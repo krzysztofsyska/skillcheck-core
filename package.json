@@ -1,1 +1,8 @@
-
+{
+  "name": "skillcheck-core",
+  "version": "0.1.0",
+  "description": "SkillCheck core plugin",
+  "main": "skillcheck-core.php",
+  "author": "SkillCheck",
+  "license": "GPL-2.0"
+}
