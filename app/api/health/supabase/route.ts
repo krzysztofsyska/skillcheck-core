@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSupabaseEnv } from "@/lib/supabase/env";
+import { getSupabaseEnv } from "../../../../lib/supabase/env";
 
 export const dynamic = "force-dynamic";
 
