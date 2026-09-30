@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "test:db": "node --test tests/database.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
@@ -16,6 +17,7 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
