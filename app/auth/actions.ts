@@ -33,11 +33,7 @@ export async function createCompany(form: FormData) {
   if (!user) redirect("/login");
   const name = String(form.get("name") ?? "").trim();
   if (!name || name.length > 200) redirect("/onboarding?message=invalid");
-  // Repeated submissions should not create another company after onboarding.
-  const { data: existing, error: lookupError } = await client.from("companies").select("id").limit(1);
-  if (lookupError) redirect("/onboarding?message=failed");
-  if (existing?.length) redirect("/dashboard");
-  const { error } = await client.rpc("create_company", { company_name: name });
+  const { error } = await client.rpc("ensure_initial_company", { company_name: name });
   if (error) redirect("/onboarding?message=failed");
   redirect("/dashboard");
 }

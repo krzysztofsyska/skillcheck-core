@@ -19,6 +19,7 @@ test('SkillCheck migration and tenant isolation', async (t) => {
     grant execute on function auth.uid() to anon, authenticated;
   `);
   await db.exec(await readFile(new URL('../supabase/migrations/20260930000100_skillcheck_core.sql', import.meta.url), 'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/20261001000100_idempotent_onboarding.sql', import.meta.url), 'utf8'));
   const ids = Array.from({ length: 6 }, (_, i) => `00000000-0000-0000-0000-00000000000${i + 1}`);
   const [ownerA, ownerB, recruiter, viewer, outsider, multi] = ids;
   for (const id of ids) await db.query('insert into auth.users values ($1)', [id]);
@@ -155,5 +156,22 @@ test('SkillCheck migration and tenant isolation', async (t) => {
     await db.query('delete from public.company_members where company_id = $1 and user_id = $2', [a.company_id, recruiter]);
     await asUser(recruiter);
     assert.equal((await db.query('select * from public.candidates')).rows.length, 0);
+  });
+
+  await t.test('onboarding retries return one firm and reuse existing memberships', async () => {
+    await asUser(null, 'anon');
+    await denied("select public.ensure_initial_company('Denied')");
+    await asUser(null);
+    await denied("select public.ensure_initial_company('Denied')");
+    await asUser(viewer);
+    const memberResult = await db.query("select public.ensure_initial_company('Do not create') as id");
+    assert.equal(memberResult.rows[0].id, a.company_id);
+    await asUser(outsider);
+    const first = await db.query("select public.ensure_initial_company('New firm') as id");
+    const retry = await db.query("select public.ensure_initial_company('Retry') as id");
+    assert.equal(first.rows[0].id, retry.rows[0].id);
+    const companies = await db.query('select name from public.companies');
+    assert.deepEqual(companies.rows, [{ name: 'New firm' }]);
+    assert.equal((await db.query('select * from public.company_profiles')).rows.length, 1);
   });
 });

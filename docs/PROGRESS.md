@@ -9,3 +9,5 @@
 - Automatyzacja budowa-i-testowanie-skillcheck jest aktywna co godzinę w tym czacie.
 
 - Weryfikacja 2026-10-01: npm run typecheck, npm run build, npm run test:db (9) i npm run test:auth (2) przeszły. Nie wykonano jeszcze testu logowania z prawdziwą skrzynką ani sesji w dwóch firmach przez HTTP. Zmiany etapu 2 są szkicem, nie ukończonym wdrożeniem.
+
+- 2026-10-01: dodano i wdrożono migrację 20261001000100_idempotent_onboarding.sql. RPC ensure_initial_company blokuje równoległy onboarding tego samego użytkownika i ponownie zwraca istniejącą firmę. Test powtórnego wywołania i istniejącego członkostwa przeszedł; nie wykonywano wielosesyjnego testu współbieżności. Zweryfikowano na Supabase: funkcja istnieje, anon=false, authenticated=true. Tej migracji również nie uruchamiać ponownie. 10 testów bazy, TypeScript i build przeszły.

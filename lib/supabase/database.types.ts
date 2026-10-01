@@ -49,7 +49,10 @@ export type Database = {
       candidate_assessments: Table<CandidateAssessment, "company_id" | "recruitment_id" | "application_id" | "stage_id", "status" | "score" | "notes" | "completed_at">;
     };
     Views: { [_ in never]: never };
-    Functions: { create_company: { Args: { company_name: string }; Returns: string } };
+    Functions: {
+      create_company: { Args: { company_name: string }; Returns: string };
+      ensure_initial_company: { Args: { company_name: string }; Returns: string };
+    };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };
   };
