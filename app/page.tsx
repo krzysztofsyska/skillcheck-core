@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function Home() {
   return (
     <main>
@@ -5,11 +7,9 @@ export default function Home() {
         <p className="eyebrow">SKILLCHECK</p>
         <h1>Sprawdzamy kompetencje, nie deklaracje.</h1>
         <p className="lead">
-          Fundament MVP działa na Next.js i Vercel. Warstwa Supabase jest
-          przygotowana pod logowanie, firmy, stanowiska, rekrutacje,
-          kandydatów i proces oceny kompetencji.
+          Zbuduj profil stanowiska i prowadź rekrutację opartą na kompetencjach.
         </p>
-        <div className="status">MVP · infrastruktura gotowa</div>
+        <div className="actions"><Link className="button" href="/register">Utwórz konto</Link><Link href="/login">Zaloguj się</Link></div>
       </section>
     </main>
   );

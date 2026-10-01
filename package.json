@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
-    "test:db": "node --test tests/database.test.mjs"
+    "test:db": "node --test tests/database.test.mjs",
+    "test:auth": "node --test tests/auth.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
