@@ -12,7 +12,7 @@ export default async function Recruitment({params}: {params:Promise<{companyId:s
   const candidates = applications.length ? await client.from('candidates').select('id,first_name,last_name').eq('company_id',companyId).in('id',applications.map(a=>a.candidate_id)) : {data:[],error:null};
   if(candidates.error) throw new Error('Nie udało się wczytać kandydatów.');
   return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link><h1>{recruitment.name}</h1><Link href={`/dashboard/${companyId}/positions/${recruitment.position_id}`}>Profil stanowiska</Link><h2>Kandydaci w rekrutacji</h2>
-    {candidates.data.length ? <ul>{candidates.data.map(c=><li key={c.id}><Link href={`/dashboard/${companyId}/candidates/${c.id}`}>{c.first_name} {c.last_name}</Link></li>)}</ul> : <p>Brak przypisanych kandydatów.</p>}
+    {candidates.data.length ? <ul>{candidates.data.map(c=><li key={c.id}><Link href={`/dashboard/${companyId}/candidates/${c.id}`}>{c.first_name} {c.last_name}</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/applications/${applications.find(a=>a.candidate_id===c.id)!.id}/screening`}>Przygotowanie preselekcji</Link></li>)}</ul> : <p>Brak przypisanych kandydatów.</p>}
     <Link href={`/dashboard/${companyId}/candidates`}>Otwórz bazę kandydatów i przypisz osobę do rekrutacji</Link>
   </section></main>;
 }

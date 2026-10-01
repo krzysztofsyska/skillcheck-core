@@ -35,3 +35,5 @@ Sprawdzenie: `npm ci`, `npm run typecheck`, `npm run test:db`, `npm run build`.
 Skopiuj `.env.example` do ignorowanego `.env.local` i uzupełnij publiczny klucz projektu. Nie używaj klucza service_role. Na Vercel sprawdź konfigurację osobno dla Preview i Production; Site URL powinien wskazywać właściwą domenę HTTPS.
 
 `npm run test:live` sprawdza logowanie dwóch potwierdzonych kont i odmowę odczytu obcej firmy we wszystkich 10 tabelach (po migracji CV). W `.env.local` wymagane są SKILLCHECK_TEST_EMAIL_A, SKILLCHECK_TEST_PASSWORD_A oraz analogiczne wartości B. Konta muszą mieć różne istniejące firmy testowe. Test nie zmienia danych, nie wysyła e-maili i kończy się błędem przy braku konfiguracji. Nie zastępuje testu formularzy w przeglądarce ani odzyskiwania hasła. Nigdy nie zapisuj haseł w repozytorium.
+
+Przy zgłoszeniu do rekrutacji dostępne jest przygotowanie preselekcji: wymagania stanowiska i najnowsze zatwierdzone CV. Integracja AI nie jest uruchomiona; nie generujemy ocen ani decyzji. Kontrakt danych, ograniczenia i pozostałe kroki: [docs/screening.md](docs/screening.md).

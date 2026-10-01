@@ -56,3 +56,10 @@
 - Testy CV: 15 raportowanych testów (w tym nadrzędny test RLS), wszystkie przeszły; w tej liczbie 5 nowych scenariuszy DOCX z wieloma przypadkami błędów. Pierwszy typecheck wykrył brak jawnego typu wpisu ZIP, poprawiono.
 - Migracja CV i testy zalogowanego wdrożenia nadal czekają na powrót użytkownika; nie wykonywano migracji ani scalenia do main.
 - Końcowa kompilacja z TypeScript, test HTTP buildu oraz kontrola plików parsera PDF w manifeście przeszły. npm install zgłosił 0 znanych podatności.
+
+## Aktualizacja: przygotowanie preselekcji dla zgłoszenia
+- Odczytano ponownie dostępną wcześniejszą rozmowę; historia jest ograniczona i nie zawiera pełnej specyfikacji AI.
+- Przy kandydacie w rekrutacji dodano stronę przygotowania: wymagania stanowiska i najnowsze zatwierdzone CV. Nowszy szkic, obca firma/kandydat i zamknięte zgłoszenie blokują przygotowanie. Brak migracji CV pokazuje komunikat.
+- Kontrakt danych wyklucza oryginał, dane kontaktowe i identyfikatory z przyszłego payload. Powiązanie wersji i walidator cytatów chronią przed nieaktualnym lub niezgodnym wynikiem. Zachowania pozostają do oceny w rozmowie/zadaniach.
+- Brak połączenia AI i zapisów wyników: ekran jawnie to komunikuje. Integracja, budżet, kontrola kosztów i zapis z RLS nadal do zbudowania (docs/screening.md). Nie zakupiono usług ani nie wysłano danych.
+- Przeszły: 7 testów preselekcji, build/TypeScript, 11 raportowanych testów podstawowej bazy i izolacji firm, test HTTP z nową trasą oraz kontrola plików PDF. Testy zalogowanej wersji oraz migracja CV nadal odłożone; nie zmieniono produkcji.
