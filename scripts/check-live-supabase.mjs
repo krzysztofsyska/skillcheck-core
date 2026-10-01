@@ -26,14 +26,14 @@ if (missing.length) {
     }
     assert.ok(firms[0].every(id=>!firms[1].includes(id)),'Konta testowe muszą należeć do różnych firm.');
     for (const [index,client] of clients.entries()) {
-      for (const table of ['companies','company_members','company_profiles','positions','recruitments','candidates','applications','assessment_stages','candidate_assessments']) {
+      for (const table of ['companies','company_members','company_profiles','positions','recruitments','candidates','applications','assessment_stages','candidate_assessments','candidate_documents']) {
         const column = table === 'companies' ? 'id' : 'company_id';
         const response = await client.from(table).select(column).in(column,firms[1-index]);
         assert.ok(!response.error,`Błąd odczytu tabeli ${table}.`);
         assert.equal(response.data.length,0,`Izolacja firm nie działa: ${table}.`);
       }
     }
-    console.log('PASS: dwa rzeczywiste logowania i blokada odczytu danych obcej firmy w 9 tabelach. Bez zmian danych.');
+    console.log('PASS: dwa rzeczywiste logowania i blokada odczytu danych obcej firmy w 10 tabelach. Bez zmian danych.');
   } catch (error) {
     console.error(error instanceof assert.AssertionError ? error.message : 'Błąd połączenia z Supabase; test nie został ukończony.');
     process.exitCode = 1;

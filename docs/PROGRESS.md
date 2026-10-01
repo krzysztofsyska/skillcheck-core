@@ -12,7 +12,7 @@
 - Kogo potrzebujesz: tworzenie i edycja profilu stanowiska z zadaniami, KPI, samodzielnością, kompetencjami i 8 wymaganiami behawioralnymi. Wymagania zachowań są zapisane jako teksty w required_behaviors; normalizacja do osobnych rekordów wymaga późniejszej migracji przed ocenianiem kandydatów.
 - Właściciel/rekruter edytuje, viewer czyta; zapisy ponownie sprawdzają sesję i rolę, RLS pozostaje końcowym zabezpieczeniem.
 - Kandydaci: formularz z walidacją i zachowaniem danych po błędzie, lista po 25 osób, karta kandydata, przypisanie do rekrutacji i czytelny komunikat o duplikacie. Nowa rekrutacja otwiera własną stronę ze stanowiskiem i kandydatami. Uprawnienia zapisu sprawdzane na serwerze; RLS i złożone klucze obce blokują obce firmy. Nie wymaga nowej migracji.
-- Brak CV, AI, voicebota, testów kompetencji, AC i raportów.
+- CV tekstowe/TXT i sprawdzanie anonimizacji przygotowane w kodzie (docs/cv.md). Nowa migracja 20261001000200 jeszcze NIE wykonana na Supabase. PDF/DOCX, AI, voicebot, testy kompetencji, AC i raporty pozostają do zbudowania.
 
 ## Testy
 - Przeszły: build, TypeScript, 11 testów bazy, 8 testów walidacji/bezpiecznych przekierowań, test HTTP rzeczywistego buildu Next (formularze i blokada anonimowych wejść).
@@ -39,3 +39,8 @@
 - Panel wdrożenia https://vercel.com/krzysztofs-projects-b7ce87b5/skillcheck-core/6zp5kKfFrTJybm6TKnYj2ywL3joF wymaga zalogowania użytkownika w przeglądarce Codex. Poproszono o tę jedną czynność.
 - Dodano .env.example i test:live: dwa rzeczywiste logowania oraz odczyt RLS w 9 tabelach, bez zmian danych. Próba uruchomienia zakończyła się prawidłowym błędem braku konfiguracji; NIE uznawać za udany test integracyjny.
 
+## Aktualizacja: tekst CV i ręczne zatwierdzenie anonimizacji
+- Odczytano dostępną wcześniejszą rozmowę; pełnej specyfikacji formatów CV nie udostępnia ograniczona historia. Jawnie ograniczono pierwszą wersję do tekstu i TXT UTF-8.
+- Nowa tabela candidate_documents chroni oryginał, wersjonuje poprawki i zapisuje rzeczywistego recenzenta. Zmiana tekstu cofa zatwierdzenie. Wdrożenie i testy po zalogowaniu odłożone zgodnie z prośbą użytkownika do powrotu do domu.
+- Lokalnie: build/TypeScript, 11 testów bazy podstawowej, 8 walidacji, 7 CV (łącznie z testami nadrzędnymi) i test HTTP przeszły. Pierwsza kompilacja wykryła iterację Set przy starym celu TS; poprawiono na Array.from i ponowiono build.
+- Nie uruchomiono nowych płatnych usług, nie wysyłano dokumentów do AI ani wiadomości do kandydatów.

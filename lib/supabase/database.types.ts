@@ -35,9 +35,19 @@ export type CandidateAssessment = Entity & {
   status: "pending" | "in_progress" | "completed" | "skipped";
   score: number | null; notes: string | null; completed_at: string | null;
 };
+export type CandidateDocument = Entity & {
+  candidate_id: string; source_text: string; redacted_text: string; version: number;
+  status: "draft" | "reviewed"; reviewed_by: string | null; reviewed_at: string | null;
+};
 export type Database = {
   public: {
     Tables: {
+      candidate_documents: {
+        Row: CandidateDocument;
+        Insert: Pick<CandidateDocument, "company_id" | "candidate_id" | "source_text" | "redacted_text">;
+        Update: Pick<Partial<CandidateDocument>, "redacted_text">;
+        Relationships: [];
+      };
       companies: Table<Company, "name" | "owner_id", "name">;
       company_members: Table<CompanyMember, "company_id" | "user_id", "role">;
       company_profiles: Table<CompanyProfile, "company_id", "industry" | "description" | "website" | "size_band" | "work_environment" | "company_values">;
@@ -50,6 +60,7 @@ export type Database = {
     };
     Views: { [_ in never]: never };
     Functions: {
+      review_candidate_document: { Args: { document_id: string; expected_version: number }; Returns: boolean };
       create_company: { Args: { company_name: string }; Returns: string };
       ensure_initial_company: { Args: { company_name: string }; Returns: string };
     };
