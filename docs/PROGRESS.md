@@ -1,13 +1,28 @@
-# SkillCheck — stan prac
+# SkillCheck — stan prac (2026-10-01)
 
-- Etap 1: migracja 20260930000100 wykonana w Supabase w projekcie wsvjawuikxfzjyivxgsu. Zweryfikowano 9 tabel, 34 polityki RLS, brak uprawnień anon. Nie wykonywać ponownie.
-- Kod etapu 1: PR #1 (feat/tenant-database), lokalny commit i commit na GitHub różnią się z powodu publikacji przez connector. Nie wykonywać force push.
-- Etap 2: dodano rejestrację, logowanie, wylogowanie, odświeżanie sesji, chroniony onboarding firmy i stronę listy firm. Brak finalnego panelu rekrutacji.
-- Rejestracja używa standardowego potwierdzenia Supabase; po potwierdzeniu użytkownik wraca do /login i loguje się hasłem. Site URL w Supabase musi wskazywać prawdziwą domenę aplikacji. Endpoint /auth/callback obsługuje PKCE, jeśli skonfigurowano taki redirect.
-- Następne kroki: testy sesji i dwóch kont w środowisku testowym, konfiguracja adresów Auth w Supabase/Vercel, idempotentny onboarding odporny na równoległe żądania, odzyskiwanie hasła. Następnie panel i formularz Kogo potrzebujesz.
-- W dalszych etapach: CV, anonimizacja, AI, voicebot, kompetencje, AC, raport. Wczytać szczegółowe wcześniejsze ustalenia z rozmowy 6ab8157c-d460-83eb-81a9-56d7bd8aa23e. Decyzje rekrutacyjne zatwierdza człowiek. Nie kontaktować kandydatów bez upoważnienia.
-- Automatyzacja budowa-i-testowanie-skillcheck jest aktywna co godzinę w tym czacie.
+## Wdrożona baza
+- Supabase: wsvjawuikxfzjyivxgsu, 9 tabel i 34 polityki RLS.
+- Migracje 20260930000100 i 20261001000100 już wykonano. Nie wykonywać ponownie.
+- ensure_initial_company chroni przed duplikacją onboardingu. Test powtórzenia i członkostwa przeszedł; test równoległych sesji pozostaje do wykonania.
 
-- Weryfikacja 2026-10-01: npm run typecheck, npm run build, npm run test:db (9) i npm run test:auth (2) przeszły. Nie wykonano jeszcze testu logowania z prawdziwą skrzynką ani sesji w dwóch firmach przez HTTP. Zmiany etapu 2 są szkicem, nie ukończonym wdrożeniem.
+## Kod w PR #1
+- Rejestracja, logowanie, wylogowanie, odświeżanie sesji, tworzenie firmy.
+- Odzyskiwanie hasła: /forgot-password → e-mail PKCE → /auth/callback?flow=recovery → /reset-password. Link wymaga tej samej przeglądarki. Nie wysyłano jeszcze testowych wiadomości.
+- Panel /dashboard/[companyId]: profil firmy, ostatnie 50 stanowisk i rekrutacji, liczba kandydatów, utworzenie rekrutacji dla stanowiska.
+- Kogo potrzebujesz: tworzenie i edycja profilu stanowiska z zadaniami, KPI, samodzielnością, kompetencjami i 8 wymaganiami behawioralnymi. Wymagania zachowań są zapisane jako teksty w required_behaviors; normalizacja do osobnych rekordów wymaga późniejszej migracji przed ocenianiem kandydatów.
+- Właściciel/rekruter edytuje, viewer czyta; zapisy ponownie sprawdzają sesję i rolę, RLS pozostaje końcowym zabezpieczeniem.
+- Brak obsługi kandydatów, CV, AI, voicebota, testów kompetencji, AC i raportów.
 
-- 2026-10-01: dodano i wdrożono migrację 20261001000100_idempotent_onboarding.sql. RPC ensure_initial_company blokuje równoległy onboarding tego samego użytkownika i ponownie zwraca istniejącą firmę. Test powtórnego wywołania i istniejącego członkostwa przeszedł; nie wykonywano wielosesyjnego testu współbieżności. Zweryfikowano na Supabase: funkcja istnieje, anon=false, authenticated=true. Tej migracji również nie uruchamiać ponownie. 10 testów bazy, TypeScript i build przeszły.
+## Testy
+- Przeszły: build, TypeScript, 10 testów bazy, 6 testów walidacji/bezpiecznych przekierowań, test HTTP rzeczywistego buildu Next (formularze i blokada anonimowych wejść).
+- Test HTTP używa nieaktywnego testowego adresu Supabase; potwierdza zachowanie bez sesji, nie pełne logowanie.
+- Pozostają: logowanie i e-mail end-to-end, dwa konta przez HTTP, test zapisów i wyglądu panelu po zalogowaniu, równoległy onboarding.
+
+## Konfiguracja i następne kroki
+- Dla odzyskiwania hasła ustawić NEXT_PUBLIC_SITE_URL na kanoniczny adres HTTPS (alternatywnie VERCEL_PROJECT_PRODUCTION_URL).
+- W Supabase Auth: Site URL = domena aplikacji; dopuścić adres /auth/callback oraz /auth/callback?flow=recovery. Zachować włączone potwierdzanie e-maila. Sprawdzić limity i nadawcę przed testami e-mail.
+- Rejestracja używa domyślnego szablonu Supabase; po potwierdzeniu użytkownik może wrócić do /login i zalogować się hasłem.
+- Dokończyć wymienione testy i konfigurację, dopiero wtedy scalić PR i uznać etapy za wdrożone. Nie przedstawiać kodu w PR jako działającej produkcji.
+- Repo lokalne i GitHub mają różne SHA wskutek publikacji przez connector. Nie wykonywać force push; bazować kolejne commity zdalne na aktualnym HEAD PR.
+- Odczytano dostępną historię 6ab8157c-d460-83eb-81a9-56d7bd8aa23e. Ustalono osiem obszarów: odpowiedzialność, samodzielność, inicjatywa, wynik, współpraca, zmiana, feedback, presja. Oceny muszą mieć dowody i poziomy: brak danych/poniżej/zgodnie/powyżej wymagań. Nie diagnozować zdrowia ani automatycznie decydować o zatrudnieniu.
+- Automatyzacja budowa-i-testowanie-skillcheck aktywna co godzinę. Brak zgody na nowe koszty i kontaktowanie kandydatów.

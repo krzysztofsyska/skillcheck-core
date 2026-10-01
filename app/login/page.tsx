@@ -15,6 +15,6 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
       <label>E-mail<input name="email" type="email" autoComplete="email" required maxLength={254} /></label>
       <label>Hasło<input name="password" type="password" autoComplete="current-password" required maxLength={256} /></label>
       <SubmitButton>Zaloguj się</SubmitButton>
-    </form><p>Nie masz konta? <Link href="/register">Utwórz konto</Link></p>
+    </form><p><Link href="/forgot-password">Nie pamiętasz hasła?</Link></p><p>Nie masz konta? <Link href="/register">Utwórz konto</Link></p>
   </section></main>;
 }
