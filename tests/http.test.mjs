@@ -31,7 +31,7 @@ test('production app serves forms and rejects unauthenticated tenant routes', as
     assert.match(await response.text(),new RegExp(label));
     assert.match(response.headers.get('cache-control'),/no-store/);
   }
-  for (const path of ['/dashboard','/onboarding','/dashboard/00000000-0000-0000-0000-000000000001','/dashboard/00000000-0000-0000-0000-000000000001/positions/new']) {
+  for (const path of ['/dashboard','/onboarding','/dashboard/00000000-0000-0000-0000-000000000001','/dashboard/00000000-0000-0000-0000-000000000001/positions/new','/dashboard/00000000-0000-0000-0000-000000000001/candidates','/dashboard/00000000-0000-0000-0000-000000000001/candidates/00000000-0000-0000-0000-000000000002','/dashboard/00000000-0000-0000-0000-000000000001/recruitments/00000000-0000-0000-0000-000000000002']) {
     const response=await fetch(base+path,{redirect:'manual'});
     assert.equal(response.status,307,path);
     assert.equal(response.headers.get('location'),'/login');

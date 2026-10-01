@@ -38,19 +38,21 @@ export function PositionForm({companyId, position}: {companyId:string;position?:
   </form>;
 }
 export function ProfileForm({companyId, profile}: {companyId:string;profile:CompanyProfile|null}) {
+  const field = useFields();
   const [state,action] = useActionState(saveProfile.bind(null,companyId),{});
   return <form action={action}><Feedback state={state}/>
-    <label>Branża<input name="industry" maxLength={200} defaultValue={profile?.industry ?? ""}/></label>
-    <label>Czym zajmuje się firma?<textarea name="description" rows={3} maxLength={10000} defaultValue={profile?.description ?? ""}/></label>
-    <label>Środowisko pracy<textarea name="work_environment" rows={3} maxLength={5000} defaultValue={profile?.work_environment ?? ""}/></label>
-    <label>Wartości firmy<small>Jedna wartość w każdym wierszu.</small><textarea name="company_values" rows={3} defaultValue={profile?.company_values.join("\n")}/></label>
+    <label>Branża<input {...field("industry",profile?.industry ?? "")} maxLength={200}/></label>
+    <label>Czym zajmuje się firma?<textarea {...field("description",profile?.description ?? "")} rows={3} maxLength={10000}/></label>
+    <label>Środowisko pracy<textarea {...field("work_environment",profile?.work_environment ?? "")} rows={3} maxLength={5000}/></label>
+    <label>Wartości firmy<small>Jedna wartość w każdym wierszu.</small><textarea {...field("company_values",profile?.company_values.join("\n"))} rows={3}/></label>
     <SubmitButton>Zapisz profil firmy</SubmitButton>
   </form>;
 }
 export function RecruitmentForm({companyId,positions}: {companyId:string;positions:Pick<Position,"id"|"title">[]}) {
+  const field = useFields();
   const [state,action]=useActionState(createRecruitment.bind(null,companyId),{});
-  return <form action={action}><Feedback state={state}/><label>Nazwa rekrutacji<input name="name" maxLength={200} required/></label>
-    <label>Stanowisko<select name="position_id" required defaultValue=""><option value="" disabled>Wybierz stanowisko</option>{positions.map(p=><option value={p.id} key={p.id}>{p.title}</option>)}</select></label>
+  return <form action={action}><Feedback state={state}/><label>Nazwa rekrutacji<input {...field("name")} maxLength={200} required/></label>
+    <label>Stanowisko<select {...field("position_id")} required><option value="" disabled>Wybierz stanowisko</option>{positions.map(p=><option value={p.id} key={p.id}>{p.title}</option>)}</select></label>
     <SubmitButton>Utwórz rekrutację</SubmitButton>
   </form>;
 }

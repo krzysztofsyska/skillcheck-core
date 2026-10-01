@@ -11,10 +11,11 @@
 - Panel /dashboard/[companyId]: profil firmy, ostatnie 50 stanowisk i rekrutacji, liczba kandydatów, utworzenie rekrutacji dla stanowiska.
 - Kogo potrzebujesz: tworzenie i edycja profilu stanowiska z zadaniami, KPI, samodzielnością, kompetencjami i 8 wymaganiami behawioralnymi. Wymagania zachowań są zapisane jako teksty w required_behaviors; normalizacja do osobnych rekordów wymaga późniejszej migracji przed ocenianiem kandydatów.
 - Właściciel/rekruter edytuje, viewer czyta; zapisy ponownie sprawdzają sesję i rolę, RLS pozostaje końcowym zabezpieczeniem.
-- Brak obsługi kandydatów, CV, AI, voicebota, testów kompetencji, AC i raportów.
+- Kandydaci: formularz z walidacją i zachowaniem danych po błędzie, lista po 25 osób, karta kandydata, przypisanie do rekrutacji i czytelny komunikat o duplikacie. Nowa rekrutacja otwiera własną stronę ze stanowiskiem i kandydatami. Uprawnienia zapisu sprawdzane na serwerze; RLS i złożone klucze obce blokują obce firmy. Nie wymaga nowej migracji.
+- Brak CV, AI, voicebota, testów kompetencji, AC i raportów.
 
 ## Testy
-- Przeszły: build, TypeScript, 10 testów bazy, 6 testów walidacji/bezpiecznych przekierowań, test HTTP rzeczywistego buildu Next (formularze i blokada anonimowych wejść).
+- Przeszły: build, TypeScript, 11 testów bazy, 8 testów walidacji/bezpiecznych przekierowań, test HTTP rzeczywistego buildu Next (formularze i blokada anonimowych wejść).
 - Test HTTP używa nieaktywnego testowego adresu Supabase; potwierdza zachowanie bez sesji, nie pełne logowanie.
 - Pozostają: logowanie i e-mail end-to-end, dwa konta przez HTTP, test zapisów i wyglądu panelu po zalogowaniu, równoległy onboarding.
 
@@ -26,3 +27,9 @@
 - Repo lokalne i GitHub mają różne SHA wskutek publikacji przez connector. Nie wykonywać force push; bazować kolejne commity zdalne na aktualnym HEAD PR.
 - Odczytano dostępną historię 6ab8157c-d460-83eb-81a9-56d7bd8aa23e. Ustalono osiem obszarów: odpowiedzialność, samodzielność, inicjatywa, wynik, współpraca, zmiana, feedback, presja. Oceny muszą mieć dowody i poziomy: brak danych/poniżej/zgodnie/powyżej wymagań. Nie diagnozować zdrowia ani automatycznie decydować o zatrudnieniu.
 - Automatyzacja budowa-i-testowanie-skillcheck aktywna co godzinę. Brak zgody na nowe koszty i kontaktowanie kandydatów.
+
+## Aktualizacja: kandydaci i domknięcie nawigacji
+- Formularze profilu firmy i rekrutacji zachowują wpisane dane przy błędzie.
+- Test PostgreSQL używa walidowanych danych stanowiska i kandydata, zapisuje rekrutację i zgłoszenie; sprawdza duplikat, viewer i odczyt obcej firmy. Test HTTP obejmuje nowe chronione strony. Build oraz wszystkie 20 raportowanych testów przeszły (w tym nadrzędny test bazy).
+- Pełny test rzeczywistego Supabase Auth nadal NIE jest zakończony: lokalnie brak .env i danych logowania testowego. Otworzono panel Auth w zalogowanym Supabase, ale nawigacja konfiguracji URL nie powiodła się. Nie zmieniano kont, haseł ani ustawień Auth.
+- Kod kandydatów wymaga sprawdzenia po zalogowaniu przed produkcją. Nie utożsamiać testów PostgreSQL i anonimowego HTTP z pełnym testem przeglądarkowym.

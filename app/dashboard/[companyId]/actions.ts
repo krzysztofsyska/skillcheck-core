@@ -37,8 +37,8 @@ export async function createRecruitment(companyId: string, _state: EditorState, 
   if (!name || name.length > 200) return { error: "Podaj nazwę rekrutacji (do 200 znaków)." };
   const { data: position, error: positionError } = await client.from("positions").select("id,status").eq("company_id", companyId).eq("id", positionId).maybeSingle();
   if (positionError || !position || position.status === "archived") return { error: "Wybierz dostępne stanowisko swojej firmy." };
-  const { error } = await client.from("recruitments").insert({company_id:companyId,position_id:position.id,name});
-  if (error) return { error: "Nie udało się utworzyć rekrutacji." };
+  const { data, error } = await client.from("recruitments").insert({company_id:companyId,position_id:position.id,name}).select("id").single();
+  if (error || !data) return { error: "Nie udało się utworzyć rekrutacji." };
   revalidatePath("/dashboard/" + companyId);
-  return { saved: true };
+  redirect(`/dashboard/${companyId}/recruitments/${data.id}`);
 }

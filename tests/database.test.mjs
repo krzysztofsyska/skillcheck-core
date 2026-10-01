@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { parseCandidate } from '../lib/candidate-fields.ts';
+import { parsePosition, behaviorAreas } from '../lib/position-fields.ts';
 import { PGlite } from '@electric-sql/pglite';
 
 test('SkillCheck migration and tenant isolation', async (t) => {
@@ -156,6 +158,30 @@ test('SkillCheck migration and tenant isolation', async (t) => {
     await db.query('delete from public.company_members where company_id = $1 and user_id = $2', [a.company_id, recruiter]);
     await asUser(recruiter);
     assert.equal((await db.query('select * from public.candidates')).rows.length, 0);
+  });
+
+
+  await t.test('validated company-to-candidate workflow persists and rejects duplicate applications', async () => {
+    await asUser(ownerA);
+    const f = new FormData();
+    for (const [key,value] of Object.entries({title:'Support',tasks:'Answer requests',kpis:'Response within 24h',autonomy_level:'3'})) f.set(key,value);
+    for (const [key] of behaviorAreas) f.set(key,'Standardowy');
+    const position = await insert('positions',{company_id:a.company_id,...parsePosition(f)});
+    const recruitment = await insert('recruitments',{company_id:a.company_id,position_id:position.id,name:'Support intake'});
+    const c = new FormData(); c.set('first_name',' Anna '); c.set('last_name','Test');
+    const candidate = await insert('candidates',{company_id:a.company_id,...parseCandidate(c)});
+    const row = {company_id:a.company_id,recruitment_id:recruitment.id,candidate_id:candidate.id};
+    const application = await insert('applications',row);
+    assert.equal(application.status,'new');
+    assert.equal(candidate.first_name,'Anna');
+    assert.equal(candidate.email,null);
+    await assert.rejects(insert('applications',row),e=>e.code==='23505');
+    await asUser(viewer);
+    await assert.rejects(insert('candidates',{company_id:a.company_id,...parseCandidate(c)}),e=>e.code==='42501');
+    await assert.rejects(insert('applications',row),e=>e.code==='42501');
+    await asUser(ownerB);
+    assert.equal((await db.query('select * from public.candidates where id=$1',[candidate.id])).rows.length,0);
+    assert.equal((await db.query('select * from public.applications where id=$1',[application.id])).rows.length,0);
   });
 
   await t.test('onboarding retries return one firm and reuse existing memberships', async () => {
