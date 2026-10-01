@@ -25,7 +25,7 @@ Stara wersja projektu jest zachowana w gałęzi `archive-old-version`.
 
 Migracja SQL, zasady dostępu firm i przykłady użycia są opisane w
 [docs/database.md](docs/database.md). Kod obejmuje firmy, profile firm, stanowiska,
-rekrutacje, kandydatów, aplikacje i etapy oceny. Zawiera logowanie, panel, profil stanowiska, rekrutacje i ręczne dodawanie kandydatów. Tekst CV/TXT/PDF i weryfikacja anonimizacji są przygotowane; wymagają nowej migracji opisanej w docs/cv.md. DOCX/OCR/AI/voicebot pozostają do implementacji.
+rekrutacje, kandydatów, aplikacje i etapy oceny. Zawiera logowanie, panel, profil stanowiska, rekrutacje i ręczne dodawanie kandydatów. Tekst CV/TXT/PDF/DOCX i weryfikacja anonimizacji są przygotowane; wymagają nowej migracji opisanej w docs/cv.md. OCR/AI/voicebot pozostają do implementacji.
 
 Migracje 20260930000100 i 20261001000100 wykonano już w docelowym Supabase. Nie uruchamiać ponownie.
 
