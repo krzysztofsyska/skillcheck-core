@@ -11,12 +11,14 @@
     "test:auth": "node --test tests/auth.test.mjs tests/position.test.mjs tests/candidate.test.mjs",
     "test:http": "node --test tests/http.test.mjs",
     "test:live": "node --env-file-if-exists=.env.local scripts/check-live-supabase.mjs",
-    "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs"
+    "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs tests/cv-pdf.test.mjs",
+    "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
     "@supabase/supabase-js": "latest",
     "next": "16.3.6",
+    "pdf-parse": "2.4.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

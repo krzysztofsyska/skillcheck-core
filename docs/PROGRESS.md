@@ -12,7 +12,7 @@
 - Kogo potrzebujesz: tworzenie i edycja profilu stanowiska z zadaniami, KPI, samodzielnością, kompetencjami i 8 wymaganiami behawioralnymi. Wymagania zachowań są zapisane jako teksty w required_behaviors; normalizacja do osobnych rekordów wymaga późniejszej migracji przed ocenianiem kandydatów.
 - Właściciel/rekruter edytuje, viewer czyta; zapisy ponownie sprawdzają sesję i rolę, RLS pozostaje końcowym zabezpieczeniem.
 - Kandydaci: formularz z walidacją i zachowaniem danych po błędzie, lista po 25 osób, karta kandydata, przypisanie do rekrutacji i czytelny komunikat o duplikacie. Nowa rekrutacja otwiera własną stronę ze stanowiskiem i kandydatami. Uprawnienia zapisu sprawdzane na serwerze; RLS i złożone klucze obce blokują obce firmy. Nie wymaga nowej migracji.
-- CV tekstowe/TXT i sprawdzanie anonimizacji przygotowane w kodzie (docs/cv.md). Nowa migracja 20261001000200 jeszcze NIE wykonana na Supabase. PDF/DOCX, AI, voicebot, testy kompetencji, AC i raporty pozostają do zbudowania.
+- CV tekstowe/TXT i sprawdzanie anonimizacji przygotowane w kodzie (docs/cv.md). Nowa migracja 20261001000200 jeszcze NIE wykonana na Supabase. DOCX/OCR, AI, voicebot, testy kompetencji, AC i raporty pozostają do zbudowania.
 
 ## Testy
 - Przeszły: build, TypeScript, 11 testów bazy, 8 testów walidacji/bezpiecznych przekierowań, test HTTP rzeczywistego buildu Next (formularze i blokada anonimowych wejść).
@@ -44,3 +44,8 @@
 - Nowa tabela candidate_documents chroni oryginał, wersjonuje poprawki i zapisuje rzeczywistego recenzenta. Zmiana tekstu cofa zatwierdzenie. Wdrożenie i testy po zalogowaniu odłożone zgodnie z prośbą użytkownika do powrotu do domu.
 - Lokalnie: build/TypeScript, 11 testów bazy podstawowej, 8 walidacji, 7 CV (łącznie z testami nadrzędnymi) i test HTTP przeszły. Pierwsza kompilacja wykryła iterację Set przy starym celu TS; poprawiono na Array.from i ponowiono build.
 - Nie uruchomiono nowych płatnych usług, nie wysyłano dokumentów do AI ani wiadomości do kandydatów.
+
+## Aktualizacja: odczyt tekstowego PDF
+- Dodano pdf-parse 2.4.5, odczyt PDF do 750 KB / 20 stron / 100 000 znaków, odrzucanie pustych stron, skanów i uszkodzonego formatu. Bez zewnętrznego AI i bez zachowywania pliku binarnego. DOCX/OCR wciąż nieobsługiwane.
+- Testy PDF przeszły dla syntetycznych dokumentów, w tym kompresji, kolejności stron i limitów; testy pozostałego CV przeszły w tym uruchomieniu. Build/TypeScript, test HTTP i test:pdf-bundle przeszły. Uzupełniono tracing workera i natywnych zależności po wykryciu braków w pierwszym manifeście.
+- Brak nowej migracji: moduł nadal czeka na 20261001000200 i testy zalogowanej wersji na Vercel po powrocie użytkownika. Żadnej migracji ani wdrożenia produkcyjnego nie uruchomiono.

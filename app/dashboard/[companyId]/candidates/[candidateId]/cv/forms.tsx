@@ -20,9 +20,9 @@ export function IntakeForm({companyId,candidateId}:{companyId:string;candidateId
   },{});
   return <form action={action}><Feedback state={state}/>
     <label>Wklej tekst CV<textarea name="source_text" value={text} onChange={e=>setText(e.target.value)} rows={10} maxLength={100000}/></label>
-    <label>Lub dodaj plik TXT (UTF-8, do 200 KB)<input type="file" name="cv_file" accept=".txt,text/plain" onChange={e=>{file.current=e.target.files?.[0]??null;setFilename(file.current?.name??'');}}/></label>
+    <label>Lub dodaj TXT (do 200 KB) albo PDF (do 750 KB, 20 stron)<input type="file" name="cv_file" accept=".txt,text/plain,.pdf,application/pdf" onChange={e=>{file.current=e.target.files?.[0]??null;setFilename(file.current?.name??'');}}/></label>
     {filename && <p>Wybrany plik: {filename} <button type="button" onClick={()=>{file.current=null;setFilename('');}}>Usuń wybór pliku</button></p>}
-    <p>Obsługujemy tekst i TXT. PDF, DOCX i skany nie są jeszcze odczytywane. Dokument pozostaje w bazie Twojej firmy.</p>
+    <p>Obsługujemy tekst, TXT i PDF z warstwą tekstową. DOCX i skany nie są jeszcze odczytywane. Sprawdź kompletność odczytanego tekstu, zwłaszcza kolumn i tabel. W bazie firmy zapisujemy tekst, bez oryginalnego pliku.</p>
     <SubmitButton>Zapisz CV i przygotuj propozycję anonimizacji</SubmitButton>
   </form>;
 }
