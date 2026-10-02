@@ -77,3 +77,10 @@
 - Supabase URL Configuration: Site URL = https://skillcheck-core-krzysztofs-projects-b7ce87b5.vercel.app/; redirect allowlist zawiera tę domenę z / i /** oraz wzorzec https://skillcheck-*-core-krzysztofs-projects-b7ce87b5.vercel.app (także /**). Nie zawiera widocznej produkcyjnej domeny skillcheck-core.vercel.app ani właściwego adresu gałęzi preview. Do poprawienia i przetestowania przed uznaniem poczty/recovery za gotowe. Nie zmieniano ustawień.
 - Supabase Policies: widoczne 9 tabel i 34 polityki authenticated, RLS włączone; candidate_documents nie ma na liście. Panel wyświetla także API DISABLED i informację o custom Data API permissions. Ten znacznik nie został zweryfikowany testem API po zalogowaniu; nie zmieniać grantów ani wyłączać RLS na podstawie samej etykiety.
 - Próba otwarcia produkcyjnego /api/health/supabase w przeglądarce została zablokowana ERR_BLOCKED_BY_CLIENT; nie potwierdza ani awarii Supabase, ani udanego połączenia. Konieczny rzeczywisty test aplikacji i dwóch kont.
+
+## Aktualizacja 2026-10-02: adresy Auth dla Preview i produkcji
+- PR #1 pozostaje szkicem; dla bc9119e GitHub Checks run 37009180127 i Vercel ExUtc2ndqtZXV9sBKLrUXC2a4dtW zakończyły się sukcesem.
+- Naprawiono fallback Preview do produkcji: adresy wiadomości pochodzą z konfiguracji danego wdrożenia, Origin żądania musi dokładnie pasować. Rejestracja dostała jawne emailRedirectTo; odzyskiwanie korzysta z tego samego mechanizmu.
+- Uzupełniono komunikaty tej samej przeglądarki i błędnego/wygasłego linku. Callback ustawia no-store/no-referrer również przy błędzie.
+- Konfiguracji Supabase nie zmieniono. Dokładne brakujące callbacki i instrukcje testów zapisano w docs/auth-configuration.md. Nie tworzono kont ani nie wysyłano prawdziwych wiadomości.
+- Przeszły: 11 testów auth/walidacji, build/TypeScript, test HTTP formularzy i chronionych tras oraz nowy test rzeczywistych akcji Next z lokalnym stubem Auth. Testy HTTP powtórzono po zakończeniu buildu. Dostawy poczty i rzeczywistego logowania nadal nie zweryfikowano.

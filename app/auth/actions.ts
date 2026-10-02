@@ -1,9 +1,10 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { createClient } from "../../lib/supabase/server";
 import { credentials } from "../../lib/auth-validation";
-import { appOrigin } from "../../lib/auth-url";
+import { authCallbackUrl } from "../../lib/auth-url";
 
 export async function login(form: FormData) {
   const input = credentials(form);
@@ -16,8 +17,11 @@ export async function login(form: FormData) {
 export async function register(form: FormData) {
   const input = credentials(form);
   if (!input || input.password.length < 12) redirect("/register?message=invalid");
+  let emailRedirectTo: string;
+  try { emailRedirectTo = authCallbackUrl('signup', (await headers()).get('origin')); }
+  catch { redirect('/register?message=unavailable'); }
   const client = await createClient();
-  const { data, error } = await client.auth.signUp(input);
+  const { data, error } = await client.auth.signUp({ ...input, options: { emailRedirectTo } });
   if (error) redirect("/register?message=failed");
   if (data.session) redirect("/onboarding");
   redirect("/login?message=confirm");
@@ -45,10 +49,10 @@ export async function requestPasswordReset(form: FormData) {
   validation.set("email", email);
   validation.set("password", "validation-only");
   if (!credentials(validation)) redirect("/forgot-password?message=invalid");
-  let origin: string;
-  try { origin = appOrigin(); } catch { redirect("/forgot-password?message=unavailable"); }
+  let redirectTo: string;
+  try { redirectTo = authCallbackUrl('recovery', (await headers()).get('origin')); } catch { redirect("/forgot-password?message=unavailable"); }
   const client = await createClient();
-  const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: origin + "/auth/callback?flow=recovery" });
+  const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
   if (error) redirect("/forgot-password?message=unavailable");
   redirect("/forgot-password?message=sent");
 }

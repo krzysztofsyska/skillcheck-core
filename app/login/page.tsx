@@ -4,7 +4,8 @@ import { SubmitButton } from "../components/submit-button";
 const messages: Record<string, string> = {
   invalid: "Podaj poprawny e-mail i hasło.",
   failed: "Nie udało się zalogować. Sprawdź dane i potwierdzenie adresu e-mail lub spróbuj ponownie za chwilę.",
-  confirm: "Sprawdź skrzynkę i potwierdź adres linkiem z wiadomości. Następnie wróć tutaj i zaloguj się.",
+  confirm: "Sprawdź skrzynkę i otwórz link potwierdzający w tej samej przeglądarce, w której tworzysz konto.",
+  callback: "Nie udało się potwierdzić linku. Otwórz go w przeglądarce, w której rozpoczęto operację. Jeśli adres e-mail został już potwierdzony, zaloguj się hasłem. Dla wygasłego linku odzyskiwania hasła zamów nową wiadomość.",
 };
 export default async function Login({ searchParams }: { searchParams: Promise<{ message?: string }> }) {
   const { message } = await searchParams;
