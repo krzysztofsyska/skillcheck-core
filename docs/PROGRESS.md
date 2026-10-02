@@ -1,5 +1,15 @@
 # SkillCheck — stan prac (2026-10-02)
 
+## Bieżący wynik — zalogowany test Preview
+- Użytkownik samodzielnie zarejestrował konto i utworzył firmę. Potwierdzono działającą sesję właściciela oraz rzeczywiste odczyty i zapisy na Vercel/Supabase. Nie obserwowano całego przepływu poczty ani odzyskiwania hasła.
+- Na jawnie fikcyjnych danych TEST przeszły: stanowisko, rekrutacja, kandydat bez kontaktu, przypisanie i blokada duplikatu, tekst CV, import PDF i DOCX (polskie znaki i tabela), edycja/zatwierdzenie CV, cofnięcie zatwierdzenia po zmianie i konflikt dwóch okien. Najnowszy szkic blokuje preselekcję mimo starszego zatwierdzonego CV; po zatwierdzeniu przygotowanie jest dostępne. AI nie jest połączone.
+- Etap zapisuje status i notatkę, zachowuje je po odświeżeniu; zakończenie pokazuje datę. Przewodnik pokazuje osiem obszarów / 16 pytań i poziomy zgodne ze stanowiskiem, w tym rozwijane wskazówki. Szczegóły i ograniczenia: docs/e2e-2026-10-02.md.
+- Dane TEST pozostawiono do dalszych prób; nie zmieniano rzeczywistego profilu firmy, nie kontaktowano kandydatów. Generator scripts/create-test-cv-fixtures.mjs odtwarza syntetyczne pliki PDF/DOCX użyte w próbie.
+
+## Praca w toku — oceny z dowodami
+- Rozpoczęto lokalnie ocenę obszarów zachowania z dowodami i historią: nowa migracja 20261002000100_behavior_assessments.sql, lib/behavior-assessment.ts i rozszerzenie typów. To NIEUKOŃCZONE zmiany robocze: brak testów migracji/RLS, interfejsu i walidacji integracji. Migracji NIE wykonano w Supabase; nie uruchamiać jej przed ukończeniem i testami. Baza nadal ma 10 tabel / 37 polityk.
+- Następna kontynuacja: dokończyć kod, interfejs i testy nowych ocen z dowodami oraz historią. Niezależnie pozostają rzeczywiste testy drugiej firmy, viewer/recruiter, poczty/recovery i równoległego onboardingu. Nie publikować samych zmian roboczych jako gotowego modułu.
+
 ## Wdrożona baza
 - Supabase: wsvjawuikxfzjyivxgsu, 10 tabel i 37 polityk; kontrola SQL 2026-10-02 potwierdziła RLS włączone we wszystkich tabelach.
 - Migracje 20260930000100, 20261001000100 i 20261001000200 już wykonano. Nie wykonywać ponownie.
@@ -13,23 +23,23 @@
 - Kogo potrzebujesz: tworzenie i edycja profilu stanowiska z zadaniami, KPI, samodzielnością, kompetencjami i 8 wymaganiami behawioralnymi. Wymagania zachowań są zapisane jako teksty w required_behaviors; normalizacja do osobnych rekordów wymaga późniejszej migracji przed ocenianiem kandydatów.
 - Właściciel/rekruter edytuje, viewer czyta; zapisy ponownie sprawdzają sesję i rolę, RLS pozostaje końcowym zabezpieczeniem.
 - Kandydaci: formularz z walidacją i zachowaniem danych po błędzie, lista po 25 osób, karta kandydata, przypisanie do rekrutacji i czytelny komunikat o duplikacie. Nowa rekrutacja otwiera własną stronę ze stanowiskiem i kandydatami. Uprawnienia zapisu sprawdzane na serwerze; RLS i złożone klucze obce blokują obce firmy. Nie wymaga nowej migracji.
-- CV tekstowe/TXT/PDF/DOCX i sprawdzanie anonimizacji przygotowane w kodzie (docs/cv.md); migrację 20261001000200 wykonano na Supabase. Pozostaje sprawdzenie importu i edycji w zalogowanej aplikacji. OCR, integracja AI, voicebot, testy kompetencji, AC i raporty pozostają do zbudowania.
+- CV tekstowe/TXT/PDF/DOCX i sprawdzanie anonimizacji są w Preview (docs/cv.md); migrację 20261001000200 wykonano na Supabase. Import PDF/DOCX, wklejanie i edycję sprawdzono w zalogowanej aplikacji na fikcyjnych danych. OCR, integracja AI, voicebot, testy kompetencji, AC i raporty pozostają do zbudowania.
 - Dostępne są przygotowanie danych do preselekcji oraz etapy rekrutacji z ręcznymi statusami i notatkami. Nie są to działające integracje AI ani formalne testy kompetencji/AC.
 - Przewodnik rozmowy przy rekrutacji: osiem obszarów, 16 pytań sytuacyjnych, definicje oraz wskazówki do zebrania dowodów. Wymagania są odczytywane z aktualnego stanowiska; niepełne, błędne lub sprzeczne zapisy są oznaczane do sprawdzenia. Linki ze strony rekrutacji, preselekcji i etapów oceny. Bez nowej migracji ani kontaktowania kandydatów; szczegóły docs/interview-guide.md.
-- PR #1 pozostaje szkicem. Preview d76fdf7 jest Ready; /login dostępne anonimowo. Produkcja pozostaje na main 62a47ba.
+- PR #1 pozostaje szkicem. Zalogowane testy wykonano na Preview gałęzi dla 1e4a3dd; dotychczasowe CI i Vercel dla tego kodu zakończyły się sukcesem. Produkcja pozostaje na main 62a47ba.
 
 ## Testy
 - W dotychczasowych uruchomieniach przeszły build/TypeScript, 12 raportowanych testów bazy, 11 auth/walidacji, 7 preselekcji, 2 walidacji etapów, testy HTTP rzeczywistego buildu Next i kontrola plików parsera PDF. Datowane wpisy poniżej opisują zakres poszczególnych uruchomień.
 - 2026-10-02 ponownie wykonano test:cv: wszystkie 15 raportowanych testów parserów i uprawnień PostgreSQL/PGlite przeszło.
 - Wzmocniono test:live: wymaga widocznego własnego rekordu dla obu firm w każdej z 10 tabel przed sprawdzeniem odczytu krzyżowego. Puste tabele i błędy API nie dają PASS. Cztery testy mechanizmu kontroli przeszły i trafiły do CI (test:live-check). Próba test:live nadal kończy się brakiem lokalnej konfiguracji; nie jest to udany test zdalny. Przygotowanie danych: docs/live-testing.md.
-- Przewodnik rozmowy: 6 testów mapowania wymagań przeszło; build z TypeScript oraz test HTTP blokady anonimowego wejścia i no-store również przeszły. Zalogowany odczyt rzeczywistej rekrutacji pozostaje do wykonania.
+- Przewodnik rozmowy: 6 testów mapowania wymagań przeszło; build z TypeScript oraz test HTTP blokady anonimowego wejścia i no-store również przeszły. Zalogowany odczyt wymagań testowej rekrutacji na Vercel potwierdzono 2026-10-02.
 - Test HTTP używa nieaktywnego testowego adresu Supabase; potwierdza zachowanie bez sesji, nie pełne logowanie.
-- Pozostają: logowanie i e-mail end-to-end, dwa konta przez HTTP, test zapisów i wyglądu panelu po zalogowaniu, równoległy onboarding.
+- Pozostają: pełny przepływ logowania/poczty/recovery, dwa konta przez HTTP, role viewer/recruiter i równoległy onboarding. Test jednej sesji właściciela nie potwierdza izolacji dwóch rzeczywistych firm. Formularza rzeczywistego profilu firmy nie zmieniano.
 
 ## Konfiguracja i następne kroki
 - 2026-10-02 zapisano Supabase Auth Site URL = https://skillcheck-core.vercel.app oraz cztery dokładne callbacki produkcji i gałęzi Preview, podane w docs/auth-configuration.md. Zachowano cztery starsze wpisy; łącznie osiem Redirect URLs. Nie zmieniano kont ani haseł.
 - Vercel ma NEXT_PUBLIC_SUPABASE_URL i NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY dla All Environments. Systemowe zmienne są włączone; kod może używać VERCEL_PROJECT_PRODUCTION_URL bez osobnej NEXT_PUBLIC_SITE_URL. Sprawdzić dostawę poczty, limity i nadawcę podczas rzeczywistych testów Auth.
-- Oznaczenie API DISABLED w panelu nie zostało potwierdzone jako awaria API. Kontrola SQL potwierdziła grant SELECT dla authenticated na candidates; brak rzeczywistego testu HTTP po autoryzacji. Nie rozszerzać grantów ani wyłączać RLS na podstawie samej etykiety.
+- Oznaczenie API DISABLED w panelu nie było dowodem awarii: 2026-10-02 rzeczywista zalogowana aplikacja odczytała i zapisała testowe rekordy przez Supabase. Nie rozszerzano grantów ani nie wyłączano RLS.
 - Rejestracja używa domyślnego szablonu Supabase; po potwierdzeniu użytkownik może wrócić do /login i zalogować się hasłem.
 - Dokończyć wymienione testy i konfigurację, dopiero wtedy scalić PR i uznać etapy za wdrożone. Nie przedstawiać kodu w PR jako działającej produkcji.
 - Repo lokalne i GitHub mają różne SHA wskutek publikacji przez connector. Nie wykonywać force push; bazować kolejne commity zdalne na aktualnym HEAD PR.

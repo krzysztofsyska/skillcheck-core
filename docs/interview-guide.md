@@ -16,4 +16,6 @@ Przewodnik pokazuje aktualny profil; nie tworzy kopii wymagań z dnia rozmowy. I
 
 ## Weryfikacja
 
-`test:behavior-guide` sprawdza mapowanie zapisów stanowiska, wszystkie osiem obszarów oraz brak zgadywania poziomów przy niepełnych/błędnych danych. `test:http` sprawdza przekierowanie anonimowego wejścia do logowania i zakaz cache. Odczyt rzeczywistego profilu, dostęp viewer i wygląd strony po zalogowaniu na Vercel pozostają do sprawdzenia z kontami testowymi.
+`test:behavior-guide` sprawdza mapowanie zapisów stanowiska, wszystkie osiem obszarów oraz brak zgadywania poziomów przy niepełnych/błędnych danych. `test:http` sprawdza przekierowanie anonimowego wejścia do logowania i zakaz cache.
+
+2026-10-02 zalogowana sesja właściciela na Vercel odczytała wymagania testowego stanowiska: odpowiedzialność Wysoki, pozostałe siedem obszarów Standardowy. Widoczne osiem obszarów i 16 pytań; nawigacja do odpowiedzialności i rozwinięcie wskazówek zadziałały. Wygląd sprawdzono w bieżącym widoku desktop. Dostęp viewer, druga firma i widok mobilny pozostają do sprawdzenia. Szczegóły docs/e2e-2026-10-02.md.

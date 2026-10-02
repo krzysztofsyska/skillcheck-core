@@ -21,3 +21,5 @@ Test najpierw sprawdza widoczność własnego rekordu w tabeli dla A oraz B, a n
 ## Granice testu
 
 PASS dotyczy odczytów przez dwie sesje Auth w przygotowanych firmach. Osobno pozostają zapisy formularzy, uprawnienia viewer/recruiter, potwierdzanie e-maila, odzyskiwanie hasła, import PDF/DOCX na Vercel, konflikty dwóch okien i współbieżny onboarding. Lokalne testy PostgreSQL sprawdzają zapisy oraz RLS, ale nie zastępują tych prób wdrożenia.
+
+2026-10-02 wykonano osobno część prób jednej sesji właściciela: formularze stanowiska/rekrutacji/kandydata, import PDF/DOCX, redakcję i konflikt CV, przygotowanie preselekcji, zapis statusu/notatki etapu i odczyt przewodnika. Wyniki: docs/e2e-2026-10-02.md. Nie zmienia to wymagań `test:live` ani nie potwierdza izolacji dwóch rzeczywistych firm.

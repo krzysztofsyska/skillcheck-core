@@ -27,7 +27,8 @@ Jeśli testy zaczynają się na adresie konkretnego wdrożenia (VERCEL_URL), jeg
 - test:auth obejmuje osobne środowiska, domeny gałęzi i wdrożenia, brak konfiguracji, obce Origin, niedozwolone schematy i nieprawidłowe wartości.
 - test:auth-http uruchamia prawdziwy build Next oraz lokalną atrapę protokołu Supabase Auth. Wysyła formularze rejestracji i odzyskiwania hasła, sprawdza redirect_to, PKCE challenge i cookie weryfikatora oraz obsługę nieprawidłowego callbacku. Nie wysyła poczty i nie testuje rzeczywistego Supabase Auth.
 - 2026-10-02: panel potwierdził zapis Site URL i ośmiu Redirect URLs. Vercel Preview d76fdf7 jest Ready, a strona /login dostępna anonimowo. Produkcja pozostaje na main 62a47ba; nie opublikowano tam zmian z PR #1.
-- Nadal wymagane: prawdziwa dostawa poczty, potwierdzenie konta i odzyskanie hasła na tym samym adresie/przeglądarce, zapis firmy oraz izolacja dwóch zalogowanych kont. Brak danych logowania testowego; anonimowe otwarcie formularza nie jest testem zalogowanej aplikacji.
+- Następnie 2026-10-02 użytkownik sam zarejestrował konto i utworzył firmę. Potwierdzono sesję właściciela oraz rzeczywiste odczyty i zapisy formularzy na Preview 1e4a3dd (docs/e2e-2026-10-02.md). Nie odczytywano danych uwierzytelniających.
+- Nadal wymagane: pełny przepływ dostawy poczty/potwierdzenia konta, ponownego logowania i odzyskania hasła na tym samym adresie/przeglądarce, równoległy onboarding oraz izolacja dwóch zalogowanych kont. Jedna działająca sesja nie potwierdza tych przypadków.
 
 Źródła API:
 - https://supabase.com/docs/guides/auth/redirect-urls

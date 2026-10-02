@@ -25,4 +25,6 @@ Nadal do implementacji: wybór dostawcy i modelu, jawny budżet, konfiguracja kl
 Ta zmiana nie dodaje migracji. Migracja 20261001000200_candidate_documents.sql została wykonana 2026-10-02; baza ma 10 tabel i 37 polityk RLS. Migracji już wykonanych nie ponawiać.
 
 ## Testy
-Siedem testów lokalnej logiki obejmuje zakres danych, izolację relacji/firm, blokady statusów, aktualność wersji i walidację dowodów. Test HTTP buildu sprawdza przekierowanie anonimowego wejścia na nową stronę do logowania. Nie jest to test AI ani pełny test po zalogowaniu w Supabase/Vercel. Ten pozostaje do wykonania po powrocie użytkownika.
+Siedem testów lokalnej logiki obejmuje zakres danych, izolację relacji/firm, blokady statusów, aktualność wersji i walidację dowodów. Test HTTP buildu sprawdza przekierowanie anonimowego wejścia na nową stronę do logowania.
+
+2026-10-02 sprawdzono rzeczywistą sesję właściciela na Vercel/Supabase: najnowszy szkic blokuje przygotowanie mimo starszego zatwierdzonego CV. Po zatwierdzeniu DOCX widok pokazał jego wersję 2 oraz zapisane zadania, KPI, kompetencje i wymagania zachowań. Nie uruchamiano AI. Pozostają próby drugiej firmy i pozostałych ról; szczegóły docs/e2e-2026-10-02.md.
