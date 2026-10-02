@@ -63,3 +63,17 @@
 - Kontrakt danych wyklucza oryginał, dane kontaktowe i identyfikatory z przyszłego payload. Powiązanie wersji i walidator cytatów chronią przed nieaktualnym lub niezgodnym wynikiem. Zachowania pozostają do oceny w rozmowie/zadaniach.
 - Brak połączenia AI i zapisów wyników: ekran jawnie to komunikuje. Integracja, budżet, kontrola kosztów i zapis z RLS nadal do zbudowania (docs/screening.md). Nie zakupiono usług ani nie wysłano danych.
 - Przeszły: 7 testów preselekcji, build/TypeScript, 11 raportowanych testów podstawowej bazy i izolacji firm, test HTTP z nową trasą oraz kontrola plików PDF. Testy zalogowanej wersji oraz migracja CV nadal odłożone; nie zmieniono produkcji.
+
+## Aktualizacja: etapy i ręczne notatki rekrutera
+- Dodawanie etapów w rekrutacji (nazwa, opis, jednoznaczna kolejność). Każde zgłoszenie ma osobny ekran postępu: oczekuje, w trakcie, zakończony, pominięty. Zakończenie/pominięcie wymaga notatki. Nie ma automatycznej decyzji o kandydacie ani kontaktu z nim.
+- Tworzenie i zapisy kontrolują sesję i rolę, firmę, rekrutację i zgłoszenie. Baza chroni przed duplikatami i relacjami z obcej rekrutacji. Zapis istniejącej notatki porównuje updated_at, aby starsze okno nie nadpisało nowej wersji. Ponowne otwarcie etapu usuwa datę zakończenia; edycja notatki zakończonego etapu ją zachowuje.
+- Definicje etapów są dodawane, bez edycji/usuwania w interfejsie. Nie dodano skali punktowej, rubryk testów, wersjonowania definicji ani pełnego audytu autorów notatek; potrzebne przed formalnymi ocenami/raportami. To rejestr ręcznego postępu, nie działający voicebot/test kompetencji/AC.
+- Nie wymaga nowej migracji; używa assessment_stages i candidate_assessments z istniejącej bazy. Nie zmieniano migracji już wykonanych.
+- Przeszły 2 testy walidacji, 12 raportowanych testów bazy (z cyklem etapów, duplikatami, konfliktem notatek i RLS), build/TypeScript i test HTTP nowej chronionej strony. Testy zalogowanej wersji nadal niewykonane.
+
+## Kontrola konfiguracji — obserwacje 2026-10-01, zapis 2026-10-02
+- Vercel: zalogowany panel dostępny. Produkcja Ready, nadal main 62a47ba, wdrożenie B5VamFwj7JpY9SwUmK7CgBgbJdnS. Preview dla badb889 gotowy: 98Bk9AAofmKzABXL9f6hKZNetyYE. GitHub Checks run 36879665470: success.
+- Vercel Environment Variables: NEXT_PUBLIC_SUPABASE_URL i NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY obecne, All Environments. Nie ujawniano wartości. Brak osobnej NEXT_PUBLIC_SITE_URL na liście Project. System environment variables włączone; kod ma fallback VERCEL_PROJECT_PRODUCTION_URL.
+- Supabase URL Configuration: Site URL = https://skillcheck-core-krzysztofs-projects-b7ce87b5.vercel.app/; redirect allowlist zawiera tę domenę z / i /** oraz wzorzec https://skillcheck-*-core-krzysztofs-projects-b7ce87b5.vercel.app (także /**). Nie zawiera widocznej produkcyjnej domeny skillcheck-core.vercel.app ani właściwego adresu gałęzi preview. Do poprawienia i przetestowania przed uznaniem poczty/recovery za gotowe. Nie zmieniano ustawień.
+- Supabase Policies: widoczne 9 tabel i 34 polityki authenticated, RLS włączone; candidate_documents nie ma na liście. Panel wyświetla także API DISABLED i informację o custom Data API permissions. Ten znacznik nie został zweryfikowany testem API po zalogowaniu; nie zmieniać grantów ani wyłączać RLS na podstawie samej etykiety.
+- Próba otwarcia produkcyjnego /api/health/supabase w przeglądarce została zablokowana ERR_BLOCKED_BY_CLIENT; nie potwierdza ani awarii Supabase, ani udanego połączenia. Konieczny rzeczywisty test aplikacji i dwóch kont.

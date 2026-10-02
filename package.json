@@ -13,7 +13,8 @@
     "test:live": "node --env-file-if-exists=.env.local scripts/check-live-supabase.mjs",
     "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs tests/cv-pdf.test.mjs tests/cv-docx.test.mjs",
     "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs",
-    "test:screening": "node --test tests/screening.test.mjs"
+    "test:screening": "node --test tests/screening.test.mjs",
+    "test:assessments": "node --test tests/assessment.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",

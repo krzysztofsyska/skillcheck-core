@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { parseCandidate } from '../lib/candidate-fields.ts';
 import { parsePosition, behaviorAreas } from '../lib/position-fields.ts';
+import { parseAssessmentStage, parseAssessmentProgress } from '../lib/assessment-fields.ts';
 import { PGlite } from '@electric-sql/pglite';
 
 test('SkillCheck migration and tenant isolation', async (t) => {
@@ -182,6 +183,33 @@ test('SkillCheck migration and tenant isolation', async (t) => {
     await asUser(ownerB);
     assert.equal((await db.query('select * from public.candidates where id=$1',[candidate.id])).rows.length,0);
     assert.equal((await db.query('select * from public.applications where id=$1',[application.id])).rows.length,0);
+  });
+
+  await t.test('manual assessment lifecycle enforces order, uniqueness and stale-write protection', async () => {
+    await asUser(ownerA);
+    const f = new FormData(); f.set('name','Zadanie praktyczne'); f.set('sequence','20');
+    const stage = await insert('assessment_stages',{company_id:a.company_id,recruitment_id:a.recruitment.id,...parseAssessmentStage(f)});
+    await assert.rejects(insert('assessment_stages',{company_id:a.company_id,recruitment_id:a.recruitment.id,...parseAssessmentStage(f)}), e=>e.code==='23505');
+    const pf = new FormData(); pf.set('status','in_progress'); pf.set('notes','Rozpoczęto zadanie');
+    const input={company_id:a.company_id,recruitment_id:a.recruitment.id,application_id:a.application.id,stage_id:stage.id,...parseAssessmentProgress(pf)};
+    const first=await insert('candidate_assessments',input);
+    await assert.rejects(insert('candidate_assessments',input),e=>e.code==='23505');
+    // Keep the exact database timestamp precision, as Supabase returns it to the action.
+    const version=(await db.query('select updated_at::text as value from public.candidate_assessments where id=$1',[first.id])).rows[0].value;
+    const completed=await db.query("update public.candidate_assessments set status='completed',notes='Opisano rozwiązanie i dowody',completed_at=now() where id=$1 and updated_at=$2::timestamptz returning *",[first.id,version]);
+    assert.equal(completed.rows.length,1);
+    assert.ok(completed.rows[0].completed_at);
+    assert.equal((await db.query("update public.candidate_assessments set notes='Stare okno' where id=$1 and updated_at=$2::timestamptz returning id",[first.id,version])).rows.length,0);
+    await db.query("update public.candidate_assessments set status='in_progress',completed_at=null where id=$1",[first.id]);
+    const reopened=(await db.query('select * from public.candidate_assessments where id=$1',[first.id])).rows[0];
+    assert.equal(reopened.completed_at,null);
+    assert.equal((await db.query('select status from public.applications where id=$1',[a.application.id])).rows[0].status,'in_progress');
+    await asUser(viewer);
+    assert.equal((await db.query('select notes from public.candidate_assessments where id=$1',[first.id])).rows.length,1);
+    assert.equal((await db.query("update public.candidate_assessments set notes='Viewer edit' where id=$1 returning id",[first.id])).rows.length,0);
+    await assert.rejects(insert('assessment_stages',{company_id:a.company_id,recruitment_id:a.recruitment.id,name:'Denied',sequence:21}),e=>e.code==='42501');
+    await asUser(ownerB);
+    assert.equal((await db.query('select * from public.candidate_assessments where id=$1',[first.id])).rows.length,0);
   });
 
   await t.test('onboarding retries return one firm and reuse existing memberships', async () => {

@@ -19,6 +19,7 @@ jobs:
       - run: npm run test:auth
       - run: npm run test:cv
       - run: npm run test:screening
+      - run: npm run test:assessments
       - run: npm run build
       - run: npm run test:pdf-bundle
       - run: npm run test:http
