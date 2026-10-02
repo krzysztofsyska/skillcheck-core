@@ -22,7 +22,7 @@ export default async function Assessments({ params }: { params: Promise<{ compan
   return <main className="workspace"><section><Link href={base}>← Rekrutacja</Link>
     <h1>Etapy oceny — {candidate.data.first_name} {candidate.data.last_name}</h1><p>{recruitment.data.name}</p>
     <p className="notice">Postęp i notatki zapisuje rekruter. Zakończenie etapu nie oznacza przyjęcia ani odrzucenia kandydata i nie uruchamia żadnej wiadomości.</p>
-    <p><Link href={`${base}/applications/${applicationId}/screening`}>Przygotowanie preselekcji</Link> · <Link href={`${base}/interview-guide`}>Przewodnik rozmowy</Link></p>
+    <p><Link href={`${base}/applications/${applicationId}/screening`}>Przygotowanie preselekcji</Link> · <Link href={`${base}/interview-guide`}>Przewodnik rozmowy</Link> · <Link href={`${base}/applications/${applicationId}/behaviors`}>Oceny z dowodami i historią</Link></p>
     {!stages.data.length && <p>Najpierw dodaj etapy na stronie rekrutacji.</p>}
     {stages.data.map(stage => {
       const assessment = assessments.data.find(row => row.stage_id === stage.id);

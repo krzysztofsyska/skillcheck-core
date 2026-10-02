@@ -39,9 +39,18 @@ export type CandidateDocument = Entity & {
   candidate_id: string; source_text: string; redacted_text: string; version: number;
   status: "draft" | "reviewed"; reviewed_by: string | null; reviewed_at: string | null;
 };
+export type BehaviorAssessmentEntry = {
+  id: string; company_id: string; recruitment_id: string; application_id: string;
+  area_key: string; version: number; rating: 'insufficient_data' | 'below' | 'meets' | 'above'; evidence: string;
+  required_level: string; position_id: string; position_updated_at: string;
+  position_snapshot: { title: string; description: string | null; tasks: string[]; kpis: string[];
+    autonomy_level: number | null; required_competencies: string[]; required_behaviors: string[] };
+  author_id: string; created_at: string;
+};
 export type Database = {
   public: {
     Tables: {
+      behavior_assessment_entries: { Row: BehaviorAssessmentEntry; Insert: never; Update: never; Relationships: [] };
       candidate_documents: {
         Row: CandidateDocument;
         Insert: Pick<CandidateDocument, "company_id" | "candidate_id" | "source_text" | "redacted_text">;
@@ -58,8 +67,10 @@ export type Database = {
       assessment_stages: Table<AssessmentStage, "company_id" | "recruitment_id" | "name" | "sequence", "name" | "description" | "sequence">;
       candidate_assessments: Table<CandidateAssessment, "company_id" | "recruitment_id" | "application_id" | "stage_id", "status" | "score" | "notes" | "completed_at">;
     };
-    Views: { [_ in never]: never };
+    Views: { latest_behavior_assessments: { Row: BehaviorAssessmentEntry; Relationships: [] } };
     Functions: {
+      save_behavior_assessment: { Args: { target_application: string; target_area: string; new_rating: string;
+        new_evidence: string; expected_version: number; expected_position_updated_at: string; expected_position_id: string }; Returns: string };
       review_candidate_document: { Args: { document_id: string; expected_version: number }; Returns: boolean };
       create_company: { Args: { company_name: string }; Returns: string };
       ensure_initial_company: { Args: { company_name: string }; Returns: string };

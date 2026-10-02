@@ -6,13 +6,15 @@
 - Etap zapisuje status i notatkę, zachowuje je po odświeżeniu; zakończenie pokazuje datę. Przewodnik pokazuje osiem obszarów / 16 pytań i poziomy zgodne ze stanowiskiem, w tym rozwijane wskazówki. Szczegóły i ograniczenia: docs/e2e-2026-10-02.md.
 - Dane TEST pozostawiono do dalszych prób; nie zmieniano rzeczywistego profilu firmy, nie kontaktowano kandydatów. Generator scripts/create-test-cv-fixtures.mjs odtwarza syntetyczne pliki PDF/DOCX użyte w próbie.
 
-## Praca w toku — oceny z dowodami
-- Rozpoczęto lokalnie ocenę obszarów zachowania z dowodami i historią: nowa migracja 20261002000100_behavior_assessments.sql, lib/behavior-assessment.ts i rozszerzenie typów. To NIEUKOŃCZONE zmiany robocze: brak testów migracji/RLS, interfejsu i walidacji integracji. Migracji NIE wykonano w Supabase; nie uruchamiać jej przed ukończeniem i testami. Baza nadal ma 10 tabel / 37 polityk.
-- Następna kontynuacja: dokończyć kod, interfejs i testy nowych ocen z dowodami oraz historią. Niezależnie pozostają rzeczywiste testy drugiej firmy, viewer/recruiter, poczty/recovery i równoległego onboardingu. Nie publikować samych zmian roboczych jako gotowego modułu.
+## Oceny z dowodami — implementacja i migracja
+- Dokończono formularz ośmiu ocen przy zgłoszeniu, zapis przez transakcyjne RPC i historię po 20 wpisów z kopią profilu stanowiska. Rekruter/właściciel zapisuje; viewer czyta. Każda poprawka tworzy wersję, a autor i wymagania pochodzą z bazy. Konflikt oceny lub profilu blokuje zapis, nie nadpisuje dowodów. Brak integracji AI lub automatycznej decyzji.
+- Migracja 20261002000100_behavior_assessments.sql wykonana 2026-10-02 po potwierdzeniu braku nowej tabeli/widoku. Wynik Success; kontrola SQL: 11 tabel, 38 polityk, RLS nowej tabeli, security_invoker widoku, brak odczytu anon i bezpośredniego zapisu authenticated, dostępne RPC. NIE uruchamiać jej ponownie.
+- Przeszły 12 raportowanych testów nowych ocen (w tym nadrzędny test bazy), 6 przewodnika, 4 mechanizmu live, typecheck, build i HTTP obu nowych chronionych tras. Pierwsza próba testu widoku oczekiwała złego kodu błędu; poprawiono oczekiwanie na PostgreSQL 55000 dla nieaktualizowalnego widoku i sprawdzono osobno brak grantu UPDATE.
+- Test zalogowanego formularza i historii po publikacji Preview pozostaje do wykonania. Szczegóły docs/behavior-assessments.md. Następnie: dalsze rubryki testów kompetencji/AC i raport oparty na dowodach; zewnętrzne AI/voicebot wymagają dostawcy, kluczy i budżetu. Niezależnie pozostają druga firma, role, poczta/recovery i równoległy onboarding.
 
 ## Wdrożona baza
-- Supabase: wsvjawuikxfzjyivxgsu, 10 tabel i 37 polityk; kontrola SQL 2026-10-02 potwierdziła RLS włączone we wszystkich tabelach.
-- Migracje 20260930000100, 20261001000100 i 20261001000200 już wykonano. Nie wykonywać ponownie.
+- Supabase: wsvjawuikxfzjyivxgsu, 11 tabel i 38 polityk po migracji ocen. Poprzednia kontrola potwierdziła RLS w dziesięciu tabelach, kolejna także w nowej tabeli; widok ocen używa security_invoker.
+- Migracje 20260930000100, 20261001000100, 20261001000200 i 20261002000100 już wykonano. Nie wykonywać ponownie.
 - Migracja CV wykonana 2026-10-02 po potwierdzeniu braku candidate_documents. Kontrola po wykonaniu potwierdziła trzy polityki CV, aktywny wyzwalacz wersjonowania i granty RPC; anonimowy odczyt oraz bezpośrednia zmiana oryginału/metadanych zatwierdzenia są niedozwolone.
 - ensure_initial_company chroni przed duplikacją onboardingu. Test powtórzenia i członkostwa przeszedł; test równoległych sesji pozostaje do wykonania.
 
@@ -20,7 +22,7 @@
 - Rejestracja, logowanie, wylogowanie, odświeżanie sesji, tworzenie firmy.
 - Odzyskiwanie hasła: /forgot-password → e-mail PKCE → /auth/callback?flow=recovery → /reset-password. Link wymaga tej samej przeglądarki. Nie wysyłano jeszcze testowych wiadomości.
 - Panel /dashboard/[companyId]: profil firmy, ostatnie 50 stanowisk i rekrutacji, liczba kandydatów, utworzenie rekrutacji dla stanowiska.
-- Kogo potrzebujesz: tworzenie i edycja profilu stanowiska z zadaniami, KPI, samodzielnością, kompetencjami i 8 wymaganiami behawioralnymi. Wymagania zachowań są zapisane jako teksty w required_behaviors; normalizacja do osobnych rekordów wymaga późniejszej migracji przed ocenianiem kandydatów.
+- Kogo potrzebujesz: tworzenie i edycja profilu stanowiska z zadaniami, KPI, samodzielnością, kompetencjami i 8 wymaganiami behawioralnymi. Wymagania są w required_behaviors; zapis oceny waliduje jednoznaczność obszaru i kopiuje wymagany poziom oraz pełny profil do wersjonowanego wpisu.
 - Właściciel/rekruter edytuje, viewer czyta; zapisy ponownie sprawdzają sesję i rolę, RLS pozostaje końcowym zabezpieczeniem.
 - Kandydaci: formularz z walidacją i zachowaniem danych po błędzie, lista po 25 osób, karta kandydata, przypisanie do rekrutacji i czytelny komunikat o duplikacie. Nowa rekrutacja otwiera własną stronę ze stanowiskiem i kandydatami. Uprawnienia zapisu sprawdzane na serwerze; RLS i złożone klucze obce blokują obce firmy. Nie wymaga nowej migracji.
 - CV tekstowe/TXT/PDF/DOCX i sprawdzanie anonimizacji są w Preview (docs/cv.md); migrację 20261001000200 wykonano na Supabase. Import PDF/DOCX, wklejanie i edycję sprawdzono w zalogowanej aplikacji na fikcyjnych danych. OCR, integracja AI, voicebot, testy kompetencji, AC i raporty pozostają do zbudowania.
@@ -31,7 +33,7 @@
 ## Testy
 - W dotychczasowych uruchomieniach przeszły build/TypeScript, 12 raportowanych testów bazy, 11 auth/walidacji, 7 preselekcji, 2 walidacji etapów, testy HTTP rzeczywistego buildu Next i kontrola plików parsera PDF. Datowane wpisy poniżej opisują zakres poszczególnych uruchomień.
 - 2026-10-02 ponownie wykonano test:cv: wszystkie 15 raportowanych testów parserów i uprawnień PostgreSQL/PGlite przeszło.
-- Wzmocniono test:live: wymaga widocznego własnego rekordu dla obu firm w każdej z 10 tabel przed sprawdzeniem odczytu krzyżowego. Puste tabele i błędy API nie dają PASS. Cztery testy mechanizmu kontroli przeszły i trafiły do CI (test:live-check). Próba test:live nadal kończy się brakiem lokalnej konfiguracji; nie jest to udany test zdalny. Przygotowanie danych: docs/live-testing.md.
+- Test:live wymaga widocznego własnego rekordu obu firm w 11 tabelach i widoku ocen przed sprawdzeniem odczytu krzyżowego. Puste tabele i błędy API nie dają PASS. Cztery testy mechanizmu kontroli przeszły i trafiły do CI. Próba test:live nadal nie została wykonana z dwoma kontami; lokalnie brak konfiguracji. Przygotowanie: docs/live-testing.md.
 - Przewodnik rozmowy: 6 testów mapowania wymagań przeszło; build z TypeScript oraz test HTTP blokady anonimowego wejścia i no-store również przeszły. Zalogowany odczyt wymagań testowej rekrutacji na Vercel potwierdzono 2026-10-02.
 - Test HTTP używa nieaktywnego testowego adresu Supabase; potwierdza zachowanie bez sesji, nie pełne logowanie.
 - Pozostają: pełny przepływ logowania/poczty/recovery, dwa konta przez HTTP, role viewer/recruiter i równoległy onboarding. Test jednej sesji właściciela nie potwierdza izolacji dwóch rzeczywistych firm. Formularza rzeczywistego profilu firmy nie zmieniano.

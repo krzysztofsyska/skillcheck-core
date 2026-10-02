@@ -26,7 +26,7 @@ if (missing.length) {
       firms.push(company.data.map(row=>row.id));
     }
     await checkTenantReads(clients, firms);
-    console.log('PASS: dwa rzeczywiste logowania, odczyt własnych rekordów i blokada odczytu obcej firmy w 10 tabelach. Bez zmian danych.');
+    console.log('PASS: dwa rzeczywiste logowania, odczyt własnych rekordów i blokada odczytu obcej firmy w 11 tabelach i widoku ocen. Bez zmian danych.');
   } catch (error) {
     console.error(error instanceof assert.AssertionError ? error.message : 'Błąd połączenia z Supabase; test nie został ukończony.');
     process.exitCode = 1;

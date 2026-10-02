@@ -4,13 +4,14 @@
 
 ## Warunki wiarygodnego wyniku
 
-Oba potwierdzone konta muszą należeć do rozłącznych firm testowych. W każdej firmie muszą być widoczne dla danego konta rekordy wszystkich 10 tabel:
+Oba potwierdzone konta muszą należeć do rozłącznych firm testowych. W każdej firmie muszą być widoczne dla danego konta rekordy wszystkich 11 tabel oraz widoku najnowszych ocen:
 
 - firma i jej profil;
 - przynajmniej jeden jawny wpis członkostwa (właściciel sam w sobie nie tworzy rekordu company_members);
 - stanowisko, rekrutacja, kandydat i jego zgłoszenie;
 - etap oceny i zapis postępu tego zgłoszenia;
-- dokument CV z syntetyczną treścią.
+- dokument CV z syntetyczną treścią;
+- co najmniej jedna ocena z uzasadnieniem, utworzona przez RPC/formularz i widoczna również w latest_behavior_assessments. Wymaga wykonanej migracji 20261002000100.
 
 Dane przygotowujemy wcześniej w uzgodnionym środowisku testowym. Nie dodajemy fikcyjnych kont do produkcji, nie przyznajemy członkostwa obcym osobom ani nie używamy prawdziwych CV tylko po to, by przeprowadzić test. Interfejs zarządzania członkami nie jest jeszcze zaimplementowany; istniejący testowy wpis może przygotować administrator zgodnie z docelowym modelem dostępu.
 

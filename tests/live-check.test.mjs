@@ -22,13 +22,14 @@ function clientsFor(respond) {
 }
 const isolated = ({ own, column, index }) => ({ data: own ? [{ [column]: firms[index][0] }] : [], error: null });
 
-test('live checker requires positive controls in both firms for all ten tables', async () => {
+test('live checker requires positive controls in both firms for eleven tables and the assessment view', async () => {
   const checked = new Set();
   await checkTenantReads(clientsFor(args => {
     checked.add(`${args.table}:${args.index}:${args.own}`);
     return isolated(args);
   }), firms);
-  assert.equal(checked.size, 40);
+  assert.ok(tenantTables.includes('behavior_assessment_entries') && tenantTables.includes('latest_behavior_assessments'));
+  assert.equal(checked.size, 48);
 });
 
 test('empty or invisible CV fixtures cannot produce a successful RLS test', async () => {

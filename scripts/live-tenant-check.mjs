@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 export const tenantTables = [
   'companies', 'company_members', 'company_profiles', 'positions', 'recruitments',
   'candidates', 'applications', 'assessment_stages', 'candidate_assessments', 'candidate_documents',
+  'behavior_assessment_entries', 'latest_behavior_assessments',
 ];
 
 // A hidden foreign row is evidence only if its owner can actually read it.

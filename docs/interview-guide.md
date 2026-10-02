@@ -12,7 +12,7 @@ Zawartość słownika przygotowano na podstawie odczytanej 2026-10-02 rozmowy 6a
 
 Strona wymaga sesji i dostępu do firmy. Rekrutacja jest pobierana po identyfikatorze i firmie, stanowisko wyłącznie z powiązania tej rekrutacji z filtrem tej samej firmy. Wszystkie role z odczytem, w tym viewer, mają dostęp. Nie ma zapisu, pobierania CV lub danych kandydatów ani nowych migracji.
 
-Przewodnik pokazuje aktualny profil; nie tworzy kopii wymagań z dnia rozmowy. Interfejs prosi o zapisanie wymaganego poziomu w notatce. Strukturalne oceny, dowody przypisane do kryteriów, wersjonowanie rubryk oraz ich audyt wymagają osobnej implementacji przed formalnymi ocenami i raportami.
+Przewodnik pokazuje aktualny profil; sam nie tworzy kopii wymagań z dnia rozmowy. Osobny moduł Oceny z dowodami i historią przy zgłoszeniu zapisuje wersjonowane oceny człowieka, uzasadnienia i kopię profilu — docs/behavior-assessments.md. Formalne rubryki testów kompetencji/AC i raport pozostają do zbudowania.
 
 ## Weryfikacja
 
