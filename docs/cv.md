@@ -8,15 +8,18 @@
 - Zatwierdzenie dotyczy konkretnej wersji tekstu. Baza zapisuje tożsamość recenzenta i czas. Edycja tekstu cofa zatwierdzenie; przestarzała edycja lub zatwierdzenie są odrzucane. Nie oceniamy i nie kontaktujemy kandydatów.
 - Właściciel/rekruter tworzy, edytuje i zatwierdza. Viewer czyta. Brak dostępu anonimowego i między firmami.
 
-## Migracja — jeszcze niewykonana na Supabase
-Nowy plik: supabase/migrations/20261001000200_candidate_documents.sql.
-Stosować dopiero po zakończeniu testów środowiska. Poprzednie dwie migracje są już wykonane i nie wolno ich ponawiać.
-Nowa migracja dodaje jedną tabelę, trzy polityki, wyzwalacz wersjonowania i RPC zatwierdzania. Bez tej tabeli podstrona CV pokazuje, że moduł oczekuje na uruchomienie; pozostałe strony nie wymagają nowego schematu.
+## Migracja wykonana na Supabase — 2026-10-02
+Plik supabase/migrations/20261001000200_candidate_documents.sql wykonano w SQL Editor projektu wsvjawuikxfzjyivxgsu; wynik Success. Przed wykonaniem sprawdzono stan 9 tabel / 34 polityki oraz brak candidate_documents. Kontrola po wykonaniu potwierdziła 10 tabel / 37 polityk i włączone RLS we wszystkich tabelach. Ta migracja oraz poprzednie dwie są już wykonane — nie ponawiać ich.
+
+Tabela candidate_documents ma trzy polityki i aktywny wyzwalacz wersjonowania. Kontrola SQL potwierdziła granty authenticated do odczytu, edycji redacted_text i RPC zatwierdzania oraz brak bezpośredniego UPDATE oryginału i metadanych zatwierdzenia. Rola anon nie ma odczytu tabeli ani wykonania RPC. Te granty nie zastępują kontroli firmy przez RLS ani testu rzeczywistej sesji aplikacji.
+
+Kod modułu jest dostępny w gałęzi Preview; produkcja pozostaje na main 62a47ba. Wykonanie migracji nie oznacza zakończenia testów importu na Vercel po zalogowaniu.
 
 ## Weryfikacja
 - test:cv: odczyt DOCX (polskie znaki, tabele, błędne archiwa, limity rozpakowania i liczby wpisów, nieobsługiwane elementy), walidacja TXT/UTF-8 i rzeczywistego parsera PDF (syntetyczne dokumenty, skompresowane strumienie, wiele stron, puste/mieszane strony, błędny format i limity), binarne i nadmierne dane, reguły redakcji, uprawnienia PostgreSQL/PGlite, obce firmy, niezmienność oryginału, ochrona metadanych zatwierdzenia i konflikt wersji.
+- 2026-10-02 ponownie wykonano test:cv: wszystkie 15 raportowanych testów przeszło, w tym testy parserów i RLS w PGlite.
 - test:http obejmuje odmowę dostępu anonimowego do podstrony CV.
-- test:live obejmuje teraz 10 tabel i wymaga migracji CV oraz dwóch rzeczywistych kont. Nie został jeszcze wykonany z prawdziwymi danymi dostępowymi.
+- test:live obejmuje 10 tabel; migracja CV jest już wykonana, nadal potrzebne są dwa rzeczywiste konta. Test nie został jeszcze wykonany z prawdziwymi danymi dostępowymi.
 - Pozostają testy zalogowanej przeglądarki: plik i wklejanie, zachowanie danych po błędzie, edycja i cofnięcie zatwierdzenia, konflikt dwóch okien oraz drugi użytkownik/inna firma. Nie uznawać PGlite za test pełnej integracji.
 
 ## Dalszy rozwój
@@ -36,4 +39,4 @@ Późniejsza preselekcja może korzystać wyłącznie ze sprawdzonej wersji i mu
 - JSZip odbudowuje archiwum wyłącznie ze sprawdzonych wpisów przed odczytem przez Mammoth, aby różnice między czytnikami ZIP nie omijały kontroli. Nic nie jest wypakowywane na dysk. Limity nie stanowią twardej izolacji czasu i pamięci procesu.
 - Odczyt obejmuje treść akapitów i tabel; nie wykonuje OCR obrazów. Dokumenty z nagłówkami, stopkami i przypisami oraz ostrzeżeniami parsera są odrzucane z prośbą o pełny tekst lub tekstowy PDF. Rekruter nadal musi porównać kompletność z oryginałem.
 - Test hiperłącza zewnętrznego potwierdza, że zapisujemy tekst etykiety bez wywołania fetch. Nie pobieramy adresów z CV.
-- DOCX nie wymaga kolejnej migracji; nadal obowiązuje oczekująca migracja candidate_documents i test po zalogowaniu.
+- DOCX korzysta z wykonanej migracji candidate_documents i nie wymaga kolejnej. Nadal pozostaje test importu po zalogowaniu.

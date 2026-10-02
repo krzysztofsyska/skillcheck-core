@@ -9,8 +9,8 @@ W produkcji dozwolone są NEXT_PUBLIC_SITE_URL i VERCEL_PROJECT_PRODUCTION_URL. 
 
 PKCE wymaga tej samej przeglądarki i domeny, na której rozpoczęto operację. UI informuje o tym przy rejestracji, potwierdzeniu i błędzie linku. Domyślny szablon Supabase powinien używać ConfirmationURL; niestandardowe szablony trzeba oddzielnie sprawdzić.
 
-## Ustawienia nadal do wykonania w panelu
-Kontrola 2026-10-01 wykazała inne domeny w Supabase niż aktualna produkcja i preview. Ta zmiana w kodzie nie modyfikuje allowlisty Supabase.
+## Ustawienia zapisane w panelu — 2026-10-02
+W projekcie Supabase wsvjawuikxfzjyivxgsu zapisano poniższy Site URL i dodano cztery dokładne callbacki. Zachowano cztery wcześniejsze wpisy; panel potwierdza łącznie osiem Redirect URLs. Poprawia to rozbieżność domen wykrytą 2026-10-01. Zapis konfiguracji nie potwierdza jeszcze dostawy poczty ani poprawnego zakończenia logowania.
 
 Site URL dla produkcji: https://skillcheck-core.vercel.app
 Dokładne adresy Redirect URLs dla produkcji:
@@ -21,12 +21,13 @@ Dla aktualnego adresu gałęzi testowej:
 - https://skillcheck-core-git-feat-te-a48cba-krzysztofs-projects-b7ce87b5.vercel.app/auth/callback
 - https://skillcheck-core-git-feat-te-a48cba-krzysztofs-projects-b7ce87b5.vercel.app/auth/callback?flow=recovery
 
-Jeśli testy zaczynają się na adresie konkretnego wdrożenia (VERCEL_URL), jego callbacki również muszą być dopuszczone. Przed zmianą ustawień potwierdzić aktualne domeny; nie rozszerzać allowlisty na wszystkie projekty/konta. Dla localhost dodać tylko używany port na czas testów. NEXT_PUBLIC_SITE_URL w Vercel ustawić osobno dla produkcji, zachować dostępność systemowych zmiennych wdrożenia.
+Jeśli testy zaczynają się na adresie konkretnego wdrożenia (VERCEL_URL), jego callbacki również muszą być dopuszczone; powyższe cztery wpisy obejmują produkcję i stały adres gałęzi. Przed zmianą ustawień potwierdzić aktualne domeny; nie rozszerzać allowlisty na wszystkie projekty/konta. Dla localhost dodać tylko używany port na czas testów. W Vercel systemowe zmienne wdrożenia są włączone, a kod produkcji może użyć VERCEL_PROJECT_PRODUCTION_URL. Osobna NEXT_PUBLIC_SITE_URL nie jest obecnie ustawiona w projekcie; jeżeli zostanie dodana, skonfigurować ją osobno dla produkcji.
 
 ## Weryfikacja
 - test:auth obejmuje osobne środowiska, domeny gałęzi i wdrożenia, brak konfiguracji, obce Origin, niedozwolone schematy i nieprawidłowe wartości.
 - test:auth-http uruchamia prawdziwy build Next oraz lokalną atrapę protokołu Supabase Auth. Wysyła formularze rejestracji i odzyskiwania hasła, sprawdza redirect_to, PKCE challenge i cookie weryfikatora oraz obsługę nieprawidłowego callbacku. Nie wysyła poczty i nie testuje rzeczywistego Supabase Auth.
-- Nadal wymagane: ustawienia panelu, prawdziwa dostawa poczty, potwierdzenie konta i odzyskanie hasła na tym samym adresie/przeglądarce, zapis firmy oraz izolacja dwóch zalogowanych kont.
+- 2026-10-02: panel potwierdził zapis Site URL i ośmiu Redirect URLs. Vercel Preview d76fdf7 jest Ready, a strona /login dostępna anonimowo. Produkcja pozostaje na main 62a47ba; nie opublikowano tam zmian z PR #1.
+- Nadal wymagane: prawdziwa dostawa poczty, potwierdzenie konta i odzyskanie hasła na tym samym adresie/przeglądarce, zapis firmy oraz izolacja dwóch zalogowanych kont. Brak danych logowania testowego; anonimowe otwarcie formularza nie jest testem zalogowanej aplikacji.
 
 Źródła API:
 - https://supabase.com/docs/guides/auth/redirect-urls

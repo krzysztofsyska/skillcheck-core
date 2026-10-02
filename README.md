@@ -25,16 +25,16 @@ Stara wersja projektu jest zachowana w gałęzi `archive-old-version`.
 
 Migracja SQL, zasady dostępu firm i przykłady użycia są opisane w
 [docs/database.md](docs/database.md). Kod obejmuje firmy, profile firm, stanowiska,
-rekrutacje, kandydatów, aplikacje i etapy oceny. Zawiera logowanie, panel, profil stanowiska, rekrutacje i ręczne dodawanie kandydatów. Tekst CV/TXT/PDF/DOCX i weryfikacja anonimizacji są przygotowane; wymagają nowej migracji opisanej w docs/cv.md. OCR/AI/voicebot pozostają do implementacji.
+rekrutacje, kandydatów, aplikacje i etapy oceny. Zawiera logowanie, panel, profil stanowiska, rekrutacje i ręczne dodawanie kandydatów. Tekst CV/TXT/PDF/DOCX i weryfikacja anonimizacji mają już wdrożony schemat bazy; wymagają testów zalogowanej aplikacji opisanych w docs/cv.md. OCR/AI/voicebot pozostają do implementacji.
 
-Migracje 20260930000100 i 20261001000100 wykonano już w docelowym Supabase. Nie uruchamiać ponownie.
+Migracje 20260930000100, 20261001000100 i 20261001000200 wykonano już w docelowym Supabase. Stan zweryfikowany 2026-10-02: 10 tabel, 37 polityk RLS. Nie uruchamiać ponownie. Kod aplikacji pozostaje w PR #1 / Preview; produkcja nadal używa wcześniejszej wersji z main.
 
 Sprawdzenie: `npm ci`, `npm run typecheck`, `npm run test:db`, `npm run build`.
 
 ## Konfiguracja i test rzeczywistego Supabase
 Skopiuj `.env.example` do ignorowanego `.env.local` i uzupełnij publiczny klucz projektu. Nie używaj klucza service_role. Na Vercel sprawdź konfigurację osobno dla Preview i Production; Site URL powinien wskazywać właściwą domenę HTTPS.
 
-`npm run test:live` sprawdza logowanie dwóch potwierdzonych kont i odmowę odczytu obcej firmy we wszystkich 10 tabelach (po migracji CV). W `.env.local` wymagane są SKILLCHECK_TEST_EMAIL_A, SKILLCHECK_TEST_PASSWORD_A oraz analogiczne wartości B. Konta muszą mieć różne istniejące firmy testowe. Test nie zmienia danych, nie wysyła e-maili i kończy się błędem przy braku konfiguracji. Nie zastępuje testu formularzy w przeglądarce ani odzyskiwania hasła. Nigdy nie zapisuj haseł w repozytorium.
+`npm run test:live` sprawdza logowanie dwóch potwierdzonych kont, odczyt własnych rekordów i odmowę odczytu obcej firmy we wszystkich 10 tabelach. W `.env.local` wymagane są SKILLCHECK_TEST_EMAIL_A, SKILLCHECK_TEST_PASSWORD_A oraz analogiczne wartości B. Konta muszą mieć rozłączne firmy i widoczne dane testowe w każdej tabeli. Brak danych daje wynik niepełny/błąd, nigdy PASS na pustej tabeli. Przygotowanie: [docs/live-testing.md](docs/live-testing.md). Test nie zmienia danych, nie wysyła e-maili i kończy się błędem przy braku konfiguracji. Nie zastępuje testu formularzy w przeglądarce ani odzyskiwania hasła. Nigdy nie zapisuj haseł w repozytorium.
 
 Przy zgłoszeniu do rekrutacji dostępne jest przygotowanie preselekcji: wymagania stanowiska i najnowsze zatwierdzone CV. Integracja AI nie jest uruchomiona; nie generujemy ocen ani decyzji. Kontrakt danych, ograniczenia i pozostałe kroki: [docs/screening.md](docs/screening.md).
 

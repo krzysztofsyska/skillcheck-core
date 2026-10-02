@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import assert from 'node:assert/strict';
+import { checkTenantReads } from './live-tenant-check.mjs';
 
 // Read-only live check. Use two confirmed test accounts belonging to distinct firms.
 // Credentials stay in .env.local / process environment and are never printed.
@@ -24,16 +25,8 @@ if (missing.length) {
       assert.ok(!company.error && company.data.length,`Konto ${label} wymaga istniejącej firmy testowej.`);
       firms.push(company.data.map(row=>row.id));
     }
-    assert.ok(firms[0].every(id=>!firms[1].includes(id)),'Konta testowe muszą należeć do różnych firm.');
-    for (const [index,client] of clients.entries()) {
-      for (const table of ['companies','company_members','company_profiles','positions','recruitments','candidates','applications','assessment_stages','candidate_assessments','candidate_documents']) {
-        const column = table === 'companies' ? 'id' : 'company_id';
-        const response = await client.from(table).select(column).in(column,firms[1-index]);
-        assert.ok(!response.error,`Błąd odczytu tabeli ${table}.`);
-        assert.equal(response.data.length,0,`Izolacja firm nie działa: ${table}.`);
-      }
-    }
-    console.log('PASS: dwa rzeczywiste logowania i blokada odczytu danych obcej firmy w 10 tabelach. Bez zmian danych.');
+    await checkTenantReads(clients, firms);
+    console.log('PASS: dwa rzeczywiste logowania, odczyt własnych rekordów i blokada odczytu obcej firmy w 10 tabelach. Bez zmian danych.');
   } catch (error) {
     console.error(error instanceof assert.AssertionError ? error.message : 'Błąd połączenia z Supabase; test nie został ukończony.');
     process.exitCode = 1;

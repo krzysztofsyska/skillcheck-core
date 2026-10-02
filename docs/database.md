@@ -1,5 +1,7 @@
 # SkillCheck — baza danych, etap 1
 
+Stan docelowego Supabase na 2026-10-02: wykonano migracje 20260930000100, 20261001000100 i 20261001000200. Jest 10 tabel oraz 37 polityk RLS. Nie wykonywać tych migracji ponownie. Poniższy opis modelu etapu 1 obejmuje pierwotne dziewięć tabel; rozszerzenie candidate_documents i jego weryfikację opisuje [cv.md](cv.md). Instrukcja wykonania poniżej dotyczy wyłącznie nowego, pustego środowiska.
+
 Migracja: `supabase/migrations/20260930000100_skillcheck_core.sql`.
 Przygotowanie pliku ani wdrożenie kodu na Vercel nie wykonuje migracji w Supabase.
 

@@ -15,7 +15,8 @@
     "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs",
     "test:screening": "node --test tests/screening.test.mjs",
     "test:assessments": "node --test tests/assessment.test.mjs",
-    "test:auth-http": "node --test tests/auth-mail-http.test.mjs"
+    "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
+    "test:live-check": "node --test tests/live-check.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
