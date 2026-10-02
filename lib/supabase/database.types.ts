@@ -1,5 +1,6 @@
 // Contract for 20260930000100_skillcheck_core.sql; regenerate from Supabase
 // after deployment: supabase gen types typescript --project-id <id> --schema public
+import type { ExerciseDefinition } from '../exercise-definition';
 type Timestamps = { created_at: string; updated_at: string };
 type Entity = Timestamps & { id: string; company_id: string };
 type Table<Row, Required extends keyof Row, Editable extends keyof Row> = {
@@ -47,9 +48,15 @@ export type BehaviorAssessmentEntry = {
     autonomy_level: number | null; required_competencies: string[]; required_behaviors: string[] };
   author_id: string; created_at: string;
 };
+export type ExerciseDefinitionEntry = {
+  id: string; exercise_id: string; company_id: string; recruitment_id: string;
+  version: number; definition: ExerciseDefinition; position_id: string; position_updated_at: string;
+  position_snapshot: BehaviorAssessmentEntry['position_snapshot']; author_id: string; created_at: string;
+};
 export type Database = {
   public: {
     Tables: {
+      exercise_definition_entries: { Row: ExerciseDefinitionEntry; Insert: never; Update: never; Relationships: [] };
       behavior_assessment_entries: { Row: BehaviorAssessmentEntry; Insert: never; Update: never; Relationships: [] };
       candidate_documents: {
         Row: CandidateDocument;
@@ -67,8 +74,14 @@ export type Database = {
       assessment_stages: Table<AssessmentStage, "company_id" | "recruitment_id" | "name" | "sequence", "name" | "description" | "sequence">;
       candidate_assessments: Table<CandidateAssessment, "company_id" | "recruitment_id" | "application_id" | "stage_id", "status" | "score" | "notes" | "completed_at">;
     };
-    Views: { latest_behavior_assessments: { Row: BehaviorAssessmentEntry; Relationships: [] } };
+    Views: {
+      latest_behavior_assessments: { Row: BehaviorAssessmentEntry; Relationships: [] };
+      latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
+    };
     Functions: {
+      save_exercise_definition: { Args: { target_recruitment: string; target_exercise: string;
+        new_definition: ExerciseDefinition; expected_version: number; expected_position_id: string;
+        expected_position_updated_at: string }; Returns: string };
       save_behavior_assessment: { Args: { target_application: string; target_area: string; new_rating: string;
         new_evidence: string; expected_version: number; expected_position_updated_at: string; expected_position_id: string }; Returns: string };
       review_candidate_document: { Args: { document_id: string; expected_version: number }; Returns: boolean };

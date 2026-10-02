@@ -14,7 +14,7 @@
     "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs tests/cv-pdf.test.mjs tests/cv-docx.test.mjs",
     "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs",
     "test:screening": "node --test tests/screening.test.mjs",
-    "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs",
+    "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:live-check": "node --test tests/live-check.test.mjs",
     "test:behavior-guide": "node --test tests/behavior-guide.test.mjs",

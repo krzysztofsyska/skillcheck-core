@@ -1,5 +1,11 @@
 # SkillCheck — stan prac (2026-10-02)
 
+## Nowy etap — wersjonowane definicje zadań
+- Przygotowano migrację 20261002000300_exercise_definitions.sql oraz typy Supabase dla zadań kompetencyjnych i Assessment Center. Migracja NIE została wykonana w docelowym Supabase; stan wdrożonej bazy poniżej pozostaje bez zmian. Nowa tabela historii, widok security_invoker i transakcyjne RPC zachowują autora, wersję oraz profil stanowiska; stary formularz i zmiana profilu dają PT409. Nie ma bezpośrednich zapisów tabeli z klienta.
+- Baza niezależnie waliduje definicję i kryteria, usuwa obce pola JSON, blokuje przenoszenie zadania między rekrutacjami/firmami i ponowienie pierwszego zapisu. Owner/recruiter zapisują, viewer czyta. Zamknięta rekrutacja, zarchiwizowane stanowisko i odebrane członkostwo blokują zapis.
+- npm run test:assessments: 12 raportowanych testów przeszło (w tym nadrzędny test migracji); kontrola TypeScript bez emisji przeszła. Test migracji używa PostgreSQL/PGlite z dwiema firmami i rolami. Nie jest testem rzeczywistego Auth ani równoczesnych połączeń. Testy włączone do istniejącego CI.
+- Dalej: formularz tworzenia/edycji zadań i historia, zastosowanie nowej migracji po przygotowaniu UI, próby Preview, a następnie obserwacje wykonania powiązane z konkretną wersją rubryki i raport. Szczegóły: docs/exercise-definitions.md. Ten etap nie jest jeszcze gotowym modułem UI ani działającym Assessment Center.
+
 ## Bieżący wynik — zalogowany test Preview
 - Użytkownik samodzielnie zarejestrował konto i utworzył firmę. Potwierdzono działającą sesję właściciela oraz rzeczywiste odczyty i zapisy na Vercel/Supabase. Nie obserwowano całego przepływu poczty ani odzyskiwania hasła.
 - Na jawnie fikcyjnych danych TEST przeszły: stanowisko, rekrutacja, kandydat bez kontaktu, przypisanie i blokada duplikatu, tekst CV, import PDF i DOCX (polskie znaki i tabela), edycja/zatwierdzenie CV, cofnięcie zatwierdzenia po zmianie i konflikt dwóch okien. Najnowszy szkic blokuje preselekcję mimo starszego zatwierdzonego CV; po zatwierdzeniu przygotowanie jest dostępne. AI nie jest połączone.
