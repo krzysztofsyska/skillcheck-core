@@ -11,7 +11,7 @@ Oba potwierdzone konta muszą należeć do rozłącznych firm testowych. W każd
 - stanowisko, rekrutacja, kandydat i jego zgłoszenie;
 - etap oceny i zapis postępu tego zgłoszenia;
 - dokument CV z syntetyczną treścią;
-- co najmniej jedna ocena z uzasadnieniem, utworzona przez RPC/formularz i widoczna również w latest_behavior_assessments. Wymaga wykonanej migracji 20261002000100.
+- co najmniej jedna ocena z uzasadnieniem, utworzona przez RPC/formularz i widoczna również w latest_behavior_assessments. Wymaga wykonanych migracji 20261002000100 i 20261002000200.
 
 Dane przygotowujemy wcześniej w uzgodnionym środowisku testowym. Nie dodajemy fikcyjnych kont do produkcji, nie przyznajemy członkostwa obcym osobom ani nie używamy prawdziwych CV tylko po to, by przeprowadzić test. Interfejs zarządzania członkami nie jest jeszcze zaimplementowany; istniejący testowy wpis może przygotować administrator zgodnie z docelowym modelem dostępu.
 
