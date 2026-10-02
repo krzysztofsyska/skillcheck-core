@@ -15,12 +15,14 @@
 - Kandydaci: formularz z walidacją i zachowaniem danych po błędzie, lista po 25 osób, karta kandydata, przypisanie do rekrutacji i czytelny komunikat o duplikacie. Nowa rekrutacja otwiera własną stronę ze stanowiskiem i kandydatami. Uprawnienia zapisu sprawdzane na serwerze; RLS i złożone klucze obce blokują obce firmy. Nie wymaga nowej migracji.
 - CV tekstowe/TXT/PDF/DOCX i sprawdzanie anonimizacji przygotowane w kodzie (docs/cv.md); migrację 20261001000200 wykonano na Supabase. Pozostaje sprawdzenie importu i edycji w zalogowanej aplikacji. OCR, integracja AI, voicebot, testy kompetencji, AC i raporty pozostają do zbudowania.
 - Dostępne są przygotowanie danych do preselekcji oraz etapy rekrutacji z ręcznymi statusami i notatkami. Nie są to działające integracje AI ani formalne testy kompetencji/AC.
+- Przewodnik rozmowy przy rekrutacji: osiem obszarów, 16 pytań sytuacyjnych, definicje oraz wskazówki do zebrania dowodów. Wymagania są odczytywane z aktualnego stanowiska; niepełne, błędne lub sprzeczne zapisy są oznaczane do sprawdzenia. Linki ze strony rekrutacji, preselekcji i etapów oceny. Bez nowej migracji ani kontaktowania kandydatów; szczegóły docs/interview-guide.md.
 - PR #1 pozostaje szkicem. Preview d76fdf7 jest Ready; /login dostępne anonimowo. Produkcja pozostaje na main 62a47ba.
 
 ## Testy
 - W dotychczasowych uruchomieniach przeszły build/TypeScript, 12 raportowanych testów bazy, 11 auth/walidacji, 7 preselekcji, 2 walidacji etapów, testy HTTP rzeczywistego buildu Next i kontrola plików parsera PDF. Datowane wpisy poniżej opisują zakres poszczególnych uruchomień.
 - 2026-10-02 ponownie wykonano test:cv: wszystkie 15 raportowanych testów parserów i uprawnień PostgreSQL/PGlite przeszło.
 - Wzmocniono test:live: wymaga widocznego własnego rekordu dla obu firm w każdej z 10 tabel przed sprawdzeniem odczytu krzyżowego. Puste tabele i błędy API nie dają PASS. Cztery testy mechanizmu kontroli przeszły i trafiły do CI (test:live-check). Próba test:live nadal kończy się brakiem lokalnej konfiguracji; nie jest to udany test zdalny. Przygotowanie danych: docs/live-testing.md.
+- Przewodnik rozmowy: 6 testów mapowania wymagań przeszło; build z TypeScript oraz test HTTP blokady anonimowego wejścia i no-store również przeszły. Zalogowany odczyt rzeczywistej rekrutacji pozostaje do wykonania.
 - Test HTTP używa nieaktywnego testowego adresu Supabase; potwierdza zachowanie bez sesji, nie pełne logowanie.
 - Pozostają: logowanie i e-mail end-to-end, dwa konta przez HTTP, test zapisów i wyglądu panelu po zalogowaniu, równoległy onboarding.
 

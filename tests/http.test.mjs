@@ -36,6 +36,10 @@ test('production app serves forms and rejects unauthenticated tenant routes', as
     assert.equal(response.status,307,path);
     assert.equal(response.headers.get('location'),'/login');
   }
+  const guide=await fetch(base+'/dashboard/00000000-0000-0000-0000-000000000001/recruitments/00000000-0000-0000-0000-000000000002/interview-guide',{redirect:'manual'});
+  assert.equal(guide.status,307);
+  assert.equal(guide.headers.get('location'),'/login');
+  assert.match(guide.headers.get('cache-control'),/no-store/);
   const reset=await fetch(base+'/reset-password',{redirect:'manual'});
   assert.equal(reset.status,307);
   assert.equal(reset.headers.get('location'),'/forgot-password?message=expired');

@@ -14,7 +14,7 @@ export default async function Recruitment({params}: {params:Promise<{companyId:s
   if(candidates.error) throw new Error('Nie udało się wczytać kandydatów.');
   const stages = await client.from('assessment_stages').select('*').eq('company_id',companyId).eq('recruitment_id',recruitmentId).order('sequence');
   if(stages.error) throw new Error('Nie udało się wczytać etapów.');
-  return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link><h1>{recruitment.name}</h1><Link href={`/dashboard/${companyId}/positions/${recruitment.position_id}`}>Profil stanowiska</Link><h2>Kandydaci w rekrutacji</h2>
+  return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link><h1>{recruitment.name}</h1><p><Link href={`/dashboard/${companyId}/positions/${recruitment.position_id}`}>Profil stanowiska</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/interview-guide`}>Przewodnik rozmowy</Link></p><h2 id="candidates">Kandydaci w rekrutacji</h2>
     {candidates.data.length ? <ul>{candidates.data.map(c=><li key={c.id}><Link href={`/dashboard/${companyId}/candidates/${c.id}`}>{c.first_name} {c.last_name}</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/applications/${applications.find(a=>a.candidate_id===c.id)!.id}/screening`}>Przygotowanie preselekcji</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/applications/${applications.find(a=>a.candidate_id===c.id)!.id}/assessments`}>Etapy oceny</Link></li>)}</ul> : <p>Brak przypisanych kandydatów.</p>}
     <Link href={`/dashboard/${companyId}/candidates`}>Otwórz bazę kandydatów i przypisz osobę do rekrutacji</Link>
     <h2>Plan etapów oceny</h2>

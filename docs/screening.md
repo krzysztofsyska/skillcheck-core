@@ -22,7 +22,7 @@ Walidator przyszłej odpowiedzi wymaga dokładnie jednego wpisu na każde kryter
 ## Przed uruchomieniem AI
 Nadal do implementacji: wybór dostawcy i modelu, jawny budżet, konfiguracja kluczy, zgoda na wysłanie sprawdzonego materiału, instrukcje odporne na polecenia w CV, limity żądań/kosztów, obsługa błędów, idempotencja, zapis wyniku z RLS i stanem sprawdzenia przez człowieka. Ponownie pobierać aktualny materiał przed wysyłką oraz przed zapisem wyniku; zmiana w trakcie analizy musi unieważnić wynik. Potrzebna kontrola współbieżności w transakcji bazy przy zapisie, nie tylko porównanie w kodzie.
 
-Ta zmiana nie dodaje migracji. Nadal oczekuje 20261001000200_candidate_documents.sql. Migracji już wykonanych nie ponawiać.
+Ta zmiana nie dodaje migracji. Migracja 20261001000200_candidate_documents.sql została wykonana 2026-10-02; baza ma 10 tabel i 37 polityk RLS. Migracji już wykonanych nie ponawiać.
 
 ## Testy
 Siedem testów lokalnej logiki obejmuje zakres danych, izolację relacji/firm, blokady statusów, aktualność wersji i walidację dowodów. Test HTTP buildu sprawdza przekierowanie anonimowego wejścia na nową stronę do logowania. Nie jest to test AI ani pełny test po zalogowaniu w Supabase/Vercel. Ten pozostaje do wykonania po powrocie użytkownika.

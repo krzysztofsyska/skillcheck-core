@@ -16,7 +16,8 @@
     "test:screening": "node --test tests/screening.test.mjs",
     "test:assessments": "node --test tests/assessment.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
-    "test:live-check": "node --test tests/live-check.test.mjs"
+    "test:live-check": "node --test tests/live-check.test.mjs",
+    "test:behavior-guide": "node --test tests/behavior-guide.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",

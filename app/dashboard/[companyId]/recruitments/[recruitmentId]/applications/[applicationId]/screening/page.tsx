@@ -47,6 +47,7 @@ export default async function Screening({ params }: { params: Promise<{ companyI
       <details><summary>Sprawdzony tekst CV</summary><pre className="cv-text">{prepared.payload.cv_text}</pre></details>
     </>}
     <h2>Do sprawdzenia w dalszych etapach</h2>
+    <p><Link href={`${base}/recruitments/${recruitmentId}/interview-guide`}>Otwórz przewodnik rozmowy dla ośmiu obszarów zachowania</Link></p>
     <p>Samodzielność i sposób działania wymagają rozmowy, przykładów zachowań lub zadań. Nie wyciągamy wniosków o osobowości wyłącznie z CV.</p>
     {position.data.autonomy_level !== null && <p>Wymagany poziom samodzielności: {position.data.autonomy_level}/5.</p>}
     <ul>{position.data.required_behaviors.map((requirement, index) => <li key={index}>{requirement}</li>)}</ul>

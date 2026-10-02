@@ -39,3 +39,5 @@ Skopiuj `.env.example` do ignorowanego `.env.local` i uzupełnij publiczny klucz
 Przy zgłoszeniu do rekrutacji dostępne jest przygotowanie preselekcji: wymagania stanowiska i najnowsze zatwierdzone CV. Integracja AI nie jest uruchomiona; nie generujemy ocen ani decyzji. Kontrakt danych, ograniczenia i pozostałe kroki: [docs/screening.md](docs/screening.md).
 
 Etapy oceny: rekruter dodaje plan etapów w rekrutacji i zapisuje status oraz notatki osobno dla każdego zgłoszenia. Konflikty edycji są wykrywane. Nie jest to automatyczne ocenianie, voicebot ani decyzja o zatrudnieniu.
+
+Przewodnik rozmowy: przy rekrutacji dostępnych jest osiem obszarów zachowania i 16 pytań z wymaganym poziomem stanowiska oraz wskazówkami do zebrania dowodów. Brakujące lub sprzeczne wymagania są jawnie oznaczane. Rozmowę prowadzi człowiek; odpowiedzi można opisać w istniejących notatkach etapów. Zakres: [docs/interview-guide.md](docs/interview-guide.md).
