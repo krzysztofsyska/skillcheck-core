@@ -9,7 +9,7 @@ export function behaviorSchemaMissing(code?: string) {
 }
 export function behaviorSaveError(code?: string) {
   if (behaviorSchemaMissing(code)) return behaviorModuleUnavailable;
-  if (code === '40001') return 'Ocena lub profil stanowiska zmieniły się w innym oknie. Skopiuj swoje uzasadnienie, odśwież stronę i porównaj dane przed ponownym zapisem.';
+  if (code === 'PT409' || code === '40001') return 'Ocena lub profil stanowiska zmieniły się w innym oknie. Skopiuj swoje uzasadnienie, odśwież stronę i porównaj dane przed ponownym zapisem.';
   if (code === '42501') return 'Nie masz uprawnień do zapisu tej oceny.';
   if (code === '55000') return 'Zgłoszenie, rekrutacja lub stanowisko nie pozwalają już na nowe oceny.';
   if (code === '22023') return 'Sprawdź uzasadnienie i wymagany poziom w profilu stanowiska. Obszar musi mieć jeden poprawny poziom.';

@@ -20,7 +20,9 @@ export function BehaviorForm({ companyId, recruitmentId, applicationId, areaKey,
     if (result.saved) setOpened({ ...opened, version: opened.version + 1 });
     return result;
   }, {});
-  return <form action={action}>
+  // React actions reset native form controls after resolving (also when an
+  // action returns a validation error). Keep this revision editor intact.
+  return <form action={action} onReset={event => event.preventDefault()}>
     {state.error && <p role="alert">{state.error}</p>}{state.saved && <p role="status">Zapisano nową wersję oceny.</p>}
     <label>Ocena względem wymagań<select name="rating" value={rating} onChange={e => setRating(e.target.value)}>
       {behaviorRatings.map(([value, label]) => <option key={value} value={value}>{label}</option>)}

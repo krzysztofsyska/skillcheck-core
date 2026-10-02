@@ -11,7 +11,7 @@ test('behavior revisions: migration, RLS, evidence, snapshots and optimistic con
     create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     grant usage on schema auth to anon, authenticated; grant execute on function auth.uid() to anon, authenticated;`);
-  for (const name of ['20260930000100_skillcheck_core', '20261001000100_idempotent_onboarding', '20261001000200_candidate_documents', '20261002000100_behavior_assessments'])
+  for (const name of ['20260930000100_skillcheck_core', '20261001000100_idempotent_onboarding', '20261001000200_candidate_documents', '20261002000100_behavior_assessments', '20261002000200_behavior_conflict_response'])
     await db.exec(await readFile(new URL('../supabase/migrations/' + name + '.sql', import.meta.url), 'utf8'));
   const [ownerA, ownerB, recruiter, viewer] = [1,2,3,4].map(n => '00000000-0000-0000-0000-00000000000' + n);
   for (const id of [ownerA, ownerB, recruiter, viewer]) await db.query('insert into auth.users values($1)', [id]);
@@ -68,7 +68,7 @@ test('behavior revisions: migration, RLS, evidence, snapshots and optimistic con
   });
 
   await t.test('stale writes including duplicate first save fail without destroying previous evidence', async () => {
-    await denied(rpc, args(a, 'responsibility', 1), '40001'); await denied(rpc, args(a, 'initiative', 0), '40001');
+    await denied(rpc, args(a, 'responsibility', 1), 'PT409'); await denied(rpc, args(a, 'initiative', 0), 'PT409');
     await save(a, 'responsibility', 2, 'insufficient_data', 'Potrzebne dalsze pytanie');
     const rows = (await db.query("select version,evidence from public.behavior_assessment_entries where area_key='responsibility' order by version")).rows;
     assert.equal(rows.length, 3); assert.equal(rows[1].evidence, 'Drugi dowód'); assert.equal(rows[2].version, 3);
@@ -78,12 +78,12 @@ test('behavior revisions: migration, RLS, evidence, snapshots and optimistic con
     for (const [offset, value] of [[1, 'unknown'], [2, 'hired'], [3, '\t\n\u00a0\u2009\ufeff'], [3, 'x'.repeat(10001)], [3, null], [4, -1], [4, null], [5, null], [6, null]]) {
       const values = args(a, 'responsibility', 3); values[offset] = value; await denied(rpc, values, '22023');
     }
-    const forged = args(a, 'responsibility', 3); forged[6] = b.position.id; await denied(rpc, forged, '40001');
+    const forged = args(a, 'responsibility', 3); forged[6] = b.position.id; await denied(rpc, forged, 'PT409');
   });
 
   await t.test('changed profile blocks stale editor; new revision preserves old requirements and full profile', async () => {
     await db.query("update public.positions set title='Nowy profil',tasks=array['Nowe zadanie'],required_behaviors=$1 where id=$2", [requirements.map(r => r.replace('Standardowy', 'Wysoki')), a.position.id]);
-    await denied(rpc, args(a, 'responsibility', 3), '40001'); await refreshPosition(); await save(a, 'responsibility', 3);
+    await denied(rpc, args(a, 'responsibility', 3), 'PT409'); await refreshPosition(); await save(a, 'responsibility', 3);
     const rows = (await db.query("select * from public.behavior_assessment_entries where area_key='responsibility' order by version")).rows;
     assert.equal(rows[0].required_level, 'Standardowy'); assert.equal(rows[0].position_snapshot.title, 'TEST');
     assert.equal(rows[3].required_level, 'Wysoki'); assert.equal(rows[3].position_snapshot.title, 'Nowy profil'); assert.deepEqual(rows[3].position_snapshot.tasks, ['Nowe zadanie']);

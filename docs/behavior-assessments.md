@@ -26,3 +26,7 @@ Migrację `20261002000100_behavior_assessments.sql` wykonano 2026-10-02 w projek
 - `test:live` rozszerzono o tabelę wpisów i widok najnowszych ocen. Obie firmy muszą mieć własny wpis; puste relacje nie dają PASS. Nie skonfigurowano jeszcze dwóch kont do tej próby.
 
 Źródła mechanizmów PostgreSQL: [widoki security_invoker](https://www.postgresql.org/docs/current/sql-createview.html), [blokady wierszy i transakcyjne blokady doradcze](https://www.postgresql.org/docs/17/explicit-locking.html).
+
+### Poprawki po pierwszej próbie Preview
+
+Pierwsze trzy zapisy fikcyjnej oceny utworzyły wersje poprawnie. Test wykrył reset listy wyboru po akcji React; formularz blokuje teraz automatyczny reset natywnych pól. Nieaktualne żądanie z drugiego okna długo oczekiwało i wróciło z ogólnym błędem. Przyczyną był domenowy SQLSTATE 40001, który starszy PostgREST ponawia jako błąd przejściowy — [opis Supabase](https://supabase.com/docs/guides/troubleshooting/high-cpu-and-infinite-transaction-retries-when-using-custom-error-codes-in-rpc-functions-77326b). Dodano migrację 20261002000200_behavior_conflict_response.sql z PT409 dla konfliktu profilu/oceny; wykonana 2026-10-02 z wynikiem Success. Oryginalnej wykonanej migracji nie zmieniano. Wszystkie 12 testów ocen ponownie przeszło z nową migracją. Powtórzenie testu poprawionego Preview jest w toku.

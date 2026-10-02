@@ -9,12 +9,13 @@
 ## Oceny z dowodami — implementacja i migracja
 - Dokończono formularz ośmiu ocen przy zgłoszeniu, zapis przez transakcyjne RPC i historię po 20 wpisów z kopią profilu stanowiska. Rekruter/właściciel zapisuje; viewer czyta. Każda poprawka tworzy wersję, a autor i wymagania pochodzą z bazy. Konflikt oceny lub profilu blokuje zapis, nie nadpisuje dowodów. Brak integracji AI lub automatycznej decyzji.
 - Migracja 20261002000100_behavior_assessments.sql wykonana 2026-10-02 po potwierdzeniu braku nowej tabeli/widoku. Wynik Success; kontrola SQL: 11 tabel, 38 polityk, RLS nowej tabeli, security_invoker widoku, brak odczytu anon i bezpośredniego zapisu authenticated, dostępne RPC. NIE uruchamiać jej ponownie.
+- Próba Preview wykryła dwa problemy: reset listy oceny po akcji React oraz długie ponawianie konfliktu 40001 przez PostgREST. Zablokowano reset formularza; migrację naprawczą 20261002000200_behavior_conflict_response.sql wykonano z wynikiem Success. Konflikty domenowe używają teraz PT409; nie zmienia to reguł dostępu. Nie ponawiać żadnej z pięciu migracji. Testy nowych ocen ponownie przeszły; próba poprawionej wersji Preview trwa.
 - Przeszły 12 raportowanych testów nowych ocen (w tym nadrzędny test bazy), 6 przewodnika, 4 mechanizmu live, typecheck, build i HTTP obu nowych chronionych tras. Pierwsza próba testu widoku oczekiwała złego kodu błędu; poprawiono oczekiwanie na PostgreSQL 55000 dla nieaktualizowalnego widoku i sprawdzono osobno brak grantu UPDATE.
 - Test zalogowanego formularza i historii po publikacji Preview pozostaje do wykonania. Szczegóły docs/behavior-assessments.md. Następnie: dalsze rubryki testów kompetencji/AC i raport oparty na dowodach; zewnętrzne AI/voicebot wymagają dostawcy, kluczy i budżetu. Niezależnie pozostają druga firma, role, poczta/recovery i równoległy onboarding.
 
 ## Wdrożona baza
 - Supabase: wsvjawuikxfzjyivxgsu, 11 tabel i 38 polityk po migracji ocen. Poprzednia kontrola potwierdziła RLS w dziesięciu tabelach, kolejna także w nowej tabeli; widok ocen używa security_invoker.
-- Migracje 20260930000100, 20261001000100, 20261001000200 i 20261002000100 już wykonano. Nie wykonywać ponownie.
+- Migracje 20260930000100, 20261001000100, 20261001000200, 20261002000100 i 20261002000200 już wykonano. Nie wykonywać ponownie.
 - Migracja CV wykonana 2026-10-02 po potwierdzeniu braku candidate_documents. Kontrola po wykonaniu potwierdziła trzy polityki CV, aktywny wyzwalacz wersjonowania i granty RPC; anonimowy odczyt oraz bezpośrednia zmiana oryginału/metadanych zatwierdzenia są niedozwolone.
 - ensure_initial_company chroni przed duplikacją onboardingu. Test powtórzenia i członkostwa przeszedł; test równoległych sesji pozostaje do wykonania.
 

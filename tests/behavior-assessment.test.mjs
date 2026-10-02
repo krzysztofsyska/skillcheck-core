@@ -21,6 +21,7 @@ test('closed workflows are read only and errors distinguish conflicts from unava
   for (const recruitment of ['paused', 'closed', 'unknown']) assert.equal(behaviorEditingOpen('new', recruitment, 'active'), false);
   assert.equal(behaviorEditingOpen('new', 'open', 'archived'), false);
   assert.match(behaviorSaveError('40001'), /Skopiuj/);
+  assert.match(behaviorSaveError('PT409'), /Skopiuj/);
   assert.match(behaviorSaveError('42501'), /uprawnień/);
   assert.match(behaviorSaveError('55000'), /już/);
   assert.equal(behaviorSchemaMissing('42501'), false);
