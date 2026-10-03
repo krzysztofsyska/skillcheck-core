@@ -47,3 +47,25 @@ export function parseExerciseDefinition(input: unknown): ExerciseDefinition {
     durationMinutes: value.durationMinutes as number, criteria,
   };
 }
+
+/** Parse native repeated form controls without accepting client-supplied tenant metadata. */
+export function parseExerciseFormData(form: FormData): ExerciseDefinition {
+  const scalar = (name: string): string => {
+    const values = form.getAll(name);
+    if (values.length !== 1 || typeof values[0] !== 'string') throw new Error('Nieprawidłowe pole formularza: ' + name);
+    return values[0];
+  };
+  const duration = scalar('durationMinutes');
+  if (!/^[1-9][0-9]{0,2}$/.test(duration)) throw new Error('Podaj całkowitą liczbę minut od 1 do 180.');
+  const fields = ['competency', 'below', 'meets', 'above'] as const;
+  const columns = fields.map(field => form.getAll(field));
+  const count = columns[0].length;
+  if (count < 1 || count > 12 || columns.some(column => column.length !== count || column.some(value => typeof value !== 'string'))) {
+    throw new Error('Każde kryterium wymaga kompetencji i trzech opisów poziomów.');
+  }
+  return parseExerciseDefinition({
+    kind: scalar('kind'), title: scalar('title'), instructions: scalar('instructions'),
+    expectedOutput: scalar('expectedOutput'), durationMinutes: Number(duration),
+    criteria: columns[0].map((_, i) => ({competency: columns[0][i], below: columns[1][i], meets: columns[2][i], above: columns[3][i]})),
+  });
+}

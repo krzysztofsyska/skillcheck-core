@@ -43,3 +43,37 @@ test('duplicate competencies and indistinguishable anchors cannot form a rubric'
   const same = valid(); same.criteria[0].above = same.criteria[0].meets.toUpperCase();
   assert.throws(() => parseExerciseDefinition(same));
 });
+
+// Native form fields must preserve each criterion's row and reject ambiguous payloads.
+const nativeForm = () => {
+  const input = valid(); const form = new FormData();
+  for (const field of ['kind', 'title', 'instructions', 'expectedOutput', 'durationMinutes']) form.set(field, String(input[field]));
+  for (const criterion of input.criteria) for (const [key, value] of Object.entries(criterion)) form.append(key, value);
+  return form;
+};
+test('native exercise form preserves criterion rows and excludes untrusted metadata', async () => {
+  const { parseExerciseFormData } = await import('../lib/exercise-definition.ts');
+  const form = nativeForm();
+  for (const [key, value] of Object.entries({competency:'Komunikacja', below:'Pomija informacje.', meets:'Przekazuje informacje.', above:'Dodatkowo sprawdza zrozumienie.'})) form.append(key,value);
+  form.set('company_id','other'); form.set('author_id','other'); form.set('version','999');
+  const parsed = parseExerciseFormData(form);
+  assert.equal(parsed.criteria.length,2); assert.equal(parsed.criteria[1].competency,'Komunikacja');
+  assert.equal(parsed.criteria[1].meets,'Przekazuje informacje.');
+  assert.equal('company_id' in parsed,false); assert.equal('author_id' in parsed,false); assert.equal('version' in parsed,false);
+});
+test('native exercise form rejects duplicate scalars, files, missing rows and coercion tricks', async () => {
+  const { parseExerciseFormData } = await import('../lib/exercise-definition.ts');
+  for (const field of ['kind','title','instructions','expectedOutput','durationMinutes']) {
+    const duplicate=nativeForm(); duplicate.append(field,'second'); assert.throws(()=>parseExerciseFormData(duplicate));
+    const missing=nativeForm(); missing.delete(field); assert.throws(()=>parseExerciseFormData(missing));
+    const file=nativeForm(); file.set(field,new File(['x'],'x.txt')); assert.throws(()=>parseExerciseFormData(file));
+  }
+  for(const value of ['20.0','2e1','0x14','+20','020',' 20','20 ','181','0','-1']) {
+    const form=nativeForm(); form.set('durationMinutes',value); assert.throws(()=>parseExerciseFormData(form));
+  }
+  for(const field of ['competency','below','meets','above']) {
+    const missing=nativeForm(); missing.delete(field); assert.throws(()=>parseExerciseFormData(missing));
+    const extra=nativeForm(); extra.append(field,'extra'); assert.throws(()=>parseExerciseFormData(extra));
+    const file=nativeForm(); file.set(field,new File(['x'],'x.txt')); assert.throws(()=>parseExerciseFormData(file));
+  }
+});
