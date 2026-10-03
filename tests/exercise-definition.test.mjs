@@ -77,3 +77,20 @@ test('native exercise form rejects duplicate scalars, files, missing rows and co
     const file=nativeForm(); file.set(field,new File(['x'],'x.txt')); assert.throws(()=>parseExerciseFormData(file));
   }
 });
+import { validExerciseEditorContext, exerciseSaveError } from '../lib/exercise-editor.ts';
+
+test('exercise editor accepts only bounded versions, UUIDs and a parseable position timestamp', () => {
+  const context = { recruitmentId:'10000000-0000-0000-0000-000000000001', exerciseId:'20000000-0000-0000-0000-000000000001', positionId:'30000000-0000-0000-0000-000000000001', expectedVersion:0, positionUpdatedAt:'2026-10-02T18:00:00.123456Z' };
+  assert.equal(validExerciseEditorContext(context), true);
+  for(const field of ['recruitmentId','exerciseId','positionId']) for(const value of [null, {}, '', '../other', 'x'.repeat(36)]) assert.equal(validExerciseEditorContext({...context,[field]:value}),false);
+  for(const expectedVersion of [-1, 1.5, '0', NaN, Infinity, 2147483647]) assert.equal(validExerciseEditorContext({...context,expectedVersion}),false);
+  for(const positionUpdatedAt of [null,{},'', 'not-a-date']) assert.equal(validExerciseEditorContext({...context,positionUpdatedAt}),false);
+});
+test('exercise errors distinguish conflict, permissions, missing schema and ambiguous save outcome', () => {
+  assert.match(exerciseSaveError('PT409'),/Skopiuj/);
+  assert.match(exerciseSaveError('42501'),/uprawnień/);
+  assert.match(exerciseSaveError('55000'),/nie pozwalają/);
+  assert.match(exerciseSaveError('22023'),/kryteriów/);
+  for(const code of ['42P01','42883','PGRST202','PGRST205']) assert.match(exerciseSaveError(code),/jeszcze dostępne/);
+  for(const code of [undefined,'08006','PGRST301']) assert.match(exerciseSaveError(code),/zapis mógł się zakończyć/);
+});
