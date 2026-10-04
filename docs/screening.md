@@ -46,16 +46,38 @@ Migracja `20261004000200_screening_results.sql` jest wdrożona i dostarcza pię�
 - Nie są przechowywane raw provider request/response ani nowe payloady poza
   zatwierdzonym snapshotem redacted CV, kryteriami i bindingiem audytowym.
 
-Migracja została uruchomiona na produkcyjnym Supabase 2026-10-04. Nie zapewnia
-jeszcze integracji OpenAI ani provisioningu/dispatchu wewnętrznego workera; te
-elementy należą do SC-005.
+Migracja została uruchomiona na produkcyjnym Supabase 2026-10-04.
 
-## Przed uruchomieniem AI
-Nadal do implementacji: wybór i konfiguracja dostawcy/modelu, jawny budżet,
-konfiguracja kluczy, zgoda na wysłanie sprawdzonego materiału, instrukcje odporne
-na polecenia w CV, limity żądań/kosztów oraz bezpieczny dispatch workera.
-Integracja musi ponownie pobierać aktualny materiał przed wysyłką i korzystać z
-lease/RPC przy zapisie. Nie wolno przekazywać internal capability do przeglądarki.
+## Worker AI przygotowany w SC-005
+
+Kod workera i dispatcher są w repozytorium, ale flaga `SCREENING_AI_ENABLED`
+domyślnie pozostaje `false`. UI nadal nie uruchamia analizy. Migracja
+`20261005000100_screening_worker_claim_payload.sql` nie jest zastosowana do
+produkcji.
+
+- Edge Function `screening-worker` ma `verify_jwt = false` i ufa wyłącznie HMAC
+  `x-skillcheck-timestamp` / `x-skillcheck-signature`.
+- Podpis: HMAC-SHA256(secret, timestamp + "." + sha256(surowe bajty body)).
+- Worker łączy się przez `SUPABASE_DB_URL` i `SET LOCAL ROLE screening_worker`.
+  Nie używa `service_role` do claim/complete/fail.
+- OpenAI Responses API, model `gpt-5.4-mini-2026-03-17`, `store:false`,
+  `reasoning.effort=low`, strict Structured Outputs, bez tools i conversation.
+- Brak user-callable Server Action. `dispatchScreeningWorker` zostaje
+  wewnętrznym helperem serwerowym; start + RPC + dispatch spina SC-006.
+- Przed wywołaniem OpenAI worker potwierdza, że claim odpowiada
+  `screeningAiContract` i temu samemu `analysis_contract_hash`.
+- Pojedynczy request OpenAI ma timeout 60 s (`AbortController`). Przy max
+  2 retry (3 próby) budżet zostaje wyraźnie poniżej 5-minutowego lease.
+- Do modelu idzie wyłącznie `{schema_version, cv_text, criteria}`.
+  Tekst CV i treść kryteriów są danymi niezaufanymi, nie instrukcjami.
+- Model zwraca cytaty; worker liczy offsety UTF-16 przez dokładne `indexOf`.
+- Sekrety: `OPENAI_API_KEY`, `SCREENING_WORKER_DISPATCH_SECRET`,
+  `SUPABASE_DB_URL`, `SCREENING_AI_ENABLED`. Nigdy `NEXT_PUBLIC_*`.
+
+## Przed odblokowaniem UI
+SC-006 może włączyć dispatch dla użytkownika dopiero po review, zgodzie na
+wysłanie materiału i ustawieniu sekretów poza repozytorium. Nie wolno
+przekazywać internal capability do przeglądarki.
 
 Wdrożony baseline produkcji ma 18 tabel z RLS, 45 polityk, trzy widoki
 `security_invoker`, 12 publicznych RPC i osiem wykonanych migracji. Nie ponawiać
@@ -63,8 +85,9 @@ Wdrożony baseline produkcji ma 18 tabel z RLS, 45 polityk, trzy widoki
 
 ## Testy
 Testy lokalnej logiki obejmują zakres danych, izolację relacji/firm, blokady
-statusów, aktualność wersji, canonical contract hash i walidację dowodów. Testy
-PGlite SC-004 odtwarzają migrację, role/RLS, idempotency, lease, immutable result,
+statusów, aktualność wersji, canonical contract hash, HMAC dispatch, allowlist
+payload, Structured Outputs i walidację cytatów. Testy PGlite odtwarzają
+migracje SC-004/SC-005, role/RLS, rozszerzony claim, lease, immutable result,
 stale completion i optimistic human review. Test HTTP buildu nadal sprawdza
 przekierowanie anonimowego wejścia do logowania.
 

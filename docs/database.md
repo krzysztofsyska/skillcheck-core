@@ -16,6 +16,11 @@ persistowanego wyniku preselekcji oraz sześć RPC. Po wdrożeniu produkcyjny
 baseline wynosi 18 tabel z RLS / 45 polityk / 3 widoki `security_invoker` /
 12 publicznych RPC.
 
+SC-005 przygotowuje w repozytorium jedną kolejną migrację
+`20261005000100_screening_worker_claim_payload.sql`. Rozszerza wyłącznie
+wynik `claim_screening_attempt` o niemutowalny payload workera. Nie została
+zastosowana do produkcyjnego Supabase i nie zmienia tabel, RLS ani grantów.
+
 ## Model
 
 | Tabela | Znaczenie |
@@ -156,7 +161,8 @@ profile są tworzone atomowo przez RPC; ich bezpośredni `Insert` ma typ `never`
 Typy wygenerowane przez Supabase CLI należy porównywać z tym kontraktem, nie
 zastępować nim ograniczeń API bez przeglądu. Baza zawsze egzekwuje uprawnienia.
 
-`tests/database-types.test.mjs` odtwarza osiem wdrożonych migracji i zamraża
+`tests/database-types.test.mjs` odtwarza osiem wdrożonych migracji oraz
+przygotowaną migrację SC-005 i zamraża
 publiczne tabele, kolumny, relacje, widoki `security_invoker` oraz sygnatury RPC.
 `tests/database-types.contract.ts` zamraża odpowiadające im typy TypeScript.
 
@@ -169,8 +175,8 @@ npm run test:db
 npm run build
 ```
 
-Testy wykonują migracje w PGlite i sprawdzają istniejący model oraz pięć tabel
-SC-004, a także
+Testy wykonują migracje w PGlite i sprawdzają istniejący model, pięć tabel
+SC-004 oraz rozszerzony claim SC-005, a także
 izolację odczytu/zapisu/usuwania, brak anonimowego dostępu, role, odebranie dostępu,
 blokadę zmiany właściciela i firmy, złożone relacje, ograniczenia i bootstrap.
 Te same kontrole są uruchamiane przez GitHub Actions. Plik lock stabilizuje wersje.

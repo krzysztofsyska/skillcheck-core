@@ -17,6 +17,7 @@ const migrations = [
   "20261002000300_exercise_definitions.sql",
   "20261004000100_exercise_observations.sql",
   "20261004000200_screening_results.sql",
+  "20261005000100_screening_worker_claim_payload.sql",
 ];
 
 const ownerA = "10000000-0000-0000-0000-000000000001";
@@ -363,6 +364,18 @@ test("persisted screening results enforce tenant, worker, evidence and review co
     firstClaim = await claim(first.attempt_id);
     assert.equal(firstClaim.analysis_id, first.analysis_id);
     assert.equal(firstClaim.lease_token.length, 64);
+    assert.equal(firstClaim.input_fingerprint, preparedA.fingerprint);
+    assert.equal(firstClaim.analysis_contract_hash, contractHash);
+    assert.equal(firstClaim.payload_schema_version, 1);
+    assert.equal(firstClaim.prompt_version, contractV1.prompt_version);
+    assert.ok(Array.isArray(firstClaim.criteria_snapshot));
+    assert.equal(firstClaim.input_cv_text_snapshot, preparedA.payload.cv_text);
+    for (const forbidden of [
+      "company_id", "candidate_id", "application_id", "recruitment_id",
+      "position_id", "document_id", "binding_snapshot", "source_text",
+    ]) {
+      assert.equal(firstClaim[forbidden], undefined);
+    }
     await assert.rejects(
       db.query("select * from public.claim_screening_attempt($1)", [first.attempt_id]),
       error => error.code === "55000",

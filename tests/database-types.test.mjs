@@ -12,6 +12,7 @@ const migrations = [
   "20261002000300_exercise_definitions.sql",
   "20261004000100_exercise_observations.sql",
   "20261004000200_screening_results.sql",
+  "20261005000100_screening_worker_claim_payload.sql",
 ];
 
 const tableColumns = {
@@ -173,6 +174,14 @@ test("public database contract matches the manually maintained Supabase types", 
     for (const name of ["start_screening_analysis", "claim_screening_attempt", "retry_screening_analysis"]) {
       assert.match(rpc.rows.find(row => row.proname === name).result, /^TABLE\(/);
     }
+    assert.match(
+      rpc.rows.find(row => row.proname === "claim_screening_attempt").result,
+      /input_fingerprint[\s\S]*criteria_snapshot/,
+    );
+    assert.doesNotMatch(
+      rpc.rows.find(row => row.proname === "claim_screening_attempt").result,
+      /company_id|candidate_id|binding_snapshot|source_text/,
+    );
     for (const name of [
       "create_company", "ensure_initial_company", "save_behavior_assessment",
       "save_exercise_definition", "save_exercise_observations",

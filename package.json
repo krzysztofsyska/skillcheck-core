@@ -13,7 +13,7 @@
     "test:live": "node --env-file-if-exists=.env.local scripts/check-live-supabase.mjs",
     "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs tests/cv-pdf.test.mjs tests/cv-docx.test.mjs",
     "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs",
-    "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs",
+    "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs",
     "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:live-check": "node --test tests/live-check.test.mjs tests/live-membership.test.mjs tests/live-final-audit.test.mjs",

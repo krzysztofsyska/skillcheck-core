@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261004000200.
+// Public API contract after migrations 20260930000100 through 20261005000100.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -370,6 +370,16 @@ export type Database = {
           attempt_id: string;
           lease_token: string;
           lease_expires_at: string;
+          input_fingerprint: string;
+          analysis_contract_hash: string;
+          payload_schema_version: number;
+          result_schema_version: number;
+          prompt_version: string;
+          provider: string;
+          model: string;
+          model_revision: string | null;
+          input_cv_text_snapshot: string;
+          criteria_snapshot: ScreeningCriterionSnapshot[];
         }[];
       };
       start_screening_analysis: {

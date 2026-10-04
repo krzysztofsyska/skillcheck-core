@@ -1,0 +1,5 @@
+# CLI metadata only. Do not store secrets here.
+project_id = "skillcheck-core"
+
+[functions.screening-worker]
+verify_jwt = false
