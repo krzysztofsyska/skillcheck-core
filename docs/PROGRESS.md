@@ -212,3 +212,6 @@ Wykonano kontrolę PR/kodu, konfiguracji SMTP i próbę odmowy dostępu B do obs
 
 ## Instrukcja zamknięcia audytu
 Przygotowano docs/owner-audit-runbook.md i tryb Membership do prób API ról bez przekazywania haseł. 10 zestawów PASS; cztery dodatkowe próby offline narzędzia PASS. Aktualny jednoznaczny status NOT READY: wymagane realne wyniki A/B, ról, recovery i równoległego onboardingu. Szczegóły w audit-2026-10-04.md. Brak nowych funkcji aplikacji i merge.
+
+## Wynik A/B od wlasciciela
+Zrzut potwierdza PASS odczytow API dwoch kont w 16 relacjach. Dowod i granice zapisano w audit-2026-10-04.md. Role, pelny recovery i rownolegly onboarding nadal otwarte; NOT READY.
