@@ -141,3 +141,7 @@ Poniższe wpisy zachowują stan z chwili ich zapisu. Dawne informacje o oczekuj�
 ## Akcja zapisu definicji — 2026-10-03
 - Dodano serwerową akcję saveExerciseDefinition: sprawdzenie sesji/roli i przynależności rekrutacji do firmy, walidacja formularza i kontekstu wersji, wywołanie transakcyjnego RPC oraz odświeżenie przyszłej trasy exercises. Nie przyjmuje autora ani firmy z pól definicji. Zwraca id zapisanej wersji; formularz powinien aktualizować swój kontekst dopiero po potwierdzonym sukcesie.
 - Czytelne błędy rozróżniają konflikt, brak uprawnień, zamknięty proces, niepoprawne kryteria i brak migracji. Przy nieznanym wyniku komunikat zaleca sprawdzenie historii przed ponowieniem. Siedem testów walidatora/formularza/kontekstu i TypeScript przeszło; testy samej akcji z prawdziwą sesją czekają na podłączenie UI. Pozostają strona i formularz, migracja docelowa oraz testy Preview. Nie wykonywano migracji ani publikacji produkcji.
+
+## Weryfikacja publikacji — 2026-10-04
+- Kod interfejsu 8158646 opublikowany do gałęzi PR; Vercel deployment 52rqM3dzt93Rjge737MCP4E7UcBp zakończony success. GitHub Checks verify: success (runs 37166622809 i 37166620917).
+- Wznowienie istniejącego logowania Supabase przez ChatGPT próbowano dwukrotnie. Obie próby wróciły z OAuth state has expired. Nie wykonano migracji 20261002000300 ani zapisu nowych zadań na docelowej bazie. Potrzebne zalogowanie użytkownika w przeglądarce Codex; ekran pozostawiono otwarty. Nie pobierano haseł ani tokenów.
