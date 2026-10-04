@@ -104,11 +104,16 @@ Podpis:
 `HMAC-SHA256(secret, timestamp + "." + sha256(body))`
 
 Worker:
-1. sprawdza timestamp, np. max ±60 s,
-2. oblicza własny podpis,
-3. porównuje constant-time,
-4. odrzuca brak/niezgodność,
-5. nie loguje sekretu ani pełnych nagłówków.
+1. odczytuje surowe bajty request body przed parsowaniem JSON,
+2. sprawdza timestamp, np. max ±60 s,
+3. liczy SHA-256 dokładnie tych samych surowych bajtów body,
+4. oblicza własny HMAC,
+5. porównuje constant-time,
+6. dopiero po poprawnej weryfikacji parsuje JSON,
+7. odrzuca brak/niezgodność,
+8. nie loguje sekretu ani pełnych nagłówków.
+
+Sekret powinien być losowy, co najmniej 32 bajty entropii, przechowywany wyłącznie w secret store.
 
 Replay tego samego dispatchu jest dodatkowo neutralizowany przez DB:
 - jeden aktywny attempt,
@@ -414,6 +419,15 @@ Nie tworzyć własnego systemu retry poza SC-004.
 Edge Function endpoint:
 `screening-worker`
 
+Konfiguracja funkcji:
+
+```toml
+[functions.screening-worker]
+verify_jwt = false
+```
+
+Wyłączenie gateway JWT jest świadome: endpoint nie ufa Supabase user JWT ani service key. Jedyną autoryzacją dispatchu jest poprawny, świeży podpis HMAC server-to-server. Dzięki temu Vercel nie potrzebuje `service_role` ani Supabase secret key.
+
 Po poprawnym HMAC:
 1. zwrócić HTTP 202 szybko,
 2. uruchomić:
@@ -500,7 +514,7 @@ Integracja po wdrożeniu ma być domyślnie bez user-facing auto-run.
 Server-side flag:
 `SCREENING_AI_ENABLED=false`
 
-SC-005 może wdrożyć worker i testy, ale rzeczywiste uruchamianie dla użytkownika odblokowuje dopiero SC-006 po review UI i zgody.
+Flaga ma być sprawdzana zarówno przez dispatcher na Vercel, jak i przez Edge Function jako defense-in-depth. SC-005 może wdrożyć worker i testy, ale rzeczywiste uruchamianie dla użytkownika odblokowuje dopiero SC-006 po review UI i zgody.
 
 ## 25. Testy wymagane w implementacji
 
