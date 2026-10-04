@@ -25,9 +25,9 @@ Stara wersja projektu jest zachowana w gałęzi `archive-old-version`.
 
 Migracja SQL, zasady dostępu firm i przykłady użycia są opisane w
 [docs/database.md](docs/database.md). Kod obejmuje firmy, profile firm, stanowiska,
-rekrutacje, kandydatów, aplikacje i etapy oceny. Zawiera logowanie, panel, profil stanowiska, rekrutacje i ręczne dodawanie kandydatów. Import tekstu/PDF/DOCX i sprawdzanie anonimizacji przeszły próby jednej zalogowanej firmy na Preview — docs/e2e-2026-10-02.md. OCR/AI/voicebot pozostają do implementacji.
+rekrutacje, kandydatów, aplikacje i etapy oceny. Zawiera logowanie, panel, profil stanowiska, rekrutacje i ręczne dodawanie kandydatów. Import tekstu/PDF/DOCX i sprawdzanie anonimizacji zweryfikowano przed scaleniem na Preview — [docs/e2e-2026-10-02.md](docs/e2e-2026-10-02.md). Funkcje te są obecnie na `main` i w produkcji. OCR/AI/voicebot pozostają do implementacji.
 
-Migracje 20260930000100, 20261001000100, 20261001000200, 20261002000100 20261002000200 20261002000300 i 20261004000100 wykonano już w docelowym Supabase. Stan zweryfikowany 2026-10-04: 13 tabel, 40 polityk RLS oraz trzy widoki z security_invoker. Nie uruchamiać ponownie. Kod aplikacji pozostaje w PR #1 / Preview; produkcja nadal używa wcześniejszej wersji z main.
+Migracje 20260930000100, 20261001000100, 20261001000200, 20261002000100, 20261002000200, 20261002000300 i 20261004000100 wykonano już w docelowym Supabase. Stan zweryfikowany 2026-10-04: 13 tabel, 40 polityk RLS oraz trzy widoki z security_invoker. Nie uruchamiać ponownie. PR #1 i PR #22 są scalone do `main`; commit `e517d9e` został pomyślnie wdrożony na Production 2026-10-04.
 
 Sprawdzenie: `npm ci`, `npm run typecheck`, `npm run test:db`, `npm run build`.
 
