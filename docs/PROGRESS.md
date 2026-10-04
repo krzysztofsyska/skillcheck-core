@@ -206,3 +206,6 @@ Lokalny SHA 8cfd55a16a2eb274dc52c42849a220da3bcb0fb8: ponownie uruchomiono wszys
 GitHub HEAD przy kontroli 7a205dbe2dbbd909786d074ba3e893c9b3d4656f, Vercel success (AgQu5QVVH2Wjb6zk96PB9y3yxWeU); PR draft, merged=false; main nadal 62a47ba6b40a1d92149fd2f6b1d34b195756048d. Nowsze lokalne zmiany dotyczą dokumentacji kompletności danych i tego wyniku.
 
 Aktualne blokady: kompletność rekordów A/B jest już potwierdzona (16/16), więc poprzednie braki danych nie obowiązują. Następny krok to scripts/run-live-check.ps1 z danymi wprowadzonymi lokalnie przez użytkownika; aktywna sesja przeglądarki nie jest sesją skryptu Node. Nie pobierano ciasteczek ani tokenów z przeglądarki. Pełny test API, rzeczywiste role recruiter/viewer, pełny cykl recovery oraz współbieżny onboarding nadal niezaliczone. Przygotowanie testów i dostępna walidacja lokalna zakończone, cały audyt NIE jest zakończony. NOT READY do merge.
+
+## Audyt bez hasła B — 2026-10-04
+Wykonano kontrolę PR/kodu, konfiguracji SMTP i próbę odmowy dostępu B do obserwacji A. Naprawiono komunikat limitu e-mail i kodowanie runnera Windows; build/typecheck/Auth/HTTP PASS. Szczegóły i otwarte bramki w końcowej sekcji docs/audit-2026-10-04.md. Cały audyt nadal NOT READY; bez merge i nowych modułów.

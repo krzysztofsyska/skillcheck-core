@@ -13,7 +13,7 @@ foreach ($variableName in $taskVariables) {
 $taskExitCode = 1
 try {
   $env:NEXT_PUBLIC_SUPABASE_URL = 'https://wsvjawuikxfzjyivxgsu.supabase.co'
-  Write-Host 'SkillCheck: tylko odczyt API dwóch kont. Hasła nie będą wyświetlane ani zapisywane w plikach.'
+  Write-Host 'SkillCheck: tylko odczyt API dwoch kont. Hasla nie beda wyswietlane ani zapisywane w plikach.'
   Write-Host 'Klucz publiczny projektu: Supabase > Project Settings > API Keys > Publishable key.'
   $publicKey = (Read-Host 'Klucz sb_publishable_ (nigdy secret/service_role)').Trim()
   if (-not $publicKey.StartsWith('sb_publishable_')) { throw 'Wymagany klucz publiczny sb_publishable_.' }
@@ -22,10 +22,10 @@ try {
     $accountEmail = (Read-Host "E-mail konta $accountLabel").Trim()
     if ($accountEmail -notmatch '^[^\s@]+@[^\s@]+\.[^\s@]+$') { throw 'Niepoprawny format e-maila.' }
     [Environment]::SetEnvironmentVariable("SKILLCHECK_TEST_EMAIL_$accountLabel", $accountEmail, 'Process')
-    $securePassword = Read-Host "Hasło konta $accountLabel (ukryte)" -AsSecureString
+    $securePassword = Read-Host "Haslo konta $accountLabel (ukryte)" -AsSecureString
     $passwordPointer = [IntPtr]::Zero
     try {
-      if ($securePassword.Length -eq 0) { throw 'Hasło nie może być puste.' }
+      if ($securePassword.Length -eq 0) { throw 'Haslo nie moze byc puste.' }
       $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
       [Environment]::SetEnvironmentVariable("SKILLCHECK_TEST_PASSWORD_$accountLabel",
         [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer), 'Process')
@@ -38,7 +38,7 @@ try {
   & node (Join-Path $PSScriptRoot 'check-live-supabase.mjs')
   $taskExitCode = $LASTEXITCODE
 } catch {
-  Write-Host 'Test nie został ukończony. Sprawdź format danych i dostępność Node.js; nie przesyłaj haseł w czacie.'
+  Write-Host 'Test nie zostal ukonczony. Sprawdz format danych i dostepnosc Node.js; nie przesylaj hasel w czacie.'
 } finally {
   foreach ($variableName in $taskVariables) {
     [Environment]::SetEnvironmentVariable($variableName, $previousValues[$variableName], 'Process')

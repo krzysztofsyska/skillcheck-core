@@ -53,6 +53,7 @@ export async function requestPasswordReset(form: FormData) {
   try { redirectTo = authCallbackUrl('recovery', (await headers()).get('origin')); } catch { redirect("/forgot-password?message=unavailable"); }
   const client = await createClient();
   const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
+  if (error?.code === "over_email_send_rate_limit") redirect("/forgot-password?message=rate-limit");
   if (error) redirect("/forgot-password?message=unavailable");
   redirect("/forgot-password?message=sent");
 }
