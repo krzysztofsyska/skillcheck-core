@@ -170,3 +170,7 @@ Poniższe wpisy zachowują stan z chwili ich zapisu. Dawne informacje o oczekuj�
 ## Uzupełnienie audytu — rzeczywiste konto B
 
 Potwierdzono TEST Firmę B, zapis/trwałość profilu, stanowisko/KPI/zachowania, rekrutację, kandydata/przypisanie i blokadę duplikatu, tekst CV/anonimizację/zatwierdzenie oraz logout z ochroną panelu. Konto B otrzymało 404 przy wejściu do panelu firmy A. Oczekiwanie na login użytkownika A do próby odwrotnej; pełnego RLS/test:live/rol/recovery nie zaliczono. Szczegóły i identyfikatory: docs/audit-2026-10-04.md. Kod bez zmian, bez merge.
+
+## Uzupełnienie audytu — rzeczywiste konto A
+
+Potwierdzono własny panel Ekoflame i odmowę dostępu (404) do panelu B, CV B oraz identyfikatora kandydata B pod ścieżką A. Kontrola paneli A↔B przeszła; nie zastępuje pełnego test:live/RLS/rol/recovery. Sesja A pozostawiona w swoim panelu. Szczegóły w docs/audit-2026-10-04.md; kod bez zmian, bez merge.
