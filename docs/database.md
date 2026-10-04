@@ -1,8 +1,13 @@
-# SkillCheck — baza danych, etap 1
+# SkillCheck — kontrakt bazy danych
 
-Stan docelowego Supabase na 2026-10-02: wykonano migracje 20260930000100, 20261001000100 i 20261001000200. Jest 10 tabel oraz 37 polityk RLS. Nie wykonywać tych migracji ponownie. Poniższy opis modelu etapu 1 obejmuje pierwotne dziewięć tabel; rozszerzenie candidate_documents i jego weryfikację opisuje [cv.md](cv.md). Instrukcja wykonania poniżej dotyczy wyłącznie nowego, pustego środowiska.
+Stan docelowego Supabase na 2026-10-04 obejmuje siedem wykonanych migracji:
+`20260930000100`, `20261001000100`, `20261001000200`, `20261002000100`,
+`20261002000200`, `20261002000300` i `20261004000100`. Schemat publiczny ma
+13 tabel z RLS, 40 polityk, trzy widoki `security_invoker` i sześć publicznych
+RPC. Nie wykonywać tych migracji ponownie. Instrukcja wykonania poniżej dotyczy
+wyłącznie nowego, pustego środowiska.
 
-Migracja: `supabase/migrations/20260930000100_skillcheck_core.sql`.
+Migracja bazowa: `supabase/migrations/20260930000100_skillcheck_core.sql`.
 Przygotowanie pliku ani wdrożenie kodu na Vercel nie wykonuje migracji w Supabase.
 
 ## Model
@@ -18,11 +23,25 @@ Przygotowanie pliku ani wdrożenie kodu na Vercel nie wykonuje migracji w Supaba
 | applications | Udział kandydata w rekrutacji; jedna osoba może mieć wiele aplikacji |
 | assessment_stages | Uporządkowane etapy danej rekrutacji |
 | candidate_assessments | Status, opcjonalny wynik 0–100 i notatka dla aplikacji i etapu |
+| candidate_documents | Wersjonowany tekst CV i ręcznie zatwierdzona redakcja |
+| behavior_assessment_entries | Niezmienna historia ocen zachowania z dowodami |
+| exercise_definition_entries | Niezmienne wersje definicji zadań i rubryk |
+| exercise_observation_entries | Niezmienna historia obserwacji wykonania zadań |
 
 Każdy rekord operacyjny zawiera `company_id`. Złożone klucze obce wymagają tej
 samej firmy po obu stronach relacji. Ocena wymaga dodatkowo tej samej rekrutacji
-dla aplikacji i etapu. Nie ma automatycznej oceny, CV, AI ani voicebota.
-Wynik jest wartością zapisaną przez uprawnionego użytkownika.
+dla aplikacji i etapu. CV, oceny zachowania, definicje zadań i obserwacje opisują
+odpowiednio [cv.md](cv.md), [behavior-assessments.md](behavior-assessments.md),
+[exercise-definitions.md](exercise-definitions.md) i
+[exercise-observations.md](exercise-observations.md). Nie ma automatycznej oceny,
+integracji AI ani voicebota; wyniki zapisuje uprawniony użytkownik.
+
+Widoki `latest_behavior_assessments`, `latest_exercise_definitions` i
+`latest_exercise_observations` udostępniają najnowsze wersje przez
+`security_invoker`, więc nadal obowiązuje RLS tabel źródłowych. Publiczne RPC to
+`create_company`, `ensure_initial_company`, `review_candidate_document`,
+`save_behavior_assessment`, `save_exercise_definition` i
+`save_exercise_observations`.
 
 ## Uprawnienia
 
@@ -107,10 +126,17 @@ Przy jej ponownym otwieraniu ustaw `completed_at: null`. Statusy i zakresy warto
 sprawdza baza. Kolejność etapów jest unikalna w rekrutacji; przy zmianie kolejności
 użyj wolnej dodatniej wartości przejściowej (docelowy edytor może dostać własne RPC).
 
-Kontrakt TypeScript jest na tym etapie utrzymywany ręcznie, z celowo ograniczonymi
-polami Update; relacyjne selecty nie są jeszcze opisane w Relationships.
-Po wdrożeniu można wygenerować pełne typy przez Supabase CLI i zachować ograniczenia
-edytowalnych pól w warstwie dostępu do danych. Baza zawsze egzekwuje te ograniczenia.
+Kontrakt TypeScript w `lib/supabase/database.types.ts` jest utrzymywany ręcznie.
+Obejmuje wszystkie 13 tabel, trzy widoki, sześć RPC, relacje między obiektami
+publicznymi oraz celowo ograniczone typy `Insert`/`Update` zgodne z dostępnymi
+ścieżkami zapisu. Tabele historii są zapisywane wyłącznie przez RPC, a firmy i ich
+profile są tworzone atomowo przez RPC; ich bezpośredni `Insert` ma typ `never`.
+Typy wygenerowane przez Supabase CLI należy porównywać z tym kontraktem, nie
+zastępować nim ograniczeń API bez przeglądu. Baza zawsze egzekwuje uprawnienia.
+
+`tests/database-types.test.mjs` odtwarza wszystkie siedem migracji i zamraża
+publiczne tabele, kolumny, relacje, widoki `security_invoker` oraz sygnatury RPC.
+`tests/database-types.contract.ts` zamraża odpowiadające im typy TypeScript.
 
 ## Sprawdzenie
 

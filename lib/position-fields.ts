@@ -9,6 +9,11 @@ export const behaviorAreas = [
   ["pressure", "Działanie pod presją i w trudnych sytuacjach"],
 ] as const;
 export const requirementLevels = ["Niski", "Standardowy", "Wysoki", "Krytyczny"] as const;
+export type BehaviorAreaKey = typeof behaviorAreas[number][0];
+export type RequiredBehaviorLevel = typeof requirementLevels[number];
+export function isBehaviorAreaKey(value: string): value is BehaviorAreaKey {
+  return behaviorAreas.some(([key]) => key === value);
+}
 export type EditorState = { error?: string; saved?: boolean };
 export function parsePosition(form: FormData) {
   const text = (name: string) => String(form.get(name) ?? "").trim();

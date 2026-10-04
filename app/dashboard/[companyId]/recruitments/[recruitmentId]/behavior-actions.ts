@@ -1,7 +1,7 @@
 'use server';
 import { revalidatePath } from 'next/cache';
 import { companyAccess } from '../../../../../lib/company-access';
-import { behaviorAreas } from '../../../../../lib/position-fields';
+import { isBehaviorAreaKey } from '../../../../../lib/position-fields';
 import type { EditorState } from '../../../../../lib/position-fields';
 import { parseBehaviorAssessment, behaviorSaveError } from '../../../../../lib/behavior-assessment';
 
@@ -10,7 +10,7 @@ export async function saveBehaviorAssessment(companyId: string, recruitmentId: s
   _state: EditorState, form: FormData): Promise<EditorState> {
   const { client, canEdit } = await companyAccess(companyId);
   if (!canEdit) return { error: 'Masz dostęp tylko do odczytu.' };
-  if (!behaviorAreas.some(([key]) => key === areaKey) || !Number.isInteger(expectedVersion) || expectedVersion < 0 || expectedVersion > 2147483647
+  if (!isBehaviorAreaKey(areaKey) || !Number.isInteger(expectedVersion) || expectedVersion < 0 || expectedVersion > 2147483647
     || ![applicationId, recruitmentId, positionId].every(id => /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id))
     || typeof positionUpdatedAt !== 'string' || !Number.isFinite(Date.parse(positionUpdatedAt))) return { error: 'Odśwież stronę, aby wczytać bieżące dane.' };
   let values;
