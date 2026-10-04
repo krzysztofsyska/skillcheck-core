@@ -1,20 +1,20 @@
 # SkillCheck — kontrakt bazy danych
 
-Stan docelowego Supabase na 2026-10-04 obejmuje siedem wykonanych migracji:
+Stan docelowego Supabase na 2026-10-04 obejmuje osiem wykonanych migracji:
 `20260930000100`, `20261001000100`, `20261001000200`, `20261002000100`,
-`20261002000200`, `20261002000300` i `20261004000100`. Schemat publiczny ma
-13 tabel z RLS, 40 polityk, trzy widoki `security_invoker` i sześć publicznych
-RPC. Nie wykonywać tych migracji ponownie. Instrukcja wykonania poniżej dotyczy
+`20261002000200`, `20261002000300`, `20261004000100` i
+`20261004000200`. Schemat publiczny ma 18 tabel z RLS, 45 polityk, trzy widoki
+`security_invoker` i 12 publicznych RPC. Nie wykonywać tych migracji ponownie. Instrukcja wykonania poniżej dotyczy
 wyłącznie nowego, pustego środowiska.
 
 Migracja bazowa: `supabase/migrations/20260930000100_skillcheck_core.sql`.
 Przygotowanie pliku ani wdrożenie kodu na Vercel nie wykonuje migracji w Supabase.
 
-SC-004 przygotowuje w repozytorium jedną kolejną migrację
-`20261004000200_screening_results.sql`. Dodaje pięć tabel persistowanego wyniku
-preselekcji i sześć RPC, ale nie została zastosowana do produkcyjnego Supabase.
-Do czasu osobnego zatwierdzenia powyższe liczby produkcyjne 13/40/3/6 pozostają
-źródłem prawdy dla wdrożonego środowiska.
+SC-004 zostało wdrożone do produkcyjnego Supabase przez
+`20261004000200_screening_results.sql`. Migracja dodała pięć tabel
+persistowanego wyniku preselekcji oraz sześć RPC. Po wdrożeniu produkcyjny
+baseline wynosi 18 tabel z RLS / 45 polityk / 3 widoki `security_invoker` /
+12 publicznych RPC.
 
 ## Model
 
@@ -54,7 +54,7 @@ Widoki `latest_behavior_assessments`, `latest_exercise_definitions` i
 `save_behavior_assessment`, `save_exercise_definition` i
 `save_exercise_observations`.
 
-Po zastosowaniu migracji SC-004 dojdą `start_screening_analysis`,
+SC-004 dodało `start_screening_analysis`,
 `retry_screening_analysis` i `review_screening_result` dla owner/recruiter oraz
 worker-only `claim_screening_attempt`, `complete_screening_analysis` i
 `fail_screening_attempt`. Zwykła rola `authenticated` nie ma `EXECUTE` do
@@ -70,8 +70,7 @@ do tabel i korzysta z hashowanego, wygasającego lease.
 | viewer | Przypisana firma | Nie | Nie |
 | Osoba spoza firmy / anonimowa | Nie | Nie | Nie |
 
-RLS chroni wszystkie 13 wdrożonych tabel oraz wszystkie pięć tabel przygotowanych
-w SC-004. Uprawnienia do kolumn blokują zmianę
+RLS chroni wszystkie 18 wdrożonych tabel, w tym pięć tabel SC-004. Uprawnienia do kolumn blokują zmianę
 właściciela, identyfikatorów, firmy i relacji nadrzędnych. Funkcje pomocnicze
 SECURITY DEFINER mają pusty `search_path` i znajdują się w schemacie `private`.
 Nie dodawaj go do Exposed schemas w Supabase. Tylko `public` jest potrzebny API.
@@ -100,8 +99,9 @@ zamiast ponownie ją uruchamiać. Alternatywą dla SQL Editor jest standardowy
 proces Supabase CLI: inicjalizacja lokalna, link do właściwego projektu i db push.
 Nie stosuj obu metod jednocześnie. Nie uruchamiaj lokalnego db reset na produkcji.
 
-Migracja SC-004 jest wyłącznie przygotowana do review. Nie uruchamiać jej z tej
-gałęzi na produkcji. Testy odtwarzają ją tylko w efemerycznym PGlite.
+Migracja SC-004 została zastosowana do docelowego Supabase 2026-10-04 i jest
+zarejestrowana w zdalnej historii migracji jako `20261004000200`. Nie uruchamiać
+jej ponownie. Testy nadal odtwarzają pełny kontrakt w efemerycznym PGlite.
 
 Testy poniżej nie wymagają konta Supabase. Odtwarzają role i `auth.uid()` w lokalnym
 PostgreSQL (PGlite), ale nie weryfikują konfiguracji zdalnego projektu, Auth, JWT ani
@@ -149,15 +149,14 @@ sprawdza baza. Kolejność etapów jest unikalna w rekrutacji; przy zmianie kole
 użyj wolnej dodatniej wartości przejściowej (docelowy edytor może dostać własne RPC).
 
 Kontrakt TypeScript w `lib/supabase/database.types.ts` jest utrzymywany ręcznie.
-Obejmuje 13 wdrożonych tabel oraz pięć tabel SC-004, trzy widoki, 12 RPC, relacje między obiektami
+Obejmuje 18 wdrożonych tabel, trzy widoki, 12 RPC, relacje między obiektami
 publicznymi oraz celowo ograniczone typy `Insert`/`Update` zgodne z dostępnymi
 ścieżkami zapisu. Tabele historii są zapisywane wyłącznie przez RPC, a firmy i ich
 profile są tworzone atomowo przez RPC; ich bezpośredni `Insert` ma typ `never`.
 Typy wygenerowane przez Supabase CLI należy porównywać z tym kontraktem, nie
 zastępować nim ograniczeń API bez przeglądu. Baza zawsze egzekwuje uprawnienia.
 
-`tests/database-types.test.mjs` odtwarza siedem wdrożonych migracji oraz
-przygotowaną migrację SC-004 i zamraża
+`tests/database-types.test.mjs` odtwarza osiem wdrożonych migracji i zamraża
 publiczne tabele, kolumny, relacje, widoki `security_invoker` oraz sygnatury RPC.
 `tests/database-types.contract.ts` zamraża odpowiadające im typy TypeScript.
 

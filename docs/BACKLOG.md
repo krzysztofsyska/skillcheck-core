@@ -9,11 +9,11 @@ Nie budować ponownie: auth/onboarding, firmy, profile stanowisk, rekrutacje, ka
 
 | ID | Zadanie | Level | Owner | Reviewer | Depends on | Status |
 |---|---|---:|---|---|---|---|
-| SC-001 | Post-merge production baseline + aktualizacja starych opisów PR/README/PROGRESS | L1 | Cursor | Codex | — | READY |
-| SC-002 | Zamrożenie kontraktów DB/types + kontrola rozbieżności ręcznych typów Supabase | L2 | Cursor | Codex | SC-001 | BACKLOG |
-| SC-003 | Model danych dla persistowanego wyniku preselekcji AI | L3 | Codex→Cursor | Codex | SC-002 | BACKLOG |
-| SC-004 | Migracja + RLS + RPC dla wyników preselekcji i review człowieka | L3 | Cursor | Codex | SC-003 | BACKLOG |
-| SC-005 | Integracja OpenAI dla preselekcji: bezpieczny payload, structured output, limity | L3 | Codex→Cursor | Codex | SC-004 | BACKLOG |
+| SC-001 | Post-merge production baseline + aktualizacja starych opisów PR/README/PROGRESS | L1 | Cursor | Codex | — | DONE |
+| SC-002 | Zamrożenie kontraktów DB/types + kontrola rozbieżności ręcznych typów Supabase | L2 | Cursor | Codex | SC-001 | DONE |
+| SC-003 | Model danych dla persistowanego wyniku preselekcji AI | L3 | Codex→Cursor | Codex | SC-002 | DONE |
+| SC-004 | Migracja + RLS + RPC dla wyników preselekcji i review człowieka | L3 | Cursor | Codex | SC-003 | DONE |
+| SC-005 | Integracja OpenAI dla preselekcji: bezpieczny payload, structured output, limity | L3 | Codex→Cursor | Codex | SC-004 | READY |
 | SC-006 | UI uruchomienia analizy i podglądu dowodów bez automatycznej decyzji | L2 | Cursor | Codex | SC-005 | BACKLOG |
 | SC-007 | Obsługa stale/fingerprint/idempotency/concurrency analizy | L3 | Cursor | Codex | SC-005 | BACKLOG |
 | SC-008 | Ranking/shortlista dla jednej rekrutacji na podstawie sprawdzonych wyników | L2 | Cursor | Codex | SC-006,SC-007 | BACKLOG |
