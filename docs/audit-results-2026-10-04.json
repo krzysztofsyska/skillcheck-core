@@ -1,0 +1,58 @@
+[
+  {
+    "check": "typecheck",
+    "exit": 0
+  },
+  {
+    "check": "build",
+    "exit": 0
+  },
+  {
+    "check": "test:db",
+    "exit": 0
+  },
+  {
+    "check": "test:auth",
+    "exit": 0
+  },
+  {
+    "check": "test:cv",
+    "exit": 0
+  },
+  {
+    "check": "test:screening",
+    "exit": 0
+  },
+  {
+    "check": "test:assessments",
+    "exit": 0
+  },
+  {
+    "check": "test:auth-http",
+    "exit": 0
+  },
+  {
+    "check": "test:live-check",
+    "exit": 0
+  },
+  {
+    "check": "test:behavior-guide",
+    "exit": 0
+  },
+  {
+    "check": "test:behavior-assessments",
+    "exit": 0
+  },
+  {
+    "check": "test:http",
+    "exit": 0
+  },
+  {
+    "check": "test:pdf-bundle",
+    "exit": 0
+  },
+  {
+    "check": "test:live",
+    "exit": 1
+  }
+]
