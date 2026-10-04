@@ -13,7 +13,7 @@ Nie budować ponownie: auth/onboarding, firmy, profile stanowisk, rekrutacje, ka
 | SC-002 | Zamrożenie kontraktów DB/types + kontrola rozbieżności ręcznych typów Supabase | L2 | Cursor | Codex | SC-001 | DONE |
 | SC-003 | Model danych dla persistowanego wyniku preselekcji AI | L3 | Codex→Cursor | Codex | SC-002 | DONE |
 | SC-004 | Migracja + RLS + RPC dla wyników preselekcji i review człowieka | L3 | Cursor | Codex | SC-003 | DONE |
-| SC-005 | Integracja OpenAI dla preselekcji: bezpieczny payload, structured output, limity | L3 | Codex→Cursor | Codex | SC-004 | READY |
+| SC-005 | Integracja OpenAI dla preselekcji: bezpieczny payload, structured output, limity | L3 | Codex→Cursor | Codex | SC-004 | DONE |
 | SC-006 | UI uruchomienia analizy i podglądu dowodów bez automatycznej decyzji | L2 | Cursor | Codex | SC-005 | BACKLOG |
 | SC-007 | Obsługa stale/fingerprint/idempotency/concurrency analizy | L3 | Cursor | Codex | SC-005 | BACKLOG |
 | SC-008 | Ranking/shortlista dla jednej rekrutacji na podstawie sprawdzonych wyników | L2 | Cursor | Codex | SC-006,SC-007 | BACKLOG |

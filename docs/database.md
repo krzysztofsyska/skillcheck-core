@@ -1,9 +1,9 @@
 # SkillCheck — kontrakt bazy danych
 
-Stan docelowego Supabase na 2026-10-04 obejmuje osiem wykonanych migracji:
+Stan docelowego Supabase na 2026-10-04 obejmuje dziewięć wykonanych migracji:
 `20260930000100`, `20261001000100`, `20261001000200`, `20261002000100`,
-`20261002000200`, `20261002000300`, `20261004000100` i
-`20261004000200`. Schemat publiczny ma 18 tabel z RLS, 45 polityk, trzy widoki
+`20261002000200`, `20261002000300`, `20261004000100`,
+`20261004000200` i `20261005000100`. Schemat publiczny ma 18 tabel z RLS, 45 polityk, trzy widoki
 `security_invoker` i 12 publicznych RPC. Nie wykonywać tych migracji ponownie. Instrukcja wykonania poniżej dotyczy
 wyłącznie nowego, pustego środowiska.
 
@@ -16,10 +16,11 @@ persistowanego wyniku preselekcji oraz sześć RPC. Po wdrożeniu produkcyjny
 baseline wynosi 18 tabel z RLS / 45 polityk / 3 widoki `security_invoker` /
 12 publicznych RPC.
 
-SC-005 przygotowuje w repozytorium jedną kolejną migrację
-`20261005000100_screening_worker_claim_payload.sql`. Rozszerza wyłącznie
-wynik `claim_screening_attempt` o niemutowalny payload workera. Nie została
-zastosowana do produkcyjnego Supabase i nie zmienia tabel, RLS ani grantów.
+SC-005 zostało wdrożone produkcyjnie w trybie dark. Migracja
+`20261005000100_screening_worker_claim_payload.sql` rozszerzyła wyłącznie
+wynik `claim_screening_attempt` o niemutowalny payload workera i nie zmieniła
+liczby tabel, RLS ani grantów. Edge Function `screening-worker` jest ACTIVE,
+ale `SCREENING_AI_ENABLED=false`, a klucze OpenAI/HMAC nie są jeszcze ustawione.
 
 ## Model
 
@@ -104,9 +105,9 @@ zamiast ponownie ją uruchamiać. Alternatywą dla SQL Editor jest standardowy
 proces Supabase CLI: inicjalizacja lokalna, link do właściwego projektu i db push.
 Nie stosuj obu metod jednocześnie. Nie uruchamiaj lokalnego db reset na produkcji.
 
-Migracja SC-004 została zastosowana do docelowego Supabase 2026-10-04 i jest
-zarejestrowana w zdalnej historii migracji jako `20261004000200`. Nie uruchamiać
-jej ponownie. Testy nadal odtwarzają pełny kontrakt w efemerycznym PGlite.
+Migracje SC-004 i SC-005 zostały zastosowane do docelowego Supabase 2026-10-04
+i są zarejestrowane w zdalnej historii migracji jako `20261004000200` oraz
+`20261005000100`. Nie uruchamiać ich ponownie. Testy nadal odtwarzają pełny kontrakt w efemerycznym PGlite.
 
 Testy poniżej nie wymagają konta Supabase. Odtwarzają role i `auth.uid()` w lokalnym
 PostgreSQL (PGlite), ale nie weryfikują konfiguracji zdalnego projektu, Auth, JWT ani

@@ -1,11 +1,11 @@
-# Preselekcja — przygotowanie danych, bez integracji AI
+# Preselekcja — przygotowanie danych i dark worker AI
 
 ## Dostępny zakres
 Ze strony rekrutacji przy każdym kandydacie można otworzyć Przygotowanie preselekcji. Widok dotyczy zgłoszenia, nie globalnej oceny osoby. Pokazuje aktualne zadania, KPI, kompetencje i najnowszy sprawdzony tekst CV. Czytanie odbywa się przez klienta sesji użytkownika i istniejące RLS, z filtrami firmy oraz relacji zgłoszenie–rekrutacja–stanowisko–kandydat.
 
-Nie ma połączenia z modelem, wysyłki danych, uruchamiania analizy, rankingu ani
-automatycznej decyzji rekrutacyjnej. SC-004 dostarcza warstwę persistencji również w produkcyjnym Supabase, ale żaden
-istniejący flow aplikacji nie wywołuje jeszcze integracji AI ani workera. Komunikat w interfejsie nadal informuje, że analiza
+Nie ma jeszcze user-facing uruchamiania analizy, rankingu ani automatycznej decyzji
+rekrutacyjnej. SC-004 dostarcza warstwę persistencji, a SC-005 wdrożyło worker AI
+w trybie dark; istniejący flow aplikacji nadal go nie wywołuje. Komunikat w interfejsie nadal informuje, że analiza
 nie jest uruchomiona. Nie ma pozornego przycisku generowania ani przykładowych ocen
 udających wynik AI.
 
@@ -50,10 +50,12 @@ Migracja została uruchomiona na produkcyjnym Supabase 2026-10-04.
 
 ## Worker AI przygotowany w SC-005
 
-Kod workera i dispatcher są w repozytorium, ale flaga `SCREENING_AI_ENABLED`
-domyślnie pozostaje `false`. UI nadal nie uruchamia analizy. Migracja
-`20261005000100_screening_worker_claim_payload.sql` nie jest zastosowana do
-produkcji.
+Kod workera i dispatcher są w repozytorium, a Edge Function `screening-worker`
+jest wdrożona produkcyjnie jako ACTIVE. Flaga `SCREENING_AI_ENABLED=false`,
+więc UI nadal nie uruchamia analizy. Migracja
+`20261005000100_screening_worker_claim_payload.sql` jest zastosowana do
+produkcji. `OPENAI_API_KEY` i `SCREENING_WORKER_DISPATCH_SECRET` nie są jeszcze
+ustawione.
 
 - Edge Function `screening-worker` ma `verify_jwt = false` i ufa wyłącznie HMAC
   `x-skillcheck-timestamp` / `x-skillcheck-signature`.
@@ -80,7 +82,7 @@ wysłanie materiału i ustawieniu sekretów poza repozytorium. Nie wolno
 przekazywać internal capability do przeglądarki.
 
 Wdrożony baseline produkcji ma 18 tabel z RLS, 45 polityk, trzy widoki
-`security_invoker`, 12 publicznych RPC i osiem wykonanych migracji. Nie ponawiać
+`security_invoker`, 12 publicznych RPC i dziewięć wykonanych migracji. Nie ponawiać
 żadnej z nich.
 
 ## Testy
