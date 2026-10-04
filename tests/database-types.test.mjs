@@ -11,6 +11,7 @@ const migrations = [
   "20261002000200_behavior_conflict_response.sql",
   "20261002000300_exercise_definitions.sql",
   "20261004000100_exercise_observations.sql",
+  "20261004000200_screening_results.sql",
 ];
 
 const tableColumns = {
@@ -27,6 +28,11 @@ const tableColumns = {
   exercise_observation_entries: ["id", "company_id", "recruitment_id", "application_id", "definition_entry_id", "version", "work_sample", "observations", "author_id", "created_at"],
   positions: ["id", "company_id", "title", "description", "tasks", "kpis", "autonomy_level", "required_behaviors", "required_competencies", "status", "created_at", "updated_at"],
   recruitments: ["id", "company_id", "position_id", "name", "status", "opened_at", "closed_at", "created_at", "updated_at"],
+  screening_analysis_attempts: ["id", "company_id", "analysis_id", "attempt_no", "idempotency_key", "status", "lease_token_hash", "lease_expires_at", "provider_request_id", "provider_response_id", "input_tokens", "output_tokens", "cached_input_tokens", "cost_amount", "cost_currency", "error_code", "finalization_hash", "created_at", "started_at", "finished_at"],
+  screening_analysis_versions: ["id", "company_id", "recruitment_id", "application_id", "position_id", "candidate_document_id", "candidate_document_version", "analysis_version", "input_fingerprint", "analysis_contract_hash", "payload_schema_version", "result_schema_version", "prompt_version", "provider", "model", "model_revision", "execution_status", "input_cv_text_snapshot", "criteria_snapshot", "binding_snapshot", "result_summary", "overall_score", "stale_at", "stale_reason", "superseded_by_analysis_id", "failure_code", "failure_message", "created_by", "created_at", "processing_started_at", "completed_at", "failed_at", "updated_at", "latest_review_version"],
+  screening_criterion_results: ["id", "company_id", "analysis_id", "criterion_id", "criterion_kind", "criterion_order", "criterion_text_snapshot", "rating", "evidence", "explanation", "confidence", "created_at"],
+  screening_criterion_review_overrides: ["id", "company_id", "review_id", "criterion_result_id", "rating_override", "evidence_override", "explanation_override", "created_at"],
+  screening_result_reviews: ["id", "company_id", "analysis_id", "review_version", "reviewer_id", "disposition", "review_note", "created_at"],
 };
 
 const viewColumns = {
@@ -57,15 +63,31 @@ const publicForeignKeys = [
   "positions_company_id_fkey",
   "recruitments_company_id_fkey",
   "recruitments_company_id_position_id_fkey",
+  "screening_analysis_application_fkey",
+  "screening_analysis_document_fkey",
+  "screening_analysis_position_fkey",
+  "screening_analysis_recruitment_fkey",
+  "screening_analysis_superseded_fkey",
+  "screening_attempt_analysis_fkey",
+  "screening_criterion_analysis_fkey",
+  "screening_override_criterion_fkey",
+  "screening_override_review_fkey",
+  "screening_review_analysis_fkey",
 ];
 
 const functions = {
   create_company: "company_name text",
   ensure_initial_company: "company_name text",
+  claim_screening_attempt: "target_attempt uuid",
+  complete_screening_analysis: "target_attempt uuid, provided_lease_token text, expected_input_fingerprint text, expected_analysis_contract_hash text, findings jsonb, new_provider_request_id text, new_provider_response_id text, new_input_tokens integer, new_output_tokens integer, new_cached_input_tokens integer, new_cost_amount numeric, new_cost_currency text",
+  fail_screening_attempt: "target_attempt uuid, provided_lease_token text, expected_input_fingerprint text, expected_analysis_contract_hash text, new_error_code text, new_error_message text, new_provider_request_id text, new_input_tokens integer, new_output_tokens integer, new_cached_input_tokens integer, new_cost_amount numeric, new_cost_currency text",
+  review_screening_result: "target_analysis uuid, expected_review_version integer, new_disposition text, new_review_note text, new_overrides jsonb",
   review_candidate_document: "document_id uuid, expected_version integer",
+  retry_screening_analysis: "target_analysis uuid, request_idempotency_key uuid",
   save_behavior_assessment: "target_application uuid, target_area text, new_rating text, new_evidence text, expected_version integer, expected_position_updated_at timestamp with time zone, expected_position_id uuid",
   save_exercise_definition: "target_recruitment uuid, target_exercise uuid, new_definition jsonb, expected_version integer, expected_position_id uuid, expected_position_updated_at timestamp with time zone",
   save_exercise_observations: "target_application uuid, target_definition uuid, expected_version integer, new_work_sample text, new_observations jsonb",
+  start_screening_analysis: "target_application uuid, expected_input_fingerprint text, expected_payload_schema_version integer, requested_result_schema_version integer, requested_prompt_version text, requested_provider text, requested_model text, requested_model_revision text, request_idempotency_key uuid, force_reanalysis boolean",
 };
 
 test("public database contract matches the manually maintained Supabase types", async () => {
@@ -125,6 +147,8 @@ test("public database contract matches the manually maintained Supabase types", 
         and constraint_name not like '%_owner_id_fkey'
         and constraint_name not like '%_user_id_fkey'
         and constraint_name not like '%_author_id_fkey'
+        and constraint_name not like '%_created_by_fkey'
+        and constraint_name not like '%_reviewer_id_fkey'
         and constraint_name <> 'candidate_documents_reviewed_by_fkey'
       order by constraint_name
     `);
@@ -145,7 +169,17 @@ test("public database contract matches the manually maintained Supabase types", 
       Object.fromEntries(rpc.rows.map(row => [row.proname, row.arguments])),
       functions,
     );
-    assert.ok(rpc.rows.every(row => row.result === (row.proname === "review_candidate_document" ? "boolean" : "uuid")));
+    assert.equal(rpc.rows.find(row => row.proname === "review_candidate_document").result, "boolean");
+    for (const name of ["start_screening_analysis", "claim_screening_attempt", "retry_screening_analysis"]) {
+      assert.match(rpc.rows.find(row => row.proname === name).result, /^TABLE\(/);
+    }
+    for (const name of [
+      "create_company", "ensure_initial_company", "save_behavior_assessment",
+      "save_exercise_definition", "save_exercise_observations",
+      "complete_screening_analysis", "fail_screening_attempt", "review_screening_result",
+    ]) {
+      assert.equal(rpc.rows.find(row => row.proname === name).result, "uuid");
+    }
   } finally {
     await db.close();
   }

@@ -50,6 +50,33 @@ export function prepareScreening(context: ScreeningContext) {
 
 export type PreparedScreening = ReturnType<typeof prepareScreening>;
 
+export type ScreeningAnalysisContract = {
+  provider: string;
+  model: string;
+  model_revision: string | null;
+  prompt_version: string;
+  payload_schema_version: number;
+  result_schema_version: number;
+};
+
+export function screeningAnalysisContractHash(contract: ScreeningAnalysisContract) {
+  if (![contract.provider, contract.model, contract.prompt_version].every(value => value.trim())
+    || (contract.model_revision !== null && !contract.model_revision.trim())
+    || !Number.isSafeInteger(contract.payload_schema_version) || contract.payload_schema_version < 1
+    || !Number.isSafeInteger(contract.result_schema_version) || contract.result_schema_version < 1) {
+    throw new Error('Nieprawidłowy kontrakt analizy.');
+  }
+  const canonical = {
+    provider: contract.provider.trim(),
+    model: contract.model.trim(),
+    model_revision: contract.model_revision?.trim() ?? null,
+    prompt_version: contract.prompt_version.trim(),
+    payload_schema_version: contract.payload_schema_version,
+    result_schema_version: contract.result_schema_version,
+  };
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
 // Future provider integration must reload the context before dispatch AND before saving a result.
 export function assertScreeningCurrent(prepared: PreparedScreening, current: ScreeningContext) {
   if (prepareScreening(current).fingerprint !== prepared.fingerprint) {

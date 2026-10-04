@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261004000100.
+// Public API contract after migrations 20260930000100 through 20261004000200.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -90,9 +90,125 @@ export type ExerciseObservationEntry = {
   observations: { criterionIndex: number; rating: BehaviorRating; evidence: string }[];
   author_id: string; created_at: string;
 };
+export type ScreeningRating = "insufficient_data" | "below" | "meets" | "above";
+export type ScreeningEvidence = { start: number; end: number; quote: string };
+export type ScreeningCriterionSnapshot = {
+  id: string;
+  kind: "task" | "kpi" | "competency";
+  text: string;
+};
+export type ScreeningBindingSnapshot = {
+  company_id: string;
+  application_id: string;
+  application_updated_at: string;
+  recruitment_id: string;
+  recruitment_updated_at: string;
+  position_id: string;
+  position_updated_at: string;
+  document_id: string;
+  document_version: number;
+};
+export type ScreeningAnalysisVersion = {
+  id: string; company_id: string; recruitment_id: string; application_id: string;
+  position_id: string; candidate_document_id: string; candidate_document_version: number;
+  analysis_version: number; input_fingerprint: string; analysis_contract_hash: string;
+  payload_schema_version: number; result_schema_version: number; prompt_version: string;
+  provider: string; model: string; model_revision: string | null;
+  execution_status: "pending" | "processing" | "completed" | "failed" | "cancelled";
+  input_cv_text_snapshot: string; criteria_snapshot: ScreeningCriterionSnapshot[];
+  binding_snapshot: ScreeningBindingSnapshot; result_summary: Record<string, unknown> | null;
+  overall_score: number | null; stale_at: string | null; stale_reason:
+    | "application_changed" | "recruitment_changed" | "position_changed"
+    | "candidate_document_changed" | "candidate_document_unreviewed"
+    | "screening_contract_changed" | "manual_invalidation"
+    | "input_changed_during_processing" | null;
+  superseded_by_analysis_id: string | null; failure_code: string | null;
+  failure_message: string | null; created_by: string; created_at: string;
+  processing_started_at: string | null; completed_at: string | null;
+  failed_at: string | null; updated_at: string; latest_review_version: number;
+};
+export type ScreeningAnalysisAttempt = {
+  id: string; company_id: string; analysis_id: string; attempt_no: number;
+  idempotency_key: string; status: "pending" | "processing" | "completed" | "failed" | "abandoned";
+  lease_token_hash: string | null; lease_expires_at: string | null;
+  provider_request_id: string | null; provider_response_id: string | null;
+  input_tokens: number | null; output_tokens: number | null; cached_input_tokens: number | null;
+  cost_amount: number | null; cost_currency: string | null; error_code: string | null;
+  finalization_hash: string | null; created_at: string; started_at: string | null;
+  finished_at: string | null;
+};
+export type ScreeningCriterionResult = {
+  id: string; company_id: string; analysis_id: string; criterion_id: string;
+  criterion_kind: "task" | "kpi" | "competency"; criterion_order: number;
+  criterion_text_snapshot: string; rating: ScreeningRating; evidence: ScreeningEvidence[];
+  explanation: string | null; confidence: number | null; created_at: string;
+};
+export type ScreeningResultReview = {
+  id: string; company_id: string; analysis_id: string; review_version: number;
+  reviewer_id: string; disposition: "approved" | "approved_with_changes" | "needs_reanalysis";
+  review_note: string | null; created_at: string;
+};
+export type ScreeningCriterionReviewOverride = {
+  id: string; company_id: string; review_id: string; criterion_result_id: string;
+  rating_override: ScreeningRating | null; evidence_override: ScreeningEvidence[] | null;
+  explanation_override: string | null; created_at: string;
+};
+export type ScreeningFindingInput = {
+  criterion_id: string; rating: ScreeningRating; evidence: ScreeningEvidence[];
+  explanation?: string | null; confidence?: number | null;
+};
+export type ScreeningReviewOverrideInput = {
+  criterion_result_id: string; rating_override?: ScreeningRating | null;
+  evidence_override?: ScreeningEvidence[] | null; explanation_override?: string | null;
+};
 export type Database = {
   public: {
     Tables: {
+      screening_criterion_review_overrides: {
+        Row: ScreeningCriterionReviewOverride;
+        Insert: never;
+        Update: never;
+        Relationships: [
+          Relationship<"screening_override_review_fkey", ["company_id", "review_id"], "screening_result_reviews", ["company_id", "id"]>,
+          Relationship<"screening_override_criterion_fkey", ["company_id", "criterion_result_id"], "screening_criterion_results", ["company_id", "id"]>,
+        ];
+      };
+      screening_result_reviews: {
+        Row: ScreeningResultReview;
+        Insert: never;
+        Update: never;
+        Relationships: [
+          Relationship<"screening_review_analysis_fkey", ["company_id", "analysis_id"], "screening_analysis_versions", ["company_id", "id"]>,
+        ];
+      };
+      screening_criterion_results: {
+        Row: ScreeningCriterionResult;
+        Insert: never;
+        Update: never;
+        Relationships: [
+          Relationship<"screening_criterion_analysis_fkey", ["company_id", "analysis_id"], "screening_analysis_versions", ["company_id", "id"]>,
+        ];
+      };
+      screening_analysis_attempts: {
+        Row: ScreeningAnalysisAttempt;
+        Insert: never;
+        Update: never;
+        Relationships: [
+          Relationship<"screening_attempt_analysis_fkey", ["company_id", "analysis_id"], "screening_analysis_versions", ["company_id", "id"]>,
+        ];
+      };
+      screening_analysis_versions: {
+        Row: ScreeningAnalysisVersion;
+        Insert: never;
+        Update: never;
+        Relationships: [
+          Relationship<"screening_analysis_application_fkey", ["company_id", "recruitment_id", "application_id"], "applications", ["company_id", "recruitment_id", "id"]>,
+          Relationship<"screening_analysis_recruitment_fkey", ["company_id", "recruitment_id"], "recruitments", ["company_id", "id"]>,
+          Relationship<"screening_analysis_position_fkey", ["company_id", "position_id"], "positions", ["company_id", "id"]>,
+          Relationship<"screening_analysis_document_fkey", ["company_id", "candidate_document_id"], "candidate_documents", ["company_id", "id"]>,
+          Relationship<"screening_analysis_superseded_fkey", ["company_id", "superseded_by_analysis_id"], "screening_analysis_versions", ["company_id", "id"]>,
+        ];
+      };
       exercise_observation_entries: {
         Row: ExerciseObservationEntry;
         Insert: never;
@@ -199,6 +315,84 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      review_screening_result: {
+        Args: {
+          target_analysis: string;
+          expected_review_version: number;
+          new_disposition: ScreeningResultReview["disposition"];
+          new_review_note: string | null;
+          new_overrides?: ScreeningReviewOverrideInput[];
+        };
+        Returns: string;
+      };
+      retry_screening_analysis: {
+        Args: { target_analysis: string; request_idempotency_key: string };
+        Returns: { analysis_id: string; attempt_id: string; analysis_version: number }[];
+      };
+      fail_screening_attempt: {
+        Args: {
+          target_attempt: string;
+          provided_lease_token: string;
+          expected_input_fingerprint: string;
+          expected_analysis_contract_hash: string;
+          new_error_code: string;
+          new_error_message?: string | null;
+          new_provider_request_id?: string | null;
+          new_input_tokens?: number | null;
+          new_output_tokens?: number | null;
+          new_cached_input_tokens?: number | null;
+          new_cost_amount?: number | null;
+          new_cost_currency?: string | null;
+        };
+        Returns: string;
+      };
+      complete_screening_analysis: {
+        Args: {
+          target_attempt: string;
+          provided_lease_token: string;
+          expected_input_fingerprint: string;
+          expected_analysis_contract_hash: string;
+          findings: ScreeningFindingInput[];
+          new_provider_request_id?: string | null;
+          new_provider_response_id?: string | null;
+          new_input_tokens?: number | null;
+          new_output_tokens?: number | null;
+          new_cached_input_tokens?: number | null;
+          new_cost_amount?: number | null;
+          new_cost_currency?: string | null;
+        };
+        Returns: string;
+      };
+      claim_screening_attempt: {
+        Args: { target_attempt: string };
+        Returns: {
+          analysis_id: string;
+          attempt_id: string;
+          lease_token: string;
+          lease_expires_at: string;
+        }[];
+      };
+      start_screening_analysis: {
+        Args: {
+          target_application: string;
+          expected_input_fingerprint: string;
+          expected_payload_schema_version: number;
+          requested_result_schema_version: number;
+          requested_prompt_version: string;
+          requested_provider: string;
+          requested_model: string;
+          requested_model_revision: string | null;
+          request_idempotency_key: string;
+          force_reanalysis?: boolean;
+        };
+        Returns: {
+          analysis_id: string;
+          attempt_id: string | null;
+          analysis_version: number;
+          execution_status: ScreeningAnalysisVersion["execution_status"];
+          reused: boolean;
+        }[];
+      };
       save_exercise_observations: { Args: { target_application: string; target_definition: string; expected_version: number; new_work_sample: string; new_observations: ExerciseObservationEntry['observations'] }; Returns: string };
       save_exercise_definition: { Args: { target_recruitment: string; target_exercise: string;
         new_definition: ExerciseDefinition; expected_version: number; expected_position_id: string;
