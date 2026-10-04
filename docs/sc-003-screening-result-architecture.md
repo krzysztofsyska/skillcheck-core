@@ -62,7 +62,7 @@ Jedna wersja logicznego wyniku preselekcji dla jednego zgłoszenia i jednego zam
 | `criteria_snapshot` | jsonb | no | dokładna, uporządkowana lista kryteriów wysłana do modelu |
 | `binding_snapshot` | jsonb | no | internal audit binding z `prepareScreening`; nigdy nie jest payloadem AI |
 | `result_summary` | jsonb | yes | opcjonalne, bez decyzji rekrutacyjnej; tylko agregaty techniczne/ranking-ready |
-| `overall_score` | numeric(6,3) | yes | opcjonalny wynik po ukończeniu, obliczany deterministycznie z kryteriów; nie decyzja |
+| `overall_score` | numeric(6,3) | yes | rezerwa pod SC-008; w SC-004 pozostaje NULL i nie jest wyliczany |
 | `stale_at` | timestamptz | yes | moment wykrycia dezaktualizacji |
 | `stale_reason` | text | yes | kontrolowany kod przyczyny |
 | `superseded_by_analysis_id` | uuid | yes | następna zakończona wersja, jeśli istnieje |
@@ -590,7 +590,7 @@ Transakcja:
 5. waliduj dokładnie jedno kryterium na snapshot item;
 6. waliduj evidence exact match;
 7. insert wszystkich criterion rows;
-8. wylicz deterministic aggregate `overall_score` jeśli SC-004 zamraża algorytm;
+8. nie wyliczaj `overall_score` w SC-004; scoring i wersjonowany ranking contract należą do SC-008;
 9. attempt -> completed, analysis -> completed, timestamps;
 10. commit atomowo.
 
