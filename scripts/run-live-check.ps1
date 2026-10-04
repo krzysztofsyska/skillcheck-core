@@ -1,7 +1,7 @@
 # Passwords are prompted without echo and passed only through process environment.
 # Do not use Start-Transcript while running this script.
 [CmdletBinding()]
-param()
+param([ValidateSet('Tenants','Membership')][string]$Check = 'Tenants')
 $ErrorActionPreference = 'Stop'
 $taskVariables = @('NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
   'SKILLCHECK_TEST_EMAIL_A', 'SKILLCHECK_TEST_PASSWORD_A',
@@ -13,7 +13,11 @@ foreach ($variableName in $taskVariables) {
 $taskExitCode = 1
 try {
   $env:NEXT_PUBLIC_SUPABASE_URL = 'https://wsvjawuikxfzjyivxgsu.supabase.co'
-  Write-Host 'SkillCheck: tylko odczyt API dwoch kont. Hasla nie beda wyswietlane ani zapisywane w plikach.'
+  if ($Check -eq 'Membership') {
+    Write-Host 'TEST uprawnien: konto A = czlonek C, konto B = wlasciciel TEST Firmy B.'
+    Write-Host 'Proby zmiany wlasnej roli i dodania istniejacego czlonkostwa powinny byc odrzucone.'
+  } else { Write-Host 'SkillCheck: tylko odczyt API dwoch kont.' }
+  Write-Host 'Hasla nie beda wyswietlane ani zapisywane w plikach.'
   Write-Host 'Klucz publiczny projektu: Supabase > Project Settings > API Keys > Publishable key.'
   $publicKey = (Read-Host 'Klucz sb_publishable_ (nigdy secret/service_role)').Trim()
   if (-not $publicKey.StartsWith('sb_publishable_')) { throw 'Wymagany klucz publiczny sb_publishable_.' }
@@ -35,7 +39,8 @@ try {
     }
   }
   # No password in CLI arguments; no .env file created or loaded.
-  & node (Join-Path $PSScriptRoot 'check-live-supabase.mjs')
+  $taskScript = if ($Check -eq 'Membership') { 'check-live-membership.mjs' } else { 'check-live-supabase.mjs' }
+  & node (Join-Path $PSScriptRoot $taskScript)
   $taskExitCode = $LASTEXITCODE
 } catch {
   Write-Host 'Test nie zostal ukonczony. Sprawdz format danych i dostepnosc Node.js; nie przesylaj hasel w czacie.'

@@ -34,3 +34,6 @@ PASS dotyczy odczytów przez dwie sesje Auth w przygotowanych firmach. Osobno po
 Definicje zadań: każda firma musi mieć wpis exercise_definition_entries widoczny również w latest_exercise_definitions. Migracja 20261002000300 została wykonana 2026-10-04. Test obejmuje 16 relacji; brak własnego wpisu uniemożliwia potwierdzenie izolacji.
 
 Każda firma wymaga również obserwacji wykonania, widocznej w exercise_observation_entries i latest_exercise_observations (migracja 20261004000100 wykonana).
+
+## Osobny test członkostw
+Tryb run-live-check.ps1 -Check Membership jest testem zapisów na dedykowanej TEST Firmie B, nie testem rozłącznych A/B. Konto A w tym trybie oznacza C (członka), B właściciela firmy B. Dokładne kroki i przywracanie roli opisano w owner-audit-runbook.md. Tryb domyślny Tenants pozostaje tylko do odczytu.

@@ -209,3 +209,6 @@ Aktualne blokady: kompletność rekordów A/B jest już potwierdzona (16/16), wi
 
 ## Audyt bez hasła B — 2026-10-04
 Wykonano kontrolę PR/kodu, konfiguracji SMTP i próbę odmowy dostępu B do obserwacji A. Naprawiono komunikat limitu e-mail i kodowanie runnera Windows; build/typecheck/Auth/HTTP PASS. Szczegóły i otwarte bramki w końcowej sekcji docs/audit-2026-10-04.md. Cały audyt nadal NOT READY; bez merge i nowych modułów.
+
+## Instrukcja zamknięcia audytu
+Przygotowano docs/owner-audit-runbook.md i tryb Membership do prób API ról bez przekazywania haseł. 10 zestawów PASS; cztery dodatkowe próby offline narzędzia PASS. Aktualny jednoznaczny status NOT READY: wymagane realne wyniki A/B, ról, recovery i równoległego onboardingu. Szczegóły w audit-2026-10-04.md. Brak nowych funkcji aplikacji i merge.
