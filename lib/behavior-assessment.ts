@@ -1,8 +1,10 @@
+import type { BehaviorRating } from "./supabase/database.types";
+
 export const behaviorRatings = [
   ['insufficient_data', 'Niewystarczające dane'], ['below', 'Poniżej wymagań'],
   ['meets', 'Zgodne z wymaganiami'], ['above', 'Powyżej wymagań'],
 ] as const;
-export type BehaviorRating = typeof behaviorRatings[number][0];
+export type { BehaviorRating } from "./supabase/database.types";
 export const behaviorModuleUnavailable = 'Oceny z historią nie są jeszcze dostępne w tym środowisku. Możesz nadal korzystać z notatek etapów.';
 export function behaviorSchemaMissing(code?: string) {
   return ['42P01', '42883', 'PGRST202', 'PGRST205'].includes(code ?? '');

@@ -1,5 +1,7 @@
+import type { BehaviorAreaKey } from "./position-fields";
+
 export type BehaviorGuideDefinition = Readonly<{
-  id: string;
+  id: BehaviorAreaKey;
   label: string;
   definition: string;
   questions: readonly string[];

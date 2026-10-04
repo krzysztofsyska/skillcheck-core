@@ -1,0 +1,152 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { PGlite } from "@electric-sql/pglite";
+
+const migrations = [
+  "20260930000100_skillcheck_core.sql",
+  "20261001000100_idempotent_onboarding.sql",
+  "20261001000200_candidate_documents.sql",
+  "20261002000100_behavior_assessments.sql",
+  "20261002000200_behavior_conflict_response.sql",
+  "20261002000300_exercise_definitions.sql",
+  "20261004000100_exercise_observations.sql",
+];
+
+const tableColumns = {
+  applications: ["id", "company_id", "recruitment_id", "candidate_id", "status", "created_at", "updated_at"],
+  assessment_stages: ["id", "company_id", "recruitment_id", "name", "description", "sequence", "created_at", "updated_at"],
+  behavior_assessment_entries: ["id", "company_id", "recruitment_id", "application_id", "area_key", "version", "rating", "evidence", "required_level", "position_id", "position_updated_at", "position_snapshot", "author_id", "created_at"],
+  candidate_assessments: ["id", "company_id", "recruitment_id", "application_id", "stage_id", "status", "score", "notes", "completed_at", "created_at", "updated_at"],
+  candidate_documents: ["id", "company_id", "candidate_id", "source_text", "redacted_text", "version", "status", "reviewed_by", "reviewed_at", "created_at", "updated_at"],
+  candidates: ["id", "company_id", "first_name", "last_name", "email", "phone", "created_at", "updated_at"],
+  companies: ["id", "name", "owner_id", "created_at", "updated_at"],
+  company_members: ["company_id", "user_id", "role", "created_at", "updated_at"],
+  company_profiles: ["company_id", "industry", "description", "website", "size_band", "work_environment", "company_values", "created_at", "updated_at"],
+  exercise_definition_entries: ["id", "exercise_id", "company_id", "recruitment_id", "version", "definition", "position_id", "position_updated_at", "position_snapshot", "author_id", "created_at"],
+  exercise_observation_entries: ["id", "company_id", "recruitment_id", "application_id", "definition_entry_id", "version", "work_sample", "observations", "author_id", "created_at"],
+  positions: ["id", "company_id", "title", "description", "tasks", "kpis", "autonomy_level", "required_behaviors", "required_competencies", "status", "created_at", "updated_at"],
+  recruitments: ["id", "company_id", "position_id", "name", "status", "opened_at", "closed_at", "created_at", "updated_at"],
+};
+
+const viewColumns = {
+  latest_behavior_assessments: tableColumns.behavior_assessment_entries,
+  latest_exercise_definitions: tableColumns.exercise_definition_entries,
+  latest_exercise_observations: tableColumns.exercise_observation_entries,
+};
+
+const publicForeignKeys = [
+  "applications_company_id_candidate_id_fkey",
+  "applications_company_id_fkey",
+  "applications_company_id_recruitment_id_fkey",
+  "assessment_stages_company_id_fkey",
+  "assessment_stages_company_id_recruitment_id_fkey",
+  "behavior_assessment_entries_company_id_position_id_fkey",
+  "behavior_assessment_entries_company_id_recruitment_id_appl_fkey",
+  "candidate_assessments_company_id_fkey",
+  "candidate_assessments_company_id_recruitment_id_applicatio_fkey",
+  "candidate_assessments_company_id_recruitment_id_stage_id_fkey",
+  "candidate_documents_company_id_candidate_id_fkey",
+  "candidates_company_id_fkey",
+  "company_members_company_id_fkey",
+  "company_profiles_company_id_fkey",
+  "exercise_definition_entries_company_id_position_id_fkey",
+  "exercise_definition_entries_company_id_recruitment_id_fkey",
+  "exercise_observation_entries_company_id_recruitment_id_app_fkey",
+  "exercise_observation_entries_company_id_recruitment_id_def_fkey",
+  "positions_company_id_fkey",
+  "recruitments_company_id_fkey",
+  "recruitments_company_id_position_id_fkey",
+];
+
+const functions = {
+  create_company: "company_name text",
+  ensure_initial_company: "company_name text",
+  review_candidate_document: "document_id uuid, expected_version integer",
+  save_behavior_assessment: "target_application uuid, target_area text, new_rating text, new_evidence text, expected_version integer, expected_position_updated_at timestamp with time zone, expected_position_id uuid",
+  save_exercise_definition: "target_recruitment uuid, target_exercise uuid, new_definition jsonb, expected_version integer, expected_position_id uuid, expected_position_updated_at timestamp with time zone",
+  save_exercise_observations: "target_application uuid, target_definition uuid, expected_version integer, new_work_sample text, new_observations jsonb",
+};
+
+test("public database contract matches the manually maintained Supabase types", async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(`
+      create role anon nologin;
+      create role authenticated nologin;
+      create schema auth;
+      create table auth.users (id uuid primary key);
+      create function auth.uid() returns uuid language sql stable as $$
+        select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+      $$;
+      grant usage on schema auth to anon, authenticated;
+      grant execute on function auth.uid() to anon, authenticated;
+    `);
+    for (const migration of migrations) {
+      await db.exec(await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), "utf8"));
+    }
+
+    const relations = await db.query(`
+      select c.relname as relation_name, c.relkind,
+        array_agg(a.attname order by a.attnum) filter (where a.attnum > 0 and not a.attisdropped) as columns
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      left join pg_attribute a on a.attrelid = c.oid
+      where n.nspname = 'public' and c.relkind in ('r', 'v')
+      group by c.relname, c.relkind
+      order by c.relname
+    `);
+    const actualTables = Object.fromEntries(
+      relations.rows.filter(row => row.relkind === "r").map(row => [row.relation_name, row.columns]),
+    );
+    const actualViews = Object.fromEntries(
+      relations.rows.filter(row => row.relkind === "v").map(row => [row.relation_name, row.columns]),
+    );
+    assert.deepEqual(actualTables, tableColumns);
+    assert.deepEqual(actualViews, viewColumns);
+
+    const securityInvokerViews = await db.query(`
+      select c.relname
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relkind = 'v'
+        and 'security_invoker=true' = any(coalesce(c.reloptions, '{}'))
+      order by c.relname
+    `);
+    assert.deepEqual(
+      securityInvokerViews.rows.map(row => row.relname),
+      Object.keys(viewColumns).sort(),
+    );
+
+    const foreignKeys = await db.query(`
+      select constraint_name
+      from information_schema.table_constraints
+      where constraint_schema = 'public' and constraint_type = 'FOREIGN KEY'
+        and constraint_name not like '%_owner_id_fkey'
+        and constraint_name not like '%_user_id_fkey'
+        and constraint_name not like '%_author_id_fkey'
+        and constraint_name <> 'candidate_documents_reviewed_by_fkey'
+      order by constraint_name
+    `);
+    assert.deepEqual(
+      foreignKeys.rows.map(row => row.constraint_name),
+      [...publicForeignKeys].sort(),
+    );
+
+    const rpc = await db.query(`
+      select p.proname, pg_get_function_identity_arguments(p.oid) as arguments,
+        pg_get_function_result(p.oid) as result
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+      order by p.proname
+    `);
+    assert.deepEqual(
+      Object.fromEntries(rpc.rows.map(row => [row.proname, row.arguments])),
+      functions,
+    );
+    assert.ok(rpc.rows.every(row => row.result === (row.proname === "review_candidate_document" ? "boolean" : "uuid")));
+  } finally {
+    await db.close();
+  }
+});
