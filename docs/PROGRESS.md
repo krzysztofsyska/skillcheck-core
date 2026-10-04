@@ -166,3 +166,7 @@ Poniższe wpisy zachowują stan z chwili ich zapisu. Dawne informacje o oczekuj�
 ## Weryfikacja publikacji — 2026-10-04
 - Kod interfejsu 8158646 opublikowany do gałęzi PR; Vercel deployment 52rqM3dzt93Rjge737MCP4E7UcBp zakończony success. GitHub Checks verify: success (runs 37166622809 i 37166620917).
 - Wznowienie istniejącego logowania Supabase przez ChatGPT próbowano dwukrotnie. Obie próby wróciły z OAuth state has expired. Nie wykonano migracji 20261002000300 ani zapisu nowych zadań na docelowej bazie. Potrzebne zalogowanie użytkownika w przeglądarce Codex; ekran pozostawiono otwarty. Nie pobierano haseł ani tokenów.
+
+## Uzupełnienie audytu — rzeczywiste konto B
+
+Potwierdzono TEST Firmę B, zapis/trwałość profilu, stanowisko/KPI/zachowania, rekrutację, kandydata/przypisanie i blokadę duplikatu, tekst CV/anonimizację/zatwierdzenie oraz logout z ochroną panelu. Konto B otrzymało 404 przy wejściu do panelu firmy A. Oczekiwanie na login użytkownika A do próby odwrotnej; pełnego RLS/test:live/rol/recovery nie zaliczono. Szczegóły i identyfikatory: docs/audit-2026-10-04.md. Kod bez zmian, bez merge.
