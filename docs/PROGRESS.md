@@ -178,3 +178,9 @@ Potwierdzono własny panel Ekoflame i odmowę dostępu (404) do panelu B, CV B o
 ## Kontynuacja audytu — przepływ A i konflikt etapów
 
 Utworzono dane TEST A od stanowiska do zadania i obserwacji. Sprawdzono notatkę wymaganą do zakończenia, trwałość daty, konflikt starego okna bez nadpisania i ponowne otwarcie etapu. Oceny v1/v2 zachowały historię; CV zatwierdzone, przygotowanie preselekcji dostępne. Recovery przyjęte przez formularz, wiadomość/reset czekają na użytkownika. Naprawiono nieaktualny komunikat liczby relacji w checkerze; 5/5 testów mechanizmu PASS. Pełnego test:live nie zaliczono. Szczegóły i ograniczenia: docs/audit-2026-10-04.md. Bez merge.
+
+## Lokalny test dwóch sesji — 2026-10-04
+
+Dodano scripts/run-live-check.ps1: ukryte wprowadzanie haseł, publiczny klucz projektu, brak pliku z poświadczeniami, przywrócenie zmiennych procesu także po błędzie. Kontrola składni PowerShell PASS; próba na syntetycznych danych bez sieci potwierdziła przekazanie danych do procesu testu, propagację exit 7 i przywrócenie wszystkich sześciu zmiennych. Mechanizm live-check: 5/5 PASS. To nie jest wynik rzeczywistego test:live.
+
+Login A w Codex potwierdzono osobno (docs/login-password-verification.md). Do pełnego odczytu API nadal potrzebne są lokalnie wprowadzone poświadczenia oraz komplet rekordów obu firm: jawne członkostwa i brakujące dane B (etap/postęp, ocena zachowania, zadanie i obserwacja). Nie należy uruchamiać testu z niepełnymi danymi i traktować odmowy jako potwierdzenia izolacji. Właściciele nie potwierdzają uprawnień viewer/recruiter. Recovery i role pozostają nieweryfikowane. NOT READY do merge; bez nowych modułów, migracji i zmian main.

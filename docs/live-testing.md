@@ -4,6 +4,12 @@
 
 ## Warunki wiarygodnego wyniku
 
+### Wprowadzanie haseł lokalnie, bez pliku
+
+Na Windows można uruchomić `powershell -NoProfile -File .\scripts\run-live-check.ps1` w katalogu repozytorium. Skrypt pyta o klucz **publishable** projektu, adresy A/B i ukryte hasła; nie zapisuje ich w pliku ani argumentach procesu. Przywraca poprzednie zmienne środowiskowe w finally. Nie używać transkrypcji terminala ani nie wklejać haseł do czatu. Skrypt nie tworzy kont, danych, członkostw ani uprawnień i nie omija brakujących rekordów. Wymaga Node.js i zależności repozytorium. Hasła są krótkotrwale dostępne procesowi testu w pamięci/środowisku; skrypt nie gwarantuje wymazania wszystkich kopii z pamięci systemu.
+
+Właściciele A/B nie wystarczą do testów recruiter/viewer. Nie należy nadać A członkostwa w B (ani odwrotnie) podczas testu rozłączności. Testy tych ról wymagają oddzielnie przygotowanego, kontrolowanego członkostwa; niniejszy skrypt sprawdza tylko odczyty izolacji dwóch sesji.
+
 Oba potwierdzone konta muszą należeć do rozłącznych firm testowych. W każdej firmie muszą być widoczne dla danego konta rekordy wszystkich 13 tabel oraz trzech widoków najnowszych wersji:
 
 - firma i jej profil;
