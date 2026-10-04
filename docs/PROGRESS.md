@@ -192,3 +192,17 @@ Potwierdzono aktywną sesję B i TEST Firmę B. Przez istniejące formularze utw
 Identyfikatory do ponowienia audytu: application 4a0788c1-8ec9-41a5-942b-82d23e7fd411; exercise 73b3666c-317f-4c1d-9b8f-b530a70496ca; exercise revision 2ba871ce-c1ee-467e-8024-7707daa5dd03. Firma B e732b9dc-ec23-4bcb-b06f-f7dd9fa2c0fb.
 
 Wcześniejsza lista braków B dotycząca etapu, postępu, oceny zachowania, zadania i obserwacji jest nieaktualna — te dane uzupełniono. Nadal nie zaliczono test:live: jawne członkostwa obu firm i kompletność wszystkich relacji wymagają sprawdzenia/przygotowania; poświadczenia do lokalnego testu wprowadza użytkownik poza czatem. Testy viewer/recruiter i pełny recovery pozostają otwarte. Brak zmian implementacji, migracji i main. NOT READY do merge.
+
+## Kompletność danych A/B — 2026-10-04
+
+Kontrola administratora Supabase potwierdziła brak wyłącznie company_members. Dodano po jednym wpisie viewer wskazującym istniejącego właściciela własnej firmy (INSERT SELECT owner_id, tylko dwa znane company_id, ON CONFLICT DO NOTHING). Nie dodano dostępu do obcej firmy. Uprawnienia właściciela nadal mają pierwszeństwo: NIE jest to test ograniczeń viewer.
+
+Po uzupełnieniu zbiorcze SELECT: checked_relations=16, populated_for_both=16, missing=NULL. Obie firmy mają dane we wszystkich 13 tabelach i 3 widokach. To kontrola kompletności wykonana jako administrator, NIE test RLS przez sesje użytkowników. test:live nadal wymaga lokalnego wprowadzenia poświadczeń. Nadal otwarte: role, pełny cykl recovery, współbieżny onboarding i końcowy E2E. NOT READY do merge. Nie wykonywano migracji ani zmiany main.
+
+## Ostatnia kontrola lokalna — 2026-10-04
+
+Lokalny SHA 8cfd55a16a2eb274dc52c42849a220da3bcb0fb8: ponownie uruchomiono wszystkie 10 zestawów (db, auth, cv, screening, assessments, auth-http, live-check, behavior-guide, behavior-assessments, http); każdy exit 0. build, typecheck i pdf-bundle także exit 0. Logi w artifacts/audit-2026-10-04/*-final.log, zestawienie final-checks.json. Nie jest to ponowienie test:live.
+
+GitHub HEAD przy kontroli 7a205dbe2dbbd909786d074ba3e893c9b3d4656f, Vercel success (AgQu5QVVH2Wjb6zk96PB9y3yxWeU); PR draft, merged=false; main nadal 62a47ba6b40a1d92149fd2f6b1d34b195756048d. Nowsze lokalne zmiany dotyczą dokumentacji kompletności danych i tego wyniku.
+
+Aktualne blokady: kompletność rekordów A/B jest już potwierdzona (16/16), więc poprzednie braki danych nie obowiązują. Następny krok to scripts/run-live-check.ps1 z danymi wprowadzonymi lokalnie przez użytkownika; aktywna sesja przeglądarki nie jest sesją skryptu Node. Nie pobierano ciasteczek ani tokenów z przeglądarki. Pełny test API, rzeczywiste role recruiter/viewer, pełny cykl recovery oraz współbieżny onboarding nadal niezaliczone. Przygotowanie testów i dostępna walidacja lokalna zakończone, cały audyt NIE jest zakończony. NOT READY do merge.
