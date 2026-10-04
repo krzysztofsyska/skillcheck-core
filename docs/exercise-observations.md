@@ -11,3 +11,7 @@ Transakcyjne blokady rodziców i blokada pary zgłoszenie/definicja serializują
 Link z etapów zgłoszenia prowadzi do wyboru wersji zadań (25 na stronę), formularza i historii (20 na stronę). Serwer sprawdza sesję, firmę, rekrutację i zgłoszenie; również w akcji zapisu. Formularz zachowuje tekst i wybory po błędzie, blokuje pola w trakcie zapisu i aktualizuje wersję tylko po potwierdzeniu RPC. Przy brakującej migracji nie udaje działającego zapisu.
 
 Weryfikacja lokalna: build/TypeScript, test:assessments 26 raportowanych testów (w tym dwa nadrzędne), test:http oraz test:live-check 5/5. PGlite wykonuje wszystkie siedem migracji, sprawdza dwie firmy i role, historię, autora, błędne JSON, stare wersje, statusy oraz zachowanie dawnej rubryki. Nie zastępuje dwóch rzeczywistych sesji Auth ani wyścigu równoczesnych połączeń. Próba zalogowanego UI pozostaje do wykonania po publikacji Preview.
+
+## Uzupełnienie audytu 2026-10-04
+
+Próba zalogowanego Preview 4c4a369 przeszła: zapis v1/v2, utrzymanie pól, autor i historia dla niezmiennej rubryki, konflikt starego okna z zachowaniem tekstu i bez nadpisania. Szczegóły i granice: [audit-2026-10-04.md](audit-2026-10-04.md). Nadal nie potwierdzono dwóch rzeczywistych firm ani równoczesnych połączeń.

@@ -1,3 +1,13 @@
+# Punkt kontrolny 2026-10-04 — audyt, bez nowych modułów
+
+**NOT READY do merge.** Najnowsze polecenie właściciela w PR #1 zastępuje starsze plany rozwoju poniżej. Obowiązuje audyt i naprawy regresji, bez nowych modułów i bez merge do main. Pełna macierz, SHA i wyniki: [audit-2026-10-04.md](audit-2026-10-04.md).
+
+- Kod GitHub/Preview 4c4a369d8b8939595048ec00aaf809dc13003620 zgodny z lokalnym kodem (cztery różnice wyłącznie CRLF/LF). Main 62a47ba bez zmian.
+- Wszystkie lokalne zestawy: 96 raportowanych testów PASS, typecheck/build/pdf-bundle PASS. test:live BLOCKED przez brak konfiguracji i kont, nie zaliczony.
+- Supabase: 13 tabel RLS, 40 polityk, trzy widoki security_invoker; siedem migracji wykonano, nie ponawiać.
+- Preview: obserwacje v1/v2, historia i konflikt starego okna potwierdzone. Ponowiono TXT/PDF/DOCX, ręczne zatwierdzenie i blokadę/odblokowanie przygotowania preselekcji.
+- Użytkownik dostarczył dwa adresy dla kont testowych; rejestracja/potwierdzenie i hasła pozostają do wykonania. Nadal brak pełnego Auth/poczty, dwóch firm, ról, równoległego onboardingu i kompletnego E2E na jednym HEAD.
+- Starsze wpisy poniżej są chronologią, nie aktualną instrukcją wdrażania kolejnych modułów.
 # Aktualizacja 2026-10-04 — obserwacje wykonania zadań
 
 - Dodano tabelę historii, widok security_invoker, walidację SQL i RPC, typy, akcję serwerową, wybór wersji zadania, formularz i historię przy zgłoszeniu. Ocena wiąże się z niezmienną wersją rubryki, nie z jej najnowszą wersją. Dowody są wymagane; brak danych oddzielny. Stare zapisy dają PT409.
