@@ -4,9 +4,8 @@
 Ze strony rekrutacji przy każdym kandydacie można otworzyć Przygotowanie preselekcji. Widok dotyczy zgłoszenia, nie globalnej oceny osoby. Pokazuje aktualne zadania, KPI, kompetencje i najnowszy sprawdzony tekst CV. Czytanie odbywa się przez klienta sesji użytkownika i istniejące RLS, z filtrami firmy oraz relacji zgłoszenie–rekrutacja–stanowisko–kandydat.
 
 Nie ma połączenia z modelem, wysyłki danych, uruchamiania analizy, rankingu ani
-automatycznej decyzji rekrutacyjnej. SC-004 przygotowuje warstwę persistencji w
-repozytorium, ale migracja nie jest zastosowana do produkcji i żaden istniejący
-flow jej jeszcze nie wywołuje. Komunikat w interfejsie nadal informuje, że analiza
+automatycznej decyzji rekrutacyjnej. SC-004 dostarcza warstwę persistencji również w produkcyjnym Supabase, ale żaden
+istniejący flow aplikacji nie wywołuje jeszcze integracji AI ani workera. Komunikat w interfejsie nadal informuje, że analiza
 nie jest uruchomiona. Nie ma pozornego przycisku generowania ani przykładowych ocen
 udających wynik AI.
 
@@ -24,9 +23,9 @@ Identyfikatory i wersje są przechowywane osobno w binding. Fingerprint SHA-256 
 
 Walidator przyszłej odpowiedzi wymaga dokładnie jednego wpisu na każde kryterium, bez dodatkowych pól decyzji. Poziomy: insufficient_data, below, meets, above. Każda ocena inna niż brak danych wymaga cytatu zgodnego znak w znak z zatwierdzonym tekstem i poprawnymi indeksami UTF-16. Maksymalnie pięć cytatów po 2000 znaków. Walidator potwierdza zgodność tekstu, nie prawdziwość deklaracji ani poprawność interpretacji; każdy wynik musi sprawdzić rekruter.
 
-## Persistencja przygotowana w SC-004
+## Persistencja wdrożona w SC-004
 
-Migracja `20261004000200_screening_results.sql` przygotowuje pięć tabel:
+Migracja `20261004000200_screening_results.sql` jest wdrożona i dostarcza pięć tabel:
 `screening_analysis_versions`, `screening_analysis_attempts`,
 `screening_criterion_results`, `screening_result_reviews` i
 `screening_criterion_review_overrides`.
@@ -47,8 +46,9 @@ Migracja `20261004000200_screening_results.sql` przygotowuje pięć tabel:
 - Nie są przechowywane raw provider request/response ani nowe payloady poza
   zatwierdzonym snapshotem redacted CV, kryteriami i bindingiem audytowym.
 
-Migracja nie została uruchomiona na produkcji. Nie zapewnia integracji OpenAI ani
-provisioningu wewnętrznej capability workera; te elementy należą do SC-005.
+Migracja została uruchomiona na produkcyjnym Supabase 2026-10-04. Nie zapewnia
+jeszcze integracji OpenAI ani provisioningu/dispatchu wewnętrznego workera; te
+elementy należą do SC-005.
 
 ## Przed uruchomieniem AI
 Nadal do implementacji: wybór i konfiguracja dostawcy/modelu, jawny budżet,
@@ -57,8 +57,9 @@ na polecenia w CV, limity żądań/kosztów oraz bezpieczny dispatch workera.
 Integracja musi ponownie pobierać aktualny materiał przed wysyłką i korzystać z
 lease/RPC przy zapisie. Nie wolno przekazywać internal capability do przeglądarki.
 
-Wdrożony baseline produkcji nadal ma 13 tabel, 40 polityk RLS i siedem wykonanych
-migracji. Nie ponawiać ich ani nie stosować migracji SC-004 z tej gałęzi.
+Wdrożony baseline produkcji ma 18 tabel z RLS, 45 polityk, trzy widoki
+`security_invoker`, 12 publicznych RPC i osiem wykonanych migracji. Nie ponawiać
+żadnej z nich.
 
 ## Testy
 Testy lokalnej logiki obejmują zakres danych, izolację relacji/firm, blokady
