@@ -1,0 +1,52 @@
+# SkillCheck — Development Backlog
+
+Punkt startowy: po merge PR #1 do main, 2026-10-04.
+
+## Status istniejącego produktu
+Nie budować ponownie: auth/onboarding, firmy, profile stanowisk, rekrutacje, kandydaci, TXT/PDF/DOCX CV, manualna redakcja, screening-prep, ręczne etapy, behavior assessments, interview guide, exercise definitions i observations.
+
+## Kolejka SC-001 — SC-020
+
+| ID | Zadanie | Level | Owner | Reviewer | Depends on | Status |
+|---|---|---:|---|---|---|---|
+| SC-001 | Post-merge production baseline + aktualizacja starych opisów PR/README/PROGRESS | L1 | Cursor | Codex | — | READY |
+| SC-002 | Zamrożenie kontraktów DB/types + kontrola rozbieżności ręcznych typów Supabase | L2 | Cursor | Codex | SC-001 | BACKLOG |
+| SC-003 | Model danych dla persistowanego wyniku preselekcji AI | L3 | Codex→Cursor | Codex | SC-002 | BACKLOG |
+| SC-004 | Migracja + RLS + RPC dla wyników preselekcji i review człowieka | L3 | Cursor | Codex | SC-003 | BACKLOG |
+| SC-005 | Integracja OpenAI dla preselekcji: bezpieczny payload, structured output, limity | L3 | Codex→Cursor | Codex | SC-004 | BACKLOG |
+| SC-006 | UI uruchomienia analizy i podglądu dowodów bez automatycznej decyzji | L2 | Cursor | Codex | SC-005 | BACKLOG |
+| SC-007 | Obsługa stale/fingerprint/idempotency/concurrency analizy | L3 | Cursor | Codex | SC-005 | BACKLOG |
+| SC-008 | Ranking/shortlista dla jednej rekrutacji na podstawie sprawdzonych wyników | L2 | Cursor | Codex | SC-006,SC-007 | BACKLOG |
+| SC-009 | Raport preselekcji dla firmy + eksport | L2 | Cursor | Codex | SC-008 | BACKLOG |
+| SC-010 | Model komunikacji z kandydatem: zgody, statusy, kanały, retry | L3 | Codex→Cursor | Codex | SC-008 | BACKLOG |
+| SC-011 | Voicebot architecture/provider contract + koszt i limity | L3 | Codex | Codex | SC-010 | BACKLOG |
+| SC-012 | Voicebot MVP: rozmowa, callback/retry, transcript | L3 | Cursor | Codex | SC-011 | BACKLOG |
+| SC-013 | Analiza rozmowy voice + dowody + review człowieka | L3 | Cursor | Codex | SC-012 | BACKLOG |
+| SC-014 | Test kompetencji: wykonanie kandydata + scoring evidence-based | L3 | Codex→Cursor | Codex | SC-008 | BACKLOG |
+| SC-015 | Raport WERYFIKACJA łączący CV, voice i test | L2 | Cursor | Codex | SC-013,SC-014 | BACKLOG |
+| SC-016 | Assessment Center: komplet flow na istniejących exercise definitions/observations | L2 | Cursor | Codex | SC-014 | BACKLOG |
+| SC-017 | Quality of Hire 30/90/180 + KPI feedback | L3 | Codex→Cursor | Codex | SC-015 | BACKLOG |
+| SC-018 | Talent pool: zgoda kandydata, eligibility i matching | L3 | Codex→Cursor | Codex | SC-015 | BACKLOG |
+| SC-019 | Billing/pakiety/limity usage FREE-PRESELEKCJA-WERYFIKACJA-AC | L3 | Codex→Cursor | Codex | SC-009,SC-015 | BACKLOG |
+| SC-020 | White-label tenant configuration | L3 | Codex→Cursor | Codex | SC-019 | BACKLOG |
+
+## Pierwsza fala
+Uruchamiać sekwencyjnie:
+1. SC-001
+2. SC-002
+3. SC-003
+
+Po zaakceptowaniu SC-003 można rozbić implementację na niezależne podtaski.
+
+## Product backlog poza pierwszą 20
+- agency subscriptions / volume packs,
+- candidate chatbot,
+- notification center,
+- admin/ops dashboard,
+- OCR jako osobna usługa,
+- advanced analytics,
+- integrations z ATS/HRIS,
+- full white-label domain/email branding.
+
+## Zasada priorytetu
+Najpierw domknąć PRESELEKCJĘ jako pierwszy płatny end-to-end produkt. Voice, AC, QoH, billing i white-label są kolejnymi warstwami, nie mogą blokować SC-003—SC-009.
