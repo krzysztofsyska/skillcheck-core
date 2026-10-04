@@ -1,8 +1,10 @@
 import {
   SCREENING_OPENAI_MAX_RETRIES,
+  SCREENING_OPENAI_REQUEST_TIMEOUT_MS,
   ScreeningProviderError,
   type ScreeningProviderErrorCode,
   type ScreeningWorkerClaim,
+  assertScreeningClaimMatchesWorkerContract,
   buildScreeningOpenAiRequest,
   isRetryableScreeningError,
   isScreeningAiEnabled,
@@ -69,19 +71,33 @@ export async function callOpenAiResponses(
   apiKey: string,
   request: ReturnType<typeof buildScreeningOpenAiRequest>,
   fetchImpl: typeof fetch = fetch,
+  timeoutMs = SCREENING_OPENAI_REQUEST_TIMEOUT_MS,
 ): Promise<ScreeningOpenAiResponse> {
-  const response = await fetchImpl('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  });
-  if (!response.ok) {
-    throw new ScreeningProviderError(mapScreeningHttpError(response.status), 'Provider HTTP error.');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new ScreeningProviderError(mapScreeningHttpError(response.status), 'Provider HTTP error.');
+    }
+    return await response.json() as ScreeningOpenAiResponse;
+  } catch (error) {
+    if (error instanceof ScreeningProviderError) throw error;
+    if (error instanceof Error && (error.name === 'AbortError' || /aborted|timeout/i.test(error.message))) {
+      throw new ScreeningProviderError('openai_timeout', 'Provider timed out.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return await response.json() as ScreeningOpenAiResponse;
 }
 
 export async function runScreeningAttempt(attemptId: string, runtime: ScreeningWorkerRuntime) {
@@ -106,6 +122,27 @@ export async function runScreeningAttempt(attemptId: string, runtime: ScreeningW
   if (!claim) {
     runtime.log({ attempt_id: attemptId, status: 'abandoned' });
     return { status: 'abandoned' as const };
+  }
+
+  try {
+    assertScreeningClaimMatchesWorkerContract(claim);
+  } catch (error) {
+    const code = mapScreeningThrownError(error);
+    try {
+      await runtime.store.fail({
+        attemptId: claim.attempt_id,
+        leaseToken: claim.lease_token,
+        inputFingerprint: claim.input_fingerprint,
+        analysisContractHash: claim.analysis_contract_hash,
+        errorCode: code,
+        errorMessage: sanitizeScreeningError(code),
+      });
+    } catch {
+      runtime.log({ attempt_id: claim.attempt_id, analysis_id: claim.analysis_id, status: 'failed', error_code: 'worker_internal_error' });
+      return { status: 'failed' as const, code: 'worker_internal_error' as const };
+    }
+    runtime.log({ attempt_id: claim.attempt_id, analysis_id: claim.analysis_id, status: 'failed', error_code: code });
+    return { status: 'failed' as const, code };
   }
 
   const request = buildScreeningOpenAiRequest(claim);

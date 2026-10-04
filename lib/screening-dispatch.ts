@@ -16,6 +16,8 @@ function readEnv(name: string) {
   return process.env[name]?.trim() || '';
 }
 
+// Server-only internal utility. Do not re-export from a "use server" file
+// until SC-006 binds it to an authenticated start_screening_analysis flow.
 export async function dispatchScreeningWorker(
   attemptId: string,
   env: NodeJS.ProcessEnv = process.env,

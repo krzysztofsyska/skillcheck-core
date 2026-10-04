@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SCREENING_OPENAI_MODEL, ScreeningProviderError } from '../lib/screening-ai.ts';
-import { runScreeningAttempt } from '../lib/screening-worker.ts';
+import { screeningAnalysisContractHash } from '../lib/screening.ts';
+import { SCREENING_OPENAI_MODEL, ScreeningProviderError, screeningAiContract } from '../lib/screening-ai.ts';
+import { callOpenAiResponses, runScreeningAttempt } from '../lib/screening-worker.ts';
 
 const claim = {
   analysis_id: 'a1111111-1111-4111-8111-111111111111',
@@ -9,7 +10,7 @@ const claim = {
   lease_token: 'a'.repeat(64),
   lease_expires_at: '2026-10-04T17:00:00Z',
   input_fingerprint: 'b'.repeat(64),
-  analysis_contract_hash: 'c'.repeat(64),
+  analysis_contract_hash: screeningAnalysisContractHash(screeningAiContract),
   payload_schema_version: 1,
   result_schema_version: 1,
   prompt_version: 'screening-v1',
@@ -121,4 +122,61 @@ test('duplicate dispatch and late completion do not write a second AI result', a
   })));
   assert.equal(failed.status, 'failed');
   assert.equal(late.calls.complete.length, 0);
+});
+
+test('mismatched claim model, prompt or schema fails without calling OpenAI', async () => {
+  const mismatched = {
+    ...claim,
+    model: 'gpt-4o-mini',
+    prompt_version: 'screening-v0',
+    payload_schema_version: 2,
+    result_schema_version: 2,
+    analysis_contract_hash: screeningAnalysisContractHash({
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      model_revision: null,
+      prompt_version: 'screening-v0',
+      payload_schema_version: 2,
+      result_schema_version: 2,
+    }),
+  };
+  const { store, calls } = storeMock({
+    claim: async () => mismatched,
+  });
+  let openaiCalls = 0;
+  const result = await runScreeningAttempt(mismatched.attempt_id, runtime(store, async () => {
+    openaiCalls += 1;
+    throw new Error('must not call openai');
+  }));
+  assert.equal(openaiCalls, 0);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.code, 'contract_mismatch');
+  assert.equal(calls.complete.length, 0);
+  assert.equal(calls.fail.length, 1);
+  assert.equal(calls.fail[0].errorCode, 'contract_mismatch');
+  assert.doesNotMatch(calls.fail[0].errorMessage, /gpt-4o-mini|screening-v0|SQL i raporty|sk-/);
+});
+
+test('request aborted by timeout is retried then fails with openai_timeout', { timeout: 5000 }, async () => {
+  const { store, calls } = storeMock();
+  let tries = 0;
+  const hangingFetch = (_url, init) => {
+    tries += 1;
+    return new Promise((_, reject) => {
+      init.signal.addEventListener('abort', () => {
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    });
+  };
+  const result = await runScreeningAttempt(claim.attempt_id, runtime(store, request => (
+    callOpenAiResponses('sk-test', request, hangingFetch, 20)
+  )));
+  assert.equal(tries, 3);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.code, 'openai_timeout');
+  assert.equal(calls.complete.length, 0);
+  assert.equal(calls.fail[0].errorCode, 'openai_timeout');
+  assert.doesNotMatch(calls.fail[0].errorMessage, /sk-test|SQL i raporty|resp_/);
 });

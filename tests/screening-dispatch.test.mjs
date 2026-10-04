@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { dispatchScreeningWorker } from '../lib/screening-dispatch.ts';
 import { verifyScreeningDispatch } from '../lib/screening-hmac.ts';
@@ -32,4 +34,35 @@ test('dispatcher stays silent when the AI flag is off and signs a raw body when 
   });
   assert.equal(verified.ok, true);
   assert.equal(seen.init.body.toString('utf8'), JSON.stringify({ attempt_id: attemptId }));
+});
+
+test('SC-005 does not export a browser-callable action that can dispatch an arbitrary attemptId', () => {
+  const screeningActions = new URL(
+    '../app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/screening/actions.ts',
+    import.meta.url,
+  );
+  assert.equal(existsSync(screeningActions), false);
+
+  const dispatchSource = readFileSync(new URL('../lib/screening-dispatch.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(dispatchSource, /['"]use server['"]/);
+  assert.doesNotMatch(dispatchSource, /dispatchPreparedScreening/);
+
+  const offenders = [];
+  const stack = [new URL('../app', import.meta.url).pathname];
+  while (stack.length) {
+    const dir = stack.pop();
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(path);
+        continue;
+      }
+      if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.tsx')) continue;
+      const source = readFileSync(path, 'utf8');
+      if (/['"]use server['"]/.test(source) && /dispatch(PreparedScreening|ScreeningWorker)/.test(source)) {
+        offenders.push(path);
+      }
+    }
+  }
+  assert.deepEqual(offenders, []);
 });

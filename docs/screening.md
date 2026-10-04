@@ -62,7 +62,14 @@ produkcji.
   Nie używa `service_role` do claim/complete/fail.
 - OpenAI Responses API, model `gpt-5.4-mini-2026-03-17`, `store:false`,
   `reasoning.effort=low`, strict Structured Outputs, bez tools i conversation.
+- Brak user-callable Server Action. `dispatchScreeningWorker` zostaje
+  wewnętrznym helperem serwerowym; start + RPC + dispatch spina SC-006.
+- Przed wywołaniem OpenAI worker potwierdza, że claim odpowiada
+  `screeningAiContract` i temu samemu `analysis_contract_hash`.
+- Pojedynczy request OpenAI ma timeout 60 s (`AbortController`). Przy max
+  2 retry (3 próby) budżet zostaje wyraźnie poniżej 5-minutowego lease.
 - Do modelu idzie wyłącznie `{schema_version, cv_text, criteria}`.
+  Tekst CV i treść kryteriów są danymi niezaufanymi, nie instrukcjami.
 - Model zwraca cytaty; worker liczy offsety UTF-16 przez dokładne `indexOf`.
 - Sekrety: `OPENAI_API_KEY`, `SCREENING_WORKER_DISPATCH_SECRET`,
   `SUPABASE_DB_URL`, `SCREENING_AI_ENABLED`. Nigdy `NEXT_PUBLIC_*`.
