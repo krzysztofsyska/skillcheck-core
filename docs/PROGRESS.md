@@ -184,3 +184,11 @@ Utworzono dane TEST A od stanowiska do zadania i obserwacji. Sprawdzono notatkę
 Dodano scripts/run-live-check.ps1: ukryte wprowadzanie haseł, publiczny klucz projektu, brak pliku z poświadczeniami, przywrócenie zmiennych procesu także po błędzie. Kontrola składni PowerShell PASS; próba na syntetycznych danych bez sieci potwierdziła przekazanie danych do procesu testu, propagację exit 7 i przywrócenie wszystkich sześciu zmiennych. Mechanizm live-check: 5/5 PASS. To nie jest wynik rzeczywistego test:live.
 
 Login A w Codex potwierdzono osobno (docs/login-password-verification.md). Do pełnego odczytu API nadal potrzebne są lokalnie wprowadzone poświadczenia oraz komplet rekordów obu firm: jawne członkostwa i brakujące dane B (etap/postęp, ocena zachowania, zadanie i obserwacja). Nie należy uruchamiać testu z niepełnymi danymi i traktować odmowy jako potwierdzenia izolacji. Właściciele nie potwierdzają uprawnień viewer/recruiter. Recovery i role pozostają nieweryfikowane. NOT READY do merge; bez nowych modułów, migracji i zmian main.
+
+## Uzupełnienie danych B przez Preview — 2026-10-04, 07:24 UTC
+
+Potwierdzono aktywną sesję B i TEST Firmę B. Przez istniejące formularze utworzono etap TEST B — ręczna weryfikacja oraz zapisano status W trakcie i syntetyczną notatkę. Zapisano odpowiedzialność jako niewystarczające dane z uzasadnieniem (wersja 1, autor Ty), zadanie TEST B — priorytetyzacja z jednym kryterium (wersja 1) i syntetyczną obserwację wykonania (wersja 1, autor Ty). Po pełnym odświeżeniu obserwacja i historia pozostały widoczne. Nie oceniano rzeczywistej osoby i nie wysyłano wiadomości.
+
+Identyfikatory do ponowienia audytu: application 4a0788c1-8ec9-41a5-942b-82d23e7fd411; exercise 73b3666c-317f-4c1d-9b8f-b530a70496ca; exercise revision 2ba871ce-c1ee-467e-8024-7707daa5dd03. Firma B e732b9dc-ec23-4bcb-b06f-f7dd9fa2c0fb.
+
+Wcześniejsza lista braków B dotycząca etapu, postępu, oceny zachowania, zadania i obserwacji jest nieaktualna — te dane uzupełniono. Nadal nie zaliczono test:live: jawne członkostwa obu firm i kompletność wszystkich relacji wymagają sprawdzenia/przygotowania; poświadczenia do lokalnego testu wprowadza użytkownik poza czatem. Testy viewer/recruiter i pełny recovery pozostają otwarte. Brak zmian implementacji, migracji i main. NOT READY do merge.
