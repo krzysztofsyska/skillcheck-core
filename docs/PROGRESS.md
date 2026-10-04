@@ -215,3 +215,5 @@ Przygotowano docs/owner-audit-runbook.md i tryb Membership do prób API ról bez
 
 ## Wynik A/B od wlasciciela
 Zrzut potwierdza PASS odczytow API dwoch kont w 16 relacjach. Dowod i granice zapisano w audit-2026-10-04.md. Role, pelny recovery i rownolegly onboarding nadal otwarte; NOT READY.
+
+Recovery B: wlasciciel potwierdzil zmiane hasla z linku e-mail i login nowym haslem. Pozostaje logout/ochrona panelu i ponowne uzycie linku. NOT READY.
