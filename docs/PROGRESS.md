@@ -1,4 +1,10 @@
-# SkillCheck — stan prac (2026-10-02)
+# SkillCheck — stan prac (2026-10-04)
+
+## Interfejs definicji zadań — 2026-10-04
+- Dokończono formularz po przerwanym uruchomieniu oraz strony listy, tworzenia, edycji i historii. Nawigacja z rekrutacji; lista po 25 zadań i historia po 20 wersji. Strony sprawdzają sesję i filtrują firmę/rekrutację. Viewer i zamknięte procesy nie mają edycji. Brak nowej migracji wyświetla jawny komunikat.
+- Formularz ma 1–12 dynamicznych kryteriów ze stabilnymi kluczami, zachowuje dane po błędach i blokuje zmiany podczas zapisu. Kontekst wersji/profilu pozostaje zamrożony, wersja zwiększa się dopiero po potwierdzeniu RPC. Historia pokazuje kryteria, autora i pełną kopię profilu, a zmiana wymagań daje ostrzeżenie.
+- Przeszły TypeScript, build, 16 raportowanych testów etapów/definicji/migracji oraz HTTP anonimowego wejścia/no-store do trzech nowych tras. Nie wykonano jeszcze interakcyjnego testu zalogowanego UI ani zapisu Preview.
+- Próba wejścia do Supabase pokazała Session expired. Migracja 20261002000300 nadal NIE została wykonana; pięciu poprzednich nie ponawiać. Następny krok: ponowne zalogowanie do Supabase, kontrola stanu przed migracją, wykonanie nowej migracji i weryfikacja formularza w Preview. Następnie obserwacje wykonania i raport.
 
 ## Nowy etap — wersjonowane definicje zadań
 - Przygotowano migrację 20261002000300_exercise_definitions.sql oraz typy Supabase dla zadań kompetencyjnych i Assessment Center. Migracja NIE została wykonana w docelowym Supabase; stan wdrożonej bazy poniżej pozostaje bez zmian. Nowa tabela historii, widok security_invoker i transakcyjne RPC zachowują autora, wersję oraz profil stanowiska; stary formularz i zmiana profilu dają PT409. Nie ma bezpośrednich zapisów tabeli z klienta.
