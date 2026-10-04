@@ -46,7 +46,12 @@ type ExpectedTables =
   | "candidate_documents"
   | "behavior_assessment_entries"
   | "exercise_definition_entries"
-  | "exercise_observation_entries";
+  | "exercise_observation_entries"
+  | "screening_analysis_versions"
+  | "screening_analysis_attempts"
+  | "screening_criterion_results"
+  | "screening_result_reviews"
+  | "screening_criterion_review_overrides";
 type ExpectedViews =
   | "latest_behavior_assessments"
   | "latest_exercise_definitions"
@@ -57,7 +62,13 @@ type ExpectedFunctions =
   | "review_candidate_document"
   | "save_behavior_assessment"
   | "save_exercise_definition"
-  | "save_exercise_observations";
+  | "save_exercise_observations"
+  | "start_screening_analysis"
+  | "claim_screening_attempt"
+  | "complete_screening_analysis"
+  | "fail_screening_attempt"
+  | "retry_screening_analysis"
+  | "review_screening_result";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -130,6 +141,42 @@ type _ObservationColumns = Expect<Equal<
   "definition_entry_id" | "version" | "work_sample" | "observations" |
   "author_id" | "created_at"
 >>;
+type _ScreeningAnalysisColumns = Expect<Equal<
+  Keys<Row<"screening_analysis_versions">>,
+  "id" | "company_id" | "recruitment_id" | "application_id" | "position_id" |
+  "candidate_document_id" | "candidate_document_version" | "analysis_version" |
+  "input_fingerprint" | "analysis_contract_hash" | "payload_schema_version" |
+  "result_schema_version" | "prompt_version" | "provider" | "model" |
+  "model_revision" | "execution_status" | "input_cv_text_snapshot" |
+  "criteria_snapshot" | "binding_snapshot" | "result_summary" | "overall_score" |
+  "stale_at" | "stale_reason" | "superseded_by_analysis_id" | "failure_code" |
+  "failure_message" | "created_by" | "created_at" | "processing_started_at" |
+  "completed_at" | "failed_at" | "updated_at" | "latest_review_version"
+>>;
+type _ScreeningAttemptColumns = Expect<Equal<
+  Keys<Row<"screening_analysis_attempts">>,
+  "id" | "company_id" | "analysis_id" | "attempt_no" | "idempotency_key" |
+  "status" | "lease_token_hash" | "lease_expires_at" | "provider_request_id" |
+  "provider_response_id" | "input_tokens" | "output_tokens" |
+  "cached_input_tokens" | "cost_amount" | "cost_currency" | "error_code" |
+  "finalization_hash" | "created_at" | "started_at" | "finished_at"
+>>;
+type _ScreeningCriterionColumns = Expect<Equal<
+  Keys<Row<"screening_criterion_results">>,
+  "id" | "company_id" | "analysis_id" | "criterion_id" | "criterion_kind" |
+  "criterion_order" | "criterion_text_snapshot" | "rating" | "evidence" |
+  "explanation" | "confidence" | "created_at"
+>>;
+type _ScreeningReviewColumns = Expect<Equal<
+  Keys<Row<"screening_result_reviews">>,
+  "id" | "company_id" | "analysis_id" | "review_version" | "reviewer_id" |
+  "disposition" | "review_note" | "created_at"
+>>;
+type _ScreeningOverrideColumns = Expect<Equal<
+  Keys<Row<"screening_criterion_review_overrides">>,
+  "id" | "company_id" | "review_id" | "criterion_result_id" |
+  "rating_override" | "evidence_override" | "explanation_override" | "created_at"
+>>;
 
 type _CompanyNullability = Expect<Equal<NullableKeys<Row<"companies">>, never>>;
 type _MemberNullability = Expect<Equal<NullableKeys<Row<"company_members">>, never>>;
@@ -165,6 +212,31 @@ type _DocumentNullability = Expect<Equal<
 type _BehaviorNullability = Expect<Equal<NullableKeys<Row<"behavior_assessment_entries">>, never>>;
 type _DefinitionNullability = Expect<Equal<NullableKeys<Row<"exercise_definition_entries">>, never>>;
 type _ObservationNullability = Expect<Equal<NullableKeys<Row<"exercise_observation_entries">>, never>>;
+type _ScreeningAnalysisNullability = Expect<Equal<
+  NullableKeys<Row<"screening_analysis_versions">>,
+  "model_revision" | "result_summary" | "overall_score" | "stale_at" |
+  "stale_reason" | "superseded_by_analysis_id" | "failure_code" |
+  "failure_message" | "processing_started_at" | "completed_at" | "failed_at"
+>>;
+type _ScreeningAttemptNullability = Expect<Equal<
+  NullableKeys<Row<"screening_analysis_attempts">>,
+  "lease_token_hash" | "lease_expires_at" | "provider_request_id" |
+  "provider_response_id" | "input_tokens" | "output_tokens" |
+  "cached_input_tokens" | "cost_amount" | "cost_currency" | "error_code" |
+  "finalization_hash" | "started_at" | "finished_at"
+>>;
+type _ScreeningCriterionNullability = Expect<Equal<
+  NullableKeys<Row<"screening_criterion_results">>,
+  "explanation" | "confidence"
+>>;
+type _ScreeningReviewNullability = Expect<Equal<
+  NullableKeys<Row<"screening_result_reviews">>,
+  "review_note"
+>>;
+type _ScreeningOverrideNullability = Expect<Equal<
+  NullableKeys<Row<"screening_criterion_review_overrides">>,
+  "rating_override" | "evidence_override" | "explanation_override"
+>>;
 
 type _BehaviorAreas = Expect<Equal<
   BehaviorAreaKey,
@@ -197,6 +269,16 @@ type _ProfilesAreRpcOnly = Expect<Equal<Insert<"company_profiles">, never>>;
 type _BehaviorIsRpcOnly = Expect<Equal<Insert<"behavior_assessment_entries">, never>>;
 type _DefinitionsAreRpcOnly = Expect<Equal<Insert<"exercise_definition_entries">, never>>;
 type _ObservationsAreRpcOnly = Expect<Equal<Insert<"exercise_observation_entries">, never>>;
+type _ScreeningAnalysesAreRpcOnly = Expect<Equal<Insert<"screening_analysis_versions">, never>>;
+type _ScreeningAttemptsAreRpcOnly = Expect<Equal<Insert<"screening_analysis_attempts">, never>>;
+type _ScreeningCriteriaAreRpcOnly = Expect<Equal<Insert<"screening_criterion_results">, never>>;
+type _ScreeningReviewsAreRpcOnly = Expect<Equal<Insert<"screening_result_reviews">, never>>;
+type _ScreeningOverridesAreRpcOnly = Expect<Equal<Insert<"screening_criterion_review_overrides">, never>>;
+type _ScreeningAnalysisUpdatesAreRpcOnly = Expect<Equal<Update<"screening_analysis_versions">, never>>;
+type _ScreeningAttemptUpdatesAreRpcOnly = Expect<Equal<Update<"screening_analysis_attempts">, never>>;
+type _ScreeningCriterionUpdatesAreRpcOnly = Expect<Equal<Update<"screening_criterion_results">, never>>;
+type _ScreeningReviewUpdatesAreRpcOnly = Expect<Equal<Update<"screening_result_reviews">, never>>;
+type _ScreeningOverrideUpdatesAreRpcOnly = Expect<Equal<Update<"screening_criterion_review_overrides">, never>>;
 type _DocumentInsert = Expect<Equal<
   Keys<Insert<"candidate_documents">>,
   "company_id" | "candidate_id" | "source_text" | "redacted_text"
@@ -295,4 +377,28 @@ type _ObservationRelationships = Expect<Equal<
   RelationshipNames<"exercise_observation_entries">,
   "exercise_observation_entries_company_id_recruitment_id_app_fkey" |
   "exercise_observation_entries_company_id_recruitment_id_def_fkey"
+>>;
+type _ScreeningAnalysisRelationships = Expect<Equal<
+  RelationshipNames<"screening_analysis_versions">,
+  "screening_analysis_application_fkey" |
+  "screening_analysis_recruitment_fkey" |
+  "screening_analysis_position_fkey" |
+  "screening_analysis_document_fkey" |
+  "screening_analysis_superseded_fkey"
+>>;
+type _ScreeningAttemptRelationships = Expect<Equal<
+  RelationshipNames<"screening_analysis_attempts">,
+  "screening_attempt_analysis_fkey"
+>>;
+type _ScreeningCriterionRelationships = Expect<Equal<
+  RelationshipNames<"screening_criterion_results">,
+  "screening_criterion_analysis_fkey"
+>>;
+type _ScreeningReviewRelationships = Expect<Equal<
+  RelationshipNames<"screening_result_reviews">,
+  "screening_review_analysis_fkey"
+>>;
+type _ScreeningOverrideRelationships = Expect<Equal<
+  RelationshipNames<"screening_criterion_review_overrides">,
+  "screening_override_review_fkey" | "screening_override_criterion_fkey"
 >>;

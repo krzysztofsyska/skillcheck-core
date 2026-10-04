@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareScreening, assertScreeningCurrent, validateScreeningFindings } from '../lib/screening.ts';
+import {
+  prepareScreening,
+  assertScreeningCurrent,
+  screeningAnalysisContractHash,
+  validateScreeningFindings,
+} from '../lib/screening.ts';
 
 function context() {
   const common = { company_id: 'company-a', created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:00:00Z' };
@@ -23,6 +28,27 @@ test('screening payload includes only reviewed text and job criteria, excluding 
   for (const privateValue of ['Jan', 'jan@example', 'company-a', 'candidate-a', 'reviewer-a', 'Internal description', 'Odpowiedzialność']) assert.ok(!serialized.includes(privateValue));
   assert.equal(prepared.binding.application_id, 'application-a');
   assert.match(prepared.fingerprint, /^[a-f0-9]{64}$/);
+});
+
+test('analysis contract hash binds provider, model, revision, prompt and both schema versions', () => {
+  const contract = {
+    provider: 'openai', model: 'screening-test-model', model_revision: null,
+    prompt_version: 'screening-v1', payload_schema_version: 1, result_schema_version: 1,
+  };
+  assert.equal(
+    screeningAnalysisContractHash(contract),
+    'f13493b3619f7da8b127c2263a75c9ce1ddb9767eb8d808b3141bee27afde41e',
+  );
+  for (const change of [
+    value => { value.provider = 'other'; }, value => { value.model = 'other'; },
+    value => { value.model_revision = '2026-10-04'; },
+    value => { value.prompt_version = 'v2'; },
+    value => { value.payload_schema_version = 2; },
+    value => { value.result_schema_version = 2; },
+  ]) {
+    const changed = { ...contract }; change(changed);
+    assert.notEqual(screeningAnalysisContractHash(changed), screeningAnalysisContractHash(contract));
+  }
 });
 
 test('screening rejects unreviewed, absent, invalid CV and incomplete position requirements', () => {

@@ -10,6 +10,12 @@ wyłącznie nowego, pustego środowiska.
 Migracja bazowa: `supabase/migrations/20260930000100_skillcheck_core.sql`.
 Przygotowanie pliku ani wdrożenie kodu na Vercel nie wykonuje migracji w Supabase.
 
+SC-004 przygotowuje w repozytorium jedną kolejną migrację
+`20261004000200_screening_results.sql`. Dodaje pięć tabel persistowanego wyniku
+preselekcji i sześć RPC, ale nie została zastosowana do produkcyjnego Supabase.
+Do czasu osobnego zatwierdzenia powyższe liczby produkcyjne 13/40/3/6 pozostają
+źródłem prawdy dla wdrożonego środowiska.
+
 ## Model
 
 | Tabela | Znaczenie |
@@ -27,6 +33,11 @@ Przygotowanie pliku ani wdrożenie kodu na Vercel nie wykonuje migracji w Supaba
 | behavior_assessment_entries | Niezmienna historia ocen zachowania z dowodami |
 | exercise_definition_entries | Niezmienne wersje definicji zadań i rubryk |
 | exercise_observation_entries | Niezmienna historia obserwacji wykonania zadań |
+| screening_analysis_versions | Wersjonowany snapshot wejścia i stan logicznej analizy |
+| screening_analysis_attempts | Próby wykonania, idempotency oraz worker lease |
+| screening_criterion_results | Niezmienny wynik AI per kryterium |
+| screening_result_reviews | Wersjonowana historia review człowieka |
+| screening_criterion_review_overrides | Niezmienne korekty człowieka bez nadpisywania AI |
 
 Każdy rekord operacyjny zawiera `company_id`. Złożone klucze obce wymagają tej
 samej firmy po obu stronach relacji. Ocena wymaga dodatkowo tej samej rekrutacji
@@ -43,6 +54,13 @@ Widoki `latest_behavior_assessments`, `latest_exercise_definitions` i
 `save_behavior_assessment`, `save_exercise_definition` i
 `save_exercise_observations`.
 
+Po zastosowaniu migracji SC-004 dojdą `start_screening_analysis`,
+`retry_screening_analysis` i `review_screening_result` dla owner/recruiter oraz
+worker-only `claim_screening_attempt`, `complete_screening_analysis` i
+`fail_screening_attempt`. Zwykła rola `authenticated` nie ma `EXECUTE` do
+worker-only RPC. Dedykowana rola `screening_worker` nie ma bezpośredniego CRUD
+do tabel i korzysta z hashowanego, wygasającego lease.
+
 ## Uprawnienia
 
 | Użytkownik | Odczyt | Zapis danych operacyjnych | Zmiana nazwy firmy / członków |
@@ -52,7 +70,8 @@ Widoki `latest_behavior_assessments`, `latest_exercise_definitions` i
 | viewer | Przypisana firma | Nie | Nie |
 | Osoba spoza firmy / anonimowa | Nie | Nie | Nie |
 
-RLS chroni wszystkie dziewięć tabel. Uprawnienia do kolumn blokują zmianę
+RLS chroni wszystkie 13 wdrożonych tabel oraz wszystkie pięć tabel przygotowanych
+w SC-004. Uprawnienia do kolumn blokują zmianę
 właściciela, identyfikatorów, firmy i relacji nadrzędnych. Funkcje pomocnicze
 SECURITY DEFINER mają pusty `search_path` i znajdują się w schemacie `private`.
 Nie dodawaj go do Exposed schemas w Supabase. Tylko `public` jest potrzebny API.
@@ -80,6 +99,9 @@ później zarządzane CLI, oznacz tę migrację jako wykonaną w historii migrac
 zamiast ponownie ją uruchamiać. Alternatywą dla SQL Editor jest standardowy
 proces Supabase CLI: inicjalizacja lokalna, link do właściwego projektu i db push.
 Nie stosuj obu metod jednocześnie. Nie uruchamiaj lokalnego db reset na produkcji.
+
+Migracja SC-004 jest wyłącznie przygotowana do review. Nie uruchamiać jej z tej
+gałęzi na produkcji. Testy odtwarzają ją tylko w efemerycznym PGlite.
 
 Testy poniżej nie wymagają konta Supabase. Odtwarzają role i `auth.uid()` w lokalnym
 PostgreSQL (PGlite), ale nie weryfikują konfiguracji zdalnego projektu, Auth, JWT ani
@@ -127,14 +149,15 @@ sprawdza baza. Kolejność etapów jest unikalna w rekrutacji; przy zmianie kole
 użyj wolnej dodatniej wartości przejściowej (docelowy edytor może dostać własne RPC).
 
 Kontrakt TypeScript w `lib/supabase/database.types.ts` jest utrzymywany ręcznie.
-Obejmuje wszystkie 13 tabel, trzy widoki, sześć RPC, relacje między obiektami
+Obejmuje 13 wdrożonych tabel oraz pięć tabel SC-004, trzy widoki, 12 RPC, relacje między obiektami
 publicznymi oraz celowo ograniczone typy `Insert`/`Update` zgodne z dostępnymi
 ścieżkami zapisu. Tabele historii są zapisywane wyłącznie przez RPC, a firmy i ich
 profile są tworzone atomowo przez RPC; ich bezpośredni `Insert` ma typ `never`.
 Typy wygenerowane przez Supabase CLI należy porównywać z tym kontraktem, nie
 zastępować nim ograniczeń API bez przeglądu. Baza zawsze egzekwuje uprawnienia.
 
-`tests/database-types.test.mjs` odtwarza wszystkie siedem migracji i zamraża
+`tests/database-types.test.mjs` odtwarza siedem wdrożonych migracji oraz
+przygotowaną migrację SC-004 i zamraża
 publiczne tabele, kolumny, relacje, widoki `security_invoker` oraz sygnatury RPC.
 `tests/database-types.contract.ts` zamraża odpowiadające im typy TypeScript.
 
@@ -147,7 +170,8 @@ npm run test:db
 npm run build
 ```
 
-Testy wykonują rzeczywistą migrację w PGlite i sprawdzają dziewięć tabel,
+Testy wykonują migracje w PGlite i sprawdzają istniejący model oraz pięć tabel
+SC-004, a także
 izolację odczytu/zapisu/usuwania, brak anonimowego dostępu, role, odebranie dostępu,
 blokadę zmiany właściciela i firmy, złożone relacje, ograniczenia i bootstrap.
 Te same kontrole są uruchamiane przez GitHub Actions. Plik lock stabilizuje wersje.

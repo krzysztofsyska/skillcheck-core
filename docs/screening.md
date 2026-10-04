@@ -3,7 +3,12 @@
 ## Dostępny zakres
 Ze strony rekrutacji przy każdym kandydacie można otworzyć Przygotowanie preselekcji. Widok dotyczy zgłoszenia, nie globalnej oceny osoby. Pokazuje aktualne zadania, KPI, kompetencje i najnowszy sprawdzony tekst CV. Czytanie odbywa się przez klienta sesji użytkownika i istniejące RLS, z filtrami firmy oraz relacji zgłoszenie–rekrutacja–stanowisko–kandydat.
 
-Nie ma połączenia z modelem, wysyłki danych, zapisu wyniku, rankingu ani automatycznej decyzji rekrutacyjnej. Komunikat w interfejsie informuje, że analiza nie jest uruchomiona. Nie ma pozornego przycisku generowania ani przykładowych ocen udających wynik AI.
+Nie ma połączenia z modelem, wysyłki danych, uruchamiania analizy, rankingu ani
+automatycznej decyzji rekrutacyjnej. SC-004 przygotowuje warstwę persistencji w
+repozytorium, ale migracja nie jest zastosowana do produkcji i żaden istniejący
+flow jej jeszcze nie wywołuje. Komunikat w interfejsie nadal informuje, że analiza
+nie jest uruchomiona. Nie ma pozornego przycisku generowania ani przykładowych ocen
+udających wynik AI.
 
 ## Warunki przygotowania
 - Tylko aktywne zgłoszenia (new/in_progress), rekrutacja draft/open, stanowisko niezarchiwizowane.
@@ -19,12 +24,47 @@ Identyfikatory i wersje są przechowywane osobno w binding. Fingerprint SHA-256 
 
 Walidator przyszłej odpowiedzi wymaga dokładnie jednego wpisu na każde kryterium, bez dodatkowych pól decyzji. Poziomy: insufficient_data, below, meets, above. Każda ocena inna niż brak danych wymaga cytatu zgodnego znak w znak z zatwierdzonym tekstem i poprawnymi indeksami UTF-16. Maksymalnie pięć cytatów po 2000 znaków. Walidator potwierdza zgodność tekstu, nie prawdziwość deklaracji ani poprawność interpretacji; każdy wynik musi sprawdzić rekruter.
 
-## Przed uruchomieniem AI
-Nadal do implementacji: wybór dostawcy i modelu, jawny budżet, konfiguracja kluczy, zgoda na wysłanie sprawdzonego materiału, instrukcje odporne na polecenia w CV, limity żądań/kosztów, obsługa błędów, idempotencja, zapis wyniku z RLS i stanem sprawdzenia przez człowieka. Ponownie pobierać aktualny materiał przed wysyłką oraz przed zapisem wyniku; zmiana w trakcie analizy musi unieważnić wynik. Potrzebna kontrola współbieżności w transakcji bazy przy zapisie, nie tylko porównanie w kodzie.
+## Persistencja przygotowana w SC-004
 
-Ta zmiana nie dodaje migracji. Migracja 20261001000200_candidate_documents.sql została wykonana 2026-10-02; baza ma 10 tabel i 37 polityk RLS. Migracji już wykonanych nie ponawiać.
+Migracja `20261004000200_screening_results.sql` przygotowuje pięć tabel:
+`screening_analysis_versions`, `screening_analysis_attempts`,
+`screening_criterion_results`, `screening_result_reviews` i
+`screening_criterion_review_overrides`.
+
+- Wynik AI i jego kryteria są niezmienne; review tworzy osobną historię i override.
+- Reuse wymaga jednocześnie zgodnego `input_fingerprint` oraz
+  `analysis_contract_hash`.
+- Kanoniczny contract hash obejmuje provider, model, model revision, prompt version
+  oraz wersje schema wejścia i wyniku.
+- `rating` jest źródłem prawdy. Nie ma `rating_score`, `overall_score` pozostaje
+  `NULL`, a `insufficient_data` nie jest mapowane na zero.
+- Zmiana danych ustawia niezależny stan stale. Wynik ukończony po zmianie wejścia
+  pozostaje audytowalny jako `completed + stale`.
+- Owner i recruiter startują, ponawiają i reviewują przez RPC; viewer ma wyłącznie
+  odczyt. Bezpośredni zapis pięciu tabel jest zablokowany.
+- Claim/complete/fail są dostępne wyłącznie dedykowanej roli serwerowej
+  `screening_worker`. W bazie pozostaje tylko hash krótkotrwałego lease.
+- Nie są przechowywane raw provider request/response ani nowe payloady poza
+  zatwierdzonym snapshotem redacted CV, kryteriami i bindingiem audytowym.
+
+Migracja nie została uruchomiona na produkcji. Nie zapewnia integracji OpenAI ani
+provisioningu wewnętrznej capability workera; te elementy należą do SC-005.
+
+## Przed uruchomieniem AI
+Nadal do implementacji: wybór i konfiguracja dostawcy/modelu, jawny budżet,
+konfiguracja kluczy, zgoda na wysłanie sprawdzonego materiału, instrukcje odporne
+na polecenia w CV, limity żądań/kosztów oraz bezpieczny dispatch workera.
+Integracja musi ponownie pobierać aktualny materiał przed wysyłką i korzystać z
+lease/RPC przy zapisie. Nie wolno przekazywać internal capability do przeglądarki.
+
+Wdrożony baseline produkcji nadal ma 13 tabel, 40 polityk RLS i siedem wykonanych
+migracji. Nie ponawiać ich ani nie stosować migracji SC-004 z tej gałęzi.
 
 ## Testy
-Siedem testów lokalnej logiki obejmuje zakres danych, izolację relacji/firm, blokady statusów, aktualność wersji i walidację dowodów. Test HTTP buildu sprawdza przekierowanie anonimowego wejścia na nową stronę do logowania.
+Testy lokalnej logiki obejmują zakres danych, izolację relacji/firm, blokady
+statusów, aktualność wersji, canonical contract hash i walidację dowodów. Testy
+PGlite SC-004 odtwarzają migrację, role/RLS, idempotency, lease, immutable result,
+stale completion i optimistic human review. Test HTTP buildu nadal sprawdza
+przekierowanie anonimowego wejścia do logowania.
 
 2026-10-02 sprawdzono rzeczywistą sesję właściciela na Vercel/Supabase: najnowszy szkic blokuje przygotowanie mimo starszego zatwierdzonego CV. Po zatwierdzeniu DOCX widok pokazał jego wersję 2 oraz zapisane zadania, KPI, kompetencje i wymagania zachowań. Nie uruchamiano AI. Pozostają próby drugiej firmy i pozostałych ról; szczegóły docs/e2e-2026-10-02.md.
