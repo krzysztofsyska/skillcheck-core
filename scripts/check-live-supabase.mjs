@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import assert from 'node:assert/strict';
-import { checkTenantReads } from './live-tenant-check.mjs';
+import { checkTenantReads, tenantTables } from './live-tenant-check.mjs';
 
 // Read-only live check. Use two confirmed test accounts belonging to distinct firms.
 // Credentials stay in .env.local / process environment and are never printed.
@@ -26,7 +26,7 @@ if (missing.length) {
       firms.push(company.data.map(row=>row.id));
     }
     await checkTenantReads(clients, firms);
-    console.log('PASS: dwa rzeczywiste logowania, odczyt własnych rekordów i blokada odczytu obcej firmy w 11 tabelach i widoku ocen. Bez zmian danych.');
+    console.log(`PASS: dwa rzeczywiste logowania, odczyt własnych rekordów i blokada odczytu obcej firmy. Sprawdzono ${tenantTables.length} relacji (tabele i widoki). Bez zmian danych.`);
   } catch (error) {
     console.error(error instanceof assert.AssertionError ? error.message : 'Błąd połączenia z Supabase; test nie został ukończony.');
     process.exitCode = 1;

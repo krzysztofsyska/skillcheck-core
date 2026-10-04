@@ -174,3 +174,7 @@ Potwierdzono TEST Firmę B, zapis/trwałość profilu, stanowisko/KPI/zachowania
 ## Uzupełnienie audytu — rzeczywiste konto A
 
 Potwierdzono własny panel Ekoflame i odmowę dostępu (404) do panelu B, CV B oraz identyfikatora kandydata B pod ścieżką A. Kontrola paneli A↔B przeszła; nie zastępuje pełnego test:live/RLS/rol/recovery. Sesja A pozostawiona w swoim panelu. Szczegóły w docs/audit-2026-10-04.md; kod bez zmian, bez merge.
+
+## Kontynuacja audytu — przepływ A i konflikt etapów
+
+Utworzono dane TEST A od stanowiska do zadania i obserwacji. Sprawdzono notatkę wymaganą do zakończenia, trwałość daty, konflikt starego okna bez nadpisania i ponowne otwarcie etapu. Oceny v1/v2 zachowały historię; CV zatwierdzone, przygotowanie preselekcji dostępne. Recovery przyjęte przez formularz, wiadomość/reset czekają na użytkownika. Naprawiono nieaktualny komunikat liczby relacji w checkerze; 5/5 testów mechanizmu PASS. Pełnego test:live nie zaliczono. Szczegóły i ograniczenia: docs/audit-2026-10-04.md. Bez merge.
