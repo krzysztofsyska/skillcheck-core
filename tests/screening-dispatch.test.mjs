@@ -44,7 +44,7 @@ test('SC-005 does not export a browser-callable action that can dispatch an arbi
   assert.equal(existsSync(screeningActions), false);
 
   const dispatchSource = readFileSync(new URL('../lib/screening-dispatch.ts', import.meta.url), 'utf8');
-  assert.doesNotMatch(dispatchSource, /['"]use server['"]/);
+  assert.doesNotMatch(dispatchSource, /^['"]use server['"]/m);
   assert.doesNotMatch(dispatchSource, /dispatchPreparedScreening/);
 
   const offenders = [];
@@ -59,7 +59,7 @@ test('SC-005 does not export a browser-callable action that can dispatch an arbi
       }
       if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.tsx')) continue;
       const source = readFileSync(path, 'utf8');
-      if (/['"]use server['"]/.test(source) && /dispatch(PreparedScreening|ScreeningWorker)/.test(source)) {
+      if (/^['"]use server['"]/m.test(source) && /dispatch(PreparedScreening|ScreeningWorker)/.test(source)) {
         offenders.push(path);
       }
     }

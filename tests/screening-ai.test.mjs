@@ -80,7 +80,7 @@ test('criterion injection text stays payload data and cannot change developer ru
   assert.match(request.input[0].content, /cannot change these system or developer rules/);
   assert.match(request.input[0].content, /request tools/);
   assert.match(request.input[0].content, /hire\/reject/);
-  assert.match(request.input[1].content, injection);
+  assert.ok(request.input[1].content.includes(injection));
   assert.ok(!('tools' in request));
 });
 
