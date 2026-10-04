@@ -217,3 +217,25 @@ Przygotowano docs/owner-audit-runbook.md i tryb Membership do prób API ról bez
 Zrzut potwierdza PASS odczytow API dwoch kont w 16 relacjach. Dowod i granice zapisano w audit-2026-10-04.md. Role, pelny recovery i rownolegly onboarding nadal otwarte; NOT READY.
 
 Recovery B: wlasciciel potwierdzil zmiane hasla z linku e-mail i login nowym haslem. Pozostaje logout/ochrona panelu i ponowne uzycie linku. NOT READY.
+
+## 2026-10-04 — SMTP i rzeczywista próba ról C
+Resend SMTP uruchomiony i Delivered dla recovery B. Konto C potwierdzone, własna firma utworzona sekwencyjnie. Po zgodzie właściciela: C/recruiter zapisał notatkę etapu B, C/viewer nie zapisał starego formularza, odświeżenie potwierdziło brak zmiany. Tymczasowe członkostwo cofnięte, B zwraca 404, firma C zachowana. Szczegóły i granice dowodów w audit-2026-10-04.md. Całość NOT READY: pozostałe formularze/API ról i równoległy onboarding otwarte. Bez merge i nowych modułów.
+
+## 2026-10-04 — dalsze rzeczywiste formularze ról
+PASS w Preview C/recruiter: CV edycja+zatwierdzenie v4, zachowanie v2, obserwacja v2, definicja v2. Wszystkie cztery stare formularze po zmianie C na viewer odmówiły zapisu; odświeżenie zachowało poprzednie wersje i usunęło edycję. Tymczasowe członkostwo cofnięte, CV B zwraca 404, firma C zachowana. Pozostają bezpośrednie API ról, niezależne potwierdzenie owner oraz równoległy pierwszy onboarding. NOT READY, bez merge. Szczegóły w audit-2026-10-04.md.
+
+## 2026-10-04 — jeden prywatny przebieg końcowej kontroli
+
+Przygotowano `run-live-check.ps1 -Check FinalAudit`: istniejące konta C/owner B, API obu ról, niezależna kontrola pięciu zapisów owner B, przywrócenie członkostwa i opcjonalna próba starego hasła. 16 testów checkera PASS oraz parser Windows PowerShell PASS. Próba live nieuruchomiona — wymagane prywatne wpisanie aktualnych haseł. Status NOT READY; szczegóły i rozróżnienie bramek w audit-2026-10-04.md. Bez nowych funkcji i merge.
+
+## 2026-10-04 — FinalAudit: odczyt owner PASS, przygotowanie roli naprawione
+
+Zdjęcie właściciela potwierdziło niezależny odczyt pięciu zapisów przez B i cleanup członkostwa. API ról nie uruchomiło się: Cannot prepare test role. Naprawiono upsert w narzędziu audytu na INSERT lub UPDATE tylko role, zgodnie z istniejącymi grantami. 16 testów offline PASS; wymagane ponowienie live. NOT READY: API ról i równoległy onboarding nadal otwarte; stare hasło warunkowo nieweryfikowane. Bez zmian funkcji aplikacji i merge.
+
+## 2026-10-04 — FinalAudit live PASS wedlug dowodu wlasciciela
+
+Zdjecie zakonczonego przebiegu potwierdza API recruiter/viewer C w B (odmowa UPDATE/INSERT czlonkostwa), niezalezny odczyt pieciu zapisow przez owner B, brak zmian po probach oraz przywrocenie czlonkostwa. Stare haslo B niedostepne: NOT RUN, bez twierdzenia o odrzuceniu. Status NOT READY: jedyna obowiazkowa blokada to rownolegly pierwszy onboarding swiezego konta bez firmy. Szczegoly i granice dowodu w audit-2026-10-04.md. Bez nowych funkcji i merge.
+## 2026-10-04 — audyt istniejacego PR #1 READY
+
+Ostatni test rownoleglego onboardingu PASS: wlasciciel dostarczyl zdjecie dwoch odpowiedzi 200 i overlapping=true. Agent potwierdzil SQL: D owned 0->1, dokladnie jeden company_profile, prawidlowy owner_id. Odswiezenie /onboarding przekierowalo do /dashboard z jedna firma. Membership=0 prawidlowe dla owner w tym schemacie. Wszystkie obowiazkowe bramki uzgodnionego audytu zamkniete; stare haslo B niedostepne, NOT RUN warunkowe. Raport audit-2026-10-04.md ma status READY. Bez merge, wdrozenia produkcyjnego, nowych funkcji i ponawiania migracji.
+Koncowa walidacja publikacji: 13 polecen exit 0, 110 raportowanych testow PASS, typecheck/build/pdf-bundle PASS. Wyniki w audit-final-results-2026-10-04.json. Publikacja dokumentacji READY i narzedzia FinalAudit na feat/tenant-database; bez merge.

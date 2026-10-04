@@ -151,3 +151,18 @@ Przekaż wyłącznie poniższą tabelę, godzinę, SHA i zanonimizowane dowody. 
 
 READY wolno nadać dopiero po zaliczeniu wszystkich wymaganych prób i analizie ewentualnych błędów na ustalonym SHA. Każdy BLOCKED/FAIL w wymaganej bramce oznacza NOT READY. READY nie jest zgodą na merge: zakaz scalania nadal obowiązuje.
 
+
+## Końcowy przebieg C i owner B bez ręcznej zmiany ról
+
+Ten wariant dotyczy wyłącznie istniejących kont C oraz właściciela TEST Firmy B i wcześniej zapisanych danych audytowych. Nie wysyła poczty. Uruchom w Windows PowerShell:
+
+```powershell
+powershell -NoProfile -File "C:\Users\krzys\.codex\.chatgpt-projects\g-p-6ab4c12a7600819180090653b84defda\skillcheck-core\scripts\run-live-check.ps1" -Check FinalAudit
+```
+
+1. Wpisz publiczny klucz `sb_publishable_` projektu; nie używaj secret/service_role.
+2. W polach konta A wpisz adres i aktualne hasło **C**. W polach B wpisz adres i aktualne hasło **właściciela TEST Firmy B**. Hasła wpisujesz wyłącznie lokalnie, bez transkrypcji terminala.
+3. Poprzednie hasło B wpisz tylko jeśli je znasz. W przeciwnym razie naciśnij Enter; próba otrzyma NOT RUN, a nie PASS.
+4. Poczekaj do końca. Nie zamykaj terminala podczas zmiany ról. Skrypt odtworzy początkowe członkostwo C; wymagany komunikat `original membership restored and verified by owner B`.
+5. Sprawdź `$LASTEXITCODE` bezpośrednio po zakończeniu. Wynik 0 i `AUDIT RUN COMPLETE` potwierdzają zakres ról i odczytów; nie potwierdzają onboardingu. Jeśli cleanup nie został potwierdzony, należy sprawdzić członkostwo C przed kolejną próbą.
+6. Przekaż tylko wynik PASS/FAIL/NOT RUN oraz exit code. Nie przesyłaj haseł ani linków z poczty. Samo przygotowanie tego narzędzia nie zamyka bramek live.

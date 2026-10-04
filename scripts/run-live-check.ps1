@@ -1,11 +1,11 @@
 # Passwords are prompted without echo and passed only through process environment.
 # Do not use Start-Transcript while running this script.
 [CmdletBinding()]
-param([ValidateSet('Tenants','Membership')][string]$Check = 'Tenants')
+param([ValidateSet('Tenants','Membership','FinalAudit')][string]$Check = 'Tenants')
 $ErrorActionPreference = 'Stop'
 $taskVariables = @('NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
   'SKILLCHECK_TEST_EMAIL_A', 'SKILLCHECK_TEST_PASSWORD_A',
-  'SKILLCHECK_TEST_EMAIL_B', 'SKILLCHECK_TEST_PASSWORD_B')
+  'SKILLCHECK_TEST_EMAIL_B', 'SKILLCHECK_TEST_PASSWORD_B', 'SKILLCHECK_OLD_PASSWORD_B')
 $previousValues = @{}
 foreach ($variableName in $taskVariables) {
   $previousValues[$variableName] = [Environment]::GetEnvironmentVariable($variableName, 'Process')
@@ -13,7 +13,11 @@ foreach ($variableName in $taskVariables) {
 $taskExitCode = 1
 try {
   $env:NEXT_PUBLIC_SUPABASE_URL = 'https://wsvjawuikxfzjyivxgsu.supabase.co'
-  if ($Check -eq 'Membership') {
+  $env:SKILLCHECK_OLD_PASSWORD_B = $null
+  if ($Check -eq 'FinalAudit') {
+    Write-Host 'AUDYT: konto A = C, konto B = wlasciciel TEST Firmy B.'
+    Write-Host 'Sprawdzenie zapisow przez B, tymczasowe role recruiter/viewer C i przywrocenie uprawnien.'
+  } elseif ($Check -eq 'Membership') {
     Write-Host 'TEST uprawnien: konto A = czlonek C, konto B = wlasciciel TEST Firmy B.'
     Write-Host 'Proby zmiany wlasnej roli i dodania istniejacego czlonkostwa powinny byc odrzucone.'
   } else { Write-Host 'SkillCheck: tylko odczyt API dwoch kont.' }
@@ -39,7 +43,24 @@ try {
     }
   }
   # No password in CLI arguments; no .env file created or loaded.
-  $taskScript = if ($Check -eq 'Membership') { 'check-live-membership.mjs' } else { 'check-live-supabase.mjs' }
+  if ($Check -eq 'FinalAudit') {
+    $securePassword = Read-Host 'Poprzednie haslo B (ukryte); ENTER jesli niedostepne' -AsSecureString
+    $passwordPointer = [IntPtr]::Zero
+    try {
+      if ($securePassword.Length -gt 0) {
+        $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+        $env:SKILLCHECK_OLD_PASSWORD_B = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
+      }
+    } finally {
+      if ($passwordPointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer) }
+      $securePassword.Dispose()
+    }
+  }
+  $taskScript = switch ($Check) {
+    'FinalAudit' { 'check-live-final-audit.mjs' }
+    'Membership' { 'check-live-membership.mjs' }
+    default { 'check-live-supabase.mjs' }
+  }
   & node (Join-Path $PSScriptRoot $taskScript)
   $taskExitCode = $LASTEXITCODE
 } catch {
