@@ -22,14 +22,14 @@ function clientsFor(respond) {
 }
 const isolated = ({ own, column, index }) => ({ data: own ? [{ [column]: firms[index][0] }] : [], error: null });
 
-test('live checker requires positive controls in both firms for eleven tables and the assessment view', async () => {
+test('live checker requires positive controls in both firms for twelve tables and both revision views', async () => {
   const checked = new Set();
   await checkTenantReads(clientsFor(args => {
     checked.add(`${args.table}:${args.index}:${args.own}`);
     return isolated(args);
   }), firms);
   assert.ok(tenantTables.includes('behavior_assessment_entries') && tenantTables.includes('latest_behavior_assessments'));
-  assert.equal(checked.size, 48);
+  assert.equal(checked.size, 56);
 });
 
 test('empty or invisible CV fixtures cannot produce a successful RLS test', async () => {
@@ -47,4 +47,13 @@ test('live checker detects a foreign row and does not treat API errors as isolat
 
 test('overlapping memberships stop the live check before data queries', async () => {
   await assert.rejects(checkTenantReads(clientsFor(() => { throw Error('must not query'); }), [['firm-a'], ['firm-a']]), /różnych firm/);
+});
+
+test('both exercise relations need visible controls and reject foreign rows', async () => {
+  for (const table of ['exercise_definition_entries', 'latest_exercise_definitions']) {
+    await assert.rejects(checkTenantReads(clientsFor(args => args.table === table && args.own && args.index === 1
+      ? {data: [], error: null} : isolated(args)), firms));
+    await assert.rejects(checkTenantReads(clientsFor(args => args.table === table && !args.own
+      ? {data: [{company_id:'foreign'}], error:null} : isolated(args)), firms));
+  }
 });

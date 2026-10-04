@@ -1,6 +1,6 @@
 # Definicje zadań kompetencyjnych i Assessment Center
 
-Migracja `20261002000300_exercise_definitions.sql` jest przygotowana i przetestowana lokalnie. Nie wykonano jej jeszcze w docelowym Supabase. Pięć wcześniejszych migracji pozostaje wykonanych i nie należy ich ponawiać. Docelowa baza nadal ma 11 tabel i 38 polityk; ta migracja dodaje jedną tabelę, jedną politykę odczytu, widok i RPC.
+Migracja `20261002000300_exercise_definitions.sql` została wykonana i zweryfikowana 2026-10-04 w Supabase wsvjawuikxfzjyivxgsu. Nie uruchamiać ponownie żadnej z sześciu migracji. Baza ma 12 tabel z RLS i 39 polityk; nowy widok używa security_invoker. Próby zapisu oraz konfliktu dwóch okien przeszły na Preview; szczegóły docs/e2e-2026-10-04.md.
 
 Definicja obejmuje rodzaj zadania, tytuł, instrukcję, oczekiwany rezultat, czas 1–180 minut i 1–12 kryteriów. Kryterium zawiera kompetencję oraz trzy odrębne opisy obserwowalnych zachowań: poniżej, zgodnie i powyżej wymagań. Brak danych będzie osobnym wynikiem obserwacji; nie jest opisem oczekiwanego zachowania. Walidator nie generuje punktów, rankingu ani decyzji rekrutacyjnej.
 

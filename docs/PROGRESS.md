@@ -1,3 +1,9 @@
+# Aktualizacja 2026-10-04 — migracja zadań i test Preview
+
+- Wykonano 20261002000300_exercise_definitions.sql po potwierdzeniu braku obiektów. Docelowa baza ma 12 tabel z RLS, 39 polityk i dwa widoki security_invoker. NIE ponawiać żadnej z sześciu migracji. Poniższe starsze wpisy o oczekiwaniu na migrację/login są historyczne.
+- Na Preview rzeczywista sesja właściciela utworzyła zadanie TEST z dwoma kryteriami, zapisała wersje 1 i 2; historia zachowała stare dane. Stare okno odrzucono, tekst formularza zachowano. Szczegóły i identyfikatory: docs/e2e-2026-10-04.md.
+- Dodano walidator obserwacji wykonania z testami, bez UI i persystencji. TypeScript, build oraz 19 testów assessments przeszły. Rozszerzono checker izolacji na 12 tabel i dwa widoki; pełny test dwóch rzeczywistych firm nadal niewykonany.
+- Dalej: zapis i formularz obserwacji powiązane z konkretną wersją definicji, raport, pozostałe próby Auth/rol/firm. Produkcja bez zmian, kod w PR/Preview; AI i voicebot niepołączone.
 # SkillCheck — stan prac (2026-10-04)
 
 ## Interfejs definicji zadań — 2026-10-04
