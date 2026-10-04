@@ -5,6 +5,7 @@ export const tenantTables = [
   'candidates', 'applications', 'assessment_stages', 'candidate_assessments', 'candidate_documents',
   'behavior_assessment_entries', 'latest_behavior_assessments',
   'exercise_definition_entries', 'latest_exercise_definitions',
+  'exercise_observation_entries', 'latest_exercise_observations',
 ];
 
 // A hidden foreign row is evidence only if its owner can actually read it.

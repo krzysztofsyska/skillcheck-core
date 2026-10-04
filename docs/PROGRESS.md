@@ -1,3 +1,8 @@
+# Aktualizacja 2026-10-04 — obserwacje wykonania zadań
+
+- Dodano tabelę historii, widok security_invoker, walidację SQL i RPC, typy, akcję serwerową, wybór wersji zadania, formularz i historię przy zgłoszeniu. Ocena wiąże się z niezmienną wersją rubryki, nie z jej najnowszą wersją. Dowody są wymagane; brak danych oddzielny. Stare zapisy dają PT409.
+- Migracja 20261004000100_exercise_observations.sql wykonana w Supabase z wynikiem Success po prechecku; NIE ponawiać żadnej z siedmiu migracji. Szczegóły: docs/exercise-observations.md.
+- Build/TypeScript, 26 raportowanych testów assessments, HTTP nowych tras i 5 testów checkera przeszły. Test:live rozszerzony na 13 tabel / trzy widoki (16 relacji). Rzeczywiste dwie firmy i pełny Auth nadal niewykonane. Zalogowany test nowego formularza czeka na Preview.
 # Aktualizacja 2026-10-04 — migracja zadań i test Preview
 
 - Wykonano 20261002000300_exercise_definitions.sql po potwierdzeniu braku obiektów. Docelowa baza ma 12 tabel z RLS, 39 polityk i dwa widoki security_invoker. NIE ponawiać żadnej z sześciu migracji. Poniższe starsze wpisy o oczekiwaniu na migrację/login są historyczne.

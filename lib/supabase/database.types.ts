@@ -53,9 +53,16 @@ export type ExerciseDefinitionEntry = {
   version: number; definition: ExerciseDefinition; position_id: string; position_updated_at: string;
   position_snapshot: BehaviorAssessmentEntry['position_snapshot']; author_id: string; created_at: string;
 };
+export type ExerciseObservationEntry = {
+  id: string; company_id: string; recruitment_id: string; application_id: string;
+  definition_entry_id: string; version: number; work_sample: string;
+  observations: { criterionIndex: number; rating: BehaviorAssessmentEntry['rating']; evidence: string }[];
+  author_id: string; created_at: string;
+};
 export type Database = {
   public: {
     Tables: {
+      exercise_observation_entries: { Row: ExerciseObservationEntry; Insert: never; Update: never; Relationships: [] };
       exercise_definition_entries: { Row: ExerciseDefinitionEntry; Insert: never; Update: never; Relationships: [] };
       behavior_assessment_entries: { Row: BehaviorAssessmentEntry; Insert: never; Update: never; Relationships: [] };
       candidate_documents: {
@@ -75,10 +82,12 @@ export type Database = {
       candidate_assessments: Table<CandidateAssessment, "company_id" | "recruitment_id" | "application_id" | "stage_id", "status" | "score" | "notes" | "completed_at">;
     };
     Views: {
+      latest_exercise_observations: { Row: ExerciseObservationEntry; Relationships: [] };
       latest_behavior_assessments: { Row: BehaviorAssessmentEntry; Relationships: [] };
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      save_exercise_observations: { Args: { target_application: string; target_definition: string; expected_version: number; new_work_sample: string; new_observations: ExerciseObservationEntry['observations'] }; Returns: string };
       save_exercise_definition: { Args: { target_recruitment: string; target_exercise: string;
         new_definition: ExerciseDefinition; expected_version: number; expected_position_id: string;
         expected_position_updated_at: string }; Returns: string };

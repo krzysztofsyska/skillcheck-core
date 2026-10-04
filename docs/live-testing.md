@@ -4,7 +4,7 @@
 
 ## Warunki wiarygodnego wyniku
 
-Oba potwierdzone konta muszą należeć do rozłącznych firm testowych. W każdej firmie muszą być widoczne dla danego konta rekordy wszystkich 12 tabel oraz dwóch widoków najnowszych wersji:
+Oba potwierdzone konta muszą należeć do rozłącznych firm testowych. W każdej firmie muszą być widoczne dla danego konta rekordy wszystkich 13 tabel oraz trzech widoków najnowszych wersji:
 
 - firma i jej profil;
 - przynajmniej jeden jawny wpis członkostwa (właściciel sam w sobie nie tworzy rekordu company_members);
@@ -25,4 +25,6 @@ PASS dotyczy odczytów przez dwie sesje Auth w przygotowanych firmach. Osobno po
 
 2026-10-02 wykonano osobno część prób jednej sesji właściciela: formularze stanowiska/rekrutacji/kandydata, import PDF/DOCX, redakcję i konflikt CV, przygotowanie preselekcji, zapis statusu/notatki etapu i odczyt przewodnika. Wyniki: docs/e2e-2026-10-02.md. Nie zmienia to wymagań `test:live` ani nie potwierdza izolacji dwóch rzeczywistych firm.
 
-Definicje zadań: każda firma musi mieć wpis exercise_definition_entries widoczny również w latest_exercise_definitions. Migracja 20261002000300 została wykonana 2026-10-04. Test obejmuje 14 relacji; brak własnego wpisu uniemożliwia potwierdzenie izolacji.
+Definicje zadań: każda firma musi mieć wpis exercise_definition_entries widoczny również w latest_exercise_definitions. Migracja 20261002000300 została wykonana 2026-10-04. Test obejmuje 16 relacji; brak własnego wpisu uniemożliwia potwierdzenie izolacji.
+
+Każda firma wymaga również obserwacji wykonania, widocznej w exercise_observation_entries i latest_exercise_observations (migracja 20261004000100 wykonana).
