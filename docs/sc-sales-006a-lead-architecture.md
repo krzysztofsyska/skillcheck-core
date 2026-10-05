@@ -270,7 +270,7 @@ Funkcja akceptuje podpis z `request_secret_current`, a gdy `request_secret_previ
 
 Podpis wiąże treść, klucz ponowienia, czas, adres IP i kontekst użytkownika. `auth.uid()` nie jest argumentem RPC. Baza wstawia do tekstu wynik `(select auth.uid())`. Podpis anonima nie przechodzi jako zalogowany użytkownik i odwrotnie. Zmiana dowolnego podpisanego pola unieważnia MAC.
 
-`fingerprint_hash` nie jest argumentem. Po uznaniu podpisu funkcja liczy go jako HMAC-SHA256 aktualnego sekretu i dokładnego `source_ip`, tym samym kodowaniem. Dopóki `request_secret_previous` nie jest puste, ten sam limit źródła wlicza także hash wyliczony poprzednim sekretem. W bazie ląduje tylko hex nowego zapisu, zawsze z aktualnego sekretu.
+`fingerprint_hash` nie jest argumentem. Do limitu i do zapisu funkcja liczy go jako HMAC-SHA256 aktualnego sekretu i dokładnego `source_ip`, tym samym kodowaniem, ale dopiero ze sekretów odczytanych pod blokadą wiersza ustawień. Wstępne sprawdzenie podpisu nie dostarcza odcisku do tej decyzji. Dopóki `request_secret_previous` odczytany pod tą blokadą nie jest puste, ten sam limit źródła wlicza także hash wyliczony poprzednim sekretem. W bazie ląduje tylko hex nowego zapisu, zawsze z aktualnego sekretu z tego odczytu.
 
 ### Adres IP
 
@@ -288,15 +288,17 @@ Ważność podpisu i historia odcisku to dwa różne czasy. Podpis, także tym p
 
 Jedyna obsługiwana zmiana sekretu to `private.rotate_sales_lead_request_secret(new_secret text)` oraz późniejsze `private.retire_sales_lead_previous_secret()`. Obie są `SECURITY DEFINER`, `search_path = ''`, bez grantu dla `anon` i `authenticated`. Woła je postgres. Nie wkładają sekretu do migracji.
 
+Obie, zanim cokolwiek zmienią, biorą `select ... from private.sales_lead_settings for update` i pod tą blokadą ponownie czytają `leads_enabled`, `request_secret_current`, `request_secret_previous` oraz `request_secret_rotated_at`. Warunki oceniają wyłącznie ten odczyt. Nie biorą blokad 6101, 6102, 6103 ani 6104, więc nie odwracają kolejności używanej przez `submit_sales_lead`. Trzymają wiersz do końca transakcji. Zgłoszenie, które już trzyma ten wiersz, kończy zapis na sekretach ze swojego odczytu. Rotacja albo retire czekają i dopiero potem widzą stan po tym zapisie.
+
 Rotacja:
 
 1. Właściciel przygotowuje nowy ciąg poza repozytorium. Krótszy niż 32 bajty daje `sales_lead_secret_invalid` i nic nie zmienia.
-2. Gdy `request_secret_current` jest puste, funkcja wpisuje tylko aktualny sekret. Poprzedni zostaje pusty, `request_secret_rotated_at` zostaje puste. To pierwsze ustawienie, nie rotacja.
+2. Po blokadzie wiersza: gdy `request_secret_current` jest puste, funkcja wpisuje tylko aktualny sekret. Poprzedni zostaje pusty, `request_secret_rotated_at` zostaje puste. To pierwsze ustawienie, nie rotacja.
 3. Gdy aktualny sekret już jest, a poprzedni jest pusty, funkcja przepisuje aktualny do poprzedniego, ustawia nowy aktualny i `request_secret_rotated_at = clock_timestamp()`.
 4. Gdy poprzedni sekret jeszcze stoi, funkcja zwraca wyjątek `sales_lead_secret_rotation_busy` i nic nie zmienia. Kolejna rotacja czeka, aż retire wyczyści poprzedni sekret. Nie trzymać trzech sekretów.
 5. Właściciel ustawia ten sam nowy ciąg w `SALES_LEAD_REQUEST_SECRET` i wdraża aplikację. Do czasu wdrożenia stary proces podpisuje sekretem, który jest już poprzednim. Taki podpis przechodzi tylko wewnątrz zwykłego okna 120 sekund.
 
-Retire zeruje wyłącznie `request_secret_previous`. Wolno je wywołać, gdy od `request_secret_rotated_at` minęło pełne 60 minut. Wcześniej funkcja i trigger zgłaszają `sales_lead_secret_history_open`. Po udanym retire nowe podpisy liczy już tylko aktualny sekret, a zgłoszenia sprzed rotacji są starsze niż okno źródła, więc limit nie traci wierszy, które jeszcze powinny się liczyć.
+Retire zeruje wyłącznie `request_secret_previous`, pod tą samą blokadą wiersza. Wolno je wywołać, gdy od `request_secret_rotated_at` odczytanego pod blokadą minęło pełne 60 minut. Wcześniej funkcja i trigger zgłaszają `sales_lead_secret_history_open`. Po udanym retire nowe podpisy liczy już tylko aktualny sekret, a zgłoszenia sprzed rotacji są starsze niż okno źródła, więc limit nie traci wierszy, które jeszcze powinny się liczyć.
 
 ### Dwie flagi
 
@@ -332,15 +334,15 @@ Kody: `accepted`, `replay`, `sales_lead_invalid`, `sales_lead_unauthorized`, `sa
 2. Brak aktualnego sekretu albo sekret krótszy niż 32 bajty: `sales_lead_unavailable`, bez zapisu.
 3. IP spoza gramatyki z tej sekcji: `sales_lead_unauthorized`, bez zapisu.
 4. Czas poza oknem 120 sekund wstecz i 30 sekund do przodu: `sales_lead_unauthorized`, bez zapisu.
-5. Znormalizować pola, złożyć tekst kanoniczny z `auth.uid()` sesji i sprawdzić MAC aktualnym, potem ewentualnie poprzednim sekretem. Niezgodność: `sales_lead_unauthorized`, bez zapisu. Zła autoryzacja nie wchodzi do limitu i nie tworzy wiersza dziennika, bo zgłoszony adres nie został uwierzytelniony. Na tym kroku nie ma jeszcze blokad.
-6. Po ważnym podpisie wyliczyć odcisk aktualnym sekretem. Wziąć wyłącznie `pg_advisory_xact_lock(6101, hashtext(idempotency_key::text))` i odczytać zgłoszenie.
-7. Zgodne pięć pól: ścieżka `replay` z sekcji 9, także przy wyłączonej fladze i zanim funkcja odrzuci kształt nowych pól. Nie brać blokady ustawień ani 6102. Nie dopisywać próby.
-8. W każdym pozostałym przypadku, nadal trzymając 6101 i zanim powstanie próba, wziąć `select leads_enabled from private.sales_lead_settings for update`. Flaga wyłączona: `sales_lead_unavailable`, bez zgłoszenia i bez próby. Obejmuje to nowy klucz, nowy klucz z błędem pól oraz istniejący klucz o innej treści. Wiersz zgłoszenia się nie zmienia.
-9. Flaga włączona i pola nie przechodzą długości, wzorca albo znaków sterujących: dopiero teraz blokada 6102. Pod nią policzyć próby i ewentualnie dopisać jedną `rejected`. Wynik `sales_lead_invalid` albo, przy wyczerpanym progu 8, `sales_lead_rate_limited` bez nowego wiersza dziennika.
+5. Znormalizować pola i wstępnie sprawdzić MAC oraz okno czasu na odczycie sekretów bez blokady. Niezgodność: `sales_lead_unauthorized`, bez zapisu i bez blokad. Zła autoryzacja nie wchodzi do limitu i nie tworzy wiersza dziennika. Odcisk wyliczony przy tym wstępnym sprawdzeniu, jeżeli w ogóle powstanie, nie służy do limitu ani do zapisu.
+6. Wziąć wyłącznie `pg_advisory_xact_lock(6101, hashtext(idempotency_key::text))` i odczytać zgłoszenie.
+7. Zgodne pięć pól: ścieżka `replay` z sekcji 9, także przy wyłączonej fladze i zanim funkcja odrzuci kształt nowych pól. Nie brać blokady ustawień ani 6102. Nie dopisywać próby i nie używać odcisku. To jedyna ścieżka, która po wstępnej autoryzacji nie wraca do sekretów.
+8. W każdym pozostałym przypadku, nadal trzymając 6101, wziąć `select leads_enabled, request_secret_current, request_secret_previous, request_secret_rotated_at from private.sales_lead_settings for update`. Tę blokadę trzymać do końca transakcji. Pod nią ponownie złożyć MAC i ponownie sprawdzić okno 120 sekund oraz 30 sekund na sekretach z tego odczytu. Niezgodność: `sales_lead_unauthorized`, bez próby. Flaga wyłączona: `sales_lead_unavailable`, bez zgłoszenia i bez próby. Obejmuje to nowy klucz, nowy klucz z błędem pól oraz istniejący klucz o innej treści. Wiersz zgłoszenia się nie zmienia.
+9. Dopiero teraz wyliczyć odciski do limitu i ewentualnego zapisu: aktualny sekret z kroku 8 oraz, gdy poprzedni z tego samego odczytu nie jest pusty, także poprzedni. Odcisku sprzed tej blokady nie używać. Przy włączonej fladze i polach, które nie przechodzą długości, wzorca albo znaków sterujących, wziąć blokadę 6102. Pod nią policzyć próby tych odcisków i ewentualnie dopisać jedną `rejected`. Wynik `sales_lead_invalid` albo, przy wyczerpanym progu 8, `sales_lead_rate_limited` bez nowego wiersza dziennika.
 10. Flaga włączona, pola poprawne, a istniejący klucz ma inną treść: blokada 6102, ta sama zasada limitu prób, wynik `sales_lead_idempotency_conflict` albo `sales_lead_rate_limited`. Wiersz zgłoszenia bez zmian.
-11. Flaga włączona, pola poprawne i brak wiersza: w kolejności blokady 6102, 6103 (`hashtext` znormalizowanego e-maila) i 6104,1. Pod nimi jeszcze raz odczytać flagę. Pod blokadą odcisku usunąć próby tego odcisku starsze niż 48 godzin, ponownie policzyć limity i dopiero wtedy zapisać.
+11. Flaga włączona, pola poprawne i brak wiersza: w kolejności blokady 6102, 6103 (`hashtext` znormalizowanego e-maila) i 6104,1. Pod blokadą odcisku usunąć próby tych odcisków starsze niż 48 godzin, ponownie policzyć limity na odciskach z kroku 9 i dopiero wtedy zapisać. Zapisany `fingerprint_hash` jest hashem aktualnego sekretu z kroku 8.
 
-Kolejność blokad jest stała: 6101, potem wiersz ustawień, potem 6102, potem 6103, potem 6104. Ścieżka, która nie potrzebuje dalszej blokady, zatrzymuje się wcześniej. Nie bierze 6102 przed 6101 ani blokady ustawień przed 6101.
+Kolejność blokad ścieżki z licznikiem jest stała: 6101, potem wiersz ustawień, potem 6102, potem 6103, potem 6104. Ścieżka, która nie potrzebuje dalszej blokady, zatrzymuje się wcześniej. Nie bierze 6102 przed 6101 ani blokady ustawień przed 6101. Rotacja i retire nie wchodzą w tę kolejkę od drugiej strony: biorą tylko wiersz ustawień.
 
 Próba `rejected` albo `rate_limited` jest dopisywana tylko wtedy, gdy liczba prób tego odcisku z ostatnich 10 minut jest mniejsza niż 8. Ósma próba jeszcze się zapisuje. Dziewiąta zwraca `sales_lead_rate_limited` i nie dodaje wiersza. Dzięki temu odmowa biznesowa zostaje w dzienniku po zakończeniu funkcji, a przekroczenie limitu nie wydłuża dziennika bez końca.
 
@@ -528,7 +530,7 @@ To nie jest dowód współbieżności. Sprawdza kontrakt sekwencyjnie:
 
 Nie uruchamiać tego na produkcji i nie uznawać sekwencyjnego PGlite za ten test. Skrypt `tests/sales-leads-concurrency.mjs` używa dwóch niezależnych połączeń pakietu `pg`. Bez `SALES_LEADS_TEST_DATABASE_URL` kończy się kodem 0 i jawnym komunikatem, że test został pominięty. CI nie uruchamia skryptu. Pominięcie nie jest PASS współbieżności.
 
-Środowisko: jednorazowa baza PostgreSQL zgodna z Supabase, z `pgcrypto` w schemacie `extensions`, po wykonaniu wyłącznie nowej migracji na tym środowisku. Dwa połączenia wołają RPC równocześnie, `Promise.all`, bez czekania w jednej sesji.
+Środowisko: jednorazowa baza PostgreSQL zgodna z Supabase, z `pgcrypto` w schemacie `extensions`, po wykonaniu wyłącznie nowej migracji na tym środowisku. Dwa połączenia wołają RPC równocześnie, `Promise.all`, bez czekania w jednej sesji. To pokrywa wyścigi zapisu. Wyścig ze zmianą sekretu wymaga wymuszonej kolejności opisanej niżej, nie samego `Promise.all`.
 
 Wymagany wynik przed `leads_enabled = true` na środowisku współdzielonym:
 
@@ -539,6 +541,24 @@ Wymagany wynik przed `leads_enabled = true` na środowisku współdzielonym:
 - trzydzieści jeden równoczesnych przyjęć różnych e-maili i IP: nie więcej niż trzydzieści zgłoszeń;
 - dwóch operatorów odbiera uprawnienie równocześnie jeden drugiemu: po obu transakcjach zostaje co najmniej jeden aktywny operator;
 - grant wywołany przez operatora odebranego równoległą transakcją nie dodaje nowego operatora, gdy sprawdzenie pod blokadą widzi już odebranie.
+
+Osobno wymusić kolejność rotacji na niezależnych połączeniach. Funkcja czyta `skillcheck.sales_lead_submit_barrier` tylko w tej sesji. Wartość `before_settings` po kroku 7 i przed blokadą ustawień wykonuje `pg_advisory_lock(6190, 1)`, a zaraz potem `pg_advisory_unlock(6190, 1)`. Wartość `after_settings`, już po blokadzie ustawień, ponownej autoryzacji i wyliczeniu odcisków, a przed 6102, robi to samo z `6191`. Inna albo pusta wartość nic nie robi. Migracja, aplikacja i test PGlite tej wartości nie ustawiają.
+
+Kolejność testu rotacji:
+
+1. Sesja T bierze session-level `pg_advisory_lock(6190, 1)` i go nie puszcza.
+2. Sesja A ustawia barierę `before_settings` i woła `submit_sales_lead` z podpisem ważnym dla sekretu sprzed rotacji oraz z nowym kluczem.
+3. Test czeka, aż `pg_locks` pokaże, że A czeka na 6190, trzyma już 6101 i jeszcze nie ma blokady wiersza `sales_lead_settings`. Samo uruchomienie obu wywołań bez tego sprawdzenia nie wystarcza.
+4. Sesja B commituje rotację, a potem commituje przyjęcia tego samego IP już pod nowym odciskiem, aż do progu pięciu.
+5. T puszcza 6190. A dopiero teraz bierze wiersz ustawień, powtarza autoryzację i liczy oba odciski z tego odczytu.
+6. Podpis A jest nadal w oknie 120 sekund i 30 sekund w chwili sprawdzenia pod blokadą, więc odmowa nie wynika z czasu. Wynik A to `sales_lead_rate_limited` i brak szóstego zgłoszenia. W `sales_leads` dla tego IP zostaje pięć zgłoszeń zapisanych już pod nowym odciskiem. Ewentualna próba `rate_limited` powstaje tylko według progu 8. A nie zapisuje zgłoszenia na odcisku obliczonym przed rotacją.
+
+Ten sam szkielet dla retire, zamiast kroku 4. Zanim A przejdzie wstępną autoryzację, jednorazowa baza ma już pięć zgłoszeń tego IP pod odciskiem sekretu, który zostaje aktualny, oraz `request_secret_rotated_at` starszy o co najmniej 60 minut. Znacznik pochodzi ze zwykłej rotacji wykonanej wcześniej. Skrypt nie przesuwa go wstecz, nie wyłącza triggera i nie śpi wewnątrz transakcji A. B commituje `retire_sales_lead_previous_secret`, gdy `pg_locks` pokazuje oczekiwanie A na 6190. Po puszczeniu 6190:
+
+- podpis A ważny dla sekretu, który zostaje aktualny: A czyta poprzedni sekret jako pusty, liczy tylko odcisk z tego odczytu, zwraca `sales_lead_rate_limited` i nie dodaje szóstego zgłoszenia;
+- podpis A wyłącznie wycofanym sekretem: `sales_lead_unauthorized`, bez próby i bez nowego zgłoszenia.
+
+Drugi kierunek, bariera `after_settings`: T trzyma 6191. A dochodzi do blokady ustawień, powtarza autoryzację, liczy odciski i czeka na 6191, nadal trzymając wiersz. Test widzi w `pg_locks`, że B w `rotate` albo `retire` czeka na ten wiersz i nie ma jeszcze prawa zapisu. T puszcza 6191. A kończy na sekretach ze swojego odczytu i commituje. Dopiero potem B dostaje wiersz i zmienia sekrety. Zmiana nie wchodzi w licznik, który A już domknął, ani w zapisany odcisk. Gdy A było poniżej progów i podpis pasował do sekretu z własnego odczytu, wynik A to `accepted`, a zapisany `fingerprint_hash` jest hashem tego sekretu.
 
 006B oddaje skrypt i w raporcie pisze, że CI go nie wykonało. Wynik powyższej listy zapisuje się przy uruchomieniu przed publikacją, nie jako test 006B w CI.
 
@@ -614,7 +634,7 @@ Dopiero po migracji na projekcie testowym, nie produkcyjnym: właściciel firmy 
 - `SALES_LEADS_ENABLED` steruje tylko action. `leads_enabled` blokuje nowy klucz i błędne pola przed zapisem próby. Zgodne ponowienie zostaje wyjątkiem.
 - Poprzedni sekret żyje 60 minut dla historii odcisku. Okno podpisu zostaje 120 sekund. `pgcrypto` musi być w schemacie `extensions` i udostępniać `hmac(text, text, text)`, zanim migracja tworzy tabele.
 - Odmowy biznesowe wracają jako `result_code` i commitują co najwyżej jedną próbę poniżej progu. Zła autoryzacja nie tworzy próby.
-- Limity są sprawdzane ponownie pod `pg_advisory_xact_lock` w stałej kolejności.
+- Limity są sprawdzane ponownie pod `pg_advisory_xact_lock` w stałej kolejności. Końcowa autoryzacja, odciski, limity i zapis używają jednego odczytu sekretów z wiersza ustawień trzymanego do końca transakcji. Rotacja i retire biorą ten sam wiersz przed zmianą i nie biorą blokad 6101–6104.
 - Ponowienie porównuje pięć pól, nie nadpisuje `submitted_by` i agreguje się do jednego wiersza o suficie 20.
 - Usunięcie konta odczepia autora przez wąski UPDATE. API nie może dowolnie zmieniać zgłoszenia. Sprzątanie testu jest funkcją, nie wyłączeniem triggera.
 - Implementacja zaczyna się od 006B dopiero po scaleniu tego dokumentu.

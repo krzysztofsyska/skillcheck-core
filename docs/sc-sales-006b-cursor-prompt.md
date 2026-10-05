@@ -73,12 +73,15 @@ Funkcje publiczne, każda `security definer` i `set search_path = ''`:
   - `submitted_by` tylko z `auth.uid()` przy INSERT
   - kody biznesowe wracają jako wiersz, bez `RAISE`; wyjątek techniczny nie jest sukcesem
   - zła autoryzacja nie dopisuje próby i nie bierze blokad
-  - po ważnym podpisie najpierw blokada 6101 i odczyt klucza; zgodne pięć pól wraca `replay` także przy wyłączonej fladze, zanim ocenisz błąd pól
-  - potem, nadal przed próbą, `for update` na `leads_enabled`; wyłączona flaga dla nowego klucza, błędnych pól i konfliktu zwraca `sales_lead_unavailable` bez zgłoszenia i bez próby
+  - wstępna autoryzacja jest bez blokad; jej niepowodzenie nie dopisuje próby; odcisk z tego kroku nie wchodzi do limitu ani zapisu
+  - po ważnym wstępnym podpisie najpierw blokada 6101 i odczyt klucza; zgodne pięć pól wraca `replay` także przy wyłączonej fladze, bez blokady ustawień i bez odcisku
+  - każda inna ścieżka bierze potem `for update` na cały wiersz ustawień i trzyma go do końca transakcji; pod nim ponawia MAC oraz okno czasu i dopiero wtedy liczy odciski
+  - wyłączona flaga dla nowego klucza, błędnych pól i konfliktu zwraca `sales_lead_unavailable` bez zgłoszenia i bez próby
   - błędne pola, konflikt i limit przyjęć dopisują co najwyżej jedną próbę tylko przy włączonej fladze i gdy prób w 10 minut jest mniej niż 8
   - dziewiąta próba zwraca `sales_lead_rate_limited` i nie dodaje wiersza
   - limity przyjęć: 5 na odcisk w 60 minut, 3 na e-mail w 24 godziny, 30 globalnie w 60 minut
-  - blokady w kolejności 6101, wiersz ustawień, 6102, 6103, 6104; nie odwracaj jej; warunki są liczone ponownie pod blokadą
+  - blokady ścieżki z licznikiem: 6101, wiersz ustawień, 6102, 6103, 6104; nie odwracaj jej
+  - rotate i retire biorą tylko `for update` tego samego wiersza ustawień, przed zmianą i do końca swojej transakcji; nie biorą 6101–6104
   - poprzedni sekret wlicza się do limitu źródła przez 60 minut od rotacji; okno podpisu zostaje 120 sekund i 30 sekund; nie kasuj poprzedniego sekretu po 120 sekundach
   - zgodne ponowienie zwraca istniejące `lead_id` także przy wyłączonej fladze, nie zmienia `submitted_by` i nie zużywa limitu przyjęć
   - agregacja ponowień ma sufit 20 i nie dopisuje dziennika prób
@@ -114,7 +117,7 @@ Utwórz `tests/sales-leads-database.test.mjs` na wzór PGlite z `tests/database.
 
 Pokryj każdą kontrolę lokalną z sekcji 12 projektu, łącznie z usunięciem autora i sprzątaniem przez funkcję. Test włącza `leads_enabled` i sekret samodzielnie, jako właściciel bazy. Nie łącz się ze zdalnym Supabase. Nie wysyłaj wiadomości. Nie uruchamiaj `test:live`. W raporcie nie nazywaj tych testów dowodem współbieżności.
 
-Utwórz `tests/sales-leads-concurrency.mjs` według sekcji 12. Bez `SALES_LEADS_TEST_DATABASE_URL` skrypt kończy się kodem 0 i komunikatem, że został pominięty. Nie dodawaj go do CI. Nie uruchamiaj go na zdalnej bazie projektu. W handoff napisz wprost, że CI go nie wykonało i że to nie jest PASS współbieżności.
+Utwórz `tests/sales-leads-concurrency.mjs` według sekcji 12. Wyścig zapisu może iść przez `Promise.all`. Wyścig sekretu wymusza kolejność barierą sesji `skillcheck.sales_lead_submit_barrier`: `before_settings` z `pg_advisory_lock(6190, 1)` oraz `after_settings` z `6191`. Sprawdź `pg_locks`, zanim druga sesja zrobi rotację albo retire. Obejmij oba kierunki i nakładanie z retire, łącznie z wynikiem `sales_lead_rate_limited` albo `sales_lead_unauthorized` opisanym w projekcie. Samo `Promise.all` nie wystarcza. Bez `SALES_LEADS_TEST_DATABASE_URL` skrypt kończy się kodem 0 i komunikatem, że został pominięty. Nie dodawaj go do CI. Nie uruchamiaj go na zdalnej bazie projektu. W handoff napisz wprost, że CI go nie wykonało i że to nie jest PASS współbieżności.
 
 Skrypty:
 
