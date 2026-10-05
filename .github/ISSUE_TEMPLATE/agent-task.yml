@@ -1,0 +1,69 @@
+name: Agent task
+description: SkillCheck task contract for Cursor/Codex/ChatGPT
+title: "SC-XXX — "
+body:
+  - type: input
+    id: task
+    attributes:
+      label: TASK
+      placeholder: SC-XXX
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: SCOPE
+      options:
+        - FRONTEND
+        - BACKEND
+        - FULLSTACK
+        - OPERATIONS
+    validations:
+      required: true
+  - type: dropdown
+    id: level
+    attributes:
+      label: LEVEL
+      options:
+        - L1
+        - L2
+        - L3
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One concrete result
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Numbered, testable conditions
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / contracts
+  - type: textarea
+    id: tests
+    attributes:
+      label: Required tests
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security / privacy checks
+  - type: checkboxes
+    id: gates
+    attributes:
+      label: Owner gates
+      options:
+        - label: Owner acceptance is required before integration merge
+          required: true
+        - label: Production approval is required before production promotion/deploy
+          required: true

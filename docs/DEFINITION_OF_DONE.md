@@ -28,13 +28,18 @@ Task jest DONE wyłącznie gdy spełnia wszystkie wymagane punkty.
 - brak fałszywego UI sugerującego działającą funkcję, jeśli integracja nie istnieje.
 
 ## Git
-- branch zgodny z konwencją,
+- branch zgodny z konwencją i utworzony z `integration` dla nowych tasków,
 - PR opisuje zakres, testy, migracje i ryzyka,
-- merge dopiero po READY TO MERGE.
+- reviewer PASS i CI PASS,
+- OWNER ACCEPTANCE zapisane przed merge tasku do `integration`,
+- bezpośredni merge task branch do `main` jest zabroniony.
 
 ## Produkcja
 Jeśli task obejmuje wdrożenie:
+- osobny promotion PR `integration -> main`,
+- PRODUCTION APPROVAL właściciela zapisane przed merge/deploy,
 - deploy success,
+- migracje/functions/secrets wykonane wyłącznie w zatwierdzonym runbooku,
 - smoke test PASS,
 - dokumentacja stanu produkcji zaktualizowana.
 
