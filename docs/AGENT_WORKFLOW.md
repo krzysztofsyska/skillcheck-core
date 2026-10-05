@@ -68,6 +68,15 @@ Każdy agent kończy pracę blokiem:
 - KNOWN ISSUES
 - NEXT ACTION
 
+## Kontynuacja po raporcie — ustalenie właściciela z 2026-10-05
+
+- Każdy etap pracy nad projektem kończy się konkretnym raportem i od razu pełnym promptem do wykonania następnego kroku, w tej samej odpowiedzi.
+- Koordynator sam ustala następny krok na podstawie wyniku i zależności. Użytkownik nie musi ponawiać pytań „co dalej”, „przygotuj prompt” ani „gdzie to wkleić”.
+- Przy prompcie zawsze podać wykonawcę (Cursor, Codex lub ChatGPT), repozytorium/projekt oraz dokładne miejsce użycia: nowa rozmowa czy kontynuacja dotychczasowej.
+- Prompt ma zawierać identyfikator zadania, cel, zakres, ograniczenia, kryteria odbioru, wymagane kontrole i format raportu przekazania. Do kodowania podać zweryfikowaną bazę i dozwolone pliki albo zlecić najpierw ich ustalenie w zadaniu projektowym.
+- Jeśli etap wymaga poprawek, review lub wdrożenia, następny prompt dotyczy tego kroku. Nie pomijać zależności i nie przedstawiać nieukończonego zadania jako DONE.
+- Generowanie kolejnego promptu nie oznacza, że został wysłany do innego narzędzia lub że inny agent już pracuje. Wykonanie i publikacja pozostają w granicach udzielonego upoważnienia.
+
 ## Guardrails
 - nie ponawiać wykonanych migracji,
 - nie commitować sekretów,
