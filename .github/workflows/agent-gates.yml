@@ -1,0 +1,136 @@
+name: Agent Gates
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  contract:
+    name: Agent contract / scope gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate PR metadata and classify changed areas
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BODY="$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH")"
+          BASE="$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")"
+          HEAD_REF="$(jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")"
+
+          require_field() {
+            local field="$1"
+            if ! grep -Eq "^${field}:[[:space:]]*[^[:space:]].*$" <<<"$BODY"; then
+              echo "::error::Missing PR metadata field: ${field}"
+              exit 1
+            fi
+          }
+
+          for field in TASK SCOPE LEVEL OWNER_APPROVAL PRODUCTION_APPROVAL REVIEW_VERDICT PROMOTION; do
+            require_field "$field"
+          done
+
+          git fetch origin "$BASE" --depth=1
+          git diff --name-only "origin/$BASE"...HEAD > /tmp/changed-files.txt
+
+          echo "Changed files:"
+          cat /tmp/changed-files.txt
+
+          frontend=0
+          backend=0
+          db=0
+          security=0
+
+          while IFS= read -r file; do
+            case "$file" in
+              app/api/*)
+                backend=1
+                ;;
+              app/*|components/*|public/*|styles/*|*.css)
+                frontend=1
+                ;;
+            esac
+
+            case "$file" in
+              lib/*|supabase/*|scripts/*)
+                backend=1
+                ;;
+            esac
+
+            case "$file" in
+              supabase/migrations/*)
+                db=1
+                security=1
+                ;;
+              *auth*|*rls*|*billing*|*screening-worker*|*security*)
+                security=1
+                ;;
+            esac
+          done < /tmp/changed-files.txt
+
+          declared_scope="$(sed -n 's/^SCOPE:[[:space:]]*//p' <<<"$BODY" | head -1 | tr -d '\r')"
+          declared_level="$(sed -n 's/^LEVEL:[[:space:]]*//p' <<<"$BODY" | head -1 | tr -d '\r')"
+
+          if [[ "$frontend" -eq 1 && "$backend" -eq 1 ]]; then
+            detected_scope="FULLSTACK"
+          elif [[ "$backend" -eq 1 ]]; then
+            detected_scope="BACKEND"
+          elif [[ "$frontend" -eq 1 ]]; then
+            detected_scope="FRONTEND"
+          else
+            detected_scope="OPERATIONS"
+          fi
+
+          echo "Detected scope: $detected_scope"
+          echo "Declared scope: $declared_scope"
+
+          if [[ "$declared_scope" != "$detected_scope" && "$declared_scope" != "OPERATIONS" ]]; then
+            echo "::error::Declared SCOPE=$declared_scope but changed files classify as $detected_scope"
+            exit 1
+          fi
+
+          if [[ "$db" -eq 1 || "$security" -eq 1 ]]; then
+            if [[ "$declared_level" != "L3" ]]; then
+              echo "::error::DB/security-sensitive changes require LEVEL: L3"
+              exit 1
+            fi
+          fi
+
+          if [[ "$BASE" == "main" ]]; then
+            task="$(sed -n 's/^TASK:[[:space:]]*//p' <<<"$BODY" | head -1 | tr -d '\r')"
+            promotion="$(sed -n 's/^PROMOTION:[[:space:]]*//p' <<<"$BODY" | head -1 | tr -d '\r')"
+            prod="$(sed -n 's/^PRODUCTION_APPROVAL:[[:space:]]*//p' <<<"$BODY" | head -1 | tr -d '\r')"
+
+            if [[ "$task" == "SC-OPS-001" ]]; then
+              echo "Bootstrap exception for SC-OPS-001."
+            else
+              if [[ "$HEAD_REF" != "integration" ]]; then
+                echo "::error::Only integration -> main promotion PRs may target main"
+                exit 1
+              fi
+              if [[ "$promotion" != "YES" ]]; then
+                echo "::error::PR to main requires PROMOTION: YES"
+                exit 1
+              fi
+              if [[ "$prod" != "APPROVED" ]]; then
+                echo "::error::PR to main requires PRODUCTION_APPROVAL: APPROVED"
+                exit 1
+              fi
+            fi
+          fi
+
+          {
+            echo "### Agent Gate"
+            echo "- Detected scope: **$detected_scope**"
+            echo "- DB migration touched: **$db**"
+            echo "- Security-sensitive path touched: **$security**"
+            echo "- Base branch: **$BASE**"
+          } >> "$GITHUB_STEP_SUMMARY"
