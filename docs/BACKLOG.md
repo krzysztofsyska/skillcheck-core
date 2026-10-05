@@ -58,3 +58,17 @@ Najpierw domknąć PRESELEKCJĘ jako pierwszy płatny end-to-end produkt. Voice,
 | SC-SALES-004A | Publiczna strona `/` i demonstracyjny przykład `/demo` | L2 | Cursor | Codex | — | DONE |
 
 SC-SALES-004A obejmuje stronę oferty i publiczne demo bez logowania. Poza zakresem pozostają płatności, pakiety jako zakup, zamówienia i uruchamianie analiz. Istniejące zadania SC-001–SC-020 nie zmieniają tu zakresu ani statusu.
+
+## Zgłoszenia kontaktowe
+
+SC-SALES-006 nie jest backendowym SC-006. SC-006 pozostaje w kolejce analizy AI i nie zmienia tu zakresu ani statusu.
+
+| ID | Zadanie | Level | Owner | Reviewer | Depends on | Status |
+|---|---|---:|---|---|---|---|
+| SC-SALES-006A | Projekt formularza kontaktowego i bezpiecznego zapisu zgłoszeń | L3 | Codex | Codex | SC-SALES-004A | REVIEW |
+| SC-SALES-006B | Migracja, RLS i RPC zapisu oraz odczytu zgłoszeń | L3 | Cursor | Codex | SC-SALES-006A | READY |
+| SC-SALES-006C | Publiczny formularz `/rozmowa` | L2 | Cursor | Codex | SC-SALES-006B | BACKLOG |
+| SC-SALES-006D | Minimalny odczyt zgłoszeń przez operatora platformy | L2 | Cursor | Codex | SC-SALES-006C | BACKLOG |
+| SC-SALES-013 | Etapy sprzedaży, notatki, przypomnienia i powiązanie zgłoszenia z firmą | L3 | Codex→Cursor | Codex | SC-SALES-006D | BACKLOG |
+
+006B startuje dopiero wtedy, gdy dokument SC-SALES-006A jest na `main`. Potem kolejność jest liniowa: 006C, następnie 006D. Publiczne włączenie formularza wymaga obu widoków, sekretu odcisku, treści informacji podanej przez właściciela i ręcznego nadania pierwszego operatora. Tych danych ten backlog nie zawiera.
