@@ -1,0 +1,45 @@
+---
+description: SkillCheck agent pipeline and owner approval gates
+alwaysApply: true
+---
+
+# SkillCheck Cursor Rule
+
+Read `AGENTS.md`, `docs/AGENT_WORKFLOW.md`, the linked GitHub Issue and the PR before changing code.
+
+## Builder behavior
+
+- Treat the GitHub Issue as the immutable scope contract.
+- Base new task branches on `integration`, not `main`.
+- Open normal task PRs against `integration`.
+- Never merge your own PR.
+- Never deploy production unless a GitHub production promotion explicitly records owner approval.
+- Do not ask the owner to copy a handoff to ChatGPT/Codex. Write the handoff into the PR.
+- If reviewer requests changes, fix them on the same branch and post a new handoff.
+- If scope changes, stop and request a new/updated task.
+
+## Frontend
+
+For frontend changes run at least:
+- npm run typecheck
+- npm run build
+- relevant HTTP/UI/module tests
+
+Do not invent backend behavior that does not exist.
+
+## Backend
+
+For backend changes:
+- preserve auth/session boundaries
+- preserve tenant isolation
+- no direct security bypass
+- no service_role in browser/client runtime
+- run relevant DB/auth/module tests
+
+## L3 stop conditions
+
+If you discover an unplanned need to change migrations, RLS, grants, RPC trust boundaries, auth, AI contracts, billing, secrets or production logic:
+- stop implementation
+- mark BLOCKED
+- describe the required architecture decision in the PR
+- wait for orchestrator/reviewer approval
