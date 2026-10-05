@@ -1,7 +1,7 @@
 # SC-SALES-004A — przekazanie
 
 - TASK: SC-SALES-004A — strona prezentacyjna SkillCheck i publiczne demo
-- STATUS: REVIEW
+- STATUS: DONE
 - BRANCH: `feat/sc-sales-004a-public-frontend`
 - BASE_COMMIT: `72fe4423d89417ea043051ff8c57cd1ff6a7c859`
 - DB / MIGRATIONS: brak
@@ -79,7 +79,7 @@ Zrzuty leżą poza repozytorium, przy przeglądzie wizualnym: strona główna i 
 ## Znane problemy i ograniczenia
 
 - Nie było autoryzowanego konta testowego, więc panelu po zalogowaniu nie sprawdzano wizualnie. Sprawdzone zostało tylko anonimowe przekierowanie `/dashboard` i `/onboarding` do `/login`.
-- Review Codex i ocena treści nie są jeszcze wykonane. Status nie jest DONE ani READY TO MERGE.
+- Review kodu i treści: PASS dla `91efe461282efe1f814ef875709dd81adb887c01`; poprawka komunikatu dostępności została zweryfikowana. Merge i produkcyjny smoke test opisano poniżej.
 - Nie było nagrania pulpitu: agent przeglądarki interaktywnej nie wystartował. Kontrola jest z Chrome headless i protokołu DevTools.
 
 ## Do sprawdzenia przez Codex
@@ -98,7 +98,7 @@ Zrzuty leżą poza repozytorium, przy przeglądzie wizualnym: strona główna i 
 
 ## Poprawka po review PR #31
 
-Sprawdzony commit: `d427d1c9dc22a1984a2501026558c78333f41741`. Review kodu i testów zakończyło się pozytywnie. Ta poprawka zmienia tylko sposób komunikowania dostępności analizy. Status pozostaje REVIEW. Wygląd, demo, logowanie i pozostałe funkcje nie były ruszane.
+Sprawdzony commit: `d427d1c9dc22a1984a2501026558c78333f41741`. Review kodu i testów zakończyło się pozytywnie. Ta poprawka zmienia tylko sposób komunikowania dostępności analizy. Na etapie przekazania poprawki status pozostawał REVIEW. Wygląd, demo, logowanie i pozostałe funkcje nie były ruszane.
 
 Zmienione pliki:
 
@@ -117,6 +117,37 @@ Kontrola poprawki, Node.js 24.21.0, 2026-10-05 około 16:34 UTC:
 
 Pierwszy ekran `/` przy 1440 px i 390 px pokazuje nowy opis, dotychczasowy nagłówek i oba przyciski. Brak poziomego przewijania i brak wyjątków w konsoli. Zrzuty: `home_first_screen_1440.png` i `home_first_screen_390.png`.
 
+## Zakończenie i publikacja — 2026-10-05
+
+- STATUS: DONE.
+- Zgoda właściciela na scalenie i publikację: 2026-10-05, 19:03 Europe/Warsaw.
+- Review Codex kodu i treści: PASS dla `91efe461282efe1f814ef875709dd81adb887c01`.
+- PR: https://github.com/krzysztofsyska/skillcheck-core/pull/31 — scalony do `main`.
+- Commit scalający: `1eff163112baba8e5f158be9c21f5e2198136ed9`.
+- Checks dla zatwierdzonego HEAD: push https://github.com/krzysztofsyska/skillcheck-core/actions/runs/37341862331 oraz PR https://github.com/krzysztofsyska/skillcheck-core/actions/runs/37341866827 — PASS.
+- Checks po merge: https://github.com/krzysztofsyska/skillcheck-core/actions/runs/37345663116 — PASS.
+- Vercel dla commitu scalającego: success, https://vercel.com/krzysztofs-projects-b7ce87b5/skillcheck-core/9wKx5D8Nasf5xqo9mofgMjFxRV4J.
+- GitHub deployment `6865123901`, środowisko nazwane `Production`: success, 2026-10-05 17:04:59 UTC.
+- Adres produkcyjny: https://skillcheck-core.vercel.app.
+- DB / MIGRATIONS: brak. Publikacja nie zmienia auth, płatności ani uruchamiania analiz.
+
+### Smoke test na produkcji
+
+Kontrola HTTP: 2026-10-05 17:06:14 UTC (19:06:14 Europe/Warsaw), bez logowania i bez wysyłania formularzy.
+
+| Trasa | Oczekiwany i uzyskany wynik |
+|---|---|
+| `/` | 200; nowy nagłówek, poprawiony komunikat „Automatyczna analiza jest w przygotowaniu.” i linki do demo/rejestracji/logowania |
+| `/demo` | 200; baner danych demonstracyjnych, trzy fikcyjne profile i oznaczenie braku danych |
+| `/login` | 200; formularz logowania |
+| `/register` | 200; formularz rejestracji |
+| `/forgot-password` | 200; formularz odzyskiwania dostępu |
+| `/dashboard` | 307 → `/login` dla anonimowego użytkownika |
+| `/onboarding` | 307 → `/login` dla anonimowego użytkownika |
+| `/api/health/supabase` | 200, `ok: true`; nie jest to test migracji ani RLS |
+
+Wynik: 8/8 PASS. Nie tworzono kont ani nie wysyłano wiadomości. Nie testowano panelu po zalogowaniu. Kontrola wizualna opiera się na raporcie i zrzutach Cursora; Codex nie potwierdził zrzutów niezależnie.
+
 ## Następny krok
 
-Ponowne review tej poprawki treści. Bez merge i bez wdrożenia produkcyjnego.
+Zadanie SC-SALES-004A zakończone. Kolejne funkcje sprzedażowe i analiza mają osobne zadania; ta publikacja ich nie aktywuje.

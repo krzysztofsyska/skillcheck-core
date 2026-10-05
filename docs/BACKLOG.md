@@ -55,6 +55,6 @@ Najpierw domknąć PRESELEKCJĘ jako pierwszy płatny end-to-end produkt. Voice,
 
 | ID | Zadanie | Level | Owner | Reviewer | Depends on | Status |
 |---|---|---:|---|---|---|---|
-| SC-SALES-004A | Publiczna strona `/` i demonstracyjny przykład `/demo` | L2 | Cursor | Codex | — | REVIEW |
+| SC-SALES-004A | Publiczna strona `/` i demonstracyjny przykład `/demo` | L2 | Cursor | Codex | — | DONE |
 
 SC-SALES-004A obejmuje stronę oferty i publiczne demo bez logowania. Poza zakresem pozostają płatności, pakiety jako zakup, zamówienia i uruchamianie analiz. Istniejące zadania SC-001–SC-020 nie zmieniają tu zakresu ani statusu.
