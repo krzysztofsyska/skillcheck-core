@@ -30,7 +30,7 @@
 
 Publiczna strona `/` i przykład `/demo` są po polsku i działają bez konta. Build oznacza obie trasy jako statyczne. Nie importują Supabase ani klienta AI.
 
-`/` prowadzi do sekcji „Jak to działa”, „Możliwości”, „Pakiety” i „FAQ”, do `/login` oraz do `/demo`. Sekcja otwierająca ma wskazany nagłówek, link „Zobacz przykład” i link „Utwórz konto”. Tekst mówi wprost, że rejestracja nie uruchamia analizy i nie aktywuje pakietu.
+`/` prowadzi do sekcji „Jak to działa”, „Możliwości”, „Pakiety” i „FAQ”, do `/login` oraz do `/demo`. Sekcja otwierająca zachowuje nagłówek i przyciski. Po review opis otwierający mówi, że automatyczna analiza jest w przygotowaniu, a decyzję rekrutacyjną podejmuje człowiek. Notatka pod przyciskami nadal mówi, że rejestracja nie uruchamia analizy i nie aktywuje pakietu.
 
 Oznaczenia dostępności wynikają ze stanu kodu, nie z samego istnienia workera:
 
@@ -96,6 +96,27 @@ Zrzuty leżą poza repozytorium, przy przeglądzie wizualnym: strona główna i 
 - Czy brak danych nie wygląda jak ocena zero i czy strona nie sugeruje decyzji o zatrudnieniu.
 - Czy nie pojawiają się ceny, limity, terminy, opinie, regulamin ani puste odnośniki.
 
+## Poprawka po review PR #31
+
+Sprawdzony commit: `d427d1c9dc22a1984a2501026558c78333f41741`. Review kodu i testów zakończyło się pozytywnie. Ta poprawka zmienia tylko sposób komunikowania dostępności analizy. Status pozostaje REVIEW. Wygląd, demo, logowanie i pozostałe funkcje nie były ruszane.
+
+Zmienione pliki:
+
+- `app/components/marketing/home-page.tsx` — opis pod nagłówkiem mówi o przygotowaniu wymagań i materiałów, o fikcyjnym przykładzie zestawienia oraz o tym, że automatyczna analiza jest w przygotowaniu;
+- `app/page.tsx` — `metadata.description` mówi o profilu stanowiska, materiałach kandydatów, dostępnych funkcjach i demonstracyjnym przykładzie planowanej analizy;
+- `app/components/marketing/content.ts` — możliwość „Informacja poparta materiałem i brak danych” odnosi się do fikcyjnego przykładu i oznacza automatyczne przygotowywanie takiego zestawienia jako będące w przygotowaniu;
+- `docs/sc-sales-004a-handoff.md` — ten zapis.
+
+Kontrola poprawki, Node.js 24.21.0, 2026-10-05 około 16:34 UTC:
+
+| Polecenie | Wynik |
+|---|---|
+| `npm run typecheck` | PASS |
+| `npm run build` | PASS; `/` i `/demo` pozostają statyczne |
+| `npm run test:marketing` | PASS, 1 test |
+
+Pierwszy ekran `/` przy 1440 px i 390 px pokazuje nowy opis, dotychczasowy nagłówek i oba przyciski. Brak poziomego przewijania i brak wyjątków w konsoli. Zrzuty: `home_first_screen_1440.png` i `home_first_screen_390.png`.
+
 ## Następny krok
 
-Review techniczne Codex, potem ocena treści. Bez merge i bez wdrożenia produkcyjnego.
+Ponowne review tej poprawki treści. Bez merge i bez wdrożenia produkcyjnego.

@@ -39,7 +39,7 @@ export const capabilities = [
   },
   {
     title: "Informacja poparta materiałem i brak danych",
-    body: "Informacja, którą da się wskazać w materiale, zostaje przy źródle. Brak wzmianki oznaczamy jako brak danych albo temat do wyjaśnienia. Nie zamieniamy go w wynik zerowy.",
+    body: "W przykładzie każda informacja jest powiązana z fikcyjnym źródłem. Brak wzmianki oznaczamy jako brak danych albo temat do wyjaśnienia. Automatyczne przygotowywanie takiego zestawienia jest w przygotowaniu.",
   },
   {
     title: "Pytania, które uzupełniają luki",

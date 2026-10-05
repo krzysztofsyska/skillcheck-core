@@ -22,7 +22,7 @@ export function HomePage() {
               <p className={styles.kicker}>Rekrutacja oparta na materiałach</p>
               <h1 id="hero-title">Uporządkuj ocenę kandydatów przed rozmową rekrutacyjną</h1>
               <p className={styles.lede}>
-                SkillCheck zestawia informacje o kandydacie z wymaganiami stanowiska. Pokazuje, co wynika z dostarczonych materiałów, jakich informacji brakuje i jakie pytania warto zadać na rozmowie. Decyzję o kolejnym kroku podejmuje człowiek.
+                Przygotuj wymagania stanowiska i uporządkuj materiały o kandydatach w jednym miejscu. Zobacz na fikcyjnym przykładzie, jak może wyglądać zestawienie informacji, braków i pytań do rozmowy. Automatyczna analiza jest w przygotowaniu. Decyzję rekrutacyjną podejmuje człowiek.
               </p>
               <div className={styles.actions}>
                 <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>

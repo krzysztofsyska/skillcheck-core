@@ -4,7 +4,7 @@ import { HomePage } from "./components/marketing/home-page";
 export const metadata: Metadata = {
   title: "SkillCheck — uporządkuj ocenę kandydatów",
   description:
-    "SkillCheck zestawia informacje o kandydatach z wymaganiami stanowiska. Strona pokazuje dostępny zakres, planowaną ofertę i fikcyjny przykład prezentacji.",
+    "SkillCheck pomaga przygotować profil stanowiska i materiały kandydatów. Poznaj dostępne funkcje oraz demonstracyjny przykład planowanej analizy.",
 };
 
 export default function Home() {
