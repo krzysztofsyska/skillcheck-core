@@ -10,6 +10,8 @@
 
 To nie jest backendowe SC-006. SC-006 w `docs/BACKLOG.md` nadal oznacza UI uruchomienia analizy AI i pozostaje BACKLOG. To zadanie nie zmienia jego zakresu.
 
+Poprawka po review PR #32 zastępuje wcześniejszy kontrakt, w którym RPC przyjmowało dowolny `fingerprint_hash`, odmowa biznesowa była wyjątkiem wycofującym dziennik prób, a trigger niezmienności blokował usunięcie konta.
+
 ## 1. Cel
 
 Firma odwiedzająca publiczną stronę może zostawić kontakt w sprawie rozmowy o rekrutacji, bez zakładania konta. Właściciel SkillCheck odczytuje zgłoszenie tylko jako uprawniony operator platformy. Wysłanie formularza nie rezerwuje terminu i nie obiecuje czasu odpowiedzi.
@@ -18,56 +20,55 @@ Firma odwiedzająca publiczną stronę może zostawić kontakt w sprawie rozmowy
 
 Sprawdzone w kodzie na bazie `dbef6a8`:
 
-- Role firmy to wyłącznie `companies.owner_id` oraz `company_members.role` o wartościach `recruiter` albo `viewer`. Nie ma roli operatora platformy, kolumny administratora ani tabeli uprawnień globalnych.
-- Każda tabela operacyjna ma `company_id`. RLS i `private.has_company_access` izolują tenantów. Anonim nie ma do nich dostępu.
-- Zapis krytyczny idzie przez funkcje `SECURITY DEFINER` z `search_path = ''`, a nie przez otwarty `INSERT`. Wzorzec jest w `public.create_company` i RPC preselekcji. Po utworzeniu funkcji projekt robi `revoke all` i nadaje `execute` tylko wybranym rolom.
-- Aplikacja używa `lib/supabase/server.ts` i klucza publicznego. `service_role` jest zakazany w runtime. Tego zakazu nie luzujemy.
-- Walidacja e-maila logowania jest w `lib/auth-validation.ts`: trim, długość do 254, jeden prosty wzorzec bez MX.
-- Formularze auth są server actions w `app/auth/actions.ts`. Błąd nie pokazuje surowego komunikatu dostawcy.
-- `proxy.ts` odświeża sesję tylko dla `/login`, `/register`, `/forgot-password`, `/reset-password`, `/onboarding` i `/dashboard/:path*`. Strony `/` i `/demo` są statyczne i celowo nie wołają Supabase przy wejściu.
-- Publiczna oferta jest w `app/components/marketing/`. Przyciski „Zobacz przykład” i „Utwórz konto” są w sekcji otwierającej i na końcu `/` oraz `/demo`. Stopka bierze linki z `app/components/marketing/links.ts`.
-- Testy bazy odtwarzają role `anon` i `authenticated` oraz `auth.uid()` w PGlite. Kontrakt tabel i RPC jest zamrożony w `tests/database-types.test.mjs` i `tests/database-types.contract.ts`.
-- Ostatnia wykonana migracja to `20261005000100_screening_worker_claim_payload.sql`. Starszych plików nie wolno uruchamiać ponownie ani edytować.
+- Role firmy to wyłącznie `companies.owner_id` oraz `company_members.role` o wartościach `recruiter` albo `viewer`. Nie ma roli operatora platformy.
+- Każda tabela operacyjna ma `company_id`. RLS i `private.has_company_access` izolują tenantów. Tego modelu nie rozszerzamy na zgłoszenie.
+- Zapis krytyczny idzie przez funkcje `SECURITY DEFINER` z `search_path = ''`. Wzorzec `revoke all` i grant `execute` jest w `public.create_company`.
+- Aplikacja używa `lib/supabase/server.ts` i klucza publicznego. `service_role` jest zakazany w runtime.
+- Walidacja e-maila logowania jest w `lib/auth-validation.ts`: trim, długość do 254, wzorzec `^[^\s@]+@[^\s@]+\.[^\s@]+$`, bez MX.
+- `lib/screening-hmac.ts` pokazuje HMAC-SHA256 z Node `crypto`, hex i próg 32 bajtów. To wzorzec kodowania, nie ten sam sekret i nie ta sama treść podpisu. Sekret workera analizy nie może podpisywać zgłoszeń.
+- `proxy.ts` odświeża sesję tylko dla `/login`, `/register`, `/forgot-password`, `/reset-password`, `/onboarding` i `/dashboard/:path*`.
+- Publiczna oferta jest w `app/components/marketing/`.
+- Testy bazy używają PGlite oraz ról `anon` i `authenticated`. Kontrakt jest w `tests/database-types.test.mjs` i `tests/database-types.contract.ts`.
+- Ostatnia wykonana migracja to `20261005000100_screening_worker_claim_payload.sql`. Starszych plików nie wolno edytować ani uruchamiać ponownie.
+- Istniejące testy PGlite stosują jedną sesję. `docs/exercise-definitions.md` już oddziela taki test od wyścigu dwóch połączeń. Ten projekt zachowuje to rozróżnienie.
 
-Nie używać tabel `candidates`, `companies` ani `company_members` jako miejsca na zgłoszenie. Nie wywoływać `create_company` ani `ensure_initial_company` z formularza publicznego.
+Nie używać tabel `candidates`, `companies` ani `company_members` jako miejsca na zgłoszenie. Nie wywoływać `create_company` ani `ensure_initial_company` z formularza.
 
 ## 3. Podział implementacji
 
-Jeden krok nie obejmuje jednocześnie migracji, publicznej strony i panelu.
-
 | Etap | Zakres | Zależność |
 |---|---|---|
-| SC-SALES-006B | Nowa migracja, RLS, RPC, typy, testy PGlite | ten dokument na `main` |
+| SC-SALES-006B | Migracja, RLS, RPC, typy, testy PGlite i skrypt współbieżności | ten dokument zatwierdzony i na `main` |
 | SC-SALES-006C | Strona `/rozmowa`, przyciski, server action, test HTTP | 006B DONE |
 | SC-SALES-006D | Widok `/operator/leads` | 006C DONE |
 | SC-SALES-013 | Etapy, notatki, przypomnienia, ręczne powiązanie z firmą | 006D DONE |
 
-006D jest po 006C, bo oba etapy dopisują skrypt testowy do `package.json` i CI. Publiczne włączenie wymaga obu.
+006B nie startuje przed scaleniem 006A. Potem kolejność jest liniowa, bo 006C i 006D dopisują skrypty do `package.json` i CI. Publiczne włączenie wymaga obu widoków oraz testu współbieżności z sekcji 12.
 
-Pierwszy prompt wykonawczy jest w `docs/sc-sales-006b-cursor-prompt.md`.
+Pierwszy prompt wykonawczy, do użycia dopiero po scaleniu, jest w `docs/sc-sales-006b-cursor-prompt.md`.
 
 ## 4. Ścieżka odwiedzającego
 
-1. Na stronie widzi odnośnik „Porozmawiajmy o Twojej rekrutacji”.
+1. Widzi odnośnik „Porozmawiajmy o Twojej rekrutacji”.
 2. Otwiera `/rozmowa` bez konta.
 3. Podaje imię, nazwę firmy, e-mail i krótki opis potrzeb. Telefon może zostać pusty.
 4. Wysyła formularz.
-5. Napis „Zgłoszenie zostało zapisane. To nie jest rezerwacja terminu rozmowy.” pojawia się tylko wtedy, gdy funkcja bazy zwróci identyfikator istniejącego albo nowo zapisanego wiersza.
+5. Napis „Zgłoszenie zostało zapisane. To nie jest rezerwacja terminu rozmowy.” pojawia się tylko wtedy, gdy RPC zwróci niepuste `lead_id` oraz `result_code` równy `accepted` albo `replay`.
 
 Nie dodawać kalendarza, uploadu CV, załączników, płatności ani wysyłki wiadomości.
 
 ### Gdzie dodać odnośnik w 006C
 
-- Sekcja otwierająca i sekcja zamykająca `app/components/marketing/home-page.tsx`.
+- Sekcja otwierająca i zamykająca `app/components/marketing/home-page.tsx`.
 - Sekcja zamykająca `app/components/marketing/demo-page.tsx`.
 - Stopka przez `footerLinks` w `app/components/marketing/links.ts`.
-- Nawigacja desktop i menu telefonu w `site-header.tsx` oraz `mobile-nav.tsx`, jako odnośnik tekstowy za „Zaloguj się”. Przycisk „Zobacz przykład” zostaje przyciskiem głównym.
+- Nawigacja desktop i menu telefonu, jako odnośnik tekstowy za „Zaloguj się”. Przycisk „Zobacz przykład” zostaje przyciskiem głównym.
 
-Adres strony formularza: `/rozmowa`. Nie używać `/kontakt` ani adresu sugerującego umówione spotkanie.
+Adres formularza: `/rozmowa`.
 
 ## 5. A. Formularz i walidacja
 
-### Pola
+Przeglądarka wysyła tylko pola formularza i `idempotency_key`. Nie wysyła adresu IP, czasu wystawienia ani podpisu. Te trzy wartości dopisuje server action.
 
 | Pole | Wymagane | Po normalizacji | Zasada |
 |---|---|---|---|
@@ -78,41 +79,50 @@ Adres strony formularza: `/rozmowa`. Nie używać `/kontakt` ani adresu sugeruj�
 | `needs` | tak | 10–1000 znaków | trim, końce linii do `\n` |
 | `idempotency_key` | tak | UUID | generuje przeglądarka, nie użytkownik |
 
-Odrzucić znaki sterujące. W `needs` wolno zostawić tabulator i znak nowej linii. Nie sprawdzać MX. Nie poprawiać telefonu do formatu międzynarodowego.
+Odrzucić znaki sterujące i DEL (`U+007F`). W `needs` wolno zostawić tabulator i `\n`. W pozostałych polach nie. Nie sprawdzać MX. Nie poprawiać telefonu do formatu międzynarodowego.
 
-Normalizacja jest powtarzana w server action i jeszcze raz wewnątrz `submit_sales_lead`. Baza jest źródłem prawdy. Action nie przepuszcza danych, które już lokalnie łamią limity, ale bezpośrednie RPC też nie może ich zapisać.
+Normalizacja jest w `lib/sales-lead-signature.ts` i jeszcze raz w `submit_sales_lead`, tym samym algorytmem. Baza jest źródłem prawdy dla zapisu. Action nie podpisuje danych, które lokalnie łamią limity. Bezpośrednie RPC i tak nie zapisze danych bez ważnego podpisu.
 
 ### Stany interfejsu
 
 - gotowy — pola edytowalne, przycisk „Wyślij zgłoszenie”;
 - wysyłanie — `aria-busy`, wartości zostają, drugi klik nie tworzy nowego klucza;
-- sukces — formularz znika, zostaje tylko potwierdzenie z cytowanym wyżej zdaniem;
-- błąd — wartości zostają, komunikat w `role="alert"`, fokus na pierwszym błędzie pola albo na podsumowaniu;
+- sukces — wyłącznie po `lead_id` i kodzie `accepted` albo `replay`; formularz znika;
+- błąd — wartości zostają, komunikat w `role="alert"`;
 - ponowienie — ten sam klucz, dopóki treść po normalizacji jest taka sama.
 
-Wyłączony przycisk jest tylko stanem interfejsu. Nie jest zabezpieczeniem.
+Wyłączony przycisk nie jest zabezpieczeniem. Odmowa, pusty wynik i wyjątek nie są sukcesem, także gdy w odpowiedzi pojawiłby się identyfikator przy innym kodzie. Funkcja nie może zwrócić `lead_id` razem z kodem odmowy.
 
 ### Klawiatura i telefon
 
-Etykiety powiązane z polami, bez zastępowania ich placeholderem. `autoComplete`: `given-name`, `organization`, `email`, `tel`. `inputMode` dla e-maila i telefonu. Przycisk ma co najmniej 44 px wysokości. Cały formularz działa tabulatorem i Enterem. Błędy nie opierają się wyłącznie na walidacji przeglądarki.
+Etykiety powiązane z polami. `autoComplete`: `given-name`, `organization`, `email`, `tel`. Przycisk ma co najmniej 44 px wysokości. Formularz działa tabulatorem i Enterem. Walidacja przeglądarki nie zastępuje serwera ani bazy.
 
 ### Komunikaty
 
-- błąd pola: krótko o tym polu, bez treści innego zgłoszenia;
-- błąd zapisu: „Nie udało się zapisać zgłoszenia. Dane zostały w formularzu. Możesz spróbować ponownie.”;
-- limit: „Nie udało się teraz przyjąć zgłoszenia. Spróbuj później.”;
-- formularz wyłączony: „Formularz nie przyjmuje teraz zgłoszeń.”;
-- konflikt klucza: „To zgłoszenie różni się od poprzedniej próby. Wyślij je ponownie.” Po tym błędzie przeglądarka tworzy nowy klucz.
+- błąd pola: krótko o tym polu;
+- `sales_lead_invalid`, `sales_lead_unauthorized` i wyjątek techniczny: „Nie udało się zapisać zgłoszenia. Dane zostały w formularzu. Możesz spróbować ponownie.”;
+- `sales_lead_rate_limited`: „Nie udało się teraz przyjąć zgłoszenia. Spróbuj później.”;
+- `sales_lead_unavailable`: „Formularz nie przyjmuje teraz zgłoszeń.”;
+- `sales_lead_idempotency_conflict`: „To zgłoszenie różni się od poprzedniej próby. Wyślij je ponownie.” Po tym błędzie przeglądarka tworzy nowy klucz.
 
-Nie pokazywać kodu SQL, nazwy constraintu ani identyfikatora cudzego wiersza.
+Nie pokazywać, który warunek podpisu zawiódł. Nie pokazywać SQL, IP ani identyfikatora cudzego wiersza.
 
 ### Informacja o danych
 
-Nie ma zatwierdzonej treści o przetwarzaniu danych. 006C nie wymyśla regulaminu, okresu retencji ani podstawy prawnej. Jeśli zmienna `SALES_LEAD_NOTICE` jest pusta, strona nie podaje własnej klauzuli. Publiczne włączenie i tak jest zablokowane do czasu decyzji właściciela opisanej w sekcji 10.
+Nie ma zatwierdzonej treści o przetwarzaniu danych ani zatwierdzonego okresu przechowywania treści zgłoszenia. 006C nie wymyśla klauzuli. Pusta `SALES_LEAD_NOTICE` nie jest uzupełniana przez implementację. Publiczne ustawienie `leads_enabled = true` pozostaje zablokowane do decyzji właściciela.
 
 ## 6. B. Model danych
 
-Nowa migracja, jedyna do utworzenia w 006B: `supabase/migrations/20261006000100_sales_leads.sql`. Jeśli ten numer będzie już zajęty, zatrzymać się. Nie edytować migracji o niższych numerach.
+Jedyna nowa migracja 006B: `supabase/migrations/20261006000100_sales_leads.sql`. Jeśli ten numer jest zajęty, zatrzymać się.
+
+Migracja wykonuje:
+
+```sql
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
+```
+
+Jeśli `pgcrypto` jest już w innym schemacie i polecenie się nie powiedzie, zatrzymać się. Nie przenosić rozszerzenia. W Supabase rozszerzenia są w schemacie `extensions`. Funkcje wołają `extensions.hmac` przy `search_path = ''`.
 
 ### `public.sales_leads`
 
@@ -125,33 +135,51 @@ Nowa migracja, jedyna do utworzenia w 006B: `supabase/migrations/20261006000100_
 | `email` | `text not null` | e-mail po normalizacji |
 | `phone` | `text null` | telefon albo brak |
 | `needs` | `text not null` | opis potrzeb |
-| `status` | `text not null default 'received'` | jedyna dozwolona wartość: `received` |
-| `submitted_by` | `uuid null` → `auth.users(id) on delete set null` | `auth.uid()` w chwili zapisu, nigdy argument klienta |
-| `fingerprint_hash` | `text not null` | 64 znaki hex, bez adresu IP |
-| `created_at` | `timestamptz not null default now()` | czas zapisu |
+| `status` | `text not null default 'received'` | check: wyłącznie `received` |
+| `submitted_by` | `uuid null` | `auth.uid()` w chwili INSERT; bez klucza obcego |
+| `fingerprint_hash` | `text not null` | 64 znaki hex; HMAC adresu IP, bez samego adresu |
+| `created_at` | `timestamptz not null default now()` | czas pierwszego zapisu |
 
-Brak `company_id`, `updated_at` i kolumny edytowalnej przez zgłaszającego. `status` ma check równy dokładnie `received`. Rozszerzenie statusów należy do SC-SALES-013 i wymaga nowej migracji.
+Brak `company_id` i `updated_at`. Długości z sekcji 5 są checkami. Check nie zastępuje walidacji formatu w funkcji.
 
-Długości z sekcji 5 są też checkami tabeli. Check nie zastępuje walidacji formatu e-maila i telefonu w funkcji.
+`submitted_by` celowo nie ma `REFERENCES auth.users`. `ON DELETE SET NULL` jest UPDATE-em wiersza. Trigger odrzucający każdy UPDATE zablokowałby usunięcie konta. `ON DELETE CASCADE` usuwałoby zgłoszenie. `ON DELETE RESTRICT` blokowałoby usunięcie konta. Zamiast klucza obcego usunięcie konta obsługuje trigger z sekcji 8.
 
-Trigger `BEFORE UPDATE OR DELETE` woła `private.sales_leads_immutable()` i przerywa operację kodem `sales_lead_immutable`. Wiersz jest dopisywany, nie poprawiany i nie usuwany przez API.
+Indeksy: unikalny `idempotency_key`, `(email, created_at)`, `(fingerprint_hash, created_at)`, `(created_at)`.
+
+### `private.sales_lead_replay_state`
+
+Jeden wiersz na zgłoszenie, nie na każde ponowienie.
+
+| Kolumna | Typ |
+|---|---|
+| `lead_id` | `uuid` PK → `public.sales_leads(id)` |
+| `replay_count` | `integer not null`, check od 1 do 20 |
+| `last_replay_at` | `timestamptz not null default now()` |
 
 ### `public.platform_operators`
 
 | Kolumna | Typ | Znaczenie |
 |---|---|---|
 | `user_id` | `uuid` PK → `auth.users(id) on delete cascade` | konto operatora |
-| `granted_at` | `timestamptz not null default now()` | nadanie |
-| `granted_by` | `uuid null` → `auth.users(id) on delete set null` | kto nadał; `null` dla pierwszego wpisu SQL |
+| `granted_at` | `timestamptz not null default now()` | pierwsze nadanie |
+| `granted_by` | `uuid null` → `auth.users(id) on delete set null` | kto nadał; `null` dla pierwszego SQL |
 | `revoked_at` | `timestamptz null` | `null` oznacza uprawnienie aktywne |
 
-Check: `revoked_at` jest puste albo nie wcześniejsze niż `granted_at`. Migracja nie wstawia żadnego `user_id`.
+Check: `revoked_at` jest puste albo nie wcześniejsze niż `granted_at`. Migracja nie wstawia `user_id`. Aktywny operator to `revoked_at is null`. Właściciel firmy-klienta nie staje się operatorem.
 
-Aktywny operator to wiersz z `revoked_at is null`. Właściciel firmy-klienta nie staje się operatorem przez `companies.owner_id`.
+Usunięcie konta operatora kasuje jego wiersz przez `ON DELETE CASCADE`. To nie jest RPC. Może zostawić zero operatorów i wtedy ponowne wejście wymaga ręcznego SQL z sekcji 8. RPC nie ma tej ścieżki.
 
 ### `private.sales_lead_settings`
 
-Jednowierszowa tabela. Kolumna `leads_enabled boolean not null default false`. Migracja wstawia `false`. Brak grantów dla `anon` i `authenticated`. Przełącznik publiczny jest opisany w sekcji 10.
+Jeden wiersz, klucz `id boolean primary key default true check (id)`.
+
+| Kolumna | Znaczenie |
+|---|---|
+| `leads_enabled boolean not null default false` | wyłącznik zapisu nowych zgłoszeń w bazie |
+| `request_secret_current text null` | aktualny sekret MAC; `null` albo co najmniej 32 bajty |
+| `request_secret_previous text null` | poprzedni sekret w oknie rotacji; ta sama zasada długości |
+
+Migracja wstawia `leads_enabled = false` i oba sekrety jako `null`. Nie zawiera wartości sekretu.
 
 ### `private.sales_lead_attempts`
 
@@ -160,53 +188,162 @@ Jednowierszowa tabela. Kolumna `leads_enabled boolean not null default false`. M
 | `id` | `bigint identity` PK |
 | `fingerprint_hash` | `text not null` |
 | `attempted_at` | `timestamptz not null default now()` |
-| `result` | `text not null`: `accepted`, `rejected`, `rate_limited`, `unavailable`, `replay` |
+| `result` | `text not null`: tylko `accepted`, `rejected`, `rate_limited` |
 
-Tabela nie zawiera imienia, telefonu, e-maila, nazwy firmy ani treści potrzeb. Służy do limitu prób. Schemat `private` nie jest wystawiony w API.
+Brak imienia, telefonu, e-maila, nazwy firmy, treści, adresu IP i klucza ponowienia. Indeksy: `(fingerprint_hash, attempted_at)` oraz `(attempted_at)`.
+
+Schemat `private` nie jest wystawiony w API. `anon` nie dostaje `USAGE` na `private`. Istniejące `USAGE` dla `authenticated` zostaje, bo używa go reszta aplikacji. Nowe obiekty `private` nie dostają grantów dla `anon` ani `authenticated`.
+
+### Niezmienność i jedyne dozwolone zmiany
+
+Trigger `BEFORE UPDATE OR DELETE` na `public.sales_leads` woła `private.sales_leads_immutable()`.
+
+- `DELETE` kończy się `sales_lead_immutable`, chyba że w tej transakcji ustawiono lokalnie `skillcheck.sales_lead_test_purge = 'on'`. Ustawia to wyłącznie `private.purge_sales_leads(uuid[])`.
+- `UPDATE` kończy się `sales_lead_immutable`, chyba że lokalnie ustawiono `skillcheck.sales_lead_author_detach = 'on'` i jedyną zmianą jest `submitted_by` z niepustego UUID na `null`. Pozostałe kolumny muszą być równe. Ustawia to wyłącznie `private.detach_sales_lead_author(uuid)`.
+- API nie dostaje `UPDATE` ani `DELETE`. GUC bez grantu tabeli nic nie daje roli `anon` ani `authenticated`.
+- Nie wyłączać triggera jako sposobu sprzątania ani usuwania konta.
 
 ### Powtórzone wysłanie
 
-Funkcja normalizuje argumenty i szuka `idempotency_key`.
+Idempotencja porównuje wyłącznie pięć znormalizowanych pól: `first_name`, `company_name`, `email`, `phone` (`null` i pusty tekst są tym samym) oraz `needs`. Nie porównuje `submitted_by`, `fingerprint_hash`, `status`, `created_at` ani `id`. Ponowienie nie wykonuje `UPDATE` na `sales_leads`, więc nie nadpisuje pierwotnego `submitted_by`.
 
-- Brak wiersza i flaga włączona: po limitach robi `INSERT` i zwraca nowe `id`.
-- Brak wiersza i flaga wyłączona: `sales_lead_unavailable`, bez nowego zgłoszenia i bez wiersza w `sales_lead_attempts`. Limit prób nie maleje.
-- Jest wiersz i wszystkie znormalizowane pola są równe: zwraca istniejące `id` także przy wyłączonej fladze, dopisuje attempt `replay`, nie tworzy drugiego zgłoszenia i nie zwiększa liczników z sekcji 9. Dzięki temu ponowienie po utracie odpowiedzi nie kończy się fałszywym błędem.
-- Jest wiersz i którekolwiek pole się różni: przerywa kodem `sales_lead_idempotency_conflict`, nie zmienia wiersza.
+- Brak wiersza i `leads_enabled = true`: po limitach `INSERT`, wynik `accepted` i nowe `lead_id`.
+- Brak wiersza i `leads_enabled = false`: `sales_lead_unavailable`, bez zgłoszenia i bez wiersza w dzienniku prób.
+- Jest wiersz i pięć pól jest równych: `replay` oraz istniejące `lead_id`, także przy wyłączonej fladze. Nie dodaje zgłoszenia i nie zużywa limitu przyjęć. Agregacja ponowień jest w sekcji 9.
+- Jest wiersz i którekolwiek z pięciu pól się różni: `sales_lead_idempotency_conflict`, wiersz bez zmian, `lead_id` puste.
 
-Ten sam klucz z inną wielkością liter e-maila albo ze spacjami na brzegach jest powtórzeniem, nie konfliktem. Inny opis potrzeb jest konfliktem.
-
-Nowy klucz przy tym samym e-mailu może utworzyć kolejne zgłoszenie, aż do limitu z sekcji 9. Domeny e-maila nie wolno porównywać z firmami ani członkostwami.
-
-`submitted_by` ustawia wyłącznie funkcja z `(select auth.uid())`. Dla anonima zostaje `null`. Zalogowanie nie tworzy firmy i nie wiąże zgłoszenia z tenantem.
+Nowy klucz przy tym samym e-mailu może utworzyć kolejne zgłoszenie, aż do limitu. Domeny e-maila nie wolno porównywać z firmami.
 
 ## 7. C. Granica zaufania
 
 ```text
 przeglądarka
-  → server action Next.js (klient z kluczem publicznym i ciasteczkiem sesji)
-    → public.submit_sales_lead(...) jako rola anon albo authenticated
-      → INSERT wykonany wewnątrz SECURITY DEFINER
+  → server action (pola i idempotency_key)
+    → action dopisuje source_ip, issued_at_us i request_signature
+      → public.submit_sales_lead jako anon albo authenticated
+        → funkcja odrzuca podpis albo wykonuje INSERT jako SECURITY DEFINER
 ```
 
-Przeglądarka nie dostaje połączenia do Postgresa inaczej niż przez opublikowane API Supabase. To API używa ról `anon` i `authenticated`.
+Klucz publiczny Supabase pozwala wywołać RPC bezpośrednio. Dlatego sam HMAC w aplikacji nie jest kontrolą. Kontroli jest weryfikacja tego samego MAC wewnątrz funkcji, sekretem którego rola API nie umie odczytać.
 
-### Dlaczego bezpośrednie API nie omija walidacji
+### Podpis
 
-1. `revoke all` na `public.sales_leads`, `public.platform_operators` i tabelach `private` odbiera `anon` oraz `authenticated` prawa `select`, `insert`, `update` i `delete`. PostgREST odrzuca operację na tabeli brakiem uprawnienia, zanim zastosuje RLS.
-2. RLS i tak jest włączone. Nie ma polityki `INSERT`. Nawet późniejsze przypadkowe `GRANT INSERT` bez polityki nie wstawi wiersza roli niebędącej właścicielem.
-3. Jedyny zapis zgłoszenia to `public.submit_sales_lead`. Funkcja jest `SECURITY DEFINER`, ma `search_path = ''` i sama normalizuje, sprawdza format, limity, flagę i klucz. Argumenty nie obejmują `id`, `status`, `created_at`, `submitted_by` ani `company_id`.
-4. `execute` na tej funkcji mają `anon` i `authenticated`. Nie mają go na funkcjach prywatnych.
-5. Odczyt listy ma tylko `public.list_sales_leads`, i tylko dla aktywnego operatora. Brak `GRANT SELECT` na tabeli oznacza, że firma-klient nie odczyta zgłoszeń zapytaniem `.from('sales_leads')`.
-6. Trigger koryguje próbę `UPDATE` i `DELETE` na `sales_leads`, także gdy wywoła ją funkcja.
-7. Runtime aplikacji nie używa `service_role`. Istniejące polityki tenantów nie dostają nowej roli ani wyjątku.
+Sekret ma co najmniej 32 bajty UTF-8. Aplikacja trzyma go w `SALES_LEAD_REQUEST_SECRET`. Baza trzyma ten sam ciąg w `request_secret_current`. Brak którejkolwiek kopii blokuje nowe przyjęcie. Wartości nie wolno wkładać do repozytorium ani migracji.
 
-`private.is_platform_operator(uuid)` jest `SECURITY DEFINER` z pustym `search_path`. Zwraca prawdę tylko dla aktywnego wiersza. `execute` ma wyłącznie `authenticated`. Funkcja nie jest wystawiona jako publiczne RPC.
+Czas `issued_at_us` to liczba mikrosekund Unix UTC wyliczona przez action (`Date.now() * 1000`). Nie pochodzi z przeglądarki. Ważność w bazie, względem `clock_timestamp()`:
+
+- nie starszy niż 120 sekund;
+- nie nowszy niż 30 sekund.
+
+Po upływie action przy następnym wysłaniu wystawia nowy czas i nowy podpis. Ten sam klucz i ta sama treść pozostają ponowieniem. Stary podpis nie przedłuża się sam.
+
+Kanoniczny tekst UTF-8, bez ogona po ostatnim polu:
+
+```text
+v1
+<issued_at_us>
+<idempotency_key jako małe litery>
+<auth.uid() jako małe litery albo znak ->
+<source_ip>
+<bajty UTF-8>:<first_name>
+<bajty UTF-8>:<company_name>
+<bajty UTF-8>:<email>
+<bajty UTF-8>:<phone albo pusty ciąg>
+<bajty UTF-8>:<needs>
+```
+
+Każda z pierwszych dziewięciu linii kończy się `\n`. Ostatnie pole nie ma końcowego `\n`. Długość pola jest dziesiętną liczbą bajtów UTF-8, więc znak nowej linii wewnątrz `needs` nie przesuwa granicy pola. User-Agent nie wchodzi do tekstu.
+
+MAC to HMAC-SHA256. Kluczem jest sekret jako UTF-8, wiadomością kanoniczny tekst jako UTF-8, wynikiem 64 małe znaki hex. W Node jest to `crypto.createHmac('sha256', secret).update(canonical, 'utf8').digest('hex')`. W bazie jest to `encode(extensions.hmac(canonical, secret, 'sha256'), 'hex')` na przeciążeniu `text, text, text`.
+
+Sprawdzone 2026-10-05 w tym workspace: zwykłe `new PGlite()` nie ma `pgcrypto`. Po `import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'` oraz `create extension pgcrypto with schema extensions` oba wyliczenia dały ten sam hex dla tekstu ze znakiem `ś`. Dokumentacja PostgreSQL opisuje `hmac(data text, key text, type text)` i algorytm `sha256`. W Supabase woła się je jako `extensions.hmac`, bo `search_path = ''` nie widzi schematu rozszerzenia.
+
+Funkcja akceptuje podpis z `request_secret_current`, a gdy `request_secret_previous` ma co najmniej 32 bajty, także z niego. Porównanie jest równością hex. Nie zastępuje ono sekretu: bez sekretu nie da się wyliczyć MAC, który baza uzna.
+
+Podpis wiąże treść, klucz ponowienia, czas, adres IP i kontekst użytkownika. `auth.uid()` nie jest argumentem RPC. Baza wstawia do tekstu wynik `(select auth.uid())`. Podpis anonima nie przechodzi jako zalogowany użytkownik i odwrotnie. Zmiana dowolnego podpisanego pola unieważnia MAC.
+
+`fingerprint_hash` nie jest argumentem. Po uznaniu podpisu funkcja liczy go jako HMAC-SHA256 aktualnego sekretu i dokładnego `source_ip`, tym samym kodowaniem. Do limitu wlicza też hash wyliczony poprzednim sekretem, jeżeli ten sekret jeszcze jest. W bazie ląduje tylko hex.
+
+### Adres IP
+
+Docelowy hosting to Vercel, bez reverse proxy przed projektem. Zaufanym źródłem jest jeden nagłówek `x-real-ip`. Dokumentacja Vercel opisuje go jako publiczny adres klienta wyliczony przez platformę; przy brzegu Vercel platforma nadpisuje `x-forwarded-for`, żeby nie przyjmować podstawionego ciągu. Kod i tak nie czyta `x-forwarded-for`: poza Vercel lewa strona listy nie jest zaufana, a po podstawieniu proxy może zostać nadpisana. `x-vercel-forwarded-for` zostaje w dokumentacji Vercel na wypadek proxy, ale ten projekt go nie używa. Postawienie proxy przed Vercel wymaga osobnej decyzji, zanim jakikolwiek inny nagłówek stanie się źródłem.
+
+Action przyjmuje `x-real-ip` tylko wtedy, gdy po trimie jest pojedynczym adresem IPv4 albo IPv6: bez przecinka, portu, spacji i identyfikatora strefy. IPv4 to cztery oktety 0–255. IPv6 to 2–39 znaków, wyłącznie cyfry szesnastkowe i dwukropki, co najwyżej jedno `::`. Inaczej action nie podpisuje i nie woła RPC.
+
+Brak nagłówka, pusty nagłówek albo lista adresów nie są zastępowane przez `127.0.0.1` ani żaden inny wspólny adres. Action zwraca `sales_lead_unavailable` bez podpisu. Dotyczy to produkcji i lokalnego `next dev`. Test HTTP, który ma dojść do podpisu, sam ustawia `x-real-ip`, na przykład adres z sieci dokumentacyjnej `203.0.113.10`.
+
+Zmiana samego User-Agent nie zmienia `source_ip` ani `fingerprint_hash`, więc nie otwiera nowego limitu źródła. Wspólny adres NAT dzieli jeden licznik. To skutek zaufanego adresu, nie możliwość wybrania dowolnego odcisku przez klienta RPC.
+
+### Rotacja sekretu
+
+1. Właściciel przygotowuje nowy ciąg poza repozytorium.
+2. Jako postgres: `request_secret_previous = request_secret_current`, potem `request_secret_current` na nowy ciąg.
+3. Ustawia ten sam nowy ciąg w `SALES_LEAD_REQUEST_SECRET` i wdraża aplikację.
+4. Do czasu wdrożenia działająca aplikacja podpisuje starym sekretem. Baza nadal go uznaje jako previous.
+5. Po wdrożeniu i po co najmniej 120 sekundach właściciel czyści `request_secret_previous`.
+6. W oknie rotacji limity źródła sumują oba hashe tego samego IP. Nowy zapis przechowuje hash aktualnego sekretu.
+
+### Dwie flagi
+
+| Flaga | Kto ją czyta | Skutek |
+|---|---|---|
+| `SALES_LEADS_ENABLED` | tylko server action | Brak albo wartość inna niż `true`: action nie podpisuje i nie woła RPC, zwraca `sales_lead_unavailable`. Baza tej zmiennej nie widzi i nie egzekwuje. |
+| `leads_enabled` | `submit_sales_lead` | `false` blokuje nowe `idempotency_key` nawet przy ważnym podpisie i nawet przy bezpośrednim RPC. |
+
+Żądanie podpisane, zanim action zobaczyło wyłączenie zmiennej, może jeszcze dojść do bazy. Baza rozstrzyga je po `leads_enabled` i po ważności podpisu, nie po zmiennej środowiska. Przy `leads_enabled = false` nowy klucz dostaje `sales_lead_unavailable`. Ten sam klucz i ta sama treść dostają `replay`, dopóki podpis jest ważny. Samo wyłączenie zmiennej aplikacji nie unieważnia podpisu, który już wyszedł z action. Żeby zatrzymać także takie nowe klucze, trzeba ustawić `leads_enabled = false`.
+
+Wyłączenie nie kasuje zgłoszeń. Samo ukrycie przycisku nie wystarcza.
+
+### Dlaczego bezpośrednie API nie omija kontroli
+
+1. `revoke all` odbiera `anon` i `authenticated` prawa CRUD na `sales_leads`, `platform_operators` i tabelach `private`.
+2. RLS tabel publicznych jest włączone i nie ma polityki `INSERT` ani `SELECT`.
+3. Jedyny zapis zgłoszenia to `submit_sales_lead`. Nie przyjmuje `id`, `status`, `created_at`, `submitted_by`, `fingerprint_hash` ani `company_id`.
+4. Wywołanie bez ważnego MAC dostaje `sales_lead_unauthorized` i nie zapisuje zgłoszenia ani próby. Podmiana hexu, IP, treści albo kontekstu `auth.uid()` łamie podpis.
+5. `leads_enabled = false` blokuje nowy klucz także wtedy, gdy podpis jest ważny.
+6. Odczyt listy ma tylko `list_sales_leads`.
+7. Trigger ogranicza `UPDATE` i `DELETE` sposobem z sekcji 6.
+8. Runtime nie używa `service_role`. Polityki tenantów nie dostają nowej roli.
+
+Nie traktować możliwości podstawienia odcisku jako przyjętego ryzyka. Klient RPC nie wybiera odcisku, bo odcisk powstaje w bazie z adresu objętego podpisem.
+
+### Kolejność `submit_sales_lead`
+
+Funkcja zwraca dokładnie jeden wiersz `table (lead_id uuid, result_code text)` dla każdego kodu biznesowego. Nie używa `RAISE` dla tych kodów, bo wyjątek wycofałby `INSERT` do dziennika prób. Wyjątek zostaje dla niespodziewanej awarii, naruszenia triggera i dla `list_sales_leads`, które nie zapisuje licznika. Awaria techniczna nie jest sukcesem interfejsu.
+
+Kody: `accepted`, `replay`, `sales_lead_invalid`, `sales_lead_unauthorized`, `sales_lead_rate_limited`, `sales_lead_unavailable`, `sales_lead_idempotency_conflict`. `lead_id` jest niepuste wyłącznie przy `accepted` i `replay`.
+
+1. Zły kształt podpisu, pusty czas albo pusty IP: `sales_lead_unauthorized`, bez zapisu. Podpis musi pasować do `^[0-9a-f]{64}$`.
+2. Brak aktualnego sekretu albo sekret krótszy niż 32 bajty: `sales_lead_unavailable`, bez zapisu.
+3. IP spoza gramatyki z tej sekcji: `sales_lead_unauthorized`, bez zapisu.
+4. Czas poza oknem 120 sekund wstecz i 30 sekund do przodu: `sales_lead_unauthorized`, bez zapisu.
+5. Znormalizować pola, złożyć tekst kanoniczny z `auth.uid()` sesji i sprawdzić MAC aktualnym, potem ewentualnie poprzednim sekretem. Niezgodność: `sales_lead_unauthorized`, bez zapisu. Zła autoryzacja nie wchodzi do limitu i nie tworzy wiersza dziennika, bo zgłoszony adres nie został uwierzytelniony.
+6. Po ważnym podpisie wyliczyć `fingerprint_hash` z aktualnego sekretu i `source_ip`, a potem sprawdzić długości, wzorce i znaki sterujące. Błąd pól: wziąć blokady 6101 i 6102, pod nimi ponownie policzyć próby i ewentualnie dopisać jedną próbę `rejected`. Wynik `sales_lead_invalid` albo, gdy limit prób już jest wyczerpany, `sales_lead_rate_limited` bez nowego wiersza dziennika.
+7. Wziąć `pg_advisory_xact_lock(6101, hashtext(idempotency_key::text))` i odczytać zgłoszenie.
+8. Zgodne pięć pól: ścieżka `replay` z sekcji 9. Nie brać pozostałych blokad i nie dopisywać próby.
+9. Różne pole: blokada 6102, ta sama zasada limitu prób, wynik `sales_lead_idempotency_conflict` albo `sales_lead_rate_limited`. Wiersz zgłoszenia bez zmian.
+10. Brak wiersza: `select leads_enabled ... for update`. Flaga wyłączona: `sales_lead_unavailable`, bez próby.
+11. Flaga włączona: w kolejności blokady 6102, 6103 (`hashtext` znormalizowanego e-maila) i 6104,1. Pod blokadą usunąć próby tego odcisku starsze niż 48 godzin, ponownie policzyć limity i dopiero wtedy zapisać.
+
+Kolejność blokad jest stała: 6101, potem 6102, potem 6103, potem 6104. Ścieżka, która nie potrzebuje dalszej blokady, zatrzymuje się wcześniej i nie bierze ich w innej kolejności.
+
+Próba `rejected` albo `rate_limited` jest dopisywana tylko wtedy, gdy liczba prób tego odcisku z ostatnich 10 minut jest mniejsza niż 8. Ósma próba jeszcze się zapisuje. Dziewiąta zwraca `sales_lead_rate_limited` i nie dodaje wiersza. Dzięki temu odmowa biznesowa zostaje w dzienniku po zakończeniu funkcji, a przekroczenie limitu nie wydłuża dziennika bez końca.
+
+Limity przyjęć, liczone po ponownym odczycie pod blokadami, dotyczą nowego klucza:
+
+- 5 zgłoszeń tego odcisku w 60 minut, łącznie z hashem poprzedniego sekretu;
+- 3 zgłoszenia tego znormalizowanego e-maila w 24 godziny;
+- 30 zgłoszeń łącznie w 60 minut.
+
+Gdy którykolwiek jest wyczerpany, funkcja zwraca `sales_lead_rate_limited` i dopisuje próbę tylko według progu 8. Nie tworzy zgłoszenia. `replay` nie zużywa tych progów.
+
+`accepted` wstawia zgłoszenie i jedną próbę `accepted` w tej samej transakcji. `submitted_by` bierze wyłącznie z `auth.uid()`.
 
 ## 8. D. Operator platformy
 
 ### Nadanie i odebranie
 
-Pierwszego operatora nie tworzy aplikacja i nie tworzy migracja. Właściciel projektu, po zalogowaniu się zwykłym kontem, kopiuje własny UUID z panelu Auth i uruchamia w SQL Editorze jako postgres:
+Pierwszego operatora nie tworzy aplikacja ani migracja. Właściciel kopiuje własny UUID z panelu Auth i jako postgres uruchamia:
 
 ```sql
 insert into public.platform_operators (user_id)
@@ -215,134 +352,177 @@ values ('UUID-Z-PANELU-AUTH');
 
 Projekt nie podaje tego UUID.
 
-Kolejnego operatora nadaje już aktywny operator przez `public.grant_platform_operator(target_user uuid)`. Cel musi istnieć w `auth.users`. Ponowne nadanie czyści `revoked_at`. W 006B nie ma do tego ekranu. RPC ma być pokryte testem, a ekran nadawania zostaje poza 006C i 006D.
+`public.grant_platform_operator(target_user uuid) returns text`
 
-`public.revoke_platform_operator(target_user uuid)` ustawia `revoked_at`. Aktywny operator nie może odebrać uprawnienia samemu sobie, jeśli jest ostatnim aktywnym operatorem. Wtedy funkcja zwraca `sales_lead_last_operator` i nic nie zmienia.
+`public.revoke_platform_operator(target_user uuid) returns text`
 
-Oba RPC sprawdzają operatora po `auth.uid()`. Nie przyjmują identyfikatora wywołującego. Właściciel firmy, rekruter i viewer dostają odmowę.
+Obie są `SECURITY DEFINER`, `search_path = ''`, `execute` tylko dla `authenticated`. Najpierw biorą `pg_advisory_xact_lock(6105, 1)`. Pod tą blokadą ponownie czytają wiersz wywołującego `FOR UPDATE`. Brak aktywnego wiersza daje `sales_lead_forbidden` i nie zmienia danych. Grant wymaga istniejącego `auth.users`; inaczej `sales_lead_invalid`. Ponowne nadanie czyści `revoked_at` i ustawia `granted_by` na `auth.uid()`, bez zmiany pierwotnego `granted_at`.
+
+Revoke pod tą samą blokadą liczy aktywnych operatorów. Jeżeli cel jest aktywny i aktywny jest tylko jeden, zwraca `sales_lead_last_operator` i nic nie zmienia. Dotyczy to także dwóch równoczesnych RPC: druga transakcja widzi stan po pierwszej i nie zostawia zera. Odebranie już nieaktywnego celu zwraca `ok`. Sukces zapisu też zwraca `ok`.
+
+Te kody są zwykłym wynikiem, nie wyjątkiem. Nie zapisują dziennika prób.
+
+`private.is_platform_operator(uuid)` jest `SECURITY DEFINER` z pustym `search_path`. Po `revoke all` dostaje `execute` tylko `authenticated`, tak jak `private.is_company_owner`. Nie jest publicznym RPC i nie dostaje `anon`.
 
 ### Sprawdzenie
 
-- W bazie: `private.is_platform_operator((select auth.uid()))`.
-- W aplikacji, od 006D: `public.platform_operator_status()` zwraca boolean i nie ujawnia innych operatorów. Rola `anon` nie ma `execute`, więc brak sesji obsługuje przekierowanie do `/login` zanim padnie wywołanie. Zalogowany bez aktywnego wiersza dostaje `false`. `auth.uid()` równe `null` wewnątrz funkcji też zwraca `false`.
+- W bazie: `private.is_platform_operator((select auth.uid()))` pod blokadą tam, gdzie RPC zmienia uprawnienia.
+- `public.platform_operator_status() returns boolean`: `execute` ma `authenticated`. Brak aktywnego wiersza albo puste `auth.uid()` zwraca `false`. `anon` nie ma `execute`.
+- `list_sales_leads` przy braku operatora robi `RAISE` z tokenem `sales_lead_forbidden`, nie pustą listę. To odczyt bez licznika, więc wyjątek niczego nie wycofuje poza samym odczytem.
 
 ### Widok
 
-Adres: `/operator/leads`. Nie leży pod `/dashboard/[companyId]`, bo nie jest zasobem tenanta.
+Adres `/operator/leads` nie leży pod `/dashboard/[companyId]`.
 
 006D:
 
-- brak sesji przekierowuje do `/login`, tak jak reszta chronionych stron;
-- sesja bez operatora kończy się `notFound()`, bez informacji, że adres istnieje;
-- operator widzi do 50 najnowszych zgłoszeń: czas, imię, nazwę firmy, e-mail, telefon, opis, status i UUID `submitted_by`, jeśli jest;
-- brak edycji, notatek, filtrów CRM, eksportu i wysyłki;
-- `list_sales_leads` przycina limit do zakresu 1–100 niezależnie od argumentu. Domyślnie 50. Sortowanie: `created_at desc`, `id desc`.
+- brak sesji przekierowuje do `/login`;
+- sesja bez operatora kończy się `notFound()`;
+- operator widzi do 50 najnowszych zgłoszeń: czas, imię, nazwę firmy, e-mail, telefon, opis, status i UUID `submitted_by`, jeżeli jest;
+- brak edycji, notatek, eksportu i wysyłki;
+- `list_sales_leads(result_limit integer)` przycina limit do 1–100, domyślnie 50, sortuje `created_at desc, id desc`.
 
-`proxy.ts` w 006D dopisuje wyłącznie matcher `/operator/:path*`, żeby sesja i `Cache-Control: private, no-store` działały jak na `/dashboard`.
+`proxy.ts` w 006D dopisuje wyłącznie matcher `/operator/:path*`.
+
+### Usunięcie autora zgłoszenia
+
+`private.detach_sales_lead_author(uuid)` jest `SECURITY DEFINER`, `search_path = ''`, bez grantu dla `anon` i `authenticated`. Ustawia lokalnie `skillcheck.sales_lead_author_detach = 'on'` i wykonuje jedyną dozwoloną zmianę: `submitted_by` wskazanego autora na `null`.
+
+Trigger `AFTER DELETE ON auth.users FOR EACH ROW` woła tę funkcję. Usunięcie użytkownika kończy się powodzeniem, zgłoszenie zostaje, treść zostaje, a `submitted_by` staje się `null`. Pozostałe kolumny się nie zmieniają. Test 006B wykonuje ten scenariusz na tabeli `auth.users` utworzonej tak, jak robią to istniejące testy PGlite. Na hostowanym Supabase ten sam trigger tworzy rola migracji. Jeżeli host odmówi triggera na `auth.users`, 006B się zatrzymuje i nie wraca do `ON DELETE SET NULL`.
+
+### Sprzątanie techniczne
+
+`private.purge_expired_sales_lead_attempts()` kasuje próby starsze niż 48 godzin. To techniczny horyzont liczników, dłuższy niż okno 24 godzin dla e-maila. Nie jest decyzją o przechowywaniu treści zgłoszeń. Funkcja jest `SECURITY DEFINER`, bez grantu dla API. Dodatkowo ścieżka nowego zapisu, już pod blokadą odcisku, kasuje przeterminowane próby tego odcisku.
+
+`private.purge_sales_leads(uuid[])` kasuje wskazane identyfikatory. W tej samej transakcji ustawia `skillcheck.sales_lead_test_purge = 'on'`, usuwa wiersze `sales_lead_replay_state`, potem wskazane `sales_leads`. Nie przyjmuje warunku czasowego i nie jest dostępna przez API. Właściciel woła ją jako postgres, podając UUID zgłoszenia testowego. To zastępuje wyłączanie triggera.
+
+Publiczne włączenie nie wymaga harmonogramu. Właściciel może wołać czyszczenie prób ręcznie. Brak harmonogramu nie wydłuża dziennika ponowień: ponowienia mają osobny, ograniczony wiersz.
 
 ## 9. E. Ochrona publicznego formularza
 
-Limity egzekwuje `submit_sales_lead`, nie przycisk:
+Limity egzekwuje funkcja pod blokadami z sekcji 7, nie przycisk.
 
-- flaga `private.sales_lead_settings.leads_enabled` musi być `true` dla nowego klucza, inaczej `sales_lead_unavailable` i brak zapisu; wyjątek ponowienia jest w sekcji 6;
-- 8 prób na `fingerprint_hash` w 10 minut, licząc attempty inne niż `replay`; po przekroczeniu `sales_lead_rate_limited`;
-- 5 przyjętych zgłoszeń na ten sam odcisk w 60 minut;
-- 3 przyjęte zgłoszenia na ten sam znormalizowany e-mail w 24 godziny;
-- 30 przyjętych zgłoszeń łącznie w 60 minut.
+Ponowienie zgodnej treści:
 
-Replay tego samego klucza i tej samej treści nie zwiększa liczników i nie tworzy wiersza.
+- zwraca istniejące `lead_id` także przy `leads_enabled = false`, o ile podpis jest ważny;
+- nie zużywa limitu przyjęć ani limitu ośmiu prób;
+- nie dopisuje wiersza do `sales_lead_attempts`;
+- w `sales_lead_replay_state` tworzy albo zwiększa jeden licznik, najwyżej do 20;
+- po osiągnięciu 20 nie wykonuje dalszego zapisu, a wynik nadal jest `replay` z tym samym `lead_id`.
 
-Odcisk liczy server action: HMAC-SHA256 z sekretem `SALES_LEAD_FINGERPRINT_SECRET` i treścią `ip + '|' + userAgent`. Do funkcji trafia sam hex. Adres IP bierze się z `x-real-ip`, a gdy go nie ma, z `127.0.0.1`. Nie używać lewej strony `x-forwarded-for` podanej przez klienta. Sekret krótszy niż 32 znaki albo pusty oznacza odmowę przed RPC.
+Dziennik prób nie zawiera danych kontaktowych. Zła autoryzacja i wyłączona flaga nowego klucza nie dopisują próby. Błędne pola, konflikt klucza i odrzucenie przez limit przyjęć dopisują próbę tylko poniżej progu 8.
 
-Rozmiar: action odrzuca pole, zanim je zapisze, gdy surowy tekst przekracza limit kolumny. Nie obniżać globalnego `serverActions.bodySizeLimit` w `next.config.mjs`, bo ten sam proces przyjmuje pliki CV.
+Rozmiar: action odrzuca pole przed podpisem, gdy surowy tekst przekracza limit kolumny. Nie obniżać globalnego `serverActions.bodySizeLimit` w `next.config.mjs`, bo ten sam proces przyjmuje pliki CV.
 
-Niedostępna baza, wyłączona flaga albo brak sekretu dają komunikat odmowy i nie pokazują sukcesu. Wyjątek Postgresa jest mapowany na stały kod. Log serwera zawiera tylko nazwę zdarzenia: `sales_lead_accepted`, `sales_lead_rejected`, `sales_lead_rate_limited`, `sales_lead_unavailable`, `sales_lead_replay`. Bez imienia, e-maila, telefonu, firmy, treści i adresu IP.
+Niedostępna baza, brak sekretu, brak zaufanego IP albo wyłączona flaga nie pokazują sukcesu. Log serwera zawiera wyłącznie `result_code`: `sales_lead_accepted` mapowane z `accepted`, oraz `sales_lead_rejected`, `sales_lead_rate_limited`, `sales_lead_unavailable`, `sales_lead_replay`, `sales_lead_unauthorized`, `sales_lead_idempotency_conflict`. Bez imienia, e-maila, telefonu, firmy, treści, adresu IP i podpisu.
 
-Ryzyko resztkowe: ktoś wołający RPC bezpośrednio może zmieniać odcisk. Nadal wiążą go limit e-maila i limit globalny. Captcha i nowa zależność nie wchodzą do tych etapów.
+Captcha i nowa zależność poza `pg` w teście współbieżności nie wchodzą do tych etapów.
 
 ## 10. F. Konfiguracja i uruchomienie
 
-### Zmienne
-
 | Nazwa | Gdzie | Uwagi |
 |---|---|---|
-| `SALES_LEADS_ENABLED` | serwer Vercel, nie `NEXT_PUBLIC` | `true` albo `false`; brak traktować jak `false` |
-| `SALES_LEAD_FINGERPRINT_SECRET` | serwer Vercel | co najmniej 32 znaki; nie wkładać wartości do repozytorium |
-| `SALES_LEAD_NOTICE` | serwer Vercel | zatwierdzona treść od właściciela; pusta do czasu decyzji |
+| `SALES_LEADS_ENABLED` | serwer Vercel, nie `NEXT_PUBLIC` | steruje tylko action; brak oznacza wyłączenie |
+| `SALES_LEAD_REQUEST_SECRET` | serwer Vercel | co najmniej 32 bajty; ten sam ciąg co `request_secret_current` |
+| `SALES_LEAD_NOTICE` | serwer Vercel | treść od właściciela; pusta do czasu decyzji |
 
-Istniejące `NEXT_PUBLIC_SUPABASE_URL` i `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` wystarczą do wywołania RPC. Nie dodawać klucza `service_role`.
+Nie używać nazwy `SALES_LEAD_FINGERPRINT_SECRET`. Nie dodawać `service_role`.
 
 ### Kolejność
 
-1. Zmergować 006B. Uruchomić tylko `20261006000100_sales_leads.sql` raz, na docelowym Supabase, metodą już używaną dla nowych migracji. Nie uruchamiać starszych plików.
-2. Zmergować 006C i 006D przy `leads_enabled = false` i `SALES_LEADS_ENABLED` nieustawionym. Formularz odpowiada odmową.
-3. Właściciel podaje UUID swojego konta Auth i wykonuje SQL z sekcji 8.
-4. Właściciel zatwierdza tekst `SALES_LEAD_NOTICE` albo świadomie odkłada publikację.
-5. Ustawić sekret odcisku.
-6. Ustawić `SALES_LEADS_ENABLED=true` oraz `update private.sales_lead_settings set leads_enabled = true`.
-7. Sprawdzić jedno zgłoszenie testowe i odczyt operatorem. Potem usunięcie testu, jeśli będzie potrzebne, wymaga ręcznego wyłączenia triggera przez postgresa. API tego nie zrobi.
+1. Zmergować 006B. Uruchomić tylko `20261006000100_sales_leads.sql` raz. Nie uruchamiać starszych plików.
+2. Zmergować 006C i 006D przy `leads_enabled = false` i bez `SALES_LEADS_ENABLED=true`.
+3. Na jednorazowym Postgresie, nie na produkcji, wykonać test współbieżności z sekcji 12 i zachować wynik. Bez tego nie ustawiać `leads_enabled = true`.
+4. Właściciel wstawia własny UUID operatora SQL-em z sekcji 8.
+5. Właściciel zatwierdza `SALES_LEAD_NOTICE` albo świadomie odkłada publikację.
+6. Ustawia sekret w Vercel i w `request_secret_current`.
+7. Ustawia `SALES_LEADS_ENABLED=true` oraz `leads_enabled = true`.
+8. Sprawdza jedno zgłoszenie i odczyt operatorem. Sprzątanie tego wiersza robi `private.purge_sales_leads` jako postgres.
 
-Wyłączenie bez utraty danych: `SALES_LEADS_ENABLED=false` i `leads_enabled = false`. Wiersze zostają. Samo ukrycie przycisku nie wystarcza, bo RPC też sprawdza flagę w bazie.
-
-Aplikacja i baza muszą być zgodne. Sama zmienna środowiska nie otwiera zapisu, jeśli flaga w bazie jest fałszywa. Sama flaga w bazie nie otwiera formularza w interfejsie, jeśli zmienna środowiska nie jest `true`. Oba warunki są potrzebne. Bez sekretu odcisku action też odmawia.
+Wyłączenie bez utraty danych: `SALES_LEADS_ENABLED` inne niż `true` oraz `leads_enabled = false`. Wiersze zostają.
 
 ## 11. RPC, które 006B ma utworzyć
 
-Wszystkie publiczne funkcje: `language plpgsql`, `security definer`, `set search_path = ''`. Po definicji `revoke all ... from public` i grant tylko jak niżej.
+Publiczne funkcje: `language plpgsql`, `security definer`, `set search_path = ''`. Po definicji `revoke all ... from public`, potem tylko grant poniżej.
 
-### `public.submit_sales_lead(idempotency_key uuid, first_name text, company_name text, email text, phone text, needs text, fingerprint_hash text) returns uuid`
+### `public.submit_sales_lead(idempotency_key uuid, first_name text, company_name text, email text, phone text, needs text, source_ip text, issued_at_us bigint, request_signature text) returns table(lead_id uuid, result_code text)`
 
 Grant: `anon`, `authenticated`.
 
-Zwraca `id`. Komunikaty wyjątków są stałymi tokenami: `sales_lead_invalid`, `sales_lead_rate_limited`, `sales_lead_unavailable`, `sales_lead_idempotency_conflict`. Nie zawierają treści zgłoszenia.
-
 ### `public.list_sales_leads(result_limit integer) returns setof public.sales_leads`
 
-Grant: `authenticated`. Brak operatora: `sales_lead_forbidden`.
+Grant: `authenticated`. Brak operatora: wyjątek `sales_lead_forbidden`.
 
 ### `public.platform_operator_status() returns boolean`
 
-Grant: `authenticated`. Brak aktywnego uprawnienia albo puste `auth.uid()` zwraca `false`. Rola `anon` nie dostaje `execute`.
+Grant: `authenticated`. Brak uprawnienia albo puste `auth.uid()` zwraca `false`.
 
-### `public.grant_platform_operator(target_user uuid) returns void`
+### `public.grant_platform_operator(target_user uuid) returns text`
 
-### `public.revoke_platform_operator(target_user uuid) returns void`
+### `public.revoke_platform_operator(target_user uuid) returns text`
 
-Grant obu: `authenticated`. Wywołujący musi być aktywnym operatorem. Grant nie przyjmuje identyfikatora wywołującego.
+Grant obu: `authenticated`. Wynik to `ok`, `sales_lead_forbidden`, `sales_lead_last_operator` albo `sales_lead_invalid`. Obie zwracają `text`, nie `void`.
 
 ## 12. Testy przyszłej implementacji
 
-### Lokalnie, PGlite, bez sieci — 006B
+### Lokalnie, PGlite, jedna sesja — 006B
 
-- migracja przechodzi na istniejącym łańcuchu i jest dopisana do listy w `tests/database-types.test.mjs`;
-- `anon` i `authenticated` nie mają `select/insert/update/delete` na obu nowych tabelach publicznych;
-- bezpośredni `insert` i `select` na `sales_leads` kończą się odmową dla anonima, właściciela firmy, rekrutera i viewera;
-- przy `leads_enabled = true` poprawne wywołanie funkcji wstawia jeden wiersz i zwraca jego `id`;
-- pusty telefon staje się `null`, zły e-mail, za długi opis i puste imię nie tworzą wiersza;
-- ten sam klucz i ta sama treść zwracają to samo `id` i zostawiają jeden wiersz;
-- ten sam klucz i inny opis przerywają się, a pierwotny wiersz zostaje;
-- wywołanie nie tworzy `companies` ani `company_members` i nie ustawia `company_id`, bo takiej kolumny nie ma;
-- anonim ma `submitted_by null`; zalogowany użytkownik ma tam własne `auth.uid()` i nadal nie ma członkostwa z tego tytułu;
-- anonim nie może wywołać `list_sales_leads`;
+To nie jest dowód współbieżności. Sprawdza kontrakt sekwencyjnie:
+
+- migracja przechodzi na łańcuchu i jest w tablicy `tests/database-types.test.mjs`;
+- konstruktor PGlite w tym teście i w `tests/sales-leads-database.test.mjs` ładuje `@electric-sql/pglite/contrib/pgcrypto`, a migracja tworzy rozszerzenie w schemacie `extensions`;
+- jeden fixture kanoniczny daje ten sam hex w `lib/sales-lead-signature.ts` i w `extensions.hmac`;
+- `anon` i `authenticated` nie mają CRUD na obu tabelach publicznych;
+- bezpośredni `insert` i `select` kończą się odmową dla anonima, właściciela firmy, rekrutera i viewera;
+- ważny podpis i włączona flaga wstawiają jeden wiersz oraz zwracają jego `lead_id` z kodem `accepted`;
+- zły hex, zmienione pole, inny `auth.uid()` niż w podpisanym kontekście i przeterminowany `issued_at_us` dają `sales_lead_unauthorized`, zero zgłoszeń i zero prób;
+- brak sekretu daje `sales_lead_unavailable` i zero prób;
+- po ważnym podpisie zły e-mail daje `sales_lead_invalid`, jedną próbę `rejected` i zero zgłoszeń; w próbie nie ma treści kontaktu;
+- dziewiąta próba poniżej progu czasu zwraca `sales_lead_rate_limited` i nie dodaje dziewiątego wiersza;
+- ten sam klucz i te same pięć pól zwracają to samo `lead_id`, zostawiają jeden wiersz i nie zmieniają `submitted_by`;
+- ten sam klucz i inny opis dają konflikt, a pierwotny `submitted_by` zostaje;
+- po 20 ponowieniach nadal wraca to samo `lead_id`, a `replay_count` nie przekracza 20 i nie powstają kolejne wiersze dziennika;
+- wywołanie nie tworzy firmy ani członkostwa;
+- anonim ma `submitted_by null`; zalogowany ma własne `auth.uid()`;
+- `leads_enabled = false` odrzuca nowy klucz bez próby i nie kasuje starych wierszy; zgodne ponowienie nadal zwraca `lead_id`;
+- usunięcie autora z `auth.users` kończy się powodzeniem, zgłoszenie zostaje, `submitted_by` jest `null`, pozostałe kolumny bez zmian;
+- bezpośredni `update` i `delete` zgłoszenia są przerwane;
+- `purge_sales_leads` nie ma `execute` dla `anon` i `authenticated`, a wywołana jako właściciel bazy usuwa wskazany wiersz bez `disable trigger`;
+- anonim nie może wywołać listy;
 - właściciel firmy, rekruter i viewer dostają `sales_lead_forbidden`;
-- operator widzi zgłoszenie, a po `revoked_at` już nie;
-- operator nie odebrałby uprawnienia ostatniemu aktywnemu samemu sobie;
-- `grant_platform_operator` odrzuca UUID spoza `auth.users`;
-- limity e-maila, odcisku i progu globalnego działają wewnątrz funkcji;
-- `leads_enabled = false` odrzuca nowy klucz, nie tworzy zgłoszenia, nie dopisuje próby i nie kasuje starych wierszy;
-- przy wyłączonej fladze ten sam klucz i ta sama znormalizowana treść nadal zwracają istniejące `id` i dopisują attempt `replay`;
-- `update` i `delete` zgłoszenia są przerwane triggerem;
-- komunikat wyjątku nie zawiera treści `needs`.
+- operator widzi zgłoszenie, a po odebraniu już nie;
+- revoke ostatniego aktywnego operatora zwraca `sales_lead_last_operator`;
+- grant odrzuca UUID spoza `auth.users`;
+- kanoniczny tekst nie zawiera User-Agent, a dwa podpisy tego samego IP różnią się tylko wtedy, gdy różni się podpisana treść albo czas;
+- kod odmowy nie zawiera treści `needs`;
+- `npm run test:db` przechodzi po świadomym rozszerzeniu zamrożonego kontraktu.
 
-`npm run test:db` musi dalej przechodzić, bo zamrożony kontrakt tabel i sygnatur trzeba świadomie rozszerzyć. Nowy plik testu ma własny skrypt, dopisany do CI.
+### Współbieżność, osobny Postgres, przed publicznym włączeniem
+
+Nie uruchamiać tego na produkcji i nie uznawać sekwencyjnego PGlite za ten test. Skrypt `tests/sales-leads-concurrency.mjs` używa dwóch niezależnych połączeń pakietu `pg`. Bez `SALES_LEADS_TEST_DATABASE_URL` kończy się kodem 0 i jawnym komunikatem, że test został pominięty. CI nie uruchamia skryptu. Pominięcie nie jest PASS współbieżności.
+
+Środowisko: jednorazowa baza PostgreSQL zgodna z Supabase, z `pgcrypto` w schemacie `extensions`, po wykonaniu wyłącznie nowej migracji na tym środowisku. Dwa połączenia wołają RPC równocześnie, `Promise.all`, bez czekania w jednej sesji.
+
+Wymagany wynik przed `leads_enabled = true` na środowisku współdzielonym:
+
+- ten sam klucz i ta sama treść: jeden wiersz, oba wyniki mają to samo niepuste `lead_id`, kody to `accepted` i `replay`;
+- ten sam klucz i różny opis: jeden wiersz, jeden `accepted`, jeden `sales_lead_idempotency_conflict`, `submitted_by` pochodzi od pierwszego zapisu;
+- dziewięć równoczesnych nowych kluczy z jednego IP: nie więcej niż osiem prób i nie więcej niż pięć zgłoszeń;
+- cztery równoczesne przyjęcia tego samego e-maila z różnych IP: nie więcej niż trzy zgłoszenia;
+- trzydzieści jeden równoczesnych przyjęć różnych e-maili i IP: nie więcej niż trzydzieści zgłoszeń;
+- dwóch operatorów odbiera uprawnienie równocześnie jeden drugiemu: po obu transakcjach zostaje co najmniej jeden aktywny operator;
+- grant wywołany przez operatora odebranego równoległą transakcją nie dodaje nowego operatora, gdy sprawdzenie pod blokadą widzi już odebranie.
+
+006B oddaje skrypt i w raporcie pisze, że CI go nie wykonało. Wynik powyższej listy zapisuje się przy uruchomieniu przed publikacją, nie jako test 006B w CI.
 
 ### Lokalnie, HTTP, bez prawdziwej wysyłki — 006C i 006D
 
 - `GET /rozmowa` zwraca 200 i nie twierdzi, że termin jest zarezerwowany;
-- niepoprawny POST nie zawiera potwierdzenia zapisu;
-- gdy stub RPC zwróci błąd, odpowiedź nie zawiera „Zgłoszenie zostało zapisane”;
-- gdy stub zapisze i zwróci id, potwierdzenie jest;
-- ponowienie tego samego klucza i tej samej treści nie tworzy drugiego żądania insertu w stubie albo stub widzi ten sam klucz;
+- brak `x-real-ip` nie kończy się potwierdzeniem i action nie woła RPC;
+- ten sam IP i różny User-Agent nie tworzą dwóch odcisków w builderze podpisu;
+- niepoprawny POST i błąd RPC nie zawierają potwierdzenia zapisu;
+- stub z `lead_id` oraz `accepted` albo `replay` pokazuje potwierdzenie;
+- stub z `lead_id` przy innym kodzie nie pokazuje potwierdzenia;
 - anonimowe `GET /operator/leads` przekierowuje do `/login`;
 - zalogowany nie-operator dostaje 404;
 - `/`, `/demo`, `/login`, `/register`, `/forgot-password` zostają sprawne;
@@ -350,13 +530,13 @@ Grant obu: `authenticated`. Wywołujący musi być aktywnym operatorem. Grant ni
 
 Wzorzec stubu: `tests/auth-mail-http.test.mjs`. Nie wysyłać wiadomości i nie używać `test:live`.
 
-### Środowisko testowe właściciela, poza CI
+### Dwa konta właściciela
 
-Dopiero po migracji na projekcie testowym, nie produkcyjnym: dwa prawdziwe konta, właściciel firmy nie widzi `/operator/leads`, wskazany operator widzi własne zgłoszenie testowe. Ten projekt nie planuje takiego sprawdzenia jako warunku 006B.
+Dopiero po migracji na projekcie testowym, nie produkcyjnym: właściciel firmy nie widzi `/operator/leads`, wskazany operator widzi zgłoszenie. To nie jest warunek scalenia 006B.
 
 ## 13. Pliki zarezerwowane
 
-006B, i tylko 006B, ma ruszyć pliki wypisane w prompcie Cursora.
+006B rusza tylko pliki wypisane w promptcie Cursora. Są wśród nich helper podpisu, test PGlite, skrypt współbieżności i devDependency `pg`.
 
 006C, później:
 
@@ -364,7 +544,7 @@ Dopiero po migracji na projekcie testowym, nie produkcyjnym: dwa prawdziwe konta
 - `app/rozmowa/actions.ts`
 - `app/rozmowa/lead-form.tsx`
 - `app/rozmowa/rozmowa.module.css`
-- `lib/sales-lead.ts`
+- `lib/sales-lead-signature.ts` tylko przez import; nie zmieniać formatu kanonicznego
 - `app/components/marketing/home-page.tsx`
 - `app/components/marketing/demo-page.tsx`
 - `app/components/marketing/links.ts`
@@ -372,7 +552,7 @@ Dopiero po migracji na projekcie testowym, nie produkcyjnym: dwa prawdziwe konta
 - `app/components/marketing/mobile-nav.tsx`
 - `app/marketing.module.css` tylko jeśli odnośnik nie mieści się w istniejących klasach
 - `tests/sales-leads-http.test.mjs`
-- `package.json` i `.github/workflows/checks.yml` wyłącznie o nowy skrypt
+- `package.json` i `.github/workflows/checks.yml` wyłącznie o nowy skrypt HTTP
 - `.env.example` wyłącznie o nazwy zmiennych, bez wartości sekretu
 - `docs/sc-sales-006c-handoff.md`
 
@@ -390,20 +570,23 @@ Dopiero po migracji na projekcie testowym, nie produkcyjnym: dwa prawdziwe konta
 
 | Kwestia | Skutek |
 |---|---|
-| Brak UUID pierwszego operatora | Nie blokuje 006B, 006C ani 006D. Blokuje publiczne włączenie. Nie wolno go zgadywać. |
-| Brak zatwierdzonej informacji o przetwarzaniu danych | Nie blokuje kodu. Blokuje ustawienie `leads_enabled = true`. |
-| Brak sekretu odcisku | Nie blokuje kodu. Blokuje przyjęcie zgłoszenia, bo action ma wtedy odmówić. |
-| Brak powiadomienia e-mail o nowym zgłoszeniu | Świadomy brak. Właściciel czyta `/operator/leads`. Osobne zadanie, jeśli będzie potrzebne. Nie obiecywać czasu odpowiedzi. |
-| Captcha | Poza zakresem. Zostają limity z sekcji 9. |
-| Etapy sprzedaży i powiązanie z firmą | SC-SALES-013. Nie dodawać kolumny `company_id` teraz. |
+| Brak UUID pierwszego operatora | Nie blokuje kodu 006B–006D. Blokuje publiczne włączenie. Nie wolno go zgadywać. |
+| Brak zatwierdzonej informacji o przetwarzaniu danych | Nie blokuje kodu. Blokuje `leads_enabled = true`. |
+| Brak sekretu w Vercel albo w `request_secret_current` | Nie blokuje kodu. Blokuje przyjęcie zgłoszenia. |
+| Niewykonany test dwóch połączeń | Nie blokuje scalenia 006B. Blokuje `leads_enabled = true` na środowisku współdzielonym. |
+| Brak powiadomienia e-mail | Świadomy brak. Właściciel czyta `/operator/leads`. Nie obiecywać czasu odpowiedzi. |
+| Okres przechowywania treści zgłoszenia | Nieustalony. 48 godzin dotyczy wyłącznie technicznego dziennika prób. |
+| Captcha | Poza zakresem. Źródłem limitu jest adres wyliczony przez Vercel i objęty podpisem. |
+| Etapy sprzedaży i powiązanie z firmą | SC-SALES-013. Nie dodawać `company_id`. |
 
 ## 15. Decyzje podjęte w tym projekcie
 
 - Zgłoszenie jest osobnym bytem, bez tenanta i bez fikcyjnej firmy.
-- Zapis i limity są w funkcji bazy, a tabele nie mają grantów CRUD dla `anon` i `authenticated`.
-- Operator jest wierszem `platform_operators`, nadawanym poza profilem firmy.
-- Pierwszy operator powstaje ręcznym SQL, nie seedem migracji.
-- Publiczny formularz ma adres `/rozmowa` i znany tekst przycisku.
-- Potwierdzenie oznacza tylko zapis. Nie oznacza terminu.
-- Wyłączenie jest flagą w bazie i zmienną środowiska, bez usuwania wierszy.
-- Implementacja zaczyna się od 006B.
+- Bezpośrednie RPC musi przedstawić MAC wystawiony przez server action. Baza weryfikuje go `extensions.hmac`.
+- Odcisk jest HMAC zaufanego `x-real-ip`. User-Agent nie resetuje limitu. Brak adresu nie wpada do wspólnego `127.0.0.1`.
+- `SALES_LEADS_ENABLED` steruje tylko action. `leads_enabled` blokuje nowe klucze w bazie, także przy już wystawionym podpisie.
+- Odmowy biznesowe wracają jako `result_code` i commitują co najwyżej jedną próbę poniżej progu. Zła autoryzacja nie tworzy próby.
+- Limity są sprawdzane ponownie pod `pg_advisory_xact_lock` w stałej kolejności.
+- Ponowienie porównuje pięć pól, nie nadpisuje `submitted_by` i agreguje się do jednego wiersza o suficie 20.
+- Usunięcie konta odczepia autora przez wąski UPDATE. API nie może dowolnie zmieniać zgłoszenia. Sprzątanie testu jest funkcją, nie wyłączeniem triggera.
+- Implementacja zaczyna się od 006B dopiero po scaleniu tego dokumentu.

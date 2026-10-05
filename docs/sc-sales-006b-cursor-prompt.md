@@ -1,6 +1,6 @@
 # SC-SALES-006B — prompt implementacyjny
 
-Wklej treść od linii „ZADANIE” do nowej rozmowy Cursora w repozytorium `krzysztofsyska/skillcheck-core`, dopiero gdy `docs/sc-sales-006a-lead-architecture.md` jest na `main`. Nie wklejaj tego promptu do bieżącej rozmowy projektowej i nie zaczynaj 006C ani 006D w tym samym zadaniu.
+Wklej treść od linii „ZADANIE” do nowej rozmowy Cursora w repozytorium `krzysztofsyska/skillcheck-core`, dopiero gdy `docs/sc-sales-006a-lead-architecture.md` jest na `main` i review tej wersji jest zaakceptowane. Nie wklejaj tego promptu do rozmowy review i nie zaczynaj 006C ani 006D w tym samym zadaniu.
 
 ---
 
@@ -13,7 +13,7 @@ REPOZYTORIUM: krzysztofsyska/skillcheck-core
 PROJEKT: docs/sc-sales-006a-lead-architecture.md
 GAŁĄŹ: feat/sc-sales-006b-sales-leads
 
-Ten prompt jest wykonawczy. Nie projektuj innego modelu bezpieczeństwa. Jeśli pliku projektu nie ma na aktualnym `main`, przerwij i napisz, że 006A nie jest jeszcze zmergowane.
+Ten prompt jest wykonawczy. Nie projektuj innego modelu bezpieczeństwa. Jeśli pliku projektu nie ma na aktualnym `main`, przerwij i napisz, że 006A nie jest jeszcze zmergowane. Implementuj sekcje 6–11 projektu. Przy rozbieżności z tym promptem zatrzymaj się i opisz ją, zamiast wybierać starszą sygnaturę.
 
 ## Cel
 
@@ -25,86 +25,106 @@ Wyjdź z aktualnego `main`. Nie resetuj repozytorium. Ostatnia istniejąca migra
 
 `supabase/migrations/20261006000100_sales_leads.sql`
 
-Jeśli ten plik albo nowszy numer już istnieje, przerwij. Nie edytuj i nie uruchamiaj ponownie starszych migracji. Nie wykonuj migracji na zdalnym Supabase. Nie używaj `service_role`.
+Jeśli ten plik albo nowszy numer już istnieje, przerwij. Nie edytuj i nie uruchamiaj ponownie starszych migracji. Nie wykonuj migracji na zdalnym Supabase. Nie używaj `service_role`. Nie wstawiaj UUID operatora ani wartości sekretu.
 
 ## ALLOWED_FILES
 
 - `supabase/migrations/20261006000100_sales_leads.sql`
+- `lib/sales-lead-signature.ts`
 - `lib/supabase/database.types.ts`
 - `tests/database-types.contract.ts`
 - `tests/database-types.test.mjs`
 - `tests/sales-leads-database.test.mjs`
-- `package.json` — tylko skrypt `test:sales-leads`
-- `.github/workflows/checks.yml` — tylko uruchomienie `npm run test:sales-leads` obok `npm run test:db`
-- `docs/database.md` — dopisanie nowych tabel, RPC i faktu, że zgłoszenie nie ma `company_id`
+- `tests/sales-leads-concurrency.mjs`
+- `package.json` — skrypt `test:sales-leads`, skrypt `test:sales-leads-concurrency` oraz devDependency `pg` i nic poza tym
+- `.github/workflows/checks.yml` — tylko `npm run test:sales-leads` obok `npm run test:db`; nie dodawaj skryptu współbieżności do CI
+- `docs/database.md` — dopisanie nowych tabel, RPC, `pgcrypto` i faktu, że zgłoszenie nie ma `company_id`
 - `docs/BACKLOG.md` — status 006B na REVIEW, bez zmiany zakresu SC-001–SC-020 i bez zmiany znaczenia SC-006
 - `docs/sc-sales-006b-handoff.md`
 
-Poza tą listą nic nie zmieniaj. W szczególności nie twórz `app/rozmowa`, `app/operator`, zmian `proxy.ts`, marketingu, auth ani `.env`.
+Poza tą listą nic nie zmieniaj. W szczególności nie twórz `app/rozmowa`, `app/operator`, zmian `proxy.ts`, marketingu, auth ani `.env`. Nie edytuj testów, które mają własną, zamkniętą listę starszych migracji i nie wykonują nowego pliku.
 
 ## Kontrakt migracji
 
-Zaimplementuj sekcje 6–9 i 11 projektu.
+Zaimplementuj sekcje 6–9 i 11 projektu. Poniżej jest skrót, który nie zastępuje projektu. Nie zostawiaj sygnatury zwracającej samo `uuid`, argumentu `fingerprint_hash` ani `returns void` dla nadawania i odbierania operatora.
+
+Na początku migracji:
+
+```sql
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
+```
 
 Tabele:
 
 - `public.sales_leads` z kolumnami `id`, `idempotency_key`, `first_name`, `company_name`, `email`, `phone`, `needs`, `status`, `submitted_by`, `fingerprint_hash`, `created_at`.
+- `submitted_by` jest `uuid null` bez klucza obcego.
 - `public.platform_operators` z kolumnami `user_id`, `granted_at`, `granted_by`, `revoked_at`.
-- `private.sales_lead_settings` z jednym wierszem `leads_enabled = false`.
-- `private.sales_lead_attempts` bez danych kontaktowych.
+- `private.sales_lead_settings` z jednym wierszem: `leads_enabled = false`, oba sekrety `null`.
+- `private.sales_lead_attempts` bez danych kontaktowych; `result` tylko `accepted`, `rejected`, `rate_limited`.
+- `private.sales_lead_replay_state` z jednym wierszem na zgłoszenie i `replay_count` od 1 do 20.
 
-`sales_leads` nie ma `company_id`. `status` przyjmuje tylko `received`. Trigger `BEFORE UPDATE OR DELETE` przerywa zmianę tokenem `sales_lead_immutable`.
+`sales_leads` nie ma `company_id`. `status` przyjmuje tylko `received`. Trigger `BEFORE UPDATE OR DELETE` przerywa zmianę tokenem `sales_lead_immutable`, z dwoma wyjątkami opisanymi w projekcie: odczepienie autora i funkcja sprzątania wskazanych UUID. Nie używaj `ON DELETE SET NULL` na `submitted_by`. Nie wyłączaj triggera w funkcji sprzątania.
 
-Dla obu tabel publicznych: `enable row level security`, potem `revoke all` od `public`, `anon` i `authenticated`. Nie nadawaj im `select`, `insert`, `update` ani `delete`. To samo `revoke all` dla tabel w `private`. Nie nadawaj `anon` uprawnienia `usage` do schematu `private`.
-
-Nie wstawiaj żadnego UUID operatora.
+Dla obu tabel publicznych: `enable row level security`, potem `revoke all` od `public`, `anon` i `authenticated`. Nie nadawaj im CRUD. To samo `revoke all` dla nowych tabel w `private`. Nie nadawaj `anon` uprawnienia `usage` do schematu `private`. Nie odbieraj istniejącego `USAGE` roli `authenticated` na schemacie `private`.
 
 Funkcje publiczne, każda `security definer` i `set search_path = ''`:
 
-- `submit_sales_lead(idempotency_key uuid, first_name text, company_name text, email text, phone text, needs text, fingerprint_hash text) returns uuid`
+- `submit_sales_lead(idempotency_key uuid, first_name text, company_name text, email text, phone text, needs text, source_ip text, issued_at_us bigint, request_signature text) returns table(lead_id uuid, result_code text)`
   - `execute`: `anon`, `authenticated`
-  - normalizacja i limity dokładnie jak w projekcie: 1–80, 1–160, e-mail 3–254 i wzorzec z projektu, telefon `null` albo 5–32, opis 10–1000, odcisk 64 znaki hex
-  - `submitted_by` tylko z `auth.uid()`
-  - brak wiersza i flaga włączona: po limitach `INSERT` i nowe `id`
-  - brak wiersza i flaga wyłączona: `sales_lead_unavailable`, bez wiersza w `sales_leads` i bez wiersza w `sales_lead_attempts`
-  - ten sam klucz i ta sama znormalizowana treść zwracają istniejące `id` także przy wyłączonej fladze; dopisz attempt `replay` i nie zwiększaj liczników
+  - podpis, okno 120 sekund i 30 sekund, kanoniczny tekst, IP i kolejność walidacji dokładnie jak w sekcji 7 projektu
+  - `fingerprint_hash` liczy funkcja; nie przyjmuj go jako argumentu
+  - `submitted_by` tylko z `auth.uid()` przy INSERT
+  - kody biznesowe wracają jako wiersz, bez `RAISE`; wyjątek techniczny nie jest sukcesem
+  - zła autoryzacja i wyłączona flaga nowego klucza nie dopisują próby
+  - błędne pola po ważnym podpisie, konflikt i limit przyjęć dopisują co najwyżej jedną próbę, gdy prób w 10 minut jest mniej niż 8
+  - dziewiąta próba zwraca `sales_lead_rate_limited` i nie dodaje wiersza
+  - limity przyjęć: 5 na odcisk w 60 minut, 3 na e-mail w 24 godziny, 30 globalnie w 60 minut
+  - blokady `pg_advisory_xact_lock` w kolejności 6101, 6102, 6103, 6104; warunki są liczone ponownie pod blokadą
+  - zgodne ponowienie zwraca istniejące `lead_id` także przy wyłączonej fladze, nie zmienia `submitted_by` i nie zużywa limitu przyjęć
+  - agregacja ponowień ma sufit 20 i nie dopisuje dziennika prób
   - inna treść przy tym samym kluczu zwraca `sales_lead_idempotency_conflict` i nie zmienia wiersza
   - telefon: pusty tekst to `null`; inaczej 5–32 znaki zgodne z `^[0-9+().\-\s]{5,32}$`
-  - limity: 8 prób na odcisk w 10 minut, licząc attempty inne niż `replay`; 5 przyjęć na odcisk w 60 minut; 3 przyjęcia na znormalizowany e-mail w 24 godziny; 30 przyjęć globalnie w 60 minut
-  - tokeny błędów nie zawierają treści pól
+  - User-Agent nie występuje w argumentach, tekście kanonicznym ani odcisku
 - `list_sales_leads(result_limit integer) returns setof public.sales_leads`
   - `execute`: `authenticated`
-  - brak operatora: `sales_lead_forbidden`
+  - brak operatora: wyjątek `sales_lead_forbidden`
   - limit przycięty do 1–100, domyślnie 50, sortowanie `created_at desc, id desc`
 - `platform_operator_status() returns boolean`
   - `execute`: `authenticated`
   - brak aktywnego wiersza albo puste `auth.uid()` zwraca `false`
   - rola `anon` nie dostaje `execute`
-- `grant_platform_operator(target_user uuid) returns void`
-- `revoke_platform_operator(target_user uuid) returns void`
-  - oba tylko dla aktywnego operatora
+- `grant_platform_operator(target_user uuid) returns text`
+- `revoke_platform_operator(target_user uuid) returns text`
+  - obie najpierw biorą `pg_advisory_xact_lock(6105, 1)` i ponownie sprawdzają wywołującego pod blokadą
   - grant wymaga istniejącego `auth.users`
-  - revoke ostatniego aktywnego operatora na nim samym zwraca `sales_lead_last_operator`
+  - revoke nie zostawia zera aktywnych operatorów i zwraca wtedy `sales_lead_last_operator`
+  - kody: `ok`, `sales_lead_forbidden`, `sales_lead_last_operator`, `sales_lead_invalid`
 
-`private.is_platform_operator(uuid)` jest `security definer` z `search_path = ''`. Po `revoke all` nadaj `execute` tylko roli `authenticated`, tak jak przy `private.is_company_owner`. Nie nadawaj jej `anon` i nie dodawaj schematu `private` do wystawionego API. Po każdej funkcji publicznej: `revoke all ... from public`, potem tylko wskazany grant.
+`private.is_platform_operator(uuid)`, `private.detach_sales_lead_author(uuid)`, `private.purge_expired_sales_lead_attempts()` i `private.purge_sales_leads(uuid[])` są `security definer` z `search_path = ''`. Po `revoke all` funkcja operatora dostaje `execute` tylko dla `authenticated`. Funkcje sprzątania i odczepienia nie dostają grantu dla `anon` ani `authenticated`. Trigger `AFTER DELETE` na `auth.users` woła odczepienie autora. Po każdej funkcji publicznej: `revoke all ... from public`, potem tylko wskazany grant.
+
+Helper `lib/sales-lead-signature.ts` składa ten sam kanoniczny tekst i HMAC co baza. Nie woła sieci i nie czyta zmiennych środowiska. Test porównuje jeden fixture z `extensions.hmac`.
 
 ## Typy
 
-W `lib/supabase/database.types.ts` dopisz obie tabele publiczne i pięć RPC. Bezpośredni `Insert` i `Update` dla `sales_leads` oraz `platform_operators` ustaw jako niedostępne, tak jak przy obiektach zapisywanych tylko przez RPC. Rozszerz zamrożenie w `tests/database-types.contract.ts` i mapę kolumn oraz sygnatur w `tests/database-types.test.mjs`. Nowa migracja musi wejść do tablicy `migrations` tego testu.
+W `lib/supabase/database.types.ts` dopisz obie tabele publiczne i RPC. Bezpośredni `Insert` i `Update` dla `sales_leads` oraz `platform_operators` ustaw jako niedostępne. `submit_sales_lead` zwraca `lead_id` i `result_code`. Grant i revoke zwracają `text`. Rozszerz zamrożenie w `tests/database-types.contract.ts` i mapę kolumn oraz sygnatur w `tests/database-types.test.mjs`. Nowa migracja musi wejść do tablicy `migrations` tego testu. Konstruktor PGlite w tym teście musi załadować `@electric-sql/pglite/contrib/pgcrypto` przed wykonaniem migracji, bo zwykłe `new PGlite()` nie ma rozszerzenia.
 
 ## Testy
 
-Utwórz `tests/sales-leads-database.test.mjs` na wzór PGlite z `tests/database.test.mjs`: role `anon` i `authenticated`, schemat `auth`, `auth.uid()`.
+Utwórz `tests/sales-leads-database.test.mjs` na wzór PGlite z `tests/database.test.mjs`: role `anon` i `authenticated`, schemat `auth`, `auth.uid()`, oraz contrib `pgcrypto`.
 
-Pokryj każdą kontrolę lokalną z sekcji 12 projektu. Test włącza `leads_enabled` samodzielnie, jako właściciel bazy, i przywraca wyłączenie tam, gdzie sprawdza odmowę. Nie łącz się ze zdalnym Supabase. Nie wysyłaj wiadomości. Nie uruchamiaj `test:live`.
+Pokryj każdą kontrolę lokalną z sekcji 12 projektu, łącznie z usunięciem autora i sprzątaniem przez funkcję. Test włącza `leads_enabled` i sekret samodzielnie, jako właściciel bazy. Nie łącz się ze zdalnym Supabase. Nie wysyłaj wiadomości. Nie uruchamiaj `test:live`. W raporcie nie nazywaj tych testów dowodem współbieżności.
 
-Skrypt:
+Utwórz `tests/sales-leads-concurrency.mjs` według sekcji 12. Bez `SALES_LEADS_TEST_DATABASE_URL` skrypt kończy się kodem 0 i komunikatem, że został pominięty. Nie dodawaj go do CI. Nie uruchamiaj go na zdalnej bazie projektu. W handoff napisz wprost, że CI go nie wykonało i że to nie jest PASS współbieżności.
+
+Skrypty:
 
 ```json
 "test:sales-leads": "node --test tests/sales-leads-database.test.mjs"
+"test:sales-leads-concurrency": "node tests/sales-leads-concurrency.mjs"
 ```
 
-W CI uruchom go bezpośrednio po `npm run test:db`.
+W CI uruchom tylko `npm run test:sales-leads`, bezpośrednio po `npm run test:db`.
 
 Uruchom na Node 24:
 
@@ -113,18 +133,23 @@ Uruchom na Node 24:
 - `npm run test:sales-leads`
 - `npm run build`
 
+`npm run test:sales-leads-concurrency` bez adresu bazy ma pokazać pominięcie. Nie traktuj pominięcia jako zaliczenia wyścigu.
+
 ## Odbiór
 
-1. Poprawne wywołanie funkcji zapisuje jeden wiersz i zwraca jego `id`.
-2. Złe i zbyt długie dane nie tworzą wiersza.
-3. Ponowienie zgodne z kontraktem nie tworzy drugiego wiersza, a konflikt nie nadpisuje pierwszego.
-4. Anonim, właściciel firmy, rekruter i viewer nie odczytują tabeli ani listy.
-5. Operator odczytuje listę, odebrany operator już nie.
-6. Bezpośredni `insert` i `select` przez role API kończą się odmową.
-7. Limity działają w funkcji, nie w interfejsie.
-8. Wyłączona flaga nie kasuje zapisanych wierszy.
-9. Nie powstała firma, członkostwo ani powiązanie po domenie e-maila.
-10. Diff zawiera tylko ALLOWED_FILES.
+1. Ważny podpis zapisuje jeden wiersz i zwraca jego `lead_id` z kodem `accepted`.
+2. Zły podpis, zły kontekst użytkownika i przeterminowany czas nie tworzą wiersza ani próby.
+3. Złe pola po ważnym podpisie nie tworzą zgłoszenia, a odmowa zostaje w dzienniku prób po zakończeniu funkcji.
+4. Dziewiąta próba nie wydłuża dziennika.
+5. Ponowienie zgodne z kontraktem nie tworzy drugiego zgłoszenia, nie nadpisuje `submitted_by` i nie rośnie bez limitu.
+6. Konflikt nie nadpisuje pierwszego wiersza.
+7. Anonim, właściciel firmy, rekruter i viewer nie odczytują tabeli ani listy.
+8. Operator odczytuje listę, odebrany operator już nie.
+9. Bezpośredni `insert` i `select` przez role API kończą się odmową.
+10. Wyłączona flaga bazy blokuje nowy klucz także przy ważnym podpisie i nie kasuje zapisanych wierszy.
+11. Usunięcie autora nie jest blokowane przez trigger, a bezpośrednia edycja zgłoszenia jest.
+12. Diff zawiera tylko ALLOWED_FILES.
+13. Test dwóch połączeń jest dostarczony, oznaczony jako niewykonany w CI i nie jest raportowany jako PASS.
 
 ## Raport
 
@@ -141,4 +166,4 @@ WYKONANE KONTROLE
 ODCHYLENIA OD PROJEKTU
 NEXT ACTION
 
-Nie rób merge i nie wdrażaj. Nie zaczynaj 006C ani 006D. Następny krok po review to osobny prompt formularza `/rozmowa`, zgodny z sekcją 13 projektu.
+Nie rób merge i nie wdrażaj. Nie zaczynaj 006C ani 006D. Następny krok po review to osobny prompt formularza `/rozmowa`, zgodny z sekcją 13 projektu. Publiczne `leads_enabled = true` czeka na wynik testu współbieżności z sekcji 12.
