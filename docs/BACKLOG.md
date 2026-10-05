@@ -50,3 +50,11 @@ Po zaakceptowaniu SC-003 można rozbić implementację na niezależne podtaski.
 
 ## Zasada priorytetu
 Najpierw domknąć PRESELEKCJĘ jako pierwszy płatny end-to-end produkt. Voice, AC, QoH, billing i white-label są kolejnymi warstwami, nie mogą blokować SC-003—SC-009.
+
+## Prezentacja oferty
+
+| ID | Zadanie | Level | Owner | Reviewer | Depends on | Status |
+|---|---|---:|---|---|---|---|
+| SC-SALES-004A | Publiczna strona `/` i demonstracyjny przykład `/demo` | L2 | Cursor | Codex | — | REVIEW |
+
+SC-SALES-004A obejmuje stronę oferty i publiczne demo bez logowania. Poza zakresem pozostają płatności, pakiety jako zakup, zamówienia i uruchamianie analiz. Istniejące zadania SC-001–SC-020 nie zmieniają tu zakresu ani statusu.
