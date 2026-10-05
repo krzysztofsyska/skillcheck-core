@@ -43,8 +43,12 @@ RLS, schema/migracje, bezpieczeństwo, pseudonimizacja, AI scoring, voicebot, bi
 Projekt: Codex. Implementacja: Cursor lub Codex zależnie od planu. Review: Codex.
 
 ## Statusy
-BACKLOG -> READY -> IN PROGRESS -> REVIEW -> TEST -> READY TO MERGE -> DONE
+BACKLOG -> READY -> BUILDING -> PR_REVIEW -> FIXING -> READY_FOR_OWNER -> ACCEPTED -> READY_FOR_PROD -> DEPLOYING -> DONE
 Dodatkowo: BLOCKED.
+
+Właściciel podejmuje tylko dwa checkpointy:
+- OWNER ACCEPTANCE — zgoda na scalenie gotowego tasku do `integration`,
+- PRODUCTION APPROVAL — osobna zgoda na promocję `integration -> main` i produkcyjny runbook.
 
 ## Zasady równoległości
 Taski mogą iść równolegle tylko gdy:
@@ -54,18 +58,26 @@ Taski mogą iść równolegle tylko gdy:
 - zależności są oznaczone jako DONE.
 
 ## Branching
-Format: `feat/sc-XXX-short-name`, `fix/sc-XXX-short-name`, `chore/sc-XXX-short-name`.
-Bez bezpośrednich zmian funkcjonalnych na `main`.
+- `main` = źródło produkcji.
+- `integration` = zaakceptowane zmiany oczekujące na zgodę produkcyjną.
+- Nowe task branches powstają z `integration`.
+- Normalne PR-y tasków targetują `integration`.
+- Do `main` może targetować tylko promotion PR `integration -> main` po PRODUCTION APPROVAL.
+- Format task branch: `feat/sc-XXX-short-name`, `fix/sc-XXX-short-name`, `chore/sc-XXX-short-name`.
+- PR-y otwarte przed wdrożeniem SC-OPS-001 mogą dokończyć dotychczasowy base; nowych tasków nie rozpoczynać według starego modelu.
 
 ## Handoff
-Każdy agent kończy pracę blokiem:
+Każdy agent kończy pracę blokiem zapisanym w GitHub PR/Issue, nie przekazywanym ręcznie przez właściciela:
 - TASK
+- STATUS
 - BRANCH
 - COMMIT
 - CHANGED FILES
 - DB/MIGRATIONS
 - TESTS
+- SECURITY CHECKS
 - KNOWN ISSUES
+- BLOCKERS
 - NEXT ACTION
 
 ## Kontynuacja po raporcie — ustalenie właściciela z 2026-10-05
@@ -85,3 +97,15 @@ Każdy agent kończy pracę blokiem:
 - nie generować automatycznej decyzji „zatrudnij/odrzuć”,
 - każda zmiana RLS = L3,
 - każda zmiana kontraktu AI = co najmniej L2, zwykle L3.
+
+
+## Agent-to-agent przez GitHub
+
+- ChatGPT/Orchestrator przekazuje zadanie przez GitHub Issue.
+- Cursor zapisuje implementację, wyniki testów i handoff w PR.
+- Codex/Reviewer zapisuje verdict i uwagi w PR.
+- Cursor poprawia uwagi w tym samym branchu.
+- Orchestrator odczytuje GitHub i pyta właściciela dopiero przy OWNER ACCEPTANCE.
+- Po akceptacji task trafia do `integration`.
+- Osobny promotion PR i osobna zgoda właściciela poprzedzają produkcję.
+- Szczegóły: [AGENT_PIPELINE.md](AGENT_PIPELINE.md).
