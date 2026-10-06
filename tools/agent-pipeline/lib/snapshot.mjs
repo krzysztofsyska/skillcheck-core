@@ -12,8 +12,11 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   for (const issue of issues) {
     const contract = parseContract(issue.body ?? '');
     if (!contract.task_id) continue;
-    seen.add(contract.task_id);
     const record = records[contract.task_id] ?? null;
+    if (record && record.issue_number !== issue.number) continue;
+    if (seen.has(contract.task_id)) continue;
+    if (!record && ![policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(issue.user?.id ?? issue.authorId)) continue;
+    seen.add(contract.task_id);
     items.push({ record, observation: observe({ policy, policySha, now, secrets, prompts, snapshot, issue, record, pulls, integrationSha, mainSha }) });
   }
   for (const [taskId, record] of Object.entries(records)) {
@@ -30,7 +33,7 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   const terminal = items.filter(i => i.record && ['ACCEPTED', 'DONE', 'BLOCKED'].includes(i.record.state));
   const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId))));
   // One active task per repository. Terminal records still reconcile their outbox.
-  const selected = active.length ? active : fresh.length ? [fresh[0]] : terminal.filter(i => i.record.binding?.pending_notification);
+  const selected = active.length ? active : fresh.length ? [fresh[0]] : terminal.filter(i => (['BLOCKED', 'DONE'].includes(i.record.state) && i.record.binding?.last_notified_state !== i.record.state) || i.record.binding?.pending_notification || i.record.binding?.stale_approvals?.some(a => !a.cancelled && a.cancel_attempts < 3));
   return { items: selected, integrationSha, mainSha, read: snapshot.read ?? 'github' };
 }
 
@@ -38,7 +41,8 @@ function observe({ policy, policySha, now, secrets, prompts, snapshot, issue, re
   const taskId = record?.task_id ?? parseContract(issue?.body ?? '').task_id;
   const branchName = record?.binding?.branch ?? null;
   const branch = branchName ? snapshot.branches?.[branchName] ?? null : null;
-  const pull = pulls.find(item => matchesPull(item, record, taskId)) ?? null;
+  const matched = pulls.filter(item => matchesPull(item, record, taskId, policy));
+  const pull = matched.length === 1 ? matched[0] : null;
   const agentId = record?.cursor_agent_id ?? null;
   const evidence = (taskId && snapshot.evidence?.[taskId]) || (record?.head_sha && snapshot.evidence?.[record.head_sha]) || {};
   const approval = record?.approval_request_id ? snapshot.approvals?.[record.approval_request_id] ?? null : null;
@@ -82,8 +86,10 @@ function observe({ policy, policySha, now, secrets, prompts, snapshot, issue, re
   };
 }
 
-function matchesPull(pull, record, taskId) {
+function matchesPull(pull, record, taskId, policy) {
   if (record?.pr_number && pull.number === record.pr_number) return true;
+  if (pull.authorId !== policy.controller_actor_id) return false;
+  if (record?.binding?.lane === 'promotion' && !record.pr_number && pull.headRef === 'integration' && pull.baseRef === 'main' && pull.headRepositoryId === record.repository_id && pull.baseRepositoryId === record.repository_id && String(pull.body ?? '').includes(`skillcheck-task:${taskId}`)) return true;
   if (record?.binding?.branch && pull.headRef === record.binding.branch && pull.baseRef === 'integration' && pull.headRepositoryId === record.repository_id && pull.baseRepositoryId === record.repository_id && String(pull.body ?? '').includes(`skillcheck-task:${taskId}`)) return true;
   return false;
 }
@@ -93,6 +99,7 @@ export function normalizePull(pull) {
   if (pull.headRef && pull.baseRef) return pull;
   return {
     number: pull.number,
+    authorId: pull.user?.id ?? null,
     headRef: pull.head?.ref ?? null,
     baseRef: pull.base?.ref ?? null,
     headSha: pull.head?.sha ?? null,

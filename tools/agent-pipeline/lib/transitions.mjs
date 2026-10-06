@@ -13,12 +13,29 @@ const ACTIVE_RUN = new Set(['CREATING', 'RUNNING']);
 const TERMINAL_RUN = new Set(['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED']);
 
 export function plan(record, obs) {
+  const decision = planNext(record, obs);
+  const old = record?.binding?.approval;
+  if (old && decision.record && (decision.record.state === 'BLOCKED' || decision.record.binding.approval?.request_id !== old.request_id)) {
+    const next = structuredClone(decision.record);
+    const pending = next.binding.stale_approvals ?? [];
+    if (!pending.some(item => item.request_id === old.request_id)) pending.push({ ...structuredClone(old), policy_sha: record.policy_sha, cancel_attempts: 0 });
+    next.binding.stale_approvals = pending;
+    decision.record = next;
+    if (decision.preEffectRecord) decision.preEffectRecord = next;
+  }
+  return decision;
+}
+
+function planNext(record, obs) {
   if (obs.kind === 'promotion' || record?.binding?.lane === 'promotion') return planPromotion(record, obs);
   if (!record || record.state === 'BACKLOG') return openTask(obs);
   if (record.state === 'BLOCKED') return resumeOrHold(record, obs);
   if (record.state === 'ACCEPTED' || record.state === 'DONE') return done(record);
   if (record.binding?.merge?.phase === 'awaiting_confirmation') return confirmMerge(record, obs);
+  if (!obs.issue || obs.issue.number !== record.issue_number) return done(block(record, 'TASK_ISSUE_MISSING', obs.now));
   if (contractDrift(record, obs)) return done(block(record, 'CONTRACT_EDITED', obs.now));
+  if (obs.github.branch && (obs.github.fork || obs.github.branch.repositoryId !== record.repository_id || obs.github.branch.name !== record.binding.branch)) return done(block(record, 'REF_FORBIDDEN', obs.now));
+  if (obs.github.branch && filesOutside(obs.github.branch.files ?? [], record.binding.allowed_files).length) return done(block(record, 'SCOPE_VIOLATION', obs.now));
   const drifted = shaDrift(record, obs);
   if (drifted) return drifted;
   if (record.technical_state === 'DISPATCH_PENDING') return dispatchStep(record, obs);
@@ -38,6 +55,11 @@ function planPromotion(record, obs) {
   if (record.binding?.merge?.phase === 'awaiting_confirmation') return confirmMerge(record, obs);
   if (['MERGED_AWAITING_DEPLOYMENT', 'DONE'].includes(record.state)) return productionStep(record, obs);
   if (obs.github.pull && (obs.github.pull.headSha !== record.head_sha || obs.github.pull.baseSha !== record.base_sha || obs.policySha !== record.policy_sha)) return done(block(record, 'PROMOTION_MANIFEST_STALE', obs.now));
+  if (!record.pr_number) {
+    const pull = obs.github.pull;
+    if (!pull || pull.authorId !== obs.policy.controller_actor_id || pull.headRef !== 'integration' || pull.baseRef !== 'main' || pull.headRepositoryId !== record.repository_id || pull.baseRepositoryId !== record.repository_id || !String(pull.body ?? '').includes(`skillcheck-task:${record.task_id}`)) return done(block(record, 'PROMOTION_PR_UNKNOWN', obs.now));
+    return done(touch(record, obs.now, { pr_number: pull.number }));
+  }
   if (record.state === 'PR_REVIEW') return reviewStep(record, obs);
   const live = promotionLive(record, obs);
   if (record.binding.approval && !approvalStillCurrent(record.binding.approval, live)) {
@@ -188,7 +210,7 @@ function armGateB(record, obs) {
     secretNames: record.binding.promotion?.secret_names ?? [],
   });
   const next = touch(record, obs.now, { state: 'READY_FOR_PROD', technical_state: null, blocked_reason: null });
-  next.approval_request_id = sha256({ gate: 'B', canonical });
+  next.approval_request_id = sha256({ gate: 'B', canonical, revision: next.state_revision });
   next.binding.approval = {
     gate: 'B',
     phase: 'intent',
@@ -241,7 +263,7 @@ function dispatchStep(record, obs) {
   }
   if (dispatch.phase === 'awaiting_confirmation') {
     const effect = dispatch.action === 'create'
-      ? { type: 'cursor.get', agentId: record.cursor_agent_id, external: true }
+      ? { type: 'cursor.get', agentId: record.cursor_agent_id, branch: record.binding.branch, external: true }
       : { type: 'cursor.listRuns', agentId: record.cursor_agent_id, knownRunIds: [...record.binding.known_run_ids], marker: dispatch.marker, external: true };
     return { record, preEffectRecord: record, effects: [effect], journal: journalFor(record, 'confirm-dispatch') };
   }
@@ -403,8 +425,7 @@ function reviewStep(record, obs) {
       rejected.binding.evidence = { ci, review };
       rejected.binding.last_evidence_signature = signature;
       rejected.binding.reports.push({ kind: 'EVIDENCE_REJECTED', ci: ci.reason ?? null, review: review.reason ?? null, at: obs.now });
-      rejected.state = 'PR_REVIEW';
-      return done(rejected);
+      return done(block(rejected, 'EVIDENCE_REJECTED', obs.now));
     }
   }
   const next = touch(record, obs.now);
@@ -424,6 +445,7 @@ function reviewStep(record, obs) {
     next.technical_state = null;
     return record.binding.lane === 'promotion' ? armGateB(next, obs) : armGateA(next, obs);
   }
+  if (record.binding.lane === 'promotion') return done(block(next, 'PROMOTION_REVIEW_FAILED', obs.now));
   const repairable = review.ok && (review.fixes || review.fail || !ci.pass);
   if (!repairable) return done(next);
   return beginRepair(next, obs, review.payload.findings ?? []);
@@ -477,7 +499,7 @@ function armGateA(record, obs) {
     files: obs.github.branch?.files ?? [],
   });
   const next = touch(record, obs.now, { state: 'READY_FOR_OWNER' });
-  next.approval_request_id = sha256({ gate: 'A', canonical });
+  next.approval_request_id = sha256({ gate: 'A', canonical, revision: next.state_revision });
   next.binding.approval = {
     gate: 'A',
     phase: 'intent',
@@ -670,9 +692,9 @@ function foldCursorCreate(record, effect, result, now) {
   const status = result?.error?.status ?? result?.status ?? null;
   if (status === 401 || status === 403) return block(record, 'BLOCKED_CONFIGURATION', now);
   if (status === 409 || result?.conflict) {
-    const agent = result.agent ?? result.error?.payload?.agent ?? null;
-    if (agent?.id === record.cursor_agent_id) return settleCreate(record, { agent, run: result.run ?? { id: agent.latestRunId } }, now);
-    return block(record, 'DISPATCH_UNKNOWN', now, 'DISPATCH_UNKNOWN');
+    const next = touch(record, now, { technical_state: 'DISPATCH_PENDING' });
+    next.binding.dispatch.phase = 'awaiting_confirmation';
+    return next;
   }
   if (effect.type === 'cursor.get' && (result?.notFound || status === 404)) {
     const next = touch(record, now);
@@ -825,7 +847,7 @@ function cursorBusy(obs) {
 
 function findTaskPull(obs, record) {
   const pulls = obs.github.pulls ?? (obs.github.pull ? [obs.github.pull] : []);
-  return pulls.find(pull => pull.headRef === record.binding.branch && pull.baseRef === 'integration' && pull.headRepositoryId === record.repository_id && pull.baseRepositoryId === record.repository_id && String(pull.body ?? '').includes(`skillcheck-task:${record.task_id}`)) ?? null;
+  return pulls.find(pull => pull.authorId === obs.policy.controller_actor_id && pull.headRef === record.binding.branch && pull.baseRef === 'integration' && pull.headRepositoryId === record.repository_id && pull.baseRepositoryId === record.repository_id && String(pull.body ?? '').includes(`skillcheck-task:${record.task_id}`)) ?? null;
 }
 
 function promotionLive(record, obs) {

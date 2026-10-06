@@ -1,5 +1,5 @@
 import { preparePromotion } from './promotion.mjs';
-import { guardedMerge, publishEvidence, drainOutbox } from './live-effects.mjs';
+import { guardedMerge, publishEvidence, drainOutbox, cancelStaleApprovals } from './live-effects.mjs';
 import { readEvidence, readApprovals } from './evidence.mjs';
 import { randomUUID } from 'node:crypto';
 import { createLiveJournal } from './live-journal.mjs';
@@ -68,6 +68,7 @@ export async function reconcile({
     };
     const result = await tickImpl({ record: item.record ?? null, observation, journal, ports });
     if (flags.enabled && ports.github && result.record) {
+      result.record = await cancelStaleApprovals({ github: ports.github, journal, policy, record: result.record, now });
       await publishEvidence(ports.github, policy, result.record, { ci: observation.github.ci, review: observation.github.review });
       result.record = await drainOutbox({ github: ports.github, journal, policy, record: result.record, now });
     }
@@ -161,6 +162,11 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
   if (github.readRepository && (await github.readRepository()).id !== policy.repository_id) throw new Error('REPOSITORY_MISMATCH');
   const records = projection.tasks ?? {};
   for (const record of Object.values(records)) {
+    if (record.binding?.lane !== 'promotion' && record.issue_number && github.readIssue) {
+      const issue = await github.readIssue(record.issue_number);
+      const index = issues.findIndex(item => item.number === issue.number);
+      if (index < 0) issues.push(issue); else issues[index] = issue;
+    }
     if (record.pr_number && github.readPull) { const pull = await github.readPull(record.pr_number); const old = pulls.findIndex(p => p.number === pull.number); if (old < 0) pulls.push(pull); else pulls[old] = pull; }
   }
   const branches = {};
@@ -269,7 +275,14 @@ export async function defaultPorts(env, policy, configuration, flags) {
         await github.createBranch(effect.branch, effect.baseSha);
         return normalizeCursorCreate(await cursor.createAgent(effect.payload));
       }
-      if (effect.type === 'cursor.get') return normalizeCursorCreate(await cursor.getAgent(effect.agentId));
+      if (effect.type === 'cursor.get') {
+        const raw = await cursor.getAgent(effect.agentId);
+        const agent = raw?.agent ?? raw;
+        if (agent?.id !== effect.agentId || agent.workOnCurrentBranch !== true || agent.autoCreatePR !== false
+            || agent.repos?.length !== 1 || agent.repos[0].url !== policy.repository_url
+            || agent.repos[0].startingRef !== effect.branch || agent.repos[0].prUrl) throw new Error('CURSOR_IDENTITY_MISMATCH');
+        return normalizeCursorCreate(raw);
+      }
       if (effect.type === 'cursor.followup') return normalizeCursorRun(await cursor.createRun(effect.agentId, effect.payload));
       if (effect.type === 'cursor.listRuns') return cursor.listRuns(effect.agentId);
       if (effect.type === 'github.createPr') return github.createPull({ head: effect.head, base: effect.base, title: effect.taskId, body: `${effect.marker}\nTASK: ${effect.taskId}\nSCOPE: ${effect.scope || 'OPERATIONS'}\nLEVEL: ${effect.level || 'L3'}\nOWNER_APPROVAL: PENDING\nPRODUCTION_APPROVAL: PENDING\nREVIEW_VERDICT: PENDING\nPROMOTION: ${effect.base === 'main' ? 'YES' : 'NO'}` });

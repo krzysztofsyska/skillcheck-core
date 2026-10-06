@@ -1,8 +1,9 @@
+import { filesOutside } from './scope.mjs';
 import { requiredReviewChecks } from './transitions.mjs';
 import { sha256 } from './canonical.mjs';
 import { evaluatePreflight, decideMerge } from './merge.mjs';
 import { evaluateApproval, approvalStillCurrent } from './approval.mjs';
-import { readEvidence, readApprovals } from './evidence.mjs';
+import { findRun, readEvidence, readApprovals } from './evidence.mjs';
 import { validateCi } from './ci.mjs';
 import { validateReview } from './review.mjs';
 import { parseContract } from './contract.mjs';
@@ -52,6 +53,8 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   if (effect.gate === 'A') {
     const issue = await github.readIssue(record.issue_number);
     if (parseContract(issue.body).hash !== record.contract_hash) throw new Error('CONTRACT_EDITED');
+    const files = await github.readChangedFiles(record.base_sha, pull.head.sha);
+    if (pull.head.ref !== record.binding.branch || filesOutside(files, record.binding.allowed_files).length) throw new Error('SCOPE_VIOLATION');
   }
   const pair = evidence[record.task_id];
   const checked = validatePair(record, pair, policy);
@@ -86,7 +89,7 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
 export async function drainOutbox({ github, journal, policy, record, now }) {
   const kinds = ['READY_FOR_OWNER', 'READY_FOR_PROD', 'BLOCKED', 'DONE'];
   let pending = record.binding.pending_notification;
-  if (!pending && kinds.includes(record.state) && record.binding.last_notified_state !== record.state) {
+  if (kinds.includes(record.state) && record.binding.last_notified_state !== record.state && (!pending || pending.kind !== record.state)) {
     const next = touch(record, now);
     next.binding.pending_notification = buildNotification({ taskId: record.task_id, stateRevision: record.state_revision,
       recipient: policy.notification_recipient, kind: record.state, headSha: record.head_sha, baseSha: record.base_sha,
@@ -95,7 +98,7 @@ export async function drainOutbox({ github, journal, policy, record, now }) {
   }
   if (!pending || !record.issue_number || (pending.retry_at && Date.parse(pending.retry_at) > Date.parse(now))) return record;
   if (pending.kind.startsWith('READY_') && !record.binding.approval?.run_id) return record;
-  const runUrl = record.binding.approval?.run_id ? `${policy.repository_url}/actions/runs/${record.binding.approval.run_id}` : null;
+  const runUrl = pending.kind.startsWith('READY_') && record.binding.approval?.run_id ? `${policy.repository_url}/actions/runs/${record.binding.approval.run_id}` : null;
   const comments = await github.readComments(record.issue_number);
   const marker = `skillcheck-report:${record.task_id}`;
   const matches = comments.filter(c => c.user?.id === policy.controller_actor_id && c.body?.includes(marker));
@@ -124,4 +127,25 @@ export async function drainOutbox({ github, journal, policy, record, now }) {
   }
   const next = touch(record, now); next.binding.pending_notification = null; next.binding.last_notified_state = pending.kind;
   await journal.save(next, { action: 'outbox-delivered' }, record); return next;
+}
+
+// Old approval is already invalidated in the journal. Cancellation is a separate,
+// bounded cleanup operation and never restores authorization.
+export async function cancelStaleApprovals({ github, journal, policy, record, now }) {
+  for (const item of record.binding.stale_approvals ?? []) {
+    if (item.cancelled || item.cancel_attempts >= 3) continue;
+    const next = touch(record, now);
+    const pending = next.binding.stale_approvals.find(p => p.request_id === item.request_id);
+    pending.cancel_attempts++;
+    await journal.save(next, { action: 'approval-cancel-intent' }, record); record = next;
+    try {
+      const run = await findRun(github, policy, item.gate === 'A' ? 'accept' : 'promote', item.request_id, item.run_id);
+      if (!run || run.head_sha !== item.policy_sha) continue;
+      if (run.status !== 'completed') await github.cancelRun(run.id);
+      const settled = touch(record, now);
+      settled.binding.stale_approvals.find(p => p.request_id === item.request_id).cancelled = true;
+      await journal.save(settled, { action: 'approval-cancelled' }, record); record = settled;
+    } catch { /* next tick reads run status before another bounded cancel */ }
+  }
+  return record;
 }

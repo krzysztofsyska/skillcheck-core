@@ -3,7 +3,7 @@
 STATUS: REVIEW — implementacja do niezależnego review, nie zgoda na aktywację.
 WYKONAWCA POPRAWKI: Codex, po zatrzymaniu pracy Cursora przez właściciela.
 BRANCH: feat/sc-ops-002b-agent-orchestration
-BASE_COMMIT POPRAWKI: c96de5a28ebe943a657380395c00b60fcc55c2ed
+BASE_COMMIT POPRAWKI: 4888b10d947c88a5303b401986d669c02d7155e6
 BASE PR: 579da382f976971392bc15239fded5417945c0f0
 PR: https://github.com/krzysztofsyska/skillcheck-core/pull/38
 COMMIT: dokładny SHA publikacji jest w raporcie przekazania w tym PR (plik nie odwołuje się do własnego przyszłego SHA).
@@ -28,12 +28,26 @@ Ten raport zastępuje poprzednią ocenę kompletności implementacji. Dotychczas
 
 Nowe moduły: schema, protection, live-journal, evidence, live-effects, promotion, prepare-review. Zmiany ograniczone do narzędzi/testów kontrolera, jego workflow/polityk i dokumentacji. Brak nowych zależności; package.json i package-lock.json bez zmian w poprawce.
 
+## Poprawki po niezależnym review 4888b10
+
+Reviewer wykrył sześć usterek: pominięcie scope po zmianie HEAD (w tym źródło rename), podszycie Issue pod TASK, utrata odpowiedzi tworzenia promotion PR, niekończące się oczekiwanie przy niepoprawnym review przejście do gate B po negatywnym review promocji oraz przesłonięcie raportu BLOCKED przez niedostarczony raport READY.
+
+- Scope jest sprawdzany przed zmianą stanu i ponownie z GitHuba tuż przed merge; rename obejmuje starą i nową ścieżkę.
+- Zadanie jest związane z numerem Issue z journal; cudzy TASK nie podmienia kontraktu, oryginalny Issue jest odczytywany także po zamknięciu.
+- Utracony promotion PR jest odzyskiwany po jednoznacznym ref/repo/marker/autorze kontrolera, bez drugiego POST.
+- Niepoprawny komplet dowodów kończy BLOCKED; negatywny wynik promocji nie uruchamia Cursora ani zgody B.
+- Raport BLOCKED zastępuje nieaktualny READY, bez linku sugerującego zatwierdzenie. Stan terminalny ponawia dostarczenie bieżącego raportu.
+- Nowa prośba po rerun ma nowy request_id. Nieaktualne prośby są anulowane przez ograniczony do trzech prób cleanup, którego intencja zostaje w journal.
+- Odpowiedź 409 utworzenia Cursora prowadzi do GET z kontrolą repo, gałęzi oraz opcji workOnCurrentBranch/autoCreatePR; konflikt nie jest dowodem zgodności.
+
+Dziewięć nowych testów regresji obejmuje te przypadki na czystych przejściach lub przez rzeczywiste adaptery z mockiem HTTP. Żaden test nie uruchamia prawdziwego agenta.
+
 ## Weryfikacja
 
 Node.js v24.19.0, 2026-10-06, lokalnie:
 
 - npm ci — PASS (72 pakiety instalowane na tym systemie).
-- npm run test:agent-pipeline — 34 PASS, 0 FAIL.
+- npm run test:agent-pipeline — 43 PASS, 0 FAIL.
 - npm run agent:dry-run -- --fixture complete-cycle — PASS; external_calls=0, merge_calls=0, jedna poprawka, gate A i B; obie flagi false.
 - npm run typecheck — PASS.
 - npm run build — PASS.

@@ -93,7 +93,7 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
     async readChangedFiles(base, head) {
       const compared = await request(`/repos/${owner}/${repo}/compare/${base}...${head}`);
       if (!Array.isArray(compared.files) || compared.files.length >= 300) throw new Error('DIFF_INCOMPLETE');
-      return compared.files.map(file => file.filename).filter(Boolean);
+      return [...new Set(compared.files.flatMap(file => [file.filename, file.previous_filename]).filter(Boolean))];
     },
     async readProjection() {
       let foundHead = false;
@@ -208,6 +208,7 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
     },
     async readIssue(number) { return request(`/repos/${owner}/${repo}/issues/${number}`); },
     async readPull(number) { return request(`/repos/${owner}/${repo}/pulls/${number}`); },
+    async cancelRun(id) { return request(`/repos/${owner}/${repo}/actions/runs/${id}/cancel`, { method: 'POST' }); },
     async readRun(id) { return request(`/repos/${owner}/${repo}/actions/runs/${id}`); },
     async readRepository() { return request(`/repos/${owner}/${repo}`); },
     async readComments(number) { return pages(`/repos/${owner}/${repo}/issues/${number}/comments`); },
