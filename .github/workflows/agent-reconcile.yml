@@ -40,10 +40,16 @@ jobs:
         env:
           AGENT_PIPELINE_ENABLED: "false"
           AGENT_PIPELINE_MERGE_ENABLED: "false"
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
       - name: Live reconcile is configuration-gated
         if: vars.AGENT_PIPELINE_ENABLED == 'true'
         run: node tools/agent-pipeline/cli.mjs reconcile
         env:
           AGENT_PIPELINE_ENABLED: "true"
           AGENT_PIPELINE_MERGE_ENABLED: ${{ vars.AGENT_PIPELINE_MERGE_ENABLED }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          AGENT_PIPELINE_APP_ID: ${{ secrets.AGENT_PIPELINE_APP_ID }}
+          AGENT_PIPELINE_APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
+          AGENT_PIPELINE_APP_INSTALLATION_ID: ${{ secrets.AGENT_PIPELINE_APP_INSTALLATION_ID }}

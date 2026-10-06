@@ -48,3 +48,17 @@ jobs:
           printf 'main_sha=%s\n' "$MAIN_SHA"
           printf 'manifest_hash=%s\n' "$MANIFEST_HASH"
           echo "This job records production approval. It does not merge, migrate, or deploy."
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Publish approval marker
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          DIGEST: ${{ inputs.digest }}
+          TASK_ID: ${{ inputs.task_id }}
+          GATE: B
+        run: node tools/agent-pipeline/write-approval-marker.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sc-agent-promote
+          path: approval-marker.json

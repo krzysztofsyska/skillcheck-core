@@ -45,11 +45,14 @@ jobs:
         env:
           AGENT_POLICY_PATH: trusted/.github/agent-pipeline/policy.json
           AGENT_HEAD_DIR: head
+          AGENT_POLICY_SHA: ${{ inputs.policy_sha }}
+          AGENT_HEAD_SHA: ${{ inputs.head_sha }}
+          AGENT_BASE_SHA: ${{ inputs.base_sha }}
         run: node trusted/tools/agent-pipeline/run-ci-commands.mjs
       - name: Publish CI artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sc-agent-ci
-          path: |
-            trusted/.github/agent-pipeline/policy.json
+          path: ci-result.json
           include-hidden-files: false

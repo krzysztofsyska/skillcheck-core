@@ -1,5 +1,5 @@
 import { runCompleteCycle } from './fixtures/complete-cycle.mjs';
-import { flagsFromEnv } from './lib/policy.mjs';
+import { reconcileFromEnv } from './lib/reconcile.mjs';
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -29,14 +29,21 @@ if (command === 'dry-run') {
 }
 
 if (command === 'reconcile') {
-  const flags = flagsFromEnv();
-  if (!flags.enabled) {
-    console.log(JSON.stringify({ mode: 'read-only', status: 'IMPLEMENTED', effects: [], flags }));
-    process.exit(0);
-  }
-  console.log(JSON.stringify({ mode: 'live', status: 'NOT_CONFIGURED', effects: [], flags, reason: 'SC-OPS-002C bootstrap has not confirmed the GitHub App, environments, or branch rulesets' }));
-  process.exit(0);
+  const result = await reconcileFromEnv();
+  const summary = {
+    mode: result.mode,
+    status: result.status,
+    effects: result.effects,
+    controllerInvoked: result.controllerInvoked,
+    reads: result.reads,
+    missing: result.missing ?? [],
+    flags: result.flags,
+    preflight: result.preflight ? { ok: result.preflight.ok, reason: result.preflight.reason ?? null } : null,
+    items: result.work?.items?.length ?? 0,
+  };
+  console.log(JSON.stringify(summary, null, 2));
+  process.exit(result.status === 'NOT_CONFIGURED' ? 1 : 0);
 }
 
-console.error('Usage: node tools/agent-pipeline/cli.mjs dry-run --fixture complete-cycle');
+console.error('Usage: node tools/agent-pipeline/cli.mjs <dry-run|reconcile>');
 process.exit(2);

@@ -11,7 +11,7 @@ export async function tick({ record, observation, journal, ports }) {
   }
   const guarded = guardEffects(effects, observation);
   if (guarded.suppressed.length > 0 && guarded.allowed.length === 0) {
-    const next = structuredClone(decision.preEffectRecord ?? decision.record);
+    const next = structuredClone(record ?? decision.record);
     next.binding.suppressed.push(...guarded.suppressed.map(effect => ({ type: effect.type, reason: 'SUPPRESSED', at: observation.now })));
     if (journal) await journal.save(next, decision.journal);
     return { record: next, effects: [], executed: [], suppressed: guarded.suppressed };
@@ -45,12 +45,11 @@ export function guardEffects(effects, observation) {
       allowed.push(effect);
       continue;
     }
-    if (effect.type === 'github.merge') {
-      if (observation.flags?.mergeEnabled !== true) {
-        suppressed.push(effect);
-        continue;
-      }
-    } else if (!observation.simulation && observation.flags?.enabled !== true && effect.type !== 'notify' && effect.type !== 'report') {
+    if (!observation.simulation && observation.flags?.enabled !== true) {
+      suppressed.push(effect);
+      continue;
+    }
+    if (effect.type === 'github.merge' && observation.flags?.mergeEnabled !== true) {
       suppressed.push(effect);
       continue;
     }

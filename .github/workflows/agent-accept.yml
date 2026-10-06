@@ -43,3 +43,18 @@ jobs:
           printf 'head_sha=%s\n' "$HEAD_SHA"
           printf 'base_sha=%s\n' "$BASE_SHA"
           echo "This job records owner acceptance. It does not merge or deploy."
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Publish approval marker
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          DIGEST: ${{ inputs.digest }}
+          TASK_ID: ${{ inputs.task_id }}
+          GATE: A
+        run: node tools/agent-pipeline/write-approval-marker.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sc-agent-accept
+          path: approval-marker.json
+

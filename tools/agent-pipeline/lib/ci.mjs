@@ -23,6 +23,21 @@ export function validateCi(run, expected) {
   return { ok: true, pass: true };
 }
 
+export function buildCiEnvelope({ policy, policySha, headSha, baseSha, runId, runAttempt, commandsExecuted, conclusion }) {
+  return {
+    workflow_id: policy.workflow_ids.verify,
+    workflow_path: policy.workflows.verify,
+    run_id: Number(runId),
+    run_attempt: Number(runAttempt),
+    policy_sha: policySha,
+    head_sha: headSha,
+    base_sha: baseSha,
+    conclusion,
+    jobs: [{ name: 'verify', conclusion }],
+    commands_executed: commandsExecuted ?? [],
+  };
+}
+
 export function commandsFromPolicy(policy) {
   return (policy.required_ci_commands ?? []).map(command => {
     if (!/^[A-Za-z0-9_.:@/ -]+$/.test(command) || command.includes('&&') || command.includes('|') || command.includes(';')) {

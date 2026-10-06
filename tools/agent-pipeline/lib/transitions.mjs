@@ -48,8 +48,8 @@ function planPromotion(record, obs) {
       record: next,
       preEffectRecord: next,
       effects: [
-        { type: 'github.dispatch', workflow: 'promote', external: true, requestId: next.approval_request_id, digest: next.binding.approval.digest },
-        { type: 'notify', external: true, notification: notificationFor(next, obs, 'READY_FOR_PROD') },
+        { type: 'github.dispatch', workflow: 'promote', external: true, requestId: next.approval_request_id, digest: next.binding.approval.digest, taskId: next.task_id, integrationSha: next.head_sha, mainSha: next.base_sha, manifestHash: next.binding.promotion?.manifest_hash ?? null },
+        { type: 'notify', external: true, issueNumber: next.issue_number, notification: notificationFor(next, obs, 'READY_FOR_PROD') },
       ],
       journal: journalFor(next, 'request-approval-b'),
     };
@@ -314,8 +314,8 @@ function reviewStep(record, obs) {
       record: pre,
       preEffectRecord: pre,
       effects: [
-        { type: 'github.dispatch', workflow: 'verify', external: true, requestId, headSha: record.head_sha, baseSha: record.base_sha, policySha: record.policy_sha },
-        { type: 'github.dispatch', workflow: 'review', external: true, requestId, headSha: record.head_sha, baseSha: record.base_sha, policySha: record.policy_sha },
+        { type: 'github.dispatch', workflow: 'verify', external: true, requestId, headSha: record.head_sha, baseSha: record.base_sha, policySha: record.policy_sha, taskId: record.task_id },
+        { type: 'github.dispatch', workflow: 'review', external: true, requestId, headSha: record.head_sha, baseSha: record.base_sha, policySha: record.policy_sha, repositoryId: record.repository_id, prNumber: record.pr_number },
       ],
       journal: journalFor(pre, 'dispatch-evidence'),
     };
@@ -459,8 +459,8 @@ function approvalStep(record, obs) {
       record: next,
       preEffectRecord: next,
       effects: [
-        { type: 'github.dispatch', workflow: 'accept', external: true, requestId: next.approval_request_id, digest: next.binding.approval.digest },
-        { type: 'notify', external: true, notification },
+        { type: 'github.dispatch', workflow: 'accept', external: true, requestId: next.approval_request_id, digest: next.binding.approval.digest, taskId: next.task_id, headSha: next.head_sha, baseSha: next.base_sha },
+        { type: 'notify', external: true, issueNumber: next.issue_number, notification },
       ],
       journal: journalFor(next, 'request-approval-a'),
     };
@@ -470,6 +470,11 @@ function approvalStep(record, obs) {
 
 function gateDecision(record, obs, gate) {
   const request = record.binding.approval;
+  if (request.run_id == null && obs.approval?.request_id && obs.approval.request_id === request.request_id && obs.approval.run_id) {
+    const next = touch(record, obs.now);
+    next.binding.approval = { ...request, run_id: obs.approval.run_id, armed_at: request.armed_at ?? obs.now };
+    return done(next);
+  }
   const started = Date.parse(request.armed_at || record.last_transition_at);
   if (!obs.approval && Date.parse(obs.now) - started >= obs.policy.timeouts.approval_ms) {
     return done(block(record, 'APPROVAL_TIMEOUT', obs.now));
@@ -557,7 +562,7 @@ function productionStep(record, obs) {
       const next = touch(record, obs.now, { state: 'DONE', technical_state: null });
       const notification = notificationFor(next, obs, 'DONE');
       next.notification_id = notification.notification_id;
-      return effect(next, [{ type: 'notify', external: true, notification }]);
+      return effect(next, [{ type: 'notify', external: true, issueNumber: next.issue_number, notification }]);
     }
     return done(record);
   }

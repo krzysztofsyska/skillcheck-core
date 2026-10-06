@@ -69,6 +69,17 @@ function reject(reason) {
   return { ok: false, reason, pass: false };
 }
 
+export function buildReviewEnvelope({ policy, policySha, runId, runAttempt, payload }) {
+  return {
+    workflow_id: policy.workflow_ids.review,
+    workflow_path: policy.workflows.review,
+    run_id: Number(runId),
+    run_attempt: Number(runAttempt),
+    policy_sha: policySha,
+    payload,
+  };
+}
+
 export function proseIsNotReview(text) {
   return { ok: false, reason: 'prose_not_pass', pass: false, text: String(text ?? '') };
 }

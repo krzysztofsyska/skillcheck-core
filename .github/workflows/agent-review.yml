@@ -69,10 +69,15 @@ jobs:
           safety-strategy: drop-sudo
           codex-version: "0.160.1"
           working-directory: frozen
+      - name: Wrap review envelope
+        env:
+          AGENT_POLICY_PATH: trusted/.github/agent-pipeline/policy.json
+          POLICY_SHA: ${{ inputs.policy_sha }}
+        run: node trusted/tools/agent-pipeline/wrap-review.mjs --payload review-result.json --out review-envelope.json
       - uses: actions/upload-artifact@v4
         with:
           name: sc-agent-review
-          path: review-result.json
+          path: review-envelope.json
 
   publish:
     needs: model
@@ -91,7 +96,7 @@ jobs:
           name: sc-agent-review
           path: artifact
       - name: Validate review artifact
-        run: node tools/agent-pipeline/publish-review.mjs --artifact artifact/review-result.json --policy-sha "${{ inputs.policy_sha }}" --request-id "${{ inputs.request_id }}"
+        run: node tools/agent-pipeline/publish-review.mjs --artifact artifact/review-envelope.json --policy-sha "${{ inputs.policy_sha }}" --request-id "${{ inputs.request_id }}"
       - name: Publishing a check requires the controller app
         if: vars.AGENT_PIPELINE_ENABLED == 'true'
         run: echo "Check publication is performed by the controller app after SC-OPS-002C. This job does not merge."
