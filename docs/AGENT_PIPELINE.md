@@ -123,36 +123,43 @@ Orchestrator pyta właściciela dopiero gdy:
 - brak blockerów
 - acceptance criteria spełnione
 
-Po odpowiedzi „zatwierdzam” orchestrator zapisuje approval w PR i scala do `integration`.
+Zgoda A jest natywnym zatwierdzeniem środowiska GitHub `owner-acceptance`. Komentarz, reakcja, label i pole w opisie PR nie są tą zgodą. Dopiero ponownie sprawdzona zgoda może otworzyć merge do `integration`, i tylko gdy `AGENT_PIPELINE_MERGE_ENABLED=true` oraz preflight ochrony gałęzi jest aktualny.
 
 ### Gate B — PRODUCTION APPROVAL
 
-Orchestrator tworzy promotion PR `integration -> main`.
-Po zielonym CI/review pyta właściciela:
-**„Moduł jest gotowy do produkcji. Wdrażamy? TAK/NIE.”**
+Osobny promotion PR `integration -> main` ma własne środowisko `production-approval`. Zgoda A nie spełnia zgody B. Tekst „TAK” w czacie nie jest zgodą.
 
-Tylko odpowiedź TAK uprawnia do:
+Tylko potwierdzona zgoda B uprawnia do zakresu z manifestu wydania:
 - merge do `main`
-- produkcyjnych migracji
+- produkcyjnych migracji opisanych w zatwierdzonym runbooku
 - funkcji/server deployment
 - zmian produkcyjnych sekretów
 - smoke testów produkcyjnych
 
-## Co jest automatyczne
+Sam merge pozostawia stan `MERGED_AWAITING_DEPLOYMENT`. Brak runbooku blokuje wdrożenie.
 
-- task contract w GitHub
-- implementacja i handoff przez PR
-- review loop
-- CI
-- klasyfikacja FRONTEND/BACKEND/FULLSTACK
+## Kontroler SC-OPS-002B
+
+Kod kontrolera jest w `tools/agent-pipeline/`. Domyślnie `AGENT_PIPELINE_ENABLED=false` i `AGENT_PIPELINE_MERGE_ENABLED=false`: odczyt i raport są dozwolone, nowe efekty i merge nie. Starszy opis, w którym komentarz albo pole PR oznacza zgodę, nie jest implementacją. Projekt: [sc-ops-002a-agent-orchestration.md](sc-ops-002a-agent-orchestration.md). Bootstrap usług: [sc-ops-002c-bootstrap-runbook.md](sc-ops-002c-bootstrap-runbook.md).
+
+Kontroler utrwala kontrakt, `ALLOWED_FILES`, wymagane testy i skrót wersji. Issue pozostaje kontraktem, PR raportem. Stan i journal są na gałęzi `agent-state`. Cursor, CI, Codex, zgoda A, zgoda B i merge mają osobne adaptery. Publiczny Issue albo `@mention` nie uruchamia płatnej pracy.
+
+## Co jest automatyczne po włączeniu flag
+
+Przy flagach pozostawionych na false poniższe kroki są tylko zaimplementowane i testowane offline:
+
+- zamrożenie kontraktu i jeden task branch z `integration`
+- implementacja Cursora i jedna sesja poprawek
+- CI oraz review przypięte do pary commitów, kontraktu i `policy_sha`
+- prośba o zgodę A i osobna prośba o zgodę B
+- klasyfikacja FRONTEND/BACKEND/FULLSTACK/OPERATIONS
 - wykrywanie migracji/L3
-- przygotowanie promotion PR
 - odczyt wyników przez orchestrator
 
 ## Co pozostaje ręczne z definicji
 
-Tylko decyzje właściciela:
-- OWNER ACCEPTANCE
-- PRODUCTION APPROVAL
+Tylko decyzje właściciela, składane w GitHub Environments:
+- OWNER ACCEPTANCE — środowisko `owner-acceptance`
+- PRODUCTION APPROVAL — środowisko `production-approval`
 
-Sekrety i logowanie do zewnętrznych usług mogą wymagać jednorazowego bootstrapu kont, ale nie są częścią codziennego przeklejania promptów.
+Sekrety, GitHub App, ochrona gałęzi i budżety API są jednorazowym bootstrapem SC-OPS-002C, nie częścią codziennego przeklejania promptów.

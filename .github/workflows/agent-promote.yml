@@ -1,0 +1,50 @@
+name: Agent production approval
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        required: true
+        type: string
+      digest:
+        required: true
+        type: string
+      task_id:
+        required: true
+        type: string
+      integration_sha:
+        required: true
+        type: string
+      main_sha:
+        required: true
+        type: string
+      manifest_hash:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    environment: production-approval
+    permissions:
+      contents: read
+    steps:
+      - name: Emit gate B evidence
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          DIGEST: ${{ inputs.digest }}
+          TASK_ID: ${{ inputs.task_id }}
+          INTEGRATION_SHA: ${{ inputs.integration_sha }}
+          MAIN_SHA: ${{ inputs.main_sha }}
+          MANIFEST_HASH: ${{ inputs.manifest_hash }}
+        run: |
+          printf 'request_id=%s\n' "$REQUEST_ID"
+          printf 'digest=%s\n' "$DIGEST"
+          printf 'task_id=%s\n' "$TASK_ID"
+          printf 'integration_sha=%s\n' "$INTEGRATION_SHA"
+          printf 'main_sha=%s\n' "$MAIN_SHA"
+          printf 'manifest_hash=%s\n' "$MANIFEST_HASH"
+          echo "This job records production approval. It does not merge, migrate, or deploy."

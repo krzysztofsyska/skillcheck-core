@@ -23,6 +23,7 @@ jobs:
       - run: npm run test:live-check
       - run: npm run test:behavior-guide
       - run: npm run test:behavior-assessments
+      - run: npm run test:agent-pipeline
       - run: npm run build
       - run: npm run test:pdf-bundle
       - run: npm run test:http

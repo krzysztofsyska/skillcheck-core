@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "repository_id": 1043384454,
+  "repository": "krzysztofsyska/skillcheck-core",
+  "repository_url": "https://github.com/krzysztofsyska/skillcheck-core",
+  "allowed_repo_urls": [
+    "https://github.com/krzysztofsyska/skillcheck-core"
+  ],
+  "owner": {
+    "login": "krzysztofsyska",
+    "id": 222297538
+  },
+  "orchestrators": [
+    {
+      "login": "krzysztofsyska",
+      "id": 222297538
+    }
+  ],
+  "notification_recipient": "krzysztofsyska",
+  "flags": {
+    "AGENT_PIPELINE_ENABLED": false,
+    "AGENT_PIPELINE_MERGE_ENABLED": false
+  },
+  "timeouts": {
+    "build_ms": 7200000,
+    "ci_review_ms": 2700000,
+    "approval_ms": 259200000
+  },
+  "limits": {
+    "repair_rounds": 3,
+    "substantive_reviews": 4,
+    "transport_attempts": 3
+  },
+  "retry_delays_ms": [60000, 300000],
+  "codex_action_sha": "bdf19a4a223ec2549a3e2274a0cf61556bc07675",
+  "codex_cli_version": "0.160.1",
+  "cursor_api_base": "https://api.cursor.com",
+  "workflow_ids": {
+    "reconcile": "sc-agent-reconcile",
+    "verify": "sc-agent-verify",
+    "review": "sc-agent-review",
+    "accept": "sc-agent-accept",
+    "promote": "sc-agent-promote",
+    "gates": "sc-agent-gates"
+  },
+  "workflows": {
+    "reconcile": ".github/workflows/agent-reconcile.yml",
+    "verify": ".github/workflows/agent-verify.yml",
+    "review": ".github/workflows/agent-review.yml",
+    "accept": ".github/workflows/agent-accept.yml",
+    "promote": ".github/workflows/agent-promote.yml",
+    "gates": ".github/workflows/agent-gates.yml"
+  },
+  "environments": {
+    "agent_control": { "name": "agent-control", "id": null },
+    "owner_acceptance": { "name": "owner-acceptance", "id": null },
+    "production_approval": { "name": "production-approval", "id": null }
+  },
+  "required_checks": {
+    "integration": ["sc-agent/ci", "sc-agent/review", "sc-agent/owner-acceptance"],
+    "main": ["sc-agent/ci", "sc-agent/review", "sc-agent/production-approval", "sc-agent/promotion-scope"]
+  },
+  "required_ci_commands": [
+    "npm ci",
+    "npm run typecheck",
+    "npm run test:db",
+    "npm run test:auth",
+    "npm run test:cv",
+    "npm run test:screening",
+    "npm run test:assessments",
+    "npm run test:live-check",
+    "npm run test:behavior-guide",
+    "npm run test:behavior-assessments",
+    "npm run test:agent-pipeline",
+    "npm run build",
+    "npm run test:pdf-bundle",
+    "npm run test:http",
+    "npm run test:auth-http",
+    "npm run test:marketing"
+  ],
+  "forbidden_starting_refs": ["main", "integration", "agent-state"]
+}

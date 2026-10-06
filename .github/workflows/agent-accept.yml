@@ -1,0 +1,45 @@
+name: Agent owner acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        required: true
+        type: string
+      digest:
+        required: true
+        type: string
+      task_id:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    environment: owner-acceptance
+    permissions:
+      contents: read
+    steps:
+      - name: Emit gate A evidence
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          DIGEST: ${{ inputs.digest }}
+          TASK_ID: ${{ inputs.task_id }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          printf 'request_id=%s\n' "$REQUEST_ID"
+          printf 'digest=%s\n' "$DIGEST"
+          printf 'task_id=%s\n' "$TASK_ID"
+          printf 'head_sha=%s\n' "$HEAD_SHA"
+          printf 'base_sha=%s\n' "$BASE_SHA"
+          echo "This job records owner acceptance. It does not merge or deploy."

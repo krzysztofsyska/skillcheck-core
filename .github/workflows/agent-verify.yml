@@ -1,0 +1,55 @@
+name: Agent verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+      policy_sha:
+        required: true
+        type: string
+      task_id:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted policy
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.policy_sha }}
+          persist-credentials: false
+          path: trusted
+      - name: Checkout pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+          persist-credentials: false
+          path: head
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run policy commands
+        env:
+          AGENT_POLICY_PATH: trusted/.github/agent-pipeline/policy.json
+          AGENT_HEAD_DIR: head
+        run: node trusted/tools/agent-pipeline/run-ci-commands.mjs
+      - name: Publish CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sc-agent-ci
+          path: |
+            trusted/.github/agent-pipeline/policy.json
+          include-hidden-files: false

@@ -127,6 +127,10 @@ Production is a separate decision.
 - external candidate contact
 - billing/charge actions
 
+## Agent controller
+
+SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. Owner acceptance and production approval are GitHub environment approvals, not pull request prose. Do not enable the controller, merge, or deploy from a task implementation.
+
 ## Existing SkillCheck guardrails
 
 - never re-run already applied migrations

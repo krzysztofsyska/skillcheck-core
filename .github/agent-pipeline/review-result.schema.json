@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/krzysztofsyska/skillcheck-core/.github/agent-pipeline/review-result.schema.json",
+  "title": "SkillCheck Codex review result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "repository_id",
+    "pr_number",
+    "head_sha",
+    "base_sha",
+    "contract_hash",
+    "verdict",
+    "acceptance_checks",
+    "findings",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "request_id": { "type": "string", "minLength": 1 },
+    "repository_id": { "const": 1043384454 },
+    "pr_number": { "type": "integer" },
+    "head_sha": { "type": "string", "minLength": 40 },
+    "base_sha": { "type": "string", "minLength": 40 },
+    "contract_hash": { "type": "string", "minLength": 64 },
+    "verdict": { "enum": ["PASS", "PASS_WITH_FIXES", "FAIL"] },
+    "acceptance_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "required"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "enum": ["PASS", "FAIL", "NOT_RUN", "SKIPPED"] },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "path", "line", "description", "required_fix"],
+        "properties": {
+          "id": { "type": "string" },
+          "severity": { "enum": ["info", "minor", "major", "blocker"] },
+          "path": { "type": "string" },
+          "line": { "type": "integer" },
+          "description": { "type": "string" },
+          "required_fix": { "type": "string" }
+        }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}
