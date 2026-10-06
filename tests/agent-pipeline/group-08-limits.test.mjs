@@ -13,6 +13,7 @@ test('repair budget, auth failures, disabled flags, missing secrets, and missing
   const record = taskRecord({
     state: 'PR_REVIEW', review_request_id: 'request', repair_round: 3, policy_sha: policySha, contract_hash: contractHash,
   });
+  record.ci_run_id = 1; record.review_run_id = 2; record.binding.review_dispatched = true;
   record.binding.substantive_reviews = 1;
   record.binding.required_tests = ['npm run typecheck'];
   const obs = observation();

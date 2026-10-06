@@ -15,6 +15,11 @@ export function contractBody() {
     'STATUS: READY',
     'OWNER: Cursor',
     'REVIEWER: Codex',
+    'DEPENDS_ON: NONE',
+    'ACCEPTANCE_CRITERIA:',
+    '- Show the demo',
+    'SECURITY_CHECKS:',
+    '- No credentials in the client',
     'BRANCH_SLUG: demo',
     'ALLOWED_FILES:',
     '- app/demo/**',
@@ -25,7 +30,7 @@ export function contractBody() {
 
 export function loadedPolicy() {
   const policy = loadPolicy();
-  return { policy, policySha: sha256(policy) };
+  return { policy, policySha: 'd'.repeat(40) };
 }
 
 export function observation(patch = {}) {

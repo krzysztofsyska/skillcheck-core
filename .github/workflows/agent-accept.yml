@@ -1,4 +1,5 @@
 name: Agent owner acceptance
+run-name: sc-agent:${{ inputs.request_id }}
 
 on:
   workflow_dispatch:

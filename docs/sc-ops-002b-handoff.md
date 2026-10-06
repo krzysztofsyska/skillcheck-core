@@ -1,120 +1,62 @@
-# SC-OPS-002B — handoff
+# SC-OPS-002B — poprawki R1–R10 (Codex)
 
-TASK: SC-OPS-002B
-STATUS: REVIEW
+STATUS: REVIEW — implementacja do niezależnego review, nie zgoda na aktywację.
+WYKONAWCA POPRAWKI: Codex, po zatrzymaniu pracy Cursora przez właściciela.
 BRANCH: feat/sc-ops-002b-agent-orchestration
-BASE_COMMIT: 579da382f976971392bc15239fded5417945c0f0
-COMMIT: e1c7446452e85cec1ff02fbdb20683ebf440d6a9
-HEAD PR: commit dokumentujący ten wynik CI; pełny SHA headu jest w opisie PR
+BASE_COMMIT POPRAWKI: c96de5a28ebe943a657380395c00b60fcc55c2ed
+BASE PR: 579da382f976971392bc15239fded5417945c0f0
 PR: https://github.com/krzysztofsyska/skillcheck-core/pull/38
-OWNER_APPROVAL: PENDING
-PRODUCTION_APPROVAL: PENDING
-REVIEW_VERDICT: PENDING
-PROMOTION: NO
+COMMIT: dokładny SHA publikacji jest w raporcie przekazania w tym PR (plik nie odwołuje się do własnego przyszłego SHA).
+DB / MIGRATIONS: brak.
 
-## Poprawki po CI
+Ten raport zastępuje poprzednią ocenę kompletności implementacji. Dotychczasowe zielone testy nie wykrywały błędów adapterów wskazanych w review FAIL.
 
-Run 37481618039 kończył się `fatal: bad object 579da382f976971392bc15239fded5417945c0f0` w teście allowlisty (15/16). Checkout CI ma głębokość 1 i nie zawiera tamtej bazy.
+## Zmiany i dowody
 
-- Walidator allowlisty jest testem czystym i działa dla każdego zadania.
-- Kontrola zakresu SC-OPS-002B uruchamia się tylko dla tego zadania albo gałęzi `feat/sc-ops-002b-agent-orchestration`.
-- Brak obiektu gita jest błędem. Test nie zamienia błędu fetch na PASS i nie podstawia innego commita.
-- `cli reconcile` czyta stan, liczy preflight i woła kontroler oraz adaptery.
-- Brak konfiguracji przy włączonej fladze zwraca `NOT_CONFIGURED` i nie wykonuje efektów.
-- Wyłączone flagi mogą policzyć przejście, ale tłumią efekty zewnętrzne, w tym powiadomienia.
-- Poprawna konfiguracja idzie przez ten sam kod: odczyt Issue i `agent-state`, preflight, `tick`, adaptery Cursor i GitHub.
+| Uwaga | Zmiana | Regresja offline |
+| --- | --- | --- |
+| R1 | Jeden uwierzytelniony klient App dla odczytu i efektów; kontrola brakujących ID i policy commit przed efektami. | Pełne reconcileFromEnv, bez podmieniania ports/loadWork/journal, wyłącznie mock HTTP. |
+| R2 | Utworzenie task branch przed Cursor, pełna treść kontraktu w hash/payload, walidacja metadanych, zależności, jeden aktywny task. | Payload zawiera kontrakt; mock odrzuca start bez gałęzi; edycja opisu zmienia hash. |
+| R3 | policy_sha jest faktycznym commitem main; runner przypięty do github.sha, dry-run używa syntetycznego SHA commita. | Cykl HTTP sprawdza 40-znakowy policy commit; drift nadal unieważnia dowody. |
+| R4 | Walidacja checked-in JSON Schema, wymagane kryteria z kontraktu, blokery i duplikaty; niezależne pochodzenie run/artifact. | required=false/NOT_RUN, dodatkowe pole, blocker, duplikat, obcy actor/workflow/ref/SHA/attempt i podrobione run_id. |
+| R5 | Rzeczywiste refy, identyfikatory App, źródła checks, brak bypass, force/delete, konfiguracja obu środowisk. | Poprawna konfiguracja oraz zmieniona gałąź, App, puste checks, niepełna ochrona i admin bypass. |
+| R6 | Odczyt agent-state po jednym SHA, CAS odczytanej wersji, hash-linked journal i globalna blokada. Konflikt przerywa tick; następny tick odczytuje i planuje ponownie. | Stary record odrzucony; dwa niezależne procesy przez produkcyjny adapter GitHub do lokalnego mock HTTP — jeden zwycięzca. |
+| R7 | Wymagana własna blokada, ponowne odczyty H/B/dowodów/zgody/ochrony, normalizacja merge, GET konkretnego zamkniętego PR. | Brak lock odrzucony; utrata odpowiedzi po przyjętym merge odtworzona bez drugiego PUT. |
+| R8 | Oddzielny pakiet request.json/change.patch, CI przed review, wymagane checks publikowane przez App po kontroli pochodzenia. | Cykl HTTP obserwuje dispatch z pakietem i publikację checks. Składnia YAML i rozdział poświadczeń. |
+| R9 | Manifest całego diffu integration/main z pokryciem commitów zaakceptowanymi taskami; osobny promotion PR, review i gate B. | Cykl kończy się przed B; A nie otwiera B; obcy commit i brak runbooku blokują promocję. |
+| R10 | Trwały outbox, jeden raport, identyfikator i zweryfikowany autor, link do run zgody i jej zakres, ograniczone retry odczytów. | Utracona odpowiedź komentarza uzgodniona po markerze, brak duplikatu; odczyty max 3 próby; brak ślepych ponowień mutacji. |
 
-## Podział
+Nowe moduły: schema, protection, live-journal, evidence, live-effects, promotion, prepare-review. Zmiany ograniczone do narzędzi/testów kontrolera, jego workflow/polityk i dokumentacji. Brak nowych zależności; package.json i package-lock.json bez zmian w poprawce.
 
-IMPLEMENTED
-- Kontroler, journal, adaptery i workflow z pierwszej implementacji.
-- Wejście `reconcile` podłączone do odczytu stanu, preflightu, kontrolera i adapterów.
-- Osobny test walidatora oraz kontrola zakresu tylko dla tego PR.
+## Weryfikacja
 
-VERIFIED_OFFLINE
-- Wyniki lokalne Node.js v24.11.0 są w sekcji kontroli. To nie jest wynik CI.
+Node.js v24.19.0, 2026-10-06, lokalnie:
 
-NOT_CONFIGURED
-- GitHub App, środowiska `agent-control`, `owner-acceptance`, `production-approval`.
-- Rulesety writers-only i quality-gates.
-- Klucze Cursor i OpenAI, budżety, Production Branch Vercel.
-- Numeryczne id workflow i id środowisk. Polityka używa kluczy symbolicznych.
-- Monitor ChatGPT.
-- Flagi w `policy.json` pozostają false. Workflow live startuje tylko, gdy zmienna `AGENT_PIPELINE_ENABLED` jest dokładnie `true`. Ta zmienna nie jest ustawiona.
+- npm ci — PASS (72 pakiety instalowane na tym systemie).
+- npm run test:agent-pipeline — 34 PASS, 0 FAIL.
+- npm run agent:dry-run -- --fixture complete-cycle — PASS; external_calls=0, merge_calls=0, jedna poprawka, gate A i B; obie flagi false.
+- npm run typecheck — PASS.
+- npm run build — PASS.
+- git diff --check — PASS.
+- kontrola ALLOWED_FILES — PASS w zestawie testów na gałęzi 002B; również nowe pliki kontrolowane przed publikacją.
 
-NOT_RUN
-- Prawdziwe API Cursor, OpenAI i mutacje GitHub.
-- Zgody środowisk, ochrona gałęzi, merge, promocja, deploy, smoke test.
-- Test połączenia #35 i #37 nie był powtarzany.
+CI nowego SHA: wynik zostanie odczytany po publikacji i podany osobno w PR. Nie przenosimy wyniku CI z c96de5a na nowy commit.
 
-## Kontrole lokalne
+Zweryfikowano źródło action.yml openai/codex-action na przypiętym bdf19a4a223ec2549a3e2274a0cf61556bc07675, w tym working-directory, output-schema-file, permission-profile i allow-bot-users. Odczytano aktualny kontrakt Cursor API v1 (https://cursor.com/docs/cloud-agent/api/endpoints): status wykonania pochodzi z runs; Get Run /v1/agents/{id}/runs/{runId}; git jest stanem sesji, nie historycznym snapshotem. Brak wiarygodnego przypisania nieznanego follow-up nadal oznacza BLOCKED.
 
-Node.js v24.11.0. Wykonane w tym środowisku, nie w GitHub Actions.
+## Ograniczenia i aktywacja
 
-- `npm ci` — exit 0, 111 packages. `package-lock.json` bez zmian.
-- `npm run test:agent-pipeline` — 26 testów, 26 pass, 0 fail.
-- `npm run agent:dry-run -- --fixture complete-cycle` — ok true, external_calls 0, merge_calls 0, repair_round 1, task READY_FOR_OWNER gate A, promotion READY_FOR_PROD gate B, obie flagi false.
-- `npm run typecheck` — exit 0.
-- `npm run build` — exit 0.
+IMPLEMENTED / VERIFIED_OFFLINE nie oznacza VERIFIED_LIVE. Cursor/OpenAI API, rzeczywiste zgody, rulesety, merge, deploy, monitor, test:live oraz #35/#37 — NOT RUN. Ustawienia usług, sekrety i gałęzie main/integration nie były zmieniane. Obie flagi pozostają false.
 
-CI, osobno od wyników lokalnych
-- Run 37481618039 na `0eceaf93277729ed9deaeff0aa2f63fa2bf43079`: FAIL. Job `verify`, `test:agent-pipeline` 15/16, `fatal: bad object 579da382f976971392bc15239fded5417945c0f0`.
-- Run 37494786980 na `e1c7446452e85cec1ff02fbdb20683ebf440d6a9`: SUCCESS. Workflow Checks, job `verify`, w tym `npm run test:agent-pipeline`.
-- Run 37494786947 na tym samym SHA: SUCCESS. Workflow Agent Gates.
-- Ten plik dopisuje wynik tamtego CI. Workflow `verify` na commicie tej notatki jest w opisie PR i nie jest tym samym runem co 37494786980.
+- Rzeczywiste numery workflow, App/actor, środowisk i allow-bot-users wymagają konfiguracji 002C. W repo pozostają null/symboliczne.
+- Kontroler nie wykonuje uniwersalnych migracji/deploy. Po merge produkcyjnym oczekuje na potwierdzenie runbooku i smoke testów; sam merge nie jest DONE.
+- Manifest z ponad 100 commitami albo diff z 300 plikami jest celowo BLOCKED jako niekompletny, nie obcinany po cichu.
+- Niepewna mutacja nie jest ponawiana w ciemno. Nieznany follow-up pozostaje BLOCKED; nieznana dostawa raportu czeka na uzgodnienie markera, bez drugiego POST.
+- Blokada pozostawiona przez przerwany kontroler może być przejęta dopiero po potwierdzeniu completed poprzedniego run GitHuba; nie wygasa samym zegarem. Lokalna blokada bez run_id wymaga kontrolowanego odzyskania.
+- JSON Schema validator obsługuje jawnie słownictwo używane w naszym schemacie; nieznane słowo walidacyjne odrzuca wynik.
 
-Nie uruchamiano `test:live` ani testów połączenia #35 i #37.
+## Następne zadanie
 
-DB / MIGRATIONS: brak
+WYKONAWCA: niezależny reviewer Codex, nowa sesja review repozytorium, bez implementacji ani uruchamiania agentów przez ten task. Pełny prompt z rzeczywistym SHA publikacji zostaje zapisany w komentarzu PR przez wykonawcę; właściciel nie kopiuje raportu.
 
-## Odchylenia
-
-- Rekord stanu ma oprócz kolumn z sekcji 4 projektu pola `technical_state` i `binding`.
-- Identyfikatory workflow w polityce są symboliczne do czasu bootstrapu 002C.
-- `pull_request` wykonuje plik workflow z commita PR. `agent-gates.yml` nie jest korzeniem zaufania. Zaufane CI i review uruchamia kontroler z `policy_sha` na `main`. Rulesety dopina 002C.
-- Artefakty CI, review i znacznik zgody są zapisywane przez workflow, a reconcile odczytuje je przy następnej pętli. Brak artefaktu nie jest PASS.
-
-## Aktywacja
-
-Obie flagi zostają false. Włączenie i merge opisuje `docs/sc-ops-002c-bootstrap-runbook.md`. Ten PR nie jest zgodą właściciela.
-
-## Następny krok
-
-Pełne review implementacji przez Codex. Nie zaczynać bootstrapu SC-OPS-002C.
-
-## Prompt review dla Codexa
-
-Wykonawca: Codex. Miejsce: nowy przegląd pull requestu w `krzysztofsyska/skillcheck-core`. Koordynator przekazuje ten prompt przez GitHub. SHA w opisie PR jest headem po publikacji i jest SHA, które należy reviewować.
-
-```text
-ZADANIE: review SC-OPS-002B
-REPO: krzysztofsyska/skillcheck-core
-PR: https://github.com/krzysztofsyska/skillcheck-core/pull/38
-HEAD: SHA headu PR #38 podane w opisie PR
-BASE: 579da382f976971392bc15239fded5417945c0f0
-SPECYFIKACJA: docs/sc-ops-002a-agent-orchestration.md
-POZIOM: L3
-SCOPE: OPERATIONS
-
-Sprawdź zgodność ze specyfikacją 002A, a nie ze starym opisem automatyzacji.
-Werdykt: PASS / PASS WITH FIXES / FAIL.
-
-Potwierdź:
-- flagi AGENT_PIPELINE_ENABLED i AGENT_PIPELINE_MERGE_ENABLED pozostają false
-- brak sekretów, brak service_role, brak migracji
-- zgoda A nie spełnia zgody B
-- komentarz, label i pole PR nie są zgodą
-- Cursor nie dostaje envVars z agentId
-- CI i model nie dostają poświadczeń kontrolera
-- wynik review jest walidowany schematem; „no major issues” nie jest PASS
-- journal nie używa force i konflikt nie nadpisuje historii
-- nieznany follow-up zostaje BLOCKED
-- wyjątek SC-OPS-001 i obejście OPERATIONS zostały usunięte
-- test allowlisty nie blokuje przyszłych zadań spoza SC-OPS-002B, a błąd gita nie jest PASS
-- reconcile przy poprawnej konfiguracji woła kontroler, a brak konfiguracji i wyłączone flagi nie wykonują efektów
-- testy są offline
-- PR nie włącza automatyzacji, nie scala i nie wdraża
-
-Nie uruchamiaj płatnych API, nie zmieniaj ustawień GitHub i nie scalaj.
-Zapisz werdykt w PR.
-```
+Review obejmuje R1–R10, ścieżkę reconcileFromEnv/adapters, regresje negatywne i kompletność 002A. Wynik PASS/PASS WITH FIXES/FAIL należy zapisać w PR. Do tego czasu PR pozostaje draft, 002C nie jest rozpoczynane, merge i wdrożenie pozostają zabronione.

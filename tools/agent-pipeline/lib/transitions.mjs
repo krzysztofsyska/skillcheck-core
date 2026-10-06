@@ -16,6 +16,8 @@ export function plan(record, obs) {
   if (obs.kind === 'promotion' || record?.binding?.lane === 'promotion') return planPromotion(record, obs);
   if (!record || record.state === 'BACKLOG') return openTask(obs);
   if (record.state === 'BLOCKED') return resumeOrHold(record, obs);
+  if (record.state === 'ACCEPTED' || record.state === 'DONE') return done(record);
+  if (record.binding?.merge?.phase === 'awaiting_confirmation') return confirmMerge(record, obs);
   if (contractDrift(record, obs)) return done(block(record, 'CONTRACT_EDITED', obs.now));
   const drifted = shaDrift(record, obs);
   if (drifted) return drifted;
@@ -33,6 +35,10 @@ export function plan(record, obs) {
 function planPromotion(record, obs) {
   if (!record || record.state === 'BACKLOG') return openPromotion(obs);
   if (record.state === 'BLOCKED') return done(record);
+  if (record.binding?.merge?.phase === 'awaiting_confirmation') return confirmMerge(record, obs);
+  if (['MERGED_AWAITING_DEPLOYMENT', 'DONE'].includes(record.state)) return productionStep(record, obs);
+  if (obs.github.pull && (obs.github.pull.headSha !== record.head_sha || obs.github.pull.baseSha !== record.base_sha || obs.policySha !== record.policy_sha)) return done(block(record, 'PROMOTION_MANIFEST_STALE', obs.now));
+  if (record.state === 'PR_REVIEW') return reviewStep(record, obs);
   const live = promotionLive(record, obs);
   if (record.binding.approval && !approvalStillCurrent(record.binding.approval, live)) {
     const next = touch(record, obs.now, { technical_state: 'APPROVAL_STALE', approval_request_id: null });
@@ -42,6 +48,7 @@ function planPromotion(record, obs) {
   }
   if (!record.binding.approval) return armGateB(record, obs);
   if (record.binding.approval.phase === 'intent') {
+    if (!obs.simulation && !obs.preflight?.ok) return done(record);
     const next = touch(record, obs.now);
     next.binding.approval.phase = 'armed';
     return {
@@ -62,6 +69,8 @@ function openTask(obs) {
   if (!author.ok) return { record: null, effects: [{ type: 'report', kind: 'IGNORED', reason: author.reason, external: false }], journal: null };
   const contract = parseContract(obs.issue.body);
   if (!contract.ready) return { record: null, effects: [], journal: null };
+  if (obs.dependenciesReady === false || obs.activeTaskConflict) return { record: null, effects: [], journal: null };
+  if (contract.required_tests.some(test => !obs.policy.required_ci_commands.includes(test))) return { record: null, effects: [], journal: null };
   const baseSha = obs.github.integrationSha;
   const key = operationKey({
     repositoryId: obs.github.repositoryId,
@@ -86,6 +95,8 @@ function openTask(obs) {
   record.cursor_agent_id = createAgentId(key);
   record.binding.branch = branchName(contract);
   record.binding.slug = contract.slug;
+  record.binding.contract = contract;
+  record.binding.authorization = { issue_number: obs.issue.number, author_id: obs.issue.authorId, contract_hash: contract.hash, at: obs.now };
   record.binding.allowed_files = contract.allowed_files;
   record.binding.required_tests = contract.required_tests;
   record.binding.level = contract.level;
@@ -101,14 +112,24 @@ function openPromotion(obs) {
     const record = newRecord({
       repositoryId: obs.github.repositoryId,
       taskId: promo?.taskId ?? 'promotion',
-      issueNumber: promo?.prNumber ?? null,
+      issueNumber: promo?.issueNumber ?? null,
       policySha: obs.policySha,
       now: obs.now,
     });
     record.binding.lane = 'promotion';
-    return done(block(record, 'MISSING_RUNBOOK', obs.now));
+    return done(block(record, promo?.blockedReason || 'MISSING_RUNBOOK', obs.now));
   }
   const refs = obs.github.pull;
+  if (!refs && !obs.simulation) {
+    const record = newRecord({ repositoryId: obs.policy.repository_id, taskId: promo.taskId, issueNumber: promo.issueNumber, policySha: obs.policySha, now: obs.now });
+    record.binding.lane = 'promotion'; record.state = 'PR_REVIEW';
+    record.head_sha = obs.github.integrationSha; record.base_sha = obs.github.mainSha;
+    record.contract_hash = sha256(promo.manifest);
+    record.binding.contract = { source: JSON.stringify(promo.manifest), acceptance_criteria: promo.smokeTests, security_checks: ['Only accepted tasks, separate gate B'], required_tests: obs.policy.required_ci_commands };
+    record.binding.required_tests = obs.policy.required_ci_commands;
+    record.binding.promotion = { ...promo, manifest_hash: sha256(promo.manifest), runbook_hash: sha256(promo.runbook), runbook: promo.runbook };
+    return effect(record, [{ type: 'github.createPr', external: true, taskId: promo.taskId, head: 'integration', base: 'main', scope: 'OPERATIONS', level: 'L3', marker: `skillcheck-task:${promo.taskId}\nManifest: ${JSON.stringify(promo.manifest)}` }]);
+  }
   if (!refs || refs.headRef !== 'integration' || refs.baseRef !== 'main' || refs.headRepositoryId !== obs.policy.repository_id || refs.baseRepositoryId !== obs.policy.repository_id) {
     const record = newRecord({
       repositoryId: obs.github.repositoryId,
@@ -135,14 +156,22 @@ function openPromotion(obs) {
   record.binding.promotion = {
     manifest_hash: sha256(promo.manifest),
     runbook_hash: sha256(promo.runbook),
+    runbook: promo.runbook, manifest: promo.manifest,
     operations: promo.operations ?? [],
     tasks: promo.tasks ?? [],
     secret_names: promo.secretNames ?? [],
   };
+  if (!obs.simulation) {
+    record.state = 'PR_REVIEW'; record.contract_hash = sha256(promo.manifest);
+    record.binding.contract = { source: JSON.stringify(promo.manifest), acceptance_criteria: promo.smokeTests };
+    record.binding.required_tests = obs.policy.required_ci_commands;
+    return done(record);
+  }
   return armGateB(record, obs);
 }
 
 function armGateB(record, obs) {
+  if (!obs.simulation && !obs.preflight?.ok) return done(record);
   const canonical = gateBPayload({
     repositoryId: record.repository_id,
     promotionPr: record.pr_number,
@@ -153,7 +182,7 @@ function armGateB(record, obs) {
     manifestHash: record.binding.promotion?.manifest_hash,
     operations: record.binding.promotion?.operations ?? [],
     environments: ['production-approval'],
-    evidence: [],
+    evidence: [{ ci_run_id: record.ci_run_id, review_run_id: record.review_run_id, ci_digest: sha256(obs.github.ci), review_digest: sha256(obs.github.review) }],
     rollback: obs.promotion?.rollback ?? null,
     smokeTests: obs.promotion?.smokeTests ?? [],
     secretNames: record.binding.promotion?.secret_names ?? [],
@@ -273,6 +302,7 @@ function buildingStep(record, obs) {
       preEffectRecord: pre,
       effects: [{
         type: 'github.createPr',
+        scope: record.binding.scope, level: record.binding.level,
         external: true,
         marker: `skillcheck-task:${record.task_id}`,
         head: record.binding.branch,
@@ -291,6 +321,7 @@ function buildingStep(record, obs) {
     next.ci_run_id = null;
     next.ci_run_attempt = null;
     next.binding.evidence = { ci: null, review: null };
+    next.binding.review_dispatched = false;
     return done(next);
   }
   const next = touch(record, obs.now, { state: 'PR_REVIEW', technical_state: 'WAITING_CI', head_sha: branch.sha });
@@ -315,10 +346,24 @@ function reviewStep(record, obs) {
       preEffectRecord: pre,
       effects: [
         { type: 'github.dispatch', workflow: 'verify', external: true, requestId, headSha: record.head_sha, baseSha: record.base_sha, policySha: record.policy_sha, taskId: record.task_id },
-        { type: 'github.dispatch', workflow: 'review', external: true, requestId, headSha: record.head_sha, baseSha: record.base_sha, policySha: record.policy_sha, repositoryId: record.repository_id, prNumber: record.pr_number },
+
       ],
       journal: journalFor(pre, 'dispatch-evidence'),
     };
+  }
+  if (obs.github.ci && !record.ci_run_id) return done(touch(record, obs.now, { ci_run_id: obs.github.ci.run_id, ci_run_attempt: obs.github.ci.run_attempt }));
+  if (obs.github.review && !record.review_run_id) return done(touch(record, obs.now, { review_run_id: obs.github.review.run_id, review_run_attempt: obs.github.review.run_attempt }));
+  if (obs.github.ci && !record.binding.review_dispatched) {
+    const ci = validateCi(obs.github.ci, { workflowId: obs.policy.workflow_ids.verify, workflowPath: obs.policy.workflows.verify,
+      policySha: record.policy_sha, headSha: record.head_sha, baseSha: record.base_sha,
+      runId: record.ci_run_id, runAttempt: 1, requiredCommands: obs.policy.required_ci_commands });
+    if (ci.ok || String(ci.reason).startsWith('conclusion_') || ci.reason === 'job_not_success') {
+      const next = touch(record, obs.now); next.binding.review_dispatched = true;
+      return effect(next, [{ type: 'github.dispatch', workflow: 'review', external: true, requestId: record.review_request_id,
+        headSha: record.head_sha, baseSha: record.base_sha, policySha: record.policy_sha,
+        repositoryId: record.repository_id, prNumber: record.pr_number,
+        packet: reviewPacket(record, record.review_request_id, obs) }]);
+    }
   }
   if (!obs.github.ci || !obs.github.review) {
     const started = Date.parse(record.last_transition_at);
@@ -332,13 +377,14 @@ function reviewStep(record, obs) {
     headSha: record.head_sha,
     baseSha: record.base_sha,
     requiredCommands: obs.policy.required_ci_commands,
-    runAttempt: obs.github.ci.run_attempt,
+    runAttempt: 1,
+    runId: record.ci_run_id,
   });
   const review = validateReview(obs.github.review, {
     workflowId: obs.policy.workflow_ids.review,
     workflowPath: obs.policy.workflows.review,
-    runId: obs.github.review.run_id,
-    runAttempt: obs.github.review.run_attempt,
+    runId: record.review_run_id,
+    runAttempt: 1,
     policySha: record.policy_sha,
     requestId: record.review_request_id,
     repositoryId: record.repository_id,
@@ -346,7 +392,7 @@ function reviewStep(record, obs) {
     headSha: record.head_sha,
     baseSha: record.base_sha,
     contractHash: record.contract_hash,
-    requiredChecks: record.binding.required_tests,
+    requiredChecks: requiredReviewChecks(record),
   });
   const signature = sha256({ ci: obs.github.ci, review: obs.github.review, request: record.review_request_id });
   if (record.binding.last_evidence_signature === signature) return done(record);
@@ -376,7 +422,7 @@ function reviewStep(record, obs) {
   if (ci.pass && review.pass) {
     next.state = 'READY_FOR_OWNER';
     next.technical_state = null;
-    return armGateA(next, obs);
+    return record.binding.lane === 'promotion' ? armGateB(next, obs) : armGateA(next, obs);
   }
   const repairable = review.ok && (review.fixes || review.fail || !ci.pass);
   if (!repairable) return done(next);
@@ -413,6 +459,7 @@ function beginRepair(record, obs, findings) {
 }
 
 function armGateA(record, obs) {
+  if (!obs.simulation && !obs.preflight?.ok) return done(record);
   const canonical = gateAPayload({
     repositoryId: record.repository_id,
     taskId: record.task_id,
@@ -452,6 +499,7 @@ function approvalStep(record, obs) {
   if (record.state === 'ACCEPTED') return done(record);
   if (!record.binding.approval) return armGateA(record, obs);
   if (record.binding.approval.phase === 'intent') {
+    if (!obs.simulation && !obs.preflight?.ok) return done(record);
     const next = touch(record, obs.now);
     next.binding.approval.phase = 'armed';
     const notification = next.binding.pending_notification;
@@ -476,7 +524,7 @@ function gateDecision(record, obs, gate) {
     return done(next);
   }
   const started = Date.parse(request.armed_at || record.last_transition_at);
-  if (!obs.approval && Date.parse(obs.now) - started >= obs.policy.timeouts.approval_ms) {
+  if (Date.parse(obs.now) - started >= obs.policy.timeouts.approval_ms) {
     return done(block(record, 'APPROVAL_TIMEOUT', obs.now));
   }
   if (!obs.approval) return done(record);
@@ -508,7 +556,7 @@ function gateDecision(record, obs, gate) {
     simulation: obs.simulation,
     protection: obs.github.protection,
     lock: obs.mergeLock ?? null,
-    holder: record.task_id,
+    holder: obs.lockHolder ?? record.task_id,
     liveBaseSha: gate === 'B' ? obs.github.pull?.baseSha : obs.github.pull?.baseSha,
     expectedBaseSha: request.canonical.gate === 'B' ? request.canonical.main_sha : request.canonical.base_sha,
     liveHeadSha: obs.github.pull?.headSha,
@@ -537,7 +585,7 @@ function gateDecision(record, obs, gate) {
   return {
     record: pre,
     preEffectRecord: pre,
-    effects: [{ type: 'github.merge', external: true, request: merge.request, gate }],
+    effects: [{ type: 'github.merge', external: true, request: merge.request, gate, record: structuredClone(pre) }],
     journal: journalFor(pre, 'merge'),
   };
 }
@@ -557,7 +605,8 @@ function confirmMerge(record, obs) {
 
 function productionStep(record, obs) {
   if (record.state === 'MERGED_AWAITING_DEPLOYMENT') {
-    if (!obs.deployment?.runbook) return done(block(record, 'MISSING_RUNBOOK', obs.now));
+    if (!obs.deployment) return done(record);
+    if (!obs.deployment.runbook) return done(block(record, 'MISSING_RUNBOOK', obs.now));
     if (obs.deployment.confirmed === true && obs.deployment.smokePassed === true && obs.deployment.manifestHash === record.binding.promotion?.manifest_hash) {
       const next = touch(record, obs.now, { state: 'DONE', technical_state: null });
       const notification = notificationFor(next, obs, 'DONE');
@@ -592,6 +641,7 @@ export function fold(record, effect, result, obs) {
   }
   if (effect.type === 'notify') {
     const next = touch(record, now);
+    if (result?.deferred) return record;
     if (!result?.ok) next.binding.reports.push({ kind: 'NOTIFICATION_FAILED', at: now, notification_id: effect.notification.notification_id });
     else next.binding.pending_notification = null;
     return next;
@@ -677,7 +727,7 @@ function cursorCreateEffect(record, obs) {
   const payload = buildCreatePayload({
     repoUrl: obs.policy.repository_url,
     startingRef: record.binding.branch,
-    prompt: obs.prompts?.build ?? `Implement ${record.task_id}`,
+    prompt: `${obs.prompts?.build ?? ''}\n\nFROZEN CONTRACT (hash ${record.contract_hash}):\n${record.binding.contract?.source ?? ''}\nIssue: ${obs.policy.repository_url}/issues/${record.issue_number}\nBase: ${record.base_sha}\nBranch: ${record.binding.branch}`,
     agentId: record.cursor_agent_id,
     repositoryId: obs.github.repositoryId,
     expectedRepositoryId: obs.policy.repository_id,
@@ -689,7 +739,7 @@ function cursorCreateEffect(record, obs) {
     error.code = 'ENV_VARS_FORBIDDEN';
     throw error;
   }
-  return { type: 'cursor.create', external: true, agentId: record.cursor_agent_id, payload };
+  return { type: 'cursor.create', external: true, agentId: record.cursor_agent_id, payload, branch: record.binding.branch, baseSha: record.base_sha, contractHash: record.contract_hash };
 }
 
 function cursorFollowupEffect(record, obs) {
@@ -749,6 +799,7 @@ function shaDrift(record, obs) {
   next.ci_run_attempt = null;
   next.approval_request_id = null;
   next.binding.evidence = { ci: null, review: null };
+    next.binding.review_dispatched = false;
   next.binding.approval = null;
   next.head_sha = liveHead ?? record.head_sha;
   next.base_sha = liveBase ?? record.base_sha;
@@ -756,7 +807,7 @@ function shaDrift(record, obs) {
   next.state = 'PR_REVIEW';
   next.technical_state = record.binding.approval || record.state === 'READY_FOR_OWNER' ? 'APPROVAL_STALE' : 'REVIEW_STALE';
   if (record.binding.lane === 'promotion') {
-    next.state = 'READY_FOR_PROD';
+    next.state = 'PR_REVIEW';
     next.technical_state = 'APPROVAL_STALE';
   }
   return done(next);
@@ -774,7 +825,7 @@ function cursorBusy(obs) {
 
 function findTaskPull(obs, record) {
   const pulls = obs.github.pulls ?? (obs.github.pull ? [obs.github.pull] : []);
-  return pulls.find(pull => pull.headRef === record.binding.branch && pull.baseRef === 'integration' && pull.headRepositoryId === record.repository_id && String(pull.body ?? '').includes(`skillcheck-task:${record.task_id}`)) ?? null;
+  return pulls.find(pull => pull.headRef === record.binding.branch && pull.baseRef === 'integration' && pull.headRepositoryId === record.repository_id && pull.baseRepositoryId === record.repository_id && String(pull.body ?? '').includes(`skillcheck-task:${record.task_id}`)) ?? null;
 }
 
 function promotionLive(record, obs) {
@@ -810,3 +861,13 @@ function journalFor(record, action) {
     }),
   };
 }
+
+function reviewPacket(record, requestId, obs) {
+  return { schema_version: 1, request_id: requestId, repository_id: record.repository_id,
+    pr_number: record.pr_number, head_sha: record.head_sha, base_sha: record.base_sha,
+    contract_hash: record.contract_hash, policy_sha: record.policy_sha,
+    contract: record.binding.contract, required_checks: requiredReviewChecks(record),
+    ci: obs.github.ci ?? null };
+}
+
+export function requiredReviewChecks(record) { return [...new Set([...(record.binding.required_tests ?? []), ...(record.binding.contract?.acceptance_criteria ?? []), ...(record.binding.contract?.security_checks ?? [])])]; }

@@ -2,11 +2,10 @@ const FAILURES = new Set(['cancelled', 'skipped', 'neutral', 'timed_out', 'failu
 
 export function validateCi(run, expected) {
   if (!run || typeof run !== 'object') return { ok: false, reason: 'missing_run', pass: false };
+  if (expected.runId != null && run.run_id !== expected.runId) return { ok: false, reason: 'run_mismatch', pass: false };
   if (run.workflow_id !== expected.workflowId) return { ok: false, reason: 'workflow_mismatch', pass: false };
   if (run.workflow_path !== expected.workflowPath) return { ok: false, reason: 'workflow_mismatch', pass: false };
-  if (run.run_attempt !== 1 && expected.requireFirstAttempt !== false) {
-    if (run.run_attempt !== expected.runAttempt) return { ok: false, reason: 'attempt_mismatch', pass: false };
-  }
+  if (run.run_attempt !== (expected.runAttempt ?? 1)) return { ok: false, reason: 'attempt_mismatch', pass: false };
   if (run.policy_sha !== expected.policySha) return { ok: false, reason: 'policy_mismatch', pass: false };
   if (run.head_sha !== expected.headSha || run.base_sha !== expected.baseSha) return { ok: false, reason: 'sha_mismatch', pass: false };
   if (run.conclusion !== 'success') {

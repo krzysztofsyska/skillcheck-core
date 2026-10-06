@@ -38,11 +38,21 @@ export function parseContract(body) {
     slug: fields.BRANCH_SLUG ?? null,
     allowed_files: allowed,
     required_tests: tests,
+    acceptance_criteria: lists.ACCEPTANCE_CRITERIA ?? [],
+    security_checks: lists.SECURITY_CHECKS ?? [],
+    // Preserve prose and every field, not just the parser's known metadata.
+    source: String(body ?? '').replace(/\r\n/g, '\n').trim(),
   };
   return {
     ...normalized,
     hash: sha256(normalized),
-    ready: normalized.status === 'READY' && Boolean(taskId),
+    ready: normalized.status === 'READY' && /^SC-[A-Z0-9-]+$/.test(taskId ?? '')
+      && ['L1', 'L2', 'L3'].includes(normalized.level)
+      && ['FRONTEND', 'BACKEND', 'FULLSTACK', 'OPERATIONS'].includes(normalized.scope)
+      && normalized.owner === 'Cursor' && normalized.reviewer === 'Codex'
+      && allowed.length > 0 && tests.length > 0
+      && normalized.acceptance_criteria.length > 0 && normalized.security_checks.length > 0
+      && normalized.depends_on != null,
   };
 }
 

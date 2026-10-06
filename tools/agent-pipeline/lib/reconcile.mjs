@@ -1,3 +1,8 @@
+import { preparePromotion } from './promotion.mjs';
+import { guardedMerge, publishEvidence, drainOutbox } from './live-effects.mjs';
+import { readEvidence, readApprovals } from './evidence.mjs';
+import { randomUUID } from 'node:crypto';
+import { createLiveJournal } from './live-journal.mjs';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { sha256 } from './canonical.mjs';
@@ -10,8 +15,8 @@ import { createGitHubClient, createInstallationToken } from './github.mjs';
 import { assembleWork, cursorSnapshot } from './snapshot.mjs';
 
 const DISPATCH_INPUTS = {
-  verify: ['head_sha', 'base_sha', 'policy_sha', 'task_id'],
-  review: ['head_sha', 'base_sha', 'policy_sha', 'request_id', 'repository_id', 'pr_number'],
+  verify: ['request_id', 'head_sha', 'base_sha', 'policy_sha', 'task_id'],
+  review: ['head_sha', 'base_sha', 'policy_sha', 'request_id', 'repository_id', 'pr_number', 'review_packet'],
   accept: ['request_id', 'digest', 'task_id', 'head_sha', 'base_sha'],
   promote: ['request_id', 'digest', 'task_id', 'integration_sha', 'main_sha', 'manifest_hash'],
 };
@@ -51,15 +56,22 @@ export async function reconcile({
     mergeEnabled: Boolean(flags.enabled && flags.mergeEnabled && preflight.ok),
   };
   const results = [];
-  for (const item of work.items ?? []) {
+  for (const item of (work.items ?? []).slice(0, 1)) {
     const observation = {
       ...item.observation,
       now: item.observation.now ?? now,
       simulation: false,
       flags: effectiveFlags,
+      preflight,
+      lockHolder: journal?.holder,
       github: { ...item.observation.github, protection: protection ?? item.observation.github?.protection ?? null },
     };
-    results.push(await tickImpl({ record: item.record ?? null, observation, journal, ports }));
+    const result = await tickImpl({ record: item.record ?? null, observation, journal, ports });
+    if (flags.enabled && ports.github && result.record) {
+      await publishEvidence(ports.github, policy, result.record, { ci: observation.github.ci, review: observation.github.review });
+      result.record = await drainOutbox({ github: ports.github, journal, policy, record: result.record, now });
+    }
+    results.push(result);
   }
   const effects = results.flatMap(result => result.executed ?? []);
   return {
@@ -79,11 +91,23 @@ export async function reconcileFromEnv(env = process.env, overrides = {}) {
   const flags = overrides.flags ?? flagsFromEnv(env);
   const configuration = overrides.configuration ?? assessConfiguration(env, flags);
   const policy = overrides.policy ?? loadPolicy();
+  if (flags.enabled && configuration.ok) {
+    const missing = [];
+    if (!Number.isInteger(policy.controller_app_id) || Number(env.AGENT_PIPELINE_APP_ID) !== policy.controller_app_id) missing.push('controller_app_id');
+    if (!Number.isInteger(policy.controller_actor_id)) missing.push('controller_actor_id');
+    for (const key of ['verify','review','accept','promote']) if (!Number.isInteger(policy.workflow_ids[key])) missing.push(`workflow_ids.${key}`);
+    for (const key of ['owner_acceptance','production_approval']) if (!Number.isInteger(policy.environments[key].id)) missing.push(`environments.${key}.id`);
+    if (!/^[a-f0-9]{40}$/.test(env.AGENT_POLICY_COMMIT ?? '')) missing.push('AGENT_POLICY_COMMIT');
+    if (missing.length) return { status: 'NOT_CONFIGURED', controllerInvoked: false, effects: [], flags, missing };
+  }
   const ports = overrides.ports ?? await defaultPorts(env, policy, configuration, flags);
   const journal = overrides.journal ?? (flags.enabled && configuration.ok ? null : createMemoryJournal());
-  const loadWork = overrides.loadWork ?? (async () => loadWorkFromEnv(env, policy, flags, configuration));
-  const liveJournal = journal ?? await githubJournal(env, policy, flags);
-  return reconcile({ flags, configuration, policy, journal: liveJournal, loadWork, ports, tickImpl: overrides.tickImpl, now: overrides.now });
+  const loadWork = overrides.loadWork ?? (async () => loadWorkFromEnv(env, policy, flags, configuration, ports.github));
+  const liveJournal = journal ?? createLiveJournal(ports.github, `${env.GITHUB_RUN_ID || 'local'}:${randomUUID()}`, Number(env.GITHUB_RUN_ID) || null);
+  if (liveJournal.acquire) await liveJournal.acquire();
+  ports.journal = liveJournal;
+  try { return await reconcile({ flags, configuration, policy, journal: liveJournal, loadWork, ports, tickImpl: overrides.tickImpl, now: overrides.now }); }
+  finally { if (liveJournal.release) await liveJournal.release(); }
 }
 
 export function dispatchInputs(effect) {
@@ -105,6 +129,7 @@ export function dispatchInputs(effect) {
     integration_sha: effect.integrationSha,
     main_sha: effect.mainSha,
     manifest_hash: effect.manifestHash,
+    review_packet: effect.packet ? JSON.stringify(effect.packet) : null,
   };
   const inputs = {};
   for (const key of keys) {
@@ -118,7 +143,7 @@ export function dispatchInputs(effect) {
   return inputs;
 }
 
-export async function loadWorkFromClients({ github, cursor = null, policy, now, secrets, prompts = null }) {
+export async function loadWorkFromClients({ github, cursor = null, policy, now, secrets, prompts = null, policyCommit = null }) {
   const [integration, main, issues, pulls, projection] = await Promise.all([
     github.readBranch('integration'),
     github.readBranch('main'),
@@ -132,7 +157,12 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
   } catch (error) {
     if (error.status !== 401 && error.status !== 403 && error.status !== 404) throw error;
   }
+  if (policyCommit && policyCommit !== main?.commit?.sha) throw new Error('POLICY_STALE');
+  if (github.readRepository && (await github.readRepository()).id !== policy.repository_id) throw new Error('REPOSITORY_MISMATCH');
   const records = projection.tasks ?? {};
+  for (const record of Object.values(records)) {
+    if (record.pr_number && github.readPull) { const pull = await github.readPull(record.pr_number); const old = pulls.findIndex(p => p.number === pull.number); if (old < 0) pulls.push(pull); else pulls[old] = pull; }
+  }
   const branches = {};
   const cursorState = {};
   for (const record of Object.values(records)) {
@@ -142,9 +172,11 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
       cursorState[record.cursor_agent_id] = await readCursor(cursor, record.cursor_agent_id);
     }
   }
-  const evidence = await readEvidence(github, policy);
+  const promotion = github.readComparison ? await preparePromotion(github, policy, records, integration?.commit?.sha, main?.commit?.sha) : null;
+  const evidence = await readEvidence(github, policy, records);
   const approvals = await readApprovals(github, policy, records);
-  const policySha = sha256(policy);
+  const policySha = main?.commit?.sha;
+  if (!/^[a-f0-9]{40}$/.test(policySha ?? '')) throw new Error('POLICY_COMMIT_MISSING');
   return assembleWork({
     policy,
     policySha,
@@ -163,17 +195,18 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
       approvals,
       protection,
       mergeLock: projection.mergeLock ?? null,
-      promotions: {},
+      promotion,
+      promotions: promotion ? { [promotion.taskId]: promotion } : {},
       read: 'github',
     },
   });
 }
 
-async function loadWorkFromEnv(env, policy, flags, configuration) {
+async function loadWorkFromEnv(env, policy, flags, configuration, sharedGithub) {
   const token = env.GITHUB_TOKEN || env.AGENT_PIPELINE_GITHUB_TOKEN;
-  if (!token) return { items: [], read: flags.enabled ? 'missing-token' : 'skipped-no-token' };
+  if (!token && !sharedGithub) { if (flags.enabled) throw new Error('BLOCKED_CONFIGURATION'); return { items: [], read: 'skipped-no-token' }; }
   const repository = env.GITHUB_REPOSITORY || env.AGENT_PIPELINE_REPOSITORY || policy.repository;
-  const github = createGitHubClient({ fetch: globalThis.fetch, token, repository });
+  const github = sharedGithub ?? createGitHubClient({ fetch: globalThis.fetch, token, repository, policy });
   const cursor = env.CURSOR_API_KEY ? createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base }) : null;
   const work = await loadWorkFromClients({
     github,
@@ -182,15 +215,16 @@ async function loadWorkFromEnv(env, policy, flags, configuration) {
     now: new Date().toISOString(),
     secrets: secretsFromEnv(env),
     prompts: readPrompts(),
+    policyCommit: env.AGENT_POLICY_COMMIT,
   });
   if (flags.enabled && !configuration.ok) return work;
   return work;
 }
 
-async function defaultPorts(env, policy, configuration, flags) {
+export async function defaultPorts(env, policy, configuration, flags) {
   const repository = env.GITHUB_REPOSITORY || env.AGENT_PIPELINE_REPOSITORY || policy.repository;
   const readToken = env.GITHUB_TOKEN || env.AGENT_PIPELINE_GITHUB_TOKEN;
-  const readClient = readToken ? createGitHubClient({ fetch: globalThis.fetch, token: readToken, repository }) : null;
+  const readClient = readToken ? createGitHubClient({ fetch: globalThis.fetch, token: readToken, repository, policy }) : null;
   if (!flags.enabled || !configuration.ok) {
     return {
       async readProtection() {
@@ -218,9 +252,10 @@ async function defaultPorts(env, policy, configuration, flags) {
       repository,
     })
     : (env.AGENT_PIPELINE_GITHUB_TOKEN || env.GITHUB_TOKEN);
-  const github = createGitHubClient({ fetch: globalThis.fetch, token, repository });
+  const github = createGitHubClient({ fetch: globalThis.fetch, token, repository, policy });
   const cursor = createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base });
   return {
+    github,
     async readProtection() {
       try {
         return await github.readProtection();
@@ -230,51 +265,20 @@ async function defaultPorts(env, policy, configuration, flags) {
       }
     },
     async execute(effect) {
-      if (effect.type === 'cursor.create') return normalizeCursorCreate(await cursor.createAgent(effect.payload));
+      if (effect.type === 'cursor.create') {
+        await github.createBranch(effect.branch, effect.baseSha);
+        return normalizeCursorCreate(await cursor.createAgent(effect.payload));
+      }
       if (effect.type === 'cursor.get') return normalizeCursorCreate(await cursor.getAgent(effect.agentId));
       if (effect.type === 'cursor.followup') return normalizeCursorRun(await cursor.createRun(effect.agentId, effect.payload));
       if (effect.type === 'cursor.listRuns') return cursor.listRuns(effect.agentId);
-      if (effect.type === 'github.createPr') return github.createPull({ head: effect.head, base: effect.base, title: effect.taskId, body: effect.marker });
+      if (effect.type === 'github.createPr') return github.createPull({ head: effect.head, base: effect.base, title: effect.taskId, body: `${effect.marker}\nTASK: ${effect.taskId}\nSCOPE: ${effect.scope || 'OPERATIONS'}\nLEVEL: ${effect.level || 'L3'}\nOWNER_APPROVAL: PENDING\nPRODUCTION_APPROVAL: PENDING\nREVIEW_VERDICT: PENDING\nPROMOTION: ${effect.base === 'main' ? 'YES' : 'NO'}` });
       if (effect.type === 'github.dispatch') {
         return github.dispatch({ workflow: basename(policy.workflows[effect.workflow]), inputs: dispatchInputs(effect) });
       }
-      if (effect.type === 'github.merge') return github.merge({ prNumber: effect.request?.path?.split('/').at(-2), sha: effect.request?.body?.sha });
-      if (effect.type === 'notify') return github.comment({ issueNumber: effect.issueNumber, body: effect.notification.body });
+      if (effect.type === 'github.merge') return guardedMerge({ github, journal: this.journal, policy, flags, effect });
+      if (effect.type === 'notify') return { deferred: true }; // durable outbox after transition
       throw new Error(`unsupported effect ${effect.type}`);
-    },
-  };
-}
-
-async function githubJournal(env, policy, flags) {
-  if (!flags.enabled) return createMemoryJournal();
-  const repository = env.GITHUB_REPOSITORY || env.AGENT_PIPELINE_REPOSITORY || policy.repository;
-  const token = env.AGENT_PIPELINE_APP_ID
-    ? await createInstallationToken({
-      fetch: globalThis.fetch,
-      appId: env.AGENT_PIPELINE_APP_ID,
-      privateKey: env.AGENT_PIPELINE_APP_PRIVATE_KEY,
-      installationId: env.AGENT_PIPELINE_APP_INSTALLATION_ID,
-      repository,
-    })
-    : (env.AGENT_PIPELINE_GITHUB_TOKEN || env.GITHUB_TOKEN);
-  const github = createGitHubClient({ fetch: globalThis.fetch, token, repository });
-  let cache = null;
-  return {
-    async save(record) {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        cache = await github.readProjection();
-        cache.tasks[record.task_id] = record;
-        const result = await github.commitProjection({
-          tasks: cache.tasks,
-          mergeLock: cache.mergeLock,
-          expectedHead: cache.head,
-          message: `agent-state ${record.task_id} ${record.state}`,
-        });
-        if (result.ok) return result;
-      }
-      const error = new Error('AGENT_STATE_CONFLICT');
-      error.code = 'AGENT_STATE_CONFLICT';
-      throw error;
     },
   };
 }
@@ -296,84 +300,16 @@ async function readCursor(cursor, agentId) {
   try {
     const agent = await cursor.getAgent(agentId);
     const runs = await cursor.listRuns(agentId);
+    const latest = agent.latestRunId;
+    if (latest && cursor.getRun) {
+      const detail = await cursor.getRun(agentId, latest);
+      runs.items = (runs.items ?? []).map(run => run.id === latest ? detail : run);
+    }
     return cursorSnapshot(agent, runs);
   } catch (error) {
     if (error.status === 404) return null;
     throw error;
   }
-}
-
-async function readEvidence(github, policy) {
-  const evidence = {};
-  const verifyFile = basename(policy.workflows.verify);
-  const reviewFile = basename(policy.workflows.review);
-  const verifyRuns = await github.listWorkflowRuns(verifyFile).catch(ignoreMissing);
-  const reviewRuns = await github.listWorkflowRuns(reviewFile).catch(ignoreMissing);
-  for (const run of verifyRuns ?? []) {
-    const envelope = await artifactFor(github, run, policy.workflows.verify);
-    if (envelope?.head_sha && envelope.workflow_path === policy.workflows.verify) evidence[envelope.head_sha] = { ...(evidence[envelope.head_sha] ?? {}), ci: envelope };
-  }
-  for (const run of reviewRuns ?? []) {
-    const envelope = await artifactFor(github, run, policy.workflows.review);
-    if (envelope?.payload?.head_sha && envelope.workflow_path === policy.workflows.review) {
-      const head = envelope.payload.head_sha;
-      evidence[head] = { ...(evidence[head] ?? {}), review: envelope };
-    }
-  }
-  return evidence;
-}
-
-async function readApprovals(github, policy, records) {
-  const approvals = {};
-  const files = [
-    [policy.workflows.accept, 'A'],
-    [policy.workflows.promote, 'B'],
-  ];
-  for (const [workflow, gate] of files) {
-    const runs = await github.listWorkflowRuns(basename(workflow)).catch(ignoreMissing);
-    for (const run of runs ?? []) {
-      if (run.run_attempt !== 1) continue;
-      const marker = await artifactFor(github, run, workflow);
-      if (!marker?.request_id) continue;
-      const jobs = await github.readJobs(run.id);
-      const environment = environmentFromJobs(jobs);
-      const payload = await github.readApprovals(run.id);
-      approvals[marker.request_id] = {
-        request_id: marker.request_id,
-        run_id: run.id,
-        run_attempt: run.run_attempt,
-        workflow_id: gate === 'A' ? policy.workflow_ids.accept : policy.workflow_ids.promote,
-        workflow_path: workflow,
-        ref: run.head_branch ? `refs/heads/${run.head_branch}` : null,
-        environment,
-        payload: Array.isArray(payload) ? payload : [],
-        html_url: run.html_url ?? null,
-        gate,
-      };
-    }
-  }
-  void records;
-  return approvals;
-}
-
-async function artifactFor(github, run, workflowPath) {
-  if (run.path && run.path !== workflowPath) return null;
-  const artifacts = await github.listArtifacts(run.id);
-  const artifact = artifacts.find(item => item.name?.startsWith('sc-agent-'));
-  if (!artifact) return null;
-  return github.downloadArtifactJson(artifact.id);
-}
-
-function environmentFromJobs(jobs) {
-  const raw = (jobs ?? []).map(job => job.environment).find(item => item);
-  if (!raw) return null;
-  if (typeof raw === 'string') return { name: raw, id: null };
-  return { name: raw.name ?? null, id: raw.id ?? null };
-}
-
-function ignoreMissing(error) {
-  if (error.status === 404) return [];
-  throw error;
 }
 
 function normalizeCursorCreate(payload) {

@@ -1,8 +1,12 @@
 name: Agent review
+run-name: sc-agent:${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
     inputs:
+      review_packet:
+        required: true
+        type: string
       head_sha:
         required: true
         type: string
@@ -47,28 +51,25 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           path: frozen
-      - name: Record review inputs
-        working-directory: frozen
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare immutable review data
         env:
-          BASE_SHA: ${{ inputs.base_sha }}
-          HEAD_SHA: ${{ inputs.head_sha }}
-        run: |
-          if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Refusing non-SHA diff input" >&2
-            exit 1
-          fi
-          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > ../changed-files.txt
+          REVIEW_PACKET: ${{ inputs.review_packet }}
+        run: node trusted/tools/agent-pipeline/prepare-review.mjs
       - name: Codex review
         uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675
         with:
+          allow-bot-users: ${{ vars.AGENT_PIPELINE_BOT_LOGIN }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: trusted/.github/agent-pipeline/prompts/codex-review.md
-          output-schema-file: trusted/.github/agent-pipeline/review-result.schema.json
-          output-file: review-result.json
+          prompt-file: ${{ github.workspace }}/trusted/.github/agent-pipeline/prompts/codex-review.md
+          output-schema-file: ${{ github.workspace }}/trusted/.github/agent-pipeline/review-result.schema.json
+          output-file: ${{ github.workspace }}/review-result.json
           permission-profile: ":read-only"
           safety-strategy: drop-sudo
           codex-version: "0.160.1"
-          working-directory: frozen
+          working-directory: review-input
       - name: Wrap review envelope
         env:
           AGENT_POLICY_PATH: trusted/.github/agent-pipeline/policy.json
@@ -84,7 +85,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      checks: write
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
@@ -96,7 +96,6 @@ jobs:
           name: sc-agent-review
           path: artifact
       - name: Validate review artifact
+        env:
+          REVIEW_PACKET: ${{ inputs.review_packet }}
         run: node tools/agent-pipeline/publish-review.mjs --artifact artifact/review-envelope.json --policy-sha "${{ inputs.policy_sha }}" --request-id "${{ inputs.request_id }}"
-      - name: Publishing a check requires the controller app
-        if: vars.AGENT_PIPELINE_ENABLED == 'true'
-        run: echo "Check publication is performed by the controller app after SC-OPS-002C. This job does not merge."

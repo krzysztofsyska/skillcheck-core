@@ -6,18 +6,18 @@ export async function tick({ record, observation, journal, ports }) {
   if (!decision.record && decision.effects.length === 0) return { ...decision, executed: [] };
   const effects = decision.effects ?? [];
   if (effects.length === 0) {
-    if (decision.record && journal) await journal.save(decision.record, decision.journal);
+    if (decision.record && journal) await journal.save(decision.record, decision.journal, record);
     return { ...decision, executed: [] };
   }
   const guarded = guardEffects(effects, observation);
   if (guarded.suppressed.length > 0 && guarded.allowed.length === 0) {
     const next = structuredClone(record ?? decision.record);
     next.binding.suppressed.push(...guarded.suppressed.map(effect => ({ type: effect.type, reason: 'SUPPRESSED', at: observation.now })));
-    if (journal) await journal.save(next, decision.journal);
+    if (journal) await journal.save(next, decision.journal, record);
     return { record: next, effects: [], executed: [], suppressed: guarded.suppressed };
   }
   const pre = decision.preEffectRecord ?? decision.record;
-  if (journal) await journal.save(pre, decision.journal);
+  if (journal) await journal.save(pre, decision.journal, record);
   let folded = pre;
   const executed = [];
   for (const effect of guarded.allowed) {
@@ -33,7 +33,7 @@ export async function tick({ record, observation, journal, ports }) {
       folded = fold(folded, effect, { error }, observation);
     }
   }
-  if (journal) await journal.save(folded, { ...decision.journal, action: 'response', response_hash: sha256(canonicalJson(executed.map(item => item.result ?? item.error))) });
+  if (journal) await journal.save(folded, { ...decision.journal, action: 'response', response_hash: sha256(canonicalJson(executed.map(item => item.result ?? item.error))) }, pre);
   return { record: folded, effects: guarded.allowed, executed, journal: decision.journal };
 }
 

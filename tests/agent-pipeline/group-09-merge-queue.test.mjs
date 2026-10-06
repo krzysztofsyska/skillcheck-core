@@ -4,7 +4,7 @@ import { decideMerge, reconcileMergeTimeout } from '../../tools/agent-pipeline/l
 import { plan } from '../../tools/agent-pipeline/lib/transitions.mjs';
 import { observation, taskRecord } from './helpers.mjs';
 
-const protection = { exclusiveWritersConfirmed: true, scOps001Exception: false, mainProtected: true, integrationProtected: true, agentStateProtected: true, qualityGatesBypass: false, administrationWriteUsed: false, requiredChecksPinnedToApp: true };
+const protection = { environmentsConfirmed: true, exclusiveWritersConfirmed: true, scOps001Exception: false, mainProtected: true, integrationProtected: true, agentStateProtected: true, qualityGatesBypass: false, administrationWriteUsed: false, requiredChecksPinnedToApp: true };
 
 test('the merge lock rejects a base change and a timeout is reconciled without a second merge', () => {
   const locked = decideMerge({ flags: { enabled: true, mergeEnabled: true }, protection, lock: { holder: 'other' }, holder: 'SC-DEMO-001', liveBaseSha: 'c'.repeat(40), expectedBaseSha: 'c'.repeat(40), liveHeadSha: 'a'.repeat(40), expectedHeadSha: 'a'.repeat(40), approval: { ok: true }, gate: 'A', runbook: true, owner: 'krzysztofsyska', repo: 'skillcheck-core', prNumber: 50 });

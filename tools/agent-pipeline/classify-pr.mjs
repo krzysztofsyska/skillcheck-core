@@ -36,8 +36,8 @@ export function classify({ files, body, base, headRef }) {
   const errors = [];
   if (metadata.SCOPE !== detected) errors.push(`Declared SCOPE=${metadata.SCOPE} but changed files classify as ${detected}`);
   if ((database || security || operations) && metadata.LEVEL !== 'L3') errors.push('DB, security, or controller changes require LEVEL: L3');
-  if (base === 'main' && (headRef !== 'integration' || metadata.PROMOTION !== 'YES' || metadata.PRODUCTION_APPROVAL !== 'APPROVED')) {
-    errors.push('Only an approved integration -> main promotion may target main');
+  if (base === 'main' && (headRef !== 'integration' || metadata.PROMOTION !== 'YES')) {
+    errors.push('Only an integration -> main promotion may target main (approval is validated separately)');
   }
   return {
     ok: errors.length === 0,

@@ -107,3 +107,14 @@ Monitor nie jest serwerem zdarzeń. Nie mieszać go w jednym zadaniu z event tri
 ## 9. Czego ten runbook nie robi
 
 Nie scala PR, nie uruchamia migracji, nie ustawia sekretów i nie oznacza testów live jako wykonanych. Każdy niewykonany punkt zostaje `NOT RUN`.
+
+## Uzupełnienie po R1–R10 (do wykonania dopiero w 002C)
+
+- Uzupełnij w zaufanym policy.json numery controller_app_id, controller_actor_id, workflow_ids oraz obu środowisk. Odczytaj je z API właściwego repo i instalacji; nie używaj numerów fixture.
+- Ustaw AGENT_PIPELINE_BOT_LOGIN na dokładny login tej App w allow-bot-users przypiętej Codex Action. Nie używaj wildcard ani właścicielskiego PAT. Kontroler sprawdza niezależnie numeryczną tożsamość actor w pochodzeniu run.
+- runner kontrolera przekazuje AGENT_POLICY_COMMIT=github.sha oraz GITHUB_RUN_ID; klient odczytu współdzieli token instalacji App. Brak kompletu oznacza NOT_CONFIGURED.
+- Środowiska owner-acceptance i production-approval: dokładnie jeden reviewer User o ID właściciela, prevent_self_review=true, can_admins_bypass=false; selected deployment branches: wyłącznie branch main. Polityki tagów nie spełniają tego warunku.
+- Zatwierdzony runbook produkcyjny umieść przez osobną akceptowaną zmianę na main w .github/agent-pipeline/production-runbook.json. Plik example jest wyłącznie wzorem; nie jest ładowany przez kontroler. Operacje, rollback, smoke_tests i ewentualne secret_names muszą opisywać faktyczne wdrożenie. Kod nie wykonuje tych tekstów jako poleceń shell.
+- GitHub environment approval dotyczy zakresu z raportu App i jego niezmiennego digestu, obejmującego SHA, CI/review i (dla B) cały manifest. Sprawdź rzeczywiste pochodzenie required checks z App oraz działanie obu niezależnych gates.
+- Awaria kontrolera: nie usuwaj lock na podstawie czasu. Najpierw potwierdź zakończenie workflow; kolejny przebieg odczyta journal i uzgodni oczekujące efekty. Nieznany follow-up nie może zostać wysłany ponownie bez osobnego zatwierdzonego wznowienia.
+- Próg >100 commitów / >=300 plików w porównaniu blokuje automatyczny odbiór jako niekompletny; nie omijaj go usuwając checks.

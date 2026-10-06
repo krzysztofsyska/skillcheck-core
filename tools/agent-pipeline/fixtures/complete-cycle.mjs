@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadPolicy } from '../lib/policy.mjs';
 import { sha256 } from '../lib/canonical.mjs';
+import { requiredReviewChecks } from '../lib/transitions.mjs';
 import { tick } from '../lib/controller.mjs';
 import { initStateRepo, updateState } from '../lib/journal.mjs';
 
@@ -13,7 +14,7 @@ const MAIN = 'dddddddddddddddddddddddddddddddddddddddd';
 
 export async function runCompleteCycle() {
   const policy = loadPolicy();
-  const policySha = sha256(policy);
+  const policySha = MAIN;
   const calls = [];
   const network = [];
   const originalFetch = globalThis.fetch;
@@ -28,7 +29,7 @@ export async function runCompleteCycle() {
   const world = createWorld(policy, policySha);
   let record = null;
   try {
-    for (let step = 0; step < 24 && !world.taskStopped; step += 1) {
+    for (let step = 0; step < 40 && !world.taskStopped; step += 1) {
       const observation = world.observe(record);
       const result = await tick({ record, observation, journal, ports: world.ports(calls) });
       record = result.record;
@@ -87,6 +88,11 @@ function createWorld(policy, policySha) {
     'STATUS: READY',
     'OWNER: Cursor',
     'REVIEWER: Codex',
+    'DEPENDS_ON: NONE',
+    'ACCEPTANCE_CRITERIA:',
+    '- Show the demo',
+    'SECURITY_CHECKS:',
+    '- No credentials in the client',
     'BRANCH_SLUG: demo',
     'ALLOWED_FILES:',
     '- app/demo/**',
@@ -157,7 +163,7 @@ function createWorld(policy, policySha) {
           if (effect.type === 'cursor.create') return { agent: { id: effect.agentId }, run: { id: 'run-1', status: 'CREATING' } };
           if (effect.type === 'cursor.followup') return { run: { id: 'run-2', status: 'CREATING' } };
           if (effect.type === 'github.createPr') return { number: 50 };
-          if (effect.type === 'github.dispatch') return { run_id: `dispatch-${effect.workflow}`, run_attempt: 1 };
+          if (effect.type === 'github.dispatch') return { run_id: effect.workflow === 'verify' ? 100 : effect.workflow === 'review' ? (state.phase === 'review-pass' ? 202 : 201) : 300, run_attempt: 1 };
           if (effect.type === 'notify') return { ok: true };
           if (effect.type === 'github.merge') throw new Error('merge must not run in dry-run');
           throw new Error(`unexpected effect ${effect.type}`);
@@ -239,7 +245,7 @@ function reviewEnvelope(policy, policySha, record, pass) {
       base_sha: BASE,
       contract_hash: record.contract_hash,
       verdict: pass ? 'PASS' : 'PASS_WITH_FIXES',
-      acceptance_checks: [{ id: 'npm run typecheck', status: 'PASS', required: true }],
+      acceptance_checks: requiredReviewChecks(record).map(id => ({ id, status: 'PASS', required: true })),
       findings: pass ? [] : [{ id: 'fix-copy', severity: 'minor', path: 'app/demo/page.tsx', line: 3, description: 'Copy is unclear', required_fix: 'Rewrite the heading' }],
       limitations: [],
     },

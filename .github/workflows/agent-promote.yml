@@ -1,4 +1,5 @@
 name: Agent production approval
+run-name: sc-agent:${{ inputs.request_id }}
 
 on:
   workflow_dispatch:

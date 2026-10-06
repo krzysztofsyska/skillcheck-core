@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { validateSchema } from './schema.mjs';
+const schema = JSON.parse(readFileSync(new URL('../../../.github/agent-pipeline/review-result.schema.json', import.meta.url), 'utf8'));
 const VERDICTS = new Set(['PASS', 'PASS_WITH_FIXES', 'FAIL']);
 const CHECK_STATUSES = new Set(['PASS', 'FAIL', 'NOT_RUN', 'SKIPPED']);
 const SEVERITIES = new Set(['info', 'minor', 'major', 'blocker']);
@@ -54,14 +57,17 @@ export function validateReview(envelope, expected) {
   }
   const requiredIds = new Set(expected.requiredChecks ?? []);
   const seen = new Set(payload.acceptance_checks.map(check => check.id));
+  if (seen.size !== payload.acceptance_checks.length) return reject('duplicate_check');
   for (const id of requiredIds) {
     if (!seen.has(id)) return reject('required_check_missing');
   }
-  const unfinished = payload.acceptance_checks.filter(check => check.required && check.status !== 'PASS');
+  const unfinished = payload.acceptance_checks.filter(check => (requiredIds.has(check.id) || check.required) && check.status !== 'PASS');
   if (payload.verdict === 'PASS' && unfinished.length > 0) return reject('required_check_blocks_pass');
   if (payload.verdict === 'PASS' && payload.limitations.some(item => /not run|brak dowodu|evidence gap/i.test(item))) {
     return reject('evidence_gap_blocks_pass');
   }
+  if (payload.verdict === 'PASS' && payload.findings.some(item => ['major', 'blocker'].includes(item.severity))) return reject('unresolved_blocker');
+  if (validateSchema(schema, payload)) return reject('schema_invalid');
   return { ok: true, payload, pass: payload.verdict === 'PASS', fixes: payload.verdict === 'PASS_WITH_FIXES', fail: payload.verdict === 'FAIL' };
 }
 

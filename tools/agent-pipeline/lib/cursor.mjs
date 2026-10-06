@@ -1,3 +1,4 @@
+import { withTransportRetry } from './transport.mjs';
 import { agentIdFor } from './canonical.mjs';
 import { assertCursorTarget } from './scope.mjs';
 
@@ -45,7 +46,7 @@ export function createAgentId(operationKey) {
 export function reconcileListedRuns({ knownRunIds, runs }) {
   const known = new Set(knownRunIds ?? []);
   const fresh = (runs ?? []).filter(run => run?.id && !known.has(run.id));
-  if (fresh.length !== 1) return { ok: false, reason: 'DISPATCH_UNKNOWN', fresh };
+  if (fresh.length !== 1 || !fresh[0]?.operationVerified) return { ok: false, reason: 'DISPATCH_UNKNOWN', fresh };
   return { ok: true, run: fresh[0] };
 }
 
@@ -56,7 +57,7 @@ export function createCursorClient({ fetch: fetchImpl, apiKey, baseUrl = CURSOR_
     throw error;
   }
   const auth = `Basic ${Buffer.from(`${apiKey}:`).toString('base64')}`;
-  async function request(path, { method = 'GET', body } = {}) {
+  async function once(path, { method = 'GET', body } = {}) {
     const response = await fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: { authorization: auth, 'content-type': 'application/json', accept: 'application/json' },
@@ -77,6 +78,10 @@ export function createCursorClient({ fetch: fetchImpl, apiKey, baseUrl = CURSOR_
     }
     return payload;
   }
+  async function request(path, options = {}) {
+    if (!options.method || options.method === 'GET') return withTransportRetry(() => once(path, options));
+    try { return await once(path, options); } catch (error) { if (!error.status) error.code = 'LOST_RESPONSE'; throw error; }
+  }
   return {
     async createAgent(payload) {
       if (Object.prototype.hasOwnProperty.call(payload, 'envVars')) {
@@ -93,7 +98,14 @@ export function createCursorClient({ fetch: fetchImpl, apiKey, baseUrl = CURSOR_
       return request(`/v1/agents/${encodeURIComponent(agentId)}/runs`, { method: 'POST', body: payload });
     },
     async listRuns(agentId) {
-      return request(`/v1/agents/${encodeURIComponent(agentId)}/runs`);
+      const items = []; let cursor = null;
+      for (let page = 0; page < 100; page++) {
+        const result = await request(`/v1/agents/${encodeURIComponent(agentId)}/runs${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
+        items.push(...(result.items ?? result.runs ?? [])); cursor = result.nextCursor;
+        if (!cursor) return { items };
+      }
+      throw new Error('CURSOR_PAGINATION_LIMIT');
     },
+    async getRun(agentId, runId) { return request(`/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}`); },
   };
 }

@@ -31,7 +31,10 @@
     "substantive_reviews": 4,
     "transport_attempts": 3
   },
-  "retry_delays_ms": [60000, 300000],
+  "retry_delays_ms": [
+    60000,
+    300000
+  ],
   "codex_action_sha": "bdf19a4a223ec2549a3e2274a0cf61556bc07675",
   "codex_cli_version": "0.160.1",
   "cursor_api_base": "https://api.cursor.com",
@@ -52,13 +55,31 @@
     "gates": ".github/workflows/agent-gates.yml"
   },
   "environments": {
-    "agent_control": { "name": "agent-control", "id": null },
-    "owner_acceptance": { "name": "owner-acceptance", "id": null },
-    "production_approval": { "name": "production-approval", "id": null }
+    "agent_control": {
+      "name": "agent-control",
+      "id": null
+    },
+    "owner_acceptance": {
+      "name": "owner-acceptance",
+      "id": null
+    },
+    "production_approval": {
+      "name": "production-approval",
+      "id": null
+    }
   },
   "required_checks": {
-    "integration": ["sc-agent/ci", "sc-agent/review", "sc-agent/owner-acceptance"],
-    "main": ["sc-agent/ci", "sc-agent/review", "sc-agent/production-approval", "sc-agent/promotion-scope"]
+    "integration": [
+      "sc-agent/ci",
+      "sc-agent/review",
+      "sc-agent/owner-acceptance"
+    ],
+    "main": [
+      "sc-agent/ci",
+      "sc-agent/review",
+      "sc-agent/production-approval",
+      "sc-agent/promotion-scope"
+    ]
   },
   "required_ci_commands": [
     "npm ci",
@@ -78,5 +99,11 @@
     "npm run test:auth-http",
     "npm run test:marketing"
   ],
-  "forbidden_starting_refs": ["main", "integration", "agent-state"]
+  "forbidden_starting_refs": [
+    "main",
+    "integration",
+    "agent-state"
+  ],
+  "controller_app_id": null,
+  "controller_actor_id": null
 }

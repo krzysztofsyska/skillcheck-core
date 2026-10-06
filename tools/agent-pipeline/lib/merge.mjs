@@ -7,6 +7,7 @@ export function evaluatePreflight(protection) {
   if (!protection.mainProtected || !protection.integrationProtected || !protection.agentStateProtected) {
     return { ok: false, reason: 'PROTECTION_UNCONFIRMED' };
   }
+  if (protection.environmentsConfirmed !== true) return { ok: false, reason: 'ENVIRONMENTS_UNCONFIRMED' };
   if (!protection.requiredChecksPinnedToApp) return { ok: false, reason: 'CHECK_SOURCE_UNPINNED' };
   return { ok: true };
 }
@@ -16,7 +17,7 @@ export function decideMerge(input) {
   if (!input.flags?.enabled && !input.simulation) return { ok: false, reason: 'PIPELINE_DISABLED' };
   const preflight = evaluatePreflight(input.protection);
   if (!preflight.ok) return preflight;
-  if (input.lock && input.lock.holder && input.lock.holder !== input.holder) return { ok: false, reason: 'MERGE_LOCKED' };
+  if (!input.lock?.holder || input.lock.holder !== input.holder) return { ok: false, reason: 'MERGE_LOCKED' };
   if (input.liveBaseSha !== input.expectedBaseSha || input.liveHeadSha !== input.expectedHeadSha) {
     return { ok: false, reason: 'APPROVAL_STALE' };
   }

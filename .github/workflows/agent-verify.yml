@@ -1,8 +1,12 @@
 name: Agent verify
+run-name: sc-agent:${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        required: true
+        type: string
       head_sha:
         required: true
         type: string
