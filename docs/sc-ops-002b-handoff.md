@@ -4,8 +4,8 @@ TASK: SC-OPS-002B
 STATUS: REVIEW
 BRANCH: feat/sc-ops-002b-agent-orchestration
 BASE_COMMIT: 579da382f976971392bc15239fded5417945c0f0
-COMMIT: zapisany po utworzeniu commita implementacji
-PR: draft do `integration`, uzupełniony po publikacji
+COMMIT: 66bcf90e30682066145a9f89f0b61f6094024006
+PR: https://github.com/krzysztofsyska/skillcheck-core/pull/38
 OWNER_APPROVAL: PENDING
 PRODUCTION_APPROVAL: PENDING
 REVIEW_VERDICT: PENDING
@@ -74,9 +74,10 @@ Wykonawca: Codex. Miejsce: nowy przegląd pull requestu w `krzysztofsyska/skillc
 ```text
 ZADANIE: review SC-OPS-002B
 REPO: krzysztofsyska/skillcheck-core
-PR: uzupełnić URL
-HEAD: uzupełnić SHA
+PR: https://github.com/krzysztofsyska/skillcheck-core/pull/38
+HEAD: 66bcf90e30682066145a9f89f0b61f6094024006
 BASE: 579da382f976971392bc15239fded5417945c0f0
+Uwaga: commit handoffu jest późniejszy i tylko uzupełnia ten raport. Review obejmuje cały head PR #38.
 SPECYFIKACJA: docs/sc-ops-002a-agent-orchestration.md
 POZIOM: L3
 SCOPE: OPERATIONS
