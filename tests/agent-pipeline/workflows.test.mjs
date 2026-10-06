@@ -47,3 +47,16 @@ test('workflow YAML parses and the permission model stays fail-closed', () => {
   });
   assert.equal(bypass.ok, false);
 });
+
+
+test('model uses an isolated environment on main, without controller credentials', () => {
+  const parsed = spawnSync('python3', ['-c', 'import yaml,json; print(json.dumps(yaml.safe_load(open(".github/workflows/agent-review.yml"))["jobs"]["model"]))'], { encoding: 'utf8' });
+  assert.equal(parsed.status, 0, parsed.stderr);
+  const model = JSON.parse(parsed.stdout);
+  assert.equal(model.environment, 'agent-review');
+  assert.equal(model.if, "github.ref == 'refs/heads/main'");
+  assert.deepEqual(model.permissions, { contents: 'read' });
+  assert.equal(model.env, undefined);
+  const secrets = [...JSON.stringify(model).matchAll(/secrets\.([A-Z_]+)/g)].map(m => m[1]);
+  assert.deepEqual(secrets, ['OPENAI_API_KEY']);
+});
