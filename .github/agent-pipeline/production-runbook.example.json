@@ -1,0 +1,7 @@
+{
+  "id": "REPLACE_WITH_OWNER_REVIEWED_RELEASE_RUNBOOK",
+  "operations": ["Describe the exact merge effect and any automatic Vercel deployment"],
+  "rollback": "Describe the reviewed rollback procedure",
+  "smoke_tests": ["Describe the reviewed production smoke checks"],
+  "secret_names": []
+}

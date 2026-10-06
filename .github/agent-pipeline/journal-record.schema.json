@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillCheck agent-state journal entry",
+  "type": "object",
+  "required": ["schema_version", "previous_hash", "operation_key", "before", "after", "at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "previous_hash": { "type": ["string", "null"] },
+    "operation_key": { "type": "string" }
+  }
+}

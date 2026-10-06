@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillCheck agent-state projection",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "repository_id",
+    "task_id",
+    "issue_number",
+    "task_revision",
+    "contract_hash",
+    "state_revision",
+    "base_sha",
+    "head_sha",
+    "policy_sha",
+    "state",
+    "cursor_agent_id",
+    "cursor_run_id",
+    "pr_number",
+    "review_request_id",
+    "review_run_id",
+    "review_run_attempt",
+    "ci_run_id",
+    "ci_run_attempt",
+    "repair_round",
+    "approval_request_id",
+    "notification_id",
+    "last_transition_at",
+    "blocked_reason"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "state": {
+      "enum": ["BACKLOG", "READY", "BUILDING", "PR_REVIEW", "FIXING", "READY_FOR_OWNER", "ACCEPTED", "READY_FOR_PROD", "DEPLOYING", "DONE", "BLOCKED"]
+    }
+  }
+}

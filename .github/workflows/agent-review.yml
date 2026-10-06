@@ -1,0 +1,101 @@
+name: Agent review
+run-name: sc-agent:${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      review_packet:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+      policy_sha:
+        required: true
+        type: string
+      request_id:
+        required: true
+        type: string
+      repository_id:
+        required: true
+        type: string
+      pr_number:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      artifact: review-result.json
+    steps:
+      - name: Checkout trusted policy
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.policy_sha }}
+          persist-credentials: false
+          path: trusted
+      - name: Freeze diff as data
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          path: frozen
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare immutable review data
+        env:
+          REVIEW_PACKET: ${{ inputs.review_packet }}
+        run: node trusted/tools/agent-pipeline/prepare-review.mjs
+      - name: Codex review
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675
+        with:
+          allow-bot-users: ${{ vars.AGENT_PIPELINE_BOT_LOGIN }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: ${{ github.workspace }}/trusted/.github/agent-pipeline/prompts/codex-review.md
+          output-schema-file: ${{ github.workspace }}/trusted/.github/agent-pipeline/review-result.schema.json
+          output-file: ${{ github.workspace }}/review-result.json
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          codex-version: "0.160.1"
+          working-directory: review-input
+      - name: Wrap review envelope
+        env:
+          AGENT_POLICY_PATH: trusted/.github/agent-pipeline/policy.json
+          POLICY_SHA: ${{ inputs.policy_sha }}
+        run: node trusted/tools/agent-pipeline/wrap-review.mjs --payload review-result.json --out review-envelope.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sc-agent-review
+          path: review-envelope.json
+
+  publish:
+    needs: model
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.policy_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: sc-agent-review
+          path: artifact
+      - name: Validate review artifact
+        env:
+          REVIEW_PACKET: ${{ inputs.review_packet }}
+        run: node tools/agent-pipeline/publish-review.mjs --artifact artifact/review-envelope.json --policy-sha "${{ inputs.policy_sha }}" --request-id "${{ inputs.request_id }}"

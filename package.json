@@ -19,7 +19,9 @@
     "test:marketing": "node --test tests/marketing-http.test.mjs",
     "test:live-check": "node --test tests/live-check.test.mjs tests/live-membership.test.mjs tests/live-final-audit.test.mjs",
     "test:behavior-guide": "node --test tests/behavior-guide.test.mjs",
-    "test:behavior-assessments": "node --test tests/behavior-assessment.test.mjs tests/behavior-database.test.mjs"
+    "test:behavior-assessments": "node --test tests/behavior-assessment.test.mjs tests/behavior-database.test.mjs",
+    "test:agent-pipeline": "node --test tests/agent-pipeline/*.test.mjs",
+    "agent:dry-run": "node tools/agent-pipeline/cli.mjs dry-run"
   },
   "dependencies": {
     "@supabase/ssr": "latest",

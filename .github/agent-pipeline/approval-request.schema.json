@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SkillCheck owner approval request",
+  "type": "object",
+  "required": ["gate", "request_id", "digest", "canonical"],
+  "properties": {
+    "gate": { "enum": ["A", "B"] },
+    "request_id": { "type": "string" },
+    "digest": { "type": "string" }
+  }
+}

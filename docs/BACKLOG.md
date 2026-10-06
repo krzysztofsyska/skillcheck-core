@@ -72,3 +72,15 @@ SC-SALES-006 nie jest backendowym SC-006. SC-006 pozostaje w kolejce analizy AI 
 | SC-SALES-013 | Etapy sprzedaży, notatki, przypomnienia i powiązanie zgłoszenia z firmą | L3 | Codex→Cursor | Codex | SC-SALES-006D | BACKLOG |
 
 006A pozostaje w REVIEW do zatwierdzenia poprawki. 006B nie jest READY i nie startuje, dopóki ten dokument nie zostanie zatwierdzony i scalony do `main`. Potem kolejność jest liniowa: 006B, następnie 006C, następnie 006D. Publiczne włączenie wymaga obu widoków, testu współbieżności na osobnym Postgresie, sekretu żądania, treści informacji podanej przez właściciela i ręcznego nadania pierwszego operatora. Tych danych ten backlog nie zawiera.
+
+## Obieg agentów
+
+Identyfikatory SC-OPS-002A/B/C nie kolidują z SC-001–SC-020 ani z SC-SALES-006. SC-006 pozostaje zadaniem UI analizy.
+
+| ID | Zadanie | Level | Owner | Reviewer | Depends on | Status |
+|---|---|---:|---|---|---|---|
+| SC-OPS-002A | Projekt automatycznego obiegu agentów | L3 | Codex | Codex | — | REVIEW |
+| SC-OPS-002B | Implementacja kontrolera, testów offline i workflow; flagi false | L3 | Cursor | Codex | SC-OPS-002A | REVIEW |
+| SC-OPS-002C | Bootstrap GitHub App, środowisk, ochrony gałęzi, kluczy i monitora | L3 | Owner + koordynator | Codex | SC-OPS-002B | BACKLOG |
+
+002B nie włącza automatyzacji i nie zmienia ustawień usług. 002C startuje dopiero po review i akceptacji 002B.

@@ -1,0 +1,12 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const packet = JSON.parse(process.env.REVIEW_PACKET || 'null');
+for (const key of ['head_sha', 'base_sha', 'policy_sha']) if (!/^[a-f0-9]{40}$/.test(packet?.[key] ?? '')) throw new Error(`INVALID_${key}`);
+if (!packet.contract || !Array.isArray(packet.required_checks) || !packet.request_id) throw new Error('INVALID_REVIEW_PACKET');
+const diff = spawnSync('git', ['diff', '--no-ext-diff', '--no-textconv', packet.base_sha, packet.head_sha, '--'], { cwd: 'frozen', encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
+if (diff.status !== 0) throw new Error('DIFF_UNAVAILABLE');
+mkdirSync('review-input', { recursive: true });
+const initialized = spawnSync('git', ['init', 'review-input'], { encoding: 'utf8' });
+if (initialized.status !== 0) throw new Error('REVIEW_DIRECTORY_INIT_FAILED');
+writeFileSync('review-input/request.json', JSON.stringify(packet));
+writeFileSync('review-input/change.patch', diff.stdout);
