@@ -1,0 +1,16 @@
+{
+  "repository_id": 1043384454,
+  "repository": "krzysztofsyska/skillcheck-core",
+  "flags": {
+    "AGENT_PIPELINE_ENABLED": false,
+    "AGENT_PIPELINE_MERGE_ENABLED": false
+  },
+  "owner": { "login": "krzysztofsyska", "id": 222297538 },
+  "secrets": {
+    "CURSOR_API_KEY": "SET_IN_GITHUB_ENVIRONMENT_AGENT_CONTROL_NOT_IN_GIT",
+    "OPENAI_API_KEY": "SET_IN_GITHUB_ENVIRONMENT_AGENT_CONTROL_NOT_IN_GIT",
+    "APP_ID": "SET_DURING_SC_OPS_002C",
+    "APP_PRIVATE_KEY": "SET_IN_GITHUB_ENVIRONMENT_AGENT_CONTROL_NOT_IN_GIT"
+  },
+  "notes": "This file is an example. It contains no secret values. Do not set the flags to true in this task."
+}

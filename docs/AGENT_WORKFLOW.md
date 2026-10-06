@@ -50,6 +50,8 @@ Właściciel podejmuje tylko dwa checkpointy:
 - OWNER ACCEPTANCE — zgoda na scalenie gotowego tasku do `integration`,
 - PRODUCTION APPROVAL — osobna zgoda na promocję `integration -> main` i produkcyjny runbook.
 
+Od SC-OPS-002B te checkpointy są środowiskami GitHub `owner-acceptance` i `production-approval`. Komentarz, reakcja i pole w opisie PR nie zastępują kliknięcia w środowisku. Kontroler ma flagi `AGENT_PIPELINE_ENABLED` i `AGENT_PIPELINE_MERGE_ENABLED`; obie domyślnie są false i ta implementacja ich nie włącza.
+
 ## Zasady równoległości
 Taski mogą iść równolegle tylko gdy:
 - nie modyfikują tych samych tabel/migracji,
