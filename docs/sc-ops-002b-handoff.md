@@ -4,7 +4,8 @@ TASK: SC-OPS-002B
 STATUS: REVIEW
 BRANCH: feat/sc-ops-002b-agent-orchestration
 BASE_COMMIT: 579da382f976971392bc15239fded5417945c0f0
-COMMIT: head PR po tym commicie; pełny SHA jest w opisie PR, bo commit nie zawiera własnego skrótu
+COMMIT: e1c7446452e85cec1ff02fbdb20683ebf440d6a9
+HEAD PR: commit dokumentujący ten wynik CI; pełny SHA headu jest w opisie PR
 PR: https://github.com/krzysztofsyska/skillcheck-core/pull/38
 OWNER_APPROVAL: PENDING
 PRODUCTION_APPROVAL: PENDING
@@ -42,7 +43,6 @@ NOT_CONFIGURED
 - Flagi w `policy.json` pozostają false. Workflow live startuje tylko, gdy zmienna `AGENT_PIPELINE_ENABLED` jest dokładnie `true`. Ta zmienna nie jest ustawiona.
 
 NOT_RUN
-- CI `verify` na nowym SHA do czasu zakończenia workflow. Wynik poprzedniego runu 37481618039 dotyczy commita `0eceaf9` i nie jest wynikiem tej poprawki.
 - Prawdziwe API Cursor, OpenAI i mutacje GitHub.
 - Zgody środowisk, ochrona gałęzi, merge, promocja, deploy, smoke test.
 - Test połączenia #35 i #37 nie był powtarzany.
@@ -57,9 +57,11 @@ Node.js v24.11.0. Wykonane w tym środowisku, nie w GitHub Actions.
 - `npm run typecheck` — exit 0.
 - `npm run build` — exit 0.
 
-CI
-- Poprzedni run 37481618039 na `0eceaf93277729ed9deaeff0aa2f63fa2bf43079`: FAIL, `test:agent-pipeline` 15/16, `fatal: bad object 579da382f976971392bc15239fded5417945c0f0`.
-- Nowy SHA: NOT RUN w momencie zapisu tego pliku. Opis PR rozdziela wynik lokalny od wyniku workflow `verify` po publikacji.
+CI, osobno od wyników lokalnych
+- Run 37481618039 na `0eceaf93277729ed9deaeff0aa2f63fa2bf43079`: FAIL. Job `verify`, `test:agent-pipeline` 15/16, `fatal: bad object 579da382f976971392bc15239fded5417945c0f0`.
+- Run 37494786980 na `e1c7446452e85cec1ff02fbdb20683ebf440d6a9`: SUCCESS. Workflow Checks, job `verify`, w tym `npm run test:agent-pipeline`.
+- Run 37494786947 na tym samym SHA: SUCCESS. Workflow Agent Gates.
+- Ten plik dopisuje wynik tamtego CI. Workflow `verify` na commicie tej notatki jest w opisie PR i nie jest tym samym runem co 37494786980.
 
 Nie uruchamiano `test:live` ani testów połączenia #35 i #37.
 
