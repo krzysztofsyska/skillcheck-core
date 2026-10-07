@@ -18,6 +18,7 @@ const migrations = [
   "20261004000100_exercise_observations.sql",
   "20261004000200_screening_results.sql",
   "20261005000100_screening_worker_claim_payload.sql",
+  "20261007000100_screening_retry_active_conflict.sql",
 ];
 
 const ownerA = "10000000-0000-0000-0000-000000000001";
