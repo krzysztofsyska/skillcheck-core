@@ -60,6 +60,10 @@ ustawione.
 - Edge Function `screening-worker` ma `verify_jwt = false` i ufa wyłącznie HMAC
   `x-skillcheck-timestamp` / `x-skillcheck-signature`.
 - Podpis: HMAC-SHA256(secret, timestamp + "." + sha256(surowe bajty body)).
+- `lib/screening-hmac.ts` importuje `Buffer` z `node:buffer`. W Deno `Buffer` nie jest
+  globalem; bez tego importu poprawny podpis wpada w kod `secret` i HTTP 401.
+  Poprawka jest w repozytorium. Produkcyjna funkcja dostaje ją dopiero po osobnej
+  zgodzie na wdrożenie, nie przez ręczną podmianę na żywo.
 - Worker łączy się przez `SUPABASE_DB_URL` i `SET LOCAL ROLE screening_worker`.
   Nie używa `service_role` do claim/complete/fail.
 - OpenAI Responses API, model `gpt-5.4-mini-2026-03-17`, `store:false`,

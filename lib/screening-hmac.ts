@@ -1,3 +1,6 @@
+// Deno edge runtime does not provide Buffer as a global. Without this import,
+// assertScreeningDispatchSecret throws and every signed dispatch is rejected as `secret`.
+import { Buffer } from 'node:buffer';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 export const SCREENING_DISPATCH_MAX_SKEW_SECONDS = 60;
