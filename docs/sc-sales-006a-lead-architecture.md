@@ -113,7 +113,7 @@ Nie ma zatwierdzonej treści o przetwarzaniu danych ani zatwierdzonego okresu pr
 
 ## 6. B. Model danych
 
-Jedyna nowa migracja 006B: `supabase/migrations/20261006000100_sales_leads.sql`. Jeśli ten numer jest zajęty, zatrzymać się.
+Jedyna nowa migracja 006B: `supabase/migrations/20261007000200_sales_leads.sql`. Jeśli ten numer jest zajęty, zatrzymać się.
 
 Migracja nie polega na błędzie `CREATE EXTENSION IF NOT EXISTS`. To polecenie milczy, gdy rozszerzenie o tej nazwie już jest, także wtedy, gdy leży w innym schemacie. Na początku migracja robi jednoznaczny sprawdzian i przerywa się czytelnym wyjątkiem, zanim utworzy tabele:
 
@@ -449,7 +449,7 @@ Nie używać nazwy `SALES_LEAD_FINGERPRINT_SECRET`. Nie dodawać `service_role`.
 
 ### Kolejność
 
-1. Zmergować 006B. Uruchomić tylko `20261006000100_sales_leads.sql` raz. Nie uruchamiać starszych plików.
+1. Zmergować 006B. Uruchomić tylko `20261007000200_sales_leads.sql` raz. Nie uruchamiać starszych plików.
 2. Zmergować 006C i 006D przy `leads_enabled = false` i bez `SALES_LEADS_ENABLED=true`.
 3. Na jednorazowym Postgresie, nie na produkcji, wykonać test współbieżności z sekcji 12 i zachować wynik. Bez tego nie ustawiać `leads_enabled = true`.
 4. Właściciel wstawia własny UUID operatora SQL-em z sekcji 8.

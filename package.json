@@ -22,7 +22,9 @@
     "test:behavior-guide": "node --test tests/behavior-guide.test.mjs",
     "test:behavior-assessments": "node --test tests/behavior-assessment.test.mjs tests/behavior-database.test.mjs",
     "test:agent-pipeline": "node --test tests/agent-pipeline/*.test.mjs",
-    "agent:dry-run": "node tools/agent-pipeline/cli.mjs dry-run"
+    "agent:dry-run": "node tools/agent-pipeline/cli.mjs dry-run",
+    "test:sales-leads": "node --test tests/sales-leads-database.test.mjs",
+    "test:sales-leads-concurrency": "node tests/sales-leads-concurrency.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",

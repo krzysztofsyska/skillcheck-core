@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261005000100.
+// Public API contract after migrations 20260930000100 through 20261007000200.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -164,6 +164,8 @@ export type ScreeningReviewOverrideInput = {
 export type Database = {
   public: {
     Tables: {
+      sales_leads: { Row: SalesLead; Insert: never; Update: never; Relationships: [] };
+      platform_operators: { Row: PlatformOperator; Insert: never; Update: never; Relationships: [] };
       screening_criterion_review_overrides: {
         Row: ScreeningCriterionReviewOverride;
         Insert: never;
@@ -315,6 +317,14 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      submit_sales_lead: { Args: {
+        idempotency_key: string; first_name: string; company_name: string; email: string;
+        phone: string | null; needs: string; source_ip: string; issued_at_us: number; request_signature: string;
+      }; Returns: { lead_id: string | null; result_code: string }[] };
+      list_sales_leads: { Args: { result_limit?: number }; Returns: SalesLead[] };
+      platform_operator_status: { Args: Record<PropertyKey, never>; Returns: boolean };
+      grant_platform_operator: { Args: { target_user: string }; Returns: string };
+      revoke_platform_operator: { Args: { target_user: string }; Returns: string };
       review_screening_result: {
         Args: {
           target_analysis: string;
@@ -429,3 +439,12 @@ export type Row<T extends RelationName> =
       : never;
 export type Insert<T extends TableName> = Database["public"]["Tables"][T]["Insert"];
 export type Update<T extends TableName> = Database["public"]["Tables"][T]["Update"];
+
+export type SalesLead = {
+  id: string; idempotency_key: string; first_name: string; company_name: string;
+  email: string; phone: string | null; needs: string; status: 'received';
+  submitted_by: string | null; fingerprint_hash: string; created_at: string;
+};
+export type PlatformOperator = {
+  user_id: string; granted_at: string; granted_by: string | null; revoked_at: string | null;
+};

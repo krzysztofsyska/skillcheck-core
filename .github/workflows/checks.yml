@@ -30,6 +30,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:db
+      - run: npm run test:sales-leads
       - run: npm run test:auth
       - run: npm run test:cv
       - run: npm run test:screening

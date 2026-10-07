@@ -21,15 +21,19 @@ Dodać zapis i odczyt zgłoszeń kontaktowych wyłącznie przez RPC opisane w pr
 
 ## Baza
 
-Wyjdź z aktualnego `main`. Nie resetuj repozytorium. Ostatnia istniejąca migracja w momencie projektu to `supabase/migrations/20261005000100_screening_worker_claim_payload.sql`. Utwórz wyłącznie:
+Wyjdź z aktualnego `integration`. PR kieruj do `integration`. Nie resetuj repozytorium. Ostatnia istniejąca migracja w momencie projektu to `supabase/migrations/20261005000100_screening_worker_claim_payload.sql`. Utwórz wyłącznie:
 
-`supabase/migrations/20261006000100_sales_leads.sql`
+`supabase/migrations/20261007000200_sales_leads.sql`
 
 Jeśli ten plik albo nowszy numer już istnieje, przerwij. Nie edytuj i nie uruchamiaj ponownie starszych migracji. Nie wykonuj migracji na zdalnym Supabase. Nie używaj `service_role`. Nie wstawiaj UUID operatora ani wartości sekretu.
 
+Korekta metadanych 2026-10-07 (Issue #45): baza i cel PR `integration`; numer po migracji SC-007. Kontrakt bezpieczeństwa bez zmian.
+
 ## ALLOWED_FILES
 
-- `supabase/migrations/20261006000100_sales_leads.sql`
+- `supabase/migrations/20261007000200_sales_leads.sql`
+- `docs/sc-sales-006a-lead-architecture.md` — wyłącznie numer migracji
+- `docs/sc-sales-006b-cursor-prompt.md` — wyłącznie aktualizacja metadanych wykonawczych
 - `lib/sales-lead-signature.ts`
 - `lib/supabase/database.types.ts`
 - `tests/database-types.contract.ts`

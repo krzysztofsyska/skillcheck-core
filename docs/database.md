@@ -185,3 +185,19 @@ Te same kontrole są uruchamiane przez GitHub Actions. Plik lock stabilizuje wer
 Źródła projektu zabezpieczeń:
 [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)
 i [Database Functions](https://supabase.com/docs/guides/database/functions).
+
+
+## SC-SALES-006B — zgłoszenia kontaktowe (REVIEW)
+
+Migracja `20261007000200_sales_leads.sql` jest plikiem w repozytorium, nie wdrożeniem na zdalną bazę.
+`public.sales_leads` przechowuje niezmienne zgłoszenia bez `company_id`; `public.platform_operators` przechowuje osobne uprawnienie operatora. Rola firmy ani domena e-maila nie nadaje dostępu. RLS jest włączone, API nie ma CRUD.
+
+Jedyny zapis to `submit_sales_lead(uuid,text,text,text,text,text,text,bigint,text)` → tabela `(lead_id uuid,result_code text)`. HMAC wiąże pola, klucz, IP, czas i `auth.uid()`. Funkcja sama liczy odciski i limity. `list_sales_leads(integer default 50)`, `platform_operator_status()`, `grant_platform_operator(uuid)` i `revoke_platform_operator(uuid)` są dostępne tylko dla authenticated; lista i zmiany uprawnień wymagają aktywnego operatora. Grant/revoke zwracają tekstowy kod.
+
+`private.sales_lead_settings` startuje wyłączone, bez sekretów. `private.sales_lead_attempts` zawiera wyłącznie odcisk, czas i kod próby. `private.sales_lead_replay_state` agreguje maksymalnie 20 ponowień na zgłoszenie. Rotacja i retire blokują ten sam wiersz ustawień co końcowa autoryzacja zapisu; poprzedni sekret pozostaje co najmniej 60 minut. Trigger usunięcia auth.users odczepia autora bez zmiany treści. Sprzątanie odbywa się przez prywatny helper, bez wyłączania triggera.
+
+Migracja wymaga `pgcrypto` w `extensions` i przeciążenia `extensions.hmac(text,text,text)`. Inny schemat lub brak przeciążenia przerywa migrację. Nie przenosi istniejącego rozszerzenia.
+
+Testy sekwencyjne: `npm run test:sales-leads`. Test współbieżności: `npm run test:sales-leads-concurrency`, wyłącznie jednorazowy PostgreSQL po migracji, `SALES_LEADS_TEST_DATABASE_URL` oraz jawne `SALES_LEADS_TEST_DISPOSABLE=YES`. Brak adresu oznacza SKIP, nie PASS. CI nie uruchamia tego skryptu. Domyślny przebieg obejmuje zapis, limity, operatorów i rotację. Dla każdego z trzech wariantów retire przygotować osobną jednorazową bazę, wykonać `--prepare-retire`, a po rzeczywistych 60 minutach uruchomić odpowiednio `--retire-current`, `--retire-previous` albo `--retire-after`. Skrypt nie cofa zegara ani znacznika rotacji. Pełna akceptacja współbieżności wymaga wszystkich czterech przebiegów. Nie uruchomiono ich w tym zadaniu.
+
+Publiczne włączenie nadal wymaga 006C/006D, pełnego testu współbieżności, sekretu, operatora i zatwierdzonej informacji o danych.
