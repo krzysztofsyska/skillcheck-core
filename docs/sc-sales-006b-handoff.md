@@ -60,3 +60,16 @@ Nie wykonano testu prawdziwej współbieżności. PGlite nie jest takim dowodem.
 Issue #45: nowsza migracja SC-007 zajęła chronologię. Po poleceniu właściciela „Ponów”, następującym po przedstawieniu korekty, numer zmieniono z 20261006000100 na 20261007000200, bazę/target PR na integration zgodnie z AGENTS.md. Dwa dokumenty projektu/promptu zmieniono tylko w tym zakresie i liście plików. Kontrakt bezpieczeństwa pozostaje bez zmian. pg jest już zależnością po SC-007, więc package-lock.json nie wymaga zmiany.
 
 NEXT ACTION: niezależne review aktualnego SHA w draft PR; bez merge, deploy ani 006C/006D. Publiczne włączenie pozostaje zablokowane do pełnego testu współbieżności i pozostałych warunków projektu. Następny prompt review zostaje zapisany w PR i Issue, bez kopiowania przez właściciela.
+
+## Poprawka R1 i ponowne review — 2026-10-07
+
+Na polecenie właściciela Codex poprawił normalizację i wykonał ponowny przegląd.
+- Wspólna, zamrożona mapa Unicode 17.0: 1487 zamian pojedynczych znaków oraz rozwinięcie U+0130. Bez zależności od locale, wersji runtime i kontekstu słowa.
+- Jawne doprecyzowanie algorytmu w projekcie i prompcie: `ΟΣ` -> `οσ`, `İ` -> `i` + U+0307. Unicode nadal dozwolone; brak NFC/NFKC/casefold. Publiczne RPC, autoryzacja, limity i blokady bez zmian.
+- Nowy helper SQL jest prywatny, immutable/strict, z pustym search_path i bez EXECUTE dla ról API. Nie wymaga SECURITY DEFINER.
+- Regresje dziewięciu adresów obejmują accepted, wartość zapisaną i replay z tym samym ID; pełny zestaw znaków zmieniających wielkość jest porównany między JS i SQL wraz z idempotencją.
+- Zmieniono sześć plików: helper TS, istniejącą niewdrożoną migrację, testy sales-leads, projekt 006A, prompt 006B i ten handoff.
+
+Node 24.19.0: npm ci, typecheck, test:db (13/13), test:sales-leads (13/13), build i diff --check — PASS. CI dla nowego SHA oceniane po publikacji. R1 domknięte; ponowne review poprawki: PASS. Przegląd tego samego wykonawcy, nie niezależny audyt drugiego agenta. Wcześniejsze ograniczenie pozostaje: rzeczywista współbieżność PostgreSQL NOT RUN, wymagane przed publicznym włączeniem.
+
+Bez zdalnej migracji, sekretów, merge, deploy oraz 006C/006D. NEXT ACTION: po zielonym CI akceptacja właściciela do integration; osobna zgoda przed produkcją. Pełne SHA i następny prompt zostaną zapisane w PR #46.

@@ -109,6 +109,9 @@ Funkcje publiczne, każda `security definer` i `set search_path = ''`:
 
 `private.is_platform_operator(uuid)`, `private.detach_sales_lead_author(uuid)`, `private.purge_expired_sales_lead_attempts()`, `private.purge_sales_leads(uuid[])`, `private.rotate_sales_lead_request_secret(text)` i `private.retire_sales_lead_previous_secret()` są `security definer` z `search_path = ''`. Po `revoke all` funkcja operatora dostaje `execute` tylko dla `authenticated`. Funkcje sprzątania, odczepienia i sekretu nie dostają grantu dla `anon` ani `authenticated`. Rotacja i retire zachowują się jak w sekcji 7 projektu, łącznie z tokenami `sales_lead_secret_invalid`, `sales_lead_secret_rotation_busy` i `sales_lead_secret_history_open`. Trigger `AFTER DELETE` na `auth.users` woła odczepienie autora. Po każdej funkcji publicznej: `revoke all ... from public`, potem tylko wskazany grant.
 
+
+Doprecyzowanie R1 (006B): małe litery e-maila oznaczają zamrożoną mapę Unicode 17.0 stosowaną osobno do każdego punktu kodowego, bez reguł zależnych od języka i kontekstu. Mapa zawiera 1487 zamian jeden-do-jednego oraz osobne rozwinięcie U+0130 do U+0069 U+0307; pozostałe znaki pozostają bez zmian. Dlatego `ΟΣ` daje `οσ`, a nie kontekstowe `ος`. Nie wykonujemy NFC/NFKC ani casefold. Helper i prywatna funkcja SQL `private.sales_lead_lower_email(text)` mają identyczną mapę; nie korzystają z locale bazy ani bieżącej wersji Unicode runtime. Nie ograniczamy adresów do ASCII. Zmiana mapy w przyszłości wymaga wspólnej aktualizacji kontraktu, podpisu i SQL. Publiczna sygnatura RPC pozostaje bez zmian.
+
 Helper `lib/sales-lead-signature.ts` składa ten sam kanoniczny tekst i HMAC co baza. Nie woła sieci i nie czyta zmiennych środowiska. Test porównuje jeden fixture z `extensions.hmac`.
 
 ## Typy

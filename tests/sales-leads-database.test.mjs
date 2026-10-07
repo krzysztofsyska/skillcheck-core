@@ -4,7 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { randomUUID, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
-import { signSalesLead, salesLeadCanonical } from '../lib/sales-lead-signature.ts';
+import { signSalesLead, salesLeadCanonical, normalizeSalesLead } from '../lib/sales-lead-signature.ts';
 const secret = 'test-only-secret-A-'.repeat(3), secretB = 'test-only-secret-B-'.repeat(3);
 const migration = await readFile(new URL('../supabase/migrations/20261007000200_sales_leads.sql', import.meta.url),'utf8');
 const bootstrap = `create role anon; create role authenticated; create schema auth;
@@ -225,4 +225,50 @@ test('operator list clamps 1–100, defaults 50 and orders by timestamp then UUI
 test('normalization agrees with Node for Unicode whitespace and multiline UTF-8',async()=>{
   const i=input({first_name:'\u00a0Jaś\u2003Kowalski\ufeff',company_name:'\u3000Firma\u202fTest\u00a0',email:'\ufeffA@EXAMPLE.TEST\u00a0',needs:'\u00a0Nowa rekrutacja\r\nDruga linia\u3000'});
   assert.equal((await submit(i)).result_code,'accepted');
+});
+
+
+test('R1: Unicode email signatures, stored normalization and normalized replay', async () => {
+  const cases = [
+    [' TEST@EXAMPLE.TEST ', 'test@example.test'],
+    ['İ@example.test', 'i\u0307@example.test'],
+    ['ΟΣ@example.test', 'οσ@example.test'],
+    ['ΟΣΑ@example.test', 'οσα@example.test'],
+    ['ŁÓDŹ@EXAMPLE.TEST', 'łódź@example.test'],
+    ['ẞ@example.test', 'ß@example.test'],
+    ['𐐀@example.test', '𐐨@example.test'],
+    ['ı@example.test', 'ı@example.test'],
+    ['😀+中@example.test', '😀+中@example.test'],
+  ];
+  for (const [index, [email, expected]] of cases.entries()) {
+    const i = input({email, source_ip: `203.0.113.${index + 20}`});
+    assert.equal(normalizeSalesLead(i).email, expected);
+    const r = await as('anon', null, () => submit(i));
+    assert.equal(r.result_code, 'accepted', email); assert.ok(r.lead_id);
+    assert.equal(await value('select email from public.sales_leads where id=$1', [r.lead_id]), expected);
+    const replay = await as('anon', null, () => submit({...i, email: expected}));
+    assert.equal(replay.result_code, 'replay'); assert.equal(replay.lead_id, r.lead_id);
+  }
+  assert.equal(await count('public.sales_leads'), cases.length);
+  assert.equal(await count('private.sales_lead_attempts'), cases.length);
+});
+
+test('R1: entire Unicode lowercase mapping agrees with SQL and is idempotent', async () => {
+  // Independent oracle: single-code-point Unicode lowercasing, not whole-string contextual lowercasing.
+  const chars = [];
+  for (let cp = 1; cp <= 0x10ffff; cp++) {
+    if (cp >= 0xd800 && cp <= 0xdfff) continue;
+    const c = String.fromCodePoint(cp);
+    if (c !== c.toLowerCase()) chars.push(c);
+  }
+  const source = chars.join('') + 'ςıß中😀';
+  const expected = Array.from(source, c => c.toLowerCase()).join('');
+  const normalized = normalizeSalesLead(input({email: source})).email;
+  assert.equal(normalized, expected);
+  assert.equal(await value('select private.sales_lead_lower_email($1)', [source]), expected);
+  assert.equal(await value('select private.sales_lead_lower_email($1)', [expected]), expected);
+  assert.equal(normalizeSalesLead(input({email: expected})).email, expected);
+  for (const role of ['anon', 'authenticated']) {
+    assert.equal(await value("select has_function_privilege($1,'private.sales_lead_lower_email(text)','execute')", [role]), false);
+  }
 });

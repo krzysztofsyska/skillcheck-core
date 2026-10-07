@@ -83,6 +83,9 @@ Odrzucić znaki sterujące i DEL (`U+007F`). W `needs` wolno zostawić tabulator
 
 Normalizacja jest w `lib/sales-lead-signature.ts` i jeszcze raz w `submit_sales_lead`, tym samym algorytmem. Baza jest źródłem prawdy dla zapisu. Action nie podpisuje danych, które lokalnie łamią limity. Bezpośrednie RPC i tak nie zapisze danych bez ważnego podpisu.
 
+
+Doprecyzowanie R1 (006B): małe litery e-maila oznaczają zamrożoną mapę Unicode 17.0 stosowaną osobno do każdego punktu kodowego, bez reguł zależnych od języka i kontekstu. Mapa zawiera 1487 zamian jeden-do-jednego oraz osobne rozwinięcie U+0130 do U+0069 U+0307; pozostałe znaki pozostają bez zmian. Dlatego `ΟΣ` daje `οσ`, a nie kontekstowe `ος`. Nie wykonujemy NFC/NFKC ani casefold. Helper i prywatna funkcja SQL `private.sales_lead_lower_email(text)` mają identyczną mapę; nie korzystają z locale bazy ani bieżącej wersji Unicode runtime. Nie ograniczamy adresów do ASCII. Zmiana mapy w przyszłości wymaga wspólnej aktualizacji kontraktu, podpisu i SQL. Publiczna sygnatura RPC pozostaje bez zmian.
+
 ### Stany interfejsu
 
 - gotowy — pola edytowalne, przycisk „Wyślij zgłoszenie”;
