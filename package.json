@@ -14,6 +14,7 @@
     "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs tests/cv-pdf.test.mjs tests/cv-docx.test.mjs",
     "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs",
     "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs",
+    "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
     "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
@@ -40,6 +41,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/yauzl": "3.4.0",
+    "pg": "^8.16.3",
     "typescript": "^5.9.0"
   }
 }
