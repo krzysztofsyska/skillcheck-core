@@ -34,6 +34,8 @@ type RelationshipNames<Name extends TableName> =
     : never;
 
 type ExpectedTables =
+  | "sales_leads"
+  | "platform_operators"
   | "companies"
   | "company_members"
   | "company_profiles"
@@ -57,6 +59,11 @@ type ExpectedViews =
   | "latest_exercise_definitions"
   | "latest_exercise_observations";
 type ExpectedFunctions =
+  | "submit_sales_lead"
+  | "list_sales_leads"
+  | "platform_operator_status"
+  | "grant_platform_operator"
+  | "revoke_platform_operator"
   | "create_company"
   | "ensure_initial_company"
   | "review_candidate_document"
@@ -409,3 +416,26 @@ type _ScreeningOverrideRelationships = Expect<Equal<
   RelationshipNames<"screening_criterion_review_overrides">,
   "screening_override_review_fkey" | "screening_override_criterion_fkey"
 >>;
+
+type _SalesInsert = Expect<Equal<Insert<"sales_leads">, never>>;
+type _SalesUpdate = Expect<Equal<Update<"sales_leads">, never>>;
+type _OperatorInsert = Expect<Equal<Insert<"platform_operators">, never>>;
+type _OperatorUpdate = Expect<Equal<Update<"platform_operators">, never>>;
+type _SalesColumns = Expect<Equal<keyof Row<"sales_leads">,
+  "id" | "idempotency_key" | "first_name" | "company_name" | "email" | "phone" | "needs" | "status" | "submitted_by" | "fingerprint_hash" | "created_at">>;
+type _OperatorColumns = Expect<Equal<keyof Row<"platform_operators">,
+  "user_id" | "granted_at" | "granted_by" | "revoked_at">>;
+type _SalesNullable = Expect<Equal<NullableKeys<Row<"sales_leads">>, "phone" | "submitted_by">>;
+type _SalesReturn = Expect<Equal<Database["public"]["Functions"]["submit_sales_lead"]["Returns"], { lead_id: string | null; result_code: string }[]>>;
+type _OperatorGrantReturn = Expect<Equal<Database["public"]["Functions"]["grant_platform_operator"]["Returns"], string>>;
+type _OperatorRevokeReturn = Expect<Equal<Database["public"]["Functions"]["revoke_platform_operator"]["Returns"], string>>;
+
+type _SalesArgs = Expect<Equal<Database["public"]["Functions"]["submit_sales_lead"]["Args"], {
+  idempotency_key: string; first_name: string; company_name: string; email: string;
+  phone: string | null; needs: string; source_ip: string; issued_at_us: number; request_signature: string;
+}>>;
+type _ListArgs = Expect<Equal<Database["public"]["Functions"]["list_sales_leads"]["Args"], { result_limit?: number }>>;
+type _ListReturn = Expect<Equal<Database["public"]["Functions"]["list_sales_leads"]["Returns"], Row<"sales_leads">[]>>;
+type _StatusReturn = Expect<Equal<Database["public"]["Functions"]["platform_operator_status"]["Returns"], boolean>>;
+type _GrantArgs = Expect<Equal<Database["public"]["Functions"]["grant_platform_operator"]["Args"], { target_user: string }>>;
+type _RevokeArgs = Expect<Equal<Database["public"]["Functions"]["revoke_platform_operator"]["Args"], { target_user: string }>>;

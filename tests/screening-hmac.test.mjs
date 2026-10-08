@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import {
   hashScreeningBody,
@@ -42,6 +44,25 @@ test('HMAC signs raw body bytes and rejects tampering or stale timestamps', () =
     }).code,
     'secret',
   );
+});
+
+test('hmac module imports Buffer so Deno does not depend on a global', async () => {
+  const source = await readFile(new URL('../lib/screening-hmac.ts', import.meta.url), 'utf8');
+  assert.match(source, /import \{ Buffer \} from 'node:buffer';/);
+});
+
+test('deno verifies a signed body when Buffer is not a global', (t) => {
+  const deno = spawnSync('deno', ['--version'], { encoding: 'utf8' });
+  if (deno.error) {
+    t.skip('deno is not installed');
+    return;
+  }
+  const check = spawnSync('deno', ['run', '--allow-read', 'scripts/check-screening-hmac-deno.ts'], {
+    encoding: 'utf8',
+    cwd: new URL('..', import.meta.url).pathname,
+  });
+  assert.equal(check.status, 0, `${check.stdout}\n${check.stderr}`);
+  assert.match(check.stdout, /deno-hmac-ok/);
 });
 
 test('dispatch body is hashed before JSON parse and accepts only a UUID attempt', () => {
