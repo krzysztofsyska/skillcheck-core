@@ -1,0 +1,23 @@
+.page { display: block; padding: 32px 20px; }
+.panel { width: min(1040px, 100%); margin: 0 auto; padding: 40px; }
+.panel h1 { font-size: clamp(30px, 5vw, 48px); }
+.panel p { line-height: 1.6; }
+.navigation { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; margin-bottom: 32px; }
+.navigation a { display: inline-flex; align-items: center; min-height: 44px; }
+.list { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 20px; }
+.card { border: 1px solid #d7dfea; border-radius: 14px; padding: 24px; min-width: 0; overflow-wrap: anywhere; }
+.heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.heading h2 { font-size: 22px; margin: 0; }
+.status { padding: 6px 12px; border-radius: 20px; background: #eef2f7; font-size: 14px; }
+.details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; margin: 24px 0 0; }
+.details dt { color: #536078; font-size: 14px; margin-bottom: 6px; }
+.details dd { margin: 0; line-height: 1.6; }
+.full { grid-column: 1 / -1; }
+.needs { white-space: pre-wrap; }
+.empty { padding: 24px; background: #eef2f7; border-radius: 12px; }
+@media (max-width: 600px) {
+  .page { padding: 16px 12px; }
+  .panel { padding: 24px 18px; }
+  .card { padding: 18px; }
+  .details { grid-template-columns: 1fr; }
+}
