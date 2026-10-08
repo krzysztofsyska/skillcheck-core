@@ -2,6 +2,7 @@ export const sectionLinks = [
   { href: "/#jak-to-dziala", label: "Jak to działa" },
   { href: "/#mozliwosci", label: "Możliwości" },
   { href: "/#pakiety", label: "Pakiety" },
+  { href: "/#o-nas", label: "O nas" },
   { href: "/#faq", label: "FAQ" },
 ] as const;
 
