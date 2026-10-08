@@ -188,6 +188,7 @@ export function DemoPage() {
               <div className={marketing.actions}>
                 <Link href="/" className={marketing.secondary}>Wróć do oferty</Link>
                 <Link href="/register" className={marketing.primary}>Utwórz konto</Link>
+                <Link href="/rozmowa" className={marketing.secondary}>Porozmawiajmy o Twojej rekrutacji</Link>
               </div>
             </div>
           </div>
