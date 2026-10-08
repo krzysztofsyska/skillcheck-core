@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { submitLead, type LeadState, type LeadInput } from "./actions";
+import { normalizeSalesLead } from "../../lib/sales-lead-normalization";
 import styles from "./rozmowa.module.css";
 
 const initial: LeadState = { status: "idle", message: "", retry: null };
@@ -9,12 +10,14 @@ const empty = { first_name: "", company_name: "", email: "", phone: "", needs: "
 
 export function LeadForm({ notice }: { notice: string }) {
   const [fields, setFields] = useState(empty);
-  const attempt = useRef<{ raw: string; key: string } | null>(null);
+  const attempt = useRef<{ normalized: string; key: string } | null>(null);
   const feedback = useRef<HTMLParagraphElement>(null);
   const [state, action, pending] = useActionState(async (previous: LeadState, form: FormData) => {
     const values = Object.fromEntries(Object.keys(empty).map(name => [name, String(form.get(name) ?? "")])) as typeof empty;
-    const raw = JSON.stringify(values);
-    if (!attempt.current || attempt.current.raw !== raw) attempt.current = { raw, key: crypto.randomUUID() };
+    // Compare before the request: even a lost response must not change the key
+    // for a whitespace/case-only edit. Uses the exact server/SQL Unicode mapping.
+    const normalized = JSON.stringify(normalizeSalesLead(values));
+    if (!attempt.current || attempt.current.normalized !== normalized) attempt.current = { normalized, key: crypto.randomUUID() };
     try {
       const next = await submitLead(previous, { ...values, idempotency_key: attempt.current.key } satisfies LeadInput);
       // On conflict discard the candidate as well as the server-normalized retry key.
