@@ -1,6 +1,7 @@
 import Link from "next/link";
 import styles from "../../marketing.module.css";
-import { capabilities, faq, packages, steps, availabilityNote } from "./content";
+import { capabilities, faq, steps, availabilityNote } from "./content";
+import { PackageComparison } from "./package-comparison";
 import { SiteFooter } from "./site-footer";
 import { SiteHeader } from "./site-header";
 
@@ -103,23 +104,10 @@ export function HomePage() {
 
         <section className={styles.block} id="pakiety" aria-labelledby="pkg-title">
           <div className={styles.wrap}>
-            <h2 id="pkg-title">Planowana oferta</h2>
-            <p className={styles.intro}>
-              Od pierwszego uporządkowania materiałów po pogłębioną ocenę kompetencji. Rozwijamy cztery poziomy oferty — pakiety nie są jeszcze dostępne w sprzedaży.
-            </p>
-            <div className={styles.grid}>
-              {packages.map((item) => (
-                <article key={item.name} className={styles.card}>
-                  <p className={`${styles.status} ${styles.statusPlanned}`}>Planowane</p>
-                  <h3 className={styles.packageName}>{item.name}</h3>
-                  <p className={styles.packageTitle}>{item.title}</p>
-                  <p>{item.body}</p>
-                </article>
-              ))}
-            </div>
-            <p className={styles.note}>
-              Rozmowa głosowa z kandydatem i pomiar jakości zatrudnienia pozostają w planach rozwoju. Nie są dostępne na tej stronie.
-            </p>
+            <p className={styles.kicker}>Od preselekcji do pogłębionej weryfikacji</p>
+            <h2 id="pkg-title">Cztery poziomy. Jedna platforma.</h2>
+            <p className={styles.intro}>Wybierz zakres odpowiadający potrzebom Twojej rekrutacji. Poniżej przedstawiamy planowaną ofertę.</p>
+            <PackageComparison />
           </div>
         </section>
 
