@@ -39,7 +39,10 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(homeResponse.status, 200);
   assert.match(homeResponse.headers.get('content-type'), /text\/html/);
   const home = await homeResponse.text();
-  assert.match(home, /Uporządkuj ocenę kandydatów przed rozmową rekrutacyjną/);
+  assert.match(home, /Podobne CV\. Różni ludzie\. Zupełnie inne wyniki w pracy\./);
+  assert.match(home, /Cztery poziomy\. Jedna platforma\./);
+  assert.match(home, /Cena robocza z wizualizacji/);
+  assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
   for (const href of ['/demo', '/register', '/login', '/#jak-to-dziala', '/#mozliwosci', '/#pakiety', '/#faq']) {
     assert.ok(homeHrefs.includes(href), `home link ${href}`);

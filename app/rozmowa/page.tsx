@@ -19,7 +19,7 @@ export default function ConversationPage() {
       <div id="tresc" className={styles.content}>
         <h1>Porozmawiajmy o Twojej rekrutacji</h1>
         <p>Opisz potrzeby firmy i zostaw dane do kontaktu. Zgłoszenie nie rezerwuje terminu rozmowy, nie zakłada konta i nie aktywuje pakietu.</p>
-        {enabled ? <LeadForm notice={notice} /> : <p className={styles.panel} role="status">Formularz nie przyjmuje teraz zgłoszeń.</p>}
+        {enabled ? <LeadForm notice={notice} /> : <p className={styles.panel} role="status">Formularz nie przyjmuje teraz zgłoszeń. Napisz do nas: <a href="mailto:pomoc@skillcheck.pl">pomoc@skillcheck.pl</a>.</p>}
         <Link href="/demo" className={marketing.secondary}>Zobacz przykład</Link>
       </div>
       <SiteFooter />
