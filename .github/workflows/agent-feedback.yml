@@ -1,0 +1,48 @@
+name: Agent feedback bridge
+
+on:
+  # Polling also catches inline comments/review submissions and missing events.
+  # Those PR events must not select credentialed code from an integration/PR ref.
+  schedule:
+    - cron: "*/5 * * * *"
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-feedback-bridge
+  cancel-in-progress: false
+
+jobs:
+  feedback:
+    if: >-
+      github.repository == 'krzysztofsyska/skillcheck-core' &&
+      github.ref == 'refs/heads/main' &&
+      vars.AGENT_FEEDBACK_ENABLED == 'true' &&
+      vars.AGENT_PIPELINE_ENABLED != 'true' &&
+      (github.event_name != 'issue_comment' ||
+       (github.event.issue.pull_request && github.event.sender.id == 199175422 &&
+        github.event.sender.login == 'chatgpt-codex-connector[bot]'))
+    environment: agent-control
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Reconcile registered feedback
+        run: node tools/agent-pipeline/feedback-cli.mjs
+        env:
+          AGENT_FEEDBACK_ENABLED: ${{ vars.AGENT_FEEDBACK_ENABLED }}
+          AGENT_PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          AGENT_PIPELINE_APP_ID: ${{ secrets.AGENT_PIPELINE_APP_ID }}
+          AGENT_PIPELINE_APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
+          AGENT_PIPELINE_APP_INSTALLATION_ID: ${{ secrets.AGENT_PIPELINE_APP_INSTALLATION_ID }}
