@@ -47,3 +47,4 @@ jobs:
       - run: npm run test:http
       - run: npm run test:auth-http
       - run: npm run test:marketing
+      - run: npm run test:sales-leads-http

@@ -1,0 +1,12 @@
+.content { width: min(720px, calc(100% - 32px)); margin: 0 auto; padding: 56px 0; }
+.panel { margin: 24px 0; padding: clamp(16px, 4vw, 32px); border: 1px solid #c9d2df; border-radius: 16px; background: #fff; }
+.fields { min-width: 0; border: 0; padding: 0; margin: 0; display: grid; gap: 12px; }
+.legend { font-size: 1.25rem; font-weight: 700; padding: 0 0 16px; }
+.fields label { font-weight: 600; margin-top: 8px; }
+.fields input, .fields textarea { width: 100%; min-width: 0; min-height: 44px; padding: 12px; border: 1px solid #68768c; border-radius: 8px; font: inherit; color: #172033; background: #fff; box-sizing: border-box; }
+.fields textarea { resize: vertical; }
+.fields button { min-height: 48px; padding: 12px 20px; border: 0; border-radius: 8px; background: #244bc1; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+.fields button:disabled { opacity: .65; cursor: wait; }
+.fields :focus-visible, .feedback:focus { outline: 3px solid #244bc1; outline-offset: 3px; }
+.feedback { padding: 16px; border-left: 4px solid #244bc1; background: #eef2ff; }
+.notice { white-space: pre-wrap; font-size: .95rem; }

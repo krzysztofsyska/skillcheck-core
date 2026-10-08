@@ -27,6 +27,7 @@ export function HomePage() {
               <div className={styles.actions}>
                 <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>
                 <Link href="/register" className={styles.secondary}>Utwórz konto</Link>
+                <Link href="/rozmowa" className={styles.secondary}>Porozmawiajmy o Twojej rekrutacji</Link>
               </div>
               <p className={styles.note}>
                 Założenie konta nie uruchamia analizy i nie aktywuje pakietu. Część funkcji opisanych niżej jest jeszcze w przygotowaniu.
@@ -134,6 +135,7 @@ export function HomePage() {
               <div className={styles.actions}>
                 <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>
                 <Link href="/register" className={styles.secondary}>Utwórz konto</Link>
+                <Link href="/rozmowa" className={styles.secondary}>Porozmawiajmy o Twojej rekrutacji</Link>
               </div>
             </div>
           </div>
