@@ -373,6 +373,10 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      save_sales_pipeline: { Args: { target_lead: string; expected_version: number; new_stage: string; new_note: string; next_contact: string | null; linked_company: string | null }; Returns: string };
+      list_sales_pipeline: { Args: { stage_filter?: string; due_filter?: string; page_offset?: number; target_lead?: string }; Returns: SalesPipelineRow[] };
+      sales_pipeline_history: { Args: { target_lead: string; before_version?: number }; Returns: Pick<SalesPipelineRow, 'version' | 'stage' | 'note' | 'next_contact_on' | 'company_id' | 'created_at'>[] };
+      find_sales_companies: { Args: { search_text: string }; Returns: { id: string; name: string }[] };
       record_contact_permission: {
         Args: { target_candidate: string; target_recruitment: string | null; contact_channel: ContactChannel;
           permission_state: ContactPermission["state"]; evidence_ref: string | null; expected_revision: number; request_key: string };
@@ -415,11 +419,21 @@ export type Database = {
         Returns: string;
       };
       remove_recruitment_shortlist_entry: { Args: { target_entry: string }; Returns: string };
+      claim_sales_mail: {
+        Args: { target_lead: string | null; request_id: string; issued_at_ms: number; request_signature: string };
+        Returns: { lead_id: string; email: string; template_version: string; lease_id: string }[];
+      };
+      finish_sales_mail: {
+        Args: { target_lead: string; request_id: string; issued_at_ms: number; outcome: string; provider_id: string | null; request_signature: string };
+        Returns: boolean;
+      };
       submit_sales_lead: { Args: {
         idempotency_key: string; first_name: string; company_name: string; email: string;
         phone: string | null; needs: string; source_ip: string; issued_at_us: number; request_signature: string;
       }; Returns: { lead_id: string | null; result_code: string }[] };
       list_sales_leads: { Args: { result_limit?: number }; Returns: SalesLead[] };
+      list_sales_leads_inbox: { Args: { result_limit?: number }; Returns: (Omit<SalesLead, 'idempotency_key' | 'fingerprint_hash'> & { closed_at: string | null })[] };
+      close_sales_lead: { Args: { target_lead: string }; Returns: string };
       platform_operator_status: { Args: Record<PropertyKey, never>; Returns: boolean };
       grant_platform_operator: { Args: { target_user: string }; Returns: string };
       revoke_platform_operator: { Args: { target_user: string }; Returns: string };
@@ -545,4 +559,11 @@ export type SalesLead = {
 };
 export type PlatformOperator = {
   user_id: string; granted_at: string; granted_by: string | null; revoked_at: string | null;
+};
+
+export type SalesPipelineRow = {
+ id: string; first_name: string; company_name: string; email: string; phone: string | null;
+ needs: string; created_at: string; stage: import('../sales-pipeline').SalesStage;
+ note: string; next_contact_on: string | null; company_id: string | null;
+ linked_company_name: string | null; version: number; closed_at: string | null; total_count: number;
 };

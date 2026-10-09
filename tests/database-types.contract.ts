@@ -66,6 +66,10 @@ type ExpectedViews =
 type ExpectedFunctions =
   | "submit_sales_lead"
   | "list_sales_leads"
+  | "list_sales_leads_inbox"
+  | "close_sales_lead"
+  | "claim_sales_mail"
+  | "finish_sales_mail"
   | "platform_operator_status"
   | "grant_platform_operator"
   | "revoke_platform_operator"
@@ -90,7 +94,8 @@ type ExpectedFunctions =
   | "prepare_candidate_communication"
   | "cancel_candidate_communication"
   | "get_candidate_communications"
-  | "get_candidate_communication_history";
+  | "get_candidate_communication_history"
+  | "save_sales_pipeline" | "list_sales_pipeline" | "sales_pipeline_history" | "find_sales_companies";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;

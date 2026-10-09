@@ -3,6 +3,9 @@
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { headers } from "next/headers";
+import { after } from "next/server";
+import { mailEnabled } from "../../lib/sales-mail";
+import { runSalesMail } from "../../lib/sales-mail-server";
 import { createClient } from "../../lib/supabase/server";
 import { normalizeSalesLead, signSalesLead, type SalesLeadFields } from "../../lib/sales-lead-signature";
 
@@ -71,6 +74,13 @@ export async function submitLead(previous: LeadState, input: LeadInput): Promise
     if (error || !Array.isArray(data) || data.length !== 1) return result("sales_lead_rejected", generic, retry);
     const row = data[0];
     if ((row.result_code === "accepted" || row.result_code === "replay") && typeof row.lead_id === "string" && uuid.test(row.lead_id)) {
+      // The durable outbox was committed with the lead. A mail failure cannot undo the submission.
+      if (mailEnabled()) {
+        after(async () => {
+          try { console.info("sales_mail_" + await runSalesMail(row.lead_id)); }
+          catch { console.error("sales_mail_deferred"); }
+        });
+      }
       return result(row.result_code === "accepted" ? "sales_lead_accepted" : "sales_lead_replay",
         "Zgłoszenie zostało zapisane. To nie jest rezerwacja terminu rozmowy.", null, true);
     }

@@ -1,0 +1,33 @@
+.page { max-width: 1040px; margin: 0 auto; padding: 32px 24px 72px; display: block; overflow-wrap: anywhere; color: #18304b; }
+.page h1 { font-size: clamp(30px, 5vw, 46px); margin: 12px 0; }
+.page h2 { font-size: 22px; margin: 0 0 12px; }
+.page p { line-height: 1.6; }
+.page nav { display: flex; gap: 24px; flex-wrap: wrap; margin: 20px 0; }
+.page a { color: #214ccd; display: inline-block; padding: 10px 0; }
+.page header { margin: 32px 0; }
+.eyebrow { letter-spacing: .12em; font-size: 12px; font-weight: 700; color: #516584; }
+.filters { display: flex; gap: 16px; align-items: end; flex-wrap: wrap; padding: 18px 0; }
+.filters label, .form label { display: grid; gap: 8px; font-weight: 600; }
+.page input, .page select, .page textarea { font: inherit; border: 1px solid #abb9cd; border-radius: 8px; background: white; padding: 12px; min-height: 44px; color: #18304b; max-width: 100%; min-width: 0; }
+.page button { font: inherit; border: none; border-radius: 8px; padding: 12px 20px; min-height: 44px; color: white; background: #214ccd; cursor: pointer; }
+.page button:disabled { opacity: .6; cursor: wait; }
+.page :focus-visible { outline: 3px solid #a34805; outline-offset: 3px; }
+.form { display: grid; gap: 18px; margin-top: 24px; }
+.form button { justify-self: start; }
+.form textarea { resize: vertical; width: 100%; }
+.form .confirm { display: flex; align-items: start; line-height: 1.6; }
+.confirm input { min-height: 20px; width: 20px; flex-shrink: 0; margin-top: 4px; }
+.list { list-style: none; padding: 0; display: grid; gap: 20px; }
+.card { padding: 24px; border: 1px solid #d5deea; border-radius: 16px; background: white; margin: 20px 0; }
+.cardTitle { display: flex; gap: 16px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.cardTitle h2 { margin: 0; }
+.badge { display: inline-block; background: #edf2ff; color: #244bb0; border-radius: 20px; padding: 7px 14px; font-size: 14px; font-weight: 600; }
+.badge[data-stage="conversation"] { background: #e9f8fa; color: #18676b; }
+.badge[data-stage="offer"] { background: #fff3da; color: #805300; }
+.badge[data-stage="won"] { background: #e8f5eb; color: #235e33; }
+.badge[data-stage="lost"] { background: #f4ecec; color: #813636; }
+.hint { font-size: 14px; color: #52647c; }
+.note { white-space: pre-wrap; }
+.empty { background: #eef3fa; padding: 24px; border-radius: 12px; }
+.page summary { cursor: pointer; padding: 12px 0; }
+@media(max-width:600px) { .page { padding: 16px 12px 40px; } .card { padding: 18px; } .filters { display: grid; } }
