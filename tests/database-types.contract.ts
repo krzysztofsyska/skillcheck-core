@@ -54,7 +54,11 @@ type ExpectedTables =
   | "screening_criterion_results"
   | "screening_result_reviews"
   | "screening_criterion_review_overrides"
-  | "recruitment_shortlist_entries";
+  | "recruitment_shortlist_entries"
+  | "candidate_contact_permissions"
+  | "candidate_contact_preferences"
+  | "candidate_communications"
+  | "candidate_communication_events";
 type ExpectedViews =
   | "latest_behavior_assessments"
   | "latest_exercise_definitions"
@@ -80,7 +84,13 @@ type ExpectedFunctions =
   | "get_screening_ranking"
   | "get_recruitment_shortlist"
   | "add_recruitment_shortlist_entry"
-  | "remove_recruitment_shortlist_entry";
+  | "remove_recruitment_shortlist_entry"
+  | "record_contact_permission"
+  | "set_contact_preferences"
+  | "prepare_candidate_communication"
+  | "cancel_candidate_communication"
+  | "get_candidate_communications"
+  | "get_candidate_communication_history";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -449,3 +459,12 @@ type _RevokeArgs = Expect<Equal<Database["public"]["Functions"]["revoke_platform
 type _ShortlistInsert = Expect<Equal<Insert<"recruitment_shortlist_entries">, never>>;
 type _ShortlistUpdate = Expect<Equal<Update<"recruitment_shortlist_entries">, never>>;
 type _RankingTenantArgument = Expect<Equal<Extract<keyof Database["public"]["Functions"]["get_screening_ranking"]["Args"], "company_id">, never>>;
+
+// SC-010 B1: writes only through scoped RPCs; no delivery/verified grant types.
+type _ContactPermissionInsert = Expect<Equal<Insert<"candidate_contact_permissions">, never>>;
+type _ContactPermissionUpdate = Expect<Equal<Update<"candidate_contact_permissions">, never>>;
+type _ContactPreferencesInsert = Expect<Equal<Insert<"candidate_contact_preferences">, never>>;
+type _CommunicationInsert = Expect<Equal<Insert<"candidate_communications">, never>>;
+type _CommunicationUpdate = Expect<Equal<Update<"candidate_communications">, never>>;
+type _CommunicationEventUpdate = Expect<Equal<Update<"candidate_communication_events">, never>>;
+type _CommunicationNoTenantInput = Expect<Equal<Extract<keyof Database["public"]["Functions"]["prepare_candidate_communication"]["Args"], "company_id" | "actor_id" | "destination">, never>>;
