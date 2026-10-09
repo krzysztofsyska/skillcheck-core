@@ -34,7 +34,13 @@ export function AnalysisControl({ route, requestId, retryId, label, disabled }: 
 }
 
 export function ReviewControl({ route, analysisId, version, criteria, stale, review, overrides }: { route: ScreeningRoute; analysisId: string; version: number; criteria: ScreeningCriterionResult[]; stale: boolean; review?: ScreeningResultReview; overrides: ScreeningCriterionReviewOverride[] }) {
-  const [state, submit, pending] = useActionState(reviewAnalysis.bind(null, route, analysisId), {});
+  const [state, submit, pending] = useActionState(async (previous: ScreeningFormState, form: FormData) => {
+    let bytes = 0;
+    form.forEach((value, key) => { bytes += new TextEncoder().encode(key + String(value)).length + 256; });
+    if (bytes > 750000) return { error: 'Korekty są zbyt obszerne. Skróć cytaty lub uzasadnienia i zapisz ponownie.' };
+    return reviewAnalysis(route, analysisId, previous, form);
+  }, {});
+  const [selected, setSelected] = useState(() => new Set(overrides.map(o => o.criterion_result_id)));
   const [disposition, setDisposition] = useState<string>(stale ? 'needs_reanalysis' : review?.disposition ?? 'approved');
   const corrections = new Map(overrides.map(o => [o.criterion_result_id, o]));
   return <form action={submit}>
@@ -50,10 +56,11 @@ export function ReviewControl({ route, analysisId, version, criteria, stale, rev
         <p>Zaznacz kryteria do korekty. Cytaty kopiuj dokładnie z analizowanej wersji CV.</p>
         {criteria.map(c => { const correction = corrections.get(c.id); return <fieldset key={c.id}>
           <legend>{c.criterion_text_snapshot}</legend>
-          <label><input type="checkbox" name={`change:${c.id}`} defaultChecked={!!correction} /> Zapisz korektę tego kryterium</label>
+          <label><input type="checkbox" name={`change:${c.id}`} checked={selected.has(c.id)} onChange={e => setSelected(previous => { const next = new Set(previous); if (e.target.checked) next.add(c.id); else next.delete(c.id); return next; })} /> Zapisz korektę tego kryterium</label>
+          <fieldset disabled={!selected.has(c.id)}><legend>Treść korekty</legend>
           <label>Ocena po korekcie <select name={`rating:${c.id}`} defaultValue={correction?.rating_override ?? c.rating}>{Object.entries(ratingLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           {Array.from({ length: 5 }, (_, i) => <label key={i}>Dokładny cytat {i + 1} <textarea name={`quote:${c.id}:${i}`} maxLength={2000} rows={2} defaultValue={(correction?.evidence_override ?? c.evidence)[i]?.quote ?? ''} /></label>)}
-          <label>Uzasadnienie korekty <textarea name={`explanation:${c.id}`} maxLength={4000} rows={3} defaultValue={correction?.explanation_override ?? c.explanation ?? ''} /></label>
+          <label>Uzasadnienie korekty <textarea name={`explanation:${c.id}`} maxLength={4000} rows={3} defaultValue={correction?.explanation_override ?? c.explanation ?? ''} /></label></fieldset>
         </fieldset>; })}
       </div>}
       <label>Notatka rekrutera <textarea name="note" maxLength={10000} rows={3} defaultValue={review?.review_note ?? ''} /></label>

@@ -36,7 +36,7 @@ results cannot be approved as current. Original AI rows are never mutated.
 
 ## DB / migrations / secrets
 
-Migration 20261009080000_screening_latest_mutations.sql serializes review/retry with start using the same application advisory lock and rejects superseded mutations. Existing signatures and ACLs are preserved. Not applied to production; no worker deploy or production changes. No provider call.
+Migration 20261009080000_screening_latest_mutations.sql serializes review/retry/completion with start using the same application advisory lock and rejects superseded mutations. Late lower-version completion stays stale and cannot displace a newer result. Existing signatures and ACLs are preserved. Not applied to production; no worker deploy or production changes. No provider call.
 No service-role client. Attempts, leases, raw source CV, provider errors and secrets are
 not passed to client components. The built browser chunks were checked for secret env
 names and lease-token fields; no matches.
@@ -61,6 +61,8 @@ names and lease-token fields; no matches.
 No authenticated live browser/provider E2E was performed. Synthetic adapter rendering
 and PGlite tests do not establish production readiness. SC-005 remains blocked by the
 malformed provider API key observed during the previous diagnostic; AI stays disabled.
-CI and independent review must pass before owner acceptance into integration. Production
+The owner explicitly instructed: “Przegląd architektury, moja akceptacja jest i domknij SC zero zero sześć przed implementacją.” This is conditional integration acceptance already supplied, not merely development authorization. CI and independent review must still PASS before merge. Do not ask for a duplicate acceptance; do not treat this approval as a review verdict. Production
 requires separate owner approval, SC-005 PASS, and a complete authenticated smoke test
 covering start, worker completion, review, stale prevention and retry.
+
+Large review forms submit correction fields only for selected criteria. A client byte budget rejects oversized drafts before transport, keeping their text available for shortening.

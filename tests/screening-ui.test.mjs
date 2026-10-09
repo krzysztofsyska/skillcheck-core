@@ -177,6 +177,8 @@ test('review form retains latest disposition, note, rating, evidence and explana
   const override={criterion_result_id:criterion.id,rating_override:'meets',evidence_override:[{quote:'Tworzę raporty.'}],explanation_override:'Zweryfikowana korekta'};
   const html=renderToStaticMarkup(React.createElement(controls.ReviewControl,{route,analysisId:uuid(11),version:1,criteria:[criterion],stale:false,review,overrides:[override]}));
   assert.match(html,/value="approved_with_changes" selected/);
-  assert.match(html,/checked=""/);assert.match(html,/value="meets" selected/);
+  assert.match(html,/checked=""/);
+  const unselected=renderToStaticMarkup(React.createElement(controls.ReviewControl,{route,analysisId:uuid(11),version:1,criteria:[criterion],stale:false,review,overrides:[]}));
+  assert.match(unselected, /<fieldset disabled=""><legend>Treść korekty/);assert.match(html,/value="meets" selected/);
   assert.match(html,/Tworzę raporty/);assert.match(html,/Zweryfikowana korekta/);assert.match(html,/Zachowaj notatkę/);
 });

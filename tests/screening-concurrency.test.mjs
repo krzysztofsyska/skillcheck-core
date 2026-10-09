@@ -391,6 +391,19 @@ test("screening RPC races on PostgreSQL", async (t) => {
     assert.deepEqual(rows,[{execution_status:'completed',stale_at:null}]);
   });
 
+  await t.test("late lower-version completion cannot displace a newer contract result", async()=>{
+    const fixture=await seed('late-completion');
+    const older=(await fixture.user.query(startSql,startArgs(fixture,randomUUID(),false))).rows[0];
+    const args=startArgs(fixture,randomUUID(),false);args[4]='screening-v2';
+    const newer=(await fixture.user.query(startSql,args)).rows[0];
+    const worker=await connectAs('screening_worker');
+    await finish(fixture,newer,worker);await finish(fixture,older,worker);
+    const rows=(await admin.query("select analysis_version,stale_at is not null as stale from public.screening_analysis_versions where application_id=$1 order by analysis_version",[fixture.application.id])).rows;
+    assert.deepEqual(rows,[{analysis_version:1,stale:true},{analysis_version:2,stale:false}]);
+    const approved=await settle(fixture.user.query("select public.review_screening_result($1,0,'approved',null,'[]')",[newer.analysis_id]));
+    assert.equal(approved.ok,true,approved.message);
+  });
+
   await t.test("unsynchronized start and retry races stay unique and singular", async () => {
     for (let attempt = 1; attempt <= 8; attempt += 1) {
       const fixture = await seed(`burst-${attempt}`);
