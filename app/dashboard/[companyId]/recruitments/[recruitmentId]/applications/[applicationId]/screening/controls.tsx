@@ -43,6 +43,16 @@ export function ReviewControl({ route, analysisId, version, criteria, stale, rev
   const [selected, setSelected] = useState(() => new Set(overrides.map(o => o.criterion_result_id)));
   const [disposition, setDisposition] = useState<string>(stale ? 'needs_reanalysis' : review?.disposition ?? 'approved');
   const corrections = new Map(overrides.map(o => [o.criterion_result_id, o]));
+  const [note, setNote] = useState(review?.review_note ?? '');
+  const [drafts, setDrafts] = useState(() => Object.fromEntries(criteria.map(c => {
+    const correction = corrections.get(c.id);
+    return [c.id, {
+      rating: correction?.rating_override ?? c.rating,
+      explanation: correction?.explanation_override ?? c.explanation ?? '',
+      quotes: Array.from({ length: 5 }, (_, i) => (correction?.evidence_override ?? c.evidence)[i]?.quote ?? ''),
+    }];
+  })));
+
   return <form action={submit}>
     <h2>Przegląd przez rekrutera</h2>
     <p>Zatwierdzasz analizę i dowody. Nie jest to decyzja o zatrudnieniu.</p>
@@ -54,16 +64,16 @@ export function ReviewControl({ route, analysisId, version, criteria, stale, rev
       </select></label>
       {!stale && disposition === 'approved_with_changes' && <div>
         <p>Zaznacz kryteria do korekty. Cytaty kopiuj dokładnie z analizowanej wersji CV.</p>
-        {criteria.map(c => { const correction = corrections.get(c.id); return <fieldset key={c.id}>
+        {criteria.map(c => { const draft = drafts[c.id]; return <fieldset key={c.id}>
           <legend>{c.criterion_text_snapshot}</legend>
           <label><input type="checkbox" name={`change:${c.id}`} checked={selected.has(c.id)} onChange={e => setSelected(previous => { const next = new Set(previous); if (e.target.checked) next.add(c.id); else next.delete(c.id); return next; })} /> Zapisz korektę tego kryterium</label>
           <fieldset disabled={!selected.has(c.id)}><legend>Treść korekty</legend>
-          <label>Ocena po korekcie <select name={`rating:${c.id}`} defaultValue={correction?.rating_override ?? c.rating}>{Object.entries(ratingLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          {Array.from({ length: 5 }, (_, i) => <label key={i}>Dokładny cytat {i + 1} <textarea name={`quote:${c.id}:${i}`} maxLength={2000} rows={2} defaultValue={(correction?.evidence_override ?? c.evidence)[i]?.quote ?? ''} /></label>)}
-          <label>Uzasadnienie korekty <textarea name={`explanation:${c.id}`} maxLength={4000} rows={3} defaultValue={correction?.explanation_override ?? c.explanation ?? ''} /></label></fieldset>
+          <label>Ocena po korekcie <select name={`rating:${c.id}`} value={draft.rating} onChange={e => { const rating = e.target.value as keyof typeof ratingLabels; setDrafts(previous => ({ ...previous, [c.id]: { ...previous[c.id], rating } })); }}>{Object.entries(ratingLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          {Array.from({ length: 5 }, (_, i) => <label key={i}>Dokładny cytat {i + 1} <textarea name={`quote:${c.id}:${i}`} maxLength={2000} rows={2} value={draft.quotes[i]} onChange={e => { const quote = e.target.value; setDrafts(previous => ({ ...previous, [c.id]: { ...previous[c.id], quotes: previous[c.id].quotes.map((text, index) => index === i ? quote : text) } })); }} /></label>)}
+          <label>Uzasadnienie korekty <textarea name={`explanation:${c.id}`} maxLength={4000} rows={3} value={draft.explanation} onChange={e => { const explanation = e.target.value; setDrafts(previous => ({ ...previous, [c.id]: { ...previous[c.id], explanation } })); }} /></label></fieldset>
         </fieldset>; })}
       </div>}
-      <label>Notatka rekrutera <textarea name="note" maxLength={10000} rows={3} defaultValue={review?.review_note ?? ''} /></label>
+      <label>Notatka rekrutera <textarea name="note" maxLength={10000} rows={3} value={note} onChange={e => setNote(e.target.value)} /></label>
       <label><input type="checkbox" name="confirmed" required /> Sprawdziłem/am wyniki oraz cytaty w CV.</label>
       <button>Zapisz przegląd</button>
     </fieldset>

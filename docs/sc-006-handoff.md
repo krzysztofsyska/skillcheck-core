@@ -65,4 +65,4 @@ The owner explicitly instructed: “Przegląd architektury, moja akceptacja jest
 requires separate owner approval, SC-005 PASS, and a complete authenticated smoke test
 covering start, worker completion, review, stale prevention and retry.
 
-Large review forms submit correction fields only for selected criteria. A client byte budget rejects oversized drafts before transport, keeping their text available for shortening.
+Large review forms submit correction fields only for selected criteria. A client byte budget rejects oversized drafts before transport. Controlled rating, quote, explanation and note state preserves unsaved text across normal Form Action resets and validation errors.
