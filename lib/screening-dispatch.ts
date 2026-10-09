@@ -16,8 +16,7 @@ function readEnv(name: string) {
   return process.env[name]?.trim() || '';
 }
 
-// Server-only internal utility. Do not re-export from a user-callable Server Action
-// until SC-006 binds it to an authenticated start_screening_analysis flow.
+// Internal server utility: SC-006 signs only attempts returned by authenticated RPCs.
 export async function dispatchScreeningWorker(
   attemptId: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -39,6 +38,8 @@ export async function dispatchScreeningWorker(
   const signature = signScreeningDispatch(secret, timestamp, body);
   const response = await fetchImpl(url, {
     method: 'POST',
+    redirect: 'error',
+    signal: AbortSignal.timeout(15000),
     headers: {
       'content-type': 'application/json',
       [SCREENING_DISPATCH_TIMESTAMP_HEADER]: timestamp,
