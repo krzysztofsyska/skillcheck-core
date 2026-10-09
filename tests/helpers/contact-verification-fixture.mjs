@@ -2,13 +2,16 @@ import {randomUUID,randomBytes,generateKeyPairSync,sign} from 'node:crypto';
 import {ingestContactVerification,RECEIPT_DOMAIN} from '../../lib/contact-verification.ts';
 import {communicationHarness} from './candidate-communication-fixture.mjs';
 
-// Ephemeral synthetic issuer. This proves software boundaries, not real candidate consent.
+// One ephemeral synthetic verifier service per test process. Independent database
+// sessions share its signing/encryption/HMAC configuration; changing the HMAC key
+// would change the attested contact digest and correctly conflict on replay.
+// This proves software boundaries, not real candidate consent.
+const {privateKey,publicKey}=generateKeyPairSync('ed25519');
+const publicKeyPem=publicKey.export({type:'spki',format:'pem'});
+const issuer='synthetic-test',key='test-key';
+const encryptionKey=randomBytes(32),fingerprintKey=randomBytes(32);
 export function verificationHarness(h){
  const {db}=h,c=communicationHarness(h);
- const {privateKey,publicKey}=generateKeyPairSync('ed25519');
- const publicKeyPem=publicKey.export({type:'spki',format:'pem'});
- const issuer='synthetic-test',key='test-key';
- const encryptionKey=randomBytes(32),fingerprintKey=randomBytes(32);
  const asVerifier=async()=>{await db.exec('reset role;set role contact_verifier');await db.query("select set_config('request.jwt.claim.sub','',false)");};
  const register=async(f)=>{await h.asAdmin();
   await db.query("insert into private.contact_trusted_issuers(company_id,issuer_id,key_id,enabled,valid_from,valid_until) values($1,$2,$3,true,now()-interval '1 day',now()+interval '1 day')",[f.companyId,issuer,key]);
