@@ -27,7 +27,9 @@
     "test:sales-leads-http": "node --test tests/sales-leads-http.test.mjs",
     "test:sales-leads": "node --test tests/sales-leads-database.test.mjs",
     "test:sales-leads-concurrency": "node tests/sales-leads-concurrency.mjs",
-    "test:sales-leads-operator": "node --test tests/sales-leads-operator-http.test.mjs"
+    "test:sales-leads-operator": "node --test tests/sales-leads-operator-http.test.mjs",
+    "test:screening-ranking": "node --test tests/screening-ranking-database.test.mjs",
+    "test:screening-ranking-concurrency": "node --test tests/screening-ranking-concurrency.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",

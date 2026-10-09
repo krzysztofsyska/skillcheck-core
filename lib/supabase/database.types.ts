@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261007000200.
+// Public API contract after migrations 20260930000100 through 20261009081908.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -161,9 +161,42 @@ export type ScreeningReviewOverrideInput = {
   criterion_result_id: string; rating_override?: ScreeningRating | null;
   evidence_override?: ScreeningEvidence[] | null; explanation_override?: string | null;
 };
+export type ScreeningRankingEligibility =
+  | "eligible" | "insufficient_evidence" | "result_incomplete" | "review_inconsistent"
+  | "no_human_review" | "needs_reanalysis" | "processing" | "pending" | "failed"
+  | "cancelled" | "stale" | "no_completed_result";
+export type ScreeningRankingRow = {
+  application_id: string; analysis_id: string | null; review_id: string | null;
+  rank: number | null; rankable: boolean; eligibility_reason: ScreeningRankingEligibility;
+  raw_score: number | null; coverage: number | null; total_criteria: number; known_criteria: number;
+  below_count: number; meets_count: number; above_count: number; insufficient_data_count: number;
+  suggested_shortlist: boolean; ranking_policy_version: string;
+  shortlist_entry_id: string | null; shortlist_snapshot_current: boolean;
+};
+export type RecruitmentShortlistEntry = {
+  id: string; company_id: string; recruitment_id: string; application_id: string;
+  selected_by: string; selected_at: string; source: "manual" | "suggested";
+  analysis_id: string; review_id: string; ranking_policy_version: string;
+  raw_score_snapshot: number | null; coverage_snapshot: number; note: string | null;
+  removed_at: string | null; removed_by: string | null;
+};
+export type RecruitmentShortlistRow = Omit<RecruitmentShortlistEntry, "id" | "company_id" | "recruitment_id"> & {
+  entry_id: string; snapshot_current: boolean; policy_current: boolean;
+};
 export type Database = {
   public: {
     Tables: {
+      recruitment_shortlist_entries: {
+        Row: RecruitmentShortlistEntry;
+        Insert: never;
+        Update: never;
+        Relationships: [
+          Relationship<"recruitment_shortlist_application_fkey", ["company_id", "recruitment_id", "application_id"], "applications", ["company_id", "recruitment_id", "id"]>,
+          Relationship<"recruitment_shortlist_recruitment_fkey", ["company_id", "recruitment_id"], "recruitments", ["company_id", "id"]>,
+          Relationship<"recruitment_shortlist_analysis_fkey", ["company_id", "analysis_id"], "screening_analysis_versions", ["company_id", "id"]>,
+          Relationship<"recruitment_shortlist_review_fkey", ["company_id", "review_id"], "screening_result_reviews", ["company_id", "id"]>,
+        ];
+      };
       sales_leads: { Row: SalesLead; Insert: never; Update: never; Relationships: [] };
       platform_operators: { Row: PlatformOperator; Insert: never; Update: never; Relationships: [] };
       screening_criterion_review_overrides: {
@@ -317,6 +350,23 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      get_screening_ranking: {
+        Args: { target_recruitment: string; target_size?: number | null };
+        Returns: ScreeningRankingRow[];
+      };
+      get_recruitment_shortlist: {
+        Args: { target_recruitment: string; include_removed?: boolean | null };
+        Returns: RecruitmentShortlistRow[];
+      };
+      add_recruitment_shortlist_entry: {
+        Args: {
+          target_application: string; entry_source: RecruitmentShortlistEntry["source"];
+          expected_analysis_id: string; expected_review_id: string; expected_policy_version: string;
+          entry_note?: string | null; target_size?: number | null;
+        };
+        Returns: string;
+      };
+      remove_recruitment_shortlist_entry: { Args: { target_entry: string }; Returns: string };
       submit_sales_lead: { Args: {
         idempotency_key: string; first_name: string; company_name: string; email: string;
         phone: string | null; needs: string; source_ip: string; issued_at_us: number; request_signature: string;
