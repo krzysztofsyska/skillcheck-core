@@ -17,7 +17,7 @@ Nie budować ponownie: auth/onboarding, firmy, profile stanowisk, rekrutacje, ka
 | SC-006 | UI uruchomienia analizy i podglądu dowodów bez automatycznej decyzji | L3 | Codex | Codex | SC-005 | ACCEPTED / integration PR #61; produkcja osobno |
 | SC-007 | Obsługa stale/fingerprint/idempotency/concurrency analizy | L3 | Cursor | Codex | SC-005 | BACKLOG |
 | SC-008 | Ranking/shortlista dla jednej rekrutacji na podstawie sprawdzonych wyników | L3 | Codex | Codex | SC-006,SC-007 | IMPLEMENTED / PR_REVIEW; architektura zaakceptowana PR #47 |
-| SC-009 | Raport preselekcji dla firmy + eksport | L2 | Cursor | Codex | SC-008 | BACKLOG |
+| SC-009 | Raport preselekcji dla firmy + eksport | L3 | Codex | Codex | SC-008 | IMPLEMENTED / REVIEW PASS; wspólny test SC-006/008/009 PASS, PR #63 zależy od #65 |
 | SC-010 | Model komunikacji z kandydatem: zgody, statusy, kanały, retry | L3 | Codex→Cursor | Codex | SC-008 | BACKLOG |
 | SC-011 | Voicebot architecture/provider contract + koszt i limity | L3 | Codex | Codex | SC-010 | BACKLOG |
 | SC-012 | Voicebot MVP: rozmowa, callback/retry, transcript | L3 | Cursor | Codex | SC-011 | BACKLOG |
