@@ -8,6 +8,8 @@ Depends on: SC-004 (wdrożony model wyniku), SC-007 (concurrency; nie zmienia sc
 Blocks implementation until: SC-006 DONE, review architektury PASS, owner acceptance  
 Base: `integration` @ `6495162b2c04ef39843d86070cd0ce71f7f84233`
 
+Aktualizacja kontraktu: 2026-10-09, z uwzględnieniem SC-006 PR #61 i wdrożenia SC-007; kontynuacja istniejącego PR #47.
+
 Ten dokument nie jest migracją, RPC, zmianą RLS ani kodem UI. Phase B nie zaczyna się w tym PR.
 
 Phase A jest L3, nie L2. Dokument definiuje RLS, granty, autoryzację tenanta i RPC `SECURITY DEFINER`. To są granice zaufania z `AGENTS.md`, więc review tej fazy idzie ścieżką L3. Etykieta L2 w Issue #9 nie obniża tego poziomu. Implementacja nadal czeka na DONE SC-006, PASS review i owner acceptance.
@@ -81,7 +83,7 @@ Skutek dla rankingu, bez nowej reguły hire/reject: zmiana statusu zgłoszenia n
 
 ### 2.4. Co robi SC-007
 
-`20261007000100_screening_retry_active_conflict.sql` zamyka wyścig start/retry. Nie zmienia ratingu, review, RLS ani `overall_score`. Komentarz migracji mówi, że SC-007 sam nie stosuje jej na produkcji. Ranking nie zależy od tej poprawki logicznie, ale testy Phase B odtwarzają cały łańcuch migracji z `integration`, łącznie z tym plikiem.
+`20261007000100_screening_retry_active_conflict.sql` zamyka wyścig start/retry. Nie zmienia ratingu, review, RLS ani `overall_score`. Po osobnej zgodzie właściciela 2026-10-09 poprawkę zastosowano na produkcji jako `20261009073048_screening_retry_active_conflict`. Treść funkcji jest identyczna z plikiem repozytorium. Mapowanie historii zapisano w Issue #8; przed przyszłym wdrożeniem CLI uzgodnić historię, nie wykonywać tej migracji ponownie pod starszym numerem. Ranking nie zależy od tej poprawki logicznie, ale testy Phase B odtwarzają cały łańcuch migracji z `integration`, łącznie z tym plikiem.
 
 ### 2.5. Czego nie ma
 
@@ -90,7 +92,7 @@ Skutek dla rankingu, bez nowej reguły hire/reject: zmiana statusu zgłoszenia n
 - brak mapowania `below/meets/above` na punkty;
 - `docs/BACKLOG.md` nadal opisuje SC-008 jako BACKLOG; ten PR nie zmienia backlogu;
 - `lib/supabase/database.types.ts` nie ma typów rankingu; Phase A ich nie dodaje;
-- UI rekrutacji nie uruchamia analizy i nie pokazuje rankingu (`docs/screening.md`).
+- SC-006 ma implementację startu, wyników i review w otwartym PR #61; nie jest jeszcze zaakceptowane. Rankingu nadal nie ma.
 
 ## 3. Zgodność kontraktu z modelem SC-004
 
@@ -126,12 +128,12 @@ create function private.screening_ranking_freshness_reason(
   target_company uuid,
   target_analysis uuid
 ) returns text
-language sql stable security invoker set search_path = ''
+language plpgsql stable security invoker set search_path = ''
 ```
 
 `GRANT EXECUTE` tylko tej funkcji dla `authenticated`, po `REVOKE ALL` od `public`, `anon`, `authenticated` i `screening_worker`. Brak grantu na `private.screening_stale_reason(uuid)`. Nowa funkcja jej nie wywołuje.
 
-Jest `SECURITY INVOKER`. Przy odczycie rankingu działa więc RLS wywołującego. Dodatkowo, zanim przeczyta jakikolwiek wiersz analizy, sprawdza `(select auth.uid())` i `private.has_company_access(target_company)`. Brak sesji albo brak dostępu zwraca `'unavailable'` i nie wykonuje dalszych selectów. Ten sam kod wraca, gdy wiersz analizy nie należy do `target_company` albo jest niewidoczny. `'unavailable'` nie jest świeżością i nie rozróżnia braku wiersza od obcej firmy.
+Jest `SECURITY INVOKER`. Używa PL/pgSQL z jawnym `IF ... RETURN` przed odczytami danych; kolejność predykatów w SQL nie jest gwarancją wykonania kontroli dostępu jako pierwszej. Przy odczycie rankingu działa więc RLS wywołującego. Dodatkowo, zanim przeczyta jakikolwiek wiersz analizy, sprawdza `(select auth.uid())` i `private.has_company_access(target_company)`. Brak sesji albo brak dostępu zwraca `'unavailable'` i nie wykonuje dalszych selectów. Ten sam kod wraca, gdy wiersz analizy nie należy do `target_company` albo jest niewidoczny. `'unavailable'` nie jest świeżością i nie rozróżnia braku wiersza od obcej firmy.
 
 `auth.uid()` czyta claim JWT, nie `current_user`. Gdy write `SECURITY DEFINER` wywoła tę funkcję, sprawdzenie firmy nadal dotyczy zalogowanego użytkownika. Write i tak najpierw robi własne `has_company_access(company_id, true)`, a `target_company` bierze z wiersza zgłoszenia, nie z klienta.
 
@@ -161,7 +163,7 @@ Dozwolone kolumny:
 - stanowisko: `id`, `company_id`, `status`, `updated_at`;
 - dokument: `id`, `company_id`, `candidate_id`, `version`, `status`, `reviewed_by`, `reviewed_at`, `created_at`.
 
-Zakazane w tej funkcji i w RPC rankingu: `input_cv_text_snapshot`, `criteria_snapshot`, `result_summary`, cały obiekt `binding_snapshot`, `candidate_documents.source_text`, `candidate_documents.redacted_text`, `SELECT *` oraz jakiekolwiek wywołanie `private.screening_stale_reason`. Klucze JSON czyta się wyrażeniem `->>`, bez pobierania tekstu CV. Duże kolumny tekstowe są TOAST i nie wchodzą do planu, jeśli nie ma ich na liście select.
+Zakazane w funkcji świeżości: `input_cv_text_snapshot`, `criteria_snapshot`, `result_summary`, cały obiekt `binding_snapshot`, `candidate_documents.source_text`, `candidate_documents.redacted_text`, `SELECT *` oraz jakiekolwiek wywołanie `private.screening_stale_reason`. Klucze JSON czyta się wyrażeniem `->>`, bez pobierania tekstu CV. RPC rankingu może odczytać wyłącznie skalarne `jsonb_typeof(criteria_snapshot)` i `jsonb_array_length(criteria_snapshot)` do kontroli kompletności; nie zwraca ani nie ładuje całego snapshotu do zmiennej aplikacyjnej. Wyrażenie długości stosuje dopiero po potwierdzeniu typu tablicowego. Odczyt kluczy JSON może wymagać wewnętrznego odczytu wartości TOAST przez PostgreSQL; obietnica dotyczy minimalnej projekcji oraz braku treści CV w odpowiedzi, nie zerowego fizycznego I/O.
 
 ## 4. Rozstrzygnięcia przed kodem
 
@@ -268,10 +270,10 @@ Gdy bieżąca świeża analiza `completed` istnieje, pierwszy spełniony powód 
 | Kolejność | Kod | Znaczenie |
 | --- | --- | --- |
 | 1 | `result_incomplete` | Liczba kryteriów nie zgadza się ze snapshotem albo snapshot nie jest tablicą |
-| 2 | `review_inconsistent` | `max(review_version)` różni się od `latest_review_version` |
+| 2 | `review_inconsistent` | `coalesce(max(review_version), 0)` różni się od `latest_review_version` |
 | 3 | `no_human_review` | Brak wiersza review |
 | 4 | `needs_reanalysis` | Latest disposition = `needs_reanalysis` |
-| 5 | `insufficient_evidence` | Review zatwierdzony, ale `total_criteria = 0` albo coverage `< min_coverage` |
+| 5 | `insufficient_evidence` | Review zatwierdzony, ale coverage `< min_coverage` |
 | 6 | `eligible` | Spełnione reguły rankability |
 
 Gdy bieżącej świeżej analizy `completed` nie ma, pierwszy spełniony powód wygrywa:
@@ -304,6 +306,8 @@ Wśród `rankable` w jednej rekrutacji:
 `target_size` NULL albo pominięty argument oznacza `default_target_size` z polityki. Wartość spoza `<min_target_size, max_target_size>` odrzuca całe wywołanie błędem `22023` (`Invalid ranking target size`). Brak cichego obcięcia.
 
 `suggested_shortlist = true` wyłącznie gdy `rankable` i `rank <= target_size`. Gdy rankowalnych jest mniej niż `target_size`, sugestia zawiera wszystkich rankowalnych. Sugestia nie jest zapisem.
+
+Brak review przy cache równym 0 oznacza `no_human_review`; brak review przy cache większym od 0 oznacza `review_inconsistent`. Pusty snapshot zawsze daje `result_incomplete`, więc nie jest ręcznie kwalifikowany.
 
 ## 7. Model shortlisty
 
@@ -353,7 +357,7 @@ Brak triggera blokującego `DELETE`. Grantu `DELETE` też nie ma. Kaskada rodzic
 
 ### 7.1. Kiedy zapis jest legalny
 
-RPC sam odczytuje bieżący stan. Argumenty klienta to: zgłoszenie, `source`, opcjonalna notatka, a dla `suggested` także `target_size`. Klient nie podaje `company_id`, `analysis_id`, `review_id`, score ani coverage.
+RPC sam odczytuje bieżący stan. Argumenty klienta to: zgłoszenie, `source`, warunki oczekiwanej wersji, opcjonalna notatka, a dla `suggested` także `target_size`. Klient nie podaje `company_id`, score ani coverage. Przesyła `expected_analysis_id`, `expected_review_id` i `expected_policy_version` z wyświetlonego odczytu jako warunki wersji. Serwer sam wybiera aktualne źródło i porównuje je z tymi warunkami; identyfikatory klienta nie są źródłem autoryzacji ani danych snapshotu.
 
 Zapis wymaga świeżej analizy `completed` oraz latest review `approved` albo `approved_with_changes`. Świeżość sprawdza `screening_ranking_freshness_reason` po własnym teście zapisu, nie `screening_stale_reason`. To obejmuje `insufficient_evidence`. Nie obejmuje `needs_reanalysis`, braku review, stale, failed, pending, processing, cancelled i braku wyniku.
 
@@ -361,7 +365,25 @@ Zapis wymaga świeżej analizy `completed` oraz latest review `approved` albo `a
 
 Aktywny wpis tego samego zgłoszenia: błąd `PT409` (`Shortlist entry already exists`). Nieaktualny, ale jeszcze nieusunięty wpis też blokuje unikalny indeks. Odświeżenie snapshotu = miękkie usunięcie i nowy insert. RPC nie nadpisuje historii.
 
-### 7.2. Flaga aktualności
+### 7.2. Transakcja wyboru i równoczesne zmiany
+
+Read RPC daje stan jednej instrukcji SQL/MVCC. Nie gwarantuje, że ranking pozostaje identyczny do kliknięcia. Write wymaga warunków wersji opisanych powyżej, także dla wyboru ręcznego.
+
+`add_recruitment_shortlist_entry` w jednej transakcji:
+
+1. Sprawdza sesję i zapis do firmy wyprowadzonej ze zgłoszenia, zanim podejmie blokady danych tej firmy.
+2. Wybiera bieżącą analizę i blokuje jej wiersz `FOR SHARE NOWAIT`; następnie blokuje zgłoszenie, rekrutację, stanowisko i aktualny dokument `FOR SHARE NOWAIT`, używając wyłącznie wąskich kolumn. Ponownie odczytuje stan po uzyskaniu blokad. Brak wiersza lub zmiana powiązania oznacza konflikt, nie fallback do innego CV.
+3. Pod blokadami sprawdza świeżość, kompletność i latest review. Istniejące review/complete/stale triggery aktualizują wiersz analizy i kolidują z tą blokadą. Kontrole wersji porównuje do stanu serwera. Nie zastępuje po cichu wyniku widzianego przez użytkownika nową analizą lub nowym review.
+4. Liczy ranking i sprawdza sugestię w jednej instrukcji SQL na jednym snapshotcie; snapshot punktów zapisywanego kandydata pochodzi z tego samego wyliczenia. Nie woła osobnych odczytów punktów i sugestii, między którymi mógłby zmienić się stan.
+5. Zapisuje wpis z własnych danych serwera i `auth.uid()`. Zwalnia blokady dopiero przy końcu transakcji. Konkurencyjna zmiana źródeł może zakończyć się później; wtedy wpis zgodnie z kontraktem jest historyczny i `snapshot_current=false`.
+
+NOWAIT zapobiega oczekiwaniu w odwrotnej kolejności do istniejących triggerów, które blokują najpierw materiał, a potem analizę. Błędy `55P03`, `40P01`, `40001` oraz konflikt unikalnego aktywnego wpisu są tłumaczone na `PT409`. Cały zapis wycofuje się; UI zachowuje notatkę, odświeża wynik i wymaga ponownego potwierdzenia. Nie ponawia automatycznie wyboru na nowej wersji.
+
+Sugestia oznacza top N na snapshotcie serwerowego wyliczenia w transakcji wyboru, nie gwarancję miejsca po każdym późniejszym zapisie innego kandydata. Nie blokujemy wszystkich zgłoszeń rekrutacji. Wpis zapisuje własny score/coverage oraz źródła, nie historyczny rank całej populacji.
+
+Dwa równoczesne add są rozstrzygane unikalnym indeksem: jeden wpis, drugi `PT409`. Remove blokuje docelowy wpis `FOR UPDATE`, ponownie sprawdza stan i miękko usuwa; powtórzenie pozostaje idempotentne. Add/remove nie wykonują zmian w tabelach screeningu.
+
+### 7.3. Flaga aktualności
 
 Nie ma kolumny `current`. Słowo jest zarezerwowane w SQL, a flaga zależy od stanu źródeł, więc jest wyliczana:
 
@@ -454,6 +476,9 @@ Ten sam błąd `No access`, gdy rekrutacja jest niewidoczna. Świeżość snapsh
 create function public.add_recruitment_shortlist_entry(
   target_application uuid,
   entry_source text,
+  expected_analysis_id uuid,
+  expected_review_id uuid,
+  expected_policy_version text,
   entry_note text default null,
   target_size integer default 10
 ) returns uuid
@@ -467,7 +492,7 @@ Zwraca `id` nowego wpisu. Błędy:
 - `42501` brak zapisu;
 - `22023` złe `source`, za długa notatka, zły `target_size`, `suggested` spoza aktualnej sugestii;
 - `55000` `Not shortlist eligible` — brak świeżego zatwierdzonego review;
-- `PT409` aktywny wpis już istnieje.
+- `PT409` aktywny wpis już istnieje, wersja analizy/review/polityki zmieniła się albo trwa kolidujący zapis; odśwież i ponownie potwierdź wybór.
 
 Funkcja nie zmienia tabel screeningu ani `applications.status`.
 
@@ -523,7 +548,7 @@ Kontrole, które Phase B musi utrzymać:
 
 Nie tworzyć pliku w tym PR. Nie uruchamiać niczego na bazie. Nie edytować migracji już obecnych na `integration`.
 
-Przyszły plik, nazwany dopiero na początku Phase B, z timestampem późniejszym niż ostatnia zastosowana migracja. Na tym `integration` ostatni plik to `20261007000100_screening_retry_active_conflict.sql`. Jeśli wcześniej dojdzie kolejna migracja, timestamp shortlisty ma być od niej późniejszy.
+Przyszły plik, nazwany dopiero na początku Phase B, z timestampem późniejszym niż ostatnia zastosowana migracja. Numer wygenerować narzędziem migracji dopiero w Phase B, po sprawdzeniu aktualnego repozytorium i historii środowiska docelowego. Historia produkcji obejmuje już `20261009073048`; nie opierać chronologii wyłącznie na dawnym baseline dokumentu. Nie powielać zastosowanej poprawki SC-007.
 
 Jedna migracja, w jednej transakcji, zawiera:
 
@@ -608,9 +633,17 @@ Przypadki wymagane przez Issue #9, rozwinięte o rozstrzygnięcia tego dokumentu
 15. Firma B nie czyta rankingu ani shortlisty firmy A (`42501` i puste `SELECT` RLS). Bezpośredni insert do `recruitment_shortlist_entries` jako `authenticated` pada.
 16. Wynik RPC nie zawiera kolumn CV, evidence, explanation, bindingu ani payloadu providera. Test kontraktu kolumn.
 17. Seed polityki: odczyt `private.screening_ranking_policy('screening-ranking-v1')` zwraca 0/50/100 i `0.60`. Update tego wiersza pada. RPC nie daje innego progu.
-18. `total_criteria = 0` albo rozjazd liczby kryteriów ze snapshotem daje `result_incomplete` albo `insufficient_evidence` według sekcji 6 i nie dzieli przez zero.
+18. `total_criteria = 0` albo rozjazd liczby kryteriów ze snapshotem daje `result_incomplete` i nie dzieli przez zero.
 19. Dzielenie całkowite. Jeden `above` i dwa `below`: suma punktów `100`, `known_criteria = 3`. `raw_score` równa się `33.333`, nie `33` i nie `33.000`.
 20. Świeżość i granty. `authenticated` dostaje `42501` na `private.screening_stale_reason(uuid)`. `pg_get_functiondef` nowej funkcji nie zawiera `input_cv_text_snapshot`, `source_text`, `redacted_text`, `screening_stale_reason` ani `select *`. Wywołanie z firmą B albo bez sesji zwraca `unavailable` i nie zwraca NULL. Własna firma z logicznym stale dostaje kod z tabeli w sekcji 3.2.
+
+21. Warunki wersji: zmiana review lub analizy po wyświetleniu strony daje `PT409`; serwer nie zapisuje nowszego, niewidzianego źródła. Obce expected IDs nie ujawniają danych ani nie obchodzą dostępu.
+22. Brak review/cache 0 daje `no_human_review`; brak review/cache >0 daje `review_inconsistent`; pusty lub uszkodzony snapshot daje `result_incomplete`, również dla ręcznego add.
+23. Kontrola kompletności jest bezpieczna dla nie-tablicowego JSON; ranking nie zwraca treści snapshotu.
+
+Osobny zestaw na rzeczywistym PostgreSQL, co najmniej dwa połączenia (jak SC-007): add kontra review; add kontra edycja CV/stanowiska; add kontra zakończenie nowej analizy; dwa add; dwa remove; add kontra remove. Wymusić oba porządki blokad. Sprawdzać finalne wiersze, snapshoty i kody konfliktu, nie tylko brak wyjątku. Nie może być dwóch aktywnych wpisów, zapisu źródeł innych niż oczekiwane, surowego deadlocka ani częściowego wpisu. Zmiana źródła zakończona po poprawnym add musi pozostawić audytowalny wpis z `snapshot_current=false`.
+
+Testy izolowanych kluczy sortowania z punktu 9 mogą używać wejść agregatora o różnych liczbach kryteriów; nie wolno udawać, że są poprawnymi aktualnymi analizami różnych profili w jednej rekrutacji. Testy integracyjne muszą budować spójne snapshoty wspólnego stanowiska; kombinacje kluczy nieosiągalne przy jednakowej liczbie kryteriów weryfikować na czystym agregatorze. Zachować weryfikację deterministycznego końcowego porządku w realnym RPC.
 
 Osobno, jeśli PR implementacyjny ruszy typy: `npm run typecheck` i `npm run build`. Ten PR architektoniczny ich nie uruchamia jako bramki produktu, bo nie zmienia kodu wykonywalnego.
 
@@ -625,7 +658,7 @@ Poziom L3 tej fazy jest rozstrzygnięty review i nie jest już pytaniem otwartym
 
 ## 14. Blokery implementacji
 
-- SC-006 nie jest DONE. Nie ma user-facing ścieżki, która w produkcie tworzy review. Schemat review już jest i da się go testować w PGlite bez SC-006, ale Issue #9 zabrania kodu produkcyjnego i migracji przed DONE SC-006.
+- SC-006 nie jest DONE/accepted. Implementacja ścieżki review jest w PR #61 i czeka na domknięcie przeglądu oraz akceptację. Schemat review już jest i da się go testować w PGlite bez SC-006, ale Issue #9 zabrania kodu produkcyjnego i migracji przed DONE SC-006.
 - Review architektury jeszcze nie ma werdyktu PASS.
 - Brak owner acceptance architektury.
 - Phase A jest już L3. Implementacja nie startuje przed PASS review, owner acceptance i DONE SC-006. Ten PR nie dodaje migracji.
