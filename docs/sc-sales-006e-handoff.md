@@ -62,3 +62,8 @@ select cron.schedule('sales-leads-retention', '17 * * * *',
 ## Zakres świadomie nieobjęty
 
 Automatyczna wysyłka e-maili, historia korespondencji, powiadomienia o nowych zgłoszeniach, płatności, abonamenty i automatyka agentów. Obecny proces odpowiadania wykorzystuje działającą pocztę właściciela.
+
+
+## Aktualizacja 9.10.2026 — wstrzymanie i SC-SALES-006F
+
+Właściciel wstrzymał produkcję do powrotu do komputera. Logowanie do panelu Supabase przez ChatGPT zakończone sukcesem, ale migracji nadal nie wykonano. Test realnego 60-minutowego okna rotacji 37900072370 i Checks 37903540739 zakończone PASS. Poprzednia lista „zakres nieobjęty” jest rozszerzona o przygotowany automat potwierdzeń: patrz docs/sc-sales-006f-auto-reply.md. Automat i formularz nadal niewłączone. Nie traktować poprzedniej zgody produkcyjnej jako zniesienia bieżącego wstrzymania.

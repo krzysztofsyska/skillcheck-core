@@ -28,10 +28,13 @@ export default function ContactPrivacyPage() {
         Techniczny rejestr prób jest czyszczony z wpisów starszych niż 48 godzin. Zgłoszenie wysłane po zalogowaniu jest powiązane z kontem.</p>
       <h2>Odbiorcy i infrastruktura</h2>
       <p>Dostęp mają upoważnione osoby obsługujące zgłoszenia oraz dostawcy hostingu, bazy danych i poczty:
-        Vercel, Supabase i home.pl. Baza projektu znajduje się w Unii Europejskiej. Korzystanie z globalnej infrastruktury dostawców może wiązać się z przetwarzaniem poza EOG.
+        Vercel, Supabase, home.pl oraz Resend (automatyczne potwierdzenia zgłoszeń). Baza projektu znajduje się w Unii Europejskiej. Korzystanie z globalnej infrastruktury dostawców może wiązać się z przetwarzaniem poza EOG.
         Informacje o stosowanych przez dostawców zabezpieczeniach transferów, w tym standardowych klauzulach umownych, znajdują się w ich dokumentach:
         {" "}<a href="https://vercel.com/legal/dpa">Vercel</a> i <a href="https://supabase.com/legal/dpa">Supabase</a>.
         O informacje dotyczące ochrony Twoich danych możesz wystąpić do administratora.</p>
+      <p>Do wysyłki automatycznego potwierdzenia przekazujemy Resend adres e-mail oraz standardową treść wiadomości.
+        Nie przekazujemy w tym celu opisu potrzeb, numeru telefonu, nazwy firmy ani danych kandydatów.
+        Odpowiedź na potwierdzenie trafia do obsługi na pomoc@skillcheck.pl.</p>
       <h2>Twoje prawa</h2>
       <p>Możesz żądać dostępu do danych, ich sprostowania, usunięcia lub ograniczenia przetwarzania.
         Możesz wnieść sprzeciw wobec przetwarzania opartego na uzasadnionym interesie; prawo przenoszenia danych przysługuje w przypadkach określonych w RODO.

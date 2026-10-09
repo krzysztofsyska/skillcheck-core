@@ -317,6 +317,14 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      claim_sales_mail: {
+        Args: { target_lead: string | null; request_id: string; issued_at_ms: number; request_signature: string };
+        Returns: { lead_id: string; email: string; template_version: string; lease_id: string }[];
+      };
+      finish_sales_mail: {
+        Args: { target_lead: string; request_id: string; issued_at_ms: number; outcome: string; provider_id: string | null; request_signature: string };
+        Returns: boolean;
+      };
       submit_sales_lead: { Args: {
         idempotency_key: string; first_name: string; company_name: string; email: string;
         phone: string | null; needs: string; source_ip: string; issued_at_us: number; request_signature: string;

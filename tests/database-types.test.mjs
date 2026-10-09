@@ -17,6 +17,7 @@ const migrations = [
   "20261007000100_screening_retry_active_conflict.sql",
   "20261007000200_sales_leads.sql",
   "20261009073604_sales_lead_inbox_retention.sql",
+  "20261009104142_sales_lead_auto_reply.sql",
 ];
 
 const tableColumns = {
@@ -88,6 +89,8 @@ const functions = {
   list_sales_leads: "result_limit integer",
   list_sales_leads_inbox: "result_limit integer",
   close_sales_lead: "target_lead uuid",
+  claim_sales_mail: "target_lead uuid, request_id uuid, issued_at_ms bigint, request_signature text",
+  finish_sales_mail: "target_lead uuid, request_id uuid, issued_at_ms bigint, outcome text, provider_id uuid, request_signature text",
   platform_operator_status: "",
   grant_platform_operator: "target_user uuid",
   revoke_platform_operator: "target_user uuid",

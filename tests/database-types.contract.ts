@@ -63,6 +63,8 @@ type ExpectedFunctions =
   | "list_sales_leads"
   | "list_sales_leads_inbox"
   | "close_sales_lead"
+  | "claim_sales_mail"
+  | "finish_sales_mail"
   | "platform_operator_status"
   | "grant_platform_operator"
   | "revoke_platform_operator"
