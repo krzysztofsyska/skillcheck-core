@@ -1,0 +1,82 @@
+'use client';
+
+import { useActionState, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { startAnalysis, retryAnalysis, reviewAnalysis } from './actions';
+import { ratingLabels, reviewLabels, screeningPath, type ScreeningFormState, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
+import type { ScreeningCriterionResult, ScreeningResultReview, ScreeningCriterionReviewOverride } from '../../../../../../../../lib/supabase/database.types';
+
+function Feedback({ state }: { state: ScreeningFormState }) {
+  return <>{state.error && <p role="alert">{state.error}</p>}{state.message && <p role="status">{state.message}</p>}</>;
+}
+
+export function RefreshStatus({ active }: { active: boolean }) {
+  const router = useRouter();
+  useEffect(() => {
+    if (!active) return;
+    let ticks = 0;
+    const timer = setInterval(() => { router.refresh(); if (++ticks >= 60) clearInterval(timer); }, 5000);
+    return () => clearInterval(timer);
+  }, [active, router]);
+  return <button type="button" onClick={() => router.refresh()}>Odśwież stan</button>;
+}
+
+export function AnalysisControl({ route, requestId, retryId, label, disabled }: { route: ScreeningRoute; requestId: string; retryId?: string; label: string; disabled: boolean }) {
+  const action = retryId ? retryAnalysis.bind(null, route, retryId) : startAnalysis.bind(null, route);
+  const [state, submit, pending] = useActionState(action, {});
+  return <form action={submit}>
+    <input type="hidden" name="requestId" value={requestId} />
+    <button disabled={disabled || pending}>{pending ? 'Wysyłanie…' : label}</button>
+    <Feedback state={state} />
+    {state.saved && <Link href={screeningPath(route)}>Otwórz najnowszy stan analizy</Link>}
+  </form>;
+}
+
+export function ReviewControl({ route, analysisId, version, criteria, stale, review, overrides }: { route: ScreeningRoute; analysisId: string; version: number; criteria: ScreeningCriterionResult[]; stale: boolean; review?: ScreeningResultReview; overrides: ScreeningCriterionReviewOverride[] }) {
+  const [state, submit, pending] = useActionState(async (previous: ScreeningFormState, form: FormData) => {
+    let bytes = 0;
+    form.forEach((value, key) => { bytes += new TextEncoder().encode(key + String(value)).length + 256; });
+    if (bytes > 750000) return { error: 'Korekty są zbyt obszerne. Skróć cytaty lub uzasadnienia i zapisz ponownie.' };
+    return reviewAnalysis(route, analysisId, previous, form);
+  }, {});
+  const [selected, setSelected] = useState(() => new Set(overrides.map(o => o.criterion_result_id)));
+  const [disposition, setDisposition] = useState<string>(stale ? 'needs_reanalysis' : review?.disposition ?? 'approved');
+  const corrections = new Map(overrides.map(o => [o.criterion_result_id, o]));
+  const [note, setNote] = useState(review?.review_note ?? '');
+  const [drafts, setDrafts] = useState(() => Object.fromEntries(criteria.map(c => {
+    const correction = corrections.get(c.id);
+    return [c.id, {
+      rating: correction?.rating_override ?? c.rating,
+      explanation: correction?.explanation_override ?? c.explanation ?? '',
+      quotes: Array.from({ length: 5 }, (_, i) => (correction?.evidence_override ?? c.evidence)[i]?.quote ?? ''),
+    }];
+  })));
+
+  return <form action={submit}>
+    <h2>Przegląd przez rekrutera</h2>
+    <p>Zatwierdzasz analizę i dowody. Nie jest to decyzja o zatrudnieniu.</p>
+    <input type="hidden" name="reviewVersion" value={version} />
+    <fieldset disabled={pending}>
+      <legend>Sposób zakończenia przeglądu</legend>
+      <label>Wybierz działanie <select name="disposition" value={stale ? 'needs_reanalysis' : disposition} onChange={e => setDisposition(e.target.value)}>
+        {Object.entries(reviewLabels).map(([value, label]) => <option key={value} value={value} disabled={stale && value !== 'needs_reanalysis'}>{label}</option>)}
+      </select></label>
+      {!stale && disposition === 'approved_with_changes' && <div>
+        <p>Zaznacz kryteria do korekty. Cytaty kopiuj dokładnie z analizowanej wersji CV.</p>
+        {criteria.map(c => { const draft = drafts[c.id]; return <fieldset key={c.id}>
+          <legend>{c.criterion_text_snapshot}</legend>
+          <label><input type="checkbox" name={`change:${c.id}`} checked={selected.has(c.id)} onChange={e => setSelected(previous => { const next = new Set(previous); if (e.target.checked) next.add(c.id); else next.delete(c.id); return next; })} /> Zapisz korektę tego kryterium</label>
+          <fieldset disabled={!selected.has(c.id)}><legend>Treść korekty</legend>
+          <label>Ocena po korekcie <select name={`rating:${c.id}`} value={draft.rating} onChange={e => { const rating = e.target.value as keyof typeof ratingLabels; setDrafts(previous => ({ ...previous, [c.id]: { ...previous[c.id], rating } })); }}>{Object.entries(ratingLabels).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          {Array.from({ length: 5 }, (_, i) => <label key={i}>Dokładny cytat {i + 1} <textarea name={`quote:${c.id}:${i}`} maxLength={2000} rows={2} value={draft.quotes[i]} onChange={e => { const quote = e.target.value; setDrafts(previous => ({ ...previous, [c.id]: { ...previous[c.id], quotes: previous[c.id].quotes.map((text, index) => index === i ? quote : text) } })); }} /></label>)}
+          <label>Uzasadnienie korekty <textarea name={`explanation:${c.id}`} maxLength={4000} rows={3} value={draft.explanation} onChange={e => { const explanation = e.target.value; setDrafts(previous => ({ ...previous, [c.id]: { ...previous[c.id], explanation } })); }} /></label></fieldset>
+        </fieldset>; })}
+      </div>}
+      <label>Notatka rekrutera <textarea name="note" maxLength={10000} rows={3} value={note} onChange={e => setNote(e.target.value)} /></label>
+      <label><input type="checkbox" name="confirmed" required /> Sprawdziłem/am wyniki oraz cytaty w CV.</label>
+      <button>Zapisz przegląd</button>
+    </fieldset>
+    <Feedback state={state} />
+  </form>;
+}

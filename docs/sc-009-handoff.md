@@ -1,7 +1,7 @@
 # SC-009 — handoff, 2026-10-09
 
 - TASK: SC-009 / Issue #10
-- STATUS: IMPLEMENTED, independent REVIEW PASS; integracja z SC-008 zablokowana zależnością
+- STATUS: IMPLEMENTED, independent REVIEW PASS; wspólny test SC-006/008/009 PASS, CI w PR
 - LEVEL: L3
 - SCOPE: FULLSTACK
 - OWNER / BUILDER: Codex, bezpośrednie zlecenie właściciela
@@ -18,7 +18,7 @@
 - Ekran raportu w rekrutacji: wymagania, ranking, osobna shortlista człowieka, oceny po review i cytaty.
 - CSV (UTF-8 BOM, separator `;`, ochrona przed formułami, cytowanie tekstu) i druk/zapis PDF w przeglądarce.
 - Odczyt wyłącznie z sesją użytkownika i istniejącym RLS; wszystkie dane przypisane do firmy/rekrutacji.
-- Adapter kontraktu odczytów SC-008 PR #47; brak RPC daje jawny stan niedostępności, eksport HTTP 503.
+- Bezpośrednie typowane wywołania odczytów SC-008 PR #65; brak RPC daje jawny stan niedostępności, eksport HTTP 503.
 - Źródła odczytywane ponownie, aby wykrywać zmiany przed eksportem. Bez trwałego zapisu raportu.
 - Paginacja z kontrolą kompletności, limit 500 zgłoszeń, limit 10 MiB wyniku.
 - Powiązanie z ekranem rekrutacji; nowe zadania CI testujące raport i trasy HTTP.
@@ -56,8 +56,8 @@ Lokalny build najpierw odrzucił symlink `node_modules` poza worktree (Turbopack
 
 ## KNOWN ISSUES / BLOCKERS / NEXT ACTION
 
-1. SC-008 istnieje jako architektura PR #47, a nie wdrożone RPC. Testy z adapterem i syntetycznym HTTP nie dowodzą integracji z rzeczywistym rankingiem. Nie oznaczamy SC-009 jako DONE/production-ready.
-2. Po implementacji SC-008 sprawdzić kompatybilność dwóch kontraktów i uruchomić syntetyczny test: completed + review → ranking → shortlista → raport → CSV. Sprawdzić owner/recruiter/viewer i outsider na rzeczywistej bazie testowej.
+1. Backend SC-008 jest zaimplementowany w zależnym PR #65. Został włączony do gałęzi testowej SC-009; scalenie PR #65 musi poprzedzić #63.
+2. Wspólny test rzeczywistych RPC w PGlite: 9/9 PASS. Obejmuje parser formularza SC-006, zapis przeglądu, korekty, ranking, shortlistę, raport, CSV, aktualność i RLS. Uwierzytelnienie/transport testowe; to nie jest produkcyjny E2E dostawcy.
 3. Kontrola spójności jest optymistyczna. Raport nie jest transakcyjnym snapshotem ani archiwum; dane mogą zmienić się po końcowym odczycie, a nowe pobranie ma nowy czas wygenerowania.
 4. GitHub Checks, OWNER ACCEPTANCE i zależność SC-008 przed scaleniem. Osobna PRODUCTION APPROVAL oraz test zależności przed produkcyjnym uruchomieniem. Agent pipeline pozostaje niezmieniony.
 5. Publikacja początkowo została zatrzymana przez automatyczną kontrolę uprawnień. Właściciel 2026-10-09 wyraźnie zatwierdził wysłanie gałęzi do publicznego `krzysztofsyska/skillcheck-core` i utworzenie PR do `integration`. Zgoda dotyczy publikacji gałęzi/PR; nie obejmuje merge ani wdrożenia produkcyjnego. Publikacja przez połączony GitHub, ponieważ lokalny git nie ma poświadczeń HTTPS. Kod to identyczny snapshot zweryfikowanej lokalnie implementacji; SHA commita publikacji w PR.
@@ -70,3 +70,8 @@ Lokalny build najpierw odrzucił symlink `node_modules` poza worktree (Turbopack
 - `tests/screening-report.test.mjs`, `tests/screening-report-http.test.mjs`, syntetyczny fixture w `tests/helpers/`
 - `package.json`, `.github/workflows/checks.yml`
 - dokumentacja SC-009 i jego wiersz w `docs/BACKLOG.md`
+
+
+## Integracja — 2026-10-09
+
+SC-006 zaakceptowane i scalone PR #61. SC-008 PR #65 dostarcza rzeczywiste RPC i typy; usunięto tymczasowy lokalny kontrakt Supabase z loadera raportu. Rozwiązano konflikt nawigacji, zachowując „Preselekcja AI” i link raportu. Nowe `test:screening-joint` w CI wykonuje SQL z pełnego łańcucha migracji, nie kopię algorytmu rankingu. Adapter testowy wykonuje selekcje i RPC pod RLS z limitem dwóch wierszy, sprawdzając również paginację. Pierwotne wyniki HTTP/browser pozostają aktualne na wspólnym buildzie. Akceptacja scalenia PR #65/#63 i osobna decyzja produkcyjna nadal wymagane.

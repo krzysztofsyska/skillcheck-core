@@ -7,7 +7,7 @@
 - SCOPE: FULLSTACK
 - OWNER / BUILDER: Codex na bezpośrednie polecenie właściciela z 2026-10-09
 - REVIEWER: Codex, osobna recenzja
-- DEPENDS ON: SC-008, kontrakt architektury PR #47 @ 93d378a
+- DEPENDS ON: SC-008, kontrakt architektury PR #47 @ 7205a27; implementacja PR #65
 - BASE: integration @ 0003b8d
 - STATUS: implementacja równoległa autoryzowana poleceniem „przygotuj architekturę i zrób SC 009”; zależność produkcyjna pozostaje otwarta.
 
@@ -15,7 +15,7 @@
 
 Firma otrzymuje raport jednej rekrutacji: wymagania stanowiska, ranking, świadomie wybraną shortlistę oraz oceny i dowody po review człowieka. Raport nie podejmuje decyzji o zatrudnieniu. Eksport CSV zawiera te same oceny i cytaty co ekran; widok do druku umożliwia zapis PDF przez przeglądarkę.
 
-Nie implementujemy SC-008 w SC-009. Nie dodajemy migracji, RPC, grantów, zmian RLS, naliczania punktów ani wywołań AI. Nie zmieniamy globalnych typów bazy, aby nie deklarować niewdrożonych RPC jako istniejących. Dwa odczytowe kontrakty SC-008 są lokalnym typem adaptera, walidowanym także w runtime.
+Nie implementujemy SC-008 w SC-009. Nie dodajemy migracji, RPC, grantów, zmian RLS, naliczania punktów ani wywołań AI. Globalne typy RPC dostarcza zależny SC-008. Raport używa ich bez lokalnego rzutowania kontraktu; odpowiedzi nadal waliduje w runtime.
 
 ## Przepływ
 
@@ -56,6 +56,6 @@ Nie implementujemy SC-008 w SC-009. Nie dodajemy migracji, RPC, grantów, zmian 
 4. Obca firma/rekrutacja i brak sesji blokują odczyt; brak RPC blokuje eksport.
 5. Błędy i zmiana źródeł nie dają częściowego raportu; paginacja nie obcina danych.
 6. Testy adaptera, niezmienności, CSV injection, kontraktu HTTP oraz regresje screeningu i bazy; typecheck i build.
-7. Przed uruchomieniem produkcyjnym wymagane: zaakceptowany i wdrożony SC-008, rzeczywisty test RPC/raportu na danych syntetycznych, review i osobna zgoda produkcyjna. Testy z adapterem nie dowodzą integracji z niewdrożonym SC-008.
+7. Przed uruchomieniem produkcyjnym wymagane: zaakceptowany i wdrożony SC-008, rzeczywisty test RPC/raportu na danych syntetycznych, review i osobna zgoda produkcyjna. Wspólny test wykonuje rzeczywiste RPC SC-008 i RLS w PGlite; transport uwierzytelnienia pozostaje syntetyczny.
 
 Dokumentacja sprawdzona podczas implementacji: Supabase `rpc` oraz SSR `getUser` (2026-10-09). Nie zmieniamy kontraktów uwierzytelnienia ani dostawcy AI.

@@ -6,13 +6,6 @@ import {
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
 
-// Adapter for SC-008 PR #47. This does not claim those functions are deployed.
-type ReportDatabase = Omit<Database, 'public'> & { public: Omit<Database['public'], 'Functions'> & {
-  Functions: Database['public']['Functions'] & {
-    get_screening_ranking: { Args: { target_recruitment: string; target_size: number }; Returns: Record<string, unknown>[] };
-    get_recruitment_shortlist: { Args: { target_recruitment: string; include_removed: boolean }; Returns: Record<string, unknown>[] };
-  };
-} };
 type DbResult<T> = { data: T | null; error: { code?: string } | null };
 function checked<T>(result: { data: T; error: { code?: string } | null }, rpc = false): NonNullable<T> {
   if (result.error) {
@@ -49,7 +42,6 @@ export async function loadScreeningReport(
   const p = reportParameters(companyId, recruitmentId, size);
   const { data: { user }, error: authError } = await client.auth.getUser();
   if (authError || !user) throw new ScreeningReportError('unauthenticated');
-  const rankingClient = client as unknown as SupabaseClient<ReportDatabase>;
   const readSource = async () => {
     const company = checked(await client.from('companies').select('id,name,updated_at').eq('id', p.companyId).maybeSingle());
     const recruitment = checked(await client.from('recruitments').select('id,company_id,position_id,name,updated_at')
@@ -58,10 +50,10 @@ export async function loadScreeningReport(
       .eq('company_id', p.companyId).eq('id', recruitment.position_id).maybeSingle());
     const applications = await allRows((from, to) => client.from('applications').select('id,updated_at')
       .eq('company_id', p.companyId).eq('recruitment_id', p.recruitmentId).order('id').range(from, to), MAX_REPORT_APPLICATIONS);
-    const rankings = (await allRows((from, to) => rankingClient.rpc('get_screening_ranking', {
+    const rankings = (await allRows((from, to) => client.rpc('get_screening_ranking', {
       target_recruitment: p.recruitmentId, target_size: p.targetSize,
     }).order('application_id').range(from, to), MAX_REPORT_APPLICATIONS, true)).map(parseRanking);
-    const shortlist = (await allRows((from, to) => rankingClient.rpc('get_recruitment_shortlist', {
+    const shortlist = (await allRows((from, to) => client.rpc('get_recruitment_shortlist', {
       target_recruitment: p.recruitmentId, include_removed: false,
     }).order('entry_id').range(from, to), MAX_REPORT_APPLICATIONS, true)).map(parseShortlist);
     uniqueIds(applications);
