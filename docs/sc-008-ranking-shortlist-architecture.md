@@ -223,7 +223,7 @@ language sql stable security definer set search_path = ''
 
 Trigger `BEFORE UPDATE OR DELETE` na `private.screening_ranking_policies` odrzuca zmianę i usunięcie. Nowa semantyka = nowy wiersz `INSERT`, np. `screening-ranking-v2`, plus RPC, które czyta nowy klucz. Wiersz v1 zostaje. Snapshoty shortlisty nie są przeliczane.
 
-Dopóki nie istnieje żaden wpis shortlisty z daną wersją, korekta błędnego seeda może być osobną migracją z jawnym komentarzem. Po pierwszym wpisie shortlisty tej wersji korekta liczb w miejscu jest zabroniona.
+Polityka jest niemutowalna od chwili zapisania seeda, także zanim powstanie pierwszy wpis shortlisty. Każda korekta liczb wymaga nowej wersji i osobnej migracji; nie wolno omijać triggera. Brak wpisów nie dowodzi, że użytkownik nie zobaczył już rankingu tej wersji. Zmiana aktywnej wersji unieważnia wcześniejsze expected_policy_version i wymaga ponownego potwierdzenia wyboru.
 
 Effective rating jednego kryterium, zawsze w ramach jednej analizy i jednego latest review:
 
@@ -402,7 +402,7 @@ Wszystkie funkcje: `set search_path = ''`, pełne nazwy schematów. Brak argumen
 ```sql
 create function public.get_screening_ranking(
   target_recruitment uuid,
-  target_size integer default 10
+  target_size integer default null
 ) returns table (
   application_id uuid,
   analysis_id uuid,
@@ -436,7 +436,7 @@ Zachowanie:
 - rekrutacja nie istnieje albo `has_company_access(company_id)` jest false: ten sam `42501` `No access` (bez rozróżnienia braku wiersza i obcej firmy);
 - `target_size` NULL traktowany jak default polityki; wartość spoza zakresu: `22023`;
 - nie aktualizuje żadnej tabeli;
-- nie czyta `input_cv_text_snapshot`, `evidence`, `explanation`, `binding_snapshot`, `result_summary`, identyfikatorów providera ani dokumentów kandydata;
+- nie czyta treści CV: `input_cv_text_snapshot`, `candidate_documents.source_text`, `candidate_documents.redacted_text`, ani `evidence`, `explanation`, całego `binding_snapshot`, `result_summary` czy identyfikatorów providera; dozwolone są wyłącznie projekcje kluczy bindingu i metadanych dokumentu wymienione w sekcji 3.2 oraz skalarne kontrole kompletności kryteriów;
 - `shortlist_entry_id` wskazuje aktywny wpis (`removed_at is null`) albo jest NULL;
 - `ranking_policy_version` w każdym wierszu to wersja użyta do tego wyliczenia.
 
@@ -480,7 +480,7 @@ create function public.add_recruitment_shortlist_entry(
   expected_review_id uuid,
   expected_policy_version text,
   entry_note text default null,
-  target_size integer default 10
+  target_size integer default null
 ) returns uuid
 language plpgsql volatile security definer set search_path = ''
 ```
@@ -625,7 +625,7 @@ Przypadki wymagane przez Issue #9, rozwinięte o rozstrzygnięcia tego dokumentu
    - **above_count.** Przy równym raw `75`, coverage `1` i `below_count = 0`. A: dwa `above` i dwa `meets` → `above_count = 2`, większy uuid. B: jeden `above` i jeden `meets` → `above_count = 1`, mniejszy uuid. A jest pierwsza.
    - **application_id.** Dwa zgłoszenia z identycznym wektorem dwóch `meets`. Mniejszy uuid ma rank 1.
    - **Precedencja w jednym rankingu.** Te pięć par układów, jako pięć osób albo jako sąsiednie pary w jednym wyniku, ma rank zgodny z kolejnością kluczy: wyższy raw przed lepszą coverage, wyższa coverage przed mniejszym `below_count`, mniejszy `below_count` przed większym `above_count`, większy `above_count` przed mniejszym uuid. Jeden test nie może zastąpić pięciu izolowanych, bo remis na wyższych kluczach nie uruchamia niższego.
-10. `target_size` 5, 10 i default 10. Wartości 4 i 11 dają `22023`. Mniej niż N rankowalnych zwraca krótszą sugestię.
+10. `target_size` 5, 10 i default 10. Wartości 4 i 11 dają `22023`. Mniej niż N rankowalnych zwraca krótszą sugestię. Dla obu RPC dodatkowy fixture nowej polityki z default_target_size = 7: argument pominięty i jawne NULL dają 7, jawne 10 daje 10. Próba UPDATE/DELETE polityki przed pierwszą shortlistą także jest odrzucana; przełączenie wersji między odczytem a add daje PT409 dla poprzedniego expected_policy_version.
 11. Add wymaga zapisu firmy. Owner i recruiter dodają. Viewer i outsider dostają `42501`. Podwójny aktywny add daje `PT409`.
 12. `suggested` poza aktualną sugestią daje `22023`. `manual` dla `insufficient_evidence` z zatwierdzonym review przechodzi. `manual` przy `needs_reanalysis` daje `55000`.
 13. Po stale albo nowym latest review istniejący wpis zostaje, `snapshot_current` staje się false, wiersz screeningu AI się nie zmienia. Usunięcie jest miękkie; drugi insert po remove jest dozwolony i niesie nowy snapshot.
