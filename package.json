@@ -32,7 +32,9 @@
     "test:sales-leads-operator": "node --test tests/sales-leads-operator-http.test.mjs",
     "test:screening-ranking": "node --test tests/screening-ranking-database.test.mjs",
     "test:screening-ranking-concurrency": "node --test tests/screening-ranking-concurrency.test.mjs",
-    "test:screening-joint": "node --test tests/screening-joint-database.test.mjs"
+    "test:screening-joint": "node --test tests/screening-joint-database.test.mjs",
+    "test:communication": "node --test tests/candidate-communication-database.test.mjs",
+    "test:communication-concurrency": "node --test tests/candidate-communication-concurrency.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",

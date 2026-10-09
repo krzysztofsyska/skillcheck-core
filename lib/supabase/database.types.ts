@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261009081908.
+// Public API contract after migrations 20260930000100 through 20261009105025.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -56,6 +56,25 @@ export type Position = Entity & {
 export type Recruitment = Entity & {
   position_id: string; name: string; status: "draft" | "open" | "paused" | "closed";
   opened_at: string | null; closed_at: string | null;
+};
+export type ContactChannel = "email" | "sms" | "voice";
+export type ContactPermission = Entity & {
+  candidate_id: string; recruitment_id: string | null; purpose: "verification_invitation";
+  channel: ContactChannel; state: "unverified" | "revoked" | "blocked"; revision: number; source: "operator_recorded";
+};
+export type ContactWeekdayWindow = { weekday: number; start_minute: number; end_minute: number };
+export type ContactPreferences = Entity & {
+  candidate_id: string; revision: number; timezone: string; source: "operator_recorded";
+  weekday_windows: ContactWeekdayWindow[]; blocked_channels: ContactChannel[];
+};
+export type CandidateCommunication = Entity & {
+  recruitment_id: string; candidate_id: string; application_id: string; shortlist_entry_id: string;
+  channel: ContactChannel; purpose: "verification_invitation"; state: "draft" | "cancelled";
+  version: number; created_by: string; cancelled_at: string | null;
+};
+export type CandidateCommunicationEvent = {
+  id: string; company_id: string; communication_id: string; actor_id: string; created_at: string;
+  event_type: "draft_created" | "cancelled" | "permission_denied" | "preferences_changed";
 };
 export type Candidate = Entity & { first_name: string; last_name: string; email: string | null; phone: string | null };
 export type Application = Entity & {
@@ -186,6 +205,10 @@ export type RecruitmentShortlistRow = Omit<RecruitmentShortlistEntry, "id" | "co
 export type Database = {
   public: {
     Tables: {
+      candidate_contact_permissions: { Row: ContactPermission; Insert: never; Update: never; Relationships: [] };
+      candidate_contact_preferences: { Row: ContactPreferences; Insert: never; Update: never; Relationships: [] };
+      candidate_communications: { Row: CandidateCommunication; Insert: never; Update: never; Relationships: [] };
+      candidate_communication_events: { Row: CandidateCommunicationEvent; Insert: never; Update: never; Relationships: [] };
       recruitment_shortlist_entries: {
         Row: RecruitmentShortlistEntry;
         Insert: never;
@@ -350,6 +373,31 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      record_contact_permission: {
+        Args: { target_candidate: string; target_recruitment: string | null; contact_channel: ContactChannel;
+          permission_state: ContactPermission["state"]; evidence_ref: string | null; expected_revision: number; request_key: string };
+        Returns: string;
+      };
+      set_contact_preferences: {
+        Args: { target_candidate: string; contact_timezone: string; weekday_windows: ContactWeekdayWindow[];
+          blocked_channels: ContactChannel[]; expected_revision: number; request_key: string };
+        Returns: string;
+      };
+      prepare_candidate_communication: {
+        Args: { target_application: string; target_shortlist: string; contact_channel: ContactChannel; request_key: string };
+        Returns: string;
+      };
+      cancel_candidate_communication: {
+        Args: { target_id: string; expected_version: number; request_key: string }; Returns: string;
+      };
+      get_candidate_communications: {
+        Args: { target_application: string; after_created_at?: string | null; after_id?: string | null; page_size?: number };
+        Returns: CandidateCommunication[];
+      };
+      get_candidate_communication_history: {
+        Args: { target_id: string; after_created_at?: string | null; after_id?: string | null; page_size?: number };
+        Returns: CandidateCommunicationEvent[];
+      };
       get_screening_ranking: {
         Args: { target_recruitment: string; target_size?: number | null };
         Returns: ScreeningRankingRow[];
