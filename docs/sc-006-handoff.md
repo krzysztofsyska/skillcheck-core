@@ -2,7 +2,7 @@
 
 - TASK: SC-006, Issue #7
 - LEVEL: L3; SCOPE: FULLSTACK
-- STATUS: implemented locally; draft PR / independent review pending
+- STATUS: implemented; owner acceptance recorded; independent re-review pending
 - BRANCH: feat/sc-006-screening-ui
 - BASE: integration at 0003b8d
 - IMPLEMENTER: Codex, per direct owner instruction on 2026-10-09
@@ -36,7 +36,7 @@ results cannot be approved as current. Original AI rows are never mutated.
 
 ## DB / migrations / secrets
 
-No new schema, migrations, grants, worker deploys or production changes. No provider call.
+Migration 20261009080000_screening_latest_mutations.sql serializes review/retry with start using the same application advisory lock and rejects superseded mutations. Existing signatures and ACLs are preserved. Not applied to production; no worker deploy or production changes. No provider call.
 No service-role client. Attempts, leases, raw source CV, provider errors and secrets are
 not passed to client components. The built browser chunks were checked for secret env
 names and lease-token fields; no matches.
@@ -48,10 +48,10 @@ names and lease-token fields; no matches.
 - `npm run test:auth`: 11 PASS.
 - `npm run test:screening`: PASS, including existing PGlite RLS/tenant/review/retry tests.
   One pre-existing optional Deno runtime test skipped because Deno is not installed.
-- New `tests/screening-ui.test.mjs`: 10 PASS. Covers authenticated dispatch binding,
+- New `tests/screening-ui.test.mjs`: 13 PASS. Covers authenticated dispatch binding,
   viewer/foreign tenant/disabled AI/draft CV denial, retry scope/freshness, RPC/dispatch
   failures, completed reuse, exact quotes and UTF-16, review dispositions, immutable
-  corrections, and rendering the real async page with scoped synthetic adapters.
+  corrections, missing-route 404, superseded server-action submissions, retention of the latest human corrections, and rendering the real async page with scoped synthetic adapters.
 - Updated SC-005 dispatcher guard test for the new authenticated SC-006 action boundary;
   no arbitrary-attempt server action is allowed.
 - `git diff --check`: PASS.
