@@ -34,6 +34,7 @@ jobs:
       - run: npm run test:auth
       - run: npm run test:cv
       - run: npm run test:screening
+      - run: npm run test:screening-report
       - run: npm run test:screening-concurrency
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
@@ -45,6 +46,7 @@ jobs:
       - run: npm run build
       - run: npm run test:pdf-bundle
       - run: npm run test:http
+      - run: npm run test:screening-report-http
       - run: npm run test:auth-http
       - run: npm run test:marketing
       - run: npm run test:sales-leads-http

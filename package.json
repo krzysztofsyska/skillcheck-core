@@ -15,6 +15,8 @@
     "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs",
     "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs tests/screening-synthetic-fixture.test.mjs",
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
+    "test:screening-report": "node --test tests/screening-report.test.mjs",
+    "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
     "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
