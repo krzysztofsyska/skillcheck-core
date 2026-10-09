@@ -151,8 +151,14 @@ anon. Publiczne tokeny i handler wdraża osobny task po review, nie SC-010 baza.
 SECURITY DEFINER tylko gdy niezbędne: search_path='', jawny auth.uid/access check,
 REVOKE PUBLIC/anon, minimalne granty. Mutacje tabel wyłącznie przez RPC.
 
-Stała kolejność blokad dla approval, claim i permission revoke:
-candidate -> recruitment -> application -> shortlist -> communication -> attempt.
+Przyszły approval/dispatch musi stosować blokady SC-008: źródło analizy ->
+application -> recruitment -> position -> document, z NOWAIT i kontrolowanym 409.
+Nie ustanawiamy konkurencyjnej blokującej kolejności recruitment -> application.
+W B1 wszystkie mutacje serializuje candidate FOR UPDATE NOWAIT po sprawdzeniu
+autoryzacji, a komunikacja jest blokowana dopiero po kandydacie. B1 nie wykonuje
+approval/claim; draft jest tylko zapisem intencji, nigdy autoryzacją kontaktu.
+Przed B2 należy przetestować rzeczywiste wyścigi z SC-006 advisory lock oraz
+SC-008; wszystkich blokad innych modułów nie zastępuje blokada kandydata.
 Sprawdzenia: firma i rola aktora nadal aktualne, recruitment=open,
 application in(new,in_progress), istniejąca aktualna shortlista, zgody/preferencje,
 kontakt/template/policy niezmienione, koszt/próby/okno/expiry, feature flag.
@@ -195,7 +201,7 @@ Nagrania/transkrypcje należą do SC-012/013; recording_permission sprawdzane os
 
 ## Plan implementacji i odbioru
 A. SC-010 (ten PR): przegląd architektury, decyzje parametrów produktu, owner acceptance.
-B. Osobny task podstawy backendu: nowa migracja wygenerowana CLI, typy, RLS/RPC,
+B1. Podstawa offline: nowa migracja wygenerowana CLI, typy, RLS/RPC,
    pure policy/state functions i testy; COMMUNICATION_ENABLED=false oraz
    COMMUNICATION_DELIVERY_ENABLED=false. Brak adapterów sieciowych; próba execution
    zwraca disabled, a nie fikcyjne delivered. Nie nadajemy production grants workerowi
@@ -240,3 +246,43 @@ Sprawdź revoke vs dispatch, duplikaty po timeout, audyt i redakcję PII, DST i 
 Nie implementuj, nie twórz migracji, nie zmieniaj produkcji i nie kontaktuj kandydatów.
 Raportuj PASS/PASS WITH FIXES/FAIL z konkretnymi poprawkami i kryteriami testów.
 Po PASS przygotuj task backend foundation B do akceptacji architektury.”
+
+
+## Doprecyzowanie po niezależnym review — zakres B1
+Właściciel 2026-10-09 polecił wykonać przegląd i przygotowanie podstawy backendu.
+B1 implementuje: zapis niezweryfikowanego zgłoszenia zgody (unverified), revoked,
+blocked; preferencje zapisane przez rekrutera; draft/cancel/read komunikacji;
+redagowany audyt i idempotency. Nie implementuje pełnego przyszłego modelu powyżej.
+
+- evidence_ref to metadane zgłoszenia, nie dowód zweryfikowany. Recruiter nie może
+  nadać effective grant ani podszyć się pod potwierdzenie kandydata. Actor i source
+  pochodzą z serwera. Stan granted nie istnieje w B1. Kolejny unverified nie usuwa
+  już zapisanego revoked/blocked; ponowna zgoda wymaga przyszłego zaufanego procesu.
+- B1 nie zapisuje kontaktów/adresów, treści wiadomości, nagrań, tokenów ani
+  provider payload. Używa bezpiecznych enumów i UUID. Brak nowych kluczy szyfrujących.
+- Każdy wpis draft wiąże jawny human shortlist entry. Ocena świeżości przy tworzeniu
+  jest kontrolą jakości szkicu, a nie gwarancją aktualności w momencie późniejszego
+  kontaktu. Zmiany SC-008 nie powodują samoczynnej wysyłki ani reautoryzacji.
+- Dane publiczne mają read-only RLS dla członków firmy; private idempotency/audit
+  nie mają dostępu authenticated/anon/worker. Mutacje wyłącznie przez wąskie RPC.
+- Revoke/block w pasującym zakresie anuluje drafty w tej samej transakcji.
+  Preferencje mogą zawężać okna, ale nie znoszą odmowy.
+- Próba aktywacji delivery jest niedostępna strukturalnie: brak API approve,
+  worker/claim/attempt i adaptera, niezależnie od wartości flag środowiskowych.
+- Nowe FK restrict zatrzymują dotychczasowe usunięcie rodzica z historią SC010.
+  Jest to jawna zmiana zachowania: rollback transakcji usuwania, bez częściowego
+  usunięcia danych; UI i procedura redakcji/purge wymagane przed produkcyjną
+  aktywacją B1. Nie wolno przedstawiać istniejącego delete jako nadal bezwarunkowego.
+- B2 musi dostarczyć rejestr zweryfikowanych dowodów i wersji informacji (tenant,
+  kandydat, zakres, czas, hash treści, verifier), weryfikację kanału i punktu
+  kontaktowego, politykę/template approval oraz API authorize/worker. Podpisy
+  approval muszą wiązać wersje obu zakresów zgody (global/recruitment), nie jeden
+  niejednoznaczny permission_revision.
+- SC011/012 dostarcza delivery/attempt/webhook, provider reconciliation, limity
+  kosztów i kompletne okna czasu. B1 nie zgłasza tych testów jako wykonanych.
+
+Odbiór B1: tenant/role/immutable audit, serializacja revision i idempotency,
+nieosiągalność granted/scheduled/dispatch, revoke vs draft/cancel, current human
+shortlist gate, brak nowych danych kontaktowych i regresje SC006/008/009.
+Przegląd architektury pełnego B2 pozostaje warunkiem następnej fazy, a nie
+ukrytym założeniem ukończenia B1.
