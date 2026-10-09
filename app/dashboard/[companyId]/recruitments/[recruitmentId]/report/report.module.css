@@ -1,0 +1,29 @@
+.report { max-width: 1180px; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 24px; }
+.controls form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.controls p { flex-basis: 100%; margin: 0; font-size: .88rem; color: #44526b; }
+.meta { font-size: .85rem; color: #44526b; overflow-wrap: anywhere; }
+.tableWrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.table caption { text-align: left; margin: 12px 0; font-weight: 600; }
+.table th { background: #edf3fd; text-align: left; }
+.table th, .table td { padding: 12px; border-bottom: 1px solid #d4deec; vertical-align: top; }
+.application { margin-top: 24px; border-top: 2px solid #cedced; padding-top: 20px; }
+.criterion { margin-top: 16px; padding: 16px; background: #f4f7fc; border-radius: 8px; }
+.criterion h4 { margin-top: 0; }
+.criterion blockquote { margin: 12px 0; padding-left: 16px; border-left: 3px solid #2764a7; }
+.criterion footer { font-size: .8rem; margin-top: 8px; color: #44526b; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media print {
+  @page { size: A4; margin: 14mm; }
+  .report { max-width: none; padding: 0; font-size: 10pt; background: white; color: #111; }
+  .report > section { padding: 0; box-shadow: none; border: 0; }
+  .controls { display: none; }
+  .tableWrap { overflow: visible; }
+  .table { font-size: 8pt; table-layout: fixed; }
+  .table th, .table td { padding: 5px; overflow-wrap: anywhere; }
+  .table thead { display: table-header-group; }
+  .criterion { background: white; padding: 8px 0; }
+  .report h2, .report h3, .report h4 { break-after: avoid; }
+  .report a { color: inherit; text-decoration: none; }
+}

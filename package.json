@@ -13,8 +13,10 @@
     "test:live": "node --env-file-if-exists=.env.local scripts/check-live-supabase.mjs",
     "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs tests/cv-pdf.test.mjs tests/cv-docx.test.mjs",
     "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs",
-    "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs tests/screening-synthetic-fixture.test.mjs",
+    "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs tests/screening-synthetic-fixture.test.mjs tests/screening-ui.test.mjs",
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
+    "test:screening-report": "node --test tests/screening-report.test.mjs",
+    "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
     "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
@@ -27,7 +29,10 @@
     "test:sales-leads-http": "node --test tests/sales-leads-http.test.mjs",
     "test:sales-leads": "node --test tests/sales-leads-database.test.mjs",
     "test:sales-leads-concurrency": "node tests/sales-leads-concurrency.mjs",
-    "test:sales-leads-operator": "node --test tests/sales-leads-operator-http.test.mjs"
+    "test:sales-leads-operator": "node --test tests/sales-leads-operator-http.test.mjs",
+    "test:screening-ranking": "node --test tests/screening-ranking-database.test.mjs",
+    "test:screening-ranking-concurrency": "node --test tests/screening-ranking-concurrency.test.mjs",
+    "test:screening-joint": "node --test tests/screening-joint-database.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
