@@ -5,14 +5,14 @@ Phase: A, architecture only
 Level: L3  
 Scope: BACKEND + ranking contract  
 Depends on: SC-004 (wdrożony model wyniku), SC-007 (concurrency; nie zmienia scoringu)  
-Blocks implementation until: SC-006 DONE, review architektury PASS, owner acceptance  
+Blocks implementation until: SC-006 DONE, review architektury PASS; owner acceptance APPROVED 2026-10-09  
 Base: `integration` @ `6495162b2c04ef39843d86070cd0ce71f7f84233`
 
 Aktualizacja kontraktu: 2026-10-09, z uwzględnieniem SC-006 PR #61 i wdrożenia SC-007; kontynuacja istniejącego PR #47.
 
 Ten dokument nie jest migracją, RPC, zmianą RLS ani kodem UI. Phase B nie zaczyna się w tym PR.
 
-Phase A jest L3, nie L2. Dokument definiuje RLS, granty, autoryzację tenanta i RPC `SECURITY DEFINER`. To są granice zaufania z `AGENTS.md`, więc review tej fazy idzie ścieżką L3. Etykieta L2 w Issue #9 nie obniża tego poziomu. Implementacja nadal czeka na DONE SC-006, PASS review i owner acceptance.
+Phase A jest L3, nie L2. Dokument definiuje RLS, granty, autoryzację tenanta i RPC `SECURITY DEFINER`. To są granice zaufania z `AGENTS.md`, więc review tej fazy idzie ścieżką L3. Etykieta L2 w Issue #9 nie obniża tego poziomu. Implementacja nadal czeka na DONE SC-006 i PASS review. Owner acceptance jest APPROVED od 2026-10-09.
 
 ## 1. Cel i granice
 
@@ -179,7 +179,7 @@ Te punkty kontrakt Issue #9 zostawiał otwarte. Phase B implementuje je tak, jak
 8. **Rank nie jest snapshotem.** Zależy od zestawu rówieśników. Wpis shortlisty utrwala własny `raw_score` i `coverage` kandydata oraz wersję polityki, nie miejsce na liście. Odtworzenie całej historycznej listy wymagałoby osobnej tabeli przebiegów i jest poza v1.
 9. **Zaokrąglenie średniej.** `round(sum(points)::numeric / known_criteria::numeric, 3)`. Cast jest przed dzieleniem. Kolumny punktów są `integer`, a `sum` i `count` są `bigint`, więc `sum(points) / known_criteria` w PostgreSQL jest dzieleniem całkowitym: `100 / 3` daje `33`, a `round` zrobiłby z tego `33.000` zamiast `33.333`. Coverage już używa `::numeric` po obu stronach i tak zostaje. Coverage w wyniku RPC jest dokładnym `numeric`, porównywanym z progiem przed zaokrągleniem średniej.
 10. **Wagi.** Ranking-v1 jest nieważoną średnią znanych kryteriów. `criterion_kind` nie zmienia punktów. Wagi wymagają nowej wersji polityki.
-11. **Ta faza jest L3.** Review architektury obejmuje RLS, granty, autoryzację tenanta i RPC `SECURITY DEFINER`. Implementacja jest osobnym krokiem po PASS i akceptacji, na tym samym poziomie, nie obniżeniem do L2.
+11. **Ta faza jest L3.** Review architektury obejmuje RLS, granty, autoryzację tenanta i RPC `SECURITY DEFINER`. Implementacja jest osobnym krokiem po PASS i DONE SC-006, z już zapisaną akceptacją właściciela, na tym samym poziomie, nie obniżeniem do L2.
 
 ## 5. Polityka scoringu
 
@@ -358,6 +358,7 @@ Constraints:
 Indeksy:
 
 - `recruitment_shortlist_active_idx` na `(company_id, recruitment_id, selected_at desc)` gdzie `removed_at is null`;
+- `recruitment_shortlist_history_idx` na `(company_id, recruitment_id, selected_at desc, id)` bez predykatu częściowego — obsługuje include_removed=true;
 - `recruitment_shortlist_application_idx` na `(company_id, application_id, selected_at desc)`.
 
 Trigger `BEFORE INSERT`: analiza należy do tego `company_id`, `recruitment_id` i `application_id`; review należy do tej analizy i firmy; `selected_by` i `selected_at` są ustawione. Trigger łapie błąd RPC, nie zastępuje sprawdzenia uprawnień.
@@ -642,7 +643,7 @@ Przypadki wymagane przez Issue #9, rozwinięte o rozstrzygnięcia tego dokumentu
 13. Po stale albo nowym latest review istniejący wpis zostaje, `snapshot_current` staje się false, wiersz screeningu AI się nie zmienia. Usunięcie jest miękkie; drugi insert po remove jest dozwolony i niesie nowy snapshot.
 14. Ranking i shortlista nie zmieniają `screening_criterion_results.rating`, nie dokładają review i nie ruszają `applications.status` ani `overall_score`.
 15. Firma B nie czyta rankingu ani shortlisty firmy A (`42501` i puste `SELECT` RLS). Bezpośredni insert do `recruitment_shortlist_entries` jako `authenticated` pada.
-16. Wynik RPC nie zawiera kolumn CV, evidence, explanation, bindingu ani payloadu providera. Test kontraktu kolumn.
+16. Wynik RPC nie zawiera kolumn CV, evidence, explanation, bindingu ani payloadu providera. Test kontraktu kolumn oraz definicji: pg_get_functiondef(get_screening_ranking) i każdego helpera na tej ścieżce nie mogą zawierać odczytów input_cv_text_snapshot, source_text, redacted_text, evidence, explanation, całych wierszy (%rowtype, SELECT * INTO, alias.*) ani całego binding_snapshot. Dozwolone są wyłącznie udokumentowane skalarne projekcje JSON. Test musi objąć również helpery wywoływane pośrednio, aby projekcja odpowiedzi nie maskowała nadmiarowego odczytu.
 17. Seed polityki: odczyt `private.screening_ranking_policy('screening-ranking-v1')` zwraca 0/50/100 i `0.60`. Update tego wiersza pada. RPC nie daje innego progu.
 18. `total_criteria = 0` albo rozjazd liczby kryteriów ze snapshotem daje `result_incomplete` i nie dzieli przez zero.
 19. Dzielenie całkowite. Jeden `above` i dwa `below`: suma punktów `100`, `known_criteria = 3`. `raw_score` równa się `33.333`, nie `33` i nie `33.000`.
