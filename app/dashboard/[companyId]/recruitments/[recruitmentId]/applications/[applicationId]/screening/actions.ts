@@ -32,6 +32,10 @@ export async function reviewAnalysis(route: ScreeningRoute, analysisId: string, 
   catch { return { error: 'Nie znaleziono zgłoszenia.' }; }
   const analysis = await client.from('screening_analysis_versions').select('id,execution_status,input_cv_text_snapshot,stale_at').eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId).eq('application_id', route.applicationId).eq('id', analysisId).maybeSingle();
   if (analysis.error || !analysis.data || analysis.data.execution_status !== 'completed') return { error: 'Przegląd jest dostępny tylko dla ukończonej analizy.' };
+  const latest = await client.from('screening_analysis_versions').select('id')
+    .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId).eq('application_id', route.applicationId)
+    .order('analysis_version', { ascending: false }).limit(1).maybeSingle();
+  if (latest.error || latest.data?.id !== analysisId) return { error: 'Analiza została zastąpiona. Otwórz najnowszy wynik i ponów przegląd.' };
   const criteria = await client.from('screening_criterion_results').select('*').eq('company_id', route.companyId).eq('analysis_id', analysisId).order('criterion_order');
   if (criteria.error) return { error: 'Nie udało się wczytać kryteriów.' };
   const versionText = String(form.get('reviewVersion') ?? '');

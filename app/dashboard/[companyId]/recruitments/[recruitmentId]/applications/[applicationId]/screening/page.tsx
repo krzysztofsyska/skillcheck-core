@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { companyAccess } from '../../../../../../../../lib/company-access';
 import { prepareScreening, type PreparedScreening } from '../../../../../../../../lib/screening';
-import { loadScreeningContext } from '../../../../../../../../lib/screening-flow';
+import { loadScreeningContext, ScreeningNotFoundError } from '../../../../../../../../lib/screening-flow';
 import { screeningAiUserEnabled } from '../../../../../../../../lib/screening-dispatch';
 import { ratingLabels, reviewLabels, screeningStatus, screeningPath, isUuid, statusLabels, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
 import { AnalysisControl, RefreshStatus, ReviewControl } from './controls';
@@ -15,7 +15,10 @@ export default async function Screening({ params, searchParams }: { params: Prom
   const { companyId, recruitmentId } = route;
   const { client, canEdit } = await companyAccess(companyId);
   if (!Object.values(route).every(isUuid)) notFound();
-  const context = await loadScreeningContext(client, route);
+  const context = await loadScreeningContext(client, route).catch(error => {
+    if (error instanceof ScreeningNotFoundError) notFound();
+    throw error;
+  });
   let prepared: PreparedScreening | undefined;
   let reason = '';
   try { prepared = prepareScreening(context); } catch (error) { reason = error instanceof Error ? error.message : 'Sprawdź dane przed analizą.'; }
@@ -81,7 +84,7 @@ export default async function Screening({ params, searchParams }: { params: Prom
       </article>; })}
       <details><summary>CV użyte w tej analizie · wersja {analysis.candidate_document_version}</summary><pre className="cv-text">{analysis.input_cv_text_snapshot}</pre></details>
       {review && <section><h2>Ostatni przegląd</h2><p>{reviewLabels[review.disposition]} · wersja {review.review_version}</p><p>{review.review_note}</p></section>}
-      {canEdit && !historical && <ReviewControl key={`${analysis.id}:${analysis.latest_review_version}:${stale}`} route={route} analysisId={analysis.id} version={analysis.latest_review_version} criteria={criteria} stale={stale} />}
+      {canEdit && !historical && <ReviewControl key={`${analysis.id}:${analysis.latest_review_version}:${stale}`} route={route} analysisId={analysis.id} version={analysis.latest_review_version} criteria={criteria} stale={stale} review={review} overrides={overrides.data ?? []} />}
       {(reviews.data?.length ?? 0) > 1 && <details><summary>Historia przeglądów</summary><ul>{reviews.data?.map(r => <li key={r.id}>v{r.review_version}: {reviewLabels[r.disposition]} — {r.review_note}</li>)}</ul></details>}
     </>}
     {history.data.length > 0 && <nav aria-label="Historia analiz"><h2>Historia analiz</h2><ul>{history.data.map(a => <li key={a.id}><Link href={`${screeningPath(route)}?analysis=${a.id}`} aria-current={a.id === analysis?.id ? 'page' : undefined}>Wersja {a.analysis_version} · {statusLabels[a.execution_status]}</Link></li>)}</ul></nav>}

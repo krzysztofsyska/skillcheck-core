@@ -6,7 +6,7 @@ import ts from 'typescript';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readScreeningReview, screeningStatus, ratingLabels } from '../lib/screening-ui.ts';
-import { runScreeningCommand } from '../lib/screening-flow.ts';
+import { runScreeningCommand, loadScreeningContext, ScreeningNotFoundError } from '../lib/screening-flow.ts';
 import { prepareScreening } from '../lib/screening.ts';
 
 const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -98,10 +98,11 @@ test('changed or unavailable material makes existing result stale',()=>{
 
 // Render the real async Server Component with a scoped in-memory Supabase adapter.
 // Replace framework-only navigation/auth and action controls, not page rendering logic.
-async function renderPage({canEdit=true,stale=false,rating='insufficient_data'}={}) {
+async function renderPage({canEdit=true,stale=false,rating='insufficient_data',missing=false}={}) {
   const ctx=context();const id=uuid(11),reviewId=uuid(12);
   const analysis={id,company_id:route.companyId,application_id:route.applicationId,recruitment_id:route.recruitmentId,analysis_version:1,execution_status:'completed',input_fingerprint:prepareScreening(ctx).fingerprint,stale_at:stale?'now':null,input_cv_text_snapshot:ctx.document.redacted_text,latest_review_version:1,candidate_document_version:1};
   const client=clientFor(ctx,{screening_analysis_versions:[analysis],screening_criterion_results:[{...criterion,company_id:route.companyId,analysis_id:id,rating,evidence:rating==='meets'?[{start:3,end:18,quote:'Tworzę raporty.'}]:[]}],screening_result_reviews:[{id:reviewId,company_id:route.companyId,analysis_id:id,review_version:1,disposition:'approved_with_changes',review_note:'Sprawdzono'}],screening_criterion_review_overrides:[{company_id:route.companyId,review_id:reviewId,criterion_result_id:criterion.id,rating_override:'meets',evidence_override:[{quote:'Tworzę raporty.'}]}]});
+  if (missing) ctx.application.id=uuid(999);
   const path='app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/screening/page.tsx';
   const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
   const require=createRequire(import.meta.url);const mod={exports:{}};
@@ -128,4 +129,54 @@ test('approved review requires no overrides; failed RPC never dispatches', async
   assert.deepEqual(readScreeningReview(form('approved'),[criterion],''),{disposition:'approved',note:null,overrides:[]});
   const client=clientFor(context());client.rpc=async()=>({data:null,error:{message:'internal error'}});
   let sent=false;await assert.rejects(command(client,{dispatch:async()=>{sent=true;return {accepted:true};}}),/Nie udało/);assert.equal(sent,false);
+});
+
+
+test('missing or RLS-hidden application renders 404 while query errors stay server failures', async()=>{
+  await assert.rejects(renderPage({missing:true}), /404/);
+  const ctx=context();ctx.application=null;
+  await assert.rejects(loadScreeningContext(clientFor(ctx),route), ScreeningNotFoundError);
+  const broken={from(){return {select(){return this;},eq(){return this;},maybeSingle:async()=>({data:null,error:{message:'db failure'}})};}};
+  await assert.rejects(loadScreeningContext(broken,route), error=>!(error instanceof ScreeningNotFoundError));
+});
+
+function loadUiModule(file, replacements) {
+  const code=ts.transpileModule(readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
+  const require=createRequire(import.meta.url), mod={exports:{}};
+  const customRequire=name=>{
+    if(Object.hasOwn(replacements,name)) return replacements[name];
+    if(name.includes('/lib/')) return require(`../lib/${name.split('/lib/')[1]}.ts`);
+    return require(name);
+  };
+  new Function('require','module','exports',code)(customRequire,mod,mod.exports);
+  return mod.exports;
+}
+const screenDir='app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/screening/';
+
+test('stale-tab review of superseded unchanged-input analysis never calls review RPC', async()=>{
+  const ctx=context(), oldId=uuid(11);
+  const common={company_id:route.companyId,application_id:route.applicationId,recruitment_id:route.recruitmentId,execution_status:'completed',stale_at:null,input_cv_text_snapshot:ctx.document.redacted_text};
+  const client=clientFor(ctx,{screening_analysis_versions:[{...common,id:uuid(12),analysis_version:2},{...common,id:oldId,analysis_version:1}]});
+  const actions=loadUiModule(screenDir+'actions.ts', {
+    'next/cache':{revalidatePath(){}},
+    '../../../../../../../../lib/company-access':{companyAccess:async()=>({client,canEdit:true})},
+    '../../../../../../../../lib/screening-dispatch':{},
+  });
+  const f=form('approved');f.set('reviewVersion','1');
+  const result=await actions.reviewAnalysis(route,oldId,{},f);
+  assert.match(result.error,/zastąpiona/);assert.equal(client.calls.length,0);
+});
+
+test('review form retains latest disposition, note, rating, evidence and explanation corrections',()=>{
+  const controls=loadUiModule(screenDir+'controls.tsx',{
+    './actions':{reviewAnalysis:async()=>({}),startAnalysis:async()=>({}),retryAnalysis:async()=>({})},
+    'next/navigation':{useRouter:()=>({refresh(){}})},
+    'next/link':({children,...props})=>React.createElement('a',props,children),
+  });
+  const review={disposition:'approved_with_changes',review_note:'Zachowaj notatkę'};
+  const override={criterion_result_id:criterion.id,rating_override:'meets',evidence_override:[{quote:'Tworzę raporty.'}],explanation_override:'Zweryfikowana korekta'};
+  const html=renderToStaticMarkup(React.createElement(controls.ReviewControl,{route,analysisId:uuid(11),version:1,criteria:[criterion],stale:false,review,overrides:[override]}));
+  assert.match(html,/value="approved_with_changes" selected/);
+  assert.match(html,/checked=""/);assert.match(html,/value="meets" selected/);
+  assert.match(html,/Tworzę raporty/);assert.match(html,/Zweryfikowana korekta/);assert.match(html,/Zachowaj notatkę/);
 });
