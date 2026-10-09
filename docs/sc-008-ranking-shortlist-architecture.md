@@ -92,7 +92,7 @@ Skutek dla rankingu, bez nowej reguły hire/reject: zmiana statusu zgłoszenia n
 - brak mapowania `below/meets/above` na punkty;
 - `docs/BACKLOG.md` nadal opisuje SC-008 jako BACKLOG; ten PR nie zmienia backlogu;
 - `lib/supabase/database.types.ts` nie ma typów rankingu; Phase A ich nie dodaje;
-- SC-006 ma implementację startu, wyników i review w otwartym PR #61; nie jest jeszcze zaakceptowane. Rankingu nadal nie ma.
+- SC-006 ma implementację startu, wyników i review w otwartym PR #61; akceptacja właściciela jest zapisana (2026-10-09), niezależny review i scalenie nadal oczekiwane. Rankingu nadal nie ma.
 
 ## 3. Zgodność kontraktu z modelem SC-004
 
@@ -300,6 +300,17 @@ Wśród `rankable` w jednej rekrutacji:
 3. `below_count` ASC;
 4. `above_count` DESC;
 5. `application_id` ASC jako porządek `uuid`, nie rzutowanie na tekst.
+
+Aby testy nie powielały logiki sortowania, Phase B tworzy produkcyjny typ złożony
+`private.screening_ranking_order_key` z polami w kolejności:
+`negative_score numeric, negative_coverage numeric, below_count integer, negative_above_count integer, application_id uuid`.
+Czysty helper SQL
+`private.screening_ranking_order_key(numeric, numeric, integer, integer, uuid)`
+zwraca ten typ jako `ROW(-$1, -$2, $3, -$4, $5)`, jest `IMMUTABLE STRICT SECURITY INVOKER`, `SET search_path = ''`, nie czyta tabel.
+PUBLIC ma odebrane EXECUTE/USAGE; authenticated ma EXECUTE funkcji i USAGE typu oraz istniejący dostęp do schematu private.
+RPC liczy row_number i porządek rankowalnych wyłącznie przez `ORDER BY private.screening_ranking_order_key(raw_score, coverage, below_count, above_count, application_id) ASC`.
+Wszystkie pięć pól rankowalnych musi być nie-NULL. Nierankowalne są obsługiwane osobno zgodnie z dalszym kontraktem.
+Testy izolowanych kluczy wywołują ten helper w PostgreSQL i sortują po zwróconym typie; test realnego RPC sprawdza jego użycie i osiągalne pary dla wspólnego profilu. Nie tworzymy testowej kopii algorytmu.
 
 `rank` = 1..N w tej kolejności. Nierankowalne wiersze mają `rank null` i w pełnym wyniku lecą po rankowalnych, po `application_id` ASC.
 
@@ -552,7 +563,7 @@ Przyszły plik, nazwany dopiero na początku Phase B, z timestampem późniejszy
 
 Jedna migracja, w jednej transakcji, zawiera:
 
-1. tabelę `private.screening_ranking_policies`, seed v1 i trigger zamrażający update/delete;
+1. tabelę `private.screening_ranking_policies`, seed v1 i trigger zamrażający update/delete; typ i helper klucza sortowania z sekcji 6.2 oraz jawne granty;
 2. `private.screening_ranking_policy(text)` oraz revoke/grant execute;
 3. `private.screening_ranking_freshness_reason(uuid, uuid)` z sekcji 3.2, revoke/grant execute dla `authenticated`; bez zmiany grantów `private.screening_stale_reason(uuid)`;
 4. `public.recruitment_shortlist_entries`, indeksy, FK, checki, triggery spójności i niemutowalności;
@@ -625,7 +636,7 @@ Przypadki wymagane przez Issue #9, rozwinięte o rozstrzygnięcia tego dokumentu
    - **above_count.** Przy równym raw `75`, coverage `1` i `below_count = 0`. A: dwa `above` i dwa `meets` → `above_count = 2`, większy uuid. B: jeden `above` i jeden `meets` → `above_count = 1`, mniejszy uuid. A jest pierwsza.
    - **application_id.** Dwa zgłoszenia z identycznym wektorem dwóch `meets`. Mniejszy uuid ma rank 1.
    - **Precedencja w jednym rankingu.** Te pięć par układów, jako pięć osób albo jako sąsiednie pary w jednym wyniku, ma rank zgodny z kolejnością kluczy: wyższy raw przed lepszą coverage, wyższa coverage przed mniejszym `below_count`, mniejszy `below_count` przed większym `above_count`, większy `above_count` przed mniejszym uuid. Jeden test nie może zastąpić pięciu izolowanych, bo remis na wyższych kluczach nie uruchamia niższego.
-10. `target_size` 5, 10 i default 10. Wartości 4 i 11 dają `22023`. Mniej niż N rankowalnych zwraca krótszą sugestię. Dla obu RPC dodatkowy fixture nowej polityki z default_target_size = 7: argument pominięty i jawne NULL dają 7, jawne 10 daje 10. Próba UPDATE/DELETE polityki przed pierwszą shortlistą także jest odrzucana; przełączenie wersji między odczytem a add daje PT409 dla poprzedniego expected_policy_version.
+10. `target_size` 5, 10 i default 10. Wartości 4 i 11 dają `22023`. Mniej niż N rankowalnych zwraca krótszą sugestię. Dla obu RPC dodatkowy fixture w odizolowanym schemacie testowym, którego seed aktywnej polityki od początku ma default_target_size = 7 (bez UPDATE istniejącego seeda i bez wybierania najnowszej wersji po dacie): argument pominięty i jawne NULL dają 7, jawne 10 daje 10. Próba UPDATE/DELETE polityki przed pierwszą shortlistą także jest odrzucana; przełączenie wersji między odczytem a add daje PT409 dla poprzedniego expected_policy_version.
 11. Add wymaga zapisu firmy. Owner i recruiter dodają. Viewer i outsider dostają `42501`. Podwójny aktywny add daje `PT409`.
 12. `suggested` poza aktualną sugestią daje `22023`. `manual` dla `insufficient_evidence` z zatwierdzonym review przechodzi. `manual` przy `needs_reanalysis` daje `55000`.
 13. Po stale albo nowym latest review istniejący wpis zostaje, `snapshot_current` staje się false, wiersz screeningu AI się nie zmienia. Usunięcie jest miękkie; drugi insert po remove jest dozwolony i niesie nowy snapshot.
@@ -643,7 +654,7 @@ Przypadki wymagane przez Issue #9, rozwinięte o rozstrzygnięcia tego dokumentu
 
 Osobny zestaw na rzeczywistym PostgreSQL, co najmniej dwa połączenia (jak SC-007): add kontra review; add kontra edycja CV/stanowiska; add kontra zakończenie nowej analizy; dwa add; dwa remove; add kontra remove. Wymusić oba porządki blokad. Sprawdzać finalne wiersze, snapshoty i kody konfliktu, nie tylko brak wyjątku. Nie może być dwóch aktywnych wpisów, zapisu źródeł innych niż oczekiwane, surowego deadlocka ani częściowego wpisu. Zmiana źródła zakończona po poprawnym add musi pozostawić audytowalny wpis z `snapshot_current=false`.
 
-Testy izolowanych kluczy sortowania z punktu 9 mogą używać wejść agregatora o różnych liczbach kryteriów; nie wolno udawać, że są poprawnymi aktualnymi analizami różnych profili w jednej rekrutacji. Testy integracyjne muszą budować spójne snapshoty wspólnego stanowiska; kombinacje kluczy nieosiągalne przy jednakowej liczbie kryteriów weryfikować na czystym agregatorze. Zachować weryfikację deterministycznego końcowego porządku w realnym RPC.
+Testy izolowanych kluczy sortowania z punktu 9 mogą używać wejść produkcyjnego helpera klucza sortowania o różnych liczbach kryteriów; nie wolno udawać, że są poprawnymi aktualnymi analizami różnych profili w jednej rekrutacji. Testy integracyjne muszą budować spójne snapshoty wspólnego stanowiska; kombinacje kluczy nieosiągalne przy jednakowej liczbie kryteriów weryfikować na tym samym produkcyjnym helperze klucza sortowania, którego używa RPC (sekcja 6.2). Nie wolno kopiować ORDER BY do implementacji testowej. Zachować weryfikację deterministycznego końcowego porządku w realnym RPC.
 
 Osobno, jeśli PR implementacyjny ruszy typy: `npm run typecheck` i `npm run build`. Ten PR architektoniczny ich nie uruchamia jako bramki produktu, bo nie zmienia kodu wykonywalnego.
 
@@ -658,10 +669,10 @@ Poziom L3 tej fazy jest rozstrzygnięty review i nie jest już pytaniem otwartym
 
 ## 14. Blokery implementacji
 
-- SC-006 nie jest DONE/accepted. Implementacja ścieżki review jest w PR #61 i czeka na domknięcie przeglądu oraz akceptację. Schemat review już jest i da się go testować w PGlite bez SC-006, ale Issue #9 zabrania kodu produkcyjnego i migracji przed DONE SC-006.
+- SC-006 nie jest jeszcze DONE. Implementacja ścieżki review jest w PR #61; akceptacja właściciela została zapisana 2026-10-09, pozostaje PASS niezależnego review i scalenie do integration. Schemat review już jest i da się go testować w PGlite bez SC-006, ale Issue #9 zabrania kodu produkcyjnego i migracji przed DONE SC-006.
 - Review architektury jeszcze nie ma werdyktu PASS.
-- Brak owner acceptance architektury.
-- Phase A jest już L3. Implementacja nie startuje przed PASS review, owner acceptance i DONE SC-006. Ten PR nie dodaje migracji.
+- Owner acceptance architektury: APPROVED, zapisana 2026-10-09; nie wymaga ponownej decyzji.
+- Phase A jest już L3. Pozostałe warunki startu implementacji: PASS review i DONE SC-006. Ten PR nie dodaje migracji.
 
 ## 15. Poza zakresem
 
