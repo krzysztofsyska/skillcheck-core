@@ -61,6 +61,8 @@ type ExpectedViews =
 type ExpectedFunctions =
   | "submit_sales_lead"
   | "list_sales_leads"
+  | "list_sales_leads_inbox"
+  | "close_sales_lead"
   | "platform_operator_status"
   | "grant_platform_operator"
   | "revoke_platform_operator"

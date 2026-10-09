@@ -16,6 +16,7 @@ const migrations = [
   "20261005000100_screening_worker_claim_payload.sql",
   "20261007000100_screening_retry_active_conflict.sql",
   "20261007000200_sales_leads.sql",
+  "20261009073604_sales_lead_inbox_retention.sql",
 ];
 
 const tableColumns = {
@@ -85,6 +86,8 @@ const publicForeignKeys = [
 const functions = {
   submit_sales_lead: "idempotency_key uuid, first_name text, company_name text, email text, phone text, needs text, source_ip text, issued_at_us bigint, request_signature text",
   list_sales_leads: "result_limit integer",
+  list_sales_leads_inbox: "result_limit integer",
+  close_sales_lead: "target_lead uuid",
   platform_operator_status: "",
   grant_platform_operator: "target_user uuid",
   revoke_platform_operator: "target_user uuid",
