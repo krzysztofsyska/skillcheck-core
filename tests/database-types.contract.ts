@@ -53,7 +53,8 @@ type ExpectedTables =
   | "screening_analysis_attempts"
   | "screening_criterion_results"
   | "screening_result_reviews"
-  | "screening_criterion_review_overrides";
+  | "screening_criterion_review_overrides"
+  | "recruitment_shortlist_entries";
 type ExpectedViews =
   | "latest_behavior_assessments"
   | "latest_exercise_definitions"
@@ -75,7 +76,11 @@ type ExpectedFunctions =
   | "complete_screening_analysis"
   | "fail_screening_attempt"
   | "retry_screening_analysis"
-  | "review_screening_result";
+  | "review_screening_result"
+  | "get_screening_ranking"
+  | "get_recruitment_shortlist"
+  | "add_recruitment_shortlist_entry"
+  | "remove_recruitment_shortlist_entry";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -439,3 +444,8 @@ type _ListReturn = Expect<Equal<Database["public"]["Functions"]["list_sales_lead
 type _StatusReturn = Expect<Equal<Database["public"]["Functions"]["platform_operator_status"]["Returns"], boolean>>;
 type _GrantArgs = Expect<Equal<Database["public"]["Functions"]["grant_platform_operator"]["Args"], { target_user: string }>>;
 type _RevokeArgs = Expect<Equal<Database["public"]["Functions"]["revoke_platform_operator"]["Args"], { target_user: string }>>;
+
+// SC-008 writes are available exclusively through tenant-checked RPCs.
+type _ShortlistInsert = Expect<Equal<Insert<"recruitment_shortlist_entries">, never>>;
+type _ShortlistUpdate = Expect<Equal<Update<"recruitment_shortlist_entries">, never>>;
+type _RankingTenantArgument = Expect<Equal<Extract<keyof Database["public"]["Functions"]["get_screening_ranking"]["Args"], "company_id">, never>>;

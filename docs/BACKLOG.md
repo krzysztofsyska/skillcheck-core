@@ -14,9 +14,9 @@ Nie budować ponownie: auth/onboarding, firmy, profile stanowisk, rekrutacje, ka
 | SC-003 | Model danych dla persistowanego wyniku preselekcji AI | L3 | Codex→Cursor | Codex | SC-002 | DONE |
 | SC-004 | Migracja + RLS + RPC dla wyników preselekcji i review człowieka | L3 | Cursor | Codex | SC-003 | DONE |
 | SC-005 | Integracja OpenAI dla preselekcji: bezpieczny payload, structured output, limity | L3 | Codex→Cursor | Codex | SC-004 | DONE |
-| SC-006 | UI uruchomienia analizy i podglądu dowodów bez automatycznej decyzji | L2 | Cursor | Codex | SC-005 | BACKLOG |
+| SC-006 | UI uruchomienia analizy i podglądu dowodów bez automatycznej decyzji | L3 | Codex | Codex | SC-005 | ACCEPTED / integration PR #61; produkcja osobno |
 | SC-007 | Obsługa stale/fingerprint/idempotency/concurrency analizy | L3 | Cursor | Codex | SC-005 | BACKLOG |
-| SC-008 | Ranking/shortlista dla jednej rekrutacji na podstawie sprawdzonych wyników | L2 | Cursor | Codex | SC-006,SC-007 | BACKLOG |
+| SC-008 | Ranking/shortlista dla jednej rekrutacji na podstawie sprawdzonych wyników | L3 | Codex | Codex | SC-006,SC-007 | IMPLEMENTED / PR_REVIEW; architektura zaakceptowana PR #47 |
 | SC-009 | Raport preselekcji dla firmy + eksport | L2 | Cursor | Codex | SC-008 | BACKLOG |
 | SC-010 | Model komunikacji z kandydatem: zgody, statusy, kanały, retry | L3 | Codex→Cursor | Codex | SC-008 | BACKLOG |
 | SC-011 | Voicebot architecture/provider contract + koszt i limity | L3 | Codex | Codex | SC-010 | BACKLOG |
