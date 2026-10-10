@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { behaviorAreas } from "../lib/position-fields.ts";
 import { createVoicePlanWriteSnapshot, planWriteFingerprint, validatePlanReviewCommand, validatePlanReleaseCommand, VoicePlanStorageError } from "../lib/voice/plan-persistence-contract.ts";
 const id=n=>"00000000-0000-4000-8000-"+String(n).padStart(12,"0");
@@ -90,4 +91,23 @@ test("SC-012-B B1 accepts position input near existing 30-by-500 source limits",
  largeSource.position.requiredCompetencies=Array.from({length:30},(_,i)=>"Kompetencja "+i+" "+("Z".repeat(480)));
  const result=createVoicePlanWriteSnapshot(largeSource,binding());
  assert.equal(result.questions.length,5);
+});
+
+test("SC-012-B rejects mutated source binding, source fingerprint, and array hash",()=>{
+ const s=createVoicePlanWriteSnapshot(source(),binding());
+ assert.throws(()=>planWriteFingerprint({...s,sourceHash:[s.sourceHash]}),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint({...s,sourceBinding:{...s.sourceBinding,reviewId:id(83)}}),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint({...s,planSourceFingerprint:"f".repeat(64)}),VoicePlanStorageError);
+ const altered=structuredClone(s);
+ altered.questions[0].text="Wstrzyknięte dane osobowe";
+ altered.planContractHash=createHash("sha256").update(JSON.stringify({
+   plan:altered.templateVersion,questions:altered.questions
+ })).digest("hex");
+ assert.throws(()=>planWriteFingerprint(altered),VoicePlanStorageError);
+});
+test("SC-012-B accepts PostgreSQL microsecond timestamps and timezone offsets",()=>{
+ const pgBinding={...binding(),applicationUpdatedAt:"2026-10-10T13:00:00.123456+00:00",
+   recruitmentUpdatedAt:"2026-10-10T15:00:00.000001+02:00"};
+ const s=createVoicePlanWriteSnapshot(source(),pgBinding);
+ assert.match(planWriteFingerprint(s),/^[a-f0-9]{64}$/);
 });
