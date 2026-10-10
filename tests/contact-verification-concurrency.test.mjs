@@ -50,8 +50,8 @@ test('SC-010 B2 real PostgreSQL locking prevents stale evidence and approvals',a
   await a.db.query('begin');
   if(first==='approve'){
    await a.approve(id,rid);
-   if(operation==='review'||operation==='shortlist'){
-    // Existing SC-006/008 source writers use blocking row locks. Observe the
+   if(operation==='shortlist'){
+    // SC-008 shortlist removal still uses a blocking row lock. Observe the
     // actual wait, release the approval snapshot, then require their success.
     const pending=change(b).then(value=>({value}),error=>({error}));
     await h.asAdmin();let waiting=false;
@@ -62,7 +62,12 @@ test('SC-010 B2 real PostgreSQL locking prevents stale evidence and approvals',a
     }
     assert.ok(waiting,'source writer must wait for approved source snapshot');await a.db.query('commit');
     const result=await pending;if(result.error)throw result.error;
-   }else{await conflict(change(b));await a.db.query('commit');await b.h.asUser();await change(b);}
+   }else{
+    // R2 review now takes the candidate NOWAIT guard before reading its source.
+    if(operation==='review')await assert.rejects(change(b),error=>error.code==='PT409');
+    else await conflict(change(b));
+    await a.db.query('commit');await b.h.asUser();await change(b);
+   }
   }else{
    await change(a);await conflict(b.approve(id,rid));await a.db.query('commit');await b.h.asUser();await conflict(b.approve(id,rid));
   }

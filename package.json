@@ -41,7 +41,9 @@
     "test:contact-verification": "node --test tests/contact-verification.test.mjs tests/contact-verification-database.test.mjs",
     "test:contact-verification-concurrency": "node --test tests/contact-verification-concurrency.test.mjs",
     "test:erasure-preview": "node --test tests/erasure-preview-database.test.mjs tests/erasure-preview-ui.test.mjs",
-    "test:erasure-preview-concurrency": "node --test tests/erasure-preview-concurrency.test.mjs"
+    "test:erasure-preview-concurrency": "node --test tests/erasure-preview-concurrency.test.mjs",
+    "test:erasure-lifecycle": "node --test tests/erasure-lifecycle-database.test.mjs tests/erasure-lifecycle-ui.test.mjs",
+    "test:erasure-lifecycle-concurrency": "node --test tests/erasure-lifecycle-concurrency.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
