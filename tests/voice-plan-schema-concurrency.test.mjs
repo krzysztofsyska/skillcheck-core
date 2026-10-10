@@ -50,16 +50,16 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
   JSON.stringify({analysisId:f.analysis_id}),JSON.stringify(envelope),users.owner])).rows[0].id;
  const reviewId=(await db.query([
   "insert into private.voice_plan_review_entries",
-  "(company_id,plan_id,review_version,reviewer_id,decision,source_hash,",
+  "(company_id,application_id,plan_id,review_version,reviewer_id,decision,source_hash,",
   "retention_policy_version,retention_deadline)",
-  "values($1,$2,1,$3,'approved',$4,'synthetic-v1','2030-01-01') returning id"
- ].join(" "),[f.companyId,pid,users.owner,hash("a")])).rows[0].id;
+  "values($1,$2,$3,1,$4,'approved',$5,'synthetic-v1','2030-01-01') returning id"
+ ].join(" "),[f.companyId,f.application.id,pid,users.owner,hash("a")])).rows[0].id;
  const releaseId=(await db.query([
   "insert into private.voice_plan_release_entries",
-  "(company_id,plan_id,approved_review_id,release_version,source_hash,",
+  "(company_id,application_id,plan_id,approved_review_id,release_version,source_hash,",
   "released_by,retention_policy_version,retention_deadline)",
-  "values($1,$2,$3,1,$4,$5,'synthetic-v1','2030-01-01') returning id"
- ].join(" "),[f.companyId,pid,reviewId,hash("a"),users.owner])).rows[0].id;
+  "values($1,$2,$3,$4,1,$5,$6,'synthetic-v1','2030-01-01') returning id"
+ ].join(" "),[f.companyId,f.application.id,pid,reviewId,hash("a"),users.owner])).rows[0].id;
  await t.test("append-only plan/review/release stay immutable even for database admin",async()=>{
   for(const [table,id] of [
    ["public.voice_plan_versions",pid],
@@ -121,6 +121,32 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
    "retention_policy_version,retention_deadline from public.voice_plan_versions where id=$2"
   ].join(" ");
   await assert.rejects(db.query(sql,[other.analysis_id,pid]),error=>error.code==="23503");
+ });
+
+
+ await t.test("same-company wrong-application release cannot become current",async()=>{
+  const other=await h.completedApplication(await h.candidate(f),Array(5).fill("meets"));
+  await h.asAdmin();
+  await assert.rejects(db.query(
+    "insert into private.voice_plan_current_releases(company_id,application_id,plan_id,release_entry_id,pointer_version) values($1,$2,$3,$4,1)",
+    [f.companyId,other.application.id,pid,releaseId]),e=>e.code==="23503");
+ });
+ await t.test("correction lineage cannot cite an unrelated review or plan",async()=>{
+  const other=await h.completedApplication(await h.candidate(f),Array(5).fill("meets"));
+  await h.asAdmin();
+  const sql=[
+    "insert into public.voice_plan_versions",
+    "(company_id,recruitment_id,application_id,position_id,analysis_id,",
+    "screening_review_id,shortlist_entry_id,plan_version,source_hash,envelope_hash,",
+    "source_snapshot,plan_envelope,template_version,created_by,",
+    "retention_policy_version,retention_deadline,supersedes_plan_id,corrects_review_id)",
+    "select company_id,recruitment_id,application_id,position_id,analysis_id,",
+    "screening_review_id,shortlist_entry_id,78,source_hash,envelope_hash,",
+    "source_snapshot,plan_envelope,template_version,created_by,",
+    "retention_policy_version,retention_deadline,$1,$2",
+    "from public.voice_plan_versions where id=$3"
+  ].join(" ");
+  await assert.rejects(db.query(sql,[other.analysis_id,reviewId,pid]),e=>e.code==="23503");
  });
 
 });
