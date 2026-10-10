@@ -62,3 +62,30 @@ test("SC-012-B B1 sparse/malformed or unreviewed source is rejected",()=>{
  assert.throws(()=>createVoicePlanWriteSnapshot({...x,screeningReviewed:false},binding()));
  assert.throws(()=>createVoicePlanWriteSnapshot({...x,screeningCurrent:false},binding()));
 });
+
+
+test("SC-012-B B1 rejects array-wrapped hashes and mutated or copied plan envelopes",()=>{
+ const command={planId:id(21),expectedPlanVersion:1,expectedSourceHash:[sha],
+   expectedReviewVersion:0,decision:"approved",requestKey:id(50)};
+ assert.throws(()=>validatePlanReviewCommand(command),VoicePlanStorageError);
+ assert.throws(()=>validatePlanReleaseCommand({
+   planId:id(21),expectedPlanVersion:1,expectedSourceHash:[sha],
+   approvedReviewId:id(22),expectedReviewVersion:1,requestKey:id(50)
+ }),VoicePlanStorageError);
+ const valid=createVoicePlanWriteSnapshot(source(),binding());
+ const modified=structuredClone(valid);
+ modified.questions[0].text="Injected private text";
+ assert.throws(()=>planWriteFingerprint(modified),VoicePlanStorageError);
+ const modifiedTime=structuredClone(valid);
+ modifiedTime.targetSeconds=60;
+ assert.throws(()=>planWriteFingerprint(modifiedTime),VoicePlanStorageError);
+});
+
+test("SC-012-B B1 accepts position input near existing 30-by-500 source limits",()=>{
+ const largeSource=source();
+ largeSource.position.tasks=Array.from({length:30},(_,i)=>"Zadanie "+i+" "+("X".repeat(480)));
+ largeSource.position.kpis=Array.from({length:30},(_,i)=>"Wynik "+i+" "+("Y".repeat(480)));
+ largeSource.position.requiredCompetencies=Array.from({length:30},(_,i)=>"Kompetencja "+i+" "+("Z".repeat(480)));
+ const result=createVoicePlanWriteSnapshot(largeSource,binding());
+ assert.equal(result.questions.length,5);
+});
