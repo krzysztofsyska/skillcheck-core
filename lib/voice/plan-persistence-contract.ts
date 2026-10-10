@@ -4,7 +4,8 @@
  * Future RPC must derive tenant/actor/source from authenticated DB session.
  */
 import { createHash } from "node:crypto";
-import { buildInterviewPlan, type InterviewSource, type InterviewPlan } from "./interview-plan.ts";
+import { buildInterviewPlan, type InterviewSource } from "./interview-plan.ts";
+import { behaviorGuideDefinitions } from "../behavior-guide.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HEX = /^[0-9a-f]{64}$/;
@@ -23,6 +24,7 @@ export type VoicePlanWriteSnapshot = Readonly<{
   storageContractVersion: typeof SC012B_STORAGE_VERSION;
   sourceBinding: VoicePlanSourceBinding;
   sourceHash: string;
+  planSourceFingerprint: string;
   planContractHash: string;
   templateVersion: "skillcheck-voice-plan-v1";
   language: "pl-PL";
@@ -52,8 +54,7 @@ export class VoicePlanStorageError extends Error {
 const invalid = (): never => { throw new VoicePlanStorageError("INVALID"); };
 const isId = (x: unknown): x is string => typeof x === "string" && UUID.test(x);
 const isIso = (x: unknown): x is string =>
-  typeof x === "string" && Number.isFinite(Date.parse(x)) &&
-  new Date(x).toISOString() === x;
+  typeof x === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(x) && Number.isFinite(Date.parse(x));
 const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o,k);
 /** Accept only ordinary JSON-shaped data; no accessors/proxies or extra keys. */
 function cleanClone<T>(value: T): T {
@@ -80,6 +81,50 @@ function bindingValid(b: unknown): b is VoicePlanSourceBinding {
     keys.slice(10).every(k=>typeof v[k]==="string" && HEX.test(v[k] as string));
 }
 const hash = (x: unknown): string => createHash("sha256").update(JSON.stringify(x)).digest("hex");
+function sourceDigest(binding: VoicePlanSourceBinding, planSourceFingerprint: string): string {
+  return hash({
+    companyId:binding.companyId,recruitmentId:binding.recruitmentId,
+    applicationId:binding.applicationId,positionId:binding.positionId,
+    analysisId:binding.analysisId,reviewId:binding.reviewId,
+    shortlistEntryId:binding.shortlistEntryId,
+    applicationUpdatedAt:binding.applicationUpdatedAt,
+    recruitmentUpdatedAt:binding.recruitmentUpdatedAt,
+    positionUpdatedAt:binding.positionUpdatedAt,
+    analysisFingerprint:binding.analysisFingerprint,
+    screeningContractHash:binding.screeningContractHash,
+    planSourceFingerprint,
+  });
+}
+const commonFollowUp="Jakie działania podjął Pan lub podjęła Pani osobiście i jaki był rezultat?";
+const clarificationFollowUps=[
+  "W dokumentach informacje dotyczące tego kryterium są niespójne. Jaki był rzeczywisty zakres Pani lub Pana pracy?",
+  "Jaki był Pani lub Pana rzeczywisty zakres działania i rezultat?",
+] as const;
+const clarificationTexts={
+  task:"Proszę opisać konkretne zadanie, które wykonywał Pan lub wykonywała Pani osobiście, i jego rezultat.",
+  kpi:"Proszę podać konkretny przykład mierzenia wyniku swojej pracy i działania na podstawie tego miernika.",
+  competency:"Proszę opisać, w jakiej sytuacji zawodowej wykorzystał Pan lub wykorzystała Pani konkretną umiejętność i jaki był efekt.",
+} as const;
+function controlledQuestion(q: unknown, index: number): boolean {
+  if (!exactFields(q,["id","kind","criterionId","criterionKind","text","followUps","maxSeconds"])) return false;
+  const v=q as Record<string,unknown>;
+  if (typeof v.id!=="string" || typeof v.criterionId!=="string" || typeof v.text!=="string" ||
+      !Array.isArray(v.followUps) || v.followUps.length!==1 || typeof v.followUps[0]!=="string") return false;
+  if (index<4) {
+    const area=behaviorGuideDefinitions.find(x=>x.id===v.criterionId);
+    return v.kind==="common" && v.criterionKind==="behavior" && !!area &&
+      v.id==="common-"+area.id && v.text===area.questions[0] &&
+      v.followUps[0]===commonFollowUp && v.maxSeconds===60;
+  }
+  if (v.kind!=="clarification" ||
+      !["task","kpi","competency"].includes(String(v.criterionKind))) return false;
+  const kind=v.criterionKind as keyof typeof clarificationTexts;
+  const criterion=/^(task|kpi|competency):([1-9][0-9]?)$/.exec(v.criterionId);
+  return !!criterion && criterion[1]===kind && Number(criterion[2])<=30 &&
+    v.id==="clarification-"+v.criterionId.replace(":","-") &&
+    v.text===clarificationTexts[kind] && v.maxSeconds===45 &&
+    clarificationFollowUps.includes(v.followUps[0] as typeof clarificationFollowUps[number]);
+}
 
 /**
  * PRECONDITION: a privileged caller must load input and sourceBinding together
@@ -102,22 +147,12 @@ export function createVoicePlanWriteSnapshot(
     id:q.id,kind:q.kind,criterionId:q.criterionId,criterionKind:q.criterionKind,
     text:q.text,followUps:Object.freeze([...q.followUps]),maxSeconds:q.maxSeconds,
   }));
-  const sourceHash=hash({
-    companyId:binding.companyId,recruitmentId:binding.recruitmentId,
-    applicationId:binding.applicationId,positionId:binding.positionId,
-    analysisId:binding.analysisId,reviewId:binding.reviewId,
-    shortlistEntryId:binding.shortlistEntryId,
-    applicationUpdatedAt:binding.applicationUpdatedAt,
-    recruitmentUpdatedAt:binding.recruitmentUpdatedAt,
-    positionUpdatedAt:binding.positionUpdatedAt,
-    analysisFingerprint:binding.analysisFingerprint,
-    screeningContractHash:binding.screeningContractHash,
-    planSourceFingerprint:plan.sourceFingerprint,
-  });
+  const sourceHash=sourceDigest(binding,plan.sourceFingerprint);
   return Object.freeze({
     schemaVersion:1,storageContractVersion:SC012B_STORAGE_VERSION,
     sourceBinding:Object.freeze({...binding}),
-    sourceHash,planContractHash:hash({plan:plan.templateVersion,questions}),
+    sourceHash,planSourceFingerprint:plan.sourceFingerprint,
+    planContractHash:hash({plan:plan.templateVersion,questions}),
     templateVersion:"skillcheck-voice-plan-v1",language:"pl-PL",
     targetSeconds:420,maximumSeconds:600,recordingAllowed:false,noticeRequired:true,
     questions:Object.freeze(questions),
@@ -146,19 +181,23 @@ export function validatePlanReleaseCommand(raw: PlanReleaseRequest): PlanRelease
       x.expectedReviewVersion<1) invalid();
   return Object.freeze(x);
 }
-export function planWriteFingerprint(p: VoicePlanWriteSnapshot): string {
-  if (p.schemaVersion!==1 || p.storageContractVersion!==SC012B_STORAGE_VERSION ||
-      !bindingValid(p.sourceBinding) || !HEX.test(p.sourceHash) ||
-      !HEX.test(p.planContractHash) || p.recordingAllowed!==false ||
-      p.noticeRequired!==true || p.questions.length<4 || p.questions.length>6) invalid();
-  if (p.templateVersion !== "skillcheck-voice-plan-v1" ||
-      p.language !== "pl-PL" || p.targetSeconds !== 420 ||
-      p.maximumSeconds !== 600 || !Array.isArray(p.questions) ||
-      !p.questions.every(q=> exactFields(q,
-        ["id","kind","criterionId","criterionKind","text","followUps","maxSeconds"]) &&
-        typeof q.id === "string" && typeof q.text === "string" &&
-        Array.isArray(q.followUps) &&
-        q.followUps.every(t=>typeof t==="string"))) invalid();
+export function planWriteFingerprint(raw: VoicePlanWriteSnapshot): string {
+  const p=cleanClone(raw);
+  if (!exactFields(p,["schemaVersion","storageContractVersion","sourceBinding","sourceHash",
+      "planSourceFingerprint","planContractHash","templateVersion","language","targetSeconds",
+      "maximumSeconds","recordingAllowed","noticeRequired","questions"]) ||
+      p.schemaVersion!==1 || p.storageContractVersion!==SC012B_STORAGE_VERSION ||
+      !bindingValid(p.sourceBinding) ||
+      typeof p.sourceHash!=="string" || !HEX.test(p.sourceHash) ||
+      typeof p.planSourceFingerprint!=="string" || !HEX.test(p.planSourceFingerprint) ||
+      typeof p.planContractHash!=="string" || !HEX.test(p.planContractHash) ||
+      p.recordingAllowed!==false || p.noticeRequired!==true ||
+      p.templateVersion!=="skillcheck-voice-plan-v1" || p.language!=="pl-PL" ||
+      p.targetSeconds!==420 || p.maximumSeconds!==600 ||
+      !Array.isArray(p.questions) || p.questions.length<4 || p.questions.length>6 ||
+      !p.questions.every((q,i)=>controlledQuestion(q,i))) invalid();
+  if (new Set(p.questions.map(q=>q.id)).size!==p.questions.length) invalid();
+  if (sourceDigest(p.sourceBinding,p.planSourceFingerprint)!==p.sourceHash) invalid();
   const recomputedContractHash=hash({plan:p.templateVersion,questions:p.questions});
   if (recomputedContractHash!==p.planContractHash) invalid();
   return hash({
