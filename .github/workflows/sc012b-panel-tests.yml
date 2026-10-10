@@ -8,6 +8,8 @@ on:
       - 'tests/voice-plan-panel-component.test.mjs'
       - 'tests/voice-plan-panel-react-state.test.mjs'
       - '.github/workflows/sc012b-panel-tests.yml'
+      - 'package.json'
+      - 'package-lock.json'
   push:
     branches: [integration, main]
     paths:
@@ -17,6 +19,8 @@ on:
       - 'tests/voice-plan-panel-component.test.mjs'
       - 'tests/voice-plan-panel-react-state.test.mjs'
       - '.github/workflows/sc012b-panel-tests.yml'
+      - 'package.json'
+      - 'package-lock.json'
 permissions:
   contents: read
 jobs:
