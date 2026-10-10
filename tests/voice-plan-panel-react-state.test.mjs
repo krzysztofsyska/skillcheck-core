@@ -102,3 +102,50 @@ test("SC-012-B changing plan version clears rationale and previous review error"
  assert.equal(tree.root.findAllByProps({role:"alert"}).length,0);
  await act(async()=>tree.unmount());
 });
+
+
+test("SC-012-B ignores obsolete review completion while replacement plan has its own pending review",async()=>{
+ const resolvers=[];
+ let tree, oldCompletion, newCompletion;
+ const onReview=()=>new Promise(resolve=>resolvers.push(resolve));
+ const p1=plan();
+ await act(async()=>{tree=create(React.createElement(Panel,{
+   plan:p1,role:"recruiter",backendReady:true,onReview,
+ }));});
+ await act(async()=>{tree.root.findByType("textarea").props.onChange({target:{value:"Old reason"}});});
+ await act(async()=>{oldCompletion=button(tree,"Wymaga poprawy").props.onClick();});
+ assert.equal(resolvers.length,1);
+ const p2={...p1,id:"00000000-0000-4000-8000-000000000098",planVersion:3};
+ await act(async()=>{tree.update(React.createElement(Panel,{
+   plan:p2,role:"recruiter",backendReady:true,onReview,
+ }));});
+ await act(async()=>{tree.root.findByType("textarea").props.onChange({target:{value:"New plan reason"}});});
+ await act(async()=>{newCompletion=button(tree,"Wymaga poprawy").props.onClick();});
+ assert.equal(resolvers.length,2);
+ assert.equal(tree.root.findByType("fieldset").props.disabled,true);
+ await act(async()=>{resolvers[0]();await oldCompletion;});
+ assert.equal(tree.root.findByType("fieldset").props.disabled,true,
+   "old finally must not re-enable the new pending review");
+ assert.equal(tree.root.findByType("textarea").props.value,"New plan reason",
+   "old success must not erase the new plan rationale");
+ await act(async()=>{resolvers[1]();await newCompletion;});
+ assert.equal(tree.root.findByType("fieldset").props.disabled,false);
+ await act(async()=>tree.unmount());
+});
+test("SC-012-B obsolete failure does not show an error on replacement plan",async()=>{
+ let rejectOld;
+ let tree,oldCompletion;
+ const pending=new Promise((_resolve,reject)=>{rejectOld=reject;});
+ const p1=plan();
+ await act(async()=>{tree=create(React.createElement(Panel,{
+   plan:p1,role:"recruiter",backendReady:true,onReview:()=>pending
+ }));});
+ await act(async()=>{tree.root.findByType("textarea").props.onChange({target:{value:"Old request"}});});
+ await act(async()=>{oldCompletion=button(tree,"Wymaga poprawy").props.onClick();});
+ await act(async()=>{tree.update(React.createElement(Panel,{
+   plan:{...p1,planVersion:9},role:"recruiter",backendReady:true,onReview:()=>pending
+ }));});
+ await act(async()=>{rejectOld(Error("old request rejected"));await oldCompletion;});
+ assert.equal(tree.root.findAllByProps({role:"alert"}).length,0);
+ await act(async()=>tree.unmount());
+});
