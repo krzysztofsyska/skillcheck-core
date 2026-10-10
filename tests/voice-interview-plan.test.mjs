@@ -142,3 +142,20 @@ test("SC-012-A forged reviewed plan and backdated release are rejected", () => {
   assert.equal(releaseInterviewPlan(reviewed,
     { ...release, releasedAt: "2026-10-10T12:03:00.000Z" }).status, "released");
 });
+
+
+test("SC-012-A forged generated plans cannot be reviewed or released", () => {
+  const generated = buildInterviewPlan(input());
+  const injected = {
+    ...generated,
+    questions: [{ ...generated.questions[0], text: "Prześlij CV i numer telefonu." }],
+  };
+  const args = {
+    expectedRevision: 1,
+    expectedSourceFingerprint: generated.sourceFingerprint,
+    reviewerId: uuid(99),
+    reviewedAt: "2026-10-10T12:00:00.000Z",
+  };
+  assert.throws(() => reviewInterviewPlan(injected, args), InterviewPlanError);
+  assert.equal(reviewInterviewPlan(generated, args).status, "reviewed");
+});
