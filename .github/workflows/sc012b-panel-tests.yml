@@ -1,0 +1,25 @@
+name: SC012B recruiter panel tests
+on:
+  pull_request:
+    paths:
+      - 'lib/voice/plan-panel-state.ts'
+      - 'components/voice/VoicePlanApprovalPanel.tsx'
+      - 'tests/voice-plan-panel-state.test.mjs'
+      - '.github/workflows/sc012b-panel-tests.yml'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/voice/plan-panel-state.ts'
+      - 'components/voice/VoicePlanApprovalPanel.tsx'
+      - 'tests/voice-plan-panel-state.test.mjs'
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tests/voice-plan-panel-state.test.mjs
