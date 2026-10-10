@@ -3,12 +3,18 @@ on:
   pull_request:
     paths:
       - 'lib/voice/interview-plan.ts'
+      - 'lib/behavior-guide.ts'
+      - 'lib/position-fields.ts'
+      - 'lib/screening.ts'
       - 'tests/voice-interview-plan.test.mjs'
       - '.github/workflows/voice-plan-tests.yml'
   push:
     branches: [integration, main]
     paths:
       - 'lib/voice/interview-plan.ts'
+      - 'lib/behavior-guide.ts'
+      - 'lib/position-fields.ts'
+      - 'lib/screening.ts'
       - 'tests/voice-interview-plan.test.mjs'
       - '.github/workflows/voice-plan-tests.yml'
 permissions:
