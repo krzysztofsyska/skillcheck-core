@@ -15,7 +15,7 @@ function renderPanel(props) {
   runInNewContext(js, {
     exports,
     require(name) {
-      if (name === "react") return { useState: value => [value, () => {}], useEffect: () => {} };
+      if (name === "react") return { useState: value => [value, () => {}], useEffect: () => {}, useRef: v => ({current:v}) };
       if (name === "react/jsx-runtime") return { jsx: mockJsx, jsxs: mockJsx };
       if (name.endsWith("plan-panel-state")) return { getVoicePlanPanelPermissions };
       throw Error("Unapproved import: " + name);
