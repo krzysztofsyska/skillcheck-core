@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { FakeVoiceProvider } from "../lib/voice/fake-provider.ts";
 import {
-  validateVoiceCallRequest, VoiceProviderUncertainError, VoiceProviderValidationError,
+  validateVoiceCallRequest, canonicalVoiceCallRequest, VoiceProviderUncertainError, VoiceProviderValidationError,
 } from "../lib/voice/provider.ts";
 
 const request = () => ({
@@ -111,4 +111,35 @@ test("SC-011-A sparse arrays and non-index properties cannot enter provider payl
     { ...r, scenario: { ...r.scenario, questions: sparseQuestions } },
     { ...r, scenario: { ...r.scenario, questions: [{ ...r.scenario.questions[0], followUps: attached }] } },
   ]) assert.throws(() => validateVoiceCallRequest(bad), VoiceProviderValidationError);
+});
+
+
+test("SC-011-A validates and returns the identical detached snapshot, never re-reads a mutable getter", () => {
+  const source = request();
+  let reads = 0;
+  Object.defineProperty(source, "destinationE164", {
+    enumerable: true, configurable: true,
+    get() { reads++; return reads === 1 ? "+48123456789" : "CV SECRET UNVALIDATED"; },
+  });
+  const canonical = canonicalVoiceCallRequest(source);
+  assert.equal(reads, 1);
+  assert.equal(canonical.destinationE164, "+48123456789");
+  assert.ok(!JSON.stringify(canonical).includes("SECRET"));
+  const proxy = new Proxy(request(), {});
+  assert.throws(() => canonicalVoiceCallRequest(proxy), VoiceProviderValidationError);
+});
+
+test("SC-011-A custom iterator cannot poison the emitted provider request", () => {
+  const r = request();
+  const topics = ["zdrowie"];
+  Object.defineProperty(topics, Symbol.iterator, {
+    enumerable: false,
+    value: function* () { yield "CV PRIVATE RAW TEXT"; },
+  });
+  const canonical = canonicalVoiceCallRequest({
+    ...r, scenario: { ...r.scenario,
+      constraints: { ...r.scenario.constraints, prohibitedTopics: topics } },
+  });
+  assert.deepEqual(canonical.scenario.constraints.prohibitedTopics, ["zdrowie"]);
+  assert.ok(!JSON.stringify(canonical).includes("PRIVATE"));
 });
