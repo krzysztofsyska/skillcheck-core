@@ -56,6 +56,7 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
   `);
   await db.query('insert into public.companies values($1,$2)',[company,owner]);
   await db.query(await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql',import.meta.url),'utf8'));
+  await db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[company,'1234563218','verified-race-001']);
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[owner]);
   await db.query('select public.sc19_claim_trial($1,$2)',[company,'1234563218']);
   for(let n=1;n<=4;n++)await db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[uuid(n),company]);
