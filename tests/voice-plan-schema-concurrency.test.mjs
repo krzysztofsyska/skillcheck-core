@@ -31,6 +31,7 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
  });
  const db=await connect(),h=await setupRankingDatabase(db);
  await db.exec(await readFile(new URL("../db/prototypes/sc012b-plan-schema.sql",import.meta.url),"utf8"));
+ await db.exec(await readFile(new URL("./helpers/sc012b-release-cas-test-only.sql",import.meta.url),"utf8"));
  const f=await h.completedApplication(await h.seed(users.owner,randomUUID(),5),Array(5).fill("meets"));
  await h.asUser(users.owner);
  const shortlistId=await h.add(f);
@@ -147,6 +148,55 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
     "from public.voice_plan_versions where id=$3"
   ].join(" ");
   await assert.rejects(db.query(sql,[other.analysis_id,reviewId,pid]),e=>e.code==="23503");
+ });
+
+
+ await t.test("two concurrent releases: one wins CAS, loser PT409 without a history row",async()=>{
+  await h.asAdmin();
+  const p2=(await db.query([
+   "insert into public.voice_plan_versions",
+   "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+   "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+   "template_version,created_by,retention_policy_version,retention_deadline,",
+   "supersedes_plan_id,corrects_review_id)",
+   "select company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+   "shortlist_entry_id,2,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+   "template_version,created_by,retention_policy_version,retention_deadline,$1,$2",
+   "from public.voice_plan_versions where id=$1 returning id"
+  ].join(" "),[pid,reviewId])).rows[0].id;
+  const review2=(await db.query([
+   "insert into private.voice_plan_review_entries",
+   "(company_id,application_id,plan_id,review_version,reviewer_id,decision,source_hash,",
+   "retention_policy_version,retention_deadline)",
+   "values($1,$2,$3,1,$4,'approved',$5,'synthetic-v1','2030-01-01') returning id"
+  ].join(" "),[f.companyId,f.application.id,p2,users.owner,hash("a")])).rows[0].id;
+  const a=await connect(),b=await connect();
+  const call="select private.sc012b_test_release_cas($1,$2,$3,$4,$5,$6,$7) as id";
+  const args=[f.companyId,f.application.id,p2,review2,2,releaseId,users.owner];
+  const before=(await db.query("select count(*)::int as n from private.voice_plan_release_entries where application_id=$1",
+    [f.application.id])).rows[0].n;
+  await a.query("begin");
+  const winner=(await a.query(call,args)).rows[0].id;
+  const losing=b.query(call,args).then(value=>({ok:true,value}),error=>({ok:false,code:error.code}));
+  let waiting=false;
+  for(let i=0;i<80;i++){
+    const row=(await db.query("select wait_event_type from pg_stat_activity where pid=$1",[b.processID])).rows[0];
+    if(row?.wait_event_type==="Lock"){waiting=true;break;}
+    await new Promise(resolve=>setTimeout(resolve,15));
+  }
+  assert.equal(waiting,true,"loser must encounter held application advisory lock");
+  await a.query("commit");
+  const lost=await losing;
+  assert.deepEqual(lost,{ok:false,code:"PT409"});
+  const after=(await db.query("select count(*)::int as n from private.voice_plan_release_entries where application_id=$1",
+    [f.application.id])).rows[0].n;
+  assert.equal(after,before+1,"loser must not append immutable release history");
+  const current=(await db.query(
+   "select pointer_version,plan_id,release_entry_id from private.voice_plan_current_releases where application_id=$1",
+   [f.application.id])).rows[0];
+  assert.equal(Number(current.pointer_version),3);
+  assert.equal(current.plan_id,p2);
+  assert.equal(current.release_entry_id,winner);
  });
 
 });
