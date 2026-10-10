@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { buildInterviewPlan, type InterviewSource, type InterviewPlan } from "./interview-plan.ts";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HEX = /^[0-9a-f]{64}$/;
 const TEXT = /^[a-z0-9][a-z0-9._:-]{0,127}$/i;
 export const SC012B_STORAGE_VERSION = "voice-plan-storage-v1" as const;
