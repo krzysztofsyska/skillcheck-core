@@ -53,7 +53,7 @@ test("SC-012-B B1 exact review and release commands cannot smuggle extra fields"
     {...review,expectedReviewVersion:-1},{...review,decision:"hire"},
     {...review,requestKey:["fake"]}]) assert.throws(()=>validatePlanReviewCommand(b),VoicePlanStorageError);
  for(const b of [{...release,recordingAllowed:true},{...release,expectedReviewVersion:0},
-    {...release,approvedReviewId:id(22).toUpperCase()}]) assert.throws(()=>validatePlanReleaseCommand(b),VoicePlanStorageError);
+    {...release,approvedReviewId:id(22).replace("4000","A000")}]) assert.throws(()=>validatePlanReleaseCommand(b),VoicePlanStorageError);
 });
 test("SC-012-B B1 sparse/malformed or unreviewed source is rejected",()=>{
  const x=source();
