@@ -407,6 +407,8 @@ declare e private.erasure_executions;receipt uuid;c record;deleted_count bigint;
  delete from private.erasure_purge_context_rows where txid=txid_current();
  delete from private.erasure_purge_context where txid=txid_current();
  return jsonb_build_object('receipt_id',receipt,'phase','active_data_erased','counts',deleted_counts);
+exception when lock_not_available then
+ raise exception using errcode='PT409',message='Erasure source busy';
 end;$$;
 alter function private.erasure_purge_engine(uuid,bigint,boolean) owner to erasure_purge_owner;
 create function private.purge_candidate_erasure(target_request uuid,expected_sequence bigint) returns jsonb
