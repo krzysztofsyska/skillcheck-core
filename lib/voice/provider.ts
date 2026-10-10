@@ -55,7 +55,19 @@ function denseArray(value: unknown, min: number, max: number): value is unknown[
   return true;
 }
 
+/** Snapshot untrusted input once: strips accessors/iterators; rejects Proxy and
+ * unclonable values. Only this snapshot is ever inspected or serialized. */
+function detachedVoiceSnapshot(value: VoiceCallRequest): VoiceCallRequest {
+  try {
+    return structuredClone(value);
+  } catch {
+    throw new VoiceProviderValidationError();
+  }
+}
 export function validateVoiceCallRequest(value: VoiceCallRequest): void {
+  validateSnapshot(detachedVoiceSnapshot(value));
+}
+function validateSnapshot(value: VoiceCallRequest): void {
   if (!exactKeys(value, ["externalCorrelationId", "destinationE164", "publishedAssistantVersion",
     "scenario", "recordingAllowed", "callTimeoutSeconds", "providerIdempotencyKey"]) ||
     !validId(value.externalCorrelationId) || !validId(value.providerIdempotencyKey) ||
@@ -86,7 +98,9 @@ export function validateVoiceCallRequest(value: VoiceCallRequest): void {
  * Reconstruct a fixed-order allowlist so insertion order never changes identity.
  */
 export function canonicalVoiceCallRequest(value: VoiceCallRequest): VoiceCallRequest {
-  validateVoiceCallRequest(value);
+  const snapshot = detachedVoiceSnapshot(value);
+  validateSnapshot(snapshot);
+  value = snapshot;
   return {
     externalCorrelationId: value.externalCorrelationId,
     destinationE164: value.destinationE164,
