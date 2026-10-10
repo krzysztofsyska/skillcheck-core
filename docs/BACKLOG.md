@@ -69,7 +69,7 @@ SC-SALES-006 nie jest backendowym SC-006. SC-006 pozostaje w kolejce analizy AI 
 | SC-SALES-006B | Migracja, RLS i RPC zapisu oraz odczytu zgłoszeń | L3 | Codex | Codex | SC-SALES-006A | REVIEW |
 | SC-SALES-006C | Publiczny formularz `/rozmowa` | L2 | Cursor | Codex | SC-SALES-006B | BACKLOG |
 | SC-SALES-006D | Minimalny odczyt zgłoszeń przez operatora platformy | L2 | Cursor | Codex | SC-SALES-006C | BACKLOG |
-| SC-SALES-013 | Etapy sprzedaży, notatki, przypomnienia i powiązanie zgłoszenia z firmą | L3 | Codex→Cursor | Codex | SC-SALES-006D | BACKLOG |
+| SC-SALES-013 | Etapy sprzedaży, notatki, przypomnienia i powiązanie zgłoszenia z firmą | L3 | Codex | Codex | SC-SALES-006D/E/F (#64) | IMPLEMENTED / Issue #70; produkcja wstrzymana |
 
 006B jest w REVIEW po zatwierdzeniu i scaleniu projektu 006A (PR #32). Metadane wykonawcze zaktualizowano w Issue #45 do gałęzi `integration` i migracji `20261007000200`. Kolejność pozostaje liniowa: 006B, następnie 006C, następnie 006D. Publiczne włączenie wymaga obu widoków, testu współbieżności na osobnym Postgresie, sekretu żądania, treści informacji podanej przez właściciela i ręcznego nadania pierwszego operatora. Tych danych ten backlog nie zawiera.
 

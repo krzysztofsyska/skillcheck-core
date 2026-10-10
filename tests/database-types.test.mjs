@@ -18,6 +18,7 @@ const migrations = [
   "20261007000200_sales_leads.sql",
   "20261009073604_sales_lead_inbox_retention.sql",
   "20261009104142_sales_lead_auto_reply.sql",
+  "20261009141832_sales_pipeline.sql",
 ];
 
 const tableColumns = {
@@ -88,6 +89,10 @@ const functions = {
   submit_sales_lead: "idempotency_key uuid, first_name text, company_name text, email text, phone text, needs text, source_ip text, issued_at_us bigint, request_signature text",
   list_sales_leads: "result_limit integer",
   list_sales_leads_inbox: "result_limit integer",
+  save_sales_pipeline: "target_lead uuid, expected_version integer, new_stage text, new_note text, next_contact date, linked_company uuid",
+  list_sales_pipeline: "stage_filter text, due_filter text, page_offset integer, target_lead uuid",
+  sales_pipeline_history: "target_lead uuid, before_version integer",
+  find_sales_companies: "search_text text",
   close_sales_lead: "target_lead uuid",
   claim_sales_mail: "target_lead uuid, request_id uuid, issued_at_ms bigint, request_signature text",
   finish_sales_mail: "target_lead uuid, request_id uuid, issued_at_ms bigint, outcome text, provider_id uuid, request_signature text",

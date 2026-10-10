@@ -4,7 +4,6 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "../../../lib/supabase/server";
 import styles from "./leads.module.css";
 import { salesLeadReplyHref } from "../../../lib/sales-lead-reply";
-import { CloseLeadForm } from "./close-lead-form";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -33,6 +32,7 @@ export default async function OperatorLeadsPage() {
   return <main className={styles.page}><section className={styles.panel}>
     <nav className={styles.navigation} aria-label="Nawigacja operatora">
       <Link href="/">SkillCheck — strona główna</Link>
+      <Link href="/operator/sales">Proces sprzedaży — etapy i terminy</Link>
       <a href="/operator/leads">Odśwież zgłoszenia</a>
     </nav>
     <header>
@@ -46,7 +46,7 @@ export default async function OperatorLeadsPage() {
         {leads.map(lead => <li key={lead.id} className={styles.card}>
           <div className={styles.heading}>
             <h2>{lead.company_name}</h2>
-            <span className={styles.status}>{lead.closed_at ? "Zakończone" : "Otrzymane"}</span>
+
           </div>
           <dl className={styles.details}>
             <div><dt>Data zgłoszenia</dt><dd><time dateTime={lead.created_at}>{dates.format(new Date(lead.created_at))}</time></dd></div>
@@ -58,10 +58,9 @@ export default async function OperatorLeadsPage() {
           </dl>
           <div className={styles.actions}>
             <a className={styles.reply} href={salesLeadReplyHref(lead.email)}>Odpowiedz e-mailem</a>
+            <Link href={`/operator/sales/${lead.id}`}>Etap sprzedaży i ustalenia</Link>
           </div>
-          {lead.closed_at
-            ? <p>Zakończono: {dates.format(new Date(lead.closed_at))}. Usunięcie danych po 6 miesiącach.</p>
-            : <CloseLeadForm id={lead.id} />}
+          {lead.closed_at && <p>Zakończono bez umowy: {dates.format(new Date(lead.closed_at))}. Usunięcie danych po 6 miesiącach.</p>}
         </li>)}
       </ol>}
   </section></main>;

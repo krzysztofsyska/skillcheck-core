@@ -96,6 +96,7 @@ type ExpectedFunctions =
   | "cancel_candidate_communication"
   | "get_candidate_communications"
   | "get_candidate_communication_history"
+  | "save_sales_pipeline" | "list_sales_pipeline" | "sales_pipeline_history" | "find_sales_companies"
   | "approve_candidate_communication"
   | "get_communication_approval_status";
 
