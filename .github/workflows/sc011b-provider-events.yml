@@ -1,0 +1,24 @@
+name: SC011B synthetic provider event contract
+on:
+  pull_request:
+    paths:
+      - 'lib/voice/provider-event-contract.ts'
+      - 'tests/voice-provider-event-contract.test.mjs'
+      - '.github/workflows/sc011b-provider-events.yml'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/voice/provider-event-contract.ts'
+      - 'tests/voice-provider-event-contract.test.mjs'
+      - '.github/workflows/sc011b-provider-events.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tests/voice-provider-event-contract.test.mjs
