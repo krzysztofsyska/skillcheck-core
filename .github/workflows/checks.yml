@@ -40,6 +40,7 @@ jobs:
       - run: npm run test:auth
       - run: npm run test:cv
       - run: npm run test:screening
+      - run: node --test tests/sc-019-billing-prototype.test.mjs
       - run: npm run test:screening-report
       - run: npm run test:screening-joint
       - run: npm run test:communication
