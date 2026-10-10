@@ -8,7 +8,7 @@ SCOPE: FULLSTACK
 OWNER: Codex / orchestrator
 REVIEWER: niezależny Codex architect/reviewer
 DEPENDS ON: R1 #90, B1/B2, SC-006/008/009
-STATUS: CODE REVIEW PASS / CI PENDING
+STATUS: FINAL REVIEW / CI — SEE PR #94
 BRANCH: feat/sc-010-r2-lifecycle
 BASE: 5b63807f30654a8829701ef566909b318a82a281
 
@@ -38,6 +38,8 @@ Zatwierdzenie nie zmienia B1 draft na cancelled i nie dopisuje zdarzenia anulowa
 
 R2 wymaga świeżej transakcji READ COMMITTED (PostgreSQL traktuje READ UNCOMMITTED równoważnie). Mutacje są odrzucane, a zwykłe odczyty danych kandydatów zwracają pusty wynik w REPEATABLE READ/SERIALIZABLE, aby stara migawka nie omijała freeze. Aplikacja używa domyślnego READ COMMITTED.
 
+Każde jawne powiązanie w zapisie jest sprawdzane pod kątem firmy przed blokadą i odczytem stanu zamrożenia; nieistniejące oraz obce identyfikatory dają ten sam błąd niedostępności. Ochrona współdzielonych etapów i definicji obejmuje także INSERT nowych wersji.
+
 Ochrona kontekstu jest konserwatywna: zmiana danych firmy lub współdzielonego stanowiska/procesu z zamrożonym kandydatem wymaga wcześniejszego anulowania żądania. Nie wprowadzono nowej ścieżki przenoszenia własności podczas freeze.
 
 Generacja rośnie przy przejściach, nie jest cofana. Bilet sprzed cyklu freeze/cancel nie upoważnia do ponownego zatwierdzenia. Idempotencja obejmuje firmę, aktora, operację i dokładny payload; formularze zachowują klucz przy ponowieniu po utracie odpowiedzi.
@@ -63,7 +65,7 @@ Nowy immutable erasure_inventory_baseline_r2 jest konfiguracją schematu bez dan
 
 ## Weryfikacja i przekazanie
 
-Wymagane: pełny łańcuch nowych migracji; role i izolacja firm; aktualność biletu/manifestu/polityki/rozpoznania; generacje i idempotencja; odczyty oraz bezpośrednie zapisy i funkcje worker/verifier; niezależne cofnięcie zgody; wyścigi PostgreSQL 16; regresje R1/B1/B2/SC-006/008/009; formularze, HTTP, typecheck/build i niezależny review. Lokalnie R2 DB 9/9, UI 12/12, regresja R1 27/27, typecheck/build PASS. Niezależny review PASS po poprawkach ponowień screening, autoryzacji przed kontekstem cofnięcia zgody i izolacji funkcji RLS. Wyniki końcowego CI PostgreSQL oraz niezmienny SHA będą w PR.
+Wymagane: pełny łańcuch nowych migracji; role i izolacja firm; aktualność biletu/manifestu/polityki/rozpoznania; generacje i idempotencja; odczyty oraz bezpośrednie zapisy i funkcje worker/verifier; niezależne cofnięcie zgody; wyścigi PostgreSQL 16; regresje R1/B1/B2/SC-006/008/009; formularze, HTTP, typecheck/build i niezależny review. Pierwsze pełne CI przeszło: R2 DB/UI 21/21, PostgreSQL 9/9, R1 27/27 i PostgreSQL 10/10, regresje B1/B2/SC006/008/009, typecheck/build/HTTP. Dodatkowy review wskazał izolację powiązań przed sprawdzeniem freeze oraz INSERT wspólnych definicji; poprawki i dodatkowe regresje są częścią tego PR. Wyniki końcowego niezależnego review, CI i niezmienny SHA są utrzymywane w PR #94.
 
 Nowe migracje CLI: 20261010194216_candidate_erasure_lifecycle.sql, 20261010194230_candidate_erasure_guards.sql, 20261010194343_candidate_erasure_inventory_v2.sql. Starsze migracje pozostają bez zmian.
 

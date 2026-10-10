@@ -42,6 +42,56 @@ test('SC-010 R2 owner authorization, reversible lifecycle and guarded candidate 
   assert.equal((await db.query('select private.candidate_workflow_visible($1,$2) value',[own.companyId,foreign.candidate.id])).rows[0].value,true);
   assert.equal((await db.query('select private.erasure_row_visible($1,$2::jsonb) value',['public.candidates',JSON.stringify({id:foreign.candidate.id,company_id:own.companyId})])).rows[0].value,false);
  });
+ await t.test('cross-tenant direct child writes cannot distinguish missing, active or frozen foreign candidates',async()=>{
+  const own=await l.ready(),foreign=await l.ready({owner:users.otherOwner});
+  await h.asUser(own.owner);const stage=await h.insert('assessment_stages',{company_id:own.companyId,recruitment_id:own.recruitment.id,name:'Own stage',sequence:1});
+  const targets={candidate_documents:foreign.candidate.id,applications:foreign.candidate.id,candidate_assessments:foreign.application.id,assessment_stages:foreign.recruitment.id};
+  const rejection=async(table,id,company=own.companyId)=>{
+   await h.asUser(own.owner);
+   try{
+    if(table==='candidate_documents')await h.insert(table,{company_id:company,candidate_id:id,source_text:'Synthetic CV',redacted_text:'Synthetic CV'});
+    else if(table==='applications')await h.insert(table,{company_id:company,candidate_id:id,recruitment_id:own.recruitment.id});
+    else if(table==='candidate_assessments')await h.insert(table,{company_id:company,application_id:id,recruitment_id:own.recruitment.id,stage_id:stage.id});
+    else await h.insert(table,{company_id:company,recruitment_id:id,name:'Foreign stage',sequence:2});
+   }catch(error){return {code:error.code,message:error.message};}
+   assert.fail('Cross-tenant child insertion unexpectedly succeeded');
+  };
+  const cases={};
+  for(const [table,id]of Object.entries(targets)){
+   cases[table]={missing:await rejection(table,randomUUID()),active:await rejection(table,id)};
+   assert.deepEqual(cases[table].active,cases[table].missing,table);
+   assert.equal(cases[table].missing.code,'PT404');
+  }
+  assert.deepEqual(await rejection('candidate_documents',foreign.candidate.id,foreign.companyId),cases.candidate_documents.missing);
+  assert.deepEqual(await rejection('candidate_documents',randomUUID(),foreign.companyId),cases.candidate_documents.missing);
+  assert.deepEqual(await rejection('assessment_stages',foreign.recruitment.id,foreign.companyId),cases.assessment_stages.missing);
+  await l.freeze(foreign);
+  assert.deepEqual(await rejection('assessment_stages',foreign.recruitment.id,foreign.companyId),cases.assessment_stages.missing);
+  assert.deepEqual(await rejection('candidate_documents',foreign.candidate.id,foreign.companyId),cases.candidate_documents.missing);
+  for(const [table,id]of Object.entries(targets))assert.deepEqual(await rejection(table,id),cases[table].missing,table);
+ });
+ await t.test('shared stages and exercise definition new versions cannot mutate a frozen recruitment',async()=>{
+  const f=await l.ready(),otherRecruitment=await h.insert('recruitments',{company_id:f.companyId,position_id:f.position.id,name:'Unaffected process',status:'open'});
+  const definition={kind:'competency_test',title:'Synthetic task',instructions:'Complete task',expectedOutput:'Report',durationMinutes:20,criteria:[{competency:'Planning',below:'Missing',meets:'Present',above:'Detailed'}]};
+  const stamp=(await db.query('select updated_at::text stamp from public.positions where id=$1',[f.position.id])).rows[0].stamp;
+  const exercise=randomUUID();
+  const save=(recruitment,id,version)=>db.query('select public.save_exercise_definition($1,$2,$3::jsonb,$4,$5,$6) id',[recruitment,id,JSON.stringify(definition),version,f.position.id,stamp]);
+  await save(f.recruitment.id,exercise,0);
+  const stage=await h.insert('assessment_stages',{company_id:f.companyId,recruitment_id:f.recruitment.id,name:'Existing stage',sequence:1});
+  const state=await l.freeze(f);
+  await assert.rejects(h.insert('assessment_stages',{company_id:f.companyId,recruitment_id:f.recruitment.id,name:'Blocked stage',sequence:2}),conflict);
+  await assert.rejects(db.query('update public.assessment_stages set name=$1 where id=$2',['Blocked rename',stage.id]),conflict);
+  await assert.rejects(save(f.recruitment.id,randomUUID(),0),conflict);
+  await assert.rejects(save(f.recruitment.id,exercise,1),conflict);
+  const unaffectedStage=await h.insert('assessment_stages',{company_id:f.companyId,recruitment_id:otherRecruitment.id,name:'Allowed stage',sequence:1});assert.ok(unaffectedStage.id);
+  await h.asAdmin();
+  await assert.rejects(db.query('update public.assessment_stages set recruitment_id=$1 where id=$2',[f.recruitment.id,unaffectedStage.id]),conflict);
+  await h.asUser(f.owner);
+  const unaffectedExercise=randomUUID();assert.ok((await save(otherRecruitment.id,unaffectedExercise,0)).rows[0].id);
+  assert.ok((await save(otherRecruitment.id,unaffectedExercise,1)).rows[0].id);
+  await l.cancel(f,state.request_id,state.generation);
+  assert.ok((await save(f.recruitment.id,exercise,1)).rows[0].id);
+ });
  await t.test('ticket requires server state; expiry, content/policy/resolution edits and ownership transfer invalidate authorization',async()=>{
   const f=await l.ready();await assert.rejects(l.authorize(f,{preview_ticket_id:randomUUID()}));
   const p=await l.ticket(f);await db.query('update public.candidates set email=$1 where id=$2',['changed@example.test',f.candidate.id]);await assert.rejects(l.authorize(f,p),conflict);

@@ -119,7 +119,7 @@ test('SC-010 B1 real SQL foundation, tenant isolation, deny-only permissions and
  });
  await t.test('database constraints reject forged cross-tenant relations and impossible delivery states',async()=>{
   const left=await c.ready(),right=await c.ready();await h.asAdmin();
-  await assert.rejects(db.query('insert into public.candidate_communications(company_id,recruitment_id,candidate_id,application_id,shortlist_entry_id,channel,created_by) values($1,$2,$3,$4,$5,$6,$7)',[left.companyId,left.recruitment.id,right.candidate.id,left.application.id,left.shortlistId,'email',users.owner]),code('23503'));
+  await assert.rejects(db.query('insert into public.candidate_communications(company_id,recruitment_id,candidate_id,application_id,shortlist_entry_id,channel,created_by) values($1,$2,$3,$4,$5,$6,$7)',[left.companyId,left.recruitment.id,right.candidate.id,left.application.id,left.shortlistId,'email',users.owner]),code('PT404'));
   await h.asUser();const id=await c.prepare(left);await h.asAdmin();
   for(const state of ['scheduled','sending','sent'])await assert.rejects(db.query('update public.candidate_communications set state=$1 where id=$2',[state,id]),code('23514'));
   await assert.rejects(db.query("insert into public.candidate_contact_permissions(company_id,candidate_id,channel,state,revision) values($1,$2,'email','granted',1)",[left.companyId,left.candidate.id]),code('23514'));

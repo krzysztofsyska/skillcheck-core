@@ -76,6 +76,36 @@ language sql stable security definer set search_path='' as $$
   and not exists(select 1 from private.erasure_candidate_lifecycle where company_id=tenant and candidate_id=subject and status='frozen')
 $$;
 
+-- Validate every typed reference before consulting lifecycle or taking any candidate
+-- lock. Missing and foreign IDs are indistinguishable, even for INSERT before RLS.
+create function private.erasure_assert_row_tenant(data jsonb) returns void
+language plpgsql stable security definer set search_path='' as $$
+declare ref record;allowed boolean;
+begin
+ -- Session-backed callers must be authorized before BEFORE-row triggers inspect
+ -- references. Worker/verifier capabilities use their existing null-actor RPC boundary.
+ if (current_setting('role',true) in ('authenticated','anon') and auth.uid() is null)
+ or (auth.uid() is not null and not private.has_company_access((data->>'company_id')::uuid,true)) then
+  raise exception using errcode='PT404',message='Resource unavailable';
+ end if;
+ for ref in select * from (values
+  ('candidate_id','public.candidates'),('application_id','public.applications'),
+  ('candidate_document_id','public.candidate_documents'),('analysis_id','public.screening_analysis_versions'),
+  ('review_id','public.screening_result_reviews'),('criterion_result_id','public.screening_criterion_results'),
+  ('communication_id','public.candidate_communications'),('receipt_id','private.candidate_verified_contact_receipts'),
+  ('contact_point_id','private.candidate_verified_contact_points'),('shortlist_entry_id','public.recruitment_shortlist_entries'),
+  ('recruitment_id','public.recruitments'),('position_id','public.positions'),
+  ('stage_id','public.assessment_stages'),('definition_entry_id','public.exercise_definition_entries')
+ ) refs(field,relation) loop
+  if data->>ref.field is not null then
+   -- Relation names come only from the fixed adapter list above; values are parameters.
+   execute format('select exists(select 1 from %s where id=$1 and company_id=$2)',ref.relation)
+    into allowed using (data->>ref.field)::uuid,(data->>'company_id')::uuid;
+   if not allowed then raise exception using errcode='PT404',message='Resource unavailable';end if;
+  end if;
+ end loop;
+end;$$;
+
 create function private.erasure_guard_candidate_row() returns trigger
 language plpgsql security definer set search_path='' as $$
 declare data jsonb;old_data jsonb;ids uuid[];subject uuid;k text;
@@ -92,7 +122,11 @@ begin
  data:=case when tg_op='DELETE' then to_jsonb(old) else to_jsonb(new) end;
  -- The initial INSERT has no candidate row to lock; UUID/company mutations are forbidden above.
  if tg_table_name='candidates' and tg_op='INSERT' then return new;end if;
+ perform private.erasure_assert_row_tenant(data);
  ids:=private.erasure_row_candidates(tg_table_schema||'.'||tg_table_name,data);
+ if exists(select 1 from unnest(ids) s(id) where not exists(select 1 from public.candidates c where c.id=s.id and c.company_id=(data->>'company_id')::uuid)) then
+  raise exception using errcode='PT404',message='Resource unavailable';
+ end if;
  foreach subject in array ids loop perform private.erasure_lock_candidate(subject);end loop;
  if tg_op='DELETE' then return old;end if;
  return new;
@@ -102,8 +136,9 @@ end;$$;
 -- also lock their affected candidates, closing authorise-vs-context-change races.
 create function private.erasure_guard_parent_row() returns trigger
 language plpgsql security definer set search_path='' as $$
-declare subjects uuid[];subject uuid;data jsonb:=to_jsonb(old);
+declare subjects uuid[];subject uuid;data jsonb;
 begin
+ data:=case when tg_op='INSERT' then to_jsonb(new) else to_jsonb(old) end;
  if tg_op='UPDATE' and (to_jsonb(new)->'id' is distinct from data->'id' or to_jsonb(new)->'company_id' is distinct from data->'company_id') then
   raise exception using errcode='PT409',message='Parent identity is immutable';
  end if;
@@ -113,7 +148,11 @@ begin
  elsif tg_table_name='recruitments' then
   select array_agg(distinct candidate_id order by candidate_id) into subjects from public.applications where recruitment_id=old.id;
  elsif tg_table_name in ('assessment_stages','exercise_definition_entries') then
-  select array_agg(distinct candidate_id order by candidate_id) into subjects from public.applications where recruitment_id=(data->>'recruitment_id')::uuid;
+  if tg_op='UPDATE' and (to_jsonb(new)->'recruitment_id' is distinct from data->'recruitment_id' or to_jsonb(new)->'position_id' is distinct from data->'position_id') then
+   raise exception using errcode='PT409',message='Parent identity is immutable';
+  end if;
+  perform private.erasure_assert_row_tenant(data);
+  select array_agg(distinct candidate_id order by candidate_id) into subjects from public.applications where recruitment_id=(data->>'recruitment_id')::uuid and company_id=(data->>'company_id')::uuid;
  end if;
  if tg_op='DELETE' and cardinality(subjects)>0 then raise exception using errcode='PT409',message='Controlled erasure required';end if;
  foreach subject in array coalesce(subjects,'{}'::uuid[]) loop perform private.erasure_lock_candidate(subject);end loop;
@@ -160,8 +199,8 @@ create trigger aa_erasure_guard before insert or update or delete on private.can
 create trigger aa_erasure_parent_guard before update or delete on public.companies for each row execute function private.erasure_guard_parent_row();
 create trigger aa_erasure_parent_guard before update or delete on public.positions for each row execute function private.erasure_guard_parent_row();
 create trigger aa_erasure_parent_guard before update or delete on public.recruitments for each row execute function private.erasure_guard_parent_row();
-create trigger aa_erasure_parent_guard before update or delete on public.assessment_stages for each row execute function private.erasure_guard_parent_row();
-create trigger aa_erasure_parent_guard before update or delete on public.exercise_definition_entries for each row execute function private.erasure_guard_parent_row();
+create trigger aa_erasure_parent_guard before insert or update or delete on public.assessment_stages for each row execute function private.erasure_guard_parent_row();
+create trigger aa_erasure_parent_guard before insert or update or delete on public.exercise_definition_entries for each row execute function private.erasure_guard_parent_row();
 
 create or replace function private.contact_lock_candidate(target_candidate uuid) returns uuid
 language plpgsql volatile security definer set search_path='' as $$
@@ -1224,6 +1263,6 @@ $$;
 
 -- New helpers have no PUBLIC default execution. Only the non-sensitive RLS boolean
 -- may be called by authenticated; it verifies tenant access before inspecting lifecycle.
-revoke all on function private.candidate_workflow_visible(uuid,uuid),private.erasure_candidate_frozen(uuid),private.erasure_lock_candidate(uuid),private.erasure_row_candidates(text,jsonb),private.erasure_row_visible(text,jsonb),private.erasure_guard_candidate_row(),private.erasure_guard_parent_row() from public,anon,authenticated,screening_worker,contact_verifier;
+revoke all on function private.erasure_assert_row_tenant(jsonb),private.candidate_workflow_visible(uuid,uuid),private.erasure_candidate_frozen(uuid),private.erasure_lock_candidate(uuid),private.erasure_row_candidates(text,jsonb),private.erasure_row_visible(text,jsonb),private.erasure_guard_candidate_row(),private.erasure_guard_parent_row() from public,anon,authenticated,screening_worker,contact_verifier;
 grant execute on function private.erasure_row_visible(text,jsonb),private.candidate_workflow_visible(uuid,uuid) to authenticated;
 commit;
