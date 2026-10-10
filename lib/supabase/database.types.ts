@@ -380,6 +380,11 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      sc19_claim_trial: { Args: { target_company: string; supplied_nip: string }; Returns: number };
+      sc19_get_balance: {
+        Args: { target_company: string };
+        Returns: { plan: 'FREE' | 'PRESELEKCJA'; available: number; free_claimed: boolean }[];
+      };
       save_sales_pipeline: { Args: { target_lead: string; expected_version: number; new_stage: string; new_note: string; next_contact: string | null; linked_company: string | null }; Returns: string };
       list_sales_pipeline: { Args: { stage_filter?: string; due_filter?: string; page_offset?: number; target_lead?: string }; Returns: SalesPipelineRow[] };
       sales_pipeline_history: { Args: { target_lead: string; before_version?: number }; Returns: Pick<SalesPipelineRow, 'version' | 'stage' | 'note' | 'next_contact_on' | 'company_id' | 'created_at'>[] };

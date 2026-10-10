@@ -40,6 +40,7 @@ export async function runScreeningCommand(input: {
     const analysis = await input.client.from('screening_analysis_versions').select('id,execution_status,stale_at,input_fingerprint').eq('company_id', input.route.companyId).eq('application_id', input.route.applicationId).eq('recruitment_id', input.route.recruitmentId).eq('id', input.analysisId).maybeSingle();
     if (analysis.error || !analysis.data || analysis.data.stale_at || analysis.data.input_fingerprint !== prepared.fingerprint) throw new Error('Wynik jest nieaktualny. Uruchom nową analizę.');
     const result = await input.client.rpc('retry_screening_analysis', { target_analysis: analysis.data.id, request_idempotency_key: input.idempotencyKey });
+    if (result.error?.code === 'PT402') throw new Error('Wykorzystano dostępny limit analiz CV. Wybierz pakiet PRESELEKCJA.');
     if (result.error || !result.data?.[0]) throw new Error('Nie można ponowić tej analizy. Odśwież stronę i sprawdź jej stan.');
     attemptId = result.data[0].attempt_id;
   } else {
@@ -50,6 +51,7 @@ export async function runScreeningCommand(input: {
       requested_prompt_version: contract.prompt_version, requested_provider: contract.provider, requested_model: contract.model,
       requested_model_revision: contract.model_revision, request_idempotency_key: input.idempotencyKey,
     });
+    if (result.error?.code === 'PT402') throw new Error('Wykorzystano dostępny limit analiz CV. Wybierz pakiet PRESELEKCJA.');
     if (result.error || !result.data?.[0]) throw new Error('Nie udało się rozpocząć analizy. Dane mogły się zmienić — odśwież stronę.');
     attemptId = result.data[0].attempt_id;
     if (result.data[0].execution_status === 'completed') return { saved: true, message: 'Wczytano aktualny, istniejący wynik.' };
