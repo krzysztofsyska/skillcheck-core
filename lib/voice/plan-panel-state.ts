@@ -31,6 +31,10 @@ export function getVoicePlanPanelPermissions(
     reviewEnabled:false, releaseEnabled:false,
     warning:"Zapis i zatwierdzanie wymagają uruchomienia zweryfikowanego backendu SC-012-B.",
   };
+  if (value.status === "reviewed" && !value.reviewIsApproved) return {
+    reviewEnabled:false, releaseEnabled:false,
+    warning:"Rekruter zgłosił wymagane poprawki. Przygotuj nową wersję scenariusza.",
+  };
   return {
     reviewEnabled: value.status==="generated",
     releaseEnabled: value.status==="reviewed" && value.reviewIsApproved,
