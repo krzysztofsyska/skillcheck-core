@@ -7,6 +7,7 @@ const notices: Record<string,string> = {
   invalid: 'Podaj prawidłowy polski NIP.',
   taken: 'Darmowa pula została już przypisana do tego NIP lub firmy.',
   failed: 'Nie udało się aktywować FREE. Skontaktuj się z obsługą SkillCheck.',
+  verify: 'Przed aktywacją FREE wymagamy weryfikacji firmy. Wyślij zgłoszenie przez formularz kontaktowy.',
   forbidden: 'Darmową pulę może aktywować tylko właściciel firmy.',
 };
 
@@ -39,7 +40,9 @@ export default async function CompanyBilling({ params, searchParams }: {
       <p>Analiza wymaga zatwierdzonej anonimizacji CV i weryfikacji wyniku przez rekrutera. SkillCheck nie podejmuje decyzji o zatrudnieniu.</p>
     </section> : <>
       <h2>FREE — 5 analiz CV</h2>
-      <p>Jednorazowa próba dla firmy. Wymagamy prawidłowego polskiego NIP. Potwierdzony NIP nie dowodzi jednak, że użytkownik reprezentuje daną firmę.</p>
+      <p>Jednorazowa próba dla zweryfikowanej firmy. Sam poprawny NIP nie uprawnia do odbioru darmowej puli.</p>
+      <p><Link href="/rozmowa">Zgłoś firmę do weryfikacji FREE →</Link></p>
+      <p>Jeśli SkillCheck już potwierdził Twoją firmę, wpisz zatwierdzony NIP.</p>
       {isOwner ? <form action={activateSc19Free}>
         <input type="hidden" name="companyId" value={companyId} />
         <label>NIP firmy <input type="text" name="nip" inputMode="numeric" autoComplete="off" maxLength={20} required placeholder="10 cyfr" /></label>
