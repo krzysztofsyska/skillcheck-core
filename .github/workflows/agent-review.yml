@@ -31,6 +31,8 @@ permissions:
 
 jobs:
   model:
+    if: github.ref == 'refs/heads/main'
+    environment: agent-review
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
