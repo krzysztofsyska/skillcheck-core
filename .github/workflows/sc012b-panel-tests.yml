@@ -13,6 +13,8 @@ on:
       - 'lib/voice/plan-panel-state.ts'
       - 'components/voice/VoicePlanApprovalPanel.tsx'
       - 'tests/voice-plan-panel-state.test.mjs'
+      - 'tests/voice-plan-panel-component.test.mjs'
+      - '.github/workflows/sc012b-panel-tests.yml'
 permissions:
   contents: read
 jobs:
