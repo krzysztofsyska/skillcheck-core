@@ -1,7 +1,7 @@
 /** SC-011-A synthetic in-memory adapter. No network, numbers, prompts, or audio stored. */
 import { createHash } from "node:crypto";
 import {
-  validateVoiceCallRequest, VoiceProviderUncertainError, VoiceProviderValidationError,
+  canonicalVoiceCallRequest, VoiceProviderUncertainError, VoiceProviderValidationError,
   type VoiceCallAcceptance, type VoiceCallLookup, type VoiceCallRequest, type VoiceProvider,
 } from "./provider.ts";
 
@@ -20,9 +20,9 @@ export class FakeVoiceProvider implements VoiceProvider {
   }
 
   async initiateOutbound(request: VoiceCallRequest): Promise<VoiceCallAcceptance> {
-    validateVoiceCallRequest(request);
-    const fingerprint = createHash("sha256").update(JSON.stringify(request)).digest("hex");
-    const previous = this.byKey.get(request.providerIdempotencyKey);
+    const canonical = canonicalVoiceCallRequest(request);
+    const fingerprint = createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+    const previous = this.byKey.get(canonical.providerIdempotencyKey);
     if (previous) {
       if (previous.fingerprint !== fingerprint || previous.status !== "accepted")
         throw new VoiceProviderValidationError();
@@ -31,7 +31,7 @@ export class FakeVoiceProvider implements VoiceProvider {
     if (this.mode === "timeout_before_acceptance") throw new VoiceProviderUncertainError();
     const providerCallId = "fake-call-" + String(++this.sequence).padStart(6, "0");
     const record: Entry = { fingerprint, providerCallId, status: "accepted" };
-    this.byKey.set(request.providerIdempotencyKey, record);
+    this.byKey.set(canonical.providerIdempotencyKey, record);
     this.byId.set(providerCallId, record);
     if (this.mode === "timeout_after_acceptance") throw new VoiceProviderUncertainError();
     return { acceptance: "accepted", providerCallId };
