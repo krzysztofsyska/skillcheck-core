@@ -46,7 +46,8 @@ export type PlanReleaseRequest = Readonly<{
   approvedReviewId: string; expectedReviewVersion: number; requestKey: string;
 }>;
 export class VoicePlanStorageError extends Error {
-  constructor(readonly code: "INVALID" | "SOURCE_CHANGED" | "CONFLICT") { super("VOICE_PLAN_"+code); }
+  readonly code: "INVALID" | "SOURCE_CHANGED" | "CONFLICT";
+  constructor(code: "INVALID" | "SOURCE_CHANGED" | "CONFLICT") { super("VOICE_PLAN_"+code); this.code = code; }
 }
 const invalid = (): never => { throw new VoicePlanStorageError("INVALID"); };
 const isId = (x: unknown): x is string => typeof x === "string" && UUID.test(x);
@@ -60,7 +61,7 @@ function cleanClone<T>(value: T): T {
     const clone = structuredClone(value);
     if (JSON.stringify(clone).length > 35000) invalid();
     return clone;
-  } catch { invalid(); }
+  } catch { return invalid(); }
 }
 function exactFields(v: unknown, keys: readonly string[]): v is Record<string,unknown> {
   return !!v && typeof v==="object" && !Array.isArray(v) &&
