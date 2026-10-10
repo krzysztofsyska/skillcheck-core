@@ -9,6 +9,8 @@ on:
       - 'tests/helpers/screening-ranking-fixture.mjs'
       - 'supabase/migrations/**'
       - '.github/workflows/sc012b-schema-prototype.yml'
+      - 'package.json'
+      - 'package-lock.json'
   push:
     branches: [integration, main]
     paths:
@@ -19,6 +21,8 @@ on:
       - 'tests/helpers/screening-ranking-fixture.mjs'
       - 'supabase/migrations/**'
       - '.github/workflows/sc012b-schema-prototype.yml'
+      - 'package.json'
+      - 'package-lock.json'
 permissions:
   contents: read
 jobs:
