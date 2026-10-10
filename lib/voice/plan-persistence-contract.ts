@@ -39,7 +39,7 @@ export type VoicePlanWriteSnapshot = Readonly<{
 export type PlanReviewDecision = "approved" | "requires_changes";
 export type PlanReviewRequest = Readonly<{
   planId: string; expectedPlanVersion: number; expectedSourceHash: string;
-  expectedReviewVersion: number; decision: PlanReviewDecision; requestKey: string;
+  expectedReviewVersion: number; decision: PlanReviewDecision; reason: string | null; requestKey: string;
 }>;
 export type PlanReleaseRequest = Readonly<{
   planId: string; expectedPlanVersion: number; expectedSourceHash: string;
@@ -127,11 +127,13 @@ export function createVoicePlanWriteSnapshot(
 export function validatePlanReviewCommand(raw: PlanReviewRequest): PlanReviewRequest {
   const x=cleanClone(raw);
   if (!exactFields(x,["planId","expectedPlanVersion","expectedSourceHash",
-      "expectedReviewVersion","decision","requestKey"]) ||
+      "expectedReviewVersion","decision","reason","requestKey"]) ||
       !isId(x.planId) || !isId(x.requestKey) || typeof x.expectedSourceHash !== "string" || !HEX.test(x.expectedSourceHash) ||
       !Number.isSafeInteger(x.expectedPlanVersion) || x.expectedPlanVersion<1 ||
       !Number.isSafeInteger(x.expectedReviewVersion) || x.expectedReviewVersion<0 ||
-      !["approved","requires_changes"].includes(x.decision)) invalid();
+      !["approved","requires_changes"].includes(x.decision) ||
+      !(x.reason===null || (typeof x.reason==="string" && x.reason.length<=1000 && x.reason.trim().length>0)) ||
+      (x.decision==="requires_changes" && x.reason===null)) invalid();
   return Object.freeze(x);
 }
 export function validatePlanReleaseCommand(raw: PlanReleaseRequest): PlanReleaseRequest {
