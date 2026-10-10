@@ -30,9 +30,16 @@ test('operator leads: authorization, private rendering and errors via HTTP', asy
       if (statusFailure) { res.statusCode = 500; return res.end(JSON.stringify({ message: 'PRIVATE_SQL_DETAIL' })); }
       return res.end(JSON.stringify(operator));
     }
-    if (req.url === '/rest/v1/rpc/list_sales_leads') {
+    if (req.url === '/rest/v1/rpc/list_sales_leads_inbox') {
       if (revoked || listFailure) { res.statusCode = 400; return res.end(JSON.stringify({ message: revoked ? 'sales_lead_forbidden' : 'PRIVATE_SQL_DETAIL', code: 'P0001' })); }
       return res.end(JSON.stringify(rows));
+    }
+    if (req.url === '/rest/v1/rpc/close_sales_lead') {
+      if (!operator || revoked) return res.end(JSON.stringify('sales_lead_forbidden'));
+      const input = JSON.parse(Buffer.concat(chunks).toString());
+      assert.equal(input.target_lead, fixture.id);
+      rows = rows.map(row => row.id === input.target_lead ? { ...row, closed_at: '2026-10-09T07:00:00Z' } : row);
+      return res.end(JSON.stringify('ok'));
     }
     res.statusCode = 404; res.end('{}');
   });
@@ -65,7 +72,7 @@ test('operator leads: authorization, private rendering and errors via HTTP', asy
     assert.equal(html.includes(fixture.idempotency_key), false);
     return { res, html };
   };
-  const listCalls = () => requests.filter(r => r.url === '/rest/v1/rpc/list_sales_leads');
+  const listCalls = () => requests.filter(r => r.url === '/rest/v1/rpc/list_sales_leads_inbox');
   await t.test('anonymous redirects before RPC', async () => {
     const { res } = await read(false);
     assert.equal(res.status, 307); assert.equal(res.headers.get('location'), '/login');
@@ -79,11 +86,13 @@ test('operator leads: authorization, private rendering and errors via HTTP', asy
   });
   await t.test('operator reads fields, bounded RPC and escaped text', async () => {
     const { res, html } = await read(); assert.equal(res.status, 200);
-    for (const value of [fixture.company_name, fixture.first_name, fixture.email, userId, 'Nie podano', 'Otrzymane', 'Europe/Warsaw']) assert.ok(html.includes(value), value);
+    for (const value of [fixture.company_name, fixture.first_name, fixture.email, userId, 'Nie podano', 'Etap sprzedaży i ustalenia', 'Europe/Warsaw']) assert.ok(html.includes(value), value);
     assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
     assert.doesNotMatch(html, /<img src=x/);
     assert.deepEqual(JSON.parse(listCalls().at(-1).body), { result_limit: 50 });
     assert.equal(listCalls().at(-1).authorization, 'Bearer ' + token);
+    assert.match(html, /mailto:test%40example.invalid\?subject=/);
+    assert.match(html, /Odpowiedz e-mailem/);
   });
   await t.test('empty response has explicit empty state', async () => {
     rows = []; const { html } = await read(); assert.match(html, /Nie ma jeszcze zgłoszeń/); rows = [fixture];
@@ -132,8 +141,16 @@ test('operator leads: authorization, private rendering and errors via HTTP', asy
         assert.ok(await page.getByText(fixture.email, { exact: true }).isVisible());
         assert.equal(await page.locator('img[src="x"]').count(), 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        const reply = new URL(await page.getByRole('link', {name:'Odpowiedz e-mailem'}).getAttribute('href'));
+        assert.equal(decodeURIComponent(reply.pathname), fixture.email);
+        assert.deepEqual([...reply.searchParams.keys()], ['subject']);
         await page.screenshot({ path: `/tmp/sc-sales-006d-${width}.png`, fullPage: true });
       }
+      // A won lead has no closure date. The inbox must not offer the legacy lost action.
+      assert.equal(await page.getByRole('button', {name:'Potwierdź zakończenie'}).count(), 0);
+      assert.equal(await page.getByText('Otrzymane', {exact:true}).count(), 0);
+      assert.equal(await page.getByRole('link', {name:'Etap sprzedaży i ustalenia'}).getAttribute('href'), '/operator/sales/' + fixture.id);
+      assert.equal(requests.filter(r=>r.url==='/rest/v1/rpc/close_sales_lead').length, 0);
       rows = []; await page.getByRole('link', { name: 'Odśwież zgłoszenia' }).click(); await page.getByRole('status').filter({ hasText: 'Nie ma jeszcze zgłoszeń' }).waitFor(); rows = [fixture];
       operator = false; const forbidden = await page.goto(base + '/operator/leads'); assert.equal(forbidden.status(), 404); assert.equal(await page.getByText(fixture.email, { exact: true }).count(), 0); operator = true;
       await context.clearCookies(); await page.goto(base + '/operator/leads'); assert.equal(new URL(page.url()).pathname, '/login');

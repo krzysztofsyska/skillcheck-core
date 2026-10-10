@@ -54,7 +54,12 @@ type ExpectedTables =
   | "screening_criterion_results"
   | "screening_result_reviews"
   | "screening_criterion_review_overrides"
-  | "recruitment_shortlist_entries";
+  | "recruitment_shortlist_entries"
+  | "candidate_contact_permissions"
+  | "candidate_contact_preferences"
+  | "candidate_communications"
+  | "candidate_communication_events"
+  | "candidate_communication_approvals";
 type ExpectedViews =
   | "latest_behavior_assessments"
   | "latest_exercise_definitions"
@@ -62,6 +67,10 @@ type ExpectedViews =
 type ExpectedFunctions =
   | "submit_sales_lead"
   | "list_sales_leads"
+  | "list_sales_leads_inbox"
+  | "close_sales_lead"
+  | "claim_sales_mail"
+  | "finish_sales_mail"
   | "platform_operator_status"
   | "grant_platform_operator"
   | "revoke_platform_operator"
@@ -80,7 +89,27 @@ type ExpectedFunctions =
   | "get_screening_ranking"
   | "get_recruitment_shortlist"
   | "add_recruitment_shortlist_entry"
-  | "remove_recruitment_shortlist_entry";
+  | "remove_recruitment_shortlist_entry"
+  | "record_contact_permission"
+  | "set_contact_preferences"
+  | "prepare_candidate_communication"
+  | "cancel_candidate_communication"
+  | "get_candidate_communications"
+  | "get_candidate_communication_history"
+  | "save_sales_pipeline" | "list_sales_pipeline" | "sales_pipeline_history" | "find_sales_companies"
+  | "approve_candidate_communication"
+  | "get_communication_approval_status"
+  | "configure_candidate_retention_policy"
+  | "get_candidate_retention_policy"
+  | "confirm_erasure_subject"
+  | "preview_candidate_erasure"
+  | "get_erasure_subject_resolution"
+  | "issue_candidate_erasure_preview"
+  | "request_candidate_erasure"
+  | "cancel_candidate_erasure"
+  | "get_erasure_status"
+  | "get_candidate_erasure_status"
+  | "list_candidate_erasure_requests";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -449,3 +478,30 @@ type _RevokeArgs = Expect<Equal<Database["public"]["Functions"]["revoke_platform
 type _ShortlistInsert = Expect<Equal<Insert<"recruitment_shortlist_entries">, never>>;
 type _ShortlistUpdate = Expect<Equal<Update<"recruitment_shortlist_entries">, never>>;
 type _RankingTenantArgument = Expect<Equal<Extract<keyof Database["public"]["Functions"]["get_screening_ranking"]["Args"], "company_id">, never>>;
+
+// SC-010 B1: writes only through scoped RPCs; no delivery/verified grant types.
+type _ContactPermissionInsert = Expect<Equal<Insert<"candidate_contact_permissions">, never>>;
+type _ContactPermissionUpdate = Expect<Equal<Update<"candidate_contact_permissions">, never>>;
+type _ContactPreferencesInsert = Expect<Equal<Insert<"candidate_contact_preferences">, never>>;
+type _CommunicationInsert = Expect<Equal<Insert<"candidate_communications">, never>>;
+type _CommunicationUpdate = Expect<Equal<Update<"candidate_communications">, never>>;
+type _CommunicationEventUpdate = Expect<Equal<Update<"candidate_communication_events">, never>>;
+type _CommunicationNoTenantInput = Expect<Equal<Extract<keyof Database["public"]["Functions"]["prepare_candidate_communication"]["Args"], "company_id" | "actor_id" | "destination">, never>>;
+
+// SC-010 B2 public surface exposes metadata only; proof minting remains private.
+type _ApprovalInsert = Expect<Equal<Insert<"candidate_communication_approvals">, never>>;
+type _ApprovalUpdate = Expect<Equal<Update<"candidate_communication_approvals">, never>>;
+type _NoVerificationMint = Expect<Equal<Extract<FunctionName, "ingest_verified_contact_receipt">, never>>;
+type _ApprovalNoPrivateInput = Expect<Equal<Extract<keyof Database["public"]["Functions"]["approve_candidate_communication"]["Args"], "company_id" | "actor_id" | "destination" | "policy_version">, never>>;
+
+// SC-010 R1 is configuration + read-only preview, never erasure authorization.
+type _NoErasureExecution = Expect<Equal<Extract<FunctionName, "execute_candidate_erasure" | "purge_candidate" | "authorize_retention_due">, never>>;
+type _PreviewNoClientManifest = Expect<Equal<Extract<keyof Database["public"]["Functions"]["preview_candidate_erasure"]["Args"], "company_id" | "actor_id" | "candidate_ids" | "manifest" | "execute">, never>>;
+
+// R2 authorization accepts a server-minted ticket only, never client counts/hash/tenant.
+type _ErasureRequestArgs = Expect<Equal<Database["public"]["Functions"]["request_candidate_erasure"]["Args"], {
+  preview_ticket_id: string; request_key: string;
+}>>;
+type _ErasureCancelArgs = Expect<Equal<Database["public"]["Functions"]["cancel_candidate_erasure"]["Args"], {
+  target_request: string; expected_generation: number; request_key: string;
+}>>;
