@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
   getVoicePlanPanelPermissions,
   type VoicePlanPanelStatus,
@@ -51,58 +51,55 @@ const questionKind = {
   clarification:"Dopytanie do kryterium",
 };
 
-export function VoicePlanApprovalPanel({
+export function VoicePlanApprovalPanel(props: VoicePlanApprovalPanelProps) {
+  // Keyed remount gives each plan revision a fresh state store, even A -> B -> A.
+  // Pending asynchronous callbacks from the unmounted revision cannot mutate
+  // the new revision's controls or rationale.
+  return <VoicePlanApprovalPanelRevision key={props.plan.id+":"+String(props.plan.planVersion)} {...props}/>;
+}
+function VoicePlanApprovalPanelRevision({
   plan, role, backendReady=false, onReview, onRelease,
 }: VoicePlanApprovalPanelProps) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState<string | null>(null);
   const [comment,setComment]=useState("");
-  // Updated during render so a pending callback from an old plan cannot mutate
-  // a newer plan even before React runs its reset effect.
-  const activeRevision=useRef(plan.id+":"+String(plan.planVersion));
-  activeRevision.current=plan.id+":"+String(plan.planVersion);
-  // A regenerated/replaced plan must not inherit the previous plan's rationale,
-  // error state or pending submission UI. The server still owns authorization.
-  useEffect(()=>{
-    setComment("");
-    setError(null);
-    setBusy(false);
-  },[plan.id,plan.planVersion]);
+  // A successful action remains latched until authoritative props change.
+  // Review success does not block a *separate* subsequent release.
+  const [reviewSubmitted,setReviewSubmitted]=useState(false);
+  const [releaseSubmitted,setReleaseSubmitted]=useState(false);
   const permissions=getVoicePlanPanelPermissions({
     status:plan.status,sourceCurrent:plan.sourceCurrent,backendReady,
     role,reviewIsApproved:plan.reviewIsApproved,
   });
-  const canReview=permissions.reviewEnabled && !!onReview && !busy;
-  const canRelease=permissions.releaseEnabled && !!onRelease && !busy;
+  const canReview=permissions.reviewEnabled && !!onReview && !busy && !reviewSubmitted;
+  const canRelease=permissions.releaseEnabled && !!onRelease && !busy && !releaseSubmitted;
   async function review(decision: ReviewDecision) {
     if (!canReview || !onReview) return;
     const reason=comment.trim();
     if (decision === "requires_changes" && reason.length===0) {
       setError("Podaj uzasadnienie wymaganych poprawek."); return;
     }
-    const startedRevision=activeRevision.current;
     setBusy(true); setError(null);
     try {
       // No actor/tenant IDs are supplied by the browser. Verified RPC derives them.
       await onReview({planId:plan.id,expectedVersion:plan.planVersion,
         expectedSourceHash:plan.sourceHash,decision,reason:reason || null});
-      if (activeRevision.current===startedRevision) setComment("");
+      setComment("");
+      setReviewSubmitted(true);
     } catch {
-      if (activeRevision.current===startedRevision)
-        setError("Nie udało się zapisać oceny. Odśwież źródła i spróbuj ponownie.");
-    } finally { if (activeRevision.current===startedRevision) setBusy(false); }
+      setError("Nie udało się zapisać oceny. Odśwież źródła i spróbuj ponownie.");
+    } finally { setBusy(false); }
   }
   async function release() {
     if (!canRelease || !onRelease) return;
-    const startedRevision=activeRevision.current;
     setBusy(true); setError(null);
     try {
       await onRelease({planId:plan.id,expectedVersion:plan.planVersion,
         expectedSourceHash:plan.sourceHash});
+      setReleaseSubmitted(true);
     } catch {
-      if (activeRevision.current===startedRevision)
-        setError("Nie udało się wydać scenariusza. Sprawdź jego aktualność.");
-    } finally { if (activeRevision.current===startedRevision) setBusy(false); }
+      setError("Nie udało się wydać scenariusza. Sprawdź jego aktualność.");
+    } finally { setBusy(false); }
   }
   return (
     <section aria-label="Przegląd scenariusza rozmowy" style={{maxWidth:900,margin:"0 auto",padding:24}}>
