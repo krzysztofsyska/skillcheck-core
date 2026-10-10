@@ -44,12 +44,29 @@ function validRating(v:unknown): v is ScreeningRatingForVoice {
 }
 export function selectReviewedScreeningGaps(
   src: ScreeningGapSelectionSource,
+  trustedApprovedCriteriaSnapshot: readonly ScreeningCriterionForVoice[],
 ): readonly VoiceEvidenceGap[] {
   if (!src || !["approved","approved_with_changes"].includes(src.latestHumanDecision) ||
       src.analysisCompleted!==true || src.analysisCurrent!==true ||
       src.shortlistCurrent!==true || !Array.isArray(src.criteria) || !Array.isArray(src.results) ||
       !Array.isArray(src.overrides) || src.criteria.length===0 || src.criteria.length>90 ||
       src.results.length!==src.criteria.length || src.overrides.length>src.criteria.length) invalid();
+  // A partial mapper can truncate criteria and results together. Require the
+  // complete immutable approved criteria snapshot from a separately verified
+  // tenant-scoped DB read. A caller cannot derive authority from src.criteria.
+  if (!Array.isArray(trustedApprovedCriteriaSnapshot) ||
+      trustedApprovedCriteriaSnapshot.length!==src.criteria.length) invalid();
+  const trustedIds=new Set<string>();
+  for (const criterion of trustedApprovedCriteriaSnapshot) {
+    const c=parseCriterion(criterion);
+    const key=c.kind+":"+c.id;
+    if (trustedIds.has(key)) invalid();
+    trustedIds.add(key);
+  }
+  if (trustedIds.size!==src.criteria.length || src.criteria.some(c=>{
+    const parsed=parseCriterion(c);
+    return !trustedIds.has(parsed.kind+":"+parsed.id);
+  })) invalid();
   const order=new Map<string,{id:string;kind:typeof kinds[number];index:number}>();
   const seenIndex=new Map<string,Set<number>>();
   for(const raw of src.criteria){
