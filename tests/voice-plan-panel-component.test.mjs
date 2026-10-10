@@ -21,7 +21,11 @@ function renderPanel(props) {
       throw Error("Unapproved import: " + name);
     },
   });
-  return exports.VoicePlanApprovalPanel(props);
+  // The public component creates a keyed inner panel. Interpret its child
+  // for this static structural harness; stateful remount behavior is exercised
+  // separately by the actual React renderer suite.
+  const wrapper=exports.VoicePlanApprovalPanel(props);
+  return wrapper.type(wrapper.props);
 }
 function nodes(tree, result = []) {
   if (Array.isArray(tree)) { tree.forEach(x => nodes(x,result)); return result; }
