@@ -47,7 +47,15 @@ leave a pending state and are never retried automatically.
 
 The agent must be idle and bound by its v1 API identity to the exact PR, or the
 exact branch with workOnCurrentBranch=true; autoCreatePR must be false. A completed
-run must remain the agent's latest run and the PR head must change. Only then does
+run must remain the agent's latest run and the PR head must change. Cursor's pushed
+repository/branch (and PR URL when present) must match the binding. GitHub must
+return the complete linear commit suffix from the reserved head to the new head
+(maximum 100 commits), each with a valid verified signature and the configured
+`cursorCommitter` bot ID/login/type. The final commit must contain the unique
+`SkillCheck-Repair` trailer reserved for this operation and sent in its prompt.
+Unrelated, unsigned, mixed-author or incomplete evidence stops at BLOCKED_PROVENANCE.
+This evidence is rechecked immediately before the review request. The Cursor API
+git snapshot alone is session-wide, so it is not sufficient attribution. Only then does
 the adapter request `@codex review` once. A current-head APPROVED review or Codex's
 thumbs-up on that exact re-review request yields READY_FOR_OWNER, never owner
 acceptance. CI and the two existing approval gates still govern acceptance and
@@ -59,6 +67,13 @@ stored. Failure output is intentionally generic; inspect the durable phase and
 service metadata through the privileged operator session. Existing transport
 retries apply to reads only. Pending mutations require operator reconciliation,
 not deletion of state or another dispatch.
+
+Each binding is processed independently. A closed/retargeted PR, failed API read
+or other exception emits only `{pr, status: BLOCKED_BINDING}` and does not prevent
+later bindings from running. Existing pending reservations are preserved. After
+processing all bindings the CLI returns a failing exit code if any result is
+blocked; no raw error is reflected. Shared configuration/protection failures
+still stop the whole invocation before dispatch.
 
 ## Activation prerequisites — not performed by this PR
 
@@ -72,9 +87,13 @@ not deletion of state or another dispatch.
    the Cursor agent without production secrets and verify access to the existing PR
    through GET /v1/agents/{id}. A footer URL alone is not proof of API compatibility.
 4. Register exact PR number, agentId, branch, initialHead, originIntegration,
+   cursorCommitter (verified bot numeric ID and login),
    allowedFiles, level=L3 and scope=OPERATIONS in feedback.json after verification.
    originIntegration is an attested historical integration SHA; both ancestry
-   comparisons must pass. Config stays empty and disabled in this implementation.
+   comparisons must pass. Verify that this Cursor setup produces GitHub-verified
+   commits under that bot committer; neither a footer, git email nor unsigned commit
+   proves this. Unsupported signing/identity remains blocked, with no invented IDs
+   or fallback to human commits. Config stays empty and disabled in this implementation.
 5. Have the reviewed workflow installed on the trusted default branch through an
    owner-approved promotion. GitHub issue_comment/schedule require default-branch
    installation. A draft PR into integration does not activate them. Since main

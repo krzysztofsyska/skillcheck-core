@@ -69,13 +69,32 @@ export async function readSnapshot(github, cursor, binding, state) {
     github.readProjection(),
   ]);
   if (Object.values(projection.tasks).some(t => t.pr_number === binding.pr || t.binding?.branch === binding.branch)) throw new Error('MANAGED_BY_CONTROLLER');
+  let repair = null;
+  if (['FIXING', 'REVIEW_PENDING'].includes(state?.phase) && state.repairHead && state.repairHead !== pull.head.sha) {
+    const comparison = await github.request(`${root}/compare/${state.repairHead}...${pull.head.sha}?per_page=100`);
+    const complete = comparison.status === 'ahead' && comparison.base_commit?.sha === state.repairHead
+      && Number.isInteger(comparison.total_commits) && comparison.total_commits > 0 && comparison.total_commits <= 100
+      && comparison.commits?.length === comparison.total_commits;
+    const commits = complete ? await Promise.all(comparison.commits.map(c => github.request(`${root}/commits/${c.sha}`))) : [];
+    repair = { base: state.repairHead, head: pull.head.sha, status: comparison.status, complete, commits };
+  }
   return {
-    pull, files, reviews, comments, agent,
+    pull, files, reviews, comments, agent, repair,
     originVerified: ['ahead', 'identical'].includes(origin.status),
     initialHeadVerified: ['ahead', 'identical'].includes(initial.status),
     run: state?.runId ? await cursor.getRun(binding.agentId, state.runId) : null,
     reactions: state?.reviewCommentId ? await pages(`/issues/comments/${state.reviewCommentId}/reactions`) : [],
   };
+}
+
+export async function reconcileBindings(bindings, processBinding) {
+  const result = [];
+  for (const binding of bindings) {
+    try { result.push({ pr: binding.pr, status: await processBinding(binding) }); }
+    catch { result.push({ pr: binding.pr, status: 'BLOCKED_BINDING' }); }
+  }
+  // Never copy exception messages, response bodies or credentials into results.
+  return result;
 }
 
 export async function main(env = process.env) {
@@ -105,17 +124,17 @@ export async function main(env = process.env) {
   // writers before activation. Never silently recreate a deleted journal.
   await github.readBranch('agent-feedback-state');
   const cursor = createCursorClient({ fetch, apiKey: env.CURSOR_API_KEY });
-  const result = [];
-  for (const binding of config.bindings) {
-    result.push({ pr: binding.pr, status: await runFeedback({ binding, store: feedbackStore(github, binding.pr),
+  return reconcileBindings(config.bindings, binding => runFeedback({ binding, store: feedbackStore(github, binding.pr),
       readSnapshot: state => readSnapshot(github, cursor, binding, state), cursor,
       postReview: body => github.request(`/repos/${REPOSITORY}/issues/${binding.pr}/comments`, { method: 'POST', body: { body } }),
-    }) });
-  }
-  return result;
+    }));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try { console.log(JSON.stringify(await main())); }
+  try {
+    const results = await main();
+    console.log(JSON.stringify(results));
+    if (results.some(r => r.status?.startsWith('BLOCKED'))) process.exitCode = 1;
+  }
   catch { console.error('FEEDBACK_BLOCKED: inspect configuration and durable phase; provider payloads are intentionally omitted.'); process.exitCode = 1; }
 }

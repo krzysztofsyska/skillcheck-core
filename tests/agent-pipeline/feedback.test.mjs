@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { planFeedback, runFeedback, fixPrompt, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
-import { main, feedbackStore, verifyFeedbackProtection } from '../../tools/agent-pipeline/feedback-cli.mjs';
+import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readSnapshot } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
 const bot = { ...CODEX, type: 'Bot' };
 function fixture() {
   const binding = { pr: 49, agentId: 'bc-test', branch: 'cursor/test', initialHead: A,
+    cursorCommitter: { id: 123, login: 'cursor-test[bot]' },
     originIntegration: B, level: 'L3', scope: 'OPERATIONS', allowedFiles: ['docs/test.md'] };
   const snapshot = { pull: { number: 49, state: 'open', draft: false, merged: false,
     head: { ref: binding.branch, sha: A, repo: { id: REPOSITORY_ID, fork: false } },
@@ -27,6 +28,18 @@ function fixture() {
   return { binding, snapshot, args, state: () => value, calls: () => calls, reviews: () => reviews };
 }
 
+function finishRepair(f) {
+  f.snapshot.agent.latestRunId = 'run-test';
+  f.snapshot.run = { id: 'run-test', agentId: f.binding.agentId, status: 'FINISHED',
+    git: { branches: [{ repoUrl: 'github.com/krzysztofsyska/skillcheck-core', branch: f.binding.branch,
+      prUrl: 'https://github.com/krzysztofsyska/skillcheck-core/pull/49' }] } };
+  f.snapshot.pull.head.sha = C;
+  f.snapshot.repair = { base: A, head: C, status: 'ahead', complete: true, commits: [
+    { sha: C, parents: [{ sha: A }], committer: { ...f.binding.cursorCommitter, type: 'Bot' },
+      commit: { message: `Fix\n\nSkillCheck-Repair: ${f.state().operationMarker}`, verification: { verified: true, reason: 'valid' } } },
+  ] };
+}
+
 test('synthetic OFFLINE cycle: finding -> Cursor run -> changed head -> re-review -> ready, no acceptance', async () => {
   const f = fixture();
   assert.equal(await runFeedback(f.args), 'FIXING');
@@ -34,8 +47,7 @@ test('synthetic OFFLINE cycle: finding -> Cursor run -> changed head -> re-revie
   f.snapshot.run = { id: 'run-test', agentId: f.binding.agentId, status: 'RUNNING' };
   assert.equal(await runFeedback(f.args), 'FIXING');
   assert.equal(f.calls(), 1);
-  f.snapshot.run.status = 'FINISHED';
-  f.snapshot.pull.head.sha = C;
+  finishRepair(f);
   assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
   assert.equal(f.reviews(), 1);
   assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
@@ -184,14 +196,96 @@ test('state branch protection requires exclusive writer and non-bypassable integ
 
 test('lost review comment response is not posted twice', async () => {
   const f = fixture(); await runFeedback(f.args);
-  f.snapshot.agent.latestRunId = 'run-test';
-  f.snapshot.run = { id: 'run-test', agentId: f.binding.agentId, status: 'FINISHED' };
-  f.snapshot.pull.head.sha = C;
+  finishRepair(f);
   let attempts = 0;
   f.args.postReview = async () => { attempts++; throw new Error('lost'); };
   await assert.rejects(runFeedback(f.args));
   assert.equal(await runFeedback(f.args), 'REVIEW_PENDING');
   assert.equal(attempts, 1);
+});
+
+for (const [name, mutate] of Object.entries({
+  unrelatedPush: s => { s.repair.commits[0].committer = { id: 999, login: 'human', type: 'User' }; },
+  spoofedLogin: s => { s.repair.commits[0].committer.id = 999; },
+  unsignedBotEmail: s => { s.repair.commits[0].commit.verification.verified = false; },
+  missingMarker: s => { s.repair.commits[0].commit.message = 'unrelated repair'; },
+  previousOperation: s => { s.repair.commits[0].commit.message = 'SkillCheck-Repair: 00000000-0000-0000-0000-000000000000'; },
+  noPushedBranch: s => { delete s.run.git; },
+  otherBranch: s => { s.run.git.branches[0].branch = 'cursor/another'; },
+  otherPR: s => { s.run.git.branches[0].prUrl = 'https://github.com/krzysztofsyska/skillcheck-core/pull/50'; },
+  otherRepository: s => { s.run.git.branches[0].repoUrl = 'github.com/other/repository'; },
+  truncatedHistory: s => { s.repair.complete = false; },
+  missingHistory: s => { s.repair.commits = []; },
+  mergeCommit: s => { s.repair.commits[0].parents.push({ sha: B }); },
+  nonDescendant: s => { s.repair.commits[0].parents[0].sha = B; },
+  staleProof: s => { s.repair.head = B; },
+  staleCommit: s => { s.repair.commits[0].sha = B; },
+})) test(`repair provenance rejects ${name} without requesting review`, async () => {
+  const f = fixture(); await runFeedback(f.args); finishRepair(f); mutate(f.snapshot);
+  assert.equal(await runFeedback(f.args), 'BLOCKED_PROVENANCE');
+  assert.equal(f.reviews(), 0);
+  assert.equal(await runFeedback(f.args), 'BLOCKED_PROVENANCE');
+  assert.equal(f.calls(), 1);
+});
+
+test('all intervening commits must have trusted signed committer, not just the tip', async () => {
+  const f = fixture(); await runFeedback(f.args); finishRepair(f);
+  const middle = 'd'.repeat(40);
+  f.snapshot.repair.commits[0].parents = [{ sha: middle }];
+  f.snapshot.repair.commits.unshift({ sha: middle, parents: [{ sha: A }], committer: { id: 999, type: 'User' } });
+  assert.equal(await runFeedback(f.args), 'BLOCKED_PROVENANCE');
+  assert.equal(f.reviews(), 0);
+});
+
+test('provenance is checked again after reservation before review dispatch', async () => {
+  const f = fixture(); await runFeedback(f.args); finishRepair(f);
+  let reads = 0;
+  f.args.readSnapshot = async () => {
+    if (++reads === 2) f.snapshot.agent.latestRunId = 'run-other';
+    return structuredClone(f.snapshot);
+  };
+  await assert.rejects(runFeedback(f.args), /CURSOR_PROVENANCE_CHANGED/);
+  assert.equal(f.reviews(), 0);
+  assert.equal(f.state().phase, 'REVIEW_PENDING');
+});
+
+test('per-binding failure cannot starve later PRs or leak provider error', async () => {
+  const f = fixture(); const called = [];
+  const results = await reconcileBindings([{ pr: 48 }, f.binding, { pr: 50 }], async b => {
+    called.push(b.pr);
+    if (b.pr !== 49) throw new Error('secret-provider-response');
+    return runFeedback(f.args);
+  });
+  assert.deepEqual(called, [48, 49, 50]);
+  assert.deepEqual(results, [{ pr: 48, status: 'BLOCKED_BINDING' }, { pr: 49, status: 'FIXING' }, { pr: 50, status: 'BLOCKED_BINDING' }]);
+  assert.equal(f.calls(), 1);
+  assert.doesNotMatch(JSON.stringify(results), /secret-provider-response/);
+});
+
+test('snapshot fetches immutable GitHub commit proof and detects truncated comparison', async () => {
+  const f = fixture(); await runFeedback(f.args); finishRepair(f);
+  const requests = []; let truncated = false;
+  const github = {
+    readPull: async () => f.snapshot.pull, readChangedFiles: async () => f.snapshot.files,
+    readProjection: async () => ({ tasks: {} }),
+    request: async path => {
+      requests.push(path);
+      if (path.endsWith(`/compare/${A}...${C}?per_page=100`)) return {
+        status: 'ahead', base_commit: { sha: A }, total_commits: truncated ? 101 : 1, commits: [{ sha: C }],
+      };
+      if (path.endsWith(`/commits/${C}`)) return f.snapshot.repair.commits[0];
+      if (path.includes('/compare/')) return { status: 'ahead' };
+      return [];
+    },
+  };
+  const cursor = { getAgent: async () => f.snapshot.agent, getRun: async () => f.snapshot.run };
+  const s = await readSnapshot(github, cursor, f.binding, f.state());
+  assert.deepEqual(s.repair, f.snapshot.repair);
+  assert.ok(requests.some(p => p.endsWith(`/commits/${C}`)));
+  truncated = true; requests.length = 0;
+  const t = await readSnapshot(github, cursor, f.binding, f.state());
+  assert.equal(t.repair.complete, false);
+  assert.equal(requests.some(p => p.includes('/commits/')), false);
 });
 
 test('missing fix and timeout halt the loop', async () => {
