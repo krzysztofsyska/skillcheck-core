@@ -56,3 +56,8 @@ test("SC-012-B plain human approval must not inherit previous correction rows",(
  assert.deepEqual(selectReviewedScreeningGaps({...x,latestHumanDecision:"approved_with_changes",
    overrides:[{criterionId:"task:1",rating:"above"}]}).map(g=>g.criterionId),["task:2","kpi:1"]);
 });
+
+test("SC-012-B approved-with-changes requires actual approved correction rows",()=>{
+ assert.throws(()=>selectReviewedScreeningGaps({...source(),latestHumanDecision:"approved_with_changes",overrides:[]}),
+   ScreeningGapSelectionError);
+});
