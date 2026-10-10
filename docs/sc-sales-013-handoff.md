@@ -50,3 +50,11 @@ Powiązania do firm są tylko metadanymi handlowymi. Nowe RPC nie udostępniają
 - Scheduler retencji i aktywacja formularza/maila pozostają opisane w 006E/F. Ta zmiana ich nie uruchamia.
 - Zamknięte zgłoszenia nie mają ponownego otwarcia. Korekty terminalnych decyzji i polityka retencji dokumentacji umów są osobnym zakresem. Przed produkcyjnym użyciem statusu Wygrane właściciel musi ustalić retencję dokumentacji klienta; automat usuwania przegranych nie usuwa wygranych.
 - Korespondencja pozostaje w skrzynce pomoc@skillcheck.pl; historia panelu nie jest archiwum e-maili. Generator ofert, płatności i powiadomienia poza panelem nie należą do SC-SALES-013.
+
+## Poprawki po przeglądzie — 2026-10-10
+
+- R1: karta montuje formularz ponownie dla pary identyfikator/wersja (oraz wyszukiwania firmy). Pola i expected_version po rewalidacji pochodzą z tego samego odczytu. Konflikt nadal zachowuje niezapisany szkic. Dodano regresję Chromium: drugi operator zapisuje między RPC a odczytem RSC, następny zapis nie przywraca starej notatki.
+- R2: skrzynka kontaktowa prowadzi każde zgłoszenie do karty procesu. Usunięto mylący status „Otrzymane” i stary formularz zakończenia bez umowy; status oraz zakończenie obsługuje karta procesu. Wygrana bez closed_at nie oferuje już błędnej akcji. RPC pozostają zgodne wstecznie.
+- Walidacja lokalna: build (po usunięciu uszkodzonego cache Turbopack), typecheck, 2 testy modułu, 16 testów HTTP/Chromium panelu i skrzynki PASS. Chromium 1280/390 px, syntetyczny backend, bez wysyłki wiadomości i bez zdalnych zmian DB.
+- Ponowny przegląd autora: oba zgłoszone defekty naprawione. To nie jest niezależny review. CI nowego commitu wymaga osobnego potwierdzenia.
+- Zależność PR #64, akceptacja właściciela i osobna zgoda produkcyjna nadal obowiązują. Retencja wygranych pozostaje do ustalenia. Nie wdrożono na produkcję.

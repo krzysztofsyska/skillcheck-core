@@ -9,7 +9,7 @@ const cv='base64-'+Buffer.from(JSON.stringify({access_token:token,refresh_token:
 const headers={Cookie:'sb-127-auth-token='+cv};
 const initial={id,first_name:'Anna testowa',company_name:'Firma syntetyczna',email:'test@example.invalid',phone:null,needs:'<img src=x onerror=alert(1)>',created_at:'2026-10-09T08:00:00Z',stage:'new',note:'',next_contact_on:null,company_id:null,linked_company_name:null,version:0,closed_at:null,total_count:1};
 test('sales panel HTTP access, filtering and browser workflow with synthetic backend', async t=>{
- let operator=true,revoked=false,failure=false,lead={...initial},history=[],requests=[];
+ let operator=true,revoked=false,failure=false,lead={...initial},history=[],requests=[],concurrentWrite=false;
  const stub=createServer(async(req,res)=>{
   const chunks=[];for await(const c of req)chunks.push(c);const input=JSON.parse(Buffer.concat(chunks).toString()||'{}');requests.push({url:req.url,input});res.setHeader('Content-Type','application/json');
   const send=v=>res.end(JSON.stringify(v));
@@ -24,7 +24,13 @@ test('sales panel HTTP access, filtering and browser workflow with synthetic bac
     if(input.expected_version!==lead.version)return send('conflict');
     if(input.new_stage==='won'&&!input.linked_company)return send('company_required');
     lead={...lead,stage:input.new_stage,note:input.new_note,next_contact_on:input.next_contact,company_id:input.linked_company,linked_company_name:input.linked_company?'Firma klienta':null,version:lead.version+1,closed_at:input.new_stage==='lost'?'2026-10-09T09:00:00Z':null};
-    history.unshift({...lead,created_at:'2026-10-09T09:00:00Z'});return send('ok');
+    history.unshift({...lead,created_at:'2026-10-09T09:00:00Z'});
+    if(concurrentWrite){
+     concurrentWrite=false;
+     lead={...lead,version:lead.version+1,note:'Ustalenia drugiego operatora'};
+     history.unshift({...lead,created_at:'2026-10-09T09:01:00Z'});
+    }
+    return send('ok');
    }
   }
   res.statusCode=404;send({});
@@ -61,7 +67,17 @@ test('sales panel HTTP access, filtering and browser workflow with synthetic bac
    await page.getByLabel('Etap sprzedaży').selectOption('conversation');await page.getByLabel('Notatka dla zespołu').fill('Ustalono rozmowę.');await page.getByLabel('Data następnego kontaktu').fill('2026-10-10');
    await page.getByRole('button',{name:'Zapisz zmiany'}).click();await page.getByText('Wersja 1 · Rozmowa',{exact:true}).waitFor();assert.equal(lead.company_id,company);assert.equal(lead.next_contact_on,'2026-10-10');assert.equal(await page.getByLabel('Etap sprzedaży').inputValue(),'conversation');assert.equal(await page.getByLabel('Powiązana firma').inputValue(),company);
    for(const width of [1280,390]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await page.screenshot({path:`/tmp/sc-sales-013-detail-${width}.png`,fullPage:true});}
-   lead.version++;await page.getByLabel('Notatka dla zespołu').fill('Moja niezapisana notatka');await page.getByRole('button',{name:'Zapisz zmiany'}).click();await page.getByRole('status').filter({hasText:'Ktoś zmienił'}).waitFor();assert.equal(await page.getByLabel('Notatka dla zespołu').inputValue(),'Moja niezapisana notatka');assert.equal(lead.note,'Ustalono rozmowę.');
+   // Another operator commits after our save, before the refreshed snapshot is read.
+   concurrentWrite=true;
+   await page.getByLabel('Notatka dla zespołu').fill('Starsza notatka pierwszego operatora');
+   await page.getByRole('button',{name:'Zapisz zmiany'}).click();
+   await page.getByText('Wersja 3 · Rozmowa',{exact:true}).waitFor();
+   assert.equal(await page.locator('input[name="version"]').inputValue(),'3');
+   assert.equal(await page.getByLabel('Notatka dla zespołu').inputValue(),'Ustalenia drugiego operatora');
+   await page.getByRole('button',{name:'Zapisz zmiany'}).click();
+   await page.getByText('Wersja 4 · Rozmowa',{exact:true}).waitFor();
+   assert.equal(lead.note,'Ustalenia drugiego operatora');
+   lead.version++;await page.getByLabel('Notatka dla zespołu').fill('Moja niezapisana notatka');await page.getByRole('button',{name:'Zapisz zmiany'}).click();await page.getByRole('status').filter({hasText:'Ktoś zmienił'}).waitFor();assert.equal(await page.getByLabel('Notatka dla zespołu').inputValue(),'Moja niezapisana notatka');assert.equal(lead.note,'Ustalenia drugiego operatora');
    await page.reload();revoked=true;await page.getByRole('button',{name:'Zapisz zmiany'}).click();await page.getByRole('status').filter({hasText:'Nie udało się zapisać'}).waitFor();revoked=false;
    await page.getByLabel('Etap sprzedaży').selectOption('lost');const before=requests.filter(r=>r.url.endsWith('/save_sales_pipeline')).length;
    await page.getByRole('button',{name:'Zapisz zmiany'}).click();assert.equal(requests.filter(r=>r.url.endsWith('/save_sales_pipeline')).length,before);

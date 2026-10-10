@@ -86,7 +86,7 @@ test('operator leads: authorization, private rendering and errors via HTTP', asy
   });
   await t.test('operator reads fields, bounded RPC and escaped text', async () => {
     const { res, html } = await read(); assert.equal(res.status, 200);
-    for (const value of [fixture.company_name, fixture.first_name, fixture.email, userId, 'Nie podano', 'Otrzymane', 'Europe/Warsaw']) assert.ok(html.includes(value), value);
+    for (const value of [fixture.company_name, fixture.first_name, fixture.email, userId, 'Nie podano', 'Etap sprzedaży i ustalenia', 'Europe/Warsaw']) assert.ok(html.includes(value), value);
     assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
     assert.doesNotMatch(html, /<img src=x/);
     assert.deepEqual(JSON.parse(listCalls().at(-1).body), { result_limit: 50 });
@@ -146,21 +146,11 @@ test('operator leads: authorization, private rendering and errors via HTTP', asy
         assert.deepEqual([...reply.searchParams.keys()], ['subject']);
         await page.screenshot({ path: `/tmp/sc-sales-006d-${width}.png`, fullPage: true });
       }
-      await page.getByText('Zakończ rozmowę bez zawarcia umowy', {exact:true}).click();
-      const beforeClose = requests.filter(r=>r.url==='/rest/v1/rpc/close_sales_lead').length;
-      await page.getByRole('button',{name:'Potwierdź zakończenie'}).click();
-      assert.equal(requests.filter(r=>r.url==='/rest/v1/rpc/close_sales_lead').length,beforeClose);
-      await page.getByRole('checkbox').check();
-      await page.getByRole('button',{name:'Potwierdź zakończenie'}).click();
-      await page.getByText('Zakończone',{exact:true}).waitFor();
-      assert.equal(requests.filter(r=>r.url==='/rest/v1/rpc/close_sales_lead').length,beforeClose+1);
-      assert.ok(await page.getByText(/Usunięcie danych po 6 miesiącach/).isVisible());
-      rows=[fixture]; await page.reload();
-      await page.getByText('Zakończ rozmowę bez zawarcia umowy',{exact:true}).click();
-      await page.getByRole('checkbox').check(); revoked=true;
-      await page.getByRole('button',{name:'Potwierdź zakończenie'}).click();
-      await page.getByRole('status').filter({hasText:'Nie udało się zakończyć zgłoszenia'}).waitFor();
-      assert.equal(rows[0].closed_at,undefined); revoked=false;
+      // A won lead has no closure date. The inbox must not offer the legacy lost action.
+      assert.equal(await page.getByRole('button', {name:'Potwierdź zakończenie'}).count(), 0);
+      assert.equal(await page.getByText('Otrzymane', {exact:true}).count(), 0);
+      assert.equal(await page.getByRole('link', {name:'Etap sprzedaży i ustalenia'}).getAttribute('href'), '/operator/sales/' + fixture.id);
+      assert.equal(requests.filter(r=>r.url==='/rest/v1/rpc/close_sales_lead').length, 0);
       rows = []; await page.getByRole('link', { name: 'Odśwież zgłoszenia' }).click(); await page.getByRole('status').filter({ hasText: 'Nie ma jeszcze zgłoszeń' }).waitFor(); rows = [fixture];
       operator = false; const forbidden = await page.goto(base + '/operator/leads'); assert.equal(forbidden.status(), 404); assert.equal(await page.getByText(fixture.email, { exact: true }).count(), 0); operator = true;
       await context.clearCookies(); await page.goto(base + '/operator/leads'); assert.equal(new URL(page.url()).pathname, '/login');

@@ -44,7 +44,7 @@ export default async function SalesDetail({ params, searchParams }: { params: Pr
         <form method="get" className={styles.filters}><label>Nazwa firmy<input name="company" minLength={2} maxLength={100} defaultValue={search} required /></label><button>Wyszukaj firmy</button></form>
       </details>
       {search && <p role="status">Znaleziono {companies?.length || 0} firm (maksymalnie 20). Wybierz firmę poniżej; przy podobnych nazwach sprawdź identyfikator.</p>}
-      <PipelineForm key={search} lead={lead} companies={companies || []} />
+      <PipelineForm key={`${lead.id}:${lead.version}:${search}`} lead={lead} companies={companies || []} />
     </section>}
     <section className={styles.card}><h2>Historia zmian</h2><p className={styles.hint}>Daty według Europe/Warsaw. Historia pokazuje zapisane wersje ustaleń.</p>
       {!history?.length && <p>Brak wcześniejszych zmian w tym widoku.</p>}
