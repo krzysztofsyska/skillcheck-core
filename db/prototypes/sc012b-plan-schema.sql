@@ -142,3 +142,22 @@ revoke all on table private.voice_plan_current_releases from public, anon, authe
 revoke all on table private.voice_plan_request_keys from public, anon, authenticated;
 
 -- No SECURITY DEFINER RPC is granted here; no data mutation is exposed.
+
+-- Prototype immutability guard: history is append-only even for privileged callers.
+-- A future owner-authorized, narrowly scoped erasure path must be reviewed separately.
+create or replace function private.voice_plan_protect_history()
+returns trigger language plpgsql set search_path = '' as $$
+begin
+  raise exception using errcode='42501',message='VOICE_PLAN_HISTORY_IMMUTABLE';
+end;
+$$;
+revoke all on function private.voice_plan_protect_history() from public, anon, authenticated;
+create trigger voice_plan_versions_immutable
+  before update or delete on public.voice_plan_versions
+  for each row execute function private.voice_plan_protect_history();
+create trigger voice_plan_reviews_immutable
+  before update or delete on private.voice_plan_review_entries
+  for each row execute function private.voice_plan_protect_history();
+create trigger voice_plan_releases_immutable
+  before update or delete on private.voice_plan_release_entries
+  for each row execute function private.voice_plan_protect_history();
