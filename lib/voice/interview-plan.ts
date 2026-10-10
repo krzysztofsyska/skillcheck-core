@@ -54,6 +54,7 @@ const levels: Readonly<Record<string, number>> = Object.freeze({
   Krytyczny: 4, Wysoki: 3, Standardowy: 2, Niski: 1,
 });
 /** OFFLINE-only capability: cloned objects may never assert human review. */
+const generatedInProcess = new WeakSet<object>();
 const reviewedInProcess = new WeakSet<object>();
 const gapQuestionText = Object.freeze({
   task: "Proszę opisać konkretne zadanie, które wykonywał Pan lub wykonywała Pani osobiście, i jego rezultat.",
@@ -135,7 +136,7 @@ export function buildInterviewPlan(input: InterviewSource): InterviewPlan {
     },
     gaps: input.gaps.map(g => ({ criterionId: g.criterionId, kind: g.kind, reason: g.reason })),
   })).digest("hex");
-  return immutable({
+  const generated = immutable({
     schemaVersion: 1, language: "pl-PL", templateVersion: "skillcheck-voice-plan-v1",
     sourceFingerprint, status: "generated", revision: 1,
     durationTargetSeconds: 420, durationMaxSeconds: 600,
@@ -143,6 +144,8 @@ export function buildInterviewPlan(input: InterviewSource): InterviewPlan {
     questions: [...common, ...clarifications],
     reviewerId: null, reviewedAt: null, releasedBy: null, releasedAt: null,
   });
+  generatedInProcess.add(generated);
+  return generated;
 }
 
 /** Domain transition only: NOT a DB authorization or approval of contact. */
@@ -150,7 +153,8 @@ export function reviewInterviewPlan(
   plan: InterviewPlan,
   input: Readonly<{ expectedRevision: 1; expectedSourceFingerprint: string; reviewerId: string; reviewedAt: string }>,
 ): InterviewPlan {
-  if (plan.status !== "generated" || plan.revision !== input.expectedRevision ||
+  if (!generatedInProcess.has(plan) || plan.status !== "generated" ||
+      plan.revision !== input.expectedRevision ||
       plan.sourceFingerprint !== input.expectedSourceFingerprint || !uuid.test(input.reviewerId) ||
       !Number.isFinite(Date.parse(input.reviewedAt)) || new Date(input.reviewedAt).toISOString() !== input.reviewedAt)
     throw new InterviewPlanError("VOICE_PLAN_STALE_OR_CONFLICT");
