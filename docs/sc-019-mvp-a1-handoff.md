@@ -12,6 +12,9 @@ PRODUCT: the existing voicebot, candidate chatbot, AC and subscriptions remain o
 - `tests/sc-019-billing-prototype.test.mjs`: PGlite role/tenant/trial/grant/consume/refund/retry tests.
 - `lib/screening-flow.ts`: recognizes DB status `PT402` and presents a precise upgrade message; does not start provider dispatch on denial.
 - `tests/screening-ui.test.mjs`: checks fail-closed dispatch on PT402.
+- `lib/supabase/database.types.ts`: typed billing RPC contracts for when the database migration is approved.
+- `app/dashboard/[companyId]/billing/page.tsx` and `actions.ts`: owner-only FREE activation form, quota overview and operator-handled PRESELEKCJA order link; server-side `SC19_PACKAGES_ENABLED` defaults OFF.
+- `app/dashboard/[companyId]/page.tsx`: billing link exists only with the server release flag ON.
 - `.github/workflows/checks.yml`: executes isolated tests in standard CI.
 
 ## Security / billing rules
@@ -29,7 +32,7 @@ PRODUCT: the existing voicebot, candidate chatbot, AC and subscriptions remain o
 - After PASS, use **Supabase CLI** `supabase migration new sc019_mvp_credits` to create the real migration file. Transfer reviewed SQL and add immutable migration history. Do not manually fabricate or apply a migration to production.
 - Verify correct SkillCheck Supabase project connection (currently not visible to the connected Supabase account). Verify existing migration history and live worker secrets **presence only**, edge function code, HMAC/DB role.
 - Implement controlled NIP verification/anti-abuse and onboarding UI (per-company FREE activation only once); pilot operator can approve manually. Do not expose private NIP in logs or public responses.
-- Add a full package balance widget, server-side plan access, trial exhaustion/upgrade CTA and manual verified-payment operator flow; no purchase redirect may grant credits.
+- Review and test the feature-gated balance/claim panel with a real authenticated tenant; implement verified-payment operator flow and upgrade CTA; no purchase redirect may grant credits.
 - Secure first live synthetic flow: company registration → verified claim → approved redacted CV → user start → worker processing → human review → SC-008 ranking → SC-009 report → exhausted FREE → verified payment → credits.
 - Complete policy/legal readiness (DPA under GDPR Article 28, privacy info, retention, terms, VAT / invoice handling). State explicitly that AI supports rather than makes hiring decisions.
 - Explicit owner approvals remain required for pricing and production release. No real client data and no real charges in testing.
