@@ -70,3 +70,16 @@ test("SC-012-B rejects jointly truncated mapped criteria and results against tru
  assert.throws(()=>selectReviewedScreeningGaps(truncated,full.criteria),ScreeningGapSelectionError);
  assert.throws(()=>selectReviewedScreeningGaps(full,[]),ScreeningGapSelectionError);
 });
+
+
+test("SC-012-B evidence-only or explanation-only override keeps the original criterion rating",()=>{
+ const x=source();
+ const corrected={...x,latestHumanDecision:"approved_with_changes",
+   overrides:[{criterionId:"task:1",rating:null}]};
+ const gaps=selectReviewedScreeningGaps(corrected,x.criteria);
+ assert.deepEqual(gaps.map(g=>g.criterionId),["task:1","task:2"]);
+ assert.throws(()=>selectReviewedScreeningGaps({...corrected,
+   overrides:[{criterionId:"task:1"}]},x.criteria),ScreeningGapSelectionError);
+ assert.throws(()=>selectReviewedScreeningGaps({...corrected,
+   overrides:[{criterionId:"task:1",rating:"not-reviewed"}]},x.criteria),ScreeningGapSelectionError);
+});
