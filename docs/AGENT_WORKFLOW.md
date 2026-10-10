@@ -111,3 +111,7 @@ Każdy agent kończy pracę blokiem zapisanym w GitHub PR/Issue, nie przekazywan
 - Po akceptacji task trafia do `integration`.
 - Osobny promotion PR i osobna zgoda właściciela poprzedzają produkcję.
 - Szczegóły: [AGENT_PIPELINE.md](AGENT_PIPELINE.md).
+
+SC-OPS-002D dodaje ograniczony adapter istniejących PR-ów Cursor: kontrakt,
+warunki aktywacji i dowód testu opisuje [runbook feedback](sc-ops-002d-feedback.md).
+Test offline nie potwierdza uruchomienia Cursor ani ponownego review w GitHub.

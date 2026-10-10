@@ -163,3 +163,11 @@ Tylko decyzje właściciela, składane w GitHub Environments:
 - PRODUCTION APPROVAL — środowisko `production-approval`
 
 Sekrety, GitHub App, ochrona gałęzi i budżety API są jednorazowym bootstrapem SC-OPS-002C, nie częścią codziennego przeklejania promptów.
+
+## Zewnętrzne PR-y Cursor — SC-OPS-002D
+
+Adapter [feedback](sc-ops-002d-feedback.md) obsługuje jawnie zarejestrowane PR-y
+testów dokumentacyjnych spoza journal kontrolera. Zapisuje najwyżej trzy próby
+poprawek, sprawdza aktualny commit i tożsamość Codexa, prosi o ponowne review.
+Pozostaje wyłączony do bootstrapu i testu usług. Nie zastępuje gate A/B ani CI
+i nie działa równolegle ze starym kontrolerem. READY_FOR_OWNER nie oznacza zgody.
