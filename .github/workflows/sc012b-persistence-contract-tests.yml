@@ -15,6 +15,12 @@ on:
     paths:
       - 'lib/voice/plan-persistence-contract.ts'
       - 'tests/voice-plan-persistence-contract.test.mjs'
+      - 'lib/voice/screening-gap-selection.ts'
+      - 'tests/voice-screening-gap-selection.test.mjs'
+      - '.github/workflows/sc012b-persistence-contract-tests.yml'
+      - 'lib/voice/interview-plan.ts'
+      - 'lib/behavior-guide.ts'
+      - 'lib/position-fields.ts'
 permissions:
   contents: read
 jobs:
