@@ -63,3 +63,52 @@ test("SC-011-A timeout after acceptance is unknown and requires reconciliation",
   assert.equal(before.syntheticCallCount, 0);
   assert.deepEqual(await before.getCallByIdempotencyKey(request().providerIdempotencyKey), { state: "not_found" });
 });
+
+
+test("SC-011-A canonical replay ignores object insertion order across nested fields", async () => {
+  const original = request();
+  const reordered = {
+    scenario: {
+      constraints: { prohibitedTopics: ["zdrowie"], maxSeconds: 600 },
+      questions: [{ followUps: [], prompt: "Proszę opisać sytuację zawodową.", id: "common-responsibility" }],
+      introductionVersion: "notice-v001", language: "pl-PL", schemaVersion: 1,
+    },
+    callTimeoutSeconds: 600, recordingAllowed: false,
+    providerIdempotencyKey: original.providerIdempotencyKey,
+    publishedAssistantVersion: original.publishedAssistantVersion,
+    destinationE164: original.destinationE164,
+    externalCorrelationId: original.externalCorrelationId,
+  };
+  const fake = new FakeVoiceProvider();
+  const first = await fake.initiateOutbound(original);
+  assert.deepEqual(await fake.initiateOutbound(reordered), first);
+  assert.equal(fake.syntheticCallCount, 1);
+});
+
+test("SC-011-A rejects coerced identifier types and unexpected PII at every depth", () => {
+  const r = request();
+  for (const bad of [
+    { ...r, providerIdempotencyKey: [r.providerIdempotencyKey] },
+    { ...r, destinationE164: [r.destinationE164] },
+    { ...r, externalCorrelationId: [r.externalCorrelationId] },
+    { ...r, anotherPhone: "+48666123456" },
+    { ...r, scenario: { ...r.scenario, rawCv: "PRIVATE" } },
+    { ...r, scenario: { ...r.scenario, constraints: { ...r.scenario.constraints, modelInstructions: "secret" } } },
+    { ...r, scenario: { ...r.scenario, questions: [{ ...r.scenario.questions[0], candidateName: "PII" }] } },
+  ]) assert.throws(() => validateVoiceCallRequest(bad), VoiceProviderValidationError);
+});
+
+test("SC-011-A sparse arrays and non-index properties cannot enter provider payload", () => {
+  const r = request();
+  const prohibitedTopics = new Array(1);
+  const followUps = new Array(1);
+  const sparseQuestions = new Array(1);
+  const attached = [];
+  attached.extra = "secret";
+  for (const bad of [
+    { ...r, scenario: { ...r.scenario, constraints: { ...r.scenario.constraints, prohibitedTopics } } },
+    { ...r, scenario: { ...r.scenario, questions: [{ ...r.scenario.questions[0], followUps }] } },
+    { ...r, scenario: { ...r.scenario, questions: sparseQuestions } },
+    { ...r, scenario: { ...r.scenario, questions: [{ ...r.scenario.questions[0], followUps: attached }] } },
+  ]) assert.throws(() => validateVoiceCallRequest(bad), VoiceProviderValidationError);
+});
