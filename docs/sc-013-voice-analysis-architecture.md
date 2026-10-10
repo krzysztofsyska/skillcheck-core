@@ -197,3 +197,11 @@ This section supersedes V3.7 and V4.B to the extent those sections imply replaci
 3. **Report guard.** A report may expose the effective result ONLY if interview current-pointer, source hash, latest immutable human review and allowed approval decision all match. Neither completed nor mere review presence is authorization.
 
 STATUS: PR #77 remains architecture review, not independent PASS. No migrations, DB mutation, provider/API call, or deployment.
+
+## V6 — exact CAS of effective-current pointer (normative)
+
+A row lock serializes concurrent approvals but does not by itself prevent an older same-source analysis from replacing a more recent approved successor. Extend review_voice_analysis with expected_current_pointer_version and expected_current_analysis_id (nullable only when no current exists). These values are *expectations*, never authority; the RPC reads the current pointer for the same tenant and interview under lock, compares both fields, and fails closed with conflict if either changed. Additionally, require monotonic increasing analysis_version at promotion: no analysis may replace another effective-current analysis with a greater or equal version even when caller refreshes its pointer expectation. The source fingerprint must match exact frozen transcript, approved plan, rubric and permission revision. Promote successor and supersede predecessor in the same transaction after human approval only. A fresh read, re-review or explicit resolution is required after conflict; never automatically retry stale promotion with a newer pointer expectation.
+
+Tests: two differently versioned successors approved in both transaction orders, stale expected_current_pointer_version/ID, higher-version first then older approval, same-version duplicate and source invalidation. Exactly one effective current result, no resurrection of superseded analysis.
+
+STATUS: ARCHITECTURE_REVIEW awaiting independent PASS, no SQL/production change.
