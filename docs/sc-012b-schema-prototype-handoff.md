@@ -30,3 +30,11 @@ No RLS grants, end-user UI route, provider API or contact dispatch are delivered
 - CI `SC012B isolated schema prototype` runs both PGlite security tests and PostgreSQL 16 two-session tests, without a paid Supabase branch or remote data mutation.
 
 STATUS: module real-PG test PASS on head 9fe406809ea28f06143b3baa46c846b9e38d6464; full Checks and fresh independent review are separate gates. This remains a prototype (NOT `supabase/migrations`), with no production approval.
+
+## October 10 — correction lineage and single-winner race (test-only)
+
+- Plan versions now carry nullable paired `supersedes_plan_id` + `corrects_review_id`. The correction review is composite-FK-bound to the predecessor plan **and the same company/application**. The authoritative future RPC must still derive the predecessor from locked current history and reject a skipped rejected review.
+- Human review and release entries explicitly carry `application_id`, with composite keys. The application-scoped current pointer references the exact release tuple, preventing same-company other-application release substitution.
+- `tests/helpers/sc012b-release-cas-test-only.sql` contains an isolated, **non-deployable, SECURITY INVOKER** test helper with a transaction-scoped advisory lock and expected-pointer CAS. It has no grants for anonymous or authenticated roles and is not in Supabase migrations. It does not authenticate a user, validate full source freshness or satisfy the production RPC contract.
+- `tests/voice-plan-schema-concurrency.test.mjs` tests two concurrent callers with the same expected version and asserts one success, one PT409 and **exactly one appended release history row**. Also checks cross-application FK rejection. This test must pass in PostgreSQL 16 before claiming acceptance.
+- Pending work: immutable lineage rules tied to latest review, source/role revalidation and lock graph; trusted template catalog; real authenticated PostgREST RPC; retention and purge, isolated Supabase migration; full security review. Production remains untouched.
