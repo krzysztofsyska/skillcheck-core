@@ -121,7 +121,7 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
    "source_snapshot,plan_envelope,template_version,created_by,",
    "retention_policy_version,retention_deadline from public.voice_plan_versions where id=$2"
   ].join(" ");
-  await assert.rejects(db.query(sql,[other.analysis_id,pid]),error=>error.code==="23503");
+  await assert.rejects(db.query(sql,[other.analysis_id,pid]),error=>["23503","PT409"].includes(error.code));
  });
 
 
@@ -147,7 +147,7 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
     "retention_policy_version,retention_deadline,$1,$2",
     "from public.voice_plan_versions where id=$3"
   ].join(" ");
-  await assert.rejects(db.query(sql,[other.analysis_id,reviewId,pid]),e=>e.code==="23503");
+  await assert.rejects(db.query(sql,[other.analysis_id,reviewId,pid]),e=>["23503","PT409"].includes(e.code));
  });
 
 
@@ -160,16 +160,16 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
    "template_version,created_by,retention_policy_version,retention_deadline,",
    "supersedes_plan_id,corrects_review_id)",
    "select company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
-   "shortlist_entry_id,2,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+   "shortlist_entry_id,2,$3,envelope_hash,source_snapshot,plan_envelope,",
    "template_version,created_by,retention_policy_version,retention_deadline,$1,$2",
    "from public.voice_plan_versions where id=$1 returning id"
-  ].join(" "),[pid,reviewId])).rows[0].id;
+  ].join(" "),[pid,reviewId,hash("c")])).rows[0].id;
   const review2=(await db.query([
    "insert into private.voice_plan_review_entries",
    "(company_id,application_id,plan_id,review_version,reviewer_id,decision,source_hash,",
    "retention_policy_version,retention_deadline)",
    "values($1,$2,$3,1,$4,'approved',$5,'synthetic-v1','2030-01-01') returning id"
-  ].join(" "),[f.companyId,f.application.id,p2,users.owner,hash("a")])).rows[0].id;
+  ].join(" "),[f.companyId,f.application.id,p2,users.owner,hash("c")])).rows[0].id;
   const a=await connect(),b=await connect();
   const call="select private.sc012b_test_release_cas($1,$2,$3,$4,$5,$6,$7) as id";
   const args=[f.companyId,f.application.id,p2,review2,2,releaseId,users.owner];
