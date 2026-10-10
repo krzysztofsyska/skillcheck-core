@@ -106,4 +106,21 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
    JSON.stringify({}),JSON.stringify(envelope),users.owner];
   await assert.rejects(db.query(insertPlan,args),e=>e.code==="23503");
  });
+
+ await t.test("same tenant but another application analysis cannot be attached to a voice plan",async()=>{
+  const other=await h.completedApplication(await h.candidate(f),Array(5).fill("meets"));
+  await h.asAdmin();
+  const sql=[
+   "insert into public.voice_plan_versions",
+   "(company_id,recruitment_id,application_id,position_id,analysis_id,",
+   "screening_review_id,shortlist_entry_id,plan_version,source_hash,envelope_hash,",
+   "source_snapshot,plan_envelope,template_version,created_by,retention_policy_version,retention_deadline)",
+   "select company_id,recruitment_id,application_id,position_id,$1,",
+   "screening_review_id,shortlist_entry_id,77,source_hash,envelope_hash,",
+   "source_snapshot,plan_envelope,template_version,created_by,",
+   "retention_policy_version,retention_deadline from public.voice_plan_versions where id=$2"
+  ].join(" ");
+  await assert.rejects(db.query(sql,[other.analysis_id,pid]),error=>error.code==="23503");
+ });
+
 });
