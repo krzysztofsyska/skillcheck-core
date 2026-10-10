@@ -1,0 +1,54 @@
+name: SC012B isolated schema prototype
+on:
+  pull_request:
+    paths:
+      - 'db/prototypes/sc012b-plan-schema.sql'
+      - 'tests/voice-plan-schema-prototype.test.mjs'
+      - 'tests/voice-plan-schema-concurrency.test.mjs'
+      - 'tests/helpers/sc012b-release-cas-test-only.sql'
+      - 'tests/helpers/screening-ranking-fixture.mjs'
+      - 'supabase/migrations/**'
+      - '.github/workflows/sc012b-schema-prototype.yml'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'db/prototypes/sc012b-plan-schema.sql'
+      - 'tests/voice-plan-schema-prototype.test.mjs'
+      - 'tests/voice-plan-schema-concurrency.test.mjs'
+      - 'tests/helpers/sc012b-release-cas-test-only.sql'
+      - 'tests/helpers/screening-ranking-fixture.mjs'
+      - 'supabase/migrations/**'
+      - '.github/workflows/sc012b-schema-prototype.yml'
+      - 'package.json'
+      - 'package-lock.json'
+permissions:
+  contents: read
+jobs:
+  isolated:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: node --test tests/voice-plan-schema-prototype.test.mjs
+      - run: node --test tests/voice-plan-schema-concurrency.test.mjs
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
