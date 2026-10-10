@@ -58,7 +58,8 @@ type ExpectedTables =
   | "candidate_contact_permissions"
   | "candidate_contact_preferences"
   | "candidate_communications"
-  | "candidate_communication_events";
+  | "candidate_communication_events"
+  | "candidate_communication_approvals";
 type ExpectedViews =
   | "latest_behavior_assessments"
   | "latest_exercise_definitions"
@@ -95,7 +96,9 @@ type ExpectedFunctions =
   | "cancel_candidate_communication"
   | "get_candidate_communications"
   | "get_candidate_communication_history"
-  | "save_sales_pipeline" | "list_sales_pipeline" | "sales_pipeline_history" | "find_sales_companies";
+  | "save_sales_pipeline" | "list_sales_pipeline" | "sales_pipeline_history" | "find_sales_companies"
+  | "approve_candidate_communication"
+  | "get_communication_approval_status";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -473,3 +476,9 @@ type _CommunicationInsert = Expect<Equal<Insert<"candidate_communications">, nev
 type _CommunicationUpdate = Expect<Equal<Update<"candidate_communications">, never>>;
 type _CommunicationEventUpdate = Expect<Equal<Update<"candidate_communication_events">, never>>;
 type _CommunicationNoTenantInput = Expect<Equal<Extract<keyof Database["public"]["Functions"]["prepare_candidate_communication"]["Args"], "company_id" | "actor_id" | "destination">, never>>;
+
+// SC-010 B2 public surface exposes metadata only; proof minting remains private.
+type _ApprovalInsert = Expect<Equal<Insert<"candidate_communication_approvals">, never>>;
+type _ApprovalUpdate = Expect<Equal<Update<"candidate_communication_approvals">, never>>;
+type _NoVerificationMint = Expect<Equal<Extract<FunctionName, "ingest_verified_contact_receipt">, never>>;
+type _ApprovalNoPrivateInput = Expect<Equal<Extract<keyof Database["public"]["Functions"]["approve_candidate_communication"]["Args"], "company_id" | "actor_id" | "destination" | "policy_version">, never>>;

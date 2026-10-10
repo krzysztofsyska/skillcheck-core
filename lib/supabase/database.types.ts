@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261009105025.
+// Public API contract after migrations 20260930000100 through 20261009141836.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -76,6 +76,12 @@ export type CandidateCommunicationEvent = {
   id: string; company_id: string; communication_id: string; actor_id: string; created_at: string;
   event_type: "draft_created" | "cancelled" | "permission_denied" | "preferences_changed";
 };
+export type CandidateCommunicationApproval = {
+  id: string; company_id: string; communication_id: string; communication_version: number;
+  receipt_id: string; contact_version: number; shortlist_entry_id: string; analysis_id: string;
+  review_id: string; ranking_policy_version: string; approved_by: string; approved_at: string;
+};
+export type CommunicationApprovalStatus = { approval_id: string | null; is_current: boolean; reason: string };
 export type Candidate = Entity & { first_name: string; last_name: string; email: string | null; phone: string | null };
 export type Application = Entity & {
   recruitment_id: string; candidate_id: string;
@@ -207,6 +213,7 @@ export type Database = {
     Tables: {
       candidate_contact_permissions: { Row: ContactPermission; Insert: never; Update: never; Relationships: [] };
       candidate_contact_preferences: { Row: ContactPreferences; Insert: never; Update: never; Relationships: [] };
+      candidate_communication_approvals: { Row: CandidateCommunicationApproval; Insert: never; Update: never; Relationships: [] };
       candidate_communications: { Row: CandidateCommunication; Insert: never; Update: never; Relationships: [] };
       candidate_communication_events: { Row: CandidateCommunicationEvent; Insert: never; Update: never; Relationships: [] };
       recruitment_shortlist_entries: {
@@ -377,6 +384,14 @@ export type Database = {
       list_sales_pipeline: { Args: { stage_filter?: string; due_filter?: string; page_offset?: number; target_lead?: string }; Returns: SalesPipelineRow[] };
       sales_pipeline_history: { Args: { target_lead: string; before_version?: number }; Returns: Pick<SalesPipelineRow, 'version' | 'stage' | 'note' | 'next_contact_on' | 'company_id' | 'created_at'>[] };
       find_sales_companies: { Args: { search_text: string }; Returns: { id: string; name: string }[] };
+      approve_candidate_communication: {
+        Args: { target_communication: string; expected_version: number; receipt_id: string; request_key: string };
+        Returns: string;
+      };
+      get_communication_approval_status: {
+        Args: { target_communication: string };
+        Returns: CommunicationApprovalStatus[];
+      };
       record_contact_permission: {
         Args: { target_candidate: string; target_recruitment: string | null; contact_channel: ContactChannel;
           permission_state: ContactPermission["state"]; evidence_ref: string | null; expected_revision: number; request_key: string };
