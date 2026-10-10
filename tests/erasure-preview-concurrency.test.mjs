@@ -54,4 +54,14 @@ test('SC-010 R1 real PostgreSQL CAS and read-only manifest consistency',async t=
   const during=await b.preview(f,'confirmed_subject',resolution);assert.equal(during.manifest_hash,before.manifest_hash);
   await a.db.query('commit');const after=await b.preview(f,'confirmed_subject',resolution);assert.notEqual(after.manifest_hash,before.manifest_hash);assert.ok(after.blockers.includes('subject_resolution_changed'));assert.equal(after.policy_revision,2);
  });
+ await t.test('independent session timezones produce one manifest for identical committed data',async()=>{
+  const f=await h.seed(),a=await session(),b=await session();await e.policy(f);const resolution=await e.resolve(f);
+  await a.db.query("set timezone='Europe/Warsaw'");await b.db.query("set timezone='America/Los_Angeles';set datestyle='SQL, DMY'");
+  const left=await a.preview(f,'confirmed_subject',resolution),right=await b.preview(f,'confirmed_subject',resolution);
+  assert.equal(left.manifest_hash,right.manifest_hash);assert.deepEqual(left.counts,right.counts);
+  await a.db.query('update public.candidates set email=$1 where id=$2',['changed-across-timezones@example.test',f.candidate.id]);
+  const changedLeft=await a.preview(f,'confirmed_subject',resolution),changedRight=await b.preview(f,'confirmed_subject',resolution);
+  assert.notEqual(changedLeft.manifest_hash,left.manifest_hash);assert.equal(changedLeft.manifest_hash,changedRight.manifest_hash);
+ });
+
 });

@@ -75,6 +75,19 @@ test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async 
   await e.policy(f,1,[{...retentionRules[0],duration_days:40}]);next=await e.preview(f,'confirmed_subject',resolution);assert.notEqual(next.manifest_hash,prior.manifest_hash);prior=next;
   resolution=await e.resolve(f,[f.candidate.id],1);next=await e.preview(f,'confirmed_subject',resolution);assert.notEqual(next.manifest_hash,prior.manifest_hash);
  });
+ await t.test('session timezone never changes a manifest but content edits still invalidate it',async()=>{
+  const f=await h.seed();await e.policy(f);const resolution=await e.resolve(f);
+  await db.exec("set timezone='UTC'");const baseline=await e.preview(f,'confirmed_subject',resolution);
+  try{
+   await db.exec("set datestyle='SQL, DMY'");
+   for(const zone of ['Europe/Warsaw','America/Los_Angeles','Asia/Kolkata']){
+    await db.query("select set_config('TimeZone',$1,false)",[zone]);
+    const p=await e.preview(f,'confirmed_subject',resolution);assert.equal(p.manifest_hash,baseline.manifest_hash,zone);assert.deepEqual(p.counts,baseline.counts);
+   }
+   await db.query('update public.candidates set email=$1 where id=$2',['timezone-change@example.test',f.candidate.id]);
+   assert.notEqual((await e.preview(f,'confirmed_subject',resolution)).manifest_hash,baseline.manifest_hash);
+  }finally{await db.exec("set timezone='UTC';set datestyle='ISO, YMD'");}
+ });
  await t.test('new table, column and external-schema incoming FK fail closed and affect schema manifest',async()=>{
   const f=await h.seed(),baseline=await e.preview(f);
   for(const ddl of ["create table public.unmapped_candidate_payload(id uuid,payload jsonb)","alter table public.candidates add column private_extra text", "create schema extra;create table extra.unmapped(candidate_id uuid references public.candidates(id))"]){

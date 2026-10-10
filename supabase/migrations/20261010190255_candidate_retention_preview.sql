@@ -33,7 +33,7 @@ create function private.erasure_hash(value jsonb) returns text language sql immu
 $$;
 
 -- Includes new tables/columns and incoming FKs from ANY schema; OIDs are not portable.
-create function private.erasure_schema_signature() returns text language sql stable security definer set search_path='' as $$
+create function private.erasure_schema_signature() returns text language sql stable security definer set search_path='' set timezone='UTC' set datestyle='ISO, YMD' as $$
  with tracked as (select c.oid,n.nspname,c.relname,c.relkind,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace
  where n.nspname in ('public','private') and c.relkind in ('r','p','v','m','f')),
  objects as (
@@ -177,8 +177,9 @@ begin
 end;$$;
 
 -- Fixed adapters only; row content is used internally for the digest and never returned.
+-- Function-local UTC/ISO rendering prevents caller session settings from changing a manifest.
 create function private.erasure_inventory_rows(tenant uuid,subjects uuid[])
-returns table(adapter text,row_key text,row_data jsonb) language sql stable security definer set search_path='' as $$
+returns table(adapter text,row_key text,row_data jsonb) language sql stable security definer set search_path='' set timezone='UTC' set datestyle='ISO, YMD' as $$
  with apps as (select id from public.applications where company_id=tenant and candidate_id=any(subjects)),
  docs as(select id from public.candidate_documents where company_id=tenant and candidate_id=any(subjects)),
  analyses as(select id from public.screening_analysis_versions where company_id=tenant and (application_id in(select id from apps) or candidate_document_id in(select id from docs))),
@@ -233,7 +234,7 @@ returns table(adapter text,row_key text,row_data jsonb) language sql stable secu
 $$;
 
 create function public.preview_candidate_erasure(target_candidate uuid,scope_kind text default 'candidate_record',resolution_id uuid default null)
-returns jsonb language plpgsql stable security definer set search_path='' as $$
+returns jsonb language plpgsql stable security definer set search_path='' set timezone='UTC' set datestyle='ISO, YMD' as $$
 declare tenant uuid;subjects uuid[];p private.candidate_retention_policies;r private.erasure_subject_resolutions;
  baseline private.erasure_inventory_baseline;signature text;counts jsonb:='{}';manifest text;row_digest jsonb:='[]';
  blockers text[]:=array['execution_not_implemented','external_inventory_unverified','backup_policy_unverified'];generated timestamptz:=statement_timestamp();
