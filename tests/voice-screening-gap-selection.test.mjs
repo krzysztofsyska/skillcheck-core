@@ -18,6 +18,7 @@ test("SC-012-B selects two gaps in task/kpi/competency and numeric index order",
 });
 test("SC-012-B human approved override replaces only matching criterion rating",()=>{
  let s=source();
+ s.latestHumanDecision="approved_with_changes";
  s.overrides=[{criterionId:"task:1",rating:"meets"}];
  assert.deepEqual(selectReviewedScreeningGaps(s),[
    {criterionId:"task:2",kind:"task",reason:"missing_evidence"},
