@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261009141836.
+// Public API contract after migrations 20260930000100 through 20261010190255.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -56,6 +56,21 @@ export type Position = Entity & {
 export type Recruitment = Entity & {
   position_id: string; name: string; status: "draft" | "open" | "paused" | "closed";
   opened_at: string | null; closed_at: string | null;
+};
+export type CandidateRetentionRule = {
+  data_class: 'candidate' | 'assessment' | 'screening' | 'communication' | 'audit' | 'external' | 'backup' | 'exports';
+  trigger_event: 'record_created' | 'process_closed' | 'consent_revoked';
+  duration_days: number; hold_review_days: number;
+};
+export type CandidateRetentionPolicy = {
+  id: string | null; revision: number; rules: CandidateRetentionRule[];
+  configured: boolean; owner_current: boolean; execution_enabled: false;
+};
+export type ErasureSubjectResolution = { id: string | null; revision: number; candidate_ids: string[]; owner_current: boolean };
+export type CandidateErasurePreview = {
+  scope_kind: 'candidate_record' | 'confirmed_subject'; candidate_count: number;
+  counts: Record<string, number>; blockers: string[]; policy_revision: number; resolution_revision: number;
+  manifest_hash: string; schema_signature: string; generated_at: string; expires_at: string; execution_enabled: false;
 };
 export type ContactChannel = "email" | "sms" | "voice";
 export type ContactPermission = Entity & {
@@ -380,6 +395,20 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      configure_candidate_retention_policy: {
+        Args: { target_company: string; expected_revision: number; policy_rules: CandidateRetentionRule[]; request_key: string };
+        Returns: string;
+      };
+      get_candidate_retention_policy: { Args: { target_company: string }; Returns: CandidateRetentionPolicy };
+      confirm_erasure_subject: {
+        Args: { target_candidate: string; candidate_ids: string[]; expected_revision: number; request_key: string };
+        Returns: string;
+      };
+      get_erasure_subject_resolution: { Args: { target_candidate: string }; Returns: ErasureSubjectResolution };
+      preview_candidate_erasure: {
+        Args: { target_candidate: string; scope_kind?: 'candidate_record' | 'confirmed_subject'; resolution_id?: string | null };
+        Returns: CandidateErasurePreview;
+      };
       save_sales_pipeline: { Args: { target_lead: string; expected_version: number; new_stage: string; new_note: string; next_contact: string | null; linked_company: string | null }; Returns: string };
       list_sales_pipeline: { Args: { stage_filter?: string; due_filter?: string; page_offset?: number; target_lead?: string }; Returns: SalesPipelineRow[] };
       sales_pipeline_history: { Args: { target_lead: string; before_version?: number }; Returns: Pick<SalesPipelineRow, 'version' | 'stage' | 'note' | 'next_contact_on' | 'company_id' | 'created_at'>[] };
