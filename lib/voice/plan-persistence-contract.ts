@@ -4,6 +4,7 @@
  * Future RPC must derive tenant/actor/source from authenticated DB session.
  */
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { buildInterviewPlan, type InterviewSource } from "./interview-plan.ts";
 import { behaviorGuideDefinitions } from "../behavior-guide.ts";
 
@@ -207,8 +208,10 @@ export function planWriteFingerprint(
   // NOT pass browser-supplied trustedSource or trustedBinding.
   if (!trustedSource || !trustedBinding) invalid();
   const expected=createVoicePlanWriteSnapshot(trustedSource,trustedBinding);
-  if (JSON.stringify(p)!==JSON.stringify(expected)) invalid();
-  const recomputedContractHash=hash({plan:p.templateVersion,questions:p.questions});
+  // JSONB and object mappers can reorder keys: compare structure, not insertion order.
+  // Use the regenerated trusted canonical envelope for hashing.
+  if (!isDeepStrictEqual(p,expected)) invalid();
+  const recomputedContractHash=expected.planContractHash;
   if (recomputedContractHash!==p.planContractHash) invalid();
   return hash({
     contract:p.storageContractVersion,source:p.sourceHash,content:recomputedContractHash,
