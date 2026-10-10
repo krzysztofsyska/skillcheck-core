@@ -58,4 +58,12 @@ test('SC-010 R3 actual PostgreSQL request, ACK and purge serialization',async t=
   await assert.rejects(isolated.query('set role erasure_purge_owner'),error=>error.code==='42501');
  });
 
+ await t.test('erasing reservation excludes a concurrent policy change through ledger acknowledgment',async()=>{
+  const f=await x.ready(),state=await x.freeze(f),a=await session(),b=await session();await x.transition(state.request_id,0,'authorized');
+  await b.h.asUser(f.owner);const policy=await b.getPolicy(f),rules=policy.rules.map(rule=>({...rule,duration_days:rule.duration_days+1}));
+  await a.db.query('begin');const reserved=await a.reserve(state.request_id,1,'erasing');
+  await conflict(b.policy(f,policy.revision,rules));await a.db.query('commit');await conflict(b.policy(f,policy.revision,rules));
+  await x.ack(reserved);await x.purge(state.request_id,2);
+ });
+
 });

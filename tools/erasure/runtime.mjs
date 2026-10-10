@@ -25,6 +25,9 @@ export async function replayVerifiedLedger({records,checkpoint,challenge,ledgerI
  const latest=new Map();for(const item of verified)latest.set(item.receipt.request_id,item);
  const replay=verified.filter(item=>latest.get(item.receipt.request_id)===item);
  const db=await connect();try{
+  // Expired envelopes are deliberately NOT filtered. The isolated SQL ingress
+  // must prove exact scope absence or reject; age alone never permits skipping,
+  // purging, unfreezing, or discarding irreversible tombstones.
   const results=[];for(const {envelopeText,receipt} of replay){
    results.push((await db.query('select private.replay_erasure_envelope($1::text,$2::text,$3::bigint,$4::text) result',[envelopeText,receipt.event_hash,checkpoint.sequence,checkpoint.head_hash])).rows[0].result);
   }return {replayed:replay.length,verifiedEvents:verified.length,checkpoint:checkpoint.head_hash,checkpointReceipt:checkpoint.event_hash,results};

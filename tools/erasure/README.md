@@ -69,3 +69,18 @@ Tests:
 - `node --test tests/erasure-ledger.test.mjs` (PGlite persistence + crypto/runtime)
 - `node --test tests/erasure-ledger-concurrency.test.mjs` (real PostgreSQL,
   `SCREENING_TEST_DATABASE_URL`, creates and drops its own synthetic database)
+
+Expired recovery envelopes are never filtered in the Node runtime. They undergo
+full signature/history verification and reach the isolated SQL ingress just like
+current envelopes. For expired pending authorizations or irreversible phases,
+only that ingress can prove the exact signed scope is already absent from all
+reviewed operational and R1/R2 adapters (including holds and typed JSON). Any
+remaining scope or unknown adapter blocks those recoveries. Expired cancellation
+is handled separately: the signed terminal cancellation remains authoritative and
+can reconcile only its own request, including a live candidate. Expiry itself
+never authorizes a purge, releases a freeze, changes a phase, or removes retired
+IDs. Absent irreversible scopes preserve/install retired IDs with the original
+finite retain_until. Their enforcement deliberately does not expire, and no
+automatic tombstone garbage collection is implemented; removal requires a
+separately reviewed pruning protocol. A recent clean restore can acknowledge old
+absent scopes while an old backup containing their erased data remains isolated.

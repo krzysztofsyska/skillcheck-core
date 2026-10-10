@@ -75,3 +75,20 @@ test('SC010 R3 independent encrypted ledger and crash-safe signed attestation',a
   const result=await replayVerifiedLedger({...c,connect});assert.equal(result.verifiedEvents,c.records.length);assert.equal(result.replayed,new Set(c.records.map(r=>r.receipt.request_id)).size);assert.equal(connections,1);
  });
 });
+
+
+test('expired envelopes require the same verified SQL scope proof; runtime never skips aged phases',async t=>{
+ const h=await harness();t.after(()=>h.db.close());const expected=[];
+ for(const phase of ['authorized','cancelled','erasing','active_data_erased']){
+  let e={...syntheticEnvelope(),authorized_at:'2010-01-01T00:00:00Z',retention_until:'2011-01-01T00:00:00Z'},receipt=await h.append(reservation(e));
+  const path=phase==='authorized'?[]:phase==='cancelled'?['cancelled']:phase==='erasing'?['erasing']:['erasing','active_data_erased'];
+  for(const step of path){e=next(e,receipt,step);receipt=await h.append(reservation(e));}
+  expected.push({request_id:e.request_id,phase});
+ }
+ const c=await h.coverage(),seen=[];
+ const connect=async()=>({query:async(_sql,args)=>{const e=JSON.parse(args[0]);assert.ok(Date.parse(e.retention_until)<Date.now());seen.push({request_id:e.request_id,phase:e.phase});return {rows:[{result:{phase:e.phase,scope_absent:true,expired_noop:true,restore_isolated:true}}]};},end:async()=>{}});
+ const result=await replayVerifiedLedger({...c,connect});assert.equal(result.verifiedEvents,8);assert.equal(result.replayed,4);assert.deepEqual(seen,expected);
+ let calls=0;const rejected=Object.assign(new Error('Expired recovery scope still present'),{code:'PT409'});
+ await assert.rejects(replayVerifiedLedger({...c,connect:async()=>({query:async()=>{calls++;throw rejected;},end:async()=>{}})}),error=>error===rejected);assert.equal(calls,1);
+ let opened=0;await assert.rejects(replayVerifiedLedger({...c,records:c.records.slice(1),connect:async()=>{opened++;throw new Error('Must not connect');}}));assert.equal(opened,0);
+});

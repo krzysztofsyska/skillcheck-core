@@ -70,7 +70,7 @@ end;$$;
 
 create function private.reserve_erasure_transition(target_request uuid,expected_sequence bigint,target_phase text,request_key uuid) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
-declare e private.erasure_executions;r private.erasure_requests;c private.erasure_execution_config;p private.candidate_retention_policies;inventory jsonb;
+declare e private.erasure_executions;r private.erasure_requests;c private.erasure_execution_config;p private.candidate_retention_policies;resolution private.erasure_subject_resolutions;inventory jsonb;
 begin
  if current_setting('transaction_isolation') not in ('read committed','read uncommitted') then raise exception using errcode='PT409',message='Fresh transaction required';end if;
  c:=private.erasure_execution_gate(false);
@@ -87,6 +87,10 @@ begin
   if r.status<>'authorized' then raise exception using errcode='PT409',message='Erasure request changed';end if;
   select * into p from private.candidate_retention_policies where company_id=r.company_id order by revision desc limit 1;
   if p.revision is distinct from r.policy_revision or p.approved_by is distinct from r.actor_id or jsonb_array_length(p.rules)<>8 then raise exception using errcode='PT409',message='Retention policy changed';end if;
+  if r.scope_kind='confirmed_subject' then
+   select * into resolution from private.erasure_subject_resolutions where company_id=r.company_id and anchor_candidate_id=r.anchor_candidate_id order by revision desc limit 1;
+   if resolution.revision is distinct from r.resolution_revision or resolution.candidate_ids is distinct from r.candidate_ids or resolution.confirmed_by is distinct from r.actor_id then raise exception using errcode='PT409',message='Subject resolution changed';end if;
+  end if;
   if exists(select 1 from unnest(r.candidate_ids) s(id) left join private.erasure_candidate_lifecycle l on l.candidate_id=s.id where l.status is distinct from 'frozen' or l.request_id is distinct from r.id) then raise exception using errcode='PT409',message='Lifecycle changed';end if;
   insert into private.erasure_executions(request_id,company_id,candidate_ids,scope_kind,owner_id,policy_copy,resolution_revision,generation,phase,recovery_retain_until)
   values(r.id,r.company_id,r.candidate_ids,r.scope_kind,r.actor_id,jsonb_build_object('revision',p.revision,'rules',p.rules),r.resolution_revision,r.generation,'authorized',clock_timestamp()+make_interval(days=>greatest(c.backup_horizon_days,c.artifact_horizon_days)+c.retention_margin_days));
@@ -100,6 +104,11 @@ begin
   if not found then raise exception using errcode='PT409',message='Owner changed';end if;
   select * into p from private.candidate_retention_policies where company_id=e.company_id order by revision desc limit 1;
   if jsonb_build_object('revision',p.revision,'rules',p.rules) is distinct from e.policy_copy or p.approved_by is distinct from e.owner_id then raise exception using errcode='PT409',message='Retention policy changed';end if;
+  if e.scope_kind='confirmed_subject' then
+   select * into r from private.erasure_requests where id=target_request;
+   select * into resolution from private.erasure_subject_resolutions where company_id=e.company_id and anchor_candidate_id=r.anchor_candidate_id order by revision desc limit 1;
+   if resolution.revision is distinct from e.resolution_revision or resolution.candidate_ids is distinct from e.candidate_ids or resolution.confirmed_by is distinct from e.owner_id then raise exception using errcode='PT409',message='Subject resolution changed';end if;
+  end if;
  end if;
  if target_phase='erasing' and exists(select 1 from private.erasure_holds where request_id=target_request and released_at is null) then raise exception using errcode='PT409',message='Erasure hold requires review';end if;
  if target_phase='erasing' and e.reservation_id is null then
@@ -198,7 +207,7 @@ exception when lock_not_available then raise exception using errcode='PT409',mes
 -- complete stream coverage and the authoritative global checkpoint outside the restored DB.
 create function private.replay_erasure_envelope(envelope_text text,event_hash text,checkpoint_sequence bigint,checkpoint_hash text) returns jsonb
 language plpgsql volatile security definer set search_path='' as $$
-declare value jsonb;tenant uuid;request uuid;subjects uuid[];e private.erasure_executions;cp private.erasure_restore_checkpoint;inventory jsonb;seq bigint;phase text;
+declare value jsonb;tenant uuid;request uuid;subjects uuid[];e private.erasure_executions;cp private.erasure_restore_checkpoint;inventory jsonb;seq bigint;phase text;expired boolean;
 begin
  perform private.erasure_execution_gate(true);
  if current_setting('transaction_isolation') not in ('read committed','read uncommitted') then raise exception using errcode='PT409',message='Fresh transaction required';end if;
@@ -211,7 +220,8 @@ begin
  if jsonb_array_length(value->'candidate_ids') not between 1 and 100 or jsonb_array_length(value->'policy'->'rules')<>8 then raise exception using errcode='PT422',message='Invalid recovery scope';end if;
  tenant:=(value->>'company_id')::uuid;request:=(value->>'request_id')::uuid;seq:=(value->>'sequence')::bigint;phase:=value->>'phase';
  select array_agg(x::uuid order by x::uuid) into subjects from jsonb_array_elements_text(value->'candidate_ids') x;
- if cardinality(subjects)<>(select count(distinct id) from unnest(subjects) s(id)) or array_position(subjects,null) is not null or seq<1 or (value->>'generation')::bigint<1 or not isfinite((value->>'retention_until')::timestamptz) or (value->>'retention_until')::timestamptz<=clock_timestamp() then raise exception using errcode='PT409',message='Recovery envelope invalid or expired';end if;
+ if cardinality(subjects)<>(select count(distinct id) from unnest(subjects) s(id)) or array_position(subjects,null) is not null or seq<1 or (value->>'generation')::bigint<1 or not isfinite((value->>'retention_until')::timestamptz) then raise exception using errcode='PT409',message='Recovery envelope invalid';end if;
+ expired:=(value->>'retention_until')::timestamptz<=clock_timestamp();
  if exists(select 1 from public.candidates where id=any(subjects) and company_id<>tenant) then raise exception using errcode='PT409',message='Recovery scope mismatch';end if;
  select * into cp from private.erasure_restore_checkpoint where singleton for update nowait;
  if found and (cp.sequence>checkpoint_sequence or (cp.sequence=checkpoint_sequence and cp.checkpoint_hash<>checkpoint_hash)) then raise exception using errcode='PT409',message='Recovery checkpoint regressed';end if;
@@ -227,6 +237,32 @@ begin
  case when phase='active_data_erased' then 'erasing' else phase end,seq,event_hash,value,private.erasure_hash(value),value->>'manifest_hash',value->>'schema_signature',(value->>'retention_until')::timestamptz,(value->>'authorized_at')::timestamptz,checkpoint_sequence,checkpoint_hash)
  on conflict(request_id) do update set phase=excluded.phase,sequence=excluded.sequence,event_hash=excluded.event_hash,envelope=excluded.envelope,envelope_hash=excluded.envelope_hash,
  reservation_id=null,pending_phase=null,reservation_key=null,lease_until=null,local_purged=false,restore_checkpoint_sequence=excluded.restore_checkpoint_sequence,restore_checkpoint_hash=excluded.restore_checkpoint_hash;
+ -- Age is not erasure authority. For irreversible or pending authorizations,
+ -- an expired envelope may acknowledge ONLY an already absent, fully reviewed
+ -- operational/R1/R2 scope. R3 recovery control rows are deliberately excluded
+ -- by the fixed inventory adapters. Unknown typed JSON or schema fails closed.
+ -- Signed cancellation is separately replayed below: its authority is the
+ -- terminal cancelled event, never its expiry, and may leave a live candidate.
+ if expired and phase<>'cancelled' then
+  inventory:=private.prepare_erasure_purge_manifest(request);
+  if inventory->'counts' is distinct from '{}'::jsonb then
+   raise exception using errcode='PT409',message='Expired recovery scope still present';end if;
+  if phase in ('erasing','active_data_erased') then
+   -- The ordinary helper intentionally requires an unexpired execution lease.
+   -- Here full verified history + strict absence proof authorize only retaining
+   -- retired IDs; no DELETE, lease extension, or operational mutation occurs.
+   insert into private.retired_candidate_ids(candidate_id,company_id,generation,recovery_event_id,retain_until)
+   select id,tenant,(value->>'generation')::bigint,event_hash,(value->>'retention_until')::timestamptz from unnest(subjects) s(id)
+   on conflict(candidate_id) do update set retain_until=greatest(retired_candidate_ids.retain_until,excluded.retain_until)
+   where retired_candidate_ids.company_id=excluded.company_id;
+   if exists(select 1 from unnest(subjects) s(id) where not exists(select 1 from private.retired_candidate_ids t where t.candidate_id=s.id and t.company_id=tenant)) then
+    raise exception using errcode='PT409',message='Retired identity mismatch';end if;
+  end if;
+  update private.erasure_executions set phase=value->>'phase',local_purged=(value->>'phase') in ('erasing','active_data_erased'),
+   manifest_hash=inventory->>'manifest_hash',counts=inventory->'counts' where request_id=request;
+  return jsonb_build_object('request_id',request,'phase',phase,'sequence',seq,'restore_isolated',true,'requires_purge',false,
+   'local_purged',phase in ('erasing','active_data_erased'),'expired_noop',true,'scope_absent',true);
+ end if;
  if phase in ('erasing','active_data_erased') then
   perform private.install_erasure_tombstones(request);
   inventory:=private.prepare_erasure_purge_manifest(request);
@@ -245,7 +281,7 @@ language sql stable set search_path='' as $$
  select jsonb_build_object('request_id',e.request_id,'company_id',e.company_id,'status',e.phase,'generation',e.generation,
  'scope_kind',e.scope_kind,'candidate_count',cardinality(e.candidate_ids),'created_at',e.created_at,'cancelled_at',e.cancelled_at,'execution_enabled',false,
  'phase',case when e.pending_phase='cancelled' then 'cancellation_pending' when e.pending_phase is not null then 'ledger_pending' else e.phase end,
- 'can_cancel',e.phase='authorized' and e.reservation_id is null,'blockers',case when e.local_purged then jsonb_build_array('backup_pending') else jsonb_build_array('external_execution_configuration_required') end,
+ 'can_cancel',e.phase='authorized' and e.reservation_id is null,'blockers',case when e.local_purged then jsonb_build_array('backup_pending') else jsonb_build_array('execution_not_provisioned') end,
  'ledger_sequence',e.sequence,'pending_phase',e.pending_phase,'local_purged',e.local_purged)
 $$;
 create or replace function public.get_erasure_status(target_request uuid) returns jsonb
@@ -365,5 +401,69 @@ begin
  insert into private.erasure_lifecycle_commands values(t.company_id,auth.uid(),'authorize',request_key,payload,result);
  return result;
 exception when lock_not_available or unique_violation then raise exception using errcode='PT409',message='Erasure request changed';end;$$;
+
+create or replace function public.configure_candidate_retention_policy(target_company uuid,expected_revision bigint,policy_rules jsonb,request_key uuid)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare r jsonb;classes text[]:='{}';payload text;old private.erasure_configuration_requests;latest bigint;result uuid;
+begin
+ if current_setting('transaction_isolation') not in ('read committed','read uncommitted') then raise exception using errcode='PT409',message='Fresh transaction required';end if;
+ perform private.erasure_owner(target_company);
+ perform 1 from public.companies where id=target_company and owner_id=auth.uid() for update nowait;
+ if not found then raise exception using errcode='PT404',message='Resource unavailable';end if;
+ if expected_revision is null or expected_revision<0 or request_key is null or jsonb_typeof(policy_rules) is distinct from 'array'
+ or pg_column_size(policy_rules)>10000 then raise exception using errcode='PT422',message='Invalid retention policy';end if;
+ if jsonb_array_length(policy_rules) not between 1 and 8 then raise exception using errcode='PT422',message='Invalid retention policy';end if;
+ for r in select value from jsonb_array_elements(policy_rules) loop
+ if jsonb_typeof(r) is distinct from 'object' then raise exception using errcode='PT422',message='Invalid retention policy';end if;
+ if (select count(*) from jsonb_object_keys(r))<>4 or not r ?& array['data_class','trigger_event','duration_days','hold_review_days']
+ or jsonb_typeof(r->'data_class') is distinct from 'string' or jsonb_typeof(r->'trigger_event') is distinct from 'string'
+ or r->>'data_class' not in ('candidate','assessment','screening','communication','audit','external','backup','exports')
+ or r->>'trigger_event' not in ('record_created','process_closed','consent_revoked') or r->>'data_class'=any(classes)
+ or jsonb_typeof(r->'duration_days') is distinct from 'number' or jsonb_typeof(r->'hold_review_days') is distinct from 'number'
+ or r->>'duration_days' !~ '^[1-9][0-9]{0,5}$' or r->>'hold_review_days' !~ '^[1-9][0-9]{0,5}$' then
+ raise exception using errcode='PT422',message='Invalid retention policy';end if;
+ classes:=array_append(classes,r->>'data_class');end loop;
+ select jsonb_agg(value order by value->>'data_class') into policy_rules from jsonb_array_elements(policy_rules);
+ payload:=private.erasure_hash(jsonb_build_array(expected_revision,policy_rules));
+ select * into old from private.erasure_configuration_requests where company_id=target_company and actor_id=auth.uid() and operation='policy' and erasure_configuration_requests.request_key=configure_candidate_retention_policy.request_key;
+ if found then if old.payload_hash<>payload then raise exception using errcode='PT409',message='Request key reused';end if;return old.result_id;end if;
+ -- The company lock serializes configuration with the first irreversible reservation.
+ if exists(select 1 from private.erasure_executions where company_id=target_company and pending_phase='erasing') then raise exception using errcode='PT409',message='Ledger reconciliation pending';end if;
+ select coalesce(max(revision),0) into latest from private.candidate_retention_policies where company_id=target_company;
+ if latest<>expected_revision then raise exception using errcode='PT409',message='Policy revision changed';end if;
+ insert into private.candidate_retention_policies(company_id,revision,rules,approved_by) values(target_company,latest+1,policy_rules,auth.uid()) returning id into result;
+ insert into private.erasure_configuration_requests values(target_company,auth.uid(),'policy',request_key,payload,result,now());return result;
+exception when lock_not_available or unique_violation then raise exception using errcode='PT409',message='Configuration changed';end;$$;
+
+create or replace function public.confirm_erasure_subject(target_candidate uuid,candidate_ids uuid[],expected_revision bigint,request_key uuid)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare tenant uuid;ids uuid[];latest bigint;payload text;old private.erasure_configuration_requests;result uuid;total integer;
+begin
+ if current_setting('transaction_isolation') not in ('read committed','read uncommitted') then raise exception using errcode='PT409',message='Fresh transaction required';end if;
+ select company_id into tenant from public.candidates where id=target_candidate;
+ perform private.erasure_owner(tenant);
+ perform 1 from public.companies where id=tenant and owner_id=auth.uid() for update nowait;
+ if not found then raise exception using errcode='PT404',message='Resource unavailable';end if;
+ if expected_revision is null or expected_revision<0 or request_key is null or candidate_ids is null
+ or cardinality(candidate_ids) not between 1 and 100 or array_ndims(candidate_ids)<>1 or array_position(candidate_ids,null) is not null
+ or not target_candidate=any(candidate_ids) then raise exception using errcode='PT422',message='Invalid subject resolution';end if;
+ select array_agg(distinct x order by x) into ids from unnest(candidate_ids) x;
+ if cardinality(ids)<>cardinality(candidate_ids) then raise exception using errcode='PT422',message='Duplicate candidate IDs';end if;
+ perform 1 from public.candidates where company_id=tenant and id=any(ids) order by id for share nowait;
+ get diagnostics total=row_count;
+ if total<>cardinality(ids) then raise exception using errcode='PT404',message='Resource unavailable';end if;
+ if exists(select 1 from unnest(ids) s(id) where private.erasure_candidate_frozen(s.id)) then raise exception using errcode='PT409',message='Candidate workflow frozen';end if;
+ -- Removing a frozen member from the new list must not bypass its existing subject binding.
+ if exists(select 1 from unnest(coalesce((select sr.candidate_ids from private.erasure_subject_resolutions sr where sr.company_id=tenant and sr.anchor_candidate_id=target_candidate order by sr.revision desc limit 1),'{}'::uuid[])) previous(id)
+ where private.erasure_candidate_frozen(previous.id)) then raise exception using errcode='PT409',message='Candidate workflow frozen';end if;
+ payload:=private.erasure_hash(jsonb_build_array(target_candidate,ids,expected_revision));
+ select * into old from private.erasure_configuration_requests where company_id=tenant and actor_id=auth.uid() and operation='resolution' and erasure_configuration_requests.request_key=confirm_erasure_subject.request_key;
+ if found then if old.payload_hash<>payload then raise exception using errcode='PT409',message='Request key reused';end if;return old.result_id;end if;
+ select coalesce(max(revision),0) into latest from private.erasure_subject_resolutions where company_id=tenant and anchor_candidate_id=target_candidate;
+ if latest<>expected_revision then raise exception using errcode='PT409',message='Subject revision changed';end if;
+ insert into private.erasure_subject_resolutions(company_id,anchor_candidate_id,candidate_ids,revision,confirmed_by)
+ values(tenant,target_candidate,ids,latest+1,auth.uid()) returning id into result;
+ insert into private.erasure_configuration_requests values(tenant,auth.uid(),'resolution',request_key,payload,result,now());return result;
+exception when lock_not_available or unique_violation then raise exception using errcode='PT409',message='Subject changed';end;$$;
 
 commit;

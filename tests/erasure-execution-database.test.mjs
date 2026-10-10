@@ -5,6 +5,7 @@ import {PGlite} from '@electric-sql/pglite';
 import {pgcrypto} from '@electric-sql/pglite/contrib/pgcrypto';
 import {setupRankingDatabase,users} from './helpers/screening-ranking-fixture.mjs';
 import {executionHarness,setupExecutionLedger} from './helpers/erasure-execution-fixture.mjs';
+import {digest} from '../tools/erasure/ledger.mjs';
 import {assertAcceptedErasureSchema} from './helpers/erasure-preview-fixture.mjs';
 const conflict=error=>error.code==='PT409';
 
@@ -129,6 +130,74 @@ test('SC-010 R3 acknowledged erasure execution and restore capability boundaries
   await x.configure();const f=await x.ready({rich:true}),state=await x.freeze(f);await x.transition(state.request_id,0,'authorized');await x.transition(state.request_id,1,'erasing');
   await h.asUser(f.owner);await x.v.permission(f,'revoked',1);await assert.rejects(x.purge(state.request_id,2),conflict);
   await x.transition(state.request_id,2,'erasing');await x.purge(state.request_id,3);
+ });
+
+ await t.test('policy cannot change after erasing reservation and before its authoritative ledger ACK',async()=>{
+  await x.configure();const f=await x.ready(),state=await x.freeze(f);await x.transition(state.request_id,0,'authorized');
+  const erasing=await x.reserve(state.request_id,1,'erasing');
+  await h.asUser(f.owner);const current=await x.getPolicy(f);
+  await assert.rejects(x.policy(f,current.revision,current.rules.map(rule=>({...rule,duration_days:rule.duration_days+1}))),conflict);
+  assert.equal((await x.getPolicy(f)).revision,current.revision);
+  await x.ack(erasing);await x.purge(state.request_id,2);
+  await h.asAdmin();assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[f.candidate.id])).rows[0].n,0);
+ });
+ await t.test('a confirmed subject cannot shrink while frozen and first erasing rejects a newer resolution',async()=>{
+  await x.configure();const f=await x.ready(),duplicate=await h.candidate(f);
+  f.resolutionId=await x.resolve(f,[f.candidate.id,duplicate.candidate.id],1);
+  const state=await x.freeze(f);await h.asUser(f.owner);
+  await assert.rejects(x.resolve(f,[f.candidate.id],2),conflict);
+  await x.transition(state.request_id,0,'authorized');
+  await h.asAdmin();await db.exec('begin');
+  try{
+   // Simulate privileged stale/restore metadata; application roles cannot write this table.
+   await db.query('insert into private.erasure_subject_resolutions(company_id,anchor_candidate_id,candidate_ids,revision,confirmed_by) values($1,$2,$3::uuid[],3,$4)',[f.companyId,f.candidate.id,[f.candidate.id],f.owner]);
+   await assert.rejects(x.reserve(state.request_id,1,'erasing'),conflict);
+  }finally{await db.exec('rollback');}
+  await x.transition(state.request_id,1,'erasing');await x.purge(state.request_id,2);
+  const frozen=await x.ready(),active=await h.candidate(frozen);await x.freeze(frozen);
+  await h.asAdmin();
+  // Legacy/restore metadata can refer from an active anchor to a frozen member.
+  await db.query('insert into private.erasure_subject_resolutions(company_id,anchor_candidate_id,candidate_ids,revision,confirmed_by) values($1,$2,$3::uuid[],1,$4)',[frozen.companyId,active.candidate.id,[active.candidate.id,frozen.candidate.id].sort(),frozen.owner]);
+  await h.asUser(frozen.owner);await assert.rejects(x.resolve(active,[active.candidate.id],1),conflict);
+ });
+ await t.test('configuration cannot use an old transaction snapshot to bypass pending execution guards',async()=>{
+  await x.configure();const f=await x.ready(),policy=await x.getPolicy(f);
+  for(const operation of [()=>x.policy(f,policy.revision,policy.rules),()=>x.resolve(f,[f.candidate.id],1)]){
+   await h.asUser(f.owner);await db.exec('begin isolation level repeatable read');
+   try{await assert.rejects(operation(),error=>error.code==='PT409'&&error.message==='Fresh transaction required');}finally{await db.exec('rollback');}
+  }
+ });
+
+ await t.test('expired signed recovery streams distinguish cancelled, still-present and already-absent graphs',async()=>{
+  const history=async(phases,{absent=false}={})=>{
+   await x.configure();await h.asAdmin();
+   // Each synthetic historical deployment starts from a backup without a checkpoint.
+   await db.query('delete from private.erasure_restore_checkpoint');
+   const base=await x.ready();let f=base,reservation;
+   if(absent){await h.asAdmin();await db.exec('begin');f=await h.candidate(base);f.resolutionId=await x.resolve(f);}
+   try{const state=await x.freeze(f);reservation=await x.reserve(state.request_id,0,'authorized');}finally{if(absent)await db.exec('rollback');}
+   const ledgerDb=new PGlite();t.after(()=>ledgerDb.close());const historical=await setupExecutionLedger(executionHarness(h),ledgerDb);
+   // Historical fixture: the actual SQL-created envelope is backdated while its
+   // exact reviewed subject/policy/schema boundary remains unchanged. The real
+   // independent ledger encrypts/signs every event; restore verifies the full chain.
+   const original={...JSON.parse(reservation.envelope_text),authorized_at:new Date(Date.now()-3*86400000).toISOString(),retention_until:new Date(Date.now()-86400000).toISOString()};let previous=null;
+   for(const [i,phase]of phases.entries()){
+    const envelope={...original,phase,sequence:i+1,previous_phase:i?phases[i-1]:null,previous_event_hash:previous?.event_hash??null};
+    const envelopeText=JSON.stringify(envelope);previous=await historical.ledger.append({eventId:randomUUID(),envelopeText,envelopeHash:digest(envelopeText)});
+   }
+   return {f,historical};
+  };
+  const cancelled=await history(['authorized','cancelled']);await cancelled.historical.configure({restore_isolated:true});
+  await cancelled.historical.replay();await cancelled.historical.configure();await h.asUser(cancelled.f.owner);
+  assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[cancelled.f.candidate.id])).rows[0].n,1);
+  for(const phases of [['authorized'],['authorized','erasing','active_data_erased']]){
+   const present=await history(phases);await present.historical.configure({restore_isolated:true});
+   try{await assert.rejects(present.historical.replay(),conflict);}finally{await present.historical.configure();}
+   await h.asAdmin();assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[present.f.candidate.id])).rows[0].n,1);
+   const absent=await history(phases,{absent:true});await absent.historical.configure({restore_isolated:true});
+   try{const result=await absent.historical.replay();assert.equal(result.replayed,1);assert.equal(result.results[0].expired_noop,true);assert.equal(result.results[0].scope_absent,true);}finally{await absent.historical.configure();}
+   await h.asUser(absent.f.owner);if(phases.at(-1)!=='authorized')await assert.rejects(h.insert('candidates',{id:absent.f.candidate.id,company_id:absent.f.companyId,first_name:'Expired','last_name':'Old UUID'}),conflict);
+  }
  });
 
 });

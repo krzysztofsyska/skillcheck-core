@@ -8,7 +8,7 @@ SCOPE: FULLSTACK
 OWNER: Codex / orchestrator
 REVIEWER: niezależny Codex architect/reviewer
 DEPENDS ON: R2 #94, R1, B1/B2, SC-006/008/009
-STATUS: CODE REVIEW PASS / CI PENDING — bieżący wynik i SHA w PR
+STATUS: FINAL VERIFICATION — bieżący wynik i SHA w PR
 BRANCH: feat/sc-010-r3-purge
 BASE: 5479c56a10c483d3c98932a5898c347d52a5bb54
 
@@ -36,6 +36,8 @@ Pierwszy potwierdzony `erasing` jest nieodwracalną granicą. Od tego momentu an
 
 Cofnięcie zgody pozostaje dostępne. Może zmienić graf po wcześniejszym ACK, co blokuje purge starego manifestu. Reconciliation `erasing → erasing` zwiększa numer zdarzenia i potwierdza nowy manifest obliczony przez bazę. Nie zmienia firmy, osoby/UUID, zakresu, generacji, polityki, autora ani kontraktu adapterów; nie przywraca możliwości anulowania. Współbieżna kolejna zmiana ponownie wymaga uzgodnienia.
 
+Przed pierwszą rezerwacją `erasing` ponownie sprawdzane są polityka oraz aktualna rewizja, skład i autor potwierdzenia osoby. Zapis nowej polityki jest blokowany od tej rezerwacji do ACK, pod wspólną blokadą firmy. Po trwałej granicy obowiązuje przypięta polityka zaakceptowanego wykonania.
+
 ## Usuwanie grafu
 
 Purge działa w jednej transakcji z blokadami i dokładnym kontekstem dopuszczonych wierszy. Nie wyłącza RLS, FK, triggerów ani nie używa ustawianego przez klienta GUC jako uprawnienia. Wyjątki DELETE w niezmiennej historii są ograniczone do roli, transakcji i wpisów manifestu. Zwykłe UPDATE historii pozostaje zabronione.
@@ -52,6 +54,8 @@ Odtwarzana baza pozostaje izolowana od produktu i workerów. Przed pierwszym rep
 
 Envelope zawiera podpisany zakres i kopię polityki/autoryzacji. Backup sprzed powstania żądania lub polityki nie wymaga odtwarzania konta dawnego ownera. Najpierw instalowane są tombstones, następnie odtwarzany jest dokładny zakres na przywróconym grafie. Brakujące znane zasoby są idempotentne; nieznane zależności blokują otwarcie. `authorized` przywraca wyłącznie freeze, `cancelled` nie upoważnia do purge.
 
+Wygaśnięcie envelope nie upoważnia do usuwania ani pomijania weryfikacji. Cała historia nadal podlega sprawdzeniu. Wygasły wpis może zakończyć replay bez usuwania tylko po wykazaniu braku całego znanego grafu operacyjnego i R1/R2; wpisy nieodwracalne zachowują ochronę starych UUID. Obecne dane blokują taki replay. Podpisane anulowanie jest odtwarzane osobno, na podstawie decyzji w rejestrze.
+
 ## UI i zakres gotowości
 
 Panel pokazuje oczekiwanie na ACK, anulowanie oczekujące, nieodwracalne usuwanie i usunięcie danych aktywnych. Nie oferuje publicznego przycisku wywołującego worker/purge. Potwierdzenie anulowania pochodzi z autorytatywnego statusu, nie z samego zwróconego UUID.
@@ -64,4 +68,4 @@ Wymagane testy: pełny graf dwóch firm, izolacja każdej roli, brak możliwośc
 
 Wyniki, SHA i znane blokady są utrzymywane w PR. Integracja wymaga OWNER ACCEPTANCE. Produkcja i rzeczywiste usuwanie wymagają osobnej zgody i kompletnego przygotowania środowiska.
 
-Lokalnie: testy wykonania R3 10/10, rejestru 8/8, regresje R1 27/27 i R2 27/27, B1/B2 DB28/28; typecheck/build PASS. Niezależny review kodu PASS po poprawkach restore, ponowień, potwierdzeń i izolacji. Rzeczywiste wyścigi PostgreSQL oraz wynik końcowego head wymagają CI.
+Pierwszy pełny przebieg CI po poprawce konfliktu blokady zakończył się sukcesem. Końcowy review GitHub wskazał dodatkowe przypadki polityki, zakresu osoby, wygasłego replay i etykiety statusu; dodano poprawki i regresje. Aktualne liczniki testów, wynik niezależnego przeglądu oraz CI dokładnego końcowego SHA są zapisane w PR.
