@@ -87,7 +87,7 @@ export function VoicePlanApprovalPanel({
     <section aria-label="Przegląd scenariusza rozmowy" style={{maxWidth:900,margin:"0 auto",padding:24}}>
       <header>
         <h2>Scenariusz rozmowy kwalifikacyjnej</h2>
-        <p><strong>Wersja:</strong> {plan.planVersion} · <strong>Status:</strong> {label[plan.status]}</p>
+        <p><strong>Wersja:</strong> {plan.planVersion} · <strong>Status:</strong> {plan.status === "reviewed" && !plan.reviewIsApproved ? "Wymaga poprawy scenariusza" : label[plan.status]}</p>
         <p>Planowana rozmowa: 5–7 minut. Limit: 10 minut. Nagrywanie domyślnie wyłączone.</p>
         {!plan.sourceCurrent && <p role="alert">Kryteria lub dane rekrutacji uległy zmianie. Nie można zatwierdzić tego scenariusza.</p>}
         {permissions.warning && <p role="status">{permissions.warning}</p>}
