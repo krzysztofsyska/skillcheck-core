@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {Client} from 'pg';
 import {parse} from 'pg-connection-string';
 import {setupRankingDatabase,createRankingHarness,users} from './helpers/screening-ranking-fixture.mjs';
-import {erasureHarness,retentionRules} from './helpers/erasure-preview-fixture.mjs';
+import {erasureHarness,retentionRules,assertAcceptedErasureSchema} from './helpers/erasure-preview-fixture.mjs';
 const maintenanceUrl=process.env.SCREENING_TEST_DATABASE_URL;
 const databaseName=`erasure_r1_${process.pid}`;
 const conflict=promise=>assert.rejects(promise,error=>error.code==='PT409');
@@ -18,6 +18,7 @@ test('SC-010 R1 real PostgreSQL CAS and read-only manifest consistency',async t=
  const connect=async()=>{const db=new Client(config(databaseName));await db.connect();db.exec=sql=>db.query(sql);clients.push(db);await db.query("set statement_timeout='10s';set lock_timeout='3s'");return db;};
  t.after(async()=>{await Promise.all(clients.map(db=>db.end().catch(()=>{})));const cleanup=new Client(config('postgres'));await cleanup.connect();await cleanup.query('select pg_terminate_backend(pid) from pg_stat_activity where datname=$1',[databaseName]);await cleanup.query(`drop database if exists ${databaseName}`);await cleanup.end();});
  const db=await connect(),h=await setupRankingDatabase(db),e=erasureHarness(h);
+ await assertAcceptedErasureSchema(h,t);
  const session=async()=>{const db=await connect(),h=createRankingHarness(db);await h.asUser();return {...erasureHarness(h),h,db};};
  const waiting=async client=>{await h.asAdmin();for(let i=0;i<150;i++){const row=(await db.query('select wait_event_type from pg_stat_activity where pid=$1',[client.processID])).rows[0];if(row?.wait_event_type==='Lock')return;await new Promise(resolve=>setTimeout(resolve,10));}assert.fail('writer should wait on the actual locked row');};
  for(const operation of ['policy','resolution'])for(const sameKey of [true,false])await t.test(`two ${operation} mutations, ${sameKey?'shared':'different'} key: one version and deterministic retry`,async()=>{

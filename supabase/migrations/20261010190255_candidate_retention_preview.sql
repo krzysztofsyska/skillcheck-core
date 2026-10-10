@@ -44,7 +44,8 @@ create function private.erasure_schema_signature() returns text language sql sta
  left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
  union all select 'constraint:'||n.nspname||'.'||c.relname||'.'||k.conname,to_jsonb(pg_get_constraintdef(k.oid,true))
  from pg_constraint k join pg_class c on c.oid=k.conrelid join pg_namespace n on n.oid=c.relnamespace
- where k.conrelid in(select oid from tracked) or k.confrelid in(select oid from tracked)
+ -- PostgreSQL 18 additionally represents NOT NULL in pg_constraint; attnotnull above is the portable source.
+ where k.contype<>'n' and (k.conrelid in(select oid from tracked) or k.confrelid in(select oid from tracked))
  union all select 'trigger:'||t.nspname||'.'||t.relname||'.'||g.tgname,to_jsonb(pg_get_triggerdef(g.oid,true))
  from tracked t join pg_trigger g on g.tgrelid=t.oid and not g.tgisinternal
  ) select private.erasure_hash(coalesce(jsonb_agg(jsonb_build_array(key,value) order by key),'[]'::jsonb)) from objects
@@ -300,7 +301,7 @@ end;$$;
 -- Explicit reviewed baseline table names, not learned from the deployment database.
 -- Fingerprint generated from the complete reviewed migration chain in an isolated clean database.
 -- Never learn an unknown deployment schema as an approved baseline.
-insert into private.erasure_inventory_baseline values(true,'d9f4606d5fcd638d7fe69df0ed31f5033a1fca3d0120622a20e05668d845d834',array[
+insert into private.erasure_inventory_baseline values(true,'df5ae6d34210c8544359281bb638de5565b13d3c4c68ae86a8eef7cf230e5e6f',array[
  'private.candidate_retention_policies',
  'private.candidate_verified_contact_points',
  'private.candidate_verified_contact_receipts',

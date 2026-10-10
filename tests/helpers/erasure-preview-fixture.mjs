@@ -38,3 +38,20 @@ export function erasureHarness(h){
  };
  return {policy,getPolicy,resolve,getResolution,preview,rich,snapshot,v};
 }
+
+// Diagnostic schema data only (no candidate rows or secrets). Both engines must
+// accept the same reviewed baseline before any functional preview test is valid.
+export async function assertAcceptedErasureSchema(h,t){
+ await h.asAdmin();
+ const state=(await h.db.query('select schema_signature expected,private.erasure_schema_signature() actual from private.erasure_inventory_baseline where singleton')).rows[0];
+ if(!state||state.expected!==state.actual){
+  const source=(await h.db.query("select prosrc from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='private' and p.proname='erasure_schema_signature'")).rows[0]?.prosrc;
+  if(source?.includes('objects as')){
+   const diagnostic=source.replace(/select private\.erasure_hash[\s\S]*$/,'select key,value from objects order by key');
+   const objects=(await h.db.query(diagnostic)).rows;
+   t.diagnostic(`ERASURE_SCHEMA_OBJECTS ${JSON.stringify(objects)}`);
+  }
+ }
+ const assert=(await import('node:assert/strict')).default;
+ assert.ok(state&&state.actual===state.expected,`Reviewed schema baseline mismatch: ${JSON.stringify(state)}`);
+}

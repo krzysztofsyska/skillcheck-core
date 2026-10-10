@@ -4,13 +4,14 @@ import {randomUUID} from 'node:crypto';
 import {PGlite} from '@electric-sql/pglite';
 import {pgcrypto} from '@electric-sql/pglite/contrib/pgcrypto';
 import {setupRankingDatabase,users} from './helpers/screening-ranking-fixture.mjs';
-import {erasureHarness,retentionRules} from './helpers/erasure-preview-fixture.mjs';
+import {erasureHarness,retentionRules,assertAcceptedErasureSchema} from './helpers/erasure-preview-fixture.mjs';
 const conflict=error=>error.code==='PT409';
 const count=(p,table)=>Number(p.counts[table]??0);
 
 test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async t=>{
  const db=new PGlite({extensions:{pgcrypto}});t.after(()=>db.close());
  const h=await setupRankingDatabase(db),e=erasureHarness(h);
+ await assertAcceptedErasureSchema(h,t);
  await t.test('missing policy is explicit and preview has finite TTL without authorizing execution',async()=>{
   const f=await h.seed(),p=await e.preview(f);
   assert.ok(p.blockers.includes('retention_policy_required'));assert.ok(p.blockers.includes('subject_resolution_required'));
@@ -44,7 +45,7 @@ test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async 
  await t.test('full graph includes every candidate copy and all five JSON request adapters, excluding shared configuration',async()=>{
   const f=await e.rich();await e.policy(f);const resolution=await e.resolve(f);
   const before=await e.snapshot();await h.asUser(f.owner);const p=await e.preview(f,'confirmed_subject',resolution);const again=await e.preview(f,'confirmed_subject',resolution);
-  assert.equal(p.manifest_hash,again.manifest_hash);assert.equal(p.candidate_count,1);
+  assert.ok(!p.blockers.includes('schema_dependency_unknown'));assert.equal(p.manifest_hash,again.manifest_hash);assert.equal(p.candidate_count,1);
   for(const table of ['public.candidates','public.candidate_documents','public.applications','public.candidate_assessments','public.behavior_assessment_entries','public.exercise_observation_entries','public.screening_analysis_versions','public.screening_analysis_attempts','public.screening_criterion_results','public.screening_result_reviews','public.screening_criterion_review_overrides','public.recruitment_shortlist_entries','public.candidate_contact_permissions','public.candidate_contact_preferences','public.candidate_communications','public.candidate_communication_events','public.candidate_communication_approvals','private.candidate_verified_contact_receipts','private.candidate_verified_contact_points','private.contact_audit'])assert.ok(count(p,table)>0,table);
   assert.equal(count(p,'private.contact_requests'),5);
   for(const table of ['public.companies','public.positions','public.recruitments','public.exercise_definition_entries','private.contact_trusted_issuers','private.contact_policy_templates'])assert.equal(count(p,table),0,table);
@@ -79,6 +80,15 @@ test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async 
   for(const ddl of ["create table public.unmapped_candidate_payload(id uuid,payload jsonb)","alter table public.candidates add column private_extra text", "create schema extra;create table extra.unmapped(candidate_id uuid references public.candidates(id))"]){
    await h.asAdmin();await db.exec('begin');try{await db.exec(ddl);await h.asUser(f.owner);const p=await e.preview(f);assert.ok(p.blockers.includes('schema_dependency_unknown'));assert.notEqual(p.schema_signature,baseline.schema_signature);assert.notEqual(p.manifest_hash,baseline.manifest_hash);}finally{await db.exec('rollback');}
   }
+ });
+ await t.test('missing inventory baseline fails closed with no counts',async()=>{
+  const f=await h.seed();await h.asAdmin();await db.exec('begin');
+  try{
+   // Privileged corruption simulation, rolled back completely; product roles
+   // cannot disable this trigger or mutate the baseline.
+   await db.exec('alter table private.erasure_inventory_baseline disable trigger immutable_history;delete from private.erasure_inventory_baseline');
+   await h.asUser(f.owner);const p=await e.preview(f);assert.ok(p.blockers.includes('schema_dependency_unknown'));assert.deepEqual(p.counts,{});
+  }finally{await db.exec('rollback');}
  });
  await t.test('unknown and malformed JSON request operations are blockers, never UUID substring matching',async()=>{
   const f=await h.seed();

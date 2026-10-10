@@ -1,13 +1,13 @@
 # SC-010-R1 — polityki, potwierdzone rekordy osoby i podgląd
 
-TASK: SC-010-R1  
-LEVEL: L3  
-SCOPE: FULLSTACK  
-OWNER: Codex / orchestrator  
-REVIEWER: niezależny Codex reviewer  
-DEPENDS ON: SC-010-B1/B2, zaakceptowana architektura SC-010-R (#83)  
-STATUS: IMPLEMENTATION / REVIEW  
-BRANCH: feat/sc-010-r1-preview  
+TASK: SC-010-R1
+LEVEL: L3
+SCOPE: FULLSTACK
+OWNER: Codex / orchestrator
+REVIEWER: niezależny Codex reviewer
+DEPENDS ON: SC-010-B1/B2, zaakceptowana architektura SC-010-R (#83)
+STATUS: CODE REVIEW PASS / CI IN PROGRESS
+BRANCH: feat/sc-010-r1-preview
 BASE: 5f92bbfd01e0bb35fb70df44d4bc6e64ded9855b
 
 Zlecenie właściciela: 2026-10-10, „Zrób”. R1 dostarcza konfigurację i inwentaryzację. Nie wykonuje usunięcia, nie uruchamia retencji automatycznej, nie zamraża kandydata i nie wdraża zmian produkcyjnych. Podgląd nie jest upoważnieniem do późniejszego purge. Projekt wykonania pozostaje w `sc-010-retention-erasure-architecture.md`.
@@ -38,6 +38,6 @@ Wynik nie zwraca treści CV, kontaktów, dowodów ani rekordów audytu. Dane zew
 
 ## Weryfikacja i przekazanie
 
-Wymagane: testy pełnego łańcucha migracji z rzeczywistymi fixture B1/B2, izolacja ról i firm, zakaz bezpośredniego DML, wersjonowanie/idempotencja, manifest po zmianach danych i schematu, nieznane JSON, podgląd bez zapisu, testy współbieżności PostgreSQL, formularze i autoryzacja serwerowa, typecheck/build oraz regresje CI. Wyniki końcowe zostaną uzupełnione po review.
+Wymagane: testy pełnego łańcucha migracji z rzeczywistymi fixture B1/B2, izolacja ról i firm, zakaz bezpośredniego DML, wersjonowanie/idempotencja, manifest po zmianach danych i schematu, nieznane JSON, podgląd bez zapisu, testy współbieżności PostgreSQL, formularze i autoryzacja serwerowa, typecheck/build oraz regresje CI. Lokalnie: DB 12/12, UI 8/8, typecheck, production build oraz HTTP auth PASS. Niezależny review kodu e63a958 PASS. Pierwsze CI wykryło nieprzenośność sygnatury schematu między wersjami PostgreSQL; poprawka i końcowe wyniki CI są śledzone w PR #90. PR jest źródłem aktualnego werdyktu i niezmiennego SHA przy odbiorze.
 
 Migracja jest nowa, wygenerowana przez Supabase CLI. Nie stosować jej na produkcji w ramach R1. Po PASS review i CI wymagane jest OWNER ACCEPTANCE integracji zgodnie z AGENTS.md. Dalszy krok: R2 — lifecycle freeze i autoryzacja żądania usunięcia; R3 — wykonawca purge i odtwarzanie; R4 — harmonogram retencji. Żaden z tych etapów nie jest wykonany przez R1.
