@@ -26,6 +26,8 @@ create table public.voice_plan_versions (
   analysis_id uuid not null,
   screening_review_id uuid not null,
   shortlist_entry_id uuid not null,
+  supersedes_plan_id uuid,
+  corrects_review_id uuid,
   plan_version bigint not null check (plan_version>=1),
   source_hash text not null check (source_hash ~ '^[0-9a-f]{64}$'),
   envelope_hash text not null check (envelope_hash ~ '^[0-9a-f]{64}$'),
@@ -48,6 +50,9 @@ create table public.voice_plan_versions (
   unique (company_id,id),
   unique (company_id,id,application_id),
   unique (company_id,application_id,plan_version),
+  check ((supersedes_plan_id is null) = (corrects_review_id is null)),
+  foreign key(company_id,application_id,supersedes_plan_id)
+    references public.voice_plan_versions(company_id,application_id,id) on delete restrict,
   foreign key(company_id,recruitment_id) references public.recruitments(company_id,id) on delete restrict,
   foreign key(company_id,position_id) references public.positions(company_id,id) on delete restrict,
   foreign key(company_id,recruitment_id,application_id)
@@ -75,6 +80,7 @@ create index voice_plan_versions_app_idx
 create table private.voice_plan_review_entries (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null,
+  application_id uuid not null,
   plan_id uuid not null,
   review_version bigint not null check(review_version>=1),
   reviewer_id uuid not null references auth.users(id) on delete restrict,
@@ -87,14 +93,23 @@ create table private.voice_plan_review_entries (
   retention_deadline timestamptz not null,
   check(decision <> 'requires_changes' or reason is not null),
   unique(company_id,plan_id,id),
+  unique(company_id,application_id,id),
+  unique(company_id,application_id,plan_id,id),
   unique(company_id,plan_id,review_version),
-  foreign key(company_id,plan_id)
-    references public.voice_plan_versions(company_id,id) on delete restrict
+  foreign key(company_id,plan_id,application_id)
+    references public.voice_plan_versions(company_id,id,application_id) on delete restrict
 );
+-- Circular provenance is intentionally nullable on the first plan and immutable
+-- on later plans: a correction cannot reference a review of another application.
+alter table public.voice_plan_versions add constraint voice_plan_correction_lineage_fk
+  foreign key(company_id,application_id,supersedes_plan_id,corrects_review_id)
+  references private.voice_plan_review_entries(company_id,application_id,plan_id,id)
+  on delete restrict;
 
 create table private.voice_plan_release_entries (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null,
+  application_id uuid not null,
   plan_id uuid not null,
   approved_review_id uuid not null,
   release_version bigint not null check(release_version>=1),
@@ -104,11 +119,13 @@ create table private.voice_plan_release_entries (
   retention_policy_version text not null,
   retention_deadline timestamptz not null,
   unique(company_id,plan_id,id),
+  unique(company_id,application_id,id),
+  unique(company_id,application_id,plan_id,id),
   unique(company_id,plan_id),
-  foreign key(company_id,plan_id)
-    references public.voice_plan_versions(company_id,id) on delete restrict,
-  foreign key(company_id,plan_id,approved_review_id)
-    references private.voice_plan_review_entries(company_id,plan_id,id) on delete restrict
+  foreign key(company_id,plan_id,application_id)
+    references public.voice_plan_versions(company_id,id,application_id) on delete restrict,
+  foreign key(company_id,application_id,plan_id,approved_review_id)
+    references private.voice_plan_review_entries(company_id,application_id,plan_id,id) on delete restrict
 );
 
 -- The only effective release pointer is app-scoped; historical releases remain append-only.
@@ -124,8 +141,10 @@ create table private.voice_plan_current_releases (
   primary key(company_id,application_id),
   foreign key(company_id,plan_id,application_id)
     references public.voice_plan_versions(company_id,id,application_id) on delete restrict,
-  foreign key(company_id,plan_id,release_entry_id)
-    references private.voice_plan_release_entries(company_id,plan_id,id) on delete restrict
+  foreign key(company_id,application_id,release_entry_id)
+    references private.voice_plan_release_entries(company_id,application_id,id) on delete restrict,
+  foreign key(company_id,application_id,plan_id,release_entry_id)
+    references private.voice_plan_release_entries(company_id,application_id,plan_id,id) on delete restrict
 );
 
 create table private.voice_plan_request_keys (
