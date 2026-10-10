@@ -46,6 +46,11 @@ jobs:
       - run: npm run test:contact-verification
       - run: npm run test:erasure-preview
       - run: npm run test:erasure-lifecycle
+      - run: npm run test:erasure-execution
+      - run: npm run test:erasure-execution-concurrency
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          ERASURE_LEDGER_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:erasure-lifecycle-concurrency
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
