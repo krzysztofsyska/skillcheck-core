@@ -53,7 +53,13 @@ type ExpectedTables =
   | "screening_analysis_attempts"
   | "screening_criterion_results"
   | "screening_result_reviews"
-  | "screening_criterion_review_overrides";
+  | "screening_criterion_review_overrides"
+  | "recruitment_shortlist_entries"
+  | "candidate_contact_permissions"
+  | "candidate_contact_preferences"
+  | "candidate_communications"
+  | "candidate_communication_events"
+  | "candidate_communication_approvals";
 type ExpectedViews =
   | "latest_behavior_assessments"
   | "latest_exercise_definitions"
@@ -79,7 +85,19 @@ type ExpectedFunctions =
   | "complete_screening_analysis"
   | "fail_screening_attempt"
   | "retry_screening_analysis"
-  | "review_screening_result";
+  | "review_screening_result"
+  | "get_screening_ranking"
+  | "get_recruitment_shortlist"
+  | "add_recruitment_shortlist_entry"
+  | "remove_recruitment_shortlist_entry"
+  | "record_contact_permission"
+  | "set_contact_preferences"
+  | "prepare_candidate_communication"
+  | "cancel_candidate_communication"
+  | "get_candidate_communications"
+  | "get_candidate_communication_history"
+  | "approve_candidate_communication"
+  | "get_communication_approval_status";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -443,3 +461,23 @@ type _ListReturn = Expect<Equal<Database["public"]["Functions"]["list_sales_lead
 type _StatusReturn = Expect<Equal<Database["public"]["Functions"]["platform_operator_status"]["Returns"], boolean>>;
 type _GrantArgs = Expect<Equal<Database["public"]["Functions"]["grant_platform_operator"]["Args"], { target_user: string }>>;
 type _RevokeArgs = Expect<Equal<Database["public"]["Functions"]["revoke_platform_operator"]["Args"], { target_user: string }>>;
+
+// SC-008 writes are available exclusively through tenant-checked RPCs.
+type _ShortlistInsert = Expect<Equal<Insert<"recruitment_shortlist_entries">, never>>;
+type _ShortlistUpdate = Expect<Equal<Update<"recruitment_shortlist_entries">, never>>;
+type _RankingTenantArgument = Expect<Equal<Extract<keyof Database["public"]["Functions"]["get_screening_ranking"]["Args"], "company_id">, never>>;
+
+// SC-010 B1: writes only through scoped RPCs; no delivery/verified grant types.
+type _ContactPermissionInsert = Expect<Equal<Insert<"candidate_contact_permissions">, never>>;
+type _ContactPermissionUpdate = Expect<Equal<Update<"candidate_contact_permissions">, never>>;
+type _ContactPreferencesInsert = Expect<Equal<Insert<"candidate_contact_preferences">, never>>;
+type _CommunicationInsert = Expect<Equal<Insert<"candidate_communications">, never>>;
+type _CommunicationUpdate = Expect<Equal<Update<"candidate_communications">, never>>;
+type _CommunicationEventUpdate = Expect<Equal<Update<"candidate_communication_events">, never>>;
+type _CommunicationNoTenantInput = Expect<Equal<Extract<keyof Database["public"]["Functions"]["prepare_candidate_communication"]["Args"], "company_id" | "actor_id" | "destination">, never>>;
+
+// SC-010 B2 public surface exposes metadata only; proof minting remains private.
+type _ApprovalInsert = Expect<Equal<Insert<"candidate_communication_approvals">, never>>;
+type _ApprovalUpdate = Expect<Equal<Update<"candidate_communication_approvals">, never>>;
+type _NoVerificationMint = Expect<Equal<Extract<FunctionName, "ingest_verified_contact_receipt">, never>>;
+type _ApprovalNoPrivateInput = Expect<Equal<Extract<keyof Database["public"]["Functions"]["approve_candidate_communication"]["Args"], "company_id" | "actor_id" | "destination" | "policy_version">, never>>;
