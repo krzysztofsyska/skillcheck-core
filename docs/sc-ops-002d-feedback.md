@@ -106,6 +106,32 @@ still stop the whole invocation before dispatch.
 
 ## Live synthetic acceptance
 
+### Connection diagnostics (not live acceptance)
+
+`Agent connection diagnostics` (`agent-diagnostics.yml`) is manual-only and
+requires all three repository switches to equal `false`. It runs trusted `main`
+code in `agent-control`; it cannot run from the task branch. Installation on main
+still requires the normal reviewed integration-to-main promotion and explicit
+owner production approval. Do not weaken the environment restriction to test it.
+
+After authorized installation, use Actions > Agent connection diagnostics > Run
+workflow on main with an existing Cursor agent ID. The previously observed PR49
+ID is `bc-00f193ea-2c96-4b93-a3aa-12a074bd0b78`; its accessibility is not assumed.
+The script verifies App 5216184, installation 168649570 and repository identity,
+checks the state branch and its rules plus the agent-control restriction, and
+reads the selected Cursor agent. It only prints fixed check names and PASS/FAIL.
+It requests a repository-scoped read-only installation token and revokes it on
+completion (if interrupted, GitHub expiry remains the fallback). It makes no
+repository writes and starts no agents. Redirects are refused; requests time out.
+
+A green result confirms connectivity and these protections only, not Cursor
+target/signature compatibility, owner/production approval gates or live E2E.
+The workflow must actually execute its diagnostics step: a skipped job is not a
+PASS. Failed checks identify the area to repair without exposing service errors.
+
+API references: [Cursor agent endpoints](https://prod.cursor.com/docs/cloud-agent/api/endpoints)
+and [GitHub installation tokens](https://docs.github.com/en/enterprise-cloud%40latest/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app).
+
 At inspection, PR #49 head was `92bb783a7555be78d59d50ef25c3f734bd5df8c9`.
 Codex finding: discussion 4209497457, review 5445420558, actor 199175422.
 Cursor footer references bc-00f193ea-2c96-4b93-a3aa-12a074bd0b78; its API identity
