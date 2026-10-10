@@ -68,3 +68,37 @@ test("SC-012-B real React renderer preserves typed rationale after failed review
  assert.ok(tree.root.findAllByProps({role:"alert"}).some(n=>JSON.stringify(n.props.children).includes("Nie udało")));
  await act(async()=>tree.unmount());
 });
+
+
+test("SC-012-B real React renderer disables reviewer controls during an unresolved request",async()=>{
+ let releaseRequest;
+ const pending=new Promise(resolve=>{releaseRequest=resolve;});
+ let tree, completion;
+ await act(async()=>{tree=create(React.createElement(Panel,{
+   plan:plan(),role:"recruiter",backendReady:true,onReview:async()=>pending
+ }));});
+ await act(async()=>{tree.root.findByType("textarea").props.onChange({target:{value:"Opis korekty"}});});
+ await act(async()=>{completion=button(tree,"Wymaga poprawy").props.onClick();});
+ assert.equal(tree.root.findByType("fieldset").props.disabled,true);
+ assert.equal(button(tree,"Wydaj zatwierdzony scenariusz").props.disabled,true);
+ assert.equal(tree.root.findByType("textarea").props.value,"Opis korekty");
+ await act(async()=>{releaseRequest();await completion;});
+ assert.equal(tree.root.findByType("fieldset").props.disabled,false);
+ await act(async()=>tree.unmount());
+});
+test("SC-012-B changing plan version clears rationale and previous review error",async()=>{
+ let tree;
+ const original=plan();
+ const props={plan:original,role:"recruiter",backendReady:true,
+   onReview:async()=>{throw Error("simulated conflict");}};
+ await act(async()=>{tree=create(React.createElement(Panel,props));});
+ await act(async()=>{tree.root.findByType("textarea").props.onChange({target:{value:"Rationale belongs only to old plan"}});});
+ await act(async()=>{await button(tree,"Wymaga poprawy").props.onClick();});
+ assert.ok(tree.root.findAllByProps({role:"alert"}).length>0);
+ await act(async()=>{tree.update(React.createElement(Panel,{
+   ...props,plan:{...original,planVersion:original.planVersion+1},
+ }));});
+ assert.equal(tree.root.findByType("textarea").props.value,"");
+ assert.equal(tree.root.findAllByProps({role:"alert"}).length,0);
+ await act(async()=>tree.unmount());
+});
