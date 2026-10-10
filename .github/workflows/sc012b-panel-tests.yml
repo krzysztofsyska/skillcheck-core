@@ -6,6 +6,7 @@ on:
       - 'components/voice/VoicePlanApprovalPanel.tsx'
       - 'tests/voice-plan-panel-state.test.mjs'
       - 'tests/voice-plan-panel-component.test.mjs'
+      - 'tests/voice-plan-panel-react-state.test.mjs'
       - '.github/workflows/sc012b-panel-tests.yml'
   push:
     branches: [integration, main]
@@ -14,6 +15,7 @@ on:
       - 'components/voice/VoicePlanApprovalPanel.tsx'
       - 'tests/voice-plan-panel-state.test.mjs'
       - 'tests/voice-plan-panel-component.test.mjs'
+      - 'tests/voice-plan-panel-react-state.test.mjs'
       - '.github/workflows/sc012b-panel-tests.yml'
 permissions:
   contents: read
@@ -26,4 +28,6 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
-      - run: node --test tests/voice-plan-panel-state.test.mjs tests/voice-plan-panel-component.test.mjs
+      # Isolated CI-only React state renderer. Do not alter application dependencies.
+      - run: npm install --no-save --package-lock=false react-test-renderer@19.3.0
+      - run: node --test tests/voice-plan-panel-state.test.mjs tests/voice-plan-panel-component.test.mjs tests/voice-plan-panel-react-state.test.mjs
