@@ -50,7 +50,7 @@ create table public.voice_plan_versions (
   unique (company_id,id),
   unique (company_id,id,application_id),
   unique (company_id,application_id,plan_version),
-  check ((supersedes_plan_id is null) = (corrects_review_id is null)),
+  check (corrects_review_id is null or supersedes_plan_id is not null),
   foreign key(company_id,application_id,supersedes_plan_id)
     references public.voice_plan_versions(company_id,application_id,id) on delete restrict,
   foreign key(company_id,recruitment_id) references public.recruitments(company_id,id) on delete restrict,
@@ -201,3 +201,54 @@ create trigger voice_plan_reviews_immutable
 create trigger voice_plan_releases_immutable
   before update or delete on private.voice_plan_release_entries
   for each row execute function private.voice_plan_protect_history();
+
+
+-- Prototype-only lineage guard; an authenticated write RPC will need to own
+-- the same app advisory lock, actor authorization and complete source checks.
+create or replace function private.voice_plan_prototype_lineage_guard()
+returns trigger language plpgsql security invoker set search_path='' as $$
+declare
+ previous_plan public.voice_plan_versions%rowtype;
+ latest_review private.voice_plan_review_entries%rowtype;
+begin
+ perform pg_catalog.pg_advisory_xact_lock(
+   pg_catalog.hashtextextended(new.company_id::text||':'||new.application_id::text,0));
+ select * into previous_plan from public.voice_plan_versions
+   where company_id=new.company_id and application_id=new.application_id
+   order by plan_version desc limit 1;
+ if not found then
+   if new.plan_version<>1 or new.supersedes_plan_id is not null
+      or new.corrects_review_id is not null then
+     raise exception using errcode='PT409',message='VOICE_PLAN_LINEAGE_CONFLICT';
+   end if;
+   return new;
+ end if;
+ if new.supersedes_plan_id is distinct from previous_plan.id or
+    new.plan_version<>previous_plan.plan_version+1 then
+   raise exception using errcode='PT409',message='VOICE_PLAN_LINEAGE_CONFLICT';
+ end if;
+ select * into latest_review from private.voice_plan_review_entries
+   where company_id=new.company_id and application_id=new.application_id
+     and plan_id=previous_plan.id order by review_version desc limit 1;
+ if not found then
+   if new.corrects_review_id is not null or
+      new.source_hash=previous_plan.source_hash then
+     raise exception using errcode='PT409',message='VOICE_PLAN_LINEAGE_CONFLICT';
+   end if;
+ elsif new.corrects_review_id is distinct from latest_review.id then
+   raise exception using errcode='PT409',message='VOICE_PLAN_LINEAGE_CONFLICT';
+ elsif latest_review.decision='requires_changes' then
+   if new.envelope_hash=previous_plan.envelope_hash then
+     raise exception using errcode='PT409',message='VOICE_PLAN_CORRECTION_UNCHANGED';
+   end if;
+ elsif new.source_hash=previous_plan.source_hash then
+   raise exception using errcode='PT409',message='VOICE_PLAN_SOURCE_UNCHANGED';
+ end if;
+ return new;
+end;
+$$;
+revoke all on function private.voice_plan_prototype_lineage_guard()
+  from public,anon,authenticated;
+create trigger voice_plan_lineage_before_insert
+  before insert on public.voice_plan_versions
+  for each row execute function private.voice_plan_prototype_lineage_guard();
