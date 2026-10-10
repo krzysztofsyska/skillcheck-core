@@ -181,7 +181,11 @@ export function validatePlanReleaseCommand(raw: PlanReleaseRequest): PlanRelease
       x.expectedReviewVersion<1) invalid();
   return Object.freeze(x);
 }
-export function planWriteFingerprint(raw: VoicePlanWriteSnapshot): string {
+export function planWriteFingerprint(
+  raw: VoicePlanWriteSnapshot,
+  trustedSource: InterviewSource,
+  trustedBinding: VoicePlanSourceBinding,
+): string {
   const p=cleanClone(raw);
   if (!exactFields(p,["schemaVersion","storageContractVersion","sourceBinding","sourceHash",
       "planSourceFingerprint","planContractHash","templateVersion","language","targetSeconds",
@@ -198,6 +202,12 @@ export function planWriteFingerprint(raw: VoicePlanWriteSnapshot): string {
       !p.questions.every((q,i)=>controlledQuestion(q,i))) invalid();
   if (new Set(p.questions.map(q=>q.id)).size!==p.questions.length) invalid();
   if (sourceDigest(p.sourceBinding,p.planSourceFingerprint)!==p.sourceHash) invalid();
+  // Content hashes are unkeyed and cannot independently grant source authority.
+  // The calling server must re-fetch and authorize these sources from tenant DB,
+  // NOT pass browser-supplied trustedSource or trustedBinding.
+  if (!trustedSource || !trustedBinding) invalid();
+  const expected=createVoicePlanWriteSnapshot(trustedSource,trustedBinding);
+  if (JSON.stringify(p)!==JSON.stringify(expected)) invalid();
   const recomputedContractHash=hash({plan:p.templateVersion,questions:p.questions});
   if (recomputedContractHash!==p.planContractHash) invalid();
   return hash({
