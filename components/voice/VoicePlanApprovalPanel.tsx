@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getVoicePlanPanelPermissions,
   type VoicePlanPanelStatus,
@@ -57,6 +57,10 @@ export function VoicePlanApprovalPanel({
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState<string | null>(null);
   const [comment,setComment]=useState("");
+  // Updated during render so a pending callback from an old plan cannot mutate
+  // a newer plan even before React runs its reset effect.
+  const activeRevision=useRef(plan.id+":"+String(plan.planVersion));
+  activeRevision.current=plan.id+":"+String(plan.planVersion);
   // A regenerated/replaced plan must not inherit the previous plan's rationale,
   // error state or pending submission UI. The server still owns authorization.
   useEffect(()=>{
@@ -76,23 +80,29 @@ export function VoicePlanApprovalPanel({
     if (decision === "requires_changes" && reason.length===0) {
       setError("Podaj uzasadnienie wymaganych poprawek."); return;
     }
+    const startedRevision=activeRevision.current;
     setBusy(true); setError(null);
     try {
       // No actor/tenant IDs are supplied by the browser. Verified RPC derives them.
       await onReview({planId:plan.id,expectedVersion:plan.planVersion,
         expectedSourceHash:plan.sourceHash,decision,reason:reason || null});
-      setComment("");
-    } catch { setError("Nie udało się zapisać oceny. Odśwież źródła i spróbuj ponownie."); }
-    finally { setBusy(false); }
+      if (activeRevision.current===startedRevision) setComment("");
+    } catch {
+      if (activeRevision.current===startedRevision)
+        setError("Nie udało się zapisać oceny. Odśwież źródła i spróbuj ponownie.");
+    } finally { if (activeRevision.current===startedRevision) setBusy(false); }
   }
   async function release() {
     if (!canRelease || !onRelease) return;
+    const startedRevision=activeRevision.current;
     setBusy(true); setError(null);
     try {
       await onRelease({planId:plan.id,expectedVersion:plan.planVersion,
         expectedSourceHash:plan.sourceHash});
-    } catch { setError("Nie udało się wydać scenariusza. Sprawdź jego aktualność."); }
-    finally { setBusy(false); }
+    } catch {
+      if (activeRevision.current===startedRevision)
+        setError("Nie udało się wydać scenariusza. Sprawdź jego aktualność.");
+    } finally { if (activeRevision.current===startedRevision) setBusy(false); }
   }
   return (
     <section aria-label="Przegląd scenariusza rozmowy" style={{maxWidth:900,margin:"0 auto",padding:24}}>
