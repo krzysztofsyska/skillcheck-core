@@ -41,13 +41,13 @@ export function validateVoiceCallRequest(value: VoiceCallRequest): void {
   if (!s || s.schemaVersion !== 1 || s.language !== "pl-PL" ||
       !opaque.test(s.introductionVersion) || s.constraints?.maxSeconds !== 600 ||
       !Array.isArray(s.constraints?.prohibitedTopics) || s.constraints.prohibitedTopics.length > 20 ||
-      !s.constraints.prohibitedTopics.every(t => safeText(t, 100)) ||
+      !s.constraints.prohibitedTopics.every((t: unknown) => safeText(t, 100)) ||
       !Array.isArray(s.questions) || s.questions.length < 1 || s.questions.length > 8) throw new VoiceProviderValidationError();
   const ids = new Set<string>();
   for (const q of s.questions) {
     if (!q || !opaque.test(q.id) || ids.has(q.id) || !safeText(q.prompt, 1000) ||
         !Array.isArray(q.followUps) || q.followUps.length > 2 ||
-        !q.followUps.every(t => safeText(t, 500))) throw new VoiceProviderValidationError();
+        !q.followUps.every((t: unknown) => safeText(t, 500))) throw new VoiceProviderValidationError();
     ids.add(q.id);
   }
 }
