@@ -47,7 +47,8 @@ test("SC-012-B B2 renders safe preview and disables review/release without backe
  const all=nodes(tree);
  const list=buttons(tree);
  assert.equal(list.length,3);
- assert.ok(list.every(n=>n.props.disabled || all.some(x=>x.type==="fieldset" && x.props.disabled)));
+ assert.ok(list.slice(0,2).every(n=>all.some(x=>x.type==="fieldset" && x.props.disabled)));
+ assert.equal(list.at(-1).props.disabled,true,"release is outside fieldset and MUST be independently disabled");
  assert.ok(all.some(n=>typeof n.props.children==="string" && n.props.children.includes("Tryb podglądu")));
 });
 test("SC-012-B B2 shows requires_changes outcome instead of approved label",()=>{
