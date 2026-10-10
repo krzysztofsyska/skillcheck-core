@@ -16,7 +16,7 @@ export async function activateSc19Free(form: FormData) {
   if (nip.length > 20) redirect(`/dashboard/${companyId}/billing?status=invalid`);
   const { error } = await client.rpc('sc19_claim_trial', { target_company: companyId, supplied_nip: nip });
   if (error) {
-    const status = error.code === '23505' ? 'taken' : error.code === '22023' ? 'invalid' : 'failed';
+    const status = error.code === '23505' ? 'taken' : error.code === '22023' ? 'invalid' : error.code === '42501' ? 'verify' : 'failed';
     redirect(`/dashboard/${companyId}/billing?status=${status}`);
   }
   revalidatePath(`/dashboard/${companyId}/billing`);
