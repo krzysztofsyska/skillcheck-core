@@ -20,3 +20,13 @@ The SQL is intentionally stored under db/prototypes/, not supabase/migrations/. 
 6. An isolated developer DB is not currently available in the connected Supabase project. Never apply draft SQL to the production project `wsvjawuikxfzjyivxgsu` or run blanket db push.
 
 No RLS grants, end-user UI route, provider API or contact dispatch are delivered by this prototype.
+
+## Confirmed real PostgreSQL 16 race prototype — October 10, 2026
+
+- `tests/voice-plan-schema-concurrency.test.mjs` uses two independent `pg` connections to a throwaway database created and dropped inside GitHub Actions, including existing SC-006/008/010 migration history.
+- Two sessions cannot concurrently lock the same current-release pointer using `FOR UPDATE NOWAIT`; loser receives SQLSTATE 55P03, and subsequent stale-version CAS changes zero rows. Mapping zero rows to PT409 is still future trusted RPC work.
+- Append-only trigger protects plan, human-review, and release history against UPDATE/DELETE, including privileged test sessions. Future legally authorized retention/deletion requires separate narrow owner-approved protocol.
+- Composite parent keys reject foreign-tenant bindings. This prototype does NOT yet validate all same-tenant source provenance in one transactional RPC, nor hold actual authorization locks in a production workflow.
+- CI `SC012B isolated schema prototype` runs both PGlite security tests and PostgreSQL 16 two-session tests, without a paid Supabase branch or remote data mutation.
+
+STATUS: module real-PG test PASS on head 9fe406809ea28f06143b3baa46c846b9e38d6464; full Checks and fresh independent review are separate gates. This remains a prototype (NOT `supabase/migrations`), with no production approval.
