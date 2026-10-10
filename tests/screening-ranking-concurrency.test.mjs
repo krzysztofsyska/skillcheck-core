@@ -56,8 +56,15 @@ test('SC-008 real PostgreSQL transaction races preserve confirmed snapshots',asy
       };
       if(first==='add'){
         await adder.db.query('begin');const id=await adder.add(f,'manual',original,'Confirmed old result');
-        const pending=outcome(mutate());await waitForLock(changer.db);await adder.db.query('commit');
-        const result=await pending;assert.equal(result.ok,true,result.message);
+        if(change==='review'||change==='completion'){
+          // R2 source RPCs lock the candidate NOWAIT before their original row locks.
+          assertConflict(await outcome(mutate()));await adder.db.query('commit');
+          const retried=await outcome(mutate());assert.equal(retried.ok,true,retried.message);
+        }else{
+          // Direct document/position UPDATE still waits on the row held by shortlist.
+          const pending=outcome(mutate());await waitForLock(changer.db);await adder.db.query('commit');
+          const result=await pending;assert.equal(result.ok,true,result.message);
+        }
         const entries=await finalEntries(f);assert.equal(entries.length,1);assert.equal(entries[0].entry_id,id);assert.equal(entries[0].analysis_id,original.analysis_id);assert.equal(entries[0].review_id,original.review_id);assert.equal(entries[0].snapshot_current,false);assert.equal(Number(entries[0].raw_score_snapshot),50);
       }else{
         await changer.db.query('begin');await mutate();
@@ -72,8 +79,10 @@ test('SC-008 real PostgreSQL transaction races preserve confirmed snapshots',asy
     const f=await approved(`two-add-${winningSide}`),expected=await h.row(f),left=await session(),right=await session();
     const winner=winningSide==='left'?left:right,loser=winningSide==='left'?right:left;
     await winner.db.query('begin');const id=await winner.add(f,'manual',expected);
-    const pending=outcome(loser.add(f,'manual',expected));await waitForLock(loser.db);await winner.db.query('commit');
-    assertConflict(await pending);const entries=await finalEntries(f);assert.equal(entries.length,1);assert.equal(entries[0].entry_id,id);assert.equal(entries[0].snapshot_current,true);await assertSingle(f);
+    // The candidate guard rejects before the unique-index wait; after commit
+    // the retry must still reject the already-created active snapshot.
+    assertConflict(await outcome(loser.add(f,'manual',expected)));await winner.db.query('commit');
+    assertConflict(await outcome(loser.add(f,'manual',expected))); const entries=await finalEntries(f);assert.equal(entries.length,1);assert.equal(entries[0].entry_id,id);assert.equal(entries[0].snapshot_current,true);await assertSingle(f);
   });
 
   for(const winningSide of['left','right'])await t.test(`two removes: ${winningSide} owns row lock and replay is idempotent`,async()=>{
