@@ -15,7 +15,7 @@ export type ScreeningResultForVoice = Readonly<{
   criterionId: string; rating: ScreeningRatingForVoice;
 }>;
 export type ScreeningReviewOverrideForVoice = Readonly<{
-  criterionId: string; rating: ScreeningRatingForVoice;
+  criterionId: string; rating: ScreeningRatingForVoice | null;
 }>;
 export type ScreeningGapSelectionSource = Readonly<{
   latestHumanDecision: "approved" | "approved_with_changes" | "requires_changes" | "rejected";
@@ -94,9 +94,13 @@ export function selectReviewedScreeningGaps(
   const overrideSeen=new Set<string>();
   for(const change of src.overrides){
     if (!change || typeof change.criterionId!=="string" || !order.has(change.criterionId) ||
-        overrideSeen.has(change.criterionId)||!validRating(change.rating)) invalid();
+        overrideSeen.has(change.criterionId) ||
+        !Object.prototype.hasOwnProperty.call(change,"rating") ||
+        !(change.rating===null || validRating(change.rating))) invalid();
     overrideSeen.add(change.criterionId);
-    effective.set(change.criterionId,change.rating);
+    // Evidence-only and explanation-only human overrides have NULL rating_override.
+    // They must not remove or change the original machine rating.
+    if (change.rating!==null) effective.set(change.criterionId,change.rating);
   }
   const candidates=Array.from(order.values())
     .filter(c=>effective.get(c.id)==="insufficient_data")
