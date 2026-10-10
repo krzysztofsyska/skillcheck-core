@@ -160,6 +160,7 @@ export function reviewInterviewPlan(
     throw new InterviewPlanError("VOICE_PLAN_STALE_OR_CONFLICT");
   const reviewed = immutable({ ...plan, status: "reviewed", revision: 2,
     reviewerId: input.reviewerId, reviewedAt: input.reviewedAt });
+  generatedInProcess.delete(plan);
   reviewedInProcess.add(reviewed);
   return reviewed;
 }
@@ -180,6 +181,8 @@ export function releaseInterviewPlan(
       new Date(input.releasedAt).toISOString() !== input.releasedAt ||
       Date.parse(input.releasedAt) < Date.parse(plan.reviewedAt))
     throw new InterviewPlanError("VOICE_PLAN_STALE_OR_CONFLICT");
-  return immutable({ ...plan, status: "released", revision: 3,
+  const released = immutable({ ...plan, status: "released", revision: 3,
     releasedBy: input.releasedBy, releasedAt: input.releasedAt });
+  reviewedInProcess.delete(plan);
+  return released;
 }
