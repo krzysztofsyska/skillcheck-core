@@ -28,7 +28,7 @@ test("SC-012-B B1 canonical role source produces immutable questions without PII
  assert.equal(s.maximumSeconds,600);
  assert.ok(Object.isFrozen(s.questions));
  assert.ok(Object.isFrozen(s));
- assert.match(planWriteFingerprint(s),/^[a-f0-9]{64}$/);
+ assert.match(planWriteFingerprint(s,source(),binding()),/^[a-f0-9]{64}$/);
  assert.ok(!JSON.stringify(s.questions).includes("Przychody"));
 });
 test("SC-012-B B1 detects inconsistent tenant or application binding",()=>{
@@ -41,7 +41,7 @@ test("SC-012-B B1 source versions cannot reuse a previous fingerprint",()=>{
  const original=createVoicePlanWriteSnapshot(source(),binding());
  const changed=createVoicePlanWriteSnapshot(source(),{...binding(),reviewId:id(90)});
  assert.notEqual(original.sourceHash,changed.sourceHash);
- assert.notEqual(planWriteFingerprint(original),planWriteFingerprint(changed));
+ assert.notEqual(planWriteFingerprint(original,source(),binding()),planWriteFingerprint(changed,source(),{...binding(),reviewId:id(90)}));
 });
 test("SC-012-B B1 exact review and release commands cannot smuggle extra fields",()=>{
  const review={planId:id(21),expectedPlanVersion:1,expectedSourceHash:sha,
@@ -78,10 +78,10 @@ test("SC-012-B B1 rejects array-wrapped hashes and mutated or copied plan envelo
  const valid=createVoicePlanWriteSnapshot(source(),binding());
  const modified=structuredClone(valid);
  modified.questions[0].text="Injected private text";
- assert.throws(()=>planWriteFingerprint(modified),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint(modified,source(),binding()),VoicePlanStorageError);
  const modifiedTime=structuredClone(valid);
  modifiedTime.targetSeconds=60;
- assert.throws(()=>planWriteFingerprint(modifiedTime),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint(modifiedTime,source(),binding()),VoicePlanStorageError);
 });
 
 test("SC-012-B B1 accepts position input near existing 30-by-500 source limits",()=>{
@@ -95,19 +95,34 @@ test("SC-012-B B1 accepts position input near existing 30-by-500 source limits",
 
 test("SC-012-B rejects mutated source binding, source fingerprint, and array hash",()=>{
  const s=createVoicePlanWriteSnapshot(source(),binding());
- assert.throws(()=>planWriteFingerprint({...s,sourceHash:[s.sourceHash]}),VoicePlanStorageError);
- assert.throws(()=>planWriteFingerprint({...s,sourceBinding:{...s.sourceBinding,reviewId:id(83)}}),VoicePlanStorageError);
- assert.throws(()=>planWriteFingerprint({...s,planSourceFingerprint:"f".repeat(64)}),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint({...s,sourceHash:[s.sourceHash]},source(),binding()),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint({...s,sourceBinding:{...s.sourceBinding,reviewId:id(83)}},source(),binding()),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint({...s,planSourceFingerprint:"f".repeat(64)},source(),binding()),VoicePlanStorageError);
  const altered=structuredClone(s);
  altered.questions[0].text="Wstrzyknięte dane osobowe";
  altered.planContractHash=createHash("sha256").update(JSON.stringify({
    plan:altered.templateVersion,questions:altered.questions
  })).digest("hex");
- assert.throws(()=>planWriteFingerprint(altered),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint(altered,source(),binding()),VoicePlanStorageError);
 });
 test("SC-012-B accepts PostgreSQL microsecond timestamps and timezone offsets",()=>{
  const pgBinding={...binding(),applicationUpdatedAt:"2026-10-10T13:00:00.123456+00:00",
    recruitmentUpdatedAt:"2026-10-10T15:00:00.000001+02:00"};
  const s=createVoicePlanWriteSnapshot(source(),pgBinding);
- assert.match(planWriteFingerprint(s),/^[a-f0-9]{64}$/);
+ assert.match(planWriteFingerprint(s,source(),pgBinding),/^[a-f0-9]{64}$/);
+});
+
+test("SC-012-B does not accept another allowlisted question from an unrelated criterion",()=>{
+ const x=createVoicePlanWriteSnapshot(source(),binding());
+ const altered=structuredClone(x);
+ altered.questions[4]={
+   ...altered.questions[4],id:"clarification-task-30",
+   criterionId:"task:30",criterionKind:"task",
+   text:"Proszę opisać konkretne zadanie, które wykonywał Pan lub wykonywała Pani osobiście, i jego rezultat.",
+ };
+ altered.planContractHash=createHash("sha256").update(JSON.stringify({
+   plan:altered.templateVersion,questions:altered.questions
+ })).digest("hex");
+ assert.throws(()=>planWriteFingerprint(altered,source(),binding()),VoicePlanStorageError);
+ assert.throws(()=>planWriteFingerprint(x),VoicePlanStorageError);
 });
