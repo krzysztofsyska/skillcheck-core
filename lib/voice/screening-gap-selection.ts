@@ -70,6 +70,8 @@ export function selectReviewedScreeningGaps(
         resultMap.has(result.criterionId)||!validRating(result.rating)) invalid();
     resultMap.set(result.criterionId,result.rating);
   }
+  // A plain approval cannot carry correction rows from an older review.
+  if (src.latestHumanDecision==="approved" && src.overrides.length!==0) invalid();
   const effective=new Map(resultMap);
   const overrideSeen=new Set<string>();
   for(const change of src.overrides){
