@@ -1,0 +1,25 @@
+name: SC012B isolated schema prototype
+on:
+  pull_request:
+    paths:
+      - 'db/prototypes/sc012b-plan-schema.sql'
+      - 'tests/voice-plan-schema-prototype.test.mjs'
+      - '.github/workflows/sc012b-schema-prototype.yml'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'db/prototypes/sc012b-plan-schema.sql'
+      - 'tests/voice-plan-schema-prototype.test.mjs'
+      - '.github/workflows/sc012b-schema-prototype.yml'
+permissions:
+  contents: read
+jobs:
+  isolated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: node --test tests/voice-plan-schema-prototype.test.mjs
