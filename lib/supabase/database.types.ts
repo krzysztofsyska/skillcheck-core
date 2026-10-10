@@ -380,6 +380,14 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      claim_sales_mail: {
+        Args: { target_lead: string | null; request_id: string; issued_at_ms: number; request_signature: string };
+        Returns: { lead_id: string; email: string; template_version: string; lease_id: string }[];
+      };
+      finish_sales_mail: {
+        Args: { target_lead: string; request_id: string; issued_at_ms: number; outcome: string; provider_id: string | null; request_signature: string };
+        Returns: boolean;
+      };
       approve_candidate_communication: {
         Args: { target_communication: string; expected_version: number; receipt_id: string; request_key: string };
         Returns: string;
@@ -435,6 +443,8 @@ export type Database = {
         phone: string | null; needs: string; source_ip: string; issued_at_us: number; request_signature: string;
       }; Returns: { lead_id: string | null; result_code: string }[] };
       list_sales_leads: { Args: { result_limit?: number }; Returns: SalesLead[] };
+      list_sales_leads_inbox: { Args: { result_limit?: number }; Returns: (Omit<SalesLead, 'idempotency_key' | 'fingerprint_hash'> & { closed_at: string | null })[] };
+      close_sales_lead: { Args: { target_lead: string }; Returns: string };
       platform_operator_status: { Args: Record<PropertyKey, never>; Returns: boolean };
       grant_platform_operator: { Args: { target_user: string }; Returns: string };
       revoke_platform_operator: { Args: { target_user: string }; Returns: string };
