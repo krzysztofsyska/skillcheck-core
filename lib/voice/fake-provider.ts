@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import {
   validateVoiceCallRequest, VoiceProviderUncertainError, VoiceProviderValidationError,
   type VoiceCallAcceptance, type VoiceCallLookup, type VoiceCallRequest, type VoiceProvider,
-} from "./provider";
+} from "./provider.ts";
 
 export type FakeVoiceMode = "accepted" | "timeout_before_acceptance" | "timeout_after_acceptance";
 type Entry = { fingerprint: string; providerCallId: string; status: "accepted" | "cancelled" };
