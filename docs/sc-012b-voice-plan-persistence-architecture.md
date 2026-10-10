@@ -45,3 +45,29 @@ Panel `recruitments/[id]/applications/[applicationId]/voice-plan`: cztery porów
 
 ## Handoff
 TASK SC-012-B | STATUS ARCHITECTURE_REVIEW | BRANCH docs/sc-012b-persistence-architecture | DB/MIGRATIONS NONE | DEPLOY NONE | NEXT ACTION niezależny Codex review i poprawki architektury; potem osobna gałąź implementacji B1 (schema/RPC/testy), następnie B2 UI/integracja bez produkcji.
+
+## V2 binding corrections after independent Codex review (supersedes conflicting V1)
+
+1. Repository versus database: SC-010 B1/B2 migration files are present in BOTH main and integration Git branches. Live Supabase migration history from 10 October 2026 did NOT include either migration. Do not confuse repo files with production database state.
+
+2. Deterministic screening gaps: latest human review must be approved or approved_with_changes. Effective rating is most recent override from that review, otherwise stored AI criterion rating. Only effective insufficient_data generates reason=missing_evidence; current schema has no machine-verified contradiction or scope_unverified reason, so other reasons are BLOCKED. Exact ID must belong to approved criteria snapshot. Select at most two in task, kpi, competency sequence and increasing numeric index; no ranking based on explanation text, no user-supplied reasons.
+
+3. Source composite relationships: require UNIQUE(company_id,recruitment_id,application_id,position_id,id) for screening_analysis_versions; UNIQUE(company_id,analysis_id,id) for screening_result_reviews; UNIQUE(company_id,recruitment_id,application_id,analysis_id,review_id,id) for recruitment_shortlist_entries. voice_plan_versions stores all seven IDs including position, analysis, screening_review, shortlist and binds via full composite FKs to each parent, plus applications, recruitments and positions. Check current status in server RPC even with valid FK.
+
+4. Voice review keys: voice_plan_review_entries includes id UUID, company_id, plan_id, review_version, decision, reviewed_at, reviewer_id; UNIQUE(company_id,plan_id,id) and UNIQUE(company_id,plan_id,review_version). voice_plan_release_entries references (company_id,plan_id,voice_review_entry_id) to the voice review, not screening review; one effective release per plan.
+
+5. Plan status is DERIVED ONLY. Remove mutable voice_plan_versions.status. A security-invoker read derives stale on changed source, else released if release references latest approved review, else reviewed if review exists, otherwise generated. Plan/review/release history append-only; no contradictory status caches.
+
+6. Global locking: B1 must not lock candidate or communication because it must not dispatch calls. Authorization and role read before locks; acquire SC-006 per-application screening advisory lock FIRST, then existing SC-006/008 order: analysis -> application -> recruitment -> position -> document, then latest review -> shortlist -> voice_plan -> voice_review -> voice_release -> idempotency. SC-010 contact lock chain is intentionally NEVER taken by B1. Test review_screening_result/retry_screening_analysis vs plan create/review/release, shortlist removal vs release, two concurrent release, owner role revocation, and stale profile edits in real two-session PostgreSQL; never silently reorder locks. SC-010-C must independently design any cross-domain transaction.
+
+7. Retention and deletion: all plan rows, question envelopes, review reasons, releases, idempotency and source snapshots have retention_policy_version and retention_deadline. All source/parent FKs RESTRICT. Pre-activation operator-authorized purge/redaction must cover descendants, keys and minimal lawful audit, and UI must explain blocked parent deletion. Retention schedule awaits separate policy approval; never deploy with indefinite PII.
+
+8. Immutable provenance: persist source_snapshot JSONB containing bound analysis_id, screening_review_id, shortlist_entry_id, application/recruitment/position updated_at, input_fingerprint, analysis_contract_hash, template_version, prompt_version and source_contract_version. Compute source hash over this exact canonical snapshot plus identity bindings. Hash alone is insufficient for audit.
+
+9. Immutable complete envelope: plan_envelope JSONB contains schemaVersion=1, language=pl-PL, templateVersion, durationTargetSeconds=420, durationMaxSeconds=600, recordingDefault=false, noticeRequired=true and full ordered questions with criterion mapping/follow-ups/maxSeconds. Hash/SQL validation cover all fields; never regenerate historical plan from current generator.
+
+10. Scope and owner: Issue #80 product is FULLSTACK, Cursor builder, Codex reviewer; docs-only PR #82 is OPERATIONS and ChatGPT orchestrator. Next implementation B1 is BACKEND L3, B2 presentation FULLSTACK according to changes, each separately reviewed.
+
+11. Handoff: TASK SC-012-B/ARCH; STATUS V2_REVIEW; BRANCH docs/sc-012b-persistence-architecture; COMMIT read from exact GitHub PR head; CHANGED FILES docs/sc-012b-voice-plan-persistence-architecture.md; DB/MIGRATIONS NONE; TESTS planned PGlite/RLS + 2-session PostgreSQL concurrency + build/typecheck; SECURITY CHECKS composite FK, no PII, immutable snapshots, lock ordering and retention; KNOWN ISSUES migration/purge flow and unimplemented SQL/RPC; BLOCKERS Codex PASS and SQL via Supabase CLI/test database; NEXT ACTION review fixes then implement offline schema/RPC.
+
+No production changes, SQL, secrets or calls authorized by this document.
