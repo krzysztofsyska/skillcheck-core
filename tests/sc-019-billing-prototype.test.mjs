@@ -54,6 +54,11 @@ test('SC-019 prototype: FREE NIP identity, RLS-like RPC checks and zero anonymou
   const h=await setup();t.after(()=>h.db.close());
   const tax=nip('123456321');
   await h.as(ownerA);
+  await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,tax]),e=>e.code==='42501');
+  await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,'this-is-not-a-nip']),e=>e.code==='22023');
+  await h.admin();
+  await h.db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[companyA,tax,'verified-test-a']);
+  await h.as(ownerA);
   assert.equal((await h.db.query('select public.sc19_claim_trial($1,$2) as credits',[companyA,tax])).rows[0].credits,5);
   assert.deepEqual(await h.balance(companyA),{plan:'FREE',available:5,free_claimed:true});
   assert.equal((await h.db.query('select public.sc19_claim_trial($1,$2) as credits',[companyA,tax])).rows[0].credits,5);
@@ -62,7 +67,7 @@ test('SC-019 prototype: FREE NIP identity, RLS-like RPC checks and zero anonymou
   await assert.rejects(h.db.query('select * from private.sc19_balances'),e=>e.code==='42501');
   await assert.rejects(h.db.query('select private.sc19_grant_paid($1,$2)',[companyA,'settlement-123']),e=>e.code==='42501');
   await h.as(ownerB);
-  await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyB,tax]),e=>e.code==='23505');
+  await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyB,tax]),e=>e.code==='42501');
   await assert.rejects(h.db.query('select * from public.sc19_get_balance($1)',[companyA]),e=>e.code==='42501');
   await h.as(null,'anon');
   await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,tax]),e=>e.code==='42501');
@@ -70,6 +75,8 @@ test('SC-019 prototype: FREE NIP identity, RLS-like RPC checks and zero anonymou
 
 test('SC-019 prototype: atomic spend, last-credit denial, refund and retry',async t=>{
   const h=await setup();t.after(()=>h.db.close());
+  await h.admin();
+  await h.db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[companyA,nip('123456321'),'verified-test-consume']);
   await h.as(ownerA);
   await h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,nip('123456321')]);
   await h.admin();
