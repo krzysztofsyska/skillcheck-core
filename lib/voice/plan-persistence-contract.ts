@@ -59,7 +59,7 @@ const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o,
 function cleanClone<T>(value: T): T {
   try {
     const clone = structuredClone(value);
-    if (JSON.stringify(clone).length > 35000) invalid();
+    if (JSON.stringify(clone).length > 250000) invalid();
     return clone;
   } catch { return invalid(); }
 }
@@ -128,7 +128,7 @@ export function validatePlanReviewCommand(raw: PlanReviewRequest): PlanReviewReq
   const x=cleanClone(raw);
   if (!exactFields(x,["planId","expectedPlanVersion","expectedSourceHash",
       "expectedReviewVersion","decision","requestKey"]) ||
-      !isId(x.planId) || !isId(x.requestKey) || !HEX.test(x.expectedSourceHash) ||
+      !isId(x.planId) || !isId(x.requestKey) || typeof x.expectedSourceHash !== "string" || !HEX.test(x.expectedSourceHash) ||
       !Number.isSafeInteger(x.expectedPlanVersion) || x.expectedPlanVersion<1 ||
       !Number.isSafeInteger(x.expectedReviewVersion) || x.expectedReviewVersion<0 ||
       !["approved","requires_changes"].includes(x.decision)) invalid();
@@ -139,7 +139,7 @@ export function validatePlanReleaseCommand(raw: PlanReleaseRequest): PlanRelease
   if (!exactFields(x,["planId","expectedPlanVersion","expectedSourceHash",
       "approvedReviewId","expectedReviewVersion","requestKey"]) ||
       !isId(x.planId) || !isId(x.approvedReviewId) || !isId(x.requestKey) ||
-      !HEX.test(x.expectedSourceHash) || !Number.isSafeInteger(x.expectedPlanVersion) ||
+      typeof x.expectedSourceHash !== "string" || !HEX.test(x.expectedSourceHash) || !Number.isSafeInteger(x.expectedPlanVersion) ||
       x.expectedPlanVersion<1 || !Number.isSafeInteger(x.expectedReviewVersion) ||
       x.expectedReviewVersion<1) invalid();
   return Object.freeze(x);
@@ -149,7 +149,17 @@ export function planWriteFingerprint(p: VoicePlanWriteSnapshot): string {
       !bindingValid(p.sourceBinding) || !HEX.test(p.sourceHash) ||
       !HEX.test(p.planContractHash) || p.recordingAllowed!==false ||
       p.noticeRequired!==true || p.questions.length<4 || p.questions.length>6) invalid();
+  if (p.templateVersion !== "skillcheck-voice-plan-v1" ||
+      p.language !== "pl-PL" || p.targetSeconds !== 420 ||
+      p.maximumSeconds !== 600 || !Array.isArray(p.questions) ||
+      !p.questions.every(q=> exactFields(q,
+        ["id","kind","criterionId","criterionKind","text","followUps","maxSeconds"]) &&
+        typeof q.id === "string" && typeof q.text === "string" &&
+        Array.isArray(q.followUps) &&
+        q.followUps.every(t=>typeof t==="string"))) invalid();
+  const recomputedContractHash=hash({plan:p.templateVersion,questions:p.questions});
+  if (recomputedContractHash!==p.planContractHash) invalid();
   return hash({
-    contract:p.storageContractVersion,source:p.sourceHash,content:p.planContractHash,
+    contract:p.storageContractVersion,source:p.sourceHash,content:recomputedContractHash,
   });
 }
