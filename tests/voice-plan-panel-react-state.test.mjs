@@ -83,7 +83,8 @@ test("SC-012-B real React renderer disables reviewer controls during an unresolv
  assert.equal(button(tree,"Wydaj zatwierdzony scenariusz").props.disabled,true);
  assert.equal(tree.root.findByType("textarea").props.value,"Opis korekty");
  await act(async()=>{releaseRequest();await completion;});
- assert.equal(tree.root.findByType("fieldset").props.disabled,false);
+ assert.equal(tree.root.findByType("fieldset").props.disabled,true,
+   "review success stays latched until server props advance");
  await act(async()=>tree.unmount());
 });
 test("SC-012-B changing plan version clears rationale and previous review error",async()=>{
@@ -147,5 +148,50 @@ test("SC-012-B obsolete failure does not show an error on replacement plan",asyn
  }));});
  await act(async()=>{rejectOld(Error("old request rejected"));await oldCompletion;});
  assert.equal(tree.root.findAllByProps({role:"alert"}).length,0);
+ await act(async()=>tree.unmount());
+});
+
+test("SC-012-B A -> B -> A always remounts and rejects the obsolete A completion",async()=>{
+ const resolvers=[];
+ const onReview=()=>new Promise(resolve=>resolvers.push(resolve));
+ let tree,oldCompletion,newCompletion;
+ const a=plan(),b={...a,id:"00000000-0000-4000-8000-000000000041"};
+ const props=p=>({plan:p,role:"recruiter",backendReady:true,onReview});
+ await act(async()=>{tree=create(React.createElement(Panel,props(a)));});
+ await act(async()=>{tree.root.findByType("textarea").props.onChange({target:{value:"old-A"}});});
+ await act(async()=>{oldCompletion=button(tree,"Wymaga poprawy").props.onClick();});
+ await act(async()=>{tree.update(React.createElement(Panel,props(b)));});
+ await act(async()=>{tree.update(React.createElement(Panel,props(a)));});
+ await act(async()=>{tree.root.findByType("textarea").props.onChange({target:{value:"new-A"}});});
+ await act(async()=>{newCompletion=button(tree,"Wymaga poprawy").props.onClick();});
+ assert.equal(resolvers.length,2);
+ await act(async()=>{resolvers[0]();await oldCompletion;});
+ assert.equal(tree.root.findByType("fieldset").props.disabled,true);
+ assert.equal(tree.root.findByType("textarea").props.value,"new-A");
+ await act(async()=>{resolvers[1]();await newCompletion;});
+ assert.equal(tree.root.findByType("fieldset").props.disabled,true,
+    "successful new A review must remain latched");
+ await act(async()=>tree.unmount());
+});
+test("SC-012-B duplicate actions cannot be submitted after success before props update",async()=>{
+ let reviewCalls=0,releaseCalls=0,tree;
+ const p=plan();
+ await act(async()=>{tree=create(React.createElement(Panel,{
+   plan:p,role:"recruiter",backendReady:true,onReview:async()=>{reviewCalls++;}
+ }));});
+ await act(async()=>{await button(tree,"Zatwierdź scenariusz").props.onClick();});
+ assert.equal(tree.root.findByType("fieldset").props.disabled,true);
+ await act(async()=>{await button(tree,"Zatwierdź scenariusz").props.onClick();});
+ assert.equal(reviewCalls,1);
+ await act(async()=>{tree.update(React.createElement(Panel,{
+   plan:{...p,status:"reviewed",reviewIsApproved:true},role:"recruiter",backendReady:true,
+   onRelease:async()=>{releaseCalls++;}
+ }));});
+ assert.equal(button(tree,"Wydaj zatwierdzony scenariusz").props.disabled,false,
+   "review latch must not suppress separate release");
+ await act(async()=>{await button(tree,"Wydaj zatwierdzony scenariusz").props.onClick();});
+ assert.equal(button(tree,"Wydaj zatwierdzony scenariusz").props.disabled,true);
+ await act(async()=>{await button(tree,"Wydaj zatwierdzony scenariusz").props.onClick();});
+ assert.equal(releaseCalls,1);
  await act(async()=>tree.unmount());
 });
