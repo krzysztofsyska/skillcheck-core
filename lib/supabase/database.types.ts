@@ -405,6 +405,18 @@ export type Database = {
         Returns: string;
       };
       get_erasure_subject_resolution: { Args: { target_candidate: string }; Returns: ErasureSubjectResolution };
+      issue_candidate_erasure_preview: {
+        Args: { target_candidate: string; scope_kind?: 'candidate_record' | 'confirmed_subject'; resolution_id?: string | null };
+        Returns: CandidateErasurePreview & { preview_ticket_id: string };
+      };
+      request_candidate_erasure: { Args: { preview_ticket_id: string; request_key: string }; Returns: string };
+      cancel_candidate_erasure: { Args: { target_request: string; expected_generation: number; request_key: string }; Returns: string };
+      get_erasure_status: { Args: { target_request: string }; Returns: CandidateErasureStatus };
+      get_candidate_erasure_status: { Args: { target_candidate: string }; Returns: CandidateErasureStatus | null };
+      list_candidate_erasure_requests: {
+        Args: { target_company: string; before_created_at?: string | null; before_id?: string | null; page_size?: number };
+        Returns: CandidateErasureStatus[];
+      };
       preview_candidate_erasure: {
         Args: { target_candidate: string; scope_kind?: 'candidate_record' | 'confirmed_subject'; resolution_id?: string | null };
         Returns: CandidateErasurePreview;
@@ -610,4 +622,19 @@ export type SalesPipelineRow = {
  needs: string; created_at: string; stage: import('../sales-pipeline').SalesStage;
  note: string; next_contact_on: string | null; company_id: string | null;
  linked_company_name: string | null; version: number; closed_at: string | null; total_count: number;
+};
+
+export type CandidateErasureStatus = {
+  request_id: string;
+  company_id: string;
+  status: 'authorized' | 'cancelled';
+  generation: number;
+  scope_kind: 'candidate_record' | 'confirmed_subject';
+  candidate_count: number;
+  created_at: string;
+  cancelled_at: string | null;
+  execution_enabled: false;
+  phase: 'local_frozen' | 'cancelled';
+  can_cancel: boolean;
+  blockers: string[];
 };

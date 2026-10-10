@@ -1,4 +1,5 @@
 'use client';
+import {ErasureAuthorization} from '../../../retention/forms';
 import {useActionState,useState,useEffect,useRef} from 'react';
 import {saveRetentionPolicy,confirmSubject,previewErasure,searchSubjectCandidates} from './actions';
 import {stableRequestKey,retentionClasses,retentionTriggers,blockerLabel,previewCountLabels,type RetentionRule,type RetentionState} from '../../../../../../lib/erasure-preview';
@@ -46,5 +47,5 @@ export function RetentionWorkspace(props:{companyId:string;candidateId:string;po
  const [version,setVersion]=useState(0);
  // Stable callback keeps successful saves from repeatedly invalidating a preview.
  const [invalidate]=useState(()=>()=>setVersion(v=>v+1));
- return <><PolicyForm {...props} revision={props.policyRevision} onSaved={invalidate}/><SubjectForm {...props} revision={props.resolutionRevision} onSaved={invalidate}/><PreviewForm key={version} companyId={props.companyId} candidateId={props.candidateId}/></>;
+ return <><PolicyForm {...props} revision={props.policyRevision} onSaved={invalidate}/><SubjectForm {...props} revision={props.resolutionRevision} onSaved={invalidate}/><PreviewForm key={version} companyId={props.companyId} candidateId={props.candidateId}/><ErasureAuthorization key={`authorization-${version}`} companyId={props.companyId} candidateId={props.candidateId}/></>;
 }
