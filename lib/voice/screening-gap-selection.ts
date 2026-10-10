@@ -33,7 +33,8 @@ const ratings = ["insufficient_data","below","meets","above"] as const;
 function parseCriterion(c: ScreeningCriterionForVoice): { id:string; kind:typeof kinds[number]; index:number } {
   if (!c || typeof c.id !== "string" || !kinds.includes(c.kind)) invalid();
   const match = /^(task|kpi|competency):([1-9][0-9]?)$/.exec(c.id);
-  if (!match || match[1]!==c.kind) invalid();
+  if (!match) return invalid();
+  if (match[1]!==c.kind) return invalid();
   const index=Number(match[2]);
   if (!Number.isSafeInteger(index)||index>30) invalid();
   return {id:c.id,kind:c.kind,index};
@@ -60,8 +61,8 @@ export function selectReviewedScreeningGaps(
     seenIndex.set(c.kind,indexes);
   }
   // Approved screening criteria always start at 1 and have contiguous indices.
-  for(const indexes of seenIndex.values()){
-    if([...indexes].some(n=>n<1 || n>indexes.size)) invalid();
+  for(const indexes of Array.from(seenIndex.values())){
+    if(Array.from(indexes).some(n=>n<1 || n>indexes.size)) invalid();
   }
   const resultMap=new Map<string,ScreeningRatingForVoice>();
   for(const result of src.results){
@@ -77,7 +78,7 @@ export function selectReviewedScreeningGaps(
     overrideSeen.add(change.criterionId);
     effective.set(change.criterionId,change.rating);
   }
-  const candidates=[...order.values()]
+  const candidates=Array.from(order.values())
     .filter(c=>effective.get(c.id)==="insufficient_data")
     .sort((a,b)=>kinds.indexOf(a.kind)-kinds.indexOf(b.kind)||a.index-b.index)
     .slice(0,2)
