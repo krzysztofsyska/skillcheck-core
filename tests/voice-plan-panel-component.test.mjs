@@ -65,7 +65,7 @@ test("SC-012-B B2 approved current plan invokes only bounded client review comma
  assert.equal(reviewButton.props.disabled,undefined);
  await reviewButton.props.onClick();
  assert.deepEqual(JSON.parse(JSON.stringify(payload)),{
-   planId:plan().id,expectedVersion:2,expectedSourceHash:plan().sourceHash,decision:"approved",
+   planId:plan().id,expectedVersion:2,expectedSourceHash:plan().sourceHash,decision:"approved",reason:null,
  });
  assert.ok(!("companyId" in payload) && !("actorId" in payload) && !("candidateId" in payload));
 });
@@ -82,4 +82,13 @@ test("SC-012-B B2 release only with current approved review",async()=>{
  const viewer=renderPanel({plan:p,role:"viewer",backendReady:true,
    onRelease:async()=>{throw Error("should not run");}});
  assert.equal(buttons(viewer).at(-1).props.disabled,true);
+});
+
+test("SC-012-B B2 cannot submit change-request review without reason",async()=>{
+ let invoked=false;
+ const tree=renderPanel({plan:plan(),role:"recruiter",backendReady:true,
+   onReview:async()=>{invoked=true;}});
+ const b=buttons(tree).find(x=>x.props.children==="Wymaga poprawy");
+ await b.props.onClick();
+ assert.equal(invoked,false);
 });
