@@ -33,7 +33,7 @@ export type VoicePlanApprovalPanelProps = {
   backendReady?: boolean;
   onReview?: (args: Readonly<{
     planId: string; expectedVersion: number; expectedSourceHash: string;
-    decision: ReviewDecision;
+    decision: ReviewDecision; reason: string | null;
   }>) => Promise<void>;
   onRelease?: (args: Readonly<{
     planId: string; expectedVersion: number; expectedSourceHash: string;
@@ -65,11 +65,15 @@ export function VoicePlanApprovalPanel({
   const canRelease=permissions.releaseEnabled && !!onRelease && !busy;
   async function review(decision: ReviewDecision) {
     if (!canReview || !onReview) return;
+    const reason=comment.trim();
+    if (decision === "requires_changes" && reason.length===0) {
+      setError("Podaj uzasadnienie wymaganych poprawek."); return;
+    }
     setBusy(true); setError(null);
     try {
       // No actor/tenant IDs are supplied by the browser. Verified RPC derives them.
       await onReview({planId:plan.id,expectedVersion:plan.planVersion,
-        expectedSourceHash:plan.sourceHash,decision});
+        expectedSourceHash:plan.sourceHash,decision,reason:reason || null});
       setComment("");
     } catch { setError("Nie udało się zapisać oceny. Odśwież źródła i spróbuj ponownie."); }
     finally { setBusy(false); }
@@ -105,7 +109,7 @@ export function VoicePlanApprovalPanel({
       {plan.reviewerLabel && <p>Ostatni przegląd: {plan.reviewerLabel}{plan.reviewedAt ? " · "+plan.reviewedAt : ""}</p>}
       <fieldset disabled={!canReview}>
         <legend>Decyzja rekrutera</legend>
-        <label htmlFor="voice-plan-comment">Notatka robocza (nie jest wysyłana)</label>
+        <label htmlFor="voice-plan-comment">Uzasadnienie decyzji (wymagane przy żądaniu zmian)</label>
         <textarea id="voice-plan-comment" value={comment} onChange={e=>setComment(e.target.value.slice(0,1000))}
           rows={3} maxLength={1000} style={{display:"block",width:"100%",marginBottom:12}} />
         <button type="button" onClick={()=>review("approved")}>Zatwierdź scenariusz</button>
