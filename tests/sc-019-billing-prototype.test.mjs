@@ -9,7 +9,7 @@ const ownerA=id(1),ownerB=id(2),companyA=id(11),companyB=id(12);
 function nip(prefix) {
   const weights=[6,5,7,2,3,4,5,6,7];
   const check=[...prefix].reduce((v,d,i)=>v+Number(d)*weights[i],0)%11;
-  if (prefix.length!==9 || !/^\\d{9}$/.test(prefix) || check===10) throw Error('bad test prefix');
+  if (prefix.length!==9 || !/^\d{9}$/.test(prefix) || check===10) throw Error('bad test prefix');
   return prefix+check;
 }
 async function setup() {
