@@ -1,0 +1,140 @@
+"use client";
+
+import { useState } from "react";
+import {
+  getVoicePlanPanelPermissions,
+  type VoicePlanPanelStatus,
+} from "../../lib/voice/plan-panel-state";
+
+export type PlanQuestionView = Readonly<{
+  id: string;
+  kind: "common" | "clarification";
+  criterionId: string;
+  criterionKind: "behavior" | "task" | "kpi" | "competency";
+  text: string;
+  followUps: readonly string[];
+}>;
+export type VoicePlanApprovalView = Readonly<{
+  id: string;
+  status: VoicePlanPanelStatus;
+  planVersion: number;
+  sourceHash: string;
+  sourceCurrent: boolean;
+  reviewIsApproved: boolean;
+  questions: readonly PlanQuestionView[];
+  reviewerLabel: string | null;
+  reviewedAt: string | null;
+}>;
+type ReviewDecision = "approved" | "requires_changes";
+export type VoicePlanApprovalPanelProps = {
+  plan: VoicePlanApprovalView;
+  role: "owner" | "recruiter" | "viewer";
+  /** Remains false until SC-012-B DB migrations / RPC and E2E are approved. */
+  backendReady?: boolean;
+  onReview?: (args: Readonly<{
+    planId: string; expectedVersion: number; expectedSourceHash: string;
+    decision: ReviewDecision; reason: string | null;
+  }>) => Promise<void>;
+  onRelease?: (args: Readonly<{
+    planId: string; expectedVersion: number; expectedSourceHash: string;
+  }>) => Promise<void>;
+};
+
+const label: Record<VoicePlanPanelStatus, string> = {
+  generated:"Wygenerowany — oczekuje na weryfikację",
+  reviewed:"Zweryfikowany przez rekrutera",
+  released:"Wydany scenariusz (bez prawa uruchomienia połączenia)",
+  stale:"Nieaktualny — wymagana nowa wersja",
+};
+const questionKind = {
+  common:"Pytanie wspólne",
+  clarification:"Dopytanie do kryterium",
+};
+
+export function VoicePlanApprovalPanel(props: VoicePlanApprovalPanelProps) {
+  // Keyed remount gives each plan revision a fresh state store, even A -> B -> A.
+  // Pending asynchronous callbacks from the unmounted revision cannot mutate
+  // the new revision's controls or rationale.
+  return <VoicePlanApprovalPanelRevision key={props.plan.id+":"+String(props.plan.planVersion)} {...props}/>;
+}
+function VoicePlanApprovalPanelRevision({
+  plan, role, backendReady=false, onReview, onRelease,
+}: VoicePlanApprovalPanelProps) {
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState<string | null>(null);
+  const [comment,setComment]=useState("");
+  // A successful action remains latched until authoritative props change.
+  // Review success does not block a *separate* subsequent release.
+  const [reviewSubmitted,setReviewSubmitted]=useState(false);
+  const [releaseSubmitted,setReleaseSubmitted]=useState(false);
+  const permissions=getVoicePlanPanelPermissions({
+    status:plan.status,sourceCurrent:plan.sourceCurrent,backendReady,
+    role,reviewIsApproved:plan.reviewIsApproved,
+  });
+  const canReview=permissions.reviewEnabled && !!onReview && !busy && !reviewSubmitted;
+  const canRelease=permissions.releaseEnabled && !!onRelease && !busy && !releaseSubmitted;
+  async function review(decision: ReviewDecision) {
+    if (!canReview || !onReview) return;
+    const reason=comment.trim();
+    if (decision === "requires_changes" && reason.length===0) {
+      setError("Podaj uzasadnienie wymaganych poprawek."); return;
+    }
+    setBusy(true); setError(null);
+    try {
+      // No actor/tenant IDs are supplied by the browser. Verified RPC derives them.
+      await onReview({planId:plan.id,expectedVersion:plan.planVersion,
+        expectedSourceHash:plan.sourceHash,decision,reason:reason || null});
+      setComment("");
+      setReviewSubmitted(true);
+    } catch {
+      setError("Nie udało się zapisać oceny. Odśwież źródła i spróbuj ponownie.");
+    } finally { setBusy(false); }
+  }
+  async function release() {
+    if (!canRelease || !onRelease) return;
+    setBusy(true); setError(null);
+    try {
+      await onRelease({planId:plan.id,expectedVersion:plan.planVersion,
+        expectedSourceHash:plan.sourceHash});
+      setReleaseSubmitted(true);
+    } catch {
+      setError("Nie udało się wydać scenariusza. Sprawdź jego aktualność.");
+    } finally { setBusy(false); }
+  }
+  return (
+    <section aria-label="Przegląd scenariusza rozmowy" style={{maxWidth:900,margin:"0 auto",padding:24}}>
+      <header>
+        <h2>Scenariusz rozmowy kwalifikacyjnej</h2>
+        <p><strong>Wersja:</strong> {plan.planVersion} · <strong>Status:</strong> {plan.status === "reviewed" && !plan.reviewIsApproved ? "Wymaga poprawy scenariusza" : label[plan.status]}</p>
+        <p>Planowana rozmowa: 5–7 minut. Limit: 10 minut. Nagrywanie domyślnie wyłączone.</p>
+        {!plan.sourceCurrent && <p role="alert">Kryteria lub dane rekrutacji uległy zmianie. Nie można zatwierdzić tego scenariusza.</p>}
+        {permissions.warning && <p role="status">{permissions.warning}</p>}
+      </header>
+      <ol style={{paddingLeft:25}}>
+        {plan.questions.map((q,index)=>(
+          <li key={q.id} style={{marginBottom:16,padding:12,border:"1px solid #ddd",borderRadius:8}}>
+            <p style={{margin:0,fontSize:13}}>{questionKind[q.kind]} {index+1} · Kryterium: {q.criterionKind}/{q.criterionId}</p>
+            <p><strong>{q.text}</strong></p>
+            {q.followUps.length>0 && <div><p>Dopytania pomocnicze:</p><ul>{q.followUps.map((s,i)=><li key={i}>{s}</li>)}</ul></div>}
+          </li>
+        ))}
+      </ol>
+      <p>Decyzje dotyczą oceny scenariusza, nie zatrudnienia kandydata ani uruchomienia telefonu.</p>
+      {plan.reviewerLabel && <p>Ostatni przegląd: {plan.reviewerLabel}{plan.reviewedAt ? " · "+plan.reviewedAt : ""}</p>}
+      <fieldset disabled={!canReview}>
+        <legend>Decyzja rekrutera</legend>
+        <label htmlFor="voice-plan-comment">Uzasadnienie decyzji (wymagane przy żądaniu zmian)</label>
+        <textarea id="voice-plan-comment" value={comment} onChange={e=>setComment(e.target.value.slice(0,1000))}
+          rows={3} maxLength={1000} style={{display:"block",width:"100%",marginBottom:12}} />
+        <button type="button" onClick={()=>review("approved")}>Zatwierdź scenariusz</button>
+        {" "}
+        <button type="button" onClick={()=>review("requires_changes")}>Wymaga poprawy</button>
+      </fieldset>
+      <div style={{marginTop:16}}>
+        <button type="button" onClick={release} disabled={!canRelease}>Wydaj zatwierdzony scenariusz</button>
+      </div>
+      {error && <p role="alert">{error}</p>}
+      {!backendReady && <p>Tryb podglądu: żadne zatwierdzenie nie jest zapisywane i żaden kandydat nie otrzymuje połączenia.</p>}
+    </section>
+  );
+}

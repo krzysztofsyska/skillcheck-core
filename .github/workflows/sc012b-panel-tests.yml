@@ -1,0 +1,37 @@
+name: SC012B recruiter panel tests
+on:
+  pull_request:
+    paths:
+      - 'lib/voice/plan-panel-state.ts'
+      - 'components/voice/VoicePlanApprovalPanel.tsx'
+      - 'tests/voice-plan-panel-state.test.mjs'
+      - 'tests/voice-plan-panel-component.test.mjs'
+      - 'tests/voice-plan-panel-react-state.test.mjs'
+      - '.github/workflows/sc012b-panel-tests.yml'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/voice/plan-panel-state.ts'
+      - 'components/voice/VoicePlanApprovalPanel.tsx'
+      - 'tests/voice-plan-panel-state.test.mjs'
+      - 'tests/voice-plan-panel-component.test.mjs'
+      - 'tests/voice-plan-panel-react-state.test.mjs'
+      - '.github/workflows/sc012b-panel-tests.yml'
+      - 'package.json'
+      - 'package-lock.json'
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      # Isolated CI-only React state renderer. Do not alter application dependencies.
+      - run: npm install --no-save --package-lock=false react-test-renderer@19.3.0
+      - run: node --test tests/voice-plan-panel-state.test.mjs tests/voice-plan-panel-component.test.mjs tests/voice-plan-panel-react-state.test.mjs
