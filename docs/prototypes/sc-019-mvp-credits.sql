@@ -16,6 +16,16 @@ create table private.sc19_trial_nips (
   nip text not null unique check(nip ~ '^[0-9]{10}$'),
   claimed_at timestamptz not null default now()
 );
+
+-- An owner-selected checksum-valid NIP does not prove legal representation.
+-- FREE activation is blocked until the operator verifies the company/NIP
+-- relationship and inserts an approval using privileged, audited SQL.
+create table private.sc19_trial_approvals (
+  company_id uuid primary key references public.companies(id) on delete restrict,
+  nip text not null unique check(nip ~ '^[0-9]{10}$'),
+  proof_reference text not null unique check(length(btrim(proof_reference)) between 8 and 160),
+  approved_at timestamptz not null default now()
+);
 create table private.sc19_analysis_spend (
   analysis_id uuid primary key,
   company_id uuid not null references public.companies(id) on delete restrict,
@@ -36,9 +46,11 @@ create table private.sc19_credit_journal (
 -- Only SQL operator privileges can grant a paid pack. No user-facing direct
 -- balance/journal CRUD. NIP is never included in public balance responses.
 revoke all on private.sc19_balances, private.sc19_trial_nips,
-  private.sc19_analysis_spend, private.sc19_credit_journal from public, anon, authenticated;
+  private.sc19_trial_approvals, private.sc19_analysis_spend,
+  private.sc19_credit_journal from public, anon, authenticated;
 alter table private.sc19_balances enable row level security;
 alter table private.sc19_trial_nips enable row level security;
+alter table private.sc19_trial_approvals enable row level security;
 alter table private.sc19_analysis_spend enable row level security;
 alter table private.sc19_credit_journal enable row level security;
 
@@ -79,6 +91,12 @@ begin
     end if;
     select available into current_credits from private.sc19_balances where company_id=target_company;
     return current_credits; -- same company, same NIP = idempotent, no extra grant
+  end if;
+  if not exists (
+    select 1 from private.sc19_trial_approvals approval
+    where approval.company_id=target_company and approval.nip=normalized
+  ) then
+    raise exception 'sc19_trial_requires_verified_company' using errcode='42501';
   end if;
   insert into private.sc19_trial_nips(company_id,nip) values (target_company,normalized);
   insert into private.sc19_balances(company_id,plan,available,free_claimed)
