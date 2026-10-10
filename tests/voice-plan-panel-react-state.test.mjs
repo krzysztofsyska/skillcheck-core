@@ -130,7 +130,8 @@ test("SC-012-B ignores obsolete review completion while replacement plan has its
  assert.equal(tree.root.findByType("textarea").props.value,"New plan reason",
    "old success must not erase the new plan rationale");
  await act(async()=>{resolvers[1]();await newCompletion;});
- assert.equal(tree.root.findByType("fieldset").props.disabled,false);
+ assert.equal(tree.root.findByType("fieldset").props.disabled,true,
+   "successful replacement review remains latched until server props update");
  await act(async()=>tree.unmount());
 });
 test("SC-012-B obsolete failure does not show an error on replacement plan",async()=>{
