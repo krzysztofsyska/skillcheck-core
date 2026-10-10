@@ -44,14 +44,16 @@ test("SC-012-B B1 source versions cannot reuse a previous fingerprint",()=>{
 });
 test("SC-012-B B1 exact review and release commands cannot smuggle extra fields",()=>{
  const review={planId:id(21),expectedPlanVersion:1,expectedSourceHash:sha,
-   expectedReviewVersion:0,decision:"approved",requestKey:id(50)};
+   expectedReviewVersion:0,decision:"approved",reason:null,requestKey:id(50)};
  const release={planId:id(21),expectedPlanVersion:1,expectedSourceHash:sha,
    approvedReviewId:id(22),expectedReviewVersion:1,requestKey:id(51)};
  assert.equal(validatePlanReviewCommand(review).decision,"approved");
  assert.equal(validatePlanReleaseCommand(release).expectedReviewVersion,1);
  for(const b of [{...review,candidateEmail:"private@example.com"},
     {...review,expectedReviewVersion:-1},{...review,decision:"hire"},
-    {...review,requestKey:["fake"]}]) assert.throws(()=>validatePlanReviewCommand(b),VoicePlanStorageError);
+    {...review,requestKey:["fake"]},
+    {...review,decision:"requires_changes",reason:null},
+    {...review,decision:"requires_changes",reason:"  "}]) assert.throws(()=>validatePlanReviewCommand(b),VoicePlanStorageError);
  for(const b of [{...release,recordingAllowed:true},{...release,expectedReviewVersion:0},
     {...release,approvedReviewId:id(22).replace("4000","A000")}]) assert.throws(()=>validatePlanReleaseCommand(b),VoicePlanStorageError);
 });
