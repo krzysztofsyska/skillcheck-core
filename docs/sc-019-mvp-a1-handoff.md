@@ -31,7 +31,7 @@ PRODUCT: the existing voicebot, candidate chatbot, AC and subscriptions remain o
 - Run independent SQL/security review, including actual PostgreSQL 16 simultaneous-connection race tests, role/grant checks, and lock-order/deadlock analysis.
 - After PASS, use **Supabase CLI** `supabase migration new sc019_mvp_credits` to create the real migration file. Transfer reviewed SQL and add immutable migration history. Do not manually fabricate or apply a migration to production.
 - Verify correct SkillCheck Supabase project connection (currently not visible to the connected Supabase account). Verify existing migration history and live worker secrets **presence only**, edge function code, HMAC/DB role.
-- Implement controlled NIP verification/anti-abuse and onboarding UI (per-company FREE activation only once); pilot operator can approve manually. Do not expose private NIP in logs or public responses.
+- Complete real company/NIP verification and anti-abuse beyond the existing feature-gated claim UI. Test onboarding for both existing and new firms; pilot operator can approve manually. Do not expose private NIP in logs or public responses.
 - Review and test the feature-gated balance/claim panel with a real authenticated tenant; implement verified-payment operator flow and upgrade CTA; no purchase redirect may grant credits.
 - Secure first live synthetic flow: company registration → verified claim → approved redacted CV → user start → worker processing → human review → SC-008 ranking → SC-009 report → exhausted FREE → verified payment → credits.
 - Complete policy/legal readiness (DPA under GDPR Article 28, privacy info, retention, terms, VAT / invoice handling). State explicitly that AI supports rather than makes hiring decisions.
