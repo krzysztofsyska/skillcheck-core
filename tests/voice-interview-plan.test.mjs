@@ -159,3 +159,21 @@ test("SC-012-A forged generated plans cannot be reviewed or released", () => {
   assert.throws(() => reviewInterviewPlan(injected, args), InterviewPlanError);
   assert.equal(reviewInterviewPlan(generated, args).status, "reviewed");
 });
+
+
+test("SC-012-A generation and review capabilities are single-use", () => {
+  const first = buildInterviewPlan(input());
+  const reviewedAt = "2026-10-10T12:00:00.000Z";
+  const args = { expectedRevision: 1, expectedSourceFingerprint: first.sourceFingerprint,
+    reviewerId: uuid(22), reviewedAt };
+  const reviewed = reviewInterviewPlan(first, args);
+  assert.throws(() => reviewInterviewPlan(first, args), InterviewPlanError);
+  const release = { expectedRevision: 2, expectedSourceFingerprint: reviewed.sourceFingerprint,
+    releasedBy: uuid(23), releasedAt: "2026-10-10T12:02:00.000Z" };
+  const result = releaseInterviewPlan(reviewed, release);
+  assert.equal(result.status, "released");
+  assert.throws(() => releaseInterviewPlan(reviewed, release), InterviewPlanError);
+  assert.throws(() => releaseInterviewPlan(reviewed, {
+    ...release, releasedBy: uuid(24),
+  }), InterviewPlanError);
+});
