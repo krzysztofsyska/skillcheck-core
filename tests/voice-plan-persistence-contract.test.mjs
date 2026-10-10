@@ -126,3 +126,13 @@ test("SC-012-B does not accept another allowlisted question from an unrelated cr
  assert.throws(()=>planWriteFingerprint(altered,source(),binding()),VoicePlanStorageError);
  assert.throws(()=>planWriteFingerprint(x),VoicePlanStorageError);
 });
+
+test("SC-012-B accepts semantically equal JSONB envelopes with shuffled object-key order",()=>{
+ const original=createVoicePlanWriteSnapshot(source(),binding());
+ const reverseObject=(o)=>Array.isArray(o)?o.map(reverseObject):
+    o && typeof o==="object"?
+    Object.fromEntries(Object.entries(o).reverse().map(([k,v])=>[k,reverseObject(v)])):o;
+ const roundtrip=reverseObject(structuredClone(original));
+ assert.equal(planWriteFingerprint(roundtrip,source(),binding()),
+    planWriteFingerprint(original,source(),binding()));
+});
