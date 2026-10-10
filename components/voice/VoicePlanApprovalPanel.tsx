@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   getVoicePlanPanelPermissions,
   type VoicePlanPanelStatus,
@@ -57,6 +57,13 @@ export function VoicePlanApprovalPanel({
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState<string | null>(null);
   const [comment,setComment]=useState("");
+  // A regenerated/replaced plan must not inherit the previous plan's rationale,
+  // error state or pending submission UI. The server still owns authorization.
+  useEffect(()=>{
+    setComment("");
+    setError(null);
+    setBusy(false);
+  },[plan.id,plan.planVersion]);
   const permissions=getVoicePlanPanelPermissions({
     status:plan.status,sourceCurrent:plan.sourceCurrent,backendReady,
     role,reviewIsApproved:plan.reviewIsApproved,
