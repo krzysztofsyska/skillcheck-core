@@ -1,0 +1,3 @@
+# Agent feedback loop test
+EXPECTED_TOKEN=SAFE
+ACTUAL_TOKEN=UNSAFE
