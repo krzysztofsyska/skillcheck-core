@@ -11,7 +11,7 @@ const source=()=>({
   overrides:[],
 });
 test("SC-012-B selects two gaps in task/kpi/competency and numeric index order",()=>{
- assert.deepEqual(selectReviewedScreeningGaps(source()),[
+ assert.deepEqual(selectReviewedScreeningGaps(source(),source().criteria),[
    {criterionId:"task:1",kind:"task",reason:"missing_evidence"},
    {criterionId:"task:2",kind:"task",reason:"missing_evidence"},
  ]);
@@ -20,7 +20,7 @@ test("SC-012-B human approved override replaces only matching criterion rating",
  let s=source();
  s.latestHumanDecision="approved_with_changes";
  s.overrides=[{criterionId:"task:1",rating:"meets"}];
- assert.deepEqual(selectReviewedScreeningGaps(s),[
+ assert.deepEqual(selectReviewedScreeningGaps(s,source().criteria),[
    {criterionId:"task:2",kind:"task",reason:"missing_evidence"},
    {criterionId:"kpi:1",kind:"kpi",reason:"missing_evidence"},
  ]);
@@ -31,33 +31,42 @@ test("SC-012-B refuses stale, rejected, incomplete and unreviewed sources",()=>{
    {latestHumanDecision:"requires_changes"},{latestHumanDecision:"rejected"}, {latestHumanDecision:"unknown"},
    {results:s.results.slice(0,2)}, {overrides:[{criterionId:"task:90",rating:"meets"}]},
    {criteria:[...s.criteria,{id:"task:1",kind:"task"}]}]){
-   assert.throws(()=>selectReviewedScreeningGaps({...s,...changed}),ScreeningGapSelectionError);
+   assert.throws(()=>selectReviewedScreeningGaps({...s,...changed},source().criteria),ScreeningGapSelectionError);
  }
 });
 test("SC-012-B rejects same criterion repeated and invalid machine-invented reasons",()=>{
  const s=source();
  assert.throws(()=>selectReviewedScreeningGaps({...s,results:[
    {...s.results[0]},...s.results.slice(0,3),
- ]}),ScreeningGapSelectionError);
+ ]},source().criteria),ScreeningGapSelectionError);
  assert.throws(()=>selectReviewedScreeningGaps({...s,overrides:[
    {criterionId:"kpi:1",rating:"insufficient_data"},
    {criterionId:"kpi:1",rating:"above"},
- ]}),ScreeningGapSelectionError);
+ ]},source().criteria),ScreeningGapSelectionError);
  assert.throws(()=>selectReviewedScreeningGaps({...s,results:[
   {...s.results[0],rating:"contradiction"},...s.results.slice(1),
- ]}),ScreeningGapSelectionError);
+ ]},source().criteria),ScreeningGapSelectionError);
 });
 
 test("SC-012-B plain human approval must not inherit previous correction rows",()=>{
  const x=source();
  assert.throws(()=>selectReviewedScreeningGaps({...x,overrides:[
    {criterionId:"task:1",rating:"above"},
- ]}),ScreeningGapSelectionError);
+ ]},source().criteria),ScreeningGapSelectionError);
  assert.deepEqual(selectReviewedScreeningGaps({...x,latestHumanDecision:"approved_with_changes",
-   overrides:[{criterionId:"task:1",rating:"above"}]}).map(g=>g.criterionId),["task:2","kpi:1"]);
+   overrides:[{criterionId:"task:1",rating:"above"}]},source().criteria).map(g=>g.criterionId),["task:2","kpi:1"]);
 });
 
 test("SC-012-B approved-with-changes requires actual approved correction rows",()=>{
- assert.throws(()=>selectReviewedScreeningGaps({...source(),latestHumanDecision:"approved_with_changes",overrides:[]}),
+ assert.throws(()=>selectReviewedScreeningGaps({...source(),latestHumanDecision:"approved_with_changes",overrides:[]},source().criteria),
    ScreeningGapSelectionError);
+});
+
+
+test("SC-012-B rejects jointly truncated mapped criteria and results against trusted snapshot",()=>{
+ const full=source();
+ const truncated={...full,criteria:full.criteria.slice(0,1),
+   results:full.results.filter(r=>r.criterionId===full.criteria[0].id),overrides:[]};
+ assert.throws(()=>selectReviewedScreeningGaps(truncated,full.criteria),ScreeningGapSelectionError);
+ assert.throws(()=>selectReviewedScreeningGaps(full,[]),ScreeningGapSelectionError);
 });
