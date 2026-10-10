@@ -43,7 +43,9 @@
     "test:erasure-preview": "node --test tests/erasure-preview-database.test.mjs tests/erasure-preview-ui.test.mjs",
     "test:erasure-preview-concurrency": "node --test tests/erasure-preview-concurrency.test.mjs",
     "test:erasure-lifecycle": "node --test tests/erasure-lifecycle-database.test.mjs tests/erasure-lifecycle-ui.test.mjs",
-    "test:erasure-lifecycle-concurrency": "node --test tests/erasure-lifecycle-concurrency.test.mjs"
+    "test:erasure-lifecycle-concurrency": "node --test tests/erasure-lifecycle-concurrency.test.mjs",
+    "test:erasure-execution": "node --test tests/erasure-execution-database.test.mjs tests/erasure-ledger.test.mjs",
+    "test:erasure-execution-concurrency": "node --test tests/erasure-execution-concurrency.test.mjs tests/erasure-ledger-concurrency.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",

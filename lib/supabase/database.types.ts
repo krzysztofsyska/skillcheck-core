@@ -405,6 +405,8 @@ export type Database = {
         Returns: string;
       };
       get_erasure_subject_resolution: { Args: { target_candidate: string }; Returns: ErasureSubjectResolution };
+      set_candidate_erasure_hold: { Args: { target_request: string; reason: 'legal_review' | 'active_purpose' | 'owner_review'; review_at: string; expires_at: string; request_key: string }; Returns: string };
+      release_candidate_erasure_hold: { Args: { target_hold: string }; Returns: string };
       issue_candidate_erasure_preview: {
         Args: { target_candidate: string; scope_kind?: 'candidate_record' | 'confirmed_subject'; resolution_id?: string | null };
         Returns: CandidateErasurePreview & { preview_ticket_id: string };
@@ -627,14 +629,17 @@ export type SalesPipelineRow = {
 export type CandidateErasureStatus = {
   request_id: string;
   company_id: string;
-  status: 'authorized' | 'cancelled';
+  status: 'authorized' | 'cancelled' | 'erasing' | 'active_data_erased';
   generation: number;
   scope_kind: 'candidate_record' | 'confirmed_subject';
   candidate_count: number;
   created_at: string;
   cancelled_at: string | null;
   execution_enabled: false;
-  phase: 'local_frozen' | 'cancelled';
+  phase: 'local_frozen' | 'authorized' | 'cancelled' | 'erasing' | 'active_data_erased' | 'cancellation_pending' | 'ledger_pending';
+  ledger_sequence?: number;
+  pending_phase?: string | null;
+  local_purged?: boolean;
   can_cancel: boolean;
   blockers: string[];
 };

@@ -15,7 +15,7 @@ test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async 
  await t.test('missing policy is explicit and preview has finite TTL without authorizing execution',async()=>{
   const f=await h.seed(),p=await e.preview(f);
   assert.ok(p.blockers.includes('retention_policy_required'));assert.ok(p.blockers.includes('subject_resolution_required'));
-  for(const blocker of ['execution_not_implemented','external_inventory_unverified','backup_policy_unverified'])assert.ok(p.blockers.includes(blocker));
+  for(const blocker of ['execution_not_provisioned','external_inventory_unverified','backup_policy_unverified'])assert.ok(p.blockers.includes(blocker));
   assert.match(p.manifest_hash,/^[0-9a-f]{64}$/);assert.match(p.schema_signature,/^[0-9a-f]{64}$/);
   const ttl=Date.parse(p.expires_at)-Date.parse(p.generated_at);assert.ok(ttl>0&&ttl<=300000);
   assert.equal(p.policy_revision,0);assert.equal(p.candidate_count,1);assert.equal(p.scope_kind,'candidate_record');
@@ -40,7 +40,8 @@ test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async 
    await h.asAdmin();await db.exec(`set role ${role}`);for(const operation of [()=>e.policy(f),()=>e.resolve(f),()=>e.preview(f),()=>e.getPolicy(f),()=>e.getResolution(f)])await assert.rejects(operation());
   }
   await h.asAdmin();const privateFunctions=(await db.query("select p.oid::regprocedure::text signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='private' and p.proname ~ '(erasure|retention)'")).rows;
-  for(const {signature}of privateFunctions)for(const role of ['anon','authenticated','screening_worker','contact_verifier'])assert.equal((await db.query('select has_function_privilege($1,$2,\'EXECUTE\') allowed',[role,signature])).rows[0].allowed,role==='authenticated'&&signature.startsWith('private.erasure_row_visible('),`${role}: ${signature}`);
+  for(const {signature}of privateFunctions)for(const role of ['anon','authenticated','screening_worker','contact_verifier'])assert.equal((await db.query('select has_function_privilege($1,$2,\'EXECUTE\') allowed',[role,signature])).rows[0].allowed,(role==='authenticated'&&signature==='private.erasure_row_visible(text,jsonb)')||(['authenticated','screening_worker','contact_verifier'].includes(role)&&signature==='private.erasure_normal_row_guard(text,text,text,jsonb,jsonb)'),`${role}: ${signature}`);
+  for(const role of ['authenticated','screening_worker','contact_verifier']){await h.asAdmin();await db.exec(`set role ${role}`);await assert.rejects(db.query("select private.erasure_normal_row_guard('DELETE','public','candidates',$1::jsonb,null)",[JSON.stringify({id:f.candidate.id,company_id:f.companyId})]),error=>error.code==='42501');}
  });
  await t.test('full graph includes every candidate copy and all five JSON request adapters, excluding shared configuration',async()=>{
   const f=await e.rich();await e.policy(f);const resolution=await e.resolve(f);
@@ -99,7 +100,7 @@ test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async 
   try{
    // Privileged corruption simulation, rolled back completely; product roles
    // cannot disable this trigger or mutate the baseline.
-   await db.exec('alter table private.erasure_inventory_baseline_r2 disable trigger immutable_history;delete from private.erasure_inventory_baseline_r2');
+   await db.exec('alter table private.erasure_inventory_baseline_r3 disable trigger immutable_history;delete from private.erasure_inventory_baseline_r3');
    await h.asUser(f.owner);const p=await e.preview(f);assert.ok(p.blockers.includes('schema_dependency_unknown'));assert.deepEqual(p.counts,{});
   }finally{await db.exec('rollback');}
  });
