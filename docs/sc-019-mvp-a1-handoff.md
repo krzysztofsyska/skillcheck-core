@@ -10,6 +10,7 @@ PRODUCT: the existing voicebot, candidate chatbot, AC and subscriptions remain o
 ## What exists in this change
 - `docs/prototypes/sc-019-mvp-credits.sql`: executable isolated PostgreSQL prototype, NOT inside `supabase/migrations`. Applies on a database with the SC-004/005/006 logical analysis schema.
 - `tests/sc-019-billing-prototype.test.mjs`: PGlite role/tenant/trial/grant/consume/refund/retry tests.
+- `tests/sc-019-billing-concurrency.test.mjs`: disposable real PostgreSQL16 two-connection race test for final FREE credit and payment-settlement replay; only runs when SC19_TEST_DATABASE_URL is loopback `/postgres`.
 - `lib/screening-flow.ts`: recognizes DB status `PT402` and presents a precise upgrade message; does not start provider dispatch on denial.
 - `tests/screening-ui.test.mjs`: checks fail-closed dispatch on PT402.
 - `lib/supabase/database.types.ts`: typed billing RPC contracts for when the database migration is approved.
@@ -28,7 +29,7 @@ PRODUCT: the existing voicebot, candidate chatbot, AC and subscriptions remain o
 8. Existing SC-006 worker flag must remain OFF pending separately approved end-to-end synthetic test.
 
 ## Gap to customer-usable FREE / paid PRESELEKCJA
-- Run independent SQL/security review, including actual PostgreSQL 16 simultaneous-connection race tests, role/grant checks, and lock-order/deadlock analysis.
+- Run independent SQL/security review, confirm CI of the new actual PostgreSQL16 simultaneous-connection race test, validate role/grant edge cases, and complete lock-order/deadlock analysis.
 - After PASS, use **Supabase CLI** `supabase migration new sc019_mvp_credits` to create the real migration file. Transfer reviewed SQL and add immutable migration history. Do not manually fabricate or apply a migration to production.
 - Confirmed connected database: Supabase project `wsvjawuikxfzjyivxgsu`, labeled `white Label`, matches the repository sample URL and contains SkillCheck schema (20 public RLS tables and historical SC-006/008 migrations). Read-only checks 2026-10-10. Vercel Production declares `SCREENING_AI_ENABLED`, `SCREENING_WORKER_URL`, `SCREENING_WORKER_DISPATCH_SECRET`; encrypted values are not inspected. Verify their effective configuration and test HMAC + DB role with synthetic fixtures before AI activation.
 - Complete real company/NIP verification and anti-abuse beyond the existing feature-gated claim UI. Test onboarding for both existing and new firms; pilot operator can approve manually. Do not expose private NIP in logs or public responses.
