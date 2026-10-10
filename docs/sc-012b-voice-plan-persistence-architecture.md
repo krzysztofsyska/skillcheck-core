@@ -90,3 +90,9 @@ This section takes precedence over V1–V3 for conflicting state transitions.
 4. **Required tests.** Requires_changes + identical input, release->review rejection, concurrent release/review, actor revoked before lock, revoke during transaction causing 40001, successful fresh-snapshot retry, exhausted retries. Green CI does not alone establish architecture PASS.
 
 STATUS: Review fixes committed on PR #82, independent PASS and owner acceptance still pending. No migrations, production or candidate contact.
+
+## V5 — replacement must change actual reviewed plan payload (normative)
+
+A changed position title, source timestamp, review ID or fingerprint is **insufficient** to replace a plan rejected with requires_changes when the generated questions and release envelope remain byte-identical. The server must compare the canonical plan envelope (ordered question IDs, text, follow-ups, rubric and duration/recording/notice fields) against the rejected plan. Allow a replacement only when that envelope differs meaningfully, OR when a newly reviewed explicit edit command is attached to and addresses the prior immutable review reason, and becomes part of the new source provenance hash. A source revision alone never bypasses this gate. If the current deterministic generator cannot create a corrected envelope and no reviewed edit command exists, return a stable non-actionable requires_changes status rather than regenerate blindly. Test title-only edits, timestamp-only edits, legitimate changed selected behavior/questions, edited plan with matching review reference, and two concurrent replacements.
+
+STATUS: PR #82 still requires fresh Codex review and integration owner acceptance. No migration or runtime activation.
