@@ -46,3 +46,12 @@ test("SC-012-B rejects same criterion repeated and invalid machine-invented reas
   {...s.results[0],rating:"contradiction"},...s.results.slice(1),
  ]}),ScreeningGapSelectionError);
 });
+
+test("SC-012-B plain human approval must not inherit previous correction rows",()=>{
+ const x=source();
+ assert.throws(()=>selectReviewedScreeningGaps({...x,overrides:[
+   {criterionId:"task:1",rating:"above"},
+ ]}),ScreeningGapSelectionError);
+ assert.deepEqual(selectReviewedScreeningGaps({...x,latestHumanDecision:"approved_with_changes",
+   overrides:[{criterionId:"task:1",rating:"above"}]}).map(g=>g.criterionId),["task:2","kpi:1"]);
+});
