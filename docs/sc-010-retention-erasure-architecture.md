@@ -49,7 +49,7 @@ adapter usuwania. Nieznana zależność blokuje wykonanie, nie jest pomijana.
 | Klasa | Zawartość | Reguła projektowa |
 |---|---|---|
 | Dane kandydata | candidates, candidate_documents: source_text, redacted_text; e-mail/telefon | Pełne usunięcie po zatwierdzonym żądaniu, dla jednej firmy |
-| Proces rekrutacji | applications, candidate_assessments, behavior_assessment_entries, exercise_observation_entries | Wszystkie procesy tej osoby w firmie objęte pełnym żądaniem; wspólne definicje stanowisk/zadań pozostają |
+| Proces rekrutacji | applications, candidate_assessments, behavior_assessment_entries, exercise_observation_entries | Procesy wszystkich potwierdzonych rekordów tej osoby w firmie objęte manifestem; wspólne definicje stanowisk/zadań pozostają |
 | Screening/shortlista | analizy, próby, wyniki kryteriów, review, overrides, shortlist | Usunięcie zależności w kolejności FK; także kopii treści i identyfikatorów dostawcy |
 | B1/B2 | permissions, preferences, communications, events, approvals, private audit/requests, receipts/points | Usunięcie payloadów i powiązań osoby; pozostawienie tylko minimalnego potwierdzenia operacji |
 | Konfiguracja firmy | issuer/policy registry, ranking policies, wspólne templates | Nie usuwać podczas żądania jednej osoby; zamknięcie firmy wymaga osobnego zakresu |
@@ -109,12 +109,71 @@ Zmiana zakresu lub roli wymaga nowego preview/akceptacji. Idempotencja per tenan
 actor i operation; ten sam klucz z inną treścią = konflikt. Globalne usunięcie osoby
 w innych firmach nie jest funkcją tego RPC. Nie usuwa konta auth.users.
 
+### 4a. Rozpoznanie zakresu osoby i duplikaty
+
+Obecne candidates dopuszcza wiele rekordów tej samej osoby. R1 musi dodać
+owner-reviewed subject resolution: w obrębie jednej firmy operator uprawniony do
+tej osoby sprawdza potencjalne duplikaty i zatwierdza konkretną listę candidate IDs.
+Podobny e-mail, telefon lub nazwisko może być wskazówką do przeglądu, nigdy
+samodzielnym upoważnieniem do połączenia/usunięcia. Brak pewności = blocker
+subject_resolution_required, bez deklaracji pełnego usunięcia osoby.
+Manifest podpisuje scope_kind (candidate_record albo confirmed_subject), listę IDs,
+resolution_revision i potwierdzenie ownera. Interfejs jasno odróżnia „ten rekord”
+od „wszystkie potwierdzone rekordy osoby”; nie obiecuje odnalezienia nieznanych kopii.
+Preview/RPC przyjmują resolution ID, nie dowolną listę od klienta. Pełne żądanie
+wylicza graf dla wszystkich potwierdzonych IDs i wszystkich ich aplikacji w tenant.
+Zmiana powiązania, nowy potwierdzony duplikat lub aplikacja unieważnia preview.
+Autoryzacja blokuje subject resolution i posortowane candidate IDs NOWAIT; ścieżki
+link/import respektują tę blokadę. Niejednoznaczne nowe rekordy trafiają do osobnego
+przeglądu; nie są automatycznie objęte destrukcyjnym zakresem starego żądania.
+
+### 4b. Trwała blokada wycofanych identyfikatorów
+
+private.retired_candidate_ids: tenant, candidate UUID, erasure generation,
+recovery event ID, retain_until. To dane pseudonimowe, nie anonimowy audyt.
+Przed erasing każdy potwierdzony ID otrzymuje tombstone, utrwalony również w
+niezależnym ledger. Każdy INSERT oraz UPDATE id/company_id w candidates musi
+przejść DB trigger sprawdzający tombstone; dotyczy direct DML authenticated,
+importów, RPC i workerów. Kandydat nie może zmienić UUID/tenant zwykłym UPDATE.
+Wycofany UUID jest odrzucany także przy upsert; child-write i callback guards
+nie tworzą rodzica. RLS samo nie zastępuje tej kontroli. Runtime nie może usunąć
+ani zmienić tombstone; administracyjny restore zawsze zaczyna się od replay ledger.
+TTL >= maksimum ważności wszystkich UUID-bound artifacts, retry queues,
+callbacków, eksportów ponownie importowalnych i wszystkich odtwarzalnych backupów,
+plus zatwierdzony margines. Nieznany horyzont = blokada aktywacji/GC, nie arbitralny
+krótki termin. Nowe tworzenie przez RPC nadaje wyłącznie serwerowy świeży UUID;
+przed GC trzeba wycofać możliwość dowolnego client-supplied UUID w direct DML i
+udowodnić wygaśnięcie artifacts. Do tego momentu tombstone nie jest czyszczony.
+
+### 4c. Autoryzacja retencji automatycznej (R4)
+
+Samo duration nie uprawnia schedulera do purge. R4 policy activation wymaga ownera
+firmy i zapisuje jawny execution_mode: suggest_only albo automatic, zakres klas,
+trigger definicję, regułę współdzielenia, maksymalny batch i wersję polityki.
+Domyślnie suggest_only: scheduler tworzy tylko requested + preview do ręcznej zgody.
+Automatic stanowi delegację ownera dla dokładnie tej wersji; osobna scheduler rola
+może wywołać tylko authorize_retention_due, nigdy dowolne owner RPC lub DML.
+Funkcja serwerowa wybiera tylko ten tenant, przelicza due z kanonicznych zdarzeń,
+buduje manifest, sprawdza aktywną delegację ownera, hold, subject resolution,
+rewizje i wszystkie aplikacje pod tymi samymi blokadami co ręczny przepływ.
+Zapisuje policy-derived authorization z ID delegacji i manifest hash, używa
+idempotencji tenant/policy/subject/due generation. Worker dalej wykonuje wyłącznie
+zautoryzowane żądania. Wycofanie delegacji/zmiana ownera przed erasing blokuje start;
+w erasing obowiązuje jawna granica nieodwracalności jak w ręcznym przepływie.
+Wieloprocesowy kandydat: pełny purge osoby tylko gdy wszystkie potwierdzone rekordy,
+aplikacje i współdzielone dane kwalifikują się do usunięcia bez hold/aktywnego celu.
+Jedna wygasła aplikacja nie uprawnia do purge całej osoby. Adapter ograniczony do
+aplikacji może usunąć wyłącznie jej dane; współdzielone dane pozostają do czasu
+spełnienia wszystkich warunków. Brak takiego adaptera => blocked, bez eskalacji
+zakresu. Nieznane duplikaty/niepotwierdzona resolution => ręczny przegląd.
+
 ## 5. Przebieg i wyścigi
 
 1. Preview analizuje FK, jawne powiązania JSON i adaptery; niczego nie usuwa.
 2. Zatwierdzenie blokuje candidate NOWAIT, autoryzację owner i manifest. Zapisuje
-   pending erasure i monotoniczną erasure_generation. Atomowo anuluje drafty.
-   Przed pierwszym usunięciem zapisuje też tenant, UUID, generation i request ID
+   pending erasure i monotoniczną erasure_generation. Zamraża drafty przez lifecycle
+   guard bez zmiany draft -> cancelled ani zapisu cancellation events.
+   Przed pierwszym usunięciem zapisuje też podpisany recovery envelope (§8)
    do niezależnego trwałego restore ledger. Dopiero potwierdzony zapis i watermark
    pozwalają rozpocząć erasing; brak ACK => blocked. Retry tego zapisu jest idempotentny.
 3. Od tego commit kandydat jest ukryty w zwykłych listach i raportach. Wszystkie
@@ -123,9 +182,11 @@ w innych firmach nie jest funkcją tego RPC. Nie usuwa konta auth.users.
 4. Worker zamraża manifest. Nieznany adapter, hold, aktywny lease AI/provider lub
    obca wersja schematu => blocked; nie ma fałszywego DONE. Wykonujący się request
    zewnętrzny wymaga reconciliation i ponownego usunięcia późnego wyniku.
-5. Przed pierwszą nieodwracalną operacją utrwala erasing pod blokadą request/hold;
+5. Przed pierwszą nieodwracalną operacją rezerwuje erasing pod blokadą request/hold;
    zmiana hold używa tego samego protokołu. Hold zatwierdzony wcześniej blokuje
    start, a późniejszy nie cofa już wykonanych operacji i wymaga eskalacji.
+   Dopiero potwierdzony w ledger krok erasing atomowo anuluje drafty i zapisuje immutable events;
+   jest pierwszą nieodwracalną operacją i wyklucza anulowanie erasure.
    Usuwa zasoby zewnętrzne przez ich API, z bezpieczną idempotencją, po zakończeniu
    lokalnych transakcji. W DB zapisuje potwierdzenia etapów. Awaria => retry_pending
    z limitami prób i alertem; kandydat nadal niedostępny. Brak automatycznego restore.
@@ -138,10 +199,16 @@ w innych firmach nie jest funkcją tego RPC. Nie usuwa konta auth.users.
 
 Stany: requested -> authorized -> erasing -> active_data_erased -> completed;
 blocked i retry_pending mają powód i fazę wznowienia. Cancel dopuszczalny wyłącznie
-przed pierwszą nieodwracalną operacją; po usuwaniu tylko dokończenie lub eskalacja.
+przed erasing; owner cancellation pod tą samą blokadą request/generation odblokowuje
+workflow, pozostawia B1 drafty nietknięte i zwiększa generation (nigdy jej nie cofa).
+Status i odwołanie recovery envelope trafiają do niezależnego ledger przed
+odblokowaniem dostępu; brak ACK blokuje odblokowanie. Zatwierdzenia B2 muszą
+ponownie przejść bieżące sprawdzenie dowodów/ważności. Po erasing tylko dokończenie
+lub eskalacja. Cancel nigdy nie przywraca niezależnie cofniętych zgód.
 Nowy import nie może odtworzyć dawnych UUID ani zgód. Stare webhooki i tokeny
 nie tworzą brakującego kandydata; nie zakładamy wykrywania tej samej osoby wyłącznie
-po innym UUID. Nowa osoba/proces wymaga nowej zgody, nie odziedziczonego grant.
+po innym UUID bez potwierdzenia ownera (§4a). Nowa osoba/proces wymaga nowej zgody,
+nie odziedziczonego grant. Egzekwowanie zakazu dawnych UUID opisuje §4b.
 
 ## 6. Niezmienność a autoryzowane usunięcie
 
@@ -213,6 +280,45 @@ szyfrowanie i okresowe ćwiczenie restore.
 PITR, WAL, repliki, log drains i eksporty ręczne są częścią runbooka; nie obiecujemy
 selektywnego natychmiastowego usunięcia pojedynczego wiersza z każdej kopii.
 
+Recovery envelope w niezależnym ledger zawiera schema/adapter contract version,
+monotoniczny event sequence, tenant, request ID, pełną listę potwierdzonych IDs,
+scope_kind/classes, resolution revision, granicę czasu/generation, zatwierdzoną
+kopię definicji polityki i delegacji lub owner authorization, hash manifestu,
+manifest kluczy zasobów zewnętrznych potrzebnych do powtórzenia oraz fazę
+(authorized/cancelled/erasing/active_data_erased). Envelope jest uwierzytelniony
+podpisem/HMAC serwera o wersjonowanym kluczu poza odtwarzaną bazą, zaszyfrowany i
+minimalizowany; nie zawiera CV/contact destination. Hash bez danych nie wystarcza.
+ACK trwałego erasing event poprzedza cancellation events oraz wywołanie zewnętrzne/purge; commit lokalny po
+ACK może być ponowiony idempotentnie. Cancel event może powstać tylko przed erasing. Zmiany faz używają monotonicznego
+sequence i compare-and-append na request/generation/previous_phase w jednym ledger
+stream per request. Zaakceptowany erasing event jest autorytatywnym punktem
+nieodwracalności także po crash przed lokalnym commit. Cancel zawsze sprawdza
+i CAS-uje ten sam stream; po erasing ACK jest odrzucany, nawet gdy lokalny DB
+wciąż pokazuje authorized. Krótka lokalna
+transakcja rezerwuje phase transition + lease; potem następuje zapis ledger bez
+trzymania blokad DB, a osobna transakcja potwierdza dokładny event sequence.
+Konkurujący cancel/erasing nie może użyć tej samej wersji; brak pewnego ACK wymaga
+reconciliation z ledger, nigdy zgadywania sukcesu ani zwalniania freeze. Lease
+expiry nie uprawnia do przeciwnej decyzji bez odczytu autorytatywnego streamu.
+
+Restore-only kontrakt: izolowany operator odtwarzania ma jedynie EXECUTE
+replay_erasure_envelope, bez membership purge_owner ani prawa tworzenia kontekstu.
+Funkcja weryfikuje podpis, tenant, ciągłość eventów, dostępność zgodnej definicji
+polityki/adapterów i ostatnią fazę. Najpierw instalowane są tombstones dla erasing
+lub późniejszych zdarzeń. Następnie dla brakującego request odtwarza systemową
+autoryzację z envelope i wylicza manifest na przywróconym grafie dokładnie dla
+podpisanych IDs/scope; nie wymaga istnienia usuniętego ownera ani starego wiersza
+policy w backupie. Manifest może różnić się liczebnie od oryginału, ale nigdy nie
+rozszerza granic osoby/tenant/klas. Znane brakujące zasoby są idempotentnym sukcesem;
+nieznana zależność lub niezgodny adapter zatrzymuje restore. Wywołuje ten sam
+ograniczony purge przez zweryfikowany kontekst; zewnętrzne zasoby uzgadnia po API.
+Historyczny hold w backupie nie może przywrócić danych już nieodwracalnie usuniętych:
+erasing/późniejsze eventy są autorytetem ukończenia zatwierdzonego usunięcia;
+niezgodny nowszy hold z niezależnego rejestru wymaga izolacji i decyzji operatora,
+bez udostępnienia danych. Authorized bez erasing odtwarza tylko freeze i wymaga
+normalnej rewalidacji hold/polityki; cancelled nie uprawnia do purge. Odtworzenie
+pending request nie może samo stać się nową zgodą na operację nieodwracalną.
+
 Obecny wspólny klucz AES B2 nie pozwala na zniszczenie klucza jednej osoby bez
 wpływu na innych. Nie niszczymy klucza tenant/global jako metody purge. Fizyczne
 usunięcie rekordów jest pierwszym mechanizmem; per-subject envelope encryption
@@ -252,7 +358,15 @@ Wymagane kontrole implementacji:
 8. Polityka nieaktywna, brak terminu, hold expired, nieznana tabela/operation,
    próba usunięcia application zamiast całego candidate: bezpieczna blokada.
 9. typecheck/build, pełne testy B1/B2, SC-006/008/009 i dostępnych SC-011/012.
-10. Po migracji katalog FK/grants/policies/triggers zgodny z manifestem; brak
+10. Duplikaty potwierdzone i błędne dopasowania, candidate_record vs confirmed_subject;
+    direct INSERT/upsert starego UUID, przeniesienie tenant, GC przed końcem artifacts.
+11. Owner cancel przed erasing zachowuje drafty i nie odtwarza cofniętych zgód;
+    wyścig cancel/erasing oraz awaria ACK ledger są fail-closed.
+12. Automatic policy: wiele aplikacji z różnymi terminami/hold, revoked delegation,
+    suggest_only, zmiana ownera i powtórzone ticki bez podwójnej autoryzacji.
+13. Restore backup sprzed request/policy: signed envelope odbudowuje ograniczoną
+    autoryzację; błędny podpis, brak kopii policy lub nieznana schema blokują start.
+14. Po migracji katalog FK/grants/policies/triggers zgodny z manifestem; brak
     sekretów, parametrów SQL z PII i regresji istniejących applied migrations.
 
 ## 10. Handoff i następny prompt
