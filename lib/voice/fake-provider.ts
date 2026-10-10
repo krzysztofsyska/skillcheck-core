@@ -12,7 +12,12 @@ export class FakeVoiceProvider implements VoiceProvider {
   private readonly byKey = new Map<string, Entry>();
   private readonly byId = new Map<string, Entry>();
   private sequence = 0;
-  constructor(private readonly mode: FakeVoiceMode = "accepted", private readonly supportsLookup = true) {}
+  private readonly mode: FakeVoiceMode;
+  private readonly supportsLookup: boolean;
+  constructor(mode: FakeVoiceMode = "accepted", supportsLookup = true) {
+    this.mode = mode;
+    this.supportsLookup = supportsLookup;
+  }
 
   async initiateOutbound(request: VoiceCallRequest): Promise<VoiceCallAcceptance> {
     validateVoiceCallRequest(request);
