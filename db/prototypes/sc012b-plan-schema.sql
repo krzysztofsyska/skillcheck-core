@@ -6,6 +6,17 @@
 
 create schema if not exists private;
 
+-- Composite provenance keys are necessary to stop same-tenant cross-application
+-- and cross-position binding. These indexes are prototype-only, not a migration.
+create unique index sc012b_recruitment_position_binding_uq
+  on public.recruitments(company_id,position_id,id);
+create unique index sc012b_screening_application_binding_uq
+  on public.screening_analysis_versions(company_id,recruitment_id,application_id,position_id,id);
+create unique index sc012b_review_analysis_binding_uq
+  on public.screening_result_reviews(company_id,analysis_id,id);
+create unique index sc012b_shortlist_review_binding_uq
+  on public.recruitment_shortlist_entries(company_id,recruitment_id,application_id,analysis_id,review_id,id);
+
 create table public.voice_plan_versions (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null,
@@ -46,7 +57,17 @@ create table public.voice_plan_versions (
   foreign key(company_id,screening_review_id)
     references public.screening_result_reviews(company_id,id) on delete restrict,
   foreign key(company_id,shortlist_entry_id)
-    references public.recruitment_shortlist_entries(company_id,id) on delete restrict
+    references public.recruitment_shortlist_entries(company_id,id) on delete restrict,
+  foreign key(company_id,position_id,recruitment_id)
+    references public.recruitments(company_id,position_id,id) on delete restrict,
+  foreign key(company_id,recruitment_id,application_id,position_id,analysis_id)
+    references public.screening_analysis_versions(company_id,recruitment_id,application_id,position_id,id)
+    on delete restrict,
+  foreign key(company_id,analysis_id,screening_review_id)
+    references public.screening_result_reviews(company_id,analysis_id,id) on delete restrict,
+  foreign key(company_id,recruitment_id,application_id,analysis_id,screening_review_id,shortlist_entry_id)
+    references public.recruitment_shortlist_entries(company_id,recruitment_id,application_id,analysis_id,review_id,id)
+    on delete restrict
 );
 create index voice_plan_versions_app_idx
   on public.voice_plan_versions(company_id,application_id,created_at desc);
