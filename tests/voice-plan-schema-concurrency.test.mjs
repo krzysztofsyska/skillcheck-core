@@ -132,6 +132,23 @@ test("SC-012-B prototype enforces immutable rows and one CAS pointer across real
     "insert into private.voice_plan_current_releases(company_id,application_id,plan_id,release_entry_id,pointer_version) values($1,$2,$3,$4,1)",
     [f.companyId,other.application.id,pid,releaseId]),e=>e.code==="23503");
  });
+
+ await t.test("release FK rejects another valid application plan paired with the first application's release",async()=>{
+  const other=await h.completedApplication(await h.candidate(f),Array(5).fill("meets"));
+  await h.asUser(users.owner);
+  const otherShortlist=await h.add(other);
+  await h.asAdmin();
+  const otherPlan=(await db.query(insertPlan,[
+    other.companyId,other.recruitment.id,other.application.id,other.position.id,
+    other.analysis_id,other.reviewId,otherShortlist,hash("d"),hash("e"),
+    JSON.stringify({analysisId:other.analysis_id}),JSON.stringify(envelope),users.owner
+  ])).rows[0].id;
+  await assert.rejects(db.query(
+    "insert into private.voice_plan_current_releases(company_id,application_id,plan_id,release_entry_id,pointer_version) values($1,$2,$3,$4,1)",
+    [other.companyId,other.application.id,otherPlan,releaseId]),
+    error=>error.code==="23503");
+ });
+
  await t.test("correction lineage cannot cite an unrelated review or plan",async()=>{
   const other=await h.completedApplication(await h.candidate(f),Array(5).fill("meets"));
   await h.asAdmin();
