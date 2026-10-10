@@ -4,6 +4,8 @@ on:
     paths:
       - 'lib/voice/plan-persistence-contract.ts'
       - 'tests/voice-plan-persistence-contract.test.mjs'
+      - 'lib/voice/screening-gap-selection.ts'
+      - 'tests/voice-screening-gap-selection.test.mjs'
       - '.github/workflows/sc012b-persistence-contract-tests.yml'
       - 'lib/voice/interview-plan.ts'
       - 'lib/behavior-guide.ts'
@@ -23,4 +25,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node --test tests/voice-plan-persistence-contract.test.mjs
+      - run: node --test tests/voice-plan-persistence-contract.test.mjs tests/voice-screening-gap-selection.test.mjs
