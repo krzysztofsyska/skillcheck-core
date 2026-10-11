@@ -16,16 +16,21 @@ declare
   plan record;
   last_review record;
   last_version bigint;
+  auth_owner uuid;
+  auth_role text;
+  bound_review_version integer;
+  analysis_latest_version integer;
+  current_plan uuid;
   prior_key record;
   result_id uuid;
   request_digest text;
-  clean_reason text := nullif(pg_catalog.btrim(p_reason),'');
+  clean_reason text := nullif(pg_catalog.btrim(p_reason, E' \t\n\r\f\v'),'');
 begin
   if actor is null or p_plan_id is null or p_request_key is null
      or p_expected_review_version is null or p_expected_review_version<0
      or p_expected_source_hash is null
      or p_expected_source_hash !~ '^[0-9a-f]{64}$'
-     or p_decision not in ('approved','requires_changes')
+     or p_decision is null or p_decision not in ('approved','requires_changes')
      or (p_decision='requires_changes' and
          (clean_reason is null or pg_catalog.char_length(clean_reason)>1000))
      or (p_reason is not null and pg_catalog.char_length(p_reason)>1000)
@@ -43,9 +48,26 @@ begin
   -- compatibility with all SC-006/008/010 writers.
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(plan.company_id::text||':'||plan.application_id::text,0));
+  -- Pin the current owner/member row until commit; a concurrent revocation
+  -- cannot commit while this review transaction holds its membership lock.
+  select c.owner_id into auth_owner from public.companies c
+    where c.id=plan.company_id for share nowait;
+  if not found then raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN'; end if;
+  if actor is distinct from auth_owner then
+    select m.role into auth_role from public.company_members m
+      where m.company_id=plan.company_id and m.user_id=actor
+      for share nowait;
+    if not found or auth_role<>'recruiter' then
+      raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
+    end if;
+  end if;
   if not private.has_company_access(plan.company_id,true) then
     raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
   end if;
+  -- Serialize a reused request key across different applications before
+  -- looking up the global (company,actor,operation,key) uniqueness scope.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(plan.company_id::text||':'||actor::text||':review:'||p_request_key::text,0));
   perform 1 from public.voice_plan_versions p
     where p.id=p_plan_id and p.company_id=plan.company_id
       and p.application_id=plan.application_id for share nowait;
@@ -53,21 +75,38 @@ begin
   if plan.source_hash is distinct from p_expected_source_hash then
     raise exception using errcode='PT409',message='VOICE_PLAN_STALE';
   end if;
+  select p.id into current_plan from public.voice_plan_versions p
+    where p.company_id=plan.company_id and p.application_id=plan.application_id
+    order by p.plan_version desc limit 1;
+  if current_plan is distinct from p_plan_id then
+    raise exception using errcode='PT409',message='VOICE_PLAN_SUPERSEDED';
+  end if;
   -- Refuse stale analysis/shortlist/approval, including removal.
-  if not exists(
-    select 1 from public.screening_analysis_versions a
-    join public.recruitment_shortlist_entries s
-      on s.company_id=a.company_id and s.analysis_id=a.id
-      and s.application_id=a.application_id and s.review_id=plan.screening_review_id
-    join public.screening_result_reviews r
-      on r.company_id=a.company_id and r.analysis_id=a.id
-      and r.id=plan.screening_review_id
+  -- Lock the analysis and the shortlist in the writer's established order.
+  -- NOWAIT makes contention a conflict rather than waiting across lock-order
+  -- inversions. Re-check all predicates *after* the locks are acquired.
+  select a.latest_review_version into analysis_latest_version
+    from public.screening_analysis_versions a
     where a.id=plan.analysis_id and a.company_id=plan.company_id
       and a.application_id=plan.application_id
       and a.execution_status='completed' and a.stale_at is null
-      and s.id=plan.shortlist_entry_id and s.removed_at is null
+    for share nowait;
+  if not found then raise exception using errcode='PT409',message='VOICE_PLAN_STALE'; end if;
+  perform 1 from public.recruitment_shortlist_entries s
+    where s.id=plan.shortlist_entry_id and s.company_id=plan.company_id
+      and s.application_id=plan.application_id and s.analysis_id=plan.analysis_id
+      and s.review_id=plan.screening_review_id and s.removed_at is null
+    for share nowait;
+  if not found then raise exception using errcode='PT409',message='VOICE_PLAN_STALE'; end if;
+  select r.review_version into bound_review_version
+    from public.screening_result_reviews r
+    where r.id=plan.screening_review_id and r.company_id=plan.company_id
+      and r.analysis_id=plan.analysis_id
       and r.disposition in ('approved','approved_with_changes')
-  ) then raise exception using errcode='PT409',message='VOICE_PLAN_STALE'; end if;
+    for share nowait;
+  if not found or bound_review_version is distinct from analysis_latest_version then
+    raise exception using errcode='PT409',message='VOICE_PLAN_STALE';
+  end if;
   if exists(select 1 from private.voice_plan_release_entries
      where company_id=plan.company_id and plan_id=p_plan_id) then
     raise exception using errcode='PT409',message='VOICE_PLAN_ALREADY_RELEASED';
@@ -90,11 +129,14 @@ begin
     end if;
     return prior_key.result_id;
   end if;
-  select id,review_version into last_review
+  select id,review_version,decision into last_review
     from private.voice_plan_review_entries
     where company_id=plan.company_id and plan_id=p_plan_id
     order by review_version desc limit 1;
   last_version:=coalesce(last_review.review_version,0);
+  if last_review.decision='requires_changes' then
+    raise exception using errcode='PT409',message='VOICE_PLAN_REVIEW_TERMINAL';
+  end if;
   if last_version<>p_expected_review_version then
     raise exception using errcode='PT409',message='VOICE_PLAN_REVIEW_CONFLICT';
   end if;
