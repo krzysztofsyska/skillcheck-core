@@ -45,11 +45,11 @@ async function reconstructLocked(
     ].join(" "),[s.companyId])).rows);
     if(!auth.actor)fail("FORBIDDEN");
     if(auth.actor!==auth.owner_id){
-      const member=only((await db.query([
+      const members=(await db.query([
         "select m.role from public.company_members m",
         "where m.company_id=$1 and m.user_id=$2 for share nowait",
-      ].join(" "),[s.companyId,auth.actor])).rows);
-      if(member.role!=="recruiter")fail("FORBIDDEN");
+      ].join(" "),[s.companyId,auth.actor])).rows;
+      if(members.length!==1||members[0].role!=="recruiter")fail("FORBIDDEN");
     }
     const h=only((await db.query([
       "select ap.company_id,ap.id as application_id,ap.updated_at as application_updated_at,",
