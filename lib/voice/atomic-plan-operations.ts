@@ -24,6 +24,13 @@ async function atomic<T>(db:SqlClient,run:()=>Promise<T>):Promise<T>{
     return result;
   }catch(e){
     await db.query("rollback");
+    // Expected PostgreSQL NOWAIT/deadlock/serialization races are conflicts,
+    // not unexpected server errors. Never leak raw DB messages to the client.
+    if(e && typeof e==="object" && "code" in e &&
+       ["55P03","40P01","40001"].includes(String(e.code))){
+      const conflict=Object.assign(new Error("VOICE_PLAN_CONFLICT"),{code:"PT409"});
+      throw conflict;
+    }
     throw e;
   }
 }
