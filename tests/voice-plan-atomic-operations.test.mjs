@@ -102,6 +102,42 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
    "select count(*)::int as n from private.voice_plan_review_entries where plan_id=$1",[plan])).rows[0].n;
   assert.equal(after,before);
  });
+ await t.test("concurrent position update yields PT409 and no partial history",async()=>{
+  const rival=new Client(config(dbName));await rival.connect();
+  try{
+    await rival.query("begin");
+    await rival.query("select id from public.positions where id=$1 for update",[f.position.id]);
+    const before=(await db.query(
+      "select count(*)::int as n from private.voice_plan_review_entries where plan_id=$1",
+      [plan])).rows[0].n;
+    await assert.rejects(atomicReviewVoicePlan(db,{
+      ...reviewArgs,requestKey:randomUUID(),
+    }),e=>e.code==="PT409");
+    const after=(await db.query(
+      "select count(*)::int as n from private.voice_plan_review_entries where plan_id=$1",
+      [plan])).rows[0].n;
+    assert.equal(after,before);
+  }finally{
+    await rival.query("rollback").catch(()=>{});
+    await rival.end();
+  }
+ });
+ await t.test("screening reanalysis advisory lock contention is a stable PT409",async()=>{
+  const rival=new Client(config(dbName));await rival.connect();
+  try{
+    await rival.query("begin");
+    await rival.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      ["screening:"+f.application.id]);
+    await db.query("set lock_timeout='250ms'");
+    await assert.rejects(atomicReviewVoicePlan(db,{
+      ...reviewArgs,requestKey:randomUUID(),
+    }),e=>e.code==="PT409");
+  }finally{
+    await db.query("set lock_timeout='0'").catch(()=>{});
+    await rival.query("rollback").catch(()=>{});
+    await rival.end();
+  }
+ });
  await t.test("source mutation invalidates both RPCs without side effects",async()=>{
   await db.query("update public.positions set title='Modified role' where id=$1",[f.position.id]);
   await assert.rejects(atomicReviewVoicePlan(db,{...reviewArgs,requestKey:randomUUID()}),
@@ -110,6 +146,12 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
   const n=(await db.query("select count(*)::int as n from private.voice_plan_release_entries where plan_id=$1",[plan])).rows[0].n;
   assert.equal(n,1);
+ });
+ await t.test("matching release request can be recovered after source revision",async()=>{
+  assert.equal(await atomicReleaseVoicePlan(db,releaseArgs),release);
+  await assert.rejects(atomicReleaseVoicePlan(db,{
+    ...releaseArgs,requestKey:randomUUID(),
+  }),e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
  });
  await t.test("unauthorized actor cannot replay an approved operation",async()=>{
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.otherOwner]);
