@@ -151,8 +151,18 @@ export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
     const p=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
       "shortlist_entry_id,source_hash,template_version,plan_envelope",
+      "from public.voice_plan_versions where id=$1",
+    ].join(" "),[planId])).rows);
+    // Acquire application advisory lock before any plan row lock; the
+    // subsequent locked re-read rejects changes between the two reads.
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      [p.company_id+":"+p.application_id]);
+    const locked=only((await db.query([
+      "select company_id,application_id,analysis_id,screening_review_id,",
+      "shortlist_entry_id,source_hash,template_version,plan_envelope",
       "from public.voice_plan_versions where id=$1 for share nowait",
     ].join(" "),[planId])).rows);
+    if(!isDeepStrictEqual(locked,p))fail("STALE");
     if(p.template_version!==ACTIVE_VOICE_TEMPLATE_VERSION)fail("TEMPLATE_CHANGED");
     const rebuilt=await reconstructLocked(db,{
       companyId:p.company_id,applicationId:p.application_id,
