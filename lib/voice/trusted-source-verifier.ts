@@ -51,6 +51,11 @@ async function reconstructLocked(
       ].join(" "),[s.companyId,auth.actor])).rows;
       if(members.length!==1||members[0].role!=="recruiter")fail("FORBIDDEN");
     }
+    const template=only((await db.query([
+      "select version,manifest_digest from private.voice_plan_template_catalog",
+      "where version=$1 and active=true for share nowait",
+    ].join(" "),[ACTIVE_VOICE_TEMPLATE_VERSION])).rows);
+    if(template.manifest_digest!==ACTIVE_VOICE_TEMPLATE_DIGEST)fail("TEMPLATE_CHANGED");
     const h=only((await db.query([
       "select ap.company_id,ap.id as application_id,ap.updated_at as application_updated_at,",
       "ap.status as application_status,rec.id as recruitment_id,",
