@@ -6,6 +6,7 @@ import {Client} from "pg";
 import {parse} from "pg-connection-string";
 import {setupRankingDatabase,users} from "./helpers/screening-ranking-fixture.mjs";
 import {behaviorGuideDefinitions} from "../lib/behavior-guide.ts";
+import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest} from "../lib/voice/template-registry.ts";
 import {
   reconstructTrustedVoiceSource,verifyStoredVoicePlan,TrustedSourceError,
 } from "../lib/voice/trusted-source-verifier.ts";
@@ -83,4 +84,12 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
   await assert.rejects(verifyStoredVoicePlan(db,plan),
     e=>e instanceof TrustedSourceError&&e.code==="STALE");
  });
+});
+
+test("SC-012-B template registry only permits explicitly versioned, pinned templates",()=>{
+ const template=getTrustedVoiceTemplate("skillcheck-voice-plan-v1");
+ assert.equal(template.recordingAllowed,false);
+ assert.match(trustedVoiceTemplateDigest("skillcheck-voice-plan-v1"),/^[a-f0-9]{64}$/);
+ assert.throws(()=>getTrustedVoiceTemplate("skillcheck-voice-plan-v2"),/VOICE_TEMPLATE_UNSUPPORTED/);
+ assert.ok(Object.isFrozen(template));
 });
