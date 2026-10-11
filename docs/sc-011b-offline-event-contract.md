@@ -6,10 +6,24 @@ STATUS: IMPLEMENTATION_PREPARATION / NOT READY FOR REAL PROVIDER | PRODUCTION_AP
 
 ## Delivered
 - Typed strict synthetic provider event envelope with exact fields: account, attempt, provider call, event ID, UTC/offset timestamp and allowed event status.
+- `parseVoiceProviderEvent` is only an untrusted-object parser. Signature, source, header and secret fields are rejected. A parsed envelope is not an authenticated webhook.
+- `occurredAt` must be a real civil timestamp. Month length, leap day and clock fields are checked directly. `Date.parse` is only a round-trip of those components, because this runtime rewrites dates such as 2026-02-30.
 - Cloned and bounded payload validation; no raw metadata, candidate contact, CV, voice, recording or transcript.
 - Deterministic SHA256 receipt hash to distinguish same event identifier with different payloads (the future DB unique constraint enforces replay).
-- Pure progression projection: unknown -> signed reconciliation result, accepted -> ringing -> connected -> completed; cancelled/failed/completed terminal; no resurrection or backward transitions. This alone never authorizes an external side effect.
+- Pure progression projection: unknown -> accepted -> ringing -> connected -> completed; cancelled/failed/completed terminal; no resurrection or backward transitions. Timestamp order does not override status rank. This module has no event-id store. This alone never authorizes an external side effect.
 - Deterministic synthetic unit tests and separate GitHub CI.
+
+## Still blocked — vendor adapter
+- No provider is selected. Retell and Vapi are not approved.
+- No real telephony adapter, webhook route, signature verifier, replay window, or network transport.
+- No vendor credentials, account configuration, or production calls.
+- No candidate contact and no recording/consent execution.
+
+## Still blocked — SC-010-C
+- Persistent receipt deduplication and replay storage.
+- Tenant, attempt and provider-account binding in the database.
+- Dispatch fencing, lease validation and legal contact permission.
+- RLS, grants and any write of a provider event.
 
 ## NON-FEATURES (hard prohibitions)
 No actual signature validation, webhook route, vendor credentials, real API adapter, source read, contact dispatch, stored deduplication, DB migration or production access. Passing this normalizer input does NOT establish authenticity. A future vendor-selected adapter must authenticate raw HTTP bytes and provider account/timestamp, enforce replay protection with persistent receipts and follow vendor-specific signature specification BEFORE calling the normalizer. Tenant/attempt/approval binding, fencing and legal contact permission remain SC-010-C. Never mount this module directly on a public endpoint.
