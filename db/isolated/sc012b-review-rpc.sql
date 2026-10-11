@@ -79,10 +79,10 @@ begin
       'source',p_expected_source_hash,'decision',p_decision,
       'reason',clean_reason)::text,'UTF8')),'hex');
 
-  select payload_hash,result_id into prior_key
-  from private.voice_plan_request_keys
-  where company_id=plan.company_id and actor_id=actor
-    and operation='review' and request_key=p_request_key for update;
+  select k.payload_hash,k.result_id into prior_key
+  from private.voice_plan_request_keys k
+  where k.company_id=plan.company_id and k.actor_id=actor
+    and k.operation='review' and k.request_key=p_request_key for update;
   if found then
     if prior_key.payload_hash is distinct from request_digest or
        prior_key.result_id is null then
