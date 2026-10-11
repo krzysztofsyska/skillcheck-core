@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "../../../lib/supabase/server";
 import styles from "./leads.module.css";
+import { salesLeadReplyHref } from "../../../lib/sales-lead-reply";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -24,26 +25,28 @@ export default async function OperatorLeadsPage() {
   if (operator !== true) notFound();
 
   // The RPC checks the current operator role again, including revocation after the status check.
-  const { data: leads, error } = await client.rpc("list_sales_leads", { result_limit: 50 });
+  const { data: leads, error } = await client.rpc("list_sales_leads_inbox", { result_limit: 50 });
   if (error?.message === "sales_lead_forbidden") notFound();
   if (error || !Array.isArray(leads)) throw new Error("Nie udało się odczytać zgłoszeń.");
 
   return <main className={styles.page}><section className={styles.panel}>
     <nav className={styles.navigation} aria-label="Nawigacja operatora">
       <Link href="/">SkillCheck — strona główna</Link>
+      <Link href="/operator/sales">Proces sprzedaży — etapy i terminy</Link>
       <a href="/operator/leads">Odśwież zgłoszenia</a>
     </nav>
     <header>
       <p className="eyebrow">PANEL OPERATORA</p>
       <h1>Zgłoszenia kontaktowe</h1>
       <p>Do 50 najnowszych zgłoszeń, od najnowszego. Daty w strefie Europe/Warsaw.</p>
+      <p>„Odpowiedz e-mailem” otwiera Twoją pocztę. Wybierz konto pomoc@skillcheck.pl i wyślij odpowiedź. Panel nie wysyła wiadomości automatycznie ani nie przechowuje korespondencji.</p>
     </header>
     {leads.length === 0 ? <p className={styles.empty} role="status">Nie ma jeszcze zgłoszeń.</p> :
       <ol className={styles.list} aria-label="Zgłoszenia kontaktowe">
         {leads.map(lead => <li key={lead.id} className={styles.card}>
           <div className={styles.heading}>
             <h2>{lead.company_name}</h2>
-            <span className={styles.status}>{lead.status === "received" ? "Otrzymane" : lead.status}</span>
+
           </div>
           <dl className={styles.details}>
             <div><dt>Data zgłoszenia</dt><dd><time dateTime={lead.created_at}>{dates.format(new Date(lead.created_at))}</time></dd></div>
@@ -53,6 +56,11 @@ export default async function OperatorLeadsPage() {
             <div className={styles.full}><dt>Opis potrzeb</dt><dd className={styles.needs}>{lead.needs}</dd></div>
             <div className={styles.full}><dt>Konto zgłaszającego</dt><dd>{lead.submitted_by || "Bez zalogowanego konta"}</dd></div>
           </dl>
+          <div className={styles.actions}>
+            <a className={styles.reply} href={salesLeadReplyHref(lead.email)}>Odpowiedz e-mailem</a>
+            <Link href={`/operator/sales/${lead.id}`}>Etap sprzedaży i ustalenia</Link>
+          </div>
+          {lead.closed_at && <p>Zakończono bez umowy: {dates.format(new Date(lead.closed_at))}. Usunięcie danych po 6 miesiącach.</p>}
         </li>)}
       </ol>}
   </section></main>;
