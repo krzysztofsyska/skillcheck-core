@@ -138,6 +138,21 @@ async function reconstructLocked(
        result.maximumSeconds!==template.maximumSeconds||
        result.recordingAllowed!==template.recordingAllowed||
        result.noticeRequired!==template.noticeRequired)fail("TEMPLATE_CHANGED");
+    for(const q of result.questions){
+      if(q.kind==="common"){
+        const allowed=template.behaviorQuestionTexts.find(x=>x.id===q.criterionId);
+        if(!allowed||q.text!==allowed.firstQuestion||
+           q.followUps.length!==1||q.followUps[0]!==template.commonFollowUp)
+          fail("TEMPLATE_CHANGED");
+      }else{
+        const allowed=template.clarificationQuestionTexts[
+          q.criterionKind as keyof typeof template.clarificationQuestionTexts];
+        if(!allowed||q.text!==allowed||q.followUps.length!==1||
+           !template.clarificationFollowUps.includes(q.followUps[0] as
+             typeof template.clarificationFollowUps[number]))
+          fail("TEMPLATE_CHANGED");
+      }
+    }
     return result;
 }
 async function withReadTransaction<T>(db:SqlClient,work:()=>Promise<T>):Promise<T>{
