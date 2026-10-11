@@ -173,9 +173,9 @@ export async function reconstructTrustedVoiceSource(
 }
 /** Does not authorize review or release: only a source integrity preflight.
  * The mutating RPC must repeat the checks under its own transaction locks. */
-export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
+export async function verifyStoredVoicePlanWithinTransaction(db:SqlClient,planId:string){
   id(planId);
-  return withReadTransaction(db,async()=>{
+  {
     const p=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
       "shortlist_entry_id,source_hash,envelope_hash,template_version,plan_envelope",
@@ -203,5 +203,8 @@ export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
        !isDeepStrictEqual(p.plan_envelope,rebuilt))
       fail("STALE");
     return rebuilt;
-  });
+  }
+}
+export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
+  return withReadTransaction(db,()=>verifyStoredVoicePlanWithinTransaction(db,planId));
 }
