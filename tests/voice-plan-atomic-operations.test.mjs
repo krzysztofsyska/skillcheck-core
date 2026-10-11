@@ -153,6 +153,24 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     ...releaseArgs,requestKey:randomUUID(),
   }),e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
  });
+ await t.test("committed release replay survives a newer plan superseding it",async()=>{
+  const successor=(await db.query([
+    "insert into public.voice_plan_versions",
+    "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+    "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+    "template_version,created_by,retention_policy_version,retention_deadline,",
+    "supersedes_plan_id,corrects_review_id)",
+    "select company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+    "shortlist_entry_id,2,$1,envelope_hash,source_snapshot,plan_envelope,",
+    "template_version,created_by,retention_policy_version,retention_deadline,$2,$3",
+    "from public.voice_plan_versions where id=$2 returning id",
+  ].join(" "),["c".repeat(64),plan,review])).rows[0].id;
+  assert.match(successor,/^[a-f0-9-]{36}$/);
+  assert.equal(await atomicReleaseVoicePlan(db,releaseArgs),release);
+  await assert.rejects(atomicReleaseVoicePlan(db,{
+    ...releaseArgs,requestKey:randomUUID(),
+  }),e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
+ });
  await t.test("unauthorized actor cannot replay an approved operation",async()=>{
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.otherOwner]);
   await assert.rejects(atomicReleaseVoicePlan(db,releaseArgs),
