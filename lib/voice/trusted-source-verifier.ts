@@ -40,12 +40,17 @@ async function reconstructLocked(
     await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
       [s.companyId+":"+s.applicationId]);
     const auth=only((await db.query([
-      "select c.owner_id,auth.uid() as actor,",
-      "(select m.role from public.company_members m",
-      "where m.company_id=c.id and m.user_id=auth.uid()) as member_role",
+      "select c.owner_id,auth.uid() as actor",
       "from public.companies c where c.id=$1 for share nowait",
     ].join(" "),[s.companyId])).rows);
-    if(!auth.actor||(auth.actor!==auth.owner_id&&auth.member_role!=="recruiter"))fail("FORBIDDEN");
+    if(!auth.actor)fail("FORBIDDEN");
+    if(auth.actor!==auth.owner_id){
+      const member=only((await db.query([
+        "select m.role from public.company_members m",
+        "where m.company_id=$1 and m.user_id=$2 for share nowait",
+      ].join(" "),[s.companyId,auth.actor])).rows);
+      if(member.role!=="recruiter")fail("FORBIDDEN");
+    }
     const h=only((await db.query([
       "select ap.company_id,ap.id as application_id,ap.updated_at as application_updated_at,",
       "ap.status as application_status,rec.id as recruitment_id,",
