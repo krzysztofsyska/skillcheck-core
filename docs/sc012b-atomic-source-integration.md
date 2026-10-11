@@ -36,7 +36,7 @@ The independent Codex review on PR #99 flagged three P2 issues. This branch now:
 
 1. Maps verifier `55P03`, `40P01` and `40001` to a stable `PT409` after transaction rollback.
 2. Includes prototype schema and screening fixture dependencies in atomic CI path triggers.
-3. Resolves committed release idempotency keys under application, actor membership and request-key locks **before** revalidating mutable source, while requiring the exact same canonical request payload and release-plan/review linkage. New keys still undergo the complete trusted-source verifier and pointer CAS. The isolated release SQL now also checks a committed request before rejecting a superseded plan.
+3. Resolves committed release and review idempotency keys under application, actor membership and request-key locks **before** revalidating mutable source, while requiring the exact same canonical request payload and the stored review or release row. New keys still undergo the complete trusted-source verifier and pointer CAS. The isolated review and release SQL now also check a committed request before rejecting a superseded or stale plan. A different tenant actor receives `42501` / `VOICE_PLAN_FORBIDDEN` and cannot recover the id.
 
 Real PostgreSQL two-session tests additionally cover an in-flight position update, screening reanalysis advisory lock contention, and recovery of a previously committed release after source revision. They must pass on the exact current commit before review acceptance.
 

@@ -5,6 +5,8 @@ on:
       - 'lib/voice/trusted-source-verifier.ts'
       - 'lib/voice/atomic-plan-operations.ts'
       - 'lib/voice/template-registry.ts'
+      - 'lib/voice/interview-plan.ts'
+      - 'lib/behavior-guide.ts'
       - 'db/isolated/sc012b-review-rpc.sql'
       - 'db/isolated/sc012b-release-rpc.sql'
       - 'db/isolated/sc012b-template-catalog.sql'

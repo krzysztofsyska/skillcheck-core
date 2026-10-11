@@ -68,6 +68,24 @@ begin
   -- looking up the global (company,actor,operation,key) uniqueness scope.
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(plan.company_id::text||':'||actor::text||':review:'||p_request_key::text,0));
+  -- Resolve an authorized, committed request replay BEFORE current-state
+  -- checks, so a superseded or stale plan can recover the original review.
+  request_digest:=pg_catalog.encode(pg_catalog.sha256(
+    pg_catalog.convert_to(pg_catalog.jsonb_build_object(
+      'plan',p_plan_id,'expectedVersion',p_expected_review_version,
+      'source',p_expected_source_hash,'decision',p_decision,
+      'reason',clean_reason)::text,'UTF8')),'hex');
+  select k.payload_hash,k.result_id into prior_key
+  from private.voice_plan_request_keys k
+  where k.company_id=plan.company_id and k.actor_id=actor
+    and k.operation='review' and k.request_key=p_request_key for update;
+  if found then
+    if prior_key.payload_hash is distinct from request_digest or
+       prior_key.result_id is null then
+      raise exception using errcode='PT409',message='VOICE_PLAN_REQUEST_CONFLICT';
+    end if;
+    return prior_key.result_id;
+  end if;
   perform 1 from public.voice_plan_versions p
     where p.id=p_plan_id and p.company_id=plan.company_id
       and p.application_id=plan.application_id for share nowait;
@@ -112,23 +130,6 @@ begin
     raise exception using errcode='PT409',message='VOICE_PLAN_ALREADY_RELEASED';
   end if;
 
-  request_digest:=pg_catalog.encode(pg_catalog.sha256(
-    pg_catalog.convert_to(pg_catalog.jsonb_build_object(
-      'plan',p_plan_id,'expectedVersion',p_expected_review_version,
-      'source',p_expected_source_hash,'decision',p_decision,
-      'reason',clean_reason)::text,'UTF8')),'hex');
-
-  select k.payload_hash,k.result_id into prior_key
-  from private.voice_plan_request_keys k
-  where k.company_id=plan.company_id and k.actor_id=actor
-    and k.operation='review' and k.request_key=p_request_key for update;
-  if found then
-    if prior_key.payload_hash is distinct from request_digest or
-       prior_key.result_id is null then
-      raise exception using errcode='PT409',message='VOICE_PLAN_REQUEST_CONFLICT';
-    end if;
-    return prior_key.result_id;
-  end if;
   select id,review_version,decision into last_review
     from private.voice_plan_review_entries
     where company_id=plan.company_id and plan_id=p_plan_id
@@ -154,6 +155,9 @@ begin
     p.retention_policy_version,p.retention_deadline
   from public.voice_plan_versions p where p.id=p_plan_id;
   return result_id;
+exception
+  when lock_not_available or deadlock_detected or serialization_failure then
+    raise exception using errcode='PT409',message='VOICE_PLAN_CONFLICT';
 end;
 $$;
 -- No browser/anonymous grant: this is a candidate for a future trusted

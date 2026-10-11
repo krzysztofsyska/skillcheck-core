@@ -82,8 +82,13 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
       "select pg_try_advisory_xact_lock(hashtextextended($1,0)) as acquired",
       ["screening:"+f.application.id])).rows[0];
     assert.equal(lock.acquired,false,"SC-006 screening writer cannot pass while verified source is locked");
+    await rival.query("savepoint position_lock");
     await assert.rejects(rival.query(
       "select id from public.positions where id=$1 for update nowait",[f.position.id]),
+      e=>e.code==="55P03");
+    await rival.query("rollback to savepoint position_lock");
+    await assert.rejects(rival.query(
+      "select owner_id from public.companies where id=$1 for update nowait",[f.companyId]),
       e=>e.code==="55P03");
     await rival.query("rollback");
     await db.query("rollback");
@@ -166,7 +171,15 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     "from public.voice_plan_versions where id=$2 returning id",
   ].join(" "),["c".repeat(64),plan,review])).rows[0].id;
   assert.match(successor,/^[a-f0-9-]{36}$/);
+  assert.equal(await atomicReviewVoicePlan(db,reviewArgs),review);
   assert.equal(await atomicReleaseVoicePlan(db,releaseArgs),release);
+  const directReview=await db.query(
+    "select private.sc012b_review_plan($1,$2,$3,$4,$5,$6) as id",
+    [plan,0,canonical.sourceHash,"approved",null,reviewArgs.requestKey]);
+  assert.equal(directReview.rows[0].id,review);
+  await assert.rejects(atomicReviewVoicePlan(db,{
+    ...reviewArgs,decision:"requires_changes",reason:"Inna decyzja",
+  }),e=>e.code==="PT409"&&e.message==="VOICE_PLAN_REQUEST_CONFLICT");
   await assert.rejects(atomicReleaseVoicePlan(db,{
     ...releaseArgs,requestKey:randomUUID(),
   }),e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
@@ -174,6 +187,8 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
  await t.test("unauthorized actor cannot replay an approved operation",async()=>{
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.otherOwner]);
   await assert.rejects(atomicReleaseVoicePlan(db,releaseArgs),
+    e=>e.code==="42501" && e.message==="VOICE_PLAN_FORBIDDEN");
+  await assert.rejects(atomicReviewVoicePlan(db,reviewArgs),
     e=>e.code==="42501" && e.message==="VOICE_PLAN_FORBIDDEN");
  });
 });
