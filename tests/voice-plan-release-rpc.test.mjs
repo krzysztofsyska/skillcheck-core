@@ -47,7 +47,7 @@ test("SC-012-B isolated release RPC enforces approval, current pointer CAS and r
   "'skillcheck-voice-plan-v1',$11,'synthetic-v1','2030-01-01') returning id"
  ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
   f.analysis_id,f.reviewId,shortlist,source,h64("b"),JSON.stringify(envelope),users.owner])).rows[0].id;
- const insertReview=async decision=>
+ const insertReview=async (decision="approved")=>
   (await db.query([
    "insert into private.voice_plan_review_entries",
    "(company_id,application_id,plan_id,review_version,reviewer_id,decision,source_hash,",
