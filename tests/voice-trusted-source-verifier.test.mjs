@@ -71,6 +71,19 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
     e=>e instanceof TrustedSourceError&&e.code==="FORBIDDEN");
   await setActor(users.owner);
  });
+ await t.test("recruiter membership is required and revocation is fail-closed",async()=>{
+  await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter')",
+    [f.companyId,users.recruiter]);
+  await setActor(users.recruiter);
+  assert.equal((await reconstructTrustedVoiceSource(db,selector)).sourceHash,expected.sourceHash);
+  await setActor(users.owner);
+  await db.query("delete from public.company_members where company_id=$1 and user_id=$2",
+    [f.companyId,users.recruiter]);
+  await setActor(users.recruiter);
+  await assert.rejects(reconstructTrustedVoiceSource(db,selector),
+    e=>e instanceof TrustedSourceError&&e.code==="FORBIDDEN");
+  await setActor(users.owner);
+ });
  await t.test("tampered saved source hash cannot grant authority",async()=>{
   await assert.rejects(verifyStoredVoicePlan(db,randomUUID()),
     e=>e instanceof TrustedSourceError&&e.code==="STALE");
