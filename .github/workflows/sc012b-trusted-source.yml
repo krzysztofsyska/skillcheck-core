@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'lib/voice/trusted-source-verifier.ts'
+      - 'lib/voice/template-registry.ts'
       - 'lib/voice/interview-plan.ts'
       - 'lib/voice/plan-persistence-contract.ts'
       - 'lib/voice/screening-gap-selection.ts'
