@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createVoicePlanWriteSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
 import { selectReviewedScreeningGaps } from "./screening-gap-selection.ts";
 import type { InterviewSource } from "./interview-plan.ts";
+import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest} from "./template-registry.ts";
 
 type Row=Record<string,any>;
 export type SqlClient={query(sql:string,params?:readonly unknown[]):Promise<{rows:Row[]}>};
@@ -23,6 +24,7 @@ const fail=(c:TrustedSourceError["code"]):never=>{throw new TrustedSourceError(c
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const hex=/^[0-9a-f]{64}$/;
 export const ACTIVE_VOICE_TEMPLATE_VERSION="skillcheck-voice-plan-v1" as const;
+export const ACTIVE_VOICE_TEMPLATE_DIGEST=trustedVoiceTemplateDigest(ACTIVE_VOICE_TEMPLATE_VERSION);
 const id=(x:unknown)=>typeof x==="string"&&uuid.test(x)?x:fail("INVALID");
 const only=(x:Row[])=>x.length===1?x[0]:fail("STALE");
 const iso=(x:unknown)=>x instanceof Date?x.toISOString():
@@ -121,7 +123,13 @@ export async function reconstructTrustedVoiceSource(
       positionUpdatedAt:iso(h.position_updated_at),
       analysisFingerprint:h.input_fingerprint,screeningContractHash:h.analysis_contract_hash,
     };
+    const template=getTrustedVoiceTemplate(ACTIVE_VOICE_TEMPLATE_VERSION);
     const result=createVoicePlanWriteSnapshot(source,binding);
+    if(result.templateVersion!==template.version||result.language!==template.language||
+       result.targetSeconds!==template.targetSeconds||
+       result.maximumSeconds!==template.maximumSeconds||
+       result.recordingAllowed!==template.recordingAllowed||
+       result.noticeRequired!==template.noticeRequired)fail("TEMPLATE_CHANGED");
     await db.query("commit");
     return result;
   }catch(e){await db.query("rollback");throw e;}
