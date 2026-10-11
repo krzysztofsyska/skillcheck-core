@@ -1,0 +1,26 @@
+name: Voice transcript evidence offline tests
+on:
+  pull_request:
+    paths:
+      - 'lib/voice/transcript-evidence-contract.ts'
+      - 'fixtures/voice/sc-013a-synthetic-transcripts.ts'
+      - 'tests/voice-transcript-evidence.test.mjs'
+      - '.github/workflows/voice-transcript-evidence-tests.yml'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/voice/transcript-evidence-contract.ts'
+      - 'fixtures/voice/sc-013a-synthetic-transcripts.ts'
+      - 'tests/voice-transcript-evidence.test.mjs'
+      - '.github/workflows/voice-transcript-evidence-tests.yml'
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tests/voice-transcript-evidence.test.mjs
