@@ -13,8 +13,10 @@ export type SourceSelector=Readonly<{
   companyId:string;applicationId:string;analysisId:string;reviewId:string;shortlistEntryId:string;
 }>;
 export class TrustedSourceError extends Error {
-  constructor(readonly code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"){
+  readonly code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID";
+  constructor(code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"){
     super("VOICE_TRUSTED_SOURCE_"+code);
+    this.code=code;
   }
 }
 const fail=(c:TrustedSourceError["code"]):never=>{throw new TrustedSourceError(c);};
