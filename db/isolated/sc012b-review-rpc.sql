@@ -32,7 +32,7 @@ begin
      or p_expected_source_hash !~ '^[0-9a-f]{64}$'
      or p_decision is null or p_decision not in ('approved','requires_changes')
      or (p_decision='requires_changes' and
-         (clean_reason is null or pg_catalog.char_length(clean_reason)>1000))
+         (clean_reason is null or pg_catalog.nullif(pg_catalog.regexp_replace(clean_reason,'[[:space:]]','','g'),'') is null or pg_catalog.char_length(clean_reason)>1000))
      or (p_reason is not null and pg_catalog.char_length(p_reason)>1000)
   then raise exception using errcode='22023',message='VOICE_PLAN_INVALID_REVIEW'; end if;
 
