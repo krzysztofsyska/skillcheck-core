@@ -66,7 +66,7 @@ begin
       and a.application_id=plan.application_id
       and a.execution_status='completed' and a.stale_at is null
       and s.id=plan.shortlist_entry_id and s.removed_at is null
-      and r.decision in ('approved','approved_with_changes')
+      and r.disposition in ('approved','approved_with_changes')
   ) then raise exception using errcode='PT409',message='VOICE_PLAN_STALE'; end if;
   if exists(select 1 from private.voice_plan_release_entries
      where company_id=plan.company_id and plan_id=p_plan_id) then
