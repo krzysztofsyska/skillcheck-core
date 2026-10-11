@@ -81,8 +81,9 @@ still stop the whole invocation before dispatch.
    environments, branch rules, isolated review credentials and provider budget.
    This adapter uses the installed Codex GitHub reviewer; it needs no OpenAI key.
 2. Protect `agent-feedback-state`: exclusive App writer with always bypass only
-   on its update restriction; separate deletion/non-fast-forward rules without
-   bypass. Bootstrap this branch once. Do not delete state to reset the limit.
+   on its update AND creation restrictions; separate deletion/non-fast-forward
+   rules without bypass. Bootstrap this branch once. Do not delete state to reset
+   the limit. The previously configured writer rule still needs `Restrict creations`.
 3. Restrict agent-control to main; keep Cursor and App credentials there. Configure
    the Cursor agent without production secrets and verify access to the existing PR
    through GET /v1/agents/{id}. A footer URL alone is not proof of API compatibility.
@@ -105,6 +106,46 @@ still stop the whole invocation before dispatch.
    proof that a bot-authored mention was accepted.
 
 ## Live synthetic acceptance
+
+### Read-scope protection evidence and state provenance
+
+GitHub omits `bypass_actors` for Administration:read callers. Missing data is not
+an empty bypass list. Never grant Administration:write to this controller.
+An owner-reviewed entry in trusted `policy.json.ruleset_attestations` can supply
+the hidden list for exactly one live ruleset version. Each entry requires `id`,
+`owner_id`, `updated_at`, `fingerprint`, `checked_at`, `expires_at`, `bypass_actors`.
+The fingerprint is `rulesetFingerprint(liveRule)` from `ruleset-evidence.mjs`:
+SHA-256 of canonical JSON containing ID, source/type, target, enforcement,
+conditions, rules and GitHub's `updated_at`. The owner verifies the complete
+bypass list in authenticated settings at that version; commit it through reviewed
+trusted-code promotion. These are policy attestations, not API-discovered actors.
+Do not generate them from PR comments, screenshots alone without owner review,
+or the state branch. A changed live timestamp/fingerprint, wrong owner/repository,
+missing or duplicate entry, future observation or expiry blocks execution. Maximum
+lifetime is seven days; renewal requires another owner-reviewed policy update.
+If GitHub discloses the list directly, live data takes precedence. The adapter and
+shared controller protection reader both use this path. This relies on GitHub's
+version timestamp changing on edits; unsupported/missing versions stay blocked.
+
+Trusted policy also needs `feedback_state_bootstrap: {sha, owner_id}` and the
+verified `controller_actor_id`. Attest the actual audited initial state-branch
+commit; never assume an arbitrary existing branch is trusted. Its tree must have
+no `feedback` entry. Every later commit must form a complete linear suffix with
+GitHub-verified signatures and the configured controller bot committer. A forged
+pre-bootstrap state, unsigned/unrelated commit or incomplete comparison blocks
+execution. This bounded implementation supports up to 100 state commits after
+bootstrap; it halts beyond that rather than resetting the ledger. Neither policy
+attestations nor bootstrap identity have been populated by this patch. Confirm
+the App's actual signed-commit behavior before activation.
+
+Native approvals count only when submitted after a recorded review request for
+the exact current head/base, and absent from its pre-request review baseline.
+READY is re-evaluated on every poll; removed evidence or new findings persistently
+revoke it. A changed base invalidates the old request; it cannot be accepted from
+an old head-only approval. Operator reconciliation/new review evidence is required
+if the base moves; no stale approval is silently reused.
+
+Reference: [GitHub ruleset API visibility](https://docs.github.com/en/rest/repos/rules).
 
 ### Connection diagnostics (not live acceptance)
 

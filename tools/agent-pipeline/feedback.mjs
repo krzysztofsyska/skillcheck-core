@@ -34,7 +34,7 @@ export function validateSnapshot(b, s) {
   if (a.id !== b.agentId || a.repos?.length !== 1 || repo.url !== `https://github.com/${REPOSITORY}`
       || !(repo.prUrl === `https://github.com/${REPOSITORY}/pull/${b.pr}`
         || (!repo.prUrl && repo.startingRef === b.branch && a.workOnCurrentBranch === true))
-      || a.autoCreatePR !== false) fail('CURSOR_BINDING_MISMATCH');
+      || a.workOnCurrentBranch !== true || a.autoCreatePR !== false) fail('CURSOR_BINDING_MISMATCH');
 }
 
 export function findings(s) {
@@ -87,7 +87,6 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
     'BLOCKED_TIMEOUT', 'BLOCKED_NO_FIX', 'BLOCKED_PROVENANCE', 'BLOCKED_ROUND_LIMIT'].includes(current.phase)
     || !Array.isArray(current.handled)) fail('INVALID_STATE');
   if (current.phase.startsWith('BLOCKED') || current.phase.endsWith('_PENDING')) return { status: current.phase };
-  if (current.phase === 'READY_FOR_OWNER' && current.head === head && current.base === base) return { status: current.phase };
   if (current.phase === 'FIXING') {
     const run = snapshot.run;
     if (now - current.startedAt > 2 * 60 * 60 * 1000) return { state: { ...current, phase: 'BLOCKED_TIMEOUT' } };
@@ -99,10 +98,18 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
     return { state: { ...current, phase: 'REVIEW_PENDING', head, base }, effect: { type: 'review', head } };
   }
   const found = findings(snapshot);
+  const sameRequest = current.reviewCommentId && current.head === head && current.base === base;
+  const approved = sameRequest && Number.isFinite(current.reviewRequestedAt)
+    && Array.isArray(current.reviewBaseline)
+    && snapshot.reviews.some(r => trusted(r.user) && r.commit_id === head && r.state === 'APPROVED'
+      && !current.reviewBaseline.includes(r.id) && Date.parse(r.submitted_at) >= current.reviewRequestedAt);
+  const thumbs = sameRequest && snapshot.reactions?.some(r => trusted(r.user) && r.content === '+1');
+  // READY is a revocable observation, never a permanent approval cache.
+  if (current.phase === 'READY_FOR_OWNER' && (found.length || !(approved || thumbs))) {
+    return { state: { ...current, phase: 'WAITING_REVIEW',
+      ...(sameRequest ? {} : { reviewCommentId: null, reviewRequestedAt: null, reviewBaseline: [] }) } };
+  }
   if (!found.length) {
-    const approved = snapshot.reviews.some(r => trusted(r.user) && r.commit_id === head && r.state === 'APPROVED');
-    const thumbs = current.reviewCommentId && current.head === head && current.base === base
-      && snapshot.reactions?.some(r => trusted(r.user) && r.content === '+1');
     if (approved || thumbs) return { state: { ...current, phase: 'READY_FOR_OWNER', head, base } };
     if (current.reviewRequestedAt && now - current.reviewRequestedAt > 45 * 60 * 1000) return { state: { ...current, phase: 'BLOCKED_TIMEOUT' } };
     return { status: 'WAITING_REVIEW' };
@@ -156,7 +163,8 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     if (!verifyRepair(binding, plan.state, fresh)) fail('CURSOR_PROVENANCE_CHANGED');
     const result = await postReview(`@codex review\n\nSC-OPS-002D: review HEAD ${plan.state.head}. Include the synthetic acceptance criterion when applicable. Owner acceptance and production approval remain pending.`);
     if (!Number.isSafeInteger(result.id)) fail('INVALID_REVIEW_RESPONSE');
-    completed = { ...plan.state, phase: 'WAITING_REVIEW', reviewCommentId: result.id, reviewRequestedAt: now ?? Date.now() };
+    completed = { ...plan.state, phase: 'WAITING_REVIEW', reviewCommentId: result.id,
+      reviewBaseline: fresh.reviews.map(r => r.id), reviewRequestedAt: now ?? Date.now() };
   }
   await store.save(completed, revision);
   return completed.phase;

@@ -4,6 +4,7 @@ import { createGitHubClient, createInstallationToken, decodeGithubContent } from
 import { createCursorClient } from './lib/cursor.mjs';
 import { evaluatePreflight } from './lib/merge.mjs';
 import { runFeedback, validateBinding, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
+import { withRulesetEvidence, verifyStateBootstrap } from './lib/ruleset-evidence.mjs';
 
 // Reuse the existing controller's API clients and protection preflight, but keep
 // feedback records outside its task projection. No second writer for a managed PR.
@@ -26,7 +27,7 @@ export function feedbackStore(github, pr) {
   };
 }
 
-export async function verifyFeedbackProtection(github, appId) {
+export async function verifyFeedbackProtection(github, appId, policy = {}) {
   const root = `/repos/${REPOSITORY}`;
   const rules = await github.request(`${root}/rules/branches/agent-feedback-state`);
   // This endpoint returns rules applicable to the exact branch. Check each
@@ -34,9 +35,9 @@ export async function verifyFeedbackProtection(github, appId) {
   if (!Array.isArray(rules) || !rules.length) throw new Error('STATE_PROTECTION_MISSING');
   const sets = await Promise.all([...new Set(rules.map(r => r.ruleset_id))]
     .map(id => github.request(`${root}/rulesets/${id}`)));
-  const active = sets.filter(s => s.enforcement === 'active' && s.target === 'branch');
+  const active = sets.map(s => withRulesetEvidence(s, policy)).filter(s => s.enforcement === 'active' && s.target === 'branch');
   const integrity = active.filter(s => s.bypass_actors?.length === 0).flatMap(s => s.rules ?? []);
-  const writers = active.some(s => s.rules?.some(r => r.type === 'update')
+  const writers = active.some(s => ['update', 'creation'].every(type => s.rules?.some(r => r.type === type))
     && s.bypass_actors?.length === 1 && s.bypass_actors[0].actor_type === 'Integration'
     && s.bypass_actors[0].actor_id === appId && s.bypass_actors[0].bypass_mode === 'always');
   if (!writers || !['deletion', 'non_fast_forward'].every(t => integrity.some(r => r.type === t))) throw new Error('STATE_PROTECTION_MISSING');
@@ -119,10 +120,10 @@ export async function main(env = process.env) {
   if (repository.id !== REPOSITORY_ID || repository.default_branch !== 'main'
       || (await github.readBranch('main')).commit.sha !== env.GITHUB_SHA) throw new Error('TRUSTED_CODE_MOVED');
   if (!evaluatePreflight(await github.readProtection()).ok) throw new Error('PROTECTION_UNCONFIRMED');
-  await verifyFeedbackProtection(github, policy.controller_app_id);
+  await verifyFeedbackProtection(github, policy.controller_app_id, policy);
   // Bootstrap this dedicated state branch with no force/delete and controller-only
   // writers before activation. Never silently recreate a deleted journal.
-  await github.readBranch('agent-feedback-state');
+  await verifyStateBootstrap(github, policy);
   const cursor = createCursorClient({ fetch, apiKey: env.CURSOR_API_KEY });
   return reconcileBindings(config.bindings, binding => runFeedback({ binding, store: feedbackStore(github, binding.pr),
       readSnapshot: state => readSnapshot(github, cursor, binding, state), cursor,

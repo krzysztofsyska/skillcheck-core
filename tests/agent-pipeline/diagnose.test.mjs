@@ -18,10 +18,11 @@ function fixture(change = {}) {
     '/app/installations/168649570/access_tokens': { token: 'private-token', permissions: { contents: 'read', administration: 'read' } },
     [root]: { id: 1043384454, default_branch: 'main' },
     [root + '/branches/main']: { commit: { sha: env.GITHUB_SHA } },
-    [root + '/branches/agent-feedback-state']: { name: 'agent-feedback-state' },
+    [root + '/branches/agent-feedback-state']: { name: 'agent-feedback-state', commit: { sha: env.GITHUB_SHA } },
+    [root + '/git/trees/' + env.GITHUB_SHA]: { truncated: false, tree: [] },
     [root + '/rules/branches/agent-feedback-state']: [{ ruleset_id: 1 }, { ruleset_id: 2 }],
     [root + '/rulesets/1']: { enforcement: 'active', target: 'branch', bypass_actors: [], rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }] },
-    [root + '/rulesets/2']: { enforcement: 'active', target: 'branch', bypass_actors: [{ actor_type: 'Integration', actor_id: 5216184, bypass_mode: 'always' }], rules: [{ type: 'update' }] },
+    [root + '/rulesets/2']: { enforcement: 'active', target: 'branch', bypass_actors: [{ actor_type: 'Integration', actor_id: 5216184, bypass_mode: 'always' }], rules: [{ type: 'update' }, { type: 'creation' }] },
     [root + '/environments/agent-control']: { deployment_branch_policy: { custom_branch_policies: true } },
     [root + '/environments/agent-control/deployment-branch-policies']: { total_count: 1, branch_policies: [{ name: 'main', type: 'branch' }] },
     '/v1/agents/bc-test': { id: 'bc-test', name: 'private-provider-content' },
@@ -36,12 +37,12 @@ function fixture(change = {}) {
     if (data[path] instanceof Error) throw data[path];
     return new Response(JSON.stringify(data[path]));
   }
-  return { env, calls, data, run: () => diagnose(env, fetchMock) };
+  return { env, calls, data, run: () => diagnose(env, fetchMock, { repository: env.GITHUB_REPOSITORY, owner: { id: 222297538 }, feedback_state_bootstrap: { owner_id: 222297538, sha: env.GITHUB_SHA } }) };
 }
 
 test('diagnostic only reads services and issues/revokes a scoped read token', async () => {
   const f = fixture(); const result = await f.run();
-  assert.equal(result.checks.length, 7);
+  assert.equal(result.checks.length, 8);
   assert.ok(result.checks.every(c => c.status === 'PASS'));
   assert.equal(result.liveE2E, 'NOT_RUN');
   assert.deepEqual(f.calls.filter(c => c.method !== 'GET').map(c => [c.method, c.path]), [

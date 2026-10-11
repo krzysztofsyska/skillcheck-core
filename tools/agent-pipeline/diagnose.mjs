@@ -1,4 +1,6 @@
 import { pathToFileURL } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { verifyStateBootstrap } from './lib/ruleset-evidence.mjs';
 import { githubAppJwt } from './lib/github.mjs';
 import { verifyFeedbackProtection } from './feedback-cli.mjs';
 import { REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
@@ -9,7 +11,7 @@ const APP_ID = 5216184;
 const INSTALLATION_ID = 168649570;
 const ROOT = `/repos/${REPOSITORY}`;
 
-export async function diagnose(env, fetchImpl = fetch) {
+export async function diagnose(env, fetchImpl = fetch, policy = {}) {
   const checks = [];
   let token;
   async function check(name, action) {
@@ -64,7 +66,8 @@ export async function diagnose(env, fetchImpl = fetch) {
         const branch = await client.request(`${ROOT}/branches/agent-feedback-state`);
         requireThat(branch.name === 'agent-feedback-state');
       });
-      await check('feedback_protection_and_environment', () => verifyFeedbackProtection(client, APP_ID));
+      await check('feedback_protection_and_environment', () => verifyFeedbackProtection(client, APP_ID, policy));
+      await check('feedback_bootstrap_provenance', () => verifyStateBootstrap(client, policy));
     }
     await check('cursor_agent_read', async () => {
       requireThat(env.CURSOR_API_KEY && /^bc-[a-zA-Z0-9-]{1,100}$/.test(env.CURSOR_DIAGNOSTIC_AGENT_ID ?? ''));
@@ -82,7 +85,7 @@ export async function diagnose(env, fetchImpl = fetch) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const result = await diagnose(process.env);
+    const result = await diagnose(process.env, fetch, JSON.parse(readFileSync('.github/agent-pipeline/policy.json', 'utf8')));
     console.log(JSON.stringify(result));
     if (result.checks.some(check => check.status !== 'PASS')) process.exitCode = 1;
   } catch { console.error('DIAGNOSTIC_FAILED'); process.exitCode = 1; }

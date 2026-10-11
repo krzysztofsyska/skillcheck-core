@@ -4,6 +4,7 @@ import { protectionFromRulesets } from './protection.mjs';
 export { protectionFromRulesets } from './protection.mjs';
 import { withTransportRetry } from './transport.mjs';
 import { canonicalJson } from './canonical.mjs';
+import { withRulesetEvidence } from './ruleset-evidence.mjs';
 
 export function githubAppJwt({ appId, privateKey, now = Date.now() }) {
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -69,7 +70,7 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       const listed = await pages(`/repos/${owner}/${repo}/rulesets`);
       const detailed = [];
       for (const item of listed ?? []) {
-        detailed.push(await request(`/repos/${owner}/${repo}/rulesets/${item.id}`));
+        detailed.push(withRulesetEvidence(await request(`/repos/${owner}/${repo}/rulesets/${item.id}`), policy));
       }
       const environments = {};
       for (const e of [policy.environments?.owner_acceptance, policy.environments?.production_approval]) {

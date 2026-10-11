@@ -6,6 +6,48 @@ import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readS
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
 const bot = { ...CODEX, type: 'Bot' };
+
+test('PR URL does not excuse missing current-branch mode', async () => {
+  for (const mode of [false, undefined]) {
+    const f = fixture(); f.snapshot.agent.repos[0].prUrl = `https://github.com/krzysztofsyska/skillcheck-core/pull/49`;
+    f.snapshot.agent.workOnCurrentBranch = mode;
+    await assert.rejects(runFeedback(f.args), /CURSOR_BINDING_MISMATCH/);
+    assert.equal(f.calls(), 0);
+  }
+});
+
+test('unbound or pre-request native approvals cannot authorize current head/base', () => {
+  const f = fixture();
+  const state = { ...planFeedback(f.binding, null, f.snapshot, 100).state, phase: 'WAITING_REVIEW',
+    reviewCommentId: 200, reviewRequestedAt: 100, reviewBaseline: [100] };
+  f.snapshot.comments = [];
+  f.snapshot.reviews = [{ id: 100, user: bot, commit_id: A, state: 'APPROVED', submitted_at: new Date(200).toISOString() }];
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 300).status, 'WAITING_REVIEW');
+  f.snapshot.reviews[0].id = 101;
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 300).state.phase, 'READY_FOR_OWNER');
+  f.snapshot.pull.base.sha = C;
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 300).status, 'WAITING_REVIEW');
+  assert.equal(planFeedback(f.binding, null, f.snapshot, 300).status, 'WAITING_REVIEW');
+});
+
+for (const change of ['reaction_removed', 'finding_added', 'changes_requested', 'base_changed', 'approval_dismissed']) {
+  test(`READY is persisted as revoked on ${change}`, async () => {
+    const f = fixture(); await runFeedback(f.args); finishRepair(f); await runFeedback(f.args);
+    f.snapshot.comments = []; f.snapshot.reviews = [];
+    f.snapshot.reactions = [{ user: bot, content: '+1' }];
+    assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+    if (change === 'reaction_removed' || change === 'approval_dismissed') f.snapshot.reactions = [];
+    if (change === 'base_changed') f.snapshot.pull.base.sha = C;
+    if (change === 'approval_dismissed') f.snapshot.reviews = [{ id: 300, user: bot, commit_id: C, state: 'DISMISSED' }];
+    if (change === 'changes_requested' || change === 'finding_added') {
+      f.snapshot.reviews = [{ id: 300, user: bot, commit_id: C, state: change === 'changes_requested' ? 'CHANGES_REQUESTED' : 'COMMENTED' }];
+      if (change === 'finding_added') f.snapshot.comments = [{ id: 301, user: bot, commit_id: C, original_commit_id: C,
+        line: 1, pull_request_review_id: 300 }];
+    }
+    assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+    assert.equal(f.state().phase, 'WAITING_REVIEW');
+  });
+}
 function fixture() {
   const binding = { pr: 49, agentId: 'bc-test', branch: 'cursor/test', initialHead: A,
     cursorCommitter: { id: 123, login: 'cursor-test[bot]' },
@@ -179,7 +221,7 @@ test('workflow never checks out PR code or interpolates comments; no OpenAI key 
 
 test('state branch protection requires exclusive writer and non-bypassable integrity', async () => {
   const sets = [
-    { enforcement: 'active', target: 'branch', rules: [{ type: 'update' }], bypass_actors: [{ actor_type: 'Integration', actor_id: 12, bypass_mode: 'always' }] },
+    { enforcement: 'active', target: 'branch', rules: [{ type: 'update' }, { type: 'creation' }], bypass_actors: [{ actor_type: 'Integration', actor_id: 12, bypass_mode: 'always' }] },
     { enforcement: 'active', target: 'branch', rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }], bypass_actors: [] },
   ];
   const github = { request: async path => {
