@@ -220,6 +220,12 @@ test("missing source, impossible time, disorder, truncation and PII fail closed"
   const ellipsis = qualityCompanyTranscript();
   ellipsis.segments[1].text = "Zdanie urwane w połowie...";
   assert.equal(codeOf(() => sealSyntheticTranscript(ellipsis)), "truncated_context");
+  const marked = qualityCompanyTranscript();
+  marked.segments[1].text = "Zdanie urwane [TRUNCATED]";
+  assert.equal(codeOf(() => sealSyntheticTranscript(marked)), "truncated_context");
+  const spaced = qualityCompanyTranscript();
+  spaced.segments[1].text = "Zdanie urwane [truncated] ";
+  assert.equal(codeOf(() => sealSyntheticTranscript(spaced)), "truncated_context");
 
   const email = qualityCompanyTranscript();
   email.segments[1].text = "Proszę pisać na not-a-person@example.com w sprawie wydania.";
@@ -230,6 +236,9 @@ test("missing source, impossible time, disorder, truncation and PII fail closed"
   const pesel = qualityCompanyTranscript();
   pesel.segments[1].text = "Identyfikator 12345678901 nie może pojawić się w treści.";
   assert.equal(codeOf(() => sealSyntheticTranscript(pesel)), "pii_leakage");
+  const mobile = qualityCompanyTranscript();
+  mobile.segments[1].text = "Kontakt do zmiany to 500123456 i nie powinien trafić do treści.";
+  assert.equal(codeOf(() => sealSyntheticTranscript(mobile)), "pii_leakage");
 });
 
 test("evidence must be an exact candidate quote and absence is not zero", () => {
@@ -465,6 +474,74 @@ test("reviewer override withholds non-approvals and blocks an older successor", 
   assert.equal(commitReview(opened, otherSealed(sealed), reviewBody(sealed, first.ledger, first.analysisId, {
     idempotencyKey: "idem-review-cross-0001",
   })).outcome, "cross_tenant");
+});
+
+test("prototype idempotency keys, rationale overrides, and forged ledgers fail closed or apply", () => {
+  const sealed = sealSyntheticTranscript(qualityCompanyTranscript());
+  const ledger = openEvidenceLedger(sealed);
+  const constructorDraft = assessSyntheticTranscript(
+    sealed, requestFor(sealed, qualityRows(sealed), "constructor"),
+  );
+  const first = commitAssessment(ledger, constructorDraft);
+  assert.equal(first.outcome, "applied");
+  const toStringDraft = assessSyntheticTranscript(
+    sealed, requestFor(sealed, qualityRows(sealed), "toString"),
+  );
+  assert.equal(commitAssessment(first.ledger, toStringDraft).outcome, "duplicate");
+  const reviewed = commitReview(first.ledger, sealed, reviewBody(sealed, first.ledger, first.analysisId, {
+    idempotencyKey: "constructor",
+  }));
+  assert.equal(reviewed.outcome, "applied");
+  assert.equal(codeOf(() => readEffectiveResult({ ...reviewed.ledger })), "untrusted_source");
+  assert.equal(codeOf(() => commitAssessment({ ...ledger }, constructorDraft)), "untrusted_source");
+
+  const rows = qualityRows(sealed);
+  const fresh = commitAssessment(openEvidenceLedger(sealed), assessSyntheticTranscript(
+    sealed, requestFor(sealed, rows, "idem-quality-rationale"),
+  ));
+  const rationaleOnly = commitReview(fresh.ledger, sealed, reviewBody(sealed, fresh.ledger, fresh.analysisId, {
+    idempotencyKey: "idem-review-rationale1",
+    assessmentValidity: "approved_with_changes",
+    rationale: "Uzasadnienie cytatu wymaga doprecyzowania zakresu działania.",
+    overrides: [{
+      criterionId: "task:1",
+      rating: "meets",
+      evidence: rows[0].evidence.map(item => ({ ...item })),
+      rationale: "Doprecyzowanie: kandydat sam prowadził listę kontrolną.",
+    }],
+  }));
+  assert.equal(rationaleOnly.outcome, "applied");
+  const shown = readEffectiveResult(rationaleOnly.ledger).criteria.find(item => item.criterionId === "task:1");
+  assert.equal(shown.rationale, "Doprecyzowanie: kandydat sam prowadził listę kontrolną.");
+
+  const copied = qualityCompanyTranscript();
+  copied.segments.push({
+    segmentId: "seg-qual-0005",
+    speaker: "candidate",
+    startMs: 38000,
+    endMs: 46000,
+    text: qualityQuotes.checklist,
+  });
+  const copySealed = sealSyntheticTranscript(copied);
+  const copyLedger = openEvidenceLedger(copySealed);
+  const copyDraft = assessSyntheticTranscript(copySealed, requestFor(copySealed, qualityRows(copySealed), "idem-quality-copy-0001"));
+  const copyCommit = commitAssessment(copyLedger, copyDraft);
+  const moved = commitReview(copyCommit.ledger, copySealed, reviewBody(copySealed, copyCommit.ledger, copyCommit.analysisId, {
+    idempotencyKey: "idem-review-segment01",
+    assessmentValidity: "approved_with_changes",
+    rationale: "Ten sam cytat jest przypisany do właściwego segmentu.",
+    overrides: [{
+      criterionId: "task:1",
+      rating: "meets",
+      evidence: [{ ...span(copySealed, "seg-qual-0005", qualityQuotes.checklist) }],
+      rationale: rows[0].rationale,
+    }],
+  }));
+  assert.equal(moved.outcome, "applied");
+  assert.equal(
+    readEffectiveResult(moved.ledger).criteria.find(item => item.criterionId === "task:1").evidence[0].segmentId,
+    "seg-qual-0005",
+  );
 });
 
 function otherSealed(quality) {

@@ -75,6 +75,7 @@ export const reviewerOverrideFields = Object.freeze([
 
 const sealedByModule = new WeakSet<object>();
 const draftsByModule = new WeakSet<object>();
+const ledgersByModule = new WeakSet<object>();
 const MAX_MS = 600_000;
 const MAX_INPUT = 65_536;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -283,6 +284,7 @@ function hasPii(text: string): boolean {
   return /(?:^|[^\d])\+\d{8,15}(?!\d)/.test(text) ||
     /(?:^|\D)(?:\d{3}[\s-]){2}\d{3}(?!\d)/.test(text) ||
     /(?:^|\D)\d{11}(?!\d)/.test(text) ||
+    /(?:^|\D)\d{9}(?!\d)/.test(text) ||
     /\b(?:pesel|iban)\b/i.test(text);
 }
 function jcsString(value: string): string {
@@ -387,8 +389,14 @@ function requireIdentity(value: unknown, kind: "uuid" | "opaque"): string {
   return value;
 }
 function truncatedText(text: string): boolean {
-  return text.endsWith("...") || text.endsWith("…") ||
-    text.endsWith("[truncated]") || text.endsWith("[uciete]") || text.endsWith("[ucięte]");
+  const normalized = text.trimEnd().toLowerCase();
+  return normalized.endsWith("...") || normalized.endsWith("…") ||
+    normalized.endsWith("[truncated]") || normalized.endsWith("[uciete]") || normalized.endsWith("[ucięte]");
+}
+function ownBinding(record: Readonly<Record<string, string>>, key: string): string | undefined {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return undefined;
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 export function parseUntrustedJson(text: string): unknown {
@@ -831,7 +839,7 @@ export function assessSyntheticTranscript(sealedInput: SealedTranscript, request
 }
 
 function freezeLedger(ledger: EvidenceLedger): EvidenceLedger {
-  return Object.freeze({
+  const frozen = Object.freeze({
     ...ledger,
     analyses: Object.freeze(ledger.analyses.map(item => Object.freeze({
       ...item,
@@ -844,9 +852,15 @@ function freezeLedger(ledger: EvidenceLedger): EvidenceLedger {
     idempotency: Object.freeze({ ...ledger.idempotency }),
     reviewIdempotency: Object.freeze({ ...ledger.reviewIdempotency }),
   });
+  ledgersByModule.add(frozen);
+  return frozen;
 }
 function held(ledger: EvidenceLedger, outcome: LedgerOutcome, analysisId: string | null = null): LedgerResult {
   return Object.freeze({ ledger, outcome, analysisId });
+}
+function requireLedger(ledger: EvidenceLedger): EvidenceLedger {
+  if (!ledgersByModule.has(ledger)) reject("untrusted_source");
+  return ledger;
 }
 function requireDraft(draft: AssessmentDraft): AssessmentDraft {
   if (!draftsByModule.has(draft) || draft.authenticated !== false || draft.hireDecision !== null ||
@@ -875,7 +889,8 @@ export function openEvidenceLedger(sealedInput: SealedTranscript): EvidenceLedge
   });
 }
 
-export function recordTranscriptRevision(ledger: EvidenceLedger, sealedInput: SealedTranscript): LedgerResult {
+export function recordTranscriptRevision(ledgerInput: EvidenceLedger, sealedInput: SealedTranscript): LedgerResult {
+  const ledger = requireLedger(ledgerInput);
   const sealed = requireSealed(sealedInput);
   if (sealed.companyId !== ledger.companyId || sealed.voiceInterviewId !== ledger.voiceInterviewId) {
     return held(ledger, "cross_tenant");
@@ -904,7 +919,8 @@ export function recordTranscriptRevision(ledger: EvidenceLedger, sealedInput: Se
   }), "applied");
 }
 
-export function commitAssessment(ledger: EvidenceLedger, draftInput: AssessmentDraft): LedgerResult {
+export function commitAssessment(ledgerInput: EvidenceLedger, draftInput: AssessmentDraft): LedgerResult {
+  const ledger = requireLedger(ledgerInput);
   const draft = requireDraft(draftInput);
   if (draft.companyId !== ledger.companyId || draft.voiceInterviewId !== ledger.voiceInterviewId) {
     return held(ledger, "cross_tenant");
@@ -917,7 +933,7 @@ export function commitAssessment(ledger: EvidenceLedger, draftInput: AssessmentD
     draft.sourceId !== ledger.sourceId || draft.planVersionId !== ledger.planVersionId) {
     return held(ledger, "revision_mismatch");
   }
-  const bound = ledger.idempotency[draft.idempotencyKey];
+  const bound = ownBinding(ledger.idempotency, draft.idempotencyKey);
   if (bound && bound !== draft.fingerprint) return held(ledger, "idempotency_conflict");
   const prior = ledger.analyses.find(item => item.fingerprint === draft.fingerprint);
   if (bound === draft.fingerprint) return held(ledger, "duplicate", prior?.analysisId ?? null);
@@ -977,19 +993,23 @@ function readOverrides(sealed: SealedTranscript, analysis: StoredAnalysis, value
       rubricVersion: criterion.rubricVersion,
     }, item);
     const sameEvidence = next.evidence.length === criterion.evidence.length &&
-      next.evidence.every((span, index) => span.quote === criterion.evidence[index]?.quote &&
+      next.evidence.every((span, index) => span.segmentId === criterion.evidence[index]?.segmentId &&
+        span.quote === criterion.evidence[index]?.quote &&
         span.startUtf16 === criterion.evidence[index]?.startUtf16 &&
         span.endUtf16 === criterion.evidence[index]?.endUtf16);
-    if (next.rating === criterion.rating && sameEvidence) reject("invalid_transcript");
+    if (next.rating === criterion.rating && next.rationale === criterion.rationale && sameEvidence) {
+      reject("invalid_transcript");
+    }
     return next;
   });
 }
 
 export function commitReview(
-  ledger: EvidenceLedger,
+  ledgerInput: EvidenceLedger,
   sealedInput: SealedTranscript,
   reviewInput: unknown,
 ): LedgerResult {
+  const ledger = requireLedger(ledgerInput);
   const sealed = requireSealed(sealedInput);
   let cloned: unknown;
   try {
@@ -1064,7 +1084,7 @@ export function commitReview(
     reviewer_id: reviewerId,
     schema_version: 1,
   }));
-  const seen = ledger.reviewIdempotency[idempotencyKey];
+  const seen = ownBinding(ledger.reviewIdempotency, idempotencyKey);
   if (seen && seen !== fingerprint) return held(ledger, "idempotency_conflict");
   if (seen === fingerprint) return held(ledger, "duplicate", analysis.analysisId);
   if (cloned.expectedTranscriptSha256 !== sealed.transcriptSha256 ||
@@ -1116,7 +1136,8 @@ export function commitReview(
   }), "applied", analysis.analysisId);
 }
 
-export function readEffectiveResult(ledger: EvidenceLedger): EffectiveResult {
+export function readEffectiveResult(ledgerInput: EvidenceLedger): EffectiveResult {
+  const ledger = requireLedger(ledgerInput);
   const empty = {
     productionEvidence: false as const,
     authenticated: false as const,
