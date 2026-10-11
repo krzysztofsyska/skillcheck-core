@@ -88,6 +88,29 @@ test("SC-012-B isolated review RPC enforces human review CAS, request replay and
   await db.query("update public.screening_analysis_versions set latest_review_version=latest_review_version-1 where id=$1",[f.analysis_id]);
  });
 
+
+ await t.test("removed shortlist invalidates pending review",async()=>{
+  await db.query("update public.recruitment_shortlist_entries set removed_at=clock_timestamp(),removed_by=$1 where id=$2",
+    [users.owner,shortlist]);
+  await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>e.code==="PT409");
+  await db.query("update public.recruitment_shortlist_entries set removed_at=null,removed_by=null where id=$1",[shortlist]);
+ });
+ await t.test("superseded plan cannot be reviewed after new version",async()=>{
+  const lastReview=(await db.query("select id from private.voice_plan_review_entries where plan_id=$1 order by review_version desc limit 1",[plan])).rows[0].id;
+  await db.query([
+   "insert into public.voice_plan_versions",
+   "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+   "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+   "template_version,created_by,retention_policy_version,retention_deadline,",
+   "supersedes_plan_id,corrects_review_id)",
+   "select company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+   "shortlist_entry_id,2,$1,$2,source_snapshot,plan_envelope,template_version,created_by,",
+   "retention_policy_version,retention_deadline,id,$3",
+   "from public.voice_plan_versions where id=$4"
+  ].join(" "),["c".repeat(64),"d".repeat(64),lastReview,plan]);
+  await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>e.code==="PT409");
+ });
+
  await t.test("no client role can directly execute the private RPC",async()=>{
   await db.query("set role authenticated");
   await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>["42501","3F000"].includes(e.code));
