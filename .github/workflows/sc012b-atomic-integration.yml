@@ -39,6 +39,6 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
-      - run: node --test tests/voice-plan-atomic-operations.test.mjs tests/voice-trusted-source-verifier.test.mjs
+      - run: node --test --test-concurrency=1 tests/voice-plan-atomic-operations.test.mjs tests/voice-trusted-source-verifier.test.mjs
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
