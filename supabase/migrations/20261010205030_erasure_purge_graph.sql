@@ -98,7 +98,11 @@ create function private.install_erasure_tombstones(target_request uuid) returns 
 language plpgsql volatile security definer set search_path='' as $$
 declare e private.erasure_executions;begin
  select * into e from private.erasure_executions where request_id=target_request for update nowait;
- if not found or e.phase not in ('erasing','active_data_erased') or e.sequence<2 or e.event_hash is null or e.recovery_retain_until<=clock_timestamp() then
+ -- Elapsed recovery_retain_until does not reject a ledger-confirmed erasing ACK.
+ -- Tombstone enforcement does not expire, and a rolled-back ACK would freeze
+ -- a durable erasing event with no purge path. Opening that reservation is
+ -- refused earlier, while the phase is still authorized.
+ if not found or e.phase not in ('erasing','active_data_erased') or e.sequence<2 or e.event_hash is null then
  raise exception using errcode='PT409',message='Durable erasing event required';end if;
  insert into private.retired_candidate_ids(candidate_id,company_id,generation,recovery_event_id,retain_until)
  select id,e.company_id,e.generation,e.event_hash,e.recovery_retain_until from unnest(e.candidate_ids) s(id)

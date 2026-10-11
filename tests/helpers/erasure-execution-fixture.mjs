@@ -1,7 +1,7 @@
 import {randomUUID,randomBytes,generateKeyPairSync} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {PostgresErasureLedger} from '../../tools/erasure/ledger.mjs';
-import {createLedgerAttestor,commitReservedTransition,replayVerifiedLedger} from '../../tools/erasure/runtime.mjs';
+import {PostgresErasureLedger,digest,signReservationProof} from '../../tools/erasure/ledger.mjs';
+import {createLedgerAttestor,createReservationProver,commitReservedTransition,replayVerifiedLedger} from '../../tools/erasure/runtime.mjs';
 import {lifecycleHarness} from './erasure-lifecycle-fixture.mjs';
 
 export function executionHarness(h){
@@ -24,15 +24,19 @@ export function executionHarness(h){
 export async function setupExecutionLedger(x,ledgerDb){
  await (ledgerDb.exec??ledgerDb.query).call(ledgerDb,await readFile(new URL('../../tools/erasure/ledger.sql',import.meta.url),'utf8'));
  const ledgerId=randomUUID(),encryptionKey=randomBytes(32),{privateKey,publicKey}=generateKeyPairSync('ed25519');
+ const reservationKeyId='reservation-v1',{privateKey:reservationPrivateKey,publicKey:reservationPublicKey}=generateKeyPairSync('ed25519');
  await ledgerDb.query('insert into erasure_ledger.head(singleton,ledger_id) values(true,$1)',[ledgerId]);
- const verificationKeys={synthetic:publicKey},encryptionKeys={synthetic:encryptionKey};
- const ledger=new PostgresErasureLedger({connect:async()=>({query:(...args)=>ledgerDb.query(...args),end:async()=>{}}),ledgerId,encryptionKeyId:'synthetic',encryptionKey,signingKeyId:'synthetic',signingKey:privateKey,verificationKeys});
- const attest=createLedgerAttestor({ledgerId,verificationKeys,connect:async()=>{await x.role('erasure_ledger_attestor');return {query:(...args)=>x.db.query(...args),end:async()=>{}};}});
- const ack=async reservation=>commitReservedTransition({reservation,ledger,attest});
+ const verificationKeys={synthetic:publicKey},encryptionKeys={synthetic:encryptionKey},reservationKeys={[reservationKeyId]:reservationPublicKey};
+ const product=async()=>{await x.role('erasure_ledger_attestor');return {query:(...args)=>x.db.query(...args),end:async()=>{}};};
+ const ledger=new PostgresErasureLedger({connect:async()=>({query:(...args)=>ledgerDb.query(...args),end:async()=>{}}),ledgerId,encryptionKeyId:'synthetic',encryptionKey,signingKeyId:'synthetic',signingKey:privateKey,verificationKeys,reservationKeys});
+ const attest=createLedgerAttestor({ledgerId,verificationKeys,connect:product});
+ const prove=createReservationProver({signingKeyId:reservationKeyId,signingKey:reservationPrivateKey,connect:product});
+ const ack=async reservation=>commitReservedTransition({reservation,ledger,attest,prove});
  const transition=async(request,sequence,phase,key)=>{const reservation=await x.reserve(request,sequence,phase,key);await ack(reservation);return reservation;};
+ const signEnvelope=envelopeText=>{const envelopeHash=digest(envelopeText);return {envelopeHash,reservationKeyId,reservationProof:signReservationProof(envelopeHash,reservationPrivateKey)};};
  const replay=async(target=x)=>{
   const challenge=randomUUID(),checkpoint=await ledger.checkpoint(challenge),records=(await ledgerDb.query('select receipt,encrypted_envelope from erasure_ledger.events order by sequence')).rows;
-  return replayVerifiedLedger({records,checkpoint,challenge,ledgerId,minimumWatermark:{ledger_id:ledgerId,sequence:checkpoint.sequence,event_hash:checkpoint.head_hash},verificationKeys,encryptionKeys,connect:async()=>{await target.role('erasure_restore_attestor');return {query:(...args)=>target.db.query(...args),end:async()=>{}};}});
+  return replayVerifiedLedger({records,checkpoint,challenge,ledgerId,minimumWatermark:{ledger_id:ledgerId,sequence:checkpoint.sequence,event_hash:checkpoint.head_hash},verificationKeys,encryptionKeys,reservationKeys,connect:async()=>{await target.role('erasure_restore_attestor');return {query:(...args)=>target.db.query(...args),end:async()=>{}};}});
  };
- return Object.assign(x,{ledger,attest,ack,transition,replay,ledgerDb,ledgerId,verificationKeys,encryptionKeys});
+ return Object.assign(x,{ledger,attest,prove,ack,transition,replay,signEnvelope,ledgerDb,ledgerId,verificationKeys,encryptionKeys,reservationKeys,reservationKeyId,reservationPrivateKey});
 }

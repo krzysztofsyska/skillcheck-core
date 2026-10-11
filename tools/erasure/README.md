@@ -37,6 +37,14 @@ product `erasure_ledger_attestor` connection. It validates the signature and all
 reservation bindings before calling the private SQL ACK. The worker cannot ACK.
 `commitReservedTransition` joins durable append and attestation; neither a client
 flag nor an unsigned worker JSON object can replace the verified receipt.
+Before every append, `createReservationProver` reads
+`get_erasure_reservation_binding` as `erasure_ledger_attestor` and signs that
+stored envelope hash with a separate Ed25519 key. The worker cannot call the
+binding, and the prover refuses caller text that differs from the product row.
+The ledger and restore pin only the public key. A handcrafted first `authorized`
+envelope, or a later event transplanted from another reservation, is rejected
+before it can become restore authority. The private key is not stored in either
+database or in this repository.
 
 Restore stays isolated with application and workers disabled. Fetch a checkpoint
 from the independent live ledger using a newly generated challenge. Supply a
@@ -69,6 +77,16 @@ Tests:
 - `node --test tests/erasure-ledger.test.mjs` (PGlite persistence + crypto/runtime)
 - `node --test tests/erasure-ledger-concurrency.test.mjs` (real PostgreSQL,
   `SCREENING_TEST_DATABASE_URL`, creates and drops its own synthetic database)
+
+`erasure_executions.created_at` is the owner authorization time copied from
+`erasure_requests.created_at`. `execution_started_at` records worker pickup.
+Status and cursor pagination use the authorization time, so a later worker does
+not reorder the request. A new `erasing` reservation is refused once
+`recovery_retain_until` has passed and the phase is still `authorized`;
+cancellation remains available. A reservation that was already exported can
+still be acknowledged after that horizon: tombstones keep the original
+`retain_until`, their enforcement does not expire, and purge can finish. Expiry
+alone never authorizes a new erasure.
 
 Expired recovery envelopes are never filtered in the Node runtime. They undergo
 full signature/history verification and reach the isolated SQL ingress just like

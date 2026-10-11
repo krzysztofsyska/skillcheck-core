@@ -22,7 +22,8 @@ create table private.erasure_executions (
  envelope jsonb,envelope_hash text,lease_until timestamptz,
  manifest_hash text,schema_signature text,counts jsonb,receipt_id uuid,local_purged boolean not null default false,
  recovery_retain_until timestamptz not null,created_at timestamptz not null default clock_timestamp(),cancelled_at timestamptz,
- restore_checkpoint_sequence bigint,restore_checkpoint_hash text
+ restore_checkpoint_sequence bigint,restore_checkpoint_hash text,
+ execution_started_at timestamptz not null default clock_timestamp()
 );
 create index erasure_executions_company_idx on private.erasure_executions(company_id,created_at desc,request_id desc);
 create index erasure_executions_subject_idx on private.erasure_executions using gin(candidate_ids);
@@ -92,8 +93,8 @@ begin
    if resolution.revision is distinct from r.resolution_revision or resolution.candidate_ids is distinct from r.candidate_ids or resolution.confirmed_by is distinct from r.actor_id then raise exception using errcode='PT409',message='Subject resolution changed';end if;
   end if;
   if exists(select 1 from unnest(r.candidate_ids) s(id) left join private.erasure_candidate_lifecycle l on l.candidate_id=s.id where l.status is distinct from 'frozen' or l.request_id is distinct from r.id) then raise exception using errcode='PT409',message='Lifecycle changed';end if;
-  insert into private.erasure_executions(request_id,company_id,candidate_ids,scope_kind,owner_id,policy_copy,resolution_revision,generation,phase,recovery_retain_until)
-  values(r.id,r.company_id,r.candidate_ids,r.scope_kind,r.actor_id,jsonb_build_object('revision',p.revision,'rules',p.rules),r.resolution_revision,r.generation,'authorized',clock_timestamp()+make_interval(days=>greatest(c.backup_horizon_days,c.artifact_horizon_days)+c.retention_margin_days));
+  insert into private.erasure_executions(request_id,company_id,candidate_ids,scope_kind,owner_id,policy_copy,resolution_revision,generation,phase,recovery_retain_until,created_at,execution_started_at)
+  values(r.id,r.company_id,r.candidate_ids,r.scope_kind,r.actor_id,jsonb_build_object('revision',p.revision,'rules',p.rules),r.resolution_revision,r.generation,'authorized',clock_timestamp()+make_interval(days=>greatest(c.backup_horizon_days,c.artifact_horizon_days)+c.retention_margin_days),r.created_at,clock_timestamp());
   inventory:=private.prepare_erasure_purge_manifest(target_request);
   update private.erasure_executions set manifest_hash=inventory->>'manifest_hash',schema_signature=inventory->>'schema_signature',counts=inventory->'counts' where request_id=target_request;
  end if;
@@ -111,6 +112,9 @@ begin
   end if;
  end if;
  if target_phase='erasing' and exists(select 1 from private.erasure_holds where request_id=target_request and released_at is null) then raise exception using errcode='PT409',message='Erasure hold requires review';end if;
+ -- Do not open an irreversible erasing reservation after the recovery horizon.
+ -- The same reservation remains retryable so a durable ledger event can still be acknowledged.
+ if target_phase='erasing' and e.phase='authorized' and e.reservation_id is null and e.recovery_retain_until<=clock_timestamp() then raise exception using errcode='PT409',message='Recovery horizon elapsed';end if;
  if target_phase='erasing' and e.reservation_id is null then
   inventory:=private.prepare_erasure_purge_manifest(target_request);
   if inventory->>'schema_signature' is distinct from e.schema_signature then raise exception using errcode='PT409',message='Adapter schema changed';end if;
@@ -152,6 +156,16 @@ language sql stable security definer set search_path='' as $$
  select jsonb_build_object('request_id',request_id,'phase',phase,'sequence',sequence,'pending_phase',pending_phase,'reservation_id',reservation_id,
  'envelope_text',envelope::text,'envelope_hash',envelope_hash,'local_purged',local_purged,'event_hash',event_hash) from private.erasure_executions where request_id=target_request
 $$;
+-- Attestor-only binding. The worker cannot ask this to sign an envelope it invented.
+create function private.get_erasure_reservation_binding(target_reservation uuid) returns jsonb
+language plpgsql stable security definer set search_path='' set timezone='UTC' set datestyle='ISO, YMD' as $$
+declare e private.erasure_executions;n integer;begin
+ if target_reservation is null then return null;end if;
+ select count(*) into n from private.erasure_executions where reservation_id=target_reservation and envelope is not null and envelope_hash is not null;
+ if n<>1 then return null;end if;
+ select * into e from private.erasure_executions where reservation_id=target_reservation;
+ return jsonb_build_object('reservation_id',e.reservation_id,'request_id',e.request_id,'envelope_text',e.envelope::text,'envelope_hash',e.envelope_hash);
+end;$$;
 
 -- Keep R2 local cancellation only where no envelope has ever been made exportable.
 alter function public.cancel_candidate_erasure(uuid,bigint,uuid) rename to cancel_candidate_erasure_local_r2;
@@ -322,7 +336,7 @@ do $$declare t text;f record;begin
  execute format('revoke all on private.%I from public,anon,authenticated,screening_worker,contact_verifier,erasure_worker,erasure_ledger_attestor,erasure_restore_attestor,erasure_purge_owner',t);
  end loop;
  for f in select p.oid::regprocedure signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='private' and p.proname in
- ('erasure_execution_gate','erasure_reserve_locked','reserve_erasure_transition','confirm_erasure_ledger_event','get_erasure_work','replay_erasure_envelope','erasure_execution_status') loop
+ ('erasure_execution_gate','erasure_reserve_locked','reserve_erasure_transition','confirm_erasure_ledger_event','get_erasure_work','get_erasure_reservation_binding','replay_erasure_envelope','erasure_execution_status') loop
  execute format('revoke all on function %s from public,anon,authenticated,screening_worker,contact_verifier,erasure_worker,erasure_ledger_attestor,erasure_restore_attestor,erasure_purge_owner',f.signature);
  end loop;
 end;$$;
@@ -330,7 +344,7 @@ revoke all on function public.cancel_candidate_erasure(uuid,bigint,uuid) from pu
 grant execute on function public.cancel_candidate_erasure(uuid,bigint,uuid) to authenticated;
 grant usage on schema private to erasure_worker,erasure_ledger_attestor,erasure_restore_attestor,erasure_purge_owner;
 grant execute on function private.reserve_erasure_transition(uuid,bigint,text,uuid),private.get_erasure_work(uuid) to erasure_worker;
-grant execute on function private.confirm_erasure_ledger_event(uuid,uuid,bigint,text,text,text) to erasure_ledger_attestor;
+grant execute on function private.confirm_erasure_ledger_event(uuid,uuid,bigint,text,text,text),private.get_erasure_reservation_binding(uuid) to erasure_ledger_attestor;
 grant execute on function private.replay_erasure_envelope(text,text,bigint,text) to erasure_restore_attestor;
 grant select on private.erasure_execution_config,private.erasure_executions to erasure_purge_owner;
 grant update(local_purged,counts,receipt_id) on private.erasure_executions to erasure_purge_owner;

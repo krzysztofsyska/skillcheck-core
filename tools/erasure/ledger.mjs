@@ -37,18 +37,30 @@ export function decryptEnvelope(encrypted,keyring,envelopeHash){
  if(digest(text)!==envelopeHash)fail('Envelope hash mismatch');parseEnvelope(text);return text;
 }
 function signed(body,keyId,key){const event_hash=digest(canonical(body));return {...body,event_hash,key_id:keyId,signature:sign(null,Buffer.from(event_hash),key).toString('base64')};}
+const reservationKeyId=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export function signReservationProof(envelopeHash,privateKey){return sign(null,Buffer.from(envelopeHash),privateKey).toString('base64');}
+/** Public verification only. The private reservation key stays with the attestor. */
+export function verifyReservationProof({envelopeHash,reservationKeyId:keyId,reservationProof,reservationKeys}){
+ const key=reservationKeys?.[keyId];let ok=false;
+ if(!key||!reservationKeyId.test(keyId??'')||typeof reservationProof!=='string'||!reservationProof||!hash.test(envelopeHash??''))fail('Reservation proof rejected');
+ try{ok=verify(null,Buffer.from(envelopeHash),key,Buffer.from(reservationProof,'base64'));}catch{ok=false;}
+ if(!ok)fail('Reservation proof rejected');
+}
 export function verifyReceipt(receipt,keyring){
  const {event_hash,key_id,signature,...body}=receipt;
  if(!keyring[key_id]||digest(canonical(body))!==event_hash||!verify(null,Buffer.from(event_hash),keyring[key_id],Buffer.from(signature,'base64')))fail('Invalid ledger signature');
  if(body.kind!=='erasure_event'||!positive(body.ledger_sequence)||!positive(body.request_sequence)||!hash.test(body.envelope_hash)||!uuid.test(body.ledger_id)||!uuid.test(body.event_id)||!uuid.test(body.request_id))fail('Invalid receipt');
+ if(!reservationKeyId.test(body.reservation_key_id??'')||typeof body.reservation_proof!=='string'||!body.reservation_proof)fail('Invalid reservation proof');
  return receipt;
 }
 /** Connection factory must return a dedicated, connected pg-compatible client.
  * Never pass a product DB connection or share this identity with a worker. */
 export class PostgresErasureLedger{
- constructor({connect,ledgerId,encryptionKeyId,encryptionKey,signingKeyId,signingKey,verificationKeys}){Object.assign(this,{connect,ledgerId,encryptionKeyId,encryptionKey,signingKeyId,signingKey,verificationKeys});if(!uuid.test(ledgerId))fail('Ledger deployment identity required');}
- async append({eventId,envelopeText,envelopeHash}){
+ constructor({connect,ledgerId,encryptionKeyId,encryptionKey,signingKeyId,signingKey,verificationKeys,reservationKeys}){Object.assign(this,{connect,ledgerId,encryptionKeyId,encryptionKey,signingKeyId,signingKey,verificationKeys,reservationKeys});if(!uuid.test(ledgerId))fail('Ledger deployment identity required');if(!reservationKeys||!Object.keys(reservationKeys).length)fail('Reservation authority required');}
+ async append({eventId,envelopeText,envelopeHash,reservationKeyId,reservationProof}){
   const e=parseEnvelope(envelopeText);if(!uuid.test(eventId)||digest(envelopeText)!==envelopeHash)fail('Envelope binding mismatch');
+  // The coordinator cannot mint this proof. Restore checks it again with the public key.
+  verifyReservationProof({envelopeHash,reservationKeyId,reservationProof,reservationKeys:this.reservationKeys});
   const db=await this.connect();
   try{
    await db.query('begin');
@@ -65,7 +77,7 @@ export class PostgresErasureLedger{
    const boundary_hash=digest(canonical(Object.fromEntries(Object.entries(e).filter(([k])=>!['phase','sequence','previous_phase','previous_event_hash','manifest_hash'].includes(k)))));
    if(previous&&(previous.boundary_hash!==boundary_hash||(!(['authorized','erasing'].includes(previous.phase)&&e.phase==='erasing')&&previous.manifest_hash!==e.manifest_hash)))fail('Recovery boundary changed');
    const sequence=Number(head.sequence)+1;if(!positive(sequence))fail('Ledger sequence overflow');
-   const receipt=signed({kind:'erasure_event',ledger_id:this.ledgerId,ledger_sequence:sequence,previous_ledger_hash:head.event_hash,event_id:eventId,request_id:e.request_id,company_id:e.company_id,generation:e.generation,request_sequence:e.sequence,previous_event_hash:e.previous_event_hash,phase:e.phase,envelope_hash:envelopeHash,boundary_hash,manifest_hash:e.manifest_hash},this.signingKeyId,this.signingKey);
+   const receipt=signed({kind:'erasure_event',ledger_id:this.ledgerId,ledger_sequence:sequence,previous_ledger_hash:head.event_hash,event_id:eventId,request_id:e.request_id,company_id:e.company_id,generation:e.generation,request_sequence:e.sequence,previous_event_hash:e.previous_event_hash,phase:e.phase,envelope_hash:envelopeHash,boundary_hash,manifest_hash:e.manifest_hash,reservation_key_id:reservationKeyId,reservation_proof:reservationProof},this.signingKeyId,this.signingKey);
    verifyReceipt(receipt,this.verificationKeys);
    const encrypted=encrypt(envelopeText,this.encryptionKeyId,this.encryptionKey,envelopeHash);
    await db.query('insert into erasure_ledger.events(sequence,event_id,request_id,request_sequence,envelope_hash,encrypted_envelope,receipt) values($1,$2,$3,$4,$5,$6,$7)',[sequence,eventId,e.request_id,e.sequence,envelopeHash,encrypted,receipt]);
@@ -80,7 +92,8 @@ export class PostgresErasureLedger{
 }
 /** The challenge is generated by the isolated restore operator for this restore,
  * obtained from the live independent ledger, never from the product backup. */
-export function verifyReplayCoverage({records,checkpoint,challenge,ledgerId,minimumWatermark,verificationKeys,encryptionKeys}){
+export function verifyReplayCoverage({records,checkpoint,challenge,ledgerId,minimumWatermark,verificationKeys,encryptionKeys,reservationKeys}){
+ if(!reservationKeys||!Object.keys(reservationKeys).length)fail('Reservation authority required');
  const {event_hash,key_id,signature,...body}=checkpoint;
  if(!minimumWatermark||minimumWatermark.ledger_id!==ledgerId||!Number.isSafeInteger(minimumWatermark.sequence)||minimumWatermark.sequence<0||(minimumWatermark.sequence===0?minimumWatermark.event_hash!==null:!hash.test(minimumWatermark.event_hash)))fail('Independent minimum watermark required');
  if(body.sequence<minimumWatermark.sequence)fail('Ledger behind independent watermark');
@@ -91,6 +104,7 @@ export function verifyReplayCoverage({records,checkpoint,challenge,ledgerId,mini
   const {receipt,encrypted_envelope}=records[i];verifyReceipt(receipt,verificationKeys);
   if(receipt.ledger_id!==ledgerId||receipt.ledger_sequence!==i+1||receipt.previous_ledger_hash!==last)fail('Ledger continuity gap');
   const text=decryptEnvelope(encrypted_envelope,encryptionKeys,receipt.envelope_hash),e=parseEnvelope(text),previous=streams.get(e.request_id);
+  verifyReservationProof({envelopeHash:receipt.envelope_hash,reservationKeyId:receipt.reservation_key_id,reservationProof:receipt.reservation_proof,reservationKeys});
   if(e.request_id!==receipt.request_id||e.company_id!==receipt.company_id||e.sequence!==receipt.request_sequence||e.generation!==receipt.generation||e.phase!==receipt.phase||e.manifest_hash!==receipt.manifest_hash||e.previous_event_hash!==receipt.previous_event_hash)fail('Receipt envelope mismatch');
   const boundary=digest(canonical(Object.fromEntries(Object.entries(e).filter(([k])=>!['phase','sequence','previous_phase','previous_event_hash','manifest_hash'].includes(k)))));
   if(boundary!==receipt.boundary_hash||(previous?(e.sequence!==previous.sequence+1||e.previous_event_hash!==previous.event_hash||e.previous_phase!==previous.phase||receipt.boundary_hash!==previous.boundary_hash||(!(['authorized','erasing'].includes(previous.phase)&&e.phase==='erasing')&&previous.manifest_hash!==e.manifest_hash)||!phases[previous.phase].includes(e.phase)):(e.sequence!==1||e.phase!=='authorized'||e.previous_event_hash!==null||e.previous_phase!==null)))fail('Request continuity gap');

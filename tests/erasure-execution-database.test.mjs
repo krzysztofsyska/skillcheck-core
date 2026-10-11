@@ -33,13 +33,14 @@ test('SC-010 R3 acknowledged erasure execution and restore capability boundaries
   }
   await x.role('erasure_worker');
   await assert.rejects(db.query('select private.confirm_erasure_ledger_event($1,$2,1,$3,$4,$5)',[state.request_id,randomUUID(),'0'.repeat(64),'1'.repeat(64),'2'.repeat(64)]));
+  await assert.rejects(db.query('select private.get_erasure_reservation_binding($1)',[randomUUID()]));
   await db.query("select set_config('skillcheck.erasure_purge','true',false)");
   await assert.rejects(db.query('delete from public.candidates where id=$1',[f.candidate.id]));
   await h.asUser(f.owner);await x.cancel(f,state.request_id,state.generation);
  });
  await t.test('real signed durable ACK binds the reservation; lost ACK freezes cancellation until ledger reconciliation',async()=>{
   await x.configure();const f=await x.ready(),state=await x.freeze(f),reservation=await x.reserve(state.request_id,0,'authorized');
-  const receipt=await x.ledger.append({eventId:reservation.reservation_id,envelopeText:reservation.envelope_text,envelopeHash:reservation.envelope_hash});
+  const proof=await x.prove(reservation),receipt=await x.ledger.append({eventId:reservation.reservation_id,envelopeText:reservation.envelope_text,envelopeHash:reservation.envelope_hash,reservationKeyId:proof.reservation_key_id,reservationProof:proof.reservation_proof});
   await assert.rejects(x.attest(reservation,{...receipt,signature:'AAAA'}));
   await assert.rejects(x.attest({...reservation,envelope_hash:'0'.repeat(64)},receipt));
   await x.purge(state.request_id,0).then(()=>assert.fail('No purge without erasing ACK'),error=>assert.ok(error));
@@ -168,6 +169,42 @@ test('SC-010 R3 acknowledged erasure execution and restore capability boundaries
   }
  });
 
+ await t.test('execution keeps the owner authorization time and does not reorder the request at worker pickup',async()=>{
+  await x.configure();const older=await x.ready(),newer=await h.candidate(older);
+  await h.asUser(older.owner);newer.resolutionId=await x.resolve(newer);
+  const first=await x.freeze(older),second=await x.freeze(newer);
+  await h.asAdmin();await db.query("update private.erasure_requests set created_at=created_at-interval '3 hours' where id=$1",[first.request_id]);
+  await x.reserve(first.request_id,0,'authorized');
+  await h.asAdmin();
+  const stored=(await db.query(`select e.created_at=r.created_at as created,(e.envelope->>'authorized_at')::timestamptz=r.created_at as authorized,e.execution_started_at>r.created_at as started
+   from private.erasure_executions e join private.erasure_requests r on r.id=e.request_id where e.request_id=$1`,[first.request_id])).rows[0];
+  assert.deepEqual(stored,{created:true,authorized:true,started:true});
+  await h.asUser(older.owner);
+  const page=(await db.query('select public.list_candidate_erasure_requests($1) value',[older.companyId])).rows[0].value;
+  assert.deepEqual(page.map(item=>item.request_id),[second.request_id,first.request_id]);
+ });
+ await t.test('an erasing reservation is refused after the recovery horizon, while the same reserved ACK can still purge',async()=>{
+  await x.configure();const blocked=await x.ready(),blockedState=await x.freeze(blocked);
+  await x.transition(blockedState.request_id,0,'authorized');
+  await h.asAdmin();await db.query("update private.erasure_executions set recovery_retain_until=greatest(created_at+interval '1 millisecond',clock_timestamp()-interval '1 second') where request_id=$1",[blockedState.request_id]);
+  await assert.rejects(x.reserve(blockedState.request_id,1,'erasing'),conflict);
+  // The signed authorization boundary stays intact; this only moves the SQL clock.
+  await h.asUser(blocked.owner);assert.equal(await x.cancel(blocked,blockedState.request_id,blockedState.generation),blockedState.request_id);
+  await h.asAdmin();assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[blocked.candidate.id])).rows[0].n,1);
+  const f=await x.ready(),state=await x.freeze(f);await x.transition(state.request_id,0,'authorized');
+  const erasing=await x.reserve(state.request_id,1,'erasing');
+  await h.asAdmin();await db.query("update private.erasure_executions set recovery_retain_until=clock_timestamp()-interval '1 second' where request_id=$1",[state.request_id]);
+  await x.ack(erasing);await x.purge(state.request_id,2);
+  await h.asAdmin();assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[f.candidate.id])).rows[0].n,0);
+ });
+ await t.test('the ledger cannot admit an envelope the product reservation prover did not bind',async()=>{
+  await x.configure();const f=await x.ready(),state=await x.freeze(f),reservation=await x.reserve(state.request_id,0,'authorized');
+  const forgedText=JSON.stringify({...JSON.parse(reservation.envelope_text),company_id:randomUUID()}),forgedHash=digest(forgedText);
+  await assert.rejects(x.prove({...reservation,envelope_text:forgedText,envelope_hash:forgedHash}));
+  const proof=await x.prove(reservation);
+  await assert.rejects(x.ledger.append({eventId:randomUUID(),envelopeText:forgedText,envelopeHash:forgedHash,reservationKeyId:proof.reservation_key_id,reservationProof:proof.reservation_proof}),/Reservation proof/);
+  await x.ack(reservation);
+ });
  await t.test('expired signed recovery streams distinguish cancelled, still-present and already-absent graphs',async()=>{
   const history=async(phases,{absent=false}={})=>{
    await x.configure();await h.asAdmin();
@@ -183,7 +220,10 @@ test('SC-010 R3 acknowledged erasure execution and restore capability boundaries
    const original={...JSON.parse(reservation.envelope_text),authorized_at:new Date(Date.now()-3*86400000).toISOString(),retention_until:new Date(Date.now()-86400000).toISOString()};let previous=null;
    for(const [i,phase]of phases.entries()){
     const envelope={...original,phase,sequence:i+1,previous_phase:i?phases[i-1]:null,previous_event_hash:previous?.event_hash??null};
-    const envelopeText=JSON.stringify(envelope);previous=await historical.ledger.append({eventId:randomUUID(),envelopeText,envelopeHash:digest(envelopeText)});
+    const envelopeText=JSON.stringify(envelope);
+    // The product prover signs only the stored reservation. A backdated copy is a separate ledger fixture.
+    await assert.rejects(x.prove({reservation_id:reservation.reservation_id,envelope_text:envelopeText,envelope_hash:digest(envelopeText)}));
+    const proof=historical.signEnvelope(envelopeText);previous=await historical.ledger.append({eventId:randomUUID(),envelopeText,envelopeHash:proof.envelopeHash,reservationKeyId:proof.reservationKeyId,reservationProof:proof.reservationProof});
    }
    return {f,historical};
   };

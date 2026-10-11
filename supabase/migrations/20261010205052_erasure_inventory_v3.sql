@@ -60,7 +60,7 @@ begin
  'generated_at',generated,'expires_at',generated+interval '5 minutes','execution_enabled',false);
 end;$$;
 -- Literal generated from the complete clean, reviewed migration chain, never a deployment catalog.
-insert into private.erasure_inventory_baseline_r3 values(true,'2418e01ce46444c704b98355f9f42b37637d28300f6e596ada37392b3aee4583',array[
+insert into private.erasure_inventory_baseline_r3 values(true,'57af20a63790264766025a96743e548f9db116ec4f5518179c6e4f974f9d1dcc',array[
  'private.candidate_retention_policies',
  'private.candidate_verified_contact_points',
  'private.candidate_verified_contact_receipts',

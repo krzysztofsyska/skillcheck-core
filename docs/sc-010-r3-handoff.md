@@ -38,6 +38,12 @@ Cofnięcie zgody pozostaje dostępne. Może zmienić graf po wcześniejszym ACK,
 
 Przed pierwszą rezerwacją `erasing` ponownie sprawdzane są polityka oraz aktualna rewizja, skład i autor potwierdzenia osoby. Zapis nowej polityki jest blokowany od tej rezerwacji do ACK, pod wspólną blokadą firmy. Po trwałej granicy obowiązuje przypięta polityka zaakceptowanego wykonania.
 
+`erasure_executions.created_at` jest czasem autoryzacji właściciela skopiowanym z `erasure_requests.created_at`. `execution_started_at` zapisuje chwilę pierwszej rezerwacji workera. Envelope `authorized_at` oraz paginacja statusu używają czasu autoryzacji.
+
+Nowa rezerwacja `erasing` jest odrzucana, gdy `recovery_retain_until` już minął, a faza nadal jest `authorized`. Anulowanie pozostaje wtedy dostępne. Ta sama, już wyeksportowana rezerwacja może zostać potwierdzona po horyzoncie: tombstones dostają pierwotny `retain_until`, ich egzekwowanie nie wygasa i purge może się dokończyć. Samo wygaśnięcie nie otwiera nowego usuwania.
+
+Każdy append wymaga dowodu rezerwacji. Attestor czyta zapisany envelope przez `get_erasure_reservation_binding` i podpisuje jego hash osobnym kluczem Ed25519. Worker nie ma tego RPC. Prover nie podpisuje tekstu, który różni się od wiersza produktu. Rejestr i restore mają tylko klucz publiczny i odrzucają zdarzenie bez dowodu. Klucz prywatny nie jest w żadnej bazie ani w repozytorium.
+
 ## Usuwanie grafu
 
 Purge działa w jednej transakcji z blokadami i dokładnym kontekstem dopuszczonych wierszy. Nie wyłącza RLS, FK, triggerów ani nie używa ustawianego przez klienta GUC jako uprawnienia. Wyjątki DELETE w niezmiennej historii są ograniczone do roli, transakcji i wpisów manifestu. Zwykłe UPDATE historii pozostaje zabronione.
