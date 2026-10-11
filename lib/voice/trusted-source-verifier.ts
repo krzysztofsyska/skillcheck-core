@@ -36,7 +36,10 @@ async function reconstructLocked(
   db:SqlClient,s:SourceSelector,
 ):Promise<VoicePlanWriteSnapshot>{
   Object.values(s).forEach(id);
-    // Lock the application namespace before reading mutable source rows.
+    // SC-006 takes screening:application first. Match its lock before
+    // acquiring the SC-012-B application lock to serialize reanalysis.
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      ["screening:"+s.applicationId]);
     await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
       [s.companyId+":"+s.applicationId]);
     const auth=only((await db.query([
@@ -175,16 +178,17 @@ export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
   return withReadTransaction(db,async()=>{
     const p=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
-      "shortlist_entry_id,source_hash,template_version,plan_envelope",
+      "shortlist_entry_id,source_hash,envelope_hash,template_version,plan_envelope",
       "from public.voice_plan_versions where id=$1",
     ].join(" "),[planId])).rows);
-    // Acquire application advisory lock before any plan row lock; the
-    // subsequent locked re-read rejects changes between the two reads.
+    // Match SC-006 screening lock order before application/plan row locks.
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      ["screening:"+p.application_id]);
     await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
       [p.company_id+":"+p.application_id]);
     const locked=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
-      "shortlist_entry_id,source_hash,template_version,plan_envelope",
+      "shortlist_entry_id,source_hash,envelope_hash,template_version,plan_envelope",
       "from public.voice_plan_versions where id=$1 for share nowait",
     ].join(" "),[planId])).rows);
     if(!isDeepStrictEqual(locked,p))fail("STALE");
@@ -194,7 +198,9 @@ export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
       analysisId:p.analysis_id,reviewId:p.screening_review_id,
       shortlistEntryId:p.shortlist_entry_id,
     });
-    if(p.source_hash!==rebuilt.sourceHash||!isDeepStrictEqual(p.plan_envelope,rebuilt))
+    if(p.source_hash!==rebuilt.sourceHash||
+       p.envelope_hash!==rebuilt.planContractHash||
+       !isDeepStrictEqual(p.plan_envelope,rebuilt))
       fail("STALE");
     return rebuilt;
   });
