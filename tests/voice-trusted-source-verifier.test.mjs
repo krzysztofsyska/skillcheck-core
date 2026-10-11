@@ -28,6 +28,9 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
  });
  const h=await setupRankingDatabase(db);
  await db.exec(await readFile(new URL("../db/prototypes/sc012b-plan-schema.sql",import.meta.url),"utf8"));
+ await db.exec(await readFile(new URL("../db/isolated/sc012b-template-catalog.sql",import.meta.url),"utf8"));
+ await db.query("insert into private.voice_plan_template_catalog(version,manifest_digest,active) values($1,$2,true)",
+   ["skillcheck-voice-plan-v1",trustedVoiceTemplateDigest("skillcheck-voice-plan-v1")]);
  const seed=await h.seed(users.owner,randomUUID(),5);
  await h.asUser(users.owner);
  const behaviors=behaviorGuideDefinitions.map((b,i)=>b.label+": "+(i<4?"Wysoki":"Standardowy"));
@@ -64,6 +67,14 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
  await t.test("canonical saved envelope verifies with unchanged source",async()=>{
   const result=await verifyStoredVoicePlan(db,plan);
   assert.deepEqual(result.questions,expected.questions);
+ });
+ await t.test("immutable DB template catalog prevents silent template replacement",async()=>{
+  await assert.rejects(db.query(
+    "update private.voice_plan_template_catalog set manifest_digest=$1 where version=$2",
+    ["f".repeat(64),"skillcheck-voice-plan-v1"]),e=>e.code==="42501");
+  await assert.rejects(db.query(
+    "delete from private.voice_plan_template_catalog where version=$1",
+    ["skillcheck-voice-plan-v1"]),e=>e.code==="42501");
  });
  await t.test("cross-tenant user cannot reconstruct approved source",async()=>{
   await setActor(users.otherOwner);
