@@ -29,3 +29,17 @@ This is **not a production API**. The private functions remain ungranted to anon
 3. Review and align full trusted source/material and template digests.
 4. Generate a separate Supabase CLI migration on isolated development DB after owner approval.
 5. Only then wire server actions and recruiter panel; never call private SQL directly from browser.
+
+## October 11 — security review remediation and migration gate
+
+The independent Codex review on PR #99 flagged three P2 issues. This branch now:
+
+1. Maps verifier `55P03`, `40P01` and `40001` to a stable `PT409` after transaction rollback.
+2. Includes prototype schema and screening fixture dependencies in atomic CI path triggers.
+3. Resolves committed release idempotency keys under application, actor membership and request-key locks **before** revalidating mutable source, while requiring the exact same canonical request payload and release-plan/review linkage. New keys still undergo the complete trusted-source verifier and pointer CAS. The isolated release SQL now also checks a committed request before rejecting a superseded plan.
+
+Real PostgreSQL two-session tests additionally cover an in-flight position update, screening reanalysis advisory lock contention, and recovery of a previously committed release after source revision. They must pass on the exact current commit before review acceptance.
+
+### Supabase CLI migration gate
+
+Do not copy the prototype SQL directly into `supabase/migrations`. Before creating the migration, resolve all fresh review findings, prove end-to-end source freshness for candidate documents and screening materials, verify complete lock order with SC-006/008/010, confirm retention/deletion strategy and establish an isolated Supabase development database. Generate the migration name with `supabase migration new` on a verified CLI version, then apply and test only against that isolated database. No Production access, credentials, grants or deployments are authorized by this branch.
