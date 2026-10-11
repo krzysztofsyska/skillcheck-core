@@ -53,6 +53,21 @@ begin
   -- A request key is unique across applications of this actor.
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(v_plan.company_id::text||':'||actor::text||':release:'||p_request_key::text,0));
+  -- Resolve an authorized, committed request replay BEFORE current-state
+  -- checks, so superseded plans can recover their original result.
+  v_digest:=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+    pg_catalog.jsonb_build_object('plan',p_plan_id,'review',p_expected_review_id,
+      'source',p_expected_source_hash,'expectedPointer',p_expected_pointer_version,
+      'expectedRelease',p_expected_release_id)::text,'UTF8')),'hex');
+  select k.payload_hash,k.result_id into v_existing from private.voice_plan_request_keys k
+    where k.company_id=v_plan.company_id and k.actor_id=actor
+      and k.operation='release' and k.request_key=p_request_key for update;
+  if found then
+    if v_existing.payload_hash is distinct from v_digest or v_existing.result_id is null then
+      raise exception using errcode='PT409',message='VOICE_PLAN_REQUEST_CONFLICT';
+    end if;
+    return v_existing.result_id;
+  end if;
   perform 1 from public.voice_plan_versions p
     where p.id=p_plan_id and p.company_id=v_plan.company_id for share nowait;
   if not found or v_plan.source_hash is distinct from p_expected_source_hash then
@@ -93,19 +108,6 @@ begin
       and r.disposition in ('approved','approved_with_changes') for share nowait;
   if not found or v_bound_analysis_review is distinct from v_latest_analysis_review then
     raise exception using errcode='PT409',message='VOICE_PLAN_SOURCE_STALE';
-  end if;
-  v_digest:=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
-    pg_catalog.jsonb_build_object('plan',p_plan_id,'review',p_expected_review_id,
-      'source',p_expected_source_hash,'expectedPointer',p_expected_pointer_version,
-      'expectedRelease',p_expected_release_id)::text,'UTF8')),'hex');
-  select k.payload_hash,k.result_id into v_existing from private.voice_plan_request_keys k
-    where k.company_id=v_plan.company_id and k.actor_id=actor
-      and k.operation='release' and k.request_key=p_request_key for update;
-  if found then
-    if v_existing.payload_hash is distinct from v_digest or v_existing.result_id is null then
-      raise exception using errcode='PT409',message='VOICE_PLAN_REQUEST_CONFLICT';
-    end if;
-    return v_existing.result_id;
   end if;
   select c.pointer_version,c.release_entry_id into v_current
     from private.voice_plan_current_releases c
