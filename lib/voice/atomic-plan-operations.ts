@@ -41,6 +41,60 @@ function sameHash(actual:string,expected:string){
     throw e;
   }
 }
+/** Resolve a committed release replay under application, actor and key locks. */
+async function authorizedReleaseReplay(db:SqlClient,input:ReleaseInput):Promise<string|null>{
+  const plans=(await db.query(
+    "select company_id,application_id from public.voice_plan_versions where id=$1",
+    [input.planId])).rows;
+  const deny=()=>{throw Object.assign(new Error("VOICE_PLAN_FORBIDDEN"),{code:"42501"});};
+  if(plans.length!==1)deny();
+  const company=plans[0].company_id,application=plans[0].application_id;
+  await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+    ["screening:"+application]);
+  await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+    [company+":"+application]);
+  const auth=(await db.query(
+    "select c.owner_id,auth.uid() as actor from public.companies c where c.id=$1 for share nowait",
+    [company])).rows;
+  if(auth.length!==1||!auth[0].actor)deny();
+  const actor=auth[0].actor;
+  if(actor!==auth[0].owner_id){
+    const members=(await db.query(
+      "select role from public.company_members where company_id=$1 and user_id=$2 for share nowait",
+      [company,actor])).rows;
+    if(members.length!==1||members[0].role!=="recruiter")deny();
+  }
+  await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+    [company+":"+actor+":release:"+input.requestKey]);
+  const replay=(await db.query([
+    "select k.payload_hash,k.result_id,",
+    "encode(sha256(convert_to(jsonb_build_object(",
+    "'plan',$1::uuid,'review',$2::uuid,'source',$3::text,",
+    "'expectedPointer',$4::bigint,'expectedRelease',$5::uuid",
+    ")::text,'UTF8')),'hex') as expected_hash",
+    "from private.voice_plan_request_keys k",
+    "where k.company_id=$6 and k.actor_id=$7 and k.operation='release'",
+    "and k.request_key=$8::uuid for update nowait",
+  ].join(" "),[
+    input.planId,input.approvedReviewId,input.sourceHash,
+    input.expectedPointerVersion,input.expectedReleaseId,company,actor,input.requestKey,
+  ])).rows;
+  if(replay.length===0)return null;
+  if(replay.length!==1||replay[0].payload_hash!==replay[0].expected_hash||
+     !replay[0].result_id)
+    throw Object.assign(new Error("VOICE_PLAN_REQUEST_CONFLICT"),{code:"PT409"});
+  const linked=(await db.query([
+    "select 1 from private.voice_plan_release_entries",
+    "where company_id=$1 and application_id=$2 and id=$3",
+    "and plan_id=$4 and approved_review_id=$5 for share nowait",
+  ].join(" "),[
+    company,application,replay[0].result_id,input.planId,input.approvedReviewId,
+  ])).rows;
+  if(linked.length!==1)
+    throw Object.assign(new Error("VOICE_PLAN_REQUEST_CONFLICT"),{code:"PT409"});
+  return replay[0].result_id as string;
+}
+
 /** This is an isolated integration contract, NOT an exposed application API. */
 export async function atomicReviewVoicePlan(db:SqlClient,input:ReviewInput):Promise<string>{
   return atomic(db,async()=>{
@@ -57,6 +111,8 @@ export async function atomicReviewVoicePlan(db:SqlClient,input:ReviewInput):Prom
 }
 export async function atomicReleaseVoicePlan(db:SqlClient,input:ReleaseInput):Promise<string>{
   return atomic(db,async()=>{
+    const prior=await authorizedReleaseReplay(db,input);
+    if(prior!==null)return prior;
     const source=await verifyStoredVoicePlanWithinTransaction(db,input.planId);
     sameHash(source.sourceHash,input.sourceHash);
     const result=await db.query(
