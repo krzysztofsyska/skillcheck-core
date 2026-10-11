@@ -32,12 +32,10 @@ const iso=(x:unknown)=>x instanceof Date?x.toISOString():
 
 /** The caller must own a dedicated PG connection. All locks and checks are
  * inside one transaction; no input flag is trusted as an approval. */
-export async function reconstructTrustedVoiceSource(
+async function reconstructLocked(
   db:SqlClient,s:SourceSelector,
 ):Promise<VoicePlanWriteSnapshot>{
   Object.values(s).forEach(id);
-  await db.query("begin");
-  try{
     // Lock the application namespace before reading mutable source rows.
     await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
       [s.companyId+":"+s.applicationId]);
@@ -130,26 +128,39 @@ export async function reconstructTrustedVoiceSource(
        result.maximumSeconds!==template.maximumSeconds||
        result.recordingAllowed!==template.recordingAllowed||
        result.noticeRequired!==template.noticeRequired)fail("TEMPLATE_CHANGED");
+    return result;
+}
+async function withReadTransaction<T>(db:SqlClient,work:()=>Promise<T>):Promise<T>{
+  await db.query("begin");
+  try{
+    const result=await work();
     await db.query("commit");
     return result;
   }catch(e){await db.query("rollback");throw e;}
+}
+export async function reconstructTrustedVoiceSource(
+  db:SqlClient,s:SourceSelector,
+):Promise<VoicePlanWriteSnapshot>{
+  return withReadTransaction(db,()=>reconstructLocked(db,s));
 }
 /** Does not authorize review or release: only a source integrity preflight.
  * The mutating RPC must repeat the checks under its own transaction locks. */
 export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
   id(planId);
-  const p=only((await db.query([
-    "select company_id,application_id,analysis_id,screening_review_id,",
-    "shortlist_entry_id,source_hash,template_version,plan_envelope",
-    "from public.voice_plan_versions where id=$1",
-  ].join(" "),[planId])).rows);
-  if(p.template_version!==ACTIVE_VOICE_TEMPLATE_VERSION)fail("TEMPLATE_CHANGED");
-  const rebuilt=await reconstructTrustedVoiceSource(db,{
-    companyId:p.company_id,applicationId:p.application_id,
-    analysisId:p.analysis_id,reviewId:p.screening_review_id,
-    shortlistEntryId:p.shortlist_entry_id,
+  return withReadTransaction(db,async()=>{
+    const p=only((await db.query([
+      "select company_id,application_id,analysis_id,screening_review_id,",
+      "shortlist_entry_id,source_hash,template_version,plan_envelope",
+      "from public.voice_plan_versions where id=$1 for share nowait",
+    ].join(" "),[planId])).rows);
+    if(p.template_version!==ACTIVE_VOICE_TEMPLATE_VERSION)fail("TEMPLATE_CHANGED");
+    const rebuilt=await reconstructLocked(db,{
+      companyId:p.company_id,applicationId:p.application_id,
+      analysisId:p.analysis_id,reviewId:p.screening_review_id,
+      shortlistEntryId:p.shortlist_entry_id,
+    });
+    if(p.source_hash!==rebuilt.sourceHash||!isDeepStrictEqual(p.plan_envelope,rebuilt))
+      fail("STALE");
+    return rebuilt;
   });
-  if(p.source_hash!==rebuilt.sourceHash||!isDeepStrictEqual(p.plan_envelope,rebuilt))
-    fail("STALE");
-  return rebuilt;
 }
