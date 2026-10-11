@@ -7,7 +7,7 @@ import {parse} from "pg-connection-string";
 import {setupRankingDatabase,users} from "./helpers/screening-ranking-fixture.mjs";
 import {behaviorGuideDefinitions} from "../lib/behavior-guide.ts";
 import {trustedVoiceTemplateDigest} from "../lib/voice/template-registry.ts";
-import {reconstructTrustedVoiceSource} from "../lib/voice/trusted-source-verifier.ts";
+import {reconstructTrustedVoiceSource,verifyStoredVoicePlanWithinTransaction} from "../lib/voice/trusted-source-verifier.ts";
 import {atomicReviewVoicePlan,atomicReleaseVoicePlan} from "../lib/voice/atomic-plan-operations.ts";
 
 const url=process.env.SCREENING_TEST_DATABASE_URL;
@@ -71,6 +71,28 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   [f.application.id])).rows[0];
  assert.equal(current.release_entry_id,release);
  assert.equal(Number(current.pointer_version),1);
+ await t.test("source and screening advisory locks remain held through a trusted transaction",async()=>{
+  const rival=new Client(config(dbName));await rival.connect();
+  try{
+    await db.query("begin");
+    const verified=await verifyStoredVoicePlanWithinTransaction(db,plan);
+    assert.equal(verified.sourceHash,canonical.sourceHash);
+    await rival.query("begin");
+    const lock=(await rival.query(
+      "select pg_try_advisory_xact_lock(hashtextextended($1,0)) as acquired",
+      ["screening:"+f.application.id])).rows[0];
+    assert.equal(lock.acquired,false,"SC-006 screening writer cannot pass while verified source is locked");
+    await assert.rejects(rival.query(
+      "select id from public.positions where id=$1 for update nowait",[f.position.id]),
+      e=>e.code==="55P03");
+    await rival.query("rollback");
+    await db.query("rollback");
+  }finally{
+    await db.query("rollback").catch(()=>{});
+    await rival.query("rollback").catch(()=>{});
+    await rival.end();
+  }
+ });
  await t.test("mismatched caller source is rejected before any immutable review write",async()=>{
   const before=(await db.query(
    "select count(*)::int as n from private.voice_plan_review_entries where plan_id=$1",[plan])).rows[0].n;
