@@ -31,3 +31,19 @@ TESTS: PostgreSQL 16 synthetic review CAS / replay / tenant denial
 SECURITY CHECKS: pending independent PASS
 BLOCKERS: membership locks, template/source validation, release RPC, retention and reviewed grants
 NEXT ACTION: correct CI findings, independent review, no premature integration merge
+
+## October 11 — Codex review remediation (unmerged)
+
+The independent review of commit `c9a1d2284e` raised P1 findings for stale screening reviews, unlocked actor revocation, unlocked shortlist removal, stale plan versions, terminal `requires_changes`, and missing trusted source/template reconstruction. It also raised P2 for cross-application request keys, whitespace-only rationale and NULL decisions.
+
+Implemented on this branch:
+- owner or recruiter membership `FOR SHARE NOWAIT` row lock after the application advisory lock; second membership authorization check;
+- analysis `FOR SHARE NOWAIT` and shortlist `FOR SHARE NOWAIT` locks with exact latest screening review version check;
+- refusal to review a superseded plan and refusal to append to a plan with terminal `requires_changes`;
+- additional request-key advisory lock scoped to company+actor+operation+UUID, preventing cross-application duplicate-key races;
+- explicit NULL decision guard and whitespace-only rationale rejection;
+- isolated PostgreSQL regression tests for terminal decisions, stale screening review, removed shortlist, superseded plan and malformed inputs.
+
+**Still blocked:** the stored source hash is not recomputed from the *entire current* trusted source and versioned template catalog. Therefore the function MUST remain ungranted to browser/client roles and unpromoted to a production migration. Further two-session revocation/source-change tests and complete lock graph proof are required. These changes must pass current-head CI and fresh independent Codex review; no merge authorization is implied.
+
+The existing `private.sc012b_review_plan` is a test-only candidate in `db/isolated`; not a production RPC. No Supabase Production change, no real candidates, no outbound calls.
