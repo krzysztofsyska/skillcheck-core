@@ -89,12 +89,6 @@ test("SC-012-B isolated review RPC enforces human review CAS, request replay and
  });
 
 
- await t.test("removed shortlist invalidates pending review",async()=>{
-  await db.query("update public.recruitment_shortlist_entries set removed_at=clock_timestamp(),removed_by=$1 where id=$2",
-    [users.owner,shortlist]);
-  await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>e.code==="PT409");
-  await db.query("update public.recruitment_shortlist_entries set removed_at=null,removed_by=null where id=$1",[shortlist]);
- });
  await t.test("superseded plan cannot be reviewed after new version",async()=>{
   const lastReview=(await db.query("select id from private.voice_plan_review_entries where plan_id=$1 order by review_version desc limit 1",[plan])).rows[0].id;
   await db.query([
@@ -111,6 +105,11 @@ test("SC-012-B isolated review RPC enforces human review CAS, request replay and
   await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>e.code==="PT409");
  });
 
+ await t.test("removed shortlist invalidates pending review",async()=>{
+  await setActor(users.owner);
+  await db.query("select public.remove_recruitment_shortlist_entry($1)",[shortlist]);
+  await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>e.code==="PT409");
+ });
  await t.test("no client role can directly execute the private RPC",async()=>{
   await db.query("set role authenticated");
   await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>["42501","3F000"].includes(e.code));
