@@ -71,6 +71,23 @@ test("SC-012-B isolated review RPC enforces human review CAS, request replay and
   const rows=(await db.query("select decision,reason from private.voice_plan_review_entries where plan_id=$1 order by review_version",[plan])).rows;
   assert.deepEqual(rows.map(x=>x.decision),["approved","requires_changes"]);
  });
+
+ await t.test("null decision and whitespace-only reason are invalid input",async()=>{
+  await assert.rejects(db.query(call,args(2,null,null,randomUUID())),e=>e.code==="22023");
+  for(const whitespace of ["\t\n","\r\v\f","   "])
+   await assert.rejects(db.query(call,args(2,"requires_changes",whitespace,randomUUID())),e=>e.code==="22023");
+ });
+ await t.test("requires_changes is terminal for the same plan version",async()=>{
+  await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>e.code==="PT409");
+  const count=(await db.query("select count(*)::int as n from private.voice_plan_review_entries where plan_id=$1",[plan])).rows[0].n;
+  assert.equal(count,2);
+ });
+ await t.test("latest screening review mismatch invalidates the voice plan",async()=>{
+  await db.query("update public.screening_analysis_versions set latest_review_version=latest_review_version+1 where id=$1",[f.analysis_id]);
+  await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>e.code==="PT409");
+  await db.query("update public.screening_analysis_versions set latest_review_version=latest_review_version-1 where id=$1",[f.analysis_id]);
+ });
+
  await t.test("no client role can directly execute the private RPC",async()=>{
   await db.query("set role authenticated");
   await assert.rejects(db.query(call,args(2,"approved",null,randomUUID())),e=>["42501","3F000"].includes(e.code));
