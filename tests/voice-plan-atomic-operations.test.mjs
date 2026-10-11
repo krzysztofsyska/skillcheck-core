@@ -156,6 +156,6 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
  await t.test("unauthorized actor cannot replay an approved operation",async()=>{
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.otherOwner]);
   await assert.rejects(atomicReleaseVoicePlan(db,releaseArgs),
-    e=>/VOICE_TRUSTED_SOURCE_FORBIDDEN/.test(e.message));
+    e=>e.code==="42501" && e.message==="VOICE_PLAN_FORBIDDEN");
  });
 });
