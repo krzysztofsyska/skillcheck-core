@@ -28,3 +28,7 @@ DB/MIGRATIONS: NONE | SECURITY REVIEW: PENDING | NEXT ACTION: CI fixes, independ
 ## Code-side template registry
 
 The v1 template manifest is pinned under `lib/voice/template-registry.ts` and has a deterministic digest of the approved behavior question catalog and safety defaults. Unknown versions are rejected. This is a code-side versioned registry, **not** yet a database immutable template catalog; production migration and review must pin a released digest independently. CI tests check the registry and reject unknown versions.
+
+## Isolated database template catalog
+
+The branch now includes `db/isolated/sc012b-template-catalog.sql`: a private, immutable, default-deny PostgreSQL table mapping an explicit version to the reviewed code manifest digest. Source reconstruction fails closed unless the active database catalog digest matches `ACTIVE_VOICE_TEMPLATE_DIGEST`. The synthetic PostgreSQL test seeds v1 and verifies updates/deletions are denied. This is still an **isolated prototype**, not a CLI-generated Supabase migration; a reviewed production catalog seeding process and generator-release policy remain prerequisites.
