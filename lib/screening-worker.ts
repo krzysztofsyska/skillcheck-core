@@ -3,6 +3,7 @@ import {
   SCREENING_OPENAI_REQUEST_TIMEOUT_MS,
   ScreeningProviderError,
   type ScreeningProviderErrorCode,
+  type ScreeningDiagnosticReason,
   type ScreeningWorkerClaim,
   assertScreeningClaimMatchesWorkerContract,
   buildScreeningOpenAiRequest,
@@ -20,6 +21,8 @@ export type ScreeningWorkerLog = {
   analysis_id?: string;
   status: string;
   error_code?: string;
+  diagnostic_reason?: ScreeningDiagnosticReason;
+  http_status?: number;
   provider_response_id?: string | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
@@ -86,9 +89,16 @@ export async function callOpenAiResponses(
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new ScreeningProviderError(mapScreeningHttpError(response.status), 'Provider HTTP error.');
+      throw new ScreeningProviderError(mapScreeningHttpError(response.status), 'Provider HTTP error.', 'http_error', response.status);
     }
-    return await response.json() as ScreeningOpenAiResponse;
+    try {
+      return await response.json() as ScreeningOpenAiResponse;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new ScreeningProviderError('openai_invalid_output', 'Response was not JSON.', 'response_not_json');
+      }
+      throw error;
+    }
   } catch (error) {
     if (error instanceof ScreeningProviderError) throw error;
     if (error instanceof Error && (error.name === 'AbortError' || /aborted|timeout/i.test(error.message))) {
@@ -196,6 +206,10 @@ export async function runScreeningAttempt(attemptId: string, runtime: ScreeningW
         analysis_id: claim.analysis_id,
         status: 'failed',
         error_code: lastCode,
+        ...(error instanceof ScreeningProviderError ? {
+          diagnostic_reason: error.diagnosticReason,
+          http_status: error.httpStatus,
+        } : {}),
         duration_ms: (runtime.now?.() ?? Date.now()) - started,
       });
       return { status: 'failed' as const, code: lastCode };
