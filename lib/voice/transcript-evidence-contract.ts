@@ -6,6 +6,7 @@
  * `authenticated` is always false. `insufficient_data` keeps numericScore null.
  */
 import { createHash } from "node:crypto";
+import { behaviorGuideDefinitions } from "../behavior-guide.ts";
 
 export const SC013A_CONTRACT = "sc-013a-synthetic-transcript-v1";
 export const TRANSCRIPT_CANONICALIZATION = "rfc8785-transcript-v1";
@@ -82,6 +83,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const opaque = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const roleKeyPattern = /^[a-z0-9]+(?:-[a-z0-9]+){1,8}$/;
 const criterionIdPattern = /^(task|kpi|competency|behavior):([1-9]\d?)$/;
+const behaviorAreaIds = new Set(behaviorGuideDefinitions.map(area => area.id));
 const sourceIdentity = new Set([
   "companyId", "recruitmentId", "applicationId", "voiceInterviewId", "sourceId",
   "providerEventId", "providerCallId", "attemptId", "correlationId", "planVersionId",
@@ -284,6 +286,7 @@ function utf16Boundary(text: string, index: number): boolean {
 function hasPii(text: string): boolean {
   if (text.includes("@")) return true;
   // Defense-in-depth only: production transcripts still require separate PII minimization.
+  if (/(?:^|[^A-Za-z0-9])\+(?:\d[\s()./-]*){8,15}(?!\d)/.test(text)) return true;
   // Recognize Polish IBAN (26 digits after PL), including bank-style grouping.
   if (/(?:^|[^A-Za-z0-9])PL[ -]?\d{2}(?:[ -]?\d{4}){6}(?!\d)/i.test(text)) return true;
   return /(?:^|[^\d])\+\d{8,15}(?!\d)/.test(text) ||
@@ -700,9 +703,15 @@ function bindingMismatch(sealed: SealedTranscript, request: Record<string, unkno
 }
 function readCriterion(value: unknown): FrozenCriterion {
   if (!exactKeys(value, ["criterionId", "kind", "rubricVersion"])) reject("invalid_transcript");
-  if (typeof value.criterionId !== "string" || !criterionIdPattern.test(value.criterionId)) reject("invalid_transcript");
   if (typeof value.kind !== "string" || !criterionKinds.includes(value.kind as CriterionKind)) reject("invalid_transcript");
-  if (!value.criterionId.startsWith(`${value.kind}:`)) reject("invalid_transcript");
+  if (typeof value.criterionId !== "string") reject("invalid_transcript");
+  if (value.kind === "behavior" && behaviorAreaIds.has(value.criterionId)) {
+    // SC-012 emits canonical area IDs, not behavior:1; keep the legacy v1
+    // behavior:n shape for existing isolated rubric fixtures.
+  } else if (!criterionIdPattern.test(value.criterionId) ||
+      !value.criterionId.startsWith(`${value.kind}:`)) {
+    reject("invalid_transcript");
+  }
   if (typeof value.rubricVersion !== "string" || value.rubricVersion.length > 64 || !opaque.test(value.rubricVersion)) {
     reject("invalid_transcript");
   }
@@ -733,6 +742,10 @@ function validateEvidence(sealed: SealedTranscript, evidence: unknown, rating: C
     }
     if (typeof item.quote !== "string" || item.quote.length > 240 || item.quote.trim() === "") {
       reject("invented_quotation");
+    }
+    // A one-character substring may be exact but is not substantive evidence.
+    if ([...item.quote].filter(char => /[\p{L}\p{N}]/u.test(char)).length < 8) {
+      reject("insufficient_evidence");
     }
     assertWellFormed(item.quote);
     if (hasPii(item.quote)) reject("pii_leakage");
@@ -907,7 +920,9 @@ export function recordTranscriptRevision(ledgerInput: EvidenceLedger, sealedInpu
   // An interview cannot silently switch its application or recruitment on revision.
   if (sealed.roleKey !== ledger.roleKey ||
       sealed.recruitmentId !== ledger.recruitmentId ||
-      sealed.applicationId !== ledger.applicationId) return held(ledger, "conflict");
+      sealed.applicationId !== ledger.applicationId ||
+      sealed.planVersionId !== ledger.planVersionId ||
+      sealed.planRevision !== ledger.planRevision) return held(ledger, "conflict");
   if (sealed.transcriptRevision < ledger.transcriptRevision) return held(ledger, "out_of_order");
   if (sealed.transcriptRevision === ledger.transcriptRevision) {
     const same = sealed.transcriptSha256 === ledger.transcriptSha256 &&
@@ -1120,7 +1135,8 @@ export function commitReview(
     : null;
   // A newer committed analysis must be reviewed instead of promoting an older one,
   // including when there is not yet any approved/current pointer.
-  if (approving && (ledger.analyses.some(item => item.analysisVersion > analysis.analysisVersion) ||
+  if (approving && (ledger.analyses.some(item => item.analysisVersion > analysis.analysisVersion &&
+      item.review?.assessmentValidity !== "rejected_result") ||
       (current !== null && analysis.analysisVersion <= current.analysisVersion))) {
     return held(ledger, "conflict");
   }
