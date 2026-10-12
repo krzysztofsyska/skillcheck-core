@@ -6,7 +6,8 @@ import {Client} from "pg";
 import {parse} from "pg-connection-string";
 import {setupRankingDatabase,users} from "./helpers/screening-ranking-fixture.mjs";
 import {behaviorGuideDefinitions} from "../lib/behavior-guide.ts";
-import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest} from "../lib/voice/template-registry.ts";
+import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest,assertPinnedVoiceQuestions} from "../lib/voice/template-registry.ts";
+import {buildInterviewPlan} from "../lib/voice/interview-plan.ts";
 import {
   reconstructTrustedVoiceSource,verifyStoredVoicePlan,TrustedSourceError,
 } from "../lib/voice/trusted-source-verifier.ts";
@@ -116,4 +117,28 @@ test("SC-012-B template registry only permits explicitly versioned, pinned templ
  assert.match(trustedVoiceTemplateDigest("skillcheck-voice-plan-v1"),/^[a-f0-9]{64}$/);
  assert.throws(()=>getTrustedVoiceTemplate("skillcheck-voice-plan-v2"),/VOICE_TEMPLATE_UNSUPPORTED/);
  assert.ok(Object.isFrozen(template));
+});
+
+test("SC-012-B pins all question-defining behavior including order and duration",()=>{
+ const source={
+   companyId:randomUUID(),applicationId:randomUUID(),
+   positionRevision:"2026-10-12T08:00:00.000Z",
+   analysisRevision:randomUUID(),reviewRevision:randomUUID(),
+   screeningReviewed:true,screeningCurrent:true,
+   position:{
+     title:"Handlowiec",tasks:["Kontakt z klientami"],kpis:["Wynik sprzedaży"],
+     requiredCompetencies:["Negocjacje"],
+     requiredBehaviors:behaviorGuideDefinitions.map((area,i)=>
+       area.label+": "+(i<4?"Wysoki":"Standardowy")),
+   },
+   gaps:[{criterionId:"task:1",kind:"task",reason:"missing_evidence"}],
+ };
+ const generated=buildInterviewPlan(source);
+ assert.doesNotThrow(()=>assertPinnedVoiceQuestions(source,generated.questions));
+ const changedSeconds=generated.questions.map((q,i)=>i===0?{...q,maxSeconds:61}:q);
+ assert.throws(()=>assertPinnedVoiceQuestions(source,changedSeconds),/VOICE_TEMPLATE_GENERATOR_DRIFT/);
+ const reversed=[...generated.questions].reverse();
+ assert.throws(()=>assertPinnedVoiceQuestions(source,reversed),/VOICE_TEMPLATE_GENERATOR_DRIFT/);
+ const changedId=generated.questions.map((q,i)=>i===0?{...q,id:"common-other"}:q);
+ assert.throws(()=>assertPinnedVoiceQuestions(source,changedId),/VOICE_TEMPLATE_GENERATOR_DRIFT/);
 });

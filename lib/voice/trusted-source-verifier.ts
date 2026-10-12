@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createVoicePlanWriteSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
 import { selectReviewedScreeningGaps } from "./screening-gap-selection.ts";
 import type { InterviewSource } from "./interview-plan.ts";
-import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest} from "./template-registry.ts";
+import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest,assertPinnedVoiceQuestions} from "./template-registry.ts";
 
 type Row=Record<string,any>;
 export type SqlClient={query(sql:string,params?:readonly unknown[]):Promise<{rows:Row[]}>};
@@ -60,12 +60,13 @@ async function reconstructLocked(
     ].join(" "),[ACTIVE_VOICE_TEMPLATE_VERSION])).rows);
     if(catalog.manifest_digest!==ACTIVE_VOICE_TEMPLATE_DIGEST)fail("TEMPLATE_CHANGED");
     const h=only((await db.query([
-      "select ap.company_id,ap.id as application_id,ap.updated_at as application_updated_at,",
+      "select ap.company_id,ap.id as application_id,ap.candidate_id,ap.updated_at as application_updated_at,",
       "ap.status as application_status,rec.id as recruitment_id,",
       "rec.updated_at as recruitment_updated_at,rec.status as recruitment_status,",
       "pos.id as position_id,pos.updated_at as position_updated_at,pos.status as position_status,",
       "pos.title,pos.tasks,pos.kpis,pos.required_behaviors,pos.required_competencies,",
       "a.id as analysis_id,a.input_fingerprint,a.analysis_contract_hash,",
+      "a.candidate_document_id,a.candidate_document_version,a.binding_snapshot,",
       "a.criteria_snapshot,a.latest_review_version,a.execution_status,a.stale_at,",
       "r.id as review_id,r.review_version,r.disposition,",
       "s.id as shortlist_entry_id,s.removed_at",
@@ -87,6 +88,30 @@ async function reconstructLocked(
        !["approved","approved_with_changes"].includes(h.disposition)||
        h.latest_review_version!==h.review_version||
        !hex.test(h.input_fingerprint)||!hex.test(h.analysis_contract_hash))fail("STALE");
+    // The candidate parent FOR UPDATE lock blocks a concurrent new document
+    // INSERT's FK KEY SHARE lock. SC-006's screening advisory lock above
+    // serializes reanalysis while material is reconstructed.
+    const candidate=(await db.query([
+      "select id from public.candidates",
+      "where company_id=$1 and id=$2 for update nowait",
+    ].join(" "),[s.companyId,h.candidate_id])).rows;
+    if(candidate.length!==1)fail("STALE");
+    // Recompute SC-006's exact canonical fingerprint from the current
+    // reviewed document, criteria and binding. Return only hashes/metadata,
+    // never the candidate's redacted or original CV text to this caller.
+    const material=only((await db.query([
+      "select m->>'input_fingerprint' as fingerprint,",
+      "m->>'candidate_document_id' as document_id,",
+      "(m->>'candidate_document_version')::integer as document_version,",
+      "m->'criteria_snapshot' as criteria, m->'binding_snapshot' as binding",
+      "from (select private.screening_material($1,true) as m) source",
+    ].join(" "),[s.applicationId])).rows);
+    if(material.fingerprint!==h.input_fingerprint||
+       material.document_id!==h.candidate_document_id||
+       material.document_version!==h.candidate_document_version||
+       !isDeepStrictEqual(material.criteria,h.criteria_snapshot)||
+       !isDeepStrictEqual(material.binding,h.binding_snapshot))
+      fail("STALE");
     const newest=only((await db.query([
       "select id from public.screening_analysis_versions",
       "where company_id=$1 and application_id=$2",
@@ -141,6 +166,9 @@ async function reconstructLocked(
        result.maximumSeconds!==template.maximumSeconds||
        result.recordingAllowed!==template.recordingAllowed||
        result.noticeRequired!==template.noticeRequired)fail("TEMPLATE_CHANGED");
+    // Reject silent generator drift in order, timing, counts and question IDs.
+    try{assertPinnedVoiceQuestions(source,result.questions);}
+    catch{fail("TEMPLATE_CHANGED");}
     for(const q of result.questions){
       if(q.kind==="common"){
         const allowed=template.behaviorQuestionTexts.find(x=>x.id===q.criterionId);
@@ -173,9 +201,9 @@ export async function reconstructTrustedVoiceSource(
 }
 /** Does not authorize review or release: only a source integrity preflight.
  * The mutating RPC must repeat the checks under its own transaction locks. */
-export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
+export async function verifyStoredVoicePlanWithinTransaction(db:SqlClient,planId:string){
   id(planId);
-  return withReadTransaction(db,async()=>{
+  {
     const p=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
       "shortlist_entry_id,source_hash,envelope_hash,template_version,plan_envelope",
@@ -203,5 +231,8 @@ export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
        !isDeepStrictEqual(p.plan_envelope,rebuilt))
       fail("STALE");
     return rebuilt;
-  });
+  }
+}
+export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
+  return withReadTransaction(db,()=>verifyStoredVoicePlanWithinTransaction(db,planId));
 }
