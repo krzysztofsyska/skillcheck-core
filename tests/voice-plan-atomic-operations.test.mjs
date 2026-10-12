@@ -257,9 +257,9 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
  await t.test("source mutation invalidates both RPCs without side effects",async()=>{
   await db.query("update public.positions set title='Modified role' where id=$1",[f.position.id]);
   await assert.rejects(atomicReviewVoicePlan(db,{...reviewArgs,requestKey:randomUUID()}),
-    e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
+    e=>e.code==="PT409"&&e.message==="VOICE_PLAN_SOURCE_STALE");
   await assert.rejects(atomicReleaseVoicePlan(db,{...releaseArgs,requestKey:randomUUID()}),
-    e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
+    e=>e.code==="PT409"&&e.message==="VOICE_PLAN_SOURCE_STALE");
   const n=(await db.query("select count(*)::int as n from private.voice_plan_release_entries where plan_id=$1",[plan])).rows[0].n;
   assert.equal(n,1);
  });
@@ -267,7 +267,7 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   assert.equal(await atomicReleaseVoicePlan(db,releaseArgs),release);
   await assert.rejects(atomicReleaseVoicePlan(db,{
     ...releaseArgs,requestKey:randomUUID(),
-  }),e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
+  }),e=>e.code==="PT409"&&e.message==="VOICE_PLAN_SOURCE_STALE");
  });
  await t.test("committed release replay survives a newer plan superseding it",async()=>{
   const successor=(await db.query([
@@ -293,7 +293,7 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   }),e=>e.code==="PT409"&&e.message==="VOICE_PLAN_REQUEST_CONFLICT");
   await assert.rejects(atomicReleaseVoicePlan(db,{
     ...releaseArgs,requestKey:randomUUID(),
-  }),e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
+  }),e=>e.code==="PT409"&&e.message==="VOICE_PLAN_SOURCE_STALE");
  });
  await t.test("unauthorized actor cannot replay an approved operation",async()=>{
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.otherOwner]);
