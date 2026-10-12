@@ -180,3 +180,41 @@ test('request aborted by timeout is retried then fails with openai_timeout', { t
   assert.equal(calls.fail[0].errorCode, 'openai_timeout');
   assert.doesNotMatch(calls.fail[0].errorMessage, /sk-test|SQL i raporty|resp_/);
 });
+
+test('diagnostics separate HTTP, envelope and evidence failures without leaking payloads', async () => {
+  const marker = 'PRIVATE_CV_SECRET';
+  const cases = [
+    [() => callOpenAiResponses(marker, {}, async () => new Response(marker, { status: 400 })), 'http_error', 400],
+    [() => callOpenAiResponses(marker, {}, async () => new Response(marker, { status: 200 })), 'response_not_json', undefined],
+    [async () => null, 'invalid_envelope', undefined],
+    [async () => ({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }), 'output_token_limit', undefined],
+    [async () => ({ status: 'completed', output_text: marker }), 'output_not_json', undefined],
+    [async () => ({ status: 'completed', output_text: successText.replace('😀B𝄞', marker) }), 'quote_mismatch', undefined],
+    [async () => ({ status: 'completed', output_text: '{"criteria":[]}' }), 'criterion_set', undefined],
+  ];
+  for (const [provider, reason, status] of cases) {
+    const { store, calls } = storeMock();
+    const logs = [];
+    let attempts = 0;
+    const result = await runScreeningAttempt(claim.attempt_id, runtime(store, async () => {
+      attempts++;
+      return provider();
+    }, { log: entry => logs.push(entry) }));
+    assert.equal(result.status, 'failed');
+    assert.equal(result.code, 'openai_invalid_output');
+    assert.equal(logs.at(-1).diagnostic_reason, reason);
+    assert.equal(logs.at(-1).http_status, status);
+    assert.equal(calls.complete.length, 0);
+    assert.equal(calls.fail.length, 1);
+    assert.equal(attempts, 1);
+    assert.ok(!JSON.stringify({ logs, messages: calls.fail.map(x => x.errorMessage) }).includes(marker));
+    assert.ok(!JSON.stringify(logs).includes(claim.input_cv_text_snapshot));
+    assert.ok(!JSON.stringify(logs).includes(claim.lease_token));
+  }
+});
+
+test('diagnostic metadata rejects arbitrary strings and invalid status codes', () => {
+  const error = new ScreeningProviderError('openai_invalid_output', 'not logged', 'PRIVATE_SECRET', 999);
+  assert.equal(error.diagnosticReason, undefined);
+  assert.equal(error.httpStatus, undefined);
+});
