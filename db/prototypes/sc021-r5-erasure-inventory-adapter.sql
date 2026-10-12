@@ -145,6 +145,19 @@ begin
  raise exception 'SC021_R5_BASELINE_NOT_REVIEWED' using errcode='PT409';
 end $;
 
+-- CRITICAL SC-005/SC-021 boundary: the generic reservation is not an
+-- authorized candidate operation. Deny the shared AI/screening worker roles
+-- direct access to it. Candidate requests MUST go through the trusted
+-- candidate-bound SECURITY DEFINER RPC; non-candidate work needs a separately
+-- reviewed, audited role/operation classification and may not re-use these
+-- worker capabilities.
+revoke execute on function public.ai_gateway_reserve(
+ uuid,uuid,uuid,uuid,text,text,text,text,text,text,bigint)
+ from ai_meter_worker,screening_worker;
+-- The bound candidate RPC itself is available only to ai_meter_worker;
+-- screening_worker must receive a future DB-derived attempt/lease capability,
+-- NOT the right to supply arbitrary company_id or candidate_id.
+
 -- These staging helpers are callable ONLY by the migration owner / future
 -- reviewed SECURITY DEFINER SC-010 inventory function. Even erasure_purge_owner
 -- cannot enumerate another tenant outside a signed purge execution. In the real
