@@ -265,3 +265,68 @@ test('SC-021-D cost report groups by tenant, task, process and pseudonym without
     {...base,actualMicroUsd:null},
   ]),/SC021_INVALID_REPORT_ROW/);
 });
+
+
+test('Codex P1: correlation ID is always the persisted request key', async () => {
+  const f = store();
+  let received = '';
+  const result = await runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: f.ledger,
+    invoke: async (_rate, correlationId) => {
+      received = correlationId;
+      return { data: 'ok', usage, providerRequestId: null };
+    },
+  });
+  assert.equal(received, ctx.requestKey);
+  assert.equal(result.correlationId, ctx.requestKey);
+  assert.equal(f.calls.reservations[0].requestKey, ctx.requestKey);
+  const g = store();
+  await assert.rejects(runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: g.ledger,
+    correlationId: '44444444-4444-4444-8444-444444444444',
+    invoke: async () => { throw new Error('provider should never run'); },
+  }), /SC021_INVALID_CONTEXT/);
+  assert.equal(g.calls.reservations.length, 0);
+});
+
+test('Codex P2: uncertain settlement or invalid priced response is marked unknown', async () => {
+  for (const cause of ['settle-throws', 'usage-overflow']) {
+    const f = store();
+    if (cause === 'settle-throws') {
+      f.ledger.settle = async () => { throw new Error('SC021_SETTLEMENT_UNAVAILABLE'); };
+    }
+    const consumed = cause === 'usage-overflow'
+      ? { inputTokens: Number.MAX_SAFE_INTEGER, cachedInputTokens: 0, outputTokens: Number.MAX_SAFE_INTEGER }
+      : usage;
+    await assert.rejects(runMeteredOperation({
+      context: ctx, policy, maxExpectedUsage: usage, ledger: f.ledger,
+      invoke: async () => ({ data: 'do not leak', usage: consumed, providerRequestId: null }),
+    }), new RegExp(cause === 'usage-overflow' ? 'SC021_COST_OVERFLOW' : 'SC021_SETTLEMENT_UNAVAILABLE'));
+    assert.equal(f.calls.unknown.length, 1);
+    assert.equal(f.calls.unknown[0].requestKey, ctx.requestKey);
+  }
+});
+
+test('Codex P2: contribution margin rejects subtraction outside safe integer range', () => {
+  assert.throws(() => packageMargin({
+    revenueNetPlnGrosze: 0,
+    aiCostPlnGrosze: Number.MAX_SAFE_INTEGER,
+    voiceAndTelephonyPlnGrosze: Number.MAX_SAFE_INTEGER,
+    otherVariablePlnGrosze: Number.MAX_SAFE_INTEGER,
+  }), /SC021_COST_OVERFLOW/);
+});
+
+test('Codex P2: null candidate aggregation never collides with legitimate unassigned pseudonym', () => {
+  const base = {
+    companyId: ctx.companyId, billingMonth: '2026-10', task: 'cv_screening',
+    processId: null, candidatePseudonym: null, status: 'settled',
+    reservedMicroUsd: 5, actualMicroUsd: 5,
+    inputTokens: 1, cachedInputTokens: 0, outputTokens: 2,
+  };
+  const report = summarizeAiCosts(ctx.companyId, '2026-10', [
+    base, { ...base, candidatePseudonym: 'unassigned' },
+  ]);
+  assert.equal(report.total.attempts, 2);
+  assert.equal(report.byCandidate['unassigned'].attempts, 1);
+  assert.equal(report.byCandidate['\u0000no-candidate'].attempts, 1);
+});
