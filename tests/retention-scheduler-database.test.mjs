@@ -77,7 +77,9 @@ test('SC-010 R4 server-clock retention through the real signed erasure ledger',a
  });
  await t.test('bounded ticks eventually examine every stable blocked subject beyond one batch',async()=>{
   const f=await x.ready(),second=await h.candidate(f),third=await h.candidate(f);await h.asUser(f.owner);await x.resolve(second);await x.resolve(third);await x.schedule(f);
-  for(let i=0;i<6;i++)await x.tick(1);
+  await h.asAdmin();const companies=(await db.query('select count(distinct company_id)::int n from private.retention_delegations')).rows[0].n;
+  // One global slot rotates across tenants before visiting the next subject.
+  for(let i=0;i<companies*3;i++)await x.tick(1);
   await h.asAdmin();assert.equal((await db.query('select count(distinct resolution_id)::int n from private.retention_suggestions where company_id=$1',[f.companyId])).rows[0].n,3);await h.asUser(f.owner);await x.revoke(f);
  });
  await t.test('new shared assessment definition starts a fresh observed retention period',async()=>{
