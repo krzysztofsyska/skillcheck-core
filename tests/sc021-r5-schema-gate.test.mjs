@@ -227,3 +227,74 @@ test('SC-021-B/R5 staged inventory uses REAL SC-010-R4 graph and authoritative t
   )).rows[0].value;
   assert.ok(preview.blockers.includes('schema_dependency_unknown'));
 });
+
+
+test('SC-021/SC-005 trusted lease-bound screening reservation derives tenant and candidate from DB',async t=>{
+  const db=new PGlite({extensions:{pgcrypto}});
+  t.after(()=>db.close());
+  const h=await setupRankingDatabase(db);
+  const a=await h.seed();
+  const b=await h.seed(users.otherOwner);
+  await h.asAdmin();
+  for (const path of [
+    '../db/prototypes/sc021-ai-gateway-ledger.sql',
+    '../db/prototypes/sc021-r5-anonymous-erasure.sql',
+    '../db/prototypes/sc021-r5-erasure-inventory-adapter.sql',
+    '../db/prototypes/sc021-r5-sc005-lease-bound-reservation.sql',
+  ]) await db.exec(readFileSync(new URL(path,import.meta.url),'utf8'));
+
+  await db.query('insert into public.ai_gateway_limits(company_id,monthly_limit_micro_usd) values ($1,10000),($2,10000)',[a.companyId,b.companyId]);
+  const started=await h.start(a);
+  const claimed=await h.claim(started); // trusted DB-generated lease in screening_worker claim
+  assert.ok(claimed.lease_token);
+  const rpc='select * from private.ai_gateway_reserve_screening_attempt('+
+    '$1::uuid,$2::text,$3::text,$4::uuid,$5::text,$6::text,$7::text,$8::text,$9::bigint)';
+  const requestKey=randomUUID();
+  const args=[
+    started.attempt_id,claimed.lease_token,claimed.input_fingerprint,
+    requestKey,claimed.provider,claimed.model,'test-policy-v1','test-pricing-v1',100,
+  ];
+  await assert.rejects(db.query(rpc,[
+    ...args.slice(0,1),'wrong-token',...args.slice(2),
+  ]),e=>e.code==='42501');
+  await assert.rejects(db.query(rpc,[
+    ...args.slice(0,2),'wrong-fingerprint',...args.slice(3),
+  ]),e=>e.code==='42501');
+  await assert.rejects(db.query(rpc,[
+    ...args.slice(0,5),'different-provider-model',...args.slice(6),
+  ]),e=>e.code==='42501');
+
+  const first=(await db.query(rpc,args)).rows[0];
+  assert.equal(first.created,true);
+  assert.equal(first.company_id,a.companyId);
+  assert.equal(first.candidate_id,a.candidate.id);
+  assert.equal((await db.query(rpc,args)).rows[0].created,false);
+  const stored=(await db.query(
+    'select u.company_id,u.operation_id,u.process_id,u.request_key,l.candidate_id '+
+      'from public.ai_gateway_usage u join private.ai_gateway_candidate_links l '+
+      'on l.company_id=u.company_id and l.usage_id=u.id where u.request_key=$1',
+    [requestKey],
+  )).rows[0];
+  assert.equal(stored.company_id,a.companyId);
+  assert.equal(stored.candidate_id,a.candidate.id);
+  assert.equal(stored.operation_id,started.analysis_id);
+  assert.equal(stored.process_id,a.recruitment.id);
+
+  await assert.rejects(db.query(rpc,[
+    ...args.slice(0,3),randomUUID(),...args.slice(4,5),
+    'wrong-model',...args.slice(6),
+  ]),e=>e.code==='42501');
+  await assert.rejects(db.query(rpc,[
+    randomUUID(),...args.slice(1,3),randomUUID(),...args.slice(4),
+  ]),e=>e.code==='42501');
+
+  await h.asUser(a.owner);
+  await assert.rejects(db.query(rpc,args),e=>e.code==='42501');
+  await h.asAdmin();
+  await db.exec('set role ai_meter_worker');
+  await assert.rejects(db.query(rpc,args),e=>e.code==='42501');
+  await h.asAdmin();
+
+  const leftovers=(await db.query('select count(*)::int n from public.ai_gateway_usage where company_id=$1',[b.companyId])).rows[0].n;
+  assert.equal(leftovers,0);
+});
