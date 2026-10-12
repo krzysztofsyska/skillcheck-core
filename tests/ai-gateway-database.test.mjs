@@ -8,6 +8,7 @@ const url = process.env.AI_GATEWAY_TEST_DATABASE_URL;
 const idA = '11111111-1111-4111-8111-111111111111';
 const idB = '22222222-2222-4222-8222-222222222222';
 const migration = readFileSync(new URL('../db/prototypes/sc021-ai-gateway-ledger.sql', import.meta.url), 'utf8');
+const erasurePrototype = readFileSync(new URL('../db/prototypes/sc021-r5-anonymous-erasure.sql', import.meta.url), 'utf8');
 
 test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, idempotent settlement', {
   skip: !url && 'Requires AI_GATEWAY_TEST_DATABASE_URL (isolated Postgres test database)',
@@ -23,14 +24,21 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     db = new pg.Client({ connectionString: uri.toString() });
     await db.connect();
     await db.query('create schema private');
-    for (const role of ['authenticated','anon','screening_worker']) {
+    for (const role of ['authenticated','anon','screening_worker','erasure_purge_owner']) {
       await db.query('do $stmt$ begin if not exists (select 1 from pg_roles where rolname = ' +
         "'" + role + "'" + ') then create role ' + role + ' nologin noinherit; end if; end $stmt$');
     }
     await db.query('create table public.companies (id uuid primary key)');
     await db.query('create function private.has_company_access(target_company uuid) returns boolean language sql stable as $func$ select current_setting(' +
       "'sc021.actor_company'" + ', true) = target_company::text $func$');
+    // Isolated SC-010 fake lifecycle contract: not an actual signed erasure service.
+    await db.query('create table public.candidates (id uuid primary key, company_id uuid not null references public.companies(id), frozen boolean not null default false, unique(company_id,id))');
+    await db.query('create table private.erasure_executions (request_id uuid primary key, company_id uuid not null, candidate_ids uuid[] not null)');
+    await db.query("create table private.erasure_purge_context (txid bigint primary key, request_id uuid not null, company_id uuid not null, mode text not null check(mode in ('delete','cancel')))");
+    await db.query("create function private.erasure_candidate_frozen(target uuid) returns boolean language sql stable security definer set search_path='' as $func$ select exists(select 1 from public.candidates where id=target and frozen) $func$");
+    await db.query("create function private.erasure_lock_candidate(target uuid) returns void language plpgsql security definer set search_path='' as $func$ begin perform 1 from public.candidates where id=target for update; if not found then raise exception 'SC021_CANDIDATE_UNAVAILABLE'; end if; if private.erasure_candidate_frozen(target) then raise exception 'SC021_CANDIDATE_FROZEN'; end if; end $func$");
     await db.query(migration);
+    await db.query(erasurePrototype);
     await db.query('insert into public.companies(id) values ($1),($2)', [idA,idB]);
     await db.query('insert into public.ai_gateway_limits(company_id,monthly_limit_micro_usd) values ($1,100),($2,100)', [idA,idB]);
 
