@@ -98,7 +98,7 @@ export function selectModel(policy: AiRoutingPolicy, task: AiTask): ModelRate {
 }
 
 function ceilDiv(value: bigint, divisor: bigint) {
-  return (value + divisor - 1n) / divisor;
+  return (value + divisor - BigInt(1)) / divisor;
 }
 export function usageCostMicroUsd(rate: ModelRate, usage: TokenUsage): number {
   if (![usage.inputTokens, usage.cachedInputTokens, usage.outputTokens].every(nonNegativeSafe)
@@ -109,7 +109,7 @@ export function usageCostMicroUsd(rate: ModelRate, usage: TokenUsage): number {
   const total = uncached * BigInt(rate.inputMicroUsdPerMillion)
     + BigInt(usage.cachedInputTokens) * BigInt(rate.cachedInputMicroUsdPerMillion)
     + BigInt(usage.outputTokens) * BigInt(rate.outputMicroUsdPerMillion);
-  const microUsd = ceilDiv(total, 1_000_000n);
+  const microUsd = ceilDiv(total, BigInt(1000000));
   if (microUsd > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('SC021_COST_OVERFLOW');
   return Number(microUsd);
 }
@@ -118,7 +118,7 @@ export function usdMicroToPlnGrosze(usdMicro: number, plnGroszePerUsd: number): 
   if (!nonNegativeSafe(usdMicro) || !nonNegativeSafe(plnGroszePerUsd)) {
     throw new Error('SC021_INVALID_FX');
   }
-  const total = ceilDiv(BigInt(usdMicro) * BigInt(plnGroszePerUsd), 1_000_000n);
+  const total = ceilDiv(BigInt(usdMicro) * BigInt(plnGroszePerUsd), BigInt(1000000));
   if (total > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('SC021_COST_OVERFLOW');
   return Number(total);
 }
