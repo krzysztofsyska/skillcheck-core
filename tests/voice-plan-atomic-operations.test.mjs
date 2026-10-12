@@ -143,6 +143,45 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     await rival.end();
   }
  });
+ await t.test("recruiter revocation races: authorization locks and fails closed",async()=>{
+  const recruiter=users.recruiter;
+  await db.query(
+    "insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter')",
+    [f.companyId,recruiter]);
+  const reviewer=new Client(config(dbName));
+  const revoker=new Client(config(dbName));
+  await reviewer.connect();await revoker.connect();
+  try{
+    await reviewer.query("select set_config('request.jwt.claim.sub',$1,false)",[recruiter]);
+    // An authorized in-flight transaction holds membership FOR SHARE.
+    await reviewer.query("begin");
+    await verifyStoredVoicePlanWithinTransaction(reviewer,plan);
+    await revoker.query("begin");
+    await revoker.query("savepoint revocation_attempt");
+    await assert.rejects(revoker.query(
+      "select user_id from public.company_members where company_id=$1 and user_id=$2 for update nowait",
+      [f.companyId,recruiter]),e=>e.code==="55P03");
+    await revoker.query("rollback to savepoint revocation_attempt");
+    await revoker.query("rollback");
+    await reviewer.query("rollback");
+    // Revocation wins first: a concurrent review sees a lock conflict.
+    await revoker.query("begin");
+    await revoker.query(
+      "delete from public.company_members where company_id=$1 and user_id=$2",
+      [f.companyId,recruiter]);
+    await assert.rejects(atomicReviewVoicePlan(reviewer,{
+      ...reviewArgs,requestKey:randomUUID(),
+    }),e=>e.code==="PT409");
+    await revoker.query("commit");
+    await assert.rejects(atomicReviewVoicePlan(reviewer,{
+      ...reviewArgs,requestKey:randomUUID(),
+    }),e=>e.code==="42501"||/VOICE_TRUSTED_SOURCE_FORBIDDEN/.test(e.message));
+  }finally{
+    await reviewer.query("rollback").catch(()=>{});
+    await revoker.query("rollback").catch(()=>{});
+    await reviewer.end();await revoker.end();
+  }
+ });
  await t.test("source mutation invalidates both RPCs without side effects",async()=>{
   await db.query("update public.positions set title='Modified role' where id=$1",[f.position.id]);
   await assert.rejects(atomicReviewVoicePlan(db,{...reviewArgs,requestKey:randomUUID()}),
