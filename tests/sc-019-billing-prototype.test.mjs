@@ -113,3 +113,40 @@ test('SC-019 prototype: paid grant 60 once per settlement and tenant',async t=>{
   await h.as(ownerB);assert.deepEqual(await h.balance(companyB),{plan:'PRESELEKCJA',available:60,free_claimed:false});
   await h.as(ownerA);await assert.rejects(h.db.query('select * from public.sc19_get_balance($1)',[companyB]),e=>e.code==='42501');
 });
+
+test('SC-019 prototype: completed analyses cannot be refunded or reopened; failed retry cannot spend a taken credit',async t=>{
+  const h=await setup();t.after(()=>h.db.close());
+  const tax=nip('123456321');
+  await h.admin();
+  await h.db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[companyA,tax,'verified-terminal-guard']);
+  await h.as(ownerA);
+  await h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,tax]);
+  await h.admin();
+  for(let n=1;n<=5;n++) {
+    await h.db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[id(200+n),companyA]);
+  }
+  await h.db.query("update public.screening_analysis_versions set execution_status='processing' where id=$1",[id(201)]);
+  await h.db.query("update public.screening_analysis_versions set execution_status='completed' where id=$1",[id(201)]);
+  for(const terminalMutation of ['failed','cancelled','pending']) {
+    await assert.rejects(
+      h.db.query('update public.screening_analysis_versions set execution_status=$1 where id=$2',[terminalMutation,id(201)]),
+      e=>e.code==='55000',
+    );
+  }
+  assert.equal((await h.db.query('select execution_status from public.screening_analysis_versions where id=$1',[id(201)])).rows[0].execution_status,'completed');
+  assert.equal((await h.balance(companyA)).available,0);
+
+  // The failure refunds one credit, but another analysis consumes it first.
+  await h.db.query("update public.screening_analysis_versions set execution_status='failed' where id=$1",[id(202)]);
+  assert.equal((await h.balance(companyA)).available,1);
+  await h.db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[id(206),companyA]);
+  await assert.rejects(
+    h.db.query("update public.screening_analysis_versions set execution_status='pending' where id=$1",[id(202)]),
+    e=>e.code==='PT402',
+  );
+  assert.equal((await h.db.query('select execution_status from public.screening_analysis_versions where id=$1',[id(202)])).rows[0].execution_status,'failed');
+  assert.equal((await h.balance(companyA)).available,0);
+  const journal=(await h.db.query('select reason,delta from private.sc19_credit_journal where analysis_id=$1',[id(202)])).rows;
+  assert.deepEqual(journal.map(x=>x.reason).sort(),['analysis_release','analysis_reserve']);
+  assert.equal(journal.reduce((sum,x)=>sum+x.delta,0),0);
+});
