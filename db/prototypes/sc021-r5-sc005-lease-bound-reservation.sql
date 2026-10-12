@@ -2,7 +2,7 @@
 -- OFFLINE PROTOTYPE ONLY, outside supabase/migrations. Does not modify
 -- claim_screening_attempt or the Production SC-005 worker.
 begin;
-create function private.ai_gateway_reserve_screening_attempt(
+create function public.ai_gateway_reserve_screening_attempt(
  target_attempt uuid,
  target_lease_token text,
  target_input_fingerprint text,
@@ -85,10 +85,10 @@ begin
    claim.tenant::uuid,claim.candidate_id::uuid;
 end $bridge$;
 
-revoke all on function private.ai_gateway_reserve_screening_attempt(
+revoke all on function public.ai_gateway_reserve_screening_attempt(
  uuid,text,text,uuid,text,text,text,text,bigint
 ) from public,anon,authenticated,ai_meter_worker,erasure_purge_owner;
-grant execute on function private.ai_gateway_reserve_screening_attempt(
+grant execute on function public.ai_gateway_reserve_screening_attempt(
  uuid,text,text,uuid,text,text,text,text,bigint
 ) to screening_worker;
 commit;
