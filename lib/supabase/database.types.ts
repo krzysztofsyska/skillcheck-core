@@ -69,7 +69,7 @@ export type CandidateRetentionPolicy = {
 export type RetentionScheduleStatus = {
   revision: number; delegation_id: string | null; policy_revision: number | null;
   execution_mode: 'suggest_only' | 'automatic'; max_batch: number; revoked: boolean;
-  owner_current: boolean; execution_enabled: boolean; blockers: string[]; last_tick_at: string | null;
+  owner_current: boolean; authorization_enabled: boolean; production_ready: false; blockers: string[]; last_tick_at: string | null;
   suggestions: number; authorized: number; holds?: number; blocked?: number; lag_seconds?: number | null; oldest_pending_at?: string | null; expired_leases?: number;
 };
 export type ErasureSubjectResolution = { id: string | null; revision: number; candidate_ids: string[]; owner_current: boolean };

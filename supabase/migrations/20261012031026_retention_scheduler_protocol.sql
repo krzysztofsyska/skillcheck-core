@@ -61,7 +61,9 @@ declare d private.retention_delegations;old private.retention_schedule_commands;
  payload:=private.erasure_hash(jsonb_build_array('revoke',expected_revision));
  select * into old from private.retention_schedule_commands c where c.company_id=target_company and c.actor_id=auth.uid() and c.request_key=revoke_retention_schedule.request_key;
  if found then if old.payload_hash<>payload then raise exception using errcode='PT409',message='Request key reused';end if;return old.result_id;end if;
- if exists(select 1 from private.erasure_executions where company_id=target_company and pending_phase='erasing') then raise exception using errcode='PT409',message='Ledger reconciliation pending';end if;
+ -- Revocation stops future authorizations. Already exportable erasing reservations
+ -- retain their immutable authority and must reconcile; the company lock above
+ -- still serializes against a reservation transaction that has not committed.
  select * into d from private.retention_delegations where company_id=target_company order by revision desc limit 1;
  if d.revision is distinct from expected_revision then raise exception using errcode='PT409',message='Delegation revision changed';end if;
  insert into private.retention_delegations(company_id,owner_id,revision,policy_id,policy_revision,execution_mode,max_batch,revoked) values(target_company,auth.uid(),d.revision+1,d.policy_id,d.policy_revision,d.execution_mode,d.max_batch,true) returning id into result;
@@ -233,13 +235,17 @@ end;$$;
 
 create function public.get_retention_schedule(target_company uuid) returns jsonb
 language plpgsql stable security definer set search_path='' as $$
-declare d private.retention_delegations;t private.retention_ticks;c private.erasure_execution_config;begin
+declare d private.retention_delegations;t private.retention_ticks;c private.erasure_execution_config;p private.candidate_retention_policies;begin
  perform private.erasure_owner(target_company);
  select * into d from private.retention_delegations where company_id=target_company order by revision desc limit 1;
  select * into t from private.retention_ticks where company_id=target_company order by created_at desc,id desc limit 1;
  select * into c from private.erasure_execution_config where singleton;
+ select * into p from private.candidate_retention_policies where company_id=target_company order by revision desc limit 1;
  return jsonb_build_object('revision',coalesce(d.revision,0),'delegation_id',d.id,'policy_revision',d.policy_revision,'execution_mode',coalesce(d.execution_mode,'suggest_only'),
- 'max_batch',coalesce(d.max_batch,25),'revoked',coalesce(d.revoked,true),'owner_current',d.owner_id is not distinct from auth.uid(),'execution_enabled',false,
+ 'max_batch',coalesce(d.max_batch,25),'revoked',coalesce(d.revoked,true),'owner_current',d.owner_id is not distinct from auth.uid(),
+ 'authorization_enabled',coalesce(not d.revoked and d.execution_mode='automatic' and d.owner_id=auth.uid() and d.policy_id=p.id and d.policy_revision=p.revision and p.approved_by=auth.uid()
+  and c.enabled and c.external_inventory_verified and c.backup_horizon_days is not null and c.artifact_horizon_days is not null and c.retention_margin_days is not null and not c.restore_isolated,false),
+ 'production_ready',false,
  'blockers',case when c.enabled and c.external_inventory_verified and c.backup_horizon_days is not null and c.artifact_horizon_days is not null and c.retention_margin_days is not null and not c.restore_isolated then '[]'::jsonb else jsonb_build_array('execution_not_provisioned') end,
  'oldest_pending_at',(select min(created_at) from (select created_at from private.erasure_executions where company_id=target_company and phase in ('authorized','erasing') union all select r.created_at from private.erasure_requests r where r.company_id=target_company and r.status='authorized' and not exists(select 1 from private.erasure_executions e where e.request_id=r.id)) pending),
  'expired_leases',(select count(*) from private.erasure_executions where company_id=target_company and (pending_phase is not null or (phase='erasing' and not local_purged)) and lease_until<clock_timestamp()),

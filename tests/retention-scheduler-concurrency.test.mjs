@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
 import {Client} from 'pg';
 import {parse} from 'pg-connection-string';
 import {setupRankingDatabase,createRankingHarness} from './helpers/screening-ranking-fixture.mjs';
@@ -27,10 +28,10 @@ test('SC-010 R4 real PostgreSQL eligibility and delegated irreversible transitio
   else {const rec=await a.h.insert('recruitments',{company_id:f.companyId,position_id:f.position.id,name:'New active purpose',status:'open'});await a.h.insert('applications',{company_id:f.companyId,recruitment_id:rec.id,candidate_id:f.candidate.id});}
   const competing=await b.tick();assert.equal(competing.authorized,0);await a.db.query('commit');const retried=await b.tick();assert.ok(retried.results.some(r=>r.blockers?.includes('active_purpose')));await h.asUser(f.owner);assert.equal(await x.status(f),null);await x.revoke(f);
  });
- for(const first of ['revocation','erasing'])await t.test(`${first} excludes the competing delegated authority transition`,async()=>{
+ for(const first of ['revocation','erasing'])await t.test(`${first} serializes delegation revocation with the irreversible reservation`,async()=>{
   const f=await due(),request=(await x.tick()).results.find(r=>r.request_id)?.request_id;assert.ok(request);await x.transition(request,0,'authorized');const a=await session(),b=await session();await a.db.query('begin');
   if(first==='revocation'){await a.h.asUser(f.owner);await a.revoke(f);await conflict(b.reserve(request,1,'erasing'));await a.db.query('commit');await conflict(b.reserve(request,1,'erasing'));}
-  else {const reserved=await a.reserve(request,1,'erasing');await b.h.asUser(f.owner);await conflict(b.revoke(f));await a.db.query('commit');await conflict(b.revoke(f));await x.ack(reserved);await x.purge(request,2);}
+  else {const key=randomUUID(),reserved=await a.reserve(request,1,'erasing',key);await b.h.asUser(f.owner);await conflict(b.revoke(f));await a.db.query('commit');await b.revoke(f);assert.deepEqual(await b.reserve(request,1,'erasing',key),reserved);await x.ack(reserved);await x.purge(request,2);}
  });
  await t.test('stale-snapshot scheduler transactions cannot authorize from a previous eligibility snapshot',async()=>{
   const f=await due(),a=await session();await a.db.query('begin isolation level repeatable read');await conflict(a.tick());await a.db.query('rollback');await h.asUser(f.owner);assert.equal(await x.status(f),null);await x.revoke(f);

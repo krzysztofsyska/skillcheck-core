@@ -19,5 +19,5 @@ export async function revokeSchedule(companyId:string,_state:SchedulerActionStat
  const result=await client.rpc('revoke_retention_schedule',{target_company:companyId,expected_revision:expected,request_key:key});
  if(result.error)return {error:schedulerFailure(result.error.code)};
  try{uuid(result.data)}catch{return {error:'Nie otrzymano potwierdzenia wycofania. Sprawdź monitor.'}}
- return {saved:'Wycofano delegację dla kolejnych działań harmonogramu. Rozpoczęte nieodwracalne usuwanie wymaga dokończenia; sprawdź listę żądań.'};
+ return {saved:'Wycofano delegację dla kolejnych działań harmonogramu. Rozpoczęte lub nieodwracalnie zatwierdzone usuwanie, również oczekujące na potwierdzenie rejestru, wymaga dokończenia; sprawdź listę żądań.'};
 }

@@ -15,7 +15,7 @@ test('SC-010 R4 server-clock retention through the real signed erasure ledger',a
  await assertAcceptedErasureSchema(h,t);await x.configure();
  await t.test('owner-only activation is versioned and scheduler has no owner, DML, ACK or purge capability',async()=>{
   const f=await x.ready();const key=randomUUID();await h.asUser(f.owner);
-  const id=await x.schedule(f,'suggest_only',0,1,key);assert.equal(await x.schedule(f,'suggest_only',0,1,key),id);
+  const id=await x.schedule(f,'suggest_only',0,1,key);assert.equal(await x.schedule(f,'suggest_only',0,1,key),id);assert.equal((await x.scheduleStatus(f)).authorization_enabled,false);
   await assert.rejects(x.schedule(f,'automatic',0,1,key),conflict);
   for(const actor of [users.otherOwner,users.recruiter,users.viewer,users.outsider]){await h.asUser(actor);await assert.rejects(x.schedule(f));await assert.rejects(x.scheduleStatus(f));}
   await h.asAdmin();await db.exec('set role erasure_scheduler');
@@ -68,6 +68,15 @@ test('SC-010 R4 server-clock retention through the real signed erasure ledger',a
   const f=await x.ready();await x.close(f);await h.asUser(f.owner);await x.schedule(f,'automatic');await x.age(f);const result=(await x.tick()).results.find(r=>r.request_id);assert.ok(result);
   await x.transition(result.request_id,0,'authorized');await h.asUser(f.owner);await x.revoke(f);await assert.rejects(x.reserve(result.request_id,1,'erasing'),conflict);
   await h.asUser(f.owner);assert.equal((await x.status(f)).status,'authorized');
+ });
+ await t.test('revoking future delegation preserves committed erasing authority and prevents a new automatic freeze',async()=>{
+  const f=await x.ready(),future=await h.candidate(f);await h.asUser(f.owner);future.resolutionId=await x.resolve(future);await x.close(f);await x.schedule(f,'automatic');await x.age(f);
+  await h.asUser(f.owner);const enabled=await x.scheduleStatus(f);assert.equal(enabled.authorization_enabled,true);assert.equal(enabled.production_ready,false);
+  await x.configure({enabled:false});await h.asUser(f.owner);assert.equal((await x.scheduleStatus(f)).authorization_enabled,false);await x.configure();await h.asUser(f.owner);
+  const request=(await x.tick()).results.find(r=>r.request_id)?.request_id;assert.ok(request);await x.transition(request,0,'authorized');const key=randomUUID(),reserved=await x.reserve(request,1,'erasing',key);
+  await h.asUser(f.owner);await x.revoke(f);const revoked=await x.scheduleStatus(f);assert.equal(revoked.revoked,true);assert.equal(revoked.authorization_enabled,false);assert.equal(revoked.production_ready,false);
+  await db.query("update public.applications set status='rejected' where id=$1",[future.application.id]);await x.age(future);assert.equal((await x.tick()).authorized,0);await h.asUser(f.owner);assert.equal(await x.status(future),null);
+  assert.deepEqual(await x.reserve(request,1,'erasing',key),reserved);await x.ack(reserved);await x.purge(request,2);await h.asUser(f.owner);assert.equal(await x.status(future),null);assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[future.candidate.id])).rows[0].n,1);
  });
  await t.test('changed company owner cannot inherit a prior automatic delegation before first erasing',async()=>{
   const f=await x.ready();await x.close(f);await h.asUser(f.owner);await x.schedule(f,'automatic');await x.age(f);const result=(await x.tick()).results.find(r=>r.request_id);assert.ok(result);await x.transition(result.request_id,0,'authorized');

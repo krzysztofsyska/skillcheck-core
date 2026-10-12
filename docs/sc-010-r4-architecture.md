@@ -172,13 +172,19 @@ Przed pierwszą rezerwacją `erasing` serwer ponownie sprawdza aktualność
 delegacji, ownera, polityki, rozpoznania, hold oraz dowodu kwalifikacji.
 Sam zapis wcześniejszej autoryzacji schedulera nie omija tego sprawdzenia.
 
-Wycofanie delegacji przed tą granicą blokuje rozpoczęcie usuwania. Nie
-odmraża samoistnie istniejącego żądania; anulowanie przechodzi przez R2/R3.
+Wycofanie delegacji zapisuje nową wycofaną wersję i od razu blokuje przyszłe
+autoryzacje oraz pierwsze rezerwacje `erasing`, których jeszcze nie utworzono.
+Jest dostępne również wtedy, gdy inne żądanie ma oczekującą rezerwację
+`erasing`. Nie odmraża istniejącego żądania i nie cofa jego decyzji;
+anulowanie przechodzi osobno przez R2/R3.
+
 Od chwili utworzenia możliwej do wyeksportowania rezerwacji `erasing`
-nie wolno zakładać, że ledger jej nie przyjął. Mutacja, która miałaby
-wycofać tę decyzję, jest blokowana do reconciliation. Trwały `erasing`
-zachowuje przypiętą autoryzację; późniejsza zmiana ownera lub delegacji
-wpływa na przyszłe żądania, nie odwraca usuwania.
+nie wolno zakładać, że ledger jej nie przyjął. Ta rezerwacja zachowuje
+przypiętą autoryzację mimo późniejszego wycofania delegacji: dokładne
+ponowienie, ACK i nieodwracalne dokończenie pozostają dostępne. Zmiana
+polityki lub konfiguracji, która mogłaby zmienić już wyeksportowaną decyzję,
+pozostaje blokowana do reconciliation. Późniejsza delegacja nie zastępuje
+podpisanej autoryzacji trwającego strumienia.
 
 Odmowa kontaktu pozostaje niezależnie dostępna zgodnie z R3. Zmiana grafu
 wymaga odświeżenia manifestu i nowego ACK w tym samym nieodwracalnym strumieniu.
@@ -255,6 +261,12 @@ Historia ticków jest minimalna: identyfikator, firma, wersja, czas, rezultat,
 liczniki i kody. Nie zawiera CV, adresów kontaktowych, tekstów dostawców ani
 sekretów. Szczegóły osoby są dostępne jedynie w jej uprawnionym zakresie.
 Stronicowanie i ograniczenie batcha obejmują również endpointy monitoringu.
+
+`authorization_enabled` opisuje możliwość automatycznego autoryzowania
+przez bazę przy aktualnej delegacji, ownerze, polityce i lokalnej konfiguracji.
+Nie potwierdza uruchomienia workera, wykonania purge ani gotowości produkcji.
+Ocena `production_ready` pozostaje osobnym wynikiem zależnym od zewnętrznych
+dowodów; brak tych dowodów nie jest zastępowany samą flagą konfiguracji bazy.
 
 Kontrola operatorska rozdziela stan produktu od dowodów zewnętrznych.
 Zdrowia ledger nie potwierdza lokalna flaga: potrzebny jest podpisany świeży
