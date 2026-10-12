@@ -100,7 +100,7 @@ export function summarizeAiCosts(
     add(report.total, row);
     add(bucket(report.byTask, row.task), row);
     add(bucket(report.byProcess, row.processId ?? 'unassigned'), row);
-    add(bucket(report.byCandidate, row.candidatePseudonym ?? 'unassigned'), row);
+    add(bucket(report.byCandidate, row.candidatePseudonym ?? '\u0000no-candidate'), row);
   }
   return report;
 }
