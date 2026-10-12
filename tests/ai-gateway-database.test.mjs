@@ -238,7 +238,10 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
 
       await admissionClient.query('begin');
       await admissionClient.query('set local role ai_meter_worker');
-      const admission = admissionClient.query(reserveQuery, reserveArgs(idB, randomUUID(), 50));
+      // Register the rejection handler immediately: an early SQL rejection must
+      // be asserted as a test result, not reported as a dangling unhandled rejection.
+      const admission = admissionClient.query(reserveQuery, reserveArgs(idB, randomUUID(), 50))
+        .then(() => ({ok:true}), error => ({ok:false,error}));
       let waiting = false;
       for (let i = 0; i < 40; i++) {
         const state = await db.query(
@@ -251,7 +254,9 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
       // Waiters must observe the tenant budget lock even though they do not
       // access the same usage row as the operation settling above estimate.
       await settlementClient.query('commit');
-      await assert.rejects(admission, /SC021_BUDGET_EXHAUSTED/);
+      const admissionResult = await admission;
+      assert.equal(admissionResult.ok,false);
+      assert.match(admissionResult.error.message,/SC021_BUDGET_EXHAUSTED/);
       assert.equal(waiting, true, 'reservation must wait behind settlement tenant budget lock');
       await admissionClient.query('rollback');
     } finally {
