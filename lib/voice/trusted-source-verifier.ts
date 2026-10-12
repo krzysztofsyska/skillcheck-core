@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createVoicePlanWriteSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
 import { selectReviewedScreeningGaps } from "./screening-gap-selection.ts";
 import type { InterviewSource } from "./interview-plan.ts";
-import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest} from "./template-registry.ts";
+import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest,assertPinnedVoiceQuestions} from "./template-registry.ts";
 
 type Row=Record<string,any>;
 export type SqlClient={query(sql:string,params?:readonly unknown[]):Promise<{rows:Row[]}>};
@@ -141,6 +141,9 @@ async function reconstructLocked(
        result.maximumSeconds!==template.maximumSeconds||
        result.recordingAllowed!==template.recordingAllowed||
        result.noticeRequired!==template.noticeRequired)fail("TEMPLATE_CHANGED");
+    // Reject silent generator drift in order, timing, counts and question IDs.
+    try{assertPinnedVoiceQuestions(source,result.questions);}
+    catch{fail("TEMPLATE_CHANGED");}
     for(const q of result.questions){
       if(q.kind==="common"){
         const allowed=template.behaviorQuestionTexts.find(x=>x.id===q.criterionId);
