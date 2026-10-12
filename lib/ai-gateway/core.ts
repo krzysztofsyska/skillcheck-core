@@ -140,10 +140,19 @@ export function packageMargin(financials: PackageFinancials) {
     throw new Error('SC021_COST_OVERFLOW');
   }
   const margin = Number(exactMargin);
-  return {
-    known: true as const,
-    marginPlnGrosze: margin,
-    marginPercent: revenueNetPlnGrosze > 0
-      ? Math.round((margin / revenueNetPlnGrosze) * 10_000) / 100 : null,
-  };
+  let marginPercent: number | null = null;
+  if (revenueNetPlnGrosze > 0) {
+    // Basis points (0.01%) are rounded using exact integers, not a lossy
+    // floating-point intermediate which can exceed MAX_SAFE_INTEGER.
+    const numerator = exactMargin * 10_000n;
+    const denominator = BigInt(revenueNetPlnGrosze);
+    let rounded = numerator / denominator; // signed division truncates toward zero
+    const remainder = numerator % denominator;
+    if (numerator >= 0n && remainder * 2n >= denominator) rounded += 1n;
+    if (numerator < 0n && -remainder * 2n > denominator) rounded -= 1n;
+    if (rounded > BigInt(Number.MAX_SAFE_INTEGER) ||
+        rounded < BigInt(Number.MIN_SAFE_INTEGER)) throw new Error('SC021_COST_OVERFLOW');
+    marginPercent = Number(rounded) / 100;
+  }
+  return { known: true as const, marginPlnGrosze: margin, marginPercent };
 }
