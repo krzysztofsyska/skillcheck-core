@@ -201,3 +201,15 @@ test('printable mathematical and punctuation citations count toward three visibl
     assert.throws(()=>evaluateCompetencyTest(definition(),{workSample},rows));
   }
 });
+
+test('keycap emoji variation sequences are valid in answers and literal citations',()=>{
+  for(const token of ['1\uFE0F\u20E3','2\uFE0F\u20E3','3\u20E3','#\uFE0F\u20E3','*\uFE0F\u20E3']){
+    const workSample='Priorytet '+token+': analiza';
+    assert.equal(parseCompetencyTestSubmission(definition(),{workSample}).workSample,workSample);
+    const rows=review();rows[0]={criterionIndex:0,rating:'meets',evidence:'Priorytet '+token};
+    assert.equal(evaluateCompetencyTest(definition(),{workSample},rows).criterionResults[0].rating,'meets');
+  }
+  for(const workSample of ['Plan 1\uFE0F bez keycap','Kryterium #\uFE0F bez keycap']) {
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
+  }
+});

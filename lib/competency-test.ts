@@ -49,7 +49,10 @@ function visibleContentCount(value: string): number {
     if (defaultIgnorable.test(char)) {
       const previous = chars[index - 1] ?? '';
       const next = chars[index + 1] ?? '';
-      const emojiVariation = (char === '\uFE0E' || char === '\uFE0F') && pictograph.test(previous);
+      const keycapVariation = char === '\uFE0F' && /[0-9#*]/.test(previous)
+        && previous.length === 1 && next === '\u20E3';
+      const emojiVariation = (char === '\uFE0E' || char === '\uFE0F')
+        && (pictograph.test(previous) || keycapVariation);
       // Emoji modifiers and variation selectors can intervene before a ZWJ.
       let previousEmoji = index - 1;
       while (previousEmoji >= 0 && (emojiModifier.test(chars[previousEmoji])
