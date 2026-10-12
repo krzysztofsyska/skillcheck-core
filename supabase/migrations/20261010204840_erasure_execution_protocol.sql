@@ -245,25 +245,34 @@ begin
   if e.company_id<>tenant or e.candidate_ids<>subjects or e.generation<>(value->>'generation')::bigint or e.scope_kind<>value->>'scope_kind' then raise exception using errcode='PT409',message='Recovery stream scope changed';end if;
   if e.sequence>seq or (e.sequence=seq and e.event_hash is distinct from event_hash) then raise exception using errcode='PT409',message='Recovery stream regressed';end if;
   if e.phase in ('erasing','active_data_erased') and phase in ('authorized','cancelled') then raise exception using errcode='PT409',message='Irreversible recovery phase';end if;
+  -- A completed checkpoint is not proof that a restored graph is still absent.
+  -- Recheck the reviewed adapters before preserving the original receipt/counts.
+  if e.sequence=seq and e.event_hash=event_hash and e.local_purged and e.phase=phase and phase in ('erasing','active_data_erased') then
+   inventory:=private.prepare_erasure_purge_manifest(request);
+   if inventory->'counts'='{}'::jsonb then
+    perform private.install_erasure_tombstones(request);
+    update private.erasure_executions set restore_checkpoint_sequence=checkpoint_sequence,restore_checkpoint_hash=checkpoint_hash where request_id=request;
+    return jsonb_build_object('request_id',request,'phase',e.phase,'sequence',seq,'restore_isolated',true,'requires_purge',false,'local_purged',true,'replay_noop',true,'scope_absent',true);
+   end if;
+  end if;
  end if;
  insert into private.erasure_executions(request_id,company_id,candidate_ids,scope_kind,owner_id,policy_copy,resolution_revision,generation,phase,sequence,event_hash,envelope,envelope_hash,manifest_hash,schema_signature,recovery_retain_until,created_at,restore_checkpoint_sequence,restore_checkpoint_hash)
  values(request,tenant,subjects,value->>'scope_kind',(value->'authorization'->>'actor_id')::uuid,value->'policy',(value->>'resolution_revision')::bigint,(value->>'generation')::bigint,
  case when phase='active_data_erased' then 'erasing' else phase end,seq,event_hash,value,private.erasure_hash(value),value->>'manifest_hash',value->>'schema_signature',(value->>'retention_until')::timestamptz,(value->>'authorized_at')::timestamptz,checkpoint_sequence,checkpoint_hash)
  on conflict(request_id) do update set phase=excluded.phase,sequence=excluded.sequence,event_hash=excluded.event_hash,envelope=excluded.envelope,envelope_hash=excluded.envelope_hash,
- reservation_id=null,pending_phase=null,reservation_key=null,lease_until=null,local_purged=false,restore_checkpoint_sequence=excluded.restore_checkpoint_sequence,restore_checkpoint_hash=excluded.restore_checkpoint_hash;
- -- Age is not erasure authority. For irreversible or pending authorizations,
+ reservation_id=null,pending_phase=null,reservation_key=null,lease_until=null,local_purged=false,recovery_retain_until=excluded.recovery_retain_until,restore_checkpoint_sequence=excluded.restore_checkpoint_sequence,restore_checkpoint_hash=excluded.restore_checkpoint_hash;
+ -- Age is not erasure authority. For irreversible authorizations,
  -- an expired envelope may acknowledge ONLY an already absent, fully reviewed
  -- operational/R1/R2 scope. R3 recovery control rows are deliberately excluded
  -- by the fixed inventory adapters. Unknown typed JSON or schema fails closed.
  -- Signed cancellation is separately replayed below: its authority is the
  -- terminal cancelled event, never its expiry, and may leave a live candidate.
- if expired and phase<>'cancelled' then
+ if expired and phase in ('erasing','active_data_erased') then
   inventory:=private.prepare_erasure_purge_manifest(request);
   if inventory->'counts' is distinct from '{}'::jsonb then
    raise exception using errcode='PT409',message='Expired recovery scope still present';end if;
   if phase in ('erasing','active_data_erased') then
-   -- The ordinary helper intentionally requires an unexpired execution lease.
-   -- Here full verified history + strict absence proof authorize only retaining
+   -- Full verified history + strict absence proof authorize only retaining
    -- retired IDs; no DELETE, lease extension, or operational mutation occurs.
    insert into private.retired_candidate_ids(candidate_id,company_id,generation,recovery_event_id,retain_until)
    select id,tenant,(value->>'generation')::bigint,event_hash,(value->>'retention_until')::timestamptz from unnest(subjects) s(id)
@@ -466,13 +475,14 @@ begin
  perform 1 from public.candidates where company_id=tenant and id=any(ids) order by id for share nowait;
  get diagnostics total=row_count;
  if total<>cardinality(ids) then raise exception using errcode='PT404',message='Resource unavailable';end if;
+ payload:=private.erasure_hash(jsonb_build_array(target_candidate,ids,expected_revision));
+ select * into old from private.erasure_configuration_requests where company_id=tenant and actor_id=auth.uid() and operation='resolution' and erasure_configuration_requests.request_key=confirm_erasure_subject.request_key;
+ if found then if old.payload_hash<>payload then raise exception using errcode='PT409',message='Request key reused';end if;return old.result_id;end if;
  if exists(select 1 from unnest(ids) s(id) where private.erasure_candidate_frozen(s.id)) then raise exception using errcode='PT409',message='Candidate workflow frozen';end if;
  -- Removing a frozen member from the new list must not bypass its existing subject binding.
  if exists(select 1 from unnest(coalesce((select sr.candidate_ids from private.erasure_subject_resolutions sr where sr.company_id=tenant and sr.anchor_candidate_id=target_candidate order by sr.revision desc limit 1),'{}'::uuid[])) previous(id)
  where private.erasure_candidate_frozen(previous.id)) then raise exception using errcode='PT409',message='Candidate workflow frozen';end if;
- payload:=private.erasure_hash(jsonb_build_array(target_candidate,ids,expected_revision));
- select * into old from private.erasure_configuration_requests where company_id=tenant and actor_id=auth.uid() and operation='resolution' and erasure_configuration_requests.request_key=confirm_erasure_subject.request_key;
- if found then if old.payload_hash<>payload then raise exception using errcode='PT409',message='Request key reused';end if;return old.result_id;end if;
+
  select coalesce(max(revision),0) into latest from private.erasure_subject_resolutions where company_id=tenant and anchor_candidate_id=target_candidate;
  if latest<>expected_revision then raise exception using errcode='PT409',message='Subject revision changed';end if;
  insert into private.erasure_subject_resolutions(company_id,anchor_candidate_id,candidate_ids,revision,confirmed_by)

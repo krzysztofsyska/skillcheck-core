@@ -80,7 +80,7 @@ test('SC-010 R3 acknowledged erasure execution and restore capability boundaries
  });
 
  await t.test('verified ledger restores a purge authority from a backup preceding policy and authorization',async()=>{
-  await x.configure();const f=await h.seed(),restoreLedger=new PGlite();t.after(()=>restoreLedger.close());
+  await x.configure();const f=await h.seed();await h.asAdmin();const candidateBackup=(await db.query('select to_jsonb(c) value from public.candidates c where id=$1',[f.candidate.id])).rows[0].value;const restoreLedger=new PGlite();t.after(()=>restoreLedger.close());
   const restored=await setupExecutionLedger(executionHarness(h),restoreLedger);let request;
   await h.asAdmin();await db.exec('begin');
   try{
@@ -95,9 +95,27 @@ test('SC-010 R3 acknowledged erasure execution and restore capability boundaries
   await assert.rejects(restored.preview(f),conflict);await assert.rejects(restored.getResolution(f),conflict);
   assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[f.candidate.id])).rows[0].n,0);
   const replay=await restored.replay();assert.equal(replay.replayed,1);assert.equal(replay.verifiedEvents,3);
-  const replayAgain=await restored.replay();assert.equal(replayAgain.checkpoint,replay.checkpoint);
+  await h.asAdmin();const completed=(await db.query('select local_purged,counts,receipt_id from private.erasure_executions where request_id=$1',[request])).rows[0];
+  const receiptsBefore=(await db.query('select count(*)::int n from private.erasure_receipts')).rows[0].n;
+  const replayAgain=await restored.replay();assert.equal(replayAgain.checkpoint,replay.checkpoint);assert.equal(replayAgain.results[0].replay_noop,true);
+  await h.asAdmin();assert.deepEqual((await db.query('select local_purged,counts,receipt_id from private.erasure_executions where request_id=$1',[request])).rows[0],completed);
+  assert.equal((await db.query('select count(*)::int n from private.erasure_receipts')).rows[0].n,receiptsBefore);
+  // A mixed backup can contain a completed execution marker AND restored data.
+  // Privileged fault injection models that state; the second replay must purge it.
+  await db.exec('alter table public.candidates disable trigger user');
+  try{await db.query('insert into public.candidates select * from jsonb_populate_record(null::public.candidates,$1::jsonb)',[JSON.stringify(candidateBackup)]);}finally{await db.exec('alter table public.candidates enable trigger user');}
+  const withRestoredData=await restored.replay();assert.notEqual(withRestoredData.results[0].replay_noop,true);
+
   await h.asAdmin();assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[f.candidate.id])).rows[0].n,0);
   await restored.configure();await h.asUser(f.owner);await assert.rejects(h.insert('candidates',{id:f.candidate.id,company_id:f.companyId,first_name:'Old',last_name:'Restore UUID'}),conflict);
+ });
+
+ await t.test('exact subject resolution retry survives freeze without permitting a new mutation',async()=>{
+  await x.configure();const f=await x.ready(),key=randomUUID();
+  f.resolutionId=await x.resolve(f,[f.candidate.id],1,key);await x.freeze(f);
+  await h.asUser(f.owner);assert.equal(await x.resolve(f,[f.candidate.id],1,key),f.resolutionId);
+  await assert.rejects(x.resolve(f,[f.candidate.id],2,key),conflict);
+  await assert.rejects(x.resolve(f,[f.candidate.id],2,randomUUID()),conflict);
  });
 
  await t.test('finite owner holds block erasing until explicit release and cannot race after erasing reservation',async()=>{
@@ -232,10 +250,20 @@ test('SC-010 R3 acknowledged erasure execution and restore capability boundaries
   assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[cancelled.f.candidate.id])).rows[0].n,1);
   for(const phases of [['authorized'],['authorized','erasing','active_data_erased']]){
    const present=await history(phases);await present.historical.configure({restore_isolated:true});
-   try{await assert.rejects(present.historical.replay(),conflict);}finally{await present.historical.configure();}
+   try{
+    if(phases.at(-1)==='authorized'){
+     const frozenReplay=await present.historical.replay();assert.equal(frozenReplay.results[0].phase,'authorized');assert.equal(frozenReplay.results[0].local_purged,false);
+    }else await assert.rejects(present.historical.replay(),conflict);
+   }finally{await present.historical.configure();}
+   if(phases.at(-1)==='authorized'){
+    await h.asUser(present.f.owner);assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[present.f.candidate.id])).rows[0].n,0);
+    await assert.rejects(h.insert('candidate_documents',{company_id:present.f.companyId,candidate_id:present.f.candidate.id,source_text:'late',redacted_text:'late'}),conflict);
+    await h.asAdmin();const frozenState=(await db.query('select request_id,phase,local_purged from private.erasure_executions where $1=any(candidate_ids)',[present.f.candidate.id])).rows[0];
+    assert.equal(frozenState.phase,'authorized');assert.equal(frozenState.local_purged,false);await assert.rejects(present.historical.reserve(frozenState.request_id,1,'erasing'),conflict);
+   }
    await h.asAdmin();assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[present.f.candidate.id])).rows[0].n,1);
    const absent=await history(phases,{absent:true});await absent.historical.configure({restore_isolated:true});
-   try{const result=await absent.historical.replay();assert.equal(result.replayed,1);assert.equal(result.results[0].expired_noop,true);assert.equal(result.results[0].scope_absent,true);}finally{await absent.historical.configure();}
+   try{const result=await absent.historical.replay();assert.equal(result.replayed,1);if(phases.at(-1)==='authorized'){assert.equal(result.results[0].phase,'authorized');assert.equal(result.results[0].local_purged,false);}else{assert.equal(result.results[0].expired_noop,true);assert.equal(result.results[0].scope_absent,true);}}finally{await absent.historical.configure();}
    await h.asUser(absent.f.owner);if(phases.at(-1)!=='authorized')await assert.rejects(h.insert('candidates',{id:absent.f.candidate.id,company_id:absent.f.companyId,first_name:'Expired','last_name':'Old UUID'}),conflict);
   }
  });

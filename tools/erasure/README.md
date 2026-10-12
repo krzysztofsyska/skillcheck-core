@@ -90,10 +90,12 @@ alone never authorizes a new erasure.
 
 Expired recovery envelopes are never filtered in the Node runtime. They undergo
 full signature/history verification and reach the isolated SQL ingress just like
-current envelopes. For expired pending authorizations or irreversible phases,
+current envelopes. For expired irreversible phases,
 only that ingress can prove the exact signed scope is already absent from all
 reviewed operational and R1/R2 adapters (including holds and typed JSON). Any
-remaining scope or unknown adapter blocks those recoveries. Expired cancellation
+remaining scope or unknown adapter blocks those recoveries. A signed authorized
+event restores only the non-destructive freeze even after expiry; it cannot open
+a new erasing transition after its horizon. Expired cancellation
 is handled separately: the signed terminal cancellation remains authoritative and
 can reconcile only its own request, including a live candidate. Expiry itself
 never authorizes a purge, releases a freeze, changes a phase, or removes retired
@@ -102,3 +104,10 @@ finite retain_until. Their enforcement deliberately does not expire, and no
 automatic tombstone garbage collection is implemented; removal requires a
 separately reviewed pruning protocol. A recent clean restore can acknowledge old
 absent scopes while an old backup containing their erased data remains isolated.
+
+Replaying an identical completed sequence and event hash preserves the original
+receipt and deletion counts only after verifying that its full reviewed graph
+is still absent. Resurrected data must pass the normal recovery path, and expired
+irreversible scope with remaining data fails closed. Exact resolution-command
+retries return the committed result before current freeze checks; changed payloads
+under the same request key are rejected.

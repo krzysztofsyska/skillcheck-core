@@ -60,7 +60,7 @@ Odtwarzana baza pozostaje izolowana od produktu i workerów. Przed pierwszym rep
 
 Envelope zawiera podpisany zakres i kopię polityki/autoryzacji. Backup sprzed powstania żądania lub polityki nie wymaga odtwarzania konta dawnego ownera. Najpierw instalowane są tombstones, następnie odtwarzany jest dokładny zakres na przywróconym grafie. Brakujące znane zasoby są idempotentne; nieznane zależności blokują otwarcie. `authorized` przywraca wyłącznie freeze, `cancelled` nie upoważnia do purge.
 
-Wygaśnięcie envelope nie upoważnia do usuwania ani pomijania weryfikacji. Cała historia nadal podlega sprawdzeniu. Wygasły wpis może zakończyć replay bez usuwania tylko po wykazaniu braku całego znanego grafu operacyjnego i R1/R2; wpisy nieodwracalne zachowują ochronę starych UUID. Obecne dane blokują taki replay. Podpisane anulowanie jest odtwarzane osobno, na podstawie decyzji w rejestrze.
+Wygaśnięcie envelope nie upoważnia do usuwania ani pomijania weryfikacji. Cała historia nadal podlega sprawdzeniu. Wygasły wpis nieodwracalny może zakończyć replay bez usuwania tylko po wykazaniu braku całego znanego grafu operacyjnego i R1/R2; wpisy nieodwracalne zachowują ochronę starych UUID. Obecne dane blokują taki replay. Podpisane anulowanie jest odtwarzane osobno, na podstawie decyzji w rejestrze.
 
 ## UI i zakres gotowości
 
@@ -75,3 +75,5 @@ Wymagane testy: pełny graf dwóch firm, izolacja każdej roli, brak możliwośc
 Wyniki, SHA i znane blokady są utrzymywane w PR. Integracja wymaga OWNER ACCEPTANCE. Produkcja i rzeczywiste usuwanie wymagają osobnej zgody i kompletnego przygotowania środowiska.
 
 Pierwszy pełny przebieg CI po poprawce konfliktu blokady zakończył się sukcesem. Końcowy review GitHub wskazał dodatkowe przypadki polityki, zakresu osoby, wygasłego replay i etykiety statusu; dodano poprawki i regresje. Aktualne liczniki testów, wynik niezależnego przeglądu oraz CI dokładnego końcowego SHA są zapisane w PR.
+
+Przegląd przed scaleniem 2026-10-12: wygasłe `authorized` odtwarza wyłącznie zamrożenie, bez nowej zgody na purge. Ponowienie zakończonego replay zachowuje pierwotny receipt i liczniki po sprawdzeniu braku całego grafu. Dokładne ponowienie potwierdzenia zakresu zwraca zapisany wynik również po zamrożeniu; inny payload z tym samym kluczem jest odrzucany. Zgoda właściciela na integrację otrzymana 2026-10-12 04:49 Europe/Warsaw; końcowe CI i SHA w PR.
