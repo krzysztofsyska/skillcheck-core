@@ -151,7 +151,16 @@ export async function runScreeningAttempt(attemptId: string, runtime: ScreeningW
       runtime.log({ attempt_id: claim.attempt_id, analysis_id: claim.analysis_id, status: 'failed', error_code: 'worker_internal_error' });
       return { status: 'failed' as const, code: 'worker_internal_error' as const };
     }
-    runtime.log({ attempt_id: claim.attempt_id, analysis_id: claim.analysis_id, status: 'failed', error_code: code });
+    runtime.log({
+      attempt_id: claim.attempt_id,
+      analysis_id: claim.analysis_id,
+      status: 'failed',
+      error_code: code,
+      ...(error instanceof ScreeningProviderError ? {
+        diagnostic_reason: error.diagnosticReason,
+        http_status: error.httpStatus,
+      } : {}),
+    });
     return { status: 'failed' as const, code };
   }
 
