@@ -114,6 +114,47 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     assert.equal(race.filter(x => x.status === 'fulfilled').length, 1);
     assert.equal(race.filter(x => x.status === 'rejected').length, 2);
     assert.equal((await db.query('select count(*)::int as count from public.ai_gateway_usage where company_id=$1', [idB])).rows[0].count, 1);
+
+    // Codex P1: an in-flight settlement above its reservation locks tenant budget.
+    // A new reservation must wait and then see the committed higher actual cost.
+    await db.query('delete from public.ai_gateway_usage where company_id=$1', [idB]);
+    const oldAttempt = randomUUID();
+    await worker(reserveQuery, reserveArgs(idB, oldAttempt, 40));
+    const settlementClient = new pg.Client({ connectionString: uri.toString() });
+    const admissionClient = new pg.Client({ connectionString: uri.toString() });
+    await settlementClient.connect();
+    await admissionClient.connect();
+    try {
+      await settlementClient.query('begin');
+      await settlementClient.query('set local role ai_meter_worker');
+      const actual = await settlementClient.query(settleQuery, [idB, oldAttempt, 90, 100, 0, 10, 'resp_race']);
+      assert.equal(actual.rows[0].settled, true);
+
+      await admissionClient.query('begin');
+      await admissionClient.query('set local role ai_meter_worker');
+      const admission = admissionClient.query(reserveQuery, reserveArgs(idB, randomUUID(), 50));
+      let waiting = false;
+      for (let i = 0; i < 40; i++) {
+        const state = await db.query(
+          "select count(*)::int as count from pg_stat_activity where pid = $1 and wait_event_type = 'Lock'",
+          [admissionClient.processID],
+        );
+        if (state.rows[0].count > 0) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      // Waiters must observe the tenant budget lock even though they do not
+      // access the same usage row as the operation settling above estimate.
+      await settlementClient.query('commit');
+      await assert.rejects(admission, /SC021_BUDGET_EXHAUSTED/);
+      assert.equal(waiting, true, 'reservation must wait behind settlement tenant budget lock');
+      await admissionClient.query('rollback');
+    } finally {
+      await settlementClient.query('rollback').catch(() => {});
+      await admissionClient.query('rollback').catch(() => {});
+      await settlementClient.end();
+      await admissionClient.end();
+    }
+
   } finally {
     if (db) await db.end();
     await admin.query('drop database if exists ' + dbName + ' with (force)');
