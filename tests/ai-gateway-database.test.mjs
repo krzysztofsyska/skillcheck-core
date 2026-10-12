@@ -170,10 +170,13 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
       "from private.ai_gateway_candidate_links l where l.company_id=$2 and l.candidate_id=$3) v";
     await db.query(manifestSql,[purgeRequest,idA,candidateA]);
 
-    async function startSignedSyntheticPurge(client,request,company) {
+    async function startSignedSyntheticPurge(client,request,company,{tamper=false}={}) {
       await client.query('begin');
       await client.query("insert into private.erasure_purge_context(txid,request_id,company_id,manifest_hash,mode) values(txid_current(),$1,$2,'synthetic-r5-manifest','delete')",[request,company]);
       await client.query("insert into private.erasure_purge_context_rows(txid,adapter,row_key,row_hash,command) select txid_current(),adapter,row_key,row_hash,'delete' from private.erasure_purge_manifest where request_id=$1",[request]);
+      // The signed context is prepared by a privileged test operator, never
+      // modified by the restricted purge executor after SET LOCAL ROLE.
+      if (tamper) await client.query("update private.erasure_purge_context_rows set row_hash='tampered' where adapter='public.ai_gateway_usage'");
       await client.query('set local role erasure_purge_owner');
     }
     await assert.rejects(worker(candidateReserve,[idA,candidateA,randomUUID(),randomUUID(),
@@ -188,8 +191,7 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     try {
       // A forged/missing candidate link hash must stop deletion even when
       // role, request, frozen candidate and transaction context are present.
-      await startSignedSyntheticPurge(eraser,purgeRequest,idA);
-      await eraser.query("update private.erasure_purge_context_rows set row_hash='tampered' where adapter='public.ai_gateway_usage'");
+      await startSignedSyntheticPurge(eraser,purgeRequest,idA,{tamper:true});
       await assert.rejects(eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid)',[purgeRequest]),/SC021_PURGE_MANIFEST_MISMATCH/);
       await eraser.query('rollback');
       await startSignedSyntheticPurge(eraser,purgeRequest,idA);
