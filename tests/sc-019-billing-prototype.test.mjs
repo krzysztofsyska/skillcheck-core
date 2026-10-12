@@ -134,18 +134,18 @@ test('SC-019 prototype: completed analyses cannot be refunded or reopened; faile
     );
   }
   assert.equal((await h.db.query('select execution_status from public.screening_analysis_versions where id=$1',[id(201)])).rows[0].execution_status,'completed');
-  assert.equal((await h.balance(companyA)).available,0);
+  assert.equal((await h.db.query('select available from private.sc19_balances where company_id=$1',[companyA])).rows[0].available,0);
 
   // The failure refunds one credit, but another analysis consumes it first.
   await h.db.query("update public.screening_analysis_versions set execution_status='failed' where id=$1",[id(202)]);
-  assert.equal((await h.balance(companyA)).available,1);
+  assert.equal((await h.db.query('select available from private.sc19_balances where company_id=$1',[companyA])).rows[0].available,1);
   await h.db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[id(206),companyA]);
   await assert.rejects(
     h.db.query("update public.screening_analysis_versions set execution_status='pending' where id=$1",[id(202)]),
     e=>e.code==='PT402',
   );
   assert.equal((await h.db.query('select execution_status from public.screening_analysis_versions where id=$1',[id(202)])).rows[0].execution_status,'failed');
-  assert.equal((await h.balance(companyA)).available,0);
+  assert.equal((await h.db.query('select available from private.sc19_balances where company_id=$1',[companyA])).rows[0].available,0);
   const journal=(await h.db.query('select reason,delta from private.sc19_credit_journal where analysis_id=$1',[id(202)])).rows;
   assert.deepEqual(journal.map(x=>x.reason).sort(),['analysis_release','analysis_reserve']);
   assert.equal(journal.reduce((sum,x)=>sum+x.delta,0),0);
