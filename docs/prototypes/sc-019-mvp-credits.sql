@@ -118,7 +118,7 @@ create function public.sc19_get_balance(target_company uuid)
 returns table(plan text,available integer,free_claimed boolean)
 language plpgsql stable security definer set search_path = '' as $$
 begin
-  if (select auth.uid()) is null or not private.has_company_access(target_company) then
+  if (select auth.uid()) is null or not private.has_company_access(target_company, false) then
     raise exception 'sc19_company_forbidden' using errcode='42501';
   end if;
   return query select b.plan,b.available,b.free_claimed
