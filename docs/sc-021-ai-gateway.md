@@ -35,3 +35,28 @@ UWAGA: warstwa wykonawcza i SQL nie są jeszcze podłączone do istniejącego SC
 2. Polityka priorytetów i rollback w panelu operatora; egzekwowanie budżetów oraz alertów w działających operacjach poza screening.
 3. Dashboard koszty/kandydat/proces/pakiet, wielowalutowe koszty usług zewnętrznych i rzeczywiste przychody netto.
 4. Review bezpieczeństwa SQL/RLS, pełne CI, pilotaż na Preview i jawna zgoda właściciela na produkcję.
+
+
+## Release blocker confirmed by CI on 2026-10-12
+
+The base integration commit 7a365794 passed the complete Checks workflow
+(run 38219575738). After SC-021 adds ai_gateway_limits and ai_gateway_usage,
+the new module's isolated PostgreSQL and Node tests pass, but global Checks
+fails the SC-010 R4 reviewed schema signature:
+
+- approved SC-010 R4 signature: d2e7725bd5051e15cb7e700a128026a3ad6f0d87f9d3bba3de8e1539c9d3eabd
+- new schema signature: e0a0cbb529d469c9b2ead6c44c5b1b2edbb3c49e5e7578e6fc8adfc93b650752
+- reason: SC-010 monitors all public/private tables and explicitly blocks unknown dependencies.
+
+This is an expected safety guard, not a flaky CI failure. Never change the
+SC-010 expected hash, disable the schema check, or move cost tables into an
+unmonitored schema to make CI green.
+
+Before enabling this migration: separately review candidate-linked usage
+(including candidate_pseudonym, operation_id and process_id), extend the
+inventory/purge/retention graph, issue a new immutable reviewed R5 baseline,
+and test erasure plus retained aggregate financial accounting. Ledger records
+must not retain an identifiable candidate after lawful erasure, and erasure
+must not silently credit back real provider costs. Until these decisions are
+implemented, PR #108 remains DRAFT and NO MERGE / NO PRODUCTION. The dedicated
+SC-021 workflow demonstrates the module's correctness in isolation only.
