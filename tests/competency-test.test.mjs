@@ -139,3 +139,44 @@ test('ordinary Polish letters, digits and multiline candidate excerpts remain va
   assert.equal(result.criterionResults[0].evidence, 'analizuję 3 procesy');
   assert.equal(result.score,null); // 1/5 documented criteria is not enough
 });
+
+test('visible emoji formatting is valid in a readable answer and evidence', () => {
+  const answerWithEmoji = {workSample: 'Plan działania ❤️ oraz zadania 👩‍💻 są opisane.'};
+  assert.equal(parseCompetencyTestSubmission(definition(),answerWithEmoji).workSample,answerWithEmoji.workSample);
+  const rows=review();
+  rows[0]={criterionIndex:0,rating:'meets',evidence:'działania ❤️'};
+  assert.equal(evaluateCompetencyTest(definition(),answerWithEmoji,rows).criterionResults[0].evidence,'działania ❤️');
+  rows[0]={criterionIndex:0,rating:'meets',evidence:'zadania 👩‍💻'};
+  assert.equal(evaluateCompetencyTest(definition(),answerWithEmoji,rows).criterionResults[0].rating,'meets');
+});
+
+test('soft hyphen inside a visible word is allowed, but stray invisible formats are not',()=>{
+  const workSample='Ko\u00admunikacja: przygotowuję raport.';
+  assert.equal(parseCompetencyTestSubmission(definition(),{workSample}).workSample,workSample);
+  const rows=review();
+  rows[0]={criterionIndex:0,rating:'meets',evidence:'Ko\u00admunikacja'};
+  assert.equal(evaluateCompetencyTest(definition(),{workSample},rows).criterionResults[0].rating,'meets');
+  for(const workSample of ['Plan\u00ad', '\u00adPlan','Plan\u200b działania','Plan\u202e działania','Plan\u200d działania']) {
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
+  }
+});
+
+test('Braille blank and Unicode space padding never satisfy the three-visible-symbol evidence minimum',()=>{
+  for(const padding of ['\u2800\u2800', '\u2000\u2000','  ','\u2800 \u2800']){
+    const workSample='a'+padding+' produkt';
+    const rows=review();
+    rows[0]={criterionIndex:0,rating:'above',evidence:'a'+padding};
+    assert.throws(()=>evaluateCompetencyTest(definition(),{workSample},rows),/cytatu/);
+  }
+  for(const workSample of ['\u2800\u2800\u2800','\u2000\u2000\u2000']) {
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
+  }
+});
+
+test('evidence with three visible letters is sufficient despite formatting padding',()=>{
+  const workSample='abc\u2800\u2800 opis zadania';
+  const rows=review(); rows[0]={criterionIndex:0,rating:'meets',evidence:'abc\u2800\u2800'};
+  const result=evaluateCompetencyTest(definition(),{workSample},rows);
+  assert.equal(result.criterionResults[0].rating,'meets');
+  assert.equal(result.score,null);
+});
