@@ -43,3 +43,17 @@ Real PostgreSQL two-session tests additionally cover an in-flight position updat
 ### Supabase CLI migration gate
 
 Do not copy the prototype SQL directly into `supabase/migrations`. Before creating the migration, resolve all fresh review findings, prove end-to-end source freshness for candidate documents and screening materials, verify complete lock order with SC-006/008/010, confirm retention/deletion strategy and establish an isolated Supabase development database. Generate the migration name with `supabase migration new` on a verified CLI version, then apply and test only against that isolated database. No Production access, credentials, grants or deployments are authorized by this branch.
+
+## 2026-10-12 — current safety gate
+
+The source verifier now calls the existing `private.screening_material(application_id, true)` under the SC-006 screening advisory lock, the SC-012-B application lock, source row locks and an explicit `FOR UPDATE NOWAIT` candidate-parent lock. It compares the **current** SC-006 canonical input fingerprint, document ID/version, criteria and binding snapshot with the approved screening analysis. The caller never receives CV text from the verification query. This closes the earlier gap where a new CV revision could remain invisible to the stored voice source hash.
+
+The versioned template manifest now pins all question-defining fields, including priority and tie-break, question count/order, IDs, kinds, text, follow-ups and per-question duration. A change to the generator under the same v1 identifier must fail the verifier.
+
+The isolated PostgreSQL 16 suite includes:
+- two sessions competing to create the first release pointer; one committed history entry, one `PT409`;
+- reviewer membership revocation racing with a held review transaction, including the revocation-wins case;
+- candidate parent lock verification, modified CV rejection and source reanalysis lock contention;
+- idempotent replay after a committed release is superseded.
+
+**Remaining gates:** exact-current-head green CI and independent security review, additional tests of candidate document INSERT versus parent lock and source/recruitment mutation lock order, retention/purge integration, plus a reviewed SQL authorization model. No isolated SkillCheck Supabase branch is currently connected (the connected production project has no branches), so a Supabase CLI migration must not be applied to Production or to unrelated projects. A migration filename must be generated using the verified CLI, not guessed or created by renaming this prototype. The project remains non-production and the PR remains unmerged.
