@@ -82,7 +82,7 @@ export function validatePolicy(raw: unknown): AiRoutingPolicy {
       || rate.cachedInputMicroUsdPerMillion > rate.inputMicroUsdPerMillion) {
       throw new Error('SC021_INVALID_CONFIGURATION');
     }
-    models[key] = rate as ModelRate;
+    models[key] = rate as unknown as ModelRate;
   }
   for (const key of Object.values(tasks)) {
     if (!Object.hasOwn(models, key)) throw new Error('SC021_UNKNOWN_MODEL');
