@@ -88,3 +88,32 @@ test('text containing adversarial directions is data, not an instruction',()=>{
   assert.equal(result.score,null);
   assert.equal(result.status,'insufficient_evidence');
 });
+
+test('rejects invisible-only work samples, hidden Unicode and control characters',()=>{
+  for (const value of ['\u0000\u0000\u0000','\u200b\u200b\u200b','\u202eabc','abc\u0000','abc\u200d']) {
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:value}));
+  }
+  assert.deepEqual(parseCompetencyTestSubmission(definition(),{workSample:'Założenia:\nPlan A.'}),{workSample:'Założenia:\nPlan A.'});
+});
+
+test('rejects invisible citation even when answer contains format or control chars',()=>{
+  for(const value of ['Tekst \u0000\u0000\u0000','Tekst \u200b\u200b\u200b']) {
+    const r=review();r[0]={criterionIndex:0,rating:'above',evidence:value.slice(6)};
+    assert.throws(()=>evaluateCompetencyTest(definition(),{workSample:value},r));
+  }
+});
+
+test('sparse ratings never produce a partial but numerically scored review',()=>{
+  const rows = Array(5);
+  for(let i=0;i<3;i++)rows[i]={criterionIndex:i,rating:'above',evidence:'spadek konwersji'};
+  assert.throws(()=>evaluateCompetencyTest(definition(),answer,rows),/Brak obserwacji/);
+  const startHole = Array(5).fill(null).map((_,i)=>({criterionIndex:i,rating:'above',evidence:'spadek konwersji'}));
+  delete startHole[0];
+  assert.throws(()=>evaluateCompetencyTest(definition(),answer,startHole),/Brak obserwacji/);
+});
+
+test('oversized input is rejected before whitespace/visibility scan',()=>{
+  const longWhitespace=' '.repeat(2_000_000);
+  assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:longWhitespace}),/20 000/);
+  assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:'\u0000'.repeat(20001)}));
+});
