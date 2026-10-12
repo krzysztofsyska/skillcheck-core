@@ -132,10 +132,10 @@ export function assertScreeningClaimMatchesWorkerContract(claim: ScreeningWorker
       result_schema_version: claim.result_schema_version,
     });
   } catch {
-    throw new ScreeningProviderError('contract_mismatch', 'Analysis contract mismatch.');
+    throw new ScreeningProviderError('contract_mismatch', 'Analysis contract mismatch.', 'contract_mismatch');
   }
   if (!matchesFields || claimedHash !== claim.analysis_contract_hash || expectedHash !== claim.analysis_contract_hash) {
-    throw new ScreeningProviderError('contract_mismatch', 'Analysis contract mismatch.');
+    throw new ScreeningProviderError('contract_mismatch', 'Analysis contract mismatch.', 'contract_mismatch');
   }
 }
 
@@ -160,11 +160,23 @@ export function buildScreeningOpenAiRequest(claim: ScreeningWorkerClaim) {
   };
 }
 
+export const screeningDiagnosticReasons = [
+  'http_error', 'response_not_json', 'invalid_envelope', 'output_token_limit',
+  'contract_mismatch', 'invalid_evidence', 'invalid_quote', 'quote_mismatch',
+  'criterion_set', 'criterion_result', 'missing_evidence', 'refusal',
+  'response_incomplete', 'empty_output', 'output_not_json',
+] as const;
+export type ScreeningDiagnosticReason = typeof screeningDiagnosticReasons[number];
+
 export class ScreeningProviderError extends Error {
   readonly code: ScreeningProviderErrorCode;
-  constructor(code: ScreeningProviderErrorCode, message: string) {
+  readonly diagnosticReason?: ScreeningDiagnosticReason;
+  readonly httpStatus?: number;
+  constructor(code: ScreeningProviderErrorCode, message: string, reason?: ScreeningDiagnosticReason, httpStatus?: number) {
     super(message);
     this.code = code;
+    this.diagnosticReason = screeningDiagnosticReasons.includes(reason as ScreeningDiagnosticReason) ? reason : undefined;
+    this.httpStatus = Number.isInteger(httpStatus) && httpStatus! >= 100 && httpStatus! <= 599 ? httpStatus : undefined;
   }
 }
 
@@ -205,13 +217,13 @@ export function isRetryableScreeningError(code: ScreeningProviderErrorCode) {
 }
 
 export function evidenceFromExactQuotes(cvText: string, quotes: string[]) {
-  if (!Array.isArray(quotes) || quotes.length > 5) throw new ScreeningProviderError('openai_invalid_output', 'Invalid evidence.');
+  if (!Array.isArray(quotes) || quotes.length > 5) throw new ScreeningProviderError('openai_invalid_output', 'Invalid evidence.', 'invalid_evidence');
   return quotes.map(quote => {
     if (typeof quote !== 'string' || !quote.trim() || quote.length > 2000) {
-      throw new ScreeningProviderError('openai_invalid_output', 'Invalid quote.');
+      throw new ScreeningProviderError('openai_invalid_output', 'Invalid quote.', 'invalid_quote');
     }
     const start = cvText.indexOf(quote);
-    if (start < 0) throw new ScreeningProviderError('openai_invalid_output', 'Quote is not an exact match.');
+    if (start < 0) throw new ScreeningProviderError('openai_invalid_output', 'Quote is not an exact match.', 'quote_mismatch');
     return { start, end: start + quote.length, quote };
   });
 }
@@ -224,7 +236,7 @@ export function parseScreeningProviderOutput(input: unknown, claim: ScreeningWor
   const root = asRecord(input);
   if (!root || Object.keys(root).some(key => key !== 'criteria') || !Array.isArray(root.criteria)
     || root.criteria.length !== claim.criteria_snapshot.length) {
-    throw new ScreeningProviderError('openai_invalid_output', 'Invalid criterion set.');
+    throw new ScreeningProviderError('openai_invalid_output', 'Invalid criterion set.', 'criterion_set');
   }
   const allowed = new Set(claim.criteria_snapshot.map(item => item.id));
   const seen = new Set<string>();
@@ -235,12 +247,12 @@ export function parseScreeningProviderOutput(input: unknown, claim: ScreeningWor
       || !screeningLevels.includes(row.rating as typeof screeningLevels[number])
       || !Array.isArray(row.evidence_quotes)
       || typeof row.explanation !== 'string' || row.explanation.length > 4000) {
-      throw new ScreeningProviderError('openai_invalid_output', 'Invalid criterion result.');
+      throw new ScreeningProviderError('openai_invalid_output', 'Invalid criterion result.', 'criterion_result');
     }
     seen.add(row.criterion_id);
     const evidence = evidenceFromExactQuotes(claim.input_cv_text_snapshot, row.evidence_quotes.map(String));
     if (row.rating !== 'insufficient_data' && evidence.length === 0) {
-      throw new ScreeningProviderError('openai_invalid_output', 'Supported ratings require evidence.');
+      throw new ScreeningProviderError('openai_invalid_output', 'Supported ratings require evidence.', 'missing_evidence');
     }
     return {
       criterion_id: row.criterion_id,
@@ -271,13 +283,13 @@ function collectOutputText(response: ScreeningOpenAiResponse) {
   for (const item of response.output ?? []) {
     const row = asRecord(item);
     if (!row) continue;
-    if (row.type === 'refusal' || row.refusal) throw new ScreeningProviderError('openai_refusal', 'Model refused.');
+    if (row.type === 'refusal' || row.refusal) throw new ScreeningProviderError('openai_refusal', 'Model refused.', 'refusal');
     const content = Array.isArray(row.content) ? row.content : [];
     for (const part of content) {
       const piece = asRecord(part);
       if (!piece) continue;
       if (piece.type === 'refusal' || typeof piece.refusal === 'string') {
-        throw new ScreeningProviderError('openai_refusal', 'Model refused.');
+        throw new ScreeningProviderError('openai_refusal', 'Model refused.', 'refusal');
       }
       if ((piece.type === 'output_text' || piece.type === 'text') && typeof piece.text === 'string') chunks.push(piece.text);
     }
@@ -286,17 +298,21 @@ function collectOutputText(response: ScreeningOpenAiResponse) {
 }
 
 export function parseScreeningOpenAiResponse(response: ScreeningOpenAiResponse, claim: ScreeningWorkerClaim) {
-  if (response.status === 'incomplete' && /refus|content_filter|safety/i.test(response.incomplete_details?.reason ?? '')) {
-    throw new ScreeningProviderError('openai_refusal', 'Model refused.');
+  if (!asRecord(response)) throw new ScreeningProviderError('openai_invalid_output', 'Invalid response envelope.', 'invalid_envelope');
+  if (response.status === 'incomplete' && response.incomplete_details?.reason === 'max_output_tokens') {
+    throw new ScreeningProviderError('openai_invalid_output', 'Output token limit.', 'output_token_limit');
   }
-  if (response.status !== 'completed') throw new ScreeningProviderError('openai_invalid_output', 'Incomplete model response.');
+  if (response.status === 'incomplete' && /refus|content_filter|safety/i.test(response.incomplete_details?.reason ?? '')) {
+    throw new ScreeningProviderError('openai_refusal', 'Model refused.', 'refusal');
+  }
+  if (response.status !== 'completed') throw new ScreeningProviderError('openai_invalid_output', 'Incomplete model response.', 'response_incomplete');
   const text = collectOutputText(response);
-  if (!text) throw new ScreeningProviderError('openai_invalid_output', 'Empty model response.');
+  if (!text) throw new ScreeningProviderError('openai_invalid_output', 'Empty model response.', 'empty_output');
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new ScreeningProviderError('openai_invalid_output', 'Model output was not JSON.');
+    throw new ScreeningProviderError('openai_invalid_output', 'Model output was not JSON.', 'output_not_json');
   }
   return {
     findings: parseScreeningProviderOutput(parsed, claim),
