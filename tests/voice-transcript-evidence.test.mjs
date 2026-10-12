@@ -603,3 +603,79 @@ test("SC-013-A refuses approval of a superseded committed analysis even without 
   assert.equal(approvedNewer.outcome, "applied");
   assert.equal(readEffectiveResult(approvedNewer.ledger).analysisId, newer.analysisId);
 });
+
+test("SC-013-A accepts canonical behavior area IDs from trusted voice-plan generator", () => {
+  const sealed = sealSyntheticTranscript(qualityCompanyTranscript());
+  const rows = qualityRows(sealed);
+  rows.push({
+    criterionId: "responsibility", kind: "behavior", rubricVersion: "rubric-quality-v1",
+    rating: "meets", evidence: [span(sealed, "seg-qual-0002", qualityQuotes.checklist)],
+    rationale: "Kandydat opisał własne działania podczas kontroli jakości.",
+  });
+  const draft = assessSyntheticTranscript(sealed, requestFor(sealed, rows, "idem-quality-behavior01"));
+  assert.equal(draft.criteria[2].criterionId, "responsibility");
+  assert.equal(draft.criteria[2].kind, "behavior");
+  assert.equal(draft.productionEvidence, false);
+  const forged = rows.map(row => ({ ...row }));
+  forged[2] = { ...forged[2], criterionId: "arbitrary-behavior" };
+  assert.equal(codeOf(() => assessSyntheticTranscript(sealed, requestFor(
+    sealed, forged, "idem-quality-behavior02",
+  ))), "invalid_transcript");
+});
+
+test("SC-013-A rejects exact yet meaningless one-character evidence for a substantive rating", () => {
+  const sealed = sealSyntheticTranscript(qualityCompanyTranscript());
+  const rows = qualityRows(sealed);
+  const original = rows[0].evidence[0];
+  rows[0] = { ...rows[0], evidence: [{
+    ...original, endUtf16: original.startUtf16 + 1, quote: original.quote[0],
+  }] };
+  assert.equal(codeOf(() => assessSyntheticTranscript(sealed, requestFor(
+    sealed, rows, "idem-quality-short-quote",
+  ))), "insufficient_evidence");
+});
+
+test("SC-013-A detects internationally formatted phone numbers in Polish transcripts", () => {
+  for (const phone of ["+44 7700 900123", "+1 (202) 555-0123"]) {
+    const synthetic = qualityCompanyTranscript();
+    synthetic.segments[1].text = "Syntetyczny numer międzynarodowy: " + phone;
+    assert.equal(codeOf(() => sealSyntheticTranscript(synthetic)), "pii_leakage", phone);
+  }
+});
+
+test("SC-013-A rejects unapproved plan changes across transcript revisions", () => {
+  const source = qualityCompanyTranscript();
+  const ledger = openEvidenceLedger(sealSyntheticTranscript(source));
+  const next = { ...source, transcriptRevision: 4 };
+  for (const changed of [
+    { ...next, planRevision: 3 }, { ...next, planVersionId: "plan-quality-other" },
+  ]) {
+    const result = recordTranscriptRevision(ledger, sealSyntheticTranscript(changed));
+    assert.equal(result.outcome, "conflict");
+    assert.equal(result.ledger, ledger);
+  }
+  assert.equal(recordTranscriptRevision(ledger, sealSyntheticTranscript(next)).outcome, "applied");
+});
+
+test("SC-013-A can approve older evidence only after human rejection of the newer analysis", () => {
+  const sealed = sealSyntheticTranscript(qualityCompanyTranscript());
+  const first = commitAssessment(openEvidenceLedger(sealed), assessSyntheticTranscript(
+    sealed, requestFor(sealed, qualityRows(sealed), "idem-review-older-source"),
+  ));
+  const revised = qualityRows(sealed);
+  revised[0] = { ...revised[0], rating: "below",
+    rationale: "Odmienna interpretacja cytatu dotyczącego kontroli." };
+  const second = commitAssessment(first.ledger, assessSyntheticTranscript(
+    sealed, requestFor(sealed, revised, "idem-review-newer-source"),
+  ));
+  const rejected = commitReview(second.ledger, sealed, reviewBody(sealed, second.ledger,
+    second.analysisId, { idempotencyKey: "idem-review-newer-reject",
+      assessmentValidity: "rejected_result",
+      rationale: "Nowy wynik nie spełnia wymagań dowodowych." }));
+  assert.equal(rejected.outcome, "applied");
+  assert.equal(readEffectiveResult(rejected.ledger).state, "none");
+  const recovered = commitReview(rejected.ledger, sealed, reviewBody(sealed, rejected.ledger,
+    first.analysisId, { idempotencyKey: "idem-review-older-recover" }));
+  assert.equal(recovered.outcome, "applied");
+  assert.equal(readEffectiveResult(recovered.ledger).analysisId, first.analysisId);
+});
