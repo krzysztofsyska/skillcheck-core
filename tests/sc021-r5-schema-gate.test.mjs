@@ -110,6 +110,57 @@ test('SC-021-B/R5 staged inventory uses REAL SC-010-R4 graph and authoritative t
   )).rows;
   assert.equal(foreign.length,0,'a foreign candidate must not leak any financial rows');
 
+  // Codex P1: attempting to build the staged signing source while provider
+  // usage is reserved must fail BEFORE any manifest can be produced.
+  await assert.rejects(db.query(
+    'select * from private.erasure_purge_rows_sc021_r5($1,$2::uuid[])',
+    [tenantA.companyId,[tenantA.candidate.id]],
+  ),e=>e.code==='PT409' && /SC021_UNRECONCILED_CANDIDATE_USAGE/.test(e.message));
+
+  // Candidate worker capabilities must never create an unbound generic entry.
+  await db.exec('set role ai_meter_worker');
+  await assert.rejects(db.query(
+    'select * from public.ai_gateway_reserve(' +
+    '$1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::text,$6::text,' +
+    '$7::text,$8::text,$9::text,$10::text,$11::bigint)',
+    [tenantA.companyId,randomUUID(),randomUUID(),null,null,'cv_screening',
+      'openai','synthetic-test-model','policy-test','price-test',5],
+  ),e=>e.code==='42501');
+  await h.asAdmin();
+
+  // The original R4 function still performs candidate locks and shared
+  // administrative checks; the staged R5 wrapper must call it FIRST.
+  const executionId=randomUUID();
+  await db.query(
+    "insert into private.erasure_executions ("+
+      "request_id,company_id,candidate_ids,scope_kind,owner_id,policy_copy,"+
+      "resolution_revision,generation,phase,recovery_retain_until) "+
+      "values ($1,$2,$3::uuid[],'candidate_record',$4,$5::jsonb,0,1,'authorized',now()+interval '30 days')",
+    [executionId,tenantA.companyId,[tenantA.candidate.id],tenantA.owner,JSON.stringify({revision:0})],
+  );
+  await assert.rejects(db.query(
+    'select private.erasure_check_purge_scope_sc021_r5($1)',
+    [executionId],
+  ),e=>e.code==='PT409' && /SC021_UNRECONCILED_CANDIDATE_USAGE/.test(e.message));
+  await assert.rejects(db.query(
+    'select private.ai_gateway_r5_prepare_gate($1)',
+    [executionId],
+  ),e=>e.code==='PT409');
+
+  await db.query(
+    'select public.ai_gateway_settle($1,$2,90,250,0,80,$3)',
+    [tenantA.companyId,a.id,'response-sc021-r5-test'],
+  );
+  assert.equal((await db.query(
+    'select private.ai_gateway_r5_assert_reconciled($1,$2::uuid[]) n',
+    [tenantA.companyId,[tenantA.candidate.id]],
+  )).rows[0].n,1);
+  await db.query('select private.erasure_check_purge_scope_sc021_r5($1)',[executionId]);
+  // No R5 baseline exists. A real irreversible manifest cannot be issued yet.
+  await assert.rejects(db.query(
+    'select private.ai_gateway_r5_prepare_gate($1)',[executionId],
+  ),e=>e.code==='PT409' && /SC021_R5_BASELINE_NOT_REVIEWED/.test(e.message));
+
   const complete=(await db.query(
     'select adapter,row_key,row_data from private.erasure_purge_rows_sc021_r5($1,$2::uuid[])',
     [tenantA.companyId,[tenantA.candidate.id]],
@@ -144,14 +195,7 @@ test('SC-021-B/R5 staged inventory uses REAL SC-010-R4 graph and authoritative t
     'select private.ai_gateway_r5_assert_reconciled($1,$2::uuid[])',
     [tenantA.companyId,[tenantA.candidate.id]],
   ),e=>e.code==='PT409');
-  await db.query(
-    'select public.ai_gateway_settle($1,$2,90,250,0,80,$3)',
-    [tenantA.companyId,a.id,'response-sc021-r5-test'],
-  );
-  assert.equal((await db.query(
-    'select private.ai_gateway_r5_assert_reconciled($1,$2::uuid[]) n',
-    [tenantA.companyId,[tenantA.candidate.id]],
-  )).rows[0].n,1);
+
   await assert.rejects(db.query(
     'select private.ai_gateway_r5_assert_reconciled($1,$2::uuid[])',
     [tenantA.companyId,[tenantB.candidate.id]],
