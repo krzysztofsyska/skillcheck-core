@@ -63,8 +63,12 @@ export async function runMeteredOperation<T>(input: {
   assertContext(input.context);
   const rate = selectModel(input.policy, input.context.task);
   const estimatedMicroUsd = usageCostMicroUsd(rate, input.maxExpectedUsage);
-  const correlationId = input.correlationId ?? crypto.randomUUID();
-  if (!uuid.test(correlationId)) throw new AiGatewayError('SC021_INVALID_CONTEXT');
+  // Exactly the persisted physical-attempt ID must be sent to the provider.
+  // A different caller-supplied ID would make an unknown charge unreconcilable.
+  const correlationId = input.context.requestKey;
+  if (input.correlationId !== undefined && input.correlationId !== correlationId) {
+    throw new AiGatewayError('SC021_INVALID_CONTEXT');
+  }
 
   const reservation = await input.ledger.reserve({
     ...input.context,
@@ -94,16 +98,23 @@ export async function runMeteredOperation<T>(input: {
     });
     throw new AiGatewayError('SC021_USAGE_UNAVAILABLE');
   }
-  const costMicroUsd = usageCostMicroUsd(rate, reply.usage);
-  // An in-flight operation may cost more than forecast. Settle actual rather than hiding overage.
-  // If settlement fails, never surface an unmetered AI result.
-  const wasSettled = await input.ledger.settle({
-    companyId: input.context.companyId,
-    requestKey: input.context.requestKey,
-    costMicroUsd,
-    usage: reply.usage,
-    providerRequestId: reply.providerRequestId,
-  });
-  if (!wasSettled) throw new AiGatewayError('SC021_ALREADY_SETTLED');
-  return { data: reply.data, costMicroUsd, warning: reservation.warning, correlationId };
+  // The provider has already responded: invalid/unknown usage and settlement errors
+  // must hold the reservation as unknown, rather than leaving it as in-flight.
+  try {
+    const costMicroUsd = usageCostMicroUsd(rate, reply.usage);
+    const wasSettled = await input.ledger.settle({
+      companyId: input.context.companyId,
+      requestKey: input.context.requestKey,
+      costMicroUsd,
+      usage: reply.usage,
+      providerRequestId: reply.providerRequestId,
+    });
+    if (!wasSettled) throw new AiGatewayError('SC021_ALREADY_SETTLED');
+    return { data: reply.data, costMicroUsd, warning: reservation.warning, correlationId };
+  } catch (error) {
+    await input.ledger.markUnknown({
+      companyId: input.context.companyId, requestKey: input.context.requestKey,
+    });
+    throw error;
+  }
 }
