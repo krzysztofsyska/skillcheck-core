@@ -100,7 +100,7 @@ test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async 
   try{
    // Privileged corruption simulation, rolled back completely; product roles
    // cannot disable this trigger or mutate the baseline.
-   await db.exec('alter table private.erasure_inventory_baseline_r3 disable trigger immutable_history;delete from private.erasure_inventory_baseline_r3');
+   await db.exec('alter table private.erasure_inventory_baseline_r4 disable trigger immutable_history;delete from private.erasure_inventory_baseline_r4');
    await h.asUser(f.owner);const p=await e.preview(f);assert.ok(p.blockers.includes('schema_dependency_unknown'));assert.deepEqual(p.counts,{});
   }finally{await db.exec('rollback');}
  });
@@ -108,9 +108,9 @@ test('SC-010 R1 owner-reviewed scope and read-only fail-closed inventory',async 
   const f=await h.seed();
   for(const [operation,payload]of [['unrecognized',[f.candidate.id]],['permission',{candidate:f.candidate.id}],['draft',[`prefix-${f.application.id}`,randomUUID(),'email']]]){
    await h.asAdmin();await db.exec('begin');try{
-    await db.exec('alter table private.contact_requests disable trigger aa_erasure_guard');
+    await db.exec('alter table private.contact_requests disable trigger aa_erasure_guard;alter table private.contact_requests disable trigger zz_retention_observed');
     await db.query('insert into private.contact_requests(company_id,actor_id,operation,request_key,payload,result_id) values($1,$2,$3,$4,$5::jsonb,$6)',[f.companyId,f.owner,operation,randomUUID(),JSON.stringify(payload),randomUUID()]);
-    await db.exec('alter table private.contact_requests enable trigger aa_erasure_guard');
+    await db.exec('alter table private.contact_requests enable trigger aa_erasure_guard;alter table private.contact_requests enable trigger zz_retention_observed');
     await h.asUser(f.owner);const p=await e.preview(f);assert.ok(p.blockers.includes('contact_request_adapter_unknown'));
    }finally{await db.exec('rollback');}
   }

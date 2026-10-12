@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261010190255.
+// Public API contract including SC-010-R4 retention scheduling.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -65,6 +65,12 @@ export type CandidateRetentionRule = {
 export type CandidateRetentionPolicy = {
   id: string | null; revision: number; rules: CandidateRetentionRule[];
   configured: boolean; owner_current: boolean; execution_enabled: false;
+};
+export type RetentionScheduleStatus = {
+  revision: number; delegation_id: string | null; policy_revision: number | null;
+  execution_mode: 'suggest_only' | 'automatic'; max_batch: number; revoked: boolean;
+  owner_current: boolean; execution_enabled: boolean; blockers: string[]; last_tick_at: string | null;
+  suggestions: number; authorized: number; holds?: number; blocked?: number; lag_seconds?: number | null; oldest_pending_at?: string | null; expired_leases?: number;
 };
 export type ErasureSubjectResolution = { id: string | null; revision: number; candidate_ids: string[]; owner_current: boolean };
 export type CandidateErasurePreview = {
@@ -395,6 +401,17 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      configure_retention_schedule: {
+        Args: { target_company: string; expected_revision: number; policy_revision: number; execution_mode?: 'suggest_only' | 'automatic'; max_batch?: number; request_key?: string | null };
+        Returns: string;
+      };
+      revoke_retention_schedule: { Args: { target_company: string; expected_revision: number; request_key: string }; Returns: string };
+      get_retention_suggestions: {
+        Args: { target_company: string; before_created_at?: string; before_id?: string; page_size?: number };
+        Returns: { id: string; anchor_candidate_id: string; status: 'suggested' | 'blocked' | 'authorized'; due_at: string | null; blockers: string[]; created_at: string; request_id: string | null }[];
+      };
+      get_retention_schedule: { Args: { target_company: string }; Returns: RetentionScheduleStatus };
+
       configure_candidate_retention_policy: {
         Args: { target_company: string; expected_revision: number; policy_rules: CandidateRetentionRule[]; request_key: string };
         Returns: string;

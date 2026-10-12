@@ -8,6 +8,7 @@ export const digest=text=>createHash('sha256').update(text,'utf8').digest('hex')
 const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a<b?-1:a>b?1:0)):v);
 const fail=message=>{throw new Error(message);};
 const positive=n=>Number.isSafeInteger(n)&&n>0;
+const utcTimestamp=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,19)===value.slice(0,19);
 export function parseEnvelope(text){
  if(typeof text!=='string'||Buffer.byteLength(text)>1048576)fail('Invalid envelope size');
  const e=JSON.parse(text);
@@ -16,7 +17,15 @@ export function parseEnvelope(text){
  if(!Array.isArray(e.candidate_ids)||!e.candidate_ids.length||e.candidate_ids.some(x=>!uuid.test(x))||[...new Set(e.candidate_ids)].sort().join()!==e.candidate_ids.join())fail('Invalid candidate boundary');
  if(!['candidate_record','confirmed_subject'].includes(e.scope_kind)||!Object.hasOwn(phases,e.phase)||!(e.previous_phase===null||Object.hasOwn(phases,e.previous_phase)))fail('Invalid envelope phase/scope');
  if(!(e.previous_event_hash===null||hash.test(e.previous_event_hash))||!hash.test(e.manifest_hash)||!hash.test(e.schema_signature))fail('Invalid envelope digest');
- if(!e.authorization||Object.keys(e.authorization).sort().join()!=='actor_id,kind'||e.authorization.kind!=='owner'||!uuid.test(e.authorization.actor_id))fail('Invalid authorization');
+ const a=e.authorization;
+ if(!a||Array.isArray(a)||!uuid.test(a.actor_id))fail('Invalid authorization');
+ if(a.kind==='owner'){
+  // R3 bytes/signatures stay valid; no inferred policy delegation for legacy owners.
+  if(Object.keys(a).sort().join()!=='actor_id,kind')fail('Invalid authorization');
+ }else if(a.kind==='retention_policy'){
+  const expected=['kind','actor_id','delegation_id','activation_revision','policy_revision','due_generation','due_at','evidence_hash'];
+  if(Object.keys(a).sort().join()!==expected.sort().join()||!uuid.test(a.delegation_id)||!positive(a.activation_revision)||!positive(a.policy_revision)||!positive(a.due_generation)||!hash.test(a.evidence_hash)||!utcTimestamp(a.due_at)||Date.parse(a.due_at)>Date.parse(e.authorized_at)||a.policy_revision!==e.policy?.revision)fail('Invalid retention authorization');
+ }else fail('Invalid authorization');
  if(!e.policy||Object.keys(e.policy).sort().join()!=='revision,rules'||!positive(e.policy.revision)||!Array.isArray(e.policy.rules)||e.policy.rules.length!==8)fail('Missing policy definition');
  const classes=new Set();for(const r of e.policy.rules){
   if(!r||Object.keys(r).sort().join()!=='data_class,duration_days,hold_review_days,trigger_event'||!['candidate','assessment','screening','communication','audit','external','backup','exports'].includes(r.data_class)||classes.has(r.data_class)||!['record_created','process_closed','consent_revoked'].includes(r.trigger_event)||!positive(r.duration_days)||r.duration_days>999999||!positive(r.hold_review_days)||r.hold_review_days>999999)fail('Invalid policy definition');classes.add(r.data_class);
