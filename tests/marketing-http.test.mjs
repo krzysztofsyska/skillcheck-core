@@ -53,6 +53,23 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(home.includes('Kup teraz'), false);
   assert.equal(home.includes('127.0.0.1:9'), false);
 
+
+  // Sales pilot intake is available without enabling paid checkout or AI.
+  assert.ok(homeHrefs.includes('/preselekcja'), 'marketing points to PRESELEKCJA pilot');
+
+  const orderResponse = await fetch(`${base}/preselekcja`, { redirect: 'manual' });
+  assert.equal(orderResponse.status, 200);
+  assert.match(orderResponse.headers.get('content-type'), /text\/html/);
+  const order = await orderResponse.text();
+  assert.match(order, /Zamów preselekcję kandydatów/);
+  assert.match(order, /Cena|cenę|cena/);
+  assert.match(order, /Nie przesyłaj CV zwykłym e-mailem/);
+  assert.match(order, /samo utworzenie konta nie przyznaje analiz/);
+  assert.ok(hrefs(order).some(href => href.startsWith('mailto:pomoc@skillcheck.pl?subject=')));
+  assert.ok(hrefs(order).includes('/register'));
+  assert.doesNotMatch(order, /<form[ >]/);
+  assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
+
   const demoResponse = await fetch(`${base}/demo`, { redirect: 'manual' });
   assert.equal(demoResponse.status, 200);
   assert.match(demoResponse.headers.get('content-type'), /text\/html/);
