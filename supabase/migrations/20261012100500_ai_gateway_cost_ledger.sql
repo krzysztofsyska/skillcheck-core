@@ -81,7 +81,7 @@ declare
 begin
   if target_company is null or request_id is null or target_operation is null
     or estimated_micro_usd is null or estimated_micro_usd < 0
-    or target_task not in ('cv_screening','interview_plan','voice_analysis','competency_test','assessment_case')
+    or target_task is null or target_task not in ('cv_screening','interview_plan','voice_analysis','competency_test','assessment_case')
     or target_provider is null or target_provider !~ '^[a-z0-9_-]{1,40}$'
     or target_model is null or length(target_model) not between 1 and 128
     or target_policy_version is null or length(target_policy_version) not between 1 and 80
@@ -133,7 +133,7 @@ begin
     month_date, estimated_micro_usd, limits.operator_override
   ) returning id into usage_id;
   created := true;
-  warning := spent_after * 100 >= limits.monthly_limit_micro_usd * limits.warning_percent;
+  warning := (spent_after::numeric * 100) >= (limits.monthly_limit_micro_usd::numeric * limits.warning_percent);
   return next;
 end $$;
 
