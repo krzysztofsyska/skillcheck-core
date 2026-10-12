@@ -7,7 +7,7 @@ DEPENDS: SC-005, SC-019, SC-012/013. PRODUCTION_APPROVAL: NO.
 ## Dostarczony zakres
 - lib/ai-gateway/core.ts: walidowane konfiguracje modeli, wersje polityk i cenników; dobór modelu według typu operacji; rozliczenie tokenów cached/uncached w integer mikro-USD.
 - lib/ai-gateway/runtime.ts: adapter dostawcy, rezerwacja limitu PRZED wywołaniem providera, jeden fizyczny call na jeden requestKey, idempotentne rozliczenie wyniku, blokada wyniku przy braku wiarygodnych danych usage.
-- SQL: izolowany ledger per firma i miesiąc UTC, atomowy FOR UPDATE przy rezerwacji, progi ostrzegania, blokada wydatków, override operatora, statusy reserved/settled/unknown. authenticated ma wyłącznie SELECT z RLS. Modyfikacje wyłącznie przez pracownika DB z grantem (screening_worker / ai_meter_worker).
+- PROTOTYPE SQL (tylko testowe PostgreSQL, niewdrożony): izolowany ledger per firma i miesiąc UTC, atomowy FOR UPDATE przy rezerwacji, progi ostrzegania, blokada wydatków, override operatora, statusy reserved/settled/unknown. authenticated ma wyłącznie SELECT z RLS. Modyfikacje wyłącznie przez pracownika DB z grantem (screening_worker / ai_meter_worker).
 - Marża kontrybucyjna: przychód netto PLN, koszty API przeliczone jawnym snapshotem FX, osobne koszty voice/telefonii i inne koszty zmienne. Brak danych = wynik nieznany, a nie 0 zł.
 
 ## Przebieg wywołania
@@ -40,7 +40,7 @@ UWAGA: warstwa wykonawcza i SQL nie są jeszcze podłączone do istniejącego SC
 ## Release blocker confirmed by CI on 2026-10-12
 
 The base integration commit 7a365794 passed the complete Checks workflow
-(run 38219575738). After SC-021 adds ai_gateway_limits and ai_gateway_usage,
+(run 38219575738). After SC-021 initially added ai_gateway_limits and ai_gateway_usage to the deployable migration chain,
 the new module's isolated PostgreSQL and Node tests pass, but global Checks
 fails the SC-010 R4 reviewed schema signature:
 
@@ -58,5 +58,18 @@ inventory/purge/retention graph, issue a new immutable reviewed R5 baseline,
 and test erasure plus retained aggregate financial accounting. Ledger records
 must not retain an identifiable candidate after lawful erasure, and erasure
 must not silently credit back real provider costs. Until these decisions are
-implemented, PR #108 remains DRAFT and NO MERGE / NO PRODUCTION. The dedicated
+implemented, PR #108 remains DRAFT and NO PRODUCTION. The ledger schema is now
+moved to db/prototypes/sc021-ai-gateway-ledger.sql and can only be applied
+by isolated tests. It is intentionally absent from supabase/migrations,
+so it cannot silently change the live schema as part of this PR. The dedicated
 SC-021 workflow demonstrates the module's correctness in isolation only.
+
+
+## Change on 2026-10-12: safe phased delivery
+
+The prototype is physically isolated under db/prototypes. SC-021-A's
+routing and metered-adapter logic can proceed through review independently.
+SC-021-B will be proposed as a separate real migration ONLY alongside a new
+SC-010-reviewed schema inventory/purge adapter and R5 baseline.
+The isolated SQL test runs in an ephemeral PostgreSQL database and must not
+be represented as deployment readiness.
