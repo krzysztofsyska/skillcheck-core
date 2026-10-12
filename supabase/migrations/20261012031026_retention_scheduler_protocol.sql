@@ -23,7 +23,7 @@ create table private.retention_suggestions (
  id uuid primary key default gen_random_uuid(),company_id uuid not null,candidate_ids uuid[] not null,resolution_id uuid not null,delegation_id uuid not null references private.retention_delegations(id),
  evidence_hash text not null,due_generation bigint generated always as identity check(due_generation between 1 and 9007199254740991),due_at timestamptz,
  status text not null check(status in ('suggested','authorized','blocked')),request_id uuid,blockers jsonb not null,created_at timestamptz not null default clock_timestamp(),last_evaluated_at timestamptz not null default clock_timestamp(),
- unique(company_id,delegation_id,resolution_id,evidence_hash)
+ unique(company_id,delegation_id,candidate_ids,evidence_hash)
 );
 create table private.retention_authorizations (
  request_id uuid primary key,authorization_json jsonb not null,created_at timestamptz not null default clock_timestamp()
@@ -32,6 +32,8 @@ create table private.retention_ticks (
  id uuid primary key default gen_random_uuid(),company_id uuid not null,delegation_id uuid not null,processed integer not null,suggested integer not null,authorized integer not null,blocked integer not null,
  created_at timestamptz not null default clock_timestamp()
 );
+
+create index retention_ticks_company_created_idx on private.retention_ticks(company_id,created_at desc,id desc);
 
 create function public.configure_retention_schedule(target_company uuid,expected_revision bigint,policy_revision bigint,execution_mode text default 'suggest_only',max_batch integer default 25,request_key uuid default null) returns uuid
 language plpgsql volatile security definer set search_path='' as $$
@@ -139,7 +141,7 @@ begin
  if exists(select 1 from public.screening_analysis_versions av join public.applications a on a.id=av.application_id where a.candidate_id=any(r.candidate_ids) and av.execution_status in ('pending','processing')) then blockers:=array_append(blockers,'active_screening');end if;
  select jsonb_agg(to_jsonb(c) order by candidate_id) into clocks from private.retention_candidate_clocks c where candidate_id=any(r.candidate_ids);
  return jsonb_build_object('candidate_ids',r.candidate_ids,'anchor_candidate_id',r.anchor_candidate_id,'resolution_revision',r.revision,'due_at',case when isfinite(due) then due else null end,'blockers',to_jsonb(blockers),
- 'evidence_hash',private.erasure_hash(jsonb_build_array(to_jsonb(d),to_jsonb(r),to_jsonb(p),clocks,blockers)));
+ 'evidence_hash',private.erasure_hash(jsonb_build_array(to_jsonb(d),to_jsonb(array(select id from unnest(r.candidate_ids) ids(id) order by id)),to_jsonb(p),clocks,blockers)));
 end;$$;
 
 create function private.authorize_retention_suggestion(target_suggestion uuid) returns uuid
@@ -167,7 +169,7 @@ begin
  on conflict(candidate_id) do update set generation=erasure_candidate_lifecycle.generation+1,status='frozen',request_id=excluded.request_id;
  authz:=jsonb_build_object('kind','retention_policy','actor_id',d.owner_id,'delegation_id',d.id,'activation_revision',d.revision,'policy_revision',d.policy_revision,'due_generation',s.due_generation,'due_at',s.due_at,'evidence_hash',s.evidence_hash);
  insert into private.retention_authorizations(request_id,authorization_json) values(result,authz);
- update private.retention_suggestions set status='authorized',request_id=result where id=s.id;
+ update private.retention_suggestions set status='authorized',request_id=result,blockers='[]'::jsonb where id=s.id;
  insert into private.erasure_lifecycle_events(company_id,request_id,actor_id,event,generation) values(s.company_id,result,d.owner_id,'authorized',1);
  -- Reuse the complete reviewed R3 scope validator inside this transaction. This
  -- temporary non-exportable execution never receives a reservation or ledger ACK.
@@ -199,9 +201,16 @@ begin
  for d in select latest.* from private.retention_delegations latest where not latest.revoked and latest.revision=(select max(revision) from private.retention_delegations where company_id=latest.company_id)
  order by (select max(created_at) from private.retention_ticks where company_id=latest.company_id) nulls first,latest.company_id limit batch_limit loop
   per_tenant:=0;nt:=0;na:=0;nb:=0;ns:=0;
-  for r in select sr.* from private.erasure_subject_resolutions sr where sr.company_id=d.company_id and sr.revision=(select max(revision) from private.erasure_subject_resolutions where company_id=sr.company_id and anchor_candidate_id=sr.anchor_candidate_id)
-   and not exists(select 1 from unnest(sr.candidate_ids) x(id) where private.erasure_candidate_frozen(x.id))
-   order by (select max(last_evaluated_at) from private.retention_suggestions where resolution_id=sr.id) nulls first,sr.id loop
+  -- Identical confirmed subjects across anchors consume one scheduler slot.
+  for r in select sr.* from private.erasure_subject_resolutions sr
+   join (select distinct on (scope.ids) current.id,scope.ids
+    from private.erasure_subject_resolutions current
+    cross join lateral (select array(select id from unnest(current.candidate_ids) members(id) order by id) ids) scope
+    where current.company_id=d.company_id and current.revision=(select max(revision) from private.erasure_subject_resolutions where company_id=current.company_id and anchor_candidate_id=current.anchor_candidate_id)
+    order by scope.ids,(current.confirmed_by=d.owner_id) desc,current.anchor_candidate_id,current.id
+   ) canonical on canonical.id=sr.id
+   where not exists(select 1 from unnest(canonical.ids) x(id) where private.erasure_candidate_frozen(x.id))
+   order by (select max(last_evaluated_at) from private.retention_suggestions where company_id=d.company_id and candidate_ids=canonical.ids) nulls first,canonical.ids loop
    exit when processed>=batch_limit or per_tenant>=d.max_batch;
    processed:=processed+1;per_tenant:=per_tenant+1;nt:=nt+1;result:=null;
    begin
@@ -209,9 +218,9 @@ begin
     if exists(select 1 from unnest(r.candidate_ids) x(id) where private.erasure_candidate_frozen(x.id)) then raise exception using errcode='PT409',message='Candidate workflow frozen';end if;
     p:=private.evaluate_retention_subject(r.id,d.id);
     insert into private.retention_suggestions(company_id,candidate_ids,resolution_id,delegation_id,evidence_hash,due_at,status,blockers)
-    values(d.company_id,r.candidate_ids,r.id,d.id,p->>'evidence_hash',(p->>'due_at')::timestamptz,case when p->'blockers'='[]'::jsonb then 'suggested' else 'blocked' end,p->'blockers')
-    on conflict(company_id,delegation_id,resolution_id,evidence_hash) do update set last_evaluated_at=clock_timestamp();
-    select * into s from private.retention_suggestions where company_id=d.company_id and delegation_id=d.id and resolution_id=r.id and evidence_hash=p->>'evidence_hash';
+    values(d.company_id,array(select id from unnest(r.candidate_ids) members(id) order by id),r.id,d.id,p->>'evidence_hash',(p->>'due_at')::timestamptz,case when p->'blockers'='[]'::jsonb then 'suggested' else 'blocked' end,p->'blockers')
+    on conflict(company_id,delegation_id,candidate_ids,evidence_hash) do update set last_evaluated_at=clock_timestamp(),resolution_id=case when retention_suggestions.status='authorized' then retention_suggestions.resolution_id else excluded.resolution_id end;
+    select * into s from private.retention_suggestions where company_id=d.company_id and delegation_id=d.id and candidate_ids=array(select id from unnest(r.candidate_ids) members(id) order by id) and evidence_hash=p->>'evidence_hash';
     if s.status in ('suggested','blocked') and p->'blockers'='[]'::jsonb and d.execution_mode='automatic' then
      begin result:=private.authorize_retention_suggestion(s.id);
      exception when sqlstate 'PT409' or lock_not_available then
@@ -235,18 +244,19 @@ end;$$;
 
 create function public.get_retention_schedule(target_company uuid) returns jsonb
 language plpgsql stable security definer set search_path='' as $$
-declare d private.retention_delegations;t private.retention_ticks;c private.erasure_execution_config;p private.candidate_retention_policies;begin
+declare d private.retention_delegations;t private.retention_ticks;c private.erasure_execution_config;p private.candidate_retention_policies;schema_ok boolean;begin
  perform private.erasure_owner(target_company);
  select * into d from private.retention_delegations where company_id=target_company order by revision desc limit 1;
  select * into t from private.retention_ticks where company_id=target_company order by created_at desc,id desc limit 1;
  select * into c from private.erasure_execution_config where singleton;
  select * into p from private.candidate_retention_policies where company_id=target_company order by revision desc limit 1;
+ schema_ok:=private.erasure_schema_signature() is not distinct from (select schema_signature from private.erasure_inventory_baseline_r4 where singleton);
  return jsonb_build_object('revision',coalesce(d.revision,0),'delegation_id',d.id,'policy_revision',d.policy_revision,'execution_mode',coalesce(d.execution_mode,'suggest_only'),
  'max_batch',coalesce(d.max_batch,25),'revoked',coalesce(d.revoked,true),'owner_current',d.owner_id is not distinct from auth.uid(),
- 'authorization_enabled',coalesce(not d.revoked and d.execution_mode='automatic' and d.owner_id=auth.uid() and d.policy_id=p.id and d.policy_revision=p.revision and p.approved_by=auth.uid()
+ 'authorization_enabled',coalesce(schema_ok and not d.revoked and d.execution_mode='automatic' and d.owner_id=auth.uid() and d.policy_id=p.id and d.policy_revision=p.revision and p.approved_by=auth.uid()
   and c.enabled and c.external_inventory_verified and c.backup_horizon_days is not null and c.artifact_horizon_days is not null and c.retention_margin_days is not null and not c.restore_isolated,false),
  'production_ready',false,
- 'blockers',case when c.enabled and c.external_inventory_verified and c.backup_horizon_days is not null and c.artifact_horizon_days is not null and c.retention_margin_days is not null and not c.restore_isolated then '[]'::jsonb else jsonb_build_array('execution_not_provisioned') end,
+ 'blockers',case when c.enabled and c.external_inventory_verified and c.backup_horizon_days is not null and c.artifact_horizon_days is not null and c.retention_margin_days is not null and not c.restore_isolated then '[]'::jsonb else jsonb_build_array('execution_not_provisioned') end || case when schema_ok then '[]'::jsonb else jsonb_build_array('schema_dependency_unknown') end,
  'oldest_pending_at',(select min(created_at) from (select created_at from private.erasure_executions where company_id=target_company and phase in ('authorized','erasing') union all select r.created_at from private.erasure_requests r where r.company_id=target_company and r.status='authorized' and not exists(select 1 from private.erasure_executions e where e.request_id=r.id)) pending),
  'expired_leases',(select count(*) from private.erasure_executions where company_id=target_company and (pending_phase is not null or (phase='erasing' and not local_purged)) and lease_until<clock_timestamp()),
  'last_tick_at',t.created_at,'lag_seconds',case when t.id is null then null else greatest(0,floor(extract(epoch from statement_timestamp()-t.created_at))) end,

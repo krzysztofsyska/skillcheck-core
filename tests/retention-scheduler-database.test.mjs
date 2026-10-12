@@ -29,6 +29,24 @@ test('SC-010 R4 server-clock retention through the real signed erasure ledger',a
   const suggestions=(await db.query('select public.get_retention_suggestions($1,null,null,25) value',[f.companyId])).rows[0].value;assert.equal(suggestions.length,1);assert.ok(JSON.stringify(suggestions).includes(f.candidate.id));await h.asUser(users.otherOwner);await assert.rejects(db.query('select public.get_retention_suggestions($1,null,null,25)',[f.companyId]));await h.asUser(f.owner);assert.equal(await x.status(f),null);
   assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[f.candidate.id])).rows[0].n,1);await x.revoke(f);
  });
+ await t.test('schema drift disables monitor authorization and exposes its blocking reason',async()=>{
+  const f=await x.ready();await h.asUser(f.owner);await x.schedule(f,'automatic');assert.equal((await x.scheduleStatus(f)).authorization_enabled,true);
+  await h.asAdmin();await db.exec('begin');try{
+   await db.exec('create table public.unreviewed_retention_copy(candidate_id uuid)');await h.asUser(f.owner);const state=await x.scheduleStatus(f);assert.equal(state.authorization_enabled,false);assert.ok(state.blockers.includes('schema_dependency_unknown'));assert.equal(state.production_ready,false);
+  }finally{await db.exec('rollback');}
+  await h.asUser(f.owner);assert.equal((await x.scheduleStatus(f)).authorization_enabled,true);await x.revoke(f);
+ });
+ await t.test('successful retry clears temporary execution blockers on the same suggestion',async()=>{
+  const f=await x.ready();await x.close(f);await h.asUser(f.owner);await x.schedule(f,'automatic');await x.age(f);await x.configure({enabled:false});await x.tick();
+  await h.asAdmin();const before=(await db.query('select id,status,blockers from private.retention_suggestions where company_id=$1',[f.companyId])).rows;assert.equal(before.length,1);assert.equal(before[0].status,'blocked');assert.ok(before[0].blockers.length>0);
+  await h.asUser(f.owner);const currentResolution=await x.resolve(f,[f.candidate.id],1);
+  await x.configure();await x.tick();await h.asAdmin();const after=(await db.query('select id,status,blockers,request_id,resolution_id from private.retention_suggestions where company_id=$1',[f.companyId])).rows;assert.equal(after.length,1);assert.equal(after[0].id,before[0].id);assert.equal(after[0].status,'authorized');assert.deepEqual(after[0].blockers,[]);assert.ok(after[0].request_id);assert.equal(after[0].resolution_id,currentResolution);
+ });
+ await t.test('identical confirmed subject sets deduplicate across different anchors and input ordering',async()=>{
+  const f=await x.ready(),second=await h.candidate(f);await x.close(f);await x.close(second);await h.asUser(f.owner);f.resolutionId=await x.resolve(f,[f.candidate.id,second.candidate.id],1);second.resolutionId=await x.resolve(second,[second.candidate.id,f.candidate.id]);await x.schedule(f);await x.age(f,[f.candidate.id,second.candidate.id]);
+  await x.tick();await x.tick();await h.asUser(f.owner);const state=await x.scheduleStatus(f);assert.equal(state.suggestions,1);assert.equal(state.authorized,0);assert.equal(await x.status(f),null);assert.equal(await x.status(second),null);
+  const suggestions=(await db.query('select public.get_retention_suggestions($1,null,null,25) value',[f.companyId])).rows[0].value;assert.equal(suggestions.length,1);await x.revoke(f);
+ });
  await t.test('automatic due produces delegated signed authority and removes its graph while preserving another tenant',async()=>{
   const f=await x.ready(),other=await x.ready({owner:users.otherOwner});await x.close(f);await h.asUser(f.owner);await x.schedule(f,'automatic');await x.age(f);
   const tick=await x.tick(),result=tick.results.find(r=>r.request_id);assert.ok(result?.request_id,JSON.stringify(tick));

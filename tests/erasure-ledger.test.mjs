@@ -151,6 +151,12 @@ test('R4 CLI has explicit bounded commands, no default execution, and sanitized 
 test('R4 explicit drill verifies independent history before isolated restore writes',async t=>{
  const {runErasureCommand}=await import('../tools/erasure/cli.mjs');const h=await harness();t.after(()=>h.db.close());const envelope=policyEnvelope();await h.append(h.reservation(envelope));const coverage=await h.coverage();let writes=0;
  const config={ledgerHealth:{ledgerId:h.ledgerId,getCheckpoint:challenge=>h.ledger.checkpoint(challenge),getRecords:()=>h.records(),getMinimumWatermark:async()=>coverage.minimumWatermark,verificationKeys:h.verificationKeys,encryptionKeys:h.encryptionKeys,reservationKeys:h.reservationKeys},restoreConnect:async()=>({query:async(sql,args)=>{writes++;assert.match(sql,/private.replay_erasure_envelope/);assert.deepEqual(JSON.parse(args[0]).authorization,envelope.authorization);return {rows:[{result:true}]};},end:async()=>{}})};
+ // An authentic but stale independently retained watermark must not allow writes.
+ for(const watermark of [{ledger_id:h.ledgerId,sequence:0,event_hash:null},{...coverage.minimumWatermark,event_hash:'f'.repeat(64)}]){
+  config.ledgerHealth.getMinimumWatermark=async()=>watermark;
+  await assert.rejects(runErasureCommand(['drill','--config','isolated-config','--isolated'],{loadConfig:async()=>config}),/ERASURE_COMMAND_FAILED/);assert.equal(writes,0);
+ }
+ config.ledgerHealth.getMinimumWatermark=async()=>coverage.minimumWatermark;
  const result=await runErasureCommand(['drill','--config','isolated-config','--isolated'],{loadConfig:async()=>config});assert.equal(writes,1);assert.equal(result.replayed,1);assert.equal(result.production_ready,false);assert.equal(result.isolation_released,false);
  config.ledgerHealth.getMinimumWatermark=async()=>({...coverage.minimumWatermark,sequence:100});await assert.rejects(runErasureCommand(['drill','--config','isolated-config','--isolated'],{loadConfig:async()=>config}),/ERASURE_COMMAND_FAILED/);assert.equal(writes,1);
 });

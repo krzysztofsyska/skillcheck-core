@@ -25,6 +25,9 @@ export async function runErasureCommand(args,{loadConfig=async path=>import(path
   // SQL independently enforces isolation; this flag cannot substitute for it.
   const inputs=config.ledgerHealth,challenge=newRestoreChallenge();
   const [checkpoint,minimumWatermark]=await Promise.all([inputs.getCheckpoint(challenge),inputs.getMinimumWatermark()]);
+  // A drill requires the independently retained register to cover the exact
+  // live checkpoint, not merely a lower bound accepted by recovery verification.
+  if(!minimumWatermark||minimumWatermark.sequence!==checkpoint.sequence||minimumWatermark.event_hash!==checkpoint.head_hash)throw new Error('Unreconciled drill watermark');
   const records=await inputs.getRecords(checkpoint.sequence);
   const result=await replayVerifiedLedger({...inputs,records,checkpoint,minimumWatermark,challenge,connect:config.restoreConnect});
   return {command,replayed:result.replayed,verified_events:result.verifiedEvents,checkpoint:result.checkpoint,production_ready:false,isolation_released:false};
