@@ -28,7 +28,10 @@ function hasReadableEvidence(value: string): boolean {
   // Reject format/control characters (including NUL, bidi controls and
   // zero-width marks) even when mixed with letters; keep ordinary line breaks.
   const withoutLineBreaks = value.replace(/[\t\n\r]/g, '');
-  return /[\p{L}\p{N}]/u.test(value) && !/[\p{Cc}\p{Cf}\p{Cs}]/u.test(withoutLineBreaks);
+  // RegExp constructors are needed while tsconfig targets ES5 (literal /u disallowed by tsc).
+  const readable = new RegExp(String.raw`[\p{L}\p{N}]`, 'u');
+  const hidden = new RegExp(String.raw`[\p{Cc}\p{Cf}\p{Cs}]`, 'u');
+  return readable.test(value) && !hidden.test(withoutLineBreaks);
 }
 
 function validatedTest(input: unknown): ExerciseDefinition {
