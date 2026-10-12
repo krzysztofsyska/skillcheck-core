@@ -33,8 +33,12 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
       "'sc021.actor_company'" + ', true) = target_company::text $func$');
     // Isolated SC-010 fake lifecycle contract: not an actual signed erasure service.
     await db.query('create table public.candidates (id uuid primary key, company_id uuid not null references public.companies(id), frozen boolean not null default false, unique(company_id,id))');
-    await db.query('create table private.erasure_executions (request_id uuid primary key, company_id uuid not null, candidate_ids uuid[] not null)');
-    await db.query("create table private.erasure_purge_context (txid bigint primary key, request_id uuid not null, company_id uuid not null, mode text not null check(mode in ('delete','cancel')))");
+    await db.query("create table private.erasure_executions (request_id uuid primary key, company_id uuid not null, candidate_ids uuid[] not null, manifest_hash text not null default 'synthetic-r5-manifest', phase text not null default 'erasing', sequence bigint not null default 2, event_hash text not null default 'synthetic-verified-event', local_purged boolean not null default false)");
+    await db.query("create table private.erasure_purge_context (txid bigint primary key, request_id uuid not null, company_id uuid not null, manifest_hash text not null default 'synthetic-r5-manifest', mode text not null check(mode in ('delete','cancel')))");
+    await db.query("create table private.erasure_purge_context_rows (txid bigint not null, adapter text not null, row_key text not null, row_hash text not null, command text not null, primary key(txid,adapter,row_key))");
+    await db.query("create table private.erasure_purge_manifest (request_id uuid not null, manifest_hash text not null, adapter text not null, row_key text not null, row_hash text not null, primary key(request_id,manifest_hash,adapter,row_key))");
+    await db.query("create table private.erasure_verified_ledger_events (request_id uuid not null, sequence bigint not null, event_hash text not null, phase text not null, primary key(request_id,sequence))");
+    await db.query("create function private.erasure_hash(input jsonb) returns text language sql immutable as $f$ select md5(input::text) $f$");
     await db.query("create function private.erasure_candidate_frozen(target uuid) returns boolean language sql stable security definer set search_path='' as $func$ select exists(select 1 from public.candidates where id=target and frozen) $func$");
     await db.query("create function private.erasure_lock_candidate(target uuid) returns void language plpgsql security definer set search_path='' as $func$ begin perform 1 from public.candidates where id=target for update; if not found then raise exception 'SC021_CANDIDATE_UNAVAILABLE'; end if; if private.erasure_candidate_frozen(target) then raise exception 'SC021_CANDIDATE_FROZEN'; end if; end $func$");
     await db.query(migration);
@@ -149,6 +153,25 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     await db.query('insert into private.erasure_executions(request_id,company_id,candidate_ids) values ($1,$2,$3::uuid[])',
       [purgeRequest,idA,[candidateA]]);
     await db.query('update public.candidates set frozen=true where id=$1',[candidateA]);
+    await db.query("insert into private.erasure_verified_ledger_events(request_id,sequence,event_hash,phase) values($1,2,'synthetic-verified-event','erasing')",[purgeRequest]);
+    // Synthetic snapshots emulate a *prepared* immutable SC-010 manifest;
+    // the actual signed-ledger/R5 extension is a separate release dependency.
+    const manifestSql =
+      "insert into private.erasure_purge_manifest(request_id,manifest_hash,adapter,row_key,row_hash) " +
+      "select $1::uuid,'synthetic-r5-manifest',v.adapter,v.row_key,v.row_hash from (" +
+      "select 'public.ai_gateway_usage'::text adapter,u.id::text row_key,private.erasure_hash(to_jsonb(u)) row_hash " +
+      "from public.ai_gateway_usage u join private.ai_gateway_candidate_links l on l.usage_id=u.id and l.company_id=u.company_id " +
+      "where l.company_id=$2 and l.candidate_id=$3 " +
+      "union all select 'private.ai_gateway_candidate_links'::text,l.usage_id::text,private.erasure_hash(to_jsonb(l)) " +
+      "from private.ai_gateway_candidate_links l where l.company_id=$2 and l.candidate_id=$3) v";
+    await db.query(manifestSql,[purgeRequest,idA,candidateA]);
+
+    async function startSignedSyntheticPurge(client,request,company) {
+      await client.query('begin');
+      await client.query("insert into private.erasure_purge_context(txid,request_id,company_id,manifest_hash,mode) values(txid_current(),$1,$2,'synthetic-r5-manifest','delete')",[request,company]);
+      await client.query("insert into private.erasure_purge_context_rows(txid,adapter,row_key,row_hash,command) select txid_current(),adapter,row_key,row_hash,'delete' from private.erasure_purge_manifest where request_id=$1",[request]);
+      await client.query('set local role erasure_purge_owner');
+    }
     await assert.rejects(worker(candidateReserve,[idA,candidateA,randomUUID(),randomUUID(),
       null,'cv_screening','openai','pinned-v1','policy-v1','price-v1',1]),/SC021_CANDIDATE_FROZEN/);
     // A privileged role without a signed transaction context is still denied.
@@ -159,10 +182,13 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     const eraser = new pg.Client({connectionString:uri.toString()});
     await eraser.connect();
     try {
-      await eraser.query('begin');
-      await eraser.query("insert into private.erasure_purge_context values(txid_current(),$1,$2,'delete')",
-        [purgeRequest,idA]);
-      await eraser.query('set local role erasure_purge_owner');
+      // A forged/missing candidate link hash must stop deletion even when
+      // role, request, frozen candidate and transaction context are present.
+      await startSignedSyntheticPurge(eraser,purgeRequest,idA);
+      await eraser.query("update private.erasure_purge_context_rows set row_hash='tampered' where adapter='public.ai_gateway_usage'");
+      await assert.rejects(eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid)',[purgeRequest]),/SC021_PURGE_MANIFEST_MISMATCH/);
+      await eraser.query('rollback');
+      await startSignedSyntheticPurge(eraser,purgeRequest,idA);
       assert.equal((await eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid) detached',
         [purgeRequest])).rows[0].detached,'1');
       // Rollback proves the finance move and erasure are a single atomic unit.
@@ -170,10 +196,7 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
       assert.equal((await db.query('select count(*)::int n from public.ai_gateway_usage where request_key=$1',
         [boundRequest])).rows[0].n,1);
 
-      await eraser.query('begin');
-      await eraser.query("insert into private.erasure_purge_context values(txid_current(),$1,$2,'delete')",
-        [purgeRequest,idA]);
-      await eraser.query('set local role erasure_purge_owner');
+      await startSignedSyntheticPurge(eraser,purgeRequest,idA);
       assert.equal((await eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid) detached',
         [purgeRequest])).rows[0].detached,'1');
       assert.equal((await eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid) detached',
@@ -201,14 +224,14 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     await worker(candidateReserve,[idA,pendingCandidate,pendingRequest,randomUUID(),null,
       'cv_screening','openai','pinned-v1','policy-v1','price-v1',10]);
     await db.query('update public.candidates set frozen=true where id=$1',[pendingCandidate]);
-    await db.query('insert into private.erasure_executions values($1,$2,$3::uuid[])',
+    await db.query('insert into private.erasure_executions(request_id,company_id,candidate_ids) values($1,$2,$3::uuid[])',
       [pendingPurge,idA,[pendingCandidate]]);
+    await db.query("insert into private.erasure_verified_ledger_events(request_id,sequence,event_hash,phase) values($1,2,'synthetic-verified-event','erasing')",[pendingPurge]);
     const pendingEraser=new pg.Client({connectionString:uri.toString()});
     await pendingEraser.connect();
     try {
       await pendingEraser.query('begin');
-      await pendingEraser.query("insert into private.erasure_purge_context values(txid_current(),$1,$2,'delete')",
-        [pendingPurge,idA]);
+      await pendingEraser.query("insert into private.erasure_purge_context(txid,request_id,company_id,manifest_hash,mode) values(txid_current(),$1,$2,'synthetic-r5-manifest','delete')",[pendingPurge,idA]);
       await pendingEraser.query('set local role erasure_purge_owner');
       await assert.rejects(pendingEraser.query('select private.ai_gateway_detach_signed_purge($1::uuid)',
         [pendingPurge]),/SC021_UNRECONCILED_CANDIDATE_USAGE/);
