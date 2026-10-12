@@ -4,14 +4,14 @@ on:
     paths:
       - "lib/ai-gateway/**"
       - "tests/ai-gateway*"
-      - "supabase/migrations/20261012100500_ai_gateway_cost_ledger.sql"
+      - "db/prototypes/sc021-ai-gateway-ledger.sql"
       - ".github/workflows/sc021-ai-gateway-tests.yml"
       - "package.json"
   pull_request:
     paths:
       - "lib/ai-gateway/**"
       - "tests/ai-gateway*"
-      - "supabase/migrations/20261012100500_ai_gateway_cost_ledger.sql"
+      - "db/prototypes/sc021-ai-gateway-ledger.sql"
       - ".github/workflows/sc021-ai-gateway-tests.yml"
       - "package.json"
 permissions:
