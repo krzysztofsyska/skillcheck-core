@@ -5,6 +5,7 @@ on:
       - "lib/ai-gateway/**"
       - "tests/ai-gateway*"
       - "db/prototypes/sc021-ai-gateway-ledger.sql"
+      - "db/prototypes/sc021-r5-anonymous-erasure.sql"
       - ".github/workflows/sc021-ai-gateway-tests.yml"
       - "package.json"
   pull_request:
@@ -12,6 +13,7 @@ on:
       - "lib/ai-gateway/**"
       - "tests/ai-gateway*"
       - "db/prototypes/sc021-ai-gateway-ledger.sql"
+      - "db/prototypes/sc021-r5-anonymous-erasure.sql"
       - ".github/workflows/sc021-ai-gateway-tests.yml"
       - "package.json"
 permissions:
