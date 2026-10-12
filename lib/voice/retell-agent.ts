@@ -31,8 +31,10 @@ export type RetellAgentErrorCode =
   | "RETELL_INVALID_RESPONSE";
 
 export class RetellAgentError extends Error {
-  constructor(readonly code: RetellAgentErrorCode) {
+  readonly code: RetellAgentErrorCode;
+  constructor(code: RetellAgentErrorCode) {
     super(code);
+    this.code = code;
     this.name = "RetellAgentError";
   }
 }
