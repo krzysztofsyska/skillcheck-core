@@ -47,7 +47,8 @@
     "test:erasure-execution": "node --test tests/erasure-execution-database.test.mjs tests/erasure-ledger.test.mjs",
     "test:erasure-execution-concurrency": "node --test tests/erasure-execution-concurrency.test.mjs tests/erasure-ledger-concurrency.test.mjs",
     "test:retention-scheduler": "node --test tests/retention-scheduler-database.test.mjs tests/retention-scheduler-ui.test.mjs",
-    "test:retention-scheduler-concurrency": "node --test tests/retention-scheduler-concurrency.test.mjs"
+    "test:retention-scheduler-concurrency": "node --test tests/retention-scheduler-concurrency.test.mjs",
+    "test:erasure-service": "node --test tests/erasure-service.test.mjs tests/erasure-service-backend.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
