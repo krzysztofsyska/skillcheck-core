@@ -101,18 +101,17 @@ begin
   return n;
 end $$;
 
--- No public/customer/ordinary worker direct inventory or candidate resolver.
+-- These staging helpers are callable ONLY by the migration owner / future
+-- reviewed SECURITY DEFINER SC-010 inventory function. Even erasure_purge_owner
+-- cannot enumerate another tenant outside a signed purge execution. In the real
+-- SC-010 lifecycle, inventory preparation is owned by the DB migration owner;
+-- the restricted erasure_purge_owner executes only approved delete capabilities.
 revoke all on function private.ai_gateway_r5_inventory_rows(uuid,uuid[])
- from public,anon,authenticated,screening_worker,ai_meter_worker;
+ from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
 revoke all on function private.ai_gateway_r5_row_candidates(uuid,text,jsonb)
- from public,anon,authenticated,screening_worker,ai_meter_worker;
+ from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
 revoke all on function private.erasure_purge_rows_sc021_r5(uuid,uuid[])
- from public,anon,authenticated,screening_worker,ai_meter_worker;
+ from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
 revoke all on function private.ai_gateway_r5_assert_reconciled(uuid,uuid[])
- from public,anon,authenticated,screening_worker,ai_meter_worker;
-
-grant execute on function private.ai_gateway_r5_inventory_rows(uuid,uuid[]) to erasure_purge_owner;
-grant execute on function private.ai_gateway_r5_row_candidates(uuid,text,jsonb) to erasure_purge_owner;
-grant execute on function private.erasure_purge_rows_sc021_r5(uuid,uuid[]) to erasure_purge_owner;
-grant execute on function private.ai_gateway_r5_assert_reconciled(uuid,uuid[]) to erasure_purge_owner;
+ from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
 commit;
