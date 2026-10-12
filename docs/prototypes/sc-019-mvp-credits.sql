@@ -144,6 +144,15 @@ revoke all on function public.sc19_get_balance(uuid) from public, anon, authenti
 grant execute on function public.sc19_get_balance(uuid) to authenticated;
 
 
+-- Quota offers are safe to disclose, but settlement references are not.
+create function public.sc19_list_offers()
+returns table(plan text, analyses integer)
+language sql stable security definer set search_path = '' as $
+  select p.plan,p.credits from private.sc19_package_policy p order by p.plan;
+$;
+revoke all on function public.sc19_list_offers() from public,anon,authenticated;
+grant execute on function public.sc19_list_offers() to authenticated;
+
 -- Billing history: only tenant-visible, non-identifying events.
 create function public.sc19_list_credit_history(target_company uuid, result_limit integer default 20)
 returns table(event_at timestamptz, kind text, delta integer)
