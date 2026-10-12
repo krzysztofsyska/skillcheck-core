@@ -4,7 +4,7 @@ import {
   validatePolicy, selectModel, usageCostMicroUsd, usdMicroToPlnGrosze, packageMargin,
 } from '../lib/ai-gateway/core.ts';
 import { runMeteredOperation } from '../lib/ai-gateway/runtime.ts';
-import { postgresAiLedger } from '../lib/ai-gateway/postgres.ts';
+import { postgresAiLedger, postgresCandidateAiLedger } from '../lib/ai-gateway/postgres.ts';
 import { createOpenAiResponsesAdapter } from '../lib/ai-gateway/openai.ts';
 import { summarizeAiCosts } from '../lib/ai-gateway/reports.ts';
 
@@ -329,4 +329,44 @@ test('Codex P2: null candidate aggregation never collides with legitimate unassi
   assert.equal(report.total.attempts, 2);
   assert.equal(report.byCandidate['unassigned'].attempts, 1);
   assert.equal(report.byCandidate['\u0000no-candidate'].attempts, 1);
+});
+
+
+test('SC-021/R5 candidate ledger binds every attempt to trusted candidate and not generic reserve', async () => {
+  const candidateId='55555555-5555-4555-8555-555555555555';
+  const calls=[];
+  const query=async (sql,values) => {
+    calls.push({sql,values});
+    if (sql.includes('ai_gateway_reserve_candidate')) {
+      return [{usage_id:ctx.requestKey,created:true,warning:false}];
+    }
+    if (sql.includes('ai_gateway_settle')) return [{settled:true}];
+    if (sql.includes('ai_gateway_mark_unknown')) return [{marked:true}];
+    throw Error('GENERIC_RESERVATION_MUST_NOT_BE_CALLED');
+  };
+  const ledger=postgresCandidateAiLedger(query,candidateId);
+  const reservation=await ledger.reserve({
+    ...ctx,candidatePseudonym:null,
+    provider:'openai',model:model.model,
+    policyVersion:policy.version,priceVersion:model.priceVersion,
+    estimatedMicroUsd:100,
+  });
+  assert.deepEqual(reservation,{usageId:ctx.requestKey,created:true,warning:false});
+  assert.equal(calls.length,1);
+  assert.match(calls[0].sql,/private.ai_gateway_reserve_candidate/);
+  assert.equal(calls[0].values[0],ctx.companyId);
+  assert.equal(calls[0].values[1],candidateId);
+  assert.equal(calls[0].values[2],ctx.requestKey);
+  assert.ok(!calls[0].sql.includes(ctx.companyId));
+  await assert.rejects(ledger.reserve({
+    ...ctx,provider:'openai',model:model.model,
+    policyVersion:policy.version,priceVersion:model.priceVersion,
+    estimatedMicroUsd:100,
+  }),/SC021_UNTRUSTED_CANDIDATE_IDENTIFIER/);
+  assert.equal(calls.length,1);
+  assert.throws(()=>postgresCandidateAiLedger(query,'user supplied candidate'),/SC021_INVALID_TRUSTED_CANDIDATE/);
+  assert.equal(await ledger.settle({
+    companyId:ctx.companyId,requestKey:ctx.requestKey,costMicroUsd:42,
+    usage,providerRequestId:'synthetic',
+  }),true);
 });
