@@ -162,6 +162,12 @@ begin
     or new_output_tokens is null or new_output_tokens < 0
     or length(coalesce(new_provider_request_id, '')) > 200
   then raise exception 'SC021_INVALID_USAGE' using errcode = '22023'; end if;
+  -- Match reserve() lock order: tenant budget first, then usage row.
+  -- A settlement above its estimate must not race a new reservation that would
+  -- otherwise read stale accounted usage and admit an over-budget provider call.
+  perform 1 from public.ai_gateway_limits
+    where company_id = target_company for update;
+  if not found then raise exception 'SC021_BUDGET_UNCONFIGURED' using errcode = 'P0001'; end if;
   select * into item from public.ai_gateway_usage
     where company_id = target_company and request_key = target_request_key for update;
   if not found then raise exception 'SC021_UNKNOWN_RESERVATION' using errcode = 'P0001'; end if;
