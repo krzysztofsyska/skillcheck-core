@@ -68,9 +68,13 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
       '$7::text,$8::text,$9::text,$10::text,$11::bigint)';
     const request1 = randomUUID(), operation = randomUUID();
     const reserveArgs = (companyId, requestId, cost = 100) => [
-      companyId, requestId, operation, null, 'anon:123', 'cv_screening',
+      companyId, requestId, operation, null, null, 'cv_screening',
       'openai', 'pinned-v1', 'policy-v1', 'price-v1', cost,
     ];
+    await assert.rejects(worker(reserveQuery, [
+      idA, randomUUID(), operation, null, 'candidate_identifier', 'cv_screening',
+      'openai', 'pinned-v1', 'policy-v1', 'price-v1', 1,
+    ]), /violates check constraint "ai_gateway_usage_r5_no_pseudonym"/);
     const r1 = await worker(reserveQuery, reserveArgs(idA, request1));
     assert.equal(r1[0].created, true);
     assert.equal(r1[0].warning, true);
