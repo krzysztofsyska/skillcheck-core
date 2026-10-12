@@ -241,8 +241,8 @@ declare d private.retention_delegations;t private.retention_ticks;c private.eras
  return jsonb_build_object('revision',coalesce(d.revision,0),'delegation_id',d.id,'policy_revision',d.policy_revision,'execution_mode',coalesce(d.execution_mode,'suggest_only'),
  'max_batch',coalesce(d.max_batch,25),'revoked',coalesce(d.revoked,true),'owner_current',d.owner_id is not distinct from auth.uid(),'execution_enabled',false,
  'blockers',case when c.enabled and c.external_inventory_verified and c.backup_horizon_days is not null and c.artifact_horizon_days is not null and c.retention_margin_days is not null and not c.restore_isolated then '[]'::jsonb else jsonb_build_array('execution_not_provisioned') end,
- 'oldest_pending_at',(select min(created_at) from private.erasure_executions where company_id=target_company and phase in ('authorized','erasing')),
- 'expired_leases',(select count(*) from private.erasure_executions where company_id=target_company and phase='erasing' and not local_purged and lease_until<clock_timestamp()),
+ 'oldest_pending_at',(select min(created_at) from (select created_at from private.erasure_executions where company_id=target_company and phase in ('authorized','erasing') union all select r.created_at from private.erasure_requests r where r.company_id=target_company and r.status='authorized' and not exists(select 1 from private.erasure_executions e where e.request_id=r.id)) pending),
+ 'expired_leases',(select count(*) from private.erasure_executions where company_id=target_company and (pending_phase is not null or (phase='erasing' and not local_purged)) and lease_until<clock_timestamp()),
  'last_tick_at',t.created_at,'lag_seconds',case when t.id is null then null else greatest(0,floor(extract(epoch from statement_timestamp()-t.created_at))) end,
  'suggestions',(select count(*) from private.retention_suggestions where company_id=target_company and status='suggested'),
  'authorized',(select count(*) from private.retention_suggestions where company_id=target_company and status='authorized'),
@@ -262,6 +262,7 @@ do $$declare t text;f record;begin
  if f.nspname='public' then execute format('grant execute on function %s to authenticated',f.signature);end if;
  end loop;
 end;$$;
+revoke all on sequence private.retention_suggestions_due_generation_seq from public,anon,authenticated,screening_worker,contact_verifier,erasure_worker,erasure_ledger_attestor,erasure_restore_attestor,erasure_scheduler;
 grant usage on schema private to erasure_scheduler;
 grant execute on function private.tick_retention_schedule(integer) to erasure_scheduler;
 
@@ -356,6 +357,11 @@ begin
  if value->'authorization'->>'kind'='retention_policy' then
   if jsonb_typeof(value->'authorization')<>'object' or (select count(*) from jsonb_object_keys(value->'authorization'))<>8
    or not (value->'authorization') ?& array['kind','actor_id','delegation_id','activation_revision','policy_revision','due_generation','due_at','evidence_hash']
+   or jsonb_typeof(value->'authorization'->'actor_id') is distinct from 'string' or jsonb_typeof(value->'authorization'->'delegation_id') is distinct from 'string'
+   or jsonb_typeof(value->'authorization'->'activation_revision') is distinct from 'number' or jsonb_typeof(value->'authorization'->'policy_revision') is distinct from 'number' or jsonb_typeof(value->'authorization'->'due_generation') is distinct from 'number'
+   or jsonb_typeof(value->'authorization'->'due_at') is distinct from 'string' or jsonb_typeof(value->'authorization'->'evidence_hash') is distinct from 'string'
+   or coalesce(value->'authorization'->>'policy_revision','') !~ '^[1-9][0-9]*$' or (value->'authorization'->>'policy_revision')::numeric>9007199254740991
+   or coalesce(value->'authorization'->>'due_at','') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|\+00:00)$'
    or coalesce(value->'authorization'->>'evidence_hash','') !~ '^[0-9a-f]{64}$'
    or coalesce(value->'authorization'->>'activation_revision','') !~ '^[1-9][0-9]*$' or coalesce(value->'authorization'->>'due_generation','') !~ '^[1-9][0-9]*$'
    or (value->'authorization'->>'activation_revision')::numeric>9007199254740991 or (value->'authorization'->>'due_generation')::numeric>9007199254740991
@@ -364,6 +370,7 @@ begin
    or not isfinite((value->'authorization'->>'due_at')::timestamptz)
    or (value->'authorization'->>'actor_id')::uuid is null or (value->'authorization'->>'delegation_id')::uuid is null then raise exception using errcode='PT422',message='Invalid retention provenance';end if;
  end if;
+ if value->'authorization'->>'kind'='owner' and ((select count(*) from jsonb_object_keys(value->'authorization'))<>2 or not (value->'authorization') ?& array['kind','actor_id'] or jsonb_typeof(value->'authorization'->'actor_id') is distinct from 'string' or (value->'authorization'->>'actor_id')::uuid is null) then raise exception using errcode='PT422',message='Invalid owner provenance';end if;
  if exists(select 1 from private.retention_authorizations where request_id=(value->>'request_id')::uuid and authorization_json is distinct from value->'authorization') then raise exception using errcode='PT409',message='Recovery authorization changed';end if;
  if value->>'contract' is distinct from 'sc010-r3-v1' or jsonb_typeof(value->'candidate_ids') is distinct from 'array' or jsonb_typeof(value->'policy'->'rules') is distinct from 'array'
  or value->>'scope_kind' not in ('candidate_record','confirmed_subject') or value->>'phase' not in ('authorized','cancelled','erasing','active_data_erased')
