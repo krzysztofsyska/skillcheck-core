@@ -133,8 +133,13 @@ export function packageMargin(financials: PackageFinancials) {
   if (aiCostPlnGrosze === null || voiceAndTelephonyPlnGrosze === null || otherVariablePlnGrosze === null) {
     return { known: false as const, marginPlnGrosze: null, marginPercent: null };
   }
-  const margin = revenueNetPlnGrosze - aiCostPlnGrosze
-    - voiceAndTelephonyPlnGrosze - otherVariablePlnGrosze;
+  const exactMargin = BigInt(revenueNetPlnGrosze) - BigInt(aiCostPlnGrosze)
+    - BigInt(voiceAndTelephonyPlnGrosze) - BigInt(otherVariablePlnGrosze);
+  if (exactMargin > BigInt(Number.MAX_SAFE_INTEGER)
+    || exactMargin < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new Error('SC021_COST_OVERFLOW');
+  }
+  const margin = Number(exactMargin);
   return {
     known: true as const,
     marginPlnGrosze: margin,
