@@ -47,7 +47,10 @@ const agentIdPattern = /^agent_[A-Za-z0-9]{16,64}$/;
  * The caller must separately authorize access; this is NOT a public API route.
  */
 export async function readRetellAgent(
-  env: RetellAgentEnvironment = process.env,
+  env: RetellAgentEnvironment = {
+    RETELL_API_KEY: process.env.RETELL_API_KEY,
+    RETELL_AGENT_ID: process.env.RETELL_AGENT_ID,
+  },
   http: AgentFetch = fetch,
 ): Promise<RetellAgentStatus> {
   const key = env.RETELL_API_KEY;
