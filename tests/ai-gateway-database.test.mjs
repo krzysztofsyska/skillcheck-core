@@ -42,12 +42,13 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     await db.query('insert into public.companies(id) values ($1),($2)', [idA,idB]);
     await db.query('insert into public.ai_gateway_limits(company_id,monthly_limit_micro_usd) values ($1,100),($2,100)', [idA,idB]);
 
-    async function worker(sql, values = []) {
+    async function worker(sql, values = [], role = 'ai_meter_worker') {
       const client = new pg.Client({ connectionString: uri.toString() });
       await client.connect();
       try {
         await client.query('begin');
-        await client.query('set local role ai_meter_worker');
+        if (!['ai_meter_worker','erasure_purge_owner'].includes(role)) throw Error('invalid test worker role');
+        await client.query('set local role ' + role);
         const result = await client.query(sql, values);
         await client.query('commit');
         return result.rows;
@@ -121,6 +122,103 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     ]);
     assert.equal(race.filter(x => x.status === 'fulfilled').length, 1);
     assert.equal(race.filter(x => x.status === 'rejected').length, 2);
+
+    // SC-021-B/R5: explicit per-subject mapping, worker-only access and
+    // candidate freeze. No browser-provided pseudonym is used as identity.
+    await db.query('update public.ai_gateway_limits set monthly_limit_micro_usd=1000 where company_id=$1',[idA]);
+    const candidateA=randomUUID(), candidateB=randomUUID();
+    await db.query('insert into public.candidates(id,company_id) values($1,$2),($3,$4)',
+      [candidateA,idA,candidateB,idB]);
+    const candidateReserve = 'select * from private.ai_gateway_reserve_candidate(' +
+      '$1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::text,' +
+      '$7::text,$8::text,$9::text,$10::text,$11::bigint)';
+    const boundRequest=randomUUID();
+    const boundArgs=[idA,candidateA,boundRequest,randomUUID(),null,'cv_screening',
+      'openai','pinned-v1','policy-v1','price-v1',60];
+    const bound=await worker(candidateReserve,boundArgs);
+    assert.equal(bound[0].created,true);
+    assert.equal((await worker(candidateReserve,boundArgs))[0].created,false);
+    assert.equal((await db.query('select count(*)::int n from private.ai_gateway_candidate_links where candidate_id=$1',
+      [candidateA])).rows[0].n,1);
+    await assert.rejects(worker(candidateReserve,[idA,candidateB,randomUUID(),randomUUID(),
+      null,'cv_screening','openai','pinned-v1','policy-v1','price-v1',10]),/SC021_CANDIDATE_UNAVAILABLE/);
+    await assert.rejects(asTenant(idA,'select * from private.ai_gateway_candidate_links'),/permission denied/);
+    assert.equal((await worker(settleQuery,[idA,boundRequest,70,111,0,22,'resp_private']))[0].settled,true);
+
+    const purgeRequest=randomUUID();
+    await db.query('insert into private.erasure_executions(request_id,company_id,candidate_ids) values ($1,$2,$3::uuid[])',
+      [purgeRequest,idA,[candidateA]]);
+    await db.query('update public.candidates set frozen=true where id=$1',[candidateA]);
+    await assert.rejects(worker(candidateReserve,[idA,candidateA,randomUUID(),randomUUID(),
+      null,'cv_screening','openai','pinned-v1','policy-v1','price-v1',1]),/SC021_CANDIDATE_FROZEN/);
+    // A privileged role without a signed transaction context is still denied.
+    await assert.rejects(worker(
+      'select private.ai_gateway_detach_signed_purge($1::uuid)',
+      [purgeRequest], 'erasure_purge_owner'),/SC021_ERASURE_NOT_AUTHORIZED/);
+
+    const eraser = new pg.Client({connectionString:uri.toString()});
+    await eraser.connect();
+    try {
+      await eraser.query('begin');
+      await eraser.query("insert into private.erasure_purge_context values(txid_current(),$1,$2,'delete')",
+        [purgeRequest,idA]);
+      await eraser.query('set local role erasure_purge_owner');
+      assert.equal((await eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid) detached',
+        [purgeRequest])).rows[0].detached,'1');
+      // Rollback proves the finance move and erasure are a single atomic unit.
+      await eraser.query('rollback');
+      assert.equal((await db.query('select count(*)::int n from public.ai_gateway_usage where request_key=$1',
+        [boundRequest])).rows[0].n,1);
+
+      await eraser.query('begin');
+      await eraser.query("insert into private.erasure_purge_context values(txid_current(),$1,$2,'delete')",
+        [purgeRequest,idA]);
+      await eraser.query('set local role erasure_purge_owner');
+      assert.equal((await eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid) detached',
+        [purgeRequest])).rows[0].detached,'1');
+      assert.equal((await eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid) detached',
+        [purgeRequest])).rows[0].detached,'0');
+      await eraser.query('commit');
+    } finally {
+      await eraser.query('rollback').catch(()=>{});
+      await eraser.end();
+    }
+    assert.equal((await db.query('select count(*)::int n from private.ai_gateway_candidate_links where candidate_id=$1',
+      [candidateA])).rows[0].n,0);
+    assert.equal((await db.query('select count(*)::int n from public.ai_gateway_usage where request_key=$1',
+      [boundRequest])).rows[0].n,0);
+    const aggregate=(await db.query('select cost_micro_usd::text amount,call_count::int calls from private.ai_gateway_anonymous_spend where company_id=$1',[idA])).rows;
+    assert.deepEqual(aggregate,[{amount:'70',calls:1}]);
+    await db.query('delete from public.candidates where id=$1',[candidateA]);
+    // 110 previously settled + 70 anonymized. Expense is not refunded by erasure.
+    await db.query('update public.ai_gateway_limits set monthly_limit_micro_usd=220 where company_id=$1',[idA]);
+    await assert.rejects(worker(reserveQuery,reserveArgs(idA,randomUUID(),50)),/SC021_BUDGET_EXHAUSTED/);
+
+    // A pending/unknown provider charge prevents detachment until reconciled.
+    const pendingCandidate=randomUUID(),pendingRequest=randomUUID(),pendingPurge=randomUUID();
+    await db.query('insert into public.candidates(id,company_id,frozen) values($1,$2,false)',[pendingCandidate,idA]);
+    await db.query('update public.ai_gateway_limits set monthly_limit_micro_usd=1000 where company_id=$1',[idA]);
+    await worker(candidateReserve,[idA,pendingCandidate,pendingRequest,randomUUID(),null,
+      'cv_screening','openai','pinned-v1','policy-v1','price-v1',10]);
+    await db.query('update public.candidates set frozen=true where id=$1',[pendingCandidate]);
+    await db.query('insert into private.erasure_executions values($1,$2,$3::uuid[])',
+      [pendingPurge,idA,[pendingCandidate]]);
+    const pendingEraser=new pg.Client({connectionString:uri.toString()});
+    await pendingEraser.connect();
+    try {
+      await pendingEraser.query('begin');
+      await pendingEraser.query("insert into private.erasure_purge_context values(txid_current(),$1,$2,'delete')",
+        [pendingPurge,idA]);
+      await pendingEraser.query('set local role erasure_purge_owner');
+      await assert.rejects(pendingEraser.query('select private.ai_gateway_detach_signed_purge($1::uuid)',
+        [pendingPurge]),/SC021_UNRECONCILED_CANDIDATE_USAGE/);
+      await pendingEraser.query('rollback');
+    } finally {
+      await pendingEraser.end();
+    }
+    assert.equal((await db.query('select count(*)::int n from private.ai_gateway_candidate_links where candidate_id=$1',
+      [pendingCandidate])).rows[0].n,1);
+
     assert.equal((await db.query('select count(*)::int as count from public.ai_gateway_usage where company_id=$1', [idB])).rows[0].count, 1);
 
     // Codex P1: an in-flight settlement above its reservation locks tenant budget.
