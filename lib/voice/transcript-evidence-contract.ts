@@ -83,7 +83,8 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const opaque = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const roleKeyPattern = /^[a-z0-9]+(?:-[a-z0-9]+){1,8}$/;
 const criterionIdPattern = /^(task|kpi|competency|behavior):([1-9]\d?)$/;
-const behaviorAreaIds = new Set(behaviorGuideDefinitions.map(area => area.id));
+const behaviorAreaIds: ReadonlySet<string> = new Set<string>(behaviorGuideDefinitions.map(area => area.id));
+const evidenceAlphanumeric = new RegExp('[\\p{L}\\p{N}]', 'u');
 const sourceIdentity = new Set([
   "companyId", "recruitmentId", "applicationId", "voiceInterviewId", "sourceId",
   "providerEventId", "providerCallId", "attemptId", "correlationId", "planVersionId",
@@ -744,7 +745,7 @@ function validateEvidence(sealed: SealedTranscript, evidence: unknown, rating: C
       reject("invented_quotation");
     }
     // A one-character substring may be exact but is not substantive evidence.
-    if ([...item.quote].filter(char => /[\p{L}\p{N}]/u.test(char)).length < 8) {
+    if (Array.from(item.quote).filter(char => evidenceAlphanumeric.test(char)).length < 8) {
       reject("insufficient_evidence");
     }
     assertWellFormed(item.quote);
