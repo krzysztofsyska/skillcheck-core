@@ -67,12 +67,12 @@ create function private.erasure_purge_rows_sc021_r5(
   tenant uuid, subjects uuid[]
 ) returns table(adapter text,row_key text,row_data jsonb)
 language plpgsql stable security definer set search_path = ''
-set timezone='UTC' set datestyle='ISO, YMD' as $
+set timezone='UTC' set datestyle='ISO, YMD' as $$
 begin
  perform private.ai_gateway_r5_assert_reconciled(tenant,subjects);
  return query select * from private.erasure_purge_rows(tenant,subjects);
  return query select * from private.ai_gateway_r5_inventory_rows(tenant,subjects);
-end $;
+end $$;
 
 -- Preparation/preview blocker: unsigned or unknown usage must never be erased.
 -- Unlike cost accounting, this is subject-scoped solely through the trusted FK.
@@ -107,7 +107,7 @@ end $$;
 -- with checks for both new adapters. This is an offline proposal for the R5
 -- scope checker, not a replacement for the signed R4 preparation function.
 create function private.erasure_check_purge_scope_sc021_r5(target_request uuid)
-returns void language plpgsql volatile security definer set search_path = '' as $
+returns void language plpgsql volatile security definer set search_path = '' as $$
 declare
  e private.erasure_executions%rowtype;
  r record;
@@ -132,18 +132,18 @@ begin
  end loop;
 exception when lock_not_available then
  raise exception 'SC021_ERASURE_SCOPE_BUSY' using errcode='PT409';
-end $;
+end $$;
 
 -- A real manifest must not be produced until the exact immutable R5 baseline,
 -- R5 purge graph, linked-usage removal, and independent review are in place.
 -- There is intentionally NO fallback to the R4 prepare function, since its
 -- frozen schema contract rejects the new ledger tables.
 create function private.ai_gateway_r5_prepare_gate(target_request uuid)
-returns bigint language plpgsql volatile security definer set search_path = '' as $
+returns bigint language plpgsql volatile security definer set search_path = '' as $$
 begin
  perform private.erasure_check_purge_scope_sc021_r5(target_request);
  raise exception 'SC021_R5_BASELINE_NOT_REVIEWED' using errcode='PT409';
-end $;
+end $$;
 
 -- CRITICAL SC-005/SC-021 boundary: the generic reservation is not an
 -- authorized candidate operation. Deny the shared AI/screening worker roles
