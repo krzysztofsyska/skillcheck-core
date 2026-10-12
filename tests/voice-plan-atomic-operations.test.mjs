@@ -87,6 +87,11 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
       "select id from public.positions where id=$1 for update nowait",[f.position.id]),
       e=>e.code==="55P03");
     await rival.query("rollback to savepoint position_lock");
+    await rival.query("savepoint candidate_lock");
+    await assert.rejects(rival.query(
+      "select id from public.candidates where id=$1 for update nowait",
+      [f.application.candidate_id]),e=>e.code==="55P03");
+    await rival.query("rollback to savepoint candidate_lock");
     await assert.rejects(rival.query(
       "select owner_id from public.companies where id=$1 for update nowait",[f.companyId]),
       e=>e.code==="55P03");
@@ -238,6 +243,15 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
       "select pointer_version from private.voice_plan_current_releases where application_id=$1",
       [other.application.id])).rows[0];
     assert.equal(Number(pointer.pointer_version),1);
+    // A new CV revision invalidates the source even if a previous release
+    // remains in immutable history.
+    await db.query(
+      "update public.candidate_documents set redacted_text=redacted_text || ' Aktualizacja CV' where id=$1",
+      [other.candidateDocument.id]);
+    await assert.rejects(reconstructTrustedVoiceSource(db,{
+      companyId:other.companyId,applicationId:other.application.id,
+      analysisId:other.analysis_id,reviewId:other.reviewId,shortlistEntryId:otherShortlist,
+    }),e=>/VOICE_TRUSTED_SOURCE_STALE/.test(e.message));
   }finally{await a.end();await b.end();}
  });
  await t.test("source mutation invalidates both RPCs without side effects",async()=>{
