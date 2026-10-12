@@ -72,12 +72,20 @@ export function createOpenAiResponsesAdapter<T>(options: OpenAiAdapterOptions<T>
         throw new Error('SC021_OPENAI_INVALID_RESPONSE');
       }
       const obj = object(body);
-      if (!obj || obj.status !== 'completed') throw new Error('SC021_OPENAI_INCOMPLETE');
-      return {
-        data: options.parseResult(body),
-        usage: responseUsage(body),
-        providerRequestId: typeof obj.id === 'string' ? obj.id : null,
-      };
+      if (!obj) throw new Error('SC021_OPENAI_INVALID_RESPONSE');
+      const usage = responseUsage(body);
+      const providerRequestId = typeof obj.id === 'string' ? obj.id : null;
+      // A completed but malformed result (or explicitly incomplete response) can
+      // still incur provider charges. Return its usage to the metering boundary
+      // rather than throwing away the only available settlement evidence.
+      if (obj.status !== 'completed') {
+        return { parseError: 'SC021_PROVIDER_OUTPUT_INVALID', usage, providerRequestId };
+      }
+      try {
+        return { data: options.parseResult(body), usage, providerRequestId };
+      } catch {
+        return { parseError: 'SC021_PROVIDER_OUTPUT_INVALID', usage, providerRequestId };
+      }
     } finally {
       clearTimeout(timer);
     }
