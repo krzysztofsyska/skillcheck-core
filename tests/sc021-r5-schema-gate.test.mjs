@@ -189,12 +189,12 @@ test('SC-021-B/R5 staged inventory uses REAL SC-010-R4 graph and authoritative t
       JSON.stringify({...rowsA[0].row_data,candidate_id:tenantB.candidate.id})],
   ),e=>e.code==='PT409');
 
-  // Outstanding provider charges block signed erasure; a settled invoice
-  // preserves the explicit candidate inventory and becomes reconcilable.
-  await assert.rejects(db.query(
-    'select private.ai_gateway_r5_assert_reconciled($1,$2::uuid[])',
+  // Earlier regression already rejects reserved usage BEFORE manifest.
+  // Once settled, the same candidate remains a single reconciled subject.
+  assert.equal((await db.query(
+    'select private.ai_gateway_r5_assert_reconciled($1,$2::uuid[]) as n',
     [tenantA.companyId,[tenantA.candidate.id]],
-  ),e=>e.code==='PT409');
+  )).rows[0].n,1);
 
   await assert.rejects(db.query(
     'select private.ai_gateway_r5_assert_reconciled($1,$2::uuid[])',
