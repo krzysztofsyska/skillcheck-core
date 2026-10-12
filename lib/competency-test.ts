@@ -34,6 +34,9 @@ const pictograph = new RegExp(String.raw`[\p{Extended_Pictographic}]`, 'u');
 const letter = new RegExp(String.raw`[\p{L}]`, 'u');
 const emojiModifier = new RegExp(String.raw`[\p{Emoji_Modifier}]`, 'u');
 const control = new RegExp(String.raw`[\p{Cc}\p{Cs}]`, 'u');
+const arabicLetter = new RegExp(String.raw`[\p{Script=Arabic}&&\p{L}]`, 'v');
+const indicLetter = new RegExp(String.raw`[\p{L}&&[\p{Script=Devanagari}\p{Script=Bengali}\p{Script=Gurmukhi}\p{Script=Gujarati}\p{Script=Oriya}\p{Script=Tamil}\p{Script=Telugu}\p{Script=Kannada}\p{Script=Malayalam}\p{Script=Sinhala}]]`, 'v');
+const indicViramas = new Set(['\u094D','\u09CD','\u0A4D','\u0ACD','\u0B4D','\u0BCD','\u0C4D','\u0CCD','\u0D4D','\u0DCA']);
 
 /** Returns -1 for forbidden invisible/control characters.
  * Permits contextually meaningful emoji joiners, emoji variation selectors
@@ -60,7 +63,11 @@ function visibleContentCount(value: string): number {
       const emojiJoiner = char === '\u200D' && previousEmoji >= 0
         && pictograph.test(chars[previousEmoji]) && pictograph.test(next);
       const softHyphen = char === '\u00AD' && letter.test(previous) && letter.test(next);
-      if (!emojiVariation && !emojiJoiner && !softHyphen) return -1;
+      const arabicJoiner = char === '\u200C' && arabicLetter.test(previous) && arabicLetter.test(next);
+      // ZWJ after an Indic virama participates in a visible conjunct cluster.
+      const indicJoiner = char === '\u200D' && indicViramas.has(previous)
+        && index >= 2 && indicLetter.test(chars[index-2]) && indicLetter.test(next);
+      if (!emojiVariation && !emojiJoiner && !softHyphen && !arabicJoiner && !indicJoiner) return -1;
       continue;
     }
     // U+2800 looks blank but is classified as a symbol, not White_Space.

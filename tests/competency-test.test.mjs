@@ -213,3 +213,16 @@ test('keycap emoji variation sequences are valid in answers and literal citation
     assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
   }
 });
+
+test('Persian ZWNJ and Indic conjunct ZWJ are valid script shaping, not invalid payloads',()=>{
+  for(const workSample of ['می‌روم به خانه','رفتار می‌رود','क्‍ष परीक्षण']) {
+    assert.equal(parseCompetencyTestSubmission(definition(),{workSample}).workSample,workSample);
+    const rows=review(); rows[0]={criterionIndex:0,rating:'meets',evidence:workSample};
+    assert.equal(evaluateCompetencyTest(definition(),{workSample},rows).criterionResults[0].rating,'meets');
+  }
+});
+test('unrelated invisible joiners remain forbidden',()=>{
+  for(const workSample of ['abc‌def','abc‍def','‌','‍','می‌ hello','سلام‌ABC','क‍ष']) {
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
+  }
+});
