@@ -6,6 +6,7 @@ import {
 import { runMeteredOperation } from '../lib/ai-gateway/runtime.ts';
 import { postgresAiLedger } from '../lib/ai-gateway/postgres.ts';
 import { createOpenAiResponsesAdapter } from '../lib/ai-gateway/openai.ts';
+import { summarizeAiCosts } from '../lib/ai-gateway/reports.ts';
 
 const model = {
   provider: 'openai', model: 'pinned-screening-model', revision: '2026-10-12',
@@ -231,4 +232,36 @@ test('OpenAI adapter rejects absent server secret and exposes unknown usage with
     fetchImpl:async()=>({ok:false,status:429}),
   });
   await assert.rejects(refused(model,ctx.requestKey), /SC021_OPENAI_PROVIDER_ERROR/);
+});
+
+
+test('SC-021-D cost report groups by tenant, task, process and pseudonym without inventing settled cost', () => {
+  const base = {
+    companyId:ctx.companyId,billingMonth:'2026-10',task:'cv_screening',
+    processId:ctx.operationId,candidatePseudonym:'candidate_123',
+    status:'settled',reservedMicroUsd:500,actualMicroUsd:405,
+    inputTokens:1000,cachedInputTokens:200,outputTokens:100,
+  };
+  const report = summarizeAiCosts(ctx.companyId,'2026-10',[
+    base,{...base,status:'unknown',actualMicroUsd:null,reservedMicroUsd:800,
+      inputTokens:null,cachedInputTokens:null,outputTokens:null},
+    {...base,status:'reserved',actualMicroUsd:null,reservedMicroUsd:100,
+      inputTokens:null,cachedInputTokens:null,outputTokens:null},
+    {...base,status:'released',actualMicroUsd:null,reservedMicroUsd:400,
+      inputTokens:null,cachedInputTokens:null,outputTokens:null},
+  ]);
+  assert.equal(report.total.attempts,4);
+  assert.equal(report.total.settledMicroUsd,405);
+  assert.equal(report.total.unconfirmedMicroUsd,900);
+  assert.equal(report.total.unknownAttempts,1);
+  assert.equal(report.total.inputTokens,1000);
+  assert.equal(report.byTask.cv_screening.settledMicroUsd,405);
+  assert.equal(report.byProcess[ctx.operationId].attempts,4);
+  assert.equal(report.byCandidate.candidate_123.attempts,4);
+  assert.throws(()=>summarizeAiCosts(ctx.companyId,'2026-10',[
+    {...base,companyId:'99999999-9999-4999-8999-999999999999'},
+  ]),/SC021_REPORT_SCOPE_MISMATCH/);
+  assert.throws(()=>summarizeAiCosts(ctx.companyId,'2026-10',[
+    {...base,actualMicroUsd:null},
+  ]),/SC021_INVALID_REPORT_ROW/);
 });
