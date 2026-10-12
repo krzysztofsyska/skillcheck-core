@@ -330,3 +330,22 @@ test('Codex P2: null candidate aggregation never collides with legitimate unassi
   assert.equal(report.byCandidate['unassigned'].attempts, 1);
   assert.equal(report.byCandidate['\u0000no-candidate'].attempts, 1);
 });
+
+test('SC-021 margin percentage uses exact basis point arithmetic and rejects overflow', () => {
+  assert.deepEqual(packageMargin({
+    revenueNetPlnGrosze: 3, aiCostPlnGrosze: 1,
+    voiceAndTelephonyPlnGrosze: 0, otherVariablePlnGrosze: 0,
+  }), { known: true, marginPlnGrosze: 2, marginPercent: 66.67 });
+  assert.deepEqual(packageMargin({
+    revenueNetPlnGrosze: 3, aiCostPlnGrosze: 4,
+    voiceAndTelephonyPlnGrosze: 0, otherVariablePlnGrosze: 0,
+  }), { known: true, marginPlnGrosze: -1, marginPercent: -33.33 });
+  assert.deepEqual(packageMargin({
+    revenueNetPlnGrosze: 0, aiCostPlnGrosze: 0,
+    voiceAndTelephonyPlnGrosze: 0, otherVariablePlnGrosze: 0,
+  }), { known: true, marginPlnGrosze: 0, marginPercent: null });
+  assert.throws(() => packageMargin({
+    revenueNetPlnGrosze: 1, aiCostPlnGrosze: Number.MAX_SAFE_INTEGER,
+    voiceAndTelephonyPlnGrosze: 0, otherVariablePlnGrosze: 0,
+  }), /SC021_COST_OVERFLOW/);
+});
