@@ -164,6 +164,14 @@ test('SC-021-B/R5 staged inventory uses REAL SC-010-R4 graph and authoritative t
   )).rows[0];
   assert.notEqual(schema.expected,schema.actual);
 
+  await h.asAdmin();
+  await db.exec('set role erasure_purge_owner');
+  await assert.rejects(db.query(
+    'select * from private.ai_gateway_r5_inventory_rows($1,$2::uuid[])',
+    [tenantB.companyId,[tenantB.candidate.id]],
+  ),e=>e.code==='42501');
+  await h.asAdmin();
+
   await h.asUser(tenantA.owner);
   await assert.rejects(db.query(
     'select * from private.ai_gateway_r5_inventory_rows($1,$2::uuid[])',
