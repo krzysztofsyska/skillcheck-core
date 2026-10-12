@@ -349,3 +349,41 @@ test('SC-021 margin percentage uses exact basis point arithmetic and rejects ove
     voiceAndTelephonyPlnGrosze: 0, otherVariablePlnGrosze: 0,
   }), /SC021_COST_OVERFLOW/);
 });
+
+test('SC-021 settles usage before reporting parse failure without marking a settled call unknown', async () => {
+  for (const status of ['completed', 'incomplete']) {
+    const f = store();
+    const invoke = createOpenAiResponsesAdapter({
+      apiKey: 'test-only', input: [], maxOutputTokens: 100,
+      parseResult: () => { throw Error('SYNTHETIC_MALFORMED_OUTPUT'); },
+      fetchImpl: async () => ({ ok: true, json: async () => ({
+        id: 'response-synthetic-004', status, output_text: 'unparseable',
+        usage: { input_tokens: 50, output_tokens: 20, input_tokens_details: { cached_tokens: 10 } },
+      }) }),
+    });
+    await assert.rejects(runMeteredOperation({
+      context: ctx, policy, maxExpectedUsage: usage, ledger: f.ledger, invoke,
+    }), /SC021_PROVIDER_OUTPUT_INVALID/);
+    assert.equal(f.calls.reservations.length, 1, status);
+    assert.equal(f.calls.settles.length, 1, status);
+    assert.equal(f.calls.settles[0].usage.inputTokens, 50);
+    assert.equal(f.calls.settles[0].providerRequestId, 'response-synthetic-004');
+    assert.equal(f.calls.unknown.length, 0, status);
+  }
+});
+
+test('SC-021 keeps cost unknown if parsing fails and provider usage is missing', async () => {
+  const f = store();
+  const invoke = createOpenAiResponsesAdapter({
+    apiKey: 'test-only', input: [], maxOutputTokens: 100,
+    parseResult: () => { throw Error('SYNTHETIC_MALFORMED_OUTPUT'); },
+    fetchImpl: async () => ({ ok: true, json: async () => ({
+      id: 'response-synthetic-005', status: 'completed', output_text: 'unparseable',
+    }) }),
+  });
+  await assert.rejects(runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: f.ledger, invoke,
+  }), /SC021_USAGE_UNAVAILABLE/);
+  assert.equal(f.calls.settles.length, 0);
+  assert.equal(f.calls.unknown.length, 1);
+});
