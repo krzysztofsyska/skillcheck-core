@@ -26,8 +26,21 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
   });
   await root.query(`create database "${database}"`);
   const connect=async()=>{
-    const c=new pg.Client({connectionString:urlText,database});
-    await c.connect();clients.push(c);return c;
+    // In node-postgres a connectionString overrides the separate database
+    // option: always put the disposable DB name into the URL itself.
+    const isolatedUrl=new URL(urlText);
+    isolatedUrl.pathname=`/${database}`;
+    const c=new pg.Client({connectionString:isolatedUrl.toString()});
+    await c.connect();
+    try {
+      const actual=(await c.query('select current_database() as name')).rows[0].name;
+      if(actual!==database) throw Error('SC-019 test connected to wrong database; refusing SQL');
+    } catch(error) {
+      await c.end();
+      throw error;
+    }
+    clients.push(c);
+    return c;
   };
   const db=await connect();
   await db.query(`
