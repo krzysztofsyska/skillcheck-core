@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
-const ownerA=id(1),ownerB=id(2),companyA=id(11),companyB=id(12);
+const ownerA=id(1),ownerB=id(2),recruiterA=id(3),viewerA=id(4),outsider=id(5),companyA=id(11),companyB=id(12);
 function nip(prefix) {
   const weights=[6,5,7,2,3,4,5,6,7];
   const check=[...prefix].reduce((v,d,i)=>v+Number(d)*weights[i],0)%11;
@@ -27,6 +27,7 @@ async function setup() {
     grant usage on schema auth to authenticated,anon;
     grant execute on function auth.uid() to authenticated,anon;
     create table public.companies (id uuid primary key,owner_id uuid not null);
+    create table public.company_members (company_id uuid not null,user_id uuid not null,role text not null);
     create table public.screening_analysis_versions (
       id uuid primary key,company_id uuid not null references public.companies(id),
       execution_status text not null default 'pending'
@@ -36,12 +37,18 @@ async function setup() {
         select exists(select 1 from public.companies
           where id=cid and owner_id=(select auth.uid()))
       $$;
-    create function private.has_company_access(cid uuid)
-      returns boolean language sql stable security definer set search_path='' as $$
-        select private.is_company_owner(cid)
-      $$;
+    create function private.has_company_access(cid uuid, write_access boolean default false)
+      returns boolean language sql stable security definer set search_path='' as $
+        select private.is_company_owner(cid) or exists (
+          select 1 from public.company_members
+          where company_id=cid and user_id=(select auth.uid())
+          and (not write_access or role='recruiter')
+        )
+      $;
     insert into public.companies(id,owner_id) values
       ('${companyA}','${ownerA}'),('${companyB}','${ownerB}');
+    insert into public.company_members(company_id,user_id,role) values
+      ('${companyA}','${recruiterA}','recruiter'),('${companyA}','${viewerA}','viewer');
   `);
   await db.exec(await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql',import.meta.url),'utf8'));
   const as=(user,role='authenticated')=> db.exec(`reset role; set role ${role}; select set_config('request.jwt.claim.sub','${user??''}',false)`);
@@ -64,6 +71,15 @@ test('SC-019 prototype: FREE NIP identity, RLS-like RPC checks and zero anonymou
   assert.equal((await h.db.query('select public.sc19_claim_trial($1,$2) as credits',[companyA,tax])).rows[0].credits,5);
   await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,'1234563210']),e=>e.code==='22023');
   await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyB,tax]),e=>e.code==='42501');
+  await h.as(recruiterA);
+  assert.equal((await h.balance(companyA)).available,5);
+  await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,tax]),e=>e.code==='42501');
+  await h.as(viewerA);
+  assert.equal((await h.balance(companyA)).available,5);
+  await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,tax]),e=>e.code==='42501');
+  await h.as(outsider);
+  await assert.rejects(h.db.query('select * from public.sc19_get_balance($1)',[companyA]),e=>e.code==='42501');
+  await h.as(ownerA);
   await assert.rejects(h.db.query('select * from private.sc19_balances'),e=>e.code==='42501');
   await assert.rejects(h.db.query('select private.sc19_grant_paid($1,$2)',[companyA,'settlement-123']),e=>e.code==='42501');
   await h.as(ownerB);
