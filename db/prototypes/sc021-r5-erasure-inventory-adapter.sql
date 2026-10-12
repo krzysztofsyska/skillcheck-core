@@ -59,18 +59,20 @@ exception when invalid_text_representation then
 end $$;
 
 -- Staged real SC-010-R4 purge-graph inventory UNION, not an active executor.
--- Both the candidate link and the billable usage are manifest entries.
--- Before Production the existing authoritative R4 functions need reviewed R5
--- replacements + exact immutable baseline, never an unreviewed runtime switch.
+-- IMPORTANT: reconcile BEFORE manifest rows can be returned for signing. A
+-- reserved/unknown provider call must never be included in a signed manifest.
+-- The caller must also execute the normal R4 scope check and the R5
+-- candidate-identity check (provided by erasure_check_purge_scope_sc021_r5).
 create function private.erasure_purge_rows_sc021_r5(
   tenant uuid, subjects uuid[]
 ) returns table(adapter text,row_key text,row_data jsonb)
-language sql stable security definer set search_path = ''
-set timezone='UTC' set datestyle='ISO, YMD' as $$
- select * from private.erasure_purge_rows(tenant,subjects)
- union all
- select * from private.ai_gateway_r5_inventory_rows(tenant,subjects)
-$$;
+language plpgsql stable security definer set search_path = ''
+set timezone='UTC' set datestyle='ISO, YMD' as $
+begin
+ perform private.ai_gateway_r5_assert_reconciled(tenant,subjects);
+ return query select * from private.erasure_purge_rows(tenant,subjects);
+ return query select * from private.ai_gateway_r5_inventory_rows(tenant,subjects);
+end $;
 
 -- Preparation/preview blocker: unsigned or unknown usage must never be erased.
 -- Unlike cost accounting, this is subject-scoped solely through the trusted FK.
@@ -101,6 +103,48 @@ begin
   return n;
 end $$;
 
+-- Reuse the ACTUAL SC-010-R4 scope/locking/overlap logic, then extend it
+-- with checks for both new adapters. This is an offline proposal for the R5
+-- scope checker, not a replacement for the signed R4 preparation function.
+create function private.erasure_check_purge_scope_sc021_r5(target_request uuid)
+returns void language plpgsql volatile security definer set search_path = '' as $
+declare
+ e private.erasure_executions%rowtype;
+ r record;
+ refs uuid[];
+begin
+ -- Original scope checker retains all R4 safety checks, candidate FOR UPDATE
+ -- locks, shared subject detection and provider-data guard.
+ perform private.erasure_check_purge_scope(target_request);
+ select * into e from private.erasure_executions
+  where request_id=target_request for update nowait;
+ if not found then
+   raise exception 'SC021_ERASURE_SCOPE_UNAVAILABLE' using errcode='PT404';
+ end if;
+ -- Reconcile before any caller may hash or sign the staged graph.
+ perform private.ai_gateway_r5_assert_reconciled(e.company_id,e.candidate_ids);
+ for r in select * from private.ai_gateway_r5_inventory_rows(e.company_id,e.candidate_ids)
+ loop
+   refs:=private.ai_gateway_r5_row_candidates(e.company_id,r.adapter,r.row_data);
+   if refs is null or not (refs <@ e.candidate_ids) then
+     raise exception 'SC021_SHARED_CANDIDATE_SCOPE' using errcode='PT409';
+   end if;
+ end loop;
+exception when lock_not_available then
+ raise exception 'SC021_ERASURE_SCOPE_BUSY' using errcode='PT409';
+end $;
+
+-- A real manifest must not be produced until the exact immutable R5 baseline,
+-- R5 purge graph, linked-usage removal, and independent review are in place.
+-- There is intentionally NO fallback to the R4 prepare function, since its
+-- frozen schema contract rejects the new ledger tables.
+create function private.ai_gateway_r5_prepare_gate(target_request uuid)
+returns bigint language plpgsql volatile security definer set search_path = '' as $
+begin
+ perform private.erasure_check_purge_scope_sc021_r5(target_request);
+ raise exception 'SC021_R5_BASELINE_NOT_REVIEWED' using errcode='PT409';
+end $;
+
 -- These staging helpers are callable ONLY by the migration owner / future
 -- reviewed SECURITY DEFINER SC-010 inventory function. Even erasure_purge_owner
 -- cannot enumerate another tenant outside a signed purge execution. In the real
@@ -111,6 +155,10 @@ revoke all on function private.ai_gateway_r5_inventory_rows(uuid,uuid[])
 revoke all on function private.ai_gateway_r5_row_candidates(uuid,text,jsonb)
  from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
 revoke all on function private.erasure_purge_rows_sc021_r5(uuid,uuid[])
+ from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
+revoke all on function private.erasure_check_purge_scope_sc021_r5(uuid)
+ from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
+revoke all on function private.ai_gateway_r5_prepare_gate(uuid)
  from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
 revoke all on function private.ai_gateway_r5_assert_reconciled(uuid,uuid[])
  from public,anon,authenticated,screening_worker,ai_meter_worker,erasure_purge_owner;
