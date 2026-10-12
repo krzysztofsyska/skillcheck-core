@@ -269,6 +269,9 @@ test('SC-021/SC-005 trusted lease-bound screening reservation derives tenant and
   assert.equal(first.company_id,a.companyId);
   assert.equal(first.candidate_id,a.candidate.id);
   assert.equal((await db.query(rpc,args)).rows[0].created,false);
+  // A restricted worker must never read the private candidate identity
+  // mapping table; inspect state solely as synthetic test DB administrator.
+  await h.asAdmin();
   const stored=(await db.query(
     'select u.company_id,u.operation_id,u.process_id,u.request_key,l.candidate_id '+
       'from public.ai_gateway_usage u join private.ai_gateway_candidate_links l '+
@@ -280,6 +283,7 @@ test('SC-021/SC-005 trusted lease-bound screening reservation derives tenant and
   assert.equal(stored.operation_id,started.analysis_id);
   assert.equal(stored.process_id,a.recruitment.id);
 
+  await h.asWorker();
   await assert.rejects(db.query(rpc,[
     ...args.slice(0,3),randomUUID(),...args.slice(4,5),
     'wrong-model',...args.slice(6),
