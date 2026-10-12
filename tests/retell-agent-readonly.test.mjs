@@ -1,0 +1,99 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readRetellAgent, RetellAgentError } from "../lib/voice/retell-agent.ts";
+
+const env = {
+  RETELL_API_KEY: "synthetic-test-token-123456",
+  RETELL_AGENT_ID: "agent_1234567890abcdef",
+};
+const agent = {
+  agent_id: env.RETELL_AGENT_ID,
+  agent_name: "SkillCheck demo",
+  is_published: false,
+  version: 0,
+  voice_id: "retell-Cimo",
+  language: "pl-PL",
+  response_engine: { type: "conversation-flow", secret_node: "private" },
+  custom_private_provider_data: "NEVER EXPOSE",
+};
+const reply = (status, payload = agent) => ({
+  status,
+  async json() { return payload; },
+});
+const failsWith = (promise, code) => assert.rejects(promise, error =>
+  error instanceof RetellAgentError && error.code === code
+  && !error.message.includes(env.RETELL_API_KEY)
+);
+
+test("SC-011 Retell uses only the configured GET endpoint and projects safe fields", async () => {
+  let calls = 0;
+  const result = await readRetellAgent(env, async (url, init) => {
+    calls++;
+    assert.equal(url, "https://api.retellai.com/get-agent/agent_1234567890abcdef");
+    assert.equal(init.method, "GET");
+    assert.equal(init.cache, "no-store");
+    assert.equal(init.headers.Authorization, "Bearer " + env.RETELL_API_KEY);
+    assert.ok(init.signal);
+    assert.equal(init.body, undefined);
+    return reply(200);
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(result, {
+    agentId: env.RETELL_AGENT_ID,
+    name: "SkillCheck demo",
+    published: false,
+    version: 0,
+    language: "pl-PL",
+    voiceId: "retell-Cimo",
+    responseEngineType: "conversation-flow",
+  });
+  assert.ok(!JSON.stringify(result).includes("NEVER EXPOSE"));
+  assert.ok(!JSON.stringify(result).includes(env.RETELL_API_KEY));
+});
+
+test("SC-011 Retell refuses missing or malformed config before network access", async () => {
+  let sent = 0;
+  const forbiddenNetwork = async () => { sent++; throw Error("Must not be called"); };
+  for (const e of [
+    {},
+    { ...env, RETELL_API_KEY: "" },
+    { ...env, RETELL_API_KEY: "short" },
+    { ...env, RETELL_API_KEY: "test-token-123456\nInjection" },
+    { ...env, RETELL_AGENT_ID: "../create-phone-call" },
+    { ...env, RETELL_AGENT_ID: "agent_!@#$" },
+  ]) await failsWith(readRetellAgent(e, forbiddenNetwork), "RETELL_NOT_CONFIGURED");
+  assert.equal(sent, 0);
+});
+
+test("SC-011 Retell does not forward vendor error bodies or network errors", async () => {
+  for (const [status, code] of [
+    [401, "RETELL_AUTH_FAILED"],
+    [403, "RETELL_AUTH_FAILED"],
+    [404, "RETELL_AGENT_NOT_FOUND"],
+    [429, "RETELL_UNAVAILABLE"],
+    [500, "RETELL_UNAVAILABLE"],
+  ]) await failsWith(
+    readRetellAgent(env, async () => reply(status, {secret: "LEAK"})), code,
+  );
+  await failsWith(
+    readRetellAgent(env, async () => { throw Error("Authorization: Bearer private-key"); }),
+    "RETELL_UNAVAILABLE",
+  );
+  await failsWith(
+    readRetellAgent(env, async () => ({ status: 200, async json() { throw Error("private"); } })),
+    "RETELL_INVALID_RESPONSE",
+  );
+});
+
+test("SC-011 Retell rejects cross-agent and malformed successful responses", async () => {
+  for (const response of [
+    null, [],
+    {...agent, agent_id: "agent_aaaaaaaaaaaaaaaa"},
+    {...agent, is_published: "false"},
+    {...agent, version: "0"},
+    {...agent, agent_name: "X".repeat(250)},
+  ]) await failsWith(
+    readRetellAgent(env, async () => reply(200, response)),
+    "RETELL_INVALID_RESPONSE",
+  );
+});
