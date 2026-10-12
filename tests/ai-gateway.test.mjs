@@ -4,6 +4,7 @@ import {
   validatePolicy, selectModel, usageCostMicroUsd, usdMicroToPlnGrosze, packageMargin,
 } from '../lib/ai-gateway/core.ts';
 import { runMeteredOperation } from '../lib/ai-gateway/runtime.ts';
+import { postgresAiLedger } from '../lib/ai-gateway/postgres.ts';
 
 const model = {
   provider: 'openai', model: 'pinned-screening-model', revision: '2026-10-12',
@@ -147,4 +148,34 @@ test('failed settlement never exposes unbooked result', async () => {
     context: ctx, policy, maxExpectedUsage: usage, ledger: f.ledger,
     invoke: async () => ({ data: { mustNotLeak: true }, usage, providerRequestId: null }),
   }), /SC021_SETTLEMENT_UNAVAILABLE/);
+});
+
+
+test('Postgres adapter passes only positional, typed worker metadata and validates returned row', async () => {
+  const calls = [];
+  const ledger = postgresAiLedger(async (sql, values) => {
+    calls.push({sql, values});
+    if (sql.includes('ai_gateway_reserve')) return [{ usage_id: ctx.requestKey, created: true, warning: false }];
+    if (sql.includes('ai_gateway_settle')) return [{ settled: true }];
+    if (sql.includes('ai_gateway_mark_unknown')) return [{ marked: true }];
+    return [];
+  });
+  assert.deepEqual(await ledger.reserve({
+    ...ctx, provider: 'openai', model: 'pinned-screening-model',
+    policyVersion: 'policy-v1', priceVersion: 'pricing-1', estimatedMicroUsd: 300,
+  }), { usageId: ctx.requestKey, created: true, warning: false });
+  assert.equal(await ledger.settle({
+    companyId: ctx.companyId, requestKey: ctx.requestKey, costMicroUsd: 123,
+    usage, providerRequestId: 'resp_123',
+  }), true);
+  assert.equal(await ledger.markUnknown({companyId: ctx.companyId, requestKey:ctx.requestKey}), true);
+  assert.equal(calls[0].values[0], ctx.companyId);
+  assert.equal(calls[0].values[4], ctx.candidatePseudonym);
+  assert.equal(calls[1].values[2], 123);
+  assert.ok(calls.every(call => !call.sql.includes(ctx.companyId)));
+  assert.ok(calls.every(call => !call.sql.includes('resp_123')));
+  await assert.rejects(postgresAiLedger(async () => [{ settled: 'true' }]).settle({
+    companyId: ctx.companyId, requestKey: ctx.requestKey,
+    costMicroUsd: 12, usage, providerRequestId:null,
+  }), /SC021_LEDGER_INVALID_RESPONSE/);
 });
