@@ -247,7 +247,7 @@ test('SC-021/SC-005 trusted lease-bound screening reservation derives tenant and
   const started=await h.start(a);
   const claimed=await h.claim(started); // trusted DB-generated lease in screening_worker claim
   assert.ok(claimed.lease_token);
-  const rpc='select * from private.ai_gateway_reserve_screening_attempt('+
+  const rpc='select * from public.ai_gateway_reserve_screening_attempt('+
     '$1::uuid,$2::text,$3::text,$4::uuid,$5::text,$6::text,$7::text,$8::text,$9::bigint)';
   const requestKey=randomUUID();
   const args=[
