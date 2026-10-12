@@ -5,6 +5,7 @@
  */
 import {createHash} from "node:crypto";
 import {behaviorGuideDefinitions} from "../behavior-guide.ts";
+import type {InterviewSource,InterviewQuestion} from "./interview-plan.ts";
 
 const v1=Object.freeze({
   version:"skillcheck-voice-plan-v1" as const,
@@ -13,8 +14,14 @@ const v1=Object.freeze({
   maximumSeconds:600 as const,
   recordingAllowed:false as const,
   noticeRequired:true as const,
-  behaviorQuestionTexts:Object.freeze(behaviorGuideDefinitions.map(area=>
-    Object.freeze({id:area.id,firstQuestion:area.questions[0]}))),
+  selectionRules:Object.freeze({
+    commonCount:4,clarificationLimit:2,commonMaxSeconds:60,clarificationMaxSeconds:45,
+    priorityLevels:Object.freeze(["Krytyczny","Wysoki","Standardowy","Niski"]),
+    stableTieBreak:"behavior-guide-order",
+    outputOrder:"common-then-clarification-in-source-order",
+  }),
+  behaviorQuestionTexts:Object.freeze(behaviorGuideDefinitions.map((area,index)=>
+    Object.freeze({id:area.id,label:area.label,index,firstQuestion:area.questions[0]}))),
   commonFollowUp:"Jakie działania podjął Pan lub podjęła Pani osobiście i jaki był rezultat?",
   clarificationQuestionTexts:Object.freeze({
     task:"Proszę opisać konkretne zadanie, które wykonywał Pan lub wykonywała Pani osobiście, i jego rezultat.",
@@ -36,4 +43,44 @@ export function getTrustedVoiceTemplate(version:unknown){
 }
 export function trustedVoiceTemplateDigest(version:VoiceTemplateVersion){
   return createHash("sha256").update(JSON.stringify(getTrustedVoiceTemplate(version))).digest("hex");
+}
+
+/**
+ * Independently reconstruct every question-defining field from the frozen
+ * version manifest. A generator change (order, count, duration, kind, ID,
+ * follow-up, priority) is rejected even when its question text is unchanged.
+ */
+export function assertPinnedVoiceQuestions(
+  source:InterviewSource,questions:readonly InterviewQuestion[],
+):void{
+  const t=getTrustedVoiceTemplate("skillcheck-voice-plan-v1");
+  const priorities=t.behaviorQuestionTexts.map(area=>{
+    const matching=source.position.requiredBehaviors.filter(raw=>
+      raw.slice(0,raw.indexOf(":")).trim()===area.label);
+    if(matching.length!==1)throw Error("VOICE_TEMPLATE_BEHAVIOR_INVALID");
+    const level=matching[0].slice(matching[0].indexOf(":")+1).trim();
+    const rank=t.selectionRules.priorityLevels.indexOf(level as
+      typeof t.selectionRules.priorityLevels[number]);
+    if(rank<0)throw Error("VOICE_TEMPLATE_BEHAVIOR_INVALID");
+    return {...area,rank};
+  }).sort((a,b)=>a.rank-b.rank||a.index-b.index);
+  const expected:InterviewQuestion[]=[
+    ...priorities.slice(0,t.selectionRules.commonCount).map(area=>({
+      id:"common-"+area.id,kind:"common" as const,criterionId:area.id,
+      criterionKind:"behavior" as const,text:area.firstQuestion,
+      followUps:[t.commonFollowUp],maxSeconds:t.selectionRules.commonMaxSeconds,
+    })),
+    ...source.gaps.map(gap=>({
+      id:"clarification-"+gap.criterionId.replace(":","-"),
+      kind:"clarification" as const,criterionId:gap.criterionId,
+      criterionKind:gap.kind,
+      text:t.clarificationQuestionTexts[gap.kind],
+      followUps:[gap.reason==="contradiction"?
+        t.clarificationFollowUps[0]:t.clarificationFollowUps[1]],
+      maxSeconds:t.selectionRules.clarificationMaxSeconds,
+    })),
+  ];
+  if(source.gaps.length>t.selectionRules.clarificationLimit||
+     JSON.stringify(expected)!==JSON.stringify(questions))
+    throw Error("VOICE_TEMPLATE_GENERATOR_DRIFT");
 }
