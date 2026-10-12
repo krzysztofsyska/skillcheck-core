@@ -143,17 +143,21 @@ test('mismatched claim model, prompt or schema fails without calling OpenAI', as
   const { store, calls } = storeMock({
     claim: async () => mismatched,
   });
+  const logs = [];
   let openaiCalls = 0;
   const result = await runScreeningAttempt(mismatched.attempt_id, runtime(store, async () => {
     openaiCalls += 1;
     throw new Error('must not call openai');
-  }));
+  }, { log: entry => logs.push(entry) }));
   assert.equal(openaiCalls, 0);
   assert.equal(result.status, 'failed');
   assert.equal(result.code, 'contract_mismatch');
   assert.equal(calls.complete.length, 0);
   assert.equal(calls.fail.length, 1);
   assert.equal(calls.fail[0].errorCode, 'contract_mismatch');
+  assert.equal(logs.at(-1).diagnostic_reason, 'contract_mismatch');
+  assert.equal(logs.at(-1).http_status, undefined);
+  assert.ok(!JSON.stringify(logs).includes(mismatched.input_cv_text_snapshot));
   assert.doesNotMatch(calls.fail[0].errorMessage, /gpt-4o-mini|screening-v0|SQL i raporty|sk-/);
 });
 
@@ -187,6 +191,11 @@ test('diagnostics separate HTTP, envelope and evidence failures without leaking 
     [() => callOpenAiResponses(marker, {}, async () => new Response(marker, { status: 400 })), 'http_error', 400],
     [() => callOpenAiResponses(marker, {}, async () => new Response(marker, { status: 200 })), 'response_not_json', undefined],
     [async () => null, 'invalid_envelope', undefined],
+    [async () => ({}), 'invalid_envelope', undefined],
+    [async () => ({ status: 'completed', output: {} }), 'invalid_envelope', undefined],
+    [async () => ({ status: 'completed', output_text: [] }), 'invalid_envelope', undefined],
+    [async () => ({ status: 'completed', usage: { input_tokens: 'SENSITIVE_DATA' }, output_text: successText }), 'invalid_envelope', undefined],
+    [async () => ({ status: 'completed', usage: { input_tokens_details: 'SENSITIVE_DATA' }, output_text: successText }), 'invalid_envelope', undefined],
     [async () => ({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }), 'output_token_limit', undefined],
     [async () => ({ status: 'completed', output_text: marker }), 'output_not_json', undefined],
     [async () => ({ status: 'completed', output_text: successText.replace('😀B𝄞', marker) }), 'quote_mismatch', undefined],
