@@ -81,3 +81,44 @@ Otherwise erasure would incorrectly give back consumed quota.
 Run npm run test:ai-gateway against the isolated ephemeral PostgreSQL
 instance in GitHub Actions. No real provider is called and no Supabase
 project is mutated. These are technical checks of the prototype only.
+
+## Review tightening: signed manifest and candidate pseudonym boundary
+
+The prototype now refuses generic usage rows with non-null
+`candidate_pseudonym` even if a trusted worker attempts to write them. A
+candidate-related call must use the private, tenant-verified candidate link.
+Existing deployments with such columns populated would need an explicit
+reviewed migration/backfill; the prototype is not executable production DDL.
+
+Detachment also requires the erasing phase and sequence to match the
+`private.erasure_verified_ledger_events` acknowledgement. The transaction
+context must carry the same manifest hash as the execution record; every
+linked usage row and its FK link must appear as delete entries both in the
+prepared immutable `private.erasure_purge_manifest` and in the matching
+transaction's `private.erasure_purge_context_rows`. Keys are the usage ID;
+hashes match the CURRENT full row via SC-010's hash function.
+
+**Required real SC-010 R5 integration, still missing:**
+
+- Extend the trusted `private.erasure_purge_rows` inventory with both
+  `public.ai_gateway_usage` and `private.ai_gateway_candidate_links` rows,
+  using exact candidate FK joins and frozen subject scope.
+- Extend `private.erasure_row_candidates` and guards for both records
+  without introducing UUID substring matching. Use a single canonical
+  candidate identity path.
+- Extend the actual `private.erasure_purge_engine` to invoke the
+  detached-expense transformation AFTER SC-010 validates the durable
+  checkpoint and creates the signed transaction context but BEFORE
+  deleting source candidates. Validate the exact manifest row counts;
+  include anonymized-usage counts in the immutable receipt. No ad hoc
+  privileged calls outside this gate.
+- Replace the fixed R4 signature only with a separately audited,
+  immutable R5 baseline generated from the complete reviewed migration
+  chain; never rewrite R4 history or approve a signature from an unknown
+  live schema.
+- Verify restore/recovery contracts and explicit backups/exports retention,
+  including candidate-link references in other service logs.
+
+The isolated test emulates only the structure of a durable erasing event
+and signed manifest; it **does not** prove genuine signatures, external
+ledger attestation, live worker wiring or legally sufficient anonymization.
