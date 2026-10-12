@@ -38,13 +38,13 @@ async function setup() {
           where id=cid and owner_id=(select auth.uid()))
       $$;
     create function private.has_company_access(cid uuid, write_access boolean default false)
-      returns boolean language sql stable security definer set search_path='' as $
+      returns boolean language sql stable security definer set search_path='' as $$
         select private.is_company_owner(cid) or exists (
           select 1 from public.company_members
           where company_id=cid and user_id=(select auth.uid())
           and (not write_access or role='recruiter')
         )
-      $;
+      $$;
     insert into public.companies(id,owner_id) values
       ('${companyA}','${ownerA}'),('${companyB}','${ownerB}');
     insert into public.company_members(company_id,user_id,role) values
@@ -165,4 +165,25 @@ test('SC-019 prototype: completed analyses cannot be refunded or reopened; faile
   const journal=(await h.db.query('select reason,delta from private.sc19_credit_journal where analysis_id=$1',[id(202)])).rows;
   assert.deepEqual(journal.map(x=>x.reason).sort(),['analysis_release','analysis_reserve']);
   assert.equal(journal.reduce((sum,x)=>sum+x.delta,0),0);
+});
+
+
+test('SC-019 operator policy: configurable trial and paid credits, no browser policy reads',async t=>{
+  const h=await setup();t.after(()=>h.db.close());
+  await h.admin();
+  await h.db.exec("update private.sc19_package_policy set credits=3 where plan='FREE'");
+  await h.db.exec("update private.sc19_package_policy set credits=12 where plan='PRESELEKCJA'");
+  const tax=nip('123456321');
+  await h.db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[companyA,tax,'verified-policy-change']);
+  await h.as(ownerA);
+  await assert.rejects(h.db.query('select * from private.sc19_package_policy'),e=>e.code==='42501');
+  assert.equal((await h.db.query('select public.sc19_claim_trial($1,$2) as remaining',[companyA,tax])).rows[0].remaining,3);
+  assert.equal((await h.balance(companyA)).available,3);
+  await h.admin();
+  assert.equal((await h.db.query('select private.sc19_grant_paid($1,$2) as remaining',[companyA,'policy-settlement-1'])).rows[0].remaining,15);
+  assert.equal((await h.db.query('select private.sc19_grant_paid($1,$2) as remaining',[companyA,'policy-settlement-1'])).rows[0].remaining,15);
+  const journal=(await h.db.query("select reason,delta from private.sc19_credit_journal where company_id=$1 and reason in ('trial','paid_grant') order by created_at",[companyA])).rows;
+  assert.equal(journal.reduce((sum,item)=>sum+item.delta,0),15);
+  await h.as(ownerA);
+  assert.equal((await h.balance(companyA)).available,15);
 });

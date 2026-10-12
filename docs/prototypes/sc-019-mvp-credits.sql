@@ -4,6 +4,18 @@
 -- Depends on SC-004/005/006 schemas (screening_analysis_versions).
 begin;
 
+-- Operator-controlled quota policy. Defaults are only test/prototype examples;
+-- change through reviewed privileged migration before commercial activation.
+create table private.sc19_package_policy (
+  plan text primary key check(plan in ('FREE','PRESELEKCJA')),
+  credits integer not null check(credits between 1 and 100000),
+  updated_at timestamptz not null default now()
+);
+insert into private.sc19_package_policy(plan,credits)
+values ('FREE',5),('PRESELEKCJA',60);
+revoke all on private.sc19_package_policy from public,anon,authenticated;
+alter table private.sc19_package_policy enable row level security;
+
 create table private.sc19_balances (
   company_id uuid primary key references public.companies(id) on delete restrict,
   plan text not null check(plan in ('FREE','PRESELEKCJA')),
@@ -75,6 +87,7 @@ declare
   normalized text := replace(replace(btrim(coalesce(supplied_nip,'')), '-', ''), ' ', '');
   existing_nip text;
   current_credits integer;
+  trial_credits integer;
 begin
   if (select auth.uid()) is null or not private.is_company_owner(target_company) then
     raise exception 'sc19_company_forbidden' using errcode = '42501';
@@ -98,15 +111,17 @@ begin
   ) then
     raise exception 'sc19_trial_requires_verified_company' using errcode='42501';
   end if;
+  select credits into trial_credits from private.sc19_package_policy where plan='FREE';
+  if trial_credits is null then raise exception 'sc19_missing_free_policy' using errcode='55000'; end if;
   insert into private.sc19_trial_nips(company_id,nip) values (target_company,normalized);
   insert into private.sc19_balances(company_id,plan,available,free_claimed)
-    values(target_company,'FREE',5,true)
+    values(target_company,'FREE',trial_credits,true)
     on conflict(company_id) do update
-      set available=private.sc19_balances.available+5,free_claimed=true,updated_at=now()
+      set available=private.sc19_balances.available+trial_credits,free_claimed=true,updated_at=now()
       where not private.sc19_balances.free_claimed;
   if not found then raise exception 'sc19_trial_already_claimed' using errcode='23505'; end if;
   insert into private.sc19_credit_journal(company_id,reason,delta,reference)
-    values(target_company,'trial',5,'trial:'||normalized);
+    values(target_company,'trial',trial_credits,'trial:'||normalized);
   select available into current_credits from private.sc19_balances where company_id=target_company;
   return current_credits;
 end;
@@ -128,6 +143,7 @@ $$;
 revoke all on function public.sc19_get_balance(uuid) from public, anon, authenticated;
 grant execute on function public.sc19_get_balance(uuid) to authenticated;
 
+
 -- MANUAL PAID FULFILLMENT ONLY: call from trusted admin SQL after confirming
 -- bank settlement / external processor settlement. Never GRANT to authenticated.
 create function private.sc19_grant_paid(target_company uuid, settlement_reference text)
@@ -135,6 +151,7 @@ returns integer language plpgsql security definer set search_path = '' as $$
 declare
   prior_company uuid;
   credits integer;
+  paid_credits integer;
 begin
   if length(btrim(coalesce(settlement_reference,''))) not between 8 and 160 then
     raise exception 'sc19_invalid_settlement' using errcode='22023';
@@ -150,12 +167,14 @@ begin
     select available into credits from private.sc19_balances where company_id=target_company;
     return credits; -- same payment, no second grant
   end if;
+  select p.credits into paid_credits from private.sc19_package_policy p where p.plan='PRESELEKCJA';
+  if paid_credits is null then raise exception 'sc19_missing_paid_policy' using errcode='55000'; end if;
   insert into private.sc19_balances(company_id,plan,available)
-    values(target_company,'PRESELEKCJA',60)
+    values(target_company,'PRESELEKCJA',paid_credits)
     on conflict(company_id) do update
-      set plan='PRESELEKCJA',available=private.sc19_balances.available+60,updated_at=now();
+      set plan='PRESELEKCJA',available=private.sc19_balances.available+paid_credits,updated_at=now();
   insert into private.sc19_credit_journal(company_id,reason,delta,reference)
-    values(target_company,'paid_grant',60,'settlement:'||btrim(settlement_reference));
+    values(target_company,'paid_grant',paid_credits,'settlement:'||btrim(settlement_reference));
   select available into credits from private.sc19_balances where company_id=target_company;
   return credits;
 end;
