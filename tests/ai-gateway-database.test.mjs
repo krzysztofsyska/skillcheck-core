@@ -194,6 +194,46 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
       await startSignedSyntheticPurge(eraser,purgeRequest,idA,{tamper:true});
       await assert.rejects(eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid)',[purgeRequest]),/SC021_PURGE_MANIFEST_MISMATCH/);
       await eraser.query('rollback');
+
+      // Codex review: a fully valid context and complete prepared manifest
+      // must still fail if the independently verified erasing event is missing.
+      await db.query('delete from private.erasure_verified_ledger_events where request_id=$1',[purgeRequest]);
+      await startSignedSyntheticPurge(eraser,purgeRequest,idA);
+      await assert.rejects(eraser.query(
+        'select private.ai_gateway_detach_signed_purge($1::uuid)',[purgeRequest]
+      ),/SC021_ERASURE_NOT_AUTHORIZED/);
+      await eraser.query('rollback');
+
+      // A wrong verified event hash is equally invalid; transaction context
+      // and manifest stay correct throughout these independent mutations.
+      await db.query("insert into private.erasure_verified_ledger_events(request_id,sequence,event_hash,phase) values($1,2,'wrong-signed-hash','erasing')",[purgeRequest]);
+      await startSignedSyntheticPurge(eraser,purgeRequest,idA);
+      await assert.rejects(eraser.query(
+        'select private.ai_gateway_detach_signed_purge($1::uuid)',[purgeRequest]
+      ),/SC021_ERASURE_NOT_AUTHORIZED/);
+      await eraser.query('rollback');
+      await db.query("update private.erasure_verified_ledger_events set event_hash='synthetic-verified-event' where request_id=$1",[purgeRequest]);
+
+      // A tampered PREPARED manifest must also fail if both the current row
+      // and transaction-context hashes are still intact (separate trust source).
+      const saved = (await db.query(
+        "select row_hash from private.erasure_purge_manifest where request_id=$1 and adapter='public.ai_gateway_usage'",
+        [purgeRequest],
+      )).rows[0].row_hash;
+      await startSignedSyntheticPurge(eraser,purgeRequest,idA);
+      await db.query(
+        "update private.erasure_purge_manifest set row_hash='prepared-manifest-corrupt' where request_id=$1 and adapter='public.ai_gateway_usage'",
+        [purgeRequest],
+      );
+      await assert.rejects(eraser.query(
+        'select private.ai_gateway_detach_signed_purge($1::uuid)',[purgeRequest]
+      ),/SC021_PURGE_MANIFEST_MISMATCH/);
+      await eraser.query('rollback');
+      await db.query(
+        "update private.erasure_purge_manifest set row_hash=$2 where request_id=$1 and adapter='public.ai_gateway_usage'",
+        [purgeRequest,saved],
+      );
+
       await startSignedSyntheticPurge(eraser,purgeRequest,idA);
       assert.equal((await eraser.query('select private.ai_gateway_detach_signed_purge($1::uuid) detached',
         [purgeRequest])).rows[0].detached,'1');
