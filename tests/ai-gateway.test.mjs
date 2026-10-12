@@ -5,6 +5,7 @@ import {
 } from '../lib/ai-gateway/core.ts';
 import { runMeteredOperation } from '../lib/ai-gateway/runtime.ts';
 import { postgresAiLedger } from '../lib/ai-gateway/postgres.ts';
+import { createOpenAiResponsesAdapter } from '../lib/ai-gateway/openai.ts';
 
 const model = {
   provider: 'openai', model: 'pinned-screening-model', revision: '2026-10-12',
@@ -178,4 +179,56 @@ test('Postgres adapter passes only positional, typed worker metadata and validat
     companyId: ctx.companyId, requestKey: ctx.requestKey,
     costMicroUsd: 12, usage, providerRequestId:null,
   }), /SC021_LEDGER_INVALID_RESPONSE/);
+});
+
+
+test('OpenAI adapter enforces store:false, pinned route, no tools, correlation ID and extracts usage', async () => {
+  let requests = 0;
+  const adapter = createOpenAiResponsesAdapter({
+    apiKey: 'not-real-secret-test-only', input: [{role:'user',content:'redacted data'}],
+    maxOutputTokens: 400,
+    parseResult: body => body.output_text,
+    fetchImpl: async (url, init) => {
+      requests++;
+      assert.equal(url, 'https://api.openai.com/v1/responses');
+      assert.equal(init.headers.authorization, 'Bearer not-real-secret-test-only');
+      assert.equal(init.headers['X-Client-Request-Id'], ctx.requestKey);
+      const payload = JSON.parse(init.body);
+      assert.deepEqual(Object.keys(payload).sort(), ['input','max_output_tokens','model','store']);
+      assert.equal(payload.store, false);
+      assert.equal(payload.model, model.model);
+      assert.equal(payload.max_output_tokens, 400);
+      return {
+        ok: true, async json() { return {
+          id:'response-123',status:'completed',output_text:'OK',
+          usage: {input_tokens:11, output_tokens:2, input_tokens_details:{cached_tokens:3}},
+        }; },
+      };
+    },
+  });
+  assert.deepEqual(await adapter(model, ctx.requestKey), {
+    data: 'OK', providerRequestId:'response-123',
+    usage: { inputTokens: 11, cachedInputTokens: 3, outputTokens: 2 },
+  });
+  assert.equal(requests, 1);
+  await assert.rejects(adapter({...model,provider:'other'},ctx.requestKey), /SC021_OPENAI_INVALID_ROUTE/);
+  assert.equal(requests, 1);
+});
+
+test('OpenAI adapter rejects absent server secret and exposes unknown usage without forged zero-cost', async () => {
+  assert.throws(() => createOpenAiResponsesAdapter({
+    apiKey:'',input:[],maxOutputTokens:400,parseResult:()=>null,
+  }), /SC021_OPENAI_CONFIGURATION_MISSING/);
+  const adapter = createOpenAiResponsesAdapter({
+    apiKey:'test-only',input:[],maxOutputTokens:100,parseResult:()=>'OK',
+    fetchImpl:async()=>({ok:true,json:async()=>({
+      id:'resp', status:'completed', usage:{input_tokens:10,output_tokens:1,input_tokens_details:{cached_tokens:11}},
+    })}),
+  });
+  assert.equal((await adapter(model,ctx.requestKey)).usage,null);
+  const refused = createOpenAiResponsesAdapter({
+    apiKey:'test-only',input:[],maxOutputTokens:100,parseResult:()=>'NEVER',
+    fetchImpl:async()=>({ok:false,status:429}),
+  });
+  await assert.rejects(refused(model,ctx.requestKey), /SC021_OPENAI_PROVIDER_ERROR/);
 });
