@@ -182,6 +182,64 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     await reviewer.end();await revoker.end();
   }
  });
+ await t.test("two real sessions compete for the first release pointer: exactly one wins",async()=>{
+  const other=await h.completedApplication(await h.candidate(f),
+    ["insufficient_data","meets","below","meets","above"]);
+  await h.asUser(users.owner);
+  const otherShortlist=await h.add(other);
+  await h.asAdmin();
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
+  const currentSource=await reconstructTrustedVoiceSource(db,{
+    companyId:other.companyId,applicationId:other.application.id,
+    analysisId:other.analysis_id,reviewId:other.reviewId,shortlistEntryId:otherShortlist,
+  });
+  const secondPlan=(await db.query([
+    "insert into public.voice_plan_versions",
+    "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+    "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+    "template_version,created_by,retention_policy_version,retention_deadline)",
+    "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,'{}'::jsonb,$10::jsonb,",
+    "'skillcheck-voice-plan-v1',$11,'synthetic-v1','2030-01-01') returning id",
+  ].join(" "),[
+    other.companyId,other.recruitment.id,other.application.id,other.position.id,
+    other.analysis_id,other.reviewId,otherShortlist,currentSource.sourceHash,
+    currentSource.planContractHash,JSON.stringify(currentSource),users.owner,
+  ])).rows[0].id;
+  const secondReview=(await db.query([
+    "insert into private.voice_plan_review_entries",
+    "(company_id,application_id,plan_id,review_version,reviewer_id,decision,source_hash,",
+    "retention_policy_version,retention_deadline)",
+    "values($1,$2,$3,1,$4,'approved',$5,'synthetic-v1','2030-01-01') returning id",
+  ].join(" "),[
+    other.companyId,other.application.id,secondPlan,users.owner,currentSource.sourceHash,
+  ])).rows[0].id;
+  const a=new Client(config(dbName)),b=new Client(config(dbName));
+  await a.connect();await b.connect();
+  try{
+    for(const client of [a,b])
+      await client.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
+    const base={
+      planId:secondPlan,approvedReviewId:secondReview,sourceHash:currentSource.sourceHash,
+      expectedPointerVersion:null,expectedReleaseId:null,
+    };
+    const [left,right]=await Promise.allSettled([
+      atomicReleaseVoicePlan(a,{...base,requestKey:randomUUID()}),
+      atomicReleaseVoicePlan(b,{...base,requestKey:randomUUID()}),
+    ]);
+    const successes=[left,right].filter(x=>x.status==="fulfilled");
+    const conflicts=[left,right].filter(x=>x.status==="rejected"&&x.reason.code==="PT409");
+    assert.equal(successes.length,1,"one and only one release must commit");
+    assert.equal(conflicts.length,1,"loser must fail with PT409");
+    const count=(await db.query(
+      "select count(*)::int as n from private.voice_plan_release_entries where plan_id=$1",
+      [secondPlan])).rows[0].n;
+    assert.equal(count,1,"loser must not append history");
+    const pointer=(await db.query(
+      "select pointer_version from private.voice_plan_current_releases where application_id=$1",
+      [other.application.id])).rows[0];
+    assert.equal(Number(pointer.pointer_version),1);
+  }finally{await a.end();await b.end();}
+ });
  await t.test("source mutation invalidates both RPCs without side effects",async()=>{
   await db.query("update public.positions set title='Modified role' where id=$1",[f.position.id]);
   await assert.rejects(atomicReviewVoicePlan(db,{...reviewArgs,requestKey:randomUUID()}),
