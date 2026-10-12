@@ -144,12 +144,12 @@ export function packageMargin(financials: PackageFinancials) {
   if (revenueNetPlnGrosze > 0) {
     // Basis points (0.01%) are rounded using exact integers, not a lossy
     // floating-point intermediate which can exceed MAX_SAFE_INTEGER.
-    const numerator = exactMargin * 10_000n;
+    const numerator = exactMargin * BigInt(10000);
     const denominator = BigInt(revenueNetPlnGrosze);
     let rounded = numerator / denominator; // signed division truncates toward zero
     const remainder = numerator % denominator;
-    if (numerator >= 0n && remainder * 2n >= denominator) rounded += 1n;
-    if (numerator < 0n && -remainder * 2n > denominator) rounded -= 1n;
+    if (numerator >= BigInt(0) && remainder * BigInt(2) >= denominator) rounded += BigInt(1);
+    if (numerator < BigInt(0) && -remainder * BigInt(2) > denominator) rounded -= BigInt(1);
     if (rounded > BigInt(Number.MAX_SAFE_INTEGER) ||
         rounded < BigInt(Number.MIN_SAFE_INTEGER)) throw new Error('SC021_COST_OVERFLOW');
     marginPercent = Number(rounded) / 100;
