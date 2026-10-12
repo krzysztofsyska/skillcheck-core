@@ -24,6 +24,13 @@ export type CompetencyTestRevision = {
 
 const uuidPattern = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
+function hasReadableEvidence(value: string): boolean {
+  // Reject format/control characters (including NUL, bidi controls and
+  // zero-width marks) even when mixed with letters; keep ordinary line breaks.
+  const withoutLineBreaks = value.replace(/[\t\n\r]/g, '');
+  return /[\p{L}\p{N}]/u.test(value) && !/[\p{Cc}\p{Cf}\p{Cs}]/u.test(withoutLineBreaks);
+}
+
 function validatedTest(input: unknown): ExerciseDefinition {
   const definition = parseExerciseDefinition(input);
   if (definition.kind !== 'competency_test') {
@@ -58,7 +65,7 @@ export function parseCompetencyTestSubmission(definitionInput: unknown, input: u
     throw new Error('Nieprawidłowa odpowiedź na test.');
   }
   const workSample = (input as Record<string, unknown>).workSample;
-  if (typeof workSample !== 'string' || !workSample.trim() || workSample.length > 20_000) {
+  if (typeof workSample !== 'string' || workSample.length > 20_000 || !hasReadableEvidence(workSample) || !workSample.trim()) {
     throw new Error('Odpowiedź powinna zawierać od 1 do 20 000 znaków.');
   }
   return { workSample: workSample.trim() };
@@ -76,7 +83,14 @@ export function evaluateCompetencyTest(
   if (!Array.isArray(observationsInput) || observationsInput.length !== definition.criteria.length) {
     throw new Error('Ocena wymaga po jednej obserwacji na każde kryterium rubryki.');
   }
-  const observations: CompetencyObservation[] = observationsInput.map((raw, index) => {
+  // Array.from visits sparse slots; Array.prototype.map silently skips them.
+  const observations: CompetencyObservation[] = Array.from(
+    { length: definition.criteria.length },
+    (_, index) => {
+    if (!Object.prototype.hasOwnProperty.call(observationsInput, index)) {
+      throw new Error('Brak obserwacji dla kryterium rubryki.');
+    }
+    const raw = observationsInput[index];
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       throw new Error('Nieprawidłowa obserwacja kryterium.');
     }
@@ -90,7 +104,7 @@ export function evaluateCompetencyTest(
     const evidence = row.evidence.trim();
     if (rating === 'insufficient_data') {
       if (evidence) throw new Error('Brak wystarczających danych nie może zawierać cytatu oceny.');
-    } else if (evidence.length < 3 || !submission.workSample.includes(evidence)) {
+    } else if (evidence.length < 3 || !hasReadableEvidence(evidence) || !submission.workSample.includes(evidence)) {
       throw new Error('Ocena wymaga dokładnego cytatu z odpowiedzi kandydata.');
     }
     return { criterionIndex: index, rating, evidence };
