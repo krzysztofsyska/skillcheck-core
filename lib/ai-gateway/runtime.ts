@@ -24,11 +24,9 @@ export type LedgerStore = {
   }): Promise<boolean>;
   markUnknown(input: { companyId: string; requestKey: string }): Promise<boolean>;
 };
-export type ModelInvocation<T> = {
-  data: T;
-  usage: TokenUsage | null;
-  providerRequestId: string | null;
-};
+export type ModelInvocation<T> =
+  | { data: T; usage: TokenUsage | null; providerRequestId: string | null }
+  | { parseError: 'SC021_PROVIDER_OUTPUT_INVALID'; usage: TokenUsage | null; providerRequestId: string | null };
 export type ProviderAdapter<T> = (
   rate: ModelRate, correlationId: string,
 ) => Promise<ModelInvocation<T>>;
@@ -100,8 +98,9 @@ export async function runMeteredOperation<T>(input: {
   }
   // The provider has already responded: invalid/unknown usage and settlement errors
   // must hold the reservation as unknown, rather than leaving it as in-flight.
+  let costMicroUsd: number;
   try {
-    const costMicroUsd = usageCostMicroUsd(rate, reply.usage);
+    costMicroUsd = usageCostMicroUsd(rate, reply.usage);
     const wasSettled = await input.ledger.settle({
       companyId: input.context.companyId,
       requestKey: input.context.requestKey,
@@ -110,11 +109,14 @@ export async function runMeteredOperation<T>(input: {
       providerRequestId: reply.providerRequestId,
     });
     if (!wasSettled) throw new AiGatewayError('SC021_ALREADY_SETTLED');
-    return { data: reply.data, costMicroUsd, warning: reservation.warning, correlationId };
   } catch (error) {
     await input.ledger.markUnknown({
       companyId: input.context.companyId, requestKey: input.context.requestKey,
     });
     throw error;
   }
+  // A malformed business payload does not erase a valid, billable provider usage
+  // record. First settle the physical invocation, then report invalid output.
+  if ('parseError' in reply) throw new AiGatewayError(reply.parseError);
+  return { data: reply.data, costMicroUsd, warning: reservation.warning, correlationId };
 }
