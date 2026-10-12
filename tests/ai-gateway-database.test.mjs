@@ -7,7 +7,7 @@ import pg from 'pg';
 const url = process.env.AI_GATEWAY_TEST_DATABASE_URL;
 const idA = '11111111-1111-4111-8111-111111111111';
 const idB = '22222222-2222-4222-8222-222222222222';
-const migration = readFileSync(new URL('../supabase/migrations/20261012100500_ai_gateway_cost_ledger.sql', import.meta.url), 'utf8');
+const migration = readFileSync(new URL('../db/prototypes/sc021-ai-gateway-ledger.sql', import.meta.url), 'utf8');
 
 test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, idempotent settlement', {
   skip: !url && 'Requires AI_GATEWAY_TEST_DATABASE_URL (isolated Postgres test database)',
