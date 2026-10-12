@@ -24,15 +24,39 @@ export type CompetencyTestRevision = {
 
 const uuidPattern = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-function hasReadableEvidence(value: string): boolean {
-  // Reject format/control and Default_Ignorable_Code_Point characters, including
-  // invisible letters (e.g. U+3164 HANGUL FILLER), bidi controls and zero-width
-  // marks, even when mixed with readable text. Ordinary line breaks remain allowed.
-  const withoutLineBreaks = value.replace(/[\t\n\r]/g, '');
-  // RegExp constructors are needed while tsconfig targets ES5 (literal /u disallowed by tsc).
-  const readable = new RegExp(String.raw`[\p{L}\p{N}]`, 'u');
-  const hidden = new RegExp(String.raw`[\p{Cc}\p{Cf}\p{Cs}\p{Default_Ignorable_Code_Point}]`, 'u');
-  return readable.test(value) && !hidden.test(withoutLineBreaks);
+// Unicode regex constructors preserve compatibility with the project's ES5
+// TypeScript target. Count actual textual/pictographic code points, not UTF-16
+// length or whitespace/invisible padding.
+const visibleSymbol = new RegExp(String.raw`[\p{L}\p{N}\p{Extended_Pictographic}]`, 'u');
+const defaultIgnorable = new RegExp(String.raw`[\p{Default_Ignorable_Code_Point}]`, 'u');
+const pictograph = new RegExp(String.raw`[\p{Extended_Pictographic}]`, 'u');
+const letter = new RegExp(String.raw`[\p{L}]`, 'u');
+const control = new RegExp(String.raw`[\p{Cc}\p{Cs}]`, 'u');
+
+/** Returns -1 for forbidden invisible/control characters.
+ * Permits contextually meaningful emoji joiners, emoji variation selectors
+ * and mid-word soft hyphens without counting them as visible evidence. */
+function visibleContentCount(value: string): number {
+  const chars = Array.from(value);
+  let visible = 0;
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index];
+    if (char === '\n' || char === '\r' || char === '\t') continue;
+    if (control.test(char)) return -1;
+    if (defaultIgnorable.test(char)) {
+      const previous = chars[index - 1] ?? '';
+      const next = chars[index + 1] ?? '';
+      const emojiVariation = (char === '\uFE0E' || char === '\uFE0F') && pictograph.test(previous);
+      const emojiJoiner = char === '\u200D' && pictograph.test(previous) && pictograph.test(next);
+      const softHyphen = char === '\u00AD' && letter.test(previous) && letter.test(next);
+      if (!emojiVariation && !emojiJoiner && !softHyphen) return -1;
+      continue;
+    }
+    // U+2800 looks blank but is classified as a symbol, not White_Space.
+    if (char === '\u2800') continue;
+    if (visibleSymbol.test(char)) visible += 1;
+  }
+  return visible;
 }
 
 function validatedTest(input: unknown): ExerciseDefinition {
@@ -69,7 +93,7 @@ export function parseCompetencyTestSubmission(definitionInput: unknown, input: u
     throw new Error('Nieprawidłowa odpowiedź na test.');
   }
   const workSample = (input as Record<string, unknown>).workSample;
-  if (typeof workSample !== 'string' || workSample.length > 20_000 || !hasReadableEvidence(workSample) || !workSample.trim()) {
+  if (typeof workSample !== 'string' || workSample.length > 20_000 || visibleContentCount(workSample) < 1 || !workSample.trim()) {
     throw new Error('Odpowiedź powinna zawierać od 1 do 20 000 znaków.');
   }
   return { workSample: workSample.trim() };
@@ -108,7 +132,7 @@ export function evaluateCompetencyTest(
     const evidence = row.evidence.trim();
     if (rating === 'insufficient_data') {
       if (evidence) throw new Error('Brak wystarczających danych nie może zawierać cytatu oceny.');
-    } else if (evidence.length < 3 || !hasReadableEvidence(evidence) || !submission.workSample.includes(evidence)) {
+    } else if (visibleContentCount(evidence) < 3 || !submission.workSample.includes(evidence)) {
       throw new Error('Ocena wymaga dokładnego cytatu z odpowiedzi kandydata.');
     }
     return { criterionIndex: index, rating, evidence };
