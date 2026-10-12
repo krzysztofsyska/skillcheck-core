@@ -96,16 +96,32 @@ declare
   execution_row record;
   detached_count bigint;
 begin
-  select e.company_id,e.candidate_ids into execution_row
+  select e.company_id,e.candidate_ids,e.manifest_hash,e.phase,
+         e.sequence,e.event_hash,e.local_purged,
+         context.manifest_hash as context_manifest_hash
+    into execution_row
   from private.erasure_executions e
   join private.erasure_purge_context context
     on context.request_id=e.request_id
    and context.company_id=e.company_id
    and context.txid=txid_current()
    and context.mode='delete'
+   and context.manifest_hash=e.manifest_hash
   where e.request_id=target_request;
   if not found or execution_row.candidate_ids is null
-     or cardinality(execution_row.candidate_ids)=0 then
+     or cardinality(execution_row.candidate_ids)=0
+     or execution_row.manifest_hash is null
+     or execution_row.phase is distinct from 'erasing'
+     or execution_row.local_purged is distinct from false
+     or execution_row.sequence < 2
+     or execution_row.event_hash is null
+     or not exists (
+       select 1 from private.erasure_verified_ledger_events verified
+       where verified.request_id=target_request
+         and verified.sequence=execution_row.sequence
+         and verified.phase='erasing'
+         and verified.event_hash=execution_row.event_hash
+     ) then
     raise exception 'SC021_ERASURE_NOT_AUTHORIZED' using errcode='PT403';
   end if;
   -- SC-010 freezes each subject before signing its purge; an active subject
@@ -127,6 +143,48 @@ begin
     and u.status in ('reserved','unknown');
   if found then
     raise exception 'SC021_UNRECONCILED_CANDIDATE_USAGE' using errcode='PT409';
+  end if;
+  -- Every candidate-associated call and its mapping MUST be present in the
+  -- immutable SC-010 prepared manifest and the signed execution context, with
+  -- matching hashes of the current rows. No deletion based on subject alone.
+  -- This is deliberately fail-closed until a real R5 inventory populates them.
+  if exists (
+    select 1
+    from private.ai_gateway_candidate_links l
+    join public.ai_gateway_usage u on u.company_id=l.company_id
+      and u.id=l.usage_id
+    where l.company_id=execution_row.company_id
+      and l.candidate_id=any(execution_row.candidate_ids)
+      and (
+        not exists (
+          select 1 from private.erasure_purge_context_rows c
+          join private.erasure_purge_manifest m on
+            m.request_id=target_request
+            and m.manifest_hash=execution_row.manifest_hash
+            and m.adapter=c.adapter and m.row_key=c.row_key
+            and m.row_hash=c.row_hash
+          where c.txid=txid_current()
+            and c.adapter='private.ai_gateway_candidate_links'
+            and c.row_key=l.usage_id::text
+            and c.row_hash=private.erasure_hash(to_jsonb(l))
+            and c.command='delete'
+        )
+        or not exists (
+          select 1 from private.erasure_purge_context_rows c
+          join private.erasure_purge_manifest m on
+            m.request_id=target_request
+            and m.manifest_hash=execution_row.manifest_hash
+            and m.adapter=c.adapter and m.row_key=c.row_key
+            and m.row_hash=c.row_hash
+          where c.txid=txid_current()
+            and c.adapter='public.ai_gateway_usage'
+            and c.row_key=u.id::text
+            and c.row_hash=private.erasure_hash(to_jsonb(u))
+            and c.command='delete'
+        )
+      )
+  ) then
+    raise exception 'SC021_PURGE_MANIFEST_MISMATCH' using errcode='PT409';
   end if;
   -- SETTLED expenses only. RELEASED reservations contribute zero.
   insert into private.ai_gateway_anonymous_spend (
