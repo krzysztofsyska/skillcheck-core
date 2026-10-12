@@ -298,7 +298,25 @@ function collectOutputText(response: ScreeningOpenAiResponse) {
 }
 
 export function parseScreeningOpenAiResponse(response: ScreeningOpenAiResponse, claim: ScreeningWorkerClaim) {
-  if (!asRecord(response)) throw new ScreeningProviderError('openai_invalid_output', 'Invalid response envelope.', 'invalid_envelope');
+  const envelope = asRecord(response);
+  const incompleteDetails = envelope?.incomplete_details == null ? null : asRecord(envelope.incomplete_details);
+  const usage = envelope?.usage == null ? null : asRecord(envelope.usage);
+  const usageDetails = usage?.input_tokens_details == null ? null : asRecord(usage.input_tokens_details);
+  if (!envelope || typeof envelope.status !== 'string'
+    || (envelope.output !== undefined && !Array.isArray(envelope.output))
+    || (envelope.output_text !== undefined && typeof envelope.output_text !== 'string')
+    || (envelope.status === 'completed' && envelope.output === undefined && envelope.output_text === undefined)
+    || (envelope.incomplete_details != null && (!incompleteDetails
+      || (incompleteDetails.reason !== undefined && typeof incompleteDetails.reason !== 'string')))
+    || (envelope.usage != null && !usage)
+    || (usage?.input_tokens_details != null && !usageDetails)
+    || (usage && ['input_tokens', 'output_tokens'].some(key => usage[key] !== undefined
+      && (typeof usage[key] !== 'number' || !Number.isSafeInteger(usage[key]) || (usage[key] as number) < 0)))
+    || (usageDetails?.cached_tokens !== undefined
+      && (typeof usageDetails.cached_tokens !== 'number'
+        || !Number.isSafeInteger(usageDetails.cached_tokens) || usageDetails.cached_tokens < 0))) {
+    throw new ScreeningProviderError('openai_invalid_output', 'Invalid response envelope.', 'invalid_envelope');
+  }
   if (response.status === 'incomplete' && response.incomplete_details?.reason === 'max_output_tokens') {
     throw new ScreeningProviderError('openai_invalid_output', 'Output token limit.', 'output_token_limit');
   }
