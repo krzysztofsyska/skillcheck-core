@@ -80,8 +80,8 @@ declare
   limits public.ai_gateway_limits%rowtype;
   previous public.ai_gateway_usage%rowtype;
   month_date date := (date_trunc('month', now() at time zone 'UTC'))::date;
-  accounted bigint;
-  spent_after bigint;
+  accounted numeric;
+  spent_after numeric;
 begin
   if target_company is null or request_id is null or target_operation is null
     or estimated_micro_usd is null or estimated_micro_usd < 0
@@ -115,15 +115,23 @@ begin
     return;
   end if;
 
-  select coalesce(sum(case
-      when status = 'settled' then actual_micro_usd
-      when status in ('reserved', 'unknown') then reserved_micro_usd
-      else 0
-    end), 0)::bigint into accounted
-  from public.ai_gateway_usage
-  where company_id = target_company and billing_month = month_date;
+  -- SC-021-R5: detached candidate invoices remain part of the monthly
+  -- budget. Otherwise deletion would incorrectly credit back real AI spend.
+  select (
+    coalesce((select sum(case
+      when status = 'settled' then actual_micro_usd::numeric
+      when status in ('reserved','unknown') then reserved_micro_usd::numeric
+      else 0::numeric end)
+      from public.ai_gateway_usage
+      where company_id=target_company and billing_month=month_date),0::numeric)
+    + coalesce((select sum(cost_micro_usd)
+      from private.ai_gateway_anonymous_spend
+      where company_id=target_company and billing_month=month_date),0::numeric)
+  ) into accounted;
   spent_after := accounted + estimated_micro_usd;
-  if spent_after < accounted then raise exception 'SC021_COST_OVERFLOW' using errcode = '22003'; end if;
+  if spent_after > 9223372036854775807::numeric then
+    raise exception 'SC021_COST_OVERFLOW' using errcode = '22003';
+  end if;
   if spent_after > limits.monthly_limit_micro_usd and not limits.operator_override then
     raise exception 'SC021_BUDGET_EXHAUSTED' using errcode = 'P0001';
   end if;
