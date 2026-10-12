@@ -190,6 +190,14 @@ returns trigger language plpgsql security definer set search_path = '' as $$
 declare previous_state text;
 begin
   if old.execution_status is not distinct from new.execution_status then return null; end if;
+  -- Terminal analyses cannot be resurrected or reclassified to obtain a free
+  -- refund. Only a failed/cancelled analysis may re-enter 'pending', and that
+  -- transition must reserve another credit atomically below.
+  if old.execution_status in ('completed', 'failed', 'cancelled')
+    and not (old.execution_status in ('failed', 'cancelled')
+      and new.execution_status = 'pending') then
+    raise exception 'sc19_invalid_terminal_transition' using errcode = '55000';
+  end if;
   select state into previous_state from private.sc19_analysis_spend
     where analysis_id=new.id and company_id=new.company_id for update;
   if previous_state is null then raise exception 'sc19_spend_missing' using errcode='23503'; end if;
