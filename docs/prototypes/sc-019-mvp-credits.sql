@@ -143,6 +143,26 @@ $$;
 revoke all on function public.sc19_get_balance(uuid) from public, anon, authenticated;
 grant execute on function public.sc19_get_balance(uuid) to authenticated;
 
+
+-- Billing history: only tenant-visible, non-identifying events.
+create function public.sc19_list_credit_history(target_company uuid, result_limit integer default 20)
+returns table(event_at timestamptz, kind text, delta integer)
+language plpgsql stable security definer set search_path = '' as $
+begin
+  if (select auth.uid()) is null or not private.has_company_access(target_company, false) then
+    raise exception 'sc19_company_forbidden' using errcode='42501';
+  end if;
+  if result_limit is null or result_limit < 1 or result_limit > 50 then
+    raise exception 'sc19_invalid_history_limit' using errcode='22023';
+  end if;
+  return query select j.created_at, j.reason, j.delta
+    from private.sc19_credit_journal j where j.company_id=target_company
+    order by j.created_at desc, j.id desc limit result_limit;
+end;
+$;
+revoke all on function public.sc19_list_credit_history(uuid,integer) from public,anon,authenticated;
+grant execute on function public.sc19_list_credit_history(uuid,integer) to authenticated;
+
 -- MANUAL PAID FULFILLMENT ONLY: call from trusted admin SQL after confirming
 -- bank settlement / external processor settlement. Never GRANT to authenticated.
 create function private.sc19_grant_paid(target_company uuid, settlement_reference text)
