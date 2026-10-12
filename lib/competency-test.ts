@@ -25,12 +25,13 @@ export type CompetencyTestRevision = {
 const uuidPattern = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 function hasReadableEvidence(value: string): boolean {
-  // Reject format/control characters (including NUL, bidi controls and
-  // zero-width marks) even when mixed with letters; keep ordinary line breaks.
+  // Reject format/control and Default_Ignorable_Code_Point characters, including
+  // invisible letters (e.g. U+3164 HANGUL FILLER), bidi controls and zero-width
+  // marks, even when mixed with readable text. Ordinary line breaks remain allowed.
   const withoutLineBreaks = value.replace(/[\t\n\r]/g, '');
   // RegExp constructors are needed while tsconfig targets ES5 (literal /u disallowed by tsc).
   const readable = new RegExp(String.raw`[\p{L}\p{N}]`, 'u');
-  const hidden = new RegExp(String.raw`[\p{Cc}\p{Cf}\p{Cs}]`, 'u');
+  const hidden = new RegExp(String.raw`[\p{Cc}\p{Cf}\p{Cs}\p{Default_Ignorable_Code_Point}]`, 'u');
   return readable.test(value) && !hidden.test(withoutLineBreaks);
 }
 
