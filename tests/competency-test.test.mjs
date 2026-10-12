@@ -117,3 +117,25 @@ test('oversized input is rejected before whitespace/visibility scan',()=>{
   assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:longWhitespace}),/20 000/);
   assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:'\u0000'.repeat(20001)}));
 });
+
+test('default-ignorable Unicode letters never form a valid answer or citation',()=>{
+  // U+3164 and U+FFA0 are categorized as letters, not format/control chars.
+  for (const cp of [0x3164, 0xFFA0, 0x115F, 0x1160, 0x034F]) {
+    const invisible = String.fromCodePoint(cp).repeat(3);
+    for (const workSample of [invisible, 'Plan ' + invisible + ' działania']) {
+      assert.throws(() => parseCompetencyTestSubmission(definition(),{workSample}));
+    }
+    const rows = review();
+    rows[0] = { criterionIndex:0, rating:'above', evidence:invisible };
+    assert.throws(() => evaluateCompetencyTest(definition(),{workSample:invisible},rows));
+    assert.throws(() => evaluateCompetencyTest(definition(),answer,rows));
+  }
+});
+
+test('ordinary Polish letters, digits and multiline candidate excerpts remain valid',()=>{
+  const submission = {workSample:'Najpierw analizuję 3 procesy.\nPóźniej planuję poprawki.'};
+  const rows = review(); rows[0] = {criterionIndex:0,rating:'meets',evidence:'analizuję 3 procesy'};
+  const result = evaluateCompetencyTest(definition(),submission,rows);
+  assert.equal(result.criterionResults[0].evidence, 'analizuję 3 procesy');
+  assert.equal(result.score,null); // 1/5 documented criteria is not enough
+});
