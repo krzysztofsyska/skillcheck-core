@@ -549,3 +549,57 @@ function otherSealed(quality) {
   assert.notEqual(warehouse.companyId, quality.companyId);
   return warehouse;
 }
+
+test("SC-013-A rejects formatted contact details and Polish IBANs in fictional transcripts", () => {
+  for (const sensitive of [
+    "500.123.456", "500/123/456", "+48 (500) 123 456", "500 123 456",
+    "PL61109010140000071219812874", "PL61 1090 1014 0000 0712 1981 2874",
+  ]) {
+    const payload = qualityCompanyTranscript();
+    payload.segments[1].text = "Syntetyczny numer do redakcji: " + sensitive + ".";
+    assert.equal(codeOf(() => sealSyntheticTranscript(payload)), "pii_leakage", sensitive);
+  }
+  assert.ok(sealSyntheticTranscript(qualityCompanyTranscript()));
+});
+
+test("SC-013-A binds revised transcript to the original recruitment and application", () => {
+  const source = qualityCompanyTranscript();
+  const ledger = openEvidenceLedger(sealSyntheticTranscript(source));
+  const updated = { ...source, transcriptRevision: source.transcriptRevision + 1 };
+  const newApplication = { ...updated, applicationId: "00000000-0000-4000-8000-00000000a101" };
+  const newRecruitment = { ...updated, recruitmentId: "00000000-0000-4000-8000-00000000b101" };
+  for (const changed of [newApplication, newRecruitment]) {
+    const result = recordTranscriptRevision(ledger, sealSyntheticTranscript(changed));
+    assert.equal(result.outcome, "conflict");
+    assert.equal(result.ledger, ledger);
+  }
+  const valid = recordTranscriptRevision(ledger, sealSyntheticTranscript(updated));
+  assert.equal(valid.outcome, "applied");
+  assert.equal(valid.ledger.applicationId, ledger.applicationId);
+  assert.equal(valid.ledger.recruitmentId, ledger.recruitmentId);
+});
+
+test("SC-013-A refuses approval of a superseded committed analysis even without a pointer", () => {
+  const sealed = sealSyntheticTranscript(qualityCompanyTranscript());
+  const initial = openEvidenceLedger(sealed);
+  const first = commitAssessment(initial, assessSyntheticTranscript(
+    sealed, requestFor(sealed, qualityRows(sealed), "idem-quality-older-v1"),
+  ));
+  const secondRows = qualityRows(sealed);
+  secondRows[0] = { ...secondRows[0], rating: "below", rationale: "Dodatkowe dowody zmieniają ocenę." };
+  const newer = commitAssessment(first.ledger, assessSyntheticTranscript(
+    sealed, requestFor(sealed, secondRows, "idem-quality-newer-v2"),
+  ));
+  assert.equal(newer.outcome, "applied");
+  assert.equal(newer.ledger.currentAnalysisId, null);
+  const stale = commitReview(newer.ledger, sealed, reviewBody(sealed, newer.ledger, first.analysisId, {
+    idempotencyKey: "idem-review-quality-stale-v1",
+  }));
+  assert.equal(stale.outcome, "conflict");
+  assert.equal(stale.ledger, newer.ledger);
+  const approvedNewer = commitReview(newer.ledger, sealed, reviewBody(sealed, newer.ledger, newer.analysisId, {
+    idempotencyKey: "idem-review-quality-new-v2",
+  }));
+  assert.equal(approvedNewer.outcome, "applied");
+  assert.equal(readEffectiveResult(approvedNewer.ledger).analysisId, newer.analysisId);
+});
