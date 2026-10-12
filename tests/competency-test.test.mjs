@@ -180,3 +180,24 @@ test('evidence with three visible letters is sufficient despite formatting paddi
   assert.equal(result.criterionResults[0].rating,'meets');
   assert.equal(result.score,null);
 });
+
+test('joined emoji accepts skin tone modifiers and variation selectors before ZWJ',()=>{
+  for(const workSample of ['Opis 👩🏽‍💻 działania','Plan ❤️‍🔥 analizy','Wynik 👩🏽‍💻 i ❤️‍🔥']) {
+    assert.equal(parseCompetencyTestSubmission(definition(),{workSample}).workSample,workSample);
+    const rows=review();rows[0]={criterionIndex:0,rating:'meets',evidence:workSample};
+    assert.equal(evaluateCompetencyTest(definition(),{workSample},rows).criterionResults[0].rating,'meets');
+  }
+});
+
+test('printable mathematical and punctuation citations count toward three visible characters',()=>{
+  for(const evidence of ['C++','Q&A','5–7','A/B']) {
+    const workSample='Przykład: ' + evidence + ' wskazuje na rozwiązanie.';
+    const rows=review();rows[0]={criterionIndex:0,rating:'meets',evidence};
+    assert.equal(evaluateCompetencyTest(definition(),{workSample},rows).criterionResults[0].evidence,evidence);
+  }
+  for(const evidence of ['a\u2800\u2800','a \u2800','a\u2000\u2000']) {
+    const workSample='Wynik '+evidence+' to niewystarczający cytat.';
+    const rows=review();rows[0]={criterionIndex:0,rating:'above',evidence};
+    assert.throws(()=>evaluateCompetencyTest(definition(),{workSample},rows));
+  }
+});

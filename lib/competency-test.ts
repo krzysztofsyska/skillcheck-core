@@ -27,10 +27,12 @@ const uuidPattern = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 // Unicode regex constructors preserve compatibility with the project's ES5
 // TypeScript target. Count actual textual/pictographic code points, not UTF-16
 // length or whitespace/invisible padding.
-const visibleSymbol = new RegExp(String.raw`[\p{L}\p{N}\p{Extended_Pictographic}]`, 'u');
+const visibleSymbol = new RegExp(String.raw`[\p{L}\p{N}\p{P}\p{S}]`, 'u');
+const meaningfulSymbol = new RegExp(String.raw`[\p{L}\p{N}\p{Extended_Pictographic}]`, 'u');
 const defaultIgnorable = new RegExp(String.raw`[\p{Default_Ignorable_Code_Point}]`, 'u');
 const pictograph = new RegExp(String.raw`[\p{Extended_Pictographic}]`, 'u');
 const letter = new RegExp(String.raw`[\p{L}]`, 'u');
+const emojiModifier = new RegExp(String.raw`[\p{Emoji_Modifier}]`, 'u');
 const control = new RegExp(String.raw`[\p{Cc}\p{Cs}]`, 'u');
 
 /** Returns -1 for forbidden invisible/control characters.
@@ -39,6 +41,7 @@ const control = new RegExp(String.raw`[\p{Cc}\p{Cs}]`, 'u');
 function visibleContentCount(value: string): number {
   const chars = Array.from(value);
   let visible = 0;
+  let meaningful = 0;
   for (let index = 0; index < chars.length; index += 1) {
     const char = chars[index];
     if (char === '\n' || char === '\r' || char === '\t') continue;
@@ -47,7 +50,12 @@ function visibleContentCount(value: string): number {
       const previous = chars[index - 1] ?? '';
       const next = chars[index + 1] ?? '';
       const emojiVariation = (char === '\uFE0E' || char === '\uFE0F') && pictograph.test(previous);
-      const emojiJoiner = char === '\u200D' && pictograph.test(previous) && pictograph.test(next);
+      // Emoji modifiers and variation selectors can intervene before a ZWJ.
+      let previousEmoji = index - 1;
+      while (previousEmoji >= 0 && (emojiModifier.test(chars[previousEmoji])
+        || chars[previousEmoji] === '\uFE0E' || chars[previousEmoji] === '\uFE0F')) previousEmoji -= 1;
+      const emojiJoiner = char === '\u200D' && previousEmoji >= 0
+        && pictograph.test(chars[previousEmoji]) && pictograph.test(next);
       const softHyphen = char === '\u00AD' && letter.test(previous) && letter.test(next);
       if (!emojiVariation && !emojiJoiner && !softHyphen) return -1;
       continue;
@@ -55,8 +63,11 @@ function visibleContentCount(value: string): number {
     // U+2800 looks blank but is classified as a symbol, not White_Space.
     if (char === '\u2800') continue;
     if (visibleSymbol.test(char)) visible += 1;
+    if (meaningfulSymbol.test(char)) meaningful += 1;
   }
-  return visible;
+  // Visible punctuation can satisfy the quotation length, but a line made
+  // solely of punctuation/symbol padding is not a candidate answer.
+  return meaningful > 0 ? visible : -1;
 }
 
 function validatedTest(input: unknown): ExerciseDefinition {
