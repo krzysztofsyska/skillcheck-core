@@ -191,6 +191,8 @@ export type StoredAnalysis = Readonly<{
 export type EvidenceLedger = Readonly<{
   schemaVersion: 1;
   companyId: string;
+  recruitmentId: string;
+  applicationId: string;
   voiceInterviewId: string;
   roleKey: string;
   sourceId: string;
@@ -281,7 +283,12 @@ function utf16Boundary(text: string, index: number): boolean {
 }
 function hasPii(text: string): boolean {
   if (text.includes("@")) return true;
+  // Defense-in-depth only: production transcripts still require separate PII minimization.
+  // Recognize Polish IBAN (26 digits after PL), including bank-style grouping.
+  if (/(?:^|[^A-Za-z0-9])PL[ -]?\d{2}(?:[ -]?\d{4}){6}(?!\d)/i.test(text)) return true;
   return /(?:^|[^\d])\+\d{8,15}(?!\d)/.test(text) ||
+    // Polish nine-digit numbers, with dots, slashes, brackets or whitespace.
+    /(?:^|[^\d])(?:\+48[\s()./-]*)?(?:\(?\d{3}\)?[\s./-]*){2}\d{3}(?!\d)/.test(text) ||
     /(?:^|\D)(?:\d{3}[\s-]){2}\d{3}(?!\d)/.test(text) ||
     /(?:^|\D)\d{11}(?!\d)/.test(text) ||
     /(?:^|\D)\d{9}(?!\d)/.test(text) ||
@@ -873,6 +880,8 @@ export function openEvidenceLedger(sealedInput: SealedTranscript): EvidenceLedge
   return freezeLedger({
     schemaVersion: 1,
     companyId: sealed.companyId,
+    recruitmentId: sealed.recruitmentId,
+    applicationId: sealed.applicationId,
     voiceInterviewId: sealed.voiceInterviewId,
     roleKey: sealed.roleKey,
     sourceId: sealed.sourceId,
@@ -895,7 +904,10 @@ export function recordTranscriptRevision(ledgerInput: EvidenceLedger, sealedInpu
   if (sealed.companyId !== ledger.companyId || sealed.voiceInterviewId !== ledger.voiceInterviewId) {
     return held(ledger, "cross_tenant");
   }
-  if (sealed.roleKey !== ledger.roleKey) return held(ledger, "conflict");
+  // An interview cannot silently switch its application or recruitment on revision.
+  if (sealed.roleKey !== ledger.roleKey ||
+      sealed.recruitmentId !== ledger.recruitmentId ||
+      sealed.applicationId !== ledger.applicationId) return held(ledger, "conflict");
   if (sealed.transcriptRevision < ledger.transcriptRevision) return held(ledger, "out_of_order");
   if (sealed.transcriptRevision === ledger.transcriptRevision) {
     const same = sealed.transcriptSha256 === ledger.transcriptSha256 &&
@@ -1106,7 +1118,12 @@ export function commitReview(
   const current = ledger.currentAnalysisId
     ? ledger.analyses.find(item => item.analysisId === ledger.currentAnalysisId) ?? null
     : null;
-  if (approving && current && analysis.analysisVersion <= current.analysisVersion) return held(ledger, "conflict");
+  // A newer committed analysis must be reviewed instead of promoting an older one,
+  // including when there is not yet any approved/current pointer.
+  if (approving && (ledger.analyses.some(item => item.analysisVersion > analysis.analysisVersion) ||
+      (current !== null && analysis.analysisVersion <= current.analysisVersion))) {
+    return held(ledger, "conflict");
+  }
   const review: StoredReview = {
     assessmentValidity: validity,
     reviewerId,
