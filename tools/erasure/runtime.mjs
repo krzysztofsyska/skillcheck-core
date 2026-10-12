@@ -52,3 +52,40 @@ export async function replayVerifiedLedger({records,checkpoint,challenge,ledgerI
  }finally{await db.end();}
 }
 export const newRestoreChallenge=()=>randomUUID();
+
+/** Read-only operational evidence. Adapters and keys must be pinned operator
+ * configuration, never product/caller data. No health result releases isolation
+ * or authorizes erasure. The checkpoint challenge is generated here per call. */
+export async function inspectErasureLedgerHealth({ledgerId,getCheckpoint,getRecords,getMinimumWatermark,verificationKeys,encryptionKeys,reservationKeys}){
+ const challenge=newRestoreChallenge();
+ try{
+  if(typeof getCheckpoint!=='function'||typeof getRecords!=='function'||typeof getMinimumWatermark!=='function')throw new Error('Missing operator adapter');
+  const [checkpoint,minimumWatermark]=await Promise.all([getCheckpoint(challenge),getMinimumWatermark()]);
+  const records=await getRecords(checkpoint.sequence);
+  const verified=verifyReplayCoverage({records,checkpoint,challenge,ledgerId,minimumWatermark,verificationKeys,encryptionKeys,reservationKeys});
+  const blockers=['deployment_not_attested','restore_drill_required'];
+  if(minimumWatermark.sequence!==checkpoint.sequence||minimumWatermark.event_hash!==checkpoint.head_hash)blockers.push('checkpoint_register_behind');
+  return {ledger_verified:true,production_ready:false,verified_events:verified.length,checkpoint_sequence:checkpoint.sequence,checkpoint_hash:checkpoint.head_hash,blockers};
+ }catch{
+  // Do not leak adapter errors, DSNs, key material or decrypted recovery scopes.
+  return {ledger_verified:false,production_ready:false,blockers:['independent_ledger_verification_failed','deployment_not_attested','restore_drill_required']};
+ }
+}
+
+/** One explicit, bounded scheduling tick; never installs a timer or starts a
+ * worker. connect() must be the dedicated erasure_scheduler identity, which has
+ * no ledger/attestor/purge rights. The database rechecks all activation gates. */
+export async function runRetentionScheduleTick({connect,batchLimit=25}){
+ if(!Number.isSafeInteger(batchLimit)||batchLimit<1||batchLimit>100)throw new Error('Invalid scheduler batch limit');
+ let db;
+ try{
+  db=await connect();
+  const identity=(await db.query('select current_user as role')).rows[0]?.role;
+  if(identity!=='erasure_scheduler')throw new Error('Wrong scheduler identity');
+  const result=(await db.query('select private.tick_retention_schedule($1::integer) result',[batchLimit])).rows[0]?.result;
+  if(!result||!['processed','suggested','authorized','blocked'].every(k=>Number.isSafeInteger(result[k])&&result[k]>=0&&result[k]<=batchLimit)||!Array.isArray(result.results)||result.results.length>batchLimit)throw new Error('Invalid scheduler response');
+  // Only aggregate counters leave this adapter; no candidates or request payload.
+  return {processed:result.processed,suggested:result.suggested,authorized:result.authorized,blocked:result.blocked};
+ }catch{throw new Error('RETENTION_SCHEDULE_TICK_FAILED');}
+ finally{if(db){try{await db.end()}catch{throw new Error('RETENTION_SCHEDULE_TICK_FAILED')}}}
+}

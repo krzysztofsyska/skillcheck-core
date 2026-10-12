@@ -111,3 +111,64 @@ is still absent. Resurrected data must pass the normal recovery path, and expire
 irreversible scope with remaining data fails closed. Exact resolution-command
 retries return the committed result before current freeze checks; changed payloads
 under the same request key are rejected.
+
+## R4 explicit policy scheduling and read-only health
+
+R3 `authorization: {kind: "owner", actor_id}` envelopes remain byte-compatible.
+The additional exact union member is `kind: "retention_policy"` with `actor_id`,
+`delegation_id`, `activation_revision`, `policy_revision`, `due_generation`,
+`due_at`, and `evidence_hash`. IDs are UUIDs, revisions/generation are positive
+safe integers, evidence is a lowercase SHA-256 hex digest, and due time is a
+valid UTC timestamp no later than authorization. The policy revision must equal
+the included policy snapshot. `actor_id` denotes the actual owner who delegated
+execution; a scheduler never manufactures a legacy owner authorization. All
+these fields participate in the existing immutable signed/encrypted boundary.
+The attestor still proves the stored reservation; caller-created policy JSON
+cannot mint consent. Restore preserves that entire signed boundary even when
+the restored product backup predates the delegation.
+
+`runRetentionScheduleTick({connect, batchLimit: 25})` performs one bounded call
+(1–100 items) to `private.tick_retention_schedule`. Its connection must already
+be the dedicated `erasure_scheduler` identity; the adapter checks `current_user`
+and never elevates or changes roles. SQL remains responsible for current policy,
+delegation, due evidence, activation and execution gates. The return value exposes
+only aggregate processed/suggested/authorized/blocked counters. It neither starts
+an interval nor claims, proves, commits or purges an erasure. Provisioning a
+scheduler, role credentials and cadence is separate deployment work; importing
+this module has no scheduling side effects. Do not reuse worker, attestor,
+service-role or administrative credentials. An ambiguous tick response must be
+reconciled using the durable database suggestion/request records; counters are
+not authorization or proof that deletion occurred.
+
+`inspectErasureLedgerHealth` generates its own fresh challenge and obtains a
+live independent checkpoint, full encrypted records and a minimum watermark
+from separately pinned operator adapters. It verifies signatures, reservation
+proofs, continuity and the independent watermark without product writes. It
+returns only verification metadata and blocker codes; raw envelopes, candidate
+IDs, key material and adapter exceptions are not returned. A checkpoint register
+behind the live ledger is reported explicitly. The result always says
+`production_ready: false`: this cryptographic check cannot establish deployment
+separation, independent backup custody, scheduler provisioning or a completed
+restore drill. It neither releases restore isolation nor activates scheduling.
+Use the existing `replayVerifiedLedger` only in an explicitly isolated drill or
+approved recovery procedure; health never invokes it automatically.
+
+Explicit operator commands (no daemon, interval or automatic startup):
+
+```
+node tools/erasure/cli.mjs tick --config /secure/erasure-config.mjs --limit 25
+node tools/erasure/cli.mjs health --config /secure/erasure-config.mjs
+node tools/erasure/cli.mjs drill --config /secure/isolated-drill-config.mjs --isolated
+```
+
+The configuration path points to trusted local operator code, not uploaded or
+request-selected content. Its named exports are `schedulerConnect`, `ledgerHealth`
+(the pinned health adapter/key options described above), and `restoreConnect`
+(for the isolated restore attestor only). Keep this module and secrets outside the
+repository and product backup; never put passwords or key values on the command
+line. Commands return safe aggregate metadata and generic errors. A drill requires
+an explicit flag and the existing SQL isolation checks; it never releases isolation
+or reports production readiness. The tick only processes due policy suggestions
+and authorizations. **Independent R3 executor provisioning is still required** to
+advance authorized requests through durable ledger ACK, erasing, purge and final
+ACK. The tick does not perform those destructive operations or claim their success.
