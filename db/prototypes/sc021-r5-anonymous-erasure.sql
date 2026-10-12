@@ -8,6 +8,12 @@ begin;
 -- all linked usage atomically. One physical provider call may belong to one subject.
 alter table public.ai_gateway_usage
   add constraint ai_gateway_usage_company_and_id unique (company_id,id);
+-- No free-form candidate pseudonym can remain in the generic billable ledger.
+-- Candidate identity is exclusively represented by the private tenant-scoped FK.
+-- Deployment requires a reviewed backfill strategy for any preexisting rows.
+alter table public.ai_gateway_usage
+  add constraint ai_gateway_usage_r5_no_pseudonym
+  check (candidate_pseudonym is null);
 create table private.ai_gateway_candidate_links (
   company_id uuid not null,
   usage_id uuid not null,
