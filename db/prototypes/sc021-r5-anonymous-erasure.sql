@@ -76,9 +76,10 @@ begin
     insert into private.ai_gateway_candidate_links(company_id,usage_id,candidate_id)
       values(target_company,result_row.usage_id,target_candidate);
   elsif not exists (
-    select 1 from private.ai_gateway_candidate_links
-    where company_id=target_company and usage_id=result_row.usage_id
-      and candidate_id=target_candidate
+    select 1 from private.ai_gateway_candidate_links candidate_link
+    where candidate_link.company_id=target_company
+      and candidate_link.usage_id=result_row.usage_id
+      and candidate_link.candidate_id=target_candidate
   ) then
     raise exception 'SC021_CANDIDATE_REPLAY_CONFLICT' using errcode='23505';
   end if;
