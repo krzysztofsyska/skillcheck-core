@@ -36,7 +36,14 @@ settled charge is copied into a tenant-month/task/provider/model/price
 aggregated sum and the physical usage record with candidate/process/provider
 IDs is deleted. Released reservations are dropped without monetary cost.
 The complete financial move and deletion occur in one transaction; rollback
-must restore both. Re-running detach before the candidate is removed must
+must restore both.
+
+IMPORTANT: a tenant/month/task/model financial subtotal is data-minimized,
+but NOT automatically anonymous under GDPR. A tiny cohort (e.g. one candidate)
+may still be re-identifiable using external timestamps, invoices or usage
+patterns. Privacy review must either establish effective aggregation thresholds
+or a lawful retention basis and access restrictions for these summaries. Until
+then this is an engineering prototype, not a claim of irreversible anonymity. Re-running detach before the candidate is removed must
 not duplicate the aggregate. The original billing event is permanently
 unavailable after deletion, so future invoices must reference only
 anonymous totals or a separately compliant non-personal invoice ledger.
