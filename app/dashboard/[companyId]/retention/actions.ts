@@ -1,7 +1,7 @@
 'use server';
 import {companyAccess} from '../../../../lib/company-access';
 import {requestKey,revision} from '../../../../lib/erasure-preview';
-import {parseTicket,uuid,lifecycleFailure,type LifecycleState} from '../../../../lib/erasure-lifecycle';
+import {parseStatus,cancellationMessage,parseTicket,uuid,lifecycleFailure,type LifecycleState} from '../../../../lib/erasure-lifecycle';
 async function owner(companyId:string){const a=await companyAccess(companyId);if(a.company.owner_id!==a.user.id)throw Error('OWNER_ONLY');return a.client;}
 export async function issueErasureTicket(companyId:string,candidateId:string,_state:LifecycleState,form:FormData):Promise<LifecycleState>{
  let client;try{client=await owner(companyId);uuid(candidateId)}catch{return {error:'Ta czynność jest dostępna wyłącznie właścicielowi firmy.'}}
@@ -34,5 +34,7 @@ export async function cancelErasure(companyId:string,_state:LifecycleState,form:
  let id,generation,key;try{id=uuid(form.get('request_id'));generation=revision(form.get('generation'));key=requestKey(form)}catch{return {error:'Odśwież listę żądań i spróbuj ponownie.'}}
  const result=await client.rpc('cancel_candidate_erasure',{target_request:id,expected_generation:generation,request_key:key});
  if(result.error||!result.data)return {error:lifecycleFailure(result.error?.code)};
- return {requestId:result.data,saved:'Anulowano żądanie. Nie przywrócono niezależnie cofniętych zgód ani anulowanych zaproszeń.'};
+ const current=await client.rpc('get_erasure_status',{target_request:result.data});
+ if(current.error)return {error:'Wniosek wysłano, ale nie udało się potwierdzić jego stanu. Dane mogą nadal być wstrzymane. Odśwież listę żądań.'};
+ try{return {requestId:result.data,saved:cancellationMessage(parseStatus(current.data))}}catch{return {error:'Nie udało się potwierdzić anulowania. Sprawdź status żądania.'}};
 }

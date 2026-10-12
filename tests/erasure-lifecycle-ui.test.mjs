@@ -12,12 +12,12 @@ const dir='app/dashboard/[companyId]/retention/';
 const uuid=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const ticket={preview_ticket_id:uuid(8),scope_kind:'candidate_record',candidate_count:1,counts:{'public.candidates':1},blockers:['execution_not_implemented'],policy_revision:1,resolution_revision:null,manifest_hash:'hash',schema_signature:'sig',generated_at:new Date().toISOString(),expires_at:new Date(Date.now()+300000).toISOString()};
 const status={request_id:uuid(9),status:'authorized',generation:1,scope_kind:'candidate_record',candidate_count:1,created_at:new Date().toISOString(),cancelled_at:null,execution_enabled:false,phase:'local_frozen',blockers:['execution_not_implemented'],can_cancel:true};
-function fixture(owner=true){const calls=[];const client={from(){return {select(){return this},eq(){return this},async maybeSingle(){return {data:{id:uuid(2)}}}}},async rpc(name,args){calls.push({name,args});return {data:name==='issue_candidate_erasure_preview'?ticket:name==='get_erasure_subject_resolution'?{id:uuid(6),owner_current:true}:uuid(9),error:null}}};const access={companyAccess:async()=>({client,company:{owner_id:uuid(1)},user:{id:owner?uuid(1):uuid(3)}})};const actions=load(dir+'actions.ts',{'../../../../lib/company-access':access,'../../../../lib/erasure-preview':preview,'../../../../lib/erasure-lifecycle':helpers});return {client,calls,actions,access};}
+function fixture(owner=true){const calls=[];const client={from(){return {select(){return this},eq(){return this},async maybeSingle(){return {data:{id:uuid(2)}}}}},async rpc(name,args){calls.push({name,args});return {data:name==='get_erasure_status'?{...status,status:'cancelled',phase:'cancelled',can_cancel:false}:name==='issue_candidate_erasure_preview'?ticket:name==='get_erasure_subject_resolution'?{id:uuid(6),owner_current:true}:uuid(9),error:null}}};const access={companyAccess:async()=>({client,company:{owner_id:uuid(1)},user:{id:owner?uuid(1):uuid(3)}})};const actions=load(dir+'actions.ts',{'../../../../lib/company-access':access,'../../../../lib/erasure-preview':preview,'../../../../lib/erasure-lifecycle':helpers});return {client,calls,actions,access};}
 function form(){const f=new FormData();f.set('confirmed','on');f.set('request_key',uuid(4));f.set('preview_ticket_id',uuid(8));f.set('request_id',uuid(9));f.set('generation','1');f.set('scope_kind','candidate_record');return f;}
 test('all lifecycle mutations require current company owner',async()=>{const f=fixture(false);assert.ok((await f.actions.issueErasureTicket(uuid(1),uuid(2),{},form())).error);for(const action of ['authorizeErasure','cancelErasure'])assert.ok((await f.actions[action](uuid(1),{},form())).error);assert.equal(f.calls.length,0)});
 test('ticket uses server-resolved subject and route tenant candidate access',async()=>{const f=fixture(),data=form();data.set('scope_kind','confirmed_subject');data.set('resolution_id',uuid(999));assert.ok((await f.actions.issueErasureTicket(uuid(1),uuid(2),{},data)).ticket);assert.equal(f.calls[1].args.resolution_id,uuid(6));f.client.from=()=>({select(){return this},eq(){return this},async maybeSingle(){return {data:null}}});assert.ok((await f.actions.issueErasureTicket(uuid(1),uuid(2),{},data)).error);assert.equal(f.calls.length,2)});
 test('authorization requires explicit confirmation and passes only DB ticket plus replay key',async()=>{const f=fixture(),data=form();data.delete('confirmed');assert.ok((await f.actions.authorizeErasure(uuid(1),{},data)).error);assert.equal(f.calls.length,0);data.set('confirmed','on');data.set('manifest_hash','forged');const result=await f.actions.authorizeErasure(uuid(1),{},data);assert.equal(result.requestId,uuid(9));assert.deepEqual(f.calls[0].args,{preview_ticket_id:uuid(8),request_key:uuid(4)});assert.match(result.saved,/Nie wykonano usunięcia/)});
-test('cancellation works without candidate reads and passes expected generation',async()=>{const f=fixture();f.client.from=()=>{throw Error('candidate read forbidden')};const result=await f.actions.cancelErasure(uuid(1),{},form());assert.ok(result.saved);assert.deepEqual(f.calls[0].args,{target_request:uuid(9),expected_generation:1,request_key:uuid(4)});const data=form();data.set('generation','-1');assert.ok((await f.actions.cancelErasure(uuid(1),{},data)).error);assert.equal(f.calls.length,1)});
+test('cancellation works without candidate reads and passes expected generation',async()=>{const f=fixture();f.client.from=()=>{throw Error('candidate read forbidden')};const result=await f.actions.cancelErasure(uuid(1),{},form());assert.ok(result.saved);assert.deepEqual(f.calls[0].args,{target_request:uuid(9),expected_generation:1,request_key:uuid(4)});const data=form();data.set('generation','-1');assert.ok((await f.actions.cancelErasure(uuid(1),{},data)).error);assert.equal(f.calls.length,2)});
 test('missing migration and stale ticket are errors without private DB detail',async()=>{const f=fixture();for(const code of ['PGRST202','PT409']){f.client.rpc=async()=>({data:null,error:{code,message:'PRIVATE'}});const result=await f.actions.authorizeErasure(uuid(1),{},form());assert.ok(result.error);assert.ok(!result.saved);assert.doesNotMatch(result.error,/PRIVATE/)}});
 test('status parser fails closed for active execution and malformed lifecycle',()=>{assert.deepEqual(helpers.parseStatus(status),status);for(const change of [{execution_enabled:true},{phase:'erased'},{candidate_count:-1},{status:'cancelled',phase:'cancelled',can_cancel:true}])assert.throws(()=>helpers.parseStatus({...status,...change}));assert.throws(()=>helpers.parseTicket({...ticket,preview_ticket_id:'bad'}))});
 function forms(mocks={}){return load(dir+'forms.tsx',{'./actions':{authorizeErasure(){},cancelErasure(){},issueErasureTicket(){}},'next/navigation':{useRouter:()=>({refresh(){}})},'../../../../lib/erasure-preview':preview,'../../../../lib/erasure-lifecycle':helpers,...mocks})}
@@ -27,7 +27,7 @@ test('status route fetches owner metadata without frozen candidate access',async
 test('nonowner status page stops before metadata RPC',async()=>{const f=fixture(false);const page=load(dir+'page.tsx',{'next/link':{default:props=>React.createElement('a',props)},'next/navigation':{notFound(){throw Error('404')}},'./forms':{CancelErasureForm:()=>null},'../../../../lib/company-access':f.access,'../../../../lib/erasure-preview':preview,'../../../../lib/erasure-lifecycle':helpers});await assert.rejects(page.default({params:Promise.resolve({companyId:uuid(1)}),searchParams:Promise.resolve({})}),/404/);assert.equal(f.calls.length,0)});
 
 test('authorization allows R3 execution blockers but rejects policy/schema blockers and ambiguous full person scope',()=>{
- for(const blocker of ['execution_not_implemented','external_inventory_unverified','backup_policy_unverified','administrative_inventory_pending_execution','subject_resolution_required'])assert.equal(helpers.canAuthorizeTicket({...ticket,blockers:[blocker]}),true,blocker);
+ for(const blocker of ['execution_not_provisioned','execution_not_implemented','external_inventory_unverified','backup_policy_unverified','administrative_inventory_pending_execution','subject_resolution_required'])assert.equal(helpers.canAuthorizeTicket({...ticket,blockers:[blocker]}),true,blocker);
  for(const blocker of ['retention_policy_required','schema_dependency_unknown','unknown_future_blocker'])assert.equal(helpers.canAuthorizeTicket({...ticket,blockers:[blocker]}),false,blocker);
  assert.equal(helpers.canAuthorizeTicket({...ticket,scope_kind:'confirmed_subject',blockers:['subject_resolution_required']}),false);
 });
@@ -38,4 +38,31 @@ test('confirmed authorization leaves stale candidate page; unknown response does
   renderToStaticMarkup(React.createElement(f.ErasureAuthorization,{companyId:uuid(1),candidateId:uuid(2)}));effects[0]();
   assert.deepEqual(calls,state.saved?[['replace',`/dashboard/${uuid(1)}/retention`],['refresh']]:[]);
  }
+});
+
+test('cancellation ACK pending is never reported as cancellation completed',async()=>{
+ const f=fixture();f.client.rpc=async name=>({data:name==='get_erasure_status'?{...status,phase:'cancellation_pending',can_cancel:false,pending_phase:'cancelled'}:uuid(9),error:null});
+ const result=await f.actions.cancelErasure(uuid(1),{},form());assert.match(result.saved,/Oczekuje na potwierdzenie; dane pozostają wstrzymane/);assert.doesNotMatch(result.saved,/Potwierdzono anulowanie/);
+ f.client.rpc=async name=>name==='get_erasure_status'?{error:{code:'PT409'},data:null}:{data:uuid(9),error:null};
+ const uncertain=await f.actions.cancelErasure(uuid(1),{},form());assert.ok(uncertain.error);assert.equal(uncertain.saved,undefined);
+});
+test('R3 statuses preserve pending phases and separate active data from backups',()=>{
+ for(const [state,phase] of [['authorized','authorized'],['authorized','cancellation_pending'],['authorized','ledger_pending'],['erasing','erasing'],['erasing','ledger_pending'],['active_data_erased','active_data_erased']]){
+  const parsed=helpers.parseStatus({...status,status:state,phase,can_cancel:false,local_purged:state==='active_data_erased',ledger_sequence:2,pending_phase:null,blockers:['backup_pending']});
+  const label=helpers.erasureStatusLabel(parsed);assert.doesNotMatch(label,/Anulowane/);if(state==='active_data_erased')assert.equal(label,'Usunięto dane aktywne');
+ }
+ assert.throws(()=>helpers.parseStatus({...status,status:'active_data_erased',phase:'active_data_erased',can_cancel:false,local_purged:false}));
+ assert.throws(()=>helpers.parseStatus({...status,phase:'cancellation_pending',can_cancel:true}));
+ assert.match(preview.blockerLabel('backup_pending'),/nie zostało potwierdzone/);
+});
+test('erasing and pending cancellation never render cancel controls',()=>{
+ const f=forms();for(const phase of ['erasing','cancellation_pending']){
+  const html=renderToStaticMarkup(React.createElement(f.CancelErasureForm,{companyId:uuid(1),request:{...status,phase,can_cancel:false}}));
+  assert.doesNotMatch(html,/Anuluj żądanie|name="request_id"/);
+ }
+});
+
+test('unprovisioned executor has clear label and does not prevent owner freeze',()=>{
+ assert.equal(helpers.canAuthorizeTicket({...ticket,blockers:['execution_not_provisioned']}),true);
+ assert.equal(preview.blockerLabel('execution_not_provisioned'),'Wykonanie usunięcia nie jest uruchomione w tym środowisku.');
 });

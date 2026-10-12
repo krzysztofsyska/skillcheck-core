@@ -109,7 +109,9 @@ type ExpectedFunctions =
   | "cancel_candidate_erasure"
   | "get_erasure_status"
   | "get_candidate_erasure_status"
-  | "list_candidate_erasure_requests";
+  | "list_candidate_erasure_requests"
+  | "set_candidate_erasure_hold"
+  | "release_candidate_erasure_hold";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
