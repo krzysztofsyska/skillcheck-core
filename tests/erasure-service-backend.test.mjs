@@ -8,7 +8,7 @@ import {startLedgerService} from '../tools/erasure/serve.mjs';
 
 const ledgerId='10000000-0000-0000-0000-000000000001';
 const signing=generateKeyPairSync('ed25519'),reservation=generateKeyPairSync('ed25519');
-const state={role:'erasure_ledger_service',rolsuper:false,rolbypassrls:false,rolcreaterole:false,rolcreatedb:false,memberships:0,schema_create:false,owns_objects:false,events_select:true,events_insert:true,events_extra:false,events_column_extra:false,head_select:true,head_update:true,head_extra:false};
+const state={role:'erasure_ledger_service',rolsuper:false,rolbypassrls:false,rolcreaterole:false,rolcreatedb:false,rolreplication:false,memberships:0,schema_create:false,schema_usage_grant_option:false,owns_objects:false,events_select:true,events_insert:true,events_extra:false,events_column_extra:false,events_grant_options:false,events_column_grant_options:false,head_select:true,head_update:true,head_extra:false,head_column_extra:false,head_grant_options:false,head_column_grant_options:false};
 function fixture({privileges={},head=[{ledger_id:ledgerId}],records=[],queryFailure=false}={}){
  const calls=[],connections=[];
  const connect=async()=>{
@@ -33,7 +33,7 @@ test('backend accepts only the expected least-privilege role and closes startup 
 
 test('backend fails closed for wrong role, role memberships, administrative flags, object ownership, and excess/missing grants',async t=>{
  const rejected=[{role:'postgres'},{role:'service_role'},{memberships:1},{memberships:'0'},
-  ...['rolsuper','rolbypassrls','rolcreaterole','rolcreatedb','schema_create','owns_objects','events_extra','events_column_extra','head_extra'].map(k=>({[k]:true})),
+  ...['rolsuper','rolbypassrls','rolcreaterole','rolcreatedb','rolreplication','schema_create','schema_usage_grant_option','owns_objects','events_extra','events_column_extra','events_grant_options','events_column_grant_options','head_extra','head_column_extra','head_grant_options','head_column_grant_options'].map(k=>({[k]:true})),
   ...['events_select','events_insert','head_select','head_update'].map(k=>({[k]:false})),{events_extra:null}];
  for(const privileges of rejected)await t.test(JSON.stringify(privileges),async()=>{
   const f=fixture({privileges});await assert.rejects(createServiceBackend(f.options),/Wrong ledger service privileges/);
@@ -74,7 +74,7 @@ test('bounded records adapter parameterizes range, rejects unbounded input befor
  assert.match(f.calls.at(-1).sql,/sequence>\$1 and sequence<=\$2 order by sequence limit \$3/);
  assert.equal(f.connections.at(-1).ended,1);
  const count=f.connections.length;
- for(const range of [{after:-1,through:1,limit:1},{after:2,through:1,limit:1},{after:0,through:1,limit:101},{after:0,through:1,limit:0},{after:0,through:Infinity,limit:1},{after:0,through:1.5,limit:1},{after:'0',through:1,limit:1}])await assert.rejects(backend.readRecords(range),/Invalid record range/);
+ for(const range of [{after:-1,through:1,limit:1},{after:2,through:1,limit:1},{after:0,through:1,limit:3},{after:0,through:1,limit:0},{after:0,through:Infinity,limit:1},{after:0,through:1.5,limit:1},{after:'0',through:1,limit:1}])await assert.rejects(backend.readRecords(range),/Invalid record range/);
  assert.equal(f.connections.length,count);
  const bad=fixture({queryFailure:true});const badBackend=await createServiceBackend(bad.options);
  await assert.rejects(badBackend.readRecords({after:0,through:1,limit:1}));assert.equal(bad.connections.at(-1).ended,1);
@@ -128,5 +128,63 @@ test('real PostgreSQL column-level UPDATE bypasses table-grant check but backend
   assert.deepEqual(grants,{table_update:false,column_update:true});
   await assert.rejects(createServiceBackend({...f.options,connect}),/Wrong ledger service privileges/);
   assert.equal(closedConnections,2);
+ }finally{await db.close();}
+});
+
+test('historical receipt-verification keys cannot overlap reservation keys under different names and encodings',async()=>{
+ const historical=generateKeyPairSync('ed25519');
+ for(const encode of [key=>key,key=>key.export({type:'spki',format:'pem'})]){
+  const f=fixture();
+  await assert.rejects(createServiceBackend({...f.options,
+   verificationKeys:{...f.options.verificationKeys,'retired-ledger-key':encode(historical.publicKey)},
+   reservationKeys:{...f.options.reservationKeys,'renamed-reservation-key':historical.publicKey}
+  }),/Reservation and ledger keys must be independent/);
+  assert.equal(f.connections.length,0);
+ }
+});
+
+test('real PostgreSQL rejects replication and delegated table, column, and schema privileges',async t=>{
+ const db=new PGlite();let closedConnections=0;
+ try{
+  await db.exec(await readFile(new URL('../tools/erasure/ledger.sql',import.meta.url),'utf8'));
+  await db.exec(`create role erasure_ledger_service login nosuperuser nobypassrls nocreatedb nocreaterole noreplication;
+   grant usage on schema erasure_ledger to erasure_ledger_service;
+   grant select,insert on erasure_ledger.events to erasure_ledger_service;
+   grant select,update on erasure_ledger.head to erasure_ledger_service;`);
+  await db.query('insert into erasure_ledger.head(singleton,ledger_id) values(true,$1)',[ledgerId]);
+  const f=fixture();
+  const connect=async()=>{
+   await db.exec('set role erasure_ledger_service');
+   return {query:db.query.bind(db),end:async()=>{closedConnections++;await db.exec('reset role');}};
+  };
+  const start=()=>createServiceBackend({...f.options,connect});
+  await start();
+  await t.test('replication role attribute',async()=>{
+   await db.exec('alter role erasure_ledger_service replication');
+   const count=closedConnections;
+   await assert.rejects(start(),/Wrong ledger service privileges/);assert.equal(closedConnections,count+1);
+   await db.exec('alter role erasure_ledger_service noreplication');await start();
+  });
+  for(const [table,privilege] of [['events','SELECT'],['events','INSERT'],['head','SELECT'],['head','UPDATE']])await t.test(`${table} table ${privilege} WITH GRANT OPTION`,async()=>{
+   await db.exec(`grant ${privilege} on erasure_ledger.${table} to erasure_ledger_service with grant option`);
+   await assert.rejects(start(),/Wrong ledger service privileges/);
+   await db.exec(`revoke grant option for ${privilege} on erasure_ledger.${table} from erasure_ledger_service`);
+   await start();
+  });
+  for(const [table,column] of [['events','receipt'],['head','event_hash']])for(const privilege of ['SELECT','INSERT','UPDATE','REFERENCES'])await t.test(`${table} column ${privilege} WITH GRANT OPTION`,async()=>{
+   await db.exec(`grant ${privilege} (${column}) on erasure_ledger.${table} to erasure_ledger_service with grant option`);
+   const grants=(await db.query(`select
+    has_table_privilege('erasure_ledger_service',$1,$2) as table_option,
+    has_any_column_privilege('erasure_ledger_service',$1,$2) as column_option`,[`erasure_ledger.${table}`,`${privilege} WITH GRANT OPTION`])).rows[0];
+   assert.deepEqual(grants,{table_option:false,column_option:true});
+   await assert.rejects(start(),/Wrong ledger service privileges/);
+   await db.exec(`revoke ${privilege} (${column}) on erasure_ledger.${table} from erasure_ledger_service`);
+   await start();
+  });
+  await t.test('schema USAGE WITH GRANT OPTION',async()=>{
+   await db.exec('grant usage on schema erasure_ledger to erasure_ledger_service with grant option');
+   await assert.rejects(start(),/Wrong ledger service privileges/);
+   await db.exec('revoke grant option for usage on schema erasure_ledger from erasure_ledger_service');await start();
+  });
  }finally{await db.close();}
 });

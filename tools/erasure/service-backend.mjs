@@ -22,32 +22,40 @@ export async function createServiceBackend(options){
   }));
  };
  const publicSigning=publicKeys(verificationKeys),publicReservation=publicKeys(reservationKeys);
- const signingPublic=createPublicKey(privateKey).export({type:'spki',format:'der'});
- if(Object.values(publicReservation).some(key=>key.export({type:'spki',format:'der'}).equals(signingPublic)))throw new Error('Reservation and ledger keys must be independent');
+ // Historical verification keys remain trusted for replay, so the entire rings
+ // must be disjoint, regardless of key IDs or PEM/KeyObject representation.
+ const signingPublic=new Set(Object.values(publicSigning).map(key=>key.export({type:'spki',format:'der'}).toString('hex')));
+ if(Object.values(publicReservation).some(key=>signingPublic.has(key.export({type:'spki',format:'der'}).toString('hex'))))throw new Error('Reservation and ledger keys must be independent');
  const challenge=randomBytes(32);
  if(!publicSigning[signingKeyId]||!verify(null,challenge,publicSigning[signingKeyId],sign(null,challenge,privateKey)))throw new Error('Signing key mismatch');
  const db=await connect();
  try{
-  const state=(await db.query(`select current_user as role, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb,
+  const state=(await db.query(`select current_user as role, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication,
    (select count(*)::int from pg_auth_members m where m.member=r.oid) as memberships,
    has_schema_privilege(current_user,'erasure_ledger','CREATE') as schema_create,
+   has_schema_privilege(current_user,'erasure_ledger','USAGE WITH GRANT OPTION') as schema_usage_grant_option,
    exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='erasure_ledger' and c.relowner=r.oid) as owns_objects,
    has_table_privilege(current_user,'erasure_ledger.events','SELECT') as events_select,
    has_table_privilege(current_user,'erasure_ledger.events','INSERT') as events_insert,
    has_table_privilege(current_user,'erasure_ledger.events','UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') as events_extra,
    has_any_column_privilege(current_user,'erasure_ledger.events','UPDATE,REFERENCES') as events_column_extra,
+   has_table_privilege(current_user,'erasure_ledger.events','SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION') as events_grant_options,
+   has_any_column_privilege(current_user,'erasure_ledger.events','SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION,UPDATE WITH GRANT OPTION,REFERENCES WITH GRANT OPTION') as events_column_grant_options,
    has_table_privilege(current_user,'erasure_ledger.head','SELECT') as head_select,
    has_table_privilege(current_user,'erasure_ledger.head','UPDATE') as head_update,
-   has_table_privilege(current_user,'erasure_ledger.head','INSERT,DELETE,TRUNCATE,REFERENCES,TRIGGER') as head_extra
+   has_table_privilege(current_user,'erasure_ledger.head','INSERT,DELETE,TRUNCATE,REFERENCES,TRIGGER') as head_extra,
+   has_any_column_privilege(current_user,'erasure_ledger.head','INSERT,REFERENCES') as head_column_extra,
+   has_table_privilege(current_user,'erasure_ledger.head','SELECT WITH GRANT OPTION,UPDATE WITH GRANT OPTION') as head_grant_options,
+   has_any_column_privilege(current_user,'erasure_ledger.head','SELECT WITH GRANT OPTION,INSERT WITH GRANT OPTION,UPDATE WITH GRANT OPTION,REFERENCES WITH GRANT OPTION') as head_column_grant_options
    from pg_roles r where r.rolname=current_user`)).rows[0];
-  if(!state||state.role!=='erasure_ledger_service'||state.memberships!==0||['rolsuper','rolbypassrls','rolcreaterole','rolcreatedb','schema_create','owns_objects','events_extra','events_column_extra','head_extra'].some(k=>state[k]!==false)||['events_select','events_insert','head_select','head_update'].some(k=>state[k]!==true))throw new Error('Wrong ledger service privileges');
+  if(!state||state.role!=='erasure_ledger_service'||state.memberships!==0||['rolsuper','rolbypassrls','rolcreaterole','rolcreatedb','rolreplication','schema_create','schema_usage_grant_option','owns_objects','events_extra','events_column_extra','events_grant_options','events_column_grant_options','head_extra','head_column_extra','head_grant_options','head_column_grant_options'].some(k=>state[k]!==false)||['events_select','events_insert','head_select','head_update'].some(k=>state[k]!==true))throw new Error('Wrong ledger service privileges');
   const head=(await db.query('select ledger_id from erasure_ledger.head where singleton=true')).rows;
   if(head.length!==1||head[0].ledger_id!==ledgerId)throw new Error('Wrong ledger database');
  }finally{await db.end();}
  return {
   ledger:new PostgresErasureLedger({...options,signingKey:privateKey,verificationKeys:publicSigning,reservationKeys:publicReservation}),
   readRecords:async({after,through,limit})=>{
-   if(!Number.isSafeInteger(after)||after<0||!Number.isSafeInteger(through)||through<after||!Number.isSafeInteger(limit)||limit<1||limit>100)throw new Error('Invalid record range');
+   if(!Number.isSafeInteger(after)||after<0||!Number.isSafeInteger(through)||through<after||!Number.isSafeInteger(limit)||limit<1||limit>2)throw new Error('Invalid record range');
    const client=await connect();
    try{return (await client.query('select receipt,encrypted_envelope from erasure_ledger.events where sequence>$1 and sequence<=$2 order by sequence limit $3',[after,through,limit])).rows;}
    finally{await client.end();}

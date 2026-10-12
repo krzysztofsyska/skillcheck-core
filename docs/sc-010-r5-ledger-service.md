@@ -44,10 +44,10 @@ ciał żądań, haseł lub błędów adaptera. Uwierzytelnianie poprzedza odczyt
 | --- | --- | --- |
 | POST `/v1/events` | append | `{eventId,envelopeText,envelopeHash,reservationKeyId,reservationProof}`; receipt dopiero po trwałym register.record |
 | POST `/v1/checkpoint` | read | `{challenge}` — świeży UUID, podpisany checkpoint |
-| GET `/v1/records?after=0&through=10&limit=10` | read | Zaszyfrowane rekordy, limit 1–100, dokładnie ciągła strona do wskazanego checkpointu |
+| GET `/v1/records?after=0&through=10&limit=2` | read | Zaszyfrowane rekordy, limit 1–2, dokładnie ciągła strona do wskazanego checkpointu |
 | GET `/healthz` | read | Tylko żywotność procesu, zawsze `production_ready:false` |
 
-Body JSON max 2 MiB; sam envelope max 1 MiB. Błędy kontraktu 400,
+Body JSON max 2 MiB; sam envelope max 1 MiB. Strona odczytu ma najwyżej dwa rekordy (limit odrzucany przed SQL), a odpowiedź najwyżej 4 MiB. Błędy kontraktu 400,
 uwierzytelnienia 401, nieznane trasy/metody 404, za duże body 413,
 błąd adaptera 503. Błąd po commit nie oznacza braku zapisu. Ponowienie zawsze
 używa identycznego eventId i envelope; nie wolno tworzyć zastępczego zdarzenia.
@@ -82,7 +82,7 @@ wdrożenia. Żaden boolean w config nie może zastąpić próby utraty ACK i rol
 2. W oddzielnej bazie utworzyć nieadministracyjną rolę `erasure_ledger_service`.
    USAGE na schemacie, SELECT/INSERT na events i SELECT/UPDATE na head.
    Bez własności obiektów, członkostwa w innych rolach, BYPASSRLS, CREATE ROLE/DB,
-   CREATE na schemacie, UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER na events.
+   CREATE na schemacie, REPLICATION, opcji przekazywania grantów dalej ani UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER na events.
    Poświadczenie logowania ustanowić przez bezpieczny proces operatora.
 3. Przykład `tools/erasure/operator-config.example.mjs` skopiować poza repo,
    dostosować przypięty endpoint i ścieżkę instalacji. Sekrety dostarczyć przez

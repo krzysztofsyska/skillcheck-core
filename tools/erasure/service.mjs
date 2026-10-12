@@ -2,6 +2,7 @@ import {createHash,timingSafeEqual} from 'node:crypto';
 import {digest,parseEnvelope} from './ledger.mjs';
 
 const MAX_BODY_BYTES=2*1024*1024;
+const MAX_RESPONSE_BYTES=4*1024*1024;
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const hash=/^[0-9a-f]{64}$/;
 const keyId=/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -9,7 +10,7 @@ const receiptKeys=['kind','ledger_id','ledger_sequence','previous_ledger_hash','
 const exactKeys=(value,keys)=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join() === [...keys].sort().join();
 const tokenHash=value=>createHash('sha256').update(value).digest();
 const positive=value=>Number.isSafeInteger(value)&&value>0;
-const base64=value=>typeof value==='string'&&value.length>0&&/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
+const base64=value=>typeof value==='string'&&value.length>0&&value.length<=Math.ceil(1048576/3)*4&&Buffer.from(value,'base64').toString('base64')===value;
 class RequestError extends Error {constructor(status){super('Request rejected');this.status=status;}}
 function headerValues(req,name){
  const result=[];
@@ -17,8 +18,10 @@ function headerValues(req,name){
  return result;
 }
 function send(res,status,value){
+ const encoded=JSON.stringify(value);
+ if(Buffer.byteLength(encoded)>MAX_RESPONSE_BYTES)throw new Error('Response too large');
  res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','connection':'close'});
- res.end(JSON.stringify(value));
+ res.end(encoded);
 }
 async function readBody(req,maxBodyBytes){
  const type=headerValues(req,'content-type'),encoding=headerValues(req,'content-encoding');
@@ -51,7 +54,8 @@ function pageParameters(query){
  const p=new URLSearchParams(query);
  if([...p.keys()].sort().join()!=='after,limit,through')throw new RequestError(400);
  const result={};for(const k of ['after','through','limit']){const value=p.get(k);if(!/^(0|[1-9][0-9]*)$/.test(value??''))throw new RequestError(400);result[k]=Number(value);if(!Number.isSafeInteger(result[k]))throw new RequestError(400);}
- if(result.through<result.after||result.limit<1||result.limit>100)throw new RequestError(400);
+ // Bound BEFORE the database call: two maximum envelopes encode to <3 MiB.
+ if(result.through<result.after||result.limit<1||result.limit>2)throw new RequestError(400);
  return result;
 }
 /** Separate ledger-only process. All adapters come from trusted operator config.

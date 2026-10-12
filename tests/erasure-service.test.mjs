@@ -68,7 +68,7 @@ test('R5 body limits and exact request contracts reject before touching persiste
 test('R5 routes, methods and pagination never fall through to a privileged operation',async t=>{
  const {send,calls}=await server(t);
  for(const [path,method] of [['/','GET'],['/v1/events','GET'],['/v1/events','DELETE'],['/healthz','POST'],['/v1/checkpoint','GET'],['/v1/records','POST']])assert.equal((await send(path,{method,token:appendToken})).status,404);
- for(const query of ['','?after=-1&through=1&limit=1','?after=0&through=1&limit=101','?after=0&through=1&limit=0','?after=0&through=1&limit=1.5','?after=0&through=9007199254740992&limit=1','?after=2&through=1&limit=1','?after=0&through=1&limit=1&email=private','?after=0&after=1&through=2&limit=1'])assert.equal((await send('/v1/records'+query)).status,400,query);
+ for(const query of ['','?after=-1&through=1&limit=1','?after=0&through=3&limit=3','?after=0&through=100&limit=100','?after=0&through=1&limit=101','?after=0&through=1&limit=0','?after=0&through=1&limit=1.5','?after=0&through=9007199254740992&limit=1','?after=2&through=1&limit=1','?after=0&through=1&limit=1&email=private','?after=0&after=1&through=2&limit=1'])assert.equal((await send('/v1/records'+query)).status,400,query);
  assert.deepEqual(calls,{append:0,checkpoint:0,records:0,register:0});
 });
 
@@ -101,4 +101,22 @@ test('R5 record pagination returns bounded encrypted pages usable for full signe
  const records=[...first.json().records,...second.json().records];assert.deepEqual(records.map(r=>r.receipt.ledger_sequence),[1,2,3]);assert.deepEqual(queries,[{after:0,through:3,limit:2},{after:2,through:3,limit:2}]);
  for(const row of records)assert.deepEqual(Object.keys(row).sort(),['encrypted_envelope','receipt']);
  const challenge=randomUUID(),checkpoint=(await send('/v1/checkpoint',{method:'POST',body:{challenge}})).json();assert.equal(verifyReplayCoverage({records,checkpoint,challenge,ledgerId:f.ledgerId,minimumWatermark:watermark,verificationKeys:f.verificationKeys,encryptionKeys:f.encryptionKeys,reservationKeys:f.reservationKeys}).length,3);
+});
+
+test('R5 caps record count before persistence and serves two maximum ciphertexts within a fixed budget',async t=>{
+ const f=await ledgerFixture(t);
+ await f.ledger.append(f.makePayload());await f.ledger.append(f.makePayload());
+ const rows=await f.readRecords({after:0,through:2,limit:2});
+ const ciphertext=Buffer.alloc(1048576,7).toString('base64');
+ for(const row of rows)row.encrypted_envelope.ciphertext=ciphertext;
+ let reads=0;
+ const {send}=await server(t,{readRecords:async()=>{reads++;return rows;}});
+ for(const limit of [3,100])assert.equal((await send(`/v1/records?after=0&through=100&limit=${limit}`)).status,400);
+ assert.equal(reads,0);
+ const response=await send('/v1/records?after=0&through=2&limit=2');
+ assert.equal(response.status,200);assert.equal(reads,1);
+ assert.ok(Buffer.byteLength(response.text)<3*1024*1024);
+ assert.equal(response.json().records.length,2);
+ rows[0].encrypted_envelope.ciphertext=Buffer.alloc(1048579).toString('base64');
+ assert.equal((await send('/v1/records?after=0&through=2&limit=2')).status,503);
 });
