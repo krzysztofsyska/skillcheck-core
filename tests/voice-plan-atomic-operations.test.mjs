@@ -247,7 +247,7 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     // remains in immutable history.
     await db.query(
       "update public.candidate_documents set redacted_text=redacted_text || ' Aktualizacja CV' where id=$1",
-      [other.candidateDocument.id]);
+      [other.documentId]);
     await assert.rejects(reconstructTrustedVoiceSource(db,{
       companyId:other.companyId,applicationId:other.application.id,
       analysisId:other.analysis_id,reviewId:other.reviewId,shortlistEntryId:otherShortlist,
