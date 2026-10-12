@@ -95,12 +95,13 @@ export async function runMeteredOperation<T>(input: {
   const costMicroUsd = usageCostMicroUsd(rate, reply.usage);
   // An in-flight operation may cost more than forecast. Settle actual rather than hiding overage.
   // If settlement fails, never surface an unmetered AI result.
-  await input.ledger.settle({
+  const wasSettled = await input.ledger.settle({
     companyId: input.context.companyId,
     requestKey: input.context.requestKey,
     costMicroUsd,
     usage: reply.usage,
     providerRequestId: reply.providerRequestId,
   });
+  if (!wasSettled) throw new AiGatewayError('SC021_ALREADY_SETTLED');
   return { data: reply.data, costMicroUsd, warning: reservation.warning, correlationId };
 }
