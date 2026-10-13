@@ -25,6 +25,13 @@ to code/workflow changes requires a separately reviewed scope policy; a prompt
 alone is not filesystem isolation. The remote Cursor account must have no
 production credentials, and protected branches must prevent its merge/push.
 
+The shared live controller also requests a repository-specific installation
+token with exact necessary grants, including `Administration:read` but never
+`Administration:write`. Unexpected returned permissions/repositories or missing
+App credentials abort the workflow before agent effects; an owner PAT is never
+a fallback for live mutations. GitHub's directly disclosed `bypass_actors`
+must not be treated as proof of least-privilege without that token restriction.
+
 The adapter polls submitted review/inline-comment APIs every five minutes; a
 trusted Codex issue comment also wakes it. Polling recovers missed/coalesced
 events. It does not execute PR-supplied code or interpret comment bodies as shell.

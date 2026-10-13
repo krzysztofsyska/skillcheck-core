@@ -58,7 +58,12 @@ export function httpWorld() {
       return json(w.cursor);
     }
     if(u.hostname!=='api.github.com')throw Error(`unexpected network ${url}`);
-    if(u.pathname==='/app/installations/9/access_tokens')return json({token:'synthetic-installation-token'});
+    if(u.pathname==='/app/installations/9/access_tokens') {
+      if(method!=='POST' || !body?.repository_ids?.length || !body?.permissions) throw Error('missing scoped App token request');
+      return json({token:'synthetic-installation-token',repository_selection:'selected',
+        repositories:body.repository_ids.map(id=>({id})),
+        permissions:{metadata:'read',...body.permissions}});
+    }
     if(u.pathname==='/graphql') {w.pulls.forEach(p=>{if(p.node_id===body.variables.id)p.draft=false;});return json({data:{}});}
     const path=u.pathname.replace(`/repos/${policy.repository}`,'');
     if(path===''&&method==='GET')return json({id:policy.repository_id});
