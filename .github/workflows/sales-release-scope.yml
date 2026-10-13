@@ -1,48 +1,28 @@
+# PREPARATION-ONLY regression. Not a required Production check, not an approval.
+# A future production gate MUST execute from a trusted protected main revision.
 name: Sales Release Scope
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review]
-    branches: [main, integration]
+    branches: [integration]
     paths:
-      - 'tools/agent-pipeline/classify-pr.mjs'
       - 'tools/agent-pipeline/lib/sales-release.mjs'
+      - 'tools/agent-pipeline/classify-pr.mjs'
       - 'tests/agent-pipeline/sales-release-gate.test.mjs'
       - '.github/workflows/sales-release-scope.yml'
       - 'docs/sales-mvp-selective-release.md'
-      - 'app/preselekcja/page.tsx'
-      - 'app/components/marketing/home-page.tsx'
-      - 'app/components/marketing/site-header.tsx'
-      - 'app/components/marketing/package-comparison.tsx'
-      - 'tests/marketing-http.test.mjs'
+      - 'AGENTS.md'
 permissions:
   contents: read
-  pull-requests: read
 jobs:
   scope:
-    name: Sales release file and governance guard
-    if: ${{ github.base_ref == 'main' || startsWith(github.head_ref, 'chore/sales-mvp-release-gate-prep-') }}
+    name: Sales release offline deny-matrix tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - name: Regression / deny test
-        run: node --test tests/agent-pipeline/sales-release-gate.test.mjs
-      - name: Verify PR diff without relying on the PR description as approval
-        if: ${{ github.base_ref == 'main' }}
-        run: node tools/agent-pipeline/classify-pr.mjs
-        env:
-          GITHUB_EVENT_PATH: ${{ github.event_path }}
-  manual-sales-production-gate:
-    name: Sales production owner checkpoint
-    if: ${{ github.base_ref == 'main' && startsWith(github.head_ref, 'release/sales-mvp-intake-') }}
-    needs: [scope]
-    runs-on: ubuntu-latest
-    environment: sales-production-approval
-    steps:
-      - name: Record separate approval checkpoint (no deployment)
-        run: echo "Environment approval is a prerequisite, not authorization for CI to deploy"
+      - run: node --test tests/agent-pipeline/sales-release-gate.test.mjs
