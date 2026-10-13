@@ -5,10 +5,10 @@
  */
 export type RetellAgentStatus = Readonly<{
   agentId: string;
-  name: string;
+  name: string | null;
   published: boolean;
   version: number;
-  language: string | null;
+  language: string | readonly string[] | null;
   voiceId: string | null;
   responseEngineType: string | null;
 }>;
@@ -94,8 +94,8 @@ export async function readRetellAgent(
   const data = body as Record<string, unknown>;
   if (
     data.agent_id !== agentId ||
-    typeof data.agent_name !== "string" ||
-    data.agent_name.length > 200 ||
+    (data.agent_name !== null &&
+      (typeof data.agent_name !== "string" || data.agent_name.length > 200)) ||
     typeof data.is_published !== "boolean" ||
     !Number.isInteger(data.version) ||
     (data.version as number) < 0
@@ -104,14 +104,26 @@ export async function readRetellAgent(
   const engine = data.response_engine;
   const engineType = engine && typeof engine === "object" && !Array.isArray(engine)
     ? (engine as Record<string, unknown>).type : undefined;
+  // Retell may return either one locale or a multilingual locale array.
+  // Copy/freeze array values to prevent downstream mutation of the status.
+  const sourceLanguage = data.language;
+  let language: string | readonly string[] | null = null;
+  if (typeof sourceLanguage === "string" &&
+      sourceLanguage.length > 0 && sourceLanguage.length <= 30) {
+    language = sourceLanguage;
+  } else if (Array.isArray(sourceLanguage) &&
+      sourceLanguage.length > 0 && sourceLanguage.length <= 20 &&
+      sourceLanguage.every((value: unknown) =>
+        typeof value === "string" && value.length > 0 && value.length <= 30)) {
+    language = Object.freeze([...sourceLanguage] as string[]);
+  }
   // Return a strict projection, never Retell's raw agent configuration.
   return Object.freeze({
     agentId,
     name: data.agent_name,
     published: data.is_published,
     version: data.version as number,
-    language: typeof data.language === "string" && data.language.length <= 30
-      ? data.language : null,
+    language,
     voiceId: typeof data.voice_id === "string" && data.voice_id.length <= 120
       ? data.voice_id : null,
     responseEngineType: typeof engineType === "string" && engineType.length <= 60
