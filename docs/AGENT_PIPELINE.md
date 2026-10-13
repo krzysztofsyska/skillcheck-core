@@ -51,9 +51,11 @@ ChatGPT Orchestrator
 
 ## Statusy
 
-`BACKLOG -> READY -> BUILDING -> PR_REVIEW -> FIXING -> READY_FOR_INTEGRATION -> ACCEPTED -> READY_FOR_PROD -> DEPLOYING -> DONE`
+`BACKLOG -> READY -> BUILDING -> PR_REVIEW -> FIXING -> READY_FOR_OWNER -> ACCEPTED -> READY_FOR_PROD -> DEPLOYING -> DONE`
 
 Dodatkowo: `BLOCKED`.
+
+Sterownik zapisuje gotowość zwykłego tasku jako `READY_FOR_OWNER`. Automatyczne scalenie do `integration` nie wprowadza osobnej wartości statusu.
 
 ## Kanał agent-agent
 

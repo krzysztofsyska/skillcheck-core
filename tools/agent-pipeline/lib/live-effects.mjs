@@ -104,6 +104,16 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   return github.merge({ prNumber: record.pr_number, sha: record.head_sha });
 }
 
+// Owner gates keep waiting for the GitHub Environment run. Automatic integration
+// has no such run, including while merge is temporarily disabled.
+function readinessDeliverable(record, pending, policy) {
+  if (!pending.kind?.startsWith('READY_')) return true;
+  if (record.binding.approval?.run_id) return true;
+  if (record.binding.approval?.gate === 'A' || record.binding.approval?.gate === 'B') return false;
+  if (pending.kind !== 'READY_FOR_OWNER' || record.binding.lane === 'promotion') return false;
+  return policy?.integration_merge_policy === 'verified_ci_review';
+}
+
 export async function drainOutbox({ github, journal, policy, record, now }) {
   const kinds = ['READY_FOR_OWNER', 'READY_FOR_PROD', 'BLOCKED', 'DONE'];
   let pending = record.binding.pending_notification;
@@ -115,7 +125,7 @@ export async function drainOutbox({ github, journal, policy, record, now }) {
     await journal.save(next, { action: 'outbox-intent' }, record); record = next; pending = next.binding.pending_notification;
   }
   if (!pending || !record.issue_number || (pending.retry_at && Date.parse(pending.retry_at) > Date.parse(now))) return record;
-  if (pending.kind.startsWith('READY_') && !record.binding.approval?.run_id) return record;
+  if (!readinessDeliverable(record, pending, policy)) return record;
   const runUrl = pending.kind.startsWith('READY_') && record.binding.approval?.run_id ? `${policy.repository_url}/actions/runs/${record.binding.approval.run_id}` : null;
   const comments = await github.readComments(record.issue_number);
   const marker = `skillcheck-report:${record.task_id}`;
@@ -126,7 +136,9 @@ export async function drainOutbox({ github, journal, policy, record, now }) {
   if (!delivered) {
     const next = touch(record, now); next.binding.pending_notification.delivery_phase = 'unknown';
     await journal.save(next, { action: 'outbox-send' }, record); record = next;
-    const body = `${marker}\n${pending.body}\naction: ${runUrl || pending.action_url || ''}\n\nApproval scope (immutable digest ${record.binding.approval?.digest ?? 'none'}):\n${JSON.stringify(record.binding.approval?.canonical ?? null, null, 2)}\n`;
+    const scope = record.binding.approval?.canonical ?? record.binding.auto_integration ?? null;
+    const digest = record.binding.approval?.digest ?? record.binding.auto_integration?.review_digest ?? 'none';
+    const body = `${marker}\n${pending.body}\naction: ${runUrl || pending.action_url || ''}\n\nApproval scope (immutable digest ${digest}):\n${JSON.stringify(scope, null, 2)}\n`;
     try {
       if (matches[0]) await github.updateComment(matches[0].id, body);
       else await github.comment({ issueNumber: record.issue_number, body });
