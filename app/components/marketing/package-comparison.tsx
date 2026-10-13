@@ -26,7 +26,7 @@ export function PackageComparison(){return <>
     <p className={styles.planLabel}>Planowany pakiet</p><h3>{plan.name}</h3><p className={styles.planTitle}>{plan.title}</p><p>{plan.text}</p>
     <ul>{plan.features.map(f=><li key={f}>{f}</li>)}</ul>
     <div className={styles.planPrice}><strong>{plan.price}</strong><p>{plan.scope}</p><small>Cena robocza z wizualizacji</small></div>
-    <Link href={plan.name === "FREE" ? "/preselekcja#free-title" : plan.name === "PRESELEKCJA" ? "/preselekcja" : "/rozmowa"} className={styles.secondary}>Zapytaj o {plan.name === "FREE" ? "wariant próbny" : plan.name}</Link>
+    <Link href={plan.name === "FREE" ? "/preselekcja#free" : plan.name === "PRESELEKCJA" ? "/preselekcja" : "/rozmowa"} className={styles.secondary}>Zapytaj o {plan.name === "FREE" ? "wariant próbny" : plan.name}</Link>
   </article>)}</div>
   <p className={styles.note}>To koncepcja oferty do oceny, nie aktywny cennik. Ceny, limity i warunki wymagają zatwierdzenia przed sprzedażą. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.</p>
   <details className={styles.packageDetails}><summary>Porównaj wszystkie funkcje pakietów</summary>
