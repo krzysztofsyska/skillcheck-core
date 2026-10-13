@@ -25,7 +25,7 @@ test('Retell pure request is deterministic, versioned and includes no candidate 
     'from_number','idempotency_key','override_agent_id','override_agent_version',
     'retell_llm_dynamic_variables','to_number',
   ].sort());
-  assert.deepEqual(one.retell_llm_dynamic_variables,{
+  assert.deepEqual({...one.retell_llm_dynamic_variables},{
     sc_notice_version:'notice-pl-202610',sc_language:'pl-PL',sc_max_seconds:'600',
     sc_question_count:'1',sc_question_1:'Proszę opisać sytuację zawodową.',
     sc_followup_1_1:'Jaki był rezultat?',
