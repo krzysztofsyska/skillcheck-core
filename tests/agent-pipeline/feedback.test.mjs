@@ -4,7 +4,7 @@ import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.m
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { planFeedback, runFeedback, fixPrompt, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
-import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readSnapshot } from '../../tools/agent-pipeline/feedback-cli.mjs';
+import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readSnapshot, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
 const bot = { ...CODEX, type: 'Bot' };
@@ -378,13 +378,127 @@ test('Codex approval in the same GitHub second as request is accepted', () => {
     rounds: 0, handled: [], phase: 'WAITING_REVIEW', head: A, base: B,
     reviewCommentId: 200, reviewBaseline: [100], reviewRequestedAt: 1500 };
   assert.equal(planFeedback(f.binding, state, f.snapshot, 1600).state.phase, 'READY_FOR_OWNER');
+  f.snapshot.reviews[0].submitted_at = new Date(0).toISOString();
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 1600).status, 'WAITING_REVIEW');
+});
+
+test('moved integration base posts one replacement review instead of waiting forever', async () => {
+  const f = fixture();
+  await runFeedback(f.args);
+  finishRepair(f);
+  await runFeedback(f.args);
+  f.snapshot.comments = [];
+  f.snapshot.reviews = [{ id: 300, user: bot, commit_id: C, state: 'APPROVED', submitted_at: new Date(5_000).toISOString() }];
+  f.snapshot.reactions = [];
+  f.args.now = 5_000;
+  assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+  const D = 'd'.repeat(40);
+  f.snapshot.pull.base.sha = D;
+  const posts = [];
+  f.args.postReview = async body => { posts.push(body); return { id: 201 }; };
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(posts.length, 1);
+  assert.match(posts[0], new RegExp(`HEAD ${C}`));
+  assert.match(posts[0], new RegExp(`base ${D}`));
+  const saved = f.state();
+  assert.equal(saved.phase, 'WAITING_REVIEW');
+  assert.equal(saved.head, C);
+  assert.equal(saved.base, D);
+  assert.equal(saved.reviewCommentId, 201);
+  assert.equal(saved.reviewRequestedAt, 5_000);
+  assert.deepEqual(saved.reviewBaseline, [300]);
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(posts.length, 1);
+  f.snapshot.reviews.push({ id: 400, user: bot, commit_id: C, state: 'APPROVED', submitted_at: new Date(5_000).toISOString() });
+  assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+});
+
+test('lost base-change review request is not posted twice', async () => {
+  const f = fixture();
+  await runFeedback(f.args);
+  finishRepair(f);
+  await runFeedback(f.args);
+  f.snapshot.comments = [];
+  f.snapshot.reviews = [];
+  f.snapshot.reactions = [{ user: bot, content: '+1' }];
+  assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+  f.snapshot.pull.base.sha = 'd'.repeat(40);
+  let attempts = 0;
+  f.args.postReview = async () => { attempts++; throw new Error('lost'); };
+  await assert.rejects(runFeedback(f.args));
+  assert.equal(f.state().phase, 'REVIEW_PENDING');
+  assert.equal(f.state().reviewCommentId, null);
+  assert.equal(f.state().reviewRequestedAt, null);
+  assert.equal(await runFeedback(f.args), 'REVIEW_PENDING');
+  assert.equal(attempts, 1);
+});
+
+test('base-change review is not posted when a finding appears first', async () => {
+  const f = fixture();
+  await runFeedback(f.args);
+  finishRepair(f);
+  await runFeedback(f.args);
+  f.snapshot.comments = [];
+  f.snapshot.reviews = [];
+  f.snapshot.reactions = [{ user: bot, content: '+1' }];
+  assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+  f.snapshot.pull.base.sha = 'd'.repeat(40);
+  let reads = 0;
+  f.args.readSnapshot = async () => {
+    const snap = structuredClone(f.snapshot);
+    if (++reads === 2) snap.reviews = [{ id: 300, user: bot, commit_id: snap.pull.head.sha, state: 'CHANGES_REQUESTED' }];
+    return snap;
+  };
+  await assert.rejects(runFeedback(f.args), /FINDINGS_STALE/);
+  assert.equal(f.reviews(), 1);
+  assert.equal(f.state().phase, 'REVIEW_PENDING');
+});
+
+test('cursor dispatch uses findings recomputed after reservation', async () => {
+  const f = fixture();
+  let prompt = '';
+  f.args.cursor.createRun = async (_id, payload) => {
+    prompt = payload.prompt.text;
+    return { run: { id: 'run-test', agentId: f.binding.agentId } };
+  };
+  assert.equal(await runFeedback(f.args), 'FIXING');
+  assert.match(prompt, /discussion_r101/);
+  assert.doesNotMatch(prompt, /private-provider-text/);
+});
+
+test('dismissed finding is not dispatched from the reserved list', async () => {
+  const f = fixture();
+  let reads = 0;
+  f.args.readSnapshot = async () => {
+    const snap = structuredClone(f.snapshot);
+    if (++reads === 2) { snap.comments = []; snap.reviews = []; }
+    return snap;
+  };
+  await assert.rejects(runFeedback(f.args), /FINDINGS_STALE/);
+  assert.equal(f.calls(), 0);
+  assert.equal(f.state().phase, 'CURSOR_PENDING');
+  assert.equal(f.state().rounds, 1);
+});
+
+test('a changed finding set is not dispatched as the reserved set', async () => {
+  const f = fixture();
+  let reads = 0;
+  f.args.readSnapshot = async () => {
+    const snap = structuredClone(f.snapshot);
+    if (++reads === 2) snap.comments[0].id = 999;
+    return snap;
+  };
+  await assert.rejects(runFeedback(f.args), /FINDINGS_STALE/);
+  assert.equal(f.calls(), 0);
+  assert.equal(f.state().phase, 'CURSOR_PENDING');
 });
 
 test('feedback bridge token is bound to the exact repository and permissions', async () => {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-  const scope = { repository_ids: [REPOSITORY_ID], permissions: {
-    contents: 'write', issues: 'write', pull_requests: 'read', administration: 'read',
-  } };
+  assert.deepEqual(FEEDBACK_TOKEN_PERMISSIONS, {
+    contents: 'write', issues: 'write', pull_requests: 'read', administration: 'read', actions: 'read',
+  });
+  const scope = { repository_ids: [REPOSITORY_ID], permissions: FEEDBACK_TOKEN_PERMISSIONS };
   let issuedBody;
   const issued = { token: 'test-token', repository_selection: 'selected',
     repositories: [{ id: REPOSITORY_ID }],
@@ -403,5 +517,17 @@ test('feedback bridge token is bound to the exact repository and permissions', a
   await assert.rejects(createInstallationToken(args), /TOKEN_SCOPE_MISMATCH/);
   issued.permissions.administration = 'read';
   issued.repositories[0].id = 1;
+  await assert.rejects(createInstallationToken(args), /TOKEN_SCOPE_MISMATCH/);
+  issued.repositories[0].id = REPOSITORY_ID;
+  issued.repository_selection = 'all';
+  await assert.rejects(createInstallationToken(args), /TOKEN_SCOPE_MISMATCH/);
+  issued.repository_selection = 'selected';
+  issued.repositories.push({ id: 2 });
+  await assert.rejects(createInstallationToken(args), /TOKEN_SCOPE_MISMATCH/);
+  issued.repositories.pop();
+  issued.permissions.actions = 'write';
+  await assert.rejects(createInstallationToken(args), /TOKEN_SCOPE_MISMATCH/);
+  issued.permissions.actions = 'read';
+  issued.permissions.checks = 'read';
   await assert.rejects(createInstallationToken(args), /TOKEN_SCOPE_MISMATCH/);
 });

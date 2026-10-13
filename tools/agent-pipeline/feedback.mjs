@@ -7,6 +7,9 @@ const sha = value => /^[a-f0-9]{40}$/.test(value ?? '');
 const trusted = user => user?.id === CODEX.id && user?.login === CODEX.login && user?.type === 'Bot';
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = code => { throw new Error(code); };
+const sameFindings = (left, right) => left.length === right.length
+  && left.every((item, index) => item.kind === right[index].kind && item.id === right[index].id);
+const codexReviewRequest = (head, base) => `@codex review\n\nSC-OPS-002D: review HEAD ${head} against base ${base}. Include the synthetic acceptance criterion when applicable. Owner acceptance and production approval remain pending.`;
 
 // Trusted configuration, never PR prose/labels: exact paths and exact PR/agent binding.
 export function validateBinding(b) {
@@ -99,13 +102,26 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
   }
   const found = findings(snapshot);
   const sameRequest = current.reviewCommentId && current.head === head && current.base === base;
+  // GitHub stores submitted_at at whole-second resolution. Compare there so an
+  // approval in the same second as the request is not ordered before it.
   const approved = sameRequest && Number.isFinite(current.reviewRequestedAt)
     && Array.isArray(current.reviewBaseline)
     && snapshot.reviews.some(r => trusted(r.user) && r.commit_id === head && r.state === 'APPROVED'
-      && !current.reviewBaseline.includes(r.id) && Math.floor(Date.parse(r.submitted_at) / 1000) >= Math.floor(current.reviewRequestedAt / 1000));
+      && !current.reviewBaseline.includes(r.id)
+      && Math.floor(Date.parse(r.submitted_at) / 1000) >= Math.floor(current.reviewRequestedAt / 1000));
   const thumbs = sameRequest && snapshot.reactions?.some(r => trusted(r.user) && r.content === '+1');
   // READY is a revocable observation, never a permanent approval cache.
   if (current.phase === 'READY_FOR_OWNER' && (found.length || !(approved || thumbs))) {
+    const repairable = found.length > 0 && !current.handled.includes(head);
+    // A moved base/head clears the only request timestamp. Without a new review
+    // request the binding can never time out or become READY again.
+    if (!sameRequest && !repairable) {
+      return {
+        state: { ...current, phase: 'REVIEW_PENDING', head, base,
+          reviewCommentId: null, reviewRequestedAt: null, reviewBaseline: [] },
+        effect: { type: 'request-review', head, base },
+      };
+    }
     return { state: { ...current, phase: 'WAITING_REVIEW',
       ...(sameRequest ? {} : { reviewCommentId: null, reviewRequestedAt: null, reviewBaseline: [] }) } };
   }
@@ -160,13 +176,21 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
   let completed;
   if (plan.effect.type === 'fix') {
     if (fresh.agent.status !== 'IDLE') fail('CURSOR_BUSY');
-    const response = await cursor.createRun(binding.agentId, { prompt: { text: fixPrompt(binding, plan.effect) } });
+    const freshFindings = findings(fresh);
+    if (!freshFindings.length || !sameFindings(freshFindings, plan.effect.findings)) fail('FINDINGS_STALE');
+    const response = await cursor.createRun(binding.agentId, { prompt: { text: fixPrompt(binding, { ...plan.effect, findings: freshFindings }) } });
     const run = response.run;
     if (!run?.id || run.agentId !== binding.agentId) fail('INVALID_CURSOR_RESPONSE');
     completed = { ...plan.state, phase: 'FIXING', runId: run.id };
+  } else if (plan.effect.type === 'request-review') {
+    if (findings(fresh).length) fail('FINDINGS_STALE');
+    const result = await postReview(codexReviewRequest(plan.state.head, plan.state.base));
+    if (!Number.isSafeInteger(result.id)) fail('INVALID_REVIEW_RESPONSE');
+    completed = { ...plan.state, phase: 'WAITING_REVIEW', reviewCommentId: result.id,
+      reviewBaseline: fresh.reviews.map(r => r.id), reviewRequestedAt: now ?? Date.now() };
   } else {
     if (!verifyRepair(binding, plan.state, fresh)) fail('CURSOR_PROVENANCE_CHANGED');
-    const result = await postReview(`@codex review\n\nSC-OPS-002D: review HEAD ${plan.state.head}. Include the synthetic acceptance criterion when applicable. Owner acceptance and production approval remain pending.`);
+    const result = await postReview(codexReviewRequest(plan.state.head, plan.state.base));
     if (!Number.isSafeInteger(result.id)) fail('INVALID_REVIEW_RESPONSE');
     completed = { ...plan.state, phase: 'WAITING_REVIEW', reviewCommentId: result.id,
       reviewBaseline: fresh.reviews.map(r => r.id), reviewRequestedAt: now ?? Date.now() };

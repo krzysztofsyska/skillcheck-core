@@ -31,6 +31,11 @@ token with exact necessary grants, including `Administration:read` but never
 App credentials abort the workflow before agent effects; an owner PAT is never
 a fallback for live mutations. GitHub's directly disclosed `bypass_actors`
 must not be treated as proof of least-privilege without that token restriction.
+The feedback adapter uses a separate installation token: contents write, issues
+write, pull requests read, administration read, and actions read. Actions read
+exists only so protection checks can read environments and deployment branch
+policies; the token is not granted Actions write. Returned grants must match
+that set, and the token must be selected for this repository alone.
 
 The adapter polls submitted review/inline-comment APIs every five minutes; a
 trusted Codex issue comment also wakes it. Polling recovers missed/coalesced
@@ -61,7 +66,10 @@ return the complete linear commit suffix from the reserved head to the new head
 `cursorCommitter` bot ID/login/type. The final commit must contain the unique
 `SkillCheck-Repair` trailer reserved for this operation and sent in its prompt.
 Unrelated, unsigned, mixed-author or incomplete evidence stops at BLOCKED_PROVENANCE.
-This evidence is rechecked immediately before the review request. The Cursor API
+This evidence is rechecked immediately before the review request. Actionable
+findings are recomputed from the fresh snapshot immediately before `createRun`.
+An empty or changed set does not start Cursor; the reservation stays
+`CURSOR_PENDING` instead of sending the earlier finding list. The Cursor API
 git snapshot alone is session-wide, so it is not sufficient attribution. Only then does
 the adapter request `@codex review` once. A current-head APPROVED review or Codex's
 thumbs-up on that exact re-review request yields READY_FOR_OWNER, never owner
@@ -148,10 +156,15 @@ the App's actual signed-commit behavior before activation.
 
 Native approvals count only when submitted after a recorded review request for
 the exact current head/base, and absent from its pre-request review baseline.
+`submitted_at` and the recorded request time are compared at GitHub's whole-second
+resolution, so an approval in the same second as the request can count.
 READY is re-evaluated on every poll; removed evidence or new findings persistently
-revoke it. A changed base invalidates the old request; it cannot be accepted from
-an old head-only approval. Operator reconciliation/new review evidence is required
-if the base moves; no stale approval is silently reused.
+revoke it. A changed base or head invalidates the old request. When that
+invalidated READY record has no new repair to run, the adapter reserves and posts
+one replacement `@codex review` for the new head/base, then waits on that request.
+Approvals already present are stored in the new baseline and cannot authorize READY.
+A lost post remains `REVIEW_PENDING` and is not retried. No stale approval is
+silently reused.
 
 Reference: [GitHub ruleset API visibility](https://docs.github.com/en/rest/repos/rules).
 
@@ -169,9 +182,14 @@ ID is `bc-00f193ea-2c96-4b93-a3aa-12a074bd0b78`; its accessibility is not assume
 The script verifies App 5216184, installation 168649570 and repository identity,
 checks the state branch and its rules plus the agent-control restriction, and
 reads the selected Cursor agent. It only prints fixed check names and PASS/FAIL.
-It requests a repository-scoped read-only installation token and revokes it on
-completion (if interrupted, GitHub expiry remains the fallback). It makes no
-repository writes and starts no agents. Redirects are refused; requests time out.
+It requests a repository-scoped read-only installation token for repository id
+1043384454 with contents, administration, and actions read, and revokes it on
+completion (if interrupted, GitHub expiry remains the fallback). The response
+must report `repository_selection: selected` for that exact repository. A broader
+repository grant or a missing or elevated permission fails the check. Actions
+read is required to read environments and deployment branch policies; the token
+is not granted Actions write. It makes no repository writes and starts no agents.
+Redirects are refused; requests time out.
 
 A green result confirms connectivity and these protections only, not Cursor
 target/signature compatibility, owner/production approval gates or live E2E.

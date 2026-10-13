@@ -6,6 +6,12 @@ import { evaluatePreflight } from './lib/merge.mjs';
 import { runFeedback, validateBinding, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
 import { withRulesetEvidence, verifyStateBootstrap } from './lib/ruleset-evidence.mjs';
 
+// Actions read is required for environment and deployment-branch policy reads.
+// It is not Actions write, and Administration stays read-only.
+export const FEEDBACK_TOKEN_PERMISSIONS = {
+  contents: 'write', issues: 'write', pull_requests: 'read', administration: 'read', actions: 'read',
+};
+
 // Reuse the existing controller's API clients and protection preflight, but keep
 // feedback records outside its task projection. No second writer for a managed PR.
 export function feedbackStore(github, pr) {
@@ -115,9 +121,7 @@ export async function main(env = process.env) {
   config.bindings.forEach(validateBinding);
   const token = await createInstallationToken({ fetch, appId: env.AGENT_PIPELINE_APP_ID,
     privateKey: env.AGENT_PIPELINE_APP_PRIVATE_KEY, installationId: env.AGENT_PIPELINE_APP_INSTALLATION_ID, repository: REPOSITORY,
-    tokenScope: { repository_ids: [REPOSITORY_ID], permissions: {
-      contents: 'write', issues: 'write', pull_requests: 'read', administration: 'read',
-    } },
+    tokenScope: { repository_ids: [REPOSITORY_ID], permissions: FEEDBACK_TOKEN_PERMISSIONS },
   });
   const github = createGitHubClient({ fetch, token, repository: REPOSITORY, policy });
   const repository = await github.request(`/repos/${REPOSITORY}`);

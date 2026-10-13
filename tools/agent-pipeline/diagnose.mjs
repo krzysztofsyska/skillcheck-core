@@ -47,12 +47,19 @@ export async function diagnose(env, fetchImpl = fetch, policy = {}) {
     requireThat(installation.id === INSTALLATION_ID && installation.app_id === APP_ID
       && installation.account?.id === 222297538 && installation.suspended_at === null);
     const issued = await github(`/app/installations/${INSTALLATION_ID}/access_tokens`, `Bearer ${jwt}`, 'POST', {
-      repository_ids: [REPOSITORY_ID], permissions: { contents: 'read', administration: 'read' },
+      repository_ids: [REPOSITORY_ID],
+      permissions: { contents: 'read', administration: 'read', actions: 'read' },
     });
     token = issued.token;
     requireThat(typeof token === 'string' && token.length > 0);
-    requireThat(issued.permissions?.contents === 'read' && issued.permissions?.administration === 'read'
-      && Object.values(issued.permissions).every(value => value === 'read'));
+    const required = { contents: 'read', administration: 'read', actions: 'read' };
+    const granted = issued.permissions ?? {};
+    const allowed = new Set(['metadata', 'contents', 'administration', 'actions']);
+    requireThat(Object.entries(required).every(([key, value]) => granted[key] === value)
+      && Object.entries(granted).every(([key, value]) => allowed.has(key) && value === 'read'));
+    requireThat(issued.repository_selection === 'selected'
+      && Array.isArray(issued.repositories) && issued.repositories.length === 1
+      && issued.repositories[0]?.id === REPOSITORY_ID);
   });
   try {
     if (connected) {

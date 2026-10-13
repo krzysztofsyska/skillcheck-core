@@ -15,7 +15,10 @@ function fixture(change = {}) {
   const data = {
     '/app': { id: 5216184, slug: 'skillcheck-agent-ks' },
     '/app/installations/168649570': { id: 168649570, app_id: 5216184, account: { id: 222297538 }, suspended_at: null },
-    '/app/installations/168649570/access_tokens': { token: 'private-token', permissions: { contents: 'read', administration: 'read' } },
+    '/app/installations/168649570/access_tokens': {
+      token: 'private-token', repository_selection: 'selected', repositories: [{ id: 1043384454 }],
+      permissions: { contents: 'read', administration: 'read', actions: 'read' },
+    },
     [root]: { id: 1043384454, default_branch: 'main' },
     [root + '/branches/main']: { commit: { sha: env.GITHUB_SHA } },
     [root + '/branches/agent-feedback-state']: { name: 'agent-feedback-state', commit: { sha: env.GITHUB_SHA } },
@@ -49,7 +52,7 @@ test('diagnostic only reads services and issues/revokes a scoped read token', as
     ['POST', '/app/installations/168649570/access_tokens'], ['DELETE', '/installation/token'],
   ]);
   assert.deepEqual(JSON.parse(f.calls.find(c => c.method === 'POST').body), {
-    repository_ids: [1043384454], permissions: { contents: 'read', administration: 'read' },
+    repository_ids: [1043384454], permissions: { contents: 'read', administration: 'read', actions: 'read' },
   });
   assert.doesNotMatch(JSON.stringify(result), /private-/);
 });
@@ -86,6 +89,24 @@ test('unexpected write token is rejected and revoked', async () => {
   assert.ok(result.checks.some(c => c.check === 'github_identity_and_read_token' && c.status === 'FAIL'));
   assert.equal(f.calls.at(-1).method, 'DELETE');
   assert.equal(f.calls.some(c => c.path === root), false);
+});
+
+for (const [name, mutate] of Object.entries({
+  extraRepository: issued => { issued.repositories.push({ id: 1 }); },
+  allRepositories: issued => { issued.repository_selection = 'all'; },
+  wrongRepository: issued => { issued.repositories[0].id = 1; },
+  missingRepositoryGrant: issued => { delete issued.repositories; },
+  missingActions: issued => { delete issued.permissions.actions; },
+  actionsWrite: issued => { issued.permissions.actions = 'write'; },
+  extraReadGrant: issued => { issued.permissions.checks = 'read'; },
+})) test(`diagnostic token rejects ${name} and revokes before repository reads`, async () => {
+  const f = fixture();
+  mutate(f.data['/app/installations/168649570/access_tokens']);
+  const result = await f.run();
+  assert.ok(result.checks.some(c => c.check === 'github_identity_and_read_token' && c.status === 'FAIL'));
+  assert.equal(f.calls.at(-1).method, 'DELETE');
+  assert.equal(f.calls.some(c => c.path === root), false);
+  assert.doesNotMatch(JSON.stringify(result), /private-/);
 });
 
 test('invalid agent path cannot redirect credentialed requests', async () => {
