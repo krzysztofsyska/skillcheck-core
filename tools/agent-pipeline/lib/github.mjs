@@ -247,7 +247,7 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
   };
 }
 
-export async function createInstallationToken({ fetch: fetchImpl, appId, privateKey, installationId, repository, apiBase = 'https://api.github.com' }) {
+export async function createInstallationToken({ fetch: fetchImpl, appId, privateKey, installationId, repository, apiBase = 'https://api.github.com', tokenScope = null }) {
   const jwt = githubAppJwt({ appId, privateKey: privateKey.includes('\\n') ? privateKey.replace(/\\n/g, '\n') : privateKey });
   const headers = { accept: 'application/vnd.github+json', authorization: `Bearer ${jwt}` };
   let installation = installationId;
@@ -264,12 +264,28 @@ export async function createInstallationToken({ fetch: fetchImpl, appId, private
     if (!installation) throw new Error('BLOCKED_CONFIGURATION');
     void repo;
   }
-  const response = await fetchImpl(`${apiBase}/app/installations/${installation}/access_tokens`, { method: 'POST', headers });
+  const scopedBody = tokenScope ? { repository_ids: tokenScope.repository_ids, permissions: tokenScope.permissions } : null;
+  if (tokenScope && (!Array.isArray(scopedBody.repository_ids) || scopedBody.repository_ids.length !== 1
+      || !Number.isSafeInteger(scopedBody.repository_ids[0]) || !scopedBody.permissions
+      || Object.keys(scopedBody.permissions).length === 0)) throw new Error('INVALID_TOKEN_SCOPE');
+  const response = await fetchImpl(`${apiBase}/app/installations/${installation}/access_tokens`, {
+    method: 'POST', headers, ...(scopedBody ? { body: JSON.stringify(scopedBody) } : {}),
+  });
   const payload = await response.json();
   if (!response.ok || !payload.token) {
     const error = new Error('installation token failed');
     error.status = response.status;
     throw error;
+  }
+  if (scopedBody) {
+    const granted = payload.permissions ?? {};
+    const allowed = { metadata: 'read', ...scopedBody.permissions };
+    const exactPermissions = Object.entries(scopedBody.permissions).every(([k, v]) => granted[k] === v)
+      && Object.entries(granted).every(([k, v]) => allowed[k] === v);
+    const exactRepositories = payload.repository_selection === 'selected'
+      && Array.isArray(payload.repositories) && payload.repositories.length === 1
+      && payload.repositories[0].id === scopedBody.repository_ids[0];
+    if (!exactPermissions || !exactRepositories) throw new Error('TOKEN_SCOPE_MISMATCH');
   }
   return payload.token;
 }
