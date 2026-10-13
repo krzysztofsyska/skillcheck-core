@@ -1,7 +1,7 @@
 # SC-019-MVP A1 — SAFE BILLING CORE PROTOTYPE
 
 TASK: #91 / SC-019-MVP
-STATUS: IMPLEMENTED IN ISOLATED BRANCH; REVIEW AND PRODUCTION ACTIVATION PENDING
+STATUS: FIXING — CI syntax blocker and integration conflict repaired on PR #92; independent L3 review still pending
 BASE: integration
 SCOPE: FREE (5 analyses) + PRESELEKCJA prepaid (60 analyses)
 PRICING: 299 PLN is only a proposed initial commercial price; do NOT charge or publish it as approved.
@@ -37,6 +37,15 @@ PRODUCT: the existing voicebot, candidate chatbot, AC and subscriptions remain o
 - Secure first live synthetic flow: company registration → verified claim → approved redacted CV → user start → worker processing → human review → SC-008 ranking → SC-009 report → exhausted FREE → verified payment → credits.
 - Complete policy/legal readiness (DPA under GDPR Article 28, privacy info, retention, terms, VAT / invoice handling). State explicitly that AI supports rather than makes hiring decisions.
 - Explicit owner approvals remain required for pricing and production release. No real client data and no real charges in testing.
+
+## 2026-10-13 continuation (PR #92, no production)
+
+- HEAD before this pass was `585bb55`. GitHub Checks `verify` (run 38236739739) and `credits` (run 38236739678) failed because `tests/sc-019-billing-prototype.test.mjs` created `private.has_company_access` with an unclosed dollar quote (`as $`). PGlite reported SQLSTATE 42601 at position 1332, so quota, refund, grant and RLS tests never ran.
+- That fixture quote is restored, and the disposable PostgreSQL 16 race fixture now declares the same two-argument `has_company_access(uuid, boolean)` signature that `public.sc19_get_balance` calls.
+- PR #92 was CONFLICTING with `integration`. The only content conflict was `lib/supabase/database.types.ts`. The resolution keeps `sc19_claim_trial` / `sc19_get_balance` and the SC-010 retention/erasure RPCs already on `integration`.
+- No Codex review thread exists on PR #92: review comments and pull-request reviews are empty. The 2026-10-10 comment is a review request, not a PASS.
+- No Supabase migration was added. `docs/prototypes/sc-019-mvp-credits.sql` stays review-only. A CLI migration PR is the next step only after an independent PASS, and only for sandbox/`integration`, never Production.
+- Payments, production migration, production deploy, voicebot SC-011-B #79 and customer E2E for SC-005 remain out of this change.
 
 ## Release guards
 NEVER merge SQL prototype into migration tree or activate it on live Supabase automatically.
