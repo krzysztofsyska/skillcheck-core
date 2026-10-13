@@ -22,6 +22,8 @@ export type RetellOutboundConfig = Readonly<{
   maxBudgetSeconds: number;
   /** Immutable SHA-256 of reviewed exact Retell flow response; owner-approved source. */
   approvedFlowSha256: string;
+  /** Independently reviewed exact complete Retell agent response digest. */
+  approvedAgentSha256: string;
 }>;
 
 export type RetellOutboundDraft = Readonly<{
@@ -42,6 +44,11 @@ export type RetellOutboundDraft = Readonly<{
   }>;
   /** Not a Retell time limit: verified agent-side max must be <= this. */
   requestedMaxSeconds: number;
+  /** Diagnostic proof only. DOES NOT authorize a provider POST. */
+  agentRevisionSha256: string;
+  verifiedAtMs: number;
+  expiresAtMs: number;
+  preflightOnly: true;
 }>;
 
 export class RetellOutboundDraftError extends Error {
@@ -58,7 +65,7 @@ const revision = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const tag = /^(?!latest$|latest_published$|v\d+$)[a-z][a-z0-9_-]{0,19}$/;
 const flowId = /^[A-Za-z0-9_]{12,100}$/;
 const configFields = ["agentId","agentVersionTag","agentVersion","approvedAssistantVersion",
-  "noticeVersion","fromNumberE164","maxBudgetSeconds","approvedFlowSha256"] as const;
+  "noticeVersion","fromNumberE164","maxBudgetSeconds","approvedFlowSha256","approvedAgentSha256"] as const;
 
 function isPlainExact(v: unknown, keys: readonly string[]): v is Record<string, unknown> {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
@@ -80,16 +87,55 @@ function validatedConfig(input: RetellOutboundConfig): RetellOutboundConfig {
     typeof c.fromNumberE164 !== "string" || !phone.test(c.fromNumberE164) ||
     !Number.isInteger(c.maxBudgetSeconds) ||
     c.maxBudgetSeconds < 420 || c.maxBudgetSeconds > 600 ||
-    typeof c.approvedFlowSha256 !== "string" || !sha256.test(c.approvedFlowSha256)
+    typeof c.approvedFlowSha256 !== "string" || !sha256.test(c.approvedFlowSha256) ||
+    typeof c.approvedAgentSha256 !== "string" || !sha256.test(c.approvedAgentSha256)
   ) return reject();
   return c;
 }
 type AgentFetch = (url: string, init: RequestInit) =>
-  Promise<Pick<Response, "status" | "json">>;
+  Promise<Pick<Response, "status" | "headers" | "body">>;
+const providerJsonMaxBytes = 256 * 1024;
+const policyGuardrail = "Never ask about health, medical information or special-category personal data.";
+
+/** No response.json(): enforce a decompressed streaming byte limit first. */
+async function readBoundedJson(result: Pick<Response, "headers" | "body">): Promise<Record<string, unknown>> {
+  const contentLength = result.headers.get("content-length");
+  if (contentLength !== null) {
+    const length = Number(contentLength);
+    if (!Number.isSafeInteger(length) || length < 0 || length > providerJsonMaxBytes)
+      return reject();
+  }
+  if (!result.body) return reject();
+  const reader = result.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0;
+  let text = "";
+  let completed = false;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > providerJsonMaxBytes) return reject();
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+    completed = true;
+  } catch { return reject(); }
+  finally {
+    if (!completed) { try { await reader.cancel(); } catch { /* fail closed */ } }
+    reader.releaseLock();
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return reject(); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return reject();
+  return parsed as Record<string, unknown>;
+}
 const verified = new WeakSet<object>();
 export type RetellVerifiedAgent = Readonly<{
   agentId: string; agentVersionTag: string; agentVersion: number;
   maxCallDurationMs: number; checkedAtMs: number; flowSha256: string;
+  agentSha256: string;
 }>;
 
 /** Server side GET-only gate for exact tag/revision, privacy and flow prompt.
@@ -115,7 +161,7 @@ export async function verifyRetellOutboundAgent(
     try {
       const result = await http(url, init);
       if (result.status !== 200) return reject();
-      raw = await result.json();
+      raw = await readBoundedJson(result);
     } catch { return reject(); }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return reject();
     return raw as Record<string, unknown>;
@@ -135,6 +181,14 @@ export async function verifyRetellOutboundAgent(
     (a.max_call_duration_ms as number) > c.maxBudgetSeconds * 1000 ||
     !(langs === "pl-PL" || (Array.isArray(langs) && langs.includes("pl-PL"))))
     return reject();
+  // Pin ALL returned agent revision fields, not only the nested conversation flow.
+  // This binds pre/post-session tools, webhooks, memory and future vendor fields
+  // to the independently reviewed immutable configuration digest.
+  let agentDigest: string;
+  try { agentDigest = createHash("sha256").update(JSON.stringify(a)).digest("hex"); }
+  catch { return reject(); }
+  if (agentDigest !== c.approvedAgentSha256) return reject();
+
   const engine = a.response_engine;
   if (!engine || typeof engine !== "object" || Array.isArray(engine)) return reject();
   const e = engine as Record<string, unknown>;
@@ -159,14 +213,15 @@ export async function verifyRetellOutboundAgent(
   const globalPrompt = flow.global_prompt;
   if (typeof globalPrompt !== "string" ||
       !globalPrompt.includes("{{skillcheck_interview_script}}") ||
-      !globalPrompt.includes("{{skillcheck_notice_version}}"))
+      !globalPrompt.includes("{{skillcheck_notice_version}}") ||
+      !globalPrompt.includes(policyGuardrail))
     return reject();
 
   const proof: RetellVerifiedAgent = Object.freeze({
     agentId: c.agentId, agentVersionTag: c.agentVersionTag,
     agentVersion: c.agentVersion,
     maxCallDurationMs: a.max_call_duration_ms as number,
-    checkedAtMs: Date.now(), flowSha256: digest,
+    checkedAtMs: Date.now(), flowSha256: digest, agentSha256: agentDigest,
   });
   verified.add(proof);
   return proof;
@@ -191,6 +246,7 @@ export function compileRetellOutboundDraft(
       provider.agentVersionTag !== c.agentVersionTag ||
       provider.agentVersion !== c.agentVersion ||
       provider.flowSha256 !== c.approvedFlowSha256 ||
+      provider.agentSha256 !== c.approvedAgentSha256 ||
       !Number.isFinite(provider.checkedAtMs) ||
       Date.now() - provider.checkedAtMs < 0 ||
       Date.now() - provider.checkedAtMs > 30000 ||
@@ -205,7 +261,11 @@ export function compileRetellOutboundDraft(
       releasedPlan.recordingDefault !== false ||
       releasedPlan.noticeRequired !== true ||
       releasedPlan.templateVersion !== "skillcheck-voice-plan-v1" ||
-      call.scenario.questions.length !== releasedPlan.questions.length)
+      call.scenario.questions.length !== releasedPlan.questions.length ||
+      // Only this audited policy is currently supported; no arbitrary topics
+      // may be interpolated into Retell's provider prompt.
+      call.scenario.constraints.prohibitedTopics.length !== 1 ||
+      call.scenario.constraints.prohibitedTopics[0] !== "zdrowie")
     return reject();
 
   for (let i = 0; i < call.scenario.questions.length; i++) {
@@ -218,7 +278,8 @@ export function compileRetellOutboundDraft(
   }
   // Deterministic, versioned templates only. No name/CV/contact data here.
   const script = call.scenario.questions.map((q, i) =>
-    String(i + 1) + ". " + q.prompt +
+    String(i + 1) + ". [Limit: " + releasedPlan.questions[i].maxSeconds +
+      " sekund] " + q.prompt +
       (q.followUps.length ? " | Dopytania: " + q.followUps.join(" / ") : "")
   ).join("\n");
   if (script.length > 13500) return reject();
@@ -240,5 +301,9 @@ export function compileRetellOutboundDraft(
     endpoint: "https://api.retellai.com/v2/create-phone-call" as const,
     method: "POST" as const, payload,
     requestedMaxSeconds: call.callTimeoutSeconds,
+    agentRevisionSha256: provider.agentSha256,
+    verifiedAtMs: provider.checkedAtMs,
+    expiresAtMs: provider.checkedAtMs + 30000,
+    preflightOnly: true as const,
   });
 }
