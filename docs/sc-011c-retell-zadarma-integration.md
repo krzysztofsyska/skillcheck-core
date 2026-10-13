@@ -13,6 +13,10 @@ DB/MIGRATIONS: NONE
 - `verifyRetellOutboundAgent` is the separate **server-side GET-only gate**, using fixed Retell URLs and `redirect: error`. It checks an exact tag's assigned numeric version and published flag, `pl-PL`, data storage `basic_attributes_only`, and a provider-side duration cap. It reads the exact referenced flow revision and requires both prompt variable placeholders in its **global prompt**; otherwise fail closed. Emits an in-memory capability valid for at most 30 seconds. It MUST be called only by authenticated trusted backend/worker with server-held credentials, never from untrusted client input.
 - SC-012 released plans have a nonforgeable in-process provenance WeakSet from generated → reviewed → released transitions. The offline compiler requires an authentic released plan, exact frozen question text/IDs/followups and approved notice revision. Arbitrary text inserted even inside a valid request is rejected. This does **not** replace source freshness, durable human approval or tenant authorization at DB level.
 - Provider idempotency key is included at the correct Retell request-body level. Retell's provider deduplication window is bounded; future SC-010-C worker needs durable once-only reservation and exception handling beyond that window.
+- The source-approved full Retell flow JSON SHA-256 (`approvedFlowSha256`) must match the exact fetched version, including *all* nested nodes and tools. This is a strict pin to a separately reviewed immutable configuration; changes, including custom function, SMS or call-transfer additions, invalidate the gate. The hash must be reviewed and recorded by the trusted backend, never accepted from candidates, arbitrary users or client inputs.
+- The agent must explicitly set a bounded storage retention of 1–30 days. The default indefinite retention is rejected, including when only basic call attributes are stored.
+- Retell metadata is entirely omitted: caller-controlled correlation strings must not be retained at the provider. Provider idempotency key is restricted to a generated UUID v4 (Retell-compatible alphabet), and `honor_internal_dnc` remains true.
+- Offline compiler also requires at least 420 seconds for the SC-012 approved interview and a vendor cap no shorter than that target.
 - Privacy: no audio/transcripts/PII handling in this PR. If a future reporting module requires transcriptions, design a separately approved and GDPR-reviewed processing route rather than silently switching storage from basic_attributes_only.
 - Three gate workflow checks; `tests/retell-outbound-draft.test.mjs` is synthetic-only with no live network.
 
@@ -27,7 +31,7 @@ Official guide: https://zadarma.com/pl/support/instructions/retellai/
    - Termination URI: `pbx.zadarma.com`
    - SIP Trunk User Name: dedicated private PBX extension
    - SIP Trunk Password: dedicated SIP secret; NEVER share in chats, GitHub, frontend, Vercel logs.
-4. Assign outbound agent/appropriate outgoing route, publish explicitly reviewed, tagged agent version with global prompt placeholders `{{skillcheck_interview_script}}` and `{{skillcheck_notice_version}}`, minimal storage `basic_attributes_only` and capped duration.
+4. Assign outbound agent/appropriate outgoing route, publish explicitly reviewed, tagged agent version with global prompt placeholders `{{skillcheck_interview_script}}` and `{{skillcheck_notice_version}}`, minimal storage `basic_attributes_only`, explicitly finite `data_storage_retention_days` (1–30), provider-side duration at least 420 s and no more than 600 s.
 5. First owner-approved synthetic-person +48 test, **separate payment authorization required**.
 
 ## Remaining gates for any live call
