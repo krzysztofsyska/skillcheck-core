@@ -89,7 +89,7 @@ type AgentFetch = (url: string, init: RequestInit) =>
 const verified = new WeakSet<object>();
 export type RetellVerifiedAgent = Readonly<{
   agentId: string; agentVersionTag: string; agentVersion: number;
-  maxCallDurationMs: number; checkedAtMs: number;
+  maxCallDurationMs: number; checkedAtMs: number; flowSha256: string;
 }>;
 
 /** Server side GET-only gate for exact tag/revision, privacy and flow prompt.
@@ -166,7 +166,7 @@ export async function verifyRetellOutboundAgent(
     agentId: c.agentId, agentVersionTag: c.agentVersionTag,
     agentVersion: c.agentVersion,
     maxCallDurationMs: a.max_call_duration_ms as number,
-    checkedAtMs: Date.now(),
+    checkedAtMs: Date.now(), flowSha256: digest,
   });
   verified.add(proof);
   return proof;
@@ -190,6 +190,7 @@ export function compileRetellOutboundDraft(
       provider.agentId !== c.agentId ||
       provider.agentVersionTag !== c.agentVersionTag ||
       provider.agentVersion !== c.agentVersion ||
+      provider.flowSha256 !== c.approvedFlowSha256 ||
       !Number.isFinite(provider.checkedAtMs) ||
       Date.now() - provider.checkedAtMs < 0 ||
       Date.now() - provider.checkedAtMs > 30000 ||
