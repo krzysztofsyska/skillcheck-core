@@ -17,27 +17,28 @@ Pierwszy zakres jest umyślnie wąski: **wyłącznie zapytania handlowe** FREE /
 
 Żadnych migracji, RLS, kredytów, automatycznych opłat, nowych kluczy ani workerów. Wdrożenie obsługi pakietów SC-019 będzie odrębną zmianą wysokiego ryzyka z własnymi testami rozliczeń, zgodą produkcyjną i przeglądem bezpieczeństwa.
 
-## Automatyczny preflight wydania
+## Izolowany preflight — tylko do przygotowania
 
-`tools/agent-pipeline/lib/sales-release.mjs` jest funkcją **fail-closed**. Odrzuca:
+`tools/agent-pipeline/lib/sales-release.mjs` to **wyłącznie doradczy analizator zakresu**. Sprawdza końcową różnicę oraz **wszystkie pośrednie commity**, odrzucając:
+- nieznaną gałąź, nieoczekiwany cel lub brak strony `/preselekcja`;
+- dowolny plik spoza pięciu dozwolonych, duplikaty i pusty zestaw zmian;
+- usunięcia, rename, merge commity, symlinki, submoduły i tryb pliku wykonywalnego;
+- commit tymczasowo zawierający niedozwolony plik, nawet gdy znika on z końcowego diffu;
+- historię, której nie da się jednoznacznie zweryfikować.
 
-- branch spoza `release/sales-mvp-intake-YYYYMMDD` i PR niecelujący w `main`;
-- każdy plik poza pięcioma powyżej, pusty diff lub brak strony `/preselekcja`;
-- usunięcia, zmiany typu, zmiany nazwy, pliki wykonywalne, symlinki i submoduły;
-- brak metadanych `RELEASE_KIND: SALES_MVP_INTAKE`, `PROMOTION: YES`, `LEVEL: L3`;
-- brak `PRODUCTION_APPROVAL: APPROVED`.
+Funkcja **ZAWSZE zwraca `authorizedForProduction:false`**, także przy prawidłowym zakresie. Nigdy nie wnioskuje zgody z pól tekstowych PR. `node --test tests/agent-pipeline/sales-release-gate.test.mjs` sprawdza również, że aktywna kontrola `main` **w dalszym ciągu odrzuca** wszystkie selektywne gałęzie wydaniowe.
 
-Sama treść `PRODUCTION_APPROVAL: APPROVED` w opisie PR **nie jest dowodem zgody właściciela**. Wymagana jest niezależna i egzekwowalna kontrola ochrony GitHub, review Codex oraz potwierdzenie właściciela przypięte do dokładnego SHA. Nie wolno wykonać merge, jeśli brakuje tych dowodów. Test: `node --test tests/agent-pipeline/sales-release-gate.test.mjs`.
+Workflow `Sales Release Scope` działa **tylko na roboczych PR do `integration`**, bez użycia sekretów i bez Production environment. Nie jest obowiązującą bramką wydania do `main` i nie zastępuje przyszłego procesu.
 
 ## Wymagana aktywacja polityki — odrębna zgoda
 
 Obecna gałąź `main` nie ma nowego gate i według sprawdzonego API GitHub nie była oznaczona jako chroniona. **Nie korzystać jeszcze z wyjątku wydaniowego.** Ten PR przygotowuje zmianę w `integration`; jego obecność nie modyfikuje `main`. Przed pierwszym selektywnym wydaniem należy:
 
-1. Uzyskać niezależny L3 review zmiany klasyfikatora, testów i workflow, usunąć wszystkie P1/P2.
-2. Ustalić osobny, minimalny i recenzowany sposób wprowadzenia samej polityki do `main` bez sześciu lub więcej niegotowych migracji HR z `integration`. Nie promować całej `integration`. To osobny production-governance checkpoint.
-3. Zabezpieczyć `main`: wyłączyć force-push / deletion, wymagać poprawnych status checks, aktualnego niezależnego code review, odrzucać stale approvals, zablokować niezrecenzowane bezpośrednie push i zapewnić właścicielski approval na Production. Zweryfikować settings i dopiero wtedy uznać bramkę za egzekwowaną.
-4. Przenieść **wyłącznie** 5 plików z ostatniego zatwierdzonego commitu PR #118 na branch z najnowszego `main`; nie cherry-pickować innych zmian z `integration`. Zapisać source SHA, target SHA i dokładną listę zmian.
-5. Uruchomić fast release guard, pełne CI, marketing HTTP, build, kontrolę prywatności (bez danych CV), test Preview, Codex na finalnym SHA. Brak zielonego wyniku blokuje.
+1. Uzyskać niezależny L3 review odrębnej polityki oraz testów, usunąć wszystkie P1/P2.
+2. Przygotować osobną, minimalną implementację **zaufanej bramki** działającej z chronionej wersji `main`, a nie z plików PR; sprawdzać pełną historię commitów i finalny diff. Jej instalacja wymaga osobnego zatwierdzenia właściciela. Nie promować całej `integration`.
+3. Zabezpieczyć `main`: wyłączyć force-push / deletion, wymagać poprawnych status checks, aktualnego niezależnego code review, odrzucać stare approvals i niekontrolowane bezpośrednie push. Wymagać **dwóch odrębnych dowodów z zaufanego GitHub**, nie tekstu PR: OWNER ACCEPTANCE oraz PRODUCTION APPROVAL. Zweryfikować przez API konfigurację uprawnień, ochrony `main` i wymaganych reviewerów środowisk przed uznaniem bramki za egzekwowaną; gdy API zwróci 403 lub ustawienia są niepełne, bramka musi FAIL CLOSED.
+4. Gotowy DRAFT #120 jest oparty na `main` i zawiera dokładnie pięć plików. Przed jakąkolwiek produkcją zweryfikować ponownie jego HEAD oraz `main`; jeśli baza się zmieni, bezpiecznie odtworzyć wydanie od aktualnego `main`. Nie cherry-pickować innych zmian z `integration`.
+5. Zastosować zaufaną bramkę (po jej odrębnej aktywacji), pełne CI, marketing HTTP, build, kontrolę prywatności bez danych CV, test Preview, Codex na finalnym SHA. Tylko odpowiednia, formalnie egzekwowana ochrona `main` oraz recenzja mogą dopuścić do etapu decyzji właściciela.
 6. Zadać właścicielowi **jedno** pytanie: czy zatwierdza wdrożenie do Production konkretnego commit SHA i zakresu? Bez YES: nie scalać ani nie publikować.
 7. Po zgodzie i merge: sprawdzić `/preselekcja` na własnej domenie, kliknięcie do maila, brak automatycznych płatności, dostępność loginu; w razie problemu rollback bez zmian w Supabase.
 
