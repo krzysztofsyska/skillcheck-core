@@ -42,7 +42,7 @@ export function findings(s) {
   const reviews = s.reviews.filter(r => trusted(r.user) && r.commit_id === head && r.state !== 'DISMISSED');
   const ids = new Set(reviews.map(r => r.id));
   const inline = s.comments.filter(c => trusted(c.user) && c.commit_id === head
-    && c.original_commit_id === head && c.line != null && !c.in_reply_to_id && ids.has(c.pull_request_review_id));
+    && c.original_commit_id === head && (c.subject_type === 'file' || c.line != null) && !c.in_reply_to_id && ids.has(c.pull_request_review_id));
   const changes = reviews.filter(r => r.state === 'CHANGES_REQUESTED');
   // Only immutable IDs leave the adapter. Never echo provider prose, HTML or secrets.
   return [...inline.map(c => ({ kind: 'discussion', id: c.id })), ...changes.map(r => ({ kind: 'review', id: r.id }))]
@@ -102,7 +102,7 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
   const approved = sameRequest && Number.isFinite(current.reviewRequestedAt)
     && Array.isArray(current.reviewBaseline)
     && snapshot.reviews.some(r => trusted(r.user) && r.commit_id === head && r.state === 'APPROVED'
-      && !current.reviewBaseline.includes(r.id) && Date.parse(r.submitted_at) >= current.reviewRequestedAt);
+      && !current.reviewBaseline.includes(r.id) && Math.floor(Date.parse(r.submitted_at) / 1000) >= Math.floor(current.reviewRequestedAt / 1000));
   const thumbs = sameRequest && snapshot.reactions?.some(r => trusted(r.user) && r.content === '+1');
   // READY is a revocable observation, never a permanent approval cache.
   if (current.phase === 'READY_FOR_OWNER' && (found.length || !(approved || thumbs))) {
@@ -110,7 +110,12 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
       ...(sameRequest ? {} : { reviewCommentId: null, reviewRequestedAt: null, reviewBaseline: [] }) } };
   }
   if (!found.length) {
-    if (approved || thumbs) return { state: { ...current, phase: 'READY_FOR_OWNER', head, base } };
+    if (approved || thumbs) {
+      if (current.phase === 'READY_FOR_OWNER' && current.head === head && current.base === base) {
+        return { status: 'READY_FOR_OWNER' };
+      }
+      return { state: { ...current, phase: 'READY_FOR_OWNER', head, base } };
+    }
     if (current.reviewRequestedAt && now - current.reviewRequestedAt > 45 * 60 * 1000) return { state: { ...current, phase: 'BLOCKED_TIMEOUT' } };
     return { status: 'WAITING_REVIEW' };
   }
