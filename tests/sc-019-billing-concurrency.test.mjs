@@ -56,7 +56,8 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
     create table public.companies(id uuid primary key,owner_id uuid not null);
     create table public.screening_analysis_versions(
       id uuid primary key,company_id uuid not null references public.companies(id),
-      execution_status text not null default 'pending'
+      execution_status text not null default 'pending',
+      stale_at timestamptz
     );
     create function private.is_company_owner(cid uuid)
       returns boolean language sql stable security definer set search_path='' as $$
@@ -90,4 +91,21 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
   assert.equal(paid.filter(x=>x.status==='fulfilled').length,2);
   assert.equal(Number((await db.query('select available from private.sc19_balances where company_id=$1',[company])).rows[0].available),60);
   assert.equal(Number((await db.query("select count(*)::int as n from private.sc19_credit_journal where reason='paid_grant' and company_id=$1",[company])).rows[0].n),1);
+  for (const client of [db,a,b]) await client.query("set deadlock_timeout='100ms'");
+  let available=60;
+  for (let n=1;n<=12;n++) {
+    const reserved=uuid(200+n);
+    const fresh=uuid(300+n);
+    await db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[reserved,company]);
+    available-=1;
+    const mixed=await Promise.allSettled([
+      a.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[fresh,company]),
+      b.query('select private.sc19_grant_paid($1,$2)',[company,`mixed-settlement-${n}`]),
+      db.query("update public.screening_analysis_versions set execution_status='failed' where id=$1",[reserved]),
+    ]);
+    assert.deepEqual(mixed.map(item=>item.status),['fulfilled','fulfilled','fulfilled']);
+    available+=60;
+    assert.equal(Number((await db.query('select available from private.sc19_balances where company_id=$1',[company])).rows[0].available),available);
+  }
+  assert.equal(Number((await db.query("select count(*)::int as n from private.sc19_credit_journal where reason='paid_grant' and company_id=$1",[company])).rows[0].n),13);
 });

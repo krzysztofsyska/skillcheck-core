@@ -30,7 +30,8 @@ async function setup() {
     create table public.company_members (company_id uuid not null,user_id uuid not null,role text not null);
     create table public.screening_analysis_versions (
       id uuid primary key,company_id uuid not null references public.companies(id),
-      execution_status text not null default 'pending'
+      execution_status text not null default 'pending',
+      stale_at timestamptz
     );
     create function private.is_company_owner(cid uuid)
       returns boolean language sql stable security definer set search_path='' as $$
@@ -128,6 +129,11 @@ test('SC-019 prototype: paid grant 60 once per settlement and tenant',async t=>{
   await assert.rejects(h.db.query('select private.sc19_grant_paid($1,$2)',[companyA,'bank-confirmed-001']),e=>e.code==='23505');
   await h.as(ownerB);assert.deepEqual(await h.balance(companyB),{plan:'PRESELEKCJA',available:60,free_claimed:false});
   await h.as(ownerA);await assert.rejects(h.db.query('select * from public.sc19_get_balance($1)',[companyB]),e=>e.code==='42501');
+  await h.admin();
+  await h.db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[companyB,nip('526104082'),'verified-after-payment']);
+  await h.as(ownerB);
+  await assert.rejects(h.db.query('select public.sc19_claim_trial($1,$2)',[companyB,nip('526104082')]),e=>e.code==='23505');
+  assert.deepEqual(await h.balance(companyB),{plan:'PRESELEKCJA',available:60,free_claimed:false});
 });
 
 test('SC-019 prototype: completed analyses cannot be refunded or reopened; failed retry cannot spend a taken credit',async t=>{
@@ -165,4 +171,67 @@ test('SC-019 prototype: completed analyses cannot be refunded or reopened; faile
   const journal=(await h.db.query('select reason,delta from private.sc19_credit_journal where analysis_id=$1',[id(202)])).rows;
   assert.deepEqual(journal.map(x=>x.reason).sort(),['analysis_release','analysis_reserve']);
   assert.equal(journal.reduce((sum,x)=>sum+x.delta,0),0);
+});
+
+test('SC-019 prototype: staling an active analysis cancels it and releases the reservation',async t=>{
+  const h=await setup();t.after(()=>h.db.close());
+  const tax=nip('123456321');
+  await h.admin();
+  await h.db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[companyA,tax,'verified-stale-release']);
+  await h.as(ownerA);
+  await h.db.query('select public.sc19_claim_trial($1,$2)',[companyA,tax]);
+  await h.admin();
+  await h.db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[id(301),companyA]);
+  await h.db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[id(302),companyA]);
+  assert.equal((await h.db.query('select available from private.sc19_balances where company_id=$1',[companyA])).rows[0].available,3);
+  await h.db.query('update public.screening_analysis_versions set stale_at=now() where id=$1',[id(301)]);
+  assert.equal((await h.db.query('select execution_status from public.screening_analysis_versions where id=$1',[id(301)])).rows[0].execution_status,'cancelled');
+  assert.equal((await h.db.query('select available from private.sc19_balances where company_id=$1',[companyA])).rows[0].available,4);
+  await h.db.query("update public.screening_analysis_versions set execution_status='processing' where id=$1",[id(302)]);
+  await h.db.query("update public.screening_analysis_versions set execution_status='completed' where id=$1",[id(302)]);
+  await h.db.query('update public.screening_analysis_versions set stale_at=now() where id=$1',[id(302)]);
+  assert.equal((await h.db.query('select execution_status from public.screening_analysis_versions where id=$1',[id(302)])).rows[0].execution_status,'completed');
+  assert.equal((await h.db.query('select available from private.sc19_balances where company_id=$1',[companyA])).rows[0].available,4);
+  await h.db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[id(303),companyA]);
+  assert.equal((await h.db.query('select available from private.sc19_balances where company_id=$1',[companyA])).rows[0].available,3);
+});
+
+test('SC-019 prototype: install rejects an in-flight analysis that has no reservation',async t=>{
+  const db=new PGlite({extensions:{pgcrypto}});
+  t.after(()=>db.close());
+  await db.exec(`
+    create role anon nologin;
+    create role authenticated nologin;
+    create schema auth;
+    create schema private;
+    revoke all on schema private from public,anon,authenticated;
+    create table auth.users (id uuid primary key);
+    create function auth.uid() returns uuid language sql stable as $$
+      select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid
+    $$;
+    create table public.companies (id uuid primary key,owner_id uuid not null);
+    create table public.screening_analysis_versions (
+      id uuid primary key,company_id uuid not null references public.companies(id),
+      execution_status text not null default 'pending',
+      stale_at timestamptz
+    );
+    create function private.is_company_owner(cid uuid)
+      returns boolean language sql stable security definer set search_path='' as $$
+      select false $$;
+    create function private.has_company_access(cid uuid, write_access boolean default false)
+      returns boolean language sql stable security definer set search_path='' as $$
+      select false $$;
+    insert into public.companies(id,owner_id) values('${companyA}','${ownerA}');
+    insert into public.screening_analysis_versions(id,company_id,execution_status)
+      values('${id(401)}','${companyA}','pending');
+  `);
+  const prototype=await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql',import.meta.url),'utf8');
+  await assert.rejects(db.exec(prototype),e=>e.code==='55000');
+  await db.exec('rollback');
+  await db.query("update public.screening_analysis_versions set execution_status='completed' where id=$1",[id(401)]);
+  await db.exec(prototype);
+  await assert.rejects(
+    db.query("update public.screening_analysis_versions set execution_status='failed' where id=$1",[id(401)]),
+    e=>e.code==='55000',
+  );
 });

@@ -1,7 +1,7 @@
 # SC-019-MVP A1 — SAFE BILLING CORE PROTOTYPE
 
 TASK: #91 / SC-019-MVP
-STATUS: FIXING — CI syntax blocker and integration conflict repaired on PR #92; independent L3 review still pending
+STATUS: FIXING — Codex P1/P2 findings on c6f217d repaired in the prototype; independent repeat review still pending
 BASE: integration
 SCOPE: FREE (5 analyses) + PRESELEKCJA prepaid (60 analyses)
 PRICING: 299 PLN is only a proposed initial commercial price; do NOT charge or publish it as approved.
@@ -46,6 +46,18 @@ PRODUCT: the existing voicebot, candidate chatbot, AC and subscriptions remain o
 - No Codex review thread exists on PR #92: review comments and pull-request reviews are empty. The 2026-10-10 comment is a review request, not a PASS.
 - No Supabase migration was added. `docs/prototypes/sc-019-mvp-credits.sql` stays review-only. A CLI migration PR is the next step only after an independent PASS, and only for sandbox/`integration`, never Production.
 - Payments, production migration, production deploy, voicebot SC-011-B #79 and customer E2E for SC-005 remain out of this change.
+
+## Codex findings on c6f217d
+
+The automated review was not a PASS. This prototype now:
+
+- locks `public.companies` before balance, spend, and journal writes, with a PostgreSQL 16 mixed grant/spend/refund loop
+- cancels and releases a pending or processing analysis when it becomes stale; a completed analysis that later becomes stale keeps its charge
+- rejects FREE after a PRESELEKCJA grant
+- aborts installation while any non-completed analysis has no reservation
+- when SC-010 is already installed, publishes immutable `erasure_inventory_baseline_r5` in the same transaction, retargets the preview, purge, and scheduler signature checks, and leaves billing `analysis_id` values as company accounting with no foreign key to `screening_analysis_versions`
+
+No file was added under `supabase/migrations`. Payments and production activation stay off.
 
 ## Release guards
 NEVER merge SQL prototype into migration tree or activate it on live Supabase automatically.
