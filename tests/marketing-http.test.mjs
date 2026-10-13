@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { readFileSync } from 'node:fs';
 
 function hrefs(html) {
   return [...html.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
@@ -52,6 +53,50 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(home.includes('Aktywuj pakiet'), false);
   assert.equal(home.includes('Kup teraz'), false);
   assert.equal(home.includes('127.0.0.1:9'), false);
+
+
+  // Sales pilot intake is available without enabling paid checkout or AI.
+  assert.ok(homeHrefs.includes('/preselekcja'), 'marketing points to PRESELEKCJA pilot');
+
+  const orderResponse = await fetch(`${base}/preselekcja`, { redirect: 'manual' });
+  assert.equal(orderResponse.status, 200);
+  assert.match(orderResponse.headers.get('content-type'), /text\/html/);
+  const order = await orderResponse.text();
+  assert.match(order, /Zapytaj o preselekcję kandydatów/);
+  assert.match(order, /Cena|cenę|cena/);
+  assert.match(order, /Nie przesyłaj CV zwykłym e-mailem/);
+  assert.match(order, /samo utworzenie konta nie przyznaje analiz/);
+  const inquiries = hrefs(order).filter(href => href.startsWith('mailto:pomoc@skillcheck.pl?subject='));
+  assert.equal(inquiries.length, 2, 'paid inquiry and FREE inquiry are separate');
+  for (const href of inquiries) {
+    const url = new URL(href.replaceAll('&amp;', '&'));
+    const subject = url.searchParams.get('subject');
+    const body = url.searchParams.get('body');
+    assert.ok(subject && !/zamówienie|zakup|zapłać/i.test(subject), 'email is not a placed order');
+    assert.ok(body && body.includes('\r\n'), 'RFC6068 CRLF mail body');
+    assert.doesNotMatch(body, /osoba kontaktowa|numer telefonu|służbowy e-mail|imię i nazwisko/i);
+    assert.doesNotMatch(body, /PESEL|@example/i);
+  }
+  assert.ok(homeHrefs.includes('/preselekcja#free'), 'FREE CTA anchors to the FREE section');
+  assert.match(order, /id="free"/, 'FREE anchor is on section, below sticky header');
+  assert.ok(hrefs(order).includes('/register'));
+  assert.doesNotMatch(order, /<form[ >]/);
+  assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
+  assert.match(order, /aktualnie te funkcje nie są udostępnione do samodzielnego użycia/);
+  assert.match(home, /Zapytaj o pilotaż PRESELEKCJA/);
+  assert.match(home, /Według oferty/);
+  assert.match(order, /Jeżeli potwierdzimy dostępność tych funkcji/);
+  assert.doesNotMatch(order, /<li>Wyniki, ranking, shortlistę i raport weryfikuje/);
+  const comparison = readFileSync(new URL('../app/components/marketing/package-comparison.tsx', import.meta.url), 'utf8');
+  const lines = comparison.split('\n');
+  const offer = lines.find(line => line.includes('name:"PRESELEKCJA"'));
+  assert.ok(offer, 'PRESELEKCJA offer defined');
+  assert.match(offer, /Liczba analiz ustalana w ofercie/);
+  assert.doesNotMatch(offer, /60 analiz CV|Shortlista 5–10 kandydatów/);
+  const cvRow = lines.find(line => line.trimStart().startsWith('["Analizy CV"'));
+  const shortlistRow = lines.find(line => line.trimStart().startsWith('["Shortlista \/ raport preselekcji"'));
+  assert.ok(cvRow?.includes('"Według oferty"'));
+  assert.ok(shortlistRow?.includes('"Według oferty"'));
 
   const demoResponse = await fetch(`${base}/demo`, { redirect: 'manual' });
   assert.equal(demoResponse.status, 200);
