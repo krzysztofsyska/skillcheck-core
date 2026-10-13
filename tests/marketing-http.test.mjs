@@ -61,14 +61,28 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(orderResponse.status, 200);
   assert.match(orderResponse.headers.get('content-type'), /text\/html/);
   const order = await orderResponse.text();
-  assert.match(order, /Zamów preselekcję kandydatów/);
+  assert.match(order, /Zapytaj o preselekcję kandydatów/);
   assert.match(order, /Cena|cenę|cena/);
   assert.match(order, /Nie przesyłaj CV zwykłym e-mailem/);
   assert.match(order, /samo utworzenie konta nie przyznaje analiz/);
-  assert.ok(hrefs(order).some(href => href.startsWith('mailto:pomoc@skillcheck.pl?subject=')));
+  const inquiries = hrefs(order).filter(href => href.startsWith('mailto:pomoc@skillcheck.pl?subject='));
+  assert.equal(inquiries.length, 2, 'paid inquiry and FREE inquiry are separate');
+  for (const href of inquiries) {
+    const url = new URL(href.replaceAll('&amp;', '&'));
+    const subject = url.searchParams.get('subject');
+    const body = url.searchParams.get('body');
+    assert.ok(subject && !/zamówienie|zakup|zapłać/i.test(subject), 'email is not a placed order');
+    assert.ok(body && body.includes('\r\n'), 'RFC6068 CRLF mail body');
+    assert.doesNotMatch(body, /osoba kontaktowa|numer telefonu|służbowy e-mail|imię i nazwisko/i);
+    assert.doesNotMatch(body, /PESEL|@example/i);
+  }
+  assert.ok(hrefs(order).includes('/preselekcja#free-title') || homeHrefs.includes('/preselekcja'), 'offer route discoverable');
   assert.ok(hrefs(order).includes('/register'));
   assert.doesNotMatch(order, /<form[ >]/);
   assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
+  assert.match(order, /aktualnie te funkcje nie są udostępnione do samodzielnego użycia/);
+  assert.match(home, /Zapytaj o pilotaż PRESELEKCJA/);
+  assert.match(home, /Według oferty/);
 
   const demoResponse = await fetch(`${base}/demo`, { redirect: 'manual' });
   assert.equal(demoResponse.status, 200);
