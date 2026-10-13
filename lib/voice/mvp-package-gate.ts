@@ -105,7 +105,7 @@ export function voiceScenarioFromApprovedPlan(plan: InterviewPlan): VoiceScenari
         typeof q.text !== "string" || q.text.trim().length < 1 ||
         q.text.length > 1000 || /[\u0000-\u001f\u007f]/.test(q.text) ||
         !Array.isArray(q.followUps) || q.followUps.length > 2 ||
-        !q.followUps.every(s=>typeof s === "string" && s.length > 0 &&
+        !q.followUps.every((s: unknown)=>typeof s === "string" && s.length > 0 &&
           s.length <= 500 && !/[\u0000-\u001f\u007f]/.test(s)))
       throw new Error("VOICE_MVP_INVALID_QUESTION");
     return Object.freeze({ id:q.id, prompt:q.text, followUps:Object.freeze([...q.followUps]) });
