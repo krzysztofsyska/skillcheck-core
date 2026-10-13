@@ -367,11 +367,12 @@ test('unchanged READY result does not write another state commit', async () => {
 
 test('Codex approval in the same GitHub second as request is accepted', () => {
   const f = fixture();
+  const initial = planFeedback(f.binding, null, f.snapshot).state;
   f.snapshot.comments = [];
   f.snapshot.reviews = [{ id: 101, user: bot, commit_id: A,
     state: 'APPROVED', submitted_at: new Date(1000).toISOString() }];
   const state = { version: 1,
-    configHash: planFeedback(f.binding, null, f.snapshot).state?.configHash,
+    configHash: initial.configHash,
     rounds: 0, handled: [], phase: 'WAITING_REVIEW', head: A, base: B,
     reviewCommentId: 200, reviewBaseline: [100], reviewRequestedAt: 1500 };
   assert.equal(planFeedback(f.binding, state, f.snapshot, 1600).state.phase, 'READY_FOR_OWNER');
