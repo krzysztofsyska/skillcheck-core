@@ -13,7 +13,7 @@ const agent = {
   version: 0,
   voice_id: "retell-Cimo",
   language: "pl-PL",
-  response_engine: { type: "conversation-flow", secret_node: "private" },
+  response_engine: { type: "conversation-flow", conversation_flow_id: "flow_synthetic_123", secret_node: "private" },
   custom_private_provider_data: "NEVER EXPOSE",
 };
 const reply = (status, payload = agent) => ({
@@ -149,6 +149,32 @@ test("SC-011 Retell rejects missing or malformed required voice engine configura
     {voice_id: 123}, {response_engine: undefined},
     {response_engine: null}, {response_engine: {}},
     {response_engine: {type: 123}},
+    {response_engine: {type: "conversation-flow"}},
+    {response_engine: {type: "conversation-flow", conversation_flow_id: ""}},
+    {response_engine: {type: "conversation-flow", conversation_flow_id: 42}},
+    {response_engine: {type: "retell-llm"}},
+    {response_engine: {type: "retell-llm", llm_id: " "}},
+    {response_engine: {type: "custom-llm"}},
+    {response_engine: {type: "custom-llm", llm_websocket_url: null}},
+    {response_engine: {type: "not-a-valid-engine", conversation_flow_id: "flow_123"}},
   ]) await failsWith(readRetellAgent(env, async () =>
     reply(200, {...agent, ...change})), "RETELL_INVALID_RESPONSE");
+});
+
+test("SC-011 Retell accepts all documented complete response engine variants", async () => {
+  for (const response_engine of [
+    {type: "retell-llm", llm_id: "llm_synthetic_123"},
+    {type: "custom-llm", llm_websocket_url: "wss://example.invalid/llm"},
+    {type: "conversation-flow", conversation_flow_id: "flow_synthetic_123"},
+  ]) {
+    const result = await readRetellAgent(env, async () =>
+      reply(200, {...agent, response_engine}));
+    assert.equal(result.responseEngineType, response_engine.type);
+  }
+});
+
+test("SC-011 Retell normalizes omitted optional agent_name to null", async () => {
+  const {agent_name: _unused, ...unnamedAgent} = agent;
+  const result = await readRetellAgent(env, async () => reply(200, unnamedAgent));
+  assert.equal(result.name, null);
 });
