@@ -9,10 +9,10 @@ export const metadata: Metadata = {
   description: "Zgłoś firmę do pilotażu preselekcji CV. Przed płatnością potwierdzamy zakres usługi, dostępność, liczbę analiz i cenę.",
 };
 
-const preselectionEmail = "mailto:pomoc@skillcheck.pl?subject=" + encodeURIComponent("SkillCheck — zamówienie pilotażu PRESELEKCJA")
-  + "&body=" + encodeURIComponent("Nazwa firmy:\nOsoba kontaktowa:\nStanowisko do obsadzenia:\nOrientacyjna liczba CV:\nTelefon (opcjonalnie):\n\nProszę o potwierdzenie zakresu, ceny i dostępności pilotażu PRESELEKCJA. Nie przesyłam danych kandydatów.");
+const preselectionEmail = "mailto:pomoc@skillcheck.pl?subject=" + encodeURIComponent("SkillCheck — zapytanie o dostępność PRESELEKCJA")
+  + "&body=" + encodeURIComponent("Branża firmy (opcjonalnie):\r\nNazwa stanowiska:\r\nSzacowana liczba CV (bez dokumentów):\r\n\r\nProszę o informację, czy możliwy jest pilotaż PRESELEKCJA oraz o proponowany zakres i warunki. Nie przesyłam danych osobowych ani CV kandydatów.");
 const freeEmail = "mailto:pomoc@skillcheck.pl?subject=" + encodeURIComponent("SkillCheck — zgłoszenie firmy do FREE")
-  + "&body=" + encodeURIComponent("Nazwa firmy:\nOsoba kontaktowa:\nSłużbowy e-mail:\nStanowisko do obsadzenia:\n\nProszę o zasady weryfikacji firmy i uruchomienia pilotażu FREE. Nie przesyłam CV ani danych kandydatów.");
+  + "&body=" + encodeURIComponent("Branża firmy (opcjonalnie):\r\nNazwa stanowiska:\r\n\r\nProszę o warunki weryfikacji firmy i ewentualny dostęp próbny FREE. Nie przesyłam danych osobowych ani CV kandydatów.");
 
 export default function PreselectionOfferPage() {
   return <main className={styles.page}>
@@ -20,21 +20,21 @@ export default function PreselectionOfferPage() {
     <div id="tresc" className={styles.wrap}>
       <section aria-labelledby="preselection-title">
         <p className={styles.kicker}>SkillCheck / oferta pilotażowa dla firm</p>
-        <h1 id="preselection-title">Zamów preselekcję kandydatów</h1>
-        <p className={styles.lede}>Przygotuj profil stanowiska, porównaj zatwierdzone materiały CV z wymaganiami, przejrzyj ranking i shortlistę. Oceny AI wspierają rekrutera — nie podejmują decyzji o zatrudnieniu.</p>
+        <h1 id="preselection-title">Zapytaj o preselekcję kandydatów</h1>
+        <p className={styles.lede}>Planujemy pilotaż porównujący kompetencje udokumentowane w CV z wymaganiami stanowiska. Dostępność analizy AI, rankingu i shortlisty potwierdzamy indywidualnie przed ofertą; aktualnie te funkcje nie są udostępnione do samodzielnego użycia przez nowych klientów. Oceny AI mają wspierać rekrutera — nie podejmują decyzji o zatrudnieniu.</p>
         <p>Rozpoczynamy od obsługi pilotażowej przez operatora SkillCheck. Liczba analiz, zakres, cena oraz termin realizacji są potwierdzane indywidualnie <strong>przed złożeniem płatnego zamówienia</strong>. To nie jest automatyczna aktywacja pakietu.</p>
         <div className={styles.actions}>
-          <a className={styles.primary} href={preselectionEmail}>Zapytaj o zakup PRESELEKCJA</a>
+          <a className={styles.primary} href={preselectionEmail}>Zapytaj o dostępność PRESELEKCJA</a>
           <Link className={styles.secondary} href="/demo">Zobacz przykładowy raport</Link>
         </div>
       </section>
       <section aria-labelledby="pilot-process">
         <h2 id="pilot-process">Jak uruchomimy pierwszą rekrutację?</h2>
         <ol>
-          <li>Wyślij nazwę firmy, stanowisko i szacowaną liczbę CV — bez danych kandydatów.</li>
+          <li>Wyślij zapytanie z branżą, nazwą stanowiska i szacowaną liczbą CV, bez nazwisk, danych kontaktowych i CV kandydatów.</li>
           <li>Potwierdzimy możliwość realizacji, warunki przetwarzania danych i cenę.</li>
           <li>Po przyjęciu oferty uzgodnimy sposób dostarczenia dokumentów w bezpiecznym systemie. Nie przesyłaj CV zwykłym e-mailem.</li>
-          <li>Wyniki, ranking, shortlistę i raport weryfikuje osoba prowadząca rekrutację.</li>
+          <li>Jeżeli potwierdzimy dostępność tych funkcji w uzgodnionym pilotażu, wyniki, ranking, shortlistę i raport będzie weryfikować osoba prowadząca rekrutację.</li>
         </ol>
       </section>
       <section aria-labelledby="free-title">
@@ -44,7 +44,7 @@ export default function PreselectionOfferPage() {
           <a className={styles.secondary} href={freeEmail}>Zgłoś firmę do FREE</a>
           <Link className={styles.secondary} href="/register">Utwórz konto firmowe</Link>
         </div>
-        <p className={styles.note}>Do zgłoszenia nie dołączaj życiorysów, numerów PESEL ani innych danych kandydatów. Nie pobieramy płatności na tej stronie.</p>
+        <p className={styles.note}>Do wiadomości nie dołączaj danych osobowych — ani kandydatów, ani osób kontaktowych. Aby ustalić zasady dalszego kontaktu, korzystaj z zatwierdzonych kanałów SkillCheck. Nie pobieramy płatności na tej stronie.</p>
       </section>
     </div>
     <SiteFooter />
