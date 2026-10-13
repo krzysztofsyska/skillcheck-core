@@ -1,27 +1,24 @@
 import { sha256 } from './canonical.mjs';
 
-// Only trusted, owner-reviewed policy may supply attestations. Never infer that
-// a missing bypass_actors field means an empty list. GitHub hides it at read scope.
+// GitHub can conceal bypass actors at read scope. Never infer an empty list
+// or trust a timestamp-based attestation of the concealed list.
 export function rulesetFingerprint(rule) {
   const { id, source, source_type, target, enforcement, conditions, rules, updated_at } = rule;
   return sha256({ id, source, source_type, target, enforcement, conditions, rules, updated_at });
 }
 
-export function withRulesetEvidence(rule, policy = {}, now = Date.now()) {
-  if (Array.isArray(rule.bypass_actors)) return rule;
-  const evidence = policy.ruleset_attestations?.filter(e => e.id === rule.id);
-  if (evidence?.length !== 1) throw new Error('RULESET_ATTESTATION_REQUIRED');
-  const e = evidence[0];
-  const checked = Date.parse(e.checked_at), expires = Date.parse(e.expires_at);
-  if (!Number.isSafeInteger(policy.owner?.id) || e.owner_id !== policy.owner.id
-      || !Array.isArray(e.bypass_actors) || rule.source_type !== 'Repository'
-      || rule.source !== policy.repository || !Number.isFinite(Date.parse(rule.updated_at))
-      || e.fingerprint !== rulesetFingerprint(rule) || e.updated_at !== rule.updated_at
-      || !Number.isFinite(checked) || !Number.isFinite(expires) || checked > now || expires <= now
-      || checked < Date.parse(rule.updated_at) || expires - checked > 7 * 24 * 60 * 60 * 1000) {
-    throw new Error('RULESET_ATTESTATION_STALE');
+// Security boundary: read-scoped GitHub API hides bypass_actors. Its ruleset GET
+// response has no monotonic version_id, while ruleset history/version endpoints
+// require Administration:write. Matching updated_at (even with an owner-reviewed
+// fingerprint) cannot distinguish edits made within the same timestamp tick.
+// Therefore never hydrate a hidden bypass list from policy attestations.
+// This deliberately blocks activation until an independently verified,
+// explicitly approved version-aware evidence mechanism is available.
+export function withRulesetEvidence(rule) {
+  if (!rule || !Array.isArray(rule.bypass_actors)) {
+    throw new Error('RULESET_BYPASS_UNVERIFIABLE');
   }
-  return { ...rule, bypass_actors: e.bypass_actors };
+  return rule;
 }
 
 export async function verifyStateBootstrap(github, policy) {

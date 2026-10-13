@@ -109,23 +109,24 @@ still stop the whole invocation before dispatch.
 
 ### Read-scope protection evidence and state provenance
 
-GitHub omits `bypass_actors` for Administration:read callers. Missing data is not
-an empty bypass list. Never grant Administration:write to this controller.
-An owner-reviewed entry in trusted `policy.json.ruleset_attestations` can supply
-the hidden list for exactly one live ruleset version. Each entry requires `id`,
-`owner_id`, `updated_at`, `fingerprint`, `checked_at`, `expires_at`, `bypass_actors`.
-The fingerprint is `rulesetFingerprint(liveRule)` from `ruleset-evidence.mjs`:
-SHA-256 of canonical JSON containing ID, source/type, target, enforcement,
-conditions, rules and GitHub's `updated_at`. The owner verifies the complete
-bypass list in authenticated settings at that version; commit it through reviewed
-trusted-code promotion. These are policy attestations, not API-discovered actors.
-Do not generate them from PR comments, screenshots alone without owner review,
-or the state branch. A changed live timestamp/fingerprint, wrong owner/repository,
-missing or duplicate entry, future observation or expiry blocks execution. Maximum
-lifetime is seven days; renewal requires another owner-reviewed policy update.
-If GitHub discloses the list directly, live data takes precedence. The adapter and
-shared controller protection reader both use this path. This relies on GitHub's
-version timestamp changing on edits; unsupported/missing versions stay blocked.
+GitHub omits `bypass_actors` for Administration:read callers. Missing
+information is **unknown**, not an empty list. The previous optional
+`policy.json.ruleset_attestations` fallback is **not trusted** for live
+authorization: a SHA-256 fingerprint and GitHub `updated_at` cannot detect
+a bypass-actor edit that occurs within the same timestamp resolution.
+GitHub's ruleset history exposes a monotonic `version_id`, but its REST
+history/version endpoints require Administration:write. The controller
+must **not** receive that elevated permission just to circumvent a gate.
+
+`withRulesetEvidence` now accepts only a directly disclosed
+`bypass_actors` array in the authenticated GitHub ruleset response.
+Without it, the shared controller and feedback bridge stop before effects
+with `RULESET_BYPASS_UNVERIFIABLE`; even an apparently matching,
+owner-reviewed timestamp attestation must not override the block.
+This is an intentional fail-closed security fix, not a live activation.
+Future automatic authorization under read-only credentials requires a
+separately designed and reviewed reliable current-version proof; do not
+invent a `version_id` from a timestamp or raise the controller's scope.
 
 Trusted policy also needs `feedback_state_bootstrap: {sha, owner_id}` and the
 verified `controller_actor_id`. Attest the actual audited initial state-branch
