@@ -219,5 +219,6 @@ test("SC-011-C requires interview duration at least approved SC-012 target", asy
   const c=config(), p=released(), proof=await verify();
   denied({...request(p),callTimeoutSeconds:60},c,p,proof);
   denied({...request(p),callTimeoutSeconds:419},c,p,proof);
-  assert.equal(compileRetellOutboundDraft({...request(p),callTimeoutSeconds:420},c,p,proof).requestedMaxSeconds,420);
+  const shortAgentProof = await verify(c,{...agent,max_call_duration_ms:420000});
+  assert.equal(compileRetellOutboundDraft({...request(p),callTimeoutSeconds:420},c,p,shortAgentProof).requestedMaxSeconds,420);
 });
