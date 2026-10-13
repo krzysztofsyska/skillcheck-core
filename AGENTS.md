@@ -25,9 +25,11 @@ Do not require the owner to copy handoffs between agents.
 - task branches start from `integration`.
 - normal task PRs target `integration`.
 - only a production promotion PR may target `main`.
-- promotion PR must be `integration -> main`.
+- promotion PR must be `integration -> main` by default.
+- **Proposal only, NOT active**: selective `release/sales-mvp-intake-YYYYMMDD -> main` may be considered after a separately reviewed governance rollout. The offline checker `tools/agent-pipeline/lib/sales-release.mjs` only analyzes scope and ALWAYS denies Production authorization.
+- Current `main` classifier still denies all PR heads except `integration`. A future trusted production gate must be installed from the protected main revision, verify every commit and exact release scope, enforce owner acceptance and production approval as separate GitHub-origin attestations (not editable PR text), and fail closed if protection settings cannot be verified. Never use PR-supplied code as its own authorization gate. No billing, migrations, workers, secrets, database or payments belong to the limited sales-intake candidate.
 
-Do not merge task branches directly to `main`.
+Do not merge task branches directly to `main` or use this exception before its production safeguards are verified.
 
 ## Required task metadata
 
