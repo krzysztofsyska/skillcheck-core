@@ -60,7 +60,20 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   const checked = validatePair(record, pair, policy);
   if (!checked.ci.pass || !checked.review.pass) throw new Error('EVIDENCE_STALE');
   const request = record.binding.approval;
-  if (effect.gate === 'A' && (request.canonical.review_digest !== sha256(pair.review.payload) || request.canonical.ci_digest !== sha256(pair.ci))) throw new Error('EVIDENCE_STALE');
+  const automatic = effect.gate === 'A' && policy.integration_merge_policy === 'verified_ci_review';
+  const frozen = record.binding.auto_integration;
+  if (automatic) {
+    if (record.binding.lane === 'promotion' || request?.gate === 'B' ||
+        record.binding.merge?.gate !== 'A' || frozen?.source !== 'verified_ci_review' ||
+        frozen.head_sha !== record.head_sha || frozen.base_sha !== record.base_sha ||
+        frozen.policy_sha !== record.policy_sha || frozen.contract_hash !== record.contract_hash ||
+        frozen.ci_run_id !== record.ci_run_id || frozen.review_run_id !== record.review_run_id ||
+        frozen.ci_digest !== sha256(pair.ci) || frozen.review_digest !== sha256(pair.review.payload)) {
+      throw new Error('EVIDENCE_STALE');
+    }
+  } else if (effect.gate === 'A' && (!request?.canonical ||
+      request.canonical.review_digest !== sha256(pair.review.payload) ||
+      request.canonical.ci_digest !== sha256(pair.ci))) throw new Error('EVIDENCE_STALE');
   if (effect.gate === 'B') {
     const frozen = request.canonical.ci_review_evidence?.[0];
     const manifest = record.binding.promotion?.manifest;
@@ -68,9 +81,12 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
         || request.canonical.manifest_hash !== sha256(manifest)
         || manifest?.integration_sha !== record.head_sha || manifest?.main_sha !== record.base_sha) throw new Error('PROMOTION_EVIDENCE_STALE');
   }
-  const approval = approvals[request.request_id];
-  const result = evaluateApproval({ request, run: approval, payload: approval?.payload,
-    expectedUser: policy.owner, expectedEnvironment: effect.gate === 'B' ? policy.environments.production_approval : policy.environments.owner_acceptance });
+  const approval = request ? approvals[request.request_id] : null;
+  // Only gate A can use verified CI/review in place of owner acceptance.
+  // Gate B always requires an actual GitHub Environment approval from the owner.
+  const result = automatic ? { ok: true, source: 'verified_ci_review' } :
+    evaluateApproval({ request, run: approval, payload: approval?.payload,
+      expectedUser: policy.owner, expectedEnvironment: effect.gate === 'B' ? policy.environments.production_approval : policy.environments.owner_acceptance });
   const decision = decideMerge({ flags, protection, lock: snapshot.mergeLock, holder: journal.holder,
     liveBaseSha: base.commit.sha, expectedBaseSha: record.base_sha, liveHeadSha: pull.head.sha, expectedHeadSha: record.head_sha,
     approval: result, gate: effect.gate, runbook: record.binding.promotion?.runbook,
@@ -78,8 +94,10 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   if (!decision.ok) throw new Error(decision.reason);
   if (pull.draft) await github.readyPull(pull.node_id);
   await publishEvidence(github, policy, record, pair);
-  const name = effect.gate === 'B' ? 'production-approval' : 'owner-acceptance';
-  await github.publishCheck({ head: record.head_sha, name: `sc-agent/${name}`, externalId: request.request_id, conclusion: 'success', summary: JSON.stringify(request.canonical) });
+  const name = effect.gate === 'B' ? 'production-approval' : automatic ? 'integration-ready' : 'owner-acceptance';
+  const checkId = automatic ? `${record.task_id}:${record.review_request_id}:integration-ready` : request.request_id;
+  await github.publishCheck({ head: record.head_sha, name: `sc-agent/${name}`, externalId: checkId, conclusion: 'success',
+    summary: JSON.stringify(automatic ? frozen : request.canonical) });
   if (effect.gate === 'B') await github.publishCheck({ head: record.head_sha, name: 'sc-agent/promotion-scope', externalId: request.request_id, conclusion: 'success', summary: JSON.stringify(record.binding.promotion) });
   // No writer except this holder can move the base; GitHub strict rules apply.
   await journal.assertOwned();
