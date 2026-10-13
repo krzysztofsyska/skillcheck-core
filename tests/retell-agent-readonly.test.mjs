@@ -127,11 +127,28 @@ test("SC-011 Retell discards malformed multilingual data without leaking values"
   for (const language of [
     ["pl-PL", 1],
     ["pl-PL", "X".repeat(31)],
-    Array.from({length: 21}, () => "pl-PL"),
     [],
     { bogus: "pl-PL" },
   ]) {
     const result = await readRetellAgent(env, async () => reply(200, {...agent, language}));
     assert.equal(result.language, null);
   }
+});
+
+test("SC-011 Retell preserves more than 20 valid languages including pl-PL", async () => {
+  const locales = Array.from({length: 25}, (_,i) => "lang-" + String(i));
+  locales.push("pl-PL");
+  const result = await readRetellAgent(env, async () =>
+    reply(200, {...agent, language: locales}));
+  assert.deepEqual(result.language, locales);
+});
+
+test("SC-011 Retell rejects missing or malformed required voice engine configuration", async () => {
+  for (const change of [
+    {voice_id: undefined}, {voice_id: null}, {voice_id: ""},
+    {voice_id: 123}, {response_engine: undefined},
+    {response_engine: null}, {response_engine: {}},
+    {response_engine: {type: 123}},
+  ]) await failsWith(readRetellAgent(env, async () =>
+    reply(200, {...agent, ...change})), "RETELL_INVALID_RESPONSE");
 });
