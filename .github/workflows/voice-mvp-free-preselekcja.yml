@@ -4,6 +4,8 @@ on:
     paths:
       - 'lib/voice/mvp-package-gate.ts'
       - 'tests/voice-mvp-package-gate.test.mjs'
+      - 'lib/voice/retell-outbound-draft.ts'
+      - 'tests/retell-outbound-draft.test.mjs'
       - '.github/workflows/voice-mvp-free-preselekcja.yml'
       - 'docs/sc-voice-mvp-free-preselekcja.md'
   push:
