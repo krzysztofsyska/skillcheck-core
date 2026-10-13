@@ -18,7 +18,7 @@ function pathSafe(path) {
     !path.split('/').some(part => part === '.' || part === '..' || part === '');
 }
 
-export function validateSalesRelease({ files, statuses, base, headRef, metadata = {} }) {
+export function validateSalesRelease({ files, statuses, modes, base, headRef, metadata = {} }) {
   const errors = [];
   if (base !== valid.base) errors.push('Sales release must target main');
   if (!branchPattern.test(headRef ?? '')) errors.push('Unexpected sales release branch');
@@ -47,6 +47,13 @@ export function validateSalesRelease({ files, statuses, base, headRef, metadata 
         if (!['A', 'M'].includes(statuses[i])) {
           errors.push('Only added/modified regular files allowed: ' + files[i]);
         }
+      }
+    }
+    if (!Array.isArray(modes) || modes.length !== files.length) {
+      errors.push('Tracked file modes verification required');
+    } else {
+      for (let i = 0; i < files.length; i += 1) {
+        if (modes[i] !== '100644') errors.push('Only regular non-executable files allowed: ' + files[i]);
       }
     }
   }
