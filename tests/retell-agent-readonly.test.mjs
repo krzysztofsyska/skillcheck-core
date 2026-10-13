@@ -109,3 +109,29 @@ test("SC-011 Retell permits documented unprefixed 32-character agent IDs only", 
   });
   assert.equal(result.agentId, id);
 });
+
+test("SC-011 Retell accepts unnamed agents and preserves safe multilingual locale arrays", async () => {
+  const response = {
+    ...agent, agent_name: null,
+    language: ["pl-PL", "en-US"],
+  };
+  const result = await readRetellAgent(env, async () => reply(200, response));
+  assert.equal(result.name, null);
+  assert.deepEqual(result.language, ["pl-PL", "en-US"]);
+  assert.ok(Object.isFrozen(result.language));
+  assert.ok(Object.isFrozen(result));
+  assert.ok(!JSON.stringify(result).includes("NEVER EXPOSE"));
+});
+
+test("SC-011 Retell discards malformed multilingual data without leaking values", async () => {
+  for (const language of [
+    ["pl-PL", 1],
+    ["pl-PL", "X".repeat(31)],
+    Array.from({length: 21}, () => "pl-PL"),
+    [],
+    { bogus: "pl-PL" },
+  ]) {
+    const result = await readRetellAgent(env, async () => reply(200, {...agent, language}));
+    assert.equal(result.language, null);
+  }
+});
