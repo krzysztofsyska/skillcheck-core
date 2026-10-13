@@ -32,6 +32,7 @@ test("SC-011 Retell uses only the configured GET endpoint and projects safe fiel
     assert.equal(url, "https://api.retellai.com/get-agent/agent_1234567890abcdef");
     assert.equal(init.method, "GET");
     assert.equal(init.cache, "no-store");
+    assert.equal(init.redirect, "error");
     assert.equal(init.headers.Authorization, "Bearer " + env.RETELL_API_KEY);
     assert.ok(init.signal);
     assert.equal(init.body, undefined);
@@ -70,6 +71,7 @@ test("SC-011 Retell does not forward vendor error bodies or network errors", asy
     [401, "RETELL_AUTH_FAILED"],
     [403, "RETELL_AUTH_FAILED"],
     [404, "RETELL_AGENT_NOT_FOUND"],
+    [422, "RETELL_AGENT_NOT_FOUND"],
     [429, "RETELL_UNAVAILABLE"],
     [500, "RETELL_UNAVAILABLE"],
   ]) await failsWith(
@@ -96,4 +98,14 @@ test("SC-011 Retell rejects cross-agent and malformed successful responses", asy
     readRetellAgent(env, async () => reply(200, response)),
     "RETELL_INVALID_RESPONSE",
   );
+});
+
+test("SC-011 Retell permits documented unprefixed 32-character agent IDs only", async () => {
+  const id = "16b980523634a6dc504898cda492e939";
+  const result = await readRetellAgent({ ...env, RETELL_AGENT_ID: id }, async (url, init) => {
+    assert.equal(url, "https://api.retellai.com/get-agent/" + id);
+    assert.equal(init.redirect, "error");
+    return reply(200, { ...agent, agent_id: id });
+  });
+  assert.equal(result.agentId, id);
 });
