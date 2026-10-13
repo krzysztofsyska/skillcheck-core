@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { behaviorAreas } from "../lib/position-fields.ts";
 import { buildInterviewPlan, reviewInterviewPlan, releaseInterviewPlan } from "../lib/voice/interview-plan.ts";
 import {
@@ -8,6 +9,7 @@ import {
 
 const uuid = n => "00000000-0000-4000-8000-" + String(n).padStart(12, "0");
 const config = () => ({
+  approvedFlowSha256: createHash("sha256").update(JSON.stringify(flow)).digest("hex"),
   agentId: "agent_1234567890abcdef",
   agentVersionTag: "skillcheck_mvp",
   agentVersion: 2,
@@ -45,7 +47,7 @@ const request = p => ({
   publishedAssistantVersion: "skillcheck-agent-approved-v2",
   recordingAllowed: false,
   callTimeoutSeconds: 480,
-  providerIdempotencyKey: "idempotency-synthetic-001",
+  providerIdempotencyKey: uuid(501),
   scenario: {
     schemaVersion: 1, language: "pl-PL",
     introductionVersion: "notice-approved-v001",
@@ -55,18 +57,20 @@ const request = p => ({
 });
 
 const flowId = "conversation_flow_abcdefghijklmnop";
+const flow = {
+  conversation_flow_id: flowId, version: 3,
+  global_prompt: "Read the approved notice {{skillcheck_notice_version}}. Ask {{skillcheck_interview_script}}. Never request personal information.",
+};
+
 const agent = {
   agent_id: config().agentId, version: 2, is_published: true,
   assigned_tags: ["skillcheck_mvp"],
   data_storage_setting: "basic_attributes_only",
+  data_storage_retention_days: 14,
   max_call_duration_ms: 480000,
   language: "pl-PL",
   response_engine: { type: "conversation-flow", conversation_flow_id: flowId, version: 3 },
   unused_private_data: "NEVER EXPOSE",
-};
-const flow = {
-  conversation_flow_id: flowId, version: 3,
-  global_prompt: "Read the approved notice {{skillcheck_notice_version}}. Ask {{skillcheck_interview_script}}. Never request personal information.",
 };
 const reply = data => ({status: 200, async json() {return data;}});
 const http = (a = agent, f = flow) => async (url, init) => {
@@ -112,7 +116,8 @@ test("SC-011-C compiles approved source only; no POST or telephone network opera
     assert.equal(result.payload.to_number, "+48123456789");
     assert.equal(result.payload.from_number, "+48581234567");
     assert.equal(result.payload.override_agent_version, "skillcheck_mvp");
-    assert.equal(result.payload.idempotency_key, "idempotency-synthetic-001");
+    assert.equal(result.payload.idempotency_key, uuid(501));
+    assert.ok(!("metadata" in result.payload));
     assert.equal(result.payload.honor_internal_dnc, true);
     assert.ok(!JSON.stringify(result).includes("zdrowie"));
     assert.ok(!Object.keys(result.payload).includes("agent_override"));
@@ -143,7 +148,8 @@ test("SC-011-C requires fully matching version/caller/notice/budget and recordin
     { agentVersionTag:"latest" }, { agentVersionTag:"v2" },
     { fromNumberE164:"1234" }, { agentVersion: 3 },
     { approvedAssistantVersion:"other-approved" }, { noticeVersion:"other-notice" },
-    { maxBudgetSeconds:420 }, { maxBudgetSeconds:601 },
+    { maxBudgetSeconds:419 }, { maxBudgetSeconds:601 },
+    { approvedFlowSha256: "0".repeat(64) },
     { RETELL_API_KEY:"leak"},
   ]) denied(r, {...c, ...change}, p, proof);
   for (const change of [
@@ -161,7 +167,12 @@ test("SC-011-C rejects agent with storage/cap/tag/published/language mismatch", 
     { data_storage_setting: "everything" },
     { data_storage_setting: "everything_except_pii" },
     { data_storage_setting: undefined },
+    { data_storage_retention_days: undefined },
+    { data_storage_retention_days: null },
+    { data_storage_retention_days: 31 },
+    { data_storage_retention_days: 0 },
     { max_call_duration_ms: 600000 },
+    { max_call_duration_ms: 60000 },
     { max_call_duration_ms: undefined },
     { assigned_tags: [] }, { assigned_tags: ["other"] },
     { is_published: false }, { version: 3 },
@@ -175,6 +186,8 @@ test("SC-011-C rejects missing exact flow, incompatible prompts or version", asy
     { global_prompt: "No variables used" },
     { global_prompt: "{{skillcheck_interview_script}}" },
     { global_prompt: "{{skillcheck_notice_version}}" },
+    { components: [{type:"custom_function",name:"exfiltrate"}] },
+    { tools: [{type:"transfer_call",target:"+48123456789"}] },
     { version: 22 }, { conversation_flow_id: "other_flow" },
   ]) await rejectedGate(verify(config(),agent,{...flow,...changed}));
   await rejectedGate(verifyRetellOutboundAgent(config(), "short", http()));
@@ -186,9 +199,25 @@ test("SC-011-C different released interview plans remain isolated", async () => 
   const c=config(), proof=await verify(), first=released(), second=released();
   const a=compileRetellOutboundDraft(request(first),c,first,proof);
   const reqB={...request(second),externalCorrelationId:"correlation-synthetic-002",
-    providerIdempotencyKey:"idempotency-synthetic-002"};
+    providerIdempotencyKey:uuid(502)};
   const b=compileRetellOutboundDraft(reqB,c,second,proof);
-  assert.notEqual(a.payload.metadata.skillcheck_correlation_id,
-    b.payload.metadata.skillcheck_correlation_id);
   assert.notEqual(a.payload.idempotency_key,b.payload.idempotency_key);
+});
+
+test("SC-011-C Retell idempotency key must be a fresh opaque UUID, never candidate data", async () => {
+  const c=config(), p=released(), proof=await verify();
+  const r=request(p);
+  for(const key of ["JanKowalski", "123.456", "abc:def", "+48500100200",
+    "idempotency_synthetic_001", ""]) {
+    denied({...r,providerIdempotencyKey:key},c,p,proof);
+  }
+  const good=compileRetellOutboundDraft(r,c,p,proof);
+  assert.equal(good.payload.idempotency_key, uuid(501));
+});
+
+test("SC-011-C requires interview duration at least approved SC-012 target", async () => {
+  const c=config(), p=released(), proof=await verify();
+  denied({...request(p),callTimeoutSeconds:60},c,p,proof);
+  denied({...request(p),callTimeoutSeconds:419},c,p,proof);
+  assert.equal(compileRetellOutboundDraft({...request(p),callTimeoutSeconds:420},c,p,proof).requestedMaxSeconds,420);
 });
