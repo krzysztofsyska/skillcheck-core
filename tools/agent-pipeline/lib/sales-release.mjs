@@ -1,5 +1,6 @@
-// SALES-MVP-RELEASE: narrow PR scope policy, not a deployment authorization.
-// Only pilot inquiry pages. No payment, billing, worker, database or config files.
+// Read-only, preparation-only validator. NEVER a Production authorization.
+// The ACTIVE main gate still rejects standalone release branches. A future
+// production verifier must execute from the protected base revision, not PR code.
 export const SALES_INTAKE_FILES = Object.freeze([
   'app/preselekcja/page.tsx',
   'app/components/marketing/home-page.tsx',
@@ -8,58 +9,71 @@ export const SALES_INTAKE_FILES = Object.freeze([
   'tests/marketing-http.test.mjs',
 ]);
 
-const allow = new Set(SALES_INTAKE_FILES);
+const allowed = new Set(SALES_INTAKE_FILES);
 const branchPattern = /^release\/sales-mvp-intake-[0-9]{8}(?:-[a-z0-9-]+)?$/;
-const valid = Object.freeze({ base: 'main', releaseKind: 'SALES_MVP_INTAKE' });
 
-function pathSafe(path) {
-  return typeof path === 'string' && path.length > 0 &&
-    !path.startsWith('/') && !path.includes('\\') &&
-    !path.split('/').some(part => part === '.' || part === '..' || part === '');
+function validPath(path) {
+  return typeof path === 'string' && allowed.has(path)
+    && !path.startsWith('/') && !path.includes('\\')
+    && !path.split('/').some(part => !part || part === '.' || part === '..');
 }
 
-export function validateSalesRelease({ files, statuses, modes, base, headRef, metadata = {} }) {
+function inspectChanges(paths, statuses, modes, errors, label) {
+  if (!Array.isArray(paths) || paths.length < 1) {
+    errors.push(label + ': missing diff');
+    return;
+  }
+  if (!Array.isArray(statuses) || !Array.isArray(modes) ||
+      statuses.length !== paths.length || modes.length !== paths.length) {
+    errors.push(label + ': missing status/mode evidence');
+    return;
+  }
+  const seen = new Set();
+  for (let index = 0; index < paths.length; index += 1) {
+    const path = paths[index];
+    if (!validPath(path)) errors.push(label + ': forbidden file ' + String(path));
+    if (seen.has(path)) errors.push(label + ': duplicate file ' + path);
+    seen.add(path);
+    if (!['A','M'].includes(statuses[index])) errors.push(label + ': forbidden status ' + String(statuses[index]));
+    if (modes[index] !== '100644') errors.push(label + ': forbidden mode ' + String(modes[index]));
+  }
+}
+
+// This verifies FINAL diff plus EVERY INTERMEDIATE commit, preventing a
+// malicious temporary secret, symlink, deletion or submodule from entering main
+// via merge-commit history. It checks scope, NOT identity or authorization.
+export function validateSalesRelease({ files, statuses, modes, commits, base, headRef }) {
   const errors = [];
-  if (base !== valid.base) errors.push('Sales release must target main');
-  if (!branchPattern.test(headRef ?? '')) errors.push('Unexpected sales release branch');
-  if (metadata.PROMOTION !== 'YES') errors.push('PROMOTION must be YES');
-  if (metadata.RELEASE_KIND !== valid.releaseKind) errors.push('RELEASE_KIND must be SALES_MVP_INTAKE');
-  if (metadata.LEVEL !== 'L3') errors.push('Sales release requires L3');
-  if (metadata.OWNER_APPROVAL !== 'APPROVED') errors.push('Owner acceptance required');
-  if (metadata.REVIEW_VERDICT !== 'PASS') errors.push('Independent review verdict PASS required');
-  if (metadata.PRODUCTION_APPROVAL !== 'APPROVED') {
-    errors.push('Production approval required before sales-release promotion');
-  }
-  // Textual metadata is NOT trusted proof of approval. A protected GitHub
-  // environment and branch rules, plus independent review, are mandatory.
-  if (!Array.isArray(files) || files.length < 1) {
-    errors.push('Empty or invalid release diff');
+  if (base !== 'main') errors.push('Expected main target');
+  if (!branchPattern.test(headRef ?? '')) errors.push('Unexpected release branch');
+  inspectChanges(files, statuses, modes, errors, 'final');
+  if (!files?.includes('app/preselekcja/page.tsx')) errors.push('Intake page required');
+  if (!Array.isArray(commits) || commits.length === 0 || commits.length > 30) {
+    errors.push('Entire commit history must be verified (1–30 commits)');
   } else {
-    const seen = new Set();
-    for (const path of files) {
-      if (!pathSafe(path) || !allow.has(path)) errors.push('File not allowed: ' + String(path));
-      if (seen.has(path)) errors.push('Duplicate file: ' + path);
-      seen.add(path);
-    }
-    if (!seen.has('app/preselekcja/page.tsx')) errors.push('Sales intake page is required');
-    if (!Array.isArray(statuses) || statuses.length !== files.length) {
-      errors.push('Changed-file status verification required');
-    } else {
-      for (let i = 0; i < files.length; i += 1) {
-        if (!['A', 'M'].includes(statuses[i])) {
-          errors.push('Only added/modified regular files allowed: ' + files[i]);
-        }
+    for (let i=0; i<commits.length; i+=1) {
+      const commit = commits[i];
+      if (!commit || commit.parentCount !== 1) {
+        errors.push('Merge/root commit forbidden in sales release history ' + i);
+        continue;
       }
-    }
-    if (!Array.isArray(modes) || modes.length !== files.length) {
-      errors.push('Tracked file modes verification required');
-    } else {
-      for (let i = 0; i < files.length; i += 1) {
-        if (modes[i] !== '100644') errors.push('Only regular non-executable files allowed: ' + files[i]);
+      const changes = commit.changes;
+      if (!Array.isArray(changes)) {
+        errors.push('Missing per-commit diff ' + i);
+        continue;
       }
+      inspectChanges(
+        changes.map(c => c?.path),
+        changes.map(c => c?.status),
+        changes.map(c => c?.mode),
+        errors, 'commit '+i,
+      );
     }
   }
-  return { ok: errors.length === 0, errors };
+  // This flag explicitly bars treating a metadata string or green CI as a
+  // Production decision. Separate verified owner acceptance and Production
+  // environment approval are required AFTER a trusted main-side bootstrap.
+  return { ok: errors.length === 0, authorizedForProduction: false, errors };
 }
 
 export function isSalesReleaseBranch(headRef) {
