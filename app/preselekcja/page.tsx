@@ -37,7 +37,7 @@ export default function PreselectionOfferPage() {
           <li>Jeżeli potwierdzimy dostępność tych funkcji w uzgodnionym pilotażu, wyniki, ranking, shortlistę i raport będzie weryfikować osoba prowadząca rekrutację.</li>
         </ol>
       </section>
-      <section aria-labelledby="free-title">
+      <section id="free" aria-labelledby="free-title">
         <h2 id="free-title">Chcesz najpierw wypróbować FREE?</h2>
         <p>Jednorazowy dostęp próbny wymaga weryfikacji firmy. Obecnie aktywację koordynuje operator; samo utworzenie konta nie przyznaje analiz.</p>
         <div className={styles.actions}>
