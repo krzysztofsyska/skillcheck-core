@@ -15,13 +15,25 @@ const body = [
 ].join('\n');
 
 const files=[...SALES_INTAKE_FILES];
+const baseSha='a'.repeat(40);
+const commitIds=['b','c','d','e','f'].map(char=>char.repeat(40));
 const commits=files.map((path,index)=>({
+  sha:commitIds[index],
+  parentSha:index===0?baseSha:commitIds[index-1],
   parentCount:1,
   changes:[{path,status:index===0?'A':'M',mode:'100644'}],
 }));
 const good={
   files,statuses:['A','M','M','M','M'],modes:files.map(()=>'100644'),
-  commits,base:'main',headRef:'release/sales-mvp-intake-20261013',
+  commits,baseSha,headSha:commitIds.at(-1),
+  base:'main',headRef:'release/sales-mvp-intake-20261013',
+};
+// Supply a correctly linked extension to isolate tests of forbidden changes.
+const extended=(path,status='A',mode='100644')=>{
+  const sha='1'.repeat(40);
+  return {commits:[...commits,{
+    sha,parentSha:good.headSha,parentCount:1,changes:[{path,status,mode}],
+  }],headSha:sha};
 };
 const check=patch=>validateSalesRelease({...good,...patch});
 
@@ -29,6 +41,8 @@ test('offline intake validator checks final diff and every commit but NEVER auth
   const r=check({});
   assert.equal(r.ok,true);
   assert.equal(r.authorizedForProduction,false);
+  assert.equal(r.historyAuthenticated,false);
+  assert.equal(r.secretsScanned,false);
   assert.equal(classify({files,base:'main',headRef:good.headRef,body}).ok,false);
 });
 
@@ -60,13 +74,19 @@ test('each intermediate commit denies prohibited paths even if final diff clean'
     'app/rozmowa/actions.ts','tools/agent-pipeline/classify-pr.mjs',
   ];
   for(const path of forbidden){
-    assert.equal(check({commits:[...commits,{parentCount:1,changes:[{path,status:'A',mode:'100644'}]}]}).ok,false,path);
+    const r=check(extended(path));
+    assert.equal(r.ok,false,path);
+    assert.ok(r.errors.some(error=>error.includes('forbidden file')),path);
   }
   for(const status of ['D','T','R100','C100']){
-    assert.equal(check({commits:[...commits,{parentCount:1,changes:[{path:files[0],status,mode:'100644'}]}]}).ok,false,status);
+    const r=check(extended(files[0],status));
+    assert.equal(r.ok,false,status);
+    assert.ok(r.errors.some(error=>error.includes('forbidden status')),status);
   }
   for(const mode of ['120000','160000','100755',null]){
-    assert.equal(check({commits:[...commits,{parentCount:1,changes:[{path:files[0],status:'M',mode}]}]}).ok,false,String(mode));
+    const r=check(extended(files[0],'M',mode));
+    assert.equal(r.ok,false,String(mode));
+    assert.ok(r.errors.some(error=>error.includes('forbidden mode')),String(mode));
   }
 });
 
@@ -75,6 +95,21 @@ test('history must contain individual verified commits, not merge commits or mis
     assert.equal(check({commits:history}).ok,false);
   }
   assert.equal(check({commits:Array.from({length:31},()=>commits[0])}).ok,false);
+});
+
+test('caller-supplied history must link base to head, without missing or duplicate records',()=>{
+  assert.equal(check({}).ok,true);
+  assert.equal(check({baseSha:'0'.repeat(40)}).ok,false);
+  assert.equal(check({headSha:'9'.repeat(40)}).ok,false);
+  assert.equal(check({baseSha:'not-a-sha'}).ok,false);
+  assert.equal(check({commits:[...commits.slice(0,2),...commits.slice(3)]}).ok,false);
+  assert.equal(check({commits:[commits[0],commits[0],...commits.slice(2)]}).ok,false);
+  assert.equal(check({commits:commits.slice(0,1)}).ok,false);
+  assert.equal(check({commits:commits.map((c,i)=>i===2?{...c,changes:[{path:files[0],status:'M',mode:'100644'}]}:c)}).ok,false);
+  // These attest only internal structure, NOT genuine Git history or secret-free blobs.
+  assert.equal(check({}).historyAuthenticated,false);
+  assert.equal(check({}).secretsScanned,false);
+  assert.equal(check({}).authorizedForProduction,false);
 });
 
 test('branch mismatch, deletion, symlink and executable final files fail',()=>{

@@ -39,27 +39,45 @@ function inspectChanges(paths, statuses, modes, errors, label) {
   }
 }
 
-// This verifies FINAL diff plus EVERY INTERMEDIATE commit, preventing a
-// malicious temporary secret, symlink, deletion or submodule from entering main
-// via merge-commit history. It checks scope, NOT identity or authorization.
-export function validateSalesRelease({ files, statuses, modes, commits, base, headRef }) {
+// Advisory validation of CALLER-SUPPLIED evidence. Linked SHA values detect
+// internally inconsistent ranges, but do not authenticate the Git object graph.
+// Status/mode metadata CANNOT detect secrets hidden in permitted file blobs.
+// Only a future trusted main-side verifier may enumerate actual Git commits,
+// inspect historical blobs, and enforce a Production release rule.
+const shaPattern = /^[0-9a-f]{40}$/;
+export function validateSalesRelease({
+  files, statuses, modes, commits, base, headRef, baseSha, headSha,
+}) {
   const errors = [];
   if (base !== 'main') errors.push('Expected main target');
   if (!branchPattern.test(headRef ?? '')) errors.push('Unexpected release branch');
   inspectChanges(files, statuses, modes, errors, 'final');
   if (!files?.includes('app/preselekcja/page.tsx')) errors.push('Intake page required');
+  if (!shaPattern.test(baseSha ?? '') || !shaPattern.test(headSha ?? '') || baseSha === headSha) {
+    errors.push('Require distinct base/head SHA-1 identifiers');
+  }
   if (!Array.isArray(commits) || commits.length === 0 || commits.length > 30) {
     errors.push('Entire commit history must be verified (1–30 commits)');
   } else {
+    let previousSha = baseSha;
+    const seenCommits = new Set();
+    const touched = new Set();
     for (let i=0; i<commits.length; i+=1) {
       const commit = commits[i];
       if (!commit || commit.parentCount !== 1) {
-        errors.push('Merge/root commit forbidden in sales release history ' + i);
+        errors.push('Merge/root commit forbidden in supplied sales release history ' + i);
         continue;
       }
+      if (!shaPattern.test(commit.sha ?? '') || !shaPattern.test(commit.parentSha ?? '') ||
+          commit.sha === commit.parentSha || commit.parentSha !== previousSha ||
+          seenCommits.has(commit.sha)) {
+        errors.push('Broken or duplicate supplied commit chain at ' + i);
+      }
+      previousSha = commit.sha;
+      seenCommits.add(commit.sha);
       const changes = commit.changes;
       if (!Array.isArray(changes)) {
-        errors.push('Missing per-commit diff ' + i);
+        errors.push('Missing supplied per-commit diff ' + i);
         continue;
       }
       inspectChanges(
@@ -68,12 +86,23 @@ export function validateSalesRelease({ files, statuses, modes, commits, base, he
         changes.map(c => c?.mode),
         errors, 'commit '+i,
       );
+      for (const change of changes) touched.add(change?.path);
+    }
+    if (previousSha !== headSha) errors.push('Supplied commit chain does not reach head SHA');
+    for (const path of files ?? []) {
+      if (!touched.has(path)) errors.push('Final file missing from supplied history: ' + path);
     }
   }
-  // This flag explicitly bars treating a metadata string or green CI as a
-  // Production decision. Separate verified owner acceptance and Production
-  // environment approval are required AFTER a trusted main-side bootstrap.
-  return { ok: errors.length === 0, authorizedForProduction: false, errors };
+  // Both booleans are intentionally FALSE: the caller's hashes are not
+  // authenticated against Git objects and historical blob contents are not scanned.
+  // A green result is advisory scope consistency, NEVER Production permission.
+  return {
+    ok: errors.length === 0,
+    historyAuthenticated: false,
+    secretsScanned: false,
+    authorizedForProduction: false,
+    errors,
+  };
 }
 
 export function isSalesReleaseBranch(headRef) {
