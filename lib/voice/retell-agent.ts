@@ -96,6 +96,11 @@ export async function readRetellAgent(
     data.agent_id !== agentId ||
     (data.agent_name !== null &&
       (typeof data.agent_name !== "string" || data.agent_name.length > 200)) ||
+    typeof data.voice_id !== "string" || data.voice_id.length === 0 || data.voice_id.length > 120 ||
+    !data.response_engine || typeof data.response_engine !== "object" || Array.isArray(data.response_engine) ||
+    typeof (data.response_engine as Record<string, unknown>).type !== "string" ||
+    ((data.response_engine as Record<string, unknown>).type as string).length === 0 ||
+    ((data.response_engine as Record<string, unknown>).type as string).length > 60 ||
     typeof data.is_published !== "boolean" ||
     !Number.isInteger(data.version) ||
     (data.version as number) < 0
@@ -112,7 +117,7 @@ export async function readRetellAgent(
       sourceLanguage.length > 0 && sourceLanguage.length <= 30) {
     language = sourceLanguage;
   } else if (Array.isArray(sourceLanguage) &&
-      sourceLanguage.length > 0 && sourceLanguage.length <= 20 &&
+      sourceLanguage.length > 0 &&
       sourceLanguage.every((value: unknown) =>
         typeof value === "string" && value.length > 0 && value.length <= 30)) {
     language = Object.freeze([...sourceLanguage] as string[]);
@@ -124,9 +129,7 @@ export async function readRetellAgent(
     published: data.is_published,
     version: data.version as number,
     language,
-    voiceId: typeof data.voice_id === "string" && data.voice_id.length <= 120
-      ? data.voice_id : null,
-    responseEngineType: typeof engineType === "string" && engineType.length <= 60
-      ? engineType : null,
+    voiceId: data.voice_id as string,
+    responseEngineType: engineType as string,
   });
 }
