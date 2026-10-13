@@ -1,4 +1,6 @@
 import { test } from 'node:test';
+import { generateKeyPairSync } from 'node:crypto';
+import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { planFeedback, runFeedback, fixPrompt, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
@@ -376,4 +378,30 @@ test('Codex approval in the same GitHub second as request is accepted', () => {
     rounds: 0, handled: [], phase: 'WAITING_REVIEW', head: A, base: B,
     reviewCommentId: 200, reviewBaseline: [100], reviewRequestedAt: 1500 };
   assert.equal(planFeedback(f.binding, state, f.snapshot, 1600).state.phase, 'READY_FOR_OWNER');
+});
+
+test('feedback bridge token is bound to the exact repository and permissions', async () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const scope = { repository_ids: [REPOSITORY_ID], permissions: {
+    contents: 'write', issues: 'write', pull_requests: 'read', administration: 'read',
+  } };
+  let issuedBody;
+  const issued = { token: 'test-token', repository_selection: 'selected',
+    repositories: [{ id: REPOSITORY_ID }],
+    permissions: { ...scope.permissions, metadata: 'read' } };
+  const fetchImpl = async (url, request) => {
+    assert.equal(url, 'https://api.github.com/app/installations/168649570/access_tokens');
+    issuedBody = JSON.parse(request.body);
+    return { ok: true, json: async () => issued };
+  };
+  const args = { fetch: fetchImpl, appId: 5216184,
+    privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    installationId: 168649570, repository: 'krzysztofsyska/skillcheck-core', tokenScope: scope };
+  assert.equal(await createInstallationToken(args), 'test-token');
+  assert.deepEqual(issuedBody, scope);
+  issued.permissions.administration = 'write';
+  await assert.rejects(createInstallationToken(args), /TOKEN_SCOPE_MISMATCH/);
+  issued.permissions.administration = 'read';
+  issued.repositories[0].id = 1;
+  await assert.rejects(createInstallationToken(args), /TOKEN_SCOPE_MISMATCH/);
 });
