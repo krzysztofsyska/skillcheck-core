@@ -25,6 +25,8 @@ export function validateSalesRelease({ files, statuses, modes, base, headRef, me
   if (metadata.PROMOTION !== 'YES') errors.push('PROMOTION must be YES');
   if (metadata.RELEASE_KIND !== valid.releaseKind) errors.push('RELEASE_KIND must be SALES_MVP_INTAKE');
   if (metadata.LEVEL !== 'L3') errors.push('Sales release requires L3');
+  if (metadata.OWNER_APPROVAL !== 'APPROVED') errors.push('Owner acceptance required');
+  if (metadata.REVIEW_VERDICT !== 'PASS') errors.push('Independent review verdict PASS required');
   if (metadata.PRODUCTION_APPROVAL !== 'APPROVED') {
     errors.push('Production approval required before sales-release promotion');
   }
