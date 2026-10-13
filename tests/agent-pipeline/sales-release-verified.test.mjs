@@ -68,6 +68,7 @@ test('rejects merge history, stale main, historical key and mismatched blob',()=
     git(f.cwd,'update-ref','refs/remotes/origin/main',f.baseSha);
     git(f.cwd,'checkout','-q','-b','key-test',f.baseSha);
     const path=filenames[0];
+    mkdirSync(dirname(join(f.cwd,path)),{recursive:true});
     writeFileSync(join(f.cwd,path),'-----BEGIN PRIVATE KEY-----\nFAKE\n');
     git(f.cwd,'add',path);git(f.cwd,'commit','-q','-m','temporary key');
     writeFileSync(join(f.cwd,path),'reviewed '+path+'\n');
