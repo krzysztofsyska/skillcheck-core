@@ -24,6 +24,8 @@ Data: 2026-10-13. Cel: jeden wspólny voicebot SkillCheck dostępny dla obu plan
 - Funkcja wyłącznie zwraca `prepared_for_trusted_dispatch` lub `blocked`. **NIE może wysłać telefonu ani zarezerwować jednostki**; nie tworzy fałszywej autoryzacji.
 - `voiceScenarioFromApprovedPlan`: bezpieczna, deterministyczna projekcja **wcześniej autoryzowanego** planu SC-012 do istniejącego kontraktu SC-011 VoiceScenario (bez numeru i treści CV).
 - `tests/voice-mvp-package-gate.test.mjs`: testy obu planów, zgód, limitów, odmowy nieznanych pól/PII oraz fikcyjnej rozmowy w FakeVoiceProvider. Wszystko offline.
+- `lib/voice/retell-outbound-draft.ts` przygotowuje **tylko obiekt żądania** wg Retell Create Phone Call: E.164, idempotency_key, przypięty agent/version i bezpieczne zmienne `sc_question_1..6`. Nie wykonuje POST, nie ma klucza i nie uruchamia kosztów. Dokumentacja API: https://docs.retellai.com/api-references/create-phone-call. W panelu Retell agent musi korzystać z odpowiadających zmiennych, potwierdzić powiadomienie i kończyć w limicie; bez tego żadnych połączeń.
+- `tests/retell-outbound-draft.test.mjs` sprawdza deterministyczność, brak CV, odmowę nieprawidłowego agenta/numeru, zmiany wersji i niedozwolonego nagrywania.
 - CI typecheck, istniejące testy voice i build. Bez API/kluczy/wywołań Retell/Zadarma.
 
 ## Wymagane przed prawdziwym połączeniem — kolejny etap, nie aktywować teraz
