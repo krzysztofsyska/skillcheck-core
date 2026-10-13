@@ -100,7 +100,24 @@ type ExpectedFunctions =
   | "get_candidate_communication_history"
   | "save_sales_pipeline" | "list_sales_pipeline" | "sales_pipeline_history" | "find_sales_companies"
   | "approve_candidate_communication"
-  | "get_communication_approval_status";
+  | "get_communication_approval_status"
+  | "configure_candidate_retention_policy"
+  | "get_candidate_retention_policy"
+  | "confirm_erasure_subject"
+  | "preview_candidate_erasure"
+  | "get_erasure_subject_resolution"
+  | "issue_candidate_erasure_preview"
+  | "request_candidate_erasure"
+  | "cancel_candidate_erasure"
+  | "get_erasure_status"
+  | "get_candidate_erasure_status"
+  | "list_candidate_erasure_requests"
+  | "set_candidate_erasure_hold"
+  | "release_candidate_erasure_hold"
+  | "configure_retention_schedule"
+  | "revoke_retention_schedule"
+  | "get_retention_schedule"
+  | "get_retention_suggestions";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -484,3 +501,15 @@ type _ApprovalInsert = Expect<Equal<Insert<"candidate_communication_approvals">,
 type _ApprovalUpdate = Expect<Equal<Update<"candidate_communication_approvals">, never>>;
 type _NoVerificationMint = Expect<Equal<Extract<FunctionName, "ingest_verified_contact_receipt">, never>>;
 type _ApprovalNoPrivateInput = Expect<Equal<Extract<keyof Database["public"]["Functions"]["approve_candidate_communication"]["Args"], "company_id" | "actor_id" | "destination" | "policy_version">, never>>;
+
+// SC-010 R1 is configuration + read-only preview, never erasure authorization.
+type _NoErasureExecution = Expect<Equal<Extract<FunctionName, "execute_candidate_erasure" | "purge_candidate" | "authorize_retention_due">, never>>;
+type _PreviewNoClientManifest = Expect<Equal<Extract<keyof Database["public"]["Functions"]["preview_candidate_erasure"]["Args"], "company_id" | "actor_id" | "candidate_ids" | "manifest" | "execute">, never>>;
+
+// R2 authorization accepts a server-minted ticket only, never client counts/hash/tenant.
+type _ErasureRequestArgs = Expect<Equal<Database["public"]["Functions"]["request_candidate_erasure"]["Args"], {
+  preview_ticket_id: string; request_key: string;
+}>>;
+type _ErasureCancelArgs = Expect<Equal<Database["public"]["Functions"]["cancel_candidate_erasure"]["Args"], {
+  target_request: string; expected_generation: number; request_key: string;
+}>>;
