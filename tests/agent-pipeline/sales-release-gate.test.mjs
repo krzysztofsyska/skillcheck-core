@@ -16,10 +16,11 @@ const data = {
 };
 const check = change => validateSalesRelease({ ...data, ...change });
 
-test('sales intake release: narrow, exact scope is allowed only with explicit approval metadata', () => {
+test('sales intake release: offline scope passes but existing main gate still rejects it', () => {
   assert.deepEqual(SALES_INTAKE_FILES, data.files);
   assert.equal(check({}).ok, true);
-  assert.equal(classify({ ...data, body }).ok, true);
+  // The candidate-only scope can be validated for review, but main stays closed.
+  assert.equal(classify({ ...data, body }).ok, false);
 });
 
 test('legacy promotion to main still requires integration head and cannot claim a sales exception', () => {
@@ -67,6 +68,8 @@ test('release requires a specifically approved promotion, not a generic or pendi
     assert.equal(check({metadata}).ok,false,field);
   }
   assert.equal(classify({...data,body:body.replace('PRODUCTION_APPROVAL: APPROVED','PRODUCTION_APPROVAL: PENDING')}).ok,false);
+  // Even forged positive approval labels cannot bypass the trusted main rule.
+  assert.equal(classify({...data,body}).ok,false);
 });
 
 test('normal task PRs to integration remain unaffected by release-only controls', () => {
