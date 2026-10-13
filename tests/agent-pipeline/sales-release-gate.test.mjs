@@ -61,7 +61,7 @@ test('gate rejects wrong branches, wrong bases, missing intake page and duplicat
 });
 
 test('release requires a specifically approved promotion, not a generic or pending description', () => {
-  const fields = ['PROMOTION','RELEASE_KIND','LEVEL','PRODUCTION_APPROVAL'];
+  const fields = ['PROMOTION','RELEASE_KIND','LEVEL','OWNER_APPROVAL','REVIEW_VERDICT','PRODUCTION_APPROVAL'];
   for (const field of fields) {
     const metadata={...data.metadata,[field]:'PENDING'};
     assert.equal(check({metadata}).ok,false,field);
