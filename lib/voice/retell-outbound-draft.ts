@@ -5,6 +5,7 @@
  * validate tenant-specific current DB revisions, lock once-only dispatch,
  * enforce cost limits, and reconcile unknown results before any HTTP POST.
  */
+import { createHash } from "node:crypto";
 import { canonicalVoiceCallRequest, type VoiceCallRequest } from "./provider.ts";
 import { isAuthenticallyReleasedInterviewPlan, type InterviewPlan } from "./interview-plan.ts";
 
@@ -19,6 +20,8 @@ export type RetellOutboundConfig = Readonly<{
   /** Verified Zadarma caller ID, provisioned separately. */
   fromNumberE164: string;
   maxBudgetSeconds: number;
+  /** Immutable SHA-256 of reviewed exact Retell flow response; owner-approved source. */
+  approvedFlowSha256: string;
 }>;
 
 export type RetellOutboundDraft = Readonly<{
@@ -36,7 +39,6 @@ export type RetellOutboundDraft = Readonly<{
       skillcheck_notice_version: string;
       skillcheck_language: "pl-PL";
     }>;
-    metadata: Readonly<{ skillcheck_correlation_id: string }>;
   }>;
   /** Not a Retell time limit: verified agent-side max must be <= this. */
   requestedMaxSeconds: number;
@@ -48,12 +50,15 @@ export class RetellOutboundDraftError extends Error {
 }
 const reject = (): never => { throw new RetellOutboundDraftError(); };
 const phone = /^\+[1-9]\d{7,14}$/;
+// Retell accepts [A-Za-z0-9_-]; require non-PII randomly generated UUID v4 form.
+const idempotencyUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const sha256 = /^[0-9a-f]{64}$/;
 const agentId = /^(?:agent_[A-Za-z0-9]{16,64}|[A-Za-z0-9]{32})$/;
 const revision = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const tag = /^(?!latest$|latest_published$|v\d+$)[a-z][a-z0-9_-]{0,19}$/;
 const flowId = /^[A-Za-z0-9_]{12,100}$/;
 const configFields = ["agentId","agentVersionTag","agentVersion","approvedAssistantVersion",
-  "noticeVersion","fromNumberE164","maxBudgetSeconds"] as const;
+  "noticeVersion","fromNumberE164","maxBudgetSeconds","approvedFlowSha256"] as const;
 
 function isPlainExact(v: unknown, keys: readonly string[]): v is Record<string, unknown> {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
@@ -74,7 +79,8 @@ function validatedConfig(input: RetellOutboundConfig): RetellOutboundConfig {
     typeof c.noticeVersion !== "string" || !revision.test(c.noticeVersion) ||
     typeof c.fromNumberE164 !== "string" || !phone.test(c.fromNumberE164) ||
     !Number.isInteger(c.maxBudgetSeconds) ||
-    c.maxBudgetSeconds < 60 || c.maxBudgetSeconds > 600
+    c.maxBudgetSeconds < 420 || c.maxBudgetSeconds > 600 ||
+    typeof c.approvedFlowSha256 !== "string" || !sha256.test(c.approvedFlowSha256)
   ) return reject();
   return c;
 }
@@ -121,8 +127,11 @@ export async function verifyRetellOutboundAgent(
     a.is_published !== true ||
     !Array.isArray(a.assigned_tags) || !a.assigned_tags.includes(c.agentVersionTag) ||
     a.data_storage_setting !== "basic_attributes_only" ||
+    !Number.isInteger(a.data_storage_retention_days) ||
+    (a.data_storage_retention_days as number) < 1 ||
+    (a.data_storage_retention_days as number) > 30 ||
     !Number.isInteger(a.max_call_duration_ms) ||
-    (a.max_call_duration_ms as number) < 60000 ||
+    (a.max_call_duration_ms as number) < 420000 ||
     (a.max_call_duration_ms as number) > c.maxBudgetSeconds * 1000 ||
     !(langs === "pl-PL" || (Array.isArray(langs) && langs.includes("pl-PL"))))
     return reject();
@@ -137,6 +146,14 @@ export async function verifyRetellOutboundAgent(
     e.conversation_flow_id + "?version=" + e.version);
   if (flow.conversation_flow_id !== e.conversation_flow_id ||
       flow.version !== e.version) return reject();
+  // Exact-reviewed flow hash covers nested tools, custom function nodes,
+  // transfer/SMS settings and all other side effects. Any drift fails closed.
+  // The trusted SC-010 worker must obtain this digest from a reviewed,
+  // immutable configuration record, not from a candidate request.
+  let digest: string;
+  try { digest = createHash("sha256").update(JSON.stringify(flow)).digest("hex"); }
+  catch { return reject(); }
+  if (digest !== c.approvedFlowSha256) return reject();
 
   // Mandatory GLOBAL instructions, not incidental text on an unreachable node.
   const globalPrompt = flow.global_prompt;
@@ -179,6 +196,9 @@ export function compileRetellOutboundDraft(
       call.publishedAssistantVersion !== c.approvedAssistantVersion ||
       call.scenario.introductionVersion !== c.noticeVersion ||
       call.callTimeoutSeconds > c.maxBudgetSeconds ||
+      call.callTimeoutSeconds < releasedPlan.durationTargetSeconds ||
+      provider.maxCallDurationMs < releasedPlan.durationTargetSeconds * 1000 ||
+      !idempotencyUuid.test(call.providerIdempotencyKey) ||
       provider.maxCallDurationMs > call.callTimeoutSeconds * 1000 ||
       call.recordingAllowed !== false ||
       releasedPlan.recordingDefault !== false ||
@@ -213,9 +233,6 @@ export function compileRetellOutboundDraft(
       skillcheck_interview_script: script,
       skillcheck_notice_version: c.noticeVersion,
       skillcheck_language: "pl-PL" as const,
-    }),
-    metadata: Object.freeze({
-      skillcheck_correlation_id: call.externalCorrelationId,
     }),
   });
   return Object.freeze({
