@@ -481,7 +481,7 @@ function beginRepair(record, obs, findings) {
 }
 
 function armGateA(record, obs) {
-  if (obs.policy.integration_merge_policy === 'verified_ci_review') return autoIntegrationStep(record, obs);
+  if (!obs.simulation && obs.policy.integration_merge_policy === 'verified_ci_review') return autoIntegrationStep(record, obs);
   if (!obs.simulation && !obs.preflight?.ok) return done(record);
   const canonical = gateAPayload({
     repositoryId: record.repository_id,
@@ -519,7 +519,7 @@ function armGateA(record, obs) {
 }
 
 function approvalStep(record, obs) {
-  if (obs.policy.integration_merge_policy === 'verified_ci_review') return autoIntegrationStep(record, obs);
+  if (!obs.simulation && obs.policy.integration_merge_policy === 'verified_ci_review') return autoIntegrationStep(record, obs);
   if (record.state === 'ACCEPTED') return done(record);
   if (!record.binding.approval) return armGateA(record, obs);
   if (record.binding.approval.phase === 'intent') {
