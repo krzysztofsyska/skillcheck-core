@@ -39,7 +39,7 @@ export class RetellAgentError extends Error {
   }
 }
 
-const agentIdPattern = /^agent_[A-Za-z0-9]{16,64}$/;
+const agentIdPattern = /^(?:agent_[A-Za-z0-9]{16,64}|[A-Za-z0-9]{32})$/;
 
 /**
  * GET /get-agent/{agent_id} only. Fail closed when the credential or agent ID
@@ -69,6 +69,7 @@ export async function readRetellAgent(
         method: "GET",
         headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
         cache: "no-store",
+        redirect: "error",
         signal: AbortSignal.timeout(8000),
       },
     );
@@ -77,7 +78,7 @@ export async function readRetellAgent(
   }
   if (response.status === 401 || response.status === 403)
     throw new RetellAgentError("RETELL_AUTH_FAILED");
-  if (response.status === 404)
+  if (response.status === 404 || response.status === 422)
     throw new RetellAgentError("RETELL_AGENT_NOT_FOUND");
   if (response.status !== 200)
     throw new RetellAgentError("RETELL_UNAVAILABLE");
