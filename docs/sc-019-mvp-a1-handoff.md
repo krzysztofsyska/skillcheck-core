@@ -51,7 +51,7 @@ PRODUCT: the existing voicebot, candidate chatbot, AC and subscriptions remain o
 
 The automated review was not a PASS. This prototype now:
 
-- locks `public.companies` before balance, spend, and journal writes, with a PostgreSQL 16 mixed grant/spend/refund loop
+- locks `public.companies` in a BEFORE INSERT trigger, before the analysis foreign key takes a key-share lock, then before balance, spend, and journal writes. A PostgreSQL 16 mixed grant/spend/refund loop covers the same order
 - cancels and releases a pending or processing analysis when it becomes stale; a completed analysis that later becomes stale keeps its charge
 - rejects FREE after a PRESELEKCJA grant
 - aborts installation while any non-completed analysis has no reservation

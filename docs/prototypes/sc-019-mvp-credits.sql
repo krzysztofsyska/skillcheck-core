@@ -84,6 +84,18 @@ end;
 $$;
 revoke all on function private.sc19_lock_company(uuid) from public, anon, authenticated;
 
+-- The analysis insert's foreign key takes a key-share lock on the company row
+-- before an AFTER trigger runs. Taking the stronger company lock there deadlocks
+-- two concurrent inserts. Lock first, while the insert is still BEFORE.
+create function private.sc19_lock_analysis_company()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  perform private.sc19_lock_company(new.company_id);
+  return new;
+end;
+$$;
+revoke all on function private.sc19_lock_analysis_company() from public, anon, authenticated;
+
 create function public.sc19_claim_trial(target_company uuid, supplied_nip text)
 returns integer language plpgsql security definer set search_path = '' as $$
 declare
@@ -271,6 +283,8 @@ begin
 end
 $sc19_preexisting$;
 
+create trigger sc19_analysis_lock before insert on public.screening_analysis_versions
+  for each row execute function private.sc19_lock_analysis_company();
 create trigger sc19_analysis_bill after insert on public.screening_analysis_versions
   for each row execute function private.sc19_charge_analysis();
 create trigger sc19_analysis_reconcile after update of execution_status, stale_at

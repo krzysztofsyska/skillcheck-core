@@ -80,8 +80,8 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
   const simultaneous=await Promise.allSettled([
     a.query(sql,[uuid(101),company]),b.query(sql,[uuid(102),company]),
   ]);
-  assert.equal(simultaneous.filter(x=>x.status==='fulfilled').length,1);
-  assert.equal(simultaneous.filter(x=>x.status==='rejected'&&x.reason.code==='PT402').length,1);
+  const raceOutcome=simultaneous.map(item=>item.status==='fulfilled'?'ok':`${item.reason.code}:${item.reason.message}`).sort();
+  assert.deepEqual(raceOutcome,['PT402:sc19_quota_exhausted','ok']);
   assert.equal(Number((await db.query('select available from private.sc19_balances where company_id=$1',[company])).rows[0].available),0);
   assert.equal(Number((await db.query('select count(*)::int as n from private.sc19_analysis_spend where company_id=$1',[company])).rows[0].n),5);
   const paid=await Promise.allSettled([
