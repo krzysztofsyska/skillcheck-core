@@ -26,5 +26,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: node --test tests/voice-mvp-package-gate.test.mjs tests/voice-provider.test.mjs tests/voice-interview-plan.test.mjs
+      - run: node --test tests/voice-mvp-package-gate.test.mjs tests/retell-outbound-draft.test.mjs tests/voice-provider.test.mjs tests/voice-interview-plan.test.mjs
       - run: npm run build
