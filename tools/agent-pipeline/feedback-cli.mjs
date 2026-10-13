@@ -114,7 +114,11 @@ export async function main(env = process.env) {
       || new Set(config.bindings.map(b => b.agentId)).size !== config.bindings.length) throw new Error('INVALID_BINDINGS');
   config.bindings.forEach(validateBinding);
   const token = await createInstallationToken({ fetch, appId: env.AGENT_PIPELINE_APP_ID,
-    privateKey: env.AGENT_PIPELINE_APP_PRIVATE_KEY, installationId: env.AGENT_PIPELINE_APP_INSTALLATION_ID, repository: REPOSITORY });
+    privateKey: env.AGENT_PIPELINE_APP_PRIVATE_KEY, installationId: env.AGENT_PIPELINE_APP_INSTALLATION_ID, repository: REPOSITORY,
+    tokenScope: { repository_ids: [REPOSITORY_ID], permissions: {
+      contents: 'write', issues: 'write', pull_requests: 'read', administration: 'read',
+    } },
+  });
   const github = createGitHubClient({ fetch, token, repository: REPOSITORY, policy });
   const repository = await github.request(`/repos/${REPOSITORY}`);
   if (repository.id !== REPOSITORY_ID || repository.default_branch !== 'main'
