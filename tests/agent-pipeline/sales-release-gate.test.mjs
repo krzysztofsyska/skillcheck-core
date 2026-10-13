@@ -3,76 +3,93 @@ import assert from 'node:assert/strict';
 import { classify } from '../../tools/agent-pipeline/classify-pr.mjs';
 import { SALES_INTAKE_FILES, validateSalesRelease } from '../../tools/agent-pipeline/lib/sales-release.mjs';
 
-const body = "TASK: SC-SALES-RELEASE\nSCOPE: FRONTEND\nLEVEL: L3\nOWNER_APPROVAL: APPROVED\nPRODUCTION_APPROVAL: APPROVED\nREVIEW_VERDICT: PASS\nPROMOTION: YES\nRELEASE_KIND: SALES_MVP_INTAKE";
-const data = {
-  files: ['app/preselekcja/page.tsx', 'app/components/marketing/home-page.tsx',
-    'app/components/marketing/site-header.tsx', 'app/components/marketing/package-comparison.tsx',
-    'tests/marketing-http.test.mjs'],
-  statuses: ['A', 'M', 'M', 'M', 'M'],
-  modes: ['100644','100644','100644','100644','100644'],
-  base: 'main',
-  headRef: 'release/sales-mvp-intake-20261013',
-  metadata: Object.fromEntries(body.split('\n').map(l => l.split(': '))),
+const body = [
+  'TASK: SC-SALES-MVP-INTAKE-RELEASE',
+  'SCOPE: FRONTEND',
+  'LEVEL: L3',
+  'OWNER_APPROVAL: APPROVED',
+  'PRODUCTION_APPROVAL: APPROVED',
+  'REVIEW_VERDICT: PASS',
+  'PROMOTION: YES',
+  'RELEASE_KIND: SALES_MVP_INTAKE',
+].join('\n');
+
+const files=[...SALES_INTAKE_FILES];
+const commits=files.map((path,index)=>({
+  parentCount:1,
+  changes:[{path,status:index===0?'A':'M',mode:'100644'}],
+}));
+const good={
+  files,statuses:['A','M','M','M','M'],modes:files.map(()=>'100644'),
+  commits,base:'main',headRef:'release/sales-mvp-intake-20261013',
 };
-const check = change => validateSalesRelease({ ...data, ...change });
+const check=patch=>validateSalesRelease({...good,...patch});
 
-test('sales intake release: offline scope passes but existing main gate still rejects it', () => {
-  assert.deepEqual(SALES_INTAKE_FILES, data.files);
-  assert.equal(check({}).ok, true);
-  // The candidate-only scope can be validated for review, but main stays closed.
-  assert.equal(classify({ ...data, body }).ok, false);
+test('offline intake validator checks final diff and every commit but NEVER authorizes Production',()=>{
+  const r=check({});
+  assert.equal(r.ok,true);
+  assert.equal(r.authorizedForProduction,false);
+  assert.equal(classify({files,base:'main',headRef:good.headRef,body}).ok,false);
 });
 
-test('legacy promotion to main still requires integration head and cannot claim a sales exception', () => {
-  const normal = classify({files:['app/rozmowa/page.tsx'],body:body.replace('RELEASE_KIND: SALES_MVP_INTAKE','RELEASE_KIND: GENERAL'),base:'main',headRef:'release/other'});
-  assert.equal(normal.ok,false);
-  const standard = classify({files:['app/rozmowa/page.tsx'],body:'TASK: PROD\nSCOPE: FRONTEND\nLEVEL: L3\nOWNER_APPROVAL: APPROVED\nPRODUCTION_APPROVAL: APPROVED\nREVIEW_VERDICT: PASS\nPROMOTION: YES',base:'main',headRef:'integration'});
+test('unchanged standard promotion from integration is still valid',()=>{
+  const standard=classify({files:['app/rozmowa/page.tsx'],body,base:'main',headRef:'integration'});
   assert.equal(standard.ok,true);
+  const out=classify({files,body,base:'main',headRef:good.headRef});
+  assert.equal(out.ok,false);
+  const bypass=classify({files,body:body.replace('PROMOTION: YES','PROMOTION: NO'),base:'main',headRef:good.headRef});
+  assert.equal(bypass.ok,false);
 });
 
-test('gate rejects forbidden billing, payment, CV, worker, SQL and deployment paths', () => {
+test('final release diff denies changes outside exact marketing files',()=>{
   for (const path of [
-    'supabase/migrations/20261013_sc19.sql','app/api/payments/route.ts','app/dashboard/[companyId]/billing/page.tsx',
-    'lib/screening-worker.ts','app/rozmowa/actions.ts','.github/workflows/agent-gates.yml',
-    'tools/agent-pipeline/classify-pr.mjs','vercel.json','.env','package.json','../private.txt',
-  ]) {
-    const files = [data.files[0],path];
-    assert.equal(check({files,statuses:['A','M'],modes:['100644','100644']}).ok,false,path);
+    'supabase/migrations/0001.sql','app/api/payments/route.ts','app/dashboard/[companyId]/billing/page.tsx',
+    'lib/screening-worker.ts','app/rozmowa/actions.ts','tools/agent-pipeline/classify-pr.mjs',
+    '.github/workflows/sales-release-scope.yml','vercel.json','.env','package.json','../secret',
+  ]){
+    assert.equal(check({files:[good.files[0],path],statuses:['A','M'],modes:['100644','100644']}).ok,false,path);
+  }
+  assert.equal(check({files:[],statuses:[],modes:[]}).ok,false);
+  assert.equal(check({files:['tests/marketing-http.test.mjs'],statuses:['M'],modes:['100644']}).ok,false);
+  assert.equal(check({statuses:[]}).ok,false);
+});
+
+test('each intermediate commit denies prohibited paths even if final diff clean',()=>{
+  const forbidden=[
+    'supabase/migrations/20261013.sql','.env','app/api/checkout/route.ts',
+    'app/rozmowa/actions.ts','tools/agent-pipeline/classify-pr.mjs',
+  ];
+  for(const path of forbidden){
+    assert.equal(check({commits:[...commits,{parentCount:1,changes:[{path,status:'A',mode:'100644'}]}]}).ok,false,path);
+  }
+  for(const status of ['D','T','R100','C100']){
+    assert.equal(check({commits:[...commits,{parentCount:1,changes:[{path:files[0],status,mode:'100644'}]}]}).ok,false,status);
+  }
+  for(const mode of ['120000','160000','100755',null]){
+    assert.equal(check({commits:[...commits,{parentCount:1,changes:[{path:files[0],status:'M',mode}]}]}).ok,false,String(mode));
   }
 });
 
-test('gate rejects deletions, symlinks, executable files and unverifiable git statuses', () => {
-  for (const status of ['D','T','R100','C100']) {
-    assert.equal(check({statuses:[status,...data.statuses.slice(1)]}).ok,false,status);
+test('history must contain individual verified commits, not merge commits or missing data',()=>{
+  for(const history of [null,[],[{parentCount:2,changes:commits[0].changes}],[{parentCount:1,changes:[]}]]){
+    assert.equal(check({commits:history}).ok,false);
   }
-  for (const mode of ['120000','160000','100755',null]) {
-    assert.equal(check({modes:[mode,...data.modes.slice(1)]}).ok,false,String(mode));
-  }
-  assert.equal(check({statuses:null}).ok,false);
-  assert.equal(check({modes:null}).ok,false);
+  assert.equal(check({commits:Array.from({length:31},()=>commits[0])}).ok,false);
 });
 
-test('gate rejects wrong branches, wrong bases, missing intake page and duplicate paths', () => {
-  for (const headRef of ['integration','release/sales-only-20261011','release/sales-mvp-billing-20261013','release/sales-mvp-intake-abc','release/sales-mvp-intake-20261013/other']) {
-    assert.equal(check({headRef}).ok,false,headRef);
+test('branch mismatch, deletion, symlink and executable final files fail',()=>{
+  for(const b of ['release/sales-only-20261011','release/sales-mvp-intake-abc','release/sales-mvp-intake-20261013/other']){
+    assert.equal(check({headRef:b}).ok,false,b);
   }
   assert.equal(check({base:'integration'}).ok,false);
-  assert.equal(check({files:['tests/marketing-http.test.mjs'],statuses:['M'],modes:['100644']}).ok,false);
-  assert.equal(check({files:[data.files[0],data.files[0]],statuses:['M','M'],modes:['100644','100644']}).ok,false);
+  for(const status of ['D','T','R100'])assert.equal(check({statuses:[status,...good.statuses.slice(1)]}).ok,false);
+  for(const mode of ['120000','160000','100755'])assert.equal(check({modes:[mode,...good.modes.slice(1)]}).ok,false);
+  assert.equal(check({files:[files[0],files[0]],statuses:['A','M'],modes:['100644','100644']}).ok,false);
 });
 
-test('release requires a specifically approved promotion, not a generic or pending description', () => {
-  const fields = ['PROMOTION','RELEASE_KIND','LEVEL','OWNER_APPROVAL','REVIEW_VERDICT','PRODUCTION_APPROVAL'];
-  for (const field of fields) {
-    const metadata={...data.metadata,[field]:'PENDING'};
-    assert.equal(check({metadata}).ok,false,field);
-  }
-  assert.equal(classify({...data,body:body.replace('PRODUCTION_APPROVAL: APPROVED','PRODUCTION_APPROVAL: PENDING')}).ok,false);
-  // Even forged positive approval labels cannot bypass the trusted main rule.
-  assert.equal(classify({...data,body}).ok,false);
-});
-
-test('normal task PRs to integration remain unaffected by release-only controls', () => {
-  const result=classify({files:['app/preselekcja/page.tsx'],body:body.replace('PROMOTION: YES','PROMOTION: NO'),base:'integration',headRef:'feat/sales-mvp-landing'});
-  assert.equal(result.ok,true);
+test('PR-provided owner metadata is never accepted as independent approval',()=>{
+  const fakeApprovals=body.replace('OWNER_APPROVAL: APPROVED','OWNER_APPROVAL: APPROVED\nREVIEW_VERDICT: PASS');
+  assert.equal(classify({files,base:'main',headRef:good.headRef,body:fakeApprovals}).ok,false);
+  assert.equal(check({}).authorizedForProduction,false);
+  assert.equal(classify({files:['app/preselekcja/page.tsx'],body:body.replace('PROMOTION: YES','PROMOTION: NO'),base:'integration',headRef:'feat/landing'}).ok,true);
 });
