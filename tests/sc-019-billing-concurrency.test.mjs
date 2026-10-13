@@ -62,9 +62,9 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
       returns boolean language sql stable security definer set search_path='' as $$
       select exists(select 1 from public.companies where id=cid and owner_id=(select auth.uid()))
     $$;
-    create function private.has_company_access(cid uuid)
+    create function private.has_company_access(cid uuid, write_access boolean default false)
       returns boolean language sql stable security definer set search_path='' as $$
-      select private.is_company_owner(cid)
+      select private.is_company_owner(cid) and (not write_access or private.is_company_owner(cid))
     $$;
   `);
   await db.query('insert into public.companies values($1,$2)',[company,owner]);
@@ -72,6 +72,7 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
   await db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[company,'1234563218','verified-race-001']);
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[owner]);
   await db.query('select public.sc19_claim_trial($1,$2)',[company,'1234563218']);
+  assert.equal(Number((await db.query('select available from public.sc19_get_balance($1)',[company])).rows[0].available),5);
   for(let n=1;n<=4;n++)await db.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[uuid(n),company]);
   const a=await connect(),b=await connect();
   const sql='insert into public.screening_analysis_versions(id,company_id) values($1,$2)';

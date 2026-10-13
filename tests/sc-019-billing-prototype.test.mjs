@@ -38,13 +38,13 @@ async function setup() {
           where id=cid and owner_id=(select auth.uid()))
       $$;
     create function private.has_company_access(cid uuid, write_access boolean default false)
-      returns boolean language sql stable security definer set search_path='' as $
+      returns boolean language sql stable security definer set search_path='' as $$
         select private.is_company_owner(cid) or exists (
           select 1 from public.company_members
           where company_id=cid and user_id=(select auth.uid())
           and (not write_access or role='recruiter')
         )
-      $;
+      $$;
     insert into public.companies(id,owner_id) values
       ('${companyA}','${ownerA}'),('${companyB}','${ownerB}');
     insert into public.company_members(company_id,user_id,role) values
