@@ -3,16 +3,16 @@ import styles from "../../marketing.module.css";
 
 const plans = [
   {name:"FREE", color:styles.planBlue, title:"Wypróbuj SkillCheck", text:"Poznaj docelowy proces na niewielkiej grupie kandydatów.", price:"0 zł", scope:"5–6 próbnych analiz CV", features:["Konto firmy i profil stanowiska", "Pseudonimizacja i ocena dopasowania", "Chatbot informacyjny dla kandydatów", "Podstawowa shortlista", "Jedna próbna rozmowa z botem i podstawowa analiza"]},
-  {name:"PRESELEKCJA", color:styles.planGreen, title:"Uporządkuj wybór kandydatów", text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę.", price:"299 zł", scope:"60 analiz CV", features:["Konto firmy i profil stanowiska", "Pseudonimizacja i ocena dopasowania", "Chatbot informacyjny dla kandydatów", "Shortlista 5–10 kandydatów", "Podstawowy raport preselekcji"]},
+  {name:"PRESELEKCJA", color:styles.planGreen, title:"Uporządkuj wybór kandydatów", text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę.", price:"Po wycenie", scope:"Liczba analiz ustalana w ofercie", features:["Konto firmy i profil stanowiska", "Pseudonimizacja i ocena dopasowania", "Chatbot informacyjny dla kandydatów", "Shortlista — zakres ustalany w ofercie", "Podstawowy raport preselekcji"]},
   {name:"WERYFIKACJA", color:styles.planPurple, title:"Sprawdź, co naprawdę potrafią", text:"Pogłęb ocenę przez rozmowę, jej analizę i test kompetencji.", price:"899 zł", scope:"60 CV + 20 rozmów + testy", features:["Wszystko z Preselekcji", "20 rozmów weryfikacyjnych z botem", "Analiza odpowiedzi z rozmowy", "Testy kompetencji", "Rozszerzony raport kandydata"]},
   {name:"ASSESSMENT CENTER", color:styles.planOrange, title:"Zobacz, jak podejdą do pracy", text:"Sprawdź sposób działania w zadaniach osadzonych w realiach stanowiska.", price:"1 799 zł", scope:"60 CV + 20 rozmów + testy + case studies", features:["Wszystko z Weryfikacji", "Case studies i zadania praktyczne", "Ćwiczenia dopasowane do roli", "Pogłębiony proces Assessment Center", "Kompleksowy raport kandydata"]},
 ];
 const rows = [
   ["Konto firmy i profil stanowiska","Tak","Tak","Tak","Tak"],
-  ["Analizy CV","5–6 próbnych","60","60","60"],
+  ["Analizy CV","5–6 próbnych","Według oferty","60","60"],
   ["Pseudonimizacja i ocena dopasowania","Tak","Tak","Tak","Tak"],
   ["Chatbot informacyjny","Tak","Tak","Tak","Tak"],
-  ["Shortlista / raport preselekcji","Podstawowe","5–10 kandydatów","5–10 kandydatów","5–10 kandydatów"],
+  ["Shortlista / raport preselekcji","Podstawowe","Według oferty","5–10 kandydatów","5–10 kandydatów"],
   ["Rozmowa weryfikacyjna z botem","1 próbna","Nie","20","20"],
   ["Analiza rozmowy","Podstawowa","Nie","Tak","Tak"],
   ["Test kompetencji","Nie","Nie","Tak","Tak"],
@@ -26,7 +26,7 @@ export function PackageComparison(){return <>
     <p className={styles.planLabel}>Planowany pakiet</p><h3>{plan.name}</h3><p className={styles.planTitle}>{plan.title}</p><p>{plan.text}</p>
     <ul>{plan.features.map(f=><li key={f}>{f}</li>)}</ul>
     <div className={styles.planPrice}><strong>{plan.price}</strong><p>{plan.scope}</p><small>Cena robocza z wizualizacji</small></div>
-    <Link href="/rozmowa" className={styles.secondary}>Zapytaj o {plan.name === "FREE" ? "wariant próbny" : plan.name}</Link>
+    <Link href={plan.name === "FREE" ? "/preselekcja#free" : plan.name === "PRESELEKCJA" ? "/preselekcja" : "/rozmowa"} className={styles.secondary}>Zapytaj o {plan.name === "FREE" ? "wariant próbny" : plan.name}</Link>
   </article>)}</div>
   <p className={styles.note}>To koncepcja oferty do oceny, nie aktywny cennik. Ceny, limity i warunki wymagają zatwierdzenia przed sprzedażą. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.</p>
   <details className={styles.packageDetails}><summary>Porównaj wszystkie funkcje pakietów</summary>
