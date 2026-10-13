@@ -41,6 +41,21 @@ export class RetellAgentError extends Error {
 
 const agentIdPattern = /^(?:agent_[A-Za-z0-9]{16,64}|[A-Za-z0-9]{32})$/;
 
+// Validate Retell's full AgentResponse response-engine discriminated union.
+// A malformed configuration must not pass the read-only preflight.
+function isValidResponseEngine(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const engine = value as Record<string, unknown>;
+  const requiredField =
+    engine.type === "retell-llm" ? "llm_id" :
+    engine.type === "custom-llm" ? "llm_websocket_url" :
+    engine.type === "conversation-flow" ? "conversation_flow_id" : null;
+  if (requiredField === null) return false;
+  const identifier = engine[requiredField];
+  return typeof identifier === "string" &&
+    identifier.trim().length > 0 && identifier.length <= 2048;
+}
+
 /**
  * GET /get-agent/{agent_id} only. Fail closed when the credential or agent ID
  * is absent, and never propagate provider response bodies or thrown messages.
@@ -94,13 +109,10 @@ export async function readRetellAgent(
   const data = body as Record<string, unknown>;
   if (
     data.agent_id !== agentId ||
-    (data.agent_name !== null &&
+    (data.agent_name != null &&
       (typeof data.agent_name !== "string" || data.agent_name.length > 200)) ||
     typeof data.voice_id !== "string" || data.voice_id.length === 0 || data.voice_id.length > 120 ||
-    !data.response_engine || typeof data.response_engine !== "object" || Array.isArray(data.response_engine) ||
-    typeof (data.response_engine as Record<string, unknown>).type !== "string" ||
-    ((data.response_engine as Record<string, unknown>).type as string).length === 0 ||
-    ((data.response_engine as Record<string, unknown>).type as string).length > 60 ||
+    !isValidResponseEngine(data.response_engine) ||
     typeof data.is_published !== "boolean" ||
     !Number.isInteger(data.version) ||
     (data.version as number) < 0
@@ -125,7 +137,7 @@ export async function readRetellAgent(
   // Return a strict projection, never Retell's raw agent configuration.
   return Object.freeze({
     agentId,
-    name: data.agent_name,
+    name: data.agent_name ?? null,
     published: data.is_published,
     version: data.version as number,
     language,
