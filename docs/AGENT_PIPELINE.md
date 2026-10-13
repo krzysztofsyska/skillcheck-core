@@ -5,9 +5,7 @@
 Właściciel nie przekleja promptów ani raportów pomiędzy ChatGPT, Cursor i Codex.
 GitHub jest wspólną szyną komunikacyjną.
 
-Właściciel wykonuje tylko dwa checkpointy:
-1. **OWNER ACCEPTANCE** — „akceptuję wykonanie”.
-2. **PRODUCTION APPROVAL** — „wdrażaj na produkcję”.
+Właściciel nie zatwierdza zwykłych PR-ów do `integration`. Po aktualnych testach CI i niezależnym review PASS kod jest scalany automatycznie, o ile ochrona gałęzi i blokady bezpieczeństwa są spełnione. Właściciel zatwierdza dopiero **PRODUCTION APPROVAL**, nowe koszty lub operacje nieodwracalne.
 
 ## Topologia
 
@@ -31,11 +29,10 @@ ChatGPT Orchestrator
   |                         v
   |                        CI
   |
-  +--> asks Owner: ACCEPT?
+  +--> CI PASS + reviewer PASS + security gates
               |
-             YES
               v
-      merge task PR -> integration
+      automatic merge task PR -> integration
               |
       ready for production
               |
@@ -54,7 +51,7 @@ ChatGPT Orchestrator
 
 ## Statusy
 
-`BACKLOG -> READY -> BUILDING -> PR_REVIEW -> FIXING -> READY_FOR_OWNER -> ACCEPTED -> READY_FOR_PROD -> DEPLOYING -> DONE`
+`BACKLOG -> READY -> BUILDING -> PR_REVIEW -> FIXING -> READY_FOR_INTEGRATION -> ACCEPTED -> READY_FOR_PROD -> DEPLOYING -> DONE`
 
 Dodatkowo: `BLOCKED`.
 
@@ -82,7 +79,7 @@ Zmiany frontendowe obejmują m.in.:
 - formularze
 - style i interakcje klienta
 
-Frontend może być scalony do `integration` po OWNER ACCEPTANCE.
+Frontend może być scalony do `integration` automatycznie po aktualnym CI PASS i review PASS oraz po spełnieniu pozostałych bramek.
 Nie trafia do produkcyjnego `main` przed PRODUCTION APPROVAL.
 
 ## Backend
@@ -115,15 +112,11 @@ PR musi wskazać:
 
 ## Dwa gates
 
-### Gate A — OWNER ACCEPTANCE
+### Gate A — AUTOMATIC INTEGRATION
 
-Orchestrator pyta właściciela dopiero gdy:
-- reviewer PASS
-- CI PASS
-- brak blockerów
-- acceptance criteria spełnione
+Nie wymaga zgody właściciela. Sterownik może scalić zwykły task PR do `integration` wyłącznie po niezależnym review PASS i CI PASS dla niezmienionego HEAD/BASE/kontraktu. Przed merge ponownie pobiera aktualne dane GitHuba, weryfikuje podpisane dowody, zakres zmian, blokadę scalenia, ochronę gałęzi i źródła wymaganych checks. Publikuje `sc-agent/integration-ready`, nigdy nie fałszuje `owner-acceptance`.
 
-Zgoda A jest natywnym zatwierdzeniem środowiska GitHub `owner-acceptance`. Komentarz, reakcja, label i pole w opisie PR nie są tą zgodą. Dopiero ponownie sprawdzona zgoda może otworzyć merge do `integration`, i tylko gdy `AGENT_PIPELINE_MERGE_ENABLED=true` oraz preflight ochrony gałęzi jest aktualny.
+Flagi LIVE, poświadczenia GitHub App oraz konfiguracja rulesetów nadal pozostają osobnymi wymaganiami. Brak spełnionej ochrony i testów oznacza STOP, a nie obejście kontroli.
 
 ### Gate B — PRODUCTION APPROVAL
 
@@ -151,15 +144,15 @@ Przy flagach pozostawionych na false poniższe kroki są tylko zaimplementowane 
 - zamrożenie kontraktu i jeden task branch z `integration`
 - implementacja Cursora i jedna sesja poprawek
 - CI oraz review przypięte do pary commitów, kontraktu i `policy_sha`
-- prośba o zgodę A i osobna prośba o zgodę B
+- automatyczne scalenie A na podstawie CI + review, osobna prośba o zgodę B
 - klasyfikacja FRONTEND/BACKEND/FULLSTACK/OPERATIONS
 - wykrywanie migracji/L3
 - odczyt wyników przez orchestrator
 
 ## Co pozostaje ręczne z definicji
 
-Tylko decyzje właściciela, składane w GitHub Environments:
-- OWNER ACCEPTANCE — środowisko `owner-acceptance`
+Tylko decyzja o produkcji, składana w GitHub Environments:
 - PRODUCTION APPROVAL — środowisko `production-approval`
+- Dodatkowo właściciel zatwierdza nowe koszty i operacje nieodwracalne.
 
 Sekrety, GitHub App, ochrona gałęzi i budżety API są jednorazowym bootstrapem SC-OPS-002C, nie częścią codziennego przeklejania promptów.
