@@ -26,8 +26,8 @@ Do not require the owner to copy handoffs between agents.
 - normal task PRs target `integration`.
 - only a production promotion PR may target `main`.
 - promotion PR must be `integration -> main` by default.
-- **Proposed, currently inactive exception**: a separately reviewed and owner-approved `release/sales-mvp-intake-YYYYMMDD -> main` PR can carry only the five marketing files defined by `tools/agent-pipeline/lib/sales-release.mjs`. No billing, migrations, worker, secrets, database, payments or other product changes.
-- The exception may be activated only after review of the gate itself, independent reviewer PASS, hard GitHub branch protection, a protected `sales-production-approval` environment with the owner as required reviewer, and a separately approved governance rollout on `main`. PR description text alone never establishes owner authorization.
+- **Proposal only, NOT active**: selective `release/sales-mvp-intake-YYYYMMDD -> main` may be considered after a separately reviewed governance rollout. The offline checker `tools/agent-pipeline/lib/sales-release.mjs` only analyzes scope and ALWAYS denies Production authorization.
+- Current `main` classifier still denies all PR heads except `integration`. A future trusted production gate must be installed from the protected main revision, verify every commit and exact release scope, enforce owner acceptance and production approval as separate GitHub-origin attestations (not editable PR text), and fail closed if protection settings cannot be verified. Never use PR-supplied code as its own authorization gate. No billing, migrations, workers, secrets, database or payments belong to the limited sales-intake candidate.
 
 Do not merge task branches directly to `main` or use this exception before its production safeguards are verified.
 
