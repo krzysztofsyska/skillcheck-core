@@ -339,3 +339,40 @@ test('missing fix and timeout halt the loop', async () => {
   g.args.now = 8_000_000;
   assert.equal(await runFeedback(g.args), 'BLOCKED_TIMEOUT');
 });
+
+test('file-level Codex finding is actionable without a line number', async () => {
+  const f = fixture();
+  f.snapshot.comments[0].subject_type = 'file';
+  f.snapshot.comments[0].line = null;
+  assert.equal(await runFeedback(f.args), 'FIXING');
+  assert.equal(f.calls(), 1);
+});
+
+test('unchanged READY result does not write another state commit', async () => {
+  const f = fixture();
+  await runFeedback(f.args);
+  finishRepair(f);
+  await runFeedback(f.args);
+  f.snapshot.comments = [];
+  f.snapshot.reviews = [];
+  f.snapshot.reactions = [{ user: bot, content: '+1' }];
+  assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+  const revision = f.state();
+  assert.equal(await runFeedback({ ...f.args, store: {
+    ...f.args.store,
+    async save() { throw new Error('REDUNDANT_READY_WRITE'); },
+  } }), 'READY_FOR_OWNER');
+  assert.deepEqual(f.state(), revision);
+});
+
+test('Codex approval in the same GitHub second as request is accepted', () => {
+  const f = fixture();
+  f.snapshot.comments = [];
+  f.snapshot.reviews = [{ id: 101, user: bot, commit_id: A,
+    state: 'APPROVED', submitted_at: new Date(1000).toISOString() }];
+  const state = { version: 1,
+    configHash: planFeedback(f.binding, null, f.snapshot).state?.configHash,
+    rounds: 0, handled: [], phase: 'WAITING_REVIEW', head: A, base: B,
+    reviewCommentId: 200, reviewBaseline: [100], reviewRequestedAt: 1500 };
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 1600).state.phase, 'READY_FOR_OWNER');
+});
