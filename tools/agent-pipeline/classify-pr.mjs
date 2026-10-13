@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { isSalesReleaseBranch, validateSalesRelease } from './lib/sales-release.mjs';
 
 const PRODUCT_FRONTEND = /^(app\/(?!api\/)|components\/|public\/|styles\/).+|\.css$/;
 const PRODUCT_BACKEND = /^(app\/api\/|lib\/|supabase\/|scripts\/)/;
 const OPERATIONS = /^(tools\/agent-pipeline\/|tests\/agent-pipeline\/|\.github\/agent-pipeline\/|\.github\/workflows\/agent-|docs\/sc-ops-002|docs\/AGENT_PIPELINE\.md|docs\/AGENT_WORKFLOW\.md|AGENTS\.md|\.cursor\/rules\/skillcheck-agent-pipeline\.mdc)/;
 
-export function classify({ files, body, base, headRef }) {
+export function classify({ files, body, base, headRef, statuses = null, modes = null }) {
   const metadata = parseMetadata(body);
   const missing = ['TASK', 'SCOPE', 'LEVEL', 'OWNER_APPROVAL', 'PRODUCTION_APPROVAL', 'REVIEW_VERDICT', 'PROMOTION']
     .filter(field => !metadata[field]);
@@ -37,7 +38,12 @@ export function classify({ files, body, base, headRef }) {
   if (metadata.SCOPE !== detected) errors.push(`Declared SCOPE=${metadata.SCOPE} but changed files classify as ${detected}`);
   if ((database || security || operations) && metadata.LEVEL !== 'L3') errors.push('DB, security, or controller changes require LEVEL: L3');
   if (base === 'main' && (headRef !== 'integration' || metadata.PROMOTION !== 'YES')) {
-    errors.push('Only an integration -> main promotion may target main (approval is validated separately)');
+    if (isSalesReleaseBranch(headRef) || metadata.RELEASE_KIND === 'SALES_MVP_INTAKE') {
+      const policy = validateSalesRelease({ files, statuses, modes, base, headRef, metadata });
+      errors.push(...policy.errors);
+    } else {
+      errors.push('Only integration -> main or a separately approved, guarded sales intake release may target main');
+    }
   }
   return {
     ok: errors.length === 0,
@@ -61,13 +67,28 @@ function parseMetadata(body) {
 }
 
 function changedFiles(base) {
-  const diff = spawnSync('git', ['diff', '--name-only', `origin/${base}...HEAD`], { encoding: 'utf8' });
-  if (diff.status !== 0) {
-    const fallback = spawnSync('git', ['diff', '--name-only', `${base}...HEAD`], { encoding: 'utf8' });
-    if (fallback.status !== 0) throw new Error(diff.stderr || fallback.stderr);
-    return fallback.stdout.split('\n').filter(Boolean);
+  // -z + --no-renames exposes deleted source paths, odd filenames, type
+  // changes and symlink attempts rather than silently hiding rename sources.
+  const args = ['diff', '--no-renames', '--name-status', '-z', `origin/${base}...HEAD`];
+  let result = spawnSync('git', args, { encoding: 'utf8' });
+  if (result.status !== 0) {
+    result = spawnSync('git', ['diff', '--no-renames', '--name-status', '-z', `${base}...HEAD`], { encoding: 'utf8' });
   }
-  return diff.stdout.split('\n').filter(Boolean);
+  if (result.status !== 0) throw new Error('Cannot verify changed files: ' + result.stderr);
+  const parts = result.stdout.split('\0').filter(Boolean);
+  if (parts.length % 2 !== 0) throw new Error('Malformed git name-status output');
+  const files = [], statuses = [], modes = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    const status = parts[i], path = parts[i+1];
+    if (!/^[A-Z]+$/.test(status)) throw new Error('Unexpected git status: ' + status);
+    files.push(path);
+    statuses.push(status);
+    const out = spawnSync('git', ['ls-files', '--stage', '--', path], { encoding: 'utf8' });
+    if (out.status !== 0) throw new Error('Cannot verify file mode for ' + path);
+    const match = /^([0-9]{6}) [0-9a-f]{40,64} [0-9]+\t/.exec(out.stdout);
+    modes.push(match ? match[1] : null);
+  }
+  return { files, statuses, modes };
 }
 
 function main() {
@@ -78,11 +99,15 @@ function main() {
   };
   let body = '';
   let files = [];
+  let statuses = null;
+  let modes = null;
   let base = 'integration';
   let headRef = '';
   if (readArg('--body-file')) {
     body = readFileSync(readArg('--body-file'), 'utf8');
     files = readFileSync(readArg('--files-file'), 'utf8').split('\n').filter(Boolean);
+    if (readArg('--statuses-file')) statuses = readFileSync(readArg('--statuses-file'), 'utf8').split('\n').filter(Boolean);
+    if (readArg('--modes-file')) modes = readFileSync(readArg('--modes-file'), 'utf8').split('\n').filter(Boolean);
     base = readArg('--base') ?? base;
     headRef = readArg('--head') ?? '';
   } else if (process.env.GITHUB_EVENT_PATH) {
@@ -90,11 +115,11 @@ function main() {
     body = event.pull_request?.body ?? '';
     base = event.pull_request?.base?.ref ?? 'integration';
     headRef = event.pull_request?.head?.ref ?? '';
-    files = changedFiles(base);
+    ({ files, statuses, modes } = changedFiles(base));
   } else {
     throw new Error('Missing pull request event');
   }
-  const result = classify({ files, body, base, headRef });
+  const result = classify({ files, body, base, headRef, statuses, modes });
   if (!result.ok) {
     for (const error of result.errors) console.error(`::error::${error}`);
     process.exit(1);
