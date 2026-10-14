@@ -1,0 +1,34 @@
+name: SC012B offline persistence contract
+on:
+  pull_request:
+    paths:
+      - 'lib/voice/plan-persistence-contract.ts'
+      - 'tests/voice-plan-persistence-contract.test.mjs'
+      - 'lib/voice/screening-gap-selection.ts'
+      - 'tests/voice-screening-gap-selection.test.mjs'
+      - '.github/workflows/sc012b-persistence-contract-tests.yml'
+      - 'lib/voice/interview-plan.ts'
+      - 'lib/behavior-guide.ts'
+      - 'lib/position-fields.ts'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/voice/plan-persistence-contract.ts'
+      - 'tests/voice-plan-persistence-contract.test.mjs'
+      - 'lib/voice/screening-gap-selection.ts'
+      - 'tests/voice-screening-gap-selection.test.mjs'
+      - '.github/workflows/sc012b-persistence-contract-tests.yml'
+      - 'lib/voice/interview-plan.ts'
+      - 'lib/behavior-guide.ts'
+      - 'lib/position-fields.ts'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tests/voice-plan-persistence-contract.test.mjs tests/voice-screening-gap-selection.test.mjs
