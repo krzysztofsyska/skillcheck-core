@@ -92,6 +92,156 @@ begin
   return query select result_row.usage_id::uuid,result_row.created::boolean,result_row.warning::boolean;
 end $$;
 
+-- Shared settlement body. required_candidate null means the usage must stay
+-- unbound; a non-null value must match the stored tenant FK. Workers cannot
+-- call this helper directly.
+create function private.ai_gateway_apply_settlement(
+  target_company uuid,
+  target_request_key uuid,
+  required_candidate uuid,
+  new_cost_micro_usd bigint,
+  new_input_tokens bigint,
+  new_cached_input_tokens bigint,
+  new_output_tokens bigint,
+  new_provider_request_id text
+) returns boolean language plpgsql security definer set search_path = '' as $$
+declare
+  item public.ai_gateway_usage%rowtype;
+  linked_candidate uuid;
+begin
+  if new_cost_micro_usd is null or new_cost_micro_usd < 0
+    or new_input_tokens is null or new_input_tokens < 0
+    or new_cached_input_tokens is null or new_cached_input_tokens < 0
+    or new_cached_input_tokens > new_input_tokens
+    or new_output_tokens is null or new_output_tokens < 0
+    or length(coalesce(new_provider_request_id, '')) > 200
+  then raise exception 'SC021_INVALID_USAGE' using errcode = '22023'; end if;
+  perform 1 from public.ai_gateway_limits
+    where company_id = target_company for update;
+  if not found then raise exception 'SC021_BUDGET_UNCONFIGURED' using errcode = 'P0001'; end if;
+  select * into item from public.ai_gateway_usage
+    where company_id = target_company and request_key = target_request_key for update;
+  if not found then raise exception 'SC021_UNKNOWN_RESERVATION' using errcode = 'P0001'; end if;
+  select l.candidate_id into linked_candidate
+  from private.ai_gateway_candidate_links l
+  where l.company_id = item.company_id and l.usage_id = item.id;
+  if required_candidate is null then
+    if found then raise exception 'SC021_CANDIDATE_BINDING_REQUIRED' using errcode = '42501'; end if;
+  elsif not found or linked_candidate is distinct from required_candidate then
+    raise exception 'SC021_CANDIDATE_UNAVAILABLE' using errcode = 'PT404';
+  end if;
+  if item.status = 'settled' then
+    if item.actual_micro_usd <> new_cost_micro_usd
+      or item.input_tokens <> new_input_tokens
+      or item.cached_input_tokens <> new_cached_input_tokens
+      or item.output_tokens <> new_output_tokens
+      or item.provider_request_id is distinct from new_provider_request_id
+    then raise exception 'SC021_SETTLEMENT_CONFLICT' using errcode = '23505'; end if;
+    return false;
+  end if;
+  if item.status not in ('reserved','unknown') then
+    raise exception 'SC021_NOT_SETTLEABLE' using errcode = 'P0001';
+  end if;
+  update public.ai_gateway_usage set
+    actual_micro_usd = new_cost_micro_usd, input_tokens = new_input_tokens,
+    cached_input_tokens = new_cached_input_tokens, output_tokens = new_output_tokens,
+    provider_request_id = new_provider_request_id, status = 'settled', finalized_at = now()
+  where id = item.id;
+  return true;
+end $$;
+
+create function private.ai_gateway_apply_unknown(
+  target_company uuid, target_request_key uuid, required_candidate uuid
+) returns boolean language plpgsql security definer set search_path = '' as $$
+declare
+  item public.ai_gateway_usage%rowtype;
+  linked_candidate uuid;
+begin
+  select * into item from public.ai_gateway_usage
+    where company_id = target_company and request_key = target_request_key for update;
+  if not found then raise exception 'SC021_UNKNOWN_RESERVATION' using errcode = 'P0001'; end if;
+  select l.candidate_id into linked_candidate
+  from private.ai_gateway_candidate_links l
+  where l.company_id = item.company_id and l.usage_id = item.id;
+  if required_candidate is null then
+    if found then raise exception 'SC021_CANDIDATE_BINDING_REQUIRED' using errcode = '42501'; end if;
+  elsif not found or linked_candidate is distinct from required_candidate then
+    raise exception 'SC021_CANDIDATE_UNAVAILABLE' using errcode = 'PT404';
+  end if;
+  if item.status in ('settled','released') then return false; end if;
+  update public.ai_gateway_usage set status = 'unknown' where id = item.id;
+  return true;
+end $$;
+
+-- Generic worker settlement cannot close a candidate-linked call. The caller
+-- would otherwise choose any tenant's request key without the trusted FK.
+create or replace function public.ai_gateway_settle(
+  target_company uuid,
+  target_request_key uuid,
+  new_cost_micro_usd bigint,
+  new_input_tokens bigint,
+  new_cached_input_tokens bigint,
+  new_output_tokens bigint,
+  new_provider_request_id text
+) returns boolean language plpgsql security definer set search_path = '' as $$
+begin
+  return private.ai_gateway_apply_settlement(
+    target_company, target_request_key, null,
+    new_cost_micro_usd, new_input_tokens, new_cached_input_tokens,
+    new_output_tokens, new_provider_request_id
+  );
+end $$;
+
+create or replace function public.ai_gateway_mark_unknown(
+  target_company uuid, target_request_key uuid
+) returns boolean language plpgsql security definer set search_path = '' as $$
+begin
+  return private.ai_gateway_apply_unknown(target_company, target_request_key, null);
+end $$;
+
+create function private.ai_gateway_settle_candidate(
+  target_company uuid, target_candidate uuid, target_request_key uuid,
+  new_cost_micro_usd bigint, new_input_tokens bigint,
+  new_cached_input_tokens bigint, new_output_tokens bigint,
+  new_provider_request_id text
+) returns boolean language plpgsql security definer set search_path = '' as $$
+declare
+  candidate_company uuid;
+begin
+  if target_company is null or target_candidate is null or target_request_key is null then
+    raise exception 'SC021_CANDIDATE_UNAVAILABLE' using errcode = 'PT404';
+  end if;
+  perform private.erasure_lock_candidate(target_candidate);
+  select company_id into candidate_company from public.candidates where id = target_candidate;
+  if candidate_company is distinct from target_company then
+    raise exception 'SC021_CANDIDATE_UNAVAILABLE' using errcode = 'PT404';
+  end if;
+  return private.ai_gateway_apply_settlement(
+    target_company, target_request_key, target_candidate,
+    new_cost_micro_usd, new_input_tokens, new_cached_input_tokens,
+    new_output_tokens, new_provider_request_id
+  );
+end $$;
+
+create function private.ai_gateway_mark_unknown_candidate(
+  target_company uuid, target_candidate uuid, target_request_key uuid
+) returns boolean language plpgsql security definer set search_path = '' as $$
+declare
+  candidate_company uuid;
+begin
+  if target_company is null or target_candidate is null or target_request_key is null then
+    raise exception 'SC021_CANDIDATE_UNAVAILABLE' using errcode = 'PT404';
+  end if;
+  perform private.erasure_lock_candidate(target_candidate);
+  select company_id into candidate_company from public.candidates where id = target_candidate;
+  if candidate_company is distinct from target_company then
+    raise exception 'SC021_CANDIDATE_UNAVAILABLE' using errcode = 'PT404';
+  end if;
+  return private.ai_gateway_apply_unknown(
+    target_company, target_request_key, target_candidate
+  );
+end $$;
+
 -- Prepared exclusively for the SC-010 purge executor, never an ordinary worker
 -- or tenant. It REQUIRES an execution-scoped signed purge context in the SAME
 -- transaction. A detached cost remains in an anonymous company total, so
@@ -229,9 +379,24 @@ revoke all on function private.ai_gateway_reserve_candidate(
   from public,anon,authenticated;
 revoke all on function private.ai_gateway_detach_signed_purge(uuid)
   from public,anon,authenticated;
+revoke all on function private.ai_gateway_apply_settlement(
+  uuid,uuid,uuid,bigint,bigint,bigint,bigint,text)
+  from public,anon,authenticated,ai_meter_worker,screening_worker,erasure_purge_owner;
+revoke all on function private.ai_gateway_apply_unknown(uuid,uuid,uuid)
+  from public,anon,authenticated,ai_meter_worker,screening_worker,erasure_purge_owner;
+revoke all on function private.ai_gateway_settle_candidate(
+  uuid,uuid,uuid,bigint,bigint,bigint,bigint,text)
+  from public,anon,authenticated,screening_worker,erasure_purge_owner;
+revoke all on function private.ai_gateway_mark_unknown_candidate(uuid,uuid,uuid)
+  from public,anon,authenticated,screening_worker,erasure_purge_owner;
 grant usage on schema private to ai_meter_worker,erasure_purge_owner;
 grant execute on function private.ai_gateway_reserve_candidate(
   uuid,uuid,uuid,uuid,uuid,text,text,text,text,text,bigint)
+  to ai_meter_worker;
+grant execute on function private.ai_gateway_settle_candidate(
+  uuid,uuid,uuid,bigint,bigint,bigint,bigint,text)
+  to ai_meter_worker;
+grant execute on function private.ai_gateway_mark_unknown_candidate(uuid,uuid,uuid)
   to ai_meter_worker;
 grant execute on function private.ai_gateway_detach_signed_purge(uuid)
   to erasure_purge_owner;

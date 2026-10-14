@@ -147,10 +147,19 @@ test('SC-021-B/R5 staged inventory uses REAL SC-010-R4 graph and authoritative t
     [executionId],
   ),e=>e.code==='PT409');
 
-  await db.query(
+  // An open erasure execution freezes the candidate. Settlement must use the
+  // candidate-bound RPC, which refuses that lock, so release the execution
+  // only for the ledger close and restore it before the success-path scope check.
+  await db.query("update private.erasure_executions set phase='cancelled' where request_id=$1",[executionId]);
+  await assert.rejects(db.query(
     'select public.ai_gateway_settle($1,$2,90,250,0,80,$3)',
     [tenantA.companyId,a.id,'response-sc021-r5-test'],
+  ),e=>/SC021_CANDIDATE_BINDING_REQUIRED/.test(e.message));
+  await db.query(
+    'select private.ai_gateway_settle_candidate($1,$2,$3,90,250,0,80,$4)',
+    [tenantA.companyId,tenantA.candidate.id,a.id,'response-sc021-r5-test'],
   );
+  await db.query("update private.erasure_executions set phase='authorized' where request_id=$1",[executionId]);
   assert.equal((await db.query(
     'select private.ai_gateway_r5_assert_reconciled($1,$2::uuid[]) n',
     [tenantA.companyId,[tenantA.candidate.id]],
@@ -248,11 +257,24 @@ test('SC-021/SC-005 trusted lease-bound screening reservation derives tenant and
   const claimed=await h.claim(started); // trusted DB-generated lease in screening_worker claim
   assert.ok(claimed.lease_token);
   const rpc='select * from public.ai_gateway_reserve_screening_attempt('+
-    '$1::uuid,$2::text,$3::text,$4::uuid,$5::text,$6::text,$7::text,$8::text,$9::bigint)';
-  const requestKey=randomUUID();
+    '$1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text,$8::bigint)';
+  const signature=(await db.query(
+    "select pg_get_function_identity_arguments(p.oid) as args from pg_proc p "+
+    "join pg_namespace n on n.oid=p.pronamespace "+
+    "where n.nspname='public' and p.proname='ai_gateway_reserve_screening_attempt'",
+  )).rows;
+  assert.equal(signature.length,1);
+  assert.equal(signature[0].args,
+    'target_attempt uuid, target_lease_token text, target_input_fingerprint text, expected_provider text, expected_model text, expected_policy_version text, expected_price_version text, expected_micro_usd bigint');
+  await h.asAdmin();
+  const idempotencyKey=(await db.query(
+    'select idempotency_key from public.screening_analysis_attempts where id=$1',
+    [started.attempt_id],
+  )).rows[0].idempotency_key;
+  await h.asWorker();
   const args=[
     started.attempt_id,claimed.lease_token,claimed.input_fingerprint,
-    requestKey,claimed.provider,claimed.model,'test-policy-v1','test-pricing-v1',100,
+    claimed.provider,claimed.model,'test-policy-v1','test-pricing-v1',100,
   ];
   await assert.rejects(db.query(rpc,[
     ...args.slice(0,1),'wrong-token',...args.slice(2),
@@ -261,14 +283,18 @@ test('SC-021/SC-005 trusted lease-bound screening reservation derives tenant and
     ...args.slice(0,2),'wrong-fingerprint',...args.slice(3),
   ]),e=>e.code==='42501');
   await assert.rejects(db.query(rpc,[
-    ...args.slice(0,5),'different-provider-model',...args.slice(6),
+    ...args.slice(0,3),'different-provider',...args.slice(4),
   ]),e=>e.code==='42501');
 
   const first=(await db.query(rpc,args)).rows[0];
   assert.equal(first.created,true);
   assert.equal(first.company_id,a.companyId);
-  assert.equal(first.candidate_id,a.candidate.id);
-  assert.equal((await db.query(rpc,args)).rows[0].created,false);
+  assert.equal(first.request_key,idempotencyKey);
+  assert.equal('candidate_id' in first,false);
+  const replay=(await db.query(rpc,args)).rows[0];
+  assert.equal(replay.created,false);
+  assert.equal(replay.usage_id,first.usage_id);
+  assert.equal(replay.request_key,idempotencyKey);
   // A restricted worker must never read the private candidate identity
   // mapping table; inspect state solely as synthetic test DB administrator.
   await h.asAdmin();
@@ -276,20 +302,38 @@ test('SC-021/SC-005 trusted lease-bound screening reservation derives tenant and
     'select u.company_id,u.operation_id,u.process_id,u.request_key,l.candidate_id '+
       'from public.ai_gateway_usage u join private.ai_gateway_candidate_links l '+
       'on l.company_id=u.company_id and l.usage_id=u.id where u.request_key=$1',
-    [requestKey],
+    [idempotencyKey],
   )).rows[0];
   assert.equal(stored.company_id,a.companyId);
   assert.equal(stored.candidate_id,a.candidate.id);
   assert.equal(stored.operation_id,started.analysis_id);
   assert.equal(stored.process_id,a.recruitment.id);
+  assert.equal((await db.query(
+    'select count(*)::int n from public.ai_gateway_usage where company_id=$1',[a.companyId],
+  )).rows[0].n,1);
+  const binding=(await db.query(
+    'select company_id,request_key,usage_id from private.ai_gateway_screening_attempt_reservations where attempt_id=$1',
+    [started.attempt_id],
+  )).rows[0];
+  assert.equal(binding.company_id,a.companyId);
+  assert.equal(binding.request_key,idempotencyKey);
+  assert.equal(binding.usage_id,first.usage_id);
 
   await h.asWorker();
+  await assert.rejects(db.query(
+    'select * from private.ai_gateway_screening_attempt_reservations'),e=>e.code==='42501');
+  await assert.rejects(db.query(
+    'select * from public.ai_gateway_reserve(' +
+    '$1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::text,$6::text,' +
+    '$7::text,$8::text,$9::text,$10::text,$11::bigint)',
+    [a.companyId,randomUUID(),randomUUID(),null,null,'cv_screening',
+      'openai','synthetic-test-model','policy-test','price-test',5],
+  ),e=>e.code==='42501');
   await assert.rejects(db.query(rpc,[
-    ...args.slice(0,3),randomUUID(),...args.slice(4,5),
-    'wrong-model',...args.slice(6),
+    ...args.slice(0,4),'wrong-model',...args.slice(5),
   ]),e=>e.code==='42501');
   await assert.rejects(db.query(rpc,[
-    randomUUID(),...args.slice(1,3),randomUUID(),...args.slice(4),
+    randomUUID(),...args.slice(1),
   ]),e=>e.code==='42501');
 
   await h.asUser(a.owner);
@@ -301,4 +345,66 @@ test('SC-021/SC-005 trusted lease-bound screening reservation derives tenant and
 
   const leftovers=(await db.query('select count(*)::int n from public.ai_gateway_usage where company_id=$1',[b.companyId])).rows[0].n;
   assert.equal(leftovers,0);
+
+  // An application change that commits during reservation, after the first
+  // stale check and before the candidate lock is released, must roll the
+  // usage row back. The trigger fires inside reserve_candidate, while that
+  // lock is already held, and leaves attempt status as processing.
+  const fresh=await h.candidate({
+    owner:a.owner,companyId:a.companyId,position:a.position,recruitment:a.recruitment,
+  });
+  const staleStarted=await h.start(fresh);
+  const staleClaimed=await h.claim(staleStarted);
+  await h.asAdmin();
+  await db.exec(`
+    create function private.sc021_test_touch_application_on_usage()
+    returns trigger language plpgsql security definer set search_path='' as $fn$
+    begin
+      update public.applications set status=status
+      where id=(
+        select application_id from public.screening_analysis_versions
+        where id=new.operation_id and company_id=new.company_id
+      );
+      return new;
+    end $fn$;
+    create trigger sc021_test_stale_during_reserve
+    after insert on public.ai_gateway_usage
+    for each row execute function private.sc021_test_touch_application_on_usage();
+  `);
+  try {
+    await h.asWorker();
+    await assert.rejects(db.query(rpc,[
+      staleStarted.attempt_id,staleClaimed.lease_token,staleClaimed.input_fingerprint,
+      staleClaimed.provider,staleClaimed.model,'test-policy-v1','test-pricing-v1',100,
+    ]),e=>e.code==='42501' && /SC021_SCREENING_INPUT_STALE/.test(e.message));
+  } finally {
+    await h.asAdmin();
+    await db.exec('drop trigger sc021_test_stale_during_reserve on public.ai_gateway_usage');
+    await db.exec('drop function private.sc021_test_touch_application_on_usage()');
+  }
+  assert.equal((await db.query(
+    'select count(*)::int n from public.ai_gateway_usage where operation_id=$1',
+    [staleStarted.analysis_id],
+  )).rows[0].n,0);
+  assert.equal((await db.query(
+    'select count(*)::int n from private.ai_gateway_screening_attempt_reservations where attempt_id=$1',
+    [staleStarted.attempt_id],
+  )).rows[0].n,0);
+
+  const fresher=await h.candidate({
+    owner:a.owner,companyId:a.companyId,position:a.position,recruitment:a.recruitment,
+  });
+  const early=await h.start(fresher);
+  const earlyClaim=await h.claim(early);
+  await h.asAdmin();
+  await db.query('update public.applications set status=status where id=$1',[fresher.application.id]);
+  await h.asWorker();
+  await assert.rejects(db.query(rpc,[
+    early.attempt_id,earlyClaim.lease_token,earlyClaim.input_fingerprint,
+    earlyClaim.provider,earlyClaim.model,'test-policy-v1','test-pricing-v1',100,
+  ]),e=>e.code==='42501' && /SC021_SCREENING_CLAIM_INVALID/.test(e.message));
+  await h.asAdmin();
+  assert.equal((await db.query(
+    'select count(*)::int n from public.ai_gateway_usage where operation_id=$1',[early.analysis_id],
+  )).rows[0].n,0);
 });

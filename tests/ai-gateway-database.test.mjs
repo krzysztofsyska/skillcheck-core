@@ -151,7 +151,26 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     await assert.rejects(worker(candidateReserve,[idA,candidateB,randomUUID(),randomUUID(),
       null,'cv_screening','openai','pinned-v1','policy-v1','price-v1',10]),/SC021_CANDIDATE_UNAVAILABLE/);
     await assert.rejects(asTenant(idA,'select * from private.ai_gateway_candidate_links'),/permission denied/);
-    assert.equal((await worker(settleQuery,[idA,boundRequest,70,111,0,22,'resp_private']))[0].settled,true);
+    const candidateA2=randomUUID();
+    await db.query('insert into public.candidates(id,company_id) values($1,$2)',[candidateA2,idA]);
+    const settleCandidate='select private.ai_gateway_settle_candidate(' +
+      '$1::uuid,$2::uuid,$3::uuid,$4::bigint,$5::bigint,$6::bigint,$7::bigint,$8::text) as settled';
+    await assert.rejects(worker(settleQuery,[idA,boundRequest,70,111,0,22,'resp_private']),
+      /SC021_CANDIDATE_BINDING_REQUIRED/);
+    await assert.rejects(worker(settleCandidate,[idA,candidateA2,boundRequest,70,111,0,22,'resp_private']),
+      /SC021_CANDIDATE_UNAVAILABLE/);
+    assert.equal((await worker(settleCandidate,[idA,candidateA,boundRequest,70,111,0,22,'resp_private']))[0].settled,true);
+    const unknownRequest=randomUUID();
+    await worker(candidateReserve,[idA,candidateA2,unknownRequest,randomUUID(),null,'cv_screening',
+      'openai','pinned-v1','policy-v1','price-v1',10]);
+    await assert.rejects(worker('select public.ai_gateway_mark_unknown($1::uuid,$2::uuid) as marked',[idA,unknownRequest]),
+      /SC021_CANDIDATE_BINDING_REQUIRED/);
+    await assert.rejects(worker(
+      'select private.ai_gateway_mark_unknown_candidate($1::uuid,$2::uuid,$3::uuid) as marked',
+      [idA,candidateA,unknownRequest]),/SC021_CANDIDATE_UNAVAILABLE/);
+    assert.equal((await worker(
+      'select private.ai_gateway_mark_unknown_candidate($1::uuid,$2::uuid,$3::uuid) as marked',
+      [idA,candidateA2,unknownRequest]))[0].marked,true);
 
     const purgeRequest=randomUUID();
     await db.query('insert into private.erasure_executions(request_id,company_id,candidate_ids) values ($1,$2,$3::uuid[])',

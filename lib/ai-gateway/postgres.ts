@@ -65,10 +65,7 @@ export function postgresCandidateAiLedger(
   if (!uuid.test(trustedCandidateId)) {
     throw new Error('SC021_INVALID_TRUSTED_CANDIDATE');
   }
-  // Settlement and unknown reconciliation use the same worker-only ledger.
-  const base = postgresAiLedger(query);
   return {
-    ...base,
     async reserve(input): Promise<Reservation> {
       if (input.candidatePseudonym !== null) {
         throw new Error('SC021_UNTRUSTED_CANDIDATE_IDENTIFIER');
@@ -88,6 +85,27 @@ export function postgresCandidateAiLedger(
         throw new Error('SC021_LEDGER_INVALID_RESPONSE');
       }
       return { usageId: row.usage_id, created: row.created, warning: row.warning };
+    },
+    async settle(input) {
+      const row = rowOf(await query(
+        'select private.ai_gateway_settle_candidate(' +
+          '$1::uuid,$2::uuid,$3::uuid,$4::bigint,$5::bigint,$6::bigint,$7::bigint,$8::text) as settled',
+        [
+          input.companyId, trustedCandidateId, input.requestKey, input.costMicroUsd,
+          input.usage.inputTokens, input.usage.cachedInputTokens, input.usage.outputTokens,
+          input.providerRequestId,
+        ],
+      ));
+      if (typeof row.settled !== 'boolean') throw new Error('SC021_LEDGER_INVALID_RESPONSE');
+      return row.settled;
+    },
+    async markUnknown(input) {
+      const row = rowOf(await query(
+        'select private.ai_gateway_mark_unknown_candidate($1::uuid,$2::uuid,$3::uuid) as marked',
+        [input.companyId, trustedCandidateId, input.requestKey],
+      ));
+      if (typeof row.marked !== 'boolean') throw new Error('SC021_LEDGER_INVALID_RESPONSE');
+      return row.marked;
     },
   };
 }

@@ -340,9 +340,9 @@ test('SC-021/R5 candidate ledger binds every attempt to trusted candidate and no
     if (sql.includes('ai_gateway_reserve_candidate')) {
       return [{usage_id:ctx.requestKey,created:true,warning:false}];
     }
-    if (sql.includes('ai_gateway_settle')) return [{settled:true}];
-    if (sql.includes('ai_gateway_mark_unknown')) return [{marked:true}];
-    throw Error('GENERIC_RESERVATION_MUST_NOT_BE_CALLED');
+    if (sql.includes('private.ai_gateway_settle_candidate')) return [{settled:true}];
+    if (sql.includes('private.ai_gateway_mark_unknown_candidate')) return [{marked:true}];
+    throw Error('GENERIC_LEDGER_MUST_NOT_BE_CALLED');
   };
   const ledger=postgresCandidateAiLedger(query,candidateId);
   const reservation=await ledger.reserve({
@@ -369,4 +369,14 @@ test('SC-021/R5 candidate ledger binds every attempt to trusted candidate and no
     companyId:ctx.companyId,requestKey:ctx.requestKey,costMicroUsd:42,
     usage,providerRequestId:'synthetic',
   }),true);
+  assert.match(calls[1].sql,/private\.ai_gateway_settle_candidate/);
+  assert.equal(calls[1].values[1],candidateId);
+  assert.equal(calls[1].values[0],ctx.companyId);
+  assert.equal(calls[1].values[2],ctx.requestKey);
+  assert.equal(await ledger.markUnknown({
+    companyId:ctx.companyId,requestKey:ctx.requestKey,
+  }),true);
+  assert.match(calls[2].sql,/private\.ai_gateway_mark_unknown_candidate/);
+  assert.deepEqual(calls[2].values,[ctx.companyId,candidateId,ctx.requestKey]);
+  assert.ok(calls.every(call=>!call.sql.includes('public.ai_gateway_')));
 });
