@@ -44,8 +44,16 @@ begin
      not in ('read committed','read uncommitted') then
     raise exception using errcode='PT409',message='VOICE_PLAN_REQUIRES_READ_COMMITTED';
   end if;
+  -- chr(11) is vertical tab. PostgreSQL E'\v' is not that character, and
+  -- POSIX [[:space:]] does not cover the Unicode separators translated above.
   clean_reason := nullif(pg_catalog.btrim(pg_catalog.translate(
-    p_reason, unicode_spaces, pg_catalog.repeat(' ', 19)), E' \t\n\r\f\v'), '');
+    p_reason, unicode_spaces, pg_catalog.repeat(' ', 19)),
+    ' '||pg_catalog.chr(9)||pg_catalog.chr(10)||pg_catalog.chr(11)
+      ||pg_catalog.chr(12)||pg_catalog.chr(13)), '');
+  if clean_reason is not null and nullif(pg_catalog.regexp_replace(
+       clean_reason,'[[:space:]]','','g'),'') is null then
+    clean_reason := null;
+  end if;
   if actor is null or p_plan_id is null or p_request_key is null
      or p_expected_review_version is null or p_expected_review_version<0
      or p_expected_source_hash is null
