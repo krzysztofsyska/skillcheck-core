@@ -41,6 +41,7 @@ jobs:
       - run: npm run test:cv
       - run: npm run test:screening
       - run: node --test tests/sc-019-billing-prototype.test.mjs
+      - run: node --experimental-strip-types --test tests/sc-019-package-display.test.mjs
       - run: node --test tests/sc-019-billing-concurrency.test.mjs
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres

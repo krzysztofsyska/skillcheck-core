@@ -16,6 +16,20 @@ values ('FREE',5),('PRESELEKCJA',60);
 revoke all on private.sc19_package_policy from public,anon,authenticated;
 alter table private.sc19_package_policy enable row level security;
 
+-- Audit clock for operator credit changes. Uses private.touch_updated_at()
+-- from 20260930000100_skillcheck_core.sql and does not redefine it.
+-- A caller-supplied updated_at is overwritten, so the stamp cannot be backdated.
+do $$
+begin
+  if to_regprocedure('private.touch_updated_at()') is null then
+    raise exception 'sc19_missing_touch_updated_at' using errcode = '55000';
+  end if;
+end
+$$;
+create trigger touch_updated_at
+  before update on private.sc19_package_policy
+  for each row execute function private.touch_updated_at();
+
 create table private.sc19_balances (
   company_id uuid primary key references public.companies(id) on delete restrict,
   plan text not null check(plan in ('FREE','PRESELEKCJA')),
@@ -142,6 +156,19 @@ end;
 $$;
 revoke all on function public.sc19_get_balance(uuid) from public, anon, authenticated;
 grant execute on function public.sc19_get_balance(uuid) to authenticated;
+
+-- Canonical customer-facing package sizes. Plan and credits only: no balances,
+-- NIP, journal, settlement references, or proof data. The private table stays
+-- revoked. anon serves the public offer; authenticated serves the billing panel.
+create function public.sc19_package_sizes()
+returns table(plan text, credits integer)
+language sql stable security definer set search_path = '' as $$
+  select policy.plan, policy.credits
+  from private.sc19_package_policy policy
+  order by policy.plan;
+$$;
+revoke all on function public.sc19_package_sizes() from public, anon, authenticated;
+grant execute on function public.sc19_package_sizes() to anon, authenticated;
 
 
 -- MANUAL PAID FULFILLMENT ONLY: call from trusted admin SQL after confirming

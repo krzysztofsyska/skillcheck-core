@@ -42,6 +42,10 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Podobne CV\. Różni ludzie\. Zupełnie inne wyniki w pracy\./);
   assert.match(home, /Cztery poziomy\. Jedna platforma\./);
   assert.match(home, /Cena robocza z wizualizacji/);
+  assert.match(home, /Liczba analiz CV według zatwierdzonej polityki/);
+  assert.equal(home.includes('5 analiz CV'), false);
+  assert.equal(home.includes('60 analiz CV'), false);
+  assert.equal(home.includes('5–6'), false);
   assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
   for (const href of ['/demo', '/register', '/login', '/#jak-to-dziala', '/#mozliwosci', '/#pakiety', '/#faq']) {

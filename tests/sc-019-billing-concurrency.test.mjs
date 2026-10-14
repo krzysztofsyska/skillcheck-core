@@ -66,6 +66,14 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
       returns boolean language sql stable security definer set search_path='' as $$
       select private.is_company_owner(cid)
     $$;
+    create function private.touch_updated_at()
+      returns trigger language plpgsql set search_path='' as $$
+      begin
+        new.updated_at := now();
+        return new;
+      end;
+      $$;
+    revoke all on function private.touch_updated_at() from public, anon, authenticated;
   `);
   await db.query('insert into public.companies values($1,$2)',[company,owner]);
   await db.query(await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql',import.meta.url),'utf8'));

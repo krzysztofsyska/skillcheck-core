@@ -45,6 +45,14 @@ async function setup() {
           and (not write_access or role='recruiter')
         )
       $$;
+    create function private.touch_updated_at()
+      returns trigger language plpgsql set search_path='' as $$
+      begin
+        new.updated_at := now();
+        return new;
+      end;
+      $$;
+    revoke all on function private.touch_updated_at() from public, anon, authenticated;
     insert into public.companies(id,owner_id) values
       ('${companyA}','${ownerA}'),('${companyB}','${ownerB}');
     insert into public.company_members(company_id,user_id,role) values
@@ -171,12 +179,41 @@ test('SC-019 prototype: completed analyses cannot be refunded or reopened; faile
 test('SC-019 operator policy: configurable trial and paid credits, no browser policy reads',async t=>{
   const h=await setup();t.after(()=>h.db.close());
   await h.admin();
-  await h.db.exec("update private.sc19_package_policy set credits=3 where plan='FREE'");
-  await h.db.exec("update private.sc19_package_policy set credits=12 where plan='PRESELEKCJA'");
+  const trigger=(await h.db.query(`select pg_get_triggerdef(t.oid) as definition
+    from pg_trigger t
+    where t.tgrelid='private.sc19_package_policy'::regclass and not t.tgisinternal`)).rows;
+  assert.equal(trigger.length,1);
+  assert.match(trigger[0].definition,/touch_updated_at/);
+  const privileges=await h.db.query(`select
+    has_function_privilege('anon','public.sc19_package_sizes()','execute') as anon_execute,
+    has_function_privilege('authenticated','public.sc19_package_sizes()','execute') as user_execute,
+    has_table_privilege('anon','private.sc19_package_policy','select') as anon_table,
+    has_table_privilege('authenticated','private.sc19_package_policy','select') as user_table,
+    has_table_privilege('anon','private.sc19_package_policy','update') as anon_update`);
+  assert.deepEqual(privileges.rows[0],{
+    anon_execute:true,user_execute:true,anon_table:false,user_table:false,anon_update:false,
+  });
+  await h.as(null,'anon');
+  assert.deepEqual((await h.db.query('select * from public.sc19_package_sizes() order by plan')).rows,[
+    {plan:'FREE',credits:5},{plan:'PRESELEKCJA',credits:60},
+  ]);
+  await assert.rejects(h.db.query('select * from private.sc19_package_policy'),e=>e.code==='42501');
+  await h.admin();
+  await h.db.exec("update private.sc19_package_policy set credits=3, updated_at='1999-01-01T00:00:00Z' where plan='FREE'");
+  await h.db.exec("update private.sc19_package_policy set credits=12, updated_at='1999-01-01T00:00:00Z' where plan='PRESELEKCJA'");
+  const policy=(await h.db.query('select plan,credits,updated_at from private.sc19_package_policy order by plan')).rows;
+  assert.deepEqual(policy.map(row=>[row.plan,row.credits]),[['FREE',3],['PRESELEKCJA',12]]);
+  for (const row of policy) {
+    const stamp=row.updated_at instanceof Date ? row.updated_at.getTime() : Date.parse(row.updated_at);
+    assert.ok(stamp>Date.parse('1999-01-01T00:00:00Z'), `${row.plan} updated_at did not advance`);
+  }
   const tax=nip('123456321');
   await h.db.query('insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,$2,$3)',[companyA,tax,'verified-policy-change']);
   await h.as(ownerA);
   await assert.rejects(h.db.query('select * from private.sc19_package_policy'),e=>e.code==='42501');
+  assert.deepEqual((await h.db.query('select * from public.sc19_package_sizes() order by plan')).rows,[
+    {plan:'FREE',credits:3},{plan:'PRESELEKCJA',credits:12},
+  ]);
   assert.equal((await h.db.query('select public.sc19_claim_trial($1,$2) as remaining',[companyA,tax])).rows[0].remaining,3);
   assert.equal((await h.balance(companyA)).available,3);
   await h.admin();
