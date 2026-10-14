@@ -3,7 +3,8 @@
  * NOT a public API, write authorization, or production release gate.
  */
 import { isDeepStrictEqual } from "node:util";
-import { createVoicePlanWriteSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
+import { buildBehaviorGuide } from "../behavior-guide.ts";
+import { canonicalVoiceSourceSnapshot, createVoicePlanWriteSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
 import { selectReviewedScreeningGaps } from "./screening-gap-selection.ts";
 import type { InterviewSource } from "./interview-plan.ts";
 import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest} from "./template-registry.ts";
@@ -14,11 +15,16 @@ export type SourceSelector=Readonly<{
   companyId:string;applicationId:string;analysisId:string;reviewId:string;shortlistEntryId:string;
 }>;
 export class TrustedSourceError extends Error {
-  readonly code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID";
-  constructor(code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"){
+  readonly code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"|"CONFLICT";
+  constructor(code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"|"CONFLICT"){
     super("VOICE_TRUSTED_SOURCE_"+code);
     this.code=code;
   }
+}
+const concurrencySqlState=new Set(["55P03","40001","40P01"]);
+function isConcurrencyConflict(e:unknown){
+  return !!e&&typeof e==="object"&&"code" in e&&
+    concurrencySqlState.has(String((e as {code:unknown}).code));
 }
 const fail=(c:TrustedSourceError["code"]):never=>{throw new TrustedSourceError(c);};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -68,7 +74,7 @@ async function reconstructLocked(
       "a.id as analysis_id,a.input_fingerprint,a.analysis_contract_hash,",
       "a.criteria_snapshot,a.latest_review_version,a.execution_status,a.stale_at,",
       "r.id as review_id,r.review_version,r.disposition,",
-      "s.id as shortlist_entry_id,s.removed_at",
+      "s.id as shortlist_entry_id,s.removed_at,s.ranking_policy_version",
       "from public.applications ap",
       "join public.recruitments rec on rec.company_id=ap.company_id and rec.id=ap.recruitment_id",
       "join public.positions pos on pos.company_id=rec.company_id and pos.id=rec.position_id",
@@ -93,6 +99,17 @@ async function reconstructLocked(
       "order by analysis_version desc limit 1",
     ].join(" "),[s.companyId,s.applicationId])).rows);
     if(newest.id!==s.analysisId)fail("STALE");
+    const pinnedPolicy=only((await db.query([
+      "select version from private.screening_ranking_policies",
+      "where version=$1 for share nowait",
+    ].join(" "),[h.ranking_policy_version])).rows);
+    if(pinnedPolicy.version!==h.ranking_policy_version)fail("STALE");
+    const listed=(await db.query([
+      "select ranking_policy_version,policy_current",
+      "from public.get_recruitment_shortlist($1,false) where entry_id=$2",
+    ].join(" "),[h.recruitment_id,s.shortlistEntryId])).rows;
+    if(listed.length!==1||listed[0].policy_current!==true||
+       listed[0].ranking_policy_version!==h.ranking_policy_version)fail("STALE");
     const criteria=h.criteria_snapshot;
     if(!Array.isArray(criteria)||criteria.length<2||criteria.length>90)fail("INVALID");
     const approvedCriteria=criteria.map((c:Row)=>({id:c?.id,kind:c?.kind}));
@@ -141,21 +158,43 @@ async function reconstructLocked(
        result.maximumSeconds!==template.maximumSeconds||
        result.recordingAllowed!==template.recordingAllowed||
        result.noticeRequired!==template.noticeRequired)fail("TEMPLATE_CHANGED");
-    for(const q of result.questions){
-      if(q.kind==="common"){
-        const allowed=template.behaviorQuestionTexts.find(x=>x.id===q.criterionId);
-        if(!allowed||q.text!==allowed.firstQuestion||
-           q.followUps.length!==1||q.followUps[0]!==template.commonFollowUp)
-          fail("TEMPLATE_CHANGED");
-      }else{
-        const allowed=template.clarificationQuestionTexts[
-          q.criterionKind as keyof typeof template.clarificationQuestionTexts];
-        if(!allowed||q.text!==allowed||q.followUps.length!==1||
-           !template.clarificationFollowUps.includes(q.followUps[0] as
-             typeof template.clarificationFollowUps[number]))
-          fail("TEMPLATE_CHANGED");
-      }
-    }
+    const guide=buildBehaviorGuide(source.position.requiredBehaviors);
+    const ranks=template.behaviorLevelRank;
+    if(guide.unrecognizedRequirements.length||guide.areas.some(area=>
+       !area.requiredLevel||!Object.prototype.hasOwnProperty.call(ranks,area.requiredLevel)))
+      fail("INVALID");
+    const expectedCommon=[...guide.areas].sort((a,b)=>
+      ranks[b.requiredLevel as keyof typeof ranks]-ranks[a.requiredLevel as keyof typeof ranks]||
+      guide.areas.indexOf(a)-guide.areas.indexOf(b)).slice(0,template.questionRules.commonCount);
+    const clarifications=result.questions.filter(q=>q.kind==="clarification");
+    if(expectedCommon.length!==template.questionRules.commonCount||
+       result.questions.length!==expectedCommon.length+clarifications.length||
+       clarifications.length!==gaps.length||
+       clarifications.length>template.questionRules.maxClarificationCount)fail("TEMPLATE_CHANGED");
+    expectedCommon.forEach((area,i)=>{
+      const q=result.questions[i];
+      const allowed=template.behaviorQuestionTexts.find(x=>x.id===area.id);
+      if(!q||q.kind!=="common"||!allowed||q.criterionId!==area.id||
+         q.criterionKind!=="behavior"||
+         q.id!==template.questionRules.commonIdPrefix+area.id||
+         q.text!==allowed.firstQuestion||q.maxSeconds!==template.questionRules.commonMaxSeconds||
+         q.followUps.length!==1||q.followUps[0]!==template.commonFollowUp)
+        fail("TEMPLATE_CHANGED");
+    });
+    clarifications.forEach((q,i)=>{
+      const gap=gaps[i];
+      const allowed=template.clarificationQuestionTexts[
+        gap.kind as keyof typeof template.clarificationQuestionTexts];
+      const followIndex=template.clarificationFollowUpByReason[
+        gap.reason as keyof typeof template.clarificationFollowUpByReason];
+      const followUp=template.clarificationFollowUps[followIndex];
+      if(!allowed||followUp===undefined||q.criterionId!==gap.criterionId||
+         q.criterionKind!==gap.kind||
+         q.id!==template.questionRules.clarificationIdPrefix+gap.criterionId.replace(":","-")||
+         q.text!==allowed||q.maxSeconds!==template.questionRules.clarificationMaxSeconds||
+         q.followUps.length!==1||q.followUps[0]!==followUp)
+        fail("TEMPLATE_CHANGED");
+    });
     return result;
 }
 async function withReadTransaction<T>(db:SqlClient,work:()=>Promise<T>):Promise<T>{
@@ -164,7 +203,12 @@ async function withReadTransaction<T>(db:SqlClient,work:()=>Promise<T>):Promise<
     const result=await work();
     await db.query("commit");
     return result;
-  }catch(e){await db.query("rollback");throw e;}
+  }catch(e){
+    try{await db.query("rollback");}catch{/* transaction already closed */}
+    if(e instanceof TrustedSourceError)throw e;
+    if(isConcurrencyConflict(e))throw new TrustedSourceError("CONFLICT");
+    throw e;
+  }
 }
 export async function reconstructTrustedVoiceSource(
   db:SqlClient,s:SourceSelector,
@@ -178,7 +222,7 @@ export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
   return withReadTransaction(db,async()=>{
     const p=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
-      "shortlist_entry_id,source_hash,envelope_hash,template_version,plan_envelope",
+      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope",
       "from public.voice_plan_versions where id=$1",
     ].join(" "),[planId])).rows);
     // Match SC-006 screening lock order before application/plan row locks.
@@ -188,7 +232,7 @@ export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
       [p.company_id+":"+p.application_id]);
     const locked=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
-      "shortlist_entry_id,source_hash,envelope_hash,template_version,plan_envelope",
+      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope",
       "from public.voice_plan_versions where id=$1 for share nowait",
     ].join(" "),[planId])).rows);
     if(!isDeepStrictEqual(locked,p))fail("STALE");
@@ -200,6 +244,8 @@ export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
     });
     if(p.source_hash!==rebuilt.sourceHash||
        p.envelope_hash!==rebuilt.planContractHash||
+       !isDeepStrictEqual(p.source_snapshot,canonicalVoiceSourceSnapshot(
+         rebuilt.sourceBinding,rebuilt.planSourceFingerprint))||
        !isDeepStrictEqual(p.plan_envelope,rebuilt))
       fail("STALE");
     return rebuilt;

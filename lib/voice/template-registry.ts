@@ -25,6 +25,22 @@ const v1=Object.freeze({
     "W dokumentach informacje dotyczące tego kryterium są niespójne. Jaki był rzeczywisty zakres Pani lub Pana pracy?",
     "Jaki był Pani lub Pana rzeczywisty zakres działania i rezultat?",
   ]),
+  /** Digested with the manifest so generator drift changes the catalog digest. */
+  questionRules:Object.freeze({
+    commonCount:4,
+    maxClarificationCount:2,
+    commonMaxSeconds:60,
+    clarificationMaxSeconds:45,
+    commonIdPrefix:"common-",
+    clarificationIdPrefix:"clarification-",
+    order:"required-level-desc-then-guide-order-then-gap-order",
+  }),
+  behaviorLevelRank:Object.freeze({
+    Krytyczny:4,Wysoki:3,Standardowy:2,Niski:1,
+  }),
+  clarificationFollowUpByReason:Object.freeze({
+    contradiction:0,missing_evidence:1,scope_unverified:1,
+  }),
 });
 const registry=Object.freeze({"skillcheck-voice-plan-v1":v1});
 export type VoiceTemplateVersion=keyof typeof registry;

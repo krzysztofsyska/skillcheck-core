@@ -8,7 +8,7 @@ STATUS: REVIEW_PENDING | OWNER_APPROVAL: PENDING | PRODUCTION_APPROVAL: NO
 
 `reconstructTrustedVoiceSource` reads tenant-scoped application, recruitment, position, completed current screening analysis, latest human review, active human shortlist, complete approved criteria and criterion results, and review overrides. It uses a PostgreSQL transaction, application advisory lock and row-level `FOR SHARE NOWAIT` locks. Tenant actor is derived from `auth.uid()`, not a browser-supplied role or company. Only owner/recruiter may access the trusted source.
 
-The function re-derives interview questions through the pinned, deterministic `skillcheck-voice-plan-v1` generator, then calculates the canonical source and question hashes using the offline SC-012-B contract. It does not use CV text, phone numbers, arbitrary provider responses or browser-provided source assertions. The `verifyStoredVoicePlan` preflight rejects mismatched stored hash/envelope or unknown template version.
+The function re-derives interview questions through the pinned, deterministic `skillcheck-voice-plan-v1` generator, then calculates the canonical source and question hashes using the offline SC-012-B contract. It does not use CV text, phone numbers, arbitrary provider responses or browser-provided source assertions. The `verifyStoredVoicePlan` preflight rejects a mismatched stored hash, envelope, envelope digest, or `source_snapshot`. Question text, follow-ups, durations, ids and selection order are compared with the digested template manifest. Shortlist currency comes from `get_recruitment_shortlist.policy_current` under the same transaction locks. `55P03`, `40001` and `40P01` become `VOICE_TRUSTED_SOURCE_CONFLICT`.
 
 ## Explicit remaining gates
 

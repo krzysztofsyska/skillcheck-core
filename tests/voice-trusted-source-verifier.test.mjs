@@ -7,6 +7,7 @@ import {parse} from "pg-connection-string";
 import {setupRankingDatabase,users} from "./helpers/screening-ranking-fixture.mjs";
 import {behaviorGuideDefinitions} from "../lib/behavior-guide.ts";
 import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest} from "../lib/voice/template-registry.ts";
+import {canonicalVoiceSourceSnapshot} from "../lib/voice/plan-persistence-contract.ts";
 import {
   reconstructTrustedVoiceSource,verifyStoredVoicePlan,TrustedSourceError,
 } from "../lib/voice/trusted-source-verifier.ts";
@@ -52,18 +53,43 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
  assert.equal(expected.recordingAllowed,false);
  assert.equal(expected.noticeRequired,true);
  assert.ok(expected.questions.length>=4&&expected.questions.length<=6);
+ assert.equal(expected.questions.filter(q=>q.kind==="common").length,4);
+ assert.ok(expected.questions.filter(q=>q.kind==="common").every(q=>q.maxSeconds===60));
+ assert.ok(expected.questions.filter(q=>q.kind==="clarification").every(q=>q.maxSeconds===45));
  assert.equal(expected.sourceBinding.analysisId,f.analysis_id);
  assert.ok(expected.questions.every(q=>!q.text.includes("PRIVATE")));
- const plan=(await db.query([
-  "insert into public.voice_plan_versions",
-  "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
-  "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
-  "template_version,created_by,retention_policy_version,retention_deadline)",
-  "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,'{}'::jsonb,$10::jsonb,",
-  "'skillcheck-voice-plan-v1',$11,'synthetic-v1','2030-01-01') returning id"
- ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
-  f.analysis_id,f.reviewId,shortlist,expected.sourceHash,expected.planContractHash,
-  JSON.stringify(expected),users.owner])).rows[0].id;
+ const sourceSnapshot=canonicalVoiceSourceSnapshot(
+   expected.sourceBinding,expected.planSourceFingerprint);
+ const insertPlan=async snapshot=>{
+  const row=await db.query([
+   "insert into public.voice_plan_versions",
+   "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+   "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+   "template_version,created_by,retention_policy_version,retention_deadline)",
+   "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
+   "'skillcheck-voice-plan-v1',$12,'synthetic-v1','2030-01-01') returning id"
+  ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
+   f.analysis_id,f.reviewId,shortlist,expected.sourceHash,expected.planContractHash,
+   JSON.stringify(snapshot),JSON.stringify(expected),users.owner]);
+  return row.rows[0].id;
+ };
+ const replacePlan=async()=>{
+  await db.query("alter table public.voice_plan_versions disable trigger voice_plan_versions_immutable");
+  await db.query("delete from public.voice_plan_versions where company_id=$1 and application_id=$2",
+    [f.companyId,f.application.id]);
+  await db.query("alter table public.voice_plan_versions enable trigger voice_plan_versions_immutable");
+ };
+ await t.test("empty or overbroad source snapshot cannot verify",async()=>{
+  const empty=await insertPlan({});
+  await assert.rejects(verifyStoredVoicePlan(db,empty),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await replacePlan();
+  const leaked=await insertPlan({...sourceSnapshot,cvText:"PRIVATE original CV"});
+  await assert.rejects(verifyStoredVoicePlan(db,leaked),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await replacePlan();
+ });
+ const plan=await insertPlan(sourceSnapshot);
  await t.test("canonical saved envelope verifies with unchanged source",async()=>{
   const result=await verifyStoredVoicePlan(db,plan);
   assert.deepEqual(result.questions,expected.questions);
@@ -103,6 +129,36 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
   await assert.rejects(reconstructTrustedVoiceSource(db,fake),
     e=>e instanceof TrustedSourceError&&e.code==="STALE");
  });
+ await t.test("obsolete ranking policy invalidates an otherwise active shortlist",async()=>{
+  await db.query(`insert into private.screening_ranking_policies
+    (version,min_coverage,below_points,meets_points,above_points,min_target_size,max_target_size,default_target_size)
+    values ('screening-ranking-v2',0.60,0,60,100,5,10,10)`);
+  const original=(await db.query(`select pg_get_functiondef(p.oid) as definition from pg_proc p
+    join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname='get_recruitment_shortlist'`)).rows[0].definition;
+  assert.match(original,/screening-ranking-v1/);
+  await db.query(original.replaceAll("screening-ranking-v1","screening-ranking-v2"));
+  await assert.rejects(reconstructTrustedVoiceSource(db,selector),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await assert.rejects(verifyStoredVoicePlan(db,plan),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await db.query(original);
+  assert.equal((await reconstructTrustedVoiceSource(db,selector)).sourceHash,expected.sourceHash);
+ });
+ await t.test("row lock contention returns a domain conflict",async()=>{
+  const other=new Client(config(dbName));
+  await other.connect();
+  try{
+   await other.query("begin");
+   await other.query("select id from public.companies where id=$1 for update",[f.companyId]);
+   await assert.rejects(reconstructTrustedVoiceSource(db,selector),
+     e=>e instanceof TrustedSourceError&&e.code==="CONFLICT");
+  }finally{
+   await other.query("rollback");
+   await other.end();
+  }
+  assert.equal((await reconstructTrustedVoiceSource(db,selector)).sourceHash,expected.sourceHash);
+ });
  await t.test("position revision invalidates the saved plan",async()=>{
   await db.query("update public.positions set title='New analyst role' where id=$1",[f.position.id]);
   await assert.rejects(verifyStoredVoicePlan(db,plan),
@@ -113,6 +169,14 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
 test("SC-012-B template registry only permits explicitly versioned, pinned templates",()=>{
  const template=getTrustedVoiceTemplate("skillcheck-voice-plan-v1");
  assert.equal(template.recordingAllowed,false);
+ assert.equal(template.questionRules.commonCount,4);
+ assert.equal(template.questionRules.commonMaxSeconds,60);
+ assert.equal(template.questionRules.clarificationMaxSeconds,45);
+ assert.equal(template.questionRules.maxClarificationCount,2);
+ assert.equal(template.behaviorLevelRank.Wysoki,3);
+ assert.deepEqual(template.clarificationFollowUpByReason,{
+   contradiction:0,missing_evidence:1,scope_unverified:1,
+ });
  assert.match(trustedVoiceTemplateDigest("skillcheck-voice-plan-v1"),/^[a-f0-9]{64}$/);
  assert.throws(()=>getTrustedVoiceTemplate("skillcheck-voice-plan-v2"),/VOICE_TEMPLATE_UNSUPPORTED/);
  assert.ok(Object.isFrozen(template));
