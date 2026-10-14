@@ -70,7 +70,8 @@ export function verifyRepair(binding, state, snapshot) {
   for (const c of proof.commits) {
     const changed = Array.isArray(c.files) ? c.files.flatMap(file => [file?.filename, file?.previous_filename].filter(Boolean)) : null;
     // The net pull diff hides an out-of-scope commit that a later commit reverted.
-    // GitHub omits files when a commit exceeds 300 paths, so a missing list is not proof.
+    // readSnapshot supplies files only after every commit-file page is proven.
+    // A missing list, including a commit GitHub truncates past 300 paths, is not proof.
     if (!sha(c.sha) || c.parents?.length !== 1 || c.parents[0].sha !== parent
         || c.committer?.id !== binding.cursorCommitter.id || c.committer?.login !== binding.cursorCommitter.login
         || c.committer?.type !== 'Bot' || c.commit?.verification?.verified !== true

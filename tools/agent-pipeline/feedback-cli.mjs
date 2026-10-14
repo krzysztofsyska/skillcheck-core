@@ -54,6 +54,27 @@ export async function verifyFeedbackProtection(github, appId, policy = {}) {
       || branches.branch_policies[0].type !== 'branch') throw new Error('CONTROL_ENVIRONMENT_UNPROTECTED');
 }
 
+// GitHub's commit endpoint returns 30 files unless per_page is set, and never
+// more than 100 on one page. A full page is not the end of the list. At 300
+// paths GitHub omits the remainder, so three full pages are not proof either.
+async function readRepairCommit(github, root, sha) {
+  const files = [];
+  let commit = null;
+  for (let page = 1; page <= 3; page++) {
+    const body = await github.request(`${root}/commits/${sha}?per_page=100&page=${page}`);
+    if (body?.sha !== sha || !Array.isArray(body.files) || body.files.length > 100) {
+      return { ...(commit ?? { sha }), files: null };
+    }
+    if (!commit) {
+      commit = { ...body };
+      delete commit.files;
+    }
+    files.push(...body.files);
+    if (body.files.length < 100) return { ...commit, files };
+  }
+  return { ...commit, files: null };
+}
+
 export async function readSnapshot(github, cursor, binding, state) {
   const root = `/repos/${REPOSITORY}`;
   async function pages(path) {
@@ -82,7 +103,7 @@ export async function readSnapshot(github, cursor, binding, state) {
     const complete = comparison.status === 'ahead' && comparison.base_commit?.sha === state.repairHead
       && Number.isInteger(comparison.total_commits) && comparison.total_commits > 0 && comparison.total_commits <= 100
       && comparison.commits?.length === comparison.total_commits;
-    const commits = complete ? await Promise.all(comparison.commits.map(c => github.request(`${root}/commits/${c.sha}`))) : [];
+    const commits = complete ? await Promise.all(comparison.commits.map(c => readRepairCommit(github, root, c.sha))) : [];
     repair = { base: state.repairHead, head: pull.head.sha, status: comparison.status, complete, commits };
   }
   return {

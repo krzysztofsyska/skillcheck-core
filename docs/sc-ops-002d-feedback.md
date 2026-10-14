@@ -68,6 +68,9 @@ return the complete linear commit suffix from the reserved head to the new head
 Unrelated, unsigned, mixed-author or incomplete evidence stops at BLOCKED_PROVENANCE.
 Every commit in that suffix must also carry GitHub's complete file list, and every
 path it records, including a rename source, must be inside the binding allowlist.
+The commit endpoint pages that list, 30 files by default and 100 at most. The
+adapter requests `per_page=100` and continues until a short page. A full last
+page, a missing page, or 300 or more paths is not a complete list.
 A later revert does not erase an earlier out-of-scope commit. The repository's
 Checks workflow runs on push only for `main` and `integration`; pull requests still
 run it. This does not recall a push that already happened and does not control a

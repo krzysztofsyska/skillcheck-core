@@ -344,7 +344,7 @@ test('snapshot fetches immutable GitHub commit proof and detects truncated compa
       if (path.endsWith(`/compare/${A}...${C}?per_page=100`)) return {
         status: 'ahead', base_commit: { sha: A }, total_commits: truncated ? 101 : 1, commits: [{ sha: C }],
       };
-      if (path.endsWith(`/commits/${C}`)) return f.snapshot.repair.commits[0];
+      if (path === `/repos/krzysztofsyska/skillcheck-core/commits/${C}?per_page=100&page=1`) return f.snapshot.repair.commits[0];
       if (path.includes('/compare/')) return { status: 'ahead' };
       return [];
     },
@@ -352,11 +352,66 @@ test('snapshot fetches immutable GitHub commit proof and detects truncated compa
   const cursor = { getAgent: async () => f.snapshot.agent, getRun: async () => f.snapshot.run };
   const s = await readSnapshot(github, cursor, f.binding, f.state());
   assert.deepEqual(s.repair, f.snapshot.repair);
-  assert.ok(requests.some(p => p.endsWith(`/commits/${C}`)));
+  assert.ok(requests.some(p => p.endsWith(`/commits/${C}?per_page=100&page=1`)));
   truncated = true; requests.length = 0;
   const t = await readSnapshot(github, cursor, f.binding, f.state());
   assert.equal(t.repair.complete, false);
   assert.equal(requests.some(p => p.includes('/commits/')), false);
+});
+
+test('repair commit file pages are combined and an unproven list cannot certify scope', async () => {
+  const f = fixture(); await runFeedback(f.args); finishRepair(f);
+  const commit = f.snapshot.repair.commits[0];
+  const root = `/repos/krzysztofsyska/skillcheck-core/commits/${C}`;
+  const requests = [];
+  let catalog = [];
+  const github = {
+    readPull: async () => f.snapshot.pull, readChangedFiles: async () => ['docs/test.md'],
+    readProjection: async () => ({ tasks: {} }),
+    request: async path => {
+      requests.push(path);
+      if (path.endsWith(`/compare/${A}...${C}?per_page=100`)) return {
+        status: 'ahead', base_commit: { sha: A }, total_commits: 1, commits: [{ sha: C }],
+      };
+      if (path.includes('/compare/')) return { status: 'ahead' };
+      if (!path.includes(`/commits/${C}?`)) return [];
+      const page = Number(new URL(path, 'https://example.test').searchParams.get('page'));
+      const perPage = Number(new URL(path, 'https://example.test').searchParams.get('per_page'));
+      // An unpaginated read receives only GitHub's default first page.
+      const size = perPage === 100 ? 100 : 30;
+      const files = Number.isInteger(page) && page > 0 ? catalog.slice((page - 1) * size, page * size) : catalog.slice(0, 30);
+      return { ...commit, files };
+    },
+  };
+  const cursor = { getAgent: async () => f.snapshot.agent, getRun: async () => f.snapshot.run };
+  const allowlisted = count => Array.from({ length: count }, () => ({ filename: 'docs/test.md' }));
+  function phaseFor(repair) {
+    const snapshot = { ...f.snapshot, files: ['docs/test.md'], repair };
+    return planFeedback(f.binding, f.state(), snapshot, 100).state.phase;
+  }
+  catalog = [...allowlisted(30), { filename: 'supabase/migrations/evil.sql' }];
+  const hiddenDefault = await readSnapshot(github, cursor, f.binding, f.state());
+  assert.equal(hiddenDefault.repair.commits[0].files.some(file => file.filename === 'supabase/migrations/evil.sql'), true);
+  assert.equal(phaseFor(hiddenDefault.repair), 'BLOCKED_PROVENANCE');
+
+  catalog = [...allowlisted(100), { filename: 'lib/secret.ts' }];
+  requests.length = 0;
+  const hiddenSecond = await readSnapshot(github, cursor, f.binding, f.state());
+  assert.ok(requests.includes(`${root}?per_page=100&page=2`));
+  assert.equal(hiddenSecond.repair.commits[0].files.some(file => file.filename === 'lib/secret.ts'), true);
+  assert.equal(phaseFor(hiddenSecond.repair), 'BLOCKED_PROVENANCE');
+
+  catalog = allowlisted(300);
+  const unproven = await readSnapshot(github, cursor, f.binding, f.state());
+  assert.equal(unproven.repair.commits[0].files, null);
+  assert.equal(phaseFor(unproven.repair), 'BLOCKED_PROVENANCE');
+
+  catalog = allowlisted(100);
+  requests.length = 0;
+  const proven = await readSnapshot(github, cursor, f.binding, f.state());
+  assert.ok(requests.includes(`${root}?per_page=100&page=2`));
+  assert.equal(proven.repair.commits[0].files.length, 100);
+  assert.equal(phaseFor(proven.repair), 'REVIEW_PENDING');
 });
 
 test('missing fix and timeout halt the loop', async () => {
