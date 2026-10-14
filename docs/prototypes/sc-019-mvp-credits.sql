@@ -230,6 +230,9 @@ begin
     -- Same reconciliation as claim_screening_attempt: a pending or processing
     -- attempt cannot stay active after this cancellation, or the worker can
     -- no longer record token and cost metadata for the refunded credit.
+    -- The analysis row is already locked by the statement that set stale_at.
+    -- The company row is locked above, and the attempt row is locked here.
+    -- claim_screening_attempt uses that same order when it is installed.
     -- The isolated billing fixture has no attempts table.
     if to_regclass('public.screening_analysis_attempts') is not null then
       update public.screening_analysis_attempts
@@ -301,6 +304,126 @@ create trigger sc19_analysis_bill after insert on public.screening_analysis_vers
 create trigger sc19_analysis_reconcile after update of execution_status, stale_at
   on public.screening_analysis_versions
   for each row execute function private.sc19_reconcile_analysis();
+
+-- The installed worker claim locks its attempt before the analysis. A stale
+-- update already holds the analysis row and then locks the attempt, so those
+-- two orders deadlock. Replace the claim with the reviewed body and the
+-- analysis, company, attempt, candidate order. The minimal billing fixture has
+-- no claim function, so this step does nothing there.
+do $sc19_claim_lock$
+begin
+  if to_regprocedure('public.claim_screening_attempt(uuid)') is null
+     or to_regprocedure('private.erasure_lock_candidate(uuid)') is null then
+    return;
+  end if;
+create or replace function public.claim_screening_attempt(target_attempt uuid)
+returns table (
+  analysis_id uuid,
+  attempt_id uuid,
+  lease_token text,
+  lease_expires_at timestamptz,
+  input_fingerprint text,
+  analysis_contract_hash text,
+  payload_schema_version integer,
+  result_schema_version integer,
+  prompt_version text,
+  provider text,
+  model text,
+  model_revision text,
+  input_cv_text_snapshot text,
+  criteria_snapshot jsonb
+) language plpgsql security definer set search_path = '' as $$
+declare
+  attempt public.screening_analysis_attempts%rowtype;
+  analysis public.screening_analysis_versions%rowtype;
+  stale_reason text;
+  raw_token text;
+  expires_at timestamptz;
+  target_analysis uuid;
+  target_company uuid;
+  target_candidate uuid;
+begin
+  -- Reviewed claim body, with the lock order changed to match a stale
+  -- cancellation: analysis row, company, attempt, then candidate. Locking the
+  -- attempt first deadlocks with sc19_reconcile_analysis.
+  -- The return column analysis_id is in scope, so this lookup is dynamic SQL.
+  execute $claim_locate$
+    select t.analysis_id, t.company_id, a.candidate_id
+    from public.screening_analysis_attempts t
+    join public.screening_analysis_versions v
+      on v.id = t.analysis_id and v.company_id = t.company_id
+    join public.applications a
+      on a.id = v.application_id and a.company_id = v.company_id
+    where t.id = $1
+  $claim_locate$
+  into target_analysis, target_company, target_candidate
+  using target_attempt;
+  if target_analysis is null or target_company is null or target_candidate is null then
+    raise exception 'Attempt unavailable' using errcode = '42501';
+  end if;
+  select * into analysis from public.screening_analysis_versions
+    where id = target_analysis and company_id = target_company for update;
+  if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  perform private.sc19_lock_company(target_company);
+  select * into attempt from public.screening_analysis_attempts
+    where id = target_attempt for update;
+  if not found
+     or attempt.analysis_id is distinct from target_analysis
+     or attempt.company_id is distinct from target_company then
+    raise exception 'Attempt unavailable' using errcode = '42501';
+  end if;
+  perform private.erasure_lock_candidate(target_candidate);
+  if attempt.status <> 'pending'
+    and not (attempt.status = 'processing' and attempt.lease_expires_at <= clock_timestamp())
+    then raise exception 'Attempt is not claimable' using errcode = '55000'; end if;
+
+  stale_reason := private.screening_stale_reason(analysis.id);
+  if stale_reason is not null then
+    update public.screening_analysis_attempts
+      set status = 'abandoned', finished_at = clock_timestamp()
+      where id = attempt.id;
+    update public.screening_analysis_versions
+      set execution_status = 'cancelled',
+        stale_at = coalesce(stale_at, clock_timestamp()),
+        stale_reason = coalesce(screening_analysis_versions.stale_reason, stale_reason),
+        updated_at = clock_timestamp()
+      where id = analysis.id;
+    return;
+  end if;
+
+  raw_token := replace(gen_random_uuid()::text, '-', '')
+    || replace(gen_random_uuid()::text, '-', '');
+  expires_at := clock_timestamp() + interval '5 minutes';
+  update public.screening_analysis_attempts
+    set status = 'processing',
+      lease_token_hash = private.screening_hash(raw_token),
+      lease_expires_at = expires_at,
+      started_at = coalesce(started_at, clock_timestamp())
+    where id = attempt.id;
+  update public.screening_analysis_versions
+    set execution_status = 'processing',
+      processing_started_at = coalesce(processing_started_at, clock_timestamp()),
+      updated_at = clock_timestamp()
+    where id = analysis.id;
+  return query select
+    analysis.id,
+    attempt.id,
+    raw_token,
+    expires_at,
+    analysis.input_fingerprint,
+    analysis.analysis_contract_hash,
+    analysis.payload_schema_version,
+    analysis.result_schema_version,
+    analysis.prompt_version,
+    analysis.provider,
+    analysis.model,
+    analysis.model_revision,
+    analysis.input_cv_text_snapshot,
+    analysis.criteria_snapshot;
+end;
+$$;
+end
+$sc19_claim_lock$;
 
 -- When SC-010 is already installed, publish the next immutable inventory baseline
 -- in this same transaction. Billing rows are company accounting: analysis_id is an

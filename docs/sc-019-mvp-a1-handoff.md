@@ -1,7 +1,7 @@
 # SC-019-MVP A1 — SAFE BILLING CORE PROTOTYPE
 
 TASK: #91 / SC-019-MVP
-STATUS: FIXING — Codex P1 findings on ca6eef3 repaired in the prototype; independent repeat review still pending
+STATUS: FIXING — Codex P1 on 2aff83b (stale/claim lock order) repaired in the prototype; independent repeat review still pending
 BASE: integration
 SCOPE: FREE (5 analyses) + PRESELEKCJA prepaid (60 analyses)
 PRICING: 299 PLN is only a proposed initial commercial price; do NOT charge or publish it as approved.
@@ -66,6 +66,12 @@ The repeat review was not a PASS. This prototype now:
 - abandons a pending or processing `screening_analysis_attempts` row in the same transaction that cancels a newly stale analysis, matching `claim_screening_attempt`, before the reservation is released
 - checks in the R5 schema signature `e764d74f5563805185807c6a37b5e08659771f2e8534c76df3651c9ea46ea7d9`, generated from the clean migration chain plus this prototype on both PGlite and PostgreSQL 16
 - installs the preview, purge-manifest, retention-authorization, and retention-schedule bodies from that reviewed source with the baseline relation renamed to R5, and refuses install when the stored R4 signature, the live signature, or the relation inventory differs
+
+No file was added under `supabase/migrations`. Payments and production activation stay off.
+
+## Codex finding on 2aff83b
+
+The repeat review was not a PASS. The stale cancellation already holds the analysis row and then locks the attempt. The installed `claim_screening_attempt` locked the attempt first, so the two paths could deadlock. When that function is present, the prototype replaces it with the reviewed body and locks the analysis row, the company row, the attempt, and then the candidate. A PostgreSQL 16 test races the worker claim against the stale update eight times with `deadlock_timeout=100ms` and requires the analysis to end cancelled, the attempt abandoned, and the balance restored.
 
 No file was added under `supabase/migrations`. Payments and production activation stay off.
 

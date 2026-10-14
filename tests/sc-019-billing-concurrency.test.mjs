@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import pg from 'pg';
+import { setupRankingDatabase } from './helpers/screening-ranking-fixture.mjs';
 
 const urlText=process.env.SC19_TEST_DATABASE_URL;
 const owner='00000000-0000-4000-8000-000000000001';
@@ -108,4 +109,80 @@ assertion('SC-019: actual PostgreSQL last-credit race and same-settlement idempo
     assert.equal(Number((await db.query('select available from private.sc19_balances where company_id=$1',[company])).rows[0].available),available);
   }
   assert.equal(Number((await db.query("select count(*)::int as n from private.sc19_credit_journal where reason='paid_grant' and company_id=$1",[company])).rows[0].n),13);
+});
+
+assertion('SC-019: stale cancellation does not deadlock a worker claim', async t => {
+  const u = new URL(urlText);
+  if (!['127.0.0.1', 'localhost', '::1'].includes(u.hostname) || u.pathname !== '/postgres') {
+    throw Error('SC19_TEST_DATABASE_URL must point to disposable loopback postgres service; refusing remote databases');
+  }
+  const database = 'sc19claim_' + randomBytes(6).toString('hex');
+  const root = new pg.Client({ connectionString: urlText });
+  await root.connect();
+  const clients = [];
+  t.after(async () => {
+    await Promise.allSettled(clients.map(c => c.end()));
+    await root.query(`drop database if exists "${database}" with (force)`).catch(() => {});
+    await root.end();
+  });
+  await root.query(`create database "${database}"`);
+  const connect = async () => {
+    const isolatedUrl = new URL(urlText);
+    isolatedUrl.pathname = `/${database}`;
+    const c = new pg.Client({ connectionString: isolatedUrl.toString() });
+    await c.connect();
+    try {
+      const actual = (await c.query('select current_database() as name')).rows[0].name;
+      if (actual !== database) throw Error('SC-019 test connected to wrong database; refusing SQL');
+    } catch (error) {
+      await c.end();
+      throw error;
+    }
+    clients.push(c);
+    return c;
+  };
+  const db = await connect();
+  db.exec = sql => db.query(sql);
+  const harness = await setupRankingDatabase(db);
+  await harness.asAdmin();
+  await db.query(await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql', import.meta.url), 'utf8'));
+  const fixture = await harness.seed();
+  await harness.asAdmin();
+  await db.query('select private.sc19_grant_paid($1,$2)', [fixture.companyId, 'claim-stale-race-01']);
+  const worker = await connect();
+  const marker = await connect();
+  for (const client of [worker, marker]) {
+    await client.query("set deadlock_timeout = '100ms'");
+    await client.query("set statement_timeout = '5s'");
+  }
+  await worker.query('set role screening_worker');
+  for (let n = 0; n < 8; n++) {
+    const started = await harness.start(fixture);
+    await harness.asAdmin();
+    const raced = await Promise.allSettled([
+      worker.query('select * from public.claim_screening_attempt($1)', [started.attempt_id]),
+      marker.query(
+        `update public.screening_analysis_versions
+           set stale_at = clock_timestamp(), stale_reason = 'manual_invalidation'
+         where id = $1`,
+        [started.analysis_id],
+      ),
+    ]);
+    for (const item of raced) {
+      if (item.status === 'rejected') assert.notEqual(item.reason.code, '40P01');
+    }
+    assert.equal(raced[1].status, 'fulfilled');
+    if (raced[0].status === 'rejected') assert.equal(raced[0].reason.code, '55000');
+    const after = (await db.query(`
+      select analysis.execution_status, attempt.status, attempt.finished_at, balance.available
+      from public.screening_analysis_versions analysis
+      join public.screening_analysis_attempts attempt on attempt.id = $2
+      join private.sc19_balances balance on balance.company_id = analysis.company_id
+      where analysis.id = $1
+    `, [started.analysis_id, started.attempt_id])).rows[0];
+    assert.equal(after.execution_status, 'cancelled');
+    assert.equal(after.status, 'abandoned');
+    assert.ok(after.finished_at);
+    assert.equal(Number(after.available), 60);
+  }
 });
