@@ -46,4 +46,16 @@ Implemented on this branch:
 
 **Still blocked:** the stored source hash is not recomputed from the *entire current* trusted source and versioned template catalog. Therefore the function MUST remain ungranted to browser/client roles and unpromoted to a production migration. Further two-session revocation/source-change tests and complete lock graph proof are required. These changes must pass current-head CI and fresh independent Codex review; no merge authorization is implied.
 
+## October 14 — remaining Codex findings on `8698f67`
+
+Skipped as already implemented on this branch before this pass: latest screening review, actor membership lock, shortlist lock, cross-application request-key serialization, terminal `requires_changes`, NULL decision, ASCII whitespace, and latest-plan rejection under read committed. The trusted source/template reconstruction P1 stays blocked; no template catalog exists in this isolated candidate and no EXECUTE grant is added.
+
+Implemented in this pass:
+- idempotent replay after actor revalidation and before mutable freshness, release, shortlist and screening gates;
+- `lock_not_available` from `FOR SHARE NOWAIT` translated to `PT409` / `VOICE_PLAN_SOURCE_BUSY` with no in-transaction retry;
+- explicit Unicode space normalization (including U+00A0 and U+202F) before the human-readable reason check;
+- `private.erasure_lock_candidate` after the company lock and before a new review write, so a frozen candidate cannot append history;
+- rejection of repeatable read and serializable callers with `VOICE_PLAN_REQUIRES_READ_COMMITTED`;
+- removal of the unrelated Vercel deployment policy commit. That policy already belongs to merged PR #110 on `integration`.
+
 The existing `private.sc012b_review_plan` is a test-only candidate in `db/isolated`; not a production RPC. No Supabase Production change, no real candidates, no outbound calls.

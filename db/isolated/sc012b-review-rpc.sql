@@ -1,8 +1,9 @@
 -- SC-012-B first executable DB operation: isolated review RPC candidate.
 -- NOT a Supabase migration, NOT exposed to public Data API, NOT production-ready.
 -- Must be installed after db/prototypes/sc012b-plan-schema.sql in a disposable PG DB.
--- Future work: complete actor-membership row lock order, trusted template source
--- and retention erasure before promotion to production migration.
+-- Future work before any EXECUTE grant: recompute the source fingerprint from
+-- locked authoritative rows and a trusted versioned template catalog, then
+-- retention erasure. This function stays revoked from client roles until then.
 create or replace function private.sc012b_review_plan(
   p_plan_id uuid,
   p_expected_review_version bigint,
@@ -21,18 +22,37 @@ declare
   bound_review_version integer;
   analysis_latest_version integer;
   current_plan uuid;
+  candidate uuid;
   prior_key record;
   result_id uuid;
   request_digest text;
-  clean_reason text := nullif(pg_catalog.btrim(p_reason, E' \t\n\r\f\v'),'');
+  -- POSIX [[:space:]] misses these separators under the C/POSIX locale used in CI.
+  unicode_spaces text := pg_catalog.chr(160)||pg_catalog.chr(5760)
+    ||pg_catalog.chr(8192)||pg_catalog.chr(8193)||pg_catalog.chr(8194)
+    ||pg_catalog.chr(8195)||pg_catalog.chr(8196)||pg_catalog.chr(8197)
+    ||pg_catalog.chr(8198)||pg_catalog.chr(8199)||pg_catalog.chr(8200)
+    ||pg_catalog.chr(8201)||pg_catalog.chr(8202)
+    ||pg_catalog.chr(8232)||pg_catalog.chr(8233)||pg_catalog.chr(8239)
+    ||pg_catalog.chr(8287)||pg_catalog.chr(12288)||pg_catalog.chr(65279);
+  clean_reason text;
 begin
+  -- PostgREST cannot upgrade isolation inside the function. Repeatable read
+  -- and serializable snapshots taken before the application advisory lock hide
+  -- committed successors and releases, so freshness decisions require read
+  -- committed (read uncommitted is the same snapshot rule in PostgreSQL).
+  if pg_catalog.current_setting('transaction_isolation')
+     not in ('read committed','read uncommitted') then
+    raise exception using errcode='PT409',message='VOICE_PLAN_REQUIRES_READ_COMMITTED';
+  end if;
+  clean_reason := nullif(pg_catalog.btrim(pg_catalog.translate(
+    p_reason, unicode_spaces, pg_catalog.repeat(' ', 19)), E' \t\n\r\f\v'), '');
   if actor is null or p_plan_id is null or p_request_key is null
      or p_expected_review_version is null or p_expected_review_version<0
      or p_expected_source_hash is null
      or p_expected_source_hash !~ '^[0-9a-f]{64}$'
      or p_decision is null or p_decision not in ('approved','requires_changes')
      or (p_decision='requires_changes' and
-         (clean_reason is null or nullif(pg_catalog.regexp_replace(clean_reason,'[[:space:]]','','g'),'') is null or pg_catalog.char_length(clean_reason)>1000))
+         (clean_reason is null or pg_catalog.char_length(clean_reason)>1000))
      or (p_reason is not null and pg_catalog.char_length(p_reason)>1000)
   then raise exception using errcode='22023',message='VOICE_PLAN_INVALID_REVIEW'; end if;
 
@@ -68,6 +88,38 @@ begin
   -- looking up the global (company,actor,operation,key) uniqueness scope.
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(plan.company_id::text||':'||actor::text||':review:'||p_request_key::text,0));
+
+  -- Replay a committed result before mutable freshness gates. A client that
+  -- lost the first response must recover it after the plan is superseded,
+  -- released, removed from the shortlist, or invalidated by a newer screening
+  -- review. Membership was revalidated above; a changed payload still conflicts.
+  request_digest:=pg_catalog.encode(pg_catalog.sha256(
+    pg_catalog.convert_to(pg_catalog.jsonb_build_object(
+      'plan',p_plan_id,'expectedVersion',p_expected_review_version,
+      'source',p_expected_source_hash,'decision',p_decision,
+      'reason',clean_reason)::text,'UTF8')),'hex');
+  select k.payload_hash,k.result_id into prior_key
+  from private.voice_plan_request_keys k
+  where k.company_id=plan.company_id and k.actor_id=actor
+    and k.operation='review' and k.request_key=p_request_key for update;
+  if found then
+    if prior_key.payload_hash is distinct from request_digest or
+       prior_key.result_id is null then
+      raise exception using errcode='PT409',message='VOICE_PLAN_REQUEST_CONFLICT';
+    end if;
+    return prior_key.result_id;
+  end if;
+
+  -- Company row is already locked above, matching erasure's company-then-candidate
+  -- order. Screening and communication mutations use this same candidate lock
+  -- to reject frozen workflows before appending history.
+  select a.candidate_id into candidate from public.applications a
+    where a.id=plan.application_id and a.company_id=plan.company_id;
+  if not found or candidate is null then
+    raise exception using errcode='PT409',message='VOICE_PLAN_STALE';
+  end if;
+  perform private.erasure_lock_candidate(candidate);
+
   perform 1 from public.voice_plan_versions p
     where p.id=p_plan_id and p.company_id=plan.company_id
       and p.application_id=plan.application_id for share nowait;
@@ -112,23 +164,6 @@ begin
     raise exception using errcode='PT409',message='VOICE_PLAN_ALREADY_RELEASED';
   end if;
 
-  request_digest:=pg_catalog.encode(pg_catalog.sha256(
-    pg_catalog.convert_to(pg_catalog.jsonb_build_object(
-      'plan',p_plan_id,'expectedVersion',p_expected_review_version,
-      'source',p_expected_source_hash,'decision',p_decision,
-      'reason',clean_reason)::text,'UTF8')),'hex');
-
-  select k.payload_hash,k.result_id into prior_key
-  from private.voice_plan_request_keys k
-  where k.company_id=plan.company_id and k.actor_id=actor
-    and k.operation='review' and k.request_key=p_request_key for update;
-  if found then
-    if prior_key.payload_hash is distinct from request_digest or
-       prior_key.result_id is null then
-      raise exception using errcode='PT409',message='VOICE_PLAN_REQUEST_CONFLICT';
-    end if;
-    return prior_key.result_id;
-  end if;
   select id,review_version,decision into last_review
     from private.voice_plan_review_entries
     where company_id=plan.company_id and plan_id=p_plan_id
@@ -154,6 +189,9 @@ begin
     p.retention_policy_version,p.retention_deadline
   from public.voice_plan_versions p where p.id=p_plan_id;
   return result_id;
+exception
+  when lock_not_available then
+    raise exception using errcode='PT409',message='VOICE_PLAN_SOURCE_BUSY';
 end;
 $$;
 -- No browser/anonymous grant: this is a candidate for a future trusted
