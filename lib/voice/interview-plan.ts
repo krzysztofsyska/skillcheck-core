@@ -56,6 +56,7 @@ const levels: Readonly<Record<string, number>> = Object.freeze({
 /** OFFLINE-only capability: cloned objects may never assert human review. */
 const generatedInProcess = new WeakSet<object>();
 const reviewedInProcess = new WeakSet<object>();
+const releasedInProcess = new WeakSet<object>();
 const gapQuestionText = Object.freeze({
   task: "Proszę opisać konkretne zadanie, które wykonywał Pan lub wykonywała Pani osobiście, i jego rezultat.",
   kpi: "Proszę podać konkretny przykład mierzenia wyniku swojej pracy i działania na podstawie tego miernika.",
@@ -184,5 +185,16 @@ export function releaseInterviewPlan(
   const released = immutable({ ...plan, status: "released", revision: 3,
     releasedBy: input.releasedBy, releasedAt: input.releasedAt });
   reviewedInProcess.delete(plan);
+  releasedInProcess.add(released);
   return released;
+}
+
+/** Provenance proof for the OFFLINE compiler only. This is NOT database
+ * authorization or permission to contact a person. It cannot survive a
+ * server restart; the production worker must re-check source/revision in DB. */
+export function isAuthenticallyReleasedInterviewPlan(value: unknown): value is InterviewPlan {
+  return !!value && typeof value === "object" &&
+    releasedInProcess.has(value) &&
+    (value as InterviewPlan).status === "released" &&
+    (value as InterviewPlan).revision === 3;
 }
