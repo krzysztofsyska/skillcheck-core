@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join,dirname } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync,spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { inspectSalesReleaseGit,REVIEWED_SALES_BLOBS } from '../../tools/agent-pipeline/lib/sales-release-verified.mjs';
 
 const filenames=Object.keys(REVIEWED_SALES_BLOBS);
+const releaseBranch='release/sales-mvp-intake-20261013';
+const releaseRef='refs/heads/'+releaseBranch;
+const inspector=fileURLToPath(new URL('../../tools/agent-pipeline/lib/sales-release-verified.mjs',import.meta.url));
 function git(cwd,...args) {
   return execFileSync('git',args,{cwd,encoding:'utf8'}).trim();
 }
@@ -37,7 +41,9 @@ function setup(paths=filenames, content=reviewedContent) {
     git(cwd,'commit','-q','-m','reviewed '+path);
     expected[path]=git(cwd,'rev-parse','HEAD:'+path);
   }
-  return {cwd,baseSha,headSha:git(cwd,'rev-parse','HEAD'),expected};
+  const headSha=git(cwd,'rev-parse','HEAD');
+  git(cwd,'update-ref',releaseRef,headSha);
+  return {cwd,baseSha,headSha,expected};
 }
 test('actual five-file Git history and pinned blobs are checked; no production permission',()=>{
   const f=setup();
@@ -46,7 +52,52 @@ test('actual five-file Git history and pinned blobs are checked; no production p
     assert.equal(r.ok,true,JSON.stringify(r.errors));
     assert.equal(r.authorizedForProduction,false);
     assert.deepEqual(f.expected,REVIEWED_SALES_BLOBS,'fixture bytes must match reviewed content');
+    assert.notEqual(git(f.cwd,'branch','--show-current'),releaseBranch);
+    assert.equal(git(f.cwd,'rev-parse',releaseRef+'^{commit}'),f.headSha);
     assert.equal(inspectSalesReleaseGit({cwd:f.cwd,baseSha:f.baseSha,headSha:f.headSha,headRef:'anything'}).ok,false);
+  }finally{rmSync(f.cwd,{recursive:true,force:true});}
+});
+test('branch name cannot replace a trusted release ref that matches HEAD',()=>{
+  const f=setup();
+  try {
+    git(f.cwd,'update-ref','-d',releaseRef);
+    for(const headRef of [undefined,releaseBranch]) {
+      const missing=inspectSalesReleaseGit({cwd:f.cwd,baseSha:f.baseSha,headSha:f.headSha,headRef});
+      assert.equal(missing.authorizedForProduction,false);
+      assert.deepEqual(missing.errors,['Trusted release ref is missing or not a commit']);
+    }
+    git(f.cwd,'update-ref',releaseRef,f.baseSha);
+    const pointedElsewhere=inspectSalesReleaseGit({
+      cwd:f.cwd,baseSha:f.baseSha,headSha:f.headSha,headRef:releaseBranch,
+    });
+    assert.deepEqual(pointedElsewhere.errors,['Trusted release ref does not point at inspected HEAD']);
+    git(f.cwd,'update-ref','-d',releaseRef);
+    git(f.cwd,'branch','decoy',f.headSha);
+    const decoy=inspectSalesReleaseGit({
+      cwd:f.cwd,baseSha:f.baseSha,headSha:f.headSha,headRef:releaseBranch,
+    });
+    assert.deepEqual(decoy.errors,['Trusted release ref is missing or not a commit']);
+    assert.notEqual(git(f.cwd,'branch','--show-current'),releaseBranch);
+  }finally{rmSync(f.cwd,{recursive:true,force:true});}
+});
+test('CLI with only base and head SHAs requires the local release ref',()=>{
+  const f=setup();
+  try {
+    const run=(args)=>spawnSync(process.execPath,[inspector,...args],{cwd:f.cwd,encoding:'utf8'});
+    const ok=run([f.baseSha,f.headSha]);
+    assert.equal(ok.status,0,ok.stderr);
+    const passed=JSON.parse(ok.stdout);
+    assert.equal(passed.ok,true);
+    assert.equal(passed.authorizedForProduction,false);
+    git(f.cwd,'update-ref','-d',releaseRef);
+    const bad=run([f.baseSha,f.headSha]);
+    assert.equal(bad.status,1);
+    const denied=JSON.parse(bad.stdout);
+    assert.equal(denied.authorizedForProduction,false);
+    assert.deepEqual(denied.errors,['Trusted release ref is missing or not a commit']);
+    const literal=run([f.baseSha,f.headSha,releaseBranch]);
+    assert.equal(literal.status,1);
+    assert.deepEqual(JSON.parse(literal.stdout).errors,['Trusted release ref is missing or not a commit']);
   }finally{rmSync(f.cwd,{recursive:true,force:true});}
 });
 test('disallows foreign intermediate path even when final diff is clean',()=>{

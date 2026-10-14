@@ -37,6 +37,15 @@ function changes(raw) {
   }
   return entries;
 }
+function releaseCommit(cwd) {
+  // Resolve only the fixed policy ref. Never pass a caller-supplied name to Git.
+  try {
+    const sha=git(cwd,'rev-parse','--verify','--end-of-options','refs/heads/'+branch+'^{commit}').trim();
+    return sha40.test(sha)?sha:'';
+  } catch {
+    return '';
+  }
+}
 function blobAt(cwd, sha, path) {
   const row=git(cwd, 'ls-tree','--full-tree',sha,'--',path).trim();
   const match=/^([0-9]{6}) blob ([a-f0-9]{40})\t(.+)$/.exec(row);
@@ -69,6 +78,11 @@ export function inspectSalesReleaseGit({
     return {ok:false,authorizedForProduction:false,errors:['Invalid base/head SHA']};
   if (headRef!==branch) errors.push('Unexpected source branch');
   try {
+    // A defaulted or caller-supplied branch name is not evidence. The trusted
+    // local release ref must resolve to this exact HEAD commit.
+    const releaseSha=releaseCommit(cwd);
+    if(!releaseSha) errors.push('Trusted release ref is missing or not a commit');
+    else if(releaseSha!==headSha) errors.push('Trusted release ref does not point at inspected HEAD');
     const actualMain=git(cwd,'rev-parse','refs/remotes/origin/main').trim();
     if(actualMain!==baseSha) errors.push('Base does not match current origin/main');
     if(git(cwd,'merge-base',baseSha,headSha).trim()!==baseSha)

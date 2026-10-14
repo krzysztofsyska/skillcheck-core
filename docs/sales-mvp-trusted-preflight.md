@@ -3,6 +3,7 @@ This module strengthens the prepared selective-release workflow for exactly **PR
 Status: **preflight only**. No change to main Agent Gates, no Production authorization.
 
 `tools/agent-pipeline/lib/sales-release-verified.mjs` checks the **actual local Git object graph**, rather than caller-supplied commit descriptions:
+- local `refs/heads/release/sales-mvp-intake-20261013` must exist and resolve to the inspected HEAD commit; a defaulted or caller-supplied branch name is not evidence, and no other ref can stand in for it;
 - base must match the checkout's `refs/remotes/origin/main`, with one-parent contiguous commit history;
 - each intermediate commit and final diff must touch only the five reviewed marketing/test paths with A/M status and normal 100644 blobs;
 - the HEAD blobs must match immutable reviewed Git blob IDs from PR #118 at `9b9bcdca376b19a36231161fc6f5aa3632223396`;
