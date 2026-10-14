@@ -50,13 +50,36 @@ test('workflow YAML parses and the permission model stays fail-closed', () => {
 
 
 test('model uses an isolated environment on main, without controller credentials', () => {
-  const parsed = spawnSync('python3', ['-c', 'import yaml,json; print(json.dumps(yaml.safe_load(open(".github/workflows/agent-review.yml"))["jobs"]["model"]))'], { encoding: 'utf8' });
+  const parsed = spawnSync('python3', ['-c', 'import yaml,json; print(json.dumps(yaml.safe_load(open(".github/workflows/agent-review.yml"))["jobs"]))'], { encoding: 'utf8' });
   assert.equal(parsed.status, 0, parsed.stderr);
-  const model = JSON.parse(parsed.stdout);
+  const jobs = JSON.parse(parsed.stdout);
+  const model = jobs.model;
+  const authorize = jobs.authorize;
   assert.equal(model.environment, 'agent-review');
-  assert.equal(model.if, "github.ref == 'refs/heads/main'");
+  assert.equal(model.needs, 'authorize');
+  assert.equal(model.if, "success() && needs.authorize.outputs.allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && vars.AGENT_PIPELINE_ENABLED == 'true'");
   assert.deepEqual(model.permissions, { contents: 'read' });
   assert.equal(model.env, undefined);
   const secrets = [...JSON.stringify(model).matchAll(/secrets\.([A-Z_]+)/g)].map(m => m[1]);
   assert.deepEqual(secrets, ['OPENAI_API_KEY']);
+  assert.equal(authorize.environment, undefined);
+  assert.equal(authorize.if, "github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && vars.AGENT_PIPELINE_ENABLED == 'true'");
+  assert.deepEqual(authorize.permissions, { contents: 'read' });
+  assert.equal(JSON.stringify(authorize).includes('secrets.'), false);
+  assert.equal(JSON.stringify(authorize).includes('inputs'), false);
+  assert.equal(authorize.steps[0].with.ref, '${{ github.sha }}');
+  assert.equal(authorize.steps[0].with['persist-credentials'], false);
+  assert.match(authorize.steps[2].run, /authorize-review-dispatch\.mjs/);
+  assert.equal(authorize.steps[2].env.ACTOR_ID, '${{ github.actor_id }}');
+  assert.equal(authorize.steps[2].env.PIPELINE_ENABLED, '${{ vars.AGENT_PIPELINE_ENABLED }}');
+});
+
+test('example secret map keeps OpenAI out of the controller environment', () => {
+  const example = JSON.parse(readFileSync('.github/agent-pipeline/config.example.json', 'utf8'));
+  assert.equal(example.secrets.OPENAI_API_KEY, 'SET_IN_GITHUB_ENVIRONMENT_AGENT_REVIEW_NOT_IN_GIT');
+  assert.equal(example.secrets.OPENAI_API_KEY.includes('AGENT_CONTROL'), false);
+  assert.match(example.secrets.CURSOR_API_KEY, /AGENT_CONTROL/);
+  assert.match(example.secrets.APP_PRIVATE_KEY, /AGENT_CONTROL/);
+  assert.equal(example.flags.AGENT_PIPELINE_ENABLED, false);
+  assert.equal(example.flags.AGENT_PIPELINE_MERGE_ENABLED, false);
 });

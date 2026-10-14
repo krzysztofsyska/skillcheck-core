@@ -30,8 +30,33 @@ permissions:
   contents: read
 
 jobs:
+  authorize:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && vars.AGENT_PIPELINE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.provenance.outputs.allowed }}
+    steps:
+      - name: Checkout workflow ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require controller provenance
+        id: provenance
+        env:
+          ACTOR_ID: ${{ github.actor_id }}
+          PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+        run: node tools/agent-pipeline/authorize-review-dispatch.mjs
+
   model:
-    if: github.ref == 'refs/heads/main'
+    needs: authorize
+    if: success() && needs.authorize.outputs.allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && vars.AGENT_PIPELINE_ENABLED == 'true'
     environment: agent-review
     runs-on: ubuntu-latest
     timeout-minutes: 45

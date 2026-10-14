@@ -47,7 +47,7 @@ W środowisku `agent-control`, nigdy w repozytorium, PR ani artefakcie:
 - klucz Cursor API i zatwierdzony budżet; kontrakt v1 sprawdzony na koncie przed aktywacją,
 - klucz prywatny GitHub App.
 
-Klucz projektu OpenAI umieść wyłącznie w osobnym środowisku `agent-review`, dostępnym tylko dla gałęzi `main`. Nie dodawaj tam kluczy kontrolera ani Cursora. Job `model` w `agent-review.yml` korzysta z tego środowiska i wykonuje się tylko z `main`. Nie twórz repozytoryjnej kopii `OPENAI_API_KEY`. Model i limit wydatków wymagają osobnej decyzji; sama subskrypcja ChatGPT nie potwierdza budżetu API.
+Klucz projektu OpenAI umieść wyłącznie w osobnym środowisku `agent-review`, dostępnym tylko dla gałęzi `main`. Nie dodawaj tam kluczy kontrolera ani Cursora. Job `model` wchodzi do tego środowiska dopiero wtedy, gdy workflow pochodzi z `main`, zdarzenie to `workflow_dispatch`, zmienna `AGENT_PIPELINE_ENABLED` ma wartość `true`, a numeryczny `github.actor_id` jest równy `controller_actor_id` z `policy.json` na SHA tego workflow. Ręczne wybranie `main` nie wystarcza. Dopóki identyfikator aktora jest null albo flaga nie jest włączona, job nie dostaje sekretu. Nie twórz repozytoryjnej kopii `OPENAI_API_KEY`. Model i limit wydatków wymagają osobnej decyzji; sama subskrypcja ChatGPT nie potwierdza budżetu API.
 
 Klucz OpenAI wchodzi tylko jako wejście `openai-api-key` akcji Codex. Klucz Cursor tylko do adaptera tworzącego agenta. Nie przekazywać `envVars` razem z `agentId`.
 
