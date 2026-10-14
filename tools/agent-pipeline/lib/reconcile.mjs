@@ -156,7 +156,11 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
   try {
     protection = await github.readProtection();
   } catch (error) {
-    if (error.status !== 401 && error.status !== 403 && error.status !== 404) throw error;
+    // This read happens before ports.readProtection(). A metadata token hides
+    // bypass_actors. Unknown protection stays null here. The enabled ports
+    // path still throws RULESET_BYPASS_UNVERIFIABLE and does not run effects.
+    if (error.status !== 401 && error.status !== 403 && error.status !== 404
+        && error.message !== 'RULESET_BYPASS_UNVERIFIABLE') throw error;
   }
   if (policyCommit && policyCommit !== main?.commit?.sha) throw new Error('POLICY_STALE');
   if (github.readRepository && (await github.readRepository()).id !== policy.repository_id) throw new Error('REPOSITORY_MISMATCH');

@@ -4,7 +4,7 @@ import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.m
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { planFeedback, runFeedback, fixPrompt, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
-import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readSnapshot, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
+import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
 const bot = { ...CODEX, type: 'Bot' };
@@ -28,7 +28,9 @@ test('unbound or pre-request native approvals cannot authorize current head/base
   f.snapshot.reviews[0].id = 101;
   assert.equal(planFeedback(f.binding, state, f.snapshot, 300).state.phase, 'READY_FOR_OWNER');
   f.snapshot.pull.base.sha = C;
-  assert.equal(planFeedback(f.binding, state, f.snapshot, 300).status, 'WAITING_REVIEW');
+  const moved = planFeedback(f.binding, state, f.snapshot, 300);
+  assert.equal(moved.state.phase, 'REVIEW_PENDING');
+  assert.equal(moved.effect.type, 'request-review');
   assert.equal(planFeedback(f.binding, null, f.snapshot, 300).status, 'WAITING_REVIEW');
 });
 
@@ -195,7 +197,10 @@ test('old thumbs do not accept new head or base', async () => {
   const state = { ...p.state, phase: 'WAITING_REVIEW', reviewCommentId: 200 };
   f.snapshot.comments = []; f.snapshot.reactions = [{ user: bot, content: '+1' }];
   f.snapshot.pull.head.sha = C;
-  assert.equal(planFeedback(f.binding, state, f.snapshot).status, 'WAITING_REVIEW');
+  const moved = planFeedback(f.binding, state, f.snapshot);
+  assert.equal(moved.state.phase, 'REVIEW_PENDING');
+  assert.equal(moved.effect.type, 'request-review');
+  assert.notEqual(moved.state.phase, 'READY_FOR_OWNER');
 });
 
 test('disabled entrypoint needs no credentials and performs no network calls', async () => {
@@ -218,6 +223,12 @@ test('workflow never checks out PR code or interpolates comments; no OpenAI key 
   assert.match(text, /github.ref == 'refs\/heads\/main'/);
   assert.match(text, /sender.id == 199175422/);
   assert.match(text, /cancel-in-progress: false/);
+  assert.match(text, /vars.AGENT_PIPELINE_MERGE_ENABLED == 'false'/);
+  assert.match(text, /AGENT_PIPELINE_MERGE_ENABLED: \$\{\{ vars.AGENT_PIPELINE_MERGE_ENABLED \}\}/);
+  assert.throws(() => assertFeedbackSwitches({ AGENT_PIPELINE_ENABLED: 'false', AGENT_PIPELINE_MERGE_ENABLED: 'true' }), /MERGE_MUST_BE_DISABLED/);
+  assert.throws(() => assertFeedbackSwitches({ AGENT_PIPELINE_ENABLED: 'false' }), /MERGE_MUST_BE_DISABLED/);
+  assert.throws(() => assertFeedbackSwitches({ AGENT_PIPELINE_ENABLED: 'true', AGENT_PIPELINE_MERGE_ENABLED: 'false' }), /CONTROLLER_MUST_BE_DISABLED/);
+  assertFeedbackSwitches({ AGENT_PIPELINE_ENABLED: 'false', AGENT_PIPELINE_MERGE_ENABLED: 'false' });
   const runner = readFileSync('tools/agent-pipeline/feedback-cli.mjs', 'utf8');
   assert.doesNotMatch(runner, /\/merge['"`]|execSync|spawnSync|console\.error\(.*error/);
 });
@@ -464,6 +475,24 @@ test('Codex approval in the same GitHub second as request is accepted', () => {
   assert.equal(planFeedback(f.binding, state, f.snapshot, 1600).status, 'WAITING_REVIEW');
 });
 
+test('a later Codex review replaces an earlier changes request on the same head', () => {
+  const f = fixture();
+  const initial = planFeedback(f.binding, null, f.snapshot).state;
+  f.snapshot.comments = [{ id: 102, user: bot, commit_id: A, original_commit_id: A, line: 3, pull_request_review_id: 100 }];
+  f.snapshot.reviews = [
+    { id: 100, user: bot, commit_id: A, state: 'CHANGES_REQUESTED', submitted_at: new Date(1000).toISOString() },
+    { id: 101, user: bot, commit_id: A, state: 'APPROVED', submitted_at: new Date(2000).toISOString() },
+  ];
+  const state = { version: 1, configHash: initial.configHash, rounds: 1, handled: [A], phase: 'WAITING_REVIEW',
+    head: A, base: B, reviewCommentId: 200, reviewBaseline: [], reviewRequestedAt: 500 };
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 3000).state.phase, 'READY_FOR_OWNER');
+  f.snapshot.reviews = [
+    { id: 100, user: bot, commit_id: A, state: 'APPROVED', submitted_at: new Date(1000).toISOString() },
+    { id: 101, user: bot, commit_id: A, state: 'CHANGES_REQUESTED', submitted_at: new Date(2000).toISOString() },
+  ];
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 3000).status, 'DUPLICATE_HEAD');
+});
+
 test('approval already visible when the review request returns cannot authorize READY', async () => {
   const f = fixture();
   await runFeedback(f.args);
@@ -510,6 +539,24 @@ test('moved integration base posts one replacement review instead of waiting for
   assert.equal(posts.length, 1);
   f.snapshot.reviews.push({ id: 400, user: bot, commit_id: C, state: 'APPROVED', submitted_at: new Date(5_000).toISOString() });
   assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+});
+
+test('a waiting review is replaced once when the base moves before approval', async () => {
+  const f = fixture();
+  await runFeedback(f.args);
+  finishRepair(f);
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(f.reviews(), 1);
+  const D = 'd'.repeat(40);
+  f.snapshot.pull.base.sha = D;
+  f.args.now = 100 + 46 * 60 * 1000;
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(f.reviews(), 2);
+  assert.equal(f.state().base, D);
+  assert.equal(f.state().reviewRequestedAt, f.args.now);
+  assert.notEqual(f.state().phase, 'BLOCKED_TIMEOUT');
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(f.reviews(), 2);
 });
 
 test('lost base-change review request is not posted twice', async () => {

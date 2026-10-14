@@ -84,8 +84,13 @@ git snapshot alone is session-wide, so it is not sufficient attribution. Only th
 the adapter request `@codex review` once. A current-head APPROVED review or Codex's
 thumbs-up on that exact re-review request yields READY_FOR_OWNER, never owner
 acceptance. CI and the two existing approval gates still govern acceptance and
-production. Base/head movement invalidates the thumbs-up binding. Two-hour repair
-and 45-minute requested-review timeouts stop the adapter.
+production. Base/head movement invalidates the thumbs-up binding. A review
+request that is still `WAITING_REVIEW` is replaced once when the head or base
+moves and the current head has no unhandled finding; the stale request cannot
+time out into `BLOCKED_TIMEOUT`. Two-hour repair and 45-minute requested-review
+timeouts stop the adapter. Only the trusted reviewer's latest review on the
+current head counts. An earlier `CHANGES_REQUESTED` does not stay actionable
+after a newer review.
 
 No raw API errors, agent results, credentials or reviewer prose are logged or
 stored. Failure output is intentionally generic; inspect the durable phase and
@@ -125,7 +130,9 @@ still stop the whole invocation before dispatch.
    installation. A draft PR into integration does not activate them. Since main
    is the production source, this chat must not merge there to bypass this blocker.
 6. Enable config.enabled and AGENT_FEEDBACK_ENABLED only for the bounded test;
-   leave AGENT_PIPELINE_ENABLED and AGENT_PIPELINE_MERGE_ENABLED false. API preflight
+   leave AGENT_PIPELINE_ENABLED and AGENT_PIPELINE_MERGE_ENABLED false. The
+   workflow and the runtime both require the merge switch to be explicit
+   `false` before any Cursor dispatch. API preflight
    checks branch/gate protection before any agent call. The App must be permitted
    to trigger the installed Codex reviewer; a successfully posted comment is not
    proof that a bot-authored mention was accepted.
@@ -149,9 +156,9 @@ Without it, the shared controller and feedback bridge stop before effects
 with `RULESET_BYPASS_UNVERIFIABLE`; even an apparently matching,
 owner-reviewed timestamp attestation must not override the block.
 Disabled reconciliation is the exception that stays read-only: a metadata
-`GITHUB_TOKEN` cannot see `bypass_actors`, so that scheduled read treats the
-hidden list as unknown protection and performs no effects. Enabling the
-controller does not gain that exception.
+`GITHUB_TOKEN` cannot see `bypass_actors`, so both the work-loading read and
+`defaultPorts().readProtection()` treat the hidden list as unknown protection
+and perform no effects. Enabling the controller does not gain that exception.
 This is an intentional fail-closed security fix, not a live activation.
 Future automatic authorization under read-only credentials requires a
 separately designed and reviewed reliable current-version proof; do not

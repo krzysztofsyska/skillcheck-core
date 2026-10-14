@@ -42,7 +42,16 @@ export function validateSnapshot(b, s) {
 
 export function findings(s) {
   const head = s.pull.head.sha;
-  const reviews = s.reviews.filter(r => trusted(r.user) && r.commit_id === head && r.state !== 'DISMISSED');
+  // GitHub keeps every submitted review. A later review by the same trusted
+  // reviewer replaces the earlier state for this head; an old CHANGES_REQUESTED
+  // must not stay actionable after a newer APPROVED.
+  const latest = new Map();
+  for (const review of s.reviews) {
+    if (!trusted(review.user) || review.commit_id !== head || !Number.isSafeInteger(review.id)) continue;
+    const previous = latest.get(review.user.id);
+    if (!previous || review.id > previous.id) latest.set(review.user.id, review);
+  }
+  const reviews = [...latest.values()].filter(review => review.state !== 'DISMISSED');
   const ids = new Set(reviews.map(r => r.id));
   const inline = s.comments.filter(c => trusted(c.user) && c.commit_id === head
     && c.original_commit_id === head && (c.subject_type === 'file' || c.line != null) && !c.in_reply_to_id && ids.has(c.pull_request_review_id));
@@ -129,6 +138,16 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
     }
     return { state: { ...current, phase: 'WAITING_REVIEW',
       ...(sameRequest ? {} : { reviewCommentId: null, reviewRequestedAt: null, reviewBaseline: [] }) } };
+  }
+  // A request posted for the previous head/base cannot authorize the new pair.
+  // Re-request unless this head still has an unhandled finding to repair.
+  if (current.phase === 'WAITING_REVIEW' && current.reviewCommentId && !sameRequest
+      && !(found.length > 0 && !current.handled.includes(head))) {
+    return {
+      state: { ...current, phase: 'REVIEW_PENDING', head, base,
+        reviewCommentId: null, reviewRequestedAt: null, reviewBaseline: [] },
+      effect: { type: 'request-review', head, base },
+    };
   }
   if (!found.length) {
     if (approved || thumbs) {

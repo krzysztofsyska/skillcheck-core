@@ -125,10 +125,17 @@ export async function reconcileBindings(bindings, processBinding) {
   return result;
 }
 
+export function assertFeedbackSwitches(env) {
+  if (env.AGENT_PIPELINE_ENABLED === 'true') throw new Error('CONTROLLER_MUST_BE_DISABLED');
+  // An omitted or true merge switch is not an explicit off. The bridge must
+  // not run beside controller merge automation.
+  if (env.AGENT_PIPELINE_MERGE_ENABLED !== 'false') throw new Error('MERGE_MUST_BE_DISABLED');
+}
+
 export async function main(env = process.env) {
   const config = JSON.parse(readFileSync('.github/agent-pipeline/feedback.json', 'utf8'));
   if (env.AGENT_FEEDBACK_ENABLED !== 'true' || config.enabled !== true) return ['DISABLED'];
-  if (env.AGENT_PIPELINE_ENABLED === 'true') throw new Error('CONTROLLER_MUST_BE_DISABLED');
+  assertFeedbackSwitches(env);
   if (env.GITHUB_REPOSITORY !== REPOSITORY || env.GITHUB_REF !== 'refs/heads/main') throw new Error('UNTRUSTED_WORKFLOW_REF');
   for (const key of ['CURSOR_API_KEY', 'AGENT_PIPELINE_APP_ID', 'AGENT_PIPELINE_APP_PRIVATE_KEY', 'AGENT_PIPELINE_APP_INSTALLATION_ID']) {
     if (!env[key]) throw new Error('MISSING_CONFIGURATION');

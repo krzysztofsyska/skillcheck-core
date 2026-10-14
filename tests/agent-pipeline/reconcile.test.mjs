@@ -86,6 +86,33 @@ test('disabled reconciliation treats hidden bypass actors as unknown protection'
   } finally { globalThis.fetch = previous; }
 });
 
+test('work loading treats hidden bypass actors as unknown protection', async () => {
+  const { policy } = loadedPolicy();
+  const github = {
+    async readBranch(name) {
+      return { commit: { sha: name === 'main' ? 'd'.repeat(40) : 'c'.repeat(40) } };
+    },
+    async readIssues() {
+      return [{ number: 7, body: contractBody(), user: { id: policy.owner.id, login: policy.owner.login } }];
+    },
+    async readPulls() { return []; },
+    async readProjection() { return { tasks: {}, mergeLock: null, head: null }; },
+    async readProtection() { throw new Error('RULESET_BYPASS_UNVERIFIABLE'); },
+    async listWorkflowRuns() { return []; },
+    async listArtifacts() { return []; },
+    async readJobs() { return []; },
+    async readApprovals() { return []; },
+  };
+  const work = await loadWorkFromClients({
+    policy, now: '2026-10-06T12:00:00.000Z', secrets: { cursor: true, openai: false, githubApp: true }, github,
+  });
+  assert.equal(work.items[0].observation.github.protection, null);
+  github.readProtection = async () => { const error = new Error('boom'); error.status = 500; throw error; };
+  await assert.rejects(loadWorkFromClients({
+    policy, now: '2026-10-06T12:00:00.000Z', secrets: { cursor: true, openai: false, githubApp: true }, github,
+  }), /boom/);
+});
+
 test('live protection read still fails when bypass actors are hidden', async () => {
   const { generateKeyPairSync } = await import('node:crypto');
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
