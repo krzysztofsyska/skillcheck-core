@@ -4,7 +4,8 @@ TASK: SC-OPS-002C
 STATUS: REVIEW (część repo); BLOCKED_CONFIGURATION (usługi)
 BRANCH: chore/sc-ops-002c-bootstrap-config
 BASE_COMMIT: 90af2e2eb3bfb19409deec4466c1be72af1d4d6c
-COMMIT: SHA tego commita jest w komentarzu PR skierowanym do Codexa; plik nie może zawierać hasha samego siebie.
+COMMIT: 2c51ad0728d00cd1efc2d0ee3274152666737de2
+PIN: commit po tym SHA zmienia wyłącznie identyfikator w tym raporcie. Kontrole poniżej dotyczą COMMIT.
 ISSUE: https://github.com/krzysztofsyska/skillcheck-core/issues/40
 
 ## Zmiany
@@ -48,5 +49,5 @@ WYKONAWCA: niezależny Codex reviewer, nowa sesja po odczycie PR; raport przez G
 ZADANIE: review SC-OPS-002C, część konfiguracji repo
 REPO: krzysztofsyska/skillcheck-core
 BAZA: 90af2e2eb3bfb19409deec4466c1be72af1d4d6c
-HEAD: odczytaj rzeczywisty HEAD PR chore/sc-ops-002c-bootstrap-config i przypnij do raportu.
+HEAD: 2c51ad0728d00cd1efc2d0ee3274152666737de2
 Przeczytaj Issue #40, AGENTS.md, projekt 002A, runbook 002C, cały diff i ten handoff. Sprawdź faktyczne numery workflow z GitHub i agent-control ID, flagi false, brak wymyślonych App/gate IDs, zgodność checks dla main/integration oraz brak poświadczeń kontrolera/Cursora w modelu. Dla płatnego joba sprawdź, że środowisko `agent-review` jest osiągalne tylko po `authorize`: flaga `AGENT_PIPELINE_ENABLED`, aktor równy `controller_actor_id` z policy na SHA workflow, a nie z wejścia dispatch. Sprawdź, że przykład sekretów trzyma OpenAI w `agent-review`. Zweryfikuj, że test statyczny nie jest przedstawiany jako dowód konfiguracji usług. Wykonaj npm run test:agent-pipeline i sprawdź CI bieżącego SHA. Nie wywołuj agentów, nie dodawaj sekretów, nie twórz środowisk ani rulesetów, nie scalaj i nie wdrażaj. Zapisz PASS / PASS WITH FIXES / FAIL z plikiem i konkretną uwagą na PR. Przy PASS następny etap to akceptacja tej poprawki; aktywacja nadal zablokowana przez braki usług z Issue #40. Podaj raport TASK/STATUS/HEAD/TESTS/UWAGI/NEXT ACTION i pełny kolejny prompt. Nie deklaruj pełnego 002C jako DONE.
