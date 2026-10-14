@@ -16,11 +16,11 @@ export function postgresAiLedger(query: AiWorkerQuery): LedgerStore {
       const row = rowOf(await query(
         'select * from public.ai_gateway_reserve(' +
           '$1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::text,$6::text,' +
-          '$7::text,$8::text,$9::text,$10::text,$11::bigint)',
+          '$7::text,$8::text,$9::text,$10::text,$11::text,$12::bigint)',
         [
           input.companyId, input.requestKey, input.operationId, input.processId,
           input.candidatePseudonym, input.task, input.provider, input.model,
-          input.policyVersion, input.priceVersion, input.estimatedMicroUsd,
+          input.revision, input.policyVersion, input.priceVersion, input.estimatedMicroUsd,
         ],
       ));
       if (typeof row.usage_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(row.usage_id)
@@ -49,6 +49,14 @@ export function postgresAiLedger(query: AiWorkerQuery): LedgerStore {
       ));
       if (typeof row.marked !== 'boolean') throw new Error('SC021_LEDGER_INVALID_RESPONSE');
       return row.marked;
+    },
+    async release(input) {
+      const row = rowOf(await query(
+        'select public.ai_gateway_release($1::uuid,$2::uuid) as released',
+        [input.companyId, input.requestKey],
+      ));
+      if (typeof row.released !== 'boolean') throw new Error('SC021_LEDGER_INVALID_RESPONSE');
+      return row.released;
     },
   };
 }

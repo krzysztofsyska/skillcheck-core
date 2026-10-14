@@ -27,7 +27,7 @@ const ctx = {
 const usage = { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 100 };
 
 function store() {
-  const calls = { reservations: [], settles: [], unknown: [] };
+  const calls = { reservations: [], settles: [], unknown: [], releases: [] };
   let seen = false;
   return {
     calls,
@@ -40,6 +40,7 @@ function store() {
       },
       async settle(req) { calls.settles.push(req); return true; },
       async markUnknown(req) { calls.unknown.push(req); return true; },
+      async release(req) { calls.releases.push(req); return true; },
     },
   };
 }
@@ -107,6 +108,7 @@ test('a provider call happens only after budget reservation and settles real usa
   assert.equal(one.warning, true);
   assert.equal(f.calls.reservations[0].estimatedMicroUsd, 1050);
   assert.equal(f.calls.reservations[0].priceVersion, 'pricing-1');
+  assert.equal(f.calls.reservations[0].revision, model.revision);
   assert.equal(f.calls.settles[0].costMicroUsd, 405);
   await assert.rejects(run(), /SC021_DUPLICATE_ATTEMPT/);
   assert.equal(providerCalls, 1);
@@ -160,10 +162,11 @@ test('Postgres adapter passes only positional, typed worker metadata and validat
     if (sql.includes('ai_gateway_reserve')) return [{ usage_id: ctx.requestKey, created: true, warning: false }];
     if (sql.includes('ai_gateway_settle')) return [{ settled: true }];
     if (sql.includes('ai_gateway_mark_unknown')) return [{ marked: true }];
+    if (sql.includes('ai_gateway_release')) return [{ released: true }];
     return [];
   });
   assert.deepEqual(await ledger.reserve({
-    ...ctx, provider: 'openai', model: 'pinned-screening-model',
+    ...ctx, provider: 'openai', model: 'pinned-screening-model', revision: model.revision,
     policyVersion: 'policy-v1', priceVersion: 'pricing-1', estimatedMicroUsd: 300,
   }), { usageId: ctx.requestKey, created: true, warning: false });
   assert.equal(await ledger.settle({
@@ -171,9 +174,12 @@ test('Postgres adapter passes only positional, typed worker metadata and validat
     usage, providerRequestId: 'resp_123',
   }), true);
   assert.equal(await ledger.markUnknown({companyId: ctx.companyId, requestKey:ctx.requestKey}), true);
+  assert.equal(await ledger.release({companyId: ctx.companyId, requestKey:ctx.requestKey}), true);
   assert.equal(calls[0].values[0], ctx.companyId);
   assert.equal(calls[0].values[4], ctx.candidatePseudonym);
+  assert.equal(calls[0].values[8], model.revision);
   assert.equal(calls[1].values[2], 123);
+  assert.match(calls[3].sql, /ai_gateway_release/);
   assert.ok(calls.every(call => !call.sql.includes(ctx.companyId)));
   assert.ok(calls.every(call => !call.sql.includes('resp_123')));
   await assert.rejects(postgresAiLedger(async () => [{ settled: 'true' }]).settle({
@@ -195,9 +201,10 @@ test('OpenAI adapter enforces store:false, pinned route, no tools, correlation I
       assert.equal(init.headers.authorization, 'Bearer not-real-secret-test-only');
       assert.equal(init.headers['X-Client-Request-Id'], ctx.requestKey);
       const payload = JSON.parse(init.body);
-      assert.deepEqual(Object.keys(payload).sort(), ['input','max_output_tokens','model','store']);
+      assert.deepEqual(Object.keys(payload).sort(), ['input','max_output_tokens','metadata','model','store']);
       assert.equal(payload.store, false);
       assert.equal(payload.model, model.model);
+      assert.deepEqual(payload.metadata, { model_revision: model.revision });
       assert.equal(payload.max_output_tokens, 400);
       return {
         ok: true, async json() { return {
@@ -229,9 +236,14 @@ test('OpenAI adapter rejects absent server secret and exposes unknown usage with
   assert.equal((await adapter(model,ctx.requestKey)).usage,null);
   const refused = createOpenAiResponsesAdapter({
     apiKey:'test-only',input:[],maxOutputTokens:100,parseResult:()=>'NEVER',
-    fetchImpl:async()=>({ok:false,status:429}),
+    fetchImpl:async()=>({ok:false,status:401}),
   });
-  await assert.rejects(refused(model,ctx.requestKey), /SC021_OPENAI_PROVIDER_ERROR/);
+  await assert.rejects(refused(model,ctx.requestKey), /SC021_PROVIDER_REJECTED/);
+  const ambiguous = createOpenAiResponsesAdapter({
+    apiKey:'test-only',input:[],maxOutputTokens:100,parseResult:()=>'NEVER',
+    fetchImpl:async()=>({ok:false,status:500}),
+  });
+  await assert.rejects(ambiguous(model,ctx.requestKey), /SC021_OPENAI_PROVIDER_ERROR/);
 });
 
 
@@ -370,6 +382,132 @@ test('SC-021 settles usage before reporting parse failure without marking a sett
     assert.equal(f.calls.settles[0].providerRequestId, 'response-synthetic-004');
     assert.equal(f.calls.unknown.length, 0, status);
   }
+});
+
+test('SC-021 releases a reservation only for a definitive pre-invocation rejection', async () => {
+  for (const status of [400, 401, 403, 404, 422, 429]) {
+    const f = store();
+    const invoke = createOpenAiResponsesAdapter({
+      apiKey: 'test-only', input: [], maxOutputTokens: 100, parseResult: () => 'NO',
+      fetchImpl: async () => ({ ok: false, status }),
+    });
+    await assert.rejects(runMeteredOperation({
+      context: ctx, policy, maxExpectedUsage: usage, ledger: f.ledger, invoke,
+    }), /SC021_PROVIDER_REJECTED/);
+    assert.equal(f.calls.releases.length, 1, String(status));
+    assert.equal(f.calls.releases[0].requestKey, ctx.requestKey);
+    assert.equal(f.calls.unknown.length, 0, String(status));
+    assert.equal(f.calls.settles.length, 0, String(status));
+  }
+
+  const circular = {};
+  circular.self = circular;
+  const serialized = store();
+  let fetched = false;
+  const blocked = createOpenAiResponsesAdapter({
+    apiKey: 'test-only', input: circular, maxOutputTokens: 100, parseResult: () => 'NO',
+    fetchImpl: async () => { fetched = true; throw new Error('fetch must not run'); },
+  });
+  await assert.rejects(runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: serialized.ledger, invoke: blocked,
+  }), /SC021_PROVIDER_REJECTED/);
+  assert.equal(fetched, false);
+  assert.equal(serialized.calls.releases.length, 1);
+  assert.equal(serialized.calls.unknown.length, 0);
+
+  const transport = store();
+  const dropped = createOpenAiResponsesAdapter({
+    apiKey: 'test-only', input: [], maxOutputTokens: 100, parseResult: () => 'NO',
+    fetchImpl: async () => { throw new Error('socket hang up'); },
+  });
+  await assert.rejects(runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: transport.ledger, invoke: dropped,
+  }), /SC021_PROVIDER_FAILURE/);
+  assert.equal(transport.calls.releases.length, 0);
+  assert.equal(transport.calls.unknown.length, 1);
+
+  const server = store();
+  const fiveHundred = createOpenAiResponsesAdapter({
+    apiKey: 'test-only', input: [], maxOutputTokens: 100, parseResult: () => 'NO',
+    fetchImpl: async () => ({ ok: false, status: 500 }),
+  });
+  await assert.rejects(runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: server.ledger, invoke: fiveHundred,
+  }), /SC021_PROVIDER_FAILURE/);
+  assert.equal(server.calls.releases.length, 0);
+  assert.equal(server.calls.unknown.length, 1);
+
+  const held = store();
+  held.ledger.release = async () => { throw new Error('SC021_LEDGER_UNAVAILABLE'); };
+  const rejected = createOpenAiResponsesAdapter({
+    apiKey: 'test-only', input: [], maxOutputTokens: 100, parseResult: () => 'NO',
+    fetchImpl: async () => ({ ok: false, status: 400 }),
+  });
+  await assert.rejects(runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: held.ledger, invoke: rejected,
+  }), /SC021_PROVIDER_REJECTED/);
+  assert.equal(held.calls.unknown.length, 1);
+});
+
+test('SC-021 records the selected model revision on the reservation and the provider call', async () => {
+  const f = store();
+  let payload = null;
+  const invoke = createOpenAiResponsesAdapter({
+    apiKey: 'test-only', input: [{ role: 'user', content: 'redacted' }],
+    maxOutputTokens: 100, parseResult: () => 'OK',
+    fetchImpl: async (_url, init) => {
+      payload = JSON.parse(init.body);
+      return { ok: true, json: async () => ({
+        id: 'resp-rev', status: 'completed', output_text: 'OK',
+        usage: { input_tokens: 4, output_tokens: 1, input_tokens_details: { cached_tokens: 1 } },
+      }) };
+    },
+  });
+  await runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: f.ledger, invoke,
+  });
+  assert.equal(f.calls.reservations[0].model, model.model);
+  assert.equal(f.calls.reservations[0].revision, '2026-10-12');
+  assert.equal(payload.model, model.model);
+  assert.deepEqual(payload.metadata, { model_revision: '2026-10-12' });
+  assert.equal(f.calls.settles.length, 1);
+});
+
+test('SC-021 keeps a missing cached-token breakdown unreconciled', async () => {
+  for (const usageBody of [
+    { input_tokens: 10, output_tokens: 1 },
+    { input_tokens: 10, output_tokens: 1, input_tokens_details: {} },
+    { input_tokens: 10, output_tokens: 1, input_tokens_details: null },
+  ]) {
+    const f = store();
+    const invoke = createOpenAiResponsesAdapter({
+      apiKey: 'test-only', input: [], maxOutputTokens: 100, parseResult: () => 'OK',
+      fetchImpl: async () => ({ ok: true, json: async () => ({
+        id: 'resp-missing-cache', status: 'completed', output_text: 'OK', usage: usageBody,
+      }) }),
+    });
+    await assert.rejects(runMeteredOperation({
+      context: ctx, policy, maxExpectedUsage: usage, ledger: f.ledger, invoke,
+    }), /SC021_USAGE_UNAVAILABLE/);
+    assert.equal(f.calls.settles.length, 0);
+    assert.equal(f.calls.unknown.length, 1);
+    assert.equal(f.calls.releases.length, 0);
+  }
+
+  const explicitZero = store();
+  const invoke = createOpenAiResponsesAdapter({
+    apiKey: 'test-only', input: [], maxOutputTokens: 100, parseResult: body => body.output_text,
+    fetchImpl: async () => ({ ok: true, json: async () => ({
+      id: 'resp-zero-cache', status: 'completed', output_text: 'OK',
+      usage: { input_tokens: 10, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } },
+    }) }),
+  });
+  const result = await runMeteredOperation({
+    context: ctx, policy, maxExpectedUsage: usage, ledger: explicitZero.ledger, invoke,
+  });
+  assert.equal(result.data, 'OK');
+  assert.equal(explicitZero.calls.settles[0].usage.cachedInputTokens, 0);
+  assert.equal(explicitZero.calls.unknown.length, 0);
 });
 
 test('SC-021 keeps cost unknown if parsing fails and provider usage is missing', async () => {

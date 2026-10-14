@@ -26,6 +26,10 @@ create table public.ai_gateway_usage (
   )),
   provider text not null check (provider ~ '^[a-z0-9_-]{1,40}$'),
   model text not null check (length(model) between 1 and 128),
+  model_revision text not null check (
+    model_revision ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]*$'
+    and length(model_revision) between 1 and 128
+  ),
   policy_version text not null check (length(policy_version) between 1 and 80),
   price_version text not null check (length(price_version) between 1 and 80),
   billing_month date not null,
@@ -69,6 +73,7 @@ create function public.ai_gateway_reserve(
   target_task text,
   target_provider text,
   target_model text,
+  target_model_revision text,
   target_policy_version text,
   target_price_version text,
   estimated_micro_usd bigint
@@ -88,6 +93,9 @@ begin
     or target_task is null or target_task not in ('cv_screening','interview_plan','voice_analysis','competency_test','assessment_case')
     or target_provider is null or target_provider !~ '^[a-z0-9_-]{1,40}$'
     or target_model is null or length(target_model) not between 1 and 128
+    or target_model_revision is null
+    or target_model_revision !~ '^[A-Za-z0-9][A-Za-z0-9._:/-]*$'
+    or length(target_model_revision) not between 1 and 128
     or target_policy_version is null or length(target_policy_version) not between 1 and 80
     or target_price_version is null or length(target_price_version) not between 1 and 80
     or (target_candidate_pseudonym is not null
@@ -104,7 +112,9 @@ begin
   if found then
     if previous.operation_id <> target_operation
        or previous.task <> target_task or previous.provider <> target_provider
-       or previous.model <> target_model or previous.policy_version <> target_policy_version
+       or previous.model <> target_model
+       or previous.model_revision <> target_model_revision
+       or previous.policy_version <> target_policy_version
        or previous.price_version <> target_price_version
        or previous.reserved_micro_usd <> estimated_micro_usd
        or previous.process_id is distinct from target_process
@@ -129,11 +139,11 @@ begin
   end if;
   insert into public.ai_gateway_usage(
     company_id, request_key, operation_id, process_id, candidate_pseudonym,
-    task, provider, model, policy_version, price_version,
+    task, provider, model, model_revision, policy_version, price_version,
     billing_month, reserved_micro_usd, override_used
   ) values (
     target_company, request_id, target_operation, target_process, target_candidate_pseudonym,
-    target_task, target_provider, target_model, target_policy_version, target_price_version,
+    target_task, target_provider, target_model, target_model_revision, target_policy_version, target_price_version,
     month_date, estimated_micro_usd, limits.operator_override
   ) returning id into usage_id;
   created := true;
@@ -206,13 +216,41 @@ begin
   return true;
 end $$;
 
+create function public.ai_gateway_release(
+  target_company uuid, target_request_key uuid
+)
+returns boolean language plpgsql security definer set search_path = ''
+as $$
+declare item public.ai_gateway_usage%rowtype;
+begin
+  -- Same lock order as reserve/settle: tenant budget, then the usage row.
+  perform 1 from public.ai_gateway_limits
+    where company_id = target_company for update;
+  if not found then raise exception 'SC021_BUDGET_UNCONFIGURED' using errcode = 'P0001'; end if;
+  select * into item from public.ai_gateway_usage
+    where company_id = target_company and request_key = target_request_key for update;
+  if not found then raise exception 'SC021_UNKNOWN_RESERVATION' using errcode = 'P0001'; end if;
+  if item.status = 'released' then return false; end if;
+  -- Settled and unknown rows may represent a billable call and must not be freed.
+  if item.status <> 'reserved' then
+    raise exception 'SC021_NOT_RELEASABLE' using errcode = 'P0001';
+  end if;
+  update public.ai_gateway_usage
+    set status = 'released', finalized_at = now()
+    where id = item.id;
+  return true;
+end $$;
+
 -- No PUBLIC execution on SECURITY DEFINER functions.
-revoke all on function public.ai_gateway_reserve(uuid,uuid,uuid,uuid,text,text,text,text,text,text,bigint) from public, anon, authenticated;
+revoke all on function public.ai_gateway_reserve(uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,bigint) from public, anon, authenticated;
 revoke all on function public.ai_gateway_settle(uuid,uuid,bigint,bigint,bigint,bigint,text) from public, anon, authenticated;
 revoke all on function public.ai_gateway_mark_unknown(uuid,uuid) from public, anon, authenticated;
-grant execute on function public.ai_gateway_reserve(uuid,uuid,uuid,uuid,text,text,text,text,text,text,bigint)
+revoke all on function public.ai_gateway_release(uuid,uuid) from public, anon, authenticated;
+grant execute on function public.ai_gateway_reserve(uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,bigint)
   to ai_meter_worker, screening_worker;
 grant execute on function public.ai_gateway_settle(uuid,uuid,bigint,bigint,bigint,bigint,text)
   to ai_meter_worker, screening_worker;
 grant execute on function public.ai_gateway_mark_unknown(uuid,uuid)
+  to ai_meter_worker, screening_worker;
+grant execute on function public.ai_gateway_release(uuid,uuid)
   to ai_meter_worker, screening_worker;

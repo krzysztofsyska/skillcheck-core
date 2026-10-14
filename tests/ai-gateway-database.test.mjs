@@ -52,11 +52,11 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     }
     const reserveQuery = 'select * from public.ai_gateway_reserve(' +
       '$1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::text,$6::text,' +
-      '$7::text,$8::text,$9::text,$10::text,$11::bigint)';
+      '$7::text,$8::text,$9::text,$10::text,$11::text,$12::bigint)';
     const request1 = randomUUID(), operation = randomUUID();
     const reserveArgs = (companyId, requestId, cost = 100) => [
       companyId, requestId, operation, null, 'anon:123', 'cv_screening',
-      'openai', 'pinned-v1', 'policy-v1', 'price-v1', cost,
+      'openai', 'pinned-v1', 'rev-2026-10-12', 'policy-v1', 'price-v1', cost,
     ];
     const r1 = await worker(reserveQuery, reserveArgs(idA, request1));
     assert.equal(r1[0].created, true);
@@ -64,6 +64,12 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     assert.equal((await worker(reserveQuery, reserveArgs(idA, request1)))[0].created, false);
     await assert.rejects(worker(reserveQuery, reserveArgs(idA, randomUUID())), /SC021_BUDGET_EXHAUSTED/);
     await assert.rejects(worker(reserveQuery, reserveArgs(idA, request1, 99)), /SC021_IDEMPOTENCY_CONFLICT/);
+    const otherRevision = reserveArgs(idA, request1);
+    otherRevision[8] = 'rev-other';
+    await assert.rejects(worker(reserveQuery, otherRevision), /SC021_IDEMPOTENCY_CONFLICT/);
+    assert.equal((await db.query(
+      'select model_revision from public.ai_gateway_usage where request_key=$1', [request1],
+    )).rows[0].model_revision, 'rev-2026-10-12');
     assert.equal((await worker(reserveQuery, reserveArgs(idB, randomUUID())))[0].created, true);
 
     const settleQuery = 'select public.ai_gateway_settle(' +
@@ -74,7 +80,7 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
     await assert.rejects(worker(settleQuery, [idA,request1,50,1000,100,50,'resp_001']), /SC021_SETTLEMENT_CONFLICT/);
     await assert.rejects(worker(settleQuery, [idB,request1,50,1000,100,50,'resp_001']), /SC021_UNKNOWN_RESERVATION/);
 
-    const gateParams = [idB, randomUUID(), operation, null, null, 'cv_screening','openai','pinned-v1','policy-v1','price-v1', 1];
+    const gateParams = [idB, randomUUID(), operation, null, null, 'cv_screening','openai','pinned-v1','rev-2026-10-12','policy-v1','price-v1', 1];
     await assert.rejects(worker(reserveQuery, gateParams), /SC021_BUDGET_EXHAUSTED/);
     await db.query('update public.ai_gateway_limits set operator_override = true where company_id = $1', [idB]);
     const allowed = await worker(reserveQuery, gateParams);
@@ -154,6 +160,33 @@ test('SC-021 database: worker-only permissions, tenant RLS, serialized budgets, 
       await settlementClient.end();
       await admissionClient.end();
     }
+
+    // A definitive rejection frees the reserved amount for a later attempt.
+    await db.query('update public.ai_gateway_limits set monthly_limit_micro_usd=100, operator_override=false where company_id=$1', [idB]);
+    await db.query('delete from public.ai_gateway_usage where company_id=$1', [idB]);
+    const held = randomUUID();
+    await worker(reserveQuery, reserveArgs(idB, held, 80));
+    await assert.rejects(worker(reserveQuery, reserveArgs(idB, randomUUID(), 40)), /SC021_BUDGET_EXHAUSTED/);
+    const releaseQuery = 'select public.ai_gateway_release($1::uuid,$2::uuid) as released';
+    assert.equal((await worker(releaseQuery, [idB, held]))[0].released, true);
+    assert.equal((await worker(releaseQuery, [idB, held]))[0].released, false);
+    const releasedRow = await db.query(
+      'select status, model_revision, finalized_at is not null as final from public.ai_gateway_usage where request_key=$1',
+      [held],
+    );
+    assert.equal(releasedRow.rows[0].status, 'released');
+    assert.equal(releasedRow.rows[0].model_revision, 'rev-2026-10-12');
+    assert.equal(releasedRow.rows[0].final, true);
+    assert.equal((await worker(reserveQuery, reserveArgs(idB, randomUUID(), 40)))[0].created, true);
+    const settledKey = randomUUID();
+    await worker(reserveQuery, reserveArgs(idB, settledKey, 10));
+    await worker(settleQuery, [idB, settledKey, 10, 1, 0, 1, 'resp_rel']);
+    await assert.rejects(worker(releaseQuery, [idB, settledKey]), /SC021_NOT_RELEASABLE/);
+    const unknownKey = randomUUID();
+    await worker(reserveQuery, reserveArgs(idB, unknownKey, 10));
+    await worker('select public.ai_gateway_mark_unknown($1::uuid,$2::uuid)', [idB, unknownKey]);
+    await assert.rejects(worker(releaseQuery, [idB, unknownKey]), /SC021_NOT_RELEASABLE/);
+    await assert.rejects(asTenant(idB, releaseQuery, [idB, held]), /permission denied/);
 
   } finally {
     if (db) await db.end();

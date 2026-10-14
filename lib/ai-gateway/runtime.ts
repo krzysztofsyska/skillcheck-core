@@ -15,7 +15,8 @@ export type UsageContext = {
 export type Reservation = { usageId: string; created: boolean; warning: boolean };
 export type LedgerStore = {
   reserve(input: UsageContext & {
-    provider: string; model: string; policyVersion: string; priceVersion: string;
+    provider: string; model: string; revision: string;
+    policyVersion: string; priceVersion: string;
     estimatedMicroUsd: number;
   }): Promise<Reservation>;
   settle(input: {
@@ -23,6 +24,8 @@ export type LedgerStore = {
     usage: TokenUsage; providerRequestId: string | null;
   }): Promise<boolean>;
   markUnknown(input: { companyId: string; requestKey: string }): Promise<boolean>;
+  // true when this call moved reserved → released; false when it was already released.
+  release(input: { companyId: string; requestKey: string }): Promise<boolean>;
 };
 export type ModelInvocation<T> =
   | { data: T; usage: TokenUsage | null; providerRequestId: string | null }
@@ -37,6 +40,14 @@ export class AiGatewayError extends Error {
     super(code);
     this.code = code;
     this.name = 'AiGatewayError';
+  }
+}
+// The provider rejected the attempt before any billable invocation.
+// Ambiguous transport failures must stay ordinary errors so the reservation is held.
+export class ProviderPreInvocationRejection extends AiGatewayError {
+  constructor(code = 'SC021_PROVIDER_REJECTED') {
+    super(code);
+    this.name = 'ProviderPreInvocationRejection';
   }
 }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -72,6 +83,7 @@ export async function runMeteredOperation<T>(input: {
     ...input.context,
     provider: rate.provider,
     model: rate.model,
+    revision: rate.revision,
     policyVersion: input.policy.version,
     priceVersion: rate.priceVersion,
     estimatedMicroUsd,
@@ -82,7 +94,20 @@ export async function runMeteredOperation<T>(input: {
   let reply: ModelInvocation<T>;
   try {
     reply = await input.invoke(rate, correlationId);
-  } catch {
+  } catch (error) {
+    if (error instanceof ProviderPreInvocationRejection) {
+      // No billable invocation started. Free the cap so a fresh requestKey can retry.
+      try {
+        await input.ledger.release({
+          companyId: input.context.companyId, requestKey: input.context.requestKey,
+        });
+      } catch {
+        await input.ledger.markUnknown({
+          companyId: input.context.companyId, requestKey: input.context.requestKey,
+        });
+      }
+      throw new AiGatewayError('SC021_PROVIDER_REJECTED');
+    }
     // On network errors usage may have been billed. Hold reservation for reconciliation.
     await input.ledger.markUnknown({
       companyId: input.context.companyId, requestKey: input.context.requestKey,

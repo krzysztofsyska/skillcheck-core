@@ -1,4 +1,4 @@
-import type { ProviderAdapter } from './runtime.ts';
+import { ProviderPreInvocationRejection, type ProviderAdapter } from './runtime.ts';
 import type { TokenUsage } from './core.ts';
 
 type JsonObject = Record<string, unknown>;
@@ -19,11 +19,21 @@ function token(value: unknown) {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+const revisionName = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+// Request-validation and auth failures happen before a billable generation.
+// 408/5xx and transport errors stay ambiguous: the provider may already have run.
+function definitiveRejection(status: number) {
+  return status === 400 || status === 401 || status === 403
+    || status === 404 || status === 422 || status === 429;
+}
+
 function responseUsage(body: unknown): TokenUsage | null {
   const usage = object(object(body)?.usage);
   if (!usage || !token(usage.input_tokens) || !token(usage.output_tokens)) return null;
   const details = object(usage.input_tokens_details);
-  const cached = details?.cached_tokens ?? 0;
+  // A missing cache breakdown is not evidence that every input token was uncached.
+  if (!details || !Object.hasOwn(details, 'cached_tokens')) return null;
+  const cached = details.cached_tokens;
   if (!token(cached) || Number(cached) > Number(usage.input_tokens)) return null;
   return {
     inputTokens: usage.input_tokens as number,
@@ -45,26 +55,46 @@ export function createOpenAiResponsesAdapter<T>(options: OpenAiAdapterOptions<T>
     throw new Error('SC021_OPENAI_CONFIGURATION_INVALID');
   }
   return async (rate, correlationId) => {
-    if (rate.provider !== 'openai' || !/^[0-9a-f-]{36}$/i.test(correlationId)) {
-      throw new Error('SC021_OPENAI_INVALID_ROUTE');
+    if (rate.provider !== 'openai' || !/^[0-9a-f-]{36}$/i.test(correlationId)
+      || !revisionName.test(rate.revision)) {
+      throw new ProviderPreInvocationRejection('SC021_OPENAI_INVALID_ROUTE');
+    }
+    let requestBody: string;
+    try {
+      requestBody = JSON.stringify({
+        model: rate.model,
+        store: false,
+        input: options.input,
+        max_output_tokens: options.maxOutputTokens,
+        metadata: { model_revision: rate.revision },
+      });
+    } catch {
+      throw new ProviderPreInvocationRejection('SC021_PROVIDER_REJECTED');
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
-      const response = await fetchImpl('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        headers: {
-          authorization: 'Bearer ' + options.apiKey,
-          'content-type': 'application/json',
-          'X-Client-Request-Id': correlationId,
-        },
-        body: JSON.stringify({
-          model: rate.model, store: false, input: options.input,
-          max_output_tokens: options.maxOutputTokens,
-        }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error('SC021_OPENAI_PROVIDER_ERROR');
+      let response: Awaited<ReturnType<typeof fetchImpl>>;
+      try {
+        response = await fetchImpl('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + options.apiKey,
+            'content-type': 'application/json',
+            'X-Client-Request-Id': correlationId,
+          },
+          body: requestBody,
+          signal: controller.signal,
+        });
+      } catch {
+        throw new Error('SC021_OPENAI_PROVIDER_ERROR');
+      }
+      if (!response.ok) {
+        if (definitiveRejection(response.status)) {
+          throw new ProviderPreInvocationRejection('SC021_PROVIDER_REJECTED');
+        }
+        throw new Error('SC021_OPENAI_PROVIDER_ERROR');
+      }
       let body: unknown;
       try {
         body = await response.json();
