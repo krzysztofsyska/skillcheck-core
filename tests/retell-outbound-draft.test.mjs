@@ -226,6 +226,11 @@ test("SC-011-C requires interview duration at least approved SC-012 target", asy
   const c=config(), p=released(), proof=await verify();
   denied({...request(p),callTimeoutSeconds:60},c,p,proof);
   denied({...request(p),callTimeoutSeconds:419},c,p,proof);
-  const shortAgentProof = await verify(c,{...agent,max_call_duration_ms:420000});
-  assert.equal(compileRetellOutboundDraft({...request(p),callTimeoutSeconds:420},c,p,shortAgentProof).requestedMaxSeconds,420);
+  const shortAgent = {...agent, max_call_duration_ms:420000};
+  const shortConfig = {...c,
+    approvedAgentSha256: createHash("sha256").update(JSON.stringify(shortAgent)).digest("hex"),
+  };
+  const shortAgentProof = await verify(shortConfig, shortAgent);
+  assert.equal(compileRetellOutboundDraft({...request(p),callTimeoutSeconds:420},
+    shortConfig,p,shortAgentProof).requestedMaxSeconds,420);
 });
