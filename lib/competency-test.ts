@@ -35,12 +35,60 @@ const letter = new RegExp(String.raw`[\p{L}]`, 'u');
 const emojiModifier = new RegExp(String.raw`[\p{Emoji_Modifier}]`, 'u');
 const control = new RegExp(String.raw`[\p{Cc}\p{Cs}]`, 'u');
 const arabicLetter = new RegExp(String.raw`[\p{Script=Arabic}&&\p{L}]`, 'v');
-const indicLetter = new RegExp(String.raw`[\p{L}&&[\p{Script=Devanagari}\p{Script=Bengali}\p{Script=Gurmukhi}\p{Script=Gujarati}\p{Script=Oriya}\p{Script=Tamil}\p{Script=Telugu}\p{Script=Kannada}\p{Script=Malayalam}\p{Script=Sinhala}]]`, 'v');
-const indicViramas = new Set(['\u094D','\u09CD','\u0A4D','\u0ACD','\u0B4D','\u0BCD','\u0C4D','\u0CCD','\u0D4D','\u0DCA']);
+const nonspacingMark = new RegExp(String.raw`\p{Mn}`, 'u');
+const ideograph = new RegExp(String.raw`\p{Unified_Ideograph}`, 'u');
+const inheritedOrCommon = new RegExp(String.raw`[\p{Script=Inherited}\p{Script=Common}]`, 'u');
+// UAX #31 A2/B conjunct contexts, limited to the viramas of the scripts we accept.
+const indicConjunct = new Map([
+  { virama: '\u094D', script: 'Devanagari' },
+  { virama: '\u09CD', script: 'Bengali' },
+  { virama: '\u0A4D', script: 'Gurmukhi' },
+  { virama: '\u0ACD', script: 'Gujarati' },
+  { virama: '\u0B4D', script: 'Oriya' },
+  { virama: '\u0BCD', script: 'Tamil' },
+  { virama: '\u0C4D', script: 'Telugu' },
+  { virama: '\u0CCD', script: 'Kannada' },
+  { virama: '\u0D4D', script: 'Malayalam' },
+  { virama: '\u0DCA', script: 'Sinhala' },
+].map(({ virama, script }) => [virama, {
+  letter: new RegExp(String.raw`[\p{L}&&\p{Script=${script}}]`, 'v'),
+  mark: new RegExp(String.raw`[\p{M}&&\p{Script=${script}}]`, 'v'),
+}] as [string, { letter: RegExp; mark: RegExp }]));
+
+function sameScriptMark(char: string, script: { letter: RegExp; mark: RegExp }): boolean {
+  return nonspacingMark.test(char) && (script.mark.test(char) || inheritedOrCommon.test(char));
+}
+
+/** UAX #31 §2.3.1: ZWNJ joins two same-script letters around a virama. ZWJ
+ * follows a virama and is rejected when the next mark is from that script
+ * (dependent vowels). Other marks of the same script may sit between the
+ * letter and the virama. Neither joiner counts as visible evidence. */
+function indicConjunctJoiner(chars: string[], index: number): boolean {
+  const joiner = chars[index];
+  const zwnj = joiner === '\u200C';
+  const zwj = joiner === '\u200D';
+  if (!zwnj && !zwj) return false;
+  let cursor = index - 1;
+  while (cursor >= 0 && nonspacingMark.test(chars[cursor]) && !indicConjunct.has(chars[cursor])) cursor -= 1;
+  const script = cursor >= 0 ? indicConjunct.get(chars[cursor]) : undefined;
+  if (!script) return false;
+  for (let mark = index - 1; mark > cursor; mark -= 1) {
+    if (!sameScriptMark(chars[mark], script)) return false;
+  }
+  cursor -= 1;
+  while (cursor >= 0 && sameScriptMark(chars[cursor], script)) cursor -= 1;
+  if (cursor < 0 || !script.letter.test(chars[cursor])) return false;
+  if (zwnj) {
+    let next = index + 1;
+    while (next < chars.length && sameScriptMark(chars[next], script)) next += 1;
+    return next < chars.length && script.letter.test(chars[next]);
+  }
+  return !script.mark.test(chars[index + 1] ?? '');
+}
 
 /** Returns -1 for forbidden invisible/control characters.
- * Permits contextually meaningful emoji joiners, emoji variation selectors
- * and mid-word soft hyphens without counting them as visible evidence. */
+ * Permits contextually meaningful emoji joiners, variation selectors,
+ * Indic conjunct joiners and mid-word soft hyphens without counting them. */
 function visibleContentCount(value: string): number {
   const chars = Array.from(value);
   let visible = 0;
@@ -56,6 +104,11 @@ function visibleContentCount(value: string): number {
         && previous.length === 1 && next === '\u20E3';
       const emojiVariation = (char === '\uFE0E' || char === '\uFE0F')
         && (pictograph.test(previous) || keycapVariation);
+      // IVS uses U+E0100–U+E01EF immediately after a unified ideograph.
+      // The selector stays invisible and does not count as evidence.
+      const variationPoint = char.codePointAt(0) ?? 0;
+      const ideographicVariation = variationPoint >= 0xE0100 && variationPoint <= 0xE01EF
+        && ideograph.test(previous);
       // Emoji modifiers and variation selectors can intervene before a ZWJ.
       let previousEmoji = index - 1;
       while (previousEmoji >= 0 && (emojiModifier.test(chars[previousEmoji])
@@ -64,10 +117,8 @@ function visibleContentCount(value: string): number {
         && pictograph.test(chars[previousEmoji]) && pictograph.test(next);
       const softHyphen = char === '\u00AD' && letter.test(previous) && letter.test(next);
       const arabicJoiner = char === '\u200C' && arabicLetter.test(previous) && arabicLetter.test(next);
-      // ZWJ after an Indic virama participates in a visible conjunct cluster.
-      const indicJoiner = char === '\u200D' && indicViramas.has(previous)
-        && index >= 2 && indicLetter.test(chars[index-2]) && indicLetter.test(next);
-      if (!emojiVariation && !emojiJoiner && !softHyphen && !arabicJoiner && !indicJoiner) return -1;
+      const indicJoiner = indicConjunctJoiner(chars, index);
+      if (!emojiVariation && !ideographicVariation && !emojiJoiner && !softHyphen && !arabicJoiner && !indicJoiner) return -1;
       continue;
     }
     // U+2800 looks blank but is classified as a symbol, not White_Space.

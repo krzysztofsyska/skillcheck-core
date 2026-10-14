@@ -226,3 +226,40 @@ test('unrelated invisible joiners remain forbidden',()=>{
     assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
   }
 });
+
+test('Indic ZWNJ conjuncts and ideographic variation sequences remain readable evidence',()=>{
+  const malayalam = String.fromCodePoint(0x0D26,0x0D43,0x0D15,0x0D4D,0x200C,0x0D38,0x0D3E,0x0D15,0x0D4D,0x0D37,0x0D3F);
+  const withNukta = String.fromCodePoint(0x0915,0x093C,0x094D,0x200C,0x0937) + ' उदाहरण';
+  const sinhala = String.fromCodePoint(0x0DC1,0x0DCA,0x200D,0x0DBB,0x0DD3,0x0020,0x0DBD,0x0D82,0x0D9A,0x0DCF);
+  const halfForm = String.fromCodePoint(0x0915,0x094D,0x200D) + ' रूप';
+  const japanese = String.fromCodePoint(0x8FBB,0xE0100) + 'は地名です';
+  for (const workSample of [malayalam, withNukta, sinhala, halfForm, japanese]) {
+    assert.equal(parseCompetencyTestSubmission(definition(),{workSample}).workSample, workSample);
+    const rows = review();
+    rows[0] = {criterionIndex:0, rating:'meets', evidence:workSample};
+    assert.equal(evaluateCompetencyTest(definition(),{workSample},rows).criterionResults[0].evidence, workSample);
+  }
+  const quoted = String.fromCodePoint(0x8FBB,0xE0100) + '本店';
+  const rows = review();
+  rows[0] = {criterionIndex:0, rating:'above', evidence:quoted};
+  assert.equal(evaluateCompetencyTest(definition(),{workSample:'支店は' + quoted + 'です'},rows).criterionResults[0].rating, 'above');
+  const twoIdeographs = String.fromCodePoint(0x8FBB,0xE0100,0x672C);
+  rows[0] = {criterionIndex:0, rating:'meets', evidence:twoIdeographs};
+  assert.throws(()=>evaluateCompetencyTest(definition(),{workSample:twoIdeographs + 'です'},rows), /cytatu/);
+});
+
+test('joiners and variation selectors outside their Unicode contexts stay rejected',()=>{
+  const samples = [
+    String.fromCodePoint(0x0D15,0x200C,0x0D38),
+    String.fromCodePoint(0x0D15,0x0D4D,0x200C,0x0937),
+    String.fromCodePoint(0x0D15,0x0D4D,0x200C),
+    String.fromCodePoint(0x0DC1,0x0DCA,0x200D,0x0DD3),
+    String.fromCodePoint(0x0915,0x094D,0x200D,0x093E),
+    '地名' + String.fromCodePoint(0xFE00),
+    'abc' + String.fromCodePoint(0xE0100),
+    String.fromCodePoint(0xE0100) + '辻',
+  ];
+  for (const workSample of samples) {
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
+  }
+});
