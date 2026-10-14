@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
-import { parsePipelineForm, validContactDate } from '../lib/sales-pipeline.ts';
+import { isUuid, parsePipelineForm, validContactDate } from '../lib/sales-pipeline.ts';
 
 test('server form rejects malformed values and requires deliberate terminal confirmation', () => {
   const form = new FormData();
@@ -17,6 +17,12 @@ test('server form rejects malformed values and requires deliberate terminal conf
   }
   form.set('stage','lost');assert.equal(parsePipelineForm(form),null);
   form.set('confirm_close','yes');assert.equal(parsePipelineForm(form).next_contact,null);
+  const leadId=form.get('lead_id');
+  assert.equal(isUuid(String(leadId)),true);
+  for (const value of [leadId+'suffix', 'prefix'+leadId, leadId+'\n', leadId+' ']) {
+    form.set('lead_id',value);assert.equal(isUuid(String(value)),false);assert.equal(parsePipelineForm(form),null);
+  }
+  form.set('lead_id',leadId);form.set('company_id',String(leadId)+'suffix');assert.equal(parsePipelineForm(form),null);
 });
 
 test('pipeline authorization, filters, concurrency versions, history and retention cascade', async t => {
@@ -41,7 +47,13 @@ test('pipeline authorization, filters, concurrency versions, history and retenti
  await db.query("insert into public.companies values($1,'Firma testowa')",[company]);
  const insert=async()=>{const id=randomUUID();await db.query(`insert into public.sales_leads(id,idempotency_key,first_name,company_name,email,needs,fingerprint_hash) values($1,$2,'Test','Firma','test@example.invalid','Synthetic needs',$3)`,[id,randomUUID(),'a'.repeat(64)]);return id;};
  const old=await insert();await db.query('insert into private.sales_lead_closures(lead_id) values($1)',[old]);
- await db.exec(await readFile(new URL('../supabase/migrations/20261009141832_sales_pipeline.sql',import.meta.url),'utf8'));
+ const pipelineSql=await readFile(new URL('../supabase/migrations/20261009141832_sales_pipeline.sql',import.meta.url),'utf8');
+ const triggerAt=pipelineSql.indexOf('create trigger initialize_sales_pipeline');
+ const backfillAt=pipelineSql.lastIndexOf('insert into private.sales_pipeline(lead_id,stage,updated_at)');
+ assert.ok(triggerAt>0&&backfillAt>triggerAt,'initializer must be installed before the backfill');
+ assert.match(pipelineSql,/lock table public\.sales_leads in share row exclusive mode/);
+ assert.equal(pipelineSql.match(/on conflict\(lead_id\) do nothing/g)?.length,2);
+ await db.exec(pipelineSql);
  const id=await insert(),lost=await insert(),won=await insert(),legacy=await insert();
  const scalar=async(sql,args=[])=>Object.values((await db.query(sql,args)).rows[0])[0];
  const as=async(role,uid,fn)=>{await db.exec('set role '+role);await db.query("select set_config('request.jwt.claim.sub',$1,false)",[uid||'']);try{return await fn();}finally{await db.exec('reset role');}};

@@ -25,16 +25,19 @@ revoke all on private.sales_pipeline,private.sales_pipeline_events from public,a
 revoke all on sequence private.sales_pipeline_events_id_seq from public,anon,authenticated;
 create index sales_pipeline_due_idx on private.sales_pipeline(next_contact_on,lead_id) where stage not in ('won','lost');
 create index sales_pipeline_stage_idx on private.sales_pipeline(stage,lead_id);
-insert into private.sales_pipeline(lead_id,stage,updated_at)
- select l.id,case when c.lead_id is null then 'new' else 'lost' end,coalesce(c.closed_at,l.created_at)
- from public.sales_leads l left join private.sales_lead_closures c on c.lead_id=l.id;
-
+-- Hold inserts and closures until the initializer and the backfill both commit.
+lock table public.sales_leads in share row exclusive mode;
+lock table private.sales_lead_closures in share row exclusive mode;
 create function private.initialize_sales_pipeline() returns trigger
 language plpgsql security definer set search_path='' as $$
-begin insert into private.sales_pipeline(lead_id) values(new.id); return new; end $$;
+begin insert into private.sales_pipeline(lead_id) values(new.id) on conflict(lead_id) do nothing; return new; end $$;
 revoke all on function private.initialize_sales_pipeline() from public,anon,authenticated;
 create trigger initialize_sales_pipeline after insert on public.sales_leads
  for each row execute function private.initialize_sales_pipeline();
+insert into private.sales_pipeline(lead_id,stage,updated_at)
+ select l.id,case when c.lead_id is null then 'new' else 'lost' end,coalesce(c.closed_at,l.created_at)
+ from public.sales_leads l left join private.sales_lead_closures c on c.lead_id=l.id
+ on conflict(lead_id) do nothing;
 
 -- Legacy inbox closure and the new pipeline must share the same lifecycle.
 create function private.close_sales_pipeline() returns trigger

@@ -70,7 +70,8 @@ begin
     where o.state in ('pending','retry','sending') and (o.first_attempt_at<=clock_timestamp()-interval '12 hours' or
       (o.attempts>=6 and (o.lease_until is null or o.lease_until<=clock_timestamp())));
   update private.sales_mail_outbox o set state='suppressed',last_code='conversation_closed'
-    where o.state in ('pending','retry') and exists(select 1 from private.sales_lead_closures c where c.lead_id=o.lead_id);
+    where exists(select 1 from private.sales_lead_closures c where c.lead_id=o.lead_id)
+      and (o.state in ('pending','retry') or (o.state='sending' and o.lease_until<=clock_timestamp()));
   select o.lead_id into chosen from private.sales_mail_outbox o
     where (target_lead is null or o.lead_id=target_lead) and o.attempts<6
       and ((o.state in ('pending','retry') and o.next_attempt_at<=clock_timestamp())

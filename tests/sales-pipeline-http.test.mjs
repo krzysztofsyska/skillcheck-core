@@ -54,6 +54,12 @@ test('sales panel HTTP access, filtering and browser workflow with synthetic bac
   const detail=await read('/operator/sales/'+id);assert.equal(detail.res.status,200);assert.match(detail.html,/&lt;img src=x onerror=alert\(1\)&gt;/);assert.doesNotMatch(detail.html,/<img src=x/);
   assert.equal((await read('/operator/sales/bad')).res.status,404);
   assert.equal((await read('/operator/sales/00000000-0000-4000-8000-000000000099')).res.status,404);
+  const suffixed=id+'suffix';
+  assert.equal((await read('/operator/sales/'+suffixed)).res.status,404);
+  assert.equal(requests.some(r=>r.input?.target_lead===suffixed),false);
+ });
+ if(process.env.CI&&!process.env.PLAYWRIGHT_MODULE)await t.test('browser desktop/mobile: search, edit, conflict, permissions and terminal confirmation',async()=>{
+  assert.fail('PLAYWRIGHT_MODULE is required in CI so the sales pipeline browser scenarios gate the pull request');
  });
  if(process.env.PLAYWRIGHT_MODULE)await t.test('browser desktop/mobile: search, edit, conflict, permissions and terminal confirmation',async()=>{
   const {chromium}=await import(process.env.PLAYWRIGHT_MODULE);

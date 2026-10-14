@@ -1,13 +1,13 @@
 # SC-SALES-013 — proces sprzedaży
 
 TASK: SC-SALES-013
-STATUS: IMPLEMENTED / awaiting integration acceptance; production paused
+STATUS: FIXING — poprawki review na gałęzi wydania; scalenie do main ZABLOKOWANE
 LEVEL: L3
 SCOPE: FULLSTACK
 OWNER: Krzysztof
-REVIEWER: Codex (implementation self-review; independent review not claimed)
+REVIEWER: Codex (niezależny review PR #100; poprawki w toku)
 DEPENDS ON: SC-SALES-006D/E/F, PR #64
-BRANCH: feat/sc-sales-013
+BRANCH: release/sales-only-20261011
 ISSUE: #70
 OWNER_APPROVAL: NO
 PRODUCTION_APPROVAL: NO
@@ -25,7 +25,7 @@ PRODUCTION_APPROVAL: NO
 
 ## Baza i kontrakt
 
-Migracja `20261009141832_sales_pipeline.sql`, utworzona CLI; NIE zastosowana na produkcji.
+Migracja `20261009141832_sales_pipeline.sql`, utworzona CLI. Plik poprawiono 2026-10-14 (trigger przed backfillem). Jeśli poprzednia wersja jest już w historii bazy, nie powtarzać jej; ta edycja nie była wykonywana na produkcji.
 
 Prywatne tabele `sales_pipeline` i `sales_pipeline_events`: RLS oraz brak bezpośrednich grantów dla anon/authenticated. Oryginalne zgłoszenie pozostaje niemodyfikowalne. Migracja inicjalizuje metadane istniejących zgłoszeń, uwzględniając wcześniejsze zakończenia; nowe zgłoszenia inicjalizuje trigger.
 
@@ -45,7 +45,7 @@ Powiązania do firm są tylko metadanymi handlowymi. Nowe RPC nie udostępniają
 ## Ograniczenia i uruchomienie
 
 - Produkcja nadal wstrzymana na życzenie właściciela. Przygotowanie kodu nie oznacza uruchomienia formularza.
-- Gałąź zaczyna się od integration `5f8036e` i zawiera zależność #64 (`4f33ffa`). Konflikty scalania rozwiązano zachowując kontrakty i skrypty obu modułów. Najpierw akceptacja/integracja #64; potem ponowny diff/CI i akceptacja SC-SALES-013. Nie scalać tej gałęzi w celu obejścia akceptacji #64.
+- P1, promocja: ta gałąź wydania ma rodzica `main` `76760b7`, a nie `integration`. Scalenie PR #100 do `main` pominęłoby checkpoint integration i rozstrzygnięcie konfliktów z zaakceptowaną pracą. Tego PR nie wolno scalać do `main`. Promocja produkcji ma powstać od nowa jako `integration -> main` dopiero wtedy, gdy zależności i te poprawki są już na `integration`. Ta zmiana nie przełącza bazy PR, nie zastępuje gałęzi całą `integration` i nie osłabia reguły classify-pr. Decyzja o odtworzeniu promocji zostaje przy orkiestratorze.
 - Po osobnej zgodzie produkcyjnej: zastosować brakujące migracje 006B/E/F, następnie 013, zachowując istniejącą historię migracji; wdrożyć aplikację w zatwierdzonym procesie integration → main; wykonać test własnego zgłoszenia i uprawnień.
 - Scheduler retencji i aktywacja formularza/maila pozostają opisane w 006E/F. Ta zmiana ich nie uruchamia.
 - Zamknięte zgłoszenia nie mają ponownego otwarcia. Korekty terminalnych decyzji i polityka retencji dokumentacji umów są osobnym zakresem. Przed produkcyjnym użyciem statusu Wygrane właściciel musi ustalić retencję dokumentacji klienta; automat usuwania przegranych nie usuwa wygranych.
@@ -58,3 +58,11 @@ Powiązania do firm są tylko metadanymi handlowymi. Nowe RPC nie udostępniają
 - Walidacja lokalna: build (po usunięciu uszkodzonego cache Turbopack), typecheck, 2 testy modułu, 16 testów HTTP/Chromium panelu i skrzynki PASS. Chromium 1280/390 px, syntetyczny backend, bez wysyłki wiadomości i bez zdalnych zmian DB.
 - Ponowny przegląd autora: oba zgłoszone defekty naprawione. To nie jest niezależny review. CI nowego commitu wymaga osobnego potwierdzenia.
 - Zależność PR #64, akceptacja właściciela i osobna zgoda produkcyjna nadal obowiązują. Retencja wygranych pozostaje do ustalenia. Nie wdrożono na produkcję.
+
+## Poprawki po niezależnym review PR #100 — 2026-10-14
+
+- P2, wygasły lease `sending`: `claim_sales_mail` tłumi też wygasłe wiersze `sending` zamkniętej rozmowy, zanim scheduler może je ponownie przejąć. Aktywny lease pozostaje do czasu wygaśnięcia, żeby dokończenie wysyłki nadal mogło zapisać wynik.
+- P2, inicjalizacja pipeline: migracja najpierw blokuje `sales_leads` i `sales_lead_closures`, instaluje trigger, potem wykonuje backfill z `on conflict (lead_id) do nothing`.
+- P2, UUID: `isUuid` wymaga całej wartości — kotwice `^` i `$` oraz długość 36. Sufiks nie przechodzi do RPC; trasa zwraca 404.
+- P2, przeglądarka: Checks instaluje Playwright Chromium i ustawia `PLAYWRIGHT_MODULE`. W CI brak tej zmiennej kończy test błędem, zamiast po cichu pominąć scenariusz.
+- P1, promocja: BLOCKED. Nie scalać tej gałęzi do `main`. Nie uruchamiano migracji na bazie współdzielonej ani produkcyjnej. Jeśli poprzednie wersje tych dwóch migracji są już zapisane w historii bazy, nie wolno ich powtarzać; zmiana pliku nie aktualizuje wtedy żywej funkcji. Naprawa takiej bazy wymaga osobno zatwierdzonej migracji forward i nie została wykonana w tym zadaniu.

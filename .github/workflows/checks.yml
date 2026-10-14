@@ -61,5 +61,9 @@ jobs:
       - run: npm run test:auth-http
       - run: npm run test:marketing
       - run: npm run test:sales-leads-http
+      - run: npx playwright install --with-deps chromium
       - run: npm run test:sales-pipeline-http
+        env:
+          PLAYWRIGHT_MODULE: playwright
+          BROWSER_ARGS: '["--no-sandbox","--disable-dev-shm-usage"]'
       - run: npm run test:sales-leads-operator

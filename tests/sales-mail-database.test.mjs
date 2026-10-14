@@ -64,6 +64,15 @@ test('outbox: atomic enqueue, disable, authorization, lease, retry window, reten
  assert.deepEqual(await claim(expired),[]);assert.equal(await scalar('select state from private.sales_mail_outbox where lead_id=$1',[expired]),'uncertain');
  const closed=await insert('closed@example.test');await db.query('insert into private.sales_lead_closures(lead_id) values($1)',[closed]);assert.deepEqual(await claim(closed),[]);
  assert.equal(await scalar('select state from private.sales_mail_outbox where lead_id=$1',[closed]),'suppressed');
+ const crashed=await insert('crashed-closed@example.test');
+ assert.ok((await claim(crashed))[0]);
+ await db.query('insert into private.sales_lead_closures(lead_id) values($1)',[crashed]);
+ assert.equal(await scalar('select state from private.sales_mail_outbox where lead_id=$1',[crashed]),'sending');
+ assert.deepEqual(await claim(crashed),[]);
+ await db.query("update private.sales_mail_outbox set lease_until=clock_timestamp()-interval '1 second' where lead_id=$1",[crashed]);
+ assert.deepEqual(await claim(crashed),[]);
+ assert.equal(await scalar('select state from private.sales_mail_outbox where lead_id=$1',[crashed]),'suppressed');
+ assert.equal(await scalar('select last_code from private.sales_mail_outbox where lead_id=$1',[crashed]),'conversation_closed');
  const recovering=await insert('crash@example.test');const stale=(await claim(recovering))[0];
  await db.query("update private.sales_mail_outbox set lease_until=clock_timestamp()-interval '1 second' where lead_id=$1",[recovering]);
  const recovered=(await claim(recovering))[0];assert.notEqual(stale.lease_id,recovered.lease_id);

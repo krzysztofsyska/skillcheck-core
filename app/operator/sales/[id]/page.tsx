@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { salesOperator, checkSalesError } from '../access';
 import { PipelineForm } from '../pipeline-form';
-import { uuidPattern, salesStages } from '../../../../lib/sales-pipeline';
+import { isUuid, salesStages } from '../../../../lib/sales-pipeline';
 import { salesLeadReplyHref } from '../../../../lib/sales-lead-reply';
 import styles from '../sales.module.css';
 export const dynamic = 'force-dynamic';
@@ -12,7 +12,7 @@ const dates = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium', timeStyle:
 export default async function SalesDetail({ params, searchParams }: { params: Promise<{id: string}>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const client = await salesOperator();
   const { id } = await params;
-  if (!uuidPattern.test(id)) notFound();
+  if (!isUuid(id)) notFound();
   const q = await searchParams;
   const search = typeof q.company === 'string' ? q.company.trim().slice(0, 100) : '';
   const before = typeof q.before === 'string' && /^\d{1,9}$/.test(q.before) ? Number(q.before) : 2147483647;
