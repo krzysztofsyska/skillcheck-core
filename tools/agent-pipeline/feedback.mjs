@@ -68,10 +68,14 @@ export function verifyRepair(binding, state, snapshot) {
   // Require a complete linear suffix signed by the configured Cursor bot committer.
   let parent = state.repairHead;
   for (const c of proof.commits) {
+    const changed = Array.isArray(c.files) ? c.files.flatMap(file => [file?.filename, file?.previous_filename].filter(Boolean)) : null;
+    // The net pull diff hides an out-of-scope commit that a later commit reverted.
+    // GitHub omits files when a commit exceeds 300 paths, so a missing list is not proof.
     if (!sha(c.sha) || c.parents?.length !== 1 || c.parents[0].sha !== parent
         || c.committer?.id !== binding.cursorCommitter.id || c.committer?.login !== binding.cursorCommitter.login
         || c.committer?.type !== 'Bot' || c.commit?.verification?.verified !== true
-        || c.commit.verification.reason !== 'valid') return false;
+        || c.commit.verification.reason !== 'valid'
+        || !changed?.length || changed.some(file => !binding.allowedFiles.includes(file))) return false;
     parent = c.sha;
   }
   const tip = proof.commits.at(-1);
@@ -173,6 +177,17 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
   const fresh = await readSnapshot(plan.state);
   validateSnapshot(binding, fresh);
   if (fresh.pull.head.sha !== plan.state.head || fresh.pull.base.sha !== plan.state.base) fail('TARGET_MOVED');
+  async function completeReviewRequest() {
+    const result = await postReview(codexReviewRequest(plan.state.head, plan.state.base));
+    if (!Number.isSafeInteger(result.id)) fail('INVALID_REVIEW_RESPONSE');
+    // Baseline is taken after the request exists. An approval that landed in this
+    // same GitHub second, but before the comment, is then excluded.
+    const posted = await readSnapshot(plan.state);
+    validateSnapshot(binding, posted);
+    if (posted.pull.head.sha !== plan.state.head || posted.pull.base.sha !== plan.state.base) fail('TARGET_MOVED');
+    return { ...plan.state, phase: 'WAITING_REVIEW', reviewCommentId: result.id,
+      reviewBaseline: posted.reviews.map(review => review.id), reviewRequestedAt: now ?? Date.now() };
+  }
   let completed;
   if (plan.effect.type === 'fix') {
     if (fresh.agent.status !== 'IDLE') fail('CURSOR_BUSY');
@@ -184,16 +199,10 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     completed = { ...plan.state, phase: 'FIXING', runId: run.id };
   } else if (plan.effect.type === 'request-review') {
     if (findings(fresh).length) fail('FINDINGS_STALE');
-    const result = await postReview(codexReviewRequest(plan.state.head, plan.state.base));
-    if (!Number.isSafeInteger(result.id)) fail('INVALID_REVIEW_RESPONSE');
-    completed = { ...plan.state, phase: 'WAITING_REVIEW', reviewCommentId: result.id,
-      reviewBaseline: fresh.reviews.map(r => r.id), reviewRequestedAt: now ?? Date.now() };
+    completed = await completeReviewRequest();
   } else {
     if (!verifyRepair(binding, plan.state, fresh)) fail('CURSOR_PROVENANCE_CHANGED');
-    const result = await postReview(codexReviewRequest(plan.state.head, plan.state.base));
-    if (!Number.isSafeInteger(result.id)) fail('INVALID_REVIEW_RESPONSE');
-    completed = { ...plan.state, phase: 'WAITING_REVIEW', reviewCommentId: result.id,
-      reviewBaseline: fresh.reviews.map(r => r.id), reviewRequestedAt: now ?? Date.now() };
+    completed = await completeReviewRequest();
   }
   await store.save(completed, revision);
   return completed.phase;

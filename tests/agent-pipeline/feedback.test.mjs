@@ -80,6 +80,7 @@ function finishRepair(f) {
   f.snapshot.pull.head.sha = C;
   f.snapshot.repair = { base: A, head: C, status: 'ahead', complete: true, commits: [
     { sha: C, parents: [{ sha: A }], committer: { ...f.binding.cursorCommitter, type: 'Bot' },
+      files: [{ filename: 'docs/test.md' }],
       commit: { message: `Fix\n\nSkillCheck-Repair: ${f.state().operationMarker}`, verification: { verified: true, reason: 'valid' } } },
   ] };
 }
@@ -272,6 +273,32 @@ for (const [name, mutate] of Object.entries({
   assert.equal(f.calls(), 1);
 });
 
+test('a reverted out-of-scope commit is rejected even when the net diff is allowed', async () => {
+  const f = fixture(); await runFeedback(f.args); finishRepair(f);
+  const middle = 'd'.repeat(40);
+  const signed = { ...f.binding.cursorCommitter, type: 'Bot' };
+  const proof = { verified: true, reason: 'valid' };
+  f.snapshot.files = ['docs/test.md'];
+  f.snapshot.repair.commits = [
+    { sha: middle, parents: [{ sha: A }], committer: signed, files: [{ filename: '.github/workflows/checks.yml' }],
+      commit: { message: 'out of scope', verification: proof } },
+    { sha: C, parents: [{ sha: middle }], committer: signed,
+      files: [{ filename: '.github/workflows/checks.yml' }, { filename: 'docs/test.md' }],
+      commit: { message: `Fix\n\nSkillCheck-Repair: ${f.state().operationMarker}`, verification: proof } },
+  ];
+  assert.equal(await runFeedback(f.args), 'BLOCKED_PROVENANCE');
+  assert.equal(f.reviews(), 0);
+});
+
+test('repair commit without a complete file list is not allowlisted by the net diff', async () => {
+  const f = fixture(); await runFeedback(f.args); finishRepair(f);
+  delete f.snapshot.repair.commits[0].files;
+  assert.equal(await runFeedback(f.args), 'BLOCKED_PROVENANCE');
+  f.snapshot.repair.commits[0].files = [{ filename: 'docs/test.md', previous_filename: 'supabase/migrations/evil.sql' }];
+  assert.equal(await runFeedback(f.args), 'BLOCKED_PROVENANCE');
+  assert.equal(f.reviews(), 0);
+});
+
 test('all intervening commits must have trusted signed committer, not just the tip', async () => {
   const f = fixture(); await runFeedback(f.args); finishRepair(f);
   const middle = 'd'.repeat(40);
@@ -380,6 +407,23 @@ test('Codex approval in the same GitHub second as request is accepted', () => {
   assert.equal(planFeedback(f.binding, state, f.snapshot, 1600).state.phase, 'READY_FOR_OWNER');
   f.snapshot.reviews[0].submitted_at = new Date(0).toISOString();
   assert.equal(planFeedback(f.binding, state, f.snapshot, 1600).status, 'WAITING_REVIEW');
+});
+
+test('approval already visible when the review request returns cannot authorize READY', async () => {
+  const f = fixture();
+  await runFeedback(f.args);
+  finishRepair(f);
+  let reads = 0;
+  f.args.readSnapshot = async () => {
+    const snap = structuredClone(f.snapshot);
+    if (++reads >= 3) snap.reviews.push({ id: 150, user: bot, commit_id: C, state: 'APPROVED', submitted_at: new Date(f.args.now).toISOString() });
+    return snap;
+  };
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.ok(f.state().reviewBaseline.includes(150));
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  f.snapshot.reviews.push({ id: 151, user: bot, commit_id: C, state: 'APPROVED', submitted_at: new Date(f.args.now).toISOString() });
+  assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
 });
 
 test('moved integration base posts one replacement review instead of waiting forever', async () => {

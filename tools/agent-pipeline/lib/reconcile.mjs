@@ -238,7 +238,11 @@ export async function defaultPorts(env, policy, configuration, flags) {
         try {
           return await readClient.readProtection();
         } catch (error) {
-          if (error.status === 401 || error.status === 403 || error.status === 404) return null;
+          // A metadata token cannot see bypass_actors. Disabled reconciliation
+          // must stay read-only instead of failing the scheduled workflow.
+          // Live effects keep the strict RULESET_BYPASS_UNVERIFIABLE failure.
+          if (error.status === 401 || error.status === 403 || error.status === 404
+              || error.message === 'RULESET_BYPASS_UNVERIFIABLE') return null;
           throw error;
         }
       },

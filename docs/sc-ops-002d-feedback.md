@@ -66,6 +66,13 @@ return the complete linear commit suffix from the reserved head to the new head
 `cursorCommitter` bot ID/login/type. The final commit must contain the unique
 `SkillCheck-Repair` trailer reserved for this operation and sent in its prompt.
 Unrelated, unsigned, mixed-author or incomplete evidence stops at BLOCKED_PROVENANCE.
+Every commit in that suffix must also carry GitHub's complete file list, and every
+path it records, including a rename source, must be inside the binding allowlist.
+A later revert does not erase an earlier out-of-scope commit. The repository's
+Checks workflow runs on push only for `main` and `integration`; pull requests still
+run it. This does not recall a push that already happened and does not control a
+deployment configured outside the repository. There is no push deployment workflow
+in this repo.
 This evidence is rechecked immediately before the review request. Actionable
 findings are recomputed from the fresh snapshot immediately before `createRun`.
 An empty or changed set does not start Cursor; the reservation stays
@@ -138,6 +145,10 @@ must **not** receive that elevated permission just to circumvent a gate.
 Without it, the shared controller and feedback bridge stop before effects
 with `RULESET_BYPASS_UNVERIFIABLE`; even an apparently matching,
 owner-reviewed timestamp attestation must not override the block.
+Disabled reconciliation is the exception that stays read-only: a metadata
+`GITHUB_TOKEN` cannot see `bypass_actors`, so that scheduled read treats the
+hidden list as unknown protection and performs no effects. Enabling the
+controller does not gain that exception.
 This is an intentional fail-closed security fix, not a live activation.
 Future automatic authorization under read-only credentials requires a
 separately designed and reviewed reliable current-version proof; do not
@@ -157,7 +168,9 @@ the App's actual signed-commit behavior before activation.
 Native approvals count only when submitted after a recorded review request for
 the exact current head/base, and absent from its pre-request review baseline.
 `submitted_at` and the recorded request time are compared at GitHub's whole-second
-resolution, so an approval in the same second as the request can count.
+resolution. The review baseline is the review list read after the request comment
+exists, so an approval already visible at that read cannot authorize READY. A
+baseline-excluded approval in that same second can still count.
 READY is re-evaluated on every poll; removed evidence or new findings persistently
 revoke it. A changed base or head invalidates the old request. When that
 invalidated READY record has no new repair to run, the adapter reserves and posts
