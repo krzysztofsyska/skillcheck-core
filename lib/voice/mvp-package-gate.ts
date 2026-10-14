@@ -9,8 +9,9 @@
  * No Retell / VoIPstudio-GoTrunk calls or credential access in this module.
  */
 import {
-  isProcessReleasedPlan, releasedPlanQuestionsAreControlled,
-  SC012_INTRODUCTION_VERSION, SC012_PROHIBITED_TOPICS, type InterviewPlan,
+  isProcessReleasedPlan, releasedApplicationBinding, releasedPlanQuestionsAreControlled,
+  SC012_INTRODUCTION_VERSION, SC012_PROHIBITED_TOPICS,
+  type InterviewPlan, type ReleasedApplicationBinding,
 } from "./interview-plan.ts";
 import type { VoiceScenario } from "./provider.ts";
 
@@ -98,6 +99,13 @@ const isoInstant = (value: unknown): value is string =>
   typeof value === "string" && Number.isFinite(Date.parse(value)) &&
   new Date(value).toISOString() === value;
 
+const scenarioApplication = new WeakMap<object, ReleasedApplicationBinding>();
+/** Binding for the exact scenario object. Copies and JSON restores have none. */
+export function scenarioApplicationBinding(scenario: unknown): ReleasedApplicationBinding | undefined {
+  if (!scenario || typeof scenario !== "object") return undefined;
+  return scenarioApplication.get(scenario);
+}
+
 /** Pure mapping for SC-011's already-existing VoiceScenario contract.
  * Accepts only the object returned by releaseInterviewPlan in this process.
  * A persisted or hand-built DTO that merely claims status "released" is rejected.
@@ -122,10 +130,13 @@ export function voiceScenarioFromApprovedPlan(plan: InterviewPlan): VoiceScenari
     throw new Error("VOICE_MVP_PLAN_NOT_RELEASED");
   if (!releasedPlanQuestionsAreControlled(snapshot.questions))
     throw new Error("VOICE_MVP_INVALID_QUESTION");
+  const binding = releasedApplicationBinding(plan);
+  if (!binding || binding.sourceFingerprint !== snapshot.sourceFingerprint)
+    throw new Error("VOICE_MVP_PLAN_NOT_RELEASED");
   const questions = snapshot.questions.map(q => Object.freeze({
     id: q.id, prompt: q.text, followUps: Object.freeze([...q.followUps]),
   }));
-  return Object.freeze({
+  const scenario: VoiceScenario = Object.freeze({
     schemaVersion: 1, language: "pl-PL",
     introductionVersion: SC012_INTRODUCTION_VERSION,
     questions: Object.freeze(questions),
@@ -134,4 +145,6 @@ export function voiceScenarioFromApprovedPlan(plan: InterviewPlan): VoiceScenari
       prohibitedTopics: Object.freeze([...SC012_PROHIBITED_TOPICS]),
     }),
   });
+  scenarioApplication.set(scenario, binding);
+  return scenario;
 }

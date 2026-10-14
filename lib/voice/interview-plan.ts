@@ -89,9 +89,36 @@ function isPlainObject(value: object): boolean {
 function isClarificationKind(value: InterviewQuestion["criterionKind"]): value is "task" | "kpi" | "competency" {
   return value === "task" || value === "kpi" || value === "competency";
 }
+/** Server-side brand only. Never copied onto a provider payload. */
+export type ReleasedApplicationBinding = Readonly<{
+  companyId: string;
+  applicationId: string;
+  sourceFingerprint: string;
+}>;
+const applicationBinding = new WeakMap<object, ReleasedApplicationBinding>();
+function bindApplication(plan: object, binding: ReleasedApplicationBinding): void {
+  applicationBinding.set(plan, Object.freeze({
+    companyId: binding.companyId,
+    applicationId: binding.applicationId,
+    sourceFingerprint: binding.sourceFingerprint,
+  }));
+}
+function carryApplication(from: object, to: InterviewPlan): void {
+  const binding = applicationBinding.get(from);
+  if (!binding || binding.sourceFingerprint !== to.sourceFingerprint)
+    throw new InterviewPlanError("VOICE_PLAN_STALE_OR_CONFLICT");
+  applicationBinding.set(to, binding);
+}
 /** True only for the object returned by releaseInterviewPlan in this process. */
 export function isProcessReleasedPlan(plan: unknown): plan is InterviewPlan {
   return typeof plan === "object" && plan !== null && releasedInProcess.has(plan);
+}
+/** Application brand for a plan released in this process. Absent on copies. */
+export function releasedApplicationBinding(plan: unknown): ReleasedApplicationBinding | undefined {
+  if (!isProcessReleasedPlan(plan)) return undefined;
+  const binding = applicationBinding.get(plan);
+  if (!binding || binding.sourceFingerprint !== plan.sourceFingerprint) return undefined;
+  return binding;
 }
 export function prohibitedTopicsAreCanonical(topics: readonly string[]): boolean {
   return Array.isArray(topics) &&
@@ -241,6 +268,11 @@ export function buildInterviewPlan(input: InterviewSource): InterviewPlan {
     reviewerId: null, reviewedAt: null, releasedBy: null, releasedAt: null,
   });
   generatedInProcess.add(generated);
+  bindApplication(generated, {
+    companyId: input.companyId,
+    applicationId: input.applicationId,
+    sourceFingerprint,
+  });
   return generated;
 }
 
@@ -256,6 +288,7 @@ export function reviewInterviewPlan(
     throw new InterviewPlanError("VOICE_PLAN_STALE_OR_CONFLICT");
   const reviewed = immutable({ ...plan, status: "reviewed", revision: 2,
     reviewerId: input.reviewerId, reviewedAt: input.reviewedAt });
+  carryApplication(plan, reviewed);
   generatedInProcess.delete(plan);
   reviewedInProcess.add(reviewed);
   return reviewed;
@@ -279,6 +312,7 @@ export function releaseInterviewPlan(
     throw new InterviewPlanError("VOICE_PLAN_STALE_OR_CONFLICT");
   const released = immutable({ ...plan, status: "released", revision: 3,
     releasedBy: input.releasedBy, releasedAt: input.releasedAt });
+  carryApplication(plan, released);
   reviewedInProcess.delete(plan);
   releasedInProcess.add(released);
   return released;

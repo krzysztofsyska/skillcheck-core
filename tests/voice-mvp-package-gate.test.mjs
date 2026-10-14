@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { behaviorAreas } from '../lib/position-fields.ts';
 import { buildInterviewPlan, reviewInterviewPlan, releaseInterviewPlan } from '../lib/voice/interview-plan.ts';
-import { evaluateVoiceMvpPreflight, voiceScenarioFromApprovedPlan } from '../lib/voice/mvp-package-gate.ts';
+import { evaluateVoiceMvpPreflight, scenarioApplicationBinding, voiceScenarioFromApprovedPlan } from '../lib/voice/mvp-package-gate.ts';
 import { validateVoiceCallRequest } from '../lib/voice/provider.ts';
 import { FakeVoiceProvider } from '../lib/voice/fake-provider.ts';
 
@@ -85,7 +85,12 @@ test('SC-012 reviewed & released plan projects into the real SC-011 VoiceScenari
   assert.equal(scenario.language,'pl-PL');
   assert.equal(scenario.introductionVersion,'notice-pl-202610');
   assert.deepEqual(scenario.questions.map(q=>q.prompt),released.questions.map(q=>q.text));
+  assert.deepEqual(scenarioApplicationBinding(scenario),{
+    companyId:uuid(1),applicationId:uuid(2),sourceFingerprint:released.sourceFingerprint,
+  });
+  assert.equal(scenarioApplicationBinding(structuredClone(scenario)),undefined);
   assert.ok(!JSON.stringify(scenario).includes(uuid(1)));
+  assert.ok(!JSON.stringify(scenario).includes(uuid(2)));
   assert.ok(!JSON.stringify(scenario).includes('Pozyskiwanie klientów'));
   assert.ok(!JSON.stringify(scenario).includes('Nowe umowy'));
   const request={
