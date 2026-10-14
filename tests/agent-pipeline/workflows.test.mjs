@@ -57,13 +57,13 @@ test('model uses an isolated environment on main, without controller credentials
   const authorize = jobs.authorize;
   assert.equal(model.environment, 'agent-review');
   assert.equal(model.needs, 'authorize');
-  assert.equal(model.if, "success() && needs.authorize.outputs.allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && vars.AGENT_PIPELINE_ENABLED == 'true'");
+  assert.equal(model.if, "success() && needs.authorize.outputs.allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && vars.AGENT_PIPELINE_ENABLED == 'true'");
   assert.deepEqual(model.permissions, { contents: 'read' });
   assert.equal(model.env, undefined);
   const secrets = [...JSON.stringify(model).matchAll(/secrets\.([A-Z_]+)/g)].map(m => m[1]);
   assert.deepEqual(secrets, ['OPENAI_API_KEY']);
   assert.equal(authorize.environment, undefined);
-  assert.equal(authorize.if, "github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && vars.AGENT_PIPELINE_ENABLED == 'true'");
+  assert.equal(authorize.if, "github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && vars.AGENT_PIPELINE_ENABLED == 'true'");
   assert.deepEqual(authorize.permissions, { contents: 'read' });
   assert.equal(JSON.stringify(authorize).includes('secrets.'), false);
   assert.equal(JSON.stringify(authorize).includes('inputs'), false);
@@ -72,6 +72,7 @@ test('model uses an isolated environment on main, without controller credentials
   assert.match(authorize.steps[2].run, /authorize-review-dispatch\.mjs/);
   assert.equal(authorize.steps[2].env.ACTOR_ID, '${{ github.actor_id }}');
   assert.equal(authorize.steps[2].env.PIPELINE_ENABLED, '${{ vars.AGENT_PIPELINE_ENABLED }}');
+  assert.equal(authorize.steps[2].env.RUN_ATTEMPT, '${{ github.run_attempt }}');
 });
 
 test('example secret map keeps OpenAI out of the controller environment', () => {

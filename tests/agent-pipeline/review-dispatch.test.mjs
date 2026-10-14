@@ -4,23 +4,26 @@ import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
 import { reviewDispatchDecision } from '../../tools/agent-pipeline/lib/review-dispatch.mjs';
 
 test('paid review dispatch requires the enabled flag and the configured controller actor', () => {
-  const allowed = reviewDispatchDecision({ actorId: '456', pipelineEnabled: 'true', controllerActorId: 456 });
+  const allowed = reviewDispatchDecision({ actorId: '456', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '1' });
   assert.deepEqual(allowed, { ok: true, reason: 'controller' });
 
   const cases = [
-    [{ actorId: '456', pipelineEnabled: 'false', controllerActorId: 456 }, 'pipeline_disabled'],
-    [{ actorId: '456', pipelineEnabled: 'TRUE', controllerActorId: 456 }, 'pipeline_disabled'],
-    [{ actorId: '456', pipelineEnabled: true, controllerActorId: 456 }, 'pipeline_disabled'],
-    [{ actorId: '456', pipelineEnabled: 'true ', controllerActorId: 456 }, 'pipeline_disabled'],
-    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: null }, 'controller_actor_unconfigured'],
-    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: 0 }, 'controller_actor_unconfigured'],
-    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: '456' }, 'controller_actor_unconfigured'],
-    [{ actorId: '457', pipelineEnabled: 'true', controllerActorId: 456 }, 'actor_untrusted'],
-    [{ actorId: '0456', pipelineEnabled: 'true', controllerActorId: 456 }, 'actor_untrusted'],
-    [{ actorId: '456abc', pipelineEnabled: 'true', controllerActorId: 456 }, 'actor_untrusted'],
-    [{ actorId: '', pipelineEnabled: 'true', controllerActorId: 456 }, 'actor_untrusted'],
-    [{ actorId: 456, pipelineEnabled: 'true', controllerActorId: 456 }, 'actor_untrusted'],
-    [{ actorId: '9007199254740993', pipelineEnabled: 'true', controllerActorId: 456 }, 'actor_untrusted'],
+    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '2' }, 'rerun_rejected'],
+    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: 1 }, 'rerun_rejected'],
+    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '' }, 'rerun_rejected'],
+    [{ actorId: '456', pipelineEnabled: 'false', controllerActorId: 456, runAttempt: '1' }, 'pipeline_disabled'],
+    [{ actorId: '456', pipelineEnabled: 'TRUE', controllerActorId: 456, runAttempt: '1' }, 'pipeline_disabled'],
+    [{ actorId: '456', pipelineEnabled: true, controllerActorId: 456, runAttempt: '1' }, 'pipeline_disabled'],
+    [{ actorId: '456', pipelineEnabled: 'true ', controllerActorId: 456, runAttempt: '1' }, 'pipeline_disabled'],
+    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: null, runAttempt: '1' }, 'controller_actor_unconfigured'],
+    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: 0, runAttempt: '1' }, 'controller_actor_unconfigured'],
+    [{ actorId: '456', pipelineEnabled: 'true', controllerActorId: '456', runAttempt: '1' }, 'controller_actor_unconfigured'],
+    [{ actorId: '457', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '1' }, 'actor_untrusted'],
+    [{ actorId: '0456', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '1' }, 'actor_untrusted'],
+    [{ actorId: '456abc', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '1' }, 'actor_untrusted'],
+    [{ actorId: '', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '1' }, 'actor_untrusted'],
+    [{ actorId: 456, pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '1' }, 'actor_untrusted'],
+    [{ actorId: '9007199254740993', pipelineEnabled: 'true', controllerActorId: 456, runAttempt: '1' }, 'actor_untrusted'],
   ];
   for (const [input, reason] of cases) {
     assert.deepEqual(reviewDispatchDecision(input), { ok: false, reason }, reason);
@@ -36,6 +39,8 @@ test('checked-in policy cannot authorize a paid review dispatch', () => {
     actorId: String(policy.owner.id),
     pipelineEnabled: 'true',
     controllerActorId: policy.controller_actor_id,
+    runAttempt: '1',
   });
+  assert.equal(policy.environments.agent_review.id, null);
   assert.deepEqual(ownerDispatch, { ok: false, reason: 'controller_actor_unconfigured' });
 });

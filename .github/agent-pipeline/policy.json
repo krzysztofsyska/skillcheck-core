@@ -66,6 +66,10 @@
     "production_approval": {
       "name": "production-approval",
       "id": null
+    },
+    "agent_review": {
+      "name": "agent-review",
+      "id": null
     }
   },
   "required_checks": {

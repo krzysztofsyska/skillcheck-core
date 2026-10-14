@@ -6,6 +6,7 @@ const decision = reviewDispatchDecision({
   actorId: process.env.ACTOR_ID ?? '',
   pipelineEnabled: process.env.PIPELINE_ENABLED ?? '',
   controllerActorId: loadPolicy().controller_actor_id,
+  runAttempt: process.env.RUN_ATTEMPT ?? '',
 });
 if (process.env.GITHUB_OUTPUT) {
   appendFileSync(process.env.GITHUB_OUTPUT, `allowed=${decision.ok ? 'true' : 'false'}\n`);

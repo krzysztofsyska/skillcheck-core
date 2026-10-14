@@ -9,8 +9,9 @@ ISSUE: https://github.com/krzysztofsyska/skillcheck-core/issues/40
 
 ## Zmiany
 
-- policy.json: rzeczywiste numery 6 workflow i istniejącego agent-control z API. Brakujące App/actor/gate IDs nadal null, flagi false.
-- agent-review.yml: job `model` dostaje środowisko `agent-review` dopiero po jobie `authorize`. Authorize czyta `policy.json` z SHA workflow, nie z wejścia dispatch, i wpuszcza dalej tylko przy `AGENT_PIPELINE_ENABLED=true` oraz gdy `github.actor_id` jest równy dodatniemu `controller_actor_id`. Samo `main` nie uruchamia płatnego kroku. Sekret OpenAI nie wymaga dostępu do środowiska kontrolera.
+- policy.json: rzeczywiste numery 6 workflow i istniejącego agent-control z API. `agent_review.id` jest null, tak jak brakujące App/actor/gate IDs. Flagi false.
+- agent-review.yml: job `model` dostaje środowisko `agent-review` dopiero po `authorize`, i tylko przy `github.run_attempt == 1`. Authorize czyta `policy.json` z SHA workflow, nie z wejścia dispatch, i wpuszcza dalej tylko przy `AGENT_PIPELINE_ENABLED=true` oraz gdy `github.actor_id` jest równy dodatniemu `controller_actor_id`. Ponowienie zachowuje aktora pierwszej próby, więc nie wchodzi do sekretu. Sekret OpenAI nie wymaga dostępu do środowiska kontrolera.
+- Preflight: odczyt i potwierdzenie środowiska `agent-review` obejmuje numeryczne ID oraz politykę gałęzi dokładnie `main`. Brak recenzenta właściciela na tym środowisku jest zgodny z runbookiem. Bez ID preflight i konfiguracja live pozostają zamknięte.
 - config.example.json: `OPENAI_API_KEY` jest opisany jako sekret środowiska `agent-review`. Klucze kontrolera i Cursora zostają przy `agent-control`.
 - Runbook: oddzielny sekret review, warunek wejścia joba modelu, jawne checks dla obu gałęzi zgodne z 002A/policy, aktualne dowody odczytu.
 - Test kontraktu: bramka dispatch, przykładowa mapa sekretów, zaufana gałąź, osobne środowisko, jedyny odwołany sekret OPENAI_API_KEY i permissions contents:read.
@@ -21,16 +22,15 @@ DB / MIGRATIONS: brak
 
 Poprzedni odbiór na 42826d80c91609ef8ce06da93bdef51c2b3345ba: npm ci, test:agent-pipeline 44/44, dry-run, typecheck i build PASS.
 
-Ten diff, binarka Node v24.19.0:
-- npm ci: PASS
-- npm run test:agent-pipeline: PASS, 47/47
+Ten diff, binarka Node v24.19.0, po odmowie rerunów i preflight `agent-review`:
+- npm run test:agent-pipeline: PASS, 47/47 (nowe asercje są w istniejących testach)
 - npm run agent:dry-run -- --fixture complete-cycle: PASS, external_calls=0, merge_calls=0, flagi false, zatrzymanie przy obu gates
 - git diff --check: PASS
-- typecheck i build: niepowtarzane dla tej poprawki workflow; CI PR je uruchamia. Nie są dowodem bramki dispatch.
+- typecheck i build: uruchamia je CI tego SHA. Nie są dowodem bramki dispatch ani preflightu.
 
-## Znane, poza tą poprawką
+## Znane
 
-Osobna uwaga Codexa o preflight środowiska `agent-review` nie jest tu ruszana. `controller_actor_id` zostaje null, więc nawet przy ręcznie ustawionej zmiennej `AGENT_PIPELINE_ENABLED` skrypt odmawia. Bramka obowiązuje dopiero w pliku workflow na `main`; ten PR jej nie scala i nie włącza flag.
+`controller_actor_id` i `agent_review.id` zostają null, więc nawet przy ręcznie ustawionej zmiennej `AGENT_PIPELINE_ENABLED` skrypt i preflight odmawiają. Bramka obowiązuje dopiero w pliku workflow na `main`; ten PR jej nie scala i nie włącza flag. Uwagi o dispatchu kontrolera i przykładzie sekretu są zamknięte w ffa601dd9b3a6d26e8f2f3d922b144193df2bf02.
 
 To testy offline; nie potwierdzają dostępu API agentów, izolacji sekretów na koncie ani rzeczywistych zgód.
 

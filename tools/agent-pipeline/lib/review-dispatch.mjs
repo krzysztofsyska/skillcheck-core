@@ -1,4 +1,5 @@
-export function reviewDispatchDecision({ actorId, pipelineEnabled, controllerActorId }) {
+export function reviewDispatchDecision({ actorId, pipelineEnabled, controllerActorId, runAttempt }) {
+  if (runAttempt !== '1') return { ok: false, reason: 'rerun_rejected' };
   if (pipelineEnabled !== 'true') return { ok: false, reason: 'pipeline_disabled' };
   if (!Number.isInteger(controllerActorId) || !Number.isSafeInteger(controllerActorId) || controllerActorId <= 0) {
     return { ok: false, reason: 'controller_actor_unconfigured' };

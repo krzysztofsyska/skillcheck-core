@@ -22,15 +22,20 @@ export function protectionFromRulesets(rulesets, policy = {}, environments = {})
       && policy.required_checks[branch].every(context => checks.required_status_checks?.some(c => c.context === context && c.integration_id === appId));
   };
   const stateRules = active.filter(r => covers(r, 'agent-state') && noBypass(r)).flatMap(r => r.rules ?? []);
+  const mainOnly = configured => {
+    const e = environments[configured?.name];
+    return Number.isInteger(configured?.id) && e?.id === configured.id
+      && e.deployment_branch_policy?.custom_branch_policies === true
+      && Array.isArray(e.branch_policies) && e.branch_policies.length === 1
+      && e.branch_policies[0].name === 'main' && e.branch_policies[0].type === 'branch';
+  };
   const environmentOk = configured => {
     const e = environments[configured?.name];
     const reviewers = e?.protection_rules?.find(r => r.type === 'required_reviewers');
-    return Number.isInteger(configured?.id) && e?.id === configured.id
+    return mainOnly(configured)
       && reviewers?.prevent_self_review === true && reviewers.reviewers?.length === 1
       && reviewers.reviewers[0].type === 'User' && reviewers.reviewers[0].reviewer?.id === policy.owner?.id
-      && e.can_admins_bypass === false
-      && e.deployment_branch_policy?.custom_branch_policies === true
-      && e.branch_policies?.length === 1 && e.branch_policies[0].name === 'main' && e.branch_policies[0].type === 'branch';
+      && e.can_admins_bypass === false;
   };
   return {
     exclusiveWritersConfirmed: writer('main', 'pull_request') && writer('integration', 'pull_request') && writer('agent-state', 'always'),
@@ -40,6 +45,6 @@ export function protectionFromRulesets(rulesets, policy = {}, environments = {})
     qualityGatesBypass: active.some(r => ['quality-gates', 'agent-state-integrity'].includes(r.name) && !noBypass(r)),
     administrationWriteUsed: false,
     requiredChecksPinnedToApp: quality('main') && quality('integration'),
-    environmentsConfirmed: environmentOk(policy.environments?.owner_acceptance) && environmentOk(policy.environments?.production_approval),
+    environmentsConfirmed: environmentOk(policy.environments?.owner_acceptance) && environmentOk(policy.environments?.production_approval) && mainOnly(policy.environments?.agent_review),
   };
 }
