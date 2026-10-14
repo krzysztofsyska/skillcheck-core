@@ -113,6 +113,16 @@ function carryApplication(from: object, to: InterviewPlan): void {
 export function isProcessReleasedPlan(plan: unknown): plan is InterviewPlan {
   return typeof plan === "object" && plan !== null && releasedInProcess.has(plan);
 }
+/** Provenance proof for the OFFLINE compiler only. This is NOT database
+ * authorization or permission to contact a person. It cannot survive a
+ * server restart; the production worker must re-check source/revision in DB. */
+export function isAuthenticallyReleasedInterviewPlan(value: unknown): value is InterviewPlan {
+  return !!value && typeof value === "object" &&
+    releasedInProcess.has(value) &&
+    (value as InterviewPlan).status === "released" &&
+    (value as InterviewPlan).revision === 3;
+}
+
 /** Application brand for a plan released in this process. Absent on copies. */
 export function releasedApplicationBinding(plan: unknown): ReleasedApplicationBinding | undefined {
   if (!isProcessReleasedPlan(plan)) return undefined;
