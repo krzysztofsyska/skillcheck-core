@@ -54,6 +54,7 @@ function reviewSnapshot(overrides = {}) {
     ci: overrides.ci ?? null,
     fixAuthor: overrides.fixAuthor ?? null,
     error: overrides.error ?? null,
+    verdict: overrides.verdict ?? null,
   };
 }
 
@@ -188,6 +189,58 @@ test('three attempts are shared across heads and the fourth review is blocked', 
   assert.equal(replay.outcome.status, 'DUPLICATE');
 });
 
+test('a newer review closes the earlier open reservation', () => {
+  let ledger = emptyLedger();
+  ledger = apply(ledger, reviewSnapshot({ reviewId: 1, threads: [thread(1, 1, SHA.one)] })).ledger;
+  const second = apply(ledger, reviewSnapshot({ reviewId: 2, now: '2026-10-14T07:31:00.000Z', threads: [thread(2, 2, SHA.one)] }));
+  ledger = second.ledger;
+  assert.equal(second.outcome.status, 'HANDOFF');
+  assert.equal(second.outcome.attempt, 2);
+  assert.equal(ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'SUPERSEDED');
+  assert.equal(ledger.reservations[dedupKey('126', SHA.one, 2)].status, 'HANDOFF_PLANNED');
+
+  const requested = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  ledger = requested.ledger;
+  const repeated = apply(ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
+  assert.equal(repeated.outcome.status, 'DUPLICATE');
+  assert.equal(repeated.ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'SUPERSEDED');
+  assert.equal(repeated.outcome.plan.codex_rereview, null);
+});
+
+test('a Codex PASS comment reaches ready from stored CI without a GitHub approval', () => {
+  let ledger = emptyLedger();
+  ledger = apply(ledger, reviewSnapshot()).ledger;
+  ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+
+  const commented = apply(ledger, reviewSnapshot({ headSha: SHA.two, reviewId: 800, reviewState: 'commented', threads: [] }));
+  assert.equal(commented.outcome.status, 'IGNORED_NO_FINDINGS');
+  assert.equal(commented.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
+
+  const fixes = apply(ledger, reviewSnapshot({ headSha: SHA.two, reviewId: 801, reviewState: 'approved', threads: [], verdict: 'PASS_WITH_FIXES' }));
+  assert.equal(fixes.outcome.status, 'IGNORED_NO_FINDINGS');
+  const failed = apply(ledger, reviewSnapshot({ headSha: SHA.two, reviewId: 802, reviewState: 'approved', threads: [], verdict: 'FAIL' }));
+  assert.equal(failed.outcome.status, 'IGNORED_NO_FINDINGS');
+
+  const authorPass = apply(ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 803,
+    reviewState: 'commented',
+    threads: [],
+    verdict: 'PASS',
+    reviewer: { ...AUTHOR },
+    sender: { ...AUTHOR },
+  }));
+  assert.equal(authorPass.outcome.status, 'REJECTED_SELF_APPROVAL');
+
+  const ready = apply(ledger, reviewSnapshot({ headSha: SHA.two, reviewId: 804, reviewState: 'commented', threads: [], verdict: 'PASS' }));
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(ready.outcome.plan.owner_acceptance, false);
+  assert.equal(ready.ledger.attempts['126'], 1);
+  const after = apply(ready.ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(after.outcome.status, 'IGNORED_NO_RESERVATION');
+});
+
 test('forks, wrong base, spoofed identity, stale threads, and integration errors do not reserve a handoff', () => {
   const cases = [
     ['IGNORED_FORK', reviewSnapshot({ headRepo: 'attacker/skillcheck-core' })],
@@ -250,9 +303,27 @@ test('raw review payload drops comment text before planning', () => {
     id: 't',
     isResolved: false,
     isOutdated: false,
-    comments: [{ id: 15, commit_id: SHA.one, pull_request_review_id: 11, path: 'README.md', line: 2, body: SENTINEL }],
+    comments: [{ id: 15, commit_id: SHA.one, pull_request_review_id: 11, path: 'README.md', line: 2, body: `PASS ${SENTINEL}` }],
   }]);
   assert.equal(JSON.stringify(normalized).includes(SENTINEL), false);
+  assert.equal(normalized.verdict, null);
+  const withVerdict = normalizeGithubEvent({
+    action: 'submitted',
+    verdict: 'PASS',
+    repository: { full_name: 'krzysztofsyska/skillcheck-core' },
+    sender: { ...CODEX_REVIEWER },
+    review: { id: 12, state: 'commented', commit_id: SHA.one, user: { ...CODEX_REVIEWER }, body: SENTINEL },
+    pull_request: {
+      number: 126,
+      state: 'open',
+      draft: false,
+      user: { ...AUTHOR },
+      base: { ref: 'integration' },
+      head: { sha: SHA.one, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
+    },
+  });
+  assert.equal(withVerdict.verdict, 'PASS');
+  assert.equal(JSON.stringify(withVerdict).includes(SENTINEL), false);
   const result = apply(emptyLedger(), { ...normalized, now: '2026-10-14T07:40:00.000Z' });
   assert.equal(result.outcome.status, 'HANDOFF');
   assert.equal(result.outcome.findings[0].url.endsWith('#discussion_r15'), true);

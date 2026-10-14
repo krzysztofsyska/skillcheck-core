@@ -59,6 +59,7 @@ export function normalizeGithubEvent(event, threads = []) {
       commitId: event?.review?.commit_id ?? event?.comment?.commit_id ?? null,
       user: pickActor(reviewUser),
     },
+    verdict: canonicalVerdict(event?.verdict ?? event?.review?.verdict),
     threads: (Array.isArray(threads) ? threads : []).map(cleanThread),
   };
 }
@@ -84,7 +85,8 @@ function onReview(ledger, snapshot) {
     return { status: 'IGNORED_REVIEW_STATE' };
   }
   const findings = snapshot.review.id ? actionableFindings(snapshot) : [];
-  if (snapshot.review.state === 'approved' && findings.length === 0) return considerReady(ledger, snapshot);
+  const verdict = canonicalVerdict(snapshot.verdict ?? snapshot.review?.verdict);
+  if (findings.length === 0 && isCleanPass(snapshot, verdict)) return considerReady(ledger, snapshot);
   const identity = validateCodex(snapshot);
   if (identity) return identity;
   if (findings.length === 0) return { status: 'IGNORED_NO_FINDINGS' };
@@ -98,6 +100,7 @@ function reserveHandoff(ledger, snapshot, findings) {
   if (existing) return { status: 'DUPLICATE', handoff_id: existing.handoff_id, attempt: ledger.attempts[pr] ?? 0, findings: existing.finding_refs };
   const used = ledger.attempts[pr] ?? 0;
   if (used >= HANDOFF_ATTEMPT_LIMIT) return { status: 'BLOCKED_LIMIT', attempt: used };
+  supersedeOpenReservations(ledger, pr);
   const handoffId = handoffIdFor(pr, snapshot.pull.headSha, snapshot.review.id);
   ledger.attempts[pr] = used + 1;
   ledger.reservations[key] = {
@@ -140,6 +143,7 @@ function observeCi(ledger, snapshot) {
     reservation.status = 'WAITING_CI';
     return { status: 'WAITING_CI', handoff_id: reservation.handoff_id };
   }
+  reservation.ci = { sha: headSha, conclusion: ci.conclusion };
   if (ci.conclusion !== 'success') {
     reservation.status = 'CI_FAILED';
     return { status: 'CI_FAILED', handoff_id: reservation.handoff_id };
@@ -169,7 +173,7 @@ function considerReady(ledger, snapshot) {
     return { status: 'IGNORED_APPROVAL' };
   }
   if (reservation.review_requested_for !== snapshot.pull.headSha) return { status: 'IGNORED_UNREQUESTED_APPROVAL' };
-  const ci = snapshot.ci;
+  const ci = snapshot.ci ?? reservation.ci ?? null;
   if (!ci || ci.sha !== snapshot.pull.headSha || ci.conclusion !== 'success') return { status: 'WAITING_CI', handoff_id: reservation.handoff_id };
   const reviewer = snapshot.review.user;
   if (sameActor(reviewer, snapshot.pull.author) || sameActor(reviewer, snapshot.fixAuthor)) {
@@ -216,6 +220,24 @@ function actionableFindings(snapshot) {
     });
   }
   return findings;
+}
+
+function supersedeOpenReservations(ledger, pr) {
+  for (const row of Object.values(ledger.reservations)) {
+    if (row.pr === pr && OPEN_STATUSES.has(row.status)) row.status = 'SUPERSEDED';
+  }
+}
+
+function isCleanPass(snapshot, verdict) {
+  if (verdict === 'PASS_WITH_FIXES' || verdict === 'FAIL') return false;
+  if (verdict === 'PASS') return true;
+  return snapshot.review.state === 'approved';
+}
+
+function canonicalVerdict(value) {
+  const text = String(value ?? '').trim().toUpperCase().replaceAll(' ', '_');
+  if (text === 'PASS' || text === 'PASS_WITH_FIXES' || text === 'FAIL') return text;
+  return null;
 }
 
 function activeReservation(ledger, pr) {
