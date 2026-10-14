@@ -17,7 +17,7 @@ export type RetellOutboundConfig = Readonly<{
   agentVersion: number;
   approvedAssistantVersion: string;
   noticeVersion: string;
-  /** Verified Zadarma caller ID, provisioned separately. */
+  /** Verified caller ID from the selected SIP operator (VoIPstudio/GoTrunk), provisioned separately. */
   fromNumberE164: string;
   maxBudgetSeconds: number;
   /** Immutable SHA-256 of reviewed exact Retell flow response; owner-approved source. */
