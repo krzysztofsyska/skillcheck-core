@@ -8,9 +8,11 @@ import {
 } from "../lib/voice/retell-outbound-draft.ts";
 
 const uuid = n => "00000000-0000-4000-8000-" + String(n).padStart(12, "0");
+const testAgentId = "agent_1234567890abcdef";
 const config = () => ({
   approvedFlowSha256: createHash("sha256").update(JSON.stringify(flow)).digest("hex"),
-  agentId: "agent_1234567890abcdef",
+  approvedAgentSha256: createHash("sha256").update(JSON.stringify(agent)).digest("hex"),
+  agentId: testAgentId,
   agentVersionTag: "skillcheck_mvp",
   agentVersion: 2,
   approvedAssistantVersion: "skillcheck-agent-approved-v2",
@@ -59,11 +61,11 @@ const request = p => ({
 const flowId = "conversation_flow_abcdefghijklmnop";
 const flow = {
   conversation_flow_id: flowId, version: 3,
-  global_prompt: "Read the approved notice {{skillcheck_notice_version}}. Ask {{skillcheck_interview_script}}. Never request personal information.",
+  global_prompt: "Read the approved notice {{skillcheck_notice_version}}. Ask {{skillcheck_interview_script}}. Never ask about health, medical information or special-category personal data.",
 };
 
 const agent = {
-  agent_id: config().agentId, version: 2, is_published: true,
+  agent_id: testAgentId, version: 2, is_published: true,
   assigned_tags: ["skillcheck_mvp"],
   data_storage_setting: "basic_attributes_only",
   data_storage_retention_days: 14,
@@ -72,7 +74,11 @@ const agent = {
   response_engine: { type: "conversation-flow", conversation_flow_id: flowId, version: 3 },
   unused_private_data: "NEVER EXPOSE",
 };
-const reply = data => ({status: 200, async json() {return data;}});
+// Mirror the real fetch Response interface: the security gate validates headers
+// and consumes a bounded streamed body before parsing JSON.
+const reply = data => new Response(JSON.stringify(data), {
+  status: 200, headers: { "content-type": "application/json" },
+});
 const http = (a = agent, f = flow) => async (url, init) => {
   assert.equal(init.method, "GET");
   assert.equal(init.redirect, "error");
@@ -150,6 +156,7 @@ test("SC-011-C requires fully matching version/caller/notice/budget and recordin
     { approvedAssistantVersion:"other-approved" }, { noticeVersion:"other-notice" },
     { maxBudgetSeconds:419 }, { maxBudgetSeconds:601 },
     { approvedFlowSha256: "0".repeat(64) },
+    { approvedAgentSha256: "0".repeat(64) },
     { RETELL_API_KEY:"leak"},
   ]) denied(r, {...c, ...change}, p, proof);
   for (const change of [
