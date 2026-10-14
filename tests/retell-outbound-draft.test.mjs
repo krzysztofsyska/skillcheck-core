@@ -32,8 +32,8 @@ const source = () => ({
   },
   gaps: [{ criterionId: "kpi:1", kind: "kpi", reason: "missing_evidence" }],
 });
-const released = () => {
-  const g = buildInterviewPlan(source());
+const released = (input = source()) => {
+  const g = buildInterviewPlan(input);
   const r = reviewInterviewPlan(g, {
     expectedRevision: 1, expectedSourceFingerprint: g.sourceFingerprint,
     reviewerId: uuid(91), reviewedAt: "2026-10-13T07:00:00.000Z",
@@ -203,12 +203,28 @@ test("SC-011-C rejects missing exact flow, incompatible prompts or version", asy
 });
 
 test("SC-011-C different released interview plans remain isolated", async () => {
-  const c=config(), proof=await verify(), first=released(), second=released();
+  const c=config(), proof=await verify(), first=released();
+  const second=released({...source(), applicationId:uuid(12),
+    gaps:[{criterionId:"task:1",kind:"task",reason:"contradiction"}]});
+  assert.notEqual(first.sourceFingerprint, second.sourceFingerprint);
   const a=compileRetellOutboundDraft(request(first),c,first,proof);
   const reqB={...request(second),externalCorrelationId:"correlation-synthetic-002",
     providerIdempotencyKey:uuid(502)};
   const b=compileRetellOutboundDraft(reqB,c,second,proof);
   assert.notEqual(a.payload.idempotency_key,b.payload.idempotency_key);
+  const scriptA=a.payload.retell_llm_dynamic_variables.skillcheck_interview_script;
+  const scriptB=b.payload.retell_llm_dynamic_variables.skillcheck_interview_script;
+  assert.notEqual(scriptA,scriptB);
+  for (const [plan,script] of [[first,scriptA],[second,scriptB]]) {
+    for (const q of plan.questions) {
+      assert.ok(script.includes("[Limit: " + q.maxSeconds + " sekund] " + q.text));
+      for (const followUp of q.followUps) assert.ok(script.includes(followUp));
+    }
+  }
+  assert.ok(!scriptA.includes(second.questions.at(-1).text));
+  assert.ok(!scriptB.includes(first.questions.at(-1).text));
+  denied(request(first),c,second,proof);
+  denied(request(second),c,first,proof);
 });
 
 test("SC-011-C Retell idempotency key must be a fresh opaque UUID, never candidate data", async () => {
@@ -233,4 +249,77 @@ test("SC-011-C requires interview duration at least approved SC-012 target", asy
   const shortAgentProof = await verify(shortConfig, shortAgent);
   assert.equal(compileRetellOutboundDraft({...request(p),callTimeoutSeconds:420},
     shortConfig,p,shortAgentProof).requestedMaxSeconds,420);
+});
+
+
+test("SC-011-C prompt guardrails reject even an explicitly pinned incompatible flow", async () => {
+  for (const global_prompt of [
+    flow.global_prompt.replace("{{skillcheck_interview_script}}", ""),
+    flow.global_prompt.replace("{{skillcheck_notice_version}}", ""),
+    flow.global_prompt.replace("Never ask about health, medical information or special-category personal data.", ""),
+  ]) {
+    const changedFlow={...flow,global_prompt};
+    const c={...config(), approvedFlowSha256:createHash("sha256")
+      .update(JSON.stringify(changedFlow)).digest("hex")};
+    await rejectedGate(verify(c,agent,changedFlow));
+  }
+});
+
+test("SC-011-C full agent digest blocks otherwise-valid webhook and tool drift", async () => {
+  for (const change of [
+    {webhook_url:"https://synthetic.invalid/webhook"},
+    {pre_session_tools:[{type:"custom_function",name:"unreviewed"}]},
+    {post_session_tools:[{type:"custom_function",name:"unreviewed"}]},
+  ]) await rejectedGate(verify(config(),{...agent,...change}));
+});
+
+test("SC-011-C proof freshness accepts boundary and rejects expired or future evidence", async () => {
+  const originalNow=Date.now;
+  let now=1800000000000;
+  Date.now=()=>now;
+  try {
+    const c=config(), p=released(), proof=await verify();
+    const compiled=()=>compileRetellOutboundDraft(request(p),c,p,proof);
+    assert.equal(compiled().verifiedAtMs,now);
+    now+=30000;
+    assert.equal(compiled().expiresAtMs,now);
+    now+=1;
+    denied(request(p),c,p,proof);
+    now=proof.checkedAtMs-1;
+    denied(request(p),c,p,proof);
+  } finally { Date.now=originalNow; }
+});
+
+test("SC-011-C bounds both agent and flow responses before JSON parsing", async () => {
+  const limit=256*1024;
+  for (const target of ["agent","flow"]) {
+    for (const mode of ["declared","streamed"]) {
+      // Valid pinned JSON plus legal whitespace: without the byte gate it passes.
+      const data=target==="agent" ? agent : flow;
+      const oversized=new TextEncoder().encode(JSON.stringify(data)+" ".repeat(limit));
+      let cancelled=false, reads=0, calls=0;
+      const oversizedReply=()=>new Response(new ReadableStream({
+        pull(controller) {
+          const offset=reads++*65536;
+          if (offset>=oversized.length) controller.close();
+          else controller.enqueue(oversized.slice(offset,offset+65536));
+        },
+        cancel() { cancelled=true; },
+      },{highWaterMark:0}),{
+        status:200, headers:mode==="declared" ? {"content-length":String(oversized.length)} : {},
+      });
+      await rejectedGate(verifyRetellOutboundAgent(config(),"synthetic-test-api-key-123456",
+        async (...args)=> {
+          calls++;
+          if ((target==="agent" && calls===1) || (target==="flow" && calls===2))
+            return oversizedReply();
+          return http()(...args);
+        }));
+      assert.equal(calls,target==="agent" ? 1 : 2);
+      if (mode==="streamed") {
+        assert.ok(reads>1);
+        assert.equal(cancelled,true);
+      } else assert.equal(reads,0);
+    }
+  }
 });
