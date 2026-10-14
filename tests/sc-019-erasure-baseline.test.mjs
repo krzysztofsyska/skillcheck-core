@@ -15,6 +15,7 @@ async function assertBillingBaseline(db) {
     select schema_signature as expected, private.erasure_schema_signature() as actual
     from private.erasure_inventory_baseline_r5 where singleton
   `)).rows[0];
+  assert.equal(state.expected, 'e764d74f5563805185807c6a37b5e08659771f2e8534c76df3651c9ea46ea7d9');
   assert.equal(state.actual, state.expected);
   const missing = (await db.query(`
     select namespace.nspname || '.' || relation.relname as name
@@ -68,6 +69,40 @@ async function exercise(db) {
     [fixture.companyId, [fixture.candidate.id], 'private.sc19%'],
   )).rows;
   assert.deepEqual(adapters, []);
+  const granted = (await db.query(
+    'select private.sc19_grant_paid($1,$2) as available',
+    [fixture.companyId, 'attempt-stale-settlement-01'],
+  )).rows[0];
+  assert.equal(granted.available, 60);
+  const started = await harness.start(fixture);
+  const claimed = await harness.claim(started);
+  assert.equal(claimed.attempt_id, started.attempt_id);
+  await harness.asAdmin();
+  assert.equal((await db.query(
+    'select status from public.screening_analysis_attempts where id=$1',
+    [started.attempt_id],
+  )).rows[0].status, 'processing');
+  await db.query(
+    `update public.screening_analysis_versions
+       set stale_at=clock_timestamp(), stale_reason='manual_invalidation'
+     where id=$1`,
+    [started.analysis_id],
+  );
+  const after = (await db.query(`
+    select analysis.execution_status, attempt.status as attempt_status, attempt.finished_at, balance.available
+    from public.screening_analysis_versions analysis
+    join public.screening_analysis_attempts attempt on attempt.id=$2
+    join private.sc19_balances balance on balance.company_id=analysis.company_id
+    where analysis.id=$1
+  `, [started.analysis_id, started.attempt_id])).rows[0];
+  assert.equal(after.execution_status, 'cancelled');
+  assert.equal(after.attempt_status, 'abandoned');
+  assert.ok(after.finished_at);
+  assert.equal(after.available, 60);
+  await assert.rejects(
+    () => harness.finishClaim(started, claimed, Array(claimed.criteria_snapshot.length).fill('meets')),
+    error => error.code === '42501',
+  );
 }
 
 test('SC-019 prototype extends the SC-010 erasure baseline on PGlite', async t => {

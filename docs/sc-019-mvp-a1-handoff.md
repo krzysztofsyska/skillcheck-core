@@ -1,7 +1,7 @@
 # SC-019-MVP A1 — SAFE BILLING CORE PROTOTYPE
 
 TASK: #91 / SC-019-MVP
-STATUS: FIXING — Codex P1/P2 findings on c6f217d repaired in the prototype; independent repeat review still pending
+STATUS: FIXING — Codex P1 findings on ca6eef3 repaired in the prototype; independent repeat review still pending
 BASE: integration
 SCOPE: FREE (5 analyses) + PRESELEKCJA prepaid (60 analyses)
 PRICING: 299 PLN is only a proposed initial commercial price; do NOT charge or publish it as approved.
@@ -56,6 +56,16 @@ The automated review was not a PASS. This prototype now:
 - rejects FREE after a PRESELEKCJA grant
 - aborts installation while any non-completed analysis has no reservation
 - when SC-010 is already installed, publishes immutable `erasure_inventory_baseline_r5` in the same transaction, retargets the preview, purge, and scheduler signature checks, and leaves billing `analysis_id` values as company accounting with no foreign key to `screening_analysis_versions`
+
+No file was added under `supabase/migrations`. Payments and production activation stay off.
+
+## Codex findings on ca6eef3
+
+The repeat review was not a PASS. This prototype now:
+
+- abandons a pending or processing `screening_analysis_attempts` row in the same transaction that cancels a newly stale analysis, matching `claim_screening_attempt`, before the reservation is released
+- checks in the R5 schema signature `e764d74f5563805185807c6a37b5e08659771f2e8534c76df3651c9ea46ea7d9`, generated from the clean migration chain plus this prototype on both PGlite and PostgreSQL 16
+- installs the preview, purge-manifest, retention-authorization, and retention-schedule bodies from that reviewed source with the baseline relation renamed to R5, and refuses install when the stored R4 signature, the live signature, or the relation inventory differs
 
 No file was added under `supabase/migrations`. Payments and production activation stay off.
 
