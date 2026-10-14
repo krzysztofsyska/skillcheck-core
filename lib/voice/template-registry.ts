@@ -19,6 +19,9 @@ const v1=Object.freeze({
     priorityLevels:Object.freeze(["Krytyczny","Wysoki","Standardowy","Niski"]),
     stableTieBreak:"behavior-guide-order",
     outputOrder:"common-then-clarification-in-source-order",
+    gapQualifyingRatings:Object.freeze(["insufficient_data"]),
+    gapKindOrder:Object.freeze(["task","kpi","competency"]),
+    gapReason:"missing_evidence" as const,
   }),
   behaviorQuestionTexts:Object.freeze(behaviorGuideDefinitions.map((area,index)=>
     Object.freeze({id:area.id,label:area.label,index,firstQuestion:area.questions[0]}))),
@@ -43,6 +46,29 @@ export function getTrustedVoiceTemplate(version:unknown){
 }
 export function trustedVoiceTemplateDigest(version:VoiceTemplateVersion){
   return createHash("sha256").update(JSON.stringify(getTrustedVoiceTemplate(version))).digest("hex");
+}
+/** Rebuild clarification gaps from the frozen manifest rules and the locked
+ * screening rows. This does not call the selector, so a selector change that
+ * keeps the v1 id fails the comparison in the verifier. */
+export function pinnedClarificationGaps(input:Readonly<{
+  criteria:readonly {id:string;kind:"task"|"kpi"|"competency"}[];
+  results:readonly {criterionId:string;rating:string}[];
+  overrides:readonly {criterionId:string;rating:string|null}[];
+}>):readonly {criterionId:string;kind:"task"|"kpi"|"competency";reason:"missing_evidence"}[]{
+  const rules=getTrustedVoiceTemplate("skillcheck-voice-plan-v1").selectionRules;
+  const qualifying=new Set<string>(rules.gapQualifyingRatings);
+  const effective=new Map(input.results.map(row=>[row.criterionId,row.rating]));
+  for(const change of input.overrides){
+    if(change.rating!==null)effective.set(change.criterionId,change.rating);
+  }
+  return input.criteria.map(criterion=>{
+    const match=/^(task|kpi|competency):([1-9][0-9]?)$/.exec(criterion.id);
+    if(!match||match[1]!==criterion.kind)throw Error("VOICE_TEMPLATE_GAP_INVALID");
+    return {id:criterion.id,kind:criterion.kind,index:Number(match[2])};
+  }).filter(criterion=>qualifying.has(effective.get(criterion.id)??""))
+    .sort((a,b)=>rules.gapKindOrder.indexOf(a.kind)-rules.gapKindOrder.indexOf(b.kind)||a.index-b.index)
+    .slice(0,rules.clarificationLimit)
+    .map(criterion=>({criterionId:criterion.id,kind:criterion.kind,reason:rules.gapReason}));
 }
 
 /**

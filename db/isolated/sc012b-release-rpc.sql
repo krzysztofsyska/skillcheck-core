@@ -34,7 +34,10 @@ begin
   if not found or not private.has_company_access(v_plan.company_id,true) then
     raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
   end if;
-  -- Application lock serializes first pointer creation and replacement.
+  -- Screening advisory before the application advisory. The Node verifier
+  -- takes the same order; the opposite order deadlocks two sessions.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('screening:'||v_plan.application_id::text,0));
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(v_plan.company_id::text||':'||v_plan.application_id::text,0));
   select c.owner_id into v_owner from public.companies c
@@ -48,6 +51,14 @@ begin
     end if;
   end if;
   if not private.has_company_access(v_plan.company_id,true) then
+    raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
+  end if;
+  -- Same candidate lock and freeze check as SC-010. A frozen candidate must
+  -- not recover a replay id and must not append a new release row.
+  perform private.erasure_lock_candidate(ap.candidate_id)
+    from public.applications ap
+    where ap.company_id=v_plan.company_id and ap.id=v_plan.application_id;
+  if not found then
     raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
   end if;
   -- A request key is unique across applications of this actor.
@@ -159,3 +170,142 @@ end;
 $$;
 revoke all on function private.sc012b_release_plan(
   uuid,uuid,text,bigint,uuid,uuid) from public,anon,authenticated;
+
+-- Read the current release only after revalidating the live source.
+-- A stale pointer is removed in this same statement. Release history stays.
+-- Returning NULL without raising is required: an exception would roll the
+-- delete back. This is isolated SQL, not a Supabase migration.
+create or replace function private.sc012b_current_release(p_application_id uuid)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare
+  actor uuid := (select auth.uid());
+  v_row record;
+  v_owner uuid;
+  v_role text;
+  v_plan record;
+  v_plan_found boolean := false;
+  v_material jsonb;
+  v_position_updated timestamptz;
+  v_position_found boolean := false;
+  v_analysis record;
+  v_analysis_found boolean := false;
+  v_shortlist_removed timestamptz;
+  v_shortlist_found boolean := false;
+  v_review_version integer;
+  v_review_disposition text;
+  v_review_found boolean := false;
+  v_frozen boolean := false;
+  v_stale boolean;
+begin
+  if actor is null or p_application_id is null then
+    raise exception using errcode='22023',message='VOICE_PLAN_INVALID_RELEASE';
+  end if;
+  select c.company_id,c.application_id,c.plan_id,c.release_entry_id
+    into v_row
+  from private.voice_plan_current_releases c
+  where c.application_id=p_application_id
+  for update;
+  if not found then return null; end if;
+  if not private.has_company_access(v_row.company_id,true) then
+    raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
+  end if;
+  select c.owner_id into v_owner from public.companies c
+    where c.id=v_row.company_id for share nowait;
+  if not found then raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN'; end if;
+  if actor is distinct from v_owner then
+    select m.role into v_role from public.company_members m
+      where m.company_id=v_row.company_id and m.user_id=actor for share nowait;
+    if not found or v_role<>'recruiter' then
+      raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
+    end if;
+  end if;
+  if not private.has_company_access(v_row.company_id,true) then
+    raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('screening:'||v_row.application_id::text,0));
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_row.company_id::text||':'||v_row.application_id::text,0));
+  select p.analysis_id,p.screening_review_id,p.shortlist_entry_id,p.plan_envelope
+    into v_plan
+  from public.voice_plan_versions p
+  where p.id=v_row.plan_id and p.company_id=v_row.company_id
+    and p.application_id=v_row.application_id
+  for share nowait;
+  v_plan_found:=found;
+  if v_plan_found then
+    begin
+      -- Position FOR SHARE inside screening_material happens before the
+      -- candidate FOR UPDATE below.
+      v_material:=private.screening_material(v_row.application_id,true);
+    exception
+      when insufficient_privilege or object_not_in_prerequisite_state
+           or invalid_parameter_value then
+        v_material:=null;
+    end;
+    select pos.updated_at into v_position_updated
+    from public.applications ap
+    join public.recruitments rec
+      on rec.company_id=ap.company_id and rec.id=ap.recruitment_id
+    join public.positions pos
+      on pos.company_id=rec.company_id and pos.id=rec.position_id
+    where ap.company_id=v_row.company_id and ap.id=v_row.application_id;
+    v_position_found:=found;
+    select a.latest_review_version,a.execution_status,a.stale_at into v_analysis
+    from public.screening_analysis_versions a
+    where a.company_id=v_row.company_id and a.id=v_plan.analysis_id
+      and a.application_id=v_row.application_id
+    for share nowait;
+    v_analysis_found:=found;
+    select s.removed_at into v_shortlist_removed
+    from public.recruitment_shortlist_entries s
+    where s.company_id=v_row.company_id and s.id=v_plan.shortlist_entry_id
+      and s.application_id=v_row.application_id
+    for share nowait;
+    v_shortlist_found:=found;
+    select r.review_version,r.disposition
+      into v_review_version,v_review_disposition
+    from public.screening_result_reviews r
+    where r.company_id=v_row.company_id and r.id=v_plan.screening_review_id
+      and r.analysis_id=v_plan.analysis_id
+    for share nowait;
+    v_review_found:=found;
+  end if;
+  begin
+    perform private.erasure_lock_candidate(ap.candidate_id)
+      from public.applications ap
+      where ap.company_id=v_row.company_id and ap.id=v_row.application_id;
+    if not found then
+      raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
+    end if;
+  exception
+    when sqlstate 'PT409' then
+      if sqlerrm is distinct from 'Candidate workflow frozen' then raise; end if;
+      v_frozen:=true;
+  end;
+  v_stale:=not v_plan_found or v_material is null or not v_position_found
+    or not v_analysis_found or not v_shortlist_found or not v_review_found
+    or (v_material->>'input_fingerprint') is distinct from
+       (v_plan.plan_envelope #>> '{sourceBinding,analysisFingerprint}')
+    or pg_catalog.date_trunc('milliseconds', v_position_updated) is distinct from
+       pg_catalog.date_trunc('milliseconds',
+         (v_plan.plan_envelope #>> '{sourceBinding,positionUpdatedAt}')::timestamptz)
+    or v_analysis.execution_status is distinct from 'completed'
+    or v_analysis.stale_at is not null
+    or v_shortlist_removed is not null
+    or v_review_disposition not in ('approved','approved_with_changes')
+    or v_review_version is distinct from v_analysis.latest_review_version;
+  if v_frozen then return null; end if;
+  if v_stale then
+    delete from private.voice_plan_current_releases
+    where company_id=v_row.company_id and application_id=v_row.application_id;
+    return null;
+  end if;
+  return v_row.release_entry_id;
+exception
+  when lock_not_available or deadlock_detected or serialization_failure then
+    raise exception using errcode='PT409',message='VOICE_PLAN_CONFLICT';
+end;
+$$;
+revoke all on function private.sc012b_current_release(uuid)
+  from public,anon,authenticated;

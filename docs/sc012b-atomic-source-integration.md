@@ -57,3 +57,14 @@ The isolated PostgreSQL 16 suite includes:
 - idempotent replay after a committed release is superseded.
 
 **Remaining gates:** exact-current-head green CI and independent security review, additional tests of candidate document INSERT versus parent lock and source/recruitment mutation lock order, retention/purge integration, plus a reviewed SQL authorization model. No isolated SkillCheck Supabase branch is currently connected (the connected production project has no branches), so a Supabase CLI migration must not be applied to Production or to unrelated projects. A migration filename must be generated using the verified CLI, not guessed or created by renaming this prototype. The project remains non-production and the PR remains unmerged.
+
+## 2026-10-14 — remaining Codex P2 remediation
+
+Four unresolved review notes on PR #99 are addressed in isolated code only. No live migration was added.
+
+1. The v1 manifest pins gap qualifying ratings, kind order, and the missing-evidence reason. `pinnedClarificationGaps` rebuilds the gaps from those rules and the locked screening rows. The verifier rejects the plan when that result differs from `selectReviewedScreeningGaps`.
+2. Review, release, replay, and source reconstruction call `private.erasure_lock_candidate` after the actor check. A frozen candidate returns `PT409` / `Candidate workflow frozen` and does not append history or recover an id. The screening advisory lock is taken before the application advisory lock.
+3. `private.sc012b_current_release` revalidates the live fingerprint, position timestamp, analysis, shortlist, and screening review. A stale pointer is deleted and the function returns NULL, so the delete commits. `voice_plan_release_entries` stays. A frozen candidate returns NULL and does not delete. The function is revoked from public, anon, and authenticated.
+4. The atomic integration workflow also runs on push to `integration` and `main` for the same paths.
+
+Replay of a matching request key remains before supersession and live freshness checks. That earlier note is already implemented and is not changed here. PR #126 is out of scope.

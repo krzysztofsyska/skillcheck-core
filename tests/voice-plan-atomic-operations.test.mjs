@@ -71,6 +71,9 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   [f.application.id])).rows[0];
  assert.equal(current.release_entry_id,release);
  assert.equal(Number(current.pointer_version),1);
+ const visible=(await db.query(
+  "select private.sc012b_current_release($1) as id",[f.application.id])).rows[0].id;
+ assert.equal(visible,release);
  await t.test("source and screening advisory locks remain held through a trusted transaction",async()=>{
   const rival=new Client(config(dbName));await rival.connect();
   try{
@@ -262,6 +265,17 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     e=>e.code==="PT409"&&e.message==="VOICE_PLAN_SOURCE_STALE");
   const n=(await db.query("select count(*)::int as n from private.voice_plan_release_entries where plan_id=$1",[plan])).rows[0].n;
   assert.equal(n,1);
+  const hidden=(await db.query(
+    "select private.sc012b_current_release($1) as id",[f.application.id])).rows[0].id;
+  assert.equal(hidden,null);
+  const pointers=(await db.query(
+    "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+    [f.application.id])).rows[0].n;
+  assert.equal(pointers,0);
+  const history=(await db.query(
+    "select count(*)::int as n from private.voice_plan_release_entries where plan_id=$1",
+    [plan])).rows[0].n;
+  assert.equal(history,1);
  });
  await t.test("matching release request can be recovered after source revision",async()=>{
   assert.equal(await atomicReleaseVoicePlan(db,releaseArgs),release);
@@ -301,5 +315,42 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     e=>e.code==="42501" && e.message==="VOICE_PLAN_FORBIDDEN");
   await assert.rejects(atomicReviewVoicePlan(db,reviewArgs),
     e=>e.code==="42501" && e.message==="VOICE_PLAN_FORBIDDEN");
+ });
+ await t.test("a frozen candidate cannot append a review or recover a release",async()=>{
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
+  const ticket=(await db.query([
+    "insert into private.erasure_preview_tickets",
+    "(company_id,actor_id,anchor_candidate_id,scope_kind,candidate_ids,",
+    "manifest_hash,generations,expires_at)",
+    "values($1,$2,$3,'candidate_record',array[$3]::uuid[],$4,'{}'::jsonb,now())",
+    "returning id",
+  ].join(" "),[f.companyId,users.owner,f.application.candidate_id,"a".repeat(64)])).rows[0].id;
+  const request=(await db.query([
+    "insert into private.erasure_requests",
+    "(company_id,actor_id,anchor_candidate_id,candidate_ids,scope_kind,",
+    "preview_ticket_id,manifest_hash,policy_revision,resolution_revision,",
+    "status,generation)",
+    "values($1,$2,$3,array[$3]::uuid[],'candidate_record',$4,$5,1,1,'authorized',1)",
+    "returning id",
+  ].join(" "),[f.companyId,users.owner,f.application.candidate_id,ticket,"a".repeat(64)])).rows[0].id;
+  await db.query([
+    "insert into private.erasure_candidate_lifecycle",
+    "(candidate_id,company_id,generation,status,request_id) values($1,$2,1,'frozen',$3)",
+  ].join(" "),[f.application.candidate_id,f.companyId,request]);
+  try{
+    await assert.rejects(atomicReviewVoicePlan(db,{
+      ...reviewArgs,requestKey:randomUUID(),
+    }),e=>e.code==="PT409" && e.message==="Candidate workflow frozen");
+    await assert.rejects(atomicReleaseVoicePlan(db,releaseArgs),
+      e=>e.code==="PT409" && e.message==="Candidate workflow frozen");
+    const history=(await db.query(
+      "select count(*)::int as n from private.voice_plan_review_entries where plan_id=$1",
+      [plan])).rows[0].n;
+    assert.equal(history,1);
+  }finally{
+    await db.query(
+      "delete from private.erasure_candidate_lifecycle where candidate_id=$1",
+      [f.application.candidate_id]);
+  }
  });
 });

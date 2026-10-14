@@ -44,8 +44,10 @@ begin
     raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
   end if;
 
-  -- Same lock domain as the test-only release CAS. This does not yet prove
-  -- compatibility with all SC-006/008/010 writers.
+  -- Screening advisory before the application advisory. The Node verifier
+  -- takes the same order; the opposite order deadlocks two sessions.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('screening:'||plan.application_id::text,0));
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(plan.company_id::text||':'||plan.application_id::text,0));
   -- Pin the current owner/member row until commit; a concurrent revocation
@@ -62,6 +64,14 @@ begin
     end if;
   end if;
   if not private.has_company_access(plan.company_id,true) then
+    raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
+  end if;
+  -- Same candidate lock and freeze check as SC-010. A frozen candidate must
+  -- not recover a replay id and must not append a new review row.
+  perform private.erasure_lock_candidate(ap.candidate_id)
+    from public.applications ap
+    where ap.company_id=plan.company_id and ap.id=plan.application_id;
+  if not found then
     raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
   end if;
   -- Serialize a reused request key across different applications before

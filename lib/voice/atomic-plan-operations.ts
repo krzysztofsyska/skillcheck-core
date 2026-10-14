@@ -44,6 +44,17 @@ function sameHash(actual:string,expected:string){
     throw e;
   }
 }
+/** SC-010 freeze check. Call only after actor revalidation and only when a
+ * committed replay is about to return an id. The miss path must not take the
+ * candidate lock before the verifier locks the position. */
+async function assertCandidateNotFrozen(db:SqlClient,company:string,application:string){
+  const rows=(await db.query(
+    "select candidate_id from public.applications where company_id=$1 and id=$2",
+    [company,application])).rows;
+  if(rows.length!==1)
+    throw Object.assign(new Error("VOICE_PLAN_FORBIDDEN"),{code:"42501"});
+  await db.query("select private.erasure_lock_candidate($1)",[rows[0].candidate_id]);
+}
 /** Resolve a committed release replay under application, actor and key locks. */
 async function authorizedReleaseReplay(db:SqlClient,input:ReleaseInput):Promise<string|null>{
   const plans=(await db.query(
@@ -95,6 +106,7 @@ async function authorizedReleaseReplay(db:SqlClient,input:ReleaseInput):Promise<
   ])).rows;
   if(linked.length!==1)
     throw Object.assign(new Error("VOICE_PLAN_REQUEST_CONFLICT"),{code:"PT409"});
+  await assertCandidateNotFrozen(db,company,application);
   return replay[0].result_id as string;
 }
 
@@ -151,6 +163,7 @@ async function authorizedReviewReplay(db:SqlClient,input:ReviewInput):Promise<st
   ])).rows;
   if(linked.length!==1)
     throw Object.assign(new Error("VOICE_PLAN_REQUEST_CONFLICT"),{code:"PT409"});
+  await assertCandidateNotFrozen(db,company,application);
   return replay[0].result_id as string;
 }
 

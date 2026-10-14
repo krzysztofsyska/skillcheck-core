@@ -20,6 +20,27 @@ on:
       - 'supabase/migrations/**'
       - 'package.json'
       - 'package-lock.json'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/voice/trusted-source-verifier.ts'
+      - 'lib/voice/atomic-plan-operations.ts'
+      - 'lib/voice/template-registry.ts'
+      - 'lib/voice/interview-plan.ts'
+      - 'lib/behavior-guide.ts'
+      - 'db/isolated/sc012b-review-rpc.sql'
+      - 'db/isolated/sc012b-release-rpc.sql'
+      - 'db/isolated/sc012b-template-catalog.sql'
+      - 'db/prototypes/sc012b-plan-schema.sql'
+      - 'tests/helpers/screening-ranking-fixture.mjs'
+      - 'lib/voice/plan-persistence-contract.ts'
+      - 'lib/voice/screening-gap-selection.ts'
+      - 'tests/voice-plan-atomic-operations.test.mjs'
+      - 'tests/voice-trusted-source-verifier.test.mjs'
+      - '.github/workflows/sc012b-atomic-integration.yml'
+      - 'supabase/migrations/**'
+      - 'package.json'
+      - 'package-lock.json'
 permissions:
   contents: read
 jobs:

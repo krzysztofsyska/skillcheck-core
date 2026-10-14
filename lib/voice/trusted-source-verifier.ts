@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createVoicePlanWriteSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
 import { selectReviewedScreeningGaps } from "./screening-gap-selection.ts";
 import type { InterviewSource } from "./interview-plan.ts";
-import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest,assertPinnedVoiceQuestions} from "./template-registry.ts";
+import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest,assertPinnedVoiceQuestions,pinnedClarificationGaps} from "./template-registry.ts";
 
 type Row=Record<string,any>;
 export type SqlClient={query(sql:string,params?:readonly unknown[]):Promise<{rows:Row[]}>};
@@ -82,20 +82,20 @@ async function reconstructLocked(
       "where ap.company_id=$1 and ap.id=$2 and a.id=$3 and r.id=$4 and s.id=$5",
       "for share of ap,rec,pos,a,r,s nowait",
     ].join(" "),[s.companyId,s.applicationId,s.analysisId,s.reviewId,s.shortlistEntryId])).rows);
+    // Position FOR SHARE is already held by the query above. The SC-010
+    // candidate lock and freeze check come next, before a stale status can
+    // hide a privacy freeze. A raw FOR UPDATE would ignore that freeze.
+    await db.query("select private.erasure_lock_candidate($1)",[h.candidate_id]);
+    const candidate=(await db.query(
+      "select id from public.candidates where company_id=$1 and id=$2",
+      [s.companyId,h.candidate_id])).rows;
+    if(candidate.length!==1)fail("STALE");
     if(h.application_status==="withdrawn"||h.application_status==="rejected"||
        h.recruitment_status!=="open"||h.position_status!=="active"||
        h.execution_status!=="completed"||h.stale_at!==null||h.removed_at!==null||
        !["approved","approved_with_changes"].includes(h.disposition)||
        h.latest_review_version!==h.review_version||
        !hex.test(h.input_fingerprint)||!hex.test(h.analysis_contract_hash))fail("STALE");
-    // The candidate parent FOR UPDATE lock blocks a concurrent new document
-    // INSERT's FK KEY SHARE lock. SC-006's screening advisory lock above
-    // serializes reanalysis while material is reconstructed.
-    const candidate=(await db.query([
-      "select id from public.candidates",
-      "where company_id=$1 and id=$2 for update nowait",
-    ].join(" "),[s.companyId,h.candidate_id])).rows;
-    if(candidate.length!==1)fail("STALE");
     // Recompute SC-006's exact canonical fingerprint from the current
     // reviewed document, criteria and binding. Return only hashes/metadata,
     // never the candidate's redacted or original CV text to this caller.
@@ -136,11 +136,14 @@ async function reconstructLocked(
     ].join(" "),[s.companyId,s.reviewId,s.analysisId])).rows.map(r=>({
       criterionId:r.criterion_id,rating:r.rating_override,
     }));
-    const gaps=selectReviewedScreeningGaps({
+    const gapInput={
       latestHumanDecision:h.disposition,analysisCompleted:true,
       analysisCurrent:true,shortlistCurrent:true,criteria:approvedCriteria,
       results,overrides,
-    },approvedCriteria);
+    };
+    const selected=selectReviewedScreeningGaps(gapInput,approvedCriteria);
+    const gaps=pinnedClarificationGaps({criteria:approvedCriteria,results,overrides});
+    if(!isDeepStrictEqual(selected,gaps))fail("TEMPLATE_CHANGED");
     const source:InterviewSource={
       companyId:s.companyId,applicationId:s.applicationId,
       positionRevision:iso(h.position_updated_at),

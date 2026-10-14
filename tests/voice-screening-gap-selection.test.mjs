@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { selectReviewedScreeningGaps, ScreeningGapSelectionError } from "../lib/voice/screening-gap-selection.ts";
+import { pinnedClarificationGaps } from "../lib/voice/template-registry.ts";
 
 const source=()=>({
   latestHumanDecision:"approved",analysisCompleted:true,analysisCurrent:true,shortlistCurrent:true,
@@ -9,6 +10,17 @@ const source=()=>({
   results:[{criterionId:"task:1",rating:"insufficient_data"},{criterionId:"kpi:1",rating:"insufficient_data"},
     {criterionId:"task:2",rating:"insufficient_data"},{criterionId:"competency:1",rating:"insufficient_data"}],
   overrides:[],
+});
+test("SC-012-B pinned manifest gaps match the selector and drop other ratings",()=>{
+ const s=source();
+ assert.deepEqual(pinnedClarificationGaps(s),selectReviewedScreeningGaps(s,s.criteria));
+ const overridden={...s,latestHumanDecision:"approved_with_changes",
+   overrides:[{criterionId:"task:1",rating:"meets"}]};
+ assert.deepEqual(pinnedClarificationGaps(overridden),
+   selectReviewedScreeningGaps(overridden,s.criteria));
+ const meets={...s,results:s.results.map(row=>({...row,rating:"meets"}))};
+ assert.deepEqual(pinnedClarificationGaps(meets),[]);
+ assert.deepEqual(selectReviewedScreeningGaps(meets,meets.criteria),[]);
 });
 test("SC-012-B selects two gaps in task/kpi/competency and numeric index order",()=>{
  assert.deepEqual(selectReviewedScreeningGaps(source(),source().criteria),[
