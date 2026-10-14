@@ -6,7 +6,7 @@
  * A positive preflight is NOT a right to start a call. The eventual SC-010
  * worker must recheck consent, source freshness, payment, quota and contact
  * validity, then reserve exactly once in PostgreSQL before Retell dispatch.
- * No Retell / Zadarma calls or credential access in this module.
+ * No Retell / VoIPstudio-GoTrunk calls or credential access in this module.
  */
 import type { InterviewPlan } from "./interview-plan.ts";
 import type { VoiceScenario } from "./provider.ts";
