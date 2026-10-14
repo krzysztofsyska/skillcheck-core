@@ -8,7 +8,10 @@
  * validity, then reserve exactly once in PostgreSQL before Retell dispatch.
  * No Retell / VoIPstudio-GoTrunk calls or credential access in this module.
  */
-import type { InterviewPlan } from "./interview-plan.ts";
+import {
+  isProcessReleasedPlan, releasedPlanQuestionsAreControlled,
+  SC012_INTRODUCTION_VERSION, SC012_PROHIBITED_TOPICS, type InterviewPlan,
+} from "./interview-plan.ts";
 import type { VoiceScenario } from "./provider.ts";
 
 export type VoiceMvpPackage = "FREE" | "PRESELEKCJA";
@@ -66,6 +69,9 @@ export function evaluateVoiceMvpPreflight(input: unknown): VoiceMvpPreflight {
       snapshot.limit.reserved > snapshot.limit.total) return blocked("invalid_snapshot");
 
   const p = snapshot as unknown as VoiceMvpSnapshot;
+  // FREE is one approved trial interview. A larger configured total is a
+  // misconfiguration, not extra quota that can be dispatched.
+  if (p.plan === "FREE" && p.limit.total !== 1) return blocked("invalid_snapshot");
   if (!p.companyVerified) return blocked("company_unverified");
   if (!p.planActive) return blocked("package_not_active");
   if (p.plan === "FREE" && !p.freeTrialApproved) return blocked("trial_not_approved");
@@ -82,45 +88,50 @@ export function evaluateVoiceMvpPreflight(input: unknown): VoiceMvpPreflight {
   return Object.freeze({ state:"prepared_for_trusted_dispatch", package:p.plan, maxSeconds:600 });
 }
 
+const planKeys = Object.freeze([
+  "schemaVersion", "language", "templateVersion", "sourceFingerprint", "status", "revision",
+  "durationTargetSeconds", "durationMaxSeconds", "recordingDefault", "noticeRequired",
+  "questions", "reviewerId", "reviewedAt", "releasedBy", "releasedAt",
+]);
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isoInstant = (value: unknown): value is string =>
+  typeof value === "string" && Number.isFinite(Date.parse(value)) &&
+  new Date(value).toISOString() === value;
+
 /** Pure mapping for SC-011's already-existing VoiceScenario contract.
- * Never take an InterviewPlan directly from a web request. Only the locked,
- * reviewed SC-012 SQL source and immutable versioned template are authoritative.
- * No candidate name, CV text, phone, transcript or PII is interpolated here.
+ * Accepts only the object returned by releaseInterviewPlan in this process.
+ * A persisted or hand-built DTO that merely claims status "released" is rejected.
+ * Question text must still match the canonical SC-012 templates; supplied wording
+ * is never interpolated. No candidate name, CV, phone or transcript is copied.
  */
 export function voiceScenarioFromApprovedPlan(plan: InterviewPlan): VoiceScenario {
-  if (!plan || plan.schemaVersion !== 1 || plan.language !== "pl-PL" ||
-      plan.status !== "released" || plan.revision !== 3 ||
-      plan.templateVersion !== "skillcheck-voice-plan-v1" ||
-      !/^[0-9a-f]{64}$/i.test(plan.sourceFingerprint) ||
-      plan.durationMaxSeconds !== 600 || plan.noticeRequired !== true ||
-      plan.recordingDefault !== false ||
-      typeof plan.releasedAt !== "string" ||
-      typeof plan.releasedBy !== "string" ||
-      !Array.isArray(plan.questions) ||
-      plan.questions.length < 4 || plan.questions.length > 6)
+  if (!isProcessReleasedPlan(plan)) throw new Error("VOICE_MVP_PLAN_NOT_RELEASED");
+  let snapshot: InterviewPlan;
+  try { snapshot = structuredClone(plan); } catch { throw new Error("VOICE_MVP_PLAN_NOT_RELEASED"); }
+  const own = Reflect.ownKeys(snapshot);
+  if (own.length !== planKeys.length || !planKeys.every(key => own.includes(key)) ||
+      snapshot.schemaVersion !== 1 || snapshot.language !== "pl-PL" ||
+      snapshot.status !== "released" || snapshot.revision !== 3 ||
+      snapshot.templateVersion !== "skillcheck-voice-plan-v1" ||
+      snapshot.durationTargetSeconds !== 420 || snapshot.durationMaxSeconds !== 600 ||
+      snapshot.noticeRequired !== true || snapshot.recordingDefault !== false ||
+      !/^[0-9a-f]{64}$/i.test(snapshot.sourceFingerprint) ||
+      !uuid.test(snapshot.reviewerId ?? "") || !isoInstant(snapshot.reviewedAt) ||
+      !uuid.test(snapshot.releasedBy ?? "") || !isoInstant(snapshot.releasedAt) ||
+      Date.parse(snapshot.releasedAt) < Date.parse(snapshot.reviewedAt))
     throw new Error("VOICE_MVP_PLAN_NOT_RELEASED");
-  const questions = plan.questions.map(q => {
-    if (!q || typeof q.id !== "string" ||
-        !/^[a-z0-9][a-z0-9:-]{7,127}$/i.test(q.id) ||
-        typeof q.text !== "string" || q.text.trim().length < 1 ||
-        q.text.length > 1000 || /[\u0000-\u001f\u007f]/.test(q.text) ||
-        !Array.isArray(q.followUps) || q.followUps.length > 2 ||
-        !q.followUps.every((s: unknown)=>typeof s === "string" && s.length > 0 &&
-          s.length <= 500 && !/[\u0000-\u001f\u007f]/.test(s)))
-      throw new Error("VOICE_MVP_INVALID_QUESTION");
-    return Object.freeze({ id:q.id, prompt:q.text, followUps:Object.freeze([...q.followUps]) });
-  });
-  if (new Set(questions.map(q=>q.id)).size !== questions.length)
+  if (!releasedPlanQuestionsAreControlled(snapshot.questions))
     throw new Error("VOICE_MVP_INVALID_QUESTION");
+  const questions = snapshot.questions.map(q => Object.freeze({
+    id: q.id, prompt: q.text, followUps: Object.freeze([...q.followUps]),
+  }));
   return Object.freeze({
-    schemaVersion:1, language:"pl-PL",
-    introductionVersion:"notice-pl-202610",
-    questions:Object.freeze(questions),
-    constraints:Object.freeze({
-      maxSeconds:600,
-      prohibitedTopics:Object.freeze([
-        "stan zdrowia", "religia", "poglądy polityczne", "życie prywatne",
-      ]),
+    schemaVersion: 1, language: "pl-PL",
+    introductionVersion: SC012_INTRODUCTION_VERSION,
+    questions: Object.freeze(questions),
+    constraints: Object.freeze({
+      maxSeconds: 600,
+      prohibitedTopics: Object.freeze([...SC012_PROHIBITED_TOPICS]),
     }),
   });
 }

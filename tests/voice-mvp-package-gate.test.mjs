@@ -29,9 +29,12 @@ test('FREE and PRESELEKCJA can be enabled separately with configured backend quo
   for(const plan of ['FREE','PRESELEKCJA']){
     const result=evaluateVoiceMvpPreflight(policy(plan));
     assert.deepEqual(result,{state:'prepared_for_trusted_dispatch',package:plan,maxSeconds:600});
-    assert.equal(evaluateVoiceMvpPreflight({...policy(plan),limit:{total:1,used:0,reserved:1}}).reason,'quota_exhausted');
-    assert.equal(evaluateVoiceMvpPreflight({...policy(plan),limit:{total:2,used:2,reserved:0}}).reason,'quota_exhausted');
+    assert.equal(evaluateVoiceMvpPreflight({...policy(plan),limit:{total:plan==='FREE'?1:10,used:0,reserved:plan==='FREE'?1:10}}).reason,'quota_exhausted');
   }
+  assert.equal(evaluateVoiceMvpPreflight({...policy('PRESELEKCJA'),limit:{total:2,used:2,reserved:0}}).reason,'quota_exhausted');
+  assert.equal(evaluateVoiceMvpPreflight({...policy('FREE'),limit:{total:10,used:1,reserved:0}}).reason,'invalid_snapshot');
+  assert.equal(evaluateVoiceMvpPreflight({...policy('FREE'),limit:{total:10,used:0,reserved:0}}).reason,'invalid_snapshot');
+  assert.equal(evaluateVoiceMvpPreflight({...policy('FREE'),limit:{total:2,used:0,reserved:0}}).reason,'invalid_snapshot');
 });
 
 test('FREE strictly requires verified trial; PRESELEKCJA strictly requires paid settlement',()=>{
@@ -100,11 +103,24 @@ test('SC-012 reviewed & released plan projects into the real SC-011 VoiceScenari
 
 test('No forging allowed via extra injected questions or malformed released status',()=>{
   const draft=buildInterviewPlan(source());
+  const approved=reviewInterviewPlan(draft,{
+    expectedRevision:1,expectedSourceFingerprint:draft.sourceFingerprint,reviewerId:uuid(10),
+    reviewedAt:'2026-10-12T10:00:00.000Z',
+  });
+  const released=releaseInterviewPlan(approved,{
+    expectedRevision:2,expectedSourceFingerprint:approved.sourceFingerprint,releasedBy:uuid(11),
+    releasedAt:'2026-10-12T10:01:00.000Z',
+  });
   const fake={...draft,status:'released',revision:3,
-    releasedAt:'2026-10-12T10:01:00.000Z',releasedBy:uuid(11)};
+    releasedAt:'2026-10-12T10:01:00.000Z',releasedBy:uuid(11),
+    reviewerId:uuid(10),reviewedAt:'2026-10-12T10:00:00.000Z'};
   assert.doesNotThrow(()=>JSON.stringify(fake));
-  // A forged DTO can match these shape checks. The adapter explicitly requires
-  // an independent trusted SQL plan-release authorization before dispatch.
   assert.equal(evaluateVoiceMvpPreflight({...policy(),planReleasedAndCurrent:false}).state,'blocked');
-  assert.throws(()=>voiceScenarioFromApprovedPlan({...fake,questions:[{id:'common-unsafe',text:'',followUps:[]}]}),/VOICE_MVP_PLAN_NOT_RELEASED|VOICE_MVP_INVALID_QUESTION/);
+  assert.throws(()=>voiceScenarioFromApprovedPlan(fake),/VOICE_MVP_PLAN_NOT_RELEASED/);
+  assert.throws(()=>voiceScenarioFromApprovedPlan(structuredClone(released)),/VOICE_MVP_PLAN_NOT_RELEASED/);
+  assert.throws(()=>voiceScenarioFromApprovedPlan({
+    ...released,
+    questions:released.questions.map((q,index)=>index===0?{...q,text:'CV Jana Kowalskiego, tel. +48111222333'}:q),
+  }),/VOICE_MVP_PLAN_NOT_RELEASED/);
+  assert.doesNotThrow(()=>voiceScenarioFromApprovedPlan(released));
 });

@@ -5,7 +5,7 @@
  * all source revisions under lock when storing/releasing/dispatching the plan.
  */
 import { createHash } from "node:crypto";
-import { buildBehaviorGuide } from "../behavior-guide.ts";
+import { behaviorGuideDefinitions, buildBehaviorGuide } from "../behavior-guide.ts";
 import type { BehaviorAreaKey } from "../position-fields";
 
 export type VoiceEvidenceGap = Readonly<{
@@ -53,14 +53,112 @@ const bad = (): never => { throw new InterviewPlanError("VOICE_PLAN_INVALID_SOUR
 const levels: Readonly<Record<string, number>> = Object.freeze({
   Krytyczny: 4, Wysoki: 3, Standardowy: 2, Niski: 1,
 });
-/** OFFLINE-only capability: cloned objects may never assert human review. */
+/** OFFLINE-only capability: cloned objects may never assert human review or release. */
 const generatedInProcess = new WeakSet<object>();
 const reviewedInProcess = new WeakSet<object>();
+const releasedInProcess = new WeakSet<object>();
+const commonFollowUp =
+  "Jakie działania podjął Pan lub podjęła Pani osobiście i jaki był rezultat?";
+const clarificationFollowUps = Object.freeze([
+  "W dokumentach informacje dotyczące tego kryterium są niespójne. Jaki był rzeczywisty zakres Pani lub Pana pracy?",
+  "Jaki był Pani lub Pana rzeczywisty zakres działania i rezultat?",
+] as const);
 const gapQuestionText = Object.freeze({
   task: "Proszę opisać konkretne zadanie, które wykonywał Pan lub wykonywała Pani osobiście, i jego rezultat.",
   kpi: "Proszę podać konkretny przykład mierzenia wyniku swojej pracy i działania na podstawie tego miernika.",
   competency: "Proszę opisać, w jakiej sytuacji zawodowej wykorzystał Pan lub wykorzystała Pani konkretną umiejętność i jaki był efekt.",
 } as const);
+/** Closed SC-012 policy. Callers may not substitute health/religion/politics/private-life wording. */
+export const SC012_PROHIBITED_TOPICS = Object.freeze([
+  "stan zdrowia", "religia", "poglądy polityczne", "życie prywatne",
+] as const);
+export const SC012_INTRODUCTION_VERSION = "notice-pl-202610" as const;
+const planQuestionKeys = Object.freeze([
+  "id", "kind", "criterionId", "criterionKind", "text", "followUps", "maxSeconds",
+]);
+
+function exactOwnKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Reflect.ownKeys(value);
+  return actual.length === keys.length &&
+    actual.every(k => typeof k === "string" && keys.includes(k));
+}
+function isPlainObject(value: object): boolean {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+function isClarificationKind(value: InterviewQuestion["criterionKind"]): value is "task" | "kpi" | "competency" {
+  return value === "task" || value === "kpi" || value === "competency";
+}
+/** True only for the object returned by releaseInterviewPlan in this process. */
+export function isProcessReleasedPlan(plan: unknown): plan is InterviewPlan {
+  return typeof plan === "object" && plan !== null && releasedInProcess.has(plan);
+}
+export function prohibitedTopicsAreCanonical(topics: readonly string[]): boolean {
+  return Array.isArray(topics) &&
+    topics.length === SC012_PROHIBITED_TOPICS.length &&
+    Object.keys(topics).length === topics.length &&
+    SC012_PROHIBITED_TOPICS.every((topic, index) => topics[index] === topic);
+}
+/**
+ * Regenerates the expected SC-012 wording from question identity and compares it.
+ * Arbitrary CV text, phone numbers or instructions never match this closed set.
+ */
+export function releasedPlanQuestionsAreControlled(questions: readonly InterviewQuestion[]): boolean {
+  if (!Array.isArray(questions) || questions.length < 4 || questions.length > 6 ||
+      Object.keys(questions).length !== questions.length) return false;
+  const seen = new Set<string>();
+  for (let index = 0; index < questions.length; index++) {
+    const q = questions[index];
+    if (!q || !isPlainObject(q) || !exactOwnKeys(q, planQuestionKeys)) return false;
+    if (typeof q.id !== "string" || seen.has(q.id)) return false;
+    seen.add(q.id);
+    if (!Array.isArray(q.followUps) || q.followUps.length !== 1 ||
+        typeof q.followUps[0] !== "string" || Object.keys(q.followUps).length !== 1) return false;
+    if (index < 4) {
+      const area = behaviorGuideDefinitions.find(item => item.id === q.criterionId);
+      if (q.kind !== "common" || q.criterionKind !== "behavior" || !area ||
+          q.id !== "common-" + area.id || q.text !== area.questions[0] ||
+          q.followUps[0] !== commonFollowUp || q.maxSeconds !== 60) return false;
+      continue;
+    }
+    if (q.kind !== "clarification" || !isClarificationKind(q.criterionKind)) return false;
+    const kind: "task" | "kpi" | "competency" = q.criterionKind;
+    const criterion = /^(task|kpi|competency):([1-9][0-9]?)$/.exec(q.criterionId);
+    if (!criterion || criterion[1] !== kind || Number(criterion[2]) > 30 ||
+        q.id !== "clarification-" + q.criterionId.replace(":", "-") ||
+        q.text !== gapQuestionText[kind] || q.maxSeconds !== 45 ||
+        !clarificationFollowUps.includes(q.followUps[0] as typeof clarificationFollowUps[number]))
+      return false;
+  }
+  return true;
+}
+/** Same closed templates, checked from the SC-011 projection (id, prompt, followUps). */
+export function scenarioQuestionsAreControlled(
+  questions: readonly { readonly id: string; readonly prompt: string; readonly followUps: readonly string[] }[],
+): boolean {
+  if (!Array.isArray(questions) || questions.length < 4 || questions.length > 6 ||
+      Object.keys(questions).length !== questions.length) return false;
+  const seen = new Set<string>();
+  for (let index = 0; index < questions.length; index++) {
+    const q = questions[index];
+    if (!q || typeof q.id !== "string" || seen.has(q.id)) return false;
+    seen.add(q.id);
+    if (!Array.isArray(q.followUps) || q.followUps.length !== 1 || typeof q.followUps[0] !== "string")
+      return false;
+    if (index < 4) {
+      const area = behaviorGuideDefinitions.find(item => q.id === "common-" + item.id);
+      if (!area || q.prompt !== area.questions[0] || q.followUps[0] !== commonFollowUp) return false;
+      continue;
+    }
+    const matched = /^clarification-(task|kpi|competency)-([1-9][0-9]?)$/.exec(q.id);
+    if (!matched || Number(matched[2]) > 30) return false;
+    const kind = matched[1] as keyof typeof gapQuestionText;
+    if (q.prompt !== gapQuestionText[kind] ||
+        !clarificationFollowUps.includes(q.followUps[0] as typeof clarificationFollowUps[number]))
+      return false;
+  }
+  return true;
+}
 function immutable(plan: InterviewPlan): InterviewPlan {
   const questions = Object.freeze(plan.questions.map(q =>
     Object.freeze({ ...q, followUps: Object.freeze([...q.followUps]) })));
@@ -108,7 +206,7 @@ export function buildInterviewPlan(input: InterviewSource): InterviewPlan {
     id: "common-" + area.id, kind: "common", criterionId: area.id,
     criterionKind: "behavior",
     text: area.questions[0],
-    followUps: ["Jakie działania podjął Pan lub podjęła Pani osobiście i jaki był rezultat?"],
+    followUps: [commonFollowUp],
     maxSeconds: 60,
   }));
   // Do not quote arbitrary CV, user notes, model responses or candidate data
@@ -118,9 +216,7 @@ export function buildInterviewPlan(input: InterviewSource): InterviewPlan {
     kind: "clarification", criterionId: gap.criterionId, criterionKind: gap.kind,
     text: gapQuestionText[gap.kind],
     followUps: [
-      gap.reason === "contradiction"
-        ? "W dokumentach informacje dotyczące tego kryterium są niespójne. Jaki był rzeczywisty zakres Pani lub Pana pracy?"
-        : "Jaki był Pani lub Pana rzeczywisty zakres działania i rezultat?",
+      gap.reason === "contradiction" ? clarificationFollowUps[0] : clarificationFollowUps[1],
     ],
     maxSeconds: 45,
   }));
@@ -184,5 +280,6 @@ export function releaseInterviewPlan(
   const released = immutable({ ...plan, status: "released", revision: 3,
     releasedBy: input.releasedBy, releasedAt: input.releasedAt });
   reviewedInProcess.delete(plan);
+  releasedInProcess.add(released);
   return released;
 }

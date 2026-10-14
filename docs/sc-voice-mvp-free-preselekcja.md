@@ -27,9 +27,10 @@ Data: 2026-10-13. Cel: jeden wspólny voicebot SkillCheck dostępny dla obu plan
 ## W tym PR
 - `lib/voice/mvp-package-gate.ts`: offline preflight sprawdza aktywację firmy, FREE vs opłaconą PRESELEKCJĘ, aktualny zatwierdzony screening i scenariusz, notice i zgodę kandydata, flagę dostawcy oraz pozostały limit.
 - Funkcja wyłącznie zwraca `prepared_for_trusted_dispatch` lub `blocked`. **NIE może wysłać telefonu ani zarezerwować jednostki**; nie tworzy fałszywej autoryzacji.
-- `voiceScenarioFromApprovedPlan`: bezpieczna, deterministyczna projekcja **wcześniej autoryzowanego** planu SC-012 do istniejącego kontraktu SC-011 VoiceScenario (bez numeru i treści CV).
+- `voiceScenarioFromApprovedPlan`: bezpieczna, deterministyczna projekcja planu zwróconego przez `releaseInterviewPlan` w tym procesie. Odtworzony lub ręcznie złożony obiekt ze `status: "released"` jest odrzucany, a treść pytań musi zgadzać się z kanonicznymi szablonami SC-012 (bez numeru i treści CV).
 - `tests/voice-mvp-package-gate.test.mjs`: testy obu planów, zgód, limitów, odmowy nieznanych pól/PII oraz fikcyjnej rozmowy w FakeVoiceProvider. Wszystko offline.
-- `lib/voice/retell-outbound-draft.ts` przygotowuje **tylko obiekt żądania** wg Retell Create Phone Call: E.164, idempotency_key, przypięty agent/version i bezpieczne zmienne `sc_question_1..6`. Nie wykonuje POST, nie ma klucza i nie uruchamia kosztów. Dokumentacja API: https://docs.retellai.com/api-references/create-phone-call. W panelu Retell agent musi korzystać z odpowiadających zmiennych, potwierdzić powiadomienie i kończyć w limicie; bez tego żadnych połączeń.
+- `lib/voice/retell-outbound-draft.ts` przygotowuje **tylko obiekt żądania** wg Retell Create Phone Call: E.164, `idempotency_key` z alfabetu `^[A-Za-z0-9_-]+$`, nieprzezroczysty `override_agent_id`, wersję agenta związaną z `publishedAssistantVersion`, `honor_internal_dnc: true`, `agent_override.agent.enable_dnc_detection: true`, `max_call_duration_ms` z limitu rozmowy oraz `data_storage_setting: basic_attributes_only` (bez nagrań, transkrypcji i logów). Zmienne `sc_question_*` / `sc_followup_*` / `sc_prohibited_topics` pochodzą wyłącznie z zamkniętych szablonów SC-012. Nie wykonuje POST, nie ma klucza i nie uruchamia kosztów. Dokumentacja API: https://docs.retellai.com/api-references/create-phone-call. W panelu Retell przypięty agent musi używać tych zmiennych i tej samej listy tematów zakazanych; bez tego szkic nie jest dopuszczalny do dispatchu.
+- FREE z `limit.total` innym niż 1 jest konfiguracją niepoprawną (`invalid_snapshot`), nie dodatkowym limitem.
 - `tests/retell-outbound-draft.test.mjs` sprawdza deterministyczność, brak CV, odmowę nieprawidłowego agenta/numeru, zmiany wersji i niedozwolonego nagrywania.
 - CI typecheck, istniejące testy voice i build. Bez API/kluczy/wywołań Retell/VoIPstudio/GoTrunk.
 
@@ -45,4 +46,4 @@ Data: 2026-10-13. Cel: jeden wspólny voicebot SkillCheck dostępny dla obu plan
 Nie wymagać od właściciela osobnej akceptacji każdej funkcji. Zbiorczy raport końcowy zawiera stan SC-010–013 + Voice MVP, dokładne PR/SHA, zielone CI, niezależny PASS, syntetyczny E2E, braki do podłączenia Retell/VoIPstudio/GoTrunk i jeden checkpoint OWNER ACCEPTANCE. Dopiero po tej decyzji merge. Osobny checkpoint PRODUCTION oraz zgoda na koszty/połączenia pozostają obowiązkowe. Nie uruchamiać automatycznych połączeń i nie używać rzeczywistych danych kandydatów.
 
 ## Testy
-`node --test tests/voice-mvp-package-gate.test.mjs tests/voice-provider.test.mjs tests/voice-interview-plan.test.mjs`.
+`node --test tests/voice-mvp-package-gate.test.mjs tests/retell-outbound-draft.test.mjs tests/voice-provider.test.mjs tests/voice-interview-plan.test.mjs`.
