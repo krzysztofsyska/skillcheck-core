@@ -132,7 +132,21 @@ export async function drainOutbox({ github, journal, policy, record, now }) {
   const matches = comments.filter(c => c.user?.id === policy.controller_actor_id && c.body?.includes(marker));
   if (matches.length > 1) return record; // ambiguous report ownership: do not create more
   const delivered = matches[0]?.body?.includes(pending.marker);
-  if (!delivered && pending.delivery_phase === 'unknown') return record;
+  if (!delivered && pending.delivery_phase === 'unknown') {
+    // A lost response may still have created the comment. After the transport
+    // bound with no marker, stop treating the report as queue-blocking work.
+    const bound = Number.isInteger(policy?.limits?.transport_attempts) ? policy.limits.transport_attempts : 3;
+    const attempts = pending.unknown_attempts ?? 0;
+    if (attempts >= bound) return record;
+    const next = touch(record, now);
+    const item = next.binding.pending_notification;
+    item.unknown_attempts = attempts + 1;
+    if (item.unknown_attempts >= bound) {
+      next.binding.reports.push({ kind: 'NOTIFICATION_UNCONFIRMED', at: now, notification_id: item.notification_id });
+    }
+    await journal.save(next, { action: 'outbox-unknown' }, record);
+    return next;
+  }
   if (!delivered) {
     const next = touch(record, now); next.binding.pending_notification.delivery_phase = 'unknown';
     await journal.save(next, { action: 'outbox-send' }, record); record = next;

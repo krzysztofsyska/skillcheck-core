@@ -32,9 +32,9 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   const active = items.filter(i => i.record && !['ACCEPTED', 'DONE', 'BLOCKED'].includes(i.record.state));
   const terminal = items.filter(i => i.record && ['ACCEPTED', 'DONE', 'BLOCKED'].includes(i.record.state));
   const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId))));
-  const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && i.record.binding?.pending_notification);
-  // One active task per repository. An accepted record with an undelivered report is
-  // reconciled before a new promotion, so automatic integration can finish its outbox.
+  const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && notificationBlocksQueue(i.record, policy));
+  // One active task per repository. A reconcilable accepted report still runs
+  // before new work. An unconfirmed report past the transport bound does not.
   const selected = active.length ? active : acceptedOutbox.length ? [acceptedOutbox[0]] : fresh.length ? [fresh[0]] : terminal.filter(i => (['BLOCKED', 'DONE'].includes(i.record.state) && i.record.binding?.last_notified_state !== i.record.state) || i.record.binding?.pending_notification || i.record.binding?.stale_approvals?.some(a => !a.cancelled && a.cancel_attempts < 3));
   return { items: selected, integrationSha, mainSha, read: snapshot.read ?? 'github' };
 }
@@ -133,3 +133,10 @@ export function cursorSnapshot(agent, runsPayload) {
 }
 
 function recordsDependency(snapshot, id) { return ['ACCEPTED', 'DONE'].includes(snapshot.records?.[id]?.state); }
+
+function notificationBlocksQueue(record, policy) {
+  const pending = record.binding?.pending_notification;
+  if (!pending) return false;
+  const bound = Number.isInteger(policy?.limits?.transport_attempts) ? policy.limits.transport_attempts : 3;
+  return !(pending.delivery_phase === 'unknown' && (pending.unknown_attempts ?? 0) >= bound);
+}

@@ -20,7 +20,7 @@ Aplikacja instalowana tylko w `krzysztofsyska/skillcheck-core`. Poświadczenia n
 | Środowisko | Kto zatwierdza | Zakres |
 | --- | --- | --- |
 | `agent-control` | brak recenzenta właściciela; dostęp workflow tylko z `main` | klucze kontrolera i dostawców |
-| `owner-acceptance` | jedyny required reviewer: właściciel | gate A, sam dowód, bez merge |
+| `owner-acceptance` | jedyny required reviewer: właściciel | środowisko sprawdzane przez preflight; nie jest checkiem statusu `integration` |
 | `production-approval` | jedyny required reviewer: właściciel | gate B, sam dowód, bez merge i bez deploy |
 
 Dla obu zgód: wyłączony bypass administratora i wyłączony self-review. Agenci nie dostają tokenu właściciela zdolnego zatwierdzić te joby. Jeżeli istniejąca integracja ma taki zakres, ograniczyć go przed aktywacją. Komentarz opublikowany kontem właściciela nie jest dowodem kliknięcia.
@@ -32,7 +32,8 @@ Po pierwszej prawdziwej zgodzie zapisać numeryczne `environments[].id`. Do tego
 Osobne zestawy, bo wyjątek autora zapisu nie może omijać jakości:
 
 - `writers-only` na `main` i `integration`: aktualizacje tylko przez GitHub App kontrolera, tryb PR-only. Wyjątek App wyłącznie w tym ruleset.
-- `quality-gates` na `main` i `integration`: wymagany PR, strict checks, zakaz force i delete, bez listy bypass. Wymagane checki: dla `integration` `sc-agent/ci`, `sc-agent/review`, `sc-agent/owner-acceptance`; dla `main` te same plus `sc-agent/production-approval` i `sc-agent/promotion-scope`. Źródło checków przypięte do App, nie „any source”.
+- `quality-gates` na `main` i `integration`: wymagany PR, strict checks, zakaz force i delete, bez listy bypass. Wymagane checki, te same co `required_checks` w policy.json: dla `integration` `sc-agent/ci`, `sc-agent/review`, `sc-agent/integration-ready`; dla `main` `sc-agent/ci`, `sc-agent/review`, `sc-agent/production-approval`, `sc-agent/promotion-scope`. Źródło checków przypięte do App, nie „any source”.
+- Na `integration` nie ustawiaj wymaganego checka `sc-agent/owner-acceptance`. Brak `sc-agent/integration-ready` albo check z innego źródła niż App oznacza nieudany preflight i brak automatycznego scalenia, także gdy obie flagi LIVE są włączone. Środowisko `owner-acceptance` zostaje, bo preflight sprawdza jego reviewerów.
 - `agent-state`: writers-only pozwala App na bezpośredni zapis; osobny ruleset bez bypass zabrania force i delete. Gałąź nie jest scalana do aplikacji.
 
 Jeżeli kombinacja nie jest skuteczna na tym repozytorium, auto-merge pozostaje wyłączone. Instrukcja w AGENTS nie zastępuje rulesetu.

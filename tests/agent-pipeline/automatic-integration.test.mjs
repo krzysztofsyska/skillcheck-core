@@ -9,6 +9,10 @@ import { createMemoryJournal } from '../../tools/agent-pipeline/lib/controller.m
 import { buildNotification } from '../../tools/agent-pipeline/lib/notifications.mjs';
 import { assembleWork } from '../../tools/agent-pipeline/lib/snapshot.mjs';
 import { MAIN_STATES } from '../../tools/agent-pipeline/lib/record.mjs';
+import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
+import { protectionFromRulesets } from '../../tools/agent-pipeline/lib/protection.mjs';
+import { evaluatePreflight } from '../../tools/agent-pipeline/lib/merge.mjs';
+import { configuredPolicy, protectionFixtures } from './http-world.mjs';
 import { observation, taskRecord } from './helpers.mjs';
 
 function verifiedTask() {
@@ -230,6 +234,69 @@ test('readiness is delivered while merge is disabled and production still waits 
   });
   assert.equal(work.items[0].record.state, 'ACCEPTED');
   assert.equal(work.items[0].record.binding.pending_notification.kind, 'READY_FOR_OWNER');
+});
+
+test('operative setup requires integration-ready and rejects an owner-acceptance ruleset', () => {
+  const policy = loadPolicy();
+  const runbook = readFileSync('docs/sc-ops-002c-bootstrap-runbook.md', 'utf8');
+  const spec = readFileSync('docs/sc-ops-002a-agent-orchestration.md', 'utf8');
+  const checksIn = text => [...text.matchAll(/sc-agent\/[a-z0-9-]+/g)].map(match => match[0]);
+  const runbookLine = runbook.split('\n').find(line => line.includes('quality-gates'));
+  const specLine = spec.split('\n').find(line => line.includes('Wymagane checks:'));
+  assert.deepEqual(checksIn(runbookLine.split('dla `main`')[0]), policy.required_checks.integration);
+  assert.deepEqual(checksIn(runbookLine.split('dla `main`')[1]), policy.required_checks.main);
+  assert.deepEqual(checksIn(specLine.split(' dla integration')[0]), policy.required_checks.integration);
+  assert.deepEqual(checksIn(specLine.split(' dla integration')[1].split(' dla main')[0]), policy.required_checks.main);
+
+  const live = configuredPolicy();
+  const fixtures = protectionFixtures(live);
+  const rules = structuredClone(fixtures.rules);
+  const integration = rules.find(rule => rule.name === 'quality-gates' && rule.conditions.ref_name.include.includes('refs/heads/integration'));
+  const required = integration.rules.find(rule => rule.type === 'required_status_checks').parameters.required_status_checks;
+  const ready = required.find(check => check.context === 'sc-agent/integration-ready');
+  ready.context = 'sc-agent/owner-acceptance';
+  const stale = protectionFromRulesets(rules, live, fixtures.environments);
+  assert.equal(stale.integrationProtected, false);
+  assert.equal(evaluatePreflight(stale).ok, false);
+  assert.equal(evaluatePreflight(protectionFromRulesets(fixtures.rules, live, fixtures.environments)).ok, true);
+});
+
+test('unconfirmed readiness delivery stops blocking the next task', async () => {
+  const policy = structuredClone(observation().policy);
+  policy.controller_actor_id = 456;
+  const record = taskRecord({ state: 'ACCEPTED', issue_number: 7, pr_number: 50 });
+  record.binding.approval = null;
+  record.binding.pending_notification = buildNotification({
+    taskId: record.task_id, stateRevision: record.state_revision, recipient: policy.notification_recipient,
+    kind: 'READY_FOR_OWNER', headSha: record.head_sha, baseSha: record.base_sha, result: 'READY_FOR_OWNER',
+    evidenceUrl: `${policy.repository_url}/pull/50`, actionUrl: null,
+  });
+  record.binding.pending_notification.delivery_phase = 'unknown';
+  const github = {
+    async readComments() { return []; },
+    async comment() { throw Object.assign(new Error('transport'), { status: 500 }); },
+    async updateComment() { throw Object.assign(new Error('transport'), { status: 500 }); },
+  };
+  let current = record;
+  for (let i = 0; i < policy.limits.transport_attempts; i++) {
+    current = await drainOutbox({ github, journal: createMemoryJournal(), policy, record: current, now: '2026-10-14T08:00:00.000Z' });
+  }
+  assert.equal(current.binding.pending_notification.unknown_attempts, policy.limits.transport_attempts);
+  assert.equal(current.binding.pending_notification.delivery_phase, 'unknown');
+  assert.equal(current.binding.reports.at(-1).kind, 'NOTIFICATION_UNCONFIRMED');
+  const again = await drainOutbox({ github, journal: createMemoryJournal(), policy, record: current, now: '2026-10-14T08:00:00.000Z' });
+  assert.equal(again.binding.pending_notification.unknown_attempts, policy.limits.transport_attempts);
+  const work = assembleWork({
+    policy, policySha: 'd'.repeat(40), now: '2026-10-14T08:00:00.000Z', secrets: {},
+    snapshot: {
+      records: { [current.task_id]: current },
+      promotion: { taskId: 'SC-PROMOTE-QUEUE', manifest: { tasks: [] }, runbook: { id: 'r' } },
+      issues: [], pulls: [],
+    },
+  });
+  assert.equal(work.items.length, 1);
+  assert.equal(work.items[0].record, null);
+  assert.equal(work.items[0].observation.kind, 'promotion');
 });
 
 function acceptedRecord() {
