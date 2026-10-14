@@ -12,4 +12,5 @@ export const footerLinks = [
   { href: "/login", label: "Zaloguj się" },
   { href: "/register", label: "Utwórz konto" },
   { href: "/rozmowa", label: "Porozmawiajmy o Twojej rekrutacji" },
+  { href: "/prywatnosc", label: "Dane w formularzu kontaktowym" },
 ] as const;
