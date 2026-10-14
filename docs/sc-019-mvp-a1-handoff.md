@@ -1,7 +1,7 @@
 # SC-019-MVP A1 — SAFE BILLING CORE PROTOTYPE
 
 TASK: #91 / SC-019-MVP
-STATUS: FIXING — Codex P1 on 69e965f (claim versus complete/fail lock order) repaired in the prototype; independent repeat review still pending
+STATUS: FIXING — Codex P1 on the install-time unbilled-analysis race repaired in the prototype; independent repeat review still pending
 BASE: integration
 SCOPE: FREE (5 analyses) + PRESELEKCJA prepaid (60 analyses)
 PRICING: 299 PLN is only a proposed initial commercial price; do NOT charge or publish it as approved.
@@ -78,6 +78,12 @@ No file was added under `supabase/migrations`. Payments and production activatio
 ## Codex finding on 69e965f
 
 The repeat review was not a PASS. Completion and failure still locked the attempt before the analysis, which deadlocks a reclaim that now locks the analysis first. Both finalizers use the reviewed function bodies and take the analysis row, the company row, the attempt, and then the candidate. Completion keeps its application advisory lock before those row locks. The PostgreSQL 16 test races an expired-lease reclaim against both completion and failure, requires exactly one of them to commit, and checks that held credits still match the balance.
+
+No file was added under `supabase/migrations`. Payments and production activation stay off.
+
+## Codex finding on the unbilled-analysis install race
+
+The preexisting-row check used to read `screening_analysis_versions` without a table lock. An open insert could stay invisible, commit while trigger creation waited, and leave a pending analysis with no reservation. Installation now takes `SHARE ROW EXCLUSIVE` before that check and holds it through trigger creation, then checks again. A PostgreSQL 16 test holds an uncommitted pending insert, waits until the install lock is blocked, commits the insert, and requires the install to abort with `sc19_preexisting_unbilled_analysis` without leaving the billing tables behind.
 
 No file was added under `supabase/migrations`. Payments and production activation stay off.
 

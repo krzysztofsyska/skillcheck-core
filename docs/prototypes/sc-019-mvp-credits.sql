@@ -282,8 +282,12 @@ revoke all on function private.sc19_reconcile_analysis() from public, anon, auth
 -- Those rows are reachable from the legacy start/retry RPC without a new INSERT,
 -- so installing the trigger around them would either skip the debit or fail closed
 -- mid-retry. Completed history is left unbilled and cannot be refunded.
+-- SHARE ROW EXCLUSIVE waits for an open insert and then blocks new writes until
+-- this transaction commits, so a pending analysis cannot land between the check
+-- and trigger creation.
 do $sc19_preexisting$
 begin
+  lock table public.screening_analysis_versions in share row exclusive mode;
   if exists (
     select 1 from public.screening_analysis_versions analysis
     where analysis.execution_status is distinct from 'completed'
@@ -304,6 +308,24 @@ create trigger sc19_analysis_bill after insert on public.screening_analysis_vers
 create trigger sc19_analysis_reconcile after update of execution_status, stale_at
   on public.screening_analysis_versions
   for each row execute function private.sc19_reconcile_analysis();
+
+-- The write-blocking lock from the check above is still held. Recheck after the
+-- triggers exist so an analysis that committed while trigger creation waited
+-- cannot remain unbilled.
+do $sc19_preexisting_recheck$
+begin
+  if exists (
+    select 1 from public.screening_analysis_versions analysis
+    where analysis.execution_status is distinct from 'completed'
+      and not exists (
+        select 1 from private.sc19_analysis_spend spend
+        where spend.analysis_id=analysis.id
+      )
+  ) then
+    raise exception 'sc19_preexisting_unbilled_analysis' using errcode='55000';
+  end if;
+end
+$sc19_preexisting_recheck$;
 
 -- Claim, completion and failure must take the same row locks. A stale update
 -- already holds the analysis row, then the company, then the attempt. Claim

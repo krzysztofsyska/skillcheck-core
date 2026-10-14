@@ -250,3 +250,89 @@ assertion('SC-019: stale cancellation does not deadlock a worker claim', async t
   )).rows[0].available);
   assert.equal(available + held, 60);
 });
+
+assertion('SC-019: install waits for an open analysis insert and then refuses it', async t => {
+  const u = new URL(urlText);
+  if (!['127.0.0.1', 'localhost', '::1'].includes(u.hostname) || u.pathname !== '/postgres') {
+    throw Error('SC19_TEST_DATABASE_URL must point to disposable loopback postgres service; refusing remote databases');
+  }
+  const database = 'sc19install_' + randomBytes(6).toString('hex');
+  const root = new pg.Client({ connectionString: urlText });
+  await root.connect();
+  const clients = [];
+  t.after(async () => {
+    await Promise.allSettled(clients.map(c => c.end()));
+    await root.query(`drop database if exists "${database}" with (force)`).catch(() => {});
+    await root.end();
+  });
+  await root.query(`create database "${database}"`);
+  const connect = async () => {
+    const isolatedUrl = new URL(urlText);
+    isolatedUrl.pathname = `/${database}`;
+    const c = new pg.Client({ connectionString: isolatedUrl.toString() });
+    await c.connect();
+    clients.push(c);
+    return c;
+  };
+  const db = await connect();
+  const writer = await connect();
+  const installer = await connect();
+  await db.query(`
+    do $$ begin
+      if not exists(select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
+      if not exists(select 1 from pg_roles where rolname='authenticated') then create role authenticated nologin; end if;
+    end $$;
+    create schema auth;
+    create schema private;
+    revoke all on schema private from public, anon, authenticated;
+    create function auth.uid() returns uuid language sql stable as $$
+      select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+    $$;
+    create table public.companies(id uuid primary key, owner_id uuid not null);
+    create table public.screening_analysis_versions(
+      id uuid primary key,
+      company_id uuid not null references public.companies(id),
+      execution_status text not null default 'pending',
+      stale_at timestamptz
+    );
+    create function private.is_company_owner(cid uuid)
+      returns boolean language sql stable security definer set search_path='' as $$
+      select false $$;
+    create function private.has_company_access(cid uuid, write_access boolean default false)
+      returns boolean language sql stable security definer set search_path='' as $$
+      select false $$;
+  `);
+  await db.query('insert into public.companies values($1,$2)', [company, owner]);
+  await writer.query('begin');
+  await writer.query(
+    'insert into public.screening_analysis_versions(id, company_id, execution_status) values($1,$2,$3)',
+    [uuid(501), company, 'pending'],
+  );
+  const prototype = await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql', import.meta.url), 'utf8');
+  const install = installer.query(prototype);
+  let waiting = false;
+  for (let n = 0; n < 50; n++) {
+    const locks = await db.query(`
+      select count(*)::int as n
+      from pg_locks
+      where relation = 'public.screening_analysis_versions'::regclass
+        and mode = 'ShareRowExclusiveLock'
+        and not granted
+    `);
+    if (locks.rows[0].n > 0) {
+      waiting = true;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(waiting, true);
+  await writer.query('commit');
+  await assert.rejects(install, error => error.code === '55000' && error.message.includes('sc19_preexisting_unbilled_analysis'));
+  const left = (await db.query(`
+    select to_regclass('private.sc19_balances') as balances,
+           count(*)::int as analyses
+    from public.screening_analysis_versions
+  `)).rows[0];
+  assert.equal(left.balances, null);
+  assert.equal(left.analyses, 1);
+});
