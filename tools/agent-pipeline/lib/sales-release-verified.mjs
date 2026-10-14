@@ -60,14 +60,14 @@ function checkChanged(entries, expected, errors, label, allowPartial) {
   if(!entries.length) errors.push(label+': empty diff');
 }
 export function inspectSalesReleaseGit({
-  cwd='.', baseSha, headSha, headRef=branch, expectedBlobs=REVIEWED_SALES_BLOBS,
+  cwd='.', baseSha, headSha, headRef=branch,
 }) {
+  // The manifest is policy, never caller input (including test-only overrides).
+  const expectedBlobs=REVIEWED_SALES_BLOBS;
   const errors=[], inspected=new Set();
   if (!sha40.test(baseSha??'') || !sha40.test(headSha??'') || baseSha===headSha)
     return {ok:false,authorizedForProduction:false,errors:['Invalid base/head SHA']};
   if (headRef!==branch) errors.push('Unexpected source branch');
-  if (!expectedBlobs || Object.keys(expectedBlobs).length!==5)
-    errors.push('Invalid reviewed content manifest');
   try {
     const actualMain=git(cwd,'rev-parse','refs/remotes/origin/main').trim();
     if(actualMain!==baseSha) errors.push('Base does not match current origin/main');
