@@ -52,3 +52,60 @@ export function postgresAiLedger(query: AiWorkerQuery): LedgerStore {
     },
   };
 }
+
+
+// SC-021-B/R5: candidate-associated metering is a separate, privileged,
+// tenant-scoped capability. candidateId MUST come from the verified database
+// worker claim for the active SC-005 attempt, never browser JSON/headers.
+// The role ai_meter_worker cannot call the legacy generic reserve() after R5.
+export function postgresCandidateAiLedger(
+  query: AiWorkerQuery, trustedCandidateId: string,
+): LedgerStore {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(trustedCandidateId)) {
+    throw new Error('SC021_INVALID_TRUSTED_CANDIDATE');
+  }
+  return {
+    async reserve(input): Promise<Reservation> {
+      if (input.candidatePseudonym !== null) {
+        throw new Error('SC021_UNTRUSTED_CANDIDATE_IDENTIFIER');
+      }
+      const row = rowOf(await query(
+        'select * from private.ai_gateway_reserve_candidate(' +
+          '$1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::text,' +
+          '$7::text,$8::text,$9::text,$10::text,$11::bigint)',
+        [
+          input.companyId, trustedCandidateId, input.requestKey, input.operationId,
+          input.processId, input.task, input.provider, input.model,
+          input.policyVersion, input.priceVersion, input.estimatedMicroUsd,
+        ],
+      ));
+      if (typeof row.usage_id !== 'string' || !uuid.test(row.usage_id)
+        || typeof row.created !== 'boolean' || typeof row.warning !== 'boolean') {
+        throw new Error('SC021_LEDGER_INVALID_RESPONSE');
+      }
+      return { usageId: row.usage_id, created: row.created, warning: row.warning };
+    },
+    async settle(input) {
+      const row = rowOf(await query(
+        'select private.ai_gateway_settle_candidate(' +
+          '$1::uuid,$2::uuid,$3::uuid,$4::bigint,$5::bigint,$6::bigint,$7::bigint,$8::text) as settled',
+        [
+          input.companyId, trustedCandidateId, input.requestKey, input.costMicroUsd,
+          input.usage.inputTokens, input.usage.cachedInputTokens, input.usage.outputTokens,
+          input.providerRequestId,
+        ],
+      ));
+      if (typeof row.settled !== 'boolean') throw new Error('SC021_LEDGER_INVALID_RESPONSE');
+      return row.settled;
+    },
+    async markUnknown(input) {
+      const row = rowOf(await query(
+        'select private.ai_gateway_mark_unknown_candidate($1::uuid,$2::uuid,$3::uuid) as marked',
+        [input.companyId, trustedCandidateId, input.requestKey],
+      ));
+      if (typeof row.marked !== 'boolean') throw new Error('SC021_LEDGER_INVALID_RESPONSE');
+      return row.marked;
+    },
+  };
+}
