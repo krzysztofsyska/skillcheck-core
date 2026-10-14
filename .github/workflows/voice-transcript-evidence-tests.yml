@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'lib/voice/transcript-evidence-contract.ts'
+      - 'lib/behavior-guide.ts'
       - 'fixtures/voice/sc-013a-synthetic-transcripts.ts'
       - 'tests/voice-transcript-evidence.test.mjs'
       - '.github/workflows/voice-transcript-evidence-tests.yml'
@@ -10,6 +11,7 @@ on:
     branches: [integration, main]
     paths:
       - 'lib/voice/transcript-evidence-contract.ts'
+      - 'lib/behavior-guide.ts'
       - 'fixtures/voice/sc-013a-synthetic-transcripts.ts'
       - 'tests/voice-transcript-evidence.test.mjs'
       - '.github/workflows/voice-transcript-evidence-tests.yml'

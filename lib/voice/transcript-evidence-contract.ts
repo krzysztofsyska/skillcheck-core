@@ -60,7 +60,7 @@ export type ApprovingValidity = "approved" | "approved_with_changes";
 export const transcriptEventFields = Object.freeze([
   "schemaVersion", "provenance", "untrusted", "contextComplete", "language",
   "companyId", "recruitmentId", "applicationId", "voiceInterviewId",
-  "roleKey", "roleTitle", "planVersionId", "planRevision", "transcriptRevision",
+  "roleKey", "roleTitle", "planVersionId", "planRevision", "planCriteria", "transcriptRevision",
   "sourceId", "providerEventId", "providerCallId", "attemptId", "correlationId",
   "segments",
 ] as const);
@@ -71,7 +71,7 @@ export const reviewerOverrideFields = Object.freeze([
   "schemaVersion", "idempotencyKey", "reviewerId", "reviewedAt", "analysisId",
   "expectedAnalysisVersion", "expectedTranscriptSha256", "expectedSourceFingerprint",
   "expectedReviewVersion", "expectedPointerVersion", "expectedCurrentAnalysisId",
-  "assessmentValidity", "rationale", "overrides",
+  "expectedLineageVersion", "assessmentValidity", "rationale", "overrides",
 ] as const);
 
 const sealedByModule = new WeakSet<object>();
@@ -139,6 +139,7 @@ export type SealedTranscript = Readonly<{
   roleTitle: string;
   planVersionId: string;
   planRevision: number;
+  planCriteria: readonly FrozenCriterion[];
   transcriptRevision: number;
   sourceId: string;
   providerEventId: string;
@@ -199,11 +200,15 @@ export type EvidenceLedger = Readonly<{
   voiceInterviewId: string;
   roleKey: string;
   sourceId: string;
+  attemptId: string;
+  providerCallId: string;
   planVersionId: string;
   planRevision: number;
+  planCriteria: readonly FrozenCriterion[];
   transcriptRevision: number;
   transcriptSha256: string;
   sourceFingerprint: string;
+  lineageVersion: number;
   pointerVersion: number;
   currentAnalysisId: string | null;
   analyses: readonly StoredAnalysis[];
@@ -288,6 +293,8 @@ function hasPii(text: string): boolean {
   if (text.includes("@")) return true;
   // Defense-in-depth only: production transcripts still require separate PII minimization.
   if (/(?:^|[^A-Za-z0-9])\+(?:\d[\s()./-]*){8,15}(?!\d)/.test(text)) return true;
+  // 00 is the same international prefix as +, including a space after 00.
+  if (/(?:^|[^A-Za-z0-9])00(?:[\s()./-]*\d){8,15}(?!\d)/.test(text)) return true;
   // Recognize Polish IBAN (26 digits after PL), including bank-style grouping.
   if (/(?:^|[^A-Za-z0-9])PL[ -]?\d{2}(?:[ -]?\d{4}){6}(?!\d)/i.test(text)) return true;
   return /(?:^|[^\d])\+\d{8,15}(?!\d)/.test(text) ||
@@ -328,8 +335,16 @@ function asCanon(value: unknown, depth = 0): Canon {
     return value.map(item => asCanon(item, depth + 1));
   }
   if (!plainObject(value)) reject("invalid_transcript");
-  const out: Record<string, Canon> = {};
-  for (const key of ownNames(value)) out[key] = asCanon(value[key], depth + 1);
+  // A normal object assignment treats "__proto__" as the legacy setter.
+  const out = Object.create(null) as { [key: string]: Canon };
+  for (const key of ownNames(value)) {
+    Object.defineProperty(out, key, {
+      value: asCanon(value[key], depth + 1),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
   return out;
 }
 function canonicalize(value: Canon): string {
@@ -595,9 +610,11 @@ export function sealSyntheticTranscript(input: unknown): SealedTranscript {
   const correlationId = requireIdentity(cloned.correlationId, "opaque");
   const planVersionId = requireIdentity(cloned.planVersionId, "opaque");
   const planRevision = requireRevision(cloned.planRevision);
+  const planCriteria = Object.freeze(readPlanCriteria(cloned.planCriteria).map(freezePlanCriterion));
   const transcriptRevision = requireRevision(cloned.transcriptRevision);
   if (typeof cloned.roleKey !== "string" || !roleKeyPattern.test(cloned.roleKey)) reject("invalid_transcript");
-  const roleTitle = safeText(cloned.roleTitle, 8, 120);
+  if (typeof cloned.roleTitle !== "string") reject("invalid_transcript");
+  const roleTitle = safeText(cloned.roleTitle.trim(), 1, 200);
   if (!denseArray(cloned.segments, 2, 30)) reject("invalid_transcript");
 
   const seen = new Set<string>();
@@ -637,6 +654,11 @@ export function sealSyntheticTranscript(input: unknown): SealedTranscript {
     context_complete: true,
     correlation_id: correlationId,
     language: "pl-PL",
+    plan_criteria: planCriteria.map(item => ({
+      criterion_id: item.criterionId,
+      kind: item.kind,
+      rubric_version: item.rubricVersion,
+    })),
     plan_revision: planRevision,
     plan_version_id: planVersionId,
     provenance: "synthetic_fixture",
@@ -670,6 +692,7 @@ export function sealSyntheticTranscript(input: unknown): SealedTranscript {
     roleTitle,
     planVersionId,
     planRevision,
+    planCriteria,
     transcriptRevision,
     sourceId,
     providerEventId,
@@ -717,6 +740,37 @@ function readCriterion(value: unknown): FrozenCriterion {
     reject("invalid_transcript");
   }
   return { criterionId: value.criterionId, kind: value.kind as CriterionKind, rubricVersion: value.rubricVersion };
+}
+function readPlanCriteria(value: unknown): FrozenCriterion[] {
+  if (!denseArray(value, 1, 12)) reject("invalid_transcript");
+  const criteria = value.map(readCriterion);
+  const ids = new Set<string>();
+  for (const item of criteria) {
+    if (ids.has(item.criterionId)) reject("invalid_transcript");
+    ids.add(item.criterionId);
+  }
+  return criteria;
+}
+function freezePlanCriterion(item: FrozenCriterion): FrozenCriterion {
+  return Object.freeze({
+    criterionId: item.criterionId,
+    kind: item.kind,
+    rubricVersion: item.rubricVersion,
+  });
+}
+function samePlanRoster(left: readonly FrozenCriterion[], right: readonly FrozenCriterion[]): boolean {
+  return left.length === right.length && left.every((item, index) => {
+    const other = right[index];
+    return !!other && item.criterionId === other.criterionId &&
+      item.kind === other.kind && item.rubricVersion === other.rubricVersion;
+  });
+}
+function sameCriterionSet(left: readonly FrozenCriterion[], right: readonly FrozenCriterion[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every(item => right.some(other =>
+    other.criterionId === item.criterionId &&
+    other.kind === item.kind &&
+    other.rubricVersion === item.rubricVersion));
 }
 function validateEvidence(sealed: SealedTranscript, evidence: unknown, rating: CriterionRating): EvidenceSpan[] {
   if (!denseArray(evidence, 0, 5)) reject("insufficient_evidence");
@@ -826,6 +880,7 @@ export function assessSyntheticTranscript(sealedInput: SealedTranscript, request
   const criteria = cloned.criteria.map(readCriterion);
   const ids = new Set(criteria.map(item => item.criterionId));
   if (ids.size !== criteria.length) reject("invalid_transcript");
+  if (!sameCriterionSet(criteria, sealed.planCriteria)) reject("revision_mismatch");
   if (cloned.ratings.length !== criteria.length) reject("invalid_transcript");
   const used = new Set<string>();
   const byId = new Map<string, unknown>();
@@ -870,6 +925,7 @@ function freezeLedger(ledger: EvidenceLedger): EvidenceLedger {
         overrides: Object.freeze(item.review.overrides.map(freezeCriterion)),
       }) : null,
     }))),
+    planCriteria: Object.freeze(ledger.planCriteria.map(freezePlanCriterion)),
     idempotency: Object.freeze({ ...ledger.idempotency }),
     reviewIdempotency: Object.freeze({ ...ledger.reviewIdempotency }),
   });
@@ -899,11 +955,15 @@ export function openEvidenceLedger(sealedInput: SealedTranscript): EvidenceLedge
     voiceInterviewId: sealed.voiceInterviewId,
     roleKey: sealed.roleKey,
     sourceId: sealed.sourceId,
+    attemptId: sealed.attemptId,
+    providerCallId: sealed.providerCallId,
     planVersionId: sealed.planVersionId,
     planRevision: sealed.planRevision,
+    planCriteria: sealed.planCriteria,
     transcriptRevision: sealed.transcriptRevision,
     transcriptSha256: sealed.transcriptSha256,
     sourceFingerprint: sealed.sourceFingerprint,
+    lineageVersion: 0,
     pointerVersion: 0,
     currentAnalysisId: null,
     analyses: [],
@@ -923,7 +983,10 @@ export function recordTranscriptRevision(ledgerInput: EvidenceLedger, sealedInpu
       sealed.recruitmentId !== ledger.recruitmentId ||
       sealed.applicationId !== ledger.applicationId ||
       sealed.planVersionId !== ledger.planVersionId ||
-      sealed.planRevision !== ledger.planRevision) return held(ledger, "conflict");
+      sealed.planRevision !== ledger.planRevision ||
+      sealed.attemptId !== ledger.attemptId ||
+      sealed.providerCallId !== ledger.providerCallId ||
+      !samePlanRoster(sealed.planCriteria, ledger.planCriteria)) return held(ledger, "conflict");
   if (sealed.transcriptRevision < ledger.transcriptRevision) return held(ledger, "out_of_order");
   if (sealed.transcriptRevision === ledger.transcriptRevision) {
     const same = sealed.transcriptSha256 === ledger.transcriptSha256 &&
@@ -989,6 +1052,7 @@ export function commitAssessment(ledgerInput: EvidenceLedger, draftInput: Assess
   };
   return held(freezeLedger({
     ...ledger,
+    lineageVersion: ledger.lineageVersion + 1,
     analyses: [...ledger.analyses, stored],
     idempotency: { ...ledger.idempotency, [draft.idempotencyKey]: draft.fingerprint },
   }), "applied", analysisId);
@@ -1075,6 +1139,10 @@ export function commitReview(
     cloned.expectedPointerVersion < 0) {
     reject("invalid_transcript");
   }
+  if (typeof cloned.expectedLineageVersion !== "number" || !Number.isSafeInteger(cloned.expectedLineageVersion) ||
+    cloned.expectedLineageVersion < 0) {
+    reject("invalid_transcript");
+  }
   const expectedCurrentAnalysisId: string | null = cloned.expectedCurrentAnalysisId === null
     ? null
     : typeof cloned.expectedCurrentAnalysisId === "string"
@@ -1091,6 +1159,7 @@ export function commitReview(
     assessment_validity: validity,
     expected_analysis_version: cloned.expectedAnalysisVersion,
     expected_current_analysis_id: expectedCurrentAnalysisId,
+    expected_lineage_version: cloned.expectedLineageVersion,
     expected_pointer_version: cloned.expectedPointerVersion,
     expected_review_version: cloned.expectedReviewVersion,
     expected_source_fingerprint: cloned.expectedSourceFingerprint,
@@ -1126,6 +1195,7 @@ export function commitReview(
   if (cloned.expectedAnalysisVersion !== analysis.analysisVersion ||
     cloned.expectedReviewVersion !== analysis.reviewVersion ||
     cloned.expectedPointerVersion !== ledger.pointerVersion ||
+    cloned.expectedLineageVersion !== ledger.lineageVersion ||
     expectedCurrentAnalysisId !== ledger.currentAnalysisId ||
     analysis.review) {
     return held(ledger, "conflict");
@@ -1164,6 +1234,7 @@ export function commitReview(
   return held(freezeLedger({
     ...ledger,
     analyses,
+    lineageVersion: ledger.lineageVersion + 1,
     pointerVersion,
     currentAnalysisId,
     reviewIdempotency: { ...ledger.reviewIdempotency, [idempotencyKey]: fingerprint },

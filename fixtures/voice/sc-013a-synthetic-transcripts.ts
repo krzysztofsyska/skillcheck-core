@@ -16,6 +16,10 @@ const qualityCompany = {
   roleTitle: "Specjalista jakości oprogramowania",
   planVersionId: "plan-quality-v3",
   planRevision: 4,
+  planCriteria: [
+    { criterionId: "task:1", kind: "task", rubricVersion: "rubric-quality-v1" },
+    { criterionId: "kpi:1", kind: "kpi", rubricVersion: "rubric-quality-v1" },
+  ],
   transcriptRevision: 3,
   sourceId: "src-quality-rev3",
   providerEventId: "evt-quality-0003",
@@ -68,6 +72,11 @@ const warehouseCompany = {
   roleTitle: "Koordynator zmiany magazynowej",
   planVersionId: "plan-warehouse-v2",
   planRevision: 2,
+  planCriteria: [
+    { criterionId: "task:1", kind: "task", rubricVersion: "rubric-warehouse-v1" },
+    { criterionId: "kpi:1", kind: "kpi", rubricVersion: "rubric-warehouse-v1" },
+    { criterionId: "competency:1", kind: "competency", rubricVersion: "rubric-warehouse-v1" },
+  ],
   transcriptRevision: 3,
   sourceId: "src-warehouse-rev3",
   providerEventId: "evt-warehouse-003",

@@ -114,6 +114,7 @@ function reviewBody(sealed, ledger, analysisId, patch = {}) {
     expectedReviewVersion: analysis.reviewVersion,
     expectedPointerVersion: ledger.pointerVersion,
     expectedCurrentAnalysisId: ledger.currentAnalysisId,
+    expectedLineageVersion: ledger.lineageVersion,
     assessmentValidity: "approved",
     rationale: "Cytaty pochodzą z wypowiedzi kandydata i wystarczają do oceny.",
     overrides: [],
@@ -132,6 +133,16 @@ test("RFC 8785 vectors keep slash, quotes, newline, emoji and combining marks", 
     sha256Utf8(rfc8785Canonicalize({ t: "é" })),
   );
   assert.equal(sha256Utf8(rfc8785Canonicalize({ t: "a/b" })), sha256Utf8('{"t":"a/b"}'));
+  const protoKey = {};
+  Object.defineProperty(protoKey, "__proto__", {
+    value: { a: 1 }, enumerable: true, writable: true, configurable: true,
+  });
+  assert.equal(rfc8785Canonicalize(protoKey), '{"__proto__":{"a":1}}');
+  assert.notEqual(rfc8785Canonicalize(protoKey), rfc8785Canonicalize({}));
+  assert.notEqual(
+    rfc8785Canonicalize(JSON.parse('{"__proto__":{"a":1}}')),
+    rfc8785Canonicalize({}),
+  );
   assert.equal(codeOf(() => parseUntrustedJson('{"a":1,"a":2}')), "invalid_transcript");
   assert.equal(codeOf(() => parseUntrustedJson('{"a":01}')), "invalid_transcript");
   assert.equal(codeOf(() => parseUntrustedJson("\uFEFF{}")), "invalid_transcript");
@@ -604,8 +615,13 @@ test("SC-013-A refuses approval of a superseded committed analysis even without 
   assert.equal(readEffectiveResult(approvedNewer.ledger).analysisId, newer.analysisId);
 });
 
-test("SC-013-A accepts canonical behavior area IDs from trusted voice-plan generator", () => {
-  const sealed = sealSyntheticTranscript(qualityCompanyTranscript());
+test("SC-013-A accepts behavior IDs only when the released plan lists them", () => {
+  const input = qualityCompanyTranscript();
+  input.planCriteria = [
+    ...input.planCriteria,
+    { criterionId: "responsibility", kind: "behavior", rubricVersion: "rubric-quality-v1" },
+  ];
+  const sealed = sealSyntheticTranscript(input);
   const rows = qualityRows(sealed);
   rows.push({
     criterionId: "responsibility", kind: "behavior", rubricVersion: "rubric-quality-v1",
@@ -621,6 +637,28 @@ test("SC-013-A accepts canonical behavior area IDs from trusted voice-plan gener
   assert.equal(codeOf(() => assessSyntheticTranscript(sealed, requestFor(
     sealed, forged, "idem-quality-behavior02",
   ))), "invalid_transcript");
+  const unbound = sealSyntheticTranscript(qualityCompanyTranscript());
+  const outside = qualityRows(unbound);
+  outside.push({
+    criterionId: "independence", kind: "behavior", rubricVersion: "rubric-quality-v1",
+    rating: "meets", evidence: [span(unbound, "seg-qual-0002", qualityQuotes.checklist)],
+    rationale: "To kryterium nie należy do opublikowanego planu rozmowy.",
+  });
+  assert.equal(codeOf(() => assessSyntheticTranscript(unbound, requestFor(
+    unbound, outside, "idem-quality-behavior03",
+  ))), "revision_mismatch");
+  const everyArea = ["responsibility", "independence", "initiative", "results", "cooperation", "change", "feedback", "pressure"]
+    .map(criterionId => ({
+      criterionId, kind: "behavior", rubricVersion: "rubric-quality-v1", rating: "meets",
+      evidence: [span(unbound, "seg-qual-0002", qualityQuotes.checklist)],
+      rationale: "Pełny katalog nie zastępuje kryteriów tego planu.",
+    }));
+  assert.equal(codeOf(() => assessSyntheticTranscript(unbound, requestFor(
+    unbound, everyArea, "idem-quality-behavior04",
+  ))), "revision_mismatch");
+  assert.equal(codeOf(() => assessSyntheticTranscript(sealed, requestFor(
+    sealed, qualityRows(sealed), "idem-quality-behavior05",
+  ))), "revision_mismatch");
 });
 
 test("SC-013-A rejects exact yet meaningless one-character evidence for a substantive rating", () => {
@@ -636,7 +674,7 @@ test("SC-013-A rejects exact yet meaningless one-character evidence for a substa
 });
 
 test("SC-013-A detects internationally formatted phone numbers in Polish transcripts", () => {
-  for (const phone of ["+44 7700 900123", "+1 (202) 555-0123"]) {
+  for (const phone of ["+44 7700 900123", "+1 (202) 555-0123", "0044 7700 900123", "00 44 7700 900123"]) {
     const synthetic = qualityCompanyTranscript();
     synthetic.segments[1].text = "Syntetyczny numer międzynarodowy: " + phone;
     assert.equal(codeOf(() => sealSyntheticTranscript(synthetic)), "pii_leakage", phone);
@@ -648,7 +686,11 @@ test("SC-013-A rejects unapproved plan changes across transcript revisions", () 
   const ledger = openEvidenceLedger(sealSyntheticTranscript(source));
   const next = { ...source, transcriptRevision: 4 };
   for (const changed of [
-    { ...next, planRevision: 3 }, { ...next, planVersionId: "plan-quality-other" },
+    { ...next, planRevision: 3 },
+    { ...next, planVersionId: "plan-quality-other" },
+    { ...next, planCriteria: [...next.planCriteria, {
+      criterionId: "responsibility", kind: "behavior", rubricVersion: "rubric-quality-v1",
+    }] },
   ]) {
     const result = recordTranscriptRevision(ledger, sealSyntheticTranscript(changed));
     assert.equal(result.outcome, "conflict");
@@ -678,4 +720,72 @@ test("SC-013-A can approve older evidence only after human rejection of the newe
     first.analysisId, { idempotencyKey: "idem-review-older-recover" }));
   assert.equal(recovered.outcome, "applied");
   assert.equal(readEffectiveResult(recovered.ledger).analysisId, first.analysisId);
+});
+
+test("SC-013-A requires a recovery approval to name the lineage that rejected the newer analysis", () => {
+  const sealed = sealSyntheticTranscript(qualityCompanyTranscript());
+  const first = commitAssessment(openEvidenceLedger(sealed), assessSyntheticTranscript(
+    sealed, requestFor(sealed, qualityRows(sealed), "idem-lineage-older"),
+  ));
+  const preparedBeforeNewer = reviewBody(sealed, first.ledger, first.analysisId, {
+    idempotencyKey: "idem-lineage-stale-form",
+  });
+  const revised = qualityRows(sealed);
+  revised[0] = { ...revised[0], rating: "below", rationale: "Nowsza analiza zmienia odczyt cytatu." };
+  const second = commitAssessment(first.ledger, assessSyntheticTranscript(
+    sealed, requestFor(sealed, revised, "idem-lineage-newer"),
+  ));
+  const rejected = commitReview(second.ledger, sealed, reviewBody(sealed, second.ledger, second.analysisId, {
+    idempotencyKey: "idem-lineage-reject",
+    assessmentValidity: "rejected_result",
+    rationale: "Nowszy wynik został odrzucony po przeglądzie cytatu.",
+  }));
+  assert.equal(rejected.outcome, "applied");
+  const stale = commitReview(rejected.ledger, sealed, preparedBeforeNewer);
+  assert.equal(stale.outcome, "conflict");
+  assert.equal(stale.ledger, rejected.ledger);
+  const observed = commitReview(rejected.ledger, sealed, reviewBody(sealed, rejected.ledger, first.analysisId, {
+    idempotencyKey: "idem-lineage-observed",
+  }));
+  assert.equal(observed.outcome, "applied");
+  assert.equal(readEffectiveResult(observed.ledger).analysisId, first.analysisId);
+});
+
+test("SC-013-A keeps the provider attempt and call fixed across transcript revisions", () => {
+  const source = qualityCompanyTranscript();
+  const ledger = openEvidenceLedger(sealSyntheticTranscript(source));
+  const next = { ...source, transcriptRevision: 4 };
+  const otherAttempt = {
+    ...next,
+    attemptId: "11111111-1111-4111-8111-111111111199",
+  };
+  const otherCall = { ...next, providerCallId: "call-quality-9999" };
+  for (const changed of [otherAttempt, otherCall]) {
+    const result = recordTranscriptRevision(ledger, sealSyntheticTranscript(changed));
+    assert.equal(result.outcome, "conflict");
+    assert.equal(result.ledger, ledger);
+    assert.equal(result.ledger.attemptId, source.attemptId);
+    assert.equal(result.ledger.providerCallId, source.providerCallId);
+  }
+  const sameCall = { ...next, providerEventId: "evt-quality-0004" };
+  const applied = recordTranscriptRevision(ledger, sealSyntheticTranscript(sameCall));
+  assert.equal(applied.outcome, "applied");
+  assert.equal(applied.ledger.attemptId, source.attemptId);
+  assert.equal(applied.ledger.providerCallId, source.providerCallId);
+});
+
+test("SC-013-A accepts the same position title length as the position contract", () => {
+  for (const title of ["QA", "TEST", "A".repeat(200)]) {
+    const payload = qualityCompanyTranscript();
+    payload.roleTitle = title;
+    assert.equal(sealSyntheticTranscript(payload).roleTitle, title);
+  }
+  const padded = qualityCompanyTranscript();
+  padded.roleTitle = "  QA  ";
+  assert.equal(sealSyntheticTranscript(padded).roleTitle, "QA");
+  for (const title of ["", "   ", "A".repeat(201)]) {
+    const payload = qualityCompanyTranscript();
+    payload.roleTitle = title;
+    assert.equal(codeOf(() => sealSyntheticTranscript(payload)), "invalid_transcript", title.length);
+  }
 });
