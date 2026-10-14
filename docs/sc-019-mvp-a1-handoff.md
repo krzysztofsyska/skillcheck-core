@@ -1,7 +1,7 @@
 # SC-019-MVP A1 — SAFE BILLING CORE PROTOTYPE
 
 TASK: #91 / SC-019-MVP
-STATUS: FIXING — Codex P1 on 2aff83b (stale/claim lock order) repaired in the prototype; independent repeat review still pending
+STATUS: FIXING — Codex P1 on 69e965f (claim versus complete/fail lock order) repaired in the prototype; independent repeat review still pending
 BASE: integration
 SCOPE: FREE (5 analyses) + PRESELEKCJA prepaid (60 analyses)
 PRICING: 299 PLN is only a proposed initial commercial price; do NOT charge or publish it as approved.
@@ -72,6 +72,12 @@ No file was added under `supabase/migrations`. Payments and production activatio
 ## Codex finding on 2aff83b
 
 The repeat review was not a PASS. The stale cancellation already holds the analysis row and then locks the attempt. The installed `claim_screening_attempt` locked the attempt first, so the two paths could deadlock. When that function is present, the prototype replaces it with the reviewed body and locks the analysis row, the company row, the attempt, and then the candidate. A PostgreSQL 16 test races the worker claim against the stale update eight times with `deadlock_timeout=100ms` and requires the analysis to end cancelled, the attempt abandoned, and the balance restored.
+
+No file was added under `supabase/migrations`. Payments and production activation stay off.
+
+## Codex finding on 69e965f
+
+The repeat review was not a PASS. Completion and failure still locked the attempt before the analysis, which deadlocks a reclaim that now locks the analysis first. Both finalizers use the reviewed function bodies and take the analysis row, the company row, the attempt, and then the candidate. Completion keeps its application advisory lock before those row locks. The PostgreSQL 16 test races an expired-lease reclaim against both completion and failure, requires exactly one of them to commit, and checks that held credits still match the balance.
 
 No file was added under `supabase/migrations`. Payments and production activation stay off.
 

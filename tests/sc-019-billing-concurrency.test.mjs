@@ -185,4 +185,68 @@ assertion('SC-019: stale cancellation does not deadlock a worker claim', async t
     assert.ok(after.finished_at);
     assert.equal(Number(after.available), 60);
   }
+  await marker.query('set role screening_worker');
+  for (const mode of ['complete', 'fail']) {
+    for (let n = 0; n < 4; n++) {
+      const subject = await harness.candidate(fixture);
+      const started = await harness.start(subject);
+      const claimed = await harness.claim(started);
+      await harness.asAdmin();
+      await db.query(
+        `update public.screening_analysis_attempts
+           set lease_expires_at = clock_timestamp() - interval '1 second'
+         where id = $1`,
+        [started.attempt_id],
+      );
+      const findings = JSON.stringify(harness.findings(claimed, Array(claimed.criteria_snapshot.length).fill('meets')));
+      const raced = await Promise.allSettled([
+        worker.query('select * from public.claim_screening_attempt($1)', [started.attempt_id]),
+        mode === 'complete'
+          ? marker.query(
+            'select public.complete_screening_analysis($1,$2,$3,$4,$5::jsonb)',
+            [started.attempt_id, claimed.lease_token, claimed.input_fingerprint, claimed.analysis_contract_hash, findings],
+          )
+          : marker.query(
+            "select public.fail_screening_attempt($1,$2,$3,$4,'provider_timeout','race')",
+            [started.attempt_id, claimed.lease_token, claimed.input_fingerprint, claimed.analysis_contract_hash],
+          ),
+      ]);
+      for (const item of raced) {
+        if (item.status === 'rejected') assert.notEqual(item.reason.code, '40P01', item.reason.message);
+      }
+      const claimWon = raced[0].status === 'fulfilled';
+      const finalWon = raced[1].status === 'fulfilled';
+      assert.equal(Number(claimWon) + Number(finalWon), 1, JSON.stringify(raced.map(item => item.status === 'fulfilled' ? 'ok' : `${item.reason.code}:${item.reason.message}`)));
+      const after = (await db.query(`
+        select analysis.execution_status, attempt.status, attempt.finished_at
+        from public.screening_analysis_versions analysis
+        join public.screening_analysis_attempts attempt on attempt.id = $2
+        where analysis.id = $1
+      `, [started.analysis_id, started.attempt_id])).rows[0];
+      if (mode === 'complete' && finalWon) {
+        assert.equal(raced[0].reason.code, '55000');
+        assert.equal(after.execution_status, 'completed');
+        assert.equal(after.status, 'completed');
+      } else if (mode === 'fail' && finalWon) {
+        assert.equal(raced[0].reason.code, '55000');
+        assert.equal(after.execution_status, 'failed');
+        assert.equal(after.status, 'failed');
+        assert.ok(after.finished_at);
+      } else {
+        assert.equal(raced[1].reason.code, '42501');
+        assert.equal(after.execution_status, 'processing');
+        assert.equal(after.status, 'processing');
+      }
+    }
+  }
+  const held = Number((await db.query(
+    `select count(*)::int as n from public.screening_analysis_versions
+     where company_id = $1 and execution_status in ('pending','processing','completed')`,
+    [fixture.companyId],
+  )).rows[0].n);
+  const available = Number((await db.query(
+    'select available from private.sc19_balances where company_id = $1',
+    [fixture.companyId],
+  )).rows[0].available);
+  assert.equal(available + held, 60);
 });

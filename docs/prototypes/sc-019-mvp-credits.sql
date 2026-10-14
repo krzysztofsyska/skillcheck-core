@@ -305,14 +305,16 @@ create trigger sc19_analysis_reconcile after update of execution_status, stale_a
   on public.screening_analysis_versions
   for each row execute function private.sc19_reconcile_analysis();
 
--- The installed worker claim locks its attempt before the analysis. A stale
--- update already holds the analysis row and then locks the attempt, so those
--- two orders deadlock. Replace the claim with the reviewed body and the
--- analysis, company, attempt, candidate order. The minimal billing fixture has
--- no claim function, so this step does nothing there.
+-- Claim, completion and failure must take the same row locks. A stale update
+-- already holds the analysis row, then the company, then the attempt. Claim
+-- follows that order. Completion and failure used to lock the attempt first,
+-- which deadlocks a reclaim of an expired lease. The minimal billing fixture
+-- has none of these functions, so this step does nothing there.
 do $sc19_claim_lock$
 begin
   if to_regprocedure('public.claim_screening_attempt(uuid)') is null
+     or to_regprocedure('public.complete_screening_analysis(uuid,text,text,text,jsonb,text,text,integer,integer,integer,numeric,text)') is null
+     or to_regprocedure('public.fail_screening_attempt(uuid,text,text,text,text,text,text,integer,integer,integer,numeric,text)') is null
      or to_regprocedure('private.erasure_lock_candidate(uuid)') is null then
     return;
   end if;
@@ -420,6 +422,307 @@ begin
     analysis.model_revision,
     analysis.input_cv_text_snapshot,
     analysis.criteria_snapshot;
+end;
+$$;
+create or replace function public.complete_screening_analysis(
+  target_attempt uuid,
+  provided_lease_token text,
+  expected_input_fingerprint text,
+  expected_analysis_contract_hash text,
+  findings jsonb,
+  new_provider_request_id text default null,
+  new_provider_response_id text default null,
+  new_input_tokens integer default null,
+  new_output_tokens integer default null,
+  new_cached_input_tokens integer default null,
+  new_cost_amount numeric default null,
+  new_cost_currency text default null
+) returns uuid language plpgsql security definer set search_path = '' as $$
+declare
+  attempt public.screening_analysis_attempts%rowtype;
+  analysis public.screening_analysis_versions%rowtype;
+  expected_criterion jsonb;
+  finding jsonb;
+  item_order bigint;
+  rating text;
+  evidence jsonb;
+  explanation text;
+  confidence numeric;
+  computed_finalization_hash text;
+  detected_stale_reason text;
+  target_analysis uuid;
+  target_company uuid;
+  target_application uuid;
+  target_candidate uuid;
+begin
+  if provided_lease_token is null or length(provided_lease_token) < 32
+    or expected_input_fingerprint !~ '^[0-9a-f]{64}$'
+    or expected_analysis_contract_hash !~ '^[0-9a-f]{64}$'
+    or jsonb_typeof(findings) is distinct from 'array'
+    or new_input_tokens < 0 or new_output_tokens < 0 or new_cached_input_tokens < 0
+    or new_cost_amount < 0
+    or (new_cost_currency is not null and new_cost_currency !~ '^[A-Z]{3}$')
+    or length(coalesce(new_provider_request_id, '')) > 500
+    or length(coalesce(new_provider_response_id, '')) > 500
+    then raise exception 'Invalid completion metadata' using errcode = '22023'; end if;
+  computed_finalization_hash := private.screening_hash(jsonb_build_object(
+    'findings', findings,
+    'provider_request_id', new_provider_request_id,
+    'provider_response_id', new_provider_response_id,
+    'input_tokens', new_input_tokens,
+    'output_tokens', new_output_tokens,
+    'cached_input_tokens', new_cached_input_tokens,
+    'cost_amount', new_cost_amount,
+    'cost_currency', new_cost_currency
+  )::text);
+
+  -- Advisory lock stays before row locks, matching start/review/retry.
+  -- Row locks then match claim and stale cancellation: analysis, company,
+  -- attempt, candidate.
+  select attempts.analysis_id, attempts.company_id, versions.application_id, applications.candidate_id
+    into target_analysis, target_company, target_application, target_candidate
+  from public.screening_analysis_attempts attempts
+  join public.screening_analysis_versions versions
+    on versions.id = attempts.analysis_id and versions.company_id = attempts.company_id
+  join public.applications applications
+    on applications.id = versions.application_id and applications.company_id = versions.company_id
+  where attempts.id = target_attempt;
+  if not found then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('screening:' || target_application::text, 0));
+  select * into analysis from public.screening_analysis_versions
+    where id = target_analysis and company_id = target_company for update;
+  if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  perform private.sc19_lock_company(target_company);
+  select * into attempt from public.screening_analysis_attempts
+    where id = target_attempt for update;
+  if not found
+     or attempt.analysis_id is distinct from target_analysis
+     or attempt.company_id is distinct from target_company then
+    raise exception 'Attempt unavailable' using errcode = '42501';
+  end if;
+  perform private.erasure_lock_candidate(target_candidate);
+
+  if attempt.status = 'completed' then
+    if attempt.lease_token_hash = private.screening_hash(provided_lease_token)
+      and attempt.finalization_hash = computed_finalization_hash
+      then return analysis.id; end if;
+    raise exception 'Conflicting completion' using errcode = 'PT409';
+  end if;
+  if attempt.status <> 'processing'
+    or attempt.lease_expires_at <= clock_timestamp()
+    or attempt.lease_token_hash <> private.screening_hash(provided_lease_token)
+    then raise exception 'Invalid or expired lease' using errcode = '42501'; end if;
+  if analysis.execution_status <> 'processing'
+    or analysis.input_fingerprint <> expected_input_fingerprint
+    or analysis.analysis_contract_hash <> expected_analysis_contract_hash
+    then raise exception 'Analysis binding changed' using errcode = 'PT409'; end if;
+  if jsonb_array_length(findings) <> jsonb_array_length(analysis.criteria_snapshot)
+    then raise exception 'Incomplete criterion set' using errcode = '22023'; end if;
+
+  for expected_criterion, item_order in
+    select value, ordinality
+    from jsonb_array_elements(analysis.criteria_snapshot) with ordinality
+  loop
+    select value into finding
+    from jsonb_array_elements(findings)
+    where value->>'criterion_id' = expected_criterion->>'id';
+    if not found or (
+      select count(*) from jsonb_array_elements(findings)
+      where value->>'criterion_id' = expected_criterion->>'id'
+    ) <> 1 then raise exception 'Invalid criterion set' using errcode = '22023'; end if;
+    if jsonb_typeof(finding) is distinct from 'object'
+      or exists (
+        select 1 from jsonb_object_keys(finding) key
+        where key not in ('criterion_id', 'rating', 'evidence', 'explanation', 'confidence')
+      )
+      or jsonb_typeof(finding->'criterion_id') is distinct from 'string'
+      or jsonb_typeof(finding->'rating') is distinct from 'string'
+      or jsonb_typeof(finding->'evidence') is distinct from 'array'
+      or (finding ? 'explanation'
+        and jsonb_typeof(finding->'explanation') not in ('string', 'null'))
+      or (finding ? 'confidence'
+        and jsonb_typeof(finding->'confidence') not in ('number', 'null'))
+      then raise exception 'Invalid criterion result' using errcode = '22023'; end if;
+    rating := finding->>'rating';
+    evidence := finding->'evidence';
+    explanation := finding->>'explanation';
+    confidence := case when jsonb_typeof(finding->'confidence') = 'number'
+      then (finding->>'confidence')::numeric else null end;
+    if rating not in ('insufficient_data', 'below', 'meets', 'above')
+      or length(coalesce(explanation, '')) > 4000
+      or confidence < 0 or confidence > 1
+      or not private.screening_valid_evidence(
+        analysis.input_cv_text_snapshot, evidence, rating <> 'insufficient_data'
+      ) then raise exception 'Invalid evidence' using errcode = '22023'; end if;
+
+    insert into public.screening_criterion_results(
+      company_id, analysis_id, criterion_id, criterion_kind, criterion_order,
+      criterion_text_snapshot, rating, evidence, explanation, confidence
+    ) values (
+      analysis.company_id, analysis.id, expected_criterion->>'id',
+      expected_criterion->>'kind', item_order, expected_criterion->>'text',
+      rating, evidence, explanation, confidence
+    );
+  end loop;
+
+  detected_stale_reason := private.screening_stale_reason(analysis.id);
+  if detected_stale_reason is null and exists (
+    select 1 from public.screening_analysis_versions newer
+    where newer.company_id = analysis.company_id
+      and newer.application_id = analysis.application_id
+      and newer.analysis_version > analysis.analysis_version
+  ) then detected_stale_reason := 'manual_invalidation'; end if;
+  if detected_stale_reason is null and analysis.stale_at is null then
+    update public.screening_analysis_versions previous
+    set stale_at = clock_timestamp(),
+      stale_reason = case
+        when previous.input_fingerprint <> analysis.input_fingerprint
+          then coalesce(private.screening_stale_reason(previous.id), 'manual_invalidation')
+        when previous.analysis_contract_hash <> analysis.analysis_contract_hash
+          then 'screening_contract_changed'
+        else 'manual_invalidation'
+      end,
+      superseded_by_analysis_id = analysis.id,
+      updated_at = clock_timestamp()
+    where previous.company_id = analysis.company_id
+      and previous.application_id = analysis.application_id
+      and previous.id <> analysis.id
+      and previous.execution_status = 'completed'
+      and previous.stale_at is null;
+  end if;
+
+  update public.screening_analysis_attempts
+  set status = 'completed',
+    provider_request_id = new_provider_request_id,
+    provider_response_id = new_provider_response_id,
+    input_tokens = new_input_tokens,
+    output_tokens = new_output_tokens,
+    cached_input_tokens = new_cached_input_tokens,
+    cost_amount = new_cost_amount,
+    cost_currency = new_cost_currency,
+    finalization_hash = computed_finalization_hash,
+    finished_at = clock_timestamp()
+  where id = attempt.id;
+  update public.screening_analysis_versions
+  set execution_status = 'completed',
+    completed_at = clock_timestamp(),
+    failed_at = null,
+    failure_code = null,
+    failure_message = null,
+    stale_at = case when detected_stale_reason is not null or stale_at is not null
+      then coalesce(stale_at, clock_timestamp()) else null end,
+    stale_reason = case when detected_stale_reason is not null or stale_at is not null
+      then case when detected_stale_reason = 'manual_invalidation' then 'manual_invalidation' else 'input_changed_during_processing' end else null end,
+    overall_score = null,
+    updated_at = clock_timestamp()
+  where id = analysis.id;
+  return analysis.id;
+exception
+  when check_violation or invalid_text_representation or numeric_value_out_of_range then
+    raise exception 'Invalid completion payload' using errcode = '22023';
+end;
+$$;
+create or replace function public.fail_screening_attempt(
+  target_attempt uuid,
+  provided_lease_token text,
+  expected_input_fingerprint text,
+  expected_analysis_contract_hash text,
+  new_error_code text,
+  new_error_message text default null,
+  new_provider_request_id text default null,
+  new_input_tokens integer default null,
+  new_output_tokens integer default null,
+  new_cached_input_tokens integer default null,
+  new_cost_amount numeric default null,
+  new_cost_currency text default null
+) returns uuid language plpgsql security definer set search_path = '' as $$
+declare
+  attempt public.screening_analysis_attempts%rowtype;
+  analysis public.screening_analysis_versions%rowtype;
+  computed_finalization_hash text;
+  target_analysis uuid;
+  target_company uuid;
+  target_candidate uuid;
+begin
+  if provided_lease_token is null or length(provided_lease_token) < 32
+    or expected_input_fingerprint !~ '^[0-9a-f]{64}$'
+    or expected_analysis_contract_hash !~ '^[0-9a-f]{64}$'
+    or new_error_code is null or new_error_code !~ '^[a-z0-9_:-]{1,100}$'
+    or length(coalesce(new_error_message, '')) > 2000
+    or length(coalesce(new_provider_request_id, '')) > 500
+    or new_input_tokens < 0 or new_output_tokens < 0 or new_cached_input_tokens < 0
+    or new_cost_amount < 0
+    or (new_cost_currency is not null and new_cost_currency !~ '^[A-Z]{3}$')
+    then raise exception 'Invalid failure metadata' using errcode = '22023'; end if;
+  computed_finalization_hash := private.screening_hash(jsonb_build_object(
+    'error_code', new_error_code,
+    'error_message', new_error_message,
+    'provider_request_id', new_provider_request_id,
+    'input_tokens', new_input_tokens,
+    'output_tokens', new_output_tokens,
+    'cached_input_tokens', new_cached_input_tokens,
+    'cost_amount', new_cost_amount,
+    'cost_currency', new_cost_currency
+  )::text);
+
+  -- Same row-lock order as claim and completion: analysis, company, attempt, candidate.
+  select attempts.analysis_id, attempts.company_id, applications.candidate_id
+    into target_analysis, target_company, target_candidate
+  from public.screening_analysis_attempts attempts
+  join public.screening_analysis_versions versions
+    on versions.id = attempts.analysis_id and versions.company_id = attempts.company_id
+  join public.applications applications
+    on applications.id = versions.application_id and applications.company_id = versions.company_id
+  where attempts.id = target_attempt;
+  if not found then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
+  select * into analysis from public.screening_analysis_versions
+    where id = target_analysis and company_id = target_company for update;
+  if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  perform private.sc19_lock_company(target_company);
+  select * into attempt from public.screening_analysis_attempts
+    where id = target_attempt for update;
+  if not found
+     or attempt.analysis_id is distinct from target_analysis
+     or attempt.company_id is distinct from target_company then
+    raise exception 'Attempt unavailable' using errcode = '42501';
+  end if;
+  perform private.erasure_lock_candidate(target_candidate);
+  if attempt.status = 'failed' then
+    if attempt.lease_token_hash = private.screening_hash(provided_lease_token)
+      and attempt.finalization_hash = computed_finalization_hash
+      then return analysis.id; end if;
+    raise exception 'Conflicting failure' using errcode = 'PT409';
+  end if;
+  if attempt.status <> 'processing'
+    or attempt.lease_expires_at <= clock_timestamp()
+    or attempt.lease_token_hash <> private.screening_hash(provided_lease_token)
+    then raise exception 'Invalid or expired lease' using errcode = '42501'; end if;
+  if analysis.execution_status <> 'processing'
+    or analysis.input_fingerprint <> expected_input_fingerprint
+    or analysis.analysis_contract_hash <> expected_analysis_contract_hash
+    then raise exception 'Analysis binding changed' using errcode = 'PT409'; end if;
+
+  update public.screening_analysis_attempts
+  set status = 'failed',
+    provider_request_id = new_provider_request_id,
+    input_tokens = new_input_tokens,
+    output_tokens = new_output_tokens,
+    cached_input_tokens = new_cached_input_tokens,
+    cost_amount = new_cost_amount,
+    cost_currency = new_cost_currency,
+    error_code = new_error_code,
+    finalization_hash = computed_finalization_hash,
+    finished_at = clock_timestamp()
+  where id = attempt.id;
+  update public.screening_analysis_versions
+  set execution_status = 'failed',
+    failure_code = new_error_code,
+    failure_message = new_error_message,
+    failed_at = clock_timestamp(),
+    completed_at = null,
+    updated_at = clock_timestamp()
+  where id = analysis.id;
+  return analysis.id;
 end;
 $$;
 end
