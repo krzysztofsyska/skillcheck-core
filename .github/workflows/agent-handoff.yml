@@ -1,0 +1,71 @@
+# Inactive Codex → Cursor handoff loop.
+# Review events load this file only from the default branch. The job stays skipped
+# until CODEX_CURSOR_HANDOFF_ENABLED=true, and the CLI still refuses live effects.
+# It does not post comments, call Cursor or Codex, read secrets, merge, or deploy.
+# PR #57 remains the live feedback bridge. PR #124 remains the merge proposal.
+
+name: Codex Cursor handoff
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-cursor-handoff
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    if: >-
+      github.repository == 'krzysztofsyska/skillcheck-core' &&
+      vars.CODEX_CURSOR_HANDOFF_ENABLED == 'true' &&
+      vars.AGENT_PIPELINE_ENABLED != 'true' &&
+      vars.AGENT_PIPELINE_MERGE_ENABLED != 'true' &&
+      vars.AGENT_FEEDBACK_ENABLED != 'true' &&
+      (
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'pull_request_review' &&
+         github.event.pull_request.base.ref == 'integration' &&
+         github.event.pull_request.head.repo.full_name == github.repository &&
+         github.event.review.commit_id == github.event.pull_request.head.sha &&
+         github.event.review.user.id == 199175422 &&
+         github.event.review.user.login == 'chatgpt-codex-connector[bot]' &&
+         github.event.review.user.type == 'Bot' &&
+         github.event.sender.id == 199175422 &&
+         github.event.sender.login == 'chatgpt-codex-connector[bot]' &&
+         github.event.sender.type == 'Bot') ||
+        (github.event_name == 'pull_request_review_comment' &&
+         github.event.pull_request.base.ref == 'integration' &&
+         github.event.pull_request.head.repo.full_name == github.repository &&
+         github.event.comment.commit_id == github.event.pull_request.head.sha &&
+         github.event.comment.user.id == 199175422 &&
+         github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
+         github.event.comment.user.type == 'Bot' &&
+         github.event.sender.id == 199175422 &&
+         github.event.sender.login == 'chatgpt-codex-connector[bot]' &&
+         github.event.sender.type == 'Bot')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fail closed before any handoff effect
+        run: node tools/agent-pipeline/handoff-cli.mjs
+        env:
+          CODEX_CURSOR_HANDOFF_ENABLED: ${{ vars.CODEX_CURSOR_HANDOFF_ENABLED }}

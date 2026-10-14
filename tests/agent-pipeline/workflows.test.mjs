@@ -11,6 +11,7 @@ const files = [
   '.github/workflows/agent-accept.yml',
   '.github/workflows/agent-promote.yml',
   '.github/workflows/agent-gates.yml',
+  '.github/workflows/agent-handoff.yml',
   '.github/workflows/checks.yml',
 ];
 
