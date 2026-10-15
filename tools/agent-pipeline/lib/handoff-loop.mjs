@@ -54,22 +54,25 @@ export function retireOpenReservations(ledger, pr) {
 
 export async function deliverGithubReview(ledger, event, threads = [], github = null) {
   const snapshot = normalizeGithubEvent(event, threads);
-  snapshot.fixAuthor = await readSuccessorActor(github, snapshot.pull?.headSha);
+  const read = await readSuccessorActor(github, snapshot.pull?.headSha);
+  snapshot.fixAuthor = read.user;
+  if (read.blocked) {
+    snapshot.error = { status: read.status ?? null, code: read.code ?? 'BLOCKED_EVIDENCE' };
+  }
   return step(ledger, snapshot);
 }
 
 async function readSuccessorActor(github, sha) {
-  if (!github || typeof github.readCommit !== 'function' || !isCommitSha(sha)) return null;
-  let commit = null;
+  if (!github || typeof github.readCommit !== 'function' || !isCommitSha(sha)) return { user: null, blocked: false };
   try {
-    commit = await github.readCommit(sha);
-  } catch {
-    return null;
+    const commit = await github.readCommit(sha);
+    if (!commit || commit.sha !== sha || !isActor(commit.author)) return { user: null, blocked: false };
+    return { user: pickActor(commit.author), blocked: false };
+  } catch (error) {
+    const status = error?.status ?? error?.statusCode ?? null;
+    const blocked = status === 401 || status === 403 || error?.code === 'BLOCKED_CONFIGURATION' || status == null;
+    return { user: null, blocked, status, code: error?.code ?? null };
   }
-  if (!commit || commit.sha !== sha) return null;
-  const user = commit.author;
-  if (!isActor(user)) return null;
-  return pickActor(user);
 }
 
 export function normalizeGithubEvent(event, threads = []) {
@@ -98,7 +101,7 @@ export function normalizeGithubEvent(event, threads = []) {
       user: pickActor(reviewUser),
     },
     verdict: canonicalVerdict(event?.verdict ?? event?.review?.verdict),
-    fixAuthor: commitActor(event),
+    fixAuthor: null,
     threads: (Array.isArray(threads) ? threads : []).map(cleanThread),
   };
 }
@@ -369,12 +372,6 @@ function isCommitSha(value) {
 
 function isActor(actor) {
   return Boolean(actor && actor.id != null && typeof actor.login === 'string' && actor.login.length > 0);
-}
-
-function commitActor(event) {
-  const author = event?.head_commit?.author ?? event?.fix_author ?? null;
-  if (!isActor(author)) return null;
-  return pickActor(author);
 }
 
 function validateContext(snapshot) {

@@ -481,8 +481,7 @@ test('raw review payload drops comment text before planning', () => {
     },
   });
   assert.equal(attributed.pull.baseSha, SHA.base);
-  assert.equal(attributed.fixAuthor.login, 'cursor[bot]');
-  assert.equal(attributed.fixAuthor.login === AUTHOR.login, false);
+  assert.equal(attributed.fixAuthor, null);
   const emailOnly = normalizeGithubEvent({
     action: 'submitted',
     repository: { full_name: 'krzysztofsyska/skillcheck-core' },
@@ -520,7 +519,12 @@ test('the workflow and CLI stay fail-closed with no secrets or paid actions', ()
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /CODEX_CURSOR_HANDOFF_ENABLED == 'true'/);
   assert.match(workflow, /AGENT_FEEDBACK_ENABLED != 'true'/);
-  assert.equal(readFileSync('tools/agent-pipeline/handoff-cli.mjs', 'utf8').includes('fetch('), false);
+  const cli = readFileSync('tools/agent-pipeline/handoff-cli.mjs', 'utf8');
+  assert.equal(cli.includes('fetch('), false);
+  assert.equal(cli.includes('deliverGithubReview'), false);
+  assert.equal(cli.includes('readCommit'), false);
+  assert.equal(workflow.includes('deliverGithubReview'), false);
+  assert.equal(workflow.includes('readCommit'), false);
   assert.equal(readFileSync('tools/agent-pipeline/lib/handoff-loop.mjs', 'utf8').includes('fetch('), false);
   assert.equal(readFileSync('.github/agent-pipeline/policy.json', 'utf8').includes('"AGENT_PIPELINE_ENABLED": false'), true);
   assert.equal(readFileSync('.github/agent-pipeline/policy.json', 'utf8').includes('"AGENT_PIPELINE_MERGE_ENABLED": false'), true);
@@ -838,6 +842,17 @@ test('github delivery emits a plan, reads the successor author, and shares the r
     fetch: async (url, options) => {
       calls.push({ url, method: options?.method ?? 'GET' });
       const sha = decodeURIComponent(String(url.split('/commits/').at(-1) ?? ''));
+      if (sha === SHA.two && authorMode === 'race') throw new Error('lost');
+      if (sha === SHA.two && authorMode === 'forbidden') {
+        return new Response(JSON.stringify({ message: 'forbidden' }), { status: 403 });
+      }
+      if (sha === SHA.two && authorMode === 'foreign') {
+        return new Response(JSON.stringify({
+          sha: SHA.three,
+          commit: { author: { name: 'Cursor Name', email: 'cursor@example.com' }, message: SENTINEL },
+          author: { ...CURSOR_ACTOR },
+        }), { status: 200 });
+      }
       if (sha === SHA.two && authorMode === 'named') {
         return new Response(JSON.stringify({
           sha,
@@ -863,6 +878,7 @@ test('github delivery emits a plan, reads the successor author, and shares the r
   assert.deepEqual(opened.outcome.plan.cursor_handoff.finding_refs.map(item => item.comment_id), [50]);
   assert.equal(opened.outcome.plan.cursor_handoff == null, false);
   assert.equal(opened.outcome.live_effects, 'blocked');
+  assert.equal(LIVE_EFFECTS_ENABLED, false);
   assert.deepEqual(opened.outcome.executed, []);
   assert.equal(calls.every(call => call.method === 'GET'), true);
 
@@ -896,24 +912,48 @@ test('github delivery emits a plan, reads the successor author, and shares the r
   assert.equal(ci.outcome.status, 'REVIEW_REQUESTED');
   ledger = ci.ledger;
 
-  authorMode = 'named';
-  const unnamed = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
-  assert.equal(unnamed.outcome.status, 'BLOCKED_EVIDENCE');
-  assert.notEqual(unnamed.outcome.status, 'READY_FOR_OWNER');
-  ledger = unnamed.ledger;
+  const reservationKey = dedupKey('126', SHA.one, 50);
+  const spoofedPass = { reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS', spoof: { ...CURSOR_ACTOR } };
+  for (const [mode, status] of [['missing', 'BLOCKED_EVIDENCE'], ['named', 'BLOCKED_EVIDENCE'], ['foreign', 'BLOCKED_EVIDENCE']]) {
+    authorMode = mode;
+    const blocked = await deliverGithubReview(ledger, githubEvent(spoofedPass), [], github);
+    assert.equal(blocked.outcome.status, status);
+    assert.notEqual(blocked.outcome.status, 'READY_FOR_OWNER');
+    assert.equal(blocked.ledger.reservations[reservationKey].status, 'WAITING_REREVIEW');
+    ledger = blocked.ledger;
+  }
+  authorMode = 'forbidden';
+  const forbidden = await deliverGithubReview(ledger, githubEvent(spoofedPass), [], github);
+  assert.equal(forbidden.outcome.status, 'BLOCKED_INTEGRATION');
+  assert.equal(forbidden.outcome.http_status, 403);
+  assert.equal(forbidden.ledger.reservations[reservationKey].status, 'WAITING_REREVIEW');
+  ledger = forbidden.ledger;
+  authorMode = 'race';
+  const lost = await deliverGithubReview(ledger, githubEvent(spoofedPass), [], github);
+  assert.equal(lost.outcome.status, 'BLOCKED_INTEGRATION');
+  assert.equal(lost.outcome.http_status, null);
+  assert.equal(lost.ledger.reservations[reservationKey].status, 'WAITING_REREVIEW');
+  ledger = lost.ledger;
 
   authorMode = 'reviewer';
-  const fetchedSelf = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  const fetchedSelf = await deliverGithubReview(ledger, githubEvent(spoofedPass), [], github);
   assert.equal(fetchedSelf.outcome.status, 'REJECTED_SELF_APPROVAL');
+  assert.notEqual(fetchedSelf.outcome.status, 'READY_FOR_OWNER');
   ledger = fetchedSelf.ledger;
 
   authorMode = 'linked';
-  const pass100 = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  const clean = githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' });
+  assert.equal(Object.hasOwn(clean, 'head_commit'), false);
+  assert.equal(Object.hasOwn(clean, 'fix_author'), false);
+  assert.equal(Object.hasOwn(clean, 'user'), false);
+  const pass100 = await deliverGithubReview(ledger, clean, [], github);
   assert.equal(pass100.outcome.status, 'READY_FOR_OWNER');
   assert.equal(pass100.outcome.plan.merge, null);
+  assert.equal(calls.some(call => call.method === 'GET' && call.url.endsWith(`/commits/${SHA.two}`)), true);
   ledger = pass100.ledger;
-  const pass200 = await deliverGithubReview(ledger, githubEvent({ reviewId: 200, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  const pass200 = await deliverGithubReview(ledger, githubEvent({ reviewId: 200, sha: SHA.two, state: 'commented', verdict: 'PASS', spoof: { ...CODEX_REVIEWER } }), [], github);
   assert.equal(pass200.outcome.status, 'REVIEW_REUSED');
+  assert.notEqual(pass200.outcome.status, 'REJECTED_SELF_APPROVAL');
   assert.equal(pass200.outcome.plan.cursor_handoff, null);
   ledger = pass200.ledger;
 
@@ -956,8 +996,8 @@ test('github delivery emits a plan, reads the successor author, and shares the r
   assert.notEqual(reopened.outcome.status, 'REVIEW_REQUESTED');
 });
 
-function githubEvent({ pr = 126, reviewId, sha, state = 'changes_requested', verdict = null, baseSha = SHA.base }) {
-  return {
+function githubEvent({ pr = 126, reviewId, sha, state = 'changes_requested', verdict = null, baseSha = SHA.base, spoof = null }) {
+  const event = {
     action: 'submitted',
     repository: { full_name: 'krzysztofsyska/skillcheck-core' },
     sender: { ...CODEX_REVIEWER },
@@ -978,6 +1018,12 @@ function githubEvent({ pr = 126, reviewId, sha, state = 'changes_requested', ver
       head: { sha, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
     },
   };
+  if (spoof) {
+    event.head_commit = { author: { ...spoof, name: 'Spoof Name', email: 'spoof@example.com' } };
+    event.fix_author = { ...spoof };
+    event.user = { ...spoof };
+  }
+  return event;
 }
 
 function findingThread(reviewId, sha) {
