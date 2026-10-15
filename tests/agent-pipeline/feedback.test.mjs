@@ -4,7 +4,7 @@ import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.m
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { planFeedback, runFeedback, fixPrompt, accountLedger, ledgerHold, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
-import { main, feedbackStore, loadFeedbackHolds, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
+import { main, feedbackStore, loadFeedbackHolds, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, beginLiveFeedback, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
 const bot = { ...CODEX, type: 'Bot' };
@@ -205,6 +205,31 @@ test('old thumbs do not accept new head or base', async () => {
 
 test('disabled entrypoint needs no credentials and performs no network calls', async () => {
   assert.deepEqual(await main({}), ['DISABLED']);
+});
+
+test('an enabled live poll refuses paid calls without a combined spend cap', async () => {
+  const env = {
+    AGENT_FEEDBACK_ENABLED: 'true', AGENT_PIPELINE_ENABLED: 'false', AGENT_PIPELINE_MERGE_ENABLED: 'false',
+    GITHUB_REPOSITORY: 'krzysztofsyska/skillcheck-core', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: A,
+    CURSOR_API_KEY: 'would-spend', AGENT_PIPELINE_APP_ID: '5216184',
+    AGENT_PIPELINE_APP_PRIVATE_KEY: 'would-mint', AGENT_PIPELINE_APP_INSTALLATION_ID: '168649570',
+  };
+  const config = { enabled: true, bindings: [{ pr: 49 }] };
+  let network = 0;
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => { network += 1; throw new Error('paid-call'); };
+  try {
+    assert.throws(() => beginLiveFeedback(env, config), /BLOCKED_BUDGET_GUARD/);
+    assert.throws(() => beginLiveFeedback(env, config), /BLOCKED_BUDGET_GUARD/);
+  } finally {
+    globalThis.fetch = previous;
+  }
+  assert.equal(network, 0);
+  assert.equal(beginLiveFeedback({}, { enabled: false, bindings: [] }), 'DISABLED');
+  const runner = readFileSync('tools/agent-pipeline/feedback-cli.mjs', 'utf8');
+  const entry = runner.indexOf('if (beginLiveFeedback(env, config)');
+  assert.ok(entry > 0 && entry < runner.lastIndexOf('createInstallationToken') && entry < runner.lastIndexOf('createCursorClient'));
+  assert.doesNotMatch(readFileSync('tools/agent-pipeline/lib/cursor.mjs', 'utf8'), /spend|usage|invoice/i);
 });
 
 test('state writes carry exact branch and CAS blob SHA, no force', async () => {

@@ -162,10 +162,22 @@ export function assertFeedbackSwitches(env) {
   if (env.AGENT_PIPELINE_MERGE_ENABLED !== 'false') throw new Error('MERGE_MUST_BE_DISABLED');
 }
 
+// Cursor createRun and a Codex review mention are billed by different vendors.
+// This process cannot read a hard cap that covers both, and a local counter or
+// config flag would not stop either vendor. There is no argument that clears it.
+export function assertCombinedSpendGuard() {
+  throw new Error('BLOCKED_BUDGET_GUARD');
+}
+
+export function beginLiveFeedback(env, config) {
+  if (env.AGENT_FEEDBACK_ENABLED !== 'true' || config.enabled !== true) return 'DISABLED';
+  assertFeedbackSwitches(env);
+  assertCombinedSpendGuard();
+}
+
 export async function main(env = process.env) {
   const config = JSON.parse(readFileSync('.github/agent-pipeline/feedback.json', 'utf8'));
-  if (env.AGENT_FEEDBACK_ENABLED !== 'true' || config.enabled !== true) return ['DISABLED'];
-  assertFeedbackSwitches(env);
+  if (beginLiveFeedback(env, config) === 'DISABLED') return ['DISABLED'];
   if (env.GITHUB_REPOSITORY !== REPOSITORY || env.GITHUB_REF !== 'refs/heads/main') throw new Error('UNTRUSTED_WORKFLOW_REF');
   for (const key of ['CURSOR_API_KEY', 'AGENT_PIPELINE_APP_ID', 'AGENT_PIPELINE_APP_PRIVATE_KEY', 'AGENT_PIPELINE_APP_INSTALLATION_ID']) {
     if (!env[key]) throw new Error('MISSING_CONFIGURATION');

@@ -259,6 +259,42 @@ been made and live PASS is NOT claimed. Rulesets API still returns [] and the
 original agent-state branch is absent. No Cursor/App credentials are available in
 the current shell; no secrets were read from disk or printed.
 
+## Live test spend guard — BLOCKED_BUDGET_GUARD
+
+Owner authorization for one documentation-only live test allows a combined hard
+ceiling of 10 USD across Cursor and OpenAI, with no merge, production,
+migration or voice. This repository cannot enforce that ceiling. The feedback
+CLI's `budget` is a count of state-branch commits, not money. `policy.json`
+limits repair rounds and reviews, not vendor spend. `createCursorClient` has no
+usage or spend call. The bridge posts `@codex review` as a GitHub comment; any
+charge for that review is applied by the Codex GitHub app, not by
+`OPENAI_API_KEY`, which this workflow does not receive. A counter inside this
+process would not stop either vendor, so it is not a guard and is not added.
+
+`beginLiveFeedback` therefore throws `BLOCKED_BUDGET_GUARD` after the existing
+switch checks and before an installation token, Cursor client, state write or
+review comment. Repeating the call still throws and still performs no dispatch.
+The committed `feedback.json` stays `enabled: false` with an empty binding list.
+The same refusal is the unpaid dry-run: no documentation PR is opened and no
+paid API is called.
+
+The later safeguard stays in this CLI, not in a second controller. It can
+replace the throw only when a reviewed change reads the Cursor account hard
+limit and remaining spend, and the Codex/OpenAI hard limit and remaining spend,
+and both reads succeed, both are vendor-enforced caps, their sum is at most
+10 USD, and the worst case of one repair plus one review fits in what remains.
+A missing, stale or ambiguous read stays `BLOCKED_BUDGET_GUARD`. Setting those
+caps in the vendor dashboards is an owner action outside this pull request.
+
+These separate gates are also still closed and are not bypassed: the feedback
+workflow and config are absent from `main`, so the scheduled job cannot run;
+`AGENT_FEEDBACK_ENABLED` stays off; both pipeline switches stay false; PR #124
+is open and unmerged; PR #126 remains a draft. Promotion onto `main` remains a
+separate owner decision. This token could not read repository Actions variables
+(403) or the installation permission list (401), so those live grants are not
+claimed from this run. The code asks the feedback token only for contents
+write, issues write, pull requests read, administration read and actions read.
+
 ## Verification and handoff
 
 Tests exercise the offline positive cycle and rejection of forks, stale/spoofed
