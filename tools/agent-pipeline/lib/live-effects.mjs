@@ -60,7 +60,20 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   const checked = validatePair(record, pair, policy);
   if (!checked.ci.pass || !checked.review.pass) throw new Error('EVIDENCE_STALE');
   const request = record.binding.approval;
-  if (effect.gate === 'A' && (request.canonical.review_digest !== sha256(pair.review.payload) || request.canonical.ci_digest !== sha256(pair.ci))) throw new Error('EVIDENCE_STALE');
+  const automatic = effect.gate === 'A' && policy.integration_merge_policy === 'verified_ci_review';
+  const frozen = record.binding.auto_integration;
+  if (automatic) {
+    if (record.binding.lane === 'promotion' || request?.gate === 'B' ||
+        record.binding.merge?.gate !== 'A' || frozen?.source !== 'verified_ci_review' ||
+        frozen.head_sha !== record.head_sha || frozen.base_sha !== record.base_sha ||
+        frozen.policy_sha !== record.policy_sha || frozen.contract_hash !== record.contract_hash ||
+        frozen.ci_run_id !== record.ci_run_id || frozen.review_run_id !== record.review_run_id ||
+        frozen.ci_digest !== sha256(pair.ci) || frozen.review_digest !== sha256(pair.review.payload)) {
+      throw new Error('EVIDENCE_STALE');
+    }
+  } else if (effect.gate === 'A' && (!request?.canonical ||
+      request.canonical.review_digest !== sha256(pair.review.payload) ||
+      request.canonical.ci_digest !== sha256(pair.ci))) throw new Error('EVIDENCE_STALE');
   if (effect.gate === 'B') {
     const frozen = request.canonical.ci_review_evidence?.[0];
     const manifest = record.binding.promotion?.manifest;
@@ -68,9 +81,12 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
         || request.canonical.manifest_hash !== sha256(manifest)
         || manifest?.integration_sha !== record.head_sha || manifest?.main_sha !== record.base_sha) throw new Error('PROMOTION_EVIDENCE_STALE');
   }
-  const approval = approvals[request.request_id];
-  const result = evaluateApproval({ request, run: approval, payload: approval?.payload,
-    expectedUser: policy.owner, expectedEnvironment: effect.gate === 'B' ? policy.environments.production_approval : policy.environments.owner_acceptance });
+  const approval = request ? approvals[request.request_id] : null;
+  // Only gate A can use verified CI/review in place of owner acceptance.
+  // Gate B always requires an actual GitHub Environment approval from the owner.
+  const result = automatic ? { ok: true, source: 'verified_ci_review' } :
+    evaluateApproval({ request, run: approval, payload: approval?.payload,
+      expectedUser: policy.owner, expectedEnvironment: effect.gate === 'B' ? policy.environments.production_approval : policy.environments.owner_acceptance });
   const decision = decideMerge({ flags, protection, lock: snapshot.mergeLock, holder: journal.holder,
     liveBaseSha: base.commit.sha, expectedBaseSha: record.base_sha, liveHeadSha: pull.head.sha, expectedHeadSha: record.head_sha,
     approval: result, gate: effect.gate, runbook: record.binding.promotion?.runbook,
@@ -78,12 +94,24 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   if (!decision.ok) throw new Error(decision.reason);
   if (pull.draft) await github.readyPull(pull.node_id);
   await publishEvidence(github, policy, record, pair);
-  const name = effect.gate === 'B' ? 'production-approval' : 'owner-acceptance';
-  await github.publishCheck({ head: record.head_sha, name: `sc-agent/${name}`, externalId: request.request_id, conclusion: 'success', summary: JSON.stringify(request.canonical) });
+  const name = effect.gate === 'B' ? 'production-approval' : automatic ? 'integration-ready' : 'owner-acceptance';
+  const checkId = automatic ? `${record.task_id}:${record.review_request_id}:integration-ready` : request.request_id;
+  await github.publishCheck({ head: record.head_sha, name: `sc-agent/${name}`, externalId: checkId, conclusion: 'success',
+    summary: JSON.stringify(automatic ? frozen : request.canonical) });
   if (effect.gate === 'B') await github.publishCheck({ head: record.head_sha, name: 'sc-agent/promotion-scope', externalId: request.request_id, conclusion: 'success', summary: JSON.stringify(record.binding.promotion) });
   // No writer except this holder can move the base; GitHub strict rules apply.
   await journal.assertOwned();
   return github.merge({ prNumber: record.pr_number, sha: record.head_sha });
+}
+
+// Owner gates keep waiting for the GitHub Environment run. Automatic integration
+// has no such run, including while merge is temporarily disabled.
+function readinessDeliverable(record, pending, policy) {
+  if (!pending.kind?.startsWith('READY_')) return true;
+  if (record.binding.approval?.run_id) return true;
+  if (record.binding.approval?.gate === 'A' || record.binding.approval?.gate === 'B') return false;
+  if (pending.kind !== 'READY_FOR_OWNER' || record.binding.lane === 'promotion') return false;
+  return policy?.integration_merge_policy === 'verified_ci_review';
 }
 
 export async function drainOutbox({ github, journal, policy, record, now }) {
@@ -97,18 +125,34 @@ export async function drainOutbox({ github, journal, policy, record, now }) {
     await journal.save(next, { action: 'outbox-intent' }, record); record = next; pending = next.binding.pending_notification;
   }
   if (!pending || !record.issue_number || (pending.retry_at && Date.parse(pending.retry_at) > Date.parse(now))) return record;
-  if (pending.kind.startsWith('READY_') && !record.binding.approval?.run_id) return record;
+  if (!readinessDeliverable(record, pending, policy)) return record;
   const runUrl = pending.kind.startsWith('READY_') && record.binding.approval?.run_id ? `${policy.repository_url}/actions/runs/${record.binding.approval.run_id}` : null;
   const comments = await github.readComments(record.issue_number);
   const marker = `skillcheck-report:${record.task_id}`;
   const matches = comments.filter(c => c.user?.id === policy.controller_actor_id && c.body?.includes(marker));
   if (matches.length > 1) return record; // ambiguous report ownership: do not create more
   const delivered = matches[0]?.body?.includes(pending.marker);
-  if (!delivered && pending.delivery_phase === 'unknown') return record;
+  if (!delivered && pending.delivery_phase === 'unknown') {
+    // A lost response may still have created the comment. After the transport
+    // bound with no marker, stop treating the report as queue-blocking work.
+    const bound = Number.isInteger(policy?.limits?.transport_attempts) ? policy.limits.transport_attempts : 3;
+    const attempts = pending.unknown_attempts ?? 0;
+    if (attempts >= bound) return record;
+    const next = touch(record, now);
+    const item = next.binding.pending_notification;
+    item.unknown_attempts = attempts + 1;
+    if (item.unknown_attempts >= bound) {
+      next.binding.reports.push({ kind: 'NOTIFICATION_UNCONFIRMED', at: now, notification_id: item.notification_id });
+    }
+    await journal.save(next, { action: 'outbox-unknown' }, record);
+    return next;
+  }
   if (!delivered) {
     const next = touch(record, now); next.binding.pending_notification.delivery_phase = 'unknown';
     await journal.save(next, { action: 'outbox-send' }, record); record = next;
-    const body = `${marker}\n${pending.body}\naction: ${runUrl || pending.action_url || ''}\n\nApproval scope (immutable digest ${record.binding.approval?.digest ?? 'none'}):\n${JSON.stringify(record.binding.approval?.canonical ?? null, null, 2)}\n`;
+    const scope = record.binding.approval?.canonical ?? record.binding.auto_integration ?? null;
+    const digest = record.binding.approval?.digest ?? record.binding.auto_integration?.review_digest ?? 'none';
+    const body = `${marker}\n${pending.body}\naction: ${runUrl || pending.action_url || ''}\n\nApproval scope (immutable digest ${digest}):\n${JSON.stringify(scope, null, 2)}\n`;
     try {
       if (matches[0]) await github.updateComment(matches[0].id, body);
       else await github.comment({ issueNumber: record.issue_number, body });
