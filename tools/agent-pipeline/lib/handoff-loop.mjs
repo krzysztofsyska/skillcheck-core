@@ -5,6 +5,7 @@ import { admit, claimHandoffSlot, ensureAdmission, identityRevoked, markUnknown,
 import { validatePair } from './live-effects.mjs';
 import { loadPolicy } from './policy.mjs';
 import { validateReview } from './review.mjs';
+import { requiredReviewChecks } from './transitions.mjs';
 
 /**
  * Inactive Codex review → Cursor handoff → CI → independent Codex review loop.
@@ -375,8 +376,8 @@ function observeReadyCi(ledger, snapshot, headSha) {
     return { status: 'IGNORED_NO_RESERVATION' };
   }
   ready.ci = { sha: headSha, conclusion };
-  ready.status = 'READINESS_REVOKED';
-  return { status: 'READINESS_REVOKED', handoff_id: ready.handoff_id };
+  ready.status = 'WAITING_REREVIEW';
+  return { status: 'CI_FAILED', handoff_id: ready.handoff_id };
 }
 
 export function claimRereview(ledger, pr, headSha) {
@@ -409,26 +410,30 @@ export function claimRereview(ledger, pr, headSha) {
 function frozenReviewContract(slot) {
   const frozen = slot?.review_contract;
   if (!frozen || typeof frozen !== 'object') return null;
+  const fromRecord = Boolean(frozen.binding) && typeof frozen.review_request_id === 'string';
+  const requestId = fromRecord ? frozen.review_request_id : frozen.request_id;
+  const required = fromRecord ? requiredReviewChecks(frozen) : frozen.required_checks;
+  const round = fromRecord ? frozen.binding.substantive_reviews : frozen.round;
   if (!Number.isInteger(frozen.repository_id)) return null;
   if (typeof frozen.task_id !== 'string' || frozen.task_id.trim() === '') return null;
   if (!Number.isInteger(frozen.task_revision) || frozen.task_revision < 1) return null;
-  if (!Number.isInteger(frozen.round) || frozen.round < 0) return null;
-  if (typeof frozen.request_id !== 'string' || frozen.request_id.trim() === '') return null;
+  if (!Number.isInteger(round) || round < 0) return null;
+  if (typeof requestId !== 'string' || requestId.trim() === '') return null;
   if (typeof frozen.contract_hash !== 'string' || !/^[a-f0-9]{64}$/i.test(frozen.contract_hash)) return null;
   if (!isCommitSha(frozen.policy_sha) || !isCommitSha(frozen.head_sha) || !isCommitSha(frozen.base_sha)) return null;
-  if (!Array.isArray(frozen.required_checks) || frozen.required_checks.length === 0) return null;
-  if (frozen.required_checks.some(id => typeof id !== 'string' || id.trim() === '')) return null;
+  if (!Array.isArray(required) || required.length === 0) return null;
+  if (required.some(id => typeof id !== 'string' || id.trim() === '')) return null;
   return {
     repository_id: frozen.repository_id,
     task_id: frozen.task_id,
     task_revision: frozen.task_revision,
-    round: frozen.round,
-    request_id: frozen.request_id,
+    round,
+    request_id: requestId,
     contract_hash: frozen.contract_hash,
     policy_sha: frozen.policy_sha,
     head_sha: frozen.head_sha,
     base_sha: frozen.base_sha,
-    required_checks: frozen.required_checks.map(id => String(id)),
+    required_checks: required.map(id => String(id)),
   };
 }
 
@@ -571,14 +576,16 @@ export async function observeStructuralReview(ledger, pr, github, policy = loadP
     return blockedRead(next, pr, error);
   }
   if (verified.status !== 'success') {
-    if (verified.conclusion) reservation.ci = { sha: expected.head_sha, conclusion: verified.conclusion };
-    if (reservation.status === 'READY_FOR_OWNER') reservation.status = 'READINESS_REVOKED';
+    if (verified.conclusion && verified.conclusion !== 'success' && verified.conclusion !== 'pending') {
+      reservation.ci = { sha: expected.head_sha, conclusion: verified.conclusion };
+    }
+    suspendReady(reservation, expected.head_sha, verified.conclusion);
     const snapshot = structuralSnapshot({ pull, expected, run, author: author.author, policy, ciConclusion: verified.conclusion ?? 'failure' });
-    const status = reservation.status === 'READINESS_REVOKED' ? 'READINESS_REVOKED' : verified.status;
-    return finish(next, snapshot, { status, handoff_id: reservation.handoff_id });
+    return finish(next, snapshot, { status: verified.status, handoff_id: reservation.handoff_id });
   }
   const pair = validatePair(structuralRecord(expected, run, verified.run), { ci: verified.ci, review: envelope }, policy);
   if (!pair.ci?.pass || !pair.review?.pass) {
+    suspendReady(reservation, expected.head_sha, null);
     return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id });
   }
   reservation.ci = { sha: expected.head_sha, conclusion: 'success' };
@@ -589,6 +596,12 @@ export async function observeStructuralReview(ledger, pr, github, policy = loadP
   }
   const ready = considerReady(next, snapshot, { structural: true, controllerActorId: policy.controller_actor_id });
   return finish(next, snapshot, ready);
+}
+
+function suspendReady(reservation, headSha, conclusion) {
+  if (!reservation || reservation.status !== 'READY_FOR_OWNER') return;
+  reservation.status = 'WAITING_REREVIEW';
+  reservation.ci = { sha: headSha, conclusion: conclusion && conclusion !== 'success' && conclusion !== 'pending' ? conclusion : 'pending' };
 }
 
 function structuralRecord(expected, reviewRun, ciRun) {

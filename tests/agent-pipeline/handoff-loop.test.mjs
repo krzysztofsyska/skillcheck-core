@@ -1539,7 +1539,7 @@ test('an old structural result does not unlock readiness after the tuple changes
   assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
 
   const controls = structuralLedger('ci-after');
-  controls.ledger.slots['126'].review_contract.required_checks = [...expected.required_checks, 'sc-agent/extra-control'];
+  controls.ledger.slots['126'].review_contract.binding.contract.acceptance_criteria.push('sc-agent/extra-control');
   const reissued = apply(controls.ledger, reviewSnapshot({
     event: 'ci_completed',
     headSha: SHA.two,
@@ -1549,7 +1549,7 @@ test('an old structural result does not unlock readiness after the tuple changes
   }));
   assert.equal(reissued.outcome.status, 'REVIEW_REQUESTED');
   assert.equal(reissued.ledger.reservations[key].status, 'WAITING_REREVIEW');
-  assert.equal(reissued.ledger.reservations[key].structural_review.required_checks.at(-1), 'sc-agent/extra-control');
+  assert.equal(reissued.ledger.reservations[key].structural_review.required_checks.includes('sc-agent/extra-control'), true);
   assert.equal(reissued.ledger.reservations[key].structural_review.policy_sha, expected.policy_sha);
   const repeated = apply(reissued.ledger, reviewSnapshot({
     event: 'ci_completed',
@@ -1566,6 +1566,49 @@ test('an old structural result does not unlock readiness after the tuple changes
   }).github, policy);
   assert.notEqual(previous.outcome.status, 'READY_FOR_OWNER');
   assert.equal(previous.ledger.reservations[key].status, 'WAITING_REREVIEW');
+});
+
+test('the structural consumer accepts the reviewStep packet without a second contract', async () => {
+  const policy = configuredReviewPolicy();
+  const produced = producerReview(SHA.two, SHA.base);
+  assert.equal(produced.packet == null, false);
+  assert.equal(produced.packet.request_id, produced.record.review_request_id);
+  assert.equal(produced.packet.contract_hash, produced.record.contract_hash);
+  assert.deepEqual(produced.packet.required_checks, requiredReviewChecks(produced.record));
+  let ledger = apply(emptyLedger(), reviewSnapshot({ baseSha: SHA.base })).ledger;
+  ledger.slots['126'].review_contract = produced.record;
+  ledger = apply(ledger, completeSlot(ledger, 126, SHA.two)).ledger;
+  const requested = apply(ledger, reviewSnapshot({
+    event: 'head_advanced',
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
+  const key = dedupKey('126', SHA.one, 5445420558);
+  const stored = requested.ledger.reservations[key].structural_review;
+  assert.equal(stored.request_id, produced.packet.request_id);
+  assert.equal(stored.contract_hash, produced.packet.contract_hash);
+  assert.equal(stored.policy_sha, produced.packet.policy_sha);
+  assert.deepEqual(stored.required_checks, produced.packet.required_checks);
+  const packetView = {
+    request_id: produced.packet.request_id,
+    policy_sha: produced.packet.policy_sha,
+    head_sha: produced.packet.head_sha,
+    base_sha: produced.packet.base_sha,
+    contract_hash: produced.packet.contract_hash,
+    required_checks: produced.packet.required_checks,
+    repository_id: produced.packet.repository_id,
+    pr: produced.packet.pr_number,
+  };
+  const ready = await observeStructuralReview(requested.ledger, 126, structuralWorld({
+    expected: packetView,
+    policy,
+    envelope: envelopeFor(packetView, policy, { verdict: 'PASS', findings: [structuralFinding('note', 'info')] }),
+  }).github, policy);
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(ready.ledger.reservations[key].status, 'READY_FOR_OWNER');
 });
 
 test('structural review does not invent a contract hash', async () => {
@@ -1634,13 +1677,21 @@ test('a later CI failure withdraws structural readiness', async () => {
     threads: [],
     ci: { sha: SHA.two, conclusion: 'failure' },
   }));
-  assert.equal(failed.outcome.status, 'READINESS_REVOKED');
+  assert.equal(failed.outcome.status, 'CI_FAILED');
   assert.notEqual(failed.outcome.status, 'IGNORED_NO_RESERVATION');
-  assert.equal(failed.ledger.reservations[key].status, 'READINESS_REVOKED');
-  const again = await observeStructuralReview(failed.ledger, 126, world.github, policy);
-  assert.notEqual(again.outcome.status, 'REVIEW_REUSED');
-  assert.notEqual(again.outcome.status, 'READY_FOR_OWNER');
-  assert.equal(again.ledger.reservations[key].status, 'READINESS_REVOKED');
+  assert.equal(failed.ledger.reservations[key].status, 'WAITING_REREVIEW');
+  assert.notEqual(failed.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  const stillFailed = await observeStructuralReview(failed.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: passEnvelope(expected, policy),
+    ciRuns: [ciRun(expected, policy, { conclusion: 'failure' })],
+  }).github, policy);
+  assert.equal(stillFailed.outcome.status, 'CI_FAILED');
+  assert.equal(stillFailed.ledger.reservations[key].status, 'WAITING_REREVIEW');
+  const restored = await observeStructuralReview(stillFailed.ledger, 126, world.github, policy);
+  assert.equal(restored.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(restored.ledger.reservations[key].status, 'READY_FOR_OWNER');
 
   const artifact = structuralLedger('ci-after');
   const passed = await observeStructuralReview(artifact.ledger, 126, structuralWorld({
@@ -1655,9 +1706,17 @@ test('a later CI failure withdraws structural readiness', async () => {
     envelope: passEnvelope(artifact.expected, policy),
     ciRuns: [ciRun(artifact.expected, policy, { conclusion: 'failure' })],
   }).github, policy);
-  assert.equal(reread.outcome.status, 'READINESS_REVOKED');
+  assert.equal(reread.outcome.status, 'CI_FAILED');
   assert.notEqual(reread.outcome.status, 'REVIEW_REUSED');
-  assert.equal(reread.ledger.reservations[key].status, 'READINESS_REVOKED');
+  assert.equal(reread.ledger.reservations[key].status, 'WAITING_REREVIEW');
+  assert.notEqual(reread.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  const recovered = await observeStructuralReview(reread.ledger, 126, structuralWorld({
+    expected: artifact.expected,
+    policy,
+    envelope: passEnvelope(artifact.expected, policy),
+  }).github, policy);
+  assert.equal(recovered.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(recovered.ledger.reservations[key].status, 'READY_FOR_OWNER');
   const missing = structuralLedger('ci-after');
   const held = await observeStructuralReview(missing.ledger, 126, structuralWorld({
     expected: missing.expected,
@@ -1670,9 +1729,16 @@ test('a later CI failure withdraws structural readiness', async () => {
     envelope: passEnvelope(missing.expected, policy),
     ciRuns: [ciRun(missing.expected, policy, { status: 'in_progress', conclusion: null })],
   }).github, policy);
-  assert.notEqual(unavailable.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(unavailable.outcome.status, 'BLOCKED_EVIDENCE');
   assert.notEqual(unavailable.outcome.status, 'REVIEW_REUSED');
-  assert.notEqual(unavailable.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(unavailable.ledger.reservations[key].status, 'WAITING_REREVIEW');
+  const available = await observeStructuralReview(unavailable.ledger, 126, structuralWorld({
+    expected: missing.expected,
+    policy,
+    envelope: passEnvelope(missing.expected, policy),
+  }).github, policy);
+  assert.equal(available.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(available.ledger.reservations[key].status, 'READY_FOR_OWNER');
 });
 
 test('a later structural FAIL without findings withdraws readiness and does not start a fix', async () => {
@@ -1718,6 +1784,23 @@ test('a later structural FAIL without findings withdraws readiness and does not 
   assert.notEqual(unordered.outcome.status, 'HANDOFF');
   assert.equal(unordered.ledger.reservations[key].status, 'READY_FOR_OWNER');
   assert.equal(unordered.ledger.attempts['126'], fresh.ledger.attempts['126']);
+
+  const current = await observeStructuralReview(structuralLedger('ci-after').ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: passEnvelope(expected, policy),
+  }).github, policy);
+  const older = await observeStructuralReview(current.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: envelopeFor(expected, policy, { verdict: 'FAIL', findings: [], run_id: 903 }),
+    runs: [reviewRun(expected, policy, { id: 903, updated_at: '2026-10-15T12:00:00Z' })],
+  }).github, policy);
+  assert.equal(older.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(older.outcome.status, 'HANDOFF');
+  assert.equal(older.outcome.plan.cursor_handoff, null);
+  assert.equal(older.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(older.ledger.attempts['126'], current.ledger.attempts['126']);
 });
 
 function configuredReviewPolicy() {
@@ -1760,19 +1843,8 @@ function producerReview(headSha, baseSha, pr = 126) {
 
 function installFrozenContract(ledger) {
   const produced = producerReview(SHA.two, SHA.base);
-  const record = produced.record;
-  ledger.slots['126'].review_contract = {
-    repository_id: record.repository_id,
-    task_id: record.task_id,
-    task_revision: record.task_revision,
-    round: record.binding.substantive_reviews,
-    request_id: record.review_request_id,
-    contract_hash: produced.packet.contract_hash,
-    policy_sha: produced.packet.policy_sha,
-    head_sha: produced.packet.head_sha,
-    base_sha: produced.packet.base_sha,
-    required_checks: produced.packet.required_checks,
-  };
+  ledger.slots['126'].review_contract = produced.record;
+  return produced;
 }
 
 function structuralLedger(order) {
@@ -1798,7 +1870,7 @@ function structuralLedger(order) {
   assert.equal(expected.required_checks.includes('sc-agent/owner-acceptance'), false);
   assert.equal(expected.head_sha, SHA.two);
   assert.equal(expected.base_sha, SHA.base);
-  assert.equal(frozen.request_id, produced.record.review_request_id);
+  assert.equal(frozen.review_request_id, produced.record.review_request_id);
   return { ledger, expected };
 }
 
