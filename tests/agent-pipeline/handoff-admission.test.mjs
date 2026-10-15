@@ -819,6 +819,24 @@ test('an uncertain transport keeps its reservation and never calls the executor'
   assert.equal(invented.ledger.slots['53'], undefined);
 });
 
+test('a dispatch without a task id occupies no slot', () => {
+  let ledger = emptyLedger();
+  for (const taskId of [undefined, null, '', '   ']) {
+    const blocked = apply(ledger, request({ pr: 70, task_id: taskId }));
+    assert.equal(blocked.outcome.status, 'BLOCKED_EVIDENCE');
+    assert.equal(blocked.outcome.plan.admitted, null);
+    assert.equal(occupiedCount(blocked.ledger), 0);
+    assert.equal(blocked.ledger.queue.length, 0);
+    assert.equal(blocked.ledger.slots['70'], undefined);
+    ledger = blocked.ledger;
+  }
+  assert.equal(Object.values(ledger.slots).some(slot => slot.task_id === 'undefined' || slot.task_id === 'null'), false);
+  const admitted = apply(ledger, request({ pr: 71, task_id: 'REAL-71' }));
+  assert.equal(admitted.outcome.status, 'REQUESTED');
+  assert.equal(admitted.ledger.slots['71'].task_id, 'REAL-71');
+  assert.equal(occupiedCount(admitted.ledger), 1);
+});
+
 function complete(ledger, pr, taskId, head = NEXT) {
   return apply(ledger, snapshot({
     event: 'admission_completed',

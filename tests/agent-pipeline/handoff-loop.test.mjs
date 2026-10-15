@@ -1055,6 +1055,51 @@ test('github delivery emits a plan, reads the successor author, and shares the r
   assert.notEqual(reopened.outcome.status, 'REVIEW_REQUESTED');
 });
 
+test('a delayed approval cannot pass while a newer Codex decision is already listed', async () => {
+  let published = [
+    githubReview({ id: 100, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z' }),
+    githubReview({ id: 200, sha: SHA.two, state: 'CHANGES_REQUESTED', at: '2026-10-15T12:01:00Z' }),
+  ];
+  const github = createGitHubClient({
+    token: 'fixture',
+    repository: 'krzysztofsyska/skillcheck-core',
+    fetch: async (url) => {
+      const href = String(url);
+      if (href.includes('/pulls/') && href.includes('/reviews')) return new Response(JSON.stringify(published), { status: 200 });
+      const sha = decodeURIComponent(href.split('/commits/').at(-1) ?? '');
+      if (sha === SHA.two) {
+        return new Response(JSON.stringify({
+          sha,
+          commit: { author: { name: 'Cursor Name', email: 'cursor@example.com' }, message: 'fix' },
+          author: { ...CURSOR_ACTOR },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message: 'missing' }), { status: 404 });
+    },
+  });
+  let ledger = apply(emptyLedger(), reviewSnapshot()).ledger;
+  ledger = apply(ledger, completeSlot(ledger, 126, SHA.two)).ledger;
+  ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, baseSha: SHA.base, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+  published = [githubReview({ id: 100, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z' })];
+  const ready = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }), [], github);
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+  ledger = ready.ledger;
+  published = [
+    githubReview({ id: 100, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z' }),
+    githubReview({ id: 200, sha: SHA.two, state: 'CHANGES_REQUESTED', at: '2026-10-15T12:01:00Z' }),
+  ];
+  const delayed = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }), [], github);
+  assert.equal(delayed.outcome.status, 'READINESS_REVOKED');
+  assert.notEqual(delayed.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(delayed.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'READINESS_REVOKED');
+  const absent = await deliverGithubReview(delayed.ledger, githubEvent({ reviewId: 300, sha: SHA.two, state: 'commented' }), [], github);
+  assert.equal(absent.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(absent.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(absent.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'READINESS_REVOKED');
+  const prose = await deliverGithubReview(absent.ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }), [], github);
+  assert.notEqual(prose.outcome.status, 'READY_FOR_OWNER');
+});
+
 function githubEvent({ pr = 126, reviewId, sha, state = 'changes_requested', verdict = null, baseSha = SHA.base, spoof = null }) {
   const event = {
     action: 'submitted',

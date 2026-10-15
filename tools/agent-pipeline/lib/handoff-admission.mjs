@@ -53,6 +53,9 @@ export function admit(ledger, snapshot) {
 
 function requestDispatch(ledger, snapshot, adapter) {
   const task = taskFrom(adapter, snapshot);
+  if (!task.task_id) {
+    return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
+  }
   if (ledger.slots[task.pr]?.occupied && ledger.slots[task.pr].phase === 'DISPATCH_UNKNOWN') {
     return stagePartial(snapshot, adapter, { status: 'RECONCILE_REQUIRED', next_stage: 'reconcile', blocker: 'RECONCILE_REQUIRED', agent_id: ledger.slots[task.pr].agent_id });
   }
@@ -708,10 +711,17 @@ function cycleMembers(tasks) {
   return members;
 }
 
+function taskIdentifier(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  return text.length > 0 ? text : null;
+}
+
 function taskFrom(adapter, snapshot) {
   return {
     pr: String(adapter.pr),
-    task_id: String(adapter.task_id),
+    task_id: taskIdentifier(adapter.task_id),
     priority: adapter.priority ?? 'NORMAL',
     depends_on: [...(adapter.depends_on ?? [])].map(String),
     head_sha: adapter.head_sha,

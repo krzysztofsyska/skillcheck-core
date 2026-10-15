@@ -59,7 +59,26 @@ export async function deliverGithubReview(ledger, event, threads = [], github = 
   if (read.blocked) snapshot.error = { status: read.status ?? null, code: read.code ?? 'BLOCKED_EVIDENCE' };
   const decision = await readCodexDecision(github, snapshot.pull?.number, snapshot.pull?.headSha, snapshot.review?.id);
   if (decision.blocked) snapshot.error = { status: decision.status ?? null, code: decision.code ?? 'BLOCKED_EVIDENCE' };
-  else if (decision.review) {
+  else if (decision.reason === 'unordered') snapshot.reviewDecision = 'unordered';
+  else if (decision.reason === 'superseded') {
+    const state = String(decision.review.state).toLowerCase();
+    snapshot.review = {
+      ...snapshot.review,
+      id: decision.review.id,
+      state,
+      commitId: decision.review.commit_id,
+      user: pickActor(decision.review.user),
+      submittedAt: decision.review.submitted_at,
+    };
+    snapshot.verdict = null;
+    snapshot.reviewSuperseded = true;
+    snapshot.newerDecision = {
+      id: decision.newer.id,
+      state: decision.newer.state,
+      submitted_at: decision.newer.submitted_at,
+    };
+    snapshot.reviewDecision = 'superseded';
+  } else if (decision.review) {
     const state = String(decision.review.state).toLowerCase();
     snapshot.review = {
       ...snapshot.review,
@@ -95,7 +114,7 @@ async function readCodexDecision(github, pr, headSha, reviewId) {
   try {
     const reviews = await github.readPullReviews(pr);
     if (!Array.isArray(reviews)) return { blocked: false, checked: true, review: null };
-    return { blocked: false, checked: true, review: selectCodexReview(reviews, headSha, reviewId) };
+    return { blocked: false, checked: true, ...selectCodexReview(reviews, headSha, reviewId) };
   } catch (error) {
     const status = error?.status ?? error?.statusCode ?? null;
     const blocked = status === 401 || status === 403 || error?.code === 'BLOCKED_CONFIGURATION' || status == null;
@@ -111,10 +130,18 @@ function selectCodexReview(reviews, headSha, reviewId) {
     && review.submitted_at.length > 0
     && !Number.isNaN(Date.parse(review.submitted_at)));
   const requested = rows.find(review => review.id === reviewId);
-  if (requested) return requested;
-  const decisions = rows.filter(review => ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(String(review.state ?? '').toUpperCase()));
-  decisions.sort((left, right) => Date.parse(left.submitted_at) - Date.parse(right.submitted_at) || left.id - right.id);
-  return decisions.at(-1) ?? null;
+  if (!requested) return { review: null, reason: 'missing' };
+  const structural = rows.filter(review => ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(String(review.state ?? '').toUpperCase()));
+  const requestedAt = Date.parse(requested.submitted_at);
+  const others = structural.filter(review => review.id !== requested.id);
+  if (others.some(review => Date.parse(review.submitted_at) === requestedAt)) {
+    return { review: requested, reason: 'unordered' };
+  }
+  const newer = others.filter(review => Date.parse(review.submitted_at) > requestedAt)
+    .sort((left, right) => Date.parse(left.submitted_at) - Date.parse(right.submitted_at) || left.id - right.id)
+    .at(-1) ?? null;
+  if (newer) return { review: requested, reason: 'superseded', newer };
+  return { review: requested, reason: 'current' };
 }
 
 export function normalizeGithubEvent(event, threads = []) {
@@ -206,6 +233,8 @@ function onReview(ledger, snapshot) {
   if (snapshot.review.state === 'pending' || snapshot.review.state === '') {
     return { status: 'IGNORED_REVIEW_STATE' };
   }
+  if (snapshot.reviewDecision === 'unordered') return { status: 'BLOCKED_EVIDENCE' };
+  if (snapshot.reviewSuperseded) return reconcileSupersededReview(ledger, snapshot);
   const findings = snapshot.review.id ? actionableFindings(snapshot) : [];
   const verdict = canonicalVerdict(snapshot.verdict ?? snapshot.review?.verdict);
   if (findings.length === 0 && isCleanPass(snapshot, verdict)) {
@@ -232,6 +261,25 @@ function onReview(ledger, snapshot) {
   if (effect === 'unordered') return { status: 'BLOCKED_EVIDENCE' };
   if (effect === 'bounded') return { status: 'STALE_REVIEW' };
   return reserveHandoff(ledger, snapshot, findings);
+}
+
+function reconcileSupersededReview(ledger, snapshot) {
+  const newer = snapshot.newerDecision ?? {};
+  const state = String(newer.state ?? '').toUpperCase();
+  if (state === 'CHANGES_REQUESTED' || state === 'DISMISSED') {
+    const effect = revokeSharedReadiness(
+      ledger,
+      String(snapshot.pull.number),
+      snapshot.pull.headSha,
+      snapshot.pull?.baseSha,
+      newer.id,
+      newer.submitted_at,
+    );
+    if (effect === 'unordered') return { status: 'BLOCKED_EVIDENCE' };
+    const revoked = Object.values(ledger.reservations ?? {}).find(row => row.pr === String(snapshot.pull.number) && row.revoked_review_id === newer.id);
+    if (revoked) return { status: 'READINESS_REVOKED', handoff_id: revoked.handoff_id };
+  }
+  return { status: 'STALE_REVIEW' };
 }
 
 function reserveHandoff(ledger, snapshot, findings) {
