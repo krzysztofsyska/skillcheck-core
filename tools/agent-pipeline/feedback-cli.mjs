@@ -22,7 +22,7 @@ export async function loadFeedbackHolds(github, configuredPrs) {
     listing = await github.request(`/repos/${REPOSITORY}/contents/feedback?ref=agent-feedback-state`);
   } catch (error) {
     if (error.status === 404) return 0;
-    throw error;
+    throw new Error('LEDGER_HOLD_UNREAD');
   }
   if (!Array.isArray(listing)) throw new Error('LEDGER_HOLD_UNBOUND');
   let held = 0;
@@ -30,8 +30,14 @@ export async function loadFeedbackHolds(github, configuredPrs) {
     const match = /^(\d+)\.json$/.exec(entry?.name ?? '');
     if (!match || entry.type !== 'file') throw new Error('LEDGER_HOLD_UNBOUND');
     const pr = Number(match[1]);
-    const file = await github.request(`/repos/${REPOSITORY}/contents/feedback/${entry.name}?ref=agent-feedback-state`);
-    const hold = ledgerHold(JSON.parse(decodeGithubContent(file)));
+    let hold;
+    try {
+      const file = await github.request(`/repos/${REPOSITORY}/contents/feedback/${entry.name}?ref=agent-feedback-state`);
+      hold = ledgerHold(JSON.parse(decodeGithubContent(file)));
+    } catch (error) {
+      if (error?.message === 'INVALID_STATE') throw error;
+      throw new Error('LEDGER_HOLD_UNREAD');
+    }
     if (hold > 0 && !configuredPrs.has(pr)) throw new Error('LEDGER_HOLD_UNBOUND');
     held += hold;
   }

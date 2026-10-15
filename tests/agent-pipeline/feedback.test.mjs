@@ -656,6 +656,11 @@ test('a replacement review keeps one terminal slot', async () => {
   assert.equal(posted, true);
   assert.equal(f.state().ledgerHold, 1);
   assert.equal(room.used, 100);
+  f.snapshot.reactions = [{ user: bot, content: '+1' }];
+  assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+  assert.equal(f.state().ledgerHold, undefined);
+  assert.equal(room.used, 100);
+  assert.throws(() => accountLedger(room.used, 1, 0), /LEDGER_CAPACITY/);
 });
 
 test('replacing a post-repair request keeps its terminal hold', async () => {
@@ -670,6 +675,10 @@ test('replacing a post-repair request keeps its terminal hold', async () => {
   assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
   assert.equal(f.state().ledgerHold, 1);
   assert.equal(room.used, 100);
+  f.args.now = f.state().reviewRequestedAt + 46 * 60 * 1000;
+  assert.equal(await runFeedback(f.args), 'BLOCKED_TIMEOUT');
+  assert.equal(f.state().ledgerHold, undefined);
+  assert.equal(room.used, 100);
 });
 
 test('a failed terminal save does not release a repair hold', async () => {
@@ -682,11 +691,16 @@ test('a failed terminal save does not release a repair hold', async () => {
   assert.equal(f.state().ledgerHold, 3);
   f.args.store.save = async () => { throw new Error('cas'); };
   f.args.now = f.state().startedAt + 2 * 60 * 60 * 1000 + 1;
-  await assert.rejects(runFeedback(f.args), /cas/);
+  const results = await reconcileBindings([f.binding, { pr: 50 }], async binding => {
+    if (binding.pr === f.binding.pr) return runFeedback(f.args);
+    reserve(2, 0);
+    return 'OPEN';
+  });
+  assert.deepEqual(results.map(result => result.status), ['BLOCKED_BINDING', 'BLOCKED_BINDING']);
   assert.equal(f.state().phase, 'FIXING');
   assert.equal(f.state().ledgerHold, 3);
   assert.equal(room.used, 100);
-  assert.throws(() => accountLedger(room.used, 1, 0), /LEDGER_CAPACITY/);
+  assert.throws(() => accountLedger(room.used, 2, 0), /LEDGER_CAPACITY/);
 });
 
 test('a removed binding with a durable hold blocks the poll', async () => {
@@ -703,6 +717,15 @@ test('a removed binding with a durable hold blocks the poll', async () => {
   assert.equal(await loadFeedbackHolds(github, new Set([49, 88])), 3);
   const missing = { request: async () => { const error = new Error('missing'); error.status = 404; throw error; } };
   assert.equal(await loadFeedbackHolds(missing, new Set([49])), 0);
+  const unread = { request: async path => {
+    if (path.endsWith('/contents/feedback?ref=agent-feedback-state')) return [{ name: '88.json', type: 'file' }];
+    const error = new Error('lost');
+    error.status = 500;
+    throw error;
+  } };
+  await assert.rejects(loadFeedbackHolds(unread, new Set([88])), /LEDGER_HOLD_UNREAD/);
+  const lostListing = { request: async () => { throw new Error('lost'); } };
+  await assert.rejects(loadFeedbackHolds(lostListing, new Set([88])), /LEDGER_HOLD_UNREAD/);
 });
 
 test('approval already visible when the review request returns cannot authorize READY', async () => {
@@ -783,8 +806,12 @@ test('lost base-change review request is not posted twice', async () => {
   f.snapshot.pull.base.sha = 'd'.repeat(40);
   let attempts = 0;
   f.args.postReview = async () => { attempts++; throw new Error('lost'); };
+  const room = { used: 97 };
+  f.args.reserveLedger = (writes, held = 0) => { room.used = accountLedger(room.used, writes, held); };
   await assert.rejects(runFeedback(f.args));
   assert.equal(f.state().phase, 'REVIEW_PENDING');
+  assert.equal(f.state().ledgerHold, 2);
+  assert.equal(room.used, 100);
   assert.equal(f.state().reviewCommentId, null);
   assert.equal(f.state().reviewRequestedAt, null);
   assert.equal(await runFeedback(f.args), 'REVIEW_PENDING');

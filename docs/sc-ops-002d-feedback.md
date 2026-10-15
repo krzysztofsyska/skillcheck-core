@@ -184,8 +184,11 @@ remainder is stored on that binding as `ledgerHold`. Every poll lists every
 or another binding cannot spend those slots. A record whose pull request is no
 longer configured stops the poll while its hold is nonzero. After any review
 request is posted one slot remains. A failure persists its terminal phase and
-releases the unused remainder only after that state write commits. A rejected
-write leaves the previous hold in the shared budget. A new round needs its own
+releases the unused remainder only after that state write commits. A rejected,
+lost or ambiguous write leaves the previous hold in the shared budget, including
+when the per-binding catch continues with the next pull request. A missing or
+unreadable `feedback/*.json` record aborts the poll instead of counting as zero.
+A new round needs its own
 five commits; without them Cursor does
 not start and the current phase remains durable. Repair rounds stay capped at
 three. The 100-commit ceiling stays in force and the ledger is not reset. Neither policy

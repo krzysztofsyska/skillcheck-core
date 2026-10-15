@@ -239,6 +239,8 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     if (releasing) reserveLedger?.(budget, held);
     return plan.state.phase;
   }
+  // A throw below leaves the pre-save room unchanged. reconcileBindings may
+  // continue with the next pull request, but it must not observe a release.
   // Re-read immediately before sending; a moved target consumes the reservation and stops.
   const fresh = await readSnapshot(plan.state);
   validateSnapshot(binding, fresh);
