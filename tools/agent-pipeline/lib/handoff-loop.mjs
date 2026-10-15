@@ -1,5 +1,5 @@
 import { sha256 } from './canonical.mjs';
-import { admit, claimHandoffSlot, ensureAdmission, releasePull } from './handoff-admission.mjs';
+import { admit, claimHandoffSlot, ensureAdmission, markUnknown, releasePull } from './handoff-admission.mjs';
 
 /**
  * Inactive Codex review → Cursor handoff → CI → independent Codex review loop.
@@ -80,13 +80,24 @@ export function step(ledger, snapshot) {
   const next = structuredClone(ledger ?? emptyLedger());
   if (!next.attempts || !next.reservations || !next.audits) return finish(emptyLedger(), snapshot ?? {}, { status: 'BLOCKED_INTEGRATION' });
   ensureAdmission(next);
+  if (isUncertainTransport(snapshot)) {
+    const context = validateContext(snapshot);
+    if (context) return finish(next, snapshot, context);
+    return finish(next, snapshot, markUnknown(next, snapshot));
+  }
   if (snapshot?.error) {
     return finish(next, snapshot, { status: 'BLOCKED_INTEGRATION', http_status: snapshot.error.status ?? null });
   }
   const context = validateContext(snapshot);
   if (context) {
     if ((context.status === 'IGNORED_CLOSED' || context.status === 'IGNORED_DRAFT') && snapshot.pull?.number) {
-      releasePull(next, snapshot.pull.number);
+      const release = releasePull(next, snapshot.pull.number);
+      if (release.held) {
+        return finish(next, snapshot, {
+          status: context.status,
+          stage: { pr: snapshot.pull.number, sha: snapshot.pull.headSha, next_stage: 'reconcile', blocker: 'RECONCILE_REQUIRED' },
+        });
+      }
     }
     return finish(next, snapshot, context);
   }
@@ -127,7 +138,7 @@ function reserveHandoff(ledger, snapshot, findings) {
     return { status: 'BLOCKED_LIMIT', attempt: used };
   }
   const claim = claimHandoffSlot(ledger, snapshot);
-  if (claim.status === 'WAITING_CAPACITY' || claim.status === 'DUPLICATE_DISPATCH') {
+  if (claim.status === 'WAITING_CAPACITY' || claim.status === 'DUPLICATE_DISPATCH' || claim.status === 'RECONCILE_REQUIRED') {
     return { status: claim.status, attempt: used, cursor_handoff: null };
   }
   supersedeOpenReservations(ledger, pr);
@@ -212,6 +223,11 @@ function considerReady(ledger, snapshot) {
   if (!isCodex(reviewer)) return { status: 'IGNORED_REVIEWER', handoff_id: reservation.handoff_id };
   reservation.status = 'READY_FOR_OWNER';
   return { status: 'READY_FOR_OWNER', handoff_id: reservation.handoff_id };
+}
+
+function isUncertainTransport(snapshot) {
+  if (snapshot?.error?.timeout === true || snapshot?.transport?.outcome === 'unknown') return true;
+  return snapshot?.adapter?.source === 'trusted_adapter' && snapshot?.adapter?.kind === 'dispatch_unknown';
 }
 
 function validateContext(snapshot) {

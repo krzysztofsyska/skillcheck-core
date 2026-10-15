@@ -4,7 +4,7 @@ import { CODEX_REVIEWER, REPOSITORY } from './handoff-loop.mjs';
 export const CURSOR_SLOT_LIMIT = 5;
 const PRIORITY_RANK = Object.freeze({ FREE: 0, PRESELEKCJA: 1, 'SC-005': 2 });
 const ACTIVE_SEVERITIES = new Set(['P0', 'P1', 'P2']);
-const OCCUPYING = new Set(['REQUESTED', 'STARTED']);
+const OCCUPYING = new Set(['REQUESTED', 'STARTED', 'DISPATCH_UNKNOWN']);
 
 export function conditionsDigest(conditions) {
   return sha256({
@@ -45,12 +45,17 @@ export function admit(ledger, snapshot) {
   if (kind === 'started') return guarded(snapshot, adapter, () => markStarted(ledger, snapshot, adapter));
   if (kind === 'completed') return guarded(snapshot, adapter, () => markCompleted(ledger, snapshot, adapter));
   if (kind === 'review') return bindReview(ledger, snapshot, adapter);
+  if (kind === 'dispatch_unknown') return markUnknown(ledger, snapshot);
+  if (kind === 'cancelled') return guarded(snapshot, adapter, () => markCancelled(ledger, snapshot, adapter));
   if (kind === 'dispatch_request') return guarded(snapshot, adapter, () => requestDispatch(ledger, snapshot, adapter), { base: true });
   return stagePartial(snapshot, adapter, { status: 'IGNORED_EVENT', next_stage: 'wait_for_adapter', blocker: 'IGNORED_EVENT' });
 }
 
 function requestDispatch(ledger, snapshot, adapter) {
   const task = taskFrom(adapter, snapshot);
+  if (ledger.slots[task.pr]?.occupied && ledger.slots[task.pr].phase === 'DISPATCH_UNKNOWN') {
+    return stagePartial(snapshot, adapter, { status: 'RECONCILE_REQUIRED', next_stage: 'reconcile', blocker: 'RECONCILE_REQUIRED', agent_id: ledger.slots[task.pr].agent_id });
+  }
   if (occupyingSlot(ledger, task.pr) || ledger.queue.some(item => item.pr === task.pr)) {
     return stagePartial(snapshot, adapter, { status: 'DUPLICATE_DISPATCH', next_stage: 'wait_for_slot', blocker: null, agent_id: occupyingSlot(ledger, task.pr)?.agent_id ?? null });
   }
@@ -276,6 +281,7 @@ function occupy(ledger, task) {
 export function claimHandoffSlot(ledger, snapshot) {
   ensureAdmission(ledger);
   const pr = String(snapshot.pull.number);
+  if (ledger.slots[pr]?.occupied && ledger.slots[pr].phase === 'DISPATCH_UNKNOWN') return { status: 'RECONCILE_REQUIRED' };
   if (occupyingSlot(ledger, pr)) return { status: 'REUSED' };
   if (ledger.queue.some(item => item.pr === pr)) return { status: 'DUPLICATE_DISPATCH' };
   if (occupiedCount(ledger) >= CURSOR_SLOT_LIMIT) return { status: 'WAITING_CAPACITY' };
@@ -296,10 +302,13 @@ export function claimHandoffSlot(ledger, snapshot) {
 export function releasePull(ledger, pr) {
   ensureAdmission(ledger);
   const key = String(pr ?? '');
-  if (!key) return false;
-  let released = false;
+  if (!key) return { released: false, held: false };
   const slot = ledger.slots[key];
-  if (slot?.occupied) {
+  if (slot?.occupied && (slot.phase === 'STARTED' || slot.phase === 'DISPATCH_UNKNOWN')) {
+    return { released: false, held: true };
+  }
+  let released = false;
+  if (slot?.occupied && slot.phase === 'REQUESTED') {
     slot.occupied = false;
     slot.phase = 'CANCELLED';
     slot.ack = false;
@@ -309,7 +318,66 @@ export function releasePull(ledger, pr) {
   ledger.queue = ledger.queue.filter(item => item.pr !== key);
   if (ledger.queue.length !== queued) released = true;
   if (released) promote(ledger);
-  return released;
+  return { released, held: false };
+}
+
+export function markUnknown(ledger, snapshot) {
+  ensureAdmission(ledger);
+  const pr = String(snapshot?.pull?.number ?? snapshot?.adapter?.pr ?? '');
+  if (!pr || !snapshot?.pull?.headSha) {
+    return { status: 'BLOCKED_INTEGRATION', stage: { pr: pr || null, sha: snapshot?.adapter?.head_sha ?? null, next_stage: 'reconcile', blocker: 'RECONCILE_REQUIRED' } };
+  }
+  const existing = ledger.slots[pr];
+  if (existing?.occupied && existing.phase === 'DISPATCH_UNKNOWN') {
+    return unknownPartial(existing);
+  }
+  if (existing?.occupied) {
+    existing.phase = 'DISPATCH_UNKNOWN';
+    existing.occupied = true;
+    return unknownPartial(existing);
+  }
+  if (occupiedCount(ledger) >= CURSOR_SLOT_LIMIT) {
+    return { status: 'WAITING_CAPACITY', stage: { pr, sha: snapshot.pull.headSha, next_stage: 'wait_for_slot', blocker: 'WAITING_CAPACITY' } };
+  }
+  occupy(ledger, {
+    pr,
+    task_id: String(snapshot.adapter?.task_id ?? `unknown-${pr}`),
+    priority: 'NORMAL',
+    depends_on: [],
+    head_sha: snapshot.pull.headSha,
+    base_sha: snapshot.adapter?.base_sha ?? snapshot.pull.baseSha ?? snapshot.pull.baseRef ?? null,
+    executor: snapshot.adapter?.executor ?? 'cursor',
+    created_at: snapshot.now ?? null,
+  });
+  ledger.slots[pr].phase = 'DISPATCH_UNKNOWN';
+  return unknownPartial(ledger.slots[pr]);
+}
+
+function unknownPartial(slot) {
+  return {
+    status: 'RECONCILE_REQUIRED',
+    agent_id: slot.agent_id,
+    stage: {
+      pr: slot.pr,
+      executor: slot.executor,
+      task: slot.task_id,
+      sha: slot.head_sha,
+      next_stage: 'reconcile',
+      blocker: 'RECONCILE_REQUIRED',
+      agent_id: slot.agent_id,
+    },
+  };
+}
+
+function markCancelled(ledger, snapshot, adapter) {
+  const slot = occupyingSlot(ledger, String(adapter.pr));
+  if (!slot || adapter.cancelled !== true || adapter.agent_id !== slot.agent_id) {
+    return stagePartial(snapshot, adapter, { status: 'IGNORED_NO_RESERVATION', next_stage: 'reconcile', blocker: 'RECONCILE_REQUIRED' });
+  }
+  slot.occupied = false;
+  slot.phase = 'CANCELLED';
+  promote(ledger);
+  return stagePartial(snapshot, adapter, { status: 'CANCELLED', next_stage: 'wait_for_slot', blocker: null, agent_id: slot.agent_id });
 }
 
 function revokeBinding(ledger, key, verdict) {

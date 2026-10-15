@@ -581,6 +581,63 @@ test('a Codex finding waits for a Cursor slot and an omitted head cannot look re
   assert.deepEqual(hidden.ledger.bound_reviews, {});
 });
 
+test('a started remote task stays reserved until cancellation evidence frees the queue', () => {
+  let ledger = emptyLedger();
+  for (let index = 1; index <= CURSOR_SLOT_LIMIT; index += 1) {
+    ledger = apply(ledger, request({ pr: 400 + index, task_id: `S${index}`, now: `2026-10-15T12:0${index}:00.000Z` })).ledger;
+  }
+  const agentId = ledger.slots['401'].agent_id;
+  ledger = apply(ledger, snapshot({
+    event: 'admission_started',
+    pr: 401,
+    adapter: { source: 'trusted_adapter', kind: 'started', pr: 401, task_id: 'S1', agent_id: agentId, ack: true, executor: 'cursor', head_sha: HEAD },
+  })).ledger;
+  ledger = apply(ledger, request({ pr: 406, task_id: 'S6', now: '2026-10-15T12:06:00.000Z' })).ledger;
+  const closed = apply(ledger, snapshot({ event: 'admission_completed', pr: 401, state: 'closed', head_sha: HEAD }));
+  assert.equal(closed.outcome.status, 'IGNORED_CLOSED');
+  assert.equal(closed.outcome.stage.blocker, 'RECONCILE_REQUIRED');
+  assert.equal(closed.ledger.slots['401'].occupied, true);
+  assert.equal(closed.ledger.slots['401'].phase, 'STARTED');
+  assert.equal(closed.ledger.slots['406'], undefined);
+  assert.equal(occupiedCount(closed.ledger), 5);
+
+  const cancelled = apply(closed.ledger, snapshot({
+    event: 'admission_completed',
+    pr: 401,
+    head_sha: HEAD,
+    adapter: { source: 'trusted_adapter', kind: 'cancelled', pr: 401, task_id: 'S1', agent_id: agentId, cancelled: true, executor: 'cursor', head_sha: HEAD },
+  }));
+  assert.equal(cancelled.outcome.status, 'CANCELLED');
+  assert.equal(cancelled.ledger.slots['401'].occupied, false);
+  assert.equal(cancelled.ledger.slots['406'].task_id, 'S6');
+  assert.equal(cancelled.ledger.slots['406'].occupied, true);
+});
+
+test('an uncertain transport keeps its reservation and never calls the executor', async () => {
+  let calls = 0;
+  const operation = async () => {
+    calls += 1;
+  };
+  const first = await dispatchAdmission(emptyLedger(), request({ pr: 51, task_id: 'UNK' }), operation);
+  assert.equal(calls, 0);
+  assert.equal(first.ledger.slots['51'].phase, 'REQUESTED');
+  const uncertain = await dispatchAdmission(first.ledger, {
+    ...request({ pr: 51, task_id: 'UNK' }),
+    error: { timeout: true },
+    transport: { outcome: 'unknown' },
+  }, operation);
+  assert.equal(calls, 0);
+  assert.equal(uncertain.outcome.status, 'RECONCILE_REQUIRED');
+  assert.equal(uncertain.ledger.slots['51'].phase, 'DISPATCH_UNKNOWN');
+  assert.equal(uncertain.ledger.slots['51'].occupied, true);
+  const retry = await dispatchAdmission(uncertain.ledger, request({ pr: 51, task_id: 'UNK-2' }), operation);
+  assert.equal(calls, 0);
+  assert.equal(retry.outcome.status, 'RECONCILE_REQUIRED');
+  assert.equal(occupiedCount(retry.ledger), 1);
+  assert.equal(retry.outcome.live_effects, 'blocked');
+  assert.deepEqual(retry.outcome.executed, []);
+});
+
 function complete(ledger, pr, taskId, head = NEXT) {
   return apply(ledger, snapshot({
     event: 'admission_completed',

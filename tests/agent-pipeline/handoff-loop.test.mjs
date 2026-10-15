@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify } from '../../tools/agent-pipeline/classify-pr.mjs';
 import { runHandoffCli } from '../../tools/agent-pipeline/handoff-cli.mjs';
+import { occupiedCount } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
 import {
   CODEX_REVIEWER,
   CURSOR_HANDOFF_TEMPLATE,
@@ -418,6 +419,62 @@ test('the workflow and CLI stay fail-closed with no secrets or paid actions', ()
   assert.equal(report.live_effects, false);
   assert.equal(report.attempts['126'], 1);
   assert.equal(runHandoffCli(['--sandbox', join(process.cwd(), 'package.json')], {}, { log: () => {}, error: line => errors.push(line) }), 1);
+});
+
+function workflowAdmission(pr, taskId) {
+  return {
+    now: '2026-10-15T11:00:00.000Z',
+    repository: 'krzysztofsyska/skillcheck-core',
+    event: { name: 'admission_request', action: 'observed' },
+    sender: { ...CODEX_REVIEWER },
+    pull: {
+      number: pr,
+      state: 'open',
+      draft: false,
+      baseRef: 'integration',
+      headSha: SHA.one,
+      author: { ...AUTHOR },
+      headRepo: 'krzysztofsyska/skillcheck-core',
+    },
+    review: { id: 1, user: { ...CODEX_REVIEWER } },
+    adapter: {
+      source: 'trusted_adapter',
+      kind: 'dispatch_request',
+      pr,
+      task_id: taskId,
+      priority: 'NORMAL',
+      depends_on: [],
+      head_sha: SHA.one,
+      base_sha: SHA.two,
+      executor: 'cursor',
+    },
+  };
+}
+
+test('workflow review events keep one slot per pull request and the existing review dedup', () => {
+  let ledger = emptyLedger();
+  for (let index = 1; index <= 5; index += 1) {
+    const reserved = apply(ledger, workflowAdmission(300 + index, `W${index}`));
+    ledger = reserved.ledger;
+    assert.equal(reserved.outcome.status, 'REQUESTED');
+  }
+  const sixth = apply(ledger, reviewSnapshot({ pr: 880, reviewId: 9100 }));
+  assert.equal(sixth.outcome.status, 'WAITING_CAPACITY');
+  assert.equal(sixth.outcome.plan.cursor_handoff, null);
+  assert.equal(sixth.ledger.attempts['880'], undefined);
+  assert.equal(occupiedCount(sixth.ledger), 5);
+
+  ledger = apply(emptyLedger(), reviewSnapshot()).ledger;
+  assert.equal(occupiedCount(ledger), 1);
+  const duplicate = apply(ledger, reviewSnapshot({ event: 'pull_request_review_comment' }));
+  ledger = duplicate.ledger;
+  assert.equal(duplicate.outcome.status, 'DUPLICATE');
+  assert.equal(ledger.attempts['126'], 1);
+  assert.equal(occupiedCount(ledger), 1);
+  const replacement = apply(ledger, reviewSnapshot({ reviewId: 77 }));
+  assert.equal(replacement.outcome.status, 'HANDOFF');
+  assert.equal(replacement.ledger.attempts['126'], 2);
+  assert.equal(occupiedCount(replacement.ledger), 1);
 });
 
 test('automation documents and the handoff workflow classify as L3 operations', () => {
