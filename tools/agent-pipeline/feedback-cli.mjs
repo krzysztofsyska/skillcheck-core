@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createGitHubClient, createInstallationToken, decodeGithubContent } from './lib/github.mjs';
 import { createCursorClient } from './lib/cursor.mjs';
 import { evaluatePreflight } from './lib/merge.mjs';
-import { runFeedback, validateBinding, assertLedgerRoom, LEDGER_LIMIT, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
+import { runFeedback, validateBinding, accountLedger, ledgerHold, LEDGER_LIMIT, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
 import { withRulesetEvidence, verifyStateBootstrap } from './lib/ruleset-evidence.mjs';
 
 // Actions read is required for environment and deployment-branch policy reads.
@@ -160,13 +160,21 @@ export async function main(env = process.env) {
   // Bootstrap this dedicated state branch with no force/delete and controller-only
   // writers before activation. Never silently recreate a deleted journal.
   const ledger = await verifyStateBootstrap(github, policy);
+  // Commit count plus every binding's unwritten repair hold. A later poll sees
+  // the same promise, so another binding cannot spend a repair's outcome slots.
   const room = { used: ledger.commits };
-  function reserveLedger(writes) {
-    assertLedgerRoom(room.used, writes, LEDGER_LIMIT);
-    room.used += writes;
+  const stores = new Map();
+  for (const binding of config.bindings) {
+    const store = feedbackStore(github, binding.pr);
+    stores.set(binding.pr, store);
+    try { room.used += ledgerHold((await store.read()).value); }
+    catch { room.used += 4; }
+  }
+  function reserveLedger(writes, held = 0) {
+    room.used = accountLedger(room.used, writes, held, LEDGER_LIMIT);
   }
   const cursor = createCursorClient({ fetch, apiKey: env.CURSOR_API_KEY });
-  return reconcileBindings(config.bindings, binding => runFeedback({ binding, store: feedbackStore(github, binding.pr),
+  return reconcileBindings(config.bindings, binding => runFeedback({ binding, store: stores.get(binding.pr),
       readSnapshot: state => readSnapshot(github, cursor, binding, state), cursor, reserveLedger,
       postReview: body => github.request(`/repos/${REPOSITORY}/issues/${binding.pr}/comments`, { method: 'POST', body: { body } }),
     }));

@@ -177,9 +177,12 @@ bootstrap. A transition is refused, before any external effect, unless the
 ledger has room for every write that transition will make: one for a state-only
 change and two for a review reservation plus its completion. Starting Cursor
 reserves four: the dispatch pair plus the later failure or review-request pair.
-That hold is shared with later bindings in the same poll. The next poll counts
-the commits actually written, so the follow-up still fits. A full ledger stays
-valid and is not reset. Neither policy
+The unwritten remainder is stored on that binding as `ledgerHold`. Every poll
+adds every binding's hold to the branch commit count, so a later poll or
+another binding cannot spend those slots. A failure or timeout persists the
+terminal phase and releases the unused remainder. A review handoff spends the
+held pair. Repair rounds stay capped at three; a later round reserves its own
+lifecycle. The 100-commit ceiling stays in force and the ledger is not reset. Neither policy
 attestations nor bootstrap identity have been populated by this patch. Confirm
 the App's actual signed-commit behavior before activation.
 

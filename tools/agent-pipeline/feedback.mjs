@@ -13,6 +13,29 @@ export function assertLedgerRoom(used, writes, limit = LEDGER_LIMIT) {
     throw new Error('LEDGER_CAPACITY');
   }
 }
+export function ledgerHold(state) {
+  if (state == null || state.ledgerHold == null) return 0;
+  if (!Number.isInteger(state.ledgerHold) || state.ledgerHold < 0 || state.ledgerHold > LEDGER_LIMIT) fail('INVALID_STATE');
+  return state.ledgerHold;
+}
+// A repair's unwritten remainder is already inside `used`. Spend it instead of
+// reserving those commits again, and release any remainder this outcome does not use.
+export function accountLedger(used, writes, held = 0, limit = LEDGER_LIMIT) {
+  if (!Number.isInteger(writes) || writes < 1 || !Number.isInteger(held) || held < 0) throw new Error('LEDGER_CAPACITY');
+  const delta = writes - held;
+  if (delta > 0) {
+    assertLedgerRoom(used, delta, limit);
+    return used + delta;
+  }
+  if (!Number.isInteger(used) || used + delta < 0) throw new Error('LEDGER_CAPACITY');
+  return used + delta;
+}
+function applyHold(state, hold) {
+  const next = { ...state };
+  if (hold > 0) next.ledgerHold = hold;
+  else delete next.ledgerHold;
+  return next;
+}
 const sameFindings = (left, right) => left.length === right.length
   && left.every((item, index) => item.kind === right[index].kind && item.id === right[index].id);
 const codexReviewRequest = (head, base) => `@codex review\n\nSC-OPS-002D: review HEAD ${head} against base ${base}. Include the synthetic acceptance criterion when applicable. Owner acceptance and production approval remain pending.`;
@@ -191,6 +214,7 @@ export function fixPrompt(binding, effect) {
 // An ambiguous response remains *_PENDING forever until manually reconciled.
 export async function runFeedback({ binding, store, readSnapshot, cursor, postReview, now, reserveLedger }) {
   const saved = await store.read();
+  const held = ledgerHold(saved.value);
   const snapshot = await readSnapshot(saved.value);
   const plan = planFeedback(binding, saved.value, snapshot, now);
   if (!plan.state) return plan.status;
@@ -198,12 +222,12 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     plan.state.operationMarker = randomUUID();
     plan.effect.marker = plan.state.operationMarker;
   }
-  // A review post writes its reservation and completion. A state-only change
-  // writes once. Starting Cursor also has to leave room for the next poll to
-  // persist a failure or the two-write review request, so that repair is not
-  // stranded at the ledger ceiling.
-  const lifecycle = plan.effect?.type === 'fix' ? 4 : plan.effect ? 2 : 1;
-  reserveLedger?.(lifecycle);
+  // Starting Cursor commits four writes: this reservation, its completion, and
+  // the later failure or review-request pair. A review post needs two writes
+  // and a state-only stop needs one. The unwritten remainder stays on the record.
+  const writes = plan.effect?.type === 'fix' ? 4 : plan.effect ? 2 : 1;
+  reserveLedger?.(writes, held);
+  plan.state = applyHold(plan.state, plan.effect ? writes - 1 : 0);
   const revision = await store.save(plan.state, saved.revision);
   if (!plan.effect) return plan.state.phase;
   // Re-read immediately before sending; a moved target consumes the reservation and stops.
@@ -229,13 +253,13 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     const response = await cursor.createRun(binding.agentId, { prompt: { text: fixPrompt(binding, { ...plan.effect, findings: freshFindings }) } });
     const run = response.run;
     if (!run?.id || run.agentId !== binding.agentId) fail('INVALID_CURSOR_RESPONSE');
-    completed = { ...plan.state, phase: 'FIXING', runId: run.id };
+    completed = applyHold({ ...plan.state, phase: 'FIXING', runId: run.id }, 2);
   } else if (plan.effect.type === 'request-review') {
     if (findings(fresh).length) fail('FINDINGS_STALE');
-    completed = await completeReviewRequest();
+    completed = applyHold(await completeReviewRequest(), 0);
   } else {
     if (!verifyRepair(binding, plan.state, fresh)) fail('CURSOR_PROVENANCE_CHANGED');
-    completed = await completeReviewRequest();
+    completed = applyHold(await completeReviewRequest(), 0);
   }
   await store.save(completed, revision);
   return completed.phase;

@@ -3,7 +3,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { planFeedback, runFeedback, fixPrompt, assertLedgerRoom, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
+import { planFeedback, runFeedback, fixPrompt, accountLedger, ledgerHold, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
 import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
@@ -544,31 +544,87 @@ test('a later commented review does not clear an earlier changes request', () =>
 });
 
 test('a dispatch is refused when the ledger cannot hold the repair lifecycle', async () => {
-  assert.doesNotThrow(() => assertLedgerRoom(96, 4));
-  assert.throws(() => assertLedgerRoom(97, 4), /LEDGER_CAPACITY/);
-  assert.throws(() => assertLedgerRoom(99, 2), /LEDGER_CAPACITY/);
-  assert.throws(() => assertLedgerRoom(100, 1), /LEDGER_CAPACITY/);
-  const f = fixture();
-  let used = 98;
-  let saves = 0;
-  const persist = f.args.store.save.bind(f.args.store);
-  f.args.store.save = async (...args) => { saves += 1; return persist(...args); };
-  f.args.reserveLedger = writes => { assertLedgerRoom(used, writes); used += writes; };
-  await assert.rejects(runFeedback(f.args), /LEDGER_CAPACITY/);
-  assert.equal(f.calls(), 0);
-  assert.equal(saves, 0);
-  used = 97;
-  await assert.rejects(runFeedback(f.args), /LEDGER_CAPACITY/);
-  used = 96;
-  assert.equal(await runFeedback(f.args), 'FIXING');
-  assert.equal(f.calls(), 1);
-  assert.equal(used, 100);
-  assert.equal(saves, 2);
-  used = 98;
-  finishRepair(f);
-  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
-  assert.equal(used, 100);
-  assert.equal(saves, 4);
+  assert.equal(accountLedger(96, 4, 0), 100);
+  assert.throws(() => accountLedger(97, 4, 0), /LEDGER_CAPACITY/);
+  assert.throws(() => accountLedger(98, 4, 0), /LEDGER_CAPACITY/);
+  assert.equal(accountLedger(100, 2, 2), 100);
+  assert.equal(accountLedger(100, 1, 2), 99);
+  const refused = fixture();
+  let probe = 98;
+  refused.args.reserveLedger = (writes, held = 0) => { probe = accountLedger(probe, writes, held); };
+  await assert.rejects(runFeedback(refused.args), /LEDGER_CAPACITY/);
+  assert.equal(refused.calls(), 0);
+  assert.equal(refused.state(), null);
+
+  let commits = 96;
+  const room = { used: commits };
+  const reserve = (writes, held = 0) => { room.used = accountLedger(room.used, writes, held); };
+  const poll = states => { room.used = commits + states.reduce((sum, state) => sum + ledgerHold(state), 0); };
+  function track(f) {
+    const persist = f.args.store.save.bind(f.args.store);
+    f.args.store.save = async (...args) => { commits += 1; return persist(...args); };
+    f.args.reserveLedger = reserve;
+    return f;
+  }
+  const first = track(fixture());
+  const second = track(fixture());
+  assert.equal(await runFeedback(first.args), 'FIXING');
+  assert.equal(ledgerHold(first.state()), 2);
+  assert.equal(first.state().rounds, 1);
+  await assert.rejects(runFeedback(second.args), /LEDGER_CAPACITY/);
+  assert.equal(second.calls(), 0);
+  poll([first.state(), second.state()]);
+  await assert.rejects(runFeedback(second.args), /LEDGER_CAPACITY/);
+  assert.equal(second.calls(), 0);
+
+  const timed = track(fixture());
+  commits = 96;
+  poll([]);
+  assert.equal(await runFeedback(timed.args), 'FIXING');
+  poll([timed.state()]);
+  timed.args.now = timed.state().startedAt + 2 * 60 * 60 * 1000 + 1;
+  assert.equal(await runFeedback(timed.args), 'BLOCKED_TIMEOUT');
+  assert.equal(ledgerHold(timed.state()), 0);
+  const blockedSaves = commits;
+  poll([timed.state()]);
+  assert.equal(await runFeedback(timed.args), 'BLOCKED_TIMEOUT');
+  assert.equal(commits, blockedSaves);
+
+  const done = track(fixture());
+  commits = 96;
+  poll([]);
+  assert.equal(await runFeedback(done.args), 'FIXING');
+  poll([done.state()]);
+  finishRepair(done);
+  let lost = false;
+  const persistDone = done.args.store.save.bind(done.args.store);
+  done.args.store.save = async (...args) => {
+    if (ledgerHold(done.state()) === 1) { lost = true; throw new Error('LOST_COMPLETION'); }
+    commits += 1;
+    return persistDone(...args);
+  };
+  await assert.rejects(runFeedback(done.args), /LOST_COMPLETION/);
+  assert.equal(done.state().phase, 'REVIEW_PENDING');
+  assert.equal(ledgerHold(done.state()), 1);
+  poll([done.state(), second.state()]);
+  await assert.rejects(runFeedback(second.args), /LEDGER_CAPACITY/);
+  done.args.store.save = async (...args) => { commits += 1; return persistDone(...args); };
+  poll([done.state()]);
+  assert.equal(await runFeedback(done.args), 'REVIEW_PENDING');
+  assert.equal(lost, true);
+
+  const finished = track(fixture());
+  commits = 96;
+  poll([]);
+  assert.equal(await runFeedback(finished.args), 'FIXING');
+  poll([finished.state()]);
+  finishRepair(finished);
+  assert.equal(await runFeedback(finished.args), 'WAITING_REVIEW');
+  assert.equal(ledgerHold(finished.state()), 0);
+  assert.equal(finished.reviews(), 1);
+  poll([finished.state()]);
+  await assert.rejects(runFeedback(second.args), /LEDGER_CAPACITY/);
+  assert.equal(second.calls(), 0);
 });
 
 test('approval already visible when the review request returns cannot authorize READY', async () => {
