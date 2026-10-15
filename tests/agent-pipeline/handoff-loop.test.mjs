@@ -427,6 +427,8 @@ test('forks, wrong base, spoofed identity, stale threads, and integration errors
     ['IGNORED_NO_FINDINGS', reviewSnapshot({ threads: [thread(10, 5445420558, SHA.one, { inReplyToId: 9 })] })],
     ['IGNORED_NO_FINDINGS', reviewSnapshot({ threads: [thread(10, 5445420558, SHA.one, { path: '../secrets.env' })] })],
     ['BLOCKED_INTEGRATION', reviewSnapshot({ error: { status: 403 } })],
+    ['BLOCKED_INTEGRATION', reviewSnapshot({ error: { status: 429 } })],
+    ['BLOCKED_INTEGRATION', reviewSnapshot({ error: { status: 429, timeout: false } })],
     ['IGNORED_APPROVAL', reviewSnapshot({ reviewState: 'approved', threads: [] })],
   ];
   for (const [status, snapshot] of cases) {
@@ -552,6 +554,12 @@ test('the workflow and CLI stay fail-closed with no secrets or paid actions', ()
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /CODEX_CURSOR_HANDOFF_ENABLED == 'true'/);
   assert.match(workflow, /AGENT_FEEDBACK_ENABLED != 'true'/);
+  assert.equal(/^\s*pull_request_review:/m.test(workflow), false);
+  assert.equal(/^\s*pull_request_review_comment:/m.test(workflow), false);
+  assert.match(workflow, /^on:\n {2}workflow_dispatch:\n/m);
+  assert.equal(workflow.includes('\n  group: codex-cursor-handoff\n'), false);
+  assert.match(workflow, /group: codex-cursor-handoff-inactive-\$\{\{ github\.repository \}\}-\$\{\{ github\.ref \}\}/);
+  assert.match(workflow, /cancel-in-progress: false/);
   const cli = readFileSync('tools/agent-pipeline/handoff-cli.mjs', 'utf8');
   assert.equal(cli.includes('fetch('), false);
   assert.equal(cli.includes('deliverGithubReview'), false);

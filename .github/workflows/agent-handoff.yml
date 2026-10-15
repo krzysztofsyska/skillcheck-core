@@ -1,23 +1,24 @@
 # Inactive Codex → Cursor handoff loop.
-# Review events load this file only from the default branch. The job stays skipped
-# until CODEX_CURSOR_HANDOFF_ENABLED=true, and the CLI still refuses live effects.
-# It does not post comments, call Cursor or Codex, read secrets, merge, or deploy.
+# Review and comment events are not subscribed. While this file lived on the PR
+# branch, each pull_request_review and pull_request_review_comment started a run.
+# The job if-gate then skipped it, and the single group codex-cursor-handoff
+# cancelled every older pending run. That produced 113 skipped and 94 cancelled
+# runs without doing work. Event subscription stays off until a separate
+# activation change. workflow_dispatch remains behind the same flag, and the CLI
+# still refuses live effects. This file does not post comments, call Cursor or
+# Codex, read secrets, merge, or deploy.
 # PR #57 remains the live feedback bridge. PR #124 remains the merge proposal.
 
 name: Codex Cursor handoff
 
 on:
-  pull_request_review:
-    types: [submitted]
-  pull_request_review_comment:
-    types: [created]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: codex-cursor-handoff
+  group: codex-cursor-handoff-inactive-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
