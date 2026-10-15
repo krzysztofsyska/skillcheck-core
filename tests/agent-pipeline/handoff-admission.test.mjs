@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { agentIdFor, operationKey } from '../../tools/agent-pipeline/lib/canonical.mjs';
-import { conditionsDigest, CURSOR_SLOT_LIMIT, occupiedCount } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
+import { conditionsDigest, CURSOR_SLOT_LIMIT, occupiedCount, reviewStillValid } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
 import { CODEX_REVIEWER, dispatchAdmission, emptyLedger, step } from '../../tools/agent-pipeline/lib/handoff-loop.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -250,6 +250,7 @@ test('a comment is not STARTED or COMPLETED, and completion needs an ack plus a 
   const noAck = apply(ledger, snapshot({
     event: 'admission_completed',
     pr: 41,
+    head_sha: NEXT,
     adapter: {
       source: 'trusted_adapter',
       kind: 'completed',
@@ -406,15 +407,84 @@ test('stage audit comes from the trusted adapter and a 403 opens no slot', async
     error.status = 403;
     throw error;
   });
-  assert.equal(calls, 1);
-  assert.equal(transported.outcome.status, 'BLOCKED_INTEGRATION');
-  assert.equal(transported.outcome.http_status, 403);
-  assert.deepEqual(transported.ledger.slots, {});
-  assert.deepEqual(transported.ledger.queue, []);
+  assert.equal(calls, 0);
+  assert.equal(transported.outcome.status, 'REQUESTED');
+  assert.equal(transported.ledger.slots['73'].occupied, true);
   assert.equal(transported.outcome.merge_authorized, false);
   assert.equal(transported.outcome.plan.merge, null);
   assert.equal(transported.outcome.plan.deploy, null);
   assert.equal(transported.outcome.live_effects, 'blocked');
+});
+
+test('an offline dispatch never starts the executor callback', async () => {
+  let calls = 0;
+  const operation = async () => {
+    calls += 1;
+  };
+  let ledger = emptyLedger();
+  for (let index = 1; index <= 6; index += 1) {
+    const result = await dispatchAdmission(ledger, request({ pr: 800 + index, task_id: `C${index}`, now: `2026-10-15T08:0${index}:00.000Z` }), operation);
+    ledger = result.ledger;
+    assert.equal(result.outcome.status, index < 6 ? 'REQUESTED' : 'WAITING_CAPACITY');
+    assert.deepEqual(result.outcome.executed, []);
+    assert.equal(result.outcome.live_effects, 'blocked');
+    assert.equal(result.outcome.merge_authorized, false);
+  }
+  const duplicate = await dispatchAdmission(ledger, request({ pr: 801, task_id: 'C1-again' }), operation);
+  assert.equal(duplicate.outcome.status, 'DUPLICATE_DISPATCH');
+  assert.deepEqual(duplicate.outcome.executed, []);
+  assert.equal(duplicate.outcome.live_effects, 'blocked');
+  assert.equal(calls, 0);
+  assert.equal(occupiedCount(duplicate.ledger), 5);
+});
+
+test('a newer FAIL, PASS_WITH_FIXES, or dismissal revokes a stored PASS', () => {
+  const digest = conditionsDigest(CONDITIONS);
+  const failed = apply(apply(emptyLedger(), review({ review_id: 8101 })).ledger, review({ review_id: 8101, verdict: 'FAIL', findings: [] }));
+  assert.notEqual(failed.outcome.status, 'READY_TO_MERGE');
+  assert.equal(failed.outcome.merge_authorized, false);
+  assert.equal(reviewStillValid(failed.ledger, HEAD, BASE, digest, { pr: 81, reviewId: 8101 }), null);
+
+  const fixes = apply(apply(emptyLedger(), review({ review_id: 8102 })).ledger, review({ review_id: 8102, verdict: 'PASS_WITH_FIXES', findings: [] }));
+  assert.notEqual(fixes.outcome.status, 'READY_TO_MERGE');
+  assert.equal(reviewStillValid(fixes.ledger, HEAD, BASE, digest, { pr: 81, reviewId: 8102 }), null);
+
+  const dismissedEvent = review({ review_id: 8103, verdict: 'PASS' });
+  dismissedEvent.review.state = 'dismissed';
+  const dismissed = apply(apply(emptyLedger(), review({ review_id: 8103 })).ledger, dismissedEvent);
+  assert.notEqual(dismissed.outcome.status, 'READY_TO_MERGE');
+  assert.equal(reviewStillValid(dismissed.ledger, HEAD, BASE, digest, { pr: 81, reviewId: 8103 }), null);
+});
+
+test('readiness is refused when adapter evidence disagrees with the current pull', () => {
+  const mismatched = review({ review_id: 8201 });
+  mismatched.pull.headSha = 'c'.repeat(40);
+  const result = apply(emptyLedger(), mismatched);
+  assert.notEqual(result.outcome.status, 'READY_TO_MERGE');
+  assert.equal(result.outcome.merge_authorized, false);
+  assert.deepEqual(result.ledger.bound_reviews, {});
+
+  const wrongPr = review({ review_id: 8202 });
+  wrongPr.adapter.pr = 999;
+  assert.notEqual(apply(emptyLedger(), wrongPr).outcome.status, 'READY_TO_MERGE');
+  assert.deepEqual(apply(emptyLedger(), wrongPr).ledger.bound_reviews, {});
+
+  const missingBase = review({ review_id: 8203 });
+  delete missingBase.adapter.base_sha;
+  assert.notEqual(apply(emptyLedger(), missingBase).outcome.status, 'READY_TO_MERGE');
+
+  const missingReview = review({ review_id: 8204 });
+  missingReview.review.id = null;
+  assert.notEqual(apply(emptyLedger(), missingReview).outcome.status, 'READY_TO_MERGE');
+
+  const bound = apply(emptyLedger(), review({ review_id: 8205 }));
+  assert.equal(bound.outcome.status, 'READY_TO_MERGE');
+  const stored = Object.values(bound.ledger.bound_reviews)[0];
+  assert.equal(stored.pr, '81');
+  assert.equal(stored.review_id, 8205);
+  assert.equal(stored.head_sha, HEAD);
+  assert.equal(stored.base_sha, BASE);
+  assert.deepEqual(stored.conditions, CONDITIONS);
 });
 
 function complete(ledger, pr, taskId, head = NEXT) {
@@ -442,6 +512,7 @@ function review(fields) {
     event: 'admission_review',
     pr: fields.pr ?? 81,
     head_sha: head,
+    review_id: fields.review_id,
     sender: fields.sender ?? { ...CODEX_REVIEWER },
     reviewer: fields.reviewer ?? { ...CODEX_REVIEWER },
     author: fields.author ?? { ...AUTHOR },

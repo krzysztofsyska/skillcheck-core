@@ -1,5 +1,4 @@
 import { agentIdFor, operationKey, sha256 } from './canonical.mjs';
-import { withTransportRetry } from './transport.mjs';
 import { CODEX_REVIEWER, REPOSITORY } from './handoff-loop.mjs';
 
 export const CURSOR_SLOT_LIMIT = 5;
@@ -26,19 +25,10 @@ export function occupiedCount(ledger) {
   return Object.values(ledger.slots ?? {}).filter(slot => slot.occupied).length;
 }
 
-export async function dispatchAdmission(ledger, snapshot, operation) {
+export async function dispatchAdmission(ledger, snapshot) {
   ensureAdmission(ledger);
-  try {
-    await withTransportRetry(async () => operation(), { sleep: async () => {}, maxAttempts: 1 });
-  } catch (error) {
-    const status = error.status ?? error.statusCode ?? null;
-    if (status === 403 || error.code === 'BLOCKED_CONFIGURATION') {
-      return {
-        ledger,
-        partial: blockedPartial(snapshot, 'BLOCKED_INTEGRATION', 403),
-      };
-    }
-    throw error;
+  if (snapshot?.error?.status === 403 || snapshot?.error?.code === 'BLOCKED_CONFIGURATION') {
+    return { ledger, partial: blockedPartial(snapshot, 'BLOCKED_INTEGRATION', 403) };
   }
   return { ledger, partial: admit(ledger, snapshot) };
 }
@@ -52,10 +42,10 @@ export function admit(ledger, snapshot) {
   if (kind === 'comment') return stagePartial(snapshot, adapter, { status: 'COMMENT_ONLY', next_stage: 'wait_for_adapter', blocker: null });
   if (kind === 'merge') return stagePartial(snapshot, adapter, { status: 'BLOCKED_MERGE', next_stage: 'blocked', blocker: 'BLOCKED_MERGE' });
   if (kind === 'deploy') return stagePartial(snapshot, adapter, { status: 'BLOCKED_DEPLOY', next_stage: 'blocked', blocker: 'BLOCKED_DEPLOY' });
-  if (kind === 'started') return markStarted(ledger, snapshot, adapter);
-  if (kind === 'completed') return markCompleted(ledger, snapshot, adapter);
+  if (kind === 'started') return guarded(snapshot, adapter, () => markStarted(ledger, snapshot, adapter));
+  if (kind === 'completed') return guarded(snapshot, adapter, () => markCompleted(ledger, snapshot, adapter));
   if (kind === 'review') return bindReview(ledger, snapshot, adapter);
-  if (kind === 'dispatch_request') return requestDispatch(ledger, snapshot, adapter);
+  if (kind === 'dispatch_request') return guarded(snapshot, adapter, () => requestDispatch(ledger, snapshot, adapter), { base: true });
   return stagePartial(snapshot, adapter, { status: 'IGNORED_EVENT', next_stage: 'wait_for_adapter', blocker: 'IGNORED_EVENT' });
 }
 
@@ -119,24 +109,45 @@ function bindReview(ledger, snapshot, adapter) {
   if (!isIndependentCodex(snapshot, adapter)) {
     return stagePartial(snapshot, adapter, { status: 'IGNORED_REVIEWER', next_stage: 'wait_for_review', blocker: 'IGNORED_REVIEWER' });
   }
+  if (reviewEvidenceProblem(snapshot, adapter)) {
+    return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
+  }
+  const reviewId = snapshot.review.id;
   const digest = conditionsDigest(adapter.conditions);
-  const key = sha256({ head: adapter.head_sha, base: adapter.base_sha, digest });
-  const current = reviewStillValid(ledger, adapter.head_sha, adapter.base_sha, digest);
+  const pr = String(snapshot.pull.number);
+  const key = bindingKey(pr, adapter.head_sha, adapter.base_sha, digest);
+  if (isNegativeReview(snapshot, adapter)) {
+    const stored = ledger.bound_reviews[key];
+    if (stored) {
+      stored.completed = false;
+      stored.revoked = true;
+      stored.verdict = negativeVerdict(snapshot, adapter);
+    }
+    return stagePartial(snapshot, adapter, { status: 'READINESS_REVOKED', next_stage: 'wait_for_review', blocker: 'READINESS_REVOKED' });
+  }
+  const current = reviewStillValid(ledger, adapter.head_sha, adapter.base_sha, digest, { pr, reviewId });
   if (adapter.reuse_binding === true && !current) {
     return stagePartial(snapshot, adapter, { status: 'STALE_REVIEW', next_stage: 'wait_for_review', blocker: 'STALE_REVIEW' });
   }
-  if (current?.verdict === 'PASS') {
+  if (current?.verdict === 'PASS' && adapter.verdict === 'PASS') {
     return mergeReadiness(ledger, snapshot, adapter, { status: 'REVIEW_REUSED', next_stage: 'owner_acceptance', blocker: null });
   }
   if (adapter.verdict !== 'PASS') {
     return stagePartial(snapshot, adapter, { status: 'REVIEW_NOT_PASS', next_stage: 'wait_for_review', blocker: 'REVIEW_NOT_PASS' });
   }
   ledger.bound_reviews[key] = {
+    pr,
+    review_id: reviewId,
     head_sha: adapter.head_sha,
     base_sha: adapter.base_sha,
     digest,
+    conditions: {
+      policy_sha: adapter.conditions.policy_sha,
+      required_checks: [...adapter.conditions.required_checks],
+    },
     verdict: 'PASS',
     completed: true,
+    revoked: false,
     task_id: adapter.task_id ?? null,
   };
   return mergeReadiness(ledger, snapshot, adapter, { status: 'REVIEW_BOUND', next_stage: 'owner_acceptance', blocker: null });
@@ -144,10 +155,13 @@ function bindReview(ledger, snapshot, adapter) {
 
 function mergeReadiness(ledger, snapshot, adapter, partial) {
   const digest = conditionsDigest(adapter.conditions);
-  const valid = reviewStillValid(ledger, adapter.head_sha, adapter.base_sha, digest);
+  const valid = reviewStillValid(ledger, adapter.head_sha, adapter.base_sha, digest, {
+    pr: snapshot.pull?.number,
+    reviewId: snapshot.review?.id,
+  });
   const active = activeFindings(adapter);
   const dependenciesReady = (adapter.depends_on ?? []).every(taskId => ledger.completed_tasks[taskId]);
-  const ciReady = adapter.ci?.sha === adapter.head_sha && adapter.ci?.conclusion === 'success';
+  const ciReady = adapter.ci?.sha === snapshot.pull?.headSha && adapter.ci?.sha === adapter.head_sha && adapter.ci?.conclusion === 'success';
   if (valid?.verdict === 'PASS' && ciReady && dependenciesReady && active.length === 0) {
     return stagePartial(snapshot, adapter, { status: 'READY_TO_MERGE', next_stage: 'owner_acceptance', blocker: null });
   }
@@ -157,12 +171,60 @@ function mergeReadiness(ledger, snapshot, adapter, partial) {
   return stagePartial(snapshot, adapter, partial);
 }
 
-export function reviewStillValid(ledger, head, base, digest) {
-  const key = sha256({ head, base, digest });
-  const stored = ledger.bound_reviews?.[key];
-  if (!stored || stored.completed !== true || stored.verdict !== 'PASS') return null;
-  if (stored.head_sha !== head || stored.base_sha !== base || stored.digest !== digest) return null;
+export function bindingKey(pr, head, base, digest) {
+  return sha256({ pr: pr == null ? null : String(pr), head, base, digest });
+}
+
+export function reviewStillValid(ledger, head, base, digest, identity = {}) {
+  const pr = identity.pr == null ? null : String(identity.pr);
+  const stored = ledger.bound_reviews?.[bindingKey(pr, head, base, digest)];
+  if (!stored || stored.completed !== true || stored.revoked === true || stored.verdict !== 'PASS') return null;
+  if (stored.pr !== pr || stored.head_sha !== head || stored.base_sha !== base || stored.digest !== digest) return null;
+  if (!stored.review_id || !stored.conditions) return null;
+  if (identity.reviewId != null && stored.review_id !== identity.reviewId) return null;
   return stored;
+}
+
+function guarded(snapshot, adapter, proceed, options = {}) {
+  if (identityProblem(snapshot, adapter)) {
+    return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
+  }
+  if (options.base === true && !adapter.base_sha) {
+    return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
+  }
+  if (snapshot.pull?.baseSha && adapter.base_sha && adapter.base_sha !== snapshot.pull.baseSha) {
+    return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
+  }
+  return proceed();
+}
+
+function identityProblem(snapshot, adapter) {
+  const pull = snapshot?.pull;
+  if (!pull?.number || adapter?.pr == null || String(adapter.pr) !== String(pull.number)) return true;
+  if (!pull.headSha || !adapter?.head_sha || adapter.head_sha !== pull.headSha) return true;
+  return false;
+}
+
+function reviewEvidenceProblem(snapshot, adapter) {
+  if (identityProblem(snapshot, adapter) || !adapter.base_sha) return true;
+  if (snapshot.pull?.baseSha && adapter.base_sha !== snapshot.pull.baseSha) return true;
+  const reviewId = snapshot.review?.id;
+  if (!Number.isInteger(reviewId) || reviewId <= 0) return true;
+  if (adapter.review_id != null && adapter.review_id !== reviewId) return true;
+  const conditions = adapter.conditions;
+  if (!conditions || typeof conditions.policy_sha !== 'string' || conditions.policy_sha.length === 0) return true;
+  if (!Array.isArray(conditions.required_checks)) return true;
+  return false;
+}
+
+function isNegativeReview(snapshot, adapter) {
+  if (adapter?.verdict === 'FAIL' || adapter?.verdict === 'PASS_WITH_FIXES') return true;
+  return String(snapshot?.review?.state ?? '').toLowerCase() === 'dismissed';
+}
+
+function negativeVerdict(snapshot, adapter) {
+  if (adapter?.verdict === 'FAIL' || adapter?.verdict === 'PASS_WITH_FIXES') return adapter.verdict;
+  return 'DISMISSED';
 }
 
 function promote(ledger) {

@@ -1,5 +1,5 @@
 import { sha256 } from './canonical.mjs';
-import { admit, dispatchAdmission as dispatchThroughTransport, ensureAdmission } from './handoff-admission.mjs';
+import { admit, ensureAdmission } from './handoff-admission.mjs';
 
 /**
  * Inactive Codex review → Cursor handoff → CI → independent Codex review loop.
@@ -67,10 +67,13 @@ export function normalizeGithubEvent(event, threads = []) {
 }
 
 export async function dispatchAdmission(ledger, snapshot, operation) {
-  const next = structuredClone(ledger ?? emptyLedger());
-  ensureAdmission(next);
-  const result = await dispatchThroughTransport(next, snapshot, operation);
-  return finish(result.ledger, snapshot, result.partial);
+  // LIVE_EFFECTS_ENABLED stays false. The executor callback is not a planner
+  // and must not run before context validation, nor in this offline PR.
+  void operation;
+  if (LIVE_EFFECTS_ENABLED === true) {
+    return finish(structuredClone(ledger ?? emptyLedger()), snapshot, { status: 'BLOCKED_ACTIVATION' });
+  }
+  return step(ledger, snapshot);
 }
 
 export function step(ledger, snapshot) {

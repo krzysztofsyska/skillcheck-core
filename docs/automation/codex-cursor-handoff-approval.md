@@ -40,11 +40,12 @@ Workflow nasłuchuje `pull_request_review` / `pull_request_review_comment` / `wo
 
 ## Kolejka offline (2026-10-15)
 
-Ta sama pamięć ledgeru, bez nowego kontrolera i bez gałęzi stanu. Transport 403 pochodzi z istniejącego `withTransportRetry` (#57): błąd 403 nie otwiera slotu i nie jest powtarzany. #124 dalej jest jedyną polityką merge; ten kod jej nie kopiuje.
+Ta sama pamięć ledgeru, bez nowego kontrolera i bez gałęzi stanu. W trybie offline nie wołamy transportu ani callbacku wykonawczego. Błąd 403 na zrzucie zdarzenia blokuje obieg przed otwarciem slotu. Istniejący `withTransportRetry` (#57) zostaje helperem na późniejszą aktywację i nie jest stąd uruchamiany. #124 dalej jest jedyną polityką merge; ten kod jej nie kopiuje.
 
 - Najwyżej pięć zadań Cursora naraz. Rezerwacja `REQUESTED` bez ACK oraz `STARTED` bez ACK zajmują slot. Szóste czeka. Ten sam PR nie dostaje drugiego zlecenia, dopóki poprzednie jest w kolejce albo w slocie.
 - `FREE`, `PRESELEKCJA` i `SC-005` wchodzą przed zwykłymi zadaniami. Ich jawne zależności też, ale samo zadanie priorytetowe czeka, aż zależność zostanie ukończona. Cykl zależności jest `BLOCKED_DEPENDENCY_CYCLE` i nie zajmuje slotu.
-- Ważny review jest zapisany dla trójki HEAD, BASE i skrótu warunków kontroli (`policy_sha` oraz posortowane `required_checks`). Ta sama trójka nie tworzy drugiego review. Inny BASE, HEAD albo skrót nie odtwarza starego wyniku; próba ponowienia daje `STALE_REVIEW`.
+- Ważny review jest zapisany dla PR, identyfikatora review, HEAD, BASE i skrótu warunków kontroli (`policy_sha` oraz posortowane `required_checks`). Ta sama tożsamość nie tworzy drugiego review. Inny BASE, HEAD, PR albo skrót nie odtwarza starego wyniku; próba ponowienia daje `STALE_REVIEW`. Napis `trusted_adapter` nie wystarcza: numer PR, HEAD i BASE muszą zgadzać się ze zrzutem, a brak tych danych blokuje gotowość. Nowszy `FAIL`, `PASS_WITH_FIXES` albo odrzucenie review unieważnia zapisany PASS.
+- Callback wykonawczy nie startuje w trybie offline i nie startuje przed walidacją. `LIVE_EFFECTS_ENABLED` zostaje false.
 - Zdarzenie musi przyjść z `source: trusted_adapter`. Komentarz, także `@codex review` albo słowo `STARTED` w treści, zostaje `COMMENT_ONLY`. `STARTED` wymaga zgodnego identyfikatora agenta. `COMPLETED` wymaga ACK i nowego SHA. Brak ACK albo brak nowego commita zostawia slot zajęty. Tekst opisu PR nie jest dowodem.
 - `READY_TO_MERGE` pojawia się tylko przy niezależnym strukturalnym `PASS` Codexa, zielonym CI tego HEAD, ukończonych wskazanych zależnościach i braku aktywnych P0/P1/P2. `READY_FOR_OWNER` nie jest `READY_TO_MERGE`. Żaden z tych statusów nie ustawia `merge_authorized`. Merge i deploy są zawsze `BLOCKED_MERGE` / `BLOCKED_DEPLOY`.
 - Audyt etapu zapisuje PR, wykonawcę, zadanie, SHA, testy, review, następny etap, blokadę i identyfikator agenta z adaptera, nie z opisu PR.
