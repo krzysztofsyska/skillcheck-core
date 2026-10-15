@@ -175,7 +175,10 @@ pre-bootstrap state, unsigned/unrelated commit or incomplete comparison blocks
 execution. This bounded implementation supports up to 100 state commits after
 bootstrap. A transition is refused, before any external effect, unless the
 ledger has room for every write that transition will make: one for a state-only
-change and two for a reservation plus its completion. A full ledger stays
+change and two for a review reservation plus its completion. Starting Cursor
+reserves four: the dispatch pair plus the later failure or review-request pair.
+That hold is shared with later bindings in the same poll. The next poll counts
+the commits actually written, so the follow-up still fits. A full ledger stays
 valid and is not reset. Neither policy
 attestations nor bootstrap identity have been populated by this patch. Confirm
 the App's actual signed-commit behavior before activation.

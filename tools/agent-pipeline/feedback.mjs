@@ -198,9 +198,12 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     plan.state.operationMarker = randomUUID();
     plan.effect.marker = plan.state.operationMarker;
   }
-  // A dispatch writes the reservation and the completion. Both must fit before
-  // Cursor or a review comment is sent. A state-only transition needs one write.
-  reserveLedger?.(plan.effect ? 2 : 1);
+  // A review post writes its reservation and completion. A state-only change
+  // writes once. Starting Cursor also has to leave room for the next poll to
+  // persist a failure or the two-write review request, so that repair is not
+  // stranded at the ledger ceiling.
+  const lifecycle = plan.effect?.type === 'fix' ? 4 : plan.effect ? 2 : 1;
+  reserveLedger?.(lifecycle);
   const revision = await store.save(plan.state, saved.revision);
   if (!plan.effect) return plan.state.phase;
   // Re-read immediately before sending; a moved target consumes the reservation and stops.

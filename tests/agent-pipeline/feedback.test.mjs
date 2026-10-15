@@ -543,23 +543,32 @@ test('a later commented review does not clear an earlier changes request', () =>
   assert.equal(planFeedback(f.binding, state, f.snapshot, 6000).state.phase, 'READY_FOR_OWNER');
 });
 
-test('a dispatch is refused when the ledger cannot hold both writes', async () => {
-  assert.doesNotThrow(() => assertLedgerRoom(99, 1));
+test('a dispatch is refused when the ledger cannot hold the repair lifecycle', async () => {
+  assert.doesNotThrow(() => assertLedgerRoom(96, 4));
+  assert.throws(() => assertLedgerRoom(97, 4), /LEDGER_CAPACITY/);
   assert.throws(() => assertLedgerRoom(99, 2), /LEDGER_CAPACITY/);
   assert.throws(() => assertLedgerRoom(100, 1), /LEDGER_CAPACITY/);
   const f = fixture();
-  let used = 99;
+  let used = 98;
   let saves = 0;
-  f.args.store = { ...f.args.store, async save() { saves += 1; return saves; } };
+  const persist = f.args.store.save.bind(f.args.store);
+  f.args.store.save = async (...args) => { saves += 1; return persist(...args); };
   f.args.reserveLedger = writes => { assertLedgerRoom(used, writes); used += writes; };
   await assert.rejects(runFeedback(f.args), /LEDGER_CAPACITY/);
   assert.equal(f.calls(), 0);
   assert.equal(saves, 0);
-  used = 98;
+  used = 97;
+  await assert.rejects(runFeedback(f.args), /LEDGER_CAPACITY/);
+  used = 96;
   assert.equal(await runFeedback(f.args), 'FIXING');
   assert.equal(f.calls(), 1);
   assert.equal(used, 100);
   assert.equal(saves, 2);
+  used = 98;
+  finishRepair(f);
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(used, 100);
+  assert.equal(saves, 4);
 });
 
 test('approval already visible when the review request returns cannot authorize READY', async () => {
