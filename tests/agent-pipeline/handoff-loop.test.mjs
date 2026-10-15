@@ -637,6 +637,13 @@ test('workflow review events keep one slot per pull request and the existing rev
   assert.equal(freed.ledger.attempts['880'], 1);
   assert.equal(freed.ledger.queue.some(item => item.pr === '880'), false);
   assert.equal(freed.outcome.live_effects, 'blocked');
+  assert.equal(freed.outcome.plan.cursor_handoff.template, CURSOR_HANDOFF_TEMPLATE);
+  assert.equal(freed.outcome.plan.cursor_handoff.existing_pr, true);
+  assert.deepEqual(freed.outcome.plan.cursor_handoff.finding_refs.map(item => item.comment_id), [10]);
+  const replayQueued = apply(freed.ledger, reviewSnapshot({ pr: 880, reviewId: 9100 }));
+  assert.equal(replayQueued.outcome.status, 'DUPLICATE');
+  assert.equal(replayQueued.outcome.plan.cursor_handoff, null);
+  assert.equal(replayQueued.ledger.attempts['880'], 1);
 
   ledger = apply(emptyLedger(), reviewSnapshot()).ledger;
   assert.equal(occupiedCount(ledger), 1);
@@ -755,7 +762,69 @@ test('closing a started review keeps its slot until matching terminal proof admi
   assert.equal(proved.ledger.slots['502'].occupied, true);
   assert.equal(occupiedCount(proved.ledger), 5);
   assert.equal(proved.outcome.live_effects, 'blocked');
-  assert.equal(proved.outcome.plan.cursor_handoff, null);
+  assert.equal(proved.outcome.plan.cursor_handoff.template, CURSOR_HANDOFF_TEMPLATE);
+  assert.deepEqual(proved.outcome.plan.cursor_handoff.finding_refs.map(item => item.comment_id), [5906]);
+  const replayPromoted = apply(proved.ledger, reviewSnapshot({ pr: 506, reviewId: 5906, threads: [thread(5906, 5906, SHA.one)] }));
+  assert.equal(replayPromoted.outcome.status, 'DUPLICATE');
+  assert.equal(replayPromoted.outcome.plan.cursor_handoff, null);
+  assert.equal(replayPromoted.ledger.attempts['506'], 1);
+});
+
+test('closing an unstarted handoff retires its reservation', () => {
+  const opened = apply(emptyLedger(), reviewSnapshot({ pr: 77, reviewId: 7700, threads: [thread(7700, 7700, SHA.one)] }));
+  assert.equal(opened.ledger.slots['77'].phase, 'REQUESTED');
+  assert.equal(opened.ledger.slots['77'].ack, false);
+  const closed = apply(opened.ledger, reviewSnapshot({ pr: 77, state: 'closed', reviewId: 1, threads: [] }));
+  assert.equal(closed.outcome.status, 'IGNORED_CLOSED');
+  assert.equal(closed.ledger.slots['77'].occupied, false);
+  assert.equal(closed.ledger.slots['77'].phase, 'CANCELLED');
+  assert.equal(closed.ledger.reservations[dedupKey('77', SHA.one, 7700)].status, 'CANCELLED');
+  const reopened = apply(closed.ledger, reviewSnapshot({
+    pr: 77,
+    event: 'head_advanced',
+    headSha: SHA.two,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(reopened.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.notEqual(reopened.outcome.status, 'REVIEW_REQUESTED');
+});
+
+test('a later negative verdict revokes owner readiness', () => {
+  for (const verdict of ['FAIL', 'PASS_WITH_FIXES']) {
+    let ledger = apply(emptyLedger(), reviewSnapshot()).ledger;
+    ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+    ledger = apply(ledger, completeSlot(ledger, 126, SHA.two)).ledger;
+    const ready = apply(ledger, reviewSnapshot({
+      headSha: SHA.two,
+      reviewId: 910,
+      reviewState: 'commented',
+      threads: [],
+      verdict: 'PASS',
+      fixAuthor: { ...CURSOR_ACTOR },
+      baseSha: SHA.base,
+    }));
+    assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+    const negative = apply(ready.ledger, reviewSnapshot({
+      headSha: SHA.two,
+      reviewId: 911,
+      reviewState: 'commented',
+      threads: [],
+      verdict,
+    }));
+    assert.equal(negative.outcome.status, 'READINESS_REVOKED');
+    assert.equal(negative.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'READINESS_REVOKED');
+    const replay = apply(negative.ledger, reviewSnapshot({
+      headSha: SHA.two,
+      reviewId: 910,
+      reviewState: 'commented',
+      threads: [],
+      verdict: 'PASS',
+      fixAuthor: { ...CURSOR_ACTOR },
+      baseSha: SHA.base,
+    }));
+    assert.notEqual(replay.outcome.status, 'READY_FOR_OWNER');
+  }
 });
 
 test('five finished handoff cycles release their slots before the next review', () => {

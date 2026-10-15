@@ -513,6 +513,77 @@ test('active findings revoke a stored PASS and a later reuse cannot restore it',
   assert.equal(fresh.outcome.status, 'READY_TO_MERGE');
 });
 
+test('an earlier pass cannot restore readiness after a newer negative review', () => {
+  let ledger = emptyLedger();
+  const pass100 = apply(ledger, review({ review_id: 100 }));
+  assert.equal(pass100.outcome.status, 'READY_TO_MERGE');
+  ledger = pass100.ledger;
+  const pass200 = apply(ledger, review({ review_id: 200 }));
+  assert.equal(pass200.outcome.status, 'READY_TO_MERGE');
+  ledger = pass200.ledger;
+  const failed = apply(ledger, review({ review_id: 300, verdict: 'FAIL' }));
+  assert.equal(failed.outcome.status, 'READINESS_REVOKED');
+  ledger = failed.ledger;
+  const floor = Object.values(ledger.bound_reviews)[0].revoked_review_ids;
+  assert.deepEqual(floor, [100, 200, 300]);
+  const replay100 = apply(ledger, review({ review_id: 100 }));
+  assert.equal(replay100.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(replay100.outcome.status, 'READY_TO_MERGE');
+  const replay200 = apply(ledger, review({ review_id: 200 }));
+  assert.equal(replay200.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(replay200.outcome.status, 'READY_TO_MERGE');
+  assert.equal(Object.values(replay200.ledger.bound_reviews)[0].revoked, true);
+  const pass400 = apply(ledger, review({ review_id: 400 }));
+  assert.equal(pass400.outcome.status, 'READY_TO_MERGE');
+  const repeated400 = apply(pass400.ledger, review({ review_id: 400, ci: null }));
+  assert.equal(repeated400.outcome.status, 'REVIEW_REUSED');
+  assert.equal(Object.keys(repeated400.ledger.bound_reviews).length, 1);
+  const late100 = apply(pass400.ledger, review({ review_id: 100 }));
+  assert.equal(late100.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(late100.outcome.status, 'READY_TO_MERGE');
+  assert.equal(Object.values(late100.ledger.bound_reviews)[0].review_id, 400);
+  assert.equal(Object.values(late100.ledger.bound_reviews)[0].revoked, false);
+  const replayFail = apply(pass400.ledger, review({ review_id: 300, verdict: 'FAIL' }));
+  assert.equal(replayFail.outcome.status, 'STALE_REVIEW');
+  assert.equal(Object.values(replayFail.ledger.bound_reviews)[0].review_id, 400);
+  assert.equal(Object.values(replayFail.ledger.bound_reviews)[0].revoked, false);
+});
+
+test('a pass stays blocked while the matching cursor task is still occupied', () => {
+  let ledger = apply(emptyLedger(), request({ pr: 81, task_id: 'REVIEW-1' })).ledger;
+  assert.equal(ledger.slots['81'].phase, 'REQUESTED');
+  assert.equal(ledger.slots['81'].occupied, true);
+  const early = apply(ledger, review({ review_id: 8601 }));
+  assert.equal(early.outcome.status, 'BLOCKED_NO_COMMIT');
+  assert.notEqual(early.outcome.status, 'READY_TO_MERGE');
+  const started = apply(early.ledger, snapshot({
+    event: 'admission_started',
+    pr: 81,
+    head_sha: HEAD,
+    pull_base_sha: BASE,
+    adapter: {
+      source: 'trusted_adapter',
+      kind: 'started',
+      pr: 81,
+      task_id: 'REVIEW-1',
+      agent_id: early.ledger.slots['81'].agent_id,
+      ack: true,
+      executor: 'cursor',
+      head_sha: HEAD,
+      base_sha: BASE,
+    },
+  }));
+  assert.equal(started.outcome.status, 'STARTED');
+  const stillEarly = apply(started.ledger, review({ review_id: 8601 }));
+  assert.equal(stillEarly.outcome.status, 'BLOCKED_NO_COMMIT');
+  const completed = complete(stillEarly.ledger, 81, 'REVIEW-1');
+  assert.equal(completed.outcome.status, 'COMPLETED');
+  const ready = apply(completed.ledger, review({ review_id: 8602, head_sha: NEXT }));
+  assert.equal(ready.outcome.status, 'READY_TO_MERGE');
+  const oldHead = apply(completed.ledger, review({ review_id: 8601 }));
+  assert.notEqual(oldHead.outcome.status, 'READY_TO_MERGE');
+});
+
 test('a review cannot drop dependencies captured when the task was queued', () => {
   let ledger = apply(emptyLedger(), request({ pr: 91, task_id: 'WAIT', depends_on: ['DEP-WAIT'], priority: 'FREE' })).ledger;
   assert.equal(ledger.queue.some(item => item.task_id === 'WAIT'), true);
@@ -523,7 +594,13 @@ test('a review cannot drop dependencies captured when the task was queued', () =
 
   ledger = apply(dropped.ledger, request({ pr: 92, task_id: 'DEP-WAIT' })).ledger;
   ledger = complete(ledger, 92, 'DEP-WAIT').ledger;
-  const matched = apply(ledger, review({ pr: 91, task_id: 'WAIT', review_id: 8401, depends_on: ['DEP-WAIT'] }));
+  assert.equal(ledger.slots['91'].occupied, true);
+  const occupied = apply(ledger, review({ pr: 91, task_id: 'WAIT', review_id: 8401, depends_on: ['DEP-WAIT'] }));
+  assert.equal(occupied.outcome.status, 'BLOCKED_NO_COMMIT');
+  assert.notEqual(occupied.outcome.status, 'READY_TO_MERGE');
+  const finished = complete(occupied.ledger, 91, 'WAIT');
+  assert.equal(finished.outcome.status, 'COMPLETED');
+  const matched = apply(finished.ledger, review({ pr: 91, task_id: 'WAIT', review_id: 8402, head_sha: NEXT, depends_on: ['DEP-WAIT'] }));
   assert.equal(matched.outcome.status, 'READY_TO_MERGE');
 });
 

@@ -37,6 +37,21 @@ export function handoffIdFor(pr, sha, reviewId) {
   return `ho-${sha256(`${pr}\n${sha}\n${reviewId}`).slice(0, 24)}`;
 }
 
+export function cursorHandoffPlan(findingRefs) {
+  return {
+    mechanism: 'github_comment_at_cursor',
+    existing_pr: true,
+    template: CURSOR_HANDOFF_TEMPLATE,
+    finding_refs: [...(findingRefs ?? [])],
+  };
+}
+
+export function retireOpenReservations(ledger, pr) {
+  for (const row of Object.values(ledger?.reservations ?? {})) {
+    if (row.pr === String(pr) && OPEN_STATUSES.has(row.status)) row.status = 'CANCELLED';
+  }
+}
+
 export function normalizeGithubEvent(event, threads = []) {
   const name = event?.comment ? 'pull_request_review_comment' : (event?.review ? 'pull_request_review' : null);
   const pull = event?.pull_request ?? {};
@@ -104,6 +119,7 @@ export function step(ledger, snapshot) {
           stage: { pr: snapshot.pull.number, sha: snapshot.pull.headSha, next_stage: 'reconcile', blocker: 'RECONCILE_REQUIRED' },
         });
       }
+      return finish(next, snapshot, { ...context, cursor_handoff: release.cursor_handoff ?? null });
     }
     return finish(next, snapshot, context);
   }
@@ -129,7 +145,13 @@ function onReview(ledger, snapshot) {
   }
   const identity = validateCodex(snapshot);
   if (identity) return identity;
-  if (findings.length === 0) return { status: 'IGNORED_NO_FINDINGS' };
+  if (findings.length === 0) {
+    if (verdict === 'FAIL' || verdict === 'PASS_WITH_FIXES') {
+      const revoked = revokeReadyReservation(ledger, snapshot);
+      if (revoked) return revoked;
+    }
+    return { status: 'IGNORED_NO_FINDINGS' };
+  }
   return reserveHandoff(ledger, snapshot, findings);
 }
 
@@ -169,12 +191,7 @@ function reserveHandoff(ledger, snapshot, findings) {
     handoff_id: handoffId,
     attempt: used + 1,
     findings,
-    cursor_handoff: {
-      mechanism: 'github_comment_at_cursor',
-      existing_pr: true,
-      template: CURSOR_HANDOFF_TEMPLATE,
-      finding_refs: findings,
-    },
+    cursor_handoff: cursorHandoffPlan(findings),
   };
 }
 
@@ -239,6 +256,16 @@ function considerReady(ledger, snapshot) {
   }
   reservation.status = 'READY_FOR_OWNER';
   return { status: 'READY_FOR_OWNER', handoff_id: reservation.handoff_id };
+}
+
+function revokeReadyReservation(ledger, snapshot) {
+  const pr = String(snapshot.pull.number);
+  const head = snapshot.pull.headSha;
+  const reservation = Object.values(ledger.reservations ?? {}).find(row => row.pr === pr && row.status === 'READY_FOR_OWNER' && row.successor_sha === head);
+  if (!reservation) return null;
+  reservation.status = 'READINESS_REVOKED';
+  reservation.revoked_review_id = snapshot.review.id;
+  return { status: 'READINESS_REVOKED', handoff_id: reservation.handoff_id };
 }
 
 function pendingFeedback(ledger, snapshot, findings, attempt) {
@@ -367,12 +394,7 @@ function mergeDuplicateFindings(existing, findings, attempt) {
     handoff_id: existing.handoff_id,
     attempt,
     findings: existing.finding_refs,
-    cursor_handoff: {
-      mechanism: 'github_comment_at_cursor',
-      existing_pr: true,
-      template: CURSOR_HANDOFF_TEMPLATE,
-      finding_refs: existing.finding_refs,
-    },
+    cursor_handoff: cursorHandoffPlan(existing.finding_refs),
   };
 }
 
