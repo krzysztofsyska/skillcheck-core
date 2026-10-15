@@ -85,6 +85,7 @@ function apply(ledger, snapshot) {
   assert.equal(result.outcome.plan.merge, null);
   assert.equal(result.outcome.plan.deploy, null);
   assert.equal(result.outcome.plan.owner_acceptance, false);
+  assert.equal(result.outcome.merge_authorized, false);
   assert.equal(JSON.stringify(result).includes(SENTINEL), false);
   return result;
 }

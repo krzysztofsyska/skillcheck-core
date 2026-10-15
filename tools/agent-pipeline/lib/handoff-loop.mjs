@@ -1,4 +1,5 @@
 import { sha256 } from './canonical.mjs';
+import { admit, dispatchAdmission as dispatchThroughTransport, ensureAdmission } from './handoff-admission.mjs';
 
 /**
  * Inactive Codex review → Cursor handoff → CI → independent Codex review loop.
@@ -21,10 +22,11 @@ export const CURSOR_HANDOFF_TEMPLATE = 'Update the existing pull request on its 
 
 const OPEN_STATUSES = new Set(['HANDOFF_PLANNED', 'WAITING_CI', 'CI_FAILED', 'WAITING_REREVIEW']);
 const REVIEW_EVENTS = new Set(['pull_request_review', 'pull_request_review_comment']);
+const ADMISSION_EVENTS = new Set(['admission_request', 'admission_started', 'admission_completed', 'admission_comment', 'admission_review', 'admission_merge', 'admission_deploy']);
 const SAFE_PATH = /^[A-Za-z0-9_./@+-]+$/;
 
 export function emptyLedger() {
-  return { schema_version: 1, attempts: {}, reservations: {}, audits: [] };
+  return { schema_version: 1, attempts: {}, reservations: {}, audits: [], slots: {}, queue: [], bound_reviews: {}, completed_tasks: {} };
 }
 
 export function dedupKey(pr, sha, reviewId) {
@@ -64,9 +66,17 @@ export function normalizeGithubEvent(event, threads = []) {
   };
 }
 
+export async function dispatchAdmission(ledger, snapshot, operation) {
+  const next = structuredClone(ledger ?? emptyLedger());
+  ensureAdmission(next);
+  const result = await dispatchThroughTransport(next, snapshot, operation);
+  return finish(result.ledger, snapshot, result.partial);
+}
+
 export function step(ledger, snapshot) {
   const next = structuredClone(ledger ?? emptyLedger());
   if (!next.attempts || !next.reservations || !next.audits) return finish(emptyLedger(), snapshot ?? {}, { status: 'BLOCKED_INTEGRATION' });
+  ensureAdmission(next);
   if (snapshot?.error) {
     return finish(next, snapshot, { status: 'BLOCKED_INTEGRATION', http_status: snapshot.error.status ?? null });
   }
@@ -74,6 +84,7 @@ export function step(ledger, snapshot) {
   if (context) return finish(next, snapshot, context);
 
   const eventName = snapshot.event?.name;
+  if (ADMISSION_EVENTS.has(eventName)) return finish(next, snapshot, admit(next, snapshot));
   if (REVIEW_EVENTS.has(eventName)) return finish(next, snapshot, onReview(next, snapshot));
   if (eventName === 'head_advanced' || eventName === 'ci_completed') return finish(next, snapshot, observeCi(next, snapshot));
   return finish(next, snapshot, { status: 'IGNORED_EVENT' });
@@ -327,16 +338,26 @@ function finish(ledger, snapshot, partial) {
     },
     executed: [],
     live_effects: 'blocked',
+    merge_authorized: false,
+    agent_id: partial.agent_id ?? partial.stage?.agent_id ?? null,
+    stage: partial.stage ?? null,
   };
   const entry = {
     status: outcome.status,
-    pr: snapshot?.pull?.number ?? null,
-    sha: snapshot?.pull?.headSha ?? null,
+    pr: partial.stage?.pr ?? snapshot?.pull?.number ?? null,
+    sha: partial.stage?.sha ?? snapshot?.pull?.headSha ?? null,
     review_id: snapshot?.review?.id ?? null,
     comment_ids: outcome.findings.map(finding => finding.comment_id),
     ci: snapshot?.ci ? { sha: snapshot.ci.sha, conclusion: snapshot.ci.conclusion } : null,
     handoff_id: outcome.handoff_id,
     http_status: outcome.http_status,
+    executor: partial.stage?.executor ?? null,
+    task: partial.stage?.task ?? null,
+    tests: partial.stage?.tests ?? null,
+    review: partial.stage?.review ?? null,
+    next_stage: partial.stage?.next_stage ?? null,
+    blocker: partial.stage?.blocker ?? null,
+    agent_id: outcome.agent_id,
   };
   const key = sha256(entry);
   if (!ledger.audits.some(row => row.key === key)) {
