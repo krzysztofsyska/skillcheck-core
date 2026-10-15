@@ -4,7 +4,7 @@ import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.m
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { planFeedback, runFeedback, fixPrompt, accountLedger, ledgerHold, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
-import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
+import { main, feedbackStore, loadFeedbackHolds, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
 const bot = { ...CODEX, type: 'Bot' };
@@ -631,6 +631,78 @@ test('a dispatch is refused when the ledger cannot hold the repair lifecycle', a
   assert.equal(commits, readySaves);
   await assert.rejects(runFeedback(second.args), /LEDGER_CAPACITY/);
   assert.equal(second.calls(), 0);
+});
+
+test('a replacement review keeps one terminal slot', async () => {
+  const f = fixture();
+  await runFeedback(f.args);
+  finishRepair(f);
+  await runFeedback(f.args);
+  f.snapshot.comments = [];
+  f.snapshot.reviews = [{ id: 300, user: bot, commit_id: C, state: 'APPROVED', submitted_at: new Date(5_000).toISOString() }];
+  f.args.now = 5_000;
+  assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+  const D = 'd'.repeat(40);
+  f.snapshot.pull.base.sha = D;
+  let posted = false;
+  f.args.postReview = async () => { posted = true; return { id: 201 }; };
+  const room = { used: 98 };
+  f.args.reserveLedger = (writes, held = 0) => { room.used = accountLedger(room.used, writes, held); };
+  await assert.rejects(runFeedback(f.args), /LEDGER_CAPACITY/);
+  assert.equal(posted, false);
+  assert.equal(f.state().phase, 'READY_FOR_OWNER');
+  room.used = 97;
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(posted, true);
+  assert.equal(f.state().ledgerHold, 1);
+  assert.equal(room.used, 100);
+});
+
+test('replacing a post-repair request keeps its terminal hold', async () => {
+  const f = fixture();
+  await runFeedback(f.args);
+  finishRepair(f);
+  await runFeedback(f.args);
+  assert.equal(f.state().ledgerHold, 1);
+  f.snapshot.pull.base.sha = 'd'.repeat(40);
+  const room = { used: 98 };
+  f.args.reserveLedger = (writes, held = 0) => { room.used = accountLedger(room.used, writes, held); };
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(f.state().ledgerHold, 1);
+  assert.equal(room.used, 100);
+});
+
+test('a failed terminal save does not release a repair hold', async () => {
+  const room = { used: 95 };
+  const reserve = (writes, held = 0) => { room.used = accountLedger(room.used, writes, held); };
+  const f = fixture();
+  f.args.reserveLedger = reserve;
+  assert.equal(await runFeedback(f.args), 'FIXING');
+  assert.equal(room.used, 100);
+  assert.equal(f.state().ledgerHold, 3);
+  f.args.store.save = async () => { throw new Error('cas'); };
+  f.args.now = f.state().startedAt + 2 * 60 * 60 * 1000 + 1;
+  await assert.rejects(runFeedback(f.args), /cas/);
+  assert.equal(f.state().phase, 'FIXING');
+  assert.equal(f.state().ledgerHold, 3);
+  assert.equal(room.used, 100);
+  assert.throws(() => accountLedger(room.used, 1, 0), /LEDGER_CAPACITY/);
+});
+
+test('a removed binding with a durable hold blocks the poll', async () => {
+  const encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
+  const github = { request: async path => {
+    if (path.endsWith('/contents/feedback?ref=agent-feedback-state')) {
+      return [{ name: '49.json', type: 'file' }, { name: '88.json', type: 'file' }];
+    }
+    if (path.includes('/feedback/49.json')) return { content: encode({ ledgerHold: 1 }), sha: A };
+    if (path.includes('/feedback/88.json')) return { content: encode({ ledgerHold: 2 }), sha: B };
+    throw new Error(path);
+  } };
+  await assert.rejects(loadFeedbackHolds(github, new Set([49])), /LEDGER_HOLD_UNBOUND/);
+  assert.equal(await loadFeedbackHolds(github, new Set([49, 88])), 3);
+  const missing = { request: async () => { const error = new Error('missing'); error.status = 404; throw error; } };
+  assert.equal(await loadFeedbackHolds(missing, new Set([49])), 0);
 });
 
 test('approval already visible when the review request returns cannot authorize READY', async () => {

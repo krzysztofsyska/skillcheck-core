@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createGitHubClient, createInstallationToken, decodeGithubContent } from './lib/github.mjs';
 import { createCursorClient } from './lib/cursor.mjs';
 import { evaluatePreflight } from './lib/merge.mjs';
-import { runFeedback, validateBinding, accountLedger, ledgerHold, LEDGER_LIMIT, REPAIR_LEDGER, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
+import { runFeedback, validateBinding, accountLedger, ledgerHold, LEDGER_LIMIT, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
 import { withRulesetEvidence, verifyStateBootstrap } from './lib/ruleset-evidence.mjs';
 
 // Actions read is required for environment and deployment-branch policy reads.
@@ -14,6 +14,30 @@ export const FEEDBACK_TOKEN_PERMISSIONS = {
 
 // Reuse the existing controller's API clients and protection preflight, but keep
 // feedback records outside its task projection. No second writer for a managed PR.
+// Holds live on the state branch, including a binding removed from config while
+// FIXING or waiting. A nonzero hold outside the current config stops the poll.
+export async function loadFeedbackHolds(github, configuredPrs) {
+  let listing;
+  try {
+    listing = await github.request(`/repos/${REPOSITORY}/contents/feedback?ref=agent-feedback-state`);
+  } catch (error) {
+    if (error.status === 404) return 0;
+    throw error;
+  }
+  if (!Array.isArray(listing)) throw new Error('LEDGER_HOLD_UNBOUND');
+  let held = 0;
+  for (const entry of listing) {
+    const match = /^(\d+)\.json$/.exec(entry?.name ?? '');
+    if (!match || entry.type !== 'file') throw new Error('LEDGER_HOLD_UNBOUND');
+    const pr = Number(match[1]);
+    const file = await github.request(`/repos/${REPOSITORY}/contents/feedback/${entry.name}?ref=agent-feedback-state`);
+    const hold = ledgerHold(JSON.parse(decodeGithubContent(file)));
+    if (hold > 0 && !configuredPrs.has(pr)) throw new Error('LEDGER_HOLD_UNBOUND');
+    held += hold;
+  }
+  return held;
+}
+
 export function feedbackStore(github, pr) {
   const path = `/repos/${REPOSITORY}/contents/feedback/${pr}.json`;
   return {
@@ -160,16 +184,11 @@ export async function main(env = process.env) {
   // Bootstrap this dedicated state branch with no force/delete and controller-only
   // writers before activation. Never silently recreate a deleted journal.
   const ledger = await verifyStateBootstrap(github, policy);
-  // Commit count plus every binding's unwritten repair hold. A later poll sees
-  // the same promise, so another binding cannot spend a repair's outcome slots.
-  const room = { used: ledger.commits };
+  // Commit count plus every durable feedback record. A later poll sees the same
+  // promise, including a binding removed from config before its hold reached zero.
+  const room = { used: ledger.commits + await loadFeedbackHolds(github, new Set(config.bindings.map(binding => binding.pr))) };
   const stores = new Map();
-  for (const binding of config.bindings) {
-    const store = feedbackStore(github, binding.pr);
-    stores.set(binding.pr, store);
-    try { room.used += ledgerHold((await store.read()).value); }
-    catch { room.used += REPAIR_LEDGER; }
-  }
+  for (const binding of config.bindings) stores.set(binding.pr, feedbackStore(github, binding.pr));
   function reserveLedger(writes, held = 0) {
     room.used = accountLedger(room.used, writes, held, LEDGER_LIMIT);
   }

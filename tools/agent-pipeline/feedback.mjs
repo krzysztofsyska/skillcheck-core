@@ -225,17 +225,20 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     plan.effect.marker = plan.state.operationMarker;
   }
   // The unwritten remainder stays on the record and is counted on later polls.
-  // A post-repair review keeps the terminal slot. READY or a timeout spends it.
-  const budget = plan.effect?.type === 'fix' ? REPAIR_LEDGER
-    : plan.effect?.type === 'review' ? 3
-    : plan.effect ? 2 : 1;
-  const afterSave = plan.effect?.type === 'fix' ? 4
-    : plan.effect?.type === 'review' ? 2
-    : plan.effect ? 1 : 0;
-  reserveLedger?.(budget, held);
+  // Every review request, including a replacement for a moved head or base, keeps
+  // one slot for READY or the review timeout. A release is applied only after the
+  // state write that spends the hold has committed.
+  const reviewRequest = plan.effect?.type === 'review' || plan.effect?.type === 'request-review';
+  const budget = plan.effect?.type === 'fix' ? REPAIR_LEDGER : reviewRequest ? 3 : 1;
+  const afterSave = plan.effect?.type === 'fix' ? 4 : reviewRequest ? 2 : 0;
+  const releasing = budget < held;
+  if (!releasing) reserveLedger?.(budget, held);
   plan.state = applyHold(plan.state, afterSave);
   const revision = await store.save(plan.state, saved.revision);
-  if (!plan.effect) return plan.state.phase;
+  if (!plan.effect) {
+    if (releasing) reserveLedger?.(budget, held);
+    return plan.state.phase;
+  }
   // Re-read immediately before sending; a moved target consumes the reservation and stops.
   const fresh = await readSnapshot(plan.state);
   validateSnapshot(binding, fresh);
@@ -262,11 +265,12 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     completed = applyHold({ ...plan.state, phase: 'FIXING', runId: run.id }, 3);
   } else if (plan.effect.type === 'request-review') {
     if (findings(fresh).length) fail('FINDINGS_STALE');
-    completed = applyHold(await completeReviewRequest(), 0);
+    completed = applyHold(await completeReviewRequest(), 1);
   } else {
     if (!verifyRepair(binding, plan.state, fresh)) fail('CURSOR_PROVENANCE_CHANGED');
     completed = applyHold(await completeReviewRequest(), 1);
   }
   await store.save(completed, revision);
+  if (releasing) reserveLedger?.(budget, held);
   return completed.phase;
 }
