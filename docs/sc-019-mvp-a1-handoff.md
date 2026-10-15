@@ -1,7 +1,7 @@
 # SC-019-MVP A1 — SAFE BILLING CORE PROTOTYPE
 
 TASK: #91 / SC-019-MVP
-STATUS: FIXING — Codex P1 on the install-time unbilled-analysis race repaired in the prototype; independent repeat review still pending
+STATUS: FIXING — Codex P1s on the 3437918 lock rewrite and billing UI tests repaired in the prototype; independent repeat review still pending
 BASE: integration
 SCOPE: FREE (5 analyses) + PRESELEKCJA prepaid (60 analyses)
 PRICING: 299 PLN is only a proposed initial commercial price; do NOT charge or publish it as approved.
@@ -84,6 +84,16 @@ No file was added under `supabase/migrations`. Payments and production activatio
 ## Codex finding on the unbilled-analysis install race
 
 The preexisting-row check used to read `screening_analysis_versions` without a table lock. An open insert could stay invisible, commit while trigger creation waited, and leave a pending analysis with no reservation. Installation now takes `SHARE ROW EXCLUSIVE` before that check and holds it through trigger creation, then checks again. A PostgreSQL 16 test holds an uncommitted pending insert, waits until the install lock is blocked, commits the insert, and requires the install to abort with `sc19_preexisting_unbilled_analysis` without leaving the billing tables behind.
+
+No file was added under `supabase/migrations`. Payments and production activation stay off.
+
+## Codex findings on 3437918
+
+The review of `3437918` was not a PASS. Three P1 notes were still present:
+
+- The worker-function rewrite returned early unless `private.erasure_lock_candidate` existed. On SC-004/005/006 without SC-010, claim and the finalizers kept the attempt-before-analysis order while the stale trigger already holds the analysis. The rewrite now installs without that function and skips only the candidate call. A PostgreSQL 16 test renames the function away, disables the erasure triggers, and races claim against stale cancellation.
+- Completion took the application advisory lock before `erasure_lock_candidate`. Start and retry hold the candidate and then wait for that advisory lock, and the candidate lock uses `NOWAIT`, so an overlap returned `PT409` while completion held the advisory lock. Completion now locks the analysis row, then the candidate, then the advisory lock. The analysis row stays first because a stale update already holds it before its own `NOWAIT` candidate guard. A PostgreSQL 16 test holds the candidate and blocks on the advisory lock, requires the finalizer to return `PT409` without making that waiter progress, then completes or fails once the locks are released. It also races start against completion and retry against failure.
+- The billing page and `activateSc19Free` had no UI or HTTP test. `tests/sc-019-billing-ui.test.mjs` covers the release flag, owner and member access, NIP submission, and the RPC error mapping.
 
 No file was added under `supabase/migrations`. Payments and production activation stay off.
 

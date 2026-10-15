@@ -328,16 +328,23 @@ end
 $sc19_preexisting_recheck$;
 
 -- Claim, completion and failure must take the same row locks. A stale update
--- already holds the analysis row, then the company, then the attempt. Claim
--- follows that order. Completion and failure used to lock the attempt first,
--- which deadlocks a reclaim of an expired lease. The minimal billing fixture
--- has none of these functions, so this step does nothing there.
+-- already holds the analysis row before its erasure guard locks the candidate,
+-- then this rewrite locks the company and the attempt. Completion and failure
+-- used to lock the attempt first, which deadlocks a reclaim of an expired
+-- lease. The candidate lock, when SC-010 installed it, is taken immediately
+-- after the analysis row and before the advisory lock. Taking it earlier makes
+-- the stale update fail with PT409, because that update already holds the
+-- analysis row and then uses NOWAIT. Taking it after the advisory lock makes
+-- start or retry, which hold the candidate and wait for the advisory lock,
+-- fail the finalizer the same way. A database that has the worker functions
+-- but not erasure_lock_candidate still receives this rewrite; only the
+-- candidate call is skipped. The minimal billing fixture has none of these
+-- functions, so this step does nothing there.
 do $sc19_claim_lock$
 begin
   if to_regprocedure('public.claim_screening_attempt(uuid)') is null
      or to_regprocedure('public.complete_screening_analysis(uuid,text,text,text,jsonb,text,text,integer,integer,integer,numeric,text)') is null
-     or to_regprocedure('public.fail_screening_attempt(uuid,text,text,text,text,text,text,integer,integer,integer,numeric,text)') is null
-     or to_regprocedure('private.erasure_lock_candidate(uuid)') is null then
+     or to_regprocedure('public.fail_screening_attempt(uuid,text,text,text,text,text,text,integer,integer,integer,numeric,text)') is null then
     return;
   end if;
 create or replace function public.claim_screening_attempt(target_attempt uuid)
@@ -367,9 +374,10 @@ declare
   target_company uuid;
   target_candidate uuid;
 begin
-  -- Reviewed claim body, with the lock order changed to match a stale
-  -- cancellation: analysis row, company, attempt, then candidate. Locking the
-  -- attempt first deadlocks with sc19_reconcile_analysis.
+  -- Reviewed claim body. The analysis row, the company, and then the attempt
+  -- match a stale cancellation. The candidate lock follows the analysis row:
+  -- the stale update already holds that row before its NOWAIT candidate guard.
+  -- Locking the attempt first deadlocks with sc19_reconcile_analysis.
   -- The return column analysis_id is in scope, so this lookup is dynamic SQL.
   execute $claim_locate$
     select t.analysis_id, t.company_id, a.candidate_id
@@ -388,6 +396,9 @@ begin
   select * into analysis from public.screening_analysis_versions
     where id = target_analysis and company_id = target_company for update;
   if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  if to_regprocedure('private.erasure_lock_candidate(uuid)') is not null then
+    perform private.erasure_lock_candidate(target_candidate);
+  end if;
   perform private.sc19_lock_company(target_company);
   select * into attempt from public.screening_analysis_attempts
     where id = target_attempt for update;
@@ -396,7 +407,6 @@ begin
      or attempt.company_id is distinct from target_company then
     raise exception 'Attempt unavailable' using errcode = '42501';
   end if;
-  perform private.erasure_lock_candidate(target_candidate);
   if attempt.status <> 'pending'
     and not (attempt.status = 'processing' and attempt.lease_expires_at <= clock_timestamp())
     then raise exception 'Attempt is not claimable' using errcode = '55000'; end if;
@@ -498,9 +508,10 @@ begin
     'cost_currency', new_cost_currency
   )::text);
 
-  -- Advisory lock stays before row locks, matching start/review/retry.
-  -- Row locks then match claim and stale cancellation: analysis, company,
-  -- attempt, candidate.
+  -- The analysis row comes first, matching a stale update that already holds
+  -- it before the candidate guard. The candidate lock comes before the
+  -- advisory lock, so a start or retry waiting on that advisory lock cannot
+  -- make this NOWAIT fail while this transaction holds the advisory lock.
   select attempts.analysis_id, attempts.company_id, versions.application_id, applications.candidate_id
     into target_analysis, target_company, target_application, target_candidate
   from public.screening_analysis_attempts attempts
@@ -510,10 +521,13 @@ begin
     on applications.id = versions.application_id and applications.company_id = versions.company_id
   where attempts.id = target_attempt;
   if not found then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
-  perform pg_advisory_xact_lock(hashtextextended('screening:' || target_application::text, 0));
   select * into analysis from public.screening_analysis_versions
     where id = target_analysis and company_id = target_company for update;
   if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  if to_regprocedure('private.erasure_lock_candidate(uuid)') is not null then
+    perform private.erasure_lock_candidate(target_candidate);
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('screening:' || target_application::text, 0));
   perform private.sc19_lock_company(target_company);
   select * into attempt from public.screening_analysis_attempts
     where id = target_attempt for update;
@@ -522,7 +536,6 @@ begin
      or attempt.company_id is distinct from target_company then
     raise exception 'Attempt unavailable' using errcode = '42501';
   end if;
-  perform private.erasure_lock_candidate(target_candidate);
 
   if attempt.status = 'completed' then
     if attempt.lease_token_hash = private.screening_hash(provided_lease_token)
@@ -687,7 +700,8 @@ begin
     'cost_currency', new_cost_currency
   )::text);
 
-  -- Same row-lock order as claim and completion: analysis, company, attempt, candidate.
+  -- Same row locks as claim: analysis, candidate when SC-010 is present,
+  -- company, then attempt. Failure takes no advisory lock.
   select attempts.analysis_id, attempts.company_id, applications.candidate_id
     into target_analysis, target_company, target_candidate
   from public.screening_analysis_attempts attempts
@@ -700,6 +714,9 @@ begin
   select * into analysis from public.screening_analysis_versions
     where id = target_analysis and company_id = target_company for update;
   if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  if to_regprocedure('private.erasure_lock_candidate(uuid)') is not null then
+    perform private.erasure_lock_candidate(target_candidate);
+  end if;
   perform private.sc19_lock_company(target_company);
   select * into attempt from public.screening_analysis_attempts
     where id = target_attempt for update;
@@ -708,7 +725,6 @@ begin
      or attempt.company_id is distinct from target_company then
     raise exception 'Attempt unavailable' using errcode = '42501';
   end if;
-  perform private.erasure_lock_candidate(target_candidate);
   if attempt.status = 'failed' then
     if attempt.lease_token_hash = private.screening_hash(provided_lease_token)
       and attempt.finalization_hash = computed_finalization_hash
