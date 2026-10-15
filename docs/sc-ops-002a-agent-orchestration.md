@@ -87,18 +87,20 @@ Review JSON: schema_version, request_id, repository_id, pr_number, head_sha, bas
 
 CI jest przypisane do H/B i zaufanego workflow. Dopuszczalne wyłącznie success; cancelled, skipped, neutral, timeout, brak joba i oczekiwanie nie są PASS. Obowiązkowy zestaw obejmuje dotychczasowy verify oraz testy kontrolera. Kontroler weryfikuje identyfikator workflow/run, nie samą nazwę checka. Dowolny PR może próbować nadać identyczną nazwę checkowi GitHub Actions.
 
-Każda zmiana head lub base, kontraktu albo policy_sha unieważnia review, CI i przygotowaną zgodę. Stare wyniki mogą zostać w historii, ale nie odblokowują kolejnego commita. Dla task PR aktualizacja integration wymaga aktualizacji gałęzi, nowego CI/review i nowego przedstawienia zakresu, jeżeli poprzednia zgoda straciła aktualność.
+Każda zmiana head lub base, kontraktu albo policy_sha unieważnia review, CI i przygotowaną zgodę produkcyjną. Stare wyniki mogą zostać w historii, ale nie odblokowują kolejnego commita. Dla task PR aktualizacja integration wymaga aktualizacji gałęzi oraz nowego CI i review. Brak aktualnych dowodów zatrzymuje scalenie.
 
-## 7. Dwie zgody właściciela
+## 7. Zgoda produkcyjna i preflight
 
-Nie przyjmujemy jako zgody komentarza bota, pola PR, reakcji, label ani samego author_association. Narzędzia koordynatora mogą publikować pod kontem użytkownika, dlatego nawet komentarz z loginem właściciela nie powinien samodzielnie otwierać produkcji.
+Zwykły PR zadania nie czeka na zgodę właściciela. Do `integration` scala się po bieżącym CI PASS, niezależnym review PASS, fail-closed preflight, ochronie gałęzi i blokadzie zapisu. Check statusu to `sc-agent/integration-ready`.
 
-Wybrana zgoda to natywne zatwierdzenie oczekującego joba środowiska GitHub. Dwa stałe środowiska: owner-acceptance i production-approval. Jedyny required reviewer: krzysztofsyska, ID 222297538 (ID odczytane z GitHub; ponownie potwierdzić przy konfiguracji). Zakaz obejścia przez admina; prevent self-review. Workflow proszący o zgodę uruchamia kontroler jako GitHub App, aby właściciel mógł go zatwierdzić. Agentom nie udostępniać tokenów właściciela zdolnych do zatwierdzania tych jobów. Jeżeli istniejąca integracja dysponuje takim zakresem, ograniczyć go przed aktywacją albo nie deklarować odporności na zatwierdzenie przez agenta.
+Osobna zgoda właściciela zostaje dla pierwszej aktywacji kontrolera i włączenia flag LIVE, dla sekretów i płatnych usług oraz dla promocji i produkcji. Nie przyjmujemy jako tej zgody komentarza bota, pola PR, reakcji, label ani samego author_association. Narzędzia koordynatora mogą publikować pod kontem użytkownika, dlatego nawet komentarz z loginem właściciela nie otwiera produkcji.
 
-Prośba ma unikalny request_id i niezmienny digest kanonicznego JSON:
+Środowiska zostają dwa: `owner-acceptance` jest sprawdzane przez preflight i nie jest checkiem statusu `integration`; `production-approval` jest zgodą przed `main`. Jedyny required reviewer: krzysztofsyska, ID 222297538 (ID odczytane z GitHub; ponownie potwierdzić przy konfiguracji). Zakaz obejścia przez admina; prevent self-review. Workflow proszący o zgodę produkcyjną uruchamia kontroler jako GitHub App, aby właściciel mógł go zatwierdzić. Agentom nie udostępniać tokenów właściciela zdolnych do zatwierdzania tych jobów. Jeżeli istniejąca integracja dysponuje takim zakresem, ograniczyć go przed aktywacją albo nie deklarować odporności na zatwierdzenie przez agenta.
 
-- A: repo ID, task, PR, target integration, head H, base B, contract_hash, policy_sha, review i CI run IDs/attempts/digests, zakres plików, operacja merge.
-- B: promotion PR, target main, integration H, main B, policy_sha, zbiór tasków i ich zgód A, manifest wydania, jego hash, lista dokładnych operacji i środowisk, dowody CI/review, rollback i smoke tests. Lista sekretów może wskazywać nazwy, nigdy wartości.
+Zgoda produkcyjna ma unikalny request_id i niezmienny digest kanonicznego JSON:
+
+- integracja: zamrożone dowody CI i review dla repo ID, tasku, PR, head H, base B, contract_hash, policy_sha i zakresu plików; to nie jest kliknięcie właściciela,
+- B: promotion PR, target main, integration H, main B, policy_sha, zbiór tasków i ich dowodów scalenia, manifest wydania, jego hash, lista dokładnych operacji i środowisk, dowody CI/review, rollback i smoke tests. Lista sekretów może wskazywać nazwy, nigdy wartości.
 
 Podsumowanie i link do niezmiennego manifestu muszą być dostępne przed kliknięciem. Job zgody nie wdraża niczego i nie scala; po zatwierdzeniu emituje dowód wykonania dla request_id. Kontroler potwierdza konfigurację required reviewers i brak bypass, właściwy workflow/ref/run attempt i oczekiwane środowisko. Autora ustala przez GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals: state=approved, user.id=222297538, user.type=User oraz zgodne environments[].id/name [S9]. Brak wpisu, odrzucenie, nieznane środowisko lub niejednoznaczność oznacza odmowę. Treść comment jest wyłącznie opisem. Odczyt tego endpointu dla istniejącego run 37468845703 zwrócił []; potwierdza dostęp do odczytu, nie test rzeczywistej zgody.
 
@@ -118,7 +120,7 @@ Wymagania konfiguracji przed włączeniem:
 
 W MVP jeden globalny szereg operacji merge. Podczas końcowego sprawdzenia i wywołania merge kontroler trzyma trwałą blokadę serializacji; żaden inny proces kontrolera nie zmienia main/integration. REST merge wysyła oczekiwany head SHA. Sam ten parametr nie chroni base — ochronę daje wyłączność zapisów, globalna kolejność i reguły strict. Brak potwierdzonej wyłączności wyłącza auto-merge.
 
-Kontroler tuż przed merge ponownie sprawdza H/B, aktualne dowody, digest zgody, reguły ochrony i obie flagi. Po timeout odczytuje merged/merge_commit_sha, nigdy nie zakłada sukcesu ani nie wykonuje drugiego merge na zmienionym PR. Każda awaria pomiędzy zgodą a merge jest odtwarzana z dziennika, nie z tekstu raportu.
+Kontroler tuż przed scaleniem do integration ponownie sprawdza H/B, aktualne dowody CI i review, reguły ochrony i obie flagi. Przed promocją dodatkowo sprawdza digest zgody B. Po timeout odczytuje merged/merge_commit_sha, nigdy nie zakłada sukcesu ani nie wykonuje drugiego merge na zmienionym PR. Każda awaria pomiędzy zgodą produkcyjną a merge jest odtwarzana z dziennika, nie z tekstu raportu.
 
 ## 9. Produkcja i Vercel
 
@@ -172,7 +174,7 @@ Konfiguracja zewnętrzna wymagana od właściciela:
 | --- | --- |
 | GitHub App | Instalacja tylko w skillcheck-core; poświadczenia niedostępne Builderowi. Contents, PR, Issues, Checks i Actions: write dla kontrolowanych efektów. Administration: read wyłącznie do bieżącego preflight ochrony (nigdy write); odczyt środowisk zgód zgodnie z wymaganiami API. Bez praw zatwierdzania jako właściciel. Uprawnienia potrzebne do CI/modelu są osobnymi, węższymi tokenami. |
 | agent-control | Dostęp tylko z main; klucze kontrolera i dostawców tylko w zaufanych jobach. Brak sekretów w repo/PR/artifactach. |
-| Dwie zgody | Required reviewer = właściciel; brak self-review i bypass; brak uprawnień agentów do zatwierdzenia. |
+| Środowiska zgód | `owner-acceptance` zostaje w preflightcie i nie jest checkiem integration; `production-approval` jest zgodą właściciela przed main. Required reviewer = właściciel; brak self-review i bypass; brak uprawnień agentów do zatwierdzenia. |
 | Gałęzie | Zabezpieczenia z sekcji 8, kontrola rzeczywistego dostępu Cursor/GitHub Apps. |
 | Cursor API | Klucz i zatwierdzony budżet; kontrakt v1 sprawdzony na koncie przed aktywacją. |
 | Codex Action | Klucz projektu OpenAI, model z dozwolonej listy i limit wydatków; nie zakładać dostępności z samej subskrypcji. |

@@ -402,6 +402,48 @@ test('entry guides keep automatic integration and separate first-activation and 
   assert.doesNotMatch(pipeline, /zgoda A, zgoda B i merge/);
 });
 
+test('operative entries do not require routine owner acceptance before integration', () => {
+  const entries = [
+    '.github/ISSUE_TEMPLATE/agent-task.yml',
+    'docs/DEFINITION_OF_DONE.md',
+    'docs/AGENT_WORKFLOW.md',
+    'docs/AGENT_PIPELINE.md',
+    'docs/sc-ops-002a-agent-orchestration.md',
+    'docs/sc-ops-002c-bootstrap-runbook.md',
+    'AGENTS.md',
+    '.cursor/rules/skillcheck-agent-pipeline.mdc',
+  ];
+  const stale = [
+    /Owner acceptance is required before integration merge/i,
+    /OWNER ACCEPTANCE zapisane przed merge tasku do `integration`/,
+    /zgoda na scalenie gotowego tasku do `integration`/,
+    /pyta właściciela dopiero przy OWNER ACCEPTANCE/,
+    /## 7\. Dwie zgody właściciela/,
+    /otwiera prośbę o zgodę A/,
+    /merge tylko po zgodzie A/,
+    /merge tylko po A/,
+    /zatrzymanie przed zgodą A/,
+    /zatrzymanie przed A/,
+  ];
+  for (const file of entries) {
+    const text = readFileSync(file, 'utf8');
+    for (const pattern of stale) assert.doesNotMatch(text, pattern, file);
+    assert.match(text, /production|PRODUCTION APPROVAL|production-approval|zgodę B|zgody B/i, file);
+  }
+  const form = readFileSync('.github/ISSUE_TEMPLATE/agent-task.yml', 'utf8');
+  assert.match(form, /CI/);
+  assert.match(form, /review/i);
+  assert.match(form, /integration merge/i);
+  assert.match(form, /Production approval is required before production promotion\/deploy/);
+  assert.match(form, /activation|preflight/i);
+  const done = readFileSync('docs/DEFINITION_OF_DONE.md', 'utf8');
+  assert.match(done, /PRODUCTION APPROVAL/);
+  assert.match(done, /bez rutynowej zgody|automatyczn|CI PASS/i);
+  assert.match(done, /bezpośredni merge task branch do `main` jest zabroniony/);
+  assert.match(readFileSync('docs/sc-ops-002c-bootstrap-runbook.md', 'utf8'), /OWNER ACCEPTANCE i jest na `integration`/);
+  assert.match(readFileSync('docs/sc-ops-002a-agent-orchestration.md', 'utf8'), /Zgoda A nigdy nie spełnia B/);
+});
+
 function acceptedRecord() {
   const record = taskRecord({
     task_id: 'SC-X', state: 'ACCEPTED', issue_number: 7,
