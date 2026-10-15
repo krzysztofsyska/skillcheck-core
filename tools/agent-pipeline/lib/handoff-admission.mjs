@@ -490,6 +490,7 @@ function markCancelled(ledger, snapshot, adapter) {
   }
   slot.occupied = false;
   slot.phase = 'CANCELLED';
+  retireOpenReservations(ledger, slot.pr);
   const promotion = promote(ledger);
   return stagePartial(snapshot, adapter, { status: 'CANCELLED', next_stage: 'wait_for_slot', blocker: null, agent_id: slot.agent_id, cursor_handoff: promotion.cursor_handoff, admitted: promotion.admitted });
 }
@@ -680,15 +681,7 @@ function priorityRank(task, ledger) {
 
 function requestSupersedesCompletion(task, done) {
   if (!done) return true;
-  const nextRevision = taskRevisionOf(task);
-  const doneRevision = taskRevisionOf(done);
-  if (nextRevision > doneRevision) return true;
-  if (nextRevision < doneRevision) return false;
-  const requestedHead = done.requested_head_sha ?? null;
-  const requestedBase = done.requested_base_sha ?? done.base_sha ?? null;
-  if (requestedHead && task.head_sha && task.head_sha !== requestedHead) return true;
-  if (requestedBase && task.base_sha && task.base_sha !== requestedBase) return true;
-  return false;
+  return taskRevisionOf(task) > taskRevisionOf(done);
 }
 
 function completionSupersedes(slot, adapter, prior) {

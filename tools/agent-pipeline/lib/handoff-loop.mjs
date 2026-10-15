@@ -115,7 +115,7 @@ async function readSuccessorActor(github, sha) {
     return { user: pickActor(commit.author), blocked: false };
   } catch (error) {
     const status = error?.status ?? error?.statusCode ?? null;
-    const blocked = status === 401 || status === 403 || error?.code === 'BLOCKED_CONFIGURATION' || status == null;
+    const blocked = status === 401 || status === 403 || status === 429 || error?.timeout === true || error?.code === 'BLOCKED_CONFIGURATION' || status == null;
     return { user: null, blocked, status, code: error?.code ?? null };
   }
 }
@@ -130,7 +130,7 @@ async function readCodexDecision(github, pr, headSha, reviewId) {
     return { blocked: false, checked: true, ...selectCodexReview(reviews, headSha, reviewId) };
   } catch (error) {
     const status = error?.status ?? error?.statusCode ?? null;
-    const blocked = status === 401 || status === 403 || error?.code === 'BLOCKED_CONFIGURATION' || status == null;
+    const blocked = status === 401 || status === 403 || status === 429 || error?.timeout === true || error?.code === 'BLOCKED_CONFIGURATION' || status == null;
     return { blocked, checked: true, review: null, status, code: error?.code ?? null };
   }
 }
@@ -211,6 +211,7 @@ export function step(ledger, snapshot) {
     return finish(next, snapshot, markUnknown(next, snapshot));
   }
   if (snapshot?.error) {
+    suspendReadyOnReadFailure(next, snapshot);
     return finish(next, snapshot, { status: 'BLOCKED_INTEGRATION', http_status: snapshot.error.status ?? null });
   }
   const context = validateContext(snapshot);
@@ -428,7 +429,8 @@ export function claimRereview(ledger, pr, headSha, options = {}) {
   const issued = reservation.structural_review;
   const issuedBase = isCommitSha(issued?.base_sha) ? issued.base_sha : null;
   const frozen = frozenReviewContract(ledger.slots?.[String(pr)]);
-  const baseMoved = Boolean(nextBase && issuedBase && nextBase !== issuedBase);
+  const frozenBase = isCommitSha(frozen?.base_sha) ? frozen.base_sha : null;
+  const baseMoved = Boolean(nextBase && ((issuedBase && nextBase !== issuedBase) || (frozenBase && nextBase !== frozenBase)));
   const controlsMoved = options.controlsMoved === true || Boolean(issued && frozen && !sameControl(issued, frozen));
   if (reservation.review_requested_for === headSha) {
     if (!baseMoved && !controlsMoved) return null;
@@ -452,12 +454,14 @@ export function claimRereview(ledger, pr, headSha, options = {}) {
     reservation.review_requested_for = headSha;
     reservation.status = 'WAITING_REREVIEW';
     reservation.structural_review = expectationFromPacket(advanced.record, advanced.packet);
+    reservation.verify_dispatch = advanced.verify ?? null;
     return {
       mechanism: 'independent_codex_review',
       sha: headSha,
       reviewer: CODEX_REVIEWER.login,
       author_approval_counts: false,
       paid_call: false,
+      verify_dispatch: advanced.verify ?? null,
     };
   }
   reservation.review_requested_for = headSha;
@@ -590,8 +594,10 @@ function advanceProducerRecord(record, { headSha, baseSha, controlsMoved }) {
   current = clearProducerGeneration(current, headSha, baseSha);
   let decision = plan(current, producerObservation(current, headSha, baseSha, null));
   current = decision?.record;
+  let verifyEffect = verifyDispatch(decision);
   if (!current?.review_request_id) {
     decision = plan(current, producerObservation(current, headSha, baseSha, null));
+    verifyEffect = verifyDispatch(decision) ?? verifyEffect;
     current = decision?.record;
   }
   if (!current?.review_request_id || current.blocked_reason) return null;
@@ -600,7 +606,11 @@ function advanceProducerRecord(record, { headSha, baseSha, controlsMoved }) {
   const dispatched = plan(seen.record, producerObservation(seen.record, headSha, baseSha, probe));
   const packet = (dispatched.effects ?? []).find(effect => effect.type === 'github.dispatch' && effect.workflow === 'review')?.packet ?? null;
   if (!packet || packet.request_id !== current.review_request_id) return null;
-  return { record: current, packet };
+  return { record: current, packet, verify: verifyEffect };
+}
+
+function verifyDispatch(decision) {
+  return (decision?.effects ?? []).find(effect => effect?.type === 'github.dispatch' && effect.workflow === 'verify') ?? null;
 }
 
 function realignStructuralPull(ledger, pr, pull) {
@@ -635,6 +645,7 @@ function realignStructuralPull(ledger, pr, pull) {
     row.review_requested_for = head;
     row.status = 'WAITING_REREVIEW';
     row.structural_review = expectationFromPacket(advanced.record, advanced.packet);
+    row.verify_dispatch = advanced.verify ?? null;
   }
   if (advanced?.record) ledger.slots[String(pr)].review_contract = advanced.record;
   if (!advanced?.packet) return { stop: true, status: 'BLOCKED_EVIDENCE', handoff_id: moved[0].handoff_id ?? null };
@@ -825,6 +836,17 @@ export async function observeStructuralReview(ledger, pr, github, policy = loadP
   }
   const ready = considerReady(next, snapshot, { structural: true, controllerActorId: policy.controller_actor_id });
   return finish(next, snapshot, ready);
+}
+
+function suspendReadyOnReadFailure(ledger, snapshot) {
+  const pr = String(snapshot?.pull?.number ?? '');
+  const head = snapshot?.pull?.headSha ?? null;
+  if (!pr) return;
+  for (const row of Object.values(ledger.reservations ?? {})) {
+    if (String(row.pr) !== pr || row.status !== 'READY_FOR_OWNER') continue;
+    if (head && row.successor_sha && row.successor_sha !== head) continue;
+    row.status = 'WAITING_REREVIEW';
+  }
 }
 
 function suspendReady(reservation, headSha, conclusion) {

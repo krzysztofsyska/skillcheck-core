@@ -1054,6 +1054,51 @@ test('an identical dispatch after completion is a duplicate and an older generat
   assert.equal(occupiedCount(oldComplete.ledger) <= CURSOR_SLOT_LIMIT, true);
 });
 
+test('a different head at the same task revision does not supersede a completed dispatch', () => {
+  let ledger = apply(emptyLedger(), request({ pr: 1, task_id: 'A', task_revision: 1 })).ledger;
+  const agent = ledger.slots['1'].agent_id;
+  ledger = apply(ledger, snapshot({
+    event: 'admission_started',
+    pr: 1,
+    adapter: { source: 'trusted_adapter', kind: 'started', pr: 1, task_id: 'A', task_revision: 1, agent_id: agent, ack: true, executor: 'cursor', head_sha: HEAD },
+  })).ledger;
+  const done = complete(ledger, 1, 'A', NEXT);
+  assert.equal(done.outcome.status, 'COMPLETED');
+  assert.equal(done.ledger.completed_tasks.A.current, true);
+  ledger = done.ledger;
+  const dependent = apply(ledger, request({ pr: 4, task_id: 'B', depends_on: ['A'], now: '2026-10-15T13:00:00.000Z' }));
+  assert.equal(dependent.outcome.status, 'REQUESTED');
+  assert.equal(dependent.ledger.slots['4'].occupied, true);
+  ledger = dependent.ledger;
+  const proof = ledger.completed_tasks.A;
+
+  const moved = apply(ledger, request({
+    pr: 8,
+    task_id: 'A',
+    task_revision: 1,
+    head_sha: NEXT,
+    base_sha: OTHER_BASE,
+    now: '2026-10-15T13:01:00.000Z',
+  }));
+  assert.equal(moved.outcome.status, 'DUPLICATE_DISPATCH');
+  assert.equal(moved.outcome.plan.cursor_handoff, null);
+  assert.equal(moved.outcome.plan.admitted, null);
+  assert.equal(moved.outcome.agent_id, agent);
+  assert.equal(moved.ledger.queue.length, 0);
+  assert.equal(moved.ledger.slots['8'], undefined);
+  assert.equal(moved.ledger.completed_tasks.A.current, true);
+  assert.deepEqual(moved.ledger.completed_tasks.A, proof);
+  assert.equal(moved.ledger.slots['4'].occupied, true);
+  assert.equal(moved.ledger.slots['4'].phase, 'REQUESTED');
+
+  const later = apply(moved.ledger, request({ pr: 9, task_id: 'C', depends_on: ['A'], now: '2026-10-15T13:02:00.000Z' }));
+  assert.equal(later.outcome.status, 'REQUESTED');
+  assert.equal(later.ledger.slots['9'].occupied, true);
+  assert.equal(later.ledger.completed_tasks.A.current, true);
+  assert.deepEqual(later.ledger.completed_tasks.A, proof);
+  assert.equal(occupiedCount(later.ledger) <= CURSOR_SLOT_LIMIT, true);
+});
+
 function complete(ledger, pr, taskId, head = NEXT) {
   return apply(ledger, snapshot({
     event: 'admission_completed',

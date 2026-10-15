@@ -558,7 +558,7 @@ test('the workflow and CLI stay fail-closed with no secrets or paid actions', ()
   assert.equal(/^\s*pull_request_review_comment:/m.test(workflow), false);
   assert.match(workflow, /^on:\n {2}workflow_dispatch:\n/m);
   assert.equal(workflow.includes('\n  group: codex-cursor-handoff\n'), false);
-  assert.match(workflow, /group: codex-cursor-handoff-inactive-\$\{\{ github\.repository \}\}-\$\{\{ github\.ref \}\}/);
+  assert.match(workflow, /group: codex-cursor-handoff-inactive-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
   const cli = readFileSync('tools/agent-pipeline/handoff-cli.mjs', 'utf8');
   assert.equal(cli.includes('fetch('), false);
@@ -800,6 +800,7 @@ test('closing a started review keeps its slot until matching terminal proof admi
   }));
   assert.equal(proved.outcome.status, 'CANCELLED');
   assert.equal(proved.ledger.slots['501'].occupied, false);
+  assert.equal(proved.ledger.reservations[dedupKey('501', SHA.one, 5001)].status, 'CANCELLED');
   assert.equal(proved.ledger.slots['506'].occupied, true);
   assert.equal(proved.ledger.slots['506'].phase, 'REQUESTED');
   assert.equal(proved.ledger.reservations[dedupKey('506', SHA.one, 5906)].status, 'HANDOFF_PLANNED');
@@ -888,6 +889,7 @@ test('github delivery emits a plan, reads the successor author, and shares the r
       if (href.includes('/pulls/') && href.includes('/reviews')) {
         if (reviewsMode === 'race') throw new Error('lost');
         if (reviewsMode === 'forbidden') return new Response(JSON.stringify({ message: 'forbidden' }), { status: 403 });
+        if (reviewsMode === 'limited') return new Response(JSON.stringify({ message: 'rate limit' }), { status: 429 });
         if (reviewsMode === 'missing') return new Response(JSON.stringify([]), { status: 200 });
         if (reviewsMode === 'foreign') return new Response(JSON.stringify([githubReview({ id: 100, sha: SHA.three, state: 'APPROVED', at: '2026-10-15T12:00:00Z' })]), { status: 200 });
         if (reviewsMode === 'stranger') return new Response(JSON.stringify([githubReview({ id: 100, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z', user: AUTHOR })]), { status: 200 });
@@ -1155,6 +1157,114 @@ test('an unordered GitHub decision withdraws readiness until a later pass', asyn
   assert.equal(later.outcome.status, 'READY_FOR_OWNER');
   assert.equal(later.ledger.reservations[key].status, 'READY_FOR_OWNER');
 });
+
+test('a failed GitHub read withdraws READY_FOR_OWNER and a later authentic pass restores it', async () => {
+  const ready = await reachOwnerReady();
+  const key = dedupKey('126', SHA.one, 50);
+  assert.equal(ready.reservations[key].status, 'READY_FOR_OWNER');
+  const cases = [
+    { reviews: 'forbidden', author: 'linked', status: 403 },
+    { reviews: 'limited', author: 'linked', status: 429 },
+    { reviews: 'published', author: 'timeout', status: null },
+  ];
+  for (const mode of cases) {
+    const blocked = await deliverGithubReview(
+      structuredClone(ready),
+      githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }),
+      [],
+      reviewReadClient(mode),
+    );
+    assert.equal(blocked.outcome.status, 'BLOCKED_INTEGRATION');
+    assert.notEqual(blocked.outcome.status, 'BLOCKED_EVIDENCE');
+    assert.equal(blocked.outcome.http_status, mode.status);
+    assert.equal(blocked.outcome.plan.cursor_handoff, null);
+    assert.deepEqual(blocked.outcome.executed, []);
+    assert.equal(blocked.ledger.reservations[key].status, 'WAITING_REREVIEW');
+    assert.notEqual(blocked.ledger.reservations[key].status, 'READINESS_REVOKED');
+    assert.equal(blocked.ledger.reservations[key].status === 'READY_FOR_OWNER', false);
+  }
+  const withdrawn = await deliverGithubReview(
+    structuredClone(ready),
+    githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }),
+    [],
+    reviewReadClient({ reviews: 'forbidden', author: 'linked' }),
+  );
+  assert.equal(withdrawn.ledger.reservations[key].status, 'WAITING_REREVIEW');
+  const restored = await deliverGithubReview(
+    withdrawn.ledger,
+    githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }),
+    [],
+    reviewReadClient({ reviews: 'published', author: 'linked' }),
+  );
+  assert.equal(restored.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(restored.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(restored.outcome.plan.cursor_handoff, null);
+  assert.deepEqual(restored.outcome.executed, []);
+});
+
+function reviewReadClient({ reviews, author }) {
+  const published = [githubReview({ id: 100, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z' })];
+  return createGitHubClient({
+    token: 'fixture',
+    repository: 'krzysztofsyska/skillcheck-core',
+    sleep: async () => {},
+    fetch: async (url) => {
+      const href = String(url);
+      if (href.includes('/pulls/') && href.includes('/reviews')) {
+        if (reviews === 'forbidden') return new Response(JSON.stringify({ message: 'forbidden' }), { status: 403 });
+        if (reviews === 'limited') return new Response(JSON.stringify({ message: 'rate limit' }), { status: 429 });
+        return new Response(JSON.stringify(published), { status: 200 });
+      }
+      const sha = decodeURIComponent(href.split('/commits/').at(-1) ?? '');
+      if (sha === SHA.two && author === 'timeout') {
+        const error = new Error('timeout');
+        error.timeout = true;
+        throw error;
+      }
+      if (sha === SHA.two && author === 'linked') {
+        return new Response(JSON.stringify({
+          sha,
+          commit: { author: { name: 'Cursor Name', email: 'cursor@example.com' }, message: 'fix' },
+          author: { ...CURSOR_ACTOR },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message: 'missing' }), { status: 404 });
+    },
+  });
+}
+
+async function reachOwnerReady() {
+  const github = reviewReadClient({ reviews: 'published', author: 'linked' });
+  const opened = await deliverGithubReview(emptyLedger(), githubEvent({ reviewId: 50, sha: SHA.one }), findingThread(50, SHA.one), github);
+  assert.equal(opened.outcome.status, 'HANDOFF');
+  const started = apply(opened.ledger, reviewSnapshot({
+    event: 'admission_started',
+    pr: 126,
+    threads: [],
+    adapter: {
+      source: 'trusted_adapter',
+      kind: 'started',
+      pr: 126,
+      task_id: opened.ledger.slots['126'].task_id,
+      agent_id: opened.ledger.slots['126'].agent_id,
+      ack: true,
+      executor: 'cursor',
+      head_sha: SHA.one,
+    },
+  }));
+  const completed = apply(started.ledger, completeSlot(started.ledger, 126, SHA.two));
+  const ci = apply(completed.ledger, reviewSnapshot({
+    event: 'head_advanced',
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(ci.outcome.status, 'REVIEW_REQUESTED');
+  const pass = await deliverGithubReview(ci.ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }), [], github);
+  assert.equal(pass.outcome.status, 'READY_FOR_OWNER');
+  return pass.ledger;
+}
 
 function githubEvent({ pr = 126, reviewId, sha, state = 'changes_requested', verdict = null, baseSha = SHA.base, spoof = null }) {
   const event = {
@@ -1543,6 +1653,14 @@ test('a base change reissues the structural review tuple', () => {
   }));
   assert.equal(moved.outcome.status, 'REVIEW_REQUESTED');
   assert.equal(moved.outcome.plan.codex_rereview == null, false);
+  assert.equal(moved.outcome.plan.codex_rereview.verify_dispatch.workflow, 'verify');
+  assert.equal(moved.outcome.plan.codex_rereview.verify_dispatch.type, 'github.dispatch');
+  assert.equal(moved.outcome.plan.codex_rereview.verify_dispatch.headSha, SHA.two);
+  assert.equal(moved.outcome.plan.codex_rereview.verify_dispatch.baseSha, SHA.four);
+  assert.equal(moved.outcome.plan.codex_rereview.paid_call, false);
+  assert.deepEqual(moved.outcome.executed, []);
+  assert.equal(moved.ledger.reservations[key].verify_dispatch.workflow, 'verify');
+  assert.equal(moved.ledger.reservations[key].verify_dispatch.headSha, SHA.two);
   assert.equal(moved.ledger.reservations[key].structural_review.base_sha, SHA.four);
   assert.notEqual(moved.ledger.reservations[key].structural_review.request_id, expected.request_id);
   assert.equal(moved.ledger.reservations[key].structural_review.request_id, producerReview(SHA.two, SHA.four).record.review_request_id);
@@ -2061,6 +2179,10 @@ test('ready structural state loses durability on pending CI, a denied read, a mo
   assert.equal(moved.outcome.status, 'REVIEW_REQUESTED');
   assert.notEqual(moved.outcome.status, 'IGNORED_NO_RESERVATION');
   assert.notEqual(moved.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(moved.outcome.plan.codex_rereview.verify_dispatch.workflow, 'verify');
+  assert.equal(moved.outcome.plan.codex_rereview.paid_call, false);
+  assert.deepEqual(moved.outcome.executed, []);
+  assert.equal(moved.ledger.reservations[key].verify_dispatch.workflow, 'verify');
   assert.equal(moved.ledger.reservations[key].structural_review.base_sha, SHA.four);
   assert.notEqual(moved.ledger.reservations[key].structural_review.request_id, prepared.expected.request_id);
   const stale = await observeStructuralReview(moved.ledger, 126, structuralWorld({

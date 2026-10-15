@@ -18,7 +18,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: codex-cursor-handoff-inactive-${{ github.repository }}-${{ github.ref }}
+  # A review event, if one is ever subscribed, is scoped to its pull request.
+  # workflow_dispatch has no pull request, so it falls back to its own run id
+  # and does not cancel another pending dispatch.
+  group: codex-cursor-handoff-inactive-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: false
 
 jobs:
