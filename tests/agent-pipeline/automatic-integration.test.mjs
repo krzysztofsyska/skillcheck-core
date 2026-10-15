@@ -373,6 +373,35 @@ test('operative flow merges from CI and review and still stops before production
   assert.doesNotMatch(acceptance, /merge tylko po A/);
 });
 
+test('entry guides keep automatic integration and separate first-activation and production approval', () => {
+  const workflow = readFileSync('docs/AGENT_WORKFLOW.md', 'utf8');
+  assert.match(workflow, /nie zatwierdza zwykłych PR-ów tasków do `integration`/);
+  assert.match(workflow, /Nie otwiera rutynowej zgody OWNER ACCEPTANCE/);
+  assert.match(workflow, /pierwszą aktywację kontrolera/);
+  assert.match(workflow, /PRODUCTION APPROVAL/);
+  assert.match(workflow, /trafia do `integration` bez pytania właściciela/);
+  assert.doesNotMatch(workflow, /zgoda na scalenie gotowego tasku do `integration`/);
+  assert.doesNotMatch(workflow, /pyta właściciela dopiero przy OWNER ACCEPTANCE/);
+
+  const runbook = readFileSync('docs/sc-ops-002c-bootstrap-runbook.md', 'utf8');
+  const loop = runbook.split('## 7. Test pętli')[1].split('## 8.')[0];
+  assert.match(loop, /bez zgody A/);
+  assert.match(loop, /sc-agent\/integration-ready/);
+  assert.match(loop, /zatrzymanie przed zgodą B/);
+  assert.match(loop, /odmowa produkcji bez zgody B/);
+  assert.doesNotMatch(loop, /zatrzymanie przed zgodą A/);
+  assert.doesNotMatch(loop, /merge tylko po zgodzie A/);
+  assert.match(runbook, /OWNER ACCEPTANCE i jest na `integration`/);
+
+  const pipeline = readFileSync('docs/AGENT_PIPELINE.md', 'utf8');
+  assert.match(pipeline, /nie zatwierdza zwykłych PR-ów do `integration`/);
+  assert.match(pipeline, /Nie wymaga zgody właściciela/);
+  assert.match(pipeline, /pierwsza aktywacja kontrolera/);
+  assert.match(pipeline, /PRODUCTION APPROVAL/);
+  assert.match(pipeline, /Zgoda A nie spełnia zgody B/);
+  assert.doesNotMatch(pipeline, /zgoda A, zgoda B i merge/);
+});
+
 function acceptedRecord() {
   const record = taskRecord({
     task_id: 'SC-X', state: 'ACCEPTED', issue_number: 7,

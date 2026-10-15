@@ -73,8 +73,8 @@ Na osobnym zadaniu, bez biznesowej bazy i bez publikacji aplikacji:
 1. rzeczywisty start API,
 2. jedna wymuszona poprawka,
 3. nowe SHA, review i CI,
-4. zatrzymanie przed zgodą A,
-5. merge tylko po zgodzie A,
+4. automatyczne scalenie do integration po bieżącym CI PASS i review PASS, bez zgody A,
+5. publikacja checka sc-agent/integration-ready i raportu gotowości; brak zgody A nie jest warunkiem tego scalenia,
 6. zatrzymanie przed zgodą B,
 7. odmowa produkcji bez zgody B,
 8. dostarczenie powiadomienia monitora.

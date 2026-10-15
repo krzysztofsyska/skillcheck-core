@@ -94,7 +94,7 @@ Zmiany backendowe obejmują m.in.:
 - migracje
 - auth, RLS, RPC
 
-Zmiany DB/security mają L3 i wymagają review przed acceptance.
+Zmiany DB/security mają L3 i wymagają niezależnego review przed scaleniem do integration.
 Produkcja wymaga osobnego runbooku i jawnej zgody właściciela.
 
 ## Fullstack
@@ -137,7 +137,7 @@ Sam merge pozostawia stan `MERGED_AWAITING_DEPLOYMENT`. Brak runbooku blokuje wd
 
 Kod kontrolera jest w `tools/agent-pipeline/`. Domyślnie `AGENT_PIPELINE_ENABLED=false` i `AGENT_PIPELINE_MERGE_ENABLED=false`: odczyt i raport są dozwolone, nowe efekty i merge nie. Starszy opis, w którym komentarz albo pole PR oznacza zgodę, nie jest implementacją. Projekt: [sc-ops-002a-agent-orchestration.md](sc-ops-002a-agent-orchestration.md). Bootstrap usług: [sc-ops-002c-bootstrap-runbook.md](sc-ops-002c-bootstrap-runbook.md).
 
-Kontroler utrwala kontrakt, `ALLOWED_FILES`, wymagane testy i skrót wersji. Issue pozostaje kontraktem, PR raportem. Stan i journal są na gałęzi `agent-state`. Cursor, CI, Codex, zgoda A, zgoda B i merge mają osobne adaptery. Publiczny Issue albo `@mention` nie uruchamia płatnej pracy.
+Kontroler utrwala kontrakt, `ALLOWED_FILES`, wymagane testy i skrót wersji. Issue pozostaje kontraktem, PR raportem. Stan i journal są na gałęzi `agent-state`. Cursor, CI, Codex, automatyczna integracja, zgoda B i merge mają osobne adaptery. Publiczny Issue albo `@mention` nie uruchamia płatnej pracy.
 
 ## Co jest automatyczne po włączeniu flag
 
@@ -146,15 +146,16 @@ Przy flagach pozostawionych na false poniższe kroki są tylko zaimplementowane 
 - zamrożenie kontraktu i jeden task branch z `integration`
 - implementacja Cursora i jedna sesja poprawek
 - CI oraz review przypięte do pary commitów, kontraktu i `policy_sha`
-- automatyczne scalenie A na podstawie CI + review, osobna prośba o zgodę B
+- automatyczne scalenie do integration na podstawie CI + review, bez zgody właściciela; osobna prośba o zgodę B
 - klasyfikacja FRONTEND/BACKEND/FULLSTACK/OPERATIONS
 - wykrywanie migracji/L3
 - odczyt wyników przez orchestrator
 
 ## Co pozostaje ręczne z definicji
 
-Tylko decyzja o produkcji, składana w GitHub Environments:
-- PRODUCTION APPROVAL — środowisko `production-approval`
-- Dodatkowo właściciel zatwierdza nowe koszty i operacje nieodwracalne.
+Osobne zgody właściciela, składane poza codziennym scaleniem tasku:
+- pierwsza aktywacja kontrolera i włączenie flag LIVE,
+- PRODUCTION APPROVAL — środowisko `production-approval`,
+- nowe koszty i operacje nieodwracalne.
 
 Sekrety, GitHub App, ochrona gałęzi i budżety API są jednorazowym bootstrapem SC-OPS-002C, nie częścią codziennego przeklejania promptów.
