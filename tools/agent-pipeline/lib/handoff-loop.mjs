@@ -51,6 +51,7 @@ export function normalizeGithubEvent(event, threads = []) {
       state: pull.state ?? null,
       draft: pull.draft === true,
       baseRef: pull.base?.ref ?? null,
+      baseSha: isCommitSha(pull.base?.sha) ? pull.base.sha : null,
       headSha: pull.head?.sha ?? null,
       author: pickActor(pull.user),
       headRepo: pull.head?.repo?.full_name ?? null,
@@ -62,6 +63,7 @@ export function normalizeGithubEvent(event, threads = []) {
       user: pickActor(reviewUser),
     },
     verdict: canonicalVerdict(event?.verdict ?? event?.review?.verdict),
+    fixAuthor: commitActor(event),
     threads: (Array.isArray(threads) ? threads : []).map(cleanThread),
   };
 }
@@ -80,9 +82,12 @@ export function step(ledger, snapshot) {
   const next = structuredClone(ledger ?? emptyLedger());
   if (!next.attempts || !next.reservations || !next.audits) return finish(emptyLedger(), snapshot ?? {}, { status: 'BLOCKED_INTEGRATION' });
   ensureAdmission(next);
-  if (isUncertainTransport(snapshot)) {
+  if (isUncertainSignal(snapshot)) {
     const context = validateContext(snapshot);
-    if (context) return finish(next, snapshot, context);
+    if (context && context.status !== 'IGNORED_CLOSED' && context.status !== 'IGNORED_DRAFT') return finish(next, snapshot, context);
+    if (!isVerifiedDispatchUncertainty(snapshot)) {
+      return finish(next, snapshot, { status: 'BLOCKED_INTEGRATION', http_status: snapshot?.error?.status ?? null });
+    }
     return finish(next, snapshot, markUnknown(next, snapshot));
   }
   if (snapshot?.error) {
@@ -221,10 +226,17 @@ function considerReady(ledger, snapshot) {
   const ci = snapshot.ci ?? reservation.ci ?? null;
   if (!ci || ci.sha !== snapshot.pull.headSha || ci.conclusion !== 'success') return { status: 'WAITING_CI', handoff_id: reservation.handoff_id };
   const reviewer = snapshot.review.user;
-  if (sameActor(reviewer, snapshot.pull.author) || sameActor(reviewer, snapshot.fixAuthor)) {
+  if (sameActor(reviewer, snapshot.pull.author) || (isActor(snapshot.fixAuthor) && sameActor(reviewer, snapshot.fixAuthor))) {
     return { status: 'REJECTED_SELF_APPROVAL', handoff_id: reservation.handoff_id };
   }
   if (!isCodex(reviewer)) return { status: 'IGNORED_REVIEWER', handoff_id: reservation.handoff_id };
+  if (!isActor(snapshot.fixAuthor) || !isCommitSha(snapshot.pull?.baseSha)) {
+    return { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id };
+  }
+  const slot = ledger.slots?.[String(snapshot.pull.number)];
+  if (!slot || slot.occupied !== false || slot.phase !== 'COMPLETED' || slot.completed_head_sha !== snapshot.pull.headSha) {
+    return { status: 'BLOCKED_NO_COMMIT', handoff_id: reservation.handoff_id };
+  }
   reservation.status = 'READY_FOR_OWNER';
   return { status: 'READY_FOR_OWNER', handoff_id: reservation.handoff_id };
 }
@@ -278,9 +290,31 @@ function isTerminalProof(snapshot) {
   return adapter?.source === 'trusted_adapter' && (adapter.kind === 'cancelled' || adapter.kind === 'completed');
 }
 
-function isUncertainTransport(snapshot) {
+function isUncertainSignal(snapshot) {
   if (snapshot?.error?.timeout === true || snapshot?.transport?.outcome === 'unknown') return true;
   return snapshot?.adapter?.source === 'trusted_adapter' && snapshot?.adapter?.kind === 'dispatch_unknown';
+}
+
+function isVerifiedDispatchUncertainty(snapshot) {
+  if (!isUncertainSignal(snapshot)) return false;
+  const adapter = snapshot?.adapter;
+  if (adapter?.source !== 'trusted_adapter') return false;
+  if (!['dispatch_unknown', 'dispatch_request', 'started'].includes(adapter.kind)) return false;
+  return adapter.pr != null && adapter.task_id != null && adapter.agent_id != null;
+}
+
+function isCommitSha(value) {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
+}
+
+function isActor(actor) {
+  return Boolean(actor && actor.id != null && typeof actor.login === 'string' && actor.login.length > 0);
+}
+
+function commitActor(event) {
+  const author = event?.head_commit?.author ?? event?.fix_author ?? null;
+  if (!isActor(author)) return null;
+  return pickActor(author);
 }
 
 function validateContext(snapshot) {

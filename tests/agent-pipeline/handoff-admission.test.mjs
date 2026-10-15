@@ -37,6 +37,7 @@ function snapshot(fields) {
       draft: fields.draft === true,
       baseRef: 'integration',
       headSha,
+      baseSha: Object.hasOwn(fields, 'pull_base_sha') ? fields.pull_base_sha : null,
       author: fields.author ?? { ...AUTHOR },
       headRepo: 'krzysztofsyska/skillcheck-core',
       body: fields.body ?? SENTINEL,
@@ -472,6 +473,13 @@ test('readiness is refused when adapter evidence disagrees with the current pull
   const missingBase = review({ review_id: 8203 });
   delete missingBase.adapter.base_sha;
   assert.notEqual(apply(emptyLedger(), missingBase).outcome.status, 'READY_TO_MERGE');
+  const omittedPullBase = review({ review_id: 8206, pull_base_sha: null });
+  assert.equal(omittedPullBase.adapter.base_sha, BASE);
+  assert.equal(omittedPullBase.pull.baseSha, null);
+  const hiddenBase = apply(emptyLedger(), omittedPullBase);
+  assert.equal(hiddenBase.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(hiddenBase.outcome.status, 'READY_TO_MERGE');
+  assert.deepEqual(hiddenBase.ledger.bound_reviews, {});
 
   const missingReview = review({ review_id: 8204 });
   missingReview.review.id = null;
@@ -497,6 +505,12 @@ test('active findings revoke a stored PASS and a later reuse cannot restore it',
   const reused = apply(blocked.ledger, review({ review_id: 8301, reuse_binding: true }));
   assert.equal(reused.outcome.status, 'STALE_REVIEW');
   assert.notEqual(reused.outcome.status, 'READY_TO_MERGE');
+  const replay = apply(blocked.ledger, review({ review_id: 8301 }));
+  assert.equal(replay.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(replay.outcome.status, 'READY_TO_MERGE');
+  assert.equal(Object.values(replay.ledger.bound_reviews)[0].revoked, true);
+  const fresh = apply(blocked.ledger, review({ review_id: 8302 }));
+  assert.equal(fresh.outcome.status, 'READY_TO_MERGE');
 });
 
 test('a review cannot drop dependencies captured when the task was queued', () => {
@@ -616,6 +630,7 @@ test('a started remote task stays reserved until cancellation evidence frees the
   const cancelled = apply(mismatch.ledger, snapshot({
     event: 'admission_completed',
     pr: 401,
+    state: 'closed',
     head_sha: HEAD,
     adapter: { source: 'trusted_adapter', kind: 'cancelled', pr: 401, task_id: 'S1', agent_id: agentId, cancelled: true, executor: 'cursor', head_sha: HEAD },
   }));
@@ -637,6 +652,7 @@ test('an uncertain transport keeps its reservation and never calls the executor'
     ...request({ pr: 51, task_id: 'UNK' }),
     error: { timeout: true },
     transport: { outcome: 'unknown' },
+    adapter: { ...request({ pr: 51, task_id: 'UNK' }).adapter, agent_id: first.ledger.slots['51'].agent_id },
   }, operation);
   assert.equal(calls, 0);
   assert.equal(uncertain.outcome.status, 'RECONCILE_REQUIRED');
@@ -653,6 +669,24 @@ test('an uncertain transport keeps its reservation and never calls the executor'
   assert.equal(drafted.ledger.slots['51'].phase, 'DISPATCH_UNKNOWN');
   assert.equal(drafted.ledger.slots['51'].occupied, true);
   assert.notEqual(drafted.ledger.slots['51'].phase, 'CANCELLED');
+
+  const readTimeout = await dispatchAdmission(emptyLedger(), {
+    ...request({ pr: 52, task_id: 'READ' }),
+    event: { name: 'ci_completed', action: 'observed' },
+    error: { timeout: true },
+    adapter: undefined,
+  }, operation);
+  assert.equal(calls, 0);
+  assert.equal(readTimeout.outcome.status, 'BLOCKED_INTEGRATION');
+  assert.equal(occupiedCount(readTimeout.ledger), 0);
+  const invented = await dispatchAdmission(emptyLedger(), {
+    ...request({ pr: 53, task_id: 'GHOST' }),
+    error: { timeout: true },
+    adapter: { ...request({ pr: 53, task_id: 'GHOST' }).adapter, kind: 'dispatch_unknown', agent_id: 'bc-nobody' },
+  }, operation);
+  assert.equal(calls, 0);
+  assert.equal(invented.outcome.status, 'BLOCKED_INTEGRATION');
+  assert.equal(invented.ledger.slots['53'], undefined);
 });
 
 function complete(ledger, pr, taskId, head = NEXT) {
@@ -676,10 +710,12 @@ function complete(ledger, pr, taskId, head = NEXT) {
 
 function review(fields) {
   const head = fields.head_sha ?? HEAD;
+  const base = fields.base_sha ?? BASE;
   return snapshot({
     event: 'admission_review',
     pr: fields.pr ?? 81,
     head_sha: head,
+    pull_base_sha: Object.hasOwn(fields, 'pull_base_sha') ? fields.pull_base_sha : base,
     review_id: fields.review_id,
     sender: fields.sender ?? { ...CODEX_REVIEWER },
     reviewer: fields.reviewer ?? { ...CODEX_REVIEWER },
@@ -691,7 +727,7 @@ function review(fields) {
       task_id: fields.task_id ?? 'REVIEW-1',
       executor: fields.executor ?? 'codex',
       head_sha: head,
-      base_sha: fields.base_sha ?? BASE,
+      base_sha: base,
       conditions: fields.conditions ?? CONDITIONS,
       verdict: fields.verdict ?? 'PASS',
       reuse_binding: fields.reuse_binding === true,

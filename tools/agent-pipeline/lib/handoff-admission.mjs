@@ -82,7 +82,7 @@ function requestDispatch(ledger, snapshot, adapter) {
 
 function markStarted(ledger, snapshot, adapter) {
   const slot = occupyingSlot(ledger, String(adapter.pr));
-  if (!slot || adapter.agent_id !== slot.agent_id) {
+  if (!slot || !sameRemoteTask(slot, adapter)) {
     return stagePartial(snapshot, adapter, { status: 'IGNORED_NO_RESERVATION', next_stage: 'wait_for_adapter', blocker: 'IGNORED_NO_RESERVATION' });
   }
   slot.phase = 'STARTED';
@@ -128,6 +128,13 @@ function bindReview(ledger, snapshot, adapter) {
   if (activeFindings(adapter).length > 0) {
     revokeBinding(ledger, key, 'FINDINGS');
     return stagePartial(snapshot, adapter, { status: 'BLOCKED_FINDINGS', next_stage: 'blocked', blocker: 'BLOCKED_FINDINGS' });
+  }
+  if (!isActor(adapter.fix_author)) {
+    return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
+  }
+  const stored = ledger.bound_reviews[key];
+  if (stored?.revoked === true && stored.review_id === reviewId) {
+    return stagePartial(snapshot, adapter, { status: 'STALE_REVIEW', next_stage: 'wait_for_review', blocker: 'STALE_REVIEW' });
   }
   const current = reviewStillValid(ledger, adapter.head_sha, adapter.base_sha, digest, { pr, reviewId });
   if (adapter.reuse_binding === true && !current) {
@@ -214,8 +221,8 @@ function identityProblem(snapshot, adapter) {
 }
 
 function reviewEvidenceProblem(snapshot, adapter) {
-  if (identityProblem(snapshot, adapter) || !adapter.base_sha) return true;
-  if (snapshot.pull?.baseSha && adapter.base_sha !== snapshot.pull.baseSha) return true;
+  if (identityProblem(snapshot, adapter) || !isCommitSha(adapter.base_sha) || !isCommitSha(snapshot.pull?.baseSha)) return true;
+  if (adapter.base_sha !== snapshot.pull.baseSha) return true;
   const reviewId = snapshot.review?.id;
   if (!Number.isInteger(reviewId) || reviewId <= 0) return true;
   if (adapter.review_id != null && adapter.review_id !== reviewId) return true;
@@ -374,34 +381,17 @@ export function releasePull(ledger, pr) {
 
 export function markUnknown(ledger, snapshot) {
   ensureAdmission(ledger);
-  const pr = String(snapshot?.pull?.number ?? snapshot?.adapter?.pr ?? '');
-  if (!pr || !snapshot?.pull?.headSha) {
-    return { status: 'BLOCKED_INTEGRATION', stage: { pr: pr || null, sha: snapshot?.adapter?.head_sha ?? null, next_stage: 'reconcile', blocker: 'RECONCILE_REQUIRED' } };
-  }
+  const adapter = snapshot?.adapter;
+  const pr = String(adapter?.pr ?? '');
   const existing = ledger.slots[pr];
-  if (existing?.occupied && existing.phase === 'DISPATCH_UNKNOWN') {
-    return unknownPartial(existing);
+  if (!existing?.occupied || !sameRemoteTask(existing, adapter)) {
+    return { status: 'BLOCKED_INTEGRATION', stage: { pr: pr || null, sha: adapter?.head_sha ?? null, next_stage: 'blocked', blocker: 'BLOCKED_INTEGRATION' } };
   }
-  if (existing?.occupied) {
+  if (existing.phase !== 'DISPATCH_UNKNOWN') {
     existing.phase = 'DISPATCH_UNKNOWN';
     existing.occupied = true;
-    return unknownPartial(existing);
   }
-  if (occupiedCount(ledger) >= CURSOR_SLOT_LIMIT) {
-    return { status: 'WAITING_CAPACITY', stage: { pr, sha: snapshot.pull.headSha, next_stage: 'wait_for_slot', blocker: 'WAITING_CAPACITY' } };
-  }
-  occupy(ledger, {
-    pr,
-    task_id: String(snapshot.adapter?.task_id ?? `unknown-${pr}`),
-    priority: 'NORMAL',
-    depends_on: [],
-    head_sha: snapshot.pull.headSha,
-    base_sha: snapshot.adapter?.base_sha ?? snapshot.pull.baseSha ?? snapshot.pull.baseRef ?? null,
-    executor: snapshot.adapter?.executor ?? 'cursor',
-    created_at: snapshot.now ?? null,
-  });
-  ledger.slots[pr].phase = 'DISPATCH_UNKNOWN';
-  return unknownPartial(ledger.slots[pr]);
+  return unknownPartial(existing);
 }
 
 function unknownPartial(slot) {
@@ -468,6 +458,14 @@ function occupyingSlot(ledger, pr) {
   const slot = ledger.slots[String(pr)];
   if (!slot || !slot.occupied || !OCCUPYING.has(slot.phase)) return null;
   return slot;
+}
+
+function isCommitSha(value) {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
+}
+
+function isActor(actor) {
+  return Boolean(actor && actor.id != null && typeof actor.login === 'string' && actor.login.length > 0);
 }
 
 function sameRemoteTask(slot, adapter) {

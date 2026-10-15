@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify } from '../../tools/agent-pipeline/classify-pr.mjs';
 import { runHandoffCli } from '../../tools/agent-pipeline/handoff-cli.mjs';
+import { agentIdFor, operationKey } from '../../tools/agent-pipeline/lib/canonical.mjs';
 import { occupiedCount } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
 import {
   CODEX_REVIEWER,
@@ -24,7 +25,9 @@ const SHA = {
   two: 'b'.repeat(40),
   three: 'c'.repeat(40),
   four: 'd'.repeat(40),
+  base: 'e'.repeat(40),
 };
+const CURSOR_ACTOR = { id: 7, login: 'cursor[bot]', type: 'Bot' };
 const AUTHOR = { id: 222297538, login: 'krzysztofsyska', type: 'User' };
 const SENTINEL = 'LEAK_$(reboot)_/etc/passwd';
 
@@ -41,6 +44,7 @@ function reviewSnapshot(overrides = {}) {
       state: overrides.state ?? 'open',
       draft: overrides.draft ?? false,
       baseRef: overrides.baseRef ?? 'integration',
+      baseSha: overrides.baseSha ?? null,
       headSha,
       author: overrides.author ?? { ...AUTHOR },
       headRepo: overrides.headRepo ?? 'krzysztofsyska/skillcheck-core',
@@ -183,13 +187,18 @@ test('sandbox cycle hands off once, waits for CI, then accepts only an independe
   ledger = committerApproval.ledger;
   assert.equal(committerApproval.outcome.status, 'IGNORED_REVIEWER');
 
+  const done = apply(ledger, completeSlot(ledger, 126, SHA.two));
+  ledger = done.ledger;
+  assert.equal(done.outcome.status, 'COMPLETED');
+  assert.equal(ledger.slots['126'].occupied, false);
   const ready = apply(ledger, reviewSnapshot({
     headSha: SHA.two,
     reviewId: 603,
     reviewState: 'approved',
     threads: [],
     ci: { sha: SHA.two, conclusion: 'success' },
-    fixAuthor: { id: 7, login: 'cursor[bot]', type: 'Bot' },
+    fixAuthor: { ...CURSOR_ACTOR },
+    baseSha: SHA.base,
   }));
   assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
   assert.equal(ready.outcome.plan.owner_acceptance, false);
@@ -289,7 +298,47 @@ test('a Codex PASS comment reaches ready from stored CI without a GitHub approva
   assert.equal(authorPass.outcome.status, 'IGNORED_REVIEWER');
   assert.equal(authorPass.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
 
-  const ready = apply(ledger, reviewSnapshot({ headSha: SHA.two, reviewId: 804, reviewState: 'commented', threads: [], verdict: 'PASS' }));
+  const early = apply(ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 804,
+    reviewState: 'commented',
+    threads: [],
+    verdict: 'PASS',
+    fixAuthor: { ...CURSOR_ACTOR },
+    baseSha: SHA.base,
+  }));
+  assert.equal(early.outcome.status, 'BLOCKED_NO_COMMIT');
+  assert.equal(early.ledger.slots['126'].occupied, true);
+  const done = apply(early.ledger, completeSlot(early.ledger, 126, SHA.two));
+  assert.equal(done.outcome.status, 'COMPLETED');
+  assert.equal(done.ledger.slots['126'].occupied, false);
+  const unproven = apply(done.ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 805,
+    reviewState: 'commented',
+    threads: [],
+    verdict: 'PASS',
+    baseSha: SHA.base,
+  }));
+  assert.equal(unproven.outcome.status, 'BLOCKED_EVIDENCE');
+  const missingBase = apply(done.ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 806,
+    reviewState: 'commented',
+    threads: [],
+    verdict: 'PASS',
+    fixAuthor: { ...CURSOR_ACTOR },
+  }));
+  assert.equal(missingBase.outcome.status, 'BLOCKED_EVIDENCE');
+  const ready = apply(done.ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 804,
+    reviewState: 'commented',
+    threads: [],
+    verdict: 'PASS',
+    fixAuthor: { ...CURSOR_ACTOR },
+    baseSha: SHA.base,
+  }));
   assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
   assert.equal(ready.outcome.plan.owner_acceptance, false);
   assert.equal(ready.ledger.attempts['126'], 1);
@@ -411,6 +460,43 @@ test('raw review payload drops comment text before planning', () => {
   });
   assert.equal(withVerdict.verdict, 'PASS');
   assert.equal(JSON.stringify(withVerdict).includes(SENTINEL), false);
+  assert.equal(normalized.pull.baseSha, null);
+  assert.equal(normalized.fixAuthor, null);
+  const attributed = normalizeGithubEvent({
+    action: 'submitted',
+    repository: { full_name: 'krzysztofsyska/skillcheck-core' },
+    sender: { ...CODEX_REVIEWER },
+    head_commit: { author: { ...CURSOR_ACTOR }, message: `fix ${SENTINEL}` },
+    fix_author: { id: 1, login: 'from-comment', type: 'User' },
+    review: { id: 13, state: 'commented', commit_id: SHA.one, user: { ...CODEX_REVIEWER }, body: `${SENTINEL} cursor[bot]` },
+    pull_request: {
+      number: 126,
+      state: 'open',
+      draft: false,
+      user: { ...AUTHOR },
+      base: { ref: 'integration', sha: SHA.base },
+      head: { sha: SHA.one, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
+    },
+  });
+  assert.equal(attributed.pull.baseSha, SHA.base);
+  assert.equal(attributed.fixAuthor.login, 'cursor[bot]');
+  assert.equal(attributed.fixAuthor.login === AUTHOR.login, false);
+  const emailOnly = normalizeGithubEvent({
+    action: 'submitted',
+    repository: { full_name: 'krzysztofsyska/skillcheck-core' },
+    sender: { ...CODEX_REVIEWER },
+    head_commit: { author: { name: 'Codex', email: 'codex@example.com' } },
+    review: { id: 14, state: 'commented', commit_id: SHA.one, user: { ...CODEX_REVIEWER }, body: SENTINEL },
+    pull_request: {
+      number: 126,
+      state: 'open',
+      user: { ...AUTHOR },
+      base: { ref: 'integration' },
+      head: { sha: SHA.one, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
+    },
+  });
+  assert.equal(emailOnly.pull.baseSha, null);
+  assert.equal(emailOnly.fixAuthor, null);
   const result = apply(emptyLedger(), { ...normalized, now: '2026-10-14T07:40:00.000Z' });
   assert.equal(result.outcome.status, 'HANDOFF');
   assert.equal(result.outcome.findings[0].url.endsWith('#discussion_r15'), true);
@@ -450,17 +536,49 @@ test('the workflow and CLI stay fail-closed with no secrets or paid actions', ()
 
   const directory = mkdtempSync(join(tmpdir(), 'handoff-sandbox-'));
   const fixture = join(directory, 'cycle.json');
+  const sandboxAgent = agentIdFor(operationKey({
+    repositoryId: 'krzysztofsyska/skillcheck-core',
+    taskId: 'review-126',
+    taskRevision: 1,
+    headSha: SHA.one,
+    baseSha: 'integration',
+    action: 'cursor-handoff',
+    round: 0,
+  }));
   writeFileSync(fixture, JSON.stringify([
     reviewSnapshot(),
     reviewSnapshot({ event: 'pull_request_review_comment' }),
     reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }),
-    reviewSnapshot({ headSha: SHA.two, reviewId: 700, reviewState: 'approved', threads: [], ci: { sha: SHA.two, conclusion: 'success' } }),
+    reviewSnapshot({
+      event: 'admission_completed',
+      headSha: SHA.two,
+      threads: [],
+      adapter: {
+        source: 'trusted_adapter',
+        kind: 'completed',
+        pr: 126,
+        task_id: 'review-126',
+        agent_id: sandboxAgent,
+        ack: true,
+        executor: 'cursor',
+        head_sha: SHA.two,
+      },
+    }),
+    reviewSnapshot({
+      headSha: SHA.two,
+      reviewId: 700,
+      reviewState: 'approved',
+      threads: [],
+      ci: { sha: SHA.two, conclusion: 'success' },
+      fixAuthor: { ...CURSOR_ACTOR },
+      baseSha: SHA.base,
+    }),
   ]));
   const sandboxLogs = [];
   const code = runHandoffCli(['--sandbox', fixture], {}, { log: line => sandboxLogs.push(line), error: line => errors.push(line) });
   assert.equal(code, 0, errors.join('\n'));
   const report = JSON.parse(sandboxLogs.at(-1));
-  assert.deepEqual(report.statuses, ['HANDOFF', 'DUPLICATE', 'REVIEW_REQUESTED', 'READY_FOR_OWNER']);
+  assert.deepEqual(report.statuses, ['HANDOFF', 'DUPLICATE', 'REVIEW_REQUESTED', 'COMPLETED', 'READY_FOR_OWNER']);
   assert.equal(report.executed, 0);
   assert.equal(report.live_effects, false);
   assert.equal(report.attempts['126'], 1);
@@ -638,6 +756,47 @@ test('closing a started review keeps its slot until matching terminal proof admi
   assert.equal(occupiedCount(proved.ledger), 5);
   assert.equal(proved.outcome.live_effects, 'blocked');
   assert.equal(proved.outcome.plan.cursor_handoff, null);
+});
+
+test('five finished handoff cycles release their slots before the next review', () => {
+  let ledger = emptyLedger();
+  for (let index = 1; index <= 5; index += 1) {
+    const pr = 600 + index;
+    ledger = apply(ledger, reviewSnapshot({
+      pr,
+      reviewId: 6000 + index,
+      threads: [thread(6000 + index, 6000 + index, SHA.one)],
+    })).ledger;
+    ledger = apply(ledger, reviewSnapshot({
+      event: 'head_advanced',
+      pr,
+      headSha: SHA.two,
+      threads: [],
+      ci: { sha: SHA.two, conclusion: 'success' },
+    })).ledger;
+    const done = apply(ledger, completeSlot(ledger, pr, SHA.two));
+    assert.equal(done.outcome.status, 'COMPLETED');
+    assert.equal(done.ledger.slots[String(pr)].occupied, false);
+    ledger = done.ledger;
+    const ready = apply(ledger, reviewSnapshot({
+      pr,
+      headSha: SHA.two,
+      reviewId: 6100 + index,
+      reviewState: 'approved',
+      threads: [],
+      ci: { sha: SHA.two, conclusion: 'success' },
+      fixAuthor: { ...CURSOR_ACTOR },
+      baseSha: SHA.base,
+    }));
+    assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+    ledger = ready.ledger;
+    assert.equal(ledger.slots[String(pr)].occupied, false);
+  }
+  assert.equal(occupiedCount(ledger), 0);
+  const sixth = apply(ledger, reviewSnapshot({ pr: 606, reviewId: 6606, threads: [thread(6606, 6606, SHA.one)] }));
+  assert.equal(sixth.outcome.status, 'HANDOFF');
+  assert.equal(sixth.outcome.plan.cursor_handoff == null, false);
+  assert.equal(occupiedCount(sixth.ledger), 1);
 });
 
 test('automation documents and the handoff workflow classify as L3 operations', () => {
