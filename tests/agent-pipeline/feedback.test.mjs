@@ -520,29 +520,27 @@ test('inline findings from an earlier current-head review stay actionable', () =
 test('a later commented review does not clear an earlier changes request', () => {
   const f = fixture();
   const initial = planFeedback(f.binding, null, f.snapshot).state;
+  const review = (id, state, at) => ({ id, user: bot, commit_id: A, state, submitted_at: new Date(at).toISOString() });
   f.snapshot.comments = [
     { id: 104, user: bot, commit_id: A, original_commit_id: A, line: 5, pull_request_review_id: 101 },
   ];
-  f.snapshot.reviews = [
-    { id: 100, user: bot, commit_id: A, state: 'CHANGES_REQUESTED', submitted_at: new Date(1000).toISOString() },
-    { id: 101, user: bot, commit_id: A, state: 'COMMENTED', submitted_at: new Date(2000).toISOString() },
-  ];
+  f.snapshot.reviews = [review(90, 'APPROVED', 1000), review(100, 'CHANGES_REQUESTED', 2000), review(101, 'COMMENTED', 3000)];
   f.snapshot.reactions = [{ user: bot, content: '+1' }];
   const state = { version: 1, configHash: initial.configHash, rounds: 0, handled: [], phase: 'WAITING_REVIEW',
     head: A, base: B, reviewCommentId: 200, reviewBaseline: [], reviewRequestedAt: 500 };
-  const plan = planFeedback(f.binding, state, f.snapshot, 3000);
-  assert.equal(plan.state.phase, 'CURSOR_PENDING');
-  assert.deepEqual(plan.effect.findings.map(item => item.id), [100, 104]);
+  const blocked = planFeedback(f.binding, state, f.snapshot, 4000);
+  assert.equal(blocked.state.phase, 'CURSOR_PENDING');
+  assert.deepEqual(blocked.effect.findings.map(item => item.id), [100, 104]);
+  f.snapshot.reviews = [review(90, 'APPROVED', 1000), review(100, 'CHANGES_REQUESTED', 2000), review(101, 'COMMENTED', 3000), review(102, 'APPROVED', 5000)];
+  const superseded = planFeedback(f.binding, state, f.snapshot, 6000);
+  assert.equal(superseded.state.phase, 'CURSOR_PENDING');
+  assert.deepEqual(superseded.effect.findings.map(item => item.id), [104]);
   f.snapshot.comments = [];
-  f.snapshot.reviews = [
-    { id: 100, user: bot, commit_id: A, state: 'APPROVED', submitted_at: new Date(1000).toISOString() },
-    { id: 101, user: bot, commit_id: A, state: 'COMMENTED', submitted_at: new Date(2000).toISOString() },
-  ];
-  assert.equal(planFeedback(f.binding, state, f.snapshot, 3000).state.phase, 'READY_FOR_OWNER');
-  f.snapshot.reviews = [
-    { id: 100, user: bot, commit_id: A, state: 'DISMISSED', submitted_at: new Date(1000).toISOString() },
-  ];
-  assert.equal(planFeedback(f.binding, state, f.snapshot, 3000).state.phase, 'READY_FOR_OWNER');
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 6000).state.phase, 'READY_FOR_OWNER');
+  f.snapshot.reviews = [review(90, 'APPROVED', 1000), review(100, 'CHANGES_REQUESTED', 2000), review(101, 'DISMISSED', 3000)];
+  assert.deepEqual(planFeedback(f.binding, state, f.snapshot, 6000).effect.findings.map(item => item.id), [100]);
+  f.snapshot.reviews = [review(90, 'APPROVED', 1000), review(100, 'DISMISSED', 2000), review(101, 'COMMENTED', 3000)];
+  assert.equal(planFeedback(f.binding, state, f.snapshot, 6000).state.phase, 'READY_FOR_OWNER');
 });
 
 test('a dispatch is refused when the ledger cannot hold both writes', async () => {
