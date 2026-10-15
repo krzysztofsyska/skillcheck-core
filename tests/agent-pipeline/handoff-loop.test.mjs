@@ -7,9 +7,11 @@ import { join } from 'node:path';
 import { classify } from '../../tools/agent-pipeline/classify-pr.mjs';
 import { createGitHubClient } from '../../tools/agent-pipeline/lib/github.mjs';
 import { runHandoffCli } from '../../tools/agent-pipeline/handoff-cli.mjs';
-import { agentIdFor, operationKey } from '../../tools/agent-pipeline/lib/canonical.mjs';
-import { occupiedCount } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
+import { agentIdFor, operationKey, sha256 } from '../../tools/agent-pipeline/lib/canonical.mjs';
+import { buildCiEnvelope } from '../../tools/agent-pipeline/lib/ci.mjs';
+import { occupiedCount, releasePull } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
 import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
+import { requiredReviewChecks } from '../../tools/agent-pipeline/lib/transitions.mjs';
 import {
   CODEX_REVIEWER,
   CURSOR_HANDOFF_TEMPLATE,
@@ -1361,6 +1363,25 @@ test('structural review uses the authenticated artifact and ignores a connector 
   assert.equal(handed.outcome.plan.cursor_handoff.finding_refs[0].severity, 'P2');
   assert.equal(handed.outcome.plan.cursor_handoff.finding_refs[0].path, 'docs/automation/codex-cursor-handoff-approval.md');
 
+  const blankFix = envelopeFor(expected, policy, {
+    verdict: 'PASS',
+    findings: [structuralFinding('guard', 'minor', { required_fix: '   ', description: 'keep the guard on the same ledger' })],
+  });
+  const described = await observeStructuralReview(structuralLedger('ci-after').ledger, 126, structuralWorld({ expected, policy, envelope: blankFix }).github, policy);
+  assert.equal(described.outcome.status, 'HANDOFF');
+  assert.equal(described.outcome.plan.cursor_handoff.finding_refs[0].required_fix, 'keep the guard on the same ledger');
+  assert.notEqual(described.outcome.status, 'READY_FOR_OWNER');
+
+  const emptyFix = envelopeFor(expected, policy, {
+    verdict: 'FAIL',
+    findings: [structuralFinding('empty', 'major', { required_fix: ' ', description: '  ' })],
+  });
+  const beforeAttempts = structuralLedger('ci-after');
+  const blockedFix = await observeStructuralReview(beforeAttempts.ledger, 126, structuralWorld({ expected, policy, envelope: emptyFix }).github, policy);
+  assert.equal(blockedFix.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.equal(blockedFix.ledger.attempts['126'], beforeAttempts.ledger.attempts['126']);
+  assert.equal(blockedFix.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
+
   const failed = envelopeFor(expected, policy, { verdict: 'FAIL', findings: [structuralFinding('break', 'blocker')] });
   const failedWorld = structuralWorld({ expected, policy, envelope: failed });
   const fixes = await observeStructuralReview(structuralLedger('ci-after').ledger, 126, failedWorld.github, policy);
@@ -1376,6 +1397,8 @@ test('structural review uses the authenticated artifact and ignores a connector 
   const waiting = await observeStructuralReview(full.ledger, 126, structuralWorld({ expected: full.expected, policy, envelope: failed }).github, policy);
   assert.equal(waiting.outcome.status, 'WAITING_CAPACITY');
   assert.equal(occupiedCount(waiting.ledger), 5);
+  assert.equal(waiting.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'SUPERSEDED');
+  assert.equal(waiting.ledger.queue.some(item => item.pr === '126'), true);
   assert.notEqual(waiting.outcome.status, 'READY_FOR_OWNER');
 
   const dependent = structuralLedger('ci-after');
@@ -1428,13 +1451,154 @@ test('structural review uses the authenticated artifact and ignores a connector 
   assert.notEqual(self.outcome.status, 'READY_FOR_OWNER');
 });
 
+test('structural review reads the verify artifact and keeps the dispatch policy SHA', async () => {
+  const policy = configuredReviewPolicy();
+  const { ledger, expected } = structuralLedger('ci-after');
+  const pass = passEnvelope(expected, policy);
+  const failed = await observeStructuralReview(ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: pass,
+    ciRuns: [ciRun(expected, policy, { conclusion: 'failure' })],
+  }).github, policy);
+  assert.equal(failed.outcome.status, 'CI_FAILED');
+  assert.notEqual(failed.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(failed.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
+  assert.equal(failed.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].ci.conclusion, 'failure');
+
+  const recovered = await observeStructuralReview(failed.ledger, 126, structuralWorld({ expected, policy, envelope: pass }).github, policy);
+  assert.equal(recovered.outcome.status, 'READY_FOR_OWNER');
+
+  const stalePolicy = structuralLedger('ci-after');
+  const advanced = reviewRun(stalePolicy.expected, policy, { head_sha: '9'.repeat(40) });
+  const rejected = await observeStructuralReview(stalePolicy.ledger, 126, structuralWorld({
+    expected: stalePolicy.expected,
+    policy,
+    envelope: passEnvelope(stalePolicy.expected, policy),
+    runs: [advanced],
+  }).github, policy);
+  assert.equal(rejected.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(rejected.outcome.status, 'READY_FOR_OWNER');
+});
+
+test('a base change reissues the structural review tuple', () => {
+  const { ledger, expected } = structuralLedger('ci-after');
+  const key = dedupKey('126', SHA.one, 5445420558);
+  const moved = apply(ledger, reviewSnapshot({
+    event: 'ci_completed',
+    headSha: SHA.two,
+    baseSha: SHA.four,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(moved.outcome.status, 'REVIEW_REQUESTED');
+  assert.equal(moved.outcome.plan.codex_rereview == null, false);
+  assert.equal(moved.ledger.reservations[key].structural_review.base_sha, SHA.four);
+  assert.notEqual(moved.ledger.reservations[key].structural_review.request_id, expected.request_id);
+  assert.equal(moved.ledger.reservations[key].structural_review.contract_hash, expected.contract_hash);
+  assert.equal(moved.ledger.reservations[key].structural_review.policy_sha, expected.policy_sha);
+  assert.deepEqual(moved.ledger.reservations[key].structural_review.required_checks, expected.required_checks);
+  const again = apply(moved.ledger, reviewSnapshot({
+    event: 'ci_completed',
+    headSha: SHA.two,
+    baseSha: SHA.four,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(again.outcome.status, 'DUPLICATE');
+});
+
+test('structural review does not invent a contract hash', async () => {
+  let ledger = apply(emptyLedger(), reviewSnapshot({ baseSha: SHA.base })).ledger;
+  ledger = apply(ledger, completeSlot(ledger, 126, SHA.two)).ledger;
+  const requested = apply(ledger, reviewSnapshot({
+    event: 'head_advanced',
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
+  assert.equal(requested.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].structural_review, null);
+  const observed = await observeStructuralReview(requested.ledger, 126, null);
+  assert.equal(observed.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(observed.outcome.status, 'READY_FOR_OWNER');
+});
+
+test('a queued structural fix is observed on the successor head', async () => {
+  const policy = configuredReviewPolicy();
+  const full = structuralLedger('ci-after');
+  for (let index = 0; index < 5; index += 1) {
+    full.ledger = apply(full.ledger, reviewSnapshot({ pr: 201 + index, reviewId: 8100 + index, threads: [thread(8100 + index, 8100 + index, SHA.one)] })).ledger;
+  }
+  const failed = envelopeFor(full.expected, policy, { verdict: 'FAIL', findings: [structuralFinding('break', 'blocker')] });
+  const waiting = await observeStructuralReview(full.ledger, 126, structuralWorld({ expected: full.expected, policy, envelope: failed }).github, policy);
+  assert.equal(waiting.outcome.status, 'WAITING_CAPACITY');
+  releasePull(waiting.ledger, 201);
+  assert.equal(waiting.ledger.slots['126'].occupied, true);
+  assert.equal(waiting.ledger.slots['126'].review_contract.task_id, 'SC-OPS-HANDOFF');
+  const done = apply(waiting.ledger, completeSlot(waiting.ledger, 126, SHA.three));
+  assert.equal(done.outcome.status, 'COMPLETED');
+  const requested = apply(done.ledger, reviewSnapshot({
+    event: 'head_advanced',
+    headSha: SHA.three,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.three, conclusion: 'success' },
+  }));
+  assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
+  const successor = requested.ledger.reservations[dedupKey('126', SHA.two, 900)].structural_review;
+  assert.equal(successor.head_sha, SHA.three);
+  assert.equal(successor.task_id, 'SC-OPS-HANDOFF');
+  assert.equal(requested.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'SUPERSEDED');
+  const ready = await observeStructuralReview(requested.ledger, 126, structuralWorld({
+    expected: successor,
+    policy,
+    envelope: passEnvelope(successor, policy),
+    pullHead: SHA.three,
+  }).github, policy);
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+});
+
 function configuredReviewPolicy() {
   const policy = loadPolicy();
-  return { ...policy, controller_actor_id: 456, workflow_ids: { ...policy.workflow_ids, review: 88001 } };
+  return { ...policy, controller_actor_id: 456, workflow_ids: { ...policy.workflow_ids, review: 88001, verify: 88002 } };
+}
+
+function frozenReviewRecord() {
+  return {
+    repository_id: loadPolicy().repository_id,
+    task_id: 'SC-OPS-HANDOFF',
+    task_revision: 1,
+    contract_hash: 'ab'.repeat(32),
+    policy_sha: MAIN,
+    binding: {
+      substantive_reviews: 0,
+      required_tests: ['npm run test:agent-pipeline'],
+      contract: {
+        acceptance_criteria: ['inactive adapter stays offline'],
+        security_checks: ['no live dispatch'],
+      },
+    },
+  };
+}
+
+function installFrozenContract(ledger) {
+  const record = frozenReviewRecord();
+  ledger.slots['126'].review_contract = {
+    repository_id: record.repository_id,
+    task_id: record.task_id,
+    task_revision: record.task_revision,
+    round: record.binding.substantive_reviews,
+    contract_hash: record.contract_hash,
+    policy_sha: record.policy_sha,
+    required_checks: requiredReviewChecks(record),
+  };
 }
 
 function structuralLedger(order) {
   let ledger = apply(emptyLedger(), reviewSnapshot({ baseSha: SHA.base })).ledger;
+  installFrozenContract(ledger);
   if (order === 'ci-first') {
     ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, baseSha: SHA.base, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
     const done = apply(ledger, completeSlot(ledger, 126, SHA.two));
@@ -1444,7 +1608,20 @@ function structuralLedger(order) {
     ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, baseSha: SHA.base, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
   }
   const expected = ledger.reservations[dedupKey('126', SHA.one, 5445420558)].structural_review;
-  assert.ok(expected?.request_id);
+  const frozen = ledger.slots['126'].review_contract;
+  assert.equal(expected.request_id, sha256(operationKey({
+    repositoryId: frozen.repository_id,
+    taskId: frozen.task_id,
+    taskRevision: frozen.task_revision,
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    action: 'review',
+    round: frozen.round,
+  })));
+  assert.deepEqual(expected.required_checks, frozen.required_checks);
+  assert.equal(expected.required_checks.includes('sc-agent/owner-acceptance'), false);
+  assert.equal(expected.contract_hash, frozen.contract_hash);
+  assert.equal(expected.policy_sha, MAIN);
   assert.equal(expected.head_sha, SHA.two);
   assert.equal(expected.base_sha, SHA.base);
   return { ledger, expected };
@@ -1454,7 +1631,7 @@ function passEnvelope(expected, policy) {
   return envelopeFor(expected, policy, { verdict: 'PASS', findings: [structuralFinding('note', 'info')] });
 }
 
-function structuralFinding(id, severity) {
+function structuralFinding(id, severity, extra = {}) {
   return {
     id,
     severity,
@@ -1462,6 +1639,7 @@ function structuralFinding(id, severity) {
     line: 12,
     description: 'structural finding',
     required_fix: 'apply the structural finding',
+    ...extra,
   };
 }
 
@@ -1471,7 +1649,7 @@ function envelopeFor(expected, policy, patch) {
     workflow_path: policy.workflows.review,
     run_id: 900,
     run_attempt: 1,
-    policy_sha: MAIN,
+    policy_sha: expected.policy_sha,
     payload: {
       schema_version: 1,
       request_id: expected.request_id,
@@ -1495,7 +1673,7 @@ function reviewRun(expected, policy, patch = {}) {
     path: policy.workflows.review,
     event: 'workflow_dispatch',
     head_branch: 'main',
-    head_sha: MAIN,
+    head_sha: expected.policy_sha,
     actor: { id: policy.controller_actor_id, login: 'skillcheck-controller[bot]', type: 'Bot' },
     display_title: `sc-agent:${expected.request_id}`,
     run_attempt: 1,
@@ -1506,8 +1684,42 @@ function reviewRun(expected, policy, patch = {}) {
   };
 }
 
-function structuralWorld({ expected, policy, envelope, runs = null, pullHead = SHA.two, pullBase = SHA.base, author = CURSOR_ACTOR, fail = null }) {
+function ciRun(expected, policy, patch = {}) {
+  return {
+    id: 910,
+    workflow_id: policy.workflow_ids.verify,
+    path: policy.workflows.verify,
+    event: 'workflow_dispatch',
+    head_branch: 'main',
+    head_sha: expected.policy_sha,
+    actor: { id: policy.controller_actor_id, login: 'skillcheck-controller[bot]', type: 'Bot' },
+    display_title: `sc-agent:${expected.request_id}`,
+    run_attempt: 1,
+    status: 'completed',
+    conclusion: 'success',
+    updated_at: '2026-10-15T13:05:00Z',
+    ...patch,
+  };
+}
+
+function ciEnvelope(expected, policy, conclusion = 'success') {
+  return buildCiEnvelope({
+    policy,
+    policySha: expected.policy_sha,
+    headSha: expected.head_sha,
+    baseSha: expected.base_sha,
+    runId: 910,
+    runAttempt: 1,
+    commandsExecuted: policy.required_ci_commands,
+    conclusion,
+  });
+}
+
+function structuralWorld({ expected, policy, envelope, runs = null, ciRuns = null, pullHead = SHA.two, pullBase = SHA.base, author = CURSOR_ACTOR, fail = null, jobs = null }) {
   const listed = runs ?? [reviewRun(expected, policy)];
+  const verifyRuns = ciRuns ?? [ciRun(expected, policy)];
+  const ciBody = ciEnvelope(expected, policy, verifyRuns[0]?.conclusion === 'failure' ? 'failure' : 'success');
+  const jobRows = jobs ?? [{ id: 1, name: 'verify', conclusion: verifyRuns[0]?.conclusion === 'success' ? 'success' : 'failure' }];
   const calls = [];
   const github = createGitHubClient({
     token: 'fixture',
@@ -1517,16 +1729,30 @@ function structuralWorld({ expected, policy, envelope, runs = null, pullHead = S
       calls.push({ url: href, method: options?.method ?? 'GET' });
       if (fail && href.includes(fail)) return new Response(JSON.stringify({ message: 'forbidden' }), { status: 403 });
       if (href.includes('/pulls/') && href.includes('/reviews')) {
-        return new Response(JSON.stringify([githubReview({ id: 100, sha: SHA.two, state: 'COMMENTED', at: '2026-10-15T12:00:00Z' })]), { status: 200 });
+        return new Response(JSON.stringify([githubReview({ id: 100, sha: pullHead, state: 'COMMENTED', at: '2026-10-15T12:00:00Z' })]), { status: 200 });
       }
       if (href.includes('/actions/workflows/') && href.includes('/runs')) {
-        return new Response(JSON.stringify({ workflow_runs: listed }), { status: 200 });
+        const batch = href.includes('agent-verify.yml') ? verifyRuns : listed;
+        return new Response(JSON.stringify({ workflow_runs: batch }), { status: 200 });
       }
-      if (href.includes('/artifacts/') && href.endsWith('/zip') || href.includes('/artifacts/') && href.includes('/zip')) {
-        return new Response(zipStored('review-envelope.json', JSON.stringify(envelope)), { status: 200 });
+      if (href.includes('/actions/runs/') && href.includes('/jobs')) {
+        return new Response(JSON.stringify({ jobs: jobRows }), { status: 200 });
+      }
+      if (href.includes('/artifacts/') && (href.endsWith('/zip') || href.includes('/zip'))) {
+        const body = href.includes('/artifacts/51/') ? ciBody : envelope;
+        const name = href.includes('/artifacts/51/') ? 'ci-result.json' : 'review-envelope.json';
+        return new Response(zipStored(name, JSON.stringify(body)), { status: 200 });
       }
       if (href.includes('/actions/runs/') && href.includes('/artifacts')) {
-        return new Response(JSON.stringify({ artifacts: [{ id: 50, name: 'sc-agent-review', expired: false, workflow_run: { id: listed[0].id } }] }), { status: 200 });
+        const verify = href.includes('/runs/910/');
+        return new Response(JSON.stringify({
+          artifacts: [{
+            id: verify ? 51 : 50,
+            name: verify ? 'sc-agent-ci' : 'sc-agent-review',
+            expired: false,
+            workflow_run: { id: verify ? 910 : listed[0].id },
+          }],
+        }), { status: 200 });
       }
       if (href.includes('/pulls/126')) {
         return new Response(JSON.stringify({
@@ -1538,10 +1764,10 @@ function structuralWorld({ expected, policy, envelope, runs = null, pullHead = S
           head: { sha: pullHead, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
         }), { status: 200 });
       }
-      if (href.includes('/branches/main')) return new Response(JSON.stringify({ name: 'main', commit: { sha: MAIN } }), { status: 200 });
-      if (href.includes(`/commits/${encodeURIComponent(SHA.two)}`) || href.includes(`/commits/${SHA.two}`)) {
+      if (href.includes('/branches/main')) return new Response(JSON.stringify({ name: 'main', commit: { sha: '9'.repeat(40) } }), { status: 200 });
+      if (href.includes(`/commits/${encodeURIComponent(expected.head_sha)}`) || href.includes(`/commits/${expected.head_sha}`)) {
         return new Response(JSON.stringify({
-          sha: SHA.two,
+          sha: expected.head_sha,
           commit: { author: { name: 'Cursor Name', email: 'cursor@example.com' }, message: 'fix' },
           author: { ...author },
         }), { status: 200 });

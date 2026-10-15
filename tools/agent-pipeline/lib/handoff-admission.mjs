@@ -336,7 +336,7 @@ function occupy(ledger, task) {
     action: 'cursor-handoff',
     round: 0,
   }));
-  ledger.slots[task.pr] = {
+  const slot = {
     pr: task.pr,
     task_id: task.task_id,
     priority: task.priority,
@@ -350,6 +350,8 @@ function occupy(ledger, task) {
     executor: task.executor,
     created_at: task.created_at,
   };
+  if (task.review_contract && typeof task.review_contract === 'object') slot.review_contract = structuredClone(task.review_contract);
+  ledger.slots[task.pr] = slot;
 }
 
 export function claimHandoffSlot(ledger, snapshot, findings = []) {
@@ -368,6 +370,8 @@ export function claimHandoffSlot(ledger, snapshot, findings = []) {
     return { status: 'DUPLICATE_DISPATCH' };
   }
   const task = handoffTask(snapshot, findings);
+  const carried = ledger.slots[pr]?.review_contract;
+  if (carried && typeof carried === 'object') task.review_contract = structuredClone(carried);
   if (occupiedCount(ledger) >= CURSOR_SLOT_LIMIT) {
     ledger.queue.push(task);
     return { status: 'WAITING_CAPACITY' };
@@ -719,7 +723,7 @@ function taskIdentifier(value) {
 }
 
 function taskFrom(adapter, snapshot) {
-  return {
+  const task = {
     pr: String(adapter.pr),
     task_id: taskIdentifier(adapter.task_id),
     priority: adapter.priority ?? 'NORMAL',
@@ -729,6 +733,8 @@ function taskFrom(adapter, snapshot) {
     executor: adapter.executor ?? null,
     created_at: snapshot.now ?? null,
   };
+  if (adapter.review_contract && typeof adapter.review_contract === 'object') task.review_contract = structuredClone(adapter.review_contract);
+  return task;
 }
 
 function trustedAdapter(snapshot) {
