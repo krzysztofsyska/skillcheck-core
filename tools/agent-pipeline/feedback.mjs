@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 export const LEDGER_LIMIT = 100;
+// One repair claims two dispatch writes, two review writes and one terminal write.
+export const REPAIR_LEDGER = 5;
 export const REPOSITORY = 'krzysztofsyska/skillcheck-core';
 export const REPOSITORY_ID = 1043384454;
 export const CODEX = { id: 199175422, login: 'chatgpt-codex-connector[bot]' };
@@ -222,12 +224,16 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     plan.state.operationMarker = randomUUID();
     plan.effect.marker = plan.state.operationMarker;
   }
-  // Starting Cursor commits four writes: this reservation, its completion, and
-  // the later failure or review-request pair. A review post needs two writes
-  // and a state-only stop needs one. The unwritten remainder stays on the record.
-  const writes = plan.effect?.type === 'fix' ? 4 : plan.effect ? 2 : 1;
-  reserveLedger?.(writes, held);
-  plan.state = applyHold(plan.state, plan.effect ? writes - 1 : 0);
+  // The unwritten remainder stays on the record and is counted on later polls.
+  // A post-repair review keeps the terminal slot. READY or a timeout spends it.
+  const budget = plan.effect?.type === 'fix' ? REPAIR_LEDGER
+    : plan.effect?.type === 'review' ? 3
+    : plan.effect ? 2 : 1;
+  const afterSave = plan.effect?.type === 'fix' ? 4
+    : plan.effect?.type === 'review' ? 2
+    : plan.effect ? 1 : 0;
+  reserveLedger?.(budget, held);
+  plan.state = applyHold(plan.state, afterSave);
   const revision = await store.save(plan.state, saved.revision);
   if (!plan.effect) return plan.state.phase;
   // Re-read immediately before sending; a moved target consumes the reservation and stops.
@@ -253,13 +259,13 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     const response = await cursor.createRun(binding.agentId, { prompt: { text: fixPrompt(binding, { ...plan.effect, findings: freshFindings }) } });
     const run = response.run;
     if (!run?.id || run.agentId !== binding.agentId) fail('INVALID_CURSOR_RESPONSE');
-    completed = applyHold({ ...plan.state, phase: 'FIXING', runId: run.id }, 2);
+    completed = applyHold({ ...plan.state, phase: 'FIXING', runId: run.id }, 3);
   } else if (plan.effect.type === 'request-review') {
     if (findings(fresh).length) fail('FINDINGS_STALE');
     completed = applyHold(await completeReviewRequest(), 0);
   } else {
     if (!verifyRepair(binding, plan.state, fresh)) fail('CURSOR_PROVENANCE_CHANGED');
-    completed = applyHold(await completeReviewRequest(), 0);
+    completed = applyHold(await completeReviewRequest(), 1);
   }
   await store.save(completed, revision);
   return completed.phase;

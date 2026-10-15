@@ -176,13 +176,15 @@ execution. This bounded implementation supports up to 100 state commits after
 bootstrap. A transition is refused, before any external effect, unless the
 ledger has room for every write that transition will make: one for a state-only
 change and two for a review reservation plus its completion. Starting Cursor
-reserves four: the dispatch pair plus the later failure or review-request pair.
-The unwritten remainder is stored on that binding as `ledgerHold`. Every poll
-adds every binding's hold to the branch commit count, so a later poll or
-another binding cannot spend those slots. A failure or timeout persists the
-terminal phase and releases the unused remainder. A review handoff spends the
-held pair. Repair rounds stay capped at three; a later round reserves its own
-lifecycle. The 100-commit ceiling stays in force and the ledger is not reset. Neither policy
+reserves five: the dispatch pair, the review pair and the later READY, failure
+or review-timeout write. The unwritten remainder is stored on that binding as
+`ledgerHold`. Every poll adds every binding's hold to the branch commit count,
+so a later poll or another binding cannot spend those slots. After the review
+is posted one slot remains, so READY or the review timeout still fits at the
+ceiling. A failure persists its terminal phase and releases the unused
+remainder. A new round needs its own five commits; without them Cursor does
+not start and the current phase remains durable. Repair rounds stay capped at
+three. The 100-commit ceiling stays in force and the ledger is not reset. Neither policy
 attestations nor bootstrap identity have been populated by this patch. Confirm
 the App's actual signed-commit behavior before activation.
 

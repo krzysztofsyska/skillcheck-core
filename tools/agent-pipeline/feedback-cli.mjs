@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createGitHubClient, createInstallationToken, decodeGithubContent } from './lib/github.mjs';
 import { createCursorClient } from './lib/cursor.mjs';
 import { evaluatePreflight } from './lib/merge.mjs';
-import { runFeedback, validateBinding, accountLedger, ledgerHold, LEDGER_LIMIT, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
+import { runFeedback, validateBinding, accountLedger, ledgerHold, LEDGER_LIMIT, REPAIR_LEDGER, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
 import { withRulesetEvidence, verifyStateBootstrap } from './lib/ruleset-evidence.mjs';
 
 // Actions read is required for environment and deployment-branch policy reads.
@@ -168,7 +168,7 @@ export async function main(env = process.env) {
     const store = feedbackStore(github, binding.pr);
     stores.set(binding.pr, store);
     try { room.used += ledgerHold((await store.read()).value); }
-    catch { room.used += 4; }
+    catch { room.used += REPAIR_LEDGER; }
   }
   function reserveLedger(writes, held = 0) {
     room.used = accountLedger(room.used, writes, held, LEDGER_LIMIT);

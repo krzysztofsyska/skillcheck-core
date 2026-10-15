@@ -544,19 +544,17 @@ test('a later commented review does not clear an earlier changes request', () =>
 });
 
 test('a dispatch is refused when the ledger cannot hold the repair lifecycle', async () => {
-  assert.equal(accountLedger(96, 4, 0), 100);
-  assert.throws(() => accountLedger(97, 4, 0), /LEDGER_CAPACITY/);
-  assert.throws(() => accountLedger(98, 4, 0), /LEDGER_CAPACITY/);
-  assert.equal(accountLedger(100, 2, 2), 100);
-  assert.equal(accountLedger(100, 1, 2), 99);
+  assert.equal(accountLedger(95, 5, 0), 100);
+  assert.throws(() => accountLedger(96, 5, 0), /LEDGER_CAPACITY/);
+  assert.equal(accountLedger(100, 1, 1), 100);
   const refused = fixture();
-  let probe = 98;
+  let probe = 96;
   refused.args.reserveLedger = (writes, held = 0) => { probe = accountLedger(probe, writes, held); };
   await assert.rejects(runFeedback(refused.args), /LEDGER_CAPACITY/);
   assert.equal(refused.calls(), 0);
   assert.equal(refused.state(), null);
 
-  let commits = 96;
+  let commits = 95;
   const room = { used: commits };
   const reserve = (writes, held = 0) => { room.used = accountLedger(room.used, writes, held); };
   const poll = states => { room.used = commits + states.reduce((sum, state) => sum + ledgerHold(state), 0); };
@@ -569,7 +567,7 @@ test('a dispatch is refused when the ledger cannot hold the repair lifecycle', a
   const first = track(fixture());
   const second = track(fixture());
   assert.equal(await runFeedback(first.args), 'FIXING');
-  assert.equal(ledgerHold(first.state()), 2);
+  assert.equal(ledgerHold(first.state()), 3);
   assert.equal(first.state().rounds, 1);
   await assert.rejects(runFeedback(second.args), /LEDGER_CAPACITY/);
   assert.equal(second.calls(), 0);
@@ -578,7 +576,7 @@ test('a dispatch is refused when the ledger cannot hold the repair lifecycle', a
   assert.equal(second.calls(), 0);
 
   const timed = track(fixture());
-  commits = 96;
+  commits = 95;
   poll([]);
   assert.equal(await runFeedback(timed.args), 'FIXING');
   poll([timed.state()]);
@@ -590,39 +588,47 @@ test('a dispatch is refused when the ledger cannot hold the repair lifecycle', a
   assert.equal(await runFeedback(timed.args), 'BLOCKED_TIMEOUT');
   assert.equal(commits, blockedSaves);
 
-  const done = track(fixture());
-  commits = 96;
-  poll([]);
-  assert.equal(await runFeedback(done.args), 'FIXING');
-  poll([done.state()]);
-  finishRepair(done);
-  let lost = false;
-  const persistDone = done.args.store.save.bind(done.args.store);
-  done.args.store.save = async (...args) => {
-    if (ledgerHold(done.state()) === 1) { lost = true; throw new Error('LOST_COMPLETION'); }
-    commits += 1;
-    return persistDone(...args);
-  };
-  await assert.rejects(runFeedback(done.args), /LOST_COMPLETION/);
-  assert.equal(done.state().phase, 'REVIEW_PENDING');
-  assert.equal(ledgerHold(done.state()), 1);
-  poll([done.state(), second.state()]);
-  await assert.rejects(runFeedback(second.args), /LEDGER_CAPACITY/);
-  done.args.store.save = async (...args) => { commits += 1; return persistDone(...args); };
-  poll([done.state()]);
-  assert.equal(await runFeedback(done.args), 'REVIEW_PENDING');
-  assert.equal(lost, true);
-
   const finished = track(fixture());
-  commits = 96;
+  commits = 95;
   poll([]);
   assert.equal(await runFeedback(finished.args), 'FIXING');
   poll([finished.state()]);
   finishRepair(finished);
   assert.equal(await runFeedback(finished.args), 'WAITING_REVIEW');
-  assert.equal(ledgerHold(finished.state()), 0);
+  assert.equal(ledgerHold(finished.state()), 1);
   assert.equal(finished.reviews(), 1);
+  poll([finished.state(), second.state()]);
+  finished.snapshot.reviews = [{ id: 400, user: bot, commit_id: C, state: 'COMMENTED' }];
+  finished.snapshot.comments = [{ id: 900, user: bot, commit_id: C, original_commit_id: C, line: 2, pull_request_review_id: 400 }];
+  const callsBeforeRound = finished.calls();
+  await assert.rejects(runFeedback(finished.args), /LEDGER_CAPACITY/);
+  assert.equal(finished.calls(), callsBeforeRound);
+  assert.equal(finished.state().phase, 'WAITING_REVIEW');
+  finished.snapshot.comments = [];
+  finished.args.now = finished.state().reviewRequestedAt + 46 * 60 * 1000;
   poll([finished.state()]);
+  assert.equal(await runFeedback(finished.args), 'BLOCKED_TIMEOUT');
+  assert.equal(ledgerHold(finished.state()), 0);
+  const roundSaves = commits;
+  poll([finished.state()]);
+  assert.equal(await runFeedback(finished.args), 'BLOCKED_TIMEOUT');
+  assert.equal(commits, roundSaves);
+
+  const ready = track(fixture());
+  commits = 95;
+  poll([]);
+  assert.equal(await runFeedback(ready.args), 'FIXING');
+  poll([ready.state()]);
+  finishRepair(ready);
+  assert.equal(await runFeedback(ready.args), 'WAITING_REVIEW');
+  poll([ready.state()]);
+  ready.snapshot.reactions = [{ user: bot, content: '+1' }];
+  assert.equal(await runFeedback(ready.args), 'READY_FOR_OWNER');
+  assert.equal(ledgerHold(ready.state()), 0);
+  const readySaves = commits;
+  poll([ready.state(), second.state()]);
+  assert.equal(await runFeedback(ready.args), 'READY_FOR_OWNER');
+  assert.equal(commits, readySaves);
   await assert.rejects(runFeedback(second.args), /LEDGER_CAPACITY/);
   assert.equal(second.calls(), 0);
 });
