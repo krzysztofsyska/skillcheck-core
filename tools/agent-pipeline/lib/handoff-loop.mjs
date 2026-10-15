@@ -364,23 +364,50 @@ function observeCi(ledger, snapshot) {
 }
 
 function observeReadyCi(ledger, snapshot, headSha) {
+  const ready = Object.values(ledger.reservations ?? {}).find(row => String(row.pr) === String(snapshot.pull.number) && row.status === 'READY_FOR_OWNER' && row.review_requested_for != null);
+  if (!ready) return { status: 'IGNORED_NO_RESERVATION' };
   const base = snapshot.pull?.baseSha;
-  const ready = Object.values(ledger.reservations ?? {}).find(row => {
-    if (String(row.pr) !== String(snapshot.pull.number) || row.status !== 'READY_FOR_OWNER') return false;
-    if (row.successor_sha !== headSha || row.review_requested_for !== headSha) return false;
-    const issuedBase = row.structural_review?.base_sha ?? row.base_sha;
-    return !(isCommitSha(base) && isCommitSha(issuedBase) && base !== issuedBase);
-  });
+  const issuedBase = ready.structural_review?.base_sha ?? ready.base_sha;
+  const headMoved = ready.successor_sha !== headSha || ready.review_requested_for !== headSha;
+  const baseMoved = Boolean(isCommitSha(base) && isCommitSha(issuedBase) && base !== issuedBase);
+  const frozen = frozenReviewContract(ledger.slots?.[String(snapshot.pull.number)]);
+  const controlsMoved = Boolean(ready.structural_review && frozen && !sameControl(ready.structural_review, frozen));
   const conclusion = snapshot.ci?.sha === headSha ? snapshot.ci.conclusion : null;
-  if (!ready || conclusion == null || conclusion === 'pending' || conclusion === 'success') {
-    return { status: 'IGNORED_NO_RESERVATION' };
+  if (headMoved || baseMoved || controlsMoved) {
+    ready.structural_review = null;
+    ready.review_requested_for = null;
+    ready.successor_sha = headSha;
+    if (isCommitSha(base)) ready.base_sha = base;
+    ready.ci = conclusion == null ? null : { sha: headSha, conclusion };
+    if (conclusion == null || conclusion === 'pending') {
+      ready.status = 'WAITING_CI';
+      return { status: 'WAITING_CI', handoff_id: ready.handoff_id };
+    }
+    if (conclusion !== 'success') {
+      ready.status = 'CI_FAILED';
+      return { status: 'CI_FAILED', handoff_id: ready.handoff_id };
+    }
+    if (!executorCompleted(ledger, snapshot.pull.number, headSha)) {
+      ready.status = 'WAITING_CURSOR';
+      return { status: 'WAITING_CURSOR', handoff_id: ready.handoff_id, codex_rereview: null };
+    }
+    const request = claimRereview(ledger, snapshot.pull.number, headSha, { controlsMoved: controlsMoved && !baseMoved && !headMoved });
+    if (!request) return { status: 'BLOCKED_EVIDENCE', handoff_id: ready.handoff_id };
+    return { status: 'REVIEW_REQUESTED', handoff_id: ready.handoff_id, codex_rereview: request };
   }
+  if (conclusion == null) return { status: 'IGNORED_NO_RESERVATION' };
+  if (conclusion === 'pending') {
+    ready.ci = { sha: headSha, conclusion: 'pending' };
+    ready.status = 'WAITING_REREVIEW';
+    return { status: 'WAITING_CI', handoff_id: ready.handoff_id };
+  }
+  if (conclusion === 'success') return { status: 'IGNORED_NO_RESERVATION' };
   ready.ci = { sha: headSha, conclusion };
   ready.status = 'WAITING_REREVIEW';
   return { status: 'CI_FAILED', handoff_id: ready.handoff_id };
 }
 
-export function claimRereview(ledger, pr, headSha) {
+export function claimRereview(ledger, pr, headSha, options = {}) {
   const reservation = Object.values(ledger?.reservations ?? {}).find(row => String(row.pr) === String(pr) && row.successor_sha === headSha);
   if (!reservation?.ci || reservation.ci.sha !== headSha || reservation.ci.conclusion !== 'success') return null;
   if (!executorCompleted(ledger, pr, headSha)) return null;
@@ -389,15 +416,16 @@ export function claimRereview(ledger, pr, headSha) {
   const issuedBase = isCommitSha(issued?.base_sha) ? issued.base_sha : null;
   const frozen = frozenReviewContract(ledger.slots?.[String(pr)]);
   const baseMoved = Boolean(nextBase && issuedBase && nextBase !== issuedBase);
-  const controlsMoved = Boolean(issued && frozen && !sameControl(issued, frozen));
+  const controlsMoved = options.controlsMoved === true || Boolean(issued && frozen && !sameControl(issued, frozen));
   if (reservation.review_requested_for === headSha) {
     if (!baseMoved && !controlsMoved) return null;
     reservation.review_requested_for = null;
     reservation.structural_review = null;
   }
+  if (controlsMoved && !baseMoved && frozen?.head_sha === headSha && frozen?.base_sha === nextBase) bumpReviewRound(ledger, pr);
   reservation.review_requested_for = headSha;
   reservation.status = 'WAITING_REREVIEW';
-  reservation.structural_review = structuralExpectation(ledger, pr, headSha, reservation.base_sha);
+  reservation.structural_review = structuralExpectation(ledger, pr, headSha, reservation.base_sha, { controlsMoved: controlsMoved && !baseMoved });
   return {
     mechanism: 'independent_codex_review',
     sha: headSha,
@@ -443,11 +471,18 @@ function sameControl(issued, frozen) {
   return list(issued.required_checks) === list(frozen.required_checks);
 }
 
-function structuralExpectation(ledger, pr, headSha, baseSha) {
+function bumpReviewRound(ledger, pr) {
+  const live = ledger.slots?.[String(pr)]?.review_contract;
+  if (!live?.binding || !Number.isInteger(live.binding.substantive_reviews)) return;
+  live.binding.substantive_reviews += 1;
+}
+
+function structuralExpectation(ledger, pr, headSha, baseSha, options = {}) {
   const frozen = frozenReviewContract(ledger.slots?.[String(pr)]);
   const policy = loadPolicy();
   if (!frozen || !isCommitSha(headSha) || !isCommitSha(baseSha) || frozen.repository_id !== policy.repository_id) return null;
-  const requestId = frozen.head_sha === headSha && frozen.base_sha === baseSha
+  const samePlace = frozen.head_sha === headSha && frozen.base_sha === baseSha;
+  const requestId = samePlace && !options.controlsMoved
     ? frozen.request_id
     : sha256(operationKey({
       repositoryId: frozen.repository_id,
@@ -522,21 +557,21 @@ export async function observeStructuralReview(ledger, pr, github, policy = loadP
     author = await github.readCommit(expected.head_sha);
     run = await findRun(github, policy, 'review', expected.request_id, null);
     if (!run || run.run_attempt !== 1 || run.status !== 'completed' || run.conclusion !== 'success' || run.head_sha !== expected.policy_sha) {
-      return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+      return unfinishedRead(next, pr, reservation);
     }
     if (!run.updated_at || reviewInstant(run.updated_at) == null) {
-      return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+      return unfinishedRead(next, pr, reservation);
     }
     envelope = await artifactFromRun(github, run, 'sc-agent-review');
   } catch (error) {
     return blockedRead(next, pr, error);
   }
   if (!author || author.sha !== expected.head_sha || !isActor(author.author)) {
-    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+    return unfinishedRead(next, pr, reservation);
   }
   if (!envelope || envelope.run_id !== run.id || envelope.run_attempt !== run.run_attempt || envelope.policy_sha !== run.head_sha
       || envelope.policy_sha !== expected.policy_sha || envelope.workflow_id !== run.workflow_id || envelope.workflow_path !== run.path) {
-    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+    return unfinishedRead(next, pr, reservation);
   }
   const validated = validateReview(envelope, {
     workflowId: policy.workflow_ids.review,
@@ -552,16 +587,19 @@ export async function observeStructuralReview(ledger, pr, github, policy = loadP
     contractHash: expected.contract_hash,
     requiredChecks: expected.required_checks,
   });
-  if (!validated.ok) return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  if (!validated.ok) return unfinishedRead(next, pr, reservation);
   const findings = structuralFindings(validated.payload.findings, expected);
   if (findings.some(item => !structuralFindingShape(item))) {
-    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id });
+    return unfinishedRead(next, pr, reservation);
   }
   const active = findings.filter(item => item.severity !== 'info');
   if (validated.payload.verdict !== 'PASS' || active.length > 0) {
     const snapshot = structuralSnapshot({ pull, expected, run, author: author.author, policy, ciConclusion: null });
     const effect = revokeSharedReadiness(next, String(pr), expected.head_sha, expected.base_sha, run.id, run.updated_at);
-    if (effect === 'unordered') return finish(next, snapshot, { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id });
+    if (effect === 'unordered') {
+      suspendReady(reservation, expected.head_sha, null);
+      return finish(next, snapshot, { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id });
+    }
     if (effect === 'bounded') return finish(next, snapshot, { status: 'STALE_REVIEW', handoff_id: reservation.handoff_id });
     if (active.length === 0) {
       const revoked = Object.values(next.reservations ?? {}).some(row => row.revoked_review_id === run.id && row.status === 'READINESS_REVOKED');
@@ -713,7 +751,15 @@ function structuralSnapshot({ pull, expected, run, author, policy, ciConclusion 
   };
 }
 
+function unfinishedRead(ledger, pr, reservation) {
+  suspendReady(reservation, reservation?.structural_review?.head_sha ?? reservation?.successor_sha, null);
+  return finish(ledger, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE', handoff_id: reservation?.handoff_id ?? null });
+}
+
 function blockedRead(ledger, pr, error) {
+  for (const row of Object.values(ledger.reservations ?? {})) {
+    if (String(row.pr) === String(pr)) suspendReady(row, row.structural_review?.head_sha ?? row.successor_sha, null);
+  }
   const status = error?.status ?? error?.statusCode ?? null;
   if (status === 401 || status === 403 || error?.code === 'BLOCKED_CONFIGURATION' || status == null) {
     return finish(ledger, { pull: { number: pr } }, { status: 'BLOCKED_INTEGRATION', http_status: status });
@@ -745,6 +791,7 @@ function considerReady(ledger, snapshot, options = {}) {
     return { status: 'REJECTED_SELF_APPROVAL', handoff_id: reservation.handoff_id };
   }
   if (options.structural === true) {
+    if (isCodex(snapshot.fixAuthor)) return { status: 'REJECTED_SELF_APPROVAL', handoff_id: reservation.handoff_id };
     if (reviewer?.id !== options.controllerActorId) return { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id };
   } else if (!isCodex(reviewer)) return { status: 'IGNORED_REVIEWER', handoff_id: reservation.handoff_id };
   if (!isActor(snapshot.fixAuthor) || !isCommitSha(snapshot.pull?.baseSha)) {

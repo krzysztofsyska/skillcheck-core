@@ -1549,8 +1549,29 @@ test('an old structural result does not unlock readiness after the tuple changes
   }));
   assert.equal(reissued.outcome.status, 'REVIEW_REQUESTED');
   assert.equal(reissued.ledger.reservations[key].status, 'WAITING_REREVIEW');
-  assert.equal(reissued.ledger.reservations[key].structural_review.required_checks.includes('sc-agent/extra-control'), true);
-  assert.equal(reissued.ledger.reservations[key].structural_review.policy_sha, expected.policy_sha);
+  const successorControls = reissued.ledger.reservations[key].structural_review;
+  assert.equal(successorControls.required_checks.includes('sc-agent/extra-control'), true);
+  assert.equal(successorControls.policy_sha, expected.policy_sha);
+  assert.notEqual(successorControls.request_id, controls.expected.request_id);
+  const producedRound = producerReview(SHA.two, SHA.base).record;
+  assert.equal(successorControls.request_id, sha256(operationKey({
+    repositoryId: producedRound.repository_id,
+    taskId: producedRound.task_id,
+    taskRevision: producedRound.task_revision,
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    action: 'review',
+    round: producedRound.binding.substantive_reviews + 1,
+  })));
+  const accepted = await observeStructuralReview(reissued.ledger, 126, structuralWorld({
+    expected: successorControls,
+    policy,
+    envelope: envelopeFor(successorControls, policy, { verdict: 'PASS', findings: [structuralFinding('note', 'info')], run_id: 901 }),
+    runs: [reviewRun(controls.expected, policy, { id: 900 }), reviewRun(successorControls, policy, { id: 901 })],
+    ciRuns: [ciRun(controls.expected, policy, { id: 911 }), ciRun(successorControls, policy, { id: 910 })],
+  }).github, policy);
+  assert.equal(accepted.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(accepted.ledger.reservations[key].status, 'READY_FOR_OWNER');
   const repeated = apply(reissued.ledger, reviewSnapshot({
     event: 'ci_completed',
     headSha: SHA.two,
@@ -1782,8 +1803,27 @@ test('a later structural FAIL without findings withdraws readiness and does not 
   }).github, policy);
   assert.equal(unordered.outcome.status, 'BLOCKED_EVIDENCE');
   assert.notEqual(unordered.outcome.status, 'HANDOFF');
-  assert.equal(unordered.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(unordered.outcome.plan.cursor_handoff, null);
+  assert.equal(unordered.outcome.plan.codex_rereview, null);
+  assert.notEqual(unordered.ledger.reservations[key].status, 'READY_FOR_OWNER');
   assert.equal(unordered.ledger.attempts['126'], fresh.ledger.attempts['126']);
+
+  const sameSecond = await observeStructuralReview(structuralLedger('ci-after').ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: passEnvelope(expected, policy),
+  }).github, policy);
+  const ambiguous = await observeStructuralReview(sameSecond.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: envelopeFor(expected, policy, { verdict: 'FAIL', findings: [], run_id: 901 }),
+    runs: [reviewRun(expected, policy, { id: 901, updated_at: '2026-10-15T13:00:00Z' })],
+  }).github, policy);
+  assert.equal(ambiguous.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.equal(ambiguous.outcome.plan.cursor_handoff, null);
+  assert.equal(ambiguous.outcome.plan.codex_rereview, null);
+  assert.notEqual(ambiguous.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(ambiguous.ledger.attempts['126'], sameSecond.ledger.attempts['126']);
 
   const current = await observeStructuralReview(structuralLedger('ci-after').ledger, 126, structuralWorld({
     expected,
@@ -1801,6 +1841,84 @@ test('a later structural FAIL without findings withdraws readiness and does not 
   assert.equal(older.outcome.plan.cursor_handoff, null);
   assert.equal(older.ledger.reservations[key].status, 'READY_FOR_OWNER');
   assert.equal(older.ledger.attempts['126'], current.ledger.attempts['126']);
+});
+
+test('ready structural state loses durability on pending CI, a denied read, a moved base, and a Codex author', async () => {
+  const policy = configuredReviewPolicy();
+  const key = dedupKey('126', SHA.one, 5445420558);
+  const prepared = structuralLedger('ci-after');
+  const ready = await observeStructuralReview(prepared.ledger, 126, structuralWorld({
+    expected: prepared.expected,
+    policy,
+    envelope: passEnvelope(prepared.expected, policy),
+  }).github, policy);
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+  const pending = apply(ready.ledger, reviewSnapshot({
+    event: 'ci_completed',
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'pending' },
+  }));
+  assert.equal(pending.outcome.status, 'WAITING_CI');
+  assert.notEqual(pending.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.notEqual(pending.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  const pendingRestored = await observeStructuralReview(pending.ledger, 126, structuralWorld({
+    expected: prepared.expected,
+    policy,
+    envelope: passEnvelope(prepared.expected, policy),
+  }).github, policy);
+  assert.equal(pendingRestored.outcome.status, 'READY_FOR_OWNER');
+
+  const denied = await observeStructuralReview(pendingRestored.ledger, 126, structuralWorld({
+    expected: prepared.expected,
+    policy,
+    envelope: passEnvelope(prepared.expected, policy),
+    fail: '/jobs',
+  }).github, policy);
+  assert.equal(denied.outcome.status, 'BLOCKED_INTEGRATION');
+  assert.equal(denied.outcome.http_status, 403);
+  assert.notEqual(denied.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  const readRestored = await observeStructuralReview(denied.ledger, 126, structuralWorld({
+    expected: prepared.expected,
+    policy,
+    envelope: passEnvelope(prepared.expected, policy),
+  }).github, policy);
+  assert.equal(readRestored.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(readRestored.ledger.reservations[key].status, 'READY_FOR_OWNER');
+
+  const moved = apply(readRestored.ledger, reviewSnapshot({
+    event: 'ci_completed',
+    headSha: SHA.two,
+    baseSha: SHA.four,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(moved.outcome.status, 'REVIEW_REQUESTED');
+  assert.notEqual(moved.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.notEqual(moved.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(moved.ledger.reservations[key].structural_review.base_sha, SHA.four);
+  assert.notEqual(moved.ledger.reservations[key].structural_review.request_id, prepared.expected.request_id);
+  const stale = await observeStructuralReview(moved.ledger, 126, structuralWorld({
+    expected: prepared.expected,
+    policy,
+    envelope: passEnvelope(prepared.expected, policy),
+    pullBase: SHA.four,
+  }).github, policy);
+  assert.notEqual(stale.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(stale.ledger.reservations[key].status, 'WAITING_REREVIEW');
+
+  const codex = structuralLedger('ci-after');
+  const self = await observeStructuralReview(codex.ledger, 126, structuralWorld({
+    expected: codex.expected,
+    policy,
+    envelope: passEnvelope(codex.expected, policy),
+    author: CODEX_REVIEWER,
+  }).github, policy);
+  assert.equal(self.outcome.status, 'REJECTED_SELF_APPROVAL');
+  assert.notEqual(self.outcome.status, 'READY_FOR_OWNER');
+  assert.notEqual(self.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(self.outcome.plan.cursor_handoff, null);
 });
 
 function configuredReviewPolicy() {
@@ -1991,13 +2109,14 @@ function structuralWorld({ expected, policy, envelope, runs = null, ciRuns = nul
         return new Response(zipStored(name, JSON.stringify(body)), { status: 200 });
       }
       if (href.includes('/actions/runs/') && href.includes('/artifacts')) {
-        const verify = href.includes('/runs/910/');
+        const runId = Number(href.match(/\/runs\/(\d+)/)?.[1]);
+        const verify = verifyRuns.some(run => run.id === runId);
         return new Response(JSON.stringify({
           artifacts: [{
             id: verify ? 51 : 50,
             name: verify ? 'sc-agent-ci' : 'sc-agent-review',
             expired: false,
-            workflow_run: { id: verify ? 910 : listed[0].id },
+            workflow_run: { id: runId },
           }],
         }), { status: 200 });
       }
