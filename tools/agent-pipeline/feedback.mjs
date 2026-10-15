@@ -49,19 +49,20 @@ export function validateSnapshot(b, s) {
 export function findings(s) {
   const head = s.pull.head.sha;
   const onHead = s.reviews.filter(r => trusted(r.user) && r.commit_id === head && Number.isSafeInteger(r.id));
-  // Only the decision state is reduced to the latest review. An earlier
-  // CHANGES_REQUESTED does not survive a newer APPROVED. Inline comments on
-  // every non-dismissed review of this head stay actionable.
-  const latest = new Map();
+  // Only APPROVED and CHANGES_REQUESTED are decisions. A later COMMENTED review
+  // does not replace a blocking CHANGES_REQUESTED. A newer APPROVED does.
+  // Inline comments on every non-dismissed review of this head stay actionable.
+  const decisions = new Map();
   for (const review of onHead) {
-    const previous = latest.get(review.user.id);
-    if (!previous || review.id > previous.id) latest.set(review.user.id, review);
+    if (review.state !== 'APPROVED' && review.state !== 'CHANGES_REQUESTED') continue;
+    const previous = decisions.get(review.user.id);
+    if (!previous || review.id > previous.id) decisions.set(review.user.id, review);
   }
   const active = onHead.filter(review => review.state !== 'DISMISSED');
   const ids = new Set(active.map(r => r.id));
   const inline = s.comments.filter(c => trusted(c.user) && c.commit_id === head
     && c.original_commit_id === head && (c.subject_type === 'file' || c.line != null) && !c.in_reply_to_id && ids.has(c.pull_request_review_id));
-  const changes = [...latest.values()].filter(review => review.state === 'CHANGES_REQUESTED');
+  const changes = [...decisions.values()].filter(review => review.state === 'CHANGES_REQUESTED');
   // Only immutable IDs leave the adapter. Never echo provider prose, HTML or secrets.
   return [...inline.map(c => ({ kind: 'discussion', id: c.id })), ...changes.map(r => ({ kind: 'review', id: r.id }))]
     .filter(r => Number.isSafeInteger(r.id)).sort((a, b) => a.id - b.id);

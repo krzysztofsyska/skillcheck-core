@@ -88,10 +88,11 @@ production. Base/head movement invalidates the thumbs-up binding. A review
 request that is still `WAITING_REVIEW` is replaced once when the head or base
 moves and the current head has no unhandled finding; the stale request cannot
 time out into `BLOCKED_TIMEOUT`. Two-hour repair and 45-minute requested-review
-timeouts stop the adapter. Only the trusted reviewer's latest decision on the
-current head counts, so an earlier `CHANGES_REQUESTED` does not stay actionable
-after a newer `APPROVED`. Inline comments on every non-dismissed review of that
-head remain findings.
+timeouts stop the adapter. Only the trusted reviewer's latest `APPROVED` or
+`CHANGES_REQUESTED` on the current head is a decision. A later `COMMENTED`
+review does not replace that decision. An earlier `CHANGES_REQUESTED` does not
+stay actionable after a newer `APPROVED`. Inline comments on every non-dismissed
+review of that head remain findings.
 
 No raw API errors, agent results, credentials or reviewer prose are logged or
 stored. Failure output is intentionally generic; inspect the durable phase and
