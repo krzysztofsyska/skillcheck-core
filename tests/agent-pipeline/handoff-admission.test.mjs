@@ -867,7 +867,9 @@ test('a new revision of a completed task does not unlock its dependents', () => 
 
   const rev2 = apply(ledger, request({ pr: 3, task_id: 'A', task_revision: 2, head_sha: NEXT, now: '2026-10-15T13:00:00.000Z' }));
   assert.equal(rev2.outcome.status, 'REQUESTED');
-  assert.equal(rev2.ledger.completed_tasks.A, undefined);
+  assert.equal(rev2.ledger.completed_tasks.A.task_revision, 1);
+  assert.equal(rev2.ledger.completed_tasks.A.head_sha, NEXT);
+  assert.equal(rev2.ledger.completed_tasks.A.current, false);
   const rev2Agent = rev2.ledger.slots['3'].agent_id;
   assert.notEqual(rev2Agent, rev1Agent);
   ledger = apply(rev2.ledger, snapshot({
@@ -891,7 +893,9 @@ test('a new revision of a completed task does not unlock its dependents', () => 
   }));
   assert.equal(replay.outcome.status, 'IGNORED_NO_RESERVATION');
   assert.equal(replay.ledger.slots['4'], undefined);
-  assert.equal(replay.ledger.completed_tasks.A, undefined);
+  assert.equal(replay.ledger.completed_tasks.A.task_revision, 1);
+  assert.equal(replay.ledger.completed_tasks.A.head_sha, NEXT);
+  assert.equal(replay.ledger.completed_tasks.A.current, false);
   const wrongAgent = apply(replay.ledger, snapshot({
     event: 'admission_completed',
     pr: 3,
@@ -927,6 +931,127 @@ test('a new revision of a completed task does not unlock its dependents', () => 
   }));
   assert.equal(again.outcome.status, 'IGNORED_NO_RESERVATION');
   assert.equal(again.ledger.slots['4'].occupied, true);
+});
+
+test('an identical dispatch after completion is a duplicate and an older generation cannot reset the newest proof', () => {
+  let ledger = apply(emptyLedger(), request({ pr: 1, task_id: 'A', task_revision: 1 })).ledger;
+  const rev1Agent = ledger.slots['1'].agent_id;
+  ledger = apply(ledger, snapshot({
+    event: 'admission_started',
+    pr: 1,
+    adapter: { source: 'trusted_adapter', kind: 'started', pr: 1, task_id: 'A', task_revision: 1, agent_id: rev1Agent, ack: true, executor: 'cursor', head_sha: HEAD },
+  })).ledger;
+  const done = complete(ledger, 1, 'A', NEXT);
+  assert.equal(done.outcome.status, 'COMPLETED');
+  const proof = done.ledger.completed_tasks.A;
+  assert.equal(proof.task_id, 'A');
+  assert.equal(proof.task_revision, 1);
+  assert.equal(proof.requested_head_sha, HEAD);
+  assert.equal(proof.requested_base_sha, BASE);
+  assert.equal(proof.head_sha, NEXT);
+  assert.equal(proof.base_sha, BASE);
+  assert.equal(proof.agent_id, rev1Agent);
+  assert.equal(proof.current, true);
+  ledger = done.ledger;
+
+  const duplicate = apply(ledger, request({ pr: 1, task_id: 'A', task_revision: 1 }));
+  assert.equal(duplicate.outcome.status, 'DUPLICATE_DISPATCH');
+  assert.equal(duplicate.outcome.plan.cursor_handoff, null);
+  assert.equal(duplicate.outcome.plan.admitted, null);
+  assert.equal(duplicate.outcome.agent_id, rev1Agent);
+  assert.equal(duplicate.ledger.queue.length, 0);
+  assert.equal(duplicate.ledger.slots['1'].phase, 'COMPLETED');
+  assert.equal(duplicate.ledger.slots['1'].occupied, false);
+  assert.equal(duplicate.ledger.slots['1'].agent_id, rev1Agent);
+  assert.deepEqual(duplicate.ledger.completed_tasks.A, proof);
+  ledger = duplicate.ledger;
+
+  const replay = apply(ledger, snapshot({
+    event: 'admission_completed',
+    pr: 1,
+    head_sha: NEXT,
+    adapter: { source: 'trusted_adapter', kind: 'completed', pr: 1, task_id: 'A', task_revision: 1, agent_id: rev1Agent, ack: true, executor: 'cursor', head_sha: NEXT },
+  }));
+  assert.equal(replay.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.equal(replay.outcome.plan.cursor_handoff, null);
+  assert.equal(replay.outcome.plan.admitted, null);
+  assert.deepEqual(replay.ledger.completed_tasks.A, proof);
+  assert.equal(replay.ledger.slots['1'].phase, 'COMPLETED');
+  assert.equal(replay.ledger.queue.length, 0);
+  ledger = replay.ledger;
+
+  const nextHead = 'f'.repeat(40);
+  const rev2 = apply(ledger, request({ pr: 3, task_id: 'A', task_revision: 2, head_sha: NEXT, now: '2026-10-15T13:00:00.000Z' }));
+  assert.equal(rev2.outcome.status, 'REQUESTED');
+  const rev2Agent = rev2.ledger.slots['3'].agent_id;
+  assert.notEqual(rev2Agent, rev1Agent);
+  assert.equal(rev2.ledger.completed_tasks.A.current, false);
+  assert.equal(rev2.ledger.completed_tasks.A.task_revision, 1);
+  assert.equal(rev2.ledger.completed_tasks.A.head_sha, NEXT);
+  assert.equal(rev2.ledger.completed_tasks.A.agent_id, rev1Agent);
+  ledger = apply(rev2.ledger, snapshot({
+    event: 'admission_started',
+    pr: 3,
+    head_sha: NEXT,
+    adapter: { source: 'trusted_adapter', kind: 'started', pr: 3, task_id: 'A', task_revision: 2, agent_id: rev2Agent, ack: true, executor: 'cursor', head_sha: NEXT },
+  })).ledger;
+  assert.equal(ledger.slots['3'].phase, 'STARTED');
+
+  const waiting = apply(ledger, request({ pr: 4, task_id: 'B', depends_on: ['A'], now: '2026-10-15T13:01:00.000Z' }));
+  assert.equal(waiting.outcome.status, 'WAITING_DEPENDENCY');
+  assert.equal(waiting.ledger.slots['4'], undefined);
+  ledger = waiting.ledger;
+  const oldWhileOpen = apply(ledger, request({ pr: 1, task_id: 'A', task_revision: 1, now: '2026-10-15T13:02:00.000Z' }));
+  assert.equal(oldWhileOpen.outcome.status, 'DUPLICATE_DISPATCH');
+  assert.equal(oldWhileOpen.outcome.plan.cursor_handoff, null);
+  assert.equal(oldWhileOpen.outcome.plan.admitted, null);
+  assert.equal(oldWhileOpen.ledger.completed_tasks.A.task_revision, 1);
+  assert.equal(oldWhileOpen.ledger.completed_tasks.A.current, false);
+  assert.equal(oldWhileOpen.ledger.slots['3'].phase, 'STARTED');
+  assert.equal(oldWhileOpen.ledger.slots['4'], undefined);
+  ledger = oldWhileOpen.ledger;
+  for (let index = 1; index <= 4; index += 1) {
+    ledger = apply(ledger, request({ pr: 40 + index, task_id: `HOLD${index}`, now: `2026-10-15T13:0${index + 2}:00.000Z` })).ledger;
+  }
+  assert.equal(occupiedCount(ledger), 5);
+  const finished = apply(ledger, snapshot({
+    event: 'admission_completed',
+    pr: 3,
+    head_sha: nextHead,
+    adapter: { source: 'trusted_adapter', kind: 'completed', pr: 3, task_id: 'A', task_revision: 2, agent_id: rev2Agent, ack: true, executor: 'cursor', head_sha: nextHead },
+  }));
+  assert.equal(finished.outcome.status, 'COMPLETED');
+  assert.equal(finished.ledger.completed_tasks.A.task_revision, 2);
+  assert.equal(finished.ledger.completed_tasks.A.requested_head_sha, NEXT);
+  assert.equal(finished.ledger.completed_tasks.A.requested_base_sha, BASE);
+  assert.equal(finished.ledger.completed_tasks.A.head_sha, nextHead);
+  assert.equal(finished.ledger.completed_tasks.A.agent_id, rev2Agent);
+  assert.equal(finished.ledger.completed_tasks.A.current, true);
+  assert.equal(finished.ledger.slots['4'].task_id, 'B');
+  assert.equal(finished.ledger.slots['4'].occupied, true);
+  assert.equal(occupiedCount(finished.ledger) <= CURSOR_SLOT_LIMIT, true);
+  const newest = finished.ledger.completed_tasks.A;
+
+  const oldRequest = apply(finished.ledger, request({ pr: 8, task_id: 'A', task_revision: 1, now: '2026-10-15T13:08:00.000Z' }));
+  assert.equal(oldRequest.outcome.status, 'DUPLICATE_DISPATCH');
+  assert.equal(oldRequest.outcome.plan.cursor_handoff, null);
+  assert.equal(oldRequest.outcome.plan.admitted, null);
+  assert.equal(oldRequest.ledger.slots['8'], undefined);
+  assert.deepEqual(oldRequest.ledger.completed_tasks.A, newest);
+  assert.equal(oldRequest.ledger.slots['4'].occupied, true);
+  const oldComplete = apply(oldRequest.ledger, snapshot({
+    event: 'admission_completed',
+    pr: 3,
+    head_sha: NEXT,
+    adapter: { source: 'trusted_adapter', kind: 'completed', pr: 3, task_id: 'A', task_revision: 1, agent_id: rev1Agent, ack: true, executor: 'cursor', head_sha: NEXT },
+  }));
+  assert.equal(oldComplete.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.equal(oldComplete.outcome.plan.cursor_handoff, null);
+  assert.equal(oldComplete.outcome.plan.admitted, null);
+  assert.deepEqual(oldComplete.ledger.completed_tasks.A, newest);
+  assert.equal(oldComplete.ledger.slots['4'].occupied, true);
+  assert.equal(oldComplete.ledger.slots['3'].phase, 'COMPLETED');
+  assert.equal(occupiedCount(oldComplete.ledger) <= CURSOR_SLOT_LIMIT, true);
 });
 
 function complete(ledger, pr, taskId, head = NEXT) {

@@ -683,12 +683,35 @@ function selectStructuralReservation(ledger, pr, pull) {
   const rows = Object.values(ledger.reservations ?? {}).filter(row => {
     const expected = row.structural_review;
     if (String(row.pr) !== String(pr) || !expected?.request_id) return false;
-    if (row.status !== 'WAITING_REREVIEW' && row.status !== 'READY_FOR_OWNER') return false;
+    if (row.status !== 'WAITING_REREVIEW' && row.status !== 'READY_FOR_OWNER' && row.status !== 'READINESS_REVOKED') return false;
     if (expected.head_sha !== head || expected.base_sha !== base) return false;
     if (taskId && expected.task_id !== taskId) return false;
     return true;
   });
-  return rows.find(row => row.status === 'WAITING_REREVIEW') ?? rows.find(row => row.status === 'READY_FOR_OWNER') ?? null;
+  return rows.find(row => row.status === 'WAITING_REREVIEW')
+    ?? rows.find(row => row.status === 'READINESS_REVOKED')
+    ?? rows.find(row => row.status === 'READY_FOR_OWNER')
+    ?? null;
+}
+
+function structuralFloor(ledger, pr, head, base) {
+  const mark = ledger.review_watermarks?.[`${String(pr)}\n${head}\n${base}`];
+  return mark?.floor_at ?? null;
+}
+
+function chooseOrderedRun(matches, reservation, ledger) {
+  if (!Array.isArray(matches) || matches.length < 2) return null;
+  const expected = reservation?.structural_review;
+  const floor = expected ? structuralFloor(ledger, reservation.pr, expected.head_sha, expected.base_sha) : null;
+  const bound = reservation?.status === 'READINESS_REVOKED' && floor != null
+    ? floor
+    : (reservation?.status === 'READY_FOR_OWNER' && reservation.ready_at != null ? reservation.ready_at : null);
+  if (bound == null) return null;
+  const later = matches.filter(item => {
+    const at = reviewInstant(item?.updated_at);
+    return at != null && at > bound;
+  });
+  return later.length === 1 ? later[0] : null;
 }
 
 export async function observeStructuralReview(ledger, pr, github, policy = loadPolicy()) {
@@ -721,7 +744,9 @@ export async function observeStructuralReview(ledger, pr, github, policy = loadP
   let envelope;
   try {
     author = await github.readCommit(expected.head_sha);
-    run = await findRun(github, policy, 'review', expected.request_id, null);
+    run = await findRun(github, policy, 'review', expected.request_id, null, {
+      choose: matches => chooseOrderedRun(matches, reservation, next),
+    });
     if (!run || run.run_attempt !== 1 || run.status !== 'completed' || run.conclusion !== 'success' || run.head_sha !== expected.policy_sha) {
       return unfinishedRead(next, pr, reservation);
     }

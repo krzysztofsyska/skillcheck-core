@@ -71,7 +71,16 @@ function requestDispatch(ledger, snapshot, adapter) {
     }
     return stagePartial(snapshot, adapter, { status: 'BLOCKED_DEPENDENCY_CYCLE', next_stage: 'blocked', blocker: 'BLOCKED_DEPENDENCY_CYCLE' });
   }
-  delete ledger.completed_tasks[task.task_id];
+  const finished = ledger.completed_tasks?.[task.task_id];
+  if (finished && !requestSupersedesCompletion(task, finished)) {
+    return stagePartial(snapshot, adapter, {
+      status: 'DUPLICATE_DISPATCH',
+      next_stage: 'wait_for_slot',
+      blocker: null,
+      agent_id: finished.agent_id ?? null,
+    });
+  }
+  if (finished) finished.current = false;
   ledger.queue.push(task);
   const promotion = promote(ledger);
   const slot = ledger.slots[task.pr];
@@ -106,6 +115,10 @@ function markCompleted(ledger, snapshot, adapter) {
   if (!adapter.head_sha || adapter.head_sha === slot.head_sha) {
     return stagePartial(snapshot, adapter, { status: 'BLOCKED_NO_COMMIT', next_stage: 'wait_for_commit', blocker: 'BLOCKED_NO_COMMIT', agent_id: slot.agent_id });
   }
+  const prior = ledger.completed_tasks[slot.task_id];
+  if (prior && !completionSupersedes(slot, adapter, prior)) {
+    return stagePartial(snapshot, adapter, { status: 'IGNORED_NO_RESERVATION', next_stage: 'wait_for_adapter', blocker: 'IGNORED_NO_RESERVATION' });
+  }
   slot.phase = 'COMPLETED';
   slot.occupied = false;
   slot.ack = true;
@@ -114,9 +127,12 @@ function markCompleted(ledger, snapshot, adapter) {
     pr: slot.pr,
     task_id: slot.task_id,
     task_revision: taskRevisionOf(slot),
+    requested_head_sha: slot.head_sha,
+    requested_base_sha: slot.base_sha,
     head_sha: adapter.head_sha,
     base_sha: slot.base_sha,
     agent_id: slot.agent_id,
+    current: true,
   };
   const promotion = promote(ledger);
   return stagePartial(snapshot, adapter, {
@@ -662,9 +678,32 @@ function priorityRank(task, ledger) {
   return boosted ? 3 : 4;
 }
 
+function requestSupersedesCompletion(task, done) {
+  if (!done) return true;
+  const nextRevision = taskRevisionOf(task);
+  const doneRevision = taskRevisionOf(done);
+  if (nextRevision > doneRevision) return true;
+  if (nextRevision < doneRevision) return false;
+  const requestedHead = done.requested_head_sha ?? null;
+  const requestedBase = done.requested_base_sha ?? done.base_sha ?? null;
+  if (requestedHead && task.head_sha && task.head_sha !== requestedHead) return true;
+  if (requestedBase && task.base_sha && task.base_sha !== requestedBase) return true;
+  return false;
+}
+
+function completionSupersedes(slot, adapter, prior) {
+  if (taskRevisionOf(slot) > taskRevisionOf(prior)) return true;
+  if (taskRevisionOf(slot) < taskRevisionOf(prior)) return false;
+  if (prior.agent_id && slot.agent_id !== prior.agent_id) return true;
+  if (prior.requested_head_sha && slot.head_sha !== prior.requested_head_sha) return true;
+  if (prior.requested_base_sha && slot.base_sha !== prior.requested_base_sha) return true;
+  if (prior.head_sha && adapter.head_sha !== prior.head_sha) return true;
+  return false;
+}
+
 export function completionCurrent(ledger, taskId) {
   const done = ledger.completed_tasks?.[taskId];
-  if (!done?.head_sha || !isCommitSha(done.head_sha)) return false;
+  if (!done?.head_sha || !isCommitSha(done.head_sha) || done.current === false) return false;
   const pending = [...(ledger.queue ?? []), ...Object.values(ledger.slots ?? {})].some(item => {
     if (!item || String(item.task_id) !== String(taskId)) return false;
     if (item.phase === 'COMPLETED' && item.occupied === false) return false;

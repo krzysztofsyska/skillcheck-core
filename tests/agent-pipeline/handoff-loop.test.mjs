@@ -1917,6 +1917,88 @@ test('a later structural FAIL without findings withdraws readiness and does not 
   assert.equal(older.ledger.attempts['126'], current.ledger.attempts['126']);
 });
 
+test('readiness revoked by an empty structural FAIL can accept a later complete pair and still rejects the old pass', async () => {
+  const policy = configuredReviewPolicy();
+  const { ledger, expected } = structuralLedger('ci-after');
+  const key = dedupKey('126', SHA.one, 5445420558);
+  const pass = passEnvelope(expected, policy);
+  const original = reviewRun(expected, policy, { id: 900, updated_at: '2026-10-15T13:00:00Z' });
+  const ready = await observeStructuralReview(ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: pass,
+    runs: [original],
+  }).github, policy);
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+  const attempts = ready.ledger.attempts['126'];
+  const requestId = ready.ledger.reservations[key].structural_review.request_id;
+  assert.equal(requestId, ready.ledger.slots['126'].review_contract.review_request_id);
+  const floorKey = `126\n${SHA.two}\n${SHA.base}`;
+
+  const fail = envelopeFor(expected, policy, { verdict: 'FAIL', findings: [], run_id: 901 });
+  const failedRun = reviewRun(expected, policy, { id: 901, updated_at: '2026-10-15T14:00:00Z' });
+  const revoked = await observeStructuralReview(ready.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelopes: { 900: pass, 901: fail },
+    runs: [original, failedRun],
+  }).github, policy);
+  assert.equal(revoked.outcome.status, 'READINESS_REVOKED');
+  assert.equal(revoked.outcome.plan.cursor_handoff, null);
+  assert.equal(revoked.outcome.plan.codex_rereview, null);
+  assert.equal(revoked.ledger.reservations[key].status, 'READINESS_REVOKED');
+  assert.equal(revoked.ledger.reservations[key].structural_review.request_id, requestId);
+  assert.equal(revoked.ledger.attempts['126'], attempts);
+  const floor = revoked.ledger.review_watermarks[floorKey].floor_at;
+  assert.equal(floor, Date.parse('2026-10-15T14:00:00Z') / 1000);
+  assert.equal(revoked.ledger.review_watermarks[floorKey].revoked_review_ids.includes(900), true);
+
+  const replayed = await observeStructuralReview(revoked.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelopes: { 900: pass, 901: fail },
+    runs: [original, failedRun],
+  }).github, policy);
+  assert.equal(replayed.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(replayed.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(replayed.outcome.plan.cursor_handoff, null);
+  assert.equal(replayed.outcome.plan.codex_rereview, null);
+  assert.equal(replayed.ledger.reservations[key].status, 'READINESS_REVOKED');
+  assert.equal(replayed.ledger.review_watermarks[floorKey].floor_at, floor);
+  assert.equal(replayed.ledger.attempts['126'], attempts);
+
+  const oldOnly = await observeStructuralReview(revoked.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: pass,
+    runs: [original],
+  }).github, policy);
+  assert.equal(oldOnly.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(oldOnly.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(oldOnly.ledger.reservations[key].status, 'READINESS_REVOKED');
+  assert.equal(oldOnly.ledger.review_watermarks[floorKey].floor_at, floor);
+  assert.equal(oldOnly.outcome.plan.cursor_handoff, null);
+
+  const laterPass = envelopeFor(expected, policy, { verdict: 'PASS', findings: [structuralFinding('note', 'info')], run_id: 904 });
+  const laterRun = reviewRun(expected, policy, { id: 904, updated_at: '2026-10-15T15:00:00Z' });
+  const restored = await observeStructuralReview(revoked.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelopes: { 900: pass, 901: fail, 904: laterPass },
+    runs: [original, failedRun, laterRun],
+  }).github, policy);
+  assert.equal(restored.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(restored.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(restored.ledger.reservations[key].structural_review.request_id, requestId);
+  assert.equal(restored.ledger.slots['126'].review_contract.review_request_id, requestId);
+  assert.equal(restored.ledger.reservations[key].ready_review_id, 904);
+  assert.equal(restored.ledger.review_watermarks[floorKey].floor_at, floor);
+  assert.equal(restored.ledger.review_watermarks[floorKey].revoked_review_ids.includes(900), true);
+  assert.equal(restored.ledger.attempts['126'], attempts);
+  assert.equal(restored.outcome.plan.cursor_handoff, null);
+  assert.equal(restored.outcome.plan.codex_rereview, null);
+});
+
 test('ready structural state loses durability on pending CI, a denied read, a moved base, and a Codex author', async () => {
   const policy = configuredReviewPolicy();
   const key = dedupKey('126', SHA.one, 5445420558);
@@ -2233,9 +2315,10 @@ function ciEnvelope(expected, policy, conclusion = 'success') {
   });
 }
 
-function structuralWorld({ expected, policy, envelope, runs = null, ciRuns = null, pullHead = SHA.two, pullBase = SHA.base, pullState = 'open', pullDraft = false, author = CURSOR_ACTOR, fail = null, jobs = null }) {
+function structuralWorld({ expected, policy, envelope, envelopes = null, runs = null, ciRuns = null, pullHead = SHA.two, pullBase = SHA.base, pullState = 'open', pullDraft = false, author = CURSOR_ACTOR, fail = null, jobs = null }) {
   const listed = runs ?? [reviewRun(expected, policy)];
   const verifyRuns = ciRuns ?? [ciRun(expected, policy)];
+  const reviewEnvelope = runId => envelopes?.[runId] ?? envelope;
   const ciBody = ciEnvelope(expected, policy, verifyRuns[0]?.conclusion === 'failure' ? 'failure' : 'success');
   const jobRows = jobs ?? [{ id: 1, name: 'verify', conclusion: verifyRuns[0]?.conclusion === 'success' ? 'success' : 'failure' }];
   const calls = [];
@@ -2257,8 +2340,10 @@ function structuralWorld({ expected, policy, envelope, runs = null, ciRuns = nul
         return new Response(JSON.stringify({ jobs: jobRows }), { status: 200 });
       }
       if (href.includes('/artifacts/') && (href.endsWith('/zip') || href.includes('/zip'))) {
-        const body = href.includes('/artifacts/51/') ? ciBody : envelope;
-        const name = href.includes('/artifacts/51/') ? 'ci-result.json' : 'review-envelope.json';
+        const artifactId = Number(href.match(/\/artifacts\/(\d+)/)?.[1]);
+        const verifyArtifact = artifactId === 51;
+        const body = verifyArtifact ? ciBody : reviewEnvelope(artifactId - 800000);
+        const name = verifyArtifact ? 'ci-result.json' : 'review-envelope.json';
         return new Response(zipStored(name, JSON.stringify(body)), { status: 200 });
       }
       if (href.includes('/actions/runs/') && href.includes('/artifacts')) {
@@ -2266,7 +2351,7 @@ function structuralWorld({ expected, policy, envelope, runs = null, ciRuns = nul
         const verify = verifyRuns.some(run => run.id === runId);
         return new Response(JSON.stringify({
           artifacts: [{
-            id: verify ? 51 : 50,
+            id: verify ? 51 : 800000 + runId,
             name: verify ? 'sc-agent-ci' : 'sc-agent-review',
             expired: false,
             workflow_run: { id: runId },
