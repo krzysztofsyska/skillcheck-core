@@ -86,7 +86,11 @@ function onReview(ledger, snapshot) {
   }
   const findings = snapshot.review.id ? actionableFindings(snapshot) : [];
   const verdict = canonicalVerdict(snapshot.verdict ?? snapshot.review?.verdict);
-  if (findings.length === 0 && isCleanPass(snapshot, verdict)) return considerReady(ledger, snapshot);
+  if (findings.length === 0 && isCleanPass(snapshot, verdict)) {
+    const identity = validateCodex(snapshot);
+    if (identity) return identity;
+    return considerReady(ledger, snapshot);
+  }
   const identity = validateCodex(snapshot);
   if (identity) return identity;
   if (findings.length === 0) return { status: 'IGNORED_NO_FINDINGS' };
@@ -97,9 +101,12 @@ function reserveHandoff(ledger, snapshot, findings) {
   const pr = String(snapshot.pull.number);
   const key = dedupKey(pr, snapshot.pull.headSha, snapshot.review.id);
   const existing = ledger.reservations[key];
-  if (existing) return { status: 'DUPLICATE', handoff_id: existing.handoff_id, attempt: ledger.attempts[pr] ?? 0, findings: existing.finding_refs };
+  if (existing) return mergeDuplicateFindings(existing, findings, ledger.attempts[pr] ?? 0);
   const used = ledger.attempts[pr] ?? 0;
-  if (used >= HANDOFF_ATTEMPT_LIMIT) return { status: 'BLOCKED_LIMIT', attempt: used };
+  if (used >= HANDOFF_ATTEMPT_LIMIT) {
+    supersedeOpenReservations(ledger, pr);
+    return { status: 'BLOCKED_LIMIT', attempt: used };
+  }
   supersedeOpenReservations(ledger, pr);
   const handoffId = handoffIdFor(pr, snapshot.pull.headSha, snapshot.review.id);
   ledger.attempts[pr] = used + 1;
@@ -220,6 +227,27 @@ function actionableFindings(snapshot) {
     });
   }
   return findings;
+}
+
+function mergeDuplicateFindings(existing, findings, attempt) {
+  const known = new Set((existing.finding_refs ?? []).map(finding => finding.comment_id));
+  const added = findings.filter(finding => !known.has(finding.comment_id));
+  if (existing.status !== 'HANDOFF_PLANNED' || added.length === 0) {
+    return { status: 'DUPLICATE', handoff_id: existing.handoff_id, attempt, findings: existing.finding_refs };
+  }
+  existing.finding_refs = [...existing.finding_refs, ...added];
+  return {
+    status: 'HANDOFF_UPDATED',
+    handoff_id: existing.handoff_id,
+    attempt,
+    findings: existing.finding_refs,
+    cursor_handoff: {
+      mechanism: 'github_comment_at_cursor',
+      existing_pr: true,
+      template: CURSOR_HANDOFF_TEMPLATE,
+      finding_refs: existing.finding_refs,
+    },
+  };
 }
 
 function supersedeOpenReservations(ledger, pr) {

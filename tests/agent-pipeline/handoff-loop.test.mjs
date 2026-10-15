@@ -100,7 +100,9 @@ test('sandbox cycle hands off once, waits for CI, then accepts only an independe
   assert.equal(first.outcome.handoff_id, handoffIdFor('126', SHA.one, 5445420558));
   assert.equal(first.outcome.plan.cursor_handoff.template, CURSOR_HANDOFF_TEMPLATE);
   assert.deepEqual(first.outcome.findings.map(finding => finding.comment_id), [10]);
-  assert.equal(secondComment.outcome.status, 'DUPLICATE');
+  assert.equal(secondComment.outcome.status, 'HANDOFF_UPDATED');
+  assert.deepEqual(secondComment.outcome.findings.map(finding => finding.comment_id), [10, 11]);
+  assert.equal(secondComment.outcome.plan.cursor_handoff.finding_refs.length, 2);
   assert.equal(ledger.attempts['126'], 1);
   assert.equal(Object.keys(ledger.reservations).length, 1);
 
@@ -143,7 +145,7 @@ test('sandbox cycle hands off once, waits for CI, then accepts only an independe
     fixAuthor: { id: 7, login: 'cursor[bot]', type: 'Bot' },
   }));
   ledger = selfApproval.ledger;
-  assert.equal(selfApproval.outcome.status, 'REJECTED_SELF_APPROVAL');
+  assert.equal(selfApproval.outcome.status, 'IGNORED_REVIEWER');
 
   const committerApproval = apply(ledger, reviewSnapshot({
     headSha: SHA.two,
@@ -156,7 +158,7 @@ test('sandbox cycle hands off once, waits for CI, then accepts only an independe
     fixAuthor: { id: 7, login: 'cursor[bot]', type: 'Bot' },
   }));
   ledger = committerApproval.ledger;
-  assert.equal(committerApproval.outcome.status, 'REJECTED_SELF_APPROVAL');
+  assert.equal(committerApproval.outcome.status, 'IGNORED_REVIEWER');
 
   const ready = apply(ledger, reviewSnapshot({
     headSha: SHA.two,
@@ -185,8 +187,13 @@ test('three attempts are shared across heads and the fourth review is blocked', 
   assert.equal(blocked.outcome.status, 'BLOCKED_LIMIT');
   assert.equal(blocked.ledger.attempts['126'], HANDOFF_ATTEMPT_LIMIT);
   assert.equal(blocked.outcome.plan.cursor_handoff, null);
+  assert.equal(blocked.ledger.reservations[dedupKey('126', SHA.three, 1002)].status, 'SUPERSEDED');
   const replay = apply(blocked.ledger, reviewSnapshot({ reviewId: 1000, threads: [thread(100, 1000, SHA.one)] }));
   assert.equal(replay.outcome.status, 'DUPLICATE');
+  const advanced = apply(blocked.ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.four, threads: [], ci: { sha: SHA.four, conclusion: 'success' } }));
+  assert.equal(advanced.outcome.status, 'IGNORED_NO_RESERVATION');
+  const latePass = apply(advanced.ledger, reviewSnapshot({ headSha: SHA.four, reviewId: 1004, reviewState: 'commented', threads: [], verdict: 'PASS', ci: { sha: SHA.four, conclusion: 'success' } }));
+  assert.notEqual(latePass.outcome.status, 'READY_FOR_OWNER');
 });
 
 test('a newer review closes the earlier open reservation', () => {
@@ -231,7 +238,8 @@ test('a Codex PASS comment reaches ready from stored CI without a GitHub approva
     reviewer: { ...AUTHOR },
     sender: { ...AUTHOR },
   }));
-  assert.equal(authorPass.outcome.status, 'REJECTED_SELF_APPROVAL');
+  assert.equal(authorPass.outcome.status, 'IGNORED_REVIEWER');
+  assert.equal(authorPass.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
 
   const ready = apply(ledger, reviewSnapshot({ headSha: SHA.two, reviewId: 804, reviewState: 'commented', threads: [], verdict: 'PASS' }));
   assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
@@ -239,6 +247,37 @@ test('a Codex PASS comment reaches ready from stored CI without a GitHub approva
   assert.equal(ready.ledger.attempts['126'], 1);
   const after = apply(ready.ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
   assert.equal(after.outcome.status, 'IGNORED_NO_RESERVATION');
+});
+
+test('a spoofed sender cannot accept a Codex PASS and the Codex actor cannot approve its own fix', () => {
+  let ledger = emptyLedger();
+  ledger = apply(ledger, reviewSnapshot()).ledger;
+  ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+  const spoofed = apply(ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 900,
+    reviewState: 'commented',
+    threads: [],
+    verdict: 'PASS',
+    reviewer: { ...CODEX_REVIEWER },
+    sender: { id: 1, login: 'not-codex', type: 'User' },
+  }));
+  assert.equal(spoofed.outcome.status, 'IGNORED_REVIEWER');
+  assert.equal(spoofed.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
+
+  const self = apply(ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 901,
+    reviewState: 'commented',
+    threads: [],
+    verdict: 'PASS',
+    author: { ...CODEX_REVIEWER },
+    reviewer: { ...CODEX_REVIEWER },
+    sender: { ...CODEX_REVIEWER },
+    fixAuthor: { id: 7, login: 'cursor[bot]', type: 'Bot' },
+  }));
+  assert.equal(self.outcome.status, 'REJECTED_SELF_APPROVAL');
+  assert.equal(self.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
 });
 
 test('forks, wrong base, spoofed identity, stale threads, and integration errors do not reserve a handoff', () => {
