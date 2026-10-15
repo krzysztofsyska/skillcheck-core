@@ -197,6 +197,10 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       if (!/^[0-9a-f]{40}$/i.test(String(sha ?? ''))) throw new Error('INVALID_SHA');
       return request(`/repos/${owner}/${repo}/commits/${sha}`);
     },
+    async readPullReviews(number) {
+      if (!Number.isInteger(number) || number < 1) throw new Error('INVALID_PULL');
+      return pages(`/repos/${owner}/${repo}/pulls/${number}/reviews`);
+    },
     async readComparison(base, head) {
       const result = await request(`/repos/${owner}/${repo}/compare/${base}...${head}?per_page=100`);
       if (!Array.isArray(result.commits) || !Array.isArray(result.files) || result.files.length >= 300 || result.total_commits > 100) throw new Error('PROMOTION_DIFF_INCOMPLETE');

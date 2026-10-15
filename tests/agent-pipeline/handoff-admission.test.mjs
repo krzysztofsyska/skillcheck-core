@@ -717,6 +717,59 @@ test('a started remote task stays reserved until cancellation evidence frees the
   assert.equal(cancelled.ledger.slots['406'].occupied, true);
 });
 
+test('submitted review time orders a delayed pass and a delayed failure', () => {
+  const at = minute => `2026-10-15T12:${String(minute).padStart(2, '0')}:00Z`;
+  const failedFirst = apply(emptyLedger(), review({ review_id: 200, verdict: 'FAIL', submitted_at: at(20) }));
+  assert.equal(failedFirst.outcome.status, 'READINESS_REVOKED');
+  const unseenPass = apply(failedFirst.ledger, review({ review_id: 100, submitted_at: at(10) }));
+  assert.equal(unseenPass.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(unseenPass.outcome.status, 'READY_TO_MERGE');
+
+  const pass400 = apply(emptyLedger(), review({ review_id: 400, submitted_at: at(40) }));
+  assert.equal(pass400.outcome.status, 'READY_TO_MERGE');
+  const delayedFail = apply(pass400.ledger, review({ review_id: 300, verdict: 'FAIL', submitted_at: at(30) }));
+  assert.equal(delayedFail.outcome.status, 'STALE_REVIEW');
+  assert.equal(Object.values(delayedFail.ledger.bound_reviews)[0].review_id, 400);
+  assert.equal(Object.values(delayedFail.ledger.bound_reviews)[0].revoked, false);
+  const sameSecond = apply(pass400.ledger, review({ review_id: 500, verdict: 'FAIL', submitted_at: at(40) }));
+  assert.equal(sameSecond.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.equal(Object.values(sameSecond.ledger.bound_reviews)[0].revoked, false);
+  const unordered = apply(pass400.ledger, review({ review_id: 501, verdict: 'FAIL' }));
+  assert.equal(unordered.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.equal(Object.values(unordered.ledger.bound_reviews)[0].revoked, false);
+});
+
+test('completing a dependency returns every admitted task once', () => {
+  let ledger = apply(emptyLedger(), request({ pr: 1, task_id: 'DEP' })).ledger;
+  for (let index = 1; index <= 6; index += 1) {
+    ledger = apply(ledger, request({ pr: 10 + index, task_id: `TASK-${index}`, depends_on: ['DEP'], now: `2026-10-15T13:0${index}:00.000Z` })).ledger;
+    assert.equal(ledger.slots[String(10 + index)], undefined);
+  }
+  const done = complete(ledger, 1, 'DEP');
+  assert.equal(done.outcome.status, 'COMPLETED');
+  assert.equal(done.outcome.plan.admitted.length, 5);
+  assert.equal(new Set(done.outcome.plan.admitted.map(item => item.task_id)).size, 5);
+  for (const plan of done.outcome.plan.admitted) {
+    assert.equal(typeof plan.agent_id, 'string');
+    assert.equal(plan.agent_id.length > 0, true);
+    assert.equal(plan.pr, plan.task_id.replace('TASK-', '1'));
+    assert.equal(plan.sha, HEAD);
+    assert.equal(done.ledger.slots[plan.pr].occupied, true);
+    assert.equal(done.ledger.slots[plan.pr].agent_id, plan.agent_id);
+  }
+  assert.equal(done.ledger.queue.map(item => item.task_id).join(','), 'TASK-6');
+  assert.equal(occupiedCount(done.ledger), 5);
+  const repeated = complete(done.ledger, 1, 'DEP');
+  assert.equal(repeated.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.equal(repeated.outcome.plan.admitted, null);
+  assert.equal(repeated.ledger.queue.map(item => item.task_id).join(','), 'TASK-6');
+  const first = done.outcome.plan.admitted[0];
+  const next = complete(done.ledger, Number(first.pr), first.task_id);
+  assert.equal(next.outcome.plan.admitted.length, 1);
+  assert.equal(next.outcome.plan.admitted[0].task_id, 'TASK-6');
+  assert.equal(next.ledger.queue.length, 0);
+});
+
 test('an uncertain transport keeps its reservation and never calls the executor', async () => {
   let calls = 0;
   const operation = async () => {
@@ -813,6 +866,7 @@ function review(fields) {
       ci: fields.ci === undefined ? { sha: head, conclusion: 'success' } : fields.ci,
       tests: fields.tests ?? { suite: 'agent-pipeline', result: 'pass' },
       fix_author: fields.fix_author ?? { id: 7, login: 'cursor[bot]', type: 'Bot' },
+      submitted_at: fields.submitted_at ?? null,
     },
   });
 }

@@ -157,11 +157,18 @@ test('sandbox cycle hands off once, waits for CI, then accepts only an independe
   ledger = requested.ledger;
   const requestedAgain = apply(ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, reviewId: null, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
   ledger = requestedAgain.ledger;
-  assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
-  assert.equal(requested.outcome.plan.codex_rereview.author_approval_counts, false);
-  assert.equal(requested.outcome.plan.codex_rereview.paid_call, false);
+  assert.equal(requested.outcome.status, 'WAITING_CURSOR');
+  assert.equal(requested.outcome.plan.codex_rereview, null);
   assert.equal(requested.outcome.plan.cursor_handoff, null);
-  assert.equal(requestedAgain.outcome.status, 'DUPLICATE');
+  assert.equal(requestedAgain.outcome.status, 'WAITING_CURSOR');
+  assert.equal(requestedAgain.outcome.plan.codex_rereview, null);
+  const done = apply(ledger, completeSlot(ledger, 126, SHA.two));
+  ledger = done.ledger;
+  assert.equal(done.outcome.status, 'COMPLETED');
+  assert.equal(done.outcome.plan.codex_rereview.sha, SHA.two);
+  assert.equal(done.outcome.plan.codex_rereview.author_approval_counts, false);
+  assert.equal(done.outcome.plan.codex_rereview.paid_call, false);
+  assert.equal(ledger.slots['126'].occupied, false);
 
   const selfApproval = apply(ledger, reviewSnapshot({
     headSha: SHA.two,
@@ -189,10 +196,6 @@ test('sandbox cycle hands off once, waits for CI, then accepts only an independe
   ledger = committerApproval.ledger;
   assert.equal(committerApproval.outcome.status, 'IGNORED_REVIEWER');
 
-  const done = apply(ledger, completeSlot(ledger, 126, SHA.two));
-  ledger = done.ledger;
-  assert.equal(done.outcome.status, 'COMPLETED');
-  assert.equal(ledger.slots['126'].occupied, false);
   const ready = apply(ledger, reviewSnapshot({
     headSha: SHA.two,
     reviewId: 603,
@@ -268,16 +271,49 @@ test('a newer review on an active pull request updates the existing agent', () =
   const requested = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
   ledger = requested.ledger;
   const repeated = apply(ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
-  assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
-  assert.equal(repeated.outcome.status, 'DUPLICATE');
-  assert.equal(repeated.ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'WAITING_REREVIEW');
+  assert.equal(requested.outcome.status, 'WAITING_CURSOR');
+  assert.equal(requested.outcome.plan.codex_rereview, null);
+  assert.equal(repeated.outcome.status, 'WAITING_CURSOR');
   assert.equal(repeated.outcome.plan.codex_rereview, null);
+  assert.equal(repeated.ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'WAITING_CURSOR');
+  const done = apply(repeated.ledger, completeSlot(repeated.ledger, 126, SHA.two));
+  assert.equal(done.outcome.status, 'COMPLETED');
+  assert.equal(done.outcome.plan.codex_rereview.sha, SHA.two);
+  assert.equal(done.outcome.plan.codex_rereview.paid_call, false);
+  const later = apply(done.ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(later.outcome.status, 'DUPLICATE');
+  assert.equal(later.outcome.plan.codex_rereview, null);
+  assert.equal(later.ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'WAITING_REREVIEW');
 });
 
 test('a Codex PASS comment reaches ready from stored CI without a GitHub approval', () => {
   let ledger = emptyLedger();
   ledger = apply(ledger, reviewSnapshot()).ledger;
-  ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+  const waiting = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  ledger = waiting.ledger;
+  assert.equal(waiting.outcome.status, 'WAITING_CURSOR');
+  assert.equal(waiting.outcome.plan.codex_rereview, null);
+  assert.equal(ledger.reservations[dedupKey('126', SHA.one, 5445420558)].ci.conclusion, 'success');
+
+  const beforeCompletion = apply(ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 804,
+    reviewState: 'commented',
+    threads: [],
+    verdict: 'PASS',
+    fixAuthor: { ...CURSOR_ACTOR },
+    baseSha: SHA.base,
+  }));
+  assert.equal(beforeCompletion.outcome.status, 'IGNORED_UNREQUESTED_APPROVAL');
+  assert.notEqual(beforeCompletion.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(beforeCompletion.ledger.slots['126'].occupied, true);
+
+  const done = apply(ledger, completeSlot(ledger, 126, SHA.two));
+  assert.equal(done.outcome.status, 'COMPLETED');
+  assert.equal(done.outcome.plan.codex_rereview.sha, SHA.two);
+  assert.equal(done.outcome.plan.codex_rereview.paid_call, false);
+  assert.equal(done.ledger.slots['126'].occupied, false);
+  ledger = done.ledger;
 
   const commented = apply(ledger, reviewSnapshot({ headSha: SHA.two, reviewId: 800, reviewState: 'commented', threads: [] }));
   assert.equal(commented.outcome.status, 'IGNORED_NO_FINDINGS');
@@ -300,21 +336,7 @@ test('a Codex PASS comment reaches ready from stored CI without a GitHub approva
   assert.equal(authorPass.outcome.status, 'IGNORED_REVIEWER');
   assert.equal(authorPass.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
 
-  const early = apply(ledger, reviewSnapshot({
-    headSha: SHA.two,
-    reviewId: 804,
-    reviewState: 'commented',
-    threads: [],
-    verdict: 'PASS',
-    fixAuthor: { ...CURSOR_ACTOR },
-    baseSha: SHA.base,
-  }));
-  assert.equal(early.outcome.status, 'BLOCKED_NO_COMMIT');
-  assert.equal(early.ledger.slots['126'].occupied, true);
-  const done = apply(early.ledger, completeSlot(early.ledger, 126, SHA.two));
-  assert.equal(done.outcome.status, 'COMPLETED');
-  assert.equal(done.ledger.slots['126'].occupied, false);
-  const unproven = apply(done.ledger, reviewSnapshot({
+  const unproven = apply(ledger, reviewSnapshot({
     headSha: SHA.two,
     reviewId: 805,
     reviewState: 'commented',
@@ -351,7 +373,12 @@ test('a Codex PASS comment reaches ready from stored CI without a GitHub approva
 test('a spoofed sender cannot accept a Codex PASS and the Codex actor cannot approve its own fix', () => {
   let ledger = emptyLedger();
   ledger = apply(ledger, reviewSnapshot()).ledger;
-  ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+  const waiting = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(waiting.outcome.status, 'WAITING_CURSOR');
+  assert.equal(waiting.outcome.plan.codex_rereview, null);
+  const done = apply(waiting.ledger, completeSlot(waiting.ledger, 126, SHA.two));
+  assert.equal(done.outcome.plan.codex_rereview.sha, SHA.two);
+  ledger = done.ledger;
   const spoofed = apply(ledger, reviewSnapshot({
     headSha: SHA.two,
     reviewId: 900,
@@ -460,7 +487,7 @@ test('raw review payload drops comment text before planning', () => {
       head: { sha: SHA.one, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
     },
   });
-  assert.equal(withVerdict.verdict, 'PASS');
+  assert.equal(withVerdict.verdict, null);
   assert.equal(JSON.stringify(withVerdict).includes(SENTINEL), false);
   assert.equal(normalized.pull.baseSha, null);
   assert.equal(normalized.fixAuthor, null);
@@ -584,7 +611,7 @@ test('the workflow and CLI stay fail-closed with no secrets or paid actions', ()
   const code = runHandoffCli(['--sandbox', fixture], {}, { log: line => sandboxLogs.push(line), error: line => errors.push(line) });
   assert.equal(code, 0, errors.join('\n'));
   const report = JSON.parse(sandboxLogs.at(-1));
-  assert.deepEqual(report.statuses, ['HANDOFF', 'DUPLICATE', 'REVIEW_REQUESTED', 'COMPLETED', 'READY_FOR_OWNER']);
+  assert.deepEqual(report.statuses, ['HANDOFF', 'DUPLICATE', 'WAITING_CURSOR', 'COMPLETED', 'READY_FOR_OWNER']);
   assert.equal(report.executed, 0);
   assert.equal(report.live_effects, false);
   assert.equal(report.attempts['126'], 1);
@@ -836,12 +863,25 @@ test('a later negative verdict revokes owner readiness', () => {
 test('github delivery emits a plan, reads the successor author, and shares the revocation floor', async () => {
   const calls = [];
   let authorMode = 'missing';
+  let reviewsMode = 'published';
+  let published = [githubReview({ id: 50, sha: SHA.one, state: 'CHANGES_REQUESTED', at: '2026-10-15T10:00:00Z' })];
   const github = createGitHubClient({
     token: 'fixture',
     repository: 'krzysztofsyska/skillcheck-core',
     fetch: async (url, options) => {
-      calls.push({ url, method: options?.method ?? 'GET' });
-      const sha = decodeURIComponent(String(url.split('/commits/').at(-1) ?? ''));
+      const href = String(url);
+      calls.push({ url: href, method: options?.method ?? 'GET' });
+      if (href.includes('/pulls/') && href.includes('/reviews')) {
+        if (reviewsMode === 'race') throw new Error('lost');
+        if (reviewsMode === 'forbidden') return new Response(JSON.stringify({ message: 'forbidden' }), { status: 403 });
+        if (reviewsMode === 'missing') return new Response(JSON.stringify([]), { status: 200 });
+        if (reviewsMode === 'foreign') return new Response(JSON.stringify([githubReview({ id: 100, sha: SHA.three, state: 'APPROVED', at: '2026-10-15T12:00:00Z' })]), { status: 200 });
+        if (reviewsMode === 'stranger') return new Response(JSON.stringify([githubReview({ id: 100, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z', user: AUTHOR })]), { status: 200 });
+        if (reviewsMode === 'pending') return new Response(JSON.stringify([{ id: 100, user: { ...CODEX_REVIEWER }, state: 'PENDING', commit_id: SHA.two, body: 'PASS' }]), { status: 200 });
+        if (reviewsMode === 'commented') return new Response(JSON.stringify([githubReview({ id: 100, sha: SHA.two, state: 'COMMENTED', at: '2026-10-15T12:00:00Z' })]), { status: 200 });
+        return new Response(JSON.stringify(published), { status: 200 });
+      }
+      const sha = decodeURIComponent(href.split('/commits/').at(-1) ?? '');
       if (sha === SHA.two && authorMode === 'race') throw new Error('lost');
       if (sha === SHA.two && authorMode === 'forbidden') {
         return new Response(JSON.stringify({ message: 'forbidden' }), { status: 403 });
@@ -913,67 +953,86 @@ test('github delivery emits a plan, reads the successor author, and shares the r
   ledger = ci.ledger;
 
   const reservationKey = dedupKey('126', SHA.one, 50);
-  const spoofedPass = { reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS', spoof: { ...CURSOR_ACTOR } };
-  for (const [mode, status] of [['missing', 'BLOCKED_EVIDENCE'], ['named', 'BLOCKED_EVIDENCE'], ['foreign', 'BLOCKED_EVIDENCE']]) {
-    authorMode = mode;
-    const blocked = await deliverGithubReview(ledger, githubEvent(spoofedPass), [], github);
-    assert.equal(blocked.outcome.status, status);
+  const commented = { reviewId: 100, sha: SHA.two, state: 'commented', spoof: { ...CURSOR_ACTOR } };
+  authorMode = 'linked';
+  for (const mode of ['missing', 'foreign', 'stranger', 'pending', 'commented']) {
+    reviewsMode = mode;
+    const blocked = await deliverGithubReview(ledger, githubEvent(commented), [], github);
+    assert.equal(blocked.outcome.status, 'BLOCKED_EVIDENCE');
     assert.notEqual(blocked.outcome.status, 'READY_FOR_OWNER');
     assert.equal(blocked.ledger.reservations[reservationKey].status, 'WAITING_REREVIEW');
     ledger = blocked.ledger;
   }
-  authorMode = 'forbidden';
-  const forbidden = await deliverGithubReview(ledger, githubEvent(spoofedPass), [], github);
+  reviewsMode = 'forbidden';
+  const forbidden = await deliverGithubReview(ledger, githubEvent(commented), [], github);
   assert.equal(forbidden.outcome.status, 'BLOCKED_INTEGRATION');
   assert.equal(forbidden.outcome.http_status, 403);
   assert.equal(forbidden.ledger.reservations[reservationKey].status, 'WAITING_REREVIEW');
   ledger = forbidden.ledger;
-  authorMode = 'race';
-  const lost = await deliverGithubReview(ledger, githubEvent(spoofedPass), [], github);
+  reviewsMode = 'race';
+  const lost = await deliverGithubReview(ledger, githubEvent(commented), [], github);
   assert.equal(lost.outcome.status, 'BLOCKED_INTEGRATION');
   assert.equal(lost.outcome.http_status, null);
   assert.equal(lost.ledger.reservations[reservationKey].status, 'WAITING_REREVIEW');
   ledger = lost.ledger;
-
+  reviewsMode = 'published';
+  authorMode = 'named';
+  published = [githubReview({ id: 100, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z' })];
+  const unnamed = await deliverGithubReview(ledger, githubEvent(commented), [], github);
+  assert.equal(unnamed.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(unnamed.outcome.status, 'READY_FOR_OWNER');
+  ledger = unnamed.ledger;
   authorMode = 'reviewer';
-  const fetchedSelf = await deliverGithubReview(ledger, githubEvent(spoofedPass), [], github);
+  const fetchedSelf = await deliverGithubReview(ledger, githubEvent(commented), [], github);
   assert.equal(fetchedSelf.outcome.status, 'REJECTED_SELF_APPROVAL');
   assert.notEqual(fetchedSelf.outcome.status, 'READY_FOR_OWNER');
   ledger = fetchedSelf.ledger;
 
   authorMode = 'linked';
-  const clean = githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' });
+  const clean = githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' });
   assert.equal(Object.hasOwn(clean, 'head_commit'), false);
   assert.equal(Object.hasOwn(clean, 'fix_author'), false);
   assert.equal(Object.hasOwn(clean, 'user'), false);
+  assert.equal(Object.hasOwn(clean, 'verdict'), false);
+  assert.equal(Object.hasOwn(clean.review, 'verdict'), false);
   const pass100 = await deliverGithubReview(ledger, clean, [], github);
   assert.equal(pass100.outcome.status, 'READY_FOR_OWNER');
   assert.equal(pass100.outcome.plan.merge, null);
   assert.equal(calls.some(call => call.method === 'GET' && call.url.endsWith(`/commits/${SHA.two}`)), true);
   ledger = pass100.ledger;
-  const pass200 = await deliverGithubReview(ledger, githubEvent({ reviewId: 200, sha: SHA.two, state: 'commented', verdict: 'PASS', spoof: { ...CODEX_REVIEWER } }), [], github);
+  published = [
+    githubReview({ id: 100, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z' }),
+    githubReview({ id: 200, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:01:00Z' }),
+  ];
+  const pass200 = await deliverGithubReview(ledger, githubEvent({ reviewId: 200, sha: SHA.two, state: 'commented', spoof: { ...CODEX_REVIEWER } }), [], github);
   assert.equal(pass200.outcome.status, 'REVIEW_REUSED');
   assert.notEqual(pass200.outcome.status, 'REJECTED_SELF_APPROVAL');
   assert.equal(pass200.outcome.plan.cursor_handoff, null);
   ledger = pass200.ledger;
 
+  published = [
+    ...published,
+    githubReview({ id: 301, sha: SHA.two, state: 'DISMISSED', at: '2026-10-15T12:02:00Z' }),
+  ];
   const dismissed = await deliverGithubReview(ledger, githubEvent({ reviewId: 301, sha: SHA.two, state: 'dismissed' }), [], github);
   assert.equal(dismissed.outcome.status, 'READINESS_REVOKED');
   assert.equal(dismissed.ledger.reservations[dedupKey('126', SHA.one, 50)].status, 'READINESS_REVOKED');
   ledger = dismissed.ledger;
-  const failed = apply(ledger, admissionPass({ reviewId: 300, verdict: 'FAIL' }));
+  const failed = apply(ledger, admissionPass({ reviewId: 300, verdict: 'FAIL', submitted_at: '2026-10-15T12:03:00Z' }));
   assert.equal(failed.outcome.status, 'READINESS_REVOKED');
   ledger = failed.ledger;
 
-  const replay100 = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  published = published.filter(review => review.id !== 301);
+  const replay100 = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }), [], github);
   assert.equal(replay100.outcome.status, 'STALE_REVIEW');
   assert.notEqual(replay100.outcome.status, 'READY_FOR_OWNER');
-  const replay200 = apply(ledger, admissionPass({ reviewId: 200 }));
+  const replay200 = apply(ledger, admissionPass({ reviewId: 200, submitted_at: '2026-10-15T12:01:00Z' }));
   assert.equal(replay200.outcome.status, 'STALE_REVIEW');
   assert.notEqual(replay200.outcome.status, 'READY_TO_MERGE');
-  const pass400 = await deliverGithubReview(ledger, githubEvent({ reviewId: 400, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  published = [...published, githubReview({ id: 400, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:04:00Z' })];
+  const pass400 = await deliverGithubReview(ledger, githubEvent({ reviewId: 400, sha: SHA.two, state: 'commented' }), [], github);
   assert.equal(pass400.outcome.status, 'READY_FOR_OWNER');
-  const late100 = apply(pass400.ledger, admissionPass({ reviewId: 100 }));
+  const late100 = apply(pass400.ledger, admissionPass({ reviewId: 100, submitted_at: '2026-10-15T12:00:00Z' }));
   assert.equal(late100.outcome.status, 'STALE_REVIEW');
   assert.equal(late100.ledger.reservations[dedupKey('126', SHA.one, 50)].status, 'READY_FOR_OWNER');
   assert.equal(calls.every(call => call.method === 'GET'), true);
@@ -1001,7 +1060,6 @@ function githubEvent({ pr = 126, reviewId, sha, state = 'changes_requested', ver
     action: 'submitted',
     repository: { full_name: 'krzysztofsyska/skillcheck-core' },
     sender: { ...CODEX_REVIEWER },
-    verdict,
     review: {
       id: reviewId,
       state,
@@ -1018,6 +1076,7 @@ function githubEvent({ pr = 126, reviewId, sha, state = 'changes_requested', ver
       head: { sha, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
     },
   };
+  if (verdict != null) event.verdict = verdict;
   if (spoof) {
     event.head_commit = { author: { ...spoof, name: 'Spoof Name', email: 'spoof@example.com' } };
     event.fix_author = { ...spoof };
@@ -1042,7 +1101,18 @@ function findingThread(reviewId, sha) {
   }];
 }
 
-function admissionPass({ reviewId, verdict = 'PASS' }) {
+function githubReview({ id, sha, state, at, user = CODEX_REVIEWER }) {
+  return {
+    id,
+    user: { ...user },
+    state,
+    commit_id: sha,
+    submitted_at: at,
+    body: 'PASS',
+  };
+}
+
+function admissionPass({ reviewId, verdict = 'PASS', submitted_at = null }) {
   return {
     now: '2026-10-15T12:00:00.000Z',
     repository: 'krzysztofsyska/skillcheck-core',
@@ -1058,7 +1128,7 @@ function admissionPass({ reviewId, verdict = 'PASS' }) {
       author: { ...AUTHOR },
       headRepo: 'krzysztofsyska/skillcheck-core',
     },
-    review: { id: reviewId, state: 'commented', user: { ...CODEX_REVIEWER } },
+    review: { id: reviewId, state: 'commented', user: { ...CODEX_REVIEWER }, submittedAt: submitted_at },
     adapter: {
       source: 'trusted_adapter',
       kind: 'review',
@@ -1067,6 +1137,7 @@ function admissionPass({ reviewId, verdict = 'PASS' }) {
       executor: 'codex',
       head_sha: SHA.two,
       base_sha: SHA.base,
+      submitted_at,
       conditions: { policy_sha: 'policy-1', required_checks: ['verify'] },
       verdict,
       findings: [],
@@ -1075,6 +1146,69 @@ function admissionPass({ reviewId, verdict = 'PASS' }) {
     },
   };
 }
+
+test('successor CI waits for completion and either order requests review once', () => {
+  let ledger = apply(emptyLedger(), reviewSnapshot()).ledger;
+  const waiting = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(waiting.outcome.status, 'WAITING_CURSOR');
+  assert.equal(waiting.outcome.plan.codex_rereview, null);
+  assert.equal(waiting.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].ci.conclusion, 'success');
+  const repeated = apply(waiting.ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(repeated.outcome.plan.codex_rereview, null);
+  const done = apply(repeated.ledger, completeSlot(repeated.ledger, 126, SHA.two));
+  assert.equal(done.outcome.status, 'COMPLETED');
+  assert.equal(done.outcome.plan.codex_rereview.sha, SHA.two);
+  assert.equal(done.outcome.plan.codex_rereview.paid_call, false);
+  const after = apply(done.ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(after.outcome.status, 'DUPLICATE');
+  assert.equal(after.outcome.plan.codex_rereview, null);
+
+  let reverse = apply(emptyLedger(), reviewSnapshot({ pr: 127, reviewId: 9 })).ledger;
+  const completed = apply(reverse, completeSlot(reverse, 127, SHA.two));
+  assert.equal(completed.outcome.status, 'COMPLETED');
+  assert.equal(completed.outcome.plan.codex_rereview, null);
+  const requested = apply(completed.ledger, reviewSnapshot({ pr: 127, event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
+  assert.equal(requested.outcome.plan.codex_rereview.sha, SHA.two);
+  const second = apply(requested.ledger, reviewSnapshot({ pr: 127, event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
+  assert.equal(second.outcome.status, 'DUPLICATE');
+  assert.equal(second.outcome.plan.codex_rereview, null);
+});
+
+test('new findings revoke owner readiness before reserving the next handoff', () => {
+  let ledger = apply(emptyLedger(), reviewSnapshot()).ledger;
+  ledger = apply(ledger, completeSlot(ledger, 126, SHA.two)).ledger;
+  ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+  const ready = apply(ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 100,
+    reviewState: 'approved',
+    threads: [],
+    fixAuthor: { ...CURSOR_ACTOR },
+    baseSha: SHA.base,
+  }));
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+  const findings = apply(ready.ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 500,
+    threads: [thread(500, 500, SHA.two)],
+    baseSha: SHA.base,
+  }));
+  assert.equal(findings.outcome.status, 'HANDOFF');
+  assert.equal(findings.outcome.plan.cursor_handoff == null, false);
+  assert.equal(findings.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'READINESS_REVOKED');
+  const replay = apply(findings.ledger, reviewSnapshot({
+    headSha: SHA.two,
+    reviewId: 100,
+    reviewState: 'approved',
+    threads: [],
+    fixAuthor: { ...CURSOR_ACTOR },
+    baseSha: SHA.base,
+  }));
+  assert.equal(replay.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(replay.outcome.status, 'READY_FOR_OWNER');
+  assert.notEqual(replay.outcome.status, 'REVIEW_REUSED');
+});
 
 test('five finished handoff cycles release their slots before the next review', () => {
   let ledger = emptyLedger();

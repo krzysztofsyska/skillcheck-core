@@ -1,5 +1,5 @@
 import { agentIdFor, operationKey, sha256 } from './canonical.mjs';
-import { CODEX_REVIEWER, HANDOFF_ATTEMPT_LIMIT, REPOSITORY, cursorHandoffPlan, dedupKey, handoffIdFor, retireOpenReservations } from './handoff-loop.mjs';
+import { CODEX_REVIEWER, HANDOFF_ATTEMPT_LIMIT, REPOSITORY, claimRereview, cursorHandoffPlan, dedupKey, handoffIdFor, retireOpenReservations } from './handoff-loop.mjs';
 
 export const CURSOR_SLOT_LIMIT = 5;
 const PRIORITY_RANK = Object.freeze({ FREE: 0, PRESELEKCJA: 1, 'SC-005': 2 });
@@ -71,8 +71,8 @@ function requestDispatch(ledger, snapshot, adapter) {
   ledger.queue.push(task);
   const promotion = promote(ledger);
   const slot = ledger.slots[task.pr];
-  const plan = { cursor_handoff: promotion.cursor_handoff };
-  if (slot?.occupied && promotion.admitted.includes(task.task_id)) {
+  const plan = { cursor_handoff: promotion.cursor_handoff, admitted: promotion.admitted };
+  if (slot?.occupied && promotion.admitted.some(item => item.task_id === task.task_id)) {
     return stagePartial(snapshot, adapter, { status: 'REQUESTED', next_stage: 'wait_for_ack', blocker: null, agent_id: slot.agent_id, ...plan });
   }
   if (!dependenciesMet(ledger, task)) {
@@ -108,7 +108,15 @@ function markCompleted(ledger, snapshot, adapter) {
   slot.completed_head_sha = adapter.head_sha;
   ledger.completed_tasks[slot.task_id] = { pr: slot.pr, task_id: slot.task_id, head_sha: adapter.head_sha, base_sha: slot.base_sha };
   const promotion = promote(ledger);
-  return stagePartial(snapshot, adapter, { status: 'COMPLETED', next_stage: 'wait_for_review', blocker: null, agent_id: slot.agent_id, cursor_handoff: promotion.cursor_handoff });
+  return stagePartial(snapshot, adapter, {
+    status: 'COMPLETED',
+    next_stage: 'wait_for_review',
+    blocker: null,
+    agent_id: slot.agent_id,
+    cursor_handoff: promotion.cursor_handoff,
+    admitted: promotion.admitted,
+    codex_rereview: claimRereview(ledger, slot.pr, adapter.head_sha),
+  });
 }
 
 function bindReview(ledger, snapshot, adapter) {
@@ -123,16 +131,16 @@ function bindReview(ledger, snapshot, adapter) {
   const pr = String(snapshot.pull.number);
   const key = bindingKey(pr, adapter.head_sha, adapter.base_sha, digest);
   if (isNegativeReview(snapshot, adapter)) {
-    return revocationResult(ledger, snapshot, adapter, key, negativeVerdict(snapshot, adapter), reviewId, pr, 'READINESS_REVOKED', 'wait_for_review');
+    return revocationResult(ledger, snapshot, adapter, key, negativeVerdict(snapshot, adapter), reviewId, pr, 'READINESS_REVOKED', 'wait_for_review', adapter.submitted_at);
   }
   if (activeFindings(adapter).length > 0) {
-    return revocationResult(ledger, snapshot, adapter, key, 'FINDINGS', reviewId, pr, 'BLOCKED_FINDINGS', 'blocked');
+    return revocationResult(ledger, snapshot, adapter, key, 'FINDINGS', reviewId, pr, 'BLOCKED_FINDINGS', 'blocked', adapter.submitted_at);
   }
   if (!isActor(adapter.fix_author)) {
     return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
   }
   const stored = ledger.bound_reviews[key];
-  if (revocationBlocks(stored, reviewId) || identityRevoked(ledger, pr, adapter.head_sha, adapter.base_sha, reviewId)) {
+  if (revocationBlocks(stored, reviewId) || identityRevoked(ledger, pr, adapter.head_sha, adapter.base_sha, reviewId, adapter.submitted_at)) {
     return stagePartial(snapshot, adapter, { status: 'STALE_REVIEW', next_stage: 'wait_for_review', blocker: 'STALE_REVIEW' });
   }
   const current = reviewStillValid(ledger, adapter.head_sha, adapter.base_sha, digest, { pr, reviewId });
@@ -146,7 +154,9 @@ function bindReview(ledger, snapshot, adapter) {
     return stagePartial(snapshot, adapter, { status: 'REVIEW_NOT_PASS', next_stage: 'wait_for_review', blocker: 'REVIEW_NOT_PASS' });
   }
   const seen = reviewIdList(stored?.seen_review_ids, stored?.review_id, stored?.revoked_review_ids, reviewId);
-  notePassIdentity(ledger, pr, adapter.head_sha, adapter.base_sha, reviewId);
+  const noted = notePassIdentity(ledger, pr, adapter.head_sha, adapter.base_sha, reviewId, adapter.submitted_at);
+  if (noted === 'unordered') return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
+  if (noted === 'stale') return stagePartial(snapshot, adapter, { status: 'STALE_REVIEW', next_stage: 'wait_for_review', blocker: 'STALE_REVIEW' });
   ledger.bound_reviews[key] = {
     pr,
     review_id: reviewId,
@@ -163,6 +173,7 @@ function bindReview(ledger, snapshot, adapter) {
     task_id: adapter.task_id ?? null,
     seen_review_ids: seen,
     revoked_review_ids: reviewIdList(stored?.revoked_review_ids),
+    submitted_at: adapter.submitted_at ?? null,
   };
   return mergeReadiness(ledger, snapshot, adapter, { status: 'REVIEW_BOUND', next_stage: 'owner_acceptance', blocker: null });
 }
@@ -262,14 +273,30 @@ function promote(ledger) {
     if (!dependenciesMet(ledger, task) || occupyingSlot(ledger, task.pr)) continue;
     if (task.handoff === true && (ledger.attempts?.[task.pr] ?? 0) >= HANDOFF_ATTEMPT_LIMIT) continue;
     occupy(ledger, task);
+    const slot = ledger.slots[task.pr];
+    const plan = dispatchPlan(task, slot);
+    if (!plan) {
+      delete ledger.slots[task.pr];
+      continue;
+    }
     ledger.queue = ledger.queue.filter(item => item.task_id !== task.task_id);
-    admitted.push(task.task_id);
+    admitted.push(plan);
     if (task.handoff === true && cursorHandoff == null) {
       const reservation = recordQueuedHandoff(ledger, task);
       if (reservation) cursorHandoff = cursorHandoffPlan(reservation.finding_refs);
     }
   }
   return { admitted, cursor_handoff: cursorHandoff };
+}
+
+function dispatchPlan(task, slot) {
+  if (!slot?.agent_id || task?.task_id == null || task.pr == null || !task.head_sha) return null;
+  return {
+    task_id: String(task.task_id),
+    agent_id: slot.agent_id,
+    pr: String(task.pr),
+    sha: task.head_sha,
+  };
 }
 
 function recordQueuedHandoff(ledger, task) {
@@ -389,7 +416,7 @@ export function releasePull(ledger, pr) {
   ledger.queue = ledger.queue.filter(item => item.pr !== key);
   if (ledger.queue.length !== queued) released = true;
   const promotion = released ? promote(ledger) : null;
-  return { released, held: false, cursor_handoff: promotion?.cursor_handoff ?? null };
+  return { released, held: false, cursor_handoff: promotion?.cursor_handoff ?? null, admitted: promotion?.admitted ?? null };
 }
 
 export function markUnknown(ledger, snapshot) {
@@ -431,22 +458,27 @@ function markCancelled(ledger, snapshot, adapter) {
   slot.occupied = false;
   slot.phase = 'CANCELLED';
   const promotion = promote(ledger);
-  return stagePartial(snapshot, adapter, { status: 'CANCELLED', next_stage: 'wait_for_slot', blocker: null, agent_id: slot.agent_id, cursor_handoff: promotion.cursor_handoff });
+  return stagePartial(snapshot, adapter, { status: 'CANCELLED', next_stage: 'wait_for_slot', blocker: null, agent_id: slot.agent_id, cursor_handoff: promotion.cursor_handoff, admitted: promotion.admitted });
 }
 
-function revocationResult(ledger, snapshot, adapter, key, verdict, reviewId, pr, status, nextStage) {
-  const effect = revokeBinding(ledger, key, verdict, reviewId, pr, adapter.head_sha, adapter.base_sha);
+function revocationResult(ledger, snapshot, adapter, key, verdict, reviewId, pr, status, nextStage, submittedAt) {
+  const effect = revokeBinding(ledger, key, verdict, reviewId, pr, adapter.head_sha, adapter.base_sha, submittedAt);
+  if (effect === 'unordered') return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
   if (effect === 'bounded' && ledger.bound_reviews[key]?.revoked !== true) {
     return stagePartial(snapshot, adapter, { status: 'STALE_REVIEW', next_stage: 'wait_for_review', blocker: 'STALE_REVIEW' });
   }
   return stagePartial(snapshot, adapter, { status, next_stage: nextStage, blocker: status });
 }
 
-function revokeBinding(ledger, key, verdict, reviewId, pr, head, base) {
-  const shared = revokeSharedReadiness(ledger, pr, head, base, reviewId);
+function revokeBinding(ledger, key, verdict, reviewId, pr, head, base, submittedAt) {
+  const shared = revokeSharedReadiness(ledger, pr, head, base, reviewId, submittedAt);
+  if (shared === 'unordered') return 'unordered';
   const stored = ledger.bound_reviews[key];
   if (!stored) return shared === 'bounded' ? 'bounded' : 'revoked';
   if (shared === 'bounded' || reviewIdList(stored.revoked_review_ids).includes(reviewId)) return 'bounded';
+  const passAt = reviewInstant(stored.submitted_at);
+  const at = reviewInstant(submittedAt);
+  if (passAt != null && at != null && passAt > at) return 'bounded';
   const seen = reviewIdList(stored.seen_review_ids, stored.review_id, reviewId);
   stored.seen_review_ids = seen;
   stored.revoked_review_ids = reviewIdList(stored.revoked_review_ids, seen);
@@ -464,31 +496,60 @@ function watermark(ledger, pr, head, base) {
   ensureAdmission(ledger);
   ledger.review_watermarks ??= {};
   const key = watermarkKey(pr, head, base);
-  ledger.review_watermarks[key] ??= { seen_review_ids: [], revoked_review_ids: [] };
+  ledger.review_watermarks[key] ??= { seen_review_ids: [], revoked_review_ids: [], events: [], floor_at: null };
   return ledger.review_watermarks[key];
 }
 
-export function notePassIdentity(ledger, pr, head, base, reviewId) {
+export function reviewInstant(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value);
+  const parsed = Date.parse(String(value));
+  if (!Number.isFinite(parsed)) return null;
+  return Math.floor(parsed / 1000);
+}
+
+function orderConflict(mark, at, kind) {
+  const events = mark.events ?? [];
+  const hasTimed = events.some(event => event.at != null);
+  const hasUntimed = events.some(event => event.at == null);
+  if (at == null && hasTimed) return 'unordered';
+  if (at != null && hasUntimed) return 'unordered';
+  if (at != null && events.some(event => event.at === at && event.id !== undefined && event.kind !== kind)) return 'unordered';
+  return null;
+}
+
+export function notePassIdentity(ledger, pr, head, base, reviewId, submittedAt) {
   if (!isCommitSha(head) || !isCommitSha(base) || reviewId == null) return 'missing';
   const mark = watermark(ledger, pr, head, base);
+  const at = reviewInstant(submittedAt);
   if (mark.revoked_review_ids.includes(reviewId)) return 'stale';
+  const conflict = orderConflict(mark, at, 'pass');
+  if (conflict) return conflict;
+  if (at != null && mark.floor_at != null && at <= mark.floor_at) return 'stale';
+  mark.events ??= [];
+  if (!mark.events.some(event => event.id === reviewId && event.kind === 'pass')) {
+    mark.events.push({ id: reviewId, at, kind: 'pass' });
+  }
   mark.seen_review_ids = reviewIdList(mark.seen_review_ids, reviewId);
   return 'pass';
 }
 
-export function identityRevoked(ledger, pr, head, base, reviewId) {
+export function identityRevoked(ledger, pr, head, base, reviewId, submittedAt) {
+  const at = reviewInstant(submittedAt);
   const marks = ledger?.review_watermarks ?? {};
   for (const [key, mark] of Object.entries(marks)) {
     const [markPr, markHead, markBase] = key.split('\n');
     if (markPr !== String(pr) || markHead !== head) continue;
     if (isCommitSha(base) && markBase !== base) continue;
     if (mark.revoked_review_ids?.includes(reviewId)) return true;
+    if (at != null && mark.floor_at != null && at <= mark.floor_at) return true;
   }
   return false;
 }
 
-export function revokeSharedReadiness(ledger, pr, head, base, reviewId) {
+export function revokeSharedReadiness(ledger, pr, head, base, reviewId, submittedAt) {
   ensureAdmission(ledger);
+  const at = reviewInstant(submittedAt);
   const bases = new Set();
   if (isCommitSha(base)) bases.add(base);
   else {
@@ -497,23 +558,49 @@ export function revokeSharedReadiness(ledger, pr, head, base, reviewId) {
       if (markPr === String(pr) && markHead === head && isCommitSha(markBase)) bases.add(markBase);
     }
   }
+  if (bases.size === 0) return 'missing';
+  for (const item of bases) {
+    const conflict = orderConflict(watermark(ledger, pr, head, item), at, 'negative');
+    if (conflict) return conflict;
+  }
   let effect = 'missing';
   for (const item of bases) {
     const mark = watermark(ledger, pr, head, item);
-    if (mark.revoked_review_ids.includes(reviewId)) {
+    if ((mark.events ?? []).some(event => event.id === reviewId && event.kind === 'negative') || (at == null && mark.revoked_review_ids.includes(reviewId))) {
       effect = 'bounded';
       continue;
     }
+    mark.events ??= [];
+    if (at == null) {
+      mark.seen_review_ids = reviewIdList(mark.seen_review_ids, reviewId);
+      mark.revoked_review_ids = reviewIdList(mark.revoked_review_ids, mark.seen_review_ids);
+      mark.events.push({ id: reviewId, at: null, kind: 'negative' });
+      effect = 'revoked';
+      continue;
+    }
+    mark.events.push({ id: reviewId, at, kind: 'negative' });
+    mark.floor_at = mark.floor_at == null ? at : Math.max(mark.floor_at, at);
+    const revoked = new Set(mark.revoked_review_ids);
+    revoked.add(reviewId);
+    for (const event of mark.events) {
+      if (event.kind === 'pass' && event.at != null && event.at <= mark.floor_at) revoked.add(event.id);
+    }
+    mark.revoked_review_ids = [...revoked];
     mark.seen_review_ids = reviewIdList(mark.seen_review_ids, reviewId);
-    mark.revoked_review_ids = reviewIdList(mark.revoked_review_ids, mark.seen_review_ids);
     effect = 'revoked';
   }
   if (effect === 'bounded') return 'bounded';
+  let flipped = false;
   for (const row of Object.values(ledger.reservations ?? {})) {
     if (String(row.pr) !== String(pr) || row.successor_sha !== head || row.status !== 'READY_FOR_OWNER') continue;
+    if (row.ready_at != null && at != null && row.ready_at > at) continue;
     row.status = 'READINESS_REVOKED';
     row.revoked_review_id = reviewId;
-    effect = 'revoked';
+    flipped = true;
+  }
+  if (!flipped && at != null) {
+    const protectedReady = Object.values(ledger.reservations ?? {}).some(row => String(row.pr) === String(pr) && row.successor_sha === head && row.status === 'READY_FOR_OWNER' && row.ready_at != null && row.ready_at > at);
+    if (protectedReady) return 'bounded';
   }
   return effect;
 }
@@ -677,6 +764,8 @@ function stagePartial(snapshot, adapter, fields) {
     http_status: fields.http_status ?? null,
     agent_id: fields.agent_id ?? null,
     cursor_handoff: fields.cursor_handoff ?? null,
+    codex_rereview: fields.codex_rereview ?? null,
+    admitted: fields.admitted ?? null,
     stage: {
       pr: adapter?.pr ?? snapshot?.pull?.number ?? null,
       executor: adapter?.executor ?? null,
