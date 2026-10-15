@@ -3,7 +3,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { planFeedback, runFeedback, fixPrompt, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
+import { planFeedback, runFeedback, fixPrompt, assertLedgerRoom, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
 import { main, feedbackStore, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
@@ -478,7 +478,7 @@ test('Codex approval in the same GitHub second as request is accepted', () => {
 test('a later Codex review replaces an earlier changes request on the same head', () => {
   const f = fixture();
   const initial = planFeedback(f.binding, null, f.snapshot).state;
-  f.snapshot.comments = [{ id: 102, user: bot, commit_id: A, original_commit_id: A, line: 3, pull_request_review_id: 100 }];
+  f.snapshot.comments = [];
   f.snapshot.reviews = [
     { id: 100, user: bot, commit_id: A, state: 'CHANGES_REQUESTED', submitted_at: new Date(1000).toISOString() },
     { id: 101, user: bot, commit_id: A, state: 'APPROVED', submitted_at: new Date(2000).toISOString() },
@@ -491,6 +491,49 @@ test('a later Codex review replaces an earlier changes request on the same head'
     { id: 101, user: bot, commit_id: A, state: 'CHANGES_REQUESTED', submitted_at: new Date(2000).toISOString() },
   ];
   assert.equal(planFeedback(f.binding, state, f.snapshot, 3000).status, 'DUPLICATE_HEAD');
+});
+
+test('inline findings from an earlier current-head review stay actionable', () => {
+  const f = fixture();
+  const initial = planFeedback(f.binding, null, f.snapshot).state;
+  f.snapshot.comments = [
+    { id: 102, user: bot, commit_id: A, original_commit_id: A, line: 3, pull_request_review_id: 100 },
+    { id: 103, user: bot, commit_id: A, original_commit_id: A, line: 4, pull_request_review_id: 101 },
+  ];
+  f.snapshot.reviews = [
+    { id: 100, user: bot, commit_id: A, state: 'COMMENTED', submitted_at: new Date(1000).toISOString() },
+    { id: 101, user: bot, commit_id: A, state: 'COMMENTED', submitted_at: new Date(2000).toISOString() },
+  ];
+  f.snapshot.reactions = [{ user: bot, content: '+1' }];
+  const state = { version: 1, configHash: initial.configHash, rounds: 0, handled: [], phase: 'WAITING_REVIEW',
+    head: A, base: B, reviewCommentId: 200, reviewBaseline: [], reviewRequestedAt: 500 };
+  const plan = planFeedback(f.binding, state, f.snapshot, 3000);
+  assert.equal(plan.state.phase, 'CURSOR_PENDING');
+  assert.deepEqual(plan.effect.findings.map(item => item.id), [102, 103]);
+  f.snapshot.reviews[1].state = 'APPROVED';
+  f.snapshot.comments = [f.snapshot.comments[0]];
+  const stillOpen = planFeedback(f.binding, state, f.snapshot, 3000);
+  assert.equal(stillOpen.state.phase, 'CURSOR_PENDING');
+  assert.deepEqual(stillOpen.effect.findings.map(item => item.id), [102]);
+});
+
+test('a dispatch is refused when the ledger cannot hold both writes', async () => {
+  assert.doesNotThrow(() => assertLedgerRoom(99, 1));
+  assert.throws(() => assertLedgerRoom(99, 2), /LEDGER_CAPACITY/);
+  assert.throws(() => assertLedgerRoom(100, 1), /LEDGER_CAPACITY/);
+  const f = fixture();
+  let used = 99;
+  let saves = 0;
+  f.args.store = { ...f.args.store, async save() { saves += 1; return saves; } };
+  f.args.reserveLedger = writes => { assertLedgerRoom(used, writes); used += writes; };
+  await assert.rejects(runFeedback(f.args), /LEDGER_CAPACITY/);
+  assert.equal(f.calls(), 0);
+  assert.equal(saves, 0);
+  used = 98;
+  assert.equal(await runFeedback(f.args), 'FIXING');
+  assert.equal(f.calls(), 1);
+  assert.equal(used, 100);
+  assert.equal(saves, 2);
 });
 
 test('approval already visible when the review request returns cannot authorize READY', async () => {

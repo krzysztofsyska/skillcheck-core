@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createGitHubClient, createInstallationToken, decodeGithubContent } from './lib/github.mjs';
 import { createCursorClient } from './lib/cursor.mjs';
 import { evaluatePreflight } from './lib/merge.mjs';
-import { runFeedback, validateBinding, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
+import { runFeedback, validateBinding, assertLedgerRoom, LEDGER_LIMIT, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
 import { withRulesetEvidence, verifyStateBootstrap } from './lib/ruleset-evidence.mjs';
 
 // Actions read is required for environment and deployment-branch policy reads.
@@ -159,10 +159,15 @@ export async function main(env = process.env) {
   await verifyFeedbackProtection(github, policy.controller_app_id, policy);
   // Bootstrap this dedicated state branch with no force/delete and controller-only
   // writers before activation. Never silently recreate a deleted journal.
-  await verifyStateBootstrap(github, policy);
+  const ledger = await verifyStateBootstrap(github, policy);
+  const room = { used: ledger.commits };
+  function reserveLedger(writes) {
+    assertLedgerRoom(room.used, writes, LEDGER_LIMIT);
+    room.used += writes;
+  }
   const cursor = createCursorClient({ fetch, apiKey: env.CURSOR_API_KEY });
   return reconcileBindings(config.bindings, binding => runFeedback({ binding, store: feedbackStore(github, binding.pr),
-      readSnapshot: state => readSnapshot(github, cursor, binding, state), cursor,
+      readSnapshot: state => readSnapshot(github, cursor, binding, state), cursor, reserveLedger,
       postReview: body => github.request(`/repos/${REPOSITORY}/issues/${binding.pr}/comments`, { method: 'POST', body: { body } }),
     }));
 }

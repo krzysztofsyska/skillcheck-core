@@ -57,13 +57,18 @@ test('bootstrap must be pinned, empty and have authenticated linear descendants'
   const tree = { truncated: false, tree: [] };
   const commit = { sha: b, parents: [{ sha: a }], committer: { id: 456, type: 'Bot' },
     commit: { verification: { verified: true, reason: 'valid' } } };
+  let total = 1;
   const github = { request: async path => {
     if (path.includes('/branches/')) return { commit: { sha: b } };
     if (path.includes('/git/trees/')) return tree;
-    if (path.includes('/compare/')) return { status: 'ahead', base_commit: { sha: a }, total_commits: 1, commits: [{ sha: b }] };
+    if (path.includes('/compare/')) return { status: 'ahead', base_commit: { sha: a }, total_commits: total,
+      commits: Array.from({ length: total }, () => ({ sha: b })) };
     return commit;
   } };
-  await verifyStateBootstrap(github, policy);
+  assert.equal((await verifyStateBootstrap(github, policy)).commits, 1);
+  total = 101;
+  await assert.rejects(verifyStateBootstrap(github, policy), /STATE_BOOTSTRAP_MISMATCH/);
+  total = 1;
   commit.committer.id = 999;
   await assert.rejects(verifyStateBootstrap(github, policy), /WRITER_UNVERIFIED/);
   tree.tree.push({ path: 'feedback', type: 'tree' });

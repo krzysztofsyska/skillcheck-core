@@ -35,6 +35,7 @@ export async function verifyStateBootstrap(github, policy) {
   if (tree.truncated !== false || !Array.isArray(tree.tree) || tree.tree.some(x => x.path === 'feedback')) {
     throw new Error('STATE_BOOTSTRAP_NOT_EMPTY');
   }
+  let commits = 0;
   if (head !== e.sha) {
     const comparison = await github.request(`${root}/compare/${e.sha}...${head}?per_page=100`);
     if (comparison.status !== 'ahead' || comparison.base_commit?.sha !== e.sha
@@ -53,5 +54,7 @@ export async function verifyStateBootstrap(github, policy) {
       parent = commit.sha;
     }
     if (parent !== head) throw new Error('STATE_BOOTSTRAP_MISMATCH');
+    commits = comparison.total_commits;
   }
+  return { commits };
 }

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
+export const LEDGER_LIMIT = 100;
 export const REPOSITORY = 'krzysztofsyska/skillcheck-core';
 export const REPOSITORY_ID = 1043384454;
 export const CODEX = { id: 199175422, login: 'chatgpt-codex-connector[bot]' };
@@ -7,6 +8,11 @@ const sha = value => /^[a-f0-9]{40}$/.test(value ?? '');
 const trusted = user => user?.id === CODEX.id && user?.login === CODEX.login && user?.type === 'Bot';
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = code => { throw new Error(code); };
+export function assertLedgerRoom(used, writes, limit = LEDGER_LIMIT) {
+  if (!Number.isInteger(used) || used < 0 || !Number.isInteger(writes) || writes < 1 || used + writes > limit) {
+    throw new Error('LEDGER_CAPACITY');
+  }
+}
 const sameFindings = (left, right) => left.length === right.length
   && left.every((item, index) => item.kind === right[index].kind && item.id === right[index].id);
 const codexReviewRequest = (head, base) => `@codex review\n\nSC-OPS-002D: review HEAD ${head} against base ${base}. Include the synthetic acceptance criterion when applicable. Owner acceptance and production approval remain pending.`;
@@ -42,20 +48,20 @@ export function validateSnapshot(b, s) {
 
 export function findings(s) {
   const head = s.pull.head.sha;
-  // GitHub keeps every submitted review. A later review by the same trusted
-  // reviewer replaces the earlier state for this head; an old CHANGES_REQUESTED
-  // must not stay actionable after a newer APPROVED.
+  const onHead = s.reviews.filter(r => trusted(r.user) && r.commit_id === head && Number.isSafeInteger(r.id));
+  // Only the decision state is reduced to the latest review. An earlier
+  // CHANGES_REQUESTED does not survive a newer APPROVED. Inline comments on
+  // every non-dismissed review of this head stay actionable.
   const latest = new Map();
-  for (const review of s.reviews) {
-    if (!trusted(review.user) || review.commit_id !== head || !Number.isSafeInteger(review.id)) continue;
+  for (const review of onHead) {
     const previous = latest.get(review.user.id);
     if (!previous || review.id > previous.id) latest.set(review.user.id, review);
   }
-  const reviews = [...latest.values()].filter(review => review.state !== 'DISMISSED');
-  const ids = new Set(reviews.map(r => r.id));
+  const active = onHead.filter(review => review.state !== 'DISMISSED');
+  const ids = new Set(active.map(r => r.id));
   const inline = s.comments.filter(c => trusted(c.user) && c.commit_id === head
     && c.original_commit_id === head && (c.subject_type === 'file' || c.line != null) && !c.in_reply_to_id && ids.has(c.pull_request_review_id));
-  const changes = reviews.filter(r => r.state === 'CHANGES_REQUESTED');
+  const changes = [...latest.values()].filter(review => review.state === 'CHANGES_REQUESTED');
   // Only immutable IDs leave the adapter. Never echo provider prose, HTML or secrets.
   return [...inline.map(c => ({ kind: 'discussion', id: c.id })), ...changes.map(r => ({ kind: 'review', id: r.id }))]
     .filter(r => Number.isSafeInteger(r.id)).sort((a, b) => a.id - b.id);
@@ -182,7 +188,7 @@ export function fixPrompt(binding, effect) {
 
 // store.save must be compare-and-swap. Reservation precedes every external effect.
 // An ambiguous response remains *_PENDING forever until manually reconciled.
-export async function runFeedback({ binding, store, readSnapshot, cursor, postReview, now }) {
+export async function runFeedback({ binding, store, readSnapshot, cursor, postReview, now, reserveLedger }) {
   const saved = await store.read();
   const snapshot = await readSnapshot(saved.value);
   const plan = planFeedback(binding, saved.value, snapshot, now);
@@ -191,6 +197,9 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
     plan.state.operationMarker = randomUUID();
     plan.effect.marker = plan.state.operationMarker;
   }
+  // A dispatch writes the reservation and the completion. Both must fit before
+  // Cursor or a review comment is sent. A state-only transition needs one write.
+  reserveLedger?.(plan.effect ? 2 : 1);
   const revision = await store.save(plan.state, saved.revision);
   if (!plan.effect) return plan.state.phase;
   // Re-read immediately before sending; a moved target consumes the reservation and stops.
