@@ -1,11 +1,11 @@
 import { operationKey, sha256 } from './canonical.mjs';
 import { validateCi } from './ci.mjs';
 import { artifactFromRun, findRun } from './evidence.mjs';
-import { admit, claimHandoffSlot, ensureAdmission, identityRevoked, markUnknown, notePassIdentity, releasePull, reviewInstant, revokeSharedReadiness } from './handoff-admission.mjs';
+import { admit, claimHandoffSlot, completionCurrent, ensureAdmission, identityRevoked, markUnknown, notePassIdentity, releasePull, reviewInstant, revokeSharedReadiness } from './handoff-admission.mjs';
 import { validatePair } from './live-effects.mjs';
 import { loadPolicy } from './policy.mjs';
 import { validateReview } from './review.mjs';
-import { requiredReviewChecks } from './transitions.mjs';
+import { plan, requiredReviewChecks } from './transitions.mjs';
 
 /**
  * Inactive Codex review → Cursor handoff → CI → independent Codex review loop.
@@ -69,7 +69,10 @@ export async function deliverGithubReview(ledger, event, threads = [], github = 
   if (read.blocked) snapshot.error = { status: read.status ?? null, code: read.code ?? 'BLOCKED_EVIDENCE' };
   const decision = await readCodexDecision(github, snapshot.pull?.number, snapshot.pull?.headSha, snapshot.review?.id);
   if (decision.blocked) snapshot.error = { status: decision.status ?? null, code: decision.code ?? 'BLOCKED_EVIDENCE' };
-  else if (decision.reason === 'unordered') snapshot.reviewDecision = 'unordered';
+  else if (decision.reason === 'unordered') {
+    snapshot.reviewDecision = 'unordered';
+    if (decision.review?.submitted_at) snapshot.review = { ...snapshot.review, submittedAt: decision.review.submitted_at };
+  }
   else if (decision.reason === 'superseded') {
     const state = String(decision.review.state).toLowerCase();
     snapshot.review = {
@@ -243,7 +246,14 @@ function onReview(ledger, snapshot) {
   if (snapshot.review.state === 'pending' || snapshot.review.state === '') {
     return { status: 'IGNORED_REVIEW_STATE' };
   }
-  if (snapshot.reviewDecision === 'unordered') return { status: 'BLOCKED_EVIDENCE' };
+  if (snapshot.reviewDecision === 'unordered') {
+    const pr = String(snapshot.pull?.number ?? '');
+    const head = snapshot.pull?.headSha;
+    if (pr && isCommitSha(head)) {
+      revokeSharedReadiness(ledger, pr, head, snapshot.pull?.baseSha, snapshot.review?.id, snapshot.review?.submittedAt);
+    }
+    return { status: 'BLOCKED_EVIDENCE' };
+  }
   if (snapshot.reviewSuperseded) return reconcileSupersededReview(ledger, snapshot);
   const findings = snapshot.review.id ? actionableFindings(snapshot) : [];
   const verdict = canonicalVerdict(snapshot.verdict ?? snapshot.review?.verdict);
@@ -392,7 +402,10 @@ function observeReadyCi(ledger, snapshot, headSha) {
       return { status: 'WAITING_CURSOR', handoff_id: ready.handoff_id, codex_rereview: null };
     }
     const request = claimRereview(ledger, snapshot.pull.number, headSha, { controlsMoved: controlsMoved && !baseMoved && !headMoved });
-    if (!request) return { status: 'BLOCKED_EVIDENCE', handoff_id: ready.handoff_id };
+    if (!request) {
+      ready.status = 'WAITING_REREVIEW';
+      return { status: 'BLOCKED_EVIDENCE', handoff_id: ready.handoff_id };
+    }
     return { status: 'REVIEW_REQUESTED', handoff_id: ready.handoff_id, codex_rereview: request };
   }
   if (conclusion == null) return { status: 'IGNORED_NO_RESERVATION' };
@@ -422,10 +435,34 @@ export function claimRereview(ledger, pr, headSha, options = {}) {
     reservation.review_requested_for = null;
     reservation.structural_review = null;
   }
-  if (controlsMoved && !baseMoved && frozen?.head_sha === headSha && frozen?.base_sha === nextBase) bumpReviewRound(ledger, pr);
+  const headMoved = Boolean(frozen && frozen.head_sha !== headSha);
+  if (baseMoved || controlsMoved || headMoved) {
+    reservation.review_requested_for = null;
+    reservation.structural_review = null;
+    const advanced = advanceProducerRecord(ledger.slots?.[String(pr)]?.review_contract, {
+      headSha,
+      baseSha: nextBase,
+      controlsMoved: controlsMoved && !baseMoved && !headMoved,
+    });
+    if (!advanced?.packet) {
+      reservation.status = 'WAITING_REREVIEW';
+      return null;
+    }
+    ledger.slots[String(pr)].review_contract = advanced.record;
+    reservation.review_requested_for = headSha;
+    reservation.status = 'WAITING_REREVIEW';
+    reservation.structural_review = expectationFromPacket(advanced.record, advanced.packet);
+    return {
+      mechanism: 'independent_codex_review',
+      sha: headSha,
+      reviewer: CODEX_REVIEWER.login,
+      author_approval_counts: false,
+      paid_call: false,
+    };
+  }
   reservation.review_requested_for = headSha;
   reservation.status = 'WAITING_REREVIEW';
-  reservation.structural_review = structuralExpectation(ledger, pr, headSha, reservation.base_sha, { controlsMoved: controlsMoved && !baseMoved });
+  reservation.structural_review = structuralExpectation(ledger, pr, headSha, reservation.base_sha, { controlsMoved: false });
   return {
     mechanism: 'independent_codex_review',
     sha: headSha,
@@ -471,10 +508,137 @@ function sameControl(issued, frozen) {
   return list(issued.required_checks) === list(frozen.required_checks);
 }
 
-function bumpReviewRound(ledger, pr) {
-  const live = ledger.slots?.[String(pr)]?.review_contract;
-  if (!live?.binding || !Number.isInteger(live.binding.substantive_reviews)) return;
-  live.binding.substantive_reviews += 1;
+function expectationFromPacket(record, packet) {
+  return {
+    request_id: packet.request_id,
+    repository_id: packet.repository_id,
+    pr: packet.pr_number,
+    task_id: record.task_id,
+    head_sha: packet.head_sha,
+    base_sha: packet.base_sha,
+    required_checks: [...packet.required_checks],
+    contract_hash: packet.contract_hash,
+    policy_sha: packet.policy_sha,
+  };
+}
+
+function clearProducerGeneration(record, headSha, baseSha) {
+  const next = structuredClone(record);
+  next.review_request_id = null;
+  next.review_run_id = null;
+  next.review_run_attempt = null;
+  next.ci_run_id = null;
+  next.ci_run_attempt = null;
+  next.approval_request_id = null;
+  next.binding.evidence = { ci: null, review: null };
+  next.binding.review_dispatched = false;
+  next.binding.approval = null;
+  next.binding.last_evidence_signature = null;
+  if (isCommitSha(headSha)) next.head_sha = headSha;
+  if (isCommitSha(baseSha)) next.base_sha = baseSha;
+  next.state = 'PR_REVIEW';
+  next.technical_state = 'REVIEW_STALE';
+  next.blocked_reason = null;
+  return next;
+}
+
+function producerObservation(record, headSha, baseSha, ci) {
+  const policy = loadPolicy();
+  return {
+    now: record.last_transition_at || '2026-10-15T12:00:00.000Z',
+    kind: 'task',
+    simulation: true,
+    flags: { enabled: false, mergeEnabled: false },
+    policy,
+    policySha: record.policy_sha,
+    secrets: { cursor: false, openai: false, githubApp: false },
+    issue: { number: record.issue_number, authorId: policy.owner.id, body: null },
+    github: {
+      repositoryId: record.repository_id,
+      fork: false,
+      integrationSha: baseSha,
+      branch: null,
+      pull: { headSha, baseSha, number: record.pr_number, baseRef: INTEGRATION_BRANCH },
+      pulls: [],
+      ci,
+      review: null,
+    },
+  };
+}
+
+function dispatchProbe(record) {
+  const policy = loadPolicy();
+  return {
+    workflow_id: policy.workflow_ids.verify,
+    workflow_path: policy.workflows.verify,
+    run_id: 1,
+    run_attempt: 1,
+    policy_sha: record.policy_sha,
+    head_sha: record.head_sha,
+    base_sha: record.base_sha,
+    conclusion: 'failure',
+    jobs: [{ name: 'verify', conclusion: 'failure' }],
+    commands_executed: [],
+  };
+}
+
+function advanceProducerRecord(record, { headSha, baseSha, controlsMoved }) {
+  if (!record?.binding || typeof record.task_id !== 'string' || !Number.isInteger(record.repository_id)) return null;
+  if (!isCommitSha(headSha) || !isCommitSha(baseSha)) return null;
+  let current = structuredClone(record);
+  if (controlsMoved && Number.isInteger(current.binding.substantive_reviews)) current.binding.substantive_reviews += 1;
+  current = clearProducerGeneration(current, headSha, baseSha);
+  let decision = plan(current, producerObservation(current, headSha, baseSha, null));
+  current = decision?.record;
+  if (!current?.review_request_id) {
+    decision = plan(current, producerObservation(current, headSha, baseSha, null));
+    current = decision?.record;
+  }
+  if (!current?.review_request_id || current.blocked_reason) return null;
+  const probe = dispatchProbe(current);
+  const seen = plan(structuredClone(current), producerObservation(current, headSha, baseSha, probe));
+  const dispatched = plan(seen.record, producerObservation(seen.record, headSha, baseSha, probe));
+  const packet = (dispatched.effects ?? []).find(effect => effect.type === 'github.dispatch' && effect.workflow === 'review')?.packet ?? null;
+  if (!packet || packet.request_id !== current.review_request_id) return null;
+  return { record: current, packet };
+}
+
+function realignStructuralPull(ledger, pr, pull) {
+  const head = pull?.head?.sha ?? null;
+  const base = pull?.base?.sha ?? null;
+  const invalid = !pull || pull.state !== 'open' || pull.draft === true || pull.base?.ref !== INTEGRATION_BRANCH
+    || pull.head?.repo?.full_name !== REPOSITORY || pull.base?.repo?.full_name !== REPOSITORY
+    || !isCommitSha(head) || !isCommitSha(base);
+  const rows = Object.values(ledger.reservations ?? {}).filter(row => String(row.pr) === String(pr) && (row.structural_review || row.status === 'READY_FOR_OWNER'));
+  if (rows.length === 0) return null;
+  if (invalid) {
+    for (const row of rows) {
+      if (row.status === 'READY_FOR_OWNER') row.status = 'WAITING_REREVIEW';
+      row.structural_review = null;
+      row.review_requested_for = null;
+    }
+    return { stop: true, status: 'BLOCKED_EVIDENCE', handoff_id: rows[0].handoff_id ?? null };
+  }
+  const moved = rows.filter(row => row.structural_review && (row.structural_review.head_sha !== head || row.structural_review.base_sha !== base));
+  if (moved.length === 0) return null;
+  const advanced = advanceProducerRecord(ledger.slots?.[String(pr)]?.review_contract, { headSha: head, baseSha: base, controlsMoved: false });
+  for (const row of moved) {
+    if (row.status === 'READY_FOR_OWNER') row.status = 'WAITING_REREVIEW';
+    if (!advanced?.packet) {
+      row.structural_review = null;
+      row.review_requested_for = null;
+      row.status = 'WAITING_REREVIEW';
+      continue;
+    }
+    row.successor_sha = head;
+    row.base_sha = base;
+    row.review_requested_for = head;
+    row.status = 'WAITING_REREVIEW';
+    row.structural_review = expectationFromPacket(advanced.record, advanced.packet);
+  }
+  if (advanced?.record) ledger.slots[String(pr)].review_contract = advanced.record;
+  if (!advanced?.packet) return { stop: true, status: 'BLOCKED_EVIDENCE', handoff_id: moved[0].handoff_id ?? null };
+  return null;
 }
 
 function structuralExpectation(ledger, pr, headSha, baseSha, options = {}) {
@@ -539,6 +703,8 @@ export async function observeStructuralReview(ledger, pr, github, policy = loadP
   } catch (error) {
     return blockedRead(next, pr, error);
   }
+  const realigned = realignStructuralPull(next, pr, pull);
+  if (realigned?.stop) return finish(next, { pull: { number: pr } }, { status: realigned.status, handoff_id: realigned.handoff_id ?? null });
   const reservation = selectStructuralReservation(next, pr, pull);
   const expected = reservation?.structural_review ?? null;
   if (!reservation || !expected?.request_id || !isCommitSha(expected.policy_sha)) {
@@ -629,7 +795,7 @@ export async function observeStructuralReview(ledger, pr, github, policy = loadP
   reservation.ci = { sha: expected.head_sha, conclusion: 'success' };
   const snapshot = structuralSnapshot({ pull, expected, run, author: author.author, policy, ciConclusion: 'success' });
   const slot = next.slots?.[String(pr)];
-  if ((slot?.depends_on ?? []).some(id => !next.completed_tasks?.[id])) {
+  if ((slot?.depends_on ?? []).some(id => !completionCurrent(next, id))) {
     return finish(next, snapshot, { status: 'WAITING_DEPENDENCY', handoff_id: reservation.handoff_id });
   }
   const ready = considerReady(next, snapshot, { structural: true, controllerActorId: policy.controller_actor_id });

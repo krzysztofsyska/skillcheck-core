@@ -71,6 +71,7 @@ function requestDispatch(ledger, snapshot, adapter) {
     }
     return stagePartial(snapshot, adapter, { status: 'BLOCKED_DEPENDENCY_CYCLE', next_stage: 'blocked', blocker: 'BLOCKED_DEPENDENCY_CYCLE' });
   }
+  delete ledger.completed_tasks[task.task_id];
   ledger.queue.push(task);
   const promotion = promote(ledger);
   const slot = ledger.slots[task.pr];
@@ -109,7 +110,14 @@ function markCompleted(ledger, snapshot, adapter) {
   slot.occupied = false;
   slot.ack = true;
   slot.completed_head_sha = adapter.head_sha;
-  ledger.completed_tasks[slot.task_id] = { pr: slot.pr, task_id: slot.task_id, head_sha: adapter.head_sha, base_sha: slot.base_sha };
+  ledger.completed_tasks[slot.task_id] = {
+    pr: slot.pr,
+    task_id: slot.task_id,
+    task_revision: taskRevisionOf(slot),
+    head_sha: adapter.head_sha,
+    base_sha: slot.base_sha,
+    agent_id: slot.agent_id,
+  };
   const promotion = promote(ledger);
   return stagePartial(snapshot, adapter, {
     status: 'COMPLETED',
@@ -192,7 +200,7 @@ function mergeReadiness(ledger, snapshot, adapter, partial) {
   if (dependencies.mismatch) {
     return stagePartial(snapshot, adapter, { status: 'DEPENDENCY_MISMATCH', next_stage: 'wait_for_dependency', blocker: 'WAITING_DEPENDENCY' });
   }
-  const dependenciesReady = dependencies.required.every(taskId => ledger.completed_tasks[taskId]);
+  const dependenciesReady = dependencies.required.every(taskId => completionCurrent(ledger, taskId));
   const ciReady = adapter.ci?.sha === snapshot.pull?.headSha && adapter.ci?.sha === adapter.head_sha && adapter.ci?.conclusion === 'success';
   if (valid?.verdict === 'PASS' && ciReady && dependenciesReady && active.length === 0) {
     if (!ownTaskReady(ledger, snapshot, adapter)) {
@@ -327,10 +335,11 @@ function recordQueuedHandoff(ledger, task) {
 }
 
 function occupy(ledger, task) {
+  const taskRevision = taskRevisionOf(task);
   const agentId = agentIdFor(operationKey({
     repositoryId: REPOSITORY,
     taskId: task.task_id,
-    taskRevision: 1,
+    taskRevision,
     headSha: task.head_sha,
     baseSha: task.base_sha,
     action: 'cursor-handoff',
@@ -339,6 +348,7 @@ function occupy(ledger, task) {
   const slot = {
     pr: task.pr,
     task_id: task.task_id,
+    task_revision: taskRevision,
     priority: task.priority,
     depends_on: task.depends_on,
     phase: 'REQUESTED',
@@ -568,7 +578,10 @@ export function revokeSharedReadiness(ledger, pr, head, base, reviewId, submitte
   if (bases.size === 0) return 'missing';
   for (const item of bases) {
     const conflict = orderConflict(watermark(ledger, pr, head, item), at, 'negative');
-    if (conflict) return conflict;
+    if (conflict) {
+      rememberUnordered(ledger, pr, head, bases, reviewId, at);
+      return 'unordered';
+    }
   }
   let effect = 'missing';
   for (const item of bases) {
@@ -649,8 +662,19 @@ function priorityRank(task, ledger) {
   return boosted ? 3 : 4;
 }
 
+export function completionCurrent(ledger, taskId) {
+  const done = ledger.completed_tasks?.[taskId];
+  if (!done?.head_sha || !isCommitSha(done.head_sha)) return false;
+  const pending = [...(ledger.queue ?? []), ...Object.values(ledger.slots ?? {})].some(item => {
+    if (!item || String(item.task_id) !== String(taskId)) return false;
+    if (item.phase === 'COMPLETED' && item.occupied === false) return false;
+    return true;
+  });
+  return !pending;
+}
+
 function dependenciesMet(ledger, task) {
-  return (task.depends_on ?? []).every(taskId => ledger.completed_tasks[taskId]);
+  return (task.depends_on ?? []).every(taskId => completionCurrent(ledger, taskId));
 }
 
 function occupyingSlot(ledger, pr) {
@@ -672,6 +696,7 @@ function sameRemoteTask(slot, adapter) {
   if (adapter.agent_id !== slot.agent_id) return false;
   if (adapter.task_id == null || String(adapter.task_id) !== String(slot.task_id)) return false;
   if (adapter.pr == null || String(adapter.pr) !== String(slot.pr)) return false;
+  if (adapter.task_revision != null && taskRevisionOf(adapter) !== taskRevisionOf(slot)) return false;
   return true;
 }
 
@@ -722,10 +747,52 @@ function taskIdentifier(value) {
   return text.length > 0 ? text : null;
 }
 
+function taskRevisionOf(value) {
+  return Number.isInteger(value?.task_revision) && value.task_revision >= 1 ? value.task_revision : 1;
+}
+
+function rememberUnordered(ledger, pr, head, bases, reviewId, at) {
+  for (const item of bases) {
+    const mark = watermark(ledger, pr, head, item);
+    mark.events ??= [];
+    if (reviewId != null && !mark.events.some(event => event.id === reviewId && event.kind === 'negative')) {
+      mark.events.push({ id: reviewId, at, kind: 'negative' });
+    }
+    const timed = mark.events.map(event => event.at).filter(value => value != null);
+    const floor = at != null ? at : (timed.length > 0 ? Math.max(...timed) : null);
+    if (floor != null) mark.floor_at = mark.floor_at == null ? floor : Math.max(mark.floor_at, floor);
+    const revoked = new Set(mark.revoked_review_ids ?? []);
+    if (reviewId != null) revoked.add(reviewId);
+    for (const event of mark.events) {
+      if (event.kind !== 'pass') continue;
+      if (event.at == null || (mark.floor_at != null && event.at <= mark.floor_at)) revoked.add(event.id);
+    }
+    mark.revoked_review_ids = [...revoked];
+    mark.seen_review_ids = reviewIdList(mark.seen_review_ids, reviewId);
+  }
+  for (const stored of Object.values(ledger.bound_reviews ?? {})) {
+    if (String(stored.pr) !== String(pr) || stored.head_sha !== head) continue;
+    if (bases.size > 0 && isCommitSha(stored.base_sha) && !bases.has(stored.base_sha)) continue;
+    const passAt = reviewInstant(stored.submitted_at);
+    if (at != null && passAt != null && passAt > at) continue;
+    stored.completed = false;
+    stored.revoked = true;
+    if (stored.verdict === 'PASS') stored.verdict = 'UNORDERED';
+    stored.revoked_review_ids = reviewIdList(stored.revoked_review_ids, stored.review_id, reviewId);
+    stored.seen_review_ids = reviewIdList(stored.seen_review_ids, stored.review_id, reviewId);
+  }
+  for (const row of Object.values(ledger.reservations ?? {})) {
+    if (String(row.pr) !== String(pr) || row.successor_sha !== head || row.status !== 'READY_FOR_OWNER') continue;
+    if (row.ready_at != null && at != null && row.ready_at > at) continue;
+    row.status = 'WAITING_REREVIEW';
+  }
+}
+
 function taskFrom(adapter, snapshot) {
   const task = {
     pr: String(adapter.pr),
     task_id: taskIdentifier(adapter.task_id),
+    task_revision: taskRevisionOf(adapter),
     priority: adapter.priority ?? 'NORMAL',
     depends_on: [...(adapter.depends_on ?? [])].map(String),
     head_sha: adapter.head_sha,
