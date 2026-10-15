@@ -94,6 +94,9 @@ test('current CI + independent review schedules integration merge without owner 
   assert.equal(result.record.binding.auto_integration.source, 'verified_ci_review');
   assert.equal(result.record.binding.auto_integration.head_sha, record.head_sha);
   assert.equal(result.record.binding.merge.phase, 'awaiting_confirmation');
+  assert.equal(result.record.binding.pending_notification.kind, 'READY_FOR_OWNER');
+  assert.match(result.record.binding.pending_notification.body, /task: SC-DEMO-001/);
+  assert.equal(result.record.binding.pending_notification.action_url, null);
 });
 
 test('disabled LIVE flags, unconfirmed protection, or missing evidence cannot merge', () => {
@@ -113,6 +116,32 @@ test('disabled LIVE flags, unconfirmed protection, or missing evidence cannot me
     const result = plan(record, obs);
     assert.equal(result.effects.some(e => e.type === 'github.merge'), false);
   }
+});
+
+test('a readiness report already delivered is not queued again before merge', () => {
+  const { record, obs } = verifiedTask();
+  record.binding.last_notified_state = 'READY_FOR_OWNER';
+  const result = plan(record, obs);
+  assert.equal(result.effects[0].type, 'github.merge');
+  assert.equal(result.record.binding.pending_notification, null);
+});
+
+test('stored PASS with missing live CI or review blocks instead of holding the queue', () => {
+  for (const clear of [obs => { obs.github.ci = null; }, obs => { obs.github.review = null; }]) {
+    const { record, obs } = verifiedTask();
+    clear(obs);
+    const result = plan(record, obs);
+    assert.equal(result.effects.length, 0);
+    assert.equal(result.record.state, 'BLOCKED');
+    assert.equal(result.record.blocked_reason, 'EVIDENCE_STALE');
+    assert.equal(result.record.binding.reports.at(-1).reason, 'LIVE_EVIDENCE_MISSING');
+  }
+  const waiting = verifiedTask();
+  waiting.record.binding.evidence.ci.pass = false;
+  waiting.obs.github.ci = null;
+  const held = plan(waiting.record, waiting.obs);
+  assert.equal(held.record.state, 'READY_FOR_OWNER');
+  assert.equal(held.record.blocked_reason, null);
 });
 
 test('a production approval record never enters automatic integration', () => {
@@ -297,6 +326,51 @@ test('unconfirmed readiness delivery stops blocking the next task', async () => 
   assert.equal(work.items.length, 1);
   assert.equal(work.items[0].record, null);
   assert.equal(work.items[0].observation.kind, 'promotion');
+});
+
+test('an exhausted readiness report does not starve a later terminal report', () => {
+  const policy = structuredClone(observation().policy);
+  const accepted = taskRecord({ state: 'ACCEPTED' });
+  accepted.binding.approval = null;
+  accepted.binding.pending_notification = buildNotification({
+    taskId: accepted.task_id, stateRevision: accepted.state_revision, recipient: policy.notification_recipient,
+    kind: 'READY_FOR_OWNER', headSha: accepted.head_sha, baseSha: accepted.base_sha, result: 'READY_FOR_OWNER',
+    evidenceUrl: `${policy.repository_url}/pull/50`, actionUrl: null,
+  });
+  accepted.binding.pending_notification.delivery_phase = 'unknown';
+  accepted.binding.pending_notification.unknown_attempts = policy.limits.transport_attempts;
+  const finished = taskRecord({ state: 'DONE', task_id: 'SC-PROMOTE-1', issue_number: 8, pr_number: 51 });
+  finished.binding.lane = 'promotion';
+  finished.binding.last_notified_state = null;
+  const work = assembleWork({
+    policy, policySha: 'd'.repeat(40), now: '2026-10-14T08:00:00.000Z', secrets: {},
+    snapshot: { records: { [accepted.task_id]: accepted, [finished.task_id]: finished }, issues: [], pulls: [] },
+  });
+  assert.equal(work.items.length, 1);
+  assert.equal(work.items[0].record.task_id, 'SC-PROMOTE-1');
+  assert.equal(work.items[0].record.state, 'DONE');
+  const idle = assembleWork({
+    policy, policySha: 'd'.repeat(40), now: '2026-10-14T08:00:00.000Z', secrets: {},
+    snapshot: { records: { [accepted.task_id]: accepted }, issues: [], pulls: [] },
+  });
+  assert.equal(idle.items.length, 1);
+  assert.equal(idle.items[0].record.state, 'ACCEPTED');
+});
+
+test('operative flow merges from CI and review and still stops before production', () => {
+  const spec = readFileSync('docs/sc-ops-002a-agent-orchestration.md', 'utf8');
+  const flow = spec.split('## 3. Przebieg')[1].split('## 4.')[0];
+  assert.match(flow, /sc-agent\/integration-ready/);
+  assert.match(flow, /Nie otwiera ani nie czeka na zgodę A/);
+  assert.match(flow, /Brak aktualnych dowodów oznacza STOP/);
+  assert.doesNotMatch(flow, /otwiera prośbę o zgodę A/);
+  assert.doesNotMatch(flow, /Po zgodzie A/);
+  const acceptance = spec.split('## 12.')[1];
+  assert.match(acceptance, /bez zgody A/);
+  assert.match(acceptance, /zatrzymanie przed B/);
+  assert.match(acceptance, /zgoda A użyta jako B/);
+  assert.doesNotMatch(acceptance, /zatrzymanie przed A/);
+  assert.doesNotMatch(acceptance, /merge tylko po A/);
 });
 
 function acceptedRecord() {

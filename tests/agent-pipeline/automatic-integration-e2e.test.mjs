@@ -16,6 +16,8 @@ test('integration merges automatically after CI/review without owner, production
     for (let i = 0; i < 100 && task()?.state !== 'ACCEPTED'; i++) await step();
     assert.equal(task()?.state, 'ACCEPTED', JSON.stringify(task()));
     assert.equal(task().binding.approval, null, 'no owner acceptance is used');
+    assert.ok(w.comments.some(comment => comment.body.includes('kind: READY_FOR_OWNER') && comment.body.includes('SC-DEMO-001')));
+    assert.equal(w.comments.some(comment => /actions\/runs\/\d+/.test(comment.body)), false);
     assert.equal(w.mergeCount, 1);
     assert.equal(w.runs.some(run => run.workflow_id === w.policy.workflow_ids.accept), false);
     assert.ok(w.checks.some(check => check.name === 'sc-agent/integration-ready' && check.conclusion === 'success'));

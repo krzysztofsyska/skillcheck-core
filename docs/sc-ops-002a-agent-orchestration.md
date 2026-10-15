@@ -34,8 +34,8 @@ Nie wprowadzamy nowej bazy Supabase, publicznego endpointu aplikacji ani nowego 
 4. Po zakończeniu pracy kontroler sprawdza faktyczne commity, zakres plików i raport. Tworzy albo odnajduje jeden draft PR do integration. Identyfikuje go przez repo ID, head branch, base branch i task ID, nie przez sam tytuł.
 5. Dla aktualnej pary commitów H (head) i B (base) uruchamia niezależnie zaufane CI oraz Codex review. Wynik przypisuje do H, B, kontraktu i wersji polityki.
 6. Uwagi albo naprawialny błąd CI trafiają automatycznie do tej samej sesji Cursora. Poprawka musi pozostać na tej samej gałęzi i w ALLOWED_FILES. Kolejny commit rozpoczyna nowe CI/review.
-7. Dopiero pełne PASS i zielone obowiązkowe CI prowadzą do READY_FOR_OWNER. Kontroler otwiera prośbę o zgodę A. Właściciel dostaje podsumowanie i link do właściwego zatwierdzenia w GitHubie.
-8. Po zgodzie A oraz ponownym sprawdzeniu aktualności kontroler może scalić do integration. Stan ACCEPTED nie oznacza produkcji.
+7. Dopiero pełne niezależne PASS review oraz zielone obowiązkowe CI dla niezmienionej pary HEAD/BASE i kontraktu prowadzą do automatycznego scalenia zwykłego PR do integration. Kontroler publikuje check sc-agent/integration-ready i raport gotowości. Nie otwiera ani nie czeka na zgodę A.
+8. Przed scaleniem kontroler ponownie odczytuje dowody CI i review, zakres, blokadę zapisu oraz ochronę gałęzi. Brak aktualnych dowodów oznacza STOP. Stan ACCEPTED nie oznacza produkcji.
 9. Powstaje oddzielny PR integration -> main z manifestem wydania, testami i instrukcją wdrożenia. Jego gotowość otwiera zgodę B. Do czasu tej zgody nie ma merge do main ani produkcyjnych operacji.
 10. Po zgodzie B wolno wykonać wyłącznie zakres z manifestu wydania. DONE wymaga potwierdzenia wdrożenia i smoke testów; sam merge to stan MERGED_AWAITING_DEPLOYMENT. Automatyzacja nie wymyśla poleceń migracji z opisu PR.
 
@@ -198,7 +198,7 @@ Lokalnie/offline w 002B, na mockach i izolowanym git:
 11. Powiadomienia mają stałe ID; błąd powiadomienia nie otwiera gates i nie zatraca wyniku.
 12. Odnowienie procesu odtwarza cały stan z agent-state; etykiety i treść PR nie są źródłem autoryzacji.
 
-W 002C, dopiero po konfiguracji: rzeczywisty start API, jedna wymuszona poprawka, nowe SHA/review/CI, zatrzymanie przed A, merge tylko po A, zatrzymanie przed B, odmowa produkcji bez B, dostarczenie powiadomienia do ChatGPT. Testy izolowane, bez biznesowej bazy i bez publikacji aplikacji. Oddzielnie zatwierdzony test produkcyjnego runbooku. Niewykonane testy: NOT RUN, nigdy PASS.
+W 002C, dopiero po konfiguracji: rzeczywisty start API, jedna wymuszona poprawka, nowe SHA/review/CI, automatyczne scalenie do integration po bieżącym CI PASS i review PASS bez zgody A, zatrzymanie przed B, odmowa produkcji bez B, dostarczenie powiadomienia do ChatGPT. Testy izolowane, bez biznesowej bazy i bez publikacji aplikacji. Oddzielnie zatwierdzony test produkcyjnego runbooku. Niewykonane testy: NOT RUN, nigdy PASS.
 
 ## 13. Źródła
 

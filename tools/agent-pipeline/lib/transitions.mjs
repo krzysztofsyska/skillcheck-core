@@ -548,8 +548,15 @@ function autoIntegrationStep(record, obs) {
     return done(block(record, 'GATE_MISMATCH', obs.now));
   }
   if (!record.binding.evidence?.ci?.pass || !record.binding.evidence?.review?.pass ||
-      !obs.github.ci || !obs.github.review || !record.review_run_id || !record.ci_run_id) {
+      !record.review_run_id || !record.ci_run_id) {
     return done(record);
+  }
+  // Stored PASS with no live envelope means the artifact expired or was deleted.
+  // Holding READY_FOR_OWNER would keep this task ahead of every later task.
+  if (!obs.github.ci || !obs.github.review) {
+    const marked = touch(record, obs.now);
+    marked.binding.reports.push({ kind: 'EVIDENCE_STALE', reason: 'LIVE_EVIDENCE_MISSING', at: obs.now });
+    return done(block(marked, 'EVIDENCE_STALE', obs.now));
   }
   if (!obs.simulation && !obs.preflight?.ok) return done(record);
   const merge = decideMerge({
@@ -593,6 +600,13 @@ function autoIntegrationStep(record, obs) {
     source: 'verified_ci_review',
   };
   pre.binding.merge = { phase: 'awaiting_confirmation', expectedHeadSha: merge.request.body.sha, gate: 'A' };
+  // Queue the handoff before the merge. A successful merge folds straight to
+  // ACCEPTED, and the outbox does not synthesize READY_FOR_OWNER after that.
+  if (pre.binding.last_notified_state !== 'READY_FOR_OWNER' && pre.binding.pending_notification?.kind !== 'READY_FOR_OWNER') {
+    const notification = notificationFor(pre, obs, 'READY_FOR_OWNER');
+    pre.notification_id = notification.notification_id;
+    pre.binding.pending_notification = notification;
+  }
   return {
     record: pre,
     preEffectRecord: pre,

@@ -34,8 +34,9 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId))));
   const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && notificationBlocksQueue(i.record, policy));
   // One active task per repository. A reconcilable accepted report still runs
-  // before new work. An unconfirmed report past the transport bound does not.
-  const selected = active.length ? active : acceptedOutbox.length ? [acceptedOutbox[0]] : fresh.length ? [fresh[0]] : terminal.filter(i => (['BLOCKED', 'DONE'].includes(i.record.state) && i.record.binding?.last_notified_state !== i.record.state) || i.record.binding?.pending_notification || i.record.binding?.stale_approvals?.some(a => !a.cancelled && a.cancel_attempts < 3));
+  // before new work. An unconfirmed report past the transport bound does not,
+  // including in the terminal fallback, so a later DONE or BLOCKED report can run.
+  const selected = active.length ? active : acceptedOutbox.length ? [acceptedOutbox[0]] : fresh.length ? [fresh[0]] : terminalWork(terminal, policy);
   return { items: selected, integrationSha, mainSha, read: snapshot.read ?? 'github' };
 }
 
@@ -139,4 +140,22 @@ function notificationBlocksQueue(record, policy) {
   if (!pending) return false;
   const bound = Number.isInteger(policy?.limits?.transport_attempts) ? policy.limits.transport_attempts : 3;
   return !(pending.delivery_phase === 'unknown' && (pending.unknown_attempts ?? 0) >= bound);
+}
+
+function terminalWork(terminal, policy) {
+  const actionable = terminal.filter(i => needsTerminalAction(i.record, policy));
+  if (actionable.length) return actionable;
+  // Idle only: a later marker can still adopt an exhausted report.
+  return terminal.filter(i => exhaustedNotification(i.record, policy));
+}
+
+function needsTerminalAction(record, policy) {
+  if (exhaustedNotification(record, policy)) return false;
+  const needsStateReport = ['BLOCKED', 'DONE'].includes(record.state) && record.binding?.last_notified_state !== record.state;
+  const staleApproval = record.binding?.stale_approvals?.some(a => !a.cancelled && a.cancel_attempts < 3);
+  return needsStateReport || notificationBlocksQueue(record, policy) || Boolean(staleApproval);
+}
+
+function exhaustedNotification(record, policy) {
+  return Boolean(record.binding?.pending_notification) && !notificationBlocksQueue(record, policy);
 }
