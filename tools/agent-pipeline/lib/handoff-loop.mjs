@@ -1,5 +1,5 @@
 import { sha256 } from './canonical.mjs';
-import { admit, ensureAdmission } from './handoff-admission.mjs';
+import { admit, claimHandoffSlot, ensureAdmission, releasePull } from './handoff-admission.mjs';
 
 /**
  * Inactive Codex review → Cursor handoff → CI → independent Codex review loop.
@@ -84,7 +84,12 @@ export function step(ledger, snapshot) {
     return finish(next, snapshot, { status: 'BLOCKED_INTEGRATION', http_status: snapshot.error.status ?? null });
   }
   const context = validateContext(snapshot);
-  if (context) return finish(next, snapshot, context);
+  if (context) {
+    if ((context.status === 'IGNORED_CLOSED' || context.status === 'IGNORED_DRAFT') && snapshot.pull?.number) {
+      releasePull(next, snapshot.pull.number);
+    }
+    return finish(next, snapshot, context);
+  }
 
   const eventName = snapshot.event?.name;
   if (ADMISSION_EVENTS.has(eventName)) return finish(next, snapshot, admit(next, snapshot));
@@ -120,6 +125,10 @@ function reserveHandoff(ledger, snapshot, findings) {
   if (used >= HANDOFF_ATTEMPT_LIMIT) {
     supersedeOpenReservations(ledger, pr);
     return { status: 'BLOCKED_LIMIT', attempt: used };
+  }
+  const claim = claimHandoffSlot(ledger, snapshot);
+  if (claim.status === 'WAITING_CAPACITY' || claim.status === 'DUPLICATE_DISPATCH') {
+    return { status: claim.status, attempt: used, cursor_handoff: null };
   }
   supersedeOpenReservations(ledger, pr);
   const handoffId = handoffIdFor(pr, snapshot.pull.headSha, snapshot.review.id);
@@ -348,7 +357,7 @@ function finish(ledger, snapshot, partial) {
   const entry = {
     status: outcome.status,
     pr: partial.stage?.pr ?? snapshot?.pull?.number ?? null,
-    sha: partial.stage?.sha ?? snapshot?.pull?.headSha ?? null,
+    sha: partial.stage ? partial.stage.sha ?? null : snapshot?.pull?.headSha ?? null,
     review_id: snapshot?.review?.id ?? null,
     comment_ids: outcome.findings.map(finding => finding.comment_id),
     ci: snapshot?.ci ? { sha: snapshot.ci.sha, conclusion: snapshot.ci.conclusion } : null,

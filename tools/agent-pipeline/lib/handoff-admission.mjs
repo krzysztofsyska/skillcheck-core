@@ -117,13 +117,12 @@ function bindReview(ledger, snapshot, adapter) {
   const pr = String(snapshot.pull.number);
   const key = bindingKey(pr, adapter.head_sha, adapter.base_sha, digest);
   if (isNegativeReview(snapshot, adapter)) {
-    const stored = ledger.bound_reviews[key];
-    if (stored) {
-      stored.completed = false;
-      stored.revoked = true;
-      stored.verdict = negativeVerdict(snapshot, adapter);
-    }
+    revokeBinding(ledger, key, negativeVerdict(snapshot, adapter));
     return stagePartial(snapshot, adapter, { status: 'READINESS_REVOKED', next_stage: 'wait_for_review', blocker: 'READINESS_REVOKED' });
+  }
+  if (activeFindings(adapter).length > 0) {
+    revokeBinding(ledger, key, 'FINDINGS');
+    return stagePartial(snapshot, adapter, { status: 'BLOCKED_FINDINGS', next_stage: 'blocked', blocker: 'BLOCKED_FINDINGS' });
   }
   const current = reviewStillValid(ledger, adapter.head_sha, adapter.base_sha, digest, { pr, reviewId });
   if (adapter.reuse_binding === true && !current) {
@@ -160,7 +159,11 @@ function mergeReadiness(ledger, snapshot, adapter, partial) {
     reviewId: snapshot.review?.id,
   });
   const active = activeFindings(adapter);
-  const dependenciesReady = (adapter.depends_on ?? []).every(taskId => ledger.completed_tasks[taskId]);
+  const dependencies = dependencyContract(ledger, adapter);
+  if (dependencies.mismatch) {
+    return stagePartial(snapshot, adapter, { status: 'DEPENDENCY_MISMATCH', next_stage: 'wait_for_dependency', blocker: 'WAITING_DEPENDENCY' });
+  }
+  const dependenciesReady = dependencies.required.every(taskId => ledger.completed_tasks[taskId]);
   const ciReady = adapter.ci?.sha === snapshot.pull?.headSha && adapter.ci?.sha === adapter.head_sha && adapter.ci?.conclusion === 'success';
   if (valid?.verdict === 'PASS' && ciReady && dependenciesReady && active.length === 0) {
     return stagePartial(snapshot, adapter, { status: 'READY_TO_MERGE', next_stage: 'owner_acceptance', blocker: null });
@@ -270,6 +273,67 @@ function occupy(ledger, task) {
   };
 }
 
+export function claimHandoffSlot(ledger, snapshot) {
+  ensureAdmission(ledger);
+  const pr = String(snapshot.pull.number);
+  if (occupyingSlot(ledger, pr)) return { status: 'REUSED' };
+  if (ledger.queue.some(item => item.pr === pr)) return { status: 'DUPLICATE_DISPATCH' };
+  if (occupiedCount(ledger) >= CURSOR_SLOT_LIMIT) return { status: 'WAITING_CAPACITY' };
+  const task = {
+    pr,
+    task_id: `review-${pr}`,
+    priority: 'NORMAL',
+    depends_on: [],
+    head_sha: snapshot.pull.headSha,
+    base_sha: snapshot.pull.baseSha ?? snapshot.pull.baseRef ?? null,
+    executor: 'cursor',
+    created_at: snapshot.now ?? null,
+  };
+  occupy(ledger, task);
+  return { status: 'REQUESTED', agent_id: ledger.slots[pr].agent_id };
+}
+
+export function releasePull(ledger, pr) {
+  ensureAdmission(ledger);
+  const key = String(pr ?? '');
+  if (!key) return false;
+  let released = false;
+  const slot = ledger.slots[key];
+  if (slot?.occupied) {
+    slot.occupied = false;
+    slot.phase = 'CANCELLED';
+    slot.ack = false;
+    released = true;
+  }
+  const queued = ledger.queue.length;
+  ledger.queue = ledger.queue.filter(item => item.pr !== key);
+  if (ledger.queue.length !== queued) released = true;
+  if (released) promote(ledger);
+  return released;
+}
+
+function revokeBinding(ledger, key, verdict) {
+  const stored = ledger.bound_reviews[key];
+  if (!stored) return;
+  stored.completed = false;
+  stored.revoked = true;
+  stored.verdict = verdict;
+}
+
+function dependencyContract(ledger, adapter) {
+  const pr = String(adapter.pr ?? '');
+  const taskId = adapter.task_id == null ? null : String(adapter.task_id);
+  const related = [...ledger.queue, ...Object.values(ledger.slots)].filter(item => item && (item.pr === pr || (taskId && item.task_id === taskId)));
+  const stored = [...new Set(related.flatMap(item => (item.depends_on ?? []).map(String)))].sort();
+  const declared = [...new Set((adapter.depends_on ?? []).map(String))].sort();
+  return {
+    stored,
+    declared,
+    mismatch: stored.length > 0 && stored.join('\0') !== declared.join('\0'),
+    required: stored.length > 0 ? stored : declared,
+  };
+}
+
 function priorityRank(task, ledger) {
   if (Object.hasOwn(PRIORITY_RANK, task.priority)) return PRIORITY_RANK[task.priority];
   const boosted = [...ledger.queue, ...Object.values(ledger.slots)].some(other =>
@@ -358,7 +422,7 @@ function stagePartial(snapshot, adapter, fields) {
       pr: adapter?.pr ?? snapshot?.pull?.number ?? null,
       executor: adapter?.executor ?? null,
       task: adapter?.task_id ?? null,
-      sha: adapter?.head_sha ?? snapshot?.pull?.headSha ?? null,
+      sha: adapter?.head_sha ?? null,
       tests: adapter?.tests ?? null,
       review: adapter?.verdict ?? null,
       next_stage: fields.next_stage ?? null,

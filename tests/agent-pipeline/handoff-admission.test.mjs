@@ -33,8 +33,8 @@ function snapshot(fields) {
     sender: fields.sender ?? { ...CODEX_REVIEWER },
     pull: {
       number: fields.pr,
-      state: 'open',
-      draft: false,
+      state: fields.state ?? 'open',
+      draft: fields.draft === true,
       baseRef: 'integration',
       headSha,
       author: fields.author ?? { ...AUTHOR },
@@ -485,6 +485,100 @@ test('readiness is refused when adapter evidence disagrees with the current pull
   assert.equal(stored.head_sha, HEAD);
   assert.equal(stored.base_sha, BASE);
   assert.deepEqual(stored.conditions, CONDITIONS);
+});
+
+test('active findings revoke a stored PASS and a later reuse cannot restore it', () => {
+  const digest = conditionsDigest(CONDITIONS);
+  const ready = apply(emptyLedger(), review({ review_id: 8301 }));
+  assert.equal(ready.outcome.status, 'READY_TO_MERGE');
+  const blocked = apply(ready.ledger, review({ review_id: 8301, findings: [{ severity: 'P1', active: true }] }));
+  assert.equal(blocked.outcome.status, 'BLOCKED_FINDINGS');
+  assert.equal(reviewStillValid(blocked.ledger, HEAD, BASE, digest, { pr: 81, reviewId: 8301 }), null);
+  const reused = apply(blocked.ledger, review({ review_id: 8301, reuse_binding: true }));
+  assert.equal(reused.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(reused.outcome.status, 'READY_TO_MERGE');
+});
+
+test('a review cannot drop dependencies captured when the task was queued', () => {
+  let ledger = apply(emptyLedger(), request({ pr: 91, task_id: 'WAIT', depends_on: ['DEP-WAIT'], priority: 'FREE' })).ledger;
+  assert.equal(ledger.queue.some(item => item.task_id === 'WAIT'), true);
+  const dropped = apply(ledger, review({ pr: 91, task_id: 'WAIT', review_id: 8401, depends_on: [] }));
+  assert.equal(dropped.outcome.status, 'DEPENDENCY_MISMATCH');
+  assert.notEqual(dropped.outcome.status, 'READY_TO_MERGE');
+  assert.equal(dropped.ledger.queue.some(item => item.task_id === 'WAIT'), true);
+
+  ledger = apply(dropped.ledger, request({ pr: 92, task_id: 'DEP-WAIT' })).ledger;
+  ledger = complete(ledger, 92, 'DEP-WAIT').ledger;
+  const matched = apply(ledger, review({ pr: 91, task_id: 'WAIT', review_id: 8401, depends_on: ['DEP-WAIT'] }));
+  assert.equal(matched.outcome.status, 'READY_TO_MERGE');
+});
+
+test('closing or drafting a pull request releases its slot for the next task', () => {
+  let ledger = emptyLedger();
+  for (let index = 1; index <= CURSOR_SLOT_LIMIT; index += 1) {
+    ledger = apply(ledger, request({ pr: 900 + index, task_id: `HOLD${index}`, now: `2026-10-15T09:0${index}:00.000Z` })).ledger;
+  }
+  ledger = apply(ledger, request({ pr: 906, task_id: 'HOLD6', now: '2026-10-15T09:06:00.000Z' })).ledger;
+  assert.equal(occupiedCount(ledger), 5);
+  const closed = apply(ledger, snapshot({ event: 'admission_completed', pr: 901, state: 'closed', head_sha: HEAD }));
+  ledger = closed.ledger;
+  assert.equal(closed.outcome.status, 'IGNORED_CLOSED');
+  assert.equal(ledger.slots['901'].occupied, false);
+  assert.equal(ledger.slots['901'].phase, 'CANCELLED');
+  assert.equal(ledger.slots['906'].task_id, 'HOLD6');
+  assert.equal(ledger.slots['906'].occupied, true);
+
+  const drafted = apply(ledger, snapshot({ event: 'admission_started', pr: 902, draft: true, head_sha: HEAD }));
+  assert.equal(drafted.outcome.status, 'IGNORED_DRAFT');
+  assert.equal(drafted.ledger.slots['902'].occupied, false);
+  assert.equal(drafted.ledger.slots['902'].phase, 'CANCELLED');
+});
+
+test('a Codex finding waits for a Cursor slot and an omitted head cannot look ready', () => {
+  let ledger = emptyLedger();
+  for (let index = 1; index <= CURSOR_SLOT_LIMIT; index += 1) {
+    ledger = apply(ledger, request({ pr: 700 + index, task_id: `FULL${index}` })).ledger;
+  }
+  const finding = apply(ledger, {
+    now: '2026-10-15T10:00:00.000Z',
+    repository: 'krzysztofsyska/skillcheck-core',
+    event: { name: 'pull_request_review', action: 'submitted' },
+    sender: { ...CODEX_REVIEWER },
+    pull: {
+      number: 126,
+      state: 'open',
+      draft: false,
+      baseRef: 'integration',
+      headSha: HEAD,
+      author: { ...AUTHOR },
+      headRepo: 'krzysztofsyska/skillcheck-core',
+    },
+    review: {
+      id: 8801,
+      state: 'changes_requested',
+      commitId: HEAD,
+      user: { ...CODEX_REVIEWER },
+    },
+    threads: [{
+      id: 'thread-88',
+      isResolved: false,
+      isOutdated: false,
+      comments: [{ id: 88, commitId: HEAD, reviewId: 8801, inReplyToId: null, path: 'docs/automation/codex-cursor-handoff-approval.md', line: 4 }],
+    }],
+  });
+  assert.equal(finding.outcome.status, 'WAITING_CAPACITY');
+  assert.equal(finding.outcome.plan.cursor_handoff, null);
+  assert.equal(finding.ledger.attempts['126'], undefined);
+  assert.equal(occupiedCount(finding.ledger), 5);
+
+  const omitted = review({ review_id: 8802 });
+  delete omitted.adapter.head_sha;
+  omitted.adapter.ci = { conclusion: 'success' };
+  const hidden = apply(emptyLedger(), omitted);
+  assert.equal(hidden.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.equal(hidden.outcome.stage.sha, null);
+  assert.equal(hidden.ledger.audits.at(-1).sha, null);
+  assert.deepEqual(hidden.ledger.bound_reviews, {});
 });
 
 function complete(ledger, pr, taskId, head = NEXT) {
