@@ -1,5 +1,8 @@
-import { sha256 } from './canonical.mjs';
+import { operationKey, sha256 } from './canonical.mjs';
+import { artifactFromRun, findRun } from './evidence.mjs';
 import { admit, claimHandoffSlot, ensureAdmission, identityRevoked, markUnknown, notePassIdentity, releasePull, reviewInstant, revokeSharedReadiness } from './handoff-admission.mjs';
+import { loadPolicy } from './policy.mjs';
+import { validateReview } from './review.mjs';
 
 /**
  * Inactive Codex review → Cursor handoff → CI → independent Codex review loop.
@@ -21,6 +24,9 @@ export const CODEX_REVIEWER = Object.freeze({
 export const CURSOR_HANDOFF_TEMPLATE = 'Update the existing pull request on its current branch. Apply the linked review findings. Do not merge, deploy, or print secrets.';
 
 const OPEN_STATUSES = new Set(['HANDOFF_PLANNED', 'WAITING_CI', 'WAITING_CURSOR', 'CI_FAILED', 'WAITING_REREVIEW']);
+// Structural sc-agent-review severities are not GitHub review threads. Minor is
+// active here even though validateReview still allows it inside a PASS payload.
+const STRUCTURAL_SEVERITY = Object.freeze({ blocker: 'P0', major: 'P1', minor: 'P2' });
 const REVIEW_EVENTS = new Set(['pull_request_review', 'pull_request_review_comment']);
 const ADMISSION_EVENTS = new Set(['admission_request', 'admission_started', 'admission_completed', 'admission_comment', 'admission_review', 'admission_merge', 'admission_deploy']);
 const SAFE_PATH = /^[A-Za-z0-9_./@+-]+$/;
@@ -332,6 +338,7 @@ function observeCi(ledger, snapshot) {
     return { status: 'BLOCKED_HEAD', handoff_id: reservation.handoff_id };
   }
   reservation.successor_sha = headSha;
+  if (isCommitSha(snapshot.pull?.baseSha)) reservation.base_sha = snapshot.pull.baseSha;
   const ci = snapshot.ci;
   if (!ci || ci.sha !== headSha || ci.conclusion == null || ci.conclusion === 'pending') {
     reservation.status = 'WAITING_CI';
@@ -358,6 +365,7 @@ export function claimRereview(ledger, pr, headSha) {
   if (reservation.review_requested_for === headSha) return null;
   reservation.review_requested_for = headSha;
   reservation.status = 'WAITING_REREVIEW';
+  reservation.structural_review = structuralExpectation(ledger, pr, headSha, reservation.base_sha);
   return {
     mechanism: 'independent_codex_review',
     sha: headSha,
@@ -367,12 +375,189 @@ export function claimRereview(ledger, pr, headSha) {
   };
 }
 
+function structuralExpectation(ledger, pr, headSha, baseSha) {
+  const slot = ledger.slots?.[String(pr)];
+  const policy = loadPolicy();
+  if (!slot?.task_id || !isCommitSha(headSha) || !isCommitSha(baseSha) || !Number.isInteger(policy.repository_id)) return null;
+  const required = [...(policy.required_checks?.integration ?? [])].map(String).sort();
+  const requestId = sha256(operationKey({
+    repositoryId: policy.repository_id,
+    taskId: slot.task_id,
+    taskRevision: 1,
+    headSha,
+    baseSha,
+    action: 'review',
+    round: ledger.attempts?.[String(pr)] ?? 0,
+  }));
+  return {
+    request_id: requestId,
+    repository_id: policy.repository_id,
+    pr: Number(pr),
+    task_id: slot.task_id,
+    head_sha: headSha,
+    base_sha: baseSha,
+    required_checks: required,
+    contract_hash: sha256({
+      repository_id: policy.repository_id,
+      pr: Number(pr),
+      task_id: slot.task_id,
+      head_sha: headSha,
+      base_sha: baseSha,
+      required_checks: required,
+    }),
+  };
+}
+
+function structuralPolicyReady(policy) {
+  return Number.isInteger(policy?.controller_actor_id) && Number.isInteger(policy?.workflow_ids?.review);
+}
+
+export async function observeStructuralReview(ledger, pr, github, policy = loadPolicy()) {
+  const next = structuredClone(ledger ?? emptyLedger());
+  const rows = Object.values(next.reservations ?? {}).filter(row => String(row.pr) === String(pr) && row.structural_review?.request_id);
+  const reservation = rows.find(row => row.status === 'WAITING_REREVIEW') ?? rows.find(row => row.status === 'READY_FOR_OWNER');
+  const expected = reservation?.structural_review ?? null;
+  if (!reservation || !expected?.request_id) return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  if (!structuralPolicyReady(policy)) return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_CONFIGURATION' });
+  if (!github) return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_INTEGRATION' });
+  let pull;
+  let main;
+  let author;
+  try {
+    pull = await github.readPull(Number(pr));
+    main = await github.readBranch('main');
+    author = await github.readCommit(expected.head_sha);
+  } catch (error) {
+    return blockedRead(next, pr, error);
+  }
+  const head = pull?.head?.sha ?? null;
+  const base = pull?.base?.sha ?? null;
+  const mainSha = main?.commit?.sha ?? null;
+  if (pull?.state !== 'open' || pull?.draft === true || pull?.base?.ref !== INTEGRATION_BRANCH) {
+    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  }
+  if (pull?.head?.repo?.full_name !== REPOSITORY || pull?.base?.repo?.full_name !== REPOSITORY) {
+    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  }
+  if (head !== expected.head_sha || base !== expected.base_sha || !isCommitSha(mainSha)) {
+    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  }
+  if (!author || author.sha !== expected.head_sha || !isActor(author.author)) {
+    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  }
+  let run;
+  let envelope;
+  try {
+    run = await findRun(github, policy, 'review', expected.request_id, null);
+    if (!run || run.run_attempt !== 1 || run.status !== 'completed' || run.conclusion !== 'success' || run.head_sha !== mainSha) {
+      return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+    }
+    if (!run.updated_at || reviewInstant(run.updated_at) == null) {
+      return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+    }
+    envelope = await artifactFromRun(github, run, 'sc-agent-review');
+  } catch (error) {
+    return blockedRead(next, pr, error);
+  }
+  if (!envelope || envelope.run_id !== run.id || envelope.run_attempt !== run.run_attempt || envelope.policy_sha !== run.head_sha
+      || envelope.workflow_id !== run.workflow_id || envelope.workflow_path !== run.path) {
+    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  }
+  const validated = validateReview(envelope, {
+    workflowId: policy.workflow_ids.review,
+    workflowPath: policy.workflows.review,
+    runId: run.id,
+    runAttempt: 1,
+    policySha: mainSha,
+    requestId: expected.request_id,
+    repositoryId: expected.repository_id,
+    prNumber: expected.pr,
+    headSha: expected.head_sha,
+    baseSha: expected.base_sha,
+    contractHash: expected.contract_hash,
+    requiredChecks: expected.required_checks,
+  });
+  if (!validated.ok) return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  const findings = structuralFindings(validated.payload.findings, expected);
+  if (findings.some(item => !structuralFindingShape(item))) {
+    return finish(next, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE' });
+  }
+  const active = findings.filter(item => item.severity !== 'info');
+  const snapshot = structuralSnapshot({ pull, expected, run, author: author.author, policy });
+  if (validated.payload.verdict !== 'PASS' || active.length > 0) {
+    if (active.length === 0) return finish(next, snapshot, { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id });
+    revokeSharedReadiness(next, String(pr), expected.head_sha, expected.base_sha, run.id, run.updated_at);
+    return finish(next, snapshot, reserveHandoff(next, snapshot, active));
+  }
+  const slot = next.slots?.[String(pr)];
+  if ((slot?.depends_on ?? []).some(id => !next.completed_tasks?.[id])) {
+    return finish(next, snapshot, { status: 'WAITING_DEPENDENCY', handoff_id: reservation.handoff_id });
+  }
+  const ready = considerReady(next, snapshot, { structural: true, controllerActorId: policy.controller_actor_id });
+  return finish(next, snapshot, ready);
+}
+
+function structuralFindingShape(item) {
+  if (!item?.comment_id || typeof item.comment_id !== 'string') return false;
+  if (item.path != null && (!SAFE_PATH.test(item.path) || item.path.split('/').includes('..') || item.path.startsWith('/'))) return false;
+  if (item.line != null && (!Number.isInteger(item.line) || item.line < 1)) return false;
+  return true;
+}
+
+function structuralFindings(findings, expected) {
+  return (findings ?? []).map(finding => ({
+    thread_id: finding.id,
+    comment_id: finding.id,
+    path: finding.path,
+    line: finding.line,
+    severity: STRUCTURAL_SEVERITY[finding.severity] ?? 'info',
+    required_fix: finding.required_fix,
+    head_sha: expected.head_sha,
+  }));
+}
+
+function structuralSnapshot({ pull, expected, run, author, policy }) {
+  return {
+    repository: REPOSITORY,
+    pull: {
+      number: expected.pr,
+      state: 'open',
+      draft: false,
+      baseRef: INTEGRATION_BRANCH,
+      baseSha: expected.base_sha,
+      headSha: expected.head_sha,
+      author: pickActor(pull.user),
+      headRepo: REPOSITORY,
+    },
+    review: {
+      id: run.id,
+      state: 'approved',
+      commitId: expected.head_sha,
+      user: { id: policy.controller_actor_id, login: run.actor?.login ?? 'github-actions[bot]', type: 'Bot' },
+      submittedAt: run.updated_at,
+    },
+    sender: { id: policy.controller_actor_id, login: run.actor?.login ?? 'github-actions[bot]', type: 'Bot' },
+    fixAuthor: pickActor(author),
+    ci: { sha: expected.head_sha, conclusion: 'success' },
+    threads: [],
+    verdict: null,
+  };
+}
+
+function blockedRead(ledger, pr, error) {
+  const status = error?.status ?? error?.statusCode ?? null;
+  if (status === 401 || status === 403 || error?.code === 'BLOCKED_CONFIGURATION' || status == null) {
+    return finish(ledger, { pull: { number: pr } }, { status: 'BLOCKED_INTEGRATION', http_status: status });
+  }
+  return finish(ledger, { pull: { number: pr } }, { status: 'BLOCKED_EVIDENCE', http_status: status });
+}
+
 function executorCompleted(ledger, pr, headSha) {
   const slot = ledger?.slots?.[String(pr)];
   return Boolean(slot && slot.occupied === false && slot.phase === 'COMPLETED' && slot.completed_head_sha === headSha);
 }
 
-function considerReady(ledger, snapshot) {
+function considerReady(ledger, snapshot, options = {}) {
   const head = snapshot.pull.headSha;
   const pr = String(snapshot.pull.number);
   const open = activeReservation(ledger, pr);
@@ -390,7 +575,9 @@ function considerReady(ledger, snapshot) {
   if (sameActor(reviewer, snapshot.pull.author) || (isActor(snapshot.fixAuthor) && sameActor(reviewer, snapshot.fixAuthor))) {
     return { status: 'REJECTED_SELF_APPROVAL', handoff_id: reservation.handoff_id };
   }
-  if (!isCodex(reviewer)) return { status: 'IGNORED_REVIEWER', handoff_id: reservation.handoff_id };
+  if (options.structural === true) {
+    if (reviewer?.id !== options.controllerActorId) return { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id };
+  } else if (!isCodex(reviewer)) return { status: 'IGNORED_REVIEWER', handoff_id: reservation.handoff_id };
   if (!isActor(snapshot.fixAuthor) || !isCommitSha(snapshot.pull?.baseSha)) {
     return { status: 'BLOCKED_EVIDENCE', handoff_id: reservation.handoff_id };
   }

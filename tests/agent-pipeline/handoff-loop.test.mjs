@@ -9,6 +9,7 @@ import { createGitHubClient } from '../../tools/agent-pipeline/lib/github.mjs';
 import { runHandoffCli } from '../../tools/agent-pipeline/handoff-cli.mjs';
 import { agentIdFor, operationKey } from '../../tools/agent-pipeline/lib/canonical.mjs';
 import { occupiedCount } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
+import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
 import {
   CODEX_REVIEWER,
   CURSOR_HANDOFF_TEMPLATE,
@@ -17,6 +18,7 @@ import {
   dedupKey,
   deliverGithubReview,
   emptyLedger,
+  observeStructuralReview,
   handoffIdFor,
   normalizeGithubEvent,
   step,
@@ -1319,3 +1321,260 @@ test('automation documents and the handoff workflow classify as L3 operations', 
   });
   assert.equal(low.ok, false);
 });
+
+const MAIN = 'f'.repeat(40);
+
+test('structural review uses the authenticated artifact and ignores a connector comment', async () => {
+  const policy = configuredReviewPolicy();
+  const early = await observeStructuralReview(emptyLedger(), 126, null);
+  assert.equal(early.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(early.outcome.status, 'READY_FOR_OWNER');
+
+  for (const order of ['ci-after', 'ci-first']) {
+    const { ledger, expected } = structuralLedger(order);
+    const untouched = await observeStructuralReview(ledger, 126, { readPull() { throw new Error('unread'); } });
+    assert.equal(untouched.outcome.status, 'BLOCKED_CONFIGURATION');
+    assert.equal(untouched.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
+
+    const pass = envelopeFor(expected, policy, { verdict: 'PASS', findings: [structuralFinding('note', 'info')] });
+    const world = structuralWorld({ expected, policy, envelope: pass });
+    const commented = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented' }), [], world.github);
+    assert.equal(commented.outcome.status, 'BLOCKED_EVIDENCE');
+    assert.notEqual(commented.outcome.status, 'READY_FOR_OWNER');
+
+    const ready = await observeStructuralReview(ledger, 126, world.github, policy);
+    assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+    assert.equal(ready.outcome.plan.merge, null);
+    assert.equal(ready.ledger.slots['126'].occupied, false);
+    assert.equal(world.calls.every(call => call.method === 'GET'), true);
+    const replay = await observeStructuralReview(ready.ledger, 126, world.github, policy);
+    assert.equal(replay.outcome.status, 'REVIEW_REUSED');
+    assert.equal(replay.ledger.slots['126'].occupied, false);
+  }
+
+  const { ledger, expected } = structuralLedger('ci-after');
+  const minor = envelopeFor(expected, policy, { verdict: 'PASS', findings: [structuralFinding('copy', 'minor')] });
+  const minorWorld = structuralWorld({ expected, policy, envelope: minor });
+  const handed = await observeStructuralReview(ledger, 126, minorWorld.github, policy);
+  assert.equal(handed.outcome.status, 'HANDOFF');
+  assert.notEqual(handed.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(handed.outcome.plan.cursor_handoff.finding_refs[0].severity, 'P2');
+  assert.equal(handed.outcome.plan.cursor_handoff.finding_refs[0].path, 'docs/automation/codex-cursor-handoff-approval.md');
+
+  const failed = envelopeFor(expected, policy, { verdict: 'FAIL', findings: [structuralFinding('break', 'blocker')] });
+  const failedWorld = structuralWorld({ expected, policy, envelope: failed });
+  const fixes = await observeStructuralReview(structuralLedger('ci-after').ledger, 126, failedWorld.github, policy);
+  assert.equal(fixes.outcome.status, 'HANDOFF');
+  assert.equal(fixes.outcome.plan.cursor_handoff.finding_refs[0].severity, 'P0');
+  assert.notEqual(fixes.outcome.status, 'READY_FOR_OWNER');
+
+  const full = structuralLedger('ci-after');
+  for (let index = 0; index < 5; index += 1) {
+    full.ledger = apply(full.ledger, reviewSnapshot({ pr: 201 + index, reviewId: 8000 + index, threads: [thread(8000 + index, 8000 + index, SHA.one)] })).ledger;
+  }
+  assert.equal(occupiedCount(full.ledger), 5);
+  const waiting = await observeStructuralReview(full.ledger, 126, structuralWorld({ expected: full.expected, policy, envelope: failed }).github, policy);
+  assert.equal(waiting.outcome.status, 'WAITING_CAPACITY');
+  assert.equal(occupiedCount(waiting.ledger), 5);
+  assert.notEqual(waiting.outcome.status, 'READY_FOR_OWNER');
+
+  const dependent = structuralLedger('ci-after');
+  dependent.ledger.slots['126'].depends_on = ['UNFINISHED'];
+  const held = await observeStructuralReview(dependent.ledger, 126, structuralWorld({ expected: dependent.expected, policy, envelope: passEnvelope(dependent.expected, policy) }).github, policy);
+  assert.equal(held.outcome.status, 'WAITING_DEPENDENCY');
+  assert.notEqual(held.outcome.status, 'READY_FOR_OWNER');
+
+  const mismatched = structuralLedger('ci-after');
+  const wrongHead = envelopeFor(mismatched.expected, policy, { verdict: 'PASS', head_sha: SHA.three });
+  const wrong = await observeStructuralReview(mismatched.ledger, 126, structuralWorld({ expected: mismatched.expected, policy, envelope: wrongHead }).github, policy);
+  assert.equal(wrong.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.equal(wrong.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
+
+  const moved = structuralLedger('ci-after');
+  const movedResult = await observeStructuralReview(moved.ledger, 126, structuralWorld({ expected: moved.expected, policy, envelope: passEnvelope(moved.expected, policy), pullHead: SHA.three }).github, policy);
+  assert.equal(movedResult.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(movedResult.outcome.status, 'READY_FOR_OWNER');
+
+  const forbidden = structuralLedger('ci-after');
+  const blockedRead = await observeStructuralReview(forbidden.ledger, 126, structuralWorld({ expected: forbidden.expected, policy, envelope: passEnvelope(forbidden.expected, policy), fail: '/actions/workflows/' }).github, policy);
+  assert.equal(blockedRead.outcome.status, 'BLOCKED_INTEGRATION');
+  assert.equal(blockedRead.outcome.http_status, 403);
+  assert.equal(blockedRead.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
+
+  const duplicate = structuralLedger('ci-after');
+  const first = reviewRun(duplicate.expected, policy);
+  const duplicated = await observeStructuralReview(duplicate.ledger, 126, structuralWorld({ expected: duplicate.expected, policy, envelope: passEnvelope(duplicate.expected, policy), runs: [first, { ...first, id: 901 }] }).github, policy);
+  assert.equal(duplicated.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(duplicated.outcome.status, 'READY_FOR_OWNER');
+
+  const pending = structuralLedger('ci-after');
+  const unfinished = await observeStructuralReview(pending.ledger, 126, structuralWorld({
+    expected: pending.expected,
+    policy,
+    envelope: passEnvelope(pending.expected, policy),
+    runs: [reviewRun(pending.expected, policy, { status: 'in_progress', conclusion: null })],
+  }).github, policy);
+  assert.equal(unfinished.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.equal(unfinished.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'WAITING_REREVIEW');
+
+  const owned = structuralLedger('ci-after');
+  const self = await observeStructuralReview(owned.ledger, 126, structuralWorld({
+    expected: owned.expected,
+    policy,
+    envelope: passEnvelope(owned.expected, policy),
+    author: { id: policy.controller_actor_id, login: 'skillcheck-controller[bot]', type: 'Bot' },
+  }).github, policy);
+  assert.equal(self.outcome.status, 'REJECTED_SELF_APPROVAL');
+  assert.notEqual(self.outcome.status, 'READY_FOR_OWNER');
+});
+
+function configuredReviewPolicy() {
+  const policy = loadPolicy();
+  return { ...policy, controller_actor_id: 456, workflow_ids: { ...policy.workflow_ids, review: 88001 } };
+}
+
+function structuralLedger(order) {
+  let ledger = apply(emptyLedger(), reviewSnapshot({ baseSha: SHA.base })).ledger;
+  if (order === 'ci-first') {
+    ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, baseSha: SHA.base, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+    const done = apply(ledger, completeSlot(ledger, 126, SHA.two));
+    ledger = done.ledger;
+  } else {
+    ledger = apply(ledger, completeSlot(ledger, 126, SHA.two)).ledger;
+    ledger = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, baseSha: SHA.base, threads: [], ci: { sha: SHA.two, conclusion: 'success' } })).ledger;
+  }
+  const expected = ledger.reservations[dedupKey('126', SHA.one, 5445420558)].structural_review;
+  assert.ok(expected?.request_id);
+  assert.equal(expected.head_sha, SHA.two);
+  assert.equal(expected.base_sha, SHA.base);
+  return { ledger, expected };
+}
+
+function passEnvelope(expected, policy) {
+  return envelopeFor(expected, policy, { verdict: 'PASS', findings: [structuralFinding('note', 'info')] });
+}
+
+function structuralFinding(id, severity) {
+  return {
+    id,
+    severity,
+    path: 'docs/automation/codex-cursor-handoff-approval.md',
+    line: 12,
+    description: 'structural finding',
+    required_fix: 'apply the structural finding',
+  };
+}
+
+function envelopeFor(expected, policy, patch) {
+  return {
+    workflow_id: policy.workflow_ids.review,
+    workflow_path: policy.workflows.review,
+    run_id: 900,
+    run_attempt: 1,
+    policy_sha: MAIN,
+    payload: {
+      schema_version: 1,
+      request_id: expected.request_id,
+      repository_id: expected.repository_id,
+      pr_number: expected.pr,
+      head_sha: patch.head_sha ?? expected.head_sha,
+      base_sha: expected.base_sha,
+      contract_hash: expected.contract_hash,
+      verdict: patch.verdict,
+      acceptance_checks: expected.required_checks.map(id => ({ id, status: 'PASS', required: true })),
+      findings: patch.findings ?? [],
+      limitations: [],
+    },
+  };
+}
+
+function reviewRun(expected, policy, patch = {}) {
+  return {
+    id: 900,
+    workflow_id: policy.workflow_ids.review,
+    path: policy.workflows.review,
+    event: 'workflow_dispatch',
+    head_branch: 'main',
+    head_sha: MAIN,
+    actor: { id: policy.controller_actor_id, login: 'skillcheck-controller[bot]', type: 'Bot' },
+    display_title: `sc-agent:${expected.request_id}`,
+    run_attempt: 1,
+    status: 'completed',
+    conclusion: 'success',
+    updated_at: '2026-10-15T13:00:00Z',
+    ...patch,
+  };
+}
+
+function structuralWorld({ expected, policy, envelope, runs = null, pullHead = SHA.two, pullBase = SHA.base, author = CURSOR_ACTOR, fail = null }) {
+  const listed = runs ?? [reviewRun(expected, policy)];
+  const calls = [];
+  const github = createGitHubClient({
+    token: 'fixture',
+    repository: 'krzysztofsyska/skillcheck-core',
+    fetch: async (url, options) => {
+      const href = String(url);
+      calls.push({ url: href, method: options?.method ?? 'GET' });
+      if (fail && href.includes(fail)) return new Response(JSON.stringify({ message: 'forbidden' }), { status: 403 });
+      if (href.includes('/pulls/') && href.includes('/reviews')) {
+        return new Response(JSON.stringify([githubReview({ id: 100, sha: SHA.two, state: 'COMMENTED', at: '2026-10-15T12:00:00Z' })]), { status: 200 });
+      }
+      if (href.includes('/actions/workflows/') && href.includes('/runs')) {
+        return new Response(JSON.stringify({ workflow_runs: listed }), { status: 200 });
+      }
+      if (href.includes('/artifacts/') && href.endsWith('/zip') || href.includes('/artifacts/') && href.includes('/zip')) {
+        return new Response(zipStored('review-envelope.json', JSON.stringify(envelope)), { status: 200 });
+      }
+      if (href.includes('/actions/runs/') && href.includes('/artifacts')) {
+        return new Response(JSON.stringify({ artifacts: [{ id: 50, name: 'sc-agent-review', expired: false, workflow_run: { id: listed[0].id } }] }), { status: 200 });
+      }
+      if (href.includes('/pulls/126')) {
+        return new Response(JSON.stringify({
+          number: 126,
+          state: 'open',
+          draft: false,
+          user: { ...AUTHOR },
+          base: { ref: 'integration', sha: pullBase, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
+          head: { sha: pullHead, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
+        }), { status: 200 });
+      }
+      if (href.includes('/branches/main')) return new Response(JSON.stringify({ name: 'main', commit: { sha: MAIN } }), { status: 200 });
+      if (href.includes(`/commits/${encodeURIComponent(SHA.two)}`) || href.includes(`/commits/${SHA.two}`)) {
+        return new Response(JSON.stringify({
+          sha: SHA.two,
+          commit: { author: { name: 'Cursor Name', email: 'cursor@example.com' }, message: 'fix' },
+          author: { ...author },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message: 'missing' }), { status: 404 });
+    },
+  });
+  return { github, calls };
+}
+
+function zipStored(name, text) {
+  const file = Buffer.from(text);
+  const nameBuf = Buffer.from(name);
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(0, 8);
+  local.writeUInt32LE(file.length, 18);
+  local.writeUInt32LE(file.length, 22);
+  local.writeUInt16LE(nameBuf.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(file.length, 20);
+  central.writeUInt32LE(file.length, 24);
+  central.writeUInt16LE(nameBuf.length, 28);
+  central.writeUInt32LE(0, 42);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(46 + nameBuf.length, 12);
+  end.writeUInt32LE(30 + nameBuf.length + file.length, 16);
+  return Buffer.concat([local, nameBuf, file, central, nameBuf, end]);
+}
