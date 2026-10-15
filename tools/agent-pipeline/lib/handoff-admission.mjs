@@ -1,10 +1,10 @@
 import { agentIdFor, operationKey, sha256 } from './canonical.mjs';
-import { CODEX_REVIEWER, REPOSITORY } from './handoff-loop.mjs';
+import { CODEX_REVIEWER, HANDOFF_ATTEMPT_LIMIT, REPOSITORY, dedupKey, handoffIdFor } from './handoff-loop.mjs';
 
 export const CURSOR_SLOT_LIMIT = 5;
 const PRIORITY_RANK = Object.freeze({ FREE: 0, PRESELEKCJA: 1, 'SC-005': 2 });
 const ACTIVE_SEVERITIES = new Set(['P0', 'P1', 'P2']);
-const OCCUPYING = new Set(['REQUESTED', 'STARTED', 'DISPATCH_UNKNOWN']);
+const OCCUPYING = new Set(['REQUESTED', 'STARTED', 'DISPATCH_UNKNOWN', 'CANCEL_PENDING']);
 
 export function conditionsDigest(conditions) {
   return sha256({
@@ -92,7 +92,7 @@ function markStarted(ledger, snapshot, adapter) {
 
 function markCompleted(ledger, snapshot, adapter) {
   const slot = occupyingSlot(ledger, String(adapter.pr));
-  if (!slot || adapter.agent_id !== slot.agent_id) {
+  if (!slot || !sameRemoteTask(slot, adapter)) {
     return stagePartial(snapshot, adapter, { status: 'IGNORED_NO_RESERVATION', next_stage: 'wait_for_adapter', blocker: 'IGNORED_NO_RESERVATION' });
   }
   if (adapter.ack !== true) {
@@ -245,11 +245,36 @@ function promote(ledger) {
   for (const task of ranked) {
     if (occupiedCount(ledger) >= CURSOR_SLOT_LIMIT) break;
     if (!dependenciesMet(ledger, task) || occupyingSlot(ledger, task.pr)) continue;
+    if (task.handoff === true && (ledger.attempts?.[task.pr] ?? 0) >= HANDOFF_ATTEMPT_LIMIT) continue;
     occupy(ledger, task);
     ledger.queue = ledger.queue.filter(item => item.task_id !== task.task_id);
     admitted.push(task.task_id);
+    if (task.handoff === true) recordQueuedHandoff(ledger, task);
   }
   return admitted;
+}
+
+function recordQueuedHandoff(ledger, task) {
+  ledger.attempts ??= {};
+  ledger.reservations ??= {};
+  const pr = String(task.pr);
+  const reviewId = task.review_id;
+  if (reviewId == null) return;
+  const key = dedupKey(pr, task.head_sha, reviewId);
+  if (ledger.reservations[key]) return;
+  const used = ledger.attempts[pr] ?? 0;
+  ledger.attempts[pr] = used + 1;
+  ledger.reservations[key] = {
+    handoff_id: handoffIdFor(pr, task.head_sha, reviewId),
+    pr,
+    sha: task.head_sha,
+    review_id: reviewId,
+    status: 'HANDOFF_PLANNED',
+    finding_refs: [...(task.findings ?? [])],
+    successor_sha: null,
+    review_requested_for: null,
+    created_at: task.created_at ?? null,
+  };
 }
 
 function occupy(ledger, task) {
@@ -278,14 +303,33 @@ function occupy(ledger, task) {
   };
 }
 
-export function claimHandoffSlot(ledger, snapshot) {
+export function claimHandoffSlot(ledger, snapshot, findings = []) {
   ensureAdmission(ledger);
   const pr = String(snapshot.pull.number);
   if (ledger.slots[pr]?.occupied && ledger.slots[pr].phase === 'DISPATCH_UNKNOWN') return { status: 'RECONCILE_REQUIRED' };
-  if (occupyingSlot(ledger, pr)) return { status: 'REUSED' };
-  if (ledger.queue.some(item => item.pr === pr)) return { status: 'DUPLICATE_DISPATCH' };
-  if (occupiedCount(ledger) >= CURSOR_SLOT_LIMIT) return { status: 'WAITING_CAPACITY' };
-  const task = {
+  if (occupyingSlot(ledger, pr)) return { status: 'REUSED', agent_id: ledger.slots[pr].agent_id };
+  const queued = ledger.queue.find(item => item.pr === pr);
+  if (queued) {
+    if (queued.handoff === true) {
+      const before = queued.findings?.length ?? 0;
+      mergeFindingRefs(queued, findings);
+      noteReview(queued, snapshot.review?.id);
+      return { status: queued.findings.length > before ? 'PENDING_FEEDBACK' : 'DUPLICATE_DISPATCH', queued: true };
+    }
+    return { status: 'DUPLICATE_DISPATCH' };
+  }
+  const task = handoffTask(snapshot, findings);
+  if (occupiedCount(ledger) >= CURSOR_SLOT_LIMIT) {
+    ledger.queue.push(task);
+    return { status: 'WAITING_CAPACITY' };
+  }
+  occupy(ledger, task);
+  return { status: 'REQUESTED', agent_id: ledger.slots[pr].agent_id };
+}
+
+function handoffTask(snapshot, findings) {
+  const pr = String(snapshot.pull.number);
+  return {
     pr,
     task_id: `review-${pr}`,
     priority: 'NORMAL',
@@ -294,9 +338,11 @@ export function claimHandoffSlot(ledger, snapshot) {
     base_sha: snapshot.pull.baseSha ?? snapshot.pull.baseRef ?? null,
     executor: 'cursor',
     created_at: snapshot.now ?? null,
+    handoff: true,
+    review_id: snapshot.review?.id ?? null,
+    findings: [...findings],
+    feedback_reviews: snapshot.review?.id == null ? [] : [snapshot.review.id],
   };
-  occupy(ledger, task);
-  return { status: 'REQUESTED', agent_id: ledger.slots[pr].agent_id };
 }
 
 export function releasePull(ledger, pr) {
@@ -304,11 +350,16 @@ export function releasePull(ledger, pr) {
   const key = String(pr ?? '');
   if (!key) return { released: false, held: false };
   const slot = ledger.slots[key];
-  if (slot?.occupied && (slot.phase === 'STARTED' || slot.phase === 'DISPATCH_UNKNOWN')) {
+  if (slot?.occupied && (slot.phase === 'DISPATCH_UNKNOWN' || slot.phase === 'CANCEL_PENDING')) {
+    return { released: false, held: true };
+  }
+  if (slot?.occupied && (slot.phase === 'STARTED' || slot.ack === true)) {
+    slot.phase = 'CANCEL_PENDING';
+    slot.occupied = true;
     return { released: false, held: true };
   }
   let released = false;
-  if (slot?.occupied && slot.phase === 'REQUESTED') {
+  if (slot?.occupied && slot.phase === 'REQUESTED' && slot.ack !== true) {
     slot.occupied = false;
     slot.phase = 'CANCELLED';
     slot.ack = false;
@@ -371,7 +422,7 @@ function unknownPartial(slot) {
 
 function markCancelled(ledger, snapshot, adapter) {
   const slot = occupyingSlot(ledger, String(adapter.pr));
-  if (!slot || adapter.cancelled !== true || adapter.agent_id !== slot.agent_id) {
+  if (!slot || adapter.cancelled !== true || !sameRemoteTask(slot, adapter)) {
     return stagePartial(snapshot, adapter, { status: 'IGNORED_NO_RESERVATION', next_stage: 'reconcile', blocker: 'RECONCILE_REQUIRED' });
   }
   slot.occupied = false;
@@ -417,6 +468,30 @@ function occupyingSlot(ledger, pr) {
   const slot = ledger.slots[String(pr)];
   if (!slot || !slot.occupied || !OCCUPYING.has(slot.phase)) return null;
   return slot;
+}
+
+function sameRemoteTask(slot, adapter) {
+  if (!slot || !adapter) return false;
+  if (adapter.agent_id !== slot.agent_id) return false;
+  if (adapter.task_id == null || String(adapter.task_id) !== String(slot.task_id)) return false;
+  if (adapter.pr == null || String(adapter.pr) !== String(slot.pr)) return false;
+  return true;
+}
+
+function mergeFindingRefs(target, findings) {
+  target.findings ??= [];
+  const known = new Set(target.findings.map(item => item.comment_id));
+  for (const finding of findings) {
+    if (known.has(finding.comment_id)) continue;
+    target.findings.push(finding);
+    known.add(finding.comment_id);
+  }
+}
+
+function noteReview(target, reviewId) {
+  if (reviewId == null) return;
+  target.feedback_reviews ??= [];
+  if (!target.feedback_reviews.includes(reviewId)) target.feedback_reviews.push(reviewId);
 }
 
 function cycleMembers(tasks) {

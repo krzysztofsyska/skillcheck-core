@@ -595,13 +595,25 @@ test('a started remote task stays reserved until cancellation evidence frees the
   ledger = apply(ledger, request({ pr: 406, task_id: 'S6', now: '2026-10-15T12:06:00.000Z' })).ledger;
   const closed = apply(ledger, snapshot({ event: 'admission_completed', pr: 401, state: 'closed', head_sha: HEAD }));
   assert.equal(closed.outcome.status, 'IGNORED_CLOSED');
+  assert.notEqual(closed.outcome.status, 'CANCELLED');
   assert.equal(closed.outcome.stage.blocker, 'RECONCILE_REQUIRED');
   assert.equal(closed.ledger.slots['401'].occupied, true);
-  assert.equal(closed.ledger.slots['401'].phase, 'STARTED');
+  assert.equal(closed.ledger.slots['401'].phase, 'CANCEL_PENDING');
   assert.equal(closed.ledger.slots['406'], undefined);
   assert.equal(occupiedCount(closed.ledger), 5);
 
-  const cancelled = apply(closed.ledger, snapshot({
+  const mismatch = apply(closed.ledger, snapshot({
+    event: 'admission_completed',
+    pr: 401,
+    state: 'closed',
+    head_sha: HEAD,
+    adapter: { source: 'trusted_adapter', kind: 'cancelled', pr: 401, task_id: 'OTHER', agent_id: agentId, cancelled: true, executor: 'cursor', head_sha: HEAD },
+  }));
+  assert.equal(mismatch.ledger.slots['401'].occupied, true);
+  assert.equal(mismatch.ledger.slots['401'].phase, 'CANCEL_PENDING');
+  assert.equal(mismatch.ledger.slots['406'], undefined);
+
+  const cancelled = apply(mismatch.ledger, snapshot({
     event: 'admission_completed',
     pr: 401,
     head_sha: HEAD,
@@ -636,6 +648,11 @@ test('an uncertain transport keeps its reservation and never calls the executor'
   assert.equal(occupiedCount(retry.ledger), 1);
   assert.equal(retry.outcome.live_effects, 'blocked');
   assert.deepEqual(retry.outcome.executed, []);
+  const drafted = apply(retry.ledger, snapshot({ event: 'admission_completed', pr: 51, draft: true, head_sha: HEAD }));
+  assert.equal(drafted.outcome.status, 'IGNORED_DRAFT');
+  assert.equal(drafted.ledger.slots['51'].phase, 'DISPATCH_UNKNOWN');
+  assert.equal(drafted.ledger.slots['51'].occupied, true);
+  assert.notEqual(drafted.ledger.slots['51'].phase, 'CANCELLED');
 });
 
 function complete(ledger, pr, taskId, head = NEXT) {

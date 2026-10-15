@@ -56,7 +56,28 @@ function reviewSnapshot(overrides = {}) {
     fixAuthor: overrides.fixAuthor ?? null,
     error: overrides.error ?? null,
     verdict: overrides.verdict ?? null,
+    adapter: overrides.adapter,
   };
+}
+
+function completeSlot(ledger, pr, nextHead) {
+  const slot = ledger.slots[String(pr)];
+  return reviewSnapshot({
+    event: 'admission_completed',
+    pr,
+    headSha: nextHead,
+    threads: [],
+    adapter: {
+      source: 'trusted_adapter',
+      kind: 'completed',
+      pr,
+      task_id: slot.task_id,
+      agent_id: slot.agent_id,
+      ack: true,
+      executor: 'cursor',
+      head_sha: nextHead,
+    },
+  });
 }
 
 function thread(commentId, reviewId, sha, extra = {}) {
@@ -184,6 +205,23 @@ test('three attempts are shared across heads and the fourth review is blocked', 
     ledger = result.ledger;
     assert.equal(result.outcome.status, 'HANDOFF');
     assert.equal(result.outcome.attempt, index + 1);
+    assert.equal(result.outcome.plan.cursor_handoff.existing_pr, true);
+    if (index >= heads.length - 1) return;
+    const feedback = apply(ledger, reviewSnapshot({
+      headSha,
+      reviewId: 2000 + index,
+      threads: [thread(200 + index, 2000 + index, headSha)],
+    }));
+    ledger = feedback.ledger;
+    assert.equal(feedback.outcome.status, 'PENDING_FEEDBACK');
+    assert.equal(feedback.outcome.plan.cursor_handoff, null);
+    assert.equal(feedback.outcome.pending_feedback.update, true);
+    assert.equal(feedback.outcome.agent_id, ledger.slots['126'].agent_id);
+    assert.equal(ledger.attempts['126'], index + 1);
+    const done = apply(ledger, completeSlot(ledger, 126, heads[index + 1]));
+    ledger = done.ledger;
+    assert.equal(done.outcome.status, 'COMPLETED');
+    assert.equal(ledger.slots['126'].occupied, false);
   });
   const blocked = apply(ledger, reviewSnapshot({ headSha: SHA.four, reviewId: 1003, threads: [thread(103, 1003, SHA.four)] }));
   assert.equal(blocked.outcome.status, 'BLOCKED_LIMIT');
@@ -198,22 +236,30 @@ test('three attempts are shared across heads and the fourth review is blocked', 
   assert.notEqual(latePass.outcome.status, 'READY_FOR_OWNER');
 });
 
-test('a newer review closes the earlier open reservation', () => {
+test('a newer review on an active pull request updates the existing agent', () => {
   let ledger = emptyLedger();
   ledger = apply(ledger, reviewSnapshot({ reviewId: 1, threads: [thread(1, 1, SHA.one)] })).ledger;
+  const agentId = ledger.slots['126'].agent_id;
   const second = apply(ledger, reviewSnapshot({ reviewId: 2, now: '2026-10-14T07:31:00.000Z', threads: [thread(2, 2, SHA.one)] }));
   ledger = second.ledger;
-  assert.equal(second.outcome.status, 'HANDOFF');
-  assert.equal(second.outcome.attempt, 2);
-  assert.equal(ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'SUPERSEDED');
-  assert.equal(ledger.reservations[dedupKey('126', SHA.one, 2)].status, 'HANDOFF_PLANNED');
+  assert.equal(second.outcome.status, 'PENDING_FEEDBACK');
+  assert.equal(second.outcome.attempt, 1);
+  assert.equal(second.outcome.plan.cursor_handoff, null);
+  assert.equal(second.outcome.pending_feedback.update, true);
+  assert.equal(second.outcome.pending_feedback.agent_id, agentId);
+  assert.equal(second.outcome.agent_id, agentId);
+  assert.deepEqual(second.outcome.pending_feedback.finding_refs.map(item => item.comment_id), [2]);
+  assert.equal(ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'HANDOFF_PLANNED');
+  assert.equal(ledger.reservations[dedupKey('126', SHA.one, 2)], undefined);
+  assert.equal(ledger.attempts['126'], 1);
+  assert.equal(occupiedCount(ledger), 1);
 
   const requested = apply(ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
   ledger = requested.ledger;
   const repeated = apply(ledger, reviewSnapshot({ event: 'ci_completed', headSha: SHA.two, threads: [], ci: { sha: SHA.two, conclusion: 'success' } }));
   assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
   assert.equal(repeated.outcome.status, 'DUPLICATE');
-  assert.equal(repeated.ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'SUPERSEDED');
+  assert.equal(repeated.ledger.reservations[dedupKey('126', SHA.one, 1)].status, 'WAITING_REREVIEW');
   assert.equal(repeated.outcome.plan.codex_rereview, null);
 });
 
@@ -462,7 +508,17 @@ test('workflow review events keep one slot per pull request and the existing rev
   assert.equal(sixth.outcome.status, 'WAITING_CAPACITY');
   assert.equal(sixth.outcome.plan.cursor_handoff, null);
   assert.equal(sixth.ledger.attempts['880'], undefined);
+  assert.equal(sixth.ledger.queue.some(item => item.pr === '880' && item.review_id === 9100), true);
   assert.equal(occupiedCount(sixth.ledger), 5);
+  const freed = apply(sixth.ledger, reviewSnapshot({ pr: 301, state: 'closed', reviewId: 1, threads: [] }));
+  assert.equal(freed.outcome.status, 'IGNORED_CLOSED');
+  assert.equal(freed.ledger.slots['301'].occupied, false);
+  assert.equal(freed.ledger.slots['880'].occupied, true);
+  assert.equal(freed.ledger.slots['880'].phase, 'REQUESTED');
+  assert.equal(freed.ledger.reservations[dedupKey('880', SHA.one, 9100)].status, 'HANDOFF_PLANNED');
+  assert.equal(freed.ledger.attempts['880'], 1);
+  assert.equal(freed.ledger.queue.some(item => item.pr === '880'), false);
+  assert.equal(freed.outcome.live_effects, 'blocked');
 
   ledger = apply(emptyLedger(), reviewSnapshot()).ledger;
   assert.equal(occupiedCount(ledger), 1);
@@ -471,10 +527,117 @@ test('workflow review events keep one slot per pull request and the existing rev
   assert.equal(duplicate.outcome.status, 'DUPLICATE');
   assert.equal(ledger.attempts['126'], 1);
   assert.equal(occupiedCount(ledger), 1);
-  const replacement = apply(ledger, reviewSnapshot({ reviewId: 77 }));
-  assert.equal(replacement.outcome.status, 'HANDOFF');
-  assert.equal(replacement.ledger.attempts['126'], 2);
+  const replacement = apply(ledger, reviewSnapshot({ reviewId: 77, threads: [thread(77, 77, SHA.one)] }));
+  assert.equal(replacement.outcome.status, 'PENDING_FEEDBACK');
+  assert.equal(replacement.outcome.plan.cursor_handoff, null);
+  assert.equal(replacement.outcome.pending_feedback.update, true);
+  assert.equal(replacement.outcome.pending_feedback.agent_id, ledger.slots['126'].agent_id);
+  assert.equal(replacement.ledger.attempts['126'], 1);
   assert.equal(occupiedCount(replacement.ledger), 1);
+  assert.equal(replacement.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'HANDOFF_PLANNED');
+});
+
+test('closing a started review keeps its slot until matching terminal proof admits the queued review', () => {
+  let ledger = emptyLedger();
+  for (let index = 1; index <= 5; index += 1) {
+    const pr = 500 + index;
+    const opened = apply(ledger, reviewSnapshot({
+      pr,
+      reviewId: 5000 + index,
+      threads: [thread(5000 + index, 5000 + index, SHA.one)],
+    }));
+    ledger = opened.ledger;
+    assert.equal(opened.outcome.status, 'HANDOFF');
+    const slot = ledger.slots[String(pr)];
+    const started = apply(ledger, reviewSnapshot({
+      event: 'admission_started',
+      pr,
+      threads: [],
+      adapter: {
+        source: 'trusted_adapter',
+        kind: 'started',
+        pr,
+        task_id: slot.task_id,
+        agent_id: slot.agent_id,
+        ack: true,
+        executor: 'cursor',
+        head_sha: SHA.one,
+      },
+    }));
+    ledger = started.ledger;
+    assert.equal(started.outcome.status, 'STARTED');
+  }
+
+  const closed = apply(ledger, reviewSnapshot({ pr: 501, state: 'closed', reviewId: 1, threads: [] }));
+  ledger = closed.ledger;
+  assert.equal(closed.outcome.status, 'IGNORED_CLOSED');
+  assert.equal(ledger.slots['501'].occupied, true);
+  assert.equal(ledger.slots['501'].phase, 'CANCEL_PENDING');
+  assert.equal(ledger.slots['501'].ack, true);
+  const drafted = apply(ledger, reviewSnapshot({ pr: 502, draft: true, reviewId: 1, threads: [] }));
+  ledger = drafted.ledger;
+  assert.equal(drafted.outcome.status, 'IGNORED_DRAFT');
+  assert.equal(ledger.slots['502'].phase, 'CANCEL_PENDING');
+  assert.equal(ledger.slots['502'].occupied, true);
+  assert.equal(occupiedCount(ledger), 5);
+
+  const sixth = apply(ledger, reviewSnapshot({ pr: 506, reviewId: 5906, threads: [thread(5906, 5906, SHA.one)] }));
+  ledger = sixth.ledger;
+  assert.equal(sixth.outcome.status, 'WAITING_CAPACITY');
+  assert.equal(sixth.outcome.plan.cursor_handoff, null);
+  assert.equal(ledger.queue.some(item => item.pr === '506' && item.review_id === 5906), true);
+  assert.equal(ledger.slots['506'], undefined);
+
+  const mismatch = apply(ledger, reviewSnapshot({
+    event: 'admission_completed',
+    pr: 501,
+    state: 'closed',
+    threads: [],
+    adapter: {
+      source: 'trusted_adapter',
+      kind: 'cancelled',
+      pr: 501,
+      task_id: 'other-task',
+      agent_id: ledger.slots['501'].agent_id,
+      cancelled: true,
+      executor: 'cursor',
+      head_sha: SHA.one,
+    },
+  }));
+  ledger = mismatch.ledger;
+  assert.notEqual(mismatch.outcome.status, 'CANCELLED');
+  assert.equal(ledger.slots['501'].occupied, true);
+  assert.equal(ledger.slots['501'].phase, 'CANCEL_PENDING');
+  assert.equal(ledger.slots['506'], undefined);
+
+  const proved = apply(ledger, reviewSnapshot({
+    event: 'admission_completed',
+    pr: 501,
+    state: 'closed',
+    threads: [],
+    adapter: {
+      source: 'trusted_adapter',
+      kind: 'cancelled',
+      pr: 501,
+      task_id: ledger.slots['501'].task_id,
+      agent_id: ledger.slots['501'].agent_id,
+      cancelled: true,
+      executor: 'cursor',
+      head_sha: SHA.one,
+    },
+  }));
+  assert.equal(proved.outcome.status, 'CANCELLED');
+  assert.equal(proved.ledger.slots['501'].occupied, false);
+  assert.equal(proved.ledger.slots['506'].occupied, true);
+  assert.equal(proved.ledger.slots['506'].phase, 'REQUESTED');
+  assert.equal(proved.ledger.reservations[dedupKey('506', SHA.one, 5906)].status, 'HANDOFF_PLANNED');
+  assert.equal(proved.ledger.attempts['506'], 1);
+  assert.equal(proved.ledger.queue.some(item => item.pr === '506'), false);
+  assert.equal(proved.ledger.slots['502'].phase, 'CANCEL_PENDING');
+  assert.equal(proved.ledger.slots['502'].occupied, true);
+  assert.equal(occupiedCount(proved.ledger), 5);
+  assert.equal(proved.outcome.live_effects, 'blocked');
+  assert.equal(proved.outcome.plan.cursor_handoff, null);
 });
 
 test('automation documents and the handoff workflow classify as L3 operations', () => {

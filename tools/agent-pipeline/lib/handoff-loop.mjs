@@ -92,6 +92,7 @@ export function step(ledger, snapshot) {
   if (context) {
     if ((context.status === 'IGNORED_CLOSED' || context.status === 'IGNORED_DRAFT') && snapshot.pull?.number) {
       const release = releasePull(next, snapshot.pull.number);
+      if (isTerminalProof(snapshot)) return finish(next, snapshot, admit(next, snapshot));
       if (release.held) {
         return finish(next, snapshot, {
           status: context.status,
@@ -137,7 +138,10 @@ function reserveHandoff(ledger, snapshot, findings) {
     supersedeOpenReservations(ledger, pr);
     return { status: 'BLOCKED_LIMIT', attempt: used };
   }
-  const claim = claimHandoffSlot(ledger, snapshot);
+  const claim = claimHandoffSlot(ledger, snapshot, findings);
+  if (claim.status === 'REUSED' || claim.status === 'PENDING_FEEDBACK') {
+    return pendingFeedback(ledger, snapshot, findings, used);
+  }
   if (claim.status === 'WAITING_CAPACITY' || claim.status === 'DUPLICATE_DISPATCH' || claim.status === 'RECONCILE_REQUIRED') {
     return { status: claim.status, attempt: used, cursor_handoff: null };
   }
@@ -223,6 +227,55 @@ function considerReady(ledger, snapshot) {
   if (!isCodex(reviewer)) return { status: 'IGNORED_REVIEWER', handoff_id: reservation.handoff_id };
   reservation.status = 'READY_FOR_OWNER';
   return { status: 'READY_FOR_OWNER', handoff_id: reservation.handoff_id };
+}
+
+function pendingFeedback(ledger, snapshot, findings, attempt) {
+  const pr = String(snapshot.pull.number);
+  const slot = ledger.slots[pr];
+  if (slot?.occupied) {
+    const reserved = Object.values(ledger.reservations ?? {})
+      .filter(row => row.pr === pr)
+      .flatMap(row => row.finding_refs ?? []);
+    const known = new Set([...(slot.pending_feedback ?? []), ...reserved].map(item => item.comment_id));
+    const added = findings.filter(item => !known.has(item.comment_id));
+    slot.pending_feedback = [...(slot.pending_feedback ?? []), ...added];
+    slot.feedback_reviews ??= [];
+    const seen = slot.feedback_reviews.includes(snapshot.review.id);
+    if (!seen) slot.feedback_reviews.push(snapshot.review.id);
+    const status = added.length > 0 || !seen ? 'PENDING_FEEDBACK' : 'DUPLICATE';
+    return {
+      status,
+      attempt,
+      agent_id: slot.agent_id,
+      findings: slot.pending_feedback,
+      cursor_handoff: null,
+      pending_feedback: feedbackNote(slot, snapshot, slot.pending_feedback),
+    };
+  }
+  const queued = ledger.queue.find(item => item.pr === pr);
+  return {
+    status: 'PENDING_FEEDBACK',
+    attempt,
+    findings: queued?.findings ?? findings,
+    cursor_handoff: null,
+    pending_feedback: feedbackNote(queued, snapshot, queued?.findings ?? findings),
+  };
+}
+
+function feedbackNote(target, snapshot, findingRefs) {
+  return {
+    agent_id: target?.agent_id ?? null,
+    pr: String(snapshot.pull.number),
+    task_id: target?.task_id ?? null,
+    review_id: snapshot.review.id,
+    finding_refs: findingRefs,
+    update: true,
+  };
+}
+
+function isTerminalProof(snapshot) {
+  const adapter = snapshot?.adapter;
+  return adapter?.source === 'trusted_adapter' && (adapter.kind === 'cancelled' || adapter.kind === 'completed');
 }
 
 function isUncertainTransport(snapshot) {
@@ -367,6 +420,7 @@ function finish(ledger, snapshot, partial) {
     executed: [],
     live_effects: 'blocked',
     merge_authorized: false,
+    pending_feedback: partial.pending_feedback ?? null,
     agent_id: partial.agent_id ?? partial.stage?.agent_id ?? null,
     stage: partial.stage ?? null,
   };
