@@ -123,16 +123,16 @@ function bindReview(ledger, snapshot, adapter) {
   const pr = String(snapshot.pull.number);
   const key = bindingKey(pr, adapter.head_sha, adapter.base_sha, digest);
   if (isNegativeReview(snapshot, adapter)) {
-    return revocationResult(ledger, snapshot, adapter, key, negativeVerdict(snapshot, adapter), reviewId, 'READINESS_REVOKED', 'wait_for_review');
+    return revocationResult(ledger, snapshot, adapter, key, negativeVerdict(snapshot, adapter), reviewId, pr, 'READINESS_REVOKED', 'wait_for_review');
   }
   if (activeFindings(adapter).length > 0) {
-    return revocationResult(ledger, snapshot, adapter, key, 'FINDINGS', reviewId, 'BLOCKED_FINDINGS', 'blocked');
+    return revocationResult(ledger, snapshot, adapter, key, 'FINDINGS', reviewId, pr, 'BLOCKED_FINDINGS', 'blocked');
   }
   if (!isActor(adapter.fix_author)) {
     return stagePartial(snapshot, adapter, { status: 'BLOCKED_EVIDENCE', next_stage: 'blocked', blocker: 'BLOCKED_EVIDENCE' });
   }
   const stored = ledger.bound_reviews[key];
-  if (revocationBlocks(stored, reviewId)) {
+  if (revocationBlocks(stored, reviewId) || identityRevoked(ledger, pr, adapter.head_sha, adapter.base_sha, reviewId)) {
     return stagePartial(snapshot, adapter, { status: 'STALE_REVIEW', next_stage: 'wait_for_review', blocker: 'STALE_REVIEW' });
   }
   const current = reviewStillValid(ledger, adapter.head_sha, adapter.base_sha, digest, { pr, reviewId });
@@ -146,6 +146,7 @@ function bindReview(ledger, snapshot, adapter) {
     return stagePartial(snapshot, adapter, { status: 'REVIEW_NOT_PASS', next_stage: 'wait_for_review', blocker: 'REVIEW_NOT_PASS' });
   }
   const seen = reviewIdList(stored?.seen_review_ids, stored?.review_id, stored?.revoked_review_ids, reviewId);
+  notePassIdentity(ledger, pr, adapter.head_sha, adapter.base_sha, reviewId);
   ledger.bound_reviews[key] = {
     pr,
     review_id: reviewId,
@@ -202,6 +203,7 @@ export function reviewStillValid(ledger, head, base, digest, identity = {}) {
   if (stored.pr !== pr || stored.head_sha !== head || stored.base_sha !== base || stored.digest !== digest) return null;
   if (!stored.review_id || !stored.conditions) return null;
   if (identity.reviewId != null && stored.review_id !== identity.reviewId) return null;
+  if (identity.reviewId != null && identityRevoked(ledger, pr, head, base, identity.reviewId)) return null;
   return stored;
 }
 
@@ -432,26 +434,88 @@ function markCancelled(ledger, snapshot, adapter) {
   return stagePartial(snapshot, adapter, { status: 'CANCELLED', next_stage: 'wait_for_slot', blocker: null, agent_id: slot.agent_id, cursor_handoff: promotion.cursor_handoff });
 }
 
-function revocationResult(ledger, snapshot, adapter, key, verdict, reviewId, status, nextStage) {
-  const effect = revokeBinding(ledger, key, verdict, reviewId);
+function revocationResult(ledger, snapshot, adapter, key, verdict, reviewId, pr, status, nextStage) {
+  const effect = revokeBinding(ledger, key, verdict, reviewId, pr, adapter.head_sha, adapter.base_sha);
   if (effect === 'bounded' && ledger.bound_reviews[key]?.revoked !== true) {
     return stagePartial(snapshot, adapter, { status: 'STALE_REVIEW', next_stage: 'wait_for_review', blocker: 'STALE_REVIEW' });
   }
   return stagePartial(snapshot, adapter, { status, next_stage: nextStage, blocker: status });
 }
 
-function revokeBinding(ledger, key, verdict, reviewId) {
+function revokeBinding(ledger, key, verdict, reviewId, pr, head, base) {
+  const shared = revokeSharedReadiness(ledger, pr, head, base, reviewId);
   const stored = ledger.bound_reviews[key];
-  if (!stored) return 'missing';
-  const floor = reviewIdList(stored.revoked_review_ids);
-  if (floor.includes(reviewId)) return 'bounded';
+  if (!stored) return shared === 'bounded' ? 'bounded' : 'revoked';
+  if (shared === 'bounded' || reviewIdList(stored.revoked_review_ids).includes(reviewId)) return 'bounded';
   const seen = reviewIdList(stored.seen_review_ids, stored.review_id, reviewId);
   stored.seen_review_ids = seen;
-  stored.revoked_review_ids = reviewIdList(floor, seen);
+  stored.revoked_review_ids = reviewIdList(stored.revoked_review_ids, seen);
   stored.completed = false;
   stored.revoked = true;
   stored.verdict = verdict;
   return 'revoked';
+}
+
+function watermarkKey(pr, head, base) {
+  return `${String(pr)}\n${head}\n${base}`;
+}
+
+function watermark(ledger, pr, head, base) {
+  ensureAdmission(ledger);
+  ledger.review_watermarks ??= {};
+  const key = watermarkKey(pr, head, base);
+  ledger.review_watermarks[key] ??= { seen_review_ids: [], revoked_review_ids: [] };
+  return ledger.review_watermarks[key];
+}
+
+export function notePassIdentity(ledger, pr, head, base, reviewId) {
+  if (!isCommitSha(head) || !isCommitSha(base) || reviewId == null) return 'missing';
+  const mark = watermark(ledger, pr, head, base);
+  if (mark.revoked_review_ids.includes(reviewId)) return 'stale';
+  mark.seen_review_ids = reviewIdList(mark.seen_review_ids, reviewId);
+  return 'pass';
+}
+
+export function identityRevoked(ledger, pr, head, base, reviewId) {
+  const marks = ledger?.review_watermarks ?? {};
+  for (const [key, mark] of Object.entries(marks)) {
+    const [markPr, markHead, markBase] = key.split('\n');
+    if (markPr !== String(pr) || markHead !== head) continue;
+    if (isCommitSha(base) && markBase !== base) continue;
+    if (mark.revoked_review_ids?.includes(reviewId)) return true;
+  }
+  return false;
+}
+
+export function revokeSharedReadiness(ledger, pr, head, base, reviewId) {
+  ensureAdmission(ledger);
+  const bases = new Set();
+  if (isCommitSha(base)) bases.add(base);
+  else {
+    for (const key of Object.keys(ledger.review_watermarks ?? {})) {
+      const [markPr, markHead, markBase] = key.split('\n');
+      if (markPr === String(pr) && markHead === head && isCommitSha(markBase)) bases.add(markBase);
+    }
+  }
+  let effect = 'missing';
+  for (const item of bases) {
+    const mark = watermark(ledger, pr, head, item);
+    if (mark.revoked_review_ids.includes(reviewId)) {
+      effect = 'bounded';
+      continue;
+    }
+    mark.seen_review_ids = reviewIdList(mark.seen_review_ids, reviewId);
+    mark.revoked_review_ids = reviewIdList(mark.revoked_review_ids, mark.seen_review_ids);
+    effect = 'revoked';
+  }
+  if (effect === 'bounded') return 'bounded';
+  for (const row of Object.values(ledger.reservations ?? {})) {
+    if (String(row.pr) !== String(pr) || row.successor_sha !== head || row.status !== 'READY_FOR_OWNER') continue;
+    row.status = 'READINESS_REVOKED';
+    row.revoked_review_id = reviewId;
+    effect = 'revoked';
+  }
+  return effect;
 }
 
 function revocationBlocks(stored, reviewId) {

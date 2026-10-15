@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify } from '../../tools/agent-pipeline/classify-pr.mjs';
+import { createGitHubClient } from '../../tools/agent-pipeline/lib/github.mjs';
 import { runHandoffCli } from '../../tools/agent-pipeline/handoff-cli.mjs';
 import { agentIdFor, operationKey } from '../../tools/agent-pipeline/lib/canonical.mjs';
 import { occupiedCount } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
@@ -14,6 +15,7 @@ import {
   HANDOFF_ATTEMPT_LIMIT,
   LIVE_EFFECTS_ENABLED,
   dedupKey,
+  deliverGithubReview,
   emptyLedger,
   handoffIdFor,
   normalizeGithubEvent,
@@ -826,6 +828,207 @@ test('a later negative verdict revokes owner readiness', () => {
     assert.notEqual(replay.outcome.status, 'READY_FOR_OWNER');
   }
 });
+
+test('github delivery emits a plan, reads the successor author, and shares the revocation floor', async () => {
+  const calls = [];
+  let authorMode = 'missing';
+  const github = createGitHubClient({
+    token: 'fixture',
+    repository: 'krzysztofsyska/skillcheck-core',
+    fetch: async (url, options) => {
+      calls.push({ url, method: options?.method ?? 'GET' });
+      const sha = decodeURIComponent(String(url.split('/commits/').at(-1) ?? ''));
+      if (sha === SHA.two && authorMode === 'named') {
+        return new Response(JSON.stringify({
+          sha,
+          commit: { author: { name: AUTHOR.login, email: 'person@example.com' }, message: SENTINEL },
+          author: null,
+        }), { status: 200 });
+      }
+      if (sha === SHA.two && (authorMode === 'reviewer' || authorMode === 'linked')) {
+        return new Response(JSON.stringify({
+          sha,
+          commit: { author: { name: 'Cursor Name', email: 'cursor@example.com' }, message: SENTINEL },
+          author: authorMode === 'reviewer' ? { ...CODEX_REVIEWER } : { ...CURSOR_ACTOR },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message: 'missing' }), { status: 404 });
+    },
+  });
+
+  const opened = await deliverGithubReview(emptyLedger(), githubEvent({ reviewId: 50, sha: SHA.one }), findingThread(50, SHA.one), github);
+  assert.equal(opened.outcome.status, 'HANDOFF');
+  assert.equal(opened.outcome.plan.cursor_handoff.template, CURSOR_HANDOFF_TEMPLATE);
+  assert.equal(opened.outcome.plan.cursor_handoff.existing_pr, true);
+  assert.deepEqual(opened.outcome.plan.cursor_handoff.finding_refs.map(item => item.comment_id), [50]);
+  assert.equal(opened.outcome.plan.cursor_handoff == null, false);
+  assert.equal(opened.outcome.live_effects, 'blocked');
+  assert.deepEqual(opened.outcome.executed, []);
+  assert.equal(calls.every(call => call.method === 'GET'), true);
+
+  let ledger = opened.ledger;
+  const started = apply(ledger, reviewSnapshot({
+    event: 'admission_started',
+    pr: 126,
+    threads: [],
+    adapter: {
+      source: 'trusted_adapter',
+      kind: 'started',
+      pr: 126,
+      task_id: ledger.slots['126'].task_id,
+      agent_id: ledger.slots['126'].agent_id,
+      ack: true,
+      executor: 'cursor',
+      head_sha: SHA.one,
+    },
+  }));
+  assert.equal(started.outcome.status, 'STARTED');
+  ledger = apply(started.ledger, completeSlot(started.ledger, 126, SHA.two)).ledger;
+  assert.equal(ledger.slots['126'].phase, 'COMPLETED');
+  assert.equal(ledger.slots['126'].completed_head_sha, SHA.two);
+  const ci = apply(ledger, reviewSnapshot({
+    event: 'head_advanced',
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(ci.outcome.status, 'REVIEW_REQUESTED');
+  ledger = ci.ledger;
+
+  authorMode = 'named';
+  const unnamed = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  assert.equal(unnamed.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(unnamed.outcome.status, 'READY_FOR_OWNER');
+  ledger = unnamed.ledger;
+
+  authorMode = 'reviewer';
+  const fetchedSelf = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  assert.equal(fetchedSelf.outcome.status, 'REJECTED_SELF_APPROVAL');
+  ledger = fetchedSelf.ledger;
+
+  authorMode = 'linked';
+  const pass100 = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  assert.equal(pass100.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(pass100.outcome.plan.merge, null);
+  ledger = pass100.ledger;
+  const pass200 = await deliverGithubReview(ledger, githubEvent({ reviewId: 200, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  assert.equal(pass200.outcome.status, 'REVIEW_REUSED');
+  assert.equal(pass200.outcome.plan.cursor_handoff, null);
+  ledger = pass200.ledger;
+
+  const dismissed = await deliverGithubReview(ledger, githubEvent({ reviewId: 301, sha: SHA.two, state: 'dismissed' }), [], github);
+  assert.equal(dismissed.outcome.status, 'READINESS_REVOKED');
+  assert.equal(dismissed.ledger.reservations[dedupKey('126', SHA.one, 50)].status, 'READINESS_REVOKED');
+  ledger = dismissed.ledger;
+  const failed = apply(ledger, admissionPass({ reviewId: 300, verdict: 'FAIL' }));
+  assert.equal(failed.outcome.status, 'READINESS_REVOKED');
+  ledger = failed.ledger;
+
+  const replay100 = await deliverGithubReview(ledger, githubEvent({ reviewId: 100, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  assert.equal(replay100.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(replay100.outcome.status, 'READY_FOR_OWNER');
+  const replay200 = apply(ledger, admissionPass({ reviewId: 200 }));
+  assert.equal(replay200.outcome.status, 'STALE_REVIEW');
+  assert.notEqual(replay200.outcome.status, 'READY_TO_MERGE');
+  const pass400 = await deliverGithubReview(ledger, githubEvent({ reviewId: 400, sha: SHA.two, state: 'commented', verdict: 'PASS' }), [], github);
+  assert.equal(pass400.outcome.status, 'READY_FOR_OWNER');
+  const late100 = apply(pass400.ledger, admissionPass({ reviewId: 100 }));
+  assert.equal(late100.outcome.status, 'STALE_REVIEW');
+  assert.equal(late100.ledger.reservations[dedupKey('126', SHA.one, 50)].status, 'READY_FOR_OWNER');
+  assert.equal(calls.every(call => call.method === 'GET'), true);
+
+  const queued = await deliverGithubReview(emptyLedger(), githubEvent({ pr: 77, reviewId: 77, sha: SHA.one }), findingThread(77, SHA.one), github);
+  assert.equal(queued.outcome.status, 'HANDOFF');
+  assert.equal(queued.outcome.plan.cursor_handoff == null, false);
+  const closed = apply(queued.ledger, reviewSnapshot({ pr: 77, state: 'closed', reviewId: 1, threads: [] }));
+  assert.equal(closed.outcome.status, 'IGNORED_CLOSED');
+  assert.equal(closed.ledger.slots['77'].phase, 'CANCELLED');
+  assert.equal(closed.ledger.reservations[dedupKey('77', SHA.one, 77)].status, 'CANCELLED');
+  const reopened = apply(closed.ledger, reviewSnapshot({
+    pr: 77,
+    event: 'head_advanced',
+    headSha: SHA.two,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(reopened.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.notEqual(reopened.outcome.status, 'REVIEW_REQUESTED');
+});
+
+function githubEvent({ pr = 126, reviewId, sha, state = 'changes_requested', verdict = null, baseSha = SHA.base }) {
+  return {
+    action: 'submitted',
+    repository: { full_name: 'krzysztofsyska/skillcheck-core' },
+    sender: { ...CODEX_REVIEWER },
+    verdict,
+    review: {
+      id: reviewId,
+      state,
+      commit_id: sha,
+      user: { ...CODEX_REVIEWER },
+      body: SENTINEL,
+    },
+    pull_request: {
+      number: pr,
+      state: 'open',
+      draft: false,
+      user: { ...AUTHOR },
+      base: { ref: 'integration', sha: baseSha },
+      head: { sha, repo: { full_name: 'krzysztofsyska/skillcheck-core' } },
+    },
+  };
+}
+
+function findingThread(reviewId, sha) {
+  return [{
+    id: `thread-${reviewId}`,
+    isResolved: false,
+    isOutdated: false,
+    comments: [{
+      id: reviewId,
+      commit_id: sha,
+      pull_request_review_id: reviewId,
+      path: 'docs/automation/codex-cursor-handoff-approval.md',
+      line: 12,
+      body: SENTINEL,
+    }],
+  }];
+}
+
+function admissionPass({ reviewId, verdict = 'PASS' }) {
+  return {
+    now: '2026-10-15T12:00:00.000Z',
+    repository: 'krzysztofsyska/skillcheck-core',
+    event: { name: 'admission_review', action: 'observed' },
+    sender: { ...CODEX_REVIEWER },
+    pull: {
+      number: 126,
+      state: 'open',
+      draft: false,
+      baseRef: 'integration',
+      headSha: SHA.two,
+      baseSha: SHA.base,
+      author: { ...AUTHOR },
+      headRepo: 'krzysztofsyska/skillcheck-core',
+    },
+    review: { id: reviewId, state: 'commented', user: { ...CODEX_REVIEWER } },
+    adapter: {
+      source: 'trusted_adapter',
+      kind: 'review',
+      pr: 126,
+      task_id: 'review-126',
+      executor: 'codex',
+      head_sha: SHA.two,
+      base_sha: SHA.base,
+      conditions: { policy_sha: 'policy-1', required_checks: ['verify'] },
+      verdict,
+      findings: [],
+      ci: { sha: SHA.two, conclusion: 'success' },
+      fix_author: { ...CURSOR_ACTOR },
+    },
+  };
+}
 
 test('five finished handoff cycles release their slots before the next review', () => {
   let ledger = emptyLedger();

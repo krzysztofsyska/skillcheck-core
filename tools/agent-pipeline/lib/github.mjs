@@ -193,6 +193,10 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
     async readStateFile(path) {
       return request(`/repos/${owner}/${repo}/contents/${path}?ref=agent-state`);
     },
+    async readCommit(sha) {
+      if (!/^[0-9a-f]{40}$/i.test(String(sha ?? ''))) throw new Error('INVALID_SHA');
+      return request(`/repos/${owner}/${repo}/commits/${sha}`);
+    },
     async readComparison(base, head) {
       const result = await request(`/repos/${owner}/${repo}/compare/${base}...${head}?per_page=100`);
       if (!Array.isArray(result.commits) || !Array.isArray(result.files) || result.files.length >= 300 || result.total_commits > 100) throw new Error('PROMOTION_DIFF_INCOMPLETE');
