@@ -5,13 +5,15 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classify } from '../../tools/agent-pipeline/classify-pr.mjs';
+import { parseContract } from '../../tools/agent-pipeline/lib/contract.mjs';
 import { createGitHubClient } from '../../tools/agent-pipeline/lib/github.mjs';
 import { runHandoffCli } from '../../tools/agent-pipeline/handoff-cli.mjs';
 import { agentIdFor, operationKey, sha256 } from '../../tools/agent-pipeline/lib/canonical.mjs';
 import { buildCiEnvelope } from '../../tools/agent-pipeline/lib/ci.mjs';
 import { occupiedCount, releasePull } from '../../tools/agent-pipeline/lib/handoff-admission.mjs';
 import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
-import { requiredReviewChecks } from '../../tools/agent-pipeline/lib/transitions.mjs';
+import { plan, requiredReviewChecks } from '../../tools/agent-pipeline/lib/transitions.mjs';
+import { contractBody, observation, taskRecord } from './helpers.mjs';
 import {
   CODEX_REVIEWER,
   CURSOR_HANDOFF_TEMPLATE,
@@ -1324,8 +1326,6 @@ test('automation documents and the handoff workflow classify as L3 operations', 
   assert.equal(low.ok, false);
 });
 
-const MAIN = 'f'.repeat(40);
-
 test('structural review uses the authenticated artifact and ignores a connector comment', async () => {
   const policy = configuredReviewPolicy();
   const early = await observeStructuralReview(emptyLedger(), 126, null);
@@ -1495,6 +1495,7 @@ test('a base change reissues the structural review tuple', () => {
   assert.equal(moved.outcome.plan.codex_rereview == null, false);
   assert.equal(moved.ledger.reservations[key].structural_review.base_sha, SHA.four);
   assert.notEqual(moved.ledger.reservations[key].structural_review.request_id, expected.request_id);
+  assert.equal(moved.ledger.reservations[key].structural_review.request_id, producerReview(SHA.two, SHA.four).record.review_request_id);
   assert.equal(moved.ledger.reservations[key].structural_review.contract_hash, expected.contract_hash);
   assert.equal(moved.ledger.reservations[key].structural_review.policy_sha, expected.policy_sha);
   assert.deepEqual(moved.ledger.reservations[key].structural_review.required_checks, expected.required_checks);
@@ -1506,6 +1507,65 @@ test('a base change reissues the structural review tuple', () => {
     ci: { sha: SHA.two, conclusion: 'success' },
   }));
   assert.equal(again.outcome.status, 'DUPLICATE');
+});
+
+test('an old structural result does not unlock readiness after the tuple changes', async () => {
+  const policy = configuredReviewPolicy();
+  const { ledger, expected } = structuralLedger('ci-after');
+  const key = dedupKey('126', SHA.one, 5445420558);
+  const moved = apply(ledger, reviewSnapshot({
+    event: 'ci_completed',
+    headSha: SHA.two,
+    baseSha: SHA.four,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  const stale = await observeStructuralReview(moved.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: passEnvelope(expected, policy),
+    pullBase: SHA.four,
+  }).github, policy);
+  assert.notEqual(stale.outcome.status, 'READY_FOR_OWNER');
+  assert.notEqual(stale.outcome.status, 'REVIEW_REUSED');
+  assert.equal(stale.ledger.reservations[key].status, 'WAITING_REREVIEW');
+  const successor = moved.ledger.reservations[key].structural_review;
+  const ready = await observeStructuralReview(moved.ledger, 126, structuralWorld({
+    expected: successor,
+    policy,
+    envelope: passEnvelope(successor, policy),
+    pullBase: SHA.four,
+  }).github, policy);
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+
+  const controls = structuralLedger('ci-after');
+  controls.ledger.slots['126'].review_contract.required_checks = [...expected.required_checks, 'sc-agent/extra-control'];
+  const reissued = apply(controls.ledger, reviewSnapshot({
+    event: 'ci_completed',
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(reissued.outcome.status, 'REVIEW_REQUESTED');
+  assert.equal(reissued.ledger.reservations[key].status, 'WAITING_REREVIEW');
+  assert.equal(reissued.ledger.reservations[key].structural_review.required_checks.at(-1), 'sc-agent/extra-control');
+  assert.equal(reissued.ledger.reservations[key].structural_review.policy_sha, expected.policy_sha);
+  const repeated = apply(reissued.ledger, reviewSnapshot({
+    event: 'ci_completed',
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'success' },
+  }));
+  assert.equal(repeated.outcome.status, 'DUPLICATE');
+  const previous = await observeStructuralReview(reissued.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: passEnvelope(expected, policy),
+  }).github, policy);
+  assert.notEqual(previous.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(previous.ledger.reservations[key].status, 'WAITING_REREVIEW');
 });
 
 test('structural review does not invent a contract hash', async () => {
@@ -1536,7 +1596,7 @@ test('a queued structural fix is observed on the successor head', async () => {
   assert.equal(waiting.outcome.status, 'WAITING_CAPACITY');
   releasePull(waiting.ledger, 201);
   assert.equal(waiting.ledger.slots['126'].occupied, true);
-  assert.equal(waiting.ledger.slots['126'].review_contract.task_id, 'SC-OPS-HANDOFF');
+  assert.equal(waiting.ledger.slots['126'].review_contract.task_id, 'SC-DEMO-001');
   const done = apply(waiting.ledger, completeSlot(waiting.ledger, 126, SHA.three));
   assert.equal(done.outcome.status, 'COMPLETED');
   const requested = apply(done.ledger, reviewSnapshot({
@@ -1549,7 +1609,7 @@ test('a queued structural fix is observed on the successor head', async () => {
   assert.equal(requested.outcome.status, 'REVIEW_REQUESTED');
   const successor = requested.ledger.reservations[dedupKey('126', SHA.two, 900)].structural_review;
   assert.equal(successor.head_sha, SHA.three);
-  assert.equal(successor.task_id, 'SC-OPS-HANDOFF');
+  assert.equal(successor.task_id, 'SC-DEMO-001');
   assert.equal(requested.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'SUPERSEDED');
   const ready = await observeStructuralReview(requested.ledger, 126, structuralWorld({
     expected: successor,
@@ -1560,39 +1620,158 @@ test('a queued structural fix is observed on the successor head', async () => {
   assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
 });
 
+test('a later CI failure withdraws structural readiness', async () => {
+  const policy = configuredReviewPolicy();
+  const { ledger, expected } = structuralLedger('ci-after');
+  const key = dedupKey('126', SHA.one, 5445420558);
+  const world = structuralWorld({ expected, policy, envelope: passEnvelope(expected, policy) });
+  const ready = await observeStructuralReview(ledger, 126, world.github, policy);
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+  const failed = apply(ready.ledger, reviewSnapshot({
+    event: 'ci_completed',
+    headSha: SHA.two,
+    baseSha: SHA.base,
+    threads: [],
+    ci: { sha: SHA.two, conclusion: 'failure' },
+  }));
+  assert.equal(failed.outcome.status, 'READINESS_REVOKED');
+  assert.notEqual(failed.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.equal(failed.ledger.reservations[key].status, 'READINESS_REVOKED');
+  const again = await observeStructuralReview(failed.ledger, 126, world.github, policy);
+  assert.notEqual(again.outcome.status, 'REVIEW_REUSED');
+  assert.notEqual(again.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(again.ledger.reservations[key].status, 'READINESS_REVOKED');
+
+  const artifact = structuralLedger('ci-after');
+  const passed = await observeStructuralReview(artifact.ledger, 126, structuralWorld({
+    expected: artifact.expected,
+    policy,
+    envelope: passEnvelope(artifact.expected, policy),
+  }).github, policy);
+  assert.equal(passed.outcome.status, 'READY_FOR_OWNER');
+  const reread = await observeStructuralReview(passed.ledger, 126, structuralWorld({
+    expected: artifact.expected,
+    policy,
+    envelope: passEnvelope(artifact.expected, policy),
+    ciRuns: [ciRun(artifact.expected, policy, { conclusion: 'failure' })],
+  }).github, policy);
+  assert.equal(reread.outcome.status, 'READINESS_REVOKED');
+  assert.notEqual(reread.outcome.status, 'REVIEW_REUSED');
+  assert.equal(reread.ledger.reservations[key].status, 'READINESS_REVOKED');
+  const missing = structuralLedger('ci-after');
+  const held = await observeStructuralReview(missing.ledger, 126, structuralWorld({
+    expected: missing.expected,
+    policy,
+    envelope: passEnvelope(missing.expected, policy),
+  }).github, policy);
+  const unavailable = await observeStructuralReview(held.ledger, 126, structuralWorld({
+    expected: missing.expected,
+    policy,
+    envelope: passEnvelope(missing.expected, policy),
+    ciRuns: [ciRun(missing.expected, policy, { status: 'in_progress', conclusion: null })],
+  }).github, policy);
+  assert.notEqual(unavailable.outcome.status, 'READY_FOR_OWNER');
+  assert.notEqual(unavailable.outcome.status, 'REVIEW_REUSED');
+  assert.notEqual(unavailable.ledger.reservations[key].status, 'READY_FOR_OWNER');
+});
+
+test('a later structural FAIL without findings withdraws readiness and does not start a fix', async () => {
+  const policy = configuredReviewPolicy();
+  const { ledger, expected } = structuralLedger('ci-after');
+  const key = dedupKey('126', SHA.one, 5445420558);
+  const ready = await observeStructuralReview(ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: passEnvelope(expected, policy),
+  }).github, policy);
+  assert.equal(ready.outcome.status, 'READY_FOR_OWNER');
+  const attempts = ready.ledger.attempts['126'];
+  const fail = envelopeFor(expected, policy, { verdict: 'FAIL', findings: [], run_id: 901 });
+  const revoked = await observeStructuralReview(ready.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: fail,
+    runs: [reviewRun(expected, policy, { id: 901, updated_at: '2026-10-15T14:00:00Z' })],
+  }).github, policy);
+  assert.equal(revoked.outcome.status, 'READINESS_REVOKED');
+  assert.notEqual(revoked.outcome.status, 'HANDOFF');
+  assert.equal(revoked.outcome.plan.cursor_handoff, null);
+  assert.equal(revoked.ledger.reservations[key].status, 'READINESS_REVOKED');
+  assert.equal(revoked.ledger.attempts['126'], attempts);
+
+  const fresh = await observeStructuralReview(structuralLedger('ci-after').ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: passEnvelope(expected, policy),
+  }).github, policy);
+  const unordered = await observeStructuralReview(fresh.ledger, 126, structuralWorld({
+    expected,
+    policy,
+    envelope: envelopeFor(expected, policy, {
+      verdict: 'FAIL',
+      findings: [structuralFinding('late', 'minor')],
+      run_id: 902,
+    }),
+    runs: [reviewRun(expected, policy, { id: 902, updated_at: '2026-10-15T13:00:00Z' })],
+  }).github, policy);
+  assert.equal(unordered.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(unordered.outcome.status, 'HANDOFF');
+  assert.equal(unordered.ledger.reservations[key].status, 'READY_FOR_OWNER');
+  assert.equal(unordered.ledger.attempts['126'], fresh.ledger.attempts['126']);
+});
+
 function configuredReviewPolicy() {
   const policy = loadPolicy();
   return { ...policy, controller_actor_id: 456, workflow_ids: { ...policy.workflow_ids, review: 88001, verify: 88002 } };
 }
 
-function frozenReviewRecord() {
-  return {
-    repository_id: loadPolicy().repository_id,
-    task_id: 'SC-OPS-HANDOFF',
-    task_revision: 1,
-    contract_hash: 'ab'.repeat(32),
-    policy_sha: MAIN,
-    binding: {
-      substantive_reviews: 0,
-      required_tests: ['npm run test:agent-pipeline'],
-      contract: {
-        acceptance_criteria: ['inactive adapter stays offline'],
-        security_checks: ['no live dispatch'],
-      },
-    },
+function producerReview(headSha, baseSha, pr = 126) {
+  const contract = parseContract(contractBody());
+  const record = taskRecord({
+    state: 'PR_REVIEW',
+    head_sha: headSha,
+    base_sha: baseSha,
+    pr_number: pr,
+    contract_hash: contract.hash,
+  });
+  record.binding.contract = contract;
+  record.binding.required_tests = contract.required_tests;
+  const opened = plan(record, observation());
+  const policy = loadPolicy();
+  const ci = {
+    workflow_id: policy.workflow_ids.verify,
+    workflow_path: policy.workflows.verify,
+    run_id: 910,
+    run_attempt: 1,
+    policy_sha: opened.record.policy_sha,
+    head_sha: headSha,
+    base_sha: baseSha,
+    conclusion: 'failure',
+    jobs: [{ name: 'verify', conclusion: 'failure' }],
+    commands_executed: [],
   };
+  const obs = observation();
+  obs.github = { ...obs.github, ci };
+  const seen = plan(opened.record, obs);
+  const dispatched = plan(seen.record, obs);
+  const packet = dispatched.effects.find(effect => effect.workflow === 'review')?.packet;
+  return { record: dispatched.record, packet };
 }
 
 function installFrozenContract(ledger) {
-  const record = frozenReviewRecord();
+  const produced = producerReview(SHA.two, SHA.base);
+  const record = produced.record;
   ledger.slots['126'].review_contract = {
     repository_id: record.repository_id,
     task_id: record.task_id,
     task_revision: record.task_revision,
     round: record.binding.substantive_reviews,
-    contract_hash: record.contract_hash,
-    policy_sha: record.policy_sha,
-    required_checks: requiredReviewChecks(record),
+    request_id: record.review_request_id,
+    contract_hash: produced.packet.contract_hash,
+    policy_sha: produced.packet.policy_sha,
+    head_sha: produced.packet.head_sha,
+    base_sha: produced.packet.base_sha,
+    required_checks: produced.packet.required_checks,
   };
 }
 
@@ -1609,21 +1788,17 @@ function structuralLedger(order) {
   }
   const expected = ledger.reservations[dedupKey('126', SHA.one, 5445420558)].structural_review;
   const frozen = ledger.slots['126'].review_contract;
-  assert.equal(expected.request_id, sha256(operationKey({
-    repositoryId: frozen.repository_id,
-    taskId: frozen.task_id,
-    taskRevision: frozen.task_revision,
-    headSha: SHA.two,
-    baseSha: SHA.base,
-    action: 'review',
-    round: frozen.round,
-  })));
-  assert.deepEqual(expected.required_checks, frozen.required_checks);
+  const produced = producerReview(SHA.two, SHA.base);
+  assert.equal(expected.request_id, produced.record.review_request_id);
+  assert.equal(expected.contract_hash, produced.packet.contract_hash);
+  assert.equal(expected.contract_hash, produced.record.contract_hash);
+  assert.deepEqual(expected.required_checks, produced.packet.required_checks);
+  assert.deepEqual(expected.required_checks, requiredReviewChecks(produced.record));
+  assert.equal(expected.policy_sha, produced.packet.policy_sha);
   assert.equal(expected.required_checks.includes('sc-agent/owner-acceptance'), false);
-  assert.equal(expected.contract_hash, frozen.contract_hash);
-  assert.equal(expected.policy_sha, MAIN);
   assert.equal(expected.head_sha, SHA.two);
   assert.equal(expected.base_sha, SHA.base);
+  assert.equal(frozen.request_id, produced.record.review_request_id);
   return { ledger, expected };
 }
 
@@ -1647,7 +1822,7 @@ function envelopeFor(expected, policy, patch) {
   return {
     workflow_id: policy.workflow_ids.review,
     workflow_path: policy.workflows.review,
-    run_id: 900,
+    run_id: patch.run_id ?? 900,
     run_attempt: 1,
     policy_sha: expected.policy_sha,
     payload: {
