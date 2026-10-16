@@ -135,14 +135,25 @@ export async function readSnapshot(github, cursor, binding, state) {
     github.readProjection(),
   ]);
   if (Object.values(projection.tasks).some(t => t.pr_number === binding.pr || t.binding?.branch === binding.branch)) throw new Error('MANAGED_BY_CONTROLLER');
+  // Cost probes require the same authenticated, paginated commit-file evidence
+  // as repairs. A net PR diff alone cannot prove a single authorized commit.
+  const costProbePhase = ['COST_PROBE_CURSOR_DONE', 'COST_PROBE_REVIEW_PENDING'].includes(state?.phase);
+  const repairBase = costProbePhase ? state.baselineHead : state?.repairHead;
   let repair = null;
-  if (['FIXING', 'REVIEW_PENDING'].includes(state?.phase) && state.repairHead && state.repairHead !== pull.head.sha) {
-    const comparison = await github.request(`${root}/compare/${state.repairHead}...${pull.head.sha}?per_page=100`);
+  if (['FIXING', 'REVIEW_PENDING'].includes(state?.phase) || costProbePhase) {
+    if (!repairBase || repairBase === pull.head.sha) return {
+      pull, files, reviews, comments, agent, repair: null,
+      originVerified: ['ahead', 'identical'].includes(origin.status),
+      initialHeadVerified: ['ahead', 'identical'].includes(initial.status),
+      run: state?.runId ? await cursor.getRun(binding.agentId, state.runId) : null,
+      reactions: [],
+    };
+    const comparison = await github.request(`${root}/compare/${repairBase}...${pull.head.sha}?per_page=100`);
     const complete = comparison.status === 'ahead' && comparison.base_commit?.sha === state.repairHead
       && Number.isInteger(comparison.total_commits) && comparison.total_commits > 0 && comparison.total_commits <= 100
       && comparison.commits?.length === comparison.total_commits;
     const commits = complete ? await Promise.all(comparison.commits.map(c => readRepairCommit(github, root, c.sha))) : [];
-    repair = { base: state.repairHead, head: pull.head.sha, status: comparison.status, complete, commits };
+    repair = { base: repairBase, head: pull.head.sha, status: comparison.status, complete, commits };
   }
   return {
     pull, files, reviews, comments, agent, repair,
