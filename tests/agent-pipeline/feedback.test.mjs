@@ -305,6 +305,7 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   assert.equal(reviews, 0);
   assert.match(prompt, /exactly one documentation commit/);
   assert.match(prompt, /docs\/test\.md/);
+  assert.match(prompt, /SkillCheck-Cost-Probe:/);
   assert.doesNotMatch(prompt, /CURSOR_API_KEY|private key/i);
   assert.equal(f.state().cursorChargedCents, null);
   assert.equal(f.state().cursorRawCostCents, null);
@@ -408,6 +409,80 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   await assert.rejects(runCostProbe({
     binding: f.binding, store: fixture().args.store, cursor,
   }), /COST_PROBE_UNWIRED/);
+});
+
+test('cost probe polls read-only and measures only after a terminal run', async () => {
+  const f = fixture();
+  let runStatus = 'CREATING', dispatches = 0, reads = 0, reviews = 0;
+  let used = 0;
+  const args = {
+    binding: f.binding, store: f.args.store,
+    reserveLedger: (writes, held = 0) => { used = accountLedger(used, writes, held); },
+    cursor: {
+      async createRun() { dispatches += 1; return { run: { id: 'run-fail', agentId: f.binding.agentId } }; },
+      async getRun() { return { id: 'run-fail', agentId: f.binding.agentId, status: runStatus }; },
+      async getUsage() { reads += 1; return { totalUsage: { totalTokens: 1 } }; },
+    },
+    readHead: async () => A,
+    readSnapshot: async () => structuredClone(f.snapshot),
+    postReview: async () => { reviews += 1; return { id: 3 }; },
+  };
+  assert.equal(await runCostProbe(args), 'COST_PROBE_RUNNING');
+  assert.equal(used, 5);
+  assert.equal(await runCostProbe(args), 'COST_PROBE_RUNNING');
+  runStatus = 'RUNNING';
+  assert.equal(await runCostProbe(args), 'COST_PROBE_RUNNING');
+  assert.equal(dispatches, 1);
+  assert.equal(reads, 0);
+  assert.equal(reviews, 0);
+  runStatus = 'ERROR';
+  assert.equal(await runCostProbe(args), 'COST_PROBE_FAILED');
+  assert.equal(f.state().runStatus, 'ERROR');
+  assert.equal(f.state().ledgerHold, undefined);
+  assert.equal(used, 3, 'failed terminal state releases two unused hold slots after CAS');
+  assert.equal(await runCostProbe(args), 'COST_PROBE_FAILED');
+  assert.equal(dispatches, 1);
+  assert.equal(reads, 0);
+  assert.equal(reviews, 0);
+});
+
+test('cost probe refuses forged, extra or out-of-scope commit evidence', async () => {
+  const f = fixture();
+  let reviews = 0;
+  const args = {
+    binding: f.binding, store: f.args.store,
+    cursor: {
+      async createRun() { return { run: { id: 'run-proof', agentId: f.binding.agentId } }; },
+      async getRun() { return { id: 'run-proof', agentId: f.binding.agentId, status: 'FINISHED' }; },
+      async getUsage() { return { totalUsage: { totalTokens: 2 } }; },
+    },
+    readHead: async () => C,
+    readSnapshot: async () => structuredClone(f.snapshot),
+    postReview: async () => { reviews += 1; return { id: 300 }; },
+  };
+  assert.equal(await runCostProbe(args), 'COST_PROBE_RUNNING');
+  assert.equal(await runCostProbe(args), 'COST_PROBE_CURSOR_DONE');
+  finishCostProbe(f, 'run-proof');
+  assert.ok(verifyCostProbeCommit(f.binding, f.state(), f.snapshot));
+  const original = structuredClone(f.snapshot);
+  const wrong = [
+    s => { s.repair.commits[0].committer.id = 999; },
+    s => { s.repair.commits[0].files.push({ filename: 'lib/unapproved.ts' }); },
+    s => { s.repair.commits.push(structuredClone(s.repair.commits[0])); },
+    s => { s.repair.commits[0].commit.verification.verified = false; },
+    s => { s.repair.commits[0].commit.message = 'no trailer'; },
+    s => { s.agent.latestRunId = 'run-other'; },
+    s => { s.pull.base.sha = C; },
+    s => { s.repair.commits[0].parents[0].sha = B; },
+  ];
+  for (const mutate of wrong) {
+    const snapshot = structuredClone(original);
+    mutate(snapshot);
+    assert.equal(verifyCostProbeCommit(f.binding, f.state(), snapshot), false);
+    await assert.rejects(runCostProbe({ ...args, readSnapshot: async () => snapshot }), /COST_PROBE_PROVENANCE/);
+    assert.equal(f.state().phase, 'COST_PROBE_CURSOR_DONE');
+  }
+  assert.equal(reviews, 0);
 });
 
 test('cost probe refuses stale PR, out-of-scope or reconfigured agent before paid dispatch', async () => {
@@ -991,8 +1066,8 @@ test('a cost probe cannot be rearmed on a different PR after any durable probe p
   } };
   // All uncertain/committed pilot phases consume the one repository-wide attempt,
   // even when the old record no longer owns any state-branch commit hold.
-  for (const phase of ['COST_PROBE_PENDING', 'COST_PROBE_CURSOR_DONE',
-    'COST_PROBE_REVIEW_PENDING', 'COST_PROBE_DONE']) {
+  for (const phase of ['COST_PROBE_PENDING', 'COST_PROBE_RUNNING', 'COST_PROBE_CURSOR_DONE',
+    'COST_PROBE_REVIEW_PENDING', 'COST_PROBE_DONE', 'COST_PROBE_FAILED']) {
     prior = { phase };
     await assert.rejects(loadFeedbackHolds(github, new Set([88]), 88), /COST_PROBE_ALREADY_USED/);
     assert.equal(await loadFeedbackHolds(github, new Set([49, 88]), 49), 0);
