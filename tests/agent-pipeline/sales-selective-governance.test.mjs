@@ -14,9 +14,9 @@ const seed='governance/sales-selective-main-gate-20261016';
 const main='76760b7ffb7e95231fc7af313cc67bc8d36fefe1';
 test('one-time governance installation is pinned to old main and exact seven files',()=>{
   const input={files:seedFiles,body:meta('OPERATIONS','GOVERNANCE_SEED'),
-    base:'main',headRef:seed,baseSha:main};
+    base:'main',headRef:seed,baseSha:main,prNumber:128};
   assert.equal(classify(input).ok,true);
-  for(const patch of [{baseSha:'a'.repeat(40)},{headRef:'feat/other'},
+  for(const patch of [{baseSha:'a'.repeat(40)},{prNumber:129},{headRef:'feat/other'},
     {files:[...seedFiles,'app/api/payments/route.ts']},
     {files:seedFiles.slice(1)},{body:meta('OPERATIONS','NO')},
     {files:[...seedFiles.slice(1),seedFiles[1]]}])
@@ -24,9 +24,9 @@ test('one-time governance installation is pinned to old main and exact seven fil
 });
 test('only the five reviewed intake paths classify as special promotion',()=>{
   const input={files:sourceFiles,body:meta('FRONTEND','SALES_MVP_INTAKE'),
-    base:'main',headRef:source,baseSha:main};
+    base:'main',headRef:source,baseSha:main,prNumber:120};
   assert.equal(classify(input).ok,true);
-  for(const patch of [{headRef:'release/other'},{files:['app/preselekcja/page.tsx']},
+  for(const patch of [{prNumber:129},{headRef:'release/other'},{files:['app/preselekcja/page.tsx']},
     {files:[...sourceFiles,'supabase/migrations/0001.sql']},
     {files:[...sourceFiles.slice(1),sourceFiles[1]]},
     {body:meta('FRONTEND','NO')},{body:meta('OPERATIONS','SALES_MVP_INTAKE')},

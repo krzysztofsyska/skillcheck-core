@@ -10,15 +10,15 @@ function exactFiles(files,allowed) {
   return Array.isArray(files) && files.length === allowed.length &&
     new Set(files).size === allowed.length && files.every(f => allowed.includes(f));
 }
-function allowedMainException({base,headRef,baseSha,metadata,files}) {
+function allowedMainException({base,headRef,baseSha,prNumber,metadata,files}) {
   if(base !== 'main' || metadata.PROMOTION !== 'YES' || metadata.LEVEL !== 'L3') return false;
   if(headRef === SALES_INTAKE_BRANCH)
-    return metadata.SCOPE === 'FRONTEND' && metadata.RELEASE_KIND === 'SALES_MVP_INTAKE' &&
+    return prNumber === 120 && metadata.SCOPE === 'FRONTEND' && metadata.RELEASE_KIND === 'SALES_MVP_INTAKE' &&
       exactFiles(files,SALES_INTAKE_FILES);
   // Single-use governance seed, pinned to the original main SHA. After main
   // advances this exception becomes unreachable, even on a reused branch.
   if(headRef === SEED_BRANCH)
-    return baseSha === SEED_BASE_SHA && metadata.SCOPE === 'OPERATIONS' &&
+    return prNumber === 128 && baseSha === SEED_BASE_SHA && metadata.SCOPE === 'OPERATIONS' &&
       metadata.RELEASE_KIND === 'GOVERNANCE_SEED' && exactFiles(files,SEED_FILES);
   return false;
 }
@@ -31,7 +31,7 @@ const PRODUCT_FRONTEND = /^(app\/(?!api\/)|components\/|public\/|styles\/).+|\.c
 const PRODUCT_BACKEND = /^(app\/api\/|lib\/|supabase\/|scripts\/)/;
 const OPERATIONS = /^(tools\/agent-pipeline\/|tests\/agent-pipeline\/|\.github\/agent-pipeline\/|\.github\/workflows\/agent-|docs\/sc-ops-002|docs\/AGENT_PIPELINE\.md|docs\/AGENT_WORKFLOW\.md|AGENTS\.md|\.cursor\/rules\/skillcheck-agent-pipeline\.mdc)/;
 
-export function classify({ files, body, base, headRef, baseSha }) {
+export function classify({ files, body, base, headRef, baseSha, prNumber }) {
   const metadata = parseMetadata(body);
   const missing = ['TASK', 'SCOPE', 'LEVEL', 'OWNER_APPROVAL', 'PRODUCTION_APPROVAL', 'REVIEW_VERDICT', 'PROMOTION']
     .filter(field => !metadata[field]);
@@ -62,7 +62,7 @@ export function classify({ files, body, base, headRef, baseSha }) {
   if (metadata.SCOPE !== detected) errors.push(`Declared SCOPE=${metadata.SCOPE} but changed files classify as ${detected}`);
   if ((database || security || operations) && metadata.LEVEL !== 'L3') errors.push('DB, security, or controller changes require LEVEL: L3');
   if (base === 'main' && (headRef !== 'integration' || metadata.PROMOTION !== 'YES') &&
-      !allowedMainException({base,headRef,baseSha,metadata,files})) {
+      !allowedMainException({base,headRef,baseSha,prNumber,metadata,files})) {
     errors.push('Only an integration -> main promotion may target main (approval is validated separately)');
   }
   return {
@@ -107,23 +107,26 @@ function main() {
   let base = 'integration';
   let headRef = '';
   let baseSha = '';
+  let prNumber = 0;
   if (readArg('--body-file')) {
     body = readFileSync(readArg('--body-file'), 'utf8');
     files = readFileSync(readArg('--files-file'), 'utf8').split('\n').filter(Boolean);
     base = readArg('--base') ?? base;
     headRef = readArg('--head') ?? '';
     baseSha = readArg('--base-sha') ?? '';
+    prNumber = Number(readArg('--pr-number') || 0);
   } else if (process.env.GITHUB_EVENT_PATH) {
     const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
     body = event.pull_request?.body ?? '';
     base = event.pull_request?.base?.ref ?? 'integration';
     headRef = event.pull_request?.head?.ref ?? '';
     baseSha = event.pull_request?.base?.sha ?? '';
+    prNumber = Number(event.pull_request?.number || 0);
     files = changedFiles(base);
   } else {
     throw new Error('Missing pull request event');
   }
-  const result = classify({ files, body, base, headRef, baseSha });
+  const result = classify({ files, body, base, headRef, baseSha, prNumber });
   if (!result.ok) {
     for (const error of result.errors) console.error(`::error::${error}`);
     process.exit(1);

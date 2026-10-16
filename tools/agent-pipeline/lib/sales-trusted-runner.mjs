@@ -2,6 +2,8 @@
  * A PASS means scope verification, NOT Production or owner approval.
  * NEVER check out or execute the candidate release's files. */
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { inspectSalesReleaseGit } from './sales-release-verified.mjs';
 
 const owner='krzysztofsyska', repo='skillcheck-core', full=owner+'/'+repo;
@@ -39,8 +41,10 @@ async function verifyProtection() {
   for(const item of summaries.slice(0,40)) {
     if(item.enforcement!=='active'||!Number.isInteger(item.id))continue;
     const rule=await github('rulesets/'+item.id);
-    if(rule.enforcement==='active'&&rule.target==='branch'&&mainRuleMatches(rule))
+    if(rule.enforcement==='active'&&rule.target==='branch'&&mainRuleMatches(rule)) {
+      if(Array.isArray(rule.bypass_actors)&&rule.bypass_actors.length)deny('main ruleset has bypass actors');
       effective.push(...(Array.isArray(rule.rules)?rule.rules:[]));
+    }
   }
   for(const kind of ['deletion','non_fast_forward','pull_request','required_status_checks'])
     if(!effective.some(x=>x.type===kind))deny('main ruleset missing '+kind);
@@ -50,6 +54,11 @@ async function verifyProtection() {
     deny('main does not require Agent Gates');
   if(!hasRequiredContext(effective,'Sales selective scope verified'))
     deny('main does not require trusted sales scope check');
+  if(!effective.some(x=>x.type==='pull_request' &&
+      Number.isInteger(x.parameters?.required_approving_review_count) &&
+      x.parameters.required_approving_review_count>=1 &&
+      x.parameters.dismiss_stale_reviews_on_push===true))
+    deny('main lacks independent approval/stale review dismissal');
   return true;
 }
 export async function checkTrustedSalesRelease({event,cwd='.'}) {
@@ -69,7 +78,7 @@ export async function checkTrustedSalesRelease({event,cwd='.'}) {
   if(inspected.authorizedForProduction!==false)deny('Inspector improperly grants Production');
   return {scopeVerified:true,authorizedForProduction:false};
 }
-if(process.argv[1]&&import.meta.url===new URL('file://'+process.argv[1]).href){
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
   const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
   checkTrustedSalesRelease({event}).then(result=>{
     process.stdout.write(JSON.stringify(result)+'\\n');
