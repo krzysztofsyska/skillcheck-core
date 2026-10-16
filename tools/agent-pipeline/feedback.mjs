@@ -234,12 +234,45 @@ export function costMeasurement(payload) {
   };
 }
 
-function costProbePrompt(binding) {
+function costProbePrompt(binding, marker) {
   return 'TASK: SC-OPS-127-PILOT cost probe.\n'
     + `Make exactly one documentation commit on branch ${binding.branch}.\n`
     + `Change only ${binding.allowedFiles[0]}. Add one line: cost-probe documentation commit.\n`
+    + `Use the configured Cursor bot signing identity and include the exact last commit-message line: SkillCheck-Cost-Probe: ${marker}\n`
     + 'Do not open another pull request and do not make a second commit.\n'
     + 'No merge, deployment, migration, secret read, or production action. Stop after that one commit.';
+}
+
+// The pilot approves one verified, signed documentation commit, not merely a
+// different PR head. Verify the terminal run and every changed path, including
+// rename sources, against the immutable reservation.
+export function verifyCostProbeCommit(binding, current, snapshot) {
+  const run = snapshot.run;
+  const branches = run?.git?.branches;
+  if (run?.id !== current.runId || run?.agentId !== binding.agentId
+      || run?.status !== 'FINISHED' || snapshot.agent.latestRunId !== current.runId
+      || snapshot.agent.status !== 'IDLE'
+      || branches?.length !== 1 || branches[0].repoUrl !== `github.com/${REPOSITORY}`
+      || branches[0].branch !== binding.branch
+      || (branches[0].prUrl != null && branches[0].prUrl !== `https://github.com/${REPOSITORY}/pull/${binding.pr}`)
+      || snapshot.pull.base.sha !== current.baselineBase) return false;
+  const proof = snapshot.repair;
+  if (!proof || proof.base !== current.baselineHead || proof.head !== snapshot.pull.head.sha
+      || proof.status !== 'ahead' || proof.complete !== true || proof.commits?.length !== 1
+      || !/^[a-f0-9-]{36}$/.test(current.operationMarker ?? '')) return false;
+  const commit = proof.commits[0];
+  const changed = Array.isArray(commit.files)
+    ? commit.files.flatMap(file => [file?.filename, file?.previous_filename].filter(Boolean))
+    : null;
+  return sha(commit.sha) && commit.sha === snapshot.pull.head.sha
+    && commit.parents?.length === 1 && commit.parents[0].sha === current.baselineHead
+    && commit.committer?.id === binding.cursorCommitter.id
+    && commit.committer?.login === binding.cursorCommitter.login
+    && commit.committer?.type === 'Bot'
+    && commit.commit?.verification?.verified === true
+    && commit.commit.verification.reason === 'valid'
+    && changed?.length > 0 && changed.every(file => binding.allowedFiles.includes(file))
+    && commit.commit.message?.split(/\\r?\\n/).includes(`SkillCheck-Cost-Probe: ${current.operationMarker}`);
 }
 
 function costProbeReview(head) {
@@ -260,7 +293,7 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
     return finishCostProbeRun({ binding, saved, store, cursor, reserveLedger });
   }
   if (phase === 'COST_PROBE_CURSOR_DONE') {
-    return postCostProbeReview({ binding, saved, store, readHead, postReview });
+    return postCostProbeReview({ binding, saved, store, readSnapshot, postReview });
   }
   if (saved.value) fail('COST_PROBE_STATE');
   if (typeof readHead !== 'function' || typeof readSnapshot !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
@@ -274,7 +307,7 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
   reserveLedger?.(5, 0);
   const pending = {
     version: 1, configHash: hash(binding), rounds: 0, handled: [], phase: 'COST_PROBE_PENDING',
-    operationMarker: randomUUID(), baselineHead, ledgerHold: 4,
+    operationMarker: randomUUID(), baselineHead, baselineBase: before.pull.base.sha, ledgerHold: 4,
   };
   const revision = await store.save(pending, saved.revision);
   // A durable reservation alone is not permission to dispatch against a
@@ -282,10 +315,10 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
   const fresh = await readSnapshot(pending);
   validateSnapshot(binding, fresh);
   if (fresh.agent.status !== 'IDLE') fail('CURSOR_BUSY');
-  if (fresh.pull.head.sha !== baselineHead || fresh.pull.base.sha !== before.pull.base.sha) fail('COST_PROBE_TARGET_MOVED');
+  if (fresh.pull.head.sha !== baselineHead || fresh.pull.base.sha !== pending.baselineBase) fail('COST_PROBE_TARGET_MOVED');
   let run;
   try {
-    const response = await cursor.createRun(binding.agentId, { prompt: { text: costProbePrompt(binding) } });
+    const response = await cursor.createRun(binding.agentId, { prompt: { text: costProbePrompt(binding, pending.operationMarker) } });
     run = response?.run;
     if (!run?.id || run.agentId !== binding.agentId) fail('INVALID_CURSOR_RESPONSE');
   } catch (error) {
@@ -322,14 +355,22 @@ async function finishCostProbeRun({ binding, saved, store, cursor, reserveLedger
   return 'COST_PROBE_CURSOR_DONE';
 }
 
-async function postCostProbeReview({ binding, saved, store, readHead, postReview }) {
+async function postCostProbeReview({ binding, saved, store, readSnapshot, postReview }) {
   const current = saved.value;
   if (current.configHash !== hash(binding) || current.ledgerHold !== 2 || !sha(current.baselineHead) || !current.runId) fail('COST_PROBE_STATE');
-  if (typeof readHead !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
-  const head = await readHead();
-  if (!sha(head) || head === current.baselineHead) return 'COST_PROBE_CURSOR_DONE';
+  if (typeof readSnapshot !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
+  const before = await readSnapshot(current);
+  validateSnapshot(binding, before);
+  const head = before.pull.head.sha;
+  if (head === current.baselineHead) return 'COST_PROBE_CURSOR_DONE';
+  if (!verifyCostProbeCommit(binding, current, before)) fail('COST_PROBE_PROVENANCE');
   const reviewing = { ...current, phase: 'COST_PROBE_REVIEW_PENDING', head, ledgerHold: 1 };
   const revision = await store.save(reviewing, saved.revision);
+  // Protect against target replacement after reservation but before posting
+  // the one allowed review request.
+  const fresh = await readSnapshot(reviewing);
+  validateSnapshot(binding, fresh);
+  if (fresh.pull.head.sha !== head || !verifyCostProbeCommit(binding, current, fresh)) fail('COST_PROBE_PROVENANCE');
   let comment;
   try {
     comment = await postReview(costProbeReview(head));
