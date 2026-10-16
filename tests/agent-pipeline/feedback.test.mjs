@@ -269,6 +269,7 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   const args = {
     binding: f.binding, store: f.args.store, cursor,
     readHead: async () => head,
+    readSnapshot: async () => structuredClone(f.snapshot),
     postReview: async body => { reviews += 1; reviewBody = body; return { id: 4242 }; },
   };
   assert.equal(await runCostProbe(args), 'COST_PROBE_CURSOR_DONE');
@@ -309,7 +310,8 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   const lostCursor = { async createRun() { lostRuns += 1; throw new Error('lost'); }, async getUsage() { throw new Error('unread'); } };
   const lostArgs = {
     binding: lost.binding, store: lost.args.store, cursor: lostCursor,
-    readHead: async () => A, postReview: async () => { throw new Error('review'); },
+    readHead: async () => A, readSnapshot: async () => structuredClone(lost.snapshot),
+    postReview: async () => { throw new Error('review'); },
   };
   assert.equal(await runCostProbe(lostArgs), 'COST_PROBE_PENDING');
   assert.equal(await runCostProbe(lostArgs), 'COST_PROBE_PENDING');
@@ -321,7 +323,8 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   await runCostProbe({
     binding: dropped.binding, store: dropped.args.store,
     cursor: { async createRun() { return { run: { id: 'run-drop', agentId: dropped.binding.agentId } }; }, async getUsage() { return { cost: { chargedCents: 1 } }; } },
-    readHead: async () => A, postReview: async () => { droppedReviews += 1; throw new Error('lost-review'); },
+    readHead: async () => A, readSnapshot: async () => structuredClone(dropped.snapshot),
+    postReview: async () => { droppedReviews += 1; throw new Error('lost-review'); },
   });
   assert.equal(droppedReviews, 0);
   await runCostProbe({
@@ -343,7 +346,8 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   };
   assert.equal(await runCostProbe({
     binding: unpriced.binding, store: unpriced.args.store, cursor: unpricedCursor,
-    readHead: async () => A, postReview: async () => { throw new Error('no-review-yet'); },
+    readHead: async () => A, readSnapshot: async () => structuredClone(unpriced.snapshot),
+    postReview: async () => { throw new Error('no-review-yet'); },
   }), 'COST_PROBE_CURSOR_DONE');
   assert.equal(unpriced.state().cursorCostStatus, 'UNAVAILABLE');
   assert.equal(unpriced.state().cursorChargedCents, null);
