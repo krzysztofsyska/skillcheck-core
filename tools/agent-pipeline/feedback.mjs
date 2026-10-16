@@ -272,7 +272,7 @@ export function verifyCostProbeCommit(binding, current, snapshot) {
     && commit.commit?.verification?.verified === true
     && commit.commit.verification.reason === 'valid'
     && changed?.length > 0 && changed.every(file => binding.allowedFiles.includes(file))
-    && commit.commit.message?.split(/\\r?\\n/).includes(`SkillCheck-Cost-Probe: ${current.operationMarker}`);
+    && commit.commit.message?.split(/\r?\n/).includes(`SkillCheck-Cost-Probe: ${current.operationMarker}`);
 }
 
 function costProbeReview(head) {
