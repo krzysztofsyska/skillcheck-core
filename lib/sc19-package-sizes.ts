@@ -48,6 +48,26 @@ export function sc19OfferScopes(sizes: Sc19PackageSizes | null) {
   };
 }
 
+/**
+ * Public marketing must remain available when the optional quota catalog or
+ * Supabase is unavailable. Never display unverified numeric entitlements.
+ * Billing/credit grants still fail closed: this fallback is display-only.
+ */
+export async function loadSc19PublicOfferSizes(
+  enabled: boolean,
+  fetchSizes: () => Promise<Sc19PackageSizes>,
+): Promise<Sc19PackageSizes | null> {
+  if (!enabled) return null;
+  try {
+    const sizes = await fetchSizes();
+    sc19AnalysisScope(sizes.FREE);
+    sc19AnalysisScope(sizes.PRESELEKCJA);
+    return sizes;
+  } catch {
+    return null;
+  }
+}
+
 export async function loadSc19PackageSizes(client: SupabaseClient<Database>): Promise<Sc19PackageSizes> {
   const { data, error } = await client.rpc('sc19_package_sizes');
   if (error) throw new Error(packageSizeError);
