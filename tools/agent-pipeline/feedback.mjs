@@ -249,7 +249,7 @@ function costProbeReview(head) {
 // review-pending, and done. A later call never starts a second run. The review
 // comment is posted once, only after a new head exists, and a lost response is
 // not posted again.
-export async function runCostProbe({ binding, store, cursor, reserveLedger, readHead, postReview }) {
+export async function runCostProbe({ binding, store, cursor, reserveLedger, readHead, readSnapshot, postReview }) {
   validateBinding(binding);
   if (binding.allowedFiles.length !== 1) fail('COST_PROBE_SCOPE');
   const saved = await store.read();
@@ -259,8 +259,13 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
     return postCostProbeReview({ binding, saved, store, readHead, postReview });
   }
   if (saved.value) fail('COST_PROBE_STATE');
-  if (typeof readHead !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
-  const baselineHead = await readHead();
+  if (typeof readHead !== 'function' || typeof readSnapshot !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
+  // The inexpensive head-only read cannot establish PR scope, ancestry,
+  // controller exclusivity or the live Cursor agent configuration.
+  const before = await readSnapshot(null);
+  validateSnapshot(binding, before);
+  if (before.agent.status !== 'IDLE') fail('CURSOR_BUSY');
+  const baselineHead = before.pull.head.sha;
   if (!sha(baselineHead)) fail('COST_PROBE_HEAD');
   reserveLedger?.(4, 0);
   const pending = {
@@ -268,6 +273,12 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
     operationMarker: randomUUID(), baselineHead, ledgerHold: 3,
   };
   const revision = await store.save(pending, saved.revision);
+  // A durable reservation alone is not permission to dispatch against a
+  // changed target. Fail closed if the PR, base or agent changed in the gap.
+  const fresh = await readSnapshot(pending);
+  validateSnapshot(binding, fresh);
+  if (fresh.agent.status !== 'IDLE') fail('CURSOR_BUSY');
+  if (fresh.pull.head.sha !== baselineHead || fresh.pull.base.sha !== before.pull.base.sha) fail('COST_PROBE_TARGET_MOVED');
   let run;
   try {
     const response = await cursor.createRun(binding.agentId, { prompt: { text: costProbePrompt(binding) } });
