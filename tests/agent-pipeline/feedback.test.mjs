@@ -3,7 +3,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { planFeedback, runFeedback, runCostProbe, costMeasurement, fixPrompt, accountLedger, ledgerHold, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
+import { planFeedback, runFeedback, runCostProbe, verifyCostProbeCommit, costMeasurement, fixPrompt, accountLedger, ledgerHold, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
 import { main, feedbackStore, loadFeedbackHolds, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, beginLiveFeedback, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
@@ -85,6 +85,25 @@ function finishRepair(f) {
       files: [{ filename: 'docs/test.md' }],
       commit: { message: `Fix\n\nSkillCheck-Repair: ${f.state().operationMarker}`, verification: { verified: true, reason: 'valid' } } },
   ] };
+}
+
+function finishCostProbe(f, runId, head = C) {
+  const current = f.state();
+  f.snapshot.agent.latestRunId = runId;
+  f.snapshot.agent.status = 'IDLE';
+  f.snapshot.run = { id: runId, agentId: f.binding.agentId, status: 'FINISHED',
+    git: { branches: [{ repoUrl: 'github.com/krzysztofsyska/skillcheck-core',
+      branch: f.binding.branch, prUrl: 'https://github.com/krzysztofsyska/skillcheck-core/pull/49' }] } };
+  f.snapshot.pull.head.sha = head;
+  f.snapshot.repair = {
+    base: current.baselineHead, head, status: 'ahead', complete: true, commits: [{
+      sha: head, parents: [{ sha: current.baselineHead }],
+      committer: { ...f.binding.cursorCommitter, type: 'Bot' },
+      files: [{ filename: 'docs/test.md' }],
+      commit: { message: `docs\\n\\nSkillCheck-Cost-Probe: ${current.operationMarker}`,
+        verification: { verified: true, reason: 'valid' } },
+    }],
+  };
 }
 
 test('synthetic OFFLINE cycle: finding -> Cursor run -> changed head -> re-review -> ready, no acceptance', async () => {
@@ -300,6 +319,8 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   assert.equal(runs, 1);
   assert.equal(reviews, 0);
   head = C;
+  finishCostProbe(f, 'run-probe');
+  assert.ok(verifyCostProbeCommit(f.binding, f.state(), f.snapshot));
   assert.equal(await runCostProbe(args), 'COST_PROBE_DONE');
   assert.equal(reviews, 1);
   assert.match(reviewBody, /@codex review/);
@@ -345,6 +366,7 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   assert.equal(await runCostProbe(droppedArgs), 'COST_PROBE_CURSOR_DONE');
   assert.equal(droppedReviews, 0);
   droppedHead = C;
+  finishCostProbe(dropped, 'run-drop');
   assert.equal(await runCostProbe(droppedArgs), 'COST_PROBE_REVIEW_PENDING');
   assert.equal(dropped.state().phase, 'COST_PROBE_REVIEW_PENDING');
   assert.equal(droppedReviews, 1);
