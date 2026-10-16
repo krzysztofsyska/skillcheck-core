@@ -886,6 +886,34 @@ test('a removed binding with a durable hold blocks the poll', async () => {
   await assert.rejects(loadFeedbackHolds(lostListing, new Set([88])), /LEDGER_HOLD_UNREAD/);
 });
 
+test('a cost probe cannot be rearmed on a different PR after any durable probe phase', async () => {
+  const encode = value => Buffer.from(JSON.stringify(value)).toString('base64');
+  let prior = { phase: 'COST_PROBE_DONE' };
+  const github = { request: async path => {
+    if (path.endsWith('/contents/feedback?ref=agent-feedback-state')) {
+      return [{ name: '49.json', type: 'file' }, { name: '88.json', type: 'file' }];
+    }
+    if (path.includes('/feedback/49.json')) return { content: encode(prior), sha: A };
+    if (path.includes('/feedback/88.json')) return { content: encode({ phase: 'WAITING_REVIEW' }), sha: B };
+    throw new Error(path);
+  } };
+  // All uncertain/committed pilot phases consume the one repository-wide attempt,
+  // even when the old record no longer owns any state-branch commit hold.
+  for (const phase of ['COST_PROBE_PENDING', 'COST_PROBE_CURSOR_DONE',
+    'COST_PROBE_REVIEW_PENDING', 'COST_PROBE_DONE']) {
+    prior = { phase };
+    await assert.rejects(loadFeedbackHolds(github, new Set([88]), 88), /COST_PROBE_ALREADY_USED/);
+    assert.equal(await loadFeedbackHolds(github, new Set([49, 88]), 49), 0);
+  }
+  prior = { phase: 'WAITING_REVIEW' };
+  assert.equal(await loadFeedbackHolds(github, new Set([88]), 88), 0);
+  // The live entry point must always pass its one configured probe PR to the
+  // ledger scan before it constructs the Cursor client or dispatches a run.
+  const source = readFileSync('tools/agent-pipeline/feedback-cli.mjs', 'utf8');
+  assert.match(source, /mode === 'COST_PROBE' \\? config\\.bindings\\[0\\]\\.pr : null/);
+  assert.ok(source.indexOf('await loadFeedbackHolds(') < source.indexOf('const cursor = createCursorClient('));
+});
+
 test('approval already visible when the review request returns cannot authorize READY', async () => {
   const f = fixture();
   await runFeedback(f.args);
