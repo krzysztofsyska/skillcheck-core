@@ -15,6 +15,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], {
     env: {
       ...process.env,
+      // The public landing must still return HTTP 200 with the package feature
+      // enabled even when the catalog RPC cannot reach this synthetic endpoint.
+      SC19_PACKAGES_ENABLED: 'true',
       NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:9',
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'test-only-public-key',
       NEXT_PUBLIC_SITE_URL: `http://127.0.0.1:${port}`,
