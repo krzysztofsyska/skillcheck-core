@@ -100,7 +100,7 @@ function finishCostProbe(f, runId, head = C) {
       sha: head, parents: [{ sha: current.baselineHead }],
       committer: { ...f.binding.cursorCommitter, type: 'Bot' },
       files: [{ filename: 'docs/test.md' }],
-      commit: { message: `docs\\n\\nSkillCheck-Cost-Probe: ${current.operationMarker}`,
+      commit: { message: `docs\n\nSkillCheck-Cost-Probe: ${current.operationMarker}`,
         verification: { verified: true, reason: 'valid' } },
     }],
   };
