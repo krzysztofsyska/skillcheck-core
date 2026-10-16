@@ -221,7 +221,11 @@ export async function main(env = process.env) {
   const cursor = createCursorClient({ fetch, apiKey: env.CURSOR_API_KEY });
   if (mode === 'COST_PROBE') {
     const binding = config.bindings[0];
-    const status = await runCostProbe({ binding, store: stores.get(binding.pr), cursor, reserveLedger });
+    const status = await runCostProbe({
+      binding, store: stores.get(binding.pr), cursor, reserveLedger,
+      readHead: async () => (await github.request(`/repos/${REPOSITORY}/pulls/${binding.pr}`))?.head?.sha,
+      postReview: body => github.request(`/repos/${REPOSITORY}/issues/${binding.pr}/comments`, { method: 'POST', body: { body } }),
+    });
     return [{ pr: binding.pr, status }];
   }
   throw new Error('BLOCKED_BUDGET_GUARD');

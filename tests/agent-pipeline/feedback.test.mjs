@@ -240,13 +240,19 @@ test('an enabled live poll refuses paid calls without a combined spend cap', asy
   assert.throws(() => beginLiveFeedback(env, { enabled: true, costProbe: { armed: true }, bindings: [{ pr: 49 }] }), /LIVE_MODE_AMBIGUOUS/);
   assert.throws(() => beginLiveFeedback(env, { enabled: false, costProbe: { armed: true }, bindings: [] }), /COST_PROBE_BINDING/);
   assert.equal(beginLiveFeedback(env, { enabled: false, costProbe: { armed: true }, bindings: [{ pr: 49 }] }), 'COST_PROBE');
+  const probeCall = runner.slice(runner.indexOf("mode === 'COST_PROBE'"));
+  assert.match(probeCall, /readHead/);
+  assert.match(probeCall, /postReview/);
 });
 
-test('one cost probe records vendor numbers once and does not run again', async () => {
+test('one cost probe records vendor numbers once and posts one review', async () => {
   const f = fixture();
   let runs = 0;
   let reads = 0;
+  let reviews = 0;
   let prompt = '';
+  let reviewBody = '';
+  let head = A;
   const cursor = {
     async createRun(_id, body) {
       runs += 1;
@@ -260,21 +266,40 @@ test('one cost probe records vendor numbers once and does not run again', async 
       return { totalUsage: { totalTokens: 12 }, cost: { chargedCents: 0, rawCostCents: 4.5 } };
     },
   };
-  const args = { binding: f.binding, store: f.args.store, cursor };
-  assert.equal(await runCostProbe(args), 'COST_PROBE_DONE');
+  const args = {
+    binding: f.binding, store: f.args.store, cursor,
+    readHead: async () => head,
+    postReview: async body => { reviews += 1; reviewBody = body; return { id: 4242 }; },
+  };
+  assert.equal(await runCostProbe(args), 'COST_PROBE_CURSOR_DONE');
   assert.equal(runs, 1);
   assert.equal(reads, 1);
-  assert.match(prompt, /Do not edit/);
+  assert.equal(reviews, 0);
+  assert.match(prompt, /exactly one documentation commit/);
+  assert.match(prompt, /docs\/test\.md/);
   assert.doesNotMatch(prompt, /CURSOR_API_KEY|private key/i);
   assert.equal(f.state().cursorChargedCents, 0);
   assert.equal(f.state().cursorRawCostCents, 4.5);
   assert.equal(f.state().cursorTotalTokens, 12);
   assert.equal(f.state().cursorCostStatus, 'REPORTED');
   assert.equal(f.state().codexCostStatus, 'UNAVAILABLE');
+  assert.equal(f.state().baselineHead, A);
+  assert.equal(f.state().ledgerHold, 2);
   assert.equal(f.state().rounds, 0);
+  assert.equal(await runCostProbe(args), 'COST_PROBE_CURSOR_DONE');
+  assert.equal(runs, 1);
+  assert.equal(reviews, 0);
+  head = C;
+  assert.equal(await runCostProbe(args), 'COST_PROBE_DONE');
+  assert.equal(reviews, 1);
+  assert.match(reviewBody, /@codex review/);
+  assert.match(reviewBody, new RegExp(C));
+  assert.equal(f.state().reviewCommentId, 4242);
+  assert.equal(f.state().ledgerHold, undefined);
   assert.equal(await runCostProbe(args), 'COST_PROBE_DONE');
   assert.equal(runs, 1);
   assert.equal(reads, 1);
+  assert.equal(reviews, 1);
   const planned = planFeedback(f.binding, f.state(), f.snapshot);
   assert.equal(planned.status, 'COST_PROBE_DONE');
   assert.equal(planned.effect, undefined);
@@ -282,23 +307,62 @@ test('one cost probe records vendor numbers once and does not run again', async 
   const lost = fixture();
   let lostRuns = 0;
   const lostCursor = { async createRun() { lostRuns += 1; throw new Error('lost'); }, async getUsage() { throw new Error('unread'); } };
-  const lostArgs = { binding: lost.binding, store: lost.args.store, cursor: lostCursor };
+  const lostArgs = {
+    binding: lost.binding, store: lost.args.store, cursor: lostCursor,
+    readHead: async () => A, postReview: async () => { throw new Error('review'); },
+  };
   assert.equal(await runCostProbe(lostArgs), 'COST_PROBE_PENDING');
   assert.equal(await runCostProbe(lostArgs), 'COST_PROBE_PENDING');
   assert.equal(lostRuns, 1);
   assert.equal(lost.state().runId, undefined);
+
+  const dropped = fixture();
+  let droppedReviews = 0;
+  await runCostProbe({
+    binding: dropped.binding, store: dropped.args.store,
+    cursor: { async createRun() { return { run: { id: 'run-drop', agentId: dropped.binding.agentId } }; }, async getUsage() { return { cost: { chargedCents: 1 } }; } },
+    readHead: async () => A, postReview: async () => { droppedReviews += 1; throw new Error('lost-review'); },
+  });
+  assert.equal(droppedReviews, 0);
+  await runCostProbe({
+    binding: dropped.binding, store: dropped.args.store, cursor: { async createRun() { throw new Error('second-run'); }, async getUsage() { throw new Error('second-read'); } },
+    readHead: async () => C, postReview: async () => { droppedReviews += 1; throw new Error('lost-review'); },
+  });
+  assert.equal(dropped.state().phase, 'COST_PROBE_REVIEW_PENDING');
+  assert.equal(droppedReviews, 1);
+  assert.equal(await runCostProbe({
+    binding: dropped.binding, store: dropped.args.store, cursor: { async createRun() { throw new Error('second-run'); }, async getUsage() { throw new Error('second-read'); } },
+    readHead: async () => C, postReview: async () => { droppedReviews += 1; return { id: 9 }; },
+  }), 'COST_PROBE_REVIEW_PENDING');
+  assert.equal(droppedReviews, 1);
 
   const unpriced = fixture();
   const unpricedCursor = {
     async createRun() { return { run: { id: 'run-plain', agentId: unpriced.binding.agentId } }; },
     async getUsage() { return { totalUsage: { totalTokens: 3 }, cost: { chargedCents: -1, rawCostCents: '4' } }; },
   };
-  assert.equal(await runCostProbe({ binding: unpriced.binding, store: unpriced.args.store, cursor: unpricedCursor }), 'COST_PROBE_DONE');
+  assert.equal(await runCostProbe({
+    binding: unpriced.binding, store: unpriced.args.store, cursor: unpricedCursor,
+    readHead: async () => A, postReview: async () => { throw new Error('no-review-yet'); },
+  }), 'COST_PROBE_CURSOR_DONE');
   assert.equal(unpriced.state().cursorCostStatus, 'UNAVAILABLE');
   assert.equal(unpriced.state().cursorChargedCents, null);
   assert.equal(unpriced.state().cursorRawCostCents, null);
   assert.equal(unpriced.state().cursorTotalTokens, 3);
   assert.deepEqual(costMeasurement({ cost: { chargedCents: Number.NaN } }).cursorCostStatus, 'UNAVAILABLE');
+
+  const wide = fixture();
+  wide.binding.allowedFiles = ['docs/test.md', 'docs/other.md'];
+  let wideRuns = 0;
+  await assert.rejects(runCostProbe({
+    binding: wide.binding, store: wide.args.store,
+    cursor: { async createRun() { wideRuns += 1; } },
+    readHead: async () => A, postReview: async () => ({ id: 1 }),
+  }), /COST_PROBE_SCOPE/);
+  assert.equal(wideRuns, 0);
+  await assert.rejects(runCostProbe({
+    binding: f.binding, store: fixture().args.store, cursor,
+  }), /COST_PROBE_UNWIRED/);
 });
 
 test('state writes carry exact branch and CAS blob SHA, no force', async () => {

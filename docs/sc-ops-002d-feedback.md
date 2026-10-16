@@ -285,16 +285,25 @@ it also requires `AGENT_FEEDBACK_ENABLED=true` and exactly one binding. Setting
 `enabled` and `armed` together throws `LIVE_MODE_AMBIGUOUS` before a token is
 minted. Both pipeline switches must still be false.
 
-An armed probe writes `COST_PROBE_PENDING` before `createRun`. It then calls
-`GET /v1/agents/{id}/usage?runId=` once and stores only finite non-negative
-`chargedCents`, `rawCostCents` and `totalTokens` when the payload contains
-them. Missing or non-numeric cost is `cursorCostStatus: UNAVAILABLE`; token
-counts are not converted into dollars. The GitHub Codex app does not return a
-charge to this token, so `codexCostStatus` stays `UNAVAILABLE`. A lost or
-rejected Cursor response leaves `COST_PROBE_PENDING`. The next poll returns
-that phase and does not call Cursor again. `COST_PROBE_DONE` is also terminal
-inside the repair planner, so the measured run cannot become another repair.
-This mode has not been executed.
+An armed probe is the one-shot path from issue #127: one documentation commit,
+one Cursor `createRun`, then exactly one `@codex review` after that commit
+appears. It is not a monthly budget and it does not lift the multi-round guard.
+The committed file allows exactly one docs path. The probe reads that pull
+request head, reserves four state writes, and stores `COST_PROBE_PENDING`
+before `createRun`. The prompt asks for one commit on that single file and
+then a stop. It calls `GET /v1/agents/{id}/usage?runId=` once and stores only
+finite non-negative `chargedCents`, `rawCostCents` and `totalTokens` when the
+payload contains them. Missing or non-numeric cost is `cursorCostStatus:
+UNAVAILABLE`; token counts are not converted into dollars. The next phase is
+`COST_PROBE_CURSOR_DONE`. A later poll posts one review comment only after the
+head differs from the saved baseline, first writing
+`COST_PROBE_REVIEW_PENDING`. A lost or rejected review response stays there
+and is not posted again. `COST_PROBE_DONE` records `reviewCommentId` and is
+terminal inside the repair planner. A lost Cursor response stays
+`COST_PROBE_PENDING` and does not call Cursor again. The GitHub Codex app does
+not return a charge on this token, so `codexCostStatus` stays `UNAVAILABLE`.
+A Codex charge, if any, is visible on the Codex or ChatGPT billing statement
+for that review, not in this repository. This mode has not been executed.
 
 These separate gates are also still closed and are not bypassed: the feedback
 workflow and config are absent from `main`, so the scheduled job cannot run;
