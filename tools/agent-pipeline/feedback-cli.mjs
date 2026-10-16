@@ -16,7 +16,7 @@ export const FEEDBACK_TOKEN_PERMISSIONS = {
 // feedback records outside its task projection. No second writer for a managed PR.
 // Holds live on the state branch, including a binding removed from config while
 // FIXING or waiting. A nonzero hold outside the current config stops the poll.
-export async function loadFeedbackHolds(github, configuredPrs) {
+export async function loadFeedbackHolds(github, configuredPrs, probePr = null) {
   let listing;
   try {
     listing = await github.request(`/repos/${REPOSITORY}/contents/feedback?ref=agent-feedback-state`);
@@ -30,13 +30,21 @@ export async function loadFeedbackHolds(github, configuredPrs) {
     const match = /^(\d+)\.json$/.exec(entry?.name ?? '');
     if (!match || entry.type !== 'file') throw new Error('LEDGER_HOLD_UNBOUND');
     const pr = Number(match[1]);
-    let hold;
+    let hold, state;
     try {
       const file = await github.request(`/repos/${REPOSITORY}/contents/feedback/${entry.name}?ref=agent-feedback-state`);
-      hold = ledgerHold(JSON.parse(decodeGithubContent(file)));
+      state = JSON.parse(decodeGithubContent(file));
+      hold = ledgerHold(state);
     } catch (error) {
       if (error?.message === 'INVALID_STATE') throw error;
       throw new Error('LEDGER_HOLD_UNREAD');
+    }
+    // A single authorized cost probe is repository-wide, not per PR. Even an
+    // already-finished or uncertain probe must block a different binding before
+    // an installation can create another paid Cursor run.
+    if (probePr !== null && pr !== probePr
+        && typeof state?.phase === 'string' && state.phase.startsWith('COST_PROBE_')) {
+      throw new Error('COST_PROBE_ALREADY_USED');
     }
     if (hold > 0 && !configuredPrs.has(pr)) throw new Error('LEDGER_HOLD_UNBOUND');
     held += hold;
@@ -212,7 +220,10 @@ export async function main(env = process.env) {
   const ledger = await verifyStateBootstrap(github, policy);
   // Commit count plus every durable feedback record. A later poll sees the same
   // promise, including a binding removed from config before its hold reached zero.
-  const room = { used: ledger.commits + await loadFeedbackHolds(github, new Set(config.bindings.map(binding => binding.pr))) };
+  const room = { used: ledger.commits + await loadFeedbackHolds(
+    github, new Set(config.bindings.map(binding => binding.pr)),
+    mode === 'COST_PROBE' ? config.bindings[0].pr : null,
+  ) };
   const stores = new Map();
   for (const binding of config.bindings) stores.set(binding.pr, feedbackStore(github, binding.pr));
   function reserveLedger(writes, held = 0) {
