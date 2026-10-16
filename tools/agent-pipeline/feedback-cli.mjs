@@ -140,14 +140,8 @@ export async function readSnapshot(github, cursor, binding, state) {
   const costProbePhase = ['COST_PROBE_CURSOR_DONE', 'COST_PROBE_REVIEW_PENDING'].includes(state?.phase);
   const repairBase = costProbePhase ? state.baselineHead : state?.repairHead;
   let repair = null;
-  if (['FIXING', 'REVIEW_PENDING'].includes(state?.phase) || costProbePhase) {
-    if (!repairBase || repairBase === pull.head.sha) return {
-      pull, files, reviews, comments, agent, repair: null,
-      originVerified: ['ahead', 'identical'].includes(origin.status),
-      initialHeadVerified: ['ahead', 'identical'].includes(initial.status),
-      run: state?.runId ? await cursor.getRun(binding.agentId, state.runId) : null,
-      reactions: [],
-    };
+  if ((['FIXING', 'REVIEW_PENDING'].includes(state?.phase) || costProbePhase)
+      && repairBase && repairBase !== pull.head.sha) {
     const comparison = await github.request(`${root}/compare/${repairBase}...${pull.head.sha}?per_page=100`);
     const complete = comparison.status === 'ahead' && comparison.base_commit?.sha === state.repairHead
       && Number.isInteger(comparison.total_commits) && comparison.total_commits > 0 && comparison.total_commits <= 100
