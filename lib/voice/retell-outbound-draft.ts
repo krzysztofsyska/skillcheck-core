@@ -7,7 +7,8 @@
  */
 import { createHash } from "node:crypto";
 import { canonicalVoiceCallRequest, type VoiceCallRequest } from "./provider.ts";
-import { isAuthenticallyReleasedInterviewPlan, prohibitedTopicsAreCanonical, type InterviewPlan } from "./interview-plan.ts";
+import { isAuthenticallyReleasedInterviewPlan, releasedApplicationBinding, prohibitedTopicsAreCanonical, type InterviewPlan } from "./interview-plan.ts";
+import { scenarioApplicationBinding } from "./mvp-package-gate.ts";
 
 export type RetellOutboundConfig = Readonly<{
   agentId: string;
@@ -49,6 +50,20 @@ export type RetellOutboundDraft = Readonly<{
   verifiedAtMs: number;
   expiresAtMs: number;
   preflightOnly: true;
+}>;
+
+/**
+ * Read-only snapshot from a trusted SC-010 server-side, tenant-scoped contact lookup.
+ * This structure is NOT independently authenticated or dispatch authorization.
+ * The future worker must obtain it from a locked DB read and recheck just before POST.
+ */
+export type RetellContactSnapshot = Readonly<{
+  companyId: string;
+  applicationId: string;
+  sourceFingerprint: string;
+  destinationE164: string;
+  contactApproved: true;
+  noticeDelivered: true;
 }>;
 
 export class RetellOutboundDraftError extends Error {
@@ -146,7 +161,8 @@ export type RetellVerifiedAgent = Readonly<{
 export async function verifyRetellOutboundAgent(
   config: RetellOutboundConfig,
   key: string,
-  http: AgentFetch = fetch,
+  // Explicit transport is mandatory in this offline PR; never default to live fetch.
+  http: AgentFetch,
 ): Promise<RetellVerifiedAgent> {
   const c = validatedConfig(config);
   if (typeof key !== "string" || key.length < 16 || /[\r\n]/.test(key))
@@ -236,10 +252,37 @@ export function compileRetellOutboundDraft(
   configInput: RetellOutboundConfig,
   releasedPlan: InterviewPlan,
   provider: RetellVerifiedAgent,
+  contactInput: RetellContactSnapshot,
 ): RetellOutboundDraft {
   const c = validatedConfig(configInput);
   let call: VoiceCallRequest;
-  try { call = canonicalVoiceCallRequest(request); } catch { return reject(); }
+  let rawScenario: VoiceCallRequest["scenario"] | undefined;
+  let contact: RetellContactSnapshot;
+  try {
+    // A canonical snapshot loses the in-process scenario brand; inspect the
+    // original data property first, then validate/serialize only the snapshot.
+    rawScenario = Object.getOwnPropertyDescriptor(request, "scenario")?.value;
+    call = canonicalVoiceCallRequest(request);
+    contact = structuredClone(contactInput);
+  } catch { return reject(); }
+  const binding = releasedApplicationBinding(releasedPlan);
+  const scenarioBinding = scenarioApplicationBinding(rawScenario);
+  if (!isPlainExact(contact, [
+        "companyId", "applicationId", "sourceFingerprint", "destinationE164",
+        "contactApproved", "noticeDelivered",
+      ]) ||
+      !binding || !scenarioBinding ||
+      scenarioBinding.companyId !== binding.companyId ||
+      scenarioBinding.applicationId !== binding.applicationId ||
+      scenarioBinding.sourceFingerprint !== binding.sourceFingerprint ||
+      call.externalCorrelationId !== binding.applicationId ||
+      contact.companyId !== binding.companyId ||
+      contact.applicationId !== binding.applicationId ||
+      contact.sourceFingerprint !== binding.sourceFingerprint ||
+      !phone.test(contact.destinationE164) ||
+      contact.destinationE164 !== call.destinationE164 ||
+      contact.contactApproved !== true || contact.noticeDelivered !== true)
+    return reject();
   if (!isAuthenticallyReleasedInterviewPlan(releasedPlan) ||
       !verified.has(provider) ||
       provider.agentId !== c.agentId ||
