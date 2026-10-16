@@ -7,7 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { canonicalVoiceCallRequest, type VoiceCallRequest } from "./provider.ts";
-import { isAuthenticallyReleasedInterviewPlan, type InterviewPlan } from "./interview-plan.ts";
+import { isAuthenticallyReleasedInterviewPlan, prohibitedTopicsAreCanonical, type InterviewPlan } from "./interview-plan.ts";
 
 export type RetellOutboundConfig = Readonly<{
   agentId: string;
@@ -35,7 +35,7 @@ export type RetellOutboundDraft = Readonly<{
     idempotency_key: string;
     honor_internal_dnc: true;
     override_agent_id: string;
-    override_agent_version: string;
+    override_agent_version: number;
     retell_llm_dynamic_variables: Readonly<{
       skillcheck_interview_script: string;
       skillcheck_notice_version: string;
@@ -262,10 +262,8 @@ export function compileRetellOutboundDraft(
       releasedPlan.noticeRequired !== true ||
       releasedPlan.templateVersion !== "skillcheck-voice-plan-v1" ||
       call.scenario.questions.length !== releasedPlan.questions.length ||
-      // Only this audited policy is currently supported; no arbitrary topics
-      // may be interpolated into Retell's provider prompt.
-      call.scenario.constraints.prohibitedTopics.length !== 1 ||
-      call.scenario.constraints.prohibitedTopics[0] !== "zdrowie")
+      // Enforce the exact closed SC-012 policy, not a caller-provided subset.
+      !prohibitedTopicsAreCanonical(call.scenario.constraints.prohibitedTopics))
     return reject();
 
   for (let i = 0; i < call.scenario.questions.length; i++) {
@@ -290,7 +288,9 @@ export function compileRetellOutboundDraft(
     idempotency_key: call.providerIdempotencyKey,
     honor_internal_dnc: true as const,
     override_agent_id: c.agentId,
-    override_agent_version: c.agentVersionTag,
+    // A mutable tag is only used by the read-only preflight; the DTO pins
+    // the independently verified numeric revision (still NOT POST authorization).
+    override_agent_version: c.agentVersion,
     retell_llm_dynamic_variables: Object.freeze({
       skillcheck_interview_script: script,
       skillcheck_notice_version: c.noticeVersion,
