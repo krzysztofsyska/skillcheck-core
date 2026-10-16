@@ -235,6 +235,7 @@ export async function main(env = process.env) {
     const status = await runCostProbe({
       binding, store: stores.get(binding.pr), cursor, reserveLedger,
       readHead: async () => (await github.request(`/repos/${REPOSITORY}/pulls/${binding.pr}`))?.head?.sha,
+      readSnapshot: state => readSnapshot(github, cursor, binding, state),
       postReview: body => github.request(`/repos/${REPOSITORY}/issues/${binding.pr}/comments`, { method: 'POST', body: { body } }),
     });
     return [{ pr: binding.pr, status }];
