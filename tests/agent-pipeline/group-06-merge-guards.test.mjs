@@ -31,17 +31,18 @@ function obsFor(record, approval) {
 }
 
 test('SHA drift, rerun, rejection, and timeout do not merge', () => {
-  const { record } = armedRecord();
+  const { record, policy } = armedRecord();
+  const ownerEnv = { name: policy.environments.owner_acceptance.name, id: policy.environments.owner_acceptance.id };
   const drifted = obsFor(record, null);
   drifted.github.pull.headSha = NEXT_HEAD;
   assert.equal(plan(record, drifted).effects.some(effect => effect.type === 'github.merge'), false);
 
-  const rerun = obsFor(record, { run_id: 30, run_attempt: 2, workflow_id: record.binding.approval.workflow_id, workflow_path: record.binding.approval.workflow_path, ref: 'refs/heads/main', environment: { name: 'owner-acceptance', id: null }, payload: [] });
+  const rerun = obsFor(record, { run_id: 30, run_attempt: 2, workflow_id: record.binding.approval.workflow_id, workflow_path: record.binding.approval.workflow_path, ref: 'refs/heads/main', environment: ownerEnv, payload: [] });
   const rerunPlan = plan(structuredClone(record), rerun);
   assert.equal(rerunPlan.record.blocked_reason, 'APPROVAL_RERUN');
   assert.equal(rerunPlan.effects.some(effect => effect.type === 'github.merge'), false);
 
-  const denied = obsFor(record, { run_id: 30, run_attempt: 1, workflow_id: record.binding.approval.workflow_id, workflow_path: record.binding.approval.workflow_path, ref: 'refs/heads/main', environment: { name: 'owner-acceptance', id: null }, payload: [{ state: 'rejected', user: { id: 222297538, type: 'User' }, environments: [{ name: 'owner-acceptance', id: null }] }] });
+  const denied = obsFor(record, { run_id: 30, run_attempt: 1, workflow_id: record.binding.approval.workflow_id, workflow_path: record.binding.approval.workflow_path, ref: 'refs/heads/main', environment: ownerEnv, payload: [{ state: 'rejected', user: { id: 222297538, type: 'User' }, environments: [ownerEnv] }] });
   const denial = plan(structuredClone(record), denied);
   assert.equal(denial.record.state, 'BLOCKED');
   assert.equal(denial.effects.some(effect => effect.type === 'github.merge'), false);

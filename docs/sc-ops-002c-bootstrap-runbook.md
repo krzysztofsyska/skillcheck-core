@@ -118,3 +118,24 @@ Nie scala PR, nie uruchamia migracji, nie ustawia sekretów i nie oznacza testó
 - GitHub environment approval dotyczy zakresu z raportu App i jego niezmiennego digestu, obejmującego SHA, CI/review i (dla B) cały manifest. Sprawdź rzeczywiste pochodzenie required checks z App oraz działanie obu niezależnych gates.
 - Awaria kontrolera: nie usuwaj lock na podstawie czasu. Najpierw potwierdź zakończenie workflow; kolejny przebieg odczyta journal i uzgodni oczekujące efekty. Nieznany follow-up nie może zostać wysłany ponownie bez osobnego zatwierdzonego wznowienia.
 - Próg >100 commitów / >=300 plików w porównaniu blokuje automatyczny odbiór jako niekompletny; nie omijaj go usuwając checks.
+
+## Odczyt API 2026-10-16
+
+Ten odczyt nie włącza flag i nie jest zgodą na aktywację. Token miał `metadata=read`. Nie zgadywano identyfikatorów.
+
+Zapisane z odpowiedzi 200, lista workflow domyślnej gałęzi `main` oraz środowiska repozytorium:
+
+- `workflow_ids`: reconcile `376775092`, verify `376775095`, review `376775093`, accept `376775089`, promote `376775091`, gates `375800413`.
+- `environments`: agent-control `23618160050`, owner-acceptance `23620698987`, production-approval `23622102440`.
+
+`owner-acceptance` i `production-approval`: jeden reviewer User `222297538`, `prevent_self_review=true`, `can_admins_bypass=false`, jedna polityka gałęzi `main`. `agent-control` ma `can_admins_bypass=true` i nie ma recenzenta. Środowisko `Production` (`22958749375`) nie ma reguł i ma bypass administratora. Nie było zmiany uprawnień.
+
+Zostają `null`, bo API nie podało App:
+
+- `GET /repos/krzysztofsyska/skillcheck-core/installation` → 401, JWT nie do odczytu. Potrzebny JWT podpisany kluczem prywatnym App.
+- `GET /user/installations` → 403, `allows_permissionless_access=true`. Potrzebny token użytkownika, nie token instalacji.
+- `GET /repos/krzysztofsyska/skillcheck-core/branches/main/protection` i `integration` → 403, wymagane `administration=read`.
+- `GET /repos/krzysztofsyska/skillcheck-core/actions/variables` → 403, wymagane `actions_variables=read`. Flag w pliku nie zmieniano.
+- `GET /repos/krzysztofsyska/skillcheck-core/actions/permissions` → 403, wymagane `administration=read`.
+
+Rulesety widoczne przy 200: tylko `agent-feedback-state-protection` (`24841688`) i `agent-feedback-state-writer` (`24842345`), gałąź `agent-feedback-state`. Brak `writers-only`, `quality-gates` i `agent-state`. W odczytanych regułach nie ma required checks ani `integration_id` App. Pochodzenie checków zostaje niepotwierdzone. Preflight tego odczytu jest `EXCLUSIVE_WRITERS_UNCONFIRMED`. Punkty App, sekrety, Vercel, flagi, monitor i test pętli zostają `NOT RUN`.
