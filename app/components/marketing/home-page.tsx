@@ -1,6 +1,6 @@
 import Link from "next/link";
 import styles from "../../marketing.module.css";
-import { loadSc19PackageSizes } from "../../../lib/sc19-package-sizes";
+import { loadSc19PackageSizes, loadSc19PublicOfferSizes } from "../../../lib/sc19-package-sizes";
 import { createClient } from "../../../lib/supabase/server";
 import { capabilities, faq, steps, availabilityNote } from "./content";
 import { PackageComparison } from "./package-comparison";
@@ -15,9 +15,10 @@ const statusClass = {
 } as const;
 
 export async function HomePage() {
-  const sizes = process.env.SC19_PACKAGES_ENABLED === "true"
-    ? await loadSc19PackageSizes(await createClient())
-    : null;
+  const sizes = await loadSc19PublicOfferSizes(
+    process.env.SC19_PACKAGES_ENABLED === "true",
+    async () => loadSc19PackageSizes(await createClient()),
+  );
   return (
     <main className={styles.page}>
       <SiteHeader />
