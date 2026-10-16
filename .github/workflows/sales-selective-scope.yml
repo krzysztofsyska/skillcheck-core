@@ -1,0 +1,35 @@
+# TRUSTED BASE ONLY. NEVER execute PR head scripts, actions or content.
+# Must be installed in protected main; require this job's check in the main ruleset.
+name: Sales selective scope
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  verify:
+    if: ${{ github.event.pull_request.number == 120 }}
+    name: Sales selective scope verified
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Fetch exact release ref as Git data, never execute it
+        run: git fetch --no-tags origin '+refs/heads/release/sales-mvp-intake-20261013:refs/heads/release/sales-mvp-intake-20261013'
+      - name: Verify live main rules, reviewed blobs and complete release history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: node tools/agent-pipeline/lib/sales-trusted-runner.mjs
