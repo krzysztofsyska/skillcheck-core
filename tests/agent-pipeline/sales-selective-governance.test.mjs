@@ -6,7 +6,7 @@ import { inspectSalesReleaseGit, REVIEWED_SALES_BLOBS } from '../../tools/agent-
 
 const meta=(scope,kind)=>['TASK: SC-SALES-RELEASE','SCOPE: '+scope,'LEVEL: L3',
   'OWNER_APPROVAL: PENDING','PRODUCTION_APPROVAL: NO','REVIEW_VERDICT: PENDING',
-  'PROMOTION: YES','RELEASE_KIND: '+kind].join('\\n');
+  'PROMOTION: YES','RELEASE_KIND: '+kind].join('\n');
 const sourceFiles=["app/preselekcja/page.tsx","app/components/marketing/home-page.tsx","app/components/marketing/site-header.tsx","app/components/marketing/package-comparison.tsx","tests/marketing-http.test.mjs"];
 const seedFiles=[".github/workflows/sales-selective-scope.yml","AGENTS.md","docs/sales-selective-governance-install.md","tests/agent-pipeline/sales-selective-governance.test.mjs","tools/agent-pipeline/classify-pr.mjs","tools/agent-pipeline/lib/sales-release-verified.mjs","tools/agent-pipeline/lib/sales-trusted-runner.mjs"];
 const source='release/sales-mvp-intake-20261013';
@@ -45,7 +45,7 @@ test('trusted workflow never checks out, imports or executes candidate code',()=
   assert.match(y,/persist-credentials: false/);
   assert.match(y,/ref: .*github.event.pull_request.base.sha/);
   assert.doesNotMatch(y,/ref: .*github.event.pull_request.head.sha/);
-  assert.match(y,/node tools\\/agent-pipeline\\/lib\\/sales-trusted-runner.mjs/);
-  assert.doesNotMatch(y,/secrets\\./);
+  assert.ok(y.includes('node tools/agent-pipeline/lib/sales-trusted-runner.mjs'));
+  assert.equal(y.includes('secrets.'),false);
   assert.doesNotMatch(y,/git checkout .*release/);
 });
