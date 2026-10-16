@@ -279,10 +279,11 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   assert.match(prompt, /exactly one documentation commit/);
   assert.match(prompt, /docs\/test\.md/);
   assert.doesNotMatch(prompt, /CURSOR_API_KEY|private key/i);
-  assert.equal(f.state().cursorChargedCents, 0);
-  assert.equal(f.state().cursorRawCostCents, 4.5);
+  assert.equal(f.state().cursorChargedCents, null);
+  assert.equal(f.state().cursorRawCostCents, null);
   assert.equal(f.state().cursorTotalTokens, 12);
-  assert.equal(f.state().cursorCostStatus, 'REPORTED');
+  assert.equal(f.state().cursorCostStatus, 'UNAVAILABLE');
+  assert.equal(f.state().cursorCostSource, 'CLOUD_REST_TOKENS_ONLY');
   assert.equal(f.state().codexCostStatus, 'UNAVAILABLE');
   assert.equal(f.state().baselineHead, A);
   assert.equal(f.state().ledgerHold, 2);
@@ -353,7 +354,8 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   assert.equal(unpriced.state().cursorChargedCents, null);
   assert.equal(unpriced.state().cursorRawCostCents, null);
   assert.equal(unpriced.state().cursorTotalTokens, 3);
-  assert.deepEqual(costMeasurement({ cost: { chargedCents: Number.NaN } }).cursorCostStatus, 'UNAVAILABLE');
+  assert.equal(costMeasurement({ cost: { chargedCents: 123, rawCostCents: 400 } }).cursorChargedCents, null);
+  assert.equal(costMeasurement({ cost: { chargedCents: 123, rawCostCents: 400 } }).cursorCostStatus, 'UNAVAILABLE');
 
   const wide = fixture();
   wide.binding.allowedFiles = ['docs/test.md', 'docs/other.md'];
