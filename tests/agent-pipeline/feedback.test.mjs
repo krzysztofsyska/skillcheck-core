@@ -910,7 +910,7 @@ test('a cost probe cannot be rearmed on a different PR after any durable probe p
   // The live entry point must always pass its one configured probe PR to the
   // ledger scan before it constructs the Cursor client or dispatches a run.
   const source = readFileSync('tools/agent-pipeline/feedback-cli.mjs', 'utf8');
-  assert.match(source, /mode === 'COST_PROBE' \\? config\\.bindings\\[0\\]\\.pr : null/);
+  assert.ok(source.includes("mode === 'COST_PROBE' ? config.bindings[0].pr : null"));
   assert.ok(source.indexOf('await loadFeedbackHolds(') < source.indexOf('const cursor = createCursorClient('));
 });
 
