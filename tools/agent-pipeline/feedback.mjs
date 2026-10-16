@@ -134,7 +134,8 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
   if (!Number.isInteger(current.rounds) || current.rounds < 0 || current.rounds > 3) fail('INVALID_STATE');
   if (!['WAITING_REVIEW', 'READY_FOR_OWNER', 'FIXING', 'CURSOR_PENDING', 'REVIEW_PENDING',
     'BLOCKED_TIMEOUT', 'BLOCKED_NO_FIX', 'BLOCKED_PROVENANCE', 'BLOCKED_ROUND_LIMIT',
-    'COST_PROBE_PENDING', 'COST_PROBE_CURSOR_DONE', 'COST_PROBE_REVIEW_PENDING', 'COST_PROBE_DONE'].includes(current.phase)
+    'COST_PROBE_PENDING', 'COST_PROBE_RUNNING', 'COST_PROBE_CURSOR_DONE',
+    'COST_PROBE_REVIEW_PENDING', 'COST_PROBE_DONE', 'COST_PROBE_FAILED'].includes(current.phase)
     || !Array.isArray(current.handled)) fail('INVALID_STATE');
   if (current.phase.startsWith('COST_PROBE_') || current.phase.startsWith('BLOCKED') || current.phase.endsWith('_PENDING')) {
     return { status: current.phase };
@@ -245,16 +246,19 @@ function costProbeReview(head) {
   return `@codex review\n\nSC-OPS-127-PILOT: this is the single intended review of documentation HEAD ${head}. Do not merge, deploy, or request another review.`;
 }
 
-// Four state writes are reserved before the only Cursor run: pending, measured,
-// review-pending, and done. A later call never starts a second run. The review
-// comment is posted once, only after a new head exists, and a lost response is
-// not posted again.
+// Five state writes are reserved before the only Cursor run: pending, run-id,
+// measured-after-terminal, review-pending and done. Ambiguous dispatch stays
+// pending permanently; polling RUNNING never dispatches another paid run.
 export async function runCostProbe({ binding, store, cursor, reserveLedger, readHead, readSnapshot, postReview }) {
   validateBinding(binding);
   if (binding.allowedFiles.length !== 1) fail('COST_PROBE_SCOPE');
   const saved = await store.read();
   const phase = saved.value?.phase;
-  if (phase === 'COST_PROBE_PENDING' || phase === 'COST_PROBE_REVIEW_PENDING' || phase === 'COST_PROBE_DONE') return phase;
+  if (phase === 'COST_PROBE_PENDING' || phase === 'COST_PROBE_REVIEW_PENDING'
+      || phase === 'COST_PROBE_DONE' || phase === 'COST_PROBE_FAILED') return phase;
+  if (phase === 'COST_PROBE_RUNNING') {
+    return finishCostProbeRun({ binding, saved, store, cursor, reserveLedger });
+  }
   if (phase === 'COST_PROBE_CURSOR_DONE') {
     return postCostProbeReview({ binding, saved, store, readHead, postReview });
   }
@@ -267,10 +271,10 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
   if (before.agent.status !== 'IDLE') fail('CURSOR_BUSY');
   const baselineHead = before.pull.head.sha;
   if (!sha(baselineHead)) fail('COST_PROBE_HEAD');
-  reserveLedger?.(4, 0);
+  reserveLedger?.(5, 0);
   const pending = {
     version: 1, configHash: hash(binding), rounds: 0, handled: [], phase: 'COST_PROBE_PENDING',
-    operationMarker: randomUUID(), baselineHead, ledgerHold: 3,
+    operationMarker: randomUUID(), baselineHead, ledgerHold: 4,
   };
   const revision = await store.save(pending, saved.revision);
   // A durable reservation alone is not permission to dispatch against a
@@ -288,10 +292,33 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
     if (error?.message === 'INVALID_CURSOR_RESPONSE') throw error;
     return 'COST_PROBE_PENDING';
   }
+  await store.save({ ...pending, phase: 'COST_PROBE_RUNNING', runId: run.id, ledgerHold: 3 }, revision);
+  return 'COST_PROBE_RUNNING';
+}
+
+async function finishCostProbeRun({ binding, saved, store, cursor, reserveLedger }) {
+  const current = saved.value;
+  if (current.configHash !== hash(binding) || current.ledgerHold !== 3
+      || !sha(current.baselineHead) || !current.runId) fail('COST_PROBE_STATE');
+  if (typeof cursor?.getRun !== 'function') fail('COST_PROBE_UNWIRED');
+  const run = await cursor.getRun(binding.agentId, current.runId);
+  if (run?.id !== current.runId || run.agentId !== binding.agentId) fail('CURSOR_RUN_MISMATCH');
+  if (run.status === 'CREATING' || run.status === 'RUNNING') return 'COST_PROBE_RUNNING';
+  if (['ERROR', 'CANCELLED', 'EXPIRED'].includes(run.status)) {
+    const failed = { ...current, phase: 'COST_PROBE_FAILED', runStatus: run.status };
+    delete failed.ledgerHold;
+    await store.save(failed, saved.revision);
+    // Only release unused durable holds after this CAS state write commits.
+    reserveLedger?.(1, 3);
+    return 'COST_PROBE_FAILED';
+  }
+  if (run.status !== 'FINISHED') fail('CURSOR_RUN_UNKNOWN');
+  // GET /usage is read once only AFTER terminal FINISHED. A failed/unknown
+  // response is UNAVAILABLE rather than a fabricated zero-cost invoice.
   let measurement = costMeasurement(null);
-  try { measurement = costMeasurement(await cursor.getUsage(binding.agentId, run.id)); }
+  try { measurement = costMeasurement(await cursor.getUsage(binding.agentId, current.runId)); }
   catch { measurement = costMeasurement(null); }
-  await store.save({ ...pending, phase: 'COST_PROBE_CURSOR_DONE', runId: run.id, ledgerHold: 2, ...measurement }, revision);
+  await store.save({ ...current, phase: 'COST_PROBE_CURSOR_DONE', ledgerHold: 2, ...measurement }, saved.revision);
   return 'COST_PROBE_CURSOR_DONE';
 }
 
