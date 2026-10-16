@@ -288,28 +288,39 @@ minted. Both pipeline switches must still be false.
 An armed probe is the one-shot path from issue #127: one documentation commit,
 one Cursor `createRun`, then exactly one `@codex review` after that commit
 appears. It is not a monthly budget and it does not lift the multi-round guard.
-The committed file allows exactly one docs path. The probe reads that pull
-request head, reserves four state writes, and stores `COST_PROBE_PENDING`
-before `createRun`. The prompt asks for one commit on that single file and
-then a stop. It calls `GET /v1/agents/{id}/usage?runId=` once and stores only
-finite non-negative `chargedCents`, `rawCostCents` and `totalTokens` when the
-payload contains them. Missing or non-numeric cost is `cursorCostStatus:
-UNAVAILABLE`; token counts are not converted into dollars. The next phase is
-`COST_PROBE_CURSOR_DONE`. A later poll posts one review comment only after the
-head differs from the saved baseline, first writing
-`COST_PROBE_REVIEW_PENDING`. A lost or rejected review response stays there
-and is not posted again. `COST_PROBE_DONE` records `reviewCommentId` and is
-terminal inside the repair planner. A lost Cursor response stays
-`COST_PROBE_PENDING` and does not call Cursor again. The GitHub Codex app does
-not return a charge on this token, so `codexCostStatus` stays `UNAVAILABLE`.
-A Codex charge, if any, is visible on the Codex or ChatGPT billing statement
-for that review, not in this repository. This mode has not been executed.
+The committed file allows exactly one docs path. Before reserving an
+effect it validates the live PR, full ancestry/scope, exclusive controller
+ownership and the current Cursor agent; it repeats the snapshot validation
+after the durable reservation and before `createRun`. The probe reserves four
+state writes and stores `COST_PROBE_PENDING` before its one permitted dispatch.
+A repository-wide scan of durable feedback records rejects a second probe
+against another PR, including after `COST_PROBE_DONE` or an uncertain attempt
+with no remaining ledger hold. The prompt asks for one docs commit and a stop.
+
+The raw Cloud Agents REST `GET /v1/agents/{id}/usage?runId=` documents
+**token usage only**, not a per-run billed amount. The code records finite
+`totalTokens` when available, but `cursorChargedCents` and
+`cursorRawCostCents` remain null with `cursorCostStatus: UNAVAILABLE`.
+This cannot prove dollars charged; a separately verified Cursor billing source
+with a timestamp is mandatory for the cost decision. Similarly, Codex usage
+and any charge must be obtained independently. Never convert tokens to USD or
+treat synthetic fixture cost fields as a vendor bill.
+
+IMPORTANT: the currently implemented probe requests usage immediately after
+`createRun`, while the run can still be `CREATING`. This must be repaired
+before any live pilot; an early zero token count is not final usage. Its current
+later poll posts one `@codex review` when the head differs from the baseline,
+first writing `COST_PROBE_REVIEW_PENDING`; commit provenance also still needs
+to be verified before requesting that review. An ambiguous review response is
+not retried. `COST_PROBE_DONE` records `reviewCommentId` and remains terminal.
+A lost Cursor response stays `COST_PROBE_PENDING` and is not repeated. No
+live pilot has been executed.
 
 These separate gates are also still closed and are not bypassed: the feedback
 workflow and config are absent from `main`, so the scheduled job cannot run;
 `AGENT_FEEDBACK_ENABLED` stays off; both pipeline switches stay false; PR #124
-is open and unmerged; PR #126 remains a draft. Promotion onto `main` remains a
-separate owner decision. This token could not read repository Actions variables
+is merged into `integration` but not deployed/activated from `main`; PR #126
+remains an offline draft. Promotion onto `main` remains a separate owner decision. This token could not read repository Actions variables
 (403) or the installation permission list (401), so those live grants are not
 claimed from this run. The code asks the feedback token only for contents
 write, issues write, pull requests read, administration read and actions read.
