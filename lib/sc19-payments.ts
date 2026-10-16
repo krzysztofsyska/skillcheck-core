@@ -21,6 +21,8 @@ export type PaymentOrder = Readonly<{
 }>;
 export type HostedCheckout = Readonly<{
   orderId: string; sessionId: string; url: string; scope: PaymentScope;
+  /** Canonical provider-confirmed gross charge, inclusive of any tax/discount. */
+  amountMinor: number; currency: 'PLN'; paymentKind: 'one_time';
 }>;
 export type VerifiedPayment = Readonly<{
   eventId: string; orderId: string; sessionId: string; paymentId: string;
@@ -56,6 +58,14 @@ export interface PaymentProvider {
    * the original session is positively reconciled. Never create a second charge.
    */
   createCheckout(order: PaymentOrder, idempotencyKey: string): Promise<HostedCheckout>;
+  /** READ ONLY: find the original provider session by durable order/key.
+   * Return null only on provider-confirmed absence, throw on uncertainty.
+   * Never create a new payment during reconciliation. Both operations MUST
+   * return canonical charge economics: exact gross PLN and one-time payment.
+   * Real adapters must reject automatic tax, discounts and subscriptions
+   * that differ from the immutable snapshotted order.
+   */
+  lookupCheckout(order: PaymentOrder, idempotencyKey: string): Promise<HostedCheckout | null>;
   /** Verify raw-body signature, timestamp and merchant scope; retrieve canonical
    * payment state. Return null only for authenticated, irrelevant event types.
    * Throw on missing/invalid verification or uncertain provider response.
@@ -108,9 +118,14 @@ export function createSc19Payments(deps: PaymentDependencies) {
   const origins = Object.freeze([...deps.checkoutOrigins]);
   const active = deps.enabled === true;
   const liveApproved = deps.liveApproved === true;
-  const gate = () => {
+  const checkoutGate = () => {
     if (!active || !validScope(scope) || (scope.mode === 'live' && !liveApproved))
       deny('SC19_PAYMENTS_DISABLED');
+  };
+  // Disabling new checkouts must NOT strand an existing paid checkout. Verified
+  // receipts for previously created, correctly scoped orders continue settling.
+  const fulfillmentGate = () => {
+    if (!validScope(scope)) deny('SC19_PAYMENTS_DISABLED');
   };
   const safeCheckoutUrl = (text: string): boolean => {
     try {
@@ -123,9 +138,47 @@ export function createSc19Payments(deps: PaymentDependencies) {
   const requireOrderScope = (order: PaymentOrder) => {
     if (!sameScope(order.scope, scope)) deny('SC19_PAYMENT_SCOPE_MISMATCH');
   };
+  const checkoutKey = (order: PaymentOrder) => `sc19:${order.id}`;
+  const validateHosted = (order: PaymentOrder, hosted: HostedCheckout): HostedCheckout => {
+    // Do not expose a URL without provider-authoritative one-time charge data.
+    if (!hosted || hosted.orderId !== order.id || !stringId(hosted.sessionId) ||
+        !sameScope(hosted.scope, order.scope) || !safeCheckoutUrl(hosted.url) ||
+        !money(hosted.amountMinor) || hosted.amountMinor !== order.amountMinor ||
+        hosted.currency !== order.currency || hosted.paymentKind !== 'one_time')
+      return deny('SC19_PAYMENT_CHECKOUT_INVALID');
+    return hosted;
+  };
+  async function bindHosted(order: PaymentOrder, hosted: HostedCheckout, userId?: string) {
+    return deps.store.transaction(async tx => {
+      const current = await tx.order(order.id);
+      if (!current) return deny('SC19_PAYMENT_ORDER_MISSING');
+      requireOrderScope(current);
+      validateHosted(current, hosted);
+      // A signed webhook can reconcile without a user; customer checkout still
+      // checks CURRENT owner/verified-company authorization after the round trip.
+      if (userId !== undefined) {
+        const access = await tx.companyAccess(current.companyId, userId);
+        if (access.owner !== true || access.verified !== true ||
+            current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
+      }
+      if (current.sessionId !== null && current.sessionId !== hosted.sessionId)
+        return deny('SC19_PAYMENT_SESSION_CONFLICT');
+      if (current.checkoutUrl !== null && current.checkoutUrl !== hosted.url)
+        return deny('SC19_PAYMENT_SESSION_CONFLICT');
+      if (current.status === 'paid') return { orderId: current.id, paid: true as const };
+      if (current.sessionId === null || current.checkoutUrl === null)
+        await tx.saveOrder({ ...current, sessionId: hosted.sessionId, checkoutUrl: hosted.url });
+      return hosted;
+    });
+  }
+  async function reconcileSession(order: PaymentOrder, userId?: string) {
+    // SAFE even after provider idempotency expiry: no payment creation here.
+    const found = clone(await deps.provider.lookupCheckout(clone(order), checkoutKey(order)));
+    return found === null ? null : bindHosted(order, validateHosted(order, found), userId);
+  }
 
   async function checkout(input: unknown): Promise<HostedCheckout | { orderId: string; paid: true }> {
-    gate();
+    checkoutGate();
     const req = clone(input);
     if (!exact(req, ['companyId', 'offerId', 'requestId', 'termsRevision']) ||
         typeof req.companyId !== 'string' || !uuid.test(req.companyId) ||
@@ -161,30 +214,22 @@ export function createSc19Payments(deps: PaymentDependencies) {
     if (order.status === 'paid') return { orderId: order.id, paid: true };
     if (order.sessionId && order.checkoutUrl) {
       if (!safeCheckoutUrl(order.checkoutUrl)) return deny('SC19_PAYMENT_CHECKOUT_INVALID');
-      return { orderId: order.id, sessionId: order.sessionId, url: order.checkoutUrl, scope };
+      return { orderId: order.id, sessionId: order.sessionId, url: order.checkoutUrl,
+        scope, amountMinor: order.amountMinor, currency: order.currency,
+        paymentKind: 'one_time' as const };
     }
-    if (Date.now() >= order.checkoutDeadlineMs) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
-    // Persist the order before the external side effect. No automatic new key/retry.
-    const hosted = clone(await deps.provider.createCheckout(clone(order), `sc19:${order.id}`));
-    if (!hosted || hosted.orderId !== order.id || !stringId(hosted.sessionId) ||
-        !sameScope(hosted.scope, scope) || !safeCheckoutUrl(hosted.url)) return deny('SC19_PAYMENT_CHECKOUT_INVALID');
-    return deps.store.transaction(async tx => {
-      const current = await tx.order(order.id);
-      if (!current) return deny('SC19_PAYMENT_ORDER_MISSING');
-      requireOrderScope(current);
-      // Recheck authorization after the provider round trip.
-      const access = await tx.companyAccess(companyId, userId);
-      if (access.owner !== true || access.verified !== true) return deny('SC19_PAYMENT_FORBIDDEN');
-      if (current.sessionId !== null && current.sessionId !== hosted.sessionId)
-        return deny('SC19_PAYMENT_SESSION_CONFLICT');
-      if (current.status === 'paid') return { orderId: current.id, paid: true as const };
-      await tx.saveOrder({ ...current, sessionId: hosted.sessionId, checkoutUrl: hosted.url });
-      return hosted;
-    });
+    if (Date.now() >= order.checkoutDeadlineMs) {
+      const recovered = await reconcileSession(order, userId);
+      return recovered ?? deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+    }
+    // Durable order exists before the external call; retry with SAME key only.
+    const hosted = validateHosted(order,
+      clone(await deps.provider.createCheckout(clone(order), checkoutKey(order))));
+    return bindHosted(order, hosted, userId);
   }
 
   async function notification(raw: Uint8Array, signature: string) {
-    gate();
+    fulfillmentGate();
     if (!(raw instanceof Uint8Array) || raw.byteLength === 0 || raw.byteLength > 262144 ||
         typeof signature !== 'string' || signature.length === 0 || signature.length > 8192)
       return deny('SC19_PAYMENT_NOTIFICATION_INVALID');
@@ -196,17 +241,27 @@ export function createSc19Payments(deps: PaymentDependencies) {
         !money(payment.amountMinor) || payment.currency !== 'PLN' ||
         !['paid', 'pending', 'failed'].includes(payment.status)) return deny('SC19_PAYMENT_NOTIFICATION_INVALID');
     if (payment.status !== 'paid') return { state: 'not_paid' as const };
+    // Lost createCheckout response: first re-bind the independently verified
+    // original checkout, never trust a webhook-supplied session by itself.
+    const before = await deps.store.transaction(tx => tx.order(payment.orderId));
+    if (!before) return deny('SC19_PAYMENT_ORDER_MISSING');
+    requireOrderScope(before);
+    if (!before.sessionId) {
+      const recovered = await reconcileSession(before);
+      if (recovered === null) return deny('SC19_PAYMENT_SESSION_NOT_BOUND');
+    }
     return deps.store.transaction(async tx => {
       const order = await tx.order(payment.orderId);
       if (!order) return deny('SC19_PAYMENT_ORDER_MISSING');
       requireOrderScope(order);
-      if (!order.sessionId) return deny('SC19_PAYMENT_SESSION_NOT_BOUND'); // Retry, never acknowledge as processed.
+      // A second actual payment needs a refund/review even with a NEW session.
+      if (order.status === 'paid' && order.paymentId !== payment.paymentId)
+        return deny('SC19_PAYMENT_DOUBLE_PAYMENT_REVIEW');
+      if (!order.sessionId) return deny('SC19_PAYMENT_SESSION_NOT_BOUND');
       if (order.sessionId !== payment.sessionId || order.amountMinor !== payment.amountMinor ||
           order.currency !== payment.currency) return deny('SC19_PAYMENT_ORDER_MISMATCH');
-      if (order.status === 'paid') {
-        if (order.paymentId !== payment.paymentId) return deny('SC19_PAYMENT_DOUBLE_PAYMENT_REVIEW');
+      if (order.status === 'paid')
         return { state: 'already_applied' as const, orderId: order.id };
-      }
       // Collision-free tuple encoding; event IDs alone do not deduplicate payments.
       const key = JSON.stringify([scope.provider, scope.account, scope.mode, payment.paymentId]);
       const previouslyGrantedTo = await tx.grantOnce(key, order);

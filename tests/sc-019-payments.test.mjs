@@ -12,8 +12,9 @@ const knownOffer = () => ({ id: 'preselection-v1', revision: 'revision-v1', plan
 function harness(config = {}) {
   const state = { user: id(2), access: { owner: true, verified: true }, offer: knownOffer(),
     orders: new Map(), grants: new Map(), credits: new Map(), providerSessions: new Map(),
-    createCalls: [], payment: null, authenticated: true, failSave: false, failProvider: false,
-    reads: 0, verifications: 0, url: 'https://pay.fixture.invalid/session', sessionScope: scope };
+    createCalls: [], lookupCalls: [], payment: null, authenticated: true, failSave: false, failProvider: false,
+    failLookup: false, reads: 0, verifications: 0, url: 'https://pay.fixture.invalid/session',
+    sessionScope: scope, sessionAmountMinor: null, sessionCurrency: 'PLN', sessionPaymentKind: 'one_time' };
   let tail = Promise.resolve();
   const store = { async transaction(fn) {
     let release;
@@ -54,11 +55,18 @@ function harness(config = {}) {
       state.createCalls.push({ order: structuredClone(order), key });
       let session = state.providerSessions.get(key);
       if (!session) {
-        session = { orderId: order.id, sessionId: `checkout-${order.id}`, url: state.url, scope: { ...state.sessionScope } };
+        session = { orderId: order.id, sessionId: `checkout-${order.id}`, url: state.url, scope: { ...state.sessionScope },
+          amountMinor: state.sessionAmountMinor ?? order.amountMinor, currency: state.sessionCurrency,
+          paymentKind: state.sessionPaymentKind };
         state.providerSessions.set(key, session);
       }
       if (state.failProvider) throw Error('timeout after provider accepted');
       return structuredClone(session);
+    },
+    async lookupCheckout(order, key) {
+      state.lookupCalls.push({ orderId: order.id, key });
+      if (state.failLookup) throw Error('provider lookup is uncertain');
+      return structuredClone(state.providerSessions.get(key) ?? null);
     },
     async verifyAndRetrieve(bytes, signature) {
       state.verifications++;
@@ -67,8 +75,9 @@ function harness(config = {}) {
       return structuredClone(state.payment);
     },
   };
-  const service = createSc19Payments({ store, provider, authenticate: async () => state.user ? { userId: state.user } : null,
-    scope, checkoutOrigins: ['https://pay.fixture.invalid'], enabled: true, liveApproved: false, ...config });
+  const serviceDeps = { store, provider, authenticate: async () => state.user ? { userId: state.user } : null,
+    scope, checkoutOrigins: ['https://pay.fixture.invalid'], enabled: true, liveApproved: false, ...config };
+  const service = createSc19Payments(serviceDeps);
   const notify = () => service.notification(new Uint8Array([123, 125]), 'synthetic-verified-notification');
   const paid = async (changes = {}) => {
     const hosted = await service.checkout(request());
@@ -76,7 +85,7 @@ function harness(config = {}) {
       scope: { ...scope }, amountMinor: 12345, currency: 'PLN', status: 'paid', ...changes };
     return hosted;
   };
-  return { state, service, notify, paid };
+  return { state, service, notify, paid, recreate: overrides => createSc19Payments({ ...serviceDeps, ...overrides }) };
 }
 const rejects = (promise, code) => assert.rejects(promise, e => e instanceof Sc19PaymentError && e.code === code);
 
@@ -107,13 +116,15 @@ test('unauthenticated, cross-tenant, non-owner and unverified company cannot pay
   await rejects(harness().service.checkout(request({ companyId: id(9) })), 'SC19_PAYMENT_FORBIDDEN');
 });
 
-test('disabled and unapproved LIVE stop before auth, database and provider', async () => {
+test('disabled and unapproved LIVE stop NEW checkout before auth, DB and provider', async () => {
   for (const config of [{ enabled: false }, { scope: { ...scope, mode: 'live' } }, { scope: { ...scope, account: '' } }]) {
     const h = harness(config);
     await rejects(h.service.checkout(request()), 'SC19_PAYMENTS_DISABLED');
-    await rejects(h.notify(), 'SC19_PAYMENTS_DISABLED');
     assert.equal(h.state.reads, 0); assert.equal(h.state.verifications, 0); assert.equal(h.state.createCalls.length, 0);
   }
+  const invalid = harness({ scope: { ...scope, account: '' } });
+  await rejects(invalid.notify(), 'SC19_PAYMENTS_DISABLED');
+  assert.equal(invalid.state.verifications, 0);
 });
 
 test('FREE, unapproved, inactive, expired, fractional and mismatched terms offers are refused', async () => {
@@ -153,13 +164,28 @@ test('provider timeout leaves retryable durable order and does not allocate a ne
   assert.equal(h.state.orders.get(hosted.orderId).sessionId, hosted.sessionId);
 });
 
-test('expired unbound order requires reconciliation instead of starting another checkout', async () => {
+test('expired unbound order retrieves original checkout with no second payment', async () => {
   const h = harness(); h.state.failProvider = true;
   await assert.rejects(h.service.checkout(request()), /timeout/);
   const [order] = h.state.orders.values(); h.state.orders.set(order.id, { ...order, checkoutDeadlineMs: 1 });
   h.state.failProvider = false;
-  await rejects(h.service.checkout(request()), 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+  const hosted = await h.service.checkout(request());
+  assert.equal(hosted.sessionId, `checkout-${order.id}`);
+  assert.equal(h.state.orders.get(order.id).sessionId, hosted.sessionId);
+  assert.equal(h.state.lookupCalls.length, 1);
   assert.equal(h.state.createCalls.length, 1);
+});
+
+test('absent or ambiguous lookup after deadline cannot start another payment', async () => {
+  const h = harness(); h.state.failProvider = true;
+  await assert.rejects(h.service.checkout(request()), /timeout/);
+  const [order] = h.state.orders.values(); h.state.orders.set(order.id, { ...order, checkoutDeadlineMs: 1 });
+  h.state.providerSessions.clear(); h.state.failProvider = false;
+  await rejects(h.service.checkout(request()), 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+  h.state.failLookup = true;
+  await assert.rejects(h.service.checkout(request()), /provider lookup is uncertain/);
+  assert.equal(h.state.createCalls.length, 1);
+  assert.equal(h.state.grants.size, 0);
 });
 
 test('checkout URL must match exact approved HTTPS origin, no credentials or fragment', async () => {
@@ -227,6 +253,7 @@ test('unknown order or early event before session binding is retryable, never ac
   h.state.payment.orderId = hosted.orderId;
   const original = h.state.orders.get(hosted.orderId);
   h.state.orders.set(hosted.orderId, { ...original, sessionId: null });
+  h.state.providerSessions.clear(); // No provider-confirmed checkout to reconcile.
   await rejects(h.notify(), 'SC19_PAYMENT_SESSION_NOT_BOUND'); assert.equal(h.state.grants.size, 0);
   h.state.orders.set(hosted.orderId, original); assert.equal((await h.notify()).state, 'applied');
 });
@@ -264,4 +291,83 @@ test('merchant scope mismatch in stored order fails closed', async () => {
   const order = h.state.orders.get(hosted.orderId);
   h.state.orders.set(order.id, { ...order, scope: { ...scope, account: 'another-account' } });
   await rejects(h.notify(), 'SC19_PAYMENT_SCOPE_MISMATCH'); assert.equal(h.state.grants.size, 0);
+});
+
+test('canonical checkout economics must match exactly before URL exposure', async () => {
+  for (const update of [{ sessionAmountMinor: 12344 }, { sessionAmountMinor: 12346 },
+    { sessionCurrency: 'EUR' }, { sessionPaymentKind: 'subscription' }]) {
+    const h = harness(); Object.assign(h.state, update);
+    await rejects(h.service.checkout(request()), 'SC19_PAYMENT_CHECKOUT_INVALID');
+    const [order] = h.state.orders.values();
+    assert.equal(order.sessionId, null); assert.equal(h.state.grants.size, 0);
+  }
+});
+
+test('recovered provider checkout cannot alter snapshotted economics', async () => {
+  const h = harness(); h.state.sessionPaymentKind = 'subscription'; h.state.failProvider = true;
+  await assert.rejects(h.service.checkout(request()), /timeout/);
+  const [order] = h.state.orders.values(); h.state.orders.set(order.id, { ...order, checkoutDeadlineMs: 1 });
+  h.state.failProvider = false;
+  await rejects(h.service.checkout(request()), 'SC19_PAYMENT_CHECKOUT_INVALID');
+  assert.equal(h.state.lookupCalls.length, 1); assert.equal(h.state.createCalls.length, 1);
+  assert.equal(h.state.grants.size, 0);
+});
+
+test('signed paid webhook reconciles original checkout after a lost provider response', async () => {
+  const h = harness(); h.state.failProvider = true;
+  await assert.rejects(h.service.checkout(request()), /timeout/);
+  const [order] = h.state.orders.values();
+  const hosted = [...h.state.providerSessions.values()][0];
+  h.state.payment = { eventId: 'event-recovered', orderId: order.id, sessionId: hosted.sessionId,
+    paymentId: 'payment-recovered', scope: { ...scope }, amountMinor: 12345,
+    currency: 'PLN', status: 'paid' };
+  assert.equal((await h.notify()).state, 'applied');
+  assert.equal(h.state.orders.get(order.id).sessionId, hosted.sessionId);
+  assert.equal(h.state.credits.get(id(1)), 12);
+  assert.equal((await h.notify()).state, 'already_applied');
+  assert.equal(h.state.createCalls.length, 1);
+});
+
+test('lost-response webhook rejects economically invalid original checkout', async () => {
+  const h = harness(); h.state.sessionAmountMinor = 12346; h.state.failProvider = true;
+  await assert.rejects(h.service.checkout(request()), /timeout/);
+  const [order] = h.state.orders.values();
+  const hosted = [...h.state.providerSessions.values()][0];
+  h.state.payment = { eventId: 'event-invalid', orderId: order.id, sessionId: hosted.sessionId,
+    paymentId: 'payment-invalid', scope: { ...scope }, amountMinor: 12346,
+    currency: 'PLN', status: 'paid' };
+  await rejects(h.notify(), 'SC19_PAYMENT_CHECKOUT_INVALID');
+  assert.equal(h.state.grants.size, 0); assert.equal(h.state.credits.size, 0);
+});
+
+test('disabled checkout still fulfills an existing signed provider payment', async () => {
+  const h = harness(); await h.paid();
+  const disabled = h.recreate({ enabled: false });
+  await rejects(disabled.checkout(request({ requestId: id(11) })), 'SC19_PAYMENTS_DISABLED');
+  const raw = new Uint8Array([123, 125]);
+  assert.equal((await disabled.notification(raw, 'synthetic-verified-notification')).state, 'applied');
+  assert.equal(h.state.credits.get(id(1)), 12);
+  assert.equal((await disabled.notification(raw, 'synthetic-verified-notification')).state, 'already_applied');
+});
+
+test('revoked LIVE checkout approval cannot strand an existing payment', async () => {
+  const liveScope = { ...scope, mode: 'live' };
+  const h = harness({ scope: liveScope, liveApproved: true });
+  h.state.sessionScope = liveScope;
+  const hosted = await h.service.checkout(request());
+  h.state.payment = { eventId: 'event-live', orderId: hosted.orderId, sessionId: hosted.sessionId,
+    paymentId: 'payment-live', scope: liveScope, amountMinor: 12345, currency: 'PLN', status: 'paid' };
+  const revoked = h.recreate({ liveApproved: false });
+  await rejects(revoked.checkout(request({ requestId: id(11) })), 'SC19_PAYMENTS_DISABLED');
+  assert.equal((await revoked.notification(new Uint8Array([123, 125]), 'synthetic-verified-notification')).state, 'applied');
+  assert.equal(h.state.credits.get(id(1)), 12);
+});
+
+test('cross-session second payment needs refund review, never additional credits', async () => {
+  const h = harness(); await h.paid(); await h.notify();
+  Object.assign(h.state.payment, { paymentId: 'payment-foreign', sessionId: 'checkout-foreign', eventId: 'event-foreign' });
+  await rejects(h.notify(), 'SC19_PAYMENT_DOUBLE_PAYMENT_REVIEW');
+  assert.equal(h.state.credits.get(id(1)), 12); assert.equal(h.state.grants.size, 1);
+  h.state.payment.paymentId = 'payment-1';
+  await rejects(h.notify(), 'SC19_PAYMENT_ORDER_MISMATCH');
 });
