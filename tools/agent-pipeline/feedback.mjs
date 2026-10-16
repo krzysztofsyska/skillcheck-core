@@ -217,18 +217,18 @@ export function fixPrompt(binding, effect) {
 
 // store.save must be compare-and-swap. Reservation precedes every external effect.
 // An ambiguous response remains *_PENDING forever until manually reconciled.
-const finiteCents = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const wholeTokens = value => Number.isInteger(value) && value >= 0 ? value : null;
 
-// Record only numbers the vendor returned. Token counts are not converted into dollars.
+// The Cloud Agents REST /usage endpoint documents token counts, NOT a monetary
+// charge. Never infer billed cents from a synthetic/undocumented 'cost' field.
+// Authoritative Cursor billing must be reconciled separately by an operator.
 export function costMeasurement(payload) {
-  const charged = finiteCents(payload?.cost?.chargedCents);
-  const raw = finiteCents(payload?.cost?.rawCostCents);
   return {
-    cursorChargedCents: charged,
-    cursorRawCostCents: raw,
+    cursorChargedCents: null,
+    cursorRawCostCents: null,
     cursorTotalTokens: wholeTokens(payload?.totalUsage?.totalTokens),
-    cursorCostStatus: charged === null ? 'UNAVAILABLE' : 'REPORTED',
+    cursorCostStatus: 'UNAVAILABLE',
+    cursorCostSource: 'CLOUD_REST_TOKENS_ONLY',
     codexCostStatus: 'UNAVAILABLE',
   };
 }
