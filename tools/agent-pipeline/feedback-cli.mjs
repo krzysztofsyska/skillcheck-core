@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createGitHubClient, createInstallationToken, decodeGithubContent } from './lib/github.mjs';
 import { createCursorClient } from './lib/cursor.mjs';
 import { evaluatePreflight } from './lib/merge.mjs';
-import { runFeedback, validateBinding, accountLedger, ledgerHold, LEDGER_LIMIT, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
+import { runFeedback, runCostProbe, validateBinding, accountLedger, ledgerHold, LEDGER_LIMIT, REPOSITORY, REPOSITORY_ID } from './feedback.mjs';
 import { withRulesetEvidence, verifyStateBootstrap } from './lib/ruleset-evidence.mjs';
 
 // Actions read is required for environment and deployment-branch policy reads.
@@ -170,6 +170,13 @@ export function assertCombinedSpendGuard() {
 }
 
 export function beginLiveFeedback(env, config) {
+  if (config.costProbe?.armed === true) {
+    if (config.enabled === true) throw new Error('LIVE_MODE_AMBIGUOUS');
+    if (env.AGENT_FEEDBACK_ENABLED !== 'true') return 'DISABLED';
+    assertFeedbackSwitches(env);
+    if (!Array.isArray(config.bindings) || config.bindings.length !== 1) throw new Error('COST_PROBE_BINDING');
+    return 'COST_PROBE';
+  }
   if (env.AGENT_FEEDBACK_ENABLED !== 'true' || config.enabled !== true) return 'DISABLED';
   assertFeedbackSwitches(env);
   assertCombinedSpendGuard();
@@ -177,7 +184,8 @@ export function beginLiveFeedback(env, config) {
 
 export async function main(env = process.env) {
   const config = JSON.parse(readFileSync('.github/agent-pipeline/feedback.json', 'utf8'));
-  if (beginLiveFeedback(env, config) === 'DISABLED') return ['DISABLED'];
+  const mode = beginLiveFeedback(env, config);
+  if (mode === 'DISABLED') return ['DISABLED'];
   if (env.GITHUB_REPOSITORY !== REPOSITORY || env.GITHUB_REF !== 'refs/heads/main') throw new Error('UNTRUSTED_WORKFLOW_REF');
   for (const key of ['CURSOR_API_KEY', 'AGENT_PIPELINE_APP_ID', 'AGENT_PIPELINE_APP_PRIVATE_KEY', 'AGENT_PIPELINE_APP_INSTALLATION_ID']) {
     if (!env[key]) throw new Error('MISSING_CONFIGURATION');
@@ -211,6 +219,12 @@ export async function main(env = process.env) {
     room.used = accountLedger(room.used, writes, held, LEDGER_LIMIT);
   }
   const cursor = createCursorClient({ fetch, apiKey: env.CURSOR_API_KEY });
+  if (mode === 'COST_PROBE') {
+    const binding = config.bindings[0];
+    const status = await runCostProbe({ binding, store: stores.get(binding.pr), cursor, reserveLedger });
+    return [{ pr: binding.pr, status }];
+  }
+  throw new Error('BLOCKED_BUDGET_GUARD');
   return reconcileBindings(config.bindings, binding => runFeedback({ binding, store: stores.get(binding.pr),
       readSnapshot: state => readSnapshot(github, cursor, binding, state), cursor, reserveLedger,
       postReview: body => github.request(`/repos/${REPOSITORY}/issues/${binding.pr}/comments`, { method: 'POST', body: { body } }),

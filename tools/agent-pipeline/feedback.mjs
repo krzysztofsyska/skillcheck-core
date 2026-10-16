@@ -133,9 +133,12 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
   if (current.configHash !== configHash) fail('BINDING_CHANGED');
   if (!Number.isInteger(current.rounds) || current.rounds < 0 || current.rounds > 3) fail('INVALID_STATE');
   if (!['WAITING_REVIEW', 'READY_FOR_OWNER', 'FIXING', 'CURSOR_PENDING', 'REVIEW_PENDING',
-    'BLOCKED_TIMEOUT', 'BLOCKED_NO_FIX', 'BLOCKED_PROVENANCE', 'BLOCKED_ROUND_LIMIT'].includes(current.phase)
+    'BLOCKED_TIMEOUT', 'BLOCKED_NO_FIX', 'BLOCKED_PROVENANCE', 'BLOCKED_ROUND_LIMIT',
+    'COST_PROBE_PENDING', 'COST_PROBE_DONE'].includes(current.phase)
     || !Array.isArray(current.handled)) fail('INVALID_STATE');
-  if (current.phase.startsWith('BLOCKED') || current.phase.endsWith('_PENDING')) return { status: current.phase };
+  if (current.phase.startsWith('COST_PROBE_') || current.phase.startsWith('BLOCKED') || current.phase.endsWith('_PENDING')) {
+    return { status: current.phase };
+  }
   if (current.phase === 'FIXING') {
     const run = snapshot.run;
     if (now - current.startedAt > 2 * 60 * 60 * 1000) return { state: { ...current, phase: 'BLOCKED_TIMEOUT' } };
@@ -214,6 +217,57 @@ export function fixPrompt(binding, effect) {
 
 // store.save must be compare-and-swap. Reservation precedes every external effect.
 // An ambiguous response remains *_PENDING forever until manually reconciled.
+const finiteCents = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+const wholeTokens = value => Number.isInteger(value) && value >= 0 ? value : null;
+
+// Record only numbers the vendor returned. Token counts are not converted into dollars.
+export function costMeasurement(payload) {
+  const charged = finiteCents(payload?.cost?.chargedCents);
+  const raw = finiteCents(payload?.cost?.rawCostCents);
+  return {
+    cursorChargedCents: charged,
+    cursorRawCostCents: raw,
+    cursorTotalTokens: wholeTokens(payload?.totalUsage?.totalTokens),
+    cursorCostStatus: charged === null ? 'UNAVAILABLE' : 'REPORTED',
+    codexCostStatus: 'UNAVAILABLE',
+  };
+}
+
+function costProbePrompt(binding) {
+  return 'TASK: SC-OPS-002D cost probe.\n'
+    + `Do not edit ${binding.allowedFiles.join(', ')} or any other file.\n`
+    + 'Do not open a pull request, merge, deploy, migrate, or read secrets. Stop immediately.';
+}
+
+// One reservation, one Cursor run, one usage read. A later call sees the saved
+// phase and does not start another run, including after a lost response.
+export async function runCostProbe({ binding, store, cursor, reserveLedger }) {
+  validateBinding(binding);
+  const saved = await store.read();
+  if (saved.value?.phase === 'COST_PROBE_PENDING' || saved.value?.phase === 'COST_PROBE_DONE') return saved.value.phase;
+  if (saved.value) fail('COST_PROBE_STATE');
+  reserveLedger?.(2, 0);
+  const pending = {
+    version: 1, configHash: hash(binding), rounds: 0, handled: [], phase: 'COST_PROBE_PENDING',
+    operationMarker: randomUUID(),
+  };
+  const revision = await store.save(pending, saved.revision);
+  let run;
+  try {
+    const response = await cursor.createRun(binding.agentId, { prompt: { text: costProbePrompt(binding) } });
+    run = response?.run;
+    if (!run?.id || run.agentId !== binding.agentId) fail('INVALID_CURSOR_RESPONSE');
+  } catch (error) {
+    if (error?.message === 'INVALID_CURSOR_RESPONSE') throw error;
+    return 'COST_PROBE_PENDING';
+  }
+  let measurement = costMeasurement(null);
+  try { measurement = costMeasurement(await cursor.getUsage(binding.agentId, run.id)); }
+  catch { measurement = costMeasurement(null); }
+  await store.save({ ...pending, phase: 'COST_PROBE_DONE', runId: run.id, ...measurement }, revision);
+  return 'COST_PROBE_DONE';
+}
+
 export async function runFeedback({ binding, store, readSnapshot, cursor, postReview, now, reserveLedger }) {
   const saved = await store.read();
   const held = ledgerHold(saved.value);

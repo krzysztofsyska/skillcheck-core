@@ -278,13 +278,23 @@ The committed `feedback.json` stays `enabled: false` with an empty binding list.
 The same refusal is the unpaid dry-run: no documentation PR is opened and no
 paid API is called.
 
-The later safeguard stays in this CLI, not in a second controller. It can
-replace the throw only when a reviewed change reads the Cursor account hard
-limit and remaining spend, and the Codex/OpenAI hard limit and remaining spend,
-and both reads succeed, both are vendor-enforced caps, their sum is at most
-10 USD, and the worst case of one repair plus one review fits in what remains.
-A missing, stale or ambiguous read stays `BLOCKED_BUDGET_GUARD`. Setting those
-caps in the vendor dashboards is an owner action outside this pull request.
+The multi-round bridge still throws `BLOCKED_BUDGET_GUARD`. The one-shot
+alternative is `costProbe.armed` in the same `feedback.json`. The committed
+value is false, `enabled` stays false, and the binding list stays empty. Arming
+it also requires `AGENT_FEEDBACK_ENABLED=true` and exactly one binding. Setting
+`enabled` and `armed` together throws `LIVE_MODE_AMBIGUOUS` before a token is
+minted. Both pipeline switches must still be false.
+
+An armed probe writes `COST_PROBE_PENDING` before `createRun`. It then calls
+`GET /v1/agents/{id}/usage?runId=` once and stores only finite non-negative
+`chargedCents`, `rawCostCents` and `totalTokens` when the payload contains
+them. Missing or non-numeric cost is `cursorCostStatus: UNAVAILABLE`; token
+counts are not converted into dollars. The GitHub Codex app does not return a
+charge to this token, so `codexCostStatus` stays `UNAVAILABLE`. A lost or
+rejected Cursor response leaves `COST_PROBE_PENDING`. The next poll returns
+that phase and does not call Cursor again. `COST_PROBE_DONE` is also terminal
+inside the repair planner, so the measured run cannot become another repair.
+This mode has not been executed.
 
 These separate gates are also still closed and are not bypassed: the feedback
 workflow and config are absent from `main`, so the scheduled job cannot run;

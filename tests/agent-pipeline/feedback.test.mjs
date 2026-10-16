@@ -3,7 +3,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { createInstallationToken } from '../../tools/agent-pipeline/lib/github.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { planFeedback, runFeedback, fixPrompt, accountLedger, ledgerHold, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
+import { planFeedback, runFeedback, runCostProbe, costMeasurement, fixPrompt, accountLedger, ledgerHold, CODEX, REPOSITORY_ID } from '../../tools/agent-pipeline/feedback.mjs';
 import { main, feedbackStore, loadFeedbackHolds, verifyFeedbackProtection, reconcileBindings, readSnapshot, assertFeedbackSwitches, beginLiveFeedback, FEEDBACK_TOKEN_PERMISSIONS } from '../../tools/agent-pipeline/feedback-cli.mjs';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
@@ -227,9 +227,78 @@ test('an enabled live poll refuses paid calls without a combined spend cap', asy
   assert.equal(network, 0);
   assert.equal(beginLiveFeedback({}, { enabled: false, bindings: [] }), 'DISABLED');
   const runner = readFileSync('tools/agent-pipeline/feedback-cli.mjs', 'utf8');
-  const entry = runner.indexOf('if (beginLiveFeedback(env, config)');
+  const entry = runner.indexOf('const mode = beginLiveFeedback(env, config)');
   assert.ok(entry > 0 && entry < runner.lastIndexOf('createInstallationToken') && entry < runner.lastIndexOf('createCursorClient'));
-  assert.doesNotMatch(readFileSync('tools/agent-pipeline/lib/cursor.mjs', 'utf8'), /spend|usage|invoice/i);
+  const cursorClient = readFileSync('tools/agent-pipeline/lib/cursor.mjs', 'utf8');
+  assert.match(cursorClient, /\/usage/);
+  assert.doesNotMatch(cursorClient, /invoice|estimateCost|priceCents/);
+  const committed = JSON.parse(readFileSync('.github/agent-pipeline/feedback.json', 'utf8'));
+  assert.equal(committed.enabled, false);
+  assert.equal(committed.costProbe.armed, false);
+  assert.deepEqual(committed.bindings, []);
+  assert.equal(beginLiveFeedback({}, { enabled: false, costProbe: { armed: true }, bindings: [{ pr: 49 }] }), 'DISABLED');
+  assert.throws(() => beginLiveFeedback(env, { enabled: true, costProbe: { armed: true }, bindings: [{ pr: 49 }] }), /LIVE_MODE_AMBIGUOUS/);
+  assert.throws(() => beginLiveFeedback(env, { enabled: false, costProbe: { armed: true }, bindings: [] }), /COST_PROBE_BINDING/);
+  assert.equal(beginLiveFeedback(env, { enabled: false, costProbe: { armed: true }, bindings: [{ pr: 49 }] }), 'COST_PROBE');
+});
+
+test('one cost probe records vendor numbers once and does not run again', async () => {
+  const f = fixture();
+  let runs = 0;
+  let reads = 0;
+  let prompt = '';
+  const cursor = {
+    async createRun(_id, body) {
+      runs += 1;
+      prompt = body.prompt.text;
+      return { run: { id: 'run-probe', agentId: f.binding.agentId } };
+    },
+    async getUsage(agentId, runId) {
+      reads += 1;
+      assert.equal(agentId, f.binding.agentId);
+      assert.equal(runId, 'run-probe');
+      return { totalUsage: { totalTokens: 12 }, cost: { chargedCents: 0, rawCostCents: 4.5 } };
+    },
+  };
+  const args = { binding: f.binding, store: f.args.store, cursor };
+  assert.equal(await runCostProbe(args), 'COST_PROBE_DONE');
+  assert.equal(runs, 1);
+  assert.equal(reads, 1);
+  assert.match(prompt, /Do not edit/);
+  assert.doesNotMatch(prompt, /CURSOR_API_KEY|private key/i);
+  assert.equal(f.state().cursorChargedCents, 0);
+  assert.equal(f.state().cursorRawCostCents, 4.5);
+  assert.equal(f.state().cursorTotalTokens, 12);
+  assert.equal(f.state().cursorCostStatus, 'REPORTED');
+  assert.equal(f.state().codexCostStatus, 'UNAVAILABLE');
+  assert.equal(f.state().rounds, 0);
+  assert.equal(await runCostProbe(args), 'COST_PROBE_DONE');
+  assert.equal(runs, 1);
+  assert.equal(reads, 1);
+  const planned = planFeedback(f.binding, f.state(), f.snapshot);
+  assert.equal(planned.status, 'COST_PROBE_DONE');
+  assert.equal(planned.effect, undefined);
+
+  const lost = fixture();
+  let lostRuns = 0;
+  const lostCursor = { async createRun() { lostRuns += 1; throw new Error('lost'); }, async getUsage() { throw new Error('unread'); } };
+  const lostArgs = { binding: lost.binding, store: lost.args.store, cursor: lostCursor };
+  assert.equal(await runCostProbe(lostArgs), 'COST_PROBE_PENDING');
+  assert.equal(await runCostProbe(lostArgs), 'COST_PROBE_PENDING');
+  assert.equal(lostRuns, 1);
+  assert.equal(lost.state().runId, undefined);
+
+  const unpriced = fixture();
+  const unpricedCursor = {
+    async createRun() { return { run: { id: 'run-plain', agentId: unpriced.binding.agentId } }; },
+    async getUsage() { return { totalUsage: { totalTokens: 3 }, cost: { chargedCents: -1, rawCostCents: '4' } }; },
+  };
+  assert.equal(await runCostProbe({ binding: unpriced.binding, store: unpriced.args.store, cursor: unpricedCursor }), 'COST_PROBE_DONE');
+  assert.equal(unpriced.state().cursorCostStatus, 'UNAVAILABLE');
+  assert.equal(unpriced.state().cursorChargedCents, null);
+  assert.equal(unpriced.state().cursorRawCostCents, null);
+  assert.equal(unpriced.state().cursorTotalTokens, 3);
+  assert.deepEqual(costMeasurement({ cost: { chargedCents: Number.NaN } }).cursorCostStatus, 'UNAVAILABLE');
 });
 
 test('state writes carry exact branch and CAS blob SHA, no force', async () => {
