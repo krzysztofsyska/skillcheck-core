@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   sc19AnalysisScope,
+  loadSc19PublicOfferSizes,
   sc19OfferScopes,
   sc19PackageSizesFromRows,
   sc19PolicyPendingCell,
@@ -39,8 +40,35 @@ test('package size copy follows the canonical policy rows', () => {
   assert.equal(live.preselectionAnalyses, '12');
 });
 
+
+test('public offer: failed or unavailable quota catalog never takes the landing down', async () => {
+  let reads = 0;
+  const unavailable = async () => { reads++; throw new Error('synthetic-supabase-outage'); };
+  const disabled = await loadSc19PublicOfferSizes(false, unavailable);
+  assert.equal(disabled, null);
+  assert.equal(reads, 0, 'disabled flag makes no network request');
+  const failed = await loadSc19PublicOfferSizes(true, unavailable);
+  assert.equal(failed, null);
+  assert.equal(reads, 1);
+  assert.deepEqual(sc19OfferScopes(failed), sc19OfferScopes(null));
+  for (const invalid of [
+    { FREE: 0, PRESELEKCJA: 12 },
+    { FREE: 3, PRESELEKCJA: NaN },
+    { FREE: 3, PRESELEKCJA: 100001 },
+    null,
+  ]) {
+    const result = await loadSc19PublicOfferSizes(true, async () => invalid);
+    assert.equal(result, null, 'invalid catalog cannot advertise numeric entitlements');
+  }
+  const actual = await loadSc19PublicOfferSizes(true, async () => ({ FREE: 3, PRESELEKCJA: 12 }));
+  assert.deepEqual(actual, { FREE: 3, PRESELEKCJA: 12 });
+});
+
 test('customer-facing package copy does not hardcode grant amounts', async () => {
   const billing = await readFile(new URL('../app/dashboard/[companyId]/billing/page.tsx', import.meta.url), 'utf8');
+  const home = await readFile(new URL('../app/components/marketing/home-page.tsx', import.meta.url), 'utf8');
+  assert.match(home, /loadSc19PublicOfferSizes/);
+  assert.doesNotMatch(home, /\? await loadSc19PackageSizes\(await createClient\(\)\)/);
   const marketing = await readFile(new URL('../app/components/marketing/package-comparison.tsx', import.meta.url), 'utf8');
   const handoff = await readFile(new URL('../docs/sc-019-mvp-a1-handoff.md', import.meta.url), 'utf8');
   const sql = await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql', import.meta.url), 'utf8');
