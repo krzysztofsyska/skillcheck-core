@@ -259,6 +259,11 @@ test('one cost probe records vendor numbers once and posts one review', async ()
       prompt = body.prompt.text;
       return { run: { id: 'run-probe', agentId: f.binding.agentId } };
     },
+    async getRun(agentId, runId) {
+      assert.equal(agentId, f.binding.agentId);
+      assert.equal(runId, 'run-probe');
+      return { id: runId, agentId, status: 'FINISHED' };
+    },
     async getUsage(agentId, runId) {
       reads += 1;
       assert.equal(agentId, f.binding.agentId);
@@ -272,8 +277,11 @@ test('one cost probe records vendor numbers once and posts one review', async ()
     readSnapshot: async () => structuredClone(f.snapshot),
     postReview: async body => { reviews += 1; reviewBody = body; return { id: 4242 }; },
   };
-  assert.equal(await runCostProbe(args), 'COST_PROBE_CURSOR_DONE');
+  assert.equal(await runCostProbe(args), 'COST_PROBE_RUNNING');
   assert.equal(runs, 1);
+  assert.equal(reads, 0, 'usage must not be measured while run may still be CREATING');
+  assert.equal(f.state().ledgerHold, 3);
+  assert.equal(await runCostProbe(args), 'COST_PROBE_CURSOR_DONE');
   assert.equal(reads, 1);
   assert.equal(reviews, 0);
   assert.match(prompt, /exactly one documentation commit/);
@@ -321,35 +329,44 @@ test('one cost probe records vendor numbers once and posts one review', async ()
 
   const dropped = fixture();
   let droppedReviews = 0;
-  await runCostProbe({
+  let droppedHead = A;
+  const droppedArgs = {
     binding: dropped.binding, store: dropped.args.store,
-    cursor: { async createRun() { return { run: { id: 'run-drop', agentId: dropped.binding.agentId } }; }, async getUsage() { return { cost: { chargedCents: 1 } }; } },
-    readHead: async () => A, readSnapshot: async () => structuredClone(dropped.snapshot),
+    cursor: {
+      async createRun() { return { run: { id: 'run-drop', agentId: dropped.binding.agentId } }; },
+      async getRun() { return { id: 'run-drop', agentId: dropped.binding.agentId, status: 'FINISHED' }; },
+      async getUsage() { return { totalUsage: { totalTokens: 1 } }; },
+    },
+    readHead: async () => droppedHead,
+    readSnapshot: async () => structuredClone(dropped.snapshot),
     postReview: async () => { droppedReviews += 1; throw new Error('lost-review'); },
-  });
+  };
+  assert.equal(await runCostProbe(droppedArgs), 'COST_PROBE_RUNNING');
+  assert.equal(await runCostProbe(droppedArgs), 'COST_PROBE_CURSOR_DONE');
   assert.equal(droppedReviews, 0);
-  await runCostProbe({
-    binding: dropped.binding, store: dropped.args.store, cursor: { async createRun() { throw new Error('second-run'); }, async getUsage() { throw new Error('second-read'); } },
-    readHead: async () => C, postReview: async () => { droppedReviews += 1; throw new Error('lost-review'); },
-  });
+  droppedHead = C;
+  assert.equal(await runCostProbe(droppedArgs), 'COST_PROBE_REVIEW_PENDING');
   assert.equal(dropped.state().phase, 'COST_PROBE_REVIEW_PENDING');
   assert.equal(droppedReviews, 1);
-  assert.equal(await runCostProbe({
-    binding: dropped.binding, store: dropped.args.store, cursor: { async createRun() { throw new Error('second-run'); }, async getUsage() { throw new Error('second-read'); } },
-    readHead: async () => C, postReview: async () => { droppedReviews += 1; return { id: 9 }; },
+  assert.equal(await runCostProbe({ ...droppedArgs,
+    cursor: { async createRun() { throw new Error('second-run'); }, async getUsage() { throw new Error('second-read'); } },
+    postReview: async () => { droppedReviews += 1; return { id: 9 }; },
   }), 'COST_PROBE_REVIEW_PENDING');
   assert.equal(droppedReviews, 1);
 
   const unpriced = fixture();
   const unpricedCursor = {
     async createRun() { return { run: { id: 'run-plain', agentId: unpriced.binding.agentId } }; },
+    async getRun() { return { id: 'run-plain', agentId: unpriced.binding.agentId, status: 'FINISHED' }; },
     async getUsage() { return { totalUsage: { totalTokens: 3 }, cost: { chargedCents: -1, rawCostCents: '4' } }; },
   };
-  assert.equal(await runCostProbe({
+  const unpricedArgs = {
     binding: unpriced.binding, store: unpriced.args.store, cursor: unpricedCursor,
     readHead: async () => A, readSnapshot: async () => structuredClone(unpriced.snapshot),
     postReview: async () => { throw new Error('no-review-yet'); },
-  }), 'COST_PROBE_CURSOR_DONE');
+  };
+  assert.equal(await runCostProbe(unpricedArgs), 'COST_PROBE_RUNNING');
+  assert.equal(await runCostProbe(unpricedArgs), 'COST_PROBE_CURSOR_DONE');
   assert.equal(unpriced.state().cursorCostStatus, 'UNAVAILABLE');
   assert.equal(unpriced.state().cursorChargedCents, null);
   assert.equal(unpriced.state().cursorRawCostCents, null);
