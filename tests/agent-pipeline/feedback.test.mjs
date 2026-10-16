@@ -369,6 +369,53 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   }), /COST_PROBE_UNWIRED/);
 });
 
+test('cost probe refuses stale PR, out-of-scope or reconfigured agent before paid dispatch', async () => {
+  const invalid = [
+    ['closed PR', s => { s.pull.state = 'closed'; }, /PR_BINDING_MISMATCH/],
+    ['retargeted PR', s => { s.pull.base.ref = 'main'; }, /PR_BINDING_MISMATCH/],
+    ['fork', s => { s.pull.head.repo.fork = true; }, /PR_BINDING_MISMATCH/],
+    ['untrusted ancestry', s => { s.initialHeadVerified = false; }, /SCOPE_OR_ANCESTRY_MISMATCH/],
+    ['out-of-scope diff', s => { s.files.push('lib/unapproved.ts'); }, /SCOPE_OR_ANCESTRY_MISMATCH/],
+    ['reconfigured Cursor', s => { s.agent.workOnCurrentBranch = false; }, /CURSOR_BINDING_MISMATCH/],
+    ['busy Cursor', s => { s.agent.status = 'RUNNING'; }, /CURSOR_BUSY/],
+  ];
+  for (const [label, mutate, error] of invalid) {
+    const f = fixture();
+    const snapshot = structuredClone(f.snapshot);
+    mutate(snapshot);
+    let dispatches = 0;
+    await assert.rejects(runCostProbe({
+      binding: f.binding, store: f.args.store,
+      cursor: { async createRun() { dispatches += 1; } },
+      readHead: async () => A,
+      readSnapshot: async () => snapshot,
+      postReview: async () => ({ id: 1 }),
+    }), error, label);
+    assert.equal(dispatches, 0, label);
+    assert.equal(f.state(), null, label);
+  }
+
+  const moved = fixture();
+  let reads = 0;
+  let dispatches = 0;
+  await assert.rejects(runCostProbe({
+    binding: moved.binding, store: moved.args.store,
+    cursor: { async createRun() { dispatches += 1; } },
+    readHead: async () => A,
+    readSnapshot: async () => {
+      reads += 1;
+      const result = structuredClone(moved.snapshot);
+      if (reads === 2) result.pull.head.sha = C;
+      return result;
+    },
+    postReview: async () => ({ id: 1 }),
+  }), /COST_PROBE_TARGET_MOVED/);
+  assert.equal(reads, 2);
+  assert.equal(dispatches, 0);
+  // The durable one-shot reservation is retained after a post-save race.
+  assert.equal(moved.state().phase, 'COST_PROBE_PENDING');
+});
+
 test('state writes carry exact branch and CAS blob SHA, no force', async () => {
   let observed;
   const store = feedbackStore({ request: async (path, options) => { observed = { path, options }; return { content: { sha: C } }; } }, 49);
