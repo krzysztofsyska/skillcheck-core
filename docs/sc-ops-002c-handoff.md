@@ -1,28 +1,27 @@
-# SC-OPS-002C — bootstrap bez aktywacji
+# SC-OPS-002C — przygotowanie scalenia nieaktywnego kodu
 
 TASK: SC-OPS-002C
 STATUS: IMPLEMENTED / CI_AND_INDEPENDENT_REVIEW_REQUIRED
 BRANCH: chore/sc-ops-002c-bootstrap-config
-COMMIT: 0b0ecb7f6307efc4fb7b247b67d6bd3d73217ec7
-CODE_TREE: b6a4a773bffcf628d5a85257935e0bbf03598f79
+COMMIT: 199dc3b29e06fc52c1c5338f697c2d898cce67b1
+CODE_TREE: a06ddb13474a19b4e51910e08dd5c8eb6722a6d4
 BASE_COMMIT: 1e2ec57ecfa2e0c9334ddfa5133145a2bc141240
+INPUT_HEAD: 0635fe51f4e4fc1a8bb4dd98adec635f1bc9ec21
 ISSUE: https://github.com/krzysztofsyska/skillcheck-core/issues/40
 PR: https://github.com/krzysztofsyska/skillcheck-core/pull/41
 
-COMMIT wskazuje dokładny kod po naprawie konfliktu integration i następnej poprawce preflightu. Bezpośredni następca zmienia wyłącznie ten dokument. Końcowy HEAD, bieżące CI i niezależny werdykt muszą być potwierdzone w GitHub; żaden wcześniejszy PASS nie zatwierdza nowej rewizji.
+COMMIT wskazuje dokładny kod poprawki dwóch P2. Bezpośredni następca aktualizuje wyłącznie ten dokument. Końcowy HEAD, wynik CI i niezależny werdykt muszą zostać wskazane w PR po wykonaniu. Żaden wcześniejszy PASS nie zatwierdza tej nowej rewizji.
 
-## Implementacja i granice
+## Zakończona implementacja
 
-Zachowano wszystkie pliki produktu z BASE_COMMIT. Integration została połączona INTO istniejącej gałęzi zadania przez merge z dwoma rodzicami, bez force i bez scalenia do integration/main. Brak zmian modułów FREE/PRESELEKCJA, migracji, płatności, sekretów i produkcji.
+Zachowano wcześniejsze poprawki izolacji agent-review, kontroli tożsamości z polityki na SHA workflow, ograniczenia do main/workflow_dispatch/pierwszej próby oraz wymogu bieżącego preflightu przed zewnętrznymi efektami. Pozostaje PR124 verified_ci_review i sc-agent/integration-ready, bez rutynowej zgody owner-acceptance na scalenia do integration. Osobna decyzja produkcyjna nie jest zastępowana zgodą na integration.
 
-- Zachowano PR124 `integration_merge_policy=verified_ci_review` i `sc-agent/integration-ready`. Nie przywrócono owner-acceptance jako wymaganego checka zwykłych tasków integration. Jednorazowa akceptacja bootstrapu/aktywacji pozostaje osobna, podobnie jak produkcyjna bramka B.
-- `authorize` nie ma środowiska ani sekretów. Czyta politykę z SHA workflow i wymaga main, workflow_dispatch, pierwszej próby, jawnej aktywacji i dokładnej tożsamości kontrolera. Model czeka na authorize, wchodzi tylko do agent-review i odwołuje się wyłącznie do OPENAI_API_KEY. Publish nie ma sekretów środowiska.
-- Preflight sprawdza rzeczywiste ID agent-review i dokładnie jedną gałąź main. ID 23622706434 wpisano na podstawie GitHub UI właściciela z 2026-10-17; nie oznacza to zaliczonego API preflightu ani testu klucza.
-- Naprawa P1 4302409588: `guardEffects` teraz wymaga `preflight.ok === true` dla zewnętrznych efektów niesymulowanego kontrolera. Wynik jest zastępowany w reconcile przez aktualny zaufany odczyt; stary pozytywny snapshot i sama flaga true nie dopuszczają Cursor create/followup ani workflow dispatch. Odmowa zachowuje wcześniejszą rezerwację i nie udaje wykonanego wywołania. Dziennik i raportowanie nie są deklarowane jako pozbawione wszystkich zapisów.
-- `agent-verify.yml` publikuje job `Agent verify / artifact`, odrębny od zwykłego Checks `verify`. To nadal nie jest dowód `sc-agent/ci` wystawiony przez dedykowaną App.
-- Zachowano regresje automatycznej integration i środowiska. Poprzednie dwa błędy CI dotyczyły usunięcia z runbooka jednorazowej akceptacji bootstrapu, nie zwykłego merge. Runbook ponownie rozróżnia te decyzje; istniejących asercji PR124 nie usunięto ani nie osłabiono.
+Dodatkowy przegląd uruchomiony przez zdjęcie Draft z HEAD 0635fe51 wykrył dwa P2, mimo wcześniejszego przeglądu tego samego kodu bez uwag. Nowy wynik zastąpił wcześniejszą ocenę gotowości; uwag nie pominięto.
 
-## Zmienione pliki względem BASE_COMMIT
+- P2 4302627260: agent-review wymaga jawnej tablicy protection_rules bez reviewerów, timerów i nieznanych typów. Dopuszczalne są pusta tablica lub wyłącznie metadane branch_policy, które GitHub zwraca także dla środowiska bez ręcznych bramek. ID i dokładnie jedna gałąź main pozostają weryfikowane osobno. Środowiska owner-acceptance i production-approval nadal wymagają właściciela. Fixture HTTP odzwierciedla ten rozdział zamiast błędnie dodawać reviewera środowisku modelu.
+- P2 4302627263: odmowa efektu zapisuje raz skrót jego kanonicznej tożsamości, związany z zadaniem, rewizją, kontraktem i SHA. Nie zapisuje payloadu. Kolejne identyczne odmowy nie dopisują wpisów ani nie wywołują zapisu dziennika; wcześniejsze wpisy pozostają. Oryginalna rezerwacja jest zachowana, więc dodatni preflight pozwala wznowić właściwe wywołanie, bez udawania wykonania ani mnożenia zaległych wywołań.
+
+## CHANGED FILES względem BASE_COMMIT
 
 .github/agent-pipeline/config.example.json
 .github/agent-pipeline/policy.json
@@ -30,13 +29,14 @@ Zachowano wszystkie pliki produktu z BASE_COMMIT. Integration została połączo
 .github/workflows/agent-verify.yml
 docs/sc-ops-002c-bootstrap-runbook.md
 docs/sc-ops-002c-handoff.md
+tests/agent-pipeline/bootstrap-review-isolation.test.mjs
 tests/agent-pipeline/http-world.mjs
 tests/agent-pipeline/live-adapters.test.mjs
+tests/agent-pipeline/preflight-effects.test.mjs
+tests/agent-pipeline/readiness-p2.test.mjs
+tests/agent-pipeline/reconcile.test.mjs
 tests/agent-pipeline/review-dispatch.test.mjs
 tests/agent-pipeline/workflows.test.mjs
-tests/agent-pipeline/bootstrap-review-isolation.test.mjs
-tests/agent-pipeline/preflight-effects.test.mjs
-tests/agent-pipeline/reconcile.test.mjs
 tools/agent-pipeline/authorize-review-dispatch.mjs
 tools/agent-pipeline/lib/controller.mjs
 tools/agent-pipeline/lib/github.mjs
@@ -44,20 +44,20 @@ tools/agent-pipeline/lib/protection.mjs
 tools/agent-pipeline/lib/reconcile.mjs
 tools/agent-pipeline/lib/review-dispatch.mjs
 
-DB / MIGRATIONS: bez zmian względem wskazanej integration; niczego nie wykonano ponownie.
+DB / MIGRATIONS: brak zmian i brak wykonania. Nie zmieniono produktu, FREE/PRESELEKCJA, płatności, sekretów ani ustawień dostawców. Implementacja bezpośrednio przez GitHub, nie nowe zlecenie Cursora. Bez force push i bez drugiego autora na gałęzi.
 
-## Dowody i wymagane testy
+## TESTS / SECURITY CHECKS
 
-Poprzednia rewizja 6dc0b2a5efdd46a02452cae0fd6734c7b74a14f6: 10/10 nowych testów izolacji przeszło lokalnie na Node22.16; pełne CI zakończyło się błędem (178/180 agent-pipeline, dwie asercje dokumentacji). Ten wynik nie jest PASS dla nowego COMMIT.
+Dodano osiem testów offline: dodatni branch_policy/pusta tablica; odmowa reviewerów/timerów/niepełnych danych; zachowanie osobnych zgód właściciela; domyślne adaptery z atrapą wyłącznie granicy HTTP; 1000 odmów co pięć minut z serializacją i odtworzeniem rekordu; poprawne pojedyncze wznowienie; oddzielne efekty i zachowanie historycznych wpisów; powtarzane odmowy workflow dispatch. Nie są to płatne testy usług.
 
-Nowa poprawka dodaje 7 testów w preflight-effects.test.mjs: odmowa brakującego/nieprawidłowego preflightu; osobne flagi; izolacja symulacji; dryf środowiska/checków; brak zaufania do starego snapshotu i bezpieczne wznowienie; timeout przed efektami; rzeczywiste adaptery z atrapą HTTP dla 403, 404, innego ID i dodatkowej gałęzi. Pozytywny test reconcile wymaga teraz prawidłowego dowodu ochrony zamiast niebezpiecznego null.
+Wymagane wykonanie na nowym końcowym HEAD: pełne Checks, npm run test:agent-pipeline, typecheck, build, odpowiednie testy aplikacji/HTTP, Agent Gates i niezależny Codex. Na moment zapisu dokumentu nowe wyniki są PENDING. Poprzedni Checks 39028867169 dotyczył INPUT_HEAD, nie tego COMMIT. Nie deklaruje się pełnego testu lokalnego ani rzeczywistej pętli dostawców.
 
-Wymagane nowe wykonanie: npm run test:agent-pipeline, pełne Checks (typecheck, testy aplikacji, build i HTTP), Agent Gates i niezależny review dokładnego końcowego HEAD. Na moment utworzenia tego dokumentu nowe wyniki są PENDING. Testy HTTP używają syntetycznego transportu, nie realnych kluczy ani płatnych wywołań.
+## KNOWN ISSUES / BLOCKERS / NEXT ACTION
 
-## Pozostałe blokady aktywacji
+PR został wyprowadzony z Draft w celu przygotowania integration. Dwie nowe uwagi wymagają zielonego CI i niezależnego re-review przed zamknięciem. Gotowość do scalenia nieaktywnego kodu jest oddzielona od uruchomienia kontrolera; brak App IDs i budżetu nie uzasadnia żądania aktywacji usług przed tym scaleniem.
 
-Controller App/actor IDs pozostają null w polityce; flags false. Brak potwierdzonego budżetu, ważności sekretów, pełnego testu żywej pętli i instalacji na chronionym main. Ruleset quality-gates 25299230 pozostaje disabled ze zwykłymi checkami GitHub Actions, nie pełnym kompletem dowodów App. PR50 nakłada się na tę poprawkę i pozostaje niezmieniony; nie uruchamiać drugiego mechanizmu ani drugiego autora na tej gałęzi.
+Odczyt API z 2026-10-17 potwierdził ACTIVE dla quality-gates 25299230 na integration, bez bypass, z wymaganymi verify i Agent contract / scope gate z GitHub Actions App15368. Ten odczyt zastępuje starsze wzmianki Disabled w historycznym opisie bootstrapu; w tym kroku reguły nie zmieniano. Bezpośrednio przed scaleniem ponownie sprawdzić aktualne reguły, SHA, kontrole i otwarte uwagi.
 
-## Następny etap
+W polityce obie flagi pozostają false, App/actor IDs null. Docelowe bramki dedykowanej App, ważność kluczy, budżet, instalacja na main i test usług LIVE pozostają osobnym etapem aktywacji. Issue40 nie jest ukończonym uruchomieniem. PR50 nakłada się na część tej zmiany i nie jest automatycznie scalany jako druga kopia.
 
-Niezależny Codex ocenia nowy HEAD, w szczególności P1 o skuteczności preflightu przed płatnym dispatch, istniejące P1/P2 i regresje po aktualizacji integration. Poprawki pozostają na tej samej gałęzi. Bez ujawniania sekretów, płatnych workflow, aktywacji, migracji, merge i Production. Po PASS osobno zweryfikować rzeczywiste zabezpieczenia oraz plan instalacji; nie włączać flag tylko po to, by kontrola przeszła.
+NEXT ACTION: niezależny review dokładnego nowego HEAD i pełne CI; poprawić ewentualne regresje na tej samej gałęzi. Po PASS odnotować gotowość do normalnego scalenia PR41 -> integration. Bez omijania zabezpieczeń, uruchamiania płatnych workflow, zmian main, produkcji, sekretów i migracji w ramach tego przygotowania.
