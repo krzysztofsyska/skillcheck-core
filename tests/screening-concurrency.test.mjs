@@ -19,6 +19,7 @@ const migrations = [
   "20261004000200_screening_results.sql",
   "20261005000100_screening_worker_claim_payload.sql",
   "20261007000100_screening_retry_active_conflict.sql",
+  "20261009080000_screening_latest_mutations.sql",
 ];
 const contract = {
   provider: "openai",
@@ -330,68 +331,77 @@ test("screening RPC races on PostgreSQL", async (t) => {
     );
   });
 
-  await t.test("start racing a retry does not leak a unique violation or a second active analysis", async () => {
-    const fixture = await seed("start-versus-retry");
-    const failed = await failCurrent(fixture);
-    const holder = new Client(clientConfig(databaseName));
-    clients.push(holder);
-    await holder.connect();
-    await holder.query("begin");
-    await holder.query(
-      "select id from public.screening_analysis_versions where id = $1 for update",
-      [failed.analysis_id],
-    );
-
-    const retryClient = await connectAs("authenticated", fixture.owner);
-    const retryPid = Number((await retryClient.query("select pg_backend_pid() as pid")).rows[0].pid);
-    const retryPromise = settle(retryClient.query(
-      "select * from public.retry_screening_analysis($1,$2)",
-      [failed.analysis_id, randomUUID()],
-    ));
-    const blockedAt = Date.now();
-    let blocked = false;
-    while (Date.now() - blockedAt < 5000) {
-      const activity = (await admin.query(
-        "select wait_event_type from pg_stat_activity where pid = $1",
-        [retryPid],
-      )).rows[0];
-      if (activity?.wait_event_type === "Lock") {
-        blocked = true;
-        break;
-      }
-      await new Promise(resolve => setTimeout(resolve, 20));
+  const waitForLock = async client => {
+    const pid = client.processID;
+    for (let i=0;i<250;i++) {
+      if ((await admin.query("select wait_event_type from pg_stat_activity where pid=$1",[pid])).rows[0]?.wait_event_type === 'Lock') return;
+      await new Promise(resolve=>setTimeout(resolve,20));
     }
-    assert.equal(blocked, true, "retry did not wait on the held analysis row");
+    assert.fail('RPC did not wait on transaction lock');
+  };
+  const finish = async (fixture, started, worker) => {
+    const claim=(await worker.query("select * from public.claim_screening_attempt($1)",[started.attempt_id])).rows[0];
+    await worker.query("select public.complete_screening_analysis($1,$2,$3,$4,$5::jsonb)",[
+      started.attempt_id,claim.lease_token,claim.input_fingerprint,claim.analysis_contract_hash,JSON.stringify(findingsFor(claim.criteria_snapshot))
+    ]);
+  };
 
-    const startClient = await connectAs("authenticated", fixture.owner);
-    const started = await settle(startClient.query(startSql, startArgs(fixture, randomUUID(), false)));
-    assertNoRawRace(started, "start during retry");
-    assert.equal(started.ok, true, started.message);
-    assert.notEqual(started.row.analysis_id, failed.analysis_id);
+  await t.test("start wins application lock; retry returns its active peer after commit", async () => {
+    const fixture=await seed('ordered-start-retry'), failed=await failCurrent(fixture);
+    const starter=await connectAs('authenticated',fixture.owner), retry=await connectAs('authenticated',fixture.owner);
+    await starter.query('begin');
+    const started=(await starter.query(startSql,startArgs(fixture,randomUUID(),false))).rows[0];
+    const pending=settle(retry.query("select * from public.retry_screening_analysis($1,$2)",[failed.analysis_id,randomUUID()]));
+    await waitForLock(retry);
+    await starter.query('commit');
+    const outcome=await pending;
+    assert.equal(outcome.ok,true,outcome.message);
+    assert.equal(outcome.row.analysis_id,started.analysis_id);
+    assert.equal((await activeState(fixture.application.id)).active_analyses,1);
+  });
 
-    await holder.query("commit");
-    const retried = await retryPromise;
-    assertNoRawRace(retried, "retry during start");
-    if (retried.ok) {
-      assert.equal(retried.row.analysis_id, started.row.analysis_id);
-      assert.equal(retried.row.attempt_id, started.row.attempt_id);
-    } else {
-      assert.ok(["55000", "PT409"].includes(retried.code), retried.message);
-    }
+  await t.test("review waits for concurrent reanalysis and rejects the superseded result", async()=>{
+    const fixture=await seed('review-start');
+    const original=(await fixture.user.query(startSql,startArgs(fixture,randomUUID(),false))).rows[0];
+    const worker=await connectAs('screening_worker');await finish(fixture,original,worker);
+    await fixture.user.query("select public.review_screening_result($1,0,'needs_reanalysis',null,'[]')",[original.analysis_id]);
+    const starter=await connectAs('authenticated',fixture.owner), reviewer=await connectAs('authenticated',fixture.owner);
+    await starter.query('begin');
+    const newer=(await starter.query(startSql,startArgs(fixture,randomUUID(),false))).rows[0];
+    assert.notEqual(newer.analysis_id,original.analysis_id);
+    const pending=settle(reviewer.query("select public.review_screening_result($1,1,'approved',null,'[]')",[original.analysis_id]));
+    await waitForLock(reviewer);await starter.query('commit');
+    const outcome=await pending;assert.equal(outcome.code,'PT409');
+    assert.equal((await admin.query("select disposition from public.screening_result_reviews where analysis_id=$1 order by review_version desc limit 1",[original.analysis_id])).rows[0].disposition,'needs_reanalysis');
+  });
 
-    const state = await activeState(fixture.application.id);
-    assert.deepEqual([state.active_analyses, state.active_attempts], [1, 1]);
-    const versions = (await admin.query(
-      `select id, execution_status from public.screening_analysis_versions
-       where application_id = $1 order by analysis_version`,
-      [fixture.application.id],
-    )).rows;
-    assert.deepEqual(
-      versions.map(row => row.execution_status),
-      ["failed", "pending"],
-    );
-    assert.equal(versions[0].id, failed.analysis_id);
-    assert.equal(versions[1].id, started.row.analysis_id);
+  await t.test("historical retry waits for start plus completion and cannot stale the newer result", async()=>{
+    const fixture=await seed('retry-completed'), failed=await failCurrent(fixture);
+    const starter=new Client(clientConfig(databaseName));clients.push(starter);await starter.connect();
+    await starter.query("select set_config('request.jwt.claim.sub',$1,false)",[fixture.owner]);
+    const retry=await connectAs('authenticated',fixture.owner);
+    await starter.query('begin');
+    const newer=(await starter.query(startSql,startArgs(fixture,randomUUID(),false))).rows[0];
+    await starter.query('set local role screening_worker');
+    await finish(fixture,newer,starter);
+    const pending=settle(retry.query("select * from public.retry_screening_analysis($1,$2)",[failed.analysis_id,randomUUID()]));
+    await waitForLock(retry);await starter.query('commit');
+    const outcome=await pending;assert.equal(outcome.code,'PT409');
+    const rows=(await admin.query("select execution_status,stale_at from public.screening_analysis_versions where id=$1",[newer.analysis_id])).rows;
+    assert.deepEqual(rows,[{execution_status:'completed',stale_at:null}]);
+  });
+
+  await t.test("late lower-version completion cannot displace a newer contract result", async()=>{
+    const fixture=await seed('late-completion');
+    const older=(await fixture.user.query(startSql,startArgs(fixture,randomUUID(),false))).rows[0];
+    const args=startArgs(fixture,randomUUID(),false);args[4]='screening-v2';
+    const newer=(await fixture.user.query(startSql,args)).rows[0];
+    const worker=await connectAs('screening_worker');
+    await finish(fixture,newer,worker);await finish(fixture,older,worker);
+    const rows=(await admin.query("select analysis_version,stale_at is not null as stale from public.screening_analysis_versions where application_id=$1 order by analysis_version",[fixture.application.id])).rows;
+    assert.deepEqual(rows,[{analysis_version:1,stale:true},{analysis_version:2,stale:false}]);
+    const approved=await settle(fixture.user.query("select public.review_screening_result($1,0,'approved',null,'[]')",[newer.analysis_id]));
+    assert.equal(approved.ok,true,approved.message);
   });
 
   await t.test("unsynchronized start and retry races stay unique and singular", async () => {

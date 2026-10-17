@@ -19,6 +19,7 @@ const migrations = [
   "20261004000200_screening_results.sql",
   "20261005000100_screening_worker_claim_payload.sql",
   "20261007000100_screening_retry_active_conflict.sql",
+  "20261009080000_screening_latest_mutations.sql",
 ];
 
 const ownerA = "10000000-0000-0000-0000-000000000001";
@@ -496,10 +497,6 @@ test("persisted screening results enforce tenant, worker, evidence and review co
     second = await start(tenantA, preparedA);
     assert.equal(second.analysis_version, 2);
     assert.notEqual(second.analysis_id, first.analysis_id);
-    const contractV2 = { ...contractV1, prompt_version: "screening-v2" };
-    changedContractAnalysis = await start(tenantA, preparedA, contractV2);
-    assert.equal(changedContractAnalysis.analysis_version, 3);
-    assert.notEqual(screeningAnalysisContractHash(contractV2), contractHash);
     const forced = await start(tenantA, preparedA, contractV1, randomUUID(), true);
     assert.equal(forced.analysis_id, second.analysis_id);
     assert.equal(forced.analysis_version, 2);
@@ -545,7 +542,12 @@ test("persisted screening results enforce tenant, worker, evidence and review co
   });
 
   await t.test("completion after input change is retained as completed plus stale", async () => {
+    await asUser(ownerA);
     const contractV2 = { ...contractV1, prompt_version: "screening-v2" };
+    changedContractAnalysis = await start(tenantA, preparedA, contractV2);
+    assert.equal(changedContractAnalysis.analysis_version, 3);
+    assert.notEqual(screeningAnalysisContractHash(contractV2), contractHash);
+
     const active = await claim(changedContractAnalysis.attempt_id);
     await asUser(ownerA);
     await db.query(

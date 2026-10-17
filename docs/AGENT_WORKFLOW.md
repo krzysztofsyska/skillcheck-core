@@ -46,11 +46,13 @@ Projekt: Codex. Implementacja: Cursor lub Codex zależnie od planu. Review: Code
 BACKLOG -> READY -> BUILDING -> PR_REVIEW -> FIXING -> READY_FOR_OWNER -> ACCEPTED -> READY_FOR_PROD -> DEPLOYING -> DONE
 Dodatkowo: BLOCKED.
 
-Właściciel podejmuje tylko dwa checkpointy:
-- OWNER ACCEPTANCE — zgoda na scalenie gotowego tasku do `integration`,
-- PRODUCTION APPROVAL — osobna zgoda na promocję `integration -> main` i produkcyjny runbook.
+Właściciel nie zatwierdza zwykłych PR-ów tasków do `integration`. Po aktualnym CI PASS i niezależnym review PASS kontroler scala je automatycznie, gdy ochrona gałęzi, blokada zapisu i bieżące dowody są spełnione. Publikuje `sc-agent/integration-ready`. Nie otwiera rutynowej zgody OWNER ACCEPTANCE.
 
-Od SC-OPS-002B te checkpointy są środowiskami GitHub `owner-acceptance` i `production-approval`. Komentarz, reakcja i pole w opisie PR nie zastępują kliknięcia w środowisku. Kontroler ma flagi `AGENT_PIPELINE_ENABLED` i `AGENT_PIPELINE_MERGE_ENABLED`; obie domyślnie są false i ta implementacja ich nie włącza.
+Właściciel zatwierdza osobno:
+- pierwszą aktywację kontrolera i włączenie flag LIVE,
+- PRODUCTION APPROVAL — promocję `integration -> main` i produkcyjny runbook, w środowisku GitHub `production-approval`.
+
+Środowisko `owner-acceptance` pozostaje w preflightcie, ale nie jest wymaganym checkiem ani rutynową zgodą przed scaleniem do `integration`. Komentarz, reakcja i pole w opisie PR nie zastępują zgody produkcyjnej ani zgody na pierwszą aktywację. Kontroler ma flagi `AGENT_PIPELINE_ENABLED` i `AGENT_PIPELINE_MERGE_ENABLED`; obie domyślnie są false i ta implementacja ich nie włącza.
 
 ## Zasady równoległości
 Taski mogą iść równolegle tylko gdy:
@@ -107,9 +109,9 @@ Każdy agent kończy pracę blokiem zapisanym w GitHub PR/Issue, nie przekazywan
 - Cursor zapisuje implementację, wyniki testów i handoff w PR.
 - Codex/Reviewer zapisuje verdict i uwagi w PR.
 - Cursor poprawia uwagi w tym samym branchu.
-- Orchestrator odczytuje GitHub i pyta właściciela dopiero przy OWNER ACCEPTANCE.
-- Po akceptacji task trafia do `integration`.
-- Osobny promotion PR i osobna zgoda właściciela poprzedzają produkcję.
+- Orchestrator odczytuje GitHub. Zwykły task po CI PASS i review PASS trafia do `integration` bez pytania właściciela.
+- Osobna zgoda właściciela jest wymagana przy pierwszej aktywacji kontrolera oraz przy PRODUCTION APPROVAL.
+- Osobny promotion PR i ta zgoda produkcyjna poprzedzają `main`.
 - Szczegóły: [AGENT_PIPELINE.md](AGENT_PIPELINE.md).
 
 SC-OPS-002D dodaje ograniczony adapter istniejących PR-ów Cursor: kontrakt,

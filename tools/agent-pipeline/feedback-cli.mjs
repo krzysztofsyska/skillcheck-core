@@ -143,7 +143,7 @@ export async function readSnapshot(github, cursor, binding, state) {
   if ((['FIXING', 'REVIEW_PENDING'].includes(state?.phase) || costProbePhase)
       && repairBase && repairBase !== pull.head.sha) {
     const comparison = await github.request(`${root}/compare/${repairBase}...${pull.head.sha}?per_page=100`);
-    const complete = comparison.status === 'ahead' && comparison.base_commit?.sha === state.repairHead
+    const complete = comparison.status === 'ahead' && comparison.base_commit?.sha === repairBase
       && Number.isInteger(comparison.total_commits) && comparison.total_commits > 0 && comparison.total_commits <= 100
       && comparison.commits?.length === comparison.total_commits;
     const commits = complete ? await Promise.all(comparison.commits.map(c => readRepairCommit(github, root, c.sha))) : [];

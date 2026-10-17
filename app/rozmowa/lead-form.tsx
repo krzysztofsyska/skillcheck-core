@@ -4,6 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { submitLead, type LeadState, type LeadInput } from "./actions";
 import { normalizeSalesLead } from "../../lib/sales-lead-normalization";
 import styles from "./rozmowa.module.css";
+import Link from "next/link";
 
 const initial: LeadState = { status: "idle", message: "", retry: null };
 const empty = { first_name: "", company_name: "", email: "", phone: "", needs: "" };
@@ -49,6 +50,7 @@ export function LeadForm({ notice }: { notice: string }) {
           <textarea id="lead-needs" name="needs" required minLength={10} maxLength={1000} rows={6} aria-describedby="lead-help" value={fields.needs} onChange={e => setFields({ ...fields, needs: e.target.value })} />
           <p id="lead-help">Opisz krótko potrzeby firmy (10–1000 znaków). Nie podawaj danych kandydatów ani treści CV.</p>
           <p className={styles.notice}>{notice}</p>
+          <p><Link href="/prywatnosc">Jak przetwarzamy dane ze zgłoszenia</Link></p>
           <button type="submit">{pending ? "Zapisuję zgłoszenie…" : "Wyślij zgłoszenie"}</button>
         </fieldset>
         <noscript>Do wysłania formularza potrzebne jest włączenie JavaScript.</noscript>
