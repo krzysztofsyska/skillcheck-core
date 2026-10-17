@@ -17,6 +17,7 @@ export function protectionFixtures(policy) {
   make('agent-state-integrity',['agent-state'],[{type:'deletion'},{type:'non_fast_forward'}]);
   const environments = {};
   for(const e of [policy.environments.owner_acceptance,policy.environments.production_approval,policy.environments.agent_review]) environments[e.name] = {...e,can_admins_bypass:false,deployment_branch_policy:{custom_branch_policies:true},branch_policies:[{name:'main',type:'branch'}],protection_rules:[{type:'required_reviewers',prevent_self_review:true,reviewers:[{type:'User',reviewer:{id:policy.owner.id}}]}]};
+  environments[policy.environments.agent_review.name].protection_rules = [{type:'branch_policy'}];
   return {rules,environments};
 }
 const hash = value => createHash('sha1').update(JSON.stringify(value)).digest('hex');

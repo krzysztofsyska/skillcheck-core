@@ -29,6 +29,14 @@ export function protectionFromRulesets(rulesets, policy = {}, environments = {})
       && Array.isArray(e.branch_policies) && e.branch_policies.length === 1
       && e.branch_policies[0].name === 'main' && e.branch_policies[0].type === 'branch';
   };
+  const unattendedEnvironmentOk = configured => {
+    const rules = environments[configured?.name]?.protection_rules;
+    // GitHub may include branch_policy here even with no approval/timer gate.
+    // Its exact main-only restriction is checked independently above. Missing
+    // evidence, reviewer/timer gates and unknown rule types are not unattended.
+    return mainOnly(configured) && Array.isArray(rules)
+      && rules.every(rule => rule?.type === 'branch_policy');
+  };
   const environmentOk = configured => {
     const e = environments[configured?.name];
     const reviewers = e?.protection_rules?.find(r => r.type === 'required_reviewers');
@@ -45,6 +53,6 @@ export function protectionFromRulesets(rulesets, policy = {}, environments = {})
     qualityGatesBypass: active.some(r => ['quality-gates', 'agent-state-integrity'].includes(r.name) && !noBypass(r)),
     administrationWriteUsed: false,
     requiredChecksPinnedToApp: quality('main') && quality('integration'),
-    environmentsConfirmed: environmentOk(policy.environments?.owner_acceptance) && environmentOk(policy.environments?.production_approval) && mainOnly(policy.environments?.agent_review),
+    environmentsConfirmed: environmentOk(policy.environments?.owner_acceptance) && environmentOk(policy.environments?.production_approval) && unattendedEnvironmentOk(policy.environments?.agent_review),
   };
 }
