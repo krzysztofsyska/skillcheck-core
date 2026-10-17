@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { classify } from '../../tools/agent-pipeline/classify-pr.mjs';
 import { inspectSalesReleaseGit, REVIEWED_SALES_BLOBS } from '../../tools/agent-pipeline/lib/sales-release-verified.mjs';
 
@@ -268,12 +270,20 @@ test('release fetch uses ephemeral URL-scoped authentication with no credential 
   assert.equal(call.options.env.GIT_CONFIG_PARAMETERS, undefined);
   assert.equal(call.options.env.GITHUB_TOKEN, undefined, 'Git receives only the scoped header');
   const configEnv = { ...call.options.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
+  // CI's application checkout may retain its own host-wide auth header.
+  // Test this command's config in a fresh repository, never read the runner's
+  // credential-bearing .git/config and never delete its authentication.
+  const configCwd = mkdtempSync(join(tmpdir(), 'skillcheck-git-config-'));
+  t.after(() => rmSync(configCwd, { recursive: true, force: true }));
+  const init = childProcess.spawnSync('git', ['init', '--quiet', configCwd],
+    { env: configEnv, encoding: 'utf8' });
+  assert.equal(init.status, 0, 'isolated Git configuration fixture must initialize');
   const matched = childProcess.spawnSync('git', ['config', '--get-urlmatch', 'http.extraheader',
-    'https://github.com/krzysztofsyska/skillcheck-core.git'], { env: configEnv, encoding: 'utf8' });
+    'https://github.com/krzysztofsyska/skillcheck-core.git'], { cwd: configCwd, env: configEnv, encoding: 'utf8' });
   assert.equal(matched.status, 0);
   assert.equal(matched.stdout.trim(), call.options.env.GIT_CONFIG_VALUE_0);
   const unrelated = childProcess.spawnSync('git', ['config', '--get-urlmatch', 'http.extraheader',
-    'https://github.com/unrelated/repository.git'], { env: configEnv, encoding: 'utf8' });
+    'https://github.com/unrelated/repository.git'], { cwd: configCwd, env: configEnv, encoding: 'utf8' });
   assert.equal(unrelated.status, 1);
   assert.equal(unrelated.stdout, '');
 });
