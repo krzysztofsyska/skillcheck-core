@@ -64,7 +64,7 @@ create table private.sc19_payment_grants (
 create function private.sc19_payment_immutable()
 returns trigger language plpgsql set search_path='' as $$
 begin
-  if tg_op='DELETE' then raise exception 'sc19_payment_immutable' using errcode='55000'; end if;
+  if tg_op='DELETE' or tg_table_name='sc19_payment_grants' then raise exception 'sc19_payment_immutable' using errcode='55000'; end if;
   if tg_table_name='sc19_payment_offers' then
     if (to_jsonb(new)-array['active','approved']) is distinct from
        (to_jsonb(old)-array['active','approved']) then

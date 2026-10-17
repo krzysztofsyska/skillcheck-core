@@ -31,7 +31,7 @@ Confirmed processor/account, approved PRESELEKCJA gross price and commercial ter
 
 TASK: SC-019-MVP-A2-PAYMENTS (#93); LEVEL: L3; SCOPE: FULLSTACK.
 OWNER: ChatGPT / SkillCheck; REVIEWER: independent Codex.
-STATUS: IMPLEMENTED, verification/review in progress. PRODUCTION_APPROVAL: NO.
+STATUS: IMPLEMENTED; isolated PostgreSQL verification PASS; final SHA CI pending. PRODUCTION_APPROVAL: NO.
 
 ### Dependency evidence (read 2026-10-17)
 - #92: `bb2cf5272914fb1438224959612aacaee5cba5a9`, Draft, Checks/Agent Gates/SC-019 MVP SUCCESS. One unresolved P1 thread (`PRRT_kwDOPjDIhs6spHcH`) concerning candidate/advisory/finalizer ordering, with author response; no final independent PASS accepted here.
@@ -55,3 +55,10 @@ Original 30 tests + HTTP security tests; two independent PostgreSQL connections,
 
 ### Next after dependency approval
 Reconcile #92/#115, generate a CLI migration including the immutable SC-010 inventory revision, verify the full schema and operator/KYB flow in disposable Preview. Choose the real operator/account and approve price/terms, implement its signature and canonical lookup adapter, bind per-request auth.getUser() and a scoped server DB pool, run sandbox tests, then request separate LIVE/production approval. No automatic LIVE activation, transactions, merges or production schema changes are part of this continuation.
+
+### Verification receipts for the continuation
+- `fa3e343e8910a8df40c33a12a3c1382ba618dc6f`: dedicated GitHub Actions run 39041710773, actual PostgreSQL16 + core + HTTP **64/64 PASS**, zero skipped. Twelve PostgreSQL subtests run against each pinned dependency. This includes live concurrent DB sessions and stale owner/KYB revocation, not an in-memory concurrency claim.
+- Typecheck and production Next build PASS locally. Real Next HTTP/SSR tests: 3/3 PASS (anonymous redirect, owner/non-owner rendering and all concrete endpoints fail closed). Uses synthetic Supabase auth/PostgREST only.
+- Independent reviewer found repeat-purchase P2, now fixed. Reproducible component-handler tests: 3/3 PASS (lost response retry, explicit second purchase, paid offer B cannot clear pending offer A). This is a component test, not a full browser/provider sandbox purchase.
+- CI teardown originally FORCE-dropped the test database before pg.Pool had fully disconnected, causing 57P01 after all assertions passed. Teardown now waits for zero database sessions and drops without FORCE; the next run passed.
+- Final dedicated workflow also builds Next and runs the real route tests. Final SHA/run evidence is recorded in the PR, independently from earlier receipts.

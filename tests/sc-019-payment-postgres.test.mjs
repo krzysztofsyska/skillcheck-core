@@ -98,6 +98,8 @@ for(const [pr,sha] of dependencies) test(`PostgreSQL16 payment adapter against p
  });
  await t.test('immutable order/offer economics and current-policy changes preserve purchase',async()=>{
    await assert.rejects(pool.query("update private.sc19_payment_offers set credits=99 where id='fixture-offer'"),/immutable/);
+   await assert.rejects(pool.query("update private.sc19_payment_grants set payment_key='changed'"),/immutable/);
+   await assert.rejects(pool.query('delete from private.sc19_payment_grants'),/immutable/);
    await assert.rejects(pool.query('update private.sc19_payment_orders set amount_minor=1 where id=$1',[hosted.orderId]),/immutable/);
    await assert.rejects(pool.query("update private.sc19_payment_orders set status='awaiting_payment',payment_id=null where id=$1",[hosted.orderId]),/immutable/);
    if(pr==='115')await pool.query("update private.sc19_package_policy set credits=99 where plan='PRESELEKCJA'");
