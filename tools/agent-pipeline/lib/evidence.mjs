@@ -1,13 +1,17 @@
 import { basename } from 'node:path';
 
-export async function findRun(github, policy, kind, requestId, recordedId) {
+export async function findRun(github, policy, kind, requestId, recordedId, options = null) {
   let run;
   if (recordedId) run = await github.readRun(recordedId);
   else {
     const runs = await github.listWorkflowRuns(basename(policy.workflows[kind]));
     const matches = runs.filter(r => r.display_title === `sc-agent:${requestId}`);
-    if (matches.length !== 1) return null;
-    run = matches[0];
+    if (matches.length === 1) run = matches[0];
+    else if (typeof options?.choose === 'function') {
+      const chosen = options.choose(matches);
+      if (!chosen || !matches.includes(chosen)) return null;
+      run = chosen;
+    } else return null;
   }
   if (run.workflow_id !== policy.workflow_ids[kind] || run.path !== policy.workflows[kind]
       || run.event !== 'workflow_dispatch' || run.head_branch !== 'main'

@@ -133,3 +133,30 @@ Historyczny odczyt SC-OPS-002C z 2026-10-06 identyfikował workflow reconcile 37
 Na zrzutach właściciela z 2026-10-17 środowisko `agent-review` ma ID `23622706434`, jedyną dozwoloną gałąź `main`, zero tagów i brak required reviewers/wait timera. Lista sekretów pokazuje `OPENAI_API_KEY` wyłącznie w `agent-review`, a poświadczenia App i Cursor w `agent-control`. Są to dowody konfiguracji UI, nie poprawności wartości kluczy, limitu kosztów ani testu API.
 
 Zapisany przez właściciela ruleset `quality-gates` 25299230 nadal jest disabled i zawiera zwykłe checki GitHub Actions. Nie dowodzi spełnienia docelowego preflightu App. `controller_app_id` i `controller_actor_id` w tej poprawce pozostają null; flags false. Nie uruchomiono płatnej pętli ani produkcji.
+
+
+## Odczyt API 2026-10-16
+
+Ten odczyt nie włącza flag i nie jest zgodą na aktywację. Token miał `metadata=read`. Nie zgadywano identyfikatorów.
+
+Zapisane z odpowiedzi 200, lista workflow domyślnej gałęzi `main` oraz środowiska repozytorium:
+
+- `workflow_ids`: reconcile `376775092`, verify `376775095`, review `376775093`, accept `376775089`, promote `376775091`, gates `375800413`.
+- `environments`: agent-control `23618160050`, owner-acceptance `23620698987`, production-approval `23622102440`.
+
+`owner-acceptance` i `production-approval`: jeden reviewer User `222297538`, `prevent_self_review=true`, `can_admins_bypass=false`, jedna polityka gałęzi `main`. `agent-control` ma `can_admins_bypass=true` i nie ma recenzenta. Środowisko `Production` (`22958749375`) nie ma reguł i ma bypass administratora. Nie było zmiany uprawnień.
+
+Zostają `null`, bo API nie podało App:
+
+- `GET /repos/krzysztofsyska/skillcheck-core/installation` → 401, JWT nie do odczytu. Potrzebny JWT podpisany kluczem prywatnym App.
+- `GET /user/installations` → 403, `allows_permissionless_access=true`. Potrzebny token użytkownika, nie token instalacji.
+- `GET /repos/krzysztofsyska/skillcheck-core/branches/main/protection` i `integration` → 403, wymagane `administration=read`.
+- `GET /repos/krzysztofsyska/skillcheck-core/actions/variables` → 403, wymagane `actions_variables=read`. Flag w pliku nie zmieniano.
+- `GET /repos/krzysztofsyska/skillcheck-core/actions/permissions` → 403, wymagane `administration=read`.
+
+Rulesety widoczne przy 200: tylko `agent-feedback-state-protection` (`24841688`) i `agent-feedback-state-writer` (`24842345`), gałąź `agent-feedback-state`. Brak `writers-only`, `quality-gates` i `agent-state`. W odczytanych regułach nie ma required checks ani `integration_id` App. Pochodzenie checków zostaje niepotwierdzone. Preflight tego odczytu jest `EXCLUSIVE_WRITERS_UNCONFIRMED`. Punkty App, sekrety, Vercel, flagi, monitor i test pętli zostają `NOT RUN`.
+
+
+## Status ruleset 2026-10-17 — korekta historycznego odczytu
+
+Sekcje z wcześniejszych dni mówiące, że brak reguły lub że `quality-gates` jest `Disabled`, są historią konfiguracji, a nie stanem bieżącym. GitHub wskazuje teraz `quality-gates` 25299230 jako **Active** dla `integration`: wymaga `verify` i `Agent contract / scope gate` z GitHub Actions. To **nie** jest komplet docelowych kontroli z App (`sc-agent/ci`, `sc-agent/review`, `sc-agent/integration-ready`) i **nie** jest potwierdzeniem preflightu LIVE. Nie aktywowano płatnych workflow ani nie zmieniono `main`. Identyfikatory owner-acceptance i production-approval są historycznie odczytane, ale muszą przejść ponowną weryfikację przed aktywacją.
