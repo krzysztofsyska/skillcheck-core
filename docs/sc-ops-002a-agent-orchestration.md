@@ -34,8 +34,8 @@ Nie wprowadzamy nowej bazy Supabase, publicznego endpointu aplikacji ani nowego 
 4. Po zakończeniu pracy kontroler sprawdza faktyczne commity, zakres plików i raport. Tworzy albo odnajduje jeden draft PR do integration. Identyfikuje go przez repo ID, head branch, base branch i task ID, nie przez sam tytuł.
 5. Dla aktualnej pary commitów H (head) i B (base) uruchamia niezależnie zaufane CI oraz Codex review. Wynik przypisuje do H, B, kontraktu i wersji polityki.
 6. Uwagi albo naprawialny błąd CI trafiają automatycznie do tej samej sesji Cursora. Poprawka musi pozostać na tej samej gałęzi i w ALLOWED_FILES. Kolejny commit rozpoczyna nowe CI/review.
-7. Dopiero pełne PASS i zielone obowiązkowe CI prowadzą do READY_FOR_OWNER. Kontroler otwiera prośbę o zgodę A. Właściciel dostaje podsumowanie i link do właściwego zatwierdzenia w GitHubie.
-8. Po zgodzie A oraz ponownym sprawdzeniu aktualności kontroler może scalić do integration. Stan ACCEPTED nie oznacza produkcji.
+7. Dopiero pełne niezależne PASS review oraz zielone obowiązkowe CI dla niezmienionej pary HEAD/BASE i kontraktu prowadzą do automatycznego scalenia zwykłego PR do integration. Kontroler publikuje check sc-agent/integration-ready i raport gotowości. Nie otwiera ani nie czeka na zgodę A.
+8. Przed scaleniem kontroler ponownie odczytuje dowody CI i review, zakres, blokadę zapisu oraz ochronę gałęzi. Brak aktualnych dowodów oznacza STOP. Stan ACCEPTED nie oznacza produkcji.
 9. Powstaje oddzielny PR integration -> main z manifestem wydania, testami i instrukcją wdrożenia. Jego gotowość otwiera zgodę B. Do czasu tej zgody nie ma merge do main ani produkcyjnych operacji.
 10. Po zgodzie B wolno wykonać wyłącznie zakres z manifestu wydania. DONE wymaga potwierdzenia wdrożenia i smoke testów; sam merge to stan MERGED_AWAITING_DEPLOYMENT. Automatyzacja nie wymyśla poleceń migracji z opisu PR.
 
@@ -87,18 +87,20 @@ Review JSON: schema_version, request_id, repository_id, pr_number, head_sha, bas
 
 CI jest przypisane do H/B i zaufanego workflow. Dopuszczalne wyłącznie success; cancelled, skipped, neutral, timeout, brak joba i oczekiwanie nie są PASS. Obowiązkowy zestaw obejmuje dotychczasowy verify oraz testy kontrolera. Kontroler weryfikuje identyfikator workflow/run, nie samą nazwę checka. Dowolny PR może próbować nadać identyczną nazwę checkowi GitHub Actions.
 
-Każda zmiana head lub base, kontraktu albo policy_sha unieważnia review, CI i przygotowaną zgodę. Stare wyniki mogą zostać w historii, ale nie odblokowują kolejnego commita. Dla task PR aktualizacja integration wymaga aktualizacji gałęzi, nowego CI/review i nowego przedstawienia zakresu, jeżeli poprzednia zgoda straciła aktualność.
+Każda zmiana head lub base, kontraktu albo policy_sha unieważnia review, CI i przygotowaną zgodę produkcyjną. Stare wyniki mogą zostać w historii, ale nie odblokowują kolejnego commita. Dla task PR aktualizacja integration wymaga aktualizacji gałęzi oraz nowego CI i review. Brak aktualnych dowodów zatrzymuje scalenie.
 
-## 7. Dwie zgody właściciela
+## 7. Zgoda produkcyjna i preflight
 
-Nie przyjmujemy jako zgody komentarza bota, pola PR, reakcji, label ani samego author_association. Narzędzia koordynatora mogą publikować pod kontem użytkownika, dlatego nawet komentarz z loginem właściciela nie powinien samodzielnie otwierać produkcji.
+Zwykły PR zadania nie czeka na zgodę właściciela. Do `integration` scala się po bieżącym CI PASS, niezależnym review PASS, fail-closed preflight, ochronie gałęzi i blokadzie zapisu. Check statusu to `sc-agent/integration-ready`.
 
-Wybrana zgoda to natywne zatwierdzenie oczekującego joba środowiska GitHub. Dwa stałe środowiska: owner-acceptance i production-approval. Jedyny required reviewer: krzysztofsyska, ID 222297538 (ID odczytane z GitHub; ponownie potwierdzić przy konfiguracji). Zakaz obejścia przez admina; prevent self-review. Workflow proszący o zgodę uruchamia kontroler jako GitHub App, aby właściciel mógł go zatwierdzić. Agentom nie udostępniać tokenów właściciela zdolnych do zatwierdzania tych jobów. Jeżeli istniejąca integracja dysponuje takim zakresem, ograniczyć go przed aktywacją albo nie deklarować odporności na zatwierdzenie przez agenta.
+Osobna zgoda właściciela zostaje dla pierwszej aktywacji kontrolera i włączenia flag LIVE, dla sekretów i płatnych usług oraz dla promocji i produkcji. Nie przyjmujemy jako tej zgody komentarza bota, pola PR, reakcji, label ani samego author_association. Narzędzia koordynatora mogą publikować pod kontem użytkownika, dlatego nawet komentarz z loginem właściciela nie otwiera produkcji.
 
-Prośba ma unikalny request_id i niezmienny digest kanonicznego JSON:
+Środowiska zostają dwa: `owner-acceptance` jest sprawdzane przez preflight i nie jest checkiem statusu `integration`; `production-approval` jest zgodą przed `main`. Jedyny required reviewer: krzysztofsyska, ID 222297538 (ID odczytane z GitHub; ponownie potwierdzić przy konfiguracji). Zakaz obejścia przez admina; prevent self-review. Workflow proszący o zgodę produkcyjną uruchamia kontroler jako GitHub App, aby właściciel mógł go zatwierdzić. Agentom nie udostępniać tokenów właściciela zdolnych do zatwierdzania tych jobów. Jeżeli istniejąca integracja dysponuje takim zakresem, ograniczyć go przed aktywacją albo nie deklarować odporności na zatwierdzenie przez agenta.
 
-- A: repo ID, task, PR, target integration, head H, base B, contract_hash, policy_sha, review i CI run IDs/attempts/digests, zakres plików, operacja merge.
-- B: promotion PR, target main, integration H, main B, policy_sha, zbiór tasków i ich zgód A, manifest wydania, jego hash, lista dokładnych operacji i środowisk, dowody CI/review, rollback i smoke tests. Lista sekretów może wskazywać nazwy, nigdy wartości.
+Zgoda produkcyjna ma unikalny request_id i niezmienny digest kanonicznego JSON:
+
+- integracja: zamrożone dowody CI i review dla repo ID, tasku, PR, head H, base B, contract_hash, policy_sha i zakresu plików; to nie jest kliknięcie właściciela,
+- B: promotion PR, target main, integration H, main B, policy_sha, zbiór tasków i ich dowodów scalenia, manifest wydania, jego hash, lista dokładnych operacji i środowisk, dowody CI/review, rollback i smoke tests. Lista sekretów może wskazywać nazwy, nigdy wartości.
 
 Podsumowanie i link do niezmiennego manifestu muszą być dostępne przed kliknięciem. Job zgody nie wdraża niczego i nie scala; po zatwierdzeniu emituje dowód wykonania dla request_id. Kontroler potwierdza konfigurację required reviewers i brak bypass, właściwy workflow/ref/run attempt i oczekiwane środowisko. Autora ustala przez GET /repos/{owner}/{repo}/actions/runs/{run_id}/approvals: state=approved, user.id=222297538, user.type=User oraz zgodne environments[].id/name [S9]. Brak wpisu, odrzucenie, nieznane środowisko lub niejednoznaczność oznacza odmowę. Treść comment jest wyłącznie opisem. Odczyt tego endpointu dla istniejącego run 37468845703 zwrócił []; potwierdza dostęp do odczytu, nie test rzeczywistej zgody.
 
@@ -110,7 +112,7 @@ Nowe H/B/policy/manifest podczas oczekiwania -> anulować starą prośbę, oznac
 
 Wymagania konfiguracji przed włączeniem:
 
-- main i integration: PR required, brak force push/usuwania, zasady także dla admina; bez trwałego wyjątku SC-OPS-001. Wymagane checks: sc-agent/ci, sc-agent/review, sc-agent/owner-acceptance dla integration oraz sc-agent/ci, sc-agent/review, sc-agent/production-approval, sc-agent/promotion-scope dla main. Źródło checks przypięte do dedykowanej GitHub App, nie „any source” [S5].
+- main i integration: PR required, brak force push/usuwania, zasady także dla admina; bez trwałego wyjątku SC-OPS-001. Wymagane checks: sc-agent/ci, sc-agent/review, sc-agent/integration-ready dla integration oraz sc-agent/ci, sc-agent/review, sc-agent/production-approval, sc-agent/promotion-scope dla main. Nie wymagaj sc-agent/owner-acceptance na integration. Źródło checks przypięte do dedykowanej GitHub App, nie „any source” [S5].
 - Strict/up-to-date checks. Wyłączyć inne automatyczne merge ścieżki. Publikowanie checka z tej samej nazwie przez Buildera/GITHUB_TOKEN nie odblokowuje merge.
 - Zastosować osobne rulesets: writers-only ogranicza aktualizacje main/integration do GitHub App kontrolera (jej wyjątek tylko w tym ruleset, tryb PR-only); quality-gates zawiera wymagane PR/checks, strict i zakaz force/delete, bez listy bypass. Dla agent-state writers-only dopuszcza bezpośredni zapis App, a osobny ruleset bez bypass zabrania force/delete. Rozdzielenie jest konieczne: wyjątek autora zapisu nie może omijać jakości i zgód. GitHub dokumentuje GitHub Apps i tryb PR-only jako mechanizmy rulesets [S10]. Zweryfikować kombinację na tym repo w bootstrapie. Jeśli nie jest skuteczna, auto-merge pozostaje wyłączony; nie zastępować jej instrukcją w AGENTS.
 - main przyjmuje wyłącznie PR z integration tego samego repository_id; nazwa integration w forku nie wystarcza. Promotion scope ma obejmować wszystkie zmiany wydania, a nie tylko ostatni moduł.
@@ -118,7 +120,7 @@ Wymagania konfiguracji przed włączeniem:
 
 W MVP jeden globalny szereg operacji merge. Podczas końcowego sprawdzenia i wywołania merge kontroler trzyma trwałą blokadę serializacji; żaden inny proces kontrolera nie zmienia main/integration. REST merge wysyła oczekiwany head SHA. Sam ten parametr nie chroni base — ochronę daje wyłączność zapisów, globalna kolejność i reguły strict. Brak potwierdzonej wyłączności wyłącza auto-merge.
 
-Kontroler tuż przed merge ponownie sprawdza H/B, aktualne dowody, digest zgody, reguły ochrony i obie flagi. Po timeout odczytuje merged/merge_commit_sha, nigdy nie zakłada sukcesu ani nie wykonuje drugiego merge na zmienionym PR. Każda awaria pomiędzy zgodą a merge jest odtwarzana z dziennika, nie z tekstu raportu.
+Kontroler tuż przed scaleniem do integration ponownie sprawdza H/B, aktualne dowody CI i review, reguły ochrony i obie flagi. Przed promocją dodatkowo sprawdza digest zgody B. Po timeout odczytuje merged/merge_commit_sha, nigdy nie zakłada sukcesu ani nie wykonuje drugiego merge na zmienionym PR. Każda awaria pomiędzy zgodą produkcyjną a merge jest odtwarzana z dziennika, nie z tekstu raportu.
 
 ## 9. Produkcja i Vercel
 
@@ -172,7 +174,7 @@ Konfiguracja zewnętrzna wymagana od właściciela:
 | --- | --- |
 | GitHub App | Instalacja tylko w skillcheck-core; poświadczenia niedostępne Builderowi. Contents, PR, Issues, Checks i Actions: write dla kontrolowanych efektów. Administration: read wyłącznie do bieżącego preflight ochrony (nigdy write); odczyt środowisk zgód zgodnie z wymaganiami API. Bez praw zatwierdzania jako właściciel. Uprawnienia potrzebne do CI/modelu są osobnymi, węższymi tokenami. |
 | agent-control | Dostęp tylko z main; klucze kontrolera i dostawców tylko w zaufanych jobach. Brak sekretów w repo/PR/artifactach. |
-| Dwie zgody | Required reviewer = właściciel; brak self-review i bypass; brak uprawnień agentów do zatwierdzenia. |
+| Środowiska zgód | `owner-acceptance` zostaje w preflightcie i nie jest checkiem integration; `production-approval` jest zgodą właściciela przed main. Required reviewer = właściciel; brak self-review i bypass; brak uprawnień agentów do zatwierdzenia. |
 | Gałęzie | Zabezpieczenia z sekcji 8, kontrola rzeczywistego dostępu Cursor/GitHub Apps. |
 | Cursor API | Klucz i zatwierdzony budżet; kontrakt v1 sprawdzony na koncie przed aktywacją. |
 | Codex Action | Klucz projektu OpenAI, model z dozwolonej listy i limit wydatków; nie zakładać dostępności z samej subskrypcji. |
@@ -198,7 +200,7 @@ Lokalnie/offline w 002B, na mockach i izolowanym git:
 11. Powiadomienia mają stałe ID; błąd powiadomienia nie otwiera gates i nie zatraca wyniku.
 12. Odnowienie procesu odtwarza cały stan z agent-state; etykiety i treść PR nie są źródłem autoryzacji.
 
-W 002C, dopiero po konfiguracji: rzeczywisty start API, jedna wymuszona poprawka, nowe SHA/review/CI, zatrzymanie przed A, merge tylko po A, zatrzymanie przed B, odmowa produkcji bez B, dostarczenie powiadomienia do ChatGPT. Testy izolowane, bez biznesowej bazy i bez publikacji aplikacji. Oddzielnie zatwierdzony test produkcyjnego runbooku. Niewykonane testy: NOT RUN, nigdy PASS.
+W 002C, dopiero po konfiguracji: rzeczywisty start API, jedna wymuszona poprawka, nowe SHA/review/CI, automatyczne scalenie do integration po bieżącym CI PASS i review PASS bez zgody A, zatrzymanie przed B, odmowa produkcji bez B, dostarczenie powiadomienia do ChatGPT. Testy izolowane, bez biznesowej bazy i bez publikacji aplikacji. Oddzielnie zatwierdzony test produkcyjnego runbooku. Niewykonane testy: NOT RUN, nigdy PASS.
 
 ## 13. Źródła
 

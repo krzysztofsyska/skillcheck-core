@@ -14,9 +14,7 @@ Do not require the owner to copy handoffs between agents.
 - **Cursor / BUILDER** — implements the approved task on a dedicated branch and opens/updates the PR.
 - **Codex / REVIEWER** — reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
-- **Owner** — only two required decisions:
-  1. OWNER ACCEPTANCE — implementation accepted for integration.
-  2. PRODUCTION APPROVAL — explicit permission to promote/deploy to production.
+- **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.
 
 ## Branch model
 
@@ -25,9 +23,11 @@ Do not require the owner to copy handoffs between agents.
 - task branches start from `integration`.
 - normal task PRs target `integration`.
 - only a production promotion PR may target `main`.
-- promotion PR must be `integration -> main`.
+- promotion PR must be `integration -> main` by default.
+- **Proposal only, NOT active**: selective `release/sales-mvp-intake-YYYYMMDD -> main` may be considered after a separately reviewed governance rollout. The offline checker `tools/agent-pipeline/lib/sales-release.mjs` only analyzes scope and ALWAYS denies Production authorization.
+- Current `main` classifier still denies all PR heads except `integration`. A future trusted production gate must be installed from the protected main revision, verify every commit and exact release scope, enforce owner acceptance and production approval as separate GitHub-origin attestations (not editable PR text), and fail closed if protection settings cannot be verified. Never use PR-supplied code as its own authorization gate. No billing, migrations, workers, secrets, database or payments belong to the limited sales-intake candidate.
 
-Do not merge task branches directly to `main`.
+Do not merge task branches directly to `main` or use this exception before its production safeguards are verified.
 
 ## Required task metadata
 
@@ -103,8 +103,8 @@ Do not ask the owner to paste this handoff into another agent.
 3. If fixes are required, Cursor applies them on the same branch.
 4. CI reruns.
 5. Repeat until PASS.
-6. Orchestrator asks owner only for OWNER ACCEPTANCE.
-7. After owner acceptance, merge to `integration`.
+6. If CI and an independent reviewer both pass against the current commit and all security/branch gates pass, merge to `integration` automatically; otherwise repair or block and report the specific cause.
+7. Continue with the next dependency-ready task without waiting for an owner click.
 
 ## Production loop
 
@@ -129,7 +129,7 @@ Production is a separate decision.
 
 ## Agent controller
 
-SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. Owner acceptance and production approval are GitHub environment approvals, not pull request prose. Do not enable the controller, merge, or deploy from a task implementation.
+SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. An integration merge is authorized by verified CI plus independent review (not PR prose); production approval remains a separate owner-only GitHub Environment approval. Do not enable the controller, merge, or deploy from a task implementation.
 
 ## Existing SkillCheck guardrails
 
