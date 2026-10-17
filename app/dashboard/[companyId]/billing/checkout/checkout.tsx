@@ -7,7 +7,7 @@ export default function Checkout({companyId}: {companyId:string}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
-  const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState(false);
+  const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string}|null>(null);
   const offer=offers.find(o=>o.id===selected);
   useEffect(()=>{
     const abort=new AbortController();
@@ -25,7 +25,7 @@ export default function Checkout({companyId}: {companyId:string}) {
     try {
       const r=await fetch(`/api/billing/orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store'});
       if(!r.ok)throw Error(); const data=await r.json();
-      setPaidOrder(data.status==='paid');
+      setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision}:null);
       setMessage(data.status==='paid' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.` :
         'Czekamy na potwierdzenie płatności. Kredyty zostaną przyznane po jej weryfikacji.');
     } catch {setMessage('Nie udało się sprawdzić statusu. Spróbuj ponownie.');}
@@ -34,9 +34,9 @@ export default function Checkout({companyId}: {companyId:string}) {
   function nextPurchase() {
     if(!paidOrder||!offer)return;
     try {
-      sessionStorage.removeItem(`sc19:request:${companyId}:${offer.id}:${offer.termsRevision}`);
+      sessionStorage.removeItem(`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}`);
       sessionStorage.removeItem(`sc19:order:${companyId}`);
-      setOrderId('');setPaidOrder(false);setAccepted(false);setMessage('Możesz złożyć kolejne zamówienie.');
+      setOrderId('');setPaidOrder(null);setAccepted(false);setMessage('Możesz złożyć kolejne zamówienie.');
     } catch {setMessage('Przeglądarka blokuje zapis nowego zamówienia. Zezwól na pamięć sesji.');}
   }
   async function buy() {
@@ -67,7 +67,7 @@ export default function Checkout({companyId}: {companyId:string}) {
         <details open><summary>Warunki oferty · {offer.termsRevision}</summary><p style={{whiteSpace:'pre-wrap'}}>{offer.termsText}</p></details>
         <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={accepted} disabled={busy}
           onChange={e=>setAccepted(e.target.checked)}/> Akceptuję powyższe warunki oferty.</label>
-        <button type="button" disabled={!accepted||busy||paidOrder||offer.validUntilMs<=Date.now()} onClick={buy}>
+        <button type="button" disabled={!accepted||busy||!!paidOrder||offer.validUntilMs<=Date.now()} onClick={buy}>
           {busy?'Przetwarzam…':`Zamawiam i płacę ${pln(offer.amountMinor)}`}</button></>}
     </> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
     {message&&<p role="status" aria-live="polite">{message}</p>}

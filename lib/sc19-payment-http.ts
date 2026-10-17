@@ -89,7 +89,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null) {
         if(!o)return json({error:'SC19_PAYMENT_ORDER_MISSING'},404);
         // No payment IDs, merchant, buyer, NIP, or hosted-session URL in status reads.
         return json({orderId:o.id,status:o.status,amountMinor:o.amountMinor,currency:o.currency,
-          credits:o.credits,termsRevision:o.termsRevision});
+          credits:o.credits,offerId:o.offerId,termsRevision:o.termsRevision});
       } catch(e) { return errorResponse(e); }
     },
     async webhook(request: Request) {

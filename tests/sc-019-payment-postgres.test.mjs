@@ -34,7 +34,18 @@ for(const [pr,sha] of dependencies) test(`PostgreSQL16 payment adapter against p
  const dbName='sc19pay_'+randomBytes(6).toString('hex');
  await root.query(`create database "${dbName}"`);u.pathname='/'+dbName;
  const pool=new pg.Pool({connectionString:u.href,max:12});
- t.after(async()=>{await pool.end();await root.query(`drop database "${dbName}" with(force)`);await root.end();});
+ t.after(async()=>{
+   await pool.end();
+   // pg.Pool.end resolves before every backend has observed the socket close.
+   // Wait for real disconnects instead of FORCE-killing sockets during teardown.
+   for(let i=0;i<100;i++) {
+     const remaining=Number((await root.query('select count(*) n from pg_stat_activity where datname=$1',[dbName])).rows[0].n);
+     if(remaining===0)break;
+     if(i===99)throw Error('Test connections did not close');
+     await new Promise(resolve=>setTimeout(resolve,20));
+   }
+   await root.query(`drop database "${dbName}"`);await root.end();
+ });
  assert.equal((await pool.query('select current_database() name')).rows[0].name,dbName);
  assert.match((await pool.query('select version() v')).rows[0].v,/PostgreSQL 16/);
  await pool.query(fixture);
