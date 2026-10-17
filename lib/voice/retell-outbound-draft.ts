@@ -7,7 +7,11 @@
  */
 import { createHash } from "node:crypto";
 import { canonicalVoiceCallRequest, type VoiceCallRequest } from "./provider.ts";
-import { isAuthenticallyReleasedInterviewPlan, type InterviewPlan } from "./interview-plan.ts";
+import {
+  isAuthenticallyReleasedInterviewPlan, releasedApplicationBinding, prohibitedTopicsAreCanonical,
+  SC012_PROHIBITED_TOPICS_INSTRUCTION, type InterviewPlan,
+} from "./interview-plan.ts";
+import { scenarioApplicationBinding } from "./mvp-package-gate.ts";
 
 export type RetellOutboundConfig = Readonly<{
   agentId: string;
@@ -35,7 +39,7 @@ export type RetellOutboundDraft = Readonly<{
     idempotency_key: string;
     honor_internal_dnc: true;
     override_agent_id: string;
-    override_agent_version: string;
+    override_agent_version: number;
     retell_llm_dynamic_variables: Readonly<{
       skillcheck_interview_script: string;
       skillcheck_notice_version: string;
@@ -49,6 +53,20 @@ export type RetellOutboundDraft = Readonly<{
   verifiedAtMs: number;
   expiresAtMs: number;
   preflightOnly: true;
+}>;
+
+/**
+ * Read-only snapshot from a trusted SC-010 server-side, tenant-scoped contact lookup.
+ * This structure is NOT independently authenticated or dispatch authorization.
+ * The future worker must obtain it from a locked DB read and recheck just before POST.
+ */
+export type RetellContactSnapshot = Readonly<{
+  companyId: string;
+  applicationId: string;
+  sourceFingerprint: string;
+  destinationE164: string;
+  contactApproved: true;
+  noticeDelivered: true;
 }>;
 
 export class RetellOutboundDraftError extends Error {
@@ -96,6 +114,53 @@ type AgentFetch = (url: string, init: RequestInit) =>
   Promise<Pick<Response, "status" | "headers" | "body">>;
 const providerJsonMaxBytes = 256 * 1024;
 const policyGuardrail = "Never ask about health, medical information or special-category personal data.";
+
+/**
+ * Numeric versions still inherit the preferred tag's variables at call creation.
+ * Retell request variables override tag/default values, so EVERY admitted variable
+ * consumer must use a value that this compiler supplies. A second GET or an empty
+ * tag snapshot cannot close the verification-to-use race.
+ * https://docs.retellai.com/build/dynamic-variables (value precedence/nesting)
+ */
+function assertCompilerOwnedVariables(...documents: Record<string, unknown>[]): void {
+  const pending: unknown[] = [...documents];
+  const opaqueCollections = new Set([
+    "tools", "tool_ids", "mcps", "pre_session_tools", "post_session_tools",
+    "components", "knowledge_base_ids",
+  ]);
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      // Retell trims whitespace. Nested, malformed and unknown substitutions are
+      // not part of this controlled profile; also refuse leftover single braces
+      // so a permitted inner placeholder cannot hide an outer substitution.
+      const literal = value.replace(
+        /\{\{\s*(skillcheck_interview_script|skillcheck_notice_version|skillcheck_language)\s*\}\}/g,
+        "",
+      );
+      if (/[{}]/.test(literal)) return reject();
+    } else if (Array.isArray(value)) {
+      for (const item of value) pending.push(item);
+    } else if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        // Code, tools and external subflows can read the entire variable map
+        // without {{...}}. This MVP admits only inline conversation/end nodes;
+        // admitting other consumers requires a separately verified read surface.
+        if (opaqueCollections.has(key) && child != null &&
+            (!Array.isArray(child) || child.length !== 0)) return reject();
+        if (key === "code" && child != null) return reject();
+        if (key === "nodes" && (!Array.isArray(child) || child.some(node =>
+          !node || typeof node !== "object" || Array.isArray(node) ||
+          (node.type !== "conversation" && node.type !== "end")))) return reject();
+        if (key === "contact_memory_config" && child != null &&
+            (typeof child !== "object" || Array.isArray(child) ||
+              (child as Record<string, unknown>).enable_read !== false)) return reject();
+        // Header names and other object keys can also contain placeholders.
+        pending.push(key, child);
+      }
+    }
+  }
+}
 
 /** No response.json(): enforce a decompressed streaming byte limit first. */
 async function readBoundedJson(result: Pick<Response, "headers" | "body">): Promise<Record<string, unknown>> {
@@ -146,7 +211,8 @@ export type RetellVerifiedAgent = Readonly<{
 export async function verifyRetellOutboundAgent(
   config: RetellOutboundConfig,
   key: string,
-  http: AgentFetch = fetch,
+  // Explicit transport is mandatory in this offline PR; never default to live fetch.
+  http: AgentFetch,
 ): Promise<RetellVerifiedAgent> {
   const c = validatedConfig(config);
   if (typeof key !== "string" || key.length < 16 || /[\r\n]/.test(key))
@@ -172,6 +238,8 @@ export async function verifyRetellOutboundAgent(
   if (a.agent_id !== c.agentId || a.version !== c.agentVersion ||
     a.is_published !== true ||
     !Array.isArray(a.assigned_tags) || !a.assigned_tags.includes(c.agentVersionTag) ||
+    // Existing DNC blocks and a new in-call stop-contact request are separate controls.
+    a.enable_dnc_detection !== true ||
     a.data_storage_setting !== "basic_attributes_only" ||
     !Number.isInteger(a.data_storage_retention_days) ||
     (a.data_storage_retention_days as number) < 1 ||
@@ -209,12 +277,17 @@ export async function verifyRetellOutboundAgent(
   catch { return reject(); }
   if (digest !== c.approvedFlowSha256) return reject();
 
+  // Hashes bind stored revisions, not the mutable environment values that may
+  // later be selected for those revisions. Seal all their variable consumers.
+  assertCompilerOwnedVariables(a, flow);
+
   // Mandatory GLOBAL instructions, not incidental text on an unreachable node.
   const globalPrompt = flow.global_prompt;
   if (typeof globalPrompt !== "string" ||
       !globalPrompt.includes("{{skillcheck_interview_script}}") ||
       !globalPrompt.includes("{{skillcheck_notice_version}}") ||
-      !globalPrompt.includes(policyGuardrail))
+      !globalPrompt.includes(policyGuardrail) ||
+      !globalPrompt.includes(SC012_PROHIBITED_TOPICS_INSTRUCTION))
     return reject();
 
   const proof: RetellVerifiedAgent = Object.freeze({
@@ -236,10 +309,37 @@ export function compileRetellOutboundDraft(
   configInput: RetellOutboundConfig,
   releasedPlan: InterviewPlan,
   provider: RetellVerifiedAgent,
+  contactInput: RetellContactSnapshot,
 ): RetellOutboundDraft {
   const c = validatedConfig(configInput);
   let call: VoiceCallRequest;
-  try { call = canonicalVoiceCallRequest(request); } catch { return reject(); }
+  let rawScenario: VoiceCallRequest["scenario"] | undefined;
+  let contact: RetellContactSnapshot;
+  try {
+    // A canonical snapshot loses the in-process scenario brand; inspect the
+    // original data property first, then validate/serialize only the snapshot.
+    rawScenario = Object.getOwnPropertyDescriptor(request, "scenario")?.value;
+    call = canonicalVoiceCallRequest(request);
+    contact = structuredClone(contactInput);
+  } catch { return reject(); }
+  const binding = releasedApplicationBinding(releasedPlan);
+  const scenarioBinding = scenarioApplicationBinding(rawScenario);
+  if (!isPlainExact(contact, [
+        "companyId", "applicationId", "sourceFingerprint", "destinationE164",
+        "contactApproved", "noticeDelivered",
+      ]) ||
+      !binding || !scenarioBinding ||
+      scenarioBinding.companyId !== binding.companyId ||
+      scenarioBinding.applicationId !== binding.applicationId ||
+      scenarioBinding.sourceFingerprint !== binding.sourceFingerprint ||
+      call.externalCorrelationId !== binding.applicationId ||
+      contact.companyId !== binding.companyId ||
+      contact.applicationId !== binding.applicationId ||
+      contact.sourceFingerprint !== binding.sourceFingerprint ||
+      !phone.test(contact.destinationE164) ||
+      contact.destinationE164 !== call.destinationE164 ||
+      contact.contactApproved !== true || contact.noticeDelivered !== true)
+    return reject();
   if (!isAuthenticallyReleasedInterviewPlan(releasedPlan) ||
       !verified.has(provider) ||
       provider.agentId !== c.agentId ||
@@ -262,10 +362,8 @@ export function compileRetellOutboundDraft(
       releasedPlan.noticeRequired !== true ||
       releasedPlan.templateVersion !== "skillcheck-voice-plan-v1" ||
       call.scenario.questions.length !== releasedPlan.questions.length ||
-      // Only this audited policy is currently supported; no arbitrary topics
-      // may be interpolated into Retell's provider prompt.
-      call.scenario.constraints.prohibitedTopics.length !== 1 ||
-      call.scenario.constraints.prohibitedTopics[0] !== "zdrowie")
+      // Enforce the exact closed SC-012 policy, not a caller-provided subset.
+      !prohibitedTopicsAreCanonical(call.scenario.constraints.prohibitedTopics))
     return reject();
 
   for (let i = 0; i < call.scenario.questions.length; i++) {
@@ -282,7 +380,8 @@ export function compileRetellOutboundDraft(
       " sekund] " + q.prompt +
       (q.followUps.length ? " | Dopytania: " + q.followUps.join(" / ") : "")
   ).join("\n");
-  if (script.length > 13500) return reject();
+  if (script.length > 13500 || /[{}]/.test(script) || /[{}]/.test(c.noticeVersion))
+    return reject();
 
   const payload = Object.freeze({
     from_number: c.fromNumberE164,
@@ -290,7 +389,9 @@ export function compileRetellOutboundDraft(
     idempotency_key: call.providerIdempotencyKey,
     honor_internal_dnc: true as const,
     override_agent_id: c.agentId,
-    override_agent_version: c.agentVersionTag,
+    // Pin the reviewed revision AND override every admitted variable consumer.
+    // Preferred-tag changes cannot supply an executable value in this profile.
+    override_agent_version: c.agentVersion,
     retell_llm_dynamic_variables: Object.freeze({
       skillcheck_interview_script: script,
       skillcheck_notice_version: c.noticeVersion,
