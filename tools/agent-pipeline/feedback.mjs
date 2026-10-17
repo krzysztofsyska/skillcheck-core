@@ -314,7 +314,7 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
     return finishCostProbeRun({ binding, saved, store, cursor, reserveLedger, now });
   }
   if (phase === 'COST_PROBE_CURSOR_DONE') {
-    return postCostProbeReview({ binding, saved, store, readSnapshot, postReview, reserveLedger, now });
+    return postCostProbeReview({ binding, saved, store, readHead, readSnapshot, postReview, reserveLedger, now });
   }
   if (saved.value) fail('COST_PROBE_STATE');
   if (typeof readHead !== 'function' || typeof readSnapshot !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
@@ -391,13 +391,15 @@ async function finishCostProbeRun({ binding, saved, store, cursor, reserveLedger
   return 'COST_PROBE_CURSOR_DONE';
 }
 
-async function postCostProbeReview({ binding, saved, store, readSnapshot, postReview, reserveLedger, now }) {
+async function postCostProbeReview({ binding, saved, store, readHead, readSnapshot, postReview, reserveLedger, now }) {
   const current = saved.value;
   if (current.configHash !== hash(binding) || current.ledgerHold !== 2 || !sha(current.baselineHead) || !current.runId) fail('COST_PROBE_STATE');
-  if (typeof readSnapshot !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
-  const before = await readSnapshot(current);
-  validateSnapshot(binding, before);
-  const head = before.pull.head.sha;
+  if (typeof readHead !== 'function' || typeof readSnapshot !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
+  // Terminal completion is already durable. An unchanged GitHub head can be
+  // timed out locally even if Cursor is unavailable; this grants no permission
+  // for a new run or review. A failed/unknown GitHub read is not no-artifact proof.
+  const head = await readHead();
+  if (!sha(head)) fail('COST_PROBE_HEAD');
   if (head === current.baselineHead) {
     // A successful run may produce no commit, or its push may propagate late.
     // Preserve the one-shot reservation during a bounded window, then record
@@ -410,6 +412,11 @@ async function postCostProbeReview({ binding, saved, store, readSnapshot, postRe
     }
     return 'COST_PROBE_CURSOR_DONE';
   }
+  // The head-only read cannot certify the pushed artifact. Before reserving
+  // its sole review, require the full live binding and signed commit proof.
+  const before = await readSnapshot(current);
+  validateSnapshot(binding, before);
+  if (before.pull.head.sha !== head) fail('COST_PROBE_TARGET_MOVED');
   if (!verifyCostProbeCommit(binding, current, before)) fail('COST_PROBE_PROVENANCE');
   const reviewing = { ...current, phase: 'COST_PROBE_REVIEW_PENDING', head, ledgerHold: 1 };
   const revision = await store.save(reviewing, saved.revision);

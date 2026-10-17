@@ -341,7 +341,7 @@ test('late-finding recovery still validates the repair signature and can reach i
 });
 
 test('artifact arriving inside propagation grace is verified and reviewed only once', async () => {
-  const f = feedbackFixture(); f.args.readHead = async () => A;
+  const f = feedbackFixture(); f.args.readHead = async () => f.snapshot.pull.head.sha;
   f.args.cursor.getRun = async (_id, id) => ({ id, agentId: f.binding.agentId, status: 'FINISHED' });
   f.args.cursor.getUsage = async () => ({ runs: [] });
   await runCostProbe(f.args); await runCostProbe(f.args);
@@ -513,4 +513,101 @@ test('full ledger keeps capacity to record stalled probe failure rather than lea
   assert.equal(used, 98); assert.equal(f.state().ledgerHold, undefined);
   assert.equal(f.state().reconciliationRequired, true);
   assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+});
+
+async function terminalProbeFixture() {
+  const f = feedbackFixture();
+  f.args.readHead = async () => f.snapshot.pull.head.sha;
+  f.args.cursor.getRun = async (_id, id) => ({ id, agentId: f.binding.agentId, status: 'FINISHED' });
+  f.args.cursor.getUsage = async () => ({ runs: [{ id: 'run-1', usage: { totalTokens: 7 } }] });
+  await runCostProbe(f.args); await runCostProbe(f.args);
+  return f;
+}
+
+// The no-artifact decision uses stored terminal evidence and GitHub only.
+test('expired no-artifact probe is finalized even while the provider snapshot is unavailable', async () => {
+  const f = await terminalProbeFixture();
+  f.args.now += 15 * 60 * 1000;
+  let snapshots = 0;
+  f.args.readSnapshot = async () => { snapshots++; throw new Error('provider unavailable'); };
+  const saves = f.calls.saves;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(f.state().failure, 'NO_ARTIFACT');
+  assert.equal(f.state().ledgerHold, undefined);
+  assert.deepEqual(f.calls.reservations.at(-1), [1, 2]);
+  assert.equal(f.calls.saves, saves + 1);
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(snapshots, 0);
+  assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+});
+
+test('unchanged-head propagation grace needs no provider read and causes no writes', async () => {
+  const f = await terminalProbeFixture();
+  f.args.now += 14 * 60 * 1000;
+  let snapshots = 0;
+  f.args.readSnapshot = async () => { snapshots++; throw new Error('provider unavailable'); };
+  const saves = f.calls.saves;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_CURSOR_DONE');
+  assert.equal(f.calls.saves, saves); assert.equal(snapshots, 0);
+  assert.equal(f.state().ledgerHold, 2);
+});
+
+test('changed probe head still needs complete provider provenance, even after grace expires', async () => {
+  const f = await terminalProbeFixture(); f.finish();
+  f.args.now += 16 * 60 * 1000;
+  let snapshots = 0;
+  f.args.readSnapshot = async () => { snapshots++; throw new Error('provider unavailable'); };
+  const saves = f.calls.saves, reservations = f.calls.reservations.length;
+  await assert.rejects(runCostProbe(f.args), /provider unavailable/);
+  assert.equal(snapshots, 1); assert.equal(f.calls.saves, saves);
+  assert.equal(f.calls.reservations.length, reservations);
+  assert.equal(f.state().phase, 'COST_PROBE_CURSOR_DONE'); assert.equal(f.state().ledgerHold, 2);
+  assert.equal(f.calls.reviews.length, 0);
+});
+
+test('unknown lightweight GitHub head never authorizes a no-artifact failure or hold release', async () => {
+  for (const result of [undefined, null, '', 'not-a-sha', {}, new Error('GitHub unavailable')]) {
+    const f = await terminalProbeFixture(); f.args.now += 16 * 60 * 1000;
+    f.args.readHead = async () => { if (result instanceof Error) throw result; return result; };
+    const saves = f.calls.saves, reservations = f.calls.reservations.length;
+    await assert.rejects(runCostProbe(f.args), /COST_PROBE_HEAD|GitHub unavailable/);
+    assert.equal(f.calls.saves, saves); assert.equal(f.calls.reservations.length, reservations);
+    assert.equal(f.state().ledgerHold, 2); assert.equal(f.calls.reviews.length, 0);
+  }
+});
+
+test('probe head movement between lightweight read and full snapshot fails before reservation', async () => {
+  const f = await terminalProbeFixture(); f.finish();
+  f.snapshot.repair.commits[0].commit.message = `probe\nSkillCheck-Cost-Probe: ${f.state().operationMarker}`;
+  f.args.readHead = async () => 'd'.repeat(40);
+  const saves = f.calls.saves;
+  await assert.rejects(runCostProbe(f.args), /COST_PROBE_TARGET_MOVED/);
+  assert.equal(f.calls.saves, saves); assert.equal(f.state().ledgerHold, 2);
+  assert.equal(f.calls.reviews.length, 0);
+  f.args.readHead = async () => C;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_DONE');
+  assert.equal(f.calls.reviews.length, 1); assert.equal(f.calls.runs.length, 1);
+});
+
+test('no-artifact timeout with provider outage cannot release holds after a failed CAS', async () => {
+  const f = await terminalProbeFixture(); f.args.now += 16 * 60 * 1000;
+  f.args.readSnapshot = async () => { throw new Error('provider must not be read'); };
+  const store = f.args.store, reservations = f.calls.reservations.length;
+  f.args.store = { read: store.read, async save() { throw new Error('CAS failure'); } };
+  await assert.rejects(runCostProbe(f.args), /CAS failure/);
+  assert.equal(f.state().ledgerHold, 2); assert.equal(f.calls.reservations.length, reservations);
+  f.args.store = store;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+});
+
+test('lightweight terminal-probe head check is required and cannot replace full provenance', async () => {
+  const f = await terminalProbeFixture();
+  delete f.args.readHead;
+  await assert.rejects(runCostProbe(f.args), /COST_PROBE_UNWIRED/);
+  f.args.readHead = async () => f.snapshot.pull.head.sha; f.finish();
+  f.snapshot.repair.commits[0].commit.message = `probe\nSkillCheck-Cost-Probe: ${f.state().operationMarker}`;
+  f.snapshot.repair.commits[0].commit.verification.verified = false;
+  await assert.rejects(runCostProbe(f.args), /COST_PROBE_PROVENANCE/);
+  assert.equal(f.state().ledgerHold, 2); assert.equal(f.calls.reviews.length, 0);
 });

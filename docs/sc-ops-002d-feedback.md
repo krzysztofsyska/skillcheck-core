@@ -464,3 +464,15 @@ findings on 8f6f012: delayed head visibility, eventual provenance, durable deadl
 failed CAS, unavailable run API, legacy/invalid clock data and full-ledger timeout.
 The existing failed-run test still checks immediate ERROR rejection; successful
 FINISHED propagation is covered separately rather than weakening that safeguard.
+
+### Local no-artifact completion without a second provider dependency
+
+After terminal completion is durably recorded, the no-artifact grace is checked
+using the lightweight GitHub head read before any provider snapshot. Thus a
+Cursor outage cannot prevent recording NO_ARTIFACT on a known unchanged head.
+Failed or malformed GitHub evidence still leaves the hold intact. A changed
+head always needs the full binding, latest-run and signed allowlisted commit
+proof, and must match the preliminary head before a review is reserved. The
+post-reservation recheck remains in place. Seven regressions cover the outage,
+grace, malformed evidence, moving head, provenance, missing wiring and failed
+CAS. This is local failure accounting, not an approval or a new paid action.
