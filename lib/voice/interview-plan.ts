@@ -72,6 +72,10 @@ const gapQuestionText = Object.freeze({
 export const SC012_PROHIBITED_TOPICS = Object.freeze([
   "stan zdrowia", "religia", "poglądy polityczne", "życie prywatne",
 ] as const);
+/** Required static global instruction; keep provider policy tied to the same closed set. */
+export const SC012_PROHIBITED_TOPICS_INSTRUCTION =
+  "Nie zadawaj pytań ani dopytań dotyczących następujących tematów: " +
+  SC012_PROHIBITED_TOPICS.join("; ") + ".";
 export const SC012_INTRODUCTION_VERSION = "notice-pl-202610" as const;
 const planQuestionKeys = Object.freeze([
   "id", "kind", "criterionId", "criterionKind", "text", "followUps", "maxSeconds",

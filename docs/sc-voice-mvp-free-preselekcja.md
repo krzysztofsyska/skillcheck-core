@@ -42,8 +42,8 @@ Data: 2026-10-13. Cel: jeden wspólny voicebot SkillCheck dostępny dla obu plan
 5. Preview-only test z fikcyjną rekrutacją i kontrolowanym testowym numerem po osobnej zgodzie właściciela na koszt oraz potencjalne połączenie; następnie osobno Production.
 6. Zatwierdzenie finalnych parametrów FREE i PRESELEKCJA (pule rozmów, cena) — nie wpisywać ich sztywno w frontend.
 
-## Jeden końcowy odbiór
-Nie wymagać od właściciela osobnej akceptacji każdej funkcji. Zbiorczy raport końcowy zawiera stan SC-010–013 + Voice MVP, dokładne PR/SHA, zielone CI, niezależny PASS, syntetyczny E2E, braki do podłączenia Retell/VoIPstudio/GoTrunk i jeden checkpoint OWNER ACCEPTANCE. Dopiero po tej decyzji merge. Osobny checkpoint PRODUCTION oraz zgoda na koszty/połączenia pozostają obowiązkowe. Nie uruchamiać automatycznych połączeń i nie używać rzeczywistych danych kandydatów.
+## Zbiorczy raport i dalsza integracja
+Nie wymagać od właściciela osobnej akceptacji każdej funkcji. Zbiorczy raport końcowy zawiera stan SC-010–013 + Voice MVP, dokładne PR/SHA, zielone CI, niezależny PASS, syntetyczny E2E i braki do podłączenia Retell/VoIPstudio/GoTrunk. Zgodnie z aktualnym `AGENTS.md` scalenie do `integration` następuje po CI i niezależnym review bieżącego commitu oraz przejściu bramek bezpieczeństwa i gałęzi, bez rutynowego checkpointu OWNER ACCEPTANCE. Osobny checkpoint PRODUCTION oraz zgoda na koszty/połączenia pozostają obowiązkowe. Nie uruchamiać automatycznych połączeń i nie używać rzeczywistych danych kandydatów.
 
 ## Testy
 `node --test tests/voice-mvp-package-gate.test.mjs tests/retell-outbound-draft.test.mjs tests/voice-provider.test.mjs tests/voice-interview-plan.test.mjs`.
@@ -100,9 +100,34 @@ Nie utożsamiać oznaczenia GitHub `outdated` z rozwiązaniem problemu.
 | 4270437576, 4274194107, 4283734518 | Porównanie firmy, aplikacji, fingerprintu i docelowego numeru jest już zaimplementowane i przetestowane. Snapshot kontaktu nadal nie jest uwierzytelnioną zdolnością DB; jego źródło wymaga przyszłego SC-010. |
 | 4283734498, 4283734531 | Kanoniczna lista tematów i numeryczna wersja są już używane. Pozostałą lukę zmiennych znacznika obejmuje obecna poprawka. |
 | 4294799177, 4294799184 | Transport jest obowiązkowo wstrzykiwany, a testy używają aktualnego API; brak domyślnego live fetch. |
-| **4266690401 — P1** | **Nadal niezamknięte:** weryfikator nie wymaga `enable_dnc_detection: true`; sprawdzanie istniejącej blokady DNC nie gwarantuje rozpoznania nowego żądania przerwania rozmowy. |
-| **4266690408 — P1** | **Nadal niezamknięte:** żądanie musi mieć pełną listę zabronionych tematów, ale globalny prompt jest sprawdzany tylko pod kątem zdrowia/danych szczególnych. Brakuje wymuszenia całej polityki SC-012 w konfiguracji dostawcy. |
+| **4266690401 — P1** | Poprawione 2026-10-17: przypięty agent musi mieć literalne `enable_dnc_detection: true`; brak pola, `false`, wartości zastępcze i ustawienie w innym miejscu są odrzucane przed wydaniem dowodu. Szkic zachowuje również `honor_internal_dnc: true`. |
+| **4266690408 — P1** | Poprawione 2026-10-17: globalny prompt musi zawierać pełną instrukcję zakazu pytań i dopytań, wyprowadzoną z kanonicznej listy SC-012. Dotychczasowy zakaz pytań o dane medyczne i szczególne pozostaje wymagany. |
 
-Dwie ostatnie uwagi wymagają osobnych, wąskich poprawek i regresji przed odbiorem
-całego PR. Ta zmiana zamyka wskazaną lukę znacznika, nie stanowi zgody na scalenie,
-płatne usługi, połączenia, SIP ani Production.
+### DNC i pełna polityka SC-012 (2026-10-17)
+
+`verifyRetellOutboundAgent` wymaga `enable_dnc_detection === true` w kompletnej,
+niezależnie przypiętej odpowiedzi agenta. Według [kontraktu Retell](https://docs.retellai.com/api-references/get-agent)
+ta opcja włącza rozpoznanie prośby o zaprzestanie kontaktu, potwierdzenie oraz
+zakończenie rozmowy i oznaczenie numeru jako DNC po potwierdzeniu. Samo
+`honor_internal_dnc` dotyczy respektowania już istniejącej blokady. Oba ustawienia
+są wymagane; szkic nie dodaje osobnych override agenta.
+
+W `flow.global_prompt`, obok dotychczasowego zdania o zdrowiu/danych szczególnych,
+musi znaleźć się dosłowna instrukcja `SC012_PROHIBITED_TOPICS_INSTRUCTION`:
+
+```text
+Nie zadawaj pytań ani dopytań dotyczących następujących tematów: stan zdrowia; religia; poglądy polityczne; życie prywatne.
+```
+
+Instrukcja powstaje z tej samej zamkniętej listy, którą otrzymuje scenariusz SC-012.
+Brak dowolnego tematu, sama lista nazw, odwrócenie zakazu lub umieszczenie polityki
+wyłącznie w węźle, metadanych albo zmiennej domyślnej nie wystarczają. Regresje
+ponownie obliczają oba zatwierdzone hashe dla niepoprawnych konfiguracji, więc
+sprawdzają obowiązkowe warunki, a nie tylko wykrywanie zmiany skrótu.
+
+Wcześniejszy agent bez DNC i flow z samym zakazem pytań o zdrowie muszą przejść
+ponowny przegląd konfiguracji i otrzymać nowe zatwierdzone hashe. Testy są
+syntetyczne: potwierdzają obecność wymaganej konfiguracji oraz odmowę jej braku,
+bez oceny skuteczności detektora DNC lub odpowiedzi modelu w rzeczywistej rozmowie.
+Scalenie z aktualnym `integration` zachowuje wszystkie poprzednie testy i poprawki
+wersjonowania, izolacji zmiennych, kontaktu i obowiązkowego transportu offline.

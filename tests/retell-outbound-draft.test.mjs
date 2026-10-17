@@ -57,14 +57,17 @@ const request = p => ({
 });
 
 const flowId = "conversation_flow_abcdefghijklmnop";
+// Independent fixture of the approved wording, including all four SC-012 topics.
+const sc012Guardrail = "Nie zadawaj pytań ani dopytań dotyczących następujących tematów: stan zdrowia; religia; poglądy polityczne; życie prywatne.";
 const flow = {
   conversation_flow_id: flowId, version: 3,
-  global_prompt: "Read the approved notice {{skillcheck_notice_version}}. Ask {{skillcheck_interview_script}}. Never ask about health, medical information or special-category personal data.",
+  global_prompt: "Read the approved notice {{skillcheck_notice_version}}. Ask {{skillcheck_interview_script}}. Never ask about health, medical information or special-category personal data. " + sc012Guardrail,
 };
 
 const agent = {
   agent_id: testAgentId, version: 2, is_published: true,
   assigned_tags: ["skillcheck_mvp"],
+  enable_dnc_detection: true,
   data_storage_setting: "basic_attributes_only",
   data_storage_retention_days: 14,
   max_call_duration_ms: 480000,
@@ -121,6 +124,45 @@ const interviewFlow = () => ({...flow,
       edges:[{id:"finished",destination_node_id:"end",transition_condition:{type:"prompt",prompt:"Interview complete"}}]},
     {id:"end",type:"end",instruction:{type:"static_text",text:"Dziękujemy za rozmowę."}},
   ], tools:[], components:[], mcps:[], knowledge_base_ids:[],
+});
+
+test("SC-011-C requires literal in-call DNC detection even on an independently pinned agent", async () => {
+  for (const enable_dnc_detection of [undefined, false, null, "true", "false", 1, 0, [], {}]) {
+    const a={...agent,enable_dnc_detection};
+    let calls=0;
+    await rejectedGate(verifyRetellOutboundAgent(pin(a), "synthetic-test-api-key-123456",
+      async (...args) => { calls++; return http(a)(...args); }));
+    assert.equal(calls,1); // Fail before the flow GET; no proof can reach the compiler.
+  }
+  const a={...agent,enable_dnc_detection:undefined,
+    agent_override:{agent:{enable_dnc_detection:true}},enableDncDetection:true};
+  const f={...flow,enable_dnc_detection:true};
+  await rejectedGate(verify(pin(a,f),a,f));
+});
+
+test("SC-011-C requires the full SC-012 prohibition in the reviewed global prompt", async () => {
+  for (const replacement of [
+    "", // The formerly accepted health-only prompt.
+    ...SC012_PROHIBITED_TOPICS.map(topic => sc012Guardrail.replace(topic,"")),
+    SC012_PROHIBITED_TOPICS.join("; "), // Topic names alone are not an instruction.
+    sc012Guardrail.replace("Nie zadawaj pytań ani dopytań", "Zadawaj pytania i dopytania"),
+  ]) {
+    const f={...flow,global_prompt:flow.global_prompt.replace(sc012Guardrail,replacement)};
+    await rejectedGate(verify(pin(agent,f),agent,f));
+  }
+});
+
+test("SC-011-C rejects SC-012 policy placed only outside the global prompt", async () => {
+  const global_prompt=flow.global_prompt.replace(sc012Guardrail,"");
+  for (const change of [
+    {nodes:[{id:"interview",type:"conversation",instruction:{type:"prompt",text:sc012Guardrail}}]},
+    {default_dynamic_variables:{skillcheck_interview_script:sc012Guardrail}},
+    {description:sc012Guardrail},
+  ]) {
+    const f={...flow,global_prompt,...change};
+    const a={...agent,agent_name:sc012Guardrail};
+    await rejectedGate(verify(pin(a,f),a,f));
+  }
 });
 
 test("SC-011-C rejects tag-dependent variables even in an independently pinned flow", async () => {

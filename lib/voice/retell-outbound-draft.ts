@@ -7,7 +7,10 @@
  */
 import { createHash } from "node:crypto";
 import { canonicalVoiceCallRequest, type VoiceCallRequest } from "./provider.ts";
-import { isAuthenticallyReleasedInterviewPlan, releasedApplicationBinding, prohibitedTopicsAreCanonical, type InterviewPlan } from "./interview-plan.ts";
+import {
+  isAuthenticallyReleasedInterviewPlan, releasedApplicationBinding, prohibitedTopicsAreCanonical,
+  SC012_PROHIBITED_TOPICS_INSTRUCTION, type InterviewPlan,
+} from "./interview-plan.ts";
 import { scenarioApplicationBinding } from "./mvp-package-gate.ts";
 
 export type RetellOutboundConfig = Readonly<{
@@ -235,6 +238,8 @@ export async function verifyRetellOutboundAgent(
   if (a.agent_id !== c.agentId || a.version !== c.agentVersion ||
     a.is_published !== true ||
     !Array.isArray(a.assigned_tags) || !a.assigned_tags.includes(c.agentVersionTag) ||
+    // Existing DNC blocks and a new in-call stop-contact request are separate controls.
+    a.enable_dnc_detection !== true ||
     a.data_storage_setting !== "basic_attributes_only" ||
     !Number.isInteger(a.data_storage_retention_days) ||
     (a.data_storage_retention_days as number) < 1 ||
@@ -281,7 +286,8 @@ export async function verifyRetellOutboundAgent(
   if (typeof globalPrompt !== "string" ||
       !globalPrompt.includes("{{skillcheck_interview_script}}") ||
       !globalPrompt.includes("{{skillcheck_notice_version}}") ||
-      !globalPrompt.includes(policyGuardrail))
+      !globalPrompt.includes(policyGuardrail) ||
+      !globalPrompt.includes(SC012_PROHIBITED_TOPICS_INSTRUCTION))
     return reject();
 
   const proof: RetellVerifiedAgent = Object.freeze({
