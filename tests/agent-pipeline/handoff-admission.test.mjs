@@ -1150,3 +1150,20 @@ function review(fields) {
     },
   });
 }
+
+
+test('a cancelled task cannot obtain merge readiness from a later clean PASS', () => {
+  const req = apply(emptyLedger(), request({ pr: 808, task_id: 'REVOKED' }));
+  const cancelled = apply(req.ledger, snapshot({
+    event: 'admission_cancelled', pr: 808, head_sha: HEAD,
+    adapter: {
+      source: 'trusted_adapter', kind: 'cancelled', pr: 808, task_id: 'REVOKED',
+      agent_id: agentFor('REVOKED'), cancelled: true, executor: 'cursor', head_sha: HEAD,
+    },
+  }));
+  assert.equal(cancelled.outcome.status, 'CANCELLED');
+  assert.equal(cancelled.ledger.slots['808'].phase, 'CANCELLED');
+  const late = apply(cancelled.ledger, review({ pr: 808, task_id: 'REVOKED' }));
+  assert.notEqual(late.outcome.status, 'READY_TO_MERGE');
+  assert.equal(late.outcome.stage.blocker, 'BLOCKED_NO_COMMIT');
+});

@@ -144,7 +144,10 @@ function selectCodexReview(reviews, headSha, reviewId) {
     && !Number.isNaN(Date.parse(review.submitted_at)));
   const requested = rows.find(review => review.id === reviewId);
   if (!requested) return { review: null, reason: 'missing' };
-  const structural = rows.filter(review => ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(String(review.state ?? '').toUpperCase()));
+  // A newer COMMENTED review can contain inline P0/P1/P2 findings. A delayed
+  // APPROVED webhook must never certify the older state without reconciling it.
+  // Fail closed even if the caller has not supplied complete inline evidence.
+  const structural = rows.filter(review => ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED', 'COMMENTED'].includes(String(review.state ?? '').toUpperCase()));
   const requestedAt = Date.parse(requested.submitted_at);
   const others = structural.filter(review => review.id !== requested.id);
   if (others.some(review => Date.parse(review.submitted_at) === requestedAt)) {
@@ -287,7 +290,7 @@ function onReview(ledger, snapshot) {
 function reconcileSupersededReview(ledger, snapshot) {
   const newer = snapshot.newerDecision ?? {};
   const state = String(newer.state ?? '').toUpperCase();
-  if (state === 'CHANGES_REQUESTED' || state === 'DISMISSED') {
+  if (state === 'CHANGES_REQUESTED' || state === 'DISMISSED' || state === 'COMMENTED') {
     const effect = revokeSharedReadiness(
       ledger,
       String(snapshot.pull.number),
@@ -297,6 +300,9 @@ function reconcileSupersededReview(ledger, snapshot) {
       newer.submitted_at,
     );
     if (effect === 'unordered') return { status: 'BLOCKED_EVIDENCE' };
+    // COMMENTED is not an affirmative verdict. A newer one may carry findings
+    // whose inline evidence is delayed; never resurrect an older PASS.
+    if (state === 'COMMENTED') return { status: 'BLOCKED_EVIDENCE' };
     const revoked = Object.values(ledger.reservations ?? {}).find(row => row.pr === String(snapshot.pull.number) && row.revoked_review_id === newer.id);
     if (revoked) return { status: 'READINESS_REVOKED', handoff_id: revoked.handoff_id };
   }
@@ -310,6 +316,11 @@ function reserveHandoff(ledger, snapshot, findings) {
   if (existing) return mergeDuplicateFindings(existing, findings, ledger.attempts[pr] ?? 0);
   const used = ledger.attempts[pr] ?? 0;
   if (used >= HANDOFF_ATTEMPT_LIMIT) {
+    // An occupied slot receives additional findings without a fourth dispatch.
+    // Do not supersede its still-active reservation at the three-attempt limit.
+    if (ledger.slots?.[pr]?.occupied === true) {
+      return pendingFeedback(ledger, snapshot, findings, used);
+    }
     supersedeOpenReservations(ledger, pr);
     return { status: 'BLOCKED_LIMIT', attempt: used };
   }
@@ -619,7 +630,11 @@ function realignStructuralPull(ledger, pr, pull) {
   const invalid = !pull || pull.state !== 'open' || pull.draft === true || pull.base?.ref !== INTEGRATION_BRANCH
     || pull.head?.repo?.full_name !== REPOSITORY || pull.base?.repo?.full_name !== REPOSITORY
     || !isCommitSha(head) || !isCommitSha(base);
-  const rows = Object.values(ledger.reservations ?? {}).filter(row => String(row.pr) === String(pr) && (row.structural_review || row.status === 'READY_FOR_OWNER'));
+  // Retired reservations must never be realigned back into WAITING_REREVIEW.
+  const rows = Object.values(ledger.reservations ?? {}).filter(row =>
+    String(row.pr) === String(pr)
+    && !['SUPERSEDED', 'CANCELLED', 'BLOCKED_LIMIT'].includes(row.status)
+    && (row.structural_review || row.status === 'READY_FOR_OWNER'));
   if (rows.length === 0) return null;
   if (invalid) {
     for (const row of rows) {
@@ -873,8 +888,22 @@ function structuralRecord(expected, reviewRun, ciRun) {
   };
 }
 
+function uniqueLatestVerifyRun(matches) {
+  // Distinct first-attempt dispatches may share a request title after a CI
+  // retry. Never accept an arbitrary or oldest result: demand a uniquely
+  // newest GitHub timestamp and still verify run identity and its artifact.
+  if (!Array.isArray(matches) || matches.length < 2) return null;
+  const dated = matches.map(run => ({ run,
+    at: reviewInstant(run.created_at ?? run.run_started_at ?? run.updated_at) }));
+  if (dated.some(item => item.at == null)) return null;
+  const newest = Math.max(...dated.map(item => item.at));
+  const rows = dated.filter(item => item.at === newest);
+  return rows.length === 1 ? rows[0].run : null;
+}
+
 async function readStructuralCi(github, policy, expected) {
-  const run = await findRun(github, policy, 'verify', expected.request_id, null);
+  const run = await findRun(github, policy, 'verify', expected.request_id, null,
+    { choose: uniqueLatestVerifyRun });
   if (!run || run.run_attempt !== 1 || run.status !== 'completed' || run.head_sha !== expected.policy_sha) {
     return { status: 'BLOCKED_EVIDENCE' };
   }

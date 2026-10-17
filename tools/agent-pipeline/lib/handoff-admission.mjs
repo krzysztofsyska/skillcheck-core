@@ -868,9 +868,10 @@ function ownTaskReady(ledger, snapshot, adapter) {
   if ((ledger.queue ?? []).some(related)) return false;
   const slot = ledger.slots?.[pr] ?? Object.values(ledger.slots ?? {}).find(related);
   if (!slot) return true;
-  if (slot.occupied) return false;
-  if (slot.phase === 'COMPLETED') return slot.completed_head_sha === adapter.head_sha;
-  return true;
+  // A cancelled/unknown/incomplete slot is NOT completion evidence, even
+  // though it no longer consumes capacity. No PASS can resurrect that task.
+  if (slot.occupied || slot.phase !== 'COMPLETED') return false;
+  return slot.task_id === taskId && slot.completed_head_sha === adapter.head_sha;
 }
 
 function stagePartial(snapshot, adapter, fields) {

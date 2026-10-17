@@ -2538,3 +2538,69 @@ function zipStored(name, text) {
   end.writeUInt32LE(30 + nameBuf.length + file.length, 16);
   return Buffer.concat([local, nameBuf, file, central, nameBuf, end]);
 }
+
+
+test('the third occupied handoff retains pending feedback without consuming a fourth attempt', () => {
+  let ledger = emptyLedger();
+  for (const [index, head] of [SHA.one, SHA.two, SHA.three].entries()) {
+    ledger = apply(ledger, reviewSnapshot({
+      headSha: head, reviewId: 7100 + index,
+      threads: [thread(7100 + index, 7100 + index, head)],
+    })).ledger;
+    if (index < 2) ledger = apply(ledger, completeSlot(ledger, 126, [SHA.two, SHA.three][index])).ledger;
+  }
+  assert.equal(ledger.attempts['126'], 3);
+  assert.equal(ledger.slots['126'].occupied, true);
+  const later = apply(ledger, reviewSnapshot({
+    headSha: SHA.three, reviewId: 7199,
+    threads: [thread(7199, 7199, SHA.three)],
+  }));
+  assert.equal(later.outcome.status, 'PENDING_FEEDBACK');
+  assert.equal(later.ledger.attempts['126'], 3);
+  assert.equal(later.outcome.plan.cursor_handoff, null);
+  assert.equal(later.ledger.reservations[dedupKey('126', SHA.three, 7102)].status, 'HANDOFF_PLANNED');
+});
+
+test('retired structural reservations cannot be resurrected by a head/base update', async () => {
+  const policy = configuredReviewPolicy();
+  const { ledger, expected } = structuralLedger('ci-after');
+  const key = dedupKey('126', SHA.one, 5445420558);
+  ledger.reservations[key].status = 'SUPERSEDED';
+  const world = structuralWorld({ expected, policy, envelope: passEnvelope(expected, policy), pullHead: SHA.three });
+  const observed = await observeStructuralReview(ledger, 126, world.github, policy);
+  assert.equal(observed.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.equal(observed.ledger.reservations[key].status, 'SUPERSEDED');
+  assert.notEqual(observed.outcome.status, 'READY_FOR_OWNER');
+});
+
+test('a newer COMMENTED review prevents delayed older approval from restoring readiness', async () => {
+  const event = githubEvent({ reviewId: 8000, sha: SHA.two, state: 'approved' });
+  const github = {
+    async readCommit(sha) { return { sha, author: { ...CURSOR_ACTOR } }; },
+    async readPullReviews() {
+      return [
+        githubReview({ id: 8000, sha: SHA.two, state: 'APPROVED', at: '2026-10-15T12:00:00Z' }),
+        githubReview({ id: 8001, sha: SHA.two, state: 'COMMENTED', at: '2026-10-15T12:01:00Z' }),
+      ];
+    },
+  };
+  const later = await deliverGithubReview(emptyLedger(), event, findingThread(8001, SHA.two), github);
+  assert.equal(later.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(later.outcome.status, 'READY_FOR_OWNER');
+});
+
+test('a uniquely later verified CI run can replace a failed dispatch with the same request title', async () => {
+  const { ledger, expected } = structuralLedger('ci-after');
+  const policy = configuredReviewPolicy();
+  const latest = ciRun(expected, policy, { id: 910, conclusion: 'success', updated_at: '2026-10-15T13:20:00Z' });
+  const failed = ciRun(expected, policy, { id: 911, conclusion: 'failure', updated_at: '2026-10-15T13:05:00Z' });
+  const world = structuralWorld({ expected, policy, envelope: passEnvelope(expected, policy), ciRuns: [latest, failed] });
+  const reviewed = await observeStructuralReview(ledger, 126, world.github, policy);
+  assert.equal(reviewed.outcome.status, 'READY_FOR_OWNER');
+  const ambiguous = structuralWorld({
+    expected, policy, envelope: passEnvelope(expected, policy),
+    ciRuns: [latest, { ...failed, updated_at: latest.updated_at }],
+  });
+  const blocked = await observeStructuralReview(ledger, 126, ambiguous.github, policy);
+  assert.notEqual(blocked.outcome.status, 'READY_FOR_OWNER');
+});
