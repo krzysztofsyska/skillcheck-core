@@ -9,7 +9,7 @@ import {behaviorGuideDefinitions} from "../lib/behavior-guide.ts";
 import {canonicalVoiceSourceSnapshot} from "../lib/voice/plan-persistence-contract.ts";
 import {trustedVoiceTemplateDigest} from "../lib/voice/template-registry.ts";
 import {
-  reconstructTrustedVoiceSource,verifyStoredVoicePlanWithinTransaction,
+  reconstructTrustedVoiceSource,verifyStoredVoicePlan,verifyStoredVoicePlanWithinTransaction,
   rehydrateCurrentReleasedVoicePlanWithinTransaction,TrustedSourceError,
 } from "../lib/voice/trusted-source-verifier.ts";
 import {isAuthenticallyReleasedInterviewPlan,releasedApplicationBinding} from "../lib/voice/interview-plan.ts";
@@ -58,17 +58,18 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
  const selector={companyId:f.companyId,applicationId:f.application.id,
    analysisId:f.analysis_id,reviewId:f.reviewId,shortlistEntryId:shortlist};
  const canonical=await reconstructTrustedVoiceSource(db,selector);
- const plan=(await db.query([
+ const persistPlan=async(subject,shortlistId,source,deadline="2030-01-01T00:00:00Z")=>(await db.query([
   "insert into public.voice_plan_versions",
   "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
   "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
   "template_version,created_by,retention_policy_version,retention_deadline)",
   "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
-  "'skillcheck-voice-plan-v1',$12,'synthetic-v1','2030-01-01') returning id"
- ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
-  f.analysis_id,f.reviewId,shortlist,canonical.sourceHash,canonical.planContractHash,
-  JSON.stringify(canonicalVoiceSourceSnapshot(canonical.sourceBinding,canonical.planSourceFingerprint)),
-  JSON.stringify(canonical),users.owner])).rows[0].id;
+  "'skillcheck-voice-plan-v1',$12,'synthetic-v1',$13::timestamptz) returning id"
+ ].join(" "),[subject.companyId,subject.recruitment.id,subject.application.id,subject.position.id,
+  subject.analysis_id,subject.reviewId,shortlistId,source.sourceHash,source.planContractHash,
+  JSON.stringify(canonicalVoiceSourceSnapshot(source.sourceBinding,source.planSourceFingerprint)),
+  JSON.stringify(source),users.owner,deadline])).rows[0].id;
+ const plan=await persistPlan(f,shortlist,canonical);
  observer=new Client(config(dbName));await observer.connect();
  await observer.query("set lock_timeout='100ms'");
  await db.query("create table public.sc012b_atomic_tx_markers(id uuid primary key)");
@@ -198,6 +199,183 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
    await db.query("begin");
    try{return await work();}finally{await db.query("rollback");}
  };
+ const freshPlan=async(retentionSeconds=3600)=>{
+  const subject=await h.completedApplication(await h.candidate(f),
+    ["insufficient_data","meets","below","meets","above"]);
+  await h.asUser(users.owner);
+  const shortlistId=await h.add(subject);
+  await h.asAdmin();
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
+  const selection={companyId:subject.companyId,applicationId:subject.application.id,
+    analysisId:subject.analysis_id,reviewId:subject.reviewId,shortlistEntryId:shortlistId};
+  const source=await reconstructTrustedVoiceSource(db,selection);
+  const deadline=(await db.query(
+    "select clock_timestamp()+$1::double precision*interval '1 second' as deadline",
+    [retentionSeconds])).rows[0].deadline;
+  const id=await persistPlan(subject,shortlistId,source,deadline);
+  return {subject,selection,source,plan:id,deadline,reviewArgs:{planId:id,sourceHash:source.sourceHash,
+    expectedReviewVersion:0,decision:"approved",reason:null,requestKey:randomUUID()}};
+ };
+ const releaseInput=(s,reviewId)=>({planId:s.plan,sourceHash:s.source.sourceHash,approvedReviewId:reviewId,
+   expectedPointerVersion:null,expectedReleaseId:null,requestKey:randomUUID()});
+ const directReview=input=>db.query("select private.sc012b_review_plan($1,$2,$3,$4,$5,$6) as id",
+   [input.planId,input.expectedReviewVersion,input.sourceHash,input.decision,input.reason,input.requestKey]);
+ const directRelease=input=>db.query("select private.sc012b_release_plan($1,$2,$3,$4,$5,$6) as id",
+   [input.planId,input.approvedReviewId,input.sourceHash,input.expectedPointerVersion,input.expectedReleaseId,input.requestKey]);
+ const storedState=async(s,client=db)=>(await client.query([
+   "select (select count(*)::int from public.voice_plan_versions where application_id=$1) as plans,",
+   "(select count(*)::int from private.voice_plan_review_entries where plan_id=$2) as reviews,",
+   "(select count(*)::int from private.voice_plan_release_entries where plan_id=$2) as releases,",
+   "(select count(*)::int from private.voice_plan_request_keys where company_id=$3) as request_keys,",
+   "(select coalesce(jsonb_agg(to_jsonb(p)),'[]'::jsonb) from private.voice_plan_current_releases p",
+   "where p.application_id=$1) as pointers",
+ ].join(" "),[s.subject.application.id,s.plan,s.subject.companyId])).rows[0];
+ const waitPast=async deadline=>observer.query(
+   "select pg_sleep(greatest(0,extract(epoch from ($1::timestamptz-clock_timestamp())))+0.05)",[deadline]);
+ const shortApproval=async(s,seconds)=>(await db.query([
+   "insert into private.voice_plan_review_entries",
+   "(company_id,application_id,plan_id,review_version,reviewer_id,decision,source_hash,retention_policy_version,retention_deadline)",
+   "select company_id,application_id,id,1,$2,'approved',source_hash,retention_policy_version,",
+   "clock_timestamp()+$3::double precision*interval '1 second'",
+   "from public.voice_plan_versions where id=$1 returning id,retention_deadline",
+ ].join(" "),[s.plan,users.owner,seconds])).rows[0];
+ await t.test("expired plans reject verification and new writes while historical replay only returns IDs",async()=>{
+  const s=await freshPlan(5),approved=await atomicReviewVoicePlan(db,s.reviewArgs);
+  const expiredRelease=releaseInput(s,approved);
+  const historical=await freshPlan(5),historicalReview=await atomicReviewVoicePlan(db,historical.reviewArgs);
+  const historicalReleaseArgs=releaseInput(historical,historicalReview);
+  const historicalRelease=await atomicReleaseVoicePlan(db,historicalReleaseArgs);
+  await db.query("delete from private.voice_plan_current_releases where application_id=$1",
+    [historical.subject.application.id]);
+  await waitPast(historical.deadline);
+  const before=await storedState(s),historyBefore=await storedState(historical);
+  assert.equal(before.reviews,1);assert.equal(before.releases,0);assert.deepEqual(before.pointers,[]);
+  assert.equal(historyBefore.releases,1);assert.deepEqual(historyBefore.pointers,[]);
+  assert.equal((await reconstructTrustedVoiceSource(db,s.selection)).sourceHash,s.source.sourceHash);
+  await assert.rejects(verifyStoredVoicePlan(db,s.plan),e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  const nextReview={...s.reviewArgs,expectedReviewVersion:1,requestKey:randomUUID()};
+  for(const run of [
+    ()=>atomicReviewVoicePlan(db,nextReview),()=>atomicReleaseVoicePlan(db,expiredRelease),
+    ()=>directReview(nextReview),()=>directRelease(expiredRelease),
+  ]){
+   await assert.rejects(run(),e=>e.code==="PT409");
+   assert.deepEqual(await storedState(s),before,"no review/release/key/pointer change after expired-plan refusal");
+  }
+  assert.equal(await atomicReviewVoicePlan(db,s.reviewArgs),approved);
+  assert.equal(await atomicReviewVoicePlan(db,historical.reviewArgs),historicalReview);
+  assert.equal(await atomicReleaseVoicePlan(db,historicalReleaseArgs),historicalRelease);
+  assert.equal((await directReview(historical.reviewArgs)).rows[0].id,historicalReview);
+  assert.equal((await directRelease(historicalReleaseArgs)).rows[0].id,historicalRelease);
+  assert.deepEqual(await storedState(s),before);
+  assert.deepEqual(await storedState(historical),historyBefore,
+    "an expired historical replay cannot republish the removed pointer or append history");
+ });
+ await t.test("a hired completed application denies new review/release authority and preserves history",async()=>{
+  const s=await freshPlan(),approved=await atomicReviewVoicePlan(db,s.reviewArgs);
+  const releaseArgs=releaseInput(s,approved);
+  await db.query("update public.applications set status='hired' where id=$1",[s.subject.application.id]);
+  const state=(await db.query(
+    "select ap.status,a.execution_status from public.applications ap join public.screening_analysis_versions a on a.application_id=ap.id where a.id=$1",
+    [s.subject.analysis_id])).rows[0];
+  assert.deepEqual(state,{status:"hired",execution_status:"completed"});
+  const before=await storedState(s);
+  assert.equal(before.reviews,1);assert.equal(before.releases,0);assert.deepEqual(before.pointers,[]);
+  await assert.rejects(reconstructTrustedVoiceSource(db,s.selection),e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await assert.rejects(verifyStoredVoicePlan(db,s.plan),e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  const nextReview={...s.reviewArgs,expectedReviewVersion:1,requestKey:randomUUID()};
+  for(const run of [
+    ()=>atomicReviewVoicePlan(db,nextReview),()=>atomicReleaseVoicePlan(db,releaseArgs),
+    ()=>directReview(nextReview),()=>directRelease(releaseArgs),
+  ]){
+   await assert.rejects(run(),e=>e.code==="PT409"&&e.message==="VOICE_PLAN_SOURCE_STALE");
+   assert.deepEqual(await storedState(s),before);
+  }
+  assert.equal(await atomicReviewVoicePlan(db,s.reviewArgs),approved);
+  assert.equal((await directReview(s.reviewArgs)).rows[0].id,approved);
+  assert.deepEqual(await storedState(s),before);
+ });
+ await t.test("an unexpired plan cannot release through an expired exact human approval",async()=>{
+  const s=await freshPlan();
+  // Independent retention on immutable historical approval is an input the
+  // release RPC must check even while the plan's own deadline remains valid.
+  const approval=await shortApproval(s,1);
+  await waitPast(approval.retention_deadline);
+  assert.equal((await verifyStoredVoicePlan(db,s.plan)).sourceHash,s.source.sourceHash);
+  const before=await storedState(s),args=releaseInput(s,approval.id);
+  for(const run of [()=>atomicReleaseVoicePlan(db,args),()=>directRelease(args)]){
+   await assert.rejects(run(),e=>e.code==="PT409"&&e.message==="VOICE_PLAN_REVIEW_STALE");
+   assert.deepEqual(await storedState(s),before);
+  }
+ });
+ for(const operation of ["review","release"])await t.test(
+   operation+" rejects a plan expiring after successful JS verification and before its RPC",async()=>{
+    const s=await freshPlan(5);
+    const args=operation==="review"?s.reviewArgs:releaseInput(s,await atomicReviewVoicePlan(db,s.reviewArgs));
+    const before=await storedState(s);
+    let reachedRpc=0;
+    const delayed={query:async(sql,params)=>{
+     if(sql.startsWith("select private.sc012b_"+operation+"_plan(")){
+      reachedRpc++;
+      assert.equal((await db.query(
+        "select retention_deadline>clock_timestamp() as valid from public.voice_plan_versions where id=$1",
+        [s.plan])).rows[0].valid,true,"JS verification completed while the plan was valid");
+      await waitPast(s.deadline);
+      const clock=(await db.query([
+        "select retention_deadline<=clock_timestamp() as expired,retention_deadline>now() as valid_at_begin",
+        "from public.voice_plan_versions where id=$1",
+      ].join(" "),[s.plan])).rows[0];
+      assert.deepEqual(clock,{expired:true,valid_at_begin:true},"transaction time must not authorize an expired write");
+     }
+     return db.query(sql,params);
+    }};
+    await assert.rejects(operation==="review"?atomicReviewVoicePlan(delayed,args):atomicReleaseVoicePlan(delayed,args),
+      e=>e.code==="PT409"&&e.message==="VOICE_PLAN_STALE");
+    assert.equal(reachedRpc,1,"the real isolated RPC handled the expired authority");
+    assert.deepEqual(await storedState(s),before,"delayed expiry leaves no history, key or pointer mutation");
+   });
+ for(const [operation,expiring] of [["review","plan"],["release","plan"],["release","approval"]])
+  await t.test(operation+" rolls back a successful RPC when "+expiring+" expires only before COMMIT",async()=>{
+   const s=await freshPlan(expiring==="plan"?5:3600);
+   let deadline=s.deadline,approved;
+   if(operation==="release"){
+    if(expiring==="approval"){
+     const approval=await shortApproval(s,5);
+     approved=approval.id;deadline=approval.retention_deadline;
+    }else approved=await atomicReviewVoicePlan(db,s.reviewArgs);
+   }
+   const args=operation==="review"?s.reviewArgs:releaseInput(s,approved);
+   const before=await storedState(s);
+   let rpcId,commitAttempts=0;
+   const delayed={query:async(sql,params)=>{
+    if(sql==="commit"){
+     commitAttempts++;
+     assert.match(rpcId,/^[a-f0-9-]{36}$/,"the real RPC completed successfully before the pause");
+     const pending=await storedState(s);
+     assert.equal(pending.reviews,before.reviews+(operation==="review"?1:0));
+     assert.equal(pending.releases,before.releases+(operation==="release"?1:0));
+     assert.equal(pending.request_keys,before.request_keys+1);
+     if(operation==="release"){
+      assert.equal(pending.pointers.length,1);
+      assert.equal(pending.pointers[0].release_entry_id,rpcId);
+     }else assert.deepEqual(pending.pointers,before.pointers);
+     assert.deepEqual(await storedState(s,observer),before,"the successful RPC is still uncommitted");
+     assert.equal((await db.query("select $1::timestamptz>clock_timestamp() as valid",[deadline])).rows[0].valid,true);
+     await waitPast(deadline);
+     const clock=(await db.query(
+       "select $1::timestamptz<=clock_timestamp() as expired,$1::timestamptz>now() as valid_at_begin",
+       [deadline])).rows[0];
+     assert.deepEqual(clock,{expired:true,valid_at_begin:true});
+    }
+    const result=await db.query(sql,params);
+    if(sql.startsWith("select private.sc012b_"+operation+"_plan("))rpcId=result.rows[0].id;
+    return result;
+   }};
+   await assert.rejects(operation==="review"?atomicReviewVoicePlan(delayed,args):atomicReleaseVoicePlan(delayed,args),
+     e=>e.code==="PT409"&&e.message==="VOICE_PLAN_STALE_AT_COMMIT");
+   assert.equal(commitAttempts,1,"the rejection came from the deferred guard inside COMMIT");
+   assert.deepEqual(await storedState(s),before,"COMMIT failure rolls back history, request key and pointer together");
+   assert.deepEqual(await storedState(s,observer),before);
+  });
  await t.test("WithinTransaction APIs preserve caller work and restore locks across a failed check",async()=>{
   const id=randomUUID();
   await withRollback(async()=>{

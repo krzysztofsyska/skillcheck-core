@@ -66,17 +66,19 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
  assert.ok(expected.questions.every(q=>!q.text.includes("PRIVATE")));
  const sourceSnapshot=canonicalVoiceSourceSnapshot(
    expected.sourceBinding,expected.planSourceFingerprint);
- const insertPlan=async snapshot=>{
+ const insertPlan=async(snapshot,{
+   subject=f,source=expected,shortlistId=shortlist,retentionDeadline="2030-01-01T00:00:00Z",
+ }={})=>{
   const row=await db.query([
    "insert into public.voice_plan_versions",
    "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
    "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
    "template_version,created_by,retention_policy_version,retention_deadline)",
    "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
-   "'skillcheck-voice-plan-v1',$12,'synthetic-v1','2030-01-01') returning id"
-  ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
-   f.analysis_id,f.reviewId,shortlist,expected.sourceHash,expected.planContractHash,
-   JSON.stringify(snapshot),JSON.stringify(expected),users.owner]);
+   "'skillcheck-voice-plan-v1',$12,'synthetic-v1',$13::timestamptz) returning id"
+  ].join(" "),[subject.companyId,subject.recruitment.id,subject.application.id,subject.position.id,
+   subject.analysis_id,subject.reviewId,shortlistId,source.sourceHash,source.planContractHash,
+   JSON.stringify(snapshot),JSON.stringify(source),users.owner,retentionDeadline]);
   return row.rows[0].id;
  };
  const replacePlan=async()=>{
@@ -93,6 +95,16 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
   const leaked=await insertPlan({...sourceSnapshot,cvText:"PRIVATE original CV"});
   await assert.rejects(verifyStoredVoicePlan(db,leaked),
     e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await replacePlan();
+ });
+ await t.test("an expired canonical plan is stale even when its live source is unchanged",async()=>{
+  const expired=await insertPlan(sourceSnapshot,{retentionDeadline:"2000-01-01T00:00:00Z"});
+  assert.equal((await reconstructTrustedVoiceSource(db,selector)).sourceHash,expected.sourceHash);
+  await assert.rejects(verifyStoredVoicePlan(db,expired),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  assert.equal((await db.query(
+    "select count(*)::int as n from public.voice_plan_versions where id=$1",[expired])).rows[0].n,1,
+    "expired history remains stored without granting current verification");
   await replacePlan();
  });
  const plan=await insertPlan(sourceSnapshot);
@@ -302,6 +314,30 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
  await t.test("position revision invalidates the saved plan",async()=>{
   await db.query("update public.positions set title='New analyst role' where id=$1",[f.position.id]);
   await assert.rejects(verifyStoredVoicePlan(db,plan),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+ });
+ await t.test("a completed in-progress application stops granting source authority when hired",async()=>{
+  const candidate=await h.candidate(f);
+  await db.query("update public.applications set status='in_progress' where id=$1",[candidate.application.id]);
+  const hired=await h.completedApplication(candidate,["insufficient_data","meets","below","meets","above"]);
+  await h.asUser(users.owner);
+  const shortlistId=await h.add(hired);
+  await h.asAdmin();await setActor(users.owner);
+  const hiredSelector={companyId:hired.companyId,applicationId:hired.application.id,
+    analysisId:hired.analysis_id,reviewId:hired.reviewId,shortlistEntryId:shortlistId};
+  const source=await reconstructTrustedVoiceSource(db,hiredSelector);
+  const saved=await insertPlan(canonicalVoiceSourceSnapshot(source.sourceBinding,source.planSourceFingerprint),{
+    subject:hired,source,shortlistId,
+  });
+  assert.equal((await verifyStoredVoicePlan(db,saved)).sourceHash,source.sourceHash);
+  await db.query("update public.applications set status='hired' where id=$1",[hired.application.id]);
+  const state=(await db.query(
+    "select ap.status,a.execution_status from public.applications ap join public.screening_analysis_versions a on a.application_id=ap.id where a.id=$1",
+    [hired.analysis_id])).rows[0];
+  assert.deepEqual(state,{status:"hired",execution_status:"completed"});
+  await assert.rejects(reconstructTrustedVoiceSource(db,hiredSelector),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await assert.rejects(verifyStoredVoicePlan(db,saved),
     e=>e instanceof TrustedSourceError&&e.code==="STALE");
  });
 });

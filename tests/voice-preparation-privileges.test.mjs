@@ -19,6 +19,7 @@ const tableNames = Object.freeze([
 ]);
 const signatures = Object.freeze([
   'private.sc012b_review_plan(uuid,bigint,text,text,text,uuid)',
+  'private.sc012b_assert_fresh_write()',
   'private.sc012b_release_plan(uuid,uuid,text,bigint,uuid,uuid)',
   'private.sc012b_current_release(uuid)',
   'private.voice_interview_permission_protect_history()',

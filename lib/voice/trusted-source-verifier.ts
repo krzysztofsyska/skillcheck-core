@@ -150,7 +150,7 @@ async function reconstructLocked(
       "for share of ap,rec,pos,a,r,s nowait",
     ].join(" "),[s.companyId,s.applicationId,s.analysisId,s.reviewId,s.shortlistEntryId])).rows);
     if(h.candidate_id!==locked.candidateId)fail("STALE");
-    if(h.application_status==="withdrawn"||h.application_status==="rejected"||
+    if(!["new","in_progress"].includes(h.application_status)||
        h.recruitment_status!=="open"||h.position_status!=="active"||
        h.execution_status!=="completed"||h.stale_at!==null||h.removed_at!==null||
        !["approved","approved_with_changes"].includes(h.disposition)||
@@ -294,14 +294,14 @@ async function verifyStoredLocked(db:SqlClient,planId:string){
   id(planId);
     const p=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
-      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope",
+      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope,retention_deadline",
       "from public.voice_plan_versions where id=$1",
     ].join(" "),[planId])).rows);
     await lockVoiceApplicationWithinTransaction(db,p.company_id,p.application_id);
     const locked=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
-      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope",
-      "from public.voice_plan_versions where id=$1 for share nowait",
+      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope,retention_deadline",
+      "from public.voice_plan_versions where id=$1 and retention_deadline>clock_timestamp() for share nowait",
     ].join(" "),[planId])).rows);
     if(!isDeepStrictEqual(locked,p))fail("STALE");
     if(p.template_version!==ACTIVE_VOICE_TEMPLATE_VERSION)fail("TEMPLATE_CHANGED");

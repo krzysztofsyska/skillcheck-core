@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { plan } from '../../tools/agent-pipeline/lib/transitions.mjs';
-import { loadWorkFromClients, reconcile, reconcileFromEnv } from '../../tools/agent-pipeline/lib/reconcile.mjs';
+import { defaultPorts, loadWorkFromClients, reconcile, reconcileFromEnv } from '../../tools/agent-pipeline/lib/reconcile.mjs';
 import { contractBody, loadedPolicy, observation } from './helpers.mjs';
 import { configuredPolicy, protectionFixtures } from './http-world.mjs';
 import { protectionFromRulesets } from '../../tools/agent-pipeline/lib/protection.mjs';
@@ -66,6 +66,84 @@ test('missing configuration blocks effects before the controller', async () => {
   assert.deepEqual(result.effects, []);
   assert.equal(executed, 0);
   assert.equal(loaded, 0);
+});
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+}
+
+test('disabled reconciliation treats hidden bypass actors as unknown protection', async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/rulesets')) return jsonResponse([{ id: 1 }]);
+    if (path.endsWith('/rulesets/1')) return jsonResponse({ id: 1, enforcement: 'active', target: 'branch', rules: [{ type: 'deletion' }] });
+    throw new Error(`unexpected ${path}`);
+  };
+  try {
+    const ports = await defaultPorts(
+      { GITHUB_TOKEN: 'metadata-only', GITHUB_REPOSITORY: 'krzysztofsyska/skillcheck-core' },
+      { repository: 'krzysztofsyska/skillcheck-core', environments: {} },
+      { ok: true },
+      { enabled: false, mergeEnabled: false },
+    );
+    assert.equal(await ports.readProtection(), null);
+    await assert.rejects(ports.execute({ type: 'cursor.create' }), /effects are blocked/);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('work loading treats hidden bypass actors as unknown protection', async () => {
+  const { policy } = loadedPolicy();
+  const github = {
+    async readBranch(name) {
+      return { commit: { sha: name === 'main' ? 'd'.repeat(40) : 'c'.repeat(40) } };
+    },
+    async readIssues() {
+      return [{ number: 7, body: contractBody(), user: { id: policy.owner.id, login: policy.owner.login } }];
+    },
+    async readPulls() { return []; },
+    async readProjection() { return { tasks: {}, mergeLock: null, head: null }; },
+    async readProtection() { throw new Error('RULESET_BYPASS_UNVERIFIABLE'); },
+    async listWorkflowRuns() { return []; },
+    async listArtifacts() { return []; },
+    async readJobs() { return []; },
+    async readApprovals() { return []; },
+  };
+  const work = await loadWorkFromClients({
+    policy, now: '2026-10-06T12:00:00.000Z', secrets: { cursor: true, openai: false, githubApp: true }, github,
+  });
+  assert.equal(work.items[0].observation.github.protection, null);
+  github.readProtection = async () => { const error = new Error('boom'); error.status = 500; throw error; };
+  await assert.rejects(loadWorkFromClients({
+    policy, now: '2026-10-06T12:00:00.000Z', secrets: { cursor: true, openai: false, githubApp: true }, github,
+  }), /boom/);
+});
+
+test('live protection read still fails when bypass actors are hidden', async () => {
+  const { generateKeyPairSync } = await import('node:crypto');
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const previous = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/access_tokens')) {
+      const requested = JSON.parse(init.body);
+      return jsonResponse({ token: 'scoped', repository_selection: 'selected', repositories: [{ id: requested.repository_ids[0] }],
+        permissions: { metadata: 'read', ...requested.permissions } });
+    }
+    if (path.endsWith('/rulesets')) return jsonResponse([{ id: 1 }]);
+    if (path.endsWith('/rulesets/1')) return jsonResponse({ id: 1, enforcement: 'active', target: 'branch', rules: [{ type: 'deletion' }] });
+    throw new Error(`unexpected ${path}`);
+  };
+  try {
+    const ports = await defaultPorts({
+      GITHUB_REPOSITORY: 'krzysztofsyska/skillcheck-core',
+      AGENT_PIPELINE_APP_ID: '1', AGENT_PIPELINE_APP_INSTALLATION_ID: '2',
+      AGENT_PIPELINE_APP_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+      CURSOR_API_KEY: 'cursor',
+    }, { repository: 'krzysztofsyska/skillcheck-core', repository_id: 1043384454, environments: {}, cursor_api_base: 'https://api.cursor.com' },
+    { ok: true }, { enabled: true, mergeEnabled: false });
+    await assert.rejects(ports.readProtection(), /RULESET_BYPASS_UNVERIFIABLE/);
+  } finally { globalThis.fetch = previous; }
 });
 
 test('disabled flags invoke the controller and prevent effects', async () => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reconcileFromEnv } from '../../tools/agent-pipeline/lib/reconcile.mjs';
+import { reconcileFromEnv, defaultPorts } from '../../tools/agent-pipeline/lib/reconcile.mjs';
 import { createGitHubClient, protectionFromRulesets } from '../../tools/agent-pipeline/lib/github.mjs';
 import { evaluatePreflight, decideMerge } from '../../tools/agent-pipeline/lib/merge.mjs';
 import { createLiveJournal } from '../../tools/agent-pipeline/lib/live-journal.mjs';
@@ -8,6 +8,55 @@ import { parseContract } from '../../tools/agent-pipeline/lib/contract.mjs';
 import { validateReview } from '../../tools/agent-pipeline/lib/review.mjs';
 import { httpWorld, MAIN, configuredPolicy, protectionFixtures } from './http-world.mjs';
 import { contractBody } from './helpers.mjs';
+
+test('controller requests only repository-bound App token with Administration:read', async () => {
+  const w = httpWorld(), previous = globalThis.fetch;
+  globalThis.fetch = w.fetch;
+  try {
+    await defaultPorts(w.env, w.policy, {ok:true}, {enabled:true});
+    const tokenCalls = w.calls.filter(c => c.url.endsWith('/app/installations/9/access_tokens'));
+    assert.equal(tokenCalls.length, 1);
+    const request = tokenCalls[0].body;
+    assert.deepEqual(request.repository_ids, [w.policy.repository_id]);
+    assert.deepEqual(request.permissions, {
+      administration:'read', actions:'write', checks:'write', contents:'write',
+      issues:'write', pull_requests:'write',
+    });
+    assert.equal(w.calls.some(c => c.method === 'PUT' && c.url.includes('/merge')), false);
+  } finally { globalThis.fetch = previous; }
+});
+
+test('controller rejects elevated or multi-repo returned token before GitHub effects', async () => {
+  for (const invalid of ['admin_write', 'other_repository', 'missing_grants']) {
+    const w = httpWorld(), previous = globalThis.fetch, original = w.fetch;
+    let tokenCalls = 0;
+    globalThis.fetch = async (url, options = {}) => {
+      if (!String(url).endsWith('/app/installations/9/access_tokens')) return original(url, options);
+      tokenCalls++;
+      const requested = JSON.parse(options.body);
+      const permissions = {metadata:'read', ...requested.permissions};
+      if (invalid === 'admin_write') permissions.administration = 'write';
+      if (invalid === 'missing_grants') delete permissions.checks;
+      const repositories = invalid === 'other_repository'
+        ? [{id:w.policy.repository_id}, {id:w.policy.repository_id + 1}]
+        : [{id:w.policy.repository_id}];
+      return new Response(JSON.stringify({token:'synthetic-overprivileged-token',
+        repository_selection:'selected', repositories, permissions}),
+        {status:200,headers:{'content-type':'application/json'}});
+    };
+    try {
+      await assert.rejects(defaultPorts(w.env, w.policy, {ok:true}, {enabled:true}), /TOKEN_SCOPE_MISMATCH/);
+      assert.equal(tokenCalls, 1, invalid);
+      assert.equal(w.calls.some(c => c.url.includes('/v1/agents')), false);
+    } finally { globalThis.fetch = previous; }
+  }
+});
+
+test('controller does not fall back to an owner token for live effects', async () => {
+  const w = httpWorld();
+  const env = {...w.env, AGENT_PIPELINE_APP_ID:'', AGENT_PIPELINE_GITHUB_TOKEN:'synthetic-owner'};
+  await assert.rejects(defaultPorts(env,w.policy,{ok:true},{enabled:true}),/APP_CREDENTIALS_REQUIRED/);
+});
 
 // No loadWork/ports/journal substitution: only the HTTP boundary is mocked.
 test('real CLI adapters: start, one repair, restart, A, lost merge response, separate B', async () => {

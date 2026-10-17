@@ -1,4 +1,5 @@
 -- SC-012-B release RPC candidate. TEST DATABASE ONLY.
+-- Requires sc012b-review-rpc.sql first, including its shared deferred write guard.
 -- This is not a Supabase migration or production-ready authorization boundary.
 -- It cannot be executed by anon/authenticated. Full trusted source/template
 -- reconstruction and lock-graph review remain blockers before promotion.
@@ -81,8 +82,16 @@ begin
     end if;
     return v_existing.result_id;
   end if;
-  perform 1 from public.voice_plan_versions p
-    where p.id=p_plan_id and p.company_id=v_plan.company_id for share nowait;
+  -- Replay is historical recovery only. Every new release needs current,
+  -- locked application and plan authority before it can append or move a pointer.
+  perform 1 from public.applications ap
+    where ap.company_id=v_plan.company_id and ap.id=v_plan.application_id
+      and ap.status in ('new','in_progress') for share nowait;
+  if not found then raise exception using errcode='PT409',message='VOICE_PLAN_SOURCE_STALE'; end if;
+  select p.* into v_plan from public.voice_plan_versions p
+    where p.id=p_plan_id and p.company_id=v_plan.company_id
+      and p.application_id=v_plan.application_id
+      and p.retention_deadline>pg_catalog.clock_timestamp() for share nowait;
   if not found or v_plan.source_hash is distinct from p_expected_source_hash then
     raise exception using errcode='PT409',message='VOICE_PLAN_STALE';
   end if;
@@ -92,13 +101,14 @@ begin
     raise exception using errcode='PT409',message='VOICE_PLAN_SUPERSEDED';
   end if;
   -- Match the exact latest human approval; requires_changes is terminal.
-  select r.id,r.review_version,r.decision,r.source_hash into v_latest_review
+  select r.id,r.review_version,r.decision,r.source_hash,r.retention_deadline into v_latest_review
     from private.voice_plan_review_entries r
     where r.company_id=v_plan.company_id and r.plan_id=p_plan_id
     order by r.review_version desc limit 1 for share nowait;
   if not found or v_latest_review.id is distinct from p_expected_review_id
      or v_latest_review.decision<>'approved'
-     or v_latest_review.source_hash is distinct from v_plan.source_hash then
+     or v_latest_review.source_hash is distinct from v_plan.source_hash
+     or v_latest_review.retention_deadline<=pg_catalog.clock_timestamp() then
     raise exception using errcode='PT409',message='VOICE_PLAN_REVIEW_STALE';
   end if;
   select a.latest_review_version into v_latest_analysis_review
@@ -141,9 +151,19 @@ begin
   insert into private.voice_plan_release_entries
     (company_id,application_id,plan_id,approved_review_id,release_version,
      source_hash,released_by,retention_policy_version,retention_deadline)
-  values(v_plan.company_id,v_plan.application_id,p_plan_id,p_expected_review_id,1,
-     v_plan.source_hash,actor,v_plan.retention_policy_version,v_plan.retention_deadline)
+  select p.company_id,p.application_id,p.id,r.id,1,
+     p.source_hash,actor,p.retention_policy_version,p.retention_deadline
+  from public.voice_plan_versions p
+  join public.applications ap on ap.company_id=p.company_id and ap.id=p.application_id
+  join private.voice_plan_review_entries r on r.company_id=p.company_id
+    and r.application_id=p.application_id and r.plan_id=p.id and r.id=p_expected_review_id
+  where p.id=p_plan_id and p.source_hash=p_expected_source_hash
+    and ap.status in ('new','in_progress')
+    and r.decision='approved' and r.source_hash=p.source_hash
+    and p.retention_deadline>pg_catalog.clock_timestamp()
+    and r.retention_deadline>pg_catalog.clock_timestamp()
   returning id into v_new_release;
+  if not found then raise exception using errcode='PT409',message='VOICE_PLAN_REVIEW_STALE'; end if;
   if p_expected_pointer_version is null then
     insert into private.voice_plan_current_releases
       (company_id,application_id,plan_id,release_entry_id,pointer_version)
@@ -172,6 +192,11 @@ end;
 $$;
 revoke all on function private.sc012b_release_plan(
   uuid,uuid,text,bigint,uuid,uuid) from public cascade;
+drop trigger if exists sc012b_release_fresh_at_commit on private.voice_plan_release_entries;
+create constraint trigger sc012b_release_fresh_at_commit
+  after insert on private.voice_plan_release_entries
+  deferrable initially deferred for each row
+  execute function private.sc012b_assert_fresh_write();
 
 -- Diagnostic pointer cleanup only, not a provider/reservation authorization.
 -- Trusted reservations must also run the full Node source/template verifier.

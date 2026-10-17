@@ -98,9 +98,16 @@ begin
     end if;
     return prior_key.result_id;
   end if;
-  perform 1 from public.voice_plan_versions p
+  -- A historical replay above recovers an ID only. New authority requires an
+  -- eligible application and an unexpired plan under their retained locks.
+  perform 1 from public.applications ap
+    where ap.company_id=plan.company_id and ap.id=plan.application_id
+      and ap.status in ('new','in_progress') for share nowait;
+  if not found then raise exception using errcode='PT409',message='VOICE_PLAN_SOURCE_STALE'; end if;
+  select p.* into plan from public.voice_plan_versions p
     where p.id=p_plan_id and p.company_id=plan.company_id
-      and p.application_id=plan.application_id for share nowait;
+      and p.application_id=plan.application_id
+      and p.retention_deadline>pg_catalog.clock_timestamp() for share nowait;
   if not found then raise exception using errcode='PT409',message='VOICE_PLAN_STALE'; end if;
   if plan.source_hash is distinct from p_expected_source_hash then
     raise exception using errcode='PT409',message='VOICE_PLAN_STALE';
@@ -158,8 +165,15 @@ begin
      reason,source_hash,retention_policy_version,retention_deadline)
   select p.company_id,p.application_id,p.id,last_version+1,actor,p_decision,
     clean_reason,p.source_hash,p.retention_policy_version,p.retention_deadline
-  from public.voice_plan_versions p where p.id=p_plan_id
+  from public.voice_plan_versions p
+  join public.applications ap on ap.company_id=p.company_id and ap.id=p.application_id
+  where p.id=p_plan_id and p.source_hash=p_expected_source_hash
+    and ap.status in ('new','in_progress')
+    and p.retention_deadline>pg_catalog.clock_timestamp()
   returning id into result_id;
+  -- Time can advance after JS verification or while the RPC acquires locks.
+  -- The INSERT itself must still have current write authority.
+  if not found then raise exception using errcode='PT409',message='VOICE_PLAN_STALE'; end if;
   insert into private.voice_plan_request_keys
     (company_id,actor_id,operation,request_key,payload_hash,result_id,
      retention_policy_version,retention_deadline)
@@ -172,23 +186,72 @@ exception
     raise exception using errcode='PT409',message='VOICE_PLAN_CONFLICT';
 end;
 $$;
+-- New history must still be current inside COMMIT, not only when its INSERT
+-- ran. The RPC keeps its source/actor/candidate/restore locks through this
+-- deferred check. Read-only historical replay queues no fresh-write event.
+create or replace function private.sc012b_assert_fresh_write() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+  if tg_op<>'INSERT' or tg_table_schema<>'private'
+     or tg_table_name not in ('voice_plan_review_entries','voice_plan_release_entries') then
+    raise exception using errcode='42501',message='VOICE_PLAN_INVALID_TRIGGER_CONTEXT';
+  end if;
+  if tg_table_name='voice_plan_review_entries' then
+    perform 1 from public.voice_plan_versions p
+      join public.applications ap on ap.company_id=p.company_id and ap.id=p.application_id
+      where p.company_id=new.company_id and p.application_id=new.application_id and p.id=new.plan_id
+        and p.source_hash=new.source_hash and ap.status in ('new','in_progress')
+        and p.retention_deadline>pg_catalog.clock_timestamp()
+        and new.retention_deadline>pg_catalog.clock_timestamp()
+      for share of p,ap nowait;
+  else
+    perform 1 from public.voice_plan_versions p
+      join public.applications ap on ap.company_id=p.company_id and ap.id=p.application_id
+      join private.voice_plan_review_entries r on r.company_id=p.company_id
+        and r.application_id=p.application_id and r.plan_id=p.id and r.id=new.approved_review_id
+      where p.company_id=new.company_id and p.application_id=new.application_id and p.id=new.plan_id
+        and p.source_hash=new.source_hash and r.source_hash=p.source_hash and r.decision='approved'
+        and ap.status in ('new','in_progress')
+        and p.retention_deadline>pg_catalog.clock_timestamp()
+        and r.retention_deadline>pg_catalog.clock_timestamp()
+        and new.retention_deadline>pg_catalog.clock_timestamp()
+      for share of p,ap,r nowait;
+  end if;
+  if not found then raise exception using errcode='PT409',message='VOICE_PLAN_STALE_AT_COMMIT'; end if;
+  return null;
+exception
+  when lock_not_available or deadlock_detected or serialization_failure then
+    raise exception using errcode='PT409',message='VOICE_PLAN_CONFLICT';
+end;
+$$;
+drop trigger if exists sc012b_review_fresh_at_commit on private.voice_plan_review_entries;
+create constraint trigger sc012b_review_fresh_at_commit
+  after insert on private.voice_plan_review_entries
+  deferrable initially deferred for each row
+  execute function private.sc012b_assert_fresh_write();
+
 -- No browser/anonymous grant: this is a candidate for a future trusted
 -- server capability after independent security review, not a public endpoint.
-revoke all on function private.sc012b_review_plan(
-  uuid,bigint,text,text,text,uuid) from public cascade;
--- Remove every non-owner grantee from this function's actual ACL. A fixed role
+-- Remove every non-owner grantee from both functions' actual ACLs. A fixed role
 -- list cannot close privileges inherited from arbitrary owner defaults.
 do $$
-declare recipient record;
+declare f record; recipient record;
 begin
-  for recipient in
-    select distinct a.grantee from pg_catalog.pg_proc p
-      cross join lateral pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
-      where p.oid='private.sc012b_review_plan(uuid,bigint,text,text,text,uuid)'::pg_catalog.regprocedure
-        and a.grantee<>0 and a.grantee<>p.proowner
+  for f in select p.oid,p.oid::pg_catalog.regprocedure as signature
+    from pg_catalog.pg_proc p where p.oid in (
+      'private.sc012b_review_plan(uuid,bigint,text,text,text,uuid)'::pg_catalog.regprocedure,
+      'private.sc012b_assert_fresh_write()'::pg_catalog.regprocedure
+    )
   loop
-    execute pg_catalog.format('revoke all on function private.sc012b_review_plan(uuid,bigint,text,text,text,uuid) from %I cascade',
-      pg_catalog.pg_get_userbyid(recipient.grantee));
+    execute pg_catalog.format('revoke all on function %s from public cascade',f.signature);
+    for recipient in
+      select distinct a.grantee from pg_catalog.pg_proc p
+        cross join lateral pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+        where p.oid=f.oid and a.grantee<>0 and a.grantee<>p.proowner
+    loop
+      execute pg_catalog.format('revoke all on function %s from %I cascade',f.signature,
+        pg_catalog.pg_get_userbyid(recipient.grantee));
+    end loop;
   end loop;
 end;
 $$;

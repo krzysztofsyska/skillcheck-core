@@ -102,6 +102,18 @@ z otwartą transakcją, zanim przejmą kontrolę nad COMMIT/ROLLBACK. Jawne wari
 transakcji. Blokada singletona restore jest utrzymywana przez przygotowanie,
 anulowanie, odtwarzanie źródła, review/release oraz zapis i cofnięcie pozwolenia.
 
+Nowe odtworzenie źródła, review i release wymagają aktywnej aplikacji ze statusem
+`new` albo `in_progress`. Weryfikator odrzuca plan po terminie retencji pod blokadą
+wiersza. Oba prywatne RPC powtarzają kontrolę statusu i ważności według zegara bazy
+przy nowym zapisie oraz w odroczonej kontroli wewnątrz COMMIT; release wymaga
+również nadal ważnego, dokładnego zatwierdzenia planu. Wygaśnięcie między
+weryfikacją JavaScript a RPC lub po udanym RPC przed COMMIT cofa nową historię,
+klucz żądania i zmianę wskaźnika release.
+
+Dokładne, autoryzowane ponowienie wcześniejszego review lub release może zwrócić
+historyczny identyfikator wyniku. Nie dopisuje zatwierdzenia, nie publikuje ponownie
+wskaźnika i nie przyznaje aktualnego uprawnienia do przygotowania rozmowy.
+
 **Ten zaszyfrowany UUID jest identyfikatorem diagnostycznego szkicu offline.**
 Nie stanowi klucza autoryzującego live dispatch z architektury PR #87.
 Nie powstają live lease, account binding, `dispatch_not_after` ani finalny fence
@@ -192,6 +204,10 @@ poziomach izolacji, jej COMMIT/ROLLBACK i stan błędu; celowo odziedziczone gra
 EXECUTE/CRUD dla niepowiązanych ról; wygaśnięcie dowodu po ostatnim odczycie lub
 wszystkich zapisach; wygaśnięcie retencji podczas nowej próby i dokładnego replay;
 oraz oba porządki przełączenia restore względem operacji kandydata.
+Regresje SC-012 sprawdzają też odmowę nowego review/release dla zakończonej aplikacji
+i wygasłego planu lub zatwierdzenia, w tym bezpośrednie wywołanie RPC oraz upływ
+terminu między weryfikacją źródła a zapisem, jak również po udanym RPC przed COMMIT.
+Odmowa pozostawia liczbę wpisów, kluczy żądań i wskaźnik release bez zmian.
 
 ## SECURITY CHECKS
 
