@@ -33,6 +33,8 @@ const defaultIgnorable = new RegExp(String.raw`[\p{Default_Ignorable_Code_Point}
 const pictograph = new RegExp(String.raw`[\p{Extended_Pictographic}]`, 'u');
 const letter = new RegExp(String.raw`[\p{L}]`, 'u');
 const emojiModifier = new RegExp(String.raw`[\p{Emoji_Modifier}]`, 'u');
+const rgiEmojiTagSequence = new RegExp(String.raw`^\p{RGI_Emoji_Tag_Sequence}$`, 'v');
+const emojiTagSpec = new RegExp(String.raw`^[\u{E0020}-\u{E007E}]$`, 'u');
 const control = new RegExp(String.raw`[\p{Cc}\p{Cs}]`, 'u');
 const arabicLetter = new RegExp(String.raw`[\p{Script=Arabic}&&\p{L}]`, 'v');
 const nonspacingMark = new RegExp(String.raw`\p{Mn}`, 'u');
@@ -86,15 +88,33 @@ function indicConjunctJoiner(chars: string[], index: number): boolean {
   return !script.mark.test(chars[index + 1] ?? '');
 }
 
+/** UTS #51 ED-24: accept a complete RGI flag sequence, including CANCEL TAG.
+ * Arbitrary tag text and incomplete/non-RGI sequences remain forbidden. */
+function emojiTagSequenceEnd(chars: string[], index: number): number {
+  if (chars[index] !== '\u{1F3F4}') return -1;
+  let end = index + 1;
+  while (end < chars.length && emojiTagSpec.test(chars[end])) end += 1;
+  return chars[end] === '\u{E007F}' && rgiEmojiTagSequence.test(chars.slice(index, end + 1).join('')) ? end : -1;
+}
+
 /** Returns -1 for forbidden invisible/control characters.
  * Permits contextually meaningful emoji joiners, variation selectors,
- * Indic conjunct joiners and mid-word soft hyphens without counting them. */
+ * Indic conjunct joiners, RGI flag tags and mid-word soft hyphens without
+ * counting the formatting characters. */
 function visibleContentCount(value: string): number {
   const chars = Array.from(value);
   let visible = 0;
   let meaningful = 0;
   for (let index = 0; index < chars.length; index += 1) {
     const char = chars[index];
+    const tagEnd = emojiTagSequenceEnd(chars, index);
+    if (tagEnd !== -1) {
+      // Only the flag base is visible; its tag specification is not evidence.
+      visible += 1;
+      meaningful += 1;
+      index = tagEnd;
+      continue;
+    }
     if (char === '\n' || char === '\r' || char === '\t') continue;
     if (control.test(char)) return -1;
     if (defaultIgnorable.test(char)) {
@@ -158,14 +178,17 @@ export function candidateTestView(revision: CompetencyTestRevision) {
 }
 
 /** Only an answer, not company, actor, rubric, score, dates or time from the
- * browser, is accepted. Persistence must pin the authorized revision ID. */
+ * browser, is accepted. Persistence must pin the authorized revision ID.
+ * Bound the raw input in Unicode code points before trimming. The cheap
+ * UTF-16 guard bounds allocation even for enormous untrusted strings. */
 export function parseCompetencyTestSubmission(definitionInput: unknown, input: unknown): CompetencyTestSubmission {
   validatedTest(definitionInput);
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error('Nieprawidłowa odpowiedź na test.');
   }
   const workSample = (input as Record<string, unknown>).workSample;
-  if (typeof workSample !== 'string' || workSample.length > 20_000 || visibleContentCount(workSample) < 1 || !workSample.trim()) {
+  if (typeof workSample !== 'string' || workSample.length > 40_000
+    || Array.from(workSample).length > 20_000 || visibleContentCount(workSample) < 1 || !workSample.trim()) {
     throw new Error('Odpowiedź powinna zawierać od 1 do 20 000 znaków.');
   }
   return { workSample: workSample.trim() };

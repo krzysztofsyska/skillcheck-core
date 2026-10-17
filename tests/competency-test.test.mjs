@@ -263,3 +263,71 @@ test('joiners and variation selectors outside their Unicode contexts stay reject
     assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
   }
 });
+
+test('the answer limit counts supplementary Unicode code points, including at the boundary',()=>{
+  for (const symbol of ['😀', String.fromCodePoint(0x20000)]) {
+    for (const count of [10_001, 20_000]) {
+      const workSample = symbol.repeat(count);
+      assert.equal(parseCompetencyTestSubmission(definition(),{workSample}).workSample, workSample);
+      assert.equal(evaluateCompetencyTest(definition(),{workSample},review()).status, 'insufficient_evidence');
+    }
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:symbol.repeat(20_001)}), /20 000/);
+  }
+  const mixed = 'a😀'.repeat(10_000);
+  assert.equal(parseCompetencyTestSubmission(definition(),{workSample:mixed}).workSample, mixed);
+  assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:mixed + 'a'}), /20 000/);
+});
+
+test('Unicode length is bounded before trimming and does not normalize or collapse combining marks',()=>{
+  const withinLimit = ' ' + '😀'.repeat(19_999);
+  assert.equal(parseCompetencyTestSubmission(definition(),{workSample:withinLimit}).workSample, withinLimit.trim());
+  assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:' ' + '😀'.repeat(20_000)}), /20 000/);
+  const decomposed = 'e\u0301'.repeat(10_000);
+  assert.equal(parseCompetencyTestSubmission(definition(),{workSample:decomposed}).workSample, decomposed);
+  assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:decomposed + 'e'}), /20 000/);
+  for (const workSample of ['a\uD800', '\uDC00abc']) {
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample}));
+  }
+});
+
+const subdivisionFlag = (region) => String.fromCodePoint(
+  0x1F3F4, ...Array.from(region, letter => 0xE0000 + letter.charCodeAt(0)), 0xE007F,
+);
+
+test('RGI subdivision flags remain literal text in answers and exact evidence',()=>{
+  for (const region of ['gbeng', 'gbsct', 'gbwls']) {
+    const flag = subdivisionFlag(region);
+    const workSample = 'Plan dla regionu ' + flag + ' jest gotowy';
+    assert.equal(parseCompetencyTestSubmission(definition(),{workSample}).workSample, workSample);
+    const rows = review();
+    rows[0] = {criterionIndex:0,rating:'meets',evidence:'regionu ' + flag};
+    assert.equal(evaluateCompetencyTest(definition(),{workSample},rows).criterionResults[0].evidence, 'regionu ' + flag);
+  }
+});
+
+test('subdivision tag characters cannot inflate the visible evidence count',()=>{
+  const flag = subdivisionFlag('gbeng');
+  const workSample = 'x' + flag + ' ' + flag + flag + flag;
+  const rows = review();
+  for (const evidence of [flag, 'x' + flag, flag + flag]) {
+    rows[0] = {criterionIndex:0,rating:'above',evidence};
+    assert.throws(()=>evaluateCompetencyTest(definition(),{workSample},rows), /cytatu/);
+  }
+  rows[0] = {criterionIndex:0,rating:'above',evidence:flag + flag + flag};
+  assert.equal(evaluateCompetencyTest(definition(),{workSample},rows).criterionResults[0].rating, 'above');
+});
+
+test('isolated, incomplete and unrecognized emoji tag payloads remain forbidden',()=>{
+  const flag = subdivisionFlag('gbeng');
+  const tagG = String.fromCodePoint(0xE0067);
+  const end = String.fromCodePoint(0xE007F);
+  const tagPayloads = [
+    tagG, end, flag.slice(2), flag.slice(0,-2),
+    '😀' + flag.slice(2), subdivisionFlag(''), subdivisionFlag('GBENG'),
+    subdivisionFlag('notaregion'), flag + tagG, flag + end,
+    flag.slice(0,4) + '\u202E' + flag.slice(4),
+  ];
+  for (const payload of tagPayloads) {
+    assert.throws(()=>parseCompetencyTestSubmission(definition(),{workSample:'Plan ' + payload + ' gotowy'}));
+  }
+});
