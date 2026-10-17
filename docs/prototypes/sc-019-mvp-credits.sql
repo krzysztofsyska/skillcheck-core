@@ -486,6 +486,8 @@ declare
   target_company uuid;
   target_application uuid;
   target_candidate uuid;
+  observed_attempt_status text;
+  observed_lease_expires_at timestamptz;
 begin
   if provided_lease_token is null or length(provided_lease_token) < 32
     or expected_input_fingerprint !~ '^[0-9a-f]{64}$'
@@ -508,12 +510,13 @@ begin
     'cost_currency', new_cost_currency
   )::text);
 
-  -- The analysis row comes first, matching a stale update that already holds
-  -- it before the candidate guard. The candidate lock comes before the
-  -- advisory lock, so a start or retry waiting on that advisory lock cannot
-  -- make this NOWAIT fail while this transaction holds the advisory lock.
-  select attempts.analysis_id, attempts.company_id, versions.application_id, applications.candidate_id
-    into target_analysis, target_company, target_application, target_candidate
+  -- A finalizer already has a provider result. Wait for its candidate before
+  -- holding any advisory, analysis, company or attempt lock, so a concurrent
+  -- start/retry/stale mutation can finish without discarding that result.
+  select attempts.analysis_id, attempts.company_id, versions.application_id, applications.candidate_id,
+    attempts.status, attempts.lease_expires_at
+    into target_analysis, target_company, target_application, target_candidate,
+      observed_attempt_status, observed_lease_expires_at
   from public.screening_analysis_attempts attempts
   join public.screening_analysis_versions versions
     on versions.id = attempts.analysis_id and versions.company_id = attempts.company_id
@@ -521,13 +524,24 @@ begin
     on applications.id = versions.application_id and applications.company_id = versions.company_id
   where attempts.id = target_attempt;
   if not found then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
-  select * into analysis from public.screening_analysis_versions
-    where id = target_analysis and company_id = target_company for update;
-  if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  -- An already expired finalizer must not make a valid reclaim fail its
+  -- candidate NOWAIT guard. This is only an early rejection: the authoritative
+  -- lease/token/binding checks remain below, after all locks and any wait.
+  if observed_attempt_status = 'processing' and observed_lease_expires_at <= clock_timestamp() then
+    raise exception 'Invalid or expired lease' using errcode = '42501';
+  end if;
   if to_regprocedure('private.erasure_lock_candidate(uuid)') is not null then
+    perform 1 from public.candidates
+      where id = target_candidate and company_id = target_company for update;
+    if not found then raise exception 'Resource unavailable' using errcode = 'PT404'; end if;
+    -- Keep this a separate statement after waiting: the existing guard must
+    -- recheck read-committed isolation, restore isolation and erasure freezes.
     perform private.erasure_lock_candidate(target_candidate);
   end if;
   perform pg_advisory_xact_lock(hashtextextended('screening:' || target_application::text, 0));
+  select * into analysis from public.screening_analysis_versions
+    where id = target_analysis and company_id = target_company for update;
+  if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
   perform private.sc19_lock_company(target_company);
   select * into attempt from public.screening_analysis_attempts
     where id = target_attempt for update;
@@ -678,6 +692,8 @@ declare
   target_analysis uuid;
   target_company uuid;
   target_candidate uuid;
+  observed_attempt_status text;
+  observed_lease_expires_at timestamptz;
 begin
   if provided_lease_token is null or length(provided_lease_token) < 32
     or expected_input_fingerprint !~ '^[0-9a-f]{64}$'
@@ -700,10 +716,12 @@ begin
     'cost_currency', new_cost_currency
   )::text);
 
-  -- Same row locks as claim: analysis, candidate when SC-010 is present,
-  -- company, then attempt. Failure takes no advisory lock.
-  select attempts.analysis_id, attempts.company_id, applications.candidate_id
-    into target_analysis, target_company, target_candidate
+  -- Like completion, wait for the candidate before holding other locks.
+  -- Failure takes no advisory lock; analysis still precedes company/attempt.
+  select attempts.analysis_id, attempts.company_id, applications.candidate_id,
+    attempts.status, attempts.lease_expires_at
+    into target_analysis, target_company, target_candidate,
+      observed_attempt_status, observed_lease_expires_at
   from public.screening_analysis_attempts attempts
   join public.screening_analysis_versions versions
     on versions.id = attempts.analysis_id and versions.company_id = attempts.company_id
@@ -711,12 +729,18 @@ begin
     on applications.id = versions.application_id and applications.company_id = versions.company_id
   where attempts.id = target_attempt;
   if not found then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
+  if observed_attempt_status = 'processing' and observed_lease_expires_at <= clock_timestamp() then
+    raise exception 'Invalid or expired lease' using errcode = '42501';
+  end if;
+  if to_regprocedure('private.erasure_lock_candidate(uuid)') is not null then
+    perform 1 from public.candidates
+      where id = target_candidate and company_id = target_company for update;
+    if not found then raise exception 'Resource unavailable' using errcode = 'PT404'; end if;
+    perform private.erasure_lock_candidate(target_candidate);
+  end if;
   select * into analysis from public.screening_analysis_versions
     where id = target_analysis and company_id = target_company for update;
   if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
-  if to_regprocedure('private.erasure_lock_candidate(uuid)') is not null then
-    perform private.erasure_lock_candidate(target_candidate);
-  end if;
   perform private.sc19_lock_company(target_company);
   select * into attempt from public.screening_analysis_attempts
     where id = target_attempt for update;
