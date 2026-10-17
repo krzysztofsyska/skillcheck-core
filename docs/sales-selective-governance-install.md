@@ -1,213 +1,214 @@
 # SkillCheck — selective release governance (PR #128 → PR #120)
 
-**DRAFT / NOT ACTIVATED.** This change implements the three previously missing
-release-gate paths. It neither grants an approval nor merges, deploys or
-provisions anything. The external evidence runtime and its dedicated identity
-have NOT been installed. Do not resolve live-readiness requirements merely
-because the deterministic tests pass.
+**DRAFT / NOT INSTALLED OR ACTIVATED.** The three release-gate implementation
+paths and the independent review corrections are prepared here. No owner
+approval, merge, production deployment, external service, App installation,
+credential grant or billing change is performed by this change. The external
+identity/runtime and live acceptance tests remain actual prerequisites.
 
-## Existing boundary
+## Scope and existing protection
 
-Repository: `krzysztofsyska/skillcheck-core` (ID `1043384454`). Owner ID:
-`222297538`. This remains the same seven-file governance PR, from
-`governance/sales-selective-main-gate-20261016` against original main
-`76760b7ffb7e95231fc7af313cc67bc8d36fefe1`. The one-time installer exception
-expires when main advances. No product code or other PR is changed.
+Repository `krzysztofsyska/skillcheck-core`, ID `1043384454`; designated owner
+`krzysztofsyska`, ID `222297538`. PR #128 remains the same seven policy/test
+files from `governance/sales-selective-main-gate-20261016`, against original
+main `76760b7ffb7e95231fc7af313cc67bc8d36fefe1`. The one-time installation
+exception expires when main advances. No product code or other PR is changed.
 
-The owner-created ruleset `25301984`, `main-production-protection`, was read as
-ACTIVE on literal `refs/heads/main`, with no exclusions/bypass actors, deletion
-and non-fast-forward protection, one approval, stale dismissal, latest-push
-approval and conversation resolution. Its two existing required checks are
-`verify` and `Agent contract / scope gate`, strict and pinned to GitHub Actions
-App `15368`. Preserve that baseline. A connector's administrative observation
-is not authorization evidence for a different workflow token.
+Owner-created ruleset `25301984`, `main-production-protection`, was read as
+ACTIVE, literal `refs/heads/main`, no exclusions/bypass actors, deletion and
+force-push protection, one approval, stale dismissal, independent latest-push
+approval and conversation resolution. Existing required contexts `verify` and
+`Agent contract / scope gate` are strict and pinned to GitHub Actions App
+`15368`. Preserve this baseline and the separate integration protection.
+A connector-session observation does not prove another token's access.
 
-## 1. Candidate-bound checks — discussion_r4302382315
+## Candidate-bound results and dedicated producer
 
-The workflow explicitly creates three check runs on PR #120's candidate
-`head.sha`; the automatic `pull_request_target` job checks are deliberately
-named differently and are NOT merge evidence. Each required check's
-`external_id` binds repository, PR, HEAD, BASE, workflow run, attempt and stage.
-All three begin `in_progress`. Only the corresponding verified stage can
-complete its own check. No API call here can merge a PR, publish a deployment
-approval or alter a ruleset.
+The workflow explicitly publishes three candidate-HEAD check runs. Automatic
+`pull_request_target` job checks are base-side and have different names; they
+are NOT merge evidence. Each dedicated check binds repository, PR120, candidate
+HEAD, current BASE, workflow run, attempt, stage and publisher App ID in its
+`external_id`. New checks start `in_progress`. Unknown evidence, failed stages
+and stale target/run bindings never authorize a success result.
 
-Required contexts after approved installation and producer verification:
+| Required context after approved installation | Expected producer |
+| --- | --- |
+| `verify` | GitHub Actions App 15368 |
+| `Agent contract / scope gate` | GitHub Actions App 15368 |
+| `Sales selective scope verified` | Dedicated external release App |
+| `Sales owner acceptance` | Same dedicated external release App |
+| `Sales production approval` | Same dedicated external release App |
 
-| Context | Producer | Requirement |
-| --- | --- | --- |
-| `verify` | GitHub Actions, App 15368 | Existing ordinary CI |
-| `Agent contract / scope gate` | GitHub Actions, App 15368 | Existing scope contract |
-| `Sales selective scope verified` | Explicit candidate check, App 15368 | Reviewed Git objects + live protection |
-| `Sales owner acceptance` | Explicit candidate check, App 15368 | Native owner-acceptance decision for this run |
-| `Sales production approval` | Explicit candidate check, App 15368 | Separate native production-approval decision for this run |
+**The last three must NOT be pinned to App15368.** A same-repository candidate
+workflow can request its own Actions token with check-write permission and
+impersonate that repository-wide producer. Instead, the external broker owns
+the dedicated App credential; it never returns an installation token to Actions.
+The trusted-main workflow receives only read permissions (including
+`checks:read`) and OIDC issuance permission. It sends bounded, nonce-bound
+publication requests to the broker. The broker reconstructs the exact check
+payload and allows only its three context names on the bound candidate; there
+is no generic mutation proxy. The client independently re-reads each resulting
+check through GitHub and verifies its App, HEAD, external binding and outcome.
 
-The checker requires all five contexts in the protected-main policy before
-publishing success. Checkout/import is always from the trusted base SHA. The
-fixed release ref is fetched only as Git data with command-scoped read
-credentials. Candidate code is never executed with publishing credentials.
-Release jobs have `checks:write`, read grants, and (where needed)
-`id-token:write`; they have NO contents/PR/deployment/ruleset write permission.
+The public `SALES_RELEASE_PUBLISHER_APP_ID` variable must identify the actual
+owner-approved broker App; there is no guessed/default ID. The binding, broker
+configuration, signed protection proof and required-check rules must agree.
+App15368 is explicitly refused as the dedicated publisher. Ordinary CI remains
+pinned to Actions. Never change that source merely to satisfy a stale test.
 
-Each stage re-reads the live PR, main and exact workflow run. Failure, changed
-HEAD/base, wrong source/run/attempt and unknown evidence fail closed. A
-best-effort failure update uses only the original check IDs and cannot overwrite
-another run's checks. Lost POST responses are not retried automatically. A lost
-success PATCH response fails the stage and attempts a failure result; it is not
-blindly retried as success. Pending or failed checks block merge.
+GitHub documents workflow-run `path` values with `@main`; a live read of Checks
+run39038751854 in this repository returned a bare path. Both exact forms are
+handled, and both require a separate fixed-workflow metadata/`workflow_id`
+match. Other suffixes/refs, wrong IDs, inactive workflows and incorrect run
+HEAD/event/attempt are rejected. OIDC identity separately requires the exact
+main workflow ref and trusted base SHA.
 
-A main push triggers a fresh run, and workflow concurrency cancels superseded
-attempts. Strict required checks remain mandatory; a base update is not an
-excuse to reuse a stale success. Manual recovery is a **fresh** workflow_dispatch
-with exact `expected_head` and `expected_base`, not rerunning an old approval.
-The previous current-base audit is repeated before each success publication.
-Actual event/check attachment and stale-base enforcement must still be observed
-in the live acceptance test before release.
+All checkouts/imports use trusted base code. The fixed candidate ref is fetched
+only as Git data, using command-scoped read authentication with no persistence.
+The Git inspector requires exactly the five reviewed marketing/test blobs and
+checks every historical added/modified object. Candidate scripts/actions are
+never executed with publisher or broker credentials.
 
-## 2. Authoritative protection evidence — discussion_r4302382323
+Main pushes start a new attempt; concurrency cancels superseded attempts.
+Strict up-to-date checks remain mandatory. Each stage rechecks the live
+candidate/base/run, and success is published only after fresh evidence. Lost
+POST responses are not retried automatically. Lost success PATCH responses
+fail the stage and attempt failure publication. Cleanup attempts ALL three
+owned check IDs independently, records only fixed failed-stage names, and
+fails after completing those attempts. It cannot overwrite a newer run's checks.
+Actual candidate attachment, cancellation and stale-base behavior still require
+live acceptance; deterministic tests are not proof of GitHub event delivery.
 
-GitHub documents that `bypass_actors` is only disclosed to a requester with
-write access to the ruleset. The release workflow must NOT receive that grant.
-There is no safe conversion of a missing field, a screenshot or a timestamp
-snapshot into an empty bypass list.
+## Authenticated protection and publication broker
 
-The existing runner now also exports a **separate external evidence handler**:
-`handleProtectionEvidence`. It is real HTTP/cryptographic/GitHub adapter code,
-not a callback that returns a canned PASS. It has one operation: inspect this
-repository's fixed main ruleset for the exact live candidate/run binding.
+GitHub withholds `bypass_actors` from callers without ruleset write access.
+Missing data, screenshots and unsigned/timestamp snapshots cannot be substituted
+for current protection. The evidence boundary stays OUTSIDE release Actions.
+The existing runner implements the actual client, HTTP handler, OIDC verification,
+scoped App-token adapter, native approval verifier and signed-proof protocol.
+It does not return a canned PASS when an external runtime is absent.
 
-Protocol:
+The fixed POST `/evidence` handler accepts either an evidence request or a
+strictly shaped check-publication request. A random nonce and the complete
+request/binding are hashed into the requested OIDC audience. The broker verifies
+RS256 using GitHub's fixed JWKS endpoint, issuer, repository/owner IDs, exact
+trusted-main workflow ref/SHA, event, run ID, attempt and validity period BEFORE
+minting any privileged token. Candidate/ref/other-workflow proofs are rejected.
+Approval-success publication additionally requires the matching protected
+`environment` OIDC claim, actual owner approval history and successful prior
+dedicated-App check IDs from the same bound run. The broker rechecks protection
+and environment policies independently before a success write.
 
-1. The release job generates a random nonce and obtains a GitHub OIDC token
-   whose audience is the hash of the complete evidence request.
-2. The broker verifies RS256 using GitHub's fixed JWKS endpoint, then checks
-   issuer, request audience, repository/owner IDs, trusted main workflow ref/SHA,
-   event, run ID, attempt and token validity. A different workflow/branch or
-   candidate request cannot reuse that authorization.
-3. Only then does the broker mint a short-lived, repository-selected installation
-   token for its dedicated App. It verifies App owner/ID, returned grants and
-   the token's actual one-repository scope. It reads the current PR/main/run and
-   ruleset `25301984`; missing, malformed or nonempty bypass data is rejected.
-4. The broker signs a nonce/binding-specific observation with Ed25519. Its
-   lifetime is 60 seconds. The workflow checks the signature, request hash,
-   observation time, repository/ruleset identity and all protection requirements.
-   It requests a new observation before every successful stage publication.
-5. The broker revokes its installation token in a finally block. Transport loss
-   during revocation remains bounded by GitHub's token expiry; it does not
-   silently grant the token to the workflow or trigger another mutation.
+For protection observations, the broker reads the current PR, main, workflow
+and fixed ruleset25301984, then signs a request-specific Ed25519 response. The
+client verifies signature, nonce/request hash, publisher identity, BASE and
+60-second lifetime, followed by every protection requirement. A new observation
+is requested before each stage success. A changed or replayed proof fails.
 
-**Unavoidable administrative prerequisite, not performed:** the dedicated
-broker App needs `Administration:write` because of GitHub's disclosure rule,
-plus `Contents:read`, `Pull requests:read` and `Actions:read`, selected ONLY for
-repository `1043384454`. This privilege stays outside Actions. The broker code
-performs only repository GETs; token issuance/revocation are its only external
-writes. Creating/installing this identity, storing its key, selecting a hosting
-location and approving any cost require an explicit owner decision. This patch
-does not reuse an owner PAT or elevate the existing release/controller App.
+App tokens are explicitly selected for repository1043384454. Returned grants,
+App owner/ID and actual accessible repository list must match. Base grants:
+`Administration:write`, `Contents:read`, `Pull requests:read`, `Actions:read`.
+Only publication operations additionally request `Checks:write`; evidence-only
+operations do not. The broker's repository operations are GETs or the exact
+check-run POST/PATCH operations. It cannot merge, push code, change a ruleset,
+approve deployments or create owner decisions. Token issuance/revocation are
+separate, fixed App operations. Tokens are revoked in a finally block AFTER
+the entire asynchronous operation completes; loss of revocation response is
+bounded by GitHub expiry, not permission to issue another token blindly.
 
-External runtime configuration (never GitHub workflow secrets):
+**Provisioning is NOT performed.** Creating/installing this privileged dedicated
+App, storing its private key and choosing/starting its hosting require explicit
+owner permission and approval of any additional cost. No owner PAT or privileged
+existing controller credential is substituted. A release Actions job never
+receives `Administration:write`, `Checks:write` or the broker's private keys.
 
-- `SALES_EVIDENCE_APP_ID` — actual owner-approved dedicated App ID;
-- `SALES_EVIDENCE_INSTALLATION_ID` — actual installation ID;
-- `SALES_EVIDENCE_APP_PRIVATE_KEY` — that App's RSA key;
-- `SALES_EVIDENCE_SIGNING_PRIVATE_KEY` — a separate Ed25519 PKCS8 PEM key.
+External runtime configuration (never workflow secrets):
 
-The standalone command is
-`node tools/agent-pipeline/lib/sales-trusted-runner.mjs --serve-evidence`.
-It refuses to start inside GitHub Actions, binds to loopback `127.0.0.1`
-(default port 8788), serves only POST `/evidence`, limits request size and
-suppresses raw provider errors. An operator-managed HTTPS reverse proxy or a
-separately reviewed host adapter is required. Do not publish this bare HTTP
-listener, commit keys, invent App IDs/URLs, or provision a server automatically.
-The deployment must pin reviewed broker code; it must not execute a candidate
-checkout. Public-key rotation and endpoint changes are trust changes and need
-review, not automatic fallback to a new key.
+- `SALES_EVIDENCE_APP_ID` and `SALES_EVIDENCE_INSTALLATION_ID`: actual approved IDs;
+- `SALES_EVIDENCE_APP_PRIVATE_KEY`: dedicated App RSA key;
+- `SALES_EVIDENCE_SIGNING_PRIVATE_KEY`: separate Ed25519 PKCS8 signing key.
 
-After approved provisioning, set the public configuration in trusted repository
-variables: `SALES_EVIDENCE_URL` (HTTPS, exact `/evidence` path) and
-`SALES_EVIDENCE_PUBLIC_KEY` (Ed25519 SPKI PEM). The release job sends only its
-short-lived OIDC proof to that endpoint, never GITHUB_TOKEN or the broker key.
-No verified endpoint/key/runtime currently exists in the evidence collected for
-this patch. Consequently **live evidence and live PASS remain unconfirmed**.
+Command: `node tools/agent-pipeline/lib/sales-trusted-runner.mjs --serve-evidence`.
+It refuses to run inside Actions, listens only on127.0.0.1 (default port8788),
+limits request size and suppresses raw provider errors. An operator-managed
+HTTPS reverse proxy or separately reviewed host adapter is required; do not
+publish the bare HTTP listener or provision a host automatically. The deployed
+broker code must be pinned to its reviewed version, never a candidate checkout.
 
-## 3. Two actual approval gates — discussion_r4292657545
+Trusted public repository variables after separate configuration approval:
+`SALES_EVIDENCE_URL` (HTTPS, exact `/evidence` path),
+`SALES_EVIDENCE_PUBLIC_KEY` (Ed25519 SPKI PEM), and
+`SALES_RELEASE_PUBLISHER_APP_ID` (the dedicated App's actual numeric ID).
+No endpoint, key, App or runtime has been verified live in this patch.
+Endpoint/key/identity changes are reviewed trust changes, not automatic fallback.
 
-The workflow uses the existing environment names, without changing existing
-agent-accept/promote workflow files or enabling the agent controller:
+## Two real native owner decisions
 
-- `owner` job: `environment: owner-acceptance`, after successful scope;
-- `production` job: `environment: production-approval`, only after owner success.
-
+The `owner` job uses environment `owner-acceptance` after scope success.
+The `production` job uses `production-approval` only after owner success.
 Both environments must have exactly the designated owner as required User
-reviewer (ID `222297538` and login `krzysztofsyska`), and a custom deployment
-branch policy allowing only branch `main`, not a tag/wildcard or arbitrary
-protected branch. The release code verifies those API responses; it does not
-assume that an environment label itself supplies protection.
+reviewer and a custom deployment-branch policy allowing only branch `main`.
+Wildcard/tag policies, absent reviewers and indistinguishable environment IDs
+are rejected. Existing agent-accept/promote files and controller flags are unchanged.
 
-Before publishing an approval check, the code reads
-`GET /actions/runs/{run_id}/approvals` and requires the actual owner's approved
-review for the exact environment ID/name. Missing/rejected/foreign-user,
-duplicate/ambiguous or combined-environment decisions are refused. Production
-requires two separate records and current-run successful scope/owner checks.
-No PR prose, emoji or copied artifact can substitute for this evidence.
+Before successful publication, both the trusted workflow and external publisher
+validate `GET /actions/runs/{run_id}/approvals`. Evidence must contain the actual
+owner's approved decision for the exact environment ID/name. Missing/rejected,
+foreign actor, duplicated/ambiguous and combined-environment records are rejected.
+Production requires two separate decisions and successful prior checks from
+this exact run and dedicated App. PR prose, emoji and copied artifacts do not
+satisfy the requirements. The code never invokes approval-write endpoints.
 
-GitHub's documented review-history response does not identify the run attempt.
-Therefore this implementation accepts **attempt 1 only**. A failed or cancelled
-attempt is recovered with a new explicit workflow_dispatch (new run ID and new
-decisions), never by pretending approval history from attempt 1 proves attempt
-2. Failed stages cause a cleanup job to mark that run's checks as failure.
-The workflow never calls the pending-deployments approval endpoint and cannot
-approve on the owner's behalf. Native independent code review remains separate:
-Codex COMMENTED/positive comments do not satisfy GitHub's formal APPROVED rule.
+GitHub review-history responses do not bind a run attempt. Therefore only
+attempt1 is accepted. Recovery is a NEW `workflow_dispatch` run with explicit
+`expected_head`/`expected_base` and fresh decisions, not a rerun using old approval
+history. Native independent code APPROVED review is separate from those owner
+decisions; Codex COMMENTED or a positive issue comment does not replace it.
 
-## Verification recorded for this patch
+## Recorded verification
 
-Node 22.16.0: reconstructed baseline bytes matched the fetched Git blobs;
-baseline 51/51 PASS. Expanded suite against the unchanged runner: **51 PASS,
-75 FAIL** (including missing new runtime APIs). Corrected implementation:
-**126 PASS / 0 FAIL / 0 SKIP**. JavaScript syntax checks pass. Tests cover
-candidate check publishing, stale target/run/attempt, lost responses, real
-approval-history shapes, environment restrictions, cryptographic signature and
-nonce binding, rejected/missing bypass evidence, and composed release-stage →
-OIDC client → broker → scoped installation reads → signed proof verification.
-Cryptography is real; GitHub HTTP responses, keys and identities are synthetic.
+Original baseline51/51 PASS. Initial implementation126/126 local PASS and
+full GitHub Checks39038751854 + Agent Gates39038751871/39038862111 SUCCESS for
+7cc2d326. Independent Codex review5558129801 then found two P1s and one P2:
+run-path compatibility4302946099; candidate-impersonable Actions producer4302946103;
+cleanup stopping on first failure4302946109. These are addressed by the current
+changes, subject to a fresh independent review, not automatically closed.
 
-These are deterministic OFFLINE tests, not vendor integration or customer E2E.
-Full-repository CI and independent review must be read for the final pushed SHA.
-The local workspace is a reconstructed subset; no claim is made that local
-npm build/typecheck/full tests were run here. Neither cloud builder started:
-Cursor reported a spending/billing block; Codex implementation required a repo
-environment. Direct implementation was used; independent Codex review is a
-separate step, not self-approval.
+Node22.16.0 updated suite: **147 PASS / 0 FAIL / 0 SKIP**. Against the prior
+7cc2d326 runner/workflow, the same suite gives **79 PASS / 68 FAIL**. Syntax
+checks pass. All existing cases remain; realistic qualified/bare workflow paths,
+workflow metadata, dedicated-App rule/check identity, real brokered publication,
+wrong OIDC workflow/environment, rejected native approvals and all-stage cleanup
+failures are covered. Cryptography is real; HTTP/provider identities are synthetic.
+Full CI and independent review must be evaluated for the final pushed SHA.
+No local full npm build/typecheck or live broker/customer E2E is claimed.
 
-## Safe installation order — not executed
+## Gated installation order — not executed
 
-1. Finish independent review/CI of this exact seven-file PR. Keep it Draft while
-   code findings or operational requirements are unverified. Obtain formal
-   independent APPROVED review, owner acceptance and explicit governance/main
-   rollout permission. The installer does not grant itself approval.
-2. With separate administrator permission, configure the dedicated external
-   broker/runtime and the two protected environments. Verify its actual identity,
-   scope, OIDC claims and signing key. Do not add a bypass or reduce approvals.
-3. After authorized installation on main, configure the trusted public evidence
-   variables and enable `SALES_RELEASE_GATES_ENABLED` only as part of the approved
-   test. Observe all three candidate check producers; add their exact contexts,
-   pinned to App 15368, to the main ruleset before any product merge. Missing
-   contexts fail closed; adding them does not manufacture successful results.
-4. Rebuild/revalidate PR #120 on the approved new main using only the five
-   immutable reviewed marketing blobs. Re-run CI, independent review, native
-   owner decisions and candidate-bound checks. Verify real failure paths,
-   head/base changes and rejection before declaring the release mechanism ready.
-5. Only an explicit approved product rollout may merge PR #120. Check the actual
-   Vercel version and inquiry page afterward. PR #120 is still a five-file mailto
-   inquiry release, NOT complete self-service FREE/PRESELEKCJA activation,
-   checkout, entitlements or CV processing. PR #129 remains a separate launch
-   track. No database/payment/voice/AI operation is part of this change.
+Finish current-SHA code review/CI, resolve actual findings and obtain formal
+independent approval plus owner acceptance/explicit governance rollout permission.
+Keep the installer Draft while findings or operational prerequisites remain.
+With separate administrator permission, provision/verify the dedicated broker
+and protected environments. Verify actual App scope, OIDC claims, signed proof
+and check producer identity. Do not add bypasses, reduce reviews or weaken checks.
 
-References (primary):
+After approved governance installation on main, configure public variables and
+activate `SALES_RELEASE_GATES_ENABLED` only for the approved test. Observe the
+three dedicated check producers; configure their exact names and dedicated App
+IDs as required in the main ruleset before any product merge. Missing contexts
+fail closed; adding them cannot fabricate success. Rebuild/revalidate PR120
+from the approved new main using only the five immutable reviewed blobs. Test
+real stale/rejected/missing-proof and cancellation cases before declaring LIVE PASS.
+Only separately approved production rollout may merge PR120.
+
+PR120 is a five-file marketing/mailto inquiry release, NOT full self-service
+FREE/PRESELEKCJA activation, payment/entitlements or CV processing. PR129 and its
+real adapters remain a separate launch track. No product deployment, database,
+voice/AI/payment operation or agent-loop activation is part of this patch.
+
+Primary references:
 - https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset
+- https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run
 - https://docs.github.com/en/rest/actions/workflow-runs#get-the-review-history-for-a-workflow-run
-- https://docs.github.com/en/rest/deployments/environments#get-an-environment
 - https://docs.github.com/en/rest/checks/runs#create-a-check-run
 - https://docs.github.com/en/actions/reference/security/oidc
-- https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target

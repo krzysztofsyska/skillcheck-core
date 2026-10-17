@@ -21,6 +21,7 @@ permissions:
   contents: read
   pull-requests: read
   actions: read
+  checks: read
 concurrency:
   group: sales-selective-release-120
   cancel-in-progress: true
@@ -28,6 +29,7 @@ concurrency:
 # have been independently verified. No automatic merge/deployment exists here.
 env:
   SALES_RELEASE_GATES_ENABLED: ${{ vars.SALES_RELEASE_GATES_ENABLED }}
+  SALES_RELEASE_PUBLISHER_APP_ID: ${{ vars.SALES_RELEASE_PUBLISHER_APP_ID }}
   SALES_EVIDENCE_URL: ${{ vars.SALES_EVIDENCE_URL }}
   SALES_EVIDENCE_PUBLIC_KEY: ${{ vars.SALES_EVIDENCE_PUBLIC_KEY }}
 jobs:
@@ -47,7 +49,8 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
-      checks: write
+      checks: read
+      id-token: write
     outputs:
       binding: ${{ steps.initialize.outputs.binding }}
       checks: ${{ steps.initialize.outputs.checks }}
@@ -73,7 +76,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
-      checks: write
+      checks: read
       id-token: write
     env:
       SALES_GATE_STAGE: scope
@@ -106,7 +109,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
-      checks: write
+      checks: read
       id-token: write
     env:
       SALES_GATE_STAGE: owner
@@ -133,7 +136,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
-      checks: write
+      checks: read
       id-token: write
     env:
       SALES_GATE_STAGE: production
@@ -163,7 +166,8 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
-      checks: write
+      checks: read
+      id-token: write
     env:
       SALES_GATE_STAGE: invalidate
       SALES_GATE_BINDING: ${{ needs.initialize.outputs.binding }}

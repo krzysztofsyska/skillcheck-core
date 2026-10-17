@@ -38,12 +38,12 @@ function mainRuleMatches(rule) {
   // protection of main. Unknown patterns must not supply security evidence.
   return include && refs.exclude.length===0;
 }
-function hasRequiredContext(types,context) {
+function hasRequiredContext(types,context,appId=GITHUB_ACTIONS_APP_ID) {
   return types.some(r=>r.type==='required_status_checks'&&
     r.parameters?.strict_required_status_checks_policy===true&&
     Array.isArray(r.parameters.required_status_checks)&&
     r.parameters.required_status_checks.some(x=>x?.context===context&&
-      x.integration_id===GITHUB_ACTIONS_APP_ID));
+      x.integration_id===appId));
 }
 async function verifyProtection(provided) {
   const branch=provided?.branch ?? await github('branches/main');
@@ -68,10 +68,12 @@ async function verifyProtection(provided) {
     deny('main does not require Checks CI');
   if(!hasRequiredContext(effective,'Agent contract / scope gate'))
     deny('main does not require Agent Gates');
-  if(!hasRequiredContext(effective,'Sales selective scope verified'))
+  const publisher=provided?.publisherAppId ?? Number(process.env.SALES_RELEASE_PUBLISHER_APP_ID);
+  if(!Number.isSafeInteger(publisher)||publisher<=0||publisher===GITHUB_ACTIONS_APP_ID)deny('Dedicated release publisher unconfigured');
+  if(!hasRequiredContext(effective,'Sales selective scope verified',publisher))
     deny('main does not require trusted sales scope check');
   for(const context of ['Sales owner acceptance','Sales production approval'])
-    if(!hasRequiredContext(effective,context))deny('main does not require '+context);
+    if(!hasRequiredContext(effective,context,publisher))deny('main does not require '+context);
   if(!effective.some(x=>x.type==='pull_request' &&
       Number.isInteger(x.parameters?.required_approving_review_count) &&
       x.parameters.required_approving_review_count>=1 &&
@@ -181,9 +183,10 @@ async function boundedJson(response, limit) {
 }
 
 export function validateSalesBinding(binding) {
-  if(!binding||Object.keys(binding).length!==8||binding.version!==1||binding.repositoryId!==REPOSITORY_ID||binding.pr!==120||
+  if(!binding||Object.keys(binding).length!==9||binding.version!==1||binding.repositoryId!==REPOSITORY_ID||binding.pr!==120||
       !sha40.test(binding.head??'')||!sha40.test(binding.base??'')||binding.head===binding.base||
       !positiveId(binding.runId)||!positiveId(binding.attempt)||
+      !positiveId(binding.publisherAppId)||binding.publisherAppId===GITHUB_ACTIONS_APP_ID||
       !['pull_request_target','push','workflow_dispatch'].includes(binding.event))deny('Invalid release binding');
   return binding;
 }
@@ -203,7 +206,7 @@ export async function captureSalesBinding({event,env,api}) {
       event.inputs?.expected_base!==pull.base.sha))deny('Dispatch target moved');
   const binding=validateSalesBinding({version:1,repositoryId:REPOSITORY_ID,pr:120,
     head:pull.head.sha,base:pull.base.sha,runId:Number(env.GITHUB_RUN_ID),
-    attempt:Number(env.GITHUB_RUN_ATTEMPT),event:kind});
+    attempt:Number(env.GITHUB_RUN_ATTEMPT),event:kind,publisherAppId:Number(env.SALES_RELEASE_PUBLISHER_APP_ID)});
   await assertLiveSalesBinding(binding,api);
   return binding;
 }
@@ -219,15 +222,24 @@ export async function assertLiveSalesBinding(binding,api) {
       pull.head.repo.fork!==false||branch.commit?.sha!==binding.base||branch.protected!==true)
     deny('Candidate head/base/protection changed');
   if(run.id!==binding.runId||run.run_attempt!==binding.attempt||run.event!==binding.event||
-      run.path!==WORKFLOW||run.head_sha!==binding.base||run.repository?.id!==REPOSITORY_ID||
+      run.head_sha!==binding.base||run.repository?.id!==REPOSITORY_ID||
       run.status!=='in_progress')deny('Workflow run binding changed');
+  await assertSalesWorkflow(run,api);
+}
+
+async function assertSalesWorkflow(run,api) {
+  // GitHub documents @main and the repository also returns bare paths. Both
+  // require an independent fixed-workflow metadata/ID match, never a suffix wildcard.
+  if(![WORKFLOW,`${WORKFLOW}@main`].includes(run.path)||!positiveId(run.workflow_id))deny('Workflow identity unverified');
+  const workflow=await api('actions/workflows/sales-selective-scope.yml');
+  if(workflow.id!==run.workflow_id||workflow.path!==WORKFLOW||workflow.state!=='active')deny('Workflow identity mismatch');
 }
 
 function checkExternalId(binding,stage) { return `sc-sales-v1:${digest(binding)}:${stage}`; }
 function assertBoundCheck(check,binding,stage,id) {
   if(!Object.hasOwn(SALES_CHECKS,stage)||!positiveId(check?.id)||(id!==undefined&&check.id!==id)||
       check.head_sha!==binding.head||check.name!==SALES_CHECKS[stage]||
-      check.external_id!==checkExternalId(binding,stage)||check.app?.id!==GITHUB_ACTIONS_APP_ID)
+      check.external_id!==checkExternalId(binding,stage)||check.app?.id!==binding.publisherAppId)
     deny('Check provenance mismatch');
 }
 function checkIds(value) {
@@ -374,6 +386,7 @@ export async function verifyEvidenceOidc({jwt,request,fetchImpl=fetch,now=Date.n
       !Number.isInteger(claims.exp)||!Number.isInteger(claims.nbf)||!Number.isInteger(claims.iat)||
       claims.exp<=seconds||claims.exp<=claims.iat||claims.nbf>seconds+5||claims.iat>seconds+5||claims.exp-claims.iat>600||
       (claims.job_workflow_ref!==undefined&&claims.job_workflow_ref!==workflowRef))deny('OIDC identity/binding invalid');
+  return claims;
 }
 
 export function verifyProtectionEnvelope({envelope,request,publicKey,startedAt,now=Date.now}) {
@@ -387,7 +400,7 @@ export function verifyProtectionEnvelope({envelope,request,publicKey,startedAt,n
   if(!verifySignature(null,bytes,key,Buffer.from(envelope.signature,'base64url')))deny('Protection evidence signature invalid');
   let proof;try { proof=JSON.parse(bytes); } catch { deny('Protection evidence JSON invalid'); }
   const current=now();
-  if(proof.version!==1||proof.requestDigest!==digest(request)||
+  if(proof.version!==1||proof.requestDigest!==digest(request)||proof.publisherAppId!==request.binding.publisherAppId||
       !Number.isSafeInteger(proof.observedAt)||!Number.isSafeInteger(proof.expiresAt)||
       proof.observedAt<startedAt-5000||proof.observedAt>current+5000||proof.expiresAt<=current||
       proof.expiresAt-proof.observedAt!==PROOF_TTL_MS||proof.branch?.commit?.sha!==request.binding.base||
@@ -396,7 +409,7 @@ export function verifyProtectionEnvelope({envelope,request,publicKey,startedAt,n
   return proof;
 }
 
-export async function requestProtectionEvidence({binding,env,fetchImpl=fetch,now=Date.now}) {
+async function callSalesBroker({request,env,fetchImpl=fetch}) {
   let endpoint,oidcUrl;
   try {
     endpoint=new URL(env.SALES_EVIDENCE_URL);
@@ -406,8 +419,6 @@ export async function requestProtectionEvidence({binding,env,fetchImpl=fetch,now
       endpoint.pathname!=='/evidence'||oidcUrl.protocol!=='https:'||
       !oidcUrl.hostname.endsWith('.actions.githubusercontent.com')||oidcUrl.port||oidcUrl.username||oidcUrl.password||oidcUrl.hash||
       !env.SALES_EVIDENCE_PUBLIC_KEY||!env.ACTIONS_ID_TOKEN_REQUEST_TOKEN)deny('Invalid evidence provider configuration');
-  const request=evidenceRequest(binding,randomBytes(32).toString('hex'));
-  const startedAt=now();
   oidcUrl.searchParams.set('audience',evidenceAudience(request));
   const oidc=await fetchImpl(oidcUrl,{headers:{Authorization:`Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}`},
     redirect:'error',signal:AbortSignal.timeout(8000)});
@@ -417,13 +428,20 @@ export async function requestProtectionEvidence({binding,env,fetchImpl=fetch,now
   const response=await fetchImpl(endpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),
     headers:{Authorization:`Bearer ${token.value}`,'Content-Type':'application/json'},body:JSON.stringify(request)});
   if(!response.ok)deny('Live evidence provider rejected request');
-  const proof=verifyProtectionEnvelope({envelope:await boundedJson(response,131072),request,
+  return boundedJson(response,131072);
+}
+
+export async function requestProtectionEvidence({binding,env,fetchImpl=fetch,now=Date.now}) {
+  const request=evidenceRequest(binding,randomBytes(32).toString('hex'));
+  const startedAt=now();
+  const envelope=await callSalesBroker({request,env,fetchImpl});
+  const proof=verifyProtectionEnvelope({envelope,request,
     publicKey:env.SALES_EVIDENCE_PUBLIC_KEY,startedAt,now});
   await verifyProtection(proof);
   return proof;
 }
 
-async function mintEvidenceInstallation({config,fetchImpl,now}) {
+async function mintEvidenceInstallation({config,fetchImpl,now,publish=false}) {
   if(!positiveId(config.appId)||!positiveId(config.installationId))deny('Evidence App unconfigured');
   const seconds=Math.floor(now()/1000);
   const header=Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT'})).toString('base64url');
@@ -437,7 +455,7 @@ async function mintEvidenceInstallation({config,fetchImpl,now}) {
   // GitHub withholds bypass_actors without ruleset write access. This grant is
   // confined to the external broker, never the release workflow. Provisioning
   // this dedicated App and key requires explicit administrator approval.
-  const permissions={administration:'write',contents:'read',pull_requests:'read',actions:'read'};
+  const permissions={administration:'write',contents:'read',pull_requests:'read',actions:'read',...(publish?{checks:'write'}:{})};
   const response=await fetchImpl(`https://api.github.com/app/installations/${config.installationId}/access_tokens`,{
     method:'POST',headers:{...headers,'Content-Type':'application/json'},redirect:'error',signal:AbortSignal.timeout(8000),
     body:JSON.stringify({repository_ids:[REPOSITORY_ID],permissions}),
@@ -466,18 +484,20 @@ async function mintEvidenceInstallation({config,fetchImpl,now}) {
 }
 
 export async function handleProtectionEvidence({request,authorization,config,fetchImpl=fetch,now=Date.now}) {
-  const canonical=evidenceRequest(request?.binding,request?.nonce);
+  const canonical=canonicalBrokerRequest(request);
+  if(config?.appId!==request.binding.publisherAppId||config.appId===GITHUB_ACTIONS_APP_ID)deny('Dedicated publisher identity mismatch');
   if(JSON.stringify(canonical)!==JSON.stringify(request))deny('Unexpected evidence request shape');
-  await verifyEvidenceOidc({jwt:authorization,request,fetchImpl,now});
-  const installation=await mintEvidenceInstallation({config,fetchImpl,now});
+  const claims=await verifyEvidenceOidc({jwt:authorization,request,fetchImpl,now});
+  const installation=await mintEvidenceInstallation({config,fetchImpl,now,publish:!!request.publication});
   try {
+    if(request.publication)return await executeBrokerPublication({request,claims,api:installation.api});
     const observedAt=now();
     await assertLiveSalesBinding(request.binding,installation.api);
     const [branch,rule]=await Promise.all([
       installation.api('branches/main'),installation.api(`rulesets/${EVIDENCE_RULESET_ID}`),
     ]);
     if(rule.id!==EVIDENCE_RULESET_ID||rule.source!==full||rule.source_type!=='Repository')deny('Evidence ruleset identity changed');
-    const proof={version:1,requestDigest:digest(request),observedAt,expiresAt:observedAt+PROOF_TTL_MS,branch,rules:[rule]};
+    const proof={version:1,publisherAppId:config.appId,requestDigest:digest(request),observedAt,expiresAt:observedAt+PROOF_TTL_MS,branch,rules:[rule]};
     await verifyProtection(proof);
     await assertLiveSalesBinding(request.binding,installation.api);
     if(now()>=proof.expiresAt)deny('Evidence collection timed out');
@@ -486,6 +506,111 @@ export async function handleProtectionEvidence({request,authorization,config,fet
     const bytes=Buffer.from(JSON.stringify(proof));
     return {payload:bytes.toString('base64url'),signature:signBytes(null,bytes,key).toString('base64url')};
   } finally { await installation.revoke(); }
+}
+
+
+// All three release contexts are owned by the dedicated external App, not by
+// the repository-wide Actions App that candidate workflows can impersonate.
+function canonicalBrokerRequest(request) {
+  const base=evidenceRequest(request?.binding,request?.nonce);
+  if(!Object.hasOwn(request,'publication'))return base;
+  const p=request.publication;
+  if(!p||Object.keys(p).length!==4||!Object.hasOwn(SALES_CHECKS,p.stage)||
+      !['in_progress','success','failure'].includes(p.conclusion)||
+      (p.conclusion==='in_progress'?p.checkId!==null:!positiveId(p.checkId))||
+      !Array.isArray(p.priorIds))deny('Invalid broker publication');
+  const prior=p.conclusion!=='success'||p.stage==='scope'?[]:p.stage==='owner'?['scope']:['scope','owner'];
+  if(p.priorIds.length!==prior.length||p.priorIds.some((item,i)=>!item||
+      Object.keys(item).length!==2||item.stage!==prior[i]||!positiveId(item.id)))deny('Invalid prior gate references');
+  return {...base,publication:{stage:p.stage,conclusion:p.conclusion,checkId:p.checkId,
+    priorIds:p.priorIds.map(item=>({stage:item.stage,id:item.id}))}};
+}
+
+export function createBrokeredSalesApi({binding,ids,env,readApi,fetchImpl=fetch}) {
+  validateSalesBinding(binding);
+  if(Number(env.SALES_RELEASE_PUBLISHER_APP_ID)!==binding.publisherAppId)deny('Publisher configuration mismatch');
+  return async(path,options={})=>{
+    if(!options.method||options.method==='GET')return readApi(path,options);
+    const stage=Object.keys(SALES_CHECKS).find(key=>SALES_CHECKS[key]===
+      (options.method==='POST'?options.body?.name:options.body?.output?.title));
+    const initial=options.method==='POST'&&path==='check-runs';
+    const idMatch=/^check-runs\/([1-9][0-9]*)$/.exec(path);
+    if(!stage||(!initial&&!(options.method==='PATCH'&&idMatch))||
+        (initial&&(options.body.head_sha!==binding.head||options.body.status!=='in_progress'||
+          options.body.external_id!==checkExternalId(binding,stage)))||
+        (!initial&&(options.body.status!=='completed'||!['success','failure'].includes(options.body.conclusion))))
+      deny('Invalid brokered check operation');
+    const conclusion=initial?'in_progress':options.body.conclusion;
+    const prior=conclusion!=='success'||stage==='scope'?[]:stage==='owner'?['scope']:['scope','owner'];
+    const request=canonicalBrokerRequest({...evidenceRequest(binding,randomBytes(32).toString('hex')),
+      publication:{stage,conclusion,checkId:initial?null:Number(idMatch[1]),
+        priorIds:prior.map(key=>({stage:key,id:ids?.[key]}))}});
+    const response=await callSalesBroker({request,env,fetchImpl});
+    const check=response.check;
+    assertBoundCheck(check,binding,stage,initial?undefined:Number(idMatch[1]));
+    // Verify the producer's result independently through the read-only GitHub
+    // token. The remote endpoint cannot fabricate a successful API response.
+    const actual=await readApi(`check-runs/${check.id}`);
+    assertBoundCheck(actual,binding,stage,check.id);
+    if(actual.status!==check.status||actual.conclusion!==check.conclusion)deny('Publisher response not confirmed');
+    return actual;
+  };
+}
+
+async function executeBrokerPublication({request,claims,api}) {
+  const binding=request.binding,p=request.publication;
+  if(p.conclusion==='failure') {
+    // Cleanup may outlive a moved HEAD or cancelled attempt, but it can only
+    // invalidate this exact run's dedicated-App checks, never a newer run.
+    const run=await api(`actions/runs/${binding.runId}`);
+    if(run.id!==binding.runId||run.run_attempt!==binding.attempt||
+        run.head_sha!==binding.base||run.event!==binding.event||run.repository?.id!==REPOSITORY_ID)
+      deny('Cleanup run binding changed');
+    await assertSalesWorkflow(run,api);
+  } else {
+    await assertLiveSalesBinding(binding,api);
+    if(binding.attempt!==1)deny('Fresh workflow run required for approvals');
+  }
+  if(p.conclusion==='success') {
+    const [branch,rule]=await Promise.all([api('branches/main'),api(`rulesets/${EVIDENCE_RULESET_ID}`)]);
+    if(rule.id!==EVIDENCE_RULESET_ID||rule.source!==full||rule.source_type!=='Repository')deny('Publisher ruleset identity changed');
+    await verifyProtection({branch,rules:[rule],publisherAppId:binding.publisherAppId});
+    await verifySalesEnvironments(api);
+    if(p.stage!=='scope') {
+      const environment=p.stage==='owner'?'owner-acceptance':'production-approval';
+      if(claims.environment!==environment)deny('Approval publication lacks protected environment identity');
+      for(const prior of p.priorIds) {
+        const check=await api(`check-runs/${prior.id}`);
+        assertBoundCheck(check,binding,prior.stage,prior.id);
+        if(check.status!=='completed'||check.conclusion!=='success')deny('Prior broker gate not successful');
+      }
+      await verifySalesApprovals({binding,stage:p.stage,api});
+    }
+  }
+  if(p.conclusion==='in_progress') {
+    const check=await api('check-runs',{method:'POST',body:{name:SALES_CHECKS[p.stage],head_sha:binding.head,
+      external_id:checkExternalId(binding,p.stage),status:'in_progress',
+      details_url:`https://github.com/${full}/actions/runs/${binding.runId}`,
+      output:{title:SALES_CHECKS[p.stage],summary:`Pending; HEAD ${binding.head}; BASE ${binding.base}; run ${binding.runId}/${binding.attempt}`}}});
+    assertBoundCheck(check,binding,p.stage);return {check};
+  }
+  const existing=await api(`check-runs/${p.checkId}`);
+  assertBoundCheck(existing,binding,p.stage,p.checkId);
+  if(p.conclusion==='success')await assertLiveSalesBinding(binding,api);
+  const check=await api(`check-runs/${p.checkId}`,{method:'PATCH',body:{status:'completed',conclusion:p.conclusion,
+    output:{title:SALES_CHECKS[p.stage],summary:`${p.conclusion}; HEAD ${binding.head}; BASE ${binding.base}; run ${binding.runId}/${binding.attempt}`}}});
+  assertBoundCheck(check,binding,p.stage,p.checkId);
+  return {check};
+}
+
+export async function invalidateSalesChecks({binding,ids,api}) {
+  const failed=[];
+  for(const stage of Object.keys(SALES_CHECKS)) {
+    try { await publishSalesCheck({binding,ids,stage,conclusion:'failure',api}); }
+    catch { failed.push(stage); }
+  }
+  // Do not reveal provider text. Every check was attempted before failure.
+  if(failed.length)deny('Check invalidation incomplete: '+failed.join(','));
 }
 
 export function serveProtectionEvidence(env=process.env) {
@@ -515,7 +640,7 @@ export function serveProtectionEvidence(env=process.env) {
 
 export async function salesGateCli({event,env=process.env,cwd='.'}) {
   if(env.SALES_RELEASE_GATES_ENABLED!=='true')deny('Sales release gates not activated');
-  const api=createSalesGitHub({token:env.GITHUB_TOKEN});
+  const readApi=createSalesGitHub({token:env.GITHUB_TOKEN});
   if(env.SALES_GATE_STAGE==='invalidate') {
     const prior=validateSalesBinding(JSON.parse(env.SALES_GATE_BINDING??'null'));
     if(env.GITHUB_REPOSITORY!==full||env.GITHUB_REF!=='refs/heads/main'||
@@ -525,15 +650,16 @@ export async function salesGateCli({event,env=process.env,cwd='.'}) {
     const checkout=execFileSync('git',['rev-parse','HEAD'],{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
     if(checkout!==prior.base)deny('Cleanup checkout is not trusted base');
     const ids=checkIds(JSON.parse(env.SALES_GATE_CHECKS??'null'));
-    for(const stage of Object.keys(SALES_CHECKS))await publishSalesCheck({binding:prior,ids,stage,conclusion:'failure',api});
+    const api=createBrokeredSalesApi({binding:prior,ids,env,readApi});
+    await invalidateSalesChecks({binding:prior,ids,api});
     return {invalidated:true,authorizedForProduction:false};
   }
-  const binding=await captureSalesBinding({event,env,api});
+  const binding=await captureSalesBinding({event,env,api:readApi});
   const checkout=execFileSync('git',['rev-parse','HEAD'],{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   if(checkout!==binding.base)deny('Checkout is not trusted base');
   const mode=env.SALES_GATE_STAGE;
   if(mode==='initialize') {
-    const ids=await initializeSalesChecks(binding,api);
+    const ids=await initializeSalesChecks(binding,createBrokeredSalesApi({binding,env,readApi}));
     if(!env.GITHUB_OUTPUT)deny('Workflow output missing');
     appendFileSync(env.GITHUB_OUTPUT,`binding=${JSON.stringify(binding)}\nchecks=${JSON.stringify(ids)}\n`);
     return {initialized:true,authorizedForProduction:false};
@@ -541,6 +667,7 @@ export async function salesGateCli({event,env=process.env,cwd='.'}) {
   const saved=JSON.parse(env.SALES_GATE_BINDING??'null');
   if(JSON.stringify(saved)!==JSON.stringify(binding))deny('Workflow output binding changed');
   const ids=checkIds(JSON.parse(env.SALES_GATE_CHECKS??'null'));
+  const api=createBrokeredSalesApi({binding,ids,env,readApi});
   await runSalesStage({binding,ids,stage:mode,api,
     protectionCheck:()=>requestProtectionEvidence({binding,env}),
     scopeCheck:async()=>{

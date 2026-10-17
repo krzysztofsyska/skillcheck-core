@@ -72,7 +72,7 @@ function protectionFixture(t, mutate = () => {}) {
       } },
       { type: 'required_status_checks', parameters: {
         strict_required_status_checks_policy: true,
-        required_status_checks: contexts.map(context => ({ context, integration_id: 15368 })),
+        required_status_checks: contexts.map(context => ({ context, integration_id: context.startsWith('Sales ')?8888:15368 })),
       } },
     ],
   };
@@ -83,8 +83,12 @@ function protectionFixture(t, mutate = () => {}) {
   mutate(rule);
   let liveReads = 0;
   const token = process.env.GITHUB_TOKEN;
+  const publisher = process.env.SALES_RELEASE_PUBLISHER_APP_ID;
+  process.env.SALES_RELEASE_PUBLISHER_APP_ID = '8888';
   process.env.GITHUB_TOKEN = 'synthetic-read-only-test-token';
   t.after(() => {
+    if (publisher === undefined) delete process.env.SALES_RELEASE_PUBLISHER_APP_ID;
+    else process.env.SALES_RELEASE_PUBLISHER_APP_ID = publisher;
     if (token === undefined) delete process.env.GITHUB_TOKEN;
     else process.env.GITHUB_TOKEN = token;
   });
@@ -335,7 +339,7 @@ const REPO_ID = 1043384454, OWNER_ID = 222297538;
 const WF = '.github/workflows/sales-selective-scope.yml';
 const T = Date.parse('2026-10-17T13:00:00Z');
 const bindingFor = () => ({ version: 1, repositoryId: REPO_ID, pr: 120,
-  head: 'c'.repeat(40), base: main, runId: 7001, attempt: 1, event: 'pull_request_target' });
+  head: 'c'.repeat(40), base: main, runId: 7001, attempt: 1, event: 'pull_request_target', publisherAppId: 8888 });
 const hashObject = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function liveFixture(binding = bindingFor()) {
   const checks = new Map(), writes = [], reads = [];
@@ -345,7 +349,7 @@ function liveFixture(binding = bindingFor()) {
     base: { ref: 'main', sha: binding.base, repo }, head: { ref: source, sha: binding.head, repo } };
   const branch = { name: 'main', protected: true, commit: { sha: binding.base } };
   const run = { id: binding.runId, run_attempt: binding.attempt, event: binding.event,
-    path: WF, head_sha: binding.base, repository: repo, status: 'in_progress' };
+    path: `${WF}@main`, workflow_id: 901, head_sha: binding.base, repository: repo, status: 'in_progress' };
   const environments = Object.fromEntries(['owner-acceptance', 'production-approval'].map((name, index) => [name, {
     id: 51 + index, name, protection_rules: [{ type: 'required_reviewers', prevent_self_review: false,
       reviewers: [{ type: 'User', reviewer: { id: OWNER_ID, login: 'krzysztofsyska', type: 'User' } }] }],
@@ -359,6 +363,7 @@ function liveFixture(binding = bindingFor()) {
       if (path === 'pulls/120') return structuredClone(pull);
       if (path === 'branches/main') return structuredClone(branch);
       if (path === `actions/runs/${binding.runId}`) return structuredClone(run);
+      if (path === 'actions/workflows/sales-selective-scope.yml') return {id:901,path:WF,state:'active'};
       if (path === `actions/runs/${binding.runId}/approvals`) return structuredClone(fixture.history);
       if (path.startsWith('environments/')) {
         const name = path.split('/')[1];
@@ -370,7 +375,7 @@ function liveFixture(binding = bindingFor()) {
     }
     writes.push({ path, ...structuredClone(options) });
     if (path === 'check-runs' && options.method === 'POST') {
-      const check = { ...structuredClone(options.body), id: ++serial, app: { id: 15368 }, conclusion: null };
+      const check = { ...structuredClone(options.body), id: ++serial, app: { id: binding.publisherAppId }, conclusion: null };
       checks.set(check.id, check); return structuredClone(check);
     }
     if (/^check-runs\/[0-9]+$/.test(path) && options.method === 'PATCH') {
@@ -383,7 +388,7 @@ function liveFixture(binding = bindingFor()) {
     environments: [{ id: environments[name].id, name }], comment: 'synthetic owner decision' });
   fixture.env = { GITHUB_REPOSITORY: REPO, GITHUB_REF: 'refs/heads/main', GITHUB_SHA: binding.base,
     GITHUB_WORKFLOW_SHA: binding.base, GITHUB_WORKFLOW_REF: `${REPO}/${WF}@refs/heads/main`,
-    GITHUB_RUN_ID: String(binding.runId), GITHUB_RUN_ATTEMPT: String(binding.attempt), GITHUB_EVENT_NAME: binding.event };
+    SALES_RELEASE_PUBLISHER_APP_ID: String(binding.publisherAppId), GITHUB_RUN_ID: String(binding.runId), GITHUB_RUN_ATTEMPT: String(binding.attempt), GITHUB_EVENT_NAME: binding.event };
   fixture.event = { repository: repo, pull_request: pull, inputs: { expected_head: binding.head, expected_base: binding.base } };
   return fixture;
 }
@@ -566,10 +571,10 @@ function completeRule() {
         require_last_push_approval: true, required_review_thread_resolution: true } },
       { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true,
         required_status_checks: ['verify', 'Agent contract / scope gate', ...Object.values(trustedRunner.SALES_CHECKS)]
-          .map(context => ({ context, integration_id: 15368 })) } },
+          .map(context => ({ context, integration_id: context.startsWith('Sales ')?8888:15368 })) } },
     ] };
 }
-const proofFor = request => ({ version: 1, requestDigest: hashObject(request), observedAt: T, expiresAt: T + 60000,
+const proofFor = request => ({ version: 1, publisherAppId: request.binding.publisherAppId, requestDigest: hashObject(request), observedAt: T, expiresAt: T + 60000,
   branch: { protected: true, commit: { sha: request.binding.base } }, rules: [completeRule()] });
 function envelopeFor(proof, key = signing.privateKey) {
   const bytes = Buffer.from(JSON.stringify(proof));
@@ -632,7 +637,7 @@ function brokerFixture() {
   const f = liveFixture();const calls = [];
   const config = { appId: 8888, installationId: 9999, signingPrivateKey: pemPrivate,
     appPrivateKey: brokerKey.privateKey.export({ type: 'pkcs8', format: 'pem' }) };
-  const env = { SALES_EVIDENCE_URL: 'https://evidence.example.test/evidence', SALES_EVIDENCE_PUBLIC_KEY: pemPublic,
+  const env = { SALES_RELEASE_PUBLISHER_APP_ID: '8888', SALES_EVIDENCE_URL: 'https://evidence.example.test/evidence', SALES_EVIDENCE_PUBLIC_KEY: pemPublic,
     ACTIONS_ID_TOKEN_REQUEST_URL: 'https://pipelines.synthetic.actions.githubusercontent.com/token',
     ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'synthetic-oidc-request-token', GITHUB_TOKEN: 'synthetic-workflow-token-never-to-broker' };
   const state = { rule: completeRule(), grant: { administration: 'write', contents: 'read', pull_requests: 'read', actions: 'read', metadata: 'read' },
@@ -644,19 +649,21 @@ function brokerFixture() {
     if (url === 'https://api.github.com/app') return Response.json({ id: config.appId, owner: { id: OWNER_ID } });
     if (url.endsWith(`/app/installations/${config.installationId}/access_tokens`)) {
       assert.equal(options.method, 'POST');
-      assert.deepEqual(JSON.parse(options.body), { repository_ids: [REPO_ID], permissions: {
-        administration: 'write', contents: 'read', pull_requests: 'read', actions: 'read' } });
+      const requested = JSON.parse(options.body);
+      const publish = requested.permissions.checks === 'write';
+      assert.deepEqual(requested, { repository_ids: [REPO_ID], permissions: {
+        administration: 'write', contents: 'read', pull_requests: 'read', actions: 'read', ...(publish?{checks:'write'}:{}) } });
       const jwt = options.headers.Authorization.slice(7).split('.');
       assert.ok(verifyToken('RSA-SHA256', Buffer.from(jwt.slice(0, 2).join('.')), brokerKey.publicKey, Buffer.from(jwt[2], 'base64url')));
-      return Response.json({ token: 'synthetic-broker-installation-token', repository_selection: 'selected', permissions: state.grant });
+      return Response.json({ token: 'synthetic-broker-installation-token', repository_selection: 'selected', permissions: {...state.grant, ...(publish?{checks:'write'}:{})} });
     }
     if (url === 'https://api.github.com/installation/repositories?per_page=100') return Response.json(state.scope);
     if (url === 'https://api.github.com/installation/token') { assert.equal(options.method, 'DELETE');return new Response(null, { status: 204 }); }
     if (url.startsWith(`https://api.github.com/repos/${REPO}/`)) {
-      assert.equal(options.method ?? 'GET', 'GET', 'external evidence identity never mutates repository');
       const path = url.split(`/repos/${REPO}/`)[1];
+      if ((options.method ?? 'GET') !== 'GET') assert.match(path,/^check-runs(?:\/[0-9]+)?$/, 'external publisher never changes code, rules or decisions');
       if (path === 'rulesets/25301984') return Response.json(state.rule);
-      return Response.json(await f.api(path));
+      return Response.json(await f.api(path, {method:options.method??'GET', ...(options.body?{body:JSON.parse(options.body)}:{})}));
     }
     assert.fail('Unexpected evidence network target: ' + url);
   };
@@ -664,6 +671,10 @@ function brokerFixture() {
   state.clientFetch = async (url, options = {}) => {
     const target = new URL(String(url));
     assert.equal(options.redirect, 'error');
+    if (target.hostname === 'api.github.com') {
+      assert.equal(options.method,'GET','workflow token must not publish checks');
+      return Response.json(await f.api(target.pathname.split(`/repos/${REPO}/`)[1]));
+    }
     if (target.hostname === 'pipelines.synthetic.actions.githubusercontent.com') {
       assert.equal(options.headers.Authorization, 'Bearer synthetic-oidc-request-token');
       // OIDC server signs exactly the audience requested by the Actions job.
@@ -742,8 +753,8 @@ test('actual workflow wires trusted code, sequential native gates, cleanup and n
   assert.match(text, /environment: production-approval/);
   assert.match(text, /needs: \[initialize, scope, owner\]/);
   assert.match(text, /always\(\) && needs.initialize.result == 'success'/);
-  assert.equal((text.match(/checks: write/g) ?? []).length, 5);
-  assert.equal((text.match(/id-token: write/g) ?? []).length, 3);
+  assert.equal((text.match(/checks: write/g) ?? []).length, 0);
+  assert.equal((text.match(/id-token: write/g) ?? []).length, 5);
   assert.equal((text.match(/persist-credentials: false/g) ?? []).length, 5);
   assert.doesNotMatch(text, /secrets\.|administration:|contents: write|pull-requests: write|deployments: write|statuses: write/);
   assert.doesNotMatch(text, /name: Sales selective scope verified|name: Sales owner acceptance|name: Sales production approval/,
@@ -790,18 +801,16 @@ test('all approval/check state remains pending if scope fails; output cannot gra
 });
 
 test('cleanup marks only its own run checks failed after HEAD moves, not a newer run', async t => {
-  const f = liveFixture();const ids = await trustedRunner.initializeSalesChecks(f.binding, f.api);
+  t.mock.method(Date, 'now', () => T);
+  const b = brokerFixture(), f = b.f;const ids = await trustedRunner.initializeSalesChecks(f.binding, f.api);
   for (const check of f.checks.values()) { check.status = 'completed'; check.conclusion = 'success'; }
   const newer = { id: 9999, name: 'Sales production approval', status: 'in_progress', head_sha: 'd'.repeat(40), app: { id: 15368 } };
   f.checks.set(newer.id, newer);f.pull.head.sha = 'd'.repeat(40);f.run.status = 'completed';
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
-    const path = new URL(url).pathname.split(`/repos/${REPO}/`)[1];
-    return Response.json(await f.api(path, { method: options.method, ...(options.body ? { body: JSON.parse(options.body) } : {}) }));
-  });
+  t.mock.method(globalThis, 'fetch', b.clientFetch);
   const original = childProcess.execFileSync;
   t.mock.method(childProcess, 'execFileSync', () => f.binding.base);
   syncBuiltinESMExports();t.after(() => { childProcess.execFileSync = original;syncBuiltinESMExports(); });
-  const result = await trustedRunner.salesGateCli({ event: f.event, env: { ...f.env,
+  const result = await trustedRunner.salesGateCli({ event: f.event, env: { ...f.env, ...b.env,
     GITHUB_TOKEN: 'synthetic-cleanup-token', SALES_RELEASE_GATES_ENABLED: 'true', SALES_GATE_STAGE: 'invalidate',
     SALES_GATE_BINDING: JSON.stringify(f.binding), SALES_GATE_CHECKS: JSON.stringify(ids) } });
   assert.deepEqual(result, { invalidated: true, authorizedForProduction: false });
@@ -811,4 +820,124 @@ test('cleanup marks only its own run checks failed after HEAD moves, not a newer
 
 test('unknown release-binding fields cannot be injected into an authenticated request', () => {
   assert.throws(() => trustedRunner.validateSalesBinding({ ...bindingFor(), route: '/admin' }), /Invalid release binding/);
+});
+
+// Independent review 5558129801: dedicated producer, documented run paths,
+// and best-effort invalidation that attempts every owned check.
+for (const path of [WF, `${WF}@main`]) {
+  test(`workflow path ${path} is accepted only with independently matching workflow metadata`, async () => {
+    const f=liveFixture();f.run.path=path;
+    await trustedRunner.assertLiveSalesBinding(f.binding,f.api);
+    assert.ok(f.reads.includes('actions/workflows/sales-selective-scope.yml'));
+    f.run.workflow_id=777;
+    await assert.rejects(trustedRunner.assertLiveSalesBinding(f.binding,f.api),/Workflow identity mismatch/);
+  });
+}
+for (const path of [`${WF}@integration`, `${WF}@refs/heads/main`, `${WF}@main-extra`, `${WF}@${main}`]) {
+  test(`workflow identity refuses unapproved qualified path ${path}`, async () => {
+    const f=liveFixture();f.run.path=path;
+    await assert.rejects(trustedRunner.initializeSalesChecks(f.binding,f.api),/Workflow identity/);
+    assert.equal(f.writes.length,0);
+  });
+}
+for (const stage of ['scope','owner','production']) {
+  test(`Actions App cannot impersonate dedicated ${stage} publisher`, async () => {
+    const f=liveFixture();const ids=await trustedRunner.initializeSalesChecks(f.binding,f.api);
+    f.checks.get(ids[stage]).app.id=15368;
+    await assert.rejects(trustedRunner.publishSalesCheck({binding:f.binding,ids,stage,conclusion:'success',api:f.api}),/Check provenance/);
+    assert.equal(f.writes.length,3);
+  });
+  test(`required ${stage} context cannot be pinned to repository-wide Actions App`, async () => {
+    const b=brokerFixture();
+    b.rule.rules[3].parameters.required_status_checks.find(c=>c.context===trustedRunner.SALES_CHECKS[stage]).integration_id=15368;
+    await assert.rejects(trustedRunner.requestProtectionEvidence({binding:b.f.binding,env:b.env,fetchImpl:b.clientFetch,now:()=>T}),/main does not require/);
+  });
+}
+
+test('dedicated broker publishes all three checks while workflow token performs reads only', async () => {
+  const b=brokerFixture();
+  const readApi=async(path,options={})=>{assert.equal(options.method??'GET','GET');return b.f.api(path,options);};
+  const initialApi=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,env:b.env,readApi,fetchImpl:b.clientFetch});
+  const ids=await trustedRunner.initializeSalesChecks(b.f.binding,initialApi);
+  const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,ids,env:b.env,readApi,fetchImpl:b.clientFetch});
+  const protectionCheck=()=>trustedRunner.requestProtectionEvidence({binding:b.f.binding,env:b.env,fetchImpl:b.clientFetch,now:()=>T});
+  await trustedRunner.runSalesStage(stageArgs(b.f,ids,'scope',{api,protectionCheck}));
+  b.f.history.push(b.f.approve('owner-acceptance'));b.claimsPatch.environment='owner-acceptance';
+  await trustedRunner.runSalesStage(stageArgs(b.f,ids,'owner',{api,protectionCheck}));
+  b.f.history.push(b.f.approve('production-approval'));b.claimsPatch.environment='production-approval';
+  await trustedRunner.runSalesStage(stageArgs(b.f,ids,'production',{api,protectionCheck}));
+  for(const id of Object.values(ids)) {
+    assert.equal(b.f.checks.get(id).app.id,8888);
+    assert.equal(b.f.checks.get(id).conclusion,'success');
+  }
+  const checkWrites=b.calls.filter(call=>call.url.includes('/check-runs')&&['POST','PATCH'].includes(call.method));
+  assert.equal(checkWrites.length,6);
+  assert.equal(b.calls.filter(call=>call.url.includes('/access_tokens')).length,12);
+  assert.equal(b.calls.filter(call=>call.method==='DELETE').length,12);
+  const lastPatch=b.calls.findLastIndex(call=>call.method==='PATCH');
+  assert.ok(b.calls.findLastIndex(call=>call.method==='DELETE')>lastPatch,'token must be revoked AFTER awaiting the publication, not before');
+});
+
+test('publication proof from a candidate workflow is refused before any privileged token or write', async () => {
+  const b=brokerFixture();b.claimsPatch.workflow_ref=`${REPO}/${WF}@refs/pull/120/merge`;
+  const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,env:b.env,readApi:b.f.api,fetchImpl:b.clientFetch});
+  await assert.rejects(trustedRunner.initializeSalesChecks(b.f.binding,api),/OIDC identity/);
+  assert.equal(b.calls.filter(call=>call.method==='POST').length,0);
+  assert.equal(b.f.writes.length,0);
+});
+
+test('broker independently rejects owner publication without the protected environment claim', async () => {
+  const b=brokerFixture();const ids=await trustedRunner.initializeSalesChecks(b.f.binding,b.f.api);
+  await trustedRunner.runSalesStage(stageArgs(b.f,ids,'scope'));
+  b.f.history=[b.f.approve('owner-acceptance')];
+  const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,ids,env:b.env,readApi:b.f.api,fetchImpl:b.clientFetch});
+  await assert.rejects(trustedRunner.runSalesStage(stageArgs(b.f,ids,'owner',{api})),/protected environment identity/);
+  assert.equal(b.f.checks.get(ids.owner).conclusion,'failure');
+});
+
+test('broker independently rechecks rejected owner approval before completing a dedicated check', async () => {
+  const b=brokerFixture();const ids=await trustedRunner.initializeSalesChecks(b.f.binding,b.f.api);
+  await trustedRunner.runSalesStage(stageArgs(b.f,ids,'scope'));
+  b.f.history=[{...b.f.approve('owner-acceptance'),state:'rejected'}];
+  b.claimsPatch.environment='owner-acceptance';
+  const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,ids,env:b.env,readApi:b.f.api,fetchImpl:b.clientFetch});
+  // Call the publisher directly to show that main-side orchestration is not the
+  // broker's only guard against manufactured approval results.
+  await assert.rejects(trustedRunner.publishSalesCheck({binding:b.f.binding,ids,stage:'owner',conclusion:'success',api}),/Invalid owner approval/);
+  assert.equal(b.f.checks.get(ids.owner).conclusion,null);
+});
+
+test('broker rejects binding to the Actions App or to an unconfigured publisher', () => {
+  assert.throws(()=>trustedRunner.validateSalesBinding({...bindingFor(),publisherAppId:15368}),/Invalid release binding/);
+  assert.throws(()=>trustedRunner.createBrokeredSalesApi({binding:bindingFor(),env:{},readApi:()=>{}}),/Publisher configuration mismatch/);
+});
+
+for(const failedStage of ['scope','owner','production']) {
+  test(`cleanup attempts every check when ${failedStage} fails`, async () => {
+    const f=liveFixture();const ids=await trustedRunner.initializeSalesChecks(f.binding,f.api);
+    const attempted=[];
+    const api=async(path,options={})=>{
+      if(options.method==='PATCH') {
+        attempted.push(Number(path.split('/')[1]));
+        if(path===`check-runs/${ids[failedStage]}`)throw new Error('provider-secret-must-not-escape');
+      }
+      return f.api(path,options);
+    };
+    await assert.rejects(trustedRunner.invalidateSalesChecks({binding:f.binding,ids,api}),error=>
+      error.message===`SALES_RELEASE_SCOPE_DENIED: Check invalidation incomplete: ${failedStage}`);
+    assert.deepEqual(attempted,Object.values(ids));
+    for(const stage of Object.keys(ids).filter(stage=>stage!==failedStage))assert.equal(f.checks.get(ids[stage]).conclusion,'failure');
+  });
+}
+
+test('live workflow token has no check writes and every publication goes through the broker', () => {
+  const y=readFileSync(trustedWorkflow,'utf8');
+  assert.doesNotMatch(y,/(?:checks|statuses|administration|contents|pull-requests|deployments): write/);
+  assert.match(y,/SALES_RELEASE_PUBLISHER_APP_ID: \$\{\{ vars.SALES_RELEASE_PUBLISHER_APP_ID \}\}/);
+  assert.equal((y.match(/id-token: write/g)??[]).length,5);
+  const code=readFileSync('tools/agent-pipeline/lib/sales-trusted-runner.mjs','utf8');
+  const cli=code.slice(code.indexOf('export async function salesGateCli'));
+  assert.match(cli,/initializeSalesChecks\(binding,createBrokeredSalesApi/);
+  assert.match(cli,/const api=createBrokeredSalesApi\(\{binding,ids,env,readApi\}\)/);
+  assert.match(cli,/invalidateSalesChecks\(\{binding:prior,ids,api\}\)/);
 });
