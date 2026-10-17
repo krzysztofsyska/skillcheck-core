@@ -1409,7 +1409,7 @@ test('new findings revoke owner readiness before reserving the next handoff', ()
   }));
   assert.equal(findings.outcome.status, 'HANDOFF');
   assert.equal(findings.outcome.plan.cursor_handoff == null, false);
-  assert.equal(findings.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'READINESS_REVOKED');
+  assert.equal(findings.ledger.reservations[dedupKey('126', SHA.one, 5445420558)].status, 'SUPERSEDED');
   const replay = apply(findings.ledger, reviewSnapshot({
     headSha: SHA.two,
     reviewId: 100,
@@ -2605,4 +2605,43 @@ test('a uniquely later verified CI run can replace a failed dispatch with the sa
   });
   const blocked = await observeStructuralReview(ledger, 126, ambiguous.github, policy);
   assert.notEqual(blocked.outcome.status, 'READY_FOR_OWNER');
+});
+
+
+test('a newer finding retires revoked structural readiness only after its replacement handoff is accepted', async () => {
+  const policy = configuredReviewPolicy();
+  const { ledger, expected } = structuralLedger('ci-after');
+  const key = dedupKey('126', SHA.one, 5445420558);
+  const initial = await observeStructuralReview(ledger, 126, structuralWorld({
+    expected, policy, envelope: passEnvelope(expected, policy),
+  }).github, policy);
+  assert.equal(initial.outcome.status, 'READY_FOR_OWNER');
+  const laterFinding = reviewSnapshot({
+    headSha: SHA.two, baseSha: SHA.base, reviewId: 9911,
+    reviewState: 'changes_requested', threads: [thread(9911, 9911, SHA.two)],
+    now: '2026-10-15T15:20:00Z',
+  });
+  laterFinding.review.submittedAt = '2026-10-15T15:20:00Z';
+  const negative = apply(initial.ledger, laterFinding);
+  assert.equal(negative.outcome.status, 'HANDOFF');
+  assert.equal(negative.ledger.reservations[key].status, 'SUPERSEDED');
+  const old = await observeStructuralReview(negative.ledger, 126, structuralWorld({
+    expected, policy, envelope: passEnvelope(expected, policy), pullHead: SHA.three,
+  }).github, policy);
+  assert.equal(old.ledger.reservations[key].status, 'SUPERSEDED');
+  assert.notEqual(old.outcome.status, 'READY_FOR_OWNER');
+});
+
+test('an approved webhook cannot grant readiness without its exact authenticated review record', async () => {
+  const { ledger } = structuralLedger('ci-after');
+  const evt = githubEvent({ reviewId: 9960, sha: SHA.two, state: 'approved' });
+  const missing = await deliverGithubReview(ledger, evt, [], {
+    async readCommit(sha) { return { sha, author: { ...CURSOR_ACTOR } }; },
+    async readPullReviews() { return []; },
+  });
+  assert.equal(missing.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(missing.outcome.status, 'READY_FOR_OWNER');
+  const noReader = await deliverGithubReview(ledger, evt, [], null);
+  assert.equal(noReader.outcome.status, 'BLOCKED_EVIDENCE');
+  assert.notEqual(noReader.outcome.status, 'READY_FOR_OWNER');
 });

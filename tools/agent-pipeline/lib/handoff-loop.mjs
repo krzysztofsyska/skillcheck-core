@@ -103,7 +103,9 @@ export async function deliverGithubReview(ledger, event, threads = [], github = 
     };
     snapshot.verdict = state === 'approved' ? 'PASS' : state === 'changes_requested' ? 'FAIL' : null;
     snapshot.reviewDecision = 'found';
-  } else if (decision.checked) snapshot.reviewDecision = 'missing';
+  } else snapshot.reviewDecision = 'missing';
+  // Missing authoritative review evidence (including an unavailable reader)
+  // must not be silently replaced by the untrusted webhook's 'approved' state.
   return step(ledger, snapshot);
 }
 
@@ -259,6 +261,12 @@ function onReview(ledger, snapshot) {
     return { status: 'BLOCKED_EVIDENCE' };
   }
   if (snapshot.reviewSuperseded) return reconcileSupersededReview(ledger, snapshot);
+  if (snapshot.reviewDecision === 'missing') {
+    // A webhook is not an attestation; suspend any cached readiness rather
+    // than promoting a success not found in the GitHub reviews endpoint.
+    suspendReadyOnReadFailure(ledger, snapshot);
+    return { status: 'BLOCKED_EVIDENCE' };
+  }
   const findings = snapshot.review.id ? actionableFindings(snapshot) : [];
   const verdict = canonicalVerdict(snapshot.verdict ?? snapshot.review?.verdict);
   if (findings.length === 0 && isCleanPass(snapshot, verdict)) {
@@ -338,7 +346,9 @@ function reserveHandoff(ledger, snapshot, findings) {
     if (claim.status === 'WAITING_CAPACITY') supersedeOpenReservations(ledger, pr);
     return { status: claim.status, attempt: used, cursor_handoff: null };
   }
-  supersedeOpenReservations(ledger, pr);
+  // Only a newly accepted replacement handoff retires an older revoked
+  // reservation; plain revocation without a replacement can still recover.
+  supersedeOpenReservations(ledger, pr, { retireRevoked: true });
   const handoffId = handoffIdFor(pr, snapshot.pull.headSha, snapshot.review.id);
   ledger.attempts[pr] = used + 1;
   ledger.reservations[key] = {
@@ -1197,9 +1207,12 @@ function mergeDuplicateFindings(existing, findings, attempt) {
   };
 }
 
-function supersedeOpenReservations(ledger, pr) {
+function supersedeOpenReservations(ledger, pr, options = {}) {
   for (const row of Object.values(ledger.reservations)) {
-    if (row.pr === pr && OPEN_STATUSES.has(row.status)) row.status = 'SUPERSEDED';
+    if (row.pr === pr && (OPEN_STATUSES.has(row.status)
+        || (options.retireRevoked === true && row.status === 'READINESS_REVOKED'))) {
+      row.status = 'SUPERSEDED';
+    }
   }
 }
 
