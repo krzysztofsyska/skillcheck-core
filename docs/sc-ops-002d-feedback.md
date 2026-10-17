@@ -3,7 +3,7 @@
 TASK: SC-OPS-002D; LEVEL: L3; SCOPE: OPERATIONS
 OWNER: krzysztofsyska; REVIEWER: independent Codex review
 ISSUE: #56; DEPENDS ON: #40 / #41; E2E: #48 / #49
-BASE: integration `9307d8cab5c1269fb04a1fe98a8add4d39a745cb`
+BASE (initial implementation): integration `9307d8cab5c1269fb04a1fe98a8add4d39a745cb`
 BRANCH: chore/sc-ops-002d-feedback-loop
 STATUS: implementation prepared, activation and live E2E BLOCKED_CONFIGURATION
 DB / MIGRATIONS: none
@@ -83,8 +83,10 @@ An empty or changed set does not start Cursor; the reservation stays
 git snapshot alone is session-wide, so it is not sufficient attribution. Only then does
 the adapter request `@codex review` once. A current-head APPROVED review or Codex's
 thumbs-up on that exact re-review request yields READY_FOR_OWNER, never owner
-acceptance. CI and the two existing approval gates still govern acceptance and
-production. Base/head movement invalidates the thumbs-up binding. A review
+acceptance. After PR #124, routine integration requires current CI, independent
+review and verified branch protection, not a separate owner acceptance click.
+Production remains separately approved. This adapter performs neither merge nor
+deployment. Base/head movement invalidates the thumbs-up binding. A review
 request that is still `WAITING_REVIEW` is replaced once when the head or base
 moves and the current head has no unhandled finding; the stale request cannot
 time out into `BLOCKED_TIMEOUT`. Two-hour repair and 45-minute requested-review
@@ -110,8 +112,10 @@ still stop the whole invocation before dispatch.
 ## Activation prerequisites — not performed by this PR
 
 1. Finish #40 and independently review #41: verified dedicated App IDs, gate
-   environments, branch rules, isolated review credentials and provider budget.
-   This adapter uses the installed Codex GitHub reviewer; it needs no OpenAI key.
+   environments, branch rules and isolated review credentials. The one-shot
+   pilot follows the authorization in #127; recurring operation needs its own
+   post-pilot budget. This adapter uses the installed Codex GitHub reviewer;
+   it needs no OpenAI key.
 2. Protect `agent-feedback-state`: exclusive App writer with always bypass only
    on its update AND creation restrictions; separate deletion/non-fast-forward
    rules without bypass. Bootstrap this branch once. Do not delete state to reset
@@ -131,13 +135,15 @@ still stop the whole invocation before dispatch.
    owner-approved promotion. GitHub issue_comment/schedule require default-branch
    installation. A draft PR into integration does not activate them. Since main
    is the production source, this chat must not merge there to bypass this blocker.
-6. Enable config.enabled and AGENT_FEEDBACK_ENABLED only for the bounded test;
-   leave AGENT_PIPELINE_ENABLED and AGENT_PIPELINE_MERGE_ENABLED false. The
-   workflow and the runtime both require the merge switch to be explicit
-   `false` before any Cursor dispatch. API preflight
-   checks branch/gate protection before any agent call. The App must be permitted
-   to trigger the installed Codex reviewer; a successfully posted comment is not
-   proof that a bot-authored mention was accepted.
+6. Only after reviewed configuration and verified prerequisites, the one-shot
+   pilot uses `costProbe.armed=true`, `config.enabled=false` and exactly one
+   verified binding with `AGENT_FEEDBACK_ENABLED=true`. Keep both controller
+   switches explicitly false. Setting `config.enabled=true` is not the pilot
+   path: the multi-round guard remains closed. The committed configuration is
+   disarmed; this runbook does not enable it. Preflight checks branch/gate
+   protection before any agent call. The App must be permitted to trigger the
+   installed Codex reviewer; a posted comment alone proves neither acceptance
+   of a bot-authored mention nor completion of the review.
 
 ## Live synthetic acceptance
 
@@ -255,28 +261,29 @@ Cursor run; automatic new commit on the same PR changing ACTUAL_TOKEN to SAFE;
 new Codex review/request evidence on that SHA; no outstanding current-head finding;
 required checks; no fourth repair, duplicate dispatch, merge or deployment.
 Offline test doubles are not that evidence. At preparation, no live dispatch has
-been made and live PASS is NOT claimed. Rulesets API still returns [] and the
-original agent-state branch is absent. No Cursor/App credentials are available in
-the current shell; no secrets were read from disk or printed.
+been made and live PASS is NOT claimed. The initial preparation snapshot had
+no visible rulesets and no original agent-state branch. Those are historical
+observations, not current protection evidence; repeat all prerequisite reads
+with the approved identity before activation. No secrets are printed.
 
 ## Live test spend guard — BLOCKED_BUDGET_GUARD
 
-Owner authorization for one documentation-only live test allows a combined hard
-ceiling of 10 USD across Cursor and OpenAI, with no merge, production,
-migration or voice. This repository cannot enforce that ceiling. The feedback
-CLI's `budget` is a count of state-branch commits, not money. `policy.json`
-limits repair rounds and reviews, not vendor spend. `createCursorClient` has no
-usage or spend call. The bridge posts `@codex review` as a GitHub comment; any
-charge for that review is applied by the Codex GitHub app, not by
-`OPENAI_API_KEY`, which this workflow does not receive. A counter inside this
-process would not stop either vendor, so it is not a guard and is not added.
+The earlier preparation required a combined hard ceiling of 10 USD. Issue #127
+supersedes that prerequisite for exactly one documentation-only pilot: measure
+first, then choose a monthly budget. This is not unlimited spending authority
+and does not enable recurring operation, merge, production, migration or voice.
+The multi-round bridge remains blocked because this implementation cannot
+enforce a combined monetary allowance. The feedback CLI's `budget` counts
+state-branch commits, not money; `policy.json` limits rounds and reviews, not
+vendor spend. The Cursor usage read is not a billing reservation. The bridge
+posts a GitHub review request without an `OPENAI_API_KEY`; any review charge
+requires separate provider evidence. A local counter is not a vendor spend cap.
 
-`beginLiveFeedback` therefore throws `BLOCKED_BUDGET_GUARD` after the existing
-switch checks and before an installation token, Cursor client, state write or
-review comment. Repeating the call still throws and still performs no dispatch.
-The committed `feedback.json` stays `enabled: false` with an empty binding list.
-The same refusal is the unpaid dry-run: no documentation PR is opened and no
-paid API is called.
+For enabled multi-round mode, `beginLiveFeedback` throws
+`BLOCKED_BUDGET_GUARD` after the switch checks and before any installation
+token, Cursor client, state write or review request. Repeating that call still
+performs no dispatch. With the committed disarmed configuration, the CLI returns
+`DISABLED`; that result is not a successful live test.
 
 The multi-round bridge still throws `BLOCKED_BUDGET_GUARD`. The one-shot
 alternative is `costProbe.armed` in the same `feedback.json`. The committed
@@ -288,11 +295,12 @@ minted. Both pipeline switches must still be false.
 An armed probe is the one-shot path from issue #127: one documentation commit,
 one Cursor `createRun`, then exactly one `@codex review` after that commit
 appears. It is not a monthly budget and it does not lift the multi-round guard.
-The committed file allows exactly one docs path. Before reserving an
-effect it validates the live PR, full ancestry/scope, exclusive controller
-ownership and the current Cursor agent; it repeats the snapshot validation
-after the durable reservation and before `createRun`. The probe reserves four
-state writes and stores `COST_PROBE_PENDING` before its one permitted dispatch.
+The probe accepts exactly one allowlisted docs path. Before reserving an
+effect it validates the live PR, full ancestry/scope, absence of another
+controller owner and the current Cursor agent; it repeats snapshot validation
+after the durable reservation and before `createRun`. It reserves five state
+writes: pending, run ID, terminal measurement, review pending and request recorded.
+`COST_PROBE_PENDING` is durable before its one permitted dispatch.
 A repository-wide scan of durable feedback records rejects a second probe
 against another PR, including after `COST_PROBE_DONE` or an uncertain attempt
 with no remaining ledger hold. The prompt asks for one docs commit and a stop.
@@ -306,15 +314,27 @@ with a timestamp is mandatory for the cost decision. Similarly, Codex usage
 and any charge must be obtained independently. Never convert tokens to USD or
 treat synthetic fixture cost fields as a vendor bill.
 
-IMPORTANT: the currently implemented probe requests usage immediately after
-`createRun`, while the run can still be `CREATING`. This must be repaired
-before any live pilot; an early zero token count is not final usage. Its current
-later poll posts one `@codex review` when the head differs from the baseline,
-first writing `COST_PROBE_REVIEW_PENDING`; commit provenance also still needs
-to be verified before requesting that review. An ambiguous review response is
-not retried. `COST_PROBE_DONE` records `reviewCommentId` and remains terminal.
-A lost Cursor response stays `COST_PROBE_PENDING` and is not repeated. No
-live pilot has been executed.
+After `createRun`, the saved phase is `COST_PROBE_RUNNING`. Later polls read
+only the reserved run ID; `CREATING` and `RUNNING` do not read usage or dispatch
+another run. Usage is measured after the matching run reports `FINISHED`, then
+stored as `COST_PROBE_CURSOR_DONE`. Missing usage remains unavailable, never a
+fabricated bill. A terminal ERROR, CANCELLED or EXPIRED run becomes
+`COST_PROBE_FAILED`; unused holds are released only after the state save.
+
+Before the single review request, full snapshots must prove exactly one
+authenticated, signed commit descending from `baselineHead`, the unchanged base,
+the registered agent/run, the allowed file including any rename source, and the
+`SkillCheck-Cost-Probe` operation trailer. The adapter compares GitHub
+`base_commit.sha` with the chosen `repairBase`: the pilot's `baselineHead`, not
+the ordinary repair's `repairHead`. It revalidates this evidence after saving
+`COST_PROBE_REVIEW_PENDING` and before posting. An unrelated changed HEAD is
+not sufficient. An ambiguous dispatch or review response is never retried.
+
+`COST_PROBE_DONE` means only that `reviewCommentId` was recorded; it is not
+a completed independent review, CI PASS, a reconciled bill or LIVE PASS. Those
+results must be verified separately for the resulting exact SHA. The pilot
+stays terminal and cannot enter another repair round. No live pilot is claimed
+by this implementation or by its offline tests.
 
 These separate gates are also still closed and are not bypassed: the feedback
 workflow and config are absent from `main`, so the scheduled job cannot run;
@@ -345,7 +365,8 @@ concrete file/line findings on the PR. Do not enable flags or merge. After revie
 the authorized administrator must complete the listed prerequisites and run the
 bounded live synthetic test, collecting actual Cursor commit and Codex re-review
 evidence. Report LIVE PASS only with that evidence, otherwise BLOCKED with exact
-missing prerequisites. Owner acceptance and production approval remain separate.
+missing prerequisites. Routine integration follows the #124 CI/review policy;
+production approval and verified activation prerequisites remain separate.
 
 Sources checked: [Cursor API](https://cursor.com/docs/cloud-agent/api/endpoints),
 [Codex GitHub review](https://learn.chatgpt.com/docs/third-party/github),
