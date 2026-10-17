@@ -1,0 +1,45 @@
+name: SC012B trusted source verification
+on:
+  pull_request:
+    paths:
+      - 'lib/voice/trusted-source-verifier.ts'
+      - 'lib/voice/template-registry.ts'
+      - 'lib/voice/interview-plan.ts'
+      - 'lib/voice/plan-persistence-contract.ts'
+      - 'lib/voice/screening-gap-selection.ts'
+      - 'lib/behavior-guide.ts'
+      - 'tests/voice-trusted-source-verifier.test.mjs'
+      - '.github/workflows/sc012b-trusted-source.yml'
+      - 'db/prototypes/sc012b-plan-schema.sql'
+      - 'db/isolated/sc012b-template-catalog.sql'
+      - 'supabase/migrations/**'
+      - 'package.json'
+      - 'package-lock.json'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: node --test tests/voice-trusted-source-verifier.test.mjs
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres

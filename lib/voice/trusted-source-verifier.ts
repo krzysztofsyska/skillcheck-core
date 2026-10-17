@@ -1,0 +1,253 @@
+/**
+ * SC-012-B: read-only trusted source reconstruction, isolated backend.
+ * NOT a public API, write authorization, or production release gate.
+ */
+import { isDeepStrictEqual } from "node:util";
+import { buildBehaviorGuide } from "../behavior-guide.ts";
+import { canonicalVoiceSourceSnapshot, createVoicePlanWriteSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
+import { selectReviewedScreeningGaps } from "./screening-gap-selection.ts";
+import type { InterviewSource } from "./interview-plan.ts";
+import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest} from "./template-registry.ts";
+
+type Row=Record<string,any>;
+export type SqlClient={query(sql:string,params?:readonly unknown[]):Promise<{rows:Row[]}>};
+export type SourceSelector=Readonly<{
+  companyId:string;applicationId:string;analysisId:string;reviewId:string;shortlistEntryId:string;
+}>;
+export class TrustedSourceError extends Error {
+  readonly code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"|"CONFLICT";
+  constructor(code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"|"CONFLICT"){
+    super("VOICE_TRUSTED_SOURCE_"+code);
+    this.code=code;
+  }
+}
+const concurrencySqlState=new Set(["55P03","40001","40P01"]);
+function isConcurrencyConflict(e:unknown){
+  return !!e&&typeof e==="object"&&"code" in e&&
+    concurrencySqlState.has(String((e as {code:unknown}).code));
+}
+const fail=(c:TrustedSourceError["code"]):never=>{throw new TrustedSourceError(c);};
+const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const hex=/^[0-9a-f]{64}$/;
+export const ACTIVE_VOICE_TEMPLATE_VERSION="skillcheck-voice-plan-v1" as const;
+export const ACTIVE_VOICE_TEMPLATE_DIGEST=trustedVoiceTemplateDigest(ACTIVE_VOICE_TEMPLATE_VERSION);
+const id=(x:unknown)=>typeof x==="string"&&uuid.test(x)?x:fail("INVALID");
+const only=(x:Row[])=>x.length===1?x[0]:fail("STALE");
+const iso=(x:unknown)=>x instanceof Date?x.toISOString():
+  typeof x==="string"&&!Number.isNaN(Date.parse(x))?new Date(x).toISOString():fail("INVALID");
+
+/** The caller must own a dedicated PG connection. All locks and checks are
+ * inside one transaction; no input flag is trusted as an approval. */
+async function reconstructLocked(
+  db:SqlClient,s:SourceSelector,
+):Promise<VoicePlanWriteSnapshot>{
+  Object.values(s).forEach(id);
+    // SC-006 takes screening:application first. Match its lock before
+    // acquiring the SC-012-B application lock to serialize reanalysis.
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      ["screening:"+s.applicationId]);
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      [s.companyId+":"+s.applicationId]);
+    const auth=only((await db.query([
+      "select c.owner_id,auth.uid() as actor",
+      "from public.companies c where c.id=$1 for share nowait",
+    ].join(" "),[s.companyId])).rows);
+    if(!auth.actor)fail("FORBIDDEN");
+    if(auth.actor!==auth.owner_id){
+      const members=(await db.query([
+        "select m.role from public.company_members m",
+        "where m.company_id=$1 and m.user_id=$2 for share nowait",
+      ].join(" "),[s.companyId,auth.actor])).rows;
+      if(members.length!==1||members[0].role!=="recruiter")fail("FORBIDDEN");
+    }
+    const catalog=only((await db.query([
+      "select version,manifest_digest from private.voice_plan_template_catalog",
+      "where version=$1 and active=true for share nowait",
+    ].join(" "),[ACTIVE_VOICE_TEMPLATE_VERSION])).rows);
+    if(catalog.manifest_digest!==ACTIVE_VOICE_TEMPLATE_DIGEST)fail("TEMPLATE_CHANGED");
+    const h=only((await db.query([
+      "select ap.company_id,ap.id as application_id,ap.updated_at as application_updated_at,",
+      "ap.status as application_status,rec.id as recruitment_id,",
+      "rec.updated_at as recruitment_updated_at,rec.status as recruitment_status,",
+      "pos.id as position_id,pos.updated_at as position_updated_at,pos.status as position_status,",
+      "pos.title,pos.tasks,pos.kpis,pos.required_behaviors,pos.required_competencies,",
+      "a.id as analysis_id,a.input_fingerprint,a.analysis_contract_hash,",
+      "a.criteria_snapshot,a.latest_review_version,a.execution_status,a.stale_at,",
+      "r.id as review_id,r.review_version,r.disposition,",
+      "s.id as shortlist_entry_id,s.removed_at,s.ranking_policy_version",
+      "from public.applications ap",
+      "join public.recruitments rec on rec.company_id=ap.company_id and rec.id=ap.recruitment_id",
+      "join public.positions pos on pos.company_id=rec.company_id and pos.id=rec.position_id",
+      "join public.screening_analysis_versions a on a.company_id=ap.company_id",
+      "and a.application_id=ap.id and a.recruitment_id=rec.id and a.position_id=pos.id",
+      "join public.screening_result_reviews r on r.company_id=a.company_id and r.analysis_id=a.id",
+      "join public.recruitment_shortlist_entries s on s.company_id=a.company_id",
+      "and s.application_id=ap.id and s.recruitment_id=rec.id and s.analysis_id=a.id",
+      "and s.review_id=r.id",
+      "where ap.company_id=$1 and ap.id=$2 and a.id=$3 and r.id=$4 and s.id=$5",
+      "for share of ap,rec,pos,a,r,s nowait",
+    ].join(" "),[s.companyId,s.applicationId,s.analysisId,s.reviewId,s.shortlistEntryId])).rows);
+    if(h.application_status==="withdrawn"||h.application_status==="rejected"||
+       h.recruitment_status!=="open"||h.position_status!=="active"||
+       h.execution_status!=="completed"||h.stale_at!==null||h.removed_at!==null||
+       !["approved","approved_with_changes"].includes(h.disposition)||
+       h.latest_review_version!==h.review_version||
+       !hex.test(h.input_fingerprint)||!hex.test(h.analysis_contract_hash))fail("STALE");
+    const newest=only((await db.query([
+      "select id from public.screening_analysis_versions",
+      "where company_id=$1 and application_id=$2",
+      "order by analysis_version desc limit 1",
+    ].join(" "),[s.companyId,s.applicationId])).rows);
+    if(newest.id!==s.analysisId)fail("STALE");
+    const pinnedPolicy=only((await db.query([
+      "select version from private.screening_ranking_policies",
+      "where version=$1 for share nowait",
+    ].join(" "),[h.ranking_policy_version])).rows);
+    if(pinnedPolicy.version!==h.ranking_policy_version)fail("STALE");
+    const listed=(await db.query([
+      "select ranking_policy_version,policy_current",
+      "from public.get_recruitment_shortlist($1,false) where entry_id=$2",
+    ].join(" "),[h.recruitment_id,s.shortlistEntryId])).rows;
+    if(listed.length!==1||listed[0].policy_current!==true||
+       listed[0].ranking_policy_version!==h.ranking_policy_version)fail("STALE");
+    const criteria=h.criteria_snapshot;
+    if(!Array.isArray(criteria)||criteria.length<2||criteria.length>90)fail("INVALID");
+    const approvedCriteria=criteria.map((c:Row)=>({id:c?.id,kind:c?.kind}));
+    const results=(await db.query([
+      "select criterion_id,rating from public.screening_criterion_results",
+      "where company_id=$1 and analysis_id=$2",
+      "order by criterion_order for share nowait",
+    ].join(" "),[s.companyId,s.analysisId])).rows.map(r=>({criterionId:r.criterion_id,rating:r.rating}));
+    const overrides=(await db.query([
+      "select cr.criterion_id,o.rating_override",
+      "from public.screening_criterion_review_overrides o",
+      "join public.screening_criterion_results cr on cr.company_id=o.company_id",
+      "and cr.id=o.criterion_result_id and cr.analysis_id=$3",
+      "where o.company_id=$1 and o.review_id=$2",
+      "order by cr.criterion_order for share of o,cr nowait",
+    ].join(" "),[s.companyId,s.reviewId,s.analysisId])).rows.map(r=>({
+      criterionId:r.criterion_id,rating:r.rating_override,
+    }));
+    const gaps=selectReviewedScreeningGaps({
+      latestHumanDecision:h.disposition,analysisCompleted:true,
+      analysisCurrent:true,shortlistCurrent:true,criteria:approvedCriteria,
+      results,overrides,
+    },approvedCriteria);
+    const source:InterviewSource={
+      companyId:s.companyId,applicationId:s.applicationId,
+      positionRevision:iso(h.position_updated_at),
+      analysisRevision:s.analysisId,reviewRevision:s.reviewId+":"+h.review_version,
+      screeningReviewed:true,screeningCurrent:true,
+      position:{title:h.title,tasks:h.tasks,kpis:h.kpis,
+        requiredBehaviors:h.required_behaviors,requiredCompetencies:h.required_competencies},
+      gaps,
+    };
+    const binding={
+      companyId:s.companyId,recruitmentId:h.recruitment_id,
+      applicationId:s.applicationId,positionId:h.position_id,
+      analysisId:s.analysisId,reviewId:s.reviewId,shortlistEntryId:s.shortlistEntryId,
+      applicationUpdatedAt:iso(h.application_updated_at),
+      recruitmentUpdatedAt:iso(h.recruitment_updated_at),
+      positionUpdatedAt:iso(h.position_updated_at),
+      analysisFingerprint:h.input_fingerprint,screeningContractHash:h.analysis_contract_hash,
+    };
+    const template=getTrustedVoiceTemplate(ACTIVE_VOICE_TEMPLATE_VERSION);
+    const result=createVoicePlanWriteSnapshot(source,binding);
+    if(result.templateVersion!==template.version||result.language!==template.language||
+       result.targetSeconds!==template.targetSeconds||
+       result.maximumSeconds!==template.maximumSeconds||
+       result.recordingAllowed!==template.recordingAllowed||
+       result.noticeRequired!==template.noticeRequired)fail("TEMPLATE_CHANGED");
+    const guide=buildBehaviorGuide(source.position.requiredBehaviors);
+    const ranks=template.behaviorLevelRank;
+    if(guide.unrecognizedRequirements.length||guide.areas.some(area=>
+       !area.requiredLevel||!Object.prototype.hasOwnProperty.call(ranks,area.requiredLevel)))
+      fail("INVALID");
+    const expectedCommon=[...guide.areas].sort((a,b)=>
+      ranks[b.requiredLevel as keyof typeof ranks]-ranks[a.requiredLevel as keyof typeof ranks]||
+      guide.areas.indexOf(a)-guide.areas.indexOf(b)).slice(0,template.questionRules.commonCount);
+    const clarifications=result.questions.filter(q=>q.kind==="clarification");
+    if(expectedCommon.length!==template.questionRules.commonCount||
+       result.questions.length!==expectedCommon.length+clarifications.length||
+       clarifications.length!==gaps.length||
+       clarifications.length>template.questionRules.maxClarificationCount)fail("TEMPLATE_CHANGED");
+    expectedCommon.forEach((area,i)=>{
+      const q=result.questions[i];
+      const allowed=template.behaviorQuestionTexts.find(x=>x.id===area.id);
+      if(!q||q.kind!=="common"||!allowed||q.criterionId!==area.id||
+         q.criterionKind!=="behavior"||
+         q.id!==template.questionRules.commonIdPrefix+area.id||
+         q.text!==allowed.firstQuestion||q.maxSeconds!==template.questionRules.commonMaxSeconds||
+         q.followUps.length!==1||q.followUps[0]!==template.commonFollowUp)
+        fail("TEMPLATE_CHANGED");
+    });
+    clarifications.forEach((q,i)=>{
+      const gap=gaps[i];
+      const allowed=template.clarificationQuestionTexts[
+        gap.kind as keyof typeof template.clarificationQuestionTexts];
+      const followIndex=template.clarificationFollowUpByReason[
+        gap.reason as keyof typeof template.clarificationFollowUpByReason];
+      const followUp=template.clarificationFollowUps[followIndex];
+      if(!allowed||followUp===undefined||q.criterionId!==gap.criterionId||
+         q.criterionKind!==gap.kind||
+         q.id!==template.questionRules.clarificationIdPrefix+gap.criterionId.replace(":","-")||
+         q.text!==allowed||q.maxSeconds!==template.questionRules.clarificationMaxSeconds||
+         q.followUps.length!==1||q.followUps[0]!==followUp)
+        fail("TEMPLATE_CHANGED");
+    });
+    return result;
+}
+async function withReadTransaction<T>(db:SqlClient,work:()=>Promise<T>):Promise<T>{
+  await db.query("begin");
+  try{
+    const result=await work();
+    await db.query("commit");
+    return result;
+  }catch(e){
+    try{await db.query("rollback");}catch{/* transaction already closed */}
+    if(e instanceof TrustedSourceError)throw e;
+    if(isConcurrencyConflict(e))throw new TrustedSourceError("CONFLICT");
+    throw e;
+  }
+}
+export async function reconstructTrustedVoiceSource(
+  db:SqlClient,s:SourceSelector,
+):Promise<VoicePlanWriteSnapshot>{
+  return withReadTransaction(db,()=>reconstructLocked(db,s));
+}
+/** Does not authorize review or release: only a source integrity preflight.
+ * The mutating RPC must repeat the checks under its own transaction locks. */
+export async function verifyStoredVoicePlan(db:SqlClient,planId:string){
+  id(planId);
+  return withReadTransaction(db,async()=>{
+    const p=only((await db.query([
+      "select company_id,application_id,analysis_id,screening_review_id,",
+      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope",
+      "from public.voice_plan_versions where id=$1",
+    ].join(" "),[planId])).rows);
+    // Match SC-006 screening lock order before application/plan row locks.
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      ["screening:"+p.application_id]);
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      [p.company_id+":"+p.application_id]);
+    const locked=only((await db.query([
+      "select company_id,application_id,analysis_id,screening_review_id,",
+      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope",
+      "from public.voice_plan_versions where id=$1 for share nowait",
+    ].join(" "),[planId])).rows);
+    if(!isDeepStrictEqual(locked,p))fail("STALE");
+    if(p.template_version!==ACTIVE_VOICE_TEMPLATE_VERSION)fail("TEMPLATE_CHANGED");
+    const rebuilt=await reconstructLocked(db,{
+      companyId:p.company_id,applicationId:p.application_id,
+      analysisId:p.analysis_id,reviewId:p.screening_review_id,
+      shortlistEntryId:p.shortlist_entry_id,
+    });
+    if(p.source_hash!==rebuilt.sourceHash||
+       p.envelope_hash!==rebuilt.planContractHash||
+       !isDeepStrictEqual(p.source_snapshot,canonicalVoiceSourceSnapshot(
+         rebuilt.sourceBinding,rebuilt.planSourceFingerprint))||
+       !isDeepStrictEqual(p.plan_envelope,rebuilt))
+      fail("STALE");
+    return rebuilt;
+  });
+}
