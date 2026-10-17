@@ -31,6 +31,9 @@ test('workflow YAML parses and the permission model stays fail-closed', () => {
   assert.match(verify, /persist-credentials: false/);
   assert.equal(verify.includes('secrets.'), false);
   assert.equal(gates.includes('SC-OPS-001'), false);
+  const checks = readFileSync('.github/workflows/checks.yml', 'utf8');
+  assert.match(checks, /push:\n {4}branches:\n {6}- main\n {6}- integration\n {2}pull_request:/);
+  assert.equal(checks.includes('workflow_dispatch'), false);
   assert.equal(gates.includes('declared_scope" != "OPERATIONS"'), false);
   const controllerOnly = classify({
     files: ['tools/agent-pipeline/cli.mjs'],
