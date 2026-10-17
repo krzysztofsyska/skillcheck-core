@@ -180,6 +180,7 @@ returns uuid language plpgsql volatile security definer set search_path='' as $$
 declare
   actor uuid := (select auth.uid());
   v_row record;
+  v_locked_pointer record;
   v_owner uuid;
   v_role text;
   v_plan record;
@@ -200,11 +201,13 @@ begin
   if actor is null or p_application_id is null then
     raise exception using errcode='22023',message='VOICE_PLAN_INVALID_RELEASE';
   end if;
-  select c.company_id,c.application_id,c.plan_id,c.release_entry_id
+  -- Take a non-locking pointer snapshot first. Locking this row before the
+  -- screening/application advisory locks reverses the release writer's order
+  -- and can deadlock or block a legitimate concurrent release.
+  select c.company_id,c.application_id,c.plan_id,c.release_entry_id,c.pointer_version
     into v_row
   from private.voice_plan_current_releases c
-  where c.application_id=p_application_id
-  for update;
+  where c.application_id=p_application_id;
   if not found then return null; end if;
   if not private.has_company_access(v_row.company_id,true) then
     raise exception using errcode='42501',message='VOICE_PLAN_FORBIDDEN';
@@ -295,13 +298,37 @@ begin
     or v_shortlist_removed is not null
     or v_review_disposition not in ('approved','approved_with_changes')
     or v_review_version is distinct from v_analysis.latest_review_version;
+  -- Both advisory locks, authorization/source locks and candidate erasure
+  -- checks are now held. Only now take the current pointer row lock.
+  -- Its full identity must equal the initial MVCC snapshot: while we waited
+  -- for the advisory locks a writer could have replaced or removed it.
+  select c.company_id,c.application_id,c.plan_id,c.release_entry_id,c.pointer_version
+    into v_locked_pointer
+  from private.voice_plan_current_releases c
+  where c.application_id=p_application_id
+  for update nowait;
+  if not found then
+    raise exception using errcode='PT409',message='VOICE_PLAN_POINTER_CONFLICT';
+  end if;
+  if v_locked_pointer.company_id is distinct from v_row.company_id or
+     v_locked_pointer.application_id is distinct from v_row.application_id or
+     v_locked_pointer.plan_id is distinct from v_row.plan_id or
+     v_locked_pointer.release_entry_id is distinct from v_row.release_entry_id or
+     v_locked_pointer.pointer_version is distinct from v_row.pointer_version then
+    raise exception using errcode='PT409',message='VOICE_PLAN_POINTER_CONFLICT';
+  end if;
   if v_frozen then return null; end if;
   if v_stale then
     delete from private.voice_plan_current_releases
-    where company_id=v_row.company_id and application_id=v_row.application_id;
+    where company_id=v_row.company_id and application_id=v_row.application_id
+      and plan_id=v_row.plan_id and release_entry_id=v_row.release_entry_id
+      and pointer_version=v_row.pointer_version;
+    if not found then
+      raise exception using errcode='PT409',message='VOICE_PLAN_POINTER_CONFLICT';
+    end if;
     return null;
   end if;
-  return v_row.release_entry_id;
+  return v_locked_pointer.release_entry_id;
 exception
   when lock_not_available or deadlock_detected or serialization_failure then
     raise exception using errcode='PT409',message='VOICE_PLAN_CONFLICT';
