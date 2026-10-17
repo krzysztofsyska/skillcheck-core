@@ -9,6 +9,9 @@ import { inspectSalesReleaseGit } from './sales-release-verified.mjs';
 const owner='krzysztofsyska', repo='skillcheck-core', full=owner+'/'+repo;
 const releaseRef='release/sales-mvp-intake-20261013';
 const sha40=/^[0-9a-f]{40}$/;
+// Observed on this repository's Checks and Agent Gates check runs. This is a
+// GitHub App identity, not a caller-supplied permission to publish a result.
+const GITHUB_ACTIONS_APP_ID=15368;
 function deny(message){throw new Error('SALES_RELEASE_SCOPE_DENIED: '+message);}
 async function github(path) {
   const token=process.env.GITHUB_TOKEN;
@@ -25,12 +28,17 @@ function mainRuleMatches(rule) {
   const refs=rule?.conditions?.ref_name;
   if(!refs||!Array.isArray(refs.include)||!Array.isArray(refs.exclude))return false;
   const include=refs.include.includes('refs/heads/main')||refs.include.includes('~DEFAULT_BRANCH');
-  const exclude=refs.exclude.includes('refs/heads/main')||refs.exclude.includes('~DEFAULT_BRANCH');
-  return include && !exclude;
+  // This narrow policy accepts no exclusions. Literal checks miss wildcard
+  // exclusions such as refs/heads/* and can mistake an inapplicable rule for
+  // protection of main. Unknown patterns must not supply security evidence.
+  return include && refs.exclude.length===0;
 }
 function hasRequiredContext(types,context) {
   return types.some(r=>r.type==='required_status_checks'&&
-    (r.parameters?.required_status_checks||[]).some(x=>x.context===context));
+    r.parameters?.strict_required_status_checks_policy===true&&
+    Array.isArray(r.parameters.required_status_checks)&&
+    r.parameters.required_status_checks.some(x=>x?.context===context&&
+      x.integration_id===GITHUB_ACTIONS_APP_ID));
 }
 async function verifyProtection() {
   const branch=await github('branches/main');
@@ -42,7 +50,10 @@ async function verifyProtection() {
     if(item.enforcement!=='active'||!Number.isInteger(item.id))continue;
     const rule=await github('rulesets/'+item.id);
     if(rule.enforcement==='active'&&rule.target==='branch'&&mainRuleMatches(rule)) {
-      if(Array.isArray(rule.bypass_actors)&&rule.bypass_actors.length)deny('main ruleset has bypass actors');
+      // A read-scoped response may omit this sensitive field. Missing is
+      // unknown, never proof of an empty list; do not elevate the token here.
+      if(!Array.isArray(rule.bypass_actors))deny('main ruleset bypass evidence missing');
+      if(rule.bypass_actors.length)deny('main ruleset has bypass actors');
       effective.push(...(Array.isArray(rule.rules)?rule.rules:[]));
     }
   }
@@ -57,7 +68,8 @@ async function verifyProtection() {
   if(!effective.some(x=>x.type==='pull_request' &&
       Number.isInteger(x.parameters?.required_approving_review_count) &&
       x.parameters.required_approving_review_count>=1 &&
-      x.parameters.dismiss_stale_reviews_on_push===true))
+      x.parameters.dismiss_stale_reviews_on_push===true&&
+      x.parameters.require_last_push_approval===true))
     deny('main lacks independent approval/stale review dismissal');
   return true;
 }
