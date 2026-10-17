@@ -1,58 +1,59 @@
-# SC-OPS-002C — konfiguracja repo przed aktywacją
+# SC-OPS-002C — bootstrap bez aktywacji
 
 TASK: SC-OPS-002C
-STATUS: REVIEW (część repo); BLOCKED_CONFIGURATION (usługi)
+STATUS: IMPLEMENTED / CI_AND_INDEPENDENT_REVIEW_REQUIRED
 BRANCH: chore/sc-ops-002c-bootstrap-config
-BASE_COMMIT: 90af2e2eb3bfb19409deec4466c1be72af1d4d6c
-COMMIT: 2c51ad0728d00cd1efc2d0ee3274152666737de2
-PIN: commit po tym SHA zmienia wyłącznie identyfikator w tym raporcie. Kontrole poniżej dotyczą COMMIT.
+COMMIT: 614c297450a95f5f805608ad5fc99779e7db20a9
+CODE_TREE: 1cc072690b8df270a9145e114dd1dcca5e08ead9
+BASE_COMMIT: 1e2ec57ecfa2e0c9334ddfa5133145a2bc141240
+INPUT_HEAD: 76f93360b4dc6346c78c51617a6eaddf868a1520
 ISSUE: https://github.com/krzysztofsyska/skillcheck-core/issues/40
+PR: https://github.com/krzysztofsyska/skillcheck-core/pull/41
 
-## Zmiany
+Powyższy COMMIT jednoznacznie identyfikuje kod po połączeniu aktualnej integration z istniejącą gałęzią PR #41. Bezpośredni następca aktualizuje wyłącznie ten dokument; nie zmienia plików wykonywalnych ani testów. Wyniki CI i niezależnego review muszą wskazywać dokładny końcowy HEAD w komentarzu PR — nie wolno przypisywać poprzedniego PASS do nowszego kodu.
 
-- policy.json: rzeczywiste numery 6 workflow i istniejącego agent-control z API. `agent_review.id` jest null, tak jak brakujące App/actor/gate IDs. Flagi false.
-- agent-review.yml: job `model` dostaje środowisko `agent-review` dopiero po `authorize`, i tylko przy `github.run_attempt == 1`. Authorize czyta `policy.json` z SHA workflow, nie z wejścia dispatch, i wpuszcza dalej tylko przy `AGENT_PIPELINE_ENABLED=true` oraz gdy `github.actor_id` jest równy dodatniemu `controller_actor_id`. Ponowienie zachowuje aktora pierwszej próby, więc nie wchodzi do sekretu. Sekret OpenAI nie wymaga dostępu do środowiska kontrolera.
-- Preflight: odczyt i potwierdzenie środowiska `agent-review` obejmuje numeryczne ID oraz politykę gałęzi dokładnie `main`. Brak recenzenta właściciela na tym środowisku jest zgodny z runbookiem. Bez ID preflight i konfiguracja live pozostają zamknięte.
-- config.example.json: `OPENAI_API_KEY` jest opisany jako sekret środowiska `agent-review`. Klucze kontrolera i Cursora zostają przy `agent-control`.
-- Runbook: oddzielny sekret review, warunek wejścia joba modelu, jawne checks dla obu gałęzi zgodne z 002A/policy, aktualne dowody odczytu.
-- Test kontraktu: bramka dispatch, przykładowa mapa sekretów, zaufana gałąź, osobne środowisko, jedyny odwołany sekret OPENAI_API_KEY i permissions contents:read.
+## Zakres i zachowane zabezpieczenia
 
-DB / MIGRATIONS: brak
+Zachowano wszystkie pliki produktu z integration, bez zmian modułów FREE/PRESELEKCJA, migracji, płatności, środowisk i sekretów. Aktualizacja gałęzi zadania nie jest scaleniem do integration ani main. Nie użyto force push.
 
-## Kontrole lokalne — Node 24.19.0
+- Polityka z PR #124 pozostaje `integration_merge_policy=verified_ci_review`; wymagania integration to `sc-agent/ci`, `sc-agent/review`, `sc-agent/integration-ready`, bez przywracania ręcznej bramki owner-acceptance. Produkcyjna bramka B zostaje osobna.
+- PR #41 zachowuje job `authorize` bez środowiska/sekretów: main, workflow_dispatch, pierwsza próba, jawna flaga aktywacji oraz tożsamość kontrolera z polityki na SHA workflow. Rerun nie może odziedziczyć dostępu do płatnego review.
+- Wyłącznie job model używa środowiska agent-review i OPENAI_API_KEY. Nie ma dostępu do sekretów kontrolera ani Cursora. Publish pozostaje bez sekretów środowiska.
+- Preflight odczytuje ID agent-review i politykę dokładnie jednej gałęzi main; brak danych, inny ID, tag albo dodatkowa gałąź nie są PASS. ID 23622706434 pochodzi ze zrzutu GitHub właściciela z 2026-10-17; nie zastępuje aktualnego odczytu API.
+- Nazwa joba agent-verify to `Agent verify / artifact`, odrębna od `verify` w zwykłym Checks. To nie jest syntetyczny sukces sc-agent/ci ani zastępstwo niezależnego review.
+- Połączono testy preflightu z nowszym testem automatycznego integration, zamiast nadpisać regresje PR #124. Przykład konfiguracji i runbook kierują klucz OpenAI wyłącznie do agent-review.
 
-Poprzedni odbiór na 42826d80c91609ef8ce06da93bdef51c2b3345ba: npm ci, test:agent-pipeline 44/44, dry-run, typecheck i build PASS.
+## Zmienione pliki względem BASE_COMMIT
 
-Ten diff, binarka Node v24.19.0, po odmowie rerunów i preflight `agent-review`:
-- npm run test:agent-pipeline: PASS, 47/47 (nowe asercje są w istniejących testach)
-- npm run agent:dry-run -- --fixture complete-cycle: PASS, external_calls=0, merge_calls=0, flagi false, zatrzymanie przy obu gates
-- git diff --check: PASS
-- typecheck i build: uruchamia je CI tego SHA. Nie są dowodem bramki dispatch ani preflightu.
+.github/agent-pipeline/config.example.json
+.github/agent-pipeline/policy.json
+.github/workflows/agent-review.yml
+.github/workflows/agent-verify.yml
+docs/sc-ops-002c-bootstrap-runbook.md
+docs/sc-ops-002c-handoff.md
+tests/agent-pipeline/http-world.mjs
+tests/agent-pipeline/live-adapters.test.mjs
+tests/agent-pipeline/review-dispatch.test.mjs
+tests/agent-pipeline/workflows.test.mjs
+tests/agent-pipeline/bootstrap-review-isolation.test.mjs
+tools/agent-pipeline/authorize-review-dispatch.mjs
+tools/agent-pipeline/lib/github.mjs
+tools/agent-pipeline/lib/protection.mjs
+tools/agent-pipeline/lib/reconcile.mjs
+tools/agent-pipeline/lib/review-dispatch.mjs
 
-## Znane
+DB / MIGRATIONS: brak zmian względem wskazanej integration; niczego nie zastosowano ponownie.
 
-`controller_actor_id` i `agent_review.id` zostają null, więc nawet przy ręcznie ustawionej zmiennej `AGENT_PIPELINE_ENABLED` skrypt i preflight odmawiają. Bramka obowiązuje dopiero w pliku workflow na `main`; ten PR jej nie scala i nie włącza flag. Uwagi o dispatchu kontrolera i przykładzie sekretu są zamknięte w ffa601dd9b3a6d26e8f2f3d922b144193df2bf02.
+## Weryfikacja — rozdzielone rodzaje dowodów
 
-To testy offline; nie potwierdzają dostępu API agentów, izolacji sekretów na koncie ani rzeczywistych zgód.
+Lokalnie: Node 22.16, `node --test tests/agent-pipeline/bootstrap-review-isolation.test.mjs`, 10/10 PASS, zero pominięć. Testy używają rzeczywistych czystych funkcji decyzji/przedkontroli i parsowanych plików YAML; nie wywołują API ani agentów. Zgodność odczytanych modułów z GitHub sprawdzona przez blob SHA. Pełne testy aplikacji uruchamia istniejący GitHub Actions po publikacji końcowego HEAD; ten dokument NIE twierdzi, że ich nowy wynik ani niezależny werdykt już istnieją.
 
-## Usługi i blokery
+Istotne lokalnie sprawdzone bloby: policy 88b6b947ba19d31bf7c2afd35cb43375bc406f3a; nowe testy b88b6e25fee3f18d7e83d35fec3c0b237f6b5812; review-dispatch 11616fbaa1b7b6a92b4a4f3076c53cbdb24bd051; protection b516a5f766df26923188e5f4fa5d5bb2050919ce; agent-review 00e8657f9217f4ef94b4c7ae7a364a7e80bf1ee9; agent-verify 7f29b627750f27db8042c9149d09736879323eb2.
 
-Nie zmieniono ustawień GitHub/Vercel, sekretów ani flag. Brak agent-state, środowisk owner-acceptance/production-approval/agent-review i potwierdzonych danych dedykowanej App. Rulesets API puste; klasyczna ochrona main niedostępna (403). Istniejący agent-control wymaga ograniczenia do main. Budżety i klucze API niezweryfikowane. Wtyczka Vercel została połączona przez właściciela w trakcie tego etapu; sam ten fakt nie konfiguruje GitHub App.
+## Blokady aktywacji pozostają
 
-## Projekt produkcyjnego runbooku — do osobnej akceptacji
+Controller App/actor IDs pozostają null w polityce; flags false. Nie przeprowadzono autoryzowanego testu ważności sekretów, budżetu ani pełnej płatnej pętli Cursor/Codex. Utworzony ruleset quality-gates 25299230 pozostaje disabled, ze zwykłymi checkami GitHub Actions zamiast kompletu dowodów App. To nie jest spełniony docelowy preflight. Poprawki nie są zainstalowane na main. Nakładający się PR #50 pozostaje niezmieniony i nie powinien być scalany jako drugi mechanizm; jego minimalny environment patch jest objęty tym PR.
 
-Zakres przyszłej promocji: tylko jawnie wyliczone zadania i SHA. Vercel automatycznie wdraża main, bez dodatkowego deploy. Ten zakres nie wykonuje migracji ani zmian sekretów. Odbiór: deployment właściwego SHA zakończony, HTTP 200 i oczekiwana treść /, /demo, /login. Rollback: przygotowany revert przez PR z własną zgodą; bez reset/force. Nie utworzono jeszcze aktywnego production-runbook.json.
+## Następny etap
 
-## Następny pełny prompt
-
-WYKONAWCA: niezależny Codex reviewer, nowa sesja po odczycie PR; raport przez GitHub, bez kopiowania przez właściciela.
-ZADANIE: review SC-OPS-002C, część konfiguracji repo
-REPO: krzysztofsyska/skillcheck-core
-BAZA: 90af2e2eb3bfb19409deec4466c1be72af1d4d6c
-HEAD: 2c51ad0728d00cd1efc2d0ee3274152666737de2
-Przeczytaj Issue #40, AGENTS.md, projekt 002A, runbook 002C, cały diff i ten handoff. Sprawdź faktyczne numery workflow z GitHub i agent-control ID, flagi false, brak wymyślonych App/gate IDs, zgodność checks dla main/integration oraz brak poświadczeń kontrolera/Cursora w modelu. Dla płatnego joba sprawdź, że środowisko `agent-review` jest osiągalne tylko po `authorize`: flaga `AGENT_PIPELINE_ENABLED`, aktor równy `controller_actor_id` z policy na SHA workflow, a nie z wejścia dispatch. Sprawdź, że przykład sekretów trzyma OpenAI w `agent-review`. Zweryfikuj, że test statyczny nie jest przedstawiany jako dowód konfiguracji usług. Wykonaj npm run test:agent-pipeline i sprawdź CI bieżącego SHA. Nie wywołuj agentów, nie dodawaj sekretów, nie twórz środowisk ani rulesetów, nie scalaj i nie wdrażaj. Zapisz PASS / PASS WITH FIXES / FAIL z plikiem i konkretną uwagą na PR. Przy PASS następny etap to akceptacja tej poprawki; aktywacja nadal zablokowana przez braki usług z Issue #40. Podaj raport TASK/STATUS/HEAD/TESTS/UWAGI/NEXT ACTION i pełny kolejny prompt. Nie deklaruj pełnego 002C jako DONE.
-
-
-## Stan właścicielskiej konfiguracji agent-review — 2026-10-17
-
-Właściciel potwierdził zrzutem z GitHub `agent-review` pod adresem środowiska o ID `23622706434`: 1 dozwolona gałąź `main`, 0 tagów, brak wymaganych reviewerów i timera. `OPENAI_API_KEY` jest na liście sekretów `agent-review` (wartość/ważność/budżet niezweryfikowane). Nowa rewizja PR zapisuje ten **identyfikator z UI** w `policy.json` i aktualizuje asercję offline. Pozostały preflight odczytu środowiska musi jeszcze porównać rzeczywiste API; nie twierdzi się, że PASS. `controller_actor_id` nadal null, flags false. Ten dopisek nie oznacza automatycznej aktywacji, review ani produkcyjnej gotowości.
+Codex ocenia dokładny końcowy HEAD, wszystkie istniejące P1/P2 oraz regresje po aktualizacji integration. Wymagany test całego agent-pipeline i pełne CI tego HEAD. Bez zatwierdzania własnego kodu, uruchamiania płatnego workflow, ujawniania sekretów, migracji, merge i Production. Po pozytywnych wynikach osobno zweryfikować skuteczność ochrony gałęzi i plan instalacji na chronionym main; nie zmieniać flag tylko po to, by test przeszedł.
