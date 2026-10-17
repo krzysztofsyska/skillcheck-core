@@ -66,6 +66,10 @@
     "production_approval": {
       "name": "production-approval",
       "id": 23622102440
+    },
+    "agent_review": {
+      "name": "agent-review",
+      "id": 23622706434
     }
   },
   "required_checks": {

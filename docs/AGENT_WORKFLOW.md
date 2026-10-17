@@ -113,3 +113,7 @@ Każdy agent kończy pracę blokiem zapisanym w GitHub PR/Issue, nie przekazywan
 - Osobna zgoda właściciela jest wymagana przy pierwszej aktywacji kontrolera oraz przy PRODUCTION APPROVAL.
 - Osobny promotion PR i ta zgoda produkcyjna poprzedzają `main`.
 - Szczegóły: [AGENT_PIPELINE.md](AGENT_PIPELINE.md).
+
+SC-OPS-002D dodaje ograniczony adapter istniejących PR-ów Cursor: kontrakt,
+warunki aktywacji i dowód testu opisuje [runbook feedback](sc-ops-002d-feedback.md).
+Test offline nie potwierdza uruchomienia Cursor ani ponownego review w GitHub.
