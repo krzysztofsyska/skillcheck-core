@@ -159,6 +159,30 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
   }
   assert.equal((await reconstructTrustedVoiceSource(db,selector)).sourceHash,expected.sourceHash);
  });
+ await t.test("SC-006 reanalysis advisory lock serializes both trusted-source preflights",async()=>{
+  const writer=new Client(config(dbName));
+  await writer.connect();
+  try{
+   await writer.query("begin");
+   await writer.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+     ["screening:"+selector.applicationId]);
+   // The verifier must never bypass an in-flight SC-006 source change.
+   // PostgreSQL lock_timeout maps to a domain conflict, not an internal error.
+   await db.query("set lock_timeout='250ms'");
+   for(const preflight of [
+     ()=>reconstructTrustedVoiceSource(db,selector),
+     ()=>verifyStoredVoicePlan(db,plan),
+   ]) await assert.rejects(preflight(),
+     e=>e instanceof TrustedSourceError&&e.code==="CONFLICT");
+  }finally{
+   await db.query("set lock_timeout='0'").catch(()=>{});
+   await writer.query("rollback").catch(()=>{});
+   await writer.end();
+  }
+  // Once the writer commits/rolls back, no stale lock state is carried over.
+  assert.equal((await reconstructTrustedVoiceSource(db,selector)).sourceHash,expected.sourceHash);
+  assert.equal((await verifyStoredVoicePlan(db,plan)).sourceHash,expected.sourceHash);
+ });
  await t.test("position revision invalidates the saved plan",async()=>{
   await db.query("update public.positions set title='New analyst role' where id=$1",[f.position.id]);
   await assert.rejects(verifyStoredVoicePlan(db,plan),
