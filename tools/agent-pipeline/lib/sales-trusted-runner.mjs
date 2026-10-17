@@ -72,7 +72,8 @@ async function verifyProtection() {
       Number.isInteger(x.parameters?.required_approving_review_count) &&
       x.parameters.required_approving_review_count>=1 &&
       x.parameters.dismiss_stale_reviews_on_push===true&&
-      x.parameters.require_last_push_approval===true))
+      x.parameters.require_last_push_approval===true&&
+      x.parameters.required_review_thread_resolution===true))
     deny('main lacks independent approval/stale review dismissal');
   return true;
 }

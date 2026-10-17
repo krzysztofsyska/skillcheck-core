@@ -67,7 +67,7 @@ function protectionFixture(t, mutate = () => {}) {
       { type: 'deletion' }, { type: 'non_fast_forward' },
       { type: 'pull_request', parameters: {
         required_approving_review_count: 1, dismiss_stale_reviews_on_push: true,
-        require_last_push_approval: true,
+        require_last_push_approval: true, required_review_thread_resolution: true,
       } },
       { type: 'required_status_checks', parameters: {
         strict_required_status_checks_policy: true,
@@ -142,6 +142,13 @@ for (const bypass of [undefined, null, {}, [{ actor_type: 'RepositoryRole', acto
 for (const approved of [false, undefined, 'true']) {
   test(`review policy requires independent latest push approval ${String(approved)}`, async t => {
     const f = protectionFixture(t, r => { r.rules[2].parameters.require_last_push_approval = approved; });
+    await assert.rejects(checkTrustedSalesRelease(f), /main lacks independent approval/);
+    assert.equal(f.liveReads(), 0);
+  });
+}
+for (const resolution of [false, undefined, 'true']) {
+  test(`protection requires thread resolution exactly true, received ${String(resolution)}`, async t => {
+    const f = protectionFixture(t, r => { r.rules[2].parameters.required_review_thread_resolution = resolution; });
     await assert.rejects(checkTrustedSalesRelease(f), /main lacks independent approval/);
     assert.equal(f.liveReads(), 0);
   });
