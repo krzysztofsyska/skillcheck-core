@@ -97,7 +97,7 @@ export async function reconcileFromEnv(env = process.env, overrides = {}) {
     if (!Number.isInteger(policy.controller_app_id) || Number(env.AGENT_PIPELINE_APP_ID) !== policy.controller_app_id) missing.push('controller_app_id');
     if (!Number.isInteger(policy.controller_actor_id)) missing.push('controller_actor_id');
     for (const key of ['verify','review','accept','promote']) if (!Number.isInteger(policy.workflow_ids[key])) missing.push(`workflow_ids.${key}`);
-    for (const key of ['owner_acceptance','production_approval']) if (!Number.isInteger(policy.environments[key].id)) missing.push(`environments.${key}.id`);
+    for (const key of ['owner_acceptance','production_approval','agent_review']) if (!Number.isInteger(policy.environments?.[key]?.id)) missing.push(`environments.${key}.id`);
     if (!/^[a-f0-9]{40}$/.test(env.AGENT_POLICY_COMMIT ?? '')) missing.push('AGENT_POLICY_COMMIT');
     if (missing.length) return { status: 'NOT_CONFIGURED', controllerInvoked: false, effects: [], flags, missing };
   }

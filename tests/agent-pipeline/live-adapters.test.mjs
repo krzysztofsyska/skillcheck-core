@@ -107,7 +107,13 @@ test('preflight validates exact branches, identities, checks and environments',(
   f=>{f.rules[2].rules.find(r=>r.type==='required_status_checks').parameters.required_status_checks=[];},
   f=>{f.rules[4].rules=[{type:'deletion'}];},
   f=>{f.environments['owner-acceptance'].can_admins_bypass=true;},
+  f=>{f.environments['agent-review'].branch_policies=[{name:'main',type:'branch'},{name:'integration',type:'branch'}];},
+  f=>{f.environments['agent-review'].deployment_branch_policy=null;},
+  f=>{f.environments['agent-review'].id=999;},
+  f=>{delete f.environments['agent-review'];},
  ]){const copy=structuredClone(f);mutate(copy);assert.equal(evaluatePreflight(protectionFromRulesets(copy.rules,p,copy.environments)).ok,false);}
+ const unconfigured=configuredPolicy(); unconfigured.environments.agent_review.id=null;
+ assert.equal(evaluatePreflight(protectionFromRulesets(f.rules,unconfigured,f.environments)).ok,false);
  const protection=protectionFromRulesets(f.rules,p,f.environments);
  assert.equal(decideMerge({flags:{enabled:true,mergeEnabled:true},protection,lock:null}).reason,'MERGE_LOCKED');
 });

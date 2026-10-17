@@ -73,18 +73,56 @@ export function feedbackStore(github, pr) {
 
 export async function verifyFeedbackProtection(github, appId, policy = {}) {
   const root = `/repos/${REPOSITORY}`;
-  const rules = await github.request(`${root}/rules/branches/agent-feedback-state`);
-  // This endpoint returns rules applicable to the exact branch. Check each
-  // source ruleset as well: effective rules alone do not expose bypass actors.
-  if (!Array.isArray(rules) || !rules.length) throw new Error('STATE_PROTECTION_MISSING');
-  const sets = await Promise.all([...new Set(rules.map(r => r.ruleset_id))]
-    .map(id => github.request(`${root}/rulesets/${id}`)));
-  const active = sets.map(s => withRulesetEvidence(s, policy)).filter(s => s.enforcement === 'active' && s.target === 'branch');
-  const integrity = active.filter(s => s.bypass_actors?.length === 0).flatMap(s => s.rules ?? []);
-  const writers = active.some(s => ['update', 'creation'].every(type => s.rules?.some(r => r.type === type))
-    && s.bypass_actors?.length === 1 && s.bypass_actors[0].actor_type === 'Integration'
-    && s.bypass_actors[0].actor_id === appId && s.bypass_actors[0].bypass_mode === 'always');
-  if (!writers || !['deletion', 'non_fast_forward'].every(t => integrity.some(r => r.type === t))) throw new Error('STATE_PROTECTION_MISSING');
+  const details = new Map();
+  async function applicable(branch) {
+    const rules = [];
+    // Ask GitHub which rules actually apply; do not approximate fnmatch/~ALL
+    // for source branches or silently stop at the default first page.
+    for (let page = 1; ; page++) {
+      if (page > 100) throw new Error('STATE_PROTECTION_INCOMPLETE');
+      const batch = await github.request(`${root}/rules/branches/${branch}?per_page=100&page=${page}`);
+      if (!Array.isArray(batch) || batch.length > 100
+          || batch.some(rule => !Number.isSafeInteger(rule?.ruleset_id) || rule.ruleset_id < 1)) {
+        throw new Error('STATE_PROTECTION_MISSING');
+      }
+      rules.push(...batch);
+      if (batch.length < 100) break;
+    }
+    const sets = [];
+    for (const id of new Set(rules.map(rule => rule.ruleset_id))) {
+      if (!details.has(id)) {
+        const rule = withRulesetEvidence(await github.request(`${root}/rulesets/${id}`), policy);
+        if (rule.id !== id) throw new Error('STATE_PROTECTION_MISSING');
+        details.set(id, rule);
+      }
+      const rule = details.get(id);
+      if (rule.enforcement === 'active' && rule.target === 'branch') sets.push(rule);
+    }
+    return sets;
+  }
+  if (!Number.isSafeInteger(appId) || appId < 1) throw new Error('STATE_PROTECTION_MISSING');
+  const active = await applicable('agent-feedback-state');
+  const alwaysWriter = rule => rule.rules?.some(r => r.type === 'update')
+    && rule.bypass_actors.some(actor => actor.actor_type === 'Integration'
+      && actor.actor_id === appId && actor.bypass_mode === 'always');
+  const exactStateTarget = rule => {
+    const refs = rule.conditions?.ref_name;
+    return Array.isArray(refs?.include) && refs.include.length === 1
+      && refs.include[0] === 'refs/heads/agent-feedback-state'
+      && Array.isArray(refs.exclude) && refs.exclude.length === 0;
+  };
+  // A valid narrow writer must not mask a second, broad always-bypass writer.
+  if (active.some(rule => alwaysWriter(rule) && !exactStateTarget(rule))) throw new Error('STATE_WRITER_SCOPE');
+  const integrity = active.filter(rule => rule.bypass_actors.length === 0).flatMap(rule => rule.rules ?? []);
+  const writers = active.some(rule => exactStateTarget(rule)
+    && ['update', 'creation'].every(type => rule.rules?.some(r => r.type === type))
+    && rule.bypass_actors.length === 1 && alwaysWriter(rule));
+  if (!writers || !['deletion', 'non_fast_forward'].every(type => integrity.some(r => r.type === type))) throw new Error('STATE_PROTECTION_MISSING');
+  // A different ruleset may target only main/integration and never appear in
+  // the state endpoint. Read both before certifying the App's write boundary.
+  for (const branch of ['main', 'integration']) {
+    if ((await applicable(branch)).some(alwaysWriter)) throw new Error('SOURCE_WRITER_BYPASS');
+  }
   const environment = await github.request(`${root}/environments/agent-control`);
   const branches = await github.request(`${root}/environments/agent-control/deployment-branch-policies`);
   if (environment.deployment_branch_policy?.custom_branch_policies !== true

@@ -351,7 +351,7 @@ Tests exercise the offline positive cycle and rejection of forks, stale/spoofed
 reviews, retargeting, out-of-scope files, duplicate heads, concurrent reservations,
 lost responses and budget reset. See the PR for final command results and exact SHA.
 Code additions: feedback workflow/config, feedback state machine/CLI and tests.
-Existing product/controller/approval code remains unchanged.
+Product and approval workflows remain unchanged. Shared controller API adapters are hardened for exact token grants and read-only protection evidence; the accepted PR #41 isolation and preflight safeguards are preserved.
 
 NEXT ACTION / complete continuation prompt:
 
@@ -371,3 +371,50 @@ production approval and verified activation prerequisites remain separate.
 Sources checked: [Cursor API](https://cursor.com/docs/cloud-agent/api/endpoints),
 [Codex GitHub review](https://learn.chatgpt.com/docs/third-party/github),
 [GitHub event behavior](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows).
+
+
+## Direct repair after PR #41 integration — 2026-10-17
+
+The requested Cursor follow-up failed to arrive (PR comment 6234323780). The
+coordinator repaired the existing branch directly; this is not a successful
+Cursor pilot. Input implementation: `9c926623568426e0ab8a3c3e24ab8fc5f99c2525`.
+Accepted integration: `dc4d20240568669a514480e387687c49194d5267`. The integration
+was combined into this task branch with all accepted product files preserved.
+No force push, live provider call or production deployment belongs to this repair.
+
+- Token usage is selected from exactly one `runs[].id` equal to the reserved
+  run ID, never the durable agent's aggregate `totalUsage`. Missing, ambiguous
+  or invalid token evidence stays null with `cursorUsageStatus=UNAVAILABLE`.
+  `cursorCostStatus` and Codex monetary cost remain UNAVAILABLE until independent
+  billing evidence exists; token counts are not an invoice. The request may use
+  the API run filter, but the response must still identify the correct run.
+- A signed, verified finished repair with current-head review findings returns
+  to the existing repair path, respecting the three-round and lifecycle ledger
+  limits, without requesting a redundant review. Findings arriving in the final
+  pre-review read preserve a repairable WAITING_REVIEW state and terminal hold.
+- Routine prompts require current CI, independent review and effective branch
+  protection. They do not invent an extra owner-acceptance gate for integration.
+  The builder still cannot merge/deploy; Production approval remains separate.
+- The state-writer always bypass must target exactly
+  `refs/heads/agent-feedback-state`, without wildcards, extra refs or exclusions.
+  All applicable source-branch rule pages for main and integration are checked
+  independently. Any additional controller-App always-update bypass on either
+  source branch rejects the preflight, even alongside a valid state-only writer.
+  Missing/failed evidence is not an empty bypass list or permission to proceed.
+
+Temporary read-only branch-only snapshot instrumentation packaged tracked public
+Git objects for offline merge/regression tests. It was removed from the final
+file tree; it is not a second controller or a deployment mechanism.
+
+Twenty new offline regressions cover the four current review findings, including
+response attribution, absent/duplicate run evidence, redundant-review races,
+ledger reservation, signer/round limits, exact bypass scope and pagination.
+Local baseline after combining integration: 234/234 tests passed on Node22.16.
+The first 17 focused regressions reproduced the defects (0/17 passed) before
+repair and passed afterward. Final commands/results and exact reviewed commit
+are recorded in the PR handoff. Full Node24 application CI and independent
+review must separately complete for the final HEAD before integration acceptance.
+
+Activation remains disarmed: enabled=false, costProbe.armed=false, bindings=[].
+The one-shot pilot and its later recurring budget are separate from this code
+repair. No runtime configuration is asserted to be ready by offline tests.

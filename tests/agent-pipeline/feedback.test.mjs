@@ -287,7 +287,7 @@ test('one cost probe records vendor numbers once and posts one review', async ()
       reads += 1;
       assert.equal(agentId, f.binding.agentId);
       assert.equal(runId, 'run-probe');
-      return { totalUsage: { totalTokens: 12 }, cost: { chargedCents: 0, rawCostCents: 4.5 } };
+      return { totalUsage: { totalTokens: 9012 }, runs: [{ id: 'earlier', usage: { totalTokens: 9000 } }, { id: runId, usage: { totalTokens: 12 } }], cost: { chargedCents: 0, rawCostCents: 4.5 } };
     },
   };
   const args = {
@@ -357,7 +357,7 @@ test('one cost probe records vendor numbers once and posts one review', async ()
     cursor: {
       async createRun() { return { run: { id: 'run-drop', agentId: dropped.binding.agentId } }; },
       async getRun() { return { id: 'run-drop', agentId: dropped.binding.agentId, status: 'FINISHED' }; },
-      async getUsage() { return { totalUsage: { totalTokens: 1 } }; },
+      async getUsage() { return { totalUsage: { totalTokens: 1 }, runs: [{ id: 'run-drop', usage: { totalTokens: 1 } }] }; },
     },
     readHead: async () => droppedHead,
     readSnapshot: async () => structuredClone(dropped.snapshot),
@@ -381,7 +381,7 @@ test('one cost probe records vendor numbers once and posts one review', async ()
   const unpricedCursor = {
     async createRun() { return { run: { id: 'run-plain', agentId: unpriced.binding.agentId } }; },
     async getRun() { return { id: 'run-plain', agentId: unpriced.binding.agentId, status: 'FINISHED' }; },
-    async getUsage() { return { totalUsage: { totalTokens: 3 }, cost: { chargedCents: -1, rawCostCents: '4' } }; },
+    async getUsage() { return { totalUsage: { totalTokens: 3 }, runs: [{ id: 'run-plain', usage: { totalTokens: 3 } }], cost: { chargedCents: -1, rawCostCents: '4' } }; },
   };
   const unpricedArgs = {
     binding: unpriced.binding, store: unpriced.args.store, cursor: unpricedCursor,
@@ -560,12 +560,13 @@ test('workflow never checks out PR code or interpolates comments; no OpenAI key 
 
 test('state branch protection requires exclusive writer and non-bypassable integrity', async () => {
   const sets = [
-    { enforcement: 'active', target: 'branch', rules: [{ type: 'update' }, { type: 'creation' }], bypass_actors: [{ actor_type: 'Integration', actor_id: 12, bypass_mode: 'always' }] },
-    { enforcement: 'active', target: 'branch', rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }], bypass_actors: [] },
+    { id: 1, conditions: { ref_name: { include: ['refs/heads/agent-feedback-state'], exclude: [] } }, enforcement: 'active', target: 'branch', rules: [{ type: 'update' }, { type: 'creation' }], bypass_actors: [{ actor_type: 'Integration', actor_id: 12, bypass_mode: 'always' }] },
+    { id: 2, conditions: { ref_name: { include: ['refs/heads/agent-feedback-state'], exclude: [] } }, enforcement: 'active', target: 'branch', rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }], bypass_actors: [] },
   ];
   const github = { request: async path => {
-    if (path.includes('/rules/branches/')) return [{ ruleset_id: 0 }, { ruleset_id: 1 }];
-    if (path.includes('/rulesets/')) return sets[Number(path.split('/').at(-1))];
+    if (path.includes('/rules/branches/agent-feedback-state')) return [{ ruleset_id: 1 }, { ruleset_id: 2 }];
+    if (path.includes('/rules/branches/')) return [];
+    if (path.includes('/rulesets/')) return sets.find(rule => rule.id === Number(path.split('/').at(-1)));
     if (path.endsWith('/deployment-branch-policies')) return { total_count: 1, branch_policies: [{ name: 'main', type: 'branch' }] };
     return { deployment_branch_policy: { custom_branch_policies: true } };
   } };

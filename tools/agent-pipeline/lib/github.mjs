@@ -73,7 +73,7 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
         detailed.push(withRulesetEvidence(await request(`/repos/${owner}/${repo}/rulesets/${item.id}`), policy));
       }
       const environments = {};
-      for (const e of [policy.environments?.owner_acceptance, policy.environments?.production_approval]) {
+      for (const e of [policy.environments?.owner_acceptance, policy.environments?.production_approval, policy.environments?.agent_review]) {
         if (!e?.name) continue;
         const path = `/repos/${owner}/${repo}/environments/${encodeURIComponent(e.name)}`;
         const env = await request(path);
