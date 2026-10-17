@@ -1,0 +1,30 @@
+name: PR57 offline source snapshot
+on:
+  push:
+    branches: [chore/sc-ops-002d-feedback-loop]
+    paths: [.github/workflows/pr57-offline-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.repository == 'krzysztofsyska/skillcheck-core' && github.ref == 'refs/heads/chore/sc-ops-002d-feedback-loop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Package tracked public Git objects for offline regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git bundle create /tmp/pr57-offline.bundle HEAD refs/remotes/origin/integration
+          git bundle verify /tmp/pr57-offline.bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr57-offline-source
+          path: /tmp/pr57-offline.bundle
+          retention-days: 1
+          if-no-files-found: error
