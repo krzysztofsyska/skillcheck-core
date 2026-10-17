@@ -128,3 +128,8 @@ Przygotowanie nie jest aktywacją. Workflow IDs odczytane z GitHub: reconcile 37
 Brakuje środowisk owner-acceptance, production-approval i agent-review. Rulesets API zwróciło pustą listę; klasycznej ochrony gałęzi nie zweryfikowano (403). Brak agent-state. ID App i aktora pozostają null, obie flagi false. Nie dodano sekretów i nie testowano płatnej pętli.
 
 Pin Codex Action zweryfikowany: annotated tag v1 wskazuje commit bdf19a4a223ec2549a3e2274a0cf61556bc07675. Wszystkie identyfikatory i ustawienia należy ponownie odczytać przed aktywacją. Szczegółowy kontrakt, kolejność konfiguracji usług i wymagania odbioru: https://github.com/krzysztofsyska/skillcheck-core/issues/40.
+
+
+## Aktualizacja konfiguracji — 2026-10-17 (bez uruchomienia)
+
+Właściciel udostępnił w interfejsie GitHub konfigurację środowiska `agent-review` pod identyfikatorem `23622706434`. Ekran pokazuje wyłącznie gałąź `main` (zero tagów), bez required reviewers i wait timera. Wcześniejszy ekran listy Actions secrets pokazuje `OPENAI_API_KEY` przypisany do `agent-review`; wartości sekretu, poprawności API i budżetu nie odczytywano ani nie testowano. Identyfikator został wpisany do polityki jako dane z konfiguracji właściciela, **nie** jako zaliczony odczyt API `readProtection`. Realny preflight musi niezależnie zweryfikować ID, branch policy i uprawnienia. `controller_actor_id` i `controller_app_id` pozostają `null`, obie flagi pozostają `false`: żadnych płatnych review, Cursor dispatch, merge i wdrożeń.

@@ -41,6 +41,6 @@ test('checked-in policy cannot authorize a paid review dispatch', () => {
     controllerActorId: policy.controller_actor_id,
     runAttempt: '1',
   });
-  assert.equal(policy.environments.agent_review.id, null);
+  assert.equal(policy.environments.agent_review.id, 23622706434);
   assert.deepEqual(ownerDispatch, { ok: false, reason: 'controller_actor_unconfigured' });
 });
