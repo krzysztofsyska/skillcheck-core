@@ -1,0 +1,185 @@
+# TRUSTED BASE ONLY. Candidate objects are data, never checked out or executed.
+# API check runs below, NOT automatic job checks, are the required contexts.
+name: Sales selective scope
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact PR 120 candidate SHA
+        required: true
+        type: string
+      expected_base:
+        description: Exact current main SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  checks: read
+concurrency:
+  group: sales-selective-release-120
+  cancel-in-progress: true
+# Deliberately off until installation, external evidence and required contexts
+# have been independently verified. No automatic merge/deployment exists here.
+env:
+  SALES_RELEASE_GATES_ENABLED: ${{ vars.SALES_RELEASE_GATES_ENABLED }}
+  SALES_RELEASE_PUBLISHER_APP_ID: ${{ vars.SALES_RELEASE_PUBLISHER_APP_ID }}
+  SALES_EVIDENCE_URL: ${{ vars.SALES_EVIDENCE_URL }}
+  SALES_EVIDENCE_PUBLIC_KEY: ${{ vars.SALES_EVIDENCE_PUBLIC_KEY }}
+jobs:
+  initialize:
+    if: >-
+      vars.SALES_RELEASE_GATES_ENABLED == 'true' &&
+      github.repository == 'krzysztofsyska/skillcheck-core' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'pull_request_target' ||
+      (github.event.pull_request.number == 120 &&
+      github.event.pull_request.head.ref == 'release/sales-mvp-intake-20261013' &&
+      github.event.pull_request.head.repo.id == 1043384454))
+    name: Initialize candidate-bound release checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      id-token: write
+    outputs:
+      binding: ${{ steps.initialize.outputs.binding }}
+      checks: ${{ steps.initialize.outputs.checks }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - id: initialize
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SALES_GATE_STAGE: initialize
+        run: node tools/agent-pipeline/lib/sales-trusted-runner.mjs --gate
+  scope:
+    needs: initialize
+    name: Audit reviewed release objects
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      id-token: write
+    env:
+      SALES_GATE_STAGE: scope
+      SALES_GATE_BINDING: ${{ needs.initialize.outputs.binding }}
+      SALES_GATE_CHECKS: ${{ needs.initialize.outputs.checks }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Fetch exact release ref as Git data, never execute it
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/agent-pipeline/lib/sales-trusted-runner.mjs --fetch-release-ref
+      - name: Verify live main rules, reviewed blobs and complete release history
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/agent-pipeline/lib/sales-trusted-runner.mjs --gate
+  owner:
+    needs: [initialize, scope]
+    name: Record explicit owner acceptance
+    environment: owner-acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      id-token: write
+    env:
+      SALES_GATE_STAGE: owner
+      SALES_GATE_BINDING: ${{ needs.initialize.outputs.binding }}
+      SALES_GATE_CHECKS: ${{ needs.initialize.outputs.checks }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/agent-pipeline/lib/sales-trusted-runner.mjs --gate
+  production:
+    needs: [initialize, scope, owner]
+    name: Record separate production approval (no deployment)
+    environment: production-approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      id-token: write
+    env:
+      SALES_GATE_STAGE: production
+      SALES_GATE_BINDING: ${{ needs.initialize.outputs.binding }}
+      SALES_GATE_CHECKS: ${{ needs.initialize.outputs.checks }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/agent-pipeline/lib/sales-trusted-runner.mjs --gate
+  invalidate:
+    needs: [initialize, scope, owner, production]
+    if: >-
+      always() && needs.initialize.result == 'success' &&
+      (needs.scope.result != 'success' || needs.owner.result != 'success' ||
+      needs.production.result != 'success')
+    name: Invalidate failed release attempt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      id-token: write
+    env:
+      SALES_GATE_STAGE: invalidate
+      SALES_GATE_BINDING: ${{ needs.initialize.outputs.binding }}
+      SALES_GATE_CHECKS: ${{ needs.initialize.outputs.checks }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/agent-pipeline/lib/sales-trusted-runner.mjs --gate

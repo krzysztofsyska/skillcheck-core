@@ -25,7 +25,11 @@ Do not require the owner to copy handoffs between agents.
 - task branches start from `integration`.
 - normal task PRs target `integration`.
 - only a production promotion PR may target `main`.
-- promotion PR must be `integration -> main`.
+- promotion PR must be `integration -> main` **unless** the single audited five-file intake exception below applies.
+- **Sales-intake exception (narrow, pending activation):** the only separate release source is `release/sales-mvp-intake-20261013` for PR #120; the only permitted changes are the five pinned marketing/test paths from reviewed PR #118. This is NOT a general right to promote task branches.
+- A green Agent Gates classifier is necessary but **insufficient**. Require `Sales selective scope verified`, executed by trusted `main`-side `pull_request_target` code without running candidate code; protected `main` with enforced required checks/reviews and no bypass; an independent review of the final exact SHA; separate GitHub-origin OWNER ACCEPTANCE and PRODUCTION APPROVAL with verified required reviewers. Fail closed if settings cannot be verified.
+- The one-time governance installer branch `governance/sales-selective-main-gate-20261016` is accepted only against original main SHA `76760b7ffb7e95231fc7af313cc67bc8d36fefe1` for exactly seven policy/test files. This bootstrap exception expires once main advances and may never authorize a product deployment.
+- Rebase the five reviewed marketing blobs onto the new protected main only after governance is installed; rerun CI, Codex review and trusted scope check after any head/base change. No payments, CV processing, backend, secrets, migrations or call workers in this release.
 
 Do not merge task branches directly to `main`.
 

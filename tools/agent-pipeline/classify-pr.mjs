@@ -1,3 +1,28 @@
+// Production rule change: an exception is only a scope classification, never an approval.
+// The Sales selective scope verified status MUST come from a trusted, protected
+// main-side pull_request_target workflow; the candidate PR cannot attest itself.
+const SALES_INTAKE_BRANCH = 'release/sales-mvp-intake-20261013';
+const SEED_BRANCH = 'governance/sales-selective-main-gate-20261016';
+const SEED_BASE_SHA = '76760b7ffb7e95231fc7af313cc67bc8d36fefe1';
+const SALES_INTAKE_FILES = Object.freeze(["app/preselekcja/page.tsx","app/components/marketing/home-page.tsx","app/components/marketing/site-header.tsx","app/components/marketing/package-comparison.tsx","tests/marketing-http.test.mjs"]);
+const SEED_FILES = Object.freeze([".github/workflows/sales-selective-scope.yml","AGENTS.md","docs/sales-selective-governance-install.md","tests/agent-pipeline/sales-selective-governance.test.mjs","tools/agent-pipeline/classify-pr.mjs","tools/agent-pipeline/lib/sales-release-verified.mjs","tools/agent-pipeline/lib/sales-trusted-runner.mjs"]);
+function exactFiles(files,allowed) {
+  return Array.isArray(files) && files.length === allowed.length &&
+    new Set(files).size === allowed.length && files.every(f => allowed.includes(f));
+}
+function allowedMainException({base,headRef,baseSha,prNumber,metadata,files}) {
+  if(base !== 'main' || metadata.PROMOTION !== 'YES' || metadata.LEVEL !== 'L3') return false;
+  if(headRef === SALES_INTAKE_BRANCH)
+    return prNumber === 120 && metadata.SCOPE === 'FRONTEND' && metadata.RELEASE_KIND === 'SALES_MVP_INTAKE' &&
+      exactFiles(files,SALES_INTAKE_FILES);
+  // Single-use governance seed, pinned to the original main SHA. After main
+  // advances this exception becomes unreachable, even on a reused branch.
+  if(headRef === SEED_BRANCH)
+    return prNumber === 128 && baseSha === SEED_BASE_SHA && metadata.SCOPE === 'OPERATIONS' &&
+      metadata.RELEASE_KIND === 'GOVERNANCE_SEED' && exactFiles(files,SEED_FILES);
+  return false;
+}
+
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -6,7 +31,7 @@ const PRODUCT_FRONTEND = /^(app\/(?!api\/)|components\/|public\/|styles\/).+|\.c
 const PRODUCT_BACKEND = /^(app\/api\/|lib\/|supabase\/|scripts\/)/;
 const OPERATIONS = /^(tools\/agent-pipeline\/|tests\/agent-pipeline\/|\.github\/agent-pipeline\/|\.github\/workflows\/agent-|docs\/sc-ops-002|docs\/AGENT_PIPELINE\.md|docs\/AGENT_WORKFLOW\.md|AGENTS\.md|\.cursor\/rules\/skillcheck-agent-pipeline\.mdc)/;
 
-export function classify({ files, body, base, headRef }) {
+export function classify({ files, body, base, headRef, baseSha, prNumber }) {
   const metadata = parseMetadata(body);
   const missing = ['TASK', 'SCOPE', 'LEVEL', 'OWNER_APPROVAL', 'PRODUCTION_APPROVAL', 'REVIEW_VERDICT', 'PROMOTION']
     .filter(field => !metadata[field]);
@@ -21,6 +46,12 @@ export function classify({ files, body, base, headRef }) {
     if (PRODUCT_BACKEND.test(file)) backend = true;
     else if (PRODUCT_FRONTEND.test(file)) frontend = true;
     if (OPERATIONS.test(file)) operations = true;
+    // This main-side verifier is a production trust boundary even when a
+    // later, ordinary PR changes only the workflow (outside the seed path).
+    if (file === '.github/workflows/sales-selective-scope.yml') {
+      operations = true;
+      security = true;
+    }
     if (file.startsWith('supabase/migrations/')) {
       database = true;
       security = true;
@@ -36,7 +67,8 @@ export function classify({ files, body, base, headRef }) {
   const errors = [];
   if (metadata.SCOPE !== detected) errors.push(`Declared SCOPE=${metadata.SCOPE} but changed files classify as ${detected}`);
   if ((database || security || operations) && metadata.LEVEL !== 'L3') errors.push('DB, security, or controller changes require LEVEL: L3');
-  if (base === 'main' && (headRef !== 'integration' || metadata.PROMOTION !== 'YES')) {
+  if (base === 'main' && (headRef !== 'integration' || metadata.PROMOTION !== 'YES') &&
+      !allowedMainException({base,headRef,baseSha,prNumber,metadata,files})) {
     errors.push('Only an integration -> main promotion may target main (approval is validated separately)');
   }
   return {
@@ -80,21 +112,27 @@ function main() {
   let files = [];
   let base = 'integration';
   let headRef = '';
+  let baseSha = '';
+  let prNumber = 0;
   if (readArg('--body-file')) {
     body = readFileSync(readArg('--body-file'), 'utf8');
     files = readFileSync(readArg('--files-file'), 'utf8').split('\n').filter(Boolean);
     base = readArg('--base') ?? base;
     headRef = readArg('--head') ?? '';
+    baseSha = readArg('--base-sha') ?? '';
+    prNumber = Number(readArg('--pr-number') || 0);
   } else if (process.env.GITHUB_EVENT_PATH) {
     const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
     body = event.pull_request?.body ?? '';
     base = event.pull_request?.base?.ref ?? 'integration';
     headRef = event.pull_request?.head?.ref ?? '';
+    baseSha = event.pull_request?.base?.sha ?? '';
+    prNumber = Number(event.pull_request?.number || 0);
     files = changedFiles(base);
   } else {
     throw new Error('Missing pull request event');
   }
-  const result = classify({ files, body, base, headRef });
+  const result = classify({ files, body, base, headRef, baseSha, prNumber });
   if (!result.ok) {
     for (const error of result.errors) console.error(`::error::${error}`);
     process.exit(1);
