@@ -862,9 +862,9 @@ test('dedicated broker publishes all three checks while workflow token performs 
   const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,ids,env:b.env,readApi,fetchImpl:b.clientFetch});
   const protectionCheck=()=>trustedRunner.requestProtectionEvidence({binding:b.f.binding,env:b.env,fetchImpl:b.clientFetch,now:()=>T});
   await trustedRunner.runSalesStage(stageArgs(b.f,ids,'scope',{api,protectionCheck}));
-  b.f.history.push(b.f.approve('owner-acceptance'));b.claimsPatch.environment='owner-acceptance';
+  b.f.history.push(b.f.approve('owner-acceptance'));b.claimsPatch.sub=`repo:${REPO}:environment:owner-acceptance`;
   await trustedRunner.runSalesStage(stageArgs(b.f,ids,'owner',{api,protectionCheck}));
-  b.f.history.push(b.f.approve('production-approval'));b.claimsPatch.environment='production-approval';
+  b.f.history.push(b.f.approve('production-approval'));b.claimsPatch.sub=`repo:${REPO}:environment:production-approval`;
   await trustedRunner.runSalesStage(stageArgs(b.f,ids,'production',{api,protectionCheck}));
   for(const id of Object.values(ids)) {
     assert.equal(b.f.checks.get(id).app.id,8888);
@@ -899,7 +899,7 @@ test('broker independently rechecks rejected owner approval before completing a 
   const b=brokerFixture();const ids=await trustedRunner.initializeSalesChecks(b.f.binding,b.f.api);
   await trustedRunner.runSalesStage(stageArgs(b.f,ids,'scope'));
   b.f.history=[{...b.f.approve('owner-acceptance'),state:'rejected'}];
-  b.claimsPatch.environment='owner-acceptance';
+  b.claimsPatch.sub=`repo:${REPO}:environment:owner-acceptance`;
   const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,ids,env:b.env,readApi:b.f.api,fetchImpl:b.clientFetch});
   // Call the publisher directly to show that main-side orchestration is not the
   // broker's only guard against manufactured approval results.
@@ -941,3 +941,51 @@ test('live workflow token has no check writes and every publication goes through
   assert.match(cli,/const api=createBrokeredSalesApi\(\{binding,ids,env,readApi\}\)/);
   assert.match(cli,/invalidateSalesChecks\(\{binding:prior,ids,api\}\)/);
 });
+
+
+// Independent review 5558272284: default GitHub OIDC binds the environment in
+// sub, not a guaranteed top-level environment claim. Immutable subjects also
+// include the already-verified numeric owner/repository identities.
+for (const immutable of [false, true]) {
+  test(`native owner decisions publish with default ${immutable?'immutable':'legacy'} environment subject only`, async () => {
+    const b=brokerFixture();
+    const init=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,env:b.env,readApi:b.f.api,fetchImpl:b.clientFetch});
+    const ids=await trustedRunner.initializeSalesChecks(b.f.binding,init);
+    const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,ids,env:b.env,readApi:b.f.api,fetchImpl:b.clientFetch});
+    const root=immutable?'krzysztofsyska@222297538/skillcheck-core@1043384454':REPO;
+    await trustedRunner.runSalesStage(stageArgs(b.f,ids,'scope',{api}));
+    for(const [stage,name] of [['owner','owner-acceptance'],['production','production-approval']]) {
+      b.f.history.push(b.f.approve(name));
+      b.claimsPatch.sub=`repo:${root}:environment:${name}`;
+      assert.equal(Object.hasOwn(b.claimsPatch,'environment'),false);
+      await trustedRunner.runSalesStage(stageArgs(b.f,ids,stage,{api}));
+      assert.equal(b.f.checks.get(ids[stage]).conclusion,'success');
+    }
+  });
+}
+for(const subject of [undefined, '', `repo:${REPO}:ref:refs/heads/main`,
+  `repo:${REPO}:environment:production-approval`, `repo:other/repo:environment:owner-acceptance`,
+  'repo:krzysztofsyska@9/skillcheck-core@1043384454:environment:owner-acceptance',
+  'repo:krzysztofsyska@222297538/skillcheck-core@9:environment:owner-acceptance',
+  `repo:${REPO}:environment:owner-acceptance:extra`]) {
+  test(`a custom environment claim cannot override a missing/wrong subject ${String(subject)}`, async () => {
+    const b=brokerFixture();const ids=await trustedRunner.initializeSalesChecks(b.f.binding,b.f.api);
+    await trustedRunner.runSalesStage(stageArgs(b.f,ids,'scope'));
+    b.f.history=[b.f.approve('owner-acceptance')];
+    b.claimsPatch={sub:subject,environment:'owner-acceptance'};
+    const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,ids,env:b.env,readApi:b.f.api,fetchImpl:b.clientFetch});
+    await assert.rejects(trustedRunner.publishSalesCheck({binding:b.f.binding,ids,stage:'owner',conclusion:'success',api}),/protected environment identity/);
+    assert.equal(b.f.checks.get(ids.owner).conclusion,null);
+  });
+}
+for(const conflicting of [null,'production-approval',true]) {
+  test(`an inconsistent optional environment claim is rejected: ${String(conflicting)}`, async () => {
+    const b=brokerFixture();const ids=await trustedRunner.initializeSalesChecks(b.f.binding,b.f.api);
+    await trustedRunner.runSalesStage(stageArgs(b.f,ids,'scope'));
+    b.f.history=[b.f.approve('owner-acceptance')];
+    b.claimsPatch={sub:`repo:${REPO}:environment:owner-acceptance`,environment:conflicting};
+    const api=trustedRunner.createBrokeredSalesApi({binding:b.f.binding,ids,env:b.env,readApi:b.f.api,fetchImpl:b.clientFetch});
+    await assert.rejects(trustedRunner.publishSalesCheck({binding:b.f.binding,ids,stage:'owner',conclusion:'success',api}),/protected environment identity/);
+    assert.equal(b.f.checks.get(ids.owner).conclusion,null);
+  });
+}

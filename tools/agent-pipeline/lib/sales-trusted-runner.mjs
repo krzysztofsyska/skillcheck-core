@@ -578,7 +578,14 @@ async function executeBrokerPublication({request,claims,api}) {
     await verifySalesEnvironments(api);
     if(p.stage!=='scope') {
       const environment=p.stage==='owner'?'owner-acceptance':'production-approval';
-      if(claims.environment!==environment)deny('Approval publication lacks protected environment identity');
+      // Default GitHub OIDC encodes the environment in sub. The top-level
+      // environment claim is optional; it cannot replace or contradict sub.
+      // Support both documented default formats, with exact immutable IDs.
+      const subjects=[`repo:${full}:environment:${environment}`,
+        `repo:${owner}@${OWNER_ID}/${repo}@${REPOSITORY_ID}:environment:${environment}`];
+      if(!subjects.includes(claims.sub)||
+          (claims.environment!==undefined&&claims.environment!==environment))
+        deny('Approval publication lacks protected environment identity');
       for(const prior of p.priorIds) {
         const check=await api(`check-runs/${prior.id}`);
         assertBoundCheck(check,binding,prior.stage,prior.id);
