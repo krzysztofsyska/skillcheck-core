@@ -751,10 +751,10 @@ test('repair commit file pages are combined and an unproven list cannot certify 
   assert.equal(phaseFor(proven.repair), 'REVIEW_PENDING');
 });
 
-test('missing fix and timeout halt the loop', async () => {
+test('failed repair run and timeout halt the loop', async () => {
   const f = fixture(); await runFeedback(f.args);
   f.snapshot.agent.latestRunId = 'run-test';
-  f.snapshot.run = { id: 'run-test', agentId: f.binding.agentId, status: 'FINISHED' };
+  f.snapshot.run = { id: 'run-test', agentId: f.binding.agentId, status: 'ERROR' };
   assert.equal(await runFeedback(f.args), 'BLOCKED_NO_FIX');
   const g = fixture(); await runFeedback(g.args);
   g.args.now = 8_000_000;

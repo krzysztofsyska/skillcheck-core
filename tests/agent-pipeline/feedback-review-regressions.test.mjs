@@ -383,3 +383,134 @@ test('late-finding recovery at full ledger cannot spend another lifecycle, but c
   assert.equal(f.state().ledgerHold, undefined); assert.equal(used, 100);
   assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
 });
+
+// Terminal status and GitHub's pushed head can become visible in different reads.
+test('a finished repair waits without writes for its pushed head, then verifies it once', async () => {
+  const f = feedbackFixture(); f.finding(A); await runFeedback(f.args);
+  f.finish(); f.snapshot.pull.head.sha = A;
+  const saves = f.calls.saves;
+  for (let i = 0; i < 100; i++) {
+    f.args.now += 1000;
+    assert.equal(await runFeedback(f.args), 'FIXING');
+  }
+  assert.equal(f.calls.saves, saves);
+  assert.equal(f.state().ledgerHold, 3);
+  assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+  f.snapshot.pull.head.sha = C;
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(f.calls.reviews.length, 1); assert.equal(f.calls.runs.length, 1);
+});
+
+test('repair propagation waiting retains the original deadline and terminal write', async () => {
+  const f = feedbackFixture(); f.finding(A); await runFeedback(f.args);
+  f.finish(); f.snapshot.pull.head.sha = A;
+  f.args.now += 60 * 60 * 1000;
+  assert.equal(await runFeedback(f.args), 'FIXING');
+  const saved = await f.args.store.read();
+  await f.args.store.save(JSON.parse(JSON.stringify(saved.value)), saved.revision);
+  f.args.now = saved.value.startedAt + 2 * 60 * 60 * 1000 + 1;
+  assert.equal(await runFeedback(f.args), 'BLOCKED_TIMEOUT');
+  assert.equal(f.state().ledgerHold, undefined);
+  assert.equal(await runFeedback(f.args), 'BLOCKED_TIMEOUT');
+  assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+});
+
+test('a delayed pushed repair is not exempt from signature verification', async () => {
+  const f = feedbackFixture(); f.finding(A); await runFeedback(f.args);
+  f.finish(); f.snapshot.pull.head.sha = A;
+  assert.equal(await runFeedback(f.args), 'FIXING');
+  f.snapshot.pull.head.sha = C;
+  f.snapshot.repair.commits[0].commit.verification.verified = false;
+  assert.equal(await runFeedback(f.args), 'BLOCKED_PROVENANCE');
+  assert.equal(f.calls.reviews.length, 0);
+});
+
+function runningProbeFixture(status = 'RUNNING') {
+  const f = feedbackFixture(); f.args.readHead = async () => A;
+  let runReads = 0;
+  f.args.cursor.getRun = async (_id, id) => { runReads++; return { id, agentId: f.binding.agentId, status }; };
+  f.args.cursor.getUsage = async () => { throw new Error('usage must not be read while running'); };
+  return { ...f, runReads: () => runReads };
+}
+
+for (const status of ['CREATING', 'RUNNING']) {
+  test(`stalled ${status} probe has a durable deadline, releases hold after CAS and never redispatches`, async () => {
+    const f = runningProbeFixture(status); await runCostProbe(f.args);
+    const saved = await f.args.store.read();
+    assert.equal(saved.value.runDeadlineAt, f.args.now + 2 * 60 * 60 * 1000);
+    assert.equal(saved.value.startedAt, f.args.now);
+    await f.args.store.save(JSON.parse(JSON.stringify(saved.value)), saved.revision);
+    const writes = f.calls.saves;
+    f.args.now = saved.value.runDeadlineAt - 1;
+    assert.equal(await runCostProbe(f.args), 'COST_PROBE_RUNNING');
+    assert.equal(f.calls.saves, writes); assert.equal(f.state().ledgerHold, 3);
+    const reads = f.runReads(); f.args.now++;
+    assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+    assert.equal(f.state().failure, 'RUN_TIMEOUT');
+    assert.equal(f.state().reconciliationRequired, true);
+    assert.equal(f.state().runStatus, 'UNCONFIRMED');
+    assert.equal(f.state().runId, 'run-1');
+    assert.equal(f.state().ledgerHold, undefined);
+    assert.deepEqual(f.calls.reservations.at(-1), [1, 3]);
+    assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+    assert.equal(f.runReads(), reads); assert.equal(f.calls.saves, writes + 1);
+    assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+  });
+}
+
+test('probe timeout does not depend on an unavailable run API', async () => {
+  const f = runningProbeFixture(); await runCostProbe(f.args);
+  f.args.cursor.getRun = async () => { throw new Error('fixture API timeout'); };
+  await assert.rejects(runCostProbe(f.args), /fixture API timeout/);
+  assert.equal(f.state().ledgerHold, 3);
+  f.args.now = f.state().runDeadlineAt;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(f.state().reconciliationRequired, true);
+  assert.equal(f.calls.runs.length, 1);
+});
+
+test('failed probe timeout CAS keeps the original durable hold and consumed run', async () => {
+  const f = runningProbeFixture(); await runCostProbe(f.args);
+  f.args.now = f.state().runDeadlineAt;
+  const reserveCount = f.calls.reservations.length, store = f.args.store;
+  f.args.store = { read: store.read, async save() { throw new Error('CAS failure'); } };
+  await assert.rejects(runCostProbe(f.args), /CAS failure/);
+  assert.equal(f.state().ledgerHold, 3); assert.equal(f.calls.reservations.length, reserveCount);
+  f.args.store = store;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(f.calls.runs.length, 1);
+});
+
+test('unverifiable legacy or changed probe deadlines fail closed without reading or restarting a run', async () => {
+  for (const mutate of [s => { delete s.runDeadlineAt; }, s => { s.runDeadlineAt++; },
+    s => { s.startedAt = '1000'; }, s => { s.startedAt = -1; },
+    s => { s.startedAt = 2000; s.runDeadlineAt = 2000 + 2 * 60 * 60 * 1000; }]) {
+    const f = runningProbeFixture(); await runCostProbe(f.args);
+    const saved = await f.args.store.read(); mutate(saved.value);
+    await f.args.store.save(saved.value, saved.revision);
+    assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+    assert.equal(f.state().failure, 'RUN_DEADLINE_UNVERIFIED');
+    assert.equal(f.state().reconciliationRequired, true); assert.equal(f.runReads(), 0);
+    assert.equal(f.calls.runs.length, 1);
+  }
+});
+
+test('invalid probe clock is rejected before a reservation or provider effect', async () => {
+  for (const now of [NaN, Infinity, -1, '1000', Number.MAX_SAFE_INTEGER]) {
+    const f = runningProbeFixture(); f.args.now = now;
+    await assert.rejects(runCostProbe(f.args), /COST_PROBE_CLOCK/);
+    assert.equal(f.calls.runs.length, 0); assert.equal(f.calls.saves, 0);
+  }
+});
+
+test('full ledger keeps capacity to record stalled probe failure rather than leaving it unmonitored', async () => {
+  const { accountLedger } = await import('../../tools/agent-pipeline/feedback.mjs');
+  const f = runningProbeFixture(); let used = 95;
+  f.args.reserveLedger = (writes, held) => { used = accountLedger(used, writes, held); };
+  await runCostProbe(f.args); assert.equal(used, 100);
+  f.args.now = f.state().runDeadlineAt;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(used, 98); assert.equal(f.state().ledgerHold, undefined);
+  assert.equal(f.state().reconciliationRequired, true);
+  assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+});

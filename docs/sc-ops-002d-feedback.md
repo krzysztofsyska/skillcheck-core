@@ -440,3 +440,27 @@ remaining terminal slot. Further effects require a fresh lifecycle reservation;
 full ledger capacity still permits recording timeout, not another paid effect.
 All counts and exact final SHA for CI/review are recorded in the PR receipt.
 These are code-level regressions with synthetic API responses, not LIVE testing.
+
+
+### Bounded propagation and stalled-run reconciliation
+
+A FINISHED ordinary repair with an unchanged GitHub head remains FIXING without
+additional writes or dispatches, until its original two-hour repair deadline.
+Once the pushed head appears it must still pass signed allowlisted provenance.
+A terminal error remains blocked; a head that never appears reaches timeout.
+
+The one-shot probe now persists startedAt and its exact two-hour runDeadlineAt
+in the initial reservation. A stuck CREATING/RUNNING run, missing legacy deadline
+or unreadable provider at expiration records COST_PROBE_FAILED once, with the
+exact runId, runStatus=UNCONFIRMED and reconciliationRequired=true. This records
+a local failure, not provider cancellation or cessation of billing. An operator
+must reconcile/cancel any still-active remote run separately. The global consumed
+probe record remains and prevents a second paid pilot. Unused ledger holds are
+released only after the failure's CAS save succeeds. No automatic cancellation,
+restart, paid retry, fabricated usage or live activation was added.
+
+Ten further offline regressions reproduce and close these two independent
+findings on 8f6f012: delayed head visibility, eventual provenance, durable deadlines,
+failed CAS, unavailable run API, legacy/invalid clock data and full-ledger timeout.
+The existing failed-run test still checks immediate ERROR rejection; successful
+FINISHED propagation is covered separately rather than weakening that safeguard.

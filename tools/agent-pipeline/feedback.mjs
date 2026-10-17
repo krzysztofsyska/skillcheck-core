@@ -146,7 +146,11 @@ export function planFeedback(binding, state, snapshot, now = Date.now()) {
     if (!run || run.id !== current.runId || run.agentId !== binding.agentId
         || snapshot.agent.latestRunId !== current.runId) fail('CURSOR_RUN_MISMATCH');
     if (['CREATING', 'RUNNING'].includes(run.status)) return { status: 'FIXING' };
-    if (run.status !== 'FINISHED' || head === current.head) return { state: { ...current, phase: 'BLOCKED_NO_FIX' } };
+    if (run.status !== 'FINISHED') return { state: { ...current, phase: 'BLOCKED_NO_FIX' } };
+    // The pull can be read before Cursor exposes its terminal run or GitHub
+    // exposes the push. Keep the original repair deadline/hold, with no write
+    // or redispatch, until the changed head is available for signed verification.
+    if (head === current.head) return { status: 'FIXING' };
     if (!verifyRepair(binding, current, snapshot)) return { state: { ...current, phase: 'BLOCKED_PROVENANCE' } };
     // An independently reviewed repaired head may already need the next fix.
     // Reuse the ordinary finding/round/idle checks rather than requesting a
@@ -228,6 +232,7 @@ export function fixPrompt(binding, effect) {
 // A zero row can mean usage is not recorded yet, not a free completed repair.
 const wholeTokens = value => Number.isSafeInteger(value) && value > 0 ? value : null;
 const PROBE_ARTIFACT_GRACE_MS = 15 * 60 * 1000;
+const PROBE_RUN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 // The Cloud Agents REST /usage endpoint documents token counts, NOT a monetary
 // charge. Never infer billed cents from a synthetic/undocumented 'cost' field.
@@ -298,6 +303,7 @@ function costProbeReview(head) {
 // measured-after-terminal, review-pending and done. Ambiguous dispatch stays
 // pending permanently; polling RUNNING never dispatches another paid run.
 export async function runCostProbe({ binding, store, cursor, reserveLedger, readHead, readSnapshot, postReview, now = Date.now() }) {
+  if (!Number.isSafeInteger(now) || now < 0 || !Number.isSafeInteger(now + PROBE_RUN_TIMEOUT_MS)) fail('COST_PROBE_CLOCK');
   validateBinding(binding);
   if (binding.allowedFiles.length !== 1) fail('COST_PROBE_SCOPE');
   const saved = await store.read();
@@ -323,6 +329,7 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
   const pending = {
     version: 1, configHash: hash(binding), rounds: 0, handled: [], phase: 'COST_PROBE_PENDING',
     operationMarker: randomUUID(), baselineHead, baselineBase: before.pull.base.sha, ledgerHold: 4,
+    startedAt: now, runDeadlineAt: now + PROBE_RUN_TIMEOUT_MS,
   };
   const revision = await store.save(pending, saved.revision);
   // A durable reservation alone is not permission to dispatch against a
@@ -348,6 +355,20 @@ async function finishCostProbeRun({ binding, saved, store, cursor, reserveLedger
   const current = saved.value;
   if (current.configHash !== hash(binding) || current.ledgerHold !== 3
       || !sha(current.baselineHead) || !current.runId) fail('COST_PROBE_STATE');
+  const deadlineVerified = Number.isSafeInteger(current.startedAt) && current.startedAt >= 0
+    && current.startedAt <= now && Number.isSafeInteger(current.runDeadlineAt)
+    && current.runDeadlineAt === current.startedAt + PROBE_RUN_TIMEOUT_MS;
+  if (!deadlineVerified || now >= current.runDeadlineAt) {
+    // Timeout is a local reconciliation outcome, not confirmation that Cursor
+    // stopped. Keep the exact run ID and the repository-wide consumed marker;
+    // never cancel/restart automatically or claim terminal provider evidence.
+    const failed = applyHold({ ...current, phase: 'COST_PROBE_FAILED',
+      failure: deadlineVerified ? 'RUN_TIMEOUT' : 'RUN_DEADLINE_UNVERIFIED',
+      runStatus: 'UNCONFIRMED', reconciliationRequired: true }, 0);
+    await store.save(failed, saved.revision);
+    reserveLedger?.(1, 3);
+    return 'COST_PROBE_FAILED';
+  }
   if (typeof cursor?.getRun !== 'function') fail('COST_PROBE_UNWIRED');
   const run = await cursor.getRun(binding.agentId, current.runId);
   if (run?.id !== current.runId || run.agentId !== binding.agentId) fail('CURSOR_RUN_MISMATCH');
