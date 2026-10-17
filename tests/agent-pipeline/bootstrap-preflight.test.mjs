@@ -63,6 +63,14 @@ test('the 2026-10-16 GitHub read fails preflight closed and keeps the controller
   const environments = {
     'owner-acceptance': gateEnvironment('owner-acceptance', policy.environments.owner_acceptance.id),
     'production-approval': gateEnvironment('production-approval', policy.environments.production_approval.id),
+    'agent-review': {
+      id: policy.environments.agent_review.id,
+      name: 'agent-review',
+      can_admins_bypass: true,
+      deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
+      branch_policies: [{ name: 'main', type: 'branch' }],
+      protection_rules: [],
+    },
   };
   const protection = protectionFromRulesets(RULESETS, policy, environments);
   const preflight = evaluatePreflight(protection);
@@ -74,6 +82,11 @@ test('the 2026-10-16 GitHub read fails preflight closed and keeps the controller
   assert.equal(protection.agentStateProtected, false);
   assert.equal(protection.requiredChecksPinnedToApp, false);
   assert.equal(protection.environmentsConfirmed, true);
+  const missingReview = { ...environments };
+  delete missingReview['agent-review'];
+  const withoutReview = protectionFromRulesets(RULESETS, policy, missingReview);
+  assert.equal(withoutReview.environmentsConfirmed, false);
+  assert.equal(evaluatePreflight(withoutReview).ok, false);
   assert.equal(protection.administrationWriteUsed, false);
   assert.equal(JSON.stringify(RULESETS).includes('SC-OPS-001'), false);
 });
