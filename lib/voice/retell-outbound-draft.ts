@@ -112,6 +112,53 @@ type AgentFetch = (url: string, init: RequestInit) =>
 const providerJsonMaxBytes = 256 * 1024;
 const policyGuardrail = "Never ask about health, medical information or special-category personal data.";
 
+/**
+ * Numeric versions still inherit the preferred tag's variables at call creation.
+ * Retell request variables override tag/default values, so EVERY admitted variable
+ * consumer must use a value that this compiler supplies. A second GET or an empty
+ * tag snapshot cannot close the verification-to-use race.
+ * https://docs.retellai.com/build/dynamic-variables (value precedence/nesting)
+ */
+function assertCompilerOwnedVariables(...documents: Record<string, unknown>[]): void {
+  const pending: unknown[] = [...documents];
+  const opaqueCollections = new Set([
+    "tools", "tool_ids", "mcps", "pre_session_tools", "post_session_tools",
+    "components", "knowledge_base_ids",
+  ]);
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      // Retell trims whitespace. Nested, malformed and unknown substitutions are
+      // not part of this controlled profile; also refuse leftover single braces
+      // so a permitted inner placeholder cannot hide an outer substitution.
+      const literal = value.replace(
+        /\{\{\s*(skillcheck_interview_script|skillcheck_notice_version|skillcheck_language)\s*\}\}/g,
+        "",
+      );
+      if (/[{}]/.test(literal)) return reject();
+    } else if (Array.isArray(value)) {
+      for (const item of value) pending.push(item);
+    } else if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        // Code, tools and external subflows can read the entire variable map
+        // without {{...}}. This MVP admits only inline conversation/end nodes;
+        // admitting other consumers requires a separately verified read surface.
+        if (opaqueCollections.has(key) && child != null &&
+            (!Array.isArray(child) || child.length !== 0)) return reject();
+        if (key === "code" && child != null) return reject();
+        if (key === "nodes" && (!Array.isArray(child) || child.some(node =>
+          !node || typeof node !== "object" || Array.isArray(node) ||
+          (node.type !== "conversation" && node.type !== "end")))) return reject();
+        if (key === "contact_memory_config" && child != null &&
+            (typeof child !== "object" || Array.isArray(child) ||
+              (child as Record<string, unknown>).enable_read !== false)) return reject();
+        // Header names and other object keys can also contain placeholders.
+        pending.push(key, child);
+      }
+    }
+  }
+}
+
 /** No response.json(): enforce a decompressed streaming byte limit first. */
 async function readBoundedJson(result: Pick<Response, "headers" | "body">): Promise<Record<string, unknown>> {
   const contentLength = result.headers.get("content-length");
@@ -225,6 +272,10 @@ export async function verifyRetellOutboundAgent(
   catch { return reject(); }
   if (digest !== c.approvedFlowSha256) return reject();
 
+  // Hashes bind stored revisions, not the mutable environment values that may
+  // later be selected for those revisions. Seal all their variable consumers.
+  assertCompilerOwnedVariables(a, flow);
+
   // Mandatory GLOBAL instructions, not incidental text on an unreachable node.
   const globalPrompt = flow.global_prompt;
   if (typeof globalPrompt !== "string" ||
@@ -323,7 +374,8 @@ export function compileRetellOutboundDraft(
       " sekund] " + q.prompt +
       (q.followUps.length ? " | Dopytania: " + q.followUps.join(" / ") : "")
   ).join("\n");
-  if (script.length > 13500) return reject();
+  if (script.length > 13500 || /[{}]/.test(script) || /[{}]/.test(c.noticeVersion))
+    return reject();
 
   const payload = Object.freeze({
     from_number: c.fromNumberE164,
@@ -331,8 +383,8 @@ export function compileRetellOutboundDraft(
     idempotency_key: call.providerIdempotencyKey,
     honor_internal_dnc: true as const,
     override_agent_id: c.agentId,
-    // A mutable tag is only used by the read-only preflight; the DTO pins
-    // the independently verified numeric revision (still NOT POST authorization).
+    // Pin the reviewed revision AND override every admitted variable consumer.
+    // Preferred-tag changes cannot supply an executable value in this profile.
     override_agent_version: c.agentVersion,
     retell_llm_dynamic_variables: Object.freeze({
       skillcheck_interview_script: script,

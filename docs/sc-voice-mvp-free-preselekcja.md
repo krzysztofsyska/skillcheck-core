@@ -47,3 +47,62 @@ Nie wymagać od właściciela osobnej akceptacji każdej funkcji. Zbiorczy rapor
 
 ## Testy
 `node --test tests/voice-mvp-package-gate.test.mjs tests/retell-outbound-draft.test.mjs tests/voice-provider.test.mjs tests/voice-interview-plan.test.mjs`.
+
+## PR #121 — izolacja zmiennych znacznika Retell (2026-10-17)
+
+Uwaga [P1 / 4296772812](https://github.com/krzysztofsyska/skillcheck-core/pull/121#discussion_r4296772812)
+dotyczy różnicy między odczytem po dokładnym znaczniku a wywołaniem po numerze wersji.
+Numer wersji przypina opublikowaną konfigurację, ale Retell nadal wybiera zmienne
+aktualnie preferowanego znacznika. Kolejny GET ani sprawdzenie pustych zmiennych
+nie zabezpiecza przed zmianą znacznika pomiędzy sprawdzeniem a użyciem.
+
+Weryfikator przed wydaniem niekopiowalnego dowodu sprawdza wszystkie wartości tekstowe
+i klucze kompletnej odpowiedzi agenta oraz flow. Dopuszcza wyłącznie odwołania do
+`skillcheck_interview_script`, `skillcheck_notice_version` i `skillcheck_language`.
+Każdą z tych wartości kompilator zawsze przekazuje jawnie w żądaniu. Według
+[kontraktu Retell](https://docs.retellai.com/build/dynamic-variables) wartości żądania
+mają pierwszeństwo przed wartościami środowiska i domyślnymi. Numer wersji oraz oba
+zatwierdzone skróty SHA-256 nadal muszą się zgadzać. Nieznane, zagnieżdżone lub
+niekompletne wyrażenia szablonu są odrzucane; wartości wygenerowane przez kompilator
+muszą być literalne. Nawiasy klamrowe poza trzema obsługiwanymi wyrażeniami nie są
+częścią tego profilu.
+
+Profil offline obsługuje osadzone węzły `conversation` i `end`, bez narzędzi,
+kodów wykonywalnych, MCP, komponentów/subflow, zewnętrznych baz wiedzy i odczytu
+pamięci kontaktu. Puste lub nieobecne kolekcje są dozwolone. Te ograniczenia zamykają
+odczyty całej mapy zmiennych bez składni `{{...}}`, np. przez kod `dv.*` albo narzędzie
+otrzymujące cały obiekt rozmowy. Dodanie takich funkcji wymaga osobnej weryfikacji
+ich wejść; sam zatwierdzony hash nie wystarcza. Dotychczasowy kontrolowany scenariusz
+wywiadu pozostaje obsługiwany; API kompilatora i format szkicu nie zmieniają się.
+
+Regresje obejmują różne zestawy zmiennych, inny preferowany znacznik, zmianę preferencji
+po weryfikacji i utworzeniu szkicu, niedozwolone zmienne w polach i kluczach, składnię
+zagnieżdżoną, nieprzejrzyste odbiorniki zmiennych oraz próbę użycia obcej konfiguracji
+lub skopiowanego dowodu. Model pierwszeństwa jest syntetyczny: nie wykonuje POST ani
+testu zgodności z żywą usługą. Retell może nadal przechowywać dodatkowe zmienne znacznika;
+gwarancja dotyczy ich niewykorzystania przez dopuszczoną konfigurację agenta/flow,
+nie usunięcia ich z wewnętrznego stanu dostawcy ani ustawień całego konta.
+
+### Ponowna ocena wcześniejszych uwag
+
+Punktem odniesienia jest `b4c8835392e1470fe5d107807c2f1aa02af41ab2`.
+Nie utożsamiać oznaczenia GitHub `outdated` z rozwiązaniem problemu.
+
+| Uwagi review (identyfikatory dyskusji) | Stan wynikający z aktualnego kodu |
+| --- | --- |
+| 4255619360, 4255619370 | Naprawione wcześniej: autentyczny plan SC-012, powiązanie scenariusza i dokładna zgodność pytań; testy odrzucają PII i podrobione plany. |
+| 4255619384 | Naprawione wcześniej: każdy szkic ustawia `honor_internal_dnc: true`. |
+| 4255619391, 4270437552, 4274194114 | UUID v4 jest walidowany i zachowany przy ponownej kompilacji. Generowanie i trwałe zapisanie klucza jednej operacji pozostaje obowiązkiem przyszłego workera. |
+| 4255619402 | Walidacja przyjmuje również udokumentowany nieprefiksowany identyfikator o długości 32 znaków. |
+| 4255619411, 4255619420, 4270437559, 4270437568 | Weryfikator wymaga `basic_attributes_only`, retencji 1–30 dni oraz limitu zgodnego z planem i budżetem 420–600 s. Nie przywracać wcześniejszych override, których zastąpienie było celowe. |
+| 4255619435, 4255619452 | Limit FREE równy 1 i ścieżki zależności workflow są już poprawione. |
+| 4255619446, 4270437543 | Oba hashe, identyfikator i wersja są sprawdzane przez niekopiowalny dowód; zaufane pochodzenie konfiguracji jest kontraktem serwerowym. |
+| 4270437576, 4274194107, 4283734518 | Porównanie firmy, aplikacji, fingerprintu i docelowego numeru jest już zaimplementowane i przetestowane. Snapshot kontaktu nadal nie jest uwierzytelnioną zdolnością DB; jego źródło wymaga przyszłego SC-010. |
+| 4283734498, 4283734531 | Kanoniczna lista tematów i numeryczna wersja są już używane. Pozostałą lukę zmiennych znacznika obejmuje obecna poprawka. |
+| 4294799177, 4294799184 | Transport jest obowiązkowo wstrzykiwany, a testy używają aktualnego API; brak domyślnego live fetch. |
+| **4266690401 — P1** | **Nadal niezamknięte:** weryfikator nie wymaga `enable_dnc_detection: true`; sprawdzanie istniejącej blokady DNC nie gwarantuje rozpoznania nowego żądania przerwania rozmowy. |
+| **4266690408 — P1** | **Nadal niezamknięte:** żądanie musi mieć pełną listę zabronionych tematów, ale globalny prompt jest sprawdzany tylko pod kątem zdrowia/danych szczególnych. Brakuje wymuszenia całej polityki SC-012 w konfiguracji dostawcy. |
+
+Dwie ostatnie uwagi wymagają osobnych, wąskich poprawek i regresji przed odbiorem
+całego PR. Ta zmiana zamyka wskazaną lukę znacznika, nie stanowi zgody na scalenie,
+płatne usługi, połączenia, SIP ani Production.

@@ -109,6 +109,123 @@ const rejectedGate = promise => assert.rejects(
     e.code === "RETELL_DRAFT_REJECTED" && !e.message.includes("synthetic-test-api-key"),
 );
 
+const digestOf = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const pin = (a=agent, f=flow) => ({...config(),
+  approvedAgentSha256:digestOf(a), approvedFlowSha256:digestOf(f),
+});
+const interviewFlow = () => ({...flow,
+  start_node_id:"interview",
+  nodes:[
+    {id:"interview",type:"conversation",instruction:{type:"prompt",
+      text:"{{ skillcheck_interview_script }} Notice: {{skillcheck_notice_version}} Language: {{skillcheck_language}}"},
+      edges:[{id:"finished",destination_node_id:"end",transition_condition:{type:"prompt",prompt:"Interview complete"}}]},
+    {id:"end",type:"end",instruction:{type:"static_text",text:"Dziękujemy za rozmowę."}},
+  ], tools:[], components:[], mcps:[], knowledge_base_ids:[],
+});
+
+test("SC-011-C rejects tag-dependent variables even in an independently pinned flow", async () => {
+  const f={...flow,global_prompt:flow.global_prompt+" Follow {{environment_policy}}."};
+  const a={...agent,assigned_tags:["other_environment","skillcheck_mvp"]};
+  // Both exact responses are approved: a hash alone cannot constrain which
+  // environment_policy value numeric dispatch will pick from a mutable tag.
+  await rejectedGate(verify(pin(a,f),a,f));
+});
+
+test("SC-011-C rejects unowned variables throughout agent/flow values and keys", async () => {
+  for (const change of [
+    {webhook_url:"https://synthetic.invalid/{{environment_path}}"},
+    {voicemail_option:{action:{type:"static_text",text:"{{environment_message}}"}}},
+    {post_call_analysis_data:[{type:"string",name:"summary",description:"{{environment_policy}}"}]},
+    {boosted_keywords:["{{environment_name}}"]},
+    {custom_headers:{"X-{{environment_header}}":"literal"}},
+  ]) {
+    const a={...agent,...change};
+    await rejectedGate(verify(pin(a),a));
+  }
+  for (const change of [
+    {nodes:[{id:"q",type:"conversation",instruction:{type:"prompt",text:"{{environment_policy}}"}}]},
+    {nodes:[{id:"end",type:"end",custom_sip_headers:{"X-{{environment_header}}":"literal"}}]},
+    {default_dynamic_variables:{skillcheck_language:"{{environment_language}}"}},
+  ]) {
+    const f={...flow,...change};
+    await rejectedGate(verify(pin(agent,f),agent,f));
+  }
+});
+
+test("SC-011-C rejects nested, malformed and unowned template representations", async () => {
+  for (const template of [
+    "{{environment_policy}}", "{{ environment_policy }}", "{{\nenvironment_policy\n}}",
+    "{{current_time_{{skillcheck_language}} }}", "{{{skillcheck_language}}}",
+    "{{skillcheck_language", "skillcheck_language}}", "{{}}", "{{ skillcheck_language.extra }}",
+    "{{skillcheck_language}}}", "{{ skillcheck_language } }",
+  ]) {
+    const f={...flow,global_prompt:flow.global_prompt+" "+template};
+    await rejectedGate(verify(pin(agent,f),agent,f));
+  }
+});
+
+test("SC-011-C rejects opaque consumers that can read tag variables without placeholders", async () => {
+  for (const change of [
+    {pre_session_tools:[{type:"code",name:"policy",code:"return dv.environment_policy"}]},
+    {post_session_tools:[{type:"custom",name:"save",url:"https://synthetic.invalid"}]},
+    {pre_session_tools:{}},
+    {contact_memory_config:{enable_read:true,enable_update:false}},
+    {contact_memory_config:{}},
+  ]) {
+    const a={...agent,...change};
+    await rejectedGate(verify(pin(a),a));
+  }
+  for (const change of [
+    {tools:[{type:"code",name:"policy",code:"return dv.environment_policy"}]},
+    {tools:[{type:"custom",name:"policy",url:"https://synthetic.invalid"}]},
+    {nodes:[{id:"code",type:"code",code:"return dv.environment_policy"}]},
+    {nodes:[{id:"extract",type:"extract_dynamic_variables",variables:[]}]},
+    {nodes:[{id:"handoff",type:"agent_swap",agent_id:"other"}]},
+    {nodes:[{id:"unknown",type:"future_node"}]},
+    {nodes:[{id:"q",type:"conversation",tool_ids:["remote_tool"]}]},
+    {components:[{conversation_flow_component_id:"shared_component"}]},
+    {mcps:[{url:"https://synthetic.invalid"}]},
+    {knowledge_base_ids:["uninspected_knowledge"]},
+  ]) {
+    const f={...flow,...change};
+    await rejectedGate(verify(pin(agent,f),agent,f));
+  }
+});
+
+test("SC-011-C numeric dispatch is invariant under preferred-tag changes before and after verification", async () => {
+  const f=interviewFlow();
+  const a={...agent,assigned_tags:["other_environment","skillcheck_mvp"],
+    pre_session_tools:[],post_session_tools:null,
+    contact_memory_config:{enable_read:false,enable_update:false}};
+  const c=pin(a,f), p=released(), proof=await verify(c,a,f);
+  const draft=compile(request(p),c,p,proof);
+  // Pure model of documented Retell precedence: defaults < environment < request.
+  // No provider POST is performed. Numeric routing can pick ANY preferred tag.
+  const render = (text, values) => text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g,
+    (_,key)=>values[key.trim()]??"UNRESOLVED");
+  const expected=render(f.nodes[0].instruction.text,draft.payload.retell_llm_dynamic_variables);
+  for (const tagValues of [
+    {}, {environment_policy:"UNVERIFIED_EXTRA"},
+    {skillcheck_interview_script:"UNVERIFIED_SCRIPT",skillcheck_notice_version:"UNVERIFIED_NOTICE",skillcheck_language:"UNVERIFIED_LANGUAGE"},
+    {environment_policy:"{{skillcheck_interview_script}}",skillcheck_language:"{{environment_policy}}"},
+  ]) {
+    // Simulate preference/reassignment after the proof and after draft creation.
+    a.assigned_tags=["changed_after_verification"];
+    const values={...tagValues,...draft.payload.retell_llm_dynamic_variables};
+    assert.equal(render(f.nodes[0].instruction.text,values),expected);
+    assert.equal(draft.payload.override_agent_version,2);
+    assert.deepEqual(compile(request(p),c,p,proof).payload,draft.payload);
+  }
+  assert.ok(Object.isFrozen(draft.payload.retell_llm_dynamic_variables));
+  assert.deepEqual(Object.keys(draft.payload.retell_llm_dynamic_variables).sort(),
+    ["skillcheck_interview_script","skillcheck_language","skillcheck_notice_version"]);
+  assert.ok(!Object.values(draft.payload.retell_llm_dynamic_variables).some(v=>/[{}]/.test(v)));
+  // An old proof cannot approve a changed configuration, nor can it be copied.
+  const unverifiedFlow={...f,global_prompt:f.global_prompt+" {{environment_policy}}"};
+  denied(request(p),pin(a,unverifiedFlow),p,proof);
+  denied(request(p),c,p,{...proof});
+});
+
 test("SC-011-C verifies specific published Retell tag and exact flow with only GETs", async () => {
   let calls = 0;
   const proof = await verifyRetellOutboundAgent(config(), "synthetic-test-api-key-123456",
