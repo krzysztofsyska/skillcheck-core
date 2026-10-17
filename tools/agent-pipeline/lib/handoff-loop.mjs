@@ -319,7 +319,13 @@ function reserveHandoff(ledger, snapshot, findings) {
     // An occupied slot receives additional findings without a fourth dispatch.
     // Do not supersede its still-active reservation at the three-attempt limit.
     if (ledger.slots?.[pr]?.occupied === true) {
-      return pendingFeedback(ledger, snapshot, findings, used);
+      // Feedback belongs only to the HEAD of the occupied task. A different
+      // head requires a new attempt, which is forbidden at the limit.
+      if (ledger.slots[pr].head_sha === snapshot.pull.headSha) {
+        return pendingFeedback(ledger, snapshot, findings, used);
+      }
+      // Preserve the active third reservation until terminal task evidence.
+      return { status: 'BLOCKED_LIMIT', attempt: used, cursor_handoff: null };
     }
     supersedeOpenReservations(ledger, pr);
     return { status: 'BLOCKED_LIMIT', attempt: used };

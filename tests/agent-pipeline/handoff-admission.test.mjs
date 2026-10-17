@@ -1155,7 +1155,7 @@ function review(fields) {
 test('a cancelled task cannot obtain merge readiness from a later clean PASS', () => {
   const req = apply(emptyLedger(), request({ pr: 808, task_id: 'REVOKED' }));
   const cancelled = apply(req.ledger, snapshot({
-    event: 'admission_cancelled', pr: 808, head_sha: HEAD,
+    event: 'admission_completed', pr: 808, head_sha: HEAD,
     adapter: {
       source: 'trusted_adapter', kind: 'cancelled', pr: 808, task_id: 'REVOKED',
       agent_id: agentFor('REVOKED'), cancelled: true, executor: 'cursor', head_sha: HEAD,

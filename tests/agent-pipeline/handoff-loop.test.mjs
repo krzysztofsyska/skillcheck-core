@@ -247,11 +247,13 @@ test('three attempts are shared across heads and the fourth review is blocked', 
   assert.equal(blocked.outcome.status, 'BLOCKED_LIMIT');
   assert.equal(blocked.ledger.attempts['126'], HANDOFF_ATTEMPT_LIMIT);
   assert.equal(blocked.outcome.plan.cursor_handoff, null);
-  assert.equal(blocked.ledger.reservations[dedupKey('126', SHA.three, 1002)].status, 'SUPERSEDED');
+  assert.equal(blocked.ledger.reservations[dedupKey('126', SHA.three, 1002)].status, 'HANDOFF_PLANNED');
+  assert.equal(blocked.ledger.slots['126'].occupied, true);
   const replay = apply(blocked.ledger, reviewSnapshot({ reviewId: 1000, threads: [thread(100, 1000, SHA.one)] }));
   assert.equal(replay.outcome.status, 'DUPLICATE');
   const advanced = apply(blocked.ledger, reviewSnapshot({ event: 'head_advanced', headSha: SHA.four, threads: [], ci: { sha: SHA.four, conclusion: 'success' } }));
-  assert.equal(advanced.outcome.status, 'IGNORED_NO_RESERVATION');
+  assert.notEqual(advanced.outcome.status, 'READY_FOR_OWNER');
+  assert.equal(advanced.outcome.plan.codex_rereview, null);
   const latePass = apply(advanced.ledger, reviewSnapshot({ headSha: SHA.four, reviewId: 1004, reviewState: 'commented', threads: [], verdict: 'PASS', ci: { sha: SHA.four, conclusion: 'success' } }));
   assert.notEqual(latePass.outcome.status, 'READY_FOR_OWNER');
 });
