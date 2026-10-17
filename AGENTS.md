@@ -14,9 +14,7 @@ Do not require the owner to copy handoffs between agents.
 - **Cursor / BUILDER** — implements the approved task on a dedicated branch and opens/updates the PR.
 - **Codex / REVIEWER** — reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
-- **Owner** — only two required decisions:
-  1. OWNER ACCEPTANCE — implementation accepted for integration.
-  2. PRODUCTION APPROVAL — explicit permission to promote/deploy to production.
+- **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.
 
 ## Branch model
 
@@ -105,8 +103,8 @@ Do not ask the owner to paste this handoff into another agent.
 3. If fixes are required, Cursor applies them on the same branch.
 4. CI reruns.
 5. Repeat until PASS.
-6. Orchestrator asks owner only for OWNER ACCEPTANCE.
-7. After owner acceptance, merge to `integration`.
+6. If CI and an independent reviewer both pass against the current commit and all security/branch gates pass, merge to `integration` automatically; otherwise repair or block and report the specific cause.
+7. Continue with the next dependency-ready task without waiting for an owner click.
 
 ## Production loop
 
@@ -131,7 +129,7 @@ Production is a separate decision.
 
 ## Agent controller
 
-SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. Owner acceptance and production approval are GitHub environment approvals, not pull request prose. Do not enable the controller, merge, or deploy from a task implementation.
+SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. An integration merge is authorized by verified CI plus independent review (not PR prose); production approval remains a separate owner-only GitHub Environment approval. Do not enable the controller, merge, or deploy from a task implementation.
 
 ## Existing SkillCheck guardrails
 

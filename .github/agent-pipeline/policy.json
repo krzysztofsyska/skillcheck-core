@@ -72,7 +72,7 @@
     "integration": [
       "sc-agent/ci",
       "sc-agent/review",
-      "sc-agent/owner-acceptance"
+      "sc-agent/integration-ready"
     ],
     "main": [
       "sc-agent/ci",
@@ -105,5 +105,6 @@
     "agent-state"
   ],
   "controller_app_id": null,
-  "controller_actor_id": null
+  "controller_actor_id": null,
+  "integration_merge_policy": "verified_ci_review"
 }
