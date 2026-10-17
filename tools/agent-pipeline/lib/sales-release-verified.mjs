@@ -104,7 +104,9 @@ export function inspectSalesReleaseGit({
         if(Buffer.byteLength(contents,'utf8')>200000) errors.push('Oversize file '+path);
         if(suspicious.some(pattern=>pattern.test(contents))) errors.push('Potential embedded credential in historical blob: '+path);
         inspected.add(path);
-        if(!sha40.test(blob)) errors.push('Invalid blob '+path);
+        // Final-tree equality and secret regexes cannot certify historical
+        // objects. Every added/modified blob must itself be in trusted policy.
+        if(blob!==expectedBlobs[path]) errors.push('Unreviewed historical content: '+path);
       }
     }
     if(previous!==headSha) errors.push('History does not reach requested HEAD');
