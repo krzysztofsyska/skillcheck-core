@@ -92,7 +92,7 @@ test('missing, ambiguous or invalid run usage cannot be substituted with an aggr
     assert.equal(costMeasurement({ totalUsage: { totalTokens: 999 }, runs }, 'reserved').cursorTotalTokens, null);
   }
   assert.equal(costMeasurement({ runs: [{ id: '', usage: { totalTokens: 10 } }] }, '').cursorTotalTokens, null);
-  assert.equal(costMeasurement({ runs: [{ id: 'reserved', usage: { totalTokens: 0 } }] }, 'reserved').cursorTotalTokens, 0);
+  assert.equal(costMeasurement({ runs: [{ id: 'reserved', usage: { totalTokens: 0 } }] }, 'reserved').cursorTotalTokens, null);
 });
 
 test('terminal pilot passes its durable run ID to the measurement, once per normal completion', async () => {
@@ -137,7 +137,7 @@ test('findings arriving in the final pre-review read preserve a repairable state
   const f = feedbackFixture(); f.finding(A); await runFeedback(f.args); f.finish();
   let reads = 0;
   f.args.readSnapshot = async () => { if (++reads === 2) f.finding(C, 301); return structuredClone(f.snapshot); };
-  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(await runFeedback(f.args), 'FIXING');
   assert.equal(f.calls.reviews.length, 0); assert.equal(f.calls.runs.length, 1);
   assert.equal(f.state().ledgerHold, 1);
   assert.equal(await runFeedback(f.args), 'FIXING');
@@ -216,4 +216,170 @@ test('unavailable per-run usage is persisted explicitly, not as zero-cost eviden
   assert.equal(f.state().cursorUsageStatus, 'UNAVAILABLE');
   assert.equal(f.state().cursorCostStatus, 'UNAVAILABLE');
   assert.equal(f.state().cursorChargedCents, null);
+});
+
+for (const branch of ['main', 'integration']) {
+  for (const mode of ['always', 'exempt', 'unknown', undefined]) {
+    test(`source ${branch} rejects ${mode} App bypass even without update rules`, async () => {
+      const f = protectionFixture();
+      f.sets.push({ id: 3, enforcement: 'active', target: 'branch',
+        conditions: { ref_name: { include: [`refs/heads/${branch}`], exclude: [] } },
+        rules: [{ type: 'pull_request' }, { type: 'required_status_checks' }],
+        bypass_actors: [{ actor_type: 'Integration', actor_id: 12, bypass_mode: mode }] });
+      f.applies[branch] = [3];
+      await assert.rejects(f.run(), /SOURCE_WRITER_BYPASS/);
+    });
+  }
+}
+
+test('zero run usage is not proof that an executed repair consumed no tokens', async () => {
+  const f = feedbackFixture(); f.args.readHead = async () => A;
+  f.args.cursor.getRun = async (_id, id) => ({ id, agentId: f.binding.agentId, status: 'FINISHED' });
+  f.args.cursor.getUsage = async () => ({ runs: [{ id: 'run-1', usage: { totalTokens: 0 } }] });
+  await runCostProbe(f.args); await runCostProbe(f.args);
+  assert.equal(f.state().cursorTotalTokens, null);
+  assert.equal(f.state().cursorUsageStatus, 'UNAVAILABLE');
+  assert.equal(f.state().cursorCostStatus, 'UNAVAILABLE');
+});
+
+test('review time precedes a slow post-request snapshot so a genuine response remains eligible', async () => {
+  const f = feedbackFixture(); f.finding(A); await runFeedback(f.args); f.finish();
+  delete f.args.now;
+  const realNow = Date.now; let clock = 10_000; let reads = 0;
+  Date.now = () => clock;
+  f.args.readSnapshot = async () => {
+    const result = structuredClone(f.snapshot);
+    if (++reads === 3) {
+      // The review page has already been read. New response appears while the
+      // other API reads for this post-request snapshot are still finishing.
+      f.snapshot.reviews.push({ id: 401, user: reviewer, state: 'APPROVED', commit_id: C,
+        submitted_at: new Date(11_000).toISOString() });
+      clock = 14_000;
+    }
+    return result;
+  };
+  try {
+    await runFeedback(f.args);
+    assert.equal(f.state().reviewRequestedAt, 10_000);
+    assert.equal(await runFeedback(f.args), 'READY_FOR_OWNER');
+    assert.equal(f.calls.reviews.length, 1);
+  } finally { Date.now = realNow; }
+});
+
+test('review timestamp uses the trusted comment creation time when returned', async () => {
+  const f = feedbackFixture(); f.finding(A); await runFeedback(f.args); f.finish();
+  f.args.now = 20_000;
+  f.args.postReview = async () => ({ id: 201, created_at: new Date(21_000).toISOString() });
+  await runFeedback(f.args);
+  assert.equal(f.state().reviewRequestedAt, 21_000);
+});
+
+test('a finished probe with no artifact expires, releases its hold once, and cannot redispatch', async () => {
+  const f = feedbackFixture(); f.args.readHead = async () => A;
+  let usageReads = 0;
+  f.args.cursor.getRun = async (_id, id) => ({ id, agentId: f.binding.agentId, status: 'FINISHED' });
+  f.args.cursor.getUsage = async () => { usageReads++; return { runs: [{ id: 'run-1', usage: { totalTokens: 7 } }] }; };
+  await runCostProbe(f.args); await runCostProbe(f.args);
+  const writes = f.calls.saves;
+  f.args.now += 14 * 60 * 1000;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_CURSOR_DONE');
+  assert.equal(f.calls.saves, writes);
+  f.args.now += 60 * 1000;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(f.state().failure, 'NO_ARTIFACT');
+  assert.equal(f.state().ledgerHold, undefined);
+  assert.deepEqual(f.calls.reservations.at(-1), [1, 2]);
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+  assert.equal(usageReads, 1); assert.equal(f.calls.saves, writes + 1);
+});
+
+test('a failed no-artifact CAS cannot release the durable probe hold', async () => {
+  const f = feedbackFixture(); f.args.readHead = async () => A;
+  f.args.cursor.getRun = async (_id, id) => ({ id, agentId: f.binding.agentId, status: 'FINISHED' });
+  f.args.cursor.getUsage = async () => ({ runs: [] });
+  await runCostProbe(f.args); await runCostProbe(f.args);
+  f.args.now += 16 * 60 * 1000;
+  const reservations = f.calls.reservations.length;
+  const store = f.args.store;
+  f.args.store = { read: store.read, async save() { throw new Error('CAS failure'); } };
+  await assert.rejects(runCostProbe(f.args), /CAS failure/);
+  assert.equal(f.calls.reservations.length, reservations);
+  assert.equal(f.state().ledgerHold, 2);
+  f.args.store = store;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+});
+
+test('late findings withdrawn before the next poll cannot strand a requestless WAITING state', async () => {
+  const f = feedbackFixture(); f.finding(A); await runFeedback(f.args); f.finish();
+  let reads = 0;
+  f.args.readSnapshot = async () => { if (++reads === 2) f.finding(C, 301); return structuredClone(f.snapshot); };
+  await runFeedback(f.args);
+  assert.equal(f.calls.reviews.length, 0);
+  // Recreate a coordinator restart from the stored JSON, then withdraw the finding.
+  const saved = await f.args.store.read(); await f.args.store.save(JSON.parse(JSON.stringify(saved.value)), saved.revision);
+  f.snapshot.reviews = []; f.snapshot.comments = [];
+  assert.equal(await runFeedback(f.args), 'WAITING_REVIEW');
+  assert.equal(f.calls.reviews.length, 1);
+  assert.ok(f.state().reviewCommentId);
+  assert.equal(f.calls.runs.length, 1);
+});
+
+test('late-finding recovery still validates the repair signature and can reach its original timeout', async () => {
+  for (const failure of ['signature', 'timeout']) {
+    const f = feedbackFixture(); f.finding(A); await runFeedback(f.args); f.finish();
+    let reads = 0;
+    f.args.readSnapshot = async () => { if (++reads === 2) f.finding(C, 301); return structuredClone(f.snapshot); };
+    await runFeedback(f.args);
+    f.snapshot.comments = []; f.snapshot.reviews = [];
+    if (failure === 'signature') f.snapshot.repair.commits[0].commit.verification.verified = false;
+    else f.args.now += 2 * 60 * 60 * 1000 + 1;
+    assert.equal(await runFeedback(f.args), failure === 'signature' ? 'BLOCKED_PROVENANCE' : 'BLOCKED_TIMEOUT');
+    assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
+    assert.equal(f.state().ledgerHold, undefined);
+  }
+});
+
+test('artifact arriving inside propagation grace is verified and reviewed only once', async () => {
+  const f = feedbackFixture(); f.args.readHead = async () => A;
+  f.args.cursor.getRun = async (_id, id) => ({ id, agentId: f.binding.agentId, status: 'FINISHED' });
+  f.args.cursor.getUsage = async () => ({ runs: [] });
+  await runCostProbe(f.args); await runCostProbe(f.args);
+  f.args.now += 14 * 60 * 1000;
+  f.finish();
+  f.snapshot.repair.commits[0].commit.message = `probe\nSkillCheck-Cost-Probe: ${f.state().operationMarker}`;
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_DONE');
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_DONE');
+  assert.equal(f.calls.reviews.length, 1); assert.equal(f.calls.runs.length, 1);
+});
+
+test('legacy no-artifact states without a reliable terminal timestamp fail closed once', async () => {
+  const f = feedbackFixture(); f.args.readHead = async () => A;
+  f.args.cursor.getRun = async (_id, id) => ({ id, agentId: f.binding.agentId, status: 'FINISHED' });
+  f.args.cursor.getUsage = async () => ({ runs: [] });
+  await runCostProbe(f.args); await runCostProbe(f.args);
+  const saved = await f.args.store.read(); delete saved.value.cursorFinishedAt;
+  await f.args.store.save(saved.value, saved.revision);
+  assert.equal(await runCostProbe(f.args), 'COST_PROBE_FAILED');
+  assert.equal(f.state().ledgerHold, undefined);
+  assert.equal(f.calls.reviews.length, 0);
+});
+
+test('late-finding recovery at full ledger cannot spend another lifecycle, but can still record timeout', async () => {
+  const { accountLedger } = await import('../../tools/agent-pipeline/feedback.mjs');
+  const f = feedbackFixture(); let used = 95;
+  f.args.reserveLedger = (writes, held) => { used = accountLedger(used, writes, held); };
+  f.finding(A); await runFeedback(f.args); f.finish();
+  let reads = 0;
+  f.args.readSnapshot = async () => { if (++reads === 2) f.finding(C, 301); return structuredClone(f.snapshot); };
+  assert.equal(await runFeedback(f.args), 'FIXING');
+  f.snapshot.comments = []; f.snapshot.reviews = [];
+  const writes = f.calls.saves;
+  await assert.rejects(runFeedback(f.args), /LEDGER_CAPACITY/);
+  assert.equal(f.calls.saves, writes); assert.equal(used, 100);
+  assert.equal(f.state().ledgerHold, 1);
+  f.args.now += 2 * 60 * 60 * 1000 + 1;
+  assert.equal(await runFeedback(f.args), 'BLOCKED_TIMEOUT');
+  assert.equal(f.state().ledgerHold, undefined); assert.equal(used, 100);
+  assert.equal(f.calls.runs.length, 1); assert.equal(f.calls.reviews.length, 0);
 });

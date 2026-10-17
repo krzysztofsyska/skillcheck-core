@@ -120,8 +120,13 @@ export async function verifyFeedbackProtection(github, appId, policy = {}) {
   if (!writers || !['deletion', 'non_fast_forward'].every(type => integrity.some(r => r.type === type))) throw new Error('STATE_PROTECTION_MISSING');
   // A different ruleset may target only main/integration and never appear in
   // the state endpoint. Read both before certifying the App's write boundary.
+  const directSourceBypass = rule => rule.bypass_actors.some(actor =>
+    actor?.actor_type === 'Integration' && actor.actor_id === appId
+      && actor.bypass_mode !== 'pull_request');
   for (const branch of ['main', 'integration']) {
-    if ((await applicable(branch)).some(alwaysWriter)) throw new Error('SOURCE_WRITER_BYPASS');
+    // Any non-PR-only App bypass is unsafe on source, even on a ruleset
+    // containing only review/check rules. Unknown modes fail closed too.
+    if ((await applicable(branch)).some(directSourceBypass)) throw new Error('SOURCE_WRITER_BYPASS');
   }
   const environment = await github.request(`${root}/environments/agent-control`);
   const branches = await github.request(`${root}/environments/agent-control/deployment-branch-policies`);

@@ -225,7 +225,9 @@ export function fixPrompt(binding, effect) {
 
 // store.save must be compare-and-swap. Reservation precedes every external effect.
 // An ambiguous response remains *_PENDING forever until manually reconciled.
-const wholeTokens = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+// A zero row can mean usage is not recorded yet, not a free completed repair.
+const wholeTokens = value => Number.isSafeInteger(value) && value > 0 ? value : null;
+const PROBE_ARTIFACT_GRACE_MS = 15 * 60 * 1000;
 
 // The Cloud Agents REST /usage endpoint documents token counts, NOT a monetary
 // charge. Never infer billed cents from a synthetic/undocumented 'cost' field.
@@ -295,7 +297,7 @@ function costProbeReview(head) {
 // Five state writes are reserved before the only Cursor run: pending, run-id,
 // measured-after-terminal, review-pending and done. Ambiguous dispatch stays
 // pending permanently; polling RUNNING never dispatches another paid run.
-export async function runCostProbe({ binding, store, cursor, reserveLedger, readHead, readSnapshot, postReview }) {
+export async function runCostProbe({ binding, store, cursor, reserveLedger, readHead, readSnapshot, postReview, now = Date.now() }) {
   validateBinding(binding);
   if (binding.allowedFiles.length !== 1) fail('COST_PROBE_SCOPE');
   const saved = await store.read();
@@ -303,10 +305,10 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
   if (phase === 'COST_PROBE_PENDING' || phase === 'COST_PROBE_REVIEW_PENDING'
       || phase === 'COST_PROBE_DONE' || phase === 'COST_PROBE_FAILED') return phase;
   if (phase === 'COST_PROBE_RUNNING') {
-    return finishCostProbeRun({ binding, saved, store, cursor, reserveLedger });
+    return finishCostProbeRun({ binding, saved, store, cursor, reserveLedger, now });
   }
   if (phase === 'COST_PROBE_CURSOR_DONE') {
-    return postCostProbeReview({ binding, saved, store, readSnapshot, postReview });
+    return postCostProbeReview({ binding, saved, store, readSnapshot, postReview, reserveLedger, now });
   }
   if (saved.value) fail('COST_PROBE_STATE');
   if (typeof readHead !== 'function' || typeof readSnapshot !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
@@ -342,7 +344,7 @@ export async function runCostProbe({ binding, store, cursor, reserveLedger, read
   return 'COST_PROBE_RUNNING';
 }
 
-async function finishCostProbeRun({ binding, saved, store, cursor, reserveLedger }) {
+async function finishCostProbeRun({ binding, saved, store, cursor, reserveLedger, now }) {
   const current = saved.value;
   if (current.configHash !== hash(binding) || current.ledgerHold !== 3
       || !sha(current.baselineHead) || !current.runId) fail('COST_PROBE_STATE');
@@ -364,18 +366,29 @@ async function finishCostProbeRun({ binding, saved, store, cursor, reserveLedger
   let measurement = costMeasurement(null, current.runId);
   try { measurement = costMeasurement(await cursor.getUsage(binding.agentId, current.runId), current.runId); }
   catch { measurement = costMeasurement(null, current.runId); }
-  await store.save({ ...current, phase: 'COST_PROBE_CURSOR_DONE', ledgerHold: 2, ...measurement }, saved.revision);
+  await store.save({ ...current, phase: 'COST_PROBE_CURSOR_DONE', cursorFinishedAt: now, ledgerHold: 2, ...measurement }, saved.revision);
   return 'COST_PROBE_CURSOR_DONE';
 }
 
-async function postCostProbeReview({ binding, saved, store, readSnapshot, postReview }) {
+async function postCostProbeReview({ binding, saved, store, readSnapshot, postReview, reserveLedger, now }) {
   const current = saved.value;
   if (current.configHash !== hash(binding) || current.ledgerHold !== 2 || !sha(current.baselineHead) || !current.runId) fail('COST_PROBE_STATE');
   if (typeof readSnapshot !== 'function' || typeof postReview !== 'function') fail('COST_PROBE_UNWIRED');
   const before = await readSnapshot(current);
   validateSnapshot(binding, before);
   const head = before.pull.head.sha;
-  if (head === current.baselineHead) return 'COST_PROBE_CURSOR_DONE';
+  if (head === current.baselineHead) {
+    // A successful run may produce no commit, or its push may propagate late.
+    // Preserve the one-shot reservation during a bounded window, then record
+    // failure once. Legacy/malformed/future timestamps are not an infinite wait.
+    if (!Number.isFinite(current.cursorFinishedAt) || current.cursorFinishedAt > now
+        || now - current.cursorFinishedAt >= PROBE_ARTIFACT_GRACE_MS) {
+      await store.save(applyHold({ ...current, phase: 'COST_PROBE_FAILED', failure: 'NO_ARTIFACT' }, 0), saved.revision);
+      reserveLedger?.(1, 2);
+      return 'COST_PROBE_FAILED';
+    }
+    return 'COST_PROBE_CURSOR_DONE';
+  }
   if (!verifyCostProbeCommit(binding, current, before)) fail('COST_PROBE_PROVENANCE');
   const reviewing = { ...current, phase: 'COST_PROBE_REVIEW_PENDING', head, ledgerHold: 1 };
   const revision = await store.save(reviewing, saved.revision);
@@ -432,13 +445,16 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
   async function completeReviewRequest() {
     const result = await postReview(codexReviewRequest(plan.state.head, plan.state.base));
     if (!Number.isSafeInteger(result.id)) fail('INVALID_REVIEW_RESPONSE');
+    // Capture before the multi-request snapshot, not after a slow API read.
+    const createdAt = typeof result.created_at === 'string' ? Date.parse(result.created_at) : NaN;
+    const requestedAt = Number.isFinite(createdAt) ? createdAt : (now ?? Date.now());
     // Baseline is taken after the request exists. An approval that landed in this
     // same GitHub second, but before the comment, is then excluded.
     const posted = await readSnapshot(plan.state);
     validateSnapshot(binding, posted);
     if (posted.pull.head.sha !== plan.state.head || posted.pull.base.sha !== plan.state.base) fail('TARGET_MOVED');
     return { ...plan.state, phase: 'WAITING_REVIEW', reviewCommentId: result.id,
-      reviewBaseline: posted.reviews.map(review => review.id), reviewRequestedAt: now ?? Date.now() };
+      reviewBaseline: posted.reviews.map(review => review.id), reviewRequestedAt: requestedAt };
   }
   let completed;
   if (plan.effect.type === 'fix') {
@@ -455,12 +471,12 @@ export async function runFeedback({ binding, store, readSnapshot, cursor, postRe
   } else {
     if (!verifyRepair(binding, plan.state, fresh)) fail('CURSOR_PROVENANCE_CHANGED');
     if (findings(fresh).length) {
-      // The reviewer can finish between planning and this final read. Spend
-      // the reserved completion write, retain the terminal slot and let the
-      // next poll reserve a fix. Do not strand the task in REVIEW_PENDING or
-      // post a redundant request; the same CAS/lost-response rules still apply.
-      completed = applyHold({ ...plan.state, phase: 'WAITING_REVIEW',
-        reviewCommentId: null, reviewRequestedAt: null, reviewBaseline: [] }, 1);
+      // No review was sent. Restore the original finished repair context so
+      // the next poll revalidates provenance and either fixes remaining findings
+      // or requests review if they were withdrawn. Do not invent a requestless
+      // WAITING state with no deadline. Two writes were spent; only the terminal
+      // slot remains held. Any further effect must reserve its full lifecycle.
+      completed = applyHold({ ...saved.value, phase: 'FIXING' }, 1);
     } else {
       completed = applyHold(await completeReviewRequest(), 1);
     }

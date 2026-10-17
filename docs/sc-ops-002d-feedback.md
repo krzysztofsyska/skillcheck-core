@@ -391,7 +391,8 @@ No force push, live provider call or production deployment belongs to this repai
 - A signed, verified finished repair with current-head review findings returns
   to the existing repair path, respecting the three-round and lifecycle ledger
   limits, without requesting a redundant review. Findings arriving in the final
-  pre-review read preserve a repairable WAITING_REVIEW state and terminal hold.
+  pre-review read preserve the original FIXING context and a terminal hold; the
+  next poll rechecks provenance and cannot wait on a nonexistent review request.
 - Routine prompts require current CI, independent review and effective branch
   protection. They do not invent an extra owner-acceptance gate for integration.
   The builder still cannot merge/deploy; Production approval remains separate.
@@ -418,3 +419,24 @@ review must separately complete for the final HEAD before integration acceptance
 Activation remains disarmed: enabled=false, costProbe.armed=false, bindings=[].
 The one-shot pilot and its later recurring budget are separate from this code
 repair. No runtime configuration is asserted to be ready by offline tests.
+
+
+### Follow-up edge-case fixes before acceptance
+
+The next independent review of `f67f5467279ff7a8ffda9f11eecc0b715325fdfd`
+found additional cases; its green CI was not treated as final acceptance.
+Source-branch checks now reject every controller-App bypass mode other than
+`pull_request`, including always/exempt/unknown modes even without an update
+rule. Zero per-run usage is UNAVAILABLE because it may be unsettled, not proof
+of a free run. Review time comes from the created comment or immediately after
+posting, before the subsequent snapshot. A FINISHED probe with no artifact has
+a 15-minute propagation grace measured from its persisted finish observation;
+afterward one CAS write records COST_PROBE_FAILED/NO_ARTIFACT and only then
+releases the unused hold. It never dispatches a second run or review.
+
+A final-read finding no longer leaves a requestless WAITING_REVIEW state if it
+is withdrawn: the original FIXING provenance/deadline is restored with only the
+remaining terminal slot. Further effects require a fresh lifecycle reservation;
+full ledger capacity still permits recording timeout, not another paid effect.
+All counts and exact final SHA for CI/review are recorded in the PR receipt.
+These are code-level regressions with synthetic API responses, not LIVE testing.
