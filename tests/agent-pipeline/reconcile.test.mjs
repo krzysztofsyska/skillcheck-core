@@ -4,6 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { plan } from '../../tools/agent-pipeline/lib/transitions.mjs';
 import { loadWorkFromClients, reconcile, reconcileFromEnv } from '../../tools/agent-pipeline/lib/reconcile.mjs';
 import { contractBody, loadedPolicy, observation } from './helpers.mjs';
+import { configuredPolicy, protectionFixtures } from './http-world.mjs';
+import { protectionFromRulesets } from '../../tools/agent-pipeline/lib/protection.mjs';
 
 function armedItem() {
   const obs = observation();
@@ -16,8 +18,11 @@ function armedItem() {
   return { record, observation: obs };
 }
 
-test('configured reconcile invokes the controller through substituted adapters', async () => {
+test('configured reconcile invokes the controller only with confirmed protection', async () => {
   const { policy } = loadedPolicy();
+  const fixturePolicy = configuredPolicy();
+  const fixture = protectionFixtures(fixturePolicy);
+  const verifiedProtection = protectionFromRulesets(fixture.rules, fixturePolicy, fixture.environments);
   const executed = [];
   const result = await reconcile({
     flags: { enabled: true, mergeEnabled: false },
@@ -26,7 +31,7 @@ test('configured reconcile invokes the controller through substituted adapters',
     journal: { async save() {} },
     loadWork: async () => ({ items: [armedItem()] }),
     ports: {
-      async readProtection() { return null; },
+      async readProtection() { return verifiedProtection; },
       async execute(effect) {
         executed.push(effect.type);
         if (effect.payload && Object.prototype.hasOwnProperty.call(effect.payload, 'envVars')) throw new Error('envVars forbidden');
@@ -35,6 +40,7 @@ test('configured reconcile invokes the controller through substituted adapters',
     },
   });
   assert.equal(result.status, 'RECONCILED');
+  assert.equal(result.preflight.ok, true);
   assert.equal(result.controllerInvoked, true);
   assert.deepEqual(executed, ['cursor.create']);
   assert.deepEqual(result.effects, ['cursor.create']);

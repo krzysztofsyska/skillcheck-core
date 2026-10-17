@@ -49,6 +49,14 @@ export function guardEffects(effects, observation) {
       suppressed.push(effect);
       continue;
     }
+    // Reconcile overwrites preflight with the current trusted protection read.
+    // An enabled flag or stale snapshot is not permission to spend provider
+    // budget when environment/ruleset verification failed or was unavailable.
+    // Keep pure offline simulations working without granting LIVE permission.
+    if (!observation.simulation && observation.preflight?.ok !== true) {
+      suppressed.push(effect);
+      continue;
+    }
     if (effect.type === 'github.merge' && observation.flags?.mergeEnabled !== true) {
       suppressed.push(effect);
       continue;

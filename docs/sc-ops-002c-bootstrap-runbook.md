@@ -2,7 +2,7 @@
 
 Status tego dokumentu: instrukcja. Nie została wykonana w całości. Nie włącza flag, nie tworzy GitHub App, środowisk, rulesetów, sekretów, monitora ChatGPT ani wdrożenia. Odczytane dane konfiguracji są oddzielone od niewykonanych testów połączeń.
 
-Warunek wejścia: SC-OPS-002B ma review PASS i jest na `integration`, a następnie osobna, zatwierdzona promocja `integration -> main` nadal z obiema flagami `false`. Nowy workflow nie zatwierdza własnego pierwszego merge. Zgodnie z przyjętym PR #124 rutynowe scalenie do `integration` nie wymaga owner-acceptance, ale wymaga CI, niezależnego review i skutecznej ochrony gałęzi.
+Warunek wejścia dla jednorazowego bootstrapu: SC-OPS-002B ma review PASS, OWNER ACCEPTANCE i jest na `integration`, a następnie osobna, zatwierdzona promocja `integration -> main` nadal z obiema flagami `false`. To akceptacja pierwszej instalacji/aktywacji kontrolera, nie zgoda na każdy późniejszy PR. Nowy workflow nie zatwierdza własnego pierwszego merge. Zgodnie z przyjętym PR #124 rutynowe scalenie do `integration` nie wymaga owner-acceptance, ale wymaga CI, niezależnego review i skutecznej ochrony gałęzi.
 
 Potwierdzić ponownie przy konfiguracji: właściciel `krzysztofsyska`, GitHub user id `222297538`. Identyfikator repozytorium: `1043384454`.
 
@@ -69,6 +69,8 @@ Brak odczytu konfiguracji Vercel w 002B jest `NOT RUN`, nie PASS.
 Po promocji kodu na `main` obie flagi pozostają false. Włączenie `AGENT_PIPELINE_ENABLED` jest osobną decyzją po przejściu preflightu. `AGENT_PIPELINE_MERGE_ENABLED` włącza się jeszcze później, tylko gdy rulesety writers-only i quality-gates są potwierdzone bieżącym odczytem Administration:read.
 
 Preflight jest fail-closed. Ręczny snapshot nie zastępuje bieżącego odczytu. Brak uprawnień albo niezgodna konfiguracja blokuje auto-merge.
+
+Przed wykonaniem zewnętrznego efektu `guardEffects` wymaga również `observation.preflight.ok === true`, nie tylko włączonej flagi. `reconcile` zawsze zastępuje preflight nowym wynikiem z zaufanego odczytu zabezpieczeń. Odpowiedź 403/404, niezgodne ID/polityka środowiska albo brak dowodu nie mogą uruchomić Cursor create/followup ani dispatchu review. Odrzucony plan zachowuje wcześniejszą rezerwację do ponownej weryfikacji; nie oznacza wykonania wywołania. Odczyty, raportowanie i dziennik mogą nadal działać — nie jest to deklaracja braku wszystkich zapisów GitHub. Testy offline z jawną symulacją nie otrzymują przez to uprawnień LIVE.
 
 ## 7. Test pętli
 
