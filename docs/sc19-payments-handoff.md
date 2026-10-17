@@ -26,3 +26,32 @@ Official provider references used for the integration contract (not a provider s
 
 ## Open activation inputs
 Confirmed processor/account, approved PRESELEKCJA gross price and commercial terms are not present in the verified task contract. Do not activate the illustrative 299 PLN / 60 credits as an approved sale. Do not substitute manual contact for the requested final online-payment path.
+
+## 2026-10-17 continuation — provider-independent persistence and checkout
+
+TASK: SC-019-MVP-A2-PAYMENTS (#93); LEVEL: L3; SCOPE: FULLSTACK.
+OWNER: ChatGPT / SkillCheck; REVIEWER: independent Codex.
+STATUS: IMPLEMENTED, verification/review in progress. PRODUCTION_APPROVAL: NO.
+
+### Dependency evidence (read 2026-10-17)
+- #92: `bb2cf5272914fb1438224959612aacaee5cba5a9`, Draft, Checks/Agent Gates/SC-019 MVP SUCCESS. One unresolved P1 thread (`PRRT_kwDOPjDIhs6spHcH`) concerning candidate/advisory/finalizer ordering, with author response; no final independent PASS accepted here.
+- #115: `79daea590f9cd7c546ff6e1d2b55e62ee0a834b0`, Draft and conflicting with #92; three unresolved threads on catalog display, audit timestamp and landing-page resilience. Prior replies are not a current-HEAD PASS. Current-HEAD workflow query returned no runs.
+- #129 baseline `aa17946c`: 30 tests and Checks/Agent Gates green, four old threads resolved. That evidence does not cover this continuation.
+
+### Added implementation
+- `createPostgresPaymentStore`: real parameterized PostgreSQL transactions with company-before-order/balance locking, bounded SERIALIZABLE/deadlock retries, durable request uniqueness and globally scoped payment receipt uniqueness. Uses the existing `private.sc19_balances` and `private.sc19_credit_journal`; no parallel credit system. Owner and KYB approval come from current DB rows.
+- Immutable offers and order economic snapshots, scoped session uniqueness, browser-denied private tables with RLS. No seeded commercial offer. Manual recovery must use the canonical `settlement:sc19:<sha256(JSON.stringify([provider,account,mode,paymentId]))>` journal reference and reconcile the existing order/receipt atomically; never issue a separate manual grant for an online payment.
+- Same-origin JSON checkout POST, authenticated company-scoped offer/status GETs, bounded streaming raw webhook POST. Response minimization and no-store; no browser success marker grants credits. Webhook fulfillment does not depend on the new-checkout kill switch.
+- Owner-only `/dashboard/[companyId]/billing/checkout`: approved gross price, exact credits and full terms from the catalog, explicit acceptance, persistent retry UUID, server-confirmed order status; FREE is excluded. It shows an unavailable state when configuration/catalog is absent.
+- `composeSc19PaymentRuntime` connects the real store and existing core to an injected provider. **The deployed resolver deliberately returns null** until a real provider, approved account/offer, trusted auth.getUser() composition and reviewed schema are registered. Thus all new routes currently return 503 without accessing DB/provider. No fake adapter is shipped in runtime and no environment flag alone activates it.
+
+### Isolated database contract and remaining migration gate
+`docs/prototypes/sc19-payment-storage.sql` is additive REVIEW-ONLY SQL, not a Supabase migration. It requires the #92 credit tables. It deliberately aborts before changes when SC-010 `erasure_schema_signature()` exists: adding tables requires a new, checked-in, independently reviewed immutable erasure inventory revision after #92/#115 are reconciled. It never recomputes a production baseline or bypasses erasure guards. Full-chain SC-010 deployment is therefore **not ready**.
+
+Tests load the exact #92/#115 SQL via pinned git SHAs (no copied quota implementation), on newly created disposable loopback PostgreSQL16 databases. CI fetches full history and uses a local postgres:16 service. Missing DB URL is an explicit skip locally; dedicated CI always provides it. No cloud database, credentials, external operator, real transaction or migration is used.
+
+### Required verification
+Original 30 tests + HTTP security tests; two independent PostgreSQL connections, concurrent checkout and webhook replay, restart replay, cross-company payment reuse, RLS/grants, immutable economics/current-policy change, injected rollback after credit writes, lost provider response, kill-switch draining, real quota spend/refund concurrency and actual HTTP-handler→core→PostgreSQL flow. Typecheck/build and independent review are required for this revision. Provider sandbox and browser-to-real-provider purchase remain pending selection/approval.
+
+### Next after dependency approval
+Reconcile #92/#115, generate a CLI migration including the immutable SC-010 inventory revision, verify the full schema and operator/KYB flow in disposable Preview. Choose the real operator/account and approve price/terms, implement its signature and canonical lookup adapter, bind per-request auth.getUser() and a scoped server DB pool, run sandbox tests, then request separate LIVE/production approval. No automatic LIVE activation, transactions, merges or production schema changes are part of this continuation.

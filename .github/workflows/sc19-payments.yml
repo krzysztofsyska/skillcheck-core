@@ -2,8 +2,11 @@ name: SC-019 payments offline contracts
 on:
   pull_request:
     paths:
-      - 'lib/sc19-payments.ts'
-      - 'tests/sc-019-payments.test.mjs'
+      - 'lib/sc19-payment*.ts'
+      - 'app/api/billing/**'
+      - 'app/dashboard/**/billing/checkout/**'
+      - 'tests/sc-019-payment*.mjs'
+      - 'docs/prototypes/sc19-payment-storage.sql'
       - 'docs/sc19-payments-handoff.md'
       - '.github/workflows/sc19-payments.yml'
   push:
@@ -13,12 +16,31 @@ permissions:
 jobs:
   payment-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - run: node --experimental-strip-types --test tests/sc-019-payments.test.mjs
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node --experimental-strip-types --test tests/sc-019-payments.test.mjs tests/sc-019-payment-http.test.mjs tests/sc-019-payment-postgres.test.mjs
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
