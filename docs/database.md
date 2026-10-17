@@ -185,3 +185,45 @@ Te same kontrole są uruchamiane przez GitHub Actions. Plik lock stabilizuje wer
 Źródła projektu zabezpieczeń:
 [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security)
 i [Database Functions](https://supabase.com/docs/guides/database/functions).
+
+
+## SC-SALES-006B — zgłoszenia kontaktowe (REVIEW)
+
+Migracja `20261007000200_sales_leads.sql` jest plikiem w repozytorium, nie wdrożeniem na zdalną bazę.
+`public.sales_leads` przechowuje niezmienne zgłoszenia bez `company_id`; `public.platform_operators` przechowuje osobne uprawnienie operatora. Rola firmy ani domena e-maila nie nadaje dostępu. RLS jest włączone, API nie ma CRUD.
+
+Jedyny zapis to `submit_sales_lead(uuid,text,text,text,text,text,text,bigint,text)` → tabela `(lead_id uuid,result_code text)`. HMAC wiąże pola, klucz, IP, czas i `auth.uid()`. Funkcja sama liczy odciski i limity. `list_sales_leads(integer default 50)`, `platform_operator_status()`, `grant_platform_operator(uuid)` i `revoke_platform_operator(uuid)` są dostępne tylko dla authenticated; lista i zmiany uprawnień wymagają aktywnego operatora. Grant/revoke zwracają tekstowy kod.
+
+`private.sales_lead_settings` startuje wyłączone, bez sekretów. `private.sales_lead_attempts` zawiera wyłącznie odcisk, czas i kod próby. `private.sales_lead_replay_state` agreguje maksymalnie 20 ponowień na zgłoszenie. Rotacja i retire blokują ten sam wiersz ustawień co końcowa autoryzacja zapisu; poprzedni sekret pozostaje co najmniej 60 minut. Trigger usunięcia auth.users odczepia autora bez zmiany treści. Sprzątanie odbywa się przez prywatny helper, bez wyłączania triggera.
+
+Migracja wymaga `pgcrypto` w `extensions` i przeciążenia `extensions.hmac(text,text,text)`. Inny schemat lub brak przeciążenia przerywa migrację. Nie przenosi istniejącego rozszerzenia.
+
+Testy sekwencyjne: `npm run test:sales-leads`. Test współbieżności: `npm run test:sales-leads-concurrency`, wyłącznie jednorazowy PostgreSQL po migracji, `SALES_LEADS_TEST_DATABASE_URL` oraz jawne `SALES_LEADS_TEST_DISPOSABLE=YES`. Brak adresu oznacza SKIP, nie PASS. CI nie uruchamia tego skryptu. Domyślny przebieg obejmuje zapis, limity, operatorów i rotację. Dla każdego z trzech wariantów retire przygotować osobną jednorazową bazę, wykonać `--prepare-retire`, a po rzeczywistych 60 minutach uruchomić odpowiednio `--retire-current`, `--retire-previous` albo `--retire-after`. Skrypt nie cofa zegara ani znacznika rotacji. Pełna akceptacja współbieżności wymaga wszystkich czterech przebiegów. Nie uruchomiono ich w tym zadaniu.
+
+Publiczne włączenie nadal wymaga 006C/006D, pełnego testu współbieżności, sekretu, operatora i zatwierdzonej informacji o danych.
+
+## SC-008 — ranking i shortlista (implementacja)
+
+Migracja `20261009081908_screening_ranking_shortlist.sql` rozszerza zaakceptowany
+SC-006; nie jest potwierdzeniem wdrożenia na zdalną bazę. Polityka
+`screening-ranking-v1` jest niemutowalna. Odczyty
+`get_screening_ranking(recruitment, target_size)` oraz
+`get_recruitment_shortlist(recruitment, include_removed)` działają jako invoker
+pod RLS zalogowanego użytkownika. `target_size = NULL` używa domyślnej wartości
+z polityki. Funkcja świeżości czyta wyłącznie metadane i sprawdza dostęp przed
+odczytaniem analizy; nie nadajemy dostępu do starszego helpera odczytującego CV.
+
+`recruitment_shortlist_entries` przechowuje audytowalny snapshot wyboru człowieka:
+analizę, przegląd, wersję polityki, wynik i pokrycie. API ma wyłącznie SELECT.
+Add/remove są kontrolowanymi funkcjami definer z jawną autoryzacją owner/recruiter.
+Add wymaga oczekiwanych wersji źródeł i polityki. Blokady SHARE NOWAIT oraz
+ponowna kontrola aktualności zapobiegają zapisaniu źródła innego niż widziane;
+konflikt zwraca PT409. Usunięcie jest miękkie i idempotentne, snapshot pozostaje
+niemutowalny. Viewer odczytuje, nie zapisuje. Worker i anon nie mają dostępu.
+
+Kontrole: `npm run test:screening-ranking` (rzeczywiste funkcje SQL w PGlite)
+i `npm run test:screening-ranking-concurrency` (dwa połączenia PostgreSQL;
+wymaga SCREENING_TEST_DATABASE_URL do jednorazowej bazy testowej). CI uruchamia
+obie bramki. Produkcyjna historia SC-007 ma numer `20261009073048`, podczas gdy
+plik repozytorium ma `20261007000100`; przed przyszłym zatwierdzonym wdrożeniem
+trzeba uzgodnić historię i nie wykonywać tej samej migracji drugi raz.

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { dispatchScreeningWorker } from '../lib/screening-dispatch.ts';
@@ -26,6 +26,8 @@ test('dispatcher stays silent when the AI flag is off and signs a raw body when 
   });
   assert.deepEqual(enabled, { accepted: true, attempt_id: attemptId });
   assert.ok(seen.url.endsWith('/screening-worker'));
+  assert.equal(seen.init.redirect, 'error');
+  assert.ok(seen.init.signal instanceof AbortSignal);
   const verified = verifyScreeningDispatch({
     secret,
     timestamp: seen.init.headers['x-skillcheck-timestamp'],
@@ -36,12 +38,16 @@ test('dispatcher stays silent when the AI flag is off and signs a raw body when 
   assert.equal(seen.init.body.toString('utf8'), JSON.stringify({ attempt_id: attemptId }));
 });
 
-test('SC-005 does not export a browser-callable action that can dispatch an arbitrary attemptId', () => {
+test('SC-006 exposes only authenticated orchestration, never an arbitrary attempt dispatcher', () => {
   const screeningActions = new URL(
     '../app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/screening/actions.ts',
     import.meta.url,
   );
-  assert.equal(existsSync(screeningActions), false);
+  const actions = readFileSync(screeningActions, 'utf8');
+  assert.deepEqual([...actions.matchAll(/export async function (\w+)/g)].map(m => m[1]), ['startAnalysis', 'retryAnalysis', 'reviewAnalysis']);
+  assert.doesNotMatch(actions, /form\.get\(['"]attempt/i);
+  assert.doesNotMatch(actions, /dispatchScreeningWorker\s*\(/);
+  assert.equal((actions.match(/await companyAccess\(route.companyId\)/g) ?? []).length, 3);
 
   const dispatchSource = readFileSync(new URL('../lib/screening-dispatch.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(dispatchSource, /^['"]use server['"]/m);
@@ -64,5 +70,5 @@ test('SC-005 does not export a browser-callable action that can dispatch an arbi
       }
     }
   }
-  assert.deepEqual(offenders, []);
+  assert.deepEqual(offenders, [screeningActions.pathname]);
 });

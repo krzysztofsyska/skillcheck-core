@@ -83,6 +83,9 @@ Odrzucić znaki sterujące i DEL (`U+007F`). W `needs` wolno zostawić tabulator
 
 Normalizacja jest w `lib/sales-lead-signature.ts` i jeszcze raz w `submit_sales_lead`, tym samym algorytmem. Baza jest źródłem prawdy dla zapisu. Action nie podpisuje danych, które lokalnie łamią limity. Bezpośrednie RPC i tak nie zapisze danych bez ważnego podpisu.
 
+
+Doprecyzowanie R1 (006B): małe litery e-maila oznaczają zamrożoną mapę Unicode 17.0 stosowaną osobno do każdego punktu kodowego, bez reguł zależnych od języka i kontekstu. Mapa zawiera 1487 zamian jeden-do-jednego oraz osobne rozwinięcie U+0130 do U+0069 U+0307; pozostałe znaki pozostają bez zmian. Dlatego `ΟΣ` daje `οσ`, a nie kontekstowe `ος`. Nie wykonujemy NFC/NFKC ani casefold. Helper i prywatna funkcja SQL `private.sales_lead_lower_email(text)` mają identyczną mapę; nie korzystają z locale bazy ani bieżącej wersji Unicode runtime. Nie ograniczamy adresów do ASCII. Zmiana mapy w przyszłości wymaga wspólnej aktualizacji kontraktu, podpisu i SQL. Publiczna sygnatura RPC pozostaje bez zmian.
+
 ### Stany interfejsu
 
 - gotowy — pola edytowalne, przycisk „Wyślij zgłoszenie”;
@@ -113,7 +116,7 @@ Nie ma zatwierdzonej treści o przetwarzaniu danych ani zatwierdzonego okresu pr
 
 ## 6. B. Model danych
 
-Jedyna nowa migracja 006B: `supabase/migrations/20261006000100_sales_leads.sql`. Jeśli ten numer jest zajęty, zatrzymać się.
+Jedyna nowa migracja 006B: `supabase/migrations/20261007000200_sales_leads.sql`. Jeśli ten numer jest zajęty, zatrzymać się.
 
 Migracja nie polega na błędzie `CREATE EXTENSION IF NOT EXISTS`. To polecenie milczy, gdy rozszerzenie o tej nazwie już jest, także wtedy, gdy leży w innym schemacie. Na początku migracja robi jednoznaczny sprawdzian i przerywa się czytelnym wyjątkiem, zanim utworzy tabele:
 
@@ -449,7 +452,7 @@ Nie używać nazwy `SALES_LEAD_FINGERPRINT_SECRET`. Nie dodawać `service_role`.
 
 ### Kolejność
 
-1. Zmergować 006B. Uruchomić tylko `20261006000100_sales_leads.sql` raz. Nie uruchamiać starszych plików.
+1. Zmergować 006B. Uruchomić tylko `20261007000200_sales_leads.sql` raz. Nie uruchamiać starszych plików.
 2. Zmergować 006C i 006D przy `leads_enabled = false` i bez `SALES_LEADS_ENABLED=true`.
 3. Na jednorazowym Postgresie, nie na produkcji, wykonać test współbieżności z sekcji 12 i zachować wynik. Bez tego nie ustawiać `leads_enabled = true`.
 4. Właściciel wstawia własny UUID operatora SQL-em z sekcji 8.

@@ -60,6 +60,10 @@ ustawione.
 - Edge Function `screening-worker` ma `verify_jwt = false` i ufa wyłącznie HMAC
   `x-skillcheck-timestamp` / `x-skillcheck-signature`.
 - Podpis: HMAC-SHA256(secret, timestamp + "." + sha256(surowe bajty body)).
+- `lib/screening-hmac.ts` importuje `Buffer` z `node:buffer`. W Deno `Buffer` nie jest
+  globalem; bez tego importu poprawny podpis wpada w kod `secret` i HTTP 401.
+  Poprawka jest w repozytorium. Produkcyjna funkcja dostaje ją dopiero po osobnej
+  zgodzie na wdrożenie, nie przez ręczną podmianę na żywo.
 - Worker łączy się przez `SUPABASE_DB_URL` i `SET LOCAL ROLE screening_worker`.
   Nie używa `service_role` do claim/complete/fail.
 - OpenAI Responses API, model `gpt-5.4-mini-2026-03-17`, `store:false`,
@@ -94,3 +98,30 @@ stale completion i optimistic human review. Test HTTP buildu nadal sprawdza
 przekierowanie anonimowego wejścia do logowania.
 
 2026-10-02 sprawdzono rzeczywistą sesję właściciela na Vercel/Supabase: najnowszy szkic blokuje przygotowanie mimo starszego zatwierdzonego CV. Po zatwierdzeniu DOCX widok pokazał jego wersję 2 oraz zapisane zadania, KPI, kompetencje i wymagania zachowań. Nie uruchamiano AI. Pozostają próby drugiej firmy i pozostałych ról; szczegóły docs/e2e-2026-10-02.md.
+
+## Ranking sprawdzonych wyników i shortlista — SC-008
+
+Ranking jednej rekrutacji opiera się na bieżącym, ukończonym wyniku oraz ostatnim
+przeglądzie człowieka. Korekta oceny z tego przeglądu zastępuje rating wyłącznie
+przy odczycie; wynik AI nie jest nadpisywany. Samo sprostowanie cytatu lub
+uzasadnienia nie zmienia punktów. Nowsza analiza w toku nie zasłania jeszcze
+aktualnego, zatwierdzonego wyniku; po jej ukończeniu potrzebny jest nowy przegląd.
+
+Polityka v1: below/meets/above = 0/50/100; insufficient_data pozostaje nieznane.
+Średnia uwzględnia tylko znane kryteria. Pokrycie poniżej 60% wyklucza z kolejności
+systemowej i sugestii, ale nie odrzuca osoby. Przy zatwierdzonym przeglądzie
+rekruter może świadomie zapisać taki przypadek na ręcznej shortliście. Sugestia
+obejmuje 5–10 pierwszych rankowalnych zgłoszeń (domyślnie 10) i sama niczego
+nie zapisuje. Remisy rozstrzygają kolejno wynik, pokrycie, mniej ocen below,
+więcej above oraz UUID zgłoszenia.
+
+Wpis shortlisty utrwala wybór człowieka i źródła. Po zmianie CV, wyniku lub
+przeglądu pozostaje widoczny jako nieaktualny; odnowienie wymaga usunięcia
+starego wpisu i ponownego wyboru. Błąd PT409 wymaga odświeżenia i nowego
+potwierdzenia, bez automatycznego ponawiania na innej wersji. Żadna funkcja
+rankingu/shortlisty nie zmienia statusu zgłoszenia, nie zatrudnia i nie odrzuca.
+
+Kontrakt read RPC zasila raport i CSV SC-009; ranking nie zwraca CV, cytatów
+ani uzasadnień. Raport pobiera tylko dowody zatwierdzonego, aktualnego przeglądu
+przez własne odczyty RLS. Implementacja backendu nie włącza workera ani AI
+na produkcji. Ekran edycji shortlisty jest osobnym zakresem UI.

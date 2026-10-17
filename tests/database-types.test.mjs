@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { PGlite } from "@electric-sql/pglite";
 
 const migrations = [
@@ -13,9 +14,16 @@ const migrations = [
   "20261004000100_exercise_observations.sql",
   "20261004000200_screening_results.sql",
   "20261005000100_screening_worker_claim_payload.sql",
+  "20261007000100_screening_retry_active_conflict.sql",
+  "20261007000200_sales_leads.sql",
+  "20261009073604_sales_lead_inbox_retention.sql",
+  "20261009104142_sales_lead_auto_reply.sql",
+  "20261009141832_sales_pipeline.sql",
 ];
 
 const tableColumns = {
+  sales_leads: ["id", "idempotency_key", "first_name", "company_name", "email", "phone", "needs", "status", "submitted_by", "fingerprint_hash", "created_at"],
+  platform_operators: ["user_id", "granted_at", "granted_by", "revoked_at"],
   applications: ["id", "company_id", "recruitment_id", "candidate_id", "status", "created_at", "updated_at"],
   assessment_stages: ["id", "company_id", "recruitment_id", "name", "description", "sequence", "created_at", "updated_at"],
   behavior_assessment_entries: ["id", "company_id", "recruitment_id", "application_id", "area_key", "version", "rating", "evidence", "required_level", "position_id", "position_updated_at", "position_snapshot", "author_id", "created_at"],
@@ -43,6 +51,7 @@ const viewColumns = {
 };
 
 const publicForeignKeys = [
+  "platform_operators_granted_by_fkey",
   "applications_company_id_candidate_id_fkey",
   "applications_company_id_fkey",
   "applications_company_id_recruitment_id_fkey",
@@ -77,6 +86,19 @@ const publicForeignKeys = [
 ];
 
 const functions = {
+  submit_sales_lead: "idempotency_key uuid, first_name text, company_name text, email text, phone text, needs text, source_ip text, issued_at_us bigint, request_signature text",
+  list_sales_leads: "result_limit integer",
+  list_sales_leads_inbox: "result_limit integer",
+  save_sales_pipeline: "target_lead uuid, expected_version integer, new_stage text, new_note text, next_contact date, linked_company uuid",
+  list_sales_pipeline: "stage_filter text, due_filter text, page_offset integer, target_lead uuid",
+  sales_pipeline_history: "target_lead uuid, before_version integer",
+  find_sales_companies: "search_text text",
+  close_sales_lead: "target_lead uuid",
+  claim_sales_mail: "target_lead uuid, request_id uuid, issued_at_ms bigint, request_signature text",
+  finish_sales_mail: "target_lead uuid, request_id uuid, issued_at_ms bigint, outcome text, provider_id uuid, request_signature text",
+  platform_operator_status: "",
+  grant_platform_operator: "target_user uuid",
+  revoke_platform_operator: "target_user uuid",
   create_company: "company_name text",
   ensure_initial_company: "company_name text",
   claim_screening_attempt: "target_attempt uuid",
@@ -92,7 +114,7 @@ const functions = {
 };
 
 test("public database contract matches the manually maintained Supabase types", async () => {
-  const db = new PGlite();
+  const db = new PGlite({ extensions: { pgcrypto } });
   try {
     await db.exec(`
       create role anon nologin;
@@ -171,6 +193,12 @@ test("public database contract matches the manually maintained Supabase types", 
       functions,
     );
     assert.equal(rpc.rows.find(row => row.proname === "review_candidate_document").result, "boolean");
+    assert.equal(rpc.rows.find(row => row.proname === "submit_sales_lead").result, "TABLE(lead_id uuid, result_code text)");
+    assert.equal(rpc.rows.find(row => row.proname === "list_sales_leads").result, "SETOF sales_leads");
+    assert.equal(rpc.rows.find(row => row.proname === "platform_operator_status").result, "boolean");
+    for (const name of ["grant_platform_operator", "revoke_platform_operator"]) {
+      assert.equal(rpc.rows.find(row => row.proname === name).result, "text");
+    }
     for (const name of ["start_screening_analysis", "claim_screening_attempt", "retry_screening_analysis"]) {
       assert.match(rpc.rows.find(row => row.proname === name).result, /^TABLE\(/);
     }

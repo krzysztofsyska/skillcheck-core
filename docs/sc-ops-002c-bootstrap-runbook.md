@@ -1,8 +1,8 @@
 # SC-OPS-002C — runbook bootstrapu obiegu agentów
 
-Status tego dokumentu: instrukcja. Nie została wykonana. Nie włącza flag, nie tworzy GitHub App, środowisk, rulesetów, sekretów, monitora ChatGPT ani wdrożenia.
+Status tego dokumentu: instrukcja. Nie została wykonana w całości. Nie włącza flag, nie tworzy GitHub App, środowisk, rulesetów, sekretów, monitora ChatGPT ani wdrożenia. Odczytane dane konfiguracji są oddzielone od niewykonanych testów połączeń.
 
-Warunek wejścia: SC-OPS-002B ma review PASS, OWNER ACCEPTANCE i jest na `integration`, a następnie osobna promocja `integration -> main` nadal z obiema flagami `false`. Nowy workflow nie zatwierdza własnego pierwszego merge.
+Warunek wejścia: SC-OPS-002B ma review PASS i jest na `integration`, a następnie osobna, zatwierdzona promocja `integration -> main` nadal z obiema flagami `false`. Nowy workflow nie zatwierdza własnego pierwszego merge. Zgodnie z przyjętym PR #124 rutynowe scalenie do `integration` nie wymaga owner-acceptance, ale wymaga CI, niezależnego review i skutecznej ochrony gałęzi.
 
 Potwierdzić ponownie przy konfiguracji: właściciel `krzysztofsyska`, GitHub user id `222297538`. Identyfikator repozytorium: `1043384454`.
 
@@ -21,24 +21,27 @@ Aplikacja instalowana tylko w `krzysztofsyska/skillcheck-core`. Poświadczenia n
 | --- | --- | --- |
 | `agent-control` | brak recenzenta właściciela; dostęp workflow tylko z `main` | klucze GitHub App i Cursor |
 | `agent-review` | brak recenzenta; dostęp workflow tylko z `main` | wyłącznie klucz projektu OpenAI dla joba modelu |
-| `owner-acceptance` | jedyny required reviewer: właściciel | gate A, sam dowód, bez merge |
+| `owner-acceptance` | jedyny required reviewer: właściciel | środowisko sprawdzane przez preflight; nie jest checkiem statusu `integration` |
 | `production-approval` | jedyny required reviewer: właściciel | gate B, sam dowód, bez merge i bez deploy |
 
-Dla obu zgód: wyłączony bypass administratora i wyłączony self-review. Agenci nie dostają tokenu właściciela zdolnego zatwierdzić te joby. Jeżeli istniejąca integracja ma taki zakres, ograniczyć go przed aktywacją. Komentarz opublikowany kontem właściciela nie jest dowodem kliknięcia.
+Dla obu środowisk zgód: wyłączony bypass administratora i wyłączony self-review. Agenci nie dostają tokenu właściciela zdolnego zatwierdzić te joby. Jeżeli istniejąca integracja ma taki zakres, ograniczyć go przed aktywacją. Komentarz opublikowany kontem właściciela nie jest dowodem kliknięcia.
 
-Po pierwszej prawdziwej zgodzie zapisać numeryczne `environments[].id`. Do tego czasu kod trzyma `id: null` i porównuje nazwę.
+Przed aktywacją potwierdzić numeryczne `environments[].id` oraz dokładne polityki gałęzi bieżącym odczytem API. Wpisany identyfikator lub zrzut ekranu nie zastępuje tego odczytu. `null` blokuje preflight.
 
 ## 3. Rulesets
 
 Osobne zestawy, bo wyjątek autora zapisu nie może omijać jakości:
 
 - `writers-only` na `main` i `integration`: aktualizacje tylko przez GitHub App kontrolera, tryb PR-only. Wyjątek App wyłącznie w tym ruleset.
-- `quality-gates` na `main` i `integration`: wymagany PR, strict checks, zakaz force i delete, bez listy bypass. Wymagane checki: dla `integration` `sc-agent/ci`, `sc-agent/review`, `sc-agent/owner-acceptance`; dla `main` `sc-agent/ci`, `sc-agent/review`, `sc-agent/production-approval` i `sc-agent/promotion-scope`. Źródło checków przypięte do App, nie „any source”.
+- `quality-gates` na `main` i `integration`: wymagany PR, strict checks, zakaz force i delete, bez listy bypass. Wymagane checki, te same co `required_checks` w policy.json: dla `integration` `sc-agent/ci`, `sc-agent/review`, `sc-agent/integration-ready`; dla `main` `sc-agent/ci`, `sc-agent/review`, `sc-agent/production-approval`, `sc-agent/promotion-scope`. Źródło checków przypięte do App, nie „any source”.
+- Na `integration` nie ustawiaj wymaganego checka `sc-agent/owner-acceptance`. Brak `sc-agent/integration-ready` albo check z innego źródła niż App oznacza nieudany preflight i brak automatycznego scalenia, także gdy obie flagi LIVE są włączone. Środowisko `owner-acceptance` zostaje, bo preflight sprawdza jego reviewerów.
 - `agent-state`: writers-only pozwala App na bezpośredni zapis; osobny ruleset bez bypass zabrania force i delete. Gałąź nie jest scalana do aplikacji.
 
 Jeżeli kombinacja nie jest skuteczna na tym repozytorium, auto-merge pozostaje wyłączone. Instrukcja w AGENTS nie zastępuje rulesetu.
 
 `main` przyjmuje wyłącznie PR z `integration` tego samego `repository_id`. Nazwa `integration` w forku nie wystarcza.
+
+Kontrola `verify` w `checks.yml` pozostaje bez zmiany nazwy. Zadanie `verify` w `agent-verify.yml` ma odrębną nazwę widoczną `Agent verify / artifact`, aby nie kolidować z kontrolą zwykłego CI. To nadal job GitHub Actions, NIE dowód `sc-agent/ci` wystawiony przez zaufaną App. Samo dodanie `verify` i `Agent contract / scope gate` do rulesetu nie wymusza niezależnego review Codexa i nie spełnia docelowego preflightu.
 
 ## 4. Sekrety i budżety
 
@@ -47,13 +50,13 @@ W środowisku `agent-control`, nigdy w repozytorium, PR ani artefakcie:
 - klucz Cursor API i zatwierdzony budżet; kontrakt v1 sprawdzony na koncie przed aktywacją,
 - klucz prywatny GitHub App.
 
-Klucz projektu OpenAI umieść wyłącznie w osobnym środowisku `agent-review`, dostępnym tylko dla gałęzi `main`. Nie dodawaj tam kluczy kontrolera ani Cursora. Job `model` wchodzi do tego środowiska dopiero wtedy, gdy workflow pochodzi z `main`, zdarzenie to `workflow_dispatch`, `github.run_attempt` jest równe 1, zmienna `AGENT_PIPELINE_ENABLED` ma wartość `true`, a numeryczny `github.actor_id` jest równy `controller_actor_id` z `policy.json` na SHA tego workflow. Ponowne uruchomienie zachowuje aktora pierwszej próby, więc próba inna niż 1 nie wchodzi do środowiska. Ręczne wybranie `main` nie wystarcza. Dopóki identyfikator aktora jest null albo flaga nie jest włączona, job nie dostaje sekretu. Preflight przed pracą na żywo wymaga też numerycznego ID środowiska `agent-review` i polityki gałęzi ograniczonej dokładnie do `main`. Samo null w policy nie jest tym ID. Nie twórz repozytoryjnej kopii `OPENAI_API_KEY`. Model i limit wydatków wymagają osobnej decyzji; sama subskrypcja ChatGPT nie potwierdza budżetu API.
+Klucz projektu OpenAI umieść wyłącznie w osobnym środowisku `agent-review`, dostępnym tylko dla gałęzi `main`. Nie dodawaj tam kluczy kontrolera ani Cursora. Job `model` wchodzi do tego środowiska dopiero po `authorize`: workflow z `main`, `workflow_dispatch`, `github.run_attempt == 1`, `AGENT_PIPELINE_ENABLED=true` i numeryczny `github.actor_id` równy dodatniemu `controller_actor_id` z polityki na SHA workflow. Rerun zachowuje aktora pierwszej próby, dlatego próba inna niż 1 jest odrzucana PRZED wejściem do sekretu. Ręczne wybranie `main` nie wystarcza. `controller_actor_id=null` blokuje także właściciela. Preflight sprawdza osobno ID `agent-review` i wyłącznie gałąź `main`; dodatkowa gałąź albo tag są odrzucane. Nie twórz repozytoryjnej kopii `OPENAI_API_KEY`. Model i limit wydatków wymagają odrębnej decyzji; obecność sekretu nie jest dowodem budżetu ani działającego połączenia.
 
 Klucz OpenAI wchodzi tylko jako wejście `openai-api-key` akcji Codex. Klucz Cursor tylko do adaptera tworzącego agenta. Nie przekazywać `envVars` razem z `agentId`.
 
 Przypięcie Codex: `openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675`, CLI `@openai/codex@0.160.1`, `permission-profile: ":read-only"`. Przy bootstrapie ponownie odczytać tag `v1` i wersję CLI; zmiana SHA wymaga nowego `policy_sha`.
 
-Numeryczne identyfikatory workflow w `policy.json` pochodzą z odczytu GitHuba z 2026-10-06. Przed aktywacją ponownie porównać je z właściwymi ścieżkami workflow; rejestracja workflow nie potwierdza konfiguracji usług.
+Numeryczne identyfikatory workflow w `policy.json` pochodzą z wcześniejszego odczytu GitHuba w SC-OPS-002C. Przed aktywacją ponownie porównać je z właściwymi ścieżkami workflow na `main`; rejestracja workflow nie potwierdza uruchomienia ani konfiguracji usług.
 
 ## 5. Vercel
 
@@ -74,8 +77,8 @@ Na osobnym zadaniu, bez biznesowej bazy i bez publikacji aplikacji:
 1. rzeczywisty start API,
 2. jedna wymuszona poprawka,
 3. nowe SHA, review i CI,
-4. zatrzymanie przed zgodą A,
-5. merge tylko po zgodzie A,
+4. automatyczne scalenie do integration po bieżącym CI PASS i review PASS, bez zgody A,
+5. publikacja checka sc-agent/integration-ready i raportu gotowości; brak zgody A nie jest warunkiem tego scalenia,
 6. zatrzymanie przed zgodą B,
 7. odmowa produkcji bez zgody B,
 8. dostarczenie powiadomienia monitora.
@@ -112,7 +115,7 @@ Nie scala PR, nie uruchamia migracji, nie ustawia sekretów i nie oznacza testó
 
 ## Uzupełnienie po R1–R10 (do wykonania dopiero w 002C)
 
-- Uzupełnij w zaufanym policy.json numery controller_app_id, controller_actor_id, workflow_ids oraz obu środowisk. Odczytaj je z API właściwego repo i instalacji; nie używaj numerów fixture.
+- Uzupełnij w zaufanym policy.json numery controller_app_id, controller_actor_id, workflow_ids oraz środowisk. Odczytaj je z API właściwego repo i instalacji; nie używaj numerów fixture.
 - Ustaw AGENT_PIPELINE_BOT_LOGIN na dokładny login tej App w allow-bot-users przypiętej Codex Action. Nie używaj wildcard ani właścicielskiego PAT. Kontroler sprawdza niezależnie numeryczną tożsamość actor w pochodzeniu run.
 - runner kontrolera przekazuje AGENT_POLICY_COMMIT=github.sha oraz GITHUB_RUN_ID; klient odczytu współdzieli token instalacji App. Brak kompletu oznacza NOT_CONFIGURED.
 - Środowiska owner-acceptance i production-approval: dokładnie jeden reviewer User o ID właściciela, prevent_self_review=true, can_admins_bypass=false; selected deployment branches: wyłącznie branch main. Polityki tagów nie spełniają tego warunku.
@@ -121,15 +124,10 @@ Nie scala PR, nie uruchamia migracji, nie ustawia sekretów i nie oznacza testó
 - Awaria kontrolera: nie usuwaj lock na podstawie czasu. Najpierw potwierdź zakończenie workflow; kolejny przebieg odczyta journal i uzgodni oczekujące efekty. Nieznany follow-up nie może zostać wysłany ponownie bez osobnego zatwierdzonego wznowienia.
 - Próg >100 commitów / >=300 plików w porównaniu blokuje automatyczny odbiór jako niekompletny; nie omijaj go usuwając checks.
 
-## Odczyt przygotowawczy 2026-10-06 — Issue #40
+## Stan konfiguracji z 2026-10-17 — nie test LIVE
 
-Przygotowanie nie jest aktywacją. Workflow IDs odczytane z GitHub: reconcile 376775092, verify 376775095, review 376775093, accept 376775089, promote 376775091, gates 375800413. Istniejący agent-control ma ID 23618160050, ale nie ma jeszcze wymaganej polityki gałęzi. Same numery nie dowodzą zabezpieczeń.
+Historyczny odczyt SC-OPS-002C z 2026-10-06 identyfikował workflow reconcile 376775092, verify 376775095, review 376775093, accept 376775089, promote 376775091 i gates 375800413 oraz agent-control 23618160050. Raport o brakujących wtedy środowiskach i rulesetach nie opisuje już obecnego stanu konta.
 
-Brakuje środowisk owner-acceptance, production-approval i agent-review. Rulesets API zwróciło pustą listę; klasycznej ochrony gałęzi nie zweryfikowano (403). Brak agent-state. ID App i aktora pozostają null, obie flagi false. Nie dodano sekretów i nie testowano płatnej pętli.
+Na zrzutach właściciela z 2026-10-17 środowisko `agent-review` ma ID `23622706434`, jedyną dozwoloną gałąź `main`, zero tagów i brak required reviewers/wait timera. Lista sekretów pokazuje `OPENAI_API_KEY` wyłącznie w `agent-review`, a poświadczenia App i Cursor w `agent-control`. Są to dowody konfiguracji UI, nie poprawności wartości kluczy, limitu kosztów ani testu API.
 
-Pin Codex Action zweryfikowany: annotated tag v1 wskazuje commit bdf19a4a223ec2549a3e2274a0cf61556bc07675. Wszystkie identyfikatory i ustawienia należy ponownie odczytać przed aktywacją. Szczegółowy kontrakt, kolejność konfiguracji usług i wymagania odbioru: https://github.com/krzysztofsyska/skillcheck-core/issues/40.
-
-
-## Aktualizacja konfiguracji — 2026-10-17 (bez uruchomienia)
-
-Właściciel udostępnił w interfejsie GitHub konfigurację środowiska `agent-review` pod identyfikatorem `23622706434`. Ekran pokazuje wyłącznie gałąź `main` (zero tagów), bez required reviewers i wait timera. Wcześniejszy ekran listy Actions secrets pokazuje `OPENAI_API_KEY` przypisany do `agent-review`; wartości sekretu, poprawności API i budżetu nie odczytywano ani nie testowano. Identyfikator został wpisany do polityki jako dane z konfiguracji właściciela, **nie** jako zaliczony odczyt API `readProtection`. Realny preflight musi niezależnie zweryfikować ID, branch policy i uprawnienia. `controller_actor_id` i `controller_app_id` pozostają `null`, obie flagi pozostają `false`: żadnych płatnych review, Cursor dispatch, merge i wdrożeń.
+Zapisany przez właściciela ruleset `quality-gates` 25299230 nadal jest disabled i zawiera zwykłe checki GitHub Actions. Nie dowodzi spełnienia docelowego preflightu App. `controller_app_id` i `controller_actor_id` w tej poprawce pozostają null; flags false. Nie uruchomiono płatnej pętli ani produkcji.

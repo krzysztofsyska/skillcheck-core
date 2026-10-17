@@ -16,11 +16,13 @@ test('real CLI adapters: start, one repair, restart, A, lost merge response, sep
   const advance=()=>reconcileFromEnv(w.env,{policy:w.policy});
   const task=()=>Object.values(w.projection()).find(r=>r.task_id==='SC-DEMO-001');
   try {
-    for(let i=0;i<70 && !(task()?.state==='READY_FOR_OWNER'&&task()?.binding.approval?.run_id);i++) await advance();
+    for(let i=0;i<70 && task()?.state!=='READY_FOR_OWNER';i++) await advance();
     assert.equal(task()?.state,'READY_FOR_OWNER',JSON.stringify(task()));
+    assert.equal(task().binding.approval,null);
     assert.equal(task().repair_round,1);
     assert.equal(task().policy_sha,MAIN);
     assert.equal(w.mergeCount,0);
+    assert.equal(w.runs.some(run=>run.workflow_id===w.policy.workflow_ids.accept),false);
     assert.equal(w.calls.filter(c=>c.url==='https://api.cursor.com/v1/agents'&&c.method==='POST').length,1);
     const create=w.calls.find(c=>c.url==='https://api.cursor.com/v1/agents'&&c.method==='POST');
     assert.ok(create.body.prompt.text.includes(contractBody()));
@@ -29,12 +31,14 @@ test('real CLI adapters: start, one repair, restart, A, lost merge response, sep
     w.loseComment=true;
     await advance(); await advance();
     assert.equal(w.comments.length,1);
-    assert.match(w.comments[0].body,/actions\/runs\/\d+/);
+    assert.match(w.comments[0].body,/kind: READY_FOR_OWNER/);
+    assert.doesNotMatch(w.comments[0].body,/actions\/runs\/\d+/);
+    assert.equal(w.mergeCount,0,'disabled merge does not integrate');
     w.env.AGENT_PIPELINE_MERGE_ENABLED='true';
-    await advance(); assert.equal(w.mergeCount,0,'no approval A');
-    w.approveA=true; w.loseMerge=true;
-    for(let i=0;i<15 && task()?.state!=='ACCEPTED';i++) await advance();
+    w.loseMerge=true;
+    for(let i=0;i<20 && task()?.state!=='ACCEPTED';i++) await advance();
     assert.equal(task()?.state,'ACCEPTED',JSON.stringify(task()));
+    assert.equal(task().binding.approval,null);
     assert.equal(w.mergeCount,1,'recover closed PR, no second PUT');
     const promotion=()=>Object.values(w.projection()).find(r=>r.binding.lane==='promotion');
     for(let i=0;i<70 && !(promotion()?.state==='READY_FOR_PROD'&&promotion()?.binding.approval?.run_id);i++) await advance();

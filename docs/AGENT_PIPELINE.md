@@ -5,9 +5,7 @@
 Właściciel nie przekleja promptów ani raportów pomiędzy ChatGPT, Cursor i Codex.
 GitHub jest wspólną szyną komunikacyjną.
 
-Właściciel wykonuje tylko dwa checkpointy:
-1. **OWNER ACCEPTANCE** — „akceptuję wykonanie”.
-2. **PRODUCTION APPROVAL** — „wdrażaj na produkcję”.
+Właściciel nie zatwierdza zwykłych PR-ów do `integration`. Po aktualnych testach CI i niezależnym review PASS kod jest scalany automatycznie, o ile ochrona gałęzi i blokady bezpieczeństwa są spełnione. Właściciel zatwierdza dopiero **PRODUCTION APPROVAL**, nowe koszty lub operacje nieodwracalne.
 
 ## Topologia
 
@@ -31,11 +29,10 @@ ChatGPT Orchestrator
   |                         v
   |                        CI
   |
-  +--> asks Owner: ACCEPT?
+  +--> CI PASS + reviewer PASS + security gates
               |
-             YES
               v
-      merge task PR -> integration
+      automatic merge task PR -> integration
               |
       ready for production
               |
@@ -57,6 +54,8 @@ ChatGPT Orchestrator
 `BACKLOG -> READY -> BUILDING -> PR_REVIEW -> FIXING -> READY_FOR_OWNER -> ACCEPTED -> READY_FOR_PROD -> DEPLOYING -> DONE`
 
 Dodatkowo: `BLOCKED`.
+
+Sterownik zapisuje gotowość zwykłego tasku jako `READY_FOR_OWNER`. Automatyczne scalenie do `integration` nie wprowadza osobnej wartości statusu.
 
 ## Kanał agent-agent
 
@@ -82,7 +81,7 @@ Zmiany frontendowe obejmują m.in.:
 - formularze
 - style i interakcje klienta
 
-Frontend może być scalony do `integration` po OWNER ACCEPTANCE.
+Frontend może być scalony do `integration` automatycznie po aktualnym CI PASS i review PASS oraz po spełnieniu pozostałych bramek.
 Nie trafia do produkcyjnego `main` przed PRODUCTION APPROVAL.
 
 ## Backend
@@ -95,7 +94,7 @@ Zmiany backendowe obejmują m.in.:
 - migracje
 - auth, RLS, RPC
 
-Zmiany DB/security mają L3 i wymagają review przed acceptance.
+Zmiany DB/security mają L3 i wymagają niezależnego review przed scaleniem do integration.
 Produkcja wymaga osobnego runbooku i jawnej zgody właściciela.
 
 ## Fullstack
@@ -115,15 +114,11 @@ PR musi wskazać:
 
 ## Dwa gates
 
-### Gate A — OWNER ACCEPTANCE
+### Gate A — AUTOMATIC INTEGRATION
 
-Orchestrator pyta właściciela dopiero gdy:
-- reviewer PASS
-- CI PASS
-- brak blockerów
-- acceptance criteria spełnione
+Nie wymaga zgody właściciela. Sterownik może scalić zwykły task PR do `integration` wyłącznie po niezależnym review PASS i CI PASS dla niezmienionego HEAD/BASE/kontraktu. Przed merge ponownie pobiera aktualne dane GitHuba, weryfikuje podpisane dowody, zakres zmian, blokadę scalenia, ochronę gałęzi i źródła wymaganych checks. Publikuje `sc-agent/integration-ready`, nigdy nie fałszuje `owner-acceptance`.
 
-Zgoda A jest natywnym zatwierdzeniem środowiska GitHub `owner-acceptance`. Komentarz, reakcja, label i pole w opisie PR nie są tą zgodą. Dopiero ponownie sprawdzona zgoda może otworzyć merge do `integration`, i tylko gdy `AGENT_PIPELINE_MERGE_ENABLED=true` oraz preflight ochrony gałęzi jest aktualny.
+Flagi LIVE, poświadczenia GitHub App oraz konfiguracja rulesetów nadal pozostają osobnymi wymaganiami. Brak spełnionej ochrony i testów oznacza STOP, a nie obejście kontroli.
 
 ### Gate B — PRODUCTION APPROVAL
 
@@ -142,7 +137,7 @@ Sam merge pozostawia stan `MERGED_AWAITING_DEPLOYMENT`. Brak runbooku blokuje wd
 
 Kod kontrolera jest w `tools/agent-pipeline/`. Domyślnie `AGENT_PIPELINE_ENABLED=false` i `AGENT_PIPELINE_MERGE_ENABLED=false`: odczyt i raport są dozwolone, nowe efekty i merge nie. Starszy opis, w którym komentarz albo pole PR oznacza zgodę, nie jest implementacją. Projekt: [sc-ops-002a-agent-orchestration.md](sc-ops-002a-agent-orchestration.md). Bootstrap usług: [sc-ops-002c-bootstrap-runbook.md](sc-ops-002c-bootstrap-runbook.md).
 
-Kontroler utrwala kontrakt, `ALLOWED_FILES`, wymagane testy i skrót wersji. Issue pozostaje kontraktem, PR raportem. Stan i journal są na gałęzi `agent-state`. Cursor, CI, Codex, zgoda A, zgoda B i merge mają osobne adaptery. Publiczny Issue albo `@mention` nie uruchamia płatnej pracy.
+Kontroler utrwala kontrakt, `ALLOWED_FILES`, wymagane testy i skrót wersji. Issue pozostaje kontraktem, PR raportem. Stan i journal są na gałęzi `agent-state`. Cursor, CI, Codex, automatyczna integracja, zgoda B i merge mają osobne adaptery. Publiczny Issue albo `@mention` nie uruchamia płatnej pracy.
 
 ## Co jest automatyczne po włączeniu flag
 
@@ -151,15 +146,16 @@ Przy flagach pozostawionych na false poniższe kroki są tylko zaimplementowane 
 - zamrożenie kontraktu i jeden task branch z `integration`
 - implementacja Cursora i jedna sesja poprawek
 - CI oraz review przypięte do pary commitów, kontraktu i `policy_sha`
-- prośba o zgodę A i osobna prośba o zgodę B
+- automatyczne scalenie do integration na podstawie CI + review, bez zgody właściciela; osobna prośba o zgodę B
 - klasyfikacja FRONTEND/BACKEND/FULLSTACK/OPERATIONS
 - wykrywanie migracji/L3
 - odczyt wyników przez orchestrator
 
 ## Co pozostaje ręczne z definicji
 
-Tylko decyzje właściciela, składane w GitHub Environments:
-- OWNER ACCEPTANCE — środowisko `owner-acceptance`
-- PRODUCTION APPROVAL — środowisko `production-approval`
+Osobne zgody właściciela, składane poza codziennym scaleniem tasku:
+- pierwsza aktywacja kontrolera i włączenie flag LIVE,
+- PRODUCTION APPROVAL — środowisko `production-approval`,
+- nowe koszty i operacje nieodwracalne.
 
 Sekrety, GitHub App, ochrona gałęzi i budżety API są jednorazowym bootstrapem SC-OPS-002C, nie częścią codziennego przeklejania promptów.

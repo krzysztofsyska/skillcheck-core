@@ -26,18 +26,25 @@ test('duplicate TASK in unauthorized Issue cannot shadow journal Issue', () => {
   assert.equal(plan(record, { ...obs, issue: null }).record.blocked_reason, 'TASK_ISSUE_MISSING');
 });
 
-test('approval rerun allocates fresh request ID and cannot reuse prior run', async () => {
+test('production approval rerun allocates a fresh request and cannot reuse the prior run', async () => {
   const w = httpWorld(), previous = globalThis.fetch; globalThis.fetch = w.fetch;
+  w.env.AGENT_PIPELINE_MERGE_ENABLED = 'true';
   const advance = () => reconcileFromEnv(w.env, { policy: w.policy });
   const task = () => Object.values(w.projection()).find(r => r.task_id === 'SC-DEMO-001');
+  const promotion = () => Object.values(w.projection()).find(r => r.binding.lane === 'promotion');
   try {
-    for (let i = 0; i < 70 && !task()?.binding.approval?.run_id; i++) await advance();
-    const original = task().binding.approval;
+    for (let i = 0; i < 100 && !promotion()?.binding.approval?.run_id; i++) await advance();
+    assert.equal(task().binding.approval, null);
+    assert.equal(w.runs.some(run => run.workflow_id === w.policy.workflow_ids.accept), false);
+    assert.equal(w.mergeCount, 1);
+    const original = promotion().binding.approval;
+    assert.equal(original.gate, 'B');
     w.runs.find(r => r.id === original.run_id).run_attempt = 2;
-    for (let i = 0; i < 8 && (!task().binding.approval?.run_id || task().binding.approval.request_id === original.request_id); i++) await advance();
-    assert.notEqual(task().binding.approval.request_id, original.request_id);
-    assert.notEqual(task().binding.approval.run_id, original.run_id);
-    assert.equal(w.mergeCount, 0);
+    for (let i = 0; i < 12 && (!promotion()?.binding.approval?.run_id || promotion().binding.approval.request_id === original.request_id); i++) await advance();
+    assert.notEqual(promotion().binding.approval.request_id, original.request_id);
+    assert.notEqual(promotion().binding.approval.run_id, original.run_id);
+    assert.equal(w.runs.find(r => r.id === original.run_id).conclusion, 'cancelled');
+    assert.equal(w.mergeCount, 1);
   } finally { globalThis.fetch = previous; }
 });
 
@@ -66,13 +73,19 @@ test('lost promotion PR response is adopted once before CI/review dispatch', asy
     if (!lost && options.method === 'POST' && new URL(url).pathname.endsWith('/pulls') && JSON.parse(options.body).base === 'main') { lost = true; throw new Error('lost accepted PR response'); }
     return response;
   };
-  w.approveA = true; w.env.AGENT_PIPELINE_MERGE_ENABLED = 'true';
+  w.env.AGENT_PIPELINE_MERGE_ENABLED = 'true';
   try {
     let promotion;
+    let task;
     for (let i = 0; i < 100 && !promotion?.binding.approval?.run_id; i++) {
-      await reconcileFromEnv(w.env, { policy: w.policy }); promotion = Object.values(w.projection()).find(r => r.binding.lane === 'promotion');
+      await reconcileFromEnv(w.env, { policy: w.policy });
+      promotion = Object.values(w.projection()).find(r => r.binding.lane === 'promotion');
+      task = Object.values(w.projection()).find(r => r.task_id === 'SC-DEMO-001');
     }
     assert.equal(lost, true);
+    assert.equal(task.binding.approval, null);
+    assert.equal(w.runs.some(run => run.workflow_id === w.policy.workflow_ids.accept), false);
+    assert.equal(promotion.binding.approval.gate, 'B');
     assert.equal(promotion.state, 'READY_FOR_PROD');
     assert.equal(promotion.pr_number, 51);
     assert.equal(w.pulls.filter(p => p.base.ref === 'main').length, 1);
@@ -104,7 +117,7 @@ test('409 create recovery GET verifies immutable agent target before adoption', 
 test('failed promotion review never opens gate B or dispatches Cursor', async () => {
   for (const verdict of ['FAIL', 'PASS_WITH_FIXES', 'CI_FAILURE']) {
     const w = httpWorld(), previous = globalThis.fetch;
-    w.approveA = true; w.env.AGENT_PIPELINE_MERGE_ENABLED = 'true';
+    w.env.AGENT_PIPELINE_MERGE_ENABLED = 'true';
     globalThis.fetch = async (url, options = {}) => {
       const response = await w.fetch(url, options);
       if (w.pulls.some(p => p.base.ref === 'main')) {
@@ -120,6 +133,7 @@ test('failed promotion review never opens gate B or dispatches Cursor', async ()
       let promotion;
       for (let i = 0; i < 100 && promotion?.state !== 'BLOCKED'; i++) { await reconcileFromEnv(w.env, { policy: w.policy }); promotion = Object.values(w.projection()).find(r => r.binding.lane === 'promotion'); }
       assert.equal(promotion.blocked_reason, 'PROMOTION_REVIEW_FAILED', verdict);
+      assert.equal(w.runs.some(r => r.workflow_id === w.policy.workflow_ids.accept), false);
       assert.equal(w.runs.some(r => r.workflow_id === w.policy.workflow_ids.promote), false);
       assert.equal(w.mergeCount, 1);
       assert.equal(w.repair, 1);
@@ -127,23 +141,26 @@ test('failed promotion review never opens gate B or dispatches Cursor', async ()
   }
 });
 
-test('changed head invalidates and cancels the old pending approval', async () => {
+test('changed head invalidates automatic integration evidence and does not merge', async () => {
   const w = httpWorld(), previous = globalThis.fetch; globalThis.fetch = w.fetch;
   const advance = () => reconcileFromEnv(w.env, { policy: w.policy });
   const task = () => Object.values(w.projection()).find(r => r.task_id === 'SC-DEMO-001');
   try {
-    for (let i = 0; i < 70 && !task()?.binding.approval?.run_id; i++) await advance();
-    const runId = task().binding.approval.run_id;
+    for (let i = 0; i < 70 && task()?.state !== 'READY_FOR_OWNER'; i++) await advance();
+    assert.equal(task().state, 'READY_FOR_OWNER');
+    assert.equal(task().binding.approval, null);
+    assert.equal(w.mergeCount, 0);
     w.branches[w.branch] = 'f'.repeat(40); w.pulls[0].head.sha = w.branches[w.branch];
     await advance();
+    assert.equal(task().state, 'PR_REVIEW');
+    assert.equal(task().binding.evidence.review, null);
     assert.equal(task().binding.approval, null);
-    assert.equal(w.runs.find(r => r.id === runId).conclusion, 'cancelled');
-    assert.equal(w.calls.filter(c => c.url.endsWith(`/runs/${runId}/cancel`) && c.method === 'POST').length, 1);
+    assert.equal(task().binding.auto_integration ?? null, null);
     assert.equal(w.mergeCount, 0);
   } finally { globalThis.fetch = previous; }
 });
 
-test('BLOCKED supersedes undelivered READY notification before approval run adoption', async () => {
+test('BLOCKED supersedes a delivered automatic readiness report', async () => {
   const w = httpWorld(), previous = globalThis.fetch;
   let outOfScope = false;
   globalThis.fetch = async (url, options = {}) => {
@@ -153,8 +170,10 @@ test('BLOCKED supersedes undelivered READY notification before approval run adop
   const task = () => Object.values(w.projection()).find(r => r.task_id === 'SC-DEMO-001');
   try {
     for (let i = 0; i < 70 && task()?.state !== 'READY_FOR_OWNER'; i++) await reconcileFromEnv(w.env, { policy: w.policy });
-    assert.equal(task().binding.approval.run_id, null);
-    assert.equal(task().binding.pending_notification.kind, 'READY_FOR_OWNER');
+    assert.equal(task().binding.approval, null);
+    assert.equal(task().binding.last_notified_state, 'READY_FOR_OWNER');
+    assert.equal(task().binding.pending_notification, null);
+    assert.match(w.comments[0].body, /kind: READY_FOR_OWNER/);
     outOfScope = true;
     await reconcileFromEnv(w.env, { policy: w.policy });
     assert.equal(task().state, 'BLOCKED');

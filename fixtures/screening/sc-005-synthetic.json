@@ -1,0 +1,39 @@
+{
+  "id": "sc-005-synthetic-v1",
+  "task": "SC-005",
+  "purpose": "Controlled synthetic smoke input. Fictional exercise text only.",
+  "real_person": false,
+  "contains_contact_data": false,
+  "cv_text": "Materiał syntetyczny SC-005.\nTen opis nie dotyczy rzeczywistej osoby i nie zawiera imienia, nazwiska, adresu, telefonu ani adresu e-mail.\nW środowisku ćwiczeniowym wykonano: Prowadzenie syntetycznego rejestru zamówień w arkuszu.\nWynik ćwiczenia: Utrzymanie 99% kompletności syntetycznego rejestru.",
+  "position": {
+    "tasks": ["Prowadzenie syntetycznego rejestru zamówień w arkuszu"],
+    "kpis": ["Utrzymanie 99% kompletności syntetycznego rejestru"],
+    "required_competencies": []
+  },
+  "criteria": [
+    {
+      "id": "task:1",
+      "kind": "task",
+      "text": "Prowadzenie syntetycznego rejestru zamówień w arkuszu"
+    },
+    {
+      "id": "kpi:1",
+      "kind": "kpi",
+      "text": "Utrzymanie 99% kompletności syntetycznego rejestru"
+    }
+  ],
+  "expected_evidence": [
+    {
+      "criterion_id": "task:1",
+      "quote": "Prowadzenie syntetycznego rejestru zamówień w arkuszu",
+      "start": 174,
+      "end": 227
+    },
+    {
+      "criterion_id": "kpi:1",
+      "quote": "Utrzymanie 99% kompletności syntetycznego rejestru",
+      "start": 246,
+      "end": 296
+    }
+  ]
+}
