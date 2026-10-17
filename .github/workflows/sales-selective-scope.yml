@@ -27,7 +27,9 @@ jobs:
         with:
           node-version: 24
       - name: Fetch exact release ref as Git data, never execute it
-        run: git fetch --no-tags origin '+refs/heads/release/sales-mvp-intake-20261013:refs/heads/release/sales-mvp-intake-20261013'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/agent-pipeline/lib/sales-trusted-runner.mjs --fetch-release-ref
       - name: Verify live main rules, reviewed blobs and complete release history
         env:
           GITHUB_TOKEN: ${{ github.token }}

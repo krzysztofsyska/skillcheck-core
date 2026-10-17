@@ -2,6 +2,7 @@
  * A PASS means scope verification, NOT Production or owner approval.
  * NEVER check out or execute the candidate release's files. */
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { inspectSalesReleaseGit } from './sales-release-verified.mjs';
@@ -27,7 +28,9 @@ async function github(path) {
 function mainRuleMatches(rule) {
   const refs=rule?.conditions?.ref_name;
   if(!refs||!Array.isArray(refs.include)||!Array.isArray(refs.exclude))return false;
-  const include=refs.include.includes('refs/heads/main')||refs.include.includes('~DEFAULT_BRANCH');
+  // The repository default can change. Only an explicit main selector is
+  // evidence for main; ~DEFAULT_BRANCH alone may describe another branch.
+  const include=refs.include.includes('refs/heads/main');
   // This narrow policy accepts no exclusions. Literal checks miss wildcard
   // exclusions such as refs/heads/* and can mistake an inapplicable rule for
   // protection of main. Unknown patterns must not supply security evidence.
@@ -90,9 +93,44 @@ export async function checkTrustedSalesRelease({event,cwd='.'}) {
   if(inspected.authorizedForProduction!==false)deny('Inspector improperly grants Production');
   return {scopeVerified:true,authorizedForProduction:false};
 }
+
+// Fetch Git data from the fixed repository using the existing read-only token.
+// Command-scoped environment config is not written to .git/config or disk.
+export function fetchTrustedRelease({cwd='.',env=process.env}={}) {
+  const token=env.GITHUB_TOKEN;
+  if(typeof token!=='string'||token.length<12)deny('read-only GitHub token missing');
+  const gitEnv={...env};
+  for(const key of Object.keys(gitEnv)) {
+    if(key==='GITHUB_TOKEN'||key==='GIT_CURL_VERBOSE'||key==='GIT_CONFIG_PARAMETERS'||
+       key.startsWith('GIT_TRACE')||/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(key))
+      delete gitEnv[key];
+  }
+  Object.assign(gitEnv,{
+    GIT_TERMINAL_PROMPT:'0',
+    GIT_CONFIG_COUNT:'3',
+    GIT_CONFIG_KEY_0:'http.https://github.com/'+full+'.git.extraheader',
+    GIT_CONFIG_VALUE_0:'AUTHORIZATION: basic '+Buffer.from('x-access-token:'+token).toString('base64'),
+    GIT_CONFIG_KEY_1:'credential.helper',GIT_CONFIG_VALUE_1:'',
+    GIT_CONFIG_KEY_2:'http.followRedirects',GIT_CONFIG_VALUE_2:'false',
+  });
+  try {
+    execFileSync('git',['fetch','--no-tags','--no-recurse-submodules','--',
+      'https://github.com/'+full+'.git',
+      '+refs/heads/'+releaseRef+':refs/heads/'+releaseRef],
+      {cwd,env:gitEnv,timeout:60000,stdio:['ignore','ignore','pipe']});
+  } catch {
+    // Provider output can contain URLs/credentials; never forward it.
+    deny('authenticated release fetch failed');
+  }
+}
+
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
-  const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
-  checkTrustedSalesRelease({event}).then(result=>{
-    process.stdout.write(JSON.stringify(result)+'\\n');
-  }).catch(e=>{process.stderr.write(e.message+'\\n');process.exitCode=1;});
+  Promise.resolve().then(()=>{
+    if(process.argv[2]==='--fetch-release-ref')return fetchTrustedRelease();
+    if(process.argv.length>2)deny('Unexpected command argument');
+    const event=JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8'));
+    return checkTrustedSalesRelease({event});
+  }).then(result=>{
+    if(result!==undefined)process.stdout.write(JSON.stringify(result)+'\n');
+  }).catch(e=>{process.stderr.write(e.message+'\n');process.exitCode=1;});
 }

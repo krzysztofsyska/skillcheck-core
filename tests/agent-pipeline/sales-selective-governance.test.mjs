@@ -192,3 +192,119 @@ test('restoring a reviewed final blob cannot hide unreviewed historical contents
   assert.equal(result.errors.some(error => error.includes('Potential embedded credential')), false,
     'hash-pinned history must reject content even when secret regexes do not match');
 });
+
+// PR #128 re-review regressions: protect the ordinary modification path,
+// literal main targeting and one-command read authentication after checkout.
+import * as trustedRunner from '../../tools/agent-pipeline/lib/sales-trusted-runner.mjs';
+const trustedWorkflow = '.github/workflows/sales-selective-scope.yml';
+for (const level of ['L1', 'L2', 'L3']) {
+  test(`ordinary trusted workflow edit requires L3, declared ${level}`, () => {
+    const result = classify({
+      files: [trustedWorkflow], body: meta('OPERATIONS', 'STANDARD').replace('LEVEL: L3', `LEVEL: ${level}`),
+      base: 'integration', headRef: 'fix/sales-workflow', prNumber: 999,
+    });
+    assert.equal(result.operations, true);
+    assert.equal(result.security, true);
+    assert.equal(result.ok, level === 'L3');
+    if (level !== 'L3') assert.ok(result.errors.some(error => error.includes('require LEVEL: L3')));
+  });
+}
+test('adding a frontend path cannot downgrade the trusted workflow edit', () => {
+  const result = classify({
+    files: [trustedWorkflow, 'app/page.tsx'],
+    body: meta('FRONTEND', 'STANDARD').replace('LEVEL: L3', 'LEVEL: L1'),
+    base: 'integration', headRef: 'fix/sales-workflow', prNumber: 999,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.operations, true);
+  assert.equal(result.security, true);
+});
+for (const include of [['~DEFAULT_BRANCH'], ['refs/heads/integration', '~DEFAULT_BRANCH']]) {
+  test(`nonliteral main protection is rejected: ${include.join(',')}`, async t => {
+    const f = protectionFixture(t, rule => { rule.conditions.ref_name.include = include; });
+    await assert.rejects(checkTrustedSalesRelease(f), /main ruleset missing/);
+    assert.equal(f.liveReads(), 0);
+  });
+}
+test('an explicit main selector remains valid alongside an unrelated default selector', async t => {
+  const f = protectionFixture(t, rule => { rule.conditions.ref_name.include = ['refs/heads/main', '~DEFAULT_BRANCH']; });
+  await assert.rejects(checkTrustedSalesRelease(f), /Git history\/blobs rejected/);
+  assert.equal(f.liveReads(), 1);
+});
+test('release fetch uses ephemeral URL-scoped authentication with no credential persistence', t => {
+  const env = { PATH: process.env.PATH, GITHUB_TOKEN: 'synthetic-read-only-fetch-token',
+    GIT_TRACE: '/tmp/not-used', GIT_CURL_VERBOSE: '1', GIT_CONFIG_PARAMETERS: 'not-used' };
+  const before = { ...env };
+  const original = childProcess.execFileSync;
+  let call;
+  t.mock.method(childProcess, 'execFileSync', (command, args, options) => {
+    call = { command, args, options };
+    return '';
+  });
+  syncBuiltinESMExports();
+  t.after(() => { childProcess.execFileSync = original; syncBuiltinESMExports(); });
+  trustedRunner.fetchTrustedRelease({ env, cwd: '/synthetic/trusted-checkout' });
+  assert.deepEqual(env, before, 'do not mutate environment for later steps');
+  assert.equal(call.command, 'git');
+  assert.deepEqual(call.args, ['fetch', '--no-tags', '--no-recurse-submodules', '--',
+    'https://github.com/krzysztofsyska/skillcheck-core.git',
+    '+refs/heads/release/sales-mvp-intake-20261013:refs/heads/release/sales-mvp-intake-20261013']);
+  assert.equal(call.options.cwd, '/synthetic/trusted-checkout');
+  assert.deepEqual(call.options.stdio, ['ignore', 'ignore', 'pipe']);
+  assert.equal(call.options.timeout, 60000);
+  assert.equal(JSON.stringify(call.args).includes(env.GITHUB_TOKEN), false);
+  assert.equal(call.options.env.GIT_CONFIG_COUNT, '3');
+  assert.equal(call.options.env.GIT_CONFIG_KEY_0,
+    'http.https://github.com/krzysztofsyska/skillcheck-core.git.extraheader');
+  assert.equal(call.options.env.GIT_CONFIG_VALUE_0,
+    'AUTHORIZATION: basic ' + Buffer.from('x-access-token:' + env.GITHUB_TOKEN).toString('base64'));
+  assert.equal(call.options.env.GIT_CONFIG_KEY_1, 'credential.helper');
+  assert.equal(call.options.env.GIT_CONFIG_VALUE_1, '');
+  assert.equal(call.options.env.GIT_CONFIG_KEY_2, 'http.followRedirects');
+  assert.equal(call.options.env.GIT_CONFIG_VALUE_2, 'false');
+  assert.equal(call.options.env.GIT_TERMINAL_PROMPT, '0');
+  assert.equal(call.options.env.GIT_TRACE, undefined);
+  assert.equal(call.options.env.GIT_CURL_VERBOSE, undefined);
+  assert.equal(call.options.env.GIT_CONFIG_PARAMETERS, undefined);
+  assert.equal(call.options.env.GITHUB_TOKEN, undefined, 'Git receives only the scoped header');
+  const configEnv = { ...call.options.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
+  const matched = childProcess.spawnSync('git', ['config', '--get-urlmatch', 'http.extraheader',
+    'https://github.com/krzysztofsyska/skillcheck-core.git'], { env: configEnv, encoding: 'utf8' });
+  assert.equal(matched.status, 0);
+  assert.equal(matched.stdout.trim(), call.options.env.GIT_CONFIG_VALUE_0);
+  const unrelated = childProcess.spawnSync('git', ['config', '--get-urlmatch', 'http.extraheader',
+    'https://github.com/unrelated/repository.git'], { env: configEnv, encoding: 'utf8' });
+  assert.equal(unrelated.status, 1);
+  assert.equal(unrelated.stdout, '');
+});
+test('release fetch refuses missing credentials before invoking git', t => {
+  const original = childProcess.execFileSync;
+  let calls = 0;
+  t.mock.method(childProcess, 'execFileSync', () => { calls++; });
+  syncBuiltinESMExports();
+  t.after(() => { childProcess.execFileSync = original; syncBuiltinESMExports(); });
+  for (const token of [undefined, '', 'short']) {
+    assert.throws(() => trustedRunner.fetchTrustedRelease({ env: { GITHUB_TOKEN: token } }),
+      /read-only GitHub token missing/);
+  }
+  assert.equal(calls, 0);
+});
+test('failed authenticated fetch never reflects git output or credentials', t => {
+  const original = childProcess.execFileSync;
+  t.mock.method(childProcess, 'execFileSync', () => {
+    throw new Error('private-git-output-with-synthetic-read-only-fetch-token');
+  });
+  syncBuiltinESMExports();
+  t.after(() => { childProcess.execFileSync = original; syncBuiltinESMExports(); });
+  assert.throws(() => trustedRunner.fetchTrustedRelease({
+    env: { GITHUB_TOKEN: 'synthetic-read-only-fetch-token' },
+  }), error => error.message === 'SALES_RELEASE_SCOPE_DENIED: authenticated release fetch failed');
+});
+test('workflow uses the trusted authenticated fetch and retains read-only permissions', () => {
+  const y = readFileSync(trustedWorkflow, 'utf8');
+  assert.match(y, /run: node tools\/agent-pipeline\/lib\/sales-trusted-runner\.mjs --fetch-release-ref/);
+  const fetchStep = y.slice(y.indexOf('- name: Fetch exact release ref'), y.indexOf('- name: Verify live main rules'));
+  assert.match(fetchStep, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(y, /(?:contents|pull-requests|checks|statuses|administration): write/);
+  assert.doesNotMatch(y, /persist-credentials: true|git config --(?:global|local)|run: git fetch/);
+});

@@ -46,6 +46,12 @@ export function classify({ files, body, base, headRef, baseSha, prNumber }) {
     if (PRODUCT_BACKEND.test(file)) backend = true;
     else if (PRODUCT_FRONTEND.test(file)) frontend = true;
     if (OPERATIONS.test(file)) operations = true;
+    // This main-side verifier is a production trust boundary even when a
+    // later, ordinary PR changes only the workflow (outside the seed path).
+    if (file === '.github/workflows/sales-selective-scope.yml') {
+      operations = true;
+      security = true;
+    }
     if (file.startsWith('supabase/migrations/')) {
       database = true;
       security = true;
