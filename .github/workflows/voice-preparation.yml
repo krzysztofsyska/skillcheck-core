@@ -71,6 +71,8 @@ jobs:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
         run: >-
           node --test --test-isolation=none --test-concurrency=1 --test-reporter=tap
+          tests/voice-retention-database.test.mjs
+          tests/voice-retention-concurrency.test.mjs
           tests/voice-preparation.test.mjs
           tests/voice-preparation-privileges.test.mjs
           tests/voice-interview-permission.test.mjs
