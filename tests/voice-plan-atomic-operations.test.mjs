@@ -74,6 +74,69 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
  const visible=(await db.query(
   "select private.sc012b_current_release($1) as id",[f.application.id])).rows[0].id;
  assert.equal(visible,release);
+ await t.test("screening writer advisory lock blocks the trusted current-release reader until commit",async()=>{
+  // Three independent PostgreSQL 16 sessions: a screening writer, a
+  // JWT-authenticated reader, and an observer of the server's lock table.
+  // Only synthetic fixture data is used; no provider requests are made.
+  const writer=new Client(config(dbName));
+  const reader=new Client(config(dbName));
+  const observer=new Client(config(dbName));
+  const sessions=[writer,reader,observer];
+  let writerTxOpen=false;
+  let readCompletion=null;
+  try{
+    for(const session of sessions) await session.connect();
+    await reader.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
+    await reader.query("set statement_timeout='15000ms'");
+    await observer.query("set statement_timeout='5000ms'");
+    await writer.query("begin");
+    writerTxOpen=true;
+    await writer.query("set local statement_timeout='15000ms'");
+    await writer.query(
+      "select pg_advisory_xact_lock(hashtextextended($1,0))",
+      ["screening:"+f.application.id]);
+    const readerPid=(await reader.query("select pg_backend_pid() as pid")).rows[0].pid;
+    // Attach rejection handling immediately: the query may fail while the
+    // independent observer is sampling pg_stat_activity.
+    readCompletion=reader.query(
+      "select private.sc012b_current_release($1) as id",
+      [f.application.id]).then(
+        result=>({result}),
+        error=>({error}));
+    let sawAdvisoryWait=false;
+    for(let attempt=0;attempt<100;attempt++){
+      await observer.query("select pg_stat_clear_snapshot()");
+      const state=(await observer.query(
+        "select wait_event_type,wait_event from pg_stat_activity where pid=$1",
+        [readerPid])).rows[0];
+      if(state?.wait_event_type==="Lock"&&state.wait_event==="advisory"){
+        sawAdvisoryWait=true;
+        break;
+      }
+      await new Promise(resolve=>setTimeout(resolve,40));
+    }
+    assert.ok(sawAdvisoryWait,
+      "JWT owner reader must wait for the screening writer's advisory lock");
+    // The writer must still be able to lock the release pointer. Taking the
+    // pointer lock first in the reader would invert the lock order.
+    const pointer=(await writer.query(
+      "select release_entry_id from private.voice_plan_current_releases "+
+      "where application_id=$1 for update nowait",
+      [f.application.id])).rows[0];
+    assert.equal(pointer?.release_entry_id,release);
+    await writer.query("commit");
+    writerTxOpen=false;
+    const completed=await readCompletion;
+    if(completed.error) throw completed.error;
+    assert.equal(completed.result.rows[0]?.id,release,
+      "current release becomes readable after writer commit");
+  }finally{
+    if(writerTxOpen) await writer.query("rollback").catch(()=>{});
+    if(readCompletion) await readCompletion;
+    for(const session of sessions) await session.end().catch(()=>{});
+  }
+ });
+
  await t.test("source and screening advisory locks remain held through a trusted transaction",async()=>{
   const rival=new Client(config(dbName));await rival.connect();
   try{
