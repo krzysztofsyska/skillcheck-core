@@ -61,9 +61,11 @@ body:
   - type: checkboxes
     id: gates
     attributes:
-      label: Owner gates
+      label: Merge gates
       options:
-        - label: Owner acceptance is required before integration merge
+        - label: Current CI and independent review authorize integration merge; routine owner acceptance does not
           required: true
         - label: Production approval is required before production promotion/deploy
+          required: true
+        - label: First controller activation, secrets, paid services, and a failed preflight stay closed
           required: true
