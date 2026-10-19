@@ -2,6 +2,8 @@
 -- Convert with Supabase CLI 'migration new' after independent review, production
 -- migration-history reconciliation and explicit release approval.
 -- Depends on SC-004/005/006 schemas (screening_analysis_versions).
+-- With offline voice installed, apply SC-010-R4-VOICE before this prototype.
+-- Legacy R4 and R4-VOICE each have a distinct, checked-in R5 signature.
 begin;
 
 create table private.sc19_balances (
@@ -805,8 +807,9 @@ declare
   reviewed_r4 constant text := 'd2e7725bd5051e15cb7e700a128026a3ad6f0d87f9d3bba3de8e1539c9d3eabd';
   -- Generated from the clean reviewed migration chain plus this prototype on
   -- PGlite and PostgreSQL 16. Both engines returned the same digest.
-  reviewed_r5 constant text := 'e764d74f5563805185807c6a37b5e08659771f2e8534c76df3651c9ea46ea7d9';
-  reviewed_tables constant text[] := array[
+  reviewed_r5 text := 'e764d74f5563805185807c6a37b5e08659771f2e8534c76df3651c9ea46ea7d9';
+  reviewed_r4_voice constant text := '70cdbf43562f147294c417639b76fe121154f4dc6e49799b9764232a4aedc444';
+  reviewed_tables text[] := array[
  'private.candidate_retention_policies',
  'private.candidate_verified_contact_points',
  'private.candidate_verified_contact_receipts',
@@ -893,7 +896,22 @@ begin
      or to_regprocedure('public.get_retention_schedule(uuid)') is null then
     return;
   end if;
-  if (select schema_signature from private.erasure_inventory_baseline_r4 where singleton) is distinct from reviewed_r4 then
+  if to_regclass('private.erasure_inventory_baseline_r4_voice') is not null then
+    if (select schema_signature from private.erasure_inventory_baseline_r4_voice where singleton) is distinct from reviewed_r4_voice then
+      raise exception 'sc19_voice_erasure_baseline_unreviewed' using errcode='55000';
+    end if;
+    -- Derived offline from the exact R4-VOICE + billing chain, never from
+    -- the database being installed. Unreviewed schema drift still aborts.
+    reviewed_r5 := '6157b0c234cc7485e188ce4805ee27ab77707e1496f01d807a249fa80a729146';
+    reviewed_tables := reviewed_tables || array[
+      'public.voice_plan_versions','private.voice_plan_review_entries',
+      'private.voice_plan_release_entries','private.voice_plan_current_releases',
+      'private.voice_plan_request_keys','private.voice_interview_permission_receipts',
+      'private.voice_interview_permission_revocations','private.sc010c_voice_preparations',
+      'private.sc010c_voice_preparation_requests','private.voice_plan_template_catalog',
+      'private.voice_interview_permission_policies','private.voice_interview_permission_issuers',
+      'private.sc19_voice_entitlements','private.erasure_inventory_baseline_r4_voice'];
+  elsif (select schema_signature from private.erasure_inventory_baseline_r4 where singleton) is distinct from reviewed_r4 then
     raise exception 'sc19_erasure_baseline_unreviewed' using errcode='55000';
   end if;
   if to_regclass('private.erasure_inventory_baseline_r5') is not null then
@@ -948,6 +966,14 @@ begin
   and not (n.nspname||'.'||c.relname)=any(baseline.known_tables)) then
   blockers:=array_append(blockers,'schema_dependency_unknown');
  else
+  -- Preserve the R4-VOICE preview denial as well as its purge/restore adapters.
+  -- The legacy R4 fixture has no voice module; SQL in this branch is planned
+  -- only when the reviewed voice helper exists.
+  if to_regprocedure('private.erasure_voice_request_candidate(uuid,text,uuid)') is not null then
+    if exists(select 1 from private.voice_plan_request_keys t where t.company_id=tenant
+      and private.erasure_voice_request_candidate(t.company_id,t.operation,t.result_id) is null)
+    then blockers:=array_append(blockers,'voice_request_adapter_unknown');end if;
+  end if;
   if exists(select 1 from private.contact_requests t where t.company_id=tenant
    and private.erasure_contact_request_candidate(t.company_id,t.operation,t.payload,t.result_id) is null) then blockers:=array_append(blockers,'contact_request_adapter_unknown');end if;
   if exists(select 1 from public.screening_analysis_versions a join public.applications ap on ap.company_id=a.company_id and ap.id=a.application_id
@@ -1060,4 +1086,47 @@ end;$$;
   end if;
 end
 $sc19_erasure$;
+
+-- Default privileges may explicitly grant capabilities to service/custom roles.
+-- RLS cannot stop TRUNCATE and does not protect SECURITY DEFINER execution.
+-- Reset actual ACL grantees on precisely the new billing objects, then restore
+-- only the two authenticated public RPCs. Existing worker/erasure ACLs survive
+-- CREATE OR REPLACE and are intentionally not broadened or reset here.
+do $sc19_acl$
+declare obj record; grantee record;
+begin
+  for obj in select c.oid,c.relowner from pg_class c
+    where c.oid in (
+      to_regclass('private.sc19_balances'),to_regclass('private.sc19_trial_nips'),
+      to_regclass('private.sc19_trial_approvals'),to_regclass('private.sc19_analysis_spend'),
+      to_regclass('private.sc19_credit_journal'),to_regclass('private.erasure_inventory_baseline_r5'))
+  loop
+    for grantee in select distinct acl.grantee,role.rolname
+      from pg_class c cross join lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) acl
+      left join pg_roles role on role.oid=acl.grantee
+      where c.oid=obj.oid and acl.grantee<>obj.relowner
+    loop
+      if grantee.grantee=0 then execute format('revoke all on table %s from public',obj.oid::regclass);
+      else execute format('revoke all on table %s from %I',obj.oid::regclass,grantee.rolname);end if;
+    end loop;
+  end loop;
+  for obj in select p.oid,p.proowner from pg_proc p
+    where p.oid in (
+      'private.sc19_valid_nip(text)'::regprocedure,'private.sc19_lock_company(uuid)'::regprocedure,
+      'private.sc19_lock_analysis_company()'::regprocedure,'public.sc19_claim_trial(uuid,text)'::regprocedure,
+      'public.sc19_get_balance(uuid)'::regprocedure,'private.sc19_grant_paid(uuid,text)'::regprocedure,
+      'private.sc19_charge_analysis()'::regprocedure,'private.sc19_reconcile_analysis()'::regprocedure)
+  loop
+    for grantee in select distinct acl.grantee,role.rolname
+      from pg_proc p cross join lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+      left join pg_roles role on role.oid=acl.grantee
+      where p.oid=obj.oid and acl.grantee<>obj.proowner
+    loop
+      if grantee.grantee=0 then execute format('revoke all on function %s from public',obj.oid::regprocedure);
+      else execute format('revoke all on function %s from %I',obj.oid::regprocedure,grantee.rolname);end if;
+    end loop;
+  end loop;
+end
+$sc19_acl$;
+grant execute on function public.sc19_claim_trial(uuid,text),public.sc19_get_balance(uuid) to authenticated;
 commit;

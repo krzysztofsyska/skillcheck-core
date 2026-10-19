@@ -12,7 +12,7 @@ function nip(prefix) {
   if (prefix.length!==9 || !/^\d{9}$/.test(prefix) || check===10) throw Error('bad test prefix');
   return prefix+check;
 }
-async function setup() {
+async function setup(beforePrototype) {
   const db=new PGlite({extensions:{pgcrypto}});
   await db.exec(`
     create role anon nologin;
@@ -51,6 +51,7 @@ async function setup() {
     insert into public.company_members(company_id,user_id,role) values
       ('${companyA}','${recruiterA}','recruiter'),('${companyA}','${viewerA}','viewer');
   `);
+  if (beforePrototype) await beforePrototype(db);
   await db.exec(await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql',import.meta.url),'utf8'));
   const as=(user,role='authenticated')=> db.exec(`reset role; set role ${role}; select set_config('request.jwt.claim.sub','${user??''}',false)`);
   const admin=()=>db.exec("reset role; select set_config('request.jwt.claim.sub','',false)");
@@ -234,4 +235,34 @@ test('SC-019 prototype: install rejects an in-flight analysis that has no reserv
     db.query("update public.screening_analysis_versions set execution_status='failed' where id=$1",[id(401)]),
     e=>e.code==='55000',
   );
+});
+
+
+test('SC-019: hostile default privileges cannot mint credits or truncate billing history', async t => {
+  const h=await setup(async db=>{
+    await db.exec(`create role contact_verifier nologin; create role sc19_untrusted nologin;
+      grant usage on schema private to contact_verifier,sc19_untrusted;
+      alter default privileges grant all on tables to contact_verifier;
+      alter default privileges grant execute on functions to contact_verifier;
+      alter default privileges in schema private grant all on tables to sc19_untrusted;
+      alter default privileges in schema private grant execute on functions to sc19_untrusted;
+      alter default privileges in schema public grant execute on functions to sc19_untrusted;`);
+  });
+  t.after(()=>h.db.close());
+  for (const role of ['contact_verifier','sc19_untrusted']) {
+    await h.as(null,role);
+    await assert.rejects(h.db.query('select private.sc19_grant_paid($1,$2)',[companyA,'hostile-'+role]),e=>e.code==='42501');
+    await assert.rejects(h.db.exec('truncate private.sc19_credit_journal'),e=>e.code==='42501');
+    await h.admin();
+    const functions=(await h.db.query(`select p.oid::regprocedure::text name from pg_proc p
+      join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('public','private') and left(p.proname,5)='sc19_'`)).rows;
+    for (const fn of functions) assert.equal((await h.db.query("select has_function_privilege($1,$2,'execute') allowed",[role,fn.name])).rows[0].allowed,false,role+fn.name);
+    for (const table of ['sc19_balances','sc19_trial_nips','sc19_trial_approvals','sc19_analysis_spend','sc19_credit_journal']) {
+      for (const privilege of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) {
+        assert.equal((await h.db.query('select has_table_privilege($1,$2,$3) allowed',[role,'private.'+table,privilege])).rows[0].allowed,false,role+table+privilege);
+      }
+    }
+  }
+  assert.equal((await h.db.query('select private.sc19_grant_paid($1,$2) available',[companyA,'owner-only-settlement'])).rows[0].available,60);
+  await h.as(ownerA);assert.equal((await h.balance(companyA)).available,60);
 });

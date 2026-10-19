@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import pg from 'pg';
+import { bootRetention, voiceTables } from './helpers/voice-retention-fixture.mjs';
 import { setupRankingDatabase } from './helpers/screening-ranking-fixture.mjs';
 
 const prototypeSql = await readFile(new URL('../docs/prototypes/sc-019-mvp-credits.sql', import.meta.url), 'utf8');
@@ -135,3 +136,71 @@ pgTest('SC-019 prototype extends the SC-010 erasure baseline on PostgreSQL 16', 
   client.exec = sql => client.query(sql);
   await exercise(client);
 });
+
+
+async function exerciseVoiceBilling(t, embedded) {
+  const env=await bootRetention(t,{embedded}), {db,h,x}=env;
+  await h.asAdmin();
+  await db.exec(`alter default privileges grant all on tables to contact_verifier;
+    alter default privileges grant execute on functions to contact_verifier;`);
+  await db.exec(prototypeSql);
+  for (const table of ['sc19_balances','sc19_trial_nips','sc19_trial_approvals',
+    'sc19_analysis_spend','sc19_credit_journal','erasure_inventory_baseline_r5']) {
+    assert.equal((await db.query("select has_table_privilege('contact_verifier',$1,'TRUNCATE') allowed",
+      ['private.'+table])).rows[0].allowed,false,table);
+  }
+  assert.equal((await db.query("select has_function_privilege('contact_verifier','private.sc19_grant_paid(uuid,text)','execute') allowed")).rows[0].allowed,false);
+  const baseline=(await db.query('select schema_signature expected,private.erasure_schema_signature() actual from private.erasure_inventory_baseline_r5 where singleton')).rows[0];
+  assert.equal(baseline.expected,'6157b0c234cc7485e188ce4805ee27ab77707e1496f01d807a249fa80a729146');
+  assert.equal(baseline.actual,baseline.expected);
+  const originalSeed=h.seed;
+  h.seed=async (...args)=>{
+    const f=await originalSeed(...args);await h.asAdmin();
+    await db.query('select private.sc19_grant_paid($1,$2)',[f.companyId,'composed-'+f.companyId]);
+    await h.asUser(f.owner);return f;
+  };
+  const subject=await env.ready(),survivor=await env.ready();
+  await env.prepare(subject);await env.prepare(survivor);
+  await h.asUser(subject.f.owner);
+  assert.equal(blockersOf(await x.preview(subject.f)).includes('schema_dependency_unknown'),false);
+  assert.equal(blockersOf(await x.scheduleStatus(subject.f)).includes('schema_dependency_unknown'),false);
+  await h.asAdmin();
+  await db.exec('begin');
+  await db.exec('alter table private.voice_plan_request_keys disable trigger user');
+  await db.query(`insert into private.voice_plan_request_keys values($1,$2,'generate',$3,$4,null,now(),'test',now()+interval '1 day')`,
+    [subject.f.companyId,subject.f.owner,randomUUID(),'a'.repeat(64)]);
+  await db.exec('alter table private.voice_plan_request_keys enable trigger user');
+  await h.asUser(subject.f.owner);
+  assert.ok(blockersOf(await x.preview(subject.f)).includes('voice_request_adapter_unknown'));
+  await db.exec('rollback');await h.asAdmin();
+  const billingBefore=(await db.query('select to_jsonb(j) value from private.sc19_credit_journal j order by id')).rows;
+  await db.exec('begin');
+  const state=await env.erasing(subject);
+  await x.purge(state.request_id,2);await x.transition(state.request_id,2,'active_data_erased');
+  await h.asAdmin();
+  for (const table of voiceTables) assert.equal(await env.count(table,subject.f.companyId),0,table);
+  assert.equal(await env.count('private.sc010c_voice_preparations',survivor.f.companyId),1);
+  assert.deepEqual((await db.query('select to_jsonb(j) value from private.sc19_credit_journal j order by id')).rows,billingBefore);
+  await db.exec('rollback');
+  // The independent signed ledger survives rollback; restoring the product
+  // snapshot must re-erase voice data and must not refund another reservation.
+  await x.configure({restore_isolated:true});
+  assert.equal((await x.replay()).replayed,1);
+  assert.equal(await env.count('private.sc010c_voice_preparations',subject.f.companyId),0);
+  assert.equal(await env.count('private.sc010c_voice_preparations',survivor.f.companyId),1);
+  await h.asAdmin();
+  assert.deepEqual((await db.query('select to_jsonb(j) value from private.sc19_credit_journal j order by id')).rows,billingBefore);
+  await x.configure({restore_isolated:false});
+  for (const ddl of ['create table public.unreviewed_billing_copy(candidate_id uuid)',
+    'alter table private.sc19_balances add column unreviewed_note text']) {
+    await h.asAdmin();await db.exec('begin');
+    try {
+      await db.exec(ddl);await h.asUser(survivor.f.owner);
+      assert.ok(blockersOf(await x.preview(survivor.f)).includes('schema_dependency_unknown'));
+      assert.ok(blockersOf(await x.scheduleStatus(survivor.f)).includes('schema_dependency_unknown'));
+    } finally {await db.exec('rollback');}
+  }
+}
+
+test('SC-019 composes with R4 voice: preview, signed purge, restore and drift denial on PGlite', t=>exerciseVoiceBilling(t,true));
+pgTest('SC-019 composes with R4 voice: preview, signed purge, restore and drift denial on PostgreSQL 16', t=>exerciseVoiceBilling(t,false));
