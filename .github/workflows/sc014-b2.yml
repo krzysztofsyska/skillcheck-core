@@ -1,0 +1,45 @@
+name: SC014 B2 isolated PostgreSQL
+on:
+  pull_request:
+    paths: ['db/isolated/sc014-b2-*.sql', 'scripts/sc014-b2-*.mjs', 'tests/competency-*.test.mjs', 'tests/helpers/competency-attempt-fixture.mjs', 'lib/competency*.ts', '.github/workflows/sc014-b2.yml']
+  push:
+    branches: [integration]
+    paths: ['db/isolated/sc014-b2-*.sql', 'scripts/sc014-b2-*.mjs', 'tests/competency-*.test.mjs', 'tests/helpers/competency-attempt-fixture.mjs', 'lib/competency*.ts', '.github/workflows/sc014-b2.yml']
+permissions:
+  contents: read
+jobs:
+  isolated-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: --health-cmd 'pg_isready -U postgres' --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+          cache: npm
+      - run: npm ci
+      - run: node scripts/sc014-b2-unicode.mjs --check && node scripts/sc014-b2-compose.mjs --check
+      - name: B2 backend and regression contracts
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+        run: >-
+          node --test --test-isolation=none --test-concurrency=1
+          tests/competency-test.test.mjs
+          tests/competency-validation.test.mjs
+          tests/competency-attempt.test.mjs
+          tests/competency-concurrency.test.mjs
+          tests/competency-withdrawal.test.mjs
+          tests/competency-withdrawal-concurrency.test.mjs
+          tests/competency-retention.test.mjs
+      - run: npm run typecheck && npm run build
