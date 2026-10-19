@@ -128,7 +128,13 @@ test('B2 real PostgreSQL transaction and role boundaries',async t=>{
   const f=await e.seed({duration:1}),g=await e.issue(f,{startBy:new Date(Date.now()+5000).toISOString()}),s=await e.exchange(g),key=randomUUID();
   const a=await call('private.start_candidate_competency_test',[hash(s.session),key]);
   const r=await e.started({duration:1});
+  const expired=await e.seed({duration:1}),expiredGrant=await e.issue(expired,{startBy:new Date(Date.now()+5000).toISOString()}),expiredSession=await e.exchange(expiredGrant);
   await new Promise(resolve=>setTimeout(resolve,5200));await e.asGateway();
+  await assert.rejects(call('private.inspect_candidate_competency_test',[hash(expiredSession.session)]),denied);
+  await assert.rejects(call('private.start_candidate_competency_test',[hash(expiredSession.session),randomUUID()]),denied);
+  await assert.rejects(e.exchange(expiredGrant),denied);
+  await h.asUser(expired.owner);await assert.rejects(call('public.rotate_competency_test_grant',[expiredGrant.grantId,1,randomUUID()]),denied);
+  await assert.rejects(e.issue(expired),denied);await e.asGateway();
   assert.equal((await call('private.start_candidate_competency_test',[hash(s.session),key])).deadlineAt,a.deadlineAt);
   const receipt=await call('private.submit_candidate_competency_test',[hash(s.session),JSON.stringify({workSample:'Plan po start-by.'}),randomUUID()]);
   await call('private.save_candidate_competency_test_draft',[hash(r.s.session),'zachowaj po terminie',0,randomUUID()]);

@@ -2,7 +2,7 @@
 
 TASK: SC-014-B2. SCOPE: BACKEND. LEVEL: L3. OWNER: Krzysztof Syska / ChatGPT Orchestrator.
 BUILDER: Codex (local takeover; no available Cursor dispatch). REVIEWER: separate Codex agent.
-PRODUCTION_APPROVAL: NO. STATUS: IN_PROGRESS.
+PRODUCTION_APPROVAL: NO. STATUS: IMPLEMENTED; exact-HEAD acceptance tracked in PR #135.
 BASE: integration `bd0d1d51edd2590f590172989c7f7681d4d61b62` (verified 2026-10-19).
 BRANCH: feat/sc-014-b2-isolated-attempts. Parent: Issue #15.
 
@@ -61,6 +61,8 @@ is required by this task; inspect actual workflow triggers again before publicat
 Independent review of local snapshot `78dfdfecfa8b33147c4ffef4e89cd38495b08883`
 against the base found P1 incomplete transitive withdrawal propagation and P2
 missing SC-014-A rubric validation before issue/start. Both were reproduced by
-an independent reviewer in a separate immutable checkout. Corrections and dedicated
-regressions are required before a new exact-HEAD review. This preliminary review
-was FAIL; it is not merge approval. Final CI/review evidence belongs in the PR.
+an independent reviewer in a separate immutable checkout, fixed and covered by
+dedicated regressions. The reviewer independently repeated attempts, withdrawal
+and retention (26/26 supplementary PGlite PASS) and closed both findings. This is
+not a substitute for real PostgreSQL concurrency evidence. Final exact-HEAD
+CI/review results and integration merge evidence belong in PR #135.
