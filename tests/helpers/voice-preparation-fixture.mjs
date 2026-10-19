@@ -77,6 +77,14 @@ export async function boot(t, {beforeIsolated} = {}) {
     return client;
   };
   const db = await connect();
+  return initializeVoicePreparationFixture({ db, connect, setServerActor, databaseName,
+    connectionConfig: Object.freeze(config(databaseName)), beforeIsolated });
+}
+
+// Shared synthetic graph builder. PostgreSQL boot above remains the default;
+// an embedded SQL contract test can explicitly supply a single-session engine.
+export async function initializeVoicePreparationFixture({db, connect, setServerActor,
+  databaseName, connectionConfig, beforeIsolated}) {
   const h = await setupRankingDatabase(db);
   for (const [index, path] of schemas.entries()) {
     if (index === 1 && beforeIsolated) await beforeIsolated(db);
@@ -176,6 +184,6 @@ export async function boot(t, {beforeIsolated} = {}) {
   };
   return {
     db, h, permission, connect, asServer, actor: setServerActor, ready,
-    databaseName, connectionConfig: Object.freeze(config(databaseName)),
+    databaseName, connectionConfig,
   };
 }
