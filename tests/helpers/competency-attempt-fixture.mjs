@@ -24,6 +24,9 @@ export async function boot(t,{embedded=process.env.COMPETENCY_TEST_ENGINE==='pgl
  const seed=async({tenant,owner=users.owner,duration=60}={})=>{
   const f=tenant?await h.candidate(tenant):await h.seed(owner);
   await h.asUser(f.owner);
+  // Preserve PostgreSQL microseconds for the accepted optimistic version check.
+  // pg's default Date parser truncates to milliseconds; never weaken that check.
+  f.position={...f.position,updated_at:(await db.query('select updated_at::text version from public.positions where id=$1',[f.position.id])).rows[0].version};
   const id=await call('public.save_exercise_definition',[f.recruitment.id,randomUUID(),JSON.stringify(definition(duration)),0,f.position.id,f.position.updated_at]);
   return {...f,definitionId:id,definition:definition(duration)};
  };

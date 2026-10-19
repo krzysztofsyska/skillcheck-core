@@ -25,12 +25,12 @@ test('B2 T8/T11 withdrawal, protected status boundary and subject propagation',a
   const {f,g,s,receipt}=await env.submitted();
   const sibling=await otherApplication(env,f),otherGrant=await env.issue(sibling);
   await h.asUser(f.owner);
-  const review=await call('public.save_competency_test_review',[receipt.attemptId,0,observations]);
+  const review=await call('public.save_competency_test_review',[receipt.attemptId,0,JSON.stringify(observations)]);
   assert.ok(review);
   const key=randomUUID(),result=await withdraw(env,appScope(f),key);
   assert.deepEqual(await withdraw(env,appScope(f),key),result);
   await deny(()=>call('public.read_competency_test_response',[receipt.attemptId]));
-  await deny(()=>call('public.save_competency_test_review',[receipt.attemptId,1,observations]));
+  await deny(()=>call('public.save_competency_test_review',[receipt.attemptId,1,JSON.stringify(observations)]));
   await db.query("update public.applications set status='new' where id=$1",[f.application.id]);
   await deny(()=>env.issue(f));
   await env.asGateway();
@@ -83,13 +83,13 @@ test('B2 T8/T11 withdrawal, protected status boundary and subject propagation',a
  await t.test('confirmed scope blocks every saved response and propagates through later confirm, new anchors and trusted inserts',async()=>{
   const a=await env.submitted(),b=await env.submitted({tenant:a.f}),unrelated=await env.started({tenant:a.f});
   await h.asUser(a.f.owner);
-  await call('public.save_competency_test_review',[a.receipt.attemptId,0,observations]);
-  await call('public.save_competency_test_review',[b.receipt.attemptId,0,observations]);
+  await call('public.save_competency_test_review',[a.receipt.attemptId,0,JSON.stringify(observations)]);
+  await call('public.save_competency_test_review',[b.receipt.attemptId,0,JSON.stringify(observations)]);
   const ids=[a.f.candidate.id,b.f.candidate.id].sort(),resolution=await resolve(env,a.f,ids);
   await withdraw(env,subjectScope(resolution));
   for(const item of [a,b]){
    await deny(()=>call('public.read_competency_test_response',[item.receipt.attemptId]));
-   await deny(()=>call('public.save_competency_test_review',[item.receipt.attemptId,1,observations]));
+   await deny(()=>call('public.save_competency_test_review',[item.receipt.attemptId,1,JSON.stringify(observations)]));
    await deny(()=>env.issue(item.f));
    await env.asGateway();await deny(()=>call('private.status_candidate_competency_test',[hash(item.s.session)]));
    await h.asUser(a.f.owner);
@@ -124,7 +124,7 @@ test('B2 T8/T11 withdrawal, protected status boundary and subject propagation',a
   const d=await env.submitted({tenant:a.f}),unrelated=await env.started({tenant:a.f});
   const groupOne=[a.f.candidate.id,b.f.candidate.id].sort(),groupTwo=[c.f.candidate.id,d.f.candidate.id].sort();
   const ar=await resolve(env,a.f,groupOne),cr=await resolve(env,c.f,groupTwo);
-  await call('public.save_competency_test_review',[d.receipt.attemptId,0,observations]);
+  await call('public.save_competency_test_review',[d.receipt.attemptId,0,JSON.stringify(observations)]);
   await withdraw(env,subjectScope(ar));
   await env.asGateway();
   assert.equal((await call('private.status_candidate_competency_test',[hash(d.s.session)])).state,'submitted','unlinked group still has access before linking');
@@ -141,7 +141,7 @@ test('B2 T8/T11 withdrawal, protected status boundary and subject propagation',a
   assert.equal((await call('private.inspect_candidate_competency_test',[hash(unrelated.s.session)])).state,'in_progress');
   await h.asUser(a.f.owner);
   await deny(()=>call('public.read_competency_test_response',[d.receipt.attemptId]));
-  await deny(()=>call('public.save_competency_test_review',[d.receipt.attemptId,1,observations]));
+  await deny(()=>call('public.save_competency_test_review',[d.receipt.attemptId,1,JSON.stringify(observations)]));
   await h.asAdmin();
   const complete=[...groupOne,...groupTwo].sort();
   const audit=(await db.query("select candidate_ids from private.competency_test_cancellations where resolution_id=$1 and scope_kind='resolution_link'",[linked])).rows;

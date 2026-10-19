@@ -97,19 +97,19 @@ test('B2 real PostgreSQL: withdrawal, existing confirmation and access serialize
   const first=await env.submitted();await auth(db,first.f.owner);await db.query('begin');
   try{
    assert.ok((await call('public.read_competency_test_response',[first.receipt.attemptId])).workSample);
-   await call('public.save_competency_test_review',[first.receipt.attemptId,0,observations]);
+   await call('public.save_competency_test_review',[first.receipt.attemptId,0,JSON.stringify(observations)]);
    await auth(rival,first.f.owner);await busy(()=>withdraw(rival,appScope(first.f)));
    await db.query('commit');
   }finally{await db.query('rollback');}
   await withdraw(rival,appScope(first.f));
   await auth(db,first.f.owner);
   await assert.rejects(call('public.read_competency_test_response',[first.receipt.attemptId]),{code:'PT404'});
-  await assert.rejects(call('public.save_competency_test_review',[first.receipt.attemptId,1,observations]),{code:'PT404'});
+  await assert.rejects(call('public.save_competency_test_review',[first.receipt.attemptId,1,JSON.stringify(observations)]),{code:'PT404'});
   const second=await env.submitted();await auth(db,second.f.owner);await db.query('begin');
   try{
    await withdraw(db,appScope(second.f));await auth(rival,second.f.owner);
    await busy(()=>call('public.read_competency_test_response',[second.receipt.attemptId],rival));
-   await busy(()=>call('public.save_competency_test_review',[second.receipt.attemptId,0,observations],rival));
+   await busy(()=>call('public.save_competency_test_review',[second.receipt.attemptId,0,JSON.stringify(observations)],rival));
    await db.query('commit');
   }finally{await db.query('rollback');}
   await assert.rejects(call('public.read_competency_test_response',[second.receipt.attemptId],rival),{code:'PT404'});
