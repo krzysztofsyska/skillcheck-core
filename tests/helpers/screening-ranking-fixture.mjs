@@ -6,7 +6,7 @@ export const users = Object.fromEntries(['owner', 'otherOwner', 'recruiter', 'vi
   [name, `10000000-0000-0000-0000-${String(i + 1).padStart(12, '0')}`]));
 
 // Both PGlite and pg (with exec = query) run the actual migration/RPC chain.
-export async function setupRankingDatabase(db, { defaultTargetSize } = {}) {
+export async function setupRankingDatabase(db, { defaultTargetSize, throughMigration } = {}) {
   await db.exec(`
     do $$ begin
       if not exists(select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
@@ -21,7 +21,7 @@ export async function setupRankingDatabase(db, { defaultTargetSize } = {}) {
     grant execute on function auth.uid() to anon, authenticated;
   `);
   const dir = new URL('../../supabase/migrations/', import.meta.url);
-  const migrations = (await readdir(dir)).filter(name => name.endsWith('.sql')).sort();
+  const migrations = (await readdir(dir)).filter(name => name.endsWith('.sql') && (!throughMigration || name <= throughMigration)).sort();
   assert.ok(migrations.some(name => name.includes('ranking')), 'SC-008 migration must exist');
   for (const name of migrations) {
     let sql = await readFile(new URL(name, dir), 'utf8');
