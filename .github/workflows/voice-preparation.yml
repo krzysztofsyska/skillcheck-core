@@ -1,0 +1,92 @@
+name: SC010C persistent voice preparation (offline)
+
+on:
+  pull_request:
+    paths:
+      - 'lib/**'
+      - 'components/voice/**'
+      - 'db/**'
+      - 'supabase/migrations/**'
+      - 'tests/helpers/**'
+      - 'tests/voice-*.test.mjs'
+      - 'tests/retell-*.test.mjs'
+      - 'tests/contact-verification.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'docs/sc010c-offline-preparation-handoff.md'
+      - '.github/workflows/voice-preparation.yml'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/**'
+      - 'components/voice/**'
+      - 'db/**'
+      - 'supabase/migrations/**'
+      - 'tests/helpers/**'
+      - 'tests/voice-*.test.mjs'
+      - 'tests/retell-*.test.mjs'
+      - 'tests/contact-verification.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'docs/sc010c-offline-preparation-handoff.md'
+      - '.github/workflows/voice-preparation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-preparation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # The test-owned databases are disposable. Serial execution also prevents
+      # full-chain fixtures in different files racing to create cluster roles.
+      # Explicit filenames make a missing required test fail this job.
+      - name: Persistent preparation and existing offline domain regressions
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+        run: >-
+          node --test --test-isolation=none --test-concurrency=1 --test-reporter=tap
+          tests/voice-retention-database.test.mjs
+          tests/voice-retention-concurrency.test.mjs
+          tests/voice-preparation.test.mjs
+          tests/voice-preparation-privileges.test.mjs
+          tests/voice-interview-permission.test.mjs
+          tests/voice-entitlements-database.test.mjs
+          tests/voice-trusted-source-verifier.test.mjs
+          tests/voice-plan-atomic-operations.test.mjs
+          tests/voice-provider.test.mjs
+          tests/voice-interview-plan.test.mjs
+          tests/voice-mvp-package-gate.test.mjs
+          tests/voice-provider-event-contract.test.mjs
+          tests/voice-plan-persistence-contract.test.mjs
+          tests/voice-plan-schema-prototype.test.mjs
+          tests/voice-plan-schema-concurrency.test.mjs
+          tests/voice-screening-gap-selection.test.mjs
+          tests/contact-verification.test.mjs
+          tests/retell-agent-readonly.test.mjs
+          tests/retell-outbound-draft.test.mjs

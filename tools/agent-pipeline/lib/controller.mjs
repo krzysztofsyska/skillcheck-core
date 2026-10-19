@@ -12,8 +12,22 @@ export async function tick({ record, observation, journal, ports }) {
   const guarded = guardEffects(effects, observation);
   if (guarded.suppressed.length > 0 && guarded.allowed.length === 0) {
     const next = structuredClone(record ?? decision.record);
-    next.binding.suppressed.push(...guarded.suppressed.map(effect => ({ type: effect.type, reason: 'SUPPRESSED', at: observation.now })));
-    if (journal) await journal.save(next, decision.journal, record);
+    const seen = new Set(next.binding.suppressed.filter(item => item.reason === 'SUPPRESSED').map(item => item.effect_key));
+    let changed = false;
+    for (const effect of guarded.suppressed) {
+      // Bind the pending intent, not the polling time or suppression history.
+      // Persist only a digest, never a second copy of the provider payload.
+      const effectKey = sha256({ repository_id: next.repository_id, task_id: next.task_id,
+        task_revision: next.task_revision, contract_hash: next.contract_hash,
+        policy_sha: next.policy_sha, head_sha: next.head_sha, base_sha: next.base_sha, effect });
+      if (seen.has(effectKey)) continue;
+      seen.add(effectKey);
+      next.binding.suppressed.push({ type: effect.type, reason: 'SUPPRESSED', effect_key: effectKey, at: observation.now });
+      changed = true;
+    }
+    // A prolonged outage must not grow either the task or its journal on every
+    // scheduled retry. The original reservation remains pending for recovery.
+    if (changed && journal) await journal.save(next, decision.journal, record);
     return { record: next, effects: [], executed: [], suppressed: guarded.suppressed };
   }
   const pre = decision.preEffectRecord ?? decision.record;
@@ -46,6 +60,14 @@ export function guardEffects(effects, observation) {
       continue;
     }
     if (!observation.simulation && observation.flags?.enabled !== true) {
+      suppressed.push(effect);
+      continue;
+    }
+    // Reconcile overwrites preflight with the current trusted protection read.
+    // An enabled flag or stale snapshot is not permission to spend provider
+    // budget when environment/ruleset verification failed or was unavailable.
+    // Keep pure offline simulations working without granting LIVE permission.
+    if (!observation.simulation && observation.preflight?.ok !== true) {
       suppressed.push(effect);
       continue;
     }

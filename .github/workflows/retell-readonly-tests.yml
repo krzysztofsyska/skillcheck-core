@@ -1,0 +1,24 @@
+name: SC-011 Retell read-only tests
+on:
+  pull_request:
+    paths:
+      - 'lib/voice/retell-agent.ts'
+      - 'tests/retell-agent-readonly.test.mjs'
+      - '.github/workflows/retell-readonly-tests.yml'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/voice/retell-agent.ts'
+      - 'tests/retell-agent-readonly.test.mjs'
+      - '.github/workflows/retell-readonly-tests.yml'
+permissions:
+  contents: read
+jobs:
+  read-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tests/retell-agent-readonly.test.mjs

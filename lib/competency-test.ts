@@ -1,0 +1,250 @@
+import { parseExerciseDefinition } from './exercise-definition.ts';
+import type { ExerciseDefinition } from './exercise-definition.ts';
+
+/** Pure SC-014 domain contract. The caller MUST authenticate and authorize the
+ * candidate for the specific company/application/revision before invoking it. */
+export const COMPETENCY_TEST_POLICY = Object.freeze({
+  version: 'competency-test-rubric-v1',
+  minimumCoverage: 0.6,
+  points: Object.freeze({ below: 0, meets: 50, above: 100 }),
+});
+
+export type CompetencyRating = 'below' | 'meets' | 'above' | 'insufficient_data';
+export type CompetencyObservation = {
+  criterionIndex: number;
+  rating: CompetencyRating;
+  evidence: string;
+};
+export type CompetencyTestSubmission = { workSample: string };
+export type CompetencyTestRevision = {
+  id: string;
+  version: number;
+  definition: unknown;
+};
+
+const uuidPattern = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+// Unicode regex constructors preserve compatibility with the project's ES5
+// TypeScript target. Count actual textual/pictographic code points, not UTF-16
+// length or whitespace/invisible padding.
+const visibleSymbol = new RegExp(String.raw`[\p{L}\p{N}\p{P}\p{S}]`, 'u');
+const meaningfulSymbol = new RegExp(String.raw`[\p{L}\p{N}\p{Extended_Pictographic}]`, 'u');
+const defaultIgnorable = new RegExp(String.raw`[\p{Default_Ignorable_Code_Point}]`, 'u');
+const pictograph = new RegExp(String.raw`[\p{Extended_Pictographic}]`, 'u');
+const letter = new RegExp(String.raw`[\p{L}]`, 'u');
+const emojiModifier = new RegExp(String.raw`[\p{Emoji_Modifier}]`, 'u');
+const rgiEmojiTagSequence = new RegExp(String.raw`^\p{RGI_Emoji_Tag_Sequence}$`, 'v');
+const emojiTagSpec = new RegExp(String.raw`^[\u{E0020}-\u{E007E}]$`, 'u');
+const control = new RegExp(String.raw`[\p{Cc}\p{Cs}]`, 'u');
+const arabicLetter = new RegExp(String.raw`[\p{Script=Arabic}&&\p{L}]`, 'v');
+const nonspacingMark = new RegExp(String.raw`\p{Mn}`, 'u');
+const ideograph = new RegExp(String.raw`\p{Unified_Ideograph}`, 'u');
+const inheritedOrCommon = new RegExp(String.raw`[\p{Script=Inherited}\p{Script=Common}]`, 'u');
+// UAX #31 A2/B conjunct contexts, limited to the viramas of the scripts we accept.
+const indicConjunct = new Map([
+  { virama: '\u094D', script: 'Devanagari' },
+  { virama: '\u09CD', script: 'Bengali' },
+  { virama: '\u0A4D', script: 'Gurmukhi' },
+  { virama: '\u0ACD', script: 'Gujarati' },
+  { virama: '\u0B4D', script: 'Oriya' },
+  { virama: '\u0BCD', script: 'Tamil' },
+  { virama: '\u0C4D', script: 'Telugu' },
+  { virama: '\u0CCD', script: 'Kannada' },
+  { virama: '\u0D4D', script: 'Malayalam' },
+  { virama: '\u0DCA', script: 'Sinhala' },
+].map(({ virama, script }) => [virama, {
+  letter: new RegExp(String.raw`[\p{L}&&\p{Script=${script}}]`, 'v'),
+  mark: new RegExp(String.raw`[\p{M}&&\p{Script=${script}}]`, 'v'),
+}] as [string, { letter: RegExp; mark: RegExp }]));
+
+function sameScriptMark(char: string, script: { letter: RegExp; mark: RegExp }): boolean {
+  return nonspacingMark.test(char) && (script.mark.test(char) || inheritedOrCommon.test(char));
+}
+
+/** UAX #31 §2.3.1: ZWNJ joins two same-script letters around a virama. ZWJ
+ * follows a virama and is rejected when the next mark is from that script
+ * (dependent vowels). Other marks of the same script may sit between the
+ * letter and the virama. Neither joiner counts as visible evidence. */
+function indicConjunctJoiner(chars: string[], index: number): boolean {
+  const joiner = chars[index];
+  const zwnj = joiner === '\u200C';
+  const zwj = joiner === '\u200D';
+  if (!zwnj && !zwj) return false;
+  let cursor = index - 1;
+  while (cursor >= 0 && nonspacingMark.test(chars[cursor]) && !indicConjunct.has(chars[cursor])) cursor -= 1;
+  const script = cursor >= 0 ? indicConjunct.get(chars[cursor]) : undefined;
+  if (!script) return false;
+  for (let mark = index - 1; mark > cursor; mark -= 1) {
+    if (!sameScriptMark(chars[mark], script)) return false;
+  }
+  cursor -= 1;
+  while (cursor >= 0 && sameScriptMark(chars[cursor], script)) cursor -= 1;
+  if (cursor < 0 || !script.letter.test(chars[cursor])) return false;
+  if (zwnj) {
+    let next = index + 1;
+    while (next < chars.length && sameScriptMark(chars[next], script)) next += 1;
+    return next < chars.length && script.letter.test(chars[next]);
+  }
+  return !script.mark.test(chars[index + 1] ?? '');
+}
+
+/** UTS #51 ED-24: accept a complete RGI flag sequence, including CANCEL TAG.
+ * Arbitrary tag text and incomplete/non-RGI sequences remain forbidden. */
+function emojiTagSequenceEnd(chars: string[], index: number): number {
+  if (chars[index] !== '\u{1F3F4}') return -1;
+  let end = index + 1;
+  while (end < chars.length && emojiTagSpec.test(chars[end])) end += 1;
+  return chars[end] === '\u{E007F}' && rgiEmojiTagSequence.test(chars.slice(index, end + 1).join('')) ? end : -1;
+}
+
+/** Returns -1 for forbidden invisible/control characters.
+ * Permits contextually meaningful emoji joiners, variation selectors,
+ * Indic conjunct joiners, RGI flag tags and mid-word soft hyphens without
+ * counting the formatting characters. */
+function visibleContentCount(value: string): number {
+  const chars = Array.from(value);
+  let visible = 0;
+  let meaningful = 0;
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index];
+    const tagEnd = emojiTagSequenceEnd(chars, index);
+    if (tagEnd !== -1) {
+      // Only the flag base is visible; its tag specification is not evidence.
+      visible += 1;
+      meaningful += 1;
+      index = tagEnd;
+      continue;
+    }
+    if (char === '\n' || char === '\r' || char === '\t') continue;
+    if (control.test(char)) return -1;
+    if (defaultIgnorable.test(char)) {
+      const previous = chars[index - 1] ?? '';
+      const next = chars[index + 1] ?? '';
+      const keycapVariation = char === '\uFE0F' && /[0-9#*]/.test(previous)
+        && previous.length === 1 && next === '\u20E3';
+      const emojiVariation = (char === '\uFE0E' || char === '\uFE0F')
+        && (pictograph.test(previous) || keycapVariation);
+      // IVS uses U+E0100–U+E01EF immediately after a unified ideograph.
+      // The selector stays invisible and does not count as evidence.
+      const variationPoint = char.codePointAt(0) ?? 0;
+      const ideographicVariation = variationPoint >= 0xE0100 && variationPoint <= 0xE01EF
+        && ideograph.test(previous);
+      // Emoji modifiers and variation selectors can intervene before a ZWJ.
+      let previousEmoji = index - 1;
+      while (previousEmoji >= 0 && (emojiModifier.test(chars[previousEmoji])
+        || chars[previousEmoji] === '\uFE0E' || chars[previousEmoji] === '\uFE0F')) previousEmoji -= 1;
+      const emojiJoiner = char === '\u200D' && previousEmoji >= 0
+        && pictograph.test(chars[previousEmoji]) && pictograph.test(next);
+      const softHyphen = char === '\u00AD' && letter.test(previous) && letter.test(next);
+      const arabicJoiner = char === '\u200C' && arabicLetter.test(previous) && arabicLetter.test(next);
+      const indicJoiner = indicConjunctJoiner(chars, index);
+      if (!emojiVariation && !ideographicVariation && !emojiJoiner && !softHyphen && !arabicJoiner && !indicJoiner) return -1;
+      continue;
+    }
+    // U+2800 looks blank but is classified as a symbol, not White_Space.
+    if (char === '\u2800') continue;
+    if (visibleSymbol.test(char)) visible += 1;
+    if (meaningfulSymbol.test(char)) meaningful += 1;
+  }
+  // Visible punctuation can satisfy the quotation length, but a line made
+  // solely of punctuation/symbol padding is not a candidate answer.
+  return meaningful > 0 ? visible : -1;
+}
+
+function validatedTest(input: unknown): ExerciseDefinition {
+  const definition = parseExerciseDefinition(input);
+  if (definition.kind !== 'competency_test') {
+    throw new Error('Ta wersja zadania nie jest testem kompetencji.');
+  }
+  return definition;
+}
+
+/** A public-facing DTO: rubric anchors and evaluator metadata are never sent
+ * to a candidate. Supplied revision comes from an authorized server query. */
+export function candidateTestView(revision: CompetencyTestRevision) {
+  if (!revision || typeof revision.id !== 'string' || !uuidPattern.test(revision.id)
+    || !Number.isSafeInteger(revision.version) || revision.version < 1) {
+    throw new Error('Nieprawidłowa wersja testu kompetencji.');
+  }
+  const definition = validatedTest(revision.definition);
+  return {
+    revisionId: revision.id,
+    version: revision.version,
+    title: definition.title,
+    instructions: definition.instructions,
+    expectedOutput: definition.expectedOutput,
+    durationMinutes: definition.durationMinutes,
+  };
+}
+
+/** Only an answer, not company, actor, rubric, score, dates or time from the
+ * browser, is accepted. Persistence must pin the authorized revision ID.
+ * Bound the raw input in Unicode code points before trimming. The cheap
+ * UTF-16 guard bounds allocation even for enormous untrusted strings. */
+export function parseCompetencyTestSubmission(definitionInput: unknown, input: unknown): CompetencyTestSubmission {
+  validatedTest(definitionInput);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Nieprawidłowa odpowiedź na test.');
+  }
+  const workSample = (input as Record<string, unknown>).workSample;
+  if (typeof workSample !== 'string' || workSample.length > 40_000
+    || Array.from(workSample).length > 20_000 || visibleContentCount(workSample) < 1 || !workSample.trim()) {
+    throw new Error('Odpowiedź powinna zawierać od 1 do 20 000 znaków.');
+  }
+  return { workSample: workSample.trim() };
+}
+
+/** Explicit, human-supplied rubric ratings. Every assessed rating must cite
+ * an exact quote from the immutable answer. No LLM and no hiring decision. */
+export function evaluateCompetencyTest(
+  definitionInput: unknown,
+  submissionInput: unknown,
+  observationsInput: unknown,
+) {
+  const definition = validatedTest(definitionInput);
+  const submission = parseCompetencyTestSubmission(definition, submissionInput);
+  if (!Array.isArray(observationsInput) || observationsInput.length !== definition.criteria.length) {
+    throw new Error('Ocena wymaga po jednej obserwacji na każde kryterium rubryki.');
+  }
+  // Array.from visits sparse slots; Array.prototype.map silently skips them.
+  const observations: CompetencyObservation[] = Array.from(
+    { length: definition.criteria.length },
+    (_, index) => {
+    if (!Object.prototype.hasOwnProperty.call(observationsInput, index)) {
+      throw new Error('Brak obserwacji dla kryterium rubryki.');
+    }
+    const raw = observationsInput[index];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Nieprawidłowa obserwacja kryterium.');
+    }
+    const row = raw as Record<string, unknown>;
+    if (row.criterionIndex !== index ||
+      typeof row.rating !== 'string' || !['below', 'meets', 'above', 'insufficient_data'].includes(row.rating) ||
+      typeof row.evidence !== 'string' || row.evidence.length > 10_000) {
+      throw new Error('Nieprawidłowy indeks, poziom lub dowód oceny.');
+    }
+    const rating = row.rating as CompetencyRating;
+    const evidence = row.evidence.trim();
+    if (rating === 'insufficient_data') {
+      if (evidence) throw new Error('Brak wystarczających danych nie może zawierać cytatu oceny.');
+    } else if (visibleContentCount(evidence) < 3 || !submission.workSample.includes(evidence)) {
+      throw new Error('Ocena wymaga dokładnego cytatu z odpowiedzi kandydata.');
+    }
+    return { criterionIndex: index, rating, evidence };
+  });
+  const known = observations.filter(item => item.rating !== 'insufficient_data');
+  const coverage = known.length / definition.criteria.length;
+  const rawScore = known.length
+    ? known.reduce((sum, item) => sum + COMPETENCY_TEST_POLICY.points[item.rating as keyof typeof COMPETENCY_TEST_POLICY.points], 0) / known.length
+    : null;
+  return {
+    policyVersion: COMPETENCY_TEST_POLICY.version,
+    criterionResults: observations.map((item) => ({ ...item, competency: definition.criteria[item.criterionIndex].competency })),
+    totalCriteria: definition.criteria.length,
+    evidencedCriteria: known.length,
+    coverage: Math.round(coverage * 10_000) / 10_000,
+    score: coverage >= COMPETENCY_TEST_POLICY.minimumCoverage && rawScore !== null
+      ? Math.round(rawScore * 100) / 100 : null,
+    status: coverage >= COMPETENCY_TEST_POLICY.minimumCoverage ? 'review_required' : 'insufficient_evidence',
+  } as const;
+}
