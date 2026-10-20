@@ -190,6 +190,41 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
  });
 });
 
+test("SC-012-B SQLSTATE conflicts are mapped after transaction rollback",async()=>{
+ // Isolated fake PG client: these concurrency errors must never leak raw
+ // database-driver errors to either trusted-source preflight.
+ const companyId=randomUUID(),applicationId=randomUUID(),planId=randomUUID();
+ const selector={companyId,applicationId,analysisId:randomUUID(),
+   reviewId:randomUUID(),shortlistEntryId:randomUUID()};
+ for(const code of ["55P03","40P01","40001"]){
+  for(const operation of ["reconstruct","verify"]){
+   const calls=[];
+   const mock={
+    async query(sql){
+     calls.push(sql);
+     if(sql==="begin"||sql==="rollback")return {rows:[]};
+     if(sql.includes("from public.voice_plan_versions where id=$1")&&
+        !sql.includes("for share nowait"))
+       return {rows:[{company_id:companyId,application_id:applicationId}]};
+     if(sql.includes("pg_advisory_xact_lock"))
+       throw Object.assign(new Error("synthetic driver detail, must not leak"),{code});
+     throw Error("unexpected query in synthetic conflict test: "+sql);
+    },
+   };
+   const run=operation==="reconstruct"
+    ? reconstructTrustedVoiceSource(mock,selector)
+    : verifyStoredVoicePlan(mock,planId);
+   await assert.rejects(run,e=>
+    e instanceof TrustedSourceError &&
+    e.code==="CONFLICT" &&
+    e.message==="VOICE_TRUSTED_SOURCE_CONFLICT");
+   assert.equal(calls[0],"begin");
+   assert.equal(calls.at(-1),"rollback");
+   assert.ok(!calls.includes("commit"),"failed source preflight must not commit");
+  }
+ }
+});
+
 test("SC-012-B template registry only permits explicitly versioned, pinned templates",()=>{
  const template=getTrustedVoiceTemplate("skillcheck-voice-plan-v1");
  assert.equal(template.recordingAllowed,false);
