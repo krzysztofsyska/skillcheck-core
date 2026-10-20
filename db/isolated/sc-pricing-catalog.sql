@@ -112,7 +112,7 @@ ON sc_pricing_isolated.package_services FOR EACH ROW
 EXECUTE FUNCTION sc_pricing_isolated.check_package_service();
 
 -- Service changes must not invalidate existing per-plan assignments.
-CREATE FUNCTION sc_pricing_isolated.check_service_limits() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION sc_pricing_isolated.check_service_limits() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF EXISTS (SELECT 1 FROM sc_pricing_isolated.package_services p
             WHERE p.version_id=NEW.version_id AND p.service_code=NEW.code
@@ -120,7 +120,7 @@ BEGIN
    RAISE EXCEPTION 'sc_pricing_service_update_breaks_packages' USING ERRCODE='22023';
  END IF;
  RETURN NEW;
-END $;
+END $$;
 CREATE TRIGGER service_limits BEFORE UPDATE OF max_quantity,quantity_step
 ON sc_pricing_isolated.services FOR EACH ROW
 EXECUTE FUNCTION sc_pricing_isolated.check_service_limits();
@@ -171,10 +171,10 @@ FOR EACH ROW EXECUTE FUNCTION sc_pricing_isolated.guard_version_history();
 
 -- Scope IDs/codes are technical immutable identities. Replace by creating new scopes.
 -- Stronger than guarding only published scopes; no TOCTOU race across publication.
-CREATE FUNCTION sc_pricing_isolated.guard_scope_history() RETURNS trigger LANGUAGE plpgsql AS $
+CREATE FUNCTION sc_pricing_isolated.guard_scope_history() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION 'sc_pricing_scope_immutable' USING ERRCODE='55000';
-END $;
+END $$;
 CREATE TRIGGER scope_history BEFORE UPDATE OR DELETE ON sc_pricing_isolated.scopes
 FOR EACH ROW EXECUTE FUNCTION sc_pricing_isolated.guard_scope_history();
 
