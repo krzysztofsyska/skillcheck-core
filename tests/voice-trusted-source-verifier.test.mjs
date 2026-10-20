@@ -60,7 +60,8 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
  assert.ok(expected.questions.every(q=>!q.text.includes("PRIVATE")));
  const sourceSnapshot=canonicalVoiceSourceSnapshot(
    expected.sourceBinding,expected.planSourceFingerprint);
- const insertPlan=async snapshot=>{
+ const wrongHash=value=>value==="f".repeat(64)?"0".repeat(64):"f".repeat(64);
+ const insertPlan=async (snapshot,envelopeHash=expected.planContractHash,sourceHash=expected.sourceHash)=>{
   const row=await db.query([
    "insert into public.voice_plan_versions",
    "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
@@ -69,7 +70,7 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
    "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
    "'skillcheck-voice-plan-v1',$12,'synthetic-v1','2030-01-01') returning id"
   ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
-   f.analysis_id,f.reviewId,shortlist,expected.sourceHash,expected.planContractHash,
+   f.analysis_id,f.reviewId,shortlist,sourceHash,envelopeHash,
    JSON.stringify(snapshot),JSON.stringify(expected),users.owner]);
   return row.rows[0].id;
  };
@@ -86,6 +87,14 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
   await replacePlan();
   const leaked=await insertPlan({...sourceSnapshot,cvText:"PRIVATE original CV"});
   await assert.rejects(verifyStoredVoicePlan(db,leaked),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await replacePlan();
+  const wrongEnvelope=await insertPlan(sourceSnapshot,wrongHash(expected.planContractHash));
+  await assert.rejects(verifyStoredVoicePlan(db,wrongEnvelope),
+    e=>e instanceof TrustedSourceError&&e.code==="STALE");
+  await replacePlan();
+  const wrongSource=await insertPlan(sourceSnapshot,expected.planContractHash,wrongHash(expected.sourceHash));
+  await assert.rejects(verifyStoredVoicePlan(db,wrongSource),
     e=>e instanceof TrustedSourceError&&e.code==="STALE");
   await replacePlan();
  });
