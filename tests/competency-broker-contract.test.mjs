@@ -147,3 +147,21 @@ test('shared limiter failure/denial never opens a PostgreSQL connection',async()
   assert.ok([429,503].includes(denied.status));assert.equal(state.called.length,0);noStore(denied);
  }
 });
+
+
+test('P2 shared limiter charges requests BEFORE reading slow streamed bodies',async()=>{
+ let reads=0,charges=0;
+ const limiter={consume:async()=>{charges++;return false;}};
+ const {broker,state}=setup({limiter});
+ const stream=new ReadableStream({pull(){reads++;}},{highWaterMark:0});
+ const req=new Request(endpoint,{
+  method:'POST',headers:{origin,'content-type':'application/json','x-sc014-intent':'bootstrap'},
+  body:stream,duplex:'half'
+ });
+ const rejected=await broker(req);
+ assert.equal(rejected.status,429);noStore(rejected);
+ assert.equal(charges,1,'one shared limiter debit before streaming');
+ assert.equal(reads,0,'body stream cannot consume CPU/memory ahead of shared limiter');
+ assert.equal(state.called.length,0,'no database before admission');
+ await req.body.cancel();
+});
