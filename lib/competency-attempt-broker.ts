@@ -5,8 +5,8 @@
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
-import { executeCompetencyOperation, type CompetencyConnection, type CompetencyOperation } from './competency-attempt-transport';
-import { LIMIT_WINDOW_SECONDS, type SharedRateLimiter } from './competency-broker-limiter';
+import { executeCompetencyOperation, type CompetencyConnection, type CompetencyOperation } from './competency-attempt-transport.ts';
+import { LIMIT_WINDOW_SECONDS, type SharedRateLimiter } from './competency-broker-limiter.ts';
 
 export const B3_ENDPOINT = '/api/competency/attempt';
 export const B3_SESSION_COOKIE = '__Secure-sc014_b3_session';
@@ -94,7 +94,7 @@ function sameOrigin(request: Request, expectedOrigin: string): boolean {
     const actual = new URL(request.url);
     return expected.protocol === 'https:' &&
       expected.pathname === '/' && !expected.search && !expected.hash &&
-      actual.origin === expected.origin &&
+      actual.origin === expected.origin && actual.pathname === B3_ENDPOINT &&
       request.headers.get('origin') === expected.origin &&
       (request.headers.get('sec-fetch-site') === null || request.headers.get('sec-fetch-site') === 'same-origin') &&
       (request.headers.get('sec-fetch-mode') === null || request.headers.get('sec-fetch-mode') === 'cors');
@@ -108,6 +108,7 @@ async function boundedJson(request: Request): Promise<unknown> {
   const chunks: Uint8Array[] = [];
   let length = 0;
   const timeout = AbortSignal.timeout(4000);
+  const timedOut = timedOut;
   try {
     while (true) {
       const result = await Promise.race([
