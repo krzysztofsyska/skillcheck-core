@@ -2,8 +2,8 @@
  * SC-014-B3 deployment adapter. This is inert unless the explicit feature
  * switch AND all security dependencies exist. No remote DB action at import.
  */
-import { createCompetencyBroker, competencyBrokerMethodDenied, type GatewayLease } from './competency-attempt-broker';
-import { createRedisRestLimiter } from './competency-broker-limiter';
+import { createCompetencyBroker, competencyBrokerMethodDenied, type GatewayLease } from './competency-attempt-broker.ts';
+import { createRedisRestLimiter } from './competency-broker-limiter.ts';
 
 const headers = {
   'Cache-Control': 'private, no-store, max-age=0',
