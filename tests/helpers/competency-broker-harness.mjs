@@ -57,6 +57,17 @@ export async function startCompetencyHttps(t,{redis=true,source='203.0.113.1',li
  const direct=await pool.connect();
  try{
   assert.equal((await direct.query("select session_user name")).rows[0].name,user);
+  const memberships=(await direct.query(
+    "select count(*)::int n,coalesce(bool_and(parent.rolname='competency_test_gateway'),false) only_gateway " +
+    "from pg_auth_members m join pg_roles parent on parent.oid=m.roleid " +
+    "join pg_roles child on child.oid=m.member where child.rolname=session_user"
+  )).rows[0];
+  assert.deepEqual(memberships,{n:1,only_gateway:true});
+  const logs=(await direct.query(
+    "select current_setting('log_statement') statements, " +
+    "current_setting('log_parameter_max_length_on_error') error_parameters"
+  )).rows[0];
+  assert.equal(logs.statements,'none');assert.equal(logs.error_parameters,'0');
   for(const table of b2Tables){
    await assert.rejects(direct.query('select * from '+table),x=>x.code==='42501');
   }
