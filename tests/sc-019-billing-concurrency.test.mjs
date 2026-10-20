@@ -665,6 +665,13 @@ assertion('SC-019: install waits for an open analysis insert and then refuses it
     create function private.has_company_access(cid uuid, write_access boolean default false)
       returns boolean language sql stable security definer set search_path='' as $$
       select false $$;
+    -- The package policy uses the existing core audit trigger. Include that
+    -- prerequisite so this fixture reaches the intended concurrent-install guard.
+    create function private.touch_updated_at()
+      returns trigger language plpgsql set search_path='' as $$
+      begin new.updated_at := now(); return new; end;
+      $$;
+    revoke all on function private.touch_updated_at() from public, anon, authenticated;
   `);
   await db.query('insert into public.companies values($1,$2)', [company, owner]);
   await writer.query('begin');
