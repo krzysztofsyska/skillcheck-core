@@ -1,10 +1,10 @@
 name: SC014 B2 isolated PostgreSQL
 on:
   pull_request:
-    paths: ['db/isolated/sc014-b2-*.sql', 'scripts/sc014-b2-*.mjs', 'tests/competency-*.test.mjs', 'tests/helpers/competency-attempt-fixture.mjs', 'lib/competency*.ts', '.github/workflows/sc014-b2.yml']
+    paths: ['db/isolated/sc014-b2-*.sql', 'db/isolated/sc010-r4-voice-retention.sql', 'docs/prototypes/sc-019-mvp-credits.sql', 'scripts/sc014-b2-*.mjs', 'tests/competency-*.test.mjs', 'tests/helpers/competency-attempt-fixture.mjs', 'lib/competency*.ts', '.github/workflows/sc014-b2.yml']
   push:
     branches: [integration]
-    paths: ['db/isolated/sc014-b2-*.sql', 'scripts/sc014-b2-*.mjs', 'tests/competency-*.test.mjs', 'tests/helpers/competency-attempt-fixture.mjs', 'lib/competency*.ts', '.github/workflows/sc014-b2.yml']
+    paths: ['db/isolated/sc014-b2-*.sql', 'db/isolated/sc010-r4-voice-retention.sql', 'docs/prototypes/sc-019-mvp-credits.sql', 'scripts/sc014-b2-*.mjs', 'tests/competency-*.test.mjs', 'tests/helpers/competency-attempt-fixture.mjs', 'lib/competency*.ts', '.github/workflows/sc014-b2.yml']
 permissions:
   contents: read
 jobs:
