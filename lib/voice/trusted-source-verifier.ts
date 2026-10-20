@@ -14,11 +14,16 @@ export type SourceSelector=Readonly<{
   companyId:string;applicationId:string;analysisId:string;reviewId:string;shortlistEntryId:string;
 }>;
 export class TrustedSourceError extends Error {
-  readonly code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID";
-  constructor(code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"){
+  readonly code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"|"CONFLICT";
+  constructor(code:"FORBIDDEN"|"STALE"|"TEMPLATE_CHANGED"|"INVALID"|"CONFLICT"){
     super("VOICE_TRUSTED_SOURCE_"+code);
     this.code=code;
   }
+}
+const concurrencySqlStates = new Set(["55P03", "40P01", "40001"]);
+function isConcurrencyConflict(error: unknown): boolean {
+  return error !== null && typeof error === "object" && "code" in error &&
+    concurrencySqlStates.has(String((error as {code: unknown}).code));
 }
 const fail=(c:TrustedSourceError["code"]):never=>{throw new TrustedSourceError(c);};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -195,7 +200,13 @@ async function withReadTransaction<T>(db:SqlClient,work:()=>Promise<T>):Promise<
     const result=await work();
     await db.query("commit");
     return result;
-  }catch(e){await db.query("rollback");throw e;}
+  }catch(e){
+    try { await db.query("rollback"); }
+    catch { /* Preserve the original transaction failure. */ }
+    if(e instanceof TrustedSourceError) throw e;
+    if(isConcurrencyConflict(e)) throw new TrustedSourceError("CONFLICT");
+    throw e;
+  }
 }
 export async function reconstructTrustedVoiceSource(
   db:SqlClient,s:SourceSelector,
