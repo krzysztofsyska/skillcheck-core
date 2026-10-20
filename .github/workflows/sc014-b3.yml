@@ -80,6 +80,7 @@ jobs:
           node --test --test-isolation=none --test-concurrency=1
           tests/competency-broker-postgres.test.mjs
           tests/competency-broker-browser.test.mjs
+          tests/competency-broker-security.test.mjs
       - name: Accepted B2 PostgreSQL16 and SC-010 regression
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
