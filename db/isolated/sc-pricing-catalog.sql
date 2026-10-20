@@ -101,7 +101,7 @@ BEGIN
   FROM sc_pricing_isolated.services
   WHERE version_id = NEW.version_id AND code = NEW.service_code;
   IF global_max IS NULL OR NEW.max_quantity > global_max OR
-     NEW.quantity_step % global_step <> 0 OR NEW.included_quantity > global_max THEN
+     NEW.quantity_step % global_step <> 0 THEN
     RAISE EXCEPTION 'sc_pricing_package_service_limits' USING ERRCODE = '22023';
   END IF;
   RETURN NEW;
