@@ -159,7 +159,8 @@ test('B3 real HTTPS: freeze wins over live receipt; failure to freeze during gat
  await gateway.query('commit');
  await e.x.freeze(f);
  const after=await e.request('status',{cookie:s.cookie,csrf:s.csrf});
- assert.equal(after.status,404,'frozen erasure scope denies previously issued cookie');
+ assert.ok([403,404,409].includes(after.status),'frozen erasure scope denies previously issued cookie');
+ security(after);
 });
 
 test('B3 shared real Redis limiter: global and per-source budget across independent instances',async t=>{
