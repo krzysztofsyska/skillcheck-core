@@ -1,0 +1,93 @@
+name: SC014 B3 isolated HTTP PostgreSQL HTTPS browser
+on:
+  pull_request:
+    paths:
+      - 'app/api/competency/attempt/**'
+      - 'lib/competency-attempt-broker*.ts'
+      - 'lib/competency-broker-*.ts'
+      - 'tests/competency-broker-*'
+      - 'tests/helpers/competency-broker-*'
+      - '.github/workflows/sc014-b3.yml'
+      - 'db/isolated/sc014-b2-*.sql'
+      - 'tests/helpers/competency-attempt-fixture.mjs'
+      - 'docs/sc-014-b1-candidate-attempt-architecture.md'
+      - 'docs/sc-014-b2-handoff.md'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [integration]
+    paths:
+      - 'app/api/competency/attempt/**'
+      - 'lib/competency-attempt-broker*.ts'
+      - 'lib/competency-broker-*.ts'
+      - 'tests/competency-broker-*'
+      - 'tests/helpers/competency-broker-*'
+      - '.github/workflows/sc014-b3.yml'
+      - 'db/isolated/sc014-b2-*.sql'
+      - 'tests/helpers/competency-attempt-fixture.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+permissions:
+  contents: read
+jobs:
+  isolated-broker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+          cache: npm
+      - run: npm ci
+      - name: Install isolated Chromium testing dependency (not an application dependency)
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Confirm isolated resources only
+        run: |
+          test "$(redis-cli -h 127.0.0.1 -p 6379 ping)" = PONG
+          pg_isready -h 127.0.0.1 -p 5432 -U postgres
+          openssl version
+        env:
+          PGPASSWORD: postgres
+      - name: B3 strict HTTP/Cookie/CSRF/limits supplemental contracts
+        run: node --test --test-isolation=none --test-concurrency=1 tests/competency-broker-contract.test.mjs
+      - name: B3 real HTTPS PostgreSQL16 Redis/Chromium browser evidence
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          NODE_OPTIONS: '--no-warnings'
+        run: >-
+          node --test --test-isolation=none --test-concurrency=1
+          tests/competency-broker-postgres.test.mjs
+          tests/competency-broker-browser.test.mjs
+      - name: Accepted B2 PostgreSQL16 and SC-010 regression
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+        run: >-
+          node --test --test-isolation=none --test-concurrency=1
+          tests/competency-test.test.mjs
+          tests/competency-validation.test.mjs
+          tests/competency-attempt.test.mjs
+          tests/competency-concurrency.test.mjs
+          tests/competency-withdrawal.test.mjs
+          tests/competency-withdrawal-concurrency.test.mjs
+          tests/competency-retention.test.mjs
+      - run: npm run typecheck && npm run build
