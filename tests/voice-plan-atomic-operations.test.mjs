@@ -7,6 +7,7 @@ import {parse} from "pg-connection-string";
 import {setupRankingDatabase,users} from "./helpers/screening-ranking-fixture.mjs";
 import {behaviorGuideDefinitions} from "../lib/behavior-guide.ts";
 import {trustedVoiceTemplateDigest} from "../lib/voice/template-registry.ts";
+import {canonicalVoiceSourceSnapshot} from "../lib/voice/plan-persistence-contract.ts";
 import {reconstructTrustedVoiceSource,verifyStoredVoicePlanWithinTransaction} from "../lib/voice/trusted-source-verifier.ts";
 import {atomicReviewVoicePlan,atomicReleaseVoicePlan} from "../lib/voice/atomic-plan-operations.ts";
 
@@ -52,10 +53,11 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
   "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
   "template_version,created_by,retention_policy_version,retention_deadline)",
-  "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,'{}'::jsonb,$10::jsonb,",
-  "'skillcheck-voice-plan-v1',$11,'synthetic-v1','2030-01-01') returning id"
+  "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
+  "'skillcheck-voice-plan-v1',$12,'synthetic-v1','2030-01-01') returning id"
  ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
   f.analysis_id,f.reviewId,shortlist,canonical.sourceHash,canonical.planContractHash,
+  JSON.stringify(canonicalVoiceSourceSnapshot(canonical.sourceBinding,canonical.planSourceFingerprint)),
   JSON.stringify(canonical),users.owner])).rows[0].id;
  const reviewArgs={planId:plan,sourceHash:canonical.sourceHash,
    expectedReviewVersion:0,decision:"approved",reason:null,requestKey:randomUUID()};
@@ -269,12 +271,14 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
     "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
     "template_version,created_by,retention_policy_version,retention_deadline)",
-    "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,'{}'::jsonb,$10::jsonb,",
-    "'skillcheck-voice-plan-v1',$11,'synthetic-v1','2030-01-01') returning id",
+    "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
+    "'skillcheck-voice-plan-v1',$12,'synthetic-v1','2030-01-01') returning id",
   ].join(" "),[
     other.companyId,other.recruitment.id,other.application.id,other.position.id,
     other.analysis_id,other.reviewId,otherShortlist,currentSource.sourceHash,
-    currentSource.planContractHash,JSON.stringify(currentSource),users.owner,
+    currentSource.planContractHash,
+    JSON.stringify(canonicalVoiceSourceSnapshot(currentSource.sourceBinding,currentSource.planSourceFingerprint)),
+    JSON.stringify(currentSource),users.owner,
   ])).rows[0].id;
   const secondReview=(await db.query([
     "insert into private.voice_plan_review_entries",
