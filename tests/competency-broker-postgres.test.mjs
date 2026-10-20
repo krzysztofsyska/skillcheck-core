@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import {startCompetencyHttps,httpSession,findCookie,createSharedLimiter} from './helpers/competency-broker-harness.mjs';
 
 const requestKey=()=>randomUUID();
@@ -115,6 +116,7 @@ test('B3 origin, CORS, no trust in caller proxy headers, HTTP errors never leak 
  assert.equal((await e.request('inspect',{cookie,csrf:'f'.repeat(64)})).status,403);
 });
 test('B3 shared real Redis limiter: global and per-source budget across independent instances',async t=>{
+ execFileSync('redis-cli',['-h','127.0.0.1','-p','6379','FLUSHDB'],{stdio:'ignore'});
  const suffix=randomUUID().replaceAll('-','');
  // To avoid Redis test overlap, EVAL keys are minute scoped, and the workflow
  // runs a single test worker; flush only this isolated Redis instance upfront.
