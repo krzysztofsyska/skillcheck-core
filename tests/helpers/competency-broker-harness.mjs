@@ -12,7 +12,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Pool} from 'pg';
 import {boot, b2Tables} from './competency-attempt-fixture.mjs';
-import {createCompetencyBroker,competencyBrokerMethodDenied,B3_ENDPOINT} from '../../lib/competency-attempt-broker.ts';
+import {competencyBrokerMethodDenied,B3_ENDPOINT} from '../../lib/competency-attempt-broker.ts';
+import {createCompetencyGatewayRuntime} from '../../lib/competency-attempt-broker-runtime.ts';
+import {verifyCompetencyGateway} from '../../lib/competency-broker-role.ts';
 import {createRedisRestLimiter} from '../../lib/competency-broker-limiter.ts';
 
 function tlsFixture(t) {
@@ -52,7 +54,11 @@ export async function startCompetencyHttps(t,{redis=true,source='203.0.113.1',li
  const user='competency_gateway_b3_'+randomUUID().replaceAll('-','').slice(0,18);
  const password=randomBytes(24).toString('hex');
  await db.exec('create role '+user+" login password '"+password+"' nosuperuser nocreatedb nocreaterole noinherit nobypassrls;grant competency_test_gateway to "+user);
- const pool=new Pool({...e.connectionConfig,user,password,max:4,connectionTimeoutMillis:2000,idleTimeoutMillis:5000});
+ // Restricted LOGIN is configured by the isolated test-only PostgreSQL
+ // administrator; deployed clusters must be provisioned separately.
+ await db.exec('alter role '+user+' set log_parameter_max_length=0');
+ const pool=new Pool({...e.connectionConfig,user,password,max:4,connectionTimeoutMillis:2000,idleTimeoutMillis:5000,query_timeout:7000,
+  options:'-c statement_timeout=5000 -c lock_timeout=1500 -c idle_in_transaction_session_timeout=8000'});
  cleanupRole=async()=>{await pool.end();await h.asAdmin();await db.exec('drop role '+user);};
  const direct=await pool.connect();
  try{
@@ -65,9 +71,11 @@ export async function startCompetencyHttps(t,{redis=true,source='203.0.113.1',li
   assert.deepEqual(memberships,{n:1,only_gateway:true});
   const logs=(await direct.query(
     "select current_setting('log_statement') statements, " +
+    "current_setting('log_parameter_max_length') success_parameters, " +
     "current_setting('log_parameter_max_length_on_error') error_parameters"
   )).rows[0];
-  assert.equal(logs.statements,'none');assert.equal(logs.error_parameters,'0');
+  assert.equal(logs.statements,'none');assert.equal(logs.success_parameters,'0');assert.equal(logs.error_parameters,'0');
+  await verifyCompetencyGateway(direct,user);
   for(const table of b2Tables){
    await assert.rejects(direct.query('select * from '+table),x=>x.code==='42501');
   }
@@ -112,20 +120,12 @@ export async function startCompetencyHttps(t,{redis=true,source='203.0.113.1',li
  const csrfKey=randomBytes(32),sourceKey=randomBytes(32);
  const limiter=redis?createSharedLimiter(limits):{consume:async()=>true};
  let acquired=0;
- const handler=()=>{
-  return createCompetencyBroker({enabled:true,expectedOrigin:origin,csrfKey,sourceKey,limiter,
-   trustedSource:()=>source,maxInFlight:8,
-   acquire:async()=>{
-    if(pool.waitingCount>=4)throw Error('pool pressure');
-    const client=await pool.connect();
-    acquired++;
-    try{
-     const row=(await client.query("select session_user name,pg_has_role(session_user,'competency_test_gateway','member') ok")).rows[0];
-     assert.equal(row.name,user);assert.equal(row.ok,true);
-     return {query:(sql,args)=>client.query(sql,args),release:destroy=>client.release(!!destroy)};
-    }catch(e){client.release(true);throw e;}
-   }});
- };
+ // Exercise the SAME enabled adapter as Vercel, with a disposable PG Pool.
+ // No impersonated gateway query path or test-only production downgrade.
+ const handler=()=>createCompetencyGatewayRuntime({
+   expectedOrigin:origin,expectedUser:user,csrfKey,sourceKey,limiter,pool,
+   trustedSource:()=>source,onConnection:()=>{acquired++;}
+ });
  broker=handler();
  return {...e,user,password,pool,origin,cert:tls.cert,server,
   request:(operation,options={})=>httpsPost(origin,tls.cert,operation,options),
