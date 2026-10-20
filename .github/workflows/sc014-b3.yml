@@ -4,6 +4,7 @@ on:
     paths:
       - 'app/api/competency/attempt/**'
       - 'lib/competency-attempt-broker*.ts'
+      - 'lib/competency-attempt-transport.ts'
       - 'lib/competency-broker-*.ts'
       - 'tests/competency-broker-*'
       - 'tests/helpers/competency-broker-*'
@@ -22,6 +23,7 @@ on:
     paths:
       - 'app/api/competency/attempt/**'
       - 'lib/competency-attempt-broker*.ts'
+      - 'lib/competency-attempt-transport.ts'
       - 'lib/competency-broker-*.ts'
       - 'tests/competency-broker-*'
       - 'tests/helpers/competency-broker-*'
