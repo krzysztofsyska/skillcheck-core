@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
+import {hash} from './helpers/competency-attempt-fixture.mjs';
+import {lifecycleRules} from './helpers/erasure-lifecycle-fixture.mjs';
 import {startCompetencyHttps,httpSession,findCookie,createSharedLimiter} from './helpers/competency-broker-harness.mjs';
 
 const requestKey=()=>randomUUID();
@@ -115,6 +117,51 @@ test('B3 origin, CORS, no trust in caller proxy headers, HTTP errors never leak 
  const {cookie,csrf}=await httpSession(e,g);
  assert.equal((await e.request('inspect',{cookie,csrf:'f'.repeat(64)})).status,403);
 });
+
+test('B3 real HTTPS concurrency: uncommitted autosave and revoke block submit/status across separate PG connections',async t=>{
+ const e=await startCompetencyHttps(t);
+ const f=await e.seed(),g=await e.issue(f),s=await httpSession(e,g);
+ const start=await e.request('start',{cookie:s.cookie,csrf:s.csrf,body:body('start',{requestKey:requestKey()})});
+ assert.equal(start.status,200);
+ const digest=hash(s.cookie.split('=')[1]);
+ const gateway=await e.connect(null);await e.asGateway(gateway);
+ await gateway.query('begin');
+ const draft=await e.call('private.save_candidate_competency_test_draft',[digest,'Syntetyczna odpowiedź robocza',0,requestKey()],gateway);
+ assert.equal(draft.version,1);
+ const answer={workSample:'Syntetyczny plan wdrożenia i komunikacji.'};
+ const attempt=await e.request('submit',{cookie:s.cookie,csrf:s.csrf,body:body('submit',{answer,requestKey:requestKey()})});
+ assert.equal(attempt.status,409,'uncommitted autosave locks application until commit');
+ await gateway.query('commit');
+ const receipt=await e.request('submit',{cookie:s.cookie,csrf:s.csrf,body:body('submit',{answer,requestKey:requestKey()})});
+ assert.equal(receipt.status,200);assert.equal(receipt.data.state,'submitted');
+ const staff=await e.connect(f.owner);
+ await e.actor(staff,f.owner);await staff.query('set role authenticated');
+ await staff.query('begin');
+ await e.call('public.revoke_competency_test_grant',[g.grantId,requestKey()],staff);
+ const busy=await e.request('status',{cookie:s.cookie,csrf:s.csrf});
+ assert.equal(busy.status,409,'uncommitted revoke blocks candidate status');
+ await staff.query('commit');
+ const revoked=await e.request('status',{cookie:s.cookie,csrf:s.csrf});
+ assert.equal(revoked.status,404,'revocation instantly overrides live cookie');
+});
+test('B3 real HTTPS: freeze wins over live receipt; failure to freeze during gateway transaction is safe',async t=>{
+ const e=await startCompetencyHttps(t);
+ const f=await e.seed(),g=await e.issue(f),s=await httpSession(e,g);
+ assert.equal((await e.request('start',{cookie:s.cookie,csrf:s.csrf,body:body('start',{requestKey:requestKey()})})).status,200);
+ assert.equal((await e.request('submit',{cookie:s.cookie,csrf:s.csrf,body:body('submit',{answer:{workSample:'Plan fikcyjnej rekrutacji.'},requestKey:requestKey()})})).status,200);
+ await e.h.asUser(f.owner);
+ await e.x.policy(f,0,lifecycleRules);
+ f.resolutionId=await e.x.resolve(f,[f.candidate.id]);
+ const gateway=await e.connect(null);await e.asGateway(gateway);
+ await gateway.query('begin');
+ assert.equal((await e.call('private.status_candidate_competency_test',[hash(s.cookie.split('=')[1])],gateway)).state,'submitted');
+ await assert.rejects(e.x.freeze(f),error=>error.code==='PT409');
+ await gateway.query('commit');
+ await e.x.freeze(f);
+ const after=await e.request('status',{cookie:s.cookie,csrf:s.csrf});
+ assert.equal(after.status,404,'frozen erasure scope denies previously issued cookie');
+});
+
 test('B3 shared real Redis limiter: global and per-source budget across independent instances',async t=>{
  execFileSync('redis-cli',['-h','127.0.0.1','-p','6379','FLUSHDB'],{stdio:'ignore'});
  const suffix=randomUUID().replaceAll('-','');
