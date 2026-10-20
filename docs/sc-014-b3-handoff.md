@@ -13,7 +13,8 @@ STATUS: CI AND INDEPENDENT REVIEW REQUIRED BEFORE MERGE.
 
 - Owned files: app/api/competency/attempt/route.ts, lib/competency-attempt-broker.ts,
   lib/competency-attempt-broker-runtime.ts, lib/competency-broker-limiter.ts,
-  lib/competency-broker-pg.d.ts, tests/competency-broker-*, tests/helpers/competency-broker-*,
+  lib/competency-broker-pg.d.ts, lib/competency-broker-role.ts,
+  tests/competency-broker-*, tests/helpers/competency-broker-*,
   .github/workflows/sc014-b3.yml and this document.
 - No modified B2 SQL or SC-014-A code, no applied migration, no new candidate entity,
   no external candidate contact, no B4 UI. B2 transport maintains transaction
@@ -50,7 +51,8 @@ STATUS: CI AND INDEPENDENT REVIEW REQUIRED BEFORE MERGE.
   COMPETENCY_BROKER_LIMITER_REST_URL and _TOKEN (HTTPS shared Redis REST),
   COMPETENCY_BROKER_GATEWAY_DATABASE_URL for dedicated restricted PG LOGIN
   with competency_gateway_* name, TLS certificate validation and membership
-  in competency_test_gateway, no table SELECT, no issuer RPC, no privileged role.
+  in competency_test_gateway, no direct candidate table DML/SELECT, no extra
+  schema privileges or privileged functions, no issuer RPC, no extra member roles.
   Missing dependency fails closed. No service_role, anon Data API RPC or
   production DSN fallback.
 - Only verified platform ingress x-forwarded-for on Vercel is trusted.
@@ -58,12 +60,14 @@ STATUS: CI AND INDEPENDENT REVIEW REQUIRED BEFORE MERGE.
   Source HMAC uses an hourly rotated domain-separation component;
   Redis carries anonymous HMACs only (never token/digest/tenant/attempt).
   One-minute atomic global+source Redis EVAL; TTL <=75 seconds, cardinality
-  <=4096; error/timeout blocks before SQL. No single-instance in-memory
+  <=4096; shared limiter runs before any body read, with bounded concurrent
+  admission slots; errors/timeouts block before SQL. No single-instance in-memory
   limiter claimed as multihost protection.
 - Resource bounded: max 128 KiB bytes after streaming (even chunked),
   no compression, strict UTF-8/JSON exact keys, cap headers/cookies and
   action inputs before DB; PG max 4 connections per instance, short
-  connection/lock/statement/idle timeouts, no unbounded wait queue.
+  connection/lock/statement/idle timeouts, explicit 7000ms client query_timeout
+  including COMMIT, safe idle-pool error listener, no unbounded wait queue.
   SQL errors never sent raw; any uncertain DB transaction destroys lease.
   Responses use no-store/no-referrer and no public CORS.
 - Data retention: no new persistent candidate tables, DB session remains
@@ -113,3 +117,37 @@ not by Next/Vercel and not as a candidate product page.
 Handoff fields: TASK SC-014-B3; DB/MIGRATIONS NONE; SECURITY L3;
 NEXT ACTION execute CI, fix findings, request independent current-SHA
 review; if all gates PASS then normal expected-SHA merge to integration.
+
+
+## Independent Codex R1 findings and remediation evidence (not yet approved)
+
+Original review of e056fd2e: six unresolved findings (2 P1, 4 P2).
+Changes on the same feature branch, requiring exact-HEAD CI and a fresh
+independent rereview before closing any review thread or merging:
+
+- P1 unrestricted alternative privileges: lib/competency-broker-role.ts audits
+  effective privileges on all non-system tables, schemas, sequences,
+  SECURITY DEFINER and explicitly granted functions, plus exact role
+  memberships, every time a leased session starts. Runtime denies any extra
+  privileges; synthetic PostgreSQL16 negative-grant tests cover unexpected
+  SELECT, UPDATE, private schema USAGE and public privileged functions.
+- P1 bind-parameter logging: require log_statement=none and both
+  log_parameter_max_length=0 and log_parameter_max_length_on_error=0
+  on restricted login, plus accessible pgaudit/auto_explain guards. Test-only
+  PostgreSQL role configuration verifies good/bad login sessions. Runtime
+  cannot inspect superuser-only shared_preload_libraries without
+  pg_read_all_settings, so a separate DBA attestation of extensions is an
+  explicit future activation precondition (no extra runtime privilege).
+- P2 abuse: global/source shared Redis limiter and bounded admission happen
+  BEFORE streaming/parsing JSON. A zero-read stream regression confirms it.
+- P2 production adapter: isolated HTTPS PG16 browser fixture invokes the
+  exact createCompetencyGatewayRuntime shared with deployment construct,
+  instead of bypassing privileged role, logging, pool, and transport checks.
+- P2 idle connection failure: pool error listener consumes error events
+  without logging DSNs or SQL details.
+- P2 connection blackhole: client query_timeout 7000ms guards statements
+  and COMMIT in addition to server-side timeouts and destroyed leases.
+
+There is no claimed independent reviewer PASS for the R1 corrections
+until the reviewer explicitly reviews the exact updated SHA. No merge,
+no candidate contact, no production activation.
