@@ -16,7 +16,7 @@ async function assertBillingBaseline(db) {
     select schema_signature as expected, private.erasure_schema_signature() as actual
     from private.erasure_inventory_baseline_r5 where singleton
   `)).rows[0];
-  assert.equal(state.expected, 'e764d74f5563805185807c6a37b5e08659771f2e8534c76df3651c9ea46ea7d9');
+  assert.equal(state.expected, '10358458d8802b1ed59a298b305752a89ce110d1019a11cde937f2a2311f79bc');
   assert.equal(state.actual, state.expected);
   const missing = (await db.query(`
     select namespace.nspname || '.' || relation.relname as name
@@ -144,14 +144,14 @@ async function exerciseVoiceBilling(t, embedded) {
   await db.exec(`alter default privileges grant all on tables to contact_verifier;
     alter default privileges grant execute on functions to contact_verifier;`);
   await db.exec(prototypeSql);
-  for (const table of ['sc19_balances','sc19_trial_nips','sc19_trial_approvals',
+  for (const table of ['sc19_package_policy','sc19_balances','sc19_trial_nips','sc19_trial_approvals',
     'sc19_analysis_spend','sc19_credit_journal','erasure_inventory_baseline_r5']) {
     assert.equal((await db.query("select has_table_privilege('contact_verifier',$1,'TRUNCATE') allowed",
       ['private.'+table])).rows[0].allowed,false,table);
   }
   assert.equal((await db.query("select has_function_privilege('contact_verifier','private.sc19_grant_paid(uuid,text)','execute') allowed")).rows[0].allowed,false);
   const baseline=(await db.query('select schema_signature expected,private.erasure_schema_signature() actual from private.erasure_inventory_baseline_r5 where singleton')).rows[0];
-  assert.equal(baseline.expected,'6157b0c234cc7485e188ce4805ee27ab77707e1496f01d807a249fa80a729146');
+  assert.equal(baseline.expected,'c989b84b9eec51fc48c361b8ad9e7404b4044268d56d106b6788fe56f3f1857d');
   assert.equal(baseline.actual,baseline.expected);
   const originalSeed=h.seed;
   h.seed=async (...args)=>{
@@ -192,7 +192,8 @@ async function exerciseVoiceBilling(t, embedded) {
   assert.deepEqual((await db.query('select to_jsonb(j) value from private.sc19_credit_journal j order by id')).rows,billingBefore);
   await x.configure({restore_isolated:false});
   for (const ddl of ['create table public.unreviewed_billing_copy(candidate_id uuid)',
-    'alter table private.sc19_balances add column unreviewed_note text']) {
+    'alter table private.sc19_balances add column unreviewed_note text',
+    'alter table private.sc19_package_policy add column unreviewed_note text']) {
     await h.asAdmin();await db.exec('begin');
     try {
       await db.exec(ddl);await h.asUser(survivor.f.owner);

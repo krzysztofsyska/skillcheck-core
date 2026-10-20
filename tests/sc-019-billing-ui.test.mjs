@@ -51,12 +51,12 @@ function withFlag(value, run) {
   });
 }
 
-function billingAccess({ userId = ownerId, balance = null, error = null } = {}) {
+function billingAccess({ userId = ownerId, balance = null, error = null, catalog = [{ plan: 'FREE', credits: 3 }, { plan: 'PRESELEKCJA', credits: 12 }], catalogError = null } = {}) {
   const calls = [];
   const client = {
     async rpc(name, args) {
       calls.push({ name, args });
-      return { data: balance, error };
+      return name === 'sc19_package_sizes' ? { data: catalog, error: catalogError } : { data: balance, error };
     },
   };
   const access = {
@@ -74,6 +74,7 @@ function billingPage(access) {
     'next/link': ({ children, href }) => React.createElement('a', { href }, children),
     '../../../../lib/company-access': access,
     './actions': { activateSc19Free() {} },
+    '../../../../lib/sc19-package-sizes': load('lib/sc19-package-sizes.ts'),
   }).default;
 }
 
@@ -129,7 +130,10 @@ test('billing page shows the owner form only to the owner and hides it once a ba
     assert.match(ownerHtml, /Aktywuj FREE/);
     assert.match(ownerHtml, /Darmowa pula została już przypisana/);
     assert.match(ownerHtml, /href="\/rozmowa"/);
-    assert.deepEqual(owner.calls, [{ name: 'sc19_get_balance', args: { target_company: companyId } }]);
+    assert.deepEqual(owner.calls, [{ name: 'sc19_package_sizes', args: undefined }, { name: 'sc19_get_balance', args: { target_company: companyId } }]);
+    assert.match(ownerHtml, /FREE — 3 analiz CV/);
+    assert.match(ownerHtml, /PRESELEKCJA — 12 analiz CV/);
+    assert.doesNotMatch(ownerHtml, /5 analiz CV|60 analiz CV/);
 
     const member = billingAccess({ userId: memberId });
     const memberHtml = renderToStaticMarkup(await billingPage(member.access)({
@@ -201,5 +205,20 @@ test('company dashboard links to billing only while the package flag is on', asy
   await withFlag('true', async () => {
     const html = renderToStaticMarkup(await page({ params: Promise.resolve({ companyId }) }));
     assert.match(html, new RegExp(`/dashboard/${companyId}/billing`));
+  });
+});
+
+
+test('billing never presents a grant form with an unavailable or invalid policy', async () => {
+  await withFlag('true', async () => {
+    for (const options of [
+      {catalog: null}, {catalog: []}, {catalogError: {code:'PGRST202'}},
+      {catalog:[{plan:'FREE',credits:0},{plan:'PRESELEKCJA',credits:12}]},
+      {catalog:[{plan:'FREE',credits:3},{plan:'PRESELEKCJA',credits:12.5}]},
+    ]) {
+      const fx=billingAccess(options);
+      await assert.rejects(billingPage(fx.access)({params:Promise.resolve({companyId}),searchParams:Promise.resolve({})}), /Nie można odczytać wielkości pakietów/);
+      assert.deepEqual(fx.calls,[{name:'sc19_package_sizes',args:undefined}]);
+    }
   });
 });
