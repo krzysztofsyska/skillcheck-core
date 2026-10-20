@@ -109,6 +109,7 @@ async function boundedJson(request: Request): Promise<unknown> {
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
+  let complete = false;
   const timeout = AbortSignal.timeout(4000);
   const timedOut: Promise<never> = new Promise((_, reject) => {
     timeout.addEventListener('abort', () => reject(new Error('Body timeout')), { once: true });
@@ -119,7 +120,7 @@ async function boundedJson(request: Request): Promise<unknown> {
         reader.read(),
         timedOut
       ]);
-      if (result.done) break;
+      if (result.done) { complete = true; break; }
       length += result.value.byteLength;
       if (length > B3_MAX_BODY) {
         await reader.cancel().catch(() => undefined);
@@ -128,6 +129,7 @@ async function boundedJson(request: Request): Promise<unknown> {
       chunks.push(result.value);
     }
   } finally {
+    if (!complete) await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
   if (length === 0) throw new Error('Empty request');
@@ -228,6 +230,7 @@ function statusFor(error: unknown): number {
 
 export function createCompetencyBroker(deps: CompetencyBrokerDependencies): (request: Request) => Promise<Response> {
   let inFlight = 0;
+  let admitting = 0; // also covers streaming request bodies, before any DB work
   const now = deps.now || Date.now;
   const maxInFlight = deps.maxInFlight ?? 8;
   return async (request: Request) => {
@@ -235,21 +238,33 @@ export function createCompetencyBroker(deps: CompetencyBrokerDependencies): (req
     if (request.method !== 'POST') return competencyBrokerMethodDenied();
     if (!sameOrigin(request, deps.expectedOrigin)) return response(403, { error: 'unavailable' });
     if (!allowedHeaders(request)) return response(413, { error: 'invalid_request' });
-    let input: Parsed | null;
-    try { input = parse(await boundedJson(request)); }
-    catch (error) { return response(error instanceof RangeError ? 413 : 400, { error: 'invalid_request' }); }
-    if (!input) return response(400, { error: 'invalid_request' });
-    const source = deps.trustedSource(request);
-    if (!source || !isIP(source)) return response(503, { error: 'unavailable' });
-    const minute = Math.floor(now() / (LIMIT_WINDOW_SECONDS * 1000));
-    const hour = Math.floor(now() / 3600000);
-    const sourceHmac = hmac(deps.sourceKey, 'b3-source-hour-' + String(hour), source);
+    // Rate limit before reading any request bytes. A slow stream must consume
+    // global/source budget and a bounded per-instance slot before allocation.
+    if (admitting >= maxInFlight) return response(503, { error: 'unavailable' });
+    admitting += 1;
+    let input: Parsed | null = null;
     try {
-      if (!await deps.limiter.consume(sourceHmac, minute)) return response(429, { error: 'rate_limited' });
-    } catch {
-      // Any limiter failure is an infrastructure failure; never use local memory.
-      return response(503, { error: 'unavailable' });
+      const source = deps.trustedSource(request);
+      if (!source || !isIP(source)) return response(503, { error: 'unavailable' });
+      const minute = Math.floor(now() / (LIMIT_WINDOW_SECONDS * 1000));
+      const hour = Math.floor(now() / 3600000);
+      const sourceHmac = hmac(deps.sourceKey, 'b3-source-hour-' + String(hour), source);
+      try {
+        if (!await deps.limiter.consume(sourceHmac, minute)) {
+          return response(429, { error: 'rate_limited' });
+        }
+      } catch {
+        // Shared limiter must accept the request before ANY body is read.
+        return response(503, { error: 'unavailable' });
+      }
+      try { input = parse(await boundedJson(request)); }
+      catch (error) {
+        return response(error instanceof RangeError ? 413 : 400, { error: 'invalid_request' });
+      }
+    } finally {
+      admitting -= 1;
     }
+    if (!input) return response(400, { error: 'invalid_request' });
     let cookie: string | null;
     let init: string | null;
     try {
