@@ -82,8 +82,11 @@ function bindingValid(b: unknown): b is VoicePlanSourceBinding {
     keys.slice(10).every(k=>typeof v[k]==="string" && HEX.test(v[k] as string));
 }
 const hash = (x: unknown): string => createHash("sha256").update(JSON.stringify(x)).digest("hex");
-function sourceDigest(binding: VoicePlanSourceBinding, planSourceFingerprint: string): string {
-  return hash({
+/** Exact object hashed into sourceHash. Persisted source_snapshot must match it. */
+export function canonicalVoiceSourceSnapshot(
+  binding: VoicePlanSourceBinding, planSourceFingerprint: string,
+) {
+  return {
     companyId:binding.companyId,recruitmentId:binding.recruitmentId,
     applicationId:binding.applicationId,positionId:binding.positionId,
     analysisId:binding.analysisId,reviewId:binding.reviewId,
@@ -94,7 +97,10 @@ function sourceDigest(binding: VoicePlanSourceBinding, planSourceFingerprint: st
     analysisFingerprint:binding.analysisFingerprint,
     screeningContractHash:binding.screeningContractHash,
     planSourceFingerprint,
-  });
+  };
+}
+function sourceDigest(binding: VoicePlanSourceBinding, planSourceFingerprint: string): string {
+  return hash(canonicalVoiceSourceSnapshot(binding, planSourceFingerprint));
 }
 const commonFollowUp="Jakie działania podjął Pan lub podjęła Pani osobiście i jaki był rezultat?";
 const clarificationFollowUps=[

@@ -62,3 +62,46 @@ Reconcile #92/#115, generate a CLI migration including the immutable SC-010 inve
 - Independent reviewer found repeat-purchase P2, now fixed. Reproducible component-handler tests: 3/3 PASS (lost response retry, explicit second purchase, paid offer B cannot clear pending offer A). This is a component test, not a full browser/provider sandbox purchase.
 - CI teardown originally FORCE-dropped the test database before pg.Pool had fully disconnected, causing 57P01 after all assertions passed. Teardown now waits for zero database sessions and drops without FORCE; the next run passed.
 - Final dedicated workflow also builds Next and runs the real route tests. Final SHA/run evidence is recorded in the PR, independently from earlier receipts.
+
+## 2026-10-20 reconciliation after #92 and #115
+
+TASK: SC-019-MVP-A2-PAYMENTS; LEVEL: L3; SCOPE: FULLSTACK.
+PRODUCTION_APPROVAL: NO. Existing payment core retained; no provider is selected or activated.
+
+- Ordinary merge of `integration` at `fbc75c79530fa81ddb8e94e71fcc5f1293f5553e`
+  into the existing #129 branch, without rebase or history rewriting.
+- The final reviewed dependency revisions are #92
+  `5166f3ce354ecffb5c7d77b1573a185e83f0f476` and #115
+  `5701b16e3dcbfe4f79fb27a315c1db4614d93811`. Both are already merged into this
+  integration base. The dependency blockers recorded on 2026-10-17 above are historical.
+- PostgreSQL16 payment tests now run against both final pinned revisions **and
+  the actual credit SQL read from the current checkout**. The payment workflow
+  also triggers on changes to that credit SQL. No copied quota implementation is used.
+- Each contract verifies concurrent checkout and settlement, exact-once grants,
+  rollback, tenant/merchant/mode binding, stale owner/KYB revocation and
+  spend/refund races. A new check denies a late FREE claim after paid fulfillment.
+  For every contract containing configurable policy, the policy changes after
+  checkout but before settlement; fulfillment still grants the saved 12-credit
+  order, never the later 99-credit policy.
+- Existing immutable economic snapshots, provider idempotency, lost-response
+  reconciliation, double-payment review, and checkout-disable/fulfillment-drain
+  separation are unchanged.
+- Independent review identified inherited custom-role default grants as a
+  `TRUNCATE CASCADE` bypass of RLS and row immutability triggers. Storage now
+  enumerates and revokes every actual non-owner grantee on exactly the three new
+  payment tables and the new trigger function. Existing credit ACLs are preserved.
+  Every PostgreSQL contract runs with hostile global and schema default grants,
+  including grant options, and checks all seven table capabilities, function
+  execution, actual denied SQL operations and preservation of the original ACLs.
+
+The runtime resolver still returns `null`. Payment SQL remains an isolated
+prototype and still refuses installation when SC-010 erasure inventory exists.
+An independently reviewed immutable erasure inventory revision and proper
+migration are explicit release blockers. This merge does not satisfy them.
+There are no production schema, flags, secrets, provider calls or transactions.
+
+Local core/HTTP/component checks and TypeScript are required for this tree.
+PostgreSQL16 is unavailable in the local executor; the dedicated CI service must
+run all three database variants without skips. Full Checks, built Next route
+tests and independent review must pass on the new published HEAD before merge.
+Exact run/SHA receipts belong in the PR; older green CI does not certify this tree.

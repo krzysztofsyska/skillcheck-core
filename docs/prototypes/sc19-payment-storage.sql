@@ -91,5 +91,39 @@ alter table private.sc19_payment_orders enable row level security;
 alter table private.sc19_payment_grants enable row level security;
 revoke all on private.sc19_payment_offers,private.sc19_payment_orders,private.sc19_payment_grants
   from public,anon,authenticated;
+-- Global or schema default privileges can grant custom roles capabilities that
+-- the fixed browser-role revokes above do not remove. RLS and row triggers do
+-- not stop TRUNCATE. Reset actual non-owner grantees on exactly the new objects;
+-- leave all pre-existing credit, worker and erasure permissions untouched.
+do $sc19_payment_acl$
+declare obj record; grantee record;
+begin
+  for obj in select c.oid,c.relowner from pg_class c
+    where c.oid in ('private.sc19_payment_offers'::regclass,
+      'private.sc19_payment_orders'::regclass,'private.sc19_payment_grants'::regclass)
+  loop
+    for grantee in select distinct acl.grantee,role.rolname
+      from pg_class c cross join lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) acl
+      left join pg_roles role on role.oid=acl.grantee
+      where c.oid=obj.oid and acl.grantee<>obj.relowner
+    loop
+      if grantee.grantee=0 then execute format('revoke all on table %s from public',obj.oid::regclass);
+      else execute format('revoke all on table %s from %I',obj.oid::regclass,grantee.rolname);end if;
+    end loop;
+  end loop;
+  for obj in select p.oid,p.proowner from pg_proc p
+    where p.oid='private.sc19_payment_immutable()'::regprocedure
+  loop
+    for grantee in select distinct acl.grantee,role.rolname
+      from pg_proc p cross join lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+      left join pg_roles role on role.oid=acl.grantee
+      where p.oid=obj.oid and acl.grantee<>obj.proowner
+    loop
+      if grantee.grantee=0 then execute format('revoke all on function %s from public',obj.oid::regprocedure);
+      else execute format('revoke all on function %s from %I',obj.oid::regprocedure,grantee.rolname);end if;
+    end loop;
+  end loop;
+end
+$sc19_payment_acl$;
 -- No browser grants, public RPC, service-role grants, or automatic activation.
 commit;

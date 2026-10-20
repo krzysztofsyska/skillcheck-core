@@ -53,6 +53,14 @@ test('viewer, disabled AI, foreign tenant and draft CV cannot dispatch', async (
   const ctx = context();ctx.document.status='draft';
   await assert.rejects(command(clientFor(ctx)));
 });
+test('database quota denial becomes an explicit PRESELEKCJA upgrade message', async () => {
+  const client=clientFor(context());
+  client.rpc=async()=>({data:null,error:{code:'PT402',message:'internal quota state'}});
+  let dispatched=false;
+  await assert.rejects(command(client,{dispatch:async()=>{dispatched=true;return {accepted:true};}}),/Wykorzystano dostępny limit.*PRESELEKCJA/);
+  assert.equal(dispatched,false);
+});
+
 test('completed reuse does not dispatch; dispatch failures preserve saved job without exposing network detail', async () => {
   let sent = false;
   await command(clientFor(context(),{}, {execution_status:'completed',attempt_id:null}),{dispatch:async()=>{sent=true;}});

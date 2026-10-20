@@ -401,6 +401,15 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      sc19_claim_trial: { Args: { target_company: string; supplied_nip: string }; Returns: number };
+      sc19_get_balance: {
+        Args: { target_company: string };
+        Returns: { plan: 'FREE' | 'PRESELEKCJA'; available: number; free_claimed: boolean }[];
+      };
+      sc19_package_sizes: {
+        Args: Record<PropertyKey, never>;
+        Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number }[];
+      };
       configure_retention_schedule: {
         Args: { target_company: string; expected_revision: number; policy_revision: number; execution_mode?: 'suggest_only' | 'automatic'; max_batch?: number; request_key?: string | null };
         Returns: string;

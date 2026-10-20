@@ -107,5 +107,9 @@ export function createCursorClient({ fetch: fetchImpl, apiKey, baseUrl = CURSOR_
       throw new Error('CURSOR_PAGINATION_LIMIT');
     },
     async getRun(agentId, runId) { return request(`/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}`); },
+    async getUsage(agentId, runId) {
+      const query = runId ? `?runId=${encodeURIComponent(runId)}` : '';
+      return request(`/v1/agents/${encodeURIComponent(agentId)}/usage${query}`);
+    },
   };
 }

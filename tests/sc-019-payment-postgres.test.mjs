@@ -7,7 +7,14 @@ import pg from 'pg';
 import { composeSc19PaymentRuntime } from '../lib/sc19-payment-runtime.ts';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 const url=process.env.SC19_TEST_DATABASE_URL;
-const dependencies=[['92','bb2cf5272914fb1438224959612aacaee5cba5a9'],['115','79daea590f9cd7c546ff6e1d2b55e62ee0a834b0']];
+const creditPath='docs/prototypes/sc-019-mvp-credits.sql';
+const dependencies=[
+ {label:'final reviewed PR #92',sha:'5166f3ce354ecffb5c7d77b1573a185e83f0f476'},
+ {label:'final reviewed PR #115',sha:'5701b16e3dcbfe4f79fb27a315c1db4614d93811'},
+ // Exercise the SQL actually shipped by this checkout too: historical green
+ // contracts must not hide a regression introduced by a later integration merge.
+ {label:'current checked-out integration contract',source:await readFile(new URL('../'+creditPath,import.meta.url),'utf8')},
+];
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const scope={provider:'synthetic',account:'offline-fixture',mode:'test'};
 const appOrigin='https://app.fixture.invalid';
@@ -27,7 +34,18 @@ const fixture=`
  create function private.has_company_access(cid uuid,write_access boolean default false) returns boolean language sql stable security definer set search_path='' as $$select private.is_company_owner(cid)$$;
  create function private.touch_updated_at() returns trigger language plpgsql set search_path='' as $$begin new.updated_at=now();return new;end$$;
 `;
-for(const [pr,sha] of dependencies) test(`PostgreSQL16 payment adapter against pinned PR #${pr}`,{skip:!url && 'SC19_TEST_DATABASE_URL required'},async t=>{
+const untrustedRoles=['sc19_payment_global_untrusted','sc19_payment_schema_untrusted'];
+const paymentTables=['sc19_payment_offers','sc19_payment_orders','sc19_payment_grants'];
+const creditAcls=async pool=>(await pool.query(`
+ select 'table' kind,c.oid::regclass::text name,c.relacl::text acl from pg_class c
+ join pg_namespace n on n.oid=c.relnamespace where n.nspname='private'
+ and c.relkind='r' and left(c.relname,5)='sc19_' and left(c.relname,13)<>'sc19_payment_'
+ union all
+ select 'function',p.oid::regprocedure::text,p.proacl::text from pg_proc p
+ join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('private','public')
+ and left(p.proname,5)='sc19_' and left(p.proname,13)<>'sc19_payment_'
+ order by kind,name`)).rows;
+for(const dependency of dependencies) test(`PostgreSQL16 payment adapter against ${dependency.label}`,{skip:!url && 'SC19_TEST_DATABASE_URL required'},async t=>{
  const u=new URL(url);
  if(!['127.0.0.1','localhost','[::1]'].includes(u.hostname)||u.pathname!='/postgres')throw Error('Disposable loopback /postgres required');
  const root=new pg.Client({connectionString:u.href});await root.connect();
@@ -50,8 +68,24 @@ for(const [pr,sha] of dependencies) test(`PostgreSQL16 payment adapter against p
  assert.match((await pool.query('select version() v')).rows[0].v,/PostgreSQL 16/);
  await pool.query(fixture);
  // Reuse exact upstream SQL, do not fork a second quota implementation into #129.
- const source=execFileSync('git',['show',`${sha}:docs/prototypes/sc-019-mvp-credits.sql`],{encoding:'utf8'});
- await pool.query(source);await pool.query(schema);
+ const source=dependency.source??execFileSync('git',['show',`${dependency.sha}:${creditPath}`],{encoding:'utf8'});
+ await pool.query(source);
+ await pool.query(`do $$ begin
+   if not exists(select from pg_roles where rolname='sc19_payment_global_untrusted') then create role sc19_payment_global_untrusted nologin; end if;
+   if not exists(select from pg_roles where rolname='sc19_payment_schema_untrusted') then create role sc19_payment_schema_untrusted nologin; end if;
+ end $$;
+ grant usage on schema private to sc19_payment_global_untrusted,sc19_payment_schema_untrusted;
+ create schema sc19_payment_acl_fixture;
+ grant usage,create on schema sc19_payment_acl_fixture to sc19_payment_global_untrusted,sc19_payment_schema_untrusted;
+ -- Intentional pre-existing credit ACL: payment cleanup must preserve it.
+ grant select on private.sc19_balances to sc19_payment_global_untrusted;
+ alter default privileges grant all on tables to sc19_payment_global_untrusted with grant option;
+ alter default privileges grant execute on functions to sc19_payment_global_untrusted with grant option;
+ alter default privileges in schema private grant all on tables to sc19_payment_schema_untrusted with grant option;
+ alter default privileges in schema private grant execute on functions to sc19_payment_schema_untrusted with grant option;`);
+ const existingAcls=await creditAcls(pool);
+ await pool.query(schema);
+ assert.deepEqual(await creditAcls(pool),existingAcls,'payment cleanup must preserve existing credit ACLs');
  await pool.query('insert into public.companies values($1,$2),($3,$4),($5,$6)',[id(1),id(11),id(2),id(12),id(3),id(13)]);
  await pool.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,'1234563218','proof-fixture-one'),($2,'1111111111','proof-fixture-two')`,[id(1),id(2)]);
  await pool.query(`insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,terms_revision,terms_text,valid_until_ms)
@@ -72,6 +106,33 @@ for(const [pr,sha] of dependencies) test(`PostgreSQL16 payment adapter against p
  await t.test('two independent PostgreSQL connections are available',async()=>{
    const a=await pool.connect(),b=await pool.connect();try{assert.notEqual((await a.query('select pg_backend_pid() id')).rows[0].id,(await b.query('select pg_backend_pid() id')).rows[0].id);}finally{a.release();b.release();}
  });
+ await t.test('global and schema default grants cannot read, mutate or truncate payment storage',async()=>{
+   for(const role of untrustedRoles) {
+     for(const table of paymentTables) {
+       for(const privilege of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) {
+         assert.equal((await pool.query('select has_table_privilege($1,$2,$3) allowed',[role,'private.'+table,privilege])).rows[0].allowed,false,role+table+privilege);
+       }
+     }
+     assert.equal((await pool.query("select has_function_privilege($1,'private.sc19_payment_immutable()','EXECUTE') allowed",[role])).rows[0].allowed,false);
+     const c=await pool.connect();
+     try {
+       await c.query(`set role ${role}`);
+       for(const table of paymentTables) {
+         const key=table==='sc19_payment_grants'?'payment_key':'id';
+         for(const sql of [`select * from private.${table}`,`insert into private.${table} default values`,
+           `update private.${table} set ${key}=${key}`,`delete from private.${table}`,
+           `truncate private.${table} cascade`,
+           `create table sc19_payment_acl_fixture.forbidden_reference(id ${table==='sc19_payment_orders'?'uuid':'text'} references private.${table}(${key}))`,
+           `create trigger forbidden_trigger before insert on private.${table} for each row execute function private.sc19_payment_immutable()`]) {
+           await assert.rejects(c.query(sql),e=>e.code==='42501',role+': '+sql);
+         }
+       }
+       await assert.rejects(c.query('select private.sc19_payment_immutable()'),e=>e.code==='42501');
+     } finally {await c.query('reset role');c.release();}
+   }
+   assert.equal(await count('sc19_payment_offers'),1,'denied TRUNCATE CASCADE preserves the offer');
+   assert.deepEqual(await creditAcls(pool),existingAcls);
+ });
  let hosted;
  await t.test('parallel checkout returns one durable order and stable provider key',async()=>{
    const input=request();const results=await Promise.all(Array.from({length:8},()=>runtime().service.checkout(input)));
@@ -83,6 +144,15 @@ for(const [pr,sha] of dependencies) test(`PostgreSQL16 payment adapter against p
    assert.equal(result.filter(x=>x.state==='applied').length,1);assert.equal(await balance(id(1)),12);
    assert.equal((await notify(p,runtime().service)).state,'already_applied');
    assert.equal(await count('sc19_payment_grants'),1);assert.equal(await count('sc19_credit_journal'),1);
+ });
+ await t.test('paid fulfillment preserves the credit contract prohibition on late FREE claims',async()=>{
+   const c=await pool.connect();
+   try {
+     await c.query("select set_config('request.jwt.claim.sub',$1,false)",[id(11)]);
+     await assert.rejects(c.query("select public.sc19_claim_trial($1,'1234563218')",[id(1)]),/sc19_trial_after_payment/);
+     assert.equal(await balance(id(1)),12);
+     assert.equal(await count('sc19_trial_nips'),0);
+   } finally {await c.query("select set_config('request.jwt.claim.sub','',false)");c.release();}
  });
  await t.test('tenant isolation, role denial, no browser table privileges',async()=>{
    for(const uid of [null,id(12),id(88),id(89)])await assert.rejects(runtime(uid).service.checkout(request()),/FORBIDDEN/);
@@ -102,8 +172,13 @@ for(const [pr,sha] of dependencies) test(`PostgreSQL16 payment adapter against p
    await assert.rejects(pool.query('delete from private.sc19_payment_grants'),/immutable/);
    await assert.rejects(pool.query('update private.sc19_payment_orders set amount_minor=1 where id=$1',[hosted.orderId]),/immutable/);
    await assert.rejects(pool.query("update private.sc19_payment_orders set status='awaiting_payment',payment_id=null where id=$1",[hosted.orderId]),/immutable/);
-   if(pr==='115')await pool.query("update private.sc19_package_policy set credits=99 where plan='PRESELEKCJA'");
-   const next=await service.checkout(request());await notify(payment(next));assert.equal(await balance(id(1)),24);
+   const next=await service.checkout(request());
+   if((await pool.query("select to_regclass('private.sc19_package_policy') name")).rows[0].name) {
+     await pool.query("update private.sc19_package_policy set credits=99 where plan='PRESELEKCJA'");
+     assert.equal((await pool.query("select credits from private.sc19_package_policy where plan='PRESELEKCJA'")).rows[0].credits,99);
+   }
+   await notify(payment(next));assert.equal(await balance(id(1)),24);
+   assert.equal((await runtime().readOrder(id(1),id(11),next.orderId)).credits,12);
  });
  await t.test('failure after balance increment rolls back grant, journal and paid marker',async()=>{
    const h=await service.checkout(request());const before=[await balance(id(1)),await count('sc19_payment_grants'),await count('sc19_credit_journal')];

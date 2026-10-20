@@ -1,0 +1,47 @@
+name: Agent connection diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_id:
+        description: Existing Cursor agent ID to read (does not start an agent)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-connection-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnostics:
+    if: >-
+      github.repository == 'krzysztofsyska/skillcheck-core' &&
+      github.ref == 'refs/heads/main' &&
+      vars.AGENT_PIPELINE_ENABLED == 'false' &&
+      vars.AGENT_PIPELINE_MERGE_ENABLED == 'false' &&
+      vars.AGENT_FEEDBACK_ENABLED == 'false'
+    environment: agent-control
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check connections without starting agents
+        run: node tools/agent-pipeline/diagnose.mjs
+        env:
+          AGENT_PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+          AGENT_PIPELINE_MERGE_ENABLED: ${{ vars.AGENT_PIPELINE_MERGE_ENABLED }}
+          AGENT_FEEDBACK_ENABLED: ${{ vars.AGENT_FEEDBACK_ENABLED }}
+          AGENT_PIPELINE_APP_ID: ${{ secrets.AGENT_PIPELINE_APP_ID }}
+          AGENT_PIPELINE_APP_INSTALLATION_ID: ${{ secrets.AGENT_PIPELINE_APP_INSTALLATION_ID }}
+          AGENT_PIPELINE_APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          CURSOR_DIAGNOSTIC_AGENT_ID: ${{ inputs.agent_id }}

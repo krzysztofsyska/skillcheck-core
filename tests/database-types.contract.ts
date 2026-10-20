@@ -65,6 +65,9 @@ type ExpectedViews =
   | "latest_exercise_definitions"
   | "latest_exercise_observations";
 type ExpectedFunctions =
+  | "sc19_claim_trial"
+  | "sc19_get_balance"
+  | "sc19_package_sizes"
   | "submit_sales_lead"
   | "list_sales_leads"
   | "list_sales_leads_inbox"

@@ -16,6 +16,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], {
     env: {
       ...process.env,
+      // General marketing contract with packages disabled. The separate SC-019
+      // runtime suite proves ON requests actually hit the local catalog RPC.
+      SC19_PACKAGES_ENABLED: 'false',
       NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:9',
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'test-only-public-key',
       NEXT_PUBLIC_SITE_URL: `http://127.0.0.1:${port}`,
@@ -43,6 +46,10 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Podobne CV\. Różni ludzie\. Zupełnie inne wyniki w pracy\./);
   assert.match(home, /Cztery poziomy\. Jedna platforma\./);
   assert.match(home, /Cena robocza z wizualizacji/);
+  assert.match(home, /Liczba analiz CV według zatwierdzonej polityki/);
+  assert.equal(home.includes('5 analiz CV'), false);
+  assert.equal(home.includes('60 analiz CV'), false);
+  assert.equal(home.includes('5–6'), false);
   assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
   for (const href of ['/demo', '/register', '/login', '/#jak-to-dziala', '/#mozliwosci', '/#pakiety', '/#faq']) {
@@ -91,11 +98,11 @@ test('public offer and demo pages respond without an account', async (t) => {
   const lines = comparison.split('\n');
   const offer = lines.find(line => line.includes('name:"PRESELEKCJA"'));
   assert.ok(offer, 'PRESELEKCJA offer defined');
-  assert.match(offer, /Liczba analiz ustalana w ofercie/);
+  assert.match(offer, /scope:offer.preselectionScope/);
   assert.doesNotMatch(offer, /60 analiz CV|Shortlista 5–10 kandydatów/);
   const cvRow = lines.find(line => line.trimStart().startsWith('["Analizy CV"'));
   const shortlistRow = lines.find(line => line.trimStart().startsWith('["Shortlista \/ raport preselekcji"'));
-  assert.ok(cvRow?.includes('"Według oferty"'));
+  assert.ok(cvRow?.includes('offer.preselectionAnalyses'));
   assert.ok(shortlistRow?.includes('"Według oferty"'));
 
   const demoResponse = await fetch(`${base}/demo`, { redirect: 'manual' });
