@@ -86,6 +86,13 @@ test('PostgreSQL16 catalog FK, plan overrides, immutability, hostile RLS', async
       assert.equal(r.rows[0].amount,'301');
     });
 
+    await t.test('service changes cannot silently violate existing package limits',async()=>{
+      await assertSqlError(()=>q("UPDATE @services SET max_quantity=10 WHERE version_id=$1 AND code='report_ext'",[ids.draft]),'22023');
+      await assertSqlError(()=>q("UPDATE @services SET quantity_step=2 WHERE version_id=$1 AND code='report_ext'",[ids.draft]),'22023');
+      await assertSqlError(()=>q("UPDATE @versions SET status='PUBLISHED' WHERE id=$1",[ids.draft]),'23514');
+      await assertSqlError(()=>q("UPDATE @scopes SET scope_code='altered' WHERE id=$1",[ids.scope]),'55000');
+    });
+
     await t.test('unprivileged role cannot read or insert catalog even when granted table rights',async()=>{
       await db.query('CREATE ROLE '+role+' NOLOGIN');
       await db.query('GRANT USAGE ON SCHEMA sc_pricing_isolated TO '+role);
@@ -97,6 +104,25 @@ test('PostgreSQL16 catalog FK, plan overrides, immutability, hostile RLS', async
         await assertSqlError(()=>q("INSERT INTO @versions(id,scope_id,vat_basis_points) VALUES('00000000-0000-4000-8000-000000000405',$1,2300)",[ids.scope]),'42501');
       } finally { await db.query('RESET ROLE'); }
     });
+    await t.test('child edit locks parent version and serializes competing publication',async()=>{
+      const contender=new pg.Client({connectionString:value});
+      await contender.connect();
+      try {
+        await contender.query('BEGIN');
+        await contender.query("UPDATE sc_pricing_isolated.services SET description='in flight' WHERE version_id=$1 AND code='report_ext'",[ids.draft]);
+        await db.query("SET lock_timeout='250ms'");
+        await assertSqlError(()=>q("UPDATE @versions SET status='PUBLISHED',approved=true WHERE id=$1",[ids.draft]),'55P03');
+        await db.query('RESET lock_timeout');
+        await contender.query('COMMIT');
+        await q("UPDATE @versions SET status='PUBLISHED',approved=true WHERE id=$1",[ids.draft]);
+        await assertSqlError(()=>q("UPDATE @services SET description='after publish' WHERE version_id=$1 AND code='report_ext'",[ids.draft]),'55000');
+      } finally {
+        try { await contender.query('ROLLBACK'); } catch {}
+        try { await db.query('RESET lock_timeout'); } catch {}
+        await contender.end();
+      }
+    });
+
   } finally {
     try { await db.query('RESET ROLE'); } catch {}
     try { await db.query('DROP SCHEMA IF EXISTS sc_pricing_isolated CASCADE'); } catch {}
