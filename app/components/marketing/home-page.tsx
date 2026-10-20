@@ -33,7 +33,7 @@ export async function HomePage() {
               </p>
               <div className={styles.actions}>
                 <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>
-                <Link href="/rozmowa" className={styles.secondary}>Porozmawiajmy o Twojej rekrutacji</Link>
+                <Link href="/preselekcja" className={styles.secondary}>Zapytaj o pilotaż PRESELEKCJA</Link>
               </div>
               <p className={styles.note}>
                 Produkt rozwijamy etapami. Zobacz przykład raportu i sprawdź poniżej, które funkcje są już dostępne.

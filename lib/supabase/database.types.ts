@@ -1,4 +1,4 @@
-// Public API contract after migrations 20260930000100 through 20261009141836.
+// Public API contract including SC-010-R4 retention scheduling.
 // Keep API write restrictions below when comparing with generated Supabase types.
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
@@ -56,6 +56,27 @@ export type Position = Entity & {
 export type Recruitment = Entity & {
   position_id: string; name: string; status: "draft" | "open" | "paused" | "closed";
   opened_at: string | null; closed_at: string | null;
+};
+export type CandidateRetentionRule = {
+  data_class: 'candidate' | 'assessment' | 'screening' | 'communication' | 'audit' | 'external' | 'backup' | 'exports';
+  trigger_event: 'record_created' | 'process_closed' | 'consent_revoked';
+  duration_days: number; hold_review_days: number;
+};
+export type CandidateRetentionPolicy = {
+  id: string | null; revision: number; rules: CandidateRetentionRule[];
+  configured: boolean; owner_current: boolean; execution_enabled: false;
+};
+export type RetentionScheduleStatus = {
+  revision: number; delegation_id: string | null; policy_revision: number | null;
+  execution_mode: 'suggest_only' | 'automatic'; max_batch: number; revoked: boolean;
+  owner_current: boolean; authorization_enabled: boolean; production_ready: false; blockers: string[]; last_tick_at: string | null;
+  suggestions: number; authorized: number; holds?: number; blocked?: number; lag_seconds?: number | null; oldest_pending_at?: string | null; expired_leases?: number;
+};
+export type ErasureSubjectResolution = { id: string | null; revision: number; candidate_ids: string[]; owner_current: boolean };
+export type CandidateErasurePreview = {
+  scope_kind: 'candidate_record' | 'confirmed_subject'; candidate_count: number;
+  counts: Record<string, number>; blockers: string[]; policy_revision: number; resolution_revision: number;
+  manifest_hash: string; schema_signature: string; generated_at: string; expires_at: string; execution_enabled: false;
 };
 export type ContactChannel = "email" | "sms" | "voice";
 export type ContactPermission = Entity & {
@@ -389,6 +410,45 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number }[];
       };
+      configure_retention_schedule: {
+        Args: { target_company: string; expected_revision: number; policy_revision: number; execution_mode?: 'suggest_only' | 'automatic'; max_batch?: number; request_key?: string | null };
+        Returns: string;
+      };
+      revoke_retention_schedule: { Args: { target_company: string; expected_revision: number; request_key: string }; Returns: string };
+      get_retention_suggestions: {
+        Args: { target_company: string; before_created_at?: string; before_id?: string; page_size?: number };
+        Returns: { id: string; anchor_candidate_id: string; status: 'suggested' | 'blocked' | 'authorized'; due_at: string | null; blockers: string[]; created_at: string; request_id: string | null }[];
+      };
+      get_retention_schedule: { Args: { target_company: string }; Returns: RetentionScheduleStatus };
+
+      configure_candidate_retention_policy: {
+        Args: { target_company: string; expected_revision: number; policy_rules: CandidateRetentionRule[]; request_key: string };
+        Returns: string;
+      };
+      get_candidate_retention_policy: { Args: { target_company: string }; Returns: CandidateRetentionPolicy };
+      confirm_erasure_subject: {
+        Args: { target_candidate: string; candidate_ids: string[]; expected_revision: number; request_key: string };
+        Returns: string;
+      };
+      get_erasure_subject_resolution: { Args: { target_candidate: string }; Returns: ErasureSubjectResolution };
+      set_candidate_erasure_hold: { Args: { target_request: string; reason: 'legal_review' | 'active_purpose' | 'owner_review'; review_at: string; expires_at: string; request_key: string }; Returns: string };
+      release_candidate_erasure_hold: { Args: { target_hold: string }; Returns: string };
+      issue_candidate_erasure_preview: {
+        Args: { target_candidate: string; scope_kind?: 'candidate_record' | 'confirmed_subject'; resolution_id?: string | null };
+        Returns: CandidateErasurePreview & { preview_ticket_id: string };
+      };
+      request_candidate_erasure: { Args: { preview_ticket_id: string; request_key: string }; Returns: string };
+      cancel_candidate_erasure: { Args: { target_request: string; expected_generation: number; request_key: string }; Returns: string };
+      get_erasure_status: { Args: { target_request: string }; Returns: CandidateErasureStatus };
+      get_candidate_erasure_status: { Args: { target_candidate: string }; Returns: CandidateErasureStatus | null };
+      list_candidate_erasure_requests: {
+        Args: { target_company: string; before_created_at?: string | null; before_id?: string | null; page_size?: number };
+        Returns: CandidateErasureStatus[];
+      };
+      preview_candidate_erasure: {
+        Args: { target_candidate: string; scope_kind?: 'candidate_record' | 'confirmed_subject'; resolution_id?: string | null };
+        Returns: CandidateErasurePreview;
+      };
       save_sales_pipeline: { Args: { target_lead: string; expected_version: number; new_stage: string; new_note: string; next_contact: string | null; linked_company: string | null }; Returns: string };
       list_sales_pipeline: { Args: { stage_filter?: string; due_filter?: string; page_offset?: number; target_lead?: string }; Returns: SalesPipelineRow[] };
       sales_pipeline_history: { Args: { target_lead: string; before_version?: number }; Returns: Pick<SalesPipelineRow, 'version' | 'stage' | 'note' | 'next_contact_on' | 'company_id' | 'created_at'>[] };
@@ -590,4 +650,22 @@ export type SalesPipelineRow = {
  needs: string; created_at: string; stage: import('../sales-pipeline').SalesStage;
  note: string; next_contact_on: string | null; company_id: string | null;
  linked_company_name: string | null; version: number; closed_at: string | null; total_count: number;
+};
+
+export type CandidateErasureStatus = {
+  request_id: string;
+  company_id: string;
+  status: 'authorized' | 'cancelled' | 'erasing' | 'active_data_erased';
+  generation: number;
+  scope_kind: 'candidate_record' | 'confirmed_subject';
+  candidate_count: number;
+  created_at: string;
+  cancelled_at: string | null;
+  execution_enabled: false;
+  phase: 'local_frozen' | 'authorized' | 'cancelled' | 'erasing' | 'active_data_erased' | 'cancellation_pending' | 'ledger_pending';
+  ledger_sequence?: number;
+  pending_phase?: string | null;
+  local_purged?: boolean;
+  can_cancel: boolean;
+  blockers: string[];
 };

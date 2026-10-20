@@ -39,12 +39,12 @@
   "codex_cli_version": "0.160.1",
   "cursor_api_base": "https://api.cursor.com",
   "workflow_ids": {
-    "reconcile": "sc-agent-reconcile",
-    "verify": "sc-agent-verify",
-    "review": "sc-agent-review",
-    "accept": "sc-agent-accept",
-    "promote": "sc-agent-promote",
-    "gates": "sc-agent-gates"
+    "reconcile": 376775092,
+    "verify": 376775095,
+    "review": 376775093,
+    "accept": 376775089,
+    "promote": 376775091,
+    "gates": 375800413
   },
   "workflows": {
     "reconcile": ".github/workflows/agent-reconcile.yml",
@@ -57,7 +57,7 @@
   "environments": {
     "agent_control": {
       "name": "agent-control",
-      "id": null
+      "id": 23618160050
     },
     "owner_acceptance": {
       "name": "owner-acceptance",
@@ -66,13 +66,17 @@
     "production_approval": {
       "name": "production-approval",
       "id": null
+    },
+    "agent_review": {
+      "name": "agent-review",
+      "id": 23622706434
     }
   },
   "required_checks": {
     "integration": [
       "sc-agent/ci",
       "sc-agent/review",
-      "sc-agent/owner-acceptance"
+      "sc-agent/integration-ready"
     ],
     "main": [
       "sc-agent/ci",
@@ -105,5 +109,6 @@
     "agent-state"
   ],
   "controller_app_id": null,
-  "controller_actor_id": null
+  "controller_actor_id": null,
+  "integration_merge_policy": "verified_ci_review"
 }

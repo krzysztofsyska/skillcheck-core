@@ -97,7 +97,7 @@ export async function reconcileFromEnv(env = process.env, overrides = {}) {
     if (!Number.isInteger(policy.controller_app_id) || Number(env.AGENT_PIPELINE_APP_ID) !== policy.controller_app_id) missing.push('controller_app_id');
     if (!Number.isInteger(policy.controller_actor_id)) missing.push('controller_actor_id');
     for (const key of ['verify','review','accept','promote']) if (!Number.isInteger(policy.workflow_ids[key])) missing.push(`workflow_ids.${key}`);
-    for (const key of ['owner_acceptance','production_approval']) if (!Number.isInteger(policy.environments[key].id)) missing.push(`environments.${key}.id`);
+    for (const key of ['owner_acceptance','production_approval','agent_review']) if (!Number.isInteger(policy.environments?.[key]?.id)) missing.push(`environments.${key}.id`);
     if (!/^[a-f0-9]{40}$/.test(env.AGENT_POLICY_COMMIT ?? '')) missing.push('AGENT_POLICY_COMMIT');
     if (missing.length) return { status: 'NOT_CONFIGURED', controllerInvoked: false, effects: [], flags, missing };
   }
@@ -156,7 +156,11 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
   try {
     protection = await github.readProtection();
   } catch (error) {
-    if (error.status !== 401 && error.status !== 403 && error.status !== 404) throw error;
+    // This read happens before ports.readProtection(). A metadata token hides
+    // bypass_actors. Unknown protection stays null here. The enabled ports
+    // path still throws RULESET_BYPASS_UNVERIFIABLE and does not run effects.
+    if (error.status !== 401 && error.status !== 403 && error.status !== 404
+        && error.message !== 'RULESET_BYPASS_UNVERIFIABLE') throw error;
   }
   if (policyCommit && policyCommit !== main?.commit?.sha) throw new Error('POLICY_STALE');
   if (github.readRepository && (await github.readRepository()).id !== policy.repository_id) throw new Error('REPOSITORY_MISMATCH');
@@ -238,7 +242,11 @@ export async function defaultPorts(env, policy, configuration, flags) {
         try {
           return await readClient.readProtection();
         } catch (error) {
-          if (error.status === 401 || error.status === 403 || error.status === 404) return null;
+          // A metadata token cannot see bypass_actors. Disabled reconciliation
+          // must stay read-only instead of failing the scheduled workflow.
+          // Live effects keep the strict RULESET_BYPASS_UNVERIFIABLE failure.
+          if (error.status === 401 || error.status === 403 || error.status === 404
+              || error.message === 'RULESET_BYPASS_UNVERIFIABLE') return null;
           throw error;
         }
       },
@@ -249,15 +257,27 @@ export async function defaultPorts(env, policy, configuration, flags) {
       },
     };
   }
-  const token = env.AGENT_PIPELINE_APP_ID
-    ? await createInstallationToken({
-      fetch: globalThis.fetch,
-      appId: env.AGENT_PIPELINE_APP_ID,
-      privateKey: env.AGENT_PIPELINE_APP_PRIVATE_KEY,
-      installationId: env.AGENT_PIPELINE_APP_INSTALLATION_ID,
-      repository,
-    })
-    : (env.AGENT_PIPELINE_GITHUB_TOKEN || env.GITHUB_TOKEN);
+  // Live controller effects require an App token limited to exactly one repo.
+  // An unrestricted installation token could expose Administration:write and
+  // falsely pass a protection preflight even when the policy forbids that scope.
+  if (!env.AGENT_PIPELINE_APP_ID || !env.AGENT_PIPELINE_APP_PRIVATE_KEY
+      || !env.AGENT_PIPELINE_APP_INSTALLATION_ID
+      || !Number.isSafeInteger(policy.repository_id)) throw new Error('APP_CREDENTIALS_REQUIRED');
+  const token = await createInstallationToken({
+    fetch: globalThis.fetch,
+    appId: env.AGENT_PIPELINE_APP_ID,
+    privateKey: env.AGENT_PIPELINE_APP_PRIVATE_KEY,
+    installationId: env.AGENT_PIPELINE_APP_INSTALLATION_ID,
+    repository,
+    tokenScope: { repository_ids: [policy.repository_id], permissions: {
+      administration: 'read',
+      actions: 'write',
+      checks: 'write',
+      contents: 'write',
+      issues: 'write',
+      pull_requests: 'write',
+    } },
+  });
   const github = createGitHubClient({ fetch: globalThis.fetch, token, repository, policy });
   const cursor = createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base });
   return {

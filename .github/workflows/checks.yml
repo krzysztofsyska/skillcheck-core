@@ -1,6 +1,9 @@
 name: Checks
 on:
   push:
+    branches:
+      - main
+      - integration
   pull_request:
 permissions:
   contents: read
@@ -28,8 +31,13 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: node --test tests/vercel-deployment-policy.test.mjs
       - run: npm run typecheck
       - run: npm run test:db
+      - run: npm run test:retention-scheduler
+      - run: npm run test:retention-scheduler-concurrency
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:sales-leads
       - run: npm run test:sales-pipeline
         env:
@@ -40,15 +48,33 @@ jobs:
       - run: npm run test:auth
       - run: npm run test:cv
       - run: npm run test:screening
-      - run: node --test tests/sc-019-billing-prototype.test.mjs
-      - run: node --experimental-strip-types --test tests/sc-019-package-display.test.mjs
+      - run: node --test tests/sc-019-billing-prototype.test.mjs tests/sc-019-billing-ui.test.mjs
+      - run: node --test tests/sc-019-package-display.test.mjs
       - run: node --test tests/sc-019-billing-concurrency.test.mjs
         env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      - run: node --test tests/sc-019-erasure-baseline.test.mjs
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:screening-report
       - run: npm run test:screening-joint
       - run: npm run test:communication
       - run: npm run test:contact-verification
+      - run: npm run test:erasure-preview
+      - run: npm run test:erasure-lifecycle
+      - run: npm run test:erasure-execution
+      - run: npm run test:erasure-service
+      - run: npm run test:erasure-execution-concurrency
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          ERASURE_LEDGER_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      - run: npm run test:erasure-lifecycle-concurrency
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      - run: npm run test:erasure-preview-concurrency
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:contact-verification-concurrency
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
@@ -73,6 +99,7 @@ jobs:
       - run: npm run test:screening-report-http
       - run: npm run test:auth-http
       - run: npm run test:marketing
+      - run: node --test tests/sc-019-package-http.test.mjs
       - run: npm run test:sales-leads-http
       - run: npm run test:sales-pipeline-http
       - run: npm run test:sales-leads-operator

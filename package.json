@@ -17,7 +17,7 @@
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
     "test:screening-report": "node --test tests/screening-report.test.mjs",
     "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
-    "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs",
+    "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
     "test:live-check": "node --test tests/live-check.test.mjs tests/live-membership.test.mjs tests/live-final-audit.test.mjs",
@@ -39,7 +39,17 @@
     "test:sales-pipeline": "node --test tests/sales-pipeline.test.mjs",
     "test:sales-pipeline-http": "node --test tests/sales-pipeline-http.test.mjs",
     "test:contact-verification": "node --test tests/contact-verification.test.mjs tests/contact-verification-database.test.mjs",
-    "test:contact-verification-concurrency": "node --test tests/contact-verification-concurrency.test.mjs"
+    "test:contact-verification-concurrency": "node --test tests/contact-verification-concurrency.test.mjs",
+    "test:erasure-preview": "node --test tests/erasure-preview-database.test.mjs tests/erasure-preview-ui.test.mjs",
+    "test:erasure-preview-concurrency": "node --test tests/erasure-preview-concurrency.test.mjs",
+    "test:erasure-lifecycle": "node --test tests/erasure-lifecycle-database.test.mjs tests/erasure-lifecycle-ui.test.mjs",
+    "test:erasure-lifecycle-concurrency": "node --test tests/erasure-lifecycle-concurrency.test.mjs",
+    "test:erasure-execution": "node --test tests/erasure-execution-database.test.mjs tests/erasure-ledger.test.mjs",
+    "test:erasure-execution-concurrency": "node --test tests/erasure-execution-concurrency.test.mjs tests/erasure-ledger-concurrency.test.mjs",
+    "test:retention-scheduler": "node --test tests/retention-scheduler-database.test.mjs tests/retention-scheduler-ui.test.mjs",
+    "test:retention-scheduler-concurrency": "node --test tests/retention-scheduler-concurrency.test.mjs",
+    "test:erasure-service": "node --test tests/erasure-service.test.mjs tests/erasure-service-backend.test.mjs",
+    "test:competency": "node --test tests/competency-test.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
