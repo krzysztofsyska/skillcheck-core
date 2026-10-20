@@ -78,6 +78,17 @@ const cents = (n: bigint): number => n >= BigInt(0) && n <= MAX_MINOR ? Number(n
 const roundedRatio = (numerator: bigint, denominator: bigint): bigint =>
   denominator > BigInt(0) && numerator >= BigInt(0) ? (numerator * BigInt(2) + denominator) / (BigInt(2) * denominator) : fail('INVALID_RATIO');
 const uniq = (items: readonly string[]): boolean => new Set(items).size === items.length;
+function capabilitySnapshot(source: ReadonlySet<string>): ReadonlySet<string> {
+  try {
+    if (!source || typeof source.has !== 'function' || typeof source.values !== 'function' ||
+        !Number.isSafeInteger(source.size) || source.size < 0 || source.size > 512) return fail('INVALID_CAPABILITIES');
+    const values = Array.from(source.values());
+    if (values.length !== source.size || !values.every(isCode) || !uniq(values)) return fail('INVALID_CAPABILITIES');
+    const snapshot = new Set(values);
+    if (values.some(c => source.has(c) !== true)) return fail('INVALID_CAPABILITIES');
+    return snapshot;
+  } catch { return fail('INVALID_CAPABILITIES'); }
+}
 
 function calculateRule(rule: PriceRule | null | undefined, qty: number, allowBundle = false): number {
   if (!validQty(qty)) return fail('INVALID_QUANTITY');
@@ -152,12 +163,13 @@ function validatedRequest(input: unknown): QuoteRequest {
 export function quoteOffer(offer: Offer, untrustedRequest: unknown,
   runtimeCapabilities: ReadonlySet<string>, options: Readonly<{ allowDraft?: boolean }> = {}): Quote {
   const input = validatedRequest(untrustedRequest);
+  const draftPreview = options.allowDraft === true && offer?.status === 'DRAFT';
   if (!plain(offer) || !versionPattern.test(offer.versionId) || offer.currency !== 'PLN' ||
-      offer.approved !== true || !percentage(offer.vatBasisPoints) ||
-      (offer.status !== 'PUBLISHED' && !(options.allowDraft === true && offer.status === 'DRAFT')) ||
+      !percentage(offer.vatBasisPoints) ||
+      !(offer.status === 'PUBLISHED' && offer.approved === true) && !draftPreview ||
       !Array.isArray(offer.plans) || !Array.isArray(offer.services) ||
-      !Array.isArray(offer.planServices) || !Array.isArray(offer.discounts) ||
-      !(runtimeCapabilities instanceof Set)) return fail('OFFER_NOT_APPROVED');
+      !Array.isArray(offer.planServices) || !Array.isArray(offer.discounts)) return fail('OFFER_NOT_APPROVED');
+  const ready = capabilitySnapshot(runtimeCapabilities);
   if (input.expectedVersionId !== offer.versionId) return fail('STALE_VERSION');
   if (offer.plans.length > 64 || offer.services.length > 1000 || offer.planServices.length > 4000 || offer.discounts.length > 64)
     return fail('INVALID_CATALOG');
@@ -176,6 +188,11 @@ export function quoteOffer(offer: Offer, untrustedRequest: unknown,
         !(s.capabilityCode === null || isCode(s.capabilityCode))) return fail('INVALID_CATALOG');
     services.set(s.code, s);
   }
+  // A typo in even an excluded catalogue item must not silently weaken an exclusion.
+  for (const s of Array.from(services.values())) {
+    if (s.dependencies.some(code => !services.has(code)) || s.exclusions.some(code => !services.has(code)))
+      return fail('INVALID_CATALOG');
+  }
   const plan = plans.get(input.packageCode);
   if (!plan || plan.commercialStatus === 'hidden' || !validCvCount(plan.cvPolicy, input.cvCount)) return fail('PLAN_UNAVAILABLE');
   if (plan.baseNetMinor === null) return fail('UNPRICED');
@@ -183,7 +200,9 @@ export function quoteOffer(offer: Offer, untrustedRequest: unknown,
   for (const l of offer.planServices) {
     if (!plain(l) || !isPackage(l.packageCode) || !isCode(l.serviceCode) || !services.has(l.serviceCode) ||
         !validQty(l.includedQuantity) || !validQty(l.maxQuantity) || !validQty(l.quantityStep) || l.quantityStep === 0 ||
-        l.maxQuantity < l.includedQuantity || !commercial.includes(l.commercialStatus)) return fail('INVALID_CATALOG');
+        l.maxQuantity < l.includedQuantity || !commercial.includes(l.commercialStatus) ||
+        typeof l.allowed !== 'boolean' || typeof l.visible !== 'boolean' ||
+        typeof l.extraAllowed !== 'boolean' || typeof l.autoPurchase !== 'boolean') return fail('INVALID_CATALOG');
     if (l.packageCode === input.packageCode) {
       if (links.has(l.serviceCode)) return fail('INVALID_CATALOG');
       links.set(l.serviceCode, l);
@@ -202,6 +221,11 @@ export function quoteOffer(offer: Offer, untrustedRequest: unknown,
     desired.set(add.serviceCode, qty);
     if (qty > 0) chosen.add(add.serviceCode);
   }
+  // Included/nested bundles are unsupported. Reject instead of falsely promising their contents.
+  for (const [code, l] of Array.from(links.entries())) {
+    const rule = l.overridePriceRule ?? services.get(code)?.defaultPriceRule;
+    if (rule?.method === 'bundle' && l.includedQuantity > 0) return fail('INVALID_BUNDLE');
+  }
   // Bundles automatically include their explicitly specified contents; a component may be covered by only one bundle.
   const covered = new Map<string, number>();
   for (const code of Array.from(chosen)) {
@@ -217,6 +241,8 @@ export function quoteOffer(offer: Offer, untrustedRequest: unknown,
       seen.add(comp.serviceCode);
       const target = links.get(comp.serviceCode);
       if (!target || !target.allowed || !target.extraAllowed || !services.has(comp.serviceCode)) return fail('INVALID_BUNDLE');
+      const targetRule = target.overridePriceRule ?? services.get(comp.serviceCode)?.defaultPriceRule;
+      if (targetRule?.method === 'bundle') return fail('INVALID_BUNDLE');
       const targetTotal = target.includedQuantity + comp.quantity;
       if (targetTotal > target.maxQuantity || comp.quantity % target.quantityStep !== 0) return fail('INVALID_BUNDLE');
       covered.set(comp.serviceCode, comp.quantity);
@@ -238,7 +264,7 @@ export function quoteOffer(offer: Offer, untrustedRequest: unknown,
     lines.push({ kind: 'cv_overage', code: 'cv', quantity: input.cvCount, included: plan.cvIncluded, billed: cvBilled, netMinor: price });
   }
   const unavailable = new Set<string>();
-  if (plan.commercialStatus !== 'purchasable' || !plan.capabilityCode || !runtimeCapabilities.has(plan.capabilityCode))
+  if (plan.commercialStatus !== 'purchasable' || !plan.capabilityCode || !ready.has(plan.capabilityCode))
     unavailable.add(plan.capabilityCode ?? 'plan_not_ready');
   for (const [code, l] of Array.from(links.entries())) {
     const qty = desired.get(code) ?? 0;
@@ -252,7 +278,7 @@ export function quoteOffer(offer: Offer, untrustedRequest: unknown,
     lines.push({ kind: 'service', code, quantity: qty, included, billed: billable, netMinor: amount });
     if (l.commercialStatus !== 'purchasable' || s.commercialStatus !== 'purchasable' ||
         s.technicalStatus !== 'verified' || !l.autoPurchase || !s.capabilityCode ||
-        !runtimeCapabilities.has(s.capabilityCode)) unavailable.add(s.capabilityCode ?? code);
+        !ready.has(s.capabilityCode)) unavailable.add(s.capabilityCode ?? code);
   }
   cents(subtotal);
   let discounted = subtotal, discountTotal = BigInt(0);
