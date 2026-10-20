@@ -22,7 +22,8 @@ CREATE TABLE sc_pricing_isolated.versions (
   approved boolean NOT NULL DEFAULT false,
   vat_basis_points integer NOT NULL CHECK (vat_basis_points BETWEEN 0 AND 10000),
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (id, scope_id)
+  UNIQUE (id, scope_id),
+  CHECK (status NOT IN ('PUBLISHED','SUPERSEDED') OR approved = true)
 );
 
 CREATE TABLE sc_pricing_isolated.price_rules (
@@ -99,7 +100,7 @@ DECLARE global_max integer; global_step integer;
 BEGIN
   SELECT max_quantity, quantity_step INTO global_max, global_step
   FROM sc_pricing_isolated.services
-  WHERE version_id = NEW.version_id AND code = NEW.service_code;
+  WHERE version_id = NEW.version_id AND code = NEW.service_code FOR SHARE;
   IF global_max IS NULL OR NEW.max_quantity > global_max OR
      NEW.quantity_step % global_step <> 0 THEN
     RAISE EXCEPTION 'sc_pricing_package_service_limits' USING ERRCODE = '22023';
@@ -110,12 +111,30 @@ CREATE TRIGGER package_service_limits BEFORE INSERT OR UPDATE
 ON sc_pricing_isolated.package_services FOR EACH ROW
 EXECUTE FUNCTION sc_pricing_isolated.check_package_service();
 
+-- Service changes must not invalidate existing per-plan assignments.
+CREATE FUNCTION sc_pricing_isolated.check_service_limits() RETURNS trigger LANGUAGE plpgsql AS $
+BEGIN
+ IF EXISTS (SELECT 1 FROM sc_pricing_isolated.package_services p
+            WHERE p.version_id=NEW.version_id AND p.service_code=NEW.code
+              AND (p.max_quantity > NEW.max_quantity OR p.quantity_step % NEW.quantity_step <> 0)) THEN
+   RAISE EXCEPTION 'sc_pricing_service_update_breaks_packages' USING ERRCODE='22023';
+ END IF;
+ RETURN NEW;
+END $;
+CREATE TRIGGER service_limits BEFORE UPDATE OF max_quantity,quantity_step
+ON sc_pricing_isolated.services FOR EACH ROW
+EXECUTE FUNCTION sc_pricing_isolated.check_service_limits();
+
 -- Snapshot rows become immutable after publication, even if catalog is superseded.
 CREATE FUNCTION sc_pricing_isolated.guard_catalog_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE old_version uuid; new_version uuid;
 BEGIN
   old_version := CASE WHEN TG_OP <> 'INSERT' THEN OLD.version_id ELSE NULL END;
   new_version := CASE WHEN TG_OP <> 'DELETE' THEN NEW.version_id ELSE NULL END;
+  -- FOR SHARE conflicts with UPDATE of versions.status. Child writers and publishers
+  -- serialize on the exact parent version even when its status is currently DRAFT.
+  PERFORM 1 FROM sc_pricing_isolated.versions v
+    WHERE v.id IN (old_version,new_version) ORDER BY v.id FOR SHARE;
   IF EXISTS (SELECT 1 FROM sc_pricing_isolated.versions v
              WHERE v.id IN (old_version,new_version)
                AND v.status IN ('PUBLISHED','SUPERSEDED')) THEN
@@ -149,6 +168,15 @@ BEGIN
 END $$;
 CREATE TRIGGER version_history BEFORE UPDATE OR DELETE ON sc_pricing_isolated.versions
 FOR EACH ROW EXECUTE FUNCTION sc_pricing_isolated.guard_version_history();
+
+-- Scope IDs/codes are technical immutable identities. Replace by creating new scopes.
+-- Stronger than guarding only published scopes; no TOCTOU race across publication.
+CREATE FUNCTION sc_pricing_isolated.guard_scope_history() RETURNS trigger LANGUAGE plpgsql AS $
+BEGIN
+  RAISE EXCEPTION 'sc_pricing_scope_immutable' USING ERRCODE='55000';
+END $;
+CREATE TRIGGER scope_history BEFORE UPDATE OR DELETE ON sc_pricing_isolated.scopes
+FOR EACH ROW EXECUTE FUNCTION sc_pricing_isolated.guard_scope_history();
 
 -- Prototype is deny-by-default: no SELECT/INSERT/UPDATE/DELETE policies for browser roles.
 ALTER TABLE sc_pricing_isolated.scopes ENABLE ROW LEVEL SECURITY;
