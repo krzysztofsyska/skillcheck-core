@@ -1,5 +1,5 @@
 /** Isolated SC-014-B3 broker. No page or candidate invitations (B4 is separate). */
-import { competencyBrokerOtherMethod, competencyBrokerPost } from '../../../../lib/competency-attempt-broker-runtime';
+import { competencyBrokerOtherMethod, competencyBrokerPost } from '../../../../lib/competency-attempt-broker-runtime.ts';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
