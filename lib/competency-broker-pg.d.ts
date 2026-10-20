@@ -11,11 +11,13 @@ declare module 'pg' {
       max: number;
       maxUses: number;
       connectionTimeoutMillis: number;
+      query_timeout: number;
       idleTimeoutMillis: number;
       allowExitOnIdle: boolean;
       options: string;
     });
     waitingCount: number;
     connect(): Promise<PoolClient>;
+    on(event: 'error', listener: (error: Error) => void): this;
   }
 }
