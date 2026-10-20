@@ -49,7 +49,6 @@ const LOGGING_AUDIT = [
   "select current_setting('log_statement') as statements,",
   " current_setting('log_parameter_max_length') as success_parameters,",
   " current_setting('log_parameter_max_length_on_error') as error_parameters,",
-  " current_setting('shared_preload_libraries') as preload_libraries,",
   " current_setting('pgaudit.log_parameter',true) as pgaudit_parameters,",
   " current_setting('auto_explain.log_min_duration',true) as auto_explain_duration"
 ].join('\n');
@@ -81,14 +80,14 @@ export async function verifyCompetencyGateway(
   // PostgreSQL duration/statement/error logging can independently log bind
   // parameters. Defaults (-1) are unsafe even when log_statement is "none".
   // Audit extensions have separate logging controls; unknown configurations
-  // fail closed until explicitly reviewed.
+  // fail closed until explicitly reviewed. A restricted login cannot inspect
+  // superuser-only shared_preload_libraries (and must not gain pg_read_all_settings),
+  // so deployment needs a separate privileged configuration attestation.
   const logging = (await client.query(LOGGING_AUDIT)).rows[0];
   if (!logging ||
       logging.statements !== 'none' ||
       logging.success_parameters !== '0' ||
       logging.error_parameters !== '0' ||
-      typeof logging.preload_libraries !== 'string' ||
-      /(?:^|,)\s*(?:pgaudit|auto_explain)\s*(?:,|$)/i.test(logging.preload_libraries) ||
       (logging.pgaudit_parameters != null && logging.pgaudit_parameters !== 'off') ||
       (logging.auto_explain_duration != null && logging.auto_explain_duration !== '-1')) {
     throw new Error('Unsafe database parameter logging');
