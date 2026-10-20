@@ -75,10 +75,12 @@ function equalSecret(a: string | null, b: string): boolean {
 }
 function allowedHeaders(request: Request): boolean {
   let total = 0;
-  for (const [name, value] of request.headers) {
+  let oversized = false;
+  request.headers.forEach((value, name) => {
     total += name.length + value.length;
-    if (value.length > 2048 || total > 8192) return false;
-  }
+    if (value.length > 2048 || total > 8192) oversized = true;
+  });
+  if (oversized) return false;
   if ((request.headers.get('cookie') || '').length > 1024) return false;
   const contentType = request.headers.get('content-type') || '';
   if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(contentType)) return false;
@@ -108,12 +110,14 @@ async function boundedJson(request: Request): Promise<unknown> {
   const chunks: Uint8Array[] = [];
   let length = 0;
   const timeout = AbortSignal.timeout(4000);
-  const timedOut = timedOut;
+  const timedOut: Promise<never> = new Promise((_, reject) => {
+    timeout.addEventListener('abort', () => reject(new Error('Body timeout')), { once: true });
+  });
   try {
     while (true) {
       const result = await Promise.race([
         reader.read(),
-        new Promise<never>((_, reject) => timeout.addEventListener('abort', () => reject(new Error('Body timeout')), { once: true }))
+        timedOut
       ]);
       if (result.done) break;
       length += result.value.byteLength;
@@ -142,7 +146,8 @@ function exactKeys(value: Record<string, unknown>, names: string[]): boolean {
 type Parsed =
   | { operation: 'bootstrap' }
   | { operation: 'exchange'; token: string }
-  | { operation: 'inspect' | 'status' }
+  | { operation: 'inspect' }
+  | { operation: 'status' }
   | { operation: 'start'; requestKey: string }
   | { operation: 'save'; draft: string; expectedVersion: number; requestKey: string }
   | { operation: 'submit'; answer: {workSample: string}; requestKey: string };
@@ -153,8 +158,8 @@ function parse(value: unknown): Parsed | null {
     case 'exchange':
       return exactKeys(value, ['operation','token']) && typeof value.token === 'string' && CAPABILITY.test(value.token)
         ? { operation: 'exchange', token: value.token } : null;
-    case 'inspect': case 'status':
-      return exactKeys(value, ['operation']) ? { operation: value.operation } : null;
+    case 'inspect': return exactKeys(value, ['operation']) ? { operation: 'inspect' } : null;
+    case 'status': return exactKeys(value, ['operation']) ? { operation: 'status' } : null;
     case 'start':
       return exactKeys(value, ['operation','requestKey']) &&
         typeof value.requestKey === 'string' && UUID.test(value.requestKey)
