@@ -4,7 +4,7 @@
 import {createServer} from 'node:https';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
-import * as route from '../../../app/api/competency/attempt/route.ts';
+import * as route from '../../app/api/competency/attempt/route.ts';
 
 const tls={key:readFileSync(process.env.SC014_TEST_TLS_KEY),cert:readFileSync(process.env.SC014_TEST_TLS_CERT)};
 const server=createServer(tls,async(req,res)=>{
