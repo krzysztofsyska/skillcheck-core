@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
+import {randomUUID} from 'node:crypto';
 import {startCompetencyHttps} from './helpers/competency-broker-harness.mjs';
 
-test('B3 Chromium over real HTTPS: fragment is scrubbed before hydration; HttpOnly Secure cookie survives refresh',async t=>{
+test('B3 Chromium over real HTTPS: refresh, rotated link and second test retain safe HttpOnly session behavior',async t=>{
  const e=await startCompetencyHttps(t);
  const f=await e.seed({duration:180});
  const grant=await e.issue(f);
@@ -48,6 +49,27 @@ test('B3 Chromium over real HTTPS: fragment is scrubbed before hydration; HttpOn
  const resumed=await page.evaluate(()=>window.__b3.initial);
  assert.equal(resumed.data.draft.text,'Syntetyczny draft');
  assert.equal(resumed.data.deadlineAt,started.data.deadlineAt);
+ // The recruiter rotates an issued link while this browser still has its old
+ // HttpOnly cookie. The new link restores the existing attempt, not a retry.
+ await e.h.asUser(f.owner);
+ const rotated=await e.call('public.rotate_competency_test_grant',[grant.grantId,grant.revision,randomUUID()]);
+ assert.equal((await page.evaluate(()=>window.__b3.op('inspect'))).status,404);
+ assert.equal((await context.cookies()).find(c=>c.name==='__Secure-sc014_b3_session').value,session.value);
+ await page.goto(e.origin+'/__sc014_b3_isolated_harness__#grant='+rotated.token,{waitUntil:'domcontentloaded'});
+ await page.waitForFunction(()=>document.body.dataset.state==='in_progress',{timeout:15000});
+ const afterRotation=await page.evaluate(()=>window.__b3.initial);
+ assert.equal(afterRotation.data.attemptId,started.data.attemptId);
+ assert.equal(afterRotation.data.deadlineAt,started.data.deadlineAt);
+ assert.equal(afterRotation.data.draft.text,'Syntetyczny draft');
+ const rotatedCookie=(await context.cookies()).find(c=>c.name==='__Secure-sc014_b3_session');
+ assert.notEqual(rotatedCookie.value,session.value);assert.equal(rotatedCookie.httpOnly,true);
+ for(const rejectedToken of [grant.token,rotated.token,'0'.repeat(64)]) {
+  const denied=await page.evaluate(token=>window.__b3.op('exchange',{token}),rejectedToken);
+  assert.equal(denied.status,404,'old, already exchanged and unknown tokens remain unusable');
+  assert.equal((await context.cookies()).find(c=>c.name==='__Secure-sc014_b3_session').value,rotatedCookie.value,
+   'failed new-link exchange preserves the working cookie');
+ }
+ assert.equal((await page.evaluate(()=>window.__b3.op('inspect'))).status,200);
  const receipt=await page.evaluate(()=>window.__b3.op('submit',{answer:{workSample:'Plan wdrożenia i komunikacji.'},requestKey:crypto.randomUUID()}));
  assert.equal(receipt.status,200);assert.deepEqual(Object.keys(receipt.data).sort(),['attemptId','state']);
  await page.reload({waitUntil:'domcontentloaded'});
@@ -56,6 +78,16 @@ test('B3 Chromium over real HTTPS: fragment is scrubbed before hydration; HttpOn
  assert.equal(status.status,200);
  assert.deepEqual(status.data,receipt.data);
  assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
- assert.ok(requests.every(x=>!x.url.includes(grant.token) && !x.url.includes('#grant=')));
+ const second=await e.seed(),secondGrant=await e.issue(second);
+ await page.goto(e.origin+'/__sc014_b3_isolated_harness__#grant='+secondGrant.token,{waitUntil:'domcontentloaded'});
+ await page.waitForFunction(()=>document.body.dataset.state==='not_started',{timeout:15000});
+ const secondView=await page.evaluate(()=>window.__b3.initial);
+ assert.equal(secondView.data.revisionId,second.definitionId);
+ assert.notEqual((await context.cookies()).find(c=>c.name==='__Secure-sc014_b3_session').value,rotatedCookie.value);
+ await page.reload({waitUntil:'domcontentloaded'});
+ await page.waitForFunction(()=>document.body.dataset.state==='not_started',{timeout:15000});
+ assert.equal((await page.evaluate(()=>window.__b3.initial)).data.revisionId,second.definitionId);
+ assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+ assert.ok(requests.every(x=>[grant.token,rotated.token,secondGrant.token,'#grant='].every(secret=>!x.url.includes(secret))));
  assert.deepEqual(errors,[],'browser page errors');
 });

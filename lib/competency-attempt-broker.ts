@@ -282,7 +282,13 @@ export function createCompetencyBroker(deps: CompetencyBrokerDependencies): (req
     }
     const supplied = request.headers.get('x-sc014-csrf');
     if (input.operation === 'exchange') {
-      if (cookie || !init || !equalSecret(supplied, hmac(deps.csrfKey, 'preflight:' + deps.expectedOrigin, init))) {
+      // An explicit new-link exchange can replace an existing (even revoked)
+      // browser session. Prove CSRF against THAT cookie; a preflight proof must
+      // never override it. B2 still authorizes the new one-use grant, and only
+      // the committed exchange below may replace the cookie. Refresh is inert.
+      const proof = cookie ? hmac(deps.csrfKey, 'session', cookie)
+        : init ? hmac(deps.csrfKey, 'preflight:' + deps.expectedOrigin, init) : null;
+      if (!proof || !equalSecret(supplied, proof)) {
         return response(403, { error: 'unavailable' });
       }
     } else if (!cookie || !equalSecret(supplied, hmac(deps.csrfKey, 'session', cookie))) {

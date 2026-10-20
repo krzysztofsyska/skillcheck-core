@@ -196,3 +196,25 @@ not permission to activate this feature.
 
 All new tests require current-HEAD CI and independent review before merge.
 No production configuration, customer activation or provider call is authorized.
+
+
+## Same-browser new-link exchange (2026-10-20)
+
+Ordinary bootstrap with a session cookie only returns that cookie's CSRF proof;
+it does not clear, replace or reauthorize the session. An explicit `exchange`
+with a new grant may use the proof bound to that exact existing cookie, including
+one invalidated by recruiter rotation. Without a session cookie, exchange still
+requires the short-lived preflight proof. A preflight or another session's proof
+cannot replace an existing cookie. Origin, admission and body checks are unchanged.
+
+B2 alone authorizes the new grant, its current revision and one-time exchange.
+The broker publishes the replacement cookie only after COMMIT. Invalid/reused
+links and uncertain commits leave the existing browser cookie untouched; they
+never reactivate the old grant or session. Rotation restores the same original
+attempt, deadline and draft. Opening an independent second test in the same
+browser replaces its selected session only after a successful new exchange.
+
+Contract regressions cover missing/wrong/mixed CSRF, Origin, rejection and commit
+failure. Isolated Chromium and actual production-route PG16 tests cover the
+normal rotated-link flow; Chromium also opens a second test in the same context.
+No public page, reset endpoint, production activation or DB change is introduced.

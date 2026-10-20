@@ -6,7 +6,7 @@ import {readFileSync,writeFileSync,mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomBytes,randomUUID} from 'node:crypto';
-import {startCompetencyHttps,httpsPost,httpSession} from './helpers/competency-broker-harness.mjs';
+import {startCompetencyHttps,httpsPost,httpSession,findCookie} from './helpers/competency-broker-harness.mjs';
 
 test('B3 actual enabled route -> production construct -> trusted TLS PostgreSQL16 and Redis REST',async t=>{
  assert.ok(process.env.SC014_B3_TEST_PG_CA,'The isolated workflow must provision a trusted PostgreSQL TLS certificate');
@@ -36,12 +36,29 @@ test('B3 actual enabled route -> production construct -> trusted TLS PostgreSQL1
  const request=(operation,options={})=>httpsPost(ready.origin,readFileSync(cert),operation,
   {...options,headers:{'x-forwarded-for':'203.0.113.136',...options.headers}});
  const f=await e.seed(),grant=await e.issue(f);
- const session=await httpSession({request},grant);
+ let session=await httpSession({request},grant);
  const inspected=await request('inspect',{cookie:session.cookie,csrf:session.csrf});
  assert.equal(inspected.status,200,inspected.raw);assert.equal(inspected.data.state,'not_started');
  const started=await request('start',{cookie:session.cookie,csrf:session.csrf,
   body:JSON.stringify({operation:'start',requestKey:randomUUID()})});
  assert.equal(started.status,200,started.raw);assert.equal(started.data.state,'in_progress');
+ const saved=await request('save',{cookie:session.cookie,csrf:session.csrf,
+  body:JSON.stringify({operation:'save',draft:'Syntetyczny draft po rotacji',expectedVersion:0,requestKey:randomUUID()})});
+ assert.equal(saved.status,200);
+ await e.h.asUser(f.owner);
+ const rotated=await e.call('public.rotate_competency_test_grant',[grant.grantId,grant.revision,randomUUID()]);
+ assert.equal((await request('inspect',{cookie:session.cookie,csrf:session.csrf})).status,404);
+ const previous=session;
+ const renewedCsrf=await request('bootstrap',{cookie:previous.cookie,headers:{'x-sc014-intent':'bootstrap'}});
+ assert.equal(renewedCsrf.status,200);assert.equal(renewedCsrf.headers['set-cookie'],undefined);
+ const replacement=await request('exchange',{cookie:previous.cookie,csrf:renewedCsrf.data.csrf,
+  body:JSON.stringify({operation:'exchange',token:rotated.token})});
+ assert.equal(replacement.status,200,replacement.raw);
+ session={cookie:findCookie(replacement,'__Secure-sc014_b3_session'),csrf:replacement.data.csrf};
+ assert.notEqual(session.cookie,previous.cookie);
+ const recovered=await request('inspect',{cookie:session.cookie,csrf:session.csrf});
+ assert.equal(recovered.status,200);assert.equal(recovered.data.deadlineAt,started.data.deadlineAt);
+ assert.equal(recovered.data.draft.text,'Syntetyczny draft po rotacji');
  await e.h.asAdmin();
  const connections=(await e.db.query('select s.ssl from pg_stat_activity a join pg_stat_ssl s on s.pid=a.pid where a.usename=$1',[e.user])).rows;
  assert.ok(connections.some(row=>row.ssl===true),'actual production pool authenticated over TLS');

@@ -15,7 +15,7 @@ const noStore=r=>{assert.match(r.headers.get('cache-control'),/no-store/);assert
 const json=(operation,csrf,extra={},cookies='',headers={})=>new Request(endpoint,{method:'POST',
  headers:{'content-type':'application/json',origin, ...(csrf?{'x-sc014-csrf':csrf}:{}),cookie:cookies,...headers},
  body:JSON.stringify({operation,...extra})});
-function setup({failCommit=false,limiter={consume:async()=>true},now=()=>Date.now()}={}){
+function setup({failCommit=false,limiter={consume:async()=>true},now=()=>Date.now(),exchangeSession=()=>issuedSession}={}){
  const state={called:[],released:[],active:0};
  const broker=createCompetencyBroker({
   enabled:true,expectedOrigin:origin,csrfKey:Buffer.alloc(32,17),
@@ -24,9 +24,9 @@ function setup({failCommit=false,limiter={consume:async()=>true},now=()=>Date.no
    state.active++;let ended=false;
    return {query:async(sql,values)=>{
     state.called.push({sql,values});
-    if(sql==='commit'&&failCommit)throw new Error('synthetic broken COMMIT: '+token);
+    if(sql==='commit'&&(typeof failCommit==='function'?failCommit():failCommit))throw new Error('synthetic broken COMMIT: '+token);
     if(sql==='commit'){ended=true;return {rows:[]};}
-    if(sql.startsWith('select private.exchange_'))return {rows:[{result:{session:issuedSession,expiresAt:new Date(now()+3600000).toISOString()}}]};
+    if(sql.startsWith('select private.exchange_'))return {rows:[{result:{session:exchangeSession(values[0]),expiresAt:new Date(now()+3600000).toISOString()}}]};
     if(sql.startsWith('select private.inspect_'))return {rows:[{result:{state:'not_started',revisionId:testId,version:1,durationMinutes:180,label:'Test kompetencji',company_id:'SECRET'}}]};
     if(sql.startsWith('select private.start_'))return {rows:[{result:{state:'in_progress',attemptId:testId,startedAt:new Date().toISOString(),deadlineAt:new Date(now()+10800000).toISOString(),
       test:{revisionId:testId,version:1,title:'Fikcyjne ćwiczenie',instructions:'Plan',expectedOutput:'Plan działania',durationMinutes:180,criteria:['PRIVATE']},
@@ -83,7 +83,7 @@ test('POST-only broker: preflight is same-origin, custom-header protected, and r
  assert.equal(refreshed.headers.get('set-cookie'),null,'cannot duplicate existing session');
  assert.equal((await broker(json('inspect','0'.repeat(64),{},result.cookie))).status,403);
  assert.equal((await broker(json('inspect',result.csrf,{},''))).status,403);
- assert.equal((await broker(json('exchange',result.csrf,{token},result.cookie))).status,403);
+ assert.equal((await broker(json('exchange','0'.repeat(64),{token},result.cookie))).status,403);
  assert.equal(state.active,0);assert.ok(state.released.every(x=>x.destroy===false && x.ended));
 });
 test('CSRF, strict input shapes, allowlisted in-progress/receipt projections',async()=>{
@@ -164,4 +164,47 @@ test('P2 shared limiter charges requests BEFORE reading slow streamed bodies',as
  assert.equal(reads,0,'body stream cannot consume CPU/memory ahead of shared limiter');
  assert.equal(state.called.length,0,'no database before admission');
  await req.body.cancel();
+});
+
+
+test('explicit new grant exchange uses current cookie CSRF and preserves the session on rejection',async()=>{
+ const nextToken='c'.repeat(64),nextSession='d'.repeat(64),unknownToken='e'.repeat(64);
+ const {broker,state}=setup({exchangeSession:value=>{
+  if(value===token)return issuedSession;
+  if(value===nextToken)return nextSession;
+  throw Object.assign(new Error('synthetic unavailable grant'),{code:'PT404'});
+ }});
+ const first=await establish(broker);
+ const refresh=await broker(json('bootstrap',null,{},first.cookie,{'x-sc014-intent':'bootstrap'}));
+ assert.equal(refresh.status,200);assert.equal((await refresh.json()).csrf,first.csrf);
+ assert.equal(refresh.headers.get('set-cookie'),null,'ordinary refresh never replaces a session');
+ const pre=await broker(json('bootstrap',null,{},'',{'x-sc014-intent':'bootstrap'}));
+ const preCsrf=(await pre.json()).csrf,init=pre.headers.getSetCookie()[0].split(';')[0];
+ const both=first.cookie+'; '+init,before=state.called.length;
+ for(const csrf of [null,'0'.repeat(64),preCsrf]) {
+  const denied=await broker(json('exchange',csrf,{token:nextToken},both));
+  assert.equal(denied.status,403);assert.equal(denied.headers.get('set-cookie'),null);
+ }
+ const crossOrigin=await broker(json('exchange',first.csrf,{token:nextToken},both,{origin:'https://other.test'}));
+ assert.equal(crossOrigin.status,403);assert.equal(state.called.length,before,'wrong proof never reaches SQL');
+ const changed=await broker(json('exchange',first.csrf,{token:nextToken},both));
+ assert.equal(changed.status,200);noStore(changed);
+ const payload=await changed.json(),cookie=changed.headers.getSetCookie().find(x=>x.startsWith(B3_SESSION_COOKIE+'=')).split(';')[0];
+ assert.notEqual(cookie,first.cookie);assert.notEqual(payload.csrf,first.csrf);
+ assert.equal(JSON.stringify(payload).includes(nextSession),false);
+ assert.equal(state.released.at(-1).ended,true,'replacement cookie is emitted after COMMIT');
+ assert.equal((await broker(json('inspect',first.csrf,{},cookie))).status,403,'old CSRF cannot authorize new cookie');
+ const failed=await broker(json('exchange',payload.csrf,{token:unknownToken},cookie));
+ assert.equal(failed.status,404);assert.equal(failed.headers.get('set-cookie'),null,'bad new link leaves current cookie untouched');
+ assert.equal((await broker(json('inspect',payload.csrf,{},cookie))).status,200);
+});
+
+test('uncertain replacement COMMIT never publishes or clears the existing cookie',async()=>{
+ let fail=false;
+ const {broker,state}=setup({failCommit:()=>fail});
+ const first=await establish(broker);fail=true;
+ const reply=await broker(json('exchange',first.csrf,{token:'c'.repeat(64)},first.cookie));
+ assert.equal(reply.status,503);assert.equal(reply.headers.get('set-cookie'),null);
+ assert.equal(state.released.at(-1).destroy,true);
+ fail=false;assert.equal((await broker(json('inspect',first.csrf,{},first.cookie))).status,200);
 });
