@@ -39,7 +39,7 @@ function redisRestTestAdapter(options) {
   return Response.json({result:Number(result)});
  };
 }
-function createSharedLimiter(limits={global:200,source:40}) {
+export function createSharedLimiter(limits={global:200,source:40}) {
  return createRedisRestLimiter('https://redis.invalid.example','isolated-fixture-token',
   redisRestTestAdapter(),limits);
 }
