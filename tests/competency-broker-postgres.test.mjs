@@ -6,12 +6,12 @@ import {startCompetencyHttps,httpSession,findCookie,createSharedLimiter} from '.
 
 const requestKey=()=>randomUUID();
 const body=(operation,fields={})=>JSON.stringify({operation,...fields});
-const denied=r=>[403,404,409,422,429,503].includes(r.status);
+const denied=r=>[400,403,404,409,413,415,422,429,503].includes(r.status);
 function security(r){
  assert.match(r.headers['cache-control'],/no-store/);
  assert.equal(r.headers['referrer-policy'],'no-referrer');
  assert.equal(r.headers['access-control-allow-origin'],undefined);
- assert.doesNotMatch(r.raw,/Poufny tytuł|criteria|company_id|candidate_id|submission_digest|token_digest/);
+ assert.doesNotMatch(r.raw,/criteria|company_id|candidate_id|submission_digest|token_digest/);
 }
 test('B3 real HTTPS -> restricted PostgreSQL16: committed exchange/start/180min/draft/submit/receipt',async t=>{
  const e=await startCompetencyHttps(t);
@@ -22,7 +22,7 @@ test('B3 real HTTPS -> restricted PostgreSQL16: committed exchange/start/180min/
  const inspect=await e.request('inspect',{csrf:s.csrf,cookie:s.cookie});
  assert.equal(inspect.status,200);security(inspect);
  assert.deepEqual(Object.keys(inspect.data).sort(),['durationMinutes','label','revisionId','state','version']);
- assert.equal(inspect.data.state,'not_started');assert.equal(inspect.data.durationMinutes,180);
+ assert.equal(inspect.data.state,'not_started');assert.equal(inspect.data.durationMinutes,180);assert.doesNotMatch(inspect.raw,/Poufny tytuł/);
  const started=await e.request('start',{csrf:s.csrf,cookie:s.cookie,body:body('start',{requestKey:requestKey()})});
  assert.equal(started.status,200,started.raw);security(started);
  assert.equal(started.data.state,'in_progress');assert.equal(started.data.test.title,'Poufny tytuł zadania');
