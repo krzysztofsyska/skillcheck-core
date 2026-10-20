@@ -151,3 +151,48 @@ independent rereview before closing any review thread or merging:
 There is no claimed independent reviewer PASS for the R1 corrections
 until the reviewer explicitly reviews the exact updated SHA. No merge,
 no candidate contact, no production activation.
+
+
+## R2 exact-role boundary and actual production-route regression
+
+The admission audit checks both the dedicated LOGIN and
+`competency_test_gateway`, because NOINHERIT makes the latter's privileges
+invisible to a session_user-only audit. Each connection must have exactly the
+reviewed membership (SET allowed, ADMIN/INHERIT denied), restricted attributes,
+no table or column DML/SELECT, no sequence rights, no schema CREATE or grant
+options. Ownership dependencies are forbidden for either identity, even after
+REVOKE ALL, because an owner can grant itself rights again. Explicit ACLs to
+either identity in system schemas are also forbidden, including column rights
+and system function EXECUTE. Explicit SET/ALTER SYSTEM privileges on server
+parameters are forbidden too, so a role cannot enable parameter logging after
+admission. LOGIN has public USAGE and no callable non-system functions; gateway
+has public/private USAGE and exactly the six existing B2 function overloads.
+PUBLIC invoker functions and extra overloads are not exceptions. Existing
+pgcrypto/auth functions without schema USAGE are not callable and do not need
+new grants. No database grants are added by this PR.
+
+`competency-broker-role.test.mjs` runs the actual composed SQL in PGlite and
+mutates grants, column rights, memberships, ownership and role attributes. This is
+supplemental to the real PG16 admission tests, which exercise the HTTP denial
+and recovery path for both principals.
+
+`competency-broker-route.test.mjs` launches a test-only HTTPS ingress that invokes
+the real exported POST. It does not inject the broker, Pool or limiter. The
+production construct validates all environment inputs, creates its actual TLS
+pg.Pool, uses the real Redis REST fetch/EVAL adapter, and verifies Vercel XFF.
+The workflow provisions a one-day test certificate only on its disposable PG16
+container; the child process trusts the fixture CAs. A successful exchange/start
+and pg_stat_ssl observation prove that a safe enabled adapter remains usable.
+An extra gateway grant must then return generic 503 with no cookie, followed
+by recovery after revocation. This harness is never shipped as a product page.
+
+The runtime preserves PostgreSQL's normal PUBLIC access to system catalogs and
+built-in functions. It does not certify a cluster whose administrator changes
+that global system baseline (for example granting pg_authid SELECT to PUBLIC).
+Before any future activation, DBA attestation must additionally verify that
+system PUBLIC privileges match the reviewed PostgreSQL/Supabase baseline, as
+well as the existing extension logging attestation. This is a deployment gate,
+not permission to activate this feature.
+
+All new tests require current-HEAD CI and independent review before merge.
+No production configuration, customer activation or provider call is authorized.

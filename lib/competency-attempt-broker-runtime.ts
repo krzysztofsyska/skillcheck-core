@@ -75,8 +75,8 @@ export function createCompetencyGatewayRuntime(options: CompetencyGatewayRuntime
       if (options.pool.waitingCount >= 4) throw new Error('Gateway pool backpressure');
       const client = await options.pool.connect();
       try {
-        // Always audit the real LOGIN on the exact pooled connection BEFORE
-        // switching to competency_test_gateway inside a B2 transaction.
+        // Audit both the real LOGIN and the gateway permissions it will acquire
+        // on this exact connection before any capability-bearing B2 query.
         await verifyCompetencyGateway(client, options.expectedUser);
         options.onConnection?.();
         return {
