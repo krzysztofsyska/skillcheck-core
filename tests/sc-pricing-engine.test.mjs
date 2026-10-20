@@ -194,3 +194,44 @@ test('same addon can be disabled in one plan without affecting another', () => {
   error(() => quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 1 }], 20, c), 'ADDON_UNAVAILABLE');
   assert.equal(line(quote('WERYFIKACJA', [{ serviceCode: 'report_ext', quantity: 2 }], 20, c), 'report_ext').netMinor, 300);
 });
+
+
+test('included and nested bundle configurations fail closed instead of hiding covered services', () => {
+  const c = clone();
+  c.planServices.find(l => l.serviceCode === 'bundle_rt').includedQuantity = 1;
+  error(() => quote('ASSESSMENT_CENTER', [], 20, c), 'INVALID_BUNDLE');
+  const n = clone();
+  n.services.push({ code: 'bundle_child', name:'Synthetic nested bundle', capabilityCode:'bundle_ready',
+    technicalStatus:'verified', commercialStatus:'purchasable', dependencies:[], exclusions:[],
+    defaultPriceRule:{ method:'bundle', amountMinor:100, covers:[{serviceCode:'skill_test', quantity:1}] } });
+  n.planServices.push(link('ASSESSMENT_CENTER','bundle_child'));
+  n.services.find(s => s.code === 'bundle_rt').defaultPriceRule.covers = [{serviceCode:'bundle_child', quantity:1}];
+  error(() => quote('ASSESSMENT_CENTER', [{serviceCode:'bundle_rt', quantity:1}], 20, n), 'INVALID_BUNDLE');
+});
+
+test('unknown exclusion/dependency target cannot silently permit forbidden purchases', () => {
+  const c=clone();
+  c.services.find(s => s.code === 'consult').exclusions=['missing_service'];
+  error(() => quote('WERYFIKACJA', [{serviceCode:'consult',quantity:1}],20,c), 'INVALID_CATALOG');
+  const d=clone();
+  d.services.find(s => s.code === 'check_plus').dependencies=['missing_service'];
+  error(() => quote('WERYFIKACJA', [],20,d), 'INVALID_CATALOG');
+});
+
+test('catalog booleans cannot be coerced from strings', () => {
+  for(const key of ['allowed','visible','extraAllowed','autoPurchase']) {
+    const c=clone();
+    c.planServices.find(l => l.packageCode==='PRESELEKCJA')[key]='false';
+    error(() => quote('PRESELEKCJA', [{serviceCode:'report_ext',quantity:1}],20,c), 'INVALID_CATALOG');
+  }
+});
+
+test('cross-realm compatible ReadonlySet contract and non-approved owner draft', () => {
+  const other={size:caps.size,values:()=>caps.values(),has:x=>caps.has(x)};
+  assert.equal(quote('PRESELEKCJA',[],20,offer,other).canPurchase,true);
+  const bad={size:1,values:function*(){},has:()=>true};
+  error(() => quote('PRESELEKCJA',[],20,offer,bad), 'INVALID_CAPABILITIES');
+  const draft=clone();draft.status='DRAFT';draft.approved=false;
+  error(() => quote('PRESELEKCJA',[],20,draft), 'OFFER_NOT_APPROVED');
+  assert.equal(quote('PRESELEKCJA',[],20,draft,caps,{allowDraft:true}).canPurchase,false);
+});
