@@ -57,6 +57,8 @@ jobs:
           node-version: '24.19.0'
           cache: npm
       - run: npm ci
+      - name: Install disposable Redis/Postgres client CLIs
+        run: sudo apt-get update -qq && sudo apt-get install -y redis-tools postgresql-client
       - name: Install isolated Chromium testing dependency (not an application dependency)
         run: |
           npm install --no-save --package-lock=false playwright@1.56.1
