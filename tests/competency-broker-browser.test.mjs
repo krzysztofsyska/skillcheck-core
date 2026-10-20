@@ -20,7 +20,7 @@ test('B3 Chromium over real HTTPS: fragment is scrubbed before hydration; HttpOn
  assert.equal(new URL(page.url()).hash,'');
  assert.ok(!page.url().includes(grant.token),'the fragment has been removed');
  assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
- const cookies=await context.cookies(e.origin);
+ const cookies=await context.cookies(); // Path-scoped cookies are absent from the root URL filter.
  const session=cookies.find(c=>c.name==='__Secure-sc014_b3_session');
  assert.ok(session,'browser accepted Secure session cookie over actual TLS');
  assert.equal(session.secure,true);assert.equal(session.httpOnly,true);
