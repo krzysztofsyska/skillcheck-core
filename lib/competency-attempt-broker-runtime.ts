@@ -84,11 +84,32 @@ async function construct(): Promise<BrokerHandler> {
           "from pg_roles r where r.rolname=session_user"
         );
         const role = result.rows[0];
+        // An apparently restricted login must not be able to SET ROLE into
+        // any unrelated privileged role; membership in the gateway is exact.
+        const memberships = await client.query(
+          "select count(*)::int as role_count, " +
+          "coalesce(bool_and(parent.rolname='competency_test_gateway'),false) as gateway_only " +
+          "from pg_auth_members m " +
+          "join pg_roles parent on parent.oid=m.roleid " +
+          "join pg_roles child on child.oid=m.member " +
+          "where child.rolname=session_user"
+        );
+        // PostgreSQL must not log bound grant-token or answer parameters,
+        // including on SQL errors; a cluster with verbose SQL logging is
+        // not eligible for B3 activation.
+        const logging = await client.query(
+          "select current_setting('log_statement') as statements, " +
+          "current_setting('log_parameter_max_length_on_error') as error_parameters"
+        );
+        const member = memberships.rows[0], log = logging.rows[0];
         const expectedUser = new URL(dsn).username;
         if (!role || role.login !== expectedUser || !role.rolcanlogin ||
             role.rolsuper || role.rolcreatedb || role.rolcreaterole ||
             role.rolbypassrls || role.rolinherit || !role.is_gateway ||
-            role.direct_read || role.issuer) throw new Error('Unsafe dedicated gateway role');
+            role.direct_read || role.issuer ||
+            member?.role_count !== 1 || !member?.gateway_only ||
+            log?.statements !== 'none' || log?.error_parameters !== '0')
+          throw new Error('Unsafe dedicated gateway role or logging configuration');
         // Keep one connection leased for SET LOCAL ROLE, all SQL and COMMIT.
         return { query: (sql, args) => client.query(sql, args), release: destroy => client.release(!!destroy) };
       } catch {
