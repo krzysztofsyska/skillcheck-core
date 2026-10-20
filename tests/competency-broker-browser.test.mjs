@@ -14,8 +14,19 @@ test('B3 Chromium over real HTTPS: refresh, rotated link and second test retain 
  const page=await context.newPage(),requests=[],errors=[];
  page.on('pageerror',error=>errors.push(error.name));
  page.on('request',request=>requests.push({url:request.url().split('#')[0],method:request.method()}));
- const url=e.origin+'/__sc014_b3_isolated_harness__#grant='+grant.token;
- await page.goto(url,{waitUntil:'domcontentloaded'});
+ const openGrant=async token=>{
+  // A fragment-only goto on this path is a same-document navigation. Visit a
+  // fresh document without replacing the browser context or clearing cookies.
+  await page.goto('about:blank');
+  const [exchange]=await Promise.all([
+   page.waitForResponse(reply=>reply.url()===e.origin+'/api/competency/attempt' &&
+    reply.request().method()==='POST' && reply.request().postDataJSON()?.operation==='exchange',
+    {timeout:15000}),
+   page.goto(e.origin+'/__sc014_b3_isolated_harness__#grant='+token,{waitUntil:'domcontentloaded'})
+  ]);
+  assert.equal(exchange.status(),200,'new document must complete a fresh successful grant exchange');
+ };
+ await openGrant(grant.token);
  await page.waitForFunction(()=>document.body.dataset.state==='not_started',{timeout:15000});
  assert.equal(await page.evaluate(()=>window.__b3.scrubbedBeforeHydration),true);
  assert.equal(new URL(page.url()).hash,'');
@@ -55,9 +66,10 @@ test('B3 Chromium over real HTTPS: refresh, rotated link and second test retain 
  const rotated=await e.call('public.rotate_competency_test_grant',[grant.grantId,grant.revision,randomUUID()]);
  assert.equal((await page.evaluate(()=>window.__b3.op('inspect'))).status,404);
  assert.equal((await context.cookies()).find(c=>c.name==='__Secure-sc014_b3_session').value,session.value);
- await page.goto(e.origin+'/__sc014_b3_isolated_harness__#grant='+rotated.token,{waitUntil:'domcontentloaded'});
+ await openGrant(rotated.token);
  await page.waitForFunction(()=>document.body.dataset.state==='in_progress',{timeout:15000});
  const afterRotation=await page.evaluate(()=>window.__b3.initial);
+ assert.equal(afterRotation.status,200);
  assert.equal(afterRotation.data.attemptId,started.data.attemptId);
  assert.equal(afterRotation.data.deadlineAt,started.data.deadlineAt);
  assert.equal(afterRotation.data.draft.text,'Syntetyczny draft');
@@ -79,9 +91,10 @@ test('B3 Chromium over real HTTPS: refresh, rotated link and second test retain 
  assert.deepEqual(status.data,receipt.data);
  assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
  const second=await e.seed(),secondGrant=await e.issue(second);
- await page.goto(e.origin+'/__sc014_b3_isolated_harness__#grant='+secondGrant.token,{waitUntil:'domcontentloaded'});
+ await openGrant(secondGrant.token);
  await page.waitForFunction(()=>document.body.dataset.state==='not_started',{timeout:15000});
  const secondView=await page.evaluate(()=>window.__b3.initial);
+ assert.equal(secondView.status,200);
  assert.equal(secondView.data.revisionId,second.definitionId);
  assert.notEqual((await context.cookies()).find(c=>c.name==='__Secure-sc014_b3_session').value,rotatedCookie.value);
  await page.reload({waitUntil:'domcontentloaded'});
