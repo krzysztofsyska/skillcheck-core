@@ -44,13 +44,16 @@ export function createSharedLimiter(limits={global:200,source:40}) {
   redisRestTestAdapter(),limits);
 }
 export async function startCompetencyHttps(t,{redis=true,source='203.0.113.1',limits={global:200,source:40}}={}){
+ // Register cleanup ahead of B2's disposable database drop hook.
+ let cleanupRole=async()=>{};
+ t.after(async()=>cleanupRole());
  const e=await boot(t,{embedded:false});
  const {db,h}=e;await h.asAdmin();
  const user='competency_gateway_b3_'+randomUUID().replaceAll('-','').slice(0,18);
  const password=randomBytes(24).toString('hex');
  await db.exec('create role '+user+" login password '"+password+"' nosuperuser nocreatedb nocreaterole noinherit nobypassrls;grant competency_test_gateway to "+user);
  const pool=new Pool({...e.connectionConfig,user,password,max:4,connectionTimeoutMillis:2000,idleTimeoutMillis:5000});
- t.after(async()=>{await pool.end();await h.asAdmin();await db.exec('drop role '+user);});
+ cleanupRole=async()=>{await pool.end();await h.asAdmin();await db.exec('drop role '+user);};
  const direct=await pool.connect();
  try{
   assert.equal((await direct.query("select session_user name")).rows[0].name,user);
