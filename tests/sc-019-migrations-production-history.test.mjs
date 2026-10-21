@@ -24,10 +24,12 @@ test('observed production history + pending chain preserves completed synthetic 
   await platform.query(`create role postgres login inherit createrole createdb replication bypassrls password 'synthetic-only';
     alter database sc19_production_rehearsal owner to postgres;
     create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
-    grant anon,authenticated to postgres with inherit false, set true;
+    grant anon,authenticated,service_role to postgres with admin true, inherit true, set true;
     create extension pg_cron;`);
   const db = new pg.Client({ connectionString: url.href });
   await db.connect(); t.after(() => db.end()); db.exec = sql => db.query(sql);
+  assert.deepEqual((await db.query(`select current_user::text name,session_user::text session,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls from pg_roles where rolname=current_user`)).rows[0],
+    {name:'postgres',session:'postgres',rolsuper:false,rolinherit:true,rolcreaterole:true,rolcreatedb:true,rolcanlogin:true,rolreplication:true,rolbypassrls:true});
   assert.equal(Math.floor(Number((await db.query("select current_setting('server_version_num') v")).rows[0].v)/10000), Number(process.env.SC19_TEST_PG_MAJOR));
   assert.equal((await db.query("select to_regclass('public.companies') v")).rows[0].v, null, 'Only an empty owned test database');
   await db.query(`alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
@@ -45,7 +47,7 @@ test('observed production history + pending chain preserves completed synthetic 
     t.diagnostic(`replayed observed ${entry.version} ${entry.name}`);
   }
   assert.equal((await db.query("select count(*)::int n from pg_extension where extname='pg_cron'")).rows[0].n,1);
-  assert.equal((await db.query('select count(*)::int n from cron.job')).rows[0].n,0,'No scheduled destructive job');
+  assert.equal((await platform.query('select count(*)::int n from cron.job')).rows[0].n,0,'No scheduled destructive job');
   const membership=(await db.query(`select grantor::regrole::text grantor,admin_option,inherit_option,set_option from pg_auth_members where roleid='screening_worker'::regrole and member='postgres'::regrole order by grantor::regrole::text`)).rows;
   assert.deepEqual(membership,[
     {grantor:'postgres',admin_option:false,inherit_option:false,set_option:true},
@@ -94,7 +96,7 @@ test('observed production history + pending chain preserves completed synthetic 
   assert.equal((await h.shortlist(f)).length,1);
   await h.asUser(users.otherOwner); assert.deepEqual(await h.ranking(f),[]);
   await h.asAdmin();
-  for(const role of ['anon','authenticated','screening_worker']) for(const table of ['private.sc19_balances','private.sc19_credit_journal','private.sc19_payment_orders']) {
+  for(const role of ['anon','authenticated','service_role','screening_worker']) for(const table of ['private.sc19_balances','private.sc19_credit_journal','private.sc19_payment_orders']) {
     for(const privilege of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) assert.equal((await db.query('select has_table_privilege($1,$2,$3) allowed',[role,table,privilege])).rows[0].allowed,false);
   }
 });
