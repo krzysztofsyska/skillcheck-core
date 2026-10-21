@@ -1,0 +1,1427 @@
+{
+  "source_commit": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+  "historical_payment_commit": "d34200d2e14302dda9685b79f4e2c59e9049d9b1",
+  "bootstrap_sha256": "c1e3cd51b11b1e73174e816f14d61ce36180962206a753f05dc5684bfc2c826f",
+  "queries": {
+    "routines": "with objects as (\n select n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||')' key,\n jsonb_build_array(pg_get_userbyid(p.proowner),pg_get_functiondef(p.oid)) value\n from pg_proc p join pg_namespace n on n.oid=p.pronamespace\n where n.nspname in ('public','private') and p.prokind in ('f','p')\n and not exists(select 1 from pg_depend d where d.classid='pg_proc'::regclass and d.objid=p.oid and d.deptype='e')\n ) select encode(sha256(convert_to(coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb)::text,'UTF8')),'hex') digest,\n count(*)::int object_count,coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb) manifest from objects",
+    "indexes": "with objects as (\n select ns.nspname||'.'||ic.relname key,\n jsonb_build_array(tns.nspname||'.'||tc.relname,am.amname,i.indisunique,i.indisprimary,i.indisexclusion,\n i.indimmediate,i.indisvalid,i.indisready,i.indislive,i.indnullsnotdistinct,pg_get_indexdef(ic.oid)) value\n from pg_index i join pg_class ic on ic.oid=i.indexrelid join pg_namespace ns on ns.oid=ic.relnamespace\n join pg_class tc on tc.oid=i.indrelid join pg_namespace tns on tns.oid=tc.relnamespace join pg_am am on am.oid=ic.relam\n where tns.nspname in ('public','private') and not exists(select 1 from pg_depend d where d.classid='pg_class'::regclass and d.objid=tc.oid and d.deptype='e')\n ) select encode(sha256(convert_to(coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb)::text,'UTF8')),'hex') digest,\n count(*)::int object_count,coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb) manifest from objects",
+    "trigger_states": "with objects as (\n select ns.nspname||'.'||c.relname||'.'||t.tgname key,\n jsonb_build_array(t.tgenabled,t.tgdeferrable,t.tginitdeferred,pg_get_triggerdef(t.oid,true)) value\n from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace ns on ns.oid=c.relnamespace\n where ns.nspname in ('public','private') and not t.tgisinternal\n ) select encode(sha256(convert_to(coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb)::text,'UTF8')),'hex') digest,\n count(*)::int object_count,coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb) manifest from objects",
+    "relations": "with objects as (\n select ns.nspname||'.'||c.relname key,\n jsonb_build_array(c.relkind,c.relrowsecurity,c.relforcerowsecurity,pg_get_userbyid(c.relowner),c.relpersistence) value\n from pg_class c join pg_namespace ns on ns.oid=c.relnamespace\n where ns.nspname in ('public','private') and c.relkind in ('r','p','v','m','f','S')\n and not exists(select 1 from pg_depend d where d.classid='pg_class'::regclass and d.objid=c.oid and d.deptype='e')\n ) select encode(sha256(convert_to(coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb)::text,'UTF8')),'hex') digest,\n count(*)::int object_count,coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb) manifest from objects",
+    "policies": "with objects as (\n select n.nspname||'.'||c.relname||'.'||p.polname key,\n jsonb_build_array(p.polcmd,p.polpermissive,\n (select jsonb_agg(case when r=0 then 'PUBLIC' else pg_get_userbyid(r) end order by case when r=0 then 'PUBLIC' else pg_get_userbyid(r) end collate \"C\") from unnest(p.polroles) r),\n pg_get_expr(p.polqual,p.polrelid),pg_get_expr(p.polwithcheck,p.polrelid)) value\n from pg_policy p join pg_class c on c.oid=p.polrelid join pg_namespace n on n.oid=c.relnamespace\n where n.nspname in ('public','private')\n ) select encode(sha256(convert_to(coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb)::text,'UTF8')),'hex') digest,\n count(*)::int object_count,coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb) manifest from objects",
+    "nonowned_acl": "with acl_objects as (\n  select (case when c.relkind='S' then 'sequence:' else 'table:' end)||n.nspname||'.'||c.relname as key,\n    coalesce(c.relacl,acldefault(case when c.relkind='S' then 's'::\"char\" else 'r'::\"char\" end,c.relowner)) as acl\n  from pg_class c join pg_namespace n on n.oid=c.relnamespace\n  where n.nspname in ('public','private') and c.relkind in ('r','p','v','m','f','S')\n    and (n.nspname||'.'||c.relname) <> all(array['private.sc19_package_policy','private.sc19_balances','private.sc19_trial_nips','private.sc19_trial_approvals','private.sc19_analysis_spend','private.sc19_credit_journal','private.sc19_payment_offers','private.sc19_payment_orders','private.sc19_payment_requests','private.sc19_payment_grants','private.erasure_inventory_baseline_r5','private.erasure_inventory_baseline_r6'])\n    and not exists(select 1 from pg_depend d where d.classid='pg_class'::regclass and d.objid=c.oid and d.deptype='e')\n  union all\n  select 'column:'||n.nspname||'.'||c.relname||'.'||a.attname,a.attacl\n  from pg_class c join pg_namespace n on n.oid=c.relnamespace\n  join pg_attribute a on a.attrelid=c.oid and a.attnum>0 and not a.attisdropped\n  where n.nspname in ('public','private') and c.relkind in ('r','p','v','m','f')\n    and (n.nspname||'.'||c.relname) <> all(array['private.sc19_package_policy','private.sc19_balances','private.sc19_trial_nips','private.sc19_trial_approvals','private.sc19_analysis_spend','private.sc19_credit_journal','private.sc19_payment_offers','private.sc19_payment_orders','private.sc19_payment_requests','private.sc19_payment_grants','private.erasure_inventory_baseline_r5','private.erasure_inventory_baseline_r6']) and cardinality(a.attacl)>0\n    and not exists(select 1 from pg_depend d where d.classid='pg_class'::regclass and d.objid=c.oid and d.deptype='e')\n  union all\n  select 'function:'||n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||')',\n    coalesce(p.proacl,acldefault('f',p.proowner))\n  from pg_proc p join pg_namespace n on n.oid=p.pronamespace\n  where n.nspname in ('public','private') and p.prokind in ('f','p')\n    and p.oid::regprocedure::text <> all(array['private.sc19_valid_nip(text)','private.sc19_lock_company(uuid)','private.sc19_lock_analysis_company()','private.sc19_grant_paid(uuid,text)','private.sc19_charge_analysis()','private.sc19_reconcile_analysis()','private.sc19_payment_immutable()','public.sc19_claim_trial(uuid,text)','public.sc19_package_sizes()','public.sc19_get_balance(uuid)'])\n    and not exists(select 1 from pg_depend d where d.classid='pg_proc'::regclass and d.objid=p.oid and d.deptype='e')\n  union all\n  select 'schema:'||n.nspname,coalesce(n.nspacl,acldefault('n',n.nspowner))\n  from pg_namespace n where n.nspname in ('public','private')\n    and not exists(select 1 from pg_depend d where d.classid='pg_namespace'::regclass and d.objid=n.oid and d.deptype='e')\n), objects as (\n  select o.key,coalesce((\n    select jsonb_agg(jsonb_build_array(\n      case when a.grantee=0 then 'PUBLIC' else pg_get_userbyid(a.grantee) end,\n      pg_get_userbyid(a.grantor),a.privilege_type,a.is_grantable\n    ) order by\n      (case when a.grantee=0 then 'PUBLIC' else pg_get_userbyid(a.grantee) end) collate \"C\",\n      pg_get_userbyid(a.grantor) collate \"C\",a.privilege_type collate \"C\",a.is_grantable)\n    from aclexplode(o.acl) a\n  ),'[]'::jsonb) as value from acl_objects o\n)\nselect encode(sha256(convert_to(coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb)::text,'UTF8')),'hex') digest,\n  count(*)::int object_count,\n  coalesce(jsonb_agg(jsonb_build_array(key,value) order by key collate \"C\"),'[]'::jsonb) manifest\nfrom objects;\n"
+  },
+  "generated_at": "2026-10-21T08:47:03.512Z",
+  "note": "Canonical synthetic disposable PostgreSQL fixtures; no production read or migration. Fingerprints never come from arbitrary deployed schema.",
+  "fingerprint_session": {
+    "search_path": "",
+    "timezone": "UTC",
+    "datestyle": "ISO, YMD"
+  },
+  "validation": {
+    "cases": 12,
+    "pass": 12,
+    "fail": 0,
+    "skipped": 0,
+    "all_pg16_pg17_manifests_equal": false,
+    "all_pg16_pg17_non_acl_manifests_equal": true,
+    "acl_difference": "PostgreSQL 17 adds MAINTAIN only to postgres owner entries; use version-specific pinned ACL digest without excluding MAINTAIN."
+  },
+  "generator": {
+    "path": "/tmp/sc19-input-fingerprint.mjs",
+    "sha256": "bd1d37d0abaefaf08ce56b4d89a2d424a6dcfdc88f3742ddc998c1a4dea01798"
+  },
+  "states": {
+    "r4_legacy": {
+      "pg16": {
+        "port": 55416,
+        "server": {
+          "version": "PostgreSQL 16.14 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "160014"
+        },
+        "sc010_signature": "d2e7725bd5051e15cb7e700a128026a3ad6f0d87f9d3bba3de8e1539c9d3eabd",
+        "routines": "94cd7648e37cb01a80ac2275c7d074d601d33a55d567fcc9bc42ce8565513c5f",
+        "indexes": "6914c23eb115e05186ed163a569f4e67d5677d56cf63c273d8861d3fcd7da38d",
+        "trigger_states": "89214d67680a0c2a6fb0d26c277783fb95fea921acbe9ef800b72234d5c4caff",
+        "relations": "bae142892cd11e9c8b9f303ac29c21c65837e322258bccd02ef9f26711ec1d68",
+        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
+        "nonowned_acl": "80866fd7d14d5c596441703ac7f3ccc39dbc2ce9d6b9d0da1299e61b4c749a95"
+      },
+      "sources": [
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20260930000100_skillcheck_core.sql",
+          "sha256": "fcc48ad88ca87a25d826820a144fafc2e3425bc1f352a1574c04051b0bd156b7"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000100_idempotent_onboarding.sql",
+          "sha256": "218013224c1bc366c3e5afa5871620ff6df518ce14294260ccb54b6cd0b3d4dc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000200_candidate_documents.sql",
+          "sha256": "302866856b8922e3ac169abffe0fc8d8318c8cf5aca24fbf6976c8a926eb3899"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000100_behavior_assessments.sql",
+          "sha256": "a6bdb1f0c42dbb0fed0cadec0c8a3b10fcc41e9cffc6d1cedc0224dee0699ffa"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000200_behavior_conflict_response.sql",
+          "sha256": "7b1b0b63c341fdcd3b3b53c0c892e57d6a7c2f55e9240c3612d5fca4371c5cca"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000300_exercise_definitions.sql",
+          "sha256": "842e4b9fb1791e1b3ab37c03ddc7d42ca38ac7f3d60e25ce2d8bbbf51052e87c"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000100_exercise_observations.sql",
+          "sha256": "94b3cb9d79fdc232996f961b62fc3ae3ec5cc6d554f699a431efd57728710a18"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000200_screening_results.sql",
+          "sha256": "0476d7de9dcdafe84ee0d24e949e2e6cf56423fb4166aa89758b2226df2f8fcc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261005000100_screening_worker_claim_payload.sql",
+          "sha256": "0182e7369ecbd3cd4497be8d75164eab8dd1b9e5d21b507c393adcd17d5eef9a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000100_screening_retry_active_conflict.sql",
+          "sha256": "3e3b25c2e205db80bffca0a2774ff516efaa86f0102427231d45c13116462477"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000200_sales_leads.sql",
+          "sha256": "9f6d65274b8da5c45e204367aa23d9166f762ebabec19e05be8855fab268ca39"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009073604_sales_lead_inbox_retention.sql",
+          "sha256": "3c63d37a64ce33ba7cb70580228f1f867f0e0d605329a439e1a1834962b307e5"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009080000_screening_latest_mutations.sql",
+          "sha256": "4b1b37b11c142f0ecfebc4c1a59ac7a0b23d5801a8e0f6e329f93711c1a17337"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009081908_screening_ranking_shortlist.sql",
+          "sha256": "56f59251f71fe813807ea7d553649a426e2af568ac702589ca0e1069de503be4"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009104142_sales_lead_auto_reply.sql",
+          "sha256": "27fd8a1d1409cb262162908221a68801577bda94635eda159b214abac5fa8e5b"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009105025_candidate_communication_foundation.sql",
+          "sha256": "f974105471e6ef83d2ad426bf7fcea9e5022dc75dfe4fdf899347b8b6ade3593"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141832_sales_pipeline.sql",
+          "sha256": "98df7099632ddbb4886733f32482f410198813e2753481a351ed2c1143f21f1f"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141836_candidate_communication_verification.sql",
+          "sha256": "163d37c1317813f7f6781e4b4b94636e8faea8e957b6ca40110a857806b30a23"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010190255_candidate_retention_preview.sql",
+          "sha256": "a3f5ae9cc62f87364d2f48b3c551dd1f205cd6bdefa926902f182e5c2f3c4eeb"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194216_candidate_erasure_lifecycle.sql",
+          "sha256": "034e9d264548921fb6cf2e766cfb1d3b03c977fad21d05e9309570f459d9c308"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194230_candidate_erasure_guards.sql",
+          "sha256": "47668cfe560262a523bcafeba8616ca064689c74c5b49a676b35af95beac7863"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194343_candidate_erasure_inventory_v2.sql",
+          "sha256": "b94557ce127d600849bea12731bc21f2784fe539cebf1cda61537046f7f5d556"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010204840_erasure_execution_protocol.sql",
+          "sha256": "d3bf577a171147d2d081e4eed26362581a8cb65e6658a5fe92cd6c61b6d73744"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205030_erasure_purge_graph.sql",
+          "sha256": "176304cdd300b91d6fdf4684f277730ea4b601d9ce73f46eebd1ea7630b5a8ab"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205052_erasure_inventory_v3.sql",
+          "sha256": "eba751566b34917f3e3b65dc4f7d134747edf18bb95a6957dcd4f28dda106c30"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031026_retention_scheduler_protocol.sql",
+          "sha256": "929f52db5d9deecbd163873499e1004ecdd18889031534abc3b5b4043088238a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031039_retention_scheduler_inventory.sql",
+          "sha256": "e533828aad1190c68f5fe387a9b3b0c203748dfedb8d8f6cfefb9f13db3a10e1"
+        }
+      ],
+      "pg17_same_fingerprints": false,
+      "pg17_same_non_acl_fingerprints": true,
+      "pg17": {
+        "nonowned_acl": "6428087b0877402ce4831d2c9998ad746f4d44155dc442bcb18997fdd3968b35",
+        "server": {
+          "version": "PostgreSQL 17.10 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "170010"
+        }
+      }
+    },
+    "r4_voice": {
+      "pg16": {
+        "port": 55416,
+        "server": {
+          "version": "PostgreSQL 16.14 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "160014"
+        },
+        "sc010_signature": "70cdbf43562f147294c417639b76fe121154f4dc6e49799b9764232a4aedc444",
+        "routines": "ed6198a94bb18c64f30980d25f1fe8feed0b43905a62c1da6723a17dd3307f76",
+        "indexes": "7f31e2feb3d56f59bd5761d99564fdd322b219558dfdd550c3f12389fa3ddf4b",
+        "trigger_states": "93f58b25af9eee07fdcd98812a08f80074aa3fb29d4a6325a777734b01e1d66f",
+        "relations": "f2a73bbe1f0e31af55afbcd9d98bb5eecfb0da62e263055b5a521e6d76952803",
+        "policies": "5410709dbbb55712d829a6f6c1e01ac825f71a38473ec919d8c95030db0a6706",
+        "nonowned_acl": "7bd81fd322357484bcdda55d5bbecb0aae8c2bd0c020a4a441f8271d54c12059"
+      },
+      "sources": [
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20260930000100_skillcheck_core.sql",
+          "sha256": "fcc48ad88ca87a25d826820a144fafc2e3425bc1f352a1574c04051b0bd156b7"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000100_idempotent_onboarding.sql",
+          "sha256": "218013224c1bc366c3e5afa5871620ff6df518ce14294260ccb54b6cd0b3d4dc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000200_candidate_documents.sql",
+          "sha256": "302866856b8922e3ac169abffe0fc8d8318c8cf5aca24fbf6976c8a926eb3899"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000100_behavior_assessments.sql",
+          "sha256": "a6bdb1f0c42dbb0fed0cadec0c8a3b10fcc41e9cffc6d1cedc0224dee0699ffa"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000200_behavior_conflict_response.sql",
+          "sha256": "7b1b0b63c341fdcd3b3b53c0c892e57d6a7c2f55e9240c3612d5fca4371c5cca"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000300_exercise_definitions.sql",
+          "sha256": "842e4b9fb1791e1b3ab37c03ddc7d42ca38ac7f3d60e25ce2d8bbbf51052e87c"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000100_exercise_observations.sql",
+          "sha256": "94b3cb9d79fdc232996f961b62fc3ae3ec5cc6d554f699a431efd57728710a18"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000200_screening_results.sql",
+          "sha256": "0476d7de9dcdafe84ee0d24e949e2e6cf56423fb4166aa89758b2226df2f8fcc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261005000100_screening_worker_claim_payload.sql",
+          "sha256": "0182e7369ecbd3cd4497be8d75164eab8dd1b9e5d21b507c393adcd17d5eef9a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000100_screening_retry_active_conflict.sql",
+          "sha256": "3e3b25c2e205db80bffca0a2774ff516efaa86f0102427231d45c13116462477"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000200_sales_leads.sql",
+          "sha256": "9f6d65274b8da5c45e204367aa23d9166f762ebabec19e05be8855fab268ca39"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009073604_sales_lead_inbox_retention.sql",
+          "sha256": "3c63d37a64ce33ba7cb70580228f1f867f0e0d605329a439e1a1834962b307e5"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009080000_screening_latest_mutations.sql",
+          "sha256": "4b1b37b11c142f0ecfebc4c1a59ac7a0b23d5801a8e0f6e329f93711c1a17337"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009081908_screening_ranking_shortlist.sql",
+          "sha256": "56f59251f71fe813807ea7d553649a426e2af568ac702589ca0e1069de503be4"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009104142_sales_lead_auto_reply.sql",
+          "sha256": "27fd8a1d1409cb262162908221a68801577bda94635eda159b214abac5fa8e5b"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009105025_candidate_communication_foundation.sql",
+          "sha256": "f974105471e6ef83d2ad426bf7fcea9e5022dc75dfe4fdf899347b8b6ade3593"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141832_sales_pipeline.sql",
+          "sha256": "98df7099632ddbb4886733f32482f410198813e2753481a351ed2c1143f21f1f"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141836_candidate_communication_verification.sql",
+          "sha256": "163d37c1317813f7f6781e4b4b94636e8faea8e957b6ca40110a857806b30a23"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010190255_candidate_retention_preview.sql",
+          "sha256": "a3f5ae9cc62f87364d2f48b3c551dd1f205cd6bdefa926902f182e5c2f3c4eeb"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194216_candidate_erasure_lifecycle.sql",
+          "sha256": "034e9d264548921fb6cf2e766cfb1d3b03c977fad21d05e9309570f459d9c308"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194230_candidate_erasure_guards.sql",
+          "sha256": "47668cfe560262a523bcafeba8616ca064689c74c5b49a676b35af95beac7863"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194343_candidate_erasure_inventory_v2.sql",
+          "sha256": "b94557ce127d600849bea12731bc21f2784fe539cebf1cda61537046f7f5d556"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010204840_erasure_execution_protocol.sql",
+          "sha256": "d3bf577a171147d2d081e4eed26362581a8cb65e6658a5fe92cd6c61b6d73744"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205030_erasure_purge_graph.sql",
+          "sha256": "176304cdd300b91d6fdf4684f277730ea4b601d9ce73f46eebd1ea7630b5a8ab"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205052_erasure_inventory_v3.sql",
+          "sha256": "eba751566b34917f3e3b65dc4f7d134747edf18bb95a6957dcd4f28dda106c30"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031026_retention_scheduler_protocol.sql",
+          "sha256": "929f52db5d9deecbd163873499e1004ecdd18889031534abc3b5b4043088238a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031039_retention_scheduler_inventory.sql",
+          "sha256": "e533828aad1190c68f5fe387a9b3b0c203748dfedb8d8f6cfefb9f13db3a10e1"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/prototypes/sc012b-plan-schema.sql",
+          "sha256": "52b80aa72799740945abff54201f307bb309094b81c5ffcff365397d2c587c09"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc012b-template-catalog.sql",
+          "sha256": "c11077a58f11180c02c5dcc6a69e4716f18911a6a0a52decd10bcb3d16f5bf43"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc012b-review-rpc.sql",
+          "sha256": "f8b3bfa6c2498192823a9578e90dd20722cb4f94026a409f2e2b1d560348cffa"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc012b-release-rpc.sql",
+          "sha256": "c22d114cb5277407b668a739038a05c16e02df97ffda539f760c5774925daded"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc010c-interview-permission.sql",
+          "sha256": "ca98b51650f4fa118242637436d27877c0564d7a14b61610b8b81fe39a228f71"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc019-voice-entitlements.sql",
+          "sha256": "2318eaa52ff9bfe208f643e9085aa12795ba22815017fd34729a00f1d28794b9"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc010c-voice-preparation.sql",
+          "sha256": "f39ab00d38e8617e7948a7e9157a36e96a953b87991f16f17b751c1ae3d80658"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc010-r4-voice-retention.sql",
+          "sha256": "c5dbf138405ed737332a70400f6017d983cd111f9be49180c1309b2d75ae0d5f"
+        }
+      ],
+      "pg17_same_fingerprints": false,
+      "pg17_same_non_acl_fingerprints": true,
+      "pg17": {
+        "nonowned_acl": "64ad973471c4e5d668002d0220ea8210dbc72bcae188c90884f2648f17793a72",
+        "server": {
+          "version": "PostgreSQL 17.10 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "170010"
+        }
+      }
+    },
+    "r5_legacy": {
+      "pg16": {
+        "port": 55416,
+        "server": {
+          "version": "PostgreSQL 16.14 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "160014"
+        },
+        "sc010_signature": "10358458d8802b1ed59a298b305752a89ce110d1019a11cde937f2a2311f79bc",
+        "routines": "d51b7e5e3a16bc6be5d364b1800bc4aab36b1148b6a0d5fad497f3e4ebba1837",
+        "indexes": "46f85e6eb33a1cf57c5f8413591f8efdba4719a05d698b97bb18a366a72cb6d4",
+        "trigger_states": "a371f473df135f28712553b8bff08441583052b52209141cba03c522986439c9",
+        "relations": "63dceaf21fa5eab7d514315660a2eee9ab782c6ea842ec02d46d0377d6b1f518",
+        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
+        "nonowned_acl": "80866fd7d14d5c596441703ac7f3ccc39dbc2ce9d6b9d0da1299e61b4c749a95"
+      },
+      "sources": [
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20260930000100_skillcheck_core.sql",
+          "sha256": "fcc48ad88ca87a25d826820a144fafc2e3425bc1f352a1574c04051b0bd156b7"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000100_idempotent_onboarding.sql",
+          "sha256": "218013224c1bc366c3e5afa5871620ff6df518ce14294260ccb54b6cd0b3d4dc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000200_candidate_documents.sql",
+          "sha256": "302866856b8922e3ac169abffe0fc8d8318c8cf5aca24fbf6976c8a926eb3899"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000100_behavior_assessments.sql",
+          "sha256": "a6bdb1f0c42dbb0fed0cadec0c8a3b10fcc41e9cffc6d1cedc0224dee0699ffa"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000200_behavior_conflict_response.sql",
+          "sha256": "7b1b0b63c341fdcd3b3b53c0c892e57d6a7c2f55e9240c3612d5fca4371c5cca"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000300_exercise_definitions.sql",
+          "sha256": "842e4b9fb1791e1b3ab37c03ddc7d42ca38ac7f3d60e25ce2d8bbbf51052e87c"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000100_exercise_observations.sql",
+          "sha256": "94b3cb9d79fdc232996f961b62fc3ae3ec5cc6d554f699a431efd57728710a18"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000200_screening_results.sql",
+          "sha256": "0476d7de9dcdafe84ee0d24e949e2e6cf56423fb4166aa89758b2226df2f8fcc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261005000100_screening_worker_claim_payload.sql",
+          "sha256": "0182e7369ecbd3cd4497be8d75164eab8dd1b9e5d21b507c393adcd17d5eef9a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000100_screening_retry_active_conflict.sql",
+          "sha256": "3e3b25c2e205db80bffca0a2774ff516efaa86f0102427231d45c13116462477"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000200_sales_leads.sql",
+          "sha256": "9f6d65274b8da5c45e204367aa23d9166f762ebabec19e05be8855fab268ca39"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009073604_sales_lead_inbox_retention.sql",
+          "sha256": "3c63d37a64ce33ba7cb70580228f1f867f0e0d605329a439e1a1834962b307e5"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009080000_screening_latest_mutations.sql",
+          "sha256": "4b1b37b11c142f0ecfebc4c1a59ac7a0b23d5801a8e0f6e329f93711c1a17337"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009081908_screening_ranking_shortlist.sql",
+          "sha256": "56f59251f71fe813807ea7d553649a426e2af568ac702589ca0e1069de503be4"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009104142_sales_lead_auto_reply.sql",
+          "sha256": "27fd8a1d1409cb262162908221a68801577bda94635eda159b214abac5fa8e5b"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009105025_candidate_communication_foundation.sql",
+          "sha256": "f974105471e6ef83d2ad426bf7fcea9e5022dc75dfe4fdf899347b8b6ade3593"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141832_sales_pipeline.sql",
+          "sha256": "98df7099632ddbb4886733f32482f410198813e2753481a351ed2c1143f21f1f"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141836_candidate_communication_verification.sql",
+          "sha256": "163d37c1317813f7f6781e4b4b94636e8faea8e957b6ca40110a857806b30a23"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010190255_candidate_retention_preview.sql",
+          "sha256": "a3f5ae9cc62f87364d2f48b3c551dd1f205cd6bdefa926902f182e5c2f3c4eeb"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194216_candidate_erasure_lifecycle.sql",
+          "sha256": "034e9d264548921fb6cf2e766cfb1d3b03c977fad21d05e9309570f459d9c308"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194230_candidate_erasure_guards.sql",
+          "sha256": "47668cfe560262a523bcafeba8616ca064689c74c5b49a676b35af95beac7863"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194343_candidate_erasure_inventory_v2.sql",
+          "sha256": "b94557ce127d600849bea12731bc21f2784fe539cebf1cda61537046f7f5d556"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010204840_erasure_execution_protocol.sql",
+          "sha256": "d3bf577a171147d2d081e4eed26362581a8cb65e6658a5fe92cd6c61b6d73744"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205030_erasure_purge_graph.sql",
+          "sha256": "176304cdd300b91d6fdf4684f277730ea4b601d9ce73f46eebd1ea7630b5a8ab"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205052_erasure_inventory_v3.sql",
+          "sha256": "eba751566b34917f3e3b65dc4f7d134747edf18bb95a6957dcd4f28dda106c30"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031026_retention_scheduler_protocol.sql",
+          "sha256": "929f52db5d9deecbd163873499e1004ecdd18889031534abc3b5b4043088238a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031039_retention_scheduler_inventory.sql",
+          "sha256": "e533828aad1190c68f5fe387a9b3b0c203748dfedb8d8f6cfefb9f13db3a10e1"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "docs/prototypes/sc-019-mvp-credits.sql",
+          "sha256": "219ba643a0dff4dcee342065544e375fa549aa30f35c0e525414949a46aec240"
+        }
+      ],
+      "pg17_same_fingerprints": false,
+      "pg17_same_non_acl_fingerprints": true,
+      "pg17": {
+        "nonowned_acl": "6428087b0877402ce4831d2c9998ad746f4d44155dc442bcb18997fdd3968b35",
+        "server": {
+          "version": "PostgreSQL 17.10 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "170010"
+        }
+      }
+    },
+    "r5_voice": {
+      "pg16": {
+        "port": 55416,
+        "server": {
+          "version": "PostgreSQL 16.14 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "160014"
+        },
+        "sc010_signature": "c989b84b9eec51fc48c361b8ad9e7404b4044268d56d106b6788fe56f3f1857d",
+        "routines": "bd792cc8a27a594920a785522ed738f950e053aba573ad5e2ca7d83596d88a38",
+        "indexes": "7c42f79c632912c67ce0acd34b566c08b887a7ab48fd5021cc95766baa1be6a1",
+        "trigger_states": "16ec952d94e1387937bba227daa8939d78350f5a64a73d50945ee75e53db6ee0",
+        "relations": "6ec4aecb4e2c0ce808b227fd3ea1093260fc32624e3810aa21f4283db3859390",
+        "policies": "5410709dbbb55712d829a6f6c1e01ac825f71a38473ec919d8c95030db0a6706",
+        "nonowned_acl": "7bd81fd322357484bcdda55d5bbecb0aae8c2bd0c020a4a441f8271d54c12059"
+      },
+      "sources": [
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20260930000100_skillcheck_core.sql",
+          "sha256": "fcc48ad88ca87a25d826820a144fafc2e3425bc1f352a1574c04051b0bd156b7"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000100_idempotent_onboarding.sql",
+          "sha256": "218013224c1bc366c3e5afa5871620ff6df518ce14294260ccb54b6cd0b3d4dc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000200_candidate_documents.sql",
+          "sha256": "302866856b8922e3ac169abffe0fc8d8318c8cf5aca24fbf6976c8a926eb3899"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000100_behavior_assessments.sql",
+          "sha256": "a6bdb1f0c42dbb0fed0cadec0c8a3b10fcc41e9cffc6d1cedc0224dee0699ffa"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000200_behavior_conflict_response.sql",
+          "sha256": "7b1b0b63c341fdcd3b3b53c0c892e57d6a7c2f55e9240c3612d5fca4371c5cca"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000300_exercise_definitions.sql",
+          "sha256": "842e4b9fb1791e1b3ab37c03ddc7d42ca38ac7f3d60e25ce2d8bbbf51052e87c"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000100_exercise_observations.sql",
+          "sha256": "94b3cb9d79fdc232996f961b62fc3ae3ec5cc6d554f699a431efd57728710a18"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000200_screening_results.sql",
+          "sha256": "0476d7de9dcdafe84ee0d24e949e2e6cf56423fb4166aa89758b2226df2f8fcc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261005000100_screening_worker_claim_payload.sql",
+          "sha256": "0182e7369ecbd3cd4497be8d75164eab8dd1b9e5d21b507c393adcd17d5eef9a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000100_screening_retry_active_conflict.sql",
+          "sha256": "3e3b25c2e205db80bffca0a2774ff516efaa86f0102427231d45c13116462477"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000200_sales_leads.sql",
+          "sha256": "9f6d65274b8da5c45e204367aa23d9166f762ebabec19e05be8855fab268ca39"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009073604_sales_lead_inbox_retention.sql",
+          "sha256": "3c63d37a64ce33ba7cb70580228f1f867f0e0d605329a439e1a1834962b307e5"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009080000_screening_latest_mutations.sql",
+          "sha256": "4b1b37b11c142f0ecfebc4c1a59ac7a0b23d5801a8e0f6e329f93711c1a17337"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009081908_screening_ranking_shortlist.sql",
+          "sha256": "56f59251f71fe813807ea7d553649a426e2af568ac702589ca0e1069de503be4"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009104142_sales_lead_auto_reply.sql",
+          "sha256": "27fd8a1d1409cb262162908221a68801577bda94635eda159b214abac5fa8e5b"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009105025_candidate_communication_foundation.sql",
+          "sha256": "f974105471e6ef83d2ad426bf7fcea9e5022dc75dfe4fdf899347b8b6ade3593"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141832_sales_pipeline.sql",
+          "sha256": "98df7099632ddbb4886733f32482f410198813e2753481a351ed2c1143f21f1f"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141836_candidate_communication_verification.sql",
+          "sha256": "163d37c1317813f7f6781e4b4b94636e8faea8e957b6ca40110a857806b30a23"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010190255_candidate_retention_preview.sql",
+          "sha256": "a3f5ae9cc62f87364d2f48b3c551dd1f205cd6bdefa926902f182e5c2f3c4eeb"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194216_candidate_erasure_lifecycle.sql",
+          "sha256": "034e9d264548921fb6cf2e766cfb1d3b03c977fad21d05e9309570f459d9c308"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194230_candidate_erasure_guards.sql",
+          "sha256": "47668cfe560262a523bcafeba8616ca064689c74c5b49a676b35af95beac7863"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194343_candidate_erasure_inventory_v2.sql",
+          "sha256": "b94557ce127d600849bea12731bc21f2784fe539cebf1cda61537046f7f5d556"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010204840_erasure_execution_protocol.sql",
+          "sha256": "d3bf577a171147d2d081e4eed26362581a8cb65e6658a5fe92cd6c61b6d73744"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205030_erasure_purge_graph.sql",
+          "sha256": "176304cdd300b91d6fdf4684f277730ea4b601d9ce73f46eebd1ea7630b5a8ab"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205052_erasure_inventory_v3.sql",
+          "sha256": "eba751566b34917f3e3b65dc4f7d134747edf18bb95a6957dcd4f28dda106c30"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031026_retention_scheduler_protocol.sql",
+          "sha256": "929f52db5d9deecbd163873499e1004ecdd18889031534abc3b5b4043088238a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031039_retention_scheduler_inventory.sql",
+          "sha256": "e533828aad1190c68f5fe387a9b3b0c203748dfedb8d8f6cfefb9f13db3a10e1"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/prototypes/sc012b-plan-schema.sql",
+          "sha256": "52b80aa72799740945abff54201f307bb309094b81c5ffcff365397d2c587c09"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc012b-template-catalog.sql",
+          "sha256": "c11077a58f11180c02c5dcc6a69e4716f18911a6a0a52decd10bcb3d16f5bf43"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc012b-review-rpc.sql",
+          "sha256": "f8b3bfa6c2498192823a9578e90dd20722cb4f94026a409f2e2b1d560348cffa"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc012b-release-rpc.sql",
+          "sha256": "c22d114cb5277407b668a739038a05c16e02df97ffda539f760c5774925daded"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc010c-interview-permission.sql",
+          "sha256": "ca98b51650f4fa118242637436d27877c0564d7a14b61610b8b81fe39a228f71"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc019-voice-entitlements.sql",
+          "sha256": "2318eaa52ff9bfe208f643e9085aa12795ba22815017fd34729a00f1d28794b9"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc010c-voice-preparation.sql",
+          "sha256": "f39ab00d38e8617e7948a7e9157a36e96a953b87991f16f17b751c1ae3d80658"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "db/isolated/sc010-r4-voice-retention.sql",
+          "sha256": "c5dbf138405ed737332a70400f6017d983cd111f9be49180c1309b2d75ae0d5f"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "docs/prototypes/sc-019-mvp-credits.sql",
+          "sha256": "219ba643a0dff4dcee342065544e375fa549aa30f35c0e525414949a46aec240"
+        }
+      ],
+      "pg17_same_fingerprints": false,
+      "pg17_same_non_acl_fingerprints": true,
+      "pg17": {
+        "nonowned_acl": "64ad973471c4e5d668002d0220ea8210dbc72bcae188c90884f2648f17793a72",
+        "server": {
+          "version": "PostgreSQL 17.10 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "170010"
+        }
+      }
+    },
+    "orders129_legacy": {
+      "pg16": {
+        "port": 55416,
+        "server": {
+          "version": "PostgreSQL 16.14 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "160014"
+        },
+        "sc010_signature": "66868ec85c1eff74ffa91b10914023f5869edb3b55039c9c070de8b4ca6d5c5a",
+        "routines": "9440c475ae25b5b624f0ce42eea0a2dba95af45b89a894b3f32fc24c8f18d1a6",
+        "indexes": "2fb8d07fbfa72ba959585fa7695c1b1a2a4aa9f4bde9c279c6c9e1f8468242d1",
+        "trigger_states": "46e2f0d3f1935ce8f1ec6f467d5a11b6e03d26d5c961ea516f9a273d918c6a40",
+        "relations": "1fd8e28ad7d10e8bbcd37d408435524073b1f56496bfcb2cca403e63526d849f",
+        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
+        "nonowned_acl": "80866fd7d14d5c596441703ac7f3ccc39dbc2ce9d6b9d0da1299e61b4c749a95"
+      },
+      "sources": [
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20260930000100_skillcheck_core.sql",
+          "sha256": "fcc48ad88ca87a25d826820a144fafc2e3425bc1f352a1574c04051b0bd156b7"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000100_idempotent_onboarding.sql",
+          "sha256": "218013224c1bc366c3e5afa5871620ff6df518ce14294260ccb54b6cd0b3d4dc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000200_candidate_documents.sql",
+          "sha256": "302866856b8922e3ac169abffe0fc8d8318c8cf5aca24fbf6976c8a926eb3899"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000100_behavior_assessments.sql",
+          "sha256": "a6bdb1f0c42dbb0fed0cadec0c8a3b10fcc41e9cffc6d1cedc0224dee0699ffa"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000200_behavior_conflict_response.sql",
+          "sha256": "7b1b0b63c341fdcd3b3b53c0c892e57d6a7c2f55e9240c3612d5fca4371c5cca"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000300_exercise_definitions.sql",
+          "sha256": "842e4b9fb1791e1b3ab37c03ddc7d42ca38ac7f3d60e25ce2d8bbbf51052e87c"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000100_exercise_observations.sql",
+          "sha256": "94b3cb9d79fdc232996f961b62fc3ae3ec5cc6d554f699a431efd57728710a18"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000200_screening_results.sql",
+          "sha256": "0476d7de9dcdafe84ee0d24e949e2e6cf56423fb4166aa89758b2226df2f8fcc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261005000100_screening_worker_claim_payload.sql",
+          "sha256": "0182e7369ecbd3cd4497be8d75164eab8dd1b9e5d21b507c393adcd17d5eef9a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000100_screening_retry_active_conflict.sql",
+          "sha256": "3e3b25c2e205db80bffca0a2774ff516efaa86f0102427231d45c13116462477"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000200_sales_leads.sql",
+          "sha256": "9f6d65274b8da5c45e204367aa23d9166f762ebabec19e05be8855fab268ca39"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009073604_sales_lead_inbox_retention.sql",
+          "sha256": "3c63d37a64ce33ba7cb70580228f1f867f0e0d605329a439e1a1834962b307e5"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009080000_screening_latest_mutations.sql",
+          "sha256": "4b1b37b11c142f0ecfebc4c1a59ac7a0b23d5801a8e0f6e329f93711c1a17337"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009081908_screening_ranking_shortlist.sql",
+          "sha256": "56f59251f71fe813807ea7d553649a426e2af568ac702589ca0e1069de503be4"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009104142_sales_lead_auto_reply.sql",
+          "sha256": "27fd8a1d1409cb262162908221a68801577bda94635eda159b214abac5fa8e5b"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009105025_candidate_communication_foundation.sql",
+          "sha256": "f974105471e6ef83d2ad426bf7fcea9e5022dc75dfe4fdf899347b8b6ade3593"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141832_sales_pipeline.sql",
+          "sha256": "98df7099632ddbb4886733f32482f410198813e2753481a351ed2c1143f21f1f"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141836_candidate_communication_verification.sql",
+          "sha256": "163d37c1317813f7f6781e4b4b94636e8faea8e957b6ca40110a857806b30a23"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "docs/prototypes/sc-019-mvp-credits.sql",
+          "sha256": "219ba643a0dff4dcee342065544e375fa549aa30f35c0e525414949a46aec240"
+        },
+        {
+          "ref": "d34200d2e14302dda9685b79f4e2c59e9049d9b1",
+          "path": "docs/prototypes/sc19-payment-storage.sql",
+          "sha256": "6f1a4d9c88e9c8ff53d250460bb40e2424c9171bfe1740193fabb0e044149ed1"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010190255_candidate_retention_preview.sql",
+          "sha256": "a3f5ae9cc62f87364d2f48b3c551dd1f205cd6bdefa926902f182e5c2f3c4eeb"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194216_candidate_erasure_lifecycle.sql",
+          "sha256": "034e9d264548921fb6cf2e766cfb1d3b03c977fad21d05e9309570f459d9c308"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194230_candidate_erasure_guards.sql",
+          "sha256": "47668cfe560262a523bcafeba8616ca064689c74c5b49a676b35af95beac7863"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194343_candidate_erasure_inventory_v2.sql",
+          "sha256": "b94557ce127d600849bea12731bc21f2784fe539cebf1cda61537046f7f5d556"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010204840_erasure_execution_protocol.sql",
+          "sha256": "d3bf577a171147d2d081e4eed26362581a8cb65e6658a5fe92cd6c61b6d73744"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205030_erasure_purge_graph.sql",
+          "sha256": "176304cdd300b91d6fdf4684f277730ea4b601d9ce73f46eebd1ea7630b5a8ab"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205052_erasure_inventory_v3.sql",
+          "sha256": "eba751566b34917f3e3b65dc4f7d134747edf18bb95a6957dcd4f28dda106c30"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031026_retention_scheduler_protocol.sql",
+          "sha256": "929f52db5d9deecbd163873499e1004ecdd18889031534abc3b5b4043088238a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031039_retention_scheduler_inventory.sql",
+          "sha256": "e533828aad1190c68f5fe387a9b3b0c203748dfedb8d8f6cfefb9f13db3a10e1"
+        }
+      ],
+      "pg17_same_fingerprints": false,
+      "pg17_same_non_acl_fingerprints": true,
+      "pg17": {
+        "nonowned_acl": "6428087b0877402ce4831d2c9998ad746f4d44155dc442bcb18997fdd3968b35",
+        "server": {
+          "version": "PostgreSQL 17.10 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "170010"
+        }
+      }
+    },
+    "orders152_legacy": {
+      "pg16": {
+        "port": 55416,
+        "server": {
+          "version": "PostgreSQL 16.14 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "160014"
+        },
+        "sc010_signature": "7055c0c3262ce1553944812929aa625857edbd3c1e353c3c52939ee5f1a64254",
+        "routines": "d571992052ecd526cd6c648085d87f01a4fedb3089417b0665b5495459d19a9b",
+        "indexes": "093ed79a24a982179f1a9de43ed060cfcf3d55ad36ac2f2fd47407ecee743caa",
+        "trigger_states": "34a96f7b185f2c04f651ba61a70ff284ce542862af1ce24556914b38fd1b0513",
+        "relations": "179f7cf1324d0eebc3133340b309619e14b618ad29aaa7c10e0e35d1f4c52178",
+        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
+        "nonowned_acl": "80866fd7d14d5c596441703ac7f3ccc39dbc2ce9d6b9d0da1299e61b4c749a95"
+      },
+      "sources": [
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20260930000100_skillcheck_core.sql",
+          "sha256": "fcc48ad88ca87a25d826820a144fafc2e3425bc1f352a1574c04051b0bd156b7"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000100_idempotent_onboarding.sql",
+          "sha256": "218013224c1bc366c3e5afa5871620ff6df518ce14294260ccb54b6cd0b3d4dc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261001000200_candidate_documents.sql",
+          "sha256": "302866856b8922e3ac169abffe0fc8d8318c8cf5aca24fbf6976c8a926eb3899"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000100_behavior_assessments.sql",
+          "sha256": "a6bdb1f0c42dbb0fed0cadec0c8a3b10fcc41e9cffc6d1cedc0224dee0699ffa"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000200_behavior_conflict_response.sql",
+          "sha256": "7b1b0b63c341fdcd3b3b53c0c892e57d6a7c2f55e9240c3612d5fca4371c5cca"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261002000300_exercise_definitions.sql",
+          "sha256": "842e4b9fb1791e1b3ab37c03ddc7d42ca38ac7f3d60e25ce2d8bbbf51052e87c"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000100_exercise_observations.sql",
+          "sha256": "94b3cb9d79fdc232996f961b62fc3ae3ec5cc6d554f699a431efd57728710a18"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261004000200_screening_results.sql",
+          "sha256": "0476d7de9dcdafe84ee0d24e949e2e6cf56423fb4166aa89758b2226df2f8fcc"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261005000100_screening_worker_claim_payload.sql",
+          "sha256": "0182e7369ecbd3cd4497be8d75164eab8dd1b9e5d21b507c393adcd17d5eef9a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000100_screening_retry_active_conflict.sql",
+          "sha256": "3e3b25c2e205db80bffca0a2774ff516efaa86f0102427231d45c13116462477"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261007000200_sales_leads.sql",
+          "sha256": "9f6d65274b8da5c45e204367aa23d9166f762ebabec19e05be8855fab268ca39"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009073604_sales_lead_inbox_retention.sql",
+          "sha256": "3c63d37a64ce33ba7cb70580228f1f867f0e0d605329a439e1a1834962b307e5"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009080000_screening_latest_mutations.sql",
+          "sha256": "4b1b37b11c142f0ecfebc4c1a59ac7a0b23d5801a8e0f6e329f93711c1a17337"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009081908_screening_ranking_shortlist.sql",
+          "sha256": "56f59251f71fe813807ea7d553649a426e2af568ac702589ca0e1069de503be4"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009104142_sales_lead_auto_reply.sql",
+          "sha256": "27fd8a1d1409cb262162908221a68801577bda94635eda159b214abac5fa8e5b"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009105025_candidate_communication_foundation.sql",
+          "sha256": "f974105471e6ef83d2ad426bf7fcea9e5022dc75dfe4fdf899347b8b6ade3593"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141832_sales_pipeline.sql",
+          "sha256": "98df7099632ddbb4886733f32482f410198813e2753481a351ed2c1143f21f1f"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261009141836_candidate_communication_verification.sql",
+          "sha256": "163d37c1317813f7f6781e4b4b94636e8faea8e957b6ca40110a857806b30a23"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "docs/prototypes/sc-019-mvp-credits.sql",
+          "sha256": "219ba643a0dff4dcee342065544e375fa549aa30f35c0e525414949a46aec240"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "docs/prototypes/sc19-payment-storage.sql",
+          "sha256": "a5223cab223c4065d250d96c66238cbc10544187b530907f74a13c116d77291a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010190255_candidate_retention_preview.sql",
+          "sha256": "a3f5ae9cc62f87364d2f48b3c551dd1f205cd6bdefa926902f182e5c2f3c4eeb"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194216_candidate_erasure_lifecycle.sql",
+          "sha256": "034e9d264548921fb6cf2e766cfb1d3b03c977fad21d05e9309570f459d9c308"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194230_candidate_erasure_guards.sql",
+          "sha256": "47668cfe560262a523bcafeba8616ca064689c74c5b49a676b35af95beac7863"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010194343_candidate_erasure_inventory_v2.sql",
+          "sha256": "b94557ce127d600849bea12731bc21f2784fe539cebf1cda61537046f7f5d556"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010204840_erasure_execution_protocol.sql",
+          "sha256": "d3bf577a171147d2d081e4eed26362581a8cb65e6658a5fe92cd6c61b6d73744"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205030_erasure_purge_graph.sql",
+          "sha256": "176304cdd300b91d6fdf4684f277730ea4b601d9ce73f46eebd1ea7630b5a8ab"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261010205052_erasure_inventory_v3.sql",
+          "sha256": "eba751566b34917f3e3b65dc4f7d134747edf18bb95a6957dcd4f28dda106c30"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031026_retention_scheduler_protocol.sql",
+          "sha256": "929f52db5d9deecbd163873499e1004ecdd18889031534abc3b5b4043088238a"
+        },
+        {
+          "ref": "bcc9a200a8a082c13fa3796e9375b37e4b520c8d",
+          "path": "supabase/migrations/20261012031039_retention_scheduler_inventory.sql",
+          "sha256": "e533828aad1190c68f5fe387a9b3b0c203748dfedb8d8f6cfefb9f13db3a10e1"
+        }
+      ],
+      "pg17_same_fingerprints": false,
+      "pg17_same_non_acl_fingerprints": true,
+      "pg17": {
+        "nonowned_acl": "6428087b0877402ce4831d2c9998ad746f4d44155dc442bcb18997fdd3968b35",
+        "server": {
+          "version": "PostgreSQL 17.10 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+          "version_num": "170010"
+        }
+      }
+    }
+  },
+  "acl_version_compatibility": {
+    "r4_legacy": {
+      "pg17_extra_owner_maintain_privileges": 73,
+      "removed": 0,
+      "other_changes": 0
+    },
+    "r4_voice": {
+      "pg17_extra_owner_maintain_privileges": 87,
+      "removed": 0,
+      "other_changes": 0
+    },
+    "r5_legacy": {
+      "pg17_extra_owner_maintain_privileges": 73,
+      "removed": 0,
+      "other_changes": 0
+    },
+    "r5_voice": {
+      "pg17_extra_owner_maintain_privileges": 87,
+      "removed": 0,
+      "other_changes": 0
+    },
+    "orders129_legacy": {
+      "pg17_extra_owner_maintain_privileges": 73,
+      "removed": 0,
+      "other_changes": 0
+    },
+    "orders152_legacy": {
+      "pg17_extra_owner_maintain_privileges": 73,
+      "removed": 0,
+      "other_changes": 0
+    }
+  },
+  "acl_exclusion_contract": {
+    "tables": [
+      "private.sc19_package_policy",
+      "private.sc19_balances",
+      "private.sc19_trial_nips",
+      "private.sc19_trial_approvals",
+      "private.sc19_analysis_spend",
+      "private.sc19_credit_journal",
+      "private.sc19_payment_offers",
+      "private.sc19_payment_orders",
+      "private.sc19_payment_requests",
+      "private.sc19_payment_grants",
+      "private.erasure_inventory_baseline_r5",
+      "private.erasure_inventory_baseline_r6"
+    ],
+    "functions": [
+      "private.sc19_valid_nip(text)",
+      "private.sc19_lock_company(uuid)",
+      "private.sc19_lock_analysis_company()",
+      "private.sc19_grant_paid(uuid,text)",
+      "private.sc19_charge_analysis()",
+      "private.sc19_reconcile_analysis()",
+      "private.sc19_payment_immutable()",
+      "public.sc19_claim_trial(uuid,text)",
+      "public.sc19_package_sizes()",
+      "public.sc19_get_balance(uuid)"
+    ],
+    "voice_included": true
+  },
+  "acl_validation": {
+    "generator_sha256": "226fbc425d146f0e5e90be1ce7295e16d7dc2bc1327ab33d71b1930b91fdfc9c",
+    "query_sha256": "c2e6a77aee9d0ac1252c4b621efb4d8d343e712cdbb28ee0271986b7077f70ba",
+    "pass": 12,
+    "fail": 0,
+    "skipped": 0,
+    "excluded_default_privileges": true,
+    "column_acl_included": true,
+    "voice_acl_included": true,
+    "search_path": ""
+  },
+  "outputs": {
+    "legacy": {
+      "indexes": "9ded7dff9d05049d48d530c82fb5a464ff08e1c2d69160e8571688c5ac173f61",
+      "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
+      "routines": "7c0a089b85f2b9aed7b461cc940d5de1b0b80892ccef88d9348f40fd93a04a93",
+      "relations": "43cccdc79768127d5b185acc4dbaf8228998a8c33fe9cae9e16a1bdf903a0d46",
+      "nonowned_acl": "80866fd7d14d5c596441703ac7f3ccc39dbc2ce9d6b9d0da1299e61b4c749a95",
+      "trigger_states": "74938b9b4455fa49ecc5582bb385386f37033a4e7e12881a345f4accca411fe1",
+      "sc010_signature": "e99342b97cf10c9f19c5351f423d30ff4dadaa18294465ff976d926d2cc6a07b",
+      "pg16": {
+        "indexes": "9ded7dff9d05049d48d530c82fb5a464ff08e1c2d69160e8571688c5ac173f61",
+        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
+        "routines": "7c0a089b85f2b9aed7b461cc940d5de1b0b80892ccef88d9348f40fd93a04a93",
+        "relations": "43cccdc79768127d5b185acc4dbaf8228998a8c33fe9cae9e16a1bdf903a0d46",
+        "nonowned_acl": "80866fd7d14d5c596441703ac7f3ccc39dbc2ce9d6b9d0da1299e61b4c749a95",
+        "trigger_states": "74938b9b4455fa49ecc5582bb385386f37033a4e7e12881a345f4accca411fe1",
+        "sc010_signature": "e99342b97cf10c9f19c5351f423d30ff4dadaa18294465ff976d926d2cc6a07b"
+      },
+      "known_tables": [
+        "private.candidate_retention_policies",
+        "private.candidate_verified_contact_points",
+        "private.candidate_verified_contact_receipts",
+        "private.contact_audit",
+        "private.contact_policy_templates",
+        "private.contact_requests",
+        "private.contact_trusted_issuers",
+        "private.erasure_candidate_lifecycle",
+        "private.erasure_configuration_requests",
+        "private.erasure_denial_context",
+        "private.erasure_execution_config",
+        "private.erasure_executions",
+        "private.erasure_holds",
+        "private.erasure_inventory_baseline",
+        "private.erasure_inventory_baseline_r2",
+        "private.erasure_inventory_baseline_r3",
+        "private.erasure_inventory_baseline_r4",
+        "private.erasure_inventory_baseline_r5",
+        "private.erasure_inventory_baseline_r6",
+        "private.erasure_lifecycle_commands",
+        "private.erasure_lifecycle_events",
+        "private.erasure_preview_tickets",
+        "private.erasure_purge_context",
+        "private.erasure_purge_context_rows",
+        "private.erasure_purge_manifest",
+        "private.erasure_receipts",
+        "private.erasure_requests",
+        "private.erasure_restore_checkpoint",
+        "private.erasure_subject_resolutions",
+        "private.erasure_verified_ledger_events",
+        "private.retention_authorizations",
+        "private.retention_candidate_clocks",
+        "private.retention_delegations",
+        "private.retention_schedule_commands",
+        "private.retention_suggestions",
+        "private.retention_ticks",
+        "private.retired_candidate_ids",
+        "private.sales_lead_attempts",
+        "private.sales_lead_closures",
+        "private.sales_lead_replay_state",
+        "private.sales_lead_settings",
+        "private.sales_mail_outbox",
+        "private.sales_mail_settings",
+        "private.sales_pipeline",
+        "private.sales_pipeline_events",
+        "private.sc19_analysis_spend",
+        "private.sc19_balances",
+        "private.sc19_credit_journal",
+        "private.sc19_package_policy",
+        "private.sc19_payment_grants",
+        "private.sc19_payment_offers",
+        "private.sc19_payment_orders",
+        "private.sc19_payment_requests",
+        "private.sc19_trial_approvals",
+        "private.sc19_trial_nips",
+        "private.screening_ranking_policies",
+        "public.applications",
+        "public.assessment_stages",
+        "public.behavior_assessment_entries",
+        "public.candidate_assessments",
+        "public.candidate_communication_approvals",
+        "public.candidate_communication_events",
+        "public.candidate_communications",
+        "public.candidate_contact_permissions",
+        "public.candidate_contact_preferences",
+        "public.candidate_documents",
+        "public.candidates",
+        "public.companies",
+        "public.company_members",
+        "public.company_profiles",
+        "public.exercise_definition_entries",
+        "public.exercise_observation_entries",
+        "public.platform_operators",
+        "public.positions",
+        "public.recruitment_shortlist_entries",
+        "public.recruitments",
+        "public.sales_leads",
+        "public.screening_analysis_attempts",
+        "public.screening_analysis_versions",
+        "public.screening_criterion_results",
+        "public.screening_criterion_review_overrides",
+        "public.screening_result_reviews"
+      ],
+      "pg17": {
+        "indexes": "9ded7dff9d05049d48d530c82fb5a464ff08e1c2d69160e8571688c5ac173f61",
+        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
+        "routines": "7c0a089b85f2b9aed7b461cc940d5de1b0b80892ccef88d9348f40fd93a04a93",
+        "relations": "43cccdc79768127d5b185acc4dbaf8228998a8c33fe9cae9e16a1bdf903a0d46",
+        "nonowned_acl": "6428087b0877402ce4831d2c9998ad746f4d44155dc442bcb18997fdd3968b35",
+        "trigger_states": "74938b9b4455fa49ecc5582bb385386f37033a4e7e12881a345f4accca411fe1",
+        "sc010_signature": "e99342b97cf10c9f19c5351f423d30ff4dadaa18294465ff976d926d2cc6a07b"
+      }
+    },
+    "voice": {
+      "indexes": "061d475f12d98ad172f8134bcde5d4cae60bd88a6a2c6b3a8bc665401b5dead7",
+      "policies": "5410709dbbb55712d829a6f6c1e01ac825f71a38473ec919d8c95030db0a6706",
+      "routines": "a3f2ceb6949bbd0b7d6a7ba0d4e8a55c1eddbd48e68c6f41cdcb791b2bfd40c4",
+      "relations": "8b3b08377caf9b4224c766bec90c8b59f6cefcf761de1522e018296437d5f5d4",
+      "nonowned_acl": "7bd81fd322357484bcdda55d5bbecb0aae8c2bd0c020a4a441f8271d54c12059",
+      "trigger_states": "e979fe2604d1a8631bd747fcf4e63c4539ef4a12d3b7b4d22ee360b9061090c2",
+      "sc010_signature": "6fd4900f85f0a1b6f4aad11a9246722cf79e857ea6bc999f7249151f20871061",
+      "pg16": {
+        "indexes": "061d475f12d98ad172f8134bcde5d4cae60bd88a6a2c6b3a8bc665401b5dead7",
+        "policies": "5410709dbbb55712d829a6f6c1e01ac825f71a38473ec919d8c95030db0a6706",
+        "routines": "a3f2ceb6949bbd0b7d6a7ba0d4e8a55c1eddbd48e68c6f41cdcb791b2bfd40c4",
+        "relations": "8b3b08377caf9b4224c766bec90c8b59f6cefcf761de1522e018296437d5f5d4",
+        "nonowned_acl": "7bd81fd322357484bcdda55d5bbecb0aae8c2bd0c020a4a441f8271d54c12059",
+        "trigger_states": "e979fe2604d1a8631bd747fcf4e63c4539ef4a12d3b7b4d22ee360b9061090c2",
+        "sc010_signature": "6fd4900f85f0a1b6f4aad11a9246722cf79e857ea6bc999f7249151f20871061"
+      },
+      "known_tables": [
+        "private.candidate_retention_policies",
+        "private.candidate_verified_contact_points",
+        "private.candidate_verified_contact_receipts",
+        "private.contact_audit",
+        "private.contact_policy_templates",
+        "private.contact_requests",
+        "private.contact_trusted_issuers",
+        "private.erasure_candidate_lifecycle",
+        "private.erasure_configuration_requests",
+        "private.erasure_denial_context",
+        "private.erasure_execution_config",
+        "private.erasure_executions",
+        "private.erasure_holds",
+        "private.erasure_inventory_baseline",
+        "private.erasure_inventory_baseline_r2",
+        "private.erasure_inventory_baseline_r3",
+        "private.erasure_inventory_baseline_r4",
+        "private.erasure_inventory_baseline_r4_voice",
+        "private.erasure_inventory_baseline_r5",
+        "private.erasure_inventory_baseline_r6",
+        "private.erasure_lifecycle_commands",
+        "private.erasure_lifecycle_events",
+        "private.erasure_preview_tickets",
+        "private.erasure_purge_context",
+        "private.erasure_purge_context_rows",
+        "private.erasure_purge_manifest",
+        "private.erasure_receipts",
+        "private.erasure_requests",
+        "private.erasure_restore_checkpoint",
+        "private.erasure_subject_resolutions",
+        "private.erasure_verified_ledger_events",
+        "private.retention_authorizations",
+        "private.retention_candidate_clocks",
+        "private.retention_delegations",
+        "private.retention_schedule_commands",
+        "private.retention_suggestions",
+        "private.retention_ticks",
+        "private.retired_candidate_ids",
+        "private.sales_lead_attempts",
+        "private.sales_lead_closures",
+        "private.sales_lead_replay_state",
+        "private.sales_lead_settings",
+        "private.sales_mail_outbox",
+        "private.sales_mail_settings",
+        "private.sales_pipeline",
+        "private.sales_pipeline_events",
+        "private.sc010c_voice_preparation_requests",
+        "private.sc010c_voice_preparations",
+        "private.sc19_analysis_spend",
+        "private.sc19_balances",
+        "private.sc19_credit_journal",
+        "private.sc19_package_policy",
+        "private.sc19_payment_grants",
+        "private.sc19_payment_offers",
+        "private.sc19_payment_orders",
+        "private.sc19_payment_requests",
+        "private.sc19_trial_approvals",
+        "private.sc19_trial_nips",
+        "private.sc19_voice_entitlements",
+        "private.screening_ranking_policies",
+        "private.voice_interview_permission_issuers",
+        "private.voice_interview_permission_policies",
+        "private.voice_interview_permission_receipts",
+        "private.voice_interview_permission_revocations",
+        "private.voice_plan_current_releases",
+        "private.voice_plan_release_entries",
+        "private.voice_plan_request_keys",
+        "private.voice_plan_review_entries",
+        "private.voice_plan_template_catalog",
+        "public.applications",
+        "public.assessment_stages",
+        "public.behavior_assessment_entries",
+        "public.candidate_assessments",
+        "public.candidate_communication_approvals",
+        "public.candidate_communication_events",
+        "public.candidate_communications",
+        "public.candidate_contact_permissions",
+        "public.candidate_contact_preferences",
+        "public.candidate_documents",
+        "public.candidates",
+        "public.companies",
+        "public.company_members",
+        "public.company_profiles",
+        "public.exercise_definition_entries",
+        "public.exercise_observation_entries",
+        "public.platform_operators",
+        "public.positions",
+        "public.recruitment_shortlist_entries",
+        "public.recruitments",
+        "public.sales_leads",
+        "public.screening_analysis_attempts",
+        "public.screening_analysis_versions",
+        "public.screening_criterion_results",
+        "public.screening_criterion_review_overrides",
+        "public.screening_result_reviews",
+        "public.voice_plan_versions"
+      ],
+      "pg17": {
+        "indexes": "061d475f12d98ad172f8134bcde5d4cae60bd88a6a2c6b3a8bc665401b5dead7",
+        "policies": "5410709dbbb55712d829a6f6c1e01ac825f71a38473ec919d8c95030db0a6706",
+        "routines": "a3f2ceb6949bbd0b7d6a7ba0d4e8a55c1eddbd48e68c6f41cdcb791b2bfd40c4",
+        "relations": "8b3b08377caf9b4224c766bec90c8b59f6cefcf761de1522e018296437d5f5d4",
+        "nonowned_acl": "64ad973471c4e5d668002d0220ea8210dbc72bcae188c90884f2648f17793a72",
+        "trigger_states": "e979fe2604d1a8631bd747fcf4e63c4539ef4a12d3b7b4d22ee360b9061090c2",
+        "sc010_signature": "6fd4900f85f0a1b6f4aad11a9246722cf79e857ea6bc999f7249151f20871061"
+      }
+    }
+  }
+}
