@@ -3,7 +3,7 @@
  * NOT a public API, write authorization, or production release gate.
  */
 import { isDeepStrictEqual } from "node:util";
-import { createVoicePlanWriteSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
+import { createVoicePlanWriteSnapshot, canonicalVoiceSourceSnapshot, type VoicePlanWriteSnapshot } from "./plan-persistence-contract.ts";
 import { selectReviewedScreeningGaps } from "./screening-gap-selection.ts";
 import type { InterviewSource } from "./interview-plan.ts";
 import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest,assertPinnedVoiceQuestions,pinnedClarificationGaps} from "./template-registry.ts";
@@ -74,7 +74,7 @@ async function reconstructLocked(
       "a.candidate_document_id,a.candidate_document_version,a.binding_snapshot,",
       "a.criteria_snapshot,a.latest_review_version,a.execution_status,a.stale_at,",
       "r.id as review_id,r.review_version,r.disposition,",
-      "s.id as shortlist_entry_id,s.removed_at",
+      "s.id as shortlist_entry_id,s.removed_at,s.ranking_policy_version",
       "from public.applications ap",
       "join public.recruitments rec on rec.company_id=ap.company_id and rec.id=ap.recruitment_id",
       "join public.positions pos on pos.company_id=rec.company_id and pos.id=rec.position_id",
@@ -123,6 +123,19 @@ async function reconstructLocked(
       "order by analysis_version desc limit 1",
     ].join(" "),[s.companyId,s.applicationId])).rows);
     if(newest.id!==s.analysisId)fail("STALE");
+    // Require that the stored shortlist is still current under the ranking
+    // policy. Do not accept historical shortlist membership as authority.
+    const pinnedPolicy=only((await db.query([
+      "select version from private.screening_ranking_policies",
+      "where version=$1 for share nowait",
+    ].join(" "),[h.ranking_policy_version])).rows);
+    if(pinnedPolicy.version!==h.ranking_policy_version)fail("STALE");
+    const listed=(await db.query([
+      "select ranking_policy_version,policy_current",
+      "from public.get_recruitment_shortlist($1,false) where entry_id=$2",
+    ].join(" "),[h.recruitment_id,s.shortlistEntryId])).rows;
+    if(listed.length!==1||listed[0].policy_current!==true||
+       listed[0].ranking_policy_version!==h.ranking_policy_version)fail("STALE");
     const criteria=h.criteria_snapshot;
     if(!Array.isArray(criteria)||criteria.length<2||criteria.length>90)fail("INVALID");
     const approvedCriteria=criteria.map((c:Row)=>({id:c?.id,kind:c?.kind}));
@@ -220,7 +233,7 @@ export async function verifyStoredVoicePlanWithinTransaction(db:SqlClient,planId
   {
     const p=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
-      "shortlist_entry_id,source_hash,envelope_hash,template_version,plan_envelope",
+      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope",
       "from public.voice_plan_versions where id=$1",
     ].join(" "),[planId])).rows);
     // Match SC-006 screening lock order before application/plan row locks.
@@ -230,7 +243,7 @@ export async function verifyStoredVoicePlanWithinTransaction(db:SqlClient,planId
       [p.company_id+":"+p.application_id]);
     const locked=only((await db.query([
       "select company_id,application_id,analysis_id,screening_review_id,",
-      "shortlist_entry_id,source_hash,envelope_hash,template_version,plan_envelope",
+      "shortlist_entry_id,source_hash,envelope_hash,source_snapshot,template_version,plan_envelope",
       "from public.voice_plan_versions where id=$1 for share nowait",
     ].join(" "),[planId])).rows);
     if(!isDeepStrictEqual(locked,p))fail("STALE");
@@ -242,6 +255,8 @@ export async function verifyStoredVoicePlanWithinTransaction(db:SqlClient,planId
     });
     if(p.source_hash!==rebuilt.sourceHash||
        p.envelope_hash!==rebuilt.planContractHash||
+       !isDeepStrictEqual(p.source_snapshot,canonicalVoiceSourceSnapshot(
+         rebuilt.sourceBinding,rebuilt.planSourceFingerprint))||
        !isDeepStrictEqual(p.plan_envelope,rebuilt))
       fail("STALE");
     return rebuilt;
