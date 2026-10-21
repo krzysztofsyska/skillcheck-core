@@ -21,7 +21,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
   push:
-    branches: [integration, main]
+    branches: [integration, main, feat/sc-012b-atomic-source-rpc-integration]
     paths:
       - 'lib/voice/trusted-source-verifier.ts'
       - 'lib/voice/atomic-plan-operations.ts'
