@@ -10,6 +10,7 @@ on:
       - 'lib/sc19-payment*.ts'
       - 'tests/sc-019-migrations*.mjs'
       - 'tests/data-api-grants.test.mjs'
+      - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
       - 'tests/helpers/sc19-migration-fixture.mjs'
       - 'tests/helpers/screening-ranking-fixture.mjs'
@@ -22,6 +23,7 @@ on:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
       - 'tests/data-api-grants.test.mjs'
+      - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
       - 'tests/helpers/sc19-migration-fixture.mjs'
       - '.github/workflows/sc19-migrations.yml'
@@ -87,7 +89,8 @@ jobs:
           set +e
           node --experimental-strip-types --test --test-concurrency=1 \
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
-            tests/data-api-grants.test.mjs > sc19-migrations.log 2>&1
+            tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
+            > sc19-migrations.log 2>&1
           test_result=$?
           tail -n 250 sc19-migrations.log
           exit "$test_result"

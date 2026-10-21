@@ -27,7 +27,7 @@ Every source file is identified by commit, path and SHA256 in `tests/fixtures/sc
 
 The order-bearing fixtures respect the payment prototype's historical install guard. They are known blocked precursor states whose old R4 catalog no longer describes the extra storage. Only their exact pinned catalog is accepted, and normalization to R5/R6 is atomic. No product RPC is called during that transition. This does not imply that either precursor exists in Production.
 
-The normal fresh-install test also replays **all current checked-in migrations**, rather than merely loading a selected prototype. Historical prototype tests use the explicit R4 fixture boundary; full-chain tests pass `throughMigration: null`. The two full-chain API ACL tests inherited from #154 now use native PG16/17 as well, retaining their independent public table/column allowlist. Installed PGlite is PG18.3 and remains limited to the historical fixtures, since this migration explicitly supports major 16/17.
+The normal fresh-install test also replays **all current checked-in migrations**, rather than merely loading a selected prototype. Historical prototype tests use the explicit R4 fixture boundary; full-chain tests pass `throughMigration: null`. The two full-chain API ACL tests inherited from #154 now use native PG16/17 as well, retaining their independent public table/column allowlist. The existing full-chain sales-lead isolation regression also uses native PG16/17, preserving its company-role and no-new-tenant assertions. Other historical sales tests remain unchanged. Installed PGlite is PG18.3 and remains limited to the historical fixtures, since this migration explicitly supports major 16/17.
 
 ### Final immutable inventory
 
@@ -68,7 +68,7 @@ PG_DUMP_BIN=/usr/lib/postgresql/17/bin/pg_dump \
 PG_RESTORE_BIN=/usr/lib/postgresql/17/bin/pg_restore \
 node --experimental-strip-types --test --test-concurrency=1 \
   tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
-  tests/data-api-grants.test.mjs
+  tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs
 ```
 
 Use major/client 16 for the other matrix case. Tests create and drop their own random databases, with independent backend connections and synthetic identities/providers only.
@@ -77,7 +77,7 @@ Coverage includes six exact source states and complete-chain installation; fresh
 
 Legacy recovery uses real `pg_dump` → a new database → `pg_restore`, proves the restored candidate is present, then replays the independently signed ledger to erase the candidate again. It verifies accounting, the second company and repeat replay. The voice case verifies signed purge/replay, unknown voice-adapter refusal and exactly-once release of the existing voice reservation. A separate real terminal R4 purge proves that unsupported old signed history is refused and retained.
 
-The corrected local matrix passed 99 tests per major, with zero failures and skips: 77 tests use the native PostgreSQL service (75 migration/recovery cases and two full-chain API replays), while 22 are historical PGlite API profiles. These results are separate from final exact-HEAD GitHub CI and independent review, whose receipts are recorded in the PR. Required additional checks are `npm run typecheck`, `npm run build`, existing SC-019 PostgreSQL16/core/HTTP/component regressions and built Next route tests. No production/provider E2E is claimed.
+The matrix explicitly distinguishes native PostgreSQL tests (migration/recovery cases, full-chain API and sales-lead replays) from the unchanged historical PGlite API/sales cases. Local receipts, exact counts and final exact-HEAD GitHub CI and independent review are recorded separately in the PR. Required additional checks are `npm run typecheck`, `npm run build`, existing SC-019 PostgreSQL16/core/HTTP/component regressions and built Next route tests. No production/provider E2E is claimed.
 
 ## Independent architecture review
 

@@ -42,6 +42,9 @@ jobs:
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:sales-leads
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       - run: npm run test:sales-pipeline
         env:
           SALES_PIPELINE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
