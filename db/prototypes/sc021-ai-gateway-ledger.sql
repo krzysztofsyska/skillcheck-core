@@ -55,6 +55,13 @@ create policy ai_gateway_limits_tenant_read on public.ai_gateway_limits
 create policy ai_gateway_usage_tenant_read on public.ai_gateway_usage
   for select to authenticated using (private.has_company_access(company_id));
 revoke all on public.ai_gateway_limits, public.ai_gateway_usage from public, anon, authenticated;
+-- SC-DB-API-001: the API client reads through authenticated RLS; workers use RPC.
+-- Do not retain service_role table access from historical Supabase defaults.
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    revoke all on public.ai_gateway_limits, public.ai_gateway_usage from service_role;
+  end if;
+end $$;
 grant select on public.ai_gateway_limits, public.ai_gateway_usage to authenticated;
 -- Only the privileged database operator provisions budgets; company members cannot change limits.
 
