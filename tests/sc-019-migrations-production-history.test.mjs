@@ -15,12 +15,22 @@ test('observed production history + pending chain preserves completed synthetic 
   assert.equal(url.port, '55432');
   assert.equal(url.pathname, '/sc19_production_rehearsal');
   assert.ok(['16','17'].includes(process.env.SC19_TEST_PG_MAJOR));
+  const platformUrl=new URL(url); platformUrl.username='supabase_admin';
+  const platform=new pg.Client({connectionString:platformUrl.href});
+  await platform.connect(); t.after(()=>platform.end());
+  assert.equal((await platform.query("select to_regclass('public.companies') v")).rows[0].v,null);
+  // Model the observed hosted creator, not a superuser masquerading as postgres.
+  // PG16+ generates the bootstrap-admin membership automatically on CREATE ROLE.
+  await platform.query(`create role postgres login inherit createrole createdb replication bypassrls password 'synthetic-only';
+    alter database sc19_production_rehearsal owner to postgres;
+    create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
+    grant anon,authenticated to postgres with inherit false, set true;
+    create extension pg_cron;`);
   const db = new pg.Client({ connectionString: url.href });
   await db.connect(); t.after(() => db.end()); db.exec = sql => db.query(sql);
   assert.equal(Math.floor(Number((await db.query("select current_setting('server_version_num') v")).rows[0].v)/10000), Number(process.env.SC19_TEST_PG_MAJOR));
   assert.equal((await db.query("select to_regclass('public.companies') v")).rows[0].v, null, 'Only an empty owned test database');
-  await db.query(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
-    alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
+  await db.query(`alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
     alter default privileges in schema public grant all on sequences to anon,authenticated,service_role;
     alter default privileges in schema public grant execute on functions to anon,authenticated,service_role;
     grant usage on schema public to postgres,anon,authenticated,service_role;
@@ -36,11 +46,12 @@ test('observed production history + pending chain preserves completed synthetic 
   }
   assert.equal((await db.query("select count(*)::int n from pg_extension where extname='pg_cron'")).rows[0].n,1);
   assert.equal((await db.query('select count(*)::int n from cron.job')).rows[0].n,0,'No scheduled destructive job');
-  const membership=(await db.query(`select inherit_option,set_option from pg_auth_members where roleid='screening_worker'::regrole and member='postgres'::regrole`)).rows;
-  assert.ok(membership.some(r=>r.set_option && !r.inherit_option));
-  // The hosted supabase_admin grantor topology is not reproduced by this
-  // vanilla bootstrap-superuser cluster. It remains a separate documented
-  // precondition blocker; do not claim a full hosted-platform replica.
+  const membership=(await db.query(`select grantor::regrole::text grantor,admin_option,inherit_option,set_option from pg_auth_members where roleid='screening_worker'::regrole and member='postgres'::regrole order by grantor::regrole::text`)).rows;
+  assert.deepEqual(membership,[
+    {grantor:'postgres',admin_option:false,inherit_option:false,set_option:true},
+    {grantor:'supabase_admin',admin_option:true,inherit_option:false,set_option:false}
+  ]);
+  t.diagnostic(JSON.stringify({observedHostedWorkerMembership:membership}));
   for(const id of Object.values(users)) await db.query('insert into auth.users values($1)',[id]);
   const h=createRankingHarness(db), f=await h.seed();
   const started=await h.start(f), claimed=await h.claim(started);
@@ -62,9 +73,10 @@ test('observed production history + pending chain preserves completed synthetic 
       const expected=manifest.states.r4_legacy['pg'+process.env.SC19_TEST_PG_MAJOR];
       t.diagnostic(JSON.stringify({observed,expected,mismatches:Object.keys(expected).filter(k=>expected[k]!==observed[k])}));
       await db.query('create database sc19_reference');
-      const referenceUrl=new URL(url); referenceUrl.pathname='/sc19_reference';
+      const referenceUrl=new URL(platformUrl); referenceUrl.pathname='/sc19_reference';
       const reference=new pg.Client({connectionString:referenceUrl.href}); await reference.connect(); t.after(()=>reference.end());
       reference.exec=sql=>reference.query(sql);
+      await reference.query('set role postgres');
       await setupRankingDatabase(reference,{throughMigration:pending.at(-2)});
       await reference.query("set search_path=''");
       for(const [kind,sql] of Object.entries(manifest.queries)) {

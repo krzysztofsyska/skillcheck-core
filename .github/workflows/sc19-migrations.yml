@@ -137,10 +137,10 @@ jobs:
         run: |
           docker build --build-arg PG_MAJOR="$PG_MAJOR" -t sc19-rehearsal -f tests/fixtures/sc19-rehearsal.Dockerfile tests/fixtures
           docker run -d --name sc19-rehearsal -p 127.0.0.1:55432:5432 \
-            -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_rehearsal \
+            -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_rehearsal \
             sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_production_rehearsal
           for attempt in $(seq 1 30); do
-            if docker exec sc19-rehearsal pg_isready -U postgres -d sc19_production_rehearsal; then exit 0; fi
+            if docker exec sc19-rehearsal pg_isready -U supabase_admin -d sc19_production_rehearsal; then exit 0; fi
             sleep 1
           done
           exit 1
