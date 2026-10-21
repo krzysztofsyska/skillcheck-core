@@ -133,7 +133,7 @@ Punkty odczytu PR: #96 `ed04c37fb134c4d4c8b1c60ef69eaf04ad29ea2d`,
 
 Nowy test odtwarza wszystkie historyczne migracje w PGlite (PostgreSQL/WASM), następnie
 sprawdza upgrade w trzech profilach: brak default grants, historyczny ALL oraz opt-in
-z pozostałymi uprawnieniami administracyjnymi. **23/23 PASS**. Obejmuje:
+z pozostałymi uprawnieniami administracyjnymi. **24/24 PASS**. Obejmuje:
 
 - pełne ACL tabel i kolumn, RLS/widoki, blokadę anon i service_role;
 - właściciela, rekrutera, viewer, outsider i dwa tenanty; onboarding/CV, screening worker
@@ -142,7 +142,8 @@ z pozostałymi uprawnieniami administracyjnymi. **23/23 PASS**. Obejmuje:
 - identyczne RPC ACL, polityki, default ACL i sygnaturę SC-010 przed/po naprawie;
 - prywatne kredyty SC-019, jawne RPC i nadal działającą blokadę inwentarza płatności;
 - osobny dozwolony fixture płatności bez SC-010, bez usuwania guardów;
-- pełny clean replay z nową migracją także bez roli service_role w fixture.
+- pełny clean replay wszystkich aktualnych migracji z niezależną macierzą ACL/RLS;
+  test wykrywania przyszłej tabeli i przyszłego nadania anon SELECT; osobny replay bez service_role.
 
 `npm run typecheck` i `npm run build`: PASS. Nowy test jest w istniejącym `npm run test:db`
 i wymaganym CI Checks. Wyniki całej regresji, bieżącego CI i niezależnego review przypina

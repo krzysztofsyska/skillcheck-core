@@ -68,6 +68,31 @@ async function untouched(db) {
   };
 }
 
+async function assertApiContract(db) {
+  const catalog = (await db.query(`select c.relname,c.relkind,c.relrowsecurity,c.reloptions
+    from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relkind in ('r','p','v') order by c.relname`)).rows;
+  assert.deepEqual(catalog.map(r => r.relname), relations, 'new tables require a reviewed API contract');
+  for (const row of catalog) {
+    if (row.relkind === 'v') assert.ok(row.reloptions.includes('security_invoker=true'), row.relname);
+    else assert.equal(row.relrowsecurity, true, row.relname);
+  }
+  for (const row of await apiMatrix(db)) {
+    const expected = row.rolname === 'authenticated' && (
+      (row.privilege === 'SELECT' && !rpcOnly.includes(row.relname)) ||
+      (['INSERT','DELETE'].includes(row.privilege) && crud.includes(row.relname)));
+    assert.equal(row.allowed, expected, JSON.stringify(row));
+  }
+  for (const row of await columnMatrix(db)) {
+    const expected = row.rolname === 'authenticated' && (
+      (row.privilege === 'SELECT' && !rpcOnly.includes(row.relname)) ||
+      (row.privilege === 'INSERT' && (crud.includes(row.relname) ||
+        (row.relname === 'candidate_documents' && documentInsert.includes(row.attname)))) ||
+      (row.privilege === 'UPDATE' && (updates[row.relname] ?? []).includes(row.attname)));
+    assert.equal(row.allowed, expected, JSON.stringify(row));
+  }
+}
+
 for (const profile of ['no-default-grants', 'legacy-all', 'opt-in-residual']) {
   test(`Data API ACL: full migration chain / ${profile}`, async t => {
     const db = new PGlite({ extensions: { pgcrypto } });
@@ -106,28 +131,7 @@ for (const profile of ['no-default-grants', 'legacy-all', 'opt-in-residual']) {
 
     await db.exec(repair);
     await t.test('exact table/column allowlist, RLS, invoker views, no anonymous or service CRUD', async () => {
-      const catalog = (await db.query(`select c.relname,c.relkind,c.relrowsecurity,c.reloptions
-        from pg_class c join pg_namespace n on n.oid=c.relnamespace
-        where n.nspname='public' and c.relkind in ('r','p','v') order by c.relname`)).rows;
-      assert.deepEqual(catalog.map(r => r.relname), relations, 'new tables require a reviewed API contract');
-      for (const row of catalog) {
-        if (row.relkind === 'v') assert.ok(row.reloptions.includes('security_invoker=true'), row.relname);
-        else assert.equal(row.relrowsecurity, true, row.relname);
-      }
-      for (const row of await apiMatrix(db)) {
-        const expected = row.rolname === 'authenticated' && (
-          (row.privilege === 'SELECT' && !rpcOnly.includes(row.relname)) ||
-          (['INSERT','DELETE'].includes(row.privilege) && crud.includes(row.relname)));
-        assert.equal(row.allowed, expected, JSON.stringify(row));
-      }
-      for (const row of await columnMatrix(db)) {
-        const expected = row.rolname === 'authenticated' && (
-          (row.privilege === 'SELECT' && !rpcOnly.includes(row.relname)) ||
-          (row.privilege === 'INSERT' && (crud.includes(row.relname) ||
-            (row.relname === 'candidate_documents' && documentInsert.includes(row.attname)))) ||
-          (row.privilege === 'UPDATE' && (updates[row.relname] ?? []).includes(row.attname)));
-        assert.equal(row.allowed, expected, JSON.stringify(row));
-      }
+      await assertApiContract(db);
       assert.deepEqual(await untouched(db), before, 'user/worker RPCs, policies, defaults and SC-010 signature unchanged');
       assert.equal((await db.query(`select count(*)::int as count from pg_class c join pg_namespace n on n.oid=c.relnamespace
         where n.nspname='public' and c.relkind='S'`)).rows[0].count, 0);
@@ -232,6 +236,23 @@ test('planned SC-019 payment storage clears inherited ACL in its supported isola
       assert.ok(perms.every(p => !p.allowed), `${role}/${row.relname}`);
     }
   }
+});
+
+test('full clean replay checks every current migration against the public API contract', async t => {
+  const db = new PGlite({ extensions: { pgcrypto } });
+  t.after(() => db.close());
+  await db.exec(`create role anon nologin; create role authenticated nologin;
+    create role service_role nologin bypassrls;
+    alter default privileges in schema public grant all on tables to anon,authenticated,service_role;`);
+  await setupRankingDatabase(db);
+  await assertApiContract(db);
+  // Prove the guard detects both a new table and privilege drift in a future migration.
+  await db.exec('begin; create table public.unreviewed_future_table(id integer)');
+  await assert.rejects(assertApiContract(db), error => error.code === 'ERR_ASSERTION');
+  await db.exec('rollback; begin; grant select on public.candidate_documents to anon');
+  await assert.rejects(assertApiContract(db), error => error.code === 'ERR_ASSERTION');
+  await db.exec('rollback');
+  await assertApiContract(db);
 });
 
 test('full clean replay includes the ACL repair even without a Supabase service role', async t => {
