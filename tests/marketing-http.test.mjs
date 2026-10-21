@@ -72,7 +72,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(new URL(calculatorRoute.headers.get('location'), base).pathname, '/kalkulator-demo.html');
   const calculatorResponse = await fetch(`${base}/kalkulator-demo.html`);
   assert.equal(calculatorResponse.status, 200);
-  assert.match(calculatorResponse.headers.get('content-type'), /text\\/html/);
+  assert.ok(calculatorResponse.headers.get('content-type')?.includes('text/html'));
   const calculator = await calculatorResponse.text();
   assert.match(calculator, /Interaktywny podgląd koncepcji/);
   assert.match(calculator, /data-pack="pre"/);
