@@ -149,7 +149,7 @@ export async function assertR6(db, variant = 'legacy') {
   assert.deepEqual([...actual[0].known_tables].sort(), [...expected.known_tables].sort());
   const tables = (await db.query(`select n.nspname||'.'||c.relname name from pg_class c
     join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','private')
-    and c.relkind in ('r','p','f') order by 1`)).rows.map(row => row.name);
+    and c.relkind in ('r','p','f') order by (n.nspname||'.'||c.relname) collate "C"`)).rows.map(row => row.name);
   assert.deepEqual(tables, [...expected.known_tables].sort(), 'Inventory is the complete relation allowlist');
   assert.deepEqual((await db.query(`select proname from pg_proc where prosrc ~ 'erasure_inventory_baseline_r[45]'
     and pronamespace in ('public'::regnamespace,'private'::regnamespace)`)).rows, []);

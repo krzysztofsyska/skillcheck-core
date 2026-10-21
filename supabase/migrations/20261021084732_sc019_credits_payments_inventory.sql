@@ -274,9 +274,11 @@ begin
 end
 $preflight$;
 
+-- Static object-list comparisons use C order on both sides, independent of database locale.
+
 do $baseline_data$ begin
 if (select schema_signature from private.erasure_inventory_baseline_r4 where singleton) is distinct from 'd2e7725bd5051e15cb7e700a128026a3ad6f0d87f9d3bba3de8e1539c9d3eabd'
- or (select array_agg(x order by x) from private.erasure_inventory_baseline_r4 b,unnest(b.known_tables) x where singleton)
+ or (select array_agg(x order by x collate "C") from private.erasure_inventory_baseline_r4 b,unnest(b.known_tables) x where singleton)
  is distinct from array['private.candidate_retention_policies','private.candidate_verified_contact_points','private.candidate_verified_contact_receipts','private.contact_audit','private.contact_policy_templates','private.contact_requests','private.contact_trusted_issuers','private.erasure_candidate_lifecycle','private.erasure_configuration_requests','private.erasure_denial_context','private.erasure_execution_config','private.erasure_executions','private.erasure_holds','private.erasure_inventory_baseline','private.erasure_inventory_baseline_r2','private.erasure_inventory_baseline_r3','private.erasure_inventory_baseline_r4','private.erasure_lifecycle_commands','private.erasure_lifecycle_events','private.erasure_preview_tickets','private.erasure_purge_context','private.erasure_purge_context_rows','private.erasure_purge_manifest','private.erasure_receipts','private.erasure_requests','private.erasure_restore_checkpoint','private.erasure_subject_resolutions','private.erasure_verified_ledger_events','private.retention_authorizations','private.retention_candidate_clocks','private.retention_delegations','private.retention_schedule_commands','private.retention_suggestions','private.retention_ticks','private.retired_candidate_ids','private.sales_lead_attempts','private.sales_lead_closures','private.sales_lead_replay_state','private.sales_lead_settings','private.sales_mail_outbox','private.sales_mail_settings','private.sales_pipeline','private.sales_pipeline_events','private.screening_ranking_policies','public.applications','public.assessment_stages','public.behavior_assessment_entries','public.candidate_assessments','public.candidate_communication_approvals','public.candidate_communication_events','public.candidate_communications','public.candidate_contact_permissions','public.candidate_contact_preferences','public.candidate_documents','public.candidates','public.companies','public.company_members','public.company_profiles','public.exercise_definition_entries','public.exercise_observation_entries','public.platform_operators','public.positions','public.recruitment_shortlist_entries','public.recruitments','public.sales_leads','public.screening_analysis_attempts','public.screening_analysis_versions','public.screening_criterion_results','public.screening_criterion_review_overrides','public.screening_result_reviews'] then
 raise exception 'sc19_existing_erasure_inventory_baseline_r4_data_unreviewed' using errcode='55000';
 end if;
@@ -285,7 +287,7 @@ end $baseline_data$;
 do $baseline_data$ begin
 if (select voice from pg_temp.sc19_migration_state) then
 if (select schema_signature from private.erasure_inventory_baseline_r4_voice where singleton) is distinct from '70cdbf43562f147294c417639b76fe121154f4dc6e49799b9764232a4aedc444'
- or (select array_agg(x order by x) from private.erasure_inventory_baseline_r4_voice b,unnest(b.known_tables) x where singleton)
+ or (select array_agg(x order by x collate "C") from private.erasure_inventory_baseline_r4_voice b,unnest(b.known_tables) x where singleton)
  is distinct from array['private.candidate_retention_policies','private.candidate_verified_contact_points','private.candidate_verified_contact_receipts','private.contact_audit','private.contact_policy_templates','private.contact_requests','private.contact_trusted_issuers','private.erasure_candidate_lifecycle','private.erasure_configuration_requests','private.erasure_denial_context','private.erasure_execution_config','private.erasure_executions','private.erasure_holds','private.erasure_inventory_baseline','private.erasure_inventory_baseline_r2','private.erasure_inventory_baseline_r3','private.erasure_inventory_baseline_r4','private.erasure_inventory_baseline_r4_voice','private.erasure_lifecycle_commands','private.erasure_lifecycle_events','private.erasure_preview_tickets','private.erasure_purge_context','private.erasure_purge_context_rows','private.erasure_purge_manifest','private.erasure_receipts','private.erasure_requests','private.erasure_restore_checkpoint','private.erasure_subject_resolutions','private.erasure_verified_ledger_events','private.retention_authorizations','private.retention_candidate_clocks','private.retention_delegations','private.retention_schedule_commands','private.retention_suggestions','private.retention_ticks','private.retired_candidate_ids','private.sales_lead_attempts','private.sales_lead_closures','private.sales_lead_replay_state','private.sales_lead_settings','private.sales_mail_outbox','private.sales_mail_settings','private.sales_pipeline','private.sales_pipeline_events','private.sc010c_voice_preparation_requests','private.sc010c_voice_preparations','private.sc19_voice_entitlements','private.screening_ranking_policies','private.voice_interview_permission_issuers','private.voice_interview_permission_policies','private.voice_interview_permission_receipts','private.voice_interview_permission_revocations','private.voice_plan_current_releases','private.voice_plan_release_entries','private.voice_plan_request_keys','private.voice_plan_review_entries','private.voice_plan_template_catalog','public.applications','public.assessment_stages','public.behavior_assessment_entries','public.candidate_assessments','public.candidate_communication_approvals','public.candidate_communication_events','public.candidate_communications','public.candidate_contact_permissions','public.candidate_contact_preferences','public.candidate_documents','public.candidates','public.companies','public.company_members','public.company_profiles','public.exercise_definition_entries','public.exercise_observation_entries','public.platform_operators','public.positions','public.recruitment_shortlist_entries','public.recruitments','public.sales_leads','public.screening_analysis_attempts','public.screening_analysis_versions','public.screening_criterion_results','public.screening_criterion_review_overrides','public.screening_result_reviews','public.voice_plan_versions'] then
 raise exception 'sc19_existing_erasure_inventory_baseline_r4_voice_data_unreviewed' using errcode='55000';
 end if;
@@ -296,7 +298,7 @@ end $baseline_data$;
 do $payment_data_preflight$
 begin
   if to_regclass('private.sc19_package_policy') is not null then
-    if (select array_agg(plan order by plan) from private.sc19_package_policy)
+    if (select array_agg(plan order by plan collate "C") from private.sc19_package_policy)
        is distinct from array['FREE','PRESELEKCJA'] then
       raise exception 'sc19_package_policy_incomplete' using errcode='55000';
     end if;
@@ -1327,8 +1329,8 @@ begin
       for each row execute function private.contact_immutable();
     insert into private.erasure_inventory_baseline_r5 values(true,prior,prior_tables);
   elsif (select schema_signature from private.erasure_inventory_baseline_r5 where singleton) is distinct from prior
-    or (select array_agg(x order by x) from private.erasure_inventory_baseline_r5 b,unnest(b.known_tables) x where singleton)
-       is distinct from (select array_agg(x order by x) from unnest(prior_tables) x) then
+    or (select array_agg(x order by x collate "C") from private.erasure_inventory_baseline_r5 b,unnest(b.known_tables) x where singleton)
+       is distinct from (select array_agg(x order by x collate "C") from unnest(prior_tables) x) then
     raise exception 'sc19_existing_r5_baseline_unreviewed' using errcode='55000';
   end if;
   create table private.erasure_inventory_baseline_r6 (
@@ -1558,10 +1560,10 @@ begin
   if actual is distinct from expected or private.erasure_schema_signature() is distinct from expected then
     raise exception 'sc19_final_schema_signature_mismatch:%',actual using errcode='55000';
   end if;
-  select array_agg(n.nspname||'.'||c.relname order by n.nspname||'.'||c.relname) into actual_tables
+  select array_agg(n.nspname||'.'||c.relname order by (n.nspname||'.'||c.relname) collate "C") into actual_tables
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname in ('public','private') and c.relkind in ('r','p','f');
-  if actual_tables is distinct from (select array_agg(x order by x) from unnest(known) x) then
+  if actual_tables is distinct from (select array_agg(x order by x collate "C") from unnest(known) x) then
     raise exception 'sc19_final_inventory_gap' using errcode='55000';
   end if;
   if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace

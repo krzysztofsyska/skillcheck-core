@@ -87,6 +87,8 @@ The corrected local matrix passed 99 tests per major, with zero failures and ski
 
 The first independent code review found P1: changing an existing view to `security_invoker=false` escaped the initial extra fingerprints and permitted a cross-tenant read. The reviewer reproduced it on both native PostgreSQL majors. The correction adds literal source-derived relation options and complete view/rewrite fingerprints, with negative tests for changed security options, view body and rewrite rules. Existing SC-010 historical signatures are not edited; the extra preflight/postflight contract provides the missing checks. This finding and its final closure are recorded in the PR.
 
+GitHub CI then exposed a locale-dependent comparison of the baseline's object-list row data: the first local clusters used C ordering, while the Docker PostgreSQL services use `en_US.utf8`. All new sorted list comparisons now use explicit `COLLATE "C"` on both sides. The correction changes neither the reviewed schema fingerprints nor historical functions/signatures, and does not change CI's locale. Verification includes reproducing the old refusal and replaying the corrected full matrix in separate native clusters initialized with `en_US.utf8`.
+
 ## Parallel PR #154 and rollout sequencing
 
 [PR #154](https://github.com/krzysztofsyska/skillcheck-core/pull/154), HEAD `1d96da6c8993031c3d04c7b8fa4b7e2bc6df5b4f`, merged as `3713a0c44b7579172bb613c6dba99a6403164646` during this task. Its migration `20261021084245_explicit_data_api_table_acl.sql` sorts before this SC-019 migration. Its accepted migration and implementation are preserved. Only its two full-chain test harnesses are integrated with the native migration requirement.
