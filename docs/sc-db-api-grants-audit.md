@@ -3,6 +3,80 @@
 Data odczytu: 21.10.2026, Europe/Warsaw. Kontrakt: [Issue #153](https://github.com/krzysztofsyska/skillcheck-core/issues/153).
 Poziom L3, zakres BACKEND. Production approval: **NO**.
 
+## Domknięcie repozytorium — 21.10.2026
+
+- [PR #154](https://github.com/krzysztofsyska/skillcheck-core/pull/154) scalono do
+  `integration`: `3713a0c44b7579172bb613c6dba99a6403164646`.
+  HEAD `1d96da6c8993031c3d04c7b8fa4b7e2bc6df5b4f`, BASE `bcc9a200a8a082c13fa3796e9375b37e4b520c8d`.
+  Przed merge: 10/10 checks SUCCESS, wymagane `verify` i `Agent contract / scope gate`
+  od GitHub Actions app 15368, brak legacy statuses i nierozwiązanych wątków, aktualny
+  ruleset 25299230 (strict checks, bez bypass). Standardowy merge z expected HEAD.
+- Niezależny exact-HEAD review pierwotny PASS i GitHub Codex bez findings;
+  dodatkowy niezależny przegląd statyczny `/root/acl_reviewer`: PASS, P0/P1/P2/P3=0/0/0/0.
+  Dodatkowy przegląd nie jest nowym uruchomieniem historycznych 24 testów ACL.
+  [Receipt scalenia](https://github.com/krzysztofsyska/skillcheck-core/issues/153#issuecomment-6312355932).
+- Po merge: 21/21 powiązanych workflow runs SUCCESS, w tym push Checks `39575034363`.
+  Automatyczny Vercel Preview `dpl_E14KkgEwRApkrcc8Cg51i1VYL6uR`: READY,
+  ref `integration`, SHA scalenia, target null. To wdrożenie aplikacji Preview,
+  **nie zastosowanie SQL do bazy**. Nie wykonywano testowych zapisów na Preview.
+- `main` pozostaje `76760b7ffb7e95231fc7af313cc67bc8d36fefe1`.
+  Nie wykonano zdalnych migracji, zmian sekretów/default privileges ani aktywacji usług.
+
+### SC-021: kompletna poprawka zależna
+
+[PR #156](https://github.com/krzysztofsyska/skillcheck-core/pull/156), branch
+`fix/sc021-explicit-data-api-acl-20261021` → `feat/sc-021-ai-gateway-foundation` (#108).
+HEAD `be8b564ce3ce00494bc5cd0d27e5bdbc5c84b558`, BASE `1546789e757360c738cdf72fdef9eb78bfae6f66`,
+TREE `838a71a6d3d01618227edc8db1e6b431538dd16d` zgodne z lokalnie testowanym.
+
+Minimalny REVOKE z patcha poniżej przeniesiono do niewdrożonego prototypu na oddzielnej
+zależnej gałęzi. Nie nadpisano #108/#111/#112 i nie zaimportowano całego SC-021 do integration.
+Testy rozszerzono o oba zbiory danych, oba tenanty/outsider, macierz pięciu ról i pełny cykl
+reserve/replay/unknown/settle/release obu workerów. `test:ai-gateway` uruchamia nowy plik
+w istniejącym Checks oraz dedykowanym CI SC-021.
+
+Lokalnie: 23 PASS, 1 jawny SKIP natywnego PostgreSQL bez URL; typecheck/build PASS.
+Niezależny reviewer `/root/acl_reviewer` pobrał remote HEAD, potwierdził tree i sam uruchomił
+nowe ACL: 2/2 PASS, 0 SKIP; P0/P1/P2/P3=0/0/0/0.
+[Receipt review](https://github.com/krzysztofsyska/skillcheck-core/pull/156#issuecomment-6312462458).
+Dedykowane CI `39575724444` z PostgreSQL 16.15: 24/24 PASS, 0 SKIP. Końcowy odczyt wszystkich checks
+jest zapisany w PR. Początkowy Agent Gate odrzucił metadane BACKEND, ponieważ niezmieniony
+historyczny klasyfikator #108 klasyfikuje ścieżki prototypu/testu/package jako OPERATIONS;
+skorygowano wyłącznie metadane, zachowując rzeczywisty zakres BACKEND/L3 i zabezpieczenia.
+
+Poprawka ACL nie jest zgodą na cały moduł. Integracja nadal zależy od uzgodnienia stosu
+#108/#111/#112, rzeczywistego niezmiennego SC-010 R5 i jego signed erasure/restore oraz
+końcowego CI/review. PR #156 pozostaje zależny; nie zmienia uprawnień EXECUTE service_role.
+
+### SC-019: zweryfikowany kod i otwarta zależność integracyjna
+
+Istniejący Builder prowadzi [PR #155](https://github.com/krzysztofsyska/skillcheck-core/pull/155)
+w #93/#91. Nie tworzono konkurencyjnej migracji. Odczytowy niezależny przegląd obejmował
+lokalny HEAD `2195bdfa8cdb3a9ca35baf4886928bd3e86be6c4` i SQL
+`20261021084732_sc019_credits_payments_inventory.sql`, SHA256
+`b838f49c2d5279efc82f1c9f6ac98c6a78ec138a335d8b2af275cac0321b2038`;
+opublikowany #155 HEAD `42a223ed69604186ce0df09b9a0a9a537bfe51d0` wskazuje ten sam SQL.
+
+Potwierdzono w kodzie: 10 tabel private z RLS, cleanup tabelowych/kolumnowych/funkcyjnych
+ACL nie-ownerów i grant options, tylko przewidziane public RPC, prywatne rozliczenie przez
+zaufany adapter, literalny R6 i niezmieniony guard `sc19_payment_erasure_revision_required`.
+Runtime resolver pozostaje null. To przegląd ACL, nie finalny PASS całej migracji.
+
+**P2 do poprawy w istniejącym PR #155:** nowy domyślny cutoff R4 w helperze
+`setupRankingDatabase` wymaga jawnego `{ throughMigration: null }` w dwóch testach
+`full clean replay` z `tests/data-api-grants.test.mjs`. Bez tego pierwszy test pozostawia
+legacy ACL i zawodzi, drugi może przejść bez nowych migracji. Nie cofać cutoff potrzebnego
+historycznym prototypom i nie usuwać guardów.
+
+Następnie wymagany jest łączny łańcuch R4 → #154 → R6 na PG16/17, co najmniej bez defaults
+oraz z legacy grants i syntetyczną rolą service_role BYPASSRLS, pełny replay, tenant/role/RPC,
+concurrency, purge/restore i rollback. Dotychczasowy combined rehearsal SC-019 pomijał tę
+rolę; hostile-default test używał contact_verifier. Nie poszerzać arbitralnie fingerprintów
+ani nie uczyć baseline z bazy docelowej. Nieznane ACL schematów/funkcji nadal mają odmawiać.
+Końcowa zgodność połączonego kodu pozostaje **NOT VERIFIED** do nowych testów i review.
+[Wymagania przekazane istniejącemu Builderowi](https://github.com/krzysztofsyska/skillcheck-core/issues/93#issuecomment-6312413419)
+i [komentarz w #155](https://github.com/krzysztofsyska/skillcheck-core/pull/155#issuecomment-6312456042).
+
 ## Wynik i granice dowodów
 
 Nie stwierdzono brakującego jawnego GRANT wymaganego przez obecne wywołania Data API.
@@ -110,11 +184,11 @@ musi potwierdzić istnienie tej roli, historię migracji i dokładny zestaw rela
 | SC-019 `docs/prototypes/sc19-payment-storage.sql` po #152 | 4 tabele private, RLS, czyszczenie ACL; zapis przez zaufany adapter SQL. Nie wymaga service_role Data API. Nadal **blokuje** instalację przy istniejącym SC-010 bez nowego inwentarza — poprawka ACL tego nie omija. |
 | SC-012 `db/prototypes/sc012b-plan-schema.sql` | `voice_plan_versions` RPC-only, RLS/FORCE RLS. Dodano brakujący REVOKE service_role. PR #96–99 nie dodają innych tabel public. |
 | SC-014 `db/isolated/sc014-b2-attempts.sql` | 2 tabele public: competency_test_attempts/review_entries, RLS i usuwanie nie-owner ACL. Broker/RPC, bez bezpośrednich grantów API. Brak poprawki. |
-| SC-021 PR #108/#111/#112 | 2 tabele public ai_gateway_limits/usage; jawny SELECT authenticated i tenant RLS, pominięty REVOKE service_role. Gotowy patch i 2 testy w `docs/patches/sc021-explicit-data-api-acl.patch`. |
+| SC-021 PR #108/#111/#112 | 2 tabele public ai_gateway_limits/usage; jawny SELECT authenticated i tenant RLS, pominięty REVOKE service_role. Patch wdrożony na zależnej gałęzi PR #156; historyczny patch zachowany w `docs/patches/sc021-explicit-data-api-acl.patch`. |
 | Pricing PR #151 | 6 tabel w sc_pricing_isolated; brak nowych tabel public. Nie nadawać grantów API. |
 | Pozostałe SQL db/isolated i prototypy | Nie dodają kolejnych tabel public; pozostają poza automatyczną migracją Supabase. |
 
-Patch SC-021 przygotowano i przetestowano w osobnym worktree na niezmiennym HEAD #108
+Historyczny patch SC-021 przygotowano i przetestowano w osobnym worktree na niezmiennym HEAD #108
 `1546789e757360c738cdf72fdef9eb78bfae6f66`. Nie przenosi on całego niescalonego SC-021 do
 integration i nie zmienia cudzych gałęzi. Przed przeniesieniem patcha sprawdzić nowy HEAD.
 Test `node --test tests/ai-gateway-data-api-acl.test.mjs`: **2/2 PASS**, profile bez defaults
@@ -170,10 +244,11 @@ Audyt i poprawki repozytorium nie oznaczają wdrożenia ani uruchomienia FREE/PR
 Nie zmieniano main, sekretów, konfiguracji Supabase ani aktywacji usług. SC-019 nadal
 wymaga własnej migracji i zatwierdzonego inwentarza zgodnie z #93.
 
-KONTYNUUJ SKILLCHECK — Codex/Orchestrator + skillcheck-builder, nowa sesja lub kontynuacja.
-Repo krzysztofsyska/skillcheck-core, kontrakt #153, branch fix/sc-db-api-explicit-grants-20261021
-→ integration. Odczytaj bieżący PR/HEAD, CI i niezależne review; kompletne dowody są w jego
-handoff. Następny krok w zakresie audytu: przenieść zweryfikowany patch SC-021 do aktualnej
-gałęzi zależnej #108, odświeżyć dwa testy ACL i niezależny review. Nie powielać SC-019/#152,
-nie wykonywać migracji produkcyjnych ani aktywować usług. Ten dokument nie nadaje nowej
-zgody produkcyjnej ani kosztowej.
+KONTYNUUJ SKILLCHECK — istniejący Builder SC-019 w PR #155 / #93 / #91, kontynuacja
+obecnej sesji. Użyj skillcheck-orchestrator, skillcheck-builder i Supabase. Najpierw odśwież
+integration, HEAD/BASE, własność i komentarz 6312413419; zachowaj rozpoczęty kod.
+Uzgodnij pełny replay po scalonym #154, wykonaj łączną macierz ACL/PG16/17, R6 purge/restore,
+CI i niezależny review. Nie deklaruj zgodności przyszłego kodu. Zależny PR #156 zawiera
+przetestowaną poprawkę SC-021; nie importuj całego modułu ani nie usuwaj jego bramek R5.
+Bez main, zdalnych migracji, aktywacji i kosztów. Przed przyszłym wdrożeniem pozostają osobny
+runbook, historia migracji, zewnętrzni konsumenci service_role i osobna zgoda Production.
