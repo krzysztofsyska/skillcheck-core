@@ -2,6 +2,16 @@
 
 TASK: #93, child of #91. User requires payments as part of PRESELEKCJA launch, not only a contact form. FREE never uses this paid checkout. Implemented by ChatGPT; independent Codex L3 review required.
 
+## 2026-10-21 forward-migration continuation
+
+The new SC-019 migration, six explicitly supported source states, immutable R6
+inventory and native PostgreSQL16/17 verification are described in
+[`sc19-migrations-handoff.md`](sc19-migrations-handoff.md). This supersedes the
+historical statement that migration work has not been prepared; it does not
+claim the migration is merged, remotely applied or activated. Fresh policy is
+empty, adopted policy is preserved, and the payment resolver remains null.
+Exact final HEAD/BASE, CI and independent code-review receipts belong in the PR.
+
 ## Historical baseline — core at aa17946c (superseded below)
 `lib/sc19-payments.ts` coordinates an authenticated owner's purchase using a server-approved PLN gross-total offer, immutable price/credit/terms snapshot, persisted order before provider side effects, stable per-order provider idempotency, bound checkout session, verified provider receipt, and one transaction for payment deduplication, the existing SC-019 credit increment, and the paid order marker. It does not implement a second balance ledger. No numeric customer offer, tax rate, processor or account is selected.
 

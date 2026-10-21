@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
+import { bootMigrationDatabase } from './helpers/sc19-migration-fixture.mjs';
 
 const read = path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 const repair = await read('supabase/migrations/20261021084245_explicit_data_api_table_acl.sql');
@@ -34,6 +35,10 @@ const columnPrivileges = ['SELECT', 'INSERT', 'UPDATE', 'REFERENCES'];
 const denied = promise => assert.rejects(promise, error => error.code === '42501');
 
 async function apiMatrix(db) {
+  const serverVersion = Number((await db.query("select current_setting('server_version_num') as value")).rows[0].value);
+  // MAINTAIN was introduced in PostgreSQL 17. Keep the independent API matrix
+  // strict on both supported native versions and on historical PGlite profiles.
+  const supportedPrivileges = serverVersion >= 170000 ? privileges : privileges.filter(value => value !== 'MAINTAIN');
   return (await db.query(`
     select c.relname, r.rolname, p.privilege,
       has_table_privilege(r.oid,c.oid,p.privilege) as allowed
@@ -41,7 +46,7 @@ async function apiMatrix(db) {
     cross join pg_roles r cross join unnest($1::text[]) p(privilege)
     where n.nspname='public' and c.relkind in ('r','p','v')
       and r.rolname in ('anon','authenticated','service_role')
-    order by 1,2,3`, [privileges])).rows;
+    order by 1,2,3`, [supportedPrivileges])).rows;
 }
 async function columnMatrix(db) {
   return (await db.query(`
@@ -239,26 +244,42 @@ test('planned SC-019 payment storage clears inherited ACL in its supported isola
 });
 
 test('full clean replay checks every current migration against the public API contract', async t => {
-  const db = new PGlite({ extensions: { pgcrypto } });
-  t.after(() => db.close());
-  await db.exec(`create role anon nologin; create role authenticated nologin;
-    create role service_role nologin bypassrls;
-    alter default privileges in schema public grant all on tables to anon,authenticated,service_role;`);
-  await setupRankingDatabase(db);
-  await assertApiContract(db);
-  // Prove the guard detects both a new table and privilege drift in a future migration.
-  await db.exec('begin; create table public.unreviewed_future_table(id integer)');
-  await assert.rejects(assertApiContract(db), error => error.code === 'ERR_ASSERTION');
-  await db.exec('rollback; begin; grant select on public.candidate_documents to anon');
-  await assert.rejects(assertApiContract(db), error => error.code === 'ERR_ASSERTION');
-  await db.exec('rollback');
-  await assertApiContract(db);
+  const env = await bootMigrationDatabase(t), { db } = env;
+  let createdServiceRole = false;
+  const cleanup = async () => {
+    if (!createdServiceRole) return;
+    await db.exec('rollback; reset role; drop owned by service_role');
+    await env.admin.query('drop role service_role'); createdServiceRole = false;
+  };
+  t.after(cleanup);
+  try {
+    // Roles are cluster-global in native PostgreSQL. Own this synthetic role
+    // explicitly; never remove or repurpose a pre-existing service principal.
+    assert.equal((await db.query("select to_regrole('service_role') value")).rows[0].value, null,
+      'Clean disposable cluster required: service_role must not already exist');
+    await db.exec(`do $$ begin
+      if not exists(select from pg_roles where rolname='anon') then create role anon nologin; end if;
+      if not exists(select from pg_roles where rolname='authenticated') then create role authenticated nologin; end if;
+    end $$`);
+    await db.exec('create role service_role nologin bypassrls'); createdServiceRole = true;
+    await db.exec('alter default privileges in schema public grant all on tables to anon,authenticated,service_role');
+    await setupRankingDatabase(db, { throughMigration: null });
+    await assertApiContract(db);
+    // Prove the guard detects both a new table and privilege drift in a future migration.
+    await db.exec('begin; create table public.unreviewed_future_table(id integer)');
+    await assert.rejects(assertApiContract(db), error => error.code === 'ERR_ASSERTION');
+    await db.exec('rollback; begin; grant select on public.candidate_documents to anon');
+    await assert.rejects(assertApiContract(db), error => error.code === 'ERR_ASSERTION');
+    await db.exec('rollback');
+    await assertApiContract(db);
+  } finally { await cleanup(); }
 });
 
 test('full clean replay includes the ACL repair even without a Supabase service role', async t => {
-  const db = new PGlite({ extensions: { pgcrypto } });
-  t.after(() => db.close());
-  const h = await setupRankingDatabase(db);
+  const { db } = await bootMigrationDatabase(t);
+  assert.equal((await db.query("select to_regrole('service_role') value")).rows[0].value, null);
+  const h = await setupRankingDatabase(db, { throughMigration: null });
+  await assertApiContract(db);
   const a = await h.seed();
   assert.ok(a.documentId);
 });
