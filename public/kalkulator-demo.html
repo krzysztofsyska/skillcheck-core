@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Dobierz SkillCheck: przeanalizuj koszt CV, rozmów AI i poziomu weryfikacji. Porównaj scenariusze z agencją rekrutacyjną i poznaj zakres bezpłatnej próby.">
+  <meta name="theme-color" content="#193f37">
+  <title>SkillCheck — kalkulator oferty i korzyści · podgląd v4</title>
+  <style>
+    :root {
+      --ink:#183c36; --ink-2:#27473f; --muted:#65736a; --soft:#e9efe2; --soft-2:#f4f6ef;
+      --edge:#d8e1d2; --white:#ffffff; --mint:#dfeccf; --cream:#f7f8f3; --gold:#eec88a;
+      --shadow:0 18px 60px rgba(28,55,46,.07); --round:24px;
+    }
+    *,*::before,*::after{box-sizing:border-box}
+    html{scroll-behavior:smooth;scroll-padding-top:88px}
+    body{margin:0;background:var(--cream);color:var(--ink);font:16px/1.56 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    button,select,input{font:inherit} button{cursor:pointer}
+    button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #9bb958;outline-offset:3px}
+    a{color:inherit}
+    .wrap{width:min(1180px,calc(100% - 40px));margin:0 auto}
+    .topbar{position:sticky;top:0;z-index:20;background:rgba(247,248,243,.94);backdrop-filter:blur(14px);border-bottom:1px solid #e3e8dd}
+    .topbar .wrap{min-height:70px;display:flex;align-items:center;gap:30px;justify-content:space-between}
+    .brand{display:inline-flex;align-items:center;gap:10px;text-decoration:none;font-weight:800;letter-spacing:-.02em;font-size:19px}
+    .brand-mark{display:inline-grid;place-items:center;border-radius:13px;width:35px;height:35px;color:#eff7e9;background:var(--ink);font-weight:800}
+    .toplinks{display:flex;align-items:center;gap:23px;font-size:13px;font-weight:650;color:var(--muted)}
+    .toplinks a{text-decoration:none}.toplinks a:hover{text-decoration:underline;color:var(--ink)}
+    .button{appearance:none;border:1px solid var(--ink);background:var(--ink);color:white;border-radius:13px;padding:13px 20px;display:inline-flex;justify-content:center;align-items:center;gap:9px;font-size:14px;font-weight:750;text-decoration:none;transition:transform .15s,background .15s;line-height:1.3}
+    .button:hover{background:#315d51;transform:translateY(-1px)}
+    .button.secondary{background:white;color:var(--ink);border-color:#cad8c7}.button.secondary:hover{background:#f1f6ea}
+    .button.ghost{background:transparent;color:var(--ink);border-color:var(--edge)}
+    .button.small{padding:10px 14px;border-radius:10px;font-size:13px}
+    .eyebrow{font-size:11px;letter-spacing:.15em;text-transform:uppercase;font-weight:800;color:#40665a}
+    .small-note{color:var(--muted);font-size:12px;line-height:1.6}
+    .hero{padding:55px 0 52px;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(270px,.8fr);align-items:center;gap:48px}
+    .hero h1{font-size:clamp(39px,5vw,65px);font-weight:750;letter-spacing:-.055em;line-height:1.075;margin:14px 0 20px;max-width:750px}
+    .hero p{font-size:17px;color:#52665c;max-width:690px;margin:0 0 24px}
+    .hero-actions{display:flex;flex-wrap:wrap;gap:11px;align-items:center}
+    .hero-side{border-radius:30px;padding:28px;background:linear-gradient(145deg,#e8f0dc,#f4f6ec 75%);box-shadow:var(--shadow);border:1px solid #d9e6d3}
+    .hero-side .kpi{font-size:47px;font-weight:770;letter-spacing:-.055em;line-height:1;margin:9px 0}
+    .hero-side .kpi-caption{font-size:14px;color:#52655b}
+    .hero-side .strips{margin-top:22px;border-top:1px solid #d2ddc9}
+    .hero-side .strip{display:flex;justify-content:space-between;gap:10px;padding-top:12px;font-size:13px}
+    .hero-side .strip strong{white-space:nowrap}
+    .offer-notice{background:#edf3e8;border:1px solid #d9e5d1;color:#496153;padding:12px 16px;border-radius:13px;font-size:13px;margin-bottom:29px}
+    section{margin:45px 0 0;scroll-margin-top:86px}
+    .surface{border:1px solid #e0e7db;border-radius:var(--round);background:var(--white);box-shadow:var(--shadow);padding:32px}
+    .section-head{display:flex;justify-content:space-between;align-items:start;gap:30px;margin-bottom:24px}
+    .section-head h2{font-size:clamp(25px,3.5vw,35px);letter-spacing:-.039em;line-height:1.15;margin:12px 0 10px}
+    .section-head p{color:var(--muted);max-width:610px;margin:0;font-size:14px}
+    .two-kickers{font-size:12px;color:#698074;text-align:right}
+    .volume-row{display:flex;align-items:center;justify-content:space-between;gap:25px;padding:21px 24px;border:1px solid #dce5d4;background:#f4f7ef;border-radius:19px;margin-bottom:23px}
+    .volume-row h3{font-size:20px;margin:0 0 4px;letter-spacing:-.025em}
+    .volume-buttons{display:flex;gap:8px;flex-wrap:wrap}
+    .volume-buttons button{padding:12px 18px;border-radius:11px;color:var(--ink);background:#fff;border:1px solid #d4dfd0;min-width:80px;font-size:16px;font-weight:780;transition:background .16s}
+    .volume-buttons button .mini{font-size:11px;color:#698071;font-weight:500}
+    .volume-buttons button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+    .volume-buttons button[aria-pressed="true"] .mini{color:#c5d9d0}
+    .volume-config{display:grid;grid-template-columns:minmax(220px,.67fr) minmax(0,1.33fr);gap:16px;margin-bottom:22px}
+    .volume-card{background:#f4f7ef;border:1px solid #dce5d4;border-radius:18px;padding:20px;min-width:0}
+    .volume-card h3{font-size:18px;line-height:1.3;margin:0 0 6px;letter-spacing:-.025em}
+    .volume-card .small-note{margin:0 0 14px}
+    .volume-config .volume-buttons{width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+    .volume-config .volume-buttons button{min-width:0;padding:13px 5px}
+    .volume-top{display:flex;align-items:center;gap:12px;justify-content:space-between}
+    .volume-value{font-weight:800;color:#193f37;background:#e0edda;border:1px solid #c5d9be;border-radius:11px;padding:7px 12px;white-space:nowrap;letter-spacing:-.02em}
+    .range-control{display:grid;grid-template-columns:45px minmax(0,1fr) 45px;gap:12px;align-items:center}
+    .step-btn{height:43px;border-radius:11px;background:white;border:1px solid #ccdccc;font-size:24px;font-weight:650;line-height:1;color:var(--ink)}
+    .step-btn:hover{background:#e5efe0}.step-btn:disabled{opacity:.4;cursor:not-allowed}
+    .range-control input[type=range]{width:100%;height:26px;cursor:pointer;appearance:none;-webkit-appearance:none;background:transparent;margin:0;min-width:0}
+    .range-control input[type=range]::-webkit-slider-runnable-track{height:9px;border-radius:12px;background:linear-gradient(90deg,#2e7159 0%,#2e7159 var(--range-progress),#d3e0d0 var(--range-progress),#d3e0d0 100%)}
+    .range-control input[type=range]::-moz-range-track{height:9px;border-radius:12px;background:#d3e0d0}
+    .range-control input[type=range]::-moz-range-progress{height:9px;border-radius:12px;background:#2e7159}
+    .range-control input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;height:25px;width:25px;border:4px solid white;background:#275746;box-shadow:0 1px 9px #a8bba8;border-radius:50%;margin-top:-8px}
+    .range-control input[type=range]::-moz-range-thumb{height:18px;width:18px;border:4px solid white;background:#275746;border-radius:50%}
+    .range-marks{display:flex;justify-content:space-between;color:#607267;font-size:12px;font-weight:650;margin:1px 58px 0}
+    .extra-panel{margin-top:20px;background:#f8faf6;border-radius:18px;border:1px solid #dce6d8;padding:22px}
+    .extra-panel h3{margin:3px 0 5px;font-size:20px;letter-spacing:-.02em}
+    .extra-panel > p{margin:0 0 14px;color:var(--muted);font-size:13px}
+    .extra-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    .extra-item{border:1px solid #dce4d9;background:#fff;border-radius:13px;padding:14px;display:flex;gap:11px;align-items:flex-start;cursor:pointer;min-width:0}
+    .extra-item input{flex:none;accent-color:#255747;width:19px;height:19px;margin:2px 0 0}
+    .extra-item:has(input:checked){background:#e9f4e4;border-color:#a5cba0}
+    .extra-item:has(input:disabled){opacity:.66;cursor:not-allowed}
+    .extra-item strong{display:block;font-size:13px}.extra-item small{display:block;font-size:11px;color:#5b705f;margin-top:4px}
+    .extra-note{margin-top:10px;font-size:12px;color:#577061;line-height:1.6}
+    .order-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
+    .order-actions .button{margin-top:0;flex:1 1 140px;min-height:45px;padding:10px 12px}
+    .order-actions .button.secondary{background:transparent;color:#fff;border-color:#9bc4ad}
+    .order-actions .button.secondary:hover{background:#2e5f50}
+    .order-actions .button:disabled{opacity:.55;cursor:not-allowed;transform:none}
+    .benefit-simulator{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:18px;align-items:stretch;border:1px solid #d9e5d3;background:linear-gradient(115deg,#eaf3e5,#f7faf4);border-radius:18px;padding:24px;margin-top:16px}
+    .benefit-simulator h3{font-size:19px;margin:4px 0 8px}.benefit-simulator p{font-size:12px;color:#5c725f;margin:0 0 13px}
+    .benefit-inputs{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .benefit-inputs label{font-size:12px;color:#41614e;font-weight:650;display:block}
+    .benefit-inputs input{display:block;width:100%;min-width:0;padding:10px;margin-top:6px;border-radius:9px;border:1px solid #b7cbb6;background:#fff;color:#183c36}
+    .benefit-results{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .benefit-number{display:flex;flex-direction:column;justify-content:center;border-radius:13px;padding:18px 12px;background:white;border:1px solid #dce8d9}
+    .benefit-number strong{font-size:clamp(24px,2.5vw,32px);letter-spacing:-.04em;line-height:1.2}
+    .benefit-number span{font-size:11px;color:#657b6c}
+    .packs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .pack{display:flex;flex-direction:column;gap:11px;min-height:241px;min-width:0;text-align:left;padding:21px 18px;border:1px solid #dce4d7;background:#fff;border-radius:18px;color:var(--ink);transition:background .16s,border-color .16s,box-shadow .16s}
+    .pack:hover{box-shadow:0 8px 30px rgba(30,55,48,.09)}
+    .pack[aria-pressed="true"]{border:2px solid #214e41;background:#eef4e8;padding:20px 17px}
+    .pack .pack-name{font-size:13px;letter-spacing:.045em;font-weight:850}
+    .pack .pack-desc{color:#65776a;font-size:13px;line-height:1.45;min-height:36px}
+    .pack .pack-price{font-size:27px;font-weight:820;letter-spacing:-.04em;margin-top:auto;line-height:1.2}
+    .pack .pack-sub{font-size:11px;color:#6f7c72;line-height:1.5}
+    .selected-bar{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(260px,.65fr);gap:25px;border-radius:18px;background:#193f37;color:#fff;margin-top:22px;padding:25px}
+    .selected-bar h3{margin:9px 0;font-size:25px;letter-spacing:-.035em}
+    .selected-bar p{color:#d8e7df;font-size:13px;max-width:650px;margin:8px 0 0}
+    .selected-bar .eyebrow{color:#bbd7c4}
+    .checks{display:flex;flex-wrap:wrap;gap:8px;margin-top:15px}
+    .checks span{font-size:12px;border:1px solid #5c8075;color:#eaf6ec;border-radius:30px;padding:5px 10px}
+    .order-block{padding-left:16px;border-left:1px solid #527266;display:flex;flex-direction:column;justify-content:center;gap:7px}
+    .order-block .total{font-size:clamp(30px,3.4vw,42px);font-weight:780;line-height:1.2;letter-spacing:-.04em}
+    .order-block .minilabel{font-size:12px;color:#c4dbd0}
+    .order-block .button{background:#e7f2dc;border-color:#e7f2dc;color:#193f37;max-width:100%;margin-top:10px}
+    .order-block .button:hover{background:#fff}
+    .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;margin-top:17px}
+    .metric{border:1px solid #dce6d8;border-radius:16px;background:#f6f9f3;padding:20px}
+    .metric strong{display:block;font-size:30px;line-height:1.2;letter-spacing:-.035em;margin:10px 0 8px}
+    .metric .micro{font-size:12px;color:var(--muted)}
+    .benefit-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}
+    .benefit{padding:24px;border:1px solid #dde7d7;border-radius:16px;background:#fff}
+    .benefit h3{margin:0 0 8px;font-size:19px;letter-spacing:-.02em}
+    .benefit p{font-size:14px;color:var(--muted);margin:0}
+    .compare-wrap{overflow-x:auto;border:1px solid #dde6d8;border-radius:17px}
+    table{width:100%;border-collapse:collapse;font-size:13px;min-width:740px}
+    th,td{text-align:center;border-bottom:1px solid #e6ece1;padding:14px 12px;vertical-align:middle}
+    tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
+    thead{background:#f1f6ec}thead th{font-size:14px}
+    thead th:first-child,tbody th{text-align:left;min-width:235px}
+    thead th.active-column{background:#e4efda}
+    td.active-column{background:#f5f9f0}
+    .table-choice{display:inline-flex;border:0;background:transparent;color:var(--ink);font-weight:800;text-decoration:underline;text-underline-offset:4px;padding:6px 0}
+    tbody th{font-weight:600;color:#44594d}
+    .comparison-tools{margin-bottom:14px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+    .toggle{display:flex;align-items:center;gap:9px;font-size:13px;color:#405a4d;cursor:pointer}.toggle input{accent-color:var(--ink);width:16px;height:16px}
+    .agency{background:#fff}
+    .agency-inputs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:25px 0}
+    .field{display:flex;flex-direction:column;gap:7px;min-width:0}
+    .field label{font-size:12px;color:#49604f;font-weight:650}
+    .input-shell{display:flex;align-items:center;gap:10px;border:1px solid #d5e1d2;background:#f8faf6;border-radius:10px;min-height:47px;padding:0 12px}
+    .field input,.field select{border:0;min-width:0;width:100%;outline:0;background:transparent;color:var(--ink);font-size:14px;min-height:45px}
+    .field .unit{white-space:nowrap;color:#819080;font-size:11px}
+    .input-shell:focus-within{outline:2px solid #95b17c;outline-offset:1px}
+    .field small{font-size:11px;color:#778479;line-height:1.4}
+    .agency-results{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid #d8e6d2;border-radius:15px;overflow:hidden;background:#f2f7ed}
+    .agency-card{padding:25px 21px;min-width:0;border-right:1px solid #d8e6d2}
+    .agency-card:last-child{border-right:0;background:#e4f0da}
+    .agency-card .money{font-size:clamp(22px,2.45vw,29px);letter-spacing:-.04em;font-weight:760;margin:11px 0 6px;white-space:nowrap}
+    .agency-card p{font-size:12px;color:#5d6f60;margin:0}
+    .agency-card .label{font-size:12px;color:#4b6353}
+    .agency-card.negative{background:#fff2e8}
+    .agency-caption{display:grid;grid-template-columns:1fr 1fr;gap:25px;margin-top:25px}
+    .agency-caption h3{font-size:15px;margin:0 0 8px}
+    .agency-caption p{font-size:12px;color:#667767;margin:0}
+    .fine-print{font-size:11px;line-height:1.7;color:#778376;margin:24px 0 0}
+    .free-comparison{border-radius:15px;padding:22px;background:#f1f6ed;border:1px solid #dce8d2}
+    .free-comparison p{margin:7px 0 14px;color:var(--muted);font-size:14px}
+    .assumptions{background:#eef3e9;border:1px solid #dbe7d3;border-radius:22px;padding:31px}
+    .assumptions h2{margin:10px 0 12px;font-size:28px;letter-spacing:-.03em}
+    details{border-top:1px solid #d1dfcf;padding:15px 0}details:last-child{padding-bottom:0}
+    details summary{cursor:pointer;font-weight:720;font-size:14px;list-style:none;display:flex;justify-content:space-between;gap:15px}
+    details summary::after{content:"+";font-size:20px;line-height:1}
+    details[open] summary::after{content:"−"}
+    details p,details li{font-size:13px;color:#556b5e}
+    details ul{margin:10px 0 0;padding-left:20px}
+    details a{color:#245e4b;text-decoration:underline;text-underline-offset:3px}
+    .cta-footer{padding:34px 0 60px}
+    .cta-panel{background:#193e36;color:#fff;border-radius:26px;padding:34px;display:flex;align-items:center;justify-content:space-between;gap:30px}
+    .cta-panel h2{font-size:clamp(25px,3.2vw,36px);letter-spacing:-.04em;max-width:620px;line-height:1.12;margin:8px 0 12px}
+    .cta-panel p{color:#cdded4;font-size:13px;margin:0}
+    .cta-panel .button{background:#e6f2dc;color:var(--ink);border-color:#e6f2dc;white-space:nowrap}
+    footer{border-top:1px solid #dfe7dc;padding:17px 0 26px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
+    dialog{border:1px solid #d9e4d6;border-radius:22px;padding:0;width:min(600px,calc(100vw - 30px));max-height:calc(100vh - 30px);box-shadow:0 25px 90px rgba(15,41,35,.2);color:var(--ink)}
+    dialog::backdrop{background:rgba(17,42,33,.55);backdrop-filter:blur(3px)}
+    .dialog-inner{padding:27px}
+    .modal-top{display:flex;justify-content:space-between;gap:15px;align-items:start}
+    .modal-top h2{margin:6px 0 8px;line-height:1.2;font-size:26px}
+    .icon-btn{width:32px;height:32px;display:grid;place-items:center;border:1px solid #dbe5d6;border-radius:9px;background:white;font-size:20px}
+    #quoteText{font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#334e40;width:100%;resize:vertical;min-height:230px;border:1px solid #d5e0d2;border-radius:12px;padding:13px;margin:13px 0;background:#f7faf5}
+    .modal-buttons{display:flex;flex-wrap:wrap;gap:9px}
+    .status{font-size:12px;min-height:20px;color:#32674c;margin-top:9px}
+    [hidden]{display:none!important}
+    @media(max-width:1000px){.packs{grid-template-columns:repeat(2,minmax(0,1fr))}.hero{gap:27px}.volume-row{flex-wrap:wrap}.volume-config{grid-template-columns:1fr}.pack{min-height:204px}.toplinks{gap:12px}}
+    @media(max-width:700px){
+      .wrap{width:min(100% - 24px,1180px)}.topbar .wrap{min-height:63px}.toplinks a:not(.nav-cta){display:none}
+      .hero{padding:34px 0 25px;grid-template-columns:1fr;gap:20px}.hero h1{font-size:clamp(36px,9vw,48px)}.hero p{font-size:15px}
+      .hero-side{padding:23px;border-radius:20px}.hero-side .kpi{font-size:40px}.offer-notice{margin-bottom:18px}
+      section{margin-top:25px}.surface{padding:18px;border-radius:20px}.section-head{gap:12px}.section-head h2{font-size:26px}.two-kickers{display:none}
+      .volume-card{padding:16px}.volume-card h3{font-size:17px}.range-control{gap:7px;grid-template-columns:40px minmax(0,1fr) 40px}.range-marks{margin:1px 45px 0}.extra-panel{padding:16px}.extra-grid{grid-template-columns:1fr}.extra-item{padding:12px}.benefit-simulator{grid-template-columns:1fr;padding:18px;gap:13px}.benefit-results{grid-template-columns:1fr 1fr}.benefit-number{padding:12px}.benefit-number strong{font-size:23px}
+      .packs{gap:9px}.pack{min-height:190px;padding:16px 12px;gap:7px}.pack[aria-pressed="true"]{padding:15px 11px}.pack .pack-name{font-size:11px}.pack .pack-desc{font-size:12px}.pack .pack-price{font-size:22px}.pack .pack-sub{font-size:10px}
+      .selected-bar{grid-template-columns:1fr;gap:18px;padding:22px}.order-block{border-left:0;padding-left:0;border-top:1px solid #527266;padding-top:17px}.order-actions{display:grid;grid-template-columns:1fr 1fr}.order-actions .button{font-size:12px;padding:11px 6px}
+      .metrics{grid-template-columns:1fr}.metric{padding:17px}.metric strong{font-size:27px}
+      .benefit-row,.agency-caption{grid-template-columns:1fr;gap:10px}.benefit{padding:20px}
+      .agency-inputs{grid-template-columns:1fr;gap:13px}.agency-results{grid-template-columns:1fr}.agency-card{border-right:0;border-bottom:1px solid #d8e6d2;padding:18px}.agency-card:last-child{border-bottom:0}.agency-card .money{font-size:26px;margin:4px 0}.agency-caption{margin-top:17px}
+      .assumptions{padding:23px}.cta-panel{padding:24px;display:block}.cta-panel .button{width:100%;margin-top:17px;white-space:normal}.cta-footer{padding-bottom:35px}
+    }
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.button,.pack{transition:none}}
+    @media print{.topbar,.hero-actions,.button,.modal-buttons,.cta-footer,.compare-wrap .table-choice{display:none!important}html{scroll-behavior:auto}body{background:white}.surface{box-shadow:none;break-inside:avoid}section{margin-top:15px} .hero{padding:15px 0}}
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="#start"><span class="brand-mark" aria-hidden="true">S</span>SkillCheck</a>
+    <nav class="toplinks" aria-label="Nawigacja">
+      <a href="#kalkulator">Kalkulator</a><a href="#porownaj">Porównaj pakiety</a><a href="#agencja">Agencja czy SkillCheck?</a><a href="#zalozenia">Założenia</a>
+      <a class="button small nav-cta" href="#kalkulator">Dobierz pakiet ↗</a>
+    </nav>
+  </div>
+</header>
+<main id="start" class="wrap">
+  <div class="hero">
+    <div>
+      <div class="eyebrow">Od CV do świadomej decyzji</div>
+      <h1>Masz kandydatów.<br>Sprawdź, komu warto poświęcić czas.</h1>
+      <p>Nie musisz przeprowadzać dziesiątek rozmów, żeby zacząć porównywać kandydatów. SkillCheck porządkuje CV, wskazuje braki informacji i pomaga przygotować materiał do oceny. <strong>Wybierz zakres. Poznaj cenę. Zobacz, co otrzymasz.</strong></p>
+      <div class="hero-actions">
+        <a class="button" href="#kalkulator">Sprawdź koszt rekrutacji ↗</a>
+        <button type="button" class="button secondary" id="tryFreeTop">Wypróbuj FREE — 0 zł</button>
+      </div>
+      <p class="small-note" style="margin-top:14px">Jedno stanowisko · jeden proces · decyzję o zatrudnieniu podejmuje człowiek.</p>
+    </div>
+    <aside class="hero-side" aria-label="Wybrany zakres i cena">
+      <div class="eyebrow">Twój scenariusz</div>
+      <div class="kpi" id="heroPrice">365 zł</div>
+      <div class="kpi-caption">brutto za wybrany zakres PRESELEKCJA</div>
+      <div class="strips">
+        <div class="strip"><span>Analiza dokumentów</span><strong id="heroVolume">30 CV</strong></div>
+        <div class="strip"><span>Rozmowy voicebota</span><strong id="heroCalls">do 10</strong></div>
+        <div class="strip"><span>Średnio na CV w puli</span><strong id="heroPerCv">12,16 zł</strong></div>
+      </div>
+      <p class="small-note" id="heroPriceNote">Cena dla 50 CV z bieżącej wersji oferty. Funkcje i termin potwierdzamy przed startem.</p>
+    </aside>
+  </div>
+  <div class="offer-notice" role="note"><strong>Oferta przedpremierowa.</strong> Interaktywny podgląd koncepcji. Pokazane kwoty są roboczymi symulacjami, nie wiążącą ofertą. „Kup teraz” jest demonstracją — nie pobieramy płatności ani nie aktywujemy usług. Zapytanie wysyłasz samodzielnie.</div>
+
+  <section id="kalkulator" class="surface" aria-labelledby="calculatorTitle">
+    <div class="section-head">
+      <div><div class="eyebrow">01 / Dopasuj do swoich potrzeb</div><h2 id="calculatorTitle">Ile CV chcesz przeanalizować?</h2><p>W płatnych pakietach wybrany wolumen obejmuje wszystkie CV. Bezpłatny FREE jest jednorazową próbą na maksymalnie 5 CV.</p></div>
+      <div class="two-kickers">Jedno stanowisko · jeden proces</div>
+    </div>
+    <div class="volume-config">
+      <div class="volume-card">
+        <h3>Podstawowe wielkości rekrutacji</h3>
+        <p class="small-note">Wybierz 10, 20 albo 30 CV. FREE nadal obejmuje tylko 5 CV.</p>
+        <div class="volume-buttons" role="group" aria-label="Podstawowa liczba CV">
+          <button type="button" data-cv="10" aria-pressed="false">10 <span class="mini">CV</span></button>
+          <button type="button" data-cv="20" aria-pressed="false">20 <span class="mini">CV</span></button>
+          <button type="button" data-cv="30" aria-pressed="true">30 <span class="mini">CV</span></button>
+        </div>
+      </div>
+      <div class="volume-card">
+        <div class="volume-top"><h3>Większa pula? Przesuń suwak</h3><output id="volumeValue" class="volume-value" for="volumeSlider" aria-live="polite">30 CV</output></div>
+        <p class="small-note">Od 35 do 150 CV, dokładnie co 5. Cena i symulacja korzyści aktualizują się razem.</p>
+        <div class="range-control">
+          <button id="volumeMinus" type="button" class="step-btn" aria-label="Zmniejsz liczbę CV" title="Poprzednia pula albo minus 5 CV">−</button>
+          <input type="range" id="volumeSlider" min="35" max="150" step="5" value="35" aria-label="Pula CV od 35 do 150, krok 5">
+          <button id="volumePlus" type="button" class="step-btn" aria-label="Zwiększ liczbę CV" title="Następna pula albo plus 5 CV">+</button>
+        </div>
+        <div class="range-marks"><span>35 CV</span><span>150 CV</span></div>
+        <div class="small-note" style="margin:8px 0 0">Powyżej 150 CV: zapytanie indywidualne.</div>
+      </div>
+    </div>
+    <div class="packs" role="group" aria-label="Pakiet SkillCheck">
+      <button type="button" class="pack" data-pack="free" aria-pressed="false"><span class="pack-name">✧ FREE</span><span class="pack-desc">Sprawdź na własnych CV, jak wygląda pierwsza analiza.</span><span class="pack-price" data-package-price="free">0 zł</span><span class="pack-sub">5 CV · 1 próbna rozmowa</span></button>
+      <button type="button" class="pack" data-pack="pre" aria-pressed="true"><span class="pack-name">≡ PRESELEKCJA</span><span class="pack-desc">Od dokumentów i rozmów AI do shortlisty.</span><span class="pack-price" data-package-price="pre">369 zł</span><span class="pack-sub">Wybrana pula CV · do 10 rozmów</span></button>
+      <button type="button" class="pack" data-pack="verify" aria-pressed="false"><span class="pack-name">◇ WERYFIKACJA</span><span class="pack-desc">Sprawdź odpowiedzi i kompetencje, nie tylko deklaracje.</span><span class="pack-price" data-package-price="verify">615 zł</span><span class="pack-sub">Testy i rozszerzony raport</span></button>
+      <button type="button" class="pack" data-pack="ac" aria-pressed="false"><span class="pack-name">⊞ ASSESSMENT CENTER</span><span class="pack-desc">Zobacz podejście finalistów do zadań praktycznych.</span><span class="pack-price" data-package-price="ac">1845 zł</span><span class="pack-sub">Do 5 osób · 2 zadania/os. · ekspert</span></button>
+    </div>
+    <div class="extra-panel" aria-labelledby="extraTitle">
+      <div class="eyebrow">Dostosuj zakres usługi</div>
+      <h3 id="extraTitle">Chcesz dokupić coś do swojego pakietu?</h3>
+      <p>Wybierz dodatki. W podglądzie nie mają zatwierdzonych cen — ich koszt ustalamy osobno, bez ukrytych dopłat.</p>
+      <div class="extra-grid">
+        <label class="extra-item" for="extraCalls"><input id="extraCalls" type="checkbox" data-extra="calls"><span><strong>5 dodatkowych rozmów AI</strong><small id="extraCallsHint">Ponad 10 rozmów w pakiecie · cena do wyceny</small></span></label>
+        <label class="extra-item" for="extraTests"><input id="extraTests" type="checkbox" data-extra="tests"><span><strong>Testy kompetencji</strong><small id="extraTestsHint">Dodatek do PRESELEKCJI · cena do wyceny</small></span></label>
+        <label class="extra-item" for="extraCases"><input id="extraCases" type="checkbox" data-extra="cases"><span><strong>Zadanie / case study</strong><small id="extraCasesHint">Dla finalistów · cena do wyceny</small></span></label>
+        <label class="extra-item" for="extraConsult"><input id="extraConsult" type="checkbox" data-extra="consult"><span><strong>Konsultacja eksperta</strong><small id="extraConsultHint">Dodatkowe wsparcie decyzji · cena do wyceny</small></span></label>
+      </div>
+      <div class="extra-note" id="extraSelectionSummary" aria-live="polite">Nie wybrano dodatków.</div>
+    </div>
+    <div class="selected-bar">
+      <div>
+        <div class="eyebrow">Twój wybór</div>
+        <h3 id="selectionTitle">PRESELEKCJA — od CV do shortlisty</h3>
+        <p id="selectionDescription">Uporządkuj dokumenty, uzupełnij informacje w rozmowach i przygotuj shortlistę do dalszego etapu.</p>
+        <div class="checks" id="selectionChips"><span>50 CV</span><span>do 10 rozmów AI</span><span>raport i shortlista</span></div>
+      </div>
+      <div class="order-block">
+        <div class="minilabel">Cena brutto / jeden proces</div><div id="selectedPrice" class="total" aria-live="polite">369,00 zł</div>
+        <div class="minilabel" id="netPrice">300,00 zł netto · 23% VAT</div>
+        <div class="minilabel" id="priceScopeNote">Cena bazowa pakietu · wariant demonstracyjny.</div>
+        <div class="order-actions">
+          <button type="button" id="quoteButton" class="button">Zapytaj o ofertę ↗</button>
+          <button type="button" id="buyDemoButton" class="button secondary">Kup teraz · podgląd</button>
+        </div>
+        <div class="minilabel">Żaden przycisk nie pobiera płatności ani nie aktywuje produktu.</div>
+      </div>
+    </div>
+    <div class="metrics" aria-live="polite">
+      <div class="metric"><div class="eyebrow">Twój zakres</div><strong id="metricCv">30 CV</strong><div class="micro" id="metricCvText">Analiza kandydatów na podstawie wspólnych kryteriów stanowiska.</div></div>
+      <div class="metric"><div class="eyebrow">Rozmowy AI w scenariuszu</div><strong id="metricMinutes">90 min</strong><div class="micro" id="metricMinutesText">10 rozmów × założone 9 min. To czas rozmów bota, nie zmierzona oszczędność czasu.</div></div>
+      <div class="metric"><div class="eyebrow">Przewidywalna cena</div><strong id="metricUnit">7,38 zł</strong><div class="micro" id="metricUnitText">Brutto na CV w wybranej puli; cena obejmuje również pozostałe funkcje pakietu.</div></div>
+    </div>
+    <div class="benefit-row">
+      <div class="benefit"><h3>Własne CV. Mniej pracy powtarzalnej.</h3><p id="copyReuseCv">Masz już kandydatów z ogłoszeń lub poleceń? Przy wyborze 50 CV możesz pracować na własnej puli — bez ponownego zlecania ich poszukiwania. AI pomaga uporządkować informacje.</p></div>
+      <div class="benefit"><h3>CV pokazuje deklaracje. Sprawdź więcej.</h3><p id="copyProgress">W PRESELEKCJI otrzymujesz wspólne kryteria, odpowiedzi z rozmów i shortlistę. Głębsza ocena jest dostępna w kolejnych wariantach.</p></div>
+    </div>
+    <div class="benefit-simulator" aria-label="Symulacja czasu i kosztu ręcznej analizy CV">
+      <div>
+        <div class="eyebrow">Ile kosztuje Twój czas?</div>
+        <h3>Porównaj z ręcznym czytaniem CV</h3>
+        <p>Wpisz swoje założenia. Symulacja pokazuje budżet czasu przy ręcznej analizie, a nie gwarantowaną oszczędność dzięki SkillCheck.</p>
+        <div class="benefit-inputs">
+          <label for="timePerCv">Minut na 1 CV<input id="timePerCv" type="number" inputmode="decimal" min="0" max="240" step="1" value="6"></label>
+          <label for="hourlyTimeCost">Koszt godziny, zł netto<input id="hourlyTimeCost" type="number" inputmode="decimal" min="0" max="10000" step="5" value="65"></label>
+        </div>
+      </div>
+      <div class="benefit-results" aria-live="polite">
+        <div class="benefit-number"><strong id="manualHours">3,0 h</strong><span>Czas ręcznego czytania CV</span></div>
+        <div class="benefit-number"><strong id="manualCost">195 zł</strong><span>Szacowany koszt tego czasu netto</span></div>
+      </div>
+    </div>
+    <p class="fine-print" id="volumeDisclaimer">Ceny pakietów są symulacją na bazie poprzedniego kalkulatora; przy 10–30 oraz 35–150 CV roboczo przeliczamy je z wariantu 50 CV. Dodatki wymagają indywidualnej wyceny.</p>
+  </section>
+
+  <section id="porownaj" class="surface" aria-labelledby="compareTitle">
+    <div class="section-head"><div><div class="eyebrow">02 / Zobacz różnice</div><h2 id="compareTitle">Nie płać za większy zakres, niż potrzebujesz.</h2><p>Jedna pula CV, cztery poziomy sprawdzenia. Zobacz, co otrzymujesz w każdym wariancie i jaki kolejny etap może mieć sens.</p></div></div>
+    <div class="comparison-tools"><div class="small-note" id="tableIntro">Ceny brutto dla 30 CV. FREE zawsze obejmuje maksymalnie 5 CV.</div><label class="toggle"><input id="differencesOnly" type="checkbox"> Pokaż tylko różnice</label></div>
+    <div class="compare-wrap"><table aria-label="Porównanie pakietów SkillCheck">
+      <thead><tr><th scope="col">Zakres</th><th scope="col"><button type="button" class="table-choice" data-choose-pack="free">FREE ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="pre">PRESELEKCJA ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="verify">WERYFIKACJA ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="ac">ASSESSMENT CENTER ↗</button></th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Cena brutto / proces</th><td id="tableFree">0 zł</td><td id="tablePre">369 zł</td><td id="tableVerify">615 zł</td><td id="tableAc">1845 zł</td></tr>
+        <tr><th scope="row">Analizowane CV</th><td>5 próbnych</td><td class="paidCv">50</td><td class="paidCv">50</td><td class="paidCv">50</td></tr>
+        <tr data-common="yes"><th scope="row">Profil firmy i stanowiska</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+        <tr data-common="yes"><th scope="row">Pseudonimizacja i ocena dopasowania</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+        <tr data-common="yes"><th scope="row">Chatbot informacyjny</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+        <tr><th scope="row">Shortlista</th><td>Podstawowa</td><td>5–10 osób*</td><td>5–10 osób*</td><td>5–10 osób*</td></tr>
+        <tr><th scope="row">Wykonane rozmowy voicebota</th><td>1 próbna</td><td>do 10</td><td>do 10</td><td>do 10</td></tr>
+        <tr><th scope="row">Ocena rozmowy</th><td>Podstawowa</td><td>Podstawowa</td><td>Pogłębiona</td><td>Pogłębiona</td></tr>
+        <tr><th scope="row">Test kompetencji</th><td>—</td><td>—</td><td>✓</td><td>✓</td></tr>
+        <tr><th scope="row">Case studies i zadania praktyczne</th><td>—</td><td>—</td><td>—</td><td>✓</td></tr>
+        <tr><th scope="row">Assessment Center</th><td>—</td><td>—</td><td>—</td><td>do 5 osób × 2 zadania</td></tr>
+        <tr><th scope="row">Praca eksperta</th><td>—</td><td>—</td><td>—</td><td>3 godziny / proces</td></tr>
+        <tr><th scope="row">Raport kandydata</th><td>Podstawowy</td><td>Podstawowy</td><td>Rozszerzony</td><td>Kompleksowy</td></tr>
+      </tbody>
+    </table></div>
+    <p class="fine-print">* Shortlista zależy od rzeczywistej puli i dostępnych informacji. Tabela porównuje pakiety bazowe: limit do 10 rozmów, bez dodatków. Opcjonalne 5 rozmów jest wyceniane oddzielnie. FREE obejmuje 5 CV niezależnie od suwaka.</p>
+  </section>
+
+  <section id="agencja" class="surface agency" aria-labelledby="agencyTitle">
+    <div class="section-head"><div><div class="eyebrow">03 / Symulacja budżetu</div><h2 id="agencyTitle">SkillCheck a firma rekrutacyjna</h2><p>Masz własnych kandydatów? Sprawdź, ile kosztuje wybrany zakres SkillCheck w zestawieniu z pełną usługą agencji. <strong>To porównanie budżetów, nie identycznych usług.</strong></p></div><div class="two-kickers">Jedno stanowisko · jedno zatrudnienie</div></div>
+    <div class="agency-inputs">
+      <div class="field"><label for="agencyMode">Sposób wyceny agencji</label><div class="input-shell"><select id="agencyMode"><option value="fixed">Stała opłata za zatrudnienie</option><option value="percent">Procent rocznej pensji brutto</option></select></div><small>Edytuj wartości według własnej oferty agencji.</small></div>
+      <div class="field" id="fixedFields"><label for="agencyFixed">Opłata agencji netto</label><div class="input-shell"><input type="number" id="agencyFixed" min="0" max="100000000" step="100" value="10000"><span class="unit">PLN</span></div><small>10 000 zł netto: publiczny przykład rekrutacji IT, Be in IT.</small></div>
+      <div class="field" id="percentFields" hidden><label for="agencySalary">Pensja miesięczna brutto</label><div class="input-shell"><input type="number" id="agencySalary" min="0" max="10000000" step="500" value="12000"><span class="unit">PLN</span></div><small>Podstawa do oszacowania rocznego wynagrodzenia.</small></div>
+      <div class="field" id="commissionFields" hidden><label for="agencyCommission">Prowizja od rocznej pensji</label><div class="input-shell"><input type="number" id="agencyCommission" min="0" max="100" step="0.5" value="15"><span class="unit">%</span></div><small>Przykładowy punkt startowy: 15% (HRESTIE). Wynik netto roboczo.</small></div>
+      <div class="field"><label for="extraCosts">Dodatkowy koszt klienta netto</label><div class="input-shell"><input type="number" id="extraCosts" min="0" max="100000000" step="100" value="1500"><span class="unit">PLN</span></div><small>Domyślnie 1 000 zł na pozyskanie CV i 500 zł własnej obsługi. Zmień według potrzeb.</small></div>
+    </div>
+    <div id="paidComparison">
+      <div class="agency-results" aria-live="polite">
+        <div class="agency-card"><div class="label">Opłata agencji netto</div><div class="money" id="agencyCostValue">10 000,00 zł</div><p id="agencyCostCaption">Stała opłata za jedno zatrudnienie. Zakres pełnej usługi agencji.</p></div>
+        <div class="agency-card"><div class="label">SkillCheck + budżet klienta netto</div><div class="money" id="skillBudgetValue">1 800,00 zł</div><p id="skillBudgetCaption">300,00 zł netto za PRESELEKCJĘ + 1 500,00 zł kosztów klienta.</p></div>
+        <div class="agency-card" id="deltaCard"><div class="label" id="deltaLabel">Mniejszy budżet w tym scenariuszu</div><div class="money" id="budgetDeltaValue">8 200,00 zł</div><p id="deltaCaption">82,00% niższy budżet względem opłaty agencji. To nie jest gwarantowana oszczędność.</p></div>
+      </div>
+    </div>
+    <div id="freeComparison" class="free-comparison" hidden><strong>FREE to próba, nie pełna rekrutacja.</strong><p>FREE obejmuje tylko 5 analiz CV i jedną próbną rozmowę. Porównanie z kosztem pełnej usługi agencji byłoby mylące. Wybierz płatny wariant, aby zobaczyć symulację budżetu.</p><button id="switchToPaid" type="button" class="button small">Porównaj PRESELEKCJĘ ↗</button></div>
+    <div class="agency-caption">
+      <div><h3>Co zapewnia planowany SkillCheck?</h3><p>Pracę na CV dostarczonych przez klienta, analizę dopasowania, rozmowy voicebota i raport. W WERYFIKACJI także testy i pogłębiona analiza, a w AC zadania i pracę eksperta. Pozyskanie CV i końcowa decyzja pozostają po stronie klienta.</p></div>
+      <div><h3>Co obejmuje punkt odniesienia agencji?</h3><p>Pełna rekrutacja może obejmować sourcing, selekcję, rozmowy, koordynację procesu, wsparcie zatrudnienia i gwarancję. Przykład Be in IT: rozliczenie success fee po zatrudnieniu; zakres i warunki zgodnie z ofertą konkretnej agencji.</p></div>
+    </div>
+    <p class="fine-print">Różnica budżetów nie jest potwierdzoną oszczędnością na tej samej usłudze. Przy braku zatrudnienia agencja w modelu success fee może nie pobrać opłaty; etapy SkillCheck nadal mogą być płatne. Nie oszacowano czasu wakatu, kosztu błędnego zatrudnienia ani jakości wyniku. Symulacja porównuje sam pakiet bazowy <strong>bez dodatków do wyceny</strong>. Kwoty agencji i kosztów klienta porównujemy netto, a cenę pakietu dla klienta prezentujemy brutto.</p>
+  </section>
+
+  <section id="zalozenia" class="assumptions" aria-labelledby="assumptionTitle">
+    <div class="eyebrow">04 / Założenia i źródła</div><h2 id="assumptionTitle">Wiesz, skąd bierze się każda kwota.</h2>
+    <p style="font-size:14px;color:#5b705f;max-width:760px">Symulacja nie ukrywa przyjętych parametrów. Sprawdź sposób liczenia, przykładowe stawki i ograniczenia przed wysłaniem zapytania.</p>
+    <details open><summary>Ceny i zasada przeliczania wolumenu</summary>
+      <p>Wersja bazowa dla 50 CV: PRESELEKCJA 369,00 zł, WERYFIKACJA 615,00 zł, ASSESSMENT CENTER 1845,00 zł <strong>brutto</strong>; VAT 23%. FREE: 0 zł za maksymalnie 5 CV i jedną rozmowę próbną. Ceny bazowe pochodzą z aktualnej prezentacji oferty SkillCheck (17.10.2026).</p>
+      <p>Wybór 10, 20, 30 oraz dowolnej wielkości 35–150 CV co 5 jest <strong>roboczą symulacją</strong>. Zmiana kwoty względem 50 CV = (liczba CV − 50) × 0,1652 zł netto × 1,23 VAT, zaokrąglona do grosza. W tym podglądzie zachowujemy wcześniejsze ceny bazowe i sposób liczenia, ale nie są to ceny zatwierdzone do sprzedaży. Dodatki nie mają zatwierdzonych stawek i nie są wliczone w wyświetlaną kwotę pakietu.</p>
+    </details>
+    <details><summary>Rozmowy, czas i zakres pakietów</summary>
+      <p>FREE: do 5 CV i 1 próbna rozmowa. Płatne pakiety: wybrana liczba CV i do 10 wykonanych rozmów voicebota; możesz zaznaczyć 5 dodatkowych rozmów jako pozycję do indywidualnej wyceny. Przyjęto 9 minut na rozmowę, lecz to <strong>czas pracy bota, nie zmierzona oszczędność czasu rekrutera</strong>. W AC założono do 5 uczestników po 2 zadania i 3 godziny pracy eksperta na cały proces. Ręczne czytanie CV liczymy osobno według parametrów wprowadzonych przez oglądającego.</p>
+    </details>
+    <details><summary>Skąd pochodzą przykłady opłat agencji?</summary>
+      <p><a href="https://beinit.pl/cennik/" target="_blank" rel="noopener noreferrer">Be in IT — publiczny cennik</a>: 10 000 zł netto + VAT za jedną rekrutację IT, płatność po zatrudnieniu i 3 miesiące gwarancji zgodnie z warunkami. <a href="https://www.hrestie.com/nasze-uslugi" target="_blank" rel="noopener noreferrer">HRESTIE — oferta usług</a>: podstawowa rekrutacja od 15% rocznego wynagrodzenia brutto kandydata. Są to <strong>przykłady konkretnych ofert, a nie średnie rynkowe</strong>; wycenę procentową traktujemy jako szacunek netto do potwierdzenia z agencją.</p>
+      <p>Własny koszt klienta 1 500 zł netto to edytowalny przykład: 1 000 zł pozyskanie CV + 500 zł własna obsługa. Może być wyższy, niższy albo zerowy — wpisz własny koszt. Agencja w modelu success fee i SkillCheck rozliczają inne zakresy świadczeń.</p>
+    </details>
+    <details><summary>Co dalej po wyborze pakietu?</summary>
+      <p>Kalkulator działa lokalnie w przeglądarce. „Zapytaj o ofertę” tworzy podsumowanie wyboru razem z dodatkami, gotowe do skopiowania lub wysłania samodzielnie. „Kup teraz” pokazuje jedynie podgląd kroku zakupowego. <strong>Nie przyjmuje płatności, nie przesyła CV i nie uruchamia usług</strong>. Dostępność funkcji, cenę dodatków i termin trzeba potwierdzić przed zamówieniem. Decyzja rekrutacyjna należy do człowieka.</p>
+    </details>
+  </section>
+
+  <section class="surface" aria-labelledby="faqTitle">
+    <div class="eyebrow">05 / Zanim wybierzesz</div><h2 id="faqTitle" style="font-size:28px;letter-spacing:-.035em;margin:9px 0 18px">Jasne zasady od początku.</h2>
+    <details><summary>Czy muszę zapłacić, żeby wypróbować SkillCheck?</summary><p>FREE jest planowaną jednorazową próbą dla firmy — maksymalnie 5 CV i 1 próbna rozmowa. Wybór próby nie włącza automatycznie pakietu płatnego. Dostępność i sposób uruchomienia potwierdzimy w kontakcie.</p></details>
+    <details><summary>Czy SkillCheck znajduje kandydatów?</summary><p>W tym modelu pracujesz na własnych CV, np. z ogłoszeń, poleceń lub bazy firmy. Pozyskanie kandydatów, organizacja późniejszych etapów i decyzja o zatrudnieniu pozostają po Twojej stronie.</p></details>
+    <details><summary>Czym różni się PRESELEKCJA od WERYFIKACJI?</summary><p>PRESELEKCJA pomaga uporządkować dokumenty, rozmowy i shortlistę. WERYFIKACJA dodaje testy kompetencji, pogłębioną analizę odpowiedzi i rozszerzony raport. Assessment Center pozwala dodatkowo oceniać wykonanie zadań praktycznych.</p></details>
+    <details><summary>Czy 10 rozmów przypada na każdy poziom osobno?</summary><p>Nie. Limit do 10 wykonanych rozmów jest wspólny dla całego procesu w wybranym pakiecie. Rozmowy w wyższych pakietach nie sumują się z PRESELEKCJĄ.</p></details>
+    <details><summary>Czy kalkulator pokazuje gotową ofertę i uruchamia płatność?</summary><p>Nie. Wyliczenia dla 10–150 CV są orientacyjne, a dodatki są do wyceny. „Kup teraz” jest wyłącznie podglądem przyszłego procesu zakupowego. Szczegółową ofertę, dostępność usług i warunki płatności trzeba potwierdzić.</p></details>
+  </section>
+
+  <div class="cta-footer"><div class="cta-panel">
+    <div><div class="eyebrow" style="color:#b7d4be">Najpierw sprawdź. Potem zdecyduj.</div><h2>5 CV. 0 zł. Pierwszy krok do lepiej uporządkowanej rekrutacji.</h2><p>Zobacz działanie na własnych materiałach, zanim wybierzesz większy zakres. Nie zaczynasz od płatnego pakietu.</p></div>
+    <button type="button" class="button" id="tryFreeBottom">Zapytaj o bezpłatną próbę ↗</button>
+  </div></div>
+</main>
+<footer class="wrap"><span>© SkillCheck · Interaktywny podgląd kalkulatora v4 · 19.10.2026</span><span>Decyzje rekrutacyjne pozostają po stronie człowieka · <a href="mailto:pomoc@skillcheck.pl">pomoc@skillcheck.pl</a></span></footer>
+<dialog id="quoteDialog" aria-labelledby="quoteTitle">
+  <div class="dialog-inner"><div class="modal-top"><div><div class="eyebrow">Twój SkillCheck</div><h2 id="quoteTitle">Podsumowanie wyboru</h2><p class="small-note" id="quoteLead">Możesz je skopiować, pobrać lub otworzyć w swojej poczcie. Samodzielnie zatwierdzasz wysłanie.</p></div><button class="icon-btn" type="button" id="closeQuote" aria-label="Zamknij">×</button></div>
+    <textarea id="quoteText" aria-label="Podsumowanie zakresu" readonly></textarea>
+    <div class="modal-buttons"><a class="button" id="openMail" href="mailto:pomoc@skillcheck.pl">Otwórz e-mail ↗</a><button class="button secondary" type="button" id="copyQuote">Kopiuj podsumowanie</button><button class="button secondary" type="button" id="downloadQuote">Pobierz .txt</button></div><div class="status" id="copyStatus" role="status"></div>
+  </div>
+</dialog>
+<script>
+(()=>{
+  'use strict';
+  // Cena referencyjna dla 50 CV jest zachowana z istniejącej oferty. Inne wolumeny: jawna, robocza symulacja.
+  const VAT=1.23;
+  const BASE_GROSS_CENTS={free:0,pre:36900,verify:61500,ac:184500};
+  const VOLUME_DELTA_NET_PER_CV=0.1652;
+  const PACK={
+    free:{name:'FREE',title:'FREE — poznaj działanie',desc:'Wypróbuj analizę na maksymalnie 5 CV i jednej próbnej rozmowie. To pierwszy krok, nie kompletna rekrutacja.',chip:'5 CV · 1 próbna rozmowa',lead:'Przetestuj na 5 CV bez uruchamiania płatnego pakietu.'},
+    pre:{name:'PRESELEKCJA',title:'PRESELEKCJA — od CV do shortlisty',desc:'Uporządkuj dokumenty, uzupełnij informacje w rozmowach i przygotuj shortlistę do dalszej oceny.',chip:'raport i shortlista',lead:'Wspólne kryteria, odpowiedzi z rozmów i lista osób do kolejnego etapu.'},
+    verify:{name:'WERYFIKACJA',title:'WERYFIKACJA — wyjdź poza deklaracje',desc:'Zestaw CV z odpowiedziami i wynikami testów kompetencji. Przygotuj pogłębiony materiał do decyzji.',chip:'testy i rozszerzony raport',lead:'Same deklaracje z CV to za mało? Sprawdź odpowiedzi i kompetencje.'},
+    ac:{name:'ASSESSMENT CENTER',title:'ASSESSMENT CENTER — zobacz działanie w praktyce',desc:'Połącz preselekcję, rozmowy i testy z zadaniami praktycznymi oraz wsparciem eksperta.',chip:'zadania praktyczne + ekspert',lead:'Przyjrzyj się sposobowi rozwiązywania zadań podobnych do realnej pracy.'}
+  };
+  const state={cv:30,pack:'pre',extras:{calls:false,tests:false,cases:false,consult:false}};
+  const $=id=>document.getElementById(id);
+  const formatMoney=(value,digits=2)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN',useGrouping:true,minimumFractionDigits:digits,maximumFractionDigits:digits}).format(value);
+  const fmtInt=value=>new Intl.NumberFormat('pl-PL').format(value);
+  const percent=value=>new Intl.NumberFormat('pl-PL',{minimumFractionDigits:1,maximumFractionDigits:2}).format(value)+'%';
+  const readable=(id,value)=>{$(id).textContent=value;};
+  const asMoney=id=>Math.min(100000000,Math.max(0,Number($(id).value)||0));
+  const grossCents=(pkg,cv)=>pkg==='free'?0:BASE_GROSS_CENTS[pkg]+Math.round((cv-50)*VOLUME_DELTA_NET_PER_CV*VAT*100);
+  const netCents=(pkg,cv)=>Math.round(grossCents(pkg,cv)/VAT);
+  const price=(pkg,cv)=>grossCents(pkg,cv)/100;
+  const effectiveCv=()=>state.pack==='free'?5:state.cv;
+  const voiceCount=()=>state.pack==='free'?1:10+(state.extras.calls?5:0);
+  const EXTRA_NAMES={calls:'5 dodatkowych rozmów AI',tests:'Testy kompetencji',cases:'Zadanie / case study',consult:'Konsultacja eksperta'};
+  const isIncluded=(extra,pack=state.pack)=>extra==='tests'?['verify','ac'].includes(pack):extra==='cases'||extra==='consult'?pack==='ac':false;
+  const selectedExtras=()=>Object.entries(state.extras).filter(([key,on])=>on&&!isIncluded(key));
+  function setPack(pkg){if(!PACK[pkg])return;state.pack=pkg;for(const key of Object.keys(state.extras)){if(pkg==='free'||isIncluded(key,pkg))state.extras[key]=false;}render();}
+  function setCv(cv){if(!Number.isInteger(cv)||!([10,20,30].includes(cv)||(cv>=35&&cv<=150&&cv%5===0)))return;state.cv=cv;render();}
+  function quote(){
+    const cv=effectiveCv(),pk=PACK[state.pack];
+    const lines=[
+      'SKILLCHECK — ZAPYTANIE O PAKIET',
+      '', 'Pakiet: '+pk.name,
+      'Proces: 1 stanowisko / 1 proces',
+      'Wybrana pula CV: '+state.cv,
+      'Analizy CV w wybranym wariancie: '+cv,
+      'Rozmowy voicebota: '+(state.pack==='free'?'1 próbna':'do '+voiceCount()+' na cały proces'),
+      'Cena symulowana brutto: '+formatMoney(price(state.pack,state.cv)),
+      'Cena symulowana netto: '+formatMoney(netCents(state.pack,state.cv)/100),
+      'Wybrane dodatki: '+(selectedExtras().length?selectedExtras().map(([key])=>EXTRA_NAMES[key]).join(', ')+' — każdy do indywidualnej wyceny':'Brak'),
+      'Koszt dodatków: nie uwzględniony w cenie bazowej; do indywidualnej wyceny',
+      'Dostępność: do potwierdzenia',
+      'Symulacja ręcznego czytania: '+formatMoney((effectiveCv()*(Math.max(0,Math.min(240,Number($('timePerCv').value)||0)))/60)*(Math.max(0,Math.min(10000,Number($('hourlyTimeCost').value)||0))),0)+' netto kosztu czasu przy własnych parametrach; NIE jest to gwarantowana oszczędność',
+      '', 'Cel: Proszę o informację o dostępności, terminie, dokładnym zakresie i ostatecznej cenie.',
+      '', 'Uwaga: ceny 10–150 CV stanowią roboczą symulację, nie wiążącą ofertę. FREE obejmuje tylko 5 CV.',
+      'Przygotowano w kalkulatorze SkillCheck v4. To nie jest zamówienie ani zgoda na płatność.'
+    ];
+    if(state.pack!=='free'){
+      const agency=agencyCostCents()/100,own=netCents(state.pack,state.cv)/100+asMoney('extraCosts');
+      lines.push('', 'Własna symulacja (kwoty netto, bez dodatków do wyceny):',
+        'Opłata agencji: '+formatMoney(agency),
+        'Budżet SkillCheck + dodatkowy koszt klienta: '+formatMoney(own),
+        'Różnica budżetów (nie gwarantowana oszczędność): '+formatMoney(agency-own));
+    }
+    return lines.join('\n');
+  }
+  function agencyCostCents(){
+    if($('agencyMode').value==='fixed')return Math.round(asMoney('agencyFixed')*100);
+    return Math.round(asMoney('agencySalary')*12*(Math.min(100,asMoney('agencyCommission'))/100)*100);
+  }
+  function renderAgency(){
+    const free=state.pack==='free';
+    $('paidComparison').hidden=free;$('freeComparison').hidden=!free;
+    $('fixedFields').hidden=$('agencyMode').value!=='fixed';
+    $('percentFields').hidden=$('agencyMode').value!=='percent';
+    $('commissionFields').hidden=$('agencyMode').value!=='percent';
+    if(free)return;
+    const agencyC=agencyCostCents(), extraC=Math.round(asMoney('extraCosts')*100),netC=netCents(state.pack,state.cv);
+    const budgetC=extraC+netC, deltaC=agencyC-budgetC;
+    readable('agencyCostValue',formatMoney(agencyC/100));
+    readable('skillBudgetValue',formatMoney(budgetC/100));
+    readable('budgetDeltaValue',formatMoney(Math.abs(deltaC)/100));
+    readable('agencyCostCaption',$('agencyMode').value==='fixed'?'Stała opłata za zatrudnienie, przy pełnym zakresie usługi agencji.':'Roczna pensja × ustalony procent prowizji. Wynik netto roboczo.');
+    readable('skillBudgetCaption',formatMoney(netC/100)+' za '+PACK[state.pack].name+' + '+formatMoney(extraC/100)+' dodatkowych kosztów klienta. Dodatki do wyceny nie są tu wliczone.');
+    $('deltaCard').classList.toggle('negative',deltaC<0);
+    if(deltaC===0){
+      readable('deltaLabel','Takie same budżety w tym scenariuszu');
+      readable('deltaCaption','Wprowadzone założenia dają równy budżet nominalny. Zakres obu usług jest inny.');
+    }else if(deltaC>0){
+      readable('deltaLabel','Mniejszy budżet w tym scenariuszu');
+      readable('deltaCaption',(agencyC>0?percent(deltaC/agencyC*100)+' mniejszy budżet od opłaty agencji. ':'')+'Różny zakres usług — to symulacja, nie gwarantowana oszczędność.');
+    }else{
+      readable('deltaLabel','Większy budżet w tym scenariuszu');
+      readable('deltaCaption',(agencyC>0?percent(-deltaC/agencyC*100)+' wyższy budżet od opłaty agencji. ':'')+'Zmodyfikuj założenia lub zakres i porównaj ponownie.');
+    }
+  }
+  function render(){
+    const pk=PACK[state.pack],cv=effectiveCv(),gross=price(state.pack,state.cv),net=netCents(state.pack,state.cv)/100,calls=voiceCount();
+    document.querySelectorAll('[data-cv]').forEach(btn=>btn.setAttribute('aria-pressed',String(Number(btn.dataset.cv)===state.cv)));
+    const range=$('volumeSlider');
+    range.value=String(Math.max(35,state.cv));
+    range.style.setProperty('--range-progress',((Number(range.value)-35)/115*100)+'%');
+    range.setAttribute('aria-valuetext',range.value+' CV');
+    readable('volumeValue',state.cv+' CV');
+    $('volumeMinus').disabled=state.cv<=10;
+    $('volumePlus').disabled=state.cv>=150;
+    let extraCount=0;
+    for(const [key,on] of Object.entries(state.extras)){
+      const el=document.querySelector('[data-extra="'+key+'"]');
+      const unavailable=state.pack==='free'||isIncluded(key);
+      el.disabled=unavailable;el.checked=on&&!unavailable;
+      const suffix=isIncluded(key)?'Już w wybranym pakiecie':state.pack==='free'?'Wybierz płatny wariant, aby dodać':'Po indywidualnej wycenie';
+      readable('extra'+key[0].toUpperCase()+key.slice(1)+'Hint',suffix);
+      if(on&&!unavailable)extraCount++;
+    }
+    readable('extraSelectionSummary',extraCount?('Wybrane dodatki: '+selectedExtras().map(([key])=>EXTRA_NAMES[key]).join(' · ')+'. Cena dodatków wymaga osobnej wyceny.'):'Bez dodatków. Możesz je dodać bez zmiany wariantu bazowego.');
+    document.querySelectorAll('[data-pack]').forEach(btn=>btn.setAttribute('aria-pressed',String(btn.dataset.pack===state.pack)));
+    document.querySelectorAll('[data-choose-pack]').forEach(btn=>btn.setAttribute('aria-pressed',String(btn.dataset.choosePack===state.pack)));
+    const activeColumn={free:1,pre:2,verify:3,ac:4}[state.pack];
+    document.querySelectorAll('#porownaj table tr').forEach(row=>Array.from(row.children).forEach((cell,index)=>cell.classList.toggle('active-column',index===activeColumn)));
+    document.querySelectorAll('[data-package-price]').forEach(el=>el.textContent=formatMoney(price(el.dataset.packagePrice,state.cv),0));
+    document.querySelectorAll('.paidCv').forEach(el=>el.textContent=String(state.cv));
+    ['pre','verify','ac'].forEach(name=>readable('table'+(name==='pre'?'Pre':name==='verify'?'Verify':'Ac'),formatMoney(price(name,state.cv),0)));
+    readable('tableFree','0 zł');
+    readable('heroPrice',formatMoney(gross,0));
+    readable('heroVolume',cv+' CV');
+    readable('heroCalls',state.pack==='free'?'1 próbna':'do '+calls);
+    readable('heroPerCv',formatMoney(gross/cv));
+    document.querySelector('.kpi-caption').textContent='brutto za wybrany zakres '+pk.name;
+    readable('heroPriceNote',state.pack==='free'?'FREE obejmuje tylko 5 CV oraz jedną próbną rozmowę.':state.cv===50?'Cena bazowa bieżącej wersji oferty. Funkcje i termin wymagają potwierdzenia.':'Orientacyjna cena dla '+state.cv+' CV — niezatwierdzona wycena wolumenu.');
+    readable('selectionTitle',pk.title);
+    readable('selectionDescription',pk.desc);
+    $('selectionChips').replaceChildren();
+    const chips=[cv+' CV',state.pack==='free'?'1 próbna rozmowa AI':'do '+calls+' rozmów AI',pk.chip,...selectedExtras().filter(([key])=>key!=='calls').map(([key])=>EXTRA_NAMES[key]+' · do wyceny')];
+    for(const chip of chips){const s=document.createElement('span');s.textContent=chip;$('selectionChips').append(s);}
+    readable('selectedPrice',formatMoney(gross));
+    readable('netPrice',formatMoney(net)+' netto · 23% VAT'+(state.pack==='free'?' — bezpłatna próba':''));
+    readable('quoteButton',state.pack==='free'?'Zapytaj o FREE ↗':'Zapytaj o ofertę ↗');
+    $('buyDemoButton').disabled=state.pack==='free';
+    readable('priceScopeNote',extraCount?'Cena bazowa (bez '+extraCount+' dodatków do wyceny)':'Cena bazowa pakietu · symulacja, nie wiążąca oferta');
+    readable('metricCv',cv+' CV');
+    readable('metricCvText',state.pack==='free'?'Jednorazowa próba dla firmy, maksymalnie 5 analiz CV.':'Analiza CV według wspólnych kryteriów stanowiska.');
+    readable('metricMinutes',(calls*9)+' min');
+    readable('metricMinutesText',calls+' rozmów × założone 9 min. Czas rozmów bota, nie pomiar zaoszczędzonego czasu.');
+    readable('metricUnit',formatMoney(gross/cv));
+    readable('metricUnitText',state.pack==='free'?'Bezpłatne 5 CV; nie jest to cena pełnego procesu.':extraCount?'Średnio brutto / CV w pakiecie bazowym. Nie zawiera dodatków do wyceny.':'Średnio brutto / CV w puli, razem z podstawowymi funkcjami pakietu.');
+    readable('copyReuseCv',state.pack==='free'?'Wypróbuj działanie na 5 własnych CV. Jeśli masz więcej zgłoszeń, po próbie możesz wybrać większy zakres.':'Masz kandydatów z ogłoszeń lub poleceń? Możesz pracować na '+state.cv+' własnych CV, bez ponownego zlecania ich pozyskania. AI pomaga porządkować dane przed kolejnymi rozmowami.');
+    readable('copyProgress',pk.lead);
+    readable('tableIntro','Ceny brutto dla '+state.cv+' CV w płatnych pakietach. FREE zawsze obejmuje 5 CV.');
+    readable('volumeDisclaimer',state.cv===50?'Przy 50 CV zachowano cenę bazową z poprzedniego kalkulatora. Dodatki, zakres i dostępność usług potwierdzamy przed realizacją.':'Przy '+state.cv+' CV pokazujemy orientacyjną symulację z poprzedniego modelu, a nie zatwierdzony cennik. Dodatki są do odrębnej wyceny.');
+    renderManualBenefit();
+    renderAgency();
+    if($('quoteDialog').open)fillQuote();
+  }
+  function renderManualBenefit(){
+    const mins=Math.max(0,Math.min(240,Number($('timePerCv').value)||0));
+    const hourly=Math.max(0,Math.min(10000,Number($('hourlyTimeCost').value)||0));
+    const hours=effectiveCv()*mins/60;
+    readable('manualHours',new Intl.NumberFormat('pl-PL',{minimumFractionDigits:1,maximumFractionDigits:1}).format(hours)+' h');
+    readable('manualCost',formatMoney(hours*hourly,0));
+  }
+  function fillQuote(){
+    const text=quote();$('quoteText').value=text;
+    $('openMail').href='mailto:pomoc@skillcheck.pl?subject='+encodeURIComponent('Zapytanie SkillCheck — '+PACK[state.pack].name+' / '+effectiveCv()+' CV')+'&body='+encodeURIComponent(text);
+  }
+  function openQuote(isBuyDemo=false){
+    fillQuote();$('copyStatus').textContent='';
+    readable('quoteTitle',isBuyDemo?'Podgląd zakupu — bez płatności':'Podsumowanie zapytania');
+    readable('quoteLead',isBuyDemo?'Przyszła ścieżka zakupowa jest w przygotowaniu. Niczego nie kupujesz ani nie opłacasz; możesz zamiast tego wysłać zapytanie.':'Możesz skopiować podsumowanie, pobrać plik lub otworzyć je w poczcie. Samodzielnie zatwierdzasz wysłanie.');
+    $('quoteDialog').showModal();
+  }
+  function openFree(){setPack('free');openQuote();}
+  document.querySelectorAll('[data-cv]').forEach(btn=>btn.addEventListener('click',()=>setCv(Number(btn.dataset.cv))));
+  document.querySelectorAll('[data-pack]').forEach(btn=>btn.addEventListener('click',()=>setPack(btn.dataset.pack)));
+  document.querySelectorAll('[data-choose-pack]').forEach(btn=>btn.addEventListener('click',()=>{setPack(btn.dataset.choosePack);$('kalkulator').scrollIntoView({behavior:'smooth'});}));
+  $('volumeSlider').addEventListener('input',event=>setCv(Number(event.target.value)));
+  $('volumeMinus').addEventListener('click',()=>setCv(state.cv<=30?(state.cv===30?20:10):state.cv-5));
+  $('volumePlus').addEventListener('click',()=>setCv(state.cv<30?(state.cv===10?20:30):state.cv+5));
+  document.querySelectorAll('[data-extra]').forEach(input=>input.addEventListener('change',()=>{if(!input.disabled){state.extras[input.dataset.extra]=input.checked;render();}}));
+  ['timePerCv','hourlyTimeCost'].forEach(id=>$(id).addEventListener('input',renderManualBenefit));
+  $('differencesOnly').addEventListener('change',()=>document.querySelectorAll('[data-common="yes"]').forEach(row=>row.hidden=$('differencesOnly').checked));
+  ['agencyMode','agencyFixed','agencySalary','agencyCommission','extraCosts'].forEach(id=>$(id).addEventListener('input',()=>{renderAgency();if($('quoteDialog').open)fillQuote();}));
+  $('switchToPaid').addEventListener('click',()=>setPack('pre'));
+  $('tryFreeTop').addEventListener('click',openFree);$('tryFreeBottom').addEventListener('click',openFree);
+  $('quoteButton').addEventListener('click',()=>openQuote());$('buyDemoButton').addEventListener('click',()=>openQuote(true));$('closeQuote').addEventListener('click',()=>$('quoteDialog').close());
+  $('quoteDialog').addEventListener('click',event=>{if(event.target===$('quoteDialog'))$('quoteDialog').close();});
+  $('copyQuote').addEventListener('click',async()=>{
+    fillQuote();const content=$('quoteText').value;
+    try{if(!navigator.clipboard?.writeText)throw Error('no clipboard');await navigator.clipboard.writeText(content);$('copyStatus').textContent='Skopiowano podsumowanie.';}
+    catch(e){$('quoteText').focus();$('quoteText').select();$('copyStatus').textContent='Zaznaczono tekst. Użyj Ctrl+C (lub Kopiuj) w przeglądarce.';}
+  });
+  $('downloadQuote').addEventListener('click',()=>{
+    fillQuote();const blob=new Blob(['\ufeff'+$('quoteText').value],{type:'text/plain;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='SkillCheck_'+state.pack+'_'+effectiveCv()+'CV.txt';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+    $('copyStatus').textContent='Przygotowano plik z podsumowaniem.';
+  });
+  render();
+})();
+</script>
+</body>
+</html>
