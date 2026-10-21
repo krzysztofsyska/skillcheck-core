@@ -62,7 +62,7 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
   "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
   "template_version,created_by,retention_policy_version,retention_deadline)",
   "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
-  "'skillcheck-voice-plan-v1',$11,'synthetic-v1','2030-01-01') returning id"
+  "'skillcheck-voice-plan-v1',$12,'synthetic-v1','2030-01-01') returning id"
  ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
   f.analysis_id,f.reviewId,shortlist,expected.sourceHash,expected.planContractHash,
   JSON.stringify(canonicalVoiceSourceSnapshot(expected.sourceBinding,expected.planSourceFingerprint)),
