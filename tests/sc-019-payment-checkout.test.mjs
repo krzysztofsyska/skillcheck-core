@@ -20,10 +20,10 @@ const requestKey = o => `sc19:request:${companyId}:${o.id}:${o.termsRevision}`;
 const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
-async function harness({ offers = [offer()], entries = [], checkout, order } = {}) {
+async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
   const hooks = [], effects = [];
-  let cursor = 0, sequence = 0, tree;
+  let cursor = 0, sequence = 0, offerReads = 0, tree;
   const react = {
     useState(initial) {
       const index = cursor++;
@@ -42,17 +42,17 @@ async function harness({ offers = [offer()], entries = [], checkout, order } = {
     },
   };
   const context = {
-    exports: {}, Intl, Date, AbortController,
+    exports: {}, Intl, Date:clientNow===undefined?Date:class extends Date {static now(){return clientNow;}}, AbortController,
     require(name) { return name === 'react' ? react : require(name); },
     crypto: { randomUUID() { return `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`; } },
     sessionStorage: {
-      getItem: key => storage.get(key) ?? null,
-      setItem: (key, value) => storage.set(key, value),
-      removeItem: key => storage.delete(key),
+      getItem: key => {if(storageUnavailable)throw Error('blocked');return storage.get(key) ?? null;},
+      setItem: (key, value) => {if(storageUnavailable)throw Error('blocked');storage.set(key, value);},
+      removeItem: key => {if(storageUnavailable)throw Error('blocked');storage.delete(key);},
     },
     window: { location: { assign: url => redirects.push(url) } },
     async fetch(url, options) {
-      if (url.startsWith('/api/billing/offers?')) return ok({ offers });
+      if (url.startsWith('/api/billing/offers?')) return ok({ offers:typeof offers==='function'?offers(++offerReads):offers });
       if (url === '/api/billing/checkout') {
         const input = JSON.parse(options.body);
         posts.push(input);
@@ -167,4 +167,45 @@ test('reset of paid offer B preserves pending offer A and reuses its original re
   assert.equal(h.posts[0].requestId, pendingRequest);
   assert.equal(h.uuidCount(), 0);
   assert.deepEqual(h.redirects, ['https://pay.fixture.invalid/pending-a']);
+});
+
+for(const clientNow of [0,Date.now()+365*86400000])test(`server-approved offer remains purchasable with client clock ${clientNow===0?'behind':'ahead'}`,async t=>{
+ const active={...offer(),validUntilMs:Date.now()+60000};
+ const h=await harness({offers:[active],clientNow,checkout:async()=>ok({orderId:'active-order',status:'awaiting_payment',checkoutUrl:'https://pay.fixture.invalid/active'})});
+ t.after(h.close);h.accept();await h.click('Zamawiam');
+ assert.equal(h.posts.length,1);assert.deepEqual(h.redirects,['https://pay.fixture.invalid/active']);
+});
+
+test('server expiry refreshes terms, resets acceptance and never automatically submits a replacement purchase',async t=>{
+ const initial=offer(),replacement={...offer('offer-new'),termsRevision:'terms-v2',amountMinor:23456};
+ const h=await harness({clientNow:0,offers:read=>read===1?[initial]:[replacement],checkout:async()=>({ok:false,json:async()=>({error:'SC19_PAYMENT_OFFER_UNAVAILABLE'})})});
+ t.after(h.close);h.accept();await h.click('Zamawiam');
+ assert.equal(h.posts.length,1);assert.deepEqual(h.redirects,[]);
+ assert.equal(h.find('select').props.value,replacement.id);
+ assert.equal(h.find('input').props.checked,false);assert.equal(h.find('button','Zamawiam').props.disabled,true);
+ assert.ok(h.find('p','Oferta wygasła'));
+ h.accept();await h.click('Zamawiam');assert.equal(h.posts[1].termsRevision,'terms-v2');
+});
+
+test('expired catalog becomes unavailable and a manual refresh requires fresh acceptance',async t=>{
+ const h=await harness({offers:read=>read===2?[]:[offer()],checkout:async()=>({ok:false,json:async()=>({error:'SC19_PAYMENT_OFFER_UNAVAILABLE'})})});
+ t.after(h.close);h.accept();await h.click('Zamawiam');
+ assert.equal(h.find('button','Zamawiam'),undefined);
+ await h.click('Odśwież oferty');assert.equal(h.find('input').props.checked,false);
+ assert.equal(h.find('button','Zamawiam').props.disabled,true);assert.equal(h.posts.length,1);
+});
+
+test('blocked sessionStorage still permits server-guarded checkout and keeps an in-memory retry hint',async t=>{
+ const h=await harness({storageUnavailable:true,checkout:async(_input,n)=>{
+  if(n===1)throw Error('lost');return ok({orderId:'recovered',status:'awaiting_payment',checkoutUrl:'https://pay.fixture.invalid/recovered'});
+ }});
+ t.after(h.close);h.accept();await h.click('Zamawiam');await h.click('Zamawiam');
+ assert.equal(h.posts[0].requestId,h.posts[1].requestId);
+ assert.deepEqual(h.redirects,['https://pay.fixture.invalid/recovered']);
+});
+
+test('conflicting unresolved purchase is explained without redirect or automatic retry',async t=>{
+ const h=await harness({checkout:async()=>({ok:false,json:async()=>({error:'SC19_PAYMENT_PURCHASE_PENDING'})})});
+ t.after(h.close);h.accept();await h.click('Zamawiam');
+ assert.equal(h.posts.length,1);assert.deepEqual(h.redirects,[]);assert.ok(h.find('p','nierozliczone zamówienie'));
 });

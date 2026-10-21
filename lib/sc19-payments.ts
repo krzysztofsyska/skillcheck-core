@@ -35,6 +35,10 @@ export interface PaymentTransaction {
   /** Lock the offer and enforce immutable economic revisions in persistent storage. */
   offer(id: string): Promise<PaymentOffer | null>;
   orderByRequest(companyId: string, requestId: string): Promise<PaymentOrder | null>;
+  /** At most one unresolved purchase per company, across offers and scopes. */
+  unresolvedOrder(companyId: string): Promise<PaymentOrder | null>;
+  /** Immutable request alias, committed atomically with selecting/creating the order. */
+  bindRequest(companyId: string, requestId: string, orderId: string): Promise<void>;
   /** Lock row before mutation. Tenant must also be checked on authenticated reads. */
   order(id: string): Promise<PaymentOrder | null>;
   insertOrder(order: PaymentOrder): Promise<void>;
@@ -48,7 +52,8 @@ export interface PaymentTransaction {
 }
 export interface PaymentStore {
   /** Commit all writes on success; rollback ALL writes on any error. Implement
-   * unique(company_id,request_id), row locks and bounded serialization retries.
+   * unique(company_id,request_id), one awaiting_payment per company, immutable
+   * request aliases, row locks and bounded serialization retries.
    */
   transaction<T>(work: (tx: PaymentTransaction) => Promise<T>): Promise<T>;
 }
@@ -118,9 +123,9 @@ export function createSc19Payments(deps: PaymentDependencies) {
   const origins = Object.freeze([...deps.checkoutOrigins]);
   const active = deps.enabled === true;
   const liveApproved = deps.liveApproved === true;
+  const checkoutEnabled = active && validScope(scope) && (scope.mode !== 'live' || liveApproved);
   const checkoutGate = () => {
-    if (!active || !validScope(scope) || (scope.mode === 'live' && !liveApproved))
-      deny('SC19_PAYMENTS_DISABLED');
+    if (!checkoutEnabled) deny('SC19_PAYMENTS_DISABLED');
   };
   // Disabling new checkouts must NOT strand an existing paid checkout. Verified
   // receipts for previously created, correctly scoped orders continue settling.
@@ -199,6 +204,17 @@ export function createSc19Payments(deps: PaymentDependencies) {
           return deny('SC19_PAYMENT_REQUEST_CONFLICT');
         return clone(previous);
       }
+      // Browser IDs are only retry aliases, never permission to open another
+      // unresolved purchase. Keep the original economics and provider key even
+      // after a lost response, storage eviction, new device or service restart.
+      const pending = await tx.unresolvedOrder(companyId);
+      if (pending) {
+        if (!sameScope(pending.scope, scope) || pending.buyerId !== userId ||
+            pending.offerId !== offerId || pending.termsRevision !== terms)
+          return deny('SC19_PAYMENT_PURCHASE_PENDING');
+        await tx.bindRequest(companyId, requestId, pending.id);
+        return clone(pending);
+      }
       const offer = clone(await tx.offer(offerId));
       if (!offerValid(offer, offerId, terms)) return deny('SC19_PAYMENT_OFFER_UNAVAILABLE');
       const created: PaymentOrder = Object.freeze({
@@ -209,6 +225,7 @@ export function createSc19Payments(deps: PaymentDependencies) {
         checkoutDeadlineMs: Math.min(offer.validUntilMs, Date.now() + 30 * 60_000),
       });
       await tx.insertOrder(created);
+      await tx.bindRequest(companyId, requestId, created.id);
       return created;
     });
     if (order.status === 'paid') return { orderId: order.id, paid: true };
@@ -271,5 +288,5 @@ export function createSc19Payments(deps: PaymentDependencies) {
       return { state: previouslyGrantedTo === null ? 'applied' as const : 'already_applied' as const, orderId: order.id };
     });
   }
-  return Object.freeze({ checkout, notification });
+  return Object.freeze({ checkout, notification, checkoutEnabled });
 }

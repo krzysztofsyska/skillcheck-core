@@ -50,12 +50,27 @@ create table private.sc19_payment_orders (
   checkout_deadline_ms bigint not null check(checkout_deadline_ms > 0),
   created_at timestamptz not null default now(),
   unique(company_id, request_id),
+  unique(company_id, id),
   unique(provider, account, mode, session_id),
   check((session_id is null) = (checkout_url is null)),
   check((status='paid') = (payment_id is not null)),
   check(status<>'paid' or session_id is not null)
 );
 create index sc19_payment_orders_company_idx on private.sc19_payment_orders(company_id,created_at desc);
+-- Company-wide, deliberately NOT per request, offer, provider/account or mode.
+-- Only verified settlement to paid releases this slot. Timeouts/expiry do not.
+create unique index sc19_payment_one_unresolved on private.sc19_payment_orders(company_id)
+  where status='awaiting_payment';
+create table private.sc19_payment_requests (
+  company_id uuid not null,
+  request_id uuid not null,
+  order_id uuid not null,
+  created_at timestamptz not null default now(),
+  primary key(company_id,request_id),
+  foreign key(company_id,order_id) references private.sc19_payment_orders(company_id,id) on delete restrict
+);
+-- All aliases survive settlement, so a late retry cannot become a new purchase.
+create index sc19_payment_requests_order_idx on private.sc19_payment_requests(company_id,order_id);
 create table private.sc19_payment_grants (
   payment_key text primary key check(length(payment_key) between 1 and 1024),
   order_id uuid not null unique references private.sc19_payment_orders(id) on delete restrict,
@@ -64,7 +79,7 @@ create table private.sc19_payment_grants (
 create function private.sc19_payment_immutable()
 returns trigger language plpgsql set search_path='' as $$
 begin
-  if tg_op='DELETE' or tg_table_name='sc19_payment_grants' then raise exception 'sc19_payment_immutable' using errcode='55000'; end if;
+  if tg_op='DELETE' or tg_table_name in ('sc19_payment_grants','sc19_payment_requests') then raise exception 'sc19_payment_immutable' using errcode='55000'; end if;
   if tg_table_name='sc19_payment_offers' then
     if (to_jsonb(new)-array['active','approved']) is distinct from
        (to_jsonb(old)-array['active','approved']) then
@@ -86,10 +101,13 @@ create trigger sc19_order_immutable before update or delete on private.sc19_paym
   for each row execute function private.sc19_payment_immutable();
 create trigger sc19_grant_immutable before update or delete on private.sc19_payment_grants
   for each row execute function private.sc19_payment_immutable();
+create trigger sc19_request_immutable before update or delete on private.sc19_payment_requests
+  for each row execute function private.sc19_payment_immutable();
 alter table private.sc19_payment_offers enable row level security;
 alter table private.sc19_payment_orders enable row level security;
 alter table private.sc19_payment_grants enable row level security;
-revoke all on private.sc19_payment_offers,private.sc19_payment_orders,private.sc19_payment_grants
+alter table private.sc19_payment_requests enable row level security;
+revoke all on private.sc19_payment_offers,private.sc19_payment_orders,private.sc19_payment_grants,private.sc19_payment_requests
   from public,anon,authenticated;
 -- Global or schema default privileges can grant custom roles capabilities that
 -- the fixed browser-role revokes above do not remove. RLS and row triggers do
@@ -100,7 +118,8 @@ declare obj record; grantee record;
 begin
   for obj in select c.oid,c.relowner from pg_class c
     where c.oid in ('private.sc19_payment_offers'::regclass,
-      'private.sc19_payment_orders'::regclass,'private.sc19_payment_grants'::regclass)
+      'private.sc19_payment_orders'::regclass,'private.sc19_payment_grants'::regclass,
+      'private.sc19_payment_requests'::regclass)
   loop
     for grantee in select distinct acl.grantee,role.rolname
       from pg_class c cross join lateral aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) acl

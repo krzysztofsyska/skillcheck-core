@@ -6,9 +6,9 @@ const id='00000000-0000-4000-8000-000000000001';
 const origin='https://app.fixture.invalid';
 function harness(extra={}) {
  const calls=[];
- const runtime={appOrigin:origin,signatureHeader:'fixture-signature',checkoutEnabled:true,
+ const runtime={appOrigin:origin,signatureHeader:'fixture-signature',
   authenticate:async()=>({userId:id}),
-  service:{checkout:async input=>{calls.push(input);return {orderId:id,url:'https://pay.fixture.invalid/session'};},
+  service:{checkoutEnabled:extra.checkoutEnabled??true,checkout:async input=>{calls.push(input);return {orderId:id,url:'https://pay.fixture.invalid/session'};},
    notification:async (bytes,signature)=>{calls.push({bytes,signature});if(signature!=='valid')throw Error('secret diagnostic');return {state:'applied'};}},
   readOrder:async()=>({id,status:'paid',credits:12,amountMinor:12345,currency:'PLN',termsRevision:'fixture',paymentId:'private-payment'}),
   listOffers:async()=>[],...extra};
@@ -56,4 +56,27 @@ test('composition refuses untrusted origins and invalid signature header names',
  for(const appOrigin of ['https://user:pass@app.fixture.invalid','https://app.fixture.invalid/path','http://app.fixture.invalid'])
   assert.throws(()=>composeSc19PaymentRuntime({appOrigin,signatureHeader:'signature'}),/CONFIGURATION_INVALID/);
  assert.throws(()=>composeSc19PaymentRuntime({appOrigin:origin,signatureHeader:'bad\nheader'}),/CONFIGURATION_INVALID/);
+});
+
+test('offers and checkout share the composed service gate, including unapproved LIVE and invalid scope',async()=>{
+ const scope={provider:'synthetic',account:'merchant-fixture',mode:'test'};
+ for(const override of [{enabled:false},{scope:{...scope,mode:'live'}},{scope:{...scope,account:''}},
+   {scope:{...scope,provider:''}},{scope:{...scope,mode:'invalid'}}]){
+  let db=0,providerCalls=0;
+  const runtime=composeSc19PaymentRuntime({pool:{async connect(){db++;throw Error('must not connect');}},
+   provider:{async createCheckout(){providerCalls++;},async verifyAndRetrieve(){providerCalls++;return null;}},
+   authenticate:async()=>({userId:id}),appOrigin:origin,signatureHeader:'fixture-signature',checkoutOrigins:[],
+   enabled:true,liveApproved:false,scope,...override});
+  assert.equal(runtime.service.checkoutEnabled,false);
+  const http=createSc19PaymentHttp(runtime);
+  for(const response of [await http.offers(new Request(origin+'?companyId='+id)),await http.checkout(checkout())]){
+   assert.equal(response.status,503);assert.deepEqual(await response.json(),{error:'SC19_PAYMENTS_DISABLED'});
+  }
+  assert.equal(db,0);assert.equal(providerCalls,0);
+ }
+ for(const allowed of [{scope},{scope:{...scope,mode:'live'},liveApproved:true}]){
+  const runtime=composeSc19PaymentRuntime({pool:{},provider:{},authenticate:async()=>({userId:id}),
+   appOrigin:origin,signatureHeader:'fixture-signature',checkoutOrigins:[],enabled:true,liveApproved:false,...allowed});
+  assert.equal(runtime.service.checkoutEnabled,true);
+ }
 });

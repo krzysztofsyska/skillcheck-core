@@ -8,7 +8,6 @@ export type PaymentHttpRuntime = Readonly<{
   listOffers(companyId: string,userId: string): Promise<CheckoutOffer[]>;
   appOrigin: string;
   signatureHeader: string;
-  checkoutEnabled: boolean;
 }>;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{
@@ -52,7 +51,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null) {
   }
   return {
     async checkout(request: Request) {
-      if(!runtime || !runtime.checkoutEnabled)return paymentsUnavailable();
+      if(!runtime || !runtime.service.checkoutEnabled)return paymentsUnavailable();
       try {
         // Trusted configured origin, never Host/X-Forwarded-Host from the request.
         if(request.headers.get('origin')!==runtime.appOrigin ||
@@ -74,7 +73,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null) {
       try {
         const uid=await user(); const companyId=new URL(request.url).searchParams.get('companyId') ?? '';
         if(!uuid.test(companyId))throw new Sc19PaymentError('SC19_PAYMENT_INVALID');
-        if(!runtime.checkoutEnabled)return paymentsUnavailable();
+        if(!runtime.service.checkoutEnabled)return paymentsUnavailable();
         const offers=await runtime.listOffers(companyId,uid);
         return json({offers:offers.map(o=>({id:o.id,revision:o.revision,amountMinor:o.amountMinor,currency:o.currency,
           credits:o.credits,termsRevision:o.termsRevision,termsText:o.termsText,validUntilMs:o.validUntilMs}))});
@@ -93,7 +92,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null) {
       } catch(e) { return errorResponse(e); }
     },
     async webhook(request: Request) {
-      // Deliberately independent of checkoutEnabled; outstanding orders must drain.
+      // Deliberately independent of the new-checkout gate; orders must drain.
       if(!runtime)return paymentsUnavailable();
       try {
         const signature=request.headers.get(runtime.signatureHeader) ?? '';

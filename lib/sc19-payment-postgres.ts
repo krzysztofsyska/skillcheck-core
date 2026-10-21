@@ -57,8 +57,20 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
           },
           async orderByRequest(companyId, requestId) {
             await lockCompany(companyId);
-            const r = await c.query('select * from private.sc19_payment_orders where company_id=$1 and request_id=$2 for update',[companyId,requestId]);
+            const r = await c.query(`select o.* from private.sc19_payment_orders o
+              join private.sc19_payment_requests r on r.company_id=o.company_id and r.order_id=o.id
+              where r.company_id=$1 and r.request_id=$2 for update of o`,[companyId,requestId]);
             return r.rows[0] ? orderRow(r.rows[0]) : null;
+          },
+          async unresolvedOrder(companyId) {
+            await lockCompany(companyId);
+            const r = await c.query(`select * from private.sc19_payment_orders
+              where company_id=$1 and status='awaiting_payment' for update`,[companyId]);
+            return r.rows[0] ? orderRow(r.rows[0]) : null;
+          },
+          async bindRequest(companyId, requestId, orderId) {
+            await c.query(`insert into private.sc19_payment_requests(company_id,request_id,order_id)
+              values($1,$2,$3)`,[companyId,requestId,orderId]);
           },
           async order(id) {
             const found = await c.query('select company_id from private.sc19_payment_orders where id=$1',[id]);
@@ -105,7 +117,10 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
       } catch(error) {
         await c.query('rollback').catch(() => {});
         const code = (error as { code?: string }).code;
-        const requestRace = code === '23505' && (error as { constraint?: string }).constraint === 'sc19_payment_orders_company_id_request_id_key';
+        const requestRace = code === '23505' && [
+          'sc19_payment_orders_company_id_request_id_key', 'sc19_payment_one_unresolved',
+          'sc19_payment_requests_pkey',
+        ].includes((error as { constraint?: string }).constraint ?? '');
         if ((!['40001','40P01'].includes(code ?? '') && !requestRace) || attempt >= 5) throw error;
       } finally { c.release(); }
       // Bounded jitter outside the connection; the retried callback contains DB work only.

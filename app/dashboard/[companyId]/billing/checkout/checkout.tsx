@@ -8,14 +8,21 @@ export default function Checkout({companyId}: {companyId:string}) {
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
   const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string}|null>(null);
+  const [requestIds]=useState(()=>new Map<string,string>());
   const offer=offers.find(o=>o.id===selected);
+  async function loadOffers(signal?: AbortSignal) {
+    setLoading(true);setAccepted(false);setOffers([]);setSelected('');
+    try {
+      const r=await fetch(`/api/billing/offers?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',signal});
+      if(!r.ok)throw Error();const data=await r.json();
+      if(!signal?.aborted){setOffers(data.offers);setSelected(data.offers[0]?.id ?? '');}
+    } catch {
+      if(!signal?.aborted)setMessage('Płatności nie są jeszcze dostępne. Cena i warunki oferty oczekują na zatwierdzenie.');
+    } finally {if(!signal?.aborted)setLoading(false);}
+  }
   useEffect(()=>{
     const abort=new AbortController();
-    fetch(`/api/billing/offers?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',signal:abort.signal})
-      .then(async r=>{if(!r.ok)throw Error();return r.json();})
-      .then(data=>{setOffers(data.offers);setSelected(data.offers[0]?.id ?? '');})
-      .catch(()=>{if(!abort.signal.aborted)setMessage('Płatności nie są jeszcze dostępne. Cena i warunki oferty oczekują na zatwierdzenie.');})
-      .finally(()=>{if(!abort.signal.aborted)setLoading(false);});
+    void loadOffers(abort.signal);
     try { setOrderId(sessionStorage.getItem(`sc19:order:${companyId}`) ?? ''); } catch { /* unavailable storage: status can be retried in this session */ }
     return ()=>abort.abort();
   },[companyId]);
@@ -33,28 +40,43 @@ export default function Checkout({companyId}: {companyId:string}) {
   }
   function nextPurchase() {
     if(!paidOrder||!offer)return;
+    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}`;
+    requestIds.delete(key);
     try {
-      sessionStorage.removeItem(`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}`);
+      sessionStorage.removeItem(key);
       sessionStorage.removeItem(`sc19:order:${companyId}`);
-      setOrderId('');setPaidOrder(null);setAccepted(false);setMessage('Możesz złożyć kolejne zamówienie.');
-    } catch {setMessage('Przeglądarka blokuje zapis nowego zamówienia. Zezwól na pamięć sesji.');}
+    } catch { /* Server-side order invariant does not depend on browser storage. */ }
+    setOrderId('');setPaidOrder(null);setAccepted(false);setMessage('Możesz złożyć kolejne zamówienie.');
   }
   async function buy() {
-    if(!offer||!accepted||busy||paidOrder)return;
+    if(!offer||!accepted||busy||loading||paidOrder)return;
     setBusy(true);setMessage('');
     try {
-      // A lost HTTP response / reload must reuse the same durable request ID.
-      // Refuse checkout if persistence is unavailable; do not silently generate a new key.
+      // Best-effort retry hint. The durable server invariant also protects new
+      // tabs/devices and browsers where sessionStorage is missing or evicted.
       const key=`sc19:request:${companyId}:${offer.id}:${offer.termsRevision}`;
-      let requestId=sessionStorage.getItem(key);
-      if(!requestId){requestId=crypto.randomUUID();sessionStorage.setItem(key,requestId);}
+      let requestId=requestIds.get(key);
+      try {requestId ??= sessionStorage.getItem(key) ?? undefined;} catch { /* optional */ }
+      requestId ??= crypto.randomUUID();requestIds.set(key,requestId);
+      try {sessionStorage.setItem(key,requestId);} catch { /* optional */ }
       const response=await fetch('/api/billing/checkout',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId})});
-      if(!response.ok)throw Error(); const data=await response.json();
-      setOrderId(data.orderId);sessionStorage.setItem(`sc19:order:${companyId}`,data.orderId);
+      const data=await response.json();
+      if(!response.ok){
+        if(data.error==='SC19_PAYMENT_OFFER_UNAVAILABLE'){
+          setMessage('Oferta wygasła lub zmieniły się jej warunki. Odświeżamy dostępne oferty. Sprawdź je i zaakceptuj ponownie.');
+          await loadOffers();return;
+        }
+        if(data.error==='SC19_PAYMENT_PURCHASE_PENDING'){
+          setMessage('Firma ma już nierozliczone zamówienie z innymi warunkami. Dokończ je lub skontaktuj się z obsługą przed kolejnym zakupem.');return;
+        }
+        throw Error();
+      }
+      setOrderId(data.orderId);
+      try {sessionStorage.setItem(`sc19:order:${companyId}`,data.orderId);} catch { /* optional */ }
       if(data.status==='paid'){await status(data.orderId);return;}
       window.location.assign(data.checkoutUrl);
-    } catch {setMessage('Nie udało się otworzyć płatności. Ponowienie użyje tego samego zamówienia. Jeśli przeglądarka blokuje pamięć sesji, zezwól na nią.');}
+    } catch {setMessage('Nie udało się otworzyć płatności. Ponów próbę — serwer sprawdzi istniejące zamówienie.');}
     finally {setBusy(false);}
   }
   return <section aria-busy={loading||busy}>
@@ -67,10 +89,11 @@ export default function Checkout({companyId}: {companyId:string}) {
         <details open><summary>Warunki oferty · {offer.termsRevision}</summary><p style={{whiteSpace:'pre-wrap'}}>{offer.termsText}</p></details>
         <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={accepted} disabled={busy}
           onChange={e=>setAccepted(e.target.checked)}/> Akceptuję powyższe warunki oferty.</label>
-        <button type="button" disabled={!accepted||busy||!!paidOrder||offer.validUntilMs<=Date.now()} onClick={buy}>
+        <button type="button" disabled={!accepted||busy||!!paidOrder} onClick={buy}>
           {busy?'Przetwarzam…':`Zamawiam i płacę ${pln(offer.amountMinor)}`}</button></>}
     </> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
     {message&&<p role="status" aria-live="polite">{message}</p>}
+    <button type="button" disabled={busy||loading} onClick={()=>{setMessage('');return loadOffers();}}>Odśwież oferty</button>
     {paidOrder&&<button type="button" disabled={busy} onClick={nextPurchase}>Kup kolejny pakiet</button>}
     {orderId&&<button type="button" disabled={busy} onClick={()=>status()}>Sprawdź status zamówienia</button>}
     <p>Powrót ze strony operatora nie jest potwierdzeniem zapłaty. Status sprawdzamy na serwerze.</p>
