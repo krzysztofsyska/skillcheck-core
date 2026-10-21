@@ -2,7 +2,7 @@
 
 Date: 2026-10-21. TASK: SC-019-MVP-A2-FORWARD-MIGRATIONS. Contract: [#93](https://github.com/krzysztofsyska/skillcheck-core/issues/93), parent [#91](https://github.com/krzysztofsyska/skillcheck-core/issues/91). LEVEL: L3. SCOPE: BACKEND. PRODUCTION_APPROVAL: NO.
 
-Branch: `feat/sc19-forward-migrations-20261021`. Base: `bcc9a200a8a082c13fa3796e9375b37e4b520c8d` on `integration`. Exact final HEAD, CI and independent code-review receipts belong in the PR; the architecture receipts below are separate.
+Branch: `feat/sc19-forward-migrations-20261021`. Current integration base: `8aa748368953c4979cb9c23af9f93fd636dd23ca`, incorporating #154 (`3713a0c44b7579172bb613c6dba99a6403164646`) and its documentation-only closeout #157 after the original `bcc9a200a8a082c13fa3796e9375b37e4b520c8d` design base. The #157 SC-019 observations describe the earlier HEAD; the corrected combined-chain tests below address that handoff. Exact final HEAD, CI and independent code-review receipts belong in the PR; the architecture receipts below are separate.
 
 ## Delivery and activation boundary
 
@@ -27,7 +27,7 @@ Every source file is identified by commit, path and SHA256 in `tests/fixtures/sc
 
 The order-bearing fixtures respect the payment prototype's historical install guard. They are known blocked precursor states whose old R4 catalog no longer describes the extra storage. Only their exact pinned catalog is accepted, and normalization to R5/R6 is atomic. No product RPC is called during that transition. This does not imply that either precursor exists in Production.
 
-The normal fresh-install test also replays **all current checked-in migrations**, rather than merely loading a selected prototype. Historical prototype tests use the explicit R4 fixture boundary; the new full-chain test passes `throughMigration: null`.
+The normal fresh-install test also replays **all current checked-in migrations**, rather than merely loading a selected prototype. Historical prototype tests use the explicit R4 fixture boundary; full-chain tests pass `throughMigration: null`. The two full-chain API ACL tests inherited from #154 now use native PG16/17 as well, retaining their independent public table/column allowlist. Installed PGlite is PG18.3 and remains limited to the historical fixtures, since this migration explicitly supports major 16/17.
 
 ### Final immutable inventory
 
@@ -36,11 +36,11 @@ The normal fresh-install test also replays **all current checked-in migrations**
 | Legacy | 82 | `e99342b97cf10c9f19c5351f423d30ff4dadaa18294465ff976d926d2cc6a07b` |
 | R4-VOICE | 96 | `6fd4900f85f0a1b6f4aad11a9246722cf79e857ea6bc999f7249151f20871061` |
 
-`known_tables` retains SC-010's table-list semantics. Views are also protected by the complete catalog signature and relation fingerprint. R6 is an immutable literal recorded in source, never a signature learned from an arbitrary target. The four preview/manifest/authorization/schedule functions use statically reviewed R6 bodies and preserve the voice adapter refusal. Historical R4/R4-VOICE/R5 records remain unchanged.
+`known_tables` retains SC-010's table-list semantics. Views are also covered by the catalog checks, including relation options, definitions and rewrite-rule definitions/enabled state. R6 is an immutable literal recorded in source, never a signature learned from an arbitrary target. The four preview/manifest/authorization/schedule functions use statically reviewed R6 bodies and preserve the voice adapter refusal. Historical R4/R4-VOICE/R5 records remain unchanged.
 
 ## Failure conditions and data integrity
 
-The migration accepts PostgreSQL major 16 or 17 only. It checks a source-derived catalog signature plus routine bodies/owners, indexes and predicates, trigger state, relation owner/RLS, policies and non-owned ACL. PostgreSQL 17's owner `MAINTAIN` privilege has an explicitly pinned ACL fingerprint; it is not silently discarded. Unexpected objects, partial schemas or privilege changes fail closed.
+The migration accepts PostgreSQL major 16 or 17 only. It checks a source-derived catalog signature plus routine bodies/owners, indexes and predicates, trigger state, relation owner/RLS/options, view and rewrite-rule definitions/state, policies and non-owned ACL. PostgreSQL 17's owner `MAINTAIN` privilege has an explicitly pinned ACL fingerprint; it is not silently discarded. Unexpected objects, partial schemas or privilege changes fail closed.
 
 Additional checks cover historical baseline **row data**, validated/enabled internal FK enforcement including referenced relations outside `public`/`private`, safe worker/browser role attributes and memberships, and the absence of active analyses without credit reservations. Owned accounting ACLs are reset by enumerating actual table, column and function grantees, including grant options and hostile default grants. Only the accepted public catalog and authenticated claim/balance RPC grants are restored. Unrelated privileges and global defaults are preserved.
 
@@ -67,7 +67,8 @@ SC19_TEST_PG_MAJOR=17 \
 PG_DUMP_BIN=/usr/lib/postgresql/17/bin/pg_dump \
 PG_RESTORE_BIN=/usr/lib/postgresql/17/bin/pg_restore \
 node --experimental-strip-types --test --test-concurrency=1 \
-  tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs
+  tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
+  tests/data-api-grants.test.mjs
 ```
 
 Use major/client 16 for the other matrix case. Tests create and drop their own random databases, with independent backend connections and synthetic identities/providers only.
@@ -76,7 +77,7 @@ Coverage includes six exact source states and complete-chain installation; fresh
 
 Legacy recovery uses real `pg_dump` → a new database → `pg_restore`, proves the restored candidate is present, then replays the independently signed ledger to erase the candidate again. It verifies accounting, the second company and repeat replay. The voice case verifies signed purge/replay, unknown voice-adapter refusal and exactly-once release of the existing voice reservation. A separate real terminal R4 purge proves that unsupported old signed history is refused and retained.
 
-Local receipts and final exact-HEAD GitHub evidence are recorded in the PR. Required additional checks are `npm run typecheck`, `npm run build`, existing SC-019 PostgreSQL16/core/HTTP/component regressions and built Next route tests. No production/provider E2E is claimed.
+The corrected local matrix passed 99 tests per major, with zero failures and skips: 77 tests use the native PostgreSQL service (75 migration/recovery cases and two full-chain API replays), while 22 are historical PGlite API profiles. These results are separate from final exact-HEAD GitHub CI and independent review, whose receipts are recorded in the PR. Required additional checks are `npm run typecheck`, `npm run build`, existing SC-019 PostgreSQL16/core/HTTP/component regressions and built Next route tests. No production/provider E2E is claimed.
 
 ## Independent architecture review
 
@@ -84,13 +85,15 @@ Local receipts and final exact-HEAD GitHub evidence are recorded in the PR. Requ
 - Fresh-policy addendum: `docs/sc19-migrations-addendum.md`, SHA256 `b7ae99a4e8045e0b3c9cde320dfd30994a26260787c7a22c9572dd0169b2cb53`, same independent reviewer: PASS before the correction; [reconciliation receipt](https://github.com/krzysztofsyska/skillcheck-core/issues/93#issuecomment-6312236824).
 - Final code review is separate and must name the actual HEAD and integration BASE, inspect the migration/tests and use native database evidence. Any fix invalidates the prior exact-HEAD verdict until re-reviewed.
 
+The first independent code review found P1: changing an existing view to `security_invoker=false` escaped the initial extra fingerprints and permitted a cross-tenant read. The reviewer reproduced it on both native PostgreSQL majors. The correction adds literal source-derived relation options and complete view/rewrite fingerprints, with negative tests for changed security options, view body and rewrite rules. Existing SC-010 historical signatures are not edited; the extra preflight/postflight contract provides the missing checks. This finding and its final closure are recorded in the PR.
+
 ## Parallel PR #154 and rollout sequencing
 
-[PR #154](https://github.com/krzysztofsyska/skillcheck-core/pull/154) at `1d96da6c8993031c3d04c7b8fa4b7e2bc6df5b4f` is a separate service-role ACL task. Its migration `20261021084245_explicit_data_api_table_acl.sql` sorts before this SC-019 migration. No file or branch of that PR is changed here.
+[PR #154](https://github.com/krzysztofsyska/skillcheck-core/pull/154), HEAD `1d96da6c8993031c3d04c7b8fa4b7e2bc6df5b4f`, merged as `3713a0c44b7579172bb613c6dba99a6403164646` during this task. Its migration `20261021084245_explicit_data_api_table_acl.sql` sorts before this SC-019 migration. Its accepted migration and implementation are preserved. Only its two full-chain test harnesses are integrated with the native migration requirement.
 
-A disposable combined-chain rehearsal on PG16/17 confirmed the canonical profile in which `service_role` is absent: #154 is a no-op, and R4 → #154 → R6 retains the expected output and empty fresh policy. This proves neither a real Supabase ACL profile nor general compatibility with every platform grant. Additional schema/function/private grants still correctly fail the strict source contract.
+A disposable combined-chain rehearsal on PG16/17 confirmed both controlled API fixtures: one without `service_role`, and one with the explicit public-table default grants repaired by #154 before SC-019. R4 → #154 → R6 retains the expected output and empty fresh policy. These synthetic fixtures are not observations of a real Supabase ACL profile or proof of compatibility with every platform grant. Additional schema/function/private grants still correctly fail the strict source contract.
 
-If #154 lands first, refresh/rebase before merging this PR and rerun combined checks on the real integration base. Its two tests labeled full replay currently use `setupRankingDatabase(db)` without a boundary; integration must explicitly reconcile them with this helper's historical default (`throughMigration: null` for the intended full chain). Do not call an R4-only fixture a full replay. No merge may rely on the earlier BASE receipt after it changes.
+The new integration base was merged into this task branch without rewriting the other PR's branch. Its two tests labeled full replay now explicitly use `throughMigration: null`, native PG16/17, mandatory local database configuration and the same API contract assertions. Checks supplies its PostgreSQL16 service; the dedicated migration matrix repeats the API tests on both majors. `MAINTAIN` is checked where PostgreSQL supports it. No merge may rely on an earlier BASE receipt after it changes.
 
 ## Next bounded stage
 

@@ -89,6 +89,10 @@ test('SC-019 migration is exercised by the complete current migration chain', as
 const driftCases = [
   ['unreviewed table', 'r4_legacy', 'create table public.unreviewed_candidate_copy(candidate_id uuid)'],
   ['unreviewed view', 'r4_legacy', 'create view public.unreviewed_candidates as select id from public.candidates'],
+  ['changed reviewed view body', 'r4_legacy', `create or replace view public.latest_behavior_assessments with (security_invoker=true) as
+    select distinct on (company_id,application_id,area_key) * from public.behavior_assessment_entries where false
+    order by company_id,application_id,area_key,version desc`, 'rewrites'],
+  ['extra view rewrite rule', 'r4_legacy', 'create rule sc19_unreviewed_update as on update to public.latest_behavior_assessments do instead nothing', 'rewrites'],
   ['incoming foreign key from a third schema', 'r4_legacy', 'create schema unrelated; create table unrelated.incoming(candidate_id uuid references public.candidates(id))'],
   ['unknown billing column', 'r5_legacy', 'alter table private.sc19_balances add column unreviewed_note text'],
   ['partial credit schema', 'r5_legacy', 'drop table private.sc19_trial_approvals'],
@@ -102,8 +106,48 @@ const driftCases = [
   ['extra SC-010 column privilege', 'r4_legacy', 'grant select(candidate_ids) on private.erasure_executions to authenticated'],
   ['unsafe schema CREATE grant', 'r4_legacy', 'grant create on schema private to authenticated'],
 ];
-for (const [label, state, sql] of driftCases) test(`SC-019 migration refuses ${label} atomically`, async t => {
-  const env = await boot(t, state); await env.db.query(sql); await assertRefusal(env);
+for (const [label, state, sql, fingerprint] of driftCases) test(`SC-019 migration refuses ${label} atomically`, async t => {
+  const env = await boot(t, state), before = fingerprint ? await catalogSnapshot(env.db) : null;
+  await env.db.query(sql);
+  if (fingerprint) assert.notEqual((await catalogSnapshot(env.db))[fingerprint], before[fingerprint]);
+  await assertRefusal(env);
+});
+
+test('SC-019 migration refuses owner-rights views and accepts the canonical two-tenant boundary', async t => {
+  const env = await boot(t), { db, h } = env, first = await h.seed(), second = await h.seed(users.otherOwner);
+  for (const f of [first, second]) {
+    await h.asUser(f.owner);
+    await db.query("update public.positions set required_behaviors=array['Odpowiedzialność: Standardowy'] where id=$1", [f.position.id]);
+    const stamp = (await db.query('select updated_at::text value from public.positions where id=$1', [f.position.id])).rows[0].value;
+    await db.query('select public.save_behavior_assessment($1,$2,$3,$4,$5,$6,$7)',
+      [f.application.id, 'responsibility', 'meets', 'SYNTHETIC tenant-scoped assessment', 0, stamp, f.position.id]);
+  }
+  await h.asUser(first.owner);
+  assert.deepEqual((await db.query('select company_id from public.latest_behavior_assessments')).rows, [{ company_id: first.companyId }]);
+  const before = await catalogSnapshot(db);
+  await db.query('alter view public.latest_behavior_assessments set (security_invoker=false)');
+  const changed = await catalogSnapshot(db);
+  assert.equal(changed.sc010_signature, before.sc010_signature, 'SC-010 relation layout alone does not capture view security');
+  assert.notEqual(changed.relations, before.relations, 'Reviewed relation options close the security-invoker gap');
+  await h.asUser(first.owner);
+  assert.deepEqual(new Set((await db.query('select company_id from public.latest_behavior_assessments')).rows.map(row => row.company_id)),
+    new Set([first.companyId, second.companyId]), 'Unsafe source really exposes the second tenant');
+  await assertRefusal(env);
+  await db.query('alter view public.latest_behavior_assessments set (security_invoker=true)');
+  await applyMigration(db); await assertR6(db);
+  await h.asUser(first.owner);
+  assert.deepEqual((await db.query('select company_id from public.latest_behavior_assessments')).rows, [{ company_id: first.companyId }]);
+});
+
+test('SC-019 migration fingerprints rewrite firing mode and refuses an unreviewed rule', async t => {
+  const env = await boot(t), { db } = env;
+  await db.query('create rule sc19_unreviewed_update as on update to public.candidates do instead nothing');
+  const before = await catalogSnapshot(db);
+  await db.query('alter table public.candidates enable replica rule sc19_unreviewed_update');
+  const after = await catalogSnapshot(db);
+  assert.notEqual(after.rewrites, before.rewrites, 'Rule ev_enabled must be part of the committed fingerprint contract');
+  assert.deepEqual({ ...after, rewrites: before.rewrites }, before, 'Only rewrite firing mode changed');
+  await assertRefusal(env);
 });
 
 test('SC-019 migration refuses a disabled internal payment FK trigger', async t => {

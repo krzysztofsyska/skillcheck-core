@@ -9,16 +9,19 @@ on:
       - 'docs/sc19-migrations*.md'
       - 'lib/sc19-payment*.ts'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/data-api-grants.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
       - 'tests/helpers/sc19-migration-fixture.mjs'
       - 'tests/helpers/screening-ranking-fixture.mjs'
       - 'tests/helpers/voice-retention-fixture.mjs'
       - '.github/workflows/sc19-migrations.yml'
+      - '.github/workflows/checks.yml'
   push:
     branches: [integration]
     paths:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/data-api-grants.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
       - 'tests/helpers/sc19-migration-fixture.mjs'
       - '.github/workflows/sc19-migrations.yml'
@@ -63,15 +66,42 @@ jobs:
         run: |
           if [ ! -x "/usr/lib/postgresql/$PG_MAJOR/bin/pg_dump" ]; then
             sudo apt-get update
+            if ! apt-cache show "postgresql-client-$PG_MAJOR" >/dev/null 2>&1; then
+              # Official PGDG repository; Ubuntu's default packages may only
+              # include PG16. Install clients, never another database server.
+              sudo install -d /usr/share/postgresql-common/pgdg
+              sudo curl --fail --silent --show-error \
+                -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+                https://www.postgresql.org/media/keys/ACCC4CF8.asc
+              . /etc/os-release
+              printf '%s\n' "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main" \
+                | sudo tee /etc/apt/sources.list.d/sc19-pgdg.list >/dev/null
+              sudo apt-get update
+            fi
             sudo apt-get install --yes --no-install-recommends "postgresql-client-$PG_MAJOR"
           fi
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_dump" --version
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_restore" --version
       - name: Real migration, concurrency, ACL, purge and native restore
-        run: node --experimental-strip-types --test --test-concurrency=1 tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs
+        run: |
+          set +e
+          node --experimental-strip-types --test --test-concurrency=1 \
+            tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
+            tests/data-api-grants.test.mjs > sc19-migrations.log 2>&1
+          test_result=$?
+          tail -n 250 sc19-migrations.log
+          exit "$test_result"
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
           PG_DUMP_BIN: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_dump
           PG_RESTORE_BIN: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_restore
+      - name: Preserve complete migration test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sc19-migrations-postgres-${{ matrix.postgres }}
+          path: sc19-migrations.log
+          if-no-files-found: warn
+          retention-days: 7
