@@ -7,6 +7,7 @@ import {parse} from "pg-connection-string";
 import {setupRankingDatabase,users} from "./helpers/screening-ranking-fixture.mjs";
 import {behaviorGuideDefinitions} from "../lib/behavior-guide.ts";
 import {getTrustedVoiceTemplate,trustedVoiceTemplateDigest,assertPinnedVoiceQuestions} from "../lib/voice/template-registry.ts";
+import {canonicalVoiceSourceSnapshot} from "../lib/voice/plan-persistence-contract.ts";
 import {buildInterviewPlan} from "../lib/voice/interview-plan.ts";
 import {
   reconstructTrustedVoiceSource,verifyStoredVoicePlan,TrustedSourceError,
@@ -60,10 +61,11 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
   "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
   "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
   "template_version,created_by,retention_policy_version,retention_deadline)",
-  "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,'{}'::jsonb,$10::jsonb,",
+  "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
   "'skillcheck-voice-plan-v1',$11,'synthetic-v1','2030-01-01') returning id"
  ].join(" "),[f.companyId,f.recruitment.id,f.application.id,f.position.id,
   f.analysis_id,f.reviewId,shortlist,expected.sourceHash,expected.planContractHash,
+  JSON.stringify(canonicalVoiceSourceSnapshot(expected.sourceBinding,expected.planSourceFingerprint)),
   JSON.stringify(expected),users.owner])).rows[0].id;
  await t.test("canonical saved envelope verifies with unchanged source",async()=>{
   const result=await verifyStoredVoicePlan(db,plan);
@@ -109,6 +111,40 @@ test("SC-012-B reconstructs source from live trusted DB and rejects stale or alt
   await assert.rejects(verifyStoredVoicePlan(db,plan),
     e=>e instanceof TrustedSourceError&&e.code==="STALE");
  });
+});
+
+test("SC-012-B PG SQLSTATE conflicts produce a safe domain error after rollback",async()=>{
+  // An isolated fake PG client exercises both preflights without an external DB.
+  const companyId=randomUUID(),applicationId=randomUUID(),planId=randomUUID();
+  const selector={companyId,applicationId,analysisId:randomUUID(),
+    reviewId:randomUUID(),shortlistEntryId:randomUUID()};
+  for(const code of ["55P03","40P01","40001"]){
+    for(const operation of ["reconstruct","verify"]){
+      const calls=[];
+      const mock={
+        async query(sql){
+          calls.push(sql);
+          if(sql==="begin"||sql==="rollback") return {rows:[]};
+          if(sql.includes("from public.voice_plan_versions where id=$1") &&
+            !sql.includes("for share nowait"))
+            return {rows:[{company_id:companyId,application_id:applicationId}]};
+          if(sql.includes("pg_advisory_xact_lock"))
+            throw Object.assign(new Error("synthetic driver details"),{code});
+          throw Error("Unexpected synthetic query: "+sql);
+        },
+      };
+      const run=operation==="reconstruct"
+        ? reconstructTrustedVoiceSource(mock,selector)
+        : verifyStoredVoicePlan(mock,planId);
+      await assert.rejects(run,e=>
+        e instanceof TrustedSourceError &&
+        e.code==="CONFLICT" &&
+        e.message==="VOICE_TRUSTED_SOURCE_CONFLICT");
+      assert.equal(calls[0],"begin");
+      assert.equal(calls.at(-1),"rollback");
+      assert.ok(!calls.includes("commit"),"failure must not commit");
+    }
+  }
 });
 
 test("SC-012-B template registry only permits explicitly versioned, pinned templates",()=>{
