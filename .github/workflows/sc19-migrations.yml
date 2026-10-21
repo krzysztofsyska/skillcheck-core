@@ -89,6 +89,7 @@ jobs:
           set +e
           node --experimental-strip-types --test --test-concurrency=1 \
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
+            tests/sc-019-migrations-mvp-e2e.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             > sc19-migrations.log 2>&1
           test_result=$?
@@ -108,3 +109,53 @@ jobs:
           path: sc19-migrations.log
           if-no-files-found: warn
           retention-days: 7
+  production-history:
+    name: Production history / PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Disposable native cluster with the observed pg_cron dependency
+        env:
+          PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          docker build --build-arg PG_MAJOR="$PG_MAJOR" -t sc19-rehearsal -f tests/fixtures/sc19-rehearsal.Dockerfile tests/fixtures
+          docker run -d --name sc19-rehearsal -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_rehearsal \
+            sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_production_rehearsal
+          for attempt in $(seq 1 30); do
+            if docker exec sc19-rehearsal pg_isready -U postgres -d sc19_production_rehearsal; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Rehearse exact observed schema history, pending migrations and existing synthetic data
+        env:
+          SC19_REHEARSAL_DISPOSABLE: 'yes'
+          SC19_REHEARSAL_DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:55432/sc19_production_rehearsal
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          set -o pipefail
+          node --test tests/sc-019-migrations-production-history.test.mjs 2>&1 | tee sc19-production-history.log
+      - name: Preserve rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sc19-production-history-postgres-${{ matrix.postgres }}
+          path: sc19-production-history.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove only this job's disposable container
+        if: always()
+        run: docker rm -f sc19-rehearsal || true
