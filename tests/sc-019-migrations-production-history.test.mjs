@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
-import { createRankingHarness, users } from './helpers/screening-ranking-fixture.mjs';
-import { assertR6, accountingSnapshot } from './helpers/sc19-migration-fixture.mjs';
+import { createRankingHarness, setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
+import { assertR6, accountingSnapshot, catalogSnapshot, migrationManifest } from './helpers/sc19-migration-fixture.mjs';
 
 // An isolated CI-owned cluster with real pg_cron, never a production connection.
 // This replays observed application migration history, not a Supabase platform dump.
@@ -23,6 +23,7 @@ test('observed production history + pending chain preserves completed synthetic 
     alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
     alter default privileges in schema public grant all on sequences to anon,authenticated,service_role;
     alter default privileges in schema public grant execute on functions to anon,authenticated,service_role;
+    grant usage on schema public to postgres,anon,authenticated,service_role;
     create schema auth; create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     grant usage on schema auth to anon,authenticated;
@@ -31,12 +32,19 @@ test('observed production history + pending chain preserves completed synthetic 
   assert.equal(history.length,19);
   for (const entry of history) {
     await db.query(entry.statements.join(';\n') + ';');
+    if(entry.name==='screening_worker_claim_payload') {
+      // The hosted platform's redundant grantor row was observed read-only.
+      // It grants administration, but neither SET nor inherited worker access.
+      await db.query(`create role supabase_admin superuser nologin;
+        grant screening_worker to postgres with admin true, inherit false, set false granted by supabase_admin;`);
+    }
     t.diagnostic(`replayed observed ${entry.version} ${entry.name}`);
   }
   assert.equal((await db.query("select count(*)::int n from pg_extension where extname='pg_cron'")).rows[0].n,1);
   assert.equal((await db.query('select count(*)::int n from cron.job')).rows[0].n,0,'No scheduled destructive job');
   const membership=(await db.query(`select inherit_option,set_option from pg_auth_members where roleid='screening_worker'::regrole and member='postgres'::regrole`)).rows;
   assert.ok(membership.some(r=>r.set_option && !r.inherit_option));
+  assert.ok(membership.some(r=>!r.set_option && !r.inherit_option));
   for(const id of Object.values(users)) await db.query('insert into auth.users values($1)',[id]);
   const h=createRankingHarness(db), f=await h.seed();
   const started=await h.start(f), claimed=await h.claim(started);
@@ -52,7 +60,25 @@ test('observed production history + pending chain preserves completed synthetic 
   assert.equal(pending.length,13);
   assert.equal(pending.at(-2),'20261021084245_explicit_data_api_table_acl.sql');
   assert.equal(pending.at(-1),'20261021084732_sc019_credits_payments_inventory.sql');
-  for(const name of pending) { await db.query(await readFile(new URL(name,dir),'utf8')); t.diagnostic(`applied pending ${name}`); }
+  for(const name of pending) {
+    if(name===pending.at(-1)) {
+      const observed=await catalogSnapshot(db), manifest=await migrationManifest();
+      const expected=manifest.states.r4_legacy['pg'+process.env.SC19_TEST_PG_MAJOR];
+      t.diagnostic(JSON.stringify({observed,expected,mismatches:Object.keys(expected).filter(k=>expected[k]!==observed[k])}));
+      await db.query('create database sc19_reference');
+      const referenceUrl=new URL(url); referenceUrl.pathname='/sc19_reference';
+      const reference=new pg.Client({connectionString:referenceUrl.href}); await reference.connect(); t.after(()=>reference.end());
+      reference.exec=sql=>reference.query(sql);
+      await setupRankingDatabase(reference,{throughMigration:pending.at(-2)});
+      await reference.query("set search_path=''");
+      for(const [kind,sql] of Object.entries(manifest.queries)) {
+        const real=(await db.query(sql)).rows[0].manifest, baseline=(await reference.query(sql)).rows[0].manifest;
+        const baselineMap=new Map(baseline);
+        t.diagnostic(JSON.stringify({kind,differences:real.filter(([key,value])=>JSON.stringify(value)!==JSON.stringify(baselineMap.get(key))).map(([key,value])=>({key,observed:value,expected:baselineMap.get(key)}))}));
+      }
+    }
+    await db.query(await readFile(new URL(name,dir),'utf8')); t.diagnostic(`applied pending ${name}`);
+  }
   assert.deepEqual(await snapshot(),before,'No existing application data rewritten or removed');
   await assertR6(db);
   for(const [table,rows] of Object.entries(await accountingSnapshot(db))) assert.deepEqual(rows,[],`No commercial activation or retrospective billing: ${table}`);

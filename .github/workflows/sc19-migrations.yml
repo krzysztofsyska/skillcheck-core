@@ -12,6 +12,8 @@ on:
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
+      - 'tests/fixtures/sc19-production-history.json'
+      - 'tests/fixtures/sc19-rehearsal.Dockerfile'
       - 'tests/helpers/sc19-migration-fixture.mjs'
       - 'tests/helpers/screening-ranking-fixture.mjs'
       - 'tests/helpers/voice-retention-fixture.mjs'
@@ -25,6 +27,8 @@ on:
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
+      - 'tests/fixtures/sc19-production-history.json'
+      - 'tests/fixtures/sc19-rehearsal.Dockerfile'
       - 'tests/helpers/sc19-migration-fixture.mjs'
       - '.github/workflows/sc19-migrations.yml'
 permissions:
