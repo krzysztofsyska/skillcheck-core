@@ -11,7 +11,7 @@ const knownOffer = () => ({ id: 'preselection-v1', revision: 'revision-v1', plan
   approved: true, amountMinor: 12345, currency: 'PLN', credits: 12, termsRevision: 'terms-v1', validUntilMs: Date.now() + 3_600_000 });
 function harness(config = {}) {
   const state = { user: id(2), access: { owner: true, verified: true }, offer: knownOffer(),
-    orders: new Map(), grants: new Map(), credits: new Map(), providerSessions: new Map(),
+    orders: new Map(), requests: new Map(), grants: new Map(), credits: new Map(), providerSessions: new Map(),
     createCalls: [], lookupCalls: [], payment: null, authenticated: true, failSave: false, failProvider: false,
     failLookup: false, reads: 0, verifications: 0, url: 'https://pay.fixture.invalid/session',
     sessionScope: scope, sessionAmountMinor: null, sessionCurrency: 'PLN', sessionPaymentKind: 'one_time' };
@@ -21,14 +21,16 @@ function harness(config = {}) {
     const wait = tail;
     tail = new Promise(resolve => { release = resolve; });
     await wait;
-    const before = structuredClone({ orders: state.orders, grants: state.grants, credits: state.credits });
+    const before = structuredClone({ orders: state.orders, requests: state.requests, grants: state.grants, credits: state.credits });
     const tx = {
       async companyAccess(company, user) {
         state.reads++;
         return company === id(1) && user === id(2) ? { ...state.access } : { owner: false, verified: false };
       },
       async offer(key) { return key === state.offer?.id ? structuredClone(state.offer) : null; },
-      async orderByRequest(company, rid) { return structuredClone([...state.orders.values()].find(o => o.companyId === company && o.requestId === rid) ?? null); },
+      async orderByRequest(company, rid) { return structuredClone(state.orders.get(state.requests.get(`${company}:${rid}`)) ?? null); },
+      async unresolvedOrder(company) { return structuredClone([...state.orders.values()].find(o => o.companyId === company && o.status === 'awaiting_payment') ?? null); },
+      async bindRequest(company, rid, oid) { const key = `${company}:${rid}`; if(state.requests.has(key))throw Error('unique request');state.requests.set(key,oid); },
       async order(key) { return structuredClone(state.orders.get(key) ?? null); },
       async insertOrder(order) {
         if ([...state.orders.values()].some(o => o.companyId === order.companyId && o.requestId === order.requestId)) throw Error('unique request');
@@ -370,4 +372,49 @@ test('cross-session second payment needs refund review, never additional credits
   assert.equal(h.state.credits.get(id(1)), 12); assert.equal(h.state.grants.size, 1);
   h.state.payment.paymentId = 'payment-1';
   await rejects(h.notify(), 'SC19_PAYMENT_ORDER_MISMATCH');
+});
+
+test('lost provider response and fresh request IDs recover one intent, including alias replay after paid', async () => {
+  const h=harness();h.state.failProvider=true;
+  await assert.rejects(h.service.checkout(request()),/timeout/);
+  h.state.failProvider=false;
+  const fresh=request({requestId:id(11)});
+  const hosted=await h.recreate({}).checkout(fresh);
+  assert.equal(h.state.orders.size,1);assert.equal(h.state.providerSessions.size,1);
+  assert.equal(new Set(h.state.createCalls.map(c=>c.key)).size,1);
+  h.state.payment={eventId:'event-recovery',orderId:hosted.orderId,sessionId:hosted.sessionId,paymentId:'payment-recovery',scope,amountMinor:12345,currency:'PLN',status:'paid'};
+  await h.notify();
+  for(const input of [request(),fresh])assert.deepEqual(await h.recreate({}).checkout(input),{orderId:hosted.orderId,paid:true});
+  assert.equal(h.state.orders.size,1);
+  const next=await h.service.checkout(request({requestId:id(12)}));
+  assert.notEqual(next.orderId,hosted.orderId);assert.equal(h.state.orders.size,2);
+});
+
+test('parallel fresh request IDs select one unresolved purchase and persist every retry alias',async()=>{
+  const h=harness();
+  const results=await Promise.all(Array.from({length:8},(_,i)=>h.service.checkout(request({requestId:id(20+i)}))));
+  assert.equal(new Set(results.map(r=>r.orderId)).size,1);
+  assert.equal(h.state.orders.size,1);assert.equal(h.state.providerSessions.size,1);assert.equal(h.state.requests.size,8);
+});
+
+test('unresolved purchase cannot be bypassed with another offer, terms, merchant or timeout',async()=>{
+  const h=harness();const hosted=await h.service.checkout(request());
+  for(const input of [request({requestId:id(11),offerId:'different-offer'}),request({requestId:id(12),termsRevision:'different-terms'})])
+    await rejects(h.service.checkout(input),'SC19_PAYMENT_PURCHASE_PENDING');
+  await rejects(h.recreate({scope:{...scope,account:'another-merchant'}}).checkout(request({requestId:id(13)})),'SC19_PAYMENT_PURCHASE_PENDING');
+  const original=h.state.orders.get(hosted.orderId);
+  h.state.orders.set(original.id,{...original,sessionId:null,checkoutUrl:null,checkoutDeadlineMs:1});
+  h.state.providerSessions.clear();
+  await rejects(h.service.checkout(request({requestId:id(14)})),'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+  assert.equal(h.state.orders.size,1);assert.equal(h.state.createCalls.length,1);
+});
+
+test('server expiry rejects a new order at the deadline but preserves an accepted immutable order',async()=>{
+  const h=harness();h.state.offer.validUntilMs=Date.now()-1;
+  await rejects(h.service.checkout(request()),'SC19_PAYMENT_OFFER_UNAVAILABLE');
+  assert.equal(h.state.orders.size,0);
+  h.state.offer.validUntilMs=Date.now()+3600000;
+  const hosted=await h.service.checkout(request());
+  h.state.offer.validUntilMs=1;h.state.offer.active=false;
+  assert.deepEqual(await h.service.checkout(request({requestId:id(11)})),hosted);
 });

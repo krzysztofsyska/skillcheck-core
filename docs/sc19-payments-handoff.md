@@ -105,3 +105,135 @@ PostgreSQL16 is unavailable in the local executor; the dedicated CI service must
 run all three database variants without skips. Full Checks, built Next route
 tests and independent review must pass on the new published HEAD before merge.
 Exact run/SHA receipts belong in the PR; older green CI does not certify this tree.
+
+## 2026-10-21 — checkout corrections after #129
+
+TASK: SC-019-MVP-A2-CHECKOUT-FIXES; PARENT: #91; CONTRACT: #93.
+LEVEL: L3; SCOPE: FULLSTACK; OWNER: ChatGPT / SkillCheck.
+Implementation: Codex / Builder in an isolated worktree; no available Cursor
+session for this new scope. Independent architecture assessment by Codex session
+`/root/sc19_review`: PASS before implementation on integration
+`7cc79a146a65f41ea9f463b514cff6845ec1e159`. Final code review and test receipts
+must name the final HEAD/BASE in the PR; architecture PASS is not code PASS.
+PRODUCTION_APPROVAL: NO. The resolver still returns null.
+
+### A — unresolved purchases, request aliases and lifecycle
+
+One company may have **at most one `awaiting_payment` order**, across all offers,
+providers, accounts and test/live scopes. A PostgreSQL partial unique index
+`sc19_payment_one_unresolved` enforces this durably. The service selects the
+existing order under the established company-first SERIALIZABLE lock order.
+Known request/alias/unresolved uniqueness races get bounded transaction retries;
+provider network calls remain outside retried transactions.
+
+`private.sc19_payment_requests` stores immutable `(company_id, request_id)` →
+`order_id` aliases. The composite FK prevents a cross-company alias. The original
+request and every accepted recovery alias are saved atomically with order
+selection/creation. All aliases remain after settlement: retrying one after
+`paid` returns that order, rather than accidentally starting a second purchase.
+RLS, browser privilege denial and hostile-default ACL cleanup cover the alias
+table as well. This is request deduplication, not another credit ledger.
+
+A fresh request for the same buyer, immutable offer/terms and provider scope
+reuses the original order, economic snapshot, deadline and provider key. A
+conflicting unresolved purchase returns `SC19_PAYMENT_PURCHASE_PENDING` without
+opening a second checkout. A different company has its own slot and request IDs.
+Only independently verified, atomic settlement to `paid` releases the slot;
+a subsequent deliberate request may then purchase again. Old aliases still
+resolve to the old paid order even while the next purchase is pending.
+
+Timeout, lost response, failed/pending notification, elapsed offer/deadline or
+unavailable browser storage **never** release the slot. Existing read-only
+provider reconciliation still applies after the original creation deadline.
+There is deliberately no time-based deletion or cancellation shortcut. A
+provider-confirmed cancellation/absence protocol, safe against a late paid
+notification, is an operational dependency before LIVE; an abandoned unresolved
+order can currently require support. Do not clear aliases or mark an order paid
+to unblock a purchase. No automatic refund or real cancellation is introduced.
+
+### B — one new-checkout gate, separate settlement
+
+The service exposes its snapshotted `checkoutEnabled` result derived from
+`enabled === true`, valid provider/account/mode and LIVE approval. Both HTTP
+offers and checkout consult that same value; no independently computed HTTP
+availability flag exists. Fulfillment still requires valid scope, signature and
+provider truth, but is independent of `enabled` and `liveApproved`. Status reads
+and correctly scoped existing orders remain available for settlement when new
+sales are switched off. Recompose from trusted current configuration per request.
+
+### C — server-authoritative offers and UI
+
+The browser wall clock makes no purchase decision. The server filters the catalog
+and validates new-order expiry and terms inside checkout. An existing order keeps
+its immutable accepted conditions. `SC19_PAYMENT_OFFER_UNAVAILABLE` refreshes the
+catalog, clears acceptance and asks the customer to review/accept again; it never
+automatically retries a purchase. Manual refresh does the same. A missing/empty
+catalog does not show a buy button. Session storage is a best-effort retry hint;
+in-memory reuse helps the UI, while PostgreSQL protects new tabs/devices/restarts.
+
+### Verification contract
+
+Core/HTTP/component tests cover fresh IDs after a lost response, alias replay after
+paid, concurrent fresh IDs, conflict across offer/terms/scope, post-settlement
+repurchase, both directions of client-clock skew, server expiry, empty/refreshed
+catalog, renewed acceptance, blocked session storage and gate parity. Real PG16
+runs against final #92, final #115 and the current credit SQL; it checks distinct
+concurrent requests using independent connections, direct unique-index violation,
+alias FK/immutability/hostile ACLs, same request ID in two companies, rollback,
+replay, immutable economics, owner/KYB revocation and disabled-checkout draining.
+Existing SC-010 refusal remains tested. Typecheck, build, actual Next route/SSR
+checks, current GitHub workflows/check-runs/legacy statuses and final independent
+review remain mandatory. Do not interpret a skipped DB test as PASS.
+
+### Handoff — next stage, still no activation
+
+KONTYNUUJ SKILLCHECK — use skillcheck-orchestrator and skillcheck-builder in the
+current or a new coding session. Repository krzysztofsyska/skillcheck-core,
+contract #93, parent #91. First refresh this correction PR's exact HEAD, merge,
+CI, review and integration base; do not redo merged #115/#129 or overlap pricing
+#137/#149–151/#147. The next implementation step is the reviewed credit/payment
+forward-migration plan with immutable SC-010 inventory, not activating checkout.
+
+Work possible in the repository / disposable local environment:
+1. Inventory actual migration dependencies, credit SQL and four payment tables
+   (offers, orders, requests, grants), their indexes, triggers, FK, RLS and ACL.
+   Design the immutable SC-010 revision for both approved legacy and R4-VOICE
+   chains; never learn a trusted baseline from an arbitrary installed schema.
+   Generate a forward migration via Supabase CLI after architecture review.
+   Keep the existing prototype installation guard until the separately reviewed
+   migration supplies the complete inventory. Test clean install and upgrade
+   from mapped production-equivalent fixtures, rollback/forward repair and
+   erasure/purge/restore. If historical orders exist, fail closed on unresolved
+   duplicates and backfill original request aliases without changing economics.
+2. Extend existing company access and operator verification, preserving immutable
+   legal-entity/NIP/representative attestations, tenant isolation and audited
+   revocation. No self-approval or duplicate FREE claims. Reuse the existing
+   ledger and order receipt for recovery, never grant online-payment credits via
+   a separate manual adjustment bypass.
+3. Once the provider is approved, implement its real adapter: raw signature and
+   timestamp validation, independent canonical payment retrieval, exact account/
+   mode/amount/currency binding, stable idempotency, read-only session lookup and
+   safe terminal cancellation/reconciliation. Add offline contract fixtures first.
+   Do not select a provider or invent its API semantics in this task.
+4. Assemble isolated synthetic E2E: two firms/roles → verification → FREE →
+   approved redaction → screening → human review → ranking/report/quota; then
+   checkout → independently verified settlement → one existing-ledger grant →
+   another analysis. Include expiry, lost responses, different request IDs,
+   double-submit/replay, failure/refund, restart and revoked access. Distinguish
+   mock-provider E2E from an authorized provider sandbox test.
+
+Missing decisions / environmental evidence before real use:
+- Approved provider, merchant/legal entity and account ownership; price, credits,
+  gross/net/VAT treatment, terms, expiry/rebuy/refund/cancellation rules and legal
+  notices. Illustrative fixtures are not approval.
+- Fresh read-only migration ledger/definition mapping, SC-010 inventory, grants,
+  effective runtime flags and isolated environment identity. Preview is not
+  presumed separate from Production. Secret names/presence and safe agreement
+  checks must not expose values.
+- Reviewed scoped server pool and per-request auth.getUser composition, verified
+  provider test credentials and separately authorized cost/sandbox testing;
+  final SC-005 worker/config/HMAC evidence and real provider E2E where required.
+- Final immutable release manifest, migration/restore rehearsal and rollback
+  that disables NEW purchases but preserves settlement of accepted orders.
+  Separate explicit Production approval precedes main, remote migrations,
+  deployments, secrets/flags or real payments. No sale is LIVE from this fix.

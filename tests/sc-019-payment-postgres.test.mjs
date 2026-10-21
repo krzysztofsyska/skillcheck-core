@@ -35,7 +35,7 @@ const fixture=`
  create function private.touch_updated_at() returns trigger language plpgsql set search_path='' as $$begin new.updated_at=now();return new;end$$;
 `;
 const untrustedRoles=['sc19_payment_global_untrusted','sc19_payment_schema_untrusted'];
-const paymentTables=['sc19_payment_offers','sc19_payment_orders','sc19_payment_grants'];
+const paymentTables=['sc19_payment_offers','sc19_payment_orders','sc19_payment_grants','sc19_payment_requests'];
 const creditAcls=async pool=>(await pool.query(`
  select 'table' kind,c.oid::regclass::text name,c.relacl::text acl from pg_class c
  join pg_namespace n on n.oid=c.relnamespace where n.nspname='private'
@@ -118,11 +118,14 @@ for(const dependency of dependencies) test(`PostgreSQL16 payment adapter against
      try {
        await c.query(`set role ${role}`);
        for(const table of paymentTables) {
-         const key=table==='sc19_payment_grants'?'payment_key':'id';
+         const key=table==='sc19_payment_grants'?'payment_key':table==='sc19_payment_requests'?'request_id':'id';
+         const reference=table==='sc19_payment_requests'
+           ? `create table sc19_payment_acl_fixture.forbidden_reference(company_id uuid,request_id uuid,foreign key(company_id,request_id) references private.${table}(company_id,request_id))`
+           : `create table sc19_payment_acl_fixture.forbidden_reference(id ${table==='sc19_payment_orders'?'uuid':'text'} references private.${table}(${key}))`;
          for(const sql of [`select * from private.${table}`,`insert into private.${table} default values`,
            `update private.${table} set ${key}=${key}`,`delete from private.${table}`,
            `truncate private.${table} cascade`,
-           `create table sc19_payment_acl_fixture.forbidden_reference(id ${table==='sc19_payment_orders'?'uuid':'text'} references private.${table}(${key}))`,
+           reference,
            `create trigger forbidden_trigger before insert on private.${table} for each row execute function private.sc19_payment_immutable()`]) {
            await assert.rejects(c.query(sql),e=>e.code==='42501',role+': '+sql);
          }
@@ -133,17 +136,30 @@ for(const dependency of dependencies) test(`PostgreSQL16 payment adapter against
    assert.equal(await count('sc19_payment_offers'),1,'denied TRUNCATE CASCADE preserves the offer');
    assert.deepEqual(await creditAcls(pool),existingAcls);
  });
- let hosted;
- await t.test('parallel checkout returns one durable order and stable provider key',async()=>{
-   const input=request();const results=await Promise.all(Array.from({length:8},()=>runtime().service.checkout(input)));
+ let hosted;const attempts=Array.from({length:8},()=>request());
+ await t.test('parallel checkout with distinct request IDs returns one durable order and stable provider key',async()=>{
+   const results=await Promise.all(attempts.map(input=>runtime().service.checkout(input)));
    assert.equal(new Set(results.map(x=>x.orderId)).size,1);assert.equal(sessions.size,1);
    assert.equal(await count('sc19_payment_orders'),1);hosted=results[0];
+   assert.equal(await count('sc19_payment_requests'),8);
+ });
+ await t.test('database invariant denies direct second pending order and aliases cannot cross companies or mutate',async()=>{
+   await assert.rejects(pool.query(`insert into private.sc19_payment_orders
+     (id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms)
+     select $1,company_id,buyer_id,$2,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms
+     from private.sc19_payment_orders where id=$3`,[randomUUID(),randomUUID(),hosted.orderId]),
+     e=>e.code==='23505'&&e.constraint==='sc19_payment_one_unresolved');
+   await assert.rejects(pool.query('insert into private.sc19_payment_requests values($1,$2,$3,now())',[id(2),randomUUID(),hosted.orderId]),e=>e.code==='23503');
+   await assert.rejects(pool.query('update private.sc19_payment_requests set request_id=$1',[randomUUID()]),/immutable/);
+   await assert.rejects(pool.query('delete from private.sc19_payment_requests'),/immutable/);
  });
  await t.test('parallel webhooks and new event IDs grant once; restart replays safely',async()=>{
    const p=payment(hosted);const result=await Promise.all(Array.from({length:8},(_,i)=>notify({...p,eventId:'evt-'+i},runtime().service)));
    assert.equal(result.filter(x=>x.state==='applied').length,1);assert.equal(await balance(id(1)),12);
    assert.equal((await notify(p,runtime().service)).state,'already_applied');
    assert.equal(await count('sc19_payment_grants'),1);assert.equal(await count('sc19_credit_journal'),1);
+   for(const input of attempts)assert.deepEqual(await runtime().service.checkout(input),{orderId:hosted.orderId,paid:true});
+   assert.equal(await count('sc19_payment_orders'),1,'alias retry after settlement must not create another order');
  });
  await t.test('paid fulfillment preserves the credit contract prohibition on late FREE claims',async()=>{
    const c=await pool.connect();
@@ -159,9 +175,11 @@ for(const dependency of dependencies) test(`PostgreSQL16 payment adapter against
    await assert.rejects(runtime(id(13)).service.checkout(request(id(3))),/FORBIDDEN/);
    assert.equal(await runtime(id(12)).readOrder(id(2),id(12),hosted.orderId),null);
    await assert.rejects(runtime(id(12)).readOrder(id(1),id(12),hosted.orderId),/FORBIDDEN/);
+   const other=await runtime(id(12)).service.checkout(request(id(2),attempts[0].requestId));
+   assert.notEqual(other.orderId,hosted.orderId,'request IDs are scoped to company');
    for(const role of ['anon','authenticated']){
      const c=await pool.connect();try{await c.query(`set role ${role}`);
-       for(const table of ['sc19_payment_offers','sc19_payment_orders','sc19_payment_grants','sc19_balances','sc19_credit_journal'])
+     for(const table of [...paymentTables,'sc19_balances','sc19_credit_journal'])
          await assert.rejects(c.query(`select * from private.${table}`),e=>e.code==='42501');
      }finally{await c.query('reset role');c.release();}
    }
@@ -173,6 +191,7 @@ for(const dependency of dependencies) test(`PostgreSQL16 payment adapter against
    await assert.rejects(pool.query('update private.sc19_payment_orders set amount_minor=1 where id=$1',[hosted.orderId]),/immutable/);
    await assert.rejects(pool.query("update private.sc19_payment_orders set status='awaiting_payment',payment_id=null where id=$1",[hosted.orderId]),/immutable/);
    const next=await service.checkout(request());
+   assert.notEqual(next.orderId,hosted.orderId,'a fresh deliberate request after paid may buy again');
    if((await pool.query("select to_regclass('private.sc19_package_policy') name")).rows[0].name) {
      await pool.query("update private.sc19_package_policy set credits=99 where plan='PRESELEKCJA'");
      assert.equal((await pool.query("select credits from private.sc19_package_policy where plan='PRESELEKCJA'")).rows[0].credits,99);
@@ -198,6 +217,9 @@ for(const dependency of dependencies) test(`PostgreSQL16 payment adapter against
  await t.test('lost checkout response reconciles read-only and drains with checkout disabled',async()=>{
    const input=request();loseResponse=true;await assert.rejects(service.checkout(input),/lost response/);loseResponse=false;
    const row=(await pool.query('select id from private.sc19_payment_orders where request_id=$1',[input.requestId])).rows[0];
+   const before=sessions.size;
+   const retry=await runtime().service.checkout(request());
+   assert.equal(retry.orderId,row.id);assert.equal(sessions.size,before,'new device/request cannot allocate another session');
    const h=sessions.get('sc19:'+row.id);await notify(payment(h),runtime(id(11),{enabled:false}).service);
    assert.equal((await runtime().readOrder(id(1),id(11),row.id)).status,'paid');
  });
@@ -234,6 +256,8 @@ for(const dependency of dependencies) test(`PostgreSQL16 payment adapter against
      assert.equal((await pool.query('select session_id from private.sc19_payment_orders where request_id=$1',[input.requestId])).rows[0].session_id,null);
      if(kind==='owner')await pool.query('update public.companies set owner_id=$2 where id=$1',[id(1),id(11)]);
      else await pool.query("insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,'1234563218','proof-fixture-one')",[id(1)]);
+     const original=(await pool.query('select id from private.sc19_payment_orders where request_id=$1',[input.requestId])).rows[0];
+     await notify(payment(sessions.get('sc19:'+original.id)));
    }
  });
  await t.test('SC-010 guard refuses schema changes without a reviewed inventory revision',async()=>{
