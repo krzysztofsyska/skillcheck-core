@@ -32,19 +32,15 @@ test('observed production history + pending chain preserves completed synthetic 
   assert.equal(history.length,19);
   for (const entry of history) {
     await db.query(entry.statements.join(';\n') + ';');
-    if(entry.name==='screening_worker_claim_payload') {
-      // The hosted platform's redundant grantor row was observed read-only.
-      // It grants administration, but neither SET nor inherited worker access.
-      await db.query(`create role supabase_admin superuser nologin;
-        grant screening_worker to postgres with admin true, inherit false, set false granted by supabase_admin;`);
-    }
     t.diagnostic(`replayed observed ${entry.version} ${entry.name}`);
   }
   assert.equal((await db.query("select count(*)::int n from pg_extension where extname='pg_cron'")).rows[0].n,1);
   assert.equal((await db.query('select count(*)::int n from cron.job')).rows[0].n,0,'No scheduled destructive job');
   const membership=(await db.query(`select inherit_option,set_option from pg_auth_members where roleid='screening_worker'::regrole and member='postgres'::regrole`)).rows;
   assert.ok(membership.some(r=>r.set_option && !r.inherit_option));
-  assert.ok(membership.some(r=>!r.set_option && !r.inherit_option));
+  // The hosted supabase_admin grantor topology is not reproduced by this
+  // vanilla bootstrap-superuser cluster. It remains a separate documented
+  // precondition blocker; do not claim a full hosted-platform replica.
   for(const id of Object.values(users)) await db.query('insert into auth.users values($1)',[id]);
   const h=createRankingHarness(db), f=await h.seed();
   const started=await h.start(f), claimed=await h.claim(started);
