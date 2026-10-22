@@ -16,6 +16,7 @@ on:
       - 'lib/voice/screening-gap-selection.ts'
       - 'tests/voice-plan-atomic-operations.test.mjs'
       - 'tests/voice-trusted-source-verifier.test.mjs'
+      - 'tests/voice-screening-gap-selection.test.mjs'
       - '.github/workflows/sc012b-atomic-integration.yml'
       - 'supabase/migrations/**'
       - 'package.json'
@@ -37,6 +38,7 @@ on:
       - 'lib/voice/screening-gap-selection.ts'
       - 'tests/voice-plan-atomic-operations.test.mjs'
       - 'tests/voice-trusted-source-verifier.test.mjs'
+      - 'tests/voice-screening-gap-selection.test.mjs'
       - '.github/workflows/sc012b-atomic-integration.yml'
       - 'supabase/migrations/**'
       - 'package.json'
@@ -66,6 +68,6 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
-      - run: node --test --test-concurrency=1 tests/voice-plan-atomic-operations.test.mjs tests/voice-trusted-source-verifier.test.mjs
+      - run: node --test --test-concurrency=1 tests/voice-plan-atomic-operations.test.mjs tests/voice-trusted-source-verifier.test.mjs tests/voice-screening-gap-selection.test.mjs
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
