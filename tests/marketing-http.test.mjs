@@ -63,7 +63,23 @@ test('public offer and demo pages respond without an account', async (t) => {
 
 
   // Sales pilot intake is available without enabling paid checkout or AI.
+  assert.ok(homeHrefs.includes('/kalkulator'), 'marketing links to clickable calculator');
+  assert.match(home, /Sprawdź kalkulator pakietów/);
   assert.ok(homeHrefs.includes('/preselekcja'), 'marketing points to PRESELEKCJA pilot');
+
+  const calculatorRoute = await fetch(`${base}/kalkulator`, { redirect: 'manual' });
+  assert.equal(calculatorRoute.status, 307);
+  assert.equal(new URL(calculatorRoute.headers.get('location'), base).pathname, '/kalkulator-demo.html');
+  const calculatorResponse = await fetch(`${base}/kalkulator-demo.html`);
+  assert.equal(calculatorResponse.status, 200);
+  assert.ok(calculatorResponse.headers.get('content-type')?.includes('text/html'));
+  const calculator = await calculatorResponse.text();
+  assert.match(calculator, /Interaktywny podgląd koncepcji/);
+  assert.match(calculator, /data-pack="pre"/);
+  assert.match(calculator, /data-pack="verify"/);
+  assert.match(calculator, /id="volumeSlider"/);
+  assert.match(calculator, /Kup teraz · podgląd/);
+  assert.match(calculator, /nie pobieramy płatności/i);
 
   const orderResponse = await fetch(`${base}/preselekcja`, { redirect: 'manual' });
   assert.equal(orderResponse.status, 200);
