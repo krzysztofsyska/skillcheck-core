@@ -4,7 +4,10 @@ do $$declare role_name text; r record;begin
  foreach role_name in array array['erasure_worker','erasure_ledger_attestor','erasure_restore_attestor','erasure_purge_owner'] loop
  if not exists(select 1 from pg_roles where rolname=role_name) then execute format('create role %I nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls',role_name);end if;
  select * into r from pg_roles where rolname=role_name;
- if r.rolcanlogin or r.rolinherit or r.rolsuper or r.rolcreatedb or r.rolcreaterole or r.rolreplication or r.rolbypassrls or exists(select 1 from pg_auth_members where roleid=r.oid or member=r.oid) then raise exception 'Unsafe erasure role configuration';end if;
+ if r.rolcanlogin or r.rolinherit or r.rolsuper or r.rolcreatedb or r.rolcreaterole or r.rolreplication or r.rolbypassrls or exists(select 1 from pg_auth_members m where (m.roleid=r.oid or m.member=r.oid) and not (current_user='postgres' and current_setting('server_version_num')::integer/10000 in (16,17)
+          and m.roleid=r.oid and exists(select 1 from pg_roles where oid=m.member and rolname='postgres' and not rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and exists(select 1 from pg_roles where oid=m.grantor and rolname='supabase_admin' and oid=10 and rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and m.admin_option and not m.inherit_option and not m.set_option)) then raise exception 'Unsafe erasure role configuration';end if;
  end loop;
 end;$$;
 create table private.erasure_execution_config (
