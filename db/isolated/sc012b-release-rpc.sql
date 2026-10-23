@@ -185,6 +185,7 @@ declare
   v_role text;
   v_plan record;
   v_plan_found boolean := false;
+  v_latest_analysis uuid;
   v_material jsonb;
   v_position_updated timestamptz;
   v_position_found boolean := false;
@@ -237,6 +238,14 @@ begin
   for share nowait;
   v_plan_found:=found;
   if v_plan_found then
+    -- Advisory locks cover this lookup: a forced reanalysis can change the
+    -- latest analysis even when the input fingerprint remains unchanged.
+    select a.id into v_latest_analysis
+    from public.screening_analysis_versions a
+    where a.company_id=v_row.company_id
+      and a.application_id=v_row.application_id
+    order by a.analysis_version desc limit 1
+    for share nowait;
     begin
       -- Position FOR SHARE inside screening_material happens before the
       -- candidate FOR UPDATE below.
@@ -286,7 +295,9 @@ begin
       if sqlerrm is distinct from 'Candidate workflow frozen' then raise; end if;
       v_frozen:=true;
   end;
-  v_stale:=not v_plan_found or v_material is null or not v_position_found
+  v_stale:=not v_plan_found
+    or v_latest_analysis is distinct from v_plan.analysis_id
+    or v_material is null or not v_position_found
     or not v_analysis_found or not v_shortlist_found or not v_review_found
     or (v_material->>'input_fingerprint') is distinct from
        (v_plan.plan_envelope #>> '{sourceBinding,analysisFingerprint}')
