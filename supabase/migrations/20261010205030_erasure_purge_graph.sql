@@ -414,17 +414,14 @@ declare e private.erasure_executions;receipt uuid;c record;deleted_count bigint;
 exception when lock_not_available then
  raise exception using errcode='PT409',message='Erasure source busy';
 end;$$;
-alter function private.erasure_purge_engine(uuid,bigint,boolean) owner to erasure_purge_owner;
 create function private.purge_candidate_erasure(target_request uuid,expected_sequence bigint) returns jsonb
 language sql volatile security definer set search_path='' as $$
  select private.erasure_purge_engine(target_request,expected_sequence,false)
 $$;
-alter function private.purge_candidate_erasure(uuid,bigint) owner to erasure_purge_owner;
 create function private.restore_purge_candidate_erasure(target_request uuid,expected_sequence bigint) returns jsonb
 language sql volatile security definer set search_path='' as $$
  select private.erasure_purge_engine(target_request,expected_sequence,true)
 $$;
-alter function private.restore_purge_candidate_erasure(uuid,bigint) owner to erasure_purge_owner;
 grant select,delete on public.candidate_communication_approvals to erasure_purge_owner;
 create policy erasure_purge_select on public.candidate_communication_approvals for select to erasure_purge_owner using (private.erasure_purge_visible('public.candidate_communication_approvals',to_jsonb(candidate_communication_approvals)));
 create policy erasure_purge_delete on public.candidate_communication_approvals for delete to erasure_purge_owner using (private.erasure_purge_allowed('public.candidate_communication_approvals',to_jsonb(candidate_communication_approvals)));
@@ -546,4 +543,49 @@ grant execute on function private.purge_candidate_erasure(uuid,bigint) to erasur
 grant execute on function private.restore_purge_candidate_erasure(uuid,bigint) to erasure_restore_attestor;
 -- Only trigger invocations may enter this helper; normal tenant/write authorization remains enforced.
 grant execute on function private.erasure_normal_row_guard(text,text,text,jsonb,jsonb) to authenticated,screening_worker,contact_verifier;
+-- PG16+ non-superuser creators retain ADMIN only. Ownership transfers need
+-- SET plus schema CREATE, confined to this transaction and restored below.
+create temporary table sc010_purge_migration_access on commit drop as
+ select (select rolsuper from pg_roles where rolname=current_user) superuser,
+   (select coalesce(jsonb_agg(to_jsonb(m) order by m.roleid,m.member,m.grantor),'[]'::jsonb)
+    from pg_auth_members m where m.roleid='erasure_purge_owner'::regrole or m.member='erasure_purge_owner'::regrole) memberships,
+   (select nspacl from pg_namespace where nspname='private') schema_acl;
+do $$begin
+ if current_user<>session_user then raise exception 'Migration identity must be direct';end if;
+ if has_schema_privilege('erasure_purge_owner','private','CREATE') then
+   raise exception 'Unsafe purge owner schema privileges';
+ end if;
+ if not (select superuser from pg_temp.sc010_purge_migration_access) then
+   if current_user<>'postgres' or exists(select 1 from pg_auth_members m
+     where (m.roleid='erasure_purge_owner'::regrole or m.member='erasure_purge_owner'::regrole)
+       and not (current_user='postgres' and current_setting('server_version_num')::integer/10000 in (16,17)
+          and m.roleid='erasure_purge_owner'::regrole and exists(select 1 from pg_roles where oid=m.member and rolname='postgres' and not rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and exists(select 1 from pg_roles where oid=m.grantor and rolname='supabase_admin' and oid=10 and rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and m.admin_option and not m.inherit_option and not m.set_option)) or not exists(select 1 from pg_auth_members m where (current_user='postgres' and current_setting('server_version_num')::integer/10000 in (16,17)
+          and m.roleid='erasure_purge_owner'::regrole and exists(select 1 from pg_roles where oid=m.member and rolname='postgres' and not rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and exists(select 1 from pg_roles where oid=m.grantor and rolname='supabase_admin' and oid=10 and rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and m.admin_option and not m.inherit_option and not m.set_option)) then
+     raise exception 'Unsafe purge owner migration membership';
+   end if;
+   grant erasure_purge_owner to postgres with admin false, inherit false, set true;
+ end if;
+ grant create on schema private to erasure_purge_owner;
+end;$$;
+alter function private.erasure_purge_engine(uuid,bigint,boolean) owner to erasure_purge_owner;
+alter function private.purge_candidate_erasure(uuid,bigint) owner to erasure_purge_owner;
+alter function private.restore_purge_candidate_erasure(uuid,bigint) owner to erasure_purge_owner;
+do $$begin
+ revoke create on schema private from erasure_purge_owner;
+ if not (select superuser from pg_temp.sc010_purge_migration_access) then
+   revoke erasure_purge_owner from postgres granted by postgres;
+ end if;
+ if (select nspacl from pg_namespace where nspname='private') is distinct from
+      (select schema_acl from pg_temp.sc010_purge_migration_access) or
+   has_schema_privilege('erasure_purge_owner','private','CREATE') or
+   (select coalesce(jsonb_agg(to_jsonb(m) order by m.roleid,m.member,m.grantor),'[]'::jsonb)
+    from pg_auth_members m where m.roleid='erasure_purge_owner'::regrole or m.member='erasure_purge_owner'::regrole)
+      is distinct from (select memberships from pg_temp.sc010_purge_migration_access) then
+   raise exception 'Purge migration privileges not restored';
+ end if;
+end;$$;
 commit;

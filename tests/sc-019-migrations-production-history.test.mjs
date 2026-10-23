@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
-import { createRankingHarness, setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
+import { createRankingHarness, users } from './helpers/screening-ranking-fixture.mjs';
 import { assertR6, accountingSnapshot, catalogSnapshot, migrationManifest } from './helpers/sc19-migration-fixture.mjs';
 
 // An isolated CI-owned cluster with real pg_cron, never a production connection.
@@ -74,27 +74,72 @@ test('observed production history + pending chain preserves completed synthetic 
       const observed=await catalogSnapshot(db), manifest=await migrationManifest();
       const expected=manifest.states.r4_legacy['pg'+process.env.SC19_TEST_PG_MAJOR];
       t.diagnostic(JSON.stringify({observed,expected,mismatches:Object.keys(expected).filter(k=>expected[k]!==observed[k])}));
-      await db.query('create database sc19_reference');
-      const referenceUrl=new URL(platformUrl); referenceUrl.pathname='/sc19_reference';
-      const reference=new pg.Client({connectionString:referenceUrl.href}); await reference.connect(); t.after(()=>reference.end());
-      reference.exec=sql=>reference.query(sql);
-      await reference.query('set role postgres');
-      await setupRankingDatabase(reference,{throughMigration:pending.at(-2)});
-      await reference.query("set search_path=''");
-      for(const [kind,sql] of Object.entries(manifest.queries)) {
-        const real=(await db.query(sql)).rows[0].manifest, baseline=(await reference.query(sql)).rows[0].manifest;
-        const baselineMap=new Map(baseline);
-        t.diagnostic(JSON.stringify({kind,differences:real.filter(([key,value])=>JSON.stringify(value)!==JSON.stringify(baselineMap.get(key))).map(([key,value])=>({key,observed:value,expected:baselineMap.get(key)}))}));
-      }
+
     }
-    await db.query(await readFile(new URL(name,dir),'utf8')); t.diagnostic(`applied pending ${name}`);
+    const sql=await readFile(new URL(name,dir),'utf8');
+    if(name===pending.at(-1)) for(const mutation of [
+      'grant execute on function public.platform_operator_status() to service_role with grant option',
+      'grant execute on function private.erasure_hash(jsonb) to service_role',
+      'grant create on schema public to service_role',
+      'grant select(id) on public.companies to service_role',
+      'create table public.unreviewed_hosted_table(id integer)',
+      'grant erasure_worker to anon with admin false, inherit false, set false',
+    ]) {
+      const beforeCatalog=await catalogSnapshot(db);
+      await db.query('begin'); await db.query(mutation);
+      await assert.rejects(db.query(sql), /sc19_(source_schema_unreviewed|unsafe_worker_role)/);
+      await db.query('rollback');
+      assert.deepEqual(await catalogSnapshot(db),beforeCatalog,'Refusal rolls back hosted ACL normalization and hostile changes');
+    }
+    const protectedRole = name==='20261010204840_erasure_execution_protocol.sql' ? 'erasure_worker'
+      : name==='20261012031026_retention_scheduler_protocol.sql' ? 'erasure_scheduler' : null;
+    if(protectedRole) for(const mutation of [
+      `grant ${protectedRole} to postgres with admin false, inherit false, set false`,
+      `alter role ${protectedRole} login`,
+      `grant ${protectedRole} to postgres with admin false, inherit true, set false`,
+      `grant ${protectedRole} to postgres with admin false, inherit false, set true`,
+      `grant ${protectedRole} to anon with admin false, inherit false, set false`,
+      `grant anon to ${protectedRole} with admin false, inherit false, set false`,
+    ]) {
+      await db.query('begin');
+      await db.query(`create role ${protectedRole} nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls`);
+      await db.query(mutation);
+      await assert.rejects(db.query(sql), /Unsafe (erasure|scheduler) role/);
+      await db.query('rollback');
+      assert.equal((await db.query('select count(*)::int n from pg_roles where rolname=$1',[protectedRole])).rows[0].n,0);
+    }
+    if(['20261010205030_erasure_purge_graph.sql','20261012031039_retention_scheduler_inventory.sql'].includes(name)) {
+      const access=async()=>({
+        memberships:(await db.query(`select to_jsonb(m) v from pg_auth_members m where roleid='erasure_purge_owner'::regrole or member='erasure_purge_owner'::regrole order by roleid,member,grantor`)).rows,
+        acl:(await db.query(`select nspacl::text v from pg_namespace where nspname='private'`)).rows,
+      });
+      const beforeAccess=await access();
+      await platform.query('begin; set local role postgres');
+      await assert.rejects(platform.query(sql), /Migration identity must be direct/);
+      await platform.query('rollback');
+      assert.deepEqual(await access(),beforeAccess,'Indirect migration identity is refused atomically');
+      const duringAccess=name==='20261010205030_erasure_purge_graph.sql'
+        ? sql.replace('alter function private.erasure_purge_engine(uuid,bigint,boolean) owner to erasure_purge_owner;',
+          'alter function private.erasure_purge_engine(uuid,bigint,boolean) owner to erasure_purge_owner; select 1/0;')
+        : sql.replace('reset role;','select 1/0; reset role;');
+      await assert.rejects(db.query(duringAccess), /division by zero/);
+      await db.query('rollback');
+      assert.deepEqual(await access(),beforeAccess,'Failed ownership transfer restores all memberships and schema ACL');
+      assert.equal((await db.query('select current_user')).rows[0].current_user,'postgres');
+      if(name==='20261010205030_erasure_purge_graph.sql') assert.equal((await db.query("select to_regclass('private.erasure_purge_manifest') v")).rows[0].v,null);
+      await db.query(sql);
+      assert.equal((await db.query('select current_user')).rows[0].current_user,'postgres');
+      assert.deepEqual((await access()).memberships,beforeAccess.memberships,'Successful ownership transfer restores exact membership');
+      assert.equal((await db.query("select has_schema_privilege('erasure_purge_owner','private','CREATE') v")).rows[0].v,false);
+    } else await db.query(sql);
+    t.diagnostic(`applied pending ${name}`);
   }
   assert.deepEqual(await snapshot(),before,'No existing application data rewritten or removed');
   await assertR6(db);
   for(const [table,rows] of Object.entries(await accountingSnapshot(db))) assert.deepEqual(rows,[],`No commercial activation or retrospective billing: ${table}`);
   await h.asUser(f.owner); assert.equal((await h.row(f)).eligibility_reason,'eligible');
   assert.equal((await h.shortlist(f)).length,1);
-  await h.asUser(users.otherOwner); assert.deepEqual(await h.ranking(f),[]);
+  await h.asUser(users.otherOwner); await assert.rejects(h.ranking(f),error=>error.code==='42501');
   await h.asAdmin();
   for(const role of ['anon','authenticated','service_role','screening_worker']) for(const table of ['private.sc19_balances','private.sc19_credit_journal','private.sc19_payment_orders']) {
     for(const privilege of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) assert.equal((await db.query('select has_table_privilege($1,$2,$3) allowed',[role,table,privilege])).rows[0].allowed,false);

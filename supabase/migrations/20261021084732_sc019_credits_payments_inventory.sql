@@ -17,6 +17,89 @@ set local timezone='UTC';
 set local datestyle='ISO, YMD';
 select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('sc019-forward-r6-v1',0));
 
+-- Hosted public defaults add exactly the reviewed EXECUTE/USAGE tuples below.
+-- Remove only these tuples, then compare the ORIGINAL complete fingerprints.
+-- Any other ACL, grant option, owner, routine or schema drift still rolls back.
+-- Source evidence: tests/fixtures/sc19-hosted-acl-differences.json.
+do $hosted_acl$
+declare obj record;
+begin
+ if current_user='postgres' and exists(select 1 from pg_roles where rolname=current_user
+   and not rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+   and exists(select 1 from pg_roles where oid=10 and rolname='supabase_admin'
+     and rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls) then
+   for obj in select p.oid from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+     cross join lateral aclexplode(p.proacl) a
+     where n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||')'=any(array[
+       'private.cancel_candidate_erasure_local_r2(target_request uuid, expected_generation bigint, request_key uuid)',
+       'public.add_recruitment_shortlist_entry(target_application uuid, entry_source text, expected_analysis_id uuid, expected_review_id uuid, expected_policy_version text, entry_note text, target_size integer)',
+       'public.approve_candidate_communication(target_communication uuid, expected_version bigint, receipt_id uuid, request_key uuid)',
+       'public.cancel_candidate_communication(target_id uuid, expected_version bigint, request_key uuid)',
+       'public.cancel_candidate_erasure(target_request uuid, expected_generation bigint, request_key uuid)',
+       'public.claim_sales_mail(target_lead uuid, request_id uuid, issued_at_ms bigint, request_signature text)',
+       'public.claim_screening_attempt(target_attempt uuid)',
+       'public.close_sales_lead(target_lead uuid)',
+       'public.complete_screening_analysis(target_attempt uuid, provided_lease_token text, expected_input_fingerprint text, expected_analysis_contract_hash text, findings jsonb, new_provider_request_id text, new_provider_response_id text, new_input_tokens integer, new_output_tokens integer, new_cached_input_tokens integer, new_cost_amount numeric, new_cost_currency text)',
+       'public.configure_candidate_retention_policy(target_company uuid, expected_revision bigint, policy_rules jsonb, request_key uuid)',
+       'public.configure_retention_schedule(target_company uuid, expected_revision bigint, policy_revision bigint, execution_mode text, max_batch integer, request_key uuid)',
+       'public.confirm_erasure_subject(target_candidate uuid, candidate_ids uuid[], expected_revision bigint, request_key uuid)',
+       'public.create_company(company_name text)',
+       'public.ensure_initial_company(company_name text)',
+       'public.fail_screening_attempt(target_attempt uuid, provided_lease_token text, expected_input_fingerprint text, expected_analysis_contract_hash text, new_error_code text, new_error_message text, new_provider_request_id text, new_input_tokens integer, new_output_tokens integer, new_cached_input_tokens integer, new_cost_amount numeric, new_cost_currency text)',
+       'public.find_sales_companies(search_text text)',
+       'public.finish_sales_mail(target_lead uuid, request_id uuid, issued_at_ms bigint, outcome text, provider_id uuid, request_signature text)',
+       'public.get_candidate_communication_history(target_id uuid, after_created_at timestamp with time zone, after_id uuid, page_size integer)',
+       'public.get_candidate_communications(target_application uuid, after_created_at timestamp with time zone, after_id uuid, page_size integer)',
+       'public.get_candidate_erasure_status(target_candidate uuid)',
+       'public.get_candidate_retention_policy(target_company uuid)',
+       'public.get_communication_approval_status(target_communication uuid)',
+       'public.get_erasure_status(target_request uuid)',
+       'public.get_erasure_subject_resolution(target_candidate uuid)',
+       'public.get_recruitment_shortlist(target_recruitment uuid, include_removed boolean)',
+       'public.get_retention_schedule(target_company uuid)',
+       'public.get_retention_suggestions(target_company uuid, before_created_at timestamp with time zone, before_id uuid, page_size integer)',
+       'public.get_screening_ranking(target_recruitment uuid, target_size integer)',
+       'public.grant_platform_operator(target_user uuid)',
+       'public.issue_candidate_erasure_preview(target_candidate uuid, scope_kind text, resolution_id uuid)',
+       'public.list_candidate_erasure_requests(target_company uuid, before_created_at timestamp with time zone, before_id uuid, page_size integer)',
+       'public.list_sales_leads(result_limit integer)',
+       'public.list_sales_leads_inbox(result_limit integer)',
+       'public.list_sales_pipeline(stage_filter text, due_filter text, page_offset integer, target_lead uuid)',
+       'public.platform_operator_status()',
+       'public.prepare_candidate_communication(target_application uuid, target_shortlist uuid, contact_channel text, request_key uuid)',
+       'public.preview_candidate_erasure(target_candidate uuid, scope_kind text, resolution_id uuid)',
+       'public.record_contact_permission(target_candidate uuid, target_recruitment uuid, contact_channel text, permission_state text, evidence_ref uuid, expected_revision bigint, request_key uuid)',
+       'public.release_candidate_erasure_hold(target_hold uuid)',
+       'public.remove_recruitment_shortlist_entry(target_entry uuid)',
+       'public.request_candidate_erasure(preview_ticket_id uuid, request_key uuid)',
+       'public.retry_screening_analysis(target_analysis uuid, request_idempotency_key uuid)',
+       'public.review_candidate_document(document_id uuid, expected_version integer)',
+       'public.review_screening_result(target_analysis uuid, expected_review_version integer, new_disposition text, new_review_note text, new_overrides jsonb)',
+       'public.revoke_platform_operator(target_user uuid)',
+       'public.revoke_retention_schedule(target_company uuid, expected_revision bigint, request_key uuid)',
+       'public.sales_pipeline_history(target_lead uuid, before_version integer)',
+       'public.save_behavior_assessment(target_application uuid, target_area text, new_rating text, new_evidence text, expected_version integer, expected_position_updated_at timestamp with time zone, expected_position_id uuid)',
+       'public.save_exercise_definition(target_recruitment uuid, target_exercise uuid, new_definition jsonb, expected_version integer, expected_position_id uuid, expected_position_updated_at timestamp with time zone)',
+       'public.save_exercise_observations(target_application uuid, target_definition uuid, expected_version integer, new_work_sample text, new_observations jsonb)',
+       'public.save_sales_pipeline(target_lead uuid, expected_version integer, new_stage text, new_note text, next_contact date, linked_company uuid)',
+       'public.set_candidate_erasure_hold(target_request uuid, reason text, review_at timestamp with time zone, expires_at timestamp with time zone, request_key uuid)',
+       'public.set_contact_preferences(target_candidate uuid, contact_timezone text, weekday_windows jsonb, blocked_channels text[], expected_revision bigint, request_key uuid)',
+       'public.start_screening_analysis(target_application uuid, expected_input_fingerprint text, expected_payload_schema_version integer, requested_result_schema_version integer, requested_prompt_version text, requested_provider text, requested_model text, requested_model_revision text, request_idempotency_key uuid, force_reanalysis boolean)',
+       'public.submit_sales_lead(idempotency_key uuid, first_name text, company_name text, email text, phone text, needs text, source_ip text, issued_at_us bigint, request_signature text)'
+     ]) and pg_get_userbyid(p.proowner)='postgres'
+       and pg_get_userbyid(a.grantor)='postgres' and pg_get_userbyid(a.grantee)='service_role'
+       and a.privilege_type='EXECUTE' and not a.is_grantable
+   loop execute format('revoke execute on function %s from service_role',obj.oid::regprocedure); end loop;
+   for obj in select pg_get_userbyid(a.grantee) grantee
+     from pg_namespace n cross join lateral aclexplode(n.nspacl) a
+     where n.nspname='public' and pg_get_userbyid(n.nspowner)='pg_database_owner'
+       and pg_get_userbyid(a.grantor)='pg_database_owner'
+       and pg_get_userbyid(a.grantee) in ('anon','authenticated','postgres','service_role')
+       and a.privilege_type='USAGE' and not a.is_grantable
+   loop execute format('revoke usage on schema public from %I',obj.grantee); end loop;
+ end if;
+end;$hosted_acl$;
+
 -- Helpers live only in this session's temporary schema. They are trusted source,
 -- not installed application functions or dynamically executed catalog code.
 
@@ -231,8 +314,12 @@ begin
       or role_record.rolreplication or role_record.rolbypassrls
       or exists(select 1 from pg_auth_members m where
         (m.roleid=role_record.oid or m.member=role_record.oid)
-        and not (role_record.rolname='screening_worker' and m.roleid=role_record.oid
-          and pg_get_userbyid(m.member)='postgres' and not m.inherit_option and m.set_option)) then
+        and not ((role_record.rolname='screening_worker' and m.roleid=role_record.oid
+          and pg_get_userbyid(m.member)='postgres' and pg_get_userbyid(m.grantor)='postgres'
+          and not m.admin_option and not m.inherit_option and m.set_option) or (current_user='postgres' and current_setting('server_version_num')::integer/10000 in (16,17)
+          and m.roleid=role_record.oid and exists(select 1 from pg_roles where oid=m.member and rolname='postgres' and not rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and exists(select 1 from pg_roles where oid=m.grantor and rolname='supabase_admin' and oid=10 and rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and m.admin_option and not m.inherit_option and not m.set_option))) then
       raise exception 'sc19_unsafe_worker_role:%',role_record.rolname using errcode='42501';
     end if;
   end loop;

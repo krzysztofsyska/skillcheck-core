@@ -9,8 +9,8 @@ import Link from "next/link";
 const initial: LeadState = { status: "idle", message: "", retry: null };
 const empty = { first_name: "", company_name: "", email: "", phone: "", needs: "" };
 
-export function LeadForm({ notice }: { notice: string }) {
-  const [fields, setFields] = useState(empty);
+export function LeadForm({ notice, initialNeeds = "" }: { notice: string; initialNeeds?: string }) {
+  const [fields, setFields] = useState({ ...empty, needs: initialNeeds });
   const attempt = useRef<{ normalized: string; key: string } | null>(null);
   const feedback = useRef<HTMLParagraphElement>(null);
   const [state, action, pending] = useActionState(async (previous: LeadState, form: FormData) => {
