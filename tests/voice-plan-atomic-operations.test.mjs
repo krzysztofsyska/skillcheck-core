@@ -126,19 +126,19 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     [other.analysis_id])).rows[0];
   assert.equal(previous.execution_status,"completed");
   assert.equal(previous.stale_at,null);
-  // Force creates a newer completed analysis while the source is unchanged.
+  // While forced reanalysis is pending, only the newer analysis ID invalidates
+  // this release: the prior analysis and source fingerprint are still current.
   const forced=await h.start(other,{force:true});
   assert.notEqual(forced.analysis_id,other.analysis_id);
-  await h.complete(other,forced,
-    ["insufficient_data","meets","below","meets","above"]);
   await h.asAdmin();
   await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
   const newest=(await db.query(
-    "select id,input_fingerprint from public.screening_analysis_versions "+
+    "select id,input_fingerprint,execution_status from public.screening_analysis_versions "+
     "where company_id=$1 and application_id=$2 "+
     "order by analysis_version desc limit 1",
     [other.companyId,other.application.id])).rows[0];
   assert.equal(newest.id,forced.analysis_id);
+  assert.equal(newest.execution_status,"pending");
   assert.equal(newest.input_fingerprint,previous.input_fingerprint,
     "forced reanalysis must retain the unchanged source fingerprint");
   const old=(await db.query(
@@ -152,6 +152,23 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
     [other.application.id])).rows[0];
   assert.equal(pointer.n,0,"stale current pointer must be removed");
+  await h.complete(other,forced,
+    ["insufficient_data","meets","below","meets","above"]);
+  await h.asAdmin();
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
+  const superseded=(await db.query(
+    "select execution_status,stale_at,stale_reason,superseded_by_analysis_id "+
+    "from public.screening_analysis_versions where id=$1",
+    [other.analysis_id])).rows[0];
+  assert.equal(superseded.execution_status,"completed");
+  assert.ok(superseded.stale_at,"completed reanalysis must mark the prior analysis stale");
+  assert.equal(superseded.stale_reason,"manual_invalidation");
+  assert.equal(superseded.superseded_by_analysis_id,forced.analysis_id);
+  const afterCompletion=(await db.query(
+    "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+    [other.application.id])).rows[0];
+  assert.equal(afterCompletion.n,0,"completed reanalysis must not restore the current pointer");
+  assert.equal(await current(),null,"completed reanalysis must not restore the old release");
   const immutable=(await db.query(
     "select count(*)::int as n from private.voice_plan_release_entries where id=$1 and plan_id=$2",
     [otherRelease,otherPlan])).rows[0];
@@ -160,6 +177,14 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
     "select count(*)::int as n from private.voice_plan_review_entries where id=$1 and plan_id=$2",
     [otherReview,otherPlan])).rows[0];
   assert.equal(approved.n,1,"approved review history remains immutable");
+  assert.equal((await db.query(
+    "select private.sc012b_current_release($1) as id",
+    [f.application.id])).rows[0].id,release,"the other tenant's release remains visible");
+  const unaffected=(await db.query(
+    "select release_entry_id,pointer_version from private.voice_plan_current_releases where application_id=$1",
+    [f.application.id])).rows[0];
+  assert.equal(unaffected.release_entry_id,release);
+  assert.equal(Number(unaffected.pointer_version),1);
  });
  await t.test("screening writer advisory lock blocks the trusted current-release reader until commit",async()=>{
   // Three independent PostgreSQL 16 sessions: a screening writer, a
