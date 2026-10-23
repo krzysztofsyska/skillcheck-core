@@ -1,3 +1,4 @@
+import { completeComparison } from './comparison.mjs';
 import { createSign } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import { protectionFromRulesets } from './protection.mjs';
@@ -195,9 +196,8 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       return request(`/repos/${owner}/${repo}/contents/${path}?ref=agent-state`);
     },
     async readComparison(base, head) {
-      const result = await request(`/repos/${owner}/${repo}/compare/${base}...${head}?per_page=100`);
-      if (!Array.isArray(result.commits) || !Array.isArray(result.files) || result.files.length >= 300 || result.total_commits > 100) throw new Error('PROMOTION_DIFF_INCOMPLETE');
-      return result;
+      return completeComparison(request, `/repos/${owner}/${repo}`, base, head);
+
     },
     async readReleasePlan(ref) {
       try { const file = await request(`/repos/${owner}/${repo}/contents/.github/agent-pipeline/production-runbook.json?ref=${ref}`); return JSON.parse(decodeGithubContent(file)); }
@@ -340,3 +340,4 @@ export function unzipEntries(buffer) {
 function base64url(value) {
   return Buffer.from(value).toString('base64url');
 }
+
