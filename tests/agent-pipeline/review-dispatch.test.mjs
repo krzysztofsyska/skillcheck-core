@@ -34,13 +34,20 @@ test('checked-in policy cannot authorize a paid review dispatch', () => {
   const policy = loadPolicy();
   assert.equal(policy.flags.AGENT_PIPELINE_ENABLED, false);
   assert.equal(policy.flags.AGENT_PIPELINE_MERGE_ENABLED, false);
-  assert.equal(policy.controller_actor_id, null);
+  assert.equal(policy.controller_actor_id, 338844913);
   const ownerDispatch = reviewDispatchDecision({
     actorId: String(policy.owner.id),
     pipelineEnabled: 'true',
     controllerActorId: policy.controller_actor_id,
     runAttempt: '1',
   });
+  const disabledDispatch = reviewDispatchDecision({
+    actorId: String(policy.controller_actor_id),
+    pipelineEnabled: 'false',
+    controllerActorId: policy.controller_actor_id,
+    runAttempt: '1',
+  });
   assert.equal(policy.environments.agent_review.id, 23622706434);
-  assert.deepEqual(ownerDispatch, { ok: false, reason: 'controller_actor_unconfigured' });
+  assert.deepEqual(ownerDispatch, { ok: false, reason: 'actor_untrusted' });
+  assert.deepEqual(disabledDispatch, { ok: false, reason: 'pipeline_disabled' });
 });
