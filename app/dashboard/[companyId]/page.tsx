@@ -14,6 +14,7 @@ export default async function CompanyDashboard({params}:{params:Promise<{company
   if(positions.error||recruitments.error||candidates.error||profile.error) throw new Error("Nie udało się wczytać panelu.");
   return <main className="workspace"><section><nav><Link href="/dashboard">← Twoje firmy</Link></nav><p className="eyebrow">PANEL FIRMY</p><h1>{company.name}</h1>
     {!canEdit && <p className="notice">Masz dostęp tylko do odczytu.</p>}
+    {process.env.SC19_PACKAGES_ENABLED === 'true' && <p className="lead"><Link href={`/dashboard/${companyId}/billing`}>Twój pakiet SkillCheck i pozostałe analizy CV →</Link></p>}
     <p className="lead"><Link href={`/dashboard/${companyId}/candidates`}>Kandydaci w bazie firmy: {candidates.count ?? 0}</Link></p>
     <div className="actions">{canEdit && <Link className="button" href={`/dashboard/${companyId}/positions/new`}>Kogo potrzebujesz? Utwórz stanowisko</Link>}</div>
     <h2>Stanowiska</h2><p>Ostatnie 50 stanowisk.</p>

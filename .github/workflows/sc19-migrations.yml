@@ -1,0 +1,167 @@
+name: SC-019 forward migrations
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/**'
+      - 'db/isolated/sc010-r4-voice-retention.sql'
+      - 'docs/prototypes/sc-019-mvp-credits.sql'
+      - 'docs/prototypes/sc19-payment-storage.sql'
+      - 'docs/sc19-migrations*.md'
+      - 'lib/sc19-payment*.ts'
+      - 'tests/sc-019-migrations*.mjs'
+      - 'tests/data-api-grants.test.mjs'
+      - 'tests/sales-leads-database.test.mjs'
+      - 'tests/fixtures/sc19-migration-manifest.json'
+      - 'tests/fixtures/sc19-production-history.json'
+      - 'tests/fixtures/sc19-hosted-acl-differences.json'
+      - 'tests/fixtures/sc19-rehearsal.Dockerfile'
+      - 'tests/helpers/sc19-migration-fixture.mjs'
+      - 'tests/helpers/screening-ranking-fixture.mjs'
+      - 'tests/helpers/voice-retention-fixture.mjs'
+      - '.github/workflows/sc19-migrations.yml'
+      - '.github/workflows/checks.yml'
+  push:
+    branches: [integration]
+    paths:
+      - 'supabase/migrations/**'
+      - 'tests/sc-019-migrations*.mjs'
+      - 'tests/data-api-grants.test.mjs'
+      - 'tests/sales-leads-database.test.mjs'
+      - 'tests/fixtures/sc19-migration-manifest.json'
+      - 'tests/fixtures/sc19-production-history.json'
+      - 'tests/fixtures/sc19-hosted-acl-differences.json'
+      - 'tests/fixtures/sc19-rehearsal.Dockerfile'
+      - 'tests/helpers/sc19-migration-fixture.mjs'
+      - '.github/workflows/sc19-migrations.yml'
+permissions:
+  contents: read
+jobs:
+  migration-contract:
+    name: Migrations / PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Matching native dump and restore clients
+        env:
+          PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          if [ ! -x "/usr/lib/postgresql/$PG_MAJOR/bin/pg_dump" ]; then
+            sudo apt-get update
+            if ! apt-cache show "postgresql-client-$PG_MAJOR" >/dev/null 2>&1; then
+              # Official PGDG repository; Ubuntu's default packages may only
+              # include PG16. Install clients, never another database server.
+              sudo install -d /usr/share/postgresql-common/pgdg
+              sudo curl --fail --silent --show-error \
+                -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+                https://www.postgresql.org/media/keys/ACCC4CF8.asc
+              . /etc/os-release
+              printf '%s\n' "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main" \
+                | sudo tee /etc/apt/sources.list.d/sc19-pgdg.list >/dev/null
+              sudo apt-get update
+            fi
+            sudo apt-get install --yes --no-install-recommends "postgresql-client-$PG_MAJOR"
+          fi
+          "/usr/lib/postgresql/$PG_MAJOR/bin/pg_dump" --version
+          "/usr/lib/postgresql/$PG_MAJOR/bin/pg_restore" --version
+      - name: Real migration, concurrency, ACL, purge and native restore
+        run: |
+          set +e
+          node --experimental-strip-types --test --test-concurrency=1 \
+            tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
+            tests/sc-019-migrations-mvp-e2e.test.mjs \
+            tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
+            > sc19-migrations.log 2>&1
+          test_result=$?
+          tail -n 250 sc19-migrations.log
+          exit "$test_result"
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
+          PG_DUMP_BIN: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_dump
+          PG_RESTORE_BIN: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_restore
+      - name: Preserve complete migration test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sc19-migrations-postgres-${{ matrix.postgres }}
+          path: sc19-migrations.log
+          if-no-files-found: warn
+          retention-days: 7
+  production-history:
+    name: Production history / PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Disposable native cluster with the observed pg_cron dependency
+        env:
+          PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          docker build --build-arg PG_MAJOR="$PG_MAJOR" -t sc19-rehearsal -f tests/fixtures/sc19-rehearsal.Dockerfile tests/fixtures
+          docker run -d --name sc19-rehearsal -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_rehearsal \
+            sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_production_rehearsal
+          for attempt in $(seq 1 30); do
+            if docker exec sc19-rehearsal pg_isready -U supabase_admin -d sc19_production_rehearsal; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Rehearse exact observed schema history, pending migrations and existing synthetic data
+        env:
+          SC19_REHEARSAL_DISPOSABLE: 'yes'
+          SC19_REHEARSAL_DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:55432/sc19_production_rehearsal
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          set -o pipefail
+          node --test tests/sc-019-migrations-production-history.test.mjs 2>&1 | tee sc19-production-history.log
+      - name: Preserve rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sc19-production-history-postgres-${{ matrix.postgres }}
+          path: sc19-production-history.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove only this job's disposable container
+        if: always()
+        run: docker rm -f sc19-rehearsal || true

@@ -1,0 +1,126 @@
+name: SC014 B3 isolated HTTP PostgreSQL HTTPS browser
+on:
+  pull_request:
+    paths:
+      - 'app/api/competency/attempt/**'
+      - 'lib/competency-attempt-broker*.ts'
+      - 'lib/competency-attempt-transport.ts'
+      - 'lib/competency-broker-*.ts'
+      - 'tests/competency-broker-*'
+      - 'tests/helpers/competency-broker-*'
+      - '.github/workflows/sc014-b3.yml'
+      - 'db/isolated/sc014-b2-*.sql'
+      - 'scripts/sc014-b2-compose.mjs'
+      - 'db/isolated/sc010-r4-voice-retention.sql'
+      - 'docs/prototypes/sc-019-mvp-credits.sql'
+      - 'tests/helpers/competency-attempt-fixture.mjs'
+      - 'docs/sc-014-b1-candidate-attempt-architecture.md'
+      - 'docs/sc-014-b2-handoff.md'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [integration]
+    paths:
+      - 'app/api/competency/attempt/**'
+      - 'lib/competency-attempt-broker*.ts'
+      - 'lib/competency-attempt-transport.ts'
+      - 'lib/competency-broker-*.ts'
+      - 'tests/competency-broker-*'
+      - 'tests/helpers/competency-broker-*'
+      - '.github/workflows/sc014-b3.yml'
+      - 'db/isolated/sc014-b2-*.sql'
+      - 'scripts/sc014-b2-compose.mjs'
+      - 'db/isolated/sc010-r4-voice-retention.sql'
+      - 'docs/prototypes/sc-019-mvp-credits.sql'
+      - 'tests/helpers/competency-attempt-fixture.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+permissions:
+  contents: read
+jobs:
+  isolated-broker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+          cache: npm
+      - run: npm ci
+      - name: Install disposable Redis/Postgres client CLIs
+        run: sudo apt-get update -qq && sudo apt-get install -y redis-tools postgresql-client
+      - name: Install isolated Chromium testing dependency (not an application dependency)
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Confirm isolated resources only
+        run: |
+          test "$(redis-cli -h 127.0.0.1 -p 6379 ping)" = PONG
+          pg_isready -h 127.0.0.1 -p 5432 -U postgres
+          openssl version
+        env:
+          PGPASSWORD: postgres
+      - name: Provision TLS only on the disposable PostgreSQL service
+        env:
+          PGPASSWORD: postgres
+          PGSSLROOTCERT: ${{ runner.temp }}/sc014-b3-pg.crt
+          TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          openssl req -x509 -nodes -newkey rsa:2048 -days 1 -keyout "$RUNNER_TEMP/sc014-b3-pg.key" -out "$RUNNER_TEMP/sc014-b3-pg.crt" -subj '/CN=sc014-broker-db.test' -addext 'subjectAltName=DNS:sc014-broker-db.test'
+          docker cp "$RUNNER_TEMP/sc014-b3-pg.key" "$TEST_PG_CONTAINER:/tmp/sc014-b3-pg.key"
+          docker cp "$RUNNER_TEMP/sc014-b3-pg.crt" "$TEST_PG_CONTAINER:/tmp/sc014-b3-pg.crt"
+          docker exec -u root "$TEST_PG_CONTAINER" chown postgres:postgres /tmp/sc014-b3-pg.key /tmp/sc014-b3-pg.crt
+          docker exec -u root "$TEST_PG_CONTAINER" chmod 600 /tmp/sc014-b3-pg.key
+          psql -h 127.0.0.1 -U postgres -c "alter system set ssl_cert_file='/tmp/sc014-b3-pg.crt'"
+          psql -h 127.0.0.1 -U postgres -c "alter system set ssl_key_file='/tmp/sc014-b3-pg.key'"
+          psql -h 127.0.0.1 -U postgres -c "alter system set ssl=on"
+          psql -h 127.0.0.1 -U postgres -c 'select pg_reload_conf()'
+          echo '127.0.0.1 sc014-broker-db.test' | sudo tee -a /etc/hosts
+          psql 'host=sc014-broker-db.test user=postgres dbname=postgres sslmode=verify-full' -c 'select ssl from pg_stat_ssl where pid=pg_backend_pid()'
+      - name: B3 strict HTTP/Cookie/CSRF/limits supplemental contracts
+        run: node --test --test-isolation=none --test-concurrency=1 tests/competency-broker-contract.test.mjs tests/competency-broker-role.test.mjs
+      - name: B3 real HTTPS PostgreSQL16 Redis/Chromium browser evidence
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          NODE_OPTIONS: '--no-warnings'
+        run: >-
+          node --test --test-isolation=none --test-concurrency=1
+          tests/competency-broker-postgres.test.mjs
+          tests/competency-broker-browser.test.mjs
+          tests/competency-broker-security.test.mjs
+      - name: Actual enabled route and production TLS pool + Redis REST
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC014_B3_TEST_PG_CA: ${{ runner.temp }}/sc014-b3-pg.crt
+        run: node --test --test-concurrency=1 tests/competency-broker-route.test.mjs
+      - name: Accepted B2 PostgreSQL16 and SC-010 regression
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+        run: >-
+          node --test --test-isolation=none --test-concurrency=1
+          tests/competency-test.test.mjs
+          tests/competency-validation.test.mjs
+          tests/competency-attempt.test.mjs
+          tests/competency-concurrency.test.mjs
+          tests/competency-withdrawal.test.mjs
+          tests/competency-withdrawal-concurrency.test.mjs
+          tests/competency-retention.test.mjs
+      - run: npm run typecheck && npm run build

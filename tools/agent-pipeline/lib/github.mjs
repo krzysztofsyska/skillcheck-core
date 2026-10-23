@@ -1,9 +1,11 @@
+import { completeComparison } from './comparison.mjs';
 import { createSign } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import { protectionFromRulesets } from './protection.mjs';
 export { protectionFromRulesets } from './protection.mjs';
 import { withTransportRetry } from './transport.mjs';
 import { canonicalJson } from './canonical.mjs';
+import { withRulesetEvidence } from './ruleset-evidence.mjs';
 
 export function githubAppJwt({ appId, privateKey, now = Date.now() }) {
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -69,10 +71,10 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       const listed = await pages(`/repos/${owner}/${repo}/rulesets`);
       const detailed = [];
       for (const item of listed ?? []) {
-        detailed.push(await request(`/repos/${owner}/${repo}/rulesets/${item.id}`));
+        detailed.push(withRulesetEvidence(await request(`/repos/${owner}/${repo}/rulesets/${item.id}`), policy));
       }
       const environments = {};
-      for (const e of [policy.environments?.owner_acceptance, policy.environments?.production_approval]) {
+      for (const e of [policy.environments?.owner_acceptance, policy.environments?.production_approval, policy.environments?.agent_review]) {
         if (!e?.name) continue;
         const path = `/repos/${owner}/${repo}/environments/${encodeURIComponent(e.name)}`;
         const env = await request(path);
@@ -194,9 +196,8 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       return request(`/repos/${owner}/${repo}/contents/${path}?ref=agent-state`);
     },
     async readComparison(base, head) {
-      const result = await request(`/repos/${owner}/${repo}/compare/${base}...${head}?per_page=100`);
-      if (!Array.isArray(result.commits) || !Array.isArray(result.files) || result.files.length >= 300 || result.total_commits > 100) throw new Error('PROMOTION_DIFF_INCOMPLETE');
-      return result;
+      return completeComparison(request, `/repos/${owner}/${repo}`, base, head);
+
     },
     async readReleasePlan(ref) {
       try { const file = await request(`/repos/${owner}/${repo}/contents/.github/agent-pipeline/production-runbook.json?ref=${ref}`); return JSON.parse(decodeGithubContent(file)); }
@@ -246,7 +247,7 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
   };
 }
 
-export async function createInstallationToken({ fetch: fetchImpl, appId, privateKey, installationId, repository, apiBase = 'https://api.github.com' }) {
+export async function createInstallationToken({ fetch: fetchImpl, appId, privateKey, installationId, repository, apiBase = 'https://api.github.com', tokenScope = null }) {
   const jwt = githubAppJwt({ appId, privateKey: privateKey.includes('\\n') ? privateKey.replace(/\\n/g, '\n') : privateKey });
   const headers = { accept: 'application/vnd.github+json', authorization: `Bearer ${jwt}` };
   let installation = installationId;
@@ -263,12 +264,28 @@ export async function createInstallationToken({ fetch: fetchImpl, appId, private
     if (!installation) throw new Error('BLOCKED_CONFIGURATION');
     void repo;
   }
-  const response = await fetchImpl(`${apiBase}/app/installations/${installation}/access_tokens`, { method: 'POST', headers });
+  const scopedBody = tokenScope ? { repository_ids: tokenScope.repository_ids, permissions: tokenScope.permissions } : null;
+  if (tokenScope && (!Array.isArray(scopedBody.repository_ids) || scopedBody.repository_ids.length !== 1
+      || !Number.isSafeInteger(scopedBody.repository_ids[0]) || !scopedBody.permissions
+      || Object.keys(scopedBody.permissions).length === 0)) throw new Error('INVALID_TOKEN_SCOPE');
+  const response = await fetchImpl(`${apiBase}/app/installations/${installation}/access_tokens`, {
+    method: 'POST', headers, ...(scopedBody ? { body: JSON.stringify(scopedBody) } : {}),
+  });
   const payload = await response.json();
   if (!response.ok || !payload.token) {
     const error = new Error('installation token failed');
     error.status = response.status;
     throw error;
+  }
+  if (scopedBody) {
+    const granted = payload.permissions ?? {};
+    const allowed = { metadata: 'read', ...scopedBody.permissions };
+    const exactPermissions = Object.entries(scopedBody.permissions).every(([k, v]) => granted[k] === v)
+      && Object.entries(granted).every(([k, v]) => allowed[k] === v);
+    const exactRepositories = payload.repository_selection === 'selected'
+      && Array.isArray(payload.repositories) && payload.repositories.length === 1
+      && payload.repositories[0].id === scopedBody.repository_ids[0];
+    if (!exactPermissions || !exactRepositories) throw new Error('TOKEN_SCOPE_MISMATCH');
   }
   return payload.token;
 }
@@ -323,3 +340,4 @@ export function unzipEntries(buffer) {
 function base64url(value) {
   return Buffer.from(value).toString('base64url');
 }
+
