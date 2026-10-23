@@ -53,6 +53,23 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(home.includes('Kup teraz'), false);
   assert.equal(home.includes('127.0.0.1:9'), false);
 
+  for (const href of ['/kalkulator', '/preselekcja', '/preselekcja#free']) {
+    assert.ok(homeHrefs.includes(href), `sales link ${href}`);
+  }
+  const calcRoute = await fetch(`${base}/kalkulator`, { redirect: 'manual' });
+  assert.equal(calcRoute.status, 307);
+  assert.equal(new URL(calcRoute.headers.get('location'), base).pathname, '/kalkulator-demo.html');
+  const calcPage = await fetch(`${base}/kalkulator-demo.html`);
+  assert.equal(calcPage.status, 200);
+  const calcHtml = await calcPage.text();
+  assert.match(calcHtml, /id="volumeSlider"/);
+  assert.match(calcHtml, /nie pobieramy płatności/i);
+  const pilotPage = await fetch(`${base}/preselekcja`);
+  assert.equal(pilotPage.status, 200);
+  assert.match(await pilotPage.text(), /Zapytaj o preselekcję kandydatów/);
+  const enquiry = await fetch(`${base}/rozmowa?source=calculator-v4&pack=pre&cv=150&extra=calls,consult`);
+  assert.equal(enquiry.status, 200);
+  assert.match(await enquiry.text(), /Twój wybór do potwierdzenia/);
   const demoResponse = await fetch(`${base}/demo`, { redirect: 'manual' });
   assert.equal(demoResponse.status, 200);
   assert.match(demoResponse.headers.get('content-type'), /text\/html/);

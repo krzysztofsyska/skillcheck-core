@@ -26,11 +26,12 @@ export function HomePage() {
                 Budujemy SkillCheck, aby pomóc firmom lepiej zrozumieć, kogo naprawdę potrzebują — i na jakich podstawach wybrać tę osobę. Łączymy wymagania stanowiska, materiały kandydatów i ustrukturyzowaną ocenę w jednym miejscu. Ostateczna decyzja należy do człowieka.
               </p>
               <div className={styles.actions}>
-                <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>
-                <Link href="/rozmowa" className={styles.secondary}>Porozmawiajmy o Twojej rekrutacji</Link>
+                <Link href="/kalkulator" className={styles.primary}>Sprawdź kalkulator</Link>
+                <Link href="/preselekcja" className={styles.secondary}>Zapytaj o FREE i PRESELEKCJĘ</Link>
+                <Link href="/demo" className={styles.secondary}>Zobacz przykład raportu</Link>
               </div>
               <p className={styles.note}>
-                Produkt rozwijamy etapami. Zobacz przykład raportu i sprawdź poniżej, które funkcje są już dostępne.
+                Kalkulator jest symulacją. Dostępność usług, ostateczne warunki i cenę potwierdzamy przed zamówieniem. Strona nie pobiera płatności ani nie aktywuje analiz CV.
               </p>
             </div>
             <aside className={styles.visionCard} aria-label="Pytanie, od którego zaczynamy">
