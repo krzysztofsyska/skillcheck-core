@@ -413,7 +413,7 @@
 <dialog id="quoteDialog" aria-labelledby="quoteTitle">
   <div class="dialog-inner"><div class="modal-top"><div><div class="eyebrow">Twój SkillCheck</div><h2 id="quoteTitle">Podsumowanie wyboru</h2><p class="small-note" id="quoteLead">Możesz je skopiować, pobrać lub otworzyć w swojej poczcie. Samodzielnie zatwierdzasz wysłanie.</p></div><button class="icon-btn" type="button" id="closeQuote" aria-label="Zamknij">×</button></div>
     <textarea id="quoteText" aria-label="Podsumowanie zakresu" readonly></textarea>
-    <div class="modal-buttons"><a class="button" id="openMail" href="mailto:pomoc@skillcheck.pl">Otwórz e-mail ↗</a><button class="button secondary" type="button" id="copyQuote">Kopiuj podsumowanie</button><button class="button secondary" type="button" id="downloadQuote">Pobierz .txt</button></div><div class="status" id="copyStatus" role="status"></div>
+    <div class="modal-buttons"><a class="button" id="openLead" href="/rozmowa">Przejdź do zgłoszenia →</a><a class="button secondary" id="openMail" href="mailto:pomoc@skillcheck.pl">Otwórz e-mail ↗</a><button class="button secondary" type="button" id="copyQuote">Kopiuj podsumowanie</button><button class="button secondary" type="button" id="downloadQuote">Pobierz .txt</button></div><div class="status" id="copyStatus" role="status"></div>
   </div>
 </dialog>
 <script>
@@ -435,7 +435,21 @@
   const fmtInt=value=>new Intl.NumberFormat('pl-PL').format(value);
   const percent=value=>new Intl.NumberFormat('pl-PL',{minimumFractionDigits:1,maximumFractionDigits:2}).format(value)+'%';
   const readable=(id,value)=>{$(id).textContent=value;};
-  const asMoney=id=>Math.min(100000000,Math.max(0,Number($(id).value)||0));
+  const asMoney=id=>Number($(id).value);
+  // Keep displayed assumptions identical to the numbers used by calculations.
+  document.querySelectorAll('input[type="number"]').forEach(input=>{
+    const notice=document.createElement('small');
+    notice.id=input.id+'Correction';notice.setAttribute('role','status');
+    input.setAttribute('aria-describedby',notice.id);input.parentElement.append(notice);
+    input.addEventListener('input',()=>{
+      const raw=input.value,parsed=Number(raw);
+      const value=Math.min(Number(input.max),Math.max(Number(input.min),Number.isFinite(parsed)?parsed:0));
+      if(raw.trim()===''||!Number.isFinite(parsed)||value!==parsed){
+        input.value=String(value);
+        notice.textContent='Wartość skorygowana do '+value+'. Zakres: '+input.min+'–'+input.max+'.';
+      }else notice.textContent='';
+    });
+  });
   const grossCents=(pkg,cv)=>pkg==='free'?0:BASE_GROSS_CENTS[pkg]+Math.round((cv-50)*VOLUME_DELTA_NET_PER_CV*VAT*100);
   const netCents=(pkg,cv)=>Math.round(grossCents(pkg,cv)/VAT);
   const price=(pkg,cv)=>grossCents(pkg,cv)/100;
@@ -460,7 +474,7 @@
       'Wybrane dodatki: '+(selectedExtras().length?selectedExtras().map(([key])=>EXTRA_NAMES[key]).join(', ')+' — każdy do indywidualnej wyceny':'Brak'),
       'Koszt dodatków: nie uwzględniony w cenie bazowej; do indywidualnej wyceny',
       'Dostępność: do potwierdzenia',
-      'Symulacja ręcznego czytania: '+formatMoney((effectiveCv()*(Math.max(0,Math.min(240,Number($('timePerCv').value)||0)))/60)*(Math.max(0,Math.min(10000,Number($('hourlyTimeCost').value)||0))),0)+' netto kosztu czasu przy własnych parametrach; NIE jest to gwarantowana oszczędność',
+      'Symulacja ręcznego czytania: '+formatMoney((effectiveCv()*asMoney('timePerCv')/60)*asMoney('hourlyTimeCost'),0)+' netto kosztu czasu przy własnych parametrach; NIE jest to gwarantowana oszczędność',
       '', 'Cel: Proszę o informację o dostępności, terminie, dokładnym zakresie i ostatecznej cenie.',
       '', 'Uwaga: ceny 10–150 CV stanowią roboczą symulację, nie wiążącą ofertę. FREE obejmuje tylko 5 CV.',
       'Przygotowano w kalkulatorze SkillCheck v4. To nie jest zamówienie ani zgoda na płatność.'
@@ -476,7 +490,7 @@
   }
   function agencyCostCents(){
     if($('agencyMode').value==='fixed')return Math.round(asMoney('agencyFixed')*100);
-    return Math.round(asMoney('agencySalary')*12*(Math.min(100,asMoney('agencyCommission'))/100)*100);
+    return Math.round(asMoney('agencySalary')*12*(asMoney('agencyCommission')/100)*100);
   }
   function renderAgency(){
     const free=state.pack==='free';
@@ -563,14 +577,15 @@
     if($('quoteDialog').open)fillQuote();
   }
   function renderManualBenefit(){
-    const mins=Math.max(0,Math.min(240,Number($('timePerCv').value)||0));
-    const hourly=Math.max(0,Math.min(10000,Number($('hourlyTimeCost').value)||0));
+    const mins=asMoney('timePerCv');
+    const hourly=asMoney('hourlyTimeCost');
     const hours=effectiveCv()*mins/60;
     readable('manualHours',new Intl.NumberFormat('pl-PL',{minimumFractionDigits:1,maximumFractionDigits:1}).format(hours)+' h');
     readable('manualCost',formatMoney(hours*hourly,0));
   }
   function fillQuote(){
     const text=quote();$('quoteText').value=text;
+    $('openLead').href='/rozmowa?'+new URLSearchParams({source:'calculator-v4',pack:state.pack,cv:String(state.cv),extra:selectedExtras().map(([key])=>key).join(',')});
     $('openMail').href='mailto:pomoc@skillcheck.pl?subject='+encodeURIComponent('Zapytanie SkillCheck — '+PACK[state.pack].name+' / '+effectiveCv()+' CV')+'&body='+encodeURIComponent(text);
   }
   function openQuote(isBuyDemo=false){
