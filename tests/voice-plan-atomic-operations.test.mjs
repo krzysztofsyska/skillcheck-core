@@ -76,6 +76,91 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
  const visible=(await db.query(
   "select private.sc012b_current_release($1) as id",[f.application.id])).rows[0].id;
  assert.equal(visible,release);
+
+ await t.test("forced screening reanalysis hides a release despite identical source fingerprint",async()=>{
+  // A separate synthetic tenant keeps the original release intact for the
+  // subsequent concurrent-reader and source-mutation regression cases.
+  const tenant=await h.seed(users.owner,randomUUID(),5);
+  await h.asUser(users.owner);
+  await db.query("update public.positions set required_behaviors=$1 where id=$2",
+    [behaviorGuideDefinitions.map((x,i)=>x.label+": "+(i<4?"Wysoki":"Standardowy")),tenant.position.id]);
+  const other=await h.completedApplication(tenant,
+    ["insufficient_data","meets","below","meets","above"]);
+  await h.asUser(users.owner);
+  const otherShortlist=await h.add(other);
+  await h.asAdmin();
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
+  const verified=await reconstructTrustedVoiceSource(db,{
+    companyId:other.companyId,applicationId:other.application.id,
+    analysisId:other.analysis_id,reviewId:other.reviewId,
+    shortlistEntryId:otherShortlist,
+  });
+  const otherPlan=(await db.query([
+    "insert into public.voice_plan_versions",
+    "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+    "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+    "template_version,created_by,retention_policy_version,retention_deadline)",
+    "values($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10::jsonb,$11::jsonb,",
+    "'skillcheck-voice-plan-v1',$12,'synthetic-v1','2030-01-01') returning id",
+  ].join(" "),[
+    other.companyId,other.recruitment.id,other.application.id,other.position.id,
+    other.analysis_id,other.reviewId,otherShortlist,verified.sourceHash,
+    verified.planContractHash,
+    JSON.stringify(canonicalVoiceSourceSnapshot(verified.sourceBinding,verified.planSourceFingerprint)),
+    JSON.stringify(verified),users.owner,
+  ])).rows[0].id;
+  const otherReview=await atomicReviewVoicePlan(db,{
+    planId:otherPlan,sourceHash:verified.sourceHash,expectedReviewVersion:0,
+    decision:"approved",reason:null,requestKey:randomUUID(),
+  });
+  const otherRelease=await atomicReleaseVoicePlan(db,{
+    planId:otherPlan,sourceHash:verified.sourceHash,approvedReviewId:otherReview,
+    expectedPointerVersion:null,expectedReleaseId:null,requestKey:randomUUID(),
+  });
+  const current=async()=>(await db.query(
+    "select private.sc012b_current_release($1) as id",
+    [other.application.id])).rows[0].id;
+  assert.equal(await current(),otherRelease);
+  const previous=(await db.query(
+    "select id,input_fingerprint,execution_status,stale_at from public.screening_analysis_versions where id=$1",
+    [other.analysis_id])).rows[0];
+  assert.equal(previous.execution_status,"completed");
+  assert.equal(previous.stale_at,null);
+  // Force creates a newer completed analysis while the source is unchanged.
+  const forced=await h.start(other,{force:true});
+  assert.notEqual(forced.analysis_id,other.analysis_id);
+  await h.complete(other,forced,
+    ["insufficient_data","meets","below","meets","above"]);
+  await h.asAdmin();
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.owner]);
+  const newest=(await db.query(
+    "select id,input_fingerprint from public.screening_analysis_versions "+
+    "where company_id=$1 and application_id=$2 "+
+    "order by analysis_version desc limit 1",
+    [other.companyId,other.application.id])).rows[0];
+  assert.equal(newest.id,forced.analysis_id);
+  assert.equal(newest.input_fingerprint,previous.input_fingerprint,
+    "forced reanalysis must retain the unchanged source fingerprint");
+  const old=(await db.query(
+    "select execution_status,stale_at from public.screening_analysis_versions where id=$1",
+    [other.analysis_id])).rows[0];
+  assert.equal(old.execution_status,"completed");
+  assert.equal(old.stale_at,null,
+    "regression requires prior completed analysis to remain otherwise current");
+  assert.equal(await current(),null,"older release must no longer be visible");
+  const pointer=(await db.query(
+    "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+    [other.application.id])).rows[0];
+  assert.equal(pointer.n,0,"stale current pointer must be removed");
+  const immutable=(await db.query(
+    "select count(*)::int as n from private.voice_plan_release_entries where id=$1 and plan_id=$2",
+    [otherRelease,otherPlan])).rows[0];
+  assert.equal(immutable.n,1,"release history remains immutable");
+  const approved=(await db.query(
+    "select count(*)::int as n from private.voice_plan_review_entries where id=$1 and plan_id=$2",
+    [otherReview,otherPlan])).rows[0];
+  assert.equal(approved.n,1,"approved review history remains immutable");
+ });
  await t.test("screening writer advisory lock blocks the trusted current-release reader until commit",async()=>{
   // Three independent PostgreSQL 16 sessions: a screening writer, a
   // JWT-authenticated reader, and an observer of the server's lock table.
