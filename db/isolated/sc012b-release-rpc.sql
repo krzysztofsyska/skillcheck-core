@@ -192,7 +192,11 @@ declare
   v_analysis record;
   v_analysis_found boolean := false;
   v_shortlist_removed timestamptz;
+  v_shortlist_policy_version text;
   v_shortlist_found boolean := false;
+  v_policy_current boolean := false;
+  v_policy_version text;
+  v_policy_found boolean := false;
   v_review_version integer;
   v_review_disposition text;
   v_review_found boolean := false;
@@ -230,7 +234,7 @@ begin
     pg_catalog.hashtextextended('screening:'||v_row.application_id::text,0));
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(v_row.company_id::text||':'||v_row.application_id::text,0));
-  select p.analysis_id,p.screening_review_id,p.shortlist_entry_id,p.plan_envelope
+  select p.recruitment_id,p.analysis_id,p.screening_review_id,p.shortlist_entry_id,p.plan_envelope
     into v_plan
   from public.voice_plan_versions p
   where p.id=v_row.plan_id and p.company_id=v_row.company_id
@@ -269,12 +273,20 @@ begin
       and a.application_id=v_row.application_id
     for share nowait;
     v_analysis_found:=found;
-    select s.removed_at into v_shortlist_removed
+    select s.removed_at,s.ranking_policy_version
+      into v_shortlist_removed,v_shortlist_policy_version
     from public.recruitment_shortlist_entries s
     where s.company_id=v_row.company_id and s.id=v_plan.shortlist_entry_id
       and s.application_id=v_row.application_id
     for share nowait;
     v_shortlist_found:=found;
+    -- A retained shortlist row is not current after a ranking-policy change.
+    -- Mirror the same policy_current contract as the trusted source verifier.
+    select x.policy_current,x.ranking_policy_version
+      into v_policy_current,v_policy_version
+    from public.get_recruitment_shortlist(v_plan.recruitment_id,false) x
+    where x.entry_id=v_plan.shortlist_entry_id;
+    v_policy_found:=found;
     select r.review_version,r.disposition
       into v_review_version,v_review_disposition
     from public.screening_result_reviews r
@@ -299,6 +311,8 @@ begin
     or v_latest_analysis is distinct from v_plan.analysis_id
     or v_material is null or not v_position_found
     or not v_analysis_found or not v_shortlist_found or not v_review_found
+    or not v_policy_found or v_policy_current is distinct from true
+    or v_policy_version is distinct from v_shortlist_policy_version
     or (v_material->>'input_fingerprint') is distinct from
        (v_plan.plan_envelope #>> '{sourceBinding,analysisFingerprint}')
     or pg_catalog.date_trunc('milliseconds', v_position_updated) is distinct from
