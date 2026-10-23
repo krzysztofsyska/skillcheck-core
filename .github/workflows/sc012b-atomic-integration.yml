@@ -68,6 +68,30 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
+      - name: Verify forced-reanalysis regression sensitivity
+        env:
+          SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+        run: |
+          mutation_dir=$(mktemp -d)
+          trap 'rm -rf "$mutation_dir"' EXIT
+          git archive HEAD | tar -x -C "$mutation_dir"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$mutation_dir/node_modules"
+          python3 - "$mutation_dir/db/isolated/sc012b-release-rpc.sql" <<'PYTHON'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          sql = path.read_text()
+          guard = "    or v_latest_analysis is distinct from v_plan.analysis_id\n"
+          assert sql.count(guard) == 1, "expected exactly one latest-analysis guard"
+          path.write_text(sql.replace(guard, ""))
+          PYTHON
+          if (cd "$mutation_dir" && node --test --test-reporter=tap --test-concurrency=1 tests/voice-plan-atomic-operations.test.mjs) > "$mutation_dir/result.tap" 2>&1; then
+            cat "$mutation_dir/result.tap"
+            echo "Mutation unexpectedly passed"
+            exit 1
+          fi
+          cat "$mutation_dir/result.tap"
+          grep -F 'older release must no longer be visible' "$mutation_dir/result.tap"
+          grep -E '^# fail 2$' "$mutation_dir/result.tap"
       - run: node --test --test-concurrency=1 tests/voice-plan-atomic-operations.test.mjs tests/voice-trusted-source-verifier.test.mjs tests/voice-screening-gap-selection.test.mjs
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
