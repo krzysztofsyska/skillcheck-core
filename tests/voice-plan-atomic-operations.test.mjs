@@ -77,6 +77,41 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   "select private.sc012b_current_release($1) as id",[f.application.id])).rows[0].id;
  assert.equal(visible,release);
 
+ await t.test("ranking-policy advancement revokes a previously current release",async()=>{
+  // Keep the existing release intact for subsequent regressions: both the
+  // synthetic policy upgrade and stale-pointer deletion are rolled back.
+  await db.query("begin");
+  try{
+    const original=(await db.query(`select pg_get_functiondef(p.oid) as definition
+      from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public' and p.proname='get_recruitment_shortlist'`)).rows[0].definition;
+    assert.match(original,/screening-ranking-v1/);
+    await db.query(`insert into private.screening_ranking_policies
+      (version,min_coverage,below_points,meets_points,above_points,
+       min_target_size,max_target_size,default_target_size)
+      values ('screening-ranking-v2',0.60,0,60,100,5,10,10)`);
+    await db.query(original.replaceAll("screening-ranking-v1","screening-ranking-v2"));
+    const shortlisted=(await db.query(
+      "select policy_current from public.get_recruitment_shortlist($1,false) where entry_id=$2",
+      [f.recruitment.id,shortlist])).rows;
+    assert.ok(shortlisted.length===0 || shortlisted.every(row=>row.policy_current===false));
+    assert.equal((await db.query(
+      "select private.sc012b_current_release($1) as id",
+      [f.application.id])).rows[0].id,null,
+      "old ranking policy must never authorize dispatch");
+    assert.equal((await db.query(
+      "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+      [f.application.id])).rows[0].n,0,
+      "the stale pointer must be removed, release history preserved");
+  }finally{
+    await db.query("rollback");
+  }
+  assert.equal((await db.query(
+    "select private.sc012b_current_release($1) as id",
+    [f.application.id])).rows[0].id,release);
+ });
+
+
  await t.test("forced screening reanalysis hides a release despite identical source fingerprint",async()=>{
   // A separate synthetic tenant keeps the original release intact for the
   // subsequent concurrent-reader and source-mutation regression cases.
