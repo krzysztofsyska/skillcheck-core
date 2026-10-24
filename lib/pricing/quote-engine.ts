@@ -324,6 +324,46 @@ function checkOfferHeader(offer: Offer): void {
       !Array.isArray(offer.planServices) || !Array.isArray(offer.discounts)) return fail('INVALID_CATALOG');
 }
 
+/** Maximum total weight over add-on sets the quote engine can accept together: services included in
+ * the package are always present, and no two selected services may exclude each other. Exact for
+ * conflict components of up to 20 services; larger components fall back to their plain sum, which is
+ * conservative (may reject a valid catalog, never accepts an unquotable one). */
+function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlySet<string>,
+  services: Catalog['services']): bigint {
+  const excludes = (a: string, b: string): boolean =>
+    services.get(a)!.service.exclusions.includes(b) || services.get(b)!.service.exclusions.includes(a);
+  // A service excluded by an always-present one can never be selected.
+  const free = Array.from(weight.keys()).filter(c => !forced.has(c) && !Array.from(forced).some(f => excludes(c, f)));
+  let total = ZERO;
+  for (const c of Array.from(weight.keys())) if (forced.has(c)) total += weight.get(c)!;
+  const seen = new Set<string>();
+  for (const start of free) {
+    if (seen.has(start)) continue;
+    const component: string[] = [];
+    const stack = [start];
+    seen.add(start);
+    while (stack.length) {
+      const c = stack.pop()!;
+      component.push(c);
+      for (const o of free) if (!seen.has(o) && excludes(c, o)) { seen.add(o); stack.push(o); }
+    }
+    if (component.length > 20) { for (const c of component) total += weight.get(c)!; continue; }
+    let best = ZERO;
+    for (let mask = 0; mask < 1 << component.length; mask++) {
+      let sum = ZERO, ok = true;
+      for (let i = 0; i < component.length && ok; i++) {
+        if (!(mask & (1 << i))) continue;
+        for (let j = i + 1; j < component.length; j++)
+          if (mask & (1 << j) && excludes(component[i], component[j])) { ok = false; break; }
+        sum += weight.get(component[i])!;
+      }
+      if (ok && sum > best) best = sum;
+    }
+    total += best;
+  }
+  return total;
+}
+
 /** Publish-time validation (contract: "Walidacja przed publish"). Pure; the DB publish RPC must call an
  * equivalent check in the same transaction. Returns the maximal reachable gross per plan. */
 export function validateOfferForPublish(offer: Offer): Readonly<Record<string, number>> {
@@ -343,14 +383,25 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
       if (!overage) return fail('UNPRICED');
       net += BigInt(amount(upperBound(overage, cvLargest)));
     }
-    for (const [serviceCode, { link, rule }] of Array.from(catalog.links.get(code)?.entries() ?? [])) {
+    // Per-add-on maxima, then the best *compatible* combination (exclusions respected).
+    const planLinks = catalog.links.get(code) ?? new Map();
+    const forced = new Set<string>();
+    const weight = new Map<string, bigint>();
+    for (const [serviceCode, { link }] of Array.from(planLinks.entries()))
+      if (link.allowed && link.includedQuantity > 0) forced.add(serviceCode);
+    const excludedByForced = (c: string): boolean => Array.from(forced).some(f =>
+      catalog.services.get(c)!.service.exclusions.includes(f) || catalog.services.get(f)!.service.exclusions.includes(c));
+    for (const [serviceCode, { link, rule }] of Array.from(planLinks.entries())) {
       if (!link.allowed || !link.extraAllowed) continue;
+      // Never selectable in this package (excluded by an always-present service): no reachable line.
+      if (!forced.has(serviceCode) && excludedByForced(serviceCode)) continue;
       const largest = stepLargestIn(link.quantityStep, link.maxQuantity - link.includedQuantity);
       if (largest(1, MAX_QUANTITY) === null) continue;
       if (!rule) return fail(`UNPRICED:${serviceCode}`);
-      net += BigInt(amount(upperBound(rule, largest)));
-      amount(net);
+      weight.set(serviceCode, BigInt(amount(upperBound(rule, largest))));
     }
+    net += maxCompatibleSum(weight, forced, catalog.services);
+    amount(net);
     amount(net); // undiscounted subtotal must itself fit (it is a quote field)
     // Discounts are monotonic non-decreasing in net, so the maximal net stays maximal after them;
     // apply the same ordered calculation as quoting before VAT.

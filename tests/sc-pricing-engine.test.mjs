@@ -377,3 +377,26 @@ test('publish bound applies eligible discounts before VAT, like quoting', () => 
   assert.equal(validateOfferForPublish(c).PRESELEKCJA, 553_500_000_000);
   assert.equal(quote('PRESELEKCJA', [], 30, c).grossMinor, 553_500_000_000);
 });
+
+test('publish bound respects exclusions: mutually exclusive add-ons are not summed', () => {
+  const c = clone();
+  const pre = c.plans.find(p => p.code === 'PRESELEKCJA');
+  Object.assign(pre, { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+  c.services.push(
+    { code: 'opt_a', name: 'A', technicalStatus: 'verified', commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: ['opt_b'], defaultPriceRule: { method: 'fixed', amountMinor: 500_000_000_000 } },
+    { code: 'opt_b', name: 'B', technicalStatus: 'verified', commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: [], defaultPriceRule: { method: 'fixed', amountMinor: 500_000_000_000 } });
+  c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
+  c.planServices.push({ ...link('PRESELEKCJA', 'opt_a'), maxQuantity: 1 }, { ...link('PRESELEKCJA', 'opt_b'), maxQuantity: 1 });
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 615_000_000_000);
+  assert.equal(quote('PRESELEKCJA', [{ serviceCode: 'opt_a', quantity: 1 }], 30, c).grossMinor, 615_000_000_000);
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'opt_a', quantity: 1 }, { serviceCode: 'opt_b', quantity: 1 }], 30, c), 'MUTUAL_EXCLUSION');
+  // Without the exclusion both are reachable together and the catalog must be refused.
+  c.services.find(s => s.code === 'opt_a').exclusions = [];
+  error(() => validateOfferForPublish(c), 'AMOUNT_OUT_OF_RANGE');
+  // An add-on excluded by a package-included service is never selectable.
+  const d = clone();
+  d.services.find(s => s.code === 'report_ext').exclusions = ['interview'];
+  d.planServices.find(l => l.packageCode === 'WERYFIKACJA' && l.serviceCode === 'report_ext').overridePriceRule = { method: 'per_unit', unitMinor: 40_000_000_000 };
+  d.planServices.find(l => l.packageCode === 'WERYFIKACJA' && l.serviceCode === 'report_ext').includedQuantity = 0;
+  assert.doesNotThrow(() => validateOfferForPublish(d));
+});
