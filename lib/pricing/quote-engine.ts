@@ -391,8 +391,19 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
       if (link.allowed && link.includedQuantity > 0) forced.add(serviceCode);
     const excludedByForced = (c: string): boolean => Array.from(forced).some(f =>
       catalog.services.get(c)!.service.exclusions.includes(f) || catalog.services.get(f)!.service.exclusions.includes(c));
+    // Always-present services that exclude each other would make every quote of the plan fail.
+    const forcedList = Array.from(forced);
+    for (let i = 0; i < forcedList.length; i++)
+      for (let j = i + 1; j < forcedList.length; j++)
+        if (catalog.services.get(forcedList[i])!.service.exclusions.includes(forcedList[j]) ||
+            catalog.services.get(forcedList[j])!.service.exclusions.includes(forcedList[i]))
+          return fail(`INCLUDED_SERVICES_CONFLICT:${code}`);
     for (const [serviceCode, { link, rule }] of Array.from(planLinks.entries())) {
       if (!link.allowed || !link.extraAllowed) continue;
+      // Extra quantity is reachable only through an explicit add-on selection, which quoteOffer
+      // accepts only for visible, non-hidden links of non-hidden services (same rule as quoting).
+      if (!link.visible || link.commercialStatus === 'hidden' ||
+          catalog.services.get(serviceCode)!.service.commercialStatus === 'hidden') continue;
       // Never selectable in this package (excluded by an always-present service): no reachable line.
       if (!forced.has(serviceCode) && excludedByForced(serviceCode)) continue;
       const largest = stepLargestIn(link.quantityStep, link.maxQuantity - link.includedQuantity);

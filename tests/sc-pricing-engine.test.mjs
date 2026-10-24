@@ -398,5 +398,27 @@ test('publish bound respects exclusions: mutually exclusive add-ons are not summ
   d.services.find(s => s.code === 'report_ext').exclusions = ['interview'];
   d.planServices.find(l => l.packageCode === 'WERYFIKACJA' && l.serviceCode === 'report_ext').overridePriceRule = { method: 'per_unit', unitMinor: 40_000_000_000 };
   d.planServices.find(l => l.packageCode === 'WERYFIKACJA' && l.serviceCode === 'report_ext').includedQuantity = 0;
+  d.planServices.find(l => l.packageCode === 'ASSESSMENT_CENTER' && l.serviceCode === 'report_ext').includedQuantity = 0;
   assert.doesNotThrow(() => validateOfferForPublish(d));
+});
+
+test('publish rejects mutually exclusive package-included services', () => {
+  const c = clone();
+  c.services.find(s => s.code === 'report_ext').exclusions = ['interview'];
+  error(() => validateOfferForPublish(c), 'INCLUDED_SERVICES_CONFLICT:WERYFIKACJA');
+  error(() => quote('WERYFIKACJA', [], 20, c), 'MUTUAL_EXCLUSION');
+});
+
+test('publish bound ignores add-ons that quoting would refuse to select (invisible or hidden)', () => {
+  for (const patch of [{ visible: false }, { visible: false, commercialStatus: 'hidden', autoPurchase: false }]) {
+    const c = clone();
+    const l = c.planServices.find(x => x.packageCode === 'PRESELEKCJA' && x.serviceCode === 'report_ext');
+    Object.assign(l, patch, { overridePriceRule: { method: 'fixed', amountMinor: 1_000_000_000_000 } });
+    assert.doesNotThrow(() => validateOfferForPublish(c));
+    error(() => quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 1 }], 20, c), 'ADDON_UNAVAILABLE');
+  }
+  const h = clone();
+  h.services.find(s => s.code === 'report_ext').commercialStatus = 'hidden';
+  h.planServices.find(x => x.packageCode === 'PRESELEKCJA' && x.serviceCode === 'report_ext').overridePriceRule = { method: 'fixed', amountMinor: 1_000_000_000_000 };
+  assert.doesNotThrow(() => validateOfferForPublish(h));
 });
