@@ -1,0 +1,35 @@
+{
+  "id": "SC-MVP-RELEASE-2026-10-PROPOSED",
+  "status": "PROPOSED_NOT_APPROVED",
+  "source": "docs/release/sc-mvp-production-runbook.md",
+  "note": "Draft in the controller format of .github/agent-pipeline/production-runbook.example.json. The controller reads production-runbook.json from main only; placing it there requires a separate owner decision. Never run supabase db push: production migration versions differ from repository filenames.",
+  "operations": [
+    "M1 apply 20261009105025_candidate_communication_foundation.sql individually as postgres with ON_ERROR_STOP; verify; record repository version",
+    "M2 apply 20261009141836_candidate_communication_verification.sql individually; verify contact_verifier is NOLOGIN; record",
+    "M3 apply 20261010190255_candidate_retention_preview.sql individually; verify; record",
+    "M4 apply 20261010194216_candidate_erasure_lifecycle.sql individually; verify; record",
+    "M5 apply 20261010194230_candidate_erasure_guards.sql individually outside business hours; verify triggers; record",
+    "M6 apply 20261010194343_candidate_erasure_inventory_v2.sql individually; verify; record",
+    "M7 apply 20261010204840_erasure_execution_protocol.sql individually; verify four erasure roles are NOLOGIN without BYPASSRLS; record",
+    "M8 apply 20261010205030_erasure_purge_graph.sql individually; verify temporary privileges were revoked; record",
+    "M9 apply 20261010205052_erasure_inventory_v3.sql individually; verify; record",
+    "M10 apply 20261012031026_retention_scheduler_protocol.sql individually; verify pg_cron job count unchanged; record",
+    "M11 apply 20261012031039_retention_scheduler_inventory.sql individually; run tools/erasure/production-preflight.sql; record",
+    "M12 apply 20261021084245_explicit_data_api_table_acl.sql individually after owner confirms no external service_role use; verify zero service_role table grants on the 29 relations; record",
+    "M13 apply 20261021084732_sc019_credits_payments_inventory.sql individually; verify private.sc19 tables exist and are empty; record",
+    "Regenerate the promotion manifest for the final SHA and compare its hash with the approved one",
+    "Merge integration into main; this automatically publishes Vercel Production (vercel.json main: true)",
+    "Keep SALES_LEADS_ENABLED and SALES_AUTO_REPLY_ENABLED false; do not set SC19_PACKAGES_ENABLED, COMPETENCY_BROKER_ENABLED or any payment provider configuration"
+  ],
+  "rollback": "Stop the sequence on the first failed migration (each file is transactional). Do not revert applied additive migrations; the current main does not use the new objects. For the application, promote previous Production deployment dpl_FAdsWMLnAyYVe19v6sNEY4Ci9zqm in Vercel and revert the merge on main. A point-in-time restore requires separate owner approval.",
+  "smoke_tests": [
+    "https://skillcheck.pl returns 200 without package sections",
+    "Synthetic recruiter of a fictitious company logs in and opens the dashboard",
+    "Synthetic candidate flow covers the list, ranking and report without regression",
+    "/dashboard/<company>/billing redirects to /dashboard",
+    "/rozmowa renders disabled and no sales_leads rows are created",
+    "No new Vercel runtime errors for 30 minutes",
+    "Exactly one pg_cron job remains and the Postgres logs show no errors"
+  ],
+  "secret_names": []
+}
