@@ -177,24 +177,37 @@ function priceOf(rule: CheckedRule, qty: number): bigint {
   }
 }
 
-/** Highest net charge reachable for any billed quantity in 1..maxQty. Rejects rules whose bounded
- * last tier cannot price a reachable quantity (a configuration error, not a quote-time surprise). */
-function upperBound(rule: CheckedRule, maxQty: number): bigint {
-  if (maxQty === 0) return ZERO;
-  if (rule.kind === 'fixed' || rule.kind === 'per_unit') return priceOf(rule, maxQty);
-  if (maxQty > rule.tiers[rule.tiers.length - 1].top) return fail('TIER_COVERAGE');
-  if (rule.kind === 'graduated') return priceOf(rule, maxQty);
+/** Largest reachable billed quantity inside [lo, hi] (inclusive), or null. */
+type LargestIn = (lo: number, hi: number) => number | null;
+
+/** Highest net charge over every *reachable* billed quantity. Tiered rules need not be monotonic, so
+ * each tier is evaluated at its largest reachable quantity; tiers with no reachable quantity are ignored.
+ * A reachable quantity beyond a bounded last tier is a configuration error (TIER_COVERAGE). */
+function upperBound(rule: CheckedRule, largestIn: LargestIn): bigint {
+  const top = largestIn(1, MAX_QUANTITY);
+  if (top === null) return ZERO;
+  if (rule.kind === 'fixed' || rule.kind === 'per_unit') return priceOf(rule, top);
+  const lastTop = rule.tiers[rule.tiers.length - 1].top;
+  if (lastTop < MAX_QUANTITY && largestIn(lastTop + 1, MAX_QUANTITY) !== null) return fail('TIER_COVERAGE');
+  if (rule.kind === 'graduated') return priceOf(rule, top);
   let best = ZERO;
   for (const t of rule.tiers) {
-    if (t.low > maxQty) break;
-    const candidate = rule.kind === 'tiered_flat' ? BigInt(t.value) : BigInt(Math.min(t.top, maxQty)) * BigInt(t.value);
+    const q = largestIn(t.low, t.top);
+    if (q === null) continue;
+    const candidate = rule.kind === 'tiered_flat' ? BigInt(t.value) : BigInt(q) * BigInt(t.value);
     if (candidate > best) best = candidate;
   }
   return best;
 }
 
+/** Billed add-on quantities: positive multiples of step up to `extra`. */
+const stepLargestIn = (step: number, extra: number): LargestIn => (lo, hi) => {
+  const q = Math.floor(Math.min(hi, extra) / step) * step;
+  return q >= Math.max(lo, 1) ? q : null;
+};
+
 // ---------- catalog validation (shared by publish and quote) ----------
-function checkCvPolicy(policy: unknown): { allowed: (n: number) => boolean; max: number } {
+function checkCvPolicy(policy: unknown): { allowed: (n: number) => boolean; max: number; largest: LargestIn } {
   if (!exact(policy, ['quick', 'range']) || !Array.isArray(policy.quick) || policy.quick.length > 30)
     return fail('INVALID_CV_POLICY');
   const quick = policy.quick as unknown[];
@@ -208,8 +221,21 @@ function checkCvPolicy(policy: unknown): { allowed: (n: number) => boolean; max:
   const quickSet = new Set(quick as number[]);
   const rangeTop = range ? range.min + Math.floor((range.max - range.min) / range.step) * range.step : 0;
   const max = Math.max(quick.length ? (quick[quick.length - 1] as number) : 0, rangeTop);
+  const largest = (lo: number, hi: number): number | null => {
+    let best: number | null = null;
+    for (const q of quick as number[]) if (q >= lo && q <= hi) best = q;
+    if (range !== null) {
+      const cap = Math.min(hi, range.max);
+      if (cap >= range.min) {
+        const q = range.min + Math.floor((cap - range.min) / range.step) * range.step;
+        if (q >= lo && (best === null || q > best)) best = q;
+      }
+    }
+    return best;
+  };
   return {
     max,
+    largest,
     allowed: n => validQty(n) && n > 0 && (quickSet.has(n) ||
       (range !== null && n >= range.min && n <= range.max && (n - range.min) % range.step === 0)),
   };
@@ -308,23 +334,33 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
     if (plan.commercialStatus === 'purchasable' && (plan.baseNetMinor === null || plan.capabilityCode === null))
       return fail('PURCHASABLE_REQUIRES_PRICE_AND_CAPABILITY');
     let net = BigInt(plan.baseNetMinor ?? 0);
-    const cvExtra = Math.max(0, cv.max - plan.cvIncluded);
-    if (cvExtra > 0) {
+    // Billed CV = allowed count − cvIncluded, for allowed counts above cvIncluded.
+    const cvLargest: LargestIn = (lo, hi) => {
+      const n = cv.largest(lo + plan.cvIncluded, hi + plan.cvIncluded);
+      return n === null || n <= plan.cvIncluded ? null : n - plan.cvIncluded;
+    };
+    if (cvLargest(1, MAX_QUANTITY) !== null) {
       if (!overage) return fail('UNPRICED');
-      net += upperBound(overage, cvExtra);
+      net += BigInt(amount(upperBound(overage, cvLargest)));
     }
     for (const [serviceCode, { link, rule }] of Array.from(catalog.links.get(code)?.entries() ?? [])) {
       if (!link.allowed || !link.extraAllowed) continue;
-      // Billable quantities are positive multiples of quantityStep up to max - included.
-      const extra = link.maxQuantity - link.includedQuantity;
-      const reachable = extra - (extra % link.quantityStep);
-      if (reachable === 0) continue;
+      const largest = stepLargestIn(link.quantityStep, link.maxQuantity - link.includedQuantity);
+      if (largest(1, MAX_QUANTITY) === null) continue;
       if (!rule) return fail(`UNPRICED:${serviceCode}`);
-      net += upperBound(rule, reachable);
+      net += BigInt(amount(upperBound(rule, largest)));
       amount(net);
     }
-    amount(net);
-    maxGross[code] = amount(net + vatOf(net, offer.vatBasisPoints));
+    amount(net); // undiscounted subtotal must itself fit (it is a quote field)
+    // Discounts are monotonic non-decreasing in net, so the maximal net stays maximal after them;
+    // apply the same ordered calculation as quoting before VAT.
+    let discounted = net;
+    for (const d of catalog.discounts) {
+      if (!d.eligiblePackages.includes(code)) continue;
+      const applied = d.method === 'percent' ? halfUp(discounted * BigInt(d.value), BigInt(10000)) : BigInt(d.value);
+      discounted -= applied > discounted ? discounted : applied;
+    }
+    maxGross[code] = amount(discounted + vatOf(discounted, offer.vatBasisPoints));
   }
   return maxGross;
 }

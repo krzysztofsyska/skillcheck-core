@@ -339,3 +339,41 @@ test('dependency cycles and dependency/exclusion conflicts are rejected', () => 
   d.services.find(s => s.code === 'check_plus').exclusions = ['skill_test'];
   error(() => quote('PRESELEKCJA', [], 20, d), 'INVALID_CATALOG');
 });
+
+test('publish bound uses every reachable tier maximum, not only the largest quantity', () => {
+  const c = clone();
+  Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), {
+    cvIncluded: 0, cvPolicy: { quick: [2, 3], range: null },
+    cvOverageRule: { method: 'volume_tier', mode: 'all_units', tiers: [{ upTo: 2, unitMinor: 1_000_000_000_000 }, { upTo: null, unitMinor: 1 }] },
+  });
+  error(() => validateOfferForPublish(c), 'AMOUNT_OUT_OF_RANGE');
+  error(() => quote('PRESELEKCJA', [], 2, c), 'AMOUNT_OUT_OF_RANGE');
+  assert.equal(line(quote('PRESELEKCJA', [], 3, c), 'cv').netMinor, 3);
+});
+
+test('publish bound ignores quantities that the step makes unselectable', () => {
+  const c = clone();
+  Object.assign(c.planServices.find(l => l.packageCode === 'PRESELEKCJA'), {
+    includedQuantity: 0, quantityStep: 10, maxQuantity: 20,
+    overridePriceRule: { method: 'tiered_flat', tiers: [{ upTo: 9, amountMinor: 1_000_000_000_000 }, { upTo: 20, amountMinor: 1 }] },
+  });
+  assert.doesNotThrow(() => validateOfferForPublish(c));
+  assert.equal(line(quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 10 }], 20, c), 'report_ext').netMinor, 1);
+  // Gaps in CV policies are also skipped: quick 10/20 never reach the 11..19 tier.
+  const d = clone();
+  Object.assign(d.plans.find(p => p.code === 'PRESELEKCJA'), {
+    cvIncluded: 0, cvPolicy: { quick: [10, 20], range: null },
+    cvOverageRule: { method: 'tiered_flat', tiers: [{ upTo: 10, amountMinor: 5 }, { upTo: 19, amountMinor: 1_000_000_000_000 }, { upTo: null, amountMinor: 7 }] },
+  });
+  assert.doesNotThrow(() => validateOfferForPublish(d));
+});
+
+test('publish bound applies eligible discounts before VAT, like quoting', () => {
+  const c = clone();
+  const p = c.plans.find(x => x.code === 'PRESELEKCJA');
+  Object.assign(p, { baseNetMinor: 900_000_000_000, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+  c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
+  c.discounts = [{ code: 'half', method: 'percent', value: 5000, eligiblePackages: ['PRESELEKCJA'] }];
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 553_500_000_000);
+  assert.equal(quote('PRESELEKCJA', [], 30, c).grossMinor, 553_500_000_000);
+});
