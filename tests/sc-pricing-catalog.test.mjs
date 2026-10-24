@@ -73,9 +73,67 @@ test('PostgreSQL16 catalog FK, plan overrides, immutability, hostile RLS', async
       assert.equal(result.rows[0].n,3);
     });
 
+    await t.test('rule payloads are typed in the database: v1 methods only, valid tiers',async()=>{
+      const ok=[['flat_cv','tiered_flat',{tiers:[{upTo:30,amountMinor:29000},{upTo:50,amountMinor:30000},{upTo:null,amountMinor:32000}]}],
+        ['fixed_ok','fixed',{amountMinor:4000}],
+        ['grad_ok','volume_tier',{mode:'graduated',tiers:[{upTo:10,unitMinor:100},{upTo:40,unitMinor:50}]}]];
+      for (const [code,method,payload] of ok)
+        await q('INSERT INTO @price_rules(version_id,code,method,payload) VALUES($1,$2,$3,$4)',[ids.draft,code,method,JSON.stringify(payload)]);
+      const bad=[
+        ['bundle',{amountMinor:1,covers:[]}],
+        ['formula',{expr:'1+1'}],
+        ['fixed',{amountMinor:-1}],
+        ['fixed',{amountMinor:1.5}],
+        ['fixed',{amountMinor:1,unitMinor:2}],
+        ['per_unit',{unitMinor:'100'}],
+        ['volume_tier',{mode:'stepwise',tiers:[{upTo:null,unitMinor:1}]}],
+        ['tiered_flat',{tiers:[]}],
+        ['tiered_flat',{tiers:[{upTo:50,amountMinor:1},{upTo:30,amountMinor:2}]}],
+        ['tiered_flat',{tiers:[{upTo:null,amountMinor:1},{upTo:30,amountMinor:2}]}],
+        ['tiered_flat',{tiers:[{upTo:10.5,amountMinor:1}]}],
+        ['tiered_flat',{tiers:[{upTo:10,amountMinor:1,extra:1}]}],
+        ['tiered_flat',{tiers:[{upTo:100001,amountMinor:1}]}],
+      ];
+      for (const [i,[method,payload]] of bad.entries())
+        await assertSqlError(()=>q('INSERT INTO @price_rules(version_id,code,method,payload) VALUES($1,$2,$3,$4)',[ids.draft,'bad_'+i,method,JSON.stringify(payload)]),'23514');
+    });
+
+    await t.test('plan-service flags follow the contract semantics',async()=>{
+      const base="UPDATE @package_services SET %s WHERE version_id=$1 AND package_code='WERYFIKACJA'";
+      for (const set of ["auto_purchase=true, commercial_status='on_request'",
+                         "allowed=false, included_quantity=0, extra_allowed=false, auto_purchase=false, visible=true",
+                         "commercial_status='hidden', visible=true"])
+        await assertSqlError(()=>q(base.replace('%s',set),[ids.draft]),'23514');
+      await assertSqlError(()=>q("UPDATE @services SET dependencies='{x_dep}', exclusions='{x_dep}' WHERE version_id=$1 AND code='report_ext'",[ids.draft]),'23514');
+    });
+
+    await t.test('service limit change cannot miss a concurrently committed assignment (REPEATABLE READ)',async()=>{
+      await q("INSERT INTO @services(version_id,code,name,unit,min_quantity,max_quantity,quantity_step,technical_status,commercial_status) VALUES($1,'race_svc','Race','item',0,20,1,'prototype','on_request')",[ids.draft]);
+      const other=new pg.Client({connectionString:value});
+      await other.connect();
+      try {
+        await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+        await db.query('SELECT count(*) FROM sc_pricing_isolated.package_services'); // snapshot taken here
+        await other.query("INSERT INTO sc_pricing_isolated.package_services(version_id,package_code,service_code,allowed,visible,included_quantity,max_quantity,quantity_step,extra_allowed,commercial_status) VALUES($1,'PRESELEKCJA','race_svc',true,true,0,20,1,true,'on_request')",[ids.draft]);
+        await assertSqlError(()=>db.query("UPDATE sc_pricing_isolated.services SET max_quantity=10 WHERE version_id=$1 AND code='race_svc'",[ids.draft]),'40001');
+        await db.query('ROLLBACK');
+        // READ COMMITTED sees the committed assignment and rejects the narrowing.
+        await assertSqlError(()=>q("UPDATE @services SET max_quantity=10 WHERE version_id=$1 AND code='race_svc'",[ids.draft]),'22023');
+        await q("DELETE FROM @package_services WHERE version_id=$1 AND service_code='race_svc'",[ids.draft]);
+        await q("DELETE FROM @services WHERE version_id=$1 AND code='race_svc'",[ids.draft]);
+      } finally {
+        try { await db.query('ROLLBACK'); } catch {}
+        await other.end();
+      }
+    });
+
     await t.test('published and superseded catalog snapshots are immutable',async()=>{
       await q('INSERT INTO @price_rules(version_id,code,method,payload) VALUES($1,$2,$3,$4)',[ids.published,'verify_report','per_unit',JSON.stringify({unitMinor:999})]);
       await q("UPDATE @versions SET status='PUBLISHED', approved=true WHERE id=$1",[ids.published]);
+      // A second PUBLISHED version in the same scope is refused until the first is superseded.
+      await q("INSERT INTO @versions(id,scope_id,status,approved,vat_basis_points) VALUES('00000000-0000-4000-8000-000000000404',$1,'DRAFT',true,2300)",[ids.scope]);
+      await assertSqlError(()=>q("UPDATE @versions SET status='PUBLISHED' WHERE id='00000000-0000-4000-8000-000000000404'"),'23505');
+      await q("DELETE FROM @versions WHERE id='00000000-0000-4000-8000-000000000404'");
       await assertSqlError(()=>q("UPDATE @price_rules SET payload='{\"unitMinor\":1}'::jsonb WHERE version_id=$1 AND code='verify_report'",[ids.published]),'55000');
       await assertSqlError(()=>q("DELETE FROM @price_rules WHERE version_id=$1 AND code='verify_report'",[ids.published]),'55000');
       await assertSqlError(()=>q('UPDATE @versions SET vat_basis_points=1000 WHERE id=$1',[ids.published]),'55000');

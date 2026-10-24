@@ -25,13 +25,63 @@ CREATE TABLE sc_pricing_isolated.versions (
   UNIQUE (id, scope_id),
   CHECK (status NOT IN ('PUBLISHED','SUPERSEDED') OR approved = true)
 );
+-- At most one PUBLISHED version per scope; the publisher supersedes the previous one in the same transaction.
+CREATE UNIQUE INDEX versions_one_published_per_scope
+  ON sc_pricing_isolated.versions(scope_id) WHERE status = 'PUBLISHED';
+
+-- Typed rule payload (contract pln-v1). Method lives in its own column; payload carries only the
+-- method's fields. bundle and unknown methods are not part of v1.
+CREATE FUNCTION sc_pricing_isolated.valid_money(v jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT v IS NOT NULL AND jsonb_typeof(v) = 'number'
+     AND (v #>> '{}')::numeric = trunc((v #>> '{}')::numeric)
+     AND (v #>> '{}')::numeric BETWEEN 0 AND 1000000000000
+$$;
+CREATE FUNCTION sc_pricing_isolated.valid_tiers(tiers jsonb, amount_key text) RETURNS boolean
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE n integer; i integer; t jsonb; previous numeric := 0; up numeric;
+BEGIN
+  IF tiers IS NULL OR jsonb_typeof(tiers) <> 'array' THEN RETURN false; END IF;
+  n := jsonb_array_length(tiers);
+  IF n < 1 OR n > 32 THEN RETURN false; END IF;
+  FOR i IN 0..n-1 LOOP
+    t := tiers -> i;
+    IF jsonb_typeof(t) <> 'object' OR (SELECT count(*) FROM jsonb_object_keys(t)) <> 2
+       OR NOT (t ? 'upTo') OR NOT (t ? amount_key)
+       OR NOT sc_pricing_isolated.valid_money(t -> amount_key) THEN RETURN false; END IF;
+    IF jsonb_typeof(t -> 'upTo') = 'null' THEN
+      IF i <> n-1 THEN RETURN false; END IF;      -- only the last tier may be unbounded
+    ELSE
+      IF jsonb_typeof(t -> 'upTo') <> 'number' THEN RETURN false; END IF;
+      up := (t ->> 'upTo')::numeric;
+      IF up <> trunc(up) OR up <= previous OR up > 100000 THEN RETURN false; END IF;
+      previous := up;
+    END IF;
+  END LOOP;
+  RETURN true;
+END $$;
+CREATE FUNCTION sc_pricing_isolated.valid_rule_payload(method text, payload jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE method
+    WHEN 'fixed' THEN payload ?& ARRAY['amountMinor'] AND (SELECT count(*) FROM jsonb_object_keys(payload)) = 1
+      AND sc_pricing_isolated.valid_money(payload -> 'amountMinor')
+    WHEN 'per_unit' THEN payload ?& ARRAY['unitMinor'] AND (SELECT count(*) FROM jsonb_object_keys(payload)) = 1
+      AND sc_pricing_isolated.valid_money(payload -> 'unitMinor')
+    WHEN 'volume_tier' THEN payload ?& ARRAY['mode','tiers'] AND (SELECT count(*) FROM jsonb_object_keys(payload)) = 2
+      AND payload ->> 'mode' IN ('graduated','all_units') AND jsonb_typeof(payload -> 'mode') = 'string'
+      AND sc_pricing_isolated.valid_tiers(payload -> 'tiers', 'unitMinor')
+    WHEN 'tiered_flat' THEN payload ?& ARRAY['tiers'] AND (SELECT count(*) FROM jsonb_object_keys(payload)) = 1
+      AND sc_pricing_isolated.valid_tiers(payload -> 'tiers', 'amountMinor')
+    ELSE false END
+$$;
 
 CREATE TABLE sc_pricing_isolated.price_rules (
   version_id uuid NOT NULL REFERENCES sc_pricing_isolated.versions(id) ON DELETE RESTRICT,
   code text NOT NULL CHECK (code ~ '^[a-z][a-z0-9_:-]{1,63}$'),
-  method text NOT NULL CHECK (method IN ('fixed','per_unit','volume_tier','bundle')),
+  method text NOT NULL CHECK (method IN ('fixed','per_unit','volume_tier','tiered_flat')),
   payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
-  PRIMARY KEY (version_id, code)
+  PRIMARY KEY (version_id, code),
+  CONSTRAINT price_rule_payload_valid CHECK (sc_pricing_isolated.valid_rule_payload(method, payload))
 );
 COMMENT ON TABLE sc_pricing_isolated.price_rules IS 'Typed rule payload validated again by publishing validator and quote engine; no JS/SQL evaluation';
 
@@ -66,7 +116,11 @@ CREATE TABLE sc_pricing_isolated.services (
   dependencies text[] NOT NULL DEFAULT '{}', exclusions text[] NOT NULL DEFAULT '{}',
   sort_order integer NOT NULL DEFAULT 0, visible boolean NOT NULL DEFAULT false,
   default_rule_code text,
+  -- Bumped by every package_services write: a concurrent limit change on the same service row then
+  -- conflicts (READ COMMITTED re-checks; REPEATABLE READ/SERIALIZABLE fail with 40001).
+  assignment_revision bigint NOT NULL DEFAULT 0,
   PRIMARY KEY(version_id,code),
+  CHECK (NOT (dependencies && exclusions)),
   CHECK (min_quantity <= max_quantity),
   CHECK (NOT (code = ANY(dependencies)) AND NOT (code = ANY(exclusions))),
   FOREIGN KEY (version_id,default_rule_code) REFERENCES sc_pricing_isolated.price_rules(version_id,code) ON DELETE RESTRICT
@@ -91,16 +145,22 @@ CREATE TABLE sc_pricing_isolated.package_services (
   FOREIGN KEY (version_id,override_rule_code) REFERENCES sc_pricing_isolated.price_rules(version_id,code) ON DELETE RESTRICT,
   CHECK (included_quantity <= max_quantity),
   CHECK (allowed OR (included_quantity = 0 AND extra_allowed = false AND auto_purchase = false)),
-  CHECK (NOT auto_purchase OR allowed)
+  -- Contract pln-v1 flag semantics (same rules as quote engine CONTRADICTORY_FLAGS).
+  CONSTRAINT package_service_auto_purchase CHECK (NOT auto_purchase OR (allowed AND commercial_status = 'purchasable')),
+  CONSTRAINT package_service_disallowed_hidden CHECK (allowed OR (NOT visible AND NOT auto_purchase)),
+  CONSTRAINT package_service_hidden_invisible CHECK (commercial_status <> 'hidden' OR NOT visible)
 );
 
 -- Enforce *global* service quantity ceiling and aligned unit step, not merely row CHECK.
 CREATE FUNCTION sc_pricing_isolated.check_package_service() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE global_max integer; global_step integer;
 BEGIN
-  SELECT max_quantity, quantity_step INTO global_max, global_step
-  FROM sc_pricing_isolated.services
-  WHERE version_id = NEW.version_id AND code = NEW.service_code FOR SHARE;
+  -- A row write (not just FOR SHARE) so a concurrent service limit change cannot validate against a
+  -- snapshot that misses this assignment.
+  UPDATE sc_pricing_isolated.services
+     SET assignment_revision = assignment_revision + 1
+   WHERE version_id = NEW.version_id AND code = NEW.service_code
+  RETURNING max_quantity, quantity_step INTO global_max, global_step;
   IF global_max IS NULL OR NEW.max_quantity > global_max OR
      NEW.quantity_step % global_step <> 0 THEN
     RAISE EXCEPTION 'sc_pricing_package_service_limits' USING ERRCODE = '22023';
