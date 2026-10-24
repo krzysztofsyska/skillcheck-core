@@ -66,3 +66,33 @@ dedicated regressions. The reviewer independently repeated attempts, withdrawal
 and retention (26/26 supplementary PGlite PASS) and closed both findings. This is
 not a substitute for real PostgreSQL concurrency evidence. Final exact-HEAD
 CI/review results and integration merge evidence belong in PR #135.
+
+
+## Accepted SC-019 policy composition update (2026-10-20)
+
+PR #115 was independently reviewed and merged as integration
+`fbc75c79530fa81ddb8e94e71fcc5f1293f5553e` (PR head
+`5701b16e3dcbfe4f79fb27a315c1db4614d93811`). The composer now pins that exact
+billing source, SHA-256
+`219ba643a0dff4dcee342065544e375fa549aa30f35c0e525414949a46aec240`.
+The reviewed delta adds global package policy, its timestamp trigger and the
+restricted public catalog RPC. The policy belongs in the known table inventory;
+it has no candidate relationship and is not a candidate erasure adapter.
+
+The predecessor R5-VOICE signature is the literal accepted by #115:
+`c989b84b9eec51fc48c361b8ad9e7404b4044268d56d106b6788fe56f3f1857d`.
+The isolated B2 composition signature is
+`b20053a8e9a9990fbf3a031026940947ed091b65a1643a5e070768801e6a40b7`.
+It was derived only by booting a fresh synthetic PGlite database from the full
+checked-in accepted chain: retaining the old B2 literal caused the existing
+SC014_B2_SCHEMA_MISMATCH guard to abort and report this digest. No deployed
+schema was queried; no guard was removed; no installed baseline was updated.
+PostgreSQL 16 CI must independently confirm this same literal.
+
+The fixture compares all prior R4/R4-VOICE/R5 signature rows before and after
+B2 composition. Retention tests assert that package policy is known, excluded
+from candidate manifests and unchanged after a signed purge. Existing unknown
+schema and immutable baseline rejection tests remain enabled. The source hash
+check still rejects even a synthetic comment appended to a copied input.
+Both B2 and B3 workflows now run when either manifest source changes, catching
+this dependency on the source PR before integration merge.

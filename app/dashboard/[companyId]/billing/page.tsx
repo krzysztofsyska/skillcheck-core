@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { companyAccess } from '../../../../lib/company-access';
+import { loadSc19PackageSizes, sc19AnalysisScope } from '../../../../lib/sc19-package-sizes';
 import { activateSc19Free } from './actions';
 
 const notices: Record<string,string> = {
@@ -25,6 +26,7 @@ export default async function CompanyBilling({ params, searchParams }: {
     <p className="notice">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Analizy nie są jeszcze przydzielane automatycznie.</p>
   </section></main>;
 
+  const sizes = await loadSc19PackageSizes(client);
   const { data, error } = await client.rpc('sc19_get_balance', { target_company: companyId });
   if (error) throw new Error('Nie można odczytać limitu analiz firmy.');
   const balance = data?.[0] ?? null;
@@ -39,7 +41,7 @@ export default async function CompanyBilling({ params, searchParams }: {
       <p><strong>{balance.available}</strong> analiz CV do wykorzystania</p>
       <p>Analiza wymaga zatwierdzonej anonimizacji CV i weryfikacji wyniku przez rekrutera. SkillCheck nie podejmuje decyzji o zatrudnieniu.</p>
     </section> : <>
-      <h2>FREE — 5 analiz CV</h2>
+      <h2>FREE — {sc19AnalysisScope(sizes.FREE)}</h2>
       <p>Jednorazowa próba dla zweryfikowanej firmy. Sam poprawny NIP nie uprawnia do odbioru darmowej puli.</p>
       <p><Link href="/rozmowa">Zgłoś firmę do weryfikacji FREE →</Link></p>
       <p>Jeśli SkillCheck już potwierdził Twoją firmę, wpisz zatwierdzony NIP.</p>
@@ -50,7 +52,7 @@ export default async function CompanyBilling({ params, searchParams }: {
       </form> : <p className="notice">FREE może aktywować właściciel firmy.</p>}
     </>}
     <section>
-      <h2>PRESELEKCJA — 60 analiz CV</h2>
+      <h2>PRESELEKCJA — {sc19AnalysisScope(sizes.PRESELEKCJA)}</h2>
       <p>Jednorazowy pakiet z rankingiem kandydatów i raportem. Zamówienie jest obsługiwane przez operatora — kredyty przyznajemy dopiero po potwierdzeniu wpłaty.</p>
       <p><Link className="button" href="/rozmowa">Zamów PRESELEKCJĘ</Link></p>
       <p className="notice">Brak płatności automatycznych. Oferta i warunki rozliczenia wymagają potwierdzenia przez obsługę.</p>

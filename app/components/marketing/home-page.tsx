@@ -1,5 +1,7 @@
 import Link from "next/link";
 import styles from "../../marketing.module.css";
+import { loadSc19PackageSizes, loadSc19PublicOfferSizes } from "../../../lib/sc19-package-sizes";
+import { createClient } from "../../../lib/supabase/server";
 import { capabilities, faq, steps, availabilityNote } from "./content";
 import { PackageComparison } from "./package-comparison";
 import { SiteFooter } from "./site-footer";
@@ -12,7 +14,11 @@ const statusClass = {
   Planowane: styles.statusPlanned,
 } as const;
 
-export function HomePage() {
+export async function HomePage() {
+  const sizes = await loadSc19PublicOfferSizes(
+    process.env.SC19_PACKAGES_ENABLED === "true",
+    async () => loadSc19PackageSizes(await createClient()),
+  );
   return (
     <main className={styles.page}>
       <SiteHeader />
@@ -26,11 +32,12 @@ export function HomePage() {
                 Budujemy SkillCheck, aby pomóc firmom lepiej zrozumieć, kogo naprawdę potrzebują — i na jakich podstawach wybrać tę osobę. Łączymy wymagania stanowiska, materiały kandydatów i ustrukturyzowaną ocenę w jednym miejscu. Ostateczna decyzja należy do człowieka.
               </p>
               <div className={styles.actions}>
-                <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>
+                <Link href="/kalkulator" className={styles.primary}>Sprawdź kalkulator pakietów</Link>
+                <Link href="/demo" className={styles.secondary}>Zobacz przykład raportu</Link>
                 <Link href="/preselekcja" className={styles.secondary}>Zapytaj o pilotaż PRESELEKCJA</Link>
               </div>
               <p className={styles.note}>
-                Produkt rozwijamy etapami. Zobacz przykład raportu i sprawdź poniżej, które funkcje są już dostępne.
+                Kalkulator jest interaktywnym podglądem z orientacyjnymi kwotami. Nie uruchamia płatności ani dostępu do usług. Poniżej sprawdzisz, które funkcje są już dostępne.
               </p>
             </div>
             <aside className={styles.visionCard} aria-label="Pytanie, od którego zaczynamy">
@@ -107,7 +114,7 @@ export function HomePage() {
             <p className={styles.kicker}>Od preselekcji do pogłębionej weryfikacji</p>
             <h2 id="pkg-title">Cztery poziomy. Jedna platforma.</h2>
             <p className={styles.intro}>Wybierz zakres odpowiadający potrzebom Twojej rekrutacji. Poniżej przedstawiamy planowaną ofertę.</p>
-            <PackageComparison />
+            <PackageComparison sizes={sizes} />
           </div>
         </section>
 

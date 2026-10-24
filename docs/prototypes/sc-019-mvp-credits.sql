@@ -6,6 +6,32 @@
 -- Legacy R4 and R4-VOICE each have a distinct, checked-in R5 signature.
 begin;
 
+-- Operator-controlled quota policy. Defaults are only test/prototype examples;
+-- change through reviewed privileged migration before commercial activation.
+create table private.sc19_package_policy (
+  plan text primary key check(plan in ('FREE','PRESELEKCJA')),
+  credits integer not null check(credits between 1 and 100000),
+  updated_at timestamptz not null default now()
+);
+insert into private.sc19_package_policy(plan,credits)
+values ('FREE',5),('PRESELEKCJA',60);
+revoke all on private.sc19_package_policy from public,anon,authenticated;
+alter table private.sc19_package_policy enable row level security;
+
+-- Audit clock for operator credit changes. Uses private.touch_updated_at()
+-- from 20260930000100_skillcheck_core.sql and does not redefine it.
+-- A caller-supplied updated_at is overwritten, so the stamp cannot be backdated.
+do $$
+begin
+  if to_regprocedure('private.touch_updated_at()') is null then
+    raise exception 'sc19_missing_touch_updated_at' using errcode = '55000';
+  end if;
+end
+$$;
+create trigger touch_updated_at
+  before update on private.sc19_package_policy
+  for each row execute function private.touch_updated_at();
+
 create table private.sc19_balances (
   company_id uuid primary key references public.companies(id) on delete restrict,
   plan text not null check(plan in ('FREE','PRESELEKCJA')),
@@ -104,6 +130,7 @@ declare
   normalized text := replace(replace(btrim(coalesce(supplied_nip,'')), '-', ''), ' ', '');
   existing_nip text;
   current_credits integer;
+  trial_credits integer;
 begin
   if (select auth.uid()) is null or not private.is_company_owner(target_company) then
     raise exception 'sc19_company_forbidden' using errcode = '42501';
@@ -134,16 +161,18 @@ begin
   ) then
     raise exception 'sc19_trial_after_payment' using errcode='23505';
   end if;
+  select credits into trial_credits from private.sc19_package_policy where plan='FREE';
+  if trial_credits is null then raise exception 'sc19_missing_free_policy' using errcode='55000'; end if;
   insert into private.sc19_trial_nips(company_id,nip) values (target_company,normalized);
   insert into private.sc19_balances(company_id,plan,available,free_claimed)
-    values(target_company,'FREE',5,true)
+    values(target_company,'FREE',trial_credits,true)
     on conflict(company_id) do update
-      set available=private.sc19_balances.available+5,free_claimed=true,updated_at=now()
+      set available=private.sc19_balances.available+trial_credits,free_claimed=true,updated_at=now()
       where not private.sc19_balances.free_claimed
         and private.sc19_balances.plan<>'PRESELEKCJA';
   if not found then raise exception 'sc19_trial_already_claimed' using errcode='23505'; end if;
   insert into private.sc19_credit_journal(company_id,reason,delta,reference)
-    values(target_company,'trial',5,'trial:'||normalized);
+    values(target_company,'trial',trial_credits,'trial:'||normalized);
   select available into current_credits from private.sc19_balances where company_id=target_company;
   return current_credits;
 end;
@@ -165,6 +194,20 @@ $$;
 revoke all on function public.sc19_get_balance(uuid) from public, anon, authenticated;
 grant execute on function public.sc19_get_balance(uuid) to authenticated;
 
+-- Canonical customer-facing package sizes. Plan and credits only: no balances,
+-- NIP, journal, settlement references, or proof data. The private table stays
+-- revoked. anon serves the public offer; authenticated serves the billing panel.
+create function public.sc19_package_sizes()
+returns table(plan text, credits integer)
+language sql stable security definer set search_path = '' as $$
+  select policy.plan, policy.credits
+  from private.sc19_package_policy policy
+  order by policy.plan;
+$$;
+revoke all on function public.sc19_package_sizes() from public, anon, authenticated;
+grant execute on function public.sc19_package_sizes() to anon, authenticated;
+
+
 -- MANUAL PAID FULFILLMENT ONLY: call from trusted admin SQL after confirming
 -- bank settlement / external processor settlement. Never GRANT to authenticated.
 create function private.sc19_grant_paid(target_company uuid, settlement_reference text)
@@ -172,6 +215,7 @@ returns integer language plpgsql security definer set search_path = '' as $$
 declare
   prior_company uuid;
   credits integer;
+  paid_credits integer;
 begin
   if length(btrim(coalesce(settlement_reference,''))) not between 8 and 160 then
     raise exception 'sc19_invalid_settlement' using errcode='22023';
@@ -186,12 +230,14 @@ begin
     select available into credits from private.sc19_balances where company_id=target_company;
     return credits; -- same payment, no second grant
   end if;
+  select p.credits into paid_credits from private.sc19_package_policy p where p.plan='PRESELEKCJA';
+  if paid_credits is null then raise exception 'sc19_missing_paid_policy' using errcode='55000'; end if;
   insert into private.sc19_balances(company_id,plan,available)
-    values(target_company,'PRESELEKCJA',60)
+    values(target_company,'PRESELEKCJA',paid_credits)
     on conflict(company_id) do update
-      set plan='PRESELEKCJA',available=private.sc19_balances.available+60,updated_at=now();
+      set plan='PRESELEKCJA',available=private.sc19_balances.available+paid_credits,updated_at=now();
   insert into private.sc19_credit_journal(company_id,reason,delta,reference)
-    values(target_company,'paid_grant',60,'settlement:'||btrim(settlement_reference));
+    values(target_company,'paid_grant',paid_credits,'settlement:'||btrim(settlement_reference));
   select available into credits from private.sc19_balances where company_id=target_company;
   return credits;
 end;
@@ -805,9 +851,9 @@ do $sc19_erasure$
 declare
   role_name text;
   reviewed_r4 constant text := 'd2e7725bd5051e15cb7e700a128026a3ad6f0d87f9d3bba3de8e1539c9d3eabd';
-  -- Generated from the clean reviewed migration chain plus this prototype on
-  -- PGlite and PostgreSQL 16. Both engines returned the same digest.
-  reviewed_r5 text := 'e764d74f5563805185807c6a37b5e08659771f2e8534c76df3651c9ea46ea7d9';
+  -- Generated offline from the clean reviewed migration chain plus this
+  -- policy prototype on PGlite; PostgreSQL 16 CI must confirm the same digest.
+  reviewed_r5 text := '10358458d8802b1ed59a298b305752a89ce110d1019a11cde937f2a2311f79bc';
   reviewed_r4_voice constant text := '70cdbf43562f147294c417639b76fe121154f4dc6e49799b9764232a4aedc444';
   reviewed_tables text[] := array[
  'private.candidate_retention_policies',
@@ -880,6 +926,7 @@ declare
  'private.retention_suggestions',
  'private.retention_authorizations',
  'private.retention_ticks',
+ 'private.sc19_package_policy',
  'private.sc19_balances',
  'private.sc19_trial_nips',
  'private.sc19_trial_approvals',
@@ -902,7 +949,7 @@ begin
     end if;
     -- Derived offline from the exact R4-VOICE + billing chain, never from
     -- the database being installed. Unreviewed schema drift still aborts.
-    reviewed_r5 := '6157b0c234cc7485e188ce4805ee27ab77707e1496f01d807a249fa80a729146';
+    reviewed_r5 := 'c989b84b9eec51fc48c361b8ad9e7404b4044268d56d106b6788fe56f3f1857d';
     reviewed_tables := reviewed_tables || array[
       'public.voice_plan_versions','private.voice_plan_review_entries',
       'private.voice_plan_release_entries','private.voice_plan_current_releases',
@@ -1090,14 +1137,14 @@ $sc19_erasure$;
 -- Default privileges may explicitly grant capabilities to service/custom roles.
 -- RLS cannot stop TRUNCATE and does not protect SECURITY DEFINER execution.
 -- Reset actual ACL grantees on precisely the new billing objects, then restore
--- only the two authenticated public RPCs. Existing worker/erasure ACLs survive
+-- only the authenticated balance/claim RPCs and the anonymous catalog. Existing worker/erasure ACLs survive
 -- CREATE OR REPLACE and are intentionally not broadened or reset here.
 do $sc19_acl$
 declare obj record; grantee record;
 begin
   for obj in select c.oid,c.relowner from pg_class c
     where c.oid in (
-      to_regclass('private.sc19_balances'),to_regclass('private.sc19_trial_nips'),
+      to_regclass('private.sc19_package_policy'),to_regclass('private.sc19_balances'),to_regclass('private.sc19_trial_nips'),
       to_regclass('private.sc19_trial_approvals'),to_regclass('private.sc19_analysis_spend'),
       to_regclass('private.sc19_credit_journal'),to_regclass('private.erasure_inventory_baseline_r5'))
   loop
@@ -1114,7 +1161,7 @@ begin
     where p.oid in (
       'private.sc19_valid_nip(text)'::regprocedure,'private.sc19_lock_company(uuid)'::regprocedure,
       'private.sc19_lock_analysis_company()'::regprocedure,'public.sc19_claim_trial(uuid,text)'::regprocedure,
-      'public.sc19_get_balance(uuid)'::regprocedure,'private.sc19_grant_paid(uuid,text)'::regprocedure,
+      'public.sc19_package_sizes()'::regprocedure,'public.sc19_get_balance(uuid)'::regprocedure,'private.sc19_grant_paid(uuid,text)'::regprocedure,
       'private.sc19_charge_analysis()'::regprocedure,'private.sc19_reconcile_analysis()'::regprocedure)
   loop
     for grantee in select distinct acl.grantee,role.rolname
@@ -1129,4 +1176,5 @@ begin
 end
 $sc19_acl$;
 grant execute on function public.sc19_claim_trial(uuid,text),public.sc19_get_balance(uuid) to authenticated;
+grant execute on function public.sc19_package_sizes() to anon, authenticated;
 commit;
