@@ -32,7 +32,7 @@ const services = [
   { code: 'skill_test', capabilityCode: 'tests_ready', defaultPriceRule: { method: 'volume_tier', mode: 'graduated', tiers: [{ upTo: 2, unitMinor: 300 }, { upTo: null, unitMinor: 100 }] } },
   { code: 'consult', capabilityCode: 'consult_ready', defaultPriceRule: { method: 'fixed', amountMinor: 5000 }, exclusions: ['skill_test'] },
   { code: 'check_plus', capabilityCode: 'reports_ready', defaultPriceRule: { method: 'per_unit', unitMinor: 700 }, dependencies: ['skill_test'] },
-].map(s => ({ name: s.code, technicalStatus: 'verified', commercialStatus: 'purchasable', dependencies: [], exclusions: [], ...s }));
+].map(s => ({ name: s.code, technicalStatus: 'verified', commercialStatus: 'purchasable', dependencies: [], exclusions: [], min: 0, max: 30, step: 1, ...s }));
 const link = (packageCode, serviceCode, includedQuantity = 0, overridePriceRule = undefined) => ({
   packageCode, serviceCode, allowed: true, visible: true, includedQuantity, maxQuantity: 30, quantityStep: 1,
   extraAllowed: true, autoPurchase: true, commercialStatus: 'purchasable', overridePriceRule,
@@ -383,8 +383,8 @@ test('publish bound respects exclusions: mutually exclusive add-ons are not summ
   const pre = c.plans.find(p => p.code === 'PRESELEKCJA');
   Object.assign(pre, { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
   c.services.push(
-    { code: 'opt_a', name: 'A', technicalStatus: 'verified', commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: ['opt_b'], defaultPriceRule: { method: 'fixed', amountMinor: 500_000_000_000 } },
-    { code: 'opt_b', name: 'B', technicalStatus: 'verified', commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: [], defaultPriceRule: { method: 'fixed', amountMinor: 500_000_000_000 } });
+    { code: 'opt_a', name: 'A', min: 0, max: 1, step: 1, technicalStatus: 'verified', commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: ['opt_b'], defaultPriceRule: { method: 'fixed', amountMinor: 500_000_000_000 } },
+    { code: 'opt_b', name: 'B', min: 0, max: 1, step: 1, technicalStatus: 'verified', commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: [], defaultPriceRule: { method: 'fixed', amountMinor: 500_000_000_000 } });
   c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
   c.planServices.push({ ...link('PRESELEKCJA', 'opt_a'), maxQuantity: 1 }, { ...link('PRESELEKCJA', 'opt_b'), maxQuantity: 1 });
   assert.equal(validateOfferForPublish(c).PRESELEKCJA, 615_000_000_000);
@@ -421,4 +421,31 @@ test('publish bound ignores add-ons that quoting would refuse to select (invisib
   h.services.find(s => s.code === 'report_ext').commercialStatus = 'hidden';
   h.planServices.find(x => x.packageCode === 'PRESELEKCJA' && x.serviceCode === 'report_ext').overridePriceRule = { method: 'fixed', amountMinor: 1_000_000_000_000 };
   assert.doesNotThrow(() => validateOfferForPublish(h));
+});
+
+test('package links must respect global service limits (contract maxQuantity <= service.max)', () => {
+  const c = clone();
+  c.services.find(s => s.code === 'report_ext').max = 5;
+  error(() => validateOfferForPublish(c), 'SERVICE_LIMIT_EXCEEDED');
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 30 }], 20, c), 'SERVICE_LIMIT_EXCEEDED');
+  const d = clone();
+  d.services.find(s => s.code === 'report_ext').step = 2;
+  error(() => quote('PRESELEKCJA', [], 20, d), 'SERVICE_LIMIT_EXCEEDED');
+  const e = clone();
+  delete e.services.find(s => s.code === 'report_ext').max;
+  error(() => quote('PRESELEKCJA', [], 20, e), 'INVALID_CATALOG');
+});
+
+test('publish rejects included services whose dependencies cannot be realized in the package', () => {
+  const c = clone();
+  // interview is included in WERYFIKACJA and AC; WERYFIKACJA offers consult, AC gets a consult link too → realizable.
+  c.services.find(s => s.code === 'interview').dependencies = ['consult'];
+  c.planServices.push(link('ASSESSMENT_CENTER', 'consult'));
+  assert.doesNotThrow(() => validateOfferForPublish(c));
+  assert.equal(quote('ASSESSMENT_CENTER', [{ serviceCode: 'consult', quantity: 1 }], 20, c).canPurchase, true);
+  // Without any consult link in AC the included interview can never be quoted.
+  const d = clone();
+  d.services.find(s => s.code === 'interview').dependencies = ['consult'];
+  error(() => validateOfferForPublish(d), 'INCLUDED_DEPENDENCY_UNREALIZABLE:ASSESSMENT_CENTER:consult');
+  error(() => quote('ASSESSMENT_CENTER', [], 20, d), 'UNMET_DEPENDENCY');
 });

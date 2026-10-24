@@ -20,6 +20,8 @@ export type Plan = Readonly<{
 }>;
 export type Service = Readonly<{
   code: string; name: string; technicalStatus: TechnicalStatus;
+  /** Global quantity limits; every package link must stay inside them (contract pln-v1). */
+  min: number; max: number; step: number;
   commercialStatus: CommercialStatus; capabilityCode: string | null;
   dependencies: readonly string[]; exclusions: readonly string[];
   defaultPriceRule?: PriceRule | null;
@@ -270,7 +272,9 @@ function checkCatalog(offer: Offer): Catalog {
         s.dependencies.includes(s.code) || s.exclusions.includes(s.code) ||
         s.dependencies.some(d => (s.exclusions as unknown[]).includes(d)) ||
         !COMMERCIAL.includes(s.commercialStatus as CommercialStatus) || !TECHNICAL.includes(s.technicalStatus as TechnicalStatus) ||
-        !(s.capabilityCode === null || isCode(s.capabilityCode))) return fail('INVALID_CATALOG');
+        !(s.capabilityCode === null || isCode(s.capabilityCode)) ||
+        !validQty(s.min) || !validQty(s.max) || !validQty(s.step) || s.step === 0 || s.min > s.max)
+      return fail('INVALID_CATALOG');
     const rule = s.defaultPriceRule === null || s.defaultPriceRule === undefined ? null : checkRule(s.defaultPriceRule);
     services.set(s.code, { service: s as unknown as Service, rule });
   }
@@ -300,6 +304,9 @@ function checkCatalog(offer: Offer): Catalog {
     if ((l.autoPurchase && (!l.allowed || l.commercialStatus !== 'purchasable')) ||
         (!l.allowed && (l.autoPurchase || l.visible)) ||
         (l.commercialStatus === 'hidden' && l.visible)) return fail('CONTRADICTORY_FLAGS');
+    const global = services.get(l.serviceCode)!.service;
+    // 0 <= included <= max <= service.max; link step must be a multiple of the service step.
+    if (l.maxQuantity > global.max || l.quantityStep % global.step !== 0) return fail('SERVICE_LIMIT_EXCEEDED');
     const perPackage = links.get(l.packageCode) ?? new Map();
     if (perPackage.has(l.serviceCode)) return fail('INVALID_CATALOG');
     const override = l.overridePriceRule === null || l.overridePriceRule === undefined ? null : checkRule(l.overridePriceRule);
@@ -398,6 +405,25 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
         if (catalog.services.get(forcedList[i])!.service.exclusions.includes(forcedList[j]) ||
             catalog.services.get(forcedList[j])!.service.exclusions.includes(forcedList[i]))
           return fail(`INCLUDED_SERVICES_CONFLICT:${code}`);
+    // Transitive dependencies of always-present services must be realizable in this package:
+    // present (included) or selectable with a positive quantity, and not excluded by an included service.
+    const selectable = (c: string): boolean => {
+      const entry = planLinks.get(c);
+      if (!entry) return false;
+      const l = entry.link, svc = catalog.services.get(c)!.service;
+      return l.allowed && l.visible && l.commercialStatus !== 'hidden' && svc.commercialStatus !== 'hidden' &&
+        l.maxQuantity > 0 && (l.includedQuantity > 0 || l.extraAllowed) && !excludedByForced(c);
+    };
+    const pending = [...forcedList], checked = new Set<string>();
+    while (pending.length) {
+      const c = pending.pop()!;
+      if (checked.has(c)) continue;
+      checked.add(c);
+      for (const dep of catalog.services.get(c)!.service.dependencies) {
+        if (!forced.has(dep) && !selectable(dep)) return fail(`INCLUDED_DEPENDENCY_UNREALIZABLE:${code}:${dep}`);
+        pending.push(dep);
+      }
+    }
     for (const [serviceCode, { link, rule }] of Array.from(planLinks.entries())) {
       if (!link.allowed || !link.extraAllowed) continue;
       // Extra quantity is reachable only through an explicit add-on selection, which quoteOffer
