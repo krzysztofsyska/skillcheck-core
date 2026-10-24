@@ -47,7 +47,7 @@ Nigdy nie używać zbiorczego push. Każdą migrację stosujemy pojedynczo, po n
 3. Manifest wygenerowany ponownie dla końcowego SHA: 0 commitów nieprzypisanych (`node tools/release/promotion-manifest.mjs`).
 4. **Próba generalna na PostgreSQL 17.6** (wersja produkcji) albo na gałęzi Supabase. CI #160 używał obrazu `postgres:17` (17.11) — różnica wersji pomocniczej jest ryzykiem, nie blokadą formalną; decyzja właściciela w sekcji 9.
 5. Kopia zapasowa: potwierdzony punkt PITR / backup projektu z czasu bezpośrednio przed krokiem M1 (zapisać znacznik czasu).
-6. Właściciel potwierdza, że **żadne zewnętrzne narzędzie nie używa klucza `service_role`** (migracja 12 odbiera mu dostęp do tabel). Kod aplikacji i `screening-worker` go nie używają — sprawdzono.
+6. **Spełnione (2026-10-24):** właściciel potwierdził, że żadne zewnętrzne narzędzie nie używa klucza `service_role` (migracja 12 odbiera mu dostęp do tabel). Kod aplikacji i `screening-worker` go nie używają — sprawdzono.
 7. Osobna, jawna zgoda właściciela (PRODUCTION APPROVAL) obejmująca: końcowy SHA, ten runbook, listę akcji bazodanowych M1–M13 oraz automatyczne wdrożenie Vercel.
 
 ## 4. Kolejność migracji (13 pending, kolejność repozytorium)
@@ -133,7 +133,7 @@ Włączenie FREE, sprzedaży lub płatności to **osobne** decyzje i osobne runb
 1. **Zakres:** czy pierwsze wydanie idzie bez płatności (FREE/PRESELEKCJA na fakturę), a płatności później osobno?
 2. **PostgreSQL 17.6:** dodatkowa próba na 17.6 (obraz przypięty w CI — bez kosztu) czy na gałęzi Supabase (koszt) czy akceptacja ryzyka.
 3. **Historia migracji:** zapisywać 13 nowych pozycji z wersjami z repo (zalecane) i czy naprawić 7 starszych rozbieżności (`supabase migration repair`) osobnym zadaniem.
-4. **`service_role`:** potwierdzenie, że nic zewnętrznego go nie używa.
+4. **`service_role`:** ROZSTRZYGNIĘTE 2026-10-24 — właściciel potwierdził, że nic zewnętrznego go nie używa.
 5. **Runbook dla kontrolera:** kontroler czyta `.github/agent-pipeline/production-runbook.json` z `main`, a `main` przyjmuje tylko promocję z `integration`. Wniosek: plik musi trafić na `main` w samej promocji albo osobną, zatwierdzoną zmianą zarządczą. Propozycja w `docs/release/production-runbook.proposed.json`.
 6. **Weryfikacja obejść ruleset (blokada 3 z #86):** akceptacja ręcznej weryfikacji przez właściciela zamiast automatycznej.
 
