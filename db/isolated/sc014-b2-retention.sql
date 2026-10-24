@@ -5,7 +5,7 @@
 begin;
 do $$begin
  if not exists(select 1 from private.erasure_inventory_baseline_r5 where singleton
-  and schema_signature='6157b0c234cc7485e188ce4805ee27ab77707e1496f01d807a249fa80a729146') then
+  and schema_signature='c989b84b9eec51fc48c361b8ad9e7404b4044268d56d106b6788fe56f3f1857d') then
   raise exception 'SC014_B2_REQUIRES_REVIEWED_VOICE_BILLING_BASELINE';end if;
 end;$$;
 
@@ -724,7 +724,7 @@ exception when lock_not_available then
  raise exception using errcode='PT409',message='Erasure source busy';
 end;$$;
 
-insert into private.erasure_inventory_baseline_sc014_b2_v1 values(true,'fc004325e44e5b11536b8a8aeafd7474b23e4922ab48c17c9089ea86437be5de',array[
+insert into private.erasure_inventory_baseline_sc014_b2_v1 values(true,'b20053a8e9a9990fbf3a031026940947ed091b65a1643a5e070768801e6a40b7',array[
  'private.candidate_retention_policies',
  'private.candidate_verified_contact_points',
  'private.candidate_verified_contact_receipts',
@@ -809,6 +809,7 @@ insert into private.erasure_inventory_baseline_sc014_b2_v1 values(true,'fc004325
  'private.voice_interview_permission_issuers',
  'private.sc19_voice_entitlements',
  'private.erasure_inventory_baseline_r4_voice',
+ 'private.sc19_package_policy',
  'private.sc19_balances',
  'private.sc19_trial_nips',
  'private.sc19_trial_approvals',
@@ -825,7 +826,7 @@ insert into private.erasure_inventory_baseline_sc014_b2_v1 values(true,'fc004325
  'private.erasure_inventory_baseline_sc014_b2_v1']);
 -- Fail closed on an unexpected schema; this is a literal reviewed composition.
 do $$begin
- if private.erasure_schema_signature() is distinct from 'fc004325e44e5b11536b8a8aeafd7474b23e4922ab48c17c9089ea86437be5de' then
+ if private.erasure_schema_signature() is distinct from 'b20053a8e9a9990fbf3a031026940947ed091b65a1643a5e070768801e6a40b7' then
   raise exception 'SC014_B2_SCHEMA_MISMATCH:%',private.erasure_schema_signature();end if;
  if exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
   where n.nspname in ('public','private') and c.relkind in ('r','p','f')

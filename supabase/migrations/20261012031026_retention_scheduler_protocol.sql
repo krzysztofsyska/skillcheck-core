@@ -3,7 +3,10 @@ begin;
 do $$declare r record;begin
  if not exists(select 1 from pg_roles where rolname='erasure_scheduler') then create role erasure_scheduler nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;end if;
  select * into r from pg_roles where rolname='erasure_scheduler';
- if r.rolcanlogin or r.rolsuper or r.rolinherit or r.rolcreatedb or r.rolcreaterole or r.rolreplication or r.rolbypassrls or exists(select 1 from pg_auth_members where roleid=r.oid or member=r.oid) then raise exception 'Unsafe scheduler role';end if;
+ if r.rolcanlogin or r.rolsuper or r.rolinherit or r.rolcreatedb or r.rolcreaterole or r.rolreplication or r.rolbypassrls or exists(select 1 from pg_auth_members m where (m.roleid=r.oid or m.member=r.oid) and not (current_user='postgres' and current_setting('server_version_num')::integer/10000 in (16,17)
+          and m.roleid=r.oid and exists(select 1 from pg_roles where oid=m.member and rolname='postgres' and not rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and exists(select 1 from pg_roles where oid=m.grantor and rolname='supabase_admin' and oid=10 and rolsuper and rolinherit and rolcreaterole and rolcreatedb and rolcanlogin and rolreplication and rolbypassrls)
+          and m.admin_option and not m.inherit_option and not m.set_option)) then raise exception 'Unsafe scheduler role';end if;
 end;$$;
 create table private.retention_delegations (
  id uuid primary key default gen_random_uuid(),company_id uuid not null references public.companies(id) on delete restrict,

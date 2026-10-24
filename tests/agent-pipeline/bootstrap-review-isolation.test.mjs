@@ -48,9 +48,14 @@ test('an environment identifier is configuration, not activation or controller a
   assert.equal(policy.environments.agent_review.id, 23622706434);
   assert.equal(policy.flags.AGENT_PIPELINE_ENABLED, false);
   assert.equal(policy.flags.AGENT_PIPELINE_MERGE_ENABLED, false);
-  assert.equal(policy.controller_actor_id, null);
-  assert.equal(reviewDispatchDecision({ ...validDispatch,
-    controllerActorId: policy.controller_actor_id }).ok, false);
+  assert.equal(policy.controller_actor_id, 338844913);
+  assert.deepEqual(reviewDispatchDecision({
+    ...validDispatch, actorId: String(policy.controller_actor_id),
+    controllerActorId: policy.controller_actor_id, pipelineEnabled: 'false',
+  }), { ok: false, reason: 'pipeline_disabled' });
+  assert.deepEqual(reviewDispatchDecision({
+    ...validDispatch, controllerActorId: policy.controller_actor_id,
+  }), { ok: false, reason: 'actor_untrusted' });
 });
 
 test('the exact configured controller is accepted only with explicit activation', () => {

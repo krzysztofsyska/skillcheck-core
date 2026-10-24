@@ -1,6 +1,10 @@
 import type { Metadata } from "next";
 import { HomePage } from "./components/marketing/home-page";
 
+// Package policy and its server flag must be evaluated per request, including
+// when the deployment was built while packages were disabled.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "SkillCheck — ludzie, kompetencje, świadome decyzje",
   description:

@@ -12,10 +12,17 @@ export async function boot(t,{embedded=process.env.COMPETENCY_TEST_ENGINE==='pgl
  const env=await bootRetention(t,{embedded});const {db,h}=env;
  await h.asAdmin();
  await db.exec(await readFile(new URL('../../docs/prototypes/sc-019-mvp-credits.sql',import.meta.url),'utf8'));
+ const priorBaselines=await db.query(`select 'r4' name,schema_signature from private.erasure_inventory_baseline_r4
+  union all select 'r4_voice',schema_signature from private.erasure_inventory_baseline_r4_voice
+  union all select 'r5',schema_signature from private.erasure_inventory_baseline_r5 order by name`);
  for(const name of ['validation','attempts','withdrawal',...(retention?['retention']:[])]) {
   if(name==='withdrawal'&&beforeWithdrawal)await beforeWithdrawal(db,h);
   await db.exec(await readFile(new URL(`../../db/isolated/sc014-b2-${name}.sql`,import.meta.url),'utf8'));
  }
+ const retainedBaselines=await db.query(`select 'r4' name,schema_signature from private.erasure_inventory_baseline_r4
+  union all select 'r4_voice',schema_signature from private.erasure_inventory_baseline_r4_voice
+  union all select 'r5',schema_signature from private.erasure_inventory_baseline_r5 order by name`);
+ assert.deepEqual(retainedBaselines.rows,priorBaselines.rows,'B2 composition never rewrites prior immutable baselines');
  const call=async(name,args=[],client=db)=>{
   assert.match(name,/^(public|private)\.[a-z_]+$/);
   return (await client.query(`select ${name}(${args.map((_,i)=>'$'+(i+1)).join(',')}) as result`,args)).rows[0].result;
