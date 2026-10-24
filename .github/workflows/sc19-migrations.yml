@@ -116,13 +116,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
   production-history:
-    name: Production history / PostgreSQL ${{ matrix.postgres }}
+    name: Production history / PostgreSQL ${{ matrix.label }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        postgres: ['16', '17']
+        include:
+          - { postgres: '16', image_tag: '16', label: '16' }
+          - { postgres: '17', image_tag: '17', label: '17' }
+          # Exact minor of production project wsvjawuikxfzjyivxgsu (read 2026-10-24).
+          - { postgres: '17', image_tag: '17.6', label: '17.6-production' }
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -136,16 +140,24 @@ jobs:
       - name: Disposable native cluster with the observed pg_cron dependency
         env:
           PG_MAJOR: ${{ matrix.postgres }}
+          PG_IMAGE_TAG: ${{ matrix.image_tag }}
         run: |
-          docker build --build-arg PG_MAJOR="$PG_MAJOR" -t sc19-rehearsal -f tests/fixtures/sc19-rehearsal.Dockerfile tests/fixtures
+          docker build --build-arg PG_MAJOR="$PG_MAJOR" --build-arg PG_IMAGE_TAG="$PG_IMAGE_TAG" -t sc19-rehearsal -f tests/fixtures/sc19-rehearsal.Dockerfile tests/fixtures
           docker run -d --name sc19-rehearsal -p 127.0.0.1:55432:5432 \
             -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_rehearsal \
             sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_production_rehearsal
           for attempt in $(seq 1 30); do
-            if docker exec sc19-rehearsal pg_isready -U supabase_admin -d sc19_production_rehearsal; then exit 0; fi
+            if docker exec sc19-rehearsal pg_isready -U supabase_admin -d sc19_production_rehearsal; then break; fi
+            if [ "$attempt" = 30 ]; then exit 1; fi
             sleep 1
           done
-          exit 1
+          # Fail closed if the image or pg_cron install moved the server off the pinned version.
+          actual=$(docker exec sc19-rehearsal psql -U supabase_admin -d sc19_production_rehearsal -tAc 'show server_version' | awk '{print $1}')
+          echo "Rehearsal server_version: $actual (pinned tag: $PG_IMAGE_TAG)"
+          case "$PG_IMAGE_TAG" in
+            *.*) [ "$actual" = "$PG_IMAGE_TAG" ] || { echo "::error::expected PostgreSQL $PG_IMAGE_TAG, got $actual"; exit 1; } ;;
+            *) case "$actual" in "$PG_IMAGE_TAG".*) ;; *) echo "::error::expected PostgreSQL $PG_IMAGE_TAG.x, got $actual"; exit 1 ;; esac ;;
+          esac
       - name: Rehearse exact observed schema history, pending migrations and existing synthetic data
         env:
           SC19_REHEARSAL_DISPOSABLE: 'yes'
@@ -158,7 +170,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: sc19-production-history-postgres-${{ matrix.postgres }}
+          name: sc19-production-history-postgres-${{ matrix.label }}
           path: sc19-production-history.log
           if-no-files-found: warn
           retention-days: 7

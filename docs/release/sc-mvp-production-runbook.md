@@ -45,7 +45,7 @@ Nigdy nie używać zbiorczego push. Każdą migrację stosujemy pojedynczo, po n
 1. Pełne CI na dokładnym SHA kandydata: wszystkie workflow SUCCESS, w tym `sc19-migrations` (PG16/17 + hosted-history).
 2. Niezależne review dokładnego SHA: PASS, P0/P1 = 0, zero nierozwiązanych wątków.
 3. Manifest wygenerowany ponownie dla końcowego SHA: 0 commitów nieprzypisanych (`node tools/release/promotion-manifest.mjs`).
-4. **Próba generalna na PostgreSQL 17.6** (wersja produkcji) albo na gałęzi Supabase. CI #160 używał obrazu `postgres:17` (17.11) — różnica wersji pomocniczej jest ryzykiem, nie blokadą formalną; decyzja właściciela w sekcji 9.
+4. **Próba generalna na PostgreSQL 17.6** (wersja produkcji): job CI `Production history / PostgreSQL 17.6-production` PASS na końcowym SHA (decyzja właściciela w sekcji 9).
 5. Kopia zapasowa: potwierdzony punkt PITR / backup projektu z czasu bezpośrednio przed krokiem M1 (zapisać znacznik czasu).
 6. **Spełnione (2026-10-24):** właściciel potwierdził, że żadne zewnętrzne narzędzie nie używa klucza `service_role` (migracja 12 odbiera mu dostęp do tabel). Kod aplikacji i `screening-worker` go nie używają — sprawdzono.
 7. Osobna, jawna zgoda właściciela (PRODUCTION APPROVAL) obejmująca: końcowy SHA, ten runbook, listę akcji bazodanowych M1–M13 oraz automatyczne wdrożenie Vercel.
@@ -130,8 +130,8 @@ Włączenie FREE, sprzedaży lub płatności to **osobne** decyzje i osobne runb
 
 ## 9. Decyzje właściciela
 
-1. **Zakres:** czy pierwsze wydanie idzie bez płatności (FREE/PRESELEKCJA na fakturę), a płatności później osobno?
-2. **PostgreSQL 17.6:** dodatkowa próba na 17.6 (obraz przypięty w CI — bez kosztu) czy na gałęzi Supabase (koszt) czy akceptacja ryzyka.
+1. **Zakres:** ROZSTRZYGNIĘTE 2026-10-24 — pierwsze wydanie **bez płatności online**. FREE jest bezpłatny; PRESELEKCJA sprzedawana na fakturę i przydzielana ręcznie przez operatora. Operator płatności i checkout pozostają wyłączone (blokada 1 z #86 nie blokuje tego wydania). Aktywacja FREE i obsługi PRESELEKCJI to osobny runbook po wydaniu: `SC19_PACKAGES_ENABLED`, zatwierdzone liczby kredytów w `private.sc19_package_policy` (seed jest tylko przykładem), weryfikacja firmy przez operatora (`private.sc19_trial_approvals`) oraz procedura ręcznego przydziału PRESELEKCJI po fakturze.
+2. **PostgreSQL 17.6:** ROZSTRZYGNIĘTE 2026-10-24 — próba w CI na obrazie przypiętym do 17.6 (job `Production history / PostgreSQL 17.6-production` w `sc19-migrations.yml`; job sprawdza dokładną wersję serwera). Warunek 3.4 spełniony, gdy job przejdzie na końcowym SHA.
 3. **Historia migracji:** zapisywać 13 nowych pozycji z wersjami z repo (zalecane) i czy naprawić 7 starszych rozbieżności (`supabase migration repair`) osobnym zadaniem.
 4. **`service_role`:** ROZSTRZYGNIĘTE 2026-10-24 — właściciel potwierdził, że nic zewnętrznego go nie używa.
 5. **Runbook dla kontrolera:** kontroler czyta `.github/agent-pipeline/production-runbook.json` z `main`, a `main` przyjmuje tylko promocję z `integration`. Wniosek: plik musi trafić na `main` w samej promocji albo osobną, zatwierdzoną zmianą zarządczą. Propozycja w `docs/release/production-runbook.proposed.json`.
