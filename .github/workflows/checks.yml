@@ -32,6 +32,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --test tests/vercel-deployment-policy.test.mjs
+      - run: node --test tests/release-promotion-manifest.test.mjs
       - run: npm run typecheck
       - run: npm run test:db
         env:
