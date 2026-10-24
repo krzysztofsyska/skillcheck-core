@@ -13,8 +13,8 @@ mod.require = createRequire(path);
 mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, path);
-const { quoteOffer, PricingError } = mod.exports;
-const caps = new Set(['free_ready', 'screening_ready', 'verification_ready', 'ac_ready', 'reports_ready', 'voice_ready', 'tests_ready', 'consult_ready', 'bundle_ready']);
+const { quoteOffer, validateOfferForPublish, PricingError } = mod.exports;
+const caps = new Set(['free_ready', 'screening_ready', 'verification_ready', 'ac_ready', 'reports_ready', 'voice_ready', 'tests_ready', 'consult_ready']);
 const plans = [
   ['FREE', 0, 5, 'free_ready'],
   ['PRESELEKCJA', 10_000, 20, 'screening_ready'],
@@ -32,7 +32,6 @@ const services = [
   { code: 'skill_test', capabilityCode: 'tests_ready', defaultPriceRule: { method: 'volume_tier', mode: 'graduated', tiers: [{ upTo: 2, unitMinor: 300 }, { upTo: null, unitMinor: 100 }] } },
   { code: 'consult', capabilityCode: 'consult_ready', defaultPriceRule: { method: 'fixed', amountMinor: 5000 }, exclusions: ['skill_test'] },
   { code: 'check_plus', capabilityCode: 'reports_ready', defaultPriceRule: { method: 'per_unit', unitMinor: 700 }, dependencies: ['skill_test'] },
-  { code: 'bundle_rt', capabilityCode: 'bundle_ready', defaultPriceRule: { method: 'bundle', amountMinor: 1200, covers: [{ serviceCode: 'report_ext', quantity: 1 }, { serviceCode: 'skill_test', quantity: 1 }] } },
 ].map(s => ({ name: s.code, technicalStatus: 'verified', commercialStatus: 'purchasable', dependencies: [], exclusions: [], ...s }));
 const link = (packageCode, serviceCode, includedQuantity = 0, overridePriceRule = undefined) => ({
   packageCode, serviceCode, allowed: true, visible: true, includedQuantity, maxQuantity: 30, quantityStep: 1,
@@ -50,7 +49,6 @@ const offer = {
     link('ASSESSMENT_CENTER', 'skill_test'),
     link('WERYFIKACJA', 'consult'),
     link('WERYFIKACJA', 'check_plus'),
-    link('ASSESSMENT_CENTER', 'bundle_rt'),
   ],
 };
 const request = (packageCode, addons = [], cvCount = 20) => ({ expectedVersionId: offer.versionId, packageCode, cvCount, addons });
@@ -84,17 +82,6 @@ test('included services are delivered without double charging and CV overage is 
   const more = quote('WERYFIKACJA', [{ serviceCode: 'interview', quantity: 12 }], 30);
   assert.equal(line(more, 'interview').netMinor, 2000);
   assert.equal(more.netMinor, 22_750);
-});
-
-test('bundle adds and covers contents once, no repeat charge', () => {
-  const q = quote('ASSESSMENT_CENTER', [{ serviceCode: 'bundle_rt', quantity: 1 }]);
-  assert.equal(line(q, 'bundle_rt').netMinor, 1200);
-  assert.equal(line(q, 'report_ext').netMinor, 0);
-  assert.equal(line(q, 'skill_test').netMinor, 0);
-  assert.equal(q.netMinor, 51_200);
-  const q2 = quote('ASSESSMENT_CENTER', [{ serviceCode: 'bundle_rt', quantity: 1 }, { serviceCode: 'report_ext', quantity: 5 }]);
-  assert.equal(line(q2, 'report_ext').billed, 2);
-  assert.equal(line(q2, 'report_ext').netMinor, 300);
 });
 
 test('tier graduated vs all units use exact integer arithmetic', () => {
@@ -155,7 +142,9 @@ test('unapproved, absent price and stale version fail closed', () => {
   const draft = clone();
   draft.status = 'DRAFT';
   error(() => quote('PRESELEKCJA', [], 20, draft), 'OFFER_NOT_APPROVED');
-  assert.equal(quote('PRESELEKCJA', [], 20, draft, caps, { allowDraft: true }).canPurchase, false);
+  const preview = quote('PRESELEKCJA', [], 20, draft, caps, { allowDraft: true });
+  assert.equal(preview.canPurchase, false);
+  assert.deepEqual(preview.blockedReasons, ['DRAFT_PREVIEW']);
 });
 
 test('browser-provided prices, discounts, duplicate selection and unknown code fail', () => {
@@ -180,34 +169,25 @@ test('overflow, invalid rule and malicious discount cannot become order totals',
   const tooBig = clone();
   tooBig.plans.find(p => p.code === 'PRESELEKCJA').baseNetMinor = 1_000_000_000_000;
   tooBig.planServices.find(s => s.packageCode === 'PRESELEKCJA').overridePriceRule.unitMinor = 1_000_000_000_000;
-  error(() => quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 2 }], 20, tooBig), 'PRICE_OVERFLOW');
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 2 }], 20, tooBig), 'AMOUNT_OUT_OF_RANGE');
   const bad = clone();
   bad.planServices.find(s => s.packageCode === 'PRESELEKCJA').overridePriceRule.unitMinor = -1;
   error(() => quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 1 }], 20, bad), 'INVALID_RULE');
+  // The whole catalog is validated at quote time, so an invalid rule fails even when not selected.
+  error(() => quote('PRESELEKCJA', [], 20, bad), 'INVALID_RULE');
+  bad.planServices.find(s => s.packageCode === 'PRESELEKCJA').overridePriceRule.unitMinor = 200;
   bad.discounts = [{ code: 'bad', method: 'percent', value: 12000, eligiblePackages: ['PRESELEKCJA'] }];
   error(() => quote('PRESELEKCJA', [], 20, bad), 'INVALID_DISCOUNT');
 });
 
 test('same addon can be disabled in one plan without affecting another', () => {
   const c = clone();
-  c.planServices.find(s => s.packageCode === 'PRESELEKCJA' && s.serviceCode === 'report_ext').allowed = false;
+  Object.assign(c.planServices.find(s => s.packageCode === 'PRESELEKCJA' && s.serviceCode === 'report_ext'),
+    { allowed: false, visible: false, autoPurchase: false });
   error(() => quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 1 }], 20, c), 'ADDON_UNAVAILABLE');
   assert.equal(line(quote('WERYFIKACJA', [{ serviceCode: 'report_ext', quantity: 2 }], 20, c), 'report_ext').netMinor, 300);
 });
 
-
-test('included and nested bundle configurations fail closed instead of hiding covered services', () => {
-  const c = clone();
-  c.planServices.find(l => l.serviceCode === 'bundle_rt').includedQuantity = 1;
-  error(() => quote('ASSESSMENT_CENTER', [], 20, c), 'INVALID_BUNDLE');
-  const n = clone();
-  n.services.push({ code: 'bundle_child', name:'Synthetic nested bundle', capabilityCode:'bundle_ready',
-    technicalStatus:'verified', commercialStatus:'purchasable', dependencies:[], exclusions:[],
-    defaultPriceRule:{ method:'bundle', amountMinor:100, covers:[{serviceCode:'skill_test', quantity:1}] } });
-  n.planServices.push(link('ASSESSMENT_CENTER','bundle_child'));
-  n.services.find(s => s.code === 'bundle_rt').defaultPriceRule.covers = [{serviceCode:'bundle_child', quantity:1}];
-  error(() => quote('ASSESSMENT_CENTER', [{serviceCode:'bundle_rt', quantity:1}], 20, n), 'INVALID_BUNDLE');
-});
 
 test('unknown exclusion/dependency target cannot silently permit forbidden purchases', () => {
   const c=clone();
@@ -234,4 +214,128 @@ test('cross-realm compatible ReadonlySet contract and non-approved owner draft',
   const draft=clone();draft.status='DRAFT';draft.approved=false;
   error(() => quote('PRESELEKCJA',[],20,draft), 'OFFER_NOT_APPROVED');
   assert.equal(quote('PRESELEKCJA',[],20,draft,caps,{allowDraft:true}).canPurchase,false);
+});
+
+test('CV thresholds (tiered_flat): one amount per threshold, owner "progi" mode', () => {
+  const c = clone();
+  Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), {
+    baseNetMinor: 0, cvIncluded: 0,
+    cvOverageRule: { method: 'tiered_flat', tiers: [
+      { upTo: 30, amountMinor: 29_000 }, { upTo: 50, amountMinor: 30_000 },
+      { upTo: 100, amountMinor: 31_000 }, { upTo: null, amountMinor: 32_000 }] },
+  });
+  assert.equal(quote('PRESELEKCJA', [], 10, c).netMinor, 29_000);
+  assert.equal(quote('PRESELEKCJA', [], 30, c).netMinor, 29_000);
+  assert.equal(quote('PRESELEKCJA', [], 35, c).netMinor, 30_000);
+  assert.equal(quote('PRESELEKCJA', [], 100, c).netMinor, 31_000);
+  assert.equal(quote('PRESELEKCJA', [], 150, c).netMinor, 32_000);
+  assert.equal(line(quote('PRESELEKCJA', [], 50, c), 'cv').billed, 50);
+});
+
+test('bounded last tier: quote refuses uncovered quantity, publish refuses the catalog', () => {
+  const c = clone();
+  c.plans.find(p => p.code === 'PRESELEKCJA').cvOverageRule = { method: 'tiered_flat', tiers: [{ upTo: 50, amountMinor: 1000 }] };
+  assert.equal(line(quote('PRESELEKCJA', [], 50, c), 'cv').netMinor, 1000);
+  error(() => quote('PRESELEKCJA', [], 100, c), 'QUANTITY_OUT_OF_RANGE');
+  error(() => validateOfferForPublish(c), 'TIER_COVERAGE');
+  const g = clone();
+  g.plans.find(p => p.code === 'PRESELEKCJA').cvOverageRule = { method: 'volume_tier', mode: 'graduated', tiers: [{ upTo: 10, unitMinor: 100 }, { upTo: 40, unitMinor: 50 }] };
+  assert.equal(line(quote('PRESELEKCJA', [], 45, g), 'cv').netMinor, 10 * 100 + 15 * 50);
+  error(() => quote('PRESELEKCJA', [], 65, g), 'QUANTITY_OUT_OF_RANGE');
+});
+
+test('add-on priced per unit or as one fixed amount, per package', () => {
+  const c = clone();
+  c.planServices.find(l => l.packageCode === 'WERYFIKACJA' && l.serviceCode === 'interview').overridePriceRule = { method: 'fixed', amountMinor: 4_000 };
+  assert.equal(line(quote('WERYFIKACJA', [{ serviceCode: 'interview', quantity: 15 }], 20, c), 'interview').netMinor, 4_000);
+  assert.equal(line(quote('ASSESSMENT_CENTER', [{ serviceCode: 'interview', quantity: 15 }], 20, c), 'interview').netMinor, 5 * 1000);
+});
+
+test('bundle and unknown methods are not part of v1', () => {
+  for (const rule of [{ method: 'bundle', amountMinor: 1, covers: [{ serviceCode: 'skill_test', quantity: 1 }] }, { method: 'formula', expr: '1+1' }]) {
+    const c = clone();
+    c.services.find(s => s.code === 'consult').defaultPriceRule = rule;
+    error(() => quote('PRESELEKCJA', [], 20, c), 'UNSUPPORTED_RULE');
+    error(() => validateOfferForPublish(c), 'UNSUPPORTED_RULE');
+  }
+  const extraKey = clone();
+  extraKey.services.find(s => s.code === 'consult').defaultPriceRule = { method: 'fixed', amountMinor: 1, unitMinor: 5 };
+  error(() => quote('PRESELEKCJA', [], 20, extraKey), 'INVALID_RULE');
+});
+
+test('autoPurchase=false prices the add-on but blocks purchase with a stable reason', () => {
+  const c = clone();
+  c.planServices.find(l => l.packageCode === 'WERYFIKACJA' && l.serviceCode === 'consult').autoPurchase = false;
+  const q = quote('WERYFIKACJA', [{ serviceCode: 'consult', quantity: 1 }], 20, c);
+  assert.equal(line(q, 'consult').netMinor, 5000);
+  assert.equal(q.canPurchase, false);
+  assert.deepEqual(q.blockedReasons, ['ADDON_REQUIRES_OPERATOR:consult']);
+  const ok = quote('WERYFIKACJA', [], 20, c);
+  assert.equal(ok.canPurchase, true);
+  assert.deepEqual(ok.blockedReasons, []);
+});
+
+test('contradictory plan-service flags are rejected', () => {
+  const variants = [
+    { autoPurchase: true, commercialStatus: 'on_request' },
+    { allowed: false, autoPurchase: false, visible: true },
+    { allowed: false, autoPurchase: true, visible: false },
+    { commercialStatus: 'hidden', autoPurchase: false, visible: true },
+  ];
+  for (const v of variants) {
+    const c = clone();
+    Object.assign(c.planServices.find(l => l.packageCode === 'PRESELEKCJA'), v);
+    error(() => quote('PRESELEKCJA', [], 20, c), 'CONTRADICTORY_FLAGS');
+    error(() => validateOfferForPublish(c), 'CONTRADICTORY_FLAGS');
+  }
+});
+
+test('full CV policy is validated even when the count is a quick option', () => {
+  const c = clone();
+  c.plans.find(p => p.code === 'PRESELEKCJA').cvPolicy = { quick: [20], range: { min: 35, max: 150, step: 0 } };
+  error(() => quote('PRESELEKCJA', [], 20, c), 'INVALID_CV_POLICY');
+  for (const quick of [[30, 20], [20, 20], [0], [2.5]]) {
+    const d = clone();
+    d.plans.find(p => p.code === 'PRESELEKCJA').cvPolicy = { quick, range: null };
+    error(() => quote('PRESELEKCJA', [], 30, d), 'INVALID_CV_POLICY');
+  }
+  const e = clone();
+  e.plans.find(p => p.code === 'FREE').cvIncluded = 6;
+  error(() => quote('FREE', [], 5, e), 'INVALID_CV_POLICY');
+});
+
+test('plan status reasons: on_request and informational packages cannot be bought', () => {
+  const c = clone();
+  c.plans.find(p => p.code === 'PRESELEKCJA').commercialStatus = 'on_request';
+  assert.deepEqual(quote('PRESELEKCJA', [], 20, c).blockedReasons, ['ON_REQUEST_PRICE:PRESELEKCJA']);
+  c.plans.find(p => p.code === 'PRESELEKCJA').commercialStatus = 'informational';
+  assert.deepEqual(quote('PRESELEKCJA', [], 20, c).blockedReasons, ['PACKAGE_NOT_PURCHASABLE']);
+  const ready = new Set(['screening_ready']);
+  const v = quote('WERYFIKACJA', [], 20, offer, ready);
+  assert.ok(v.blockedReasons.includes('CAPABILITY_UNAVAILABLE:verification_ready'));
+  assert.equal(v.canPurchase, v.blockedReasons.length === 0);
+});
+
+test('publish validator bounds the highest reachable quote per plan', () => {
+  const max = validateOfferForPublish(offer);
+  // PRESELEKCJA: base 10 000 + 130 CV × 75 + report_ext 30 × 200 = 25 750 net → 31 672.5 → 31 673 gross (half-up)
+  assert.equal(max.PRESELEKCJA, 31_673);
+  const big = clone();
+  big.planServices.find(l => l.packageCode === 'PRESELEKCJA').overridePriceRule = { method: 'per_unit', unitMinor: 40_000_000_000 };
+  error(() => validateOfferForPublish(big), 'AMOUNT_OUT_OF_RANGE');
+  assert.equal(quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 1 }], 20, big).netMinor, 10_000 + 40_000_000_000);
+  const unpriced = clone();
+  unpriced.plans.find(p => p.code === 'PRESELEKCJA').cvOverageRule = null;
+  error(() => validateOfferForPublish(unpriced), 'UNPRICED');
+  assert.equal(quote('PRESELEKCJA', [], 20, unpriced).netMinor, 10_000);
+  error(() => quote('PRESELEKCJA', [], 30, unpriced), 'UNPRICED');
+});
+
+test('dependency cycles and dependency/exclusion conflicts are rejected', () => {
+  const c = clone();
+  c.services.find(s => s.code === 'skill_test').dependencies = ['check_plus'];
+  error(() => quote('PRESELEKCJA', [], 20, c), 'DEPENDENCY_CYCLE');
+  const d = clone();
+  d.services.find(s => s.code === 'check_plus').exclusions = ['skill_test'];
+  error(() => quote('PRESELEKCJA', [], 20, d), 'INVALID_CATALOG');
 });

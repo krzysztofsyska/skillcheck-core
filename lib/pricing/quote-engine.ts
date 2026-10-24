@@ -1,15 +1,17 @@
-/** SC-PRICING-003: pure and deterministic commercial quote core.
+/** SC-PRICING-003: pure and deterministic commercial quote core (contract pln-v1, #149).
  * Inputs are immutable business snapshots, not browser-controlled prices.
  * No database, credentials, tenant credits, billing or provider calls here.
  */
 export type PackageCode = 'FREE' | 'PRESELEKCJA' | 'WERYFIKACJA' | 'ASSESSMENT_CENTER';
 export type CommercialStatus = 'hidden' | 'informational' | 'on_request' | 'purchasable';
 export type TechnicalStatus = 'planned' | 'prototype' | 'verified';
+type Tier<K extends string> = Readonly<{ upTo: number | null } & Record<K, number>>;
+/** v1 methods only. `bundle` and any other method are rejected with UNSUPPORTED_RULE. */
 export type PriceRule =
   | Readonly<{ method: 'fixed'; amountMinor: number }>
   | Readonly<{ method: 'per_unit'; unitMinor: number }>
-  | Readonly<{ method: 'volume_tier'; mode: 'graduated' | 'all_units'; tiers: readonly Readonly<{ upTo: number | null; unitMinor: number }>[] }>
-  | Readonly<{ method: 'bundle'; amountMinor: number; covers: readonly Readonly<{ serviceCode: string; quantity: number }>[] }>;
+  | Readonly<{ method: 'volume_tier'; mode: 'graduated' | 'all_units'; tiers: readonly Tier<'unitMinor'>[] }>
+  | Readonly<{ method: 'tiered_flat'; tiers: readonly Tier<'amountMinor'>[] }>;
 export type CvPolicy = Readonly<{ quick: readonly number[]; range: Readonly<{ min: number; max: number; step: number }> | null }>;
 export type Plan = Readonly<{
   code: PackageCode; baseNetMinor: number | null; commercialStatus: CommercialStatus;
@@ -51,107 +53,289 @@ export type Quote = Readonly<{
   lines: readonly QuoteLine[]; subtotalNetMinor: number; discountMinor: number;
   netMinor: number; vatMinor: number; grossMinor: number;
   canPurchase: boolean; unavailableCapabilities: readonly string[];
+  /** Stable machine codes; empty iff canPurchase=true. */
+  blockedReasons: readonly string[];
 }>;
 
 export class PricingError extends Error {
   constructor(readonly code: string) { super(code); this.name = 'PricingError'; }
 }
 const fail = (code: string): never => { throw new PricingError(code); };
+const ZERO = BigInt(0);
 const MAX_MINOR = BigInt(1_000_000_000_000);
 const MAX_QUANTITY = 100_000;
+const MAX_TIERS = 32;
 const PACKAGE_CODES: readonly PackageCode[] = ['FREE', 'PRESELEKCJA', 'WERYFIKACJA', 'ASSESSMENT_CENTER'];
-const commercial: readonly CommercialStatus[] = ['hidden', 'informational', 'on_request', 'purchasable'];
+const COMMERCIAL: readonly CommercialStatus[] = ['hidden', 'informational', 'on_request', 'purchasable'];
+const TECHNICAL: readonly TechnicalStatus[] = ['planned', 'prototype', 'verified'];
 const codePattern = /^[a-z][a-z0-9_:-]{1,63}$/;
 const versionPattern = /^[A-Za-z0-9][A-Za-z0-9_:-]{1,127}$/;
-const plain = (v: unknown): boolean =>
+const plain = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v) &&
   (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 const exact = (v: unknown, keys: readonly string[]): v is Record<string, unknown> =>
-  plain(v) && Object.keys(v as object).length === keys.length && Object.keys(v as object).every(k => keys.includes(k)) &&
-  keys.every(k => Object.hasOwn(v as object, k));
+  plain(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const isCode = (v: unknown): v is string => typeof v === 'string' && codePattern.test(v);
 const isPackage = (v: unknown): v is PackageCode => PACKAGE_CODES.includes(v as PackageCode);
 const validQty = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 0 && Number(n) <= MAX_QUANTITY;
 const minor = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 0 && BigInt(n as number) <= MAX_MINOR;
 const percentage = (n: unknown): n is number => Number.isSafeInteger(n) && Number(n) >= 0 && Number(n) <= 10000;
-const cents = (n: bigint): number => n >= BigInt(0) && n <= MAX_MINOR ? Number(n) : fail('PRICE_OVERFLOW');
-const roundedRatio = (numerator: bigint, denominator: bigint): bigint =>
-  denominator > BigInt(0) && numerator >= BigInt(0) ? (numerator * BigInt(2) + denominator) / (BigInt(2) * denominator) : fail('INVALID_RATIO');
-const uniq = (items: readonly string[]): boolean => new Set(items).size === items.length;
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
+/** Every line, subtotal, discount, net, VAT and gross must stay inside MoneyMinor; never truncate. */
+const amount = (n: bigint): number => n >= ZERO && n <= MAX_MINOR ? Number(n) : fail('AMOUNT_OUT_OF_RANGE');
+const halfUp = (numerator: bigint, denominator: bigint): bigint =>
+  denominator > ZERO && numerator >= ZERO ? (numerator * BigInt(2) + denominator) / (BigInt(2) * denominator) : fail('INVALID_RATIO');
+const uniq = (items: readonly unknown[]): boolean => new Set(items).size === items.length;
+const vatOf = (net: bigint, bps: number): bigint => halfUp(net * BigInt(bps), BigInt(10000));
+
 function capabilitySnapshot(source: ReadonlySet<string>): ReadonlySet<string> {
   try {
     if (!source || typeof source.has !== 'function' || typeof source.values !== 'function' ||
         !Number.isSafeInteger(source.size) || source.size < 0 || source.size > 512) return fail('INVALID_CAPABILITIES');
     const values = Array.from(source.values());
     if (values.length !== source.size || !values.every(isCode) || !uniq(values)) return fail('INVALID_CAPABILITIES');
-    const snapshot = new Set(values);
     if (values.some(c => source.has(c) !== true)) return fail('INVALID_CAPABILITIES');
-    return snapshot;
-  } catch { return fail('INVALID_CAPABILITIES'); }
+    return new Set(values);
+  } catch (error) {
+    if (error instanceof PricingError) throw error;
+    return fail('INVALID_CAPABILITIES');
+  }
 }
 
-function calculateRule(rule: PriceRule | null | undefined, qty: number, allowBundle = false): number {
-  if (!validQty(qty)) return fail('INVALID_QUANTITY');
-  if (!plain(rule)) return fail('UNPRICED');
-  const priced = rule as PriceRule;
-  if (priced.method === 'fixed') {
-    if (!minor(priced.amountMinor)) return fail('INVALID_RULE');
-    return qty > 0 ? priced.amountMinor : 0;
-  }
-  if (priced.method === 'per_unit') {
-    if (!minor(priced.unitMinor)) return fail('INVALID_RULE');
-    return cents(BigInt(priced.unitMinor) * BigInt(qty));
-  }
-  if (priced.method === 'bundle') {
-    if (!allowBundle || !minor(priced.amountMinor) || !Array.isArray(priced.covers) || !priced.covers.length || qty !== 1)
-      return fail('INVALID_BUNDLE');
-    return priced.amountMinor;
-  }
-  if (priced.method !== 'volume_tier' || (priced.mode !== 'graduated' && priced.mode !== 'all_units') ||
-      !Array.isArray(priced.tiers) || !priced.tiers.length || priced.tiers.length > 32)
-    return fail('INVALID_RULE');
+// ---------- price rules ----------
+type Bounds = { low: number; top: number }; // inclusive range covered by a tier
+function tierBounds<K extends 'unitMinor' | 'amountMinor'>(tiers: unknown, key: K): (Bounds & { value: number })[] {
+  if (!Array.isArray(tiers) || tiers.length < 1 || tiers.length > MAX_TIERS) return fail('INVALID_TIER');
+  const out: (Bounds & { value: number })[] = [];
   let previous = 0;
-  for (let i = 0; i < priced.tiers.length; i++) {
-    const tier = priced.tiers[i];
-    if (!plain(tier) || !minor(tier.unitMinor) ||
-        (tier.upTo === null ? i !== priced.tiers.length - 1 : !validQty(tier.upTo) || tier.upTo <= previous))
-      return fail('INVALID_TIER');
-    previous = tier.upTo ?? MAX_QUANTITY;
-  }
-  if (priced.tiers[priced.tiers.length - 1].upTo !== null) return fail('INVALID_TIER');
-  previous = 0;
-  let sum = BigInt(0);
-  for (const tier of priced.tiers) {
-    const top = tier.upTo ?? MAX_QUANTITY;
-    if (priced.mode === 'all_units' && qty <= top)
-      return cents(BigInt(qty) * BigInt(tier.unitMinor));
-    if (priced.mode === 'graduated') {
-      const units = Math.max(0, Math.min(qty, top) - previous);
-      sum += BigInt(units) * BigInt(tier.unitMinor);
+  for (let i = 0; i < tiers.length; i++) {
+    const t: unknown = tiers[i];
+    if (!exact(t, ['upTo', key]) || !minor(t[key])) return fail('INVALID_TIER');
+    const last = i === tiers.length - 1;
+    if (t.upTo === null) {
+      if (!last) return fail('INVALID_TIER');
+      out.push({ low: previous + 1, top: MAX_QUANTITY, value: t[key] as number });
+    } else {
+      if (!validQty(t.upTo) || t.upTo <= previous) return fail('INVALID_TIER');
+      out.push({ low: previous + 1, top: t.upTo, value: t[key] as number });
+      previous = t.upTo;
     }
-    previous = top;
   }
-  return cents(sum);
+  return out;
 }
 
-function validCvCount(policy: CvPolicy, qty: number): boolean {
-  if (!validQty(qty) || qty === 0 || !plain(policy) || !Array.isArray(policy.quick)) return false;
-  if (policy.quick.length > 30 || !policy.quick.every(x => validQty(x) && x > 0) ||
-      new Set(policy.quick).size !== policy.quick.length) return false;
-  if (policy.quick.includes(qty)) return true;
-  if (policy.range === null) return false;
+type CheckedRule =
+  | { kind: 'fixed'; value: number }
+  | { kind: 'per_unit'; value: number }
+  | { kind: 'graduated' | 'all_units' | 'tiered_flat'; tiers: (Bounds & { value: number })[] };
+
+function checkRule(rule: unknown): CheckedRule {
+  if (!plain(rule)) return fail('UNPRICED');
+  switch (rule.method) {
+    case 'fixed':
+      if (!exact(rule, ['method', 'amountMinor']) || !minor(rule.amountMinor)) return fail('INVALID_RULE');
+      return { kind: 'fixed', value: rule.amountMinor };
+    case 'per_unit':
+      if (!exact(rule, ['method', 'unitMinor']) || !minor(rule.unitMinor)) return fail('INVALID_RULE');
+      return { kind: 'per_unit', value: rule.unitMinor };
+    case 'volume_tier':
+      if (!exact(rule, ['method', 'mode', 'tiers']) || (rule.mode !== 'graduated' && rule.mode !== 'all_units'))
+        return fail('INVALID_RULE');
+      return { kind: rule.mode, tiers: tierBounds(rule.tiers, 'unitMinor') };
+    case 'tiered_flat':
+      if (!exact(rule, ['method', 'tiers'])) return fail('INVALID_RULE');
+      return { kind: 'tiered_flat', tiers: tierBounds(rule.tiers, 'amountMinor') };
+    default:
+      return fail('UNSUPPORTED_RULE');
+  }
+}
+
+/** Net charge for `qty` billed units (qty already excludes included units). */
+function priceOf(rule: CheckedRule, qty: number): bigint {
+  if (!validQty(qty)) return fail('INVALID_QUANTITY');
+  if (qty === 0) return ZERO;
+  switch (rule.kind) {
+    case 'fixed': return BigInt(rule.value);
+    case 'per_unit': return BigInt(rule.value) * BigInt(qty);
+    case 'all_units': {
+      const t = rule.tiers.find(x => qty <= x.top);
+      return t ? BigInt(qty) * BigInt(t.value) : fail('QUANTITY_OUT_OF_RANGE');
+    }
+    case 'tiered_flat': {
+      const t = rule.tiers.find(x => qty <= x.top);
+      return t ? BigInt(t.value) : fail('QUANTITY_OUT_OF_RANGE');
+    }
+    case 'graduated': {
+      if (qty > rule.tiers[rule.tiers.length - 1].top) return fail('QUANTITY_OUT_OF_RANGE');
+      let sum = ZERO;
+      for (const t of rule.tiers) {
+        if (qty < t.low) break;
+        sum += BigInt(Math.min(qty, t.top) - t.low + 1) * BigInt(t.value);
+      }
+      return sum;
+    }
+  }
+}
+
+/** Highest net charge reachable for any billed quantity in 1..maxQty. Rejects rules whose bounded
+ * last tier cannot price a reachable quantity (a configuration error, not a quote-time surprise). */
+function upperBound(rule: CheckedRule, maxQty: number): bigint {
+  if (maxQty === 0) return ZERO;
+  if (rule.kind === 'fixed' || rule.kind === 'per_unit') return priceOf(rule, maxQty);
+  if (maxQty > rule.tiers[rule.tiers.length - 1].top) return fail('TIER_COVERAGE');
+  if (rule.kind === 'graduated') return priceOf(rule, maxQty);
+  let best = ZERO;
+  for (const t of rule.tiers) {
+    if (t.low > maxQty) break;
+    const candidate = rule.kind === 'tiered_flat' ? BigInt(t.value) : BigInt(Math.min(t.top, maxQty)) * BigInt(t.value);
+    if (candidate > best) best = candidate;
+  }
+  return best;
+}
+
+// ---------- catalog validation (shared by publish and quote) ----------
+function checkCvPolicy(policy: unknown): { allowed: (n: number) => boolean; max: number } {
+  if (!exact(policy, ['quick', 'range']) || !Array.isArray(policy.quick) || policy.quick.length > 30)
+    return fail('INVALID_CV_POLICY');
+  const quick = policy.quick as unknown[];
+  if (!quick.every(x => validQty(x) && x > 0) || !uniq(quick) ||
+      quick.some((x, i) => i > 0 && (x as number) <= (quick[i - 1] as number))) return fail('INVALID_CV_POLICY');
   const r = policy.range;
-  return plain(r) && validQty(r.min) && validQty(r.max) && validQty(r.step) && r.step > 0 &&
-    r.min > 0 && r.max >= r.min && qty >= r.min && qty <= r.max && (qty - r.min) % r.step === 0;
+  if (r !== null && (!exact(r, ['min', 'max', 'step']) || !validQty(r.min) || !validQty(r.max) || !validQty(r.step) ||
+      r.min <= 0 || r.step <= 0 || r.max < r.min)) return fail('INVALID_CV_POLICY');
+  if (!quick.length && r === null) return fail('INVALID_CV_POLICY');
+  const range = r as { min: number; max: number; step: number } | null;
+  const quickSet = new Set(quick as number[]);
+  const rangeTop = range ? range.min + Math.floor((range.max - range.min) / range.step) * range.step : 0;
+  const max = Math.max(quick.length ? (quick[quick.length - 1] as number) : 0, rangeTop);
+  return {
+    max,
+    allowed: n => validQty(n) && n > 0 && (quickSet.has(n) ||
+      (range !== null && n >= range.min && n <= range.max && (n - range.min) % range.step === 0)),
+  };
 }
 
-function validatedRequest(input: unknown): QuoteRequest {
+type Catalog = {
+  plans: Map<PackageCode, { plan: Plan; cv: ReturnType<typeof checkCvPolicy>; overage: CheckedRule | null }>;
+  services: Map<string, { service: Service; rule: CheckedRule | null }>;
+  links: Map<PackageCode, Map<string, { link: PlanService; rule: CheckedRule | null }>>;
+  discounts: DiscountRule[];
+};
+
+function checkCatalog(offer: Offer): Catalog {
+  if (offer.plans.length > 64 || offer.services.length > 1000 || offer.planServices.length > 4000 || offer.discounts.length > 64)
+    return fail('INVALID_CATALOG');
+  const plans: Catalog['plans'] = new Map();
+  for (const p of offer.plans as unknown[]) {
+    if (!plain(p) || !isPackage(p.code) || plans.has(p.code) || !(p.baseNetMinor === null || minor(p.baseNetMinor)) ||
+        !validQty(p.cvIncluded) || !COMMERCIAL.includes(p.commercialStatus as CommercialStatus) ||
+        !(p.capabilityCode === null || isCode(p.capabilityCode))) return fail('INVALID_CATALOG');
+    const cv = checkCvPolicy(p.cvPolicy);
+    if (p.cvIncluded > cv.max) return fail('INVALID_CV_POLICY');
+    // Missing overage rule is allowed only while no overage is reachable (checked at publish and quote).
+    const overage = p.cvOverageRule === null || p.cvOverageRule === undefined ? null : checkRule(p.cvOverageRule);
+    plans.set(p.code, { plan: p as unknown as Plan, cv, overage });
+  }
+  const services: Catalog['services'] = new Map();
+  for (const s of offer.services as unknown[]) {
+    if (!plain(s) || !isCode(s.code) || services.has(s.code) || typeof s.name !== 'string' ||
+        !Array.isArray(s.dependencies) || !Array.isArray(s.exclusions) ||
+        !s.dependencies.every(isCode) || !s.exclusions.every(isCode) || !uniq(s.dependencies) || !uniq(s.exclusions) ||
+        s.dependencies.includes(s.code) || s.exclusions.includes(s.code) ||
+        s.dependencies.some(d => (s.exclusions as unknown[]).includes(d)) ||
+        !COMMERCIAL.includes(s.commercialStatus as CommercialStatus) || !TECHNICAL.includes(s.technicalStatus as TechnicalStatus) ||
+        !(s.capabilityCode === null || isCode(s.capabilityCode))) return fail('INVALID_CATALOG');
+    const rule = s.defaultPriceRule === null || s.defaultPriceRule === undefined ? null : checkRule(s.defaultPriceRule);
+    services.set(s.code, { service: s as unknown as Service, rule });
+  }
+  // A typo in a dependency/exclusion target must not silently weaken it; cycles are rejected.
+  for (const { service } of Array.from(services.values()))
+    if (service.dependencies.some(c => !services.has(c)) || service.exclusions.some(c => !services.has(c)))
+      return fail('INVALID_CATALOG');
+  const state = new Map<string, 1 | 2>();
+  const visit = (code: string): void => {
+    if (state.get(code) === 2) return;
+    if (state.get(code) === 1) return fail('DEPENDENCY_CYCLE');
+    state.set(code, 1);
+    for (const d of services.get(code)!.service.dependencies) visit(d);
+    state.set(code, 2);
+  };
+  for (const code of Array.from(services.keys())) visit(code);
+
+  const links: Catalog['links'] = new Map();
+  for (const l of offer.planServices as unknown[]) {
+    if (!plain(l) || !isPackage(l.packageCode) || !plans.has(l.packageCode) || !isCode(l.serviceCode) ||
+        !services.has(l.serviceCode) || !validQty(l.includedQuantity) || !validQty(l.maxQuantity) ||
+        !validQty(l.quantityStep) || l.quantityStep === 0 || l.maxQuantity < l.includedQuantity ||
+        !COMMERCIAL.includes(l.commercialStatus as CommercialStatus) ||
+        !isBool(l.allowed) || !isBool(l.visible) || !isBool(l.extraAllowed) || !isBool(l.autoPurchase))
+      return fail('INVALID_CATALOG');
+    // Contradictory flags (contract: autoPurchase semantics).
+    if ((l.autoPurchase && (!l.allowed || l.commercialStatus !== 'purchasable')) ||
+        (!l.allowed && (l.autoPurchase || l.visible)) ||
+        (l.commercialStatus === 'hidden' && l.visible)) return fail('CONTRADICTORY_FLAGS');
+    const perPackage = links.get(l.packageCode) ?? new Map();
+    if (perPackage.has(l.serviceCode)) return fail('INVALID_CATALOG');
+    const override = l.overridePriceRule === null || l.overridePriceRule === undefined ? null : checkRule(l.overridePriceRule);
+    perPackage.set(l.serviceCode, { link: l as unknown as PlanService, rule: override ?? services.get(l.serviceCode)!.rule });
+    links.set(l.packageCode, perPackage);
+  }
+  const discountCodes = new Set<string>();
+  for (const d of offer.discounts as unknown[]) {
+    if (!exact(d, ['code', 'method', 'value', 'eligiblePackages']) || !isCode(d.code) || discountCodes.has(d.code) ||
+        !Array.isArray(d.eligiblePackages) || !d.eligiblePackages.every(isPackage) || !uniq(d.eligiblePackages) ||
+        !(d.method === 'percent' ? percentage(d.value) : d.method === 'amount' ? minor(d.value) : false))
+      return fail('INVALID_DISCOUNT');
+    discountCodes.add(d.code);
+  }
+  return { plans, services, links, discounts: offer.discounts as DiscountRule[] };
+}
+
+function checkOfferHeader(offer: Offer): void {
+  if (!plain(offer) || typeof offer.versionId !== 'string' || !versionPattern.test(offer.versionId) ||
+      offer.currency !== 'PLN' || !percentage(offer.vatBasisPoints) || !isBool(offer.approved) ||
+      !Array.isArray(offer.plans) || !Array.isArray(offer.services) ||
+      !Array.isArray(offer.planServices) || !Array.isArray(offer.discounts)) return fail('INVALID_CATALOG');
+}
+
+/** Publish-time validation (contract: "Walidacja przed publish"). Pure; the DB publish RPC must call an
+ * equivalent check in the same transaction. Returns the maximal reachable gross per plan. */
+export function validateOfferForPublish(offer: Offer): Readonly<Record<string, number>> {
+  checkOfferHeader(offer);
+  const catalog = checkCatalog(offer);
+  const maxGross: Record<string, number> = {};
+  for (const [code, { plan, cv, overage }] of Array.from(catalog.plans.entries())) {
+    if (plan.commercialStatus === 'purchasable' && (plan.baseNetMinor === null || plan.capabilityCode === null))
+      return fail('PURCHASABLE_REQUIRES_PRICE_AND_CAPABILITY');
+    let net = BigInt(plan.baseNetMinor ?? 0);
+    const cvExtra = Math.max(0, cv.max - plan.cvIncluded);
+    if (cvExtra > 0) {
+      if (!overage) return fail('UNPRICED');
+      net += upperBound(overage, cvExtra);
+    }
+    for (const [serviceCode, { link, rule }] of Array.from(catalog.links.get(code)?.entries() ?? [])) {
+      if (!link.allowed || !link.extraAllowed) continue;
+      // Billable quantities are positive multiples of quantityStep up to max - included.
+      const extra = link.maxQuantity - link.includedQuantity;
+      const reachable = extra - (extra % link.quantityStep);
+      if (reachable === 0) continue;
+      if (!rule) return fail(`UNPRICED:${serviceCode}`);
+      net += upperBound(rule, reachable);
+      amount(net);
+    }
+    amount(net);
+    maxGross[code] = amount(net + vatOf(net, offer.vatBasisPoints));
+  }
+  return maxGross;
+}
+
+function checkedRequest(input: unknown): QuoteRequest {
   if (!exact(input, ['expectedVersionId', 'packageCode', 'cvCount', 'addons']) ||
       typeof input.expectedVersionId !== 'string' || !versionPattern.test(input.expectedVersionId) ||
       !isPackage(input.packageCode) || !validQty(input.cvCount) || !Array.isArray(input.addons) || input.addons.length > 64)
     return fail('INVALID_REQUEST');
   const codes = new Set<string>();
-  for (const a of input.addons) {
+  for (const a of input.addons as unknown[]) {
     if (!exact(a, ['serviceCode', 'quantity']) || !isCode(a.serviceCode) || !validQty(a.quantity) || codes.has(a.serviceCode))
       return fail('INVALID_ADDON');
     codes.add(a.serviceCode);
@@ -162,148 +346,96 @@ function validatedRequest(input: unknown): QuoteRequest {
 /** Preview requires a separately authorized owner API. NEVER derive allowDraft from a browser field. */
 export function quoteOffer(offer: Offer, untrustedRequest: unknown,
   runtimeCapabilities: ReadonlySet<string>, options: Readonly<{ allowDraft?: boolean }> = {}): Quote {
-  const input = validatedRequest(untrustedRequest);
-  const draftPreview = options.allowDraft === true && offer?.status === 'DRAFT';
-  if (!plain(offer) || !versionPattern.test(offer.versionId) || offer.currency !== 'PLN' ||
-      !percentage(offer.vatBasisPoints) ||
-      !(offer.status === 'PUBLISHED' && offer.approved === true) && !draftPreview ||
-      !Array.isArray(offer.plans) || !Array.isArray(offer.services) ||
-      !Array.isArray(offer.planServices) || !Array.isArray(offer.discounts)) return fail('OFFER_NOT_APPROVED');
+  const input = checkedRequest(untrustedRequest);
+  const draftPreview = options.allowDraft === true && plain(offer) && offer.status === 'DRAFT';
+  if (!plain(offer) || !(offer.status === 'PUBLISHED' && offer.approved === true) && !draftPreview)
+    return fail('OFFER_NOT_APPROVED');
+  checkOfferHeader(offer);
   const ready = capabilitySnapshot(runtimeCapabilities);
   if (input.expectedVersionId !== offer.versionId) return fail('STALE_VERSION');
-  if (offer.plans.length > 64 || offer.services.length > 1000 || offer.planServices.length > 4000 || offer.discounts.length > 64)
-    return fail('INVALID_CATALOG');
-  const plans = new Map<PackageCode, Plan>(), services = new Map<string, Service>();
-  for (const p of offer.plans) {
-    if (!plain(p) || !isPackage(p.code) || plans.has(p.code) || !minor(p.baseNetMinor) && p.baseNetMinor !== null ||
-        !validQty(p.cvIncluded) || !commercial.includes(p.commercialStatus) ||
-        !(p.capabilityCode === null || isCode(p.capabilityCode))) return fail('INVALID_CATALOG');
-    plans.set(p.code, p);
-  }
-  for (const s of offer.services) {
-    if (!plain(s) || !isCode(s.code) || services.has(s.code) || !Array.isArray(s.dependencies) ||
-        !Array.isArray(s.exclusions) || !s.dependencies.every(isCode) || !s.exclusions.every(isCode) ||
-        !uniq(s.dependencies) || !uniq(s.exclusions) || s.dependencies.includes(s.code) || s.exclusions.includes(s.code) ||
-        !commercial.includes(s.commercialStatus) || !['planned', 'prototype', 'verified'].includes(s.technicalStatus) ||
-        !(s.capabilityCode === null || isCode(s.capabilityCode))) return fail('INVALID_CATALOG');
-    services.set(s.code, s);
-  }
-  // A typo in even an excluded catalogue item must not silently weaken an exclusion.
-  for (const s of Array.from(services.values())) {
-    if (s.dependencies.some(code => !services.has(code)) || s.exclusions.some(code => !services.has(code)))
-      return fail('INVALID_CATALOG');
-  }
-  const plan = plans.get(input.packageCode);
-  if (!plan || plan.commercialStatus === 'hidden' || !validCvCount(plan.cvPolicy, input.cvCount)) return fail('PLAN_UNAVAILABLE');
+  const catalog = checkCatalog(offer);
+
+  const entry = catalog.plans.get(input.packageCode);
+  if (!entry || entry.plan.commercialStatus === 'hidden' || !entry.cv.allowed(input.cvCount)) return fail('PLAN_UNAVAILABLE');
+  const { plan } = entry;
   if (plan.baseNetMinor === null) return fail('UNPRICED');
-  const links = new Map<string, PlanService>(), desired = new Map<string, number>();
-  for (const l of offer.planServices) {
-    if (!plain(l) || !isPackage(l.packageCode) || !isCode(l.serviceCode) || !services.has(l.serviceCode) ||
-        !validQty(l.includedQuantity) || !validQty(l.maxQuantity) || !validQty(l.quantityStep) || l.quantityStep === 0 ||
-        l.maxQuantity < l.includedQuantity || !commercial.includes(l.commercialStatus) ||
-        typeof l.allowed !== 'boolean' || typeof l.visible !== 'boolean' ||
-        typeof l.extraAllowed !== 'boolean' || typeof l.autoPurchase !== 'boolean') return fail('INVALID_CATALOG');
-    if (l.packageCode === input.packageCode) {
-      if (links.has(l.serviceCode)) return fail('INVALID_CATALOG');
-      links.set(l.serviceCode, l);
-      if (l.allowed && l.includedQuantity > 0) desired.set(l.serviceCode, l.includedQuantity);
-    }
-  }
-  const chosen = new Set<string>();
+  const links = catalog.links.get(plan.code) ?? new Map();
+
+  const desired = new Map<string, number>();
+  for (const [code, { link }] of Array.from(links.entries()))
+    if (link.allowed && link.includedQuantity > 0) desired.set(code, link.includedQuantity);
   for (const add of input.addons) {
-    const l = links.get(add.serviceCode);
-    if (!l || !l.allowed || !l.visible || l.commercialStatus === 'hidden' ||
-        services.get(add.serviceCode)?.commercialStatus === 'hidden') return fail('ADDON_UNAVAILABLE');
+    const found = links.get(add.serviceCode);
+    const s = catalog.services.get(add.serviceCode)?.service;
+    if (!found || !s || !found.link.allowed || !found.link.visible || found.link.commercialStatus === 'hidden' ||
+        s.commercialStatus === 'hidden') return fail('ADDON_UNAVAILABLE');
+    const l = found.link;
     const qty = add.quantity === 0 ? l.includedQuantity : add.quantity;
     if (qty < l.includedQuantity || qty > l.maxQuantity ||
         (qty > l.includedQuantity && (!l.extraAllowed || (qty - l.includedQuantity) % l.quantityStep !== 0)))
       return fail('INVALID_QUANTITY');
     desired.set(add.serviceCode, qty);
-    if (qty > 0) chosen.add(add.serviceCode);
-  }
-  // Included/nested bundles are unsupported. Reject instead of falsely promising their contents.
-  for (const [code, l] of Array.from(links.entries())) {
-    const rule = l.overridePriceRule ?? services.get(code)?.defaultPriceRule;
-    if (rule?.method === 'bundle' && l.includedQuantity > 0) return fail('INVALID_BUNDLE');
-  }
-  // Bundles automatically include their explicitly specified contents; a component may be covered by only one bundle.
-  const covered = new Map<string, number>();
-  for (const code of Array.from(chosen)) {
-    const link = links.get(code)!;
-    const rule = link.overridePriceRule ?? services.get(code)?.defaultPriceRule;
-    if (rule?.method !== 'bundle') continue;
-    if (link.includedQuantity !== 0 || desired.get(code) !== 1 || !Array.isArray(rule.covers) ||
-        rule.covers.length === 0 || rule.covers.length > 32) return fail('INVALID_BUNDLE');
-    const seen = new Set<string>();
-    for (const comp of rule.covers) {
-      if (!plain(comp) || !isCode(comp.serviceCode) || !validQty(comp.quantity) || comp.quantity <= 0 ||
-          comp.serviceCode === code || seen.has(comp.serviceCode) || covered.has(comp.serviceCode)) return fail('INVALID_BUNDLE');
-      seen.add(comp.serviceCode);
-      const target = links.get(comp.serviceCode);
-      if (!target || !target.allowed || !target.extraAllowed || !services.has(comp.serviceCode)) return fail('INVALID_BUNDLE');
-      const targetRule = target.overridePriceRule ?? services.get(comp.serviceCode)?.defaultPriceRule;
-      if (targetRule?.method === 'bundle') return fail('INVALID_BUNDLE');
-      const targetTotal = target.includedQuantity + comp.quantity;
-      if (targetTotal > target.maxQuantity || comp.quantity % target.quantityStep !== 0) return fail('INVALID_BUNDLE');
-      covered.set(comp.serviceCode, comp.quantity);
-      desired.set(comp.serviceCode, Math.max(targetTotal, desired.get(comp.serviceCode) ?? 0));
-    }
   }
   for (const [code, qty] of Array.from(desired.entries())) {
     if (qty === 0) continue;
-    const s = services.get(code)!;
+    const s = catalog.services.get(code)!.service;
     if (s.dependencies.some(c => (desired.get(c) ?? 0) <= 0)) return fail('UNMET_DEPENDENCY');
     if (s.exclusions.some(c => (desired.get(c) ?? 0) > 0)) return fail('MUTUAL_EXCLUSION');
   }
-  const lines: QuoteLine[] = [{ kind: 'base', code: plan.code, quantity: 1, included: 0, billed: 1, netMinor: plan.baseNetMinor }];
+
+  const blocked = new Set<string>();
+  const unavailable = new Set<string>();
+  const capability = (cap: string | null, fallback: string, verified = true): void => {
+    if (cap === null || !verified || !ready.has(cap)) {
+      blocked.add(`CAPABILITY_UNAVAILABLE:${cap ?? fallback}`);
+      unavailable.add(cap ?? fallback);
+    }
+  };
+  if (plan.commercialStatus === 'on_request') blocked.add(`ON_REQUEST_PRICE:${plan.code}`);
+  else if (plan.commercialStatus !== 'purchasable') blocked.add('PACKAGE_NOT_PURCHASABLE');
+  capability(plan.capabilityCode, plan.code);
+
+  const lines: QuoteLine[] = [{ kind: 'base', code: plan.code, quantity: 1, included: 0, billed: 1, netMinor: amount(BigInt(plan.baseNetMinor)) }];
   let subtotal = BigInt(plan.baseNetMinor);
   const cvBilled = Math.max(0, input.cvCount - plan.cvIncluded);
   if (cvBilled) {
-    const price = calculateRule(plan.cvOverageRule, cvBilled);
+    if (!entry.overage) return fail('UNPRICED');
+    const price = amount(priceOf(entry.overage, cvBilled));
     subtotal += BigInt(price);
     lines.push({ kind: 'cv_overage', code: 'cv', quantity: input.cvCount, included: plan.cvIncluded, billed: cvBilled, netMinor: price });
   }
-  const unavailable = new Set<string>();
-  if (plan.commercialStatus !== 'purchasable' || !plan.capabilityCode || !ready.has(plan.capabilityCode))
-    unavailable.add(plan.capabilityCode ?? 'plan_not_ready');
-  for (const [code, l] of Array.from(links.entries())) {
+  for (const [code, { link, rule }] of Array.from(links.entries())) {
     const qty = desired.get(code) ?? 0;
-    if (!qty || !l.allowed) continue;
-    const s = services.get(code)!;
-    const included = l.includedQuantity + (covered.get(code) ?? 0);
-    const billable = Math.max(0, qty - included);
-    const rule = l.overridePriceRule ?? s.defaultPriceRule;
-    const amount = billable ? calculateRule(rule, billable, true) : 0;
-    subtotal += BigInt(amount);
-    lines.push({ kind: 'service', code, quantity: qty, included, billed: billable, netMinor: amount });
-    if (l.commercialStatus !== 'purchasable' || s.commercialStatus !== 'purchasable' ||
-        s.technicalStatus !== 'verified' || !l.autoPurchase || !s.capabilityCode ||
-        !ready.has(s.capabilityCode)) unavailable.add(s.capabilityCode ?? code);
+    if (!qty) continue;
+    const s = catalog.services.get(code)!.service;
+    const billable = Math.max(0, qty - link.includedQuantity);
+    if (billable && !rule) return fail('UNPRICED');
+    const price = billable ? amount(priceOf(rule!, billable)) : 0;
+    subtotal += BigInt(price);
+    lines.push({ kind: 'service', code, quantity: qty, included: link.includedQuantity, billed: billable, netMinor: price });
+    capability(s.capabilityCode, code, s.technicalStatus === 'verified');
+    if (billable && (!link.autoPurchase || link.commercialStatus !== 'purchasable' || s.commercialStatus !== 'purchasable'))
+      blocked.add(`ADDON_REQUIRES_OPERATOR:${code}`);
   }
-  cents(subtotal);
-  let discounted = subtotal, discountTotal = BigInt(0);
-  const discountCodes = new Set<string>();
-  for (const d of offer.discounts) {
-    if (!plain(d) || !isCode(d.code) || discountCodes.has(d.code) || !Array.isArray(d.eligiblePackages) ||
-        !d.eligiblePackages.every(isPackage) || !uniq(d.eligiblePackages)) return fail('INVALID_DISCOUNT');
-    discountCodes.add(d.code);
-    if (d.method === 'percent' && !percentage(d.value) || d.method === 'amount' && !minor(d.value) ||
-        (d.method !== 'percent' && d.method !== 'amount')) return fail('INVALID_DISCOUNT');
-    if (!d.eligiblePackages.includes(input.packageCode)) continue;
-    const applied = d.method === 'percent'
-      ? roundedRatio(discounted * BigInt(d.value), BigInt(10000))
-      : BigInt(d.value);
+  amount(subtotal);
+  let discounted = subtotal, discountTotal = ZERO;
+  for (const d of catalog.discounts) {
+    if (!d.eligiblePackages.includes(plan.code)) continue;
+    const applied = d.method === 'percent' ? halfUp(discounted * BigInt(d.value), BigInt(10000)) : BigInt(d.value);
     const actual = applied > discounted ? discounted : applied;
     discounted -= actual;
     discountTotal += actual;
-    lines.push({ kind: 'discount', code: d.code, quantity: 1, included: 0, billed: 1, netMinor: -cents(actual) });
+    lines.push({ kind: 'discount', code: d.code, quantity: 1, included: 0, billed: 1, netMinor: -amount(actual) });
   }
-  const vat = roundedRatio(discounted * BigInt(offer.vatBasisPoints), BigInt(10000));
+  const vat = vatOf(discounted, offer.vatBasisPoints);
+  if (offer.status !== 'PUBLISHED') blocked.add('DRAFT_PREVIEW');
+  const blockedReasons = Array.from(blocked).sort();
   return {
-    versionId: offer.versionId, packageCode: input.packageCode, currency: 'PLN', vatBasisPoints: offer.vatBasisPoints,
-    lines, subtotalNetMinor: cents(subtotal), discountMinor: cents(discountTotal),
-    netMinor: cents(discounted), vatMinor: cents(vat), grossMinor: cents(discounted + vat),
-    canPurchase: unavailable.size === 0 && offer.status === 'PUBLISHED',
+    versionId: offer.versionId, packageCode: plan.code, currency: 'PLN', vatBasisPoints: offer.vatBasisPoints,
+    lines, subtotalNetMinor: amount(subtotal), discountMinor: amount(discountTotal),
+    netMinor: amount(discounted), vatMinor: amount(vat), grossMinor: amount(discounted + vat),
+    canPurchase: blockedReasons.length === 0,
     unavailableCapabilities: Array.from(unavailable).sort(),
+    blockedReasons,
   };
 }
