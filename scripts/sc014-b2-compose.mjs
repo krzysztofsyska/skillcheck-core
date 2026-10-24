@@ -4,9 +4,12 @@
 import {readFileSync, writeFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 
+// Billing source accepted in PR #115, integration fbc75c79530fa81ddb8e94e71fcc5f1293f5553e
+// (reviewed PR head 5701b16e3dcbfe4f79fb27a315c1db4614d93811). Its global
+// package policy is known configuration, never a candidate erasure adapter.
 const sources = {
   voice: ['db/isolated/sc010-r4-voice-retention.sql','c5dbf138405ed737332a70400f6017d983cd111f9be49180c1309b2d75ae0d5f'],
-  billing: ['docs/prototypes/sc-019-mvp-credits.sql','84881ab803db8da3201757f333c0f894bb5251ec758a5ba6eaf5547d9ae694ac'],
+  billing: ['docs/prototypes/sc-019-mvp-credits.sql','219ba643a0dff4dcee342065544e375fa549aa30f35c0e525414949a46aec240'],
 };
 const text = {};
 for (const [key,[path,sha]] of Object.entries(sources)) {
@@ -28,7 +31,7 @@ const tables=[...rowTables,'private.competency_test_cancellations'];
 const baseline='private.erasure_inventory_baseline_sc014_b2_v1';
 // Generated from a clean synthetic full accepted chain on PGlite. The same
 // literal must pass the PostgreSQL 16 CI test; never learned from deployment.
-const signature='fc004325e44e5b11536b8a8aeafd7474b23e4922ab48c17c9089ea86437be5de';
+const signature='b20053a8e9a9990fbf3a031026940947ed091b65a1643a5e070768801e6a40b7';
 const output=[];
 output.push(`-- SC-014-B2 v1: isolated composition after SC-010 R4-VOICE, SC-019 R5,
 -- and SC-014-B2 validation / attempts / withdrawal. NOT a production migration.
@@ -37,7 +40,7 @@ output.push(`-- SC-014-B2 v1: isolated composition after SC-010 R4-VOICE, SC-019
 begin;
 do $$begin
  if not exists(select 1 from private.erasure_inventory_baseline_r5 where singleton
-  and schema_signature='6157b0c234cc7485e188ce4805ee27ab77707e1496f01d807a249fa80a729146') then
+  and schema_signature='c989b84b9eec51fc48c361b8ad9e7404b4044268d56d106b6788fe56f3f1857d') then
   raise exception 'SC014_B2_REQUIRES_REVIEWED_VOICE_BILLING_BASELINE';end if;
 end;$$;`);
 let rowCandidates=fn(text.voice,'private.erasure_row_candidates');
@@ -130,7 +133,7 @@ output.push(purge);
 // configuration. Such accounting is not a candidate purge adapter.
 const voiceTables=text.voice.match(/insert into private\.erasure_inventory_baseline_r4_voice values\(true,'[^']+',array\[([\s\S]*?)\]\);/)[1];
 const known=[...voiceTables.matchAll(/'([^']+)'/g)].map(m=>m[1]);
-known.push('private.sc19_balances','private.sc19_trial_nips','private.sc19_trial_approvals','private.sc19_analysis_spend','private.sc19_credit_journal','private.erasure_inventory_baseline_r5',...tables,baseline);
+known.push('private.sc19_package_policy','private.sc19_balances','private.sc19_trial_nips','private.sc19_trial_approvals','private.sc19_analysis_spend','private.sc19_credit_journal','private.erasure_inventory_baseline_r5',...tables,baseline);
 output.push(`insert into ${baseline} values(true,'${signature}',array[\n ${known.map(x=>`'${x}'`).join(',\n ')}]);
 -- Fail closed on an unexpected schema; this is a literal reviewed composition.
 do $$begin

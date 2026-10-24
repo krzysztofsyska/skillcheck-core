@@ -176,6 +176,12 @@ alter table private.voice_plan_current_releases force row level security;
 alter table private.voice_plan_request_keys force row level security;
 
 revoke all on table public.voice_plan_versions from public, anon, authenticated;
+-- RPC-only even when installed with historical Supabase public-table defaults.
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    revoke all on table public.voice_plan_versions from service_role;
+  end if;
+end $$;
 revoke all on table private.voice_plan_review_entries from public, anon, authenticated;
 revoke all on table private.voice_plan_release_entries from public, anon, authenticated;
 revoke all on table private.voice_plan_current_releases from public, anon, authenticated;

@@ -24,27 +24,27 @@ test('comments, reactions, spoofed logins, and gate A do not authorize gate B', 
     contractHash: 'h', policySha: 'p', reviewRunId: 1, reviewRunAttempt: 1, reviewDigest: 'r', ciRunId: 2, ciRunAttempt: 1, ciDigest: 'c', files: [],
   });
   const request = requestFor(canonical, 'A');
-  const run = { run_id: 20, run_attempt: 1, workflow_id: request.workflow_id, workflow_path: request.workflow_path, ref: request.ref, environment: { name: 'owner-acceptance', id: null } };
+  const run = { run_id: 20, run_attempt: 1, workflow_id: request.workflow_id, workflow_path: request.workflow_path, ref: request.ref, environment: { name: 'owner-acceptance', id: policy.environments.owner_acceptance.id } };
   const commentOnly = evaluateApproval({ request, run, payload: [], expectedUser: policy.owner, expectedEnvironment: policy.environments.owner_acceptance });
   assert.equal(commentOnly.ok, false);
   const spoof = evaluateApproval({
     request, run,
-    payload: [{ state: 'approved', user: { id: 1, login: 'krzysztofsyska', type: 'User' }, environments: [{ name: 'owner-acceptance', id: null }], comment: 'APPROVED' }],
+    payload: [{ state: 'approved', user: { id: 1, login: 'krzysztofsyska', type: 'User' }, environments: [{ name: 'owner-acceptance', id: policy.environments.owner_acceptance.id }], comment: 'APPROVED' }],
     expectedUser: policy.owner,
     expectedEnvironment: policy.environments.owner_acceptance,
   });
   assert.equal(spoof.reason, 'reviewer_mismatch');
   const bot = evaluateApproval({
     request, run,
-    payload: [{ state: 'approved', user: { id: policy.owner.id, login: 'krzysztofsyska', type: 'Bot' }, environments: [{ name: 'owner-acceptance', id: null }] }],
+    payload: [{ state: 'approved', user: { id: policy.owner.id, login: 'krzysztofsyska', type: 'Bot' }, environments: [{ name: 'owner-acceptance', id: policy.environments.owner_acceptance.id }] }],
     expectedUser: policy.owner,
     expectedEnvironment: policy.environments.owner_acceptance,
   });
   assert.equal(bot.ok, false);
   const asB = evaluateApproval({
     request: requestFor(canonical, 'B'),
-    run: { ...run, workflow_id: policy.workflow_ids.promote, workflow_path: policy.workflows.promote, environment: { name: 'production-approval', id: null } },
-    payload: [{ state: 'approved', user: { id: policy.owner.id, type: 'User' }, environments: [{ name: 'production-approval', id: null }] }],
+    run: { ...run, workflow_id: policy.workflow_ids.promote, workflow_path: policy.workflows.promote, environment: { name: 'production-approval', id: policy.environments.production_approval.id } },
+    payload: [{ state: 'approved', user: { id: policy.owner.id, type: 'User' }, environments: [{ name: 'production-approval', id: policy.environments.production_approval.id }] }],
     expectedUser: policy.owner,
     expectedEnvironment: policy.environments.production_approval,
   });
@@ -53,8 +53,8 @@ test('comments, reactions, spoofed logins, and gate A do not authorize gate B', 
   assert.equal(JSON.stringify(realB).includes('sk-'), false);
   assert.equal(evaluateApproval({
     request: { ...requestFor(realB, 'B'), workflow_id: policy.workflow_ids.promote, workflow_path: policy.workflows.promote },
-    run: { run_id: 20, run_attempt: 1, workflow_id: policy.workflow_ids.promote, workflow_path: policy.workflows.promote, ref: 'refs/heads/main', environment: { name: 'production-approval', id: null } },
-    payload: [{ state: 'approved', user: { id: policy.owner.id, type: 'User' }, environments: [{ name: 'production-approval', id: null }], comment: 'yes in chat' }],
+    run: { run_id: 20, run_attempt: 1, workflow_id: policy.workflow_ids.promote, workflow_path: policy.workflows.promote, ref: 'refs/heads/main', environment: { name: 'production-approval', id: policy.environments.production_approval.id } },
+    payload: [{ state: 'approved', user: { id: policy.owner.id, type: 'User' }, environments: [{ name: 'production-approval', id: policy.environments.production_approval.id }], comment: 'yes in chat' }],
     expectedUser: policy.owner,
     expectedEnvironment: policy.environments.production_approval,
   }).ok, true);

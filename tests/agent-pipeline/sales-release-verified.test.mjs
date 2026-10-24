@@ -14,9 +14,10 @@ const inspector=fileURLToPath(new URL('../../tools/agent-pipeline/lib/sales-rele
 function git(cwd,...args) {
   return execFileSync('git',args,{cwd,encoding:'utf8'}).trim();
 }
-// Fixture substitution stays in test Git repositories, never in the verifier API.
+// Frozen historical bytes keep the positive fixture independent of later app edits
+// and shallow checkout history. The verifier still checks its unchanged manifest.
 function reviewedContent(path) {
-  return readFileSync(new URL('../../'+path,import.meta.url));
+  return readFileSync(new URL('./fixtures/reviewed-sales-release/'+REVIEWED_SALES_BLOBS[path]+'.blob',import.meta.url));
 }
 function setup(paths=filenames, content=reviewedContent) {
   const cwd=mkdtempSync(join(tmpdir(),'skillcheck-sales-gate-'));
@@ -55,6 +56,22 @@ test('actual five-file Git history and pinned blobs are checked; no production p
     assert.notEqual(git(f.cwd,'branch','--show-current'),releaseBranch);
     assert.equal(git(f.cwd,'rev-parse',releaseRef+'^{commit}'),f.headSha);
     assert.equal(inspectSalesReleaseGit({cwd:f.cwd,baseSha:f.baseSha,headSha:f.headSha,headRef:'anything'}).ok,false);
+  }finally{rmSync(f.cwd,{recursive:true,force:true});}
+});
+test('later marketing edits do not inherit the historical release review',()=>{
+  const changedPaths=[
+    'app/components/marketing/home-page.tsx',
+    'app/components/marketing/package-comparison.tsx',
+    'tests/marketing-http.test.mjs',
+  ];
+  const f=setup(filenames,path=>changedPaths.includes(path)
+    ? Buffer.concat([reviewedContent(path),Buffer.from('\n// Subsequent unreviewed edit.\n')])
+    : reviewedContent(path));
+  try {
+    const result=inspectSalesReleaseGit({cwd:f.cwd,baseSha:f.baseSha,headSha:f.headSha});
+    assert.equal(result.ok,false);
+    assert.equal(result.authorizedForProduction,false);
+    assert.deepEqual(result.errors,changedPaths.map(path=>'Unreviewed final content: '+path));
   }finally{rmSync(f.cwd,{recursive:true,force:true});}
 });
 test('branch name cannot replace a trusted release ref that matches HEAD',()=>{

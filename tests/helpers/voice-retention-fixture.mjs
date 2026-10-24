@@ -16,7 +16,7 @@ export const voiceTables=Object.freeze([
 ]);
 export const sharedTables=Object.freeze(['private.voice_plan_template_catalog',
  'private.voice_interview_permission_policies','private.voice_interview_permission_issuers','private.sc19_voice_entitlements']);
-export async function bootRetention(t,{embedded=false,beforeIsolated,beforeRetention}={}) {
+export async function bootRetention(t,{embedded=false,beforeIsolated,beforeRetention,afterRetention}={}) {
  let env;
  if(embedded){
   const db=new PGlite({extensions:{pgcrypto}});t.after(()=>db.close());
@@ -29,6 +29,10 @@ export async function bootRetention(t,{embedded=false,beforeIsolated,beforeReten
  const baseline=(await db.query(`select schema_signature expected,private.erasure_schema_signature() actual
   from private.erasure_inventory_baseline_r4_voice where singleton`)).rows[0];
  assert.equal(baseline.actual,baseline.expected,'Literal reviewed baseline must match the clean installed chain');
+ // Forward migrations must see the canonical product schema before independent
+ // ledger test adapters add their own fixture objects. Historical callers retain
+ // the same verified R4-VOICE boundary when this explicit hook is absent.
+ if(afterRetention)await afterRetention(db);
  let ledgerDb;
  if(embedded){ledgerDb=new PGlite();t.after(()=>ledgerDb.close());}
  else {
