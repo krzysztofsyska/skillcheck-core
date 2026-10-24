@@ -414,16 +414,24 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
       return l.allowed && l.visible && l.commercialStatus !== 'hidden' && svc.commercialStatus !== 'hidden' &&
         l.maxQuantity > 0 && (l.includedQuantity > 0 || l.extraAllowed) && !excludedByForced(c);
     };
-    const pending = [...forcedList], checked = new Set<string>();
+    const pending = [...forcedList], required = new Set<string>();
     while (pending.length) {
       const c = pending.pop()!;
-      if (checked.has(c)) continue;
-      checked.add(c);
+      if (required.has(c)) continue;
+      required.add(c);
       for (const dep of catalog.services.get(c)!.service.dependencies) {
         if (!forced.has(dep) && !selectable(dep)) return fail(`INCLUDED_DEPENDENCY_UNREALIZABLE:${code}:${dep}`);
         pending.push(dep);
       }
     }
+    // Everything in the required closure must be present together, so it must be exclusion-free.
+    const requiredList = Array.from(required);
+    for (let i = 0; i < requiredList.length; i++)
+      for (let j = i + 1; j < requiredList.length; j++) {
+        const a = catalog.services.get(requiredList[i])!.service, b = catalog.services.get(requiredList[j])!.service;
+        if (a.exclusions.includes(b.code) || b.exclusions.includes(a.code))
+          return fail(`INCLUDED_DEPENDENCY_CONFLICT:${code}:${a.code < b.code ? a.code + ':' + b.code : b.code + ':' + a.code}`);
+      }
     for (const [serviceCode, { link, rule }] of Array.from(planLinks.entries())) {
       if (!link.allowed || !link.extraAllowed) continue;
       // Extra quantity is reachable only through an explicit add-on selection, which quoteOffer

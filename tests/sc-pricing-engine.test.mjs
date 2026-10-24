@@ -449,3 +449,12 @@ test('publish rejects included services whose dependencies cannot be realized in
   error(() => validateOfferForPublish(d), 'INCLUDED_DEPENDENCY_UNREALIZABLE:ASSESSMENT_CENTER:consult');
   error(() => quote('ASSESSMENT_CENTER', [], 20, d), 'UNMET_DEPENDENCY');
 });
+
+test('publish rejects included services whose required dependencies exclude each other', () => {
+  const c = clone();
+  c.services.find(s => s.code === 'interview').dependencies = ['consult', 'skill_test'];
+  // consult excludes skill_test in the fixture: WERYFIKACJA offers both, so each is selectable alone.
+  error(() => validateOfferForPublish(c), 'INCLUDED_DEPENDENCY_CONFLICT:WERYFIKACJA:consult:skill_test');
+  error(() => quote('WERYFIKACJA', [{ serviceCode: 'consult', quantity: 1 }], 20, c), 'UNMET_DEPENDENCY');
+  error(() => quote('WERYFIKACJA', [{ serviceCode: 'consult', quantity: 1 }, { serviceCode: 'skill_test', quantity: 1 }], 20, c), 'MUTUAL_EXCLUSION');
+});
