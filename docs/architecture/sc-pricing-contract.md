@@ -77,7 +77,8 @@ interface QuoteResult {
   canPurchase: boolean; unavailableCapabilities: readonly string[];
   // Stable machine codes explaining canPurchase=false; empty iff canPurchase=true.
   // Codes: PACKAGE_NOT_PURCHASABLE, ADDON_REQUIRES_OPERATOR:<serviceCode>,
-  //        CAPABILITY_UNAVAILABLE:<capabilityCode>, ON_REQUEST_PRICE:<code>.
+  //        CAPABILITY_UNAVAILABLE:<capabilityCode|code>, ON_REQUEST_PRICE:<packageCode>,
+  //        DRAFT_PREVIEW (owner-only draft quote; never purchasable).
   blockedReasons: readonly string[];
 }
 ```
@@ -102,6 +103,7 @@ Baza: `pricing_scope`, `price_versions`, `services`, `packages`, `package_servic
 - Podstawowy wolumen CV oraz inne usługi liczone według **odrębnych**, walidowanych reguł; `extraQuantity = max(0, requested - included)`. Included ma 0 charge; wszystkie linie muszą wskazywać jawnie usługi/ilości.
 - `fixed`: jednorazowa kwota (jeśli dana usługa jest wybrana ponad ilość wliczoną), `per_unit`: stała cena × dodatkowa ilość; `volume_tier`: jedna spójna polityka `graduated` albo `all_units` wskazana przez version; `tiered_flat`: kwota progu obejmującego dodatkową ilość (0 przy braku nadwyżki). `bundle` nie występuje w v1.
 - Rabat stosowany do dozwolonej podstawy netto, nie może dać wyniku ujemnego. Nie zaokrąglać ułamków liczbą float: operacje BigInt + kontrola max safe, procent w basis points, reguła **half-up**. Każdy rabat zaokrągla się osobno na pozostałej agregowanej podstawie netto (kolejność reguł jest częścią niezmiennej wersji). **VAT obliczamy i zaokrąglamy tylko raz dla sumy netto po wszystkich rabatach**, nie dla poszczególnych linii: `vatMinor = halfUp(discountedNet × vatBps / 10000)`; `grossMinor = discountedNet + vatMinor`. Linie przedstawiają kwoty netto (rabat jako osobna ujemna linia); **nie przypisujemy VAT do linii i nie rozdzielamy reszty podatkowej między pozycje**. Publiczny widok, backend i SC-019 przechowują identyczny VAT i gross z jednej wyceny; jeśli fakturowanie wymaga VAT per pozycja lub różnych stawek, potrzebna osobna wersja reguły i zgodność z wymaganiami podatkowymi przed publikacją.
+- Kody odmowy (PricingError, stabilne): `INVALID_REQUEST`, `INVALID_ADDON`, `OFFER_NOT_APPROVED`, `STALE_VERSION`, `INVALID_CATALOG`, `INVALID_CV_POLICY`, `INVALID_RULE`, `INVALID_TIER`, `UNSUPPORTED_RULE`, `TIER_COVERAGE` (publish), `CONTRADICTORY_FLAGS`, `DEPENDENCY_CYCLE`, `INVALID_DISCOUNT`, `INVALID_CAPABILITIES`, `PLAN_UNAVAILABLE`, `ADDON_UNAVAILABLE`, `INVALID_QUANTITY`, `QUANTITY_OUT_OF_RANGE`, `UNMET_DEPENDENCY`, `MUTUAL_EXCLUSION`, `UNPRICED`, `AMOUNT_OUT_OF_RANGE`, `PURCHASABLE_REQUIRES_PRICE_AND_CAPABILITY` (publish).
 - Wycena odmawia gdy brak ceny, brak PUBLISHED dla klienta, nieobsługiwana reguła, niewłaściwa quantity/step, niespełnione prerequisites, nieaktywny dodatek, niespójne statusy lub `expectedVersionId` różni się od aktualnego.
 - Cennik FREE może mieć 0 zł netto wyłącznie przy jawnie zatwierdzonym publicznym planie; nie interpretować braku ceny jako zera.
 
