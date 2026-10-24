@@ -458,3 +458,29 @@ test('publish rejects included services whose required dependencies exclude each
   error(() => quote('WERYFIKACJA', [{ serviceCode: 'consult', quantity: 1 }], 20, c), 'UNMET_DEPENDENCY');
   error(() => quote('WERYFIKACJA', [{ serviceCode: 'consult', quantity: 1 }, { serviceCode: 'skill_test', quantity: 1 }], 20, c), 'MUTUAL_EXCLUSION');
 });
+
+test('global service minimum applies to positive quantities and included quantities', () => {
+  const c = clone();
+  c.services.find(s => s.code === 'report_ext').min = 5;
+  for (const l of c.planServices.filter(l => l.serviceCode === 'report_ext')) l.includedQuantity = 0;
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 1 }], 20, c), 'INVALID_QUANTITY');
+  assert.equal(line(quote('PRESELEKCJA', [{ serviceCode: 'report_ext', quantity: 5 }], 20, c), 'report_ext').billed, 5);
+  assert.doesNotThrow(() => validateOfferForPublish(c));
+  const d = clone();
+  d.services.find(s => s.code === 'report_ext').min = 5; // WERYFIKACJA includes 1 < min 5
+  error(() => quote('PRESELEKCJA', [], 20, d), 'SERVICE_LIMIT_EXCEEDED');
+});
+
+test('compatible bound follows dependency closures, not only direct exclusions', () => {
+  const c = clone();
+  Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+  const svc = (code, price, extra = {}) => ({ code, name: code, min: 0, max: 1, step: 1, technicalStatus: 'verified',
+    commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: [],
+    defaultPriceRule: { method: 'fixed', amountMinor: price }, ...extra });
+  c.services.push(svc('alpha', 500_000_000_000, { dependencies: ['gamma'] }), svc('beta', 500_000_000_000), svc('gamma', 0, { exclusions: ['beta'] }));
+  c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
+  for (const s of ['alpha', 'beta', 'gamma']) c.planServices.push({ ...link('PRESELEKCJA', s), maxQuantity: 1 });
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 615_000_000_000);
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'alpha', quantity: 1 }, { serviceCode: 'beta', quantity: 1 }], 30, c), 'UNMET_DEPENDENCY');
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'alpha', quantity: 1 }, { serviceCode: 'beta', quantity: 1 }, { serviceCode: 'gamma', quantity: 1 }], 30, c), 'MUTUAL_EXCLUSION');
+});

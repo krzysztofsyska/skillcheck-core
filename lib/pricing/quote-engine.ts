@@ -202,10 +202,11 @@ function upperBound(rule: CheckedRule, largestIn: LargestIn): bigint {
   return best;
 }
 
-/** Billed add-on quantities: positive multiples of step up to `extra`. */
-const stepLargestIn = (step: number, extra: number): LargestIn => (lo, hi) => {
+/** Billed add-on quantities: positive multiples of step up to `extra`, whose total
+ * (included + billed) also reaches the service minimum. */
+const stepLargestIn = (step: number, extra: number, minBilled = 1): LargestIn => (lo, hi) => {
   const q = Math.floor(Math.min(hi, extra) / step) * step;
-  return q >= Math.max(lo, 1) ? q : null;
+  return q >= Math.max(lo, minBilled, 1) ? q : null;
 };
 
 // ---------- catalog validation (shared by publish and quote) ----------
@@ -306,7 +307,8 @@ function checkCatalog(offer: Offer): Catalog {
         (l.commercialStatus === 'hidden' && l.visible)) return fail('CONTRADICTORY_FLAGS');
     const global = services.get(l.serviceCode)!.service;
     // 0 <= included <= max <= service.max; link step must be a multiple of the service step.
-    if (l.maxQuantity > global.max || l.quantityStep % global.step !== 0) return fail('SERVICE_LIMIT_EXCEEDED');
+    if (l.maxQuantity > global.max || l.quantityStep % global.step !== 0 ||
+        (l.includedQuantity > 0 && l.includedQuantity < global.min)) return fail('SERVICE_LIMIT_EXCEEDED');
     const perPackage = links.get(l.packageCode) ?? new Map();
     if (perPackage.has(l.serviceCode)) return fail('INVALID_CATALOG');
     const override = l.overridePriceRule === null || l.overridePriceRule === undefined ? null : checkRule(l.overridePriceRule);
@@ -332,17 +334,41 @@ function checkOfferHeader(offer: Offer): void {
 }
 
 /** Maximum total weight over add-on sets the quote engine can accept together: services included in
- * the package are always present, and no two selected services may exclude each other. Exact for
+ * the package are always present, and no two services in the union of the selected services'
+ * dependency closures may exclude each other. Exact for
  * conflict components of up to 20 services; larger components fall back to their plain sum, which is
  * conservative (may reject a valid catalog, never accepts an unquotable one). */
 function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlySet<string>,
   services: Catalog['services']): bigint {
   const excludes = (a: string, b: string): boolean =>
     services.get(a)!.service.exclusions.includes(b) || services.get(b)!.service.exclusions.includes(a);
-  // A service excluded by an always-present one can never be selected.
-  const free = Array.from(weight.keys()).filter(c => !forced.has(c) && !Array.from(forced).some(f => excludes(c, f)));
+  // Selecting a service forces its transitive dependency closure; conflicts are judged on closures.
+  const closure = new Map<string, Set<string>>();
+  const closureOf = (c: string): Set<string> => {
+    const seen = new Set<string>(), stack = [c];
+    while (stack.length) {
+      const x = stack.pop()!;
+      if (seen.has(x)) continue;
+      seen.add(x);
+      for (const d of services.get(x)!.service.dependencies) stack.push(d);
+    }
+    return seen;
+  };
+  const clash = (a: Set<string>, b: Iterable<string>): boolean => {
+    for (const x of Array.from(a)) for (const y of Array.from(b)) if (x !== y && excludes(x, y)) return true;
+    return false;
+  };
   let total = ZERO;
   for (const c of Array.from(weight.keys())) if (forced.has(c)) total += weight.get(c)!;
+  // Never selectable: its closure conflicts internally or with the always-present services.
+  const free = Array.from(weight.keys()).filter(c => {
+    if (forced.has(c)) return false;
+    const own = closureOf(c);
+    if (clash(own, own) || clash(own, forced)) return false;
+    closure.set(c, own);
+    return true;
+  });
+  const conflict = (a: string, b: string): boolean => clash(closure.get(a)!, closure.get(b)!);
   const seen = new Set<string>();
   for (const start of free) {
     if (seen.has(start)) continue;
@@ -352,7 +378,7 @@ function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlyS
     while (stack.length) {
       const c = stack.pop()!;
       component.push(c);
-      for (const o of free) if (!seen.has(o) && excludes(c, o)) { seen.add(o); stack.push(o); }
+      for (const o of free) if (!seen.has(o) && conflict(c, o)) { seen.add(o); stack.push(o); }
     }
     if (component.length > 20) { for (const c of component) total += weight.get(c)!; continue; }
     let best = ZERO;
@@ -361,7 +387,7 @@ function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlyS
       for (let i = 0; i < component.length && ok; i++) {
         if (!(mask & (1 << i))) continue;
         for (let j = i + 1; j < component.length; j++)
-          if (mask & (1 << j) && excludes(component[i], component[j])) { ok = false; break; }
+          if (mask & (1 << j) && conflict(component[i], component[j])) { ok = false; break; }
         sum += weight.get(component[i])!;
       }
       if (ok && sum > best) best = sum;
@@ -440,7 +466,9 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
           catalog.services.get(serviceCode)!.service.commercialStatus === 'hidden') continue;
       // Never selectable in this package (excluded by an always-present service): no reachable line.
       if (!forced.has(serviceCode) && excludedByForced(serviceCode)) continue;
-      const largest = stepLargestIn(link.quantityStep, link.maxQuantity - link.includedQuantity);
+      const svcMin = catalog.services.get(serviceCode)!.service.min;
+      const largest = stepLargestIn(link.quantityStep, link.maxQuantity - link.includedQuantity,
+        Math.max(1, svcMin - link.includedQuantity));
       if (largest(1, MAX_QUANTITY) === null) continue;
       if (!rule) return fail(`UNPRICED:${serviceCode}`);
       weight.set(serviceCode, BigInt(amount(upperBound(rule, largest))));
@@ -503,7 +531,7 @@ export function quoteOffer(offer: Offer, untrustedRequest: unknown,
         s.commercialStatus === 'hidden') return fail('ADDON_UNAVAILABLE');
     const l = found.link;
     const qty = add.quantity === 0 ? l.includedQuantity : add.quantity;
-    if (qty < l.includedQuantity || qty > l.maxQuantity ||
+    if (qty < l.includedQuantity || qty > l.maxQuantity || (qty > 0 && qty < s.min) ||
         (qty > l.includedQuantity && (!l.extraAllowed || (qty - l.includedQuantity) % l.quantityStep !== 0)))
       return fail('INVALID_QUANTITY');
     desired.set(add.serviceCode, qty);
