@@ -33,7 +33,8 @@ test('committed manifest accounts for every promoted commit and pending migratio
 test('proposed controller runbook stays inactive and fail-closed', () => {
   const runbook = JSON.parse(readFileSync(new URL('../docs/release/production-runbook.proposed.json', import.meta.url), 'utf8'));
   assert.equal(runbook.status, 'PROPOSED_NOT_APPROVED');
-  assert.ok(runbook.operations.length >= 13);
+  assert.ok(runbook.operations.length >= 12);
+  assert.ok(runbook.operations.some(op => /M13 .*NOT applied/.test(op)));
   assert.ok(runbook.smoke_tests.length > 0);
   assert.ok(runbook.rollback.length > 0);
   assert.deepEqual(runbook.secret_names, []);

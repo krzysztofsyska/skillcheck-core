@@ -16,7 +16,7 @@
     "M10 apply 20261012031026_retention_scheduler_protocol.sql individually; verify pg_cron job count unchanged; record",
     "M11 apply 20261012031039_retention_scheduler_inventory.sql individually; run tools/erasure/production-preflight.sql; record",
     "M12 apply 20261021084245_explicit_data_api_table_acl.sql individually after owner confirms no external service_role use; verify zero service_role table grants on the 29 relations; record",
-    "M13 apply 20261021084732_sc019_credits_payments_inventory.sql individually; verify private.sc19 tables exist and are empty; record",
+    "M13 sc019_credits_payments_inventory is NOT applied in this release: its sc19_analysis_bill trigger blocks every new screening analysis while balances are empty; it ships with FREE/PRESELEKCJA activation",
     "Regenerate the promotion manifest for the final SHA and compare its hash with the approved one",
     "Merge integration into main; this automatically publishes Vercel Production (vercel.json main: true)",
     "Keep SALES_LEADS_ENABLED and SALES_AUTO_REPLY_ENABLED false; do not set SC19_PACKAGES_ENABLED, COMPETENCY_BROKER_ENABLED or any payment provider configuration"
@@ -29,7 +29,8 @@
     "/dashboard/<company>/billing redirects to /dashboard",
     "/rozmowa renders disabled and no sales_leads rows are created",
     "No new Vercel runtime errors for 30 minutes",
-    "Exactly one pg_cron job remains and the Postgres logs show no errors"
+    "Exactly one pg_cron job remains and the Postgres logs show no errors",
+    "A synthetic company can start a new CV analysis (no sc19_quota_exhausted)"
   ],
   "secret_names": []
 }

@@ -48,9 +48,11 @@ Nigdy nie używać zbiorczego push. Każdą migrację stosujemy pojedynczo, po n
 4. **Próba generalna na PostgreSQL 17.6** (wersja produkcji): job CI `Production history / PostgreSQL 17.6-production` PASS na końcowym SHA (decyzja właściciela w sekcji 9).
 5. Kopia zapasowa: potwierdzony punkt PITR / backup projektu z czasu bezpośrednio przed krokiem M1 (zapisać znacznik czasu).
 6. **Spełnione (2026-10-24):** właściciel potwierdził, że żadne zewnętrzne narzędzie nie używa klucza `service_role` (migracja 12 odbiera mu dostęp do tabel). Kod aplikacji i `screening-worker` go nie używają — sprawdzono.
-7. Osobna, jawna zgoda właściciela (PRODUCTION APPROVAL) obejmująca: końcowy SHA, ten runbook, listę akcji bazodanowych M1–M13 oraz automatyczne wdrożenie Vercel.
+7. Osobna, jawna zgoda właściciela (PRODUCTION APPROVAL) obejmująca: końcowy SHA, ten runbook, listę akcji bazodanowych M1–M12 oraz automatyczne wdrożenie Vercel.
 
-## 4. Kolejność migracji (13 pending, kolejność repozytorium)
+## 4. Kolejność migracji (12 z 13 pending; M13 odłożona)
+
+**M13 (`20261021084732_sc019_credits_payments_inventory.sql`) NIE wchodzi do tego wydania.** Zakłada bezwarunkowo wyzwalacz `sc19_analysis_bill` na `public.screening_analysis_versions`, który przy braku dodatniego salda firmy zgłasza `sc19_quota_exhausted` (PT402). Przy pustych saldach zablokowałby każdą nową analizę CV — także w obecnej aplikacji z `main` (review Codex na #164). Kod `integration` przy `SC19_PACKAGES_ENABLED` ≠ `true` nie odczytuje obiektów M13 (strona główna, billing i płatności sprawdzają flagę przed RPC). M13 wejdzie w osobnym wydaniu aktywacji FREE/PRESELEKCJA, razem z przydziałem kredytów (decyzja właściciela co do 6 istniejących firm) i ponowną próbą generalną.
 
 Każda pozycja to **osobna akcja do zatwierdzenia**. Każdy plik ma własne `begin; … commit;` — błąd wycofuje całą migrację.
 Wykonawca: rola `postgres` (topologia hosted zweryfikowana w #160). Polecenie: `psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 -f <plik>`.
@@ -69,14 +71,14 @@ Wykonawca: rola `postgres` (topologia hosted zweryfikowana w #160). Polecenie: `
 | M10 | `20261012031026_retention_scheduler_protocol.sql` | 6 tabel, rola `erasure_scheduler` | zmienione w #160; **nie** tworzy zadań pg_cron |
 | M11 | `20261012031039_retention_scheduler_inventory.sql` | baseline R4 | zmienione w #160 |
 | M12 | `20261021084245_explicit_data_api_table_acl.sql` | `revoke` na `service_role` (29 relacji) | patrz warunek 3.6 |
-| M13 | `20261021084732_sc019_credits_payments_inventory.sql` | 13 tabel, 26 funkcji | SC-019; tabele puste, płatności wyłączone |
+| ~~M13~~ | `20261021084732_sc019_credits_payments_inventory.sql` | — | **odłożona** do wydania aktywacji (patrz wyżej) |
 
 Zapis historii: po każdym sukcesie dopisać wiersz do `supabase_migrations.schema_migrations` z **wersją i nazwą z repozytorium**
 (zalecane — kończy dryf dla nowych migracji). Sposób zapisu historii wymaga decyzji właściciela (sekcja 9).
 
 ### Kontrole przed każdym krokiem (tylko odczyt)
 
-- liczba wierszy w `schema_migrations` = 19 + (numer kroku − 1); żadna nazwa kroku nie jest już zapisana;
+- liczba wierszy w `schema_migrations` = 19 + (numer kroku − 1); żadna nazwa kroku nie jest już zapisana; po M12 łącznie 31;
 - brak blokad długotrwałych: `select count(*) from pg_stat_activity where state <> 'idle' and xact_start < now() - interval '1 minute'` = 0;
 - aktywne zadania pg_cron bez zmian (1 zadanie).
 
@@ -86,13 +88,13 @@ Zapis historii: po każdym sukcesie dopisać wiersz do `supabase_migrations.sche
 - obiekty kroku istnieją (`to_regclass`), nowe role mają `rolcanlogin = false`, `rolsuper = false`, `rolbypassrls = false`;
 - po M11: zapytania z `tools/erasure/production-preflight.sql` — wszystkie wymagane nazwy `recorded = true`, obiekty `present = true`;
 - po M12: `select count(*) from information_schema.role_table_grants where grantee='service_role' and table_schema='public'` dla 29 relacji = 0;
-- po M13: tabele `private.sc19_*` istnieją i są puste.
+- po M12: `private.sc19_*` **nie istnieją** i na `public.screening_analysis_versions` nie ma wyzwalaczy `sc19_*` (`select tgname from pg_trigger where tgrelid='public.screening_analysis_versions'::regclass and tgname like 'sc19%'` = 0 wierszy).
 
 Błąd w kroku: **stop**. Nie ponawiać automatycznie, nie przechodzić dalej. Aplikacja produkcyjna dalej działa na starym kodzie — migracje są addytywne, a obecny `main` nie używa nowych obiektów.
 
 ## 5. Wdrożenie aplikacji
 
-1. Dopiero po M1–M13 i kontrolach: ponownie wygenerować manifest dla końcowego SHA i porównać hash z zatwierdzonym.
+1. Dopiero po M1–M12 i kontrolach: ponownie wygenerować manifest dla końcowego SHA i porównać hash z zatwierdzonym.
 2. Scalić PR #86 (`integration → main`). **Scalenie automatycznie publikuje produkcję na Vercelu** (`vercel.json`: `main: true`). Zgody GitHub Environment nie wstrzymują integracji Git Vercel.
 3. Poczekać na stan READY nowego wdrożenia produkcyjnego; zapisać jego ID.
 
@@ -120,12 +122,13 @@ Włączenie FREE, sprzedaży lub płatności to **osobne** decyzje i osobne runb
 5. `/rozmowa` pokazuje stan wyłączony; brak nowych wierszy w `sales_leads`.
 6. Vercel: brak nowych błędów runtime przez 30 minut (`get_runtime_errors`).
 7. Supabase: nadal 1 zadanie pg_cron; brak błędów w logach Postgres z ostatniej godziny.
+8. Fikcyjna firma: nowa analiza CV przechodzi (brak `sc19_quota_exhausted`).
 
 ## 8. Wycofanie
 
 - **Aplikacja:** promocja poprzedniego wdrożenia `dpl_FAdsWMLnAyYVe19v6sNEY4Ci9zqm` (Instant Rollback w Vercel), potem revert merge na `main`, żeby kolejny build nie przywrócił nowej wersji.
-- **Baza:** migracje są addytywne i **nie są cofane**. Stary kod działa z nowym schematem (nie korzysta z nowych obiektów). Wyjątek — M12: jeśli zewnętrzne narzędzie przestanie działać, nie przywracać hurtem grantów `service_role`; przygotować osobną, przejrzaną migrację tylko dla potrzebnych tabel.
-- **Awaria w trakcie M1–M13:** zatrzymać sekwencję; nieudany krok wycofał się sam. Udane kroki zostają. Nie scalać `main`, dopóki pełna sekwencja nie przejdzie.
+- **Baza:** migracje są addytywne i **nie są cofane**. Stary kod działa z nowym schematem (nie korzysta z nowych obiektów; M13 z wyzwalaczem rozliczeń nie jest stosowana). Wyjątek — M12: jeśli zewnętrzne narzędzie przestanie działać, nie przywracać hurtem grantów `service_role`; przygotować osobną, przejrzaną migrację tylko dla potrzebnych tabel.
+- **Awaria w trakcie M1–M12:** zatrzymać sekwencję; nieudany krok wycofał się sam. Udane kroki zostają. Nie scalać `main`, dopóki pełna sekwencja nie przejdzie.
 - **Ostateczność:** przywrócenie PITR do znacznika z warunku 3.5 — tylko za osobną zgodą właściciela (utrata danych zapisanych po tym czasie).
 
 ## 9. Decyzje właściciela

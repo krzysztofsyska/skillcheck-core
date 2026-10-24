@@ -57,10 +57,11 @@ function build() {
       ? lines(git('rev-list', step.parents[1], `^${step.parents[0]}`, `^${baseSha}`))
       : [];
     commits.push(step.sha);
-    for (const sha of commits) if (!owner.has(sha)) owner.set(sha, step.sha);
+    // Only a step with an identified PR attributes its commits; otherwise they stay unattributed.
+    if (pr !== null) for (const sha of commits) if (!owner.has(sha)) owner.set(sha, step.sha);
     const files = lines(git('diff', '--name-only', step.parents[0], step.sha));
     entries.push({ step_sha: step.sha, kind: step.parents.length > 1 ? 'merge' : 'single', pr, subject: step.subject,
-      commit_count: commits.filter(sha => owner.get(sha) === step.sha).length, files });
+      commit_count: pr === null ? commits.length : commits.filter(sha => owner.get(sha) === step.sha).length, files });
   }
   const unattributed = [...all].filter(sha => !owner.has(sha));
   const files = lines(git('diff', '--name-only', baseSha, headSha)).sort();
