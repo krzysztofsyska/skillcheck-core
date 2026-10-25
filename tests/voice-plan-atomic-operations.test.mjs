@@ -114,6 +114,38 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   }
  });
 
+ await t.test("retention is enforced after a transaction crosses its expiry time",async()=>{
+  // PostgreSQL now() is pinned to transaction start. A long-lived read
+  // must not continue authorizing dispatch after a deadline has passed.
+  // This synthetic mutation and the pointer invalidation are rolled back.
+  await db.query("begin");
+  try{
+   await db.query("alter table public.voice_plan_versions disable trigger voice_plan_versions_immutable");
+   await db.query(
+    "update public.voice_plan_versions set retention_deadline=pg_catalog.clock_timestamp()+interval '200 milliseconds' where id=$1",
+    [plan]);
+   await db.query("select pg_catalog.pg_sleep(0.4)");
+   const clocks=(await db.query([
+    "select now()<retention_deadline as frozen_clock_allows,",
+    "pg_catalog.clock_timestamp()>=retention_deadline as wall_clock_expired",
+    "from public.voice_plan_versions where id=$1"
+   ].join(" "),[plan])).rows[0];
+   assert.equal(clocks.frozen_clock_allows,true);
+   assert.equal(clocks.wall_clock_expired,true);
+   assert.equal((await db.query(
+    "select private.sc012b_current_release($1) as id",[f.application.id])).rows[0].id,null,
+    "an expired release must never be authorized by an older transaction clock");
+   assert.equal((await db.query(
+    "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+    [f.application.id])).rows[0].n,0);
+  }finally{
+   await db.query("rollback");
+  }
+  assert.equal((await db.query(
+   "select private.sc012b_current_release($1) as id",[f.application.id])).rows[0].id,release,
+   "isolated rollback must restore the prior valid pointer");
+ });
+
  await t.test("newer plan version revokes old current release even if source is unchanged",async()=>{
   // A newly inserted version may require human review and release, but must
   // never leave the superseded, previously approved release dispatchable.
