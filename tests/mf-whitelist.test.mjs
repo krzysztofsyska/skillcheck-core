@@ -17,7 +17,13 @@ test('NIP normalization validates the checksum', () => {
 
 test('address parsing', () => {
   assert.deepEqual(parsePolishAddress('UL. MICHAŁA KAJKI 10-12, 10-547 OLSZTYN'), { street: 'UL. MICHAŁA KAJKI 10-12', postCode: '10-547', city: 'OLSZTYN' });
+  // Forms documented by MF (https://wl-api.mf.gov.pl/): no comma before the post code.
+  assert.deepEqual(parsePolishAddress('ul/ Prosta 49 00-838 Warszawa'), { street: 'ul/ Prosta 49', postCode: '00-838', city: 'Warszawa' });
+  assert.deepEqual(parsePolishAddress('ul/ Chmielna 85/87 00-805 Warszawa'), { street: 'ul/ Chmielna 85/87', postCode: '00-805', city: 'Warszawa' });
+  assert.deepEqual(parsePolishAddress('KAJKI 10-12 10-547 OLSZTYN'), { street: 'KAJKI 10-12', postCode: '10-547', city: 'OLSZTYN' });
+  assert.deepEqual(parsePolishAddress('RYNEK  5 ,  30-001   KRAKÓW'), { street: 'RYNEK 5', postCode: '30-001', city: 'KRAKÓW' });
   assert.equal(parsePolishAddress('OLSZTYN'), null);
+  assert.equal(parsePolishAddress('00-838 Warszawa'), null);
   assert.equal(parsePolishAddress(null), null);
 });
 

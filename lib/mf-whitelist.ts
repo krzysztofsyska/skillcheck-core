@@ -33,13 +33,15 @@ export function normalizeNip(input: unknown): string | null {
   return check !== 10 && check === Number(digits[9]) ? digits : null;
 }
 
-/** "UL. MICHAŁA KAJKI 10-12, 10-547 OLSZTYN" → street / post code / city. */
+/** "UL. MICHAŁA KAJKI 10-12, 10-547 OLSZTYN" or "ul/ Prosta 49 00-838 Warszawa"
+ * (both forms occur in MF data) → street / post code / city. The LAST post-code
+ * pattern followed by a non-digit city wins, so "10-12" building numbers are safe. */
 export function parsePolishAddress(raw: unknown): { street: string; postCode: string; city: string } | null {
   if (typeof raw !== 'string' || raw.length > 300) return null;
-  const match = /^(.+),\s*(\d{2}-\d{3})\s+(.+)$/.exec(raw.trim().replace(/\s+/g, ' '));
+  const match = /^(.+)[\s,]+(\d{2}-\d{3})\s+(\D.*)$/.exec(raw.trim().replace(/\s+/g, ' '));
   if (!match) return null;
-  const [, street, postCode, city] = match;
-  return street && city ? { street: street.trim(), postCode, city: city.trim() } : null;
+  const street = match[1].replace(/[\s,]+$/, '').trim(), city = match[3].trim();
+  return street && city ? { street, postCode: match[2], city } : null;
 }
 
 const warsawDate = (now: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw' }).format(now);
