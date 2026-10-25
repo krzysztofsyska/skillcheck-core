@@ -1,10 +1,12 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { randomUUID, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { signSalesLead, salesLeadCanonical, normalizeSalesLead } from '../lib/sales-lead-signature.ts';
+import { bootMigrationDatabase } from './helpers/sc19-migration-fixture.mjs';
+import { setupRankingDatabase } from './helpers/screening-ranking-fixture.mjs';
 const secret = 'test-only-secret-A-'.repeat(3), secretB = 'test-only-secret-B-'.repeat(3);
 const migration = await readFile(new URL('../supabase/migrations/20261007000200_sales_leads.sql', import.meta.url),'utf8');
 const bootstrap = `create role anon; create role authenticated; create schema auth;
@@ -182,13 +184,12 @@ test('API privileges and operator lifecycle',async()=>{
   });
 });
 
-test('full migration chain: company roles are not operators and submissions create no tenant',async()=>{
+test('full migration chain: company roles are not operators and submissions create no tenant',async t=>{
   const originalDb=db;
-  db=new PGlite({extensions:{pgcrypto}});
+  const env=await bootMigrationDatabase(t);
+  db=env.db;
   try {
-    await db.exec(bootstrap.replace('create schema private;','').replace('grant usage on schema private to authenticated;',''));
-    const dir=new URL('../supabase/migrations/',import.meta.url);
-    for(const name of (await readdir(dir)).filter(n=>n.endsWith('.sql')).sort()) await db.exec(await readFile(new URL(name,dir),'utf8'));
+    await setupRankingDatabase(db,{throughMigration:null});
     await db.query('select private.rotate_sales_lead_request_secret($1)',[secret]);await db.exec('update private.sales_lead_settings set leads_enabled=true');
     const [owner,recruiter,viewer]=[randomUUID(),randomUUID(),randomUUID()];
     await db.query('insert into auth.users values($1),($2),($3)',[owner,recruiter,viewer]);
@@ -205,7 +206,7 @@ test('full migration chain: company roles are not operators and submissions crea
       assert.equal((await submit(input({submitted_by:user}))).result_code,'accepted');
     });
     assert.deepEqual([await count('public.companies'),await count('public.company_members')],before);
-  } finally {await db.close();db=originalDb;}
+  } finally {db=originalDb;}
 });
 
 test('operator list clamps 1–100, defaults 50 and orders by timestamp then UUID',async()=>{

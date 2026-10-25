@@ -5,7 +5,7 @@ export const MAIN = 'd'.repeat(40), BASE = 'c'.repeat(40), H1 = 'a'.repeat(40), 
 export function configuredPolicy() {
   const p = loadPolicy(); p.controller_app_id = 123; p.controller_actor_id = 456;
   Object.keys(p.workflow_ids).forEach((key, i) => { p.workflow_ids[key] = 1000 + i; });
-  p.environments.owner_acceptance.id = 800; p.environments.production_approval.id = 801;
+  p.environments.owner_acceptance.id = 800; p.environments.production_approval.id = 801; p.environments.agent_review.id = 802;
   return p;
 }
 export function protectionFixtures(policy) {
@@ -16,7 +16,8 @@ export function protectionFixtures(policy) {
   for(const branch of ['main','integration']) make('quality-gates', [branch], [{type:'pull_request'},{type:'deletion'},{type:'non_fast_forward'},{type:'required_status_checks',parameters:{strict_required_status_checks_policy:true,required_status_checks:policy.required_checks[branch].map(context=>({context,integration_id:policy.controller_app_id}))}}]);
   make('agent-state-integrity',['agent-state'],[{type:'deletion'},{type:'non_fast_forward'}]);
   const environments = {};
-  for(const e of [policy.environments.owner_acceptance,policy.environments.production_approval]) environments[e.name] = {...e,can_admins_bypass:false,deployment_branch_policy:{custom_branch_policies:true},branch_policies:[{name:'main',type:'branch'}],protection_rules:[{type:'required_reviewers',prevent_self_review:true,reviewers:[{type:'User',reviewer:{id:policy.owner.id}}]}]};
+  for(const e of [policy.environments.owner_acceptance,policy.environments.production_approval,policy.environments.agent_review]) environments[e.name] = {...e,can_admins_bypass:false,deployment_branch_policy:{custom_branch_policies:true},branch_policies:[{name:'main',type:'branch'}],protection_rules:[{type:'required_reviewers',prevent_self_review:true,reviewers:[{type:'User',reviewer:{id:policy.owner.id}}]}]};
+  environments[policy.environments.agent_review.name].protection_rules = [{type:'branch_policy'}];
   return {rules,environments};
 }
 const hash = value => createHash('sha1').update(JSON.stringify(value)).digest('hex');
@@ -58,7 +59,12 @@ export function httpWorld() {
       return json(w.cursor);
     }
     if(u.hostname!=='api.github.com')throw Error(`unexpected network ${url}`);
-    if(u.pathname==='/app/installations/9/access_tokens')return json({token:'synthetic-installation-token'});
+    if(u.pathname==='/app/installations/9/access_tokens') {
+      if(method!=='POST' || !body?.repository_ids?.length || !body?.permissions) throw Error('missing scoped App token request');
+      return json({token:'synthetic-installation-token',repository_selection:'selected',
+        repositories:body.repository_ids.map(id=>({id})),
+        permissions:{metadata:'read',...body.permissions}});
+    }
     if(u.pathname==='/graphql') {w.pulls.forEach(p=>{if(p.node_id===body.variables.id)p.draft=false;});return json({data:{}});}
     const path=u.pathname.replace(`/repos/${policy.repository}`,'');
     if(path===''&&method==='GET')return json({id:policy.repository_id});

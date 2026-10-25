@@ -12,6 +12,37 @@ let serverLogs='';app.stdout.on('data',d=>serverLogs+=d);app.stderr.on('data',d=
 try {
 for(let i=0;i<70;i++){try {if((await fetch(base+'/rozmowa')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
 browser=await chromium.launch({headless:true,executablePath:process.env.BROWSER_EXECUTABLE || undefined,args:JSON.parse(process.env.BROWSER_ARGS || '["--no-sandbox","--disable-dev-shm-usage"]')});const page=await browser.newPage({extraHTTPHeaders:{'x-real-ip':'203.0.113.10'},viewport:{width:1280,height:900}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+// Exercise the shipped calculator script and its actual link, not a constructed URL.
+for (const width of [1280, 390]) {
+  await page.setViewportSize({width,height:900});
+  await page.goto(base+'/kalkulator');
+  await page.locator('#volumeSlider').focus();await page.keyboard.press('End');
+  assert.equal(await page.locator('#volumeValue').textContent(),'150 CV');
+  await page.locator('[data-extra="calls"]').check();
+  await page.locator('[data-extra="consult"]').check();
+  await page.locator('#timePerCv').fill('300');
+  assert.equal(await page.locator('#timePerCv').inputValue(),'240');
+  assert.match(await page.locator('#timePerCvCorrection').textContent(),/skorygowana do 240/);
+  assert.equal(await page.locator('#manualHours').textContent(),'600,0 h');
+  await page.locator('#hourlyTimeCost').fill('20000');
+  assert.equal(await page.locator('#hourlyTimeCost').inputValue(),'10000');
+  await page.locator('#quoteButton').click();
+  const destination = new URL(await page.locator('#openLead').getAttribute('href'),base);
+  assert.equal(destination.searchParams.get('cv'),'150');
+  assert.equal(destination.searchParams.get('extra'),'calls,consult');
+  assert.deepEqual([...destination.searchParams.keys()].sort(),['cv','extra','pack','source']);
+  await page.locator('#openLead').click();
+  assert.match(await page.locator('#lead-needs').inputValue(),/PRESELEKCJA.*150 CV/);
+  assert.match(await page.locator('#lead-needs').inputValue(),/Konsultacja eksperta/);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.goBack();
+  if(await page.locator('#quoteDialog').evaluate(el=>el.open)) await page.locator('#closeQuote').click();
+  await page.locator('#tryFreeTop').click();
+  await page.locator('#openLead').click();
+  assert.match(await page.locator('#lead-needs').inputValue(),/Wybrany wariant: FREE/);
+  assert.match(await page.locator('#lead-needs').inputValue(),/Dodatki do wyceny: brak/);
+}
+await page.setViewportSize({width:1280,height:900});
 await page.goto(base+'/rozmowa');
 await page.getByLabel('Imię',{exact:true}).fill('  Jaś  '); await page.getByLabel('Firma',{exact:true}).fill('Firma testowa'); await page.getByLabel('E-mail',{exact:true}).fill('TEST@example.invalid'); await page.getByLabel('O jakiej rekrutacji chcesz porozmawiać?').fill('Szukamy dwóch handlowców.');
 await page.getByRole('button',{name:'Wyślij zgłoszenie'}).click();
@@ -33,7 +64,7 @@ await page.getByRole('button',{name:'Wyślij zgłoszenie'}).click();
 await page.getByText('Zgłoszenie zostało zapisane. To nie jest rezerwacja terminu rozmowy.').waitFor();
 assert.equal(requests.at(-1).idempotency_key,lostKey,'Lost response + equivalent normalized edit must preserve UUID');
 await page.goto(base+'/rozmowa'); await page.screenshot({path:'/tmp/sc-sales-006c-desktop.png',fullPage:true});
-await page.setViewportSize({width:390,height:844});await page.reload();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.getByRole('button',{name:'Menu',exact:true}).click();await page.getByRole('navigation',{name:'Menu',exact:true}).getByRole('link',{name:'Porozmawiajmy o Twojej rekrutacji'}).click();await page.screenshot({path:'/tmp/sc-sales-006c-mobile.png',fullPage:true});
+await page.setViewportSize({width:390,height:844});await page.reload();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.getByRole('button',{name:'Menu',exact:true}).click();await page.getByRole('navigation',{name:'Menu',exact:true}).getByRole('link',{name:'Kalkulator pakietów'}).click();await page.waitForURL('**/kalkulator-demo.html');await page.goto(base+'/rozmowa');await page.screenshot({path:'/tmp/sc-sales-006c-mobile.png',fullPage:true});
 const beforeInvalid=requests.length;
 await page.getByRole('button',{name:'Wyślij zgłoszenie'}).click();
 assert.equal(await page.getByLabel('Imię',{exact:true}).evaluate(el=>el.validity.valueMissing),true);

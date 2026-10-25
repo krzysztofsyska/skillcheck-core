@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { calculatorSelection } from '../app/rozmowa/selection.ts';
 import { signSalesLead } from '../lib/sales-lead-signature.ts';
 
 const secret = 'local-only-sales-test-secret-32-bytes';
@@ -160,4 +161,41 @@ for (const [label, env] of [
   assert.doesNotMatch(html, /name="first_name"/);
   assert.equal((await server.submit(input())).status, 'error');
   assert.equal(server.logs().includes('fetch failed'), false);
+});
+
+
+test('calculator enquiry accepts intent only, including hostile URL inputs', () => {
+  const valid = { source: 'calculator-v4', pack: 'pre', cv: '150', extra: 'calls,tests,cases,consult' };
+  const text = calculatorSelection({ ...valid, price: '0', discount: '100', approved: 'true' });
+  assert.match(text, /PRESELEKCJA.*150 CV/);
+  assert.match(text, /Konsultacja eksperta/);
+  assert.ok(text.length < 1000);
+  assert.doesNotMatch(text, /approved|discount|100%|0 zł/);
+  for (const change of [{ pack: '__proto__' }, { pack: '<script>' }, { pack: ['pre', 'free'] }, { cv: ['150', '30'] }, { cv: '151' }, { cv: '15' }, { cv: '35.0' }, { extra: ['calls'] }, { extra: 'calls,calls' }, { extra: '<img>' }, { source: 'other' }]) {
+    assert.equal(calculatorSelection({ ...valid, ...change }), '');
+  }
+  assert.match(calculatorSelection({ ...valid, pack: 'free' }), /Dodatki do wyceny: brak/);
+  assert.doesNotMatch(calculatorSelection({ ...valid, pack: 'ac' }), /Dodatki do wyceny:.*Testy kompetencji/);
+});
+
+test('calculator selection reaches form and remains available when intake is disabled', async t => {
+  for (const enabled of ['true', 'false']) {
+    const { base } = await start(t, { SALES_LEADS_ENABLED: enabled });
+    const query = new URLSearchParams({ source: 'calculator-v4', pack: 'pre', cv: '150', extra: 'calls,consult', price: '0' });
+    const html = await (await fetch(base + '/rozmowa?' + query)).text();
+    assert.match(html, /PRESELEKCJA.*150 CV/);
+    assert.match(html, /Konsultacja eksperta/);
+    if (enabled === 'true') {
+      assert.match(html, /<textarea[^>]*name="needs"[^>]*>Zapytanie z kalkulatora/);
+    } else {
+      assert.doesNotMatch(html, /name="needs"/);
+      const href = html.match(/href="(mailto:[^"]+)"/)[1].replaceAll('&amp;', '&');
+      const body = new URL(href).searchParams.get('body');
+      assert.match(body, /PRESELEKCJA.*150 CV/);
+      assert.match(body, /Konsultacja eksperta/);
+      assert.doesNotMatch(body, /price|0 zł/);
+    }
+    const hostile = await (await fetch(base + '/rozmowa?source=calculator-v4&pack=pre&pack=free&cv=150')).text();
+    assert.doesNotMatch(hostile, /Twój wybór do potwierdzenia/);
+  }
 });

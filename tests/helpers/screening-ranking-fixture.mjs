@@ -5,8 +5,11 @@ import { readFile, readdir } from 'node:fs/promises';
 export const users = Object.fromEntries(['owner', 'otherOwner', 'recruiter', 'viewer', 'outsider'].map((name, i) =>
   [name, `10000000-0000-0000-0000-${String(i + 1).padStart(12, '0')}`]));
 
-// Both PGlite and pg (with exec = query) run the actual migration/RPC chain.
-export async function setupRankingDatabase(db, { defaultTargetSize } = {}) {
+// Historical prototype tests explicitly stop at their reviewed SC-010 baseline.
+// Forward-migration tests pass throughMigration: null to exercise the whole
+// current checked-in chain. Both PGlite and pg (exec = query) use real SQL.
+export const historicalRankingMigration = '20261012031039_retention_scheduler_inventory.sql';
+export async function setupRankingDatabase(db, { defaultTargetSize, throughMigration = historicalRankingMigration } = {}) {
   await db.exec(`
     do $$ begin
       if not exists(select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
@@ -21,7 +24,7 @@ export async function setupRankingDatabase(db, { defaultTargetSize } = {}) {
     grant execute on function auth.uid() to anon, authenticated;
   `);
   const dir = new URL('../../supabase/migrations/', import.meta.url);
-  const migrations = (await readdir(dir)).filter(name => name.endsWith('.sql')).sort();
+  const migrations = (await readdir(dir)).filter(name => name.endsWith('.sql') && (!throughMigration || name <= throughMigration)).sort();
   assert.ok(migrations.some(name => name.includes('ranking')), 'SC-008 migration must exist');
   for (const name of migrations) {
     let sql = await readFile(new URL(name, dir), 'utf8');

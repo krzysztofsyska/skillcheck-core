@@ -481,6 +481,7 @@ function beginRepair(record, obs, findings) {
 }
 
 function armGateA(record, obs) {
+  if (!obs.simulation && obs.policy.integration_merge_policy === 'verified_ci_review') return autoIntegrationStep(record, obs);
   if (!obs.simulation && !obs.preflight?.ok) return done(record);
   const canonical = gateAPayload({
     repositoryId: record.repository_id,
@@ -518,6 +519,7 @@ function armGateA(record, obs) {
 }
 
 function approvalStep(record, obs) {
+  if (!obs.simulation && obs.policy.integration_merge_policy === 'verified_ci_review') return autoIntegrationStep(record, obs);
   if (record.state === 'ACCEPTED') return done(record);
   if (!record.binding.approval) return armGateA(record, obs);
   if (record.binding.approval.phase === 'intent') {
@@ -536,6 +538,81 @@ function approvalStep(record, obs) {
     };
   }
   return gateDecision(record, obs, 'A');
+}
+
+// Gate A for ordinary task PRs: independently reviewed CI evidence, not an owner click.
+// This only schedules an intent; guardedMerge re-reads GitHub, validates both signed
+// evidence envelopes and protected branch refs before publishing a check or merging.
+function autoIntegrationStep(record, obs) {
+  if (record.binding.lane === 'promotion' || record.binding.approval?.gate === 'B') {
+    return done(block(record, 'GATE_MISMATCH', obs.now));
+  }
+  if (!record.binding.evidence?.ci?.pass || !record.binding.evidence?.review?.pass ||
+      !record.review_run_id || !record.ci_run_id) {
+    return done(record);
+  }
+  // Stored PASS with no live envelope means the artifact expired or was deleted.
+  // Holding READY_FOR_OWNER would keep this task ahead of every later task.
+  if (!obs.github.ci || !obs.github.review) {
+    const marked = touch(record, obs.now);
+    marked.binding.reports.push({ kind: 'EVIDENCE_STALE', reason: 'LIVE_EVIDENCE_MISSING', at: obs.now });
+    return done(block(marked, 'EVIDENCE_STALE', obs.now));
+  }
+  if (!obs.simulation && !obs.preflight?.ok) return done(record);
+  const merge = decideMerge({
+    flags: obs.flags,
+    simulation: obs.simulation,
+    protection: obs.github.protection,
+    lock: obs.mergeLock ?? null,
+    holder: obs.lockHolder ?? record.task_id,
+    liveBaseSha: obs.github.pull?.baseSha,
+    expectedBaseSha: record.base_sha,
+    liveHeadSha: obs.github.pull?.headSha,
+    expectedHeadSha: record.head_sha,
+    approval: { ok: true, source: 'verified_ci_review' },
+    gate: 'A',
+    runbook: true,
+    owner: obs.policy.repository.split('/')[0],
+    repo: obs.policy.repository.split('/')[1],
+    prNumber: record.pr_number,
+  });
+  if (!merge.ok) {
+    // Temporary configuration/lock failure is not a license to bypass checks.
+    if (['PIPELINE_DISABLED', 'MERGE_DISABLED', 'PROTECTION_UNCONFIRMED', 'MERGE_LOCKED',
+      'EXCLUSIVE_WRITERS_UNCONFIRMED', 'ENVIRONMENTS_UNCONFIRMED', 'CHECK_SOURCE_UNPINNED'].includes(merge.reason)) {
+      return done(record);
+    }
+    if (merge.reason === 'APPROVAL_STALE') return done(block(record, 'EVIDENCE_STALE', obs.now));
+    return done(block(record, merge.reason, obs.now));
+  }
+  const pre = touch(record, obs.now, { state: 'READY_FOR_OWNER', technical_state: 'AUTO_INTEGRATION' });
+  pre.approval_request_id = null;
+  pre.binding.approval = null;
+  pre.binding.auto_integration = {
+    head_sha: record.head_sha,
+    base_sha: record.base_sha,
+    policy_sha: record.policy_sha,
+    contract_hash: record.contract_hash,
+    ci_run_id: record.ci_run_id,
+    review_run_id: record.review_run_id,
+    ci_digest: sha256(obs.github.ci),
+    review_digest: sha256(obs.github.review.payload),
+    source: 'verified_ci_review',
+  };
+  pre.binding.merge = { phase: 'awaiting_confirmation', expectedHeadSha: merge.request.body.sha, gate: 'A' };
+  // Queue the handoff before the merge. A successful merge folds straight to
+  // ACCEPTED, and the outbox does not synthesize READY_FOR_OWNER after that.
+  if (pre.binding.last_notified_state !== 'READY_FOR_OWNER' && pre.binding.pending_notification?.kind !== 'READY_FOR_OWNER') {
+    const notification = notificationFor(pre, obs, 'READY_FOR_OWNER');
+    pre.notification_id = notification.notification_id;
+    pre.binding.pending_notification = notification;
+  }
+  return {
+    record: pre,
+    preEffectRecord: pre,
+    effects: [{ type: 'github.merge', external: true, request: merge.request, gate: 'A', record: structuredClone(pre) }],
+    journal: journalFor(pre, 'auto-integration-merge'),
+  };
 }
 
 function gateDecision(record, obs, gate) {

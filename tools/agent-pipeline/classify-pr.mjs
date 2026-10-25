@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 
 const PRODUCT_FRONTEND = /^(app\/(?!api\/)|components\/|public\/|styles\/).+|\.css$/;
 const PRODUCT_BACKEND = /^(app\/api\/|lib\/|supabase\/|scripts\/)/;
+const ISOLATED_DATABASE_SQL = /^db\/(?:isolated|prototypes)\/.+\.sql$/;
 const OPERATIONS = /^(tools\/agent-pipeline\/|tests\/agent-pipeline\/|\.github\/agent-pipeline\/|\.github\/workflows\/agent-|docs\/sc-ops-002|docs\/AGENT_PIPELINE\.md|docs\/AGENT_WORKFLOW\.md|AGENTS\.md|\.cursor\/rules\/skillcheck-agent-pipeline\.mdc)/;
 
 export function classify({ files, body, base, headRef }) {
@@ -18,10 +19,10 @@ export function classify({ files, body, base, headRef }) {
   let database = false;
   let security = false;
   for (const file of files) {
-    if (PRODUCT_BACKEND.test(file)) backend = true;
+    if (PRODUCT_BACKEND.test(file) || ISOLATED_DATABASE_SQL.test(file)) backend = true;
     else if (PRODUCT_FRONTEND.test(file)) frontend = true;
     if (OPERATIONS.test(file)) operations = true;
-    if (file.startsWith('supabase/migrations/')) {
+    if (file.startsWith('supabase/migrations/') || ISOLATED_DATABASE_SQL.test(file)) {
       database = true;
       security = true;
     }

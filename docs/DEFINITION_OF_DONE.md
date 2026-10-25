@@ -30,8 +30,8 @@ Task jest DONE wyłącznie gdy spełnia wszystkie wymagane punkty.
 ## Git
 - branch zgodny z konwencją i utworzony z `integration` dla nowych tasków,
 - PR opisuje zakres, testy, migracje i ryzyka,
-- reviewer PASS i CI PASS,
-- OWNER ACCEPTANCE zapisane przed merge tasku do `integration`,
+- reviewer PASS i CI PASS dla aktualnego HEAD i BASE,
+- scalenie tasku do `integration` po tych dowodach i spełnionych bramkach bezpieczeństwa, bez rutynowej zgody właściciela,
 - bezpośredni merge task branch do `main` jest zabroniony.
 
 ## Produkcja

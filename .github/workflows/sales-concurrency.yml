@@ -1,0 +1,55 @@
+name: Sales PostgreSQL acceptance
+on:
+  push:
+    paths:
+      - '.github/workflows/sales-concurrency.yml'
+      - 'tests/prepare-sales-concurrency.mjs'
+      - 'tests/sales-leads-concurrency.mjs'
+      - 'supabase/migrations/20261007000200_sales_leads.sql'
+permissions:
+  contents: read
+jobs:
+  concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SALES_LEADS_TEST_DISPOSABLE: 'YES'
+      SALES_LEADS_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node tests/prepare-sales-concurrency.mjs
+      - name: Ordinary concurrency scenarios
+        run: node tests/sales-leads-concurrency.mjs
+        env:
+          SALES_LEADS_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/sales_default
+      - name: Prepare three independent real rotations
+        run: |
+          for scenario in current previous after; do
+            SALES_LEADS_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5432/sales_${scenario}" node tests/sales-leads-concurrency.mjs --prepare-retire
+          done
+      - name: Allow actual 60-minute key history to elapse
+        run: sleep 3610
+      - name: Verify all three retirement races
+        run: |
+          for scenario in current previous after; do
+            SALES_LEADS_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5432/sales_${scenario}" node tests/sales-leads-concurrency.mjs "--retire-${scenario}"
+          done

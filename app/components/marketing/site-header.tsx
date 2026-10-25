@@ -6,7 +6,8 @@ import { MobileNav } from "./mobile-nav";
 const mobileLinks = [
   ...sectionLinks,
   { href: "/login", label: "Zaloguj się" },
-  { href: "/rozmowa", label: "Porozmawiajmy o Twojej rekrutacji" },
+  { href: "/kalkulator", label: "Kalkulator pakietów" },
+  { href: "/preselekcja", label: "Zapytaj o PRESELEKCJĘ" },
   { href: "/demo", label: "Zobacz przykład", variant: "primary" as const },
 ];
 
@@ -24,7 +25,8 @@ export function SiteHeader() {
               </Link>
             ))}
             <Link href="/login" className={styles.loginLink}>Zaloguj się</Link>
-            <Link href="/rozmowa" className={styles.navLink}>Porozmawiajmy o Twojej rekrutacji</Link>
+            <Link href="/kalkulator" className={styles.navLink}>Kalkulator pakietów</Link>
+            <Link href="/preselekcja" className={styles.navLink}>Zapytaj o PRESELEKCJĘ</Link>
             <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>
           </nav>
           <MobileNav links={mobileLinks} />

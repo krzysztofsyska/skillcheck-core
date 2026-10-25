@@ -1,0 +1,40 @@
+name: SC-011 Retell outbound draft tests
+on:
+  pull_request:
+    paths:
+      - 'lib/voice/retell-outbound-draft.ts'
+      - 'lib/voice/provider.ts'
+      - 'lib/voice/interview-plan.ts'
+      - 'lib/voice/mvp-package-gate.ts'
+      - 'lib/behavior-guide.ts'
+      - 'lib/position-fields.ts'
+      - 'lib/screening.ts'
+      - 'tests/voice-interview-plan.test.mjs'
+      - 'tests/voice-provider.test.mjs'
+      - 'tests/retell-outbound-draft.test.mjs'
+      - '.github/workflows/retell-outbound-dryrun-tests.yml'
+  push:
+    branches: [integration, main]
+    paths:
+      - 'lib/voice/retell-outbound-draft.ts'
+      - 'lib/voice/provider.ts'
+      - 'lib/voice/interview-plan.ts'
+      - 'lib/voice/mvp-package-gate.ts'
+      - 'lib/behavior-guide.ts'
+      - 'lib/position-fields.ts'
+      - 'lib/screening.ts'
+      - 'tests/voice-interview-plan.test.mjs'
+      - 'tests/voice-provider.test.mjs'
+      - 'tests/retell-outbound-draft.test.mjs'
+      - '.github/workflows/retell-outbound-dryrun-tests.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test tests/retell-outbound-draft.test.mjs
