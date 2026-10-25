@@ -90,7 +90,7 @@ begin
     raise exception using errcode='PT409',message='VOICE_PLAN_SUPERSEDED';
   end if;
   -- Match the exact latest human approval; requires_changes is terminal.
-  select r.id,r.review_version,r.decision,r.source_hash into v_latest_review
+  select r.id,r.review_version,r.decision,r.source_hash,r.retention_deadline into v_latest_review
     from private.voice_plan_review_entries r
     where r.company_id=v_plan.company_id and r.plan_id=p_plan_id
     order by r.review_version desc limit 1 for share nowait;
@@ -135,6 +135,15 @@ begin
   if exists(select 1 from private.voice_plan_release_entries r
     where r.company_id=v_plan.company_id and r.plan_id=p_plan_id) then
     raise exception using errcode='PT409',message='VOICE_PLAN_ALREADY_RELEASED';
+  end if;
+  -- An expired plan/approval must not create new immutable release history.
+  -- Check against the live wall clock immediately before the insert: now()
+  -- is fixed at transaction start and can incorrectly authorize old data.
+  if v_plan.retention_deadline is null or
+     v_plan.retention_deadline<=pg_catalog.clock_timestamp() or
+     v_latest_review.retention_deadline is null or
+     v_latest_review.retention_deadline<=pg_catalog.clock_timestamp() then
+    raise exception using errcode='PT409',message='VOICE_PLAN_RETENTION_EXPIRED';
   end if;
   insert into private.voice_plan_release_entries
     (company_id,application_id,plan_id,approved_review_id,release_version,
