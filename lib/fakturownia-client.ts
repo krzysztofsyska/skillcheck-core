@@ -130,7 +130,49 @@ export function createFakturowniaClient(config: FakturowniaConfig, fetchImpl: Fa
     publicViewUrl(invoice: FakturowniaInvoice): string | null {
       return invoice.viewToken ? `${origin}/invoice/${invoice.viewToken}` : null;
     },
+    /** Issues ONE proforma (non-accounting document, never sent to KSeF).
+     * `oid_unique` makes Fakturownia refuse a second document with the same oid,
+     * so a retried call cannot create a duplicate. */
+    async createProforma(input: ProformaInput): Promise<FakturowniaInvoice> {
+      if (!/^sc19:[0-9a-f-]{36}$/.test(input.oid) || !Number.isSafeInteger(input.grossMinor) || input.grossMinor <= 0)
+        throw new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED');
+      const invoice = {
+        kind: 'proforma', oid: input.oid, oid_unique: 'yes', issue_date: input.issueDate, payment_to_kind: input.paymentDays,
+        currency: 'PLN', lang: 'pl', buyer_company: '1', buyer_name: input.buyer.name, buyer_tax_no: input.buyer.nip,
+        buyer_street: input.buyer.street, buyer_post_code: input.buyer.postCode, buyer_city: input.buyer.city,
+        buyer_country: 'PL', buyer_email: input.buyer.email,
+        calculating_strategy: { position: 'keep_gross', sum: 'keep_gross', invoice_form_price_kind: 'gross' },
+        positions: [{ name: input.itemName, quantity: 1, quantity_unit: 'usł.', tax: 23,
+          total_price_gross: formatMinor(input.grossMinor) }],
+        internal_note: `SkillCheck ${input.oid}`,
+      };
+      return parseInvoice(await call('POST', '/invoices.json', {}, { invoice }));
+    },
+    /** One page (max 100) of proformas issued between the given Warsaw dates. */
+    async proformasIssuedBetween(dateFrom: string, dateTo: string, page: number): Promise<FakturowniaInvoice[]> {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo) || !Number.isSafeInteger(page) || page < 1 || page > 50)
+        throw new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED');
+      const data = await call('GET', '/invoices.json', { kind: 'proforma', period: 'more', date_from: dateFrom, date_to: dateTo,
+        search_date_type: 'issue_date', per_page: '100', page: String(page) });
+      if (!Array.isArray(data)) throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+      return data.map(parseInvoice);
+    },
   });
+}
+
+export type ProformaInput = Readonly<{
+  oid: string; grossMinor: number; itemName: string; issueDate: string; paymentDays: number;
+  buyer: Readonly<{ name: string; nip: string; street: string; postCode: string; city: string; email: string }>;
+}>;
+
+export function formatMinor(minor: number): string {
+  return `${Math.trunc(minor / 100)}.${String(minor % 100).padStart(2, '0')}`;
+}
+/** Strict "369.00" / "369,00" / "369" → 36900. Anything else → null. */
+export function parseMinor(value: string): number | null {
+  const m = /^(\d{1,9})(?:[.,](\d{1,2}))?$/.exec(value.trim());
+  if (!m) return null;
+  return Number(m[1]) * 100 + Number((m[2] ?? '0').padEnd(2, '0'));
 }
 export type FakturowniaClient = ReturnType<typeof createFakturowniaClient>;
 
