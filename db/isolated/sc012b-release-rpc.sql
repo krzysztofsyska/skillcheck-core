@@ -185,6 +185,7 @@ declare
   v_role text;
   v_plan record;
   v_plan_found boolean := false;
+  v_newer_plan_exists boolean := false;
   v_latest_analysis uuid;
   v_material jsonb;
   v_position_updated timestamptz;
@@ -238,7 +239,7 @@ begin
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(v_row.company_id::text||':'||v_row.application_id::text,0));
   select p.recruitment_id,p.analysis_id,p.screening_review_id,p.shortlist_entry_id,
-         p.plan_envelope,p.retention_deadline
+         p.plan_envelope,p.retention_deadline,p.plan_version
     into v_plan
   from public.voice_plan_versions p
   where p.id=v_row.plan_id and p.company_id=v_row.company_id
@@ -246,6 +247,14 @@ begin
   for share nowait;
   v_plan_found:=found;
   if v_plan_found then
+    -- A newer immutable voice plan makes the previous release ineligible for
+    -- dispatch even when both versions share the same screening source.
+    -- Read under the screening/application advisory locks acquired above.
+    select exists(select 1 from public.voice_plan_versions newer
+      where newer.company_id=v_row.company_id
+        and newer.application_id=v_row.application_id
+        and newer.plan_version>v_plan.plan_version)
+      into v_newer_plan_exists;
     -- Advisory locks cover this lookup: a forced reanalysis can change the
     -- latest analysis even when the input fingerprint remains unchanged.
     select a.id into v_latest_analysis
@@ -327,6 +336,7 @@ begin
     v_retention_found:=found;
   end if;
   v_stale:=not v_plan_found
+    or v_newer_plan_exists
     or not v_retention_found
     or v_plan.retention_deadline is null or v_plan.retention_deadline<=now()
     or v_approval_retention_deadline is null or v_approval_retention_deadline<=now()
