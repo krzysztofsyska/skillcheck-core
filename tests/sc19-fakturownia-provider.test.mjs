@@ -183,5 +183,9 @@ test('provider refuses weak configuration and foreign scope', () => {
   const base = { client, scope, triggerSecret: SECRET, buyer: async () => buyer, itemName: () => 'x' };
   assert.throws(() => createFakturowniaPaymentProvider({ ...base, triggerSecret: 'short' }), e => e.code === 'FAKTUROWNIA_PROVIDER_CONFIG_INVALID');
   assert.throws(() => createFakturowniaPaymentProvider({ ...base, scope: { ...scope, provider: 'stripe' } }), e => e.code === 'FAKTUROWNIA_PROVIDER_CONFIG_INVALID');
+  // Declared merchant must be the account the client actually queries.
+  for (const account of ['different-merchant', 'KRZYSZTOF-SYSKAA', 'evil.com/x', ''])
+    assert.throws(() => createFakturowniaPaymentProvider({ ...base, scope: { ...scope, account } }), e => e.code === 'FAKTUROWNIA_PROVIDER_CONFIG_INVALID', account);
+  assert.doesNotThrow(() => createFakturowniaPaymentProvider(base));
   assert.throws(() => signPaymentTrigger(SECRET, 1, 'not-a-uuid'), e => e.code === 'FAKTUROWNIA_TRIGGER_INVALID');
 });

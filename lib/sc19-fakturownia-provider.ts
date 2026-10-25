@@ -12,7 +12,7 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { HostedCheckout, PaymentOrder, PaymentProvider, PaymentScope, VerifiedPayment } from './sc19-payments.ts';
-import { FakturowniaError, parseMinor, type FakturowniaClient, type FakturowniaInvoice } from './fakturownia-client.ts';
+import { FakturowniaError, fakturowniaOrigin, parseMinor, type FakturowniaClient, type FakturowniaInvoice } from './fakturownia-client.ts';
 
 export type InvoiceBuyer = Readonly<{ name: string; nip: string; street: string; postCode: string; city: string; email: string }>;
 export type FakturowniaProviderDeps = Readonly<{
@@ -49,6 +49,11 @@ export function signPaymentTrigger(secret: string, invoiceId: number, orderId: s
 export function createFakturowniaPaymentProvider(deps: FakturowniaProviderDeps): PaymentProvider {
   if (Buffer.byteLength(deps.triggerSecret) < 32) fail('FAKTUROWNIA_PROVIDER_CONFIG_INVALID');
   if (deps.scope.provider !== 'fakturownia') fail('FAKTUROWNIA_PROVIDER_CONFIG_INVALID');
+  // The declared merchant scope must be the account the client actually queries,
+  // so SC-019 scope checks cannot be satisfied by evidence from another account.
+  let declaredOrigin = '';
+  try { declaredOrigin = fakturowniaOrigin(deps.scope.account); } catch { fail('FAKTUROWNIA_PROVIDER_CONFIG_INVALID'); }
+  if (declaredOrigin !== deps.client.origin) fail('FAKTUROWNIA_PROVIDER_CONFIG_INVALID');
   const now = deps.now ?? Date.now;
   const days = deps.paymentDays ?? 7;
   const scope = Object.freeze({ ...deps.scope });
