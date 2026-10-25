@@ -66,6 +66,41 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
  assert.equal(await atomicReviewVoicePlan(db,reviewArgs),review);
  const releaseArgs={planId:plan,sourceHash:canonical.sourceHash,approvedReviewId:review,
    expectedPointerVersion:null,expectedReleaseId:null,requestKey:randomUUID()};
+
+ await t.test("expired plan or human approval cannot create release history",async()=>{
+  // Disposable PG16 database only. Temporarily bypass the immutable-row
+  // trigger for a synthetic expired fixture, restoring it in all cases.
+  for(const fixture of [
+   {table:"public.voice_plan_versions",trigger:"voice_plan_versions_immutable",id:plan},
+   {table:"private.voice_plan_review_entries",trigger:"voice_plan_reviews_immutable",id:review},
+  ]){
+   const stored=(await db.query(
+    "select retention_deadline from "+fixture.table+" where id=$1",[fixture.id])).rows[0];
+   assert.ok(stored?.retention_deadline);
+   await db.query("alter table "+fixture.table+" disable trigger "+fixture.trigger);
+   try{
+    await db.query("update "+fixture.table+
+      " set retention_deadline=clock_timestamp()-interval '1 second' where id=$1",
+      [fixture.id]);
+    await assert.rejects(
+      atomicReleaseVoicePlan(db,{...releaseArgs,requestKey:randomUUID()}),
+      e=>e.code==="PT409"&&e.message==="VOICE_PLAN_RETENTION_EXPIRED",
+      fixture.table+" expired source must be rejected before append");
+    const history=(await db.query(
+      "select count(*)::int as n from private.voice_plan_release_entries where plan_id=$1",
+      [plan])).rows[0].n;
+    const pointer=(await db.query(
+      "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+      [f.application.id])).rows[0].n;
+    assert.equal(history,0,"rejected release leaves no immutable history");
+    assert.equal(pointer,0,"rejected release leaves no current pointer");
+   }finally{
+    await db.query("update "+fixture.table+" set retention_deadline=$1 where id=$2",
+      [stored.retention_deadline,fixture.id]);
+    await db.query("alter table "+fixture.table+" enable trigger "+fixture.trigger);
+   }
+  }
+ });
  const release=await atomicReleaseVoicePlan(db,releaseArgs);
  assert.equal(await atomicReleaseVoicePlan(db,releaseArgs),release);
  const current=(await db.query(
