@@ -79,6 +79,19 @@ test('timeout aborts the request and reports FAKTUROWNIA_TIMEOUT', async () => {
   await assert.rejects(client.departments(), e => e.code === 'FAKTUROWNIA_TIMEOUT');
 });
 
+test('timeout also bounds a stalled response body', async () => {
+  let aborted = false;
+  const stalledBody = async (url, init) => {
+    init.signal.addEventListener('abort', () => { aborted = true; });
+    return { status: 200, ok: true, json: () => new Promise(() => {}) };
+  };
+  const client = createFakturowniaClient(readFakturowniaConfig(env), stalledBody, 20);
+  const started = Date.now();
+  await assert.rejects(client.departments(), e => e.code === 'FAKTUROWNIA_TIMEOUT' && e.httpStatus === null);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(aborted, true);
+});
+
 test('malformed payloads fail closed', async () => {
   for (const body of [{ id: 1 }, [{ name: 'no id' }], 'text', null]) {
     const health = await checkFakturowniaConnection(env, async () => reply(200, body));

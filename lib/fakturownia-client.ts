@@ -86,16 +86,28 @@ export function createFakturowniaClient(config: FakturowniaConfig, fetchImpl: Fa
     if (method === 'GET') url.searchParams.set('api_token', config.token);
     else { headers['Content-Type'] = 'application/json'; payload = JSON.stringify({ api_token: config.token, ...(body as object) }); }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response;
+    // One deadline covers headers AND body: a stalled body must not outlive it.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new FakturowniaError('FAKTUROWNIA_TIMEOUT')); }, timeoutMs);
+    });
+    deadline.catch(() => undefined);
     try {
-      response = await fetchImpl(url.toString(), { method, headers, body: payload, signal: controller.signal });
-    } catch {
-      // Never rethrow the transport error: its message may embed the URL with the token.
-      throw new FakturowniaError(controller.signal.aborted ? 'FAKTUROWNIA_TIMEOUT' : 'FAKTUROWNIA_UNAVAILABLE');
+      let response;
+      try {
+        response = await Promise.race([
+          fetchImpl(url.toString(), { method, headers, body: payload, signal: controller.signal }), deadline]);
+      } catch {
+        // Never rethrow the transport error: its message may embed the URL with the token.
+        throw new FakturowniaError(controller.signal.aborted ? 'FAKTUROWNIA_TIMEOUT' : 'FAKTUROWNIA_UNAVAILABLE');
+      }
+      if (!response.ok) throw statusError(response.status);
+      try { return await Promise.race([response.json(), deadline]); }
+      catch {
+        throw new FakturowniaError(controller.signal.aborted ? 'FAKTUROWNIA_TIMEOUT' : 'FAKTUROWNIA_RESPONSE_INVALID',
+          controller.signal.aborted ? null : response.status);
+      }
     } finally { clearTimeout(timer); }
-    if (!response.ok) throw statusError(response.status);
-    try { return await response.json(); } catch { throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID', response.status); }
   }
   return Object.freeze({
     origin,
