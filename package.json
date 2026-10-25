@@ -49,7 +49,8 @@
     "test:retention-scheduler": "node --test tests/retention-scheduler-database.test.mjs tests/retention-scheduler-ui.test.mjs",
     "test:retention-scheduler-concurrency": "node --test tests/retention-scheduler-concurrency.test.mjs",
     "test:erasure-service": "node --test tests/erasure-service.test.mjs tests/erasure-service-backend.test.mjs",
-    "test:competency": "node --test tests/competency-test.test.mjs"
+    "test:competency": "node --test tests/competency-test.test.mjs",
+    "test:fakturownia": "node --test tests/fakturownia-client.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
