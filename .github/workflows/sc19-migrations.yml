@@ -146,13 +146,19 @@ jobs:
           docker run -d --name sc19-rehearsal -p 127.0.0.1:55432:5432 \
             -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_rehearsal \
             sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_production_rehearsal
-          for attempt in $(seq 1 30); do
-            if docker exec sc19-rehearsal pg_isready -U supabase_admin -d sc19_production_rehearsal; then break; fi
-            if [ "$attempt" = 30 ]; then exit 1; fi
+          # The image entrypoint first runs a temporary init server on the Unix socket only,
+          # then restarts. Probe over TCP so readiness means the final server, and retry the
+          # version query until it answers (never treat a transient empty answer as a version).
+          actual=''
+          for attempt in $(seq 1 60); do
+            if docker exec sc19-rehearsal pg_isready -h 127.0.0.1 -U supabase_admin -d sc19_production_rehearsal >/dev/null; then
+              actual=$(docker exec -e PGPASSWORD=synthetic-only sc19-rehearsal psql -h 127.0.0.1 -U supabase_admin -d sc19_production_rehearsal -tAc 'show server_version' 2>/dev/null | awk '{print $1}') || actual=''
+              [ -n "$actual" ] && break
+            fi
             sleep 1
           done
+          [ -n "$actual" ] || { echo "::error::rehearsal server did not become ready over TCP"; docker logs --tail 50 sc19-rehearsal; exit 1; }
           # Fail closed if the image or pg_cron install moved the server off the pinned version.
-          actual=$(docker exec sc19-rehearsal psql -U supabase_admin -d sc19_production_rehearsal -tAc 'show server_version' | awk '{print $1}')
           echo "Rehearsal server_version: $actual (pinned tag: $PG_IMAGE_TAG)"
           case "$PG_IMAGE_TAG" in
             *.*) [ "$actual" = "$PG_IMAGE_TAG" ] || { echo "::error::expected PostgreSQL $PG_IMAGE_TAG, got $actual"; exit 1; } ;;
