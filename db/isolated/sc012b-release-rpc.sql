@@ -323,6 +323,8 @@ begin
   -- A retained current pointer is not authority after any immutable source,
   -- approval or release retention deadline. Check under the same transaction
   -- before locking and returning the pointer; never expose expired releases.
+  -- Use wall-clock time, not now() (transaction start): callers can hold a
+  -- transaction open past the expiration of an otherwise current release.
   if v_plan_found and not v_frozen then
     select a.retention_deadline,r.retention_deadline
       into v_approval_retention_deadline,v_release_retention_deadline
@@ -338,9 +340,9 @@ begin
   v_stale:=not v_plan_found
     or v_newer_plan_exists
     or not v_retention_found
-    or v_plan.retention_deadline is null or v_plan.retention_deadline<=now()
-    or v_approval_retention_deadline is null or v_approval_retention_deadline<=now()
-    or v_release_retention_deadline is null or v_release_retention_deadline<=now()
+    or v_plan.retention_deadline is null or v_plan.retention_deadline<=pg_catalog.clock_timestamp()
+    or v_approval_retention_deadline is null or v_approval_retention_deadline<=pg_catalog.clock_timestamp()
+    or v_release_retention_deadline is null or v_release_retention_deadline<=pg_catalog.clock_timestamp()
     or v_latest_analysis is distinct from v_plan.analysis_id
     or v_material is null or not v_position_found
     or not v_analysis_found or not v_shortlist_found or not v_review_found
