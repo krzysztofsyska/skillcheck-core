@@ -1,0 +1,153 @@
+/** SC-BILLING-INVOICE-001 (#165): minimal Fakturownia API client.
+ * Server-only. The API token travels as the documented `api_token` query
+ * parameter, so request URLs are secrets: never log, return or throw them.
+ * Errors carry only a fixed code and an HTTP status number.
+ */
+export type FakturowniaConfig = Readonly<{ account: string; token: string }>;
+export type FakturowniaFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal }) =>
+  Promise<{ status: number; ok: boolean; json(): Promise<unknown> }>;
+
+export type FakturowniaErrorCode =
+  | 'FAKTUROWNIA_NOT_CONFIGURED' | 'FAKTUROWNIA_CONFIG_INVALID' | 'FAKTUROWNIA_UNAUTHORIZED'
+  | 'FAKTUROWNIA_ACCOUNT_NOT_FOUND' | 'FAKTUROWNIA_RATE_LIMITED' | 'FAKTUROWNIA_UNAVAILABLE'
+  | 'FAKTUROWNIA_TIMEOUT' | 'FAKTUROWNIA_RESPONSE_INVALID' | 'FAKTUROWNIA_REQUEST_REJECTED';
+
+export class FakturowniaError extends Error {
+  readonly code: FakturowniaErrorCode;
+  readonly httpStatus: number | null;
+  constructor(code: FakturowniaErrorCode, httpStatus: number | null = null) {
+    super(code);
+    this.name = 'FakturowniaError';
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
+/** Account = subdomain of <account>.fakturownia.pl (RFC 1035 label). */
+const ACCOUNT = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+/** Tokens are opaque; reject whitespace/control/URL-structural characters. */
+const TOKEN = /^[A-Za-z0-9_\-./]{8,200}$/;
+
+export function readFakturowniaConfig(env: Record<string, string | undefined>): FakturowniaConfig {
+  const account = (env.FAKTUROWNIA_ACCOUNT ?? '').trim().toLowerCase().replace(/\.fakturownia\.pl$/, '');
+  const token = (env.FAKTUROWNIA_API_TOKEN ?? '').trim();
+  if (!account && !token) throw new FakturowniaError('FAKTUROWNIA_NOT_CONFIGURED');
+  if (!ACCOUNT.test(account) || !TOKEN.test(token)) throw new FakturowniaError('FAKTUROWNIA_CONFIG_INVALID');
+  return Object.freeze({ account, token });
+}
+
+export function fakturowniaOrigin(account: string): string {
+  if (!ACCOUNT.test(account)) throw new FakturowniaError('FAKTUROWNIA_CONFIG_INVALID');
+  return `https://${account}.fakturownia.pl`;
+}
+
+function statusError(status: number): FakturowniaError {
+  if (status === 401 || status === 403) return new FakturowniaError('FAKTUROWNIA_UNAUTHORIZED', status);
+  if (status === 404) return new FakturowniaError('FAKTUROWNIA_ACCOUNT_NOT_FOUND', status);
+  if (status === 429) return new FakturowniaError('FAKTUROWNIA_RATE_LIMITED', status);
+  if (status >= 500) return new FakturowniaError('FAKTUROWNIA_UNAVAILABLE', status);
+  return new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED', status);
+}
+
+export type FakturowniaDepartment = Readonly<{ id: number; name: string; taxNo: string | null }>;
+export type FakturowniaInvoice = Readonly<{
+  id: number; kind: string; status: string; number: string | null; oid: string | null;
+  priceGross: string; paid: string; currency: string; viewToken: string | null;
+}>;
+
+const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const optText = (v: unknown, max = 200) => (typeof v === 'string' && v.length <= max ? v : null);
+
+function department(v: unknown): FakturowniaDepartment {
+  if (!record(v) || !Number.isSafeInteger(v.id)) throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+  const name = optText(v.name) ?? optText(v.shortcut) ?? '';
+  return Object.freeze({ id: v.id as number, name, taxNo: optText(v.tax_no, 40) });
+}
+
+export function parseInvoice(v: unknown): FakturowniaInvoice {
+  if (!record(v) || !Number.isSafeInteger(v.id) || typeof v.kind !== 'string' || typeof v.status !== 'string')
+    throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+  const amount = (x: unknown) => (typeof x === 'string' || typeof x === 'number') ? String(x) : '0';
+  return Object.freeze({
+    id: v.id as number, kind: v.kind, status: v.status, number: optText(v.number, 100), oid: optText(v.oid, 200),
+    priceGross: amount(v.price_gross), paid: amount(v.paid), currency: optText(v.currency, 3) ?? 'PLN',
+    viewToken: typeof v.token === 'string' && /^[A-Za-z0-9]{8,64}$/.test(v.token) ? v.token : null,
+  });
+}
+
+export function createFakturowniaClient(config: FakturowniaConfig, fetchImpl: FakturowniaFetch, timeoutMs = 10_000) {
+  const origin = fakturowniaOrigin(config.account);
+  async function call(method: 'GET' | 'POST', path: string, query: Record<string, string> = {}, body?: unknown): Promise<unknown> {
+    if (!/^\/[a-z_/0-9]+\.json$/.test(path)) throw new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED');
+    const url = new URL(origin + path);
+    for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    let payload: string | undefined;
+    if (method === 'GET') url.searchParams.set('api_token', config.token);
+    else { headers['Content-Type'] = 'application/json'; payload = JSON.stringify({ api_token: config.token, ...(body as object) }); }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response;
+    try {
+      response = await fetchImpl(url.toString(), { method, headers, body: payload, signal: controller.signal });
+    } catch {
+      // Never rethrow the transport error: its message may embed the URL with the token.
+      throw new FakturowniaError(controller.signal.aborted ? 'FAKTUROWNIA_TIMEOUT' : 'FAKTUROWNIA_UNAVAILABLE');
+    } finally { clearTimeout(timer); }
+    if (!response.ok) throw statusError(response.status);
+    try { return await response.json(); } catch { throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID', response.status); }
+  }
+  return Object.freeze({
+    origin,
+    /** Read-only connection probe: lists the account's issuing companies. */
+    async departments(): Promise<FakturowniaDepartment[]> {
+      const data = await call('GET', '/departments.json');
+      if (!Array.isArray(data)) throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+      return data.slice(0, 50).map(department);
+    },
+    /** Read-only: count of proformas issued this month (first page only). */
+    async proformasThisMonth(): Promise<number> {
+      const data = await call('GET', '/invoices.json', { kind: 'proforma', period: 'this_month', per_page: '100', page: '1' });
+      if (!Array.isArray(data)) throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+      return data.length;
+    },
+    async invoice(id: number): Promise<FakturowniaInvoice> {
+      if (!Number.isSafeInteger(id) || id <= 0) throw new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED');
+      return parseInvoice(await call('GET', `/invoices/${id}.json`));
+    },
+    publicViewUrl(invoice: FakturowniaInvoice): string | null {
+      return invoice.viewToken ? `${origin}/invoice/${invoice.viewToken}` : null;
+    },
+  });
+}
+export type FakturowniaClient = ReturnType<typeof createFakturowniaClient>;
+
+export type FakturowniaHealth =
+  | Readonly<{ ok: true; account: string; departments: readonly FakturowniaDepartment[]; proformasThisMonth: number }>
+  | Readonly<{ ok: false; code: FakturowniaErrorCode; httpStatus: number | null }>;
+
+/** Owner diagnostics. Read-only; never issues, sends or changes any document. */
+export async function checkFakturowniaConnection(env: Record<string, string | undefined>, fetchImpl: FakturowniaFetch): Promise<FakturowniaHealth> {
+  try {
+    const config = readFakturowniaConfig(env);
+    const client = createFakturowniaClient(config, fetchImpl);
+    const departments = await client.departments();
+    const proformasThisMonth = await client.proformasThisMonth();
+    return Object.freeze({ ok: true, account: config.account, departments: Object.freeze(departments), proformasThisMonth });
+  } catch (error) {
+    if (error instanceof FakturowniaError) return Object.freeze({ ok: false, code: error.code, httpStatus: error.httpStatus });
+    return Object.freeze({ ok: false, code: 'FAKTUROWNIA_RESPONSE_INVALID', httpStatus: null });
+  }
+}
+
+export const fakturowniaMessages: Record<FakturowniaErrorCode, string> = {
+  FAKTUROWNIA_NOT_CONFIGURED: 'Brak zmiennych FAKTUROWNIA_ACCOUNT i FAKTUROWNIA_API_TOKEN w tym środowisku.',
+  FAKTUROWNIA_CONFIG_INVALID: 'Zmienne są ustawione, ale mają nieprawidłowy format (nazwa konta albo token).',
+  FAKTUROWNIA_UNAUTHORIZED: 'Fakturownia odrzuciła token API. Wygeneruj go ponownie i zaktualizuj zmienną.',
+  FAKTUROWNIA_ACCOUNT_NOT_FOUND: 'Nie znaleziono konta. Sprawdź nazwę konta (część adresu przed .fakturownia.pl).',
+  FAKTUROWNIA_RATE_LIMITED: 'Fakturownia chwilowo ogranicza liczbę zapytań. Spróbuj za kilka minut.',
+  FAKTUROWNIA_UNAVAILABLE: 'Fakturownia nie odpowiada poprawnie. Spróbuj ponownie później.',
+  FAKTUROWNIA_TIMEOUT: 'Przekroczono czas oczekiwania na Fakturownię.',
+  FAKTUROWNIA_RESPONSE_INVALID: 'Fakturownia zwróciła nieoczekiwaną odpowiedź.',
+  FAKTUROWNIA_REQUEST_REJECTED: 'Fakturownia odrzuciła zapytanie.',
+};
