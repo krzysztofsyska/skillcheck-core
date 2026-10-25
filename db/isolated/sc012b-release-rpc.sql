@@ -200,6 +200,9 @@ declare
   v_review_version integer;
   v_review_disposition text;
   v_review_found boolean := false;
+  v_retention_found boolean := false;
+  v_approval_retention_deadline timestamptz;
+  v_release_retention_deadline timestamptz;
   v_frozen boolean := false;
   v_stale boolean;
 begin
@@ -234,7 +237,8 @@ begin
     pg_catalog.hashtextextended('screening:'||v_row.application_id::text,0));
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(v_row.company_id::text||':'||v_row.application_id::text,0));
-  select p.recruitment_id,p.analysis_id,p.screening_review_id,p.shortlist_entry_id,p.plan_envelope
+  select p.recruitment_id,p.analysis_id,p.screening_review_id,p.shortlist_entry_id,
+         p.plan_envelope,p.retention_deadline
     into v_plan
   from public.voice_plan_versions p
   where p.id=v_row.plan_id and p.company_id=v_row.company_id
@@ -307,7 +311,26 @@ begin
       if sqlerrm is distinct from 'Candidate workflow frozen' then raise; end if;
       v_frozen:=true;
   end;
+  -- A retained current pointer is not authority after any immutable source,
+  -- approval or release retention deadline. Check under the same transaction
+  -- before locking and returning the pointer; never expose expired releases.
+  if v_plan_found and not v_frozen then
+    select a.retention_deadline,r.retention_deadline
+      into v_approval_retention_deadline,v_release_retention_deadline
+    from private.voice_plan_release_entries r
+    join private.voice_plan_review_entries a
+      on a.company_id=r.company_id and a.application_id=r.application_id
+      and a.plan_id=r.plan_id and a.id=r.approved_review_id
+    where r.company_id=v_row.company_id and r.application_id=v_row.application_id
+      and r.plan_id=v_row.plan_id and r.id=v_row.release_entry_id
+    for share of r,a nowait;
+    v_retention_found:=found;
+  end if;
   v_stale:=not v_plan_found
+    or not v_retention_found
+    or v_plan.retention_deadline is null or v_plan.retention_deadline<=now()
+    or v_approval_retention_deadline is null or v_approval_retention_deadline<=now()
+    or v_release_retention_deadline is null or v_release_retention_deadline<=now()
     or v_latest_analysis is distinct from v_plan.analysis_id
     or v_material is null or not v_position_found
     or not v_analysis_found or not v_shortlist_found or not v_review_found
