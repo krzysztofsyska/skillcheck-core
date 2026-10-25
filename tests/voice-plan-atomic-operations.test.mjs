@@ -77,6 +77,43 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   "select private.sc012b_current_release($1) as id",[f.application.id])).rows[0].id;
  assert.equal(visible,release);
 
+
+ await t.test("expired plan, approval, or release never authorizes current dispatch",async()=>{
+  // Only isolated synthetic PostgreSQL 16. DDL is transactional and rolled
+  // back after each case; immutable production history is never changed.
+  for(const fixture of [
+   {table:"public.voice_plan_versions",trigger:"voice_plan_versions_immutable",id:plan},
+   {table:"private.voice_plan_review_entries",trigger:"voice_plan_reviews_immutable",id:review},
+   {table:"private.voice_plan_release_entries",trigger:"voice_plan_releases_immutable",id:release},
+  ]){
+   await db.query("begin");
+   try{
+    await db.query("alter table "+fixture.table+" disable trigger "+fixture.trigger);
+    await db.query("update "+fixture.table+
+      " set retention_deadline=now()-interval '1 second' where id=$1",[fixture.id]);
+    assert.equal((await db.query(
+      "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+      [f.application.id])).rows[0].n,1);
+    const expired=await db.query("select private.sc012b_current_release($1) as id",
+      [f.application.id]);
+    assert.equal(expired.rows[0].id,null,
+      fixture.table+" expired data must not authorize dispatch");
+    assert.equal((await db.query(
+      "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+      [f.application.id])).rows[0].n,0,
+      fixture.table+" expired pointer must be revoked in the same transaction");
+    assert.equal((await db.query(
+      "select count(*)::int as n from private.voice_plan_release_entries where id=$1",
+      [release])).rows[0].n,1,"immutable release history must remain");
+   }finally{
+    await db.query("rollback");
+   }
+   assert.equal((await db.query("select private.sc012b_current_release($1) as id",
+     [f.application.id])).rows[0].id,release,
+     fixture.table+" synthetic rollback must restore the original current release");
+  }
+ });
+
  await t.test("ranking-policy advancement revokes a previously current release",async()=>{
   // Keep the existing release intact for subsequent regressions: both the
   // synthetic policy upgrade and stale-pointer deletion are rolled back.
