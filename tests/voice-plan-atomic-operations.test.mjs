@@ -114,6 +114,43 @@ test("SC-012-B verified source and immutable review/release are atomic in one PG
   }
  });
 
+ await t.test("newer plan version revokes old current release even if source is unchanged",async()=>{
+  // A newly inserted version may require human review and release, but must
+  // never leave the superseded, previously approved release dispatchable.
+  await db.query("begin");
+  try{
+   const successor=(await db.query([
+    "insert into public.voice_plan_versions",
+    "(company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+    "shortlist_entry_id,plan_version,source_hash,envelope_hash,source_snapshot,plan_envelope,",
+    "template_version,created_by,retention_policy_version,retention_deadline,",
+    "supersedes_plan_id,corrects_review_id)",
+    "select company_id,recruitment_id,application_id,position_id,analysis_id,screening_review_id,",
+    "shortlist_entry_id,2,$1,envelope_hash,source_snapshot,plan_envelope,",
+    "template_version,created_by,retention_policy_version,retention_deadline,$2,$3",
+    "from public.voice_plan_versions where id=$2 returning id",
+   ].join(" "),["c".repeat(64),plan,review])).rows[0].id;
+   assert.match(successor,/^[a-f0-9-]{36}$/);
+   assert.equal((await db.query(
+    "select private.sc012b_current_release($1) as id",
+    [f.application.id])).rows[0].id,null,
+    "old release must not authorize dispatch after plan supersession");
+   assert.equal((await db.query(
+    "select count(*)::int as n from private.voice_plan_current_releases where application_id=$1",
+    [f.application.id])).rows[0].n,0,
+    "superseded pointer must be revoked atomically");
+   assert.equal((await db.query(
+    "select count(*)::int as n from private.voice_plan_release_entries where id=$1",
+    [release])).rows[0].n,1,"release history is immutable");
+  }finally{
+   await db.query("rollback");
+  }
+  assert.equal((await db.query(
+   "select private.sc012b_current_release($1) as id",
+   [f.application.id])).rows[0].id,release,
+   "synthetic rollback must restore the previously current release");
+ });
+
  await t.test("ranking-policy advancement revokes a previously current release",async()=>{
   // Keep the existing release intact for subsequent regressions: both the
   // synthetic policy upgrade and stale-pointer deletion are rolled back.
