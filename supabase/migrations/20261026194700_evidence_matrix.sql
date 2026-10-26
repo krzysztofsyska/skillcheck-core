@@ -57,7 +57,7 @@ alter table public.evidence_analysis enable row level security;
 alter table public.evidence_item enable row level security;
 revoke all on public.evidence_analysis, public.evidence_item from public,anon,authenticated;
 grant select on public.evidence_analysis, public.evidence_item to authenticated;
-grant update (human_status,human_note,human_verdict,human_missing_info,human_question,reviewed_by,reviewed_at)
+grant update (human_status,human_note,human_verdict,human_missing_info,human_question)
   on public.evidence_item to authenticated;
 
 create policy evidence_analysis_read on public.evidence_analysis for select to authenticated
@@ -67,6 +67,19 @@ create policy evidence_item_read on public.evidence_item for select to authentic
 create policy evidence_item_human_update on public.evidence_item for update to authenticated
   using (private.has_company_access(organization_id,true))
   with check (private.has_company_access(organization_id,true));
+
+-- Stamp the real review identity server-side: clients cannot forge reviewer IDs.
+create function private.evidence_review_stamp() returns trigger language plpgsql set search_path = '' as $
+begin
+  if (select auth.uid()) is null then raise exception 'Authentication required' using errcode='42501'; end if;
+  new.reviewed_by := (select auth.uid());
+  new.reviewed_at := now();
+  return new;
+end;
+$;
+revoke all on function private.evidence_review_stamp() from public,anon,authenticated;
+create trigger evidence_review_stamp before update on public.evidence_item
+  for each row execute function private.evidence_review_stamp();
 
 -- Backend-only writer. Never pass this credential to browsers or store it as NEXT_PUBLIC_*.
 -- Keeping INSERT/AI status writes out of authenticated grants prevents client forgery.
