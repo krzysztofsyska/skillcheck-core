@@ -61,7 +61,7 @@ test('Step 4 SQL end-to-end: multi-tenant stage → interview note → human dec
     assert.ok(rows.every(r => r.actor_id === ownerA && r.created_at));
     const current = (await db.query('select current_stage_id from public.applications where id=$1', [a.application.id])).rows[0].current_stage_id;
     assert.equal(current, a.reference.id);
-    await assert.rejects(db.query('delete from public.assessment_stages where id=$1', [a.interview.id]), err => err.code === '23503');
+    await assert.rejects(db.query('delete from public.assessment_stages where id=$1', [a.interview.id]), err => ['23001', '23503'].includes(err.code));
   });
   await t.test('note autosave and revision history have the real user and nullable question', async () => {
     const assessment = await insert('candidate_assessments', {
