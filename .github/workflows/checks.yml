@@ -57,6 +57,7 @@ jobs:
       - run: npm run test:cv
       - run: npm run test:screening
       - run: npm run test:evidence
+      - run: npm run test:interview
       - run: node --test tests/sc-019-billing-prototype.test.mjs tests/sc-019-billing-ui.test.mjs
       - run: node --test tests/sc-019-package-display.test.mjs
       - run: node --test tests/sc-019-billing-concurrency.test.mjs
