@@ -11,7 +11,7 @@ const repair = await read('supabase/migrations/20261021084245_explicit_data_api_
 // Reviewed API contract, deliberately independent of the migration's REVOKE list.
 const crud = ['company_members', 'company_profiles', 'positions', 'recruitments',
   'candidates', 'applications', 'assessment_stages', 'candidate_assessments'];
-const readOnly = ['behavior_assessment_entries', 'exercise_definition_entries',
+const readOnly = ['evidence_analysis','evidence_item','behavior_assessment_entries', 'exercise_definition_entries',
   'exercise_observation_entries', 'screening_analysis_versions', 'screening_analysis_attempts',
   'screening_criterion_results', 'screening_result_reviews', 'screening_criterion_review_overrides',
   'recruitment_shortlist_entries', 'candidate_contact_permissions', 'candidate_contact_preferences',
@@ -28,6 +28,7 @@ const updates = {
   candidates: ['first_name', 'last_name', 'email', 'phone'], applications: ['status'],
   assessment_stages: ['name', 'description', 'sequence'],
   candidate_assessments: ['status', 'score', 'notes', 'completed_at'], candidate_documents: ['redacted_text'],
+  evidence_item: ['human_status','human_note','human_verdict','human_missing_info','human_question'],
 };
 const documentInsert = ['company_id', 'candidate_id', 'source_text', 'redacted_text'];
 const privileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'];
