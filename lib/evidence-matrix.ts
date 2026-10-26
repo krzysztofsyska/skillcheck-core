@@ -1,12 +1,28 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ScreeningCriterion } from './screening';
+import type { Position } from './supabase/database.types';
 
 export const EVIDENCE_MODEL = 'gpt-5.4-mini-2026-03-17';
 export const EVIDENCE_MAX_CHARS = 18000;
 export const EVIDENCE_MAX_REQUIREMENTS = 30;
 export const EVIDENCE_MAX_OUTPUT_TOKENS = 5000;
 export const EVIDENCE_TIMEOUT_MS = 25000;
+
+export type EvidenceRequirement = {
+  id: string; kind: 'task'|'kpi'|'competency'|'behavior'|'autonomy'; text: string;
+};
+
+/** Extend the existing screening criteria, without inferring personality from CV. */
+export function buildEvidenceRequirements(base: ScreeningCriterion[], position: Pick<Position,'required_behaviors'|'autonomy_level'>): EvidenceRequirement[] {
+  return [
+    ...base,
+    ...position.required_behaviors.map((text,i)=>({id:`behavior:${i+1}`,kind:'behavior' as const,text})),
+    ...(position.autonomy_level == null ? [] : [{
+      id:'autonomy:1',kind:'autonomy' as const,text:`Wymagany poziom samodzielności: ${position.autonomy_level}/5`,
+    }]),
+  ];
+}
 
 export const evidenceVerdicts = ['supported','partial','missing','contradicted'] as const;
 export const evidenceVerdictLabels = {
@@ -38,6 +54,7 @@ export const evidenceSystemPrompt = [
   'Missing never means an applicant does not meet a requirement; it only means the material does not establish it.',
   'Only quote contiguous verbatim text from the supplied approved CV. Never fabricate, paraphrase or amend a quote.',
   'If no direct evidence, return quotes=[] and verdict=missing. Quote maximum 5 spans per requirement.',
+  'Behavioral and autonomy requirements require concrete job examples; do not infer any personality trait from a CV.',
   'Provide missing_info and one neutral suggested_question about job requirements. Return only the schema fields.',
 ].join(' ');
 
@@ -75,7 +92,7 @@ export function locateQuote(source: string, candidate: string): { start: number;
   return { start: match.index, end: match.index + match[0].length, quote: match[0] };
 }
 
-export function validateEvidenceResult(raw: unknown, requirements: ScreeningCriterion[], material: { document_id: string; version: number; text: string }) {
+export function validateEvidenceResult(raw: unknown, requirements: EvidenceRequirement[], material: { document_id: string; version: number; text: string }) {
   const parsed = EvidenceResultSchema.parse(raw);
   if (parsed.items.length !== requirements.length) throw new Error('Wynik nie obejmuje wszystkich wymagań.');
   const known = new Set(requirements.map(r => r.id));
@@ -101,7 +118,7 @@ export function validateEvidenceResult(raw: unknown, requirements: ScreeningCrit
   });
 }
 
-export function verifyAnalysisInputs(criteria: ScreeningCriterion[], text: string) {
+export function verifyAnalysisInputs(criteria: EvidenceRequirement[], text: string) {
   if (!criteria.length || criteria.length > EVIDENCE_MAX_REQUIREMENTS) {
     throw new Error('Jedna analiza obejmuje od 1 do 30 wymagań. Skróć listę w profilu stanowiska.');
   }
