@@ -90,6 +90,9 @@ begin
   foreach tbl in array array['application_stage_events','application_decision_events','candidate_assessment_note_revisions'] loop
     execute format('alter table public.%I enable row level security',tbl);
     execute format('revoke all on public.%I from public, anon, authenticated',tbl);
+    if exists (select 1 from pg_roles where rolname = 'service_role') then
+      execute format('revoke all on public.%I from service_role',tbl);
+    end if;
     execute format('grant select on public.%I to authenticated',tbl);
     execute format('create policy tenant_read on public.%I for select to authenticated using (private.has_company_access(company_id))',tbl);
   end loop;
