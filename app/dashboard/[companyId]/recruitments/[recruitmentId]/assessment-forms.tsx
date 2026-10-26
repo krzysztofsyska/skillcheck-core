@@ -93,28 +93,33 @@ export function AssessmentForm({ companyId, recruitmentId, applicationId, stageI
 
   useEffect(() => {
     if (notes === lastSaved.current) return;
-    let cancelled = false;
-    const persist = async () => {
+    const timer = setTimeout(() => {
       if (saving.current) return;
       saving.current = true;
-      const sent = latest.current;
-      setNoteState('Zapisywanie notatki…');
-      const result = await autosaveInterviewNote(companyId, recruitmentId, applicationId, stageId, sent, versionRef.current);
-      saving.current = false;
-      if (cancelled) return;
-      if (result.saved && result.updatedAt) {
-        lastSaved.current = sent;
-        versionRef.current = result.updatedAt;
-        setUpdatedAt(result.updatedAt);
-        setNoteState('Notatka zapisana.');
-        if (latest.current !== sent) setNotes(current => current); // next edit schedules a save
-      } else {
-        setNoteState(result.error ?? 'Nie zapisano notatki.');
-      }
-    };
-    const timer = setTimeout(() => { void persist(); }, 900);
-    return () => { clearTimeout(timer); cancelled = true; };
-  }, [notes, companyId, recruitmentId, applicationId, stageId, updatedAt]);
+      void (async () => {
+        try {
+          // Serial writes: a newer keystroke cannot overwrite its own earlier version.
+          // Every accepted save returns the new DB CAS token before the next write.
+          while (latest.current !== lastSaved.current) {
+            const sent = latest.current;
+            setNoteState('Zapisywanie notatki…');
+            const result = await autosaveInterviewNote(companyId, recruitmentId, applicationId, stageId, sent, versionRef.current);
+            if (!result.saved || !result.updatedAt) {
+              setNoteState(result.error ?? 'Nie zapisano notatki.');
+              break;
+            }
+            lastSaved.current = sent;
+            versionRef.current = result.updatedAt;
+            setUpdatedAt(result.updatedAt);
+            if (latest.current === sent) setNoteState('Notatka zapisana.');
+          }
+        } finally {
+          saving.current = false;
+        }
+      })();
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [notes, companyId, recruitmentId, applicationId, stageId]);
 
   const [state, action] = useActionState(saveAssessmentProgress.bind(null, companyId, recruitmentId, applicationId, stageId), {});
   return <form action={action}><Feedback state={state}/>
