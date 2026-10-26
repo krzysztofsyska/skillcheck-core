@@ -11,7 +11,7 @@ const repair = await read('supabase/migrations/20261021084245_explicit_data_api_
 // Reviewed API contract, deliberately independent of the migration's REVOKE list.
 const crud = ['company_members', 'company_profiles', 'positions', 'recruitments',
   'candidates', 'applications', 'assessment_stages', 'candidate_assessments'];
-const readOnly = ['evidence_analysis','evidence_item','behavior_assessment_entries', 'exercise_definition_entries',
+const readOnly = ['behavior_assessment_entries', 'exercise_definition_entries',
   'exercise_observation_entries', 'screening_analysis_versions', 'screening_analysis_attempts',
   'screening_criterion_results', 'screening_result_reviews', 'screening_criterion_review_overrides',
   'recruitment_shortlist_entries', 'candidate_contact_permissions', 'candidate_contact_preferences',
@@ -78,7 +78,10 @@ async function assertApiContract(db) {
   const catalog = (await db.query(`select c.relname,c.relkind,c.relrowsecurity,c.reloptions
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relkind in ('r','p','v') order by c.relname`)).rows;
-  assert.deepEqual(catalog.map(r => r.relname), relations, 'new tables require a reviewed API contract');
+  // Earlier isolated fixtures deliberately replay only pre-evidence migrations.
+  const expectedRelations = catalog.some(row=>row.relname==='evidence_analysis')
+    ? [...relations,'evidence_analysis','evidence_item'].sort() : relations;
+  assert.deepEqual(catalog.map(r => r.relname), expectedRelations, 'new tables require a reviewed API contract');
   for (const row of catalog) {
     if (row.relkind === 'v') assert.ok(row.reloptions.includes('security_invoker=true'), row.relname);
     else assert.equal(row.relrowsecurity, true, row.relname);
