@@ -61,8 +61,8 @@ export default async function EvidencePage({ params }: {params:Promise<Route>}) 
           <th scope="row">{labels.get(item.requirement_key) ?? item.requirement_key}</th>
           <td><span className={`${styles.badge} ${styles[item.human_verdict ?? item.verdict]}`}>{evidenceVerdictLabels[item.human_verdict ?? item.verdict]}</span><p>{reviewText[item.human_status]}</p></td>
           <td>{item.evidence_quotes?.length ? <ul>{item.evidence_quotes.map((quote,i)=><li key={i}><blockquote>{quote.quote}</blockquote><a href="#evidence-source">CV v{quote.document_version}, pozycja {quote.start}–{quote.end}</a></li>)}</ul> : 'Nie znaleziono dosłownego cytatu.'}</td>
-          <td>{item.human_missing_info ?? item.missing_info || '—'}</td>
-          <td>{item.human_question ?? item.suggested_question || '—'}</td>
+          <td>{(item.human_missing_info ?? item.missing_info) || '—'}</td>
+          <td>{(item.human_question ?? item.suggested_question) || '—'}</td>
           <td><EvidenceRow key={item.id} item={item} analysisId={analysis.id} companyId={route.companyId} canEdit={canEdit}/></td>
         </tr>)}</tbody>
       </table></div>
