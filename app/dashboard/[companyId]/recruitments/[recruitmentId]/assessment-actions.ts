@@ -52,3 +52,21 @@ export async function saveAssessmentProgress(companyId: string, recruitmentId: s
   revalidatePath(path(companyId, recruitmentId) + `/applications/${applicationId}/assessments`);
   return { saved: true };
 }
+
+export async function updateAssessmentStage(companyId:string,recruitmentId:string,stageId:string,
+  _state:EditorState,form:FormData):Promise<EditorState> {
+  const {client,canEdit}=await companyAccess(companyId);
+  if(!canEdit) return {error:'Masz dostęp tylko do odczytu.'};
+  let values;
+  try {values=parseAssessmentStage(form);}
+  catch(e){return {error:e instanceof Error?e.message:'Nieprawidłowe dane etapu.'};}
+  const result=await client.from('assessment_stages').update(values)
+    .eq('company_id',companyId).eq('recruitment_id',recruitmentId)
+    .eq('id',stageId).select('id').maybeSingle();
+  if(result.error) return {error:result.error.code==='23505'
+    ?'Ta pozycja na liście jest już zajęta. Wybierz wolny numer.'
+    :'Nie udało się zaktualizować etapu.'};
+  if(!result.data)return {error:'Brak etapu lub uprawnień.'};
+  revalidatePath(path(companyId,recruitmentId),'layout');
+  return {saved:true};
+}
