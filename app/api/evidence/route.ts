@@ -36,6 +36,7 @@ export async function POST(request: Request) {
     return safeError(error instanceof Error ? error.message : 'Brak dostępu do materiałów.', 403);
   }
 
+  if (process.env.EVIDENCE_AI_ENABLED !== 'true') return safeError('Uruchamianie zestawień dowodów jest obecnie wyłączone.', 503);
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const aiKey = process.env.OPENAI_API_KEY;
