@@ -3,7 +3,7 @@ import { createClient as createServiceClient } from '@supabase/supabase-js';
 import { companyAccess } from '../../../lib/company-access';
 import { loadScreeningContext } from '../../../lib/screening-flow';
 import { prepareScreening } from '../../../lib/screening';
-import { analyzeEvidence, EVIDENCE_MODEL, snapshotHash, verifyAnalysisInputs } from '../../../lib/evidence-matrix';
+import { analyzeEvidence, buildEvidenceRequirements, EVIDENCE_MODEL, snapshotHash, verifyAnalysisInputs, type EvidenceRequirement } from '../../../lib/evidence-matrix';
 import { isUuid } from '../../../lib/screening-ui';
 
 export const runtime = 'nodejs';
@@ -20,13 +20,18 @@ export async function POST(request: Request) {
 
   // All source reads and authorization use the authenticated RLS client.
   let prepared: ReturnType<typeof prepareScreening>;
+  let requirements: EvidenceRequirement[];
   let userId: string;
+  let candidateId: string;
   try {
     const access = await companyAccess(route.companyId);
     if (!access.canEdit) return safeError('Masz dostęp tylko do odczytu.', 403);
     userId = access.user.id;
-    prepared = prepareScreening(await loadScreeningContext(access.client, route));
-    verifyAnalysisInputs(prepared.payload.criteria, prepared.payload.cv_text);
+    const context = await loadScreeningContext(access.client, route);
+    prepared = prepareScreening(context);
+    requirements = buildEvidenceRequirements(prepared.payload.criteria,context.position);
+    candidateId = context.application.candidate_id;
+    verifyAnalysisInputs(requirements, prepared.payload.cv_text);
   } catch (error) {
     return safeError(error instanceof Error ? error.message : 'Brak dostępu do materiałów.', 403);
   }
@@ -47,23 +52,20 @@ export async function POST(request: Request) {
   const snapshot = [{ document_id: material.document_id, version: material.version, text: material.text }];
   const row = {
     organization_id, recruitment_id: route.recruitmentId, application_id: route.applicationId,
-    candidate_id: (await (async () => {
-      // This relation was read from the signed-in RLS context above. Snapshot
-      // binding contains only application ID, so resolve through scoped query.
-      const access = await companyAccess(route.companyId);
-      const result = await access.client.from('applications').select('candidate_id')
-        .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId)
-        .eq('id', route.applicationId).single();
-      if (result.error || !result.data) throw new Error('Nie znaleziono zgłoszenia.');
-      return result.data.candidate_id;
-    })()),
+    candidate_id: candidateId,
     position_id: prepared.binding.position_id, document_id: material.document_id,
     status: 'running', model: EVIDENCE_MODEL, created_by: userId,
-    requirements_snapshot: prepared.payload.criteria, materials_snapshot: snapshot,
+    requirements_snapshot: requirements, materials_snapshot: snapshot,
     materials_snapshot_hash: snapshotHash(snapshot),
   };
   // A crashed request may leave an orphaned running record. A new request may
   // recover it after the maximum server execution window has elapsed.
+  // Hard quota blocks accidental repeated paid invocations per candidate/day.
+  const since = new Date(Date.now()-24*60*60*1000).toISOString();
+  const daily = await admin.from('evidence_analysis').select('id',{count:'exact',head:true})
+    .eq('organization_id',organization_id).eq('application_id',route.applicationId).gte('created_at',since);
+  if (daily.error) return safeError('Nie można sprawdzić limitu analiz.',503);
+  if ((daily.count ?? 0)>=5) return safeError('Wykorzystano limit 5 analiz w ciągu 24 godzin dla tego zgłoszenia.',429);
   const active = await admin.from('evidence_analysis').select('id,created_at')
     .eq('organization_id',organization_id).eq('application_id',route.applicationId)
     .in('status',['pending','running']).limit(1).maybeSingle();
@@ -80,7 +82,7 @@ export async function POST(request: Request) {
   const analysisId: string = created.data.id;
 
   try {
-    const items = await analyzeEvidence(prepared.payload.criteria, material, aiKey);
+    const items = await analyzeEvidence(requirements, material, aiKey);
     const stored = await admin.from('evidence_item').insert(items.map(item => ({
       ...item, organization_id, analysis_id: analysisId,
     })));
