@@ -68,10 +68,10 @@ export default async function Screening({ params, searchParams }: { params: Prom
       <ul>{prepared.payload.criteria.map(c => <li key={c.id}><strong>{kinds[c.kind]}:</strong> {c.text}</li>)}</ul>
       <pre className="cv-text">{prepared.payload.cv_text}</pre>
     </details>}
-    {analysis?.execution_status === 'completed' && analysis.candidate_document_id && criteria.some(c => c.verdict !== null) && <EvidenceMatrix
+    {analysis?.execution_status === 'completed' && analysis.candidate_document_id && criteria.some(c => c.verdict != null) && <EvidenceMatrix
       criteria={criteria} route={route} analysisId={analysis.id} documentId={analysis.candidate_document_id}
       documentVersion={analysis.candidate_document_version} editable={canEdit && !stale} />}
-    {analysis?.execution_status === 'completed' && !criteria.some(c => c.verdict !== null) && <>
+    {analysis?.execution_status === 'completed' && !criteria.some(c => c.verdict != null) && <>
       <h2>Wynik AI — oryginał</h2>
       <p>Oceny odnoszą się do kryteriów stanowiska. Nie stanowią rankingu kandydatów ani automatycznej decyzji o zatrudnieniu.</p>
       {criteria.map(c => { const correction = corrections.get(c.id); return <article className={styles.criterion} key={c.id}>

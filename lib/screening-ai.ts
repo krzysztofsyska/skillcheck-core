@@ -121,7 +121,7 @@ export const screeningSystemPrompt = [
 ].join(' ');
 
 export function assertScreeningClaimMatchesWorkerContract(claim: ScreeningWorkerClaim) {
-  const expected = screeningAiContract;
+  const expected = screeningEvidenceAiContract;
   const legacy = claim.prompt_version === 'screening-v1'
     && claim.result_schema_version === 1 && claim.payload_schema_version === 1;
   const matchesFields = claim.provider === expected.provider
@@ -156,7 +156,7 @@ export function buildScreeningOpenAiRequest(claim: ScreeningWorkerClaim) {
     reasoning: { effort: 'low' as const },
     max_output_tokens: SCREENING_OPENAI_MAX_OUTPUT_TOKENS,
     input: [
-      { role: 'developer', content: evidenceV2 ? evidenceSystemPrompt : screeningSystemPrompt },
+      { role: evidenceV2 ? 'system' : 'developer', content: evidenceV2 ? evidenceSystemPrompt : screeningSystemPrompt },
       { role: 'user', content: JSON.stringify(screeningAllowlistPayload(claim)) },
     ],
     text: {
