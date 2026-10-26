@@ -248,9 +248,67 @@ export type EvidenceItem = {
   human_question: string|null; reviewed_by: string|null; reviewed_at: string|null;
   created_at: string;
 };
+export type InterviewQuestion = {
+  id: string; organization_id: string; recruitment_id: string; application_id: string;
+  analysis_id: string; evidence_item_id: string; requirement_key: string;
+  requirement_text: string; evidence_context: string; question_text: string;
+  origin: 'generated'|'manual'; sort_order: number; is_active: boolean;
+  version: number; created_by: string; created_at: string;
+  updated_by: string|null; updated_at: string;
+};
+export type InterviewQuestionRevision = {
+  id: string; organization_id: string; question_id: string; version: number;
+  question_text: string; sort_order: number; is_active: boolean;
+  changed_by: string; changed_at: string;
+};
+export type InterviewQuestionNote = {
+  id: string; organization_id: string; question_id: string;
+  answer_text: string; observation_text: string; version: number;
+  updated_by: string; updated_at: string;
+};
+export type InterviewNoteRevision = {
+  id: string; organization_id: string; note_id: string; version: number;
+  answer_text: string; observation_text: string;
+  changed_by: string; changed_at: string;
+};
+export type ApplicationStageTransition = {
+  id: string; organization_id: string; recruitment_id: string;
+  application_id: string; stage_id: string; previous_stage_id: string|null;
+  expected_previous_event_id: string|null; changed_by: string;
+  reason: string; created_at: string;
+};
+export type HumanCandidateDecision = {
+  id: string; organization_id: string; recruitment_id: string;
+  application_id: string; decision: 'next_stage'|'on_hold'|'completed';
+  justification: string; decided_by: string; decided_at: string;
+};
 export type Database = {
   public: {
     Tables: {
+      interview_questions: {
+        Row: InterviewQuestion;
+        Insert: Pick<InterviewQuestion,'organization_id'|'recruitment_id'|'application_id'|'analysis_id'|'evidence_item_id'|'question_text'|'origin'|'sort_order'>;
+        Update: Partial<Pick<InterviewQuestion,'question_text'|'sort_order'|'is_active'>>;
+        Relationships: [];
+      };
+      interview_question_revisions: { Row: InterviewQuestionRevision; Insert: never; Update: never; Relationships: [] };
+      interview_question_notes: {
+        Row: InterviewQuestionNote;
+        Insert: Pick<InterviewQuestionNote,'organization_id'|'question_id'|'answer_text'|'observation_text'>;
+        Update: Partial<Pick<InterviewQuestionNote,'answer_text'|'observation_text'>>;
+        Relationships: [];
+      };
+      interview_note_revisions: { Row: InterviewNoteRevision; Insert: never; Update: never; Relationships: [] };
+      application_stage_transitions: {
+        Row: ApplicationStageTransition;
+        Insert: Pick<ApplicationStageTransition,'organization_id'|'recruitment_id'|'application_id'|'stage_id'|'reason'|'expected_previous_event_id'>;
+        Update: never; Relationships: [];
+      };
+      human_candidate_decisions: {
+        Row: HumanCandidateDecision;
+        Insert: Pick<HumanCandidateDecision,'organization_id'|'recruitment_id'|'application_id'|'decision'|'justification'>;
+        Update: never; Relationships: [];
+      };
       evidence_analysis: { Row: EvidenceAnalysis; Insert: never; Update: never; Relationships: [] };
       evidence_item: {
         Row: EvidenceItem;
