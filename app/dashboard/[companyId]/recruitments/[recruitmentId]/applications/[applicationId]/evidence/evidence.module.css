@@ -1,0 +1,16 @@
+.matrix { overflow-wrap: anywhere; }
+.scroll { overflow-x: auto; margin: 1.5rem 0; }
+.scroll table { width: 100%; min-width: 1180px; border-collapse: collapse; font-size: .93rem; }
+.scroll th, .scroll td { padding: .9rem; vertical-align: top; text-align: left; border: 1px solid #cbd5e1; min-width: 140px; }
+.scroll thead { background: #f1f5f9; color: #0f172a; }
+.scroll blockquote { margin: .35rem 0; border-left: 3px solid #94a3b8; padding: .4rem .65rem; white-space: pre-wrap; }
+.scroll td ul { padding-left: 1rem; margin: 0; }
+.scroll label { display:block; margin: .4rem 0; }
+.scroll textarea, .scroll select { display:block; width:100%; min-height: 2rem; max-width: 250px; }
+.scroll textarea { min-height: 4rem; }
+.badge { display:inline-block; padding:.2rem .5rem; border-radius:.35rem; font-weight:700; }
+.supported { background:#dcfce7; color:#14532d; }
+.partial { background:#fef3c7; color:#92400e; }
+.missing { background:#e2e8f0; color:#334155; }
+.contradicted { background:#fee2e2; color:#991b1b; }
+.matrix details { margin: 1rem 0; }
