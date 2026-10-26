@@ -2,9 +2,9 @@
 import { useActionState, useState } from 'react';
 import { SubmitButton } from '../../../../components/submit-button';
 import { assessmentStatuses } from '../../../../../lib/assessment-fields';
-import type { CandidateAssessment } from '../../../../../lib/supabase/database.types';
+import type { AssessmentStage, CandidateAssessment } from '../../../../../lib/supabase/database.types';
 import type { EditorState } from '../../../../../lib/position-fields';
-import { addAssessmentStage, saveAssessmentProgress } from './assessment-actions';
+import { addAssessmentStage, saveAssessmentProgress, updateAssessmentStage } from './assessment-actions';
 
 function Feedback({ state }: { state: EditorState }) {
   return <>{state.error && <p role="alert">{state.error}</p>}{state.saved && <p role="status">Zapisano.</p>}</>;
@@ -37,4 +37,18 @@ export function AssessmentForm({ companyId, recruitmentId, applicationId, stageI
     <p>Zapisz wykonane zadanie, zaobserwowane zachowania i konkretne przykłady. Przy pominięciu podaj powód.</p>
     <SubmitButton>Zapisz postęp etapu</SubmitButton>
   </form>;
+}
+
+export function StageEditForm({companyId,recruitmentId,stage}:{
+ companyId:string;recruitmentId:string;stage:AssessmentStage;
+}) {
+ const [state,action]=useActionState(updateAssessmentStage.bind(null,companyId,recruitmentId,stage.id),{});
+ return <form action={action}>
+   <Feedback state={state}/>
+   <label>Nazwa<input name="name" defaultValue={stage.name} maxLength={200} required/></label>
+   <label>Kolejność<input name="sequence" type="number" min={1} max={999999}
+     step={1} defaultValue={stage.sequence} required/></label>
+   <label>Opis<textarea name="description" defaultValue={stage.description??''} maxLength={10000}/></label>
+   <SubmitButton>Zapisz etap</SubmitButton>
+ </form>;
 }
