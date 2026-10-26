@@ -23,8 +23,8 @@ export const steps = [
   {
     number: "4",
     title: "Przygotowanie do rozmowy i decyzja człowieka",
-    status: "Częściowo dostępne",
-    body: "W koncie jest przewodnik rozmowy oraz miejsce na ręczne etapy, notatki i obserwacje. Kolejny krok wybiera człowiek. Aplikacja nie oznacza kandydatów do zatrudnienia ani do odrzucenia.",
+    status: "Dostępne",
+    body: "Na podstawie zaakceptowanych lub poprawionych przez człowieka luk z zestawienia dowodów tworzysz przewodnik rozmowy. Możesz zmieniać pytania, drukować je lub zapisać do PDF, notować odpowiedzi i obserwacje z historią zmian, ręcznie prowadzić etapy i zapisać uzasadnioną decyzję. Aplikacja nie wybiera za Ciebie decyzji.",
   },
 ] as const;
 
@@ -43,7 +43,7 @@ export const capabilities = [
   },
   {
     title: "Pytania, które uzupełniają luki",
-    body: "Tam, gdzie materiałów nie wystarcza, kolejnym krokiem jest pytanie na rozmowie. W koncie jest przewodnik rozmowy oparty na wymaganiach stanowiska. Pytania w przykładzie są fikcyjne i nie powstają z analizy plików odwiedzającego.",
+    body: "Tam, gdzie materiałów nie wystarcza, kolejnym krokiem jest pytanie na rozmowie. W koncie firmy można tworzyć i edytować pytania z luk zweryfikowanych przez człowieka w kroku 3. Pytania w publicznym przykładzie pozostają fikcyjne.",
   },
 ] as const;
 
