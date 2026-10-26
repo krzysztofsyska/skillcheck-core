@@ -34,5 +34,5 @@ test('no automatic decision setter or default in schema and app routing', async 
   assert.match(actions, /parseHumanDecision\(form\.get\('decision'\), form\.get\('reason'\)\)/);
   assert.match(forms, /<select name="decision" required defaultValue="">/);
   assert.match(forms, /<option value="" disabled>Wybierz decyzję<\/option>/);
-  assert.doesNotMatch(actions, /saveHumanDecision\(/g.test('') ? /impossible/ : /\bmodel\.generate\(/i);
+  assert.doesNotMatch(actions, /\bmodel\.generate\(/i);
 });
