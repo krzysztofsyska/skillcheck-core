@@ -53,8 +53,13 @@ export const screeningAiContract = {
   provider: SCREENING_OPENAI_PROVIDER,
   model: SCREENING_OPENAI_MODEL,
   model_revision: SCREENING_OPENAI_MODEL_REVISION,
-  prompt_version: SCREENING_OPENAI_PROMPT_VERSION,
+  prompt_version: 'screening-v1',
   payload_schema_version: SCREENING_OPENAI_PAYLOAD_SCHEMA_VERSION,
+  result_schema_version: 1,
+};
+export const screeningEvidenceAiContract = {
+  ...screeningAiContract,
+  prompt_version: SCREENING_OPENAI_PROMPT_VERSION,
   result_schema_version: SCREENING_OPENAI_RESULT_SCHEMA_VERSION,
 };
 

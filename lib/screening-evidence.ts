@@ -14,9 +14,9 @@ function normalizeWithOffsets(source: string) {
   const offsets: { start: number; end: number }[] = [];
   for (let index = 0; index < source.length;) {
     const symbol = source[index];
-    if (/\s/u.test(symbol)) {
+    if (/\s/.test(symbol)) {
       const start = index;
-      while (index < source.length && /\s/u.test(source[index])) index++;
+      while (index < source.length && /\s/.test(source[index])) index++;
       if (normalized.length && normalized[normalized.length - 1] !== ' ') {
         normalized += ' ';
         offsets.push({ start, end: index });

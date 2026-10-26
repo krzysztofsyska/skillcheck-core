@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import { prepareScreening } from './screening.ts';
-import { screeningAiContract } from './screening-ai.ts';
+import { screeningEvidenceAiContract } from './screening-ai.ts';
 import { isUuid, type ScreeningRoute } from './screening-ui.ts';
 import type { ScreeningDispatchResult } from './screening-dispatch.ts';
 
@@ -44,7 +44,7 @@ export async function runScreeningCommand(input: {
     if (result.error || !result.data?.[0]) throw new Error('Nie można ponowić tej analizy. Odśwież stronę i sprawdź jej stan.');
     attemptId = result.data[0].attempt_id;
   } else {
-    const contract = screeningAiContract;
+    const contract = screeningEvidenceAiContract;
     const result = await input.client.rpc('start_screening_analysis', {
       target_application: input.route.applicationId, expected_input_fingerprint: prepared.fingerprint,
       expected_payload_schema_version: contract.payload_schema_version, requested_result_schema_version: contract.result_schema_version,
