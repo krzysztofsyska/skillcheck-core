@@ -61,7 +61,8 @@
     "pdf-parse": "2.4.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "yauzl": "3.4.0"
+    "yauzl": "3.4.0",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

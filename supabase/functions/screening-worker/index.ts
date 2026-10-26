@@ -43,6 +43,27 @@ function workerStore(sql: ReturnType<typeof postgres>) {
     }) {
       const rows = await sql.begin(async tx => {
         await tx.unsafe("set local role screening_worker");
+        const useV2 = Array.isArray(input.findings) && input.findings.some(
+          (item: any) => item && typeof item === "object" && "verdict" in item
+        );
+        if (useV2) {
+        return await tx`
+          select public.complete_screening_evidence(
+            ${input.attemptId}::uuid,
+            ${input.leaseToken},
+            ${input.inputFingerprint},
+            ${input.analysisContractHash},
+            ${tx.json(input.findings)},
+            ${input.providerRequestId},
+            ${input.providerResponseId},
+            ${input.inputTokens},
+            ${input.outputTokens},
+            ${input.cachedInputTokens},
+            null,
+            null
+          ) as id
+        `;
+        }
         return await tx`
           select public.complete_screening_analysis(
             ${input.attemptId}::uuid,

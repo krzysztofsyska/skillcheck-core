@@ -568,6 +568,17 @@ export type Database = {
         };
         Returns: string;
       };
+      complete_screening_evidence: {
+        Args: {
+          target_attempt: string; provided_lease_token: string;
+          expected_input_fingerprint: string; expected_analysis_contract_hash: string;
+          findings: unknown[]; new_provider_request_id?: string | null;
+          new_provider_response_id?: string | null; new_input_tokens?: number | null;
+          new_output_tokens?: number | null; new_cached_input_tokens?: number | null;
+          new_cost_amount?: number | null; new_cost_currency?: string | null;
+        };
+        Returns: string;
+      };
       complete_screening_analysis: {
         Args: {
           target_attempt: string;
@@ -589,6 +600,7 @@ export type Database = {
         Args: { target_attempt: string };
         Returns: {
           analysis_id: string;
+          candidate_document_id: string;
           attempt_id: string;
           lease_token: string;
           lease_expires_at: string;

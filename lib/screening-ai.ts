@@ -1,11 +1,12 @@
 import { screeningAnalysisContractHash, screeningLevels } from './screening.ts';
+import { evidenceProviderJsonSchema, evidenceSystemPrompt, parseEvidenceOutput } from './screening-evidence-schema.ts';
 
 export const SCREENING_OPENAI_PROVIDER = 'openai';
 export const SCREENING_OPENAI_MODEL = 'gpt-5.4-mini-2026-03-17';
 export const SCREENING_OPENAI_MODEL_REVISION = null;
-export const SCREENING_OPENAI_PROMPT_VERSION = 'screening-v1';
+export const SCREENING_OPENAI_PROMPT_VERSION = 'screening-evidence-v2';
 export const SCREENING_OPENAI_PAYLOAD_SCHEMA_VERSION = 1;
-export const SCREENING_OPENAI_RESULT_SCHEMA_VERSION = 1;
+export const SCREENING_OPENAI_RESULT_SCHEMA_VERSION = 2;
 export const SCREENING_OPENAI_MAX_OUTPUT_TOKENS = 4000;
 export const SCREENING_OPENAI_MAX_RETRIES = 2;
 export const SCREENING_OPENAI_REQUEST_TIMEOUT_MS = 60000;
@@ -24,6 +25,7 @@ export type ScreeningProviderErrorCode = typeof SCREENING_PROVIDER_ERROR_CODES[n
 
 export type ScreeningWorkerClaim = {
   analysis_id: string;
+  candidate_document_id: string;
   attempt_id: string;
   lease_token: string;
   lease_expires_at: string;
@@ -39,6 +41,7 @@ export type ScreeningWorkerClaim = {
   criteria_snapshot: { id: string; kind: 'task' | 'kpi' | 'competency'; text: string }[];
 };
 
+export type ScreeningEvidenceFinding = ReturnType<typeof parseEvidenceOutput>[number];
 export type ScreeningProviderFinding = {
   criterion_id: string;
   rating: typeof screeningLevels[number];
@@ -114,12 +117,13 @@ export const screeningSystemPrompt = [
 
 export function assertScreeningClaimMatchesWorkerContract(claim: ScreeningWorkerClaim) {
   const expected = screeningAiContract;
+  const legacy = claim.prompt_version === 'screening-v1'
+    && claim.result_schema_version === 1 && claim.payload_schema_version === 1;
   const matchesFields = claim.provider === expected.provider
     && claim.model === expected.model
     && claim.model_revision === expected.model_revision
-    && claim.prompt_version === expected.prompt_version
     && claim.payload_schema_version === expected.payload_schema_version
-    && claim.result_schema_version === expected.result_schema_version;
+    && ((claim.prompt_version === expected.prompt_version && claim.result_schema_version === expected.result_schema_version) || legacy);
   const expectedHash = screeningAnalysisContractHash(expected);
   let claimedHash = '';
   try {
@@ -134,27 +138,28 @@ export function assertScreeningClaimMatchesWorkerContract(claim: ScreeningWorker
   } catch {
     throw new ScreeningProviderError('contract_mismatch', 'Analysis contract mismatch.', 'contract_mismatch');
   }
-  if (!matchesFields || claimedHash !== claim.analysis_contract_hash || expectedHash !== claim.analysis_contract_hash) {
+  if (!matchesFields || claimedHash !== claim.analysis_contract_hash || (!legacy && expectedHash !== claim.analysis_contract_hash)) {
     throw new ScreeningProviderError('contract_mismatch', 'Analysis contract mismatch.', 'contract_mismatch');
   }
 }
 
 export function buildScreeningOpenAiRequest(claim: ScreeningWorkerClaim) {
+  const evidenceV2 = claim.result_schema_version === 2;
   return {
     model: SCREENING_OPENAI_MODEL,
     store: false,
     reasoning: { effort: 'low' as const },
     max_output_tokens: SCREENING_OPENAI_MAX_OUTPUT_TOKENS,
     input: [
-      { role: 'developer', content: screeningSystemPrompt },
+      { role: 'developer', content: evidenceV2 ? evidenceSystemPrompt : screeningSystemPrompt },
       { role: 'user', content: JSON.stringify(screeningAllowlistPayload(claim)) },
     ],
     text: {
       format: {
         type: 'json_schema' as const,
-        name: 'screening_result',
+        name: evidenceV2 ? 'screening_evidence_v2' : 'screening_result',
         strict: true,
-        schema: screeningProviderOutputSchema,
+        schema: evidenceV2 ? evidenceProviderJsonSchema : screeningProviderOutputSchema,
       },
     },
   };
@@ -333,7 +338,11 @@ export function parseScreeningOpenAiResponse(response: ScreeningOpenAiResponse, 
     throw new ScreeningProviderError('openai_invalid_output', 'Model output was not JSON.', 'output_not_json');
   }
   return {
-    findings: parseScreeningProviderOutput(parsed, claim),
+    findings: claim.result_schema_version === 2
+      ? (() => { try { return parseEvidenceOutput(parsed, claim); } catch {
+        throw new ScreeningProviderError('openai_invalid_output', 'Evidence schema failed validation.', 'criterion_result');
+      } })()
+      : parseScreeningProviderOutput(parsed, claim),
     provider_request_id: typeof response.id === 'string' ? response.id : null,
     provider_response_id: typeof response.id === 'string' ? response.id : null,
     input_tokens: response.usage?.input_tokens ?? null,
