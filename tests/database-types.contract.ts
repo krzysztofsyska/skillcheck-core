@@ -67,6 +67,9 @@ type ExpectedViews =
   | "latest_exercise_definitions"
   | "latest_exercise_observations";
 type ExpectedFunctions =
+  | "begin_evidence_analysis"
+  | "complete_evidence_analysis"
+  | "fail_evidence_analysis"
   | "sc19_claim_trial"
   | "sc19_get_balance"
   | "sc19_package_sizes"
