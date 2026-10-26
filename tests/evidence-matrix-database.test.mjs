@@ -79,7 +79,12 @@ test('evidence matrix tenant RLS, read-only clients and human review audit',asyn
  await assert.rejects(db.query("update public.evidence_item set verdict='missing'"),e=>e.code==='42501');
  await user(viewer);
  assert.equal((await db.query('select * from public.evidence_item')).rows.length,1);
- await assert.rejects(db.query("update public.evidence_item set human_status='rejected'"),e=>e.code==='42501');
+ // PostgreSQL may filter unauthorized UPDATE via RLS (0 rows) instead of throwing.
+ // Both outcomes must preserve existing human review.
+ try {
+   const deniedUpdate=await db.query("update public.evidence_item set human_status='rejected' returning id");
+   assert.equal(deniedUpdate.rows.length,0,'viewer must not modify human review');
+ } catch(e) { assert.equal(e.code,'42501'); }
  await user(ownerA);
  const updated=(await db.query("update public.evidence_item set human_status='accepted',human_note='sprawdzono' where id=$1 returning reviewed_by,reviewed_at",[row.id])).rows[0];
  assert.equal(updated.reviewed_by,ownerA);
