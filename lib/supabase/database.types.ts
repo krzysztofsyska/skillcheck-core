@@ -427,6 +427,21 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      begin_evidence_analysis: {
+        Args: {
+          p_organization_id:string; p_candidate_id:string; p_position_id:string;
+          p_recruitment_id:string; p_application_id:string; p_document_id:string;
+          p_model:string; p_created_by:string; p_requirements:EvidenceAnalysis['requirements_snapshot'];
+          p_materials:EvidenceAnalysis['materials_snapshot']; p_hash:string;
+        }; Returns:string;
+      };
+      complete_evidence_analysis: {
+        Args: {p_organization_id:string; p_analysis_id:string; p_items: Omit<EvidenceItem,'id'|'organization_id'|'analysis_id'|'human_status'|'human_note'|'human_verdict'|'human_missing_info'|'human_question'|'reviewed_by'|'reviewed_at'|'created_at'>[]};
+        Returns:void;
+      };
+      fail_evidence_analysis: {
+        Args: {p_organization_id:string;p_analysis_id:string;p_message:string};Returns:void;
+      };
       sc19_claim_trial: { Args: { target_company: string; supplied_nip: string }; Returns: number };
       sc19_get_balance: {
         Args: { target_company: string };
