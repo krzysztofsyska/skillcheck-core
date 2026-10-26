@@ -100,3 +100,37 @@ export async function POST(request: Request) {
     return safeError(readable, 502);
   }
 }
+
+export async function PATCH(request: Request) {
+  let input: Record<string,unknown>;
+  try { input = await request.json(); } catch { return safeError('Nieprawidłowy formularz.'); }
+  const fields = ['organization_id','analysis_id','item_id','human_status','human_note','human_verdict','human_missing_info','human_question'];
+  if (!input || Array.isArray(input) || typeof input !== 'object' || Object.keys(input).some(k=>!fields.includes(k))
+    || !isUuid(input.organization_id) || !isUuid(input.analysis_id) || !isUuid(input.item_id)
+    || !['unreviewed','accepted','rejected','edited'].includes(String(input.human_status))
+    || typeof input.human_note !== 'string' || input.human_note.length > 3000) return safeError('Nieprawidłowe dane weryfikacji.');
+  const status = String(input.human_status);
+  if (status === 'edited' && (
+    !['supported','partial','missing','contradicted'].includes(String(input.human_verdict))
+    || typeof input.human_missing_info !== 'string' || input.human_missing_info.length > 2000
+    || typeof input.human_question !== 'string' || input.human_question.length > 2000
+  )) return safeError('Uzupełnij poprawną korektę.');
+  let access: Awaited<ReturnType<typeof companyAccess>>;
+  try { access = await companyAccess(String(input.organization_id)); }
+  catch { return safeError('Brak dostępu do firmy.', 403); }
+  if (!access.canEdit) return safeError('Masz dostęp tylko do odczytu.',403);
+  const analysis = await access.client.from('evidence_analysis').select('status')
+    .eq('organization_id',String(input.organization_id)).eq('id',String(input.analysis_id)).maybeSingle();
+  if (analysis.error || analysis.data?.status !== 'done') return safeError('Można sprawdzać tylko ukończone zestawienia.',409);
+  const edited = status === 'edited';
+  const result = await access.client.from('evidence_item').update({
+    human_status: status as 'unreviewed'|'accepted'|'rejected'|'edited',
+    human_note: String(input.human_note),
+    human_verdict: edited ? String(input.human_verdict) as 'supported'|'partial'|'missing'|'contradicted' : null,
+    human_missing_info: edited ? String(input.human_missing_info) : null,
+    human_question: edited ? String(input.human_question) : null,
+  }).eq('organization_id',String(input.organization_id))
+    .eq('analysis_id',String(input.analysis_id)).eq('id',String(input.item_id)).select('id').maybeSingle();
+  if(result.error || !result.data) return safeError('Nie zapisano weryfikacji. Odśwież widok i ponów próbę.',409);
+  return NextResponse.json({saved:true});
+}
