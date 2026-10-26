@@ -81,13 +81,117 @@ revoke all on function private.evidence_review_stamp() from public,anon,authenti
 create trigger evidence_review_stamp before update on public.evidence_item
   for each row execute function private.evidence_review_stamp();
 
--- Backend-only writer. Never pass this credential to browsers or store it as NEXT_PUBLIC_*.
--- Keeping INSERT/AI status writes out of authenticated grants prevents client forgery.
-do $grant_service$
+-- Service-role carries NO direct table privileges. Backend writes use
+-- narrow atomic SECURITY DEFINER RPCs instead of unrestricted table CRUD.
+do $evidence_acl$
 begin
-  if exists(select 1 from pg_roles where rolname='service_role') then
-    grant select,insert,update,delete on public.evidence_analysis,public.evidence_item to service_role;
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    revoke all on public.evidence_analysis,public.evidence_item from service_role;
   end if;
 end
-$grant_service$;
+$evidence_acl$;
+
+create function public.begin_evidence_analysis(
+  p_organization_id uuid, p_candidate_id uuid, p_position_id uuid,
+  p_recruitment_id uuid, p_application_id uuid, p_document_id uuid,
+  p_model text, p_created_by uuid, p_requirements jsonb, p_materials jsonb, p_hash text
+) returns uuid language plpgsql security definer set search_path = '' as $evidence_begin$
+declare
+  new_id uuid;
+  doc public.candidate_documents%rowtype;
+  rec public.recruitments%rowtype;
+begin
+  -- Prevent concurrent charges and overlapping jobs for one application.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(p_organization_id::text || ':' || p_application_id::text, 0));
+  select * into doc from public.candidate_documents
+    where company_id=p_organization_id and id=p_document_id and candidate_id=p_candidate_id
+      and status='reviewed' for share;
+  if not found then raise exception 'Reviewed CV required' using errcode='42501'; end if;
+  if pg_catalog.jsonb_typeof(p_materials) <> 'array'
+    or pg_catalog.jsonb_array_length(p_materials) <> 1
+    or p_materials->0->>'document_id' is distinct from doc.id::text
+    or p_materials->0->>'version' is distinct from doc.version::text
+    or p_materials->0->>'text' is distinct from doc.redacted_text
+    then raise exception 'Source snapshot mismatch' using errcode='22023'; end if;
+  select * into rec from public.recruitments
+    where company_id=p_organization_id and id=p_recruitment_id and position_id=p_position_id;
+  if not found then raise exception 'Position mismatch' using errcode='23503'; end if;
+  if not exists(select 1 from public.applications
+    where company_id=p_organization_id and id=p_application_id and recruitment_id=p_recruitment_id
+      and candidate_id=p_candidate_id) then raise exception 'Applicant mismatch' using errcode='23503'; end if;
+  if (select count(*) from public.evidence_analysis where organization_id=p_organization_id
+      and application_id=p_application_id and created_at > pg_catalog.now()-interval '24 hours') >= 5
+    then raise exception 'Daily analysis quota exceeded' using errcode='PT429'; end if;
+  update public.evidence_analysis set status='failed',finished_at=pg_catalog.now(),
+    failure_message='Przekroczono czas wykonywania. Możesz ponowić analizę.'
+    where organization_id=p_organization_id and application_id=p_application_id
+      and status in ('pending','running') and created_at < pg_catalog.now()-interval '120 seconds';
+  if exists(select 1 from public.evidence_analysis where organization_id=p_organization_id
+    and application_id=p_application_id and status in ('pending','running'))
+    then raise exception 'Analysis already running' using errcode='PT409'; end if;
+  insert into public.evidence_analysis(
+    organization_id,candidate_id,position_id,recruitment_id,application_id,document_id,
+    status,model,created_by,requirements_snapshot,materials_snapshot,materials_snapshot_hash
+  ) values (
+    p_organization_id,p_candidate_id,p_position_id,p_recruitment_id,p_application_id,p_document_id,
+    'running',p_model,p_created_by,p_requirements,p_materials,p_hash
+  ) returning id into new_id;
+  return new_id;
+end;
+$evidence_begin$;
+
+create function public.complete_evidence_analysis(p_organization_id uuid, p_analysis_id uuid, p_items jsonb)
+returns void language plpgsql security definer set search_path = '' as $evidence_complete$
+declare
+  analysis public.evidence_analysis%rowtype;
+  item jsonb;
+begin
+  select * into analysis from public.evidence_analysis
+    where organization_id=p_organization_id and id=p_analysis_id for update;
+  if not found or analysis.status <> 'running'
+    then raise exception 'Analysis not running' using errcode='PT409'; end if;
+  if pg_catalog.jsonb_typeof(p_items) <> 'array' or
+    pg_catalog.jsonb_array_length(p_items) <> pg_catalog.jsonb_array_length(analysis.requirements_snapshot)
+    then raise exception 'Incomplete evidence matrix' using errcode='22023'; end if;
+  for item in select value from pg_catalog.jsonb_array_elements(p_items) loop
+    if not exists(select 1 from pg_catalog.jsonb_array_elements(analysis.requirements_snapshot) r
+      where r->>'id'=item->>'requirement_key')
+      then raise exception 'Unrecognized requirement' using errcode='22023'; end if;
+    insert into public.evidence_item(
+      organization_id,analysis_id,requirement_key,verdict,evidence_quotes,missing_info,suggested_question
+    ) values (
+      p_organization_id,p_analysis_id,item->>'requirement_key',item->>'verdict',
+      item->'evidence_quotes',item->>'missing_info',item->>'suggested_question'
+    );
+  end loop;
+  update public.evidence_analysis set status='done',finished_at=pg_catalog.now()
+    where organization_id=p_organization_id and id=p_analysis_id;
+end;
+$evidence_complete$;
+
+create function public.fail_evidence_analysis(p_organization_id uuid, p_analysis_id uuid, p_message text)
+returns void language plpgsql security definer set search_path = '' as $evidence_fail$
+begin
+  update public.evidence_analysis set status='failed',finished_at=pg_catalog.now(),
+    failure_message=pg_catalog.left(p_message,2000)
+    where organization_id=p_organization_id and id=p_analysis_id and status='running';
+end;
+$evidence_fail$;
+
+revoke all on function public.begin_evidence_analysis(uuid,uuid,uuid,uuid,uuid,uuid,text,uuid,jsonb,jsonb,text)
+  from public,anon,authenticated;
+revoke all on function public.complete_evidence_analysis(uuid,uuid,jsonb) from public,anon,authenticated;
+revoke all on function public.fail_evidence_analysis(uuid,uuid,text) from public,anon,authenticated;
+do $evidence_rpc_acl$
+begin
+ if exists(select 1 from pg_roles where rolname='service_role') then
+   grant execute on function public.begin_evidence_analysis(uuid,uuid,uuid,uuid,uuid,uuid,text,uuid,jsonb,jsonb,text)
+     to service_role;
+   grant execute on function public.complete_evidence_analysis(uuid,uuid,jsonb) to service_role;
+   grant execute on function public.fail_evidence_analysis(uuid,uuid,text) to service_role;
+ end if;
+end
+$evidence_rpc_acl$;
+
 commit;
