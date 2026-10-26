@@ -17,14 +17,14 @@ alter table public.applications
 -- Legacy API callers have INSERT on applications. A caller cannot inject a
 -- stage/decision on creation to bypass the explicit audited RPCs.
 create function private.reject_unaudited_application_insert()
-returns trigger language plpgsql set search_path = '' as $
+returns trigger language plpgsql set search_path = '' as $$
 begin
   if new.current_stage_id is not null or new.human_decision is not null
      or new.human_decision_reason is not null then
     raise exception 'Stage and human decision require explicit audited action' using errcode = '42501';
   end if;
   return new;
-end $;
+end $$;
 revoke all on function private.reject_unaudited_application_insert() from public, anon, authenticated;
 create trigger application_manual_fields_insert_guard before insert on public.applications
 for each row execute function private.reject_unaudited_application_insert();
@@ -114,7 +114,7 @@ begin
   insert into public.candidate_assessment_note_revisions(company_id,recruitment_id,application_id,assessment_id,body,guide_question_id,author_id)
     values(new.company_id,new.recruitment_id,new.application_id,new.id,new.notes,new.guide_question_id,actor);
   return new;
-end $;
+end $$;
 revoke all on function private.track_candidate_assessment_notes() from public, anon, authenticated;
 create trigger candidate_assessment_note_history after insert or update on public.candidate_assessments
 for each row execute function private.track_candidate_assessment_notes();
