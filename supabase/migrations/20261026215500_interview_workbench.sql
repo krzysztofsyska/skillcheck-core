@@ -163,7 +163,7 @@ create trigger interview_question_stamp before insert or update on public.interv
   for each row execute function private.interview_question_stamp();
 
 create function private.interview_question_audit() returns trigger
-language plpgsql set search_path = '' as $$
+language plpgsql security definer set search_path = '' as $$
 begin
  insert into public.interview_question_revisions(
   organization_id,question_id,version,question_text,sort_order,is_active,changed_by
@@ -192,7 +192,7 @@ end; $$;
 create trigger interview_note_stamp before insert or update on public.interview_question_notes
   for each row execute function private.interview_note_stamp();
 create function private.interview_note_audit() returns trigger
-language plpgsql set search_path = '' as $$
+language plpgsql security definer set search_path = '' as $$
 begin
  insert into public.interview_note_revisions(
   organization_id,note_id,version,answer_text,observation_text,changed_by
@@ -249,7 +249,10 @@ begin
    'interview_note_revisions','application_stage_transitions','human_candidate_decisions'
  ] loop
    execute format('alter table public.%I enable row level security',t);
-   execute format('revoke all on public.%I from public,anon,authenticated,service_role',t);
+   execute format('revoke all on public.%I from public,anon,authenticated',t);
+   if exists(select 1 from pg_roles where rolname='service_role') then
+     execute format('revoke all on public.%I from service_role',t);
+   end if;
    execute format('grant select on public.%I to authenticated',t);
    execute format('create policy tenant_read on public.%I for select to authenticated using (private.has_company_access(organization_id))',t);
  end loop;
