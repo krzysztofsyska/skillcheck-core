@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { companyAccess } from '../../../../../../../../lib/company-access';
 import { loadScreeningContext, ScreeningNotFoundError } from '../../../../../../../../lib/screening-flow';
 import { prepareScreening } from '../../../../../../../../lib/screening';
-import { evidenceVerdictLabels, snapshotHash } from '../../../../../../../../lib/evidence-matrix';
+import { buildEvidenceRequirements, evidenceVerdictLabels, snapshotHash } from '../../../../../../../../lib/evidence-matrix';
 import { EvidenceRun, EvidenceRow, type MatrixItem } from './controls';
 import styles from './evidence.module.css';
 
@@ -33,10 +33,11 @@ export default async function EvidencePage({ params }: {params:Promise<Route>}) 
     : {data:[],error:null};
   if(results.error) throw new Error('Nie udało się wczytać macierzy dowodów.');
   const active = analysis?.status === 'pending' || analysis?.status === 'running';
+  const currentRequirements = prepared ? buildEvidenceRequirements(prepared.payload.criteria,context.position) : null;
   const current = !!prepared && !!analysis && analysis.materials_snapshot_hash === snapshotHash([{
     document_id: prepared.binding.document_id,version:prepared.binding.document_version,text:prepared.payload.cv_text,
-  }]) && JSON.stringify(analysis.requirements_snapshot) === JSON.stringify(prepared.payload.criteria);
-  const requirements = (analysis?.requirements_snapshot || prepared?.payload.criteria || []) as {id:string;kind:string;text:string}[];
+  }]) && JSON.stringify(analysis.requirements_snapshot) === JSON.stringify(currentRequirements);
+  const requirements = (analysis?.requirements_snapshot || currentRequirements || []) as {id:string;kind:string;text:string}[];
   const labels = new Map(requirements.map(r=>[r.id,r.text]));
   const items = ((results.data || []) as MatrixItem[]).slice().sort((a,b)=>
     requirements.findIndex(r=>r.id===a.requirement_key)-requirements.findIndex(r=>r.id===b.requirement_key));
