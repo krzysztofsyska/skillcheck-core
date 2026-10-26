@@ -43,9 +43,6 @@ type ExpectedTables =
   | "recruitments"
   | "candidates"
   | "applications"
-  | "application_stage_events"
-  | "application_decision_events"
-  | "candidate_assessment_note_revisions"
   | "assessment_stages"
   | "candidate_assessments"
   | "candidate_documents"
@@ -68,9 +65,6 @@ type ExpectedViews =
   | "latest_exercise_definitions"
   | "latest_exercise_observations";
 type ExpectedFunctions =
-  | "move_assessment_stage"
-  | "move_application_stage"
-  | "set_application_human_decision"
   | "sc19_claim_trial"
   | "sc19_get_balance"
   | "sc19_package_sizes"
@@ -162,7 +156,6 @@ type _CandidateColumns = Expect<Equal<
 type _ApplicationColumns = Expect<Equal<
   Keys<Row<"applications">>,
   "id" | "company_id" | "recruitment_id" | "candidate_id" | "status" |
-  "current_stage_id" | "human_decision" | "human_decision_reason" |
   "created_at" | "updated_at"
 >>;
 type _StageColumns = Expect<Equal<
@@ -173,7 +166,7 @@ type _StageColumns = Expect<Equal<
 type _AssessmentColumns = Expect<Equal<
   Keys<Row<"candidate_assessments">>,
   "id" | "company_id" | "recruitment_id" | "application_id" | "stage_id" |
-  "status" | "score" | "notes" | "completed_at" | "guide_question_id" | "created_at" | "updated_at"
+  "status" | "score" | "notes" | "completed_at" | "created_at" | "updated_at"
 >>;
 type _DocumentColumns = Expect<Equal<
   Keys<Row<"candidate_documents">>,
@@ -253,16 +246,14 @@ type _CandidateNullability = Expect<Equal<
   NullableKeys<Row<"candidates">>,
   "email" | "phone"
 >>;
-type _ApplicationNullability = Expect<Equal<NullableKeys<Row<"applications">>,
-  "current_stage_id" | "human_decision" | "human_decision_reason"
->>;
+type _ApplicationNullability = Expect<Equal<NullableKeys<Row<"applications">>, never>>;
 type _StageNullability = Expect<Equal<
   NullableKeys<Row<"assessment_stages">>,
   "description"
 >>;
 type _AssessmentNullability = Expect<Equal<
   NullableKeys<Row<"candidate_assessments">>,
-  "score" | "notes" | "completed_at" | "guide_question_id"
+  "score" | "notes" | "completed_at"
 >>;
 type _DocumentNullability = Expect<Equal<
   NullableKeys<Row<"candidate_documents">>,
@@ -398,7 +389,7 @@ type _StageUpdate = Expect<Equal<
 >>;
 type _AssessmentUpdate = Expect<Equal<
   Keys<Update<"candidate_assessments">>,
-  "status" | "score" | "notes" | "completed_at" | "guide_question_id"
+  "status" | "score" | "notes" | "completed_at"
 >>;
 
 type _BehaviorRpcArea = Expect<Equal<

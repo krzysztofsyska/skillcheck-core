@@ -107,32 +107,12 @@ export type Candidate = Entity & { first_name: string; last_name: string; email:
 export type Application = Entity & {
   recruitment_id: string; candidate_id: string;
   status: "new" | "in_progress" | "rejected" | "withdrawn" | "hired";
-  current_stage_id: string | null;
-  human_decision: "next_stage" | "on_hold" | "closed" | null;
-  human_decision_reason: string | null;
 };
 export type AssessmentStage = Entity & { recruitment_id: string; name: string; description: string | null; sequence: number };
 export type CandidateAssessment = Entity & {
   recruitment_id: string; application_id: string; stage_id: string;
   status: "pending" | "in_progress" | "completed" | "skipped";
   score: number | null; notes: string | null; completed_at: string | null;
-  guide_question_id: string | null;
-};
-export type ApplicationStageEvent = {
-  id: string; company_id: string; recruitment_id: string; application_id: string;
-  from_stage_id: string | null; to_stage_id: string | null;
-  actor_id: string; created_at: string;
-};
-export type ApplicationDecisionEvent = {
-  id: string; company_id: string; recruitment_id: string; application_id: string;
-  previous_decision: "next_stage" | "on_hold" | "closed" | null;
-  new_decision: "next_stage" | "on_hold" | "closed";
-  reason: string; actor_id: string; created_at: string;
-};
-export type CandidateAssessmentNoteRevision = {
-  id: string; company_id: string; recruitment_id: string; application_id: string;
-  assessment_id: string; body: string | null; guide_question_id: string | null;
-  author_id: string; created_at: string;
 };
 export type CandidateDocument = Entity & {
   candidate_id: string; source_text: string; redacted_text: string; version: number;
@@ -252,9 +232,6 @@ export type RecruitmentShortlistRow = Omit<RecruitmentShortlistEntry, "id" | "co
 export type Database = {
   public: {
     Tables: {
-      application_stage_events: { Row: ApplicationStageEvent; Insert: never; Update: never; Relationships: [] };
-      application_decision_events: { Row: ApplicationDecisionEvent; Insert: never; Update: never; Relationships: [] };
-      candidate_assessment_note_revisions: { Row: CandidateAssessmentNoteRevision; Insert: never; Update: never; Relationships: [] };
       candidate_contact_permissions: { Row: ContactPermission; Insert: never; Update: never; Relationships: [] };
       candidate_contact_preferences: { Row: ContactPreferences; Insert: never; Update: never; Relationships: [] };
       candidate_communication_approvals: { Row: CandidateCommunicationApproval; Insert: never; Update: never; Relationships: [] };
@@ -410,7 +387,7 @@ export type Database = {
       candidate_assessments: Table<
         CandidateAssessment,
         "company_id" | "recruitment_id" | "application_id" | "stage_id",
-        "status" | "score" | "notes" | "completed_at" | "guide_question_id",
+        "status" | "score" | "notes" | "completed_at",
         [
           Relationship<"candidate_assessments_company_id_fkey", ["company_id"], "companies", ["id"]>,
           Relationship<"candidate_assessments_company_id_recruitment_id_applicatio_fkey", ["company_id", "recruitment_id", "application_id"], "applications", ["company_id", "recruitment_id", "id"]>,
@@ -424,9 +401,6 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
-      move_assessment_stage: { Args: { target_company: string; target_recruitment: string; target_stage: string; move_direction: number }; Returns: undefined };
-      move_application_stage: { Args: { target_company: string; target_recruitment: string; target_application: string; target_stage: string | null }; Returns: undefined };
-      set_application_human_decision: { Args: { target_company: string; target_recruitment: string; target_application: string; requested_decision: "next_stage" | "on_hold" | "closed"; justification: string }; Returns: undefined };
       sc19_claim_trial: { Args: { target_company: string; supplied_nip: string }; Returns: number };
       sc19_get_balance: {
         Args: { target_company: string };
