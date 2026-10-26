@@ -114,7 +114,7 @@ async function renderPage({canEdit=true,stale=false,rating='insufficient_data',m
   const path='app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/screening/page.tsx';
   const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
   const require=createRequire(import.meta.url);const mod={exports:{}};
-  const replacements={'next/link':({children,...props})=>React.createElement('a',props,children),'next/navigation':{notFound(){throw Error('404');}},'./screening.module.css':{},'./controls':{RefreshStatus:()=>null,AnalysisControl:({disabled})=>React.createElement('button',{disabled},'START'),ReviewControl:({stale})=>React.createElement('p',null,stale?'REANALYSIS_ONLY':'REVIEW_ALLOWED')}};
+  const replacements={'next/link':({children,...props})=>React.createElement('a',props,children),'next/navigation':{notFound(){throw Error('404');}},'./screening.module.css':{},'./matrix':{EvidenceMatrix:()=>null},'./controls':{RefreshStatus:()=>null,AnalysisControl:({disabled})=>React.createElement('button',{disabled},'START'),ReviewControl:({stale})=>React.createElement('p',null,stale?'REANALYSIS_ONLY':'REVIEW_ALLOWED')}};
   const customRequire=name=> {
     if(Object.hasOwn(replacements,name)) return replacements[name];
     if(name.endsWith('/lib/company-access')) return {companyAccess:async()=>({client,canEdit})};

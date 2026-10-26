@@ -113,6 +113,7 @@ test('Step 3 end-to-end with mocked OpenAI, tenant RLS and human review', async 
     })) }),
   };
   let dispatched = 0;
+  const diagnostic = [];
   const result = await runScreeningAttempt(started.attempt_id, {
     enabled: true,
     store: {
@@ -122,11 +123,14 @@ test('Step 3 end-to-end with mocked OpenAI, tenant RLS and human review', async 
       },
       async complete(input) {
         await asWorker();
-        return (await db.query('select public.complete_screening_evidence($1,$2,$3,$4,$5::jsonb) as id',
-          [input.attemptId, input.leaseToken, input.inputFingerprint,
-            input.analysisContractHash, JSON.stringify(input.findings)])).rows[0].id;
+        try {
+          return (await db.query('select public.complete_screening_evidence($1,$2,$3,$4,$5::jsonb) as id',
+            [input.attemptId, input.leaseToken, input.inputFingerprint,
+              input.analysisContractHash, JSON.stringify(input.findings)])).rows[0].id;
+        } catch (error) { diagnostic.push({ phase: 'complete', code: error.code, message: error.message }); throw error; }
       },
       async fail(input) {
+        diagnostic.push({ phase: 'fail', code: input.errorCode, reason: input.errorMessage });
         await asWorker();
         return (await db.query('select public.fail_screening_attempt($1,$2,$3,$4,$5,$6) as id',
           [input.attemptId, input.leaseToken, input.inputFingerprint, input.analysisContractHash,
@@ -136,7 +140,7 @@ test('Step 3 end-to-end with mocked OpenAI, tenant RLS and human review', async 
     callOpenAi: async request => { dispatched++; assert.equal(request.text.format.name, 'screening_evidence_v2'); return mocked; },
     sleep: async () => {}, log: () => {},
   });
-  assert.equal(result.status, 'completed');
+  assert.equal(result.status, 'completed', JSON.stringify({ result, diagnostic }));
   assert.equal(dispatched, 1);
   await asUser(ownerA);
   const readA = await db.query('select * from public.screening_criterion_results where company_id=$1 and analysis_id=$2 order by criterion_order',
