@@ -3,13 +3,15 @@ import { notFound } from 'next/navigation';
 import { companyAccess } from '../../../../../../../../lib/company-access';
 import { assessmentStatuses } from '../../../../../../../../lib/assessment-fields';
 import { humanDecisions } from '../../../../../../../../lib/interview-decision';
+import { step4Client } from '../../../../../../../../lib/step4-database';
 import { AssessmentForm, CandidateStageForm, HumanDecisionForm } from '../../../assessment-forms';
 
 const displayTime = (time: string) => new Date(time).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' });
 
 export default async function Assessments({ params }: { params: Promise<{ companyId: string; recruitmentId: string; applicationId: string }> }) {
   const { companyId, recruitmentId, applicationId } = await params;
-  const { client, canEdit } = await companyAccess(companyId);
+  const { client: originalClient, canEdit } = await companyAccess(companyId);
+  const client = step4Client(originalClient);
   const application = await client.from('applications')
     .select('id,candidate_id,current_stage_id,human_decision,human_decision_reason')
     .eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('id', applicationId).maybeSingle();

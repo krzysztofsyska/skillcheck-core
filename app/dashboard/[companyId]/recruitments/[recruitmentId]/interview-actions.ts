@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { companyAccess } from '../../../../../lib/company-access';
 import { parseHumanDecision, parseInterviewNote, parseStageDirection } from '../../../../../lib/interview-decision';
+import { step4Client } from '../../../../../lib/step4-database';
 import type { EditorState } from '../../../../../lib/position-fields';
 
 const route = (company: string, recruitment: string) => `/dashboard/${company}/recruitments/${recruitment}`;
@@ -22,7 +23,7 @@ export async function renameRecruitmentStage(companyId: string, recruitmentId: s
   try {
     const name = form.get('name');
     if (typeof name !== 'string' || !name.trim() || name.trim().length > 200) throw new Error('Podaj nazwę etapu do 200 znaków.');
-    const client = await editor(companyId, recruitmentId);
+    const client = step4Client(await editor(companyId, recruitmentId));
     const { data, error } = await client.from('assessment_stages').update({ name: name.trim() })
       .eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('id', stageId).select('id').maybeSingle();
     if (error || !data) throw new Error('Nie udało się zmienić nazwy etapu.');
@@ -34,7 +35,7 @@ export async function renameRecruitmentStage(companyId: string, recruitmentId: s
 export async function reorderRecruitmentStage(companyId: string, recruitmentId: string, stageId: string,
   direction: -1 | 1, _state: EditorState, _form: FormData): Promise<EditorState> {
   try {
-    const client = await editor(companyId, recruitmentId);
+    const client = step4Client(await editor(companyId, recruitmentId));
     const { error } = await client.rpc('move_assessment_stage', {
       target_company: companyId, target_recruitment: recruitmentId, target_stage: stageId,
       move_direction: parseStageDirection(direction),
@@ -48,7 +49,7 @@ export async function reorderRecruitmentStage(companyId: string, recruitmentId: 
 export async function removeUnusedRecruitmentStage(companyId: string, recruitmentId: string, stageId: string,
   _state: EditorState, _form: FormData): Promise<EditorState> {
   try {
-    const client = await editor(companyId, recruitmentId);
+    const client = step4Client(await editor(companyId, recruitmentId));
     const { count, error: usageError } = await client.from('candidate_assessments')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('stage_id', stageId);
@@ -68,7 +69,7 @@ export async function moveCandidateStage(companyId: string, recruitmentId: strin
   try {
     const stage = form.get('stageId');
     if (typeof stage !== 'string') throw new Error('Wybierz etap.');
-    const client = await editor(companyId, recruitmentId);
+    const client = step4Client(await editor(companyId, recruitmentId));
     const { error } = await client.rpc('move_application_stage', {
       target_company: companyId, target_recruitment: recruitmentId,
       target_application: applicationId, target_stage: stage || null,
@@ -85,7 +86,7 @@ export async function saveHumanDecision(companyId: string, recruitmentId: string
     // Never invoked by AI, automatic transitions, the page loader or a default.
     // Only the explicit, user-submitted decision form calls this server action.
     const { decision, reason } = parseHumanDecision(form.get('decision'), form.get('reason'));
-    const client = await editor(companyId, recruitmentId);
+    const client = step4Client(await editor(companyId, recruitmentId));
     const { error } = await client.rpc('set_application_human_decision', {
       target_company: companyId, target_recruitment: recruitmentId,
       target_application: applicationId, requested_decision: decision, justification: reason,
@@ -101,7 +102,7 @@ export async function autosaveInterviewNote(companyId: string, recruitmentId: st
   stageId: string, text: string, expectedUpdatedAt: string | null): Promise<NoteSaveResult> {
   try {
     const notes = parseInterviewNote(text);
-    const client = await editor(companyId, recruitmentId);
+    const client = step4Client(await editor(companyId, recruitmentId));
     const [application, stage] = await Promise.all([
       client.from('applications').select('id').eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('id', applicationId).maybeSingle(),
       client.from('assessment_stages').select('id').eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('id', stageId).maybeSingle(),

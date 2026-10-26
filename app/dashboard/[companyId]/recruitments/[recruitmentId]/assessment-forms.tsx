@@ -3,7 +3,7 @@ import { useActionState, useEffect, useRef, useState } from 'react';
 import { SubmitButton } from '../../../../components/submit-button';
 import { assessmentStatuses } from '../../../../../lib/assessment-fields';
 import { humanDecisions } from '../../../../../lib/interview-decision';
-import type { CandidateAssessment } from '../../../../../lib/supabase/database.types';
+import type { Step4CandidateAssessment } from '../../../../../lib/step4-database';
 import type { EditorState } from '../../../../../lib/position-fields';
 import { addAssessmentStage, saveAssessmentProgress } from './assessment-actions';
 import { autosaveInterviewNote, moveCandidateStage, saveHumanDecision,
@@ -79,7 +79,7 @@ export function HumanDecisionForm({ companyId, recruitmentId, applicationId }: {
 }
 
 export function AssessmentForm({ companyId, recruitmentId, applicationId, stageId, assessment }: {
-  companyId: string; recruitmentId: string; applicationId: string; stageId: string; assessment?: CandidateAssessment;
+  companyId: string; recruitmentId: string; applicationId: string; stageId: string; assessment?: Step4CandidateAssessment;
 }) {
   const [status, setStatus] = useState<string>(assessment?.status ?? 'pending');
   const [notes, setNotes] = useState(assessment?.notes ?? '');
