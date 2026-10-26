@@ -148,6 +148,33 @@ export function createFakturowniaClient(config: FakturowniaConfig, fetchImpl: Fa
       };
       return parseInvoice(await call('POST', '/invoices.json', {}, { invoice }));
     },
+    /** Issues ONE VAT invoice for a payment already settled elsewhere (e.g. Przelewy24),
+     * marked paid in full. This IS an accounting document (KSeF per account settings),
+     * so it must only be called after provider-verified payment. `oid_unique` makes a
+     * retried call is rejected (FAKTUROWNIA_REQUEST_REJECTED) instead of issuing a
+     * duplicate; callers treat that as "already issued" and never retry with a new oid. */
+    async createPaidInvoice(input: PaidInvoiceInput): Promise<FakturowniaInvoice> {
+      if (!/^sc19-paid:[0-9a-f-]{36}$/.test(input.oid) || !Number.isSafeInteger(input.grossMinor) || input.grossMinor <= 0 ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(input.issueDate) || !/^\d{10}$/.test(input.buyer.nip) ||
+          typeof input.paymentReference !== 'string' || !/^[A-Za-z0-9:_-]{1,80}$/.test(input.paymentReference))
+        throw new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED');
+      const gross = formatMinor(input.grossMinor);
+      const invoice = {
+        kind: 'vat', oid: input.oid, oid_unique: 'yes', issue_date: input.issueDate, sell_date: input.issueDate,
+        status: 'paid', paid: gross, paid_date: input.issueDate, payment_type: 'transfer', payment_to_kind: 'off',
+        currency: 'PLN', lang: 'pl', buyer_company: '1', buyer_name: input.buyer.name, buyer_tax_no: input.buyer.nip,
+        buyer_street: input.buyer.street, buyer_post_code: input.buyer.postCode, buyer_city: input.buyer.city,
+        buyer_country: 'PL', buyer_email: input.buyer.email,
+        calculating_strategy: { position: 'keep_gross', sum: 'keep_gross', invoice_form_price_kind: 'gross' },
+        positions: [{ name: input.itemName, quantity: 1, quantity_unit: 'usł.', tax: 23, total_price_gross: gross }],
+        description: `Opłacono online (${input.paymentReference}).`,
+        internal_note: `SkillCheck ${input.oid} ${input.paymentReference}`,
+      };
+      const created = parseInvoice(await call('POST', '/invoices.json', {}, { invoice }));
+      if (created.kind !== 'vat' || created.oid !== input.oid || parseMinor(created.priceGross) !== input.grossMinor)
+        throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+      return created;
+    },
     /** One page (max 100) of proformas issued between the given Warsaw dates. */
     async proformasIssuedBetween(dateFrom: string, dateTo: string, page: number): Promise<FakturowniaInvoice[]> {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo) || !Number.isSafeInteger(page) || page < 1 || page > 50)
@@ -162,6 +189,11 @@ export function createFakturowniaClient(config: FakturowniaConfig, fetchImpl: Fa
 
 export type ProformaInput = Readonly<{
   oid: string; grossMinor: number; itemName: string; issueDate: string; paymentDays: number;
+  buyer: Readonly<{ name: string; nip: string; street: string; postCode: string; city: string; email: string }>;
+}>;
+
+export type PaidInvoiceInput = Readonly<{
+  oid: string; grossMinor: number; itemName: string; issueDate: string; paymentReference: string;
   buyer: Readonly<{ name: string; nip: string; street: string; postCode: string; city: string; email: string }>;
 }>;
 
