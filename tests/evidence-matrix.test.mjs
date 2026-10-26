@@ -24,7 +24,7 @@ test('verbatim quotes match source after normalizing whitespace; offsets preserv
   const found=locateQuote(material.text,'pracowałem w sprzedaży B2B.');
   assert.ok(found);
   assert.equal(material.text.slice(found.start,found.end),found.quote);
-  assert.match(found.quote,/\n  w  /u);
+  assert.match(found.quote,/\n  w  /);
   assert.equal(locateQuote(material.text,'pracowałem w fintechu'),null);
   assert.equal(snapshotHash([{a:1}]),snapshotHash([{a:1}]));
   assert.notEqual(snapshotHash([{a:1}]),snapshotHash([{a:2}]));
