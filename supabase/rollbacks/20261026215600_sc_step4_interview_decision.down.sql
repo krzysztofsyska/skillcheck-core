@@ -1,5 +1,7 @@
 -- Reverts 20261026215600_sc_step4_interview_decision.sql (data in audit logs lost).
 begin;
+drop trigger if exists application_manual_fields_insert_guard on public.applications;
+drop function if exists private.reject_unaudited_application_insert();
 drop function if exists public.set_application_human_decision(uuid,uuid,uuid,text,text);
 drop function if exists public.move_application_stage(uuid,uuid,uuid,uuid);
 drop function if exists public.move_assessment_stage(uuid,uuid,uuid,integer);
