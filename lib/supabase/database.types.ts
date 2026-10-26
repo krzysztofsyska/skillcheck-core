@@ -188,6 +188,12 @@ export type ScreeningCriterionResult = {
   criterion_kind: "task" | "kpi" | "competency"; criterion_order: number;
   criterion_text_snapshot: string; rating: ScreeningRating; evidence: ScreeningEvidence[];
   explanation: string | null; confidence: number | null; created_at: string;
+  verdict: "supported" | "partial" | "missing" | "contradicted" | null;
+  missing_info: string | null; suggested_question: string | null;
+  human_status: "unreviewed" | "accepted" | "rejected" | "edited";
+  human_note: string | null; human_verdict: "supported" | "partial" | "missing" | "contradicted" | null;
+  human_missing_info: string | null; human_suggested_question: string | null;
+  human_evidence: ScreeningEvidence[] | null; updated_by: string | null; updated_at: string | null;
 };
 export type ScreeningResultReview = {
   id: string; company_id: string; analysis_id: string; review_version: number;
@@ -549,6 +555,16 @@ export type Database = {
           new_cached_input_tokens?: number | null;
           new_cost_amount?: number | null;
           new_cost_currency?: string | null;
+        };
+        Returns: string;
+      };
+      review_screening_evidence_row: {
+        Args: {
+          target_company: string; target_analysis: string; target_criterion: string;
+          expected_updated_at: string | null; next_status: "unreviewed" | "accepted" | "rejected" | "edited";
+          next_note?: string | null; next_verdict?: "supported" | "partial" | "missing" | "contradicted" | null;
+          next_missing_info?: string | null; next_question?: string | null;
+          next_evidence?: ScreeningEvidence[] | null;
         };
         Returns: string;
       };
