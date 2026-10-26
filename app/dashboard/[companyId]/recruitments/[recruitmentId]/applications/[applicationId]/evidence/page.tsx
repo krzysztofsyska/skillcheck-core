@@ -51,7 +51,8 @@ export default async function EvidencePage({ params, searchParams }: {params:Pro
     <p>{context.position.title} · CV zatwierdzone przez człowieka</p>
     <p className="notice"><strong>Zestawienie przygotowane automatycznie — wymaga weryfikacji człowieka.</strong> Brak dowodu nie oznacza niespełnienia wymagania. Nie ma oceny ogólnej ani rekomendacji zatrudnienia.</p>
     <p><Link href={`/dashboard/${route.companyId}/candidates/${context.application.candidate_id}/cv`}>Materiały kandydata</Link>
-      {' · '}<Link href={`/dashboard/${route.companyId}/positions/${context.position.id}`}>Wymagania stanowiska</Link></p>
+      {' · '}<Link href={`/dashboard/${route.companyId}/positions/${context.position.id}`}>Wymagania stanowiska</Link>
+      {' · '}<Link href={`/dashboard/${route.companyId}/recruitments/${route.recruitmentId}/applications/${route.applicationId}/interview`}>Przygotuj rozmowę i zapisz decyzję człowieka →</Link></p>
     <h2>Analiza</h2>
     <p role="status">{analysis ? statusText[analysis.status] : 'Brak analizy'}{analysis && analysis.id !== latest?.id ? ' · wybrany wynik archiwalny' : ''}{analysis && !current ? ' · wymagania lub materiały uległy zmianie' : ''}</p>
     {analysis?.status === 'failed' && <p role="alert">{analysis.failure_message || 'Analiza nie została ukończona.'} Ponów po sprawdzeniu materiałów.</p>}
