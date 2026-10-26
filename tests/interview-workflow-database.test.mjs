@@ -98,7 +98,11 @@ test('Step4: tenant RLS, review guard, autosave audit, stage history, explicit m
  await assert.rejects(insert('interview_questions',{...input,evidence_item_id:analyses[1].evidence.id}),e=>['23503','42501'].includes(e.code));
  await user(viewer);
  assert.equal((await db.query('select * from public.interview_questions')).rows.length,1);
- await assert.rejects(db.query("update public.interview_questions set question_text='Nie'"),e=>e.code==='42501');
+ // Column-level UPDATE is granted to authenticated; RLS may deny by 0 rows.
+ try {
+   const deniedUpdate=await db.query("update public.interview_questions set question_text='Nie' returning id");
+   assert.equal(deniedUpdate.rows.length,0,'viewer must never edit questions');
+ } catch(e) { assert.equal(e.code,'42501'); }
  await assert.rejects(insert('interview_question_notes',{organization_id:a.organization_id,question_id:q.id,answer_text:'X',observation_text:''}),e=>e.code==='42501');
  await user(ownerA);
  const changed=(await db.query("update public.interview_questions set question_text='Pytanie poprawione' where id=$1 returning version,updated_by",[q.id])).rows[0];
