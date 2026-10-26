@@ -28,6 +28,7 @@ function NoteEditor({route,questionId,note,history,canEdit}:{
   route:Route;questionId:string;note?:InterviewQuestionNote;history:InterviewNoteRevision[];canEdit:boolean
 }) {
   const initial = { answer:note?.answer_text||'', observation:note?.observation_text||'' };
+  const router=useRouter();
   const [draft,setDraft] = useState(initial);
   const latest = useRef(initial);
   const saved = useRef(initial);
@@ -54,15 +55,17 @@ function NoteEditor({route,questionId,note,history,canEdit}:{
       setStatus('Zapisano automatycznie');
       // Refresh audit history; the draft is retained by this component.
       // If typing continued while saving, the next flush uses the new CAS version.
-      if (latest.current.answer !== current.answer || latest.current.observation !== current.observation)
-        queueMicrotask(() => { void flush(); });
+      router.refresh();
     } catch (error) {
       blocked.current = true;
       setStatus(error instanceof Error ? error.message : 'Błąd zapisu.');
     } finally {
       inFlight.current = false;
+      if (!blocked.current && (latest.current.answer !== saved.current.answer || latest.current.observation !== saved.current.observation)) {
+        setTimeout(() => { void flush(); }, 0);
+      }
     }
-  }, [route,questionId,canEdit]);
+  }, [route,questionId,canEdit,router]);
 
   useEffect(() => {
     latest.current = draft;
@@ -73,12 +76,14 @@ function NoteEditor({route,questionId,note,history,canEdit}:{
   },[draft,canEdit,flush]);
 
   return <div>
-    <label>Odpowiedź kandydata
+    <p className={styles.printOnly}><strong>Odpowiedź:</strong> {draft.answer || '—'}</p>
+    <p className={styles.printOnly}><strong>Obserwacja:</strong> {draft.observation || '—'}</p>
+    <label className={styles.noPrint}>Odpowiedź kandydata
       <textarea aria-label="Odpowiedź kandydata" rows={4} maxLength={12000}
         readOnly={!canEdit} value={draft.answer}
         onChange={e=>setDraft({...draft,answer:e.target.value})}/>
     </label>
-    <label>Obserwacja rekrutera
+    <label className={styles.noPrint}>Obserwacja rekrutera
       <textarea aria-label="Obserwacja rekrutera" rows={4} maxLength={12000}
         readOnly={!canEdit} value={draft.observation}
         onChange={e=>setDraft({...draft,observation:e.target.value})}/>
@@ -116,7 +121,8 @@ function QuestionEditor({route,question,canEdit,note,history,first,last}: {
     <p className={styles.metadata}><strong>Wymaganie:</strong> {question.requirement_text}</p>
     <p className={styles.metadata}><strong>Dowód z kroku 3:</strong> {question.evidence_context}</p>
     <p className={styles.metadata}>Źródło: {question.origin==='generated'?'Wiersz zatwierdzony przez człowieka':'Pytanie własne rekrutera'} · {question.requirement_key}</p>
-    {canEdit ? <label>Pytanie
+    <h3 className={styles.printOnly}>{text}</h3>
+    {canEdit ? <label className={styles.noPrint}>Pytanie
       <textarea rows={3} value={text} maxLength={2000} onChange={e=>setText(e.target.value)}/>
     </label> : <h3>{question.question_text}</h3>}
     {canEdit && <div className={styles.controls}>
