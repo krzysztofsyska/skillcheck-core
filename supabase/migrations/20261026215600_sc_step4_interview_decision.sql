@@ -14,6 +14,21 @@ alter table public.applications
   add constraint application_current_stage_fk foreign key (company_id, recruitment_id, current_stage_id)
     references public.assessment_stages(company_id, recruitment_id, id) on delete restrict;
 
+-- Legacy API callers have INSERT on applications. A caller cannot inject a
+-- stage/decision on creation to bypass the explicit audited RPCs.
+create function private.reject_unaudited_application_insert()
+returns trigger language plpgsql set search_path = '' as $
+begin
+  if new.current_stage_id is not null or new.human_decision is not null
+     or new.human_decision_reason is not null then
+    raise exception 'Stage and human decision require explicit audited action' using errcode = '42501';
+  end if;
+  return new;
+end $;
+revoke all on function private.reject_unaudited_application_insert() from public, anon, authenticated;
+create trigger application_manual_fields_insert_guard before insert on public.applications
+for each row execute function private.reject_unaudited_application_insert();
+
 -- Existing per-stage candidate_assessments.notes remains the live note.
 -- Future evidence-guide question identifiers can be attached after PR #171.
 alter table public.candidate_assessments
@@ -108,7 +123,7 @@ create function public.move_assessment_stage(target_company uuid, target_recruit
 returns void language plpgsql security definer set search_path = '' as $$
 declare item record; neighbor record; temporary_sequence integer;
 begin
-  if not private.has_company_access(target_company,true) or move_direction not in (-1,1) then
+  if not private.has_company_access(target_company,true) or move_direction is null or move_direction not in (-1,1) then
     raise exception 'Stage update not allowed' using errcode = '42501';
   end if;
   perform 1 from public.recruitments where company_id=target_company and id=target_recruitment for update;
