@@ -84,7 +84,7 @@ function escapeRegex(word: string) {
 /** Preserve actual offsets and whitespace of the approved source. A model quote
  * may have collapsed whitespace but may not change any non-whitespace character. */
 export function locateQuote(source: string, candidate: string): { start: number; end: number; quote: string } | null {
-  const parts = candidate.trim().split(/\s+/u).filter(Boolean);
+  const parts = candidate.trim().split(/\s+/).filter(Boolean);
   if (!parts.length || candidate.length > 2000) return null;
   const pattern = parts.map(escapeRegex).join('\\s+');
   const match = new RegExp(pattern).exec(source);
@@ -128,7 +128,7 @@ export function verifyAnalysisInputs(criteria: EvidenceRequirement[], text: stri
 }
 
 export async function analyzeEvidence(
-  requirements: ScreeningCriterion[],
+  requirements: EvidenceRequirement[],
   material: { document_id: string; version: number; text: string },
   apiKey: string,
   fetchImpl: typeof fetch = fetch,
