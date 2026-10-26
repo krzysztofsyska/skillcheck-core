@@ -17,7 +17,7 @@
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
     "test:screening-report": "node --test tests/screening-report.test.mjs",
     "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
-    "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs",
+    "test:assessments": "node --test tests/assessment.test.mjs tests/interview-decision.test.mjs tests/interview-decision-database.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
     "test:live-check": "node --test tests/live-check.test.mjs tests/live-membership.test.mjs tests/live-final-audit.test.mjs",
