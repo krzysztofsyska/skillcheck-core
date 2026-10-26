@@ -34,6 +34,8 @@ type RelationshipNames<Name extends TableName> =
     : never;
 
 type ExpectedTables =
+  | "evidence_analysis"
+  | "evidence_item"
   | "sales_leads"
   | "platform_operators"
   | "companies"
