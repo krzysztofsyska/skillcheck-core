@@ -80,7 +80,7 @@ export async function POST(request: Request) {
   }
 
   if (action === 'question' || action === 'move') {
-    if (!isUuid(input.questionId) || !Number.isInteger(input.version) || Number(input.version) < 1) {
+    if (!isUuid(input.questionId) || typeof input.version !== 'number' || !Number.isInteger(input.version) || input.version < 1) {
       return invalid('Nieprawidłowa wersja pytania.');
     }
     const questionId = String(input.questionId), version = Number(input.version);
@@ -122,8 +122,8 @@ export async function POST(request: Request) {
   }
 
   if (action === 'note') {
-    if (!isUuid(input.questionId) || !Number.isInteger(input.version) ||
-        Number(input.version) < 0 || typeof input.answerText !== 'string' ||
+    if (!isUuid(input.questionId) || typeof input.version !== 'number' || !Number.isInteger(input.version) ||
+        input.version < 0 || typeof input.answerText !== 'string' ||
         typeof input.observationText !== 'string' || input.answerText.length > 12000 ||
         input.observationText.length > 12000) return invalid('Sprawdź treść notatki i wersję.');
     const question = await client.from('interview_questions').select('id')
