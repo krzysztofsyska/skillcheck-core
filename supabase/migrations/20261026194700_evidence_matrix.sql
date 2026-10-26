@@ -69,14 +69,14 @@ create policy evidence_item_human_update on public.evidence_item for update to a
   with check (private.has_company_access(organization_id,true));
 
 -- Stamp the real review identity server-side: clients cannot forge reviewer IDs.
-create function private.evidence_review_stamp() returns trigger language plpgsql set search_path = '' as $
+create function private.evidence_review_stamp() returns trigger language plpgsql set search_path = '' as $evidence_review$
 begin
   if (select auth.uid()) is null then raise exception 'Authentication required' using errcode='42501'; end if;
   new.reviewed_by := (select auth.uid());
   new.reviewed_at := now();
   return new;
 end;
-$;
+$evidence_review$;
 revoke all on function private.evidence_review_stamp() from public,anon,authenticated;
 create trigger evidence_review_stamp before update on public.evidence_item
   for each row execute function private.evidence_review_stamp();
