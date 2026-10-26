@@ -229,9 +229,35 @@ export type RecruitmentShortlistEntry = {
 export type RecruitmentShortlistRow = Omit<RecruitmentShortlistEntry, "id" | "company_id" | "recruitment_id"> & {
   entry_id: string; snapshot_current: boolean; policy_current: boolean;
 };
+export type EvidenceQuote = { quote: string; document_id: string; document_version: number; start: number; end: number };
+export type EvidenceAnalysis = {
+  id: string; organization_id: string; candidate_id: string; position_id: string;
+  recruitment_id: string; application_id: string; document_id: string;
+  status: 'pending'|'running'|'done'|'failed'; model: string;
+  created_by: string; created_at: string; finished_at: string|null;
+  requirements_snapshot: {id:string;kind:'task'|'kpi'|'competency';text:string}[];
+  materials_snapshot: {document_id:string;version:number;text:string}[];
+  materials_snapshot_hash: string; failure_message: string|null;
+};
+export type EvidenceItem = {
+  id: string; organization_id: string; analysis_id: string; requirement_key: string;
+  verdict: 'supported'|'partial'|'missing'|'contradicted'; evidence_quotes: EvidenceQuote[];
+  missing_info: string; suggested_question: string;
+  human_status: 'unreviewed'|'accepted'|'rejected'|'edited'; human_note: string;
+  human_verdict: EvidenceItem['verdict']|null; human_missing_info: string|null;
+  human_question: string|null; reviewed_by: string|null; reviewed_at: string|null;
+  created_at: string;
+};
 export type Database = {
   public: {
     Tables: {
+      evidence_analysis: { Row: EvidenceAnalysis; Insert: never; Update: never; Relationships: [] };
+      evidence_item: {
+        Row: EvidenceItem;
+        Insert: never;
+        Update: Partial<Pick<EvidenceItem,'human_status'|'human_note'|'human_verdict'|'human_missing_info'|'human_question'>>;
+        Relationships: [];
+      };
       candidate_contact_permissions: { Row: ContactPermission; Insert: never; Update: never; Relationships: [] };
       candidate_contact_preferences: { Row: ContactPreferences; Insert: never; Update: never; Relationships: [] };
       candidate_communication_approvals: { Row: CandidateCommunicationApproval; Insert: never; Update: never; Relationships: [] };
