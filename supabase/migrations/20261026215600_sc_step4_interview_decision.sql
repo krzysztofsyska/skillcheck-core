@@ -103,16 +103,18 @@ create function private.track_candidate_assessment_notes()
 returns trigger language plpgsql security definer set search_path = '' as $$
 declare actor uuid := (select auth.uid());
 begin
-  if (tg_op = 'INSERT' and (new.notes is not null or new.guide_question_id is not null))
-     or (tg_op = 'UPDATE' and (new.notes is distinct from old.notes or new.guide_question_id is distinct from old.guide_question_id)) then
-    if actor is null or not private.has_company_access(new.company_id, true) then
-      raise exception 'Human author required for notes' using errcode = '42501';
-    end if;
-    insert into public.candidate_assessment_note_revisions(company_id,recruitment_id,application_id,assessment_id,body,guide_question_id,author_id)
-      values(new.company_id,new.recruitment_id,new.application_id,new.id,new.notes,new.guide_question_id,actor);
+  if tg_op = 'INSERT' then
+    if new.notes is null and new.guide_question_id is null then return new; end if;
+  elsif tg_op = 'UPDATE' then
+    if new.notes is not distinct from old.notes and new.guide_question_id is not distinct from old.guide_question_id then return new; end if;
   end if;
+  if actor is null or not private.has_company_access(new.company_id, true) then
+    raise exception 'Human author required for notes' using errcode = '42501';
+  end if;
+  insert into public.candidate_assessment_note_revisions(company_id,recruitment_id,application_id,assessment_id,body,guide_question_id,author_id)
+    values(new.company_id,new.recruitment_id,new.application_id,new.id,new.notes,new.guide_question_id,actor);
   return new;
-end $$;
+end $;
 revoke all on function private.track_candidate_assessment_notes() from public, anon, authenticated;
 create trigger candidate_assessment_note_history after insert or update on public.candidate_assessments
 for each row execute function private.track_candidate_assessment_notes();
