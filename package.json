@@ -50,7 +50,7 @@
     "test:retention-scheduler-concurrency": "node --test tests/retention-scheduler-concurrency.test.mjs",
     "test:erasure-service": "node --test tests/erasure-service.test.mjs tests/erasure-service-backend.test.mjs",
     "test:competency": "node --test tests/competency-test.test.mjs",
-    "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs"
+    "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs tests/sc19-przelewy24-provider.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
