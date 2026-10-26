@@ -40,8 +40,8 @@ export async function POST(request: Request) {
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const aiKey = process.env.OPENAI_API_KEY;
   if (!url || !serviceKey || !aiKey) return safeError('Moduł analizy wymaga konfiguracji serwera.', 503);
-  // Privileged API credentials never reach a client component. This client is
-  // restricted to two evidence tables; no access to candidate source is needed.
+  // Service-role credentials never reach a client component. They can execute
+  // only narrow evidence RPCs: direct CRUD on public tables stays revoked.
   const admin = createServiceClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const organization_id = route.companyId;
   const material = {
@@ -50,46 +50,35 @@ export async function POST(request: Request) {
     text: prepared.payload.cv_text,
   };
   const snapshot = [{ document_id: material.document_id, version: material.version, text: material.text }];
-  const row = {
-    organization_id, recruitment_id: route.recruitmentId, application_id: route.applicationId,
-    candidate_id: candidateId,
-    position_id: prepared.binding.position_id, document_id: material.document_id,
-    status: 'running', model: EVIDENCE_MODEL, created_by: userId,
-    requirements_snapshot: requirements, materials_snapshot: snapshot,
-    materials_snapshot_hash: snapshotHash(snapshot),
-  };
-  // A crashed request may leave an orphaned running record. A new request may
-  // recover it after the maximum server execution window has elapsed.
-  // Hard quota blocks accidental repeated paid invocations per candidate/day.
-  const since = new Date(Date.now()-24*60*60*1000).toISOString();
-  const daily = await admin.from('evidence_analysis').select('id',{count:'exact',head:true})
-    .eq('organization_id',organization_id).eq('application_id',route.applicationId).gte('created_at',since);
-  if (daily.error) return safeError('Nie można sprawdzić limitu analiz.',503);
-  if ((daily.count ?? 0)>=5) return safeError('Wykorzystano limit 5 analiz w ciągu 24 godzin dla tego zgłoszenia.',429);
-  const active = await admin.from('evidence_analysis').select('id,created_at')
-    .eq('organization_id',organization_id).eq('application_id',route.applicationId)
-    .in('status',['pending','running']).limit(1).maybeSingle();
-  if (active.error) return safeError('Nie można sprawdzić bieżącej analizy.', 503);
-  if (active.data) {
-    if (Date.now() - Date.parse(active.data.created_at) < 120000) {
-      return safeError('Analiza już trwa. Odśwież widok.', 409);
-    }
-    await admin.from('evidence_analysis').update({ status: 'failed', failure_message: 'Przekroczono czas przetwarzania. Możesz ponowić analizę.', finished_at: new Date().toISOString() })
-      .eq('id',active.data.id).eq('organization_id',organization_id).eq('status','running');
+  // Database RPC serializes requests, checks the approved snapshot, quota
+  // (5 analyses/24h) and active jobs in the same transaction.
+  const created = await admin.rpc('begin_evidence_analysis', {
+    p_organization_id: organization_id,
+    p_candidate_id: candidateId,
+    p_position_id: prepared.binding.position_id,
+    p_recruitment_id: route.recruitmentId,
+    p_application_id: route.applicationId,
+    p_document_id: material.document_id,
+    p_model: EVIDENCE_MODEL,
+    p_created_by: userId,
+    p_requirements: requirements,
+    p_materials: snapshot,
+    p_hash: snapshotHash(snapshot),
+  });
+  if (created.error || !created.data) {
+    if (created.error?.code === 'PT429') return safeError('Wykorzystano limit 5 analiz w ciągu 24 godzin dla tego zgłoszenia.', 429);
+    if (created.error?.code === 'PT409' || created.error?.code === '23505') return safeError('Analiza już trwa. Odśwież widok.', 409);
+    return safeError('Nie udało się przygotować analizy. Sprawdź zatwierdzenie CV i konfigurację bazy.', 503);
   }
-  const created = await admin.from('evidence_analysis').insert(row).select('id').single();
-  if (created.error || !created.data) return safeError('Analiza już trwa lub zapis jest niedostępny.', 409);
-  const analysisId: string = created.data.id;
+  const analysisId: string = created.data;
 
   try {
     const items = await analyzeEvidence(requirements, material, aiKey);
-    const stored = await admin.from('evidence_item').insert(items.map(item => ({
-      ...item, organization_id, analysis_id: analysisId,
-    })));
+    const stored = await admin.rpc('complete_evidence_analysis', {
+      p_organization_id: organization_id, p_analysis_id: analysisId,
+      p_items: items,
+    });
     if (stored.error) throw new Error('Nie udało się zapisać macierzy wyników.');
-    const finished = await admin.from('evidence_analysis').update({ status: 'done', finished_at: new Date().toISOString() })
-      .eq('organization_id',organization_id).eq('id',analysisId).eq('status','running').select('id').maybeSingle();
-    if (finished.error || !finished.data) throw new Error('Nie udało się zakończyć analizy.');
     return NextResponse.json({ analysis_id: analysisId, status: 'done' });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Analiza nie została ukończona.';
@@ -97,8 +86,9 @@ export async function POST(request: Request) {
       ? 'Wynik modelu nie przeszedł walidacji danych. Możesz ponowić analizę.'
       : /abort|timeout|timed out/i.test(message) ? 'Upłynął limit czasu analizy. Możesz ponowić.'
       : message;
-    await admin.from('evidence_analysis').update({ status: 'failed', finished_at: new Date().toISOString(), failure_message: readable.slice(0,2000) })
-      .eq('organization_id',organization_id).eq('id',analysisId).eq('status','running');
+    await admin.rpc('fail_evidence_analysis', {
+      p_organization_id: organization_id, p_analysis_id: analysisId, p_message: readable.slice(0,2000),
+    });
     return safeError(readable, 502);
   }
 }
