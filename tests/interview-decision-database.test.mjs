@@ -99,8 +99,9 @@ test('Step 4 SQL end-to-end: multi-tenant stage → interview note → human dec
       [a.company,a.recruitment.id,a.application.id,a.interview.id]), e => e.code === '42501');
     await assert.rejects(db.query('select public.set_application_human_decision($1,$2,$3,$4,$5)',
       [a.company,a.recruitment.id,a.application.id,'closed','Wroga zmiana decyzji w innym tenancie']), e => e.code === '42501');
-    await assert.rejects(db.query('update public.candidate_assessments set notes=$1 where id=$2',
-      ['Wroga notatka', a.application.id]), () => true).catch(() => {});
+    const hostileWrite = await db.query('update public.candidate_assessments set notes=$1 where company_id=$2 returning id',
+      ['Wroga notatka', a.company]);
+    assert.equal(hostileWrite.rows.length, 0);
     await as(viewer);
     await assert.rejects(db.query('select public.set_application_human_decision($1,$2,$3,$4,$5)',
       [a.company,a.recruitment.id,a.application.id,'closed','Viewer nie ma prawa zapisywać decyzji']), e => e.code === '42501');
