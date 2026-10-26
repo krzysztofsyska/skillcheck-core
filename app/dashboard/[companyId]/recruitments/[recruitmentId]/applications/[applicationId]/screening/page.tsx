@@ -7,6 +7,7 @@ import { loadScreeningContext, ScreeningNotFoundError } from '../../../../../../
 import { screeningAiUserEnabled } from '../../../../../../../../lib/screening-dispatch';
 import { ratingLabels, reviewLabels, screeningStatus, screeningPath, isUuid, statusLabels, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
 import { AnalysisControl, RefreshStatus, ReviewControl } from './controls';
+import { EvidenceMatrix } from './matrix';
 import styles from './screening.module.css';
 
 const kinds = { task: 'Zadanie', kpi: 'Miernik sukcesu', competency: 'Kompetencja' };
@@ -28,7 +29,7 @@ export default async function Screening({ params, searchParams }: { params: Prom
   const selectedId = (await searchParams).analysis ?? history.data[0]?.id;
   if (selectedId && !history.data.some(a => a.id === selectedId)) notFound();
   const result = selectedId ? await client.from('screening_analysis_versions')
-    .select('id,analysis_version,execution_status,input_fingerprint,stale_at,input_cv_text_snapshot,latest_review_version,candidate_document_version')
+    .select('id,analysis_version,execution_status,input_fingerprint,stale_at,input_cv_text_snapshot,latest_review_version,candidate_document_version,candidate_document_id,failure_message')
     .eq('company_id', companyId).eq('application_id', route.applicationId).eq('id', selectedId).maybeSingle() : null;
   if (result?.error || (selectedId && !result?.data)) throw new Error('Nie udało się wczytać analizy.');
   const analysis = result?.data ?? null;
@@ -58,7 +59,7 @@ export default async function Screening({ params, searchParams }: { params: Prom
     <h2>Stan analizy</h2>
     <p role="status">{!analysis && !prepared ? 'Materiał wymaga uzupełnienia' : statusLabels[status]}{analysis ? ` · wersja ${analysis.analysis_version}` : ''}</p>
     {stale && <p className="notice">To wynik historyczny lub oparty na nieaktualnym materiale. Nie można zatwierdzić go jako aktualnego.</p>}
-    {status === 'failed' && <p>Nie udało się ukończyć analizy. Możesz ponowić próbę dla tego samego, nadal aktualnego materiału.</p>}
+    {status === 'failed' && <p role="alert">{analysis?.failure_message ?? 'Nie udało się ukończyć analizy.'} Możesz ponowić próbę dla tego samego, nadal aktualnego materiału.</p>}
     <RefreshStatus active={!!analysis && ['pending', 'processing'].includes(analysis.execution_status) && !stale} />
     {canEdit && !historical && status !== 'processing' && <AnalysisControl key={`${analysis?.id ?? 'new'}:${status}`} route={route} requestId={randomUUID()}
       retryId={status === 'failed' ? analysis?.id : undefined} disabled={!enabled || !prepared}
@@ -67,7 +68,10 @@ export default async function Screening({ params, searchParams }: { params: Prom
       <ul>{prepared.payload.criteria.map(c => <li key={c.id}><strong>{kinds[c.kind]}:</strong> {c.text}</li>)}</ul>
       <pre className="cv-text">{prepared.payload.cv_text}</pre>
     </details>}
-    {analysis?.execution_status === 'completed' && <>
+    {analysis?.execution_status === 'completed' && analysis.candidate_document_id && criteria.some(c => c.verdict !== null) && <EvidenceMatrix
+      criteria={criteria} route={route} analysisId={analysis.id} documentId={analysis.candidate_document_id}
+      documentVersion={analysis.candidate_document_version} editable={canEdit && !stale} />}
+    {analysis?.execution_status === 'completed' && !criteria.some(c => c.verdict !== null) && <>
       <h2>Wynik AI — oryginał</h2>
       <p>Oceny odnoszą się do kryteriów stanowiska. Nie stanowią rankingu kandydatów ani automatycznej decyzji o zatrudnieniu.</p>
       {criteria.map(c => { const correction = corrections.get(c.id); return <article className={styles.criterion} key={c.id}>
