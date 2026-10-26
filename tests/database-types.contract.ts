@@ -34,6 +34,12 @@ type RelationshipNames<Name extends TableName> =
     : never;
 
 type ExpectedTables =
+  | "interview_questions"
+  | "interview_question_revisions"
+  | "interview_question_notes"
+  | "interview_note_revisions"
+  | "application_stage_transitions"
+  | "human_candidate_decisions"
   | "evidence_analysis"
   | "evidence_item"
   | "sales_leads"
