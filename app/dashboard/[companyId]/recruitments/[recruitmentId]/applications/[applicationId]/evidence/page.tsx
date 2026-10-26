@@ -11,8 +11,9 @@ type Route = { companyId: string; recruitmentId: string; applicationId: string }
 const statusText = { pending: 'Oczekuje', running: 'W trakcie', done: 'Gotowe', failed: 'Błąd' };
 const reviewText = { unreviewed: 'Niezweryfikowane', accepted: 'Zaakceptowane', rejected: 'Odrzucone przez człowieka', edited: 'Poprawione przez człowieka' };
 
-export default async function EvidencePage({ params }: {params:Promise<Route>}) {
+export default async function EvidencePage({ params, searchParams }: {params:Promise<Route>;searchParams:Promise<{analysis?:string}>}) {
   const route = await params;
+  const selectedAnalysisId = (await searchParams).analysis;
   const { client,canEdit } = await companyAccess(route.companyId);
   const context = await loadScreeningContext(client,route).catch(error => {
     if(error instanceof ScreeningNotFoundError) notFound();
@@ -26,13 +27,15 @@ export default async function EvidencePage({ params }: {params:Promise<Route>}) 
     .eq('organization_id',route.companyId).eq('application_id',route.applicationId)
     .order('created_at',{ascending:false}).limit(10);
   if(history.error) throw new Error('Nie udało się odczytać zestawień. Sprawdź migrację kroku 3.');
-  const analysis = history.data?.[0];
+  if (selectedAnalysisId && !history.data?.some(a=>a.id===selectedAnalysisId)) notFound();
+  const analysis = (selectedAnalysisId ? history.data?.find(a=>a.id===selectedAnalysisId) : history.data?.[0]);
   const results = analysis?.status === 'done'
     ? await client.from('evidence_item').select('*').eq('organization_id',route.companyId)
       .eq('analysis_id',analysis.id).order('created_at',{ascending:true})
     : {data:[],error:null};
   if(results.error) throw new Error('Nie udało się wczytać macierzy dowodów.');
-  const active = analysis?.status === 'pending' || analysis?.status === 'running';
+  const latest = history.data?.[0];
+  const active = latest?.status === 'pending' || latest?.status === 'running';
   const currentRequirements = prepared ? buildEvidenceRequirements(prepared.payload.criteria,context.position) : null;
   const current = !!prepared && !!analysis && analysis.materials_snapshot_hash === snapshotHash([{
     document_id: prepared.binding.document_id,version:prepared.binding.document_version,text:prepared.payload.cv_text,
@@ -50,7 +53,7 @@ export default async function EvidencePage({ params }: {params:Promise<Route>}) 
     <p><Link href={`/dashboard/${route.companyId}/candidates/${context.application.candidate_id}/cv`}>Materiały kandydata</Link>
       {' · '}<Link href={`/dashboard/${route.companyId}/positions/${context.position.id}`}>Wymagania stanowiska</Link></p>
     <h2>Analiza</h2>
-    <p role="status">{analysis ? statusText[analysis.status] : 'Brak analizy'}{analysis && !current ? ' · wynik historyczny (dane zmieniły się)' : ''}</p>
+    <p role="status">{analysis ? statusText[analysis.status] : 'Brak analizy'}{analysis && analysis.id !== latest?.id ? ' · wybrany wynik archiwalny' : ''}{analysis && !current ? ' · wymagania lub materiały uległy zmianie' : ''}</p>
     {analysis?.status === 'failed' && <p role="alert">{analysis.failure_message || 'Analiza nie została ukończona.'} Ponów po sprawdzeniu materiałów.</p>}
     <EvidenceRun route={route} canRun={canEdit && !!prepared && !active} active={!!active}
       disabledReason={!canEdit ? 'Masz dostęp tylko do odczytu.' : reason}/>
@@ -70,7 +73,7 @@ export default async function EvidencePage({ params }: {params:Promise<Route>}) 
       {material && <details id="evidence-source"><summary>Zatwierdzony tekst źródłowy z chwili analizy · CV v{material.version}</summary><pre className="cv-text">{material.text}</pre></details>}
     </>}
     {analysis && history.data && history.data.length > 1 && <details><summary>Historia zestawień ({history.data.length})</summary><ul>{history.data.map(entry=><li key={entry.id}>
-      {new Date(entry.created_at).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw'})} — {statusText[entry.status]} · {entry.model}
+      <Link href={`?analysis=${entry.id}`} aria-current={analysis?.id===entry.id?'page':undefined}>{new Date(entry.created_at).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw'})} — {statusText[entry.status]} · {entry.model}</Link>
     </li>)}</ul></details>}
   </section></main>;
 }
