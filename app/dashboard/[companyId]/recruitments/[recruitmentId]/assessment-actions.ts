@@ -22,7 +22,8 @@ export async function addAssessmentStage(companyId: string, recruitmentId: strin
 }
 
 export async function saveAssessmentProgress(companyId: string, recruitmentId: string, applicationId: string, stageId: string,
-  expectedUpdatedAt: string | null, _state: EditorState, form: FormData): Promise<EditorState> {
+  _state: EditorState, form: FormData): Promise<EditorState> {
+  const expectedUpdatedAt = String(form.get('expectedUpdatedAt') ?? '') || null;
   const { client, canEdit } = await companyAccess(companyId);
   if (!canEdit) return { error: 'Masz dostęp tylko do odczytu.' };
   let values;
