@@ -124,7 +124,7 @@ function QuestionEditor({route,question,canEdit,note,history,first,last}: {
     <h3 className={styles.printOnly}>{text}</h3>
     {canEdit ? <label className={styles.noPrint}>Pytanie
       <textarea rows={3} value={text} maxLength={2000} onChange={e=>setText(e.target.value)}/>
-    </label> : <h3>{question.question_text}</h3>}
+    </label> : <h3 className={styles.noPrint}>{question.question_text}</h3>}
     {canEdit && <div className={styles.controls}>
       <button type="button" disabled={busy||!text.trim()} onClick={()=>modify({action:'question',questionText:text,isActive:true})}>Zapisz pytanie</button>
       <button type="button" disabled={busy||first} onClick={()=>modify({action:'move',direction:'up'})}>↑ Wyżej</button>
@@ -201,6 +201,7 @@ export function InterviewWorkbench({route,analysisId,gaps,questions,notes,noteHi
       </p>)}
     </details>}
 
+    <div className={styles.noPrint}>
     <h2>Ręczne etapy rekrutacji</h2>
     <p>Lista etapów jest konfigurowana w rekrutacji przypisanej do stanowiska. Zmiana etapu wymaga działania rekrutera i zostaje zapisana w historii.</p>
     <p><strong>Aktualny etap:</strong> {stages.find(s=>s.id===currentStage?.stage_id)?.name||'Nieustawiony'}</p>
@@ -238,5 +239,6 @@ export function InterviewWorkbench({route,analysisId,gaps,questions,notes,noteHi
       <p className={styles.metadata}>Autor: {d.decided_by}; {stamp(d.decided_at)}</p>
     </li>)}</ol>}
     {error&&<p role="alert">{error}</p>}
+    </div>
   </div>;
 }
