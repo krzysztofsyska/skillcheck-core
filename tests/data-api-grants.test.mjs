@@ -17,6 +17,11 @@ const readOnly = ['behavior_assessment_entries', 'exercise_definition_entries',
   'recruitment_shortlist_entries', 'candidate_contact_permissions', 'candidate_contact_preferences',
   'candidate_communications', 'candidate_communication_events', 'candidate_communication_approvals'];
 const rpcOnly = ['sales_leads', 'platform_operators'];
+const step4Tables = ['interview_questions', 'interview_question_revisions',
+  'interview_question_notes', 'interview_note_revisions',
+  'application_stage_transitions', 'human_candidate_decisions'];
+const step4Insert = ['interview_questions', 'interview_question_notes',
+  'application_stage_transitions', 'human_candidate_decisions'];
 const views = ['latest_behavior_assessments', 'latest_exercise_definitions', 'latest_exercise_observations'];
 const tables = [...crud, ...readOnly, ...rpcOnly, 'companies', 'candidate_documents'].sort();
 const relations = [...tables, ...views].sort();
@@ -29,6 +34,8 @@ const updates = {
   assessment_stages: ['name', 'description', 'sequence'],
   candidate_assessments: ['status', 'score', 'notes', 'completed_at'], candidate_documents: ['redacted_text'],
   evidence_item: ['human_status','human_note','human_verdict','human_missing_info','human_question'],
+  interview_questions: ['question_text','sort_order','is_active'],
+  interview_question_notes: ['answer_text','observation_text'],
 };
 const documentInsert = ['company_id', 'candidate_id', 'source_text', 'redacted_text'];
 const privileges = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'];
@@ -81,6 +88,8 @@ async function assertApiContract(db) {
   // Earlier isolated fixtures deliberately replay only pre-evidence migrations.
   const expectedRelations = catalog.some(row=>row.relname==='evidence_analysis')
     ? [...relations,'evidence_analysis','evidence_item'].sort() : relations;
+  if (catalog.some(row=>row.relname==='interview_questions')) expectedRelations.push(...step4Tables);
+  expectedRelations.sort();
   assert.deepEqual(catalog.map(r => r.relname), expectedRelations, 'new tables require a reviewed API contract');
   for (const row of catalog) {
     if (row.relkind === 'v') assert.ok(row.reloptions.includes('security_invoker=true'), row.relname);
@@ -89,13 +98,14 @@ async function assertApiContract(db) {
   for (const row of await apiMatrix(db)) {
     const expected = row.rolname === 'authenticated' && (
       (row.privilege === 'SELECT' && !rpcOnly.includes(row.relname)) ||
-      (['INSERT','DELETE'].includes(row.privilege) && crud.includes(row.relname)));
+      ((row.privilege==='INSERT' && step4Insert.includes(row.relname)) ||
+       (['INSERT','DELETE'].includes(row.privilege) && crud.includes(row.relname))));
     assert.equal(row.allowed, expected, JSON.stringify(row));
   }
   for (const row of await columnMatrix(db)) {
     const expected = row.rolname === 'authenticated' && (
       (row.privilege === 'SELECT' && !rpcOnly.includes(row.relname)) ||
-      (row.privilege === 'INSERT' && (crud.includes(row.relname) ||
+      (row.privilege === 'INSERT' && (crud.includes(row.relname) || step4Insert.includes(row.relname) ||
         (row.relname === 'candidate_documents' && documentInsert.includes(row.attname)))) ||
       (row.privilege === 'UPDATE' && (updates[row.relname] ?? []).includes(row.attname)));
     assert.equal(row.allowed, expected, JSON.stringify(row));
