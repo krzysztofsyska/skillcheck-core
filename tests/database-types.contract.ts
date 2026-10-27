@@ -407,9 +407,16 @@ type _BehaviorRpcRating = Expect<Equal<
   Database["public"]["Functions"]["save_behavior_assessment"]["Args"]["new_rating"],
   BehaviorRating
 >>;
+type _ClaimV2Returns = Expect<Equal<
+  Keys<Database["public"]["Functions"]["claim_screening_attempt_v2"]["Returns"][number]>,
+  "analysis_id" | "candidate_document_id" | "attempt_id" | "lease_token" | "lease_expires_at" |
+  "input_fingerprint" | "analysis_contract_hash" | "payload_schema_version" |
+  "result_schema_version" | "prompt_version" | "provider" | "model" |
+  "model_revision" | "input_cv_text_snapshot" | "criteria_snapshot"
+>>;
 type _ClaimReturns = Expect<Equal<
   Keys<Database["public"]["Functions"]["claim_screening_attempt"]["Returns"][number]>,
-  "analysis_id" | "candidate_document_id" | "attempt_id" | "lease_token" | "lease_expires_at" |
+  "analysis_id" | "attempt_id" | "lease_token" | "lease_expires_at" |
   "input_fingerprint" | "analysis_contract_hash" | "payload_schema_version" |
   "result_schema_version" | "prompt_version" | "provider" | "model" |
   "model_revision" | "input_cv_text_snapshot" | "criteria_snapshot"

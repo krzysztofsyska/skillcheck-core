@@ -6,6 +6,7 @@ import {
   verifyScreeningDispatch,
 } from "../../../lib/screening-hmac.ts";
 import { callOpenAiResponses, runScreeningAttempt } from "../../../lib/screening-worker.ts";
+import { screeningClaimRpcName } from "../../../lib/screening-claim-route.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -25,6 +26,14 @@ function workerStore(sql: ReturnType<typeof postgres>) {
     async claim(attemptId: string) {
       return await sql.begin(async tx => {
         await tx.unsafe("set local role screening_worker");
+        const contract = await tx`
+          select public.screening_attempt_result_schema_version(${attemptId}::uuid) as version
+        `;
+        const name = screeningClaimRpcName(Number(contract[0]?.version));
+        if (name === "claim_screening_attempt_v2") {
+          const rows = await tx`select * from public.claim_screening_attempt_v2(${attemptId}::uuid)`;
+          return rows[0] ?? null;
+        }
         const rows = await tx`select * from public.claim_screening_attempt(${attemptId}::uuid)`;
         return rows[0] ?? null;
       });

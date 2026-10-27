@@ -25,7 +25,7 @@ export type ScreeningProviderErrorCode = typeof SCREENING_PROVIDER_ERROR_CODES[n
 
 export type ScreeningWorkerClaim = {
   analysis_id: string;
-  candidate_document_id: string;
+  candidate_document_id?: string | null;
   attempt_id: string;
   lease_token: string;
   lease_expires_at: string;
@@ -344,7 +344,10 @@ export function parseScreeningOpenAiResponse(response: ScreeningOpenAiResponse, 
   }
   return {
     findings: claim.result_schema_version === 2
-      ? (() => { try { return parseEvidenceOutput(parsed, claim); } catch {
+      ? (() => { try {
+        if (!claim.candidate_document_id) throw new Error('Missing reviewed document binding');
+        return parseEvidenceOutput(parsed, { ...claim, candidate_document_id: claim.candidate_document_id });
+      } catch {
         throw new ScreeningProviderError('openai_invalid_output', 'Evidence schema failed validation.', 'criterion_result');
       } })()
       : parseScreeningProviderOutput(parsed, claim),

@@ -600,6 +600,25 @@ export type Database = {
         Args: { target_attempt: string };
         Returns: {
           analysis_id: string;
+          attempt_id: string;
+          lease_token: string;
+          lease_expires_at: string;
+          input_fingerprint: string;
+          analysis_contract_hash: string;
+          payload_schema_version: number;
+          result_schema_version: number;
+          prompt_version: string;
+          provider: string;
+          model: string;
+          model_revision: string | null;
+          input_cv_text_snapshot: string;
+          criteria_snapshot: ScreeningCriterionSnapshot[];
+        }[];
+      };
+      claim_screening_attempt_v2: {
+        Args: { target_attempt: string };
+        Returns: {
+          analysis_id: string;
           candidate_document_id: string;
           attempt_id: string;
           lease_token: string;
@@ -615,6 +634,10 @@ export type Database = {
           input_cv_text_snapshot: string;
           criteria_snapshot: ScreeningCriterionSnapshot[];
         }[];
+      };
+      screening_attempt_result_schema_version: {
+        Args: { target_attempt: string };
+        Returns: number | null;
       };
       start_screening_analysis: {
         Args: {

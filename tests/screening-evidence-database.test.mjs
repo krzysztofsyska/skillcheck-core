@@ -119,7 +119,7 @@ test('Step 3 end-to-end with mocked OpenAI, tenant RLS and human review', async 
     store: {
       async claim(id) {
         await asWorker();
-        return (await db.query('select * from public.claim_screening_attempt($1)', [id])).rows[0];
+        return (await db.query('select * from public.claim_screening_attempt_v2($1)', [id])).rows[0];
       },
       async complete(input) {
         await asWorker();

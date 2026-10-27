@@ -1,7 +1,21 @@
--- SC evidence v2: transactional completion reuses legacy leases/locks and CV validator.
+-- SC evidence v2: create new worker-only claim RPC; v1 remains byte-for-byte unchanged.
+-- Existing objects are extended only by ADD COLUMN in migration 20261026220100.
 begin;
-drop function public.claim_screening_attempt(uuid);
-create function public.claim_screening_attempt(target_attempt uuid)
+-- Only screening_worker may read the contract version and claim a lease.
+-- This is read-only discovery: v1 and v2 claim RPCs remain independent.
+create function public.screening_attempt_result_schema_version(target_attempt uuid)
+returns integer language sql stable security definer set search_path = '' as $$
+  select analysis.result_schema_version
+  from public.screening_analysis_attempts attempt
+  join public.screening_analysis_versions analysis
+    on analysis.company_id = attempt.company_id and analysis.id = attempt.analysis_id
+  where attempt.id = target_attempt;
+$$;
+revoke all on function public.screening_attempt_result_schema_version(uuid)
+ from public, anon, authenticated, screening_worker;
+grant execute on function public.screening_attempt_result_schema_version(uuid) to screening_worker;
+
+create function public.claim_screening_attempt_v2(target_attempt uuid)
 returns table (
   analysis_id uuid,
   candidate_document_id uuid,
@@ -32,6 +46,8 @@ begin
   select * into analysis from public.screening_analysis_versions
     where id = attempt.analysis_id and company_id = attempt.company_id for update;
   if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  if analysis.result_schema_version <> 2 then
+    raise exception 'Evidence schema required' using errcode = '22023'; end if;
   if attempt.status <> 'pending'
     and not (attempt.status = 'processing' and attempt.lease_expires_at <= clock_timestamp())
     then raise exception 'Attempt is not claimable' using errcode = '55000'; end if;
@@ -83,8 +99,9 @@ begin
 end;
 $$;
 
-revoke all on function public.claim_screening_attempt(uuid) from public, anon, authenticated, screening_worker;
-grant execute on function public.claim_screening_attempt(uuid) to screening_worker;
+revoke all on function public.claim_screening_attempt_v2(uuid)
+ from public, anon, authenticated, screening_worker;
+grant execute on function public.claim_screening_attempt_v2(uuid) to screening_worker;
 
 create function public.complete_screening_evidence(
   target_attempt uuid,
