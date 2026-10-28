@@ -1,0 +1,75 @@
+# SC-OPS-PROD-ATTEST: owner production approval bound to the exact PR head SHA.
+# pull_request_target runs this file and tools/production-approval from main;
+# pull request code is never checked out or executed. The result is the commit
+# status "production-approval-attestation" on the PR head SHA. A new push starts
+# a new run and needs a new approval.
+name: Production approval attestation
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: production-approval-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  REPOSITORY: ${{ github.repository }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+
+jobs:
+  pending:
+    name: Production approval / pending
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: tools/production-approval
+      - run: node tools/production-approval/verify-attestation.mjs pending
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  approval:
+    name: Production approval / owner
+    needs: pending
+    runs-on: ubuntu-latest
+    # Required reviewer: the owner. The job runs only after the approval.
+    environment: production-approval
+    permissions: {}
+    steps:
+      - run: echo "Owner approved production for $HEAD_SHA"
+
+  attestation:
+    name: Production approval / attestation
+    needs: [pending, approval]
+    # Always run so that a rejected or cancelled approval writes a failure
+    # status instead of leaving a skipped job.
+    if: always() && needs.pending.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: tools/production-approval
+      - run: node tools/production-approval/verify-attestation.mjs verify
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          APPROVAL_RESULT: ${{ needs.approval.result }}
+          OWNER_LOGIN: krzysztofsyska
+          OWNER_ID: '222297538'
