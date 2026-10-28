@@ -58,7 +58,9 @@ async function assertR7(db, variant = 'legacy') {
 }
 
 async function personalData(db, f) {
+  // Row guards resolve the tenant from the session subject: act as the owner's session.
   await db.query('reset role');
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)", [f.owner]);
   const { rows } = await db.query(`update public.screening_criterion_results r
     set human_note='synthetic reviewer note', human_evidence='[{"start":0,"end":1,"quote":"x"}]'::jsonb,
       missing_info='synthetic missing info', human_status='edited'
@@ -165,4 +167,44 @@ test('R7 refuses unreviewed drift on top of Step 3 and cannot be installed twice
   }
   await apply(db, r7); await assertR7(db);
   await assert.rejects(apply(db, r7), /sc_r7_already_installed/);
+});
+
+const rollback = name => readFile(new URL(`../supabase/rollbacks/${name}`, import.meta.url), 'utf8');
+const r7Down = '20261028120000_sc_step3_erasure_inventory_r7_down.sql';
+const step3Down = ['20261026220200_sc_step3_evidence_worker_down.sql', '20261026220100_sc_step3_evidence_extensions_down.sql'];
+async function runRollback(db, name) {
+  try { await db.query(await rollback(name)); }
+  catch (error) { await db.query('rollback'); throw error; }
+}
+
+test('Rollback R7 -> Step 3 worker -> Step 3 extensions restores the exact R6 state; re-apply is refused', async t => {
+  const env = await installSource(await bootMigrationDatabase(t), 'r4_legacy'), { db, h } = env;
+  await applyMigration(db);
+  await assert.rejects(runRollback(db, r7Down), /sc_r7_not_installed/);
+  for (const name of step3) await apply(db, name);
+  await apply(db, r7); await assertR7(db);
+  const { x, subject } = await ready(env);
+  await personalData(db, subject);
+  await runRollback(db, r7Down);
+  assert.equal(await tableExists(db, 'private.erasure_inventory_baseline_r7'), false);
+  // Intermediate state is fail-closed, never silently permissive.
+  await h.asUser(subject.owner);
+  assert.ok(blockersOf(await x.preview(subject)).includes('schema_dependency_unknown'));
+  await h.asAdmin();
+  for (const name of step3Down) await runRollback(db, name);
+  assert.equal((await db.query("select count(*)::int n from information_schema.columns where table_schema='public' and table_name='screening_criterion_results' and column_name in ('human_note','human_evidence','missing_info','verdict','updated_by')")).rows[0].n, 0);
+  for (const fn of ['public.review_screening_evidence_row', 'public.claim_screening_attempt_v2', 'public.complete_screening_evidence', 'public.screening_attempt_result_schema_version']) {
+    assert.equal((await db.query("select count(*)::int n from pg_proc where oid::regprocedure::text like $1", [`${fn}(%`])).rows[0].n, 0, fn);
+  }
+  await assertR6(db);
+  await h.asUser(subject.owner);
+  assert.equal(blockersOf(await x.preview(subject)).includes('schema_dependency_unknown'), false);
+  assert.equal(blockersOf(await x.scheduleStatus(subject)).includes('schema_dependency_unknown'), false);
+  // Re-applying Step 3 after a rollback yields new column positions (dropped
+  // columns keep their attnum), so the reviewed R7 literal no longer matches:
+  // R7 refuses and erasure stays fail-closed until a new inventory is reviewed.
+  await h.asAdmin();
+  for (const name of step3) await apply(db, name);
+  await assert.rejects(apply(db, r7), /sc_r7_source_schema_unreviewed/);
+  assert.equal(await tableExists(db, 'private.erasure_inventory_baseline_r7'), false);
 });
