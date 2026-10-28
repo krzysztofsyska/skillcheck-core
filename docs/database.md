@@ -19,8 +19,11 @@ baseline wynosi 18 tabel z RLS / 45 polityk / 3 widoki `security_invoker` /
 SC-005 zostało wdrożone produkcyjnie w trybie dark. Migracja
 `20261005000100_screening_worker_claim_payload.sql` rozszerzyła wyłącznie
 wynik `claim_screening_attempt` o niemutowalny payload workera i nie zmieniła
-liczby tabel, RLS ani grantów. Edge Function `screening-worker` jest ACTIVE,
-ale `SCREENING_AI_ENABLED=false`, a klucze OpenAI/HMAC nie są jeszcze ustawione.
+liczby tabel, RLS ani grantów. Edge Function `screening-worker` jest ACTIVE.
+Od 26.10.2026 analiza AI jest włączona na produkcji decyzją właściciela
+(`SCREENING_AI_ENABLED=true` w Vercel i Supabase, klucze OpenAI/HMAC ustawione).
+Limit kredytów SC-019 (M13) nie jest jeszcze zastosowany; do tego czasu koszt
+ogranicza budżet w panelu OpenAI.
 
 ## Model
 
