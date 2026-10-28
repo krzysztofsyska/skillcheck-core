@@ -34,7 +34,7 @@ export async function HomePage() {
               <div className={styles.actions}>
                 <Link href="/kalkulator" className={styles.primary}>Sprawdź kalkulator pakietów</Link>
                 <Link href="/demo" className={styles.secondary}>Zobacz przykład raportu</Link>
-                <Link href="/preselekcja" className={styles.secondary}>Zapytaj o pilotaż PRESELEKCJA</Link>
+                <Link href="/preselekcja" className={styles.secondary}>PRESELEKCJA: 60 CV za 300 zł</Link>
               </div>
               <p className={styles.note}>
                 Kalkulator jest interaktywnym podglądem z orientacyjnymi kwotami. Nie uruchamia płatności ani dostępu do usług. Poniżej sprawdzisz, które funkcje są już dostępne.
