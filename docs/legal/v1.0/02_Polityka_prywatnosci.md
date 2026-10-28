@@ -17,7 +17,7 @@ Dane Kandydatów, które firmy wprowadzają do SkillCheck, przetwarzamy na polec
 # 3. Cele, podstawy i zakres przetwarzania
 
 | Cel | Dane | Podstawa prawna |
-|---|---|---|
+|---------------------------|---------------------------|----------------------------------------|
 | Rejestracja i prowadzenie Konta, świadczenie usług | imię, nazwisko, służbowy e-mail, nazwa firmy, NIP, rola w Koncie, dane logowania | art. 6 ust. 1 lit. b RODO (umowa), a wobec przedstawicieli firm – art. 6 ust. 1 lit. f RODO (nasz uzasadniony interes w wykonaniu umowy z firmą) |
 | Weryfikacja firmy przy aktywacji pakietu FREE i zamówieniach | NIP, nazwa i adres firmy, status VAT | art. 6 ust. 1 lit. f RODO (zapobieganie nadużyciom, weryfikacja kontrahenta) |
 | Zamówienia, płatności, faktury i KSeF | dane z zamówienia, kwota, status płatności, dane do faktury | art. 6 ust. 1 lit. b i c RODO (umowa, obowiązki podatkowe i rachunkowe) |

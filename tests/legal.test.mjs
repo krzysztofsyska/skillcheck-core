@@ -36,6 +36,12 @@ test('regulamin parses ordered lists with sub-points and tables', () => {
   assert.ok(table.rows.length >= 6);
 });
 
+test('effective date replaces the marker without a double full stop', () => {
+  const doc = parseLegalMarkdown('---\ntitle: T\n---\n\nObowiązuje od [DATA PUBLIKACJI].\n\nWersja · [DATA PUBLIKACJI]\n', '28 października 2026 r.');
+  assert.equal(doc.blocks[0].text[0].text, 'Obowiązuje od 28 października 2026 r.');
+  assert.equal(doc.blocks[1].text[0].text, 'Wersja · 28 października 2026 r.');
+});
+
 test('inline parser handles bold and italics only', () => {
   assert.deepEqual(parseInline('a **b** *c* <i>x</i>'), [
     { kind: 'text', text: 'a ' }, { kind: 'strong', text: 'b' }, { kind: 'text', text: ' ' }, { kind: 'em', text: 'c' }, { kind: 'text', text: ' <i>x</i>' },

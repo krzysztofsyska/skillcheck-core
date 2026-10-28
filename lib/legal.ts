@@ -7,7 +7,7 @@ export const LEGAL_VERSION = '1.0';
  * Effective/publication date shown in place of the "[DATA PUBLIKACJI]" marker.
  * Must be set by the owner before promotion to production (P24 verification).
  */
-export const LEGAL_EFFECTIVE_DATE: string | null = null;
+export const LEGAL_EFFECTIVE_DATE: string | null = "28 października 2026 r.";
 
 export const COMPANY = {
   name: 'KTIG CONSULTING spółka z ograniczoną odpowiedzialnością',
@@ -68,7 +68,11 @@ const cells = (line: string) => line.trim().replace(/^\||\|$/g, '').split('|').m
 
 export function parseLegalMarkdown(markdown: string, effectiveDate: string | null = LEGAL_EFFECTIVE_DATE): LegalDoc {
   let text = markdown.replace(/\r\n/g, '\n');
-  if (effectiveDate) text = text.replaceAll('[DATA PUBLIKACJI]', effectiveDate);
+  if (effectiveDate) {
+    // "…od [DATA PUBLIKACJI]." + a date ending in "r." must not produce "r..".
+    if (effectiveDate.endsWith('.')) text = text.replaceAll('[DATA PUBLIKACJI].', effectiveDate);
+    text = text.replaceAll('[DATA PUBLIKACJI]', effectiveDate);
+  }
   let title = '';
   const front = /^---\n([\s\S]*?)\n---\n/.exec(text);
   if (front) {

@@ -63,7 +63,7 @@ Podmiot przetwarzający stosuje w szczególności: uwierzytelnianie Użytkownik�
 # § 10. Dalsze podmioty przetwarzające
 
 | Podmiot | Zakres | Lokalizacja / transfer |
-|---|---|---|
+|--------------------|-------------------------------|-------------------------------|
 | Supabase Inc. | baza danych, logowanie, kopie zapasowe | baza w UE; dostęp serwisowy możliwy z USA – SCC |
 | Vercel Inc. | hosting i wykonywanie aplikacji, logi | UE/USA – DPF lub SCC |
 | OpenAI Ireland Ltd | analiza AI zredagowanego tekstu CV i wymagań stanowiska | dalsze przetwarzanie możliwe w USA – DPF lub SCC; dane API nie są używane do trenowania modeli |
