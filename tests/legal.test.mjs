@@ -19,6 +19,14 @@ test('every published legal document exists, parses and has no draft markers', (
   }
 });
 
+test('published documents carry the effective date 29.10.2026 and no date marker', () => {
+  for (const doc of ['01_Regulamin_SkillCheck.md', '02_Polityka_prywatnosci.md', '03_Umowa_powierzenia_DPA.md', '05_AI_i_nadzor_czlowieka.md']) {
+    const source = readFileSync(new URL(doc, dir), 'utf8');
+    assert.doesNotMatch(source, /\[DATA PUBLIKACJI\]/, doc);
+    assert.ok(source.includes('29.10.2026'), doc);
+  }
+});
+
 test('company identifiers are identical across documents', () => {
   for (const doc of ['01_Regulamin_SkillCheck.md', '02_Polityka_prywatnosci.md', '03_Umowa_powierzenia_DPA.md']) {
     const source = readFileSync(new URL(doc, dir), 'utf8');

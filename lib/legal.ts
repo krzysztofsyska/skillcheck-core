@@ -7,7 +7,7 @@ export const LEGAL_VERSION = '1.0';
  * Effective/publication date shown in place of the "[DATA PUBLIKACJI]" marker.
  * Must be set by the owner before promotion to production (P24 verification).
  */
-export const LEGAL_EFFECTIVE_DATE: string | null = "28 października 2026 r.";
+export const LEGAL_EFFECTIVE_DATE: string | null = "29.10.2026";
 
 export const COMPANY = {
   name: 'KTIG CONSULTING spółka z ograniczoną odpowiedzialnością',

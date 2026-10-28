@@ -2,7 +2,7 @@
 title: Umowa powierzenia przetwarzania danych osobowych (DPA)
 ---
 
-Załącznik nr 1 do Regulaminu świadczenia usług SkillCheck · Wersja 1.0 · obowiązuje od [DATA PUBLIKACJI]
+Załącznik nr 1 do Regulaminu świadczenia usług SkillCheck · Wersja 1.0 · obowiązuje od 29.10.2026
 
 # § 1. Strony i zawarcie
 
