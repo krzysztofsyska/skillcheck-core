@@ -2,7 +2,7 @@
 title: Regulamin świadczenia usług SkillCheck
 ---
 
-Wersja 1.0 · obowiązuje od [DATA PUBLIKACJI]
+Wersja 1.0 · obowiązuje od 29.10.2026
 
 # § 1. Usługodawca i kontakt
 
@@ -100,4 +100,4 @@ Do korzystania z Serwisu potrzebne są: urządzenie z dostępem do Internetu, ak
 
 1. Usługodawca może zmienić Regulamin z ważnych przyczyn (zmiana przepisów, zmiana zakresu usług, względy bezpieczeństwa). O zmianie Klient zostanie poinformowany e-mailem i w Serwisie co najmniej 14 dni przed jej wejściem w życie. Zmiany nie dotyczą zamówień złożonych przed ich wejściem w życie. Klient, który nie akceptuje zmian, może rozwiązać umowę o prowadzenie Konta przed ich wejściem w życie.
 2. W sprawach nieuregulowanych stosuje się prawo polskie. Spory z Klientami niebędącymi Przedsiębiorcami na prawach konsumenta rozstrzyga sąd właściwy dla siedziby Usługodawcy.
-3. Regulamin obowiązuje od [DATA PUBLIKACJI].
+3. Regulamin obowiązuje od 29.10.2026.
