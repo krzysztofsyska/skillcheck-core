@@ -127,6 +127,18 @@ Production is a separate decision.
 - external candidate contact
 - billing/charge actions
 
+## Production access rules for agent sessions
+
+These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to its MCP connections and tokens.
+
+1. Production migrations run only through the `db-migrate-production` workflow in the `production-approval` environment, after an owner approval bound to the exact release SHA and the exact list of migrations. Migrations are applied one by one in manifest order, never with `supabase db push`. The ledger records `statements` and the file hash for every migration (`statements = NULL` is not allowed). Production database credentials exist only as secrets of that environment. That workflow does not exist yet; until it does, production migrations are not run from agent sessions.
+2. The production Supabase project (`wsvjawuikxfzjyivxgsu`) is reachable from agent sessions only through Supabase MCP with `read_only=true` and `project_ref=wsvjawuikxfzjyivxgsu`. Write-capable Supabase MCP is allowed only for development projects or branches.
+3. Agents do not change Vercel Production environment variables, secrets, aliases, domains, deployment protection or shareable/bypass links. Only the owner does, or a pipeline after an approval. Tools that create share links as a side effect (for example fetching a protected deployment URL through Vercel MCP) are not used against production.
+4. Any production change made outside the pipeline is an incident, not a missing record. It is reported in an issue with SHA, time, actor and scope.
+5. Agent sessions never use the owner's GitHub token or OAuth identity. Writes (commits, pushes, PRs, comments) use only the `skillcheck-agent-ks[bot]` GitHub App token. Until the separate agent identity of ruleset variant (a) is in place, agents do not approve environments or pull requests.
+
+The required status `production-approval-attestation` (`.github/workflows/production-approval-attestation.yml`) passes only after the owner approves the `production-approval` environment for the exact PR head SHA. It protects `main` only while rule 5 holds: an environment can also be approved through the API with the owner's token.
+
 ## Agent controller
 
 SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. An integration merge is authorized by verified CI plus independent review (not PR prose); production approval remains a separate owner-only GitHub Environment approval. Do not enable the controller, merge, or deploy from a task implementation.

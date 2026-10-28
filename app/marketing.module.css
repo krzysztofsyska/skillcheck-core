@@ -433,7 +433,7 @@
   padding: 40px 0 48px;
 }
 
-.page a.footerBrand {
+.footer a.footerBrand {
   color: #fff;
   font-size: 1.15rem;
   font-weight: 800;
@@ -453,7 +453,20 @@
   margin-top: 18px;
 }
 
-.page .footerNav a {
+.footerCompany {
+  margin-top: 20px;
+  font-style: normal;
+  font-size: .92rem;
+  line-height: 1.6;
+  color: #d5deea;
+  overflow-wrap: anywhere;
+}
+
+.footer .footerCompany a {
+  color: #fff;
+}
+
+.footer .footerNav a {
   color: #fff;
   font-weight: 700;
   text-decoration: underline;

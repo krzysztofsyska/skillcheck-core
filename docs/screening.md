@@ -51,11 +51,12 @@ Migracja została uruchomiona na produkcyjnym Supabase 2026-10-04.
 ## Worker AI przygotowany w SC-005
 
 Kod workera i dispatcher są w repozytorium, a Edge Function `screening-worker`
-jest wdrożona produkcyjnie jako ACTIVE. Flaga `SCREENING_AI_ENABLED=false`,
-więc UI nadal nie uruchamia analizy. Migracja
+jest wdrożona produkcyjnie jako ACTIVE. Migracja
 `20261005000100_screening_worker_claim_payload.sql` jest zastosowana do
-produkcji. `OPENAI_API_KEY` i `SCREENING_WORKER_DISPATCH_SECRET` nie są jeszcze
-ustawione.
+produkcji. Od 26.10.2026 analiza AI jest włączona decyzją właściciela:
+`SCREENING_AI_ENABLED=true` w Vercel i Supabase, `OPENAI_API_KEY` i
+`SCREENING_WORKER_DISPATCH_SECRET` ustawione. Nie zależy to od M13; do czasu
+limitu kredytów SC-019 koszt ogranicza budżet w panelu OpenAI.
 
 - Edge Function `screening-worker` ma `verify_jwt = false` i ufa wyłącznie HMAC
   `x-skillcheck-timestamp` / `x-skillcheck-signature`.
