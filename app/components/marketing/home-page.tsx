@@ -2,6 +2,7 @@ import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { loadSc19PackageSizes, loadSc19PublicOfferSizes } from "../../../lib/sc19-package-sizes";
 import { createClient } from "../../../lib/supabase/server";
+import { isSc19CatalogEnabled, preselekcjaAnalyses, preselekcjaPrice } from "./preselekcja-offer";
 import { capabilities, faq, steps, availabilityNote } from "./content";
 import { PackageComparison } from "./package-comparison";
 import { SiteFooter } from "./site-footer";
@@ -15,11 +16,12 @@ const statusClass = {
 } as const;
 
 export async function HomePage() {
-  const catalogEnabled = process.env.SC19_PACKAGES_ENABLED === "true";
+  const catalogEnabled = isSc19CatalogEnabled();
   const sizes = await loadSc19PublicOfferSizes(
     catalogEnabled,
     async () => loadSc19PackageSizes(await createClient()),
   );
+  const preselekcja = preselekcjaAnalyses(catalogEnabled, sizes);
   return (
     <main className={styles.page}>
       <SiteHeader />
@@ -35,7 +37,7 @@ export async function HomePage() {
               <div className={styles.actions}>
                 <Link href="/kalkulator" className={styles.primary}>Sprawdź kalkulator pakietów</Link>
                 <Link href="/demo" className={styles.secondary}>Zobacz przykład raportu</Link>
-                <Link href="/preselekcja" className={styles.secondary}>PRESELEKCJA: 60 CV za 300 zł</Link>
+                <Link href="/preselekcja" className={styles.secondary}>{preselekcja ? `PRESELEKCJA: ${preselekcja} CV za ${preselekcjaPrice}` : "Oferta PRESELEKCJA"}</Link>
               </div>
               <p className={styles.note}>
                 Kalkulator jest interaktywnym podglądem z orientacyjnymi kwotami. Nie uruchamia płatności ani dostępu do usług. Poniżej sprawdzisz, które funkcje są już dostępne.

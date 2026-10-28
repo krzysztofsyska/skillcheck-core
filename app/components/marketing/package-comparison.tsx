@@ -1,13 +1,14 @@
 import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { sc19OfferScopes, sc19PolicyPendingCell, sc19PolicyPendingScope, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
-import { preselekcjaOffer, preselekcjaPrice, preselekcjaScope } from "./preselekcja-offer";
+import { preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
 
 export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean }) {
   const offer = sc19OfferScopes(sizes);
   // Live catalog wins when enabled; an enabled but failing catalog shows no number.
   // With the catalog off, the owner-approved PRESELEKCJA offer is shown.
-  const preselectionCount = sizes ? offer.preselectionScope : catalogEnabled ? null : preselekcjaScope;
+  const analyses = preselekcjaAnalyses(catalogEnabled, sizes);
+  const preselectionCount = analyses === null ? null : `${analyses} analiz CV`;
   const validity = `ważne ${preselekcjaOffer.validityMonths} miesiące`;
   const preselectionNote = preselectionCount
     ? `PRESELEKCJA: ${preselectionCount} za ${preselekcjaPrice}, ${validity} od przyznania.`
@@ -20,7 +21,7 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
   ];
   const rows = [
     ["Konto firmy i profil stanowiska","Tak","Tak","Tak","Tak"],
-    ["Analizy CV", offer.freeAnalyses, sizes ? offer.preselectionAnalyses : catalogEnabled ? sc19PolicyPendingCell : String(preselekcjaOffer.analyses), "Według polityki", "Według polityki"],
+    ["Analizy CV", offer.freeAnalyses, analyses === null ? sc19PolicyPendingCell : String(analyses), "Według polityki", "Według polityki"],
     ["Pseudonimizacja i ocena dopasowania","Tak","Tak","Tak","Tak"],
     ["Chatbot informacyjny","Tak","Tak","Tak","Tak"],
     ["Shortlista / raport preselekcji","Podstawowe","Według oferty","5–10 kandydatów","5–10 kandydatów"],

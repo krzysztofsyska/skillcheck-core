@@ -149,11 +149,16 @@ test('public offer and demo pages respond without an account', async (t) => {
   const offer = lines.find(line => line.includes('name:"PRESELEKCJA"'));
   assert.ok(offer, 'PRESELEKCJA offer defined');
   assert.match(offer, /scope:`\$\{preselectionCount \?\? sc19PolicyPendingScope\}/);
-  assert.match(comparison, /sizes \? offer\.preselectionScope : catalogEnabled \? null : preselekcjaScope/);
+  assert.match(comparison, /preselekcjaAnalyses\(catalogEnabled, sizes\)/);
+  const offerSource = readFileSync(new URL('../app/components/marketing/preselekcja-offer.ts', import.meta.url), 'utf8');
+  assert.match(offerSource, /if \(sizes\) return sizes\.PRESELEKCJA;\s*return catalogEnabled \? null : preselekcjaOffer\.analyses;/, 'live catalog wins; enabled failure shows no number');
+  // The static calculator cannot read the catalog: keep its package size and net price equal to the approved offer.
+  assert.equal(calculator.match(/PRE_PACKAGE_CV=(\d+);/)?.[1], offerSource.match(/analyses: (\d+),/)?.[1]);
+  assert.equal(calculator.match(/PRE_NET_CENTS=(\d+);/)?.[1], offerSource.match(/netPln: "(\d+),(\d+)"/)?.slice(1).join(''));
   assert.doesNotMatch(offer, /60 analiz CV|Shortlista 5–10 kandydatów/);
   const cvRow = lines.find(line => line.trimStart().startsWith('["Analizy CV"'));
   const shortlistRow = lines.find(line => line.trimStart().startsWith('["Shortlista \/ raport preselekcji"'));
-  assert.ok(cvRow?.includes('offer.preselectionAnalyses') && cvRow.includes('String(preselekcjaOffer.analyses)'));
+  assert.ok(cvRow?.includes('analyses === null ? sc19PolicyPendingCell : String(analyses)'));
   assert.ok(shortlistRow?.includes('"Według oferty"'));
 
   const demoResponse = await fetch(`${base}/demo`, { redirect: 'manual' });
