@@ -15,8 +15,9 @@ const statusClass = {
 } as const;
 
 export async function HomePage() {
+  const catalogEnabled = process.env.SC19_PACKAGES_ENABLED === "true";
   const sizes = await loadSc19PublicOfferSizes(
-    process.env.SC19_PACKAGES_ENABLED === "true",
+    catalogEnabled,
     async () => loadSc19PackageSizes(await createClient()),
   );
   return (
@@ -114,7 +115,7 @@ export async function HomePage() {
             <p className={styles.kicker}>Od preselekcji do pogłębionej weryfikacji</p>
             <h2 id="pkg-title">Cztery poziomy. Jedna platforma.</h2>
             <p className={styles.intro}>Wybierz zakres odpowiadający potrzebom Twojej rekrutacji. Poniżej przedstawiamy planowaną ofertę.</p>
-            <PackageComparison sizes={sizes} />
+            <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} />
           </div>
         </section>
 

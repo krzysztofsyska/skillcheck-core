@@ -148,11 +148,12 @@ test('public offer and demo pages respond without an account', async (t) => {
   const lines = comparison.split('\n');
   const offer = lines.find(line => line.includes('name:"PRESELEKCJA"'));
   assert.ok(offer, 'PRESELEKCJA offer defined');
-  assert.match(offer, /scope:`\$\{preselekcjaScope\}/);
+  assert.match(offer, /scope:`\$\{preselectionCount \?\? sc19PolicyPendingScope\}/);
+  assert.match(comparison, /sizes \? offer\.preselectionScope : catalogEnabled \? null : preselekcjaScope/);
   assert.doesNotMatch(offer, /60 analiz CV|Shortlista 5–10 kandydatów/);
   const cvRow = lines.find(line => line.trimStart().startsWith('["Analizy CV"'));
   const shortlistRow = lines.find(line => line.trimStart().startsWith('["Shortlista \/ raport preselekcji"'));
-  assert.ok(cvRow?.includes('String(preselekcjaOffer.analyses)'));
+  assert.ok(cvRow?.includes('offer.preselectionAnalyses') && cvRow.includes('String(preselekcjaOffer.analyses)'));
   assert.ok(shortlistRow?.includes('"Według oferty"'));
 
   const demoResponse = await fetch(`${base}/demo`, { redirect: 'manual' });
