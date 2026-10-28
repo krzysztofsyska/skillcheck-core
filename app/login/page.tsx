@@ -2,6 +2,7 @@ import Link from "next/link";
 import { login } from "../auth/actions";
 import { SubmitButton } from "../components/submit-button";
 import { LoginPassword } from "../components/login-password";
+import { SiteFooter } from "../components/marketing/site-footer";
 const messages: Record<string, string> = {
   invalid: "Podaj poprawny e-mail i hasło.",
   failed: "Nie udało się zalogować. Sprawdź dane i potwierdzenie adresu e-mail lub spróbuj ponownie za chwilę.",
@@ -10,7 +11,7 @@ const messages: Record<string, string> = {
 };
 export default async function Login({ searchParams }: { searchParams: Promise<{ message?: string }> }) {
   const { message } = await searchParams;
-  return <main><section className="auth"><Link href="/" className="eyebrow">SKILLCHECK</Link><h1>Witaj ponownie</h1>
+  return <><main><section className="auth"><Link href="/" className="eyebrow">SKILLCHECK</Link><h1>Witaj ponownie</h1>
     <p>Zaloguj się do swojej firmy.</p>
     {message && messages[message] && <p role="status" className="notice">{messages[message]}</p>}
     <form action={login}>
@@ -18,5 +19,5 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
       <LoginPassword />
       <SubmitButton>Zaloguj się</SubmitButton>
     </form><p><Link href="/forgot-password">Nie pamiętasz hasła?</Link></p><p>Nie masz konta? <Link href="/register">Utwórz konto</Link></p>
-  </section></main>;
+  </section></main><SiteFooter /></>;
 }

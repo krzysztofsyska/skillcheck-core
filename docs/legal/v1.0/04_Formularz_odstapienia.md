@@ -1,0 +1,29 @@
+---
+title: Wzór formularza odstąpienia od umowy
+---
+
+Załącznik nr 2 do Regulaminu świadczenia usług SkillCheck · Wersja 1.0
+
+*Formularz przeznaczony jest dla przedsiębiorcy będącego osobą fizyczną, któremu przysługuje prawo odstąpienia na zasadach § 11 Regulaminu. Formularz należy wypełnić i odesłać tylko w przypadku chęci odstąpienia od umowy.*
+
+**Adresat:** KTIG CONSULTING spółka z ograniczoną odpowiedzialnością, ul. Michała Kajki 10–12, 10-547 Olsztyn, e-mail: pomoc@skillcheck.pl
+
+Ja, niżej podpisany/a, niniejszym informuję o moim odstąpieniu od umowy o świadczenie następującej usługi:
+
+Nazwa pakietu: ……………………………………………………
+
+Numer zamówienia: ……………………………………………………
+
+Data zawarcia umowy: ……………………………………………………
+
+Imię i nazwisko: ……………………………………………………
+
+Nazwa firmy i NIP: ……………………………………………………
+
+Adres: ……………………………………………………
+
+Adres e-mail użyty przy zamówieniu: ……………………………………………………
+
+Data: ……………………
+
+Podpis (tylko w przypadku przesłania formularza w wersji papierowej): ……………………

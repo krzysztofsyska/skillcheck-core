@@ -35,6 +35,7 @@ jobs:
       - run: node --test tests/release-promotion-manifest.test.mjs
       - run: npm run test:fakturownia
       - run: npm run typecheck
+      - run: npm run test:legal
       - run: npm run test:db
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
