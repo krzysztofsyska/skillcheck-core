@@ -453,6 +453,19 @@
   margin-top: 18px;
 }
 
+.footerCompany {
+  margin-top: 20px;
+  font-style: normal;
+  font-size: .92rem;
+  line-height: 1.6;
+  color: #d5deea;
+  overflow-wrap: anywhere;
+}
+
+.page .footerCompany a {
+  color: #fff;
+}
+
 .page .footerNav a {
   color: #fff;
   font-weight: 700;
