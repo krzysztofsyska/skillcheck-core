@@ -5,7 +5,7 @@ import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture
 import { lifecycleHarness } from './helpers/erasure-lifecycle-fixture.mjs';
 import { retentionHarness } from './helpers/retention-scheduler-fixture.mjs';
 import {
-  accountingSnapshot, accountingTables, applyMigration, assertR6, blockersOf,
+  accountingSnapshot, accountingTables, applyMigration, assertCurrentInventory, assertR6, blockersOf,
   bootMigrationDatabase, catalogSnapshot, installSource, paymentHarness, paymentUsers,
   seedCreditData, seedHistoricalOrders, seedSyntheticPolicy, sourceStates,
 } from './helpers/sc19-migration-fixture.mjs';
@@ -69,7 +69,7 @@ for (const state of sourceStates) test(`SC-019 migration accepts the pinned ${st
 test('SC-019 migration is exercised by the complete current migration chain', async t => {
   const env = await bootMigrationDatabase(t);
   await setupRankingDatabase(env.db, { throughMigration: null });
-  await assertR6(env.db);
+  await assertCurrentInventory(env.db);
   await assert.rejects(env.db.query("update private.erasure_inventory_baseline_r6 set schema_signature=repeat('a',64)"), /immutable/i);
   for (const table of accountingTables) {
     assert.equal((await env.db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, 'Fresh install creates no policy/sales/approval/balance');
