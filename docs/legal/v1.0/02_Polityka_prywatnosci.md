@@ -2,7 +2,7 @@
 title: Polityka prywatności SkillCheck
 ---
 
-Wersja 1.0 · obowiązuje od [DATA PUBLIKACJI]
+Wersja 1.0 · obowiązuje od 29.10.2026
 
 # 1. Administrator
 

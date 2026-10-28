@@ -2,7 +2,7 @@
 title: AI i nadzór człowieka w SkillCheck
 ---
 
-Wersja 1.0 · [DATA PUBLIKACJI]
+Wersja 1.0 · 29.10.2026
 
 # Do czego służy AI w SkillCheck
 
