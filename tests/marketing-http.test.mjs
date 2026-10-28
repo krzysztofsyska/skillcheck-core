@@ -46,6 +46,10 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Podobne CV\. Różni ludzie\. Zupełnie inne wyniki w pracy\./);
   assert.match(home, /Cztery poziomy\. Jedna platforma\./);
   assert.match(home, /Cena robocza z wizualizacji/);
+  assert.match(home, /300 zł brutto/);
+  assert.equal(home.includes('Po wycenie'), false);
+  assert.equal(home.includes('To koncepcja oferty do oceny'), false);
+  assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 3);
   assert.match(home, /Liczba analiz CV według zatwierdzonej polityki/);
   assert.equal(home.includes('5 analiz CV'), false);
   assert.equal(home.includes('60 analiz CV'), false);
@@ -99,6 +103,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   const calculator = await calculatorResponse.text();
   assert.match(calculator, /Interaktywny podgląd koncepcji/);
   assert.match(calculator, /data-pack="pre"/);
+  assert.match(calculator, /data-package-price="pre">300 zł</);
+  assert.match(calculator, /pre:30000,/);
+  assert.equal(calculator.includes('369'), false);
   assert.match(calculator, /data-pack="verify"/);
   assert.match(calculator, /id="volumeSlider"/);
   assert.match(calculator, /Kup teraz · podgląd/);

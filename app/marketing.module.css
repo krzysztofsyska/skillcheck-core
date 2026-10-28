@@ -433,7 +433,7 @@
   padding: 40px 0 48px;
 }
 
-.page a.footerBrand {
+.footer a.footerBrand {
   color: #fff;
   font-size: 1.15rem;
   font-weight: 800;
@@ -462,11 +462,11 @@
   overflow-wrap: anywhere;
 }
 
-.page .footerCompany a {
+.footer .footerCompany a {
   color: #fff;
 }
 
-.page .footerNav a {
+.footer .footerNav a {
   color: #fff;
   font-weight: 700;
   text-decoration: underline;
