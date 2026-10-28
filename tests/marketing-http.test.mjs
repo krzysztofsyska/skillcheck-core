@@ -46,6 +46,10 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Podobne CV\. Różni ludzie\. Zupełnie inne wyniki w pracy\./);
   assert.match(home, /Cztery poziomy\. Jedna platforma\./);
   assert.match(home, /Cena robocza z wizualizacji/);
+  assert.match(home, /300 zł brutto/);
+  assert.equal(home.includes('Po wycenie'), false);
+  assert.equal(home.includes('To koncepcja oferty do oceny'), false);
+  assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 3);
   assert.match(home, /Liczba analiz CV według zatwierdzonej polityki/);
   assert.equal(home.includes('5 analiz CV'), false);
   assert.equal(home.includes('60 analiz CV'), false);
@@ -58,6 +62,29 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(home.includes('<form'), false);
   assert.equal(home.includes('Zapłać'), false);
   assert.equal(home.includes('Aktywuj pakiet'), false);
+
+  // SC-LEGAL-001: company data and legal documents required for Przelewy24 shop verification.
+  for (const text of ['NIP 7394002294', 'KRS 0001110252', 'REGON 528903093', '+48 730 266 909']) assert.ok(home.includes(text), `footer ${text}`);
+  for (const href of ['/regulamin', '/polityka-prywatnosci', '/ai']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
+  for (const [path, heading, marker, docx] of [
+    ['/regulamin', 'Regulamin świadczenia usług SkillCheck', 'PayPro S.A. Agent Rozliczeniowy', '/legal/01_Regulamin_SkillCheck_v1.0.docx'],
+    ['/polityka-prywatnosci', 'Polityka prywatności SkillCheck', 'Wykazu podatników VAT', '/legal/02_Polityka_prywatnosci_v1.0.docx'],
+    ['/regulamin/umowa-powierzenia', 'Umowa powierzenia przetwarzania danych osobowych (DPA)', 'art. 28 ust. 3 RODO', '/legal/03_Umowa_powierzenia_DPA_v1.0.docx'],
+    ['/regulamin/formularz-odstapienia', 'Wzór formularza odstąpienia od umowy', 'informuję o moim odstąpieniu', '/legal/04_Formularz_odstapienia_v1.0.docx'],
+    ['/ai', 'AI i nadzór człowieka w SkillCheck', 'Decyzję podejmuje człowiek', '/legal/05_AI_i_nadzor_czlowieka_v1.0.docx'],
+  ]) {
+    const response = await fetch(`${base}${path}`, { redirect: 'manual' });
+    assert.equal(response.status, 200, path);
+    const html = await response.text();
+    assert.ok(html.includes(`<h1>${heading}</h1>`), `${path} heading`);
+    assert.ok(html.includes(marker), `${path} content`);
+    assert.ok(html.includes('NIP 7394002294'), `${path} footer`);
+    assert.equal(html.includes('PROJEKT'), false, `${path} has no draft marker`);
+    assert.equal(html.includes('NIE PUBLIKOWAĆ'), false, `${path} has no draft marker`);
+    assert.ok(hrefs(html).includes(docx), `${path} docx link`);
+    const file = await fetch(`${base}${docx}`);
+    assert.equal(file.status, 200, docx);
+  }
   assert.equal(home.includes('Kup teraz'), false);
   assert.equal(home.includes('127.0.0.1:9'), false);
 
@@ -76,6 +103,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   const calculator = await calculatorResponse.text();
   assert.match(calculator, /Interaktywny podgląd koncepcji/);
   assert.match(calculator, /data-pack="pre"/);
+  assert.match(calculator, /data-package-price="pre">300 zł</);
+  assert.match(calculator, /pre:30000,/);
+  assert.equal(calculator.includes('369'), false);
   assert.match(calculator, /data-pack="verify"/);
   assert.match(calculator, /id="volumeSlider"/);
   assert.match(calculator, /Kup teraz · podgląd/);
