@@ -9,6 +9,9 @@ on:
       - 'docs/sc19-migrations*.md'
       - 'lib/sc19-payment*.ts'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/sc-step3-erasure-r7.test.mjs'
+      - 'tests/sc-step3-evidence-worker.test.mjs'
+      - 'supabase/rollbacks/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
@@ -25,6 +28,9 @@ on:
     paths:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/sc-step3-erasure-r7.test.mjs'
+      - 'tests/sc-step3-evidence-worker.test.mjs'
+      - 'supabase/rollbacks/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
@@ -97,6 +103,7 @@ jobs:
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
             tests/sc-019-migrations-mvp-e2e.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
+            tests/sc-step3-erasure-r7.test.mjs tests/sc-step3-evidence-worker.test.mjs \
             > sc19-migrations.log 2>&1
           test_result=$?
           tail -n 250 sc19-migrations.log

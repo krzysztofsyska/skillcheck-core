@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { createRankingHarness, users } from './screening-ranking-fixture.mjs';
@@ -163,6 +163,34 @@ export async function assertR6(db, variant = 'legacy') {
   assert.deepEqual((await db.query(`select o.id from private.sc19_payment_orders o
     left join private.sc19_payment_requests r on r.company_id=o.company_id and r.request_id=o.request_id
     where r.order_id is distinct from o.id`)).rows, []);
+}
+
+// Full-chain checks: M13's catalog manifest describes the chain ending at M13.
+// Reviewed migrations ordered after it must leave the live schema exactly equal
+// to the newest immutable erasure inventory baseline (R6, or a later revision).
+export async function assertCurrentInventory(db, variant = 'legacy') {
+  const later = (await readdir(new URL('../../supabase/migrations/', import.meta.url)))
+    .filter(name => name.endsWith('.sql') && name > migrationFile);
+  if (!later.length) return assertR6(db, variant);
+  await db.query('reset role');
+  const baselines = (await db.query(`select c.relname name, substring(c.relname from 'r([0-9]+)$')::int revision
+    from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='private' and c.relname ~ '^erasure_inventory_baseline_r[0-9]+$' order by 2 desc`)).rows;
+  assert.ok(baselines.length && baselines[0].revision >= 6, 'R6 or a later inventory revision is installed');
+  const latest = baselines[0];
+  const row = (await db.query(`select schema_signature,known_tables,private.erasure_schema_signature() actual
+    from private.${latest.name} where singleton`)).rows[0];
+  assert.equal(row.actual, row.schema_signature, `Live schema matches ${latest.name}`);
+  const tables = (await db.query(`select n.nspname||'.'||c.relname name from pg_class c
+    join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','private')
+    and c.relkind in ('r','p','f') order by (n.nspname||'.'||c.relname) collate "C"`)).rows.map(r => r.name);
+  assert.deepEqual(tables, [...row.known_tables].sort(), `${latest.name} is the complete relation allowlist`);
+  const stale = Array.from({ length: latest.revision - 4 }, (_, i) => `erasure_inventory_baseline_r${i + 4}`).join('|');
+  assert.deepEqual((await db.query(`select proname from pg_proc where prosrc ~ $1
+    and pronamespace in ('public'::regnamespace,'private'::regnamespace)`, [`(${stale})([^0-9]|$)`])).rows, []);
+  for (const name of ['preview_candidate_erasure', 'prepare_erasure_purge_manifest', 'authorize_retention_suggestion', 'get_retention_schedule']) {
+    assert.equal((await db.query('select count(*)::int n from pg_proc where proname=$1 and strpos(prosrc,$2)>0', [name, latest.name])).rows[0].n, 1, name);
+  }
 }
 
 export async function accountingSnapshot(db) {
