@@ -1,18 +1,27 @@
 import Link from "next/link";
 import styles from "../../marketing.module.css";
-import { sc19OfferScopes, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
+import { sc19OfferScopes, sc19PolicyPendingCell, sc19PolicyPendingScope, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
+import { preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
 
-export function PackageComparison({ sizes }: { sizes: Sc19PackageSizes | null }) {
+export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean }) {
   const offer = sc19OfferScopes(sizes);
+  // Live catalog wins when enabled; an enabled but failing catalog shows no number.
+  // With the catalog off, the owner-approved PRESELEKCJA offer is shown.
+  const analyses = preselekcjaAnalyses(catalogEnabled, sizes);
+  const preselectionCount = analyses === null ? null : `${analyses} analiz CV`;
+  const validity = `ważne ${preselekcjaOffer.validityMonths} miesiące`;
+  const preselectionNote = preselectionCount
+    ? `PRESELEKCJA: ${preselectionCount} za ${preselekcjaPrice}, ${validity} od przyznania.`
+    : `PRESELEKCJA: ${preselekcjaPrice}, ${validity} od przyznania.`;
   const plans = [
     {name:"FREE", color:styles.planBlue, title:"Wypróbuj SkillCheck", text:"Poznaj docelowy proces na niewielkiej grupie kandydatów.", price:"0 zł", scope:offer.freeScope, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i ocena dopasowania", "Chatbot informacyjny dla kandydatów", "Podstawowa shortlista", "Jedna próbna rozmowa z botem i podstawowa analiza"]},
-    {name:"PRESELEKCJA", color:styles.planGreen, title:"Uporządkuj wybór kandydatów", text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę.", price:"300 zł brutto", current:true, scope:offer.preselectionScope, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i ocena dopasowania", "Chatbot informacyjny dla kandydatów", "Shortlista — zakres ustalany w ofercie", "Podstawowy raport preselekcji"]},
+    {name:"PRESELEKCJA", color:styles.planGreen, title:"Uporządkuj wybór kandydatów", text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę.", price:preselekcjaPrice, current:true, scope:`${preselectionCount ?? sc19PolicyPendingScope} · ${validity}`, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i ocena dopasowania", "Chatbot informacyjny dla kandydatów", "Shortlista — zakres ustalany w ofercie", "Podstawowy raport preselekcji"]},
     {name:"WERYFIKACJA", color:styles.planPurple, title:"Sprawdź, co naprawdę potrafią", text:"Pogłęb ocenę przez rozmowę, jej analizę i test kompetencji.", price:"899 zł", scope:"20 rozmów + testy; analizy CV według zatwierdzonej polityki", features:["Wszystko z Preselekcji", "20 rozmów weryfikacyjnych z botem", "Analiza odpowiedzi z rozmowy", "Testy kompetencji", "Rozszerzony raport kandydata"]},
     {name:"ASSESSMENT CENTER", color:styles.planOrange, title:"Zobacz, jak podejdą do pracy", text:"Sprawdź sposób działania w zadaniach osadzonych w realiach stanowiska.", price:"1 799 zł", scope:"20 rozmów + testy + case studies; analizy CV według zatwierdzonej polityki", features:["Wszystko z Weryfikacji", "Case studies i zadania praktyczne", "Ćwiczenia dopasowane do roli", "Pogłębiony proces Assessment Center", "Kompleksowy raport kandydata"]},
   ];
   const rows = [
     ["Konto firmy i profil stanowiska","Tak","Tak","Tak","Tak"],
-    ["Analizy CV", offer.freeAnalyses, offer.preselectionAnalyses, "Według polityki", "Według polityki"],
+    ["Analizy CV", offer.freeAnalyses, analyses === null ? sc19PolicyPendingCell : String(analyses), "Według polityki", "Według polityki"],
     ["Pseudonimizacja i ocena dopasowania","Tak","Tak","Tak","Tak"],
     ["Chatbot informacyjny","Tak","Tak","Tak","Tak"],
     ["Shortlista / raport preselekcji","Podstawowe","Według oferty","5–10 kandydatów","5–10 kandydatów"],
@@ -32,8 +41,8 @@ export function PackageComparison({ sizes }: { sizes: Sc19PackageSizes | null })
     <Link href={plan.name === "FREE" ? "/preselekcja#free" : plan.name === "PRESELEKCJA" ? "/preselekcja" : "/rozmowa"} className={styles.secondary}>Zapytaj o {plan.name === "FREE" ? "wariant próbny" : plan.name}</Link>
   </article>)}</div>
   <p className={styles.note}>{sizes
-    ? "PRESELEKCJA kosztuje 300 zł brutto. Liczby analiz CV dla FREE i PRESELEKCJA pochodzą z zatwierdzonej polityki pakietu. Ceny i warunki pozostałych pakietów wymagają zatwierdzenia przed sprzedażą. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”."
-    : "PRESELEKCJA kosztuje 300 zł brutto. Ceny, limity i warunki pozostałych pakietów wymagają zatwierdzenia przed sprzedażą. Liczba analiz CV jest pokazywana dopiero z zatwierdzonej polityki pakietu. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”."}</p>
+    ? `${preselectionNote} Liczba analiz CV dla FREE pochodzi z zatwierdzonej polityki pakietu. Ceny i warunki pozostałych pakietów wymagają zatwierdzenia przed sprzedażą. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.`
+    : `${preselectionNote} Ceny, limity i warunki pozostałych pakietów wymagają zatwierdzenia przed sprzedażą. Liczba analiz CV dla FREE jest pokazywana dopiero z zatwierdzonej polityki pakietu. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.`}</p>
   <details className={styles.packageDetails}><summary>Porównaj wszystkie funkcje pakietów</summary>
     <div className={styles.tableScroll} role="region" aria-label="Porównanie pakietów — przewijaj poziomo na telefonie" tabIndex={0}><table className={styles.packageTable}><caption>Docelowy zakres pakietów — funkcje planowane</caption><thead><tr><th scope="col">Co otrzymujesz?</th>{plans.map(p=><th scope="col" key={p.name} className={p.color}>{p.name}</th>)}</tr></thead><tbody>{rows.map(row=><tr key={row[0]}><th scope="row">{row[0]}</th>{row.slice(1).map((v,i)=><td key={i}>{v}</td>)}</tr>)}</tbody></table></div>
   </details>
