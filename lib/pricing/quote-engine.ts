@@ -366,13 +366,30 @@ function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlyS
   for (const c of Array.from(weight.keys())) if (forced.has(c)) total += weight.get(c)!;
   const free = Array.from(weight.keys()).filter(c => !forced.has(c));
   for (const c of free) closure.set(c, dependencyClosure(services, c));
-  const conflicts = new Map<string, boolean>();
-  const conflict = (a: string, b: string): boolean => {
-    const key = a < b ? a + '\u0000' + b : b + '\u0000' + a;
-    let hit = conflicts.get(key);
-    if (hit === undefined) conflicts.set(key, hit = closuresClash(services, closure.get(a)!, closure.get(b)!));
-    return hit;
+  // Conflict graph built from indexes instead of pairwise closure scans: a service's "forbidden" set holds
+  // everything its closure excludes or is excluded by; two add-ons conflict iff one's closure meets the
+  // other's forbidden set. Cost is proportional to the exclusions present, so catalogs without exclusions
+  // stay linear.
+  const push = (index: Map<string, string[]>, key: string, value: string) => {
+    const list = index.get(key);
+    if (list) list.push(value); else index.set(key, [value]);
   };
+  const excludedBy = new Map<string, string[]>();
+  for (const { service } of Array.from(services.values())) for (const x of service.exclusions) push(excludedBy, x, service.code);
+  const containing = new Map<string, string[]>();
+  for (const c of free) for (const m of Array.from(closure.get(c)!)) push(containing, m, c);
+  const neighbours = new Map<string, Set<string>>();
+  for (const c of free) neighbours.set(c, new Set());
+  for (const c of free) {
+    const forbidden = new Set<string>();
+    for (const m of Array.from(closure.get(c)!)) {
+      for (const x of services.get(m)!.service.exclusions) forbidden.add(x);
+      for (const x of excludedBy.get(m) ?? []) forbidden.add(x);
+    }
+    for (const y of Array.from(forbidden)) for (const o of containing.get(y) ?? [])
+      if (o !== c) { neighbours.get(c)!.add(o); neighbours.get(o)!.add(c); }
+  }
+  const conflict = (a: string, b: string): boolean => neighbours.get(a)!.has(b);
   const seen = new Set<string>();
   for (const start of free) {
     if (seen.has(start)) continue;
@@ -382,7 +399,7 @@ function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlyS
     while (stack.length) {
       const c = stack.pop()!;
       component.push(c);
-      for (const o of free) if (!seen.has(o) && conflict(c, o)) { seen.add(o); stack.push(o); }
+      for (const o of Array.from(neighbours.get(c)!)) if (!seen.has(o)) { seen.add(o); stack.push(o); }
     }
     if (component.length > 20) { for (const c of component) total += weight.get(c)!; continue; }
     // Pairwise conflicts are computed once as bitmasks; each subset extends a smaller one by its lowest
