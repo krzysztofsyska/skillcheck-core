@@ -79,3 +79,13 @@ Run czerwony: nieudana migracja wycofała się w całości, wcześniejsze z tego
 ## Testy
 
 `tests/db-migrate/apply.test.mjs` (PostgreSQL 16 i 17 w workflow „SC-019 forward migrations”): kolejność i walidacja listy, ramka `begin;/commit;` każdej migracji w repo, brak luk względem zaobserwowanej historii produkcji (i odmowa pominięcia M13), wpisy historii i rejestru, odmowa ponownego wykonania, wycofanie i zatrzymanie po błędzie, cały łańcuch z repo przez runner z poprawnym inwentarzem R7.
+
+## Tryb „tylko sprawdź” (`mode: inspect`)
+
+Gdy migracja odmawia (np. `sc19_source_schema_unreviewed`), uruchom workflow z **mode = inspect** (pole `migrations` zostaw puste) i zatwierdź jak zwykle. `tools/db-migrate/inspect.mjs` w transakcji READ ONLY, zawsze wycofywanej:
+
+- liczy odciski struktury bazy (te same, które sprawdza M13) i porównuje je z zatwierdzonymi stanami z `tests/fixtures/sc19-migration-manifest.json`;
+- odczytuje historię `supabase_migrations.schema_migrations` (treść migracji, nie dane aplikacji);
+- zapisuje raport `inspection.json` jako artefakt runu (7 dni). Niczego nie zmienia i nie czyta danych klientów.
+
+Pierwsze użycie (2026-10-29): M13 odmówiła na produkcji. M1–M12 są już zapisane na produkcji (9–21.10), przed poprawkami hostingowymi z #160 — raport ma pokazać, czym schemat różni się od zatwierdzonego stanu.

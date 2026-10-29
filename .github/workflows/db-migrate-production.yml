@@ -4,6 +4,7 @@
 # approval of the production-approval environment; the database URL exists
 # only as a secret of that environment. Migrations run one by one in
 # repository order through tools/db-migrate/apply.mjs, never `supabase db push`.
+# mode=inspect runs tools/db-migrate/inspect.mjs instead: a READ ONLY report.
 name: DB migrate production
 
 on:
@@ -13,9 +14,15 @@ on:
         description: 'Full SHA of main that is being released (must equal the current main HEAD)'
         required: true
         type: string
-      migrations:
-        description: 'Migration files in repository order, comma separated (e.g. 20261021084732_sc019_credits_payments_inventory.sql)'
+      mode:
+        description: 'apply = run the listed migrations; inspect = read-only schema and history report (no changes)'
         required: true
+        default: apply
+        type: choice
+        options: [apply, inspect]
+      migrations:
+        description: 'apply only: migration files in repository order, comma separated (e.g. 20261021084732_sc019_credits_payments_inventory.sql)'
+        required: false
         type: string
 
 permissions: {}
@@ -51,6 +58,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - id: plan
         name: Migration hashes for the approval
+        if: inputs.mode == 'apply'
         env:
           MIGRATIONS: ${{ inputs.migrations }}
           RELEASE_SHA: ${{ inputs.release_sha }}
@@ -67,6 +75,18 @@ jobs:
             echo "$hashes" | node -e 'let i=0;for(const [f,h] of Object.entries(JSON.parse(require("fs").readFileSync(0,"utf8"))))console.log(`| ${++i} | \`${f}\` | \`${h}\` |`)'
             echo
             echo "Approve the **production-approval** environment only if this list and SHA match your decision."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Read-only inspection plan
+        if: inputs.mode == 'inspect'
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          {
+            echo "## Read-only database inspection"
+            echo
+            echo "Release SHA: \`$RELEASE_SHA\`"
+            echo
+            echo "Reads schema structure and migration history in a READ ONLY transaction. Changes nothing and reads no application rows."
           } >> "$GITHUB_STEP_SUMMARY"
 
   apply:
@@ -87,6 +107,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - name: Apply migrations one by one
+        if: inputs.mode == 'apply'
         env:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
           DATABASE_CA_CERT: ${{ secrets.PRODUCTION_DATABASE_CA_CERT }}
@@ -95,3 +116,17 @@ jobs:
           RELEASE_SHA: ${{ inputs.release_sha }}
           RUN_ID: ${{ github.run_id }}
         run: node tools/db-migrate/apply.mjs apply
+      - name: Read-only inspection
+        if: inputs.mode == 'inspect'
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DATABASE_CA_CERT: ${{ secrets.PRODUCTION_DATABASE_CA_CERT }}
+        run: node tools/db-migrate/inspect.mjs inspection.json
+      - name: Preserve inspection report
+        if: inputs.mode == 'inspect'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: db-inspection-${{ github.run_id }}
+          path: inspection.json
+          if-no-files-found: error
+          retention-days: 7
