@@ -94,7 +94,8 @@ test("SC010/012/019: one persistent offline draft from current database authorit
     ].sort());
     const vars = result.draft.payload.retell_llm_dynamic_variables;
     assert.deepEqual(Object.keys(vars).sort(),
-      ["skillcheck_interview_script","skillcheck_notice_version","skillcheck_language"].sort());
+      ["skillcheck_interview_script","skillcheck_notice_version","skillcheck_language",
+        "skillcheck_company_name","skillcheck_position_title"].sort());
     assert.equal(vars.skillcheck_notice_version, "notice-pl-202610");
     assert.equal(vars.skillcheck_language, "pl-PL");
     for (const forbidden of [s.f.companyId,s.f.application.id,s.f.candidate.id,"PRIVATE original CV"]) {

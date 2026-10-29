@@ -293,6 +293,9 @@ export async function prepareOfflineVoiceDraft(
     const contactDigest = createHmac("sha256", dependencies.contactVault.fingerprintKey)
       .update(JSON.stringify(["SC010B2_CONTACT_DIGEST_V1", companyId, contact.candidateId, "voice", destination])).digest("hex");
     if (contactDigest !== contact.contactDigest) return fail();
+    // Spoken employer name only; tenant-scoped by RLS and the company id filter.
+    const companies = (await db.query("select name from public.companies where id=$1", [companyId])).rows;
+    if (companies.length !== 1 || typeof companies[0].name !== "string") return fail("UNAVAILABLE");
     const scenario = voiceScenarioFromApprovedPlan(current.releasedPlan);
     const draft = compileRetellOutboundDraft({
       externalCorrelationId: contact.applicationId, destinationE164: destination,
@@ -304,7 +307,7 @@ export async function prepareOfflineVoiceDraft(
       companyId, applicationId: contact.applicationId,
       sourceFingerprint: current.snapshot.planSourceFingerprint, destinationE164: destination,
       contactApproved: true, noticeDelivered: true,
-    });
+    }, {companyId, companyName: companies[0].name});
     // Reject stale facts before writing. The deferred database constraint also
     // checks all clocks inside COMMIT, including plan/review/release retention.
     await db.query("select private.sc010c_lock_voice_contact($1,$2,$3,$4)",

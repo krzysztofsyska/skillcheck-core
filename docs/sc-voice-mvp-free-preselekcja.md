@@ -58,7 +58,9 @@ nie zabezpiecza przed zmianą znacznika pomiędzy sprawdzeniem a użyciem.
 
 Weryfikator przed wydaniem niekopiowalnego dowodu sprawdza wszystkie wartości tekstowe
 i klucze kompletnej odpowiedzi agenta oraz flow. Dopuszcza wyłącznie odwołania do
-`skillcheck_interview_script`, `skillcheck_notice_version` i `skillcheck_language`.
+`skillcheck_interview_script`, `skillcheck_notice_version` i `skillcheck_language`
+(od SC-011-D także `skillcheck_company_name` i `skillcheck_position_title`, zob.
+[sc-011d-retell-interview-config.md](sc-011d-retell-interview-config.md)).
 Każdą z tych wartości kompilator zawsze przekazuje jawnie w żądaniu. Według
 [kontraktu Retell](https://docs.retellai.com/build/dynamic-variables) wartości żądania
 mają pierwszeństwo przed wartościami środowiska i domyślnymi. Numer wersji oraz oba
