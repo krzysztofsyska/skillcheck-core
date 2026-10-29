@@ -334,12 +334,13 @@ function checkOfferHeader(offer: Offer): void {
 }
 
 /** Maximum total weight over add-on sets the quote engine can accept together: services included in
- * the package are always present, and no two services in the union of the selected services'
+ * the package are always present, every service in a selected add-on's dependency closure must be
+ * realizable in the package, and no two services in the union of the selected services'
  * dependency closures may exclude each other. Exact for
  * conflict components of up to 20 services; larger components fall back to their plain sum, which is
  * conservative (may reject a valid catalog, never accepts an unquotable one). */
 function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlySet<string>,
-  services: Catalog['services']): bigint {
+  services: Catalog['services'], realizable: (code: string) => boolean): bigint {
   const excludes = (a: string, b: string): boolean =>
     services.get(a)!.service.exclusions.includes(b) || services.get(b)!.service.exclusions.includes(a);
   // Selecting a service forces its transitive dependency closure; conflicts are judged on closures.
@@ -360,11 +361,12 @@ function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlyS
   };
   let total = ZERO;
   for (const c of Array.from(weight.keys())) if (forced.has(c)) total += weight.get(c)!;
-  // Never selectable: its closure conflicts internally or with the always-present services.
+  // Never selectable: its closure holds a service the package cannot provide, or conflicts
+  // internally or with the always-present services.
   const free = Array.from(weight.keys()).filter(c => {
     if (forced.has(c)) return false;
     const own = closureOf(c);
-    if (clash(own, own) || clash(own, forced)) return false;
+    if (!Array.from(own).every(realizable) || clash(own, own) || clash(own, forced)) return false;
     closure.set(c, own);
     return true;
   });
@@ -433,12 +435,15 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
           return fail(`INCLUDED_SERVICES_CONFLICT:${code}`);
     // Transitive dependencies of always-present services must be realizable in this package:
     // present (included) or selectable with a positive quantity, and not excluded by an included service.
+    // A non-included service is selectable only through extra quantity, so at least one positive multiple
+    // of the package step must fit under the package maximum and reach the service minimum.
     const selectable = (c: string): boolean => {
       const entry = planLinks.get(c);
       if (!entry) return false;
       const l = entry.link, svc = catalog.services.get(c)!.service;
-      return l.allowed && l.visible && l.commercialStatus !== 'hidden' && svc.commercialStatus !== 'hidden' &&
-        l.maxQuantity > 0 && (l.includedQuantity > 0 || l.extraAllowed) && !excludedByForced(c);
+      return l.allowed && l.visible && l.extraAllowed && l.commercialStatus !== 'hidden' && svc.commercialStatus !== 'hidden' &&
+        !excludedByForced(c) && stepLargestIn(l.quantityStep, l.maxQuantity - l.includedQuantity,
+          Math.max(1, svc.min - l.includedQuantity))(1, MAX_QUANTITY) !== null;
     };
     const pending = [...forcedList], required = new Set<string>();
     while (pending.length) {
@@ -473,7 +478,7 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
       if (!rule) return fail(`UNPRICED:${serviceCode}`);
       weight.set(serviceCode, BigInt(amount(upperBound(rule, largest))));
     }
-    net += maxCompatibleSum(weight, forced, catalog.services);
+    net += maxCompatibleSum(weight, forced, catalog.services, c => forced.has(c) || selectable(c));
     amount(net);
     amount(net); // undiscounted subtotal must itself fit (it is a quote field)
     // Discounts are monotonic non-decreasing in net, so the maximal net stays maximal after them;

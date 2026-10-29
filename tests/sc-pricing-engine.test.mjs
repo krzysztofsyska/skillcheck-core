@@ -484,3 +484,50 @@ test('compatible bound follows dependency closures, not only direct exclusions',
   error(() => quote('PRESELEKCJA', [{ serviceCode: 'alpha', quantity: 1 }, { serviceCode: 'beta', quantity: 1 }], 30, c), 'UNMET_DEPENDENCY');
   error(() => quote('PRESELEKCJA', [{ serviceCode: 'alpha', quantity: 1 }, { serviceCode: 'beta', quantity: 1 }, { serviceCode: 'gamma', quantity: 1 }], 30, c), 'MUTUAL_EXCLUSION');
 });
+
+test('included-service dependency needs a positive quantity the package can actually accept', () => {
+  const c = clone();
+  // interview is included in WERYFIKACJA and AC; give AC a consult link whose step exceeds its maximum.
+  c.services.find(s => s.code === 'interview').dependencies = ['consult'];
+  c.planServices.push({ ...link('ASSESSMENT_CENTER', 'consult'), maxQuantity: 1, quantityStep: 2 });
+  error(() => validateOfferForPublish(c), 'INCLUDED_DEPENDENCY_UNREALIZABLE:ASSESSMENT_CENTER:consult');
+  error(() => quote('ASSESSMENT_CENTER', [], 20, c), 'UNMET_DEPENDENCY');
+  error(() => quote('ASSESSMENT_CENTER', [{ serviceCode: 'consult', quantity: 1 }], 20, c), 'INVALID_QUANTITY');
+  error(() => quote('ASSESSMENT_CENTER', [{ serviceCode: 'consult', quantity: 2 }], 20, c), 'INVALID_QUANTITY');
+  // Service minimum above every reachable step is equally unrealizable.
+  const d = clone();
+  d.services.find(s => s.code === 'interview').dependencies = ['consult'];
+  d.services.find(s => s.code === 'consult').min = 5;
+  d.planServices.push({ ...link('ASSESSMENT_CENTER', 'consult'), maxQuantity: 4 });
+  error(() => validateOfferForPublish(d), 'INCLUDED_DEPENDENCY_UNREALIZABLE:ASSESSMENT_CENTER:consult');
+  // A reachable step keeps the package publishable.
+  const e = clone();
+  e.services.find(s => s.code === 'interview').dependencies = ['consult'];
+  e.planServices.push({ ...link('ASSESSMENT_CENTER', 'consult'), maxQuantity: 2, quantityStep: 2 });
+  assert.doesNotThrow(() => validateOfferForPublish(e));
+  assert.equal(quote('ASSESSMENT_CENTER', [{ serviceCode: 'consult', quantity: 2 }], 20, e).canPurchase, true);
+});
+
+test('publish bound ignores add-ons whose dependency closure the package cannot provide', () => {
+  const c = clone();
+  Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+  const svc = (code, price, extra = {}) => ({ code, name: code, min: 0, max: 1, step: 1, technicalStatus: 'verified',
+    commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: [],
+    defaultPriceRule: { method: 'fixed', amountMinor: price }, ...extra });
+  c.services.push(svc('alpha', 1_000_000_000_000, { dependencies: ['beta'] }), svc('beta', 0));
+  c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
+  c.planServices.push({ ...link('PRESELEKCJA', 'alpha'), maxQuantity: 1 });
+  // beta has no PRESELEKCJA link: alpha can never be quoted, so it adds nothing to the bound.
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 0);
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'alpha', quantity: 1 }], 30, c), 'UNMET_DEPENDENCY');
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'alpha', quantity: 1 }, { serviceCode: 'beta', quantity: 1 }], 30, c), 'ADDON_UNAVAILABLE');
+  // A transitive dependency whose quantity progression is empty is equally unrealizable.
+  c.services.push(svc('gamma', 0));
+  c.services.find(s => s.code === 'beta').dependencies = ['gamma'];
+  c.planServices.push({ ...link('PRESELEKCJA', 'beta'), maxQuantity: 1 }, { ...link('PRESELEKCJA', 'gamma'), maxQuantity: 1, quantityStep: 2 });
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 0);
+  // Once every dependency is selectable, the add-on counts again and the bound fails closed.
+  c.planServices.find(l => l.packageCode === 'PRESELEKCJA' && l.serviceCode === 'gamma').quantityStep = 1;
+  error(() => validateOfferForPublish(c), 'AMOUNT_OUT_OF_RANGE');
+  error(() => quote('PRESELEKCJA', ['alpha', 'beta', 'gamma'].map(serviceCode => ({ serviceCode, quantity: 1 })), 30, c), 'AMOUNT_OUT_OF_RANGE');
+});
