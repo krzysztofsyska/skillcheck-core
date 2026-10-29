@@ -569,3 +569,24 @@ test('unreachable add-ons are filtered before their own line bound is checked', 
   c.planServices.push({ ...link('PRESELEKCJA', 'beta'), maxQuantity: 1, overridePriceRule: { method: 'fixed', amountMinor: 0 } });
   error(() => validateOfferForPublish(c), 'AMOUNT_OUT_OF_RANGE');
 });
+
+test('publish rejects a required dependency closure that cannot fit in one request', () => {
+  const build = n => {
+    const c = clone();
+    Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+    const svc = (code, dependencies) => ({ code, name: code, min: 0, max: 1, step: 1, technicalStatus: 'verified',
+      commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies, exclusions: [],
+      defaultPriceRule: { method: 'fixed', amountMinor: 0 } });
+    const chain = Array.from({ length: n }, (_, i) => `dep_${i}`);
+    c.services.push(svc('root', [chain[0]]), ...chain.map((d, i) => svc(d, i + 1 < n ? [chain[i + 1]] : [])));
+    c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
+    c.planServices.push({ ...link('PRESELEKCJA', 'root', 1), maxQuantity: 1 }, ...chain.map(d => ({ ...link('PRESELEKCJA', d), maxQuantity: 1 })));
+    return { c, chain };
+  };
+  const ok = build(64);
+  assert.equal(validateOfferForPublish(ok.c).PRESELEKCJA, 0);
+  assert.equal(quote('PRESELEKCJA', ok.chain.map(serviceCode => ({ serviceCode, quantity: 1 })), 30, ok.c).canPurchase, true);
+  const tooLong = build(65);
+  error(() => validateOfferForPublish(tooLong.c), 'INCLUDED_DEPENDENCIES_EXCEED_REQUEST_LIMIT:PRESELEKCJA');
+  error(() => quote('PRESELEKCJA', tooLong.chain.map(serviceCode => ({ serviceCode, quantity: 1 })), 30, tooLong.c), 'INVALID_REQUEST');
+});

@@ -67,6 +67,7 @@ const ZERO = BigInt(0);
 const MAX_MINOR = BigInt(1_000_000_000_000);
 const MAX_QUANTITY = 100_000;
 const MAX_TIERS = 32;
+const MAX_ADDONS = 64; // per quote request
 const PACKAGE_CODES: readonly PackageCode[] = ['FREE', 'PRESELEKCJA', 'WERYFIKACJA', 'ASSESSMENT_CENTER'];
 const COMMERCIAL: readonly CommercialStatus[] = ['hidden', 'informational', 'on_request', 'purchasable'];
 const TECHNICAL: readonly TechnicalStatus[] = ['planned', 'prototype', 'verified'];
@@ -452,6 +453,10 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
     }
     // Everything in the required closure must be present together, so it must be exclusion-free.
     const requiredList = Array.from(required);
+    // quoteOffer does not auto-select dependencies: every non-included member of the required closure
+    // must be requested explicitly, so the closure must fit in one request.
+    if (requiredList.filter(c => !forced.has(c)).length > MAX_ADDONS)
+      return fail(`INCLUDED_DEPENDENCIES_EXCEED_REQUEST_LIMIT:${code}`);
     for (let i = 0; i < requiredList.length; i++)
       for (let j = i + 1; j < requiredList.length; j++) {
         const a = catalog.services.get(requiredList[i])!.service, b = catalog.services.get(requiredList[j])!.service;
@@ -499,7 +504,7 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
 function checkedRequest(input: unknown): QuoteRequest {
   if (!exact(input, ['expectedVersionId', 'packageCode', 'cvCount', 'addons']) ||
       typeof input.expectedVersionId !== 'string' || !versionPattern.test(input.expectedVersionId) ||
-      !isPackage(input.packageCode) || !validQty(input.cvCount) || !Array.isArray(input.addons) || input.addons.length > 64)
+      !isPackage(input.packageCode) || !validQty(input.cvCount) || !Array.isArray(input.addons) || input.addons.length > MAX_ADDONS)
     return fail('INVALID_REQUEST');
   const codes = new Set<string>();
   for (const a of input.addons as unknown[]) {
