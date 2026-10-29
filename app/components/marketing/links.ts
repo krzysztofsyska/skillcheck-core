@@ -14,3 +14,9 @@ export const footerLinks = [
   { href: "/rozmowa", label: "Porozmawiajmy o Twojej rekrutacji" },
   { href: "/prywatnosc", label: "Dane w formularzu kontaktowym" },
 ] as const;
+
+export const legalLinks = [
+  { href: "/regulamin", label: "Regulamin" },
+  { href: "/polityka-prywatnosci", label: "Polityka prywatności" },
+  { href: "/ai", label: "AI i nadzór człowieka" },
+] as const;

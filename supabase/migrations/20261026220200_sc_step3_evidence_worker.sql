@@ -39,13 +39,44 @@ declare
   stale_reason text;
   raw_token text;
   expires_at timestamptz;
+  target_analysis uuid;
+  target_company uuid;
+  target_candidate uuid;
 begin
+  -- Same lock order as the reviewed v1 claim: analysis, candidate, company,
+  -- then attempt. Locking the attempt first deadlocks with a concurrent stale
+  -- cancellation (sc19_reconcile_analysis holds the analysis, then the attempt).
+  -- The return column analysis_id is in scope, so this lookup is dynamic SQL.
+  execute $claim_locate$
+    select t.analysis_id, t.company_id, a.candidate_id
+    from public.screening_analysis_attempts t
+    join public.screening_analysis_versions v
+      on v.id = t.analysis_id and v.company_id = t.company_id
+    join public.applications a
+      on a.id = v.application_id and a.company_id = v.company_id
+    where t.id = $1
+  $claim_locate$
+  into target_analysis, target_company, target_candidate
+  using target_attempt;
+  if target_analysis is null or target_company is null or target_candidate is null then
+    raise exception 'Attempt unavailable' using errcode = '42501';
+  end if;
+  select * into analysis from public.screening_analysis_versions
+    where id = target_analysis and company_id = target_company for update;
+  if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  if to_regprocedure('private.erasure_lock_candidate(uuid)') is not null then
+    perform private.erasure_lock_candidate(target_candidate);
+  end if;
+  if to_regprocedure('private.sc19_lock_company(uuid)') is not null then
+    perform private.sc19_lock_company(target_company);
+  end if;
   select * into attempt from public.screening_analysis_attempts
     where id = target_attempt for update;
-  if not found then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
-  select * into analysis from public.screening_analysis_versions
-    where id = attempt.analysis_id and company_id = attempt.company_id for update;
-  if not found then raise exception 'Analysis unavailable' using errcode = '42501'; end if;
+  if not found
+     or attempt.analysis_id is distinct from target_analysis
+     or attempt.company_id is distinct from target_company then
+    raise exception 'Attempt unavailable' using errcode = '42501';
+  end if;
   if analysis.result_schema_version <> 2 then
     raise exception 'Evidence schema required' using errcode = '22023'; end if;
   if attempt.status <> 'pending'
@@ -124,6 +155,7 @@ declare
   clean_evidence jsonb;
   legacy_findings jsonb := '[]'::jsonb;
   finished_id uuid;
+  stored public.screening_criterion_results%rowtype;
 begin
   select analysis.* into a from public.screening_analysis_versions analysis
     join public.screening_analysis_attempts attempt
@@ -137,6 +169,7 @@ begin
     if jsonb_typeof(row_item) is distinct from 'object'
       or exists (select 1 from jsonb_object_keys(row_item) key
         where key not in ('criterion_id','verdict','evidence','missing_info','suggested_question','explanation'))
+      or jsonb_typeof(row_item->'verdict') is distinct from 'string'
       or row_item->>'verdict' not in ('supported','partial','missing','contradicted')
       or jsonb_typeof(row_item->'evidence') is distinct from 'array'
       or length(coalesce(row_item->>'missing_info','')) > 4000
@@ -170,14 +203,27 @@ begin
     new_provider_request_id, new_provider_response_id, new_input_tokens,
     new_output_tokens, new_cached_input_tokens, new_cost_amount, new_cost_currency
   );
+  -- The delegated call holds the analysis and attempt locks until commit and its
+  -- finalization hash covers only legacy_findings. A first completion leaves
+  -- verdict NULL on its fresh rows; a replay finds them already set. An identical
+  -- replay rewrites nothing; a replay with different v2 fields is a conflict.
   for row_item in select value from jsonb_array_elements(findings) loop
-    update public.screening_criterion_results result
-    set verdict = row_item->>'verdict',
-        missing_info = nullif(row_item->>'missing_info',''),
-        suggested_question = nullif(row_item->>'suggested_question','')
-    where result.company_id = a.company_id and result.analysis_id = finished_id
-      and result.criterion_id = row_item->>'criterion_id';
+    select * into stored from public.screening_criterion_results result
+      where result.company_id = a.company_id and result.analysis_id = finished_id
+        and result.criterion_id = row_item->>'criterion_id'
+      for update;
     if not found then raise exception 'Criterion not found' using errcode = '22023'; end if;
+    if stored.verdict is null then
+      update public.screening_criterion_results
+      set verdict = row_item->>'verdict',
+          missing_info = nullif(row_item->>'missing_info',''),
+          suggested_question = nullif(row_item->>'suggested_question','')
+      where id = stored.id;
+    elsif stored.verdict is distinct from row_item->>'verdict'
+      or stored.missing_info is distinct from nullif(row_item->>'missing_info','')
+      or stored.suggested_question is distinct from nullif(row_item->>'suggested_question','') then
+      raise exception 'Conflicting completion' using errcode = 'PT409';
+    end if;
   end loop;
   return finished_id;
 end;

@@ -80,11 +80,12 @@ test('built public route looks up the actual DB policy on each enabled request a
   const rpcPort = await listen(rpc);
   t.after(() => new Promise(resolve => rpc.close(resolve)));
   const enabled = await startApp(t,true,rpcPort);
-  async function landing(base) {
-    const response = await fetch(base, { signal: AbortSignal.timeout(5000) });
+  async function landing(base, path = '') {
+    const response = await fetch(base + path, { signal: AbortSignal.timeout(5000) });
     assert.equal(response.status,200);
-    return response.text();
+    return (await response.text()).replaceAll('<!-- -->', '');
   }
+  const offerPage = base => landing(base, '/preselekcja');
   let before = reads;
   let html = await landing(enabled);
   assert.ok(reads > before, 'ON must perform runtime RPC, not serve the build fallback');
@@ -94,11 +95,17 @@ test('built public route looks up the actual DB policy on each enabled request a
   before = reads;html = await landing(enabled);
   assert.ok(reads > before,'next request must reread changed policy');
   assert.match(html,/7 analiz CV/);assert.match(html,/24 analiz CV/);
+  html = await offerPage(enabled);
+  assert.match(html,/PRESELEKCJA — 24 analiz CV za 300 zł brutto/);
+  assert.doesNotMatch(html,/60 analiz CV/);
   for (mode of ['rpc-error','missing-rpc','empty','null','missing-plan','invalid-zero','invalid-fraction','invalid-range','invalid-string','duplicate']) {
     before = reads;html = await landing(enabled);
     assert.ok(reads > before,`${mode} exercised the RPC`);
     assert.ok(html.includes(pending),`${mode} renders nonnumeric fallback`);
     assert.doesNotMatch(html,/7 analiz CV|24 analiz CV|5 analiz CV|60 analiz CV/);
+    html = await offerPage(enabled);
+    assert.ok(html.includes(pending),`${mode} offer page shows no number`);
+    assert.doesNotMatch(html,/\d+ analiz CV/);
   }
   mode = 'database';
   const disabled = await startApp(t,false,rpcPort);
@@ -106,5 +113,8 @@ test('built public route looks up the actual DB policy on each enabled request a
   assert.equal(reads,before,'OFF does not request the catalog');
   assert.ok(html.includes(pending));
   assert.doesNotMatch(html,/7 analiz CV|24 analiz CV/);
+  before = reads;html = await offerPage(disabled);
+  assert.equal(reads,before,'OFF offer page does not request the catalog');
+  assert.match(html,/PRESELEKCJA — 60 analiz CV za 300 zł brutto/);
   assert.deepEqual(unexpected,[],'only the safe catalog RPC is requested');
 });
