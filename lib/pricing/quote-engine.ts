@@ -366,7 +366,13 @@ function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlyS
   for (const c of Array.from(weight.keys())) if (forced.has(c)) total += weight.get(c)!;
   const free = Array.from(weight.keys()).filter(c => !forced.has(c));
   for (const c of free) closure.set(c, dependencyClosure(services, c));
-  const conflict = (a: string, b: string): boolean => closuresClash(services, closure.get(a)!, closure.get(b)!);
+  const conflicts = new Map<string, boolean>();
+  const conflict = (a: string, b: string): boolean => {
+    const key = a < b ? a + '\u0000' + b : b + '\u0000' + a;
+    let hit = conflicts.get(key);
+    if (hit === undefined) conflicts.set(key, hit = closuresClash(services, closure.get(a)!, closure.get(b)!));
+    return hit;
+  };
   const seen = new Set<string>();
   for (const start of free) {
     if (seen.has(start)) continue;
@@ -379,18 +385,23 @@ function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlyS
       for (const o of free) if (!seen.has(o) && conflict(c, o)) { seen.add(o); stack.push(o); }
     }
     if (component.length > 20) { for (const c of component) total += weight.get(c)!; continue; }
-    let best = ZERO;
-    for (let mask = 0; mask < 1 << component.length; mask++) {
-      let sum = ZERO, ok = true;
-      for (let i = 0; i < component.length && ok; i++) {
-        if (!(mask & (1 << i))) continue;
-        for (let j = i + 1; j < component.length; j++)
-          if (mask & (1 << j) && conflict(component[i], component[j])) { ok = false; break; }
-        sum += weight.get(component[i])!;
-      }
-      if (ok && sum > best) best = sum;
+    // Pairwise conflicts are computed once as bitmasks; each subset extends a smaller one by its lowest
+    // member, so the enumeration is O(2^n) with no closure scans. Weights are each <= MAX_MINOR, so a sum of
+    // at most 20 stays an exact integer in a double.
+    const n = component.length;
+    const adjacent = component.map((a, i) => component.reduce((m, b, j) => j !== i && conflict(a, b) ? m | (1 << j) : m, 0));
+    const w = component.map(c => Number(weight.get(c)!));
+    const sums = new Float64Array(1 << n), valid = new Uint8Array(1 << n);
+    valid[0] = 1;
+    let best = 0;
+    for (let mask = 1; mask < 1 << n; mask++) {
+      const low = 31 - Math.clz32(mask & -mask), rest = mask & (mask - 1);
+      if (!valid[rest] || adjacent[low] & rest) continue;
+      valid[mask] = 1;
+      sums[mask] = sums[rest] + w[low];
+      if (sums[mask] > best) best = sums[mask];
     }
-    total += best;
+    total += BigInt(best);
   }
   return total;
 }
