@@ -12,6 +12,9 @@ on:
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
+      - 'tests/db-migrate/**'
+      - 'tools/db-migrate/**'
+      - '.github/workflows/db-migrate-production.yml'
       - 'supabase/rollbacks/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
@@ -32,6 +35,9 @@ on:
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
+      - 'tests/db-migrate/**'
+      - 'tools/db-migrate/**'
+      - '.github/workflows/db-migrate-production.yml'
       - 'supabase/rollbacks/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
@@ -106,7 +112,7 @@ jobs:
             tests/sc-019-migrations-mvp-e2e.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step3-evidence-worker.test.mjs \
-            tests/sc-019-operator-fulfillment.test.mjs \
+            tests/sc-019-operator-fulfillment.test.mjs tests/db-migrate/apply.test.mjs \
             > sc19-migrations.log 2>&1
           test_result=$?
           tail -n 250 sc19-migrations.log

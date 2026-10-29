@@ -1,0 +1,97 @@
+# SC-OPS-DB-MIGRATE: the only path for production database migrations
+# (AGENTS.md, production access rule 1). Started by hand from main with the
+# exact release SHA and migration list. The apply job waits for the owner's
+# approval of the production-approval environment; the database URL exists
+# only as a secret of that environment. Migrations run one by one in
+# repository order through tools/db-migrate/apply.mjs, never `supabase db push`.
+name: DB migrate production
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Full SHA of main that is being released (must equal the current main HEAD)'
+        required: true
+        type: string
+      migrations:
+        description: 'Migration files in repository order, comma separated (e.g. 20261021084732_sc019_credits_payments_inventory.sql)'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: db-migrate-production
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan / exact SHA and migration list
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      hashes: ${{ steps.plan.outputs.hashes }}
+    steps:
+      - name: Release SHA equals the dispatched main commit
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          [ "$RELEASE_SHA" = "$DISPATCH_SHA" ] || { echo "::error::release_sha $RELEASE_SHA is not the dispatched main commit $DISPATCH_SHA"; exit 1; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - id: plan
+        name: Migration hashes for the approval
+        env:
+          MIGRATIONS: ${{ inputs.migrations }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          hashes=$(node tools/db-migrate/apply.mjs plan)
+          echo "hashes=$hashes" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Production migration plan"
+            echo
+            echo "Release SHA: \`$RELEASE_SHA\`"
+            echo
+            echo "| # | Migration | sha256 |"
+            echo "| ---: | --- | --- |"
+            echo "$hashes" | node -e 'let i=0;for(const [f,h] of Object.entries(JSON.parse(require("fs").readFileSync(0,"utf8"))))console.log(`| ${++i} | \`${f}\` | \`${h}\` |`)'
+            echo
+            echo "Approve the **production-approval** environment only if this list and SHA match your decision."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply / owner-approved
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production-approval
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Apply migrations one by one
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          DATABASE_CA_CERT: ${{ secrets.PRODUCTION_DATABASE_CA_CERT }}
+          MIGRATIONS: ${{ inputs.migrations }}
+          EXPECTED_HASHES: ${{ needs.plan.outputs.hashes }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: node tools/db-migrate/apply.mjs apply
