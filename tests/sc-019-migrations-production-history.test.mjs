@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
 import { createRankingHarness, users } from './helpers/screening-ranking-fixture.mjs';
-import { assertR6, accountingSnapshot, catalogSnapshot, migrationManifest } from './helpers/sc19-migration-fixture.mjs';
+import { assertCurrentInventory, assertR6, accountingSnapshot, catalogSnapshot, migrationManifest } from './helpers/sc19-migration-fixture.mjs';
 
 // An isolated CI-owned cluster with real pg_cron, never a production connection.
 // This replays observed application migration history, not a Supabase platform dump.
@@ -66,18 +66,22 @@ test('observed production history + pending chain preserves completed synthetic 
   const dir=new URL('../supabase/migrations/',import.meta.url);
   const applied=new Set(history.map(e=>e.name));
   const pending=(await readdir(dir)).filter(f=>f.endsWith('.sql')&&!applied.has(f.replace(/^\d+_/,'').replace(/\.sql$/,''))).sort();
-  assert.equal(pending.length,13);
-  assert.equal(pending.at(-2),'20261021084245_explicit_data_api_table_acl.sql');
-  assert.equal(pending.at(-1),'20261021084732_sc019_credits_payments_inventory.sql');
+  // Locate M13 by name: reviewed migrations ordered after it
+  // are part of the pending chain and are replayed after the R6 checkpoint.
+  const m13='20261021084732_sc019_credits_payments_inventory.sql';
+  const m13Index=pending.indexOf(m13);
+  assert.equal(m13Index,12,'Exactly 12 observed-pending migrations precede M13');
+  assert.equal(pending[m13Index-1],'20261021084245_explicit_data_api_table_acl.sql');
+  let afterM13=null;
   for(const name of pending) {
-    if(name===pending.at(-1)) {
+    if(name===m13) {
       const observed=await catalogSnapshot(db), manifest=await migrationManifest();
       const expected=manifest.states.r4_legacy['pg'+process.env.SC19_TEST_PG_MAJOR];
       t.diagnostic(JSON.stringify({observed,expected,mismatches:Object.keys(expected).filter(k=>expected[k]!==observed[k])}));
 
     }
     const sql=await readFile(new URL(name,dir),'utf8');
-    if(name===pending.at(-1)) for(const mutation of [
+    if(name===m13) for(const mutation of [
       'grant execute on function public.platform_operator_status() to service_role with grant option',
       'grant execute on function private.erasure_hash(jsonb) to service_role',
       'grant create on schema public to service_role',
@@ -133,9 +137,21 @@ test('observed production history + pending chain preserves completed synthetic 
       assert.equal((await db.query("select has_schema_privilege('erasure_purge_owner','private','CREATE') v")).rows[0].v,false);
     } else await db.query(sql);
     t.diagnostic(`applied pending ${name}`);
+    if(name===m13) {
+      assert.deepEqual(await snapshot(),before,'No existing application data rewritten or removed');
+      await assertR6(db);
+      afterM13=await snapshot();
+    }
   }
-  assert.deepEqual(await snapshot(),before,'No existing application data rewritten or removed');
-  await assertR6(db);
+  assert.ok(afterM13,'M13 was applied');
+  // Later reviewed migrations may only add columns: every existing value is unchanged.
+  const canonical=(rows,keys)=>rows.map(row=>JSON.stringify(keys.map(k=>[k,row.value[k]]))).sort();
+  const final=await snapshot();
+  for(const [table,rows] of Object.entries(afterM13)) {
+    const keys=Object.keys(rows[0]?.value??{}).sort();
+    assert.deepEqual(canonical(final[table],keys),canonical(rows,keys),`${table} existing rows and values preserved`);
+  }
+  await assertCurrentInventory(db);
   for(const [table,rows] of Object.entries(await accountingSnapshot(db))) assert.deepEqual(rows,[],`No commercial activation or retrospective billing: ${table}`);
   await h.asUser(f.owner); assert.equal((await h.row(f)).eligibility_reason,'eligible');
   assert.equal((await h.shortlist(f)).length,1);
