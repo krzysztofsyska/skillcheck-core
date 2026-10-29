@@ -71,6 +71,7 @@ export default async function Screening({ params, searchParams }: { params: Prom
     {analysis?.execution_status === 'completed' && analysis.candidate_document_id && criteria.some(c => c.verdict != null) && <EvidenceMatrix
       criteria={criteria} route={route} analysisId={analysis.id} documentId={analysis.candidate_document_id}
       documentVersion={analysis.candidate_document_version} editable={canEdit && !stale} />}
+    {analysis?.execution_status === 'completed' && <details><summary>CV użyte w tej analizie · wersja {analysis.candidate_document_version}</summary><pre className="cv-text">{analysis.input_cv_text_snapshot}</pre></details>}
     {analysis?.execution_status === 'completed' && !criteria.some(c => c.verdict != null) && <>
       <h2>Wynik AI — oryginał</h2>
       <p>Oceny odnoszą się do kryteriów stanowiska. Nie stanowią rankingu kandydatów ani automatycznej decyzji o zatrudnieniu.</p>
@@ -86,7 +87,6 @@ export default async function Screening({ params, searchParams }: { params: Prom
           {correction.evidence_override?.length === 0 && <p>Brak cytatów po korekcie.</p>}
         </aside>}
       </article>; })}
-      <details><summary>CV użyte w tej analizie · wersja {analysis.candidate_document_version}</summary><pre className="cv-text">{analysis.input_cv_text_snapshot}</pre></details>
       {review && <section><h2>Ostatni przegląd</h2><p>{reviewLabels[review.disposition]} · wersja {review.review_version}</p><p>{review.review_note}</p></section>}
       {canEdit && !historical && <ReviewControl key={`${analysis.id}:${analysis.latest_review_version}:${stale}`} route={route} analysisId={analysis.id} version={analysis.latest_review_version} criteria={criteria} stale={stale} review={review} overrides={overrides.data ?? []} />}
       {(reviews.data?.length ?? 0) > 1 && <details><summary>Historia przeglądów</summary><ul>{reviews.data?.map(r => <li key={r.id}>v{r.review_version}: {reviewLabels[r.disposition]} — {r.review_note}</li>)}</ul></details>}

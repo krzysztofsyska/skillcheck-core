@@ -24,3 +24,14 @@ test('partially changed quote is not fuzzy-matched', () => {
 test('empty CV snapshot never produces evidence', () => {
   assert.deepEqual(verifySnapshotQuotes('  \n ', documentId, ['SQL']), []);
 });
+test('restored original longer than the 2000-unit DB limit is dropped', () => {
+  const spaced = `${'a'.repeat(1000)}${' '.repeat(10)}${'b'.repeat(995)}`;
+  const proposal = `${'a'.repeat(1000)} ${'b'.repeat(995)}`;
+  assert.ok(proposal.length <= 2000);
+  assert.deepEqual(verifySnapshotQuotes(spaced, documentId, [proposal]), []);
+});
+test('a citation spanning several CV lines verifies as one quote', () => {
+  const multiline = 'Linia 1\nLinia 2\nLinia 3\nLinia 4\nLinia 5\nLinia 6';
+  const [result] = verifySnapshotQuotes(multiline, documentId, [multiline]);
+  assert.equal(result.quote, multiline);
+});

@@ -92,9 +92,10 @@ export async function reviewEvidenceRow(
     nextVerdict = verdict as NonNullable<typeof current.verdict>;
     nextMissingInfo = String(form.get('missingInfo') ?? '').trim();
     nextQuestion = String(form.get('question') ?? '').trim();
-    const quotesText = String(form.get('quotes') ?? '');
-    const quotes = quotesText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (quotes.length > 5 || nextMissingInfo.length > 4000 || nextQuestion.length > 4000 || quotesText.length > 11000) {
+    // One field per citation, so a quote spanning several CV lines stays one quote.
+    const quoteFields = form.getAll('quote').map(value => String(value));
+    const quotes = quoteFields.map(s => s.trim()).filter(Boolean);
+    if (quoteFields.length > 5 || quotes.some(q => q.length > 2000) || nextMissingInfo.length > 4000 || nextQuestion.length > 4000) {
       return { error: 'Przekroczono limit pól wiersza.' };
     }
     const verified = verifySnapshotQuotes(analysis.data.input_cv_text_snapshot, analysis.data.candidate_document_id, quotes);

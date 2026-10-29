@@ -106,10 +106,10 @@ test('changed or unavailable material makes existing result stale',()=>{
 
 // Render the real async Server Component with a scoped in-memory Supabase adapter.
 // Replace framework-only navigation/auth and action controls, not page rendering logic.
-async function renderPage({canEdit=true,stale=false,rating='insufficient_data',missing=false}={}) {
+async function renderPage({canEdit=true,stale=false,rating='insufficient_data',missing=false,verdict}={}) {
   const ctx=context();const id=uuid(11),reviewId=uuid(12);
   const analysis={id,company_id:route.companyId,application_id:route.applicationId,recruitment_id:route.recruitmentId,analysis_version:1,execution_status:'completed',input_fingerprint:prepareScreening(ctx).fingerprint,stale_at:stale?'now':null,input_cv_text_snapshot:ctx.document.redacted_text,latest_review_version:1,candidate_document_version:1};
-  const client=clientFor(ctx,{screening_analysis_versions:[analysis],screening_criterion_results:[{...criterion,company_id:route.companyId,analysis_id:id,rating,evidence:rating==='meets'?[{start:3,end:18,quote:'Tworzę raporty.'}]:[]}],screening_result_reviews:[{id:reviewId,company_id:route.companyId,analysis_id:id,review_version:1,disposition:'approved_with_changes',review_note:'Sprawdzono'}],screening_criterion_review_overrides:[{company_id:route.companyId,review_id:reviewId,criterion_result_id:criterion.id,rating_override:'meets',evidence_override:[{quote:'Tworzę raporty.'}]}]});
+  const client=clientFor(ctx,{screening_analysis_versions:[analysis],screening_criterion_results:[{...criterion,...(verdict?{verdict}:{}),company_id:route.companyId,analysis_id:id,rating,evidence:rating==='meets'?[{start:3,end:18,quote:'Tworzę raporty.'}]:[]}],screening_result_reviews:[{id:reviewId,company_id:route.companyId,analysis_id:id,review_version:1,disposition:'approved_with_changes',review_note:'Sprawdzono'}],screening_criterion_review_overrides:[{company_id:route.companyId,review_id:reviewId,criterion_result_id:criterion.id,rating_override:'meets',evidence_override:[{quote:'Tworzę raporty.'}]}]});
   if (missing) ctx.application.id=uuid(999);
   const path='app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/screening/page.tsx';
   const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
@@ -127,6 +127,10 @@ async function renderPage({canEdit=true,stale=false,rating='insufficient_data',m
 }
 test('result UI renders unknown and original AI separately from human correction without numeric score',async()=>{
   const html=await renderPage();assert.match(html,/Brak wystarczających danych/);assert.match(html,/Korekta rekrutera/);assert.match(html,/Tworzę raporty/);assert.match(html,/REVIEW_ALLOWED/);assert.ok(!html.includes('0/'));assert.match(html,/disabled/);
+});
+test('v2 evidence result keeps the immutable analyzed CV snapshot visible',async()=>{
+  const html=await renderPage({verdict:'supported'});
+  assert.match(html,/CV użyte w tej analizie/);assert.ok(!html.includes('Korekta rekrutera'));
 });
 test('viewer has no mutation controls and stale results cannot be approved in UI',async()=>{
   const viewer=await renderPage({canEdit:false});assert.ok(!viewer.includes('REVIEW_ALLOWED'));assert.ok(!viewer.includes('START'));

@@ -53,6 +53,8 @@ export function verifySnapshotQuotes(source: string, documentId: string, quotes:
     if (position < 0) continue;
     const start = haystack.offsets[position].start;
     const end = haystack.offsets[position + needle.length - 1].end;
+    // The restored original can be longer than the proposal; the DB caps it at 2000.
+    if (end - start > 2000) continue;
     verified.push({ start, end, quote: source.slice(start, end), document_id: documentId });
   }
   return verified;

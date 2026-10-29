@@ -51,8 +51,8 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
       </select></label>
       <label>Czego brakuje<textarea name="missingInfo" maxLength={4000} rows={2} defaultValue={criterion.human_missing_info ?? criterion.missing_info ?? ''} /></label>
       <label>Pytanie do rozmowy<textarea name="question" maxLength={4000} rows={2} defaultValue={criterion.human_suggested_question ?? criterion.suggested_question ?? ''} /></label>
-      <label>Cytaty (jeden na linię, z zatwierdzonego CV)<textarea name="quotes" maxLength={11000} rows={3}
-        defaultValue={evidence.map(item => item.quote).join('\n')} /></label>
+      {Array.from({ length: 5 }, (_, i) => <label key={i}>Cytat {i + 1} (dokładnie z zatwierdzonego CV)<textarea name="quote" maxLength={2000} rows={2}
+        defaultValue={evidence[i]?.quote ?? ''} /></label>)}
       <label>Notatka człowieka<textarea name="note" maxLength={10000} rows={2} defaultValue={criterion.human_note ?? ''} /></label>
       <div className={styles.rowActions}>
         <button name="intent" value="accepted" disabled={pending}>Akceptuj</button>
