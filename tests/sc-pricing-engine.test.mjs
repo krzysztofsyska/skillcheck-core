@@ -610,3 +610,18 @@ test('publish bound over a 20-service conflict component finishes quickly', () =
   const all19 = [...deps, ...opts.slice(1)].map(serviceCode => ({ serviceCode, quantity: 1 }));
   assert.equal(quote('PRESELEKCJA', all19, 30, c).grossMinor, 19 * 1_230);
 });
+
+test('publish of a large catalog without exclusions stays fast', () => {
+  const c = clone();
+  Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+  const deps = Array.from({ length: 40 }, (_, i) => `dep_${i}`);
+  const opts = Array.from({ length: 900 }, (_, i) => `opt_${i}`);
+  const svc = (code, price, extra = {}) => ({ code, name: code, min: 0, max: 1, step: 1, technicalStatus: 'verified',
+    commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: [],
+    defaultPriceRule: { method: 'fixed', amountMinor: price }, ...extra });
+  c.services = [...deps.map(d => svc(d, 0)), ...opts.map(o => svc(o, 1, { dependencies: deps }))];
+  c.planServices = [...deps, ...opts].map(s => ({ ...link('PRESELEKCJA', s), maxQuantity: 1 }));
+  const started = performance.now();
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 1_107); // 900 × 0,01 zł net + 23% VAT
+  assert.ok(performance.now() - started < 5_000, `publish took ${Math.round(performance.now() - started)} ms`);
+});
