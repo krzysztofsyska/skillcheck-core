@@ -6,3 +6,4 @@
 
 .cv-text{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6}input[type=checkbox]{width:auto;justify-self:start}article{border-top:1px solid #d7dfea;margin-top:32px;padding-top:16px}
 .password-field{display:grid;gap:8px}.password-toggle{justify-self:start;background:#eef2f7;color:#204bba;padding:8px 12px;min-height:44px}
+.consent{display:flex;align-items:flex-start;gap:10px;font-weight:400;line-height:1.5}.consent input{width:auto;flex:0 0 auto;margin:4px 0 0;padding:0;min-width:18px;min-height:18px}

@@ -20,6 +20,7 @@
     "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
+    "test:legal": "node --test tests/legal.test.mjs",
     "test:live-check": "node --test tests/live-check.test.mjs tests/live-membership.test.mjs tests/live-final-audit.test.mjs",
     "test:behavior-guide": "node --test tests/behavior-guide.test.mjs",
     "test:behavior-assessments": "node --test tests/behavior-assessment.test.mjs tests/behavior-database.test.mjs",
@@ -49,7 +50,8 @@
     "test:retention-scheduler": "node --test tests/retention-scheduler-database.test.mjs tests/retention-scheduler-ui.test.mjs",
     "test:retention-scheduler-concurrency": "node --test tests/retention-scheduler-concurrency.test.mjs",
     "test:erasure-service": "node --test tests/erasure-service.test.mjs tests/erasure-service-backend.test.mjs",
-    "test:competency": "node --test tests/competency-test.test.mjs"
+    "test:competency": "node --test tests/competency-test.test.mjs",
+    "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs tests/sc19-przelewy24-provider.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "latest",
