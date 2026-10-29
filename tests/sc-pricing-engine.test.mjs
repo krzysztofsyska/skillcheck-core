@@ -552,3 +552,20 @@ test('publish bound treats required dependencies of included services as always 
   assert.equal(validateOfferForPublish(c).PRESELEKCJA, 1_230);
   assert.equal(quote('PRESELEKCJA', [{ serviceCode: 'beta', quantity: 1 }], 30, c).grossMinor, 1_230);
 });
+
+test('unreachable add-ons are filtered before their own line bound is checked', () => {
+  const c = clone();
+  Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+  c.services.push({ code: 'alpha', name: 'alpha', min: 0, max: 2, step: 1, technicalStatus: 'verified', commercialStatus: 'purchasable',
+    capabilityCode: 'reports_ready', dependencies: ['beta'], exclusions: [], defaultPriceRule: { method: 'per_unit', unitMinor: 1_000_000_000_000 } },
+  { code: 'beta', name: 'beta', min: 0, max: 1, step: 1, technicalStatus: 'verified', commercialStatus: 'purchasable',
+    capabilityCode: 'reports_ready', dependencies: [], exclusions: [], defaultPriceRule: null });
+  c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
+  c.planServices.push({ ...link('PRESELEKCJA', 'alpha'), maxQuantity: 2 });
+  // alpha's line maximum (2 × 10^12) is out of range, but alpha can never be quoted without beta.
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 0);
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'alpha', quantity: 1 }], 30, c), 'UNMET_DEPENDENCY');
+  // Once beta is selectable the same line is reachable and the bound fails closed.
+  c.planServices.push({ ...link('PRESELEKCJA', 'beta'), maxQuantity: 1, overridePriceRule: { method: 'fixed', amountMinor: 0 } });
+  error(() => validateOfferForPublish(c), 'AMOUNT_OUT_OF_RANGE');
+});

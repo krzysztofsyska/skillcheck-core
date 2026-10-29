@@ -333,44 +333,39 @@ function checkOfferHeader(offer: Offer): void {
       !Array.isArray(offer.planServices) || !Array.isArray(offer.discounts)) return fail('INVALID_CATALOG');
 }
 
+const excludesEither = (services: Catalog['services'], a: string, b: string): boolean =>
+  services.get(a)!.service.exclusions.includes(b) || services.get(b)!.service.exclusions.includes(a);
+/** Selecting a service forces its transitive dependency closure (the service itself included). */
+function dependencyClosure(services: Catalog['services'], code: string): Set<string> {
+  const seen = new Set<string>(), stack = [code];
+  while (stack.length) {
+    const x = stack.pop()!;
+    if (seen.has(x)) continue;
+    seen.add(x);
+    for (const d of services.get(x)!.service.dependencies) stack.push(d);
+  }
+  return seen;
+}
+const closuresClash = (services: Catalog['services'], a: ReadonlySet<string>, b: Iterable<string>): boolean => {
+  for (const x of Array.from(a)) for (const y of Array.from(b)) if (x !== y && excludesEither(services, x, y)) return true;
+  return false;
+};
+
 /** Maximum total weight over add-on sets the quote engine can accept together: `forced` services
- * (included in the package, plus their required dependency closure) are in every quote, every service in a selected add-on's dependency closure must be
- * realizable in the package, and no two services in the union of the selected services'
- * dependency closures may exclude each other. Exact for
- * conflict components of up to 20 services; larger components fall back to their plain sum, which is
- * conservative (may reject a valid catalog, never accepts an unquotable one). */
+ * (included in the package, plus their required dependency closure) are in every quote, and no two
+ * services in the union of the selected services' dependency closures may exclude each other.
+ * Every non-forced key of `weight` must already be selectable on its own (see validateOfferForPublish).
+ * Exact for conflict components of up to 20 services; larger components fall back to their plain sum,
+ * which is conservative (may reject a valid catalog, never accepts an unquotable one). */
 function maxCompatibleSum(weight: ReadonlyMap<string, bigint>, forced: ReadonlySet<string>,
-  services: Catalog['services'], realizable: (code: string) => boolean): bigint {
-  const excludes = (a: string, b: string): boolean =>
-    services.get(a)!.service.exclusions.includes(b) || services.get(b)!.service.exclusions.includes(a);
-  // Selecting a service forces its transitive dependency closure; conflicts are judged on closures.
+  services: Catalog['services']): bigint {
+  // Conflicts are judged on dependency closures, not only on the selected services.
   const closure = new Map<string, Set<string>>();
-  const closureOf = (c: string): Set<string> => {
-    const seen = new Set<string>(), stack = [c];
-    while (stack.length) {
-      const x = stack.pop()!;
-      if (seen.has(x)) continue;
-      seen.add(x);
-      for (const d of services.get(x)!.service.dependencies) stack.push(d);
-    }
-    return seen;
-  };
-  const clash = (a: Set<string>, b: Iterable<string>): boolean => {
-    for (const x of Array.from(a)) for (const y of Array.from(b)) if (x !== y && excludes(x, y)) return true;
-    return false;
-  };
   let total = ZERO;
   for (const c of Array.from(weight.keys())) if (forced.has(c)) total += weight.get(c)!;
-  // Never selectable: its closure holds a service the package cannot provide, or conflicts
-  // internally or with the always-present services.
-  const free = Array.from(weight.keys()).filter(c => {
-    if (forced.has(c)) return false;
-    const own = closureOf(c);
-    if (!Array.from(own).every(realizable) || clash(own, own) || clash(own, forced)) return false;
-    closure.set(c, own);
-    return true;
-  });
-  const conflict = (a: string, b: string): boolean => clash(closure.get(a)!, closure.get(b)!);
+  const free = Array.from(weight.keys()).filter(c => !forced.has(c));
+  for (const c of free) closure.set(c, dependencyClosure(services, c));
+  const conflict = (a: string, b: string): boolean => closuresClash(services, closure.get(a)!, closure.get(b)!);
   const seen = new Set<string>();
   for (const start of free) {
     if (seen.has(start)) continue;
@@ -469,8 +464,14 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
       // accepts only for visible, non-hidden links of non-hidden services (same rule as quoting).
       if (!link.visible || link.commercialStatus === 'hidden' ||
           catalog.services.get(serviceCode)!.service.commercialStatus === 'hidden') continue;
-      // Never selectable in this package (excluded by an always-present service): no reachable line.
-      if (!forced.has(serviceCode) && excludedByForced(serviceCode)) continue;
+      // An optional add-on is reachable only if its whole dependency closure can be provided by the
+      // package and is free of exclusions, internally and against the always-present services.
+      // Filter before pricing, so an unreachable line cannot fail the bound (AMOUNT_OUT_OF_RANGE etc.).
+      if (!required.has(serviceCode)) {
+        const own = dependencyClosure(catalog.services, serviceCode);
+        if (!Array.from(own).every(c => required.has(c) || selectable(c)) ||
+            closuresClash(catalog.services, own, own) || closuresClash(catalog.services, own, required)) continue;
+      }
       const svcMin = catalog.services.get(serviceCode)!.service.min;
       const largest = stepLargestIn(link.quantityStep, link.maxQuantity - link.includedQuantity,
         Math.max(1, svcMin - link.includedQuantity));
@@ -479,7 +480,7 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
       weight.set(serviceCode, BigInt(amount(upperBound(rule, largest))));
     }
     // Every quote contains the whole required closure, so its members are mandatory in the bound too.
-    net += maxCompatibleSum(weight, required, catalog.services, c => required.has(c) || selectable(c));
+    net += maxCompatibleSum(weight, required, catalog.services);
     amount(net);
     amount(net); // undiscounted subtotal must itself fit (it is a quote field)
     // Discounts are monotonic non-decreasing in net, so the maximal net stays maximal after them;
