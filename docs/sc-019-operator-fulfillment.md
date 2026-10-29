@@ -61,9 +61,14 @@ usuwa tylko funkcje; zapisane zatwierdzenia, polityka i salda zostają.
 
 1. Scalenie do `integration` po CI i niezależnym review.
 2. Promocja `integration → main` z osobnym PRODUCTION APPROVAL.
-3. Migracje na produkcji wyłącznie pojedynczo, zgodnie z
-   `docs/release/sc-mvp-production-runbook.md` (nigdy `supabase db push`): M13, Step 3
+3. **Warunek wstępny:** workflow `db-migrate-production` w środowisku
+   `production-approval` (AGENTS.md, zasady dostępu do produkcji, pkt 1) jest
+   zainstalowany na `main` i zweryfikowany. Dziś go nie ma, więc migracje produkcyjne
+   są zablokowane. Ręczna procedura `psql "$PROD_DB_URL"` z
+   `docs/release/sc-mvp-production-runbook.md` nie jest dopuszczalną ścieżką wykonania.
+4. Migracje wyłącznie przez ten workflow, po zgodzie właściciela powiązanej z dokładnym
+   SHA i listą migracji, pojedynczo w kolejności (nigdy `supabase db push`): M13, Step 3
    (`20261026220100`, `20261026220200`), R7 (`20261028120000`), potem ta migracja.
-4. W `/operator/billing`: FREE = 5, PRESELEKCJA = 60 (oferta 300 zł brutto).
-5. Ustawienie `SC19_PACKAGES_ENABLED=true` w Vercel Production — wyłącznie właściciel.
-6. Smoke test na fikcyjnej firmie: weryfikacja → FREE → analiza → saldo 4.
+5. W `/operator/billing`: FREE = 5, PRESELEKCJA = 60 (oferta 300 zł brutto).
+6. Ustawienie `SC19_PACKAGES_ENABLED=true` w Vercel Production — wyłącznie właściciel.
+7. Smoke test na fikcyjnej firmie: weryfikacja → FREE → analiza → saldo 4.
