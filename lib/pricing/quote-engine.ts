@@ -333,8 +333,8 @@ function checkOfferHeader(offer: Offer): void {
       !Array.isArray(offer.planServices) || !Array.isArray(offer.discounts)) return fail('INVALID_CATALOG');
 }
 
-/** Maximum total weight over add-on sets the quote engine can accept together: services included in
- * the package are always present, every service in a selected add-on's dependency closure must be
+/** Maximum total weight over add-on sets the quote engine can accept together: `forced` services
+ * (included in the package, plus their required dependency closure) are in every quote, every service in a selected add-on's dependency closure must be
  * realizable in the package, and no two services in the union of the selected services'
  * dependency closures may exclude each other. Exact for
  * conflict components of up to 20 services; larger components fall back to their plain sum, which is
@@ -478,7 +478,8 @@ export function validateOfferForPublish(offer: Offer): Readonly<Record<string, n
       if (!rule) return fail(`UNPRICED:${serviceCode}`);
       weight.set(serviceCode, BigInt(amount(upperBound(rule, largest))));
     }
-    net += maxCompatibleSum(weight, forced, catalog.services, c => forced.has(c) || selectable(c));
+    // Every quote contains the whole required closure, so its members are mandatory in the bound too.
+    net += maxCompatibleSum(weight, required, catalog.services, c => required.has(c) || selectable(c));
     amount(net);
     amount(net); // undiscounted subtotal must itself fit (it is a quote field)
     // Discounts are monotonic non-decreasing in net, so the maximal net stays maximal after them;

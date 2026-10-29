@@ -531,3 +531,24 @@ test('publish bound ignores add-ons whose dependency closure the package cannot 
   error(() => validateOfferForPublish(c), 'AMOUNT_OUT_OF_RANGE');
   error(() => quote('PRESELEKCJA', ['alpha', 'beta', 'gamma'].map(serviceCode => ({ serviceCode, quantity: 1 })), 30, c), 'AMOUNT_OUT_OF_RANGE');
 });
+
+test('publish bound treats required dependencies of included services as always present', () => {
+  const c = clone();
+  Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+  const svc = (code, price, extra = {}) => ({ code, name: code, min: 0, max: 1, step: 1, technicalStatus: 'verified',
+    commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: [],
+    defaultPriceRule: { method: 'fixed', amountMinor: price }, ...extra });
+  c.services.push(svc('alpha', 0, { dependencies: ['beta'] }), svc('beta', 0, { exclusions: ['gamma'] }), svc('gamma', 1_000_000_000_000));
+  c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
+  c.planServices.push({ ...link('PRESELEKCJA', 'alpha', 1), maxQuantity: 1 }, { ...link('PRESELEKCJA', 'beta'), maxQuantity: 1 },
+    { ...link('PRESELEKCJA', 'gamma'), maxQuantity: 1 });
+  // alpha is included and needs beta, which excludes gamma: gamma is never quotable, so the bound stays 0.
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 0);
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'gamma', quantity: 1 }], 30, c), 'UNMET_DEPENDENCY');
+  error(() => quote('PRESELEKCJA', [{ serviceCode: 'beta', quantity: 1 }, { serviceCode: 'gamma', quantity: 1 }], 30, c), 'MUTUAL_EXCLUSION');
+  assert.equal(quote('PRESELEKCJA', [{ serviceCode: 'beta', quantity: 1 }], 30, c).grossMinor, 0);
+  // A priced required dependency is part of every quote, so it counts toward the bound.
+  c.services.find(s => s.code === 'beta').defaultPriceRule = { method: 'fixed', amountMinor: 1_000 };
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 1_230);
+  assert.equal(quote('PRESELEKCJA', [{ serviceCode: 'beta', quantity: 1 }], 30, c).grossMinor, 1_230);
+});
