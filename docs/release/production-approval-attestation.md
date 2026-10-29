@@ -79,7 +79,7 @@ Check via the PR's Checks tab or `GET /repos/krzysztofsyska/skillcheck-core/comm
 Automated tests: `tests/production-approval-attestation.test.mjs` (decision logic and workflow safety).
 
 ## Limitations
-- **The owner's token:** an environment can be approved through the API with the owner's token. Variant (b) protects only while agent sessions do not have that token (AGENTS.md, rule 5).
+- **The owner's token:** an environment can be approved through the API with the owner's token. Since 2026-10-29 agent sessions may act through the owner's identity for task branches, PRs and `integration` merges (AGENTS.md, rule 5, variant B) but never approve environments or merge into `main`; this part of the protection is procedural until agents use the `skillcheck-agent-ks[bot]` App token.
 - **Forging a commit status:** any workflow in this repository that requests `statuses: write` can set a status with the same context and the same `integration_id` 15368. Such a change has to pass review as a change to `.github/workflows/**`. Repository rulesets do not let you pin a status to a specific workflow file.
 - **Admin bypass:** an admin (the owner) can disable the ruleset or the required check. That is visible in the ruleset's `updated_at` and in Rule insights.
 - **Vercel:** Vercel deploys Production automatically from `main`. The merge is the only control point.

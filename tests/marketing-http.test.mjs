@@ -52,7 +52,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 3);
   assert.match(home, /Liczba analiz CV według zatwierdzonej polityki/);
   assert.equal(home.includes('5 analiz CV'), false);
-  assert.equal(home.includes('60 analiz CV'), false);
+  assert.ok(home.includes('60 analiz CV'), 'approved PRESELEKCJA scope (owner 2026-10-28)');
   assert.equal(home.includes('5–6'), false);
   assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
@@ -105,6 +105,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(calculator, /data-pack="pre"/);
   assert.match(calculator, /data-package-price="pre">300 zł</);
   assert.match(calculator, /pre:30000,/);
+  assert.match(calculator, /PRE_PACKAGE_CV=60;/);
   assert.equal(calculator.includes('369'), false);
   assert.match(calculator, /data-pack="verify"/);
   assert.match(calculator, /id="volumeSlider"/);
@@ -115,7 +116,11 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(orderResponse.status, 200);
   assert.match(orderResponse.headers.get('content-type'), /text\/html/);
   const order = await orderResponse.text();
-  assert.match(order, /Zapytaj o preselekcję kandydatów/);
+  assert.match(order, /PRESELEKCJA — 60 analiz CV za 300 zł brutto/);
+  const orderText = order.replaceAll('<!-- -->', '');
+  for (const fact of [/243,90 zł netto/, /ważne przez 3 miesiące/, /faktury proforma/, /Przelewy24/, /PayPro S\.A\./, /2 dni roboczych/, /fakturę VAT/]) assert.match(orderText, fact);
+  assert.ok(hrefs(order).includes('/regulamin') && hrefs(order).includes('/polityka-prywatnosci'));
+  assert.doesNotMatch(order, /potwierdzane indywidualnie|pilotaż/);
   assert.match(order, /Cena|cenę|cena/);
   assert.match(order, /Nie przesyłaj CV zwykłym e-mailem/);
   assert.match(order, /samo utworzenie konta nie przyznaje analiz/);
@@ -135,20 +140,25 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.ok(hrefs(order).includes('/register'));
   assert.doesNotMatch(order, /<form[ >]/);
   assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
-  assert.match(order, /aktualnie te funkcje nie są udostępnione do samodzielnego użycia/);
-  assert.match(home, /Zapytaj o pilotaż PRESELEKCJA/);
+  assert.match(home, /PRESELEKCJA: 60 CV za 300 zł/);
   assert.match(home, /Według oferty/);
-  assert.match(order, /Jeżeli potwierdzimy dostępność tych funkcji/);
+  assert.match(order, /zawsze weryfikuje osoba prowadząca rekrutację/);
   assert.doesNotMatch(order, /<li>Wyniki, ranking, shortlistę i raport weryfikuje/);
   const comparison = readFileSync(new URL('../app/components/marketing/package-comparison.tsx', import.meta.url), 'utf8');
   const lines = comparison.split('\n');
   const offer = lines.find(line => line.includes('name:"PRESELEKCJA"'));
   assert.ok(offer, 'PRESELEKCJA offer defined');
-  assert.match(offer, /scope:offer.preselectionScope/);
+  assert.match(offer, /scope:`\$\{preselectionCount \?\? sc19PolicyPendingScope\}/);
+  assert.match(comparison, /preselekcjaAnalyses\(catalogEnabled, sizes\)/);
+  const offerSource = readFileSync(new URL('../app/components/marketing/preselekcja-offer.ts', import.meta.url), 'utf8');
+  assert.match(offerSource, /if \(sizes\) return sizes\.PRESELEKCJA;\s*return catalogEnabled \? null : preselekcjaOffer\.analyses;/, 'live catalog wins; enabled failure shows no number');
+  // The static calculator cannot read the catalog: keep its package size and net price equal to the approved offer.
+  assert.equal(calculator.match(/PRE_PACKAGE_CV=(\d+);/)?.[1], offerSource.match(/analyses: (\d+),/)?.[1]);
+  assert.equal(calculator.match(/PRE_NET_CENTS=(\d+);/)?.[1], offerSource.match(/netPln: "(\d+),(\d+)"/)?.slice(1).join(''));
   assert.doesNotMatch(offer, /60 analiz CV|Shortlista 5–10 kandydatów/);
   const cvRow = lines.find(line => line.trimStart().startsWith('["Analizy CV"'));
   const shortlistRow = lines.find(line => line.trimStart().startsWith('["Shortlista \/ raport preselekcji"'));
-  assert.ok(cvRow?.includes('offer.preselectionAnalyses'));
+  assert.ok(cvRow?.includes('analyses === null ? sc19PolicyPendingCell : String(analyses)'));
   assert.ok(shortlistRow?.includes('"Według oferty"'));
 
   const demoResponse = await fetch(`${base}/demo`, { redirect: 'manual' });
