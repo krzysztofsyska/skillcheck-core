@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire, Module } from 'node:module';
 import ts from 'typescript';
 import { setupRankingDatabase } from './helpers/screening-ranking-fixture.mjs';
-import { bootMigrationDatabase, assertR6, seedSyntheticPolicy, paymentHarness, paymentUsers } from './helpers/sc19-migration-fixture.mjs';
+import { bootMigrationDatabase, assertCurrentInventory, seedSyntheticPolicy, paymentHarness, paymentUsers } from './helpers/sc19-migration-fixture.mjs';
 import { reportDatabaseClient } from './helpers/screening-report-database-client.mjs';
 import { loadScreeningReport } from '../lib/screening-report-source.ts';
 import { exportScreeningReport } from '../lib/screening-report-export.ts';
@@ -37,7 +37,7 @@ test('FREE and signed fake payment feed real screening, human review, shortlist 
   const env = await bootMigrationDatabase(t), { db } = env;
   const h = await setupRankingDatabase(db, { throughMigration: null });
   env.h = h;
-  await assertR6(db);
+  await assertCurrentInventory(db);
   await seedSyntheticPolicy(db);
   for (const id of Object.values(paymentUsers)) await db.query('insert into auth.users values($1)', [id]);
   const first = await h.seed(paymentUsers.owner, 'synthetic-free-paid');
@@ -214,6 +214,6 @@ test('FREE and signed fake payment feed real screening, human review, shortlist 
     assert.equal((await audit()).filter(r => r.reason === 'paid_grant').every(r => r.delta === 12 && r.reference.startsWith('settlement:sc19:')), true);
     await h.asUser(second.owner);
     assert.equal((await exportScreeningReport(reportDatabaseClient(db, () => ({ id: second.owner })), first.companyId, first.recruitment.id, '5')).status, 404);
-    await h.asAdmin(); await assertR6(db);
+    await h.asAdmin(); await assertCurrentInventory(db);
   });
 });
