@@ -10,13 +10,13 @@ const token = [Buffer.from('{}').toString('base64url'), Buffer.from(JSON.stringi
 const cv = 'base64-' + Buffer.from(JSON.stringify({ access_token: token, refresh_token: 'synthetic', expires_at: exp, expires_in: 3600, token_type: 'bearer', user: { id: uid } })).toString('base64url');
 
 test('internal pricing calculator: owner-only access and browser workflow', async t => {
-  let operator = true;
+  let operator = true, email = 'owner@example.invalid';
   const requests = [];
   const stub = createServer(async (req, res) => {
     for await (const _ of req) { /* drain */ }
     requests.push(req.url);
     res.setHeader('Content-Type', 'application/json');
-    if (req.url === '/auth/v1/user') return res.end(JSON.stringify({ id: uid, aud: 'authenticated' }));
+    if (req.url === '/auth/v1/user') return res.end(JSON.stringify({ id: uid, aud: 'authenticated', email, email_confirmed_at: '2026-10-01T00:00:00Z' }));
     if (req.url === '/rest/v1/rpc/platform_operator_status') return res.end(JSON.stringify(operator));
     res.statusCode = 404; res.end('{}');
   });
@@ -24,7 +24,7 @@ test('internal pricing calculator: owner-only access and browser workflow', asyn
   const reserve = createServer(); await new Promise(r => reserve.listen(0, '127.0.0.1', r)); const port = reserve.address().port; await new Promise(r => reserve.close(r));
   const base = 'http://127.0.0.1:' + port;
   const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], {
-    env: { ...process.env, VERCEL_ENV: '', NEXT_PUBLIC_SITE_URL: base, NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:' + stub.address().port, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'synthetic' },
+    env: { ...process.env, VERCEL_ENV: '', NEXT_PUBLIC_SITE_URL: base, NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:' + stub.address().port, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'synthetic', PRICING_OWNER_EMAILS: 'someone@example.invalid, Owner@Example.invalid' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(() => child.kill()); let logs = ''; child.stdout.on('data', d => logs += d); child.stderr.on('data', d => logs += d);
@@ -34,9 +34,10 @@ test('internal pricing calculator: owner-only access and browser workflow', asyn
     return { res, html: await res.text() };
   };
 
-  await t.test('anonymous and non-operator users are refused', async () => {
+  await t.test('anonymous, non-operator and operator-but-not-owner users are refused', async () => {
     assert.equal((await read(false)).res.status, 307);
     operator = false; assert.equal((await read()).res.status, 404); operator = true;
+    email = 'sales@example.invalid'; assert.equal((await read()).res.status, 404); email = 'owner@example.invalid';
   });
   await t.test('operator sees the calculator, marked noindex and not connected to customers', async () => {
     const { res, html } = await read();

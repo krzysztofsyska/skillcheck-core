@@ -21,7 +21,7 @@ function load(path) {
   return mod.exports;
 }
 const calc = load(new URL('../lib/pricing/internal-calculator.ts', import.meta.url).pathname);
-const { defaultConfig, parseConfig, toOffer, calculate, validateConfig, netFromGross, parsePln, formatPln, cvChoices } = calc;
+const { defaultConfig, parseConfig, toOffer, calculate, validateConfig, netFromGross, parsePln, formatPln, cvChoices, effectivePrice, MAX_UNITS } = calc;
 const scenario = (packageCode, cvCount, quantities = {}, ordersPerMonth = 1) => ({ packageCode, cvCount, quantities, ordersPerMonth });
 
 test('default PRESELEKCJA 60 CV is quoted at the published 300 zł gross', () => {
@@ -123,8 +123,30 @@ test('stored or imported configurations are parsed strictly', () => {
 test('page is owner-gated, server-only and noindex', () => {
   const page = readFileSync(new URL('../app/operator/pricing/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /import 'server-only'/);
-  assert.match(page, /await salesOperator\(\)/);
+  assert.match(page, /await pricingOwner\(\)/);
+  const access = readFileSync(new URL('../app/operator/pricing/access.ts', import.meta.url), 'utf8');
+  assert.match(access, /await salesOperator\(\)/);
+  assert.match(access, /PRICING_OWNER_EMAILS \?\? ''/);
+  assert.match(access, /email_confirmed_at/);
+  assert.match(access, /notFound\(\)/);
   assert.match(page, /robots: \{ index: false, follow: false \}/);
   const client = readFileSync(new URL('../app/operator/pricing/internal-calculator.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(client, /fetch\(|supabase|process\.env/);
+});
+
+test('add-on quantities up to the UI limit are accepted by the generated offer', () => {
+  const r = calculate(defaultConfig(), scenario('PRESELEKCJA', 60, { sms: MAX_UNITS }));
+  assert.equal(r.ok, true);
+  assert.equal(r.quote.lines.find(l => l.code === 'sms').quantity, MAX_UNITS);
+  assert.deepEqual(calculate(defaultConfig(), scenario('PRESELEKCJA', 60, { sms: MAX_UNITS + 1 })), { ok: false, code: 'INVALID_QUANTITY' });
+});
+
+test('effective price shows when whole net grosze change a gross price', () => {
+  assert.deepEqual(effectivePrice(30_000, 2300), { netMinor: 24_390, grossMinor: 30_000 });
+  assert.deepEqual(effectivePrice(1, 2300), { netMinor: 1, grossMinor: 1 });
+  assert.deepEqual(effectivePrice(123, 2300), { netMinor: 100, grossMinor: 123 });
+  // 0,02 zł gross is 0,0163 net → 0,02 net → 0,0246 gross: per unit it rounds back to 0,02, but 100 units cost 2,46 zł.
+  const c = defaultConfig();
+  c.addons.find(a => a.code === 'sms').packages.PRESELEKCJA.unitGrossMinor = 2;
+  assert.equal(calculate(c, scenario('PRESELEKCJA', 60, { sms: 100 })).quote.grossMinor, 30_000 + 246);
 });

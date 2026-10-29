@@ -13,7 +13,8 @@ export const PACKAGE_CODES: readonly PackageCode[] = ['FREE', 'PRESELEKCJA', 'WE
 export const PACKAGE_LABELS: Readonly<Record<PackageCode, string>> = {
   FREE: 'FREE', PRESELEKCJA: 'PRESELEKCJA', WERYFIKACJA: 'WERYFIKACJA', ASSESSMENT_CENTER: 'ASSESSMENT CENTER',
 };
-const MAX_UNITS = 10_000;
+/** Largest quantity of one add-on in a scenario; the generated offer and the UI use the same limit. */
+export const MAX_UNITS = 10_000;
 const MAX_MINOR = 1_000_000_000_000;
 
 export type PackageSettings = {
@@ -140,6 +141,13 @@ export function parseConfig(input: unknown): InternalConfig | null {
 export const netFromGross = (grossMinor: number, vatBasisPoints: number): number =>
   Math.floor((grossMinor * 10_000 * 2 + (10_000 + vatBasisPoints)) / (2 * (10_000 + vatBasisPoints)));
 
+/** The engine prices whole net grosze, so a gross price may not be representable exactly. Returns the
+ * net unit price the engine will use and the gross that net amount actually corresponds to. */
+export function effectivePrice(grossMinor: number, vatBasisPoints: number): { netMinor: number; grossMinor: number } {
+  const netMinor = netFromGross(grossMinor, vatBasisPoints);
+  return { netMinor, grossMinor: netMinor + Math.floor((netMinor * vatBasisPoints * 2 + 10_000) / 20_000) };
+}
+
 export const cvChoices = (p: PackageSettings): number[] =>
   Array.from(new Set([...p.cvOptions, p.cvIncluded].filter(n => n > 0))).sort((a, b) => a - b);
 
@@ -158,7 +166,7 @@ export function toOffer(config: InternalConfig): Offer {
     if (!s.enabled) continue;
     planServices.push({
       packageCode: code, serviceCode: a.code, allowed: true, visible: true, includedQuantity: s.included,
-      maxQuantity: Math.min(MAX_UNITS, s.included + 1_000), quantityStep: 1, extraAllowed: true, autoPurchase: true,
+      maxQuantity: MAX_UNITS, quantityStep: 1, extraAllowed: true, autoPurchase: true,
       commercialStatus: 'purchasable', overridePriceRule: { method: 'per_unit', unitMinor: netFromGross(s.unitGrossMinor, vat) },
     });
   }

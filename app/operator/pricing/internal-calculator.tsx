@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  PACKAGE_CODES, PACKAGE_LABELS, calculate, cvChoices, defaultConfig, describeCode, formatPln, parseConfig, parsePln,
+  MAX_UNITS, PACKAGE_CODES, PACKAGE_LABELS, calculate, effectivePrice, cvChoices, defaultConfig, describeCode, formatPln, parseConfig, parsePln,
   validateConfig, type InternalConfig, type Scenario,
 } from '../../../lib/pricing/internal-calculator';
 import type { PackageCode } from '../../../lib/pricing/quote-engine';
@@ -29,8 +29,16 @@ function Money({ value, onChange, label }: { value: number; onChange: (minor: nu
 }
 
 function Count({ value, onChange, label, min = 0 }: { value: number; onChange: (n: number) => void; label: string; min?: number }) {
-  return <input aria-label={label} type="number" min={min} max={10000} step={1} value={value}
-    onChange={e => { const n = Number(e.target.value); if (Number.isSafeInteger(n) && n >= min && n <= 10000) onChange(n); }} />;
+  return <input aria-label={label} type="number" min={min} max={MAX_UNITS} step={1} value={value}
+    onChange={e => { const n = Number(e.target.value); if (Number.isSafeInteger(n) && n >= min && n <= MAX_UNITS) onChange(n); }} />;
+}
+
+/** Net price the engine uses for a gross input; warns when whole net grosze change the gross. */
+function NetHint({ gross, vat }: { gross: number; vat: number }) {
+  if (gross === 0) return null;
+  const effective = effectivePrice(gross, vat);
+  return <span className={styles.unit}>netto {formatPln(effective.netMinor)}
+    {effective.grossMinor !== gross && <strong className={styles.warn}> · po zaokrągleniu {formatPln(effective.grossMinor)} brutto</strong>}</span>;
 }
 
 function Percent({ value, onChange, label }: { value: number; onChange: (bps: number) => void; label: string }) {
@@ -104,7 +112,7 @@ export function InternalCalculator() {
       {available.length > 0 && <details className={styles.details}>
         <summary>Dodatki w zamówieniu ({available.length} dostępnych)</summary>
         <div className={styles.tableWrap}><table className={styles.table}>
-          <thead><tr><th>Dodatek</th><th>W pakiecie</th><th>Łącznie w zamówieniu</th></tr></thead>
+          <thead><tr><th>Dodatek</th><th>W pakiecie</th><th>Łącznie w zamówieniu (max {MAX_UNITS})</th></tr></thead>
           <tbody>{available.map(a => {
             const included = a.packages[scenario.packageCode].included;
             return <tr key={a.code}><td>{a.name}<span className={styles.unit}> / {a.unit}</span></td><td>{included}</td>
@@ -148,14 +156,14 @@ export function InternalCalculator() {
 
     <section className={styles.card} aria-labelledby="packages">
       <h2 id="packages">Pakiety</h2>
-      <p className={styles.hint}>Ceny brutto. Pole z ceną 0,00 zł oznacza cenę jeszcze nieustaloną (oprócz FREE).</p>
+      <p className={styles.hint}>Ceny brutto. Silnik liczy w pełnych groszach netto, a VAT dolicza do sumy zamówienia, więc pod każdą ceną widać jej kwotę netto. Pole z ceną 0,00 zł oznacza cenę jeszcze nieustaloną (oprócz FREE).</p>
       <div className={styles.tableWrap}><table className={styles.table}>
         <thead><tr><th>Pakiet</th><th>Cena brutto</th><th>CV w pakiecie</th><th>Opcje liczby CV</th><th>Dopłata za CV ponad pakiet (brutto)</th></tr></thead>
         <tbody>{PACKAGE_CODES.map(code => {
           const p = config.packages[code];
           return <tr key={code}>
             <th scope="row">{PACKAGE_LABELS[code]}{code !== 'FREE' && p.grossMinor === 0 && <span className={styles.badge}>bez ceny</span>}</th>
-            <td><Money label={`${PACKAGE_LABELS[code]} — cena brutto`} value={p.grossMinor} onChange={v => update(d => { d.packages[code].grossMinor = v; })} /></td>
+            <td><Money label={`${PACKAGE_LABELS[code]} — cena brutto`} value={p.grossMinor} onChange={v => update(d => { d.packages[code].grossMinor = v; })} /><NetHint gross={p.grossMinor} vat={config.vatBasisPoints} /></td>
             <td><Count label={`${PACKAGE_LABELS[code]} — CV w pakiecie`} min={1} value={p.cvIncluded} onChange={n => update(d => { d.packages[code].cvIncluded = n; })} /></td>
             <td><input aria-label={`${PACKAGE_LABELS[code]} — opcje liczby CV`} defaultValue={p.cvOptions.join(', ')} key={p.cvOptions.join(',')}
               onBlur={e => {
@@ -164,7 +172,7 @@ export function InternalCalculator() {
                   update(d => { d.packages[code].cvOptions = Array.from(new Set(list)).sort((a, b) => a - b); });
                 else e.target.value = p.cvOptions.join(', ');
               }} /></td>
-            <td><Money label={`${PACKAGE_LABELS[code]} — dopłata za CV`} value={p.overageGrossPerCvMinor} onChange={v => update(d => { d.packages[code].overageGrossPerCvMinor = v; })} /></td>
+            <td><Money label={`${PACKAGE_LABELS[code]} — dopłata za CV`} value={p.overageGrossPerCvMinor} onChange={v => update(d => { d.packages[code].overageGrossPerCvMinor = v; })} /><NetHint gross={p.overageGrossPerCvMinor} vat={config.vatBasisPoints} /></td>
           </tr>;
         })}</tbody></table></div>
     </section>
@@ -182,7 +190,7 @@ export function InternalCalculator() {
             <td><input type="checkbox" aria-label={`${a.name} dostępny w ${PACKAGE_LABELS[editPackage]}`} checked={s.enabled}
               onChange={e => update(d => { d.addons[i].packages[editPackage].enabled = e.target.checked; })} /></td>
             <td><Count label={`${a.name} — w pakiecie`} value={s.included} onChange={n => update(d => { d.addons[i].packages[editPackage].included = n; })} /></td>
-            <td><Money label={`${a.name} — cena brutto`} value={s.unitGrossMinor} onChange={v => update(d => { d.addons[i].packages[editPackage].unitGrossMinor = v; })} /></td>
+            <td><Money label={`${a.name} — cena brutto`} value={s.unitGrossMinor} onChange={v => update(d => { d.addons[i].packages[editPackage].unitGrossMinor = v; })} /><NetHint gross={s.unitGrossMinor} vat={config.vatBasisPoints} /></td>
             <td><Money label={`${a.name} — koszt własny`} value={a.unitCostMinor} onChange={v => update(d => { d.addons[i].unitCostMinor = v; })} /></td>
           </tr>;
         })}</tbody></table></div>

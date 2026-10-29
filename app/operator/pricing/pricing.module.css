@@ -26,6 +26,8 @@
 .table td input { min-width: 96px; }
 .num { text-align: right !important; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .unit { color: #52647c; font-weight: 400; font-size: 14px; }
+td > .unit { display: block; margin-top: 4px; }
+.warn { color: #8a4b00; font-weight: 600; }
 .badge { display: inline-block; margin-left: 8px; background: #fff3da; color: #805300; border-radius: 20px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
 .details summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
 .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 16px 0 0; }

@@ -1,7 +1,7 @@
 import 'server-only';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { salesOperator } from '../sales/access';
+import { pricingOwner } from './access';
 import { InternalCalculator } from './internal-calculator';
 import styles from './pricing.module.css';
 
@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: 'Wewnętrzny kalkulator cen | SkillCh
  * SC-PRICING-003 quote engine; costs and margins stay in this browser and are never sent anywhere.
  * Not connected to the customer-facing page, calculator or checkout yet. */
 export default async function PricingPage() {
-  await salesOperator();
+  await pricingOwner();
   return <main className={styles.page}>
     <nav><Link href="/operator/sales">Proces sprzedaży</Link><Link href="/operator/leads">Zgłoszenia kontaktowe</Link></nav>
     <header><p className={styles.eyebrow}>SKILLCHECK · CENY · WERSJA ROBOCZA</p><h1>Wewnętrzny kalkulator cen</h1>
