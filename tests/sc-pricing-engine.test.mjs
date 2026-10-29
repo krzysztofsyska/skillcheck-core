@@ -590,3 +590,23 @@ test('publish rejects a required dependency closure that cannot fit in one reque
   error(() => validateOfferForPublish(tooLong.c), 'INCLUDED_DEPENDENCIES_EXCEED_REQUEST_LIMIT:PRESELEKCJA');
   error(() => quote('PRESELEKCJA', tooLong.chain.map(serviceCode => ({ serviceCode, quantity: 1 })), 30, tooLong.c), 'INVALID_REQUEST');
 });
+
+test('publish bound over a 20-service conflict component finishes quickly', () => {
+  const c = clone();
+  Object.assign(c.plans.find(p => p.code === 'PRESELEKCJA'), { baseNetMinor: 0, cvIncluded: 30, cvPolicy: { quick: [10, 20, 30], range: null } });
+  const deps = Array.from({ length: 40 }, (_, i) => `dep_${i}`);
+  const opts = Array.from({ length: 20 }, (_, i) => `opt_${i}`);
+  const svc = (code, price, extra = {}) => ({ code, name: code, min: 0, max: 1, step: 1, technicalStatus: 'verified',
+    commercialStatus: 'purchasable', capabilityCode: 'reports_ready', dependencies: [], exclusions: [],
+    defaultPriceRule: { method: 'fixed', amountMinor: price }, ...extra });
+  c.services.push(...deps.map(d => svc(d, 0)),
+    ...opts.map((o, i) => svc(o, 1_000, { dependencies: deps, exclusions: i === 0 ? opts.slice(1) : [] })));
+  c.planServices = c.planServices.filter(l => l.packageCode !== 'PRESELEKCJA');
+  c.planServices.push(...[...deps, ...opts].map(s => ({ ...link('PRESELEKCJA', s), maxQuantity: 1 })));
+  const started = performance.now();
+  // Best compatible selection: the 19 services opt_1..opt_19 (opt_0 excludes all of them).
+  assert.equal(validateOfferForPublish(c).PRESELEKCJA, 19 * 1_230);
+  assert.ok(performance.now() - started < 5_000, `publish took ${Math.round(performance.now() - started)} ms`);
+  const all19 = [...deps, ...opts.slice(1)].map(serviceCode => ({ serviceCode, quantity: 1 }));
+  assert.equal(quote('PRESELEKCJA', all19, 30, c).grossMinor, 19 * 1_230);
+});
