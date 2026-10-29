@@ -93,7 +93,7 @@ export async function apply({ databaseUrl, dir, files, expectedHashes, releaseSh
     for (const m of migrations) if (expected[m.file] !== m.hash) throw new Error(`File changed since the approved plan: ${m.file}`);
     if (Object.keys(expected).length !== migrations.length) throw new Error('Approved plan and migration list differ');
   }
-  const client = new pg.Client({ connectionString: databaseUrl, ssl, application_name: 'skillcheck-db-migrate' });
+  const client = new pg.Client({ connectionString: ssl ? withoutTlsParameters(databaseUrl) : databaseUrl, ssl, application_name: 'skillcheck-db-migrate' });
   await client.connect();
   try {
     await client.query(ledgerDdl);
@@ -117,6 +117,14 @@ export async function apply({ databaseUrl, dir, files, expectedHashes, releaseSh
     }
     return migrations.map(({ file, hash }) => ({ file, hash }));
   } finally { await client.end(); }
+}
+
+// node-postgres lets sslmode/ssl* URL parameters replace the explicit ssl
+// object (and its CA), so they are removed whenever TLS is set in code.
+export function withoutTlsParameters(databaseUrl) {
+  const url = new URL(databaseUrl);
+  for (const key of [...url.searchParams.keys()]) if (key === 'ssl' || key.startsWith('ssl')) url.searchParams.delete(key);
+  return url.href;
 }
 
 // TLS is always on. With the project's CA certificate (secret DATABASE_CA_CERT)

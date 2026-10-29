@@ -4,7 +4,7 @@ import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { apply, parseList, sha256, unappliedGaps, unframe } from '../../tools/db-migrate/apply.mjs';
+import { apply, parseList, sha256, tlsOptions, unappliedGaps, unframe, withoutTlsParameters } from '../../tools/db-migrate/apply.mjs';
 import { bootMigrationDatabase } from '../helpers/sc19-migration-fixture.mjs';
 
 const repoDir = new URL('../../supabase/migrations/', import.meta.url);
@@ -107,4 +107,15 @@ test('runner applies the whole checked-in chain on a fresh database and leaves t
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.skillcheck_migration_ledger where statements is null or sha256 is null')).rows[0].n, 0);
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.schema_migrations')).rows[0].n, files.length);
   assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0, 'No commercial data seeded');
+});
+
+test('TLS comes from code: URL ssl parameters are removed so the CA and verification apply', () => {
+  const url = 'postgresql://postgres.ref:p%40ss@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=require&sslrootcert=x&application_name=a';
+  const cleaned = new URL(withoutTlsParameters(url));
+  assert.equal(cleaned.search, '?application_name=a');
+  assert.equal(cleaned.password, 'p%40ss');
+  assert.equal(cleaned.host, 'aws-0-eu-central-1.pooler.supabase.com:5432');
+  const ca = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
+  assert.deepEqual(tlsOptions(ca), { ca, rejectUnauthorized: true });
+  assert.deepEqual(tlsOptions(undefined), { rejectUnauthorized: false });
 });
