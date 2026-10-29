@@ -135,9 +135,20 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 2. The production Supabase project (`wsvjawuikxfzjyivxgsu`) is reachable from agent sessions only through Supabase MCP with `read_only=true` and `project_ref=wsvjawuikxfzjyivxgsu`. Write-capable Supabase MCP is allowed only for development projects or branches.
 3. Agents do not change Vercel Production environment variables, secrets, aliases, domains, deployment protection or shareable/bypass links. Only the owner does, or a pipeline after an approval. Tools that create share links as a side effect (for example fetching a protected deployment URL through Vercel MCP) are not used against production.
 4. Any production change made outside the pipeline is an incident, not a missing record. It is reported in an issue with SHA, time, actor and scope.
-5. Agent sessions never use the owner's GitHub token or OAuth identity. Writes (commits, pushes, PRs, comments) use only the `skillcheck-agent-ks[bot]` GitHub App token. Until the separate agent identity of ruleset variant (a) is in place, agents do not approve environments or pull requests.
+5. GitHub identity of agent sessions (owner decision 2026-10-29, variant B). The target is the `skillcheck-agent-ks[bot]` GitHub App token for every agent write. Until a session can use it, an agent session may act through the owner's GitHub identity **only** for:
+   - commits and pushes to task branches (never to `main` or `integration` directly);
+   - opening and updating pull requests, review replies and comments;
+   - merging a pull request into `integration` under the Review loop rules (CI green and an independent review with no unresolved findings on the current commit).
 
-The required status `production-approval-attestation` (`.github/workflows/production-approval-attestation.yml`) passes only after the owner approves the `production-approval` environment for the exact PR head SHA. It protects `main` only while rule 5 holds: an environment can also be approved through the API with the owner's token.
+   With the owner's identity an agent session **never**:
+   - approves the `production-approval` environment or any pull request review;
+   - merges or pushes anything to `main`, including production promotion PRs (the owner merges them after approving);
+   - changes rulesets, branch protection, environments, repository settings, secrets or deploy keys;
+   - deletes branches it did not create.
+
+   Any such action by an agent session is an incident under rule 4.
+
+The required status `production-approval-attestation` (`.github/workflows/production-approval-attestation.yml`) passes only after the owner approves the `production-approval` environment for the exact PR head SHA. While agent sessions act through the owner's identity (rule 5, variant B), the separation between an agent and the owner's approval is procedural, not technical: GitHub would accept an approval or a `main` merge made with that identity. Only the owner approves and merges into `main`. Moving agent writes to the `skillcheck-agent-ks[bot]` App token restores the technical separation.
 
 ## Agent controller
 
