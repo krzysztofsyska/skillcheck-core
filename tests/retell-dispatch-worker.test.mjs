@@ -165,6 +165,48 @@ test("SC-011-B5 once-only Retell dispatch worker on real PostgreSQL", async t =>
     assert.equal((await claim(p)).state, "accepted");
   });
 
+  const held = () => {
+    let release, started;
+    const sent = new Promise(resolve => { started = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const calls = [];
+    const http = async (url, init) => { calls.push({ url, init }); started(); return gate; };
+    return { http, calls, sent, release };
+  };
+
+  await t.test("an in-flight request blocks overlapping resends without spending attempts", async () => {
+    const p = await prepared();
+    const first = held();
+    const pending = dispatch(p, first.http);
+    await first.sent;
+    for (let i = 0; i < 12; i++) {
+      const overlap = transport(reply(201, { call_id: "call_worker_overlap_01" }));
+      assert.deepEqual(await dispatch(p, overlap.http), { state: "retry_later" });
+      assert.equal(overlap.calls.length, 0);
+    }
+    assert.deepEqual(await claim(p), { state: "sending", attempts: 1, rejection: null });
+    first.release(reply(201, { call_id: "call_worker_overlap_02" }));
+    assert.equal((await pending).state, "accepted");
+    assert.deepEqual(await claim(p), { state: "accepted", attempts: 1, rejection: null });
+  });
+
+  await t.test("an acceptance that arrives after the claim went unknown is still recorded", async () => {
+    const p = await prepared();
+    const first = held();
+    const pending = dispatch(p, first.http);
+    await first.sent;
+    await db.query("set session_replication_role=replica");
+    await db.query("update private.sc011b_voice_dispatches set state='unknown',lease_until=null where preparation_id=$1", [p.operationId]);
+    await db.query("set session_replication_role=origin");
+    first.release(reply(201, { call_id: "call_worker_late_ok_01" }));
+    const result = await pending;
+    assert.equal(result.state, "accepted");
+    assert.equal((await claim(p)).state, "accepted");
+    const again = transport(reply(201, { call_id: "call_worker_late_ok_02" }));
+    assert.deepEqual(await dispatch(p, again.http), result);
+    assert.equal(again.calls.length, 0);
+  });
+
   await t.test("a stale or malformed draft never claims or sends", async () => {
     const p = await prepared();
     const { http, calls } = transport(reply(201, { call_id: "call_worker_stale_0001" }));

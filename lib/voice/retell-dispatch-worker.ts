@@ -50,10 +50,19 @@ async function tx<T>(db: SqlClient, work: () => Promise<T>): Promise<T> {
   }
 }
 async function settle(db: SqlClient, companyId: string, operationId: string,
-  state: "accepted" | "rejected" | "unknown", rejection: string | null): Promise<void> {
-  await tx(db, () => db.query(
-    "update private.sc011b_voice_dispatches set state=$3,rejection=$4 where company_id=$1 and preparation_id=$2 and state='sending'",
-    [companyId, operationId, state, rejection]));
+  state: "accepted" | "rejected", rejection: string | null): Promise<void> {
+  // A late acceptance still settles a claim that meanwhile became unknown.
+  await tx(db, () => db.query([
+    "update private.sc011b_voice_dispatches set state=$3,rejection=$4 where company_id=$1 and preparation_id=$2",
+    "and (state='sending' or (state='unknown' and $3='accepted'))",
+  ].join(" "), [companyId, operationId, state, rejection]));
+}
+async function releaseLease(db: SqlClient, companyId: string, operationId: string): Promise<void> {
+  try {
+    await tx(db, () => db.query(
+      "update private.sc011b_voice_dispatches set lease_until=null where company_id=$1 and preparation_id=$2 and state='sending'",
+      [companyId, operationId]));
+  } catch { /* the lease expires on its own */ }
 }
 async function readCallId(result: Pick<Response, "headers" | "body">): Promise<string | null> {
   const declared = result.headers.get("content-length");
@@ -116,6 +125,7 @@ export async function dispatchRetellCall(
     ].join(" "), [companyId, operationId, keyDigest, payloadDigest])).rows.length === 1;
     const rows = (await db.query([
       "select state,attempts,provider_key_digest,payload_sha256,",
+      "coalesce(lease_until>clock_timestamp(),false) as leased,",
       "extract(epoch from (clock_timestamp()-started_at))*1000 as age_ms",
       "from private.sc011b_voice_dispatches where company_id=$1 and preparation_id=$2 for update",
     ].join(" "), [companyId, operationId])).rows;
@@ -123,8 +133,9 @@ export async function dispatchRetellCall(
     const row = rows[0];
     if (row.provider_key_digest !== keyDigest || row.payload_sha256 !== payloadDigest)
       return fail("VOICE_DISPATCH_REJECTED");
-    if (row.state !== "sending") return { state: String(row.state) };
-    // A call id recorded before a crash settles the claim: never resend it.
+    if (row.state === "accepted" || row.state === "rejected") return { state: String(row.state) };
+    // A call id recorded before a crash (or after the claim went unknown)
+    // settles the claim: never resend it.
     const recorded = (await db.query(
       "select 1 from private.sc011b_voice_attempts where company_id=$1 and preparation_id=$2",
       [companyId, operationId])).rows.length === 1;
@@ -134,6 +145,10 @@ export async function dispatchRetellCall(
         [companyId, operationId]);
       return { state: "accepted" };
     }
+    if (row.state !== "sending") return { state: String(row.state) };
+    // Another worker's request is still in flight: it neither resends nor
+    // spends an attempt, so overlap cannot exhaust the budget.
+    if (!fresh && row.leased === true) return { state: "in_flight" };
     if (!fresh) {
       if (Number(row.age_ms) > RETELL_RESEND_WINDOW_MS || Number(row.attempts) >= maxAttempts) {
         await db.query(
@@ -161,6 +176,7 @@ export async function dispatchRetellCall(
   }
   if (claim.state === "rejected" || claim.state === "unknown")
     return Object.freeze({ state: claim.state });
+  if (claim.state === "in_flight") return Object.freeze({ state: "retry_later" });
 
   let response: Pick<Response, "status" | "headers" | "body">;
   try {
@@ -171,12 +187,16 @@ export async function dispatchRetellCall(
       signal: AbortSignal.timeout(10000),
     });
   } catch {
+    await releaseLease(db, companyId, operationId);
     return Object.freeze({ state: "retry_later" });
   }
   if (response.status === 201 || response.status === 200) {
     const providerCallId = await readCallId(response);
     // Accepted without a readable id: resend later with the same key.
-    if (!providerCallId) return Object.freeze({ state: "retry_later" });
+    if (!providerCallId) {
+      await releaseLease(db, companyId, operationId);
+      return Object.freeze({ state: "retry_later" });
+    }
     const { attemptId } = await recordRetellDispatch(db, {
       companyId, operationId, providerCallId, agentId: draft.payload.override_agent_id,
     });
@@ -190,5 +210,6 @@ export async function dispatchRetellCall(
     return Object.freeze({ state: "rejected" });
   }
   // 401/402 (configuration or billing), 429 and 5xx keep the reservation.
+  await releaseLease(db, companyId, operationId);
   return Object.freeze({ state: "retry_later" });
 }

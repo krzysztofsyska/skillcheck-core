@@ -22,7 +22,8 @@ Retell przez godzinę deduplikuje ponowione `create-phone-call` z tym samym `ide
 - Wyzwalacz blokuje anulowanie i zwrot przygotowania, dopóki połączenie mogło wyjść (`sending`, `accepted`, `unknown`).
 - **Powiązanie szkicu:** worker przyjmuje tylko szkic skompilowany w tym procesie (`isCompiledRetellOutboundDraft`). Rezerwacja wysyłki zapisuje SHA-256 klucza idempotencji, który strażnik porównuje z przygotowaniem, oraz SHA-256 dokładnego ładunku. Ponowienie z innym ładunkiem jest odrzucane.
 - **Aktualne uprawnienia:** wstawienie rezerwacji wysyłki i każde ponowienie kolejkują odroczone sprawdzenie SC-010-C (`sc010c_preparation_current_guard`: kontakt, zgoda, okno, blokady kanałów, wydanie planu, pula) przy COMMIT. Cofnięte uprawnienie wycofuje rezerwację wysyłki przed POST.
-- **Odzyskanie po awarii:** istniejąca próba połączenia z `call_id` kończy rezerwację wysyłki jako `accepted` bez ponownej wysyłki.
+- **Odzyskanie po awarii:** istniejąca próba połączenia z `call_id` kończy rezerwację wysyłki jako `accepted` bez ponownej wysyłki, także gdy rezerwacja jest już w stanie `unknown`.
+- **Dzierżawa w toku:** `lease_until` (15 s, więcej niż timeout HTTP) blokuje równoległe ponowienia, więc nakładające się wywołania nie zużywają limitu prób i nie wysyłają drugiego żądania. Dzierżawa jest zwalniana po wyniku przejściowym, a po awarii wygasa sama.
 - Numer docelowy i klucz API nie są zapisywane.
 
 ## Zanim zadziała naprawdę

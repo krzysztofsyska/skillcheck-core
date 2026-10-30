@@ -17,6 +17,8 @@ create table private.sc011b_voice_dispatches (
  -- of the exact JSON payload: every resend must carry the identical request.
  provider_key_digest text not null check(provider_key_digest ~ '^[0-9a-f]{64}$'),
  payload_sha256 text not null check(payload_sha256 ~ '^[0-9a-f]{64}$'),
+ -- In-flight lease: while it runs, no other worker resends or uses an attempt.
+ lease_until timestamptz,
  check((state='rejected') = (rejection is not null)),
  primary key(company_id,preparation_id),
  foreign key(company_id,preparation_id)
@@ -53,22 +55,34 @@ begin
    raise exception using errcode='42501',message='VOICE_DISPATCH_INVALID_STATE';
   end if;
   new.started_at:=clock_timestamp(); new.last_attempt_at:=new.started_at;
+  new.lease_until:=new.started_at+interval '15 seconds';
   return new;
  end if;
- -- Only a sending claim moves: one more resend, or one terminal outcome.
- if old.state<>'sending' or new.company_id<>old.company_id or new.preparation_id<>old.preparation_id
+ -- A sending claim moves by one resend, a lease release, or one terminal
+ -- outcome. An unknown claim may still learn that its call was accepted.
+ if new.company_id<>old.company_id or new.preparation_id<>old.preparation_id
   or new.started_at<>old.started_at or new.provider_key_digest<>old.provider_key_digest
-  or new.payload_sha256<>old.payload_sha256
-  or not ((new.state='sending' and new.attempts=old.attempts+1)
-       or (new.state in ('accepted','rejected','unknown') and new.attempts=old.attempts)) then
+  or new.payload_sha256<>old.payload_sha256 or new.attempts<old.attempts
+  or not ((old.state='sending' and new.state='sending' and new.attempts=old.attempts+1)
+       or (old.state='sending' and new.state='sending' and new.attempts=old.attempts
+           and new.lease_until is null)
+       or (old.state='sending' and new.state in ('accepted','rejected','unknown') and new.attempts=old.attempts)
+       or (old.state='unknown' and new.state='accepted' and new.attempts=old.attempts)) then
   raise exception using errcode='42501',message='VOICE_DISPATCH_IMMUTABLE';
  end if;
- if new.state='sending' then
+ if new.state='sending' and new.attempts=old.attempts+1 then
+  if old.lease_until>clock_timestamp() then
+   raise exception using errcode='PT409',message='VOICE_DISPATCH_IN_FLIGHT';
+  end if;
   -- Every resend re-proves current contact authority at COMMIT as well.
   update private.sc010c_voice_preparations set state=state
    where company_id=new.company_id and id=new.preparation_id;
   new.last_attempt_at:=clock_timestamp();
- else new.last_attempt_at:=old.last_attempt_at; end if;
+  new.lease_until:=new.last_attempt_at+interval '15 seconds';
+ else
+  new.last_attempt_at:=old.last_attempt_at;
+  if new.state<>'sending' then new.lease_until:=null; end if;
+ end if;
  return new;
 end;$$;
 create trigger sc011b_dispatch_guard before insert or update or delete
