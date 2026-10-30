@@ -8,8 +8,8 @@
 import { createHash } from "node:crypto";
 import { canonicalVoiceCallRequest, type VoiceCallRequest } from "./provider.ts";
 import {
-  isAuthenticallyReleasedInterviewPlan, releasedApplicationBinding, prohibitedTopicsAreCanonical,
-  SC012_PROHIBITED_TOPICS_INSTRUCTION, type InterviewPlan,
+  isAuthenticallyReleasedInterviewPlan, releasedApplicationBinding, releasedPlanPositionTitle,
+  prohibitedTopicsAreCanonical, SC012_PROHIBITED_TOPICS_INSTRUCTION, type InterviewPlan,
 } from "./interview-plan.ts";
 import { scenarioApplicationBinding } from "./mvp-package-gate.ts";
 
@@ -44,6 +44,8 @@ export type RetellOutboundDraft = Readonly<{
       skillcheck_interview_script: string;
       skillcheck_notice_version: string;
       skillcheck_language: "pl-PL";
+      skillcheck_company_name: string;
+      skillcheck_position_title: string;
     }>;
   }>;
   /** Not a Retell time limit: verified agent-side max must be <= this. */
@@ -69,6 +71,16 @@ export type RetellContactSnapshot = Readonly<{
   noticeDelivered: true;
 }>;
 
+/**
+ * Display name of the employer the agent speaks for, from a trusted server-side,
+ * tenant-scoped read. The position title is NOT accepted here: it comes from the
+ * released plan's fingerprinted source.
+ */
+export type RetellCompanyContext = Readonly<{
+  companyId: string;
+  companyName: string;
+}>;
+
 export class RetellOutboundDraftError extends Error {
   readonly code = "RETELL_DRAFT_REJECTED";
   constructor() { super("RETELL_DRAFT_REJECTED"); }
@@ -82,6 +94,28 @@ const agentId = /^(?:agent_[A-Za-z0-9]{16,64}|[A-Za-z0-9]{32})$/;
 const revision = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const tag = /^(?!latest$|latest_published$|v\d+$)[a-z][a-z0-9_-]{0,19}$/;
 const flowId = /^[A-Za-z0-9_]{12,100}$/;
+// Spoken names only: letters, digits and common name punctuation on one line.
+// Quotation marks are dropped (they are not spoken); braces, markup, other
+// prompt delimiters and control characters fail.
+const spokenNameMax = 120;
+// Constructed at runtime: the es5 typecheck target rejects a /u literal.
+const spokenName = new RegExp("^[\\p{L}\\p{M}\\p{N}][\\p{L}\\p{M}\\p{N} .,&'’()/+\\-–:#®™!]*$", "u");
+/** Normalized spoken value, or undefined when it cannot be read aloud safely. */
+export function retellSpokenName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.normalize("NFC").replace(/["„”“«»]/g, "")
+    .replace(/[ \t]+/g, " ").trim();
+  if (normalized.length < 1 || normalized.length > spokenNameMax || !spokenName.test(normalized))
+    return undefined;
+  return normalized;
+}
+/** Every dynamic variable this profile admits; the compiler always supplies each one. */
+export const RETELL_DYNAMIC_VARIABLES = Object.freeze([
+  "skillcheck_interview_script", "skillcheck_notice_version", "skillcheck_language",
+  "skillcheck_company_name", "skillcheck_position_title",
+] as const);
+const admittedPlaceholder = new RegExp(
+  "\\{\\{\\s*(" + RETELL_DYNAMIC_VARIABLES.join("|") + ")\\s*\\}\\}", "g");
 const configFields = ["agentId","agentVersionTag","agentVersion","approvedAssistantVersion",
   "noticeVersion","fromNumberE164","maxBudgetSeconds","approvedFlowSha256","approvedAgentSha256"] as const;
 
@@ -122,7 +156,7 @@ const policyGuardrail = "Never ask about health, medical information or special-
  * tag snapshot cannot close the verification-to-use race.
  * https://docs.retellai.com/build/dynamic-variables (value precedence/nesting)
  */
-function assertCompilerOwnedVariables(...documents: Record<string, unknown>[]): void {
+export function assertCompilerOwnedVariables(...documents: Record<string, unknown>[]): void {
   const pending: unknown[] = [...documents];
   const opaqueCollections = new Set([
     "tools", "tool_ids", "mcps", "pre_session_tools", "post_session_tools",
@@ -134,10 +168,7 @@ function assertCompilerOwnedVariables(...documents: Record<string, unknown>[]): 
       // Retell trims whitespace. Nested, malformed and unknown substitutions are
       // not part of this controlled profile; also refuse leftover single braces
       // so a permitted inner placeholder cannot hide an outer substitution.
-      const literal = value.replace(
-        /\{\{\s*(skillcheck_interview_script|skillcheck_notice_version|skillcheck_language)\s*\}\}/g,
-        "",
-      );
+      const literal = value.replace(admittedPlaceholder, "");
       if (/[{}]/.test(literal)) return reject();
     } else if (Array.isArray(value)) {
       for (const item of value) pending.push(item);
@@ -197,6 +228,7 @@ async function readBoundedJson(result: Pick<Response, "headers" | "body">): Prom
   return parsed as Record<string, unknown>;
 }
 const verified = new WeakSet<object>();
+const compiledDrafts = new WeakSet<object>();
 export type RetellVerifiedAgent = Readonly<{
   agentId: string; agentVersionTag: string; agentVersion: number;
   maxCallDurationMs: number; checkedAtMs: number; flowSha256: string;
@@ -310,17 +342,20 @@ export function compileRetellOutboundDraft(
   releasedPlan: InterviewPlan,
   provider: RetellVerifiedAgent,
   contactInput: RetellContactSnapshot,
+  companyInput: RetellCompanyContext,
 ): RetellOutboundDraft {
   const c = validatedConfig(configInput);
   let call: VoiceCallRequest;
   let rawScenario: VoiceCallRequest["scenario"] | undefined;
   let contact: RetellContactSnapshot;
+  let company: RetellCompanyContext;
   try {
     // A canonical snapshot loses the in-process scenario brand; inspect the
     // original data property first, then validate/serialize only the snapshot.
     rawScenario = Object.getOwnPropertyDescriptor(request, "scenario")?.value;
     call = canonicalVoiceCallRequest(request);
     contact = structuredClone(contactInput);
+    company = structuredClone(companyInput);
   } catch { return reject(); }
   const binding = releasedApplicationBinding(releasedPlan);
   const scenarioBinding = scenarioApplicationBinding(rawScenario);
@@ -338,8 +373,13 @@ export function compileRetellOutboundDraft(
       contact.sourceFingerprint !== binding.sourceFingerprint ||
       !phone.test(contact.destinationE164) ||
       contact.destinationE164 !== call.destinationE164 ||
-      contact.contactApproved !== true || contact.noticeDelivered !== true)
+      contact.contactApproved !== true || contact.noticeDelivered !== true ||
+      !isPlainExact(company, ["companyId", "companyName"]) ||
+      company.companyId !== binding.companyId)
     return reject();
+  const companyName = retellSpokenName(company.companyName);
+  const positionTitle = retellSpokenName(releasedPlanPositionTitle(releasedPlan));
+  if (!companyName || !positionTitle) return reject();
   if (!isAuthenticallyReleasedInterviewPlan(releasedPlan) ||
       !verified.has(provider) ||
       provider.agentId !== c.agentId ||
@@ -396,9 +436,11 @@ export function compileRetellOutboundDraft(
       skillcheck_interview_script: script,
       skillcheck_notice_version: c.noticeVersion,
       skillcheck_language: "pl-PL" as const,
+      skillcheck_company_name: companyName,
+      skillcheck_position_title: positionTitle,
     }),
   });
-  return Object.freeze({
+  const draft: RetellOutboundDraft = Object.freeze({
     endpoint: "https://api.retellai.com/v2/create-phone-call" as const,
     method: "POST" as const, payload,
     requestedMaxSeconds: call.callTimeoutSeconds,
@@ -407,4 +449,12 @@ export function compileRetellOutboundDraft(
     expiresAtMs: provider.checkedAtMs + 30000,
     preflightOnly: true as const,
   });
+  compiledDrafts.add(draft);
+  return draft;
+}
+
+/** True only for the frozen object compileRetellOutboundDraft returned in this
+ * process; copies, JSON restores and hand-built drafts are rejected. */
+export function isCompiledRetellOutboundDraft(value: unknown): value is RetellOutboundDraft {
+  return !!value && typeof value === "object" && compiledDrafts.has(value);
 }

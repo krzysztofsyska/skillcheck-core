@@ -16,7 +16,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   if (!data) throw new Error('Nie udało się odczytać procesu sprzedaży.');
   const link = (p: number) => '/operator/sales?' + new URLSearchParams({ stage, due, page: String(p) });
   return <main className={styles.page}>
-    <nav><Link href="/operator/leads">Zgłoszenia kontaktowe</Link><Link href="/">Strona główna</Link></nav>
+    <nav><Link href="/operator/leads">Zgłoszenia kontaktowe</Link><Link href="/operator/pricing">Kalkulator cen</Link><Link href="/">Strona główna</Link></nav>
     <header><p className={styles.eyebrow}>SKILLCHECK · SPRZEDAŻ</p><h1>Proces sprzedaży</h1>
       <p>Od pierwszego kontaktu do decyzji klienta. Terminy „na dziś” i „zaległe” według Europe/Warsaw.</p></header>
     <form className={styles.filters} method="get">

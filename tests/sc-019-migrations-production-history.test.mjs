@@ -1,51 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
-import pg from 'pg';
 import { createRankingHarness, users } from './helpers/screening-ranking-fixture.mjs';
-import { assertR6, accountingSnapshot, catalogSnapshot, migrationManifest } from './helpers/sc19-migration-fixture.mjs';
+import { bootHostedRehearsal, replayObservedHistory } from './helpers/sc19-hosted-rehearsal.mjs';
+import { assertCurrentInventory, assertR6, accountingSnapshot, catalogSnapshot, migrationManifest } from './helpers/sc19-migration-fixture.mjs';
 
-// An isolated CI-owned cluster with real pg_cron, never a production connection.
-// This replays observed application migration history, not a Supabase platform dump.
 test('observed production history + pending chain preserves completed synthetic screening and installs empty R6 billing', async t => {
-  assert.equal(process.env.SC19_REHEARSAL_DISPOSABLE, 'yes');
   const url = new URL(process.env.SC19_REHEARSAL_DATABASE_URL);
-  assert.ok(['postgres:', 'postgresql:'].includes(url.protocol));
-  assert.equal(url.hostname, '127.0.0.1');
   assert.equal(url.port, '55432');
   assert.equal(url.pathname, '/sc19_production_rehearsal');
   assert.ok(['16','17'].includes(process.env.SC19_TEST_PG_MAJOR));
-  const platformUrl=new URL(url); platformUrl.username='supabase_admin';
-  const platform=new pg.Client({connectionString:platformUrl.href});
-  await platform.connect(); t.after(()=>platform.end());
-  assert.equal((await platform.query("select to_regclass('public.companies') v")).rows[0].v,null);
-  // Model the observed hosted creator, not a superuser masquerading as postgres.
-  // PG16+ generates the bootstrap-admin membership automatically on CREATE ROLE.
-  await platform.query(`create role postgres login inherit createrole createdb replication bypassrls password 'synthetic-only';
-    alter database sc19_production_rehearsal owner to postgres;
-    create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
-    grant anon,authenticated,service_role to postgres with admin true, inherit true, set true;
-    create extension pg_cron;`);
-  const db = new pg.Client({ connectionString: url.href });
-  await db.connect(); t.after(() => db.end()); db.exec = sql => db.query(sql);
-  assert.deepEqual((await db.query(`select current_user::text name,session_user::text session,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls from pg_roles where rolname=current_user`)).rows[0],
-    {name:'postgres',session:'postgres',rolsuper:false,rolinherit:true,rolcreaterole:true,rolcreatedb:true,rolcanlogin:true,rolreplication:true,rolbypassrls:true});
-  assert.equal(Math.floor(Number((await db.query("select current_setting('server_version_num') v")).rows[0].v)/10000), Number(process.env.SC19_TEST_PG_MAJOR));
-  assert.equal((await db.query("select to_regclass('public.companies') v")).rows[0].v, null, 'Only an empty owned test database');
-  await db.query(`alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
-    alter default privileges in schema public grant all on sequences to anon,authenticated,service_role;
-    alter default privileges in schema public grant execute on functions to anon,authenticated,service_role;
-    grant usage on schema public to postgres,anon,authenticated,service_role;
-    create schema auth; create table auth.users(id uuid primary key);
-    create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
-    grant usage on schema auth to anon,authenticated;
-    grant execute on function auth.uid() to anon,authenticated;`);
-  const {history} = JSON.parse(await readFile(new URL('./fixtures/sc19-production-history.json', import.meta.url),'utf8'));
-  assert.equal(history.length,19);
-  for (const entry of history) {
-    await db.query(entry.statements.join(';\n') + ';');
-    t.diagnostic(`replayed observed ${entry.version} ${entry.name}`);
-  }
+  const { platform, db } = await bootHostedRehearsal(t, url);
+  const history = await replayObservedHistory(t, db);
   assert.equal((await db.query("select count(*)::int n from pg_extension where extname='pg_cron'")).rows[0].n,1);
   assert.equal((await platform.query('select count(*)::int n from cron.job')).rows[0].n,0,'No scheduled destructive job');
   const membership=(await db.query(`select grantor::regrole::text grantor,admin_option,inherit_option,set_option from pg_auth_members where roleid='screening_worker'::regrole and member='postgres'::regrole order by grantor::regrole::text`)).rows;
@@ -66,18 +32,23 @@ test('observed production history + pending chain preserves completed synthetic 
   const dir=new URL('../supabase/migrations/',import.meta.url);
   const applied=new Set(history.map(e=>e.name));
   const pending=(await readdir(dir)).filter(f=>f.endsWith('.sql')&&!applied.has(f.replace(/^\d+_/,'').replace(/\.sql$/,''))).sort();
-  assert.equal(pending.length,13);
-  assert.equal(pending.at(-2),'20261021084245_explicit_data_api_table_acl.sql');
-  assert.equal(pending.at(-1),'20261021084732_sc019_credits_payments_inventory.sql');
+  // Locate M13 by name: reviewed migrations ordered after it
+  // are part of the pending chain and are replayed after the R6 checkpoint.
+  const m13='20261021084732_sc019_credits_payments_inventory.sql';
+  const m13Index=pending.indexOf(m13);
+  assert.equal(m13Index,13,'Exactly 13 observed-pending migrations precede M13');
+  assert.equal(pending[m13Index-2],'20261021084245_explicit_data_api_table_acl.sql');
+  assert.equal(pending[m13Index-1],'20261021084500_normalize_function_line_endings.sql');
+  let afterM13=null;
   for(const name of pending) {
-    if(name===pending.at(-1)) {
+    if(name===m13) {
       const observed=await catalogSnapshot(db), manifest=await migrationManifest();
       const expected=manifest.states.r4_legacy['pg'+process.env.SC19_TEST_PG_MAJOR];
       t.diagnostic(JSON.stringify({observed,expected,mismatches:Object.keys(expected).filter(k=>expected[k]!==observed[k])}));
 
     }
     const sql=await readFile(new URL(name,dir),'utf8');
-    if(name===pending.at(-1)) for(const mutation of [
+    if(name===m13) for(const mutation of [
       'grant execute on function public.platform_operator_status() to service_role with grant option',
       'grant execute on function private.erasure_hash(jsonb) to service_role',
       'grant create on schema public to service_role',
@@ -133,9 +104,21 @@ test('observed production history + pending chain preserves completed synthetic 
       assert.equal((await db.query("select has_schema_privilege('erasure_purge_owner','private','CREATE') v")).rows[0].v,false);
     } else await db.query(sql);
     t.diagnostic(`applied pending ${name}`);
+    if(name===m13) {
+      assert.deepEqual(await snapshot(),before,'No existing application data rewritten or removed');
+      await assertR6(db);
+      afterM13=await snapshot();
+    }
   }
-  assert.deepEqual(await snapshot(),before,'No existing application data rewritten or removed');
-  await assertR6(db);
+  assert.ok(afterM13,'M13 was applied');
+  // Later reviewed migrations may only add columns: every existing value is unchanged.
+  const canonical=(rows,keys)=>rows.map(row=>JSON.stringify(keys.map(k=>[k,row.value[k]]))).sort();
+  const final=await snapshot();
+  for(const [table,rows] of Object.entries(afterM13)) {
+    const keys=Object.keys(rows[0]?.value??{}).sort();
+    assert.deepEqual(canonical(final[table],keys),canonical(rows,keys),`${table} existing rows and values preserved`);
+  }
+  await assertCurrentInventory(db);
   for(const [table,rows] of Object.entries(await accountingSnapshot(db))) assert.deepEqual(rows,[],`No commercial activation or retrospective billing: ${table}`);
   await h.asUser(f.owner); assert.equal((await h.row(f)).eligibility_reason,'eligible');
   assert.equal((await h.shortlist(f)).length,1);

@@ -188,6 +188,12 @@ export type ScreeningCriterionResult = {
   criterion_kind: "task" | "kpi" | "competency"; criterion_order: number;
   criterion_text_snapshot: string; rating: ScreeningRating; evidence: ScreeningEvidence[];
   explanation: string | null; confidence: number | null; created_at: string;
+  verdict: "supported" | "partial" | "missing" | "contradicted" | null;
+  missing_info: string | null; suggested_question: string | null;
+  human_status: "unreviewed" | "accepted" | "rejected" | "edited";
+  human_note: string | null; human_verdict: "supported" | "partial" | "missing" | "contradicted" | null;
+  human_missing_info: string | null; human_suggested_question: string | null;
+  human_evidence: ScreeningEvidence[] | null; updated_by: string | null; updated_at: string | null;
 };
 export type ScreeningResultReview = {
   id: string; company_id: string; analysis_id: string; review_version: number;
@@ -410,6 +416,17 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number }[];
       };
+      sc19_operator_companies: {
+        Args: { search?: string | null };
+        Returns: { company_id: string; company_name: string; created_at: string; plan: 'FREE' | 'PRESELEKCJA' | null; available: number | null; free_claimed: boolean; approved_nip: string | null; approved_at: string | null }[];
+      };
+      sc19_operator_package_policy: {
+        Args: Record<PropertyKey, never>;
+        Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number; updated_at: string }[];
+      };
+      sc19_operator_set_package_policy: { Args: { target_plan: 'FREE' | 'PRESELEKCJA'; target_credits: number }; Returns: number };
+      sc19_operator_approve_trial: { Args: { target_company: string; supplied_nip: string; proof: string }; Returns: string };
+      sc19_operator_grant_paid: { Args: { target_company: string; settlement_reference: string }; Returns: number };
       configure_retention_schedule: {
         Args: { target_company: string; expected_revision: number; policy_revision: number; execution_mode?: 'suggest_only' | 'automatic'; max_batch?: number; request_key?: string | null };
         Returns: string;
@@ -552,6 +569,27 @@ export type Database = {
         };
         Returns: string;
       };
+      review_screening_evidence_row: {
+        Args: {
+          target_company: string; target_analysis: string; target_criterion: string;
+          expected_updated_at: string | null; next_status: "unreviewed" | "accepted" | "rejected" | "edited";
+          next_note?: string | null; next_verdict?: "supported" | "partial" | "missing" | "contradicted" | null;
+          next_missing_info?: string | null; next_question?: string | null;
+          next_evidence?: ScreeningEvidence[] | null;
+        };
+        Returns: string;
+      };
+      complete_screening_evidence: {
+        Args: {
+          target_attempt: string; provided_lease_token: string;
+          expected_input_fingerprint: string; expected_analysis_contract_hash: string;
+          findings: unknown[]; new_provider_request_id?: string | null;
+          new_provider_response_id?: string | null; new_input_tokens?: number | null;
+          new_output_tokens?: number | null; new_cached_input_tokens?: number | null;
+          new_cost_amount?: number | null; new_cost_currency?: string | null;
+        };
+        Returns: string;
+      };
       complete_screening_analysis: {
         Args: {
           target_attempt: string;
@@ -587,6 +625,30 @@ export type Database = {
           input_cv_text_snapshot: string;
           criteria_snapshot: ScreeningCriterionSnapshot[];
         }[];
+      };
+      claim_screening_attempt_v2: {
+        Args: { target_attempt: string };
+        Returns: {
+          analysis_id: string;
+          candidate_document_id: string;
+          attempt_id: string;
+          lease_token: string;
+          lease_expires_at: string;
+          input_fingerprint: string;
+          analysis_contract_hash: string;
+          payload_schema_version: number;
+          result_schema_version: number;
+          prompt_version: string;
+          provider: string;
+          model: string;
+          model_revision: string | null;
+          input_cv_text_snapshot: string;
+          criteria_snapshot: ScreeningCriterionSnapshot[];
+        }[];
+      };
+      screening_attempt_result_schema_version: {
+        Args: { target_attempt: string };
+        Returns: number | null;
       };
       start_screening_analysis: {
         Args: {

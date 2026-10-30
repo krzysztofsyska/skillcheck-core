@@ -94,7 +94,8 @@ test("SC010/012/019: one persistent offline draft from current database authorit
     ].sort());
     const vars = result.draft.payload.retell_llm_dynamic_variables;
     assert.deepEqual(Object.keys(vars).sort(),
-      ["skillcheck_interview_script","skillcheck_notice_version","skillcheck_language"].sort());
+      ["skillcheck_interview_script","skillcheck_notice_version","skillcheck_language",
+        "skillcheck_company_name","skillcheck_position_title"].sort());
     assert.equal(vars.skillcheck_notice_version, "notice-pl-202610");
     assert.equal(vars.skillcheck_language, "pl-PL");
     for (const forbidden of [s.f.companyId,s.f.application.id,s.f.candidate.id,"PRIVATE original CV"]) {
@@ -112,6 +113,18 @@ test("SC010/012/019: one persistent offline draft from current database authorit
     assert.equal(row.permission_receipt_id, s.request.permissionReceiptId);
     assert.equal(row.contact_point_id, s.f.contactPoint.id);
     assert.equal(networkCalls, 0);
+  });
+
+  await t.test("renaming the company after preparation conflicts instead of changing the replayed draft", async () => {
+    const s = await env.ready(), first = await run(s);
+    assert.equal(first.draft.payload.retell_llm_dynamic_variables.skillcheck_company_name.length > 0, true);
+    await env.asServer(s.f.owner);
+    await db.query("update public.companies set name=name||' Nowa' where id=$1", [s.f.companyId]);
+    await assert.rejects(run(s), e => e.code === "VOICE_PREPARATION_CONFLICT");
+    const stored = await stats(s);
+    assert.equal(stored.rows.length, 1); assert.equal(stored.counter.reserved, 1);
+    assert.equal(stored.rows[0].binding_json.companyNameSha256,
+      hash(first.draft.payload.retell_llm_dynamic_variables.skillcheck_company_name));
   });
 
   await t.test("same key and different key recover one logical approval without another reservation", async () => {

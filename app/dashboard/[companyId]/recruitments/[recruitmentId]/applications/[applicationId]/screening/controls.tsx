@@ -22,14 +22,33 @@ export function RefreshStatus({ active }: { active: boolean }) {
   return <button type="button" onClick={() => router.refresh()}>Odśwież stan</button>;
 }
 
-export function AnalysisControl({ route, requestId, retryId, label, disabled }: { route: ScreeningRoute; requestId: string; retryId?: string; label: string; disabled: boolean }) {
+export function AnalysisControl({ route, requestId, retryId, label, disabled, upgrade = false }: { route: ScreeningRoute; requestId: string; retryId?: string; label: string; disabled: boolean; upgrade?: boolean }) {
   const action = retryId ? retryAnalysis.bind(null, route, retryId) : startAnalysis.bind(null, route);
   const [state, submit, pending] = useActionState(action, {});
   return <form action={submit}>
     <input type="hidden" name="requestId" value={requestId} />
+    {upgrade && <input type="hidden" name="upgrade" value="evidence" />}
     <button disabled={disabled || pending}>{pending ? 'Wysyłanie…' : label}</button>
     <Feedback state={state} />
     {state.saved && <Link href={screeningPath(route)}>Otwórz najnowszy stan analizy</Link>}
+  </form>;
+}
+
+/** Analysis-level reanalysis request for evidence (v2) results; row edits never trigger a rerun. */
+export function EvidenceAnalysisReview({ route, analysisId, version, unreviewed }: { route: ScreeningRoute; analysisId: string; version: number; unreviewed: number }) {
+  const [state, submit, pending] = useActionState(reviewAnalysis.bind(null, route, analysisId), {});
+  return <form action={submit}>
+    <h2>Przegląd całej analizy</h2>
+    <input type="hidden" name="reviewVersion" value={version} />
+    <fieldset><legend>Wynik przeglądu</legend>
+      <label><input type="radio" name="disposition" value="approved" defaultChecked={unreviewed === 0} disabled={unreviewed > 0} /> Zatwierdzam zestawienie (po sprawdzeniu każdego wiersza)</label>
+      <label><input type="radio" name="disposition" value="needs_reanalysis" defaultChecked={unreviewed > 0} /> Zlecam ponowną analizę</label>
+    </fieldset>
+    {unreviewed > 0 && <p className="notice">Do sprawdzenia zostało wierszy: {unreviewed}. Zatwierdzenie jest możliwe po przeglądzie każdego wiersza.</p>}
+    <label>Notatka<textarea name="note" maxLength={10000} rows={2} /></label>
+    <label><input type="checkbox" name="confirmed" required /> Sprawdziłem wynik i cytaty</label>
+    <button disabled={pending}>{pending ? 'Zapisywanie…' : 'Zapisz przegląd'}</button>
+    <Feedback state={state} />
   </form>;
 }
 

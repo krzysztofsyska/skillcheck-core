@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { createClient } from "../../lib/supabase/server";
 import { credentials } from "../../lib/auth-validation";
 import { authCallbackUrl } from "../../lib/auth-url";
+import { hasLegalAcceptance, LEGAL_ACCEPTANCE_REVISION, LEGAL_ACCEPTED_DOCUMENTS, LEGAL_VERSION } from "../../lib/legal";
 
 export async function login(form: FormData) {
   const input = credentials(form);
@@ -17,11 +18,16 @@ export async function login(form: FormData) {
 export async function register(form: FormData) {
   const input = credentials(form);
   if (!input || input.password.length < 12) redirect("/register?message=invalid");
+  if (!hasLegalAcceptance(form)) redirect("/register?message=terms");
   let emailRedirectTo: string;
   try { emailRedirectTo = authCallbackUrl('signup', (await headers()).get('origin')); }
   catch { redirect('/register?message=unavailable'); }
   const client = await createClient();
-  const { data, error } = await client.auth.signUp({ ...input, options: { emailRedirectTo } });
+  const { data, error } = await client.auth.signUp({ ...input, options: {
+    emailRedirectTo,
+    // Server-set record of the accepted Regulamin + DPA + privacy notice + Annex 1 (voice) version.
+    data: { legal_acceptance: { version: LEGAL_VERSION, revision: LEGAL_ACCEPTANCE_REVISION, documents: [...LEGAL_ACCEPTED_DOCUMENTS], accepted_at: new Date().toISOString() } },
+  } });
   if (error) redirect("/register?message=failed");
   if (data.session) redirect("/onboarding");
   redirect("/login?message=confirm");

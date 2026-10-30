@@ -26,6 +26,12 @@ const schemas = Object.freeze([
   '../../db/isolated/sc019-voice-entitlements.sql',
   '../../db/isolated/sc010c-voice-preparation.sql',
 ]);
+/** Opt-in schemas installed after the shared chain; the R4 baseline stays unchanged. */
+export const SC011B2_DISPATCH_SCHEMA = '../../db/isolated/sc011b2-voice-dispatch.sql';
+export const SC011B3_TRANSCRIPT_SCHEMA = '../../db/isolated/sc011b3-voice-transcripts.sql';
+export const SC011B4_SETTLEMENT_SCHEMA = '../../db/isolated/sc011b4-voice-settlement.sql';
+export const SC011B5_DISPATCH_WORKER_SCHEMA = '../../db/isolated/sc011b5-voice-dispatch-worker.sql';
+export const SC011B6_DISPATCH_RESOLUTION_SCHEMA = '../../db/isolated/sc011b6-voice-dispatch-resolution.sql';
 
 /**
  * Real PostgreSQL only: a random disposable database on the explicitly supplied
@@ -39,7 +45,7 @@ const schemas = Object.freeze([
  * });
  * const rival = await env.connect(first.f.owner);
  */
-export async function boot(t, {beforeIsolated} = {}) {
+export async function boot(t, {beforeIsolated, extraSchemas = []} = {}) {
   assert.equal(typeof t?.after, 'function', 'A test cleanup context is required');
   const url = process.env.SCREENING_TEST_DATABASE_URL;
   assert.ok(url, 'SCREENING_TEST_DATABASE_URL must name a disposable loopback PostgreSQL server');
@@ -78,15 +84,15 @@ export async function boot(t, {beforeIsolated} = {}) {
   };
   const db = await connect();
   return initializeVoicePreparationFixture({ db, connect, setServerActor, databaseName,
-    connectionConfig: Object.freeze(config(databaseName)), beforeIsolated });
+    connectionConfig: Object.freeze(config(databaseName)), beforeIsolated, extraSchemas });
 }
 
 // Shared synthetic graph builder. PostgreSQL boot above remains the default;
 // an embedded SQL contract test can explicitly supply a single-session engine.
 export async function initializeVoicePreparationFixture({db, connect, setServerActor,
-  databaseName, connectionConfig, beforeIsolated}) {
+  databaseName, connectionConfig, beforeIsolated, extraSchemas = []}) {
   const h = await setupRankingDatabase(db);
-  for (const [index, path] of schemas.entries()) {
+  for (const [index, path] of [...schemas, ...extraSchemas].entries()) {
     if (index === 1 && beforeIsolated) await beforeIsolated(db);
     await db.exec(await readFile(new URL(path, import.meta.url), 'utf8'));
   }

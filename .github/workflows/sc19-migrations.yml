@@ -9,6 +9,13 @@ on:
       - 'docs/sc19-migrations*.md'
       - 'lib/sc19-payment*.ts'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/sc-step3-erasure-r7.test.mjs'
+      - 'tests/sc-step3-evidence-worker.test.mjs'
+      - 'tests/sc-019-operator-fulfillment.test.mjs'
+      - 'tests/db-migrate/**'
+      - 'tools/db-migrate/**'
+      - '.github/workflows/db-migrate-production.yml'
+      - 'supabase/rollbacks/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
@@ -16,6 +23,7 @@ on:
       - 'tests/fixtures/sc19-hosted-acl-differences.json'
       - 'tests/fixtures/sc19-rehearsal.Dockerfile'
       - 'tests/helpers/sc19-migration-fixture.mjs'
+      - 'tests/helpers/sc19-hosted-rehearsal.mjs'
       - 'tests/helpers/screening-ranking-fixture.mjs'
       - 'tests/helpers/voice-retention-fixture.mjs'
       - '.github/workflows/sc19-migrations.yml'
@@ -25,6 +33,13 @@ on:
     paths:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/sc-step3-erasure-r7.test.mjs'
+      - 'tests/sc-step3-evidence-worker.test.mjs'
+      - 'tests/sc-019-operator-fulfillment.test.mjs'
+      - 'tests/db-migrate/**'
+      - 'tools/db-migrate/**'
+      - '.github/workflows/db-migrate-production.yml'
+      - 'supabase/rollbacks/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
@@ -32,6 +47,7 @@ on:
       - 'tests/fixtures/sc19-hosted-acl-differences.json'
       - 'tests/fixtures/sc19-rehearsal.Dockerfile'
       - 'tests/helpers/sc19-migration-fixture.mjs'
+      - 'tests/helpers/sc19-hosted-rehearsal.mjs'
       - '.github/workflows/sc19-migrations.yml'
 permissions:
   contents: read
@@ -97,6 +113,9 @@ jobs:
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
             tests/sc-019-migrations-mvp-e2e.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
+            tests/sc-step3-erasure-r7.test.mjs tests/sc-step3-evidence-worker.test.mjs \
+            tests/sc-019-operator-fulfillment.test.mjs tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
+            tests/db-migrate/normalize-line-endings.test.mjs \
             > sc19-migrations.log 2>&1
           test_result=$?
           tail -n 250 sc19-migrations.log
@@ -172,6 +191,28 @@ jobs:
         run: |
           set -o pipefail
           node --test tests/sc-019-migrations-production-history.test.mjs 2>&1 | tee sc19-production-history.log
+      - name: Reproduce the inspected production state (CRLF functions), normalization and M13
+        if: matrix.postgres == '17'
+        env:
+          SC19_REHEARSAL_DISPOSABLE: 'yes'
+          SC19_HOSTED_REHEARSAL_DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:55433/sc19_production_hosted
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          set -o pipefail
+          # Second disposable cluster: pg_cron accepts one database per cluster.
+          docker run -d --name sc19-hosted -p 127.0.0.1:55433:5432 \
+            -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_hosted \
+            sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_production_hosted
+          ready=''
+          for attempt in $(seq 1 60); do
+            if docker exec sc19-hosted pg_isready -h 127.0.0.1 -U supabase_admin -d sc19_production_hosted >/dev/null; then
+              ready=$(docker exec -e PGPASSWORD=synthetic-only sc19-hosted psql -h 127.0.0.1 -U supabase_admin -d sc19_production_hosted -tAc 'select 1' 2>/dev/null) || ready=''
+              [ "$ready" = 1 ] && break
+            fi
+            sleep 1
+          done
+          [ "$ready" = 1 ] || { echo "::error::hosted rehearsal server did not become ready over TCP"; docker logs --tail 50 sc19-hosted; exit 1; }
+          node --test tests/sc-019-migrations-production-hosted-state.test.mjs 2>&1 | tee -a sc19-production-history.log
       - name: Preserve rehearsal evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -182,4 +223,4 @@ jobs:
           retention-days: 7
       - name: Remove only this job's disposable container
         if: always()
-        run: docker rm -f sc19-rehearsal || true
+        run: docker rm -f sc19-rehearsal sc19-hosted || true
