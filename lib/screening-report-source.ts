@@ -85,12 +85,22 @@ export async function loadScreeningReport(
   const reviews = await batches(reviewIds, (ids, from, to) => client.from('screening_result_reviews')
     .select('id,analysis_id,review_version,disposition').eq('company_id', p.companyId).in('id', ids).order('id').range(from, to));
   const results = await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
-    .select('id,analysis_id,criterion_id,criterion_kind,criterion_order,criterion_text_snapshot,rating,evidence,explanation,verdict,human_status,human_evidence')
+    .select('id,analysis_id,criterion_id,criterion_kind,criterion_order,criterion_text_snapshot,rating,evidence,explanation')
     .eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to));
+  // Step 3 matrix reviews live in columns that exist only after the Step 3 migrations.
+  // Before they reach a database (42703 undefined column) no row can carry one, so the
+  // legacy report stays available; any other error still fails closed.
+  const matrixFields = 'id,analysis_id,verdict,human_status,human_evidence';
+  const probe = analysisIds.length ? await client.from('screening_criterion_results').select(matrixFields)
+    .eq('company_id', p.companyId).in('analysis_id', analysisIds.slice(0, 50)).order('id').range(0, 0) : null;
+  if (probe?.error && probe.error.code !== '42703') checked(probe);
+  const matrix = probe && !probe.error ? await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
+    .select(matrixFields).eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to)) : [];
   const overrides = await batches(reviewIds, (ids, from, to) => client.from('screening_criterion_review_overrides')
     .select('id,review_id,criterion_result_id,rating_override,evidence_override,explanation_override')
     .eq('company_id', p.companyId).in('review_id', ids).order('id').range(from, to));
-  [analyses, reviews, results, overrides].forEach(uniqueIds);
+  [analyses, reviews, results, matrix, overrides].forEach(uniqueIds);
+  requireReport(matrix.every(m => results.some(r => r.id === m.id && r.analysis_id === m.analysis_id)));
   requireReport(analyses.length === reviewed.length && reviews.length === reviewed.length);
   // Detect relationships outside the requested result set even if the backend contract regresses.
   requireReport(analyses.every(a => analysisIds.includes(a.id)) && reviews.every(r => reviewIds.includes(r.id)));
@@ -117,15 +127,16 @@ export async function loadScreeningReport(
       const override = changes.find(o => o.criterion_result_id === c.id);
       // v2 evidence rows are corrected in the matrix, not through rating overrides:
       // an edited row publishes the human evidence, a rejected row publishes none.
-      const evidenceRow = c.verdict != null;
-      const rejected = evidenceRow && c.human_status === 'rejected';
-      const edited = evidenceRow && c.human_status === 'edited';
+      const matrixRow = matrix.find(m => m.id === c.id);
+      const evidenceRow = matrixRow?.verdict != null;
+      const rejected = evidenceRow && matrixRow.human_status === 'rejected';
+      const edited = evidenceRow && matrixRow.human_status === 'edited';
       return {
         id: c.criterion_id, kind: c.criterion_kind, text: reportText(c.criterion_text_snapshot)!,
         aiRating: reportRating(c.rating), rating: reportRating(override?.rating_override ?? c.rating),
         reviewedChange: !!override || rejected || edited,
         explanation: rejected ? null : reportText(override?.explanation_override ?? c.explanation),
-        evidence: reportEvidence(rejected ? [] : edited ? c.human_evidence ?? c.evidence : override?.evidence_override ?? c.evidence),
+        evidence: reportEvidence(rejected ? [] : edited ? matrixRow.human_evidence ?? c.evidence : override?.evidence_override ?? c.evidence),
       };
     });
     // Counts verify which review was applied; no scoring or coverage policy is duplicated here.
