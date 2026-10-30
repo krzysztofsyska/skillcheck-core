@@ -76,7 +76,7 @@ export default async function Screening({ params, searchParams }: { params: Prom
         unreviewed={criteria.filter(c => c.human_status === 'unreviewed').length} />}
     {analysis?.execution_status === 'completed' && criteria.some(c => c.verdict != null) && review
       && <section><p role="status">Ostatni przegląd analizy: {reviewLabels[review.disposition]} · wersja {review.review_version}</p>
-        {review.review_version !== analysis.latest_review_version && <p className="notice">Wiersze macierzy zmieniono po tym przeglądzie, więc zatwierdzenie jest nieaktualne. Raport i shortlista pominą tę analizę, dopóki ktoś nie zatwierdzi jej ponownie.</p>}
+        {review.disposition !== 'needs_reanalysis' && review.review_version !== analysis.latest_review_version && <p className="notice">Wiersze macierzy zmieniono po tym przeglądzie, więc zatwierdzenie jest nieaktualne. Raport i shortlista pominą tę analizę, dopóki ktoś nie zatwierdzi jej ponownie.</p>}
         {review.review_note && <p>{review.review_note}</p>}
         {(reviews.data?.length ?? 0) > 1 && <details><summary>Historia przeglądów</summary><ul>{reviews.data?.map(r => <li key={r.id}>v{r.review_version}: {reviewLabels[r.disposition]} — {r.review_note}</li>)}</ul></details>}
       </section>}
