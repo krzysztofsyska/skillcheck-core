@@ -93,6 +93,7 @@ export default async function Screening({ params, searchParams }: { params: Prom
     </>}
     {history.data.length > 0 && <nav aria-label="Historia analiz"><h2>Historia analiz</h2><ul>{history.data.map(a => <li key={a.id}><Link href={`${screeningPath(route)}?analysis=${a.id}`} aria-current={a.id === analysis?.id ? 'page' : undefined}>Wersja {a.analysis_version} · {statusLabels[a.execution_status]}</Link></li>)}</ul></nav>}
     <h2>Do sprawdzenia w dalszych etapach</h2>
+    <p><Link href={`${base}/recruitments/${recruitmentId}/applications/${route.applicationId}/interview`}>Przygotuj rozmowę: pytania o brakujące informacje z macierzy</Link></p>
     <p><Link href={`${base}/recruitments/${recruitmentId}/interview-guide`}>Otwórz przewodnik rozmowy dla ośmiu obszarów zachowania</Link></p>
     <p>Samodzielność i sposób działania wymagają rozmowy, przykładów zachowań lub zadań. Nie wyciągamy wniosków o osobowości wyłącznie z CV.</p>
   </section></main>;
