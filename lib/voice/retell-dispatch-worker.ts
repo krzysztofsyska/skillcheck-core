@@ -177,6 +177,8 @@ export async function dispatchRetellCall(
   if (claim.state === "rejected" || claim.state === "unknown")
     return Object.freeze({ state: claim.state });
   if (claim.state === "in_flight") return Object.freeze({ state: "retry_later" });
+  // Fail closed: any other terminal state (e.g. an operator's `abandoned`) never sends.
+  if (claim.state !== "send") return Object.freeze({ state: "rejected" });
 
   let response: Pick<Response, "status" | "headers" | "body">;
   try {
