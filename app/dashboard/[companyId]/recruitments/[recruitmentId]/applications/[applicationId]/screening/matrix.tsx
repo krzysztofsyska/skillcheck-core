@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { reviewEvidenceRow } from './actions';
 import type { ScreeningCriterionResult } from '../../../../../../../../lib/supabase/database.types';
 import type { ScreeningRoute, ScreeningFormState } from '../../../../../../../../lib/screening-ui';
@@ -31,6 +31,15 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
   const evidence = humanEdited ? criterion.human_evidence ?? criterion.evidence : criterion.evidence;
   const missingInfo = humanEdited ? criterion.human_missing_info ?? criterion.missing_info : criterion.missing_info;
   const question = humanEdited ? criterion.human_suggested_question ?? criterion.suggested_question : criterion.suggested_question;
+  // Controlled drafts: a failed validation must not reset what the recruiter typed.
+  const [draft, setDraft] = useState(() => ({
+    verdict: criterion.human_verdict ?? criterion.verdict ?? 'missing',
+    missingInfo: criterion.human_missing_info ?? criterion.missing_info ?? '',
+    question: criterion.human_suggested_question ?? criterion.suggested_question ?? '',
+    quotes: Array.from({ length: 5 }, (_, i) => evidence[i]?.quote ?? ''),
+    note: criterion.human_note ?? '',
+  }));
+  const set = (patch: Partial<typeof draft>) => setDraft(current => ({ ...current, ...patch }));
   return <tr>
     <th scope="row"><small>{criterion.criterion_kind} · {criterion.criterion_id}</small><br />{criterion.criterion_text_snapshot}</th>
     <td><strong className={`${styles.badge} ${verdict ? styles[verdict] : ''}`}>{verdict ? verdictLabels[verdict] : 'Analiza starszego typu'}</strong></td>
@@ -38,7 +47,8 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
       <div key={index}><blockquote>{item.quote}</blockquote>
         <small>Źródło: CV v{documentVersion}, dokument {documentId}, pozycja {item.start}–{item.end} (UTF-16)</small>
       </div>
-    ) : 'Nie znaleziono zweryfikowanych cytatów.'}</td>
+    ) : 'Nie znaleziono zweryfikowanych cytatów.'}
+      {criterion.explanation && <p><small>Wyjaśnienie AI (do weryfikacji): {criterion.explanation}</small></p>}</td>
     <td>{missingInfo || '—'}</td>
     <td>{question || '—'}</td>
     <td><strong>{humanLabels[criterion.human_status]}</strong>{criterion.updated_at &&
@@ -46,14 +56,14 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
         Autor: {criterion.updated_by ?? '—'}</small></p>}{criterion.human_note && <p>{criterion.human_note}</p>}</td>
     <td>{editable && <form action={submit} className={styles.matrixForm}>
       <input type="hidden" name="updatedAt" value={criterion.updated_at ?? ''} />
-      <label>Werdykt po edycji<select name="verdict" defaultValue={criterion.human_verdict ?? criterion.verdict ?? 'missing'}>
+      <label>Werdykt po edycji<select name="verdict" value={draft.verdict} onChange={e => set({ verdict: e.target.value as typeof draft.verdict })}>
         {Object.entries(verdictLabels).map(([key,label]) => <option key={key} value={key}>{label}</option>)}
       </select></label>
-      <label>Czego brakuje<textarea name="missingInfo" maxLength={4000} rows={2} defaultValue={criterion.human_missing_info ?? criterion.missing_info ?? ''} /></label>
-      <label>Pytanie do rozmowy<textarea name="question" maxLength={4000} rows={2} defaultValue={criterion.human_suggested_question ?? criterion.suggested_question ?? ''} /></label>
+      <label>Czego brakuje<textarea name="missingInfo" maxLength={4000} rows={2} value={draft.missingInfo} onChange={e => set({ missingInfo: e.target.value })} /></label>
+      <label>Pytanie do rozmowy<textarea name="question" maxLength={4000} rows={2} value={draft.question} onChange={e => set({ question: e.target.value })} /></label>
       {Array.from({ length: 5 }, (_, i) => <label key={i}>Cytat {i + 1} (dokładnie z zatwierdzonego CV)<textarea name="quote" maxLength={2000} rows={2}
-        defaultValue={evidence[i]?.quote ?? ''} /></label>)}
-      <label>Notatka człowieka<textarea name="note" maxLength={10000} rows={2} defaultValue={criterion.human_note ?? ''} /></label>
+        value={draft.quotes[i]} onChange={e => set({ quotes: draft.quotes.map((q, j) => j === i ? e.target.value : q) })} /></label>)}
+      <label>Notatka człowieka<textarea name="note" maxLength={10000} rows={2} value={draft.note} onChange={e => set({ note: e.target.value })} /></label>
       <div className={styles.rowActions}>
         <button name="intent" value="accepted" disabled={pending}>Akceptuj</button>
         <button name="intent" value="rejected" disabled={pending}>Odrzuć</button>

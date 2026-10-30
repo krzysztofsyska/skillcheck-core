@@ -206,3 +206,15 @@ test('v2 analysis review: approval only after every row was reviewed by a human;
   assert.match(evidenceReviewError('approved_with_changes', rows('edited')), /wierszach macierzy/);
   assert.equal(evidenceReviewError('approved', [{ verdict: null, human_status: 'unreviewed' }]), null, 'legacy v1 rules are unchanged');
 });
+test('evidence matrix shows the AI explanation under review and keeps row drafts in controlled fields', () => {
+  const matrix = loadUiModule(screenDir + 'matrix.tsx', { './actions': { reviewEvidenceRow: async () => ({}) }, './screening.module.css': {} });
+  const row = { ...criterion, verdict: 'supported', evidence: [{ start: 3, end: 18, quote: 'Tworzę raporty.' }], explanation: 'AI_EXPLANATION_TEXT',
+    missing_info: 'Brak skali', suggested_question: 'Jakie raporty?', human_status: 'unreviewed', human_note: null, human_verdict: null,
+    human_missing_info: null, human_suggested_question: null, human_evidence: null, updated_at: null, updated_by: null };
+  const html = renderToStaticMarkup(React.createElement(matrix.EvidenceMatrix, { criteria: [row], route, analysisId: uuid(11),
+    documentId: uuid(6), documentVersion: 1, editable: true }));
+  assert.match(html, /Wyjaśnienie AI \(do weryfikacji\): AI_EXPLANATION_TEXT/);
+  assert.match(html, /<textarea name="question"[^>]*>Jakie raporty\?<\/textarea>/);
+  assert.match(html, /<textarea name="quote"[^>]*>Tworzę raporty.<\/textarea>/);
+  assert.doesNotMatch(readFileSync(screenDir + 'matrix.tsx', 'utf8'), /defaultValue/, 'row inputs are controlled so a failed save keeps the draft');
+});
