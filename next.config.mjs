@@ -1,9 +1,15 @@
+// Preview can point at a separate Supabase project, so allow whichever one
+// this build is configured for; production falls back to its own project.
+const supabaseOrigin = new URL(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://wsvjawuikxfzjyivxgsu.supabase.co',
+).origin;
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
-  "connect-src 'self' https://wsvjawuikxfzjyivxgsu.supabase.co",
+  `connect-src 'self' ${supabaseOrigin}`,
   "img-src 'self' data: blob:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' 'unsafe-inline'",
