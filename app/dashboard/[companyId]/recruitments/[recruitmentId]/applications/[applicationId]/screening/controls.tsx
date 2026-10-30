@@ -34,14 +34,19 @@ export function AnalysisControl({ route, requestId, retryId, label, disabled }: 
 }
 
 /** Analysis-level reanalysis request for evidence (v2) results; row edits never trigger a rerun. */
-export function ReanalysisRequest({ route, analysisId, version }: { route: ScreeningRoute; analysisId: string; version: number }) {
+export function EvidenceAnalysisReview({ route, analysisId, version, unreviewed }: { route: ScreeningRoute; analysisId: string; version: number; unreviewed: number }) {
   const [state, submit, pending] = useActionState(reviewAnalysis.bind(null, route, analysisId), {});
   return <form action={submit}>
-    <input type="hidden" name="disposition" value="needs_reanalysis" />
+    <h2>Przegląd całej analizy</h2>
     <input type="hidden" name="reviewVersion" value={version} />
-    <label>Dlaczego wynik wymaga ponownej analizy?<textarea name="note" maxLength={10000} rows={2} /></label>
+    <fieldset><legend>Wynik przeglądu</legend>
+      <label><input type="radio" name="disposition" value="approved" defaultChecked={unreviewed === 0} disabled={unreviewed > 0} /> Zatwierdzam zestawienie (po sprawdzeniu każdego wiersza)</label>
+      <label><input type="radio" name="disposition" value="needs_reanalysis" defaultChecked={unreviewed > 0} /> Zlecam ponowną analizę</label>
+    </fieldset>
+    {unreviewed > 0 && <p className="notice">Do sprawdzenia zostało wierszy: {unreviewed}. Zatwierdzenie jest możliwe po przeglądzie każdego wiersza.</p>}
+    <label>Notatka<textarea name="note" maxLength={10000} rows={2} /></label>
     <label><input type="checkbox" name="confirmed" required /> Sprawdziłem wynik i cytaty</label>
-    <button disabled={pending}>{pending ? 'Zapisywanie…' : 'Zleć ponowną analizę'}</button>
+    <button disabled={pending}>{pending ? 'Zapisywanie…' : 'Zapisz przegląd'}</button>
     <Feedback state={state} />
   </form>;
 }

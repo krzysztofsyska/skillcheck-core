@@ -5,7 +5,7 @@ import { verifySnapshotQuotes } from '../../../../../../../../lib/screening-evid
 import { companyAccess } from '../../../../../../../../lib/company-access';
 import { loadScreeningContext, runScreeningCommand } from '../../../../../../../../lib/screening-flow';
 import { dispatchScreeningWorker, screeningAiUserEnabled } from '../../../../../../../../lib/screening-dispatch';
-import { isUuid, readScreeningReview, screeningPath, type ScreeningFormState, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
+import { evidenceReviewError, isUuid, readScreeningReview, screeningPath, type ScreeningFormState, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
 
 export async function startAnalysis(route: ScreeningRoute, _state: ScreeningFormState, form: FormData): Promise<ScreeningFormState> {
   const { client, canEdit } = await companyAccess(route.companyId);
@@ -44,6 +44,8 @@ export async function reviewAnalysis(route: ScreeningRoute, analysisId: string, 
   let review;
   try { review = readScreeningReview(form, criteria.data, analysis.data.input_cv_text_snapshot); }
   catch (error) { return { error: error instanceof Error ? error.message : 'Sprawdź formularz.' }; }
+  const evidenceError = evidenceReviewError(review.disposition, criteria.data);
+  if (evidenceError) return { error: evidenceError };
   if (analysis.data.stale_at && review.disposition !== 'needs_reanalysis') return { error: 'Nieaktualny wynik wymaga ponownej analizy.' };
   // The RPC independently checks current input freshness, tenant write access and review version under lock.
   const result = await client.rpc('review_screening_result', { target_analysis: analysisId, expected_review_version: Number(versionText), new_disposition: review.disposition, new_review_note: review.note, new_overrides: review.overrides });

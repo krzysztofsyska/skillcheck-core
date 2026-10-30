@@ -122,3 +122,23 @@ test('Step 3 v2: an analysis-level needs_reanalysis review lets the same materia
   await db.query("select public.review_screening_result($1,$2,'needs_reanalysis','Wrong evidence',$3::jsonb)", [analysisId, version, '[]']);
   assert.notEqual((await start()).analysis_id, analysisId, 'The reanalysis request starts a new analysis');
 });
+
+test('Step 3 v2: an approved analysis-level review allows a manual shortlist entry but never an automatic score', async t => {
+  const { db, h, f, started } = await startedV2(t);
+  const claimed = await claimV2(h, db, started);
+  const analysisId = await completeV2(h, db, started, claimed, findings(claimed));
+  await h.asUser(f.owner);
+  const version = (await db.query('select latest_review_version v from public.screening_analysis_versions where id=$1', [analysisId])).rows[0].v;
+  const reviewId = (await db.query("select public.review_screening_result($1,$2,'approved','All rows checked',$3::jsonb) as id", [analysisId, version, '[]'])).rows[0].id;
+  const recruitmentId = (await db.query('select recruitment_id from public.applications where id=$1', [f.application.id])).rows[0].recruitment_id;
+  const ranked = (await db.query('select * from public.get_screening_ranking($1,null)', [recruitmentId])).rows
+    .find(row => row.application_id === f.application.id);
+  assert.equal(ranked.analysis_id, analysisId);
+  assert.equal(ranked.review_id, reviewId);
+  assert.equal(ranked.eligibility_reason, 'insufficient_evidence', 'v2 evidence is never converted into ratings');
+  assert.equal(ranked.raw_score, null);
+  assert.equal(ranked.suggested_shortlist, false);
+  const entry = (await db.query("select public.add_recruitment_shortlist_entry($1,'manual',$2,$3,$4,'Human decision') as id",
+    [f.application.id, analysisId, reviewId, ranked.ranking_policy_version])).rows[0].id;
+  assert.ok(entry, 'A human can still place the candidate on the shortlist manually');
+});

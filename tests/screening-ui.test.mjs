@@ -114,7 +114,7 @@ async function renderPage({canEdit=true,stale=false,rating='insufficient_data',m
   const path='app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/screening/page.tsx';
   const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
   const require=createRequire(import.meta.url);const mod={exports:{}};
-  const replacements={'next/link':({children,...props})=>React.createElement('a',props,children),'next/navigation':{notFound(){throw Error('404');}},'./screening.module.css':{},'./matrix':{EvidenceMatrix:()=>null},'./controls':{RefreshStatus:()=>null,AnalysisControl:({disabled})=>React.createElement('button',{disabled},'START'),ReviewControl:({stale})=>React.createElement('p',null,stale?'REANALYSIS_ONLY':'REVIEW_ALLOWED'),ReanalysisRequest:()=>React.createElement('p',null,'V2_REANALYSIS')}};
+  const replacements={'next/link':({children,...props})=>React.createElement('a',props,children),'next/navigation':{notFound(){throw Error('404');}},'./screening.module.css':{},'./matrix':{EvidenceMatrix:()=>null},'./controls':{RefreshStatus:()=>null,AnalysisControl:({disabled})=>React.createElement('button',{disabled},'START'),ReviewControl:({stale})=>React.createElement('p',null,stale?'REANALYSIS_ONLY':'REVIEW_ALLOWED'),EvidenceAnalysisReview:({unreviewed})=>React.createElement('p',null,`V2_REVIEW:${unreviewed}`)}};
   const customRequire=name=> {
     if(Object.hasOwn(replacements,name)) return replacements[name];
     if(name.endsWith('/lib/company-access')) return {companyAccess:async()=>({client,canEdit})};
@@ -131,9 +131,9 @@ test('result UI renders unknown and original AI separately from human correction
 test('v2 evidence result keeps the immutable analyzed CV snapshot visible',async()=>{
   const html=await renderPage({verdict:'supported'});
   assert.match(html,/CV użyte w tej analizie/);assert.ok(!html.includes('Korekta rekrutera'));
-  assert.match(html,/V2_REANALYSIS/,'Completed v2 results keep an analysis-level reanalysis request');
-  assert.ok(!(await renderPage({verdict:'supported',canEdit:false})).includes('V2_REANALYSIS'));
-  assert.ok(!(await renderPage()).includes('V2_REANALYSIS'),'Legacy results use the full review form');
+  assert.match(html,/V2_REVIEW:0/,'Completed v2 results keep an analysis-level review with the unreviewed row count');
+  assert.ok(!(await renderPage({verdict:'supported',canEdit:false})).includes('V2_REVIEW'));
+  assert.ok(!(await renderPage()).includes('V2_REVIEW'),'Legacy results use the full review form');
 });
 test('viewer has no mutation controls and stale results cannot be approved in UI',async()=>{
   const viewer=await renderPage({canEdit:false});assert.ok(!viewer.includes('REVIEW_ALLOWED'));assert.ok(!viewer.includes('START'));
@@ -196,4 +196,13 @@ test('review form retains latest disposition, note, rating, evidence and explana
   const unselected=renderToStaticMarkup(React.createElement(controls.ReviewControl,{route,analysisId:uuid(11),version:1,criteria:[criterion],stale:false,review,overrides:[]}));
   assert.match(unselected, /<fieldset disabled=""><legend>Treść korekty/);assert.match(html,/value="meets" selected/);
   assert.match(html,/Tworzę raporty/);assert.match(html,/Zweryfikowana korekta/);assert.match(html,/Zachowaj notatkę/);
+});
+test('v2 analysis review: approval only after every row was reviewed by a human; no rating corrections', async () => {
+  const { evidenceReviewError } = await import('../lib/screening-ui.ts');
+  const rows = status => [{ verdict: 'supported', human_status: 'accepted' }, { verdict: 'missing', human_status: status }];
+  assert.match(evidenceReviewError('approved', rows('unreviewed')), /sprawdź każdy wiersz/);
+  assert.equal(evidenceReviewError('approved', rows('rejected')), null);
+  assert.equal(evidenceReviewError('needs_reanalysis', rows('unreviewed')), null);
+  assert.match(evidenceReviewError('approved_with_changes', rows('edited')), /wierszach macierzy/);
+  assert.equal(evidenceReviewError('approved', [{ verdict: null, human_status: 'unreviewed' }]), null, 'legacy v1 rules are unchanged');
 });
