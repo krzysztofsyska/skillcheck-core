@@ -142,3 +142,47 @@ test('Step 3 v2: an approved analysis-level review allows a manual shortlist ent
     [f.application.id, analysisId, reviewId, ranked.ranking_policy_version])).rows[0].id;
   assert.ok(entry, 'A human can still place the candidate on the shortlist manually');
 });
+
+test('Step 3 v2: a matrix row change after approval invalidates it until a human approves again; a note does not', async t => {
+  const { db, h, f, started } = await startedV2(t);
+  const claimed = await claimV2(h, db, started);
+  const rows = findings(claimed);
+  const analysisId = await completeV2(h, db, started, claimed, rows);
+  await h.asUser(f.owner);
+  const recruitmentId = (await db.query('select recruitment_id from public.applications where id=$1', [f.application.id])).rows[0].recruitment_id;
+  const version = async () => (await db.query('select latest_review_version v from public.screening_analysis_versions where id=$1', [analysisId])).rows[0].v;
+  const reason = async () => (await db.query('select * from public.get_screening_ranking($1,null)', [recruitmentId])).rows
+    .find(row => row.application_id === f.application.id).eligibility_reason;
+  // Text keeps the microseconds a JS Date would drop from the optimistic-lock timestamp.
+  const row = async criterion => (await db.query(`select id, updated_at::text as updated_at from public.screening_criterion_results
+    where analysis_id=$1 and criterion_id=$2`, [analysisId, criterion])).rows[0];
+  const approve = async () => db.query("select public.review_screening_result($1,$2,'approved','Checked',$3::jsonb)", [analysisId, await version(), '[]']);
+
+  // Changes before any approval never touch the review version.
+  for (const r of rows) { const target = await row(r.criterion_id);
+    await db.query('select public.review_screening_evidence_row($1,$2,$3,$4,$5)', [f.companyId, analysisId, target.id, target.updated_at, 'accepted']); }
+  assert.equal(await version(), 0);
+  await approve();
+  assert.equal(await version(), 1);
+  assert.equal(await reason(), 'insufficient_evidence');
+
+  // A note on an accepted row is not published: the approval stays current.
+  let target = await row(rows[1].criterion_id);
+  await db.query('select public.review_screening_evidence_row($1,$2,$3,$4,$5,$6)', [f.companyId, analysisId, target.id, target.updated_at, 'accepted', 'Only a note']);
+  assert.equal(await version(), 1, 'A note alone keeps the approval');
+  assert.equal(await reason(), 'insufficient_evidence');
+
+  // Rejecting a row after approval invalidates it.
+  target = await row(rows[1].criterion_id);
+  await db.query('select public.review_screening_evidence_row($1,$2,$3,$4,$5)', [f.companyId, analysisId, target.id, target.updated_at, 'rejected']);
+  assert.equal(await version(), 2);
+  assert.equal(await reason(), 'review_inconsistent', 'The old approval no longer authorizes the changed matrix');
+
+  // Further changes while unapproved do not bump again; a new approval restores eligibility.
+  target = await row(rows[1].criterion_id);
+  await db.query('select public.review_screening_evidence_row($1,$2,$3,$4,$5)', [f.companyId, analysisId, target.id, target.updated_at, 'accepted']);
+  assert.equal(await version(), 2);
+  await approve();
+  assert.equal(await version(), 3);
+  assert.equal(await reason(), 'insufficient_evidence');
+});

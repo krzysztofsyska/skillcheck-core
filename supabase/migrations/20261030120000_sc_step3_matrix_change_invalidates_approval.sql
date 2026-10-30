@@ -1,0 +1,115 @@
+-- SC Step 3: a matrix row change after an analysis approval invalidates it.
+-- Without this, row corrections saved after approval silently changed the
+-- report, the CSV and a current shortlist entry under the old approval.
+--
+-- Function only (create or replace, same signature, grants restated). No table,
+-- column, constraint or trigger changes, so the SC-010 erasure inventory
+-- signature (R7) is unchanged. Requires the Step 3 migrations.
+begin;
+
+do $preflight$
+begin
+  if to_regprocedure('public.review_screening_evidence_row(uuid,uuid,uuid,timestamptz,text,text,text,text,text,jsonb)') is null then
+    raise exception 'sc_step3_matrix_approval_requires_step3' using errcode='55000';
+  end if;
+end
+$preflight$;
+
+create or replace function public.review_screening_evidence_row(
+  target_company uuid,
+  target_analysis uuid,
+  target_criterion uuid,
+  expected_updated_at timestamptz,
+  next_status text,
+  next_note text default null,
+  next_verdict text default null,
+  next_missing_info text default null,
+  next_question text default null,
+  next_evidence jsonb default null
+) returns uuid language plpgsql security definer set search_path = '' as $$
+declare
+  actor uuid := (select auth.uid());
+  analysis public.screening_analysis_versions%rowtype;
+  row_data public.screening_criterion_results%rowtype;
+  effective_verdict text;
+  effective_evidence jsonb;
+begin
+  if actor is null or not private.has_company_access(target_company, true) then
+    raise exception 'No write access' using errcode = '42501';
+  end if;
+  if next_status not in ('unreviewed','accepted','rejected','edited')
+    or length(coalesce(next_note,'')) > 10000
+    or length(coalesce(next_missing_info,'')) > 4000
+    or length(coalesce(next_question,'')) > 4000
+    or next_verdict is not null and next_verdict not in ('supported','partial','missing','contradicted')
+    then raise exception 'Invalid row review' using errcode = '22023'; end if;
+
+  select * into analysis from public.screening_analysis_versions
+  where company_id = target_company and id = target_analysis;
+  if not found then raise exception 'Analysis not found' using errcode = '42501'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('screening:' || analysis.application_id::text, 0));
+  select * into analysis from public.screening_analysis_versions
+  where company_id = target_company and id = target_analysis for update;
+  if not found or analysis.execution_status <> 'completed' or analysis.stale_at is not null
+    or private.screening_stale_reason(analysis.id) is not null
+    or exists (select 1 from public.screening_analysis_versions later
+      where later.company_id = target_company and later.application_id = analysis.application_id
+        and later.analysis_version > analysis.analysis_version)
+    then raise exception 'Result is not current' using errcode = '55000'; end if;
+  select * into row_data from public.screening_criterion_results
+  where company_id = target_company and analysis_id = target_analysis and id = target_criterion for update;
+  if not found then raise exception 'Criterion not found' using errcode = '42501'; end if;
+  if row_data.updated_at is distinct from expected_updated_at
+    then raise exception 'Review changed' using errcode = 'PT409'; end if;
+  if row_data.verdict is null
+    then raise exception 'Legacy results cannot be reviewed as evidence matrix' using errcode = '55000'; end if;
+  if next_status <> 'edited' and (next_verdict is not null or next_missing_info is not null
+    or next_question is not null or next_evidence is not null)
+    then raise exception 'Edits require edited status' using errcode = '22023'; end if;
+  effective_verdict := case when next_status = 'edited' then coalesce(next_verdict, row_data.verdict)
+    else row_data.verdict end;
+  effective_evidence := case when next_status = 'edited' then coalesce(next_evidence, row_data.evidence)
+    else row_data.evidence end;
+  if not private.screening_valid_evidence(
+      analysis.input_cv_text_snapshot, effective_evidence, effective_verdict <> 'missing'
+    ) or (effective_verdict = 'missing' and jsonb_array_length(effective_evidence) <> 0)
+    then raise exception 'Evidence and verdict mismatch' using errcode = '22023'; end if;
+  update public.screening_criterion_results
+  set human_status = next_status,
+      human_note = nullif(btrim(next_note),''),
+      human_verdict = case when next_status = 'edited' then next_verdict else null end,
+      human_missing_info = case when next_status = 'edited' then next_missing_info else null end,
+      human_suggested_question = case when next_status = 'edited' then next_question else null end,
+      human_evidence = case when next_status = 'edited' then next_evidence else null end,
+      updated_by = actor, updated_at = clock_timestamp()
+  where company_id = target_company and analysis_id = target_analysis and id = target_criterion;
+  -- A substantive row change after an approval invalidates that approval. Bumping
+  -- latest_review_version leaves the approved review behind the analysis, so the
+  -- ranking reports review_inconsistent, the report skips the analysis, a shortlist
+  -- snapshot stops being current and the voice source verifier refuses it, until a
+  -- human approves the analysis again. A note alone is never published: no bump.
+  if exists (
+      select 1 from public.screening_result_reviews review
+      where review.company_id = target_company and review.analysis_id = target_analysis
+        and review.review_version = analysis.latest_review_version
+        and review.disposition in ('approved','approved_with_changes'))
+    and (row_data.human_status, row_data.human_verdict, row_data.human_missing_info,
+        row_data.human_suggested_question, row_data.human_evidence)
+      is distinct from (next_status,
+        case when next_status = 'edited' then next_verdict end,
+        case when next_status = 'edited' then next_missing_info end,
+        case when next_status = 'edited' then next_question end,
+        case when next_status = 'edited' then next_evidence end)
+  then
+    update public.screening_analysis_versions
+    set latest_review_version = latest_review_version + 1, updated_at = clock_timestamp()
+    where company_id = target_company and id = target_analysis;
+  end if;
+  return target_criterion;
+end;
+$$;
+revoke all on function public.review_screening_evidence_row(uuid,uuid,uuid,timestamptz,text,text,text,text,text,jsonb)
+  from public, anon, authenticated, screening_worker;
+grant execute on function public.review_screening_evidence_row(uuid,uuid,uuid,timestamptz,text,text,text,text,text,jsonb)
+  to authenticated;
+commit;
