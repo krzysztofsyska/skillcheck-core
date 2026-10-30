@@ -230,3 +230,96 @@ wymaga SCREENING_TEST_DATABASE_URL do jednorazowej bazy testowej). CI uruchamia
 obie bramki. Produkcyjna historia SC-007 ma numer `20261009073048`, podczas gdy
 plik repozytorium ma `20261007000100`; przed przyszłym zatwierdzonym wdrożeniem
 trzeba uzgodnić historię i nie wykonywać tej samej migracji drugi raz.
+
+## Rozbieżność historii migracji produkcji (stan 2026-10-30)
+
+Źródło: tryb tylko do odczytu workflow „DB migrate production” (`mode=inspect`),
+run [41021636267](https://github.com/krzysztofsyska/skillcheck-core/actions/runs/41021636267)
+z 2026-10-30 07:42 UTC, `main` @ `5c8ee94`, artefakt `db-inspection-41021636267`
+(`inspection.json`, ważny do 2026-11-06). Projekt `wsvjawuikxfzjyivxgsu`, PostgreSQL 17.6.
+Porównanie z `supabase/migrations` na `integration` @ `8aea00c`.
+Agent nie łączył się z bazą produkcyjną bezpośrednio.
+
+Podsumowanie: w `supabase_migrations.schema_migrations` jest 31 wierszy, w repozytorium 33 pliki.
+21 migracji zgadza się wersją i nazwą. 7 ma tę samą nazwę i treść, ale inny numer wersji.
+3 są tylko w bazie, 5 tylko w repozytorium.
+
+### Brakujące w bazie (5) — pliki niezastosowane na produkcji
+
+| # | Plik |
+| ---: | --- |
+| 1 | `20261021084732_sc019_credits_payments_inventory.sql` (M13) |
+| 2 | `20261026220100_sc_step3_evidence_extensions.sql` |
+| 3 | `20261026220200_sc_step3_evidence_worker.sql` |
+| 4 | `20261028120000_sc_step3_erasure_inventory_r7.sql` |
+| 5 | `20261029100000_sc019_operator_fulfillment.sql` |
+
+### Obecne tylko w bazie (3) — migracje operacyjne bez pliku w repozytorium
+
+| Wersja | Nazwa |
+| --- | --- |
+| `20261008155657` | `sc005_allow_postgres_set_screening_worker` |
+| `20261008155719` | `sc005_keep_worker_role_explicit_only` |
+| `20261011165916` | `sales_retention_cron_extension` |
+
+Odtwarza je fixture `tests/fixtures/sc19-production-history.json`
+(zob. `docs/release/sc-mvp-production-runbook.md`).
+
+### Różnice numeracji (7) — ta sama nazwa, inna wersja
+
+Zapisane w bazie instrukcje (`statements`) każdej z tych migracji występują w całości w odpowiadającym jej pliku.
+Pliki zostały zastosowane, a w historii zapisano wersję nadaną w chwili wykonania.
+
+| Nazwa | Wersja w bazie | Plik w repozytorium |
+| --- | --- | --- |
+| `screening_retry_active_conflict` | `20261009073048` | `20261007000100_screening_retry_active_conflict.sql` |
+| `screening_latest_mutations` | `20261009091310` | `20261009080000_screening_latest_mutations.sql` |
+| `screening_ranking_shortlist` | `20261009091318` | `20261009081908_screening_ranking_shortlist.sql` |
+| `sales_leads` | `20261011081257` | `20261007000200_sales_leads.sql` |
+| `sales_lead_inbox_retention` | `20261011081313` | `20261009073604_sales_lead_inbox_retention.sql` |
+| `sales_lead_auto_reply` | `20261011081319` | `20261009104142_sales_lead_auto_reply.sql` |
+| `sales_pipeline` | `20261011081326` | `20261009141832_sales_pipeline.sql` |
+
+`tools/db-migrate/apply.mjs` rozpoznaje zastosowane migracje po **nazwie**, więc te pliki nie zostaną uruchomione ponownie.
+Narzędzia porównujące po wersji (np. `supabase migration list` / `db push`) uznałyby je za brakujące.
+Nie używać ich wobec produkcji.
+
+### Wpisy bez `statements` (12)
+
+Kroki M1–M12 runbooka SC-MVP (`20261009105025` … `20261021084245`) mają w `schema_migrations` wartość `statements = NULL`.
+Nie mają też wpisu w `skillcheck_migration_ledger`, bo zastosowano je przed uruchomieniem workflow.
+Narusza to regułę 1 z AGENTS.md (`statements = NULL` niedozwolone).
+Uzupełnienie wymaga osobnej decyzji właściciela i przejścia przez workflow. Agent tego nie zmienia.
+
+### Przyczyna błędów workflow „DB migrate production” z 2026-10-29
+
+Oba nieudane uruchomienia dotyczyły `main` @ `8c09f0b` (PR #188). Żadne nie zmieniło bazy.
+
+1. **Run [40951497826](https://github.com/krzysztofsyska/skillcheck-core/actions/runs/40951497826), 20:43 UTC.**
+   Lista `migrations` zawierała M1–M12, które były już zapisane w historii.
+   `apply.mjs` przed pierwszą zmianą sprawdza historię po nazwie i zatrzymał się na
+   `Already applied, never re-run: 20261009105025_candidate_communication_foundation.sql`.
+   To błąd danych wejściowych (zła lista migracji), nie błąd bazy.
+2. **Run [40952836256](https://github.com/krzysztofsyska/skillcheck-core/actions/runs/40952836256), 20:52 UTC.**
+   Lista: M13 + 4 późniejsze pliki (tabela „Brakujące w bazie”).
+   M13 (`20261021084732_sc019_credits_payments_inventory.sql`) w bloku `$preflight$` liczy odcisk katalogu
+   (`sc010_signature`, `routines`, `indexes`, `trigger_states`, `relations`, `policies`, `nonowned_acl`, `rewrites`)
+   i wymaga dokładnej zgodności z jednym z 6 przejrzanych stanów (`r4_legacy`, `r4_voice`, `r5_legacy`, `r5_voice`,
+   `orders129_legacy`, `orders152_legacy`) dla PG16/PG17.
+   Produkcja nie pasuje do żadnego, więc migracja zgłosiła `sc19_source_schema_unreviewed` (55000) i została wycofana.
+   Pozostałe 4 migracje nie były uruchamiane.
+
+Inspekcja z 2026-10-30 potwierdza przyczynę 2. Najbliższy stan to `r4_legacy` (pg17).
+Zgodne są `sc010_signature`, `indexes`, `trigger_states`, `relations`, `policies` i `rewrites`.
+Różnią się dwa składniki:
+
+| Składnik | Przejrzany `r4_legacy`/pg17 | Produkcja |
+| --- | --- | --- |
+| `routines` | `94cd7648…5c513c5f` | `00a80249…14b198c557e7` |
+| `nonowned_acl` | `6428087b…3968b35` | `340b40cc…f9d68ce294` |
+
+Następny krok: porównać `catalog.routines` i `catalog.nonowned_acl` z artefaktu z próbą generalną na PostgreSQL 17.6
+(`sc19-migrations.yml`) i ustalić, które funkcje i ACL odbiegają.
+Możliwe źródła różnic to M12 i trzy migracje operacyjne. To hipoteza, której jeszcze nie sprawdzono.
+Potem przejrzeć nowy stan i dopisać go do listy `reviewed` w M13 w osobnym PR (L3).
+Ponowne uruchomienie apply z tą samą M13 skończy się tym samym błędem.
