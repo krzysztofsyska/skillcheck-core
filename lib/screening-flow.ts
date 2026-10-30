@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import { prepareScreening } from './screening.ts';
-import { screeningAiContract } from './screening-ai.ts';
+import { screeningAiContract, screeningEvidenceAiContract } from './screening-ai.ts';
 import { isUuid, type ScreeningRoute } from './screening-ui.ts';
 import type { ScreeningDispatchResult } from './screening-dispatch.ts';
 
@@ -29,6 +29,8 @@ export async function runScreeningCommand(input: {
   client: SupabaseClient<Database>; canEdit: boolean; enabled: boolean; route: ScreeningRoute;
   command: 'start' | 'retry'; analysisId?: string; idempotencyKey: string;
   dispatch: (attempt: string) => Promise<ScreeningDispatchResult>;
+  /** Explicitly start a new evidence-matrix (v2) analysis over a current v1 result. */
+  upgrade?: boolean;
 }) {
   if (!input.canEdit) throw new Error('Masz dostęp tylko do odczytu.');
   if (!input.enabled) throw new Error('Uruchamianie analizy AI jest obecnie wyłączone.');
@@ -44,7 +46,29 @@ export async function runScreeningCommand(input: {
     if (result.error || !result.data?.[0]) throw new Error('Nie można ponowić tej analizy. Odśwież stronę i sprawdź jej stan.');
     attemptId = result.data[0].attempt_id;
   } else {
-    const contract = screeningAiContract;
+    // A current pre-Step 3 (v1) analysis keeps its own contract: start_screening_analysis
+    // reuses a pending or completed analysis only on the same contract, so a v2 request
+    // would create (and bill) a second analysis for "Ponów wysłanie" or "Sprawdź
+    // aktualny wynik". v2 is used for every new analysis: no current result, changed
+    // material, a reanalysis request, or the explicit upgrade action.
+    const latest = await input.client.from('screening_analysis_versions')
+      .select('id,execution_status,stale_at,input_fingerprint,result_schema_version,prompt_version')
+      .eq('company_id', input.route.companyId).eq('application_id', input.route.applicationId).eq('recruitment_id', input.route.recruitmentId)
+      .order('analysis_version', { ascending: false }).limit(1).maybeSingle();
+    if (latest.error) throw new Error('Nie udało się rozpocząć analizy. Odśwież stronę.');
+    const currentLegacy = !input.upgrade && !!latest.data && !latest.data.stale_at
+      && latest.data.input_fingerprint === prepared.fingerprint
+      && latest.data.result_schema_version === screeningAiContract.result_schema_version
+      && latest.data.prompt_version === screeningAiContract.prompt_version;
+    let reuseLegacy = currentLegacy && latest.data?.execution_status === 'pending';
+    if (currentLegacy && latest.data?.execution_status === 'completed') {
+      const review = await input.client.from('screening_result_reviews').select('disposition')
+        .eq('company_id', input.route.companyId).eq('analysis_id', latest.data.id)
+        .order('review_version', { ascending: false }).limit(1).maybeSingle();
+      if (review.error) throw new Error('Nie udało się rozpocząć analizy. Odśwież stronę.');
+      reuseLegacy = review.data?.disposition !== 'needs_reanalysis';
+    }
+    const contract = reuseLegacy ? screeningAiContract : screeningEvidenceAiContract;
     const result = await input.client.rpc('start_screening_analysis', {
       target_application: input.route.applicationId, expected_input_fingerprint: prepared.fingerprint,
       expected_payload_schema_version: contract.payload_schema_version, requested_result_schema_version: contract.result_schema_version,
