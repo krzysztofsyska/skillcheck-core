@@ -93,3 +93,4 @@ jobs:
           tests/retell-agent-readonly.test.mjs
           tests/retell-outbound-draft.test.mjs
           tests/retell-config.test.mjs
+          tests/retell-webhook.test.mjs
