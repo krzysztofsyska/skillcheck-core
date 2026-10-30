@@ -28,6 +28,7 @@ export const LEGAL_DOCUMENTS = {
   dpa: { file: '03_Umowa_powierzenia_DPA.md', docx: '/legal/03_Umowa_powierzenia_DPA_v1.0.docx', href: '/regulamin/umowa-powierzenia' },
   odstapienie: { file: '04_Formularz_odstapienia.md', docx: '/legal/04_Formularz_odstapienia_v1.0.docx', href: '/regulamin/formularz-odstapienia' },
   ai: { file: '05_AI_i_nadzor_czlowieka.md', docx: '/legal/05_AI_i_nadzor_czlowieka_v1.0.docx', href: '/ai' },
+  aneks1: { file: '06_Aneks_1_Rozmowy_glosowe.md', docx: '/legal/06_Aneks_1_Rozmowy_glosowe_v1.0.docx', href: '/regulamin/aneks-rozmowy-glosowe' },
 } as const;
 export type LegalDocumentKey = keyof typeof LEGAL_DOCUMENTS;
 

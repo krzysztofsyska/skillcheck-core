@@ -63,3 +63,12 @@ test('registration acceptance requires the exact current version value', () => {
   assert.equal(hasLegalAcceptance(form('v0.9')), false);
   assert.equal(hasLegalAcceptance(form(`v${LEGAL_VERSION}`)), true);
 });
+
+test('annex 1 (voice interviews) lists voice sub-processors, retention and no recording', () => {
+  const source = readFileSync(new URL('06_Aneks_1_Rozmowy_glosowe.md', dir), 'utf8');
+  for (const s of ['Retell AI, Inc.', 'Level 7 Systems Limited', '90 dni', 'nie jest nagrywana', '13.11.2026', 'pomoc@skillcheck.pl']) assert.ok(source.includes(s), s);
+  const parsed = parseLegalMarkdown(source);
+  const table = parsed.blocks.find((b) => b.kind === 'table');
+  assert.equal(table.header.length, 3);
+  assert.equal(table.rows.length, 3);
+});
