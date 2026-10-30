@@ -20,6 +20,9 @@ Retell przez godzinę deduplikuje ponowione `create-phone-call` z tym samym `ide
   - `401`/`402`/`429`/`5xx`/błąd sieci/`201` bez czytelnego `call_id` → `retry_later` z tym samym kluczem. Problem z konfiguracją albo rozliczeniem nie zwalnia masowo rezerwacji.
   - Rezerwacja wysyłki starsza niż 55 minut (margines do okna 1 h) albo 10 prób → `unknown`. Brak ponownego dzwonienia; rezerwacja zostaje do wyjaśnienia.
 - Wyzwalacz blokuje anulowanie i zwrot przygotowania, dopóki połączenie mogło wyjść (`sending`, `accepted`, `unknown`).
+- **Powiązanie szkicu:** worker przyjmuje tylko szkic skompilowany w tym procesie (`isCompiledRetellOutboundDraft`). Rezerwacja wysyłki zapisuje SHA-256 klucza idempotencji, który strażnik porównuje z przygotowaniem, oraz SHA-256 dokładnego ładunku. Ponowienie z innym ładunkiem jest odrzucane.
+- **Aktualne uprawnienia:** wstawienie rezerwacji wysyłki i każde ponowienie kolejkują odroczone sprawdzenie SC-010-C (`sc010c_preparation_current_guard`: kontakt, zgoda, okno, blokady kanałów, wydanie planu, pula) przy COMMIT. Cofnięte uprawnienie wycofuje rezerwację wysyłki przed POST.
+- **Odzyskanie po awarii:** istniejąca próba połączenia z `call_id` kończy rezerwację wysyłki jako `accepted` bez ponownej wysyłki.
 - Numer docelowy i klucz API nie są zapisywane.
 
 ## Zanim zadziała naprawdę

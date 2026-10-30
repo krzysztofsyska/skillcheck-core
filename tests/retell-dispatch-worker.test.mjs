@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { prepareOfflineVoiceDraft, cancelOfflineVoicePreparation } from "../lib/voice/offline-preparation.ts";
 import { dispatchRetellCall, RetellDispatchError, RETELL_RESEND_WINDOW_MS } from "../lib/voice/retell-dispatch-worker.ts";
+import { recordRetellDispatch } from "../lib/voice/retell-dispatch-ledger.ts";
 import {
   boot, SC011B2_DISPATCH_SCHEMA, SC011B4_SETTLEMENT_SCHEMA, SC011B5_DISPATCH_WORKER_SCHEMA,
 } from "./helpers/voice-preparation-fixture.mjs";
@@ -109,6 +110,59 @@ test("SC-011-B5 once-only Retell dispatch worker on real PostgreSQL", async t =>
     assert.deepEqual(await pool(p), { used: 0, reserved: 1 }, "kept until reconciled");
     await assert.rejects(db.query("update private.sc011b_voice_dispatches set state='sending' where preparation_id=$1",
       [p.operationId]), /IMMUTABLE/);
+  });
+
+  const dispatchError = code => e => e instanceof RetellDispatchError && e.code === code;
+  const blockVoice = p => db.query(
+    "update public.candidate_contact_preferences set blocked_channels='{voice}',revision=revision+1 where company_id=$1 and candidate_id=$2",
+    [p.s.f.companyId, p.s.f.candidate.id]);
+
+  await t.test("revoked contact authority stops the first send and every resend", async () => {
+    const first = await prepared();
+    await blockVoice(first);
+    const never = transport(reply(201, { call_id: "call_worker_revoked_01" }));
+    await assert.rejects(dispatch(first, never.http), dispatchError("VOICE_DISPATCH_UNAVAILABLE"));
+    assert.equal(never.calls.length, 0);
+    assert.equal(await claim(first), undefined, "the claim rolled back with the failed currentness check");
+
+    const resend = await prepared();
+    assert.deepEqual(await dispatch(resend, transport(reply(503)).http), { state: "retry_later" });
+    await blockVoice(resend);
+    const later = transport(reply(201, { call_id: "call_worker_revoked_02" }));
+    await assert.rejects(dispatch(resend, later.http), dispatchError("VOICE_DISPATCH_UNAVAILABLE"));
+    assert.equal(later.calls.length, 0);
+    assert.deepEqual(await claim(resend), { state: "sending", attempts: 1, rejection: null });
+  });
+
+  await t.test("a draft that is not this preparation's own compiled request is refused", async () => {
+    const a = await prepared(), b = await prepared();
+    const { http, calls } = transport(reply(201, { call_id: "call_worker_swap_00001" }));
+    // Another preparation's authentic draft under this operation id.
+    await assert.rejects(dispatchRetellCall(db, { companyId: a.s.f.companyId, operationId: a.operationId,
+      draft: b.draft, apiKey }, http, b.draft.verifiedAtMs + 1), dispatchError("VOICE_DISPATCH_REJECTED"));
+    // A copy, even of the right draft, is not the compiled object.
+    await assert.rejects(dispatchRetellCall(db, { companyId: a.s.f.companyId, operationId: a.operationId,
+      draft: structuredClone(a.draft), apiKey }, http, a.draft.verifiedAtMs + 1), dispatchError("VOICE_DISPATCH_REJECTED"));
+    assert.equal(calls.length, 0);
+    assert.equal(await claim(a), undefined);
+    // A resend must carry exactly the request pinned by the first claim.
+    assert.deepEqual(await dispatch(a, transport(reply(500)).http), { state: "retry_later" });
+    await db.query("set session_replication_role=replica");
+    await db.query("update private.sc011b_voice_dispatches set payload_sha256=repeat('0',64) where preparation_id=$1", [a.operationId]);
+    await db.query("set session_replication_role=origin");
+    await assert.rejects(dispatch(a, http), dispatchError("VOICE_DISPATCH_REJECTED"));
+    assert.equal(calls.length, 0);
+  });
+
+  await t.test("a call id recorded before a crash settles the claim without resending", async () => {
+    const p = await prepared();
+    assert.deepEqual(await dispatch(p, transport(reply(500)).http), { state: "retry_later" });
+    const { attemptId } = await recordRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId,
+      providerCallId: "call_worker_crash_0001", agentId: p.draft.payload.override_agent_id });
+    const after = transport(reply(201, { call_id: "call_worker_crash_0002" }));
+    assert.deepEqual(await dispatch(p, after.http), { state: "accepted", attemptId });
+    assert.equal(after.calls.length, 0);
+    assert.equal((await claim(p)).state, "accepted");
   });
 
   await t.test("a stale or malformed draft never claims or sends", async () => {

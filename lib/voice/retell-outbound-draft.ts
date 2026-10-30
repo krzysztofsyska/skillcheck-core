@@ -228,6 +228,7 @@ async function readBoundedJson(result: Pick<Response, "headers" | "body">): Prom
   return parsed as Record<string, unknown>;
 }
 const verified = new WeakSet<object>();
+const compiledDrafts = new WeakSet<object>();
 export type RetellVerifiedAgent = Readonly<{
   agentId: string; agentVersionTag: string; agentVersion: number;
   maxCallDurationMs: number; checkedAtMs: number; flowSha256: string;
@@ -439,7 +440,7 @@ export function compileRetellOutboundDraft(
       skillcheck_position_title: positionTitle,
     }),
   });
-  return Object.freeze({
+  const draft: RetellOutboundDraft = Object.freeze({
     endpoint: "https://api.retellai.com/v2/create-phone-call" as const,
     method: "POST" as const, payload,
     requestedMaxSeconds: call.callTimeoutSeconds,
@@ -448,4 +449,12 @@ export function compileRetellOutboundDraft(
     expiresAtMs: provider.checkedAtMs + 30000,
     preflightOnly: true as const,
   });
+  compiledDrafts.add(draft);
+  return draft;
+}
+
+/** True only for the frozen object compileRetellOutboundDraft returned in this
+ * process; copies, JSON restores and hand-built drafts are rejected. */
+export function isCompiledRetellOutboundDraft(value: unknown): value is RetellOutboundDraft {
+  return !!value && typeof value === "object" && compiledDrafts.has(value);
 }

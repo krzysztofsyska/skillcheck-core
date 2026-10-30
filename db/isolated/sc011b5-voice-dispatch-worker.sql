@@ -13,6 +13,10 @@ create table private.sc011b_voice_dispatches (
  last_attempt_at timestamptz not null default clock_timestamp(),
  attempts integer not null default 1 check(attempts between 1 and 10),
  rejection text check(rejection in ('invalid_request','unprocessable')),
+ -- SHA-256 of the provider idempotency key (must equal the preparation's) and
+ -- of the exact JSON payload: every resend must carry the identical request.
+ provider_key_digest text not null check(provider_key_digest ~ '^[0-9a-f]{64}$'),
+ payload_sha256 text not null check(payload_sha256 ~ '^[0-9a-f]{64}$'),
  check((state='rejected') = (rejection is not null)),
  primary key(company_id,preparation_id),
  foreign key(company_id,preparation_id)
@@ -38,6 +42,13 @@ begin
    raise exception using errcode='PT409',message='VOICE_DISPATCH_UNAVAILABLE';
   end if;
   perform private.erasure_lock_candidate(prep.candidate_id);
+  if new.provider_key_digest<>prep.provider_key_digest then
+   raise exception using errcode='42501',message='VOICE_DISPATCH_DRAFT_MISMATCH';
+  end if;
+  -- Queue the SC-010-C deferred currentness check (contact, permission,
+  -- release, entitlement) for this transaction's COMMIT: no claim without it.
+  update private.sc010c_voice_preparations set state=state
+   where company_id=new.company_id and id=new.preparation_id;
   if new.state<>'sending' or new.attempts<>1 or new.rejection is not null then
    raise exception using errcode='42501',message='VOICE_DISPATCH_INVALID_STATE';
   end if;
@@ -46,12 +57,17 @@ begin
  end if;
  -- Only a sending claim moves: one more resend, or one terminal outcome.
  if old.state<>'sending' or new.company_id<>old.company_id or new.preparation_id<>old.preparation_id
-  or new.started_at<>old.started_at
+  or new.started_at<>old.started_at or new.provider_key_digest<>old.provider_key_digest
+  or new.payload_sha256<>old.payload_sha256
   or not ((new.state='sending' and new.attempts=old.attempts+1)
        or (new.state in ('accepted','rejected','unknown') and new.attempts=old.attempts)) then
   raise exception using errcode='42501',message='VOICE_DISPATCH_IMMUTABLE';
  end if;
- if new.state='sending' then new.last_attempt_at:=clock_timestamp();
+ if new.state='sending' then
+  -- Every resend re-proves current contact authority at COMMIT as well.
+  update private.sc010c_voice_preparations set state=state
+   where company_id=new.company_id and id=new.preparation_id;
+  new.last_attempt_at:=clock_timestamp();
  else new.last_attempt_at:=old.last_attempt_at; end if;
  return new;
 end;$$;

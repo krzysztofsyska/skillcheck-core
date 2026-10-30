@@ -9,8 +9,9 @@
  * therefore resend the same draft inside that window. After it, an unresolved
  * claim becomes `unknown`: no redial, the reservation stays until reconciled.
  */
+import { createHash } from "node:crypto";
 import type { SqlClient } from "./trusted-source-verifier.ts";
-import type { RetellOutboundDraft } from "./retell-outbound-draft.ts";
+import { isCompiledRetellOutboundDraft, type RetellOutboundDraft } from "./retell-outbound-draft.ts";
 import { recordRetellDispatch } from "./retell-dispatch-ledger.ts";
 
 export type RetellDispatchTransport = (url: string, init: RequestInit) =>
@@ -94,24 +95,45 @@ export async function dispatchRetellCall(
   if (typeof companyId !== "string" || !uuid.test(companyId) ||
       typeof operationId !== "string" || !uuid.test(operationId) ||
       typeof apiKey !== "string" || apiKey.length < 16 || /[\r\n]/.test(apiKey) ||
-      typeof http !== "function" || !draft || draft.preflightOnly !== true ||
+      typeof http !== "function" || !isCompiledRetellOutboundDraft(draft) || draft.preflightOnly !== true ||
       draft.endpoint !== "https://api.retellai.com/v2/create-phone-call" || draft.method !== "POST")
     return fail("VOICE_DISPATCH_REJECTED");
+  const body = JSON.stringify(draft.payload);
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+  // The key digest must match the preparation (DB guard); the payload digest
+  // pins every resend to the identical request.
+  const keyDigest = digest(draft.payload.idempotency_key), payloadDigest = digest(body);
   if (!Number.isFinite(nowMs) || nowMs > draft.expiresAtMs || nowMs < draft.verifiedAtMs)
     return fail("VOICE_DISPATCH_STALE_DRAFT");
 
-  const claim = await tx(db, async () => {
+  // COMMIT runs the SC-010-C currentness check queued by the claim guard; a
+  // revoked permission, expired contact or changed plan aborts before any POST.
+  let claim: { state: string };
+  try { claim = await tx(db, async () => {
     const fresh = (await db.query([
-      "insert into private.sc011b_voice_dispatches(company_id,preparation_id)",
-      "values($1,$2) on conflict (company_id,preparation_id) do nothing returning 1",
-    ].join(" "), [companyId, operationId])).rows.length === 1;
+      "insert into private.sc011b_voice_dispatches(company_id,preparation_id,provider_key_digest,payload_sha256)",
+      "values($1,$2,$3,$4) on conflict (company_id,preparation_id) do nothing returning 1",
+    ].join(" "), [companyId, operationId, keyDigest, payloadDigest])).rows.length === 1;
     const rows = (await db.query([
-      "select state,attempts,extract(epoch from (clock_timestamp()-started_at))*1000 as age_ms",
+      "select state,attempts,provider_key_digest,payload_sha256,",
+      "extract(epoch from (clock_timestamp()-started_at))*1000 as age_ms",
       "from private.sc011b_voice_dispatches where company_id=$1 and preparation_id=$2 for update",
     ].join(" "), [companyId, operationId])).rows;
     if (rows.length !== 1) return fail("VOICE_DISPATCH_UNAVAILABLE");
     const row = rows[0];
+    if (row.provider_key_digest !== keyDigest || row.payload_sha256 !== payloadDigest)
+      return fail("VOICE_DISPATCH_REJECTED");
     if (row.state !== "sending") return { state: String(row.state) };
+    // A call id recorded before a crash settles the claim: never resend it.
+    const recorded = (await db.query(
+      "select 1 from private.sc011b_voice_attempts where company_id=$1 and preparation_id=$2",
+      [companyId, operationId])).rows.length === 1;
+    if (recorded) {
+      await db.query(
+        "update private.sc011b_voice_dispatches set state='accepted' where company_id=$1 and preparation_id=$2",
+        [companyId, operationId]);
+      return { state: "accepted" };
+    }
     if (!fresh) {
       if (Number(row.age_ms) > RETELL_RESEND_WINDOW_MS || Number(row.attempts) >= maxAttempts) {
         await db.query(
@@ -124,7 +146,12 @@ export async function dispatchRetellCall(
         [companyId, operationId]);
     }
     return { state: "send" };
-  });
+  }); } catch (e) {
+    if (e instanceof RetellDispatchError) throw e;
+    // 42501: the guard refused a draft that does not belong to this preparation.
+    const code = e && typeof e === "object" && "code" in e ? String(e.code) : "";
+    return fail(code === "42501" ? "VOICE_DISPATCH_REJECTED" : "VOICE_DISPATCH_UNAVAILABLE");
+  }
   if (claim.state === "accepted") {
     const attempt = (await db.query(
       "select id from private.sc011b_voice_attempts where company_id=$1 and preparation_id=$2",
@@ -140,7 +167,7 @@ export async function dispatchRetellCall(
     response = await http(draft.endpoint, {
       method: "POST", redirect: "error", cache: "no-store",
       headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(draft.payload),
+      body,
       signal: AbortSignal.timeout(10000),
     });
   } catch {
