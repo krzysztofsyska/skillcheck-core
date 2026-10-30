@@ -106,15 +106,15 @@ test('changed or unavailable material makes existing result stale',()=>{
 
 // Render the real async Server Component with a scoped in-memory Supabase adapter.
 // Replace framework-only navigation/auth and action controls, not page rendering logic.
-async function renderPage({canEdit=true,stale=false,rating='insufficient_data',missing=false}={}) {
+async function renderPage({canEdit=true,stale=false,rating='insufficient_data',missing=false,verdict}={}) {
   const ctx=context();const id=uuid(11),reviewId=uuid(12);
   const analysis={id,company_id:route.companyId,application_id:route.applicationId,recruitment_id:route.recruitmentId,analysis_version:1,execution_status:'completed',input_fingerprint:prepareScreening(ctx).fingerprint,stale_at:stale?'now':null,input_cv_text_snapshot:ctx.document.redacted_text,latest_review_version:1,candidate_document_version:1};
-  const client=clientFor(ctx,{screening_analysis_versions:[analysis],screening_criterion_results:[{...criterion,company_id:route.companyId,analysis_id:id,rating,evidence:rating==='meets'?[{start:3,end:18,quote:'Tworzę raporty.'}]:[]}],screening_result_reviews:[{id:reviewId,company_id:route.companyId,analysis_id:id,review_version:1,disposition:'approved_with_changes',review_note:'Sprawdzono'}],screening_criterion_review_overrides:[{company_id:route.companyId,review_id:reviewId,criterion_result_id:criterion.id,rating_override:'meets',evidence_override:[{quote:'Tworzę raporty.'}]}]});
+  const client=clientFor(ctx,{screening_analysis_versions:[analysis],screening_criterion_results:[{...criterion,...(verdict?{verdict}:{}),company_id:route.companyId,analysis_id:id,rating,evidence:rating==='meets'?[{start:3,end:18,quote:'Tworzę raporty.'}]:[]}],screening_result_reviews:[{id:reviewId,company_id:route.companyId,analysis_id:id,review_version:1,disposition:'approved_with_changes',review_note:'Sprawdzono'}],screening_criterion_review_overrides:[{company_id:route.companyId,review_id:reviewId,criterion_result_id:criterion.id,rating_override:'meets',evidence_override:[{quote:'Tworzę raporty.'}]}]});
   if (missing) ctx.application.id=uuid(999);
   const path='app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/screening/page.tsx';
   const code=ts.transpileModule(readFileSync(path,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
   const require=createRequire(import.meta.url);const mod={exports:{}};
-  const replacements={'next/link':({children,...props})=>React.createElement('a',props,children),'next/navigation':{notFound(){throw Error('404');}},'./screening.module.css':{},'./controls':{RefreshStatus:()=>null,AnalysisControl:({disabled})=>React.createElement('button',{disabled},'START'),ReviewControl:({stale})=>React.createElement('p',null,stale?'REANALYSIS_ONLY':'REVIEW_ALLOWED')}};
+  const replacements={'next/link':({children,...props})=>React.createElement('a',props,children),'next/navigation':{notFound(){throw Error('404');}},'./screening.module.css':{},'./matrix':{EvidenceMatrix:()=>null},'./controls':{RefreshStatus:()=>null,AnalysisControl:({disabled})=>React.createElement('button',{disabled},'START'),ReviewControl:({stale})=>React.createElement('p',null,stale?'REANALYSIS_ONLY':'REVIEW_ALLOWED'),EvidenceAnalysisReview:({unreviewed})=>React.createElement('p',null,`V2_REVIEW:${unreviewed}`)}};
   const customRequire=name=> {
     if(Object.hasOwn(replacements,name)) return replacements[name];
     if(name.endsWith('/lib/company-access')) return {companyAccess:async()=>({client,canEdit})};
@@ -127,6 +127,13 @@ async function renderPage({canEdit=true,stale=false,rating='insufficient_data',m
 }
 test('result UI renders unknown and original AI separately from human correction without numeric score',async()=>{
   const html=await renderPage();assert.match(html,/Brak wystarczających danych/);assert.match(html,/Korekta rekrutera/);assert.match(html,/Tworzę raporty/);assert.match(html,/REVIEW_ALLOWED/);assert.ok(!html.includes('0/'));assert.match(html,/disabled/);
+});
+test('v2 evidence result keeps the immutable analyzed CV snapshot visible',async()=>{
+  const html=await renderPage({verdict:'supported'});
+  assert.match(html,/CV użyte w tej analizie/);assert.ok(!html.includes('Korekta rekrutera'));assert.match(html,/Ostatni przegląd analizy/);assert.match(html,/Sprawdzono/);
+  assert.match(html,/V2_REVIEW:0/,'Completed v2 results keep an analysis-level review with the unreviewed row count');
+  assert.ok(!(await renderPage({verdict:'supported',canEdit:false})).includes('V2_REVIEW'));
+  assert.ok(!(await renderPage()).includes('V2_REVIEW'),'Legacy results use the full review form');
 });
 test('viewer has no mutation controls and stale results cannot be approved in UI',async()=>{
   const viewer=await renderPage({canEdit:false});assert.ok(!viewer.includes('REVIEW_ALLOWED'));assert.ok(!viewer.includes('START'));
@@ -189,4 +196,57 @@ test('review form retains latest disposition, note, rating, evidence and explana
   const unselected=renderToStaticMarkup(React.createElement(controls.ReviewControl,{route,analysisId:uuid(11),version:1,criteria:[criterion],stale:false,review,overrides:[]}));
   assert.match(unselected, /<fieldset disabled=""><legend>Treść korekty/);assert.match(html,/value="meets" selected/);
   assert.match(html,/Tworzę raporty/);assert.match(html,/Zweryfikowana korekta/);assert.match(html,/Zachowaj notatkę/);
+});
+test('v2 analysis review: approval only after every row was reviewed by a human; no rating corrections', async () => {
+  const { evidenceReviewError } = await import('../lib/screening-ui.ts');
+  const rows = status => [{ verdict: 'supported', human_status: 'accepted' }, { verdict: 'missing', human_status: status }];
+  assert.match(evidenceReviewError('approved', rows('unreviewed')), /sprawdź każdy wiersz/);
+  assert.equal(evidenceReviewError('approved', rows('rejected')), null);
+  assert.equal(evidenceReviewError('needs_reanalysis', rows('unreviewed')), null);
+  assert.match(evidenceReviewError('approved_with_changes', rows('edited')), /wierszach macierzy/);
+  assert.equal(evidenceReviewError('approved', [{ verdict: null, human_status: 'unreviewed' }]), null, 'legacy v1 rules are unchanged');
+});
+test('evidence matrix shows the AI explanation under review and keeps row drafts in controlled fields', () => {
+  const matrix = loadUiModule(screenDir + 'matrix.tsx', { './actions': { reviewEvidenceRow: async () => ({}) }, './screening.module.css': {} });
+  const row = { ...criterion, verdict: 'supported', evidence: [{ start: 3, end: 18, quote: 'Tworzę raporty.' }], explanation: 'AI_EXPLANATION_TEXT',
+    missing_info: 'Brak skali', suggested_question: 'Jakie raporty?', human_status: 'unreviewed', human_note: null, human_verdict: null,
+    human_missing_info: null, human_suggested_question: null, human_evidence: null, updated_at: null, updated_by: null };
+  const html = renderToStaticMarkup(React.createElement(matrix.EvidenceMatrix, { criteria: [row], route, analysisId: uuid(11),
+    documentId: uuid(6), documentVersion: 1, editable: true }));
+  assert.match(html, /Wyjaśnienie AI \(do weryfikacji\): AI_EXPLANATION_TEXT/);
+  assert.match(html, /<textarea name="question"[^>]*>Jakie raporty\?<\/textarea>/);
+  assert.match(html, /<textarea name="quote"[^>]*>Tworzę raporty.<\/textarea>/);
+  const source = readFileSync(screenDir + 'matrix.tsx', 'utf8');
+  assert.doesNotMatch(source, /defaultValue/, 'row inputs are controlled so a failed save keeps the draft');
+  assert.match(source, /name="updatedAt" value=\{draft\.updatedAt\}/, 'the lock timestamp travels with the draft, not with newer props');
+});
+test('an edited matrix row offers no "Akceptuj" that would silently discard the saved correction', () => {
+  const matrix = loadUiModule(screenDir + 'matrix.tsx', { './actions': { reviewEvidenceRow: async () => ({}) }, './screening.module.css': {} });
+  const base = { ...criterion, verdict: 'supported', evidence: [], explanation: null, missing_info: null, suggested_question: null,
+    human_note: null, human_missing_info: null, human_suggested_question: null, human_evidence: null, updated_at: null, updated_by: null };
+  const render = row => renderToStaticMarkup(React.createElement(matrix.EvidenceMatrix, { criteria: [row], route, analysisId: uuid(11),
+    documentId: uuid(6), documentVersion: 1, editable: true }));
+  assert.match(render({ ...base, human_status: 'unreviewed', human_verdict: null }), /value="accepted"/);
+  const edited = render({ ...base, human_status: 'edited', human_verdict: 'missing' });
+  assert.doesNotMatch(edited, /value="accepted"/);
+  assert.match(edited, /value="edited"/);
+});
+test('a current v1 analysis is resent or reused on its own contract; new analyses and the explicit upgrade request v2', async () => {
+  const ctx = context(), fingerprint = prepareScreening(ctx).fingerprint;
+  const pending = (overrides = {}) => ({ id: uuid(11), company_id: route.companyId, application_id: route.applicationId, recruitment_id: route.recruitmentId,
+    analysis_version: 1, execution_status: 'pending', stale_at: null, input_fingerprint: fingerprint, result_schema_version: 1, prompt_version: 'screening-v1', ...overrides });
+  const requested = async (rows, reviews = [], options = {}) => {
+    const client = clientFor(ctx, { screening_analysis_versions: rows, screening_result_reviews: reviews }); await command(client, options); return client.calls[0].args; };
+  const review = disposition => [{ company_id: route.companyId, analysis_id: uuid(11), review_version: 1, disposition }];
+  for (const [rows, reviews] of [[[pending()], []], [[pending({ execution_status: 'processing' })], []], [[pending({ execution_status: 'completed' })], []], [[pending({ execution_status: 'completed' })], review('approved')]]) {
+    const args = await requested(rows, reviews);
+    assert.equal(args.requested_result_schema_version, 1, 'resend / "Sprawdź aktualny wynik" reuse the current v1 analysis');
+    assert.equal(args.requested_prompt_version, 'screening-v1');
+  }
+  for (const [rows, reviews, options] of [[[], []], [[pending({ input_fingerprint: 'changed' })], []],
+    [[pending({ execution_status: 'completed' })], review('needs_reanalysis')], [[pending({ execution_status: 'completed' })], [], { upgrade: true }],
+    [[pending({ result_schema_version: 2, prompt_version: 'screening-evidence-v2' })], []]]) {
+    const args = await requested(rows, reviews, options);
+    assert.equal(args.requested_result_schema_version, 2); assert.equal(args.requested_prompt_version, 'screening-evidence-v2');
+  }
 });

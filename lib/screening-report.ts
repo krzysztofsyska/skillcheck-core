@@ -106,9 +106,17 @@ export function parseShortlist(value: unknown): ShortlistRow {
     snapshot_current: bool(row.snapshot_current), policy_current: bool(row.policy_current),
   };
 }
+// Step 3 evidence-matrix rows carry a human-verified evidence state instead of a
+// performance rating (their legacy rating is a neutral placeholder).
+export const matrixVerdictLabels = {
+  supported: 'Potwierdzone w CV', partial: 'Częściowo potwierdzone', missing: 'Brak informacji w CV',
+  contradicted: 'Sprzeczne dane', rejected: 'Wiersz odrzucony przez rekrutera',
+} as const;
+export type MatrixVerdict = keyof typeof matrixVerdictLabels;
 export type ReportCriterion = {
   id: string; kind: keyof typeof kindLabels; text: string;
   aiRating: ScreeningRating; rating: ScreeningRating; reviewedChange: boolean;
+  matrixVerdict: MatrixVerdict | null;
   explanation: string | null; evidence: { start: number; end: number; quote: string }[];
 };
 export type ReportApplication = { ranking: RankingRow; shortlist: ShortlistRow | null; criteria: ReportCriterion[] };
@@ -127,6 +135,10 @@ export function reportEvidence(value: unknown): ReportCriterion['evidence'] {
 }
 export function reportRating(value: unknown): ScreeningRating {
   requireReport(typeof value === 'string' && Object.hasOwn(ratingLabels, value)); return value as ScreeningRating;
+}
+export function reportMatrixVerdict(value: unknown): Exclude<MatrixVerdict, 'rejected'> {
+  requireReport(typeof value === 'string' && value !== 'rejected' && Object.hasOwn(matrixVerdictLabels, value));
+  return value as Exclude<MatrixVerdict, 'rejected'>;
 }
 export function reportText(value: unknown): string | null { return value === null ? null : text(value, 100000); }
 export function shortlistLabel(entry: ShortlistRow | null) {
@@ -147,7 +159,7 @@ export function screeningReportCsv(report: ScreeningReport): string {
     ['Informacja', 'Raport wspiera ocenę człowieka. Nie jest decyzją o zatrudnieniu. Brak danych nie oznacza niespełnienia wymagań.'],
     ['Wymagania aktualnego stanowiska'], ['Rodzaj', 'Treść'], ...report.requirements.map(r => [kindLabels[r.kind], r.text]), [],
     ['Zgłoszenie', 'Pozycja', 'Status', 'Wynik', 'Pokrycie', 'Ocenione kryteria', 'Wszystkie kryteria', 'Sugestia systemu', 'Shortlista człowieka',
-      'Źródło wyboru', 'Wybrano (UTC)', 'Polityka', 'Analiza', 'Review', 'Kryterium', 'Rodzaj', 'Ocena AI', 'Ocena po review', 'Korekta człowieka', 'Uzasadnienie', 'Dowody'],
+      'Źródło wyboru', 'Wybrano (UTC)', 'Polityka', 'Analiza', 'Review', 'Kryterium', 'Rodzaj', 'Ocena AI', 'Ocena po review', 'Werdykt macierzy dowodów', 'Korekta człowieka', 'Uzasadnienie', 'Dowody'],
   ];
   for (const application of report.applications) {
     const { ranking: r, shortlist: s } = application;
@@ -157,6 +169,7 @@ export function screeningReportCsv(report: ScreeningReport): string {
         s?.source === 'manual' ? 'Ręczny' : s ? 'Z sugestii' : '', s?.selected_at ?? '', r.ranking_policy_version,
         r.analysis_id, r.review_id, criterion?.text ?? '', criterion ? kindLabels[criterion.kind] : '',
         criterion ? ratingLabels[criterion.aiRating] : '', criterion ? ratingLabels[criterion.rating] : '',
+        criterion?.matrixVerdict ? matrixVerdictLabels[criterion.matrixVerdict] : '',
         criterion?.reviewedChange ? 'Tak' : 'Nie', criterion?.explanation ?? '',
         criterion?.evidence.map(e => `[${e.start}–${e.end}] ${e.quote}`).join('\n') ?? '']);
     }

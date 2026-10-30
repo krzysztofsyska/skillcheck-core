@@ -30,6 +30,16 @@ test('production app serves forms and rejects unauthenticated tenant routes', as
     assert.equal(response.status,200,path);
     assert.match(await response.text(),new RegExp(label));
     assert.match(response.headers.get('cache-control'),/no-store/);
+    assert.match(response.headers.get('content-security-policy'),/^default-src 'self'; frame-ancestors 'none'; .*connect-src 'self' https:\/\/wsvjawuikxfzjyivxgsu\.supabase\.co;/,path);
+    assert.equal(response.headers.get('x-frame-options'),'DENY',path);
+    assert.equal(response.headers.get('x-content-type-options'),'nosniff',path);
+    assert.equal(response.headers.get('referrer-policy'),'strict-origin-when-cross-origin',path);
+    assert.equal(response.headers.get('permissions-policy'),'camera=(), microphone=(), geolocation=()',path);
+  }
+  for (const path of ['/dashboard/00000000-0000-0000-0000-000000000001/recruitments/00000000-0000-0000-0000-000000000002/report/export','/api/competency/attempt']) {
+    const response=await fetch(base+path,{redirect:'manual'});
+    assert.equal(response.headers.get('referrer-policy'),'no-referrer',path);
+    assert.equal(response.headers.get('x-frame-options'),'DENY',path);
   }
   for (const path of ['/dashboard/00000000-0000-0000-0000-000000000001/recruitments/00000000-0000-0000-0000-000000000002/applications/00000000-0000-0000-0000-000000000003/assessments','/dashboard/00000000-0000-0000-0000-000000000001/recruitments/00000000-0000-0000-0000-000000000002/applications/00000000-0000-0000-0000-000000000003/screening','/dashboard','/onboarding','/dashboard/00000000-0000-0000-0000-000000000001','/dashboard/00000000-0000-0000-0000-000000000001/positions/new','/dashboard/00000000-0000-0000-0000-000000000001/candidates','/dashboard/00000000-0000-0000-0000-000000000001/candidates/00000000-0000-0000-0000-000000000002/cv','/dashboard/00000000-0000-0000-0000-000000000001/candidates/00000000-0000-0000-0000-000000000002','/dashboard/00000000-0000-0000-0000-000000000001/recruitments/00000000-0000-0000-0000-000000000002']) {
     const response=await fetch(base+path,{redirect:'manual'});

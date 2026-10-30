@@ -192,3 +192,21 @@ test('React report renders status/evidence and escapes hostile content', async (
   assert.match(html,/&lt;img/); assert.doesNotMatch(html,/<img|DO_NOT_EXPORT/);
   assert.match(html,/scope="col"/); assert.match(html,/<caption>/);
 });
+
+test('v2 evidence rows publish the human matrix review, never the discarded AI citation', async () => {
+  const edited = fixture(); Object.assign(edited.screening_criterion_results[0], { verdict: 'supported', human_status: 'edited', human_verdict: 'missing', human_evidence: [] });
+  const editedReport = await load(edited);
+  const e = editedReport.applications[0].criteria[0];
+  assert.equal(e.matrixVerdict, 'missing', 'The human-corrected evidence state is published, not the neutral rating');
+  assert.match(screeningReportCsv(editedReport), /"Werdykt macierzy dowodów"/);
+  assert.match(screeningReportCsv(editedReport), /"Brak informacji w CV"/);
+  assert.deepEqual(e.evidence, []); assert.equal(e.explanation, null, 'the superseded AI explanation is not published'); assert.equal(e.reviewedChange, true);
+  const rejected = fixture(); Object.assign(rejected.screening_criterion_results[0], { verdict: 'supported', human_status: 'rejected', human_evidence: null });
+  const r = (await load(rejected)).applications[0].criteria[0];
+  assert.deepEqual(r.evidence, []); assert.equal(r.explanation, null); assert.equal(r.reviewedChange, true);
+  assert.equal(r.matrixVerdict, 'rejected');
+  const accepted = fixture(); Object.assign(accepted.screening_criterion_results[0], { verdict: 'supported', human_status: 'accepted', human_evidence: null });
+  const a = (await load(accepted)).applications[0].criteria[0];
+  assert.equal(a.evidence[0].quote, 'Raport'); assert.equal(a.reviewedChange, false); assert.equal(a.matrixVerdict, 'supported');
+  assert.equal((await load(fixture())).applications[0].criteria[0].matrixVerdict, null, 'Legacy v1 rows keep their rating only');
+});

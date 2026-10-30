@@ -97,3 +97,5 @@ jobs:
           tests/retell-config.test.mjs
           tests/retell-webhook.test.mjs
           tests/retell-dispatch-ledger.test.mjs
+          tests/retell-dispatch-worker.test.mjs
+          tests/retell-dispatch-resolution.test.mjs

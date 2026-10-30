@@ -26,7 +26,10 @@ export async function setupRankingDatabase(db, { defaultTargetSize, throughMigra
   const dir = new URL('../../supabase/migrations/', import.meta.url);
   const migrations = (await readdir(dir)).filter(name => name.endsWith('.sql') && (!throughMigration || name <= throughMigration)).sort();
   assert.ok(migrations.some(name => name.includes('ranking')), 'SC-008 migration must exist');
+  // Production-only operational migration: test clusters without pg_cron skip it (no schema objects).
+  const cronAvailable = (await db.query("select count(*)::int n from pg_available_extensions where name='pg_cron'")).rows[0].n > 0;
   for (const name of migrations) {
+    if (name === '20261011165916_sales_retention_cron_extension.sql' && !cronAvailable) continue;
     let sql = await readFile(new URL(name, dir), 'utf8');
     if (defaultTargetSize !== undefined && name.includes('ranking')) {
       // Change the initial seed in an isolated database, never mutate an installed policy.
