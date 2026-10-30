@@ -19,6 +19,7 @@ Transkrypcja to jedyny zapis odpowiedzi kandydata. Retell przy `basic_attributes
   - Wiersza nie da się zmienić. Usunąć go może tylko funkcja retencji.
   - RLS z `force` i brak grantów (jak SC-010-C i B2).
 - `ingestRetellWebhook` zapisuje transkrypcję w tej samej transakcji, w której `call_ended` ustawia status `completed`. Dotyczy to także rozmowy zakończonej prośbą o DNC. Poczta głosowa, brak odpowiedzi, zajęte i błędy nie zostawiają transkrypcji.
+- Wyzwalacz na `public.recruitments` ustawia `closed_at` przy każdym przejściu do `closed`, gdy wywołujący nie podał nowego czasu (np. zamknięcie samą zmianą statusu). Ponowne zamknięcie po otwarciu zaczyna 90 dni od nowa. Rekrutacje zamknięte wcześniej bez `closed_at` nie są usuwane, dopóki nie dostaną daty (do uzupełnienia w migracji).
 - `private.sc011b_purge_voice_transcripts()` usuwa transkrypcje rekrutacji ze statusem `closed`, gdy `closed_at` jest co najmniej 90 dni temu. Ponowne otwarcie rekrutacji wstrzymuje usuwanie. Próba połączenia i jej wynik zostają. Funkcja zwraca liczbę usuniętych wierszy.
 
 ## Zanim trafi do produkcji

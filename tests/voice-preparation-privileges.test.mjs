@@ -41,6 +41,7 @@ const signatures = Object.freeze([
   'private.sc011b_block_cancel_after_dispatch()',
   'private.sc011b_transcript_guard()',
   'private.sc011b_purge_voice_transcripts()',
+  'private.sc011b_recruitment_closed_at()',
 ]);
 const ingestionSignature = 'private.ingest_voice_interview_permission_receipt(jsonb)';
 const roleCandidates = Object.freeze([

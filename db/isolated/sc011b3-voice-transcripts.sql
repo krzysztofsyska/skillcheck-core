@@ -58,6 +58,21 @@ create trigger sc011b_transcript_guard before insert or update or delete
 create trigger sc011b_transcript_no_truncate before truncate
  on private.sc011b_voice_transcripts for each statement execute function private.sc011b_transcript_guard();
 
+-- Retention counts from closed_at, but a recruitment may be closed by changing
+-- only its status. Stamp the closure time on every transition into 'closed'
+-- unless the caller sets a new one; a re-close after reopening restarts it.
+create function private.sc011b_recruitment_closed_at() returns trigger
+language plpgsql security definer set search_path='' as $$
+begin
+ if new.status='closed' and (tg_op='INSERT' or old.status<>'closed') and
+    (new.closed_at is null or (tg_op='UPDATE' and new.closed_at is not distinct from old.closed_at)) then
+  new.closed_at:=pg_catalog.now();
+ end if;
+ return new;
+end;$$;
+create trigger sc011b_recruitment_closed_at before insert or update of status on public.recruitments
+ for each row execute function private.sc011b_recruitment_closed_at();
+
 -- Deletes transcripts of recruitments closed for at least 90 days. Intended for
 -- a trusted scheduler; returns the number of transcripts removed.
 create function private.sc011b_purge_voice_transcripts() returns integer
@@ -94,7 +109,8 @@ begin
  for f in select p.oid,p.oid::pg_catalog.regprocedure as signature
   from pg_catalog.pg_proc p where p.oid in (
    'private.sc011b_transcript_guard()'::pg_catalog.regprocedure,
-   'private.sc011b_purge_voice_transcripts()'::pg_catalog.regprocedure
+   'private.sc011b_purge_voice_transcripts()'::pg_catalog.regprocedure,
+   'private.sc011b_recruitment_closed_at()'::pg_catalog.regprocedure
   )
  loop
   execute pg_catalog.format('revoke all on function %s from public cascade',f.signature);

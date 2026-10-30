@@ -125,6 +125,27 @@ test("SC-011-B2/B3 dispatch ledger, Retell webhooks and transcripts on real Post
     await close("closed", 91);
     assert.equal(await purge(), 1);
     assert.equal(await transcript(callId), undefined);
+  });
+
+  await t.test("closing a recruitment by status alone starts the retention clock", async () => {
+    const { s, operationId } = await prepared();
+    const callId = "call_ffffffffffffffff02";
+    await recordRetellDispatch(db, { companyId: s.f.companyId, operationId, providerCallId: callId, agentId });
+    await ingest("call_ended", callId);
+    const closedAt = async () => (await db.query("select closed_at from public.recruitments where id=$1",
+      [s.f.recruitment.id])).rows[0].closed_at;
+    await db.query("update public.recruitments set status='open',closed_at=null where id=$1", [s.f.recruitment.id]);
+    await db.query("update public.recruitments set status='closed' where id=$1", [s.f.recruitment.id]);
+    const first = await closedAt();
+    assert.ok(first instanceof Date, "closing by status stamps closed_at");
+    assert.equal((await db.query("select private.sc011b_purge_voice_transcripts() as n")).rows[0].n, 0);
+    // Reopen, then close again without a timestamp: the clock restarts.
+    await db.query("update public.recruitments set closed_at=clock_timestamp()-interval '200 days' where id=$1", [s.f.recruitment.id]);
+    await db.query("update public.recruitments set status='open' where id=$1", [s.f.recruitment.id]);
+    await db.query("update public.recruitments set status='closed' where id=$1", [s.f.recruitment.id]);
+    assert.ok((await closedAt()).getTime() >= first.getTime(), "a re-close restarts the 90 days");
+    assert.equal((await db.query("select private.sc011b_purge_voice_transcripts() as n")).rows[0].n, 0);
+    assert.ok(await transcript(callId));
     assert.equal((await attemptRow(callId)).status, "completed", "the attempt and its outcome remain");
   });
 
