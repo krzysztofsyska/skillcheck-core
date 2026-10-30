@@ -130,7 +130,7 @@ test('result UI renders unknown and original AI separately from human correction
 });
 test('v2 evidence result keeps the immutable analyzed CV snapshot visible',async()=>{
   const html=await renderPage({verdict:'supported'});
-  assert.match(html,/CV użyte w tej analizie/);assert.ok(!html.includes('Korekta rekrutera'));
+  assert.match(html,/CV użyte w tej analizie/);assert.ok(!html.includes('Korekta rekrutera'));assert.match(html,/Ostatni przegląd analizy/);assert.match(html,/Sprawdzono/);
   assert.match(html,/V2_REVIEW:0/,'Completed v2 results keep an analysis-level review with the unreviewed row count');
   assert.ok(!(await renderPage({verdict:'supported',canEdit:false})).includes('V2_REVIEW'));
   assert.ok(!(await renderPage()).includes('V2_REVIEW'),'Legacy results use the full review form');
