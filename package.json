@@ -13,7 +13,7 @@
     "test:live": "node --env-file-if-exists=.env.local scripts/check-live-supabase.mjs",
     "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs tests/cv-pdf.test.mjs tests/cv-docx.test.mjs",
     "test:pdf-bundle": "node scripts/check-pdf-bundle.mjs",
-    "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs tests/screening-synthetic-fixture.test.mjs tests/screening-ui.test.mjs",
+    "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs tests/screening-synthetic-fixture.test.mjs tests/screening-ui.test.mjs tests/screening-evidence.test.mjs tests/screening-evidence-schema.test.mjs tests/screening-evidence-database.test.mjs tests/screening-claim-routing.test.mjs tests/interview-gaps.test.mjs",
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
     "test:screening-report": "node --test tests/screening-report.test.mjs",
     "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
@@ -62,7 +62,8 @@
     "pdf-parse": "2.4.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "yauzl": "3.4.0"
+    "yauzl": "3.4.0",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

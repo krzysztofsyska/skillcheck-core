@@ -44,10 +44,10 @@ test('SC-006 exposes only authenticated orchestration, never an arbitrary attemp
     import.meta.url,
   );
   const actions = readFileSync(screeningActions, 'utf8');
-  assert.deepEqual([...actions.matchAll(/export async function (\w+)/g)].map(m => m[1]), ['startAnalysis', 'retryAnalysis', 'reviewAnalysis']);
+  assert.deepEqual([...actions.matchAll(/export async function (\w+)/g)].map(m => m[1]), ['startAnalysis', 'retryAnalysis', 'reviewAnalysis', 'reviewEvidenceRow']);
   assert.doesNotMatch(actions, /form\.get\(['"]attempt/i);
   assert.doesNotMatch(actions, /dispatchScreeningWorker\s*\(/);
-  assert.equal((actions.match(/await companyAccess\(route.companyId\)/g) ?? []).length, 3);
+  assert.equal((actions.match(/await companyAccess\(route.companyId\)/g) ?? []).length, 4);
 
   const dispatchSource = readFileSync(new URL('../lib/screening-dispatch.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(dispatchSource, /^['"]use server['"]/m);

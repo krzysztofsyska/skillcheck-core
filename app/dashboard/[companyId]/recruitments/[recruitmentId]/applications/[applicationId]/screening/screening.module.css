@@ -7,3 +7,19 @@
 .screening summary { cursor: pointer; }
 .criterion { border: 1px solid #a7b4c5; border-radius: .75rem; padding: 1.25rem; margin-block: 1rem; }
 .correction { border-top: 1px solid #a7b4c5; margin-top: 1rem; padding-top: .5rem; }
+
+.matrixOverflow { width: 100%; overflow-x: auto; border: 1px solid #9baabd; border-radius: .65rem; }
+.matrix { border-collapse: collapse; min-width: 1320px; width: 100%; font-size: .9rem; }
+.matrix th, .matrix td { text-align: left; vertical-align: top; border-bottom: 1px solid #c9d3df; padding: .8rem; max-width: 22rem; }
+.matrix thead { background: #eef3fa; color: #193148; }
+.matrix tbody tr:nth-child(even) { background: #f8fafc; }
+.matrix blockquote { font-size: .9rem; border-color: #475569; margin-block: .4rem; }
+.badge { border-radius: 1rem; padding: .3rem .55rem; display: inline-block; }
+.supported { color: #14532d; background: #dcfce7; }
+.partial { color: #854d0e; background: #fef9c3; }
+.missing { color: #334155; background: #e2e8f0; }
+.contradicted { color: #991b1b; background: #fee2e2; }
+.matrixForm { margin: 0 !important; }
+.matrixForm textarea, .matrixForm select { width: 100%; min-width: 12rem; max-width: 20rem; }
+.rowActions { display: flex; flex-wrap: wrap; gap: .35rem; }
+.rowActions button { font-size: .82rem; padding: .3rem .5rem; }
