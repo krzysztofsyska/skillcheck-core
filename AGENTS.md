@@ -29,6 +29,17 @@ Do not require the owner to copy handoffs between agents.
 
 Do not merge task branches directly to `main` or use this exception before its production safeguards are verified.
 
+## Owner communication
+
+The owner is not technical and has limited time at the computer. Agents do all technical work themselves.
+
+- Write to the owner in Polish, in plain language, without jargon.
+- Ask the owner only YES/NO decisions, each with a recommendation and one sentence of reasoning. Collect open decisions into one message instead of asking one at a time.
+- Never ask the owner to click through GitHub, Vercel or Supabase, run tests, check a browser console, copy handoffs or look up settings. Agents read these themselves through their tools.
+- If a check needs something the agent does not have (an account, a credential, a test database), report it as a blocker together with a proposal that removes the need for the owner next time.
+- Prefer automated checks (CI, browser tests) over manual verification by the owner.
+- The owner's own actions are limited to: production approval, merging the promotion PR into `main`, new costs, and external or irreversible actions. For each, give the owner a direct link and say exactly what to click.
+
 ## Required task metadata
 
 Every task must define:
