@@ -10,7 +10,7 @@ import { evidenceReviewError, isUuid, readScreeningReview, screeningPath, type S
 export async function startAnalysis(route: ScreeningRoute, _state: ScreeningFormState, form: FormData): Promise<ScreeningFormState> {
   const { client, canEdit } = await companyAccess(route.companyId);
   try {
-    const state = await runScreeningCommand({ client, canEdit, route, enabled: screeningAiUserEnabled(), command: 'start', idempotencyKey: String(form.get('requestId') ?? ''), dispatch: dispatchScreeningWorker });
+    const state = await runScreeningCommand({ client, canEdit, route, enabled: screeningAiUserEnabled(), command: 'start', upgrade: form.get('upgrade') === 'evidence', idempotencyKey: String(form.get('requestId') ?? ''), dispatch: dispatchScreeningWorker });
     revalidatePath(screeningPath(route));
     return state;
   } catch (error) { return { error: error instanceof Error ? error.message : 'Nie udało się rozpocząć analizy.' }; }

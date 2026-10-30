@@ -64,6 +64,9 @@ export default async function Screening({ params, searchParams }: { params: Prom
     {canEdit && !historical && status !== 'processing' && <AnalysisControl key={`${analysis?.id ?? 'new'}:${status}`} route={route} requestId={randomUUID()}
       retryId={status === 'failed' ? analysis?.id : undefined} disabled={!enabled || !prepared}
       label={status === 'failed' ? 'Ponów analizę' : status === 'pending' ? 'Ponów wysłanie' : status === 'completed' && review?.disposition !== 'needs_reanalysis' ? 'Sprawdź aktualny wynik' : 'Uruchom analizę'} />}
+    {canEdit && !historical && status === 'completed' && !criteria.some(c => c.verdict != null) && review?.disposition !== 'needs_reanalysis'
+      && <AnalysisControl key={`${analysis?.id}:upgrade`} route={route} requestId={randomUUID()} upgrade disabled={!enabled || !prepared}
+        label="Uruchom nową analizę z macierzą dowodów (zużywa 1 analizę CV)" />}
     {prepared && <details><summary>Materiał przygotowany do analizy · CV v{prepared.binding.document_version}</summary>
       <ul>{prepared.payload.criteria.map(c => <li key={c.id}><strong>{kinds[c.kind]}:</strong> {c.text}</li>)}</ul>
       <pre className="cv-text">{prepared.payload.cv_text}</pre>
