@@ -138,8 +138,14 @@ function createRuntime() {
   };
 }
 
+const MAX_DISPATCH_BODY_BYTES = 1024;
+
 Deno.serve(async request => {
   if (request.method !== "POST") return json(405, { accepted: false });
+  const contentLength = request.headers.get("content-length");
+  if (contentLength === null || !/^\d+$/.test(contentLength) || Number(contentLength) > MAX_DISPATCH_BODY_BYTES) {
+    return json(413, { accepted: false });
+  }
   const body = new Uint8Array(await request.arrayBuffer());
   const verified = verifyScreeningDispatch({
     secret: env("SCREENING_WORKER_DISPATCH_SECRET"),
