@@ -231,15 +231,22 @@ test('an edited matrix row offers no "Akceptuj" that would silently discard the 
   assert.doesNotMatch(edited, /value="accepted"/);
   assert.match(edited, /value="edited"/);
 });
-test('resending a pending pre-Step 3 analysis keeps its v1 contract; any other start requests v2', async () => {
+test('a current v1 analysis is resent or reused on its own contract; new analyses and the explicit upgrade request v2', async () => {
   const ctx = context(), fingerprint = prepareScreening(ctx).fingerprint;
   const pending = (overrides = {}) => ({ id: uuid(11), company_id: route.companyId, application_id: route.applicationId, recruitment_id: route.recruitmentId,
     analysis_version: 1, execution_status: 'pending', stale_at: null, input_fingerprint: fingerprint, result_schema_version: 1, prompt_version: 'screening-v1', ...overrides });
-  const requested = async rows => { const client = clientFor(ctx, { screening_analysis_versions: rows }); await command(client); return client.calls[0].args; };
-  const legacy = await requested([pending()]);
-  assert.equal(legacy.requested_result_schema_version, 1); assert.equal(legacy.requested_prompt_version, 'screening-v1');
-  for (const rows of [[], [pending({ execution_status: 'completed' })], [pending({ input_fingerprint: 'changed' })], [pending({ result_schema_version: 2, prompt_version: 'screening-evidence-v2' })]]) {
-    const args = await requested(rows);
+  const requested = async (rows, reviews = [], options = {}) => {
+    const client = clientFor(ctx, { screening_analysis_versions: rows, screening_result_reviews: reviews }); await command(client, options); return client.calls[0].args; };
+  const review = disposition => [{ company_id: route.companyId, analysis_id: uuid(11), review_version: 1, disposition }];
+  for (const [rows, reviews] of [[[pending()], []], [[pending({ execution_status: 'completed' })], []], [[pending({ execution_status: 'completed' })], review('approved')]]) {
+    const args = await requested(rows, reviews);
+    assert.equal(args.requested_result_schema_version, 1, 'resend / "Sprawdź aktualny wynik" reuse the current v1 analysis');
+    assert.equal(args.requested_prompt_version, 'screening-v1');
+  }
+  for (const [rows, reviews, options] of [[[], []], [[pending({ input_fingerprint: 'changed' })], []],
+    [[pending({ execution_status: 'completed' })], review('needs_reanalysis')], [[pending({ execution_status: 'completed' })], [], { upgrade: true }],
+    [[pending({ result_schema_version: 2, prompt_version: 'screening-evidence-v2' })], []]]) {
+    const args = await requested(rows, reviews, options);
     assert.equal(args.requested_result_schema_version, 2); assert.equal(args.requested_prompt_version, 'screening-evidence-v2');
   }
 });

@@ -22,11 +22,12 @@ export function RefreshStatus({ active }: { active: boolean }) {
   return <button type="button" onClick={() => router.refresh()}>Odśwież stan</button>;
 }
 
-export function AnalysisControl({ route, requestId, retryId, label, disabled }: { route: ScreeningRoute; requestId: string; retryId?: string; label: string; disabled: boolean }) {
+export function AnalysisControl({ route, requestId, retryId, label, disabled, upgrade = false }: { route: ScreeningRoute; requestId: string; retryId?: string; label: string; disabled: boolean; upgrade?: boolean }) {
   const action = retryId ? retryAnalysis.bind(null, route, retryId) : startAnalysis.bind(null, route);
   const [state, submit, pending] = useActionState(action, {});
   return <form action={submit}>
     <input type="hidden" name="requestId" value={requestId} />
+    {upgrade && <input type="hidden" name="upgrade" value="evidence" />}
     <button disabled={disabled || pending}>{pending ? 'Wysyłanie…' : label}</button>
     <Feedback state={state} />
     {state.saved && <Link href={screeningPath(route)}>Otwórz najnowszy stan analizy</Link>}
