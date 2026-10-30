@@ -30,7 +30,11 @@ const config = {
         { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
         { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
       ],
-    }];
+    },
+    // These headers override those set by route handlers, so routes that carry auth codes, attempt
+    // tokens or candidate data keep their stricter policy here (the last matching rule wins).
+    ...['/auth/callback', '/api/competency/attempt', '/dashboard/:companyId/recruitments/:recruitmentId/report/export']
+      .map(source => ({ source, headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }] }))];
   },
 };
 export default config;
