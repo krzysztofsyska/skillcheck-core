@@ -126,7 +126,8 @@ export async function loadScreeningReport(
       requireReport(snapshot && snapshot.text === c.criterion_text_snapshot && snapshot.kind === c.criterion_kind);
       const override = changes.find(o => o.criterion_result_id === c.id);
       // v2 evidence rows are corrected in the matrix, not through rating overrides:
-      // an edited row publishes the human evidence, a rejected row publishes none.
+      // an edited row publishes the human evidence without the superseded AI
+      // explanation, a rejected row publishes neither.
       const matrixRow = matrix.find(m => m.id === c.id);
       const evidenceRow = matrixRow?.verdict != null;
       const rejected = evidenceRow && matrixRow.human_status === 'rejected';
@@ -135,7 +136,7 @@ export async function loadScreeningReport(
         id: c.criterion_id, kind: c.criterion_kind, text: reportText(c.criterion_text_snapshot)!,
         aiRating: reportRating(c.rating), rating: reportRating(override?.rating_override ?? c.rating),
         reviewedChange: !!override || rejected || edited,
-        explanation: rejected ? null : reportText(override?.explanation_override ?? c.explanation),
+        explanation: rejected || edited ? null : reportText(override?.explanation_override ?? c.explanation),
         evidence: reportEvidence(rejected ? [] : edited ? matrixRow.human_evidence ?? c.evidence : override?.evidence_override ?? c.evidence),
       };
     });

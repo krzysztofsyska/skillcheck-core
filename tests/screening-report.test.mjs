@@ -196,7 +196,7 @@ test('React report renders status/evidence and escapes hostile content', async (
 test('v2 evidence rows publish the human matrix review, never the discarded AI citation', async () => {
   const edited = fixture(); Object.assign(edited.screening_criterion_results[0], { verdict: 'supported', human_status: 'edited', human_evidence: [] });
   const e = (await load(edited)).applications[0].criteria[0];
-  assert.deepEqual(e.evidence, []); assert.equal(e.reviewedChange, true);
+  assert.deepEqual(e.evidence, []); assert.equal(e.explanation, null, 'the superseded AI explanation is not published'); assert.equal(e.reviewedChange, true);
   const rejected = fixture(); Object.assign(rejected.screening_criterion_results[0], { verdict: 'supported', human_status: 'rejected', human_evidence: null });
   const r = (await load(rejected)).applications[0].criteria[0];
   assert.deepEqual(r.evidence, []); assert.equal(r.explanation, null); assert.equal(r.reviewedChange, true);
