@@ -66,3 +66,20 @@ scratch runner bypasses only the executable startup UID check because the
 sandbox maps only UID 0; SQL identities/privileges are unchanged. These runs are
 development evidence, not a substitute for unmodified GitHub CI. No runner or
 startup shim is committed. Final acceptance requires both native CI versions.
+
+## Inspected production state (2026-10-30)
+
+The read-only inspect of production (workflow run 41021636267) matched no reviewed state:
+M13 refused with `sc19_source_schema_unreviewed`. A replay of the current files in the hosted role model on
+PostgreSQL 17.6 reproduces seven production fingerprints exactly (`nonowned_acl` before the hosted tuple
+normalization above, which M13 performs itself). `routines` differs only because 13 functions from the
+2026-10-01..04 migrations have CRLF bodies on production.
+
+`20261021084500_normalize_function_line_endings.sql` (#194) rewrites those 13 bodies to LF before M13, so
+production becomes the reviewed `r4_legacy` state and M13 runs unchanged.
+`tests/sc-019-migrations-production-hosted-state.test.mjs` proves this on the exact inspected state:
+- the rehearsal reproduces all 8 raw production fingerprints;
+- M13 refuses that state without the normalization, as it did on 2026-10-29;
+- the normalization changes only `routines`, to the reviewed `r4_legacy` value;
+- after the normalization, CRLF outside the list or an extra table is still refused;
+- M13 then installs the r4_legacy billing triggers and reaches exactly the reviewed R6 output.
