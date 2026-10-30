@@ -191,7 +191,7 @@ jobs:
         run: |
           set -o pipefail
           node --test tests/sc-019-migrations-production-history.test.mjs 2>&1 | tee sc19-production-history.log
-      - name: Reproduce the inspected production state (CRLF functions) and its reviewed M13 path
+      - name: Reproduce the inspected production state (CRLF functions), normalization and M13
         if: matrix.postgres == '17'
         env:
           SC19_REHEARSAL_DISPOSABLE: 'yes'

@@ -178,9 +178,8 @@ Wpisy M1–M12 z `statements = NULL` (`20261009105025` … `20261021084245`) nie
 ### Końcówki linii
 
 13 funkcji z migracji z 2026-10-01..04 ma na produkcji ciało z CRLF. Te migracje były wykonane z plików z końcówkami Windows,
-a historia zapisała treść z LF. To jedyna różnica między produkcją a replayem obecnych plików
-(stan `production_hosted_20261030` w M13 i w `tests/fixtures/sc19-migration-manifest.json`).
-`.gitattributes` wymusza LF dla `*.sql`.
+a historia zapisała treść z LF. To jedyna różnica między produkcją a replayem obecnych plików.
+Usuwa ją `20261021084500_normalize_function_line_endings.sql` przed M13 (#194). `.gitattributes` wymusza LF dla `*.sql`.
 
 ## Korzystanie z kodu
 

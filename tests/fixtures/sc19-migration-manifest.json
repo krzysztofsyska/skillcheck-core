@@ -1131,45 +1131,6 @@
         "relations": "bd31002a7575712be5999c53591904849eb9f2aa10fa1e42607f67851a334501",
         "rewrites": "e9c6543bb90eae112800eec33f1bec5a733fc5e6194a92915f7ff1124fad897f"
       }
-    },
-    "production_hosted_20261030": {
-      "provenance": "Production project wsvjawuikxfzjyivxgsu (PostgreSQL 17.6), read-only inspect of workflow 'DB migrate production' run 41021636267 (2026-10-30, main 5c8ee94, artifact db-inspection-41021636267). Equal to r4_legacy except routines: 13 functions created from 2026-10-01..04 migration sources carry CRLF line endings. nonowned_acl is the value M13 compares after removing the reviewed hosted default tuples (tests/fixtures/sc19-hosted-acl-differences.json); the raw production value is in inspect_observed. M13 runs this state as r4_legacy.",
-      "behaves_as": "r4_legacy",
-      "crlf_functions": [
-        "private.behavior_trim(value text)",
-        "private.exercise_key(value text)",
-        "private.has_company_access(target_company uuid, write_access boolean)",
-        "private.is_company_owner(target_company uuid)",
-        "private.touch_updated_at()",
-        "private.validate_exercise_definition(value jsonb)",
-        "private.version_candidate_document()",
-        "public.create_company(company_name text)",
-        "public.ensure_initial_company(company_name text)",
-        "public.review_candidate_document(document_id uuid, expected_version integer)",
-        "public.save_behavior_assessment(target_application uuid, target_area text, new_rating text, new_evidence text, expected_version integer, expected_position_updated_at timestamp with time zone, expected_position_id uuid)",
-        "public.save_exercise_definition(target_recruitment uuid, target_exercise uuid, new_definition jsonb, expected_version integer, expected_position_id uuid, expected_position_updated_at timestamp with time zone)",
-        "public.save_exercise_observations(target_application uuid, target_definition uuid, expected_version integer, new_work_sample text, new_observations jsonb)"
-      ],
-      "inspect_observed": {
-        "sc010_signature": "d2e7725bd5051e15cb7e700a128026a3ad6f0d87f9d3bba3de8e1539c9d3eabd",
-        "routines": "00a80249fa7ae58ee90bd25b8c5f29b3f9778dd1ed3de891abab14b198c557e7",
-        "indexes": "6914c23eb115e05186ed163a569f4e67d5677d56cf63c273d8861d3fcd7da38d",
-        "trigger_states": "89214d67680a0c2a6fb0d26c277783fb95fea921acbe9ef800b72234d5c4caff",
-        "relations": "e2a90771ec941a06b2d9b4797e6af72443cbe7f0c351dee29657e6470fafddf6",
-        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
-        "nonowned_acl": "340b40cc5295e717cef60f2124602963a5eb02e4dec9c6434075c1f9d68ce294",
-        "rewrites": "e9c6543bb90eae112800eec33f1bec5a733fc5e6194a92915f7ff1124fad897f"
-      },
-      "pg17": {
-        "sc010_signature": "d2e7725bd5051e15cb7e700a128026a3ad6f0d87f9d3bba3de8e1539c9d3eabd",
-        "routines": "00a80249fa7ae58ee90bd25b8c5f29b3f9778dd1ed3de891abab14b198c557e7",
-        "indexes": "6914c23eb115e05186ed163a569f4e67d5677d56cf63c273d8861d3fcd7da38d",
-        "trigger_states": "89214d67680a0c2a6fb0d26c277783fb95fea921acbe9ef800b72234d5c4caff",
-        "relations": "e2a90771ec941a06b2d9b4797e6af72443cbe7f0c351dee29657e6470fafddf6",
-        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
-        "nonowned_acl": "6428087b0877402ce4831d2c9998ad746f4d44155dc442bcb18997fdd3968b35",
-        "rewrites": "e9c6543bb90eae112800eec33f1bec5a733fc5e6194a92915f7ff1124fad897f"
-      }
     }
   },
   "acl_version_compatibility": {
@@ -1503,19 +1464,6 @@
         "nonowned_acl": "64ad973471c4e5d668002d0220ea8210dbc72bcae188c90884f2648f17793a72",
         "trigger_states": "e979fe2604d1a8631bd747fcf4e63c4539ef4a12d3b7b4d22ee360b9061090c2",
         "sc010_signature": "6fd4900f85f0a1b6f4aad11a9246722cf79e857ea6bc999f7249151f20871061"
-      }
-    },
-    "legacy_production_hosted_20261030": {
-      "provenance": "M13 postflight catalog for source state production_hosted_20261030: the reviewed legacy output with the same 13 CRLF function bodies, which M13 does not replace. Reproduced by tests/sc-019-migrations-production-hosted-state.test.mjs.",
-      "pg17": {
-        "sc010_signature": "e99342b97cf10c9f19c5351f423d30ff4dadaa18294465ff976d926d2cc6a07b",
-        "routines": "a1146ac71d0d3bef0915db216b1ca49291f0044651f4bed629569307f252d5ed",
-        "indexes": "9ded7dff9d05049d48d530c82fb5a464ff08e1c2d69160e8571688c5ac173f61",
-        "trigger_states": "74938b9b4455fa49ecc5582bb385386f37033a4e7e12881a345f4accca411fe1",
-        "relations": "5b1c3c8bc0ae0b1e9d2f04a9fb85f8c03c3d3dcbe174070d3c1a7166afb22f25",
-        "policies": "d7918648cf896d04731b18e4827399b4f9c0b21c243786f11aa2812fe18e8772",
-        "nonowned_acl": "6428087b0877402ce4831d2c9998ad746f4d44155dc442bcb18997fdd3968b35",
-        "rewrites": "e9c6543bb90eae112800eec33f1bec5a733fc5e6194a92915f7ff1124fad897f"
       }
     }
   }
