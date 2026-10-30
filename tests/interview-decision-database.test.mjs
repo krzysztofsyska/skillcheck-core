@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 
-const migration = new URL('../supabase/migrations/20261026215600_sc_step4_interview_decision.sql', import.meta.url);
-const rollback = new URL('../supabase/rollbacks/20261026215600_sc_step4_interview_decision.down.sql', import.meta.url);
+const migration = new URL('../supabase/migrations/20261030160000_sc_step4_interview_decision.sql', import.meta.url);
+const rollback = new URL('../supabase/rollbacks/20261030160000_sc_step4_interview_decision_down.sql', import.meta.url);
 
 test('Step 4 SQL end-to-end: multi-tenant stage → interview note → human decision → down', async t => {
   const db = new PGlite(); t.after(() => db.close());

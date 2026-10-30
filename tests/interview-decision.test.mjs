@@ -26,7 +26,7 @@ test('note and stage ordering validation', () => {
 });
 
 test('no automatic decision setter or default in schema and app routing', async () => {
-  const schema = await readFile(new URL('../supabase/migrations/20261026215600_sc_step4_interview_decision.sql', import.meta.url), 'utf8');
+  const schema = await readFile(new URL('../supabase/migrations/20261030160000_sc_step4_interview_decision.sql', import.meta.url), 'utf8');
   const actions = await readFile(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/interview-actions.ts', import.meta.url), 'utf8');
   const forms = await readFile(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/assessment-forms.tsx', import.meta.url), 'utf8');
   assert.match(schema, /add column human_decision text check/);
