@@ -8,7 +8,7 @@ begin;
 create table private.sc011b_voice_dispatches (
  company_id uuid not null,
  preparation_id uuid not null,
- state text not null default 'sending' check(state in ('sending','accepted','rejected','unknown')),
+ state text not null default 'sending' check(state in ('sending','accepted','rejected','unknown','abandoned')),
  started_at timestamptz not null default clock_timestamp(),
  last_attempt_at timestamptz not null default clock_timestamp(),
  attempts integer not null default 1 check(attempts between 1 and 10),
@@ -67,7 +67,11 @@ begin
        or (old.state='sending' and new.state='sending' and new.attempts=old.attempts
            and new.lease_until is null)
        or (old.state='sending' and new.state in ('accepted','rejected','unknown') and new.attempts=old.attempts)
-       or (old.state='unknown' and new.state='accepted' and new.attempts=old.attempts)) then
+       or (old.state='unknown' and new.state='accepted' and new.attempts=old.attempts)
+       -- Only the SC-011-B6 operator resolution may abandon an unknown claim.
+       or (old.state='unknown' and new.state='abandoned' and new.attempts=old.attempts
+           -- An unset setting is NULL: coalesce so absence is a refusal, never unknown.
+           and coalesce(pg_catalog.current_setting('skillcheck.sc011b_resolution',true),'')='on')) then
   raise exception using errcode='42501',message='VOICE_DISPATCH_IMMUTABLE';
  end if;
  if new.state='sending' and new.attempts=old.attempts+1 then
@@ -90,8 +94,9 @@ create trigger sc011b_dispatch_guard before insert or update or delete
 create trigger sc011b_dispatch_no_truncate before truncate
  on private.sc011b_voice_dispatches for each statement execute function private.sc011b_dispatch_guard();
 
--- A request Retell refused as invalid never left: drop the offline preparation
--- and return its reserved interview to the pool, in the same transaction.
+-- A request Retell refused as invalid never left (or an operator confirmed an
+-- unknown one never did): drop the offline preparation and return its
+-- reserved interview to the pool, in the same transaction.
 create function private.sc011b_dispatch_rejected() returns trigger
 language plpgsql security definer set search_path='' as $$
 declare prep private.sc010c_voice_preparations;
@@ -106,7 +111,7 @@ begin
  return null;
 end;$$;
 create trigger sc011b_dispatch_rejected after update on private.sc011b_voice_dispatches
- for each row when (new.state='rejected' and old.state='sending')
+ for each row when ((new.state='rejected' and old.state='sending') or (new.state='abandoned' and old.state='unknown'))
  execute function private.sc011b_dispatch_rejected();
 
 -- While a call may have left (sending, accepted or unknown), the preparation
@@ -115,7 +120,7 @@ create function private.sc011b_block_cancel_while_dispatching() returns trigger
 language plpgsql security definer set search_path='' as $$
 begin
  if exists(select 1 from private.sc011b_voice_dispatches
-   where company_id=old.company_id and preparation_id=old.id and state<>'rejected') then
+   where company_id=old.company_id and preparation_id=old.id and state not in ('rejected','abandoned')) then
   raise exception using errcode='PT409',message='VOICE_PREPARATION_DISPATCHED';
  end if;
  return new;
