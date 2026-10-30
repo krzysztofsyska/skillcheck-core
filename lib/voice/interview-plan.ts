@@ -100,6 +100,8 @@ export type ReleasedApplicationBinding = Readonly<{
   sourceFingerprint: string;
 }>;
 const applicationBinding = new WeakMap<object, ReleasedApplicationBinding>();
+/** Position title from the fingerprinted source; spoken by the provider, never part of the plan DTO. */
+const positionTitles = new WeakMap<object, string>();
 function bindApplication(plan: object, binding: ReleasedApplicationBinding): void {
   applicationBinding.set(plan, Object.freeze({
     companyId: binding.companyId,
@@ -112,6 +114,8 @@ function carryApplication(from: object, to: InterviewPlan): void {
   if (!binding || binding.sourceFingerprint !== to.sourceFingerprint)
     throw new InterviewPlanError("VOICE_PLAN_STALE_OR_CONFLICT");
   applicationBinding.set(to, binding);
+  const title = positionTitles.get(from);
+  if (title !== undefined) positionTitles.set(to, title);
 }
 /** True only for the object returned by releaseInterviewPlan in this process. */
 export function isProcessReleasedPlan(plan: unknown): plan is InterviewPlan {
@@ -133,6 +137,11 @@ export function releasedApplicationBinding(plan: unknown): ReleasedApplicationBi
   const binding = applicationBinding.get(plan);
   if (!binding || binding.sourceFingerprint !== plan.sourceFingerprint) return undefined;
   return binding;
+}
+/** Position title of a plan released in this process (covered by its fingerprint). Absent on copies. */
+export function releasedPlanPositionTitle(plan: unknown): string | undefined {
+  if (!releasedApplicationBinding(plan)) return undefined;
+  return positionTitles.get(plan as object);
 }
 export function prohibitedTopicsAreCanonical(topics: readonly string[]): boolean {
   return Array.isArray(topics) &&
@@ -287,6 +296,7 @@ export function buildInterviewPlan(input: InterviewSource): InterviewPlan {
     applicationId: input.applicationId,
     sourceFingerprint,
   });
+  positionTitles.set(generated, p.title);
   return generated;
 }
 

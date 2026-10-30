@@ -1,0 +1,26 @@
+{
+  "agent_name": "SkillCheck rozmowa wstępna v1",
+  "version_description": "SkillCheck skillcheck-interview-v1: rozmowa wstępna FREE/PRESELEKCJA, firma i stanowisko z dynamicznych zmiennych.",
+  "response_engine": {
+    "type": "conversation-flow",
+    "conversation_flow_id": "__CONVERSATION_FLOW_ID__",
+    "version": "__CONVERSATION_FLOW_VERSION__"
+  },
+  "voice_id": "__VOICE_ID__",
+  "language": "pl-PL",
+  "timezone": "Europe/Warsaw",
+  "boosted_keywords": [
+    "{{skillcheck_company_name}}"
+  ],
+  "enable_dnc_detection": true,
+  "data_storage_setting": "basic_attributes_only",
+  "data_storage_retention_days": 30,
+  "max_call_duration_ms": 600000,
+  "end_call_after_silence_ms": 30000,
+  "begin_message_delay_ms": 800,
+  "voicemail_option": {
+    "action": {
+      "type": "hangup"
+    }
+  }
+}
