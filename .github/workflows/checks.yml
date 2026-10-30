@@ -36,6 +36,7 @@ jobs:
       - run: node --test tests/production-approval-attestation.test.mjs
       - run: npm run test:fakturownia
       - run: npm run typecheck
+      - run: npm run test:page-guards
       - run: npm run test:legal
       - run: npm run test:db
         env:
