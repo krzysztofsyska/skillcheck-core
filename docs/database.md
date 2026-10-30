@@ -263,7 +263,7 @@ Podsumowanie: w `supabase_migrations.schema_migrations` jest 31 wierszy, w repoz
 | `20261011165916` | `sales_retention_cron_extension` |
 
 Odtwarza je fixture `tests/fixtures/sc19-production-history.json`
-(zob. `docs/release/sc-mvp-production-runbook.md`).
+(zob. `docs/release/sc-mvp-production-runbook.md`). Od #200 są też w `supabase/migrations` z tymi samymi numerami.
 
 ### Różnice numeracji (7) — ta sama nazwa, inna wersja
 
@@ -318,8 +318,16 @@ Różnią się dwa składniki:
 | `routines` | `94cd7648…5c513c5f` | `00a80249…14b198c557e7` |
 | `nonowned_acl` | `6428087b…3968b35` | `340b40cc…f9d68ce294` |
 
-Następny krok: porównać `catalog.routines` i `catalog.nonowned_acl` z artefaktu z próbą generalną na PostgreSQL 17.6
-(`sc19-migrations.yml`) i ustalić, które funkcje i ACL odbiegają.
-Możliwe źródła różnic to M12 i trzy migracje operacyjne. To hipoteza, której jeszcze nie sprawdzono.
-Potem przejrzeć nowy stan i dopisać go do listy `reviewed` w M13 w osobnym PR (L3).
-Ponowne uruchomienie apply z tą samą M13 skończy się tym samym błędem.
+Obie różnice są wyjaśnione. Porównanie zrobiono funkcja po funkcji i ACL po ACL z replayem obecnych plików na PostgreSQL 17.6
+w modelu hosted (`sc19-rehearsal.Dockerfile`):
+
+- **`routines`:** produkcja i replay mają te same 141 funkcji. 13 z nich różni się wyłącznie końcówkami linii: na produkcji ich ciała
+  mają CRLF (migracje z 2026-10-01..04 wykonano z plików z końcówkami Windows). Innych różnic nie ma. Naprawa:
+  `20261021084500_normalize_function_line_endings.sql` przed M13 (#194). Po niej `routines` = przejrzane `r4_legacy`.
+- **`nonowned_acl`:** surowa wartość produkcji (`340b40cc…`) jest identyczna z replayem. Różnicę względem `6428087b…` tworzą krotki
+  dodawane przez hosting (`tests/fixtures/sc19-hosted-acl-differences.json`). M13 sama je usuwa przed porównaniem, więc nie blokują migracji.
+- **M12 i trzy migracje operacyjne** nie są przyczyną.
+
+Dowód na dokładnym stanie produkcji (wszystkie 8 odcisków z inspect) daje `tests/sc-019-migrations-production-hosted-state.test.mjs` (#200).
+Po normalizacji niezmieniona M13 przechodzi i daje przejrzany wynik R6.
+Kolejność dla produkcji: `docs/release/db-migrate-production.md`.
