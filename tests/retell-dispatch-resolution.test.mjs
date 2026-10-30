@@ -146,6 +146,39 @@ test("SC-011-B6 operator resolution of unknown dispatches on real PostgreSQL", a
     assert.equal((await state(finished)).dispatch, "accepted");
   });
 
+  await t.test("the operator keeps their identity across several resolutions in one transaction", async () => {
+    const first = await unknown(), second = await unknown();
+    await env.actor(db, operator);
+    await db.query("begin");
+    try {
+      await resolveUnknownVoiceDispatch(db, first.target, { resolution: "not_placed" });
+      assert.ok(Array.isArray(await listUnknownVoiceDispatches(db)));
+      await resolveUnknownVoiceDispatch(db, second.target, { resolution: "not_placed" });
+      assert.equal((await db.query("select auth.uid() as id")).rows[0].id, operator);
+      await db.query("commit");
+    } catch (e) { await db.query("rollback"); throw e; }
+    await env.asServer(first.s.f.owner);
+    assert.equal((await state(first)).dispatch, "abandoned");
+    assert.equal((await state(second)).dispatch, "abandoned");
+  });
+
+  await t.test("a DNC finding on an already finished call still blocks contact without resettling", async () => {
+    const u = await unknown();
+    await recordRetellDispatch(db, { companyId: u.s.f.companyId, operationId: u.operationId,
+      providerCallId: "call_resolved_dnc_late01", agentId });
+    await db.query("update private.sc011b_voice_attempts set status='completed',outcome='completed' where preparation_id=$1",
+      [u.operationId]);
+    assert.deepEqual(await pool(u), { used: 1, reserved: 0 });
+    await env.actor(db, operator);
+    await resolveUnknownVoiceDispatch(db, u.target,
+      { resolution: "placed", providerCallId: "call_resolved_dnc_late01", outcome: "dnc_requested", agentId });
+    await env.asServer(u.s.f.owner);
+    const prefs = (await db.query("select blocked_channels from public.candidate_contact_preferences where company_id=$1 and candidate_id=$2",
+      [u.s.f.companyId, u.s.f.candidate.id])).rows[0];
+    assert.deepEqual([...prefs.blocked_channels].sort(), ["email", "sms", "voice"]);
+    assert.deepEqual(await pool(u), { used: 1, reserved: 0 }, "no second settlement");
+  });
+
   await t.test("invalid decisions change nothing", async () => {
     const u = await unknown();
     await env.actor(db, operator);

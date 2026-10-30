@@ -48,6 +48,7 @@ const signatures = Object.freeze([
   'private.sc011b_purge_voice_transcripts()',
   'private.sc011b_recruitment_closed_at()',
   'private.sc011b_attempt_settlement()',
+  'private.sc011b_block_candidate_contact(uuid,uuid)',
   'private.sc011b_dispatch_guard()',
   'private.sc011b_dispatch_rejected()',
   'private.sc011b_block_cancel_while_dispatching()',

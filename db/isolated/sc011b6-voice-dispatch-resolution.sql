@@ -58,7 +58,9 @@ create function private.sc011b_resolve_unknown_dispatch(
  target_company uuid, target_preparation uuid, target_resolution text,
  target_agent text, target_call_id text, target_outcome text
 ) returns text language plpgsql volatile security definer set search_path='' as $$
-declare actor uuid:=(select auth.uid()); claim private.sc011b_voice_dispatches;
+declare actor uuid:=(select auth.uid());
+ caller_sub text:=pg_catalog.current_setting('request.jwt.claim.sub',true);
+ claim private.sc011b_voice_dispatches;
  prep private.sc010c_voice_preparations; attempt uuid; existing private.sc011b_voice_attempts;
 begin
  if actor is null or not private.is_platform_operator(actor) then
@@ -109,6 +111,10 @@ begin
     set status=case when target_outcome in ('completed','dnc_requested') then 'completed' else 'failed' end,
         outcome=target_outcome, dnc_requested=(target_outcome='dnc_requested')
     where company_id=target_company and id=attempt;
+  elsif target_outcome='dnc_requested' and not existing.dnc_requested then
+   -- The pool was already settled, but a candidate's request not to be
+   -- called again must never be dropped.
+   perform private.sc011b_block_candidate_contact(target_company,existing.candidate_id);
   end if;
   update private.sc011b_voice_dispatches set state='accepted'
    where company_id=target_company and preparation_id=target_preparation;
@@ -118,6 +124,9 @@ begin
  insert into private.sc011b_dispatch_resolutions
   (company_id,preparation_id,resolution,provider_call_id,outcome,resolved_by)
  values(target_company,target_preparation,target_resolution,target_call_id,target_outcome,actor);
+ -- set_config(...,true) lasts until the end of the caller's transaction:
+ -- restore the operator for any statement that follows in it.
+ perform pg_catalog.set_config('request.jwt.claim.sub',coalesce(caller_sub,''),true);
  return target_resolution;
 end;$$;
 
