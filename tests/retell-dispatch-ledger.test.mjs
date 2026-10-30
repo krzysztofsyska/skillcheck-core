@@ -5,7 +5,9 @@ import { prepareOfflineVoiceDraft, cancelOfflineVoicePreparation } from "../lib/
 import { recordRetellDispatch, ingestRetellWebhook, RetellLedgerError } from "../lib/voice/retell-dispatch-ledger.ts";
 import { createRetellWebhookHttp, resolveRetellWebhookRuntime } from "../lib/voice/retell-webhook-http.ts";
 import { RetellWebhookError } from "../lib/voice/retell-webhook.ts";
-import { boot, SC011B2_DISPATCH_SCHEMA } from "./helpers/voice-preparation-fixture.mjs";
+import {
+  boot, SC011B2_DISPATCH_SCHEMA, SC011B3_TRANSCRIPT_SCHEMA, SC011B4_SETTLEMENT_SCHEMA,
+} from "./helpers/voice-preparation-fixture.mjs";
 import { syntheticRetellProof } from "./helpers/voice-preparation-provider-fixture.mjs";
 
 const key = "key_synthetic_webhook_0123456789";
@@ -25,8 +27,10 @@ const delivery = (event, callId, change = {}) => {
 };
 const ledgerError = code => e => e instanceof RetellLedgerError && e.code === code;
 
-test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL", async t => {
-  const env = await boot(t, { extraSchemas: [SC011B2_DISPATCH_SCHEMA] }), { db } = env;
+test("SC-011-B2/B3/B4 dispatch ledger, Retell webhooks, transcripts and settlement on real PostgreSQL", async t => {
+  const env = await boot(t, {
+    extraSchemas: [SC011B2_DISPATCH_SCHEMA, SC011B3_TRANSCRIPT_SCHEMA, SC011B4_SETTLEMENT_SCHEMA],
+  }), { db } = env;
   const prepared = async () => {
     const s = await env.ready();
     await env.actor(db, s.f.owner);
@@ -41,6 +45,16 @@ test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL"
   };
   const attemptRow = async callId => (await db.query(
     "select status,outcome,dnc_requested from private.sc011b_voice_attempts where provider_call_id=$1", [callId])).rows[0];
+  const transcript = async callId => (await db.query([
+    "select t.* from private.sc011b_voice_transcripts t join private.sc011b_voice_attempts a",
+    "on a.company_id=t.company_id and a.id=t.attempt_id where a.provider_call_id=$1",
+  ].join(" "), [callId])).rows[0];
+  const pool = async s => (await db.query(
+    "select used,reserved from private.sc19_voice_entitlements where company_id=$1 and id=$2",
+    [s.f.companyId, s.request.entitlementId])).rows[0];
+  const preferences = async s => (await db.query(
+    "select blocked_channels,revision from public.candidate_contact_preferences where company_id=$1 and candidate_id=$2",
+    [s.f.companyId, s.f.candidate.id])).rows[0];
   const receipts = async () => Number((await db.query("select count(*) from private.sc011b_voice_webhook_receipts")).rows[0].count);
 
   await t.test("records one provider call per preparation; replays are stable, redials conflict", async () => {
@@ -62,7 +76,7 @@ test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL"
       [first.attemptId]), /IMMUTABLE/);
   });
 
-  await t.test("webhooks advance the recorded attempt once, keep DNC and drop the transcript", async () => {
+  await t.test("webhooks advance the recorded attempt once, keep DNC and store only the minimized transcript", async () => {
     const { s, operationId } = await prepared();
     const callId = "call_bbbbbbbbbbbbbbbb01";
     await recordRetellDispatch(db, { companyId: s.f.companyId, operationId, providerCallId: callId, agentId });
@@ -72,10 +86,77 @@ test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL"
     assert.deepEqual(await ingest("call_ended", callId, { disconnection_reason: "user_requested_dnc" }), { outcome: "applied" });
     assert.deepEqual(await attemptRow(callId), { status: "completed", outcome: "dnc_requested", dnc_requested: true });
     assert.deepEqual(await ingest("call_analyzed", callId), { outcome: "recorded" });
-    const stored = JSON.stringify((await db.query(
+    const ledger = JSON.stringify((await db.query(
       "select r.*,a.* from private.sc011b_voice_webhook_receipts r left join private.sc011b_voice_attempts a on a.id=r.attempt_id")).rows);
-    assert.ok(!stored.includes("Prywatna") && !stored.includes("+48123456789"));
+    assert.ok(!ledger.includes("Prywatna") && !ledger.includes("+48123456789"), "answers live only in the transcript table");
+    const kept = await transcript(callId);
+    assert.deepEqual(kept.utterances, [{ speaker: "candidate", text: "Prywatna odpowiedź kandydata" }]);
+    assert.equal(kept.recruitment_id, s.f.recruitment.id);
+    assert.equal(kept.candidate_id, s.f.candidate.id);
+    assert.ok(!JSON.stringify(kept).includes("+48123456789"));
     await assert.rejects(db.query("delete from private.sc011b_voice_webhook_receipts"), /IMMUTABLE/);
+    await assert.rejects(db.query("update private.sc011b_voice_transcripts set utterances='[]' where attempt_id=$1",
+      [kept.attempt_id]), /IMMUTABLE/);
+    await assert.rejects(db.query("delete from private.sc011b_voice_transcripts where attempt_id=$1", [kept.attempt_id]), /IMMUTABLE/);
+  });
+
+  await t.test("calls that did not happen keep no transcript; the table refuses one for an unfinished call", async () => {
+    for (const [n, reason] of [["01", "dial_no_answer"], ["02", "voicemail_reached"], ["03", "dial_busy"]]) {
+      const { s, operationId } = await prepared();
+      const callId = "call_eeeeeeeeeeeeeee" + n + "x";
+      await recordRetellDispatch(db, { companyId: s.f.companyId, operationId, providerCallId: callId, agentId });
+      assert.deepEqual(await ingest("call_ended", callId, { disconnection_reason: reason }), { outcome: "applied" });
+      assert.equal((await attemptRow(callId)).status, "failed");
+      assert.equal(await transcript(callId), undefined, reason);
+    }
+    const { s, operationId } = await prepared();
+    const { attemptId } = await recordRetellDispatch(db,
+      { companyId: s.f.companyId, operationId, providerCallId: "call_eeeeeeeeeeeeeee04x", agentId });
+    await assert.rejects(db.query(`insert into private.sc011b_voice_transcripts(attempt_id,company_id,recruitment_id,candidate_id,utterances)
+      values($1,$2,$3,$4,'[{"speaker":"candidate","text":"x"}]')`,
+    [attemptId, s.f.companyId, s.f.recruitment.id, s.f.candidate.id]), /VOICE_TRANSCRIPT_UNAVAILABLE/);
+  });
+
+  await t.test("retention: kept while the recruitment is open, purged 90 days after it closes", async () => {
+    const { s, operationId } = await prepared();
+    const callId = "call_ffffffffffffffff01";
+    await recordRetellDispatch(db, { companyId: s.f.companyId, operationId, providerCallId: callId, agentId });
+    await ingest("call_ended", callId);
+    const purge = async () => (await db.query("select private.sc011b_purge_voice_transcripts() as n")).rows[0].n;
+    const close = (status, daysAgo) => db.query(
+      "update public.recruitments set opened_at=clock_timestamp()-interval '400 days',status=$2,closed_at=clock_timestamp()-make_interval(days=>$3) where id=$1",
+      [s.f.recruitment.id, status, daysAgo]);
+    assert.equal(await purge(), 0);
+    await close("closed", 89);
+    assert.equal(await purge(), 0);
+    assert.ok(await transcript(callId), "still inside the 90-day window");
+    await close("open", 120);
+    assert.equal(await purge(), 0, "a reopened recruitment pauses retention");
+    await close("closed", 91);
+    assert.equal(await purge(), 1);
+    assert.equal(await transcript(callId), undefined);
+  });
+
+  await t.test("closing a recruitment by status alone starts the retention clock", async () => {
+    const { s, operationId } = await prepared();
+    const callId = "call_ffffffffffffffff02";
+    await recordRetellDispatch(db, { companyId: s.f.companyId, operationId, providerCallId: callId, agentId });
+    await ingest("call_ended", callId);
+    const closedAt = async () => (await db.query("select closed_at from public.recruitments where id=$1",
+      [s.f.recruitment.id])).rows[0].closed_at;
+    await db.query("update public.recruitments set status='open',closed_at=null where id=$1", [s.f.recruitment.id]);
+    await db.query("update public.recruitments set status='closed' where id=$1", [s.f.recruitment.id]);
+    const first = await closedAt();
+    assert.ok(first instanceof Date, "closing by status stamps closed_at");
+    assert.equal((await db.query("select private.sc011b_purge_voice_transcripts() as n")).rows[0].n, 0);
+    // Reopen, then close again without a timestamp: the clock restarts.
+    await db.query("update public.recruitments set closed_at=clock_timestamp()-interval '200 days' where id=$1", [s.f.recruitment.id]);
+    await db.query("update public.recruitments set status='open' where id=$1", [s.f.recruitment.id]);
+    await db.query("update public.recruitments set status='closed' where id=$1", [s.f.recruitment.id]);
+    assert.ok((await closedAt()).getTime() >= first.getTime(), "a re-close restarts the 90 days");
+    assert.equal((await db.query("select private.sc011b_purge_voice_transcripts() as n")).rows[0].n, 0);
+    assert.ok(await transcript(callId));
+    assert.equal((await attemptRow(callId)).status, "completed", "the attempt and its outcome remain");
   });
 
   await t.test("concurrent retries of one delivery apply exactly once", async () => {
@@ -101,6 +182,38 @@ test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL"
     await recordRetellDispatch(db, { companyId: s.f.companyId, operationId, providerCallId: callId, agentId });
     assert.deepEqual(await ingest("call_ended", callId, early), { outcome: "applied" });
     assert.deepEqual(await attemptRow(callId), { status: "completed", outcome: "dnc_requested", dnc_requested: true });
+  });
+
+  await t.test("owner decisions: only a held call uses the pool; DNC blocks every channel", async () => {
+    const completed = await prepared();
+    assert.deepEqual(await pool(completed.s), { used: 0, reserved: 1 });
+    await recordRetellDispatch(db, { companyId: completed.s.f.companyId, operationId: completed.operationId,
+      providerCallId: "call_gggggggggggggggg01", agentId });
+    await ingest("call_started", "call_gggggggggggggggg01");
+    assert.deepEqual(await pool(completed.s), { used: 0, reserved: 1 }, "progress alone settles nothing");
+    await ingest("call_ended", "call_gggggggggggggggg01");
+    assert.deepEqual(await pool(completed.s), { used: 1, reserved: 0 });
+    assert.deepEqual(await ingest("call_analyzed", "call_gggggggggggggggg01"), { outcome: "recorded" });
+    assert.deepEqual(await pool(completed.s), { used: 1, reserved: 0 }, "no double settlement");
+
+    for (const [n, reason] of [["02", "dial_no_answer"], ["03", "dial_busy"], ["04", "voicemail_reached"], ["05", "dial_failed"]]) {
+      const missed = await prepared();
+      await recordRetellDispatch(db, { companyId: missed.s.f.companyId, operationId: missed.operationId,
+        providerCallId: "call_gggggggggggggggg" + n, agentId });
+      await ingest("call_ended", "call_gggggggggggggggg" + n, { disconnection_reason: reason });
+      assert.deepEqual(await pool(missed.s), { used: 0, reserved: 0 }, reason + " returns the interview to the pool");
+    }
+
+    const dnc = await prepared();
+    const before = await preferences(dnc.s);
+    assert.ok(!before.blocked_channels.includes("voice"));
+    await recordRetellDispatch(db, { companyId: dnc.s.f.companyId, operationId: dnc.operationId,
+      providerCallId: "call_gggggggggggggggg06", agentId });
+    await ingest("call_ended", "call_gggggggggggggggg06", { disconnection_reason: "user_requested_dnc" });
+    const after = await preferences(dnc.s);
+    assert.deepEqual([...after.blocked_channels].sort(), ["email", "sms", "voice"]);
+    assert.equal(Number(after.revision), Number(before.revision) + 1);
+    assert.deepEqual(await pool(dnc.s), { used: 1, reserved: 0 }, "the call took place before the request");
   });
 
   await t.test("ignored and unauthenticated deliveries never touch an attempt", async () => {

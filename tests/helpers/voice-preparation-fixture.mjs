@@ -28,6 +28,9 @@ const schemas = Object.freeze([
 ]);
 /** Opt-in schemas installed after the shared chain; the R4 baseline stays unchanged. */
 export const SC011B2_DISPATCH_SCHEMA = '../../db/isolated/sc011b2-voice-dispatch.sql';
+export const SC011B3_TRANSCRIPT_SCHEMA = '../../db/isolated/sc011b3-voice-transcripts.sql';
+export const SC011B4_SETTLEMENT_SCHEMA = '../../db/isolated/sc011b4-voice-settlement.sql';
+export const SC011B5_DISPATCH_WORKER_SCHEMA = '../../db/isolated/sc011b5-voice-dispatch-worker.sql';
 
 /**
  * Real PostgreSQL only: a random disposable database on the explicitly supplied
