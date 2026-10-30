@@ -67,7 +67,7 @@ Jeśli część z nich już jest na produkcji, run odmówi przed wykonaniem czeg
 **Uwaga:** po M13 każda nowa analiza CV pobiera 1 analizę z salda firmy. Firma z pustym saldem nie uruchomi analizy, dopóki operator nie przydzieli pakietu w `/operator/billing`. Uruchom krok B dopiero, gdy jesteś gotowy od razu ustawić pakiety i obsłużyć istniejące firmy.
 
 ```
-20261021084732_sc019_credits_payments_inventory.sql,20261026220100_sc_step3_evidence_extensions.sql,20261026220200_sc_step3_evidence_worker.sql,20261028120000_sc_step3_erasure_inventory_r7.sql,20261029100000_sc019_operator_fulfillment.sql
+20261021084500_normalize_function_line_endings.sql,20261021084732_sc019_credits_payments_inventory.sql,20261026220100_sc_step3_evidence_extensions.sql,20261026220200_sc_step3_evidence_worker.sql,20261028120000_sc_step3_erasure_inventory_r7.sql,20261029100000_sc019_operator_fulfillment.sql
 ```
 
 Po kroku B: `/operator/billing` → FREE = 5, PRESELEKCJA = 60 → przydziały dla istniejących firm → dopiero potem `SC19_PACKAGES_ENABLED=true` w Vercel Production + Redeploy.
@@ -89,3 +89,11 @@ Gdy migracja odmawia (np. `sc19_source_schema_unreviewed`), uruchom workflow z *
 - zapisuje raport `inspection.json` jako artefakt runu (7 dni). Niczego nie zmienia i nie czyta danych klientów.
 
 Pierwsze użycie (2026-10-29): M13 odmówiła na produkcji. M1–M12 są już zapisane na produkcji (9–21.10), przed poprawkami hostingowymi z #160 — raport ma pokazać, czym schemat różni się od zatwierdzonego stanu.
+
+### Wynik inspekcji 2026-10-30 (run 41021636267)
+
+- PostgreSQL 17.6; historia: 31 wpisów (M1–M12 i `20261021084245` zapisane bez treści — `statements` puste, zastosowane przed istnieniem tego workflow).
+- Najbliższy zatwierdzony stan: `r4_legacy`. Różnią się tylko `routines` i `nonowned_acl`.
+- `nonowned_acl`: wyłącznie krotki hostingu (EXECUTE dla `service_role` na 55 funkcjach i USAGE na `public` od `pg_database_owner`), które M13 sama usuwa przed porównaniem, oraz `MAINTAIN` z PostgreSQL 17 (uwzględnione w odcisku pg17). Po tej normalizacji odcisk = `r4_legacy`/pg17.
+- `routines`: 13 funkcji ma w treści końce linii CRLF zamiast LF; poza tym treść jest identyczna. Po zamianie CRLF → LF odcisk = `r4_legacy`.
+- Naprawa: `20261021084500_normalize_function_line_endings.sql` przed M13 — odtwarza te 13 funkcji z ich własnej definicji z LF, sprawdza, że właściciel i uprawnienia się nie zmieniły, i odmawia przy samotnym CR. Na bazie zbudowanej z repozytorium nic nie robi. Test: `tests/db-migrate/normalize-line-endings.test.mjs`.
