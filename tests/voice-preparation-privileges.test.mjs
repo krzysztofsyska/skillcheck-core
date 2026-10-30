@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {boot, SC011B2_DISPATCH_SCHEMA} from './helpers/voice-preparation-fixture.mjs';
+import {boot, SC011B2_DISPATCH_SCHEMA, SC011B3_TRANSCRIPT_SCHEMA} from './helpers/voice-preparation-fixture.mjs';
 import {syntheticRetellProof} from './helpers/voice-preparation-provider-fixture.mjs';
 import {
   prepareOfflineVoiceDraft, cancelOfflineVoicePreparation,
@@ -18,6 +18,7 @@ const tableNames = Object.freeze([
   'private.sc010c_voice_preparation_requests',
   'private.sc011b_voice_attempts',
   'private.sc011b_voice_webhook_receipts',
+  'private.sc011b_voice_transcripts',
 ]);
 const signatures = Object.freeze([
   'private.sc012b_review_plan(uuid,bigint,text,text,text,uuid)',
@@ -38,6 +39,8 @@ const signatures = Object.freeze([
   'private.sc011b_attempt_guard()',
   'private.sc011b_receipt_guard()',
   'private.sc011b_block_cancel_after_dispatch()',
+  'private.sc011b_transcript_guard()',
+  'private.sc011b_purge_voice_transcripts()',
 ]);
 const ingestionSignature = 'private.ingest_voice_interview_permission_receipt(jsonb)';
 const roleCandidates = Object.freeze([
@@ -58,7 +61,7 @@ const permissionDenied = description => error => {
 
 test('SC010/012/019: inherited default grants cannot expose offline authority', async t => {
   let defaultsBefore, hostileRoles;
-  const env = await boot(t, {extraSchemas: [SC011B2_DISPATCH_SCHEMA], beforeIsolated: async db => {
+  const env = await boot(t, {extraSchemas: [SC011B2_DISPATCH_SCHEMA, SC011B3_TRANSCRIPT_SCHEMA], beforeIsolated: async db => {
     // Change only the disposable database's defaults for its creating owner.
     // Existing predefined/worker roles avoid cluster-wide role or membership edits.
     hostileRoles = (await db.query(`select rolname from pg_catalog.pg_roles
