@@ -6,10 +6,19 @@
 // The test account smoke-test@skillcheck-preview.invalid lives only in the test
 // project; an agent that needs its password sets a new one there (bcrypt hash
 // via SQL) instead of asking the owner.
-const { chromium } = require('playwright');
+// Playwright is not an app dependency: like the other browser tests, an external
+// runtime can be given with PLAYWRIGHT_MODULE, BROWSER_EXECUTABLE and BROWSER_ARGS.
 const { mkdtempSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
+const { randomInt } = require('node:crypto');
+
+let chromium;
+try { ({ chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright')); }
+catch {
+  console.error('Brak Playwright: zainstaluj go poza projektem i wskaż PLAYWRIGHT_MODULE (ścieżka do modułu playwright).');
+  process.exit(1);
+}
 
 const required = ['SMOKE_BASE_URL', 'SMOKE_EMAIL', 'SMOKE_PASSWORD', 'SMOKE_COMPANY_ID', 'SMOKE_RECRUITMENT_ID', 'SMOKE_CANDIDATE_ID'];
 const missing = required.filter((name) => !process.env[name]);
@@ -20,10 +29,14 @@ if (missing.length) {
 const env = Object.fromEntries(required.map((name) => [name, process.env[name]]));
 const base = env.SMOKE_BASE_URL.replace(/\/$/, '');
 
+// Letters only, so the redaction suggestions (phone/ID numbers) leave it intact.
+const marker = 'smoke' + Array.from({ length: 12 }, () => String.fromCharCode(97 + randomInt(26))).join('');
+
 // Minimal one-page text PDF, generated so no fixture with personal data is needed.
+// The per-run marker identifies the document created by this run.
 function samplePdf() {
   const text = 'Jan Testowy - CV testowe. Doswiadczenie: 5 lat w testowaniu oprogramowania.';
-  const content = `BT /F1 11 Tf 50 750 Td (${text}) Tj ET`;
+  const content = `BT /F1 11 Tf 50 750 Td (${text}) Tj 0 -16 Td (Znacznik: ${marker}) Tj ET`;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -42,7 +55,7 @@ function samplePdf() {
 }
 
 (async () => {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ executablePath: process.env.BROWSER_EXECUTABLE || undefined, args: JSON.parse(process.env.BROWSER_ARGS || '[]') });
   const page = await browser.newPage();
   const csp = [];
   const errors = [];
@@ -72,17 +85,28 @@ function samplePdf() {
   });
   await step('wgranie PDF (CV)', async () => {
     await page.goto(`${company}/candidates/${env.SMOKE_CANDIDATE_ID}/cv`);
-    await page.locator('details summary', { hasText: 'Dodaj tekst CV' }).click();
-    await page.setInputFiles('input[name=cv_file]', samplePdf());
-    await page.getByText('Wybrany plik:').waitFor({ timeout: 10000 });
-    await page.getByRole('button', { name: /Zapisz CV/ }).click();
-    await page.locator('textarea[name=redacted_text], main [role=alert]').first().waitFor({ timeout: 60000 });
-    if (await page.locator('main [role=alert]').count()) throw new Error('alert: ' + await page.locator('main [role=alert]').first().innerText());
-    if (!/testowaniu/.test(await page.locator('textarea[name=redacted_text]').first().inputValue())) throw new Error('tekst z PDF nie trafił do propozycji anonimizacji');
+    const intake = page.locator('details', { has: page.locator('summary', { hasText: 'Dodaj tekst CV' }) });
+    await intake.locator('summary').click();
+    await intake.locator('input[name=cv_file]').setInputFiles(samplePdf());
+    await intake.getByText('Wybrany plik:').waitFor({ timeout: 10000 });
+    await intake.getByRole('button', { name: /Zapisz CV/ }).click();
+    // Result of this submission only; earlier documents on the page do not count.
+    const feedback = intake.locator('[role=status], [role=alert]').first();
+    await feedback.waitFor({ state: 'attached', timeout: 60000 });
+    if (await feedback.getAttribute('role') === 'alert') throw new Error('alert: ' + await feedback.innerText());
+    const created = page.locator('article', { has: page.locator('pre.cv-text', { hasText: marker }) });
+    await created.waitFor({ state: 'attached', timeout: 20000 });
+    const redacted = await created.locator('textarea[name=redacted_text]').inputValue();
+    if (!redacted.includes(marker) || !/testowaniu/.test(redacted)) throw new Error('tekst z PDF nie trafił do propozycji anonimizacji');
   });
   await step('raport', async () => {
     const r = await page.goto(`${recruitment}/report`);
     if (r.status() >= 400) throw new Error('HTTP ' + r.status());
+    // The error view is also HTTP 200; only a loaded report renders its controls.
+    if (!await page.locator('nav[aria-label="Działania raportu"]').count()) {
+      const notice = await page.locator('main [role=status]').first().innerText().catch(() => '');
+      throw new Error('raport się nie wczytał' + (notice ? ': ' + notice : ''));
+    }
   });
   await step('eksport raportu (CSV)', async () => {
     const r = await page.request.get(`${recruitment}/report/export?size=10`);
