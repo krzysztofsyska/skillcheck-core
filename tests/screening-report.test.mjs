@@ -192,3 +192,15 @@ test('React report renders status/evidence and escapes hostile content', async (
   assert.match(html,/&lt;img/); assert.doesNotMatch(html,/<img|DO_NOT_EXPORT/);
   assert.match(html,/scope="col"/); assert.match(html,/<caption>/);
 });
+
+test('v2 evidence rows publish the human matrix review, never the discarded AI citation', async () => {
+  const edited = fixture(); Object.assign(edited.screening_criterion_results[0], { verdict: 'supported', human_status: 'edited', human_evidence: [] });
+  const e = (await load(edited)).applications[0].criteria[0];
+  assert.deepEqual(e.evidence, []); assert.equal(e.reviewedChange, true);
+  const rejected = fixture(); Object.assign(rejected.screening_criterion_results[0], { verdict: 'supported', human_status: 'rejected', human_evidence: null });
+  const r = (await load(rejected)).applications[0].criteria[0];
+  assert.deepEqual(r.evidence, []); assert.equal(r.explanation, null); assert.equal(r.reviewedChange, true);
+  const accepted = fixture(); Object.assign(accepted.screening_criterion_results[0], { verdict: 'supported', human_status: 'accepted', human_evidence: null });
+  const a = (await load(accepted)).applications[0].criteria[0];
+  assert.equal(a.evidence[0].quote, 'Raport'); assert.equal(a.reviewedChange, false);
+});
