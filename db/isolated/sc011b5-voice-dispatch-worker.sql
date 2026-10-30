@@ -70,7 +70,8 @@ begin
        or (old.state='unknown' and new.state='accepted' and new.attempts=old.attempts)
        -- Only the SC-011-B6 operator resolution may abandon an unknown claim.
        or (old.state='unknown' and new.state='abandoned' and new.attempts=old.attempts
-           and pg_catalog.current_setting('skillcheck.sc011b_resolution',true)='on')) then
+           -- An unset setting is NULL: coalesce so absence is a refusal, never unknown.
+           and coalesce(pg_catalog.current_setting('skillcheck.sc011b_resolution',true),'')='on')) then
   raise exception using errcode='42501',message='VOICE_DISPATCH_IMMUTABLE';
  end if;
  if new.state='sending' and new.attempts=old.attempts+1 then

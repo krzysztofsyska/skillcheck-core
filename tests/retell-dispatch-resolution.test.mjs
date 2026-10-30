@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { prepareOfflineVoiceDraft } from "../lib/voice/offline-preparation.ts";
 import { dispatchRetellCall, RETELL_RESEND_WINDOW_MS } from "../lib/voice/retell-dispatch-worker.ts";
+import { recordRetellDispatch } from "../lib/voice/retell-dispatch-ledger.ts";
 import {
   listUnknownVoiceDispatches, resolveUnknownVoiceDispatch, VoiceDispatchResolutionError,
 } from "../lib/voice/retell-dispatch-resolution.ts";
@@ -103,6 +104,46 @@ test("SC-011-B6 operator resolution of unknown dispatches on real PostgreSQL", a
     const prefs = (await db.query("select blocked_channels from public.candidate_contact_preferences where company_id=$1 and candidate_id=$2",
       [dnc.s.f.companyId, dnc.s.f.candidate.id])).rows[0];
     assert.deepEqual([...prefs.blocked_channels].sort(), ["email", "sms", "voice"]);
+  });
+
+  await t.test("abandonment outside the resolution function is refused on a fresh connection", async () => {
+    const u = await unknown();
+    const fresh = await env.connect(u.s.f.owner);
+    await env.asServer(u.s.f.owner, fresh);
+    await assert.rejects(fresh.query("update private.sc011b_voice_dispatches set state='abandoned' where preparation_id=$1",
+      [u.operationId]), /IMMUTABLE/);
+    assert.deepEqual(await state(u), { dispatch: "unknown", preparation: "prepared_offline" });
+    assert.deepEqual(await pool(u), { used: 0, reserved: 1 });
+  });
+
+  await t.test("placed reuses a call recorded after the claim went unknown, never settling twice", async () => {
+    const open = await unknown();
+    await recordRetellDispatch(db, { companyId: open.s.f.companyId, operationId: open.operationId,
+      providerCallId: "call_resolved_late_0001", agentId });
+    await env.actor(db, operator);
+    await assert.rejects(resolveUnknownVoiceDispatch(db, open.target,
+      { resolution: "placed", providerCallId: "call_resolved_other_001", outcome: "completed", agentId }),
+    denied("VOICE_RESOLUTION_CONFLICT"));
+    await resolveUnknownVoiceDispatch(db, open.target,
+      { resolution: "placed", providerCallId: "call_resolved_late_0001", outcome: "completed", agentId });
+    await env.asServer(open.s.f.owner);
+    assert.deepEqual(await state(open), { dispatch: "accepted", preparation: "prepared_offline" });
+    assert.deepEqual(await pool(open), { used: 1, reserved: 0 });
+
+    const finished = await unknown();
+    await recordRetellDispatch(db, { companyId: finished.s.f.companyId, operationId: finished.operationId,
+      providerCallId: "call_resolved_done_0002", agentId });
+    await db.query("update private.sc011b_voice_attempts set status='completed',outcome='completed' where preparation_id=$1",
+      [finished.operationId]);
+    assert.deepEqual(await pool(finished), { used: 1, reserved: 0 }, "the webhook outcome already settled it");
+    await env.actor(db, operator);
+    await resolveUnknownVoiceDispatch(db, finished.target,
+      { resolution: "placed", providerCallId: "call_resolved_done_0002", outcome: "no_answer", agentId });
+    await env.asServer(finished.s.f.owner);
+    assert.deepEqual(await pool(finished), { used: 1, reserved: 0 }, "no second settlement");
+    assert.equal((await db.query("select outcome from private.sc011b_voice_attempts where preparation_id=$1",
+      [finished.operationId])).rows[0].outcome, "completed");
+    assert.equal((await state(finished)).dispatch, "accepted");
   });
 
   await t.test("invalid decisions change nothing", async () => {

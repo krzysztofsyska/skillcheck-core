@@ -59,7 +59,7 @@ create function private.sc011b_resolve_unknown_dispatch(
  target_agent text, target_call_id text, target_outcome text
 ) returns text language plpgsql volatile security definer set search_path='' as $$
 declare actor uuid:=(select auth.uid()); claim private.sc011b_voice_dispatches;
- prep private.sc010c_voice_preparations; attempt uuid;
+ prep private.sc010c_voice_preparations; attempt uuid; existing private.sc011b_voice_attempts;
 begin
  if actor is null or not private.is_platform_operator(actor) then
   raise exception using errcode='42501',message='VOICE_DISPATCH_RESOLUTION_FORBIDDEN';
@@ -86,15 +86,30 @@ begin
   if target_call_id is null or target_outcome is null or target_agent is null then
    raise exception using errcode='PT422',message='VOICE_DISPATCH_RESOLUTION_INVALID';
   end if;
-  select * into prep from private.sc010c_voice_preparations
-   where company_id=target_company and id=target_preparation;
-  insert into private.sc011b_voice_attempts(company_id,preparation_id,candidate_id,provider_account_id,provider_call_id)
-   values(target_company,target_preparation,prep.candidate_id,target_agent,target_call_id)
-   returning id into attempt;
-  update private.sc011b_voice_attempts
-   set status=case when target_outcome in ('completed','dnc_requested') then 'completed' else 'failed' end,
-       outcome=target_outcome, dnc_requested=(target_outcome='dnc_requested')
-   where company_id=target_company and id=attempt;
+  -- A late acceptance may already have recorded the call before a crash left
+  -- the claim unknown: reuse it if it is the same call, never a second one.
+  select * into existing from private.sc011b_voice_attempts
+   where company_id=target_company and preparation_id=target_preparation for update;
+  if found then
+   if existing.provider_call_id<>target_call_id or existing.provider_account_id<>target_agent then
+    raise exception using errcode='PT409',message='VOICE_DISPATCH_CALL_MISMATCH';
+   end if;
+   attempt:=existing.id;
+  else
+   select * into prep from private.sc010c_voice_preparations
+    where company_id=target_company and id=target_preparation;
+   insert into private.sc011b_voice_attempts(company_id,preparation_id,candidate_id,provider_account_id,provider_call_id)
+    values(target_company,target_preparation,prep.candidate_id,target_agent,target_call_id)
+    returning id into attempt;
+  end if;
+  -- An attempt a webhook already finished keeps its outcome and is not
+  -- settled twice; otherwise the operator's outcome finishes it once.
+  if existing.id is null or existing.status not in ('completed','failed','cancelled') then
+   update private.sc011b_voice_attempts
+    set status=case when target_outcome in ('completed','dnc_requested') then 'completed' else 'failed' end,
+        outcome=target_outcome, dnc_requested=(target_outcome='dnc_requested')
+    where company_id=target_company and id=attempt;
+  end if;
   update private.sc011b_voice_dispatches set state='accepted'
    where company_id=target_company and preparation_id=target_preparation;
  else
