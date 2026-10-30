@@ -47,7 +47,7 @@ export async function runScreeningCommand(input: {
     attemptId = result.data[0].attempt_id;
   } else {
     // A current pre-Step 3 (v1) analysis keeps its own contract: start_screening_analysis
-    // reuses a pending or completed analysis only on the same contract, so a v2 request
+    // reuses an active (pending/processing) or completed analysis only on the same contract, so a v2 request
     // would create (and bill) a second analysis for "Ponów wysłanie" or "Sprawdź
     // aktualny wynik". v2 is used for every new analysis: no current result, changed
     // material, a reanalysis request, or the explicit upgrade action.
@@ -60,7 +60,7 @@ export async function runScreeningCommand(input: {
       && latest.data.input_fingerprint === prepared.fingerprint
       && latest.data.result_schema_version === screeningAiContract.result_schema_version
       && latest.data.prompt_version === screeningAiContract.prompt_version;
-    let reuseLegacy = currentLegacy && latest.data?.execution_status === 'pending';
+    let reuseLegacy = currentLegacy && (latest.data?.execution_status === 'pending' || latest.data?.execution_status === 'processing');
     if (currentLegacy && latest.data?.execution_status === 'completed') {
       const review = await input.client.from('screening_result_reviews').select('disposition')
         .eq('company_id', input.route.companyId).eq('analysis_id', latest.data.id)

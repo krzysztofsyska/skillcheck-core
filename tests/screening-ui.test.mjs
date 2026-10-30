@@ -238,7 +238,7 @@ test('a current v1 analysis is resent or reused on its own contract; new analyse
   const requested = async (rows, reviews = [], options = {}) => {
     const client = clientFor(ctx, { screening_analysis_versions: rows, screening_result_reviews: reviews }); await command(client, options); return client.calls[0].args; };
   const review = disposition => [{ company_id: route.companyId, analysis_id: uuid(11), review_version: 1, disposition }];
-  for (const [rows, reviews] of [[[pending()], []], [[pending({ execution_status: 'completed' })], []], [[pending({ execution_status: 'completed' })], review('approved')]]) {
+  for (const [rows, reviews] of [[[pending()], []], [[pending({ execution_status: 'processing' })], []], [[pending({ execution_status: 'completed' })], []], [[pending({ execution_status: 'completed' })], review('approved')]]) {
     const args = await requested(rows, reviews);
     assert.equal(args.requested_result_schema_version, 1, 'resend / "Sprawdź aktualny wynik" reuse the current v1 analysis');
     assert.equal(args.requested_prompt_version, 'screening-v1');
