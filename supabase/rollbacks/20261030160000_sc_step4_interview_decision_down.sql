@@ -1,5 +1,11 @@
 -- Reverts 20261030160000_sc_step4_interview_decision.sql (data in audit logs lost).
 begin;
+do $step4_down_preflight$
+begin
+  if to_regclass('private.erasure_inventory_baseline_r8') is not null then
+    raise exception 'sc_step4_down_requires_r8_down_first' using errcode='55000';
+  end if;
+end $step4_down_preflight$;
 drop trigger if exists application_manual_fields_insert_guard on public.applications;
 drop function if exists private.reject_unaudited_application_insert();
 drop function if exists public.set_application_human_decision(uuid,uuid,uuid,text,text);
