@@ -33,6 +33,19 @@ export function AnalysisControl({ route, requestId, retryId, label, disabled }: 
   </form>;
 }
 
+/** Analysis-level reanalysis request for evidence (v2) results; row edits never trigger a rerun. */
+export function ReanalysisRequest({ route, analysisId, version }: { route: ScreeningRoute; analysisId: string; version: number }) {
+  const [state, submit, pending] = useActionState(reviewAnalysis.bind(null, route, analysisId), {});
+  return <form action={submit}>
+    <input type="hidden" name="disposition" value="needs_reanalysis" />
+    <input type="hidden" name="reviewVersion" value={version} />
+    <label>Dlaczego wynik wymaga ponownej analizy?<textarea name="note" maxLength={10000} rows={2} /></label>
+    <label><input type="checkbox" name="confirmed" required /> Sprawdziłem wynik i cytaty</label>
+    <button disabled={pending}>{pending ? 'Zapisywanie…' : 'Zleć ponowną analizę'}</button>
+    <Feedback state={state} />
+  </form>;
+}
+
 export function ReviewControl({ route, analysisId, version, criteria, stale, review, overrides }: { route: ScreeningRoute; analysisId: string; version: number; criteria: ScreeningCriterionResult[]; stale: boolean; review?: ScreeningResultReview; overrides: ScreeningCriterionReviewOverride[] }) {
   const [state, submit, pending] = useActionState(async (previous: ScreeningFormState, form: FormData) => {
     let bytes = 0;

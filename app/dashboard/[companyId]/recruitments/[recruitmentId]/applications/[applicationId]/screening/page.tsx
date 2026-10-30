@@ -6,7 +6,7 @@ import { prepareScreening, type PreparedScreening } from '../../../../../../../.
 import { loadScreeningContext, ScreeningNotFoundError } from '../../../../../../../../lib/screening-flow';
 import { screeningAiUserEnabled } from '../../../../../../../../lib/screening-dispatch';
 import { ratingLabels, reviewLabels, screeningStatus, screeningPath, isUuid, statusLabels, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
-import { AnalysisControl, RefreshStatus, ReviewControl } from './controls';
+import { AnalysisControl, ReanalysisRequest, RefreshStatus, ReviewControl } from './controls';
 import { EvidenceMatrix } from './matrix';
 import styles from './screening.module.css';
 
@@ -71,6 +71,8 @@ export default async function Screening({ params, searchParams }: { params: Prom
     {analysis?.execution_status === 'completed' && analysis.candidate_document_id && criteria.some(c => c.verdict != null) && <EvidenceMatrix
       criteria={criteria} route={route} analysisId={analysis.id} documentId={analysis.candidate_document_id}
       documentVersion={analysis.candidate_document_version} editable={canEdit && !stale} />}
+    {analysis?.execution_status === 'completed' && criteria.some(c => c.verdict != null) && canEdit && !historical && review?.disposition !== 'needs_reanalysis'
+      && <ReanalysisRequest key={`${analysis.id}:${analysis.latest_review_version}`} route={route} analysisId={analysis.id} version={analysis.latest_review_version} />}
     {analysis?.execution_status === 'completed' && <details><summary>CV użyte w tej analizie · wersja {analysis.candidate_document_version}</summary><pre className="cv-text">{analysis.input_cv_text_snapshot}</pre></details>}
     {analysis?.execution_status === 'completed' && !criteria.some(c => c.verdict != null) && <>
       <h2>Wynik AI — oryginał</h2>
