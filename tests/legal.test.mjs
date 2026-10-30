@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { parseLegalMarkdown, parseInline, hasLegalAcceptance, LEGAL_DOCUMENTS, LEGAL_VERSION } from '../lib/legal.ts';
+import { parseLegalMarkdown, parseInline, hasLegalAcceptance, LEGAL_DOCUMENTS, LEGAL_VERSION, LEGAL_ACCEPTANCE_VALUE } from '../lib/legal.ts';
 
 const dir = new URL(`../docs/legal/v${LEGAL_VERSION}/`, import.meta.url);
 
@@ -61,7 +61,8 @@ test('registration acceptance requires the exact current version value', () => {
   assert.equal(hasLegalAcceptance(form()), false);
   assert.equal(hasLegalAcceptance(form('on')), false);
   assert.equal(hasLegalAcceptance(form('v0.9')), false);
-  assert.equal(hasLegalAcceptance(form(`v${LEGAL_VERSION}`)), true);
+  assert.equal(hasLegalAcceptance(form(`v${LEGAL_VERSION}`)), false, 'stale form without Annex 1 is rejected');
+  assert.equal(hasLegalAcceptance(form(LEGAL_ACCEPTANCE_VALUE)), true);
 });
 
 test('annex 1 (voice interviews) lists voice sub-processors, retention and no recording', () => {

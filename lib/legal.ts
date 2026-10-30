@@ -34,7 +34,10 @@ export type LegalDocumentKey = keyof typeof LEGAL_DOCUMENTS;
 
 /** Registration form field and the only accepted value. */
 export const LEGAL_ACCEPTANCE_FIELD = 'legal_acceptance';
-export const LEGAL_ACCEPTANCE_VALUE = `v${LEGAL_VERSION}`;
+/** Accepted document set. Bump when a document is added, so a stale form cannot record acceptance of an older set. */
+export const LEGAL_ACCEPTANCE_REVISION = `${LEGAL_VERSION}+aneks1`;
+export const LEGAL_ACCEPTED_DOCUMENTS = ['regulamin', 'dpa', 'polityka-prywatnosci', 'aneks-1-rozmowy-glosowe'] as const;
+export const LEGAL_ACCEPTANCE_VALUE = `v${LEGAL_ACCEPTANCE_REVISION}`;
 
 export function hasLegalAcceptance(form: FormData): boolean {
   return form.get(LEGAL_ACCEPTANCE_FIELD) === LEGAL_ACCEPTANCE_VALUE;
