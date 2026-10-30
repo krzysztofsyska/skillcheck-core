@@ -106,12 +106,14 @@ test('real Next actions send PKCE email redirects to a local protocol stub (no e
   assert.equal(failed.status,307);
   assert.equal(new URL(failed.headers.get('location'),base).pathname+new URL(failed.headers.get('location'),base).search,'/login?message=callback');
   assert.match(failed.headers.get('cache-control'),/no-store/);
-  for (const [page,destination] of [['/forgot-password','/reset-password'],['/register','/dashboard']]) {
+  recoveryError = null;
+  for (const [page,sent,destination] of [['/forgot-password','/forgot-password?message=sent','/reset-password'],['/register','/login?message=confirm','/dashboard']]) {
     const html=await (await fetch(base+page)).text();
     const action=html.match(/name="(\$ACTION_ID_[^"]+)"/);
     const form=new FormData(); form.set(action[1],''); form.set('email','test@example.invalid'); form.set('password','test-password-long');
     if (page==='/register') form.set('legal_acceptance','v1.0');
     const started=await fetch(base+page,{method:'POST',body:form,headers:{Origin:base},redirect:'manual'});
+    assert.equal(new URL(started.headers.get('location'),base).pathname+new URL(started.headers.get('location'),base).search,sent,page);
     const cookie=started.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ');
     const forwarded=await fetch(base+'/?code=good-code',{headers:{Cookie:cookie},redirect:'manual'});
     assert.equal(forwarded.status,307);
