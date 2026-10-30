@@ -216,6 +216,19 @@ test("SC-011-B2/B3/B4 dispatch ledger, Retell webhooks, transcripts and settleme
     assert.deepEqual(await pool(dnc.s), { used: 1, reserved: 0 }, "the call took place before the request");
   });
 
+  await t.test("a production webhook runs without a session actor and still settles DNC", async () => {
+    const p = await prepared();
+    await recordRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId,
+      providerCallId: "call_hhhhhhhhhhhhhhhh01", agentId });
+    await env.asServer(null);
+    try {
+      assert.deepEqual(await ingest("call_ended", "call_hhhhhhhhhhhhhhhh01", { disconnection_reason: "user_requested_dnc" }),
+        { outcome: "applied" });
+    } finally { await env.asServer(p.s.f.owner); }
+    assert.deepEqual([...(await preferences(p.s)).blocked_channels].sort(), ["email", "sms", "voice"]);
+    assert.deepEqual(await pool(p.s), { used: 1, reserved: 0 });
+  });
+
   await t.test("ignored and unauthenticated deliveries never touch an attempt", async () => {
     assert.deepEqual(await ingest("transcript_updated", "call_unknown_00000000"), { outcome: "ignored" });
     const before = await receipts();
