@@ -41,3 +41,12 @@ export function authCallbackUrl(flow: 'signup' | 'recovery', requestOrigin?: str
 export function callbackDestination(flow: string | null) {
   return flow === "recovery" ? "/reset-password" : "/dashboard";
 }
+
+/** Where the home page sends Supabase's Site URL fallback: a PKCE code goes to the callback, an auth
+ * error to the login notice; anything else stays on the home page (null). */
+export function homeAuthFallback(params: URLSearchParams): string | null {
+  const code = params.get('code');
+  if (code && /^[A-Za-z0-9_-]{1,512}$/.test(code)) return '/auth/callback?' + new URLSearchParams({ code });
+  if (params.has('error') || params.has('error_code') || code !== null) return '/login?message=callback';
+  return null;
+}
