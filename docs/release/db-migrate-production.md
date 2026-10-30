@@ -48,7 +48,7 @@ GitHub pozwala uruchomić workflow ręcznie tylko z pliku, który jest na gałę
 
 - **Use workflow from:** `main`
 - **release_sha:** pełny SHA bieżącego `main` (GitHub → Code → gałąź `main` → ikona historii commitów → skopiuj pełny SHA ostatniego commita).
-- **migrations:** lista z jednego z dwóch kroków niżej (bez spacji, po przecinku).
+- **migrations:** lista z jednego z kroków niżej (bez spacji, po przecinku).
 
 Potem: otwórz run → job **Plan** → sprawdź tabelę w podsumowaniu → przy jobie **Apply** kliknij **Review deployments → production-approval → Approve and deploy**.
 
@@ -71,6 +71,16 @@ Jeśli część z nich już jest na produkcji, run odmówi przed wykonaniem czeg
 ```
 
 Po kroku B: `/operator/billing` → FREE = 5, PRESELEKCJA = 60 → przydziały dla istniejących firm → dopiero potem `SC19_PACKAGES_ENABLED=true` w Vercel Production + Redeploy.
+
+### Krok C — limit firm na użytkownika (SC-COMPANY-LIMIT-001)
+
+Osobna zgoda, po kroku B. `create_company` odmawia (PT409 / HTTP 409) użytkownikowi, który jest już właścicielem 1 firmy. Istniejące firmy zostają bez zmian. Onboarding (`ensure_initial_company`) działa jak dotąd.
+
+```
+20261030130000_company_creation_limit.sql
+```
+
+Wcześniejsze migracje z repozytorium muszą być już zastosowane. Jeśli którejś brakuje, run odmówi przed wykonaniem czegokolwiek i ją wypisze.
 
 ## Błąd w trakcie
 
