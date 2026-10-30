@@ -13,7 +13,7 @@ STATUS: IZOLOWANY SCHEMAT + ENDPOINT ZA BRAMKĄ (404) | PRODUCTION_APPROVAL: NO 
   - Brak grantów dla `anon`/`authenticated`.
 - **`lib/voice/retell-dispatch-ledger.ts`**:
   - `recordRetellDispatch`: przyszły worker zapisuje `call_id` zwrócony przez `create-phone-call`. Ponowienie z tym samym `call_id` zwraca tę samą próbę. Inne `call_id` dla tego samego przygotowania to konflikt, a nie ponowne dzwonienie.
-  - `ingestRetellWebhook`: najpierw podpis i minimalizacja (B1), potem transakcja. Blokuje próbę po `call_id`, odrzuca duplikat po `receipt_id`, stosuje istniejącą projekcję statusów, zapisuje wynik i DNC, a na końcu pokwitowanie. **Transkrypcja jest odrzucana**; jej zapis z retencją 90 dni po zamknięciu rekrutacji (decyzja właściciela z 2026-10-30) to krok B3.
+  - `ingestRetellWebhook`: najpierw podpis i minimalizacja (B1), potem transakcja. Blokuje próbę po `call_id`, odrzuca duplikat po `receipt_id`, stosuje istniejącą projekcję statusów, zapisuje wynik i DNC, a na końcu pokwitowanie. Transkrypcję rozmowy `completed` zapisuje krok B3 ([sc-011b3-voice-transcripts.md](sc-011b3-voice-transcripts.md)), z retencją 90 dni po zamknięciu rekrutacji.
 - **`lib/voice/retell-webhook-http.ts` + `app/api/voice/retell/webhook/route.ts`**: odpowiedzi bez treści.
   - 204: przyjęte.
   - 401: podpis lub czas.
