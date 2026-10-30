@@ -1,4 +1,4 @@
-import { kindLabels, ratingLabels, reasonLabels, shortlistLabel, type ScreeningReport } from '../../../../../../lib/screening-report';
+import { kindLabels, matrixVerdictLabels, ratingLabels, reasonLabels, shortlistLabel, type ScreeningReport } from '../../../../../../lib/screening-report';
 import styles from './report.module.css';
 
 const number = (n: number | null) => n === null ? '—' : n.toLocaleString('pl-PL', { maximumFractionDigits: 3 });
@@ -33,7 +33,9 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
       <p>{reasonLabels[r.eligibility_reason]} · Polityka: {r.ranking_policy_version}</p>
       <p className={styles.controls}><a href={`${basePath}/applications/${r.application_id}/screening`}>Otwórz preselekcję zgłoszenia</a></p>
       {!criteria.length ? <p>Brak aktualnych, zatwierdzonych dowodów do raportu. Sprawdź status zgłoszenia.</p> : criteria.map(c => <section className={styles.criterion} key={c.id}>
-        <h4>{kindLabels[c.kind]}: {c.text}</h4><p><strong>{ratingLabels[c.rating]}</strong>{c.reviewedChange && <> · Korekta człowieka (ocena AI: {ratingLabels[c.aiRating]})</>}</p>
+        <h4>{kindLabels[c.kind]}: {c.text}</h4>{c.matrixVerdict
+          ? <p><strong>{matrixVerdictLabels[c.matrixVerdict]}</strong>{c.reviewedChange ? ' · Skorygowane przez człowieka' : ' · Sprawdzone przez człowieka'}</p>
+          : <p><strong>{ratingLabels[c.rating]}</strong>{c.reviewedChange && <> · Korekta człowieka (ocena AI: {ratingLabels[c.aiRating]})</>}</p>}
         {c.explanation && <p className={styles.text}>{c.explanation}</p>}
         {c.evidence.length ? c.evidence.map((e, i) => <blockquote className={styles.text} key={i}>{e.quote}<footer>Pozycja w zatwierdzonym tekście CV: {e.start}–{e.end}</footer></blockquote>) : <p>Brak cytatów.</p>}
       </section>)}
