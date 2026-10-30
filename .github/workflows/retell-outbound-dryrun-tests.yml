@@ -12,6 +12,10 @@ on:
       - 'tests/voice-interview-plan.test.mjs'
       - 'tests/voice-provider.test.mjs'
       - 'tests/retell-outbound-draft.test.mjs'
+      - 'lib/voice/retell-config-profile.ts'
+      - 'config/retell/**'
+      - 'scripts/retell-config.mjs'
+      - 'tests/retell-config.test.mjs'
       - '.github/workflows/retell-outbound-dryrun-tests.yml'
   push:
     branches: [integration, main]
@@ -26,6 +30,10 @@ on:
       - 'tests/voice-interview-plan.test.mjs'
       - 'tests/voice-provider.test.mjs'
       - 'tests/retell-outbound-draft.test.mjs'
+      - 'lib/voice/retell-config-profile.ts'
+      - 'config/retell/**'
+      - 'scripts/retell-config.mjs'
+      - 'tests/retell-config.test.mjs'
       - '.github/workflows/retell-outbound-dryrun-tests.yml'
 permissions:
   contents: read
@@ -37,4 +45,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node --test tests/retell-outbound-draft.test.mjs
+      - run: node --test tests/retell-outbound-draft.test.mjs tests/retell-config.test.mjs
+      - run: node scripts/retell-config.mjs check

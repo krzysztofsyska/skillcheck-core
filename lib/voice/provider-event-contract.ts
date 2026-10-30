@@ -36,7 +36,8 @@ export class VoiceEventContractError extends Error {
   constructor() { super("VOICE_EVENT_INVALID"); }
 }
 const invalid = (): never => { throw new VoiceEventContractError(); };
-const opaque = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,127}$/;
+// Underscore admits Retell identifiers such as agent_… and call_….
+const opaque = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{7,127}$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const statuses: readonly VoiceProviderEventStatus[] =
   ["accepted","ringing","connected","completed","failed","cancelled"];

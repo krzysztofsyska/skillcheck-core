@@ -22,7 +22,7 @@ import {
 import {voiceScenarioFromApprovedPlan} from "./mvp-package-gate.ts";
 import {SC012_INTRODUCTION_VERSION} from "./interview-plan.ts";
 import {
-  compileRetellOutboundDraft, type RetellOutboundConfig,
+  compileRetellOutboundDraft, retellSpokenName, type RetellOutboundConfig,
   type RetellOutboundDraft, type RetellVerifiedAgent,
 } from "./retell-outbound-draft.ts";
 
@@ -229,6 +229,12 @@ export async function prepareOfflineVoiceDraft(
     )).rows[0]?.locked;
     if (locked !== true) return fail("CONFLICT");
 
+    // Spoken employer name only; tenant-scoped by RLS and the company id filter.
+    // Its digest is bound below so a rename cannot change a replayed draft.
+    const companies = (await db.query("select name from public.companies where id=$1", [companyId])).rows;
+    if (companies.length !== 1) return fail("UNAVAILABLE");
+    const companyName = retellSpokenName(companies[0].name);
+    if (!companyName) return fail();
     const binding = {
       version: 1, purpose: "voice_interview", recordingAllowed: false,
       companyId, candidateId: contact.candidateId, recruitmentId: contact.recruitmentId,
@@ -242,6 +248,7 @@ export async function prepareOfflineVoiceDraft(
       noticeVersion: contact.noticeVersion, permissionPolicySha256: contact.permissionPolicySha256,
       entitlementId: request.entitlementId, entitlementGrant: entitlement.grant_reference,
       package: entitlement.package, total: entitlement.total,
+      companyNameSha256: digest(companyName),
       // Only a hash of reviewed server configuration; no contact destination,
       // key material, CV, transcript, HTTP body or provider response is persisted.
       providerConfigHash: digest(JSON.stringify({
@@ -304,7 +311,7 @@ export async function prepareOfflineVoiceDraft(
       companyId, applicationId: contact.applicationId,
       sourceFingerprint: current.snapshot.planSourceFingerprint, destinationE164: destination,
       contactApproved: true, noticeDelivered: true,
-    });
+    }, {companyId, companyName});
     // Reject stale facts before writing. The deferred database constraint also
     // checks all clocks inside COMMIT, including plan/review/release retention.
     await db.query("select private.sc010c_lock_voice_contact($1,$2,$3,$4)",
