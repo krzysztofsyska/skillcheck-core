@@ -65,7 +65,8 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
         value={draft.quotes[i]} onChange={e => set({ quotes: draft.quotes.map((q, j) => j === i ? e.target.value : q) })} /></label>)}
       <label>Notatka człowieka<textarea name="note" maxLength={10000} rows={2} value={draft.note} onChange={e => set({ note: e.target.value })} /></label>
       <div className={styles.rowActions}>
-        <button name="intent" value="accepted" disabled={pending}>Akceptuj</button>
+        {/* The RPC clears saved corrections on "accepted"; an edited row is already reviewed. */}
+        {!humanEdited && <button name="intent" value="accepted" disabled={pending}>Akceptuj</button>}
         <button name="intent" value="rejected" disabled={pending}>Odrzuć</button>
         <button name="intent" value="edited" disabled={pending}>Edytuj</button>
         <button name="intent" value="note" disabled={pending}>Zapisz notatkę</button>

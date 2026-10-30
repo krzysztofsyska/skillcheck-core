@@ -218,3 +218,14 @@ test('evidence matrix shows the AI explanation under review and keeps row drafts
   assert.match(html, /<textarea name="quote"[^>]*>Tworzę raporty.<\/textarea>/);
   assert.doesNotMatch(readFileSync(screenDir + 'matrix.tsx', 'utf8'), /defaultValue/, 'row inputs are controlled so a failed save keeps the draft');
 });
+test('an edited matrix row offers no "Akceptuj" that would silently discard the saved correction', () => {
+  const matrix = loadUiModule(screenDir + 'matrix.tsx', { './actions': { reviewEvidenceRow: async () => ({}) }, './screening.module.css': {} });
+  const base = { ...criterion, verdict: 'supported', evidence: [], explanation: null, missing_info: null, suggested_question: null,
+    human_note: null, human_missing_info: null, human_suggested_question: null, human_evidence: null, updated_at: null, updated_by: null };
+  const render = row => renderToStaticMarkup(React.createElement(matrix.EvidenceMatrix, { criteria: [row], route, analysisId: uuid(11),
+    documentId: uuid(6), documentVersion: 1, editable: true }));
+  assert.match(render({ ...base, human_status: 'unreviewed', human_verdict: null }), /value="accepted"/);
+  const edited = render({ ...base, human_status: 'edited', human_verdict: 'missing' });
+  assert.doesNotMatch(edited, /value="accepted"/);
+  assert.match(edited, /value="edited"/);
+});
