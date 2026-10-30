@@ -326,7 +326,7 @@ Podsumowanie: w `supabase_migrations.schema_migrations` jest 31 wierszy, w repoz
 | `20261011165916` | `sales_retention_cron_extension` |
 
 Odtwarza je fixture `tests/fixtures/sc19-production-history.json`
-(zob. `docs/release/sc-mvp-production-runbook.md`). PR #200 (jeszcze niescalony) dodaje je do `supabase/migrations` z tymi samymi numerami.
+(zob. `docs/release/sc-mvp-production-runbook.md`). Od #200 są też w `supabase/migrations` z tymi samymi numerami.
 
 ### Różnice numeracji (7) — ta sama nazwa, inna wersja
 
@@ -396,7 +396,7 @@ Pokrycie testami w tym repozytorium:
 - `tests/sc-019-migrations-production-history.test.mjs` odtwarza zapisaną historię produkcji i oczekujące migracje, ale bez CRLF
   i bez porównania z 8 odciskami z inspect.
 
-Próba na dokładnym stanie produkcji (wszystkie 8 surowych odcisków z inspect) jest w PR #200 jako
-`tests/sc-019-migrations-production-hosted-state.test.mjs`. **Do czasu scalenia #200 ten dowód jest w toku**: wynik
-(normalizacja, potem niezmieniona M13, przejrzany R6) pochodzi z lokalnej próby na PostgreSQL 17.6 i z CI tego PR.
+- `tests/sc-019-migrations-production-hosted-state.test.mjs` (#200) odtwarza dokładny stan produkcji (wszystkie 8 surowych odcisków
+  z inspect, CRLF w ciele 13 funkcji) i sprawdza: odmowę M13 bez normalizacji, normalizację zmieniającą tylko `routines`
+  na `r4_legacy`, dalsze odrzucanie innych różnic oraz niezmienioną M13 z przejrzanym wynikiem R6.
 Kolejność dla produkcji: `docs/release/db-migrate-production.md`.
