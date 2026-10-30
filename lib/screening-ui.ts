@@ -38,3 +38,13 @@ export function readScreeningReview(form: FormData, criteria: ScreeningCriterion
   if ((disposition === 'approved_with_changes') !== (overrides.length > 0)) throw new Error('Zatwierdzenie z korektami wymaga zaznaczenia co najmniej jednego kryterium. Pozostałe decyzje zapisuj bez korekt.');
   return { disposition, note: note || null, overrides };
 }
+
+// v2 evidence results carry no ratings to correct, so the analysis-level review is
+// either an approval after every row was verified by a human, or a reanalysis request.
+export function evidenceReviewError(disposition: ScreeningResultReview['disposition'], criteria: Pick<ScreeningCriterionResult, 'verdict' | 'human_status'>[]) {
+  if (!criteria.some(c => c.verdict != null)) return null;
+  if (disposition === 'approved_with_changes') return 'Korekty zapisuj w wierszach macierzy. Wybierz zatwierdzenie albo ponowną analizę.';
+  if (disposition === 'approved' && criteria.some(c => c.human_status === 'unreviewed'))
+    return 'Przed zatwierdzeniem sprawdź każdy wiersz macierzy: zaakceptuj, odrzuć albo skoryguj.';
+  return null;
+}
