@@ -263,7 +263,7 @@ Podsumowanie: w `supabase_migrations.schema_migrations` jest 31 wierszy, w repoz
 | `20261011165916` | `sales_retention_cron_extension` |
 
 Odtwarza je fixture `tests/fixtures/sc19-production-history.json`
-(zob. `docs/release/sc-mvp-production-runbook.md`). Od #200 są też w `supabase/migrations` z tymi samymi numerami.
+(zob. `docs/release/sc-mvp-production-runbook.md`). PR #200 (jeszcze niescalony) dodaje je do `supabase/migrations` z tymi samymi numerami.
 
 ### Różnice numeracji (7) — ta sama nazwa, inna wersja
 
@@ -328,6 +328,12 @@ w modelu hosted (`sc19-rehearsal.Dockerfile`):
   dodawane przez hosting (`tests/fixtures/sc19-hosted-acl-differences.json`). M13 sama je usuwa przed porównaniem, więc nie blokują migracji.
 - **M12 i trzy migracje operacyjne** nie są przyczyną.
 
-Dowód na dokładnym stanie produkcji (wszystkie 8 odcisków z inspect) daje `tests/sc-019-migrations-production-hosted-state.test.mjs` (#200).
-Po normalizacji niezmieniona M13 przechodzi i daje przejrzany wynik R6.
+Pokrycie testami w tym repozytorium:
+- `tests/db-migrate/normalize-line-endings.test.mjs` (#194) sprawdza normalizację na syntetycznym stanie `r4_legacy` z dodanym CRLF;
+- `tests/sc-019-migrations-production-history.test.mjs` odtwarza zapisaną historię produkcji i oczekujące migracje, ale bez CRLF
+  i bez porównania z 8 odciskami z inspect.
+
+Próba na dokładnym stanie produkcji (wszystkie 8 surowych odcisków z inspect) jest w PR #200 jako
+`tests/sc-019-migrations-production-hosted-state.test.mjs`. **Do czasu scalenia #200 ten dowód jest w toku**: wynik
+(normalizacja, potem niezmieniona M13, przejrzany R6) pochodzi z lokalnej próby na PostgreSQL 17.6 i z CI tego PR.
 Kolejność dla produkcji: `docs/release/db-migrate-production.md`.
