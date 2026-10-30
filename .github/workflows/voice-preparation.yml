@@ -5,6 +5,8 @@ on:
     paths:
       - 'lib/**'
       - 'components/voice/**'
+      - 'app/api/voice/**'
+      - 'config/retell/**'
       - 'db/**'
       - 'supabase/migrations/**'
       - 'tests/helpers/**'
@@ -21,6 +23,8 @@ on:
     paths:
       - 'lib/**'
       - 'components/voice/**'
+      - 'app/api/voice/**'
+      - 'config/retell/**'
       - 'db/**'
       - 'supabase/migrations/**'
       - 'tests/helpers/**'
@@ -90,3 +94,8 @@ jobs:
           tests/contact-verification.test.mjs
           tests/retell-agent-readonly.test.mjs
           tests/retell-outbound-draft.test.mjs
+          tests/retell-config.test.mjs
+          tests/retell-webhook.test.mjs
+          tests/retell-dispatch-ledger.test.mjs
+          tests/retell-dispatch-worker.test.mjs
+          tests/retell-dispatch-resolution.test.mjs

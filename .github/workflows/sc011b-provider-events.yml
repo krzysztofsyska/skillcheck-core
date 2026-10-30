@@ -4,12 +4,16 @@ on:
     paths:
       - 'lib/voice/provider-event-contract.ts'
       - 'tests/voice-provider-event-contract.test.mjs'
+      - 'lib/voice/retell-webhook.ts'
+      - 'tests/retell-webhook.test.mjs'
       - '.github/workflows/sc011b-provider-events.yml'
   push:
     branches: [integration, main]
     paths:
       - 'lib/voice/provider-event-contract.ts'
       - 'tests/voice-provider-event-contract.test.mjs'
+      - 'lib/voice/retell-webhook.ts'
+      - 'tests/retell-webhook.test.mjs'
       - '.github/workflows/sc011b-provider-events.yml'
 permissions:
   contents: read
@@ -21,4 +25,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: node --test tests/voice-provider-event-contract.test.mjs
+      - run: node --test tests/voice-provider-event-contract.test.mjs tests/retell-webhook.test.mjs

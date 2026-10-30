@@ -1,0 +1,27 @@
+name: SC Pricing Engine
+on:
+  pull_request:
+    paths:
+      - 'lib/pricing/**'
+      - 'tests/sc-pricing-engine.test.mjs'
+      - 'tests/sc-pricing-internal-calculator*.test.mjs'
+      - 'app/operator/pricing/**'
+      - '.github/workflows/sc-pricing-engine.yml'
+permissions:
+  contents: read
+jobs:
+  quote-engine:
+    name: Deterministic pricing checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: node --test tests/sc-pricing-engine.test.mjs
+      - run: node --test tests/sc-pricing-internal-calculator.test.mjs
+      - run: npm run build
+      - run: node --test tests/sc-pricing-internal-calculator-http.test.mjs

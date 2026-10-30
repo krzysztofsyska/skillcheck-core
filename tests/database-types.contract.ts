@@ -68,6 +68,8 @@ type ExpectedFunctions =
   | "sc19_claim_trial"
   | "sc19_get_balance"
   | "sc19_package_sizes"
+  | "sc19_operator_companies" | "sc19_operator_package_policy" | "sc19_operator_set_package_policy"
+  | "sc19_operator_approve_trial" | "sc19_operator_grant_paid"
   | "submit_sales_lead"
   | "list_sales_leads"
   | "list_sales_leads_inbox"

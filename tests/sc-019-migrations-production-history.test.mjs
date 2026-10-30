@@ -70,8 +70,9 @@ test('observed production history + pending chain preserves completed synthetic 
   // are part of the pending chain and are replayed after the R6 checkpoint.
   const m13='20261021084732_sc019_credits_payments_inventory.sql';
   const m13Index=pending.indexOf(m13);
-  assert.equal(m13Index,12,'Exactly 12 observed-pending migrations precede M13');
-  assert.equal(pending[m13Index-1],'20261021084245_explicit_data_api_table_acl.sql');
+  assert.equal(m13Index,13,'Exactly 13 observed-pending migrations precede M13');
+  assert.equal(pending[m13Index-2],'20261021084245_explicit_data_api_table_acl.sql');
+  assert.equal(pending[m13Index-1],'20261021084500_normalize_function_line_endings.sql');
   let afterM13=null;
   for(const name of pending) {
     if(name===m13) {

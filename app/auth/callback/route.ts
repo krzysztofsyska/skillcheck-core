@@ -6,9 +6,12 @@ export async function GET(request: NextRequest) {
   let destination = '/login?message=callback';
   if (code) {
     const client = await createClient();
-    const { error } = await client.auth.exchangeCodeForSession(code);
+    const { data, error } = await client.auth.exchangeCodeForSession(code);
     if (!error) {
-      destination = callbackDestination(request.nextUrl.searchParams.get("flow"));
+      // A link that reached us through the home-page fallback has no `flow`; the PKCE verifier stored by
+      // resetPasswordForEmail still marks it as recovery.
+      const flow = request.nextUrl.searchParams.get("flow") ?? ((data as { redirectType?: string | null }).redirectType === "recovery" ? "recovery" : null);
+      destination = callbackDestination(flow);
     }
   }
   const response = NextResponse.redirect(new URL(destination, request.url));

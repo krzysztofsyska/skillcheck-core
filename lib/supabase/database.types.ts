@@ -416,6 +416,17 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number }[];
       };
+      sc19_operator_companies: {
+        Args: { search?: string | null };
+        Returns: { company_id: string; company_name: string; created_at: string; plan: 'FREE' | 'PRESELEKCJA' | null; available: number | null; free_claimed: boolean; approved_nip: string | null; approved_at: string | null }[];
+      };
+      sc19_operator_package_policy: {
+        Args: Record<PropertyKey, never>;
+        Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number; updated_at: string }[];
+      };
+      sc19_operator_set_package_policy: { Args: { target_plan: 'FREE' | 'PRESELEKCJA'; target_credits: number }; Returns: number };
+      sc19_operator_approve_trial: { Args: { target_company: string; supplied_nip: string; proof: string }; Returns: string };
+      sc19_operator_grant_paid: { Args: { target_company: string; settlement_reference: string }; Returns: number };
       configure_retention_schedule: {
         Args: { target_company: string; expected_revision: number; policy_revision: number; execution_mode?: 'suggest_only' | 'automatic'; max_batch?: number; request_key?: string | null };
         Returns: string;

@@ -52,6 +52,8 @@ Nigdy nie używać zbiorczego push. Każdą migrację stosujemy pojedynczo, po n
 
 ## 4. Kolejność migracji (12 z 13 pending; M13 odłożona)
 
+> **Aktualizacja 2026-10-29:** jedyną dozwoloną ścieżką wykonania jest workflow `db-migrate-production` (AGENTS.md, zasady dostępu do produkcji, pkt 1) — instrukcja: `docs/release/db-migrate-production.md`. Polecenia `psql "$PROD_DB_URL"` poniżej opisują historyczny plan i nie są dopuszczalną ścieżką wykonania.
+
 **M13 (`20261021084732_sc019_credits_payments_inventory.sql`) NIE wchodzi do tego wydania.** Zakłada bezwarunkowo wyzwalacz `sc19_analysis_bill` na `public.screening_analysis_versions`, który przy braku dodatniego salda firmy zgłasza `sc19_quota_exhausted` (PT402). Przy pustych saldach zablokowałby każdą nową analizę CV — także w obecnej aplikacji z `main` (review Codex na #164). Kod `integration` przy `SC19_PACKAGES_ENABLED` ≠ `true` nie odczytuje obiektów M13 (strona główna, billing i płatności sprawdzają flagę przed RPC). M13 wejdzie w osobnym wydaniu aktywacji FREE/PRESELEKCJA, razem z przydziałem kredytów (decyzja właściciela co do 6 istniejących firm) i ponowną próbą generalną.
 
 Każda pozycja to **osobna akcja do zatwierdzenia**. Każdy plik ma własne `begin; … commit;` — błąd wycofuje całą migrację.
