@@ -2,7 +2,8 @@ import type { ScreeningCriterionResult } from './supabase/database.types';
 
 // Step 4: interview topics come only from the Step 3 evidence matrix (v2 rows).
 // The output is a list of questions for a human interviewer. It carries no
-// score, ranking or hire/reject signal, and confirmed rows are only counted.
+// score, ranking or hire/reject signal. Only rows a human confirmed are counted
+// as supported; an AI "supported" verdict nobody reviewed stays an open topic.
 export type InterviewGapRow = Pick<ScreeningCriterionResult,
   'id' | 'criterion_id' | 'criterion_kind' | 'criterion_text_snapshot' | 'criterion_order'
   | 'verdict' | 'missing_info' | 'suggested_question' | 'human_status'
@@ -15,7 +16,7 @@ export type InterviewGap = {
   verdict: 'partial' | 'missing' | 'contradicted' | null;
   missingInfo: string | null;
   question: string | null;
-  source: 'matrix' | 'edited' | 'rejected';
+  source: 'matrix' | 'edited' | 'rejected' | 'unverified';
 };
 
 const gapVerdicts = new Set(['partial', 'missing', 'contradicted']);
@@ -35,7 +36,12 @@ export function buildInterviewGaps(rows: readonly InterviewGapRow[]) {
     }
     const edited = row.human_status === 'edited';
     const verdict = edited ? row.human_verdict ?? row.verdict : row.verdict;
-    if (!gapVerdicts.has(verdict)) { supported++; continue; }
+    if (!gapVerdicts.has(verdict)) {
+      if (row.human_status !== 'unreviewed') { supported++; continue; }
+      gaps.push({ id: row.id, kind: row.criterion_kind, requirement: row.criterion_text_snapshot,
+        verdict: null, missingInfo: null, question: null, source: 'unverified' });
+      continue;
+    }
     gaps.push({
       id: row.id,
       kind: row.criterion_kind,

@@ -48,15 +48,16 @@ export default async function CandidateInterview({ params }: { params: Promise<S
     {stale && <p className="notice">Materiał (CV lub wymagania) zmienił się po analizie. Pytania mogą być nieaktualne. <Link href={screeningPath(route)}>Uruchom analizę ponownie</Link>.</p>}
 
     {matrix.total > 0 && <>
-      <p role="status">Analiza w wersji {analysis?.analysis_version}, CV v{analysis?.candidate_document_version}: {matrix.supported} z {matrix.total} wymagań ma potwierdzenie w CV, {matrix.gaps.length} do wyjaśnienia na rozmowie.</p>
+      <p role="status">Analiza w wersji {analysis?.analysis_version}, CV v{analysis?.candidate_document_version}: {matrix.supported} z {matrix.total} wymagań ma potwierdzenie w CV sprawdzone przez rekrutera, {matrix.gaps.length} do wyjaśnienia na rozmowie.</p>
       <h2>Tematy do wyjaśnienia</h2>
-      {matrix.gaps.length === 0 && <p>Wszystkie wymagania mają potwierdzenie w CV. Na rozmowie sprawdź je przykładami z pracy kandydata.</p>}
+      {matrix.gaps.length === 0 && <p>Wszystkie wymagania mają potwierdzenie w CV sprawdzone przez rekrutera. Na rozmowie sprawdź je przykładami z pracy kandydata.</p>}
       {matrix.gaps.map(gap => <article className={styles.criterion} key={gap.id}>
         <p>{kinds[gap.kind]}</p>
         <h3>{gap.requirement}</h3>
         {gap.verdict && <p><strong className={`${styles.badge} ${styles[gap.verdict]}`}>{verdictLabels[gap.verdict]}</strong>
           {gap.source === 'edited' && <small> · skorygowane przez człowieka</small>}</p>}
         {gap.source === 'rejected' && <p className="notice">Rekruter odrzucił ten wiersz analizy. Ustal pytanie samodzielnie na podstawie wymagania.</p>}
+        {gap.source === 'unverified' && <p className="notice">AI wskazało potwierdzenie w CV, ale nikt go jeszcze nie sprawdził. <Link href={screeningPath(route)}>Sprawdź wiersz w macierzy</Link> albo zweryfikuj to wymaganie na rozmowie.</p>}
         {gap.missingInfo && <><h4>Czego brakuje</h4><p>{gap.missingInfo}</p></>}
         <h4>Pytanie na rozmowę</h4>
         <p>{gap.question ?? 'Poproś o konkretny przykład z pracy, który pokazuje to wymaganie: sytuację, własne działania i rezultat.'}</p>

@@ -19,7 +19,7 @@ const row = (n, extra = {}) => ({
 test('gaps list partial, missing and contradicted rows in criterion order; supported rows are only counted', () => {
   const result = buildInterviewGaps([
     row(2, { verdict: 'contradicted', missing_info: 'Daty się wykluczają', suggested_question: 'Kiedy?' }),
-    row(0, { verdict: 'supported' }),
+    row(0, { verdict: 'supported', human_status: 'accepted' }),
     row(1, { verdict: 'partial', missing_info: ' Brak skali ', suggested_question: ' Ile osób? ' }),
     row(3, { verdict: 'missing' }),
   ]);
@@ -43,6 +43,12 @@ test('human edits win over the AI row; a rejected row stays open without the AI 
   assert.deepEqual(result.gaps.map(g => [g.source, g.verdict, g.question]), [
     ['edited', 'partial', 'Pytanie rekrutera'], ['rejected', null, null],
   ]);
+});
+
+test('an AI "supported" verdict nobody reviewed is not counted as confirmed and stays a topic', () => {
+  const result = buildInterviewGaps([row(0, { verdict: 'supported' }), row(1, { verdict: 'supported', human_status: 'accepted' })]);
+  assert.equal(result.supported, 1);
+  assert.deepEqual(result.gaps.map(g => [g.requirement, g.source, g.verdict]), [['Wymaganie 0', 'unverified', null]]);
 });
 
 test('legacy v1 rows (verdict null) produce no interview topics', () => {
@@ -93,10 +99,12 @@ async function renderPage({ analysis, rows = [], stale = false } = {}) {
 
 test('interview page shows matrix gaps with questions and leaves the decision to a human', async () => {
   const html = await renderPage({ rows: [
-    row(0, { verdict: 'supported' }),
+    row(0, { verdict: 'supported', human_status: 'accepted' }),
     row(1, { verdict: 'missing', missing_info: 'Brak informacji o SQL', suggested_question: 'Jak używa Pan/Pani SQL?' }),
+    row(2, { verdict: 'supported' }),
   ] });
-  assert.match(html, /1 z 2 wymagań ma potwierdzenie w CV, 1 do wyjaśnienia/);
+  assert.match(html, /1 z 3 wymagań ma potwierdzenie w CV sprawdzone przez rekrutera, 2 do wyjaśnienia/);
+  assert.match(html, /AI wskazało potwierdzenie w CV, ale nikt go jeszcze nie sprawdził/);
   assert.match(html, /Brak informacji o SQL/);
   assert.match(html, /Jak używa Pan\/Pani SQL\?/);
   assert.match(html, /nie oznacza kandydatów do zatrudnienia ani do odrzucenia/);
