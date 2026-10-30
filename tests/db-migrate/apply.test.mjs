@@ -101,7 +101,15 @@ test('runner applies the whole checked-in chain on a fresh database and leaves t
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid;$$;
     grant usage on schema auth to anon,authenticated; grant execute on function auth.uid() to anon,authenticated;`);
   const files = (await readdir(repoDir)).filter(name => name.endsWith('.sql')).sort();
-  await apply({ databaseUrl: env.databaseUrl(env.name), dir: repoDir, files: files.join(','), releaseSha, runId: 'chain', log: quiet });
+  // Production-only operational migration (no schema objects): a test cluster without pg_cron
+  // records it as already applied, exactly as production history does, and the runner skips it.
+  const cron = '20261011165916_sales_retention_cron_extension.sql';
+  const cronAvailable = (await db.query("select count(*)::int n from pg_available_extensions where name='pg_cron'")).rows[0].n > 0;
+  if (!cronAvailable) await db.query(`create schema supabase_migrations;
+    create table supabase_migrations.schema_migrations(version text primary key, statements text[], name text);
+    insert into supabase_migrations.schema_migrations values('20261011165916',array['create extension if not exists pg_cron with schema pg_catalog;'],'sales_retention_cron_extension');`);
+  const listed = files.filter(name => cronAvailable || name !== cron);
+  await apply({ databaseUrl: env.databaseUrl(env.name), dir: repoDir, files: listed.join(','), releaseSha, runId: 'chain', log: quiet });
   const { assertCurrentInventory } = await import('../helpers/sc19-migration-fixture.mjs');
   await assertCurrentInventory(db);
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.skillcheck_migration_ledger where statements is null or sha256 is null')).rows[0].n, 0);
