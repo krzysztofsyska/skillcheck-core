@@ -3,8 +3,9 @@
  * trusted server PostgreSQL connection (db/isolated/sc011b2-voice-dispatch.sql).
  * No provider call happens here. The future SC-010-C worker records the call id
  * returned by create-phone-call; webhooks only update that recorded attempt.
- * Transcripts are NOT stored yet (SC-011-B3, 90-day retention after the
- * recruitment closes): they are dropped after authentication.
+ * SC-011-B3 keeps the minimized transcript of a completed call in the same
+ * transaction (db/isolated/sc011b3-voice-transcripts.sql); retention is the
+ * recruitment's close + 90 days. Transcripts of other outcomes are dropped.
  */
 import type { SqlClient } from "./trusted-source-verifier.ts";
 import { projectVoiceProviderEvent } from "./provider-event-contract.ts";
@@ -124,6 +125,16 @@ export async function ingestRetellWebhook(
         "where company_id=$1 and id=$2",
       ].join(" "), [attempt.company_id, attempt.id, transition.state.status,
         result.outcome, result.outcome === "dnc_requested"]);
+      // A voicemail greeting or a failed call is not an interview answer.
+      if (result.event === "call_ended" && transition.state.status === "completed" &&
+          result.transcript && result.transcript.length) {
+        await db.query([
+          "insert into private.sc011b_voice_transcripts(attempt_id,company_id,recruitment_id,candidate_id,utterances)",
+          "select a.id,a.company_id,p.recruitment_id,a.candidate_id,$3::jsonb",
+          "from private.sc011b_voice_attempts a join private.sc010c_voice_preparations p",
+          "on p.company_id=a.company_id and p.id=a.preparation_id where a.company_id=$1 and a.id=$2",
+        ].join(" "), [attempt.company_id, attempt.id, JSON.stringify(result.transcript)]);
+      }
     }
     return receipt(result.event, transition.outcome, attempt);
   });
