@@ -231,3 +231,15 @@ test('an edited matrix row offers no "Akceptuj" that would silently discard the 
   assert.doesNotMatch(edited, /value="accepted"/);
   assert.match(edited, /value="edited"/);
 });
+test('resending a pending pre-Step 3 analysis keeps its v1 contract; any other start requests v2', async () => {
+  const ctx = context(), fingerprint = prepareScreening(ctx).fingerprint;
+  const pending = (overrides = {}) => ({ id: uuid(11), company_id: route.companyId, application_id: route.applicationId, recruitment_id: route.recruitmentId,
+    analysis_version: 1, execution_status: 'pending', stale_at: null, input_fingerprint: fingerprint, result_schema_version: 1, prompt_version: 'screening-v1', ...overrides });
+  const requested = async rows => { const client = clientFor(ctx, { screening_analysis_versions: rows }); await command(client); return client.calls[0].args; };
+  const legacy = await requested([pending()]);
+  assert.equal(legacy.requested_result_schema_version, 1); assert.equal(legacy.requested_prompt_version, 'screening-v1');
+  for (const rows of [[], [pending({ execution_status: 'completed' })], [pending({ input_fingerprint: 'changed' })], [pending({ result_schema_version: 2, prompt_version: 'screening-evidence-v2' })]]) {
+    const args = await requested(rows);
+    assert.equal(args.requested_result_schema_version, 2); assert.equal(args.requested_prompt_version, 'screening-evidence-v2');
+  }
+});

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import { prepareScreening } from './screening.ts';
-import { screeningEvidenceAiContract } from './screening-ai.ts';
+import { screeningAiContract, screeningEvidenceAiContract } from './screening-ai.ts';
 import { isUuid, type ScreeningRoute } from './screening-ui.ts';
 import type { ScreeningDispatchResult } from './screening-dispatch.ts';
 
@@ -44,7 +44,19 @@ export async function runScreeningCommand(input: {
     if (result.error || !result.data?.[0]) throw new Error('Nie można ponowić tej analizy. Odśwież stronę i sprawdź jej stan.');
     attemptId = result.data[0].attempt_id;
   } else {
-    const contract = screeningEvidenceAiContract;
+    // "Ponów wysłanie" of a pending pre-Step 3 analysis must keep its own contract:
+    // start_screening_analysis reuses a pending analysis only on the same contract,
+    // so a v2 request would create (and bill) a second analysis instead.
+    const latest = await input.client.from('screening_analysis_versions')
+      .select('execution_status,stale_at,input_fingerprint,result_schema_version,prompt_version')
+      .eq('company_id', input.route.companyId).eq('application_id', input.route.applicationId).eq('recruitment_id', input.route.recruitmentId)
+      .order('analysis_version', { ascending: false }).limit(1).maybeSingle();
+    if (latest.error) throw new Error('Nie udało się rozpocząć analizy. Odśwież stronę.');
+    const pendingLegacy = latest.data?.execution_status === 'pending' && !latest.data.stale_at
+      && latest.data.input_fingerprint === prepared.fingerprint
+      && latest.data.result_schema_version === screeningAiContract.result_schema_version
+      && latest.data.prompt_version === screeningAiContract.prompt_version;
+    const contract = pendingLegacy ? screeningAiContract : screeningEvidenceAiContract;
     const result = await input.client.rpc('start_screening_analysis', {
       target_application: input.route.applicationId, expected_input_fingerprint: prepared.fingerprint,
       expected_payload_schema_version: contract.payload_schema_version, requested_result_schema_version: contract.result_schema_version,
