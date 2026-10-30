@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import { reviewEvidenceRow } from './actions';
 import type { ScreeningCriterionResult } from '../../../../../../../../lib/supabase/database.types';
 import type { ScreeningRoute, ScreeningFormState } from '../../../../../../../../lib/screening-ui';
@@ -32,13 +32,26 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
   const missingInfo = humanEdited ? criterion.human_missing_info ?? criterion.missing_info : criterion.missing_info;
   const question = humanEdited ? criterion.human_suggested_question ?? criterion.suggested_question : criterion.suggested_question;
   // Controlled drafts: a failed validation must not reset what the recruiter typed.
-  const [draft, setDraft] = useState(() => ({
+  // The optimistic-lock timestamp belongs to the revision the draft started from, so
+  // another recruiter's newer save makes this submit fail instead of overwriting it.
+  const fromRow = () => ({
+    updatedAt: criterion.updated_at ?? '',
     verdict: criterion.human_verdict ?? criterion.verdict ?? 'missing',
     missingInfo: criterion.human_missing_info ?? criterion.missing_info ?? '',
     question: criterion.human_suggested_question ?? criterion.suggested_question ?? '',
     quotes: Array.from({ length: 5 }, (_, i) => evidence[i]?.quote ?? ''),
     note: criterion.human_note ?? '',
-  }));
+  });
+  const [draft, setDraft] = useState(fromRow);
+  // Only this recruiter's own successful save restarts the draft from the saved row;
+  // someone else's later change never replaces what is being typed.
+  const refreshAfterSave = useRef(false);
+  useEffect(() => { if (state.saved) refreshAfterSave.current = true; }, [state]);
+  useEffect(() => {
+    if (!refreshAfterSave.current) return;
+    refreshAfterSave.current = false;
+    setDraft(fromRow());
+  }, [state, criterion.updated_at]);
   const set = (patch: Partial<typeof draft>) => setDraft(current => ({ ...current, ...patch }));
   return <tr>
     <th scope="row"><small>{criterion.criterion_kind} · {criterion.criterion_id}</small><br />{criterion.criterion_text_snapshot}</th>
@@ -55,7 +68,7 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
       <p><small>Aktualizacja: {new Date(criterion.updated_at).toLocaleString('pl-PL')}<br />
         Autor: {criterion.updated_by ?? '—'}</small></p>}{criterion.human_note && <p>{criterion.human_note}</p>}</td>
     <td>{editable && <form action={submit} className={styles.matrixForm}>
-      <input type="hidden" name="updatedAt" value={criterion.updated_at ?? ''} />
+      <input type="hidden" name="updatedAt" value={draft.updatedAt} />
       <label>Werdykt po edycji<select name="verdict" value={draft.verdict} onChange={e => set({ verdict: e.target.value as typeof draft.verdict })}>
         {Object.entries(verdictLabels).map(([key,label]) => <option key={key} value={key}>{label}</option>)}
       </select></label>

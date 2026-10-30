@@ -216,7 +216,9 @@ test('evidence matrix shows the AI explanation under review and keeps row drafts
   assert.match(html, /Wyjaśnienie AI \(do weryfikacji\): AI_EXPLANATION_TEXT/);
   assert.match(html, /<textarea name="question"[^>]*>Jakie raporty\?<\/textarea>/);
   assert.match(html, /<textarea name="quote"[^>]*>Tworzę raporty.<\/textarea>/);
-  assert.doesNotMatch(readFileSync(screenDir + 'matrix.tsx', 'utf8'), /defaultValue/, 'row inputs are controlled so a failed save keeps the draft');
+  const source = readFileSync(screenDir + 'matrix.tsx', 'utf8');
+  assert.doesNotMatch(source, /defaultValue/, 'row inputs are controlled so a failed save keeps the draft');
+  assert.match(source, /name="updatedAt" value=\{draft\.updatedAt\}/, 'the lock timestamp travels with the draft, not with newer props');
 });
 test('an edited matrix row offers no "Akceptuj" that would silently discard the saved correction', () => {
   const matrix = loadUiModule(screenDir + 'matrix.tsx', { './actions': { reviewEvidenceRow: async () => ({}) }, './screening.module.css': {} });

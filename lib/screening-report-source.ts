@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import {
   MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, parseRanking, parseShortlist,
-  requireReport, reportEvidence, reportParameters, reportRating, reportText,
+  requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
 
@@ -90,7 +90,7 @@ export async function loadScreeningReport(
   // Step 3 matrix reviews live in columns that exist only after the Step 3 migrations.
   // Before they reach a database (42703 undefined column) no row can carry one, so the
   // legacy report stays available; any other error still fails closed.
-  const matrixFields = 'id,analysis_id,verdict,human_status,human_evidence';
+  const matrixFields = 'id,analysis_id,verdict,human_status,human_verdict,human_evidence';
   const probe = analysisIds.length ? await client.from('screening_criterion_results').select(matrixFields)
     .eq('company_id', p.companyId).in('analysis_id', analysisIds.slice(0, 50)).order('id').range(0, 0) : null;
   if (probe?.error && probe.error.code !== '42703') checked(probe);
@@ -136,6 +136,7 @@ export async function loadScreeningReport(
         id: c.criterion_id, kind: c.criterion_kind, text: reportText(c.criterion_text_snapshot)!,
         aiRating: reportRating(c.rating), rating: reportRating(override?.rating_override ?? c.rating),
         reviewedChange: !!override || rejected || edited,
+        matrixVerdict: !evidenceRow ? null : rejected ? 'rejected' as const : reportMatrixVerdict(edited ? matrixRow.human_verdict ?? matrixRow.verdict : matrixRow.verdict),
         explanation: rejected || edited ? null : reportText(override?.explanation_override ?? c.explanation),
         evidence: reportEvidence(rejected ? [] : edited ? matrixRow.human_evidence ?? c.evidence : override?.evidence_override ?? c.evidence),
       };
