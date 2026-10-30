@@ -120,7 +120,11 @@ type ExpectedFunctions =
   | "configure_retention_schedule"
   | "revoke_retention_schedule"
   | "get_retention_schedule"
-  | "get_retention_suggestions";
+  | "get_retention_suggestions"
+  | "review_screening_evidence_row"
+  | "complete_screening_evidence"
+  | "claim_screening_attempt_v2"
+  | "screening_attempt_result_schema_version";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -217,7 +221,10 @@ type _ScreeningCriterionColumns = Expect<Equal<
   Keys<Row<"screening_criterion_results">>,
   "id" | "company_id" | "analysis_id" | "criterion_id" | "criterion_kind" |
   "criterion_order" | "criterion_text_snapshot" | "rating" | "evidence" |
-  "explanation" | "confidence" | "created_at"
+  "explanation" | "confidence" | "created_at" | "verdict" | "missing_info" |
+  "suggested_question" | "human_status" | "human_note" | "human_verdict" |
+  "human_missing_info" | "human_suggested_question" | "human_evidence" |
+  "updated_by" | "updated_at"
 >>;
 type _ScreeningReviewColumns = Expect<Equal<
   Keys<Row<"screening_result_reviews">>,
@@ -279,7 +286,9 @@ type _ScreeningAttemptNullability = Expect<Equal<
 >>;
 type _ScreeningCriterionNullability = Expect<Equal<
   NullableKeys<Row<"screening_criterion_results">>,
-  "explanation" | "confidence"
+  "explanation" | "confidence" | "verdict" | "missing_info" |
+  "suggested_question" | "human_note" | "human_verdict" | "human_missing_info" |
+  "human_suggested_question" | "human_evidence" | "updated_by" | "updated_at"
 >>;
 type _ScreeningReviewNullability = Expect<Equal<
   NullableKeys<Row<"screening_result_reviews">>,
@@ -401,6 +410,13 @@ type _BehaviorRpcArea = Expect<Equal<
 type _BehaviorRpcRating = Expect<Equal<
   Database["public"]["Functions"]["save_behavior_assessment"]["Args"]["new_rating"],
   BehaviorRating
+>>;
+type _ClaimV2Returns = Expect<Equal<
+  Keys<Database["public"]["Functions"]["claim_screening_attempt_v2"]["Returns"][number]>,
+  "analysis_id" | "candidate_document_id" | "attempt_id" | "lease_token" | "lease_expires_at" |
+  "input_fingerprint" | "analysis_contract_hash" | "payload_schema_version" |
+  "result_schema_version" | "prompt_version" | "provider" | "model" |
+  "model_revision" | "input_cv_text_snapshot" | "criteria_snapshot"
 >>;
 type _ClaimReturns = Expect<Equal<
   Keys<Database["public"]["Functions"]["claim_screening_attempt"]["Returns"][number]>,
