@@ -43,9 +43,10 @@ export function createRetellWebhookHttp(runtime: RetellWebhookRuntime | null) {
     const body = await readBounded(request);
     if (!body) return new Response(null, { status: 413 });
     try {
-      await runtime.withClient(db => ingestRetellWebhook(
+      const { outcome } = await runtime.withClient(db => ingestRetellWebhook(
         db, body, request.headers.get("x-retell-signature"), runtime.config, runtime.now()));
-      return new Response(null, { status: 204 });
+      // An unknown call id may still be committing at dispatch: ask Retell to retry.
+      return new Response(null, { status: outcome === "uncorrelated" ? 503 : 204 });
     } catch (error) {
       if (error instanceof RetellWebhookError)
         return new Response(null, { status: error.code === "RETELL_WEBHOOK_UNAUTHENTICATED" ? 401 : 400 });

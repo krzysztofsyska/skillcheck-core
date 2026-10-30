@@ -33,7 +33,8 @@ create table private.sc011b_voice_attempts (
 create index sc011b_attempt_candidate_idx on private.sc011b_voice_attempts(company_id,candidate_id);
 
 -- Retell retries a delivery up to 3 times; the receipt id is stable per
--- (event, call id). Uncorrelated and ignored events are kept without a tenant.
+-- (event, call id). Ignored events are kept without a tenant; an event for an
+-- unknown call id gets no receipt so its retry can apply once dispatch commits.
 create table private.sc011b_voice_webhook_receipts (
  receipt_id text primary key check(receipt_id ~ '^[0-9a-f]{64}$'),
  company_id uuid,
@@ -110,8 +111,44 @@ create trigger sc011b_block_cancel_after_dispatch before update
  when (new.state='cancelled_offline' and old.state='prepared_offline')
  execute function private.sc011b_block_cancel_after_dispatch();
 
-revoke all on private.sc011b_voice_attempts, private.sc011b_voice_webhook_receipts from public, anon, authenticated;
-revoke all on function private.sc011b_attempt_guard(), private.sc011b_receipt_guard(),
- private.sc011b_block_cancel_after_dispatch() from public, anon, authenticated;
+alter table private.sc011b_voice_attempts enable row level security;
+alter table private.sc011b_voice_webhook_receipts enable row level security;
+alter table private.sc011b_voice_attempts force row level security;
+alter table private.sc011b_voice_webhook_receipts force row level security;
+-- Same hardening as SC-010-C: every new object is private even when its owner
+-- has unsafe default grants. Remove all non-owner recipients and grant options.
+do $$
+declare t text; f record; recipient record;
+begin
+ foreach t in array array['sc011b_voice_attempts','sc011b_voice_webhook_receipts'] loop
+  execute pg_catalog.format('revoke all on table private.%I from public cascade',t);
+  for recipient in
+   select distinct a.grantee from pg_catalog.pg_class c
+    cross join lateral pg_catalog.aclexplode(coalesce(c.relacl,pg_catalog.acldefault('r',c.relowner))) a
+    where c.oid=pg_catalog.format('private.%I',t)::pg_catalog.regclass
+     and a.grantee<>0 and a.grantee<>c.relowner
+  loop
+   execute pg_catalog.format('revoke all on table private.%I from %I cascade',t,
+    pg_catalog.pg_get_userbyid(recipient.grantee));
+  end loop;
+ end loop;
+ for f in select p.oid,p.oid::pg_catalog.regprocedure as signature
+  from pg_catalog.pg_proc p where p.oid in (
+   'private.sc011b_attempt_guard()'::pg_catalog.regprocedure,
+   'private.sc011b_receipt_guard()'::pg_catalog.regprocedure,
+   'private.sc011b_block_cancel_after_dispatch()'::pg_catalog.regprocedure
+  )
+ loop
+  execute pg_catalog.format('revoke all on function %s from public cascade',f.signature);
+  for recipient in
+   select distinct a.grantee from pg_catalog.pg_proc p
+    cross join lateral pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+    where p.oid=f.oid and a.grantee<>0 and a.grantee<>p.proowner
+  loop
+   execute pg_catalog.format('revoke all on function %s from %I cascade',f.signature,
+    pg_catalog.pg_get_userbyid(recipient.grantee));
+  end loop;
+ end loop;
+end;$$;
 
 commit;

@@ -80,7 +80,8 @@ export type RetellIngestOutcome =
   "recorded" | "ignored" | "uncorrelated" | "duplicate_delivery";
 
 /**
- * Authenticates and applies one Retell delivery. Throws RetellWebhookError
+ * Authenticates and applies one Retell delivery. `uncorrelated` writes nothing
+ * and must not be acknowledged, so Retell retries it. Throws RetellWebhookError
  * (401/400) before touching the database; a database failure throws
  * RetellLedgerError so the caller answers 5xx and Retell retries.
  */
@@ -105,7 +106,9 @@ export async function ingestRetellWebhook(
     const seen = (await db.query(
       "select 1 from private.sc011b_voice_webhook_receipts where receipt_id=$1", [result.receiptId])).rows;
     if (seen.length) return Object.freeze({ outcome: "duplicate_delivery" as const });
-    if (attempts.length !== 1) return receipt(result.event, "uncorrelated");
+    // Not consumed: the webhook may beat the dispatch commit, and Retell's retry
+    // must still apply once the call id is recorded.
+    if (attempts.length !== 1) return Object.freeze({ outcome: "uncorrelated" as const });
     const row = attempts[0];
     const attempt = { company_id: String(row.company_id), id: String(row.id) };
     if (row.provider_account_id !== config.agentId) return fail("VOICE_ATTEMPT_REJECTED");

@@ -1,12 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { prepareOfflineVoiceDraft, cancelOfflineVoicePreparation } from "../lib/voice/offline-preparation.ts";
 import { recordRetellDispatch, ingestRetellWebhook, RetellLedgerError } from "../lib/voice/retell-dispatch-ledger.ts";
 import { createRetellWebhookHttp, resolveRetellWebhookRuntime } from "../lib/voice/retell-webhook-http.ts";
 import { RetellWebhookError } from "../lib/voice/retell-webhook.ts";
-import { boot } from "./helpers/voice-preparation-fixture.mjs";
+import { boot, SC011B2_DISPATCH_SCHEMA } from "./helpers/voice-preparation-fixture.mjs";
 import { syntheticRetellProof } from "./helpers/voice-preparation-provider-fixture.mjs";
 
 const key = "key_synthetic_webhook_0123456789";
@@ -27,8 +26,7 @@ const delivery = (event, callId, change = {}) => {
 const ledgerError = code => e => e instanceof RetellLedgerError && e.code === code;
 
 test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL", async t => {
-  const env = await boot(t), { db } = env;
-  await db.exec(await readFile(new URL("../db/isolated/sc011b2-voice-dispatch.sql", import.meta.url), "utf8"));
+  const env = await boot(t, { extraSchemas: [SC011B2_DISPATCH_SCHEMA] }), { db } = env;
   const prepared = async () => {
     const s = await env.ready();
     await env.actor(db, s.f.owner);
@@ -93,8 +91,19 @@ test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL"
     assert.deepEqual(await attemptRow(callId), { status: "completed", outcome: "completed", dnc_requested: false });
   });
 
-  await t.test("uncorrelated, ignored and unauthenticated deliveries never touch an attempt", async () => {
-    assert.deepEqual(await ingest("call_ended", "call_unknown_00000000"), { outcome: "uncorrelated" });
+  await t.test("an event that beats the dispatch commit stays retryable and applies afterwards", async () => {
+    const { s, operationId } = await prepared();
+    const callId = "call_dddddddddddddddd01";
+    const before = await receipts();
+    const early = { disconnection_reason: "user_requested_dnc" };
+    assert.deepEqual(await ingest("call_ended", callId, early), { outcome: "uncorrelated" });
+    assert.equal(await receipts(), before, "an uncorrelated event is not consumed");
+    await recordRetellDispatch(db, { companyId: s.f.companyId, operationId, providerCallId: callId, agentId });
+    assert.deepEqual(await ingest("call_ended", callId, early), { outcome: "applied" });
+    assert.deepEqual(await attemptRow(callId), { status: "completed", outcome: "dnc_requested", dnc_requested: true });
+  });
+
+  await t.test("ignored and unauthenticated deliveries never touch an attempt", async () => {
     assert.deepEqual(await ingest("transcript_updated", "call_unknown_00000000"), { outcome: "ignored" });
     const before = await receipts();
     const d = delivery("call_ended", "call_unknown_00000001");
@@ -105,9 +114,9 @@ test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL"
     assert.equal(await receipts(), before);
   });
 
-  await t.test("HTTP boundary: gated by default, 204/401/413/503 without a body", async () => {
+  await t.test("HTTP boundary: gated by default, 204/401/400/413/503 without a body", async () => {
     assert.equal(await resolveRetellWebhookRuntime(), null);
-    const d = delivery("call_ended", "call_unknown_00000002");
+    const d = delivery("transcript_updated", "call_unknown_00000002");
     const post = (handler, body, headers = {}) => handler(new Request("https://skillcheck.invalid/api/voice/retell/webhook",
       { method: "POST", body, headers: { "content-type": "application/json", ...headers } }));
     assert.equal((await post(createRetellWebhookHttp(null), d.body, { "x-retell-signature": d.signature })).status, 404);
@@ -118,6 +127,9 @@ test("SC-011-B2 dispatch ledger and Retell webhook ingestion on real PostgreSQL"
     assert.equal((await post(live, d.body, { "x-retell-signature": sign(d.body, now - 400_000) })).status, 401);
     assert.equal((await post(live, new TextEncoder().encode("{}"), { "x-retell-signature": sign(new TextEncoder().encode("{}")) })).status, 400);
     assert.equal((await post(live, d.body, { "x-retell-signature": d.signature, "content-length": "99999999" })).status, 413);
+    const unknown = delivery("call_ended", "call_unknown_00000003");
+    assert.equal((await post(live, unknown.body, { "x-retell-signature": unknown.signature })).status, 503,
+      "an uncorrelated call event is not acknowledged, so Retell retries it");
     const broken = createRetellWebhookHttp({ ...runtime, withClient: async () => { throw new Error("db down"); } });
     assert.equal((await post(broken, d.body, { "x-retell-signature": d.signature })).status, 503);
   });

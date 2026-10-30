@@ -7,7 +7,8 @@ STATUS: IZOLOWANY SCHEMAT + ENDPOINT ZA BRAMKĄ (404) | PRODUCTION_APPROVAL: NO 
 
 - **`db/isolated/sc011b2-voice-dispatch.sql`** (wzorzec SC-010-C):
   - `private.sc011b_voice_attempts`: jedno połączenie u dostawcy na przygotowanie. Unikalny `provider_call_id`, status projekcji SC-011, `outcome` z zamkniętej listy i `dnc_requested`. Wiersza nie da się usunąć, a pola tożsamości nie da się zmienić. Status terminalny się nie zmienia. Wstawienie wymaga przygotowania w stanie `prepared_offline` i blokuje kandydata przez `erasure_lock_candidate`.
-  - `private.sc011b_voice_webhook_receipts`: tylko dopisywanie, klucz `receipt_id` (stały dla ponowień Retell). Zdarzenia nieskorelowane i ignorowane są zapisywane bez tenanta.
+  - `private.sc011b_voice_webhook_receipts`: tylko dopisywanie, klucz `receipt_id` (stały dla ponowień Retell). Zdarzenia ignorowane są zapisywane bez tenanta. Zdarzenie dla nieznanego `call_id` **nie dostaje pokwitowania** i endpoint odpowiada 503, bo webhook może wyprzedzić zapis wysyłki, a ponowienie Retell zostanie zastosowane, gdy `call_id` już będzie zapisane.
+  - Obie tabele mają RLS z `force` i usunięte wszystkie odziedziczone granty (jak SC-010-C); sprawdza to `tests/voice-preparation-privileges.test.mjs`.
   - Wyzwalacz blokuje anulowanie i zwrot przygotowania, gdy połączenie już wyszło (`VOICE_PREPARATION_DISPATCHED`).
   - Brak grantów dla `anon`/`authenticated`.
 - **`lib/voice/retell-dispatch-ledger.ts`**:
@@ -18,7 +19,7 @@ STATUS: IZOLOWANY SCHEMAT + ENDPOINT ZA BRAMKĄ (404) | PRODUCTION_APPROVAL: NO 
   - 401: podpis lub czas.
   - 400: odrzucone.
   - 413: przekroczony rozmiar.
-  - 503: błąd bazy; Retell ponawia.
+  - 503: błąd bazy albo zdarzenie dla jeszcze nieznanego `call_id`; Retell ponawia.
   - `resolveRetellWebhookRuntime()` zwraca `null`, więc w każdym środowisku route odpowiada **404**, tak jak `resolveSc19PaymentRuntime`.
 
 ## Zanim bramka zostanie zdjęta
