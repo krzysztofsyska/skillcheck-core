@@ -118,6 +118,70 @@ PostgREST. Po migracji potrzebny jest test z dwiema sesjami Supabase Auth, gdy
 zostanie przygotowane logowanie. Obecny endpoint `/api/health/supabase` sprawdza
 dostępność Auth, a nie obecność tej migracji.
 
+## Historia migracji produkcji a repozytorium
+
+Stan z odczytu produkcji 2026-10-30 (workflow „DB migrate production”, `mode=inspect`, run 41021636267).
+
+### Migracje operacyjne z produkcji w repozytorium
+
+Trzy migracje istniały wcześniej tylko w `supabase_migrations.schema_migrations`. Teraz są w `supabase/migrations`
+z tym samym numerem i nazwą. Treść między `begin;` a `commit;` jest bajt w bajt równa zapisanym `statements`.
+Ramkę wymaga `tools/db-migrate`, który ją zdejmuje.
+
+- `20261008155657_sc005_allow_postgres_set_screening_worker.sql`
+- `20261008155719_sc005_keep_worker_role_explicit_only.sql`
+- `20261011165916_sales_retention_cron_extension.sql` — tylko `create extension if not exists pg_cron`.
+  Lokalne klastry testowe bez pg_cron pomijają ją jawnie (fixture rankingu) albo oznaczają jako zastosowaną (test runnera).
+
+Na produkcji są już zapisane po nazwie, więc runner ich nie uruchomi.
+
+### Rozjazdy numeracji (repozytorium ↔ produkcja)
+
+Te same nazwy i treść, różne wersje. `tools/db-migrate/apply.mjs` rozpoznaje migracje po nazwie, więc nie uruchomi ich ponownie.
+Narzędzia Supabase CLI porównują wersje i uznałyby je za brakujące. Dlatego `supabase db push` jest wobec produkcji zabronione.
+
+| Nazwa | Repozytorium ↔ produkcja |
+| --- | --- |
+| `screening_retry_active_conflict` | `20261007000100` ↔ `20261009073048` |
+| `sales_leads` | `20261007000200` ↔ `20261011081257` |
+| `sales_lead_inbox_retention` | `20261009073604` ↔ `20261011081313` |
+| `screening_latest_mutations` | `20261009080000` ↔ `20261009091310` |
+| `screening_ranking_shortlist` | `20261009081908` ↔ `20261009091318` |
+| `sales_lead_auto_reply` | `20261009104142` ↔ `20261011081319` |
+| `sales_pipeline` | `20261009141832` ↔ `20261011081326` |
+
+Wyrównanie historii do numerów z repozytorium (Supabase CLI, projekt połączony przez `supabase link`).
+**Nie uruchamiać z sesji agenta.** To zmiana produkcji: wykonuje ją wyłącznie właściciel albo pipeline po zgodzie
+(AGENTS.md, reguły dostępu do produkcji). `--status reverted` usuwa wiersz historii dla wersji z produkcji,
+`--status applied` zapisuje wersję z repozytorium jako zastosowaną. Żadna z komend nie wykonuje SQL migracji
+ani nie zmienia obiektów w bazie. Przed użyciem sprawdzić zachowanie zainstalowanej wersji CLI na kopii (branch/dev).
+
+```sh
+supabase migration repair --linked --status reverted 20261009073048
+supabase migration repair --linked --status applied 20261007000100
+supabase migration repair --linked --status reverted 20261011081257
+supabase migration repair --linked --status applied 20261007000200
+supabase migration repair --linked --status reverted 20261011081313
+supabase migration repair --linked --status applied 20261009073604
+supabase migration repair --linked --status reverted 20261009091310
+supabase migration repair --linked --status applied 20261009080000
+supabase migration repair --linked --status reverted 20261009091318
+supabase migration repair --linked --status applied 20261009081908
+supabase migration repair --linked --status reverted 20261011081319
+supabase migration repair --linked --status applied 20261009104142
+supabase migration repair --linked --status reverted 20261011081326
+supabase migration repair --linked --status applied 20261009141832
+```
+
+Wpisy M1–M12 z `statements = NULL` (`20261009105025` … `20261021084245`) nie są objęte tymi komendami.
+
+### Końcówki linii
+
+13 funkcji z migracji z 2026-10-01..04 ma na produkcji ciało z CRLF. Te migracje były wykonane z plików z końcówkami Windows,
+a historia zapisała treść z LF. To jedyna różnica między produkcją a replayem obecnych plików
+(stan `production_hosted_20261030` w M13 i w `tests/fixtures/sc19-migration-manifest.json`).
+`.gitattributes` wymusza LF dla `*.sql`.
+
 ## Korzystanie z kodu
 
 Oba istniejące klienty Supabase korzystają z kontraktu `database.types.ts`.
