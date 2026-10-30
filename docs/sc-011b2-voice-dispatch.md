@@ -27,7 +27,9 @@ STATUS: IZOLOWANY SCHEMAT + ENDPOINT ZA BRAMKĄ (404) | PRODUCTION_APPROVAL: NO 
 2. Klucz webhooka Retell jako sekret serwera (tylko właściciel lub pipeline). Dedykowana rola bazy z dostępem tylko do tych tabel.
 3. Worker wysyłki (SC-010-C), który wywołuje `recordRetellDispatch` po zaakceptowanym POST i obsługuje wynik nieznany przez zapytanie do Retell, bez ponownego dzwonienia.
 4. `webhook_url` w `config/retell/…/agent.json` i nowy skrót agenta.
-5. Przeniesienie `dnc_requested` do preferencji kontaktu kandydata oraz rozliczenie puli SC-019 (zarezerwowane → zużyte). Obie decyzje są otwarte.
+5. Wdrożenie decyzji właściciela z 2026-10-30:
+   - `dnc_requested` **automatycznie blokuje dalszy kontakt** z kandydatem (preferencje kontaktu SC-010);
+   - **nieodebrane połączenie nie zużywa rozmowy** z puli FREE ani PRESELEKCJA. Wyniki `no_answer`, `busy`, `voicemail` i `provider_error` zwalniają rezerwację; zużycie liczy się tylko dla rozmowy, która się odbyła (`completed`, w tym zakończonej prośbą o DNC).
 
 ## Testy
 
