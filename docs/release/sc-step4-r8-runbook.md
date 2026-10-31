@@ -19,6 +19,8 @@ After step 2, the signature equals R8 (legacy `d87bccd9…` / voice `f057e8bc…
 - New baseline `private.erasure_inventory_baseline_r8`: R7 tables plus `public.application_stage_events`, `public.application_decision_events`, `public.candidate_assessment_note_revisions`.
 - `private.erasure_inventory_rows` and `private.erasure_row_candidates` are renamed to `*_r7` (after an exact source-hash check per variant) and wrapped. The wrappers add the three Step 4 adapters, so preview counts, the purge manifest and manifest validation include every Step 4 row.
 - The purge engine is unchanged. Step 4 rows are erased by the `ON DELETE CASCADE` foreign keys when the engine deletes the manifest-checked `applications` / `candidate_assessments` rows. The trigger `aa_erasure_cascade_guard` refuses, inside a purge transaction, a Step 4 row whose key and hash are not in that purge's manifest.
+- Outside a purge, the same trigger refuses every delete, so the Step 4 history is append-only (also when a recruiter deletes a `candidate_assessments` row that has note revisions).
+- Each Step 4 table gets the restrictive `erasure_read_guard` policy, like every other candidate-linked table: a frozen candidate's history is hidden from the Data API.
 - The four inventory functions are retargeted from R7 to R8 (only the baseline table name changes).
 - Receipt counts keep listing the engine's adapters only; the Step 4 counts are in the preview and the manifest.
 

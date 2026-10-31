@@ -5,7 +5,7 @@ import { assessmentStatuses } from '../../../../../lib/assessment-fields';
 import { humanDecisions } from '../../../../../lib/interview-decision';
 import type { Step4CandidateAssessment } from '../../../../../lib/step4-database';
 import type { EditorState } from '../../../../../lib/position-fields';
-import { addAssessmentStage, saveAssessmentProgress } from './assessment-actions';
+import { addAssessmentStage, saveAssessmentProgress, type AssessmentProgressState } from './assessment-actions';
 import { autosaveInterviewNote, moveCandidateStage, saveHumanDecision,
   renameRecruitmentStage, reorderRecruitmentStage, removeUnusedRecruitmentStage } from './interview-actions';
 
@@ -88,14 +88,18 @@ export function AssessmentForm({ companyId, recruitmentId, applicationId, stageI
   const versionRef = useRef<string | null>(assessment?.updated_at ?? null);
   const latest = useRef(notes);
   const saving = useRef(false);
+  const [autosaving, setAutosaving] = useState(false);
+  const statusSaving = useRef(false);
+  const [resync, setResync] = useState(0);
   const [noteState, setNoteState] = useState('Zapis automatyczny po zakończeniu pisania.');
   latest.current = notes;
 
   useEffect(() => {
     if (notes === lastSaved.current) return;
     const timer = setTimeout(() => {
-      if (saving.current) return;
+      if (saving.current || statusSaving.current) return;
       saving.current = true;
+      setAutosaving(true);
       void (async () => {
         try {
           // Serial writes: a newer keystroke cannot overwrite its own earlier version.
@@ -115,19 +119,39 @@ export function AssessmentForm({ companyId, recruitmentId, applicationId, stageI
           }
         } finally {
           saving.current = false;
+          setAutosaving(false);
         }
       })();
     }, 900);
     return () => clearTimeout(timer);
-  }, [notes, companyId, recruitmentId, applicationId, stageId]);
+  }, [notes, resync, companyId, recruitmentId, applicationId, stageId]);
 
-  const [state, action] = useActionState(saveAssessmentProgress.bind(null, companyId, recruitmentId, applicationId, stageId), {});
+  const [state, action] = useActionState(async (previous: AssessmentProgressState, form: FormData) => {
+    // The status save also stores the typed note, so a pending autosave timer must not
+    // send the same text with the previous row version while this save runs.
+    const submitted = String(form.get('notes') ?? ''), previousSaved = lastSaved.current;
+    lastSaved.current = submitted;
+    statusSaving.current = true;
+    try {
+      const result = await saveAssessmentProgress(companyId, recruitmentId, applicationId, stageId, previous, form);
+      if (result.saved && result.updatedAt) {
+        versionRef.current = result.updatedAt;
+        setUpdatedAt(result.updatedAt);
+        if (latest.current === submitted) setNoteState('Notatka zapisana.');
+      } else lastSaved.current = previousSaved;
+      return result;
+    } finally {
+      statusSaving.current = false;
+      // Text typed while the status was saving is autosaved with the new row version.
+      setResync(count => count + 1);
+    }
+  }, {});
   return <form action={action}><Feedback state={state}/>
     <input type="hidden" name="expectedUpdatedAt" value={updatedAt ?? ''}/>
     <label>Status etapu<select name="status" value={status} onChange={e => setStatus(e.target.value)}>{assessmentStatuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     <label>Notatka / obserwacje z rozmowy<textarea name="notes" value={notes} onChange={e => { setNotes(e.target.value); setNoteState('Niezapisane zmiany…'); }} rows={6} maxLength={10000} required={status === 'completed' || status === 'skipped'}/></label>
     <p role="status">{noteState}</p>
     <p>Notatki zapisują się automatycznie; autor, czas i każda edycja są rejestrowane. Przy zakończeniu lub pominięciu etapu wpisz uzasadnienie.</p>
-    <SubmitButton>Zapisz status etapu</SubmitButton>
+    {autosaving ? <button type="submit" disabled>Trwa zapis notatki…</button> : <SubmitButton>Zapisz status etapu</SubmitButton>}
   </form>;
 }

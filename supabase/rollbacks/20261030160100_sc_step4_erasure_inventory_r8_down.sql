@@ -150,6 +150,9 @@ declare d private.retention_delegations;t private.retention_ticks;c private.eras
 end;$$;
 
 
+drop policy erasure_read_guard on public.application_stage_events;
+drop policy erasure_read_guard on public.application_decision_events;
+drop policy erasure_read_guard on public.candidate_assessment_note_revisions;
 drop trigger aa_erasure_cascade_guard on public.application_stage_events;
 drop trigger aa_erasure_cascade_guard on public.application_decision_events;
 drop trigger aa_erasure_cascade_guard on public.candidate_assessment_note_revisions;

@@ -6,6 +6,8 @@ import type { EditorState } from '../../../../../lib/position-fields';
 
 const path = (companyId: string, recruitmentId: string) => `/dashboard/${companyId}/recruitments/${recruitmentId}`;
 const conflict = 'Dane zmieniły się w innym oknie. Skopiuj notatkę, odśwież stronę i porównaj wersje.';
+// The new row version lets the open form keep saving without a page refresh.
+export type AssessmentProgressState = EditorState & { updatedAt?: string };
 
 export async function addAssessmentStage(companyId: string, recruitmentId: string, _state: EditorState, form: FormData): Promise<EditorState> {
   const { client, canEdit } = await companyAccess(companyId);
@@ -22,7 +24,7 @@ export async function addAssessmentStage(companyId: string, recruitmentId: strin
 }
 
 export async function saveAssessmentProgress(companyId: string, recruitmentId: string, applicationId: string, stageId: string,
-  _state: EditorState, form: FormData): Promise<EditorState> {
+  _state: AssessmentProgressState, form: FormData): Promise<AssessmentProgressState> {
   const expectedUpdatedAt = String(form.get('expectedUpdatedAt') ?? '') || null;
   const { client, canEdit } = await companyAccess(companyId);
   if (!canEdit) return { error: 'Masz dostęp tylko do odczytu.' };
@@ -40,16 +42,20 @@ export async function saveAssessmentProgress(companyId: string, recruitmentId: s
   if ((existing.data?.updated_at ?? null) !== expectedUpdatedAt) return { error: conflict };
   // Completion belongs to a human-entered stage record, never a hiring decision.
   const completed_at = values.status === 'completed' ? (existing.data?.completed_at ?? new Date().toISOString()) : null;
+  let updatedAt: string;
   if (existing.data) {
     const result = await client.from('candidate_assessments').update({ ...values, completed_at })
       .eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('application_id', applicationId).eq('stage_id', stageId)
-      .eq('id', existing.data.id).eq('updated_at', expectedUpdatedAt!).select('id').maybeSingle();
+      .eq('id', existing.data.id).eq('updated_at', expectedUpdatedAt!).select('updated_at').maybeSingle();
     if (result.error) return { error: 'Nie udało się zapisać postępu. Notatka pozostała w formularzu.' };
     if (!result.data) return { error: conflict };
+    updatedAt = result.data.updated_at;
   } else {
-    const result = await client.from('candidate_assessments').insert({ company_id: companyId, recruitment_id: recruitmentId, application_id: applicationId, stage_id: stageId, ...values, completed_at });
+    const result = await client.from('candidate_assessments').insert({ company_id: companyId, recruitment_id: recruitmentId, application_id: applicationId, stage_id: stageId, ...values, completed_at })
+      .select('updated_at').single();
     if (result.error) return { error: result.error.code === '23505' ? conflict : 'Nie udało się zapisać postępu. Notatka pozostała w formularzu.' };
+    updatedAt = result.data.updated_at;
   }
   revalidatePath(path(companyId, recruitmentId) + `/applications/${applicationId}/assessments`);
-  return { saved: true };
+  return { saved: true, updatedAt };
 }

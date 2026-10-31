@@ -28,9 +28,15 @@
 -- Step 4 rows are removed by the ON DELETE CASCADE foreign keys when the engine
 -- deletes the manifest-checked public.applications / candidate_assessments
 -- rows. A BEFORE DELETE trigger on each Step 4 table refuses, inside a purge
--- transaction, any row whose key and hash are not in that purge's manifest.
--- Manifest rows are always deleted: they reference the erased applications.
--- Receipt counts keep listing the engine's adapters only.
+-- transaction, any row whose key and hash are not in that purge's manifest,
+-- and refuses every delete outside a purge, so the history stays append-only
+-- (a recruiter deleting a candidate_assessments row cannot cascade away its
+-- note revisions). Manifest rows are always deleted: they reference the erased
+-- applications. Receipt counts keep listing the engine's adapters only.
+--
+-- Reads: like every other candidate-linked table, each Step 4 table gets the
+-- restrictive erasure_read_guard policy, so a frozen candidate's history is
+-- hidden from the Data API.
 --
 -- Signatures and source hashes are reviewed literals, never learned from the
 -- target database.
@@ -135,13 +141,15 @@ end;$$;
 
 revoke all on function private.erasure_inventory_rows(uuid,uuid[]),private.erasure_row_candidates(text,jsonb) from public,anon,authenticated;
 
--- Cascade boundary: inside a purge transaction a Step 4 row may only be
--- deleted when its key and hash are in that purge's manifest.
+-- Cascade boundary: a Step 4 row may only be deleted inside a purge
+-- transaction, and only when its key and hash are in that purge's manifest.
 create function private.erasure_step4_cascade_guard() returns trigger
 language plpgsql security definer set search_path='' as $$
 declare target_adapter text:=tg_table_schema||'.'||tg_table_name;data jsonb:=to_jsonb(old);
 begin
- if exists(select 1 from private.erasure_purge_context where txid=txid_current()) and not exists(
+ if not exists(select 1 from private.erasure_purge_context where txid=txid_current()) then
+  raise exception using errcode='42501',message='Append-only interview history';end if;
+ if not exists(
   select 1 from private.erasure_purge_context_rows r where r.txid=txid_current() and r.adapter=target_adapter
    and r.row_key=private.erasure_purge_key(target_adapter,data) and r.row_hash=private.erasure_hash(data) and r.command='delete')
  then raise exception using errcode='42501',message='Purge manifest boundary';end if;
@@ -154,6 +162,13 @@ create trigger aa_erasure_cascade_guard before delete on public.application_deci
  for each row execute function private.erasure_step4_cascade_guard();
 create trigger aa_erasure_cascade_guard before delete on public.candidate_assessment_note_revisions
  for each row execute function private.erasure_step4_cascade_guard();
+
+create policy erasure_read_guard on public.application_stage_events as restrictive for select to authenticated
+ using (private.erasure_row_visible('public.application_stage_events',to_jsonb(application_stage_events)));
+create policy erasure_read_guard on public.application_decision_events as restrictive for select to authenticated
+ using (private.erasure_row_visible('public.application_decision_events',to_jsonb(application_decision_events)));
+create policy erasure_read_guard on public.candidate_assessment_note_revisions as restrictive for select to authenticated
+ using (private.erasure_row_visible('public.candidate_assessment_note_revisions',to_jsonb(candidate_assessment_note_revisions)));
 
 comment on table public.application_stage_events is
   'SC-010 R8: candidate-linked audit; erased by FK cascade from the public.applications adapter, listed by the public.application_stage_events adapter.';
@@ -336,7 +351,9 @@ begin
     if not exists(select 1 from pg_constraint where conrelid=adapter_table::regclass and contype='f'
         and confrelid='public.applications'::regclass and confdeltype='c')
       or not exists(select 1 from pg_trigger where tgrelid=adapter_table::regclass and tgname='aa_erasure_cascade_guard'
-        and tgfoid='private.erasure_step4_cascade_guard()'::regprocedure and tgenabled='O') then
+        and tgfoid='private.erasure_step4_cascade_guard()'::regprocedure and tgenabled='O')
+      or not exists(select 1 from pg_policy where polrelid=adapter_table::regclass and polname='erasure_read_guard'
+        and not polpermissive and polcmd='r' and pg_get_expr(polqual,polrelid) like '%erasure_row_visible%') then
       raise exception 'sc_r8_cascade_contract_changed:%',adapter_table using errcode='55000';
     end if;
   end loop;

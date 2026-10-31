@@ -162,6 +162,41 @@ test('R8: inside a purge transaction a Step 4 row outside the manifest cannot be
   assert.ok((await step4Rows(db, survivor.application.id))['public.application_decision_events'].length > 0);
 });
 
+test('R8: outside a purge the Step 4 history is append-only, also through a deleted stage note', async t => {
+  const env = await install(t), { db, h } = env;
+  const { subject } = await ready(env);
+  await step4Data(h, db, subject);
+  const before = await step4Rows(db, subject.application.id);
+  await h.asUser(subject.owner);
+  await assert.rejects(db.query('delete from public.candidate_assessments where application_id=$1', [subject.application.id]),
+    error => error.code === '42501' && /Append-only interview history/.test(error.message));
+  await db.query('reset role');
+  for (const table of step4Tables) {
+    await assert.rejects(db.query(`delete from ${table} where application_id=$1`, [subject.application.id]),
+      error => error.code === '42501' && /Append-only interview history/.test(error.message), table);
+  }
+  assert.deepEqual(await step4Rows(db, subject.application.id), before);
+});
+
+test('R8: a frozen candidate\'s Step 4 history is hidden from the Data API, other candidates stay readable', async t => {
+  const env = await install(t), { db, h } = env;
+  const { x, subject, survivor } = await ready(env);
+  await step4Data(h, db, subject); await step4Data(h, db, survivor);
+  const visible = async (f) => {
+    await h.asUser(f.owner);
+    const counts = {};
+    for (const table of step4Tables) {
+      counts[table] = (await db.query(`select count(*)::int n from ${table} where application_id=$1`, [f.application.id])).rows[0].n;
+    }
+    return counts;
+  };
+  for (const n of Object.values(await visible(subject))) assert.ok(n > 0, 'history is readable before the freeze');
+  const survivorBefore = await visible(survivor);
+  await x.freeze(subject);
+  for (const [table, n] of Object.entries(await visible(subject))) assert.equal(n, 0, `${table} hidden while frozen`);
+  assert.deepEqual(await visible(survivor), survivorBefore);
+});
+
 test('Step 4 without R8 fails closed: preview and schedule blocked, erasure freeze refused', async t => {
   const env = await install(t, 'legacy', { withR8: false }), { db, h } = env;
   const { x, subject } = await ready(env);

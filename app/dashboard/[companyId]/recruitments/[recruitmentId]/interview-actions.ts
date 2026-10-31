@@ -108,11 +108,14 @@ export async function autosaveInterviewNote(companyId: string, recruitmentId: st
       client.from('assessment_stages').select('id').eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('id', stageId).maybeSingle(),
     ]);
     if (application.error || stage.error || !application.data || !stage.data) throw new Error('Nie znaleziono etapu ani zgłoszenia.');
-    const current = await client.from('candidate_assessments').select('id,updated_at')
+    const current = await client.from('candidate_assessments').select('id,updated_at,status')
       .eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('application_id', applicationId).eq('stage_id', stageId).maybeSingle();
     if (current.error) throw new Error('Nie można sprawdzić wersji notatki.');
     if ((current.data?.updated_at ?? null) !== expectedUpdatedAt)
       throw new Error('Notatka zmieniła się w innym oknie. Odśwież przed nadpisaniem.');
+    // Same rule as the status form: a completed or skipped stage keeps its note.
+    if (!notes && current.data && ['completed', 'skipped'].includes(current.data.status))
+      throw new Error('Zakończony lub pominięty etap wymaga notatki. Wpisz obserwacje albo powód pominięcia.');
     const write = current.data
       ? await client.from('candidate_assessments').update({ notes }).eq('company_id', companyId).eq('recruitment_id', recruitmentId)
           .eq('application_id', applicationId).eq('stage_id', stageId).eq('id', current.data.id)
