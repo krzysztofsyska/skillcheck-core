@@ -124,7 +124,8 @@ type ExpectedFunctions =
   | "review_screening_evidence_row"
   | "complete_screening_evidence"
   | "claim_screening_attempt_v2"
-  | "screening_attempt_result_schema_version";
+  | "screening_attempt_result_schema_version"
+  | "checkout_create_order" | "checkout_update_order" | "checkout_read_order";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;

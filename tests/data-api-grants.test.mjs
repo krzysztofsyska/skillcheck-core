@@ -16,9 +16,12 @@ const readOnly = ['behavior_assessment_entries', 'exercise_definition_entries',
   'screening_criterion_results', 'screening_result_reviews', 'screening_criterion_review_overrides',
   'recruitment_shortlist_entries', 'candidate_contact_permissions', 'candidate_contact_preferences',
   'candidate_communications', 'candidate_communication_events', 'candidate_communication_approvals'];
-const rpcOnly = ['sales_leads', 'platform_operators'];
+const rpcOnly = ['sales_leads', 'platform_operators', 'orders'];
+// Tables created after the ACL repair migration; present only in full-chain replays.
+const laterTables = ['orders'];
 const views = ['latest_behavior_assessments', 'latest_exercise_definitions', 'latest_exercise_observations'];
 const tables = [...crud, ...readOnly, ...rpcOnly, 'companies', 'candidate_documents'].sort();
+const repairTimeRelations = relations => relations.filter(name => !laterTables.includes(name));
 const relations = [...tables, ...views].sort();
 const step4Audit = ['application_stage_events','application_decision_events','candidate_assessment_note_revisions'];
 const updates = {
@@ -74,12 +77,13 @@ async function untouched(db) {
   };
 }
 
-async function assertApiContract(db) {
+async function assertApiContract(db, { fullChain = false } = {}) {
   const catalog = (await db.query(`select c.relname,c.relkind,c.relrowsecurity,c.reloptions
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relkind in ('r','p','v') order by c.relname`)).rows;
   const step4Present = catalog.some(row => row.relname === 'application_stage_events');
-  const expectedRelations = step4Present ? [...relations, ...step4Audit].sort() : relations;
+  const base = fullChain ? relations : repairTimeRelations(relations);
+  const expectedRelations = step4Present ? [...base, ...step4Audit].sort() : base;
   assert.deepEqual(catalog.map(r => r.relname), expectedRelations, 'new tables require a reviewed API contract');
   for (const row of catalog) {
     if (row.relkind === 'v') assert.ok(row.reloptions.includes('security_invoker=true'), row.relname);
@@ -145,7 +149,7 @@ for (const profile of ['no-default-grants', 'legacy-all', 'opt-in-residual']) {
         where n.nspname='public' and c.relkind='S'`)).rows[0].count, 0);
       for (const role of ['anon', 'service_role']) {
         await db.exec(`set role ${role}`);
-        for (const name of relations) await denied(db.query(`select * from public.${name}`));
+        for (const name of repairTimeRelations(relations)) await denied(db.query(`select * from public.${name}`));
         await h.asAdmin();
       }
     });
@@ -267,14 +271,16 @@ test('full clean replay checks every current migration against the public API co
     await db.exec('create role service_role nologin bypassrls'); createdServiceRole = true;
     await db.exec('alter default privileges in schema public grant all on tables to anon,authenticated,service_role');
     await setupRankingDatabase(db, { throughMigration: null });
-    await assertApiContract(db);
+    await assertApiContract(db, { fullChain: true });
     // Prove the guard detects both a new table and privilege drift in a future migration.
     await db.exec('begin; create table public.unreviewed_future_table(id integer)');
-    await assert.rejects(assertApiContract(db), error => error.code === 'ERR_ASSERTION');
+    await assert.rejects(assertApiContract(db, { fullChain: true }), error => error.code === 'ERR_ASSERTION');
     await db.exec('rollback; begin; grant select on public.candidate_documents to anon');
-    await assert.rejects(assertApiContract(db), error => error.code === 'ERR_ASSERTION');
+    await assert.rejects(assertApiContract(db, { fullChain: true }), error => error.code === 'ERR_ASSERTION');
+    await db.exec('rollback; begin; grant select on public.orders to anon');
+    await assert.rejects(assertApiContract(db, { fullChain: true }), error => error.code === 'ERR_ASSERTION');
     await db.exec('rollback');
-    await assertApiContract(db);
+    await assertApiContract(db, { fullChain: true });
   } finally { await cleanup(); }
 });
 
@@ -282,7 +288,7 @@ test('full clean replay includes the ACL repair even without a Supabase service 
   const { db } = await bootMigrationDatabase(t);
   assert.equal((await db.query("select to_regrole('service_role') value")).rows[0].value, null);
   const h = await setupRankingDatabase(db, { throughMigration: null });
-  await assertApiContract(db);
+  await assertApiContract(db, { fullChain: true });
   const a = await h.seed();
   assert.ok(a.documentId);
 });
