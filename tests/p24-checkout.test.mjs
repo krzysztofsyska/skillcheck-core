@@ -248,3 +248,12 @@ test('reconcile settles a verified payment whose write failed everywhere', async
   assert.deepEqual(await service.reconcile(0, 10), { checked: 0, paid: 0 });
   assert.ok(!authorizedReconciler(`Bearer ${secret}`, 'short'));
 });
+
+test('reconcile rotates through unsettled orders instead of rechecking the same batch', async t => {
+  const { db, service, orders } = await setup(); t.after(() => db.close());
+  const ids = [];
+  for (let i = 0; i < 3; i++) ids.push((await service.start(validateCheckout(buyer({ quantity: 1, email: `b${i}@example.test` })))).orderId);
+  const first = await orders.pending(0, 2), second = await orders.pending(0, 2);
+  assert.equal(first.length, 2); assert.ok(second.includes(ids.find(id => !first.includes(id))), 'third order reached in the next batch');
+  assert.deepEqual(new Set([...first, ...second]), new Set(ids));
+});

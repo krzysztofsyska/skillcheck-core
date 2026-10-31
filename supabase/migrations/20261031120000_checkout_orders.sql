@@ -48,6 +48,8 @@ create table checkout.orders (
   p24_session_id text not null unique check (p24_session_id = 'sc-ord-' || id::text),
   p24_order_id bigint unique check (p24_order_id is null or p24_order_id > 0),
   paid_at timestamptz,
+  -- Last reconciliation attempt; rotates the reconcile queue so unsettled rows cannot starve later ones.
+  reconciled_at timestamptz,
   check ((status = 'paid') = (paid_at is not null)),
   check (status <> 'paid' or p24_order_id is not null)
 );
@@ -178,7 +180,8 @@ begin
     o.p24_session_id, o.p24_order_id from checkout.orders o where o.id = order_id;
 end $$;
 
--- Reconciliation feed: recent orders not yet paid, oldest first (ids only).
+-- Reconciliation feed: claims a batch of recent unpaid orders (ids only), least recently
+-- checked first, and stamps reconciled_at so the next batch moves on to other rows.
 create function public.checkout_pending_orders(older_than_seconds integer, max_rows integer, issued_at_us bigint, request_signature text)
 returns table (order_id uuid)
 language plpgsql security definer set search_path = '' as $$
@@ -187,11 +190,17 @@ begin
   if older_than_seconds is null or older_than_seconds < 0 or max_rows is null or max_rows not between 1 and 50 then
     raise exception 'checkout_invalid';
   end if;
-  return query select o.id from checkout.orders o
-    where o.status in ('pending', 'failed')
-      and o.created_at < now() - pg_catalog.make_interval(secs => older_than_seconds)
-      and o.created_at > now() - interval '3 days'
-    order by o.created_at limit max_rows;
+  return query
+    with batch as (
+      select o.id from checkout.orders o
+      where o.status in ('pending', 'failed')
+        and o.created_at < now() - pg_catalog.make_interval(secs => older_than_seconds)
+        and o.created_at > now() - interval '3 days'
+      order by o.reconciled_at nulls first, o.created_at
+      limit max_rows
+      for update skip locked)
+    update checkout.orders o set reconciled_at = now() from batch where o.id = batch.id
+    returning o.id;
 end $$;
 
 revoke all on function public.checkout_create_order(uuid, text, integer, integer, text, text, text, text, text, bigint, text) from public, anon, authenticated;
