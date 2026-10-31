@@ -528,18 +528,6 @@ export type Database = {
         Args: { target_lead: string; request_id: string; issued_at_ms: number; outcome: string; provider_id: string | null; request_signature: string };
         Returns: boolean;
       };
-      checkout_create_order: { Args: {
-        order_id: string; product_code: string; quantity: number; amount_gross: number; customer_name: string;
-        customer_email: string; customer_phone: string; company_name: string | null; nip: string | null;
-        issued_at_us: number; request_signature: string;
-      }; Returns: string };
-      checkout_update_order: { Args: {
-        order_id: string; new_status: 'paid' | 'failed' | 'cancelled'; p24_order_id: number | null; paid_amount: number | null;
-        issued_at_us: number; request_signature: string;
-      }; Returns: 'pending' | 'paid' | 'failed' | 'cancelled' };
-      checkout_read_order: { Args: { order_id: string; issued_at_us: number; request_signature: string };
-        Returns: { status: 'pending' | 'paid' | 'failed' | 'cancelled'; product_code: string; quantity: number; amount_gross: number;
-          currency: 'PLN'; customer_email: string; p24_session_id: string; p24_order_id: number | null }[] };
       submit_sales_lead: { Args: {
         idempotency_key: string; first_name: string; company_name: string; email: string;
         phone: string | null; needs: string; source_ip: string; issued_at_us: number; request_signature: string;
