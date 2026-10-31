@@ -1,0 +1,30 @@
+name: SC Step 4 — human interview decision
+on:
+  pull_request:
+    paths:
+      - 'app/dashboard/**/recruitments/**/assessment-forms.tsx'
+      - 'app/dashboard/**/recruitments/**/interview-actions.ts'
+      - 'app/dashboard/**/recruitments/**/assessments/page.tsx'
+      - 'lib/interview-decision.ts'
+      - 'lib/step4-database.ts'
+      - 'supabase/migrations/*sc_step4*'
+      - 'supabase/rollbacks/*sc_step4*'
+      - 'tests/interview-decision*.test.mjs'
+      - '.github/workflows/sc-step4-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  step4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: TypeScript typecheck
+        run: npm run typecheck
+      - name: Human decision unit / RLS / DB workflow e2e
+        run: node --test tests/interview-decision.test.mjs tests/interview-decision-database.test.mjs

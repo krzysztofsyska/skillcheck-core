@@ -1,10 +1,13 @@
 'use client';
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import { SubmitButton } from '../../../../components/submit-button';
 import { assessmentStatuses } from '../../../../../lib/assessment-fields';
-import type { CandidateAssessment } from '../../../../../lib/supabase/database.types';
+import { humanDecisions } from '../../../../../lib/interview-decision';
+import type { Step4CandidateAssessment } from '../../../../../lib/step4-database';
 import type { EditorState } from '../../../../../lib/position-fields';
-import { addAssessmentStage, saveAssessmentProgress } from './assessment-actions';
+import { addAssessmentStage, saveAssessmentProgress, type AssessmentProgressState } from './assessment-actions';
+import { autosaveInterviewNote, moveCandidateStage, saveHumanDecision,
+  renameRecruitmentStage, reorderRecruitmentStage, removeUnusedRecruitmentStage } from './interview-actions';
 
 function Feedback({ state }: { state: EditorState }) {
   return <>{state.error && <p role="alert">{state.error}</p>}{state.saved && <p role="status">Zapisano.</p>}</>;
@@ -25,16 +28,130 @@ export function StageForm({ companyId, recruitmentId, nextSequence }: { companyI
   </form>;
 }
 
+export function StageControls({ companyId, recruitmentId, stageId, name, first, last }: {
+  companyId: string; recruitmentId: string; stageId: string; name: string; first: boolean; last: boolean;
+}) {
+  const [renameState, rename] = useActionState(renameRecruitmentStage.bind(null, companyId, recruitmentId, stageId), {});
+  const [upState, up] = useActionState(reorderRecruitmentStage.bind(null, companyId, recruitmentId, stageId, -1), {});
+  const [downState, down] = useActionState(reorderRecruitmentStage.bind(null, companyId, recruitmentId, stageId, 1), {});
+  const [deleteState, remove] = useActionState(removeUnusedRecruitmentStage.bind(null, companyId, recruitmentId, stageId), {});
+  return <details><summary>Zmień etap</summary>
+    <form action={rename}><Feedback state={renameState}/><label>Nowa nazwa etapu
+      <input key={name} name="name" defaultValue={name} required maxLength={200}/></label><SubmitButton>Zapisz nazwę</SubmitButton></form>
+    <form action={up}><Feedback state={upState}/><button type="submit" disabled={first}>Przesuń wyżej</button></form>
+    <form action={down}><Feedback state={downState}/><button type="submit" disabled={last}>Przesuń niżej</button></form>
+    <form action={remove} onSubmit={e => { if (!window.confirm('Usunąć wyłącznie nieużywany etap?')) e.preventDefault(); }}>
+      <Feedback state={deleteState}/><button type="submit">Usuń nieużywany etap</button>
+    </form>
+  </details>;
+}
+
+export function CandidateStageForm({ companyId, recruitmentId, applicationId, currentStageId, stages }: {
+  companyId: string; recruitmentId: string; applicationId: string; currentStageId: string | null;
+  stages: { id: string; name: string }[];
+}) {
+  const [state, action] = useActionState(moveCandidateStage.bind(null, companyId, recruitmentId, applicationId), {});
+  return <form action={action}><Feedback state={state}/>
+    <label>Aktualny etap kandydata
+      <select name="stageId" key={currentStageId ?? 'unassigned'} defaultValue={currentStageId ?? ''}>
+        <option value="">Nieprzypisany</option>
+        {stages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+      </select></label>
+    <SubmitButton>Przesuń kandydata ręcznie</SubmitButton>
+  </form>;
+}
+
+export function HumanDecisionForm({ companyId, recruitmentId, applicationId }: {
+  companyId: string; recruitmentId: string; applicationId: string;
+}) {
+  const [state, action] = useActionState(saveHumanDecision.bind(null, companyId, recruitmentId, applicationId), {});
+  return <form action={action}><Feedback state={state}/>
+    <label>Decyzja człowieka
+      <select name="decision" required defaultValue="">
+        <option value="" disabled>Wybierz decyzję</option>
+        {humanDecisions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select></label>
+    <label>Uzasadnienie (obowiązkowe)
+      <textarea name="reason" required minLength={10} maxLength={5000} rows={4} placeholder="Konkretny powód podjętej decyzji — minimum 10 znaków."/></label>
+    <SubmitButton>Zapisz decyzję człowieka</SubmitButton>
+    <p>System nie proponuje, nie wybiera i nie zapisuje decyzji automatycznie.</p>
+  </form>;
+}
+
 export function AssessmentForm({ companyId, recruitmentId, applicationId, stageId, assessment }: {
-  companyId: string; recruitmentId: string; applicationId: string; stageId: string; assessment?: CandidateAssessment;
+  companyId: string; recruitmentId: string; applicationId: string; stageId: string; assessment?: Step4CandidateAssessment;
 }) {
   const [status, setStatus] = useState<string>(assessment?.status ?? 'pending');
   const [notes, setNotes] = useState(assessment?.notes ?? '');
-  const [state, action] = useActionState(saveAssessmentProgress.bind(null, companyId, recruitmentId, applicationId, stageId, assessment?.updated_at ?? null), {});
+  const [updatedAt, setUpdatedAt] = useState<string | null>(assessment?.updated_at ?? null);
+  const lastSaved = useRef(assessment?.notes ?? '');
+  const versionRef = useRef<string | null>(assessment?.updated_at ?? null);
+  const latest = useRef(notes);
+  const saving = useRef(false);
+  const [autosaving, setAutosaving] = useState(false);
+  const statusSaving = useRef(false);
+  const [resync, setResync] = useState(0);
+  const [noteState, setNoteState] = useState('Zapis automatyczny po zakończeniu pisania.');
+  latest.current = notes;
+
+  useEffect(() => {
+    if (notes === lastSaved.current) return;
+    const timer = setTimeout(() => {
+      if (saving.current || statusSaving.current) return;
+      saving.current = true;
+      setAutosaving(true);
+      void (async () => {
+        try {
+          // Serial writes: a newer keystroke cannot overwrite its own earlier version.
+          // Every accepted save returns the new DB CAS token before the next write.
+          while (latest.current !== lastSaved.current) {
+            const sent = latest.current;
+            setNoteState('Zapisywanie notatki…');
+            const result = await autosaveInterviewNote(companyId, recruitmentId, applicationId, stageId, sent, versionRef.current);
+            if (!result.saved || !result.updatedAt) {
+              setNoteState(result.error ?? 'Nie zapisano notatki.');
+              break;
+            }
+            lastSaved.current = sent;
+            versionRef.current = result.updatedAt;
+            setUpdatedAt(result.updatedAt);
+            if (latest.current === sent) setNoteState('Notatka zapisana.');
+          }
+        } finally {
+          saving.current = false;
+          setAutosaving(false);
+        }
+      })();
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [notes, resync, companyId, recruitmentId, applicationId, stageId]);
+
+  const [state, action] = useActionState(async (previous: AssessmentProgressState, form: FormData) => {
+    // The status save also stores the typed note, so a pending autosave timer must not
+    // send the same text with the previous row version while this save runs.
+    const submitted = String(form.get('notes') ?? ''), previousSaved = lastSaved.current;
+    lastSaved.current = submitted;
+    statusSaving.current = true;
+    try {
+      const result = await saveAssessmentProgress(companyId, recruitmentId, applicationId, stageId, previous, form);
+      if (result.saved && result.updatedAt) {
+        versionRef.current = result.updatedAt;
+        setUpdatedAt(result.updatedAt);
+        if (latest.current === submitted) setNoteState('Notatka zapisana.');
+      } else lastSaved.current = previousSaved;
+      return result;
+    } finally {
+      statusSaving.current = false;
+      // Text typed while the status was saving is autosaved with the new row version.
+      setResync(count => count + 1);
+    }
+  }, {});
   return <form action={action}><Feedback state={state}/>
+    <input type="hidden" name="expectedUpdatedAt" value={updatedAt ?? ''}/>
     <label>Status etapu<select name="status" value={status} onChange={e => setStatus(e.target.value)}>{assessmentStatuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-    <label>Notatka rekrutera<textarea name="notes" value={notes} onChange={e => setNotes(e.target.value)} rows={6} maxLength={10000} required={status === 'completed' || status === 'skipped'}/></label>
-    <p>Zapisz wykonane zadanie, zaobserwowane zachowania i konkretne przykłady. Przy pominięciu podaj powód.</p>
-    <SubmitButton>Zapisz postęp etapu</SubmitButton>
+    <label>Notatka / obserwacje z rozmowy<textarea name="notes" value={notes} onChange={e => { setNotes(e.target.value); setNoteState('Niezapisane zmiany…'); }} rows={6} maxLength={10000} required={status === 'completed' || status === 'skipped'}/></label>
+    <p role="status">{noteState}</p>
+    <p>Notatki zapisują się automatycznie; autor, czas i każda edycja są rejestrowane. Przy zakończeniu lub pominięciu etapu wpisz uzasadnienie.</p>
+    {autosaving ? <button type="submit" disabled>Trwa zapis notatki…</button> : <SubmitButton>Zapisz status etapu</SubmitButton>}
   </form>;
 }

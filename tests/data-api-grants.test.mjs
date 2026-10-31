@@ -20,6 +20,7 @@ const rpcOnly = ['sales_leads', 'platform_operators'];
 const views = ['latest_behavior_assessments', 'latest_exercise_definitions', 'latest_exercise_observations'];
 const tables = [...crud, ...readOnly, ...rpcOnly, 'companies', 'candidate_documents'].sort();
 const relations = [...tables, ...views].sort();
+const step4Audit = ['application_stage_events','application_decision_events','candidate_assessment_note_revisions'];
 const updates = {
   companies: ['name'], company_members: ['role'],
   company_profiles: ['industry', 'description', 'website', 'size_band', 'work_environment', 'company_values'],
@@ -77,7 +78,9 @@ async function assertApiContract(db) {
   const catalog = (await db.query(`select c.relname,c.relkind,c.relrowsecurity,c.reloptions
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relkind in ('r','p','v') order by c.relname`)).rows;
-  assert.deepEqual(catalog.map(r => r.relname), relations, 'new tables require a reviewed API contract');
+  const step4Present = catalog.some(row => row.relname === 'application_stage_events');
+  const expectedRelations = step4Present ? [...relations, ...step4Audit].sort() : relations;
+  assert.deepEqual(catalog.map(r => r.relname), expectedRelations, 'new tables require a reviewed API contract');
   for (const row of catalog) {
     if (row.relkind === 'v') assert.ok(row.reloptions.includes('security_invoker=true'), row.relname);
     else assert.equal(row.relrowsecurity, true, row.relname);
