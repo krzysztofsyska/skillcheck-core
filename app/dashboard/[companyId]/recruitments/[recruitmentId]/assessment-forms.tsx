@@ -94,37 +94,56 @@ export function AssessmentForm({ companyId, recruitmentId, applicationId, stageI
   const [noteState, setNoteState] = useState('Zapis automatyczny po zakończeniu pisania.');
   latest.current = notes;
 
+  // One serial save loop, started by the typing pause, by leaving the page and by unmount.
+  const flush = useRef<() => void>(() => {});
+  flush.current = () => {
+    if (saving.current || statusSaving.current || latest.current === lastSaved.current) return;
+    saving.current = true;
+    setAutosaving(true);
+    void (async () => {
+      try {
+        // Serial writes: a newer keystroke cannot overwrite its own earlier version.
+        // Every accepted save returns the new DB CAS token before the next write.
+        while (latest.current !== lastSaved.current) {
+          const sent = latest.current;
+          setNoteState('Zapisywanie notatki…');
+          const result = await autosaveInterviewNote(companyId, recruitmentId, applicationId, stageId, sent, versionRef.current);
+          if (!result.saved || !result.updatedAt) {
+            setNoteState(result.error ?? 'Nie zapisano notatki.');
+            break;
+          }
+          lastSaved.current = sent;
+          versionRef.current = result.updatedAt;
+          setUpdatedAt(result.updatedAt);
+          if (latest.current === sent) setNoteState('Notatka zapisana.');
+        }
+      } finally {
+        saving.current = false;
+        setAutosaving(false);
+      }
+    })();
+  };
+
   useEffect(() => {
     if (notes === lastSaved.current) return;
-    const timer = setTimeout(() => {
-      if (saving.current || statusSaving.current) return;
-      saving.current = true;
-      setAutosaving(true);
-      void (async () => {
-        try {
-          // Serial writes: a newer keystroke cannot overwrite its own earlier version.
-          // Every accepted save returns the new DB CAS token before the next write.
-          while (latest.current !== lastSaved.current) {
-            const sent = latest.current;
-            setNoteState('Zapisywanie notatki…');
-            const result = await autosaveInterviewNote(companyId, recruitmentId, applicationId, stageId, sent, versionRef.current);
-            if (!result.saved || !result.updatedAt) {
-              setNoteState(result.error ?? 'Nie zapisano notatki.');
-              break;
-            }
-            lastSaved.current = sent;
-            versionRef.current = result.updatedAt;
-            setUpdatedAt(result.updatedAt);
-            if (latest.current === sent) setNoteState('Notatka zapisana.');
-          }
-        } finally {
-          saving.current = false;
-          setAutosaving(false);
-        }
-      })();
-    }, 900);
+    const timer = setTimeout(() => flush.current(), 900);
     return () => clearTimeout(timer);
-  }, [notes, resync, companyId, recruitmentId, applicationId, stageId]);
+  }, [notes, resync]);
+
+  // A link inside the app unmounts the form before the typing pause ends: save at once.
+  // Closing or reloading the tab cannot wait for a save, so the browser asks first.
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (latest.current === lastSaved.current && !saving.current) return;
+      flush.current();
+      event.preventDefault();
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => {
+      window.removeEventListener('beforeunload', warn);
+      flush.current();
+    };
+  }, []);
 
   const [state, action] = useActionState(async (previous: AssessmentProgressState, form: FormData) => {
     // The status save also stores the typed note, so a pending autosave timer must not
