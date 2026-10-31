@@ -34,20 +34,18 @@ export default async function PreselectionOfferPage() {
           <li><strong>Cena:</strong> {preselekcjaPrice} ({preselekcjaOffer.netPln} zł netto + 23% VAT), płatność jednorazowa.</li>
           <li><strong>Zakres:</strong> {scope ? `${scope} w ramach jednego pakietu.` : `${sc19PolicyPendingScope}.`}</li>
           <li><strong>Ważność:</strong> analizy są ważne przez {preselekcjaOffer.validityMonths} miesiące od dnia ich przyznania.</li>
-          <li><strong>Płatność:</strong> przelew na podstawie faktury proforma albo online przez Przelewy24 (szybki przelew, BLIK, karta), przyciskiem „Kup teraz”. Operatorem płatności online jest PayPro S.A., ul. Pastelowa 8, 60-198 Poznań.</li>
+          <li><strong>Płatność:</strong> przelew na podstawie faktury proforma albo online przez Przelewy24 (szybki przelew, BLIK, karta), gdy płatność online jest dostępna w panelu. Operatorem płatności online jest PayPro S.A., ul. Pastelowa 8, 60-198 Poznań.</li>
           <li><strong>Przyznanie analiz:</strong> po potwierdzeniu płatności — przy płatności online zwykle w ciągu kilku minut, przy przelewie najpóźniej w ciągu 2 dni roboczych od uznania naszego rachunku.</li>
           <li><strong>Faktura:</strong> po zaksięgowaniu płatności wystawiamy fakturę VAT i wysyłamy ją e-mailem.</li>
         </ul>
         <p>Zasady zamówienia, reklamacji i odstąpienia opisuje <Link href="/regulamin">Regulamin</Link>. Dane przetwarzamy zgodnie z <Link href="/polityka-prywatnosci">Polityką prywatności</Link>.</p>
         <div className={styles.actions}>
-          <Link className={styles.primary} href="/checkout?produkt=preselekcja">Kup teraz</Link>
-          <a className={styles.secondary} href={preselectionEmail(scope)}>Poproś o fakturę proforma</a>
+          <a className={styles.primary} href={preselectionEmail(scope)}>Poproś o fakturę proforma</a>
           <Link className={styles.secondary} href="/demo">Zobacz przykładowy raport</Link>
         </div>
       </section>
       <section aria-labelledby="pilot-process">
         <h2 id="pilot-process">Jak zamówić?</h2>
-        <p><strong>Online:</strong> kliknij „Kup teraz”, podaj dane kupującego i zapłać przez Przelewy24 (BLIK, szybki przelew, karta). <strong>Przelewem tradycyjnym:</strong></p>
         <ol>
           <li>Załóż konto firmowe w SkillCheck i zaakceptuj Regulamin.</li>
           <li>Napisz do nas z nazwą firmy, NIP i adresem e-mail konta — wystawimy fakturę proforma.</li>
@@ -63,7 +61,7 @@ export default async function PreselectionOfferPage() {
           <a className={styles.secondary} href={freeEmail}>Zgłoś firmę do FREE</a>
           <Link className={styles.secondary} href="/register">Utwórz konto firmowe</Link>
         </div>
-        <p className={styles.note}>Do wiadomości nie dołączaj danych osobowych — ani kandydatów, ani osób kontaktowych. Aby ustalić zasady dalszego kontaktu, korzystaj z zatwierdzonych kanałów SkillCheck. Na tej stronie nie pobieramy płatności — płatność online odbywa się wyłącznie w bramce Przelewy24.</p>
+        <p className={styles.note}>Do wiadomości nie dołączaj danych osobowych — ani kandydatów, ani osób kontaktowych. Aby ustalić zasady dalszego kontaktu, korzystaj z zatwierdzonych kanałów SkillCheck. Nie pobieramy płatności na tej stronie.</p>
       </section>
     </div>
     <SiteFooter />
