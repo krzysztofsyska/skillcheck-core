@@ -216,6 +216,41 @@ test("SC-011-B2/B3/B4 dispatch ledger, Retell webhooks, transcripts and settleme
     assert.deepEqual(await pool(dnc.s), { used: 1, reserved: 0 }, "the call took place before the request");
   });
 
+  await t.test("a late DNC on a finished attempt still blocks contact without resettling (#208)", async () => {
+    // An operator (SC-011-B6) may finish the attempt before Retell's call_ended.
+    for (const [n, status, outcome, pooled] of [["01", "completed", "completed", { used: 1, reserved: 0 }],
+      ["02", "failed", "no_answer", { used: 0, reserved: 0 }]]) {
+      const p = await prepared();
+      const callId = "call_latednc_" + n + "_000001";
+      await recordRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId, providerCallId: callId, agentId });
+      await db.query("update private.sc011b_voice_attempts set status=$2,outcome=$3 where provider_call_id=$1",
+        [callId, status, outcome]);
+      assert.deepEqual(await pool(p.s), pooled);
+      assert.ok(!(await preferences(p.s))?.blocked_channels.includes("voice"));
+      const late = await ingest("call_ended", callId, { disconnection_reason: "user_requested_dnc" });
+      assert.notEqual(late.outcome, "applied");
+      assert.deepEqual(await attemptRow(callId), { status, outcome: "dnc_requested", dnc_requested: true });
+      const blocked = await preferences(p.s);
+      assert.deepEqual([...blocked.blocked_channels].sort(), ["email", "sms", "voice"]);
+      assert.deepEqual(await pool(p.s), pooled, "the pool is not settled twice");
+      assert.deepEqual(await ingest("call_ended", callId, { disconnection_reason: "user_requested_dnc" }),
+        { outcome: "duplicate_delivery" });
+      assert.equal(Number((await preferences(p.s)).revision), Number(blocked.revision));
+    }
+  });
+
+  await t.test("a finished attempt still refuses every other change", async () => {
+    const p = await prepared();
+    const callId = "call_latednc_03_000001";
+    await recordRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId, providerCallId: callId, agentId });
+    await ingest("call_ended", callId);
+    for (const change of ["status='failed'", "outcome='voicemail'",
+      "status='failed',outcome='dnc_requested',dnc_requested=true"]) {
+      await assert.rejects(db.query("update private.sc011b_voice_attempts set " + change + " where provider_call_id=$1", [callId]),
+        /IMMUTABLE/);
+    }
+  });
+
   await t.test("a production webhook runs without a session actor and still settles DNC", async () => {
     const p = await prepared();
     await recordRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId,

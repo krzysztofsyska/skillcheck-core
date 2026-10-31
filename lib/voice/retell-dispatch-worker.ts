@@ -64,6 +64,59 @@ async function releaseLease(db: SqlClient, companyId: string, operationId: strin
       [companyId, operationId]));
   } catch { /* the lease expires on its own */ }
 }
+const claimRow = [
+  "select state,attempts,provider_key_digest,payload_sha256,",
+  "coalesce(lease_until>clock_timestamp(),false) as leased,",
+  "extract(epoch from (clock_timestamp()-started_at))*1000 as age_ms",
+  "from private.sc011b_voice_dispatches where company_id=$1 and preparation_id=$2 for update",
+].join(" ");
+/**
+ * Settles a claim (locked by `claimRow`) without any draft: a
+ * recorded call id accepts it; a `sending` claim past Retell's window (or out
+ * of attempts) becomes `unknown`. `resendable` means it may still be resent.
+ */
+async function reconcileClaim(db: SqlClient, companyId: string, operationId: string,
+  row: Record<string, unknown>, opened = false): Promise<string> {
+  if (row.state === "accepted" || row.state === "rejected") return String(row.state);
+  // A call id recorded before a crash (or after the claim went unknown)
+  // settles the claim: never resend it.
+  const recorded = (await db.query(
+    "select 1 from private.sc011b_voice_attempts where company_id=$1 and preparation_id=$2",
+    [companyId, operationId])).rows.length === 1;
+  if (recorded) {
+    await db.query(
+      "update private.sc011b_voice_dispatches set state='accepted' where company_id=$1 and preparation_id=$2",
+      [companyId, operationId]);
+    return "accepted";
+  }
+  if (row.state !== "sending") return String(row.state);
+  // This worker just opened the claim (and holds its lease): it may send.
+  if (opened) return "resendable";
+  // Another worker's request is still in flight: it neither resends nor
+  // spends an attempt, so overlap cannot exhaust the budget.
+  if (row.leased === true) return "in_flight";
+  if (Number(row.age_ms) > RETELL_RESEND_WINDOW_MS || Number(row.attempts) >= maxAttempts) {
+    await db.query(
+      "update private.sc011b_voice_dispatches set state='unknown' where company_id=$1 and preparation_id=$2",
+      [companyId, operationId]);
+    return "unknown";
+  }
+  return "resendable";
+}
+async function claimResult(db: SqlClient, companyId: string, operationId: string,
+  state: string): Promise<RetellDispatchResult | null> {
+  if (state === "accepted") {
+    const attempt = (await db.query(
+      "select id from private.sc011b_voice_attempts where company_id=$1 and preparation_id=$2",
+      [companyId, operationId])).rows[0];
+    return attempt ? Object.freeze({ state: "accepted", attemptId: String(attempt.id) })
+      : fail("VOICE_DISPATCH_UNAVAILABLE");
+  }
+  if (state === "rejected" || state === "unknown") return Object.freeze({ state });
+  if (state === "in_flight") return Object.freeze({ state: "retry_later" });
+  return null;
+}
+
 async function readCallId(result: Pick<Response, "headers" | "body">): Promise<string | null> {
   const declared = result.headers.get("content-length");
   if (declared !== null && (!/^\d{1,9}$/.test(declared) || Number(declared) > maxResponseBytes)) return null;
@@ -112,50 +165,29 @@ export async function dispatchRetellCall(
   // The key digest must match the preparation (DB guard); the payload digest
   // pins every resend to the identical request.
   const keyDigest = digest(draft.payload.idempotency_key), payloadDigest = digest(body);
-  if (!Number.isFinite(nowMs) || nowMs > draft.expiresAtMs || nowMs < draft.verifiedAtMs)
-    return fail("VOICE_DISPATCH_STALE_DRAFT");
+  // Freshness gates only a POST: an existing claim is still reconciled with a
+  // stale draft, so an ambiguous send cannot stay `sending` past the window.
+  const stale = !Number.isFinite(nowMs) || nowMs > draft.expiresAtMs || nowMs < draft.verifiedAtMs;
 
   // COMMIT runs the SC-010-C currentness check queued by the claim guard; a
   // revoked permission, expired contact or changed plan aborts before any POST.
   let claim: { state: string };
   try { claim = await tx(db, async () => {
-    const fresh = (await db.query([
+    // A stale draft never opens a claim.
+    const fresh = !stale && (await db.query([
       "insert into private.sc011b_voice_dispatches(company_id,preparation_id,provider_key_digest,payload_sha256)",
       "values($1,$2,$3,$4) on conflict (company_id,preparation_id) do nothing returning 1",
     ].join(" "), [companyId, operationId, keyDigest, payloadDigest])).rows.length === 1;
-    const rows = (await db.query([
-      "select state,attempts,provider_key_digest,payload_sha256,",
-      "coalesce(lease_until>clock_timestamp(),false) as leased,",
-      "extract(epoch from (clock_timestamp()-started_at))*1000 as age_ms",
-      "from private.sc011b_voice_dispatches where company_id=$1 and preparation_id=$2 for update",
-    ].join(" "), [companyId, operationId])).rows;
-    if (rows.length !== 1) return fail("VOICE_DISPATCH_UNAVAILABLE");
+    const rows = (await db.query(claimRow, [companyId, operationId])).rows;
+    if (rows.length !== 1) return fail(stale ? "VOICE_DISPATCH_STALE_DRAFT" : "VOICE_DISPATCH_UNAVAILABLE");
     const row = rows[0];
     if (row.provider_key_digest !== keyDigest || row.payload_sha256 !== payloadDigest)
       return fail("VOICE_DISPATCH_REJECTED");
-    if (row.state === "accepted" || row.state === "rejected") return { state: String(row.state) };
-    // A call id recorded before a crash (or after the claim went unknown)
-    // settles the claim: never resend it.
-    const recorded = (await db.query(
-      "select 1 from private.sc011b_voice_attempts where company_id=$1 and preparation_id=$2",
-      [companyId, operationId])).rows.length === 1;
-    if (recorded) {
-      await db.query(
-        "update private.sc011b_voice_dispatches set state='accepted' where company_id=$1 and preparation_id=$2",
-        [companyId, operationId]);
-      return { state: "accepted" };
-    }
-    if (row.state !== "sending") return { state: String(row.state) };
-    // Another worker's request is still in flight: it neither resends nor
-    // spends an attempt, so overlap cannot exhaust the budget.
-    if (!fresh && row.leased === true) return { state: "in_flight" };
+    const settled = await reconcileClaim(db, companyId, operationId, row, fresh);
+    if (settled !== "resendable") return { state: settled };
     if (!fresh) {
-      if (Number(row.age_ms) > RETELL_RESEND_WINDOW_MS || Number(row.attempts) >= maxAttempts) {
-        await db.query(
-          "update private.sc011b_voice_dispatches set state='unknown' where company_id=$1 and preparation_id=$2",
-          [companyId, operationId]);
-        return { state: "unknown" };
-      }
+      // Inside the window a resend needs the fresh draft; nothing changed yet.
+      if (stale) return { state: "stale" };
       await db.query(
         "update private.sc011b_voice_dispatches set attempts=attempts+1 where company_id=$1 and preparation_id=$2",
         [companyId, operationId]);
@@ -167,16 +199,9 @@ export async function dispatchRetellCall(
     const code = e && typeof e === "object" && "code" in e ? String(e.code) : "";
     return fail(code === "42501" ? "VOICE_DISPATCH_REJECTED" : "VOICE_DISPATCH_UNAVAILABLE");
   }
-  if (claim.state === "accepted") {
-    const attempt = (await db.query(
-      "select id from private.sc011b_voice_attempts where company_id=$1 and preparation_id=$2",
-      [companyId, operationId])).rows[0];
-    return attempt ? Object.freeze({ state: "accepted", attemptId: String(attempt.id) })
-      : fail("VOICE_DISPATCH_UNAVAILABLE");
-  }
-  if (claim.state === "rejected" || claim.state === "unknown")
-    return Object.freeze({ state: claim.state });
-  if (claim.state === "in_flight") return Object.freeze({ state: "retry_later" });
+  const settled = await claimResult(db, companyId, operationId, claim.state);
+  if (settled) return settled;
+  if (claim.state === "stale") return fail("VOICE_DISPATCH_STALE_DRAFT");
   // Fail closed: any other terminal state (e.g. an operator's `abandoned`) never sends.
   if (claim.state !== "send") return Object.freeze({ state: "rejected" });
 
@@ -214,4 +239,32 @@ export async function dispatchRetellCall(
   // 401/402 (configuration or billing), 429 and 5xx keep the reservation.
   await releaseLease(db, companyId, operationId);
   return Object.freeze({ state: "retry_later" });
+}
+
+/**
+ * Reconciles an existing claim without a draft, so a sweeper can move an
+ * ambiguous send to `unknown` (the operator's list) after Retell's window even
+ * when no fresh draft can be compiled any more. Never sends anything.
+ */
+export async function reconcileRetellDispatch(
+  db: SqlClient, input: Readonly<{ companyId: string; operationId: string }>,
+): Promise<RetellDispatchResult> {
+  const { companyId, operationId } = input ?? ({} as typeof input);
+  if (typeof companyId !== "string" || !uuid.test(companyId) ||
+      typeof operationId !== "string" || !uuid.test(operationId)) return fail("VOICE_DISPATCH_REJECTED");
+  let state: string;
+  try { state = await tx(db, async () => {
+    const rows = (await db.query(claimRow, [companyId, operationId])).rows;
+    if (rows.length !== 1) return fail("VOICE_DISPATCH_UNAVAILABLE");
+    return reconcileClaim(db, companyId, operationId, rows[0]);
+  }); } catch (e) {
+    if (e instanceof RetellDispatchError) throw e;
+    return fail("VOICE_DISPATCH_UNAVAILABLE");
+  }
+  const settled = await claimResult(db, companyId, operationId, state);
+  if (settled) return settled;
+  // Still inside the window: the next fresh draft may resend it.
+  if (state === "resendable") return Object.freeze({ state: "retry_later" });
+  // Fail closed: any other terminal state (e.g. an operator's `abandoned`).
+  return Object.freeze({ state: "rejected" });
 }
