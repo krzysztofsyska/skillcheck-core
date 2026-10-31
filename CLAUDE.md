@@ -26,12 +26,12 @@ Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as b
 Feature freeze: no new product areas (voice, competency tests, talent pool, white-label, new agent tooling) until this path works end to end: visit the site → contact or sign-up → free preselection → payment 300 zł → invoice.
 
 Order of work:
-1. Security hardening: Next.js to 16.4.3, pinned Supabase packages, security headers, request size limit in `screening-worker`. Check the existing branch `fix/security-hardening-20261030` and its PR before starting anything new.
+1. Security hardening — DONE in PR #196 (Next.js 16.4.3, pinned Supabase packages). Verify the headers and the `screening-worker` size limit are present before closing the topic.
 2. Migration drift: document the differences between production `schema_migrations` (read-only) and `supabase/migrations`, and why "DB migrate production" failed on 2026-10-29.
 3. Finish and apply the SC-019 migrations (through the approved production workflow only).
 4. AI cost limit per company.
 5. Turn on the contact form.
-6. Connect Przelewy24 and Fakturownia.
+6. Connect Przelewy24 and Fakturownia (Przelewy24 in progress: PR #223).
 7. CV retention period and automatic deletion (owner decision first).
 
 ## Keep the process light
