@@ -19,5 +19,4 @@ export const legalLinks = [
   { href: "/regulamin", label: "Regulamin" },
   { href: "/polityka-prywatnosci", label: "Polityka prywatności" },
   { href: "/ai", label: "AI i nadzór człowieka" },
-  { href: "/kontakt", label: "Kontakt" },
 ] as const;
