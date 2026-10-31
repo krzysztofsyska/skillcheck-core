@@ -135,11 +135,33 @@ test('public offer and demo pages respond without an account', async (t) => {
     assert.doesNotMatch(body, /osoba kontaktowa|numer telefonu|służbowy e-mail|imię i nazwisko/i);
     assert.doesNotMatch(body, /PESEL|@example/i);
   }
+  // SC-CHECKOUT-P24-001: online purchase next to the proforma request, legal links and contact data.
+  assert.ok(hrefs(order).includes('/checkout?produkt=preselekcja'), '"Kup teraz" leads to checkout');
+  assert.match(order, />Kup teraz</);
+  assert.match(order, />Poproś o fakturę proforma</, 'proforma option kept');
+  const checkoutResponse = await fetch(`${base}/checkout?produkt=preselekcja`, { redirect: 'manual' });
+  assert.equal(checkoutResponse.status, 200);
+  const checkout = (await checkoutResponse.text()).replaceAll('<!-- -->', '');
+  for (const fact of [/Podsumowanie zamówienia/, /Pakiet PRESELEKCJA/, /300,00\s*zł/, /Imię i nazwisko/, /E-mail/, /Telefon/, /NIP/,
+    /Akceptuję/, /BLIK/, /Szybki przelew/, /Karta płatnicza/, /Bez dodatkowych opłat/, /PayPro S\.A\./]) assert.match(checkout, fact);
+  assert.ok(hrefs(checkout).includes('/regulamin') && hrefs(checkout).includes('/polityka-prywatnosci'));
+  assert.match(checkout, /src="\/payments\/przelewy24\.svg"/);
+  const terms = checkout.match(/<input[^>]*name="terms"[^>]*>/)?.[0] ?? '';
+  assert.match(terms, /type="checkbox"/); assert.match(terms, /required/);
+  const contactResponse = await fetch(`${base}/kontakt`, { redirect: 'manual' });
+  assert.equal(contactResponse.status, 200);
+  const contact = (await contactResponse.text()).replaceAll('<!-- -->', '');
+  for (const fact of [/KTIG CONSULTING/, /7394002294/, /Michała Kajki 10–12/, /pomoc@skillcheck\.pl/, /\+48 730 266 909/]) assert.match(contact, fact);
+  for (const page of [order, checkout, contact]) for (const href of ['/regulamin', '/polityka-prywatnosci', '/kontakt']) assert.ok(hrefs(page).includes(href), href);
+  // Without P24 keys the endpoint fails closed.
+  const register = await fetch(`${base}/api/p24/register`, { method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(register.status, 503);
   assert.ok(homeHrefs.includes('/preselekcja#free'), 'FREE CTA anchors to the FREE section');
   assert.match(order, /id="free"/, 'FREE anchor is on section, below sticky header');
   assert.ok(hrefs(order).includes('/register'));
   assert.doesNotMatch(order, /<form[ >]/);
-  assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
+  // The offer page links to /checkout; payment itself never happens on this page.
+  assert.doesNotMatch(order, /Zapłać|Aktywuj pakiet/);
   assert.match(home, /PRESELEKCJA: 60 CV za 300 zł/);
   assert.match(home, /Według oferty/);
   assert.match(order, /zawsze weryfikuje osoba prowadząca rekrutację/);
