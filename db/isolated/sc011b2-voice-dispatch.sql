@@ -70,9 +70,12 @@ begin
  end if;
  perform private.erasure_lock_candidate(old.candidate_id);
  -- Only provider progress may change, and a terminal status never moves again.
+ -- The one exception: a candidate's late request not to be called again is
+ -- still recorded on a finished attempt (status kept, so nothing resettles).
  if (to_jsonb(new)-array['status','outcome','dnc_requested','updated_at']) is distinct from
     (to_jsonb(old)-array['status','outcome','dnc_requested','updated_at'])
-  or (old.status in ('completed','failed','cancelled') and new is distinct from old) then
+  or (old.status in ('completed','failed','cancelled') and new is distinct from old
+      and not (new.status=old.status and not old.dnc_requested and new.dnc_requested)) then
   raise exception using errcode='42501',message='VOICE_ATTEMPT_IMMUTABLE';
  end if;
  new.updated_at:=clock_timestamp();

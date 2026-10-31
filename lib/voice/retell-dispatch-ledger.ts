@@ -135,6 +135,15 @@ export async function ingestRetellWebhook(
           "on p.company_id=a.company_id and p.id=a.preparation_id where a.company_id=$1 and a.id=$2",
         ].join(" "), [attempt.company_id, attempt.id, JSON.stringify(result.transcript)]);
       }
+    } else if (result.outcome === "dnc_requested" && row.dnc_requested !== true &&
+        ["completed", "failed", "cancelled"].includes(String(row.status))) {
+      // The attempt was already finished (e.g. by an operator before this
+      // call_ended), but a request not to be called again is never dropped. The
+      // status is kept, so the pool is not settled twice; SC-011-B4 blocks contact.
+      await db.query([
+        "update private.sc011b_voice_attempts set outcome='dnc_requested',dnc_requested=true",
+        "where company_id=$1 and id=$2",
+      ].join(" "), [attempt.company_id, attempt.id]);
     }
     return receipt(result.event, transition.outcome, attempt);
   });
