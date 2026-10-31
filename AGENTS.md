@@ -29,6 +29,17 @@ Do not require the owner to copy handoffs between agents.
 
 Do not merge task branches directly to `main` or use this exception before its production safeguards are verified.
 
+## Owner communication
+
+The owner is not technical and has limited time at the computer. Agents do all technical work themselves.
+
+- Write to the owner in Polish, in plain language, without jargon.
+- Ask the owner only YES/NO decisions, each with a recommendation and one sentence of reasoning. Collect open decisions into one message instead of asking one at a time.
+- Never ask the owner to click through GitHub, Vercel or Supabase, run tests, check a browser console, copy handoffs or look up settings. Agents read these themselves through their tools.
+- If a check needs something the agent does not have (an account, a credential, a test database), report it as a blocker together with a proposal that removes the need for the owner next time.
+- Prefer automated checks (CI, browser tests) over manual verification by the owner.
+- The owner's own actions are limited to: production approval, merging the promotion PR into `main`, new costs, and external or irreversible actions. For each, give the owner a direct link and say exactly what to click.
+
 ## Required task metadata
 
 Every task must define:
@@ -133,6 +144,7 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 
 1. Production migrations run only through the `db-migrate-production` workflow in the `production-approval` environment, after an owner approval bound to the exact release SHA and the exact list of migrations. Migrations are applied one by one in manifest order, never with `supabase db push`. The ledger records `statements` and the file hash for every migration (`statements = NULL` is not allowed). Production database credentials exist only as secrets of that environment. That workflow does not exist yet; until it does, production migrations are not run from agent sessions.
 2. The production Supabase project (`wsvjawuikxfzjyivxgsu`) is reachable from agent sessions only through Supabase MCP with `read_only=true` and `project_ref=wsvjawuikxfzjyivxgsu`. Write-capable Supabase MCP is allowed only for development projects or branches.
+   The test project for Preview is `skillcheck-preview` (`orbyscrupgnupifzlqxp`): Vercel Preview builds of `integration` use it through branch-scoped `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. It holds no real data; agents test logins, uploads and reports there instead of asking the owner.
 3. Agents do not change Vercel Production environment variables, secrets, aliases, domains, deployment protection or shareable/bypass links. Only the owner does, or a pipeline after an approval. Tools that create share links as a side effect (for example fetching a protected deployment URL through Vercel MCP) are not used against production.
 4. Any production change made outside the pipeline is an incident, not a missing record. It is reported in an issue with SHA, time, actor and scope.
 5. GitHub identity of agent sessions (owner decision 2026-10-29, variant B). The target is the `skillcheck-agent-ks[bot]` GitHub App token for every agent write. Until a session can use it, an agent session may act through the owner's GitHub identity **only** for:
