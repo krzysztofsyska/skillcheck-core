@@ -197,6 +197,27 @@ test('R8: a frozen candidate\'s Step 4 history is hidden from the Data API, othe
   assert.deepEqual(await visible(survivor), survivorBefore);
 });
 
+test('R8: an unused stage can be deleted in a recruitment with candidates; a used stage and a frozen candidate still block', async t => {
+  const env = await install(t), { db, h } = env;
+  const { x, subject } = await ready(env);
+  const stage = async name => {
+    await h.asUser(subject.owner);
+    const next = (await db.query('select coalesce(max(sequence),0)+1 n from public.assessment_stages where recruitment_id=$1', [subject.recruitment.id])).rows[0].n;
+    return h.insert('assessment_stages', { company_id: subject.companyId, recruitment_id: subject.recruitment.id, name, sequence: next });
+  };
+  const remove = async id => { await h.asUser(subject.owner); return db.query('delete from public.assessment_stages where id=$1 returning id', [id]); };
+  const unused = await stage('Synthetic unused stage');
+  assert.equal((await remove(unused.id)).rows.length, 1, 'unused stage is deleted');
+  const used = (await db.query('select stage_id id from public.candidate_assessments where application_id=$1 limit 1', [subject.application.id])).rows[0];
+  assert.ok(used, 'rich fixture has a stage used by a candidate assessment');
+  await assert.rejects(remove(used.id), error => /Controlled erasure required/.test(error.message));
+  const another = await stage('Synthetic stage before freeze');
+  await x.freeze(subject);
+  await assert.rejects(remove(another.id), error => /Candidate workflow frozen|Controlled erasure required/.test(error.message));
+  await db.query('reset role');
+  assert.equal((await db.query('select count(*)::int n from public.assessment_stages where id=$1', [another.id])).rows[0].n, 1);
+});
+
 test('Step 4 without R8 fails closed: preview and schedule blocked, erasure freeze refused', async t => {
   const env = await install(t, 'legacy', { withR8: false }), { db, h } = env;
   const { x, subject } = await ready(env);
@@ -232,6 +253,8 @@ for (const variant of ['legacy', 'voice']) test(`R8 ${variant} rollback restores
   assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, sourceSignature[variant]);
   assert.equal((await db.query("select to_regprocedure('private.erasure_inventory_rows_r7(uuid,uuid[])') v")).rows[0].v, null);
   assert.equal((await db.query("select count(*)::int n from pg_proc where prosrc like '%erasure_inventory_baseline_r7%'")).rows[0].n, 4);
+  assert.equal((await db.query(`select encode(sha256(convert_to(prosrc,'UTF8')),'hex') h from pg_proc
+    where oid='private.erasure_guard_parent_row()'::regprocedure`)).rows[0].h, '9a3868ef8d58ed6942be1d34973c2d3cb9b131d9d0a803cca7900b802e7a5ac6');
   // R8 can be reinstalled on the restored source state.
   await run(db, await migration(r8));
   await assertR8(db, variant);

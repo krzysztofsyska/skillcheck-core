@@ -34,6 +34,11 @@
 -- note revisions). Manifest rows are always deleted: they reference the erased
 -- applications. Receipt counts keep listing the engine's adapters only.
 --
+-- Stages: private.erasure_guard_parent_row refused deleting any stage of a
+-- recruitment with candidates. A stage only cascades into candidate_assessments,
+-- so R8 lets an unused stage be deleted (after an exact source-hash check) and
+-- keeps refusing a stage that candidate assessments use.
+--
 -- Reads: like every other candidate-linked table, each Step 4 table gets the
 -- restrictive erasure_read_guard policy, so a frozen candidate's history is
 -- hidden from the Data API.
@@ -86,6 +91,10 @@ begin
   if (select encode(sha256(convert_to(prosrc,'UTF8')),'hex') from pg_proc where oid='private.erasure_inventory_rows(uuid,uuid[])'::regprocedure) is distinct from inventory_source
     or (select encode(sha256(convert_to(prosrc,'UTF8')),'hex') from pg_proc where oid='private.erasure_row_candidates(text,jsonb)'::regprocedure) is distinct from candidates_source then
     raise exception 'sc_r8_adapter_source_unreviewed' using errcode='55000';
+  end if;
+  if (select encode(sha256(convert_to(prosrc,'UTF8')),'hex') from pg_proc where oid='private.erasure_guard_parent_row()'::regprocedure)
+    is distinct from '9a3868ef8d58ed6942be1d34973c2d3cb9b131d9d0a803cca7900b802e7a5ac6' then
+    raise exception 'sc_r8_parent_guard_source_unreviewed' using errcode='55000';
   end if;
   if to_regprocedure('private.erasure_inventory_rows_r7(uuid,uuid[])') is not null
     or to_regprocedure('private.erasure_row_candidates_r7(text,jsonb)') is not null then
@@ -169,6 +178,36 @@ create policy erasure_read_guard on public.application_decision_events as restri
  using (private.erasure_row_visible('public.application_decision_events',to_jsonb(application_decision_events)));
 create policy erasure_read_guard on public.candidate_assessment_note_revisions as restrictive for select to authenticated
  using (private.erasure_row_visible('public.candidate_assessment_note_revisions',to_jsonb(candidate_assessment_note_revisions)));
+
+create or replace function private.erasure_guard_parent_row() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare subjects uuid[];subject uuid;data jsonb;
+begin
+ data:=case when tg_op='INSERT' then to_jsonb(new) else to_jsonb(old) end;
+ if tg_op='UPDATE' and (to_jsonb(new)->'id' is distinct from data->'id' or to_jsonb(new)->'company_id' is distinct from data->'company_id') then
+  raise exception using errcode='PT409',message='Parent identity is immutable';
+ end if;
+ if tg_table_name='companies' then select array_agg(id order by id) into subjects from public.candidates where company_id=old.id;
+ elsif tg_table_name='positions' then
+  select array_agg(distinct a.candidate_id order by a.candidate_id) into subjects from public.applications a join public.recruitments r on r.id=a.recruitment_id where r.position_id=old.id;
+ elsif tg_table_name='recruitments' then
+  select array_agg(distinct candidate_id order by candidate_id) into subjects from public.applications where recruitment_id=old.id;
+ elsif tg_table_name in ('assessment_stages','exercise_definition_entries') then
+  if tg_op='UPDATE' and (to_jsonb(new)->'recruitment_id' is distinct from data->'recruitment_id' or to_jsonb(new)->'position_id' is distinct from data->'position_id') then
+   raise exception using errcode='PT409',message='Parent identity is immutable';
+  end if;
+  perform private.erasure_assert_row_tenant(data);
+  select array_agg(distinct candidate_id order by candidate_id) into subjects from public.applications where recruitment_id=(data->>'recruitment_id')::uuid and company_id=(data->>'company_id')::uuid;
+ end if;
+ -- SC Step 4 / R8: an assessment stage only cascades into candidate_assessments,
+ -- so a stage no candidate assessment uses may be deleted; candidates still lock.
+ if tg_op='DELETE' and cardinality(subjects)>0 and (tg_table_name<>'assessment_stages' or exists(
+  select 1 from public.candidate_assessments a where a.company_id=(data->>'company_id')::uuid
+   and a.recruitment_id=(data->>'recruitment_id')::uuid and a.stage_id=(data->>'id')::uuid))
+ then raise exception using errcode='PT409',message='Controlled erasure required';end if;
+ foreach subject in array coalesce(subjects,'{}'::uuid[]) loop perform private.erasure_lock_candidate(subject);end loop;
+ if tg_op='DELETE' then return old;end if;return new;
+end;$$;
 
 comment on table public.application_stage_events is
   'SC-010 R8: candidate-linked audit; erased by FK cascade from the public.applications adapter, listed by the public.application_stage_events adapter.';

@@ -150,6 +150,32 @@ declare d private.retention_delegations;t private.retention_ticks;c private.eras
 end;$$;
 
 
+-- Exact reviewed SC-010 R2 parent guard (20261010194230_candidate_erasure_guards.sql).
+create or replace function private.erasure_guard_parent_row() returns trigger
+language plpgsql security definer set search_path='' as $$
+declare subjects uuid[];subject uuid;data jsonb;
+begin
+ data:=case when tg_op='INSERT' then to_jsonb(new) else to_jsonb(old) end;
+ if tg_op='UPDATE' and (to_jsonb(new)->'id' is distinct from data->'id' or to_jsonb(new)->'company_id' is distinct from data->'company_id') then
+  raise exception using errcode='PT409',message='Parent identity is immutable';
+ end if;
+ if tg_table_name='companies' then select array_agg(id order by id) into subjects from public.candidates where company_id=old.id;
+ elsif tg_table_name='positions' then
+  select array_agg(distinct a.candidate_id order by a.candidate_id) into subjects from public.applications a join public.recruitments r on r.id=a.recruitment_id where r.position_id=old.id;
+ elsif tg_table_name='recruitments' then
+  select array_agg(distinct candidate_id order by candidate_id) into subjects from public.applications where recruitment_id=old.id;
+ elsif tg_table_name in ('assessment_stages','exercise_definition_entries') then
+  if tg_op='UPDATE' and (to_jsonb(new)->'recruitment_id' is distinct from data->'recruitment_id' or to_jsonb(new)->'position_id' is distinct from data->'position_id') then
+   raise exception using errcode='PT409',message='Parent identity is immutable';
+  end if;
+  perform private.erasure_assert_row_tenant(data);
+  select array_agg(distinct candidate_id order by candidate_id) into subjects from public.applications where recruitment_id=(data->>'recruitment_id')::uuid and company_id=(data->>'company_id')::uuid;
+ end if;
+ if tg_op='DELETE' and cardinality(subjects)>0 then raise exception using errcode='PT409',message='Controlled erasure required';end if;
+ foreach subject in array coalesce(subjects,'{}'::uuid[]) loop perform private.erasure_lock_candidate(subject);end loop;
+ if tg_op='DELETE' then return old;end if;return new;
+end;$$;
+
 drop policy erasure_read_guard on public.application_stage_events;
 drop policy erasure_read_guard on public.application_decision_events;
 drop policy erasure_read_guard on public.candidate_assessment_note_revisions;
