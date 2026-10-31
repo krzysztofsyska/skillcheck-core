@@ -13,7 +13,7 @@ Status: preparation only. Production requires a separate PRODUCTION APPROVAL bou
 
 Between steps 1 and 2, candidate erasure is blocked fail-closed (`schema_dependency_unknown`). Run step 2 right after step 1.
 
-After step 2, the signature equals R8 (legacy `1928c7ec…` / voice `8d4ca57a…`), and the erasure preview has no `schema_dependency_unknown` blocker.
+After step 2, the signature equals R8 (legacy `d87bccd9…` / voice `f057e8bc…`), and the erasure preview has no `schema_dependency_unknown` blocker.
 
 ## What R8 changes
 - New baseline `private.erasure_inventory_baseline_r8`: R7 tables plus `public.application_stage_events`, `public.application_decision_events`, `public.candidate_assessment_note_revisions`.
@@ -23,7 +23,7 @@ After step 2, the signature equals R8 (legacy `1928c7ec…` / voice `8d4ca57a…
 - Receipt counts keep listing the engine's adapters only; the Step 4 counts are in the preview and the manifest.
 
 ## Rollback (manual, files in `supabase/rollbacks/`, in this order)
-1. `20261030160100_sc_step4_erasure_inventory_r8_down.sql`: restores the R7 bodies of the four inventory functions, unwraps the two adapters, drops the guard triggers and `erasure_inventory_baseline_r8`. The schema returns to the Step 4 source state (legacy `7f3c56e1…` / voice `189997bc…`); erasure stays fail-closed.
+1. `20261030160100_sc_step4_erasure_inventory_r8_down.sql`: restores the R7 bodies of the four inventory functions, unwraps the two adapters, drops the guard triggers and `erasure_inventory_baseline_r8`. The schema returns to the Step 4 source state (legacy `81388d40…` / voice `641650ae…`); erasure stays fail-closed.
 2. `20261030160000_sc_step4_interview_decision_down.sql`: **deletes the Step 4 audit logs and decision fields**. It refuses to run while R8 is installed.
 
 `tests/sc-step4-erasure-r8.test.mjs` verifies step 1 and that step 2 refuses while R8 is installed. As with R7, the rollback is one-way for erasure: re-applying Step 4 after its rollback gives the new columns different `attnum` positions, the source schema no longer matches the reviewed R8 literal, and R8 refuses to install (`sc_r8_source_schema_unreviewed`). That needs a new, separately reviewed inventory revision; until then, candidate erasure stays blocked fail-closed.

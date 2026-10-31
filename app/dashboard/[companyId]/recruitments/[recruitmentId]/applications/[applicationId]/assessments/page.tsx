@@ -37,7 +37,7 @@ export default async function Assessments({ params }: { params: Promise<{ compan
     <h1>Etapy oceny — {candidate.data.first_name} {candidate.data.last_name}</h1>
     <p>{recruitment.data.name} · <Link href={`/dashboard/${companyId}/positions/${recruitment.data.position_id}`}>Stanowisko</Link></p>
     <p className="notice">Postęp, notatki i decyzję zapisuje wyłącznie człowiek. Status etapu nie jest decyzją o zatrudnieniu. Nie uruchamia wiadomości do kandydata.</p>
-    <p><Link href={`${base}/applications/${applicationId}/screening`}>Przygotowanie preselekcji</Link> · <Link href={`${base}/interview-guide`}>Przewodnik rozmowy</Link> · <Link href={`${base}/applications/${applicationId}/behaviors`}>Oceny z dowodami i historią</Link> · <Link href={`${base}/applications/${applicationId}/exercises`}>Wykonanie zadań i historia</Link></p>
+    <p><Link href={`${base}/applications/${applicationId}/screening`}>Przygotowanie preselekcji</Link> · <Link href={`${base}/applications/${applicationId}/interview`}>Pytania na rozmowę z analizy CV</Link> · <Link href={`${base}/interview-guide`}>Przewodnik rozmowy</Link> · <Link href={`${base}/applications/${applicationId}/behaviors`}>Oceny z dowodami i historią</Link> · <Link href={`${base}/applications/${applicationId}/exercises`}>Wykonanie zadań i historia</Link></p>
 
     <h2>Aktualny etap</h2>
     <p><strong>{stageName(application.data.current_stage_id)}</strong></p>
@@ -50,6 +50,7 @@ export default async function Assessments({ params }: { params: Promise<{ compan
     </details>
 
     <h2>Notatki i obserwacje z rozmowy</h2>
+    <p>Tematy do wyjaśnienia z kandydatem: <Link href={`${base}/applications/${applicationId}/interview`}>pytania na rozmowę z analizy CV</Link>.</p>
     {!stages.data.length && <p>Najpierw dodaj etapy na stronie rekrutacji.</p>}
     {stages.data.map(stage => {
       const assessment = assessments.data.find(row => row.stage_id === stage.id);
@@ -61,7 +62,6 @@ export default async function Assessments({ params }: { params: Promise<{ compan
         {canEdit ? <AssessmentForm key={stage.id} companyId={companyId} recruitmentId={recruitmentId}
           applicationId={applicationId} stageId={stage.id} assessment={assessment ?? undefined}/>
           : <p className="cv-text">{assessment?.notes ?? 'Brak notatki.'}</p>}
-        <p>Przypisane pytanie przewodnika: {assessment?.guide_question_id ?? 'Brak (pole opcjonalne; integracja po PR #171)'}</p>
         <details><summary>Historia edycji notatki ({revisions.length})</summary>
           {revisions.length ? <ol>{revisions.map(revision => <li key={revision.id}>
             <strong>{displayTime(revision.created_at)}</strong> · autor: {revision.author_id}

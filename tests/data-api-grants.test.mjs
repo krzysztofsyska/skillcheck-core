@@ -96,8 +96,7 @@ async function assertApiContract(db) {
       (row.privilege === 'SELECT' && !rpcOnly.includes(row.relname)) ||
       (row.privilege === 'INSERT' && (crud.includes(row.relname) ||
         (row.relname === 'candidate_documents' && documentInsert.includes(row.attname)))) ||
-      (row.privilege === 'UPDATE' && ((updates[row.relname] ?? []).includes(row.attname) ||
-        (step4Present && row.relname === 'candidate_assessments' && row.attname === 'guide_question_id'))));
+      (row.privilege === 'UPDATE' && (updates[row.relname] ?? []).includes(row.attname)));
     assert.equal(row.allowed, expected, JSON.stringify(row));
   }
 }

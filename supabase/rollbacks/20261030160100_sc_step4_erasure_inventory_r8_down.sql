@@ -170,8 +170,8 @@ drop table private.erasure_inventory_baseline_r8;
 do $r8_down_postflight$
 begin
   if private.erasure_schema_signature() not in (
-      '7f3c56e1e98d426ad4afef464fa29ba91bcf5971aeff068e9ef0d78b96584ef9',
-      '189997bc094b2d10490a28f95f5e76e261aef23f7d2539264cbf63eb0e8e2ac5') then
+      '81388d40db8145b5638749b2652e229b55b73901e9905c9de16ddf495825d074',
+      '641650aea54f6e013326c76c883766fc303645e6f5f4c19b51676da9ed2e12a6') then
     raise exception 'sc_r8_down_signature_mismatch:%',private.erasure_schema_signature() using errcode='55000';
   end if;
   if exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace

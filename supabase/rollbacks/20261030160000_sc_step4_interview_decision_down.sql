@@ -16,8 +16,6 @@ drop function if exists private.track_candidate_assessment_notes();
 drop table if exists public.candidate_assessment_note_revisions;
 drop table if exists public.application_decision_events;
 drop table if exists public.application_stage_events;
-revoke update (guide_question_id) on public.candidate_assessments from authenticated;
-alter table public.candidate_assessments drop column if exists guide_question_id;
 alter table public.applications drop constraint if exists application_current_stage_fk;
 alter table public.applications drop constraint if exists application_decision_reason_pair;
 alter table public.applications

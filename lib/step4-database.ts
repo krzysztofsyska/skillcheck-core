@@ -1,19 +1,18 @@
-// Isolated Step 4 type overlay. Deliberately does not modify the shared
-// database.types.ts owned by the parallel Step 3 PR #171.
+// Isolated Step 4 type overlay over the shared database.types.ts.
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 
 type Core = Database['public'];
 type CoreTables = Core['Tables'];
 type CoreApplication = CoreTables['applications'];
-type CoreAssessment = CoreTables['candidate_assessments'];
+
+export type Step4CandidateAssessment = CoreTables['candidate_assessments']['Row'];
 
 export type Step4ApplicationFields = {
   current_stage_id: string | null;
   human_decision: 'next_stage' | 'on_hold' | 'closed' | null;
   human_decision_reason: string | null;
 };
-export type Step4CandidateAssessment = CoreAssessment['Row'] & { guide_question_id: string | null };
 
 type StageEvent = {
   id: string; company_id: string; recruitment_id: string; application_id: string;
@@ -28,24 +27,18 @@ type DecisionEvent = {
 };
 type NoteRevision = {
   id: string; company_id: string; recruitment_id: string; application_id: string;
-  assessment_id: string; body: string | null; guide_question_id: string | null;
+  assessment_id: string; body: string | null;
   author_id: string; created_at: string;
 };
 type ReadonlyAuditTable<Row> = { Row: Row; Insert: never; Update: never; Relationships: [] };
 
 export type Step4Database = Omit<Database, 'public'> & {
   public: Omit<Core, 'Tables' | 'Functions'> & {
-    Tables: Omit<CoreTables, 'applications' | 'candidate_assessments'> & {
+    Tables: Omit<CoreTables, 'applications'> & {
       applications: Omit<CoreApplication, 'Row' | 'Insert' | 'Relationships'> & {
         Row: CoreApplication['Row'] & Step4ApplicationFields;
         Insert: CoreApplication['Insert'] & Partial<Step4ApplicationFields>;
         Relationships: CoreApplication['Relationships'];
-      };
-      candidate_assessments: Omit<CoreAssessment, 'Row' | 'Insert' | 'Update' | 'Relationships'> & {
-        Row: Step4CandidateAssessment;
-        Insert: CoreAssessment['Insert'] & { guide_question_id?: string | null };
-        Update: CoreAssessment['Update'] & { guide_question_id?: string | null };
-        Relationships: CoreAssessment['Relationships'];
       };
       application_stage_events: ReadonlyAuditTable<StageEvent>;
       application_decision_events: ReadonlyAuditTable<DecisionEvent>;

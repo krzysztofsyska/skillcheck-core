@@ -36,3 +36,11 @@ test('no automatic decision setter or default in schema and app routing', async 
   assert.match(forms, /<option value="" disabled>Wybierz decyzję<\/option>/);
   assert.doesNotMatch(actions, /\bmodel\.generate\(/i);
 });
+
+test('stage notes and Step 3 interview topics link to each other for the same application', async () => {
+  const app = '../app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]';
+  const assessments = await readFile(new URL(`${app}/assessments/page.tsx`, import.meta.url), 'utf8');
+  const interview = await readFile(new URL(`${app}/interview/page.tsx`, import.meta.url), 'utf8');
+  assert.match(assessments, /href=\{`\$\{base\}\/applications\/\$\{applicationId\}\/interview`\}/);
+  assert.match(interview, /href=\{`\$\{base\}\/applications\/\$\{route\.applicationId\}\/assessments`\}/);
+});

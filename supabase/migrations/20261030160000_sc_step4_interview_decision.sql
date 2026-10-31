@@ -30,9 +30,6 @@ create trigger application_manual_fields_insert_guard before insert on public.ap
 for each row execute function private.reject_unaudited_application_insert();
 
 -- Existing per-stage candidate_assessments.notes remains the live note.
--- Future evidence-guide question identifiers can be attached after PR #171.
-alter table public.candidate_assessments
-  add column guide_question_id text check (guide_question_id is null or length(guide_question_id) between 1 and 150);
 
 create table public.application_stage_events (
   id uuid primary key default gen_random_uuid(),
@@ -76,7 +73,6 @@ create table public.candidate_assessment_note_revisions (
   application_id uuid not null,
   assessment_id uuid not null references public.candidate_assessments(id) on delete cascade,
   body text,
-  guide_question_id text,
   author_id uuid not null references auth.users(id) on delete restrict,
   created_at timestamptz not null default now(),
   foreign key (company_id, recruitment_id, application_id)
@@ -100,22 +96,21 @@ end $$;
 
 -- These log tables cannot be written, updated or deleted by an API session.
 -- Application stage/decision columns intentionally receive NO UPDATE grants.
-grant update (guide_question_id) on public.candidate_assessments to authenticated;
 
 create function private.track_candidate_assessment_notes()
 returns trigger language plpgsql security definer set search_path = '' as $$
 declare actor uuid := (select auth.uid());
 begin
   if tg_op = 'INSERT' then
-    if new.notes is null and new.guide_question_id is null then return new; end if;
+    if new.notes is null then return new; end if;
   elsif tg_op = 'UPDATE' then
-    if new.notes is not distinct from old.notes and new.guide_question_id is not distinct from old.guide_question_id then return new; end if;
+    if new.notes is not distinct from old.notes then return new; end if;
   end if;
   if actor is null or not private.has_company_access(new.company_id, true) then
     raise exception 'Human author required for notes' using errcode = '42501';
   end if;
-  insert into public.candidate_assessment_note_revisions(company_id,recruitment_id,application_id,assessment_id,body,guide_question_id,author_id)
-    values(new.company_id,new.recruitment_id,new.application_id,new.id,new.notes,new.guide_question_id,actor);
+  insert into public.candidate_assessment_note_revisions(company_id,recruitment_id,application_id,assessment_id,body,author_id)
+    values(new.company_id,new.recruitment_id,new.application_id,new.id,new.notes,actor);
   return new;
 end $$;
 revoke all on function private.track_candidate_assessment_notes() from public, anon, authenticated;

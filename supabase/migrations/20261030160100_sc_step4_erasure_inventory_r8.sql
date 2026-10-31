@@ -11,9 +11,9 @@
 --     and classification (previous_decision, new_decision)
 --   public.candidate_assessment_note_revisions: personal data / free text
 --     (body, every saved interview note version)
---   new columns applications.current_stage_id, human_decision,
---   human_decision_reason and candidate_assessments.guide_question_id are
---   erased with their row by the existing whole-row adapters.
+--   new columns applications.current_stage_id, human_decision and
+--   human_decision_reason are erased with their row by the existing
+--   public.applications whole-row adapter.
 --   actor_id/author_id reference auth.users ON DELETE RESTRICT, the same as
 --   the existing audit tables.
 --
@@ -63,15 +63,15 @@ begin
   -- itself); likewise for the voice variant. Anything else is unreviewed.
   case r7_signature
     when '4e14a55722abf0006758a2d439ac41209b41c9a9e4a85e0adebdaa526c7cf5d7' then
-      source:='7f3c56e1e98d426ad4afef464fa29ba91bcf5971aeff068e9ef0d78b96584ef9';
+      source:='81388d40db8145b5638749b2652e229b55b73901e9905c9de16ddf495825d074';
       inventory_source:='a17cd31da4c1db771ca001524682155239b20856e19f246086f12ad5034acac1';
       candidates_source:='e7733f59150888a88b9adc2c9002ac14af7addbcc5193f1b1404f78e15510421';
-      expected:='1928c7ecdcf3b104b6bbf937d12e24f39773fcc674088342f0a6d000f3d7e478';
+      expected:='d87bccd9dcf7834aeed6bd361cb117b1b11f221f2bc0280d852843d29996bdaf';
     when 'f61669ada2303111a5d027a012c8c9d6b0cc0ece4ac52eaefb7a33a40e5942c3' then
-      source:='189997bc094b2d10490a28f95f5e76e261aef23f7d2539264cbf63eb0e8e2ac5';
+      source:='641650aea54f6e013326c76c883766fc303645e6f5f4c19b51676da9ed2e12a6';
       inventory_source:='4a3a148fd8570a0c5df9bacf66458afa0a71069ce5e5637bee235b18b1ce64e3';
       candidates_source:='0feabad0bbfac8aa678f2ca3f10df0428238313fac8dd2c863b61c2319adb1ea';
-      expected:='8d4ca57aea2b04535757292b4d3a45367bea417397ec8d83390c2c23d7ef55da';
+      expected:='f057e8bce49280b3ec6dfff5259bb9b27174829ba068b1f429b003b8cb61cda9';
     else raise exception 'sc_r8_r7_baseline_unreviewed' using errcode='55000';
   end case;
   if private.erasure_schema_signature() is distinct from source then

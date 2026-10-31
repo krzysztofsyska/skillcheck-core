@@ -18,12 +18,12 @@ const step4 = '20261030160000_sc_step4_interview_decision.sql';
 const r8 = '20261030160100_sc_step4_erasure_inventory_r8.sql';
 const step4Tables = ['public.application_decision_events', 'public.application_stage_events', 'public.candidate_assessment_note_revisions'];
 const sourceSignature = {
-  legacy: '7f3c56e1e98d426ad4afef464fa29ba91bcf5971aeff068e9ef0d78b96584ef9',
-  voice: '189997bc094b2d10490a28f95f5e76e261aef23f7d2539264cbf63eb0e8e2ac5',
+  legacy: '81388d40db8145b5638749b2652e229b55b73901e9905c9de16ddf495825d074',
+  voice: '641650aea54f6e013326c76c883766fc303645e6f5f4c19b51676da9ed2e12a6',
 };
 const r8Signature = {
-  legacy: '1928c7ecdcf3b104b6bbf937d12e24f39773fcc674088342f0a6d000f3d7e478',
-  voice: '8d4ca57aea2b04535757292b4d3a45367bea417397ec8d83390c2c23d7ef55da',
+  legacy: 'd87bccd9dcf7834aeed6bd361cb117b1b11f221f2bc0280d852843d29996bdaf',
+  voice: 'f057e8bce49280b3ec6dfff5259bb9b27174829ba068b1f429b003b8cb61cda9',
 };
 const migration = name => readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8');
 const rollback = name => readFile(new URL(`../supabase/rollbacks/${name}`, import.meta.url), 'utf8');

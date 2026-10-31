@@ -63,16 +63,16 @@ test('Step 4 SQL end-to-end: multi-tenant stage → interview note → human dec
     assert.equal(current, a.reference.id);
     await assert.rejects(db.query('delete from public.assessment_stages where id=$1', [a.interview.id]), err => ['23001', '23503'].includes(err.code));
   });
-  await t.test('note autosave and revision history have the real user and nullable question', async () => {
+  await t.test('note autosave and revision history have the real user', async () => {
     const assessment = await insert('candidate_assessments', {
       company_id: a.company, recruitment_id: a.recruitment.id, application_id: a.application.id, stage_id: a.interview.id,
       notes: 'Opis sytuacji, wynik i obserwacja',
     });
     await db.query('update public.candidate_assessments set notes=$1 where id=$2', ['Druga obserwacja i rezultat', assessment.id]);
-    const versions = (await db.query('select body,author_id,guide_question_id,created_at from public.candidate_assessment_note_revisions where assessment_id=$1 order by created_at,id', [assessment.id])).rows;
+    const versions = (await db.query('select body,author_id,created_at from public.candidate_assessment_note_revisions where assessment_id=$1 order by created_at,id', [assessment.id])).rows;
     assert.equal(versions.length, 2);
     assert.deepEqual(versions.map(r => r.body), ['Opis sytuacji, wynik i obserwacja', 'Druga obserwacja i rezultat']);
-    assert.ok(versions.every(r => r.author_id === ownerA && r.created_at && r.guide_question_id === null));
+    assert.ok(versions.every(r => r.author_id === ownerA && r.created_at));
     await assert.rejects(db.query("delete from public.candidate_assessment_note_revisions"), err => err.code === '42501');
   });
   await t.test('explicit decision demands reason, logs both transitions, forbids direct write', async () => {
