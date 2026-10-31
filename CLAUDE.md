@@ -27,8 +27,8 @@ Feature freeze: no new product areas (voice, competency tests, talent pool, whit
 
 Order of work:
 1. Security hardening — DONE in PR #196 (Next.js 16.4.3, pinned Supabase packages). Verify the headers and the `screening-worker` size limit are present before closing the topic.
-2. Migration drift: document the differences between production `schema_migrations` (read-only) and `supabase/migrations`, and why "DB migrate production" failed on 2026-10-29.
-3. Finish and apply the SC-019 migrations (through the approved production workflow only).
+2. Migration drift — DONE (PR #197, documented in `docs/database.md`). Checked 2026-10-31: production has all 38 migrations from `main` by name; only the two Step 4 migrations on `integration` wait for the next promotion. Still open: 12 rows with `statements = NULL` (owner decision, see `docs/database.md`).
+3. SC-019 migrations — DONE, applied through the production workflow on 2026-10-30.
 4. AI cost limit per company.
 5. Turn on the contact form.
 6. Connect Przelewy24 and Fakturownia (Przelewy24 in progress: PR #223).
