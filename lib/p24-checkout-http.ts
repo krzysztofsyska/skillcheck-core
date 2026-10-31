@@ -1,4 +1,5 @@
 /** HTTP layer for /api/p24/register and /api/p24/notify. Service is injected (tests use fakes). */
+import { timingSafeEqual } from 'node:crypto';
 import { CheckoutOrderError } from './checkout-orders.ts';
 import { P24CheckoutError, validateCheckout, type createCheckoutService } from './p24-checkout.ts';
 
@@ -23,12 +24,21 @@ async function readBody(request: Request, max: number): Promise<Uint8Array | nul
 }
 const codeOf = (e: unknown) => e instanceof P24CheckoutError || e instanceof CheckoutOrderError ? e.code : 'UNEXPECTED';
 
-export function createP24CheckoutHttp(service: Service | null, appOrigin: string | null) {
+/** Bearer check for the scheduler-only reconcile endpoint. */
+export function authorizedReconciler(header: string | null, secret: string | undefined): boolean {
+  if (!secret || Buffer.byteLength(secret) < 32 || !header) return false;
+  const a = Buffer.from(header), b = Buffer.from(`Bearer ${secret}`);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** allowedOrigin: true only for an origin of this deployment's configured addresses. */
+export function createP24CheckoutHttp(service: Service | null, allowedOrigin: ((origin: string) => boolean) | null) {
   return Object.freeze({
     async register(request: Request): Promise<Response> {
-      if (!service || !appOrigin) return json({ error: 'CHECKOUT_DISABLED' }, 503);
+      if (!service || !allowedOrigin) return json({ error: 'CHECKOUT_DISABLED' }, 503);
       // Only our own /checkout page may start a payment.
-      if (request.headers.get('origin') !== appOrigin || ['cross-site', 'none'].includes(request.headers.get('sec-fetch-site') ?? ''))
+      const origin = request.headers.get('origin');
+      if (!origin || !allowedOrigin(origin) || ['cross-site', 'none'].includes(request.headers.get('sec-fetch-site') ?? ''))
         return json({ error: 'CHECKOUT_ORIGIN' }, 403);
       if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') return json({ error: 'CHECKOUT_CONTENT_TYPE' }, 415);
       const raw = await readBody(request, 4096);
@@ -62,6 +72,13 @@ export function createP24CheckoutHttp(service: Service | null, appOrigin: string
           'P24_ORDER_UNKNOWN', 'P24_AMOUNT_MISMATCH'].includes(code);
         return json({ error: client ? code : 'P24_RETRY' }, client ? 400 : 503);
       }
+    },
+    /** Scheduler-only safety net (no cron registered here; enabling one is an owner decision). */
+    async reconcile(request: Request, secret: string | undefined): Promise<Response> {
+      if (!authorizedReconciler(request.headers.get('authorization'), secret)) return json({ error: 'unauthorized' }, 401);
+      if (!service) return json({ error: 'CHECKOUT_DISABLED' }, 503);
+      try { return json(await service.reconcile()); }
+      catch (e) { console.error('p24_reconcile_failed', codeOf(e)); return json({ error: 'P24_RETRY' }, 503); }
     },
   });
 }

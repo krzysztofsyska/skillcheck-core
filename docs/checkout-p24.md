@@ -9,7 +9,7 @@ LEVEL: L3 (migracja DB, płatności, granica zaufania). SCOPE: FULLSTACK.
    (imię i nazwisko, e-mail, telefon; opcjonalnie firma i NIP), obowiązkowa akceptacja regulaminu
    i polityki prywatności, logo Przelewy24 i metody (BLIK, szybki przelew, karta) bez dodatkowych opłat.
 3. `POST /api/p24/register` (tylko z własnego origin): walidacja, **cena z katalogu serwera**
-   (`lib/checkout-catalog.ts`), zapis `public.orders` (status `pending`), rejestracja transakcji
+   (`lib/checkout-catalog.ts`), zapis `checkout.orders` (status `pending`), rejestracja transakcji
    `POST /api/v1/transaction/register` z podpisem SHA-384, odpowiedź z adresem bramki → przeglądarka
    przechodzi do Przelewy24.
 4. `POST /api/p24/notify` (urlStatus): ścisła walidacja pól, weryfikacja podpisu SHA-384 i merchant/POS,
@@ -24,14 +24,32 @@ LEVEL: L3 (migracja DB, płatności, granica zaufania). SCOPE: FULLSTACK.
 
 Migracja `supabase/migrations/20261031120000_checkout_orders.sql` (rollback w `supabase/rollbacks/`).
 
-- `public.orders`: `id, created_at, updated_at, status (pending/paid/failed/cancelled), product_code, quantity,
+- Osobny schemat **`checkout`** (bez uprawnień, nie wystawiony przez Data API). Kupujący nie są kandydatami,
+  więc tabele są poza inwentarzem usuwania danych kandydatów (SC-010), którego sygnatura obejmuje tylko
+  relacje w `public`/`private` — dodanie zamówień nie blokuje podglądu ani usuwania danych kandydatów.
+- `checkout.orders`: `id, created_at, updated_at, status (pending/paid/failed/cancelled), product_code, quantity,
   amount_gross (grosze), currency (PLN), customer_name, customer_email, customer_phone, company_name, nip,
   terms_accepted_at, p24_session_id, p24_order_id, paid_at`.
-- RLS włączone, **brak uprawnień** dla `anon`/`authenticated`/`service_role` do tabeli.
-- Dostęp wyłącznie przez 3 funkcje `SECURITY DEFINER` (`checkout_create_order`, `checkout_update_order`,
-  `checkout_read_order`) z podpisem HMAC-SHA256 serwera (sekret `CHECKOUT_ORDER_SECRET`), ważnym 5 minut.
+- RLS włączone, **brak uprawnień** dla `anon`/`authenticated`/`service_role` do schematu i tabel.
+- Dostęp wyłącznie przez 4 funkcje `SECURITY DEFINER` w `public` (`checkout_create_order`, `checkout_update_order`,
+  `checkout_read_order`, `checkout_pending_orders`) z podpisem HMAC-SHA256 serwera (sekret `CHECKOUT_ORDER_SECRET`), ważnym 5 minut.
   Bez zainstalowanego sekretu wszystko jest odrzucane. `paid` jest stanem końcowym; `paid` wymaga zgodnej kwoty.
 - Bez `service_role` w kodzie aplikacji — serwer używa klucza publikowalnego.
+
+## Odporność na awarie zapisu
+
+Przelewy24 przestaje ponawiać powiadomienie po udanym `verify`. Dlatego:
+1. po udanym `verify` zapis `paid` jest ponawiany 3 razy w tym samym wywołaniu;
+2. strona powrotu uzgadnia status z Przelewy24 przy każdym wejściu;
+3. `GET /api/p24/reconcile` (nagłówek `Authorization: Bearer <CHECKOUT_RECONCILE_SECRET>`) przegląda
+   nieopłacone zamówienia z ostatnich 3 dni (starsze niż 2 min) i rozlicza je odczytem z Przelewy24.
+   Endpoint jest przygotowany pod harmonogram; włączenie crona (np. co 10 min) to osobna decyzja właściciela.
+
+## Zakres pakietu
+
+Cena (300 zł brutto) i ważność pochodzą z `lib/checkout-catalog.ts` (test pilnuje zgodności z ofertą).
+Liczba analiz na `/checkout` pochodzi z tego samego źródła co `/preselekcja` (`loadPublicOffer`, polityka SC-019),
+a przy niedostępnym katalogu strona nie podaje liczby.
 
 ## Zmienne środowiskowe (Vercel, tylko serwer — nigdy w kodzie ani z prefiksem `NEXT_PUBLIC_`)
 
@@ -43,6 +61,7 @@ Migracja `supabase/migrations/20261031120000_checkout_orders.sql` (rollback w `s
 | `P24_API_KEY` | klucz do raportów / API (Basic auth REST) |
 | `P24_SANDBOX` | `true` = sandbox.przelewy24.pl, `false` = produkcja; inna wartość wyłącza płatności |
 | `CHECKOUT_ORDER_SECRET` | losowy sekret ≥ 32 znaki; ta sama wartość w bazie (poniżej) |
+| `CHECKOUT_RECONCILE_SECRET` | opcjonalnie: sekret ≥ 32 znaki dla harmonogramu wywołującego `/api/p24/reconcile` |
 
 Brak którejkolwiek zmiennej → `/api/p24/register` zwraca 503, a formularz pokazuje komunikat
 o proformie (ścieżka zakupu pozostaje widoczna).
@@ -50,7 +69,7 @@ o proformie (ścieżka zakupu pozostaje widoczna).
 Instalacja sekretu w bazie danego środowiska (SQL editor, nie z aplikacji):
 
 ```sql
-select private.set_checkout_request_secret('<ta sama wartość co CHECKOUT_ORDER_SECRET>');
+select checkout.set_request_secret('<ta sama wartość co CHECKOUT_ORDER_SECRET>');
 ```
 
 ## Test end-to-end w sandboxie (Preview, projekt `skillcheck-preview`)
@@ -63,7 +82,7 @@ select private.set_checkout_request_secret('<ta sama wartość co CHECKOUT_ORDER
 5. Na stronie sandbox wybierz metodę (np. BLIK testowy lub „przelew testowy”) i zatwierdź płatność.
 6. Po powrocie `/checkout/return?order=…` powinno pokazać „Płatność przyjęta”. Jeśli najpierw pokazuje
    „Czekamy na potwierdzenie”, kliknij **Odśwież status**.
-7. Kontrola w bazie: `select status, amount_gross, p24_order_id, paid_at from public.orders order by created_at desc limit 1;`
+7. Kontrola w bazie: `select status, amount_gross, p24_order_id, paid_at from checkout.orders order by created_at desc limit 1;`
    → `paid`, `60000`, numer Przelewy24, data.
 8. Negatywnie: anuluj płatność w bramce → status pozostaje `pending`; ręczny `POST /api/p24/notify` z błędnym
    podpisem → 400, zamówienie bez zmian.

@@ -6,14 +6,14 @@ import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { createCheckoutOrders, signCheckout } from '../lib/checkout-orders.ts';
 import { createCheckoutService, createP24Client, parseP24Notification, readP24Config, validNip, validateCheckout } from '../lib/p24-checkout.ts';
-import { createP24CheckoutHttp } from '../lib/p24-checkout-http.ts';
+import { authorizedReconciler, createP24CheckoutHttp } from '../lib/p24-checkout-http.ts';
 import { CHECKOUT_PRODUCTS } from '../lib/checkout-catalog.ts';
 
 // Real migration on PGlite + real service/HTTP code against an in-memory
 // Przelewy24 sandbox. No network, no money, synthetic keys only.
 const MERCHANT = 123456, CRC = 'synthetic-crc-0123', API_KEY = 'synthetic-api-key-0123456789';
 const SECRET = 'test-only-checkout-secret-0123456789abcdef';
-const ORIGIN = 'https://sandbox.przelewy24.pl', APP = 'https://app.example.test';
+const ORIGIN = 'https://sandbox.przelewy24.pl', APP = 'https://app.example.test', DEPLOYMENT = 'https://app-git-abc.example.test';
 const ENV = { P24_MERCHANT_ID: String(MERCHANT), P24_POS_ID: String(MERCHANT), P24_CRC: CRC, P24_API_KEY: API_KEY, P24_SANDBOX: 'true' };
 const config = readP24Config(ENV);
 const sha384 = o => createHash('sha384').update(JSON.stringify(o)).digest('hex');
@@ -58,10 +58,10 @@ function fakeP24() {
 
 async function database() {
   const db = new PGlite({ extensions: { pgcrypto } });
-  await db.exec(`create role anon; create role authenticated; create schema private; create schema extensions;
-    create extension pgcrypto with schema extensions; grant usage on schema public to anon, authenticated;`);
+  await db.exec(`create role anon; create role authenticated; create role service_role; create schema private; create schema extensions;
+    create extension pgcrypto with schema extensions; grant usage on schema public to anon, authenticated, service_role;`);
   await db.exec(migration);
-  await db.query('select private.set_checkout_request_secret($1)', [SECRET]);
+  await db.query('select checkout.set_request_secret($1)', [SECRET]);
   // Same calling convention as supabase-js rpc(): named args, executed as the anon role.
   const rpc = async (fn, args) => {
     const names = Object.keys(args);
@@ -69,20 +69,24 @@ async function database() {
     try {
       await db.exec('set role anon');
       const { rows } = await db.query(sql, names.map(n => args[n]));
-      return { data: fn === 'checkout_read_order' ? rows : Object.values(rows[0])[0], error: null };
+      return { data: ['checkout_read_order', 'checkout_pending_orders'].includes(fn) ? rows : Object.values(rows[0])[0], error: null };
     } catch (e) { return { data: null, error: { message: e.message } }; } finally { await db.exec('reset role'); }
   };
   return { db, rpc };
 }
 
-async function setup() {
-  const { db, rpc } = await database();
+async function setup({ failUpdates = 0 } = {}) {
+  const { db, rpc: realRpc } = await database();
+  let failures = failUpdates;
+  // Simulates a transient store outage on the paid write right after verify.
+  const rpc = (fn, args) => fn === 'checkout_update_order' && args.new_status === 'paid' && failures-- > 0
+    ? Promise.resolve({ data: null, error: { message: 'fetch failed' } }) : realRpc(fn, args);
   const p = fakeP24();
   const orders = createCheckoutOrders(rpc, SECRET);
-  const service = createCheckoutService({ config, orders, p24: createP24Client(config, p.fetchImpl), appOrigin: APP });
-  return { db, rpc, p, orders, service, http: createP24CheckoutHttp(service, APP) };
+  const service = createCheckoutService({ config, orders, p24: createP24Client(config, p.fetchImpl), appOrigin: APP }, async () => {});
+  return { db, rpc, p, orders, service, http: createP24CheckoutHttp(service, origin => origin === APP || origin === DEPLOYMENT) };
 }
-const row = async (db, id) => (await db.query('select * from public.orders where id=$1', [id])).rows[0];
+const row = async (db, id) => (await db.query('select * from checkout.orders where id=$1', [id])).rows[0];
 const buyer = (o = {}) => ({ product: 'preselekcja', quantity: 2, name: 'Jan Testowy', email: 'Jan@Example.test', phone: '+48 600 100 200',
   company: 'Firma Testowa Sp. z o.o.', nip: '526-000-12-46', terms: true, ...o });
 const post = (body, headers = {}) => new Request(`${APP}/api/p24/register`, { method: 'POST',
@@ -98,7 +102,11 @@ test('configuration only from complete env; sandbox flag must be explicit', () =
 test('catalog price mirrors the published PRESELEKCJA offer', async () => {
   const offer = await readFile(new URL('../app/components/marketing/preselekcja-offer.ts', import.meta.url), 'utf8');
   assert.equal(CHECKOUT_PRODUCTS.preselekcja.unitGross, Number(offer.match(/grossPln: (\d+),/)[1]) * 100);
-  assert.match(CHECKOUT_PRODUCTS.preselekcja.description, new RegExp(`^${offer.match(/analyses: (\d+),/)[1]} analiz CV`));
+  assert.match(CHECKOUT_PRODUCTS.preselekcja.description, new RegExp(`ważne ${offer.match(/validityMonths: (\d+),/)[1]} miesiące`));
+  // The analyses count is not frozen in the catalog: /checkout shows the live scope like /preselekcja.
+  assert.doesNotMatch(CHECKOUT_PRODUCTS.preselekcja.description, /analiz CV/);
+  const page = await readFile(new URL('../app/checkout/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /loadPublicOffer\(\)/); assert.match(page, /sc19PolicyPendingScope/);
 });
 
 test('validation: server price, required consent, optional company and NIP checksum', () => {
@@ -170,18 +178,23 @@ test('register endpoint: origin, content type, field errors, disabled config', a
   assert.equal((await http.register(post(buyer(), { 'content-type': 'text/plain' }))).status, 415);
   const bad = await http.register(post(buyer({ terms: false })));
   assert.equal(bad.status, 400); assert.deepEqual(await bad.json(), { error: 'CHECKOUT_FIELD', field: 'terms' });
-  assert.equal((await createP24CheckoutHttp(null, APP).register(post(buyer()))).status, 503);
+  assert.equal((await createP24CheckoutHttp(null, () => true).register(post(buyer()))).status, 503);
+  assert.equal((await http.register(post(buyer(), { origin: DEPLOYMENT }))).status, 200, 'any configured deployment address');
   assert.equal((await createP24CheckoutHttp(null, null).notify(new Request(APP, { method: 'POST', body: '{}' }))).status, 503);
-  assert.equal((await db.query('select count(*)::int as n from public.orders')).rows[0].n, 0);
+  assert.equal((await db.query('select count(*)::int as n from checkout.orders')).rows[0].n, 1);
 });
 
 test('database: no direct table access; RPCs require a fresh valid HMAC; paid is terminal', async t => {
   const { db, rpc } = await database(); t.after(() => db.close());
   const orders = createCheckoutOrders(rpc, SECRET);
   await db.exec('set role anon');
-  await assert.rejects(db.query('select * from public.orders'), e => e.code === '42501');
-  await assert.rejects(db.query("insert into public.orders(id) values (gen_random_uuid())"), e => e.code === '42501');
+  await assert.rejects(db.query('select * from checkout.orders'), e => e.code === '42501');
+  await assert.rejects(db.query("insert into checkout.orders(id) values (gen_random_uuid())"), e => e.code === '42501');
+  await assert.rejects(db.query('select * from checkout.settings'), e => e.code === '42501');
   await db.exec('reset role');
+  for (const role of ['anon', 'authenticated', 'service_role'])
+    for (const rel of ['checkout.orders', 'checkout.settings'])
+      assert.equal((await db.query('select has_table_privilege($1,$2,$3) v', [role, rel, 'select'])).rows[0].v, false, `${role} ${rel}`);
   const id = '00000000-0000-4000-8000-000000000001';
   const at = Date.now() * 1000;
   const fields = [id, 'preselekcja', '1', '30000', 'Jan Testowy', 'jan@example.test', '600100200', null, null];
@@ -199,6 +212,39 @@ test('database: no direct table access; RPCs require a fresh valid HMAC; paid is
   assert.equal(await orders.update(id, 'cancelled', null, null), 'paid', 'paid is terminal');
   await assert.rejects(orders.update(id, 'paid', 6, 30000), e => e.code === 'CHECKOUT_P24_ORDER_MISMATCH');
   // Without an installed secret everything is refused.
-  await db.exec('update private.checkout_settings set request_secret = null');
+  await db.exec('update checkout.settings set request_secret = null');
   await assert.rejects(orders.read(id), e => e.code === 'CHECKOUT_DISABLED');
+});
+
+test('candidate erasure scope untouched: no new public/private relations', async t => {
+  const { db } = await database(); t.after(() => db.close());
+  const { rows } = await db.query(`select n.nspname, c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname in ('public', 'private') and c.relkind in ('r','p','v','m','f')`);
+  assert.deepEqual(rows, [], 'checkout tables live in schema checkout, outside private.erasure_schema_signature');
+});
+
+test('paid write is retried after a successful verify (Przelewy24 does not resend)', async t => {
+  const { db, p, service, http } = await setup({ failUpdates: 2 }); t.after(() => db.close());
+  const { orderId } = await service.start(validateCheckout(buyer({ quantity: 1 })));
+  const res = await http.notify(new Request(`${APP}/api/p24/notify`, { method: 'POST', body: p.pay(`sc-ord-${orderId}`) }));
+  assert.equal(res.status, 200);
+  assert.equal((await row(db, orderId)).status, 'paid');
+});
+
+test('reconcile settles a verified payment whose write failed everywhere', async t => {
+  const { db, p, service, http } = await setup({ failUpdates: 3 }); t.after(() => db.close());
+  const { orderId } = await service.start(validateCheckout(buyer({ quantity: 1 })));
+  const res = await http.notify(new Request(`${APP}/api/p24/notify`, { method: 'POST', body: p.pay(`sc-ord-${orderId}`) }));
+  assert.equal(res.status, 503);
+  assert.equal(p.s.tx.get(`sc-ord-${orderId}`).status, 2, 'money settled at Przelewy24');
+  assert.equal((await row(db, orderId)).status, 'pending');
+  const secret = 'r'.repeat(40);
+  const call = auth => http.reconcile(new Request(`${APP}/api/p24/reconcile`, { headers: auth ? { authorization: auth } : {} }), secret);
+  assert.equal((await call()).status, 401);
+  assert.equal((await call('Bearer wrong')).status, 401);
+  assert.deepEqual(await (await call(`Bearer ${secret}`)).json(), { checked: 0, paid: 0 }, 'too recent for the default window');
+  assert.deepEqual(await service.reconcile(0, 10), { checked: 1, paid: 1 });
+  assert.equal((await row(db, orderId)).status, 'paid');
+  assert.deepEqual(await service.reconcile(0, 10), { checked: 0, paid: 0 });
+  assert.ok(!authorizedReconciler(`Bearer ${secret}`, 'short'));
 });

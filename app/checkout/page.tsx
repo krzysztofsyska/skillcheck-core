@@ -7,6 +7,8 @@ import css from "./checkout.module.css";
 import { CHECKOUT_PRODUCTS, checkoutProduct, checkoutQuantity, formatPln } from "../../lib/checkout-catalog";
 import { checkoutConfigured } from "../../lib/p24-checkout-runtime";
 import { CheckoutForm } from "./checkout-form";
+import { loadPublicOffer } from "../components/marketing/preselekcja-offer";
+import { sc19PolicyPendingScope } from "../../lib/sc19-package-sizes";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -21,6 +23,9 @@ export default async function CheckoutPage({ searchParams }: Props) {
   const params = await searchParams;
   const product = checkoutProduct(typeof params.produkt === "string" ? params.produkt : "preselekcja") ?? CHECKOUT_PRODUCTS.preselekcja;
   const quantity = checkoutQuantity(product, typeof params.ilosc === "string" ? params.ilosc : "1") ?? 1;
+  // Same live scope as /preselekcja: SC-019 policy wins; an enabled but failing catalog shows no number.
+  const { preselekcja } = await loadPublicOffer();
+  const scope = preselekcja === null ? sc19PolicyPendingScope : `${preselekcja} analiz CV`;
   return <main className={styles.page}>
     <SiteHeader />
     <div id="tresc" className={styles.wrap}>
@@ -30,7 +35,7 @@ export default async function CheckoutPage({ searchParams }: Props) {
         <p className={styles.lede}>Sprawdź zamówienie, podaj dane kupującego i przejdź do bezpiecznej płatności Przelewy24.
           Wolisz przelew tradycyjny? <Link href="/preselekcja">Poproś o fakturę proforma</Link>.</p>
         <CheckoutForm
-          product={{ code: product.code, name: product.name, description: product.description, unitGross: product.unitGross, maxQuantity: product.maxQuantity }}
+          product={{ code: product.code, name: product.name, description: `${scope}, ${product.description}`, unitGross: product.unitGross, maxQuantity: product.maxQuantity }}
           initialQuantity={quantity}
           enabled={checkoutConfigured()}
         />

@@ -21,12 +21,13 @@ export class CheckoutOrderError extends Error {
   constructor(code: string) { super(code); this.name = 'CheckoutOrderError'; this.code = code; }
 }
 
+export type CheckoutAction = 'create' | 'update' | 'read' | 'pending';
 const field = (v: string | null) => v === null ? '-' : `${Buffer.byteLength(v, 'utf8')}:${v}`;
-export function checkoutCanonical(action: 'create' | 'update' | 'read', issuedAtUs: number, fields: (string | null)[]): string {
+export function checkoutCanonical(action: CheckoutAction, issuedAtUs: number, fields: (string | null)[]): string {
   if (!Number.isSafeInteger(issuedAtUs)) throw new CheckoutOrderError('CHECKOUT_INVALID');
   return ['v1', action, String(issuedAtUs), ...fields.map(field)].join('\n');
 }
-export function signCheckout(action: 'create' | 'update' | 'read', issuedAtUs: number, fields: (string | null)[], secret: string) {
+export function signCheckout(action: CheckoutAction, issuedAtUs: number, fields: (string | null)[], secret: string) {
   if (Buffer.byteLength(secret, 'utf8') < 32) throw new CheckoutOrderError('CHECKOUT_DISABLED');
   return createHmac('sha256', secret).update(checkoutCanonical(action, issuedAtUs, fields), 'utf8').digest('hex');
 }
@@ -72,6 +73,14 @@ export function createCheckoutOrders(rpc: Rpc, secret: string, now: () => number
       // bigint may arrive as number or string depending on the driver.
       const p24 = r.p24_order_id === null ? null : Number(r.p24_order_id);
       return Object.freeze({ ...(r as StoredOrder), p24_order_id: p24 });
+    },
+    /** Ids of recent pending/failed orders older than `olderThanSeconds`, oldest first. */
+    async pending(olderThanSeconds: number, maxRows: number): Promise<string[]> {
+      const at = issued();
+      const data = await call('checkout_pending_orders', { older_than_seconds: olderThanSeconds, max_rows: maxRows, issued_at_us: at,
+        request_signature: signCheckout('pending', at, [String(olderThanSeconds), String(maxRows)], secret) });
+      if (!Array.isArray(data)) throw new CheckoutOrderError('CHECKOUT_STORE_UNAVAILABLE');
+      return data.map(r => String((r as { order_id: unknown }).order_id));
     },
   });
 }

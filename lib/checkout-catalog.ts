@@ -2,8 +2,9 @@
  * Prices are server truth; the browser only sends a product code and quantity.
  * Gross price includes 23% VAT. No surcharge for any payment method.
  */
-// Mirrors preselekcjaOffer (app/components/marketing/preselekcja-offer.ts); a test keeps them equal.
-const PRESELEKCJA = { analyses: 60, grossPln: 300, validityMonths: 3 } as const;
+// Price/validity mirror preselekcjaOffer (app/components/marketing/preselekcja-offer.ts); a test keeps them equal.
+// The number of analyses is NOT fixed here: pages show the same live scope as /preselekcja (loadPublicOffer).
+const PRESELEKCJA = { grossPln: 300, validityMonths: 3 } as const;
 
 export type CheckoutProduct = Readonly<{
   code: string;
@@ -17,7 +18,7 @@ export const CHECKOUT_PRODUCTS: Readonly<Record<string, CheckoutProduct>> = Obje
   preselekcja: Object.freeze({
     code: 'preselekcja',
     name: 'Pakiet PRESELEKCJA',
-    description: `${PRESELEKCJA.analyses} analiz CV, ważne ${PRESELEKCJA.validityMonths} miesiące`,
+    description: `analizy ważne ${PRESELEKCJA.validityMonths} miesiące`,
     unitGross: PRESELEKCJA.grossPln * 100,
     maxQuantity: 10,
   }),

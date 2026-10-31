@@ -149,7 +149,28 @@ export function validateCheckout(input: CheckoutInput): { field: string } | Vali
 
 export type CheckoutDeps = Readonly<{ config: P24Config; orders: CheckoutOrders; p24: P24Client; appOrigin: string }>;
 
-export function createCheckoutService(d: CheckoutDeps) {
+export function createCheckoutService(d: CheckoutDeps, sleep: (ms: number) => Promise<void> = ms => new Promise(r => setTimeout(r, ms))) {
+  async function markPaidWithRetry(orderId: string, p24OrderId: number, amount: number): Promise<OrderStatus> {
+    for (let attempt = 0; ; attempt++) {
+      try { return await d.orders.update(orderId, 'paid', p24OrderId, amount); }
+      catch (e) { if (attempt >= 2) throw e; await sleep(250 * 2 ** attempt); }
+    }
+  }
+  async function status(orderId: string): Promise<{ status: OrderStatus; amountGross: number; productCode: string; quantity: number } | null> {
+    if (!UUID.test(orderId)) return null;
+    const order = await d.orders.read(orderId);
+    if (!order) return null;
+    let current = order.status;
+    if (current === 'pending' || current === 'failed') {
+      try {
+        const t = await d.p24.bySession(order.p24_session_id);
+        if (t && t.amount === order.amount_gross && (t.status === 2 ||
+            (t.status === 1 && await d.p24.verify({ sessionId: order.p24_session_id, orderId: t.orderId, amount: t.amount }))))
+          current = await d.orders.update(orderId, 'paid', t.orderId, t.amount);
+      } catch { /* keep the stored status; the notification or reconcile() settles it */ }
+    }
+    return { status: current, amountGross: order.amount_gross, productCode: order.product_code, quantity: order.quantity };
+  }
   return Object.freeze({
     /** Creates the order, registers the transaction, returns the hosted payment URL. */
     async start(order: ValidCheckout, newId: () => string = randomUUID): Promise<{ orderId: string; redirectUrl: string }> {
@@ -177,7 +198,9 @@ export function createCheckoutService(d: CheckoutDeps) {
       if (order.status === 'paid') return 'paid';
       if (n.amount !== order.amount_gross) return fail('P24_AMOUNT_MISMATCH');
       if (await d.p24.verify({ sessionId: n.sessionId, orderId: n.orderId, amount: order.amount_gross }))
-        return d.orders.update(n.orderUuid, 'paid', n.orderId, order.amount_gross);
+        // Przelewy24 stops retrying once verify succeeded: retry the write here; if it still
+        // fails, reconcile() (scheduled) and the return page settle it from the provider read.
+        return markPaidWithRetry(n.orderUuid, n.orderId, order.amount_gross);
       // Repeated notification for an already verified transaction: the authenticated read decides.
       const t = await d.p24.bySession(n.sessionId);
       if (t && t.status === 2 && t.orderId === n.orderId && t.amount === order.amount_gross)
@@ -185,20 +208,13 @@ export function createCheckoutService(d: CheckoutDeps) {
       return fail('P24_VERIFY_REJECTED');
     },
     /** Return-page status. Reconciles a pending order with Przelewy24; never trusts the redirect itself. */
-    async status(orderId: string): Promise<{ status: OrderStatus; amountGross: number; productCode: string; quantity: number } | null> {
-      if (!UUID.test(orderId)) return null;
-      const order = await d.orders.read(orderId);
-      if (!order) return null;
-      let status = order.status;
-      if (status === 'pending' || status === 'failed') {
-        try {
-          const t = await d.p24.bySession(order.p24_session_id);
-          if (t && t.amount === order.amount_gross && (t.status === 2 ||
-              (t.status === 1 && await d.p24.verify({ sessionId: order.p24_session_id, orderId: t.orderId, amount: t.amount }))))
-            status = await d.orders.update(orderId, 'paid', t.orderId, t.amount);
-        } catch { /* keep the stored status; the notification will settle it */ }
-      }
-      return { status, amountGross: order.amount_gross, productCode: order.product_code, quantity: order.quantity };
+    status,
+    /** Scheduled safety net: settles recent unpaid orders from authenticated provider reads. */
+    async reconcile(olderThanSeconds = 120, maxRows = 20): Promise<{ checked: number; paid: number }> {
+      const ids = await d.orders.pending(olderThanSeconds, maxRows);
+      let paid = 0;
+      for (const id of ids) if ((await status(id))?.status === 'paid') paid++;
+      return { checked: ids.length, paid };
     },
   });
 }
