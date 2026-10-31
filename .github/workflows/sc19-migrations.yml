@@ -10,6 +10,7 @@ on:
       - 'lib/sc19-payment*.ts'
       - 'tests/sc-019-migrations*.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
+      - 'tests/sc-step4-erasure-r8.test.mjs'
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
       - 'tests/db-migrate/**'
@@ -34,6 +35,7 @@ on:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
+      - 'tests/sc-step4-erasure-r8.test.mjs'
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
       - 'tests/db-migrate/**'
@@ -113,7 +115,7 @@ jobs:
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
             tests/sc-019-migrations-mvp-e2e.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
-            tests/sc-step3-erasure-r7.test.mjs tests/sc-step3-evidence-worker.test.mjs \
+            tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/sc-step3-evidence-worker.test.mjs \
             tests/sc-019-operator-fulfillment.test.mjs tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
             tests/db-migrate/normalize-line-endings.test.mjs \
             > sc19-migrations.log 2>&1
