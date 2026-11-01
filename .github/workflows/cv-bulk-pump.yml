@@ -1,0 +1,40 @@
+# Background pump for bulk CV batches (SC-BULK-001, owner decision 3, 2026-11-01):
+# advances queued analyses and sends the batch e-mail when no recruiter keeps
+# the progress page open. Calls the production route GET /api/internal/cv-bulk
+# every 5 minutes (GitHub schedules run from `main` only, best effort).
+# Chosen over Vercel Cron: per-minute Vercel crons need a paid plan and would fail
+# a Hobby deployment. No cost.
+#
+# Secret (environment `cv-bulk-pump`): CV_BULK_CRON_SECRET — the same value as the
+# Vercel Production env CV_BULK_CRON_SECRET. Until it exists the job only logs a notice.
+name: Bulk CV background pump
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions: {}
+
+concurrency:
+  group: cv-bulk-pump
+  cancel-in-progress: false
+
+jobs:
+  pump:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    environment: cv-bulk-pump
+    permissions: {}
+    steps:
+      - name: Call the pump route
+        env:
+          CRON_SECRET: ${{ secrets.CV_BULK_CRON_SECRET }}
+          APP_URL: https://skillcheck.pl
+        run: |
+          if [ -z "${CRON_SECRET:-}" ]; then echo "::notice::CV_BULK_CRON_SECRET not configured yet; nothing to do"; exit 0; fi
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 90 -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/internal/cv-bulk")
+          echo "HTTP $code"; head -c 200 /tmp/out.json; echo
+          # 503 {"status":"disabled"} = worker secret not configured yet; any other non-200 fails.
+          if [ "$code" = "200" ] || { [ "$code" = "503" ] && grep -q '"disabled"' /tmp/out.json; }; then exit 0; fi
+          exit 1

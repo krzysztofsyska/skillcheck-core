@@ -77,3 +77,28 @@ raportowany jako „zabezpieczony”. Poprawka + test w `test:pdf-bundle`.
 
 Nie przetestowano na preview: prawdziwego wywołania OpenAI (brak wdrożonego workera na preview,
 osobny koszt), wysyłki e-mail, harmonogramu w tle.
+
+## Decyzje właściciela (2026-11-01) — wszystkie TAK
+1. W trybie zbiorczym potwierdzenie paczki przez operatora zastępuje ręczne sprawdzenie
+   anonimizacji każdego CV (`reviewed_by` = operator, automatyczne zakrycie imienia, nazwiska,
+   e-maila, telefonu i linków).
+2. Progi grup na start: ≥ 60 przeszli sito, < 35 nie spełniają kryteriów, reszta decyzja rekrutera.
+3. Przetwarzanie w tle po zamknięciu strony: harmonogram GitHub co 5 min
+   (`.github/workflows/cv-bulk-pump.yml`, tylko `main`) woła `/api/internal/cv-bulk`.
+   Nie Vercel Cron: zadania co minutę wymagają płatnego planu Vercel i na planie Hobby blokują wdrożenie.
+4. E-mail do operatora po zakończeniu paczki — włączany przy wdrożeniu produkcyjnym.
+5. Jednorazowy test z prawdziwą analizą AI na bazie testowej: `.github/workflows/preview-ai-smoke.yml`
+   (gałąź `preview-ai/**`, maks. 10 analiz, tylko firmy „Firma Testowa…”).
+6. Osobne zadanie: produkt „dokup 5 CV” w SC-019.
+
+## Lista kroków przy wdrożeniu produkcyjnym (po osobnym TAK na produkcję)
+Wykonuje właściciel albo zatwierdzony pipeline — agenci nie zmieniają sekretów produkcji.
+1. Migracje: R8 (jeśli jeszcze nie ma) → `20261101100000_cv_bulk_intake.sql` → `20261101100100_cv_bulk_erasure_inventory_r9.sql`
+   przez `db-migrate-production`.
+2. Vercel Production env: `CV_BULK_WORKER_SECRET` (≥ 32 znaki), `CV_BULK_CRON_SECRET` (≥ 32 znaki),
+   `CV_BULK_MAIL_ENABLED=true` (używa istniejącego `RESEND_API_KEY`), `CV_AI_PRICE_INPUT_PER_MTOK`,
+   `CV_AI_PRICE_CACHED_INPUT_PER_MTOK`, `CV_AI_PRICE_OUTPUT_PER_MTOK`, `CV_AI_PRICE_VERSION` (cennik OpenAI
+   dla modelu `gpt-5.4-mini-2026-03-17` z dnia wdrożenia).
+3. Baza produkcyjna (zatwierdzony krok SQL): `update private.cv_bulk_settings set worker_secret = '<CV_BULK_WORKER_SECRET>' where singleton;`
+4. GitHub: środowisko `cv-bulk-pump` z sekretem `CV_BULK_CRON_SECRET` (ta sama wartość co w Vercel).
+5. Smoke po wdrożeniu: paczka 3 syntetycznych CV na koncie testowym, przebieg do „gotowe”, e-mail, wpis tokenów i kosztu.
