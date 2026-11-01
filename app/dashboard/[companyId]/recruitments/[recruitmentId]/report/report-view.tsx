@@ -15,7 +15,7 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
     {report.requirements.length ? <ul>{report.requirements.map((r, i) => <li key={i}><strong>{kindLabels[r.kind]}:</strong> {r.text}</li>)}</ul> : <p>Brak zdefiniowanych kryteriów.</p>}
     {!!report.groups?.length && <>
       <h2>Preselekcja automatyczna</h2>
-      <p>Podział na grupy wynika z analizy AI wszystkich wymagań i nie wymaga akceptowania każdego wiersza. To sugestia do weryfikacji przez człowieka, nie decyzja o zatrudnieniu.</p>
+      <p>Podział na grupy wynika z analizy AI wszystkich wymagań. To sugestia do weryfikacji przez człowieka, nie decyzja o zatrudnieniu. Plik CSV zawiera tylko identyfikatory zgłoszeń, bez nazwisk.</p>
       <div className={styles.tableWrap}><table className={styles.table}>
         <caption>Kandydaci według grup (najpierw najwyższy wynik)</caption>
         <thead><tr><th scope="col">Grupa</th><th scope="col">Kandydat</th><th scope="col">Wynik</th><th scope="col">Pokrycie</th><th scope="col">Źródło</th></tr></thead>

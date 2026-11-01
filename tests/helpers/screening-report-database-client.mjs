@@ -1,7 +1,7 @@
 // Test-only transport adapter. Every read/RPC executes production SQL under the
 // fixture's authenticated PostgreSQL role and RLS; no ranking rows are invented.
 const tables = new Set(['companies','recruitments','positions','applications','screening_analysis_versions','screening_result_reviews','screening_criterion_results','screening_criterion_review_overrides']);
-const functions = new Set(['get_screening_ranking','get_recruitment_shortlist']);
+const functions = new Set(['get_screening_ranking','get_recruitment_shortlist','get_preselection_groups']);
 const identifier = value => { if (!/^[a-z_][a-z_0-9]*$/.test(value)) throw Error('Invalid test SQL identifier'); return '"'+value+'"'; };
 export function reportDatabaseClient(db, getUser, beforeRead = async () => {}) {
   const reads = [];

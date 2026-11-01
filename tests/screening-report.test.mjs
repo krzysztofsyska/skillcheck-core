@@ -223,7 +223,8 @@ test('automatic preselection groups appear in the report and CSV without per-row
   const report = await load(data), csv = screeningReportCsv(report);
   assert.equal(report.groups.length, 1);
   assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875 });
-  assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, /"Jan Testowy";"Przeszli sito";"87.5";"0.875";"Automatycznie"/);
+  assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, new RegExp(`"${application}";"Przeszli sito";"87.5";"0.875";"Automatycznie"`));
+  assert.doesNotMatch(csv, /Jan Testowy/, 'CSV keeps candidates by application ID only');
   assert.doesNotMatch(csv, /Obca Osoba/);
 });
 

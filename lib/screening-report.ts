@@ -143,7 +143,7 @@ export function parseGroupRow(value: unknown): ReportGroupRow {
   return {
     application_id: applicationId, candidate_name: text(g.candidate_name, 300),
     group: g.group_key as PreselectionGroupKey, source: g.source as 'auto' | 'manual',
-    raw_score: numeric(g.raw_score, 1000000, true), coverage: numeric(g.coverage, 1, true),
+    raw_score: numeric(g.raw_score, 100, true), coverage: numeric(g.coverage, 1, true),
   };
 }
 export function reportEvidence(value: unknown): ReportCriterion['evidence'] {
@@ -196,9 +196,10 @@ export function screeningReportCsv(report: ScreeningReport): string {
     }
   }
   if (report.groups?.length) {
+    // Exports keep the SC-009 rule: candidates by application ID only, no names (the screen may show names).
     rows.push([], ['Preselekcja automatyczna (grupy z analizy AI, do weryfikacji przez człowieka)'],
-      ['Zgłoszenie', 'Kandydat', 'Grupa', 'Wynik', 'Pokrycie', 'Źródło grupy']);
-    for (const g of report.groups) rows.push([g.application_id, g.candidate_name, preselectionGroupLabels[g.group], g.raw_score, g.coverage,
+      ['Zgłoszenie', 'Grupa', 'Wynik', 'Pokrycie', 'Źródło grupy']);
+    for (const g of report.groups) rows.push([g.application_id, preselectionGroupLabels[g.group], g.raw_score, g.coverage,
       g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie']);
   }
   const csv = '\uFEFF' + rows.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';
