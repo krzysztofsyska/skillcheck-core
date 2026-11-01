@@ -14,23 +14,23 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
     ? `PRESELEKCJA: ${preselectionCount} za ${preselekcjaPrice}, ${validity} od przyznania.`
     : `PRESELEKCJA: ${preselekcjaPrice}, ${validity} od przyznania.`;
   const plans = [
-    {name:"FREE", color:styles.planBlue, title:"Wypróbuj SkillCheck", text:"Poznaj docelowy proces na niewielkiej grupie kandydatów.", price:"0 zł", scope:offer.freeScope, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i ocena dopasowania", "Chatbot informacyjny dla kandydatów", "Podstawowa shortlista", "Jedna próbna rozmowa z botem i podstawowa analiza"]},
-    {name:"PRESELEKCJA", color:styles.planGreen, title:"Uporządkuj wybór kandydatów", text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę.", price:preselekcjaPrice, current:true, scope:`${preselectionCount ?? sc19PolicyPendingScope} · ${validity}`, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i ocena dopasowania", "Chatbot informacyjny dla kandydatów", "Shortlista — zakres ustalany w ofercie", "Podstawowy raport preselekcji"]},
+    {name:"FREE", color:styles.planBlue, title:"Wypróbuj SkillCheck", text:"Poznaj docelowy proces na niewielkiej grupie kandydatów.", price:"0 zł", scope:offer.freeScope, current:true, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i analiza CV przez AI", "Dowody, braki i pytania na rozmowę", "Ranking i raport preselekcji", "Jeden pakiet na firmę (weryfikacja NIP)"]},
+    {name:"PRESELEKCJA", color:styles.planGreen, title:"Uporządkuj wybór kandydatów", text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę.", price:preselekcjaPrice, current:true, scope:`${preselectionCount ?? sc19PolicyPendingScope} · ${validity}`, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i analiza CV przez AI", "Dowody, braki i pytania na rozmowę", "Ranking, shortlista i raport z eksportem", "Płatność na podstawie faktury"]},
     {name:"WERYFIKACJA", color:styles.planPurple, title:"Sprawdź, co naprawdę potrafią", text:"Pogłęb ocenę przez rozmowę, jej analizę i test kompetencji.", price:"899 zł", scope:"20 rozmów + testy; analizy CV według zatwierdzonej polityki", features:["Wszystko z Preselekcji", "20 rozmów weryfikacyjnych z botem", "Analiza odpowiedzi z rozmowy", "Testy kompetencji", "Rozszerzony raport kandydata"]},
     {name:"ASSESSMENT CENTER", color:styles.planOrange, title:"Zobacz, jak podejdą do pracy", text:"Sprawdź sposób działania w zadaniach osadzonych w realiach stanowiska.", price:"1 799 zł", scope:"20 rozmów + testy + case studies; analizy CV według zatwierdzonej polityki", features:["Wszystko z Weryfikacji", "Case studies i zadania praktyczne", "Ćwiczenia dopasowane do roli", "Pogłębiony proces Assessment Center", "Kompleksowy raport kandydata"]},
   ];
   const rows = [
     ["Konto firmy i profil stanowiska","Tak","Tak","Tak","Tak"],
     ["Analizy CV", offer.freeAnalyses, analyses === null ? sc19PolicyPendingCell : String(analyses), "Według polityki", "Według polityki"],
-    ["Pseudonimizacja i ocena dopasowania","Tak","Tak","Tak","Tak"],
-    ["Chatbot informacyjny","Tak","Tak","Tak","Tak"],
+    ["Pseudonimizacja i analiza CV przez AI","Tak","Tak","Tak","Tak"],
+    ["Chatbot informacyjny","Planowany","Planowany","Planowany","Planowany"],
     ["Shortlista / raport preselekcji","Podstawowe","Według oferty","5–10 kandydatów","5–10 kandydatów"],
-    ["Rozmowa weryfikacyjna z botem","1 próbna","Nie","20","20"],
-    ["Analiza rozmowy","Podstawowa","Nie","Tak","Tak"],
+    ["Rozmowa weryfikacyjna z botem","Nie","Nie","20","20"],
+    ["Analiza rozmowy","Nie","Nie","Tak","Tak"],
     ["Test kompetencji","Nie","Nie","Tak","Tak"],
     ["Case studies i zadania praktyczne","Nie","Nie","Nie","Tak"],
     ["Pełny Assessment Center","Nie","Nie","Nie","Tak"],
-    ["Raport kandydata","Podstawowy","Podstawowy","Rozszerzony","Kompleksowy"],
+    ["Raport kandydata","Raport preselekcji","Raport preselekcji","Rozszerzony","Kompleksowy"],
     ["Talent Pool za zgodą kandydata","Planowany","Planowany","Planowany","Planowany"],
   ];
   return <>
@@ -38,7 +38,7 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
     {!plan.current && <p className={styles.planLabel}>Planowany pakiet</p>}<h3>{plan.name}</h3><p className={styles.planTitle}>{plan.title}</p><p>{plan.text}</p>
     <ul>{plan.features.map(f=><li key={f}>{f}</li>)}</ul>
     <div className={styles.planPrice}><strong>{plan.price}</strong><p>{plan.scope}</p>{!plan.current && <small>Cena robocza z wizualizacji</small>}</div>
-    <Link href={plan.name === "FREE" ? "/preselekcja#free" : plan.name === "PRESELEKCJA" ? "/preselekcja" : "/rozmowa"} className={styles.secondary}>Zapytaj o {plan.name === "FREE" ? "wariant próbny" : plan.name}</Link>
+    <Link href={plan.name === "FREE" ? "/preselekcja#free" : plan.name === "PRESELEKCJA" ? "/preselekcja" : "/rozmowa"} className={styles.secondary}>{plan.name === "FREE" ? "Jak uzyskać FREE" : `Zapytaj o ${plan.name}`}</Link>
   </article>)}</div>
   <p className={styles.note}>{sizes
     ? `${preselectionNote} Liczba analiz CV dla FREE pochodzi z zatwierdzonej polityki pakietu. Ceny i warunki pozostałych pakietów wymagają zatwierdzenia przed sprzedażą. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.`
