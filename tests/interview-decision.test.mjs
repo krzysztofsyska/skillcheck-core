@@ -44,3 +44,11 @@ test('stage notes and Step 3 interview topics link to each other for the same ap
   assert.match(assessments, /href=\{`\$\{base\}\/applications\/\$\{applicationId\}\/interview`\}/);
   assert.match(interview, /href=\{`\$\{base\}\/applications\/\$\{route\.applicationId\}\/assessments`\}/);
 });
+
+test('a pending interview note is saved when the form unmounts, and the browser warns before unload', async () => {
+  const forms = await readFile(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/assessment-forms.tsx', import.meta.url), 'utf8');
+  assert.match(forms, /setTimeout\(\(\) => flush\.current\(\), 900\)/);
+  assert.match(forms, /addEventListener\('beforeunload', warn\)/);
+  assert.match(forms, /removeEventListener\('beforeunload', warn\);\s*flush\.current\(\);/);
+  assert.match(forms, /latest\.current === lastSaved\.current && !saving\.current\) return;\s*flush\.current\(\);\s*event\.preventDefault\(\);/);
+});
