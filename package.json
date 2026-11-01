@@ -9,7 +9,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test:db": "node --test tests/database.test.mjs tests/database-types.test.mjs tests/data-api-grants.test.mjs tests/company-creation-limit-database.test.mjs",
     "test:company-limit-concurrency": "node --test tests/company-creation-limit-concurrency.test.mjs",
-    "test:auth": "node --test tests/auth.test.mjs tests/page-access-guard.test.mjs tests/position.test.mjs tests/candidate.test.mjs tests/auth-url.test.mjs",
+    "test:auth": "node --test tests/auth.test.mjs tests/onboarding-redirect.test.mjs tests/page-access-guard.test.mjs tests/position.test.mjs tests/candidate.test.mjs tests/auth-url.test.mjs",
     "test:http": "node --test tests/http.test.mjs",
     "test:live": "node --env-file-if-exists=.env.local scripts/check-live-supabase.mjs",
     "test:cv": "node --test tests/cv.test.mjs tests/cv-database.test.mjs tests/cv-pdf.test.mjs tests/cv-docx.test.mjs",

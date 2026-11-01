@@ -44,9 +44,10 @@ export async function createCompany(form: FormData) {
   if (!user) redirect("/login");
   const name = String(form.get("name") ?? "").trim();
   if (!name || name.length > 200) redirect("/onboarding?message=invalid");
-  const { error } = await client.rpc("ensure_initial_company", { company_name: name });
+  const { data: companyId, error } = await client.rpc("ensure_initial_company", { company_name: name });
   if (error) redirect("/onboarding?message=failed");
-  redirect("/dashboard");
+  // Open the new company's dashboard straight away; fall back to the list for an unexpected value.
+  redirect(typeof companyId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId) ? `/dashboard/${companyId}` : "/dashboard");
 }
 
 export async function requestPasswordReset(form: FormData) {
