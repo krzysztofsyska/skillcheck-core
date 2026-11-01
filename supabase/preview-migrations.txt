@@ -2,3 +2,5 @@
 # .github/workflows/preview-db-migrate.yml, in this order. Entries already in
 # the preview ledger (same name) are skipped. Never used for production.
 20261030160100_sc_step4_erasure_inventory_r8.sql
+20261101100000_cv_bulk_intake.sql
+20261101100100_cv_bulk_erasure_inventory_r9.sql
