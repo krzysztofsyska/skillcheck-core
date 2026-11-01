@@ -76,6 +76,21 @@ Open security item from the audit (owner only, rule 3): Vercel Production still 
 - Do not add new GitHub workflows or agent-pipeline tooling unless the task is explicitly about that.
 - Delete the branch after its PR is merged, if you created it.
 
+## Project status report at the end of every session (owner decision 2026-11-01)
+
+At the end of every work session on this project, overwrite the status report on the owner's Google Drive.
+
+- Folder: "Status projektów" on the owner's My Drive (Drive folder id `1FGhTxEBZolwbfXPcxq2KyaCGTc6-WdHD`; on the owner's Windows computer `G:\Mój dysk\Status projektów` — if the path differs, find it and update this line).
+- File: `Status - SkillCheck.md` (one file per project; other projects use `Status - <Project>.md`, e.g. `Status - Mystery Customer.md`).
+- Always OVERWRITE the existing file. Never create versions or copies. If the tool cannot replace the content in place (the Google Drive connector in cloud sessions can only create files), create the new file first, then move the old one to the trash, so the folder holds exactly one file per project.
+- Content, short, in Polish, no jargon:
+  1. Date and time of the update (Europe/Warsaw).
+  2. List of modules, each with: status (gotowy / w trakcie / zablokowany / nie rozpoczęty), percent complete, and one sentence on what is left.
+  3. What was done in this session.
+  4. Blockers and things that need the owner's decision.
+  5. Next 3 steps.
+  6. Branch, last commit, and whether the latest Vercel deployment succeeded.
+
 ## Commands
 
 - Install: `npm ci`
