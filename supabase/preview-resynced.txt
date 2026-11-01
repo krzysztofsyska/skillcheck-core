@@ -1,0 +1,6 @@
+# Preview resync acknowledgements: "<sha256 of file text without trailing newlines>  <file>".
+# Added only after the changed objects were re-created on skillcheck-preview by hand.
+# 2026-11-01: SC-BULK-001 review fixes (cv_bulk_register_item, cv_bulk_pump_batch re-created;
+#   md5 of both bodies verified equal to this file). R9: comment-only change.
+65e9f46540d2a9dd950780363c5349791ac807eff0c95edd3c9fda2c0be29674  20261101130000_cv_bulk_intake.sql
+2c4639eb322063ea3eff7df2e143e489f17e77295dd08f659701bce3b0429755  20261101130100_cv_bulk_erasure_inventory_r9.sql

@@ -35,3 +35,12 @@ test('every listed migration exists and is a checked-in file name', () => {
   }
   assert.deepEqual([...entries].sort(), entries, 'listed in migration order');
 });
+
+test('a listed migration edited after reaching preview fails unless its resync is acknowledged', () => {
+  assert.match(yml, /ledger_sha" = "\$body_sha" \]; then echo "skip/);
+  assert.match(yml, /grep -qxF "\$body_sha  \$file" supabase\/preview-resynced\.txt/);
+  assert.match(yml, /::error::\$file changed after it was applied to preview/);
+  const acks = readFileSync(new URL('../supabase/preview-resynced.txt', import.meta.url), 'utf8')
+    .split('\n').filter(l => l && !l.startsWith('#'));
+  for (const line of acks) assert.match(line, /^[0-9a-f]{64} {2}[0-9]{14}_[a-z0-9_]+\.sql$/);
+});

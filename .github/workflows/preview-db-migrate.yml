@@ -6,7 +6,10 @@
 # What runs: exactly the files listed in supabase/preview-migrations.txt, in
 # that order, skipped when the preview ledger
 # (supabase_migrations.schema_migrations) already has a migration of the same
-# name. Each migration file carries its own transaction and preflight/postflight guards.
+# name with identical text. A listed file whose text changed after it reached
+# preview fails the job (never a silent skip) unless its new sha256 is
+# acknowledged in supabase/preview-resynced.txt after a manual resync.
+# Each migration file carries its own transaction and preflight/postflight guards.
 #
 # When: every push to `integration` or to a `preview-db/**` branch (a task
 # branch pushed there to be tested on preview before review/merge). No paths
@@ -65,7 +68,24 @@ jobs:
           select count(*) from supabase_migrations.schema_migrations where name = :'name';
           SQL
             )
-            if [ "$done_count" != "0" ]; then echo "skip   $file (already applied)"; continue; fi
+            body_sha=$(printf '%s' "$(cat "$path")" | sha256sum | cut -d' ' -f1)
+            if [ "$done_count" != "0" ]; then
+              # A listed migration edited after it reached preview must never be skipped silently.
+              ledger_sha=$(psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v name="$name" <<'SQL'
+          select encode(sha256(convert_to(array_to_string(statements, ''), 'UTF8')), 'hex') from supabase_migrations.schema_migrations where name = :'name' order by version desc limit 1;
+          SQL
+              )
+              if [ "$ledger_sha" = "$body_sha" ]; then echo "skip   $file (already applied)"; continue; fi
+              if grep -qxF "$body_sha  $file" supabase/preview-resynced.txt 2>/dev/null; then
+                # Recorded manual resync (changed objects re-created on preview): store the current text.
+                psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v name="$name" -v body="$(cat "$path")" <<'SQL'
+          update supabase_migrations.schema_migrations set statements = array[:'body'] where name = :'name';
+          SQL
+                echo "resync $file (acknowledged in supabase/preview-resynced.txt)"; continue
+              fi
+              echo "::error::$file changed after it was applied to preview (ledger $ledger_sha, file $body_sha). Re-create the changed objects on preview, then add \"$body_sha  $file\" to supabase/preview-resynced.txt."
+              exit 1
+            fi
             echo "apply  $file"
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$path"
             psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v version="$version" -v name="$name" -v body="$(cat "$path")" <<'SQL'
