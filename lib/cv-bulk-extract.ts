@@ -36,7 +36,11 @@ function remaining(deadline: number) {
   return left;
 }
 
-/** OCR with the per-file time budget; null when the result is too poor to use. */
+/**
+ * OCR with the per-file time budget. Null only for a blank page (almost no characters found);
+ * real text read with low confidence fails the file as an unreadable scan instead of being dropped,
+ * so a CV is never analysed with a silently missing page.
+ */
 async function ocrRead(ocr: OcrFn, image: Buffer, deadline: number) {
   let result;
   try { result = await ocr(image, { timeoutMs: remaining(deadline) }); }
@@ -45,7 +49,9 @@ async function ocrRead(ocr: OcrFn, image: Buffer, deadline: number) {
     throw error; // runtime failure: transient, the browser may retry
   }
   const text = result.text.trim();
-  return result.confidence < MIN_OCR_CONFIDENCE || visibleLength(text) < MIN_TEXT_CHARS ? null : text;
+  if (visibleLength(text) < MIN_PAGE_TEXT_CHARS) return null;
+  if (result.confidence < MIN_OCR_CONFIDENCE) throw new BulkIntakeError('unreadable_scan');
+  return text;
 }
 
 const isPng = (b: Buffer) => b.length > 24 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
@@ -117,8 +123,9 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
       let text: string;
       try { text = (await parser.getText({ partial: [page], pageJoiner: '', parseHyperlinks: false })).pages[0]?.text.trim() ?? ''; }
       catch { throw new BulkIntakeError('protected_pdf'); } // damaged content stream
-      // Near-empty page: OCR it, within a hard cap on OCR runs. A page where OCR finds nothing
-      // usable (a blank or decorative page) is kept as it is; only the whole document must have text.
+      // Near-empty page: OCR it, within a hard cap on OCR runs. A page where OCR finds almost no
+      // characters (a blank or decorative page) is kept as it is; a page with text OCR cannot read
+      // reliably fails the file (ocrRead). Only the whole document must reach the minimum length.
       if (visibleLength(text) < MIN_PAGE_TEXT_CHARS && attempts < BULK_MAX_OCR_ATTEMPTS) {
         attempts++;
         ocrTried = true;

@@ -510,6 +510,22 @@ test('SC-BULK-001 bulk intake on the full migration chain', async t => {
     } finally { await other.query('rollback').catch(() => {}); other.release(); }
   });
 
+  await t.test('with AI switched off, queued files return their slots after 24 hours', async () => {
+    const f = await b.tenant(paymentUsers.owner, 2);
+    const batch = await b.create(f, 2);
+    for (const item of await b.items(batch.batch_id)) await b.register(f, item.id);
+    const before = await b.balance(f.companyId);
+    assert.deepEqual((await b.pump(f, batch.batch_id, false)).dispatch, []);
+    assert.deepEqual((await b.items(batch.batch_id)).map(r => r.phase), ['queued', 'queued'], 'fresh queue waits for AI');
+    await h.asAdmin();
+    await db.query("update private.cv_bulk_items set updated_at=now()-interval '25 hours' where batch_id=$1 and position=1", [batch.batch_id]);
+    await b.pump(f, batch.batch_id, false);
+    const rows = await b.items(batch.batch_id);
+    assert.deepEqual(rows.map(r => [r.phase, r.error_reason, r.slot_state]),
+      [['error', 'analysis_failed', 'released'], ['queued', null, 'held']]);
+    assert.equal(await b.balance(f.companyId), before + 1, 'the slot returned to the package');
+  });
+
   await t.test('a retry that resolves to another analysis moves the item to it', async () => {
     const f = await b.tenant(paymentUsers.owner, 2);
     const batch = await b.create(f, 1);

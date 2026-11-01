@@ -31,10 +31,13 @@ function worker(): Promise<OcrWorker> {
   return workerPromise;
 }
 
-/** Drops the current worker (dead, stuck or failed) so the next job starts a fresh one. */
-async function discard(current: Promise<OcrWorker> | null) {
+/**
+ * Drops the current worker (dead, stuck or failed) so the next job starts a fresh one. Termination
+ * runs in the background: a worker that never finished starting must not block the OCR queue.
+ */
+function discard(current: Promise<OcrWorker> | null) {
   if (workerPromise === current) workerPromise = null;
-  if (current) await current.then(w => w.terminate()).catch(() => undefined);
+  if (current) void current.then(w => w.terminate()).catch(() => undefined);
 }
 
 export type OcrResult = { text: string; confidence: number };
@@ -58,7 +61,7 @@ export function ocrImage(image: Buffer, options: { timeoutMs?: number } = {}): P
       return { text: result.data.text ?? '', confidence: Number(result.data.confidence) || 0 };
     } catch (error) {
       // Timeout or worker failure: never reuse a worker that may be stuck or dead.
-      await discard(current);
+      discard(current);
       throw error;
     } finally { clearTimeout(timer); }
   });
@@ -68,7 +71,10 @@ export function ocrImage(image: Buffer, options: { timeoutMs?: number } = {}): P
 
 /** Ends the Tesseract worker (tests and graceful shutdown). */
 export async function closeOcr() {
-  await discard(workerPromise);
+  const current = workerPromise;
+  workerPromise = null;
+  // Bounded wait: a worker that never started is abandoned rather than awaited forever.
+  if (current) await Promise.race([current.then(w => w.terminate()).catch(() => undefined), new Promise(r => setTimeout(r, 1000).unref?.())]);
 }
 
 /** Tests only: replace the worker factory (null restores Tesseract). */

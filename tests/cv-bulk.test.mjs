@@ -236,6 +236,9 @@ test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
   assert.equal(calls, 1, 'the blank page was tried once');
   assert.equal(out.ocrUsed, false);
   assert.match(out.text, /Katarzyna Wisniewska/);
+  // Real text that OCR reads only with low confidence fails the file instead of being dropped.
+  const poorOcr = async () => ({ text: 'Doswiadczenie zawodowe 2019-2024 kierownik magazynu', confidence: 40 });
+  await assert.rejects(extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', poorOcr), reason('unreadable_scan'));
   // A scan where OCR finds nothing on any page is still unreadable.
   await assert.rejects(extractBulkCv(scannedPdf(cvLines), 'pdf', blankOcr), reason('unreadable_scan'));
 });
@@ -263,28 +266,49 @@ test('OCR worker: a stuck recognition times out and the worker is replaced', asy
   });
   try {
     await assert.rejects(ocrImage(Buffer.from('a'), { timeoutMs: 50 }), error => error instanceof OcrTimeoutError);
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(workers[0].terminated, true, 'stuck worker terminated');
     assert.deepEqual(await ocrImage(Buffer.from('b'), { timeoutMs: 1000 }), { text: 'ok', confidence: 91 });
     assert.equal(workers.length, 2, 'a fresh worker served the next job');
     // A crashed worker is replaced as well.
     workers[1].recognize = () => Promise.reject(new Error('worker died'));
     await assert.rejects(ocrImage(Buffer.from('c')), /worker died/);
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(workers[1].terminated, true);
     assert.equal((await ocrImage(Buffer.from('d'))).text, 'ok');
     assert.equal(workers.length, 3);
   } finally { await setOcrWorkerFactoryForTests(null); }
 });
 
-test('scheduler pump stops delivering when its time budget is used', async () => {
-  let clock = 0;
+test('OCR worker: a worker that never starts times out and does not block later jobs', async () => {
+  const { ocrImage, setOcrWorkerFactoryForTests } = await import('../lib/cv-ocr.ts');
+  const { OcrTimeoutError } = await import('../lib/cv-bulk.ts');
+  let starts = 0;
+  await setOcrWorkerFactoryForTests(() => ++starts === 1 ? new Promise(() => {})
+    : Promise.resolve({ recognize: async () => ({ data: { text: 'ok', confidence: 90 } }), terminate: async () => {} }));
+  try {
+    await assert.rejects(ocrImage(Buffer.from('a'), { timeoutMs: 50 }), error => error instanceof OcrTimeoutError);
+    assert.equal((await ocrImage(Buffer.from('b'), { timeoutMs: 1000 })).text, 'ok', 'the queue is not blocked');
+    assert.equal(starts, 2);
+  } finally { await setOcrWorkerFactoryForTests(null); }
+});
+
+test('scheduler pump delivers every returned batch, in parallel', async () => {
   const rpc = async fn => fn === 'cv_bulk_worker_pump'
     ? { data: [1, 2, 3].map(n => ({ batch_id: `b${n}`, dispatch: [`${n}${n}${n}${n}${n}${n}${n}${n}-4444-4444-8444-444444444444`], notify: null })), error: null }
     : { data: true, error: null };
+  let inFlight = 0, peak = 0;
   const dispatched = [];
-  const count = await pumpAllSigned({ rpc, dispatch: async id => { dispatched.push(id); clock += 20_000; return { accepted: true }; },
-    aiEnabled: true, origin: () => 'https://x', env: {}, secret: 's'.repeat(32), digest: t => createHash('sha256').update(t).digest('hex'), now: () => clock });
+  const count = await pumpAllSigned({ rpc, dispatch: async id => {
+    inFlight++; peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    inFlight--; dispatched.push(id);
+    if (id.startsWith('2')) throw new Error('one dispatch fails');
+    return { accepted: true };
+  }, aiEnabled: true, origin: () => 'https://x', env: {}, secret: 's'.repeat(32), digest: t => createHash('sha256').update(t).digest('hex') });
   assert.equal(count, 3);
-  assert.equal(dispatched.length, 2, 'third batch left for the next run');
+  assert.equal(dispatched.length, 3, 'no counted re-send is left undelivered');
+  assert.equal(peak, 3, 'batches are delivered in parallel, bounded by the per-request timeouts');
 });
 
 test('uploader: one request key per file set, synchronous double-click guard, OCR files one at a time', async () => {

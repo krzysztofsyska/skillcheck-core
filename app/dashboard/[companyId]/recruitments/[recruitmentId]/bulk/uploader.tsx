@@ -124,9 +124,15 @@ export function BulkUploader(props: Props) {
     const drain = (lane: typeof queue, width: number) => Array.from({ length: width }, async () => {
       while (lane.length) await upload(lane.shift()!);
     });
-    await Promise.all([...drain(ocrLane, BULK_OCR_UPLOAD_CONCURRENCY), ...drain(textLane, BULK_UPLOAD_CONCURRENCY)]);
-    await closeBulkUpload(props.companyId, created.batchId);
-    router.push(base);
+    try {
+      await Promise.all([...drain(ocrLane, BULK_OCR_UPLOAD_CONCURRENCY), ...drain(textLane, BULK_UPLOAD_CONCURRENCY)]);
+      await closeBulkUpload(props.companyId, created.batchId);
+    } catch {
+      // The batch exists either way: its page shows what arrived, and an upload left open is closed
+      // by the background pump. Never leave the button stuck on "Tworzę paczkę…".
+    } finally {
+      router.push(base);
+    }
   }
 
   if (progress) return <section aria-live="polite">

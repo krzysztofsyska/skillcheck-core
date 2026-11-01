@@ -287,8 +287,12 @@ begin
             updated_at = clock_timestamp() where id = a.id and stale_at is null;
           update private.cv_bulk_items set phase = 'error', error_reason = 'analysis_failed', updated_at = now() where id = item.id;
         exception when others then
-          -- E.g. the candidate row is busy: rolled back, tried again by the next pump.
-          null;
+          -- Busy rows (transient): rolled back, tried again by the next pump. Any other error must not
+          -- keep the item analyzing forever (it would hold a parallel slot): mark it failed.
+          get stacked diagnostics err_state = returned_sqlstate, err_message = message_text;
+          if not private.cv_bulk_transient_error(err_state, err_message) then
+            update private.cv_bulk_items set phase = 'error', error_reason = 'analysis_failed', updated_at = now() where id = item.id;
+          end if;
         end;
       end if;
     end if;
@@ -321,6 +325,14 @@ begin
         end if;
         -- Transient: stays queued with the slot held; the next pump tries again.
       end;
+    end loop;
+  else
+    -- AI switched off: queued files wait for it, but not forever; after 24 hours their slots
+    -- return to the package and the files are reported as not analysed.
+    for item in select * from private.cv_bulk_items where batch_id = b.id and phase = 'queued'
+        and updated_at < now() - interval '24 hours' order by position for update skip locked loop
+      perform private.cv_bulk_release_slot(item);
+      update private.cv_bulk_items set phase = 'error', error_reason = 'analysis_failed', updated_at = now() where id = item.id;
     end loop;
   end if;
   -- 3. Completion and notification claim.

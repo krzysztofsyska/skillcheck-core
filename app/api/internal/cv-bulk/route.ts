@@ -7,8 +7,8 @@ export const dynamic = 'force-dynamic';
 /**
  * Background pump for bulk CV batches whose browser tab was closed. Called every
  * 5 minutes by .github/workflows/cv-bulk-pump.yml (Bearer CV_BULK_CRON_SECRET).
- * No new batch delivery starts after 30 s, so the response returns within maxDuration;
- * whatever is left is picked up by the next run.
+ * Returned batches are delivered in parallel (dispatch 15 s, e-mail 10 s timeouts),
+ * so the response returns within maxDuration.
  */
 export async function GET(request: Request) {
   const headers = { 'Cache-Control': 'no-store' };
