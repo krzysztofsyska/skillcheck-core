@@ -60,18 +60,26 @@ export function bulkWorkerSignature(secret: string, op: 'pump' | 'notify', reque
   return createHmac('sha256', secret).update(['cv-bulk-v1', op, requestId, String(stamp), target ?? '-', extra ?? '-'].join('\n')).digest('hex');
 }
 
-/** Scheduler pump without a user session: every call is signed with the worker secret. */
-export async function pumpAllSigned(deps: PumpDeps & { secret: string; md5: (text: string) => string }) {
+/**
+ * Scheduler pump without a user session: every call is signed with the worker secret. No new batch delivery
+ * starts after `budgetMs` (default 30 s): one delivery can take up to ~25 s (15 s dispatch + 10 s e-mail),
+ * so the route stays inside maxDuration 60 s. Skipped dispatches are re-sent by a later pump and skipped
+ * e-mails are retried when their sending lease expires.
+ */
+export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (text: string) => string; budgetMs?: number; now?: () => number }) {
+  const now = deps.now ?? Date.now;
+  const deadline = now() + (deps.budgetMs ?? 30_000);
   const env = deps.env ?? process.env;
   const contract = bulkContract(deps.aiEnabled), pricing = bulkPricing(env);
   const requestId = randomUUID(), stamp = Date.now();
-  // Same canonical text as md5(contract::text || '|' || pricing::text) in SQL (jsonb canonical form).
-  const extra = deps.md5(`${canonicalJsonb(contract)}|${canonicalJsonb(pricing)}`);
+  // sha256 over the same canonical text as (contract::text || '|' || pricing::text) in SQL (jsonb canonical form).
+  const extra = deps.digest(`${canonicalJsonb(contract)}|${canonicalJsonb(pricing)}`);
   const { data, error } = await deps.rpc('cv_bulk_worker_pump', { request_id: requestId, issued_at_ms: stamp,
     request_signature: bulkWorkerSignature(deps.secret, 'pump', requestId, stamp, null, extra), contract, pricing });
   if (error) throw new Error('cv_bulk_worker_pump_failed');
   const batches = Array.isArray(data) ? data : [];
   for (const one of batches) {
+    if (now() >= deadline) break;
     await deliver(deps, parsePump(one), async (batch, outcome) => {
       const id = randomUUID(), at = Date.now();
       await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,

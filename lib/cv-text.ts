@@ -120,9 +120,29 @@ async function validateDocxArchive(bytes: Buffer, options: { headerFooterText?: 
 }
 
 // Plain text of a header/footer part: paragraph breaks, <w:t> runs, XML entities.
-function docxSectionText(xml: string) {
+// Single forward scan over the tags (indexOf only), so crafted input cannot cause regex backtracking.
+export function docxSectionText(xml: string) {
   const decode = (value: string) => value.replace(/&(lt|gt|quot|apos|amp);/g, (_, e: string) => ({ lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' })[e]!);
-  return xml.split(/<\/w:p>/).map(paragraph => Array.from(paragraph.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g), m => decode(m[1])).join('')).map(line => line.trim()).filter(Boolean).join('\n');
+  const lines: string[] = [];
+  let line = '';
+  let i = 0;
+  while (i < xml.length) {
+    const open = xml.indexOf('<', i);
+    if (open < 0) break;
+    const close = xml.indexOf('>', open + 1);
+    if (close < 0) break;
+    const tag = xml.slice(open + 1, close);
+    i = close + 1;
+    if (tag === '/w:p') { lines.push(line); line = ''; continue; }
+    // <w:t> or <w:t attr="..."> (not <w:tab/>, <w:tbl>, self-closing <w:t/>): text runs up to the next tag.
+    if ((tag === 'w:t' || /^w:t\s/.test(tag)) && !tag.endsWith('/')) {
+      const next = xml.indexOf('<', i);
+      if (next < 0) break;
+      if (xml.startsWith('</w:t>', next)) { line += decode(xml.slice(i, next)); i = next + 6; }
+    }
+  }
+  lines.push(line);
+  return lines.map(l => l.trim()).filter(Boolean).join('\n');
 }
 
 /** Bulk intake: larger files, header/footer text kept. Same archive checks otherwise. */

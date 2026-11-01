@@ -1,4 +1,5 @@
--- Reverts 20261101130100_cv_bulk_erasure_inventory_r9.sql. Run it BEFORE the
+-- Reverts 20261101130100_cv_bulk_erasure_inventory_r9.sql. Run the R10 and
+-- review fixes rollbacks (20261101130300 / 20261101130200) first. Run it BEFORE the
 -- bulk intake rollback (20261101130000_cv_bulk_intake_down.sql). Restores the
 -- exact R8 bodies of the four inventory functions, unwraps the two layered
 -- adapters and drops erasure_inventory_baseline_r9. Afterwards erasure stays
@@ -11,6 +12,9 @@ begin
     or to_regprocedure('private.erasure_inventory_rows_r8(uuid,uuid[])') is null
     or to_regprocedure('private.erasure_row_candidates_r8(text,jsonb)') is null then
     raise exception 'sc_r9_down_requires_r9' using errcode='55000';
+  end if;
+  if to_regclass('private.erasure_inventory_baseline_r10') is not null or to_regclass('private.cv_bulk_worker_nonces') is not null then
+    raise exception 'sc_r9_down_requires_r10_and_fixes_rollback' using errcode='55000';
   end if;
 end $r9_down_preflight$;
 

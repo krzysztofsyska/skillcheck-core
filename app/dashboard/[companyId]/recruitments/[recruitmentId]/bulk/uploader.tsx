@@ -2,14 +2,18 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
-  BULK_MAX_ZIP_BYTES, BULK_UPLOAD_CONCURRENCY, bulkFileKind, displayFileName, isIgnoredZipEntry, type BulkFileMeta,
+  BULK_MAX_ZIP_BYTES, BULK_OCR_UPLOAD_CONCURRENCY, BULK_UPLOAD_CONCURRENCY, bulkFileKind, bulkMayNeedOcr, displayFileName, isIgnoredZipEntry,
+  type BulkFileMeta,
 } from '../../../../../../lib/cv-bulk';
 import { closeBulkUpload, createBulkBatch } from './actions';
 
 type Picked = { name: string; size: number; blob: Blob };
 type Props = { companyId: string; recruitmentId: string; recruitmentName: string; available: number; maxFiles: number; maxFileBytes: number; billingHref: string };
+
+/** Files whose content is sent and may need OCR on the server. */
+const sendsForOcr = (f: Picked) => bulkMayNeedOcr(bulkFileKind(f.name)) && f.size > 0;
 
 const mb = (bytes: number) => `${(bytes / 1_000_000).toFixed(1).replace('.', ',')} MB`;
 
@@ -21,9 +25,15 @@ export function BulkUploader(props: Props) {
   const [confirmed, setConfirmed] = useState(false);
   const [progress, setProgress] = useState<{ sent: number; total: number } | null>(null);
   const [overLimit, setOverLimit] = useState(0);
+  const [starting, setStarting] = useState(false);
+  // One request key per selected file set: a repeated click or a retry after an error reuses the
+  // same batch instead of reserving package slots twice. A new pick gets a new key.
+  const requestKey = useRef<string | null>(null);
+  const startLock = useRef(false);
 
   async function pick(list: FileList | null) {
     setProblem(null); setConfirmed(false);
+    requestKey.current = null;
     if (!list?.length) { setFiles([]); return; }
     setReading(true);
     const picked: Picked[] = [];
@@ -70,14 +80,26 @@ export function BulkUploader(props: Props) {
   const tooBig = files.filter(f => f.size > props.maxFileBytes).length;
 
   async function start() {
+    // Synchronous guard: a second click before React re-renders the disabled button is ignored.
+    if (startLock.current) return;
+    startLock.current = true;
+    setStarting(true);
     setProblem(null);
+    requestKey.current ??= crypto.randomUUID();
     const meta: BulkFileMeta[] = files.map(f => ({ name: f.name, kind: bulkFileKind(f.name), size: f.size }));
-    const created = await createBulkBatch(props.companyId, props.recruitmentId, crypto.randomUUID(), meta);
-    if (created.error || !created.batchId || !created.items) { setProblem(created.error ?? 'Nie udało się utworzyć paczki.'); return; }
+    let created: Awaited<ReturnType<typeof createBulkBatch>>;
+    try { created = await createBulkBatch(props.companyId, props.recruitmentId, requestKey.current, meta); }
+    catch { created = { error: 'Nie udało się utworzyć paczki. Sprawdź połączenie i spróbuj ponownie.' }; }
+    if (created.error || !created.batchId || !created.items) {
+      setProblem(created.error ?? 'Nie udało się utworzyć paczki.');
+      startLock.current = false; setStarting(false);
+      return;
+    }
     setOverLimit(created.overLimit ?? 0);
     const base = `/dashboard/${props.companyId}/recruitments/${props.recruitmentId}/bulk/${created.batchId}`;
     const queue = created.items.filter(i => i.position <= (created.reserved ?? 0));
-    setProgress({ sent: 0, total: queue.length });
+    const total = queue.length;
+    setProgress({ sent: 0, total });
     let sent = 0;
     const upload = async (item: { id: string; position: number }) => {
       const picked = files[item.position - 1];
@@ -88,16 +110,21 @@ export function BulkUploader(props: Props) {
         else body.set('file', picked.blob, picked.name);
         try {
           const response = await fetch(`${base}/items/${item.id}`, { method: 'POST', body });
-          if (response.ok || response.status === 404) break;
+          // 404 (gone) and 401/403 (no write access) will not change on retry.
+          if (response.ok || [401, 403, 404].includes(response.status)) break;
         } catch { /* network error: retry */ }
         await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
       }
-      setProgress({ sent: ++sent, total: queue.length });
+      setProgress({ sent: ++sent, total });
     };
-    const workers = Array.from({ length: BULK_UPLOAD_CONCURRENCY }, async () => {
-      while (queue.length) await upload(queue.shift()!);
+    // PDFs and images may need OCR, which the server runs one image at a time: sending several at once
+    // would only make them wait and time out. Text files (DOCX/TXT) and rejected files go in parallel.
+    const ocrLane = queue.filter(i => sendsForOcr(files[i.position - 1]));
+    const textLane = queue.filter(i => !sendsForOcr(files[i.position - 1]));
+    const drain = (lane: typeof queue, width: number) => Array.from({ length: width }, async () => {
+      while (lane.length) await upload(lane.shift()!);
     });
-    await Promise.all(workers);
+    await Promise.all([...drain(ocrLane, BULK_OCR_UPLOAD_CONCURRENCY), ...drain(textLane, BULK_UPLOAD_CONCURRENCY)]);
     await closeBulkUpload(props.companyId, created.batchId);
     router.push(base);
   }
@@ -112,7 +139,7 @@ export function BulkUploader(props: Props) {
     <p>Dodaj pliki PDF, DOCX, TXT, JPG lub PNG albo jedno archiwum ZIP. Maksymalnie {props.maxFiles} plików w paczce, każdy do {mb(props.maxFileBytes)}.
       Skany i zdjęcia odczytujemy automatycznie (OCR) na naszym serwerze.</p>
     <label>Pliki CV
-      <input type="file" multiple accept=".pdf,.docx,.txt,.jpg,.jpeg,.png,.zip" disabled={reading} onChange={e => pick(e.target.files)} />
+      <input type="file" multiple accept=".pdf,.docx,.txt,.jpg,.jpeg,.png,.zip" disabled={reading || starting} onChange={e => pick(e.target.files)} />
     </label>
     {reading && <p role="status">Odczytuję pliki…</p>}
     {problem && <p role="alert">{problem}</p>}
@@ -132,7 +159,7 @@ export function BulkUploader(props: Props) {
         Potwierdzam wgranie {accepted} CV do tej rekrutacji. Rozumiem, że system automatycznie zakryje imię, nazwisko, e-mail, telefon i linki
         przed analizą AI, ale nie gwarantuje pełnej anonimizacji. Kandydaci zostali poinformowani o przetwarzaniu danych tak jak przy pojedynczym CV.
         Podział na grupy jest propozycją — decyzję o kandydacie podejmuje rekruter.</label>
-      <button type="button" disabled={!confirmed || accepted === 0} onClick={start}>Rozpocznij przetwarzanie</button>
+      <button type="button" disabled={!confirmed || accepted === 0 || starting} onClick={start}>{starting ? 'Tworzę paczkę…' : 'Rozpocznij przetwarzanie'}</button>
       <details><summary>Lista plików</summary><ol>{files.map((f, i) => <li key={i}>{f.name} ({mb(f.size)}){i >= props.available ? ' — poza limitem' : ''}</li>)}</ol></details>
     </section>}
   </section>;

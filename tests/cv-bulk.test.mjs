@@ -119,11 +119,11 @@ test('signed scheduler pump binds the exact jsonb contract text', async () => {
   };
   const dispatched = [];
   const count = await pumpAllSigned({ rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; }, aiEnabled: true, origin: () => 'https://x',
-    env: {}, secret: 's'.repeat(32), md5: t => createHash('md5').update(t).digest('hex') });
+    env: {}, secret: 's'.repeat(32), digest: t => createHash('sha256').update(t).digest('hex') });
   assert.equal(count, 1);
   assert.deepEqual(dispatched, ['44444444-4444-4444-8444-444444444444'], 'only UUID attempt ids are dispatched');
   const args = calls[0][1];
-  const extra = createHash('md5').update(`${canonicalJsonb(contract)}|`).digest('hex');
+  const extra = createHash('sha256').update(`${canonicalJsonb(contract)}|`).digest('hex');
   assert.equal(args.request_signature, createHmac('sha256', 's'.repeat(32)).update(['cv-bulk-v1', 'pump', args.request_id, String(args.issued_at_ms), '-', extra].join('\n')).digest('hex'));
   assert.equal(args.request_signature, bulkWorkerSignature('s'.repeat(32), 'pump', args.request_id, args.issued_at_ms, null, extra));
 });
@@ -144,4 +144,168 @@ test('detectPhone: international prefixes and no gluing across lines', () => {
   assert.equal(detectPhone('tel. +49 151 12345678'), '+4915112345678');
   assert.equal(detectPhone('Telefon: +48 512 345 678\n2024'), '+48512345678');
   assert.equal(detectPhone('Telefon: +44 7700 900123\n2019 BA'), '+447700900123');
+});
+
+// ---- Review fixes (PR #228) ----
+
+test('AI disabled: bulk intake is refused before any slot is reserved', async () => {
+  const { bulkIntakeBlocked } = await import('../lib/cv-bulk.ts');
+  assert.equal(bulkIntakeBlocked(true), null);
+  assert.match(bulkIntakeBlocked(false), /Analiza AI jest teraz wyłączona/);
+  const { readFileSync } = await import('node:fs');
+  const dir = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/', import.meta.url);
+  const actions = readFileSync(new URL('actions.ts', dir), 'utf8');
+  const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
+  assert.ok(create.indexOf('bulkIntakeBlocked(screeningAiUserEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
+    'createBulkBatch checks the AI flag before reserving');
+  const page = readFileSync(new URL('page.tsx', dir), 'utf8');
+  assert.match(page, /blocked \? <p role="alert">\{blocked\}<\/p>\s*: <BulkUploader/, 'uploader hidden when AI is off');
+});
+
+test('finish(): long runs of spaces are linear, over-length text is rejected, never truncated', async () => {
+  const fakeOcr = async () => assert.fail('no OCR');
+  const started = Date.now();
+  await assert.rejects(extractBulkCv(Buffer.from(cvLines.join('\n') + ' '.repeat(200_000) + 'x'), 'txt', fakeOcr), reason('too_large'));
+  await assert.rejects(extractBulkCv(Buffer.from(cvLines.join('\n') + ' '.repeat(1_000_000) + 'x'), 'txt', fakeOcr), reason('too_large'));
+  await assert.rejects(extractBulkCv(Buffer.from(('a' + ' '.repeat(5000) + '\n').repeat(700)), 'txt', fakeOcr), reason('too_large'));
+  // Trailing spaces are trimmed per line, so a CV padded with spaces still fits.
+  const padded = await extractBulkCv(Buffer.from(cvLines.map(l => l + ' \t'.repeat(3000)).join('\n')), 'txt', fakeOcr);
+  assert.equal(padded.text, cvLines.join('\n'));
+  await assert.rejects(extractBulkCv(Buffer.from('x'.repeat(100_001) + ' '.repeat(100)), 'txt', fakeOcr), reason('too_large'));
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+});
+
+test('DOCX header text: linear tokenizer, same output as before', async () => {
+  const { docxSectionText } = await import('../lib/cv-text.ts');
+  assert.equal(docxSectionText('<w:hdr><w:p><w:r><w:t xml:space="preserve">Jan &amp; </w:t></w:r><w:r><w:t>Kowalski</w:t></w:r></w:p><w:p><w:tab/><w:t>tel &lt;1&gt;</w:t></w:p></w:hdr>'),
+    'Jan & Kowalski\ntel <1>');
+  assert.equal(docxSectionText('<w:p><w:t/><w:tbl><w:t>a</w:t></w:p>'), 'a');
+  const started = Date.now();
+  docxSectionText('<w:t '.repeat(100_000));
+  docxSectionText('<w:t>' + 'a'.repeat(480_000));
+  docxSectionText('<w:t x>'.repeat(60_000) + '</w:t'.repeat(20_000));
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`);
+});
+
+test('image size: dimensions read from headers, oversized images rejected before OCR', async () => {
+  const { imageDimensions, ocrRenderScale } = await import('../lib/cv-bulk-extract.ts');
+  assert.deepEqual(imageDimensions(renderCv(cvLines, { width: 1300 })), { width: 1300, height: 432 });
+  assert.deepEqual(imageDimensions(renderCv(cvLines, { type: 'image/jpeg', width: 900 })), { width: 900, height: 432 });
+  assert.equal(imageDimensions(Buffer.from('not an image at all, really')), null);
+  const fakeOcr = async () => assert.fail('OCR must not run for an oversized image');
+  // PNG claiming 6000 x 5000 px (30 MP): only the header is read, nothing is decoded.
+  const png = renderCv(cvLines); png.writeUInt32BE(6000, 16); png.writeUInt32BE(5000, 20);
+  await assert.rejects(extractBulkCv(png, 'image', fakeOcr), reason('too_large'));
+  const jpeg = renderCv(cvLines, { type: 'image/jpeg' });
+  const sof = jpeg.indexOf(Buffer.from([0xff, 0xc0]));
+  jpeg.writeUInt16BE(6000, sof + 5); jpeg.writeUInt16BE(6000, sof + 7);
+  await assert.rejects(extractBulkCv(jpeg, 'image', fakeOcr), reason('too_large'));
+  // Allowed but large: downscaled to at most 2500 px before OCR.
+  let seen;
+  const capture = async image => { seen = imageDimensions(image); return { text: cvLines.join('\n'), confidence: 90 }; };
+  await extractBulkCv(renderCv(cvLines, { width: 4000 }), 'image', capture);
+  assert.ok(Math.max(seen.width, seen.height) <= 2500, JSON.stringify(seen));
+  assert.equal(ocrRenderScale(612, 792), 2);
+  assert.ok(ocrRenderScale(14400, 14400) * 14400 <= 2500);
+  assert.equal(ocrRenderScale(0, 0), null);
+});
+
+test('PDF OCR: page render is capped; huge page is downscaled', async () => {
+  const { imageDimensions } = await import('../lib/cv-bulk-extract.ts');
+  // 200 x 200 inch page (14400 pt): scale 2 would be 28800 px square (3.3 GB of pixels).
+  const pdf = scannedPdf(cvLines).toString('latin1').replace('/MediaBox [0 0 612 792]', '/MediaBox [0 0 14400 14400]');
+  let seen;
+  const capture = async image => { seen = imageDimensions(image); return { text: cvLines.join('\n'), confidence: 90 }; };
+  const out = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', capture);
+  assert.equal(out.ocrUsed, true);
+  assert.ok(Math.max(seen.width, seen.height) <= 2500, JSON.stringify(seen));
+});
+
+test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
+  // Two pages: a text page and an empty page (no content stream).
+  const base = textPdf(cvLines).toString('latin1')
+    .replace('/Count 1 /Kids [4 0 R]', '/Count 2 /Kids [4 0 R 6 0 R]');
+  const objects = base.slice(0, base.indexOf('xref'));
+  const extra = '6 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n';
+  const body = objects + extra;
+  const offsets = [1, 2, 3, 4, 5, 6].map(i => body.indexOf(`\n${i} 0 obj`) + 1);
+  const pdf = `${body}xref\n0 7\n0000000000 65535 f \n${offsets.map(n => String(n).padStart(10, '0') + ' 00000 n \n').join('')}trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${body.length}\n%%EOF`;
+  let calls = 0;
+  const blankOcr = async () => { calls++; return { text: '', confidence: 0 }; };
+  const out = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', blankOcr);
+  assert.equal(calls, 1, 'the blank page was tried once');
+  assert.equal(out.ocrUsed, false);
+  assert.match(out.text, /Katarzyna Wisniewska/);
+  // A scan where OCR finds nothing on any page is still unreadable.
+  await assert.rejects(extractBulkCv(scannedPdf(cvLines), 'pdf', blankOcr), reason('unreadable_scan'));
+});
+
+test('OCR time budget: expired deadline and OCR timeout give ocr_timeout', async () => {
+  const { OcrTimeoutError } = await import('../lib/cv-bulk.ts');
+  const never = async () => assert.fail('no OCR after the deadline');
+  await assert.rejects(extractBulkCv(scannedPdf(cvLines), 'pdf', never, { deadline: Date.now() - 1 }), reason('ocr_timeout'));
+  const slow = async (_image, options) => { assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 5000); throw new OcrTimeoutError(); };
+  await assert.rejects(extractBulkCv(renderCv(cvLines), 'image', slow, { deadline: Date.now() + 5000 }), reason('ocr_timeout'));
+  const { errorLabel } = await import('../lib/cv-bulk.ts');
+  assert.match(errorLabel.ocr_timeout, /trwał za długo/);
+});
+
+test('OCR worker: a stuck recognition times out and the worker is replaced', async () => {
+  const { ocrImage, setOcrWorkerFactoryForTests } = await import('../lib/cv-ocr.ts');
+  const { OcrTimeoutError } = await import('../lib/cv-bulk.ts');
+  const workers = [];
+  await setOcrWorkerFactoryForTests(async () => {
+    const w = { id: workers.length, terminated: false,
+      recognize: () => w.id === 0 ? new Promise(() => {}) : Promise.resolve({ data: { text: 'ok', confidence: 91 } }),
+      terminate: async () => { w.terminated = true; } };
+    workers.push(w);
+    return w;
+  });
+  try {
+    await assert.rejects(ocrImage(Buffer.from('a'), { timeoutMs: 50 }), error => error instanceof OcrTimeoutError);
+    assert.equal(workers[0].terminated, true, 'stuck worker terminated');
+    assert.deepEqual(await ocrImage(Buffer.from('b'), { timeoutMs: 1000 }), { text: 'ok', confidence: 91 });
+    assert.equal(workers.length, 2, 'a fresh worker served the next job');
+    // A crashed worker is replaced as well.
+    workers[1].recognize = () => Promise.reject(new Error('worker died'));
+    await assert.rejects(ocrImage(Buffer.from('c')), /worker died/);
+    assert.equal(workers[1].terminated, true);
+    assert.equal((await ocrImage(Buffer.from('d'))).text, 'ok');
+    assert.equal(workers.length, 3);
+  } finally { await setOcrWorkerFactoryForTests(null); }
+});
+
+test('scheduler pump stops delivering when its time budget is used', async () => {
+  let clock = 0;
+  const rpc = async fn => fn === 'cv_bulk_worker_pump'
+    ? { data: [1, 2, 3].map(n => ({ batch_id: `b${n}`, dispatch: [`${n}${n}${n}${n}${n}${n}${n}${n}-4444-4444-8444-444444444444`], notify: null })), error: null }
+    : { data: true, error: null };
+  const dispatched = [];
+  const count = await pumpAllSigned({ rpc, dispatch: async id => { dispatched.push(id); clock += 20_000; return { accepted: true }; },
+    aiEnabled: true, origin: () => 'https://x', env: {}, secret: 's'.repeat(32), digest: t => createHash('sha256').update(t).digest('hex'), now: () => clock });
+  assert.equal(count, 3);
+  assert.equal(dispatched.length, 2, 'third batch left for the next run');
+});
+
+test('uploader: one request key per file set, synchronous double-click guard, OCR files one at a time', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/uploader.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /createBulkBatch\([^)]*crypto\.randomUUID\(\)/, 'no fresh key per click');
+  assert.match(src, /requestKey\.current \?\?= crypto\.randomUUID\(\)/);
+  assert.match(src, /requestKey\.current = null;/, 'new pick resets the key');
+  const start = src.slice(src.indexOf('async function start()'));
+  assert.ok(start.indexOf('if (startLock.current) return;') < start.indexOf('await createBulkBatch'), 'guard before the first await');
+  assert.match(src, /disabled=\{!confirmed \|\| accepted === 0 \|\| starting\}/);
+  assert.match(src, /drain\(ocrLane, BULK_OCR_UPLOAD_CONCURRENCY\)/);
+  const { BULK_OCR_UPLOAD_CONCURRENCY, bulkMayNeedOcr } = await import('../lib/cv-bulk.ts');
+  assert.equal(BULK_OCR_UPLOAD_CONCURRENCY, 1);
+  assert.deepEqual(['pdf', 'image', 'docx', 'txt', 'other'].map(bulkMayNeedOcr), [true, true, false, false, false]);
+});
+
+test('upload route checks write access before reading the file', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/items/[itemId]/route.ts', import.meta.url), 'utf8');
+  const forbidden = src.indexOf("{ error: 'forbidden' }");
+  assert.ok(forbidden > 0 && forbidden < src.indexOf('request.formData()'), 'forbidden before formData');
+  assert.match(src, /ocrImage, \{ deadline \}\)/);
 });

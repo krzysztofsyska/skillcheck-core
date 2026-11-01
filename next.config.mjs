@@ -11,17 +11,36 @@ const contentSecurityPolicy = [
 
 /** @type {import('next').NextConfig} */
 const config = {
-  serverExternalPackages: ['pdf-parse', 'pdfjs-dist', 'tesseract.js', 'tesseract.js-core'],
+  serverExternalPackages: ['pdf-parse', 'pdfjs-dist', 'tesseract.js', 'tesseract.js-core', '@napi-rs/canvas'],
   // PDF.js loads its worker and native canvas bindings dynamically.
   outputFileTracingIncludes: {
     '/dashboard/**': [
       './node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
       './node_modules/@napi-rs/canvas/**',
       './node_modules/@napi-rs/canvas-*/*',
-      // Local OCR for bulk CV intake: WASM core and the bundled Polish model.
-      './node_modules/tesseract.js/src/**',
-      './node_modules/tesseract.js-core/*.js',
-      './node_modules/tesseract.js-core/*.wasm',
+    ],
+    // Local OCR for bulk CV intake, only in the upload route that runs it. Tesseract starts its
+    // node worker script by file path, so nft cannot follow it: the worker's own requires are listed
+    // here (see node_modules/tesseract.js/src/worker-script; node-fetch is only a fallback when
+    // global fetch is missing, never on Node 18+). Node loads <core>.js + <core>.wasm, picked by CPU
+    // features; the browser *.wasm.js builds are never used. tesseract.js 7.0.0 getCore() compares a
+    // boolean lstmOnly with OEM numbers, so it always takes the non-"-lstm" cores (verified by running
+    // OCR from the traced files only); scripts/check-pdf-bundle.mjs asserts exactly these.
+    // (Keys are picomatch globs: `[companyId]` would be a character class, so segments are `*`.)
+    '/dashboard/*/recruitments/*/bulk/*/items/*': [
+      './node_modules/tesseract.js/package.json',
+      './node_modules/tesseract.js/src/**/*.js',
+      './node_modules/tesseract.js-core/package.json',
+      './node_modules/tesseract.js-core/tesseract-core{,-simd,-relaxedsimd}.{js,wasm}',
+      './node_modules/wasm-feature-detect/package.json',
+      './node_modules/wasm-feature-detect/dist/cjs/index.cjs',
+      './node_modules/bmp-js/package.json',
+      './node_modules/bmp-js/index.js',
+      './node_modules/bmp-js/lib/*.js',
+      './node_modules/is-url/package.json',
+      './node_modules/is-url/index.js',
+      './node_modules/regenerator-runtime/package.json',
+      './node_modules/regenerator-runtime/runtime.js',
       './node_modules/@tesseract.js-data/pol/4.0.0/pol.traineddata.gz',
       './node_modules/@tesseract.js-data/pol/package.json',
     ],

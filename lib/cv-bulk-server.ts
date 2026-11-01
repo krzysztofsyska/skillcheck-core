@@ -27,5 +27,5 @@ export async function pumpScheduled() {
   const { url, key } = getSupabaseEnv();
   const anon = createSupabase(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   return pumpAllSigned({ ...deps((fn, args) => anon.rpc(fn, args) as never), secret: process.env.CV_BULK_WORKER_SECRET!,
-    md5: text => createHash('md5').update(text).digest('hex') });
+    digest: text => createHash('sha256').update(text).digest('hex') });
 }

@@ -59,6 +59,7 @@
     "e2e:step4": "node scripts/step4-browser-e2e.cjs"
   },
   "dependencies": {
+    "@napi-rs/canvas": "0.1.80",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.117.2",
     "@tesseract.js-data/pol": "1.0.0",

@@ -11,7 +11,8 @@
 # acknowledged in supabase/preview-resynced.txt after a manual resync (an
 # acknowledgement covers exactly one new file hash, one previous ledger hash
 # and only the newest ledger row).
-# Each migration file carries its own transaction and preflight/postflight guards.
+# Each migration file carries its own transaction and preflight/postflight guards;
+# its ledger row is inserted inside that same transaction.
 #
 # When: every push to `integration` or to a `preview-db/**` branch (a task
 # branch pushed there to be tested on preview before review/merge). No paths
@@ -92,10 +93,18 @@ jobs:
               exit 1
             fi
             echo "apply  $file"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$path"
-            psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v version="$version" -v name="$name" -v body="$(cat "$path")" <<'SQL'
-          insert into supabase_migrations.schema_migrations(version, name, statements) values (:'version', :'name', array[:'body']);
-          SQL
+            # Migration and ledger row commit together: the ledger insert runs inside the file's own
+            # transaction, just before its single closing `commit;`. A failure anywhere rolls back both,
+            # and a successful migration can never be missing from the ledger (no re-apply on the next run).
+            [ "$(grep -cE '^begin;[[:space:]]*$' "$path")" = "1" ] || { echo "::error::$file must open exactly one top-level begin;"; exit 1; }
+            commit_line=$(grep -nE '^commit;[[:space:]]*$' "$path" | cut -d: -f1)
+            last_line=$(grep -nvE '^[[:space:]]*$' "$path" | tail -1 | cut -d: -f1)
+            [ -n "$commit_line" ] && [ "$commit_line" = "$last_line" ] || { echo "::error::$file must end with its only top-level commit;"; exit 1; }
+            {
+              awk -v n="$commit_line" 'NR != n' "$path"
+              echo "insert into supabase_migrations.schema_migrations(version, name, statements) values (:'ledger_version', :'ledger_name', array[:'ledger_body']);"
+              echo "commit;"
+            } | psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -v ledger_version="$version" -v ledger_name="$name" -v ledger_body="$(cat "$path")"
             applied=$((applied+1))
           done < supabase/preview-migrations.txt
           {

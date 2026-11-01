@@ -38,6 +38,7 @@ jobs:
         env:
           PREVIEW_DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PREVIEW_DATABASE_CA_CERT: ${{ vars.PREVIEW_DATABASE_CA_CERT }}
           MAX_ATTEMPTS: '10'
         run: |
           test -n "${OPENAI_API_KEY:-}" || { echo "::error::OPENAI_API_KEY is not set in the preview-db environment"; exit 1; }
