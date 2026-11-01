@@ -24,11 +24,9 @@ function MoveForm({ companyId, recruitmentId, row }: { companyId: string; recrui
 
 export function PreselectionGroups({ companyId, recruitmentId, rows, canEdit }: { companyId: string; recruitmentId: string; rows: GroupRow[]; canEdit: boolean }) {
   if (!rows.length) return <p>Brak wyników automatycznej preselekcji. Wgraj paczkę CV, aby system przygotował grupy.</p>;
-  const noPhone = rows.filter(r => r.group_key === 'passed' && !r.has_phone).length;
   return <>
     <p>Grupy to propozycja systemu na podstawie analizy CV względem kryteriów stanowiska (niezatwierdzonej jeszcze przez człowieka).
       Nie zmieniają statusu kandydata. Każdą zmianę grupy zapisujemy z autorem i czasem.</p>
-    {noPhone > 0 && <p role="status"><strong>{noPhone} osób z grupy „{groupLabel.passed}” nie ma numeru telefonu — voicebot do nich nie zadzwoni.</strong></p>}
     {(Object.keys(groupLabel) as BulkGroup[]).map(group => {
       const list = rows.filter(r => r.group_key === group);
       return <section key={group} aria-label={groupLabel[group]}>
@@ -38,7 +36,7 @@ export function PreselectionGroups({ companyId, recruitmentId, rows, canEdit }: 
           {r.raw_score !== null && <> · {Math.round(Number(r.raw_score))} pkt</>}
           {r.coverage !== null && <> · pokrycie kryteriów {Math.round(Number(r.coverage) * 100)}%</>}
           {r.source === 'manual' && <> · przeniesiony ręcznie</>}
-          {!r.has_phone && <strong> · brak telefonu (voicebot nie zadzwoni)</strong>}
+          {!r.has_phone && <span> · brak telefonu w CV</span>}
           {canEdit && <MoveForm companyId={companyId} recruitmentId={recruitmentId} row={r} />}
         </li>)}</ol> : <p>Brak kandydatów.</p>}
       </section>;

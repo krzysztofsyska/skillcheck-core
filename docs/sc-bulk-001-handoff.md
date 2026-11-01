@@ -41,7 +41,7 @@ Voicebot poza zakresem.
 | `CV_OCR_LANG_PATH` (opcjonalnie) | inna lokalizacja polskiego modelu OCR |
 
 ## Migracje
-`20261101100000_cv_bulk_intake.sql` → `20261101100100_cv_bulk_erasure_inventory_r9.sql`
+`20261101130000_cv_bulk_intake.sql` → `20261101130100_cv_bulk_erasure_inventory_r9.sql`
 (po R8). Rollbacki w `supabase/rollbacks/*cv_bulk*` (najpierw R9).
 Produkcja: wyłącznie przez `db-migrate-production` po zgodzie właściciela.
 
@@ -93,7 +93,7 @@ osobny koszt), wysyłki e-mail, harmonogramu w tle.
 
 ## Lista kroków przy wdrożeniu produkcyjnym (po osobnym TAK na produkcję)
 Wykonuje właściciel albo zatwierdzony pipeline — agenci nie zmieniają sekretów produkcji.
-1. Migracje: R8 (jeśli jeszcze nie ma) → `20261101100000_cv_bulk_intake.sql` → `20261101100100_cv_bulk_erasure_inventory_r9.sql`
+1. Migracje: R8 (jeśli jeszcze nie ma) → `20261101130000_cv_bulk_intake.sql` → `20261101130100_cv_bulk_erasure_inventory_r9.sql`
    przez `db-migrate-production`.
 2. Vercel Production env: `CV_BULK_WORKER_SECRET` (≥ 32 znaki), `CV_BULK_CRON_SECRET` (≥ 32 znaki),
    `CV_BULK_MAIL_ENABLED=true` (używa istniejącego `RESEND_API_KEY`), `CV_AI_PRICE_INPUT_PER_MTOK`,

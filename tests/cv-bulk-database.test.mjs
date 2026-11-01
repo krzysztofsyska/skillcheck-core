@@ -16,8 +16,8 @@ const chain = [
   '20261030120000_sc_step3_matrix_change_invalidates_approval.sql', '20261030160000_sc_step4_interview_decision.sql',
   '20261030160100_sc_step4_erasure_inventory_r8.sql',
 ];
-const bulk = '20261101100000_cv_bulk_intake.sql';
-const r9 = '20261101100100_cv_bulk_erasure_inventory_r9.sql';
+const bulk = '20261101130000_cv_bulk_intake.sql';
+const r9 = '20261101130100_cv_bulk_erasure_inventory_r9.sql';
 const bulkTables = ['private.application_preselection_group_events', 'private.application_preselection_groups',
   'private.cv_bulk_batches', 'private.cv_bulk_items', 'private.cv_bulk_settings'];
 const contract = { payload_schema_version: 1, result_schema_version: 1, prompt_version: 'screening-v1', provider: 'openai', model: 'ranking-test-model', model_revision: 'test-rev' };
@@ -417,9 +417,9 @@ test('SC-BULK-001 R9: erasure inventory lists and purges bulk rows', async t => 
 test('SC-BULK-001 rollbacks restore R8 and remove the bulk schema', async t => {
   const env = await install(t);
   const { db } = env;
-  await run(db, await rollback('20261101100100_cv_bulk_erasure_inventory_r9_down.sql'));
+  await run(db, await rollback('20261101130100_cv_bulk_erasure_inventory_r9_down.sql'));
   assert.equal((await db.query("select to_regclass('private.erasure_inventory_baseline_r9') v")).rows[0].v, null);
-  await run(db, await rollback('20261101100000_cv_bulk_intake_down.sql'));
+  await run(db, await rollback('20261101130000_cv_bulk_intake_down.sql'));
   const r8 = (await db.query('select schema_signature, private.erasure_schema_signature() actual from private.erasure_inventory_baseline_r8')).rows[0];
   assert.equal(r8.actual, r8.schema_signature, 'schema is the reviewed R8 state again');
   // And forward again.

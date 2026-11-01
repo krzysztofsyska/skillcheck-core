@@ -93,7 +93,7 @@ export function BulkUploader(props: Props) {
   if (progress) return <section aria-live="polite">
     <h2>Wysyłanie plików</h2>
     <progress max={progress.total || 1} value={progress.sent} /> <p>{progress.sent} z {progress.total}. Nie zamykaj karty do końca wysyłania — analiza działa dalej w tle.</p>
-    {overLimit > 0 && <p role="status">{overLimit} plików przekracza pakiet i nie zostanie przetworzonych. <Link href={props.billingHref}>Dokup kolejną piątkę CV</Link> i wgraj je ponownie.</p>}
+    {overLimit > 0 && <p role="status">{overLimit} plików przekracza pakiet i nie zostanie przetworzonych. <Link href={props.billingHref}>Zamów pakiet PRESELEKCJA</Link> i wgraj je ponownie.</p>}
   </section>;
 
   return <section>
@@ -114,7 +114,7 @@ export function BulkUploader(props: Props) {
         {unsupported > 0 && <li>{unsupported} plików ma nieobsługiwany format i zostanie oznaczonych jako błąd.</li>}
         {tooBig > 0 && <li>{tooBig} plików przekracza {mb(props.maxFileBytes)} i zostanie oznaczonych jako błąd.</li>}
       </ul>
-      {surplus > 0 && <p role="status">Brakuje {surplus} miejsc w pakiecie. <Link href={props.billingHref}>Dokup kolejną piątkę CV</Link>, a nadwyżkę wgrasz w następnej paczce.</p>}
+      {surplus > 0 && <p role="status">Brakuje {surplus} miejsc w pakiecie. <Link href={props.billingHref}>Zamów pakiet PRESELEKCJA</Link>, a nadwyżkę wgrasz w następnej paczce.</p>}
       {props.available === 0 && <p role="alert">Pakiet jest pusty — żaden plik nie zostanie przetworzony.</p>}
       <label className="consent"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
         Potwierdzam wgranie {accepted} CV do tej rekrutacji. Rozumiem, że system automatycznie zakryje imię, nazwisko, e-mail, telefon i linki

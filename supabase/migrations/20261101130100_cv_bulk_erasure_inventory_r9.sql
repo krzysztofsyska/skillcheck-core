@@ -1,7 +1,7 @@
 -- SC-BULK-001 / SC-010 R9: reviewed erasure inventory revision for the bulk
--- CV intake tables (20261101100000_cv_bulk_intake.sql).
+-- CV intake tables (20261101130000_cv_bulk_intake.sql).
 --
--- Order is mandatory: R8 (20261030160100) -> bulk intake (20261101100000) ->
+-- Order is mandatory: R8 (20261030160100) -> bulk intake (20261101130000) ->
 -- this migration. Without R9 the bulk intake tables make every erasure
 -- preview/purge fail closed with schema_dependency_unknown / PT409.
 --

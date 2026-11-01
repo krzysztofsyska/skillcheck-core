@@ -25,7 +25,7 @@
 -- * Erasure: every candidate-linked row cascades from public.candidates or
 --   public.applications (a duplicate file row cascades from the application it
 --   duplicates) and is listed by the R9 inventory adapters
---   (20261101100100_cv_bulk_erasure_inventory_r9.sql, which must follow).
+--   (20261101130100_cv_bulk_erasure_inventory_r9.sql, which must follow).
 -- * Original files are never stored. Only the file name (cleared after 30 days
 --   for files that did not become a candidate) and the extracted text in the
 --   existing candidate_documents table are kept.

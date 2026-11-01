@@ -1,5 +1,5 @@
--- Reverts 20261101100000_cv_bulk_intake.sql. Run the R9 rollback
--- (20261101100100_cv_bulk_erasure_inventory_r9_down.sql) first.
+-- Reverts 20261101130000_cv_bulk_intake.sql. Run the R9 rollback
+-- (20261101130100_cv_bulk_erasure_inventory_r9_down.sql) first.
 -- Fail closed while any bulk credit movement exists: held slots would otherwise
 -- vanish from the SC-019 balance and the journal constraint could not return.
 begin;

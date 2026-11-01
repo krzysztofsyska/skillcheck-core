@@ -38,10 +38,10 @@ export function BatchProgress({ companyId, recruitmentId, batchId, initial, bill
   const overLimit = items.filter(i => i.error_reason === 'over_limit').length;
   const app = (id: string) => `/dashboard/${companyId}/recruitments/${recruitmentId}/applications/${id}/screening`;
   return <section aria-live="polite">
-    <p><strong>{finished ? 'Paczka zakończona.' : 'Przetwarzanie w toku — możesz zamknąć tę stronę, wynik pojawi się w rekrutacji.'}</strong></p>
+    <p><strong>{finished ? 'Paczka zakończona.' : 'Przetwarzanie w toku — nie zamykaj tej strony do końca przetwarzania.'}</strong></p>
     <progress max={items.length || 1} value={settled} aria-label="Postęp paczki" /> <span>{settled} z {items.length}</span>
     <p>Gotowe: {done} · W toku: {count('analyzing')} · Oczekuje: {count('queued') + count('awaiting_upload')} · Błędy: {errors}</p>
-    {overLimit > 0 && <p role="status">{overLimit} plików nie przetworzono, bo pakiet się wyczerpał. <Link href={billingHref}>Dokup kolejną piątkę CV</Link> i wgraj je w nowej paczce.</p>}
+    {overLimit > 0 && <p role="status">{overLimit} plików nie przetworzono, bo pakiet się wyczerpał. <Link href={billingHref}>Zamów pakiet PRESELEKCJA</Link> i wgraj je w nowej paczce.</p>}
     {finished && <p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}#preselekcja`}>Zobacz grupy kandydatów w rekrutacji</Link></p>}
     <table>
       <thead><tr><th>#</th><th>Plik</th><th>Status</th><th>Kandydat</th><th>Grupa (propozycja)</th></tr></thead>
@@ -51,7 +51,7 @@ export function BatchProgress({ companyId, recruitmentId, batchId, initial, bill
         <td>{statusLabel[i.phase]}{i.error_reason ? `: ${errorLabel[i.error_reason]}` : ''}
           {i.duplicate_of_application && <> — <Link href={app(i.duplicate_of_application)}>istniejące zgłoszenie</Link></>}</td>
         <td>{i.application_id && i.candidate_name ? <Link href={app(i.application_id)}>{i.candidate_name}</Link> : '—'}
-          {i.application_id && i.has_phone === false && <strong> · brak telefonu (voicebot nie zadzwoni)</strong>}</td>
+          {i.application_id && i.has_phone === false && <span> · brak telefonu w CV</span>}</td>
         <td>{i.group_key ? `${groupLabel[i.group_key]}${i.raw_score !== null ? ` (${Math.round(Number(i.raw_score))} pkt)` : ''}` : '—'}</td>
       </tr>)}</tbody>
     </table>

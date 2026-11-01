@@ -1,5 +1,5 @@
--- Reverts 20261101100100_cv_bulk_erasure_inventory_r9.sql. Run it BEFORE the
--- bulk intake rollback (20261101100000_cv_bulk_intake_down.sql). Restores the
+-- Reverts 20261101130100_cv_bulk_erasure_inventory_r9.sql. Run it BEFORE the
+-- bulk intake rollback (20261101130000_cv_bulk_intake_down.sql). Restores the
 -- exact R8 bodies of the four inventory functions, unwraps the two layered
 -- adapters and drops erasure_inventory_baseline_r9. Afterwards erasure stays
 -- fail closed (schema_dependency_unknown) until R9 or the bulk rollback runs.
