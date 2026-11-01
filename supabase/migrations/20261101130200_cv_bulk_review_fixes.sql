@@ -126,7 +126,8 @@ revoke all on function private.cv_bulk_valid_pricing(jsonb) from public, anon, a
 create function private.cv_bulk_transient_error(state text, message text) returns boolean
 language sql immutable set search_path='' as $$
   select coalesce(state in ('40001','40P01','55P03','57014')
-    or (state = 'PT409' and message in ('Candidate workflow busy','Screening input changed','Contact source busy')), false)
+    or (state = 'PT409' and message in ('Candidate workflow busy','Screening input changed','Contact source busy',
+      'Restore isolation required')), false)
 $$;
 revoke all on function private.cv_bulk_transient_error(text,text) from public, anon, authenticated;
 

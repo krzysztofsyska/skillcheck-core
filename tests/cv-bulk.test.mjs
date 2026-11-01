@@ -243,6 +243,22 @@ test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
   await assert.rejects(extractBulkCv(scannedPdf(cvLines), 'pdf', blankOcr), reason('unreadable_scan'));
 });
 
+test('PDF OCR: pages left after the OCR run cap fail the file instead of being dropped', async () => {
+  // A text page followed by 11 empty pages: the 11th empty page has no OCR run left.
+  const extraPages = 11;
+  const ids = Array.from({ length: extraPages }, (_, i) => 6 + i);
+  const base = textPdf(cvLines).toString('latin1')
+    .replace('/Count 1 /Kids [4 0 R]', `/Count ${1 + extraPages} /Kids [4 0 R ${ids.map(id => `${id} 0 R`).join(' ')}]`);
+  const body = base.slice(0, base.indexOf('xref')) + ids.map(id => `${id} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n`).join('');
+  const all = [1, 2, 3, 4, 5, ...ids];
+  const offsets = all.map(i => body.indexOf(`\n${i} 0 obj`) + 1);
+  const pdf = `${body}xref\n0 ${all.length + 1}\n0000000000 65535 f \n${offsets.map(n => String(n).padStart(10, '0') + ' 00000 n \n').join('')}trailer\n<< /Size ${all.length + 1} /Root 1 0 R >>\nstartxref\n${body.length}\n%%EOF`;
+  let calls = 0;
+  const blankOcr = async () => { calls++; return { text: '', confidence: 0 }; };
+  await assert.rejects(extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', blankOcr), reason('unreadable_scan'));
+  assert.equal(calls, 10, 'OCR stops at its cap');
+});
+
 test('OCR time budget: expired deadline and OCR timeout give ocr_timeout', async () => {
   const { OcrTimeoutError } = await import('../lib/cv-bulk.ts');
   const never = async () => assert.fail('no OCR after the deadline');
@@ -290,6 +306,26 @@ test('OCR worker: a worker that never starts times out and does not block later 
     await assert.rejects(ocrImage(Buffer.from('a'), { timeoutMs: 50 }), error => error instanceof OcrTimeoutError);
     assert.equal((await ocrImage(Buffer.from('b'), { timeoutMs: 1000 })).text, 'ok', 'the queue is not blocked');
     assert.equal(starts, 2);
+  } finally { await setOcrWorkerFactoryForTests(null); }
+});
+
+test('OCR queue: time spent waiting behind another job counts towards the deadline', async () => {
+  const { ocrImage, setOcrWorkerFactoryForTests } = await import('../lib/cv-ocr.ts');
+  const { OcrTimeoutError } = await import('../lib/cv-bulk.ts');
+  let release;
+  const recognized = [];
+  await setOcrWorkerFactoryForTests(async () => ({
+    recognize: image => { recognized.push(String(image)); return image.toString() === 'slow' ? new Promise(r => { release = () => r({ data: { text: 'x', confidence: 90 } }); }) : Promise.resolve({ data: { text: 'ok', confidence: 90 } }); },
+    terminate: async () => {} }));
+  try {
+    const slow = ocrImage(Buffer.from('slow'), { timeoutMs: 1000 });
+    const started = Date.now();
+    await assert.rejects(ocrImage(Buffer.from('queued'), { timeoutMs: 50 }), error => error instanceof OcrTimeoutError);
+    assert.ok(Date.now() - started < 500, 'the queued job gives up on its own deadline');
+    release();
+    await slow;
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(recognized, ['slow'], 'an expired queued job is never recognised');
   } finally { await setOcrWorkerFactoryForTests(null); }
 });
 

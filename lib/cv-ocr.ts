@@ -27,7 +27,10 @@ let factory: WorkerFactory = tesseractWorker;
 let workerPromise: Promise<OcrWorker> | null = null;
 
 function worker(): Promise<OcrWorker> {
-  workerPromise ??= factory().catch(error => { workerPromise = null; throw error; });
+  if (!workerPromise) {
+    const started: Promise<OcrWorker> = factory().catch(error => { if (workerPromise === started) workerPromise = null; throw error; });
+    workerPromise = started;
+  }
   return workerPromise;
 }
 
@@ -49,10 +52,13 @@ export type OcrResult = { text: string; confidence: number };
  */
 let queue: Promise<unknown> = Promise.resolve();
 export function ocrImage(image: Buffer, options: { timeoutMs?: number } = {}): Promise<OcrResult> {
+  // The deadline starts when the job is queued: waiting behind another request's image counts too.
   const deadline = Date.now() + Math.min(options.timeoutMs ?? OCR_JOB_TIMEOUT_MS, OCR_JOB_TIMEOUT_MS);
+  let queuedTimer: ReturnType<typeof setTimeout> | undefined;
+  const queuedExpiry = new Promise<never>((_, reject) => { queuedTimer = setTimeout(() => reject(new OcrTimeoutError()), deadline - Date.now()); });
   const job = queue.then(async () => {
     const left = deadline - Date.now();
-    if (left <= 0) throw new OcrTimeoutError();
+    if (left <= 0) throw new OcrTimeoutError(); // expired while queued: never started
     const current = worker();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new OcrTimeoutError()), left); });
@@ -66,7 +72,8 @@ export function ocrImage(image: Buffer, options: { timeoutMs?: number } = {}): P
     } finally { clearTimeout(timer); }
   });
   queue = job.catch(() => undefined);
-  return job;
+  queuedExpiry.catch(() => undefined);
+  return Promise.race([job, queuedExpiry]).finally(() => clearTimeout(queuedTimer));
 }
 
 /** Ends the Tesseract worker (tests and graceful shutdown). */

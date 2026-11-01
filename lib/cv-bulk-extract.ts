@@ -126,7 +126,9 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
       // Near-empty page: OCR it, within a hard cap on OCR runs. A page where OCR finds almost no
       // characters (a blank or decorative page) is kept as it is; a page with text OCR cannot read
       // reliably fails the file (ocrRead). Only the whole document must reach the minimum length.
-      if (visibleLength(text) < MIN_PAGE_TEXT_CHARS && attempts < BULK_MAX_OCR_ATTEMPTS) {
+      if (visibleLength(text) < MIN_PAGE_TEXT_CHARS) {
+        // Out of OCR runs: the page cannot be read, so the file fails rather than losing a page silently.
+        if (attempts >= BULK_MAX_OCR_ATTEMPTS) throw new BulkIntakeError('unreadable_scan');
         attempts++;
         ocrTried = true;
         remaining(deadline);
