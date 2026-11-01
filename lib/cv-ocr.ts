@@ -57,6 +57,9 @@ export function ocrImage(image: Buffer, options: { timeoutMs?: number } = {}): P
   let queuedTimer: ReturnType<typeof setTimeout> | undefined;
   const queuedExpiry = new Promise<never>((_, reject) => { queuedTimer = setTimeout(() => reject(new OcrTimeoutError()), deadline - Date.now()); });
   const job = queue.then(async () => {
+    // The outer timer covers only the wait in the queue; once started, the inner timer applies and
+    // discards a stuck worker before the caller sees the timeout.
+    clearTimeout(queuedTimer);
     const left = deadline - Date.now();
     if (left <= 0) throw new OcrTimeoutError(); // expired while queued: never started
     const current = worker();
