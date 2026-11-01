@@ -30,9 +30,11 @@ Order of work:
 2. Migration drift — DONE (PR #197, documented in `docs/database.md`). Checked 2026-10-31: production has all 38 migrations from `main` by name; only the two Step 4 migrations on `integration` wait for the next promotion. Still open: 12 rows with `statements = NULL` (owner decision, see `docs/database.md`).
 3. SC-019 migrations — DONE, applied through the production workflow on 2026-10-30.
 4. AI cost limit per company — DONE by SC-019: database triggers on `screening_analysis_versions` charge one credit per analysis and refuse with `sc19_quota_exhausted` at zero. Checked 2026-10-31: triggers active, but production has no package policy and no balances, so every new AI analysis is refused. Unblocking needs the owner to set the FREE/PRESELEKCJA sizes in `/operator/billing` (new cost decision).
-5. Turn on the contact form.
+5. Contact form (`/rozmowa`) — code ready and on production. Checked 2026-11-01: notice text, request secret and one platform operator are in place; blocked only by two owner switches: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off (`SALES_AUTO_REPLY_ENABLED=false`).
 6. Connect Przelewy24 and Fakturownia (Przelewy24 in progress: PR #223).
 7. CV retention period and automatic deletion (owner decision first).
+
+Open security item from the audit (owner only, rule 3): Vercel Production still has `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `POSTGRES_PASSWORD` (checked 2026-11-01). They must be removed and the database password rotated.
 
 ## Keep the process light
 
