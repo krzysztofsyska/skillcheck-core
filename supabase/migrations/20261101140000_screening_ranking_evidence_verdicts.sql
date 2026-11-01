@@ -12,7 +12,8 @@
 --   supported -> above (100), partial -> meets (50),
 --   missing / contradicted -> below (0) (the CV gives no or contrary evidence),
 --   a row the recruiter rejected -> insufficient_data (unknown, lowers coverage),
---   a row the recruiter edited -> its human_verdict.
+--   a row the recruiter edited -> its human_verdict (or the AI verdict if the
+--   edit kept it, the same effective verdict as review_screening_evidence_row).
 -- Legacy (v1) results keep their own rating and override exactly as before.
 -- Everything else (human-review requirement, freshness, coverage threshold,
 -- ordering, shortlist snapshot) is unchanged; the policy row is unchanged.
@@ -76,7 +77,7 @@ begin
       from (
         select coalesce(case when rv.disposition = 'approved_with_changes' then o.rating_override end,
           case when cr.verdict is null then cr.rating
-            else case (case cr.human_status when 'edited' then cr.human_verdict when 'rejected' then null else cr.verdict end)
+            else case (case cr.human_status when 'edited' then coalesce(cr.human_verdict, cr.verdict) when 'rejected' then null else cr.verdict end)
               when 'supported' then 'above' when 'partial' then 'meets'
               when 'missing' then 'below' when 'contradicted' then 'below'
               else 'insufficient_data' end end) as rating

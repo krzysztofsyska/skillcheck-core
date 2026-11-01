@@ -213,6 +213,10 @@ test('v2 evidence rows publish the human matrix review, never the discarded AI c
   const a = (await load(accepted)).applications[0].criteria[0];
   assert.equal(a.evidence[0].quote, 'Raport'); assert.equal(a.reviewedChange, false); assert.equal(a.matrixVerdict, 'supported');
   assert.deepEqual([a.aiRating, a.rating, e.aiRating, e.rating, r.rating], ['above', 'above', 'above', 'below', 'insufficient_data']);
+  // An edit that kept the AI verdict (human_verdict null) ranks on the AI verdict, like the SQL ranking.
+  const keptVerdict = ranked(fixture(), { meets_count: 1 }, '50.000'); Object.assign(keptVerdict.screening_criterion_results[0], { verdict: 'partial', human_status: 'edited', human_verdict: null, human_evidence: [] });
+  const k = (await load(keptVerdict)).applications[0].criteria[0];
+  assert.deepEqual([k.matrixVerdict, k.rating], ['partial', 'meets']);
   // A ranking that disagrees with the reviewed verdicts is refused, never published.
   const mismatch = ranked(fixture(), { meets_count: 1 }, '50.000'); Object.assign(mismatch.screening_criterion_results[0], { verdict: 'supported', human_status: 'accepted', human_evidence: null });
   await assert.rejects(load(mismatch));

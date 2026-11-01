@@ -60,7 +60,8 @@ test('report ranking ranks recruiter-reviewed evidence-matrix (v2) analyses', as
     for (const [i, c] of criteria.entries()) {
       const edit = edits[i];
       const status = edit?.status ?? 'accepted';
-      const evidence = edit?.verdict && edit.verdict !== 'missing' ? JSON.stringify([{ start: 0, end: 3, quote: 'SQL' }]) : (edit?.verdict === 'missing' ? '[]' : null);
+      const evidence = edit?.evidence ? JSON.stringify(edit.evidence)
+        : edit?.verdict && edit.verdict !== 'missing' ? JSON.stringify([{ start: 0, end: 3, quote: 'SQL' }]) : (edit?.verdict === 'missing' ? '[]' : null);
       await db.query('select public.review_screening_evidence_row($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)', [f.companyId, analysis, c.id, c.updated_at,
         status, null, status === 'edited' ? edit.verdict : null, status === 'edited' ? '' : null, status === 'edited' ? '' : null, status === 'edited' ? evidence : null]);
     }
@@ -76,7 +77,10 @@ test('report ranking ranks recruiter-reviewed evidence-matrix (v2) analyses', as
     await reviewAll('strong');
     await reviewAll('weak');
     // Reviewer edits row 2 (index 1) to supported and rejects row 5 (index 4).
-    await reviewAll('edited', { 1: { status: 'edited', verdict: 'supported' }, 4: { status: 'rejected' } });
+    // Row 1 (index 0) is edited without a new verdict (evidence only): the AI verdict stays effective,
+    // as in review_screening_evidence_row, so it still counts as supported (not unknown).
+    await reviewAll('edited', { 0: { status: 'edited', verdict: null, evidence: [{ start: 0, end: 3, quote: 'SQL' }] },
+      1: { status: 'edited', verdict: 'supported' }, 4: { status: 'rejected' } });
     const rows = await ranking();
     const by = Object.fromEntries(Object.entries(apps).map(([k, v]) => [k, rows.find(r => r.application_id === v.f.application.id)]));
     assert.deepEqual([by.strong.eligibility_reason, Number(by.strong.raw_score), Number(by.strong.coverage), by.strong.rank], ['eligible', 70, 1, 1]);
