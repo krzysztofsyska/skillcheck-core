@@ -8,13 +8,14 @@
 # (supabase_migrations.schema_migrations) already has a migration of the same
 # name with identical text. A listed file whose text changed after it reached
 # preview fails the job (never a silent skip) unless its new sha256 is
-# acknowledged in supabase/preview-resynced.txt after a manual resync.
+# acknowledged in supabase/preview-resynced.txt after a manual resync (an
+# acknowledgement covers exactly one file hash and only the newest ledger row).
 # Each migration file carries its own transaction and preflight/postflight guards.
 #
 # When: every push to `integration` or to a `preview-db/**` branch (a task
 # branch pushed there to be tested on preview before review/merge). No paths
 # filter: a new branch or a non-migration commit must still run; the job is
-# idempotent (already applied names are skipped).
+# idempotent (names already applied with identical text are skipped).
 # Secret: PREVIEW_DATABASE_URL in the GitHub environment `preview-db`.
 name: Preview DB migrate
 
@@ -79,7 +80,8 @@ jobs:
               if grep -qxF "$body_sha  $file" supabase/preview-resynced.txt 2>/dev/null; then
                 # Recorded manual resync (changed objects re-created on preview): store the current text.
                 psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v name="$name" -v body="$(cat "$path")" <<'SQL'
-          update supabase_migrations.schema_migrations set statements = array[:'body'] where name = :'name';
+          update supabase_migrations.schema_migrations set statements = array[:'body']
+            where version = (select max(version) from supabase_migrations.schema_migrations where name = :'name');
           SQL
                 echo "resync $file (acknowledged in supabase/preview-resynced.txt)"; continue
               fi
