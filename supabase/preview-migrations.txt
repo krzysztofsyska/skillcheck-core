@@ -1,6 +1,9 @@
 # Migrations applied to the TEST database skillcheck-preview by
 # .github/workflows/preview-db-migrate.yml, in this order. Entries already in
 # the preview ledger (same name) are skipped. Never used for production.
+# Preview was created without these two SC-005 role grants (worker role switch).
+20261008155657_sc005_allow_postgres_set_screening_worker.sql
+20261008155719_sc005_keep_worker_role_explicit_only.sql
 20261030160100_sc_step4_erasure_inventory_r8.sql
 20261101100000_cv_bulk_intake.sql
 20261101100100_cv_bulk_erasure_inventory_r9.sql
