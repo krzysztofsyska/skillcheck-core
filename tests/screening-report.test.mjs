@@ -268,6 +268,13 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   assert.doesNotMatch(html, /Za mało ocenionych kryteriów/);
   assert.doesNotMatch(html, /<td>0%<\/td>/);
   assert.match(html, /nie przelicza dowodów automatycznie/);
+  // CSV agrees with the page: the same status, no misleading 0 coverage.
+  const csv = screeningReportCsv(report);
+  assert.match(csv, /"Sprawdzone przez człowieka — wynik w tabeli grup"/);
+  assert.doesNotMatch(csv, /"Za mało ocenionych kryteriów"/);
+  // A stale group score is never shown as the candidate's score.
+  const staleHtml = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report: { ...report, groups: report.groups.map(g => ({ ...g, stale: true })) }, basePath: '/dashboard/test' }));
+  assert.doesNotMatch(staleHtml, /\(grupa\)<\/small>/);
   // A legacy (v1) candidate keeps the original label.
   assert.equal(rankingStatusLabel({ ranking: { eligibility_reason: 'insufficient_evidence' }, criteria: [{ matrixVerdict: null }] }), 'Za mało ocenionych kryteriów');
 });

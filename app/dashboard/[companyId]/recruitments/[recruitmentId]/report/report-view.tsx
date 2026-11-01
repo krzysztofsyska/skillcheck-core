@@ -1,9 +1,10 @@
-import { kindLabels, matrixVerdictLabels, preselectionGroupLabels, rankingStatusLabel, ratingLabels, shortlistLabel, type ScreeningReport } from '../../../../../../lib/screening-report';
+import { kindLabels, matrixVerdictLabels, preselectionGroupLabels, rankingStatusLabel, ratingLabels, reviewedEvidenceAnalysis, shortlistLabel, type ScreeningReport } from '../../../../../../lib/screening-report';
 import styles from './report.module.css';
 
 const number = (n: number | null) => n === null ? '—' : n.toLocaleString('pl-PL', { maximumFractionDigits: 3 });
 export function ScreeningReportView({ report, basePath }: { report: ScreeningReport; basePath: string }) {
   const selected = report.applications.filter(a => a.shortlist);
+  const groupsById = new Map((report.groups ?? []).map(g => [g.application_id, g]));
   return <>
     <p className="eyebrow">SKILLCHECK · PRESELEKCJA</p><h1>Raport preselekcji</h1>
     <h2>{report.recruitmentName}</h2><p>{report.companyName} · {report.positionTitle}</p>
@@ -27,18 +28,19 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
         </tr>)}</tbody></table></div>
     </>}
     <h2>Porównanie zgłoszeń</h2>
-    {!!report.groups?.length && <p className="notice">Dla analiz z macierzą dowodów system nie przelicza dowodów automatycznie na miejsce w tej tabeli: kolejność i wynik pokazuje tabela „Preselekcja automatyczna” powyżej, a o wyborze kandydata decyduje rekruter (np. przenosząc go między grupami).</p>}
-    <p>Wynik i pokrycie pochodzą z rankingu. Pokrycie to udział kryteriów, dla których są wystarczające dane. Sugestia obejmuje maksymalnie {report.targetSize} osób.</p>
+    {!!report.groups?.length && <p className="notice">Dla analiz z macierzą dowodów system nie przelicza dowodów automatycznie na miejsce w tej tabeli. Kolejność i wynik pokazuje tabela „Preselekcja automatyczna” powyżej, a o wyborze kandydata decyduje rekruter (np. przenosząc go między grupami).</p>}
+    <p>Wynik i pokrycie pochodzą z rankingu (wynik oznaczony „(grupa)” pochodzi z tabeli grup). Pokrycie to udział kryteriów, dla których są wystarczające dane. Sugestia obejmuje maksymalnie {report.targetSize} osób.</p>
     {!report.applications.length ? <p>W tej rekrutacji nie ma jeszcze zgłoszeń.</p> : <div className={styles.tableWrap}><table className={styles.table}>
       <caption>Ranking oraz shortlista zapisana przez człowieka</caption>
       <thead><tr><th scope="col">Miejsce</th><th scope="col">Zgłoszenie</th><th scope="col">Status</th><th scope="col">Wynik</th><th scope="col">Pokrycie</th><th scope="col">Sugestia</th><th scope="col">Shortlista</th></tr></thead>
-      <tbody>{report.applications.map(app => { const { ranking: r, shortlist } = app; const group = report.groups?.find(g => g.application_id === r.application_id);
-        // A grouped (v2) analysis has no ranking score: show the group score, never a misleading 0% coverage.
-        const grouped = !!group && r.raw_score === null;
+      <tbody>{report.applications.map(app => { const { ranking: r, shortlist } = app; const group = groupsById.get(r.application_id);
+        // Only a human-reviewed evidence-matrix analysis with a current group shows the group score; never a misleading 0%.
+        const evidence = reviewedEvidenceAnalysis(app);
+        const grouped = evidence && !!group && !group.stale && r.raw_score === null;
         return <tr key={r.application_id}>
         <td>{number(r.rank)}</td><td><a href={`#application-${r.application_id}`}>{r.application_id.slice(0, 8)}</a></td>
         <td>{rankingStatusLabel(app)}</td><td>{grouped ? <>{number(group!.raw_score)} <small>(grupa)</small></> : number(r.raw_score)}</td>
-        <td>{grouped || r.coverage === null ? '—' : `${number(r.coverage * 100)}%`}</td>
+        <td>{evidence || r.coverage === null ? '—' : `${number(r.coverage * 100)}%`}</td>
         <td>{r.suggested_shortlist ? 'Tak' : 'Nie'}</td><td>{shortlistLabel(shortlist)}</td>
       </tr>; })}</tbody></table></div>}
     <h2>Shortlista człowieka</h2>

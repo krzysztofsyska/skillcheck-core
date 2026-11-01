@@ -124,15 +124,18 @@ export type PreselectionGroupKey = 'passed' | 'review' | 'rejected';
 export const preselectionGroupLabels: Record<PreselectionGroupKey, string> = {
   passed: 'Przeszli sito', review: 'Do decyzji rekrutera', rejected: 'Nie spełniają kryteriów',
 };
-/** Automatic grouping from the AI evidence matrix (bulk CV intake). Needs no per-row review. */
 /** Evidence-matrix (v2) analyses are never auto-scored by the SC-008 ranking (Step 3 rule):
- * after human review they stay "insufficient_evidence" and the score lives in the preselection
- * groups. The report says so instead of the misleading "too few rated criteria / 0%". */
-export function rankingStatusLabel(app: { ranking: { eligibility_reason: keyof typeof reasonLabels }; criteria: { matrixVerdict: unknown }[] }) {
-  const evidence = app.criteria.some(c => c.matrixVerdict !== null);
-  if (evidence && app.ranking.eligibility_reason === 'insufficient_evidence') return 'Sprawdzone przez człowieka — wynik w tabeli grup';
-  return reasonLabels[app.ranking.eligibility_reason];
+ * after human review they stay "insufficient_evidence" and their score lives in the preselection
+ * groups. The report says so instead of the misleading "too few rated criteria / 0%".
+ * Criteria are loaded only for reviewed rows, so this is true only after a human review. */
+type StatusInput = { ranking: { eligibility_reason: keyof typeof reasonLabels }; criteria: { matrixVerdict: unknown }[] };
+export function reviewedEvidenceAnalysis(app: StatusInput) {
+  return app.ranking.eligibility_reason === 'insufficient_evidence' && app.criteria.some(c => c.matrixVerdict !== null);
 }
+export function rankingStatusLabel(app: StatusInput) {
+  return reviewedEvidenceAnalysis(app) ? 'Sprawdzone przez człowieka — wynik w tabeli grup' : reasonLabels[app.ranking.eligibility_reason];
+}
+/** Automatic grouping from the AI evidence matrix (bulk CV intake). Needs no per-row review. */
 export type ReportGroupRow = {
   application_id: string; candidate_name: string; group: PreselectionGroupKey; source: 'auto' | 'manual';
   raw_score: number | null; coverage: number | null;
@@ -195,7 +198,7 @@ export function screeningReportCsv(report: ScreeningReport): string {
   for (const application of report.applications) {
     const { ranking: r, shortlist: s } = application;
     for (const criterion of application.criteria.length ? application.criteria : [null]) {
-      rows.push([r.application_id, r.rank, reasonLabels[r.eligibility_reason], r.raw_score, r.coverage,
+      rows.push([r.application_id, r.rank, rankingStatusLabel(application), r.raw_score, reviewedEvidenceAnalysis(application) ? null : r.coverage,
         r.known_criteria, r.total_criteria, r.suggested_shortlist ? 'Tak' : 'Nie', shortlistLabel(s),
         s?.source === 'manual' ? 'Ręczny' : s ? 'Z sugestii' : '', s?.selected_at ?? '', r.ranking_policy_version,
         r.analysis_id, r.review_id, criterion?.text ?? '', criterion ? kindLabels[criterion.kind] : '',
