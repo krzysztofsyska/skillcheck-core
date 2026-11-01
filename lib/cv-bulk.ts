@@ -69,7 +69,7 @@ export class BulkIntakeError extends Error {
 }
 
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
-const INTL_PHONE = /(?<![\d+])(?:\+|00)[1-9]\d{0,3}(?:[\s.-]?\(?\d{1,4}\)?){2,6}(?!\d)/g;
+const INTL_PHONE = /(?<![\d+])(?:\+|00)(?!48)[1-9]\d{0,3}(?:[ \t.-]?\(?\d{1,4}\)?){2,6}(?!\d)/g;
 const PHONE = /(?<![\d+])(?:\+|00)?(?:48[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3}[\s.-]?\d{2,3}[\s.-]?\d{2,3}(?!\d)/g;
 const HEADING = /\b(?:cv|curriculum|vitae|życiorys|zyciorys|resume|résumé|dane|kontakt|osobowe|profil|o mnie|doświadczenie|wykształcenie|umiejętności|telefon|e-?mail|adres|stanowisko|kandydat)\b/i;
 const NAME_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:-[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)?$/;
@@ -83,7 +83,8 @@ export function detectEmail(text: string) {
 
 /** Polish-first phone detection; returns +48XXXXXXXXX or an international +digits number. */
 export function detectPhone(text: string) {
-  // Full international numbers first (+44 7700 900123, +49 151 12345678): the Polish-shaped pattern below would cut them.
+  // Non-Polish international numbers first (+44 7700 900123, +49 151 12345678): the Polish-shaped pattern below would cut
+  // them. Separators never cross a line break, so a year on the next line is not glued to the number.
   for (const match of Array.from(text.matchAll(INTL_PHONE))) {
     const intl = match[0].replace(/\D/g, '').replace(/^00/, '');
     if (intl.length >= 10 && intl.length <= 15) return '+' + intl;

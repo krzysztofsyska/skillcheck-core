@@ -138,3 +138,10 @@ test('session pump: AI disabled sends no contract; notification outcome is repor
   assert.equal(result.notify.batch_id, notify.batch_id);
   assert.deepEqual(parsePump({ dispatch: 'x', notify: { batch_id: 'nope' } }), { dispatch: [], notify: null });
 });
+
+test('detectPhone: international prefixes and no gluing across lines', () => {
+  assert.equal(detectPhone('Telefon: +44 7700 900123'), '+447700900123');
+  assert.equal(detectPhone('tel. +49 151 12345678'), '+4915112345678');
+  assert.equal(detectPhone('Telefon: +48 512 345 678\n2024'), '+48512345678');
+  assert.equal(detectPhone('Telefon: +44 7700 900123\n2019 BA'), '+447700900123');
+});
