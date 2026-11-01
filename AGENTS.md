@@ -10,9 +10,10 @@ Do not require the owner to copy handoffs between agents.
 
 ## Roles
 
-- **ChatGPT / ORCHESTRATOR** — owns backlog, dependencies, task scope, dispatch, owner checkpoints, merge and production approval flow.
-- **Cursor / BUILDER** — implements the approved task on a dedicated branch and opens/updates the PR.
-- **Codex / REVIEWER** — reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
+Owner decision 2026-10-31: Cursor and Codex are retired; Claude holds both the orchestrator and builder roles. See `CLAUDE.md`.
+
+- **Claude / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
+- **Independent REVIEWER** — a separate agent session with fresh context that did not write the change; reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
 - **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.
 
@@ -109,9 +110,9 @@ Do not ask the owner to paste this handoff into another agent.
 
 ## Review loop
 
-1. Cursor implements and updates PR.
+1. Builder implements and updates PR.
 2. Reviewer reads the PR and returns PASS / PASS WITH FIXES / FAIL.
-3. If fixes are required, Cursor applies them on the same branch.
+3. If fixes are required, the builder applies them on the same branch.
 4. CI reruns.
 5. Repeat until PASS.
 6. If CI and an independent reviewer both pass against the current commit and all security/branch gates pass, merge to `integration` automatically; otherwise repair or block and report the specific cause.
