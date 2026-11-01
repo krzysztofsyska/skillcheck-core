@@ -222,8 +222,8 @@ test('automatic preselection groups appear in the report and CSV without per-row
   ];
   const report = await load(data), csv = screeningReportCsv(report);
   assert.equal(report.groups.length, 1);
-  assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875 });
-  assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, new RegExp(`"${application}";"Przeszli sito";"87.5";"0.875";"Automatycznie"`));
+  assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875, stale: false });
+  assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, new RegExp(`"${application}";"Przeszli sito";"87.5";"0.875";"Automatycznie";"Aktualny"`));
   assert.doesNotMatch(csv, /Jan Testowy/, 'CSV keeps candidates by application ID only');
   assert.doesNotMatch(csv, /Obca Osoba/);
 });
@@ -232,4 +232,15 @@ test('report still loads before the bulk migration (groups RPC missing)', async 
   const report = await load(fixture(), { error: { get_preselection_groups: 'PGRST202' } });
   assert.deepEqual(report.groups, []);
   assert.doesNotMatch(screeningReportCsv(report), /Preselekcja automatyczna/);
+});
+
+test('a group whose analysis became stale is flagged, not shown as current', async () => {
+  const data = fixture();
+  Object.assign(data.get_screening_ranking[0], { rank: null, rankable: false, eligibility_reason: 'stale', raw_score: null, coverage: null,
+    known_criteria: 0, total_criteria: 1, below_count: 0, meets_count: 0, above_count: 0, insufficient_data_count: 0, suggested_shortlist: false });
+  data.get_preselection_groups = [{ application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true,
+    group_key: 'passed', source: 'auto', raw_score: 90, coverage: 1, updated_at: timestamp, application_status: 'new' }];
+  const report = await load(data);
+  assert.equal(report.groups[0].stale, true);
+  assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
 });

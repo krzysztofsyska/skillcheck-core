@@ -128,6 +128,8 @@ export const preselectionGroupLabels: Record<PreselectionGroupKey, string> = {
 export type ReportGroupRow = {
   application_id: string; candidate_name: string; group: PreselectionGroupKey; source: 'auto' | 'manual';
   raw_score: number | null; coverage: number | null;
+  /** The underlying analysis no longer matches the position or CV (ranking says stale / needs re-analysis). */
+  stale: boolean;
 };
 export type ScreeningReport = {
   version: typeof REPORT_VERSION; generatedAt: string; companyId: string; companyName: string;
@@ -143,7 +145,7 @@ export function parseGroupRow(value: unknown): ReportGroupRow {
   return {
     application_id: applicationId, candidate_name: text(g.candidate_name, 300),
     group: g.group_key as PreselectionGroupKey, source: g.source as 'auto' | 'manual',
-    raw_score: numeric(g.raw_score, 100, true), coverage: numeric(g.coverage, 1, true),
+    raw_score: numeric(g.raw_score, 100, true), coverage: numeric(g.coverage, 1, true), stale: false,
   };
 }
 export function reportEvidence(value: unknown): ReportCriterion['evidence'] {
@@ -198,9 +200,9 @@ export function screeningReportCsv(report: ScreeningReport): string {
   if (report.groups?.length) {
     // Exports keep the SC-009 rule: candidates by application ID only, no names (the screen may show names).
     rows.push([], ['Preselekcja automatyczna (grupy z analizy AI, do weryfikacji przez człowieka)'],
-      ['Zgłoszenie', 'Grupa', 'Wynik', 'Pokrycie', 'Źródło grupy']);
+      ['Zgłoszenie', 'Grupa', 'Wynik', 'Pokrycie', 'Źródło grupy', 'Aktualność']);
     for (const g of report.groups) rows.push([g.application_id, preselectionGroupLabels[g.group], g.raw_score, g.coverage,
-      g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie']);
+      g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie', g.stale ? 'Wynik nieaktualny — wymaga ponownej analizy' : 'Aktualny']);
   }
   const csv = '\uFEFF' + rows.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';
   if (Buffer.byteLength(csv, 'utf8') > 10 * 1024 * 1024) throw new ScreeningReportError('too_large');

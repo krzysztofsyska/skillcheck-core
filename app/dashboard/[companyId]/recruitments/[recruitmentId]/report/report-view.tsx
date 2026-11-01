@@ -20,7 +20,7 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
         <caption>Kandydaci według grup (najpierw najwyższy wynik)</caption>
         <thead><tr><th scope="col">Grupa</th><th scope="col">Kandydat</th><th scope="col">Wynik</th><th scope="col">Pokrycie</th><th scope="col">Źródło</th></tr></thead>
         <tbody>{report.groups.map(g => <tr key={g.application_id}>
-          <td>{preselectionGroupLabels[g.group]}</td>
+          <td>{preselectionGroupLabels[g.group]}{g.stale && <><br /><strong>Wynik nieaktualny — wymaga ponownej analizy</strong></>}</td>
           <td><a href={`${basePath}/applications/${g.application_id}/screening`}>{g.candidate_name}</a></td>
           <td>{number(g.raw_score)}</td><td>{g.coverage === null ? '—' : `${number(g.coverage * 100)}%`}</td>
           <td>{g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie'}</td>

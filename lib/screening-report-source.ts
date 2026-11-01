@@ -80,7 +80,10 @@ export async function loadScreeningReport(
       if (!['PGRST202', '42883'].includes(groupResult.error.code ?? '')) checked(groupResult, true);
     } else {
       requireReport(Array.isArray(groupResult.data) && groupResult.data.length <= MAX_REPORT_APPLICATIONS);
-      groups = (groupResult.data as unknown[]).map(parseGroupRow).filter(g => ids.has(g.application_id));
+      // A saved group outlives a position or CV change; the ranking knows when the analysis is outdated.
+      const outdated = new Set(rankings.filter(r => r.eligibility_reason === 'stale' || r.eligibility_reason === 'needs_reanalysis').map(r => r.application_id));
+      groups = (groupResult.data as unknown[]).map(parseGroupRow).filter(g => ids.has(g.application_id))
+        .map(g => ({ ...g, stale: outdated.has(g.application_id) }));
     }
     return { company, recruitment, position, applications, rankings, shortlist, groups };
   };
