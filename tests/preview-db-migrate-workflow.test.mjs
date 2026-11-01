@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const yml = readFileSync(new URL('../.github/workflows/preview-db-migrate.yml', import.meta.url), 'utf8');
 const list = readFileSync(new URL('../supabase/preview-migrations.txt', import.meta.url), 'utf8');
@@ -34,4 +35,20 @@ test('every listed migration exists and is a checked-in file name', () => {
     assert.ok(existsSync(new URL(`../supabase/migrations/${entry}`, import.meta.url)), entry);
   }
   assert.deepEqual([...entries].sort(), entries, 'listed in migration order');
+});
+
+test('a listed migration edited after reaching preview fails unless its resync is acknowledged', () => {
+  assert.match(yml, /ledger_sha" = "\$body_sha" \]; then echo "skip/);
+  assert.match(yml, /grep -qxF "\$body_sha  \$file  \$ledger_sha" supabase\/preview-resynced\.txt/);
+  assert.match(yml, /::error::\$file changed after it was applied to preview/);
+  const acks = readFileSync(new URL('../supabase/preview-resynced.txt', import.meta.url), 'utf8')
+    .split('\n').filter(l => l && !l.startsWith('#'));
+  for (const line of acks) {
+    assert.match(line, /^[0-9a-f]{64} {2}[0-9]{14}_[a-z0-9_]+\.sql {2}[0-9a-f]{64}$/);
+    const [sha, file] = line.split('  ');
+    // Same text the job hashes: the file without trailing newlines ($(cat file)).
+    const text = readFileSync(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8').replace(/\n+$/, '');
+    assert.equal(createHash('sha256').update(text).digest('hex'), sha, `${file}: acknowledged hash must match the file`);
+  }
+  assert.match(yml, /where version = \(select max\(version\)/, 'resync rewrites only the newest ledger row');
 });
