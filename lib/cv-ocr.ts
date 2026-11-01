@@ -1,16 +1,16 @@
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import os from 'node:os';
 
 // Local OCR only: Tesseract (WASM) with the Polish model bundled from npm.
 // The image never leaves the server process; no external OCR service is called.
-const require = createRequire(import.meta.url);
 
 type OcrWorker = { recognize(image: Buffer): Promise<{ data: { text: string; confidence: number } }>; terminate(): Promise<unknown> };
 let workerPromise: Promise<OcrWorker> | null = null;
 
+// Bundlers rewrite require.resolve to module ids, so the model is located from
+// the app root (Vercel: /var/task, with the file traced by next.config.mjs).
 function langPath() {
-  return path.join(path.dirname(require.resolve('@tesseract.js-data/pol/package.json')), '4.0.0');
+  return process.env.CV_OCR_LANG_PATH || path.join(process.cwd(), 'node_modules', '@tesseract.js-data', 'pol', '4.0.0');
 }
 
 async function worker(): Promise<OcrWorker> {

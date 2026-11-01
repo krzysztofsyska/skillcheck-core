@@ -48,7 +48,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ com
     extracted = buildExtraction(text, item.position, ocrUsed, suggestRedaction);
   } catch (error) {
     if (error instanceof BulkIntakeError) return fail(error.reason);
-    console.error('cv_bulk_extract_failed');
+    // Library/infrastructure error only (name and first line), never file content.
+    console.error('cv_bulk_extract_failed', error instanceof Error ? `${error.name}: ${String(error.message).split('\n')[0].slice(0, 160)}` : typeof error);
     // Transient server problem: the slot stays held and the browser may retry.
     return Response.json({ error: 'extract_failed' }, { status: 503, headers });
   }

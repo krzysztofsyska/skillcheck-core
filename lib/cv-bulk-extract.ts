@@ -39,10 +39,12 @@ async function readPdf(bytes: Buffer, ocr: OcrFn) {
     const pages: string[] = [];
     let scanned = 0;
     for (let page = 1; page <= total; page++) {
-      const result = await parser.getText({ partial: [page], pageJoiner: '', parseHyperlinks: false });
-      let text = result.pages[0]?.text.trim() ?? '';
+      let text: string;
+      try { text = (await parser.getText({ partial: [page], pageJoiner: '', parseHyperlinks: false })).pages[0]?.text.trim() ?? ''; }
+      catch { throw new BulkIntakeError('protected_pdf'); } // damaged content stream
       if (text.replace(/\s/g, '').length < 20) {
-        // Scanned page: render it locally and OCR it.
+        // Scanned page: render it locally and OCR it. A rendering/OCR runtime
+        // failure is not the file's fault: it propagates as a transient error.
         if (++scanned > BULK_MAX_OCR_PAGES) throw new BulkIntakeError('unreadable_scan');
         const shot = await parser.getScreenshot({ partial: [page], scale: 2, imageBuffer: true, imageDataUrl: false });
         const data = shot.pages[0]?.data;
@@ -53,9 +55,6 @@ async function readPdf(bytes: Buffer, ocr: OcrFn) {
       pages.push(text);
     }
     return { text: finish(pages.join('\n\n')), ocrUsed };
-  } catch (error) {
-    if (error instanceof BulkIntakeError) throw error;
-    throw new BulkIntakeError('protected_pdf');
   } finally {
     await parser.destroy();
   }
