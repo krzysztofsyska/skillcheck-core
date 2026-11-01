@@ -132,8 +132,10 @@ type StatusInput = { ranking: { eligibility_reason: keyof typeof reasonLabels };
 export function reviewedEvidenceAnalysis(app: StatusInput) {
   return app.ranking.eligibility_reason === 'insufficient_evidence' && app.criteria.some(c => c.matrixVerdict !== null);
 }
-export function rankingStatusLabel(app: StatusInput) {
-  return reviewedEvidenceAnalysis(app) ? 'Sprawdzone przez człowieka — wynik w tabeli grup' : reasonLabels[app.ranking.eligibility_reason];
+/** Points to the groups table only when this application really has a group row in the report. */
+export function rankingStatusLabel(app: StatusInput, hasGroup: boolean) {
+  if (!reviewedEvidenceAnalysis(app)) return reasonLabels[app.ranking.eligibility_reason];
+  return hasGroup ? 'Sprawdzone przez człowieka — wynik w tabeli grup' : 'Sprawdzone przez człowieka';
 }
 /** Automatic grouping from the AI evidence matrix (bulk CV intake). Needs no per-row review. */
 export type ReportGroupRow = {
@@ -198,7 +200,7 @@ export function screeningReportCsv(report: ScreeningReport): string {
   for (const application of report.applications) {
     const { ranking: r, shortlist: s } = application;
     for (const criterion of application.criteria.length ? application.criteria : [null]) {
-      rows.push([r.application_id, r.rank, rankingStatusLabel(application), r.raw_score, reviewedEvidenceAnalysis(application) ? null : r.coverage,
+      rows.push([r.application_id, r.rank, rankingStatusLabel(application, !!report.groups?.some(g => g.application_id === r.application_id && !g.stale)), r.raw_score, reviewedEvidenceAnalysis(application) ? null : r.coverage,
         r.known_criteria, r.total_criteria, r.suggested_shortlist ? 'Tak' : 'Nie', shortlistLabel(s),
         s?.source === 'manual' ? 'Ręczny' : s ? 'Z sugestii' : '', s?.selected_at ?? '', r.ranking_policy_version,
         r.analysis_id, r.review_id, criterion?.text ?? '', criterion ? kindLabels[criterion.kind] : '',

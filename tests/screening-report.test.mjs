@@ -255,7 +255,9 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
     group_key: 'passed', source: 'auto', raw_score: 83.33, coverage: 1, updated_at: timestamp, application_status: 'new' }];
   const report = await load(data);
   const { rankingStatusLabel } = await import('../lib/screening-report.ts');
-  assert.equal(rankingStatusLabel(report.applications[0]), 'Sprawdzone przez człowieka — wynik w tabeli grup');
+  assert.equal(rankingStatusLabel(report.applications[0], true), 'Sprawdzone przez człowieka — wynik w tabeli grup');
+  // Without a group row (e.g. a single-CV evidence analysis) the label never points to the groups table.
+  assert.equal(rankingStatusLabel(report.applications[0], false), 'Sprawdzone przez człowieka');
   const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx', import.meta.url).pathname;
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
@@ -268,13 +270,20 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   assert.doesNotMatch(html, /Za mało ocenionych kryteriów/);
   assert.doesNotMatch(html, /<td>0%<\/td>/);
   assert.match(html, /nie przelicza dowodów automatycznie/);
+  // A stale group score is never shown as the candidate's score.
+  const staleHtml = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report: { ...report, groups: report.groups.map(g => ({ ...g, stale: true })) }, basePath: '/dashboard/test' }));
+  assert.doesNotMatch(staleHtml, /\(grupa\)<\/small>/);
   // CSV agrees with the page: the same status, no misleading 0 coverage.
   const csv = screeningReportCsv(report);
   assert.match(csv, /"Sprawdzone przez człowieka — wynik w tabeli grup"/);
   assert.doesNotMatch(csv, /"Za mało ocenionych kryteriów"/);
-  // A stale group score is never shown as the candidate's score.
-  const staleHtml = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report: { ...report, groups: report.groups.map(g => ({ ...g, stale: true })) }, basePath: '/dashboard/test' }));
-  assert.doesNotMatch(staleHtml, /\(grupa\)<\/small>/);
+  // Status, score and coverage cells of that application row: coverage is empty, not 0.
+  const line = csv.split('\r\n').find(l => l.includes('"Sprawdzone przez człowieka — wynik w tabeli grup"'));
+  const cells = line.split(';');
+  const status = cells.findIndex(c => c.includes('Sprawdzone przez człowieka'));
+  assert.equal(cells[status + 2], '""', 'coverage cell is empty');
+  // Stale group: the label no longer points to the groups table.
+  assert.match(staleHtml, /<td>Sprawdzone przez człowieka<\/td>/);
   // A legacy (v1) candidate keeps the original label.
-  assert.equal(rankingStatusLabel({ ranking: { eligibility_reason: 'insufficient_evidence' }, criteria: [{ matrixVerdict: null }] }), 'Za mało ocenionych kryteriów');
+  assert.equal(rankingStatusLabel({ ranking: { eligibility_reason: 'insufficient_evidence' }, criteria: [{ matrixVerdict: null }] }, true), 'Za mało ocenionych kryteriów');
 });

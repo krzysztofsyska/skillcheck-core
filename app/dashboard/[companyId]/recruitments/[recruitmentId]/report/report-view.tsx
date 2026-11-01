@@ -39,7 +39,7 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
         const grouped = evidence && !!group && !group.stale && r.raw_score === null;
         return <tr key={r.application_id}>
         <td>{number(r.rank)}</td><td><a href={`#application-${r.application_id}`}>{r.application_id.slice(0, 8)}</a></td>
-        <td>{rankingStatusLabel(app)}</td><td>{grouped ? <>{number(group!.raw_score)} <small>(grupa)</small></> : number(r.raw_score)}</td>
+        <td>{rankingStatusLabel(app, !!group && !group.stale)}</td><td>{grouped ? <>{number(group!.raw_score)} <small>(grupa)</small></> : number(r.raw_score)}</td>
         <td>{evidence || r.coverage === null ? '—' : `${number(r.coverage * 100)}%`}</td>
         <td>{r.suggested_shortlist ? 'Tak' : 'Nie'}</td><td>{shortlistLabel(shortlist)}</td>
       </tr>; })}</tbody></table></div>}
@@ -50,7 +50,7 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
     <h2>Oceny i dowody po sprawdzeniu przez człowieka</h2>
     {report.applications.map(({ ranking: r, criteria }) => <article className={styles.application} id={`application-${r.application_id}`} key={r.application_id}>
       <h3>Zgłoszenie {r.application_id.slice(0, 8)}</h3><p className={styles.meta}>{r.application_id}</p>
-      <p>{rankingStatusLabel({ ranking: r, criteria })} · Polityka: {r.ranking_policy_version}</p>
+      <p>{rankingStatusLabel({ ranking: r, criteria }, !!groupsById.get(r.application_id) && !groupsById.get(r.application_id)!.stale)} · Polityka: {r.ranking_policy_version}</p>
       <p className={styles.controls}><a href={`${basePath}/applications/${r.application_id}/screening`}>Otwórz preselekcję zgłoszenia</a></p>
       {!criteria.length ? <p>Brak aktualnych, zatwierdzonych dowodów do raportu. Sprawdź status zgłoszenia.</p> : criteria.map(c => <section className={styles.criterion} key={c.id}>
         <h4>{kindLabels[c.kind]}: {c.text}</h4>{c.matrixVerdict
