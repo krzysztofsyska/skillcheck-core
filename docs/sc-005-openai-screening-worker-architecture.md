@@ -223,6 +223,8 @@ Konfiguracja:
 
 Zmiana któregokolwiek z tych elementów musi zmienić `analysis_contract_hash`.
 
+Wyjątek świadomy (2026-11-01, PR #235): do promptu `screening-evidence-v2` dodano polecenie pisania pól tekstowych po polsku bez zmiany `prompt_version`. Zmienia się tylko język `missing_info`, `suggested_question` i `explanation`; schemat, werdykty i walidacja dosłownych cytatów są bez zmian. Podbicie wersji odrzucałoby analizy w toku przy osobnym wdrożeniu aplikacji i workera oraz uruchamiało płatną ponowną analizę istniejących wyników. Analiz v2 sprzed i po tej zmianie nie da się odróżnić po polach kontraktu (różnią się językiem wyjaśnień).
+
 Później można benchmarkować:
 - GPT-5.6 Luna — koszt,
 - GPT-5.6 Terra — jakość,

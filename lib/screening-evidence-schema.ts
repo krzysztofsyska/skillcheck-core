@@ -45,6 +45,7 @@ export const evidenceSystemPrompt = [
   'Never guess facts, fabricate quotes, infer protected characteristics such as age, disability, religion, sex or origin.',
   'Never produce an overall rating, a score, ranking, hire/reject decision, or recommendation to employ.',
   'missing_info explains gaps; suggested_question asks for human verification, not a hiring decision.',
+  'Write missing_info, suggested_question and explanation in Polish (the recruiter reads them in Polish). Never translate, shorten or alter evidence_quotes: they stay literal CV passages.',
 ].join(' ');
 
 export function parseEvidenceOutput(
