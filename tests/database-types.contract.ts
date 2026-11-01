@@ -124,7 +124,20 @@ type ExpectedFunctions =
   | "review_screening_evidence_row"
   | "complete_screening_evidence"
   | "claim_screening_attempt_v2"
-  | "screening_attempt_result_schema_version";
+  | "screening_attempt_result_schema_version"
+  | "cv_bulk_create_batch"
+  | "cv_bulk_register_item"
+  | "cv_bulk_fail_item"
+  | "cv_bulk_close_upload"
+  | "cv_bulk_pump"
+  | "cv_bulk_worker_pump"
+  | "cv_bulk_finish_notification"
+  | "cv_bulk_batch_status"
+  | "cv_bulk_recruitment_batches"
+  | "get_preselection_groups"
+  | "move_preselection_group"
+  | "get_preselection_group_history"
+  | "cv_ai_usage_stats";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
