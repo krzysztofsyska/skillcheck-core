@@ -125,6 +125,14 @@ export const preselectionGroupLabels: Record<PreselectionGroupKey, string> = {
   passed: 'Przeszli sito', review: 'Do decyzji rekrutera', rejected: 'Nie spełniają kryteriów',
 };
 /** Automatic grouping from the AI evidence matrix (bulk CV intake). Needs no per-row review. */
+/** Evidence-matrix (v2) analyses are never auto-scored by the SC-008 ranking (Step 3 rule):
+ * after human review they stay "insufficient_evidence" and the score lives in the preselection
+ * groups. The report says so instead of the misleading "too few rated criteria / 0%". */
+export function rankingStatusLabel(app: { ranking: { eligibility_reason: keyof typeof reasonLabels }; criteria: { matrixVerdict: unknown }[] }) {
+  const evidence = app.criteria.some(c => c.matrixVerdict !== null);
+  if (evidence && app.ranking.eligibility_reason === 'insufficient_evidence') return 'Sprawdzone przez człowieka — wynik w tabeli grup';
+  return reasonLabels[app.ranking.eligibility_reason];
+}
 export type ReportGroupRow = {
   application_id: string; candidate_name: string; group: PreselectionGroupKey; source: 'auto' | 'manual';
   raw_score: number | null; coverage: number | null;

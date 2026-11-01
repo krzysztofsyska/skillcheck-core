@@ -244,3 +244,30 @@ test('a group whose analysis became stale is flagged, not shown as current', asy
   assert.equal(report.groups[0].stale, true);
   assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
 });
+
+test('a reviewed evidence-matrix candidate shows the group score, not "too few rated criteria / 0%"', async () => {
+  const data = fixture();
+  // v2 analysis after human review: neutral legacy rating, so SC-008 reports insufficient_evidence (Step 3 rule).
+  Object.assign(data.screening_criterion_results[0], { rating: 'insufficient_data', verdict: 'supported', human_status: 'accepted', human_evidence: null });
+  Object.assign(data.get_screening_ranking[0], { rank: null, rankable: false, eligibility_reason: 'insufficient_evidence', raw_score: null,
+    coverage: '0.000', known_criteria: 0, below_count: 0, meets_count: 0, above_count: 0, insufficient_data_count: 1, suggested_shortlist: false });
+  data.get_preselection_groups = [{ application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true,
+    group_key: 'passed', source: 'auto', raw_score: 83.33, coverage: 1, updated_at: timestamp, application_status: 'new' }];
+  const report = await load(data);
+  const { rankingStatusLabel } = await import('../lib/screening-report.ts');
+  assert.equal(rankingStatusLabel(report.applications[0]), 'Sprawdzone przez człowieka — wynik w tabeli grup');
+  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx', import.meta.url).pathname;
+  const module = new Module(filename); module.filename = filename;
+  const require = createRequire(filename);
+  module.require = name => name.endsWith('.module.css') ? { default: new Proxy({}, { get: (_, key) => String(key) }), __esModule: true }
+    : name.endsWith('/screening-report') ? require(name + '.ts') : require(name);
+  module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  const html = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report, basePath: '/dashboard/test' }));
+  assert.match(html, /Sprawdzone przez człowieka — wynik w tabeli grup/);
+  assert.match(html, /83,33 <small>\(grupa\)<\/small>/);
+  assert.doesNotMatch(html, /Za mało ocenionych kryteriów/);
+  assert.doesNotMatch(html, /<td>0%<\/td>/);
+  assert.match(html, /nie przelicza dowodów automatycznie/);
+  // A legacy (v1) candidate keeps the original label.
+  assert.equal(rankingStatusLabel({ ranking: { eligibility_reason: 'insufficient_evidence' }, criteria: [{ matrixVerdict: null }] }), 'Za mało ocenionych kryteriów');
+});
