@@ -9,7 +9,8 @@
 # name with identical text. A listed file whose text changed after it reached
 # preview fails the job (never a silent skip) unless its new sha256 is
 # acknowledged in supabase/preview-resynced.txt after a manual resync (an
-# acknowledgement covers exactly one file hash and only the newest ledger row).
+# acknowledgement covers exactly one new file hash, one previous ledger hash
+# and only the newest ledger row).
 # Each migration file carries its own transaction and preflight/postflight guards.
 #
 # When: every push to `integration` or to a `preview-db/**` branch (a task
@@ -77,7 +78,9 @@ jobs:
           SQL
               )
               if [ "$ledger_sha" = "$body_sha" ]; then echo "skip   $file (already applied)"; continue; fi
-              if grep -qxF "$body_sha  $file" supabase/preview-resynced.txt 2>/dev/null; then
+              # The acknowledgement names the ledger state it replaces, so an old line on another
+              # branch can never move the ledger back from a newer resync.
+              if grep -qxF "$body_sha  $file  $ledger_sha" supabase/preview-resynced.txt 2>/dev/null; then
                 # Recorded manual resync (changed objects re-created on preview): store the current text.
                 psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v name="$name" -v body="$(cat "$path")" <<'SQL'
           update supabase_migrations.schema_migrations set statements = array[:'body']
@@ -85,7 +88,7 @@ jobs:
           SQL
                 echo "resync $file (acknowledged in supabase/preview-resynced.txt)"; continue
               fi
-              echo "::error::$file changed after it was applied to preview (ledger $ledger_sha, file $body_sha). Re-create the changed objects on preview, then add \"$body_sha  $file\" to supabase/preview-resynced.txt."
+              echo "::error::$file changed after it was applied to preview (ledger $ledger_sha, file $body_sha). Re-create the changed objects on preview, then add \"$body_sha  $file  $ledger_sha\" to supabase/preview-resynced.txt."
               exit 1
             fi
             echo "apply  $file"

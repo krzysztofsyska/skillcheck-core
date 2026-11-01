@@ -39,12 +39,12 @@ test('every listed migration exists and is a checked-in file name', () => {
 
 test('a listed migration edited after reaching preview fails unless its resync is acknowledged', () => {
   assert.match(yml, /ledger_sha" = "\$body_sha" \]; then echo "skip/);
-  assert.match(yml, /grep -qxF "\$body_sha  \$file" supabase\/preview-resynced\.txt/);
+  assert.match(yml, /grep -qxF "\$body_sha  \$file  \$ledger_sha" supabase\/preview-resynced\.txt/);
   assert.match(yml, /::error::\$file changed after it was applied to preview/);
   const acks = readFileSync(new URL('../supabase/preview-resynced.txt', import.meta.url), 'utf8')
     .split('\n').filter(l => l && !l.startsWith('#'));
   for (const line of acks) {
-    assert.match(line, /^[0-9a-f]{64} {2}[0-9]{14}_[a-z0-9_]+\.sql$/);
+    assert.match(line, /^[0-9a-f]{64} {2}[0-9]{14}_[a-z0-9_]+\.sql {2}[0-9a-f]{64}$/);
     const [sha, file] = line.split('  ');
     // Same text the job hashes: the file without trailing newlines ($(cat file)).
     const text = readFileSync(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8').replace(/\n+$/, '');
