@@ -21,18 +21,31 @@ Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as b
 - Final report of every task: short, in Polish, no jargon. What changed in the product, the Vercel Preview link to check it, and any YES/NO decision with a recommendation.
 - Do not paste long handoffs into the chat. The full handoff from `AGENTS.md` goes into the PR description.
 
-## Current priorities (from the audit of 2026-10-30)
+## Current priorities (owner decisions 2026-11-01)
 
-Feature freeze: no new product areas (voice, competency tests, talent pool, white-label, new agent tooling) until this path works end to end: visit the site → contact or sign-up → free preselection → payment 300 zł → invoice.
+The MVP is frozen. Plan and status for the owner: Claude Doc "SkillCheck — audyt i plan do pierwszej sprzedaży" (https://claude.ai/artifact/5QWE6B2vJQkG3n73fr52D9).
+
+MVP = a new company, without technical help, can: visit the site → sign up (one FREE per NIP) → FREE preselection of 5 CVs → buy PRESELEKCJA (299 zł / 60 CVs) → get the ranked report. Nothing else ships before the first paid PRESELEKCJA.
+
+Owner decisions (all YES, 2026-11-01):
+1. No voicebot in the MVP.
+2. Starting price: PRESELEKCJA 299 zł for 60 CVs, FREE 5 CVs.
+3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). Przelewy24 and Fakturownia automation are frozen until there are paying customers.
+4. Bulk CV upload (PR #228) is part of the MVP.
+5. Everything outside the MVP is labelled `później` and closed; old branches are archived as `archive/<branch>` tags.
+6. `main` and `integration` are protected: merges only through PRs with green required checks. Claude is the only builder.
 
 Order of work:
-1. Security hardening — DONE in PR #196 (Next.js 16.4.3, pinned Supabase packages). Verify the headers and the `screening-worker` size limit are present before closing the topic.
-2. Migration drift — DONE (PR #197, documented in `docs/database.md`). Checked 2026-10-31: production has all 38 migrations from `main` by name; only the two Step 4 migrations on `integration` wait for the next promotion. Still open: 12 rows with `statements = NULL` (owner decision, see `docs/database.md`).
-3. SC-019 migrations — DONE, applied through the production workflow on 2026-10-30.
-4. AI cost limit per company — DONE by SC-019: database triggers on `screening_analysis_versions` charge one credit per analysis and refuse with `sc19_quota_exhausted` at zero. Checked 2026-10-31: triggers active, but production has no package policy and no balances, so every new AI analysis is refused. Unblocking needs the owner to set the FREE/PRESELEKCJA sizes in `/operator/billing` (new cost decision).
-5. Contact form (`/rozmowa`) — code ready and on production. Checked 2026-11-01: notice text, request secret and one platform operator are in place; blocked only by two owner switches: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off (`SALES_AUTO_REPLY_ENABLED=false`).
-6. Connect Przelewy24 and Fakturownia (Przelewy24 in progress: PR #223).
-7. CV retention period and automatic deletion (owner decision first).
+1. Housekeeping (this PR, branch protection, `później` labels).
+2. Walk the MVP path end to end on Preview (`skillcheck-preview`) as a new company; list every blocker.
+3. Fix blockers; review and merge #228.
+4. Production unblockers (owner switches, see below), then the same walk on Production.
+
+Known production blockers (owner action, give him a direct link and exact clicks):
+- No package policy and no balances on production, so every new AI analysis is refused (`sc19_quota_exhausted`). Set FREE = 5 and PRESELEKCJA = 60 in `/operator/billing`.
+- Contact form `/rozmowa`: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off.
+
+Frozen (do not work on): voice, competency tests, Assessment Center, Quality of Hire, talent pool, white-label, SC-PRICING-001–011, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
 
 Open security item from the audit (owner only, rule 3): Vercel Production still has `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `POSTGRES_PASSWORD` (checked 2026-11-01). They must be removed and the database password rotated.
 
