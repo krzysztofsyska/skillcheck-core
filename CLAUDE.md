@@ -9,11 +9,11 @@ Everything in `AGENTS.md` applies. This file adds what changed and what matters 
 Cursor and Codex are no longer used. ChatGPT is no longer the orchestrator.
 
 - **Claude** — orchestrator and builder: picks the next task, writes the code, runs the tests, opens the PR to `integration`.
-- **Independent reviewer** — a separate Claude agent started with fresh context that did not write the change. It reviews architecture, security, correctness, tests and scope against the current PR commit and returns PASS / PASS WITH FIXES / FAIL. This satisfies "independent review" in the Review loop of `AGENTS.md`.
+- **Independent reviewer** — a separate Claude agent started with fresh context that did not write the change. It reviews architecture, security, correctness, tests and scope against the current PR commit and returns PASS / PASS WITH FIXES / FAIL. This satisfies "independent review" in the Review loop of `AGENTS.md`. The verdict is posted as a PR comment (not a GitHub "Approve", see rule 5 in `AGENTS.md`) and names the full SHA of the reviewed commit; a merge into `integration` needs that SHA to equal the current PR head.
 - **CI** — deterministic checks, unchanged.
 - **Owner (Krzysztof)** — production approval, merging the promotion PR into `main`, new costs, external or irreversible actions. Nothing else.
 
-Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as builder or Codex as reviewer, read them as the roles above. Do not wait for, mention or hand off to Cursor, Codex or ChatGPT.
+Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as builder or Codex as reviewer, read them as the roles above. Do not hand work off to Cursor, Codex or ChatGPT. The `chatgpt-codex-connector` bot still reviews PRs automatically: if it posts findings on the current head, verify each one and fix it or answer it in its thread before merging. A finding about security stays open until the owner decides.
 
 ## How the owner works
 
