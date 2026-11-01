@@ -55,13 +55,18 @@ export function ocrImage(image: Buffer, options: { timeoutMs?: number } = {}): P
   // The deadline starts when the job is queued: waiting behind another request's image counts too.
   const deadline = Date.now() + Math.min(options.timeoutMs ?? OCR_JOB_TIMEOUT_MS, OCR_JOB_TIMEOUT_MS);
   let queuedTimer: ReturnType<typeof setTimeout> | undefined;
-  const queuedExpiry = new Promise<never>((_, reject) => { queuedTimer = setTimeout(() => reject(new OcrTimeoutError()), deadline - Date.now()); });
+  let abandoned = false;
+  const queuedExpiry = new Promise<never>((_, reject) => {
+    queuedTimer = setTimeout(() => { abandoned = true; reject(new OcrTimeoutError()); }, deadline - Date.now());
+  });
   const job = queue.then(async () => {
     // The outer timer covers only the wait in the queue; once started, the inner timer applies and
     // discards a stuck worker before the caller sees the timeout.
     clearTimeout(queuedTimer);
     const left = deadline - Date.now();
-    if (left <= 0) throw new OcrTimeoutError(); // expired while queued: never started
+    // Expired while queued (the caller already got the timeout; timers may fire a millisecond before
+    // Date.now() reaches the deadline, so the flag decides, not the clock alone): never started.
+    if (abandoned || left <= 0) throw new OcrTimeoutError();
     const current = worker();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new OcrTimeoutError()), left); });
