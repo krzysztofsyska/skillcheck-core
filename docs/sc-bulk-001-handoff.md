@@ -46,7 +46,7 @@ Voicebot poza zakresem.
 Produkcja: wyłącznie przez `db-migrate-production` po zgodzie właściciela.
 
 ## Testy
-- `npm run test:cv-bulk`: jednostkowe (8) + natywny PostgreSQL (pełny łańcuch migracji).
+- `npm run test:cv-bulk` (jednostkowe, 8) i `npm run test:cv-bulk-db` (natywny PostgreSQL, pełny łańcuch migracji; w CI: SC-019 forward migrations, PG 16/17).
 - `npm run test:pdf-bundle`: sprawdza też, że OCR i model są w paczce wdrożeniowej.
 - Pełna regresja lokalnie: zielona.
 
