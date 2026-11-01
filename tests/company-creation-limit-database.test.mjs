@@ -6,7 +6,7 @@ import { PGlite } from '@electric-sql/pglite';
 const migrations = [
   '20260930000100_skillcheck_core.sql',
   '20261001000100_idempotent_onboarding.sql',
-  '20261030130000_company_creation_limit.sql',
+  '20261101120000_company_creation_limit.sql',
 ];
 
 test('create_company allows one owned company per user; ensure_initial_company is unchanged', async (t) => {
@@ -86,4 +86,38 @@ test('create_company allows one owned company per user; ensure_initial_company i
   const ensureSource = (await db.query("select prosrc from pg_proc where oid='public.ensure_initial_company(text)'::regprocedure")).rows[0].prosrc;
   const original = (await readFile(new URL('../supabase/migrations/20261001000100_idempotent_onboarding.sql', import.meta.url), 'utf8'));
   assert.ok(original.includes(ensureSource), 'ensure_initial_company body is byte-for-byte the reviewed onboarding source');
+});
+
+test('rollback restores the original create_company and drops the limit', async (t) => {
+  const db = new PGlite();
+  t.after(() => db.close());
+  await db.exec(`
+    create role anon nologin;
+    create role authenticated nologin;
+    create schema auth;
+    create table auth.users (id uuid primary key);
+    create function auth.uid() returns uuid language sql stable as $$
+      select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+    $$;
+    grant usage on schema auth to anon, authenticated;
+    grant execute on function auth.uid() to anon, authenticated;
+  `);
+  for (const name of migrations) await db.exec(await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8'));
+  const aclBefore = (await db.query("select proacl::text acl from pg_proc where oid='public.create_company(text)'::regprocedure")).rows[0].acl;
+  await db.exec(await readFile(new URL('../supabase/rollbacks/20261101120000_company_creation_limit_down.sql', import.meta.url), 'utf8'));
+
+  assert.equal((await db.query("select to_regprocedure('private.company_creation_limit()') is null gone")).rows[0].gone, true);
+  assert.equal((await db.query("select proacl::text acl from pg_proc where oid='public.create_company(text)'::regprocedure")).rows[0].acl, aclBefore);
+  const source = (await db.query("select prosrc from pg_proc where oid='public.create_company(text)'::regprocedure")).rows[0].prosrc;
+  const original = await readFile(new URL('../supabase/migrations/20260930000100_skillcheck_core.sql', import.meta.url), 'utf8');
+  assert.ok(original.includes(source), 'create_company body is byte-for-byte the reviewed original source');
+
+  // Without the limit, the same user can own a second company again; onboarding still works.
+  const user = '00000000-0000-0000-0000-000000000200';
+  await db.query('insert into auth.users values ($1)', [user]);
+  await db.exec('set role authenticated');
+  await db.query("select set_config('request.jwt.claim.sub', $1, false)", [user]);
+  const first = (await db.query("select public.ensure_initial_company('Pierwsza') id")).rows[0].id;
+  assert.ok((await db.query("select public.create_company('Druga') id")).rows[0].id);
+  assert.equal((await db.query("select public.ensure_initial_company('Retry') id")).rows[0].id, first);
 });

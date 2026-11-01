@@ -9,7 +9,7 @@ const databaseName = `company_limit_${process.pid}`;
 const migrations = [
   '20260930000100_skillcheck_core.sql',
   '20261001000100_idempotent_onboarding.sql',
-  '20261030130000_company_creation_limit.sql',
+  '20261101120000_company_creation_limit.sql',
 ];
 const user = '00000000-0000-0000-0000-000000000201';
 

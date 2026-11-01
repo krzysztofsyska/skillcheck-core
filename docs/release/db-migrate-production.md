@@ -77,7 +77,7 @@ Po kroku B: `/operator/billing` → FREE = 5, PRESELEKCJA = 60 → przydziały d
 Osobna zgoda, po kroku B. `create_company` odmawia (PT409 / HTTP 409) użytkownikowi, który jest już właścicielem 1 firmy. Istniejące firmy zostają bez zmian. Onboarding (`ensure_initial_company`) działa jak dotąd.
 
 ```
-20261030130000_company_creation_limit.sql
+20261101120000_company_creation_limit.sql
 ```
 
 Wcześniejsze migracje z repozytorium muszą być już zastosowane. Jeśli którejś brakuje, run odmówi przed wykonaniem czegokolwiek i ją wypisze.
