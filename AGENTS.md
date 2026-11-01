@@ -10,9 +10,10 @@ Do not require the owner to copy handoffs between agents.
 
 ## Roles
 
-- **ChatGPT / ORCHESTRATOR** — owns backlog, dependencies, task scope, dispatch, owner checkpoints, merge and production approval flow.
-- **Cursor / BUILDER** — implements the approved task on a dedicated branch and opens/updates the PR.
-- **Codex / REVIEWER** — reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
+Owner decision 2026-10-31: Cursor and Codex are retired; Claude holds both the orchestrator and builder roles. See `CLAUDE.md`.
+
+- **Claude / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
+- **Independent REVIEWER** — a separate agent session with fresh context that did not write the change; reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
 - **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.
 
@@ -28,6 +29,17 @@ Do not require the owner to copy handoffs between agents.
 - Current `main` classifier still denies all PR heads except `integration`. A future trusted production gate must be installed from the protected main revision, verify every commit and exact release scope, enforce owner acceptance and production approval as separate GitHub-origin attestations (not editable PR text), and fail closed if protection settings cannot be verified. Never use PR-supplied code as its own authorization gate. No billing, migrations, workers, secrets, database or payments belong to the limited sales-intake candidate.
 
 Do not merge task branches directly to `main` or use this exception before its production safeguards are verified.
+
+## Owner communication
+
+The owner is not technical and has limited time at the computer. Agents do all technical work themselves.
+
+- Write to the owner in Polish, in plain language, without jargon.
+- Ask the owner only YES/NO decisions, each with a recommendation and one sentence of reasoning. Collect open decisions into one message instead of asking one at a time.
+- Never ask the owner to click through GitHub, Vercel or Supabase, run tests, check a browser console, copy handoffs or look up settings. Agents read these themselves through their tools.
+- If a check needs something the agent does not have (an account, a credential, a test database), report it as a blocker together with a proposal that removes the need for the owner next time.
+- Prefer automated checks (CI, browser tests) over manual verification by the owner.
+- The owner's own actions are limited to: production approval, merging the promotion PR into `main`, new costs, and external or irreversible actions. For each, give the owner a direct link and say exactly what to click.
 
 ## Required task metadata
 
@@ -98,9 +110,9 @@ Do not ask the owner to paste this handoff into another agent.
 
 ## Review loop
 
-1. Cursor implements and updates PR.
+1. Builder implements and updates PR.
 2. Reviewer reads the PR and returns PASS / PASS WITH FIXES / FAIL.
-3. If fixes are required, Cursor applies them on the same branch.
+3. If fixes are required, the builder applies them on the same branch.
 4. CI reruns.
 5. Repeat until PASS.
 6. If CI and an independent reviewer both pass against the current commit and all security/branch gates pass, merge to `integration` automatically; otherwise repair or block and report the specific cause.
@@ -133,6 +145,7 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 
 1. Production migrations run only through the `db-migrate-production` workflow in the `production-approval` environment, after an owner approval bound to the exact release SHA and the exact list of migrations. Migrations are applied one by one in manifest order, never with `supabase db push`. The ledger records `statements` and the file hash for every migration (`statements = NULL` is not allowed). Production database credentials exist only as secrets of that environment. That workflow does not exist yet; until it does, production migrations are not run from agent sessions.
 2. The production Supabase project (`wsvjawuikxfzjyivxgsu`) is reachable from agent sessions only through Supabase MCP with `read_only=true` and `project_ref=wsvjawuikxfzjyivxgsu`. Write-capable Supabase MCP is allowed only for development projects or branches.
+   The test project for Preview is `skillcheck-preview` (`orbyscrupgnupifzlqxp`): Vercel Preview builds of `integration` use it through branch-scoped `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. It holds no real data; agents test logins, uploads and reports there instead of asking the owner.
 3. Agents do not change Vercel Production environment variables, secrets, aliases, domains, deployment protection or shareable/bypass links. Only the owner does, or a pipeline after an approval. Tools that create share links as a side effect (for example fetching a protected deployment URL through Vercel MCP) are not used against production.
 4. Any production change made outside the pipeline is an incident, not a missing record. It is reported in an issue with SHA, time, actor and scope.
 5. GitHub identity of agent sessions (owner decision 2026-10-29, variant B). The target is the `skillcheck-agent-ks[bot]` GitHub App token for every agent write. Until a session can use it, an agent session may act through the owner's GitHub identity **only** for:

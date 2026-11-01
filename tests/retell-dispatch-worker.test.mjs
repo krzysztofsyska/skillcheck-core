@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { prepareOfflineVoiceDraft, cancelOfflineVoicePreparation } from "../lib/voice/offline-preparation.ts";
-import { dispatchRetellCall, RetellDispatchError, RETELL_RESEND_WINDOW_MS } from "../lib/voice/retell-dispatch-worker.ts";
+import {
+  dispatchRetellCall, reconcileRetellDispatch, RetellDispatchError, RETELL_RESEND_WINDOW_MS,
+} from "../lib/voice/retell-dispatch-worker.ts";
 import { recordRetellDispatch } from "../lib/voice/retell-dispatch-ledger.ts";
 import {
   boot, SC011B2_DISPATCH_SCHEMA, SC011B4_SETTLEMENT_SCHEMA, SC011B5_DISPATCH_WORKER_SCHEMA,
@@ -110,6 +112,69 @@ test("SC-011-B5 once-only Retell dispatch worker on real PostgreSQL", async t =>
     assert.deepEqual(await pool(p), { used: 0, reserved: 1 }, "kept until reconciled");
     await assert.rejects(db.query("update private.sc011b_voice_dispatches set state='sending' where preparation_id=$1",
       [p.operationId]), /IMMUTABLE/);
+  });
+
+  const agePastWindow = async p => {
+    await db.query("set session_replication_role=replica");
+    await db.query("update private.sc011b_voice_dispatches set started_at=clock_timestamp()-make_interval(secs=>$2),lease_until=null where preparation_id=$1",
+      [p.operationId, RETELL_RESEND_WINDOW_MS / 1000 + 60]);
+    await db.query("set session_replication_role=origin");
+  };
+
+  await t.test("an ambiguous send is reconciled to unknown without a fresh draft (#208)", async () => {
+    // The draft expires after 30 s and a new one needs a valid consent proof:
+    // neither may keep the claim `sending` past Retell's window.
+    const p = await prepared();
+    assert.deepEqual(await dispatch(p, transport(reply(500)).http), { state: "retry_later" });
+    await agePastWindow(p);
+    const late = transport(reply(201, { call_id: "call_worker_stale_unk01" }));
+    assert.deepEqual(await dispatch(p, late.http, p.draft.expiresAtMs + 3_600_000), { state: "unknown" });
+    assert.equal(late.calls.length, 0);
+    assert.deepEqual(await claim(p), { state: "unknown", attempts: 1, rejection: null });
+
+    const q = await prepared();
+    assert.deepEqual(await dispatch(q, transport(reply(503)).http), { state: "retry_later" });
+    const target = { companyId: q.s.f.companyId, operationId: q.operationId };
+    assert.deepEqual(await reconcileRetellDispatch(db, target), { state: "retry_later" }, "inside the window");
+    assert.deepEqual(await claim(q), { state: "sending", attempts: 1, rejection: null });
+    await agePastWindow(q);
+    assert.deepEqual(await reconcileRetellDispatch(db, target), { state: "unknown" });
+    assert.deepEqual(await claim(q), { state: "unknown", attempts: 1, rejection: null });
+    assert.deepEqual(await pool(q), { used: 0, reserved: 1 }, "kept for the operator");
+  });
+
+  await t.test("a stale draft never resends inside the window and spends no attempt", async () => {
+    const p = await prepared();
+    assert.deepEqual(await dispatch(p, transport(reply(500)).http), { state: "retry_later" });
+    const never = transport(reply(201, { call_id: "call_worker_stale_res01" }));
+    await assert.rejects(dispatch(p, never.http, p.draft.expiresAtMs + 1),
+      e => e instanceof RetellDispatchError && e.code === "VOICE_DISPATCH_STALE_DRAFT");
+    assert.equal(never.calls.length, 0);
+    assert.deepEqual(await claim(p), { state: "sending", attempts: 1, rejection: null });
+    // A call id recorded meanwhile still settles the claim, draft or not.
+    const { attemptId } = await recordRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId,
+      providerCallId: "call_worker_stale_rec01", agentId: p.draft.payload.override_agent_id });
+    assert.deepEqual(await dispatch(p, never.http, p.draft.expiresAtMs + 1), { state: "accepted", attemptId });
+    assert.deepEqual(await reconcileRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId }),
+      { state: "accepted", attemptId });
+    assert.equal(never.calls.length, 0);
+  });
+
+  await t.test("a call id recorded before the first claim is never sent again", async () => {
+    const p = await prepared();
+    const { attemptId } = await recordRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId,
+      providerCallId: "call_worker_first_rec01", agentId: p.draft.payload.override_agent_id });
+    const never = transport(reply(201, { call_id: "call_worker_first_rec02" }));
+    assert.deepEqual(await dispatch(p, never.http), { state: "accepted", attemptId });
+    assert.equal(never.calls.length, 0);
+  });
+
+  await t.test("reconciliation refuses malformed input and a missing claim", async () => {
+    const p = await prepared();
+    await assert.rejects(reconcileRetellDispatch(db, { companyId: "x", operationId: p.operationId }),
+      e => e instanceof RetellDispatchError && e.code === "VOICE_DISPATCH_REJECTED");
+    await assert.rejects(reconcileRetellDispatch(db, { companyId: p.s.f.companyId, operationId: p.operationId }),
+      e => e instanceof RetellDispatchError && e.code === "VOICE_DISPATCH_UNAVAILABLE");
   });
 
   const dispatchError = code => e => e instanceof RetellDispatchError && e.code === code;

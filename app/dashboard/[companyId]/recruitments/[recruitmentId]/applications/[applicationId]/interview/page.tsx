@@ -41,6 +41,7 @@ export default async function CandidateInterview({ params }: { params: Promise<S
     <p>{context.recruitment.name} · {context.position.title}</p>
     <p className="notice">Pytania wynikają z zestawienia wymagań i dowodów z CV. Pomagają uzupełnić brakujące informacje.
       Nie są oceną kandydata. Aplikacja nie oznacza kandydatów do zatrudnienia ani do odrzucenia. Kolejny krok wybiera człowiek.</p>
+    <p><Link href={`${base}/applications/${route.applicationId}/assessments`}>Notatki z rozmowy, etap i decyzja</Link></p>
 
     {!analysis && <p role="status">Dla tego zgłoszenia nie ma jeszcze zestawienia dowodów. <Link href={screeningPath(route)}>Uruchom analizę</Link>, aby przygotować pytania o brakujące informacje.</p>}
     {analysis && analysis.execution_status !== 'completed' && <p role="status">Zestawienie dowodów nie jest jeszcze gotowe. <Link href={screeningPath(route)}>Sprawdź stan analizy</Link>.</p>}
