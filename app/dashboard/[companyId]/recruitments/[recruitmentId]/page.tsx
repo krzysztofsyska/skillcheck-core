@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { companyAccess } from "../../../../../lib/company-access";
-import { StageForm } from "./assessment-forms";
+import { StageForm, StageControls } from "./assessment-forms";
 export default async function Recruitment({params}: {params:Promise<{companyId:string;recruitmentId:string}>}) {
   const {companyId,recruitmentId}=await params;
   const {client,canEdit}=await companyAccess(companyId);
@@ -21,7 +21,7 @@ export default async function Recruitment({params}: {params:Promise<{companyId:s
     <h2>Plan etapów oceny</h2>
     <p>Nazwanie etapu „AI” lub „voicebot” nie uruchamia integracji. Opisz, co rekruter ma sprawdzić i jakie dowody zebrać.</p>
     {!stages.data.length && <p>Brak zdefiniowanych etapów.</p>}
-    <ul>{stages.data.map(stage=><li key={stage.id}><strong>{stage.sequence}. {stage.name}</strong>{stage.description && <p className="cv-text">{stage.description}</p>}</li>)}</ul>
+    <ul>{stages.data.map((stage,index)=><li key={stage.id}><strong>{stage.sequence}. {stage.name}</strong>{stage.description && <p className="cv-text">{stage.description}</p>}{canEdit && <StageControls companyId={companyId} recruitmentId={recruitmentId} stageId={stage.id} name={stage.name} first={index === 0} last={index === stages.data.length - 1}/>}</li>)}</ul>
     {canEdit && <details><summary>Dodaj etap oceny</summary><StageForm companyId={companyId} recruitmentId={recruitmentId} nextSequence={(stages.data.at(-1)?.sequence ?? 0)+1}/></details>}
   </section></main>;
 }

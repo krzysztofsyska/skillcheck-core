@@ -52,7 +52,8 @@
     "test:erasure-service": "node --test tests/erasure-service.test.mjs tests/erasure-service-backend.test.mjs",
     "test:competency": "node --test tests/competency-test.test.mjs",
     "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs tests/sc19-przelewy24-provider.test.mjs",
-    "smoke:preview": "node scripts/preview-smoke.cjs"
+    "smoke:preview": "node scripts/preview-smoke.cjs",
+    "e2e:step4": "node scripts/step4-browser-e2e.cjs"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",
