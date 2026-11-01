@@ -9,13 +9,34 @@ export const BULK_MAX_ZIP_BYTES = 100_000_000;
 /** Pages read from a PDF; scanned pages beyond the OCR cap are an error. */
 export const BULK_MAX_PDF_PAGES = 20;
 export const BULK_MAX_OCR_PAGES = 6;
-/** Parallel uploads from one browser tab. */
-export const BULK_UPLOAD_CONCURRENCY = 3;
+/** Hard cap on OCR runs per PDF (near-blank pages that yield nothing still cost an attempt). */
+export const BULK_MAX_OCR_ATTEMPTS = 10;
+/** Largest image accepted for OCR (pixels); bigger photos/scans are reported as too large. */
+export const BULK_MAX_IMAGE_PIXELS = 25_000_000;
+/** Long side (px) of the image handed to OCR; larger inputs are downscaled first. */
+export const BULK_OCR_MAX_SIDE = 2500;
+/** Server time for reading one file (upload route maxDuration is 60 s). */
+export const BULK_EXTRACT_BUDGET_MS = 45_000;
+/** Parallel uploads from one browser tab: text files (DOCX/TXT) and files that may need OCR (PDF/images). */
+export const BULK_UPLOAD_CONCURRENCY = 2;
+export const BULK_OCR_UPLOAD_CONCURRENCY = 1;
+
+/** Files that may need OCR on the server (slow): uploaded one at a time. */
+export const bulkMayNeedOcr = (kind: BulkFileKind) => kind === 'pdf' || kind === 'image';
+
+/**
+ * Bulk intake reserves package slots and queues AI analyses. When the AI analysis is switched off
+ * (SCREENING_AI_ENABLED != 'true') queued files would never start and the slots would stay held,
+ * so no batch may be created. Returns the message shown to the recruiter, or null when allowed.
+ */
+export function bulkIntakeBlocked(aiEnabled: boolean) {
+  return aiEnabled ? null : 'Analiza AI jest teraz wyłączona, więc nie można wgrać paczki CV. Pakiet nie został naruszony. Spróbuj ponownie później.';
+}
 
 export type BulkFileKind = 'pdf' | 'docx' | 'txt' | 'image' | 'other';
 export type BulkPhase = 'awaiting_upload' | 'queued' | 'analyzing' | 'done' | 'error';
 export type BulkErrorReason = 'over_limit' | 'unreadable_scan' | 'protected_pdf' | 'bad_format' | 'too_large'
-  | 'no_text' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible';
+  | 'no_text' | 'ocr_timeout' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible';
 export type BulkGroup = 'passed' | 'review' | 'rejected';
 
 export function bulkFileKind(name: string): BulkFileKind {
@@ -47,7 +68,8 @@ export const errorLabel: Record<BulkErrorReason, string> = {
   unreadable_scan: 'nieczytelny skan',
   protected_pdf: 'zabezpieczony lub uszkodzony PDF',
   bad_format: 'zły format pliku',
-  too_large: 'plik lub tekst CV za duży (max 4 MB, 100 000 znaków)',
+  too_large: 'plik, obraz lub tekst CV za duży (max 4 MB, 25 mln pikseli, 100 000 znaków)',
+  ocr_timeout: 'odczyt skanu trwał za długo — wgraj CV jako tekstowy PDF lub DOCX',
   no_text: 'brak tekstu w pliku',
   duplicate: 'duplikat kandydata w tej rekrutacji',
   not_uploaded: 'plik nie został wysłany',
@@ -60,6 +82,11 @@ export const groupLabel: Record<BulkGroup, string> = {
 };
 
 export type BulkFileErrorReason = Exclude<BulkErrorReason, 'over_limit' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible'>;
+
+/** OCR could not finish within the time left for this file. */
+export class OcrTimeoutError extends Error {
+  constructor() { super('ocr_timeout'); this.name = 'OcrTimeoutError'; }
+}
 export class BulkIntakeError extends Error {
   readonly reason: BulkFileErrorReason;
   constructor(reason: BulkFileErrorReason) {

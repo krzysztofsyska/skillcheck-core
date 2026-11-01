@@ -14,7 +14,14 @@ if (!url.includes(PREVIEW_REF) || url.includes(PRODUCTION_REF)) throw new Error(
 if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY missing');
 const max = Math.min(Math.max(Number(process.env.MAX_ATTEMPTS ?? 10) || 10, 1), 20);
 
-const pool = new pg.Pool({ connectionString: url, max: 2, ssl: { rejectUnauthorized: false } });
+// TLS: Supabase Postgres certificates are signed by Supabase's own root CA (not in the system store), so
+// full verification needs that CA. With PREVIEW_DATABASE_CA_CERT (PEM of "Supabase Root 2021 CA", from the
+// project's Database settings) the server certificate is verified; without it the connection is encrypted
+// but unverified. Preview holds synthetic data only.
+const ca = process.env.PREVIEW_DATABASE_CA_CERT?.trim();
+if (!ca) console.warn('PREVIEW_DATABASE_CA_CERT not set: TLS certificate of the preview database is not verified');
+const pool = new pg.Pool({ connectionString: url.replace(/([?&])sslmode=[^&]*&?/, '$1').replace(/[?&]$/, ''), max: 2,
+  ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: false } });
 async function asWorker(fn) {
   const client = await pool.connect();
   try {
