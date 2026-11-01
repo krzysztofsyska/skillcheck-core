@@ -1,0 +1,4 @@
+# Migrations applied to the TEST database skillcheck-preview by
+# .github/workflows/preview-db-migrate.yml, in this order. Entries already in
+# the preview ledger (same name) are skipped. Never used for production.
+20261030160100_sc_step4_erasure_inventory_r8.sql
