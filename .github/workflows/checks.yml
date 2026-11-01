@@ -35,6 +35,7 @@ jobs:
       - run: node --test tests/release-promotion-manifest.test.mjs
       - run: node --test tests/production-approval-attestation.test.mjs
       - run: node --test tests/deploy-screening-worker-workflow.test.mjs
+      - run: node --test tests/preview-db-migrate-workflow.test.mjs
       - run: npm run test:fakturownia
       - run: npm run typecheck
       - run: npm run test:legal
