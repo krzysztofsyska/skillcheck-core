@@ -174,5 +174,6 @@ SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is n
 - never expose service_role to client code
 - preserve tenant isolation and RLS
 - CV/provider payload must remain minimal and approved
+  - Exception (owner decision 2026-11-01): in bulk CV upload (SC-BULK-001) the automatically redacted CV text counts as approved without a per-CV human review. Redaction must stay in place, and the human still decides on every candidate.
 - no automated final hire/reject decision
 - human-readable evidence and review remain required for AI screening
