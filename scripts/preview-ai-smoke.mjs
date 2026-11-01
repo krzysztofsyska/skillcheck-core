@@ -51,7 +51,7 @@ const attempts = (await pool.query(`select t.id from public.screening_analysis_a
   join public.screening_analysis_versions s on s.id = t.analysis_id
   join public.companies c on c.id = s.company_id
   where t.status = 'pending' and c.name like 'Firma Testowa%'
-  order by t.created_at limit $1`, [max])).rows.map(r => r.id);
+  order by t.created_at desc limit $1`, [max])).rows.map(r => r.id); // newest first: the batch just uploaded
 console.log(JSON.stringify({ pending_selected: attempts.length, max }));
 const runtime = {
   enabled: true, store,
