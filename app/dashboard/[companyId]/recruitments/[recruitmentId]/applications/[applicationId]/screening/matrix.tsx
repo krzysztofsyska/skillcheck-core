@@ -19,9 +19,15 @@ const humanLabels = {
   edited: 'Skorygowane',
 } as const;
 
-function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, editable }: {
+/** Shows who last changed a row without exposing account ids: the viewer or another team member. */
+export function authorLabel(updatedBy: string | null, currentUserId?: string) {
+  if (!updatedBy) return '—';
+  return updatedBy === currentUserId ? 'Ty' : 'Inna osoba z zespołu';
+}
+
+function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, editable, currentUserId }: {
   criterion: ScreeningCriterionResult; route: ScreeningRoute; analysisId: string;
-  documentId: string; documentVersion: number; editable: boolean;
+  documentId: string; documentVersion: number; editable: boolean; currentUserId?: string;
 }) {
   const [state, submit, pending] = useActionState<ScreeningFormState, FormData>(
     reviewEvidenceRow.bind(null, route, analysisId, criterion.id), {},
@@ -66,7 +72,7 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
     <td>{question || '—'}</td>
     <td><strong>{humanLabels[criterion.human_status]}</strong>{criterion.updated_at &&
       <p><small>Aktualizacja: {new Date(criterion.updated_at).toLocaleString('pl-PL')}<br />
-        Autor: {criterion.updated_by ?? '—'}</small></p>}{criterion.human_note && <p>{criterion.human_note}</p>}</td>
+        Autor: {authorLabel(criterion.updated_by, currentUserId)}</small></p>}{criterion.human_note && <p>{criterion.human_note}</p>}</td>
     <td>{editable && <form action={submit} className={styles.matrixForm}>
       <input type="hidden" name="updatedAt" value={draft.updatedAt} />
       <label>Werdykt po edycji<select name="verdict" value={draft.verdict} onChange={e => set({ verdict: e.target.value as typeof draft.verdict })}>
@@ -90,9 +96,9 @@ function MatrixRow({ criterion, route, analysisId, documentId, documentVersion, 
   </tr>;
 }
 
-export function EvidenceMatrix({ criteria, route, analysisId, documentId, documentVersion, editable }: {
+export function EvidenceMatrix({ criteria, route, analysisId, documentId, documentVersion, editable, currentUserId }: {
   criteria: ScreeningCriterionResult[]; route: ScreeningRoute; analysisId: string;
-  documentId: string; documentVersion: number; editable: boolean;
+  documentId: string; documentVersion: number; editable: boolean; currentUserId?: string;
 }) {
   return <section aria-label="Macierz dowodów">
     <h2>Macierz wymagań i dowodów</h2>
@@ -106,7 +112,7 @@ export function EvidenceMatrix({ criteria, route, analysisId, documentId, docume
       </tr></thead>
       <tbody>{criteria.length ? criteria.map(row => <MatrixRow key={row.id} criterion={row}
         route={route} analysisId={analysisId} documentId={documentId} documentVersion={documentVersion}
-        editable={editable} />) : <tr><td colSpan={7}>Brak wyników dla wymagań.</td></tr>}</tbody>
+        editable={editable} currentUserId={currentUserId} />) : <tr><td colSpan={7}>Brak wyników dla wymagań.</td></tr>}</tbody>
     </table></div>
   </section>;
 }
