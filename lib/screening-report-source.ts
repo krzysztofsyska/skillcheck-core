@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import {
-  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, parseRanking, parseShortlist,
+  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
@@ -149,6 +149,16 @@ export async function loadScreeningReport(
   }
   const rechecked = await readSource();
   requireReport(JSON.stringify(source) === JSON.stringify(rechecked));
+  // Automatic groups from bulk CV intake. Optional: before the bulk migration the RPC does not exist.
+  const groupResult = await client.rpc('get_preselection_groups', { target_recruitment: p.recruitmentId });
+  let groups: ReturnType<typeof parseGroupRow>[] = [];
+  if (groupResult.error) {
+    if (!['PGRST202', '42883'].includes(groupResult.error.code ?? '')) checked(groupResult, true);
+  } else {
+    requireReport(Array.isArray(groupResult.data) && groupResult.data.length <= MAX_REPORT_APPLICATIONS);
+    const ids = new Set(source.applications.map(a => a.id));
+    groups = (groupResult.data as unknown[]).map(parseGroupRow).filter(g => ids.has(g.application_id));
+  }
   const report: ScreeningReport = {
     version: REPORT_VERSION, generatedAt: new Date().toISOString(), companyId: p.companyId, companyName: source.company.name,
     recruitmentId: p.recruitmentId, recruitmentName: source.recruitment.name, positionTitle: source.position.title, targetSize: p.targetSize,
@@ -160,6 +170,7 @@ export async function loadScreeningReport(
     applications: [...source.rankings].sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || a.application_id.localeCompare(b.application_id))
       .map(ranking => ({ ranking, shortlist: source.shortlist.find(s => s.application_id === ranking.application_id) ?? null,
         criteria: details.get(ranking.application_id) ?? [] })),
+    groups,
   };
   if (Buffer.byteLength(JSON.stringify(report), 'utf8') > 10 * 1024 * 1024) throw new ScreeningReportError('too_large');
   return report;

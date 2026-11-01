@@ -210,3 +210,25 @@ test('v2 evidence rows publish the human matrix review, never the discarded AI c
   assert.equal(a.evidence[0].quote, 'Raport'); assert.equal(a.reviewedChange, false); assert.equal(a.matrixVerdict, 'supported');
   assert.equal((await load(fixture())).applications[0].criteria[0].matrixVerdict, null, 'Legacy v1 rows keep their rating only');
 });
+
+test('automatic preselection groups appear in the report and CSV without per-row review', async () => {
+  const data = fixture();
+  data.get_preselection_groups = [
+    { application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true, group_key: 'passed',
+      source: 'auto', raw_score: 87.5, coverage: 0.875, updated_at: timestamp, application_status: 'new' },
+    // A row for an application outside this recruitment is never shown.
+    { application_id: uuid(61), candidate_id: uuid(62), candidate_name: 'Obca Osoba', has_phone: false, group_key: 'rejected',
+      source: 'auto', raw_score: 0, coverage: 1, updated_at: timestamp, application_status: 'new' },
+  ];
+  const report = await load(data), csv = screeningReportCsv(report);
+  assert.equal(report.groups.length, 1);
+  assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875 });
+  assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, /"Jan Testowy";"Przeszli sito";"87.5";"0.875";"Automatycznie"/);
+  assert.doesNotMatch(csv, /Obca Osoba/);
+});
+
+test('report still loads before the bulk migration (groups RPC missing)', async () => {
+  const report = await load(fixture(), { error: { get_preselection_groups: 'PGRST202' } });
+  assert.deepEqual(report.groups, []);
+  assert.doesNotMatch(screeningReportCsv(report), /Preselekcja automatyczna/);
+});
