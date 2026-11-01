@@ -1,0 +1,44 @@
+# Preview-only smoke test of the real screening worker code + OpenAI against
+# pending analyses of synthetic "Firma Testowa..." companies on skillcheck-preview.
+# Owner-approved (2026-11-01, decision 5). At most 10 analyses per run, so the
+# cost is bounded; the OpenAI budget limit in the provider panel still applies.
+# Trigger: push to a `preview-ai/**` branch. Never production.
+# Secrets (environment `preview-db`): PREVIEW_DATABASE_URL, OPENAI_API_KEY.
+name: Preview AI smoke
+
+on:
+  push:
+    branches:
+      - 'preview-ai/**'
+
+permissions: {}
+
+concurrency:
+  group: preview-ai-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Real AI analysis on skillcheck-preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: preview-db
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Run worker on pending synthetic analyses
+        env:
+          PREVIEW_DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MAX_ATTEMPTS: '10'
+        run: |
+          test -n "${OPENAI_API_KEY:-}" || { echo "::error::OPENAI_API_KEY is not set in the preview-db environment"; exit 1; }
+          node --experimental-strip-types scripts/preview-ai-smoke.mjs

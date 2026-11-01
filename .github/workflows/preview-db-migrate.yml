@@ -1,0 +1,80 @@
+# Applies checked-in migrations to the TEST database skillcheck-preview
+# (orbyscrupgnupifzlqxp) only. Never production: the job refuses any
+# connection string that is not the preview project, and production
+# migrations stay with db-migrate-production (owner approval).
+#
+# What runs: exactly the files listed in supabase/preview-migrations.txt, in
+# that order, skipped when the preview ledger
+# (supabase_migrations.schema_migrations) already has a migration of the same
+# name. Each migration file carries its own transaction and preflight/postflight guards.
+#
+# When: every push to `integration` or to a `preview-db/**` branch (a task
+# branch pushed there to be tested on preview before review/merge). No paths
+# filter: a new branch or a non-migration commit must still run; the job is
+# idempotent (already applied names are skipped).
+# Secret: PREVIEW_DATABASE_URL in the GitHub environment `preview-db`.
+name: Preview DB migrate
+
+on:
+  push:
+    branches:
+      - integration
+      - 'preview-db/**'
+
+permissions: {}
+
+concurrency:
+  group: preview-db-migrate
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Migrate skillcheck-preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: preview-db
+    permissions:
+      contents: read
+    env:
+      PREVIEW_REF: orbyscrupgnupifzlqxp
+      PRODUCTION_REF: wsvjawuikxfzjyivxgsu
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Apply listed migrations to preview
+        env:
+          DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}" || { echo "::error::PREVIEW_DATABASE_URL is not set in the preview-db environment"; exit 1; }
+          case "$DATABASE_URL" in *"$PRODUCTION_REF"*) echo "::error::Refusing: connection string points at production"; exit 1;; esac
+          case "$DATABASE_URL" in *"$PREVIEW_REF"*) ;; *) echo "::error::Refusing: connection string is not skillcheck-preview"; exit 1;; esac
+          export PGCONNECT_TIMEOUT=15 PGSSLMODE=require
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -qAtc "select 'connected to ' || current_database()"
+          applied=0
+          while IFS= read -r file || [ -n "$file" ]; do
+            file="${file%%#*}"; file="$(echo "$file" | xargs)"
+            [ -z "$file" ] && continue
+            [[ "$file" =~ ^[0-9]{14}_[a-z0-9_]+\.sql$ ]] || { echo "::error::Invalid entry: $file"; exit 1; }
+            path="supabase/migrations/$file"
+            test -f "$path" || { echo "::error::Missing $path"; exit 1; }
+            version="${file%%_*}"; name="${file#*_}"; name="${name%.sql}"
+            done_count=$(psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v name="$name" <<'SQL'
+          select count(*) from supabase_migrations.schema_migrations where name = :'name';
+          SQL
+            )
+            if [ "$done_count" != "0" ]; then echo "skip   $file (already applied)"; continue; fi
+            echo "apply  $file"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$path"
+            psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v version="$version" -v name="$name" -v body="$(cat "$path")" <<'SQL'
+          insert into supabase_migrations.schema_migrations(version, name, statements) values (:'version', :'name', array[:'body']);
+          SQL
+            applied=$((applied+1))
+          done < supabase/preview-migrations.txt
+          {
+            echo "### skillcheck-preview migrations"
+            echo "- revision: \`$GITHUB_SHA\` (\`$GITHUB_REF_NAME\`)"
+            echo "- applied now: $applied"
+          } >> "$GITHUB_STEP_SUMMARY"

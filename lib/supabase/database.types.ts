@@ -3,6 +3,7 @@
 import type { ExerciseDefinition } from '../exercise-definition';
 import type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
 export type { BehaviorAreaKey, RequiredBehaviorLevel } from '../position-fields';
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 type Timestamps = { created_at: string; updated_at: string };
 type Entity = Timestamps & { id: string; company_id: string };
 type Relationship<
@@ -407,6 +408,29 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      // SC-BULK-001 bulk CV intake (jsonb results are validated in lib/cv-bulk-runner.ts).
+      cv_bulk_create_batch: { Args: { target_recruitment: string; request_key: string; files: Json }; Returns: Json };
+      cv_bulk_register_item: { Args: { target_item: string; extracted: Json }; Returns: Json };
+      cv_bulk_fail_item: { Args: { target_item: string; reason: string }; Returns: boolean };
+      cv_bulk_close_upload: { Args: { target_batch: string }; Returns: number };
+      cv_bulk_pump: { Args: { target_batch: string; contract?: Json | null; pricing?: Json | null }; Returns: Json };
+      cv_bulk_worker_pump: {
+        Args: { request_id: string; issued_at_ms: number; request_signature: string; contract?: Json | null; pricing?: Json | null };
+        Returns: Json;
+      };
+      cv_bulk_finish_notification: {
+        Args: { target_batch: string; outcome: string; request_id?: string | null; issued_at_ms?: number | null; request_signature?: string | null };
+        Returns: boolean;
+      };
+      cv_bulk_batch_status: { Args: { target_batch: string }; Returns: Json };
+      cv_bulk_recruitment_batches: { Args: { target_recruitment: string }; Returns: Json };
+      get_preselection_groups: { Args: { target_recruitment: string }; Returns: Json };
+      move_preselection_group: {
+        Args: { target_application: string; new_group: string; expected_updated_at: string; move_note?: string | null };
+        Returns: string;
+      };
+      get_preselection_group_history: { Args: { target_application: string }; Returns: Json };
+      cv_ai_usage_stats: { Args: { since_days?: number }; Returns: Json };
       sc19_claim_trial: { Args: { target_company: string; supplied_nip: string }; Returns: number };
       sc19_get_balance: {
         Args: { target_company: string };

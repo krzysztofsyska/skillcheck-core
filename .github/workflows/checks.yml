@@ -35,6 +35,8 @@ jobs:
       - run: node --test tests/release-promotion-manifest.test.mjs
       - run: node --test tests/production-approval-attestation.test.mjs
       - run: node --test tests/deploy-screening-worker-workflow.test.mjs
+      - run: node --test tests/preview-db-migrate-workflow.test.mjs
+      - run: node --test tests/cv-bulk-workflows.test.mjs
       - run: npm run test:fakturownia
       - run: npm run typecheck
       - run: npm run test:legal
@@ -61,6 +63,8 @@ jobs:
           SALES_MAIL_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:auth
       - run: npm run test:cv
+      # Unit tests; the native-PostgreSQL suite (needs full git history) runs in sc19-migrations.yml (PG 16/17).
+      - run: npm run test:cv-bulk
       - run: npm run test:screening
       - run: node --test tests/sc-019-billing-prototype.test.mjs tests/sc-019-billing-ui.test.mjs
       - run: node --test tests/sc-019-package-display.test.mjs

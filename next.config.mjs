@@ -11,13 +11,19 @@ const contentSecurityPolicy = [
 
 /** @type {import('next').NextConfig} */
 const config = {
-  serverExternalPackages: ['pdf-parse', 'pdfjs-dist'],
+  serverExternalPackages: ['pdf-parse', 'pdfjs-dist', 'tesseract.js', 'tesseract.js-core'],
   // PDF.js loads its worker and native canvas bindings dynamically.
   outputFileTracingIncludes: {
     '/dashboard/**': [
       './node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
       './node_modules/@napi-rs/canvas/**',
       './node_modules/@napi-rs/canvas-*/*',
+      // Local OCR for bulk CV intake: WASM core and the bundled Polish model.
+      './node_modules/tesseract.js/src/**',
+      './node_modules/tesseract.js-core/*.js',
+      './node_modules/tesseract.js-core/*.wasm',
+      './node_modules/@tesseract.js-data/pol/4.0.0/pol.traineddata.gz',
+      './node_modules/@tesseract.js-data/pol/package.json',
     ],
   },
   async headers() {
