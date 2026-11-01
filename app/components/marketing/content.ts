@@ -56,7 +56,7 @@ export const packages = [
   {
     name: "PRESELEKCJA",
     title: "Preselekcja CV z dowodami",
-    body: "Analiza AI CV względem wymagań stanowiska: dowody, braki i pytania na rozmowę, ranking i raport z eksportem. Płatność na podstawie faktury, pakiet aktywujemy po zaksięgowaniu wpłaty.",
+    body: "Analiza CV przez AI względem wymagań stanowiska: dowody, braki i pytania na rozmowę, ranking i raport z eksportem. Płatność na podstawie faktury, pakiet aktywujemy po zaksięgowaniu wpłaty.",
   },
   {
     name: "WERYFIKACJA",
