@@ -338,7 +338,11 @@ begin
     where a.company_id = b.company_id and a.recruitment_id = b.recruitment_id
       and ((mail is not null and lower(btrim(c.email)) = mail)
         or (tel is not null and private.cv_bulk_phone_digits(c.phone) = private.cv_bulk_phone_digits(tel) and length(private.cv_bulk_phone_digits(tel)) = 9)
-        or (named and lower(btrim(c.first_name)) = lower(first) and lower(btrim(c.last_name)) = lower(last)))
+        -- A name alone is weak evidence (a job title can look like a name): it counts only when
+        -- no contact data on either side could tell the two people apart.
+        or (named and lower(btrim(c.first_name)) = lower(first) and lower(btrim(c.last_name)) = lower(last)
+            and (mail is null or nullif(btrim(c.email), '') is null)
+            and (tel is null or nullif(btrim(c.phone), '') is null)))
     order by a.created_at, a.id limit 1;
   if dup is not null then
     perform private.cv_bulk_release_slot(item);

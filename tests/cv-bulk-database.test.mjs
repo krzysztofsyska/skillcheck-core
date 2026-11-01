@@ -182,6 +182,11 @@ test('SC-BULK-001 bulk intake on the full migration chain', async t => {
     await b.register(f2, a.id, b.extraction({ first_name: 'Ewa', last_name: 'Lis' }));
     assert.equal((await b.register(f2, c.id, b.extraction({ first_name: 'Ewa', last_name: 'Lis' }))).error_reason, 'duplicate');
     assert.equal((await b.register(f2, d.id, b.extraction({ first_name: 'Ewa', last_name: 'Lis', name_detected: false }))).status, 'queued');
+    // A detected name with different contact data is a different person (e.g. a job title read as a name).
+    const f4 = await b.tenant(paymentUsers.owner, 2);
+    const [m1, m2] = await b.items((await b.create(f4, 2)).batch_id);
+    await b.register(f4, m1.id, b.extraction({ first_name: 'Operator', last_name: 'Maszyn', email: 'jeden@example.com' }));
+    assert.equal((await b.register(f4, m2.id, b.extraction({ first_name: 'Operator', last_name: 'Maszyn', email: 'dwa@example.com' }))).status, 'queued');
     await h.asAdmin();
     assert.equal((await db.query('select status from private.cv_bulk_batches where id=$1', [batch2.batch_id])).rows[0].status, 'processing');
     // Invalid extraction is refused before anything is written.
@@ -391,7 +396,7 @@ test('SC-BULK-001 R9: erasure inventory lists and purges bulk rows', async t => 
       const [dupItem] = await b.items(batch.batch_id);
       await h.asAdmin();
       const person = (await db.query('select * from public.candidates where id=$1', [subject.candidate.id])).rows[0];
-      await b.register(subject, dupItem.id, b.extraction({ first_name: person.first_name, last_name: person.last_name, name_detected: true }));
+      await b.register(subject, dupItem.id, b.extraction({ first_name: person.first_name, last_name: person.last_name, email: person.email ?? null, name_detected: true }));
       await h.asAdmin();
       await db.query(`insert into private.application_preselection_groups(application_id,company_id,recruitment_id,group_key,source,policy_version)
         values($1,$2,$3,'review','auto','preselection-groups-v1')`, [subject.application.id, subject.companyId, subject.recruitment.id]);
