@@ -36,6 +36,8 @@ jobs:
       - run: node --test tests/production-approval-attestation.test.mjs
       - run: node --test tests/deploy-screening-worker-workflow.test.mjs
       - run: node --test tests/preview-db-migrate-workflow.test.mjs
+        env:
+          PREVIEW_MIGRATE_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: node --test tests/cv-bulk-workflows.test.mjs
       - run: npm run test:fakturownia
       - run: npm run typecheck

@@ -60,24 +60,27 @@ export function bulkWorkerSignature(secret: string, op: 'pump' | 'notify', reque
   return createHmac('sha256', secret).update(['cv-bulk-v1', op, requestId, String(stamp), target ?? '-', extra ?? '-'].join('\n')).digest('hex');
 }
 
-/** Scheduler pump without a user session: every call is signed with the worker secret. */
-export async function pumpAllSigned(deps: PumpDeps & { secret: string; md5: (text: string) => string }) {
+/**
+ * Scheduler pump without a user session: every call is signed with the worker secret. The SQL pump has already
+ * counted a re-send / e-mail attempt for every batch it returns, so every returned batch is delivered: all
+ * batches in parallel, each bounded by the dispatch (15 s) and e-mail (10 s) timeouts, so the route stays
+ * inside maxDuration 60 s however many batches (at most 20) come back.
+ */
+export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (text: string) => string }) {
   const env = deps.env ?? process.env;
   const contract = bulkContract(deps.aiEnabled), pricing = bulkPricing(env);
   const requestId = randomUUID(), stamp = Date.now();
-  // Same canonical text as md5(contract::text || '|' || pricing::text) in SQL (jsonb canonical form).
-  const extra = deps.md5(`${canonicalJsonb(contract)}|${canonicalJsonb(pricing)}`);
+  // sha256 over the same canonical text as (contract::text || '|' || pricing::text) in SQL (jsonb canonical form).
+  const extra = deps.digest(`${canonicalJsonb(contract)}|${canonicalJsonb(pricing)}`);
   const { data, error } = await deps.rpc('cv_bulk_worker_pump', { request_id: requestId, issued_at_ms: stamp,
     request_signature: bulkWorkerSignature(deps.secret, 'pump', requestId, stamp, null, extra), contract, pricing });
   if (error) throw new Error('cv_bulk_worker_pump_failed');
   const batches = Array.isArray(data) ? data : [];
-  for (const one of batches) {
-    await deliver(deps, parsePump(one), async (batch, outcome) => {
-      const id = randomUUID(), at = Date.now();
-      await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
-        request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
-    });
-  }
+  await Promise.all(batches.map(one => deliver(deps, parsePump(one), async (batch, outcome) => {
+    const id = randomUUID(), at = Date.now();
+    await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
+      request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
+  }).catch(() => undefined)));
   return batches.length;
 }
 

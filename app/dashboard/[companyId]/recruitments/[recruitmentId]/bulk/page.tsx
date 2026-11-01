@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { companyAccess } from '../../../../../../lib/company-access';
-import { BULK_MAX_FILES, BULK_MAX_FILE_BYTES } from '../../../../../../lib/cv-bulk';
+import { BULK_MAX_FILES, BULK_MAX_FILE_BYTES, bulkIntakeBlocked } from '../../../../../../lib/cv-bulk';
+import { screeningAiUserEnabled } from '../../../../../../lib/screening-dispatch';
 import { BulkUploader } from './uploader';
 
 export const dynamic = 'force-dynamic';
@@ -17,11 +18,13 @@ export default async function BulkUploadPage({ params }: { params: Promise<{ com
   const batches = await client.rpc('cv_bulk_recruitment_batches', { target_recruitment: recruitmentId });
   const list = (batches.data ?? []) as { id: string; status: string; declared_files: number; done: number; errors: number; pending: number; created_at: string }[];
   const back = `/dashboard/${companyId}/recruitments/${recruitmentId}`;
+  const blocked = bulkIntakeBlocked(screeningAiUserEnabled());
   return <main className="workspace"><section>
     <Link href={back}>← {recruitment.name}</Link>
     <h1>Wgraj wiele CV</h1>
     {!canEdit ? <p>Masz dostęp tylko do odczytu.</p> : !['draft', 'open'].includes(recruitment.status)
       ? <p role="alert">Rekrutacja jest wstrzymana lub zamknięta — nie można dodawać CV.</p>
+      : blocked ? <p role="alert">{blocked}</p>
       : <BulkUploader companyId={companyId} recruitmentId={recruitmentId} recruitmentName={recruitment.name} available={available}
           maxFiles={BULK_MAX_FILES} maxFileBytes={BULK_MAX_FILE_BYTES} billingHref={`/dashboard/${companyId}/billing`} />}
     <h2>Wcześniejsze paczki</h2>

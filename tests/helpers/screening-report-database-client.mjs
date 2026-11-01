@@ -2,6 +2,8 @@
 // fixture's authenticated PostgreSQL role and RLS; no ranking rows are invented.
 const tables = new Set(['companies','recruitments','positions','applications','screening_analysis_versions','screening_result_reviews','screening_criterion_results','screening_criterion_review_overrides']);
 const functions = new Set(['get_screening_ranking','get_recruitment_shortlist','get_preselection_groups']);
+// Functions returning one scalar (jsonb): PostgREST returns the value itself, not rows.
+const scalarFunctions = new Set(['get_preselection_groups']);
 const identifier = value => { if (!/^[a-z_][a-z_0-9]*$/.test(value)) throw Error('Invalid test SQL identifier'); return '"'+value+'"'; };
 export function reportDatabaseClient(db, getUser, beforeRead = async () => {}) {
   const reads = [];
@@ -25,6 +27,7 @@ export function reportDatabaseClient(db, getUser, beforeRead = async () => {}) {
           const where = filters.map(([key,value,many])=>identifier(key)+(many?' = any('+parameter(value)+')':' = '+parameter(value))).join(' and ');
           const sql = 'select row_to_json(result) as row from (select '+fields+' from '+source+(where?' where '+where:'')+(orders.length?' order by '+orders.join(','):'')+' limit '+parameter(limit)+' offset '+parameter(offset)+') result';
           const rows = (await db.query(sql,values)).rows.map(r=>r.row);
+          if (args && scalarFunctions.has(table)) return resolve({data:rows[0]?.[table]??null,error:null});
           return resolve({data:single?(rows[0]??null):rows,error:null});
         } catch(error) { return resolve({data:null,error:{code:error.code??'TEST_ADAPTER_ERROR',message:error.message}}); }
       },

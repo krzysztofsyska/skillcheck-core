@@ -8,3 +8,5 @@
 20261101120000_company_creation_limit.sql
 20261101130000_cv_bulk_intake.sql
 20261101130100_cv_bulk_erasure_inventory_r9.sql
+20261101130200_cv_bulk_review_fixes.sql
+20261101130300_cv_bulk_erasure_inventory_r10.sql
