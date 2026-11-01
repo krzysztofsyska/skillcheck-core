@@ -1,4 +1,4 @@
-import { kindLabels, matrixVerdictLabels, ratingLabels, reasonLabels, shortlistLabel, type ScreeningReport } from '../../../../../../lib/screening-report';
+import { kindLabels, matrixVerdictLabels, preselectionGroupLabels, ratingLabels, reasonLabels, shortlistLabel, type ScreeningReport } from '../../../../../../lib/screening-report';
 import styles from './report.module.css';
 
 const number = (n: number | null) => n === null ? '—' : n.toLocaleString('pl-PL', { maximumFractionDigits: 3 });
@@ -13,6 +13,19 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
       {' '}· Wybrane przez człowieka: <strong>{selected.length}</strong></p>
     <h2>Wymagania aktualnego stanowiska</h2>
     {report.requirements.length ? <ul>{report.requirements.map((r, i) => <li key={i}><strong>{kindLabels[r.kind]}:</strong> {r.text}</li>)}</ul> : <p>Brak zdefiniowanych kryteriów.</p>}
+    {!!report.groups?.length && <>
+      <h2>Preselekcja automatyczna</h2>
+      <p>Podział na grupy wynika z analizy AI wszystkich wymagań. To sugestia do weryfikacji przez człowieka, nie decyzja o zatrudnieniu. Plik CSV zawiera tylko identyfikatory zgłoszeń, bez nazwisk.</p>
+      <div className={styles.tableWrap}><table className={styles.table}>
+        <caption>Kandydaci według grup (najpierw najwyższy wynik)</caption>
+        <thead><tr><th scope="col">Grupa</th><th scope="col">Kandydat</th><th scope="col">Wynik</th><th scope="col">Pokrycie</th><th scope="col">Źródło</th></tr></thead>
+        <tbody>{report.groups.map(g => <tr key={g.application_id}>
+          <td>{preselectionGroupLabels[g.group]}{g.stale && <><br /><strong>Wynik nieaktualny — wymaga ponownej analizy</strong></>}</td>
+          <td><a href={`${basePath}/applications/${g.application_id}/screening`}>{g.candidate_name}</a></td>
+          <td>{number(g.raw_score)}</td><td>{g.coverage === null ? '—' : `${number(g.coverage * 100)}%`}</td>
+          <td>{g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie'}</td>
+        </tr>)}</tbody></table></div>
+    </>}
     <h2>Porównanie zgłoszeń</h2>
     <p>Wynik i pokrycie pochodzą z rankingu. Pokrycie to udział kryteriów, dla których są wystarczające dane. Sugestia obejmuje maksymalnie {report.targetSize} osób.</p>
     {!report.applications.length ? <p>W tej rekrutacji nie ma jeszcze zgłoszeń.</p> : <div className={styles.tableWrap}><table className={styles.table}>
