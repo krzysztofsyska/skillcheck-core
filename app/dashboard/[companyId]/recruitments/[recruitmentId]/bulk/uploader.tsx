@@ -35,8 +35,20 @@ export function BulkUploader(props: Props) {
           const zip = await JSZip.loadAsync(file);
           const entries = Object.values(zip.files).filter(e => !e.dir && !isIgnoredZipEntry(e.name));
           if (picked.length + entries.length > props.maxFiles) throw new Error(`Paczka może mieć maksymalnie ${props.maxFiles} plików CV.`);
+          let unpacked = 0;
           for (const entry of entries) {
+            // Read the declared size from the ZIP directory before inflating, so one highly
+            // compressed entry cannot exhaust the tab's memory. Oversized entries stay listed
+            // (shown as too big, never uploaded) without being decompressed.
+            const declared = Number((entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? NaN);
+            if (!Number.isFinite(declared) || declared > props.maxFileBytes) {
+              picked.push({ name: displayFileName(entry.name), size: Number.isFinite(declared) ? declared : props.maxFileBytes + 1, blob: new Blob([]) });
+              continue;
+            }
+            unpacked += declared;
+            if (unpacked > BULK_MAX_ZIP_BYTES) throw new Error(`Archiwum ZIP po rozpakowaniu może mieć maksymalnie ${mb(BULK_MAX_ZIP_BYTES)}.`);
             const blob = await entry.async('blob');
+            if (blob.size > props.maxFileBytes) { picked.push({ name: displayFileName(entry.name), size: blob.size, blob: new Blob([]) }); continue; }
             picked.push({ name: displayFileName(entry.name), size: blob.size, blob });
           }
         } else picked.push({ name: displayFileName(file.name), size: file.size, blob: file });

@@ -10,7 +10,9 @@ const MIN_TEXT_CHARS = 40;
 function finish(text: string) {
   const normalized = text.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ' ').replace(/[ \t]+\n/g, '\n').trim();
   if (normalized.replace(/\s/g, '').length < MIN_TEXT_CHARS) throw new BulkIntakeError('no_text');
-  try { return validateCvText(normalized.slice(0, MAX_CV_LENGTH)); }
+  // Never truncate silently: a shortened CV would be analysed and grouped as if complete.
+  if (normalized.length > MAX_CV_LENGTH) throw new BulkIntakeError('too_large');
+  try { return validateCvText(normalized); }
   catch { throw new BulkIntakeError('no_text'); }
 }
 

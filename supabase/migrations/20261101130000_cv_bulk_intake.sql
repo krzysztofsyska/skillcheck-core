@@ -466,6 +466,13 @@ begin
       -- Lost dispatch: send the same pending attempt again (claim is idempotent).
       dispatch := dispatch || (select t.id from public.screening_analysis_attempts t where t.analysis_id = a.id and t.status = 'pending' order by t.attempt_no desc limit 1);
       update private.cv_bulk_items set dispatched_at = now(), updated_at = now() where id = item.id;
+    elsif a.execution_status = 'processing' and (item.dispatched_at is null or item.dispatched_at < now() - interval '3 minutes')
+      and exists(select 1 from public.screening_analysis_attempts t where t.analysis_id = a.id and t.status = 'processing'
+                 and t.lease_expires_at <= clock_timestamp()) then
+      -- Worker died after claiming: the lease expired, so claim_screening_attempt(_v2) accepts the same attempt again.
+      dispatch := dispatch || (select t.id from public.screening_analysis_attempts t where t.analysis_id = a.id and t.status = 'processing'
+                               and t.lease_expires_at <= clock_timestamp() order by t.attempt_no desc limit 1);
+      update private.cv_bulk_items set dispatched_at = now(), updated_at = now() where id = item.id;
     end if;
   end loop;
   -- 2. Start queued items within the parallel limits.
