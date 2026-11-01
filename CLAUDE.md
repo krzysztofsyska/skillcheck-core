@@ -27,18 +27,19 @@ The owner does not want to be asked about routine work. Do it, then say in the f
 
 Never ask, just do:
 - run reviews (independent reviewer agent) and apply every fix they find, on the same branch;
-- commit and push to task branches, open and update PRs, post review comments and replies on PRs;
+- commit and push to task branches, open and update PRs, post review comments and replies on PRs (never an approving PR review);
 - merge into `integration` under the Review loop rules (green CI + independent review with no open findings on the current commit);
 - start the next task from the agreed plan;
-- technical and product-detail choices inside the agreed MVP scope (limits, wording, error handling, data minimisation, test setup). Pick the safer option, write the reasoning in the PR description and mention it in one line in the report.
+- technical and product-detail choices inside the agreed MVP scope (technical limits such as file size or rate limits — not package sizes or CV counts; wording, error handling, data minimisation, test setup). Pick the safer option, write the reasoning in the PR description and mention it in one line in the report.
 
 Still the owner's decision (ask once, YES/NO with a recommendation, all open questions in one message):
 - production approval and the merge of the promotion PR into `main`;
 - new costs (paid services, plans, domains);
-- external or irreversible actions (e-mails to real people, deleting real data, changing production settings or secrets);
+- external or irreversible actions (any contact with real candidates or customers by any channel, deleting real data, changing production settings or secrets);
+- billing and charge actions, including package or balance changes in `/operator/billing` on production;
 - changes to price, packages or what is in the MVP.
 
-If unsure which list something belongs to and it is reversible, treat it as routine.
+If unsure which list something belongs to and it is reversible, treat it as routine. This section never overrides "Prohibited actions without explicit owner production approval" or "Production access rules" 1–5 in `AGENTS.md`: anything touching production, billing, repository settings or other people's branches is never routine.
 
 ## Current priorities (owner decisions 2026-11-01)
 
