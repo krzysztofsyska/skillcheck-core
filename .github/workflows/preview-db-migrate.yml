@@ -8,8 +8,10 @@
 # (supabase_migrations.schema_migrations) already has a migration of the same
 # name. Each migration file carries its own transaction and preflight/postflight guards.
 #
-# When: on push to `integration` or to a `preview-db/**` branch (a task branch
-# pushed there to be tested on preview before review/merge).
+# When: every push to `integration` or to a `preview-db/**` branch (a task
+# branch pushed there to be tested on preview before review/merge). No paths
+# filter: a new branch or a non-migration commit must still run; the job is
+# idempotent (already applied names are skipped).
 # Secret: PREVIEW_DATABASE_URL in the GitHub environment `preview-db`.
 name: Preview DB migrate
 
@@ -18,10 +20,6 @@ on:
     branches:
       - integration
       - 'preview-db/**'
-    paths:
-      - 'supabase/preview-migrations.txt'
-      - 'supabase/migrations/**'
-      - '.github/workflows/preview-db-migrate.yml'
 
 permissions: {}
 
