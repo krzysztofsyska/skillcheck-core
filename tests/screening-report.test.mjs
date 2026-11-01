@@ -194,20 +194,28 @@ test('React report renders status/evidence and escapes hostile content', async (
 });
 
 test('v2 evidence rows publish the human matrix review, never the discarded AI citation', async () => {
-  const edited = fixture(); Object.assign(edited.screening_criterion_results[0], { verdict: 'supported', human_status: 'edited', human_verdict: 'missing', human_evidence: [] });
+  // get_screening_ranking (20261101140000) counts the reviewed verdict; the fake ranking row matches it.
+  const ranked = (f, counts, score, extra = {}) => { Object.assign(f.get_screening_ranking[0], { below_count: 0, meets_count: 0, above_count: 0,
+    insufficient_data_count: 0, ...counts, raw_score: score, ...extra }); return f; };
+  const edited = ranked(fixture(), { below_count: 1 }, '0.000'); Object.assign(edited.screening_criterion_results[0], { verdict: 'supported', human_status: 'edited', human_verdict: 'missing', human_evidence: [] });
   const editedReport = await load(edited);
   const e = editedReport.applications[0].criteria[0];
   assert.equal(e.matrixVerdict, 'missing', 'The human-corrected evidence state is published, not the neutral rating');
   assert.match(screeningReportCsv(editedReport), /"Werdykt macierzy dowodów"/);
   assert.match(screeningReportCsv(editedReport), /"Brak informacji w CV"/);
   assert.deepEqual(e.evidence, []); assert.equal(e.explanation, null, 'the superseded AI explanation is not published'); assert.equal(e.reviewedChange, true);
-  const rejected = fixture(); Object.assign(rejected.screening_criterion_results[0], { verdict: 'supported', human_status: 'rejected', human_evidence: null });
+  const rejected = ranked(fixture(), { insufficient_data_count: 1 }, null, { known_criteria: 0, coverage: '0.000', rank: null, rankable: false,
+    eligibility_reason: 'insufficient_evidence', suggested_shortlist: false }); Object.assign(rejected.screening_criterion_results[0], { verdict: 'supported', human_status: 'rejected', human_evidence: null });
   const r = (await load(rejected)).applications[0].criteria[0];
   assert.deepEqual(r.evidence, []); assert.equal(r.explanation, null); assert.equal(r.reviewedChange, true);
   assert.equal(r.matrixVerdict, 'rejected');
-  const accepted = fixture(); Object.assign(accepted.screening_criterion_results[0], { verdict: 'supported', human_status: 'accepted', human_evidence: null });
+  const accepted = ranked(fixture(), { above_count: 1 }, '100.000'); Object.assign(accepted.screening_criterion_results[0], { verdict: 'supported', human_status: 'accepted', human_evidence: null });
   const a = (await load(accepted)).applications[0].criteria[0];
   assert.equal(a.evidence[0].quote, 'Raport'); assert.equal(a.reviewedChange, false); assert.equal(a.matrixVerdict, 'supported');
+  assert.deepEqual([a.aiRating, a.rating, e.aiRating, e.rating, r.rating], ['above', 'above', 'above', 'below', 'insufficient_data']);
+  // A ranking that disagrees with the reviewed verdicts is refused, never published.
+  const mismatch = ranked(fixture(), { meets_count: 1 }, '50.000'); Object.assign(mismatch.screening_criterion_results[0], { verdict: 'supported', human_status: 'accepted', human_evidence: null });
+  await assert.rejects(load(mismatch));
   assert.equal((await load(fixture())).applications[0].criteria[0].matrixVerdict, null, 'Legacy v1 rows keep their rating only');
 });
 
@@ -243,4 +251,10 @@ test('a group whose analysis became stale is flagged, not shown as current', asy
   const report = await load(data);
   assert.equal(report.groups[0].stale, true);
   assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
+});
+
+test('evidence-matrix rows use the ranking normalisation of the reviewed verdict', async () => {
+  const { evidenceRating } = await import('../lib/screening-report.ts');
+  assert.deepEqual(['supported', 'partial', 'missing', 'contradicted', 'rejected'].map(evidenceRating),
+    ['above', 'meets', 'below', 'below', 'insufficient_data']);
 });

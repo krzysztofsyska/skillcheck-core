@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
-import {
+import { evidenceRating,
   MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
@@ -145,11 +145,13 @@ export async function loadScreeningReport(
       const evidenceRow = matrixRow?.verdict != null;
       const rejected = evidenceRow && matrixRow.human_status === 'rejected';
       const edited = evidenceRow && matrixRow.human_status === 'edited';
+      const matrixVerdict = !evidenceRow ? null : rejected ? 'rejected' as const : reportMatrixVerdict(edited ? matrixRow.human_verdict ?? matrixRow.verdict : matrixRow.verdict);
       return {
         id: c.criterion_id, kind: c.criterion_kind, text: reportText(c.criterion_text_snapshot)!,
-        aiRating: reportRating(c.rating), rating: reportRating(override?.rating_override ?? c.rating),
+        aiRating: evidenceRow ? evidenceRating(reportMatrixVerdict(matrixRow.verdict)) : reportRating(c.rating),
+        rating: override?.rating_override ? reportRating(override.rating_override) : matrixVerdict ? evidenceRating(matrixVerdict) : reportRating(c.rating),
         reviewedChange: !!override || rejected || edited,
-        matrixVerdict: !evidenceRow ? null : rejected ? 'rejected' as const : reportMatrixVerdict(edited ? matrixRow.human_verdict ?? matrixRow.verdict : matrixRow.verdict),
+        matrixVerdict,
         explanation: rejected || edited ? null : reportText(override?.explanation_override ?? c.explanation),
         evidence: reportEvidence(rejected ? [] : edited ? matrixRow.human_evidence ?? c.evidence : override?.evidence_override ?? c.evidence),
       };

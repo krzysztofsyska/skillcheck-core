@@ -113,6 +113,12 @@ export const matrixVerdictLabels = {
   contradicted: 'Sprzeczne dane', rejected: 'Wiersz odrzucony przez rekrutera',
 } as const;
 export type MatrixVerdict = keyof typeof matrixVerdictLabels;
+/** Same normalisation as get_screening_ranking (20261101140000) and the preselection groups:
+ * the reviewed evidence state maps to the ranking points; a rejected row is unknown. */
+export function evidenceRating(verdict: MatrixVerdict): ScreeningRating {
+  return verdict === 'supported' ? 'above' : verdict === 'partial' ? 'meets'
+    : verdict === 'missing' || verdict === 'contradicted' ? 'below' : 'insufficient_data';
+}
 export type ReportCriterion = {
   id: string; kind: keyof typeof kindLabels; text: string;
   aiRating: ScreeningRating; rating: ScreeningRating; reviewedChange: boolean;
