@@ -84,6 +84,19 @@ test('contact and name detection', () => {
   assert.equal(thin.phone, '+48500123456');
   assert.doesNotMatch(thin.redacted_text, /500/);
   assert.doesNotMatch(suggestRedaction('tel. 600\u00A0700\u00A0800', []), /600/, 'single-CV redaction too');
+  // Word's non-breaking hyphen / en dash, tabs, soft hyphens and zero-width characters never hide data.
+  for (const [input, digits] of [['tel. +48 500\u2011123\u2011456', '+48500123456'], ['tel. 500\u2013123\u2013456', '+48500123456'],
+    ['tel. 500\t123\t456', '+48500123456'], ['tel. 500\u00AD123\u00AD456', '+48500123456'], ['tel. 500\u200B123\u200B456', '+48500123456'],
+    ['tel. \uFF15\uFF10\uFF10 123 456', '+48500123456']]) {
+    const e = buildExtraction('Anna Nowak\n' + input, 7, false, suggestRedaction);
+    assert.equal(e.phone, digits, JSON.stringify(input));
+    assert.doesNotMatch(e.redacted_text.replace(/\D/g, ''), /500123456/, JSON.stringify(input));
+  }
+  assert.doesNotMatch(buildExtraction('Anna No\u00ADwak\nDoświadczenie', 8, false, suggestRedaction).redacted_text, /Nowak|No\u00ADwak/);
+  // Dashes in ordinary text stay as written.
+  assert.match(suggestRedaction('JavaScript 2018\u20132024', []), /2018\u20132024/);
+  // If detection and redaction ever disagree, the file stops instead of reaching the AI provider.
+  assert.throws(() => buildExtraction('Anna Nowak\ntel. 500 123 456', 9, false, t => t), /bad_format/);
   const surname = buildExtraction('Jan Ślusarz\nDoświadczenie: spawanie', 4, false, suggestRedaction);
   assert.doesNotMatch(surname.redacted_text, /Ślusarz/, 'a job-word surname is still redacted');
   const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);

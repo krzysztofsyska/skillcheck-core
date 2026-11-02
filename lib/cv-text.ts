@@ -175,18 +175,28 @@ export async function readDocxText(file: File) {
 }
 
 // Suggestions only: addresses, dates, inflections and indirect identifiers need human review.
-/** Horizontal Unicode spaces (NBSP, figure/thin/narrow spaces, ideographic space) as plain spaces; line breaks kept. */
-export function normalizeHorizontalSpaces(text: string) {
-  return text.replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+/**
+ * Text form used for detecting and redacting personal data. Word/PDF exports hide digits and names
+ * behind characters the patterns would not match: compatibility forms (full-width digits, ligatures),
+ * invisible characters (soft hyphen, zero-width spaces/joiners, BOM) and horizontal Unicode spaces
+ * (NBSP, thin, narrow). Line breaks and dashes stay (e.g. "2018–2024"); phone patterns accept Unicode
+ * hyphens and dashes (Word's non-breaking hyphen) as separators instead.
+ */
+export function normalizeForRedaction(text: string) {
+  return text.normalize("NFKC")
+    .replace(/[\u00AD\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
 }
+/** @deprecated kept for callers; use normalizeForRedaction. */
+export const normalizeHorizontalSpaces = normalizeForRedaction;
 
 export function suggestRedaction(text: string, names: string[]) {
   // Word/PDF exports often separate phone digits with non-breaking spaces; without this the number
   // would not match and would stay unredacted.
-  let output = normalizeHorizontalSpaces(validateCvText(text));
+  let output = normalizeForRedaction(validateCvText(text));
   output = output.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[E-MAIL]");
   output = output.replace(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi, "[LINK]");
-  output = output.replace(/(?<!\d)\+?\d[\d ().-]{7,}\d(?!\d)/g, match => {
+  output = output.replace(/(?<!\d)\+?\d[\d \t().\-\u2010-\u2015\u2212]{7,}\d(?!\d)/g, match => {
     const digits = match.replace(/\D/g, "");
     return digits.length >= 9 && digits.length <= 15 ? "[TELEFON / IDENTYFIKATOR]" : match;
   });

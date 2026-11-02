@@ -1,4 +1,5 @@
 // SC-BULK-001: shared bulk CV intake rules (browser + server, no secrets).
+import { normalizeForRedaction } from './cv-text.ts';
 
 /** Max files per batch (ZIP contents count individually). */
 export const BULK_MAX_FILES = 100;
@@ -96,9 +97,11 @@ export class BulkIntakeError extends Error {
 }
 
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
-const INTL_PHONE = /(?<![\d+])(?:\+|00)(?!48)[1-9]\d{0,3}(?:[ \t.-]?\(?\d{1,4}\)?){2,6}(?!\d)/g;
-// Separators are spaces, tabs, dots or hyphens on the same line: a number never takes digits from the next line.
-const PHONE = /(?<![\d+])(?:\+|00)?(?:48[ \t.-]?)?(?:\(?\d{2,3}\)?[ \t.-]?)?\d{3}[ \t.-]?\d{2,3}[ \t.-]?\d{2,3}(?!\d)/g;
+const INTL_PHONE = /(?<![\d+])(?:\+|00)(?!48)[1-9]\d{0,3}(?:[ \t.\-\u2010-\u2015\u2212]?\(?\d{1,4}\)?){2,6}(?!\d)/g;
+// Separators are spaces, tabs, dots or (Unicode) hyphens on the same line: a number never takes digits
+// from the next line. S is the separator class.
+const S = '[ \\t.\\-\\u2010-\\u2015\\u2212]';
+const PHONE = new RegExp(`(?<![\\d+])(?:\\+|00)?(?:48${S}?)?(?:\\(?\\d{2,3}\\)?${S}?)?\\d{3}${S}?\\d{2,3}${S}?\\d{2,3}(?!\\d)`, 'g');
 const HEADING = /\b(?:cv|curriculum|vitae|życiorys|zyciorys|resume|résumé|dane|kontakt|osobowe|profil|o mnie|doświadczenie|wykształcenie|umiejętności|telefon|e-?mail|adres|stanowisko|kandydat)\b/i;
 const NAME_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:-[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)?$/;
 const UPPER_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?$/;
@@ -186,17 +189,22 @@ export type BulkExtraction = {
 /** Candidate identity for the database; no name -> neutral placeholder with the file position. */
 export function buildExtraction(text: string, position: number, ocrUsed: boolean,
   redact: (text: string, names: string[]) => string): BulkExtraction {
-  // Same normalisation as the redactor: a phone or name split by non-breaking spaces must be found.
-  text = text.replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ');
+  // Same normalisation as the redactor: digits or names split by invisible characters, Unicode
+  // hyphens or non-breaking spaces must be found and redacted.
+  text = normalizeForRedaction(text);
   const name = detectName(text);
   const email = detectEmail(text);
   const phone = detectPhone(text);
   const first = name?.first ?? 'Kandydat';
   const last = name?.last ?? `nr ${position}`;
   const names = name ? [name.first, ...name.last.split(' ')] : [];
+  const redacted = redact(text, names);
+  // Detection and redaction must never drift apart: the approved text goes to the AI provider without
+  // a human check, so a phone or e-mail still visible after redaction stops the file.
+  if (detectPhone(redacted) || detectEmail(redacted)) throw new BulkIntakeError('bad_format');
   return {
     first_name: first.slice(0, 100), last_name: last.slice(0, 100), email, phone,
-    source_text: text, redacted_text: redact(text, names), name_detected: !!name, ocr_used: ocrUsed,
+    source_text: text, redacted_text: redacted, name_detected: !!name, ocr_used: ocrUsed,
   };
 }
 
