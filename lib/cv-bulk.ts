@@ -101,9 +101,10 @@ const PHONE = /(?<![\d+])(?:\+|00)?(?:48[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3}[
 const HEADING = /\b(?:cv|curriculum|vitae|życiorys|zyciorys|resume|résumé|dane|kontakt|osobowe|profil|o mnie|doświadczenie|wykształcenie|umiejętności|telefon|e-?mail|adres|stanowisko|kandydat)\b/i;
 const NAME_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:-[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)?$/;
 const UPPER_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?$/;
-// Common job-title and seniority words (PL/EN). A line made of such words is a headline like
-// "Java Developer" or "Kierownik Sprzedaży", never a name: taking it as the name would leave the
-// real name unredacted and strip these words from the whole CV.
+// Common job-title and seniority words (PL/EN). A line with such a word is usually a headline like
+// "Java Developer" or "Kierownik Sprzedaży": taking it as the name would leave the real name
+// unredacted and strip these words from the whole CV. Some are also surnames, so detectName only
+// prefers other lines and falls back to such a line when nothing else looks like a name.
 const JOB_WORDS = new Set(`developer programista programistka inżynier inzynier engineer manager menedżer menadżer menedzer
 kierownik kierowniczka specjalista specjalistka specialist analityk analityczka analyst konsultant konsultantka consultant
 asystent asystentka assistant dyrektor dyrektorka director prezes księgowy księgowa ksiegowy ksiegowa accountant handlowiec
@@ -115,7 +116,9 @@ recruiter rekruter rekruterka hr marketing account product project owner scrum m
 nauczycielka pielęgniarka pielegniarka lekarz lekarka praktykant praktykantka stażysta stażystka stazysta stazystka student
 studentka absolwent absolwentka customer service obsługi obslugi klienta specjalistów pracownik pracowniczka logistyk
 logistyczka ekonomista ekonomistka prawnik prawniczka radca adwokat fizjoterapeuta fizjoterapeutka mechanik elektryk
-spawacz monter monterka ślusarz slusarz kucharka kelnerka barista recepcjonista recepcjonistka`.split(/\s+/));
+spawacz monter monterka ślusarz slusarz kucharka kelnerka barista recepcjonista recepcjonistka
+doradca doradczyni opiekun opiekunka ekspedient ekspedientka chef sous zespołu zespolu komputerowy
+finansowy finansowa handlowy handlowa grafik kucharz kelner lider`.split(/\s+/));
 const isJobWord = (w: string) => JOB_WORDS.has(w.toLowerCase());
 const titleCase = (w: string) => w.split('-').map(p => p.charAt(0) + p.slice(1).toLowerCase()).join('-');
 
@@ -151,16 +154,20 @@ export function detectPhone(text: string) {
 /** First line that looks like "Imię Nazwisko" (2-3 capitalised words) in the top of the CV. */
 export function detectName(text: string): { first: string; last: string } | null {
   const lines = text.split('\n').map(l => l.replace(/[|•·,;:]+/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 15);
+  // A name-like line without job-title words wins; one with such a word (a headline, or a real
+  // surname such as Ślusarz) is used only when no other name-like line exists.
+  let fallback: { first: string; last: string } | null = null;
   for (const line of lines) {
     if (HEADING.test(line) || /\d|@/.test(line)) continue;
     const words = line.split(' ');
     if (words.length < 2 || words.length > 3) continue;
     const normalized = words.every(w => UPPER_WORD.test(w)) ? words.map(titleCase) : words;
     if (!normalized.every(w => NAME_WORD.test(w))) continue;
-    if (normalized.some(isJobWord)) continue;
-    return { first: normalized[0], last: normalized.slice(1).join(' ') };
+    const candidate = { first: normalized[0], last: normalized.slice(1).join(' ') };
+    if (!normalized.some(isJobWord)) return candidate;
+    fallback ??= candidate;
   }
-  return null;
+  return fallback;
 }
 
 export type BulkExtraction = {

@@ -45,6 +45,15 @@ test('contact and name detection', () => {
   assert.deepEqual(detectName('Java Developer\nAnna Nowak\nul. Polna 5'), { first: 'Anna', last: 'Nowak' });
   assert.deepEqual(detectName('KIEROWNIK SPRZEDAŻY\nJan Kowalski'), { first: 'Jan', last: 'Kowalski' });
   assert.deepEqual(detectName('Senior Data Scientist\nPiotr Zieliński'), { first: 'Piotr', last: 'Zieliński' });
+  // Job words that are also surnames or first names: still detected when nothing else looks like a name,
+  // and a real name line wins over a headline in either order.
+  assert.deepEqual(detectName('Jan Ślusarz\nul. Polna 5'), { first: 'Jan', last: 'Ślusarz' });
+  assert.deepEqual(detectName('John Head\njohn@example.com'), { first: 'John', last: 'Head' });
+  assert.deepEqual(detectName('Jan Ślusarz\nJava Developer'), { first: 'Jan', last: 'Ślusarz' });
+  assert.deepEqual(detectName('Grafik Komputerowy\nAnna Kowal'), { first: 'Anna', last: 'Kowal' });
+  assert.deepEqual(detectName('Doradca Finansowy\nPiotr Nowak'), { first: 'Piotr', last: 'Nowak' });
+  const surname = buildExtraction('Jan Ślusarz\nDoświadczenie: spawanie', 4, false, suggestRedaction);
+  assert.doesNotMatch(surname.redacted_text, /Ślusarz/, 'a job-word surname is still redacted');
   const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);
   assert.match(titled.redacted_text, /Java Developer/, 'title words stay as evidence');
   assert.doesNotMatch(titled.redacted_text, /Nowak/, 'the real name is redacted');
