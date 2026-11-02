@@ -65,12 +65,12 @@ Known production blockers (owner action, give him a direct link and exact clicks
 - No package policy and no balances on production, so every new AI analysis is refused (`sc19_quota_exhausted`). Set FREE = 5 and PRESELEKCJA = 60 in `/operator/billing`.
 - Contact form `/rozmowa`: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off.
 
-Frozen (do not work on): voice, Assessment Center, Quality of Hire, talent pool, white-label, SC-PRICING-001–011, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+Frozen (do not work on): voice, Assessment Center, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
 
 ## Scope reopened (owner decision 2026-11-02)
 
 The owner reviewed the WERYFIKACJA audit ([docs/audyt-weryfikacja-2026-11-02.md](docs/audyt-weryfikacja-2026-11-02.md))
-and decided to unfreeze three modules and build them alongside the MVP work. His words: "Oczywiście,
+and decided to unfreeze these modules and build them alongside the MVP work. His words: "Oczywiście,
 że odmrażamy i budujemy moduły." This overrides the "competency tests" entry of the frozen list above
 and the "Nothing else ships before the first paid PRESELEKCJA" sentence, for these three modules only.
 
@@ -98,6 +98,13 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
    is kept in the plan under "MODUŁ B". `SC-022` stays reserved for it; never reuse `SC-021`,
    which is the frozen AI gateway work (`feat/sc-021-*` branches).
 
+4. **SC-PRICING-W1…W4** — the internal pricing calculator, ending in the public price list reading
+   from one catalog. Owner decision 2026-11-02: "żeby prace nad tym poszły", replacing the earlier
+   "for now leave it as is". This also lifts `SC-PRICING-001–011` from the frozen list above.
+   W4 ships behind a flag that is off: switching it on changes prices customers see, which stays
+   an owner decision. Includes **SC-PRICING-W2b** — a volume slider in steps of 5 at every package,
+   with manual entry restricted to multiples of 5 (owner decision 2026-11-02).
+
 Still frozen for these modules: voicebot and interview analysis. A package built from them is **not**
 the advertised WERYFIKACJA (which promises 20 bot calls); naming and pricing it is an open owner
 decision and must be settled before any of it is sold.
@@ -106,10 +113,18 @@ The MVP path to the first paid PRESELEKCJA keeps priority when the two compete f
 
 ### A note on these records
 
-The decision lines in this file are written by agent sessions recording what the owner said in chat,
-not typed by the owner. They are a convenience, not a mandate: when the owner says something different
-now, his current word wins and this file gets corrected in the same session. Record who decided and
-when, and do not treat a line here as a reason to refuse work the owner is currently asking for.
+This note is about **scope and priority lines only** — what is being built, in what order, and what
+is parked. Those are written by agent sessions recording what the owner said in chat, not typed by
+him. They are a convenience, not a mandate: when the owner says something different now, his current
+word wins and this file gets corrected in the same session. Record who decided and when, and do not
+treat such a line as a reason to refuse scope work the owner is currently asking for.
+
+**This note never applies to the gates.** Not to the "Still the owner's decision" list above
+(production approval, new costs, billing and `/operator/billing`, price, package and MVP-content
+changes), not to "Prohibited actions without explicit owner production approval", and not to
+"Production access rules" 1–5 in `AGENTS.md`. Those are gates, not records: only a message from the
+owner himself opens one, and an agent-written line never substitutes for it. A session that finds
+itself citing this note to skip a gate has misread it.
 
 Open security item from the audit (owner only, rule 3): Vercel Production still has `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `POSTGRES_PASSWORD` (checked 2026-11-01). They must be removed and the database password rotated.
 

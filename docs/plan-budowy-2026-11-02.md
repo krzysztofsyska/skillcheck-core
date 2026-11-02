@@ -1,8 +1,9 @@
 # Plan budowy — test kompetencji, rozszerzony raport, kalkulator wyceny
 
 **Data:** 2026-11-02 · **Podstawa:** [audyt-weryfikacja-2026-11-02.md](audyt-weryfikacja-2026-11-02.md)
-**Zakres:** trzy moduły: (A) test kompetencji dla kandydata, (C) rozszerzony raport kandydata,
-(D) kalkulator wyceny i spięcie z cennikiem na stronie.
+**Zakres:** trzy moduły odmrożone decyzją właściciela 2026-11-02: (A) test kompetencji dla
+kandydata, (C) rozszerzony raport kandydata, (D) kalkulator wyceny i spięcie z cennikiem na stronie.
+Odmrożenie wszystkich trzech jest zapisane w `CLAUDE.md`, sekcja „Scope reopened”.
 Moduł (B) chatbot informacyjny został wykreślony decyzją właściciela 2026-11-02 — opis zachowany
 na przyszłość w sekcji MODUŁ B.
 **Poza zakresem tego planu:** voicebot i analiza rozmowy (SC-011/012/013), Assessment Center, Talent Pool.
@@ -113,7 +114,7 @@ miesiąca i nie da się go skopiować:
 - `sc014-b2-attempts.sql:5` i `sc014-b2-retention.sql:7` wymagają `erasure_inventory_baseline_r5`.
   Obecny stan to **r10**.
 - `sc014-b2-retention.sql:727` zawiera **wpisany na sztywno podpis schematu**
-  (`b20053a8e9a9…`) i manifest **73 tabel**. Manifest nie zna co najmniej pięciu obiektów, które
+  (`b20053a8e9a9…`) i manifest **99 obiektów**. Manifest nie zna co najmniej pięciu obiektów, które
   powstały od tamtej pory: `private.cv_bulk_items`, `private.cv_bulk_worker_nonces`,
   `private.application_preselection_group_events`, `private.erasure_inventory_baseline_r9`,
   `private.erasure_inventory_baseline_r10`.

@@ -2,6 +2,11 @@
 
 **Zakres:** repozytorium `krzysztofsyska/skillcheck-core` (HEAD `9856a3d`, merge PR #222 z `integration`),
 projekt Vercel `skillcheck-core`, baza Supabase `skillcheck-preview` (`orbyscrupgnupifzlqxp`).
+**Ważne:** audyt badał `main` (`9856a3d`). Gałąź `integration` była w kilku miejscach nowsza,
+więc część uwag — w szczególności dotyczące chatbota — opisuje stan, którego na `integration`
+już nie było. Każda taka różnica jest zaznaczona w tekście. Numery linii i długości plików
+też odnoszą się do `9856a3d`.
+
 **Charakter:** audyt wyłącznie odczytowy. Nie wprowadzono żadnych zmian w kodzie, migracjach,
 bazie ani konfiguracji Vercel.
 
@@ -16,7 +21,10 @@ Cena **615 zł za 60 CV** (decyzja właściciela 2026-11-02; w chwili audytu str
 4. Testy kompetencji
 5. Rozszerzony raport kandydata
 
-Dodatkowo tabela porównawcza deklaruje „Chatbot informacyjny — Tak” dla wszystkich czterech pakietów.
+Dodatkowo tabela porównawcza deklarowała „Chatbot informacyjny — Tak” dla wszystkich czterech
+pakietów — **ale tylko na `9856a3d`, czyli na `main`**. Na `integration` wiersz brzmiał już
+„Planowany”, a decyzją właściciela z 2026-11-02 nie ma go wcale. Wszystkie uwagi o chatbocie
+w tym dokumencie dotyczą stanu `main` z dnia audytu.
 Karta WERYFIKACJA jest oznaczona `Planowany pakiet` i opatrzona adnotacją „Cena robocza z wizualizacji”,
 a przycisk prowadzi do `/rozmowa` (formularz kontaktowy), nie do checkoutu.
 
@@ -176,7 +184,7 @@ ale **nic z tego nie jest podłączone do aplikacji ani wdrożone**.
    `sc011b4-voice-settlement.sql`, `sc011b5-voice-dispatch-worker.sql`, `sc011b6-voice-dispatch-resolution.sql`,
    `sc010-r4-voice-retention.sql`, `sc012b-*.sql`, `sc019-voice-entitlements.sql`. W żywej bazie
    `skillcheck-preview` **nie ma żadnej tabeli głosowej**.
-5. **Bramka pakietowa nie zna WERYFIKACJI.** `lib/voice/mvp-package-gate.ts:28` —
+5. **Bramka pakietowa nie zna WERYFIKACJI.** `lib/voice/mvp-package-gate.ts:18` —
    `export type VoiceMvpPackage = "FREE" | "PRESELEKCJA";`. Pakiet, który sprzedaje 20 rozmów,
    nie występuje w bramce, która o rozmowach decyduje.
 6. **Brak operatora SIP.** `lib/voice/retell-outbound-draft.ts` wymaga zweryfikowanego
@@ -195,13 +203,18 @@ Transkrypty (`sc011b3-voice-transcripts.sql`) są wyłącznie projektem schematu
 
 ## 6. Chatbot informacyjny — **BRAK**
 
+**Stan na `9856a3d` (`main`).** Na `integration` wiersz miał już wartość „Planowany”, a od
+2026-11-02 został usunięty w całości.
+
 Jedyne wystąpienia frazy w całym repozytorium to treść marketingowa:
 `app/components/marketing/package-comparison.tsx:17`, `:18`, `:26`.
 
 Brak jakiegokolwiek modułu, trasy, endpointu, tabeli czy zmiennej środowiskowej. Nie istnieje nawet prototyp.
 
-**To wymaga osobnej uwagi sprzedażowej:** tabela porównawcza deklaruje chatbota jako „Tak” również
-dla FREE i PRESELEKCJI, czyli dla pakietów już sprzedawanych. Deklaracja nie ma pokrycia w kodzie.
+**Uwaga sprzedażowa — nieaktualna od 2026-11-02.** Na `main` tabela deklarowała chatbota jako „Tak”
+również dla FREE i PRESELEKCJI, czyli dla pakietów już sprzedawanych, bez pokrycia w kodzie.
+Na `integration` wiersz brzmiał już „Planowany”, a następnie został usunięty razem z całym modułem.
+Problemu nie ma.
 
 ---
 
@@ -235,11 +248,15 @@ na wyniki rozmowy / testu / obserwacji. Jedyne wystąpienia słowa „Rozszerzon
    nawet gdyby wszystkie funkcje istniały. Wyjątkiem jest wewnętrzny kalkulator
    (`lib/pricing/quote-engine.ts:5` zna wszystkie cztery kody), ale zgodnie z ustaleniami
    nie jest on podpięty do cennika na stronie.
-2. **Ostrzeżenie bezpieczeństwa z Supabase (niezwiązane z WERYFIKACJĄ, ale krytyczne).**
+2. **Ostrzeżenie bezpieczeństwa z Supabase — mniej groźne, niż brzmi.**
    Trzy tabele mają wyłączone RLS: `private.sales_lead_settings`, `private.sales_lead_attempts`,
-   `private.sales_lead_replay_state`. Doradca Supabase oznacza to jako `critical` — przy obecnej
-   konfiguracji są one wystawione dla ról `anon`/`authenticated`. Nie zmieniałem tego.
-   Włączenie RLS bez polityk zablokuje dostęp, więc wymaga to osobnej, przemyślanej decyzji.
+   `private.sales_lead_replay_state`, a doradca Supabase oznacza to jako `critical`.
+   **Sprawdzone: realnego dostępu nie ma.** `supabase/migrations/20261007000200_sales_leads.sql:74`
+   odbiera wszystkie uprawnienia tym tabelom dla `public`, `anon` i `authenticated` (linia 75
+   robi to samo z sekwencją), żadna późniejsza migracja ich nie przywraca, a schemat `private`
+   nie jest wystawiony w Data API. To zabezpieczenie w głąb, nie dziura.
+   Niczego nie zmieniałem — i dobrze, bo włączenie RLS bez polityk zablokowałoby `/rozmowa`
+   przy naprawianiu nieistniejącego problemu.
 3. **Żadna z funkcji „weryfikacyjnych” nie ma ani jednego wiersza danych.** Zachowania, ćwiczenia,
    obserwacje, etapy, oceny — wszystko 0. Działają analizy CV (68 wersji analiz, 410 wyników kryteriów,
    109 kandydatów), czyli faktycznie używana jest tylko ścieżka PRESELEKCJI.
