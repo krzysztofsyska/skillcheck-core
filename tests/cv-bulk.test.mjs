@@ -113,6 +113,12 @@ test('contact and name detection', () => {
   const started = Date.now();
   suggestRedaction('2019' + ' '.repeat(99_000) + '12345', []);
   assert.ok(Date.now() - started < 2000, 'linear time');
+  // Crafted text cannot make e-mail detection slow; normal addresses are still found.
+  const t0 = Date.now();
+  suggestRedaction('1.'.repeat(47_500), []);
+  buildExtraction('Anna Nowak\n' + '1.'.repeat(47_500), 10, false, suggestRedaction);
+  assert.ok(Date.now() - t0 < 2000, 'e-mail patterns stay linear');
+  assert.equal(detectEmail('kontakt: anna.nowak+cv@poczta.example.pl'), 'anna.nowak+cv@poczta.example.pl');
   // Dashes in ordinary text stay as written.
   assert.match(suggestRedaction('JavaScript 2018\u20132024', []), /2018\u20132024/);
   // If detection and redaction ever disagree, the file stops instead of reaching the AI provider.
