@@ -1,3 +1,5 @@
+import { normalizeForRedaction } from "./cv-normalize.ts";
+export { normalizeForRedaction };
 export const MAX_CV_LENGTH = 100000;
 export const MAX_CV_BYTES = 200000;
 export const MAX_PDF_BYTES = 750000;
@@ -175,20 +177,6 @@ export async function readDocxText(file: File) {
 }
 
 // Suggestions only: addresses, dates, inflections and indirect identifiers need human review.
-/**
- * Text form used for detecting and redacting personal data. Word/PDF exports hide digits and names
- * behind characters the patterns would not match: compatibility forms (full-width digits, ligatures),
- * invisible characters (soft hyphen, zero-width spaces/joiners, BOM) and horizontal Unicode spaces
- * (NBSP, thin, narrow). Line breaks and dashes stay (e.g. "2018–2024"); phone patterns accept Unicode
- * hyphens and dashes (Word's non-breaking hyphen) as separators instead.
- */
-export function normalizeForRedaction(text: string) {
-  return text.normalize("NFKC")
-    .replace(/[\u00AD\u200B-\u200D\u2060\uFEFF]/g, "")
-    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
-}
-/** @deprecated kept for callers; use normalizeForRedaction. */
-export const normalizeHorizontalSpaces = normalizeForRedaction;
 
 const NUMBER_TAG = "[TELEFON / IDENTYFIKATOR]";
 /**

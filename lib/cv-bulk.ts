@@ -1,5 +1,5 @@
 // SC-BULK-001: shared bulk CV intake rules (browser + server, no secrets).
-import { normalizeForRedaction } from './cv-text.ts';
+import { normalizeForRedaction } from './cv-normalize.ts';
 
 /** Max files per batch (ZIP contents count individually). */
 export const BULK_MAX_FILES = 100;
