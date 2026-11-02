@@ -23,7 +23,6 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
     ["Konto firmy i profil stanowiska","Tak","Tak","Tak","Tak"],
     ["Analizy CV", offer.freeAnalyses, analyses === null ? sc19PolicyPendingCell : String(analyses), "Według polityki", "Według polityki"],
     ["Pseudonimizacja i analiza CV przez AI","Tak","Tak","Tak","Tak"],
-    ["Chatbot informacyjny","Planowany","Planowany","Planowany","Planowany"],
     ["Shortlista / raport preselekcji","Podstawowe","Według oferty","5–10 kandydatów","5–10 kandydatów"],
     ["Rozmowa weryfikacyjna z botem","Nie","Nie","20","20"],
     ["Analiza rozmowy","Nie","Nie","Tak","Tak"],

@@ -1,30 +1,29 @@
-# Plan budowy — test kompetencji, chatbot, rozszerzony raport, kalkulator wyceny
+# Plan budowy — test kompetencji, rozszerzony raport, kalkulator wyceny
 
 **Data:** 2026-11-02 · **Podstawa:** [audyt-weryfikacja-2026-11-02.md](audyt-weryfikacja-2026-11-02.md)
-**Zakres:** cztery moduły wskazane przez właściciela: (A) test kompetencji dla kandydata,
-(B) chatbot informacyjny, (C) rozszerzony raport kandydata, (D) kalkulator wyceny i spięcie
-z cennikiem na stronie (dodany decyzją z 2026-11-02).
+**Zakres:** trzy moduły: (A) test kompetencji dla kandydata, (C) rozszerzony raport kandydata,
+(D) kalkulator wyceny i spięcie z cennikiem na stronie.
+Moduł (B) chatbot informacyjny został wykreślony decyzją właściciela 2026-11-02 — opis zachowany
+na przyszłość w sekcji MODUŁ B.
 **Poza zakresem tego planu:** voicebot i analiza rozmowy (SC-011/012/013), Assessment Center, Talent Pool.
 
 ---
 
-## Dla właściciela — streszczenie w pięciu punktach
+## Dla właściciela — streszczenie w czterech punktach
 
 1. **Nie zaczynamy od zera.** Test kompetencji ma już zaprojektowaną architekturę (SC-014-B1), gotowy
    walidator i punktację oraz zbudowaną bramkę HTTP (SC-014-B3). Brakuje trzech rzeczy: wdrożenia bazy,
    ekranu dla kandydata i oceny wyniku. To zmniejsza pracę o mniej więcej jedną trzecią w stosunku do
    szacunku z audytu.
-2. **Chatbot to jedyny moduł budowany od zera** i jedyny, który wymaga nowej decyzji o koszcie
-   (model AI, limity miesięczne).
-3. **Rozszerzony raport jest najtańszy i najbardziej opłacalny** — spina w jedną całość rzeczy,
+2. **Rozszerzony raport jest najtańszy i najbardziej opłacalny** — spina w jedną całość rzeczy,
    które już działają, ale nikt ich nie widzi razem.
-4. **Łącznie 34–52 dni robocze**, czyli realistycznie 2–3 miesiące. Bez voicebota.
-5. **Są dwie decyzje, które musisz podjąć, zanim ruszy budowa.** Obie są na końcu dokumentu, obie
-   w formie TAK/NIE z rekomendacją.
+3. **Łącznie 28–43 dni robocze**, czyli realistycznie 1,5–2 miesiąca. Bez voicebota i bez chatbota.
+4. **Są dwie decyzje, które musisz podjąć, zanim ruszy budowa** (D1 i D2 na końcu dokumentu),
+   obie w formie TAK/NIE z rekomendacją.
 
 ### Czego NIE wolno po drodze zrobić
 
-Po zbudowaniu tych trzech modułów **nadal nie będzie można sprzedawać pakietu WERYFIKACJA**
+Po zbudowaniu tych modułów **nadal nie będzie można sprzedawać pakietu WERYFIKACJA**
 w kształcie reklamowanym na stronie, bo ten pakiet obiecuje 20 rozmów z botem i analizę rozmowy.
 Powstanie natomiast inny, mniejszy produkt. Jak go nazwać i wycenić — to decyzja D2 poniżej.
 
@@ -32,19 +31,17 @@ Powstanie natomiast inny, mniejszy produkt. Jak go nazwać i wycenić — to dec
 
 ## Kolejność i zależności
 
-Moduły nie są niezależne. Raport (C) konsumuje wynik testu (A), więc A musi być wcześniej.
-Chatbot (B) nie zależy od niczego i może iść równolegle, ale konkuruje o ten sam czas budowniczego.
+Raport (C) konsumuje wynik testu (A), więc A musi być wcześniej. Kalkulator (D) nie zależy
+od żadnego z nich.
 
 ```
-A1 → A2 → A3 → A4 → A5 ─┐
-                         ├→ C1 → C2 → C3 → C4 → [D2: pakiet i cena]
-B1 → B2 → B3 → B4 → B5 ─┘
+SC-014-C1 → C2 → C3 → C4 → C5 → SC-015-A → B → C → D → [D2: pakiet i cena]
+
+SC-PRICING-W1 → W2 → W3 → W4   (niezależnie, do wstawienia między inne zadania)
 ```
 
-**Rekomendowana kolejność wykonania:** A1–A5, potem C1–C4, potem B1–B5.
-Uzasadnienie: A+C dają kompletny, pokazywalny produkt (test + raport) w 19–29 dni. Chatbot jest
-miły, ale sam niczego nie sprzedaje i wymaga nowego kosztu stałego. Lepiej, żeby był finansowany
-z pierwszej sprzedaży, nie przed nią.
+**Rekomendowana kolejność:** SC-014-C1…C5, potem SC-015-A…D, a kalkulator wtedy, gdy coś innego
+czeka na review. A+C dają kompletny, pokazywalny produkt w 19–29 dni.
 
 ---
 
@@ -244,129 +241,47 @@ i zapisany wersjonowanie.
 
 ---
 
-# MODUŁ B — Chatbot informacyjny
+# MODUŁ B — Chatbot informacyjny — **WYKREŚLONY 2026-11-02**
 
-**Nowe ID:** SC-022 (wolne; `candidate chatbot` figuruje w BACKLOG.md jako pozycja poza pierwszą dwudziestką)
-**Stan wejściowy: nic nie istnieje.**
+**Decyzja właściciela 2026-11-02 (rozmowa głosowa): chatbot wypada z planu.**
+Powód: żaden klient nie kupi SkillChecka z powodu chatbota — sprzedaje się analiza CV,
+test kompetencji i raport. Chatbot odpowiadałby na pytania, które i tak są w ogłoszeniu.
+Odkłada to 3–4 dni pracy i comiesięczny koszt modelu AI.
 
-## Dlaczego to w ogóle trwa — i jak to skrócić
+Wykreślony również z tabeli pakietów na stronie (`package-comparison.tsx`) oraz z publicznego
+demo kalkulatora (`public/kalkulator-demo.html`, gdzie figurował jako dostępny „✓” we wszystkich
+czterech pakietach).
 
-Sam chatbot, czyli „kandydat pyta, model odpowiada na podstawie opisu stanowiska”, to **2–3 dni**.
-To jest jeden endpoint i jeden ekran. Reszta pierwotnego szacunku 10–15 dni to **nie chatbot**,
-tylko cztery rzeczy wokół niego:
+**Wracamy do tematu, gdy pierwszy klient o niego zapyta.** Wtedy punktem wyjścia jest wersja
+minimalna opisana niżej, nie pełny rozkład na pięć zadań.
 
-| Co | Dni | Czy naprawdę potrzebne na start |
-|---|---|---|
-| Zapisywanie rozmów w bazie (tabele, RLS, retencja, inwentarz usuwania) | 2–3 | Nie, jeśli nic nie zapisujemy |
-| Panel firmy: co bot może powiedzieć o tej rekrutacji | 2 | Nie, jeśli czyta gotowy profil stanowiska |
-| Limity kosztu per firma i per rekrutacja | 1–2 | Tak, ale w wersji prostej: twardy limit globalny |
-| Architektura L3, review, testy | 2–3 | Częściowo |
+<details>
+<summary>Zachowany opis wersji minimalnej (SC-022-B1, 3–4 dni) — na przyszłość</summary>
 
-Dlatego moduł jest podzielony na **B1 (wersja minimalna, 3–4 dni)** i **B2 (rozszerzenia, 6–11 dni)**.
-B1 jest działającym produktem, nie prototypem. B2 robimy dopiero, gdy ktoś tego chatbota używa.
+Czat na trasie publicznej podpięty pod konkretną rekrutację. Odpowiedzi wyłącznie na podstawie
+profilu stanowiska, który firma już wpisała (zadania, KPI, kompetencje, wymagania zachowań).
+Bez nowego panelu i bez własnej bazy wiedzy.
 
-### SC-022-B1 — Chatbot minimalny — **3–4 dni**
+Wyraźna informacja, że to bot (wymóg AI Act). Bot nie ocenia kandydata, nie obiecuje zatrudnienia,
+nie podaje widełek spoza wpisanych, nie zbiera danych osobowych, nie odpowiada na pytania o zdrowie,
+wiek, pochodzenie, wyznanie i życie prywatne — lista zakazanych tematów `SC012_PROHIBITED_TOPICS`
+z `lib/voice/interview-plan.ts` już istnieje i należy jej użyć ponownie.
 
-- **LEVEL:** L3 (kontrakt dostawcy AI, sekrety, koszt) · **SCOPE:** FULLSTACK
-- **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude · **DEPENDS ON:** —
+Treść wpisana przez firmę i przez kandydata jest danymi, nigdy instrukcją (ochrona przed prompt
+injection, ten sam wymóg co przy CV).
 
-**Co zawiera:**
-- Trasa publiczna z czatem dla kandydata, podpięta pod konkretną rekrutację.
-- Odpowiedzi wyłącznie na podstawie profilu stanowiska, który firma **już wpisała** w systemie
-  (zadania, KPI, kompetencje, wymagania zachowań, opis). Żadnego nowego panelu.
-- Typowe pytania, na które odpowie: czego dotyczy stanowisko, jakich umiejętności się oczekuje,
-  jak wygląda proces rekrutacji, co się dzieje po wysłaniu CV, ile trwa odpowiedź.
-- Wyraźna informacja, że to bot, nie człowiek (wymóg AI Act).
-- Twarde ograniczenia: nie ocenia kandydata, nie obiecuje zatrudnienia, nie podaje widełek spoza
-  wpisanych, nie pyta o dane osobowe, nie odpowiada na pytania o zdrowie, wiek, pochodzenie,
-  wyznanie i życie prywatne. Lista zakazanych tematów `SC012_PROHIBITED_TOPICS`
-  z `lib/voice/interview-plan.ts` — **już istnieje, używamy jej ponownie**.
-- Treść wpisana przez firmę i przez kandydata jest danymi, nigdy instrukcją (ochrona przed
-  prompt injection, ten sam wymóg co przy CV).
-- **Rozmowa nie jest zapisywana.** Żyje w pamięci przeglądarki, znika po zamknięciu karty.
-  To usuwa cały wątek RODO, retencji i inwentarza usuwania — największą pozycję kosztową.
-- Twardy limit: długość pytania, liczba pytań w rozmowie, globalny limit miesięczny kosztu.
-  Po przekroczeniu bot grzecznie odmawia, nie wyrzuca błędu.
-- Flaga `CHATBOT_ENABLED`, domyślnie wyłączona.
+Rozmowa nie jest zapisywana — żyje w pamięci przeglądarki. To usuwa cały wątek RODO, retencji
+i inwentarza usuwania, czyli największą pozycję kosztową. Twarde limity: długość pytania, liczba
+pytań w rozmowie, globalny limit miesięczny kosztu; po przekroczeniu bot grzecznie odmawia.
+Flaga `CHATBOT_ENABLED`, domyślnie wyłączona.
 
-**Czego świadomie nie ma w B1:** historii rozmów, podglądu dla firmy, osobnej bazy wiedzy,
-limitów per firma, statystyk. Firma nie zobaczy, o co pytali kandydaci.
+Rozszerzenia na później: zapis rozmów z retencją, panel firmy z własną bazą wiedzy, limity per
+firma, statystyki pytań. Każde opłacalne tylko wtedy, gdy wersja minimalna okaże się używana.
 
-**Nowy koszt:** zużycie modelu AI. Przy limicie globalnym to kilkadziesiąt złotych miesięcznie.
-Wymaga decyzji właściciela (D3 poniżej).
+ID `SC-022` jest zarezerwowane dla tego modułu. Nie używać `SC-021` — to zamrożona praca nad
+AI gateway (gałęzie `feat/sc-021-*`).
 
-### SC-022-B2 — Rozszerzenia — **6–11 dni, dopiero po B1 i po realnym użyciu**
-
-Osobne zadania, każde opłacalne tylko wtedy, gdy B1 okaże się używany:
-- B2a — zapis rozmów + retencja 30 dni + inwentarz usuwania (2–3 dni)
-- B2b — panel firmy: własna baza wiedzy dla rekrutacji i podgląd rozmów (2–3 dni)
-- B2c — limity i rozliczenie kosztu per firma (1–2 dni)
-- B2d — statystyki: o co najczęściej pytają kandydaci (1–2 dni)
-
-Poniższe zadania SC-022-A…E to pierwotny, pełny rozkład. **Zostają jako opis docelowy**,
-ale wykonujemy B1, nie je.
-
-> **SC-022-A0 skasowany 2026-11-02 — już nieaktualny.** Audyt wykrył, że strona deklaruje chatbota
-> jako działającego w FREE i PRESELEKCJI, ale badał `main`. Na `integration` wiersz „Chatbot
-> informacyjny” ma już wartość „Planowany” we wszystkich kolumnach i nie występuje na listach funkcji
-> FREE ani PRESELEKCJI. Fałszywej obietnicy nie ma, nie ma czego poprawiać.
-
-## SC-022-A — Architektura chatbota
-
-- **LEVEL:** L3 (kontrakt dostawcy AI, dane kandydata, koszt) · **SCOPE:** BACKEND
-- **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude · **DEPENDS ON:** SC-022-A0 · **Szacunek:** 2–3 dni
-
-### Goal
-Dokument architektury na wzór `docs/sc-005-openai-screening-worker-architecture.md`, rozstrzygający:
-zakres wiedzy bota, granice tematyczne, model danych rozmowy, retencję, limity kosztu
-i ochronę przed prompt injection.
-
-### Rozstrzygnięcia wymagane w dokumencie
-1. **Źródło wiedzy.** Rekomendacja: wyłącznie profil stanowiska i opis procesu wprowadzone przez
-   firmę dla danej rekrutacji. Bez dostępu do CV, bez danych innych kandydatów, bez wiedzy ogólnej
-   o firmie spoza tego, co firma wpisała.
-2. **Granice tematyczne.** Bot nie ocenia kandydata, nie obiecuje zatrudnienia, nie podaje widełek
-   płacowych poza wpisanymi, nie zbiera danych osobowych, nie odpowiada na pytania o zdrowie,
-   wiek, pochodzenie, wyznanie i życie prywatne. Lista zakazanych tematów na wzór
-   `SC012_PROHIBITED_TOPICS` z `lib/voice/interview-plan.ts` — ten rejestr już istnieje i należy
-   go ponownie użyć, nie pisać od nowa.
-3. **Prompt injection.** Treść wpisana przez firmę i treść wpisana przez kandydata są danymi,
-   nigdy instrukcjami. Ten sam wymóg co w guardrails dla CV.
-4. **Koszt.** Limit tokenów na rozmowę, limit rozmów na rekrutację, twardy limit miesięczny
-   na firmę, zachowanie po przekroczeniu (grzeczna odmowa, nie błąd).
-5. **Retencja.** Czy transkrypt rozmowy jest w ogóle przechowywany. Rekomendacja: tak, ale
-   z automatycznym usunięciem po 30 dniach i pełnym wpięciem w inwentarz SC-010.
-
-## SC-022-B — Migracja: rozmowy, limity, retencja
-
-- **LEVEL:** L3 · **SCOPE:** BACKEND · **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude
-- **DEPENDS ON:** SC-022-A · **Szacunek:** 2–3 dni
-
-Tabele rozmów i wiadomości z `company_id`, RLS, licznik zużycia, inwentarz usuwania R12,
-rollback. Bez wystawienia funkcji przez Data API dla roli kandydata.
-
-## SC-022-C — Endpoint i integracja z modelem
-
-- **LEVEL:** L3 (AI provider contract, secrets, koszt) · **SCOPE:** BACKEND
-- **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude · **DEPENDS ON:** SC-022-B · **Szacunek:** 3–4 dni
-
-Edge Function na wzór `supabase/functions/screening-worker/`, flaga `CHATBOT_ENABLED=false`
-domyślnie, limity, wersjonowanie promptu, fingerprint wejścia, czytelne dowody dla człowieka.
-
-## SC-022-D — Panel firmy: baza wiedzy rekrutacji
-
-- **LEVEL:** L2 · **SCOPE:** FULLSTACK · **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude
-- **DEPENDS ON:** SC-022-B · **Szacunek:** 2 dni
-
-Ekran, na którym firma wpisuje, co bot może powiedzieć o tej rekrutacji, oraz podgląd rozmów.
-
-## SC-022-E — Widget czatu dla kandydata
-
-- **LEVEL:** L2 · **SCOPE:** FRONTEND · **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude
-- **DEPENDS ON:** SC-022-C, SC-022-D · **Szacunek:** 2–3 dni
-
-Interfejs rozmowy na trasie publicznej, informacja że rozmawia z botem (wymóg AI Act i
-`docs/legal/v1.0/05_AI_i_nadzor_czlowieka.md`), limit długości, brak zbierania danych kontaktowych.
+</details>
 
 ---
 
@@ -484,15 +399,12 @@ Strona przestaje mieć ceny w kodzie i czyta je z katalogu.
 |---|---|---|
 | A — test kompetencji | SC-014-C1…C5 | 13–20 |
 | C — rozszerzony raport | SC-015-A…D | 6–9 |
-| B — chatbot (wersja minimalna B1) | SC-022-B1 | 3–4 |
 | D — kalkulator i cennik | SC-PRICING-W1…W4 | 4–7 |
-| **Razem** | **14 zadań** | **26–40** |
-| Rezerwa na review, poprawki i testy regresji (ok. 20%) | | 5–8 |
-| **Suma realistyczna** | | **31–48 dni roboczych** |
+| **Razem** | **13 zadań** | **23–36** |
+| Rezerwa na review, poprawki i testy regresji (ok. 20%) | | 5–7 |
+| **Suma realistyczna** | | **28–43 dni robocze** |
 
-Rozszerzenia chatbota (SC-022-B2a…d, 6–11 dni) są poza tą sumą — robimy je dopiero, gdy B1 okaże się używany.
-
-Przy dotychczasowym tempie projektu to **1,5–2,5 miesiąca**.
+Przy dotychczasowym tempie projektu to **1,5–2 miesiące**.
 
 **Pierwszy kamień milowy (A + C, 19–29 dni):** działający test kompetencji dla kandydata
 i rozszerzony raport. To jest moment, w którym jest co pokazać klientowi.
@@ -502,6 +414,8 @@ Moduł D nie zależy od A, B ani C i może wejść pomiędzy nie, gdy coś inneg
 ---
 
 # Decyzje właściciela — potrzebne przed startem
+
+Decyzja D3 (koszt modelu AI dla chatbota) odpadła wraz z wykreśleniem modułu B.
 
 ## D1 — Limiter brokera: Postgres czy Redis?
 
@@ -531,17 +445,6 @@ z rozmowami, który docelowo ma powstać, i nie wymaga tłumaczenia klientom, dl
 „stracił” funkcje.
 
 **TAK = nowy pakiet pośredni (rekomendowane) / NIE = przedefiniować WERYFIKACJĘ**
-
-## D3 — Zgoda na koszt modelu AI dla chatbota
-
-Chatbot zużywa model AI przy każdej odpowiedzi. Przy twardym limicie globalnym i braku klientów
-to rząd kilkudziesięciu złotych miesięcznie; limit sprawia, że rachunek nie może wystrzelić.
-Bez zgody na ten koszt moduł B nie ma sensu zaczynać.
-
-**Rekomendacja: TAK, z limitem miesięcznym ustawionym na starcie nisko** i podniesieniem go
-dopiero, gdy kandydaci faktycznie zadają pytania.
-
-**TAK = budujemy B1 z limitem (rekomendowane) / NIE = chatbot odłożony**
 
 > Decyzja D2 nie blokuje startu budowy — jest potrzebna dopiero przy zadaniu rozliczeniowym,
 > czyli po module C. Można ją podjąć za miesiąc. D1 jest potrzebna przy SC-014-C2, czyli w drugim tygodniu.

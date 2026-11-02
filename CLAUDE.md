@@ -78,8 +78,13 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
 
 1. **SC-014-C1…C5** — competency test actually taken by the candidate (architecture SC-014-B1 stands; do not redesign it).
 2. **SC-015-A…D** — extended per-candidate report, without the voice part.
-3. **SC-022-A0…E** — informational chatbot. Uses SC-022, not SC-021: `SC-021` is already taken by the
-   frozen AI gateway work (`feat/sc-021-*` branches).
+3. ~~**SC-022** — informational chatbot.~~ **Dropped the same day (owner decision 2026-11-02, by
+   voice): "wykreśl go na razie".** No customer buys SkillCheck for a chatbot; it would answer
+   questions the job ad already answers. Dropping it saves 3–4 days and a monthly AI model bill.
+   Also removed from the packages table and from the public calculator demo, where it was still
+   shown as available. Revisit when a customer actually asks for it — the minimal 3–4 day version
+   is kept in the plan under "MODUŁ B". `SC-022` stays reserved for it; never reuse `SC-021`,
+   which is the frozen AI gateway work (`feat/sc-021-*` branches).
 
 Still frozen for these modules: voicebot and interview analysis. A package built from them is **not**
 the advertised WERYFIKACJA (which promises 20 bot calls); naming and pricing it is an open owner
