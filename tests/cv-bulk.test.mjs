@@ -75,6 +75,15 @@ test('contact and name detection', () => {
   // Accepted trade-off (documented in PR #250): a whole name made of two job words looks like a
   // headline, so a later name-like line wins. Much rarer than a headline above the name.
   assert.deepEqual(detectName('Junior Lekarz\nZielona Góra'), { first: 'Zielona', last: 'Góra' });
+  // Non-breaking and other horizontal Unicode spaces (Word/PDF exports) never hide a phone or a name.
+  const nbsp = buildExtraction('Anna\u00A0Nowak\nTelefon: +48\u00A0500\u00A0123\u00A0456\ne-mail: anna@example.com', 5, false, suggestRedaction);
+  assert.equal(nbsp.phone, '+48500123456');
+  assert.deepEqual([nbsp.first_name, nbsp.last_name], ['Anna', 'Nowak']);
+  assert.doesNotMatch(nbsp.redacted_text, /500|Nowak|example/);
+  const thin = buildExtraction('Jan Kowalski\ntel. 500\u202F123\u2009456', 6, false, suggestRedaction);
+  assert.equal(thin.phone, '+48500123456');
+  assert.doesNotMatch(thin.redacted_text, /500/);
+  assert.doesNotMatch(suggestRedaction('tel. 600\u00A0700\u00A0800', []), /600/, 'single-CV redaction too');
   const surname = buildExtraction('Jan Ślusarz\nDoświadczenie: spawanie', 4, false, suggestRedaction);
   assert.doesNotMatch(surname.redacted_text, /Ślusarz/, 'a job-word surname is still redacted');
   const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);

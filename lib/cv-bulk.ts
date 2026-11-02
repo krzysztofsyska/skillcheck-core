@@ -186,6 +186,8 @@ export type BulkExtraction = {
 /** Candidate identity for the database; no name -> neutral placeholder with the file position. */
 export function buildExtraction(text: string, position: number, ocrUsed: boolean,
   redact: (text: string, names: string[]) => string): BulkExtraction {
+  // Same normalisation as the redactor: a phone or name split by non-breaking spaces must be found.
+  text = text.replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ');
   const name = detectName(text);
   const email = detectEmail(text);
   const phone = detectPhone(text);

@@ -175,8 +175,15 @@ export async function readDocxText(file: File) {
 }
 
 // Suggestions only: addresses, dates, inflections and indirect identifiers need human review.
+/** Horizontal Unicode spaces (NBSP, figure/thin/narrow spaces, ideographic space) as plain spaces; line breaks kept. */
+export function normalizeHorizontalSpaces(text: string) {
+  return text.replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, " ");
+}
+
 export function suggestRedaction(text: string, names: string[]) {
-  let output = validateCvText(text);
+  // Word/PDF exports often separate phone digits with non-breaking spaces; without this the number
+  // would not match and would stay unredacted.
+  let output = normalizeHorizontalSpaces(validateCvText(text));
   output = output.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[E-MAIL]");
   output = output.replace(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi, "[LINK]");
   output = output.replace(/(?<!\d)\+?\d[\d ().-]{7,}\d(?!\d)/g, match => {
