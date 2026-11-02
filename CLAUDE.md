@@ -105,11 +105,25 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
    an owner decision. Includes **SC-PRICING-W2b** — a volume slider in steps of 5 at every package,
    with manual entry restricted to multiples of 5 (owner decision 2026-11-02).
 
+### Voicebot on the public offer — settled 2026-11-02 (evening, owner in chat)
+
+**The voicebot is not shown anywhere on the public surfaces.** Not in the package copy, not in
+the comparison, not in the calculator demo, not as "w przygotowaniu". It comes back only once it
+actually works, and then as an addition to an existing package — free or for a small fee, the
+owner has not decided which ("jeszcze zobaczymy"). Until then no customer-facing text promises,
+previews or prices bot calls.
+
+**Prices stay visible.** WERYFIKACJA 615 zł gross / 60 CV and ASSESSMENT CENTER 1 499 zł gross /
+50 CV are shown on the public offer as the approved prices of the next stages, together with the
+fact that neither package can be bought yet. This was asked of the owner twice in chat on
+2026-11-02 and confirmed both times, the second time after #258 had already merged the opposite.
+A later agent-written line recording something different does not reopen this; only the owner does.
+
 **Order of work, settled by the owner 2026-11-02 (by voice):** module A (competency test), then
 module C (extended report), with the pricing calculator fitted in between. **Voicebot comes after
 those**, not before — the owner chose "najpierw robimy testy". Packages ship to customers **without
 bot calls**, at unchanged prices (PRESELEKCJA 300 zł, WERYFIKACJA 615 zł, ASSESSMENT CENTER
-1 499 zł), and the site keeps calls marked "w przygotowaniu" until they work. Wiring the voicebot
+1 499 zł), and the site does not mention calls at all until they work (see the section above). Wiring the voicebot
 into package limits (FREE 1, paid 10) is a separate later step and needs no rework of anything
 built before it.
 
@@ -120,11 +134,11 @@ about two weeks to a first real test call. Interview-content analysis is separat
 Still frozen for these modules: interview analysis.
 
 Naming and pricing of the package built from A + C is **settled** (owner decision 2026-11-02, by
-voice): it ships as **WERYFIKACJA at 615 zł gross for 60 CVs, without bot calls**, with calls
-marked "w przygotowaniu" on the site until they work. No new intermediate package is created. This
+voice): it ships as **WERYFIKACJA at 615 zł gross for 60 CVs, without bot calls**, with no mention of
+calls on the site until they work. No new intermediate package is created. This
 closes decision **D2** in [docs/plan-budowy-2026-11-02.md](docs/plan-budowy-2026-11-02.md); the
 earlier framing of that decision assumed the withdrawn 899 zł price and mandatory calls. The
-package description must not promise calls while they do not run — that is the condition the owner
+package description must not mention calls while they do not run — that is the condition the owner
 attached to selling it. Any further change to price or package contents is still an owner decision
 under the list above.
 

@@ -51,9 +51,14 @@ test('demo kalkulatora podaje te same ceny etapów co strona', () => {
   assert.match(demo, /proces dla 5–6 osób, maksymalnie 10/);
 });
 
-test('rozmowy z botem są wszędzie oznaczone jako niedostępne', () => {
-  assert.match(content, /Rozmowy z botem są w przygotowaniu i nie działają w żadnym pakiecie/);
-  assert.match(demo, /Rozmowy z botem są w przygotowaniu i nie działają w żadnym pakiecie/);
+test('voicebot nie jest pokazywany nigdzie na powierzchniach publicznych', () => {
+  // Decyzja właściciela 2026-11-02 (wieczór): bota nie pokazujemy w ogóle. Wróci dopiero,
+  // gdy zacznie działać — wtedy jako dodatek do pakietu, gratis albo za niewielką opłatą.
+  for (const [name, text] of [['treść strony', content], ['komponent porównania', comparison], ['demo', demo]]) {
+    for (const word of ['voicebot', 'Voicebot', 'rozmów z botem', 'Rozmowy z botem', 'rozmowy z botem', 'rozmów AI', 'rozmowy AI']) {
+      assert.equal(text.includes(word), false, `${name}: wzmianka o voicebocie „${word}"`);
+    }
+  }
 });
 
 test('wycofane ceny nie wracają', () => {

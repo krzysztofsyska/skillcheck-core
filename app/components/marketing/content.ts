@@ -97,7 +97,7 @@ export const nextStages = [
 ] as const;
 
 export const nextStagesNote =
-  "WERYFIKACJA i ASSESSMENT CENTER to kolejne etapy oferty. Ceny są zatwierdzone (decyzja właściciela 2026-11-02), ale pakiety są jeszcze w budowie — nie mają terminu uruchomienia i nie można ich dziś kupić. Rozmowy z botem są w przygotowaniu i nie działają w żadnym pakiecie.";
+  "WERYFIKACJA i ASSESSMENT CENTER to kolejne etapy oferty. Ceny są zatwierdzone (decyzja właściciela 2026-11-02), ale pakiety są jeszcze w budowie — nie mają terminu uruchomienia i nie można ich dziś kupić.";
 
 export const assumptions = [
   { label: "Czas analizy jednego CV", value: "6 minut", note: "Wartość przykładowa. W kalkulatorze wpisujesz własną." },
