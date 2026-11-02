@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { companyAccess } from '../../../../../../lib/company-access';
 import { bulkIntakeBlocked, validateBatchFiles, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
 import { pumpWithSession } from '../../../../../../lib/cv-bulk-server';
+import { loadCurrentRanking, withGroupCurrency } from '../../../../../../lib/preselection-currency';
 import { screeningAiUserEnabled } from '../../../../../../lib/screening-dispatch';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -28,7 +29,13 @@ export async function createBulkBatch(companyId: string, recruitmentId: string, 
   }
   const result = created.data as { batch_id: string; reserved_slots: number; over_limit: number };
   const status = await client.rpc('cv_bulk_batch_status', { target_batch: result.batch_id });
-  const items = ((status.data as { items?: { id: string; position: number }[] } | null)?.items ?? []).map(i => ({ id: i.id, position: i.position }));
+  const listed = (status.data as { items?: { id: string; position: number }[] } | null)?.items;
+  // A failed read must not look like an empty batch: the uploader would close it and mark every file
+  // as not uploaded. Returning an error keeps the request key, so a retry reuses the same batch.
+  if (status.error || !Array.isArray(listed) || (checked.length > 0 && listed.length === 0)) {
+    return { error: 'Nie udało się przygotować wysyłania. Spróbuj ponownie — paczka zostanie wznowiona.' };
+  }
+  const items = listed.map(i => ({ id: i.id, position: i.position }));
   return { batchId: result.batch_id, reserved: result.reserved_slots, overLimit: result.over_limit, items };
 }
 
@@ -48,7 +55,10 @@ export async function bulkProgress(companyId: string, batchId: string) {
   if (!uuid.test(batchId)) return null;
   if (canEdit) { try { await pumpWithSession(client, batchId); } catch { /* status below still shows the state */ } }
   const status = await client.rpc('cv_bulk_batch_status', { target_batch: batchId });
-  return status.error ? null : status.data;
+  if (status.error || !status.data) return null;
+  const data = status.data as { batch: { recruitment_id: string }; items: { application_id: string | null; group_key: unknown; group_analysis_id?: unknown }[] };
+  const ranking = data.items.some(i => i.group_key) ? await loadCurrentRanking(client, data.batch.recruitment_id) : null;
+  return { ...data, items: withGroupCurrency(data.items, ranking) };
 }
 
 export type MoveState = { error?: string; saved?: boolean };

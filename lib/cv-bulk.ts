@@ -1,4 +1,5 @@
 // SC-BULK-001: shared bulk CV intake rules (browser + server, no secrets).
+import { normalizeForRedaction } from './cv-normalize.ts';
 
 /** Max files per batch (ZIP contents count individually). */
 export const BULK_MAX_FILES = 100;
@@ -95,12 +96,41 @@ export class BulkIntakeError extends Error {
   }
 }
 
-const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
-const INTL_PHONE = /(?<![\d+])(?:\+|00)(?!48)[1-9]\d{0,3}(?:[ \t.-]?\(?\d{1,4}\)?){2,6}(?!\d)/g;
-const PHONE = /(?<![\d+])(?:\+|00)?(?:48[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3}[\s.-]?\d{2,3}[\s.-]?\d{2,3}(?!\d)/g;
+// A match starts only at the beginning of a run (lookbehind) and parts are bounded: linear on crafted input.
+const EMAIL = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,256}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}\b/i;
+const INTL_PHONE = /(?<![\d+])(?:\+|00)(?!48)[1-9]\d{0,3}(?:[ \t.\-\u2010-\u2015\u2212]?\(?\d{1,4}\)?){2,6}(?!\d)/g;
+// Separators are spaces, tabs, dots or (Unicode) hyphens on the same line: a number never takes digits
+// from the next line. S is the separator class.
+const S = '[ \\t.\\-\\u2010-\\u2015\\u2212]';
+const PHONE = new RegExp(`(?<![\\d+])(?:\\+|00)?(?:48${S}?)?(?:\\(?\\d{2,3}\\)?${S}?)?\\d{3}${S}?\\d{2,3}${S}?\\d{2,3}(?!\\d)`, 'g');
 const HEADING = /\b(?:cv|curriculum|vitae|życiorys|zyciorys|resume|résumé|dane|kontakt|osobowe|profil|o mnie|doświadczenie|wykształcenie|umiejętności|telefon|e-?mail|adres|stanowisko|kandydat)\b/i;
 const NAME_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:-[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)?$/;
 const UPPER_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?$/;
+// Common job-title and seniority words (PL/EN), used by isHeadline below. Taking a headline such as
+// "Java Developer" as the name would leave the real name unredacted and strip these words from the
+// whole CV. Many are also surnames or first names, so one such word never makes a line a headline.
+const JOB_WORDS = new Set(`developer programista programistka inżynier inzynier engineer manager menedżer menadżer menedzer
+kierownik kierowniczka specjalista specjalistka specialist analityk analityczka analyst konsultant konsultantka consultant
+asystent asystentka assistant dyrektor dyrektorka director prezes księgowy księgowa ksiegowy ksiegowa accountant handlowiec
+przedstawiciel przedstawicielka sprzedawca sprzedawczyni sprzedaży sprzedazy sales koordynator koordynatorka coordinator
+architekt architektka architect tester testerka administrator administratorka technik operator operatorka magazynier
+magazynierka kierowca liderka leader lead head team senior junior mid regular principal staff java python javascript
+typescript frontend front-end backend back-end fullstack full-stack devops designer projektant projektantka graficzka
+recruiter rekruter rekruterka hr marketing account product project owner scrum master data scientist officer nauczyciel
+nauczycielka pielęgniarka pielegniarka lekarz lekarka praktykant praktykantka stażysta stażystka stazysta stazystka student
+studentka absolwent absolwentka customer service obsługi obslugi klienta specjalistów pracownik pracowniczka logistyk
+logistyczka ekonomista ekonomistka prawnik prawniczka radca adwokat fizjoterapeuta fizjoterapeutka mechanik elektryk
+spawacz monter monterka ślusarz slusarz kucharka kelnerka barista recepcjonista recepcjonistka
+doradca doradczyni opiekun opiekunka ekspedient ekspedientka chef sous zespołu zespolu komputerowy
+finansowy finansowa handlowy handlowa grafik kucharz kelner lider office biura
+budowy budownictwa zarządu zarzadu medyczny medyczna logistyki projektu produkcji magazynu kadr płac plac
+ds. ds nurse software web mobile executive representative główny główna glowny glowna starszy
+starsza młodszy młodsza mlodszy mlodsza samodzielny samodzielna dyplomowany dyplomowana zmiany`.split(/\s+/));
+const isJobWord = (w: string) => JOB_WORDS.has(w.toLowerCase());
+// A headline has at least two job words ("Java Developer", "Kierownik Sprzedaży", "Head Chef").
+// One job word is not enough: it is often a surname or a first name ("Jan Ślusarz", "Ślusarz Jan",
+// "Junior Silva"), and such a real name must win over later lines (cities, schools, headings).
+const isHeadline = (words: string[]) => words.filter(isJobWord).length >= 2;
 const titleCase = (w: string) => w.split('-').map(p => p.charAt(0) + p.slice(1).toLowerCase()).join('-');
 
 export function detectEmail(text: string) {
@@ -110,6 +140,8 @@ export function detectEmail(text: string) {
 
 /** Polish-first phone detection; returns +48XXXXXXXXX or an international +digits number. */
 export function detectPhone(text: string) {
+  // Repeated horizontal spacing ('+48  500  123  456') reads as one space; line breaks stay.
+  text = text.replace(/[ \t]{2,}/g, ' ');
   // Non-Polish international numbers first (+44 7700 900123, +49 151 12345678): the Polish-shaped pattern below would cut
   // them. Separators never cross a line break, so a year on the next line is not glued to the number.
   for (const match of Array.from(text.matchAll(INTL_PHONE))) {
@@ -135,15 +167,21 @@ export function detectPhone(text: string) {
 /** First line that looks like "Imię Nazwisko" (2-3 capitalised words) in the top of the CV. */
 export function detectName(text: string): { first: string; last: string } | null {
   const lines = text.split('\n').map(l => l.replace(/[|•·,;:]+/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 15);
+  // A name-like line that is not a headline wins; a headline is used only when no other name-like
+  // line exists (e.g. a first name that is also a job word, such as Junior).
+  let fallback: { first: string; last: string } | null = null;
   for (const line of lines) {
     if (HEADING.test(line) || /\d|@/.test(line)) continue;
     const words = line.split(' ');
     if (words.length < 2 || words.length > 3) continue;
     const normalized = words.every(w => UPPER_WORD.test(w)) ? words.map(titleCase) : words;
     if (!normalized.every(w => NAME_WORD.test(w))) continue;
-    return { first: normalized[0], last: normalized.slice(1).join(' ') };
+    const candidate = { first: normalized[0], last: normalized.slice(1).join(' ') };
+    // A headline has at least two job words; see isHeadline.
+    if (!isHeadline(normalized)) return candidate;
+    fallback ??= candidate;
   }
-  return null;
+  return fallback;
 }
 
 export type BulkExtraction = {
@@ -154,15 +192,22 @@ export type BulkExtraction = {
 /** Candidate identity for the database; no name -> neutral placeholder with the file position. */
 export function buildExtraction(text: string, position: number, ocrUsed: boolean,
   redact: (text: string, names: string[]) => string): BulkExtraction {
+  // Same normalisation as the redactor: digits or names split by invisible characters, Unicode
+  // hyphens or non-breaking spaces must be found and redacted.
+  text = normalizeForRedaction(text);
   const name = detectName(text);
   const email = detectEmail(text);
   const phone = detectPhone(text);
   const first = name?.first ?? 'Kandydat';
   const last = name?.last ?? `nr ${position}`;
   const names = name ? [name.first, ...name.last.split(' ')] : [];
+  const redacted = redact(text, names);
+  // Detection and redaction must never drift apart: the approved text goes to the AI provider without
+  // a human check, so a phone or e-mail still visible after redaction stops the file.
+  if (detectPhone(redacted) || detectEmail(redacted)) throw new BulkIntakeError('bad_format');
   return {
     first_name: first.slice(0, 100), last_name: last.slice(0, 100), email, phone,
-    source_text: text, redacted_text: redact(text, names), name_detected: !!name, ocr_used: ocrUsed,
+    source_text: text, redacted_text: redacted, name_detected: !!name, ocr_used: ocrUsed,
   };
 }
 
