@@ -66,6 +66,11 @@ test('contact and name detection', () => {
   assert.deepEqual(detectName('Ślusarz Jan\nZielona Góra'), { first: 'Ślusarz', last: 'Jan' });
   assert.deepEqual(detectName('LEKARZ ANNA\nNowy Sącz'), { first: 'Lekarz', last: 'Anna' });
   assert.deepEqual(detectName('Kierownik Budowy\nJan Kowalski'), { first: 'Jan', last: 'Kowalski' });
+  assert.deepEqual(detectName('Software Developer\nAnna Nowak'), { first: 'Anna', last: 'Nowak' });
+  assert.deepEqual(detectName('Główna Księgowa\nAnna Nowak'), { first: 'Anna', last: 'Nowak' });
+  // Accepted trade-off (documented in PR #250): a whole name made of two job words looks like a
+  // headline, so a later name-like line wins. Much rarer than a headline above the name.
+  assert.deepEqual(detectName('Junior Lekarz\nZielona Góra'), { first: 'Zielona', last: 'Góra' });
   const surname = buildExtraction('Jan Ślusarz\nDoświadczenie: spawanie', 4, false, suggestRedaction);
   assert.doesNotMatch(surname.redacted_text, /Ślusarz/, 'a job-word surname is still redacted');
   const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);

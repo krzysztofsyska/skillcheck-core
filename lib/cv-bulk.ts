@@ -120,7 +120,8 @@ spawacz monter monterka ślusarz slusarz kucharka kelnerka barista recepcjonista
 doradca doradczyni opiekun opiekunka ekspedient ekspedientka chef sous zespołu zespolu komputerowy
 finansowy finansowa handlowy handlowa grafik kucharz kelner lider office biura
 budowy budownictwa zarządu zarzadu medyczny medyczna logistyki projektu produkcji magazynu kadr płac plac
-it hr ds. ds nurse chef`.split(/\s+/));
+ds. ds nurse software web mobile executive representative główny główna glowny glowna starszy
+starsza młodszy młodsza mlodszy mlodsza samodzielny samodzielna dyplomowany dyplomowana zmiany`.split(/\s+/));
 const isJobWord = (w: string) => JOB_WORDS.has(w.toLowerCase());
 // A headline has at least two job words ("Java Developer", "Kierownik Sprzedaży", "Head Chef").
 // One job word is not enough: it is often a surname or a first name ("Jan Ślusarz", "Ślusarz Jan",
@@ -170,8 +171,7 @@ export function detectName(text: string): { first: string; last: string } | null
     const normalized = words.every(w => UPPER_WORD.test(w)) ? words.map(titleCase) : words;
     if (!normalized.every(w => NAME_WORD.test(w))) continue;
     const candidate = { first: normalized[0], last: normalized.slice(1).join(' ') };
-    // A headline starts with a job word ("Java Developer", "Kierownik Sprzedaży") or is made only of them.
-    // "Jan Ślusarz" is not one: a surname that is also a job word still wins over later lines.
+    // A headline has at least two job words; see isHeadline.
     if (!isHeadline(normalized)) return candidate;
     fallback ??= candidate;
   }
