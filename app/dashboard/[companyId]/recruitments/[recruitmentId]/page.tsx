@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { companyAccess } from "../../../../../lib/company-access";
 import { StageForm, StageControls } from "./assessment-forms";
 import { PreselectionGroups, type GroupRow } from "./bulk/groups";
+import { groupAnalysisCurrent } from "../../../../../lib/screening-report";
 export default async function Recruitment({params}: {params:Promise<{companyId:string;recruitmentId:string}>}) {
   const {companyId,recruitmentId}=await params;
   const {client,canEdit}=await companyAccess(companyId);
@@ -16,7 +17,12 @@ export default async function Recruitment({params}: {params:Promise<{companyId:s
   const stages = await client.from('assessment_stages').select('*').eq('company_id',companyId).eq('recruitment_id',recruitmentId).order('sequence');
   if(stages.error) throw new Error('Nie udało się wczytać etapów.');
   const groups = await client.rpc('get_preselection_groups',{target_recruitment:recruitmentId});
-  const groupRows = (groups.error ? [] : groups.data ?? []) as GroupRow[];
+  // Same currency rule as the report: a group is current only for the analysis the ranking uses now.
+  // If the ranking cannot be read, every group is shown as outdated (fail closed).
+  const ranking = groups.error ? null : await client.rpc('get_screening_ranking',{target_recruitment:recruitmentId,target_size:10}).range(0,999);
+  const rankingById = new Map(((ranking && !ranking.error ? ranking.data : null) ?? []).map(r=>[r.application_id,r] as const));
+  const groupRows: GroupRow[] = (groups.error ? [] : (groups.data ?? []) as (Omit<GroupRow,'stale'> & {analysis_id?:unknown})[])
+    .map(g=>({...g, stale: !groupAnalysisCurrent(g.analysis_id, rankingById.get(g.application_id))}));
   return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link><h1>{recruitment.name}</h1><p><Link href={`/dashboard/${companyId}/positions/${recruitment.position_id}`}>Profil stanowiska</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/interview-guide`}>Przewodnik rozmowy</Link></p><p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/exercises`}>Zadania kompetencyjne i Assessment Center</Link></p><p>{canEdit && <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}><strong>Wgraj wiele CV</strong></Link>}{canEdit ? ' — ' : ''}<Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}>paczki CV i postęp przetwarzania</Link></p>
     <h2 id="preselekcja">Wyniki preselekcji (grupy)</h2>
     <PreselectionGroups companyId={companyId} recruitmentId={recruitmentId} rows={groupRows} canEdit={canEdit}/>

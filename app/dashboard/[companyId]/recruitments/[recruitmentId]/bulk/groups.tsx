@@ -9,6 +9,8 @@ import { movePreselectionGroup } from './actions';
 export type GroupRow = {
   application_id: string; candidate_name: string; has_phone: boolean; group_key: BulkGroup; source: 'auto' | 'manual';
   raw_score: number | null; coverage: number | null; updated_at: string;
+  /** The saved score no longer matches the candidate's current analysis (CV, position or re-analysis). */
+  stale: boolean;
 };
 
 function MoveForm({ companyId, recruitmentId, row }: { companyId: string; recruitmentId: string; row: GroupRow }) {
@@ -33,8 +35,10 @@ export function PreselectionGroups({ companyId, recruitmentId, rows, canEdit }: 
         <h3>{groupLabel[group]} ({list.length})</h3>
         {list.length ? <ol>{list.map(r => <li key={r.application_id}>
           <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/applications/${r.application_id}/screening`}>{r.candidate_name}</Link>
-          {r.raw_score !== null && <> · {Math.round(Number(r.raw_score))} pkt</>}
-          {r.coverage !== null && <> · pokrycie kryteriów {Math.round(Number(r.coverage) * 100)}%</>}
+          {r.stale ? <strong> · Wynik nieaktualny — wymaga ponownej analizy</strong> : <>
+            {r.raw_score !== null && <> · {Math.round(Number(r.raw_score))} pkt</>}
+            {r.coverage !== null && <> · pokrycie kryteriów {Math.round(Number(r.coverage) * 100)}%</>}
+          </>}
           {r.source === 'manual' && <> · przeniesiony ręcznie</>}
           {!r.has_phone && <span> · brak telefonu w CV</span>}
           {canEdit && <MoveForm companyId={companyId} recruitmentId={recruitmentId} row={r} />}
