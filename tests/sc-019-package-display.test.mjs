@@ -77,16 +77,11 @@ test('customer-facing package copy does not hardcode grant amounts', async () =>
   assert.match(billing, /sc19AnalysisScope\(sizes\.PRESELEKCJA\)/);
   assert.doesNotMatch(billing, /5 analiz CV|60 analiz CV/);
   // Strażnik dotyczy przydziałów FREE i PRESELEKCJI — te liczby pochodzą z polityki pakietu
-  // (`sc19_package_sizes`) i nie wolno ich wpisywać na sztywno. Pule WERYFIKACJI (60 CV)
-  // i ASSESSMENT CENTER (50 CV) to zatwierdzone decyzje właściciela z 2026-11-02 i są
-  // w komponencie świadomie, dopóki SC-PRICING-W2 nie przeniesie ich do katalogu — dlatego
-  // sprawdzamy resztę komponentu z pominięciem tych dwóch kart. Rozmiar procesu AC (5–6 osób)
-  // nie jest przydziałem analiz i wychodzi z tego strażnika.
-  const policyDriven = marketing
-    .split('\n')
-    .filter((line) => !/name:"WERYFIKACJA"|name:"ASSESSMENT CENTER"/.test(line))
-    .join('\n');
-  assert.doesNotMatch(policyDriven, /5 analiz CV|60 analiz CV/);
+  // (`sc19_package_sizes`) i nie wolno ich wpisywać na sztywno. Karty WERYFIKACJI i ASSESSMENT
+  // CENTER podają swoje zatwierdzone pule jako „60 CV" i „50 CV", bez słowa „analiz", właśnie po to,
+  // żeby nie kolidowały z tym strażnikiem. Rozmiar procesu AC (5–6 osób) nie jest przydziałem
+  // analiz i wyszedł z tego wyrażenia.
+  assert.doesNotMatch(marketing, /5 analiz CV|60 analiz CV/);
   assert.match(marketing, /sc19OfferScopes/);
   // FREE i PRESELEKCJA nadal czytają swoje przydziały dynamicznie, nie z literału.
   assert.match(marketing, /scope:offer\.freeScope/);

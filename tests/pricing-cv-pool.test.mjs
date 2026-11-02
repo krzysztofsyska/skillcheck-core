@@ -66,8 +66,8 @@ test('dokument cennika podaje te same liczby co kod', () => {
 test('komponent porównania pakietów nie rozjeżdża się z cennikiem', () => {
   assert.match(comparison, /price:"615 zł"/);
   assert.match(comparison, /price:"1 499 zł"/);
-  assert.match(comparison, /60 analiz CV \+ testy kompetencji/);
-  assert.match(comparison, /50 analiz CV \+ testy \+ zadania praktyczne/);
+  assert.match(comparison, /60 CV \+ testy kompetencji/);
+  assert.match(comparison, /50 CV \+ testy \+ zadania praktyczne/);
   // Cena zatwierdzona nie może być opisana jako robocza wizualizacja.
   assert.match(comparison, /priceApproved:true/);
   assert.doesNotMatch(comparison, /899/);
