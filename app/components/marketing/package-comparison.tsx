@@ -1,51 +1,50 @@
 import Link from "next/link";
 import styles from "../../marketing.module.css";
-import { sc19OfferScopes, sc19PolicyPendingCell, sc19PolicyPendingScope, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
-import { preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
+import { sc19AnalysisScope, sc19PolicyPendingCell, sc19PolicyPendingScope, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
+import { freeAnalyses, freePrice, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
+import { nextStages, nextStagesNote } from "./content";
 
 export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean }) {
-  const offer = sc19OfferScopes(sizes);
   // Live catalog wins when enabled; an enabled but failing catalog shows no number.
-  // With the catalog off, the owner-approved PRESELEKCJA offer is shown.
+  // With the catalog off, the owner-approved FREE and PRESELEKCJA offers are shown.
   const analyses = preselekcjaAnalyses(catalogEnabled, sizes);
-  const preselectionCount = analyses === null ? null : `${analyses} analiz CV`;
+  const free = freeAnalyses(catalogEnabled, sizes);
+  const preselectionCount = analyses === null ? null : sc19AnalysisScope(analyses);
+  const freeCount = free === null ? null : sc19AnalysisScope(free);
   const validity = `ważne ${preselekcjaOffer.validityMonths} miesiące`;
   const preselectionNote = preselectionCount
     ? `PRESELEKCJA: ${preselectionCount} za ${preselekcjaPrice}, ${validity} od przyznania.`
     : `PRESELEKCJA: ${preselekcjaPrice}, ${validity} od przyznania.`;
   const plans = [
-    {name:"FREE", color:styles.planBlue, title:"Wypróbuj SkillCheck", text:"Poznaj docelowy proces na niewielkiej grupie kandydatów.", price:"0 zł", scope:offer.freeScope, current:true, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i analiza CV przez AI", "Dowody, braki i pytania na rozmowę", "Ranking i raport preselekcji", "Jeden pakiet na firmę (weryfikacja NIP)"]},
-    {name:"PRESELEKCJA", color:styles.planGreen, title:"Uporządkuj wybór kandydatów", text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę.", price:preselekcjaPrice, current:true, scope:`${preselectionCount ?? sc19PolicyPendingScope} · ${validity}`, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i analiza CV przez AI", "Dowody, braki i pytania na rozmowę", "Ranking, shortlista i raport z eksportem", "Płatność na podstawie faktury"]},
-    {name:"WERYFIKACJA", color:styles.planPurple, title:"Sprawdź, co naprawdę potrafią", text:"Pogłęb ocenę przez rozmowę, jej analizę i test kompetencji.", price:"899 zł", scope:"20 rozmów + testy; analizy CV według zatwierdzonej polityki", features:["Wszystko z Preselekcji", "20 rozmów weryfikacyjnych z botem", "Analiza odpowiedzi z rozmowy", "Testy kompetencji", "Rozszerzony raport kandydata"]},
-    {name:"ASSESSMENT CENTER", color:styles.planOrange, title:"Zobacz, jak podejdą do pracy", text:"Sprawdź sposób działania w zadaniach osadzonych w realiach stanowiska.", price:"1 799 zł", scope:"20 rozmów + testy + case studies; analizy CV według zatwierdzonej polityki", features:["Wszystko z Weryfikacji", "Case studies i zadania praktyczne", "Ćwiczenia dopasowane do roli", "Pogłębiony proces Assessment Center", "Kompleksowy raport kandydata"]},
+    {name:"FREE", color:styles.planBlue, title:free === null ? "Analiza CV na próbę" : `Analiza ${free} CV`, text:"Sprawdź sposób porządkowania informacji na własnych CV, zanim wybierzesz większy zakres.", price:freePrice, scope:freeCount ?? sc19PolicyPendingScope, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i analiza CV przez AI", "Dowody, braki i pytania na rozmowę", "Ranking i raport preselekcji", "Rejestracja: NIP i firmowy e-mail, jeden pakiet na firmę"]},
+    {name:"PRESELEKCJA", color:styles.planGreen, title:analyses === null ? "Analiza CV, shortlista i raport" : `Analiza ${analyses} CV, shortlista i raport`, text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę do dalszej oceny.", price:preselekcjaPrice, scope:`${preselectionCount ?? sc19PolicyPendingScope} · ${validity}`, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i analiza CV przez AI", "Dowody, braki i pytania na rozmowę", "Ranking, shortlista i raport z eksportem", "Płatność przelewem na fakturę proforma"]},
   ];
   const rows = [
-    ["Konto firmy i profil stanowiska","Tak","Tak","Tak","Tak"],
-    ["Analizy CV", offer.freeAnalyses, analyses === null ? sc19PolicyPendingCell : String(analyses), "Według polityki", "Według polityki"],
-    ["Pseudonimizacja i analiza CV przez AI","Tak","Tak","Tak","Tak"],
-    ["Chatbot informacyjny","Planowany","Planowany","Planowany","Planowany"],
-    ["Shortlista / raport preselekcji","Podstawowe","Według oferty","5–10 kandydatów","5–10 kandydatów"],
-    ["Rozmowa weryfikacyjna z botem","Nie","Nie","20","20"],
-    ["Analiza rozmowy","Nie","Nie","Tak","Tak"],
-    ["Test kompetencji","Nie","Nie","Tak","Tak"],
-    ["Case studies i zadania praktyczne","Nie","Nie","Nie","Tak"],
-    ["Pełny Assessment Center","Nie","Nie","Nie","Tak"],
-    ["Raport kandydata","Raport preselekcji","Raport preselekcji","Rozszerzony","Kompleksowy"],
-    ["Talent Pool za zgodą kandydata","Planowany","Planowany","Planowany","Planowany"],
+    ["Konto firmy i profil stanowiska","Tak","Tak"],
+    ["Analizy CV", free === null ? sc19PolicyPendingCell : String(free), analyses === null ? sc19PolicyPendingCell : String(analyses)],
+    ["Pseudonimizacja i analiza CV przez AI","Tak","Tak"],
+    ["Dowody, braki i pytania na rozmowę","Tak","Tak"],
+    ["Shortlista / raport preselekcji","Podstawowe","Według oferty"],
+    ["Eksport raportu","Tak","Tak"],
+    ["Cena",freePrice,preselekcjaPrice],
   ];
   return <>
   <div className={styles.packageCards}>{plans.map(plan=><article key={plan.name} className={`${styles.planCard} ${plan.color}`}>
-    {!plan.current && <p className={styles.planLabel}>Planowany pakiet</p>}<h3>{plan.name}</h3><p className={styles.planTitle}>{plan.title}</p><p>{plan.text}</p>
+    <h3>{plan.name}</h3><p className={styles.planTitle}>{plan.title}</p><p>{plan.text}</p>
     <ul>{plan.features.map(f=><li key={f}>{f}</li>)}</ul>
-    <div className={styles.planPrice}><strong>{plan.price}</strong><p>{plan.scope}</p>{!plan.current && <small>Cena robocza z wizualizacji</small>}</div>
-    <Link href={plan.name === "FREE" ? "/preselekcja#free" : plan.name === "PRESELEKCJA" ? "/preselekcja" : "/rozmowa"} className={styles.secondary}>{plan.name === "FREE" ? "Jak uzyskać FREE" : `Zapytaj o ${plan.name}`}</Link>
+    <div className={styles.planPrice}><strong>{plan.price}</strong><p>{plan.scope}</p></div>
+    <Link href={plan.name === "FREE" ? "/preselekcja#free" : "/preselekcja"} className={plan.name === "FREE" ? styles.secondary : styles.primary}>{plan.name === "FREE" ? `Wypróbuj FREE — ${freePrice}` : "Zamów PRESELEKCJĘ"}</Link>
   </article>)}</div>
   <p className={styles.note}>{sizes
-    ? `${preselectionNote} Liczba analiz CV dla FREE pochodzi z zatwierdzonej polityki pakietu. Ceny i warunki pozostałych pakietów wymagają zatwierdzenia przed sprzedażą. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.`
-    : `${preselectionNote} Ceny, limity i warunki pozostałych pakietów wymagają zatwierdzenia przed sprzedażą. Liczba analiz CV dla FREE jest pokazywana dopiero z zatwierdzonej polityki pakietu. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.`}</p>
-  <details className={styles.packageDetails}><summary>Porównaj wszystkie funkcje pakietów</summary>
-    <div className={styles.tableScroll} role="region" aria-label="Porównanie pakietów — przewijaj poziomo na telefonie" tabIndex={0}><table className={styles.packageTable}><caption>Docelowy zakres pakietów — funkcje planowane</caption><thead><tr><th scope="col">Co otrzymujesz?</th>{plans.map(p=><th scope="col" key={p.name} className={p.color}>{p.name}</th>)}</tr></thead><tbody>{rows.map(row=><tr key={row[0]}><th scope="row">{row[0]}</th>{row.slice(1).map((v,i)=><td key={i}>{v}</td>)}</tr>)}</tbody></table></div>
+    ? `${preselectionNote} Liczba analiz CV pochodzi z zatwierdzonej polityki pakietów. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.`
+    : `${preselectionNote} Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.`}</p>
+  <details className={styles.packageDetails}><summary>Porównaj FREE i PRESELEKCJĘ</summary>
+    <div className={styles.tableScroll} role="region" aria-label="Porównanie pakietów — przewijaj poziomo na telefonie" tabIndex={0}><table className={styles.packageTable}><caption>Zakres pakietów dostępnych dzisiaj</caption><thead><tr><th scope="col">Co otrzymujesz?</th>{plans.map(p=><th scope="col" key={p.name} className={p.color}>{p.name}</th>)}</tr></thead><tbody>{rows.map(row=><tr key={row[0]}><th scope="row">{row[0]}</th>{row.slice(1).map((v,i)=><td key={i}>{v}</td>)}</tr>)}</tbody></table></div>
   </details>
-  <div className={styles.subscription}><div><p className={styles.kicker}>Kierunek rozwoju</p><h3>Abonament dla firm rekrutujących regularnie</h3><p>Planujemy elastyczne pule analiz, rozmów i testów do wykorzystania na różne stanowiska. Warunki kumulacji jednostek i oferta dla większych organizacji będą ustalane przed uruchomieniem.</p></div><Link href="/rozmowa" className={styles.secondary}>Porozmawiajmy o potrzebach firmy</Link></div>
+  <div className={styles.grid}>{nextStages.map(stage=><article key={stage.name} className={styles.card}>
+    <p className={styles.planLabel}>Kolejny etap</p><h3>{stage.name}</h3><p className={styles.planTitle}>{stage.title}</p><p>{stage.body}</p>
+    <p className={`${styles.status} ${styles.statusPlanned}`}>Bez ceny i terminu</p>
+  </article>)}</div>
+  <p className={styles.note}>{nextStagesNote} <Link href="/rozmowa">Napisz, jeśli chcesz o nich porozmawiać.</Link></p>
 </>;
 }

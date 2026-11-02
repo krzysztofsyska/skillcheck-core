@@ -43,20 +43,49 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(homeResponse.status, 200);
   assert.match(homeResponse.headers.get('content-type'), /text\/html/);
   const home = await homeResponse.text();
+  // Hormozi offer layout (owner decision 2026-11-02): the result-first headline leads,
+  // the old brand line moves into "dlaczego samo CV nie wystarcza".
+  assert.match(home, /<h1 id="hero-title">Masz kandydatów\. Sprawdź, komu warto poświęcić czas\.<\/h1>/);
   assert.match(home, /Podobne CV\. Różni ludzie\. Zupełnie inne wyniki w pracy\./);
-  assert.match(home, /Cztery poziomy\. Jedna platforma\./);
-  assert.match(home, /Cena robocza z wizualizacji/);
+  assert.match(home, /Dlaczego samo CV nie wystarcza/);
+  const heroIndex = home.indexOf('Masz kandydatów. Sprawdź, komu warto poświęcić czas.');
+  assert.ok(heroIndex > -1 && heroIndex < home.indexOf('Podobne CV. Różni ludzie.'), 'headline precedes the moved brand line');
+  // Slogans kept from the approved copy.
+  for (const slogan of [
+    'Własne CV. Mniej pracy powtarzalnej.',
+    'CV pokazuje deklaracje. Sprawdź więcej.',
+    'Nie płać za większy zakres, niż potrzebujesz.',
+    'Wiesz, skąd bierze się każda kwota.',
+    'Najpierw sprawdź. Potem zdecyduj.',
+  ]) assert.ok(home.includes(slogan), `slogan kept: ${slogan}`);
+  // Required section order.
+  const sectionOrder = ['id="korzysci"', 'id="jak-to-dziala"', 'id="przyklad"', 'id="kalkulator"', 'id="pakiety"', 'id="agencja"', 'id="zalozenia"', 'id="faq"', 'id="zgloszenie"'];
+  let cursor = -1;
+  for (const section of sectionOrder) {
+    const at = home.indexOf(section);
+    assert.ok(at > cursor, `section ${section} present and in order`);
+    cursor = at;
+  }
   assert.match(home, /300 zł brutto/);
   assert.equal(home.includes('Po wycenie'), false);
   assert.equal(home.includes('To koncepcja oferty do oceny'), false);
-  assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 2); // FREE and PRESELEKCJA are current (MVP 2026-11-01); WERYFIKACJA and AC planned
-  assert.match(home, /Liczba analiz CV według zatwierdzonej polityki/);
-  assert.equal(home.includes('5 analiz CV'), false);
+  assert.equal(home.includes('Cena robocza z wizualizacji'), false);
+  // Only FREE and PRESELEKCJA are sold; the later stages carry no price.
+  assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 0);
+  assert.equal((home.match(/>Kolejny etap<\/p>/g) ?? []).length, 2, 'WERYFIKACJA and ASSESSMENT CENTER shown as later stages');
+  for (const price of ['299', '369', '899', '1 799', '1799', '615', '1845']) {
+    assert.equal(home.includes(price), false, `stale price ${price} removed from the home page`);
+  }
+  assert.ok(home.includes('5 analiz CV'), 'approved FREE scope (owner 2026-11-02)');
   assert.ok(home.includes('60 analiz CV'), 'approved PRESELEKCJA scope (owner 2026-10-28)');
   assert.equal(home.includes('5–6'), false);
+  // Voicebot is not shown anywhere on the public offer (owner decision 2026-11-02).
+  for (const voice of ['voicebot', 'Voicebot', 'rozmów AI', 'rozmowy AI', 'rozmowa weryfikacyjna', 'Rozmowa weryfikacyjna', 'rozmów z botem', 'rozmowy z botem']) {
+    assert.equal(home.includes(voice), false, `no voicebot copy on the home page: ${voice}`);
+  }
   assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
-  for (const href of ['/demo', '/register', '/login', '/#jak-to-dziala', '/#mozliwosci', '/#pakiety', '/#faq']) {
+  for (const href of ['/demo', '/register', '/login', '/#korzysci', '/#jak-to-dziala', '/#przyklad', '/#pakiety', '/#faq']) {
     assert.ok(homeHrefs.includes(href), `home link ${href}`);
   }
   assert.equal(home.includes('<form'), false);
@@ -91,8 +120,17 @@ test('public offer and demo pages respond without an account', async (t) => {
 
   // Sales pilot intake is available without enabling paid checkout or AI.
   assert.ok(homeHrefs.includes('/kalkulator'), 'marketing links to clickable calculator');
-  assert.match(home, /Sprawdź kalkulator pakietów/);
+  assert.match(home, /Sprawdź koszt rekrutacji/);
+  assert.match(home, /Wypróbuj FREE — 0 zł/);
   assert.ok(homeHrefs.includes('/preselekcja'), 'marketing points to PRESELEKCJA pilot');
+  // Every CTA leads to an existing path: FREE, the offer page or the calculator.
+  for (const href of homeHrefs.filter((link) => link.startsWith('/') && !link.startsWith('/_next') && !link.startsWith('/legal/'))) {
+    const target = href.split('#')[0] || '/';
+    assert.ok(
+      ['/', '/demo', '/kalkulator', '/preselekcja', '/rozmowa', '/register', '/login', '/regulamin', '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
+      `home CTA points at an existing path: ${href}`,
+    );
+  }
 
   const calculatorRoute = await fetch(`${base}/kalkulator`, { redirect: 'manual' });
   assert.equal(calculatorRoute.status, 307);
@@ -101,16 +139,59 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(calculatorResponse.status, 200);
   assert.ok(calculatorResponse.headers.get('content-type')?.includes('text/html'));
   const calculator = await calculatorResponse.text();
-  assert.match(calculator, /Interaktywny podgląd koncepcji/);
   assert.match(calculator, /data-pack="pre"/);
+  assert.match(calculator, /data-pack="free"/);
   assert.match(calculator, /data-package-price="pre">300 zł</);
-  assert.match(calculator, /pre:30000,/);
+  assert.match(calculator, /data-package-price="free">0 zł</);
+  assert.match(calculator, /pre:30000/);
   assert.match(calculator, /PRE_PACKAGE_CV=60;/);
-  assert.equal(calculator.includes('369'), false);
-  assert.match(calculator, /data-pack="verify"/);
   assert.match(calculator, /id="volumeSlider"/);
-  assert.match(calculator, /Kup teraz · podgląd/);
-  assert.match(calculator, /nie pobieramy płatności/i);
+  assert.match(calculator, /nie pobiera płatności/i);
+  // The calculator shows the cost of manual CV reading and the agency comparison
+  // on editable assumptions, with no AI cost and no margin (owner decision 2026-11-02).
+  assert.match(calculator, /id="timePerCv"/);
+  assert.match(calculator, /id="hourlyTimeCost"/);
+  assert.match(calculator, /id="manualHours"/);
+  assert.match(calculator, /id="manualCost"/);
+  assert.match(calculator, /id="agencyFixed"/);
+  assert.match(calculator, /id="extraCosts"/);
+  assert.match(calculator, /nie jest gwarantowana oszczędność|nie gwarantowana oszczędność/);
+  assert.match(calculator, /Wiesz, skąd bierze się każda kwota\./);
+  assert.match(calculator, /Nie płać za większy zakres, niż potrzebujesz\./);
+  assert.match(calculator, /Najpierw sprawdź\. Potem zdecyduj\./);
+  assert.match(calculator, /Własne CV\. Mniej pracy powtarzalnej\./);
+  assert.match(calculator, /CV pokazuje deklaracje\. Sprawdź więcej\./);
+  // No demo purchase, no unapproved prices, no voicebot, no AI cost or margin.
+  assert.equal(calculator.includes('Kup teraz'), false);
+  assert.equal(calculator.includes('buyDemoButton'), false);
+  assert.equal(calculator.includes('data-pack="verify"'), false);
+  assert.equal(calculator.includes('data-pack="ac"'), false);
+  for (const price of ['299', '369', '899', '1799', '1 799', '615 zł', '1845']) {
+    assert.equal(calculator.includes(price), false, `stale price ${price} removed from the calculator`);
+  }
+  for (const voice of ['voicebot', 'Voicebot', 'rozmów AI', 'rozmowy AI', 'rozmów voicebota', 'Rozmowy voicebota', 'próbna rozmowa']) {
+    assert.equal(calculator.includes(voice), false, `no voicebot copy in the calculator: ${voice}`);
+  }
+  for (const internal of ['marża', 'marży', 'koszt AI', 'koszty AI', 'narzut']) {
+    assert.equal(calculator.toLowerCase().includes(internal.toLowerCase()), false, `no internal cost or margin shown: ${internal}`);
+  }
+  // WERYFIKACJA and ASSESSMENT CENTER appear as later stages without a price.
+  assert.match(calculator, /WERYFIKACJA — kolejny etap/);
+  assert.match(calculator, /ASSESSMENT CENTER — kolejny etap/);
+  for (const href of ['/preselekcja', '/preselekcja#free']) {
+    assert.ok(hrefs(calculator).includes(href), `calculator CTA to ${href}`);
+  }
+  // A pool bigger than one package must not be ordered through the single-package
+  // proforma request: it goes to the enquiry path, which keeps the chosen pool.
+  assert.match(calculator, /const orderTarget=\(\)=>/);
+  assert.match(calculator, /prePackages\(state\.cv\)===1\s*\?\{href:'\/preselekcja'/);
+  assert.match(calculator, /source:'calculator-v4',pack:'pre',cv:String\(state\.cv\)/);
+  assert.match(calculator, /id="orderNote"/);
+  // The downloadable summary must state the real number of packages and analyses,
+  // not a single package, when the chosen pool needs more than one.
+  assert.match(calculator, /Analizy CV objęte zamówieniem: '\+\(state\.pack==='free'\?String\(FREE_CV\):prePackages\(state\.cv\)\*PRE_PACKAGE_CV/);
+  assert.match(calculator, /'Zakres: '\+prePackages\(state\.cv\)\+' × pakiet '\+PRE_PACKAGE_CV/);
+  assert.doesNotMatch(calculator, /Zakres: pakiet 60 analiz CV/, 'summary no longer hardcodes one package');
 
   const orderResponse = await fetch(`${base}/preselekcja`, { redirect: 'manual' });
   assert.equal(orderResponse.status, 200);
@@ -119,8 +200,15 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(order, /PRESELEKCJA — 60 analiz CV za 300 zł brutto/);
   const orderText = order.replaceAll('<!-- -->', '');
   for (const fact of [/243,90 zł netto/, /ważne przez 3 miesiące/, /faktury proforma/, /2 dni roboczych/, /fakturę VAT/]) assert.match(orderText, fact);
-  // Online payment (Przelewy24) is frozen for the MVP (owner decision 2026-11-01): invoice only.
-  assert.doesNotMatch(orderText, /Przelewy24|PayPro/);
+  // Payment on the offer page (owner decision 2026-11-02, narrowed after review):
+  // only the method that actually works is offered. Przelewy24 may be named as being
+  // prepared, never as a way to pay now, because there is no live checkout behind it.
+  assert.match(orderText, /faktury proforma/);
+  assert.doesNotMatch(orderText, /Przelewy24[^.]{0,40}(albo|lub) przelew/, 'Przelewy24 is never offered as a way to pay now');
+  assert.doesNotMatch(orderText, /PayPro/);
+  if (orderText.includes('Przelewy24')) {
+    assert.match(orderText, /Przelewy24 jest przygotowywana/, 'Przelewy24 only as a prepared method');
+  }
   assert.ok(hrefs(order).includes('/regulamin') && hrefs(order).includes('/polityka-prywatnosci'));
   assert.doesNotMatch(order, /potwierdzane indywidualnie|pilotaż/);
   assert.match(order, /Cena|cenę|cena/);
@@ -134,7 +222,10 @@ test('public offer and demo pages respond without an account', async (t) => {
     const body = url.searchParams.get('body');
     assert.ok(subject && !/zamówienie|zakup|zapłać/i.test(subject), 'email is not a placed order');
     assert.ok(body && body.includes('\r\n'), 'RFC6068 CRLF mail body');
-    assert.doesNotMatch(body, /osoba kontaktowa|numer telefonu|służbowy e-mail|imię i nazwisko/i);
+    assert.doesNotMatch(body, /osoba kontaktowa|numer telefonu|imię i nazwisko/i);
+    // Both enquiries ask for the company identifiers the operator needs to verify
+    // the company, so no extra round of messages is required before activation.
+    assert.match(body, /NIP:/);
     assert.doesNotMatch(body, /PESEL|@example/i);
   }
   assert.ok(homeHrefs.includes('/preselekcja#free'), 'FREE CTA anchors to the FREE section');
@@ -144,6 +235,8 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
   assert.match(home, /PRESELEKCJA: 60 CV za 300 zł/);
   assert.match(home, /Według oferty/);
+  assert.match(home, /Analiza 60 CV, shortlista i raport/, 'approved PRESELEKCJA description');
+  assert.match(home, /Analiza 5 CV/, 'approved FREE description');
   assert.match(order, /zawsze weryfikuje osoba prowadząca rekrutację/);
   assert.doesNotMatch(order, /<li>Wyniki, ranking, shortlistę i raport weryfikuje/);
   const comparison = readFileSync(new URL('../app/components/marketing/package-comparison.tsx', import.meta.url), 'utf8');
@@ -157,6 +250,14 @@ test('public offer and demo pages respond without an account', async (t) => {
   // The static calculator cannot read the catalog: keep its package size and net price equal to the approved offer.
   assert.equal(calculator.match(/PRE_PACKAGE_CV=(\d+);/)?.[1], offerSource.match(/analyses: (\d+),/)?.[1]);
   assert.equal(calculator.match(/PRE_NET_CENTS=(\d+);/)?.[1], offerSource.match(/netPln: "(\d+),(\d+)"/)?.slice(1).join(''));
+  assert.equal(calculator.match(/FREE_CV=(\d+);/)?.[1], offerSource.match(/freeOffer = \{\s*analyses: (\d+),/)?.[1], 'calculator FREE size equals the approved offer');
+  assert.equal(
+    calculator.match(/BASE_GROSS_CENTS=\{free:0,pre:(\d+)\}/)?.[1],
+    String(Number(offerSource.match(/grossPln: (\d+),/)?.[1]) * 100),
+    'calculator gross price equals the approved offer',
+  );
+  assert.doesNotMatch(comparison, /WERYFIKACJA[^\n]*price:/, 'no price for the later stages');
+  assert.doesNotMatch(comparison, /ASSESSMENT CENTER[^\n]*price:/, 'no price for the later stages');
   assert.doesNotMatch(offer, /60 analiz CV|Shortlista 5–10 kandydatów/);
   const cvRow = lines.find(line => line.trimStart().startsWith('["Analizy CV"'));
   const shortlistRow = lines.find(line => line.trimStart().startsWith('["Shortlista \/ raport preselekcji"'));
