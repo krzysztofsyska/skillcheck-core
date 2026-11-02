@@ -693,9 +693,10 @@ a przejście na Redis później to jedna wymiana adaptera, bo interfejs `SharedR
 
 **Decyzja właściciela (rozmowa głosowa, 2026-11-02): przedefiniowanie WERYFIKACJI.**
 Pakiet powstały z A + C (preselekcja CV + test kompetencji + rozszerzony raport) sprzedajemy jako
-**WERYFIKACJA za 615 zł brutto za 60 CV, bez rozmów z botem**. Rozmowy zostają na stronie oznaczone
-jako „w przygotowaniu” do czasu, aż zaczną działać, i są dopisywane później jako rozszerzenie
-pakietu, bez zmiany ceny. Nowy pakiet pośredni nie powstaje.
+**WERYFIKACJA za 615 zł brutto za 60 CV, bez rozmów z botem**. Rozmów **nie wymieniamy na stronie
+w ogóle** — także nie jako funkcji „w przygotowaniu" (decyzja właściciela 2026-11-02, wieczór).
+Wrócą, gdy zaczną działać, jako rozszerzenie pakietu: gratis albo za niewielką opłatą, do ustalenia.
+Nowy pakiet pośredni nie powstaje.
 
 Pytanie było postawione przy cenie 899 zł i przy założeniu, że WERYFIKACJA obowiązkowo zawiera
 rozmowy. Oba założenia są nieaktualne: cena to 615 zł (sekcja „Decyzja cenowa” w MODULE D powyżej),
