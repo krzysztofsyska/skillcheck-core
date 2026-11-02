@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import {
-  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, parseRanking, parseShortlist,
+  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
@@ -72,7 +72,24 @@ export async function loadScreeningReport(
       requireReport(entry ? row.shortlist_snapshot_current === entry.snapshot_current : row.shortlist_snapshot_current !== true);
       if (entry?.snapshot_current) requireReport(entry.analysis_id === row.analysis_id && entry.review_id === row.review_id);
     }
-    return { company, recruitment, position, applications, rankings, shortlist };
+    // Automatic groups from bulk CV intake, read inside the source so the re-read check covers them.
+    // Optional: before the bulk migration the RPC does not exist.
+    const groupResult = await client.rpc('get_preselection_groups', { target_recruitment: p.recruitmentId });
+    let groups: ReturnType<typeof parseGroupRow>[] = [];
+    if (groupResult.error) {
+      if (!['PGRST202', '42883'].includes(groupResult.error.code ?? '')) checked(groupResult, true);
+    } else {
+      requireReport(Array.isArray(groupResult.data) && groupResult.data.length <= MAX_REPORT_APPLICATIONS);
+      // A saved group outlives a position or CV change and a re-analysis outside the batch.
+      const rankingById = new Map(rankings.map(r => [r.application_id, r]));
+      groups = (groupResult.data as unknown[]).map(row => {
+        const group = parseGroupRow(row);
+        const source = (row ?? {}) as { analysis_id?: unknown };
+        requireReport(source.analysis_id === undefined || source.analysis_id === null || (typeof source.analysis_id === 'string' && /^[0-9a-f-]{36}$/i.test(source.analysis_id)));
+        return { ...group, stale: !groupAnalysisCurrent(source.analysis_id, rankingById.get(group.application_id)) };
+      }).filter(g => ids.has(g.application_id));
+    }
+    return { company, recruitment, position, applications, rankings, shortlist, groups };
   };
   const source = await readSource();
   const reviewed = source.rankings.filter(r => r.eligibility_reason === 'eligible' || r.eligibility_reason === 'insufficient_evidence');
@@ -160,6 +177,7 @@ export async function loadScreeningReport(
     applications: [...source.rankings].sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || a.application_id.localeCompare(b.application_id))
       .map(ranking => ({ ranking, shortlist: source.shortlist.find(s => s.application_id === ranking.application_id) ?? null,
         criteria: details.get(ranking.application_id) ?? [] })),
+    groups: source.groups,
   };
   if (Buffer.byteLength(JSON.stringify(report), 'utf8') > 10 * 1024 * 1024) throw new ScreeningReportError('too_large');
   return report;

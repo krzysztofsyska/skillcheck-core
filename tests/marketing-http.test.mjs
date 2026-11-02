@@ -49,7 +49,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /300 zł brutto/);
   assert.equal(home.includes('Po wycenie'), false);
   assert.equal(home.includes('To koncepcja oferty do oceny'), false);
-  assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 3);
+  assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 2); // FREE and PRESELEKCJA are current (MVP 2026-11-01); WERYFIKACJA and AC planned
   assert.match(home, /Liczba analiz CV według zatwierdzonej polityki/);
   assert.equal(home.includes('5 analiz CV'), false);
   assert.ok(home.includes('60 analiz CV'), 'approved PRESELEKCJA scope (owner 2026-10-28)');
@@ -118,7 +118,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   const order = await orderResponse.text();
   assert.match(order, /PRESELEKCJA — 60 analiz CV za 300 zł brutto/);
   const orderText = order.replaceAll('<!-- -->', '');
-  for (const fact of [/243,90 zł netto/, /ważne przez 3 miesiące/, /faktury proforma/, /Przelewy24/, /PayPro S\.A\./, /2 dni roboczych/, /fakturę VAT/]) assert.match(orderText, fact);
+  for (const fact of [/243,90 zł netto/, /ważne przez 3 miesiące/, /faktury proforma/, /2 dni roboczych/, /fakturę VAT/]) assert.match(orderText, fact);
+  // Online payment (Przelewy24) is frozen for the MVP (owner decision 2026-11-01): invoice only.
+  assert.doesNotMatch(orderText, /Przelewy24|PayPro/);
   assert.ok(hrefs(order).includes('/regulamin') && hrefs(order).includes('/polityka-prywatnosci'));
   assert.doesNotMatch(order, /potwierdzane indywidualnie|pilotaż/);
   assert.match(order, /Cena|cenę|cena/);

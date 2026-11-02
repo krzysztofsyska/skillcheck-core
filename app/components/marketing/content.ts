@@ -17,14 +17,14 @@ export const steps = [
   {
     number: "3",
     title: "Zestawienie dowodów i brakujących informacji",
-    status: "W przygotowaniu",
-    body: "Docelowo materiały mają być zestawione z wymaganiami: co jest poparte źródłem, a gdzie danych brakuje. W koncie można już przygotować materiał do takiego zestawienia. Uruchomienie analizy, która tworzy to zestawienie, nie jest jeszcze dostępne. Układ prezentacji pokazuje przykład.",
+    status: "Dostępne",
+    body: "Analiza AI zestawia zatwierdzony, zanonimizowany tekst CV z wymaganiami stanowiska: co jest poparte cytatem z CV, czego brakuje i o co zapytać. Wyniki kandydatów trafiają do rankingu i raportu z eksportem. AI nie podejmuje decyzji o zatrudnieniu.",
   },
   {
     number: "4",
     title: "Przygotowanie do rozmowy i decyzja człowieka",
-    status: "Częściowo dostępne",
-    body: "W koncie jest przewodnik rozmowy oraz miejsce na ręczne etapy, notatki i obserwacje. Kolejny krok wybiera człowiek. Aplikacja nie oznacza kandydatów do zatrudnienia ani do odrzucenia.",
+    status: "Dostępne",
+    body: "W koncie jest przewodnik rozmowy, pytania o brakujące informacje oraz ręczne etapy, notatki i decyzja z uzasadnieniem. Kolejny krok wybiera człowiek. Aplikacja nie oznacza kandydatów do zatrudnienia ani do odrzucenia.",
   },
 ] as const;
 
@@ -35,11 +35,11 @@ export const capabilities = [
   },
   {
     title: "Te same kryteria dla każdej osoby",
-    body: "Porównanie ma sens, gdy każda osoba jest czytana według tej samej listy tematów. Widok kilku kandydatów obok siebie nie jest jeszcze częścią aplikacji. Taki układ jest pokazany w przykładzie.",
+    body: "Porównanie ma sens, gdy każda osoba jest czytana według tej samej listy tematów. Raport preselekcji pokazuje kandydatów jednej rekrutacji obok siebie, według tych samych wymagań.",
   },
   {
     title: "Informacja poparta materiałem i brak danych",
-    body: "W przykładzie każda informacja jest powiązana z fikcyjnym źródłem. Brak wzmianki oznaczamy jako brak danych albo temat do wyjaśnienia. Automatyczne przygotowywanie takiego zestawienia jest w przygotowaniu.",
+    body: "W przykładzie każda informacja jest powiązana z fikcyjnym źródłem. Brak wzmianki oznaczamy jako brak danych albo temat do wyjaśnienia. W koncie takie zestawienie przygotowuje analiza AI, a każdą informację można sprawdzić w źródle.",
   },
   {
     title: "Pytania, które uzupełniają luki",
@@ -50,13 +50,13 @@ export const capabilities = [
 export const packages = [
   {
     name: "FREE",
-    title: "Planowany wariant próbny",
-    body: "Kierunek na ograniczone zapoznanie się z produktem. Zakres, czas i warunki próby nie są ustalone. Sama rejestracja tego wariantu nie włącza.",
+    title: "Sprawdź na własnych CV",
+    body: "Bezpłatny pakiet na pierwsze analizy CV, jeden na firmę (weryfikacja NIP). Zakładasz konto, opisujesz stanowisko i sprawdzasz wynik na prawdziwej rekrutacji.",
   },
   {
     name: "PRESELEKCJA",
-    title: "Wstępne uporządkowanie informacji",
-    body: "Kierunek oferty: zestawić materiały z wymaganiami stanowiska i pokazać dowody, braki oraz pytania. W koncie można już opisać stanowisko, dodać materiały i przygotować je do zestawienia. Uruchomienie analizy oraz sam pakiet nie są dostępne.",
+    title: "Preselekcja CV z dowodami",
+    body: "Analiza CV przez AI względem wymagań stanowiska: dowody, braki i pytania na rozmowę, ranking i raport z eksportem. Płatność na podstawie faktury, pakiet aktywujemy po zaksięgowaniu wpłaty.",
   },
   {
     name: "WERYFIKACJA",

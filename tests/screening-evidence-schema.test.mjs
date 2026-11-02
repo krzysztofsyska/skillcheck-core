@@ -27,3 +27,9 @@ test('Zod rejects overall rating, score, hiring recommendations and nested field
 test('criterion allowlist forbids unknown IDs', () => {
   assert.throws(() => parseEvidenceOutput({ criteria: [{ ...valid.criteria[0], criterion_id: 'fake' }] }, claim));
 });
+
+test('evidence prompt asks for Polish free text and literal quotes', async () => {
+  const { evidenceSystemPrompt } = await import('../lib/screening-evidence-schema.ts');
+  assert.match(evidenceSystemPrompt, /missing_info, suggested_question and explanation in Polish/);
+  assert.match(evidenceSystemPrompt, /Never translate, shorten or alter evidence_quotes/);
+});

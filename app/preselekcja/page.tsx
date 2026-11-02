@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "PRESELEKCJA — oferta i cena | SkillCheck",
-  description: "Pakiet PRESELEKCJA za 300 zł brutto, analizy ważne 3 miesiące. Płatność przelewem na podstawie faktury proforma lub online przez Przelewy24.",
+  description: "Pakiet PRESELEKCJA za 300 zł brutto, analizy ważne 3 miesiące. Płatność przelewem na podstawie faktury proforma.",
 };
 
 const preselectionEmail = (scope: string | null) => "mailto:pomoc@skillcheck.pl?subject=" + encodeURIComponent("SkillCheck — PRESELEKCJA: prośba o fakturę proforma")
@@ -34,8 +34,8 @@ export default async function PreselectionOfferPage() {
           <li><strong>Cena:</strong> {preselekcjaPrice} ({preselekcjaOffer.netPln} zł netto + 23% VAT), płatność jednorazowa.</li>
           <li><strong>Zakres:</strong> {scope ? `${scope} w ramach jednego pakietu.` : `${sc19PolicyPendingScope}.`}</li>
           <li><strong>Ważność:</strong> analizy są ważne przez {preselekcjaOffer.validityMonths} miesiące od dnia ich przyznania.</li>
-          <li><strong>Płatność:</strong> przelew na podstawie faktury proforma albo online przez Przelewy24 (szybki przelew, BLIK, karta), gdy płatność online jest dostępna w panelu. Operatorem płatności online jest PayPro S.A., ul. Pastelowa 8, 60-198 Poznań.</li>
-          <li><strong>Przyznanie analiz:</strong> po potwierdzeniu płatności — przy płatności online zwykle w ciągu kilku minut, przy przelewie najpóźniej w ciągu 2 dni roboczych od uznania naszego rachunku.</li>
+          <li><strong>Płatność:</strong> przelew na podstawie faktury proforma.</li>
+          <li><strong>Przyznanie analiz:</strong> po potwierdzeniu płatności — najpóźniej w ciągu 2 dni roboczych od uznania naszego rachunku.</li>
           <li><strong>Faktura:</strong> po zaksięgowaniu płatności wystawiamy fakturę VAT i wysyłamy ją e-mailem.</li>
         </ul>
         <p>Zasady zamówienia, reklamacji i odstąpienia opisuje <Link href="/regulamin">Regulamin</Link>. Dane przetwarzamy zgodnie z <Link href="/polityka-prywatnosci">Polityką prywatności</Link>.</p>

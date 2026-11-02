@@ -14,7 +14,7 @@ const kinds = { task: 'Zadanie', kpi: 'Miernik sukcesu', competency: 'Kompetencj
 export default async function Screening({ params, searchParams }: { params: Promise<ScreeningRoute>; searchParams: Promise<{ analysis?: string }> }) {
   const route = await params;
   const { companyId, recruitmentId } = route;
-  const { client, canEdit } = await companyAccess(companyId);
+  const { client, canEdit, user } = await companyAccess(companyId);
   if (!Object.values(route).every(isUuid)) notFound();
   const context = await loadScreeningContext(client, route).catch(error => {
     if (error instanceof ScreeningNotFoundError) notFound();
@@ -73,7 +73,7 @@ export default async function Screening({ params, searchParams }: { params: Prom
     </details>}
     {analysis?.execution_status === 'completed' && analysis.candidate_document_id && criteria.some(c => c.verdict != null) && <EvidenceMatrix
       criteria={criteria} route={route} analysisId={analysis.id} documentId={analysis.candidate_document_id}
-      documentVersion={analysis.candidate_document_version} editable={canEdit && !stale} />}
+      documentVersion={analysis.candidate_document_version} editable={canEdit && !stale} currentUserId={user.id} />}
     {analysis?.execution_status === 'completed' && criteria.some(c => c.verdict != null) && canEdit && !historical && review?.disposition !== 'needs_reanalysis'
       && <EvidenceAnalysisReview key={`${analysis.id}:${analysis.latest_review_version}`} route={route} analysisId={analysis.id} version={analysis.latest_review_version}
         unreviewed={criteria.filter(c => c.human_status === 'unreviewed').length} />}

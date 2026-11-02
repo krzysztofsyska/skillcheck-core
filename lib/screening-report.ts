@@ -120,11 +120,58 @@ export type ReportCriterion = {
   explanation: string | null; evidence: { start: number; end: number; quote: string }[];
 };
 export type ReportApplication = { ranking: RankingRow; shortlist: ShortlistRow | null; criteria: ReportCriterion[] };
+export type PreselectionGroupKey = 'passed' | 'review' | 'rejected';
+export const preselectionGroupLabels: Record<PreselectionGroupKey, string> = {
+  passed: 'Przeszli sito', review: 'Do decyzji rekrutera', rejected: 'Nie spełniają kryteriów',
+};
+/** Evidence-matrix (v2) analyses are never auto-scored by the SC-008 ranking (Step 3 rule):
+ * after human review they stay "insufficient_evidence" and their score lives in the preselection
+ * groups. The report says so instead of the misleading "too few rated criteria / 0%".
+ * Criteria are loaded only for reviewed rows, so this is true only after a human review. */
+type StatusInput = { ranking: { eligibility_reason: keyof typeof reasonLabels }; criteria: { matrixVerdict: unknown }[] };
+export function reviewedEvidenceAnalysis(app: StatusInput) {
+  return app.ranking.eligibility_reason === 'insufficient_evidence' && app.criteria.some(c => c.matrixVerdict !== null);
+}
+/** Points to the groups table only when this application really has a group row in the report. */
+export function rankingStatusLabel(app: StatusInput, hasGroup: boolean) {
+  if (!reviewedEvidenceAnalysis(app)) return reasonLabels[app.ranking.eligibility_reason];
+  return hasGroup ? 'Sprawdzone przez człowieka — wynik w tabeli grup' : 'Sprawdzone przez człowieka';
+}
+/** Automatic grouping from the AI evidence matrix (bulk CV intake). Needs no per-row review. */
+export type ReportGroupRow = {
+  application_id: string; candidate_name: string; group: PreselectionGroupKey; source: 'auto' | 'manual';
+  raw_score: number | null; coverage: number | null;
+  /** The underlying analysis no longer matches the position or CV (ranking says stale / needs re-analysis). */
+  stale: boolean;
+};
 export type ScreeningReport = {
   version: typeof REPORT_VERSION; generatedAt: string; companyId: string; companyName: string;
   recruitmentId: string; recruitmentName: string; positionTitle: string; targetSize: number;
   requirements: { kind: keyof typeof kindLabels; text: string }[]; applications: ReportApplication[];
+  groups?: ReportGroupRow[];
 };
+/**
+ * A saved preselection group is current only while it was computed from the analysis the SC-008
+ * ranking uses now, and that analysis is not outdated. A re-analysis outside the batch, a CV or
+ * position change, a missing link or a malformed id all make the saved score historical.
+ */
+export function groupAnalysisCurrent(groupAnalysisId: unknown,
+  ranking: { analysis_id: unknown; eligibility_reason: unknown } | undefined): boolean {
+  if (typeof groupAnalysisId !== 'string' || !/^[0-9a-f-]{36}$/i.test(groupAnalysisId) || !ranking) return false;
+  if (ranking.eligibility_reason === 'stale' || ranking.eligibility_reason === 'needs_reanalysis') return false;
+  return typeof ranking.analysis_id === 'string' && ranking.analysis_id === groupAnalysisId;
+}
+export function parseGroupRow(value: unknown): ReportGroupRow {
+  const g = object(value);
+  const applicationId = id(g.application_id);
+  requireReport(typeof g.group_key === 'string' && Object.hasOwn(preselectionGroupLabels, g.group_key));
+  requireReport(g.source === 'auto' || g.source === 'manual');
+  return {
+    application_id: applicationId, candidate_name: text(g.candidate_name, 300),
+    group: g.group_key as PreselectionGroupKey, source: g.source as 'auto' | 'manual',
+    raw_score: numeric(g.raw_score, 100, true), coverage: numeric(g.coverage, 1, true), stale: false,
+  };
+}
 export function reportEvidence(value: unknown): ReportCriterion['evidence'] {
   requireReport(Array.isArray(value) && value.length <= 100);
   return value.map(item => {
@@ -164,7 +211,7 @@ export function screeningReportCsv(report: ScreeningReport): string {
   for (const application of report.applications) {
     const { ranking: r, shortlist: s } = application;
     for (const criterion of application.criteria.length ? application.criteria : [null]) {
-      rows.push([r.application_id, r.rank, reasonLabels[r.eligibility_reason], r.raw_score, r.coverage,
+      rows.push([r.application_id, r.rank, rankingStatusLabel(application, !!report.groups?.some(g => g.application_id === r.application_id && !g.stale)), r.raw_score, reviewedEvidenceAnalysis(application) ? null : r.coverage,
         r.known_criteria, r.total_criteria, r.suggested_shortlist ? 'Tak' : 'Nie', shortlistLabel(s),
         s?.source === 'manual' ? 'Ręczny' : s ? 'Z sugestii' : '', s?.selected_at ?? '', r.ranking_policy_version,
         r.analysis_id, r.review_id, criterion?.text ?? '', criterion ? kindLabels[criterion.kind] : '',
@@ -173,6 +220,13 @@ export function screeningReportCsv(report: ScreeningReport): string {
         criterion?.reviewedChange ? 'Tak' : 'Nie', criterion?.explanation ?? '',
         criterion?.evidence.map(e => `[${e.start}–${e.end}] ${e.quote}`).join('\n') ?? '']);
     }
+  }
+  if (report.groups?.length) {
+    // Exports keep the SC-009 rule: candidates by application ID only, no names (the screen may show names).
+    rows.push([], ['Preselekcja automatyczna (grupy z analizy AI, do weryfikacji przez człowieka)'],
+      ['Zgłoszenie', 'Grupa', 'Wynik', 'Pokrycie', 'Źródło grupy', 'Aktualność']);
+    for (const g of report.groups) rows.push([g.application_id, preselectionGroupLabels[g.group], g.raw_score, g.coverage,
+      g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie', g.stale ? 'Wynik nieaktualny — wymaga ponownej analizy' : 'Aktualny']);
   }
   const csv = '\uFEFF' + rows.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';
   if (Buffer.byteLength(csv, 'utf8') > 10 * 1024 * 1024) throw new ScreeningReportError('too_large');

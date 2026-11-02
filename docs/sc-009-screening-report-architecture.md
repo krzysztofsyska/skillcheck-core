@@ -29,7 +29,7 @@ Nie implementujemy SC-008 w SC-009. Nie dodajemy migracji, RPC, grantów, zmian 
 
 ## Dane i semantyka
 
-- Kandydat reprezentowany przez identyfikator zgłoszenia; bez nazwiska, telefonu i e-maila. Ekran odsyła do istniejącego widoku preselekcji wewnątrz firmy. Identyfikatory i cytaty nadal są danymi poufnymi, nie anonimowymi.
+- Kandydat reprezentowany przez identyfikator zgłoszenia; bez nazwiska, telefonu i e-maila. Wyjątek (MVP, 2026-11-01): sekcja „Preselekcja automatyczna” na ekranie raportu pokazuje imię i nazwisko, tak jak strona rekrutacji tej samej firmy; eksport CSV nadal zawiera wyłącznie identyfikatory zgłoszeń. Ekran odsyła do istniejącego widoku preselekcji wewnątrz firmy. Identyfikatory i cytaty nadal są danymi poufnymi, nie anonimowymi.
 - `rank`, `raw_score`, `coverage`, sugestia i wersja polityki pochodzą wyłącznie z SC-008. SC-009 nie przelicza punktów ani progu coverage.
 - `insufficient_data` wyświetla się jako „Brak wystarczających danych”. `null` score pozostaje pustą komórką CSV i „—” na ekranie, nigdy 0.
 - Sugestia algorytmu i zapisana shortlista człowieka są osobnymi polami. Nieaktualny wpis shortlisty pozostaje widoczny jako wymagający ponownego sprawdzenia; historyczny score nie zastępuje bieżącego.

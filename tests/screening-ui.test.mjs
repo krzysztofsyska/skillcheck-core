@@ -231,6 +231,20 @@ test('an edited matrix row offers no "Akceptuj" that would silently discard the 
   assert.doesNotMatch(edited, /value="accepted"/);
   assert.match(edited, /value="edited"/);
 });
+test('matrix row author is "Ty" or "Inna osoba z zespołu", never a raw account id', () => {
+  const matrix = loadUiModule(screenDir + 'matrix.tsx', { './actions': { reviewEvidenceRow: async () => ({}) }, './screening.module.css': {} });
+  const row = { ...criterion, verdict: 'supported', evidence: [], explanation: null, missing_info: null, suggested_question: null,
+    human_status: 'accepted', human_note: null, human_verdict: null, human_missing_info: null, human_suggested_question: null,
+    human_evidence: null, updated_at: new Date().toISOString(), updated_by: uuid(77) };
+  const render = currentUserId => renderToStaticMarkup(React.createElement(matrix.EvidenceMatrix, { criteria: [row], route, analysisId: uuid(11),
+    documentId: uuid(6), documentVersion: 1, editable: false, currentUserId }));
+  assert.match(render(uuid(77)), /Autor: Ty/);
+  const other = render(uuid(78));
+  assert.match(other, /Autor: Inna osoba z zespołu/);
+  assert.doesNotMatch(other, new RegExp(uuid(77)));
+  assert.equal(matrix.authorLabel(null, uuid(77)), '—');
+  assert.equal(matrix.authorLabel(uuid(77), undefined), 'Inna osoba z zespołu');
+});
 test('a current v1 analysis is resent or reused on its own contract; new analyses and the explicit upgrade request v2', async () => {
   const ctx = context(), fingerprint = prepareScreening(ctx).fingerprint;
   const pending = (overrides = {}) => ({ id: uuid(11), company_id: route.companyId, application_id: route.applicationId, recruitment_id: route.recruitmentId,

@@ -116,7 +116,7 @@ export async function HomePage() {
           <div className={styles.wrap}>
             <p className={styles.kicker}>Od preselekcji do pogłębionej weryfikacji</p>
             <h2 id="pkg-title">Cztery poziomy. Jedna platforma.</h2>
-            <p className={styles.intro}>Wybierz zakres odpowiadający potrzebom Twojej rekrutacji. Poniżej przedstawiamy planowaną ofertę.</p>
+            <p className={styles.intro}>Wybierz zakres odpowiadający potrzebom Twojej rekrutacji. Dziś dostępne są FREE i PRESELEKCJA; WERYFIKACJA i ASSESSMENT CENTER są planowane.</p>
             <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} />
           </div>
         </section>

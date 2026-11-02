@@ -210,3 +210,175 @@ test('v2 evidence rows publish the human matrix review, never the discarded AI c
   assert.equal(a.evidence[0].quote, 'Raport'); assert.equal(a.reviewedChange, false); assert.equal(a.matrixVerdict, 'supported');
   assert.equal((await load(fixture())).applications[0].criteria[0].matrixVerdict, null, 'Legacy v1 rows keep their rating only');
 });
+
+test('automatic preselection groups appear in the report and CSV without per-row review', async () => {
+  const data = fixture();
+  data.get_preselection_groups = [
+    { application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true, group_key: 'passed',
+      source: 'auto', raw_score: 87.5, coverage: 0.875, updated_at: timestamp, application_status: 'new', analysis_id: data.get_screening_ranking[0].analysis_id },
+    // A row for an application outside this recruitment is never shown.
+    { application_id: uuid(61), candidate_id: uuid(62), candidate_name: 'Obca Osoba', has_phone: false, group_key: 'rejected',
+      source: 'auto', raw_score: 0, coverage: 1, updated_at: timestamp, application_status: 'new' },
+  ];
+  const report = await load(data), csv = screeningReportCsv(report);
+  assert.equal(report.groups.length, 1);
+  assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875, stale: false });
+  assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, new RegExp(`"${application}";"Przeszli sito";"87.5";"0.875";"Automatycznie";"Aktualny"`));
+  assert.doesNotMatch(csv, /Jan Testowy/, 'CSV keeps candidates by application ID only');
+  assert.doesNotMatch(csv, /Obca Osoba/);
+});
+
+test('report still loads before the bulk migration (groups RPC missing)', async () => {
+  const report = await load(fixture(), { error: { get_preselection_groups: 'PGRST202' } });
+  assert.deepEqual(report.groups, []);
+  assert.doesNotMatch(screeningReportCsv(report), /Preselekcja automatyczna/);
+});
+
+test('a group whose analysis became stale is flagged, not shown as current', async () => {
+  const data = fixture();
+  Object.assign(data.get_screening_ranking[0], { rank: null, rankable: false, eligibility_reason: 'stale', raw_score: null, coverage: null,
+    known_criteria: 0, total_criteria: 1, below_count: 0, meets_count: 0, above_count: 0, insufficient_data_count: 0, suggested_shortlist: false });
+  data.get_preselection_groups = [{ application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true,
+    group_key: 'passed', source: 'auto', raw_score: 90, coverage: 1, updated_at: timestamp, application_status: 'new' }];
+  const report = await load(data);
+  assert.equal(report.groups[0].stale, true);
+  assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
+});
+
+test('a group computed from an older analysis is stale after a re-analysis outside the batch', async () => {
+  const data = fixture();
+  const row = { application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true,
+    group_key: 'passed', source: 'auto', raw_score: 90, coverage: 1, updated_at: timestamp, application_status: 'new' };
+  // Same analysis as the ranking: current.
+  data.get_preselection_groups = [{ ...row, analysis_id: data.get_screening_ranking[0].analysis_id }];
+  assert.equal((await load(data)).groups[0].stale, false);
+  // The ranking now uses a newer completed analysis: the saved score is historical.
+  data.get_preselection_groups = [{ ...row, analysis_id: uuid(99) }];
+  const report = await load(data);
+  assert.equal(report.groups[0].stale, true);
+  assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
+  // No link to an analysis (erased, or an older RPC without the field): never shown as current.
+  data.get_preselection_groups = [{ ...row, analysis_id: null }];
+  assert.equal((await load(data)).groups[0].stale, true);
+  data.get_preselection_groups = [row];
+  assert.equal((await load(data)).groups[0].stale, true);
+  // A malformed link fails closed.
+  data.get_preselection_groups = [{ ...row, analysis_id: 'x' }];
+  await assert.rejects(load(data));
+});
+
+test('a reviewed evidence-matrix candidate shows the group score, not "too few rated criteria / 0%"', async () => {
+  const data = fixture();
+  // v2 analysis after human review: neutral legacy rating, so SC-008 reports insufficient_evidence (Step 3 rule).
+  Object.assign(data.screening_criterion_results[0], { rating: 'insufficient_data', verdict: 'supported', human_status: 'accepted', human_evidence: null });
+  Object.assign(data.get_screening_ranking[0], { rank: null, rankable: false, eligibility_reason: 'insufficient_evidence', raw_score: null,
+    coverage: '0.000', known_criteria: 0, below_count: 0, meets_count: 0, above_count: 0, insufficient_data_count: 1, suggested_shortlist: false });
+  data.get_preselection_groups = [{ application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true,
+    group_key: 'passed', source: 'auto', raw_score: 83.33, coverage: 1, updated_at: timestamp, application_status: 'new',
+    analysis_id: data.get_screening_ranking[0].analysis_id }];
+  const report = await load(data);
+  const { rankingStatusLabel } = await import('../lib/screening-report.ts');
+  assert.equal(rankingStatusLabel(report.applications[0], true), 'Sprawdzone przez człowieka — wynik w tabeli grup');
+  // Without a group row (e.g. a single-CV evidence analysis) the label never points to the groups table.
+  assert.equal(rankingStatusLabel(report.applications[0], false), 'Sprawdzone przez człowieka');
+  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx', import.meta.url).pathname;
+  const module = new Module(filename); module.filename = filename;
+  const require = createRequire(filename);
+  module.require = name => name.endsWith('.module.css') ? { default: new Proxy({}, { get: (_, key) => String(key) }), __esModule: true }
+    : name.endsWith('/screening-report') ? require(name + '.ts') : require(name);
+  module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  const html = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report, basePath: '/dashboard/test' }));
+  assert.match(html, /Sprawdzone przez człowieka — wynik w tabeli grup/);
+  assert.match(html, /83,33 <small>\(grupa\)<\/small>/);
+  assert.doesNotMatch(html, /Za mało ocenionych kryteriów/);
+  assert.doesNotMatch(html, /<td>0%<\/td>/);
+  assert.match(html, /nie przelicza dowodów automatycznie/);
+  // A stale group score is never shown as the candidate's score.
+  const staleHtml = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report: { ...report, groups: report.groups.map(g => ({ ...g, stale: true })) }, basePath: '/dashboard/test' }));
+  assert.doesNotMatch(staleHtml, /\(grupa\)<\/small>/);
+  // CSV agrees with the page: the same status, no misleading 0 coverage.
+  const csv = screeningReportCsv(report);
+  assert.match(csv, /"Sprawdzone przez człowieka — wynik w tabeli grup"/);
+  assert.doesNotMatch(csv, /"Za mało ocenionych kryteriów"/);
+  // Status, score and coverage cells of that application row: coverage is empty, not 0.
+  const line = csv.split('\r\n').find(l => l.includes('"Sprawdzone przez człowieka — wynik w tabeli grup"'));
+  const cells = line.split(';');
+  const status = cells.findIndex(c => c.includes('Sprawdzone przez człowieka'));
+  assert.equal(cells[status + 2], '""', 'coverage cell is empty');
+  // Stale group: the label no longer points to the groups table.
+  assert.match(staleHtml, /<td>Sprawdzone przez człowieka<\/td>/);
+  // A legacy (v1) candidate keeps the original label.
+  assert.equal(rankingStatusLabel({ ranking: { eligibility_reason: 'insufficient_evidence' }, criteria: [{ matrixVerdict: null }] }, true), 'Za mało ocenionych kryteriów');
+});
+
+test('recruitment-page groups use the report currency rule: an outdated group shows no score as current', async () => {
+  const { groupAnalysisCurrent } = await import('../lib/screening-report.ts');
+  const a = '00000000-0000-4000-8000-0000000000a1', b = '00000000-0000-4000-8000-0000000000b2';
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'eligible' }), true);
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: b, eligibility_reason: 'eligible' }), false, 're-analysed outside the batch');
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'stale' }), false, 'CV or position changed');
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'needs_reanalysis' }), false);
+  assert.equal(groupAnalysisCurrent(a, undefined), false, 'no ranking row (e.g. ranking unreadable): fail closed');
+  for (const bad of [null, undefined, '', 'not-a-uuid', 42]) assert.equal(groupAnalysisCurrent(bad, { analysis_id: a, eligibility_reason: 'eligible' }), false);
+
+  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/groups.tsx', import.meta.url).pathname;
+  const module = new Module(filename); module.filename = filename;
+  const require = createRequire(filename);
+  module.require = name => name === './actions' ? { movePreselectionGroup: async () => ({}) }
+    : name.endsWith('/submit-button') ? { SubmitButton: ({ children }) => React.createElement('button', null, children) }
+    : name.endsWith('/lib/cv-bulk') ? require('../../../../../../lib/cv-bulk.ts') : require(name);
+  module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  const row = { application_id: a, candidate_name: 'Kandydat nr 1', has_phone: true, group_key: 'passed', source: 'auto', raw_score: 83.33, coverage: 1, updated_at: '2026-11-02T10:00:00Z' };
+  const render = stale => renderToStaticMarkup(React.createElement(module.exports.PreselectionGroups, { companyId: b, recruitmentId: b, rows: [{ ...row, stale }], canEdit: false }));
+  const current = render(false), outdated = render(true);
+  assert.match(current, /83 pkt/); assert.match(current, /pokrycie kryteriów 100%/); assert.doesNotMatch(current, /nieaktualny/);
+  assert.match(outdated, /Wynik nieaktualny — wymaga ponownej analizy/);
+  assert.doesNotMatch(outdated, /83 pkt|pokrycie kryteriów/, 'no historical score shown as current');
+});
+
+test('ranking currency: every page is read, a failed page fails closed; recruitment and batch pages use it', async () => {
+  const { loadCurrentRanking, withGroupCurrency } = await import('../lib/preselection-currency.ts');
+  const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const rows = Array.from({ length: 1203 }, (_, n) => ({ application_id: id(n), analysis_id: id(10000 + n), eligibility_reason: 'eligible' }));
+  const client = (failAt = -1) => ({ calls: [], rpc(fn, args) {
+    const self = this;
+    return { range(from, to) { self.calls.push([fn, args, from, to]);
+      return Promise.resolve(from === failAt ? { data: null, error: { code: 'X' } } : { data: rows.slice(from, to + 1), error: null }); } };
+  } });
+  const ok = client();
+  const map = await loadCurrentRanking(ok, id(9));
+  assert.equal(map.size, 1203, 'all pages, not only the first');
+  assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499]]);
+  assert.equal(await loadCurrentRanking(client(500), id(9)), null, 'a failed page fails closed');
+  const items = [
+    { application_id: id(1200), group_key: 'passed', group_analysis_id: id(11200) },
+    { application_id: id(1), group_key: 'passed', group_analysis_id: id(99999) },
+    { application_id: id(2), group_key: 'passed' },
+    { application_id: null, group_key: null },
+  ];
+  assert.deepEqual(withGroupCurrency(items, map).map(i => i.group_current), [true, false, false, false]);
+  assert.deepEqual(withGroupCurrency(items, null).map(i => i.group_current), [false, false, false, false], 'unreadable ranking: outdated');
+  for (const file of ['../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', '../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/page.tsx', '../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts']) {
+    const src = readFileSync(new URL(file, import.meta.url), 'utf8');
+    assert.match(src, /loadCurrentRanking\(client, /, file);
+    assert.doesNotMatch(src, /get_screening_ranking[^\n]*\.range\(0,\s*999\)/, file);
+  }
+
+  // The batch page shows an outdated group without its historical score.
+  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url).pathname;
+  const module = new Module(filename); module.filename = filename;
+  const require = createRequire(filename);
+  module.require = name => name === '../actions' ? { bulkProgress: async () => null }
+    : name === 'next/link' ? { __esModule: true, default: ({ children, ...props }) => React.createElement('a', props, children) }
+    : name.endsWith('/lib/cv-bulk') ? require('../../../../../../../lib/cv-bulk.ts') : require(name);
+  module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  const item = { id: id(1), position: 1, file_name: 'cv.pdf', phase: 'done', error_reason: null, ocr_used: false, application_id: id(1),
+    candidate_name: 'Kandydat nr 1', has_phone: true, group_key: 'passed', raw_score: 83.3, duplicate_of_application: null };
+  const render = group_current => renderToStaticMarkup(React.createElement(module.exports.BatchProgress, { companyId: id(1), recruitmentId: id(2), batchId: id(3), billingHref: '/b',
+    initial: { batch: { id: id(3), recruitment_id: id(2), status: 'completed', declared_files: 1, reserved_slots: 1, completed_at: null }, items: [{ ...item, group_current }] } }));
+  assert.match(render(true), /83 pkt/);
+  const outdated = render(false);
+  assert.match(outdated, /Wynik nieaktualny — wymaga ponownej analizy/);
+  assert.doesNotMatch(outdated, /83 pkt/, 'no historical score shown as current');
+  assert.match(render(undefined), /Wynik nieaktualny/, 'missing flag means outdated');
+});
