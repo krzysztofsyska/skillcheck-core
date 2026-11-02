@@ -335,3 +335,10 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
   assert.match(outdated, /Wynik nieaktualny — wymaga ponownej analizy/);
   assert.doesNotMatch(outdated, /83 pkt|pokrycie kryteriów/, 'no historical score shown as current');
 });
+
+test('recruitment page reads every ranking page before marking groups outdated', () => {
+  const page = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /get_screening_ranking[^\n]*\.range\(0,\s*999\)/, 'no single fixed page');
+  assert.match(page, /\.range\(rankingRows\.length, rankingRows\.length \+ 499\)/, 'pages until the ranking is exhausted');
+  assert.match(page, /if \(page\.error \|\| !Array\.isArray\(page\.data\)\) \{ rankingOk = false; break; \}/, 'a failed page fails closed');
+});
