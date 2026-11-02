@@ -105,7 +105,19 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
    an owner decision. Includes **SC-PRICING-W2b** — a volume slider in steps of 5 at every package,
    with manual entry restricted to multiples of 5 (owner decision 2026-11-02).
 
-Still frozen for these modules: voicebot and interview analysis. A package built from them is **not**
+**Order of work, settled by the owner 2026-11-02 (by voice):** module A (competency test), then
+module C (extended report), with the pricing calculator fitted in between. **Voicebot comes after
+those**, not before — the owner chose "najpierw robimy testy". Packages ship to customers **without
+bot calls**, at unchanged prices (PRESELEKCJA 300 zł, WERYFIKACJA 615 zł, ASSESSMENT CENTER
+1 499 zł), and the site keeps calls marked "w przygotowaniu" until they work. Wiring the voicebot
+into package limits (FREE 1, paid 10) is a separate later step and needs no rework of anything
+built before it.
+
+The 36–55 day voicebot figure in the audit is overstated. Most of the code exists; what is missing
+is wiring (webhook runtime, dispatch transport, schema deployment) plus Retell/VoIPstudio setup —
+about two weeks to a first real test call. Interview-content analysis is separate and comes after.
+
+Still frozen for these modules: interview analysis. A package built from them is **not**
 the advertised WERYFIKACJA (which promises 20 bot calls); naming and pricing it is an open owner
 decision and must be settled before any of it is sold.
 
