@@ -188,8 +188,10 @@ const NUMBER_TAG = "[TELEFON / IDENTYFIKATOR]";
 const DATE_TOKEN = String.raw`(?:\d{1,2}[./]){0,2}\d{4}(?:[./]\d{1,2}){0,2}`;
 // Runs made only of dates joined by dashes, spaces or tabs are employment periods, not identifiers:
 // "01.2019 – 12.2022", "2015–2018 2019–2022", "2012 2013 2014". They stay visible for the analysis.
-const DATE_RUN = new RegExp(String.raw`^${DATE_TOKEN}(?:[ \t]*[-\u2010-\u2015\u2212]?[ \t]*${DATE_TOKEN})*$`);
-const isDateRun = (run: string) => DATE_RUN.test(run.trim())
+// The separator is unambiguous (either a dash with optional spaces, or spaces/tabs only) and runs longer
+// than 120 characters are never dates, so the check stays linear on crafted input.
+const DATE_RUN = new RegExp(String.raw`^${DATE_TOKEN}(?:(?:[ \t]*[-\u2010-\u2015\u2212][ \t]*|[ \t]+)${DATE_TOKEN})*$`);
+const isDateRun = (run: string) => run.length <= 120 && DATE_RUN.test(run.trim())
   && (run.match(/\d{4}/g) ?? []).every(y => +y >= 1940 && +y <= 2099);
 
 function redactNumberRun(match: string): string {
@@ -199,6 +201,10 @@ function redactNumberRun(match: string): string {
   if (digits <= 15) return NUMBER_TAG;
   const parts = match.split(/(\t| {2,})/);
   if (parts.length === 1) return NUMBER_TAG;
+  // Split only into whole numbers (9+ digits) or employment periods; a phone written with wide spacing
+  // ("500  123  456") would otherwise fall apart into short visible groups, so it is redacted whole.
+  const pieces = parts.filter(part => !/^(\t| {2,})$/.test(part) && /\d/.test(part));
+  if (!pieces.every(part => part.replace(/\D/g, "").length >= 9 || isDateRun(part))) return NUMBER_TAG;
   return parts.map(part => /^(\t| {2,})$/.test(part) ? part : redactNumberRun(part)).join("");
 }
 

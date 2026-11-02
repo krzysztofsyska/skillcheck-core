@@ -106,6 +106,13 @@ test('contact and name detection', () => {
   // ...but a phone next to a period is still redacted.
   assert.doesNotMatch(suggestRedaction('600 700 800\t2019\u20132022', []), /600/);
   assert.match(suggestRedaction('600 700 800\t2019\u20132022', []), /2019\u20132022/);
+  // Wide spacing inside phones never splits them into short visible groups.
+  assert.doesNotMatch(suggestRedaction('tel. 500  123  456\t600  700  800', []), /500|600|123|700/);
+  assert.doesNotMatch(suggestRedaction('tel. 500  123  456', []), /500|123|456/);
+  // Crafted input cannot make the date check slow.
+  const started = Date.now();
+  suggestRedaction('2019' + ' '.repeat(99_000) + '12345', []);
+  assert.ok(Date.now() - started < 2000, 'linear time');
   // Dashes in ordinary text stay as written.
   assert.match(suggestRedaction('JavaScript 2018\u20132024', []), /2018\u20132024/);
   // If detection and redaction ever disagree, the file stops instead of reaching the AI provider.
