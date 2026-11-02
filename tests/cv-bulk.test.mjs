@@ -119,6 +119,9 @@ test('contact and name detection', () => {
   buildExtraction('Anna Nowak\n' + '1.'.repeat(47_500), 10, false, suggestRedaction);
   assert.ok(Date.now() - t0 < 2000, 'e-mail patterns stay linear');
   assert.equal(detectEmail('kontakt: anna.nowak+cv@poczta.example.pl'), 'anna.nowak+cv@poczta.example.pl');
+  // Over-long (invalid) local parts are still redacted in full.
+  assert.doesNotMatch(suggestRedaction('a'.repeat(65) + '@x.pl', []), /aaaa/);
+  assert.doesNotMatch(suggestRedaction('a.'.repeat(40) + 'b@x.pl', []), /a\.a/);
   // Dashes in ordinary text stay as written.
   assert.match(suggestRedaction('JavaScript 2018\u20132024', []), /2018\u20132024/);
   // If detection and redaction ever disagree, the file stops instead of reaching the AI provider.

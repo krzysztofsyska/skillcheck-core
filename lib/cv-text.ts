@@ -213,7 +213,7 @@ export function suggestRedaction(text: string, names: string[]) {
   // would not match and would stay unredacted.
   // Normalise first, then validate: compatibility forms can make the text longer than the limit.
   let output = validateCvText(normalizeForRedaction(text));
-  output = output.replace(/\b[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}\b/gi, "[E-MAIL]");
+  output = output.replace(/(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,256}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}\b/gi, "[E-MAIL]");
   output = output.replace(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi, "[LINK]");
   output = output.replace(/(?<!\d)\+?\d[\d \t().\-\u2010-\u2015\u2212]{7,}\d(?!\d)/g, redactNumberRun);
   // Names are normalised the same way as the text, or "Anna\u00A0Maria" from the record would not match.

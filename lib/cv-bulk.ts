@@ -96,8 +96,8 @@ export class BulkIntakeError extends Error {
   }
 }
 
-// Bounded parts (RFC limits) keep the match linear on crafted input.
-const EMAIL = /\b[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}\b/i;
+// A match starts only at the beginning of a run (lookbehind) and parts are bounded: linear on crafted input.
+const EMAIL = /(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,256}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}\b/i;
 const INTL_PHONE = /(?<![\d+])(?:\+|00)(?!48)[1-9]\d{0,3}(?:[ \t.\-\u2010-\u2015\u2212]?\(?\d{1,4}\)?){2,6}(?!\d)/g;
 // Separators are spaces, tabs, dots or (Unicode) hyphens on the same line: a number never takes digits
 // from the next line. S is the separator class.
