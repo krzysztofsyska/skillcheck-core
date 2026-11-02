@@ -337,6 +337,9 @@ test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
   // A few characters read with low confidence are an unreadable page, not a blank one.
   const shortPoor = async () => ({ text: 'SQL', confidence: 5 });
   await assert.rejects(extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', shortPoor), reason('unreadable_scan'));
+  // Scanner noise on a blank page (no word-like run) is still blank, even with low confidence.
+  const noise = async () => ({ text: '| \u2014 ~ .', confidence: 20 });
+  assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', noise)).text, /Katarzyna Wisniewska/);
   // A confident short read (page number, footer) is still skipped.
   const footer = async () => ({ text: '2', confidence: 95 });
   assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer)).text, /Katarzyna Wisniewska/);

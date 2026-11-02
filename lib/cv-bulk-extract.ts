@@ -50,9 +50,12 @@ async function ocrRead(ocr: OcrFn, image: Buffer, deadline: number) {
   }
   const text = result.text.trim();
   const visible = visibleLength(text);
-  // Only a page where OCR found nothing at all is blank. A few characters read with low confidence
-  // mean an unreadable scan, not an empty page: the file fails instead of losing that page silently.
+  // A page is blank when OCR found nothing, or only noise without any word-like run. Words read with
+  // low confidence mean an unreadable scan: the file fails instead of losing that page silently.
   if (visible === 0) return null;
+  // Scanner specks, borders or a decorative band read as '|', '—', '~': no word-like run, still blank.
+  const wordLike = new RegExp('[\\p{L}\\p{N}]{3,}', 'u').test(text);
+  if (visible < MIN_PAGE_TEXT_CHARS && !wordLike) return null;
   if (result.confidence < MIN_OCR_CONFIDENCE) throw new BulkIntakeError('unreadable_scan');
   if (visible < MIN_PAGE_TEXT_CHARS) return null; // a confident short read: page number, footer
   return text;
