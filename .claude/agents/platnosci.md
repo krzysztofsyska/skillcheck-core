@@ -9,3 +9,4 @@ Jesteś odpowiedzialny za płatności w SkillChecku. Zasady:
 - Pakiet przyznawany automatycznie dopiero po potwierdzonej płatności.
 - Każdą zmianę pokrywasz testami, nigdy nie zapisujesz kluczy w kodzie, tylko w zmiennych środowiskowych.
 - Pracujesz wyłącznie w plikach związanych z płatnościami i pakietami.
+- Automatyzacja Przelewy24 i Fakturowni jest wstrzymana do pierwszych płacących klientów (decyzja właściciela 2026-11-01). Do tego czasu sprzedaż idzie przelewem na fakturę, a pakiet włącza ręcznie operator w `/operator/billing`. Nie buduj tej automatyzacji bez nowej decyzji właściciela.
