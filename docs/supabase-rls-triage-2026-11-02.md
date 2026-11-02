@@ -1,0 +1,290 @@
+# Triage RLS — `skillcheck-preview`, 2026-11-02
+
+**Projekt:** `skillcheck-preview` (`orbyscrupgnupifzlqxp`), Postgres 17.11
+**Zakres:** schematy `public`, `private`, `checkout`
+**Tryb:** wyłącznie odczyt. Nie uruchomiono żadnej migracji ani `DDL`; nie zmieniono niczego w bazie.
+**Metoda:** zapytania do katalogu systemowego (`pg_class`, `pg_policy`, `pg_proc`,
+`information_schema.role_table_grants`) plus odczyt definicji funkcji przez `pg_get_functiondef`.
+Wynik porównany z Supabase Security Advisor — liczby się zgadzają (46 tabel, 10 funkcji
+`SECURITY DEFINER` dostępnych dla `anon`, 75 dla `authenticated`).
+
+---
+
+## Wniosek na jedno zdanie
+
+**Nie znalazłem tabeli z danymi kandydatów, do której klient z rolą `authenticated` miałby dostęp
+mimo braku polityki RLS.** Wszystkie 46 tabel bez polityk nie ma też **żadnego uprawnienia** dla
+ról `anon` i `authenticated`, więc brak polityki oznacza tam „odmawiaj zawsze", a nie „wpuszczaj
+każdego". Dostęp idzie wyłącznie przez funkcje `SECURITY DEFINER`, a każda z tych, które dotykają
+danych osobowych, ma działającą kontrolę uprawnień. Poniżej dowody i trzy rzeczy, które mimo to
+warto domknąć.
+
+---
+
+## 1. Dlaczego 46 tabel bez polityk nie jest tu dziurą
+
+Supabase Advisor zgłasza `rls_enabled_no_policy` jako INFO dla 46 tabel. Sam w sobie ten sygnał
+nic nie mówi o ryzyku — rozstrzyga dopiero to, kto ma `GRANT` na tabelę.
+
+Sprawdziłem komplet uprawnień tabelowych dla ról `anon`, `authenticated` i `PUBLIC`
+w trzech schematach. **Żadna z 46 tabel bez polityk nie występuje w wyniku.** Wszystkie mają ACL
+`postgres=arwdDxtm/postgres` (albo `null`, czyli uprawnienia domyślne właściciela).
+
+Uprawnienia dla `authenticated` ma 30 tabel i widoków w `public` — i **każda z nich ma polityki
+RLS**: `candidates`, `candidate_documents`, `applications`, `screening_*`, `recruitment_*`,
+`behavior_*`, `exercise_*`, `companies`, `company_members`, `positions`, `recruitments`.
+To są te, w których faktycznie leżą CV i dane kandydatów, i tam RLS działa.
+
+**Konsekwencja:** dla tabel z tej listy dopisanie polityki niczego nie zmieni dopóki nie ma
+`GRANT`-u — polityka bez uprawnienia jest martwa. Właściwym zabezpieczeniem jest utrzymanie braku
+`GRANT`-u, a nie dopisywanie polityk. Rekomendacje w sekcji 3 idą w tę stronę.
+
+---
+
+## 2. Tabele bez polityk, które zawierają dane osobowe
+
+Z 46 tabel dane osobowe trzyma 10. Dzielę je na te, które dotyczą **kandydatów**, i te, które
+dotyczą **klientów i leadów** — zadanie pytało o kandydatów, ale reszta też jest danymi osobowymi
+i nie ma sensu jej pomijać.
+
+### 2a. Dane kandydatów
+
+| Tabela | Co trzyma | Funkcje SD dla `authenticated` | Osiągalna dla `anon`? |
+|---|---|---|---|
+| `private.cv_bulk_items` | `file_name` (zwykle nazwisko kandydata w nazwie pliku), `candidate_id`, `application_id`, `name_detected` | 7 | nie |
+| `private.application_preselection_groups` | `application_id`, `company_id`, `recruitment_id`, `raw_score`, `coverage` | 3 | nie |
+| `private.application_preselection_group_events` | `application_id`, `actor_id`, `note` (tekst rekrutera o kandydacie) | 2 | nie |
+| `private.retired_candidate_ids` | `candidate_id` — identyfikatory po usunięciu | 1 | nie |
+| `private.candidate_retention_policies` | `rules` (polityka retencji danych kandydatów), `approved_by` | 5 | nie |
+| `private.cv_bulk_batches` | powiązania partii z firmą i rekrutacją, bez PII wprost | 7 | **tak** (`cv_bulk_finish_notification`) |
+
+**Czego tam nie ma:** zredagowana treść CV leży w `public.candidate_documents`, a wyniki analizy
+w `public.screening_*`. Obie grupy mają polityki RLS i to one są właściwą granicą dla treści CV.
+
+### 2b. Dane klientów i leadów
+
+| Tabela | Co trzyma | Funkcje SD dla `authenticated` | Osiągalna dla `anon`? |
+|---|---|---|---|
+| `public.sales_leads` | `first_name`, `company_name`, `email`, `phone`, `needs` | 7 | **tak** (`submit_sales_lead`, `claim_sales_mail`) |
+| `checkout.orders` | `customer_name`, `customer_email`, `customer_phone`, `nip` | 4 | **tak** (4 funkcje `checkout_*`) |
+| `private.sales_pipeline`, `private.sales_pipeline_events` | `note`, `next_contact_on` — notatki handlowe o leadzie | 2 | nie |
+| `private.sales_mail_outbox` | kolejka maili do leadów | 2 | **tak** (`claim_sales_mail`, `finish_sales_mail`) |
+| `private.sc19_trial_nips`, `private.sc19_trial_approvals` | `nip` (dla jednoosobowej działalności to dana osobowa) | 2–3 | nie |
+
+---
+
+## 3. Propozycje polityk
+
+Dla każdej tabeli z sekcji 2 podaję propozycję. **Żadnej nie zastosowałem** — to materiał
+do decyzji i do osobnego zadania L3 (RLS/grants to automatyczna eskalacja do L3 wg `AGENTS.md`).
+
+### Wariant domyślny dla wszystkich tabel w `private` i `checkout`
+
+Te schematy z założenia nie są wystawiane przez PostgREST. Zamiast polityk proponuję **utrwalić
+to, co już faktycznie obowiązuje**, żeby przyszła migracja nie otworzyła ich przypadkiem:
+
+```sql
+-- PROPOZYCJA, nie zastosowana.
+alter table private.cv_bulk_items force row level security;
+revoke all on all tables in schema private from anon, authenticated;
+alter default privileges in schema private revoke all on tables from anon, authenticated;
+-- to samo dla schematu checkout
+```
+
+`force row level security` ma tu konkretny sens: właściciel tabeli (`postgres`) domyślnie omija
+RLS, a wszystkie funkcje `SECURITY DEFINER` działają właśnie jako `postgres`. Dziś to jedyny
+powód, dla którego te funkcje w ogóle czytają te tabele — więc **`force` trzeba wprowadzać razem
+z politykami, nie przed nimi**, inaczej zablokuje działającą aplikację. Dlatego poniżej przy
+każdej tabeli podaję politykę, która musi istnieć **przed** włączeniem `force`.
+
+### `private.cv_bulk_items`, `private.cv_bulk_batches`
+
+Dostęp ma mieć tylko członek firmy będącej właścicielem partii. Helper `private.has_company_access`
+już istnieje i jest używany przez `private.cv_bulk_item_for_write`.
+
+```sql
+-- PROPOZYCJA, nie zastosowana.
+create policy cv_bulk_items_company_read on private.cv_bulk_items
+  for select to authenticated
+  using (private.has_company_access(company_id));
+
+create policy cv_bulk_items_company_write on private.cv_bulk_items
+  for all to authenticated
+  using (private.has_company_access(company_id, true))
+  with check (private.has_company_access(company_id, true));
+```
+
+Analogicznie dla `cv_bulk_batches` po `company_id`.
+
+### `private.application_preselection_groups`, `private.application_preselection_group_events`
+
+Obie mają `company_id`, więc ten sam wzorzec:
+
+```sql
+-- PROPOZYCJA, nie zastosowana.
+create policy preselection_groups_company on private.application_preselection_groups
+  for select to authenticated
+  using (private.has_company_access(company_id));
+```
+
+Dla tabeli zdarzeń **tylko `select`** — wpisy powstają wyłącznie przez
+`public.move_preselection_group` i mają zostać append-only.
+
+### `private.candidate_retention_policies`
+
+Dziś gate to `private.erasure_owner(tenant)`, czyli **wyłącznie właściciel firmy**, nie każdy
+członek. Polityka musi odwzorować dokładnie to, inaczej poszerzy dostęp:
+
+```sql
+-- PROPOZYCJA, nie zastosowana.
+create policy retention_policies_owner on private.candidate_retention_policies
+  for select to authenticated
+  using (exists (select 1 from public.companies c
+                 where c.id = company_id and c.owner_id = (select auth.uid())));
+```
+
+### `private.retired_candidate_ids`
+
+Brak kolumny `company_id` — to globalny rejestr identyfikatorów po usunięciu, czytany przez
+`private.erasure_normal_row_guard`. Polityki dla `authenticated` **nie proponuję**: nie ma po czym
+dzielić po firmach, a tabela celowo nie ma być czytana przez klienta. Rekomendacja: zostawić bez
+polityki i bez `GRANT`, a ochronę opisać w komentarzu do tabeli, żeby kolejny audyt nie czytał
+tego jako luki.
+
+### `public.sales_leads`
+
+To jedyna tabela z sekcji 2 leżąca w `public`, czyli w schemacie wystawianym przez PostgREST.
+Dziś nie ma `GRANT`-u i to ją chroni, ale margines jest najcieńszy — jeden `grant select` w
+przyszłej migracji wystawia bazę leadów z mailami i telefonami.
+
+```sql
+-- PROPOZYCJA, nie zastosowana.
+create policy sales_leads_operator_only on public.sales_leads
+  for select to authenticated
+  using (private.is_platform_operator((select auth.uid())));
+```
+
+Odpowiada to gate'owi, który mają już `list_sales_leads`, `list_sales_leads_inbox`,
+`list_sales_pipeline`, `save_sales_pipeline`, `close_sales_lead` i `sales_pipeline_history`.
+Wstawianie zostaje wyłącznie przez `submit_sales_lead` (podpis HMAC) — **bez** polityki `insert`.
+
+### `private.sales_pipeline`, `private.sales_pipeline_events`, `private.sales_mail_outbox`
+
+Ten sam gate operatora co wyżej, `select` dla operatora, zapis tylko przez istniejące funkcje.
+
+### `checkout.orders`
+
+Dostęp wyłącznie przez cztery funkcje `checkout_*`, każda weryfikuje `request_signature` i nie
+używa `auth.uid()` — to ścieżka maszynowa (webhook Przelewy24), nie użytkownik. Polityki dla
+`authenticated` **nie proponuję**; proponuję natomiast jawny `revoke` jak w wariancie domyślnym,
+bo tabela zawiera komplet danych kontaktowych i NIP kupującego.
+
+### `private.sc19_trial_nips`, `private.sc19_trial_approvals`
+
+Gate operatora (`private.sc19_require_operator`). Polityka `select` dla operatora, analogicznie do
+`sales_leads`.
+
+---
+
+## 4. Funkcje `SECURITY DEFINER` dostępne dla `authenticated`, które dotykają tych tabel
+
+45 funkcji. Każdą sprawdziłem pod kątem faktycznej kontroli uprawnień — nie po nazwie, tylko
+czytając ciało funkcji i ciała helperów, które wołają.
+
+### Gate operatora (`private.sc19_require_operator` / `private.is_platform_operator`)
+
+`cv_ai_usage_stats`, `sc19_operator_companies`, `sc19_operator_approve_trial`,
+`sc19_operator_package_policy`, `sc19_operator_set_package_policy`, `list_sales_leads`,
+`list_sales_leads_inbox`, `list_sales_pipeline`, `save_sales_pipeline`, `close_sales_lead`,
+`sales_pipeline_history`.
+
+`private.sc19_require_operator()` sprawdza `auth.uid()` i członkostwo w `platform_operators`,
+rzucając `42501`. Bez zastrzeżeń.
+
+### Gate firmy (`private.has_company_access`)
+
+`cv_bulk_create_batch`, `cv_bulk_batch_status`, `cv_bulk_recruitment_batches`,
+`cv_bulk_close_upload`, `cv_bulk_pump`, `cv_bulk_register_item`, `cv_bulk_fail_item`,
+`get_preselection_groups`, `get_preselection_group_history`, `move_preselection_group`,
+`sc19_claim_trial`, `sc19_get_balance`, `add_recruitment_shortlist_entry`,
+`approve_candidate_communication`.
+
+Warto odnotować dwie, które przy pobieżnym czytaniu wyglądają na niezabezpieczone:
+
+- **`cv_bulk_fail_item`** — w swoim ciele nie ma żadnego sprawdzenia. Gate jest w
+  `private.cv_bulk_item_for_write(target_item)`, które wymaga `auth.uid()` i
+  `private.has_company_access(company, true)`, i rzuca `PT404` dla cudzej partii. Zabezpieczona.
+- **`approve_candidate_communication`** — gate w `private.contact_lock_candidate`, które sprawdza
+  `has_company_access` dwukrotnie (odczyt i zapis) plus rolę `recruiter` albo własność firmy.
+  Zabezpieczona, i to mocniej niż pozostałe.
+
+### Gate właściciela firmy (`private.erasure_owner`)
+
+`configure_candidate_retention_policy`, `get_candidate_retention_policy`, `get_retention_schedule`,
+`configure_retention_schedule`, `revoke_retention_schedule`, `preview_candidate_erasure`.
+
+`private.erasure_owner(tenant)` wymaga `auth.uid()` i `companies.owner_id = auth.uid()` — węższe
+niż członkostwo w firmie. Dodatkowo blokuje się, gdy trwa izolacja odtworzeniowa (`PT409`).
+
+### Gate podpisu HMAC (ścieżki maszynowe)
+
+`checkout_create_order`, `checkout_read_order`, `checkout_update_order`, `checkout_pending_orders`,
+`claim_sales_mail`, `finish_sales_mail`, `cv_bulk_finish_notification`, `cv_bulk_worker_pump`,
+`submit_sales_lead`.
+
+Nie używają `auth.uid()` — autoryzacja opiera się na `request_signature` i `issued_at`. To
+świadomy wzorzec dla workerów i webhooków, ale oznacza, że **bezpieczeństwo tych dziewięciu
+funkcji sprowadza się do tajności sekretu HMAC i do poprawnej walidacji okna czasowego**. Nie
+audytowałem tu siły samej weryfikacji — to osobne zadanie, patrz sekcja 5.
+
+### Uprawnienia administracyjne
+
+`grant_platform_operator`, `revoke_platform_operator` — wymagają, żeby wołający sam był aktywnym
+operatorem (`for update` na własnym wierszu). `revoke` dodatkowo nie pozwala usunąć ostatniego
+operatora. Eskalacja uprawnień przez te funkcje nie jest możliwa dla zwykłego użytkownika.
+
+### Jedna bez żadnego gate'u — i tak ma być
+
+`public.sc19_package_sizes()` — zwraca wyłącznie `plan` i `credits` z `private.sc19_package_policy`
+(czyli „FREE = 5, PRESELEKCJA = 60"). Dostępna dla `anon`, bo publiczna strona z niej czyta.
+Brak danych osobowych, brak parametrów. Bez zastrzeżeń.
+
+---
+
+## 5. Trzy rzeczy do domknięcia (propozycje, nie zmiany)
+
+1. **`public.sales_leads` to najcieńszy margines.** Leży w schemacie wystawianym przez PostgREST,
+   trzyma maile i telefony, a chroni ją wyłącznie brak `GRANT`-u. Proponuję politykę operatora
+   z sekcji 3 **plus** test w CI, który sprawdza, że `anon` i `authenticated` nie mają uprawnień
+   do żadnej tabeli w `public` bez polityk. Repo ma już wzorzec: `tests/data-api-grants.test.mjs`.
+
+2. **13 tabel bez polityk nie jest osiągalnych przez żadną funkcję `SECURITY DEFINER`** dostępną
+   dla `authenticated`: `checkout.settings`, `private.cv_bulk_worker_nonces`,
+   `private.erasure_inventory_baseline` i wersje `_r2`–`_r9`, `private.erasure_restore_checkpoint`,
+   `private.erasure_verified_ledger_events`, `private.retention_authorizations`,
+   `private.sales_mail_settings`, `private.sc19_analysis_spend`, `private.sc19_payment_grants`,
+   `private.sc19_payment_offers`, `private.sc19_payment_orders`, `private.sc19_payment_requests`.
+   To dobra wiadomość z punktu widzenia bezpieczeństwa, ale `erasure_inventory_baseline_r2`–`_r9`
+   wyglądają na pozostałości po kolejnych rewizjach inwentarza usuwania (używana jest `_r10`).
+   Proponuję osobne zadanie porządkowe: potwierdzić, które rewizje są martwe, i usunąć je migracją.
+   **Nie usuwałem niczego.**
+
+3. **Dziewięć funkcji opiera autoryzację wyłącznie na HMAC.** Dotykają `checkout.orders`
+   (dane kontaktowe kupującego) i `public.sales_leads`. Proponuję osobny audyt L3 tej ścieżki:
+   skąd pochodzi sekret, czy okno `issued_at` jest wąskie, czy podpis obejmuje wszystkie
+   parametry i czy porównanie jest odporne na timing. To wykracza poza pytanie o RLS, ale jest
+   dziś realną granicą bezpieczeństwa dla tych dwóch tabel.
+
+---
+
+## Czego ten triage nie obejmuje
+
+- Nie sprawdzałem produkcji (`wsvjawuikxfzjyivxgsu`). Zgodnie z `AGENTS.md` produkcja jest
+  dostępna dla sesji agentowych tylko w trybie `read_only`; ten dokument dotyczy wyłącznie Preview.
+  **Schematy mogą się różnić** — wnioski nie przenoszą się automatycznie.
+- Nie oceniałem polityk na 30 tabelach, które je mają. Pytanie dotyczyło tabel bez polityk;
+  jakość istniejących polityk to osobne zadanie.
+- Nie oceniałem siły weryfikacji HMAC (punkt 3 wyżej).
+- `auth_leaked_password_protection` (WARN z Advisora) to ustawienie projektu Supabase, nie RLS —
+  odnotowuję, bo wyszło przy okazji; włączenie jest decyzją właściciela, bo dotyczy konfiguracji
+  projektu.
