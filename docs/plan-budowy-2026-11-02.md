@@ -528,7 +528,7 @@ kandydata; CSV odporny na wstrzyknięcie formuły (pola zaczynające się od `=`
 
 # MODUŁ D — Kalkulator wyceny i spięcie z cennikiem na stronie
 
-**ID:** SC-PRICING (kontynuacja) · **Łącznie: 4–7 dni**
+**ID:** SC-PRICING (kontynuacja) · **Łącznie: 6–9 dni** (W1 1 + W2 2–3 + W2b 1–2 + W3 1–2 + W4 1)
 **Decyzja właściciela 2026-11-02:** prace nad kalkulatorem mają ruszyć.
 Zastępuje wcześniejsze „na razie zostaw, nie spinaj, dopóki nie powiem”.
 

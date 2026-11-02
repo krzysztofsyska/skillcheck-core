@@ -74,6 +74,25 @@ test('komponent porównania pakietów nie rozjeżdża się z cennikiem', () => {
   assert.doesNotMatch(comparison, /1 799|1799/);
 });
 
+test('dopłata za CV ponad pulę bazową jest ustawiona tam, gdzie pula skaluje się co 5', () => {
+  // 0,1652 zł netto × 1,23 VAT ≈ 20 groszy brutto — ta sama stawka co w demie i w §2 cennika.
+  assert.match(internal, /WERYFIKACJA: \{ grossMinor: 61_500, cvIncluded: 60, cvOptions: \[[^\]]*\], overageGrossPerCvMinor: 20 \}/);
+  assert.match(internal, /ASSESSMENT_CENTER: \{ grossMinor: 149_900, cvIncluded: 50, cvOptions: \[[^\]]*\], overageGrossPerCvMinor: 20 \}/);
+  assert.match(demo, /const VOLUME_DELTA_NET_PER_CV=0\.1652/);
+  assert.equal(Math.round(0.1652 * 1.23 * 100), 20, 'stawka w kalkulatorze odpowiada stawce z demo');
+});
+
+test('rozmowy z botem są wszędzie oznaczone jako niedostępne', () => {
+  // Cena jest zatwierdzona, rozmowy nie działają — demo nie może obiecywać ich jako gotowych.
+  // Nie chodzi o każde użycie słowa „rozmowa" — tylko o miejsca, które deklarują rozmowy jako
+  // zakres pakietu. Tam klient czyta obietnicę i tam musi stać zastrzeżenie.
+  assert.match(demo, /do 10 rozmów \(w przygotowaniu\)/);           // podpis karty PRESELEKCJI
+  assert.match(demo, /do '\+calls\+' rozmów AI — w przygotowaniu/);  // chip wybranego zakresu
+  assert.match(demo, /Rozmowy voicebota \(w przygotowaniu/);         // podsumowanie zapytania
+  assert.match(demo, /Rozmowy z botem są w przygotowaniu i nie działają jeszcze w żadnym pakiecie/);
+  assert.match(comparison, /Rozmowy z botem — w przygotowaniu/);
+});
+
 test('domyślna konfiguracja kalkulatora wewnętrznego zgadza się z cennikiem', () => {
   assert.match(internal, /WERYFIKACJA: \{ grossMinor: 61_500, cvIncluded: 60/);
   assert.match(internal, /ASSESSMENT_CENTER: \{ grossMinor: 149_900, cvIncluded: 50/);

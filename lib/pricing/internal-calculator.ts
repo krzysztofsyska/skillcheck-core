@@ -70,6 +70,15 @@ const addon = (code: string, name: string, unit: string, included: Partial<Recor
 /** Structure from the owner's private price sheet (SkillCheck_prywatny_cennik). The three paid
  * package prices are owner-approved (2026-11-02) and must match `docs/cennik-2026-11-02.md`:
  * PRESELEKCJA 300 zł / 60 CV, WERYFIKACJA 615 zł / 60 CV, ASSESSMENT CENTER 1 499 zł / 50 CV.
+ *
+ * `overageGrossPerCvMinor` is the per-CV charge above the package's base pool: 0.1652 zł net
+ * × 1.23 VAT ≈ 20 grosze gross, the rate in §2 of the pricing doc and the one the public demo
+ * applies. It is set for WERYFIKACJA and ASSESSMENT CENTER, whose pools scale by 5 CV.
+ * PRESELEKCJA keeps 0 on purpose: it is not sold with an overage but in whole 60 CV packages
+ * (60 CV = 300 zł, 120 CV = 600 zł), which this config cannot express — so a scenario above
+ * 60 CV on PRESELEKCJA underprices here and must be read as whole packages until the catalog
+ * lands in SC-PRICING-W2.
+ *
  * Add-on amounts still start at 0 — none of them has an approved rate yet. */
 export function defaultConfig(): InternalConfig {
   return {
@@ -77,8 +86,8 @@ export function defaultConfig(): InternalConfig {
     packages: {
       FREE: { grossMinor: 0, cvIncluded: 5, cvOptions: [1, 2, 3, 4, 5], overageGrossPerCvMinor: 0 },
       PRESELEKCJA: { grossMinor: 30_000, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
-      WERYFIKACJA: { grossMinor: 61_500, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
-      ASSESSMENT_CENTER: { grossMinor: 149_900, cvIncluded: 50, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
+      WERYFIKACJA: { grossMinor: 61_500, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 20 },
+      ASSESSMENT_CENTER: { grossMinor: 149_900, cvIncluded: 50, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 20 },
     },
     addons: [
       addon('interview', 'Rozmowa AI', 'rozmowa', { WERYFIKACJA: 20, ASSESSMENT_CENTER: 20 }),

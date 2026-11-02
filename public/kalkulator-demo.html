@@ -267,7 +267,7 @@
     </div>
     <div class="packs" role="group" aria-label="Pakiet SkillCheck">
       <button type="button" class="pack" data-pack="free" aria-pressed="false"><span class="pack-name">✧ FREE</span><span class="pack-desc">Sprawdź na własnych CV, jak wygląda pierwsza analiza.</span><span class="pack-price" data-package-price="free">0 zł</span><span class="pack-sub">5 CV · 1 próbna rozmowa</span></button>
-      <button type="button" class="pack" data-pack="pre" aria-pressed="true"><span class="pack-name">≡ PRESELEKCJA</span><span class="pack-desc">Od dokumentów i rozmów AI do shortlisty.</span><span class="pack-price" data-package-price="pre">300 zł</span><span class="pack-sub" data-package-sub="pre">Brutto za 60 CV · cena bazowa · do 10 rozmów</span></button>
+      <button type="button" class="pack" data-pack="pre" aria-pressed="true"><span class="pack-name">≡ PRESELEKCJA</span><span class="pack-desc">Od dokumentów i rozmów AI do shortlisty.</span><span class="pack-price" data-package-price="pre">300 zł</span><span class="pack-sub" data-package-sub="pre">Brutto za 60 CV · cena bazowa · do 10 rozmów (w przygotowaniu)</span></button>
       <button type="button" class="pack" data-pack="verify" aria-pressed="false"><span class="pack-name">◇ WERYFIKACJA</span><span class="pack-desc">Sprawdź odpowiedzi i kompetencje, nie tylko deklaracje.</span><span class="pack-price" data-package-price="verify">615 zł</span><span class="pack-sub" data-package-sub="verify">Brutto za 60 CV · cena bazowa · testy i rozszerzony raport</span></button>
       <button type="button" class="pack" data-pack="ac" aria-pressed="false"><span class="pack-name">⊞ ASSESSMENT CENTER</span><span class="pack-desc">Zobacz podejście finalistów do zadań praktycznych.</span><span class="pack-price" data-package-price="ac">1499 zł</span><span class="pack-sub" data-package-sub="ac">Brutto za 50 CV · cena bazowa · proces dla 5–6 osób</span></button>
     </div>
@@ -276,7 +276,7 @@
       <h3 id="extraTitle">Chcesz dokupić coś do swojego pakietu?</h3>
       <p>Wybierz dodatki. W podglądzie nie mają zatwierdzonych cen — ich koszt ustalamy osobno, bez ukrytych dopłat.</p>
       <div class="extra-grid">
-        <label class="extra-item" for="extraCalls"><input id="extraCalls" type="checkbox" data-extra="calls"><span><strong>5 dodatkowych rozmów AI</strong><small id="extraCallsHint">Ponad 10 rozmów w pakiecie · cena do wyceny</small></span></label>
+        <label class="extra-item" for="extraCalls"><input id="extraCalls" type="checkbox" data-extra="calls"><span><strong>5 dodatkowych rozmów AI</strong><small id="extraCallsHint">Ponad 10 rozmów w pakiecie · rozmowy w przygotowaniu · cena do wyceny</small></span></label>
         <label class="extra-item" for="extraTests"><input id="extraTests" type="checkbox" data-extra="tests"><span><strong>Testy kompetencji</strong><small id="extraTestsHint">Dodatek do PRESELEKCJI · cena do wyceny</small></span></label>
         <label class="extra-item" for="extraCases"><input id="extraCases" type="checkbox" data-extra="cases"><span><strong>Zadanie / case study</strong><small id="extraCasesHint">Dla finalistów · cena do wyceny</small></span></label>
         <label class="extra-item" for="extraConsult"><input id="extraConsult" type="checkbox" data-extra="consult"><span><strong>Konsultacja eksperta</strong><small id="extraConsultHint">Dodatkowe wsparcie decyzji · cena do wyceny</small></span></label>
@@ -288,7 +288,7 @@
         <div class="eyebrow">Twój wybór</div>
         <h3 id="selectionTitle">PRESELEKCJA — od CV do shortlisty</h3>
         <p id="selectionDescription">Uporządkuj dokumenty, uzupełnij informacje w rozmowach i przygotuj shortlistę do dalszego etapu.</p>
-        <div class="checks" id="selectionChips"><span>60 CV</span><span>do 10 rozmów AI</span><span>raport i shortlista</span></div>
+        <div class="checks" id="selectionChips"><span>60 CV</span><span>do 10 rozmów AI — w przygotowaniu</span><span>raport i shortlista</span></div>
       </div>
       <div class="order-block">
         <div class="minilabel">Cena brutto / jeden proces</div><div id="selectedPrice" class="total" aria-live="polite">300,00 zł</div>
@@ -348,7 +348,7 @@
         <tr><th scope="row">Raport kandydata</th><td>Podstawowy</td><td>Podstawowy</td><td>Rozszerzony</td><td>Kompleksowy</td></tr>
       </tbody>
     </table></div>
-    <p class="fine-print">* Shortlista zależy od rzeczywistej puli i dostępnych informacji. Tabela porównuje pakiety bazowe: limit do 10 rozmów, bez dodatków. Opcjonalne 5 rozmów jest wyceniane oddzielnie. FREE obejmuje 5 CV niezależnie od suwaka.</p>
+    <p class="fine-print">* Shortlista zależy od rzeczywistej puli i dostępnych informacji. Tabela porównuje pakiety bazowe: limit do 10 rozmów, bez dodatków. Rozmowy z botem są w przygotowaniu i nie działają jeszcze w żadnym pakiecie. Opcjonalne 5 rozmów jest wyceniane oddzielnie. FREE obejmuje 5 CV niezależnie od suwaka.</p>
   </section>
 
   <section id="agencja" class="surface agency" aria-labelledby="agencyTitle">
@@ -430,7 +430,7 @@
   // Wolumen, przy którym obowiązuje cena bazowa danego pakietu.
   const BASE_CV={verify:60,ac:50};
   // Ogon podpisu na karcie pakietu; część z pulą CV i statusem ceny dokłada render().
-  const PACK_SUB_TAIL={pre:'do 10 rozmów',verify:'testy i rozszerzony raport',ac:'proces dla 5–6 osób'};
+  const PACK_SUB_TAIL={pre:'do 10 rozmów (w przygotowaniu)',verify:'testy i rozszerzony raport',ac:'proces dla 5–6 osób'};
   const PACK={
     free:{name:'FREE',title:'FREE — poznaj działanie',desc:'Wypróbuj analizę na maksymalnie 5 CV i jednej próbnej rozmowie. To pierwszy krok, nie kompletna rekrutacja.',chip:'5 CV · 1 próbna rozmowa',lead:'Przetestuj na 5 CV bez uruchamiania płatnego pakietu.'},
     pre:{name:'PRESELEKCJA',title:'PRESELEKCJA — od CV do shortlisty',desc:'Uporządkuj dokumenty, uzupełnij informacje w rozmowach i przygotuj shortlistę do dalszej oceny.',chip:'raport i shortlista',lead:'Wspólne kryteria, odpowiedzi z rozmów i lista osób do kolejnego etapu.'},
@@ -477,7 +477,7 @@
       'Proces: 1 stanowisko / 1 proces',
       'Wybrana pula CV: '+state.cv,
       'Analizy CV w wybranym wariancie: '+cv,
-      'Rozmowy voicebota: '+(state.pack==='free'?'1 próbna':'do '+voiceCount()+' na cały proces'),
+      'Rozmowy voicebota (w przygotowaniu, nie są jeszcze dostępne): '+(state.pack==='free'?'1 próbna':'do '+voiceCount()+' na cały proces'),
       'Cena symulowana brutto: '+formatMoney(price(state.pack,state.cv)),
       'Cena symulowana netto: '+formatMoney(netCents(state.pack,state.cv)/100),
       'Wybrane dodatki: '+(selectedExtras().length?selectedExtras().map(([key])=>EXTRA_NAMES[key]).join(', ')+' — każdy do indywidualnej wyceny':'Brak'),
@@ -572,7 +572,7 @@
     readable('selectionTitle',pk.title);
     readable('selectionDescription',pk.desc);
     $('selectionChips').replaceChildren();
-    const chips=[cv+' CV',state.pack==='free'?'1 próbna rozmowa AI':'do '+calls+' rozmów AI',pk.chip,...selectedExtras().filter(([key])=>key!=='calls').map(([key])=>EXTRA_NAMES[key]+' · do wyceny')];
+    const chips=[cv+' CV',state.pack==='free'?'1 próbna rozmowa AI — w przygotowaniu':'do '+calls+' rozmów AI — w przygotowaniu',pk.chip,...selectedExtras().filter(([key])=>key!=='calls').map(([key])=>EXTRA_NAMES[key]+' · do wyceny')];
     for(const chip of chips){const s=document.createElement('span');s.textContent=chip;$('selectionChips').append(s);}
     readable('selectedPrice',formatMoney(gross));
     readable('netPrice',formatMoney(net)+' netto · 23% VAT'+(state.pack==='free'?' — bezpłatna próba':''));
