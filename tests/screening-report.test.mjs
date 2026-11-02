@@ -215,7 +215,7 @@ test('automatic preselection groups appear in the report and CSV without per-row
   const data = fixture();
   data.get_preselection_groups = [
     { application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true, group_key: 'passed',
-      source: 'auto', raw_score: 87.5, coverage: 0.875, updated_at: timestamp, application_status: 'new' },
+      source: 'auto', raw_score: 87.5, coverage: 0.875, updated_at: timestamp, application_status: 'new', analysis_id: data.get_screening_ranking[0].analysis_id },
     // A row for an application outside this recruitment is never shown.
     { application_id: uuid(61), candidate_id: uuid(62), candidate_name: 'Obca Osoba', has_phone: false, group_key: 'rejected',
       source: 'auto', raw_score: 0, coverage: 1, updated_at: timestamp, application_status: 'new' },
@@ -245,6 +245,28 @@ test('a group whose analysis became stale is flagged, not shown as current', asy
   assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
 });
 
+test('a group computed from an older analysis is stale after a re-analysis outside the batch', async () => {
+  const data = fixture();
+  const row = { application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true,
+    group_key: 'passed', source: 'auto', raw_score: 90, coverage: 1, updated_at: timestamp, application_status: 'new' };
+  // Same analysis as the ranking: current.
+  data.get_preselection_groups = [{ ...row, analysis_id: data.get_screening_ranking[0].analysis_id }];
+  assert.equal((await load(data)).groups[0].stale, false);
+  // The ranking now uses a newer completed analysis: the saved score is historical.
+  data.get_preselection_groups = [{ ...row, analysis_id: uuid(99) }];
+  const report = await load(data);
+  assert.equal(report.groups[0].stale, true);
+  assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
+  // No link to an analysis (erased, or an older RPC without the field): never shown as current.
+  data.get_preselection_groups = [{ ...row, analysis_id: null }];
+  assert.equal((await load(data)).groups[0].stale, true);
+  data.get_preselection_groups = [row];
+  assert.equal((await load(data)).groups[0].stale, true);
+  // A malformed link fails closed.
+  data.get_preselection_groups = [{ ...row, analysis_id: 'x' }];
+  await assert.rejects(load(data));
+});
+
 test('a reviewed evidence-matrix candidate shows the group score, not "too few rated criteria / 0%"', async () => {
   const data = fixture();
   // v2 analysis after human review: neutral legacy rating, so SC-008 reports insufficient_evidence (Step 3 rule).
@@ -252,7 +274,8 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   Object.assign(data.get_screening_ranking[0], { rank: null, rankable: false, eligibility_reason: 'insufficient_evidence', raw_score: null,
     coverage: '0.000', known_criteria: 0, below_count: 0, meets_count: 0, above_count: 0, insufficient_data_count: 1, suggested_shortlist: false });
   data.get_preselection_groups = [{ application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true,
-    group_key: 'passed', source: 'auto', raw_score: 83.33, coverage: 1, updated_at: timestamp, application_status: 'new' }];
+    group_key: 'passed', source: 'auto', raw_score: 83.33, coverage: 1, updated_at: timestamp, application_status: 'new',
+    analysis_id: data.get_screening_ranking[0].analysis_id }];
   const report = await load(data);
   const { rankingStatusLabel } = await import('../lib/screening-report.ts');
   assert.equal(rankingStatusLabel(report.applications[0], true), 'Sprawdzone przez człowieka — wynik w tabeli grup');
