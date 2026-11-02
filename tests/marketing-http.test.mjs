@@ -45,15 +45,23 @@ test('public offer and demo pages respond without an account', async (t) => {
   const home = await homeResponse.text();
   assert.match(home, /Podobne CV\. Różni ludzie\. Zupełnie inne wyniki w pracy\./);
   assert.match(home, /Cztery poziomy\. Jedna platforma\./);
-  assert.match(home, /Cena robocza z wizualizacji/);
+  // Ceny WERYFIKACJI i AC są zatwierdzone (właściciel 2026-11-02), same pakiety jeszcze nie gotowe,
+  // więc karta mówi o zatwierdzonej cenie, a nie o roboczej wizualizacji.
+  assert.match(home, /Cena zatwierdzona · pakiet w przygotowaniu/);
+  assert.doesNotMatch(home, /Cena robocza z wizualizacji/);
   assert.match(home, /300 zł brutto/);
+  assert.match(home, /615 zł/);
+  assert.match(home, /1 499 zł/);
   assert.equal(home.includes('Po wycenie'), false);
   assert.equal(home.includes('To koncepcja oferty do oceny'), false);
   assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 2); // FREE and PRESELEKCJA are current (MVP 2026-11-01); WERYFIKACJA and AC planned
   assert.match(home, /Liczba analiz CV według zatwierdzonej polityki/);
   assert.equal(home.includes('5 analiz CV'), false);
   assert.ok(home.includes('60 analiz CV'), 'approved PRESELEKCJA scope (owner 2026-10-28)');
-  assert.equal(home.includes('5–6'), false);
+  // Rozmiar procesu AC (5–6 osób, maks. 10) jest częścią zatwierdzonej oferty 1 499 zł / 50 CV
+  // (właściciel 2026-11-02), więc ma być na stronie — wcześniej ta asercja zabraniała go pokazywać.
+  assert.match(home, /5–6 osób/);
+  assert.match(home, /maksymalnie 10/);
   assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
   for (const href of ['/demo', '/register', '/login', '/#jak-to-dziala', '/#mozliwosci', '/#pakiety', '/#faq']) {

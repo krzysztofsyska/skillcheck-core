@@ -168,6 +168,16 @@ postgresowego**, Redis dopiero przy realnym ruchu.
 2. Żądanie bez poprawnego Origin / CSRF / ciasteczka jest odrzucane z generycznym błędem.
 3. Przekroczenie limitu zwraca 429 bez ujawnienia tożsamości kandydata.
 4. W logach nie występuje token, treść odpowiedzi ani dane kandydata.
+### Required tests
+typecheck, build, test modułu brokera (`lib/competency-attempt-broker.ts`), test limitera
+(`lib/competency-broker-limiter.ts`) na współbieżnych żądaniach, test HTTP trasy
+`/api/competency/attempt` w wariantach: poprawny Origin, zły Origin, brak CSRF, przekroczony limit.
+
+### Security / privacy checks
+Weryfikacja Origin i CSRF po stronie serwera, nie w kliencie; limit liczony na serwerze i odporny
+na równoległe żądania; odpowiedź 429 identyczna dla kandydata istniejącego i nieistniejącego;
+token wyłącznie w ciasteczku `HttpOnly`, `Secure`, `SameSite`; żaden log nie zawiera tokenu,
+treści odpowiedzi ani identyfikatora kandydata; brak `service_role` na tej trasie.
 
 ---
 
@@ -198,6 +208,14 @@ próby, zrotować link i cofnąć dostęp.
 2. Rotacja unieważnia poprzedni link i wszystkie sesje z poprzedniej rewizji.
 3. Po wycofaniu zgody przyciski znikają, a odczyt odpowiedzi jest zablokowany.
 4. Sekret nie trafia do `revalidatePath`, logów ani historii przeglądarki po odświeżeniu.
+### Required tests
+typecheck, build, test akcji serwerowych wydania/rotacji/odwołania, test odmowy dla roli viewer,
+test unieważnienia poprzedniej rewizji po rotacji, test blokady odczytu po wycofaniu zgody.
+
+### Security / privacy checks
+Uprawnienia sprawdzane ponownie w akcji serwerowej, nie tylko w UI; sekret generowany na serwerze
+i nigdy nie zwracany ponownie po wydaniu; brak sekretu w `revalidatePath`, w URL, w logach i w
+odpowiedzi HTTP; rotacja i odwołanie zapisują zdarzenie audytowe; zapytania zawsze z `company_id`.
 
 ---
 
@@ -231,6 +249,15 @@ Kandydat otwiera link, widzi zadanie, pisze odpowiedź z autozapisem i przesyła
 3. Po deadline przesłanie jest odrzucone, a już przesłana odpowiedź nadal zwraca potwierdzenie.
 4. CSP, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` obecne na tej trasie.
 5. Test Chromium przechodzi pełną ścieżkę: otwarcie → start → autozapis → przesłanie → odświeżenie.
+### Required tests
+typecheck, build, test HTTP trasy kandydata, test autozapisu i odtworzenia draftu z ciasteczka,
+test odrzucenia po deadline, test nagłówków (CSP, `Referrer-Policy`, `Cache-Control`),
+test Chromium pełnej ścieżki wymieniony w kryterium 5.
+
+### Security / privacy checks
+Token wymieniany na sesję w ciasteczku `HttpOnly` i usuwany z URL przy pierwszym wejściu; brak PII
+w tytule strony, w URL i w logach błędów; `robots: noindex`; strona nie ładuje zasobów z obcych
+domen; treść odpowiedzi kandydata nie trafia do żadnego dostawcy AI na tym etapie.
 
 ---
 
@@ -259,6 +286,16 @@ i zapisany wersjonowanie.
 1. `reviewer_id`, `policy_version`, `coverage` i `score` pochodzą z bazy, nie z formularza.
 2. Historia ocen jest append-only; poprzednie wersje pozostają widoczne.
 3. Po wycofaniu zgody ocena nie jest dostępna do odczytu ani eksportu.
+### Required tests
+typecheck, build, test zapisu oceny na danych syntetycznych, test append-only (próba nadpisania
+poprzedniej wersji kończy się nową wersją, nie modyfikacją), test izolacji tenantów, test odmowy
+odczytu i eksportu po wycofaniu zgody.
+
+### Security / privacy checks
+`reviewer_id` brany z sesji serwerowej, nigdy z formularza; `policy_version`, `coverage` i `score`
+wyliczane lub czytane z bazy; brak zapytań bez `company_id`; komunikat błędu nie ujawnia istnienia
+rekordu innej firmy; zgodność z guardrailem „brak automatycznej decyzji hire/reject" — ocena
+człowieka jest wymagana, nie sugerowana.
 
 ---
 
@@ -497,7 +534,10 @@ Zastępuje wcześniejsze „na razie zostaw, nie spinaj, dopóki nie powiem”.
 
 **Decyzja cenowa właściciela 2026-11-02:** WERYFIKACJA = **615 zł brutto za 60 CV**
 (wcześniej strona podawała 899 zł, a demo kalkulatora 615 zł przy 50 CV — rozbieżność usunięta).
-Cena ASSESSMENT CENTER pozostaje niepotwierdzona: strona podaje 1 799 zł, demo 1 845 zł przy 50 CV.
+ASSESSMENT CENTER = **1 499 zł brutto za 50 CV**, proces dla 5–6 osób, maksymalnie 10 (zastępuje
+ilustracyjne 1 799 zł ze strony i 1 845 zł z demo). Wyprowadzenie wszystkich czterech cen:
+[docs/cennik-2026-11-02.md](cennik-2026-11-02.md) — jedyne źródło prawdy do czasu wdrożenia
+katalogu w SC-PRICING-W2.
 
 **Stan wejściowy:** kalkulator istnieje i działa — `app/operator/pricing/`,
 `lib/pricing/internal-calculator.ts`, `lib/pricing/quote-engine.ts`. Zna wszystkie cztery kody
@@ -561,6 +601,17 @@ Przenosimy ten wzorzec do właściwej strony oferty, zamiast wymyślać nowy.
 2. Wpisanie liczby spoza zakresu, tekstu albo pustego pola nie wywraca ceny ani nie pokazuje `NaN`.
 3. Suwak i pole ręczne zawsze pokazują tę samą wartość.
 4. Obsługa z klawiatury i czytnika ekranu działa (strzałki zmieniają o 5).
+### Required tests
+typecheck, build, test jednostkowy walidacji puli CV dla **wszystkich trzech pakietów płatnych**
+(PRESELEKCJA, WERYFIKACJA, ASSESSMENT CENTER): wielokrotność 5 w zakresie katalogu przyjęta,
+wartość spoza kroku skorygowana, wartość spoza zakresu, tekst i puste pole odrzucone bez `NaN`;
+test zgodności suwaka i pola ręcznego; test odczytu granic z katalogu, nie ze stałych w kodzie.
+Punkt wyjścia: `tests/pricing-cv-pool.test.mjs`, który pokrywa już ten kontrakt w demie.
+
+### Security / privacy checks
+Cena nigdy nie pochodzi z pola formularza ani z parametru URL — zawsze z przeliczenia na podstawie
+katalogu; walidacja puli CV powtórzona po stronie serwera przy składaniu zapytania ofertowego;
+wartość spoza zakresu nie powoduje zapytania do bazy o nieistniejący wariant cennika.
 
 ---
 
@@ -635,26 +686,24 @@ a przejście na Redis później to jedna wymiana adaptera, bo interfejs `SharedR
 
 **TAK = Postgres (rekomendowane) / NIE = Redis Upstash**
 
-## D2 — Jak nazwać i wycenić produkt, który z tego powstanie?
+## D2 — Jak nazwać i wycenić produkt, który z tego powstanie? — **ROZSTRZYGNIĘTE 2026-11-02**
 
-Po zbudowaniu A + C powstanie pakiet: preselekcja CV + test kompetencji + rozszerzony raport.
-To **nie jest** reklamowana WERYFIKACJA, bo nie ma rozmów z botem. Sprzedawanie tego jako
-WERYFIKACJA za 899 zł byłoby obietnicą bez pokrycia.
+**Decyzja właściciela (rozmowa głosowa, 2026-11-02): przedefiniowanie WERYFIKACJI.**
+Pakiet powstały z A + C (preselekcja CV + test kompetencji + rozszerzony raport) sprzedajemy jako
+**WERYFIKACJA za 615 zł brutto za 60 CV, bez rozmów z botem**. Rozmowy zostają na stronie oznaczone
+jako „w przygotowaniu” do czasu, aż zaczną działać, i są dopisywane później jako rozszerzenie
+pakietu, bez zmiany ceny. Nowy pakiet pośredni nie powstaje.
 
-Dwa warianty:
-- **Nowy pakiet pośredni** między PRESELEKCJĄ a WERYFIKACJĄ, np. „PRESELEKCJA+” albo „TEST”,
-  wyceniony między 300 a 899 zł. WERYFIKACJA zostaje na stronie jako planowana.
-- **Przedefiniowanie WERYFIKACJI**: usunięcie rozmów z jej opisu, obniżenie ceny, dopisanie
-  rozmów jako późniejszego rozszerzenia.
+Pytanie było postawione przy cenie 899 zł i przy założeniu, że WERYFIKACJA obowiązkowo zawiera
+rozmowy. Oba założenia są nieaktualne: cena to 615 zł (sekcja „Decyzja cenowa” w MODULE D powyżej),
+a właściciel zdecydował, że pakiety ruszają bez rozmów. Przy 615 zł za 60 CV zakres bez rozmów ma
+pokrycie w cenie — wyprowadzenie w [docs/cennik-2026-11-02.md](cennik-2026-11-02.md).
 
-**Rekomendacja: nowy pakiet pośredni.** Uzasadnienie: zostawia nazwę WERYFIKACJA dla produktu
-z rozmowami, który docelowo ma powstać, i nie wymaga tłumaczenia klientom, dlaczego pakiet
-„stracił” funkcje.
+**Ta decyzja nie jest już bramką.** Zadanie rozliczeniowe po module C realizuje się wprost na
+WERYFIKACJI 615 zł / 60 CV; żadne zadanie nie czeka na D2. Jedyny warunek postawiony przez
+właściciela: opis pakietu nie może obiecywać rozmów, dopóki one nie działają.
 
-**TAK = nowy pakiet pośredni (rekomendowane) / NIE = przedefiniować WERYFIKACJĘ**
-
-> Decyzja D2 nie blokuje startu budowy — jest potrzebna dopiero przy zadaniu rozliczeniowym,
-> czyli po module C. Można ją podjąć za miesiąc. D1 jest potrzebna przy SC-014-C2, czyli w drugim tygodniu.
+> D1 jest nadal potrzebna przy SC-014-C2, czyli w drugim tygodniu.
 
 ---
 

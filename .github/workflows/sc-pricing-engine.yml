@@ -5,7 +5,11 @@ on:
       - 'lib/pricing/**'
       - 'tests/sc-pricing-engine.test.mjs'
       - 'tests/sc-pricing-internal-calculator*.test.mjs'
+      - 'tests/pricing-cv-pool.test.mjs'
       - 'app/operator/pricing/**'
+      - 'public/kalkulator-demo.html'
+      - 'docs/cennik-2026-11-02.md'
+      - 'app/components/marketing/package-comparison.tsx'
       - '.github/workflows/sc-pricing-engine.yml'
 permissions:
   contents: read
@@ -23,5 +27,7 @@ jobs:
       - run: npm run typecheck
       - run: node --test tests/sc-pricing-engine.test.mjs
       - run: node --test tests/sc-pricing-internal-calculator.test.mjs
+      # Spójność cen i kontrakt puli CV (krok 5) między cennikiem, demem, stroną i kalkulatorem.
+      - run: node --test tests/pricing-cv-pool.test.mjs
       - run: npm run build
       - run: node --test tests/sc-pricing-internal-calculator-http.test.mjs

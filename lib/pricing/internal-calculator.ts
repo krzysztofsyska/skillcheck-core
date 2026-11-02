@@ -67,16 +67,18 @@ const addon = (code: string, name: string, unit: string, included: Partial<Recor
   },
 });
 
-/** Structure from the owner's private price sheet (SkillCheck_prywatny_cennik). Only the
- * PRESELEKCJA 60 CV / 300 zł gross price is owner-approved; every other amount starts at 0. */
+/** Structure from the owner's private price sheet (SkillCheck_prywatny_cennik). The three paid
+ * package prices are owner-approved (2026-11-02) and must match `docs/cennik-2026-11-02.md`:
+ * PRESELEKCJA 300 zł / 60 CV, WERYFIKACJA 615 zł / 60 CV, ASSESSMENT CENTER 1 499 zł / 50 CV.
+ * Add-on amounts still start at 0 — none of them has an approved rate yet. */
 export function defaultConfig(): InternalConfig {
   return {
     version: 1, vatBasisPoints: 2300, cvCostMinor: 0, paymentFeeBasisPoints: 0, fixedCostPerOrderMinor: 0,
     packages: {
       FREE: { grossMinor: 0, cvIncluded: 5, cvOptions: [1, 2, 3, 4, 5], overageGrossPerCvMinor: 0 },
       PRESELEKCJA: { grossMinor: 30_000, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
-      WERYFIKACJA: { grossMinor: 0, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
-      ASSESSMENT_CENTER: { grossMinor: 0, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
+      WERYFIKACJA: { grossMinor: 61_500, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
+      ASSESSMENT_CENTER: { grossMinor: 149_900, cvIncluded: 50, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
     },
     addons: [
       addon('interview', 'Rozmowa AI', 'rozmowa', { WERYFIKACJA: 20, ASSESSMENT_CENTER: 20 }),

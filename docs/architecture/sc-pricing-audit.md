@@ -1,6 +1,11 @@
 # SC-PRICING-001 — audyt integracji i ryzyk
 **Stan:** 2026-10-20, `integration` w punkcie startowym `a3612b5fe8eac072b0cf7f0c67c6c672fede80b7`. To audyt kodu i informacji z GitHub, nie środowiska Production.
 
+> **Dokument historyczny — nie jest źródłem cen.** Opisuje stan z 2026-10-20. Ceny wymienione
+> niżej jako ilustracyjne (899 / 1799 zł) zostały zastąpione decyzjami właściciela z 2026-11-02:
+> PRESELEKCJA 300 zł / 60 CV, WERYFIKACJA 615 zł / 60 CV, ASSESSMENT CENTER 1 499 zł / 50 CV.
+> Obowiązujące liczby i ich wyprowadzenie: [docs/cennik-2026-11-02.md](../cennik-2026-11-02.md).
+
 ## Zweryfikowane elementy do ponownego wykorzystania
 
 | Właściciel / zasób | Dowód | Reuse / ograniczenie |
