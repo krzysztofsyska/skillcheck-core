@@ -37,7 +37,7 @@ function remaining(deadline: number) {
 }
 
 /**
- * OCR with the per-file time budget. Null only for a blank page (almost no characters found);
+ * OCR with the per-file time budget. Null only for a blank page (nothing found) or a confident short read;
  * real text read with low confidence fails the file as an unreadable scan instead of being dropped,
  * so a CV is never analysed with a silently missing page.
  */
@@ -49,8 +49,12 @@ async function ocrRead(ocr: OcrFn, image: Buffer, deadline: number) {
     throw error; // runtime failure: transient, the browser may retry
   }
   const text = result.text.trim();
-  if (visibleLength(text) < MIN_PAGE_TEXT_CHARS) return null;
+  const visible = visibleLength(text);
+  // Only a page where OCR found nothing at all is blank. A few characters read with low confidence
+  // mean an unreadable scan, not an empty page: the file fails instead of losing that page silently.
+  if (visible === 0) return null;
   if (result.confidence < MIN_OCR_CONFIDENCE) throw new BulkIntakeError('unreadable_scan');
+  if (visible < MIN_PAGE_TEXT_CHARS) return null; // a confident short read: page number, footer
   return text;
 }
 

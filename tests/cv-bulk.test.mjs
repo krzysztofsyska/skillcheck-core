@@ -122,6 +122,9 @@ test('contact and name detection', () => {
   // Over-long (invalid) local parts are still redacted in full.
   assert.doesNotMatch(suggestRedaction('a'.repeat(65) + '@x.pl', []), /aaaa/);
   assert.doesNotMatch(suggestRedaction('a.'.repeat(40) + 'b@x.pl', []), /a\.a/);
+  // Repeated spacing inside a phone number is still read as the candidate's phone.
+  assert.equal(detectPhone('tel.  +48  500  123  456'), '+48500123456');
+  assert.equal(detectPhone('500  123  456'), '+48500123456');
   // Dashes in ordinary text stay as written.
   assert.match(suggestRedaction('JavaScript 2018\u20132024', []), /2018\u20132024/);
   // If detection and redaction ever disagree, the file stops instead of reaching the AI provider.
@@ -331,6 +334,12 @@ test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
   // Real text that OCR reads only with low confidence fails the file instead of being dropped.
   const poorOcr = async () => ({ text: 'Doswiadczenie zawodowe 2019-2024 kierownik magazynu', confidence: 40 });
   await assert.rejects(extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', poorOcr), reason('unreadable_scan'));
+  // A few characters read with low confidence are an unreadable page, not a blank one.
+  const shortPoor = async () => ({ text: 'SQL', confidence: 5 });
+  await assert.rejects(extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', shortPoor), reason('unreadable_scan'));
+  // A confident short read (page number, footer) is still skipped.
+  const footer = async () => ({ text: '2', confidence: 95 });
+  assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer)).text, /Katarzyna Wisniewska/);
   // A scan where OCR finds nothing on any page is still unreadable.
   await assert.rejects(extractBulkCv(scannedPdf(cvLines), 'pdf', blankOcr), reason('unreadable_scan'));
 });
