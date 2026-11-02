@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import {
-  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, parseGroupRow, parseRanking, parseShortlist,
+  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
@@ -80,18 +80,13 @@ export async function loadScreeningReport(
       if (!['PGRST202', '42883'].includes(groupResult.error.code ?? '')) checked(groupResult, true);
     } else {
       requireReport(Array.isArray(groupResult.data) && groupResult.data.length <= MAX_REPORT_APPLICATIONS);
-      // A saved group outlives a position or CV change; the ranking knows when the analysis is outdated.
-      const outdated = new Set(rankings.filter(r => r.eligibility_reason === 'stale' || r.eligibility_reason === 'needs_reanalysis').map(r => r.application_id));
-      // The group is current only while it was computed from the analysis the ranking uses now: a re-analysis
-      // outside the batch (or a missing link) makes the saved score historical.
-      const currentAnalysis = new Map(rankings.map(r => [r.application_id, r.analysis_id]));
+      // A saved group outlives a position or CV change and a re-analysis outside the batch.
+      const rankingById = new Map(rankings.map(r => [r.application_id, r]));
       groups = (groupResult.data as unknown[]).map(row => {
         const group = parseGroupRow(row);
         const source = (row ?? {}) as { analysis_id?: unknown };
         requireReport(source.analysis_id === undefined || source.analysis_id === null || (typeof source.analysis_id === 'string' && /^[0-9a-f-]{36}$/i.test(source.analysis_id)));
-        const analysis = typeof source.analysis_id === 'string' ? source.analysis_id : null;
-        const current = currentAnalysis.get(group.application_id) ?? null;
-        return { ...group, stale: outdated.has(group.application_id) || analysis === null || current === null || analysis !== current };
+        return { ...group, stale: !groupAnalysisCurrent(source.analysis_id, rankingById.get(group.application_id)) };
       }).filter(g => ids.has(g.application_id));
     }
     return { company, recruitment, position, applications, rankings, shortlist, groups };

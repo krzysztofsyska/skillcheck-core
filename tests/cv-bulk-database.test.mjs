@@ -21,6 +21,7 @@ const r9 = '20261101130100_cv_bulk_erasure_inventory_r9.sql';
 const fixes = '20261101130200_cv_bulk_review_fixes.sql';
 const r10 = '20261101130300_cv_bulk_erasure_inventory_r10.sql';
 const phoneFix = '20261102100000_cv_bulk_capacity_phone_fix.sql';
+const skipFrozen = '20261102110000_cv_bulk_skip_frozen.sql';
 const bulkTables = ['private.application_preselection_group_events', 'private.application_preselection_groups',
   'private.cv_bulk_batches', 'private.cv_bulk_items', 'private.cv_bulk_settings'];
 const contract = { payload_schema_version: 1, result_schema_version: 1, prompt_version: 'screening-v1', provider: 'openai', model: 'ranking-test-model', model_revision: 'test-rev' };
@@ -37,7 +38,7 @@ async function install(t, variant = 'legacy', { withBulk = true, withR9 = true }
   await applyMigration(env.db);
   for (const name of chain) await run(env.db, await migration(name));
   if (withBulk) await run(env.db, await migration(bulk));
-  if (withBulk && withR9) for (const name of [r9, fixes, r10, phoneFix]) await run(env.db, await migration(name));
+  if (withBulk && withR9) for (const name of [r9, fixes, r10, phoneFix, skipFrozen]) await run(env.db, await migration(name));
   await seedSyntheticPolicy(env.db);
   return env;
 }
@@ -691,6 +692,14 @@ test('SC-BULK-001 R9/R10: erasure inventory lists and purges bulk rows', async t
       subject.resolutionId = await x.resolve(subject, [subject.candidate.id, analyzed.candidate_id, queued.candidate_id].sort(), resolutionRevision);
       const balanceBefore = await b.balance(subject.companyId);
       const state = await x.freeze(subject);
+      // A pump after the freeze leaves the frozen rows untouched: settling the finished analysis or
+      // starting/expiring the queued file would change the approved manifest and block the purge.
+      const groupsBefore = (await (async () => { await h.asAdmin(); return db.query('select count(*)::int n from private.application_preselection_groups where application_id=$1', [analyzed.application_id]); })()).rows[0].n;
+      const afterFreeze = await b.pump(subject, more.batch_id);
+      assert.deepEqual(afterFreeze.dispatch ?? [], [], 'nothing started for a frozen candidate');
+      assert.deepEqual((await b.items(more.batch_id)).map(r => [r.phase, r.slot_state, r.error_reason]),
+        [['analyzing', 'transferred', null], ['queued', 'held', null]], 'frozen items untouched');
+      assert.equal((await db.query('select count(*)::int n from private.application_preselection_groups where application_id=$1', [analyzed.application_id])).rows[0].n, groupsBefore, 'no group written');
       // Duplicate rows pointing to a frozen candidate are hidden like the candidate itself.
       await h.asUser(subject.owner);
       assert.deepEqual((await db.query('select public.cv_bulk_batch_status($1) r', [batch.batch_id])).rows[0].r.items, []);
@@ -716,6 +725,10 @@ test('SC-BULK-001 R9/R10: erasure inventory lists and purges bulk rows', async t
 test('SC-BULK-001 rollbacks restore R9, R8 and remove the bulk schema', async t => {
   const env = await install(t);
   const { db } = env;
+  await run(db, await rollback('20261102110000_cv_bulk_skip_frozen_down.sql'));
+  assert.equal((await db.query("select to_regprocedure('private.cv_bulk_skip_frozen_installed()') v")).rows[0].v, null);
+  assert.doesNotMatch((await db.query("select prosrc from pg_proc where oid='private.cv_bulk_pump_batch(private.cv_bulk_batches,jsonb,jsonb)'::regprocedure")).rows[0].prosrc, /erasure_lock_candidate/);
+  await assert.rejects(run(db, await rollback('20261102110000_cv_bulk_skip_frozen_down.sql')), /cv_bulk_skip_frozen_not_installed/);
   await run(db, await rollback('20261102100000_cv_bulk_capacity_phone_fix_down.sql'));
   assert.deepEqual((await db.query("select to_regprocedure('private.cv_bulk_phone_key(text)') k, to_regprocedure('private.cv_bulk_item_running(uuid,integer,integer)') r")).rows[0], { k: null, r: null });
   assert.doesNotMatch((await db.query("select prosrc from pg_proc where oid='public.get_preselection_groups(uuid)'::regprocedure")).rows[0].prosrc, /analysis_id/);
@@ -748,5 +761,6 @@ test('SC-BULK-001 rollbacks restore R9, R8 and remove the bulk schema', async t 
   const r8 = (await db.query('select schema_signature, private.erasure_schema_signature() actual from private.erasure_inventory_baseline_r8')).rows[0];
   assert.equal(r8.actual, r8.schema_signature, 'schema is the reviewed R8 state again');
   // And forward again.
-  for (const name of [bulk, r9, fixes, r10, phoneFix]) await run(db, await migration(name));
+  for (const name of [bulk, r9, fixes, r10, phoneFix, skipFrozen]) await run(db, await migration(name));
+  await assert.rejects(run(db, await migration(skipFrozen)), /cv_bulk_skip_frozen_already_installed/);
 });

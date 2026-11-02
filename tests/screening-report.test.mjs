@@ -310,3 +310,35 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   // A legacy (v1) candidate keeps the original label.
   assert.equal(rankingStatusLabel({ ranking: { eligibility_reason: 'insufficient_evidence' }, criteria: [{ matrixVerdict: null }] }, true), 'Za mało ocenionych kryteriów');
 });
+
+test('recruitment-page groups use the report currency rule: an outdated group shows no score as current', async () => {
+  const { groupAnalysisCurrent } = await import('../lib/screening-report.ts');
+  const a = '00000000-0000-4000-8000-0000000000a1', b = '00000000-0000-4000-8000-0000000000b2';
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'eligible' }), true);
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: b, eligibility_reason: 'eligible' }), false, 're-analysed outside the batch');
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'stale' }), false, 'CV or position changed');
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'needs_reanalysis' }), false);
+  assert.equal(groupAnalysisCurrent(a, undefined), false, 'no ranking row (e.g. ranking unreadable): fail closed');
+  for (const bad of [null, undefined, '', 'not-a-uuid', 42]) assert.equal(groupAnalysisCurrent(bad, { analysis_id: a, eligibility_reason: 'eligible' }), false);
+
+  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/groups.tsx', import.meta.url).pathname;
+  const module = new Module(filename); module.filename = filename;
+  const require = createRequire(filename);
+  module.require = name => name === './actions' ? { movePreselectionGroup: async () => ({}) }
+    : name.endsWith('/submit-button') ? { SubmitButton: ({ children }) => React.createElement('button', null, children) }
+    : name.endsWith('/lib/cv-bulk') ? require('../../../../../../lib/cv-bulk.ts') : require(name);
+  module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  const row = { application_id: a, candidate_name: 'Kandydat nr 1', has_phone: true, group_key: 'passed', source: 'auto', raw_score: 83.33, coverage: 1, updated_at: '2026-11-02T10:00:00Z' };
+  const render = stale => renderToStaticMarkup(React.createElement(module.exports.PreselectionGroups, { companyId: b, recruitmentId: b, rows: [{ ...row, stale }], canEdit: false }));
+  const current = render(false), outdated = render(true);
+  assert.match(current, /83 pkt/); assert.match(current, /pokrycie kryteriów 100%/); assert.doesNotMatch(current, /nieaktualny/);
+  assert.match(outdated, /Wynik nieaktualny — wymaga ponownej analizy/);
+  assert.doesNotMatch(outdated, /83 pkt|pokrycie kryteriów/, 'no historical score shown as current');
+});
+
+test('recruitment page reads every ranking page before marking groups outdated', () => {
+  const page = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /get_screening_ranking[^\n]*\.range\(0,\s*999\)/, 'no single fixed page');
+  assert.match(page, /\.range\(rankingRows\.length, rankingRows\.length \+ 499\)/, 'pages until the ranking is exhausted');
+  assert.match(page, /if \(page\.error \|\| !Array\.isArray\(page\.data\)\) \{ rankingOk = false; break; \}/, 'a failed page fails closed');
+});
