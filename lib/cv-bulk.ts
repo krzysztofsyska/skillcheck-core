@@ -101,10 +101,9 @@ const PHONE = /(?<![\d+])(?:\+|00)?(?:48[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3}[
 const HEADING = /\b(?:cv|curriculum|vitae|życiorys|zyciorys|resume|résumé|dane|kontakt|osobowe|profil|o mnie|doświadczenie|wykształcenie|umiejętności|telefon|e-?mail|adres|stanowisko|kandydat)\b/i;
 const NAME_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:-[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)?$/;
 const UPPER_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?$/;
-// Common job-title and seniority words (PL/EN). A line with such a word is usually a headline like
-// "Java Developer" or "Kierownik Sprzedaży": taking it as the name would leave the real name
-// unredacted and strip these words from the whole CV. Some are also surnames, so detectName only
-// prefers other lines and falls back to such a line when nothing else looks like a name.
+// Common job-title and seniority words (PL/EN), used by isHeadline below. Taking a headline such as
+// "Java Developer" as the name would leave the real name unredacted and strip these words from the
+// whole CV. Many are also surnames or first names, so one such word never makes a line a headline.
 const JOB_WORDS = new Set(`developer programista programistka inżynier inzynier engineer manager menedżer menadżer menedzer
 kierownik kierowniczka specjalista specjalistka specialist analityk analityczka analyst konsultant konsultantka consultant
 asystent asystentka assistant dyrektor dyrektorka director prezes księgowy księgowa ksiegowy ksiegowa accountant handlowiec
