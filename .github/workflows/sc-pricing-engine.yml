@@ -10,6 +10,7 @@ on:
       - 'public/kalkulator-demo.html'
       - 'docs/cennik-2026-11-02.md'
       - 'app/components/marketing/package-comparison.tsx'
+      - 'app/components/marketing/content.ts'
       - '.github/workflows/sc-pricing-engine.yml'
 permissions:
   contents: read

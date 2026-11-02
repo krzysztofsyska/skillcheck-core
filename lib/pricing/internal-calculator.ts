@@ -57,6 +57,15 @@ export type Calculation =
       marginBasisPoints: number | null; monthly: { grossMinor: number; netMinor: number; costMinor: number; marginMinor: number } }
   | { ok: false; code: string };
 
+/** Turns an add-on off for every package: not enabled, nothing included. Used for a service that
+ * exists in the catalog but cannot be delivered yet, so no quote counts it as part of a package. */
+const disabledEverywhere = (a: AddonSettings): AddonSettings => ({
+  ...a,
+  packages: Object.fromEntries(
+    PACKAGE_CODES.map(code => [code, { ...a.packages[code], enabled: false, included: 0 }]),
+  ) as Record<PackageCode, AddonPackageSettings>,
+});
+
 const addon = (code: string, name: string, unit: string, included: Partial<Record<PackageCode, number>> = {}): AddonSettings => ({
   code, name, unit, unitCostMinor: 0,
   packages: {
@@ -96,7 +105,12 @@ export function defaultConfig(): InternalConfig {
       ASSESSMENT_CENTER: { grossMinor: 149_900, cvIncluded: 50, cvOptions: [50, 60, 100, 150], overageGrossPerCvMinor: 20 },
     },
     addons: [
-      addon('interview', 'Rozmowa AI', 'rozmowa', { WERYFIKACJA: 20, ASSESSMENT_CENTER: 20 }),
+      // Bot calls do not work and are not part of any package the customer can be shown
+      // (owner decision 2026-11-02). Leaving 20 calls "included" here made the operator's quote
+      // present an unavailable service as delivered and free, which distorts scope and margin.
+      // The add-on stays in the catalog so it can be priced once the voicebot works - the owner
+      // intends to add it to a package then, free or for a small fee.
+      disabledEverywhere(addon('interview', 'Rozmowa AI', 'rozmowa')),
       addon('skill_test', 'Test kompetencji', 'test', { WERYFIKACJA: 20, ASSESSMENT_CENTER: 20 }),
       addon('case_study', 'Zadanie / case study', 'zadanie', { ASSESSMENT_CENTER: 10 }),
       addon('expert_consult', 'Konsultacja ekspercka', 'godzina', { ASSESSMENT_CENTER: 2 }),
