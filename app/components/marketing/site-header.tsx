@@ -6,9 +6,9 @@ import { MobileNav } from "./mobile-nav";
 const mobileLinks = [
   ...sectionLinks,
   { href: "/login", label: "Zaloguj się" },
-  { href: "/kalkulator", label: "Kalkulator pakietów" },
-  { href: "/preselekcja", label: "Zapytaj o PRESELEKCJĘ" },
-  { href: "/demo", label: "Zobacz przykład", variant: "primary" as const },
+  { href: "/kalkulator", label: "Sprawdź koszt rekrutacji" },
+  { href: "/preselekcja", label: "Zamów PRESELEKCJĘ" },
+  { href: "/preselekcja#free", label: "Wypróbuj FREE — 0 zł", variant: "primary" as const },
 ];
 
 export function SiteHeader() {
@@ -25,9 +25,9 @@ export function SiteHeader() {
               </Link>
             ))}
             <Link href="/login" className={styles.loginLink}>Zaloguj się</Link>
-            <Link href="/kalkulator" className={styles.navLink}>Kalkulator pakietów</Link>
-            <Link href="/preselekcja" className={styles.navLink}>Zapytaj o PRESELEKCJĘ</Link>
-            <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>
+            <Link href="/kalkulator" className={styles.navLink}>Sprawdź koszt rekrutacji</Link>
+            <Link href="/preselekcja" className={styles.navLink}>Zamów PRESELEKCJĘ</Link>
+            <Link href="/preselekcja#free" className={styles.primary}>Wypróbuj FREE — 0 zł</Link>
           </nav>
           <MobileNav links={mobileLinks} />
         </div>

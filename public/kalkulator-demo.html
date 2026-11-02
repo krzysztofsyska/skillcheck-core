@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Dobierz SkillCheck: przeanalizuj koszt CV, rozmów AI i poziomu weryfikacji. Porównaj scenariusze z agencją rekrutacyjną i poznaj zakres bezpłatnej próby.">
+  <meta name="description" content="Policz koszt ręcznej analizy CV i porównaj go z ceną SkillCheck oraz z budżetem agencji rekrutacyjnej. FREE 0 zł za 5 CV, PRESELEKCJA 300 zł brutto za 60 CV.">
   <meta name="theme-color" content="#193f37">
-  <title>SkillCheck — kalkulator oferty i korzyści · podgląd v4</title>
+  <title>SkillCheck — kalkulator kosztu rekrutacji</title>
   <style>
     :root {
       --ink:#183c36; --ink-2:#27473f; --muted:#65736a; --soft:#e9efe2; --soft-2:#f4f6ef;
@@ -74,16 +74,6 @@
     .range-control input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;height:25px;width:25px;border:4px solid white;background:#275746;box-shadow:0 1px 9px #a8bba8;border-radius:50%;margin-top:-8px}
     .range-control input[type=range]::-moz-range-thumb{height:18px;width:18px;border:4px solid white;background:#275746;border-radius:50%}
     .range-marks{display:flex;justify-content:space-between;color:#607267;font-size:12px;font-weight:650;margin:1px 58px 0}
-    .extra-panel{margin-top:20px;background:#f8faf6;border-radius:18px;border:1px solid #dce6d8;padding:22px}
-    .extra-panel h3{margin:3px 0 5px;font-size:20px;letter-spacing:-.02em}
-    .extra-panel > p{margin:0 0 14px;color:var(--muted);font-size:13px}
-    .extra-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-    .extra-item{border:1px solid #dce4d9;background:#fff;border-radius:13px;padding:14px;display:flex;gap:11px;align-items:flex-start;cursor:pointer;min-width:0}
-    .extra-item input{flex:none;accent-color:#255747;width:19px;height:19px;margin:2px 0 0}
-    .extra-item:has(input:checked){background:#e9f4e4;border-color:#a5cba0}
-    .extra-item:has(input:disabled){opacity:.66;cursor:not-allowed}
-    .extra-item strong{display:block;font-size:13px}.extra-item small{display:block;font-size:11px;color:#5b705f;margin-top:4px}
-    .extra-note{margin-top:10px;font-size:12px;color:#577061;line-height:1.6}
     .order-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
     .order-actions .button{margin-top:0;flex:1 1 140px;min-height:45px;padding:10px 12px}
     .order-actions .button.secondary{background:transparent;color:#fff;border-color:#9bc4ad}
@@ -98,7 +88,7 @@
     .benefit-number{display:flex;flex-direction:column;justify-content:center;border-radius:13px;padding:18px 12px;background:white;border:1px solid #dce8d9}
     .benefit-number strong{font-size:clamp(24px,2.5vw,32px);letter-spacing:-.04em;line-height:1.2}
     .benefit-number span{font-size:11px;color:#657b6c}
-    .packs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .packs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
     .pack{display:flex;flex-direction:column;gap:11px;min-height:241px;min-width:0;text-align:left;padding:21px 18px;border:1px solid #dce4d7;background:#fff;border-radius:18px;color:var(--ink);transition:background .16s,border-color .16s,box-shadow .16s}
     .pack:hover{box-shadow:0 8px 30px rgba(30,55,48,.09)}
     .pack[aria-pressed="true"]{border:2px solid #214e41;background:#eef4e8;padding:20px 17px}
@@ -136,7 +126,6 @@
     .table-choice{display:inline-flex;border:0;background:transparent;color:var(--ink);font-weight:800;text-decoration:underline;text-underline-offset:4px;padding:6px 0}
     tbody th{font-weight:600;color:#44594d}
     .comparison-tools{margin-bottom:14px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
-    .toggle{display:flex;align-items:center;gap:9px;font-size:13px;color:#405a4d;cursor:pointer}.toggle input{accent-color:var(--ink);width:16px;height:16px}
     .agency{background:#fff}
     .agency-inputs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:25px 0}
     .field{display:flex;flex-direction:column;gap:7px;min-width:0}
@@ -190,7 +179,7 @@
       .hero{padding:34px 0 25px;grid-template-columns:1fr;gap:20px}.hero h1{font-size:clamp(36px,9vw,48px)}.hero p{font-size:15px}
       .hero-side{padding:23px;border-radius:20px}.hero-side .kpi{font-size:40px}.offer-notice{margin-bottom:18px}
       section{margin-top:25px}.surface{padding:18px;border-radius:20px}.section-head{gap:12px}.section-head h2{font-size:26px}.two-kickers{display:none}
-      .volume-card{padding:16px}.volume-card h3{font-size:17px}.range-control{gap:7px;grid-template-columns:40px minmax(0,1fr) 40px}.range-marks{margin:1px 45px 0}.extra-panel{padding:16px}.extra-grid{grid-template-columns:1fr}.extra-item{padding:12px}.benefit-simulator{grid-template-columns:1fr;padding:18px;gap:13px}.benefit-results{grid-template-columns:1fr 1fr}.benefit-number{padding:12px}.benefit-number strong{font-size:23px}
+      .volume-card{padding:16px}.volume-card h3{font-size:17px}.range-control{gap:7px;grid-template-columns:40px minmax(0,1fr) 40px}.range-marks{margin:1px 45px 0}.benefit-simulator{grid-template-columns:1fr;padding:18px;gap:13px}.benefit-results{grid-template-columns:1fr 1fr}.benefit-number{padding:12px}.benefit-number strong{font-size:23px}
       .packs{gap:9px}.pack{min-height:190px;padding:16px 12px;gap:7px}.pack[aria-pressed="true"]{padding:15px 11px}.pack .pack-name{font-size:11px}.pack .pack-desc{font-size:12px}.pack .pack-price{font-size:22px}.pack .pack-sub{font-size:10px}
       .selected-bar{grid-template-columns:1fr;gap:18px;padding:22px}.order-block{border-left:0;padding-left:0;border-top:1px solid #527266;padding-top:17px}.order-actions{display:grid;grid-template-columns:1fr 1fr}.order-actions .button{font-size:12px;padding:11px 6px}
       .metrics{grid-template-columns:1fr}.metric{padding:17px}.metric strong{font-size:27px}
@@ -205,10 +194,10 @@
 <body>
 <header class="topbar">
   <div class="wrap">
-    <a class="brand" href="#start"><span class="brand-mark" aria-hidden="true">S</span>SkillCheck</a>
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">S</span>SkillCheck</a>
     <nav class="toplinks" aria-label="Nawigacja">
       <a href="#kalkulator">Kalkulator</a><a href="#porownaj">Porównaj pakiety</a><a href="#agencja">Agencja czy SkillCheck?</a><a href="#zalozenia">Założenia</a>
-      <a class="button small nav-cta" href="#kalkulator">Dobierz pakiet ↗</a>
+      <a class="button small nav-cta" href="/preselekcja#free">Wypróbuj FREE — 0 zł ↗</a>
     </nav>
   </div>
 </header>
@@ -217,30 +206,30 @@
     <div>
       <div class="eyebrow">Od CV do świadomej decyzji</div>
       <h1>Masz kandydatów.<br>Sprawdź, komu warto poświęcić czas.</h1>
-      <p>Nie musisz przeprowadzać dziesiątek rozmów, żeby zacząć porównywać kandydatów. SkillCheck porządkuje CV, wskazuje braki informacji i pomaga przygotować materiał do oceny. <strong>Wybierz zakres. Poznaj cenę. Zobacz, co otrzymasz.</strong></p>
+      <p>Nie musisz przeprowadzać dziesiątek rozmów, żeby zacząć porównywać kandydatów. SkillCheck porządkuje CV według wymagań stanowiska, wskazuje brakujące informacje i przygotowuje shortlistę. <strong>Policz koszt swojego procesu. Poznaj cenę. Zobacz, co otrzymasz.</strong></p>
       <div class="hero-actions">
-        <a class="button" href="#kalkulator">Sprawdź koszt rekrutacji ↗</a>
-        <button type="button" class="button secondary" id="tryFreeTop">Wypróbuj FREE — 0 zł</button>
+        <a class="button" href="/preselekcja#free">Wypróbuj FREE — 0 zł ↗</a>
+        <a class="button secondary" href="#kalkulator">Sprawdź koszt rekrutacji</a>
       </div>
       <p class="small-note" style="margin-top:14px">Jedno stanowisko · jeden proces · decyzję o zatrudnieniu podejmuje człowiek.</p>
     </div>
     <aside class="hero-side" aria-label="Wybrany zakres i cena">
       <div class="eyebrow">Twój scenariusz</div>
-      <div class="kpi" id="heroPrice">365 zł</div>
+      <div class="kpi" id="heroPrice">300 zł</div>
       <div class="kpi-caption">brutto za wybrany zakres PRESELEKCJA</div>
       <div class="strips">
         <div class="strip"><span>Analiza dokumentów</span><strong id="heroVolume">30 CV</strong></div>
-        <div class="strip"><span>Rozmowy voicebota</span><strong id="heroCalls">do 10</strong></div>
+        <div class="strip"><span>Ręczne czytanie tych CV</span><strong id="heroManual">195 zł</strong></div>
         <div class="strip"><span>Średnio na CV w puli</span><strong id="heroPerCv">10,00 zł</strong></div>
       </div>
-      <p class="small-note" id="heroPriceNote">PRESELEKCJA: 300 zł brutto za pakiet 60 CV. Funkcje i termin potwierdzamy przed startem.</p>
+      <p class="small-note" id="heroPriceNote">PRESELEKCJA: 300 zł brutto za pakiet 60 analiz CV.</p>
     </aside>
   </div>
-  <div class="offer-notice" role="note"><strong>Oferta przedpremierowa.</strong> Interaktywny podgląd koncepcji. Pokazane kwoty są roboczymi symulacjami, nie wiążącą ofertą. „Kup teraz” jest demonstracją — nie pobieramy płatności ani nie aktywujemy usług. Zapytanie wysyłasz samodzielnie.</div>
+  <div class="offer-notice" role="note"><strong>Aktualne ceny.</strong> FREE kosztuje 0 zł i obejmuje 5 analiz CV, jedna próba na firmę. PRESELEKCJA kosztuje 300 zł brutto za pakiet 60 analiz CV, ważny 3 miesiące. Kalkulator liczy lokalnie w przeglądarce — nie pobiera płatności i nie aktywuje usług. Zamówienie składasz na stronie oferty.</div>
 
   <section id="kalkulator" class="surface" aria-labelledby="calculatorTitle">
     <div class="section-head">
-      <div><div class="eyebrow">01 / Dopasuj do swoich potrzeb</div><h2 id="calculatorTitle">Ile CV chcesz przeanalizować?</h2><p>W płatnych pakietach wybrany wolumen obejmuje wszystkie CV. Bezpłatny FREE jest jednorazową próbą na maksymalnie 5 CV.</p></div>
+      <div><div class="eyebrow">01 / Policz swój proces</div><h2 id="calculatorTitle">Ile CV chcesz przeanalizować?</h2><p>Wybierz pulę CV i wpisz własne założenia. Zobaczysz, ile kosztuje ręczne przeczytanie tych dokumentów i ile kosztuje PRESELEKCJA. FREE jest jednorazową próbą na 5 CV.</p></div>
       <div class="two-kickers">Jedno stanowisko · jeden proces</div>
     </div>
     <div class="volume-config">
@@ -255,10 +244,10 @@
       </div>
       <div class="volume-card">
         <div class="volume-top"><h3>Większa pula? Przesuń suwak</h3><output id="volumeValue" class="volume-value" for="volumeSlider" aria-live="polite">30 CV</output></div>
-        <p class="small-note">Od 35 do 150 CV, dokładnie co 5. Cena i symulacja korzyści aktualizują się razem.</p>
+        <p class="small-note">Od 35 do 150 CV, dokładnie co 5. Cena i koszt ręcznej analizy aktualizują się razem.</p>
         <div class="range-control">
           <button id="volumeMinus" type="button" class="step-btn" aria-label="Zmniejsz liczbę CV" title="Poprzednia pula albo minus 5 CV">−</button>
-          <input type="range" id="volumeSlider" min="35" max="150" step="5" value="60" aria-label="Pula CV od 35 do 150, krok 5">
+          <input type="range" id="volumeSlider" min="35" max="150" step="5" value="35" aria-label="Pula CV od 35 do 150, krok 5">
           <button id="volumePlus" type="button" class="step-btn" aria-label="Zwiększ liczbę CV" title="Następna pula albo plus 5 CV">+</button>
         </div>
         <div class="range-marks"><span>35 CV</span><span>150 CV</span></div>
@@ -266,49 +255,8 @@
       </div>
     </div>
     <div class="packs" role="group" aria-label="Pakiet SkillCheck">
-      <button type="button" class="pack" data-pack="free" aria-pressed="false"><span class="pack-name">✧ FREE</span><span class="pack-desc">Sprawdź na własnych CV, jak wygląda pierwsza analiza.</span><span class="pack-price" data-package-price="free">0 zł</span><span class="pack-sub">5 CV · 1 próbna rozmowa</span></button>
-      <button type="button" class="pack" data-pack="pre" aria-pressed="true"><span class="pack-name">≡ PRESELEKCJA</span><span class="pack-desc">Od dokumentów i rozmów AI do shortlisty.</span><span class="pack-price" data-package-price="pre">300 zł</span><span class="pack-sub" data-package-sub="pre">Brutto za 60 CV · cena bazowa · do 10 rozmów (w przygotowaniu)</span></button>
-      <button type="button" class="pack" data-pack="verify" aria-pressed="false"><span class="pack-name">◇ WERYFIKACJA</span><span class="pack-desc">Sprawdź odpowiedzi i kompetencje, nie tylko deklaracje.</span><span class="pack-price" data-package-price="verify">615 zł</span><span class="pack-sub" data-package-sub="verify">Brutto za 60 CV · cena bazowa · testy i rozszerzony raport</span></button>
-      <button type="button" class="pack" data-pack="ac" aria-pressed="false"><span class="pack-name">⊞ ASSESSMENT CENTER</span><span class="pack-desc">Zobacz podejście finalistów do zadań praktycznych.</span><span class="pack-price" data-package-price="ac">1499 zł</span><span class="pack-sub" data-package-sub="ac">Brutto za 50 CV · cena bazowa · proces dla 5–6 osób</span></button>
-    </div>
-    <div class="extra-panel" aria-labelledby="extraTitle">
-      <div class="eyebrow">Dostosuj zakres usługi</div>
-      <h3 id="extraTitle">Chcesz dokupić coś do swojego pakietu?</h3>
-      <p>Wybierz dodatki. W podglądzie nie mają zatwierdzonych cen — ich koszt ustalamy osobno, bez ukrytych dopłat.</p>
-      <div class="extra-grid">
-        <label class="extra-item" for="extraCalls"><input id="extraCalls" type="checkbox" data-extra="calls"><span><strong>5 dodatkowych rozmów AI</strong><small id="extraCallsHint">Ponad 10 rozmów w pakiecie · rozmowy w przygotowaniu · cena do wyceny</small></span></label>
-        <label class="extra-item" for="extraTests"><input id="extraTests" type="checkbox" data-extra="tests"><span><strong>Testy kompetencji</strong><small id="extraTestsHint">Dodatek do PRESELEKCJI · cena do wyceny</small></span></label>
-        <label class="extra-item" for="extraCases"><input id="extraCases" type="checkbox" data-extra="cases"><span><strong>Zadanie / case study</strong><small id="extraCasesHint">Dla finalistów · cena do wyceny</small></span></label>
-        <label class="extra-item" for="extraConsult"><input id="extraConsult" type="checkbox" data-extra="consult"><span><strong>Konsultacja eksperta</strong><small id="extraConsultHint">Dodatkowe wsparcie decyzji · cena do wyceny</small></span></label>
-      </div>
-      <div class="extra-note" id="extraSelectionSummary" aria-live="polite">Nie wybrano dodatków.</div>
-    </div>
-    <div class="selected-bar">
-      <div>
-        <div class="eyebrow">Twój wybór</div>
-        <h3 id="selectionTitle">PRESELEKCJA — od CV do shortlisty</h3>
-        <p id="selectionDescription">Uporządkuj dokumenty, uzupełnij informacje w rozmowach i przygotuj shortlistę do dalszego etapu.</p>
-        <div class="checks" id="selectionChips"><span>60 CV</span><span>do 10 rozmów AI — w przygotowaniu</span><span>raport i shortlista</span></div>
-      </div>
-      <div class="order-block">
-        <div class="minilabel">Cena brutto / jeden proces</div><div id="selectedPrice" class="total" aria-live="polite">300,00 zł</div>
-        <div class="minilabel" id="netPrice">243,90 zł netto · 23% VAT</div>
-        <div class="minilabel" id="priceScopeNote">Cena bazowa pakietu · wariant demonstracyjny.</div>
-        <div class="order-actions">
-          <button type="button" id="quoteButton" class="button">Zapytaj o ofertę ↗</button>
-          <button type="button" id="buyDemoButton" class="button secondary">Kup teraz · podgląd</button>
-        </div>
-        <div class="minilabel">Żaden przycisk nie pobiera płatności ani nie aktywuje produktu.</div>
-      </div>
-    </div>
-    <div class="metrics" aria-live="polite">
-      <div class="metric"><div class="eyebrow">Twój zakres</div><strong id="metricCv">30 CV</strong><div class="micro" id="metricCvText">Analiza kandydatów na podstawie wspólnych kryteriów stanowiska.</div></div>
-      <div class="metric"><div class="eyebrow">Rozmowy AI w scenariuszu</div><strong id="metricMinutes">90 min</strong><div class="micro" id="metricMinutesText">10 rozmów × założone 9 min. To czas rozmów bota, nie zmierzona oszczędność czasu.</div></div>
-      <div class="metric"><div class="eyebrow">Przewidywalna cena</div><strong id="metricUnit">10,00 zł</strong><div class="micro" id="metricUnitText">Brutto na CV w wybranej puli; cena obejmuje również pozostałe funkcje pakietu.</div></div>
-    </div>
-    <div class="benefit-row">
-      <div class="benefit"><h3>Własne CV. Mniej pracy powtarzalnej.</h3><p id="copyReuseCv">Masz już kandydatów z ogłoszeń lub poleceń? Przy wyborze 50 CV możesz pracować na własnej puli — bez ponownego zlecania ich poszukiwania. AI pomaga uporządkować informacje.</p></div>
-      <div class="benefit"><h3>CV pokazuje deklaracje. Sprawdź więcej.</h3><p id="copyProgress">W PRESELEKCJI otrzymujesz wspólne kryteria, odpowiedzi z rozmów i shortlistę. Głębsza ocena jest dostępna w kolejnych wariantach.</p></div>
+      <button type="button" class="pack" data-pack="free" aria-pressed="false"><span class="pack-name">✧ FREE</span><span class="pack-desc">Analiza 5 CV. Sprawdź na własnych dokumentach, jak wygląda wynik.</span><span class="pack-price" data-package-price="free">0 zł</span><span class="pack-sub">5 analiz CV · jedna próba na firmę</span></button>
+      <button type="button" class="pack" data-pack="pre" aria-pressed="true"><span class="pack-name">≡ PRESELEKCJA</span><span class="pack-desc">Analiza 60 CV, shortlista i raport z eksportem.</span><span class="pack-price" data-package-price="pre">300 zł</span><span class="pack-sub">Brutto za pakiet 60 analiz CV</span></button>
     </div>
     <div class="benefit-simulator" aria-label="Symulacja czasu i kosztu ręcznej analizy CV">
       <div>
@@ -325,34 +273,65 @@
         <div class="benefit-number"><strong id="manualCost">195 zł</strong><span>Szacowany koszt tego czasu netto</span></div>
       </div>
     </div>
-    <p class="fine-print" id="volumeDisclaimer">Zatwierdzone ceny bazowe obowiązują dla puli bazowej pakietu (PRESELEKCJA i WERYFIKACJA 60 CV, ASSESSMENT CENTER 50 CV). Inne wolumeny przeliczamy roboczo względem tej puli. Dodatki wymagają indywidualnej wyceny.</p>
+    <div class="selected-bar">
+      <div>
+        <div class="eyebrow">Twój wybór</div>
+        <h3 id="selectionTitle">PRESELEKCJA — od CV do shortlisty</h3>
+        <p id="selectionDescription">Uporządkuj dokumenty, porównaj je z wymaganiami stanowiska i przygotuj shortlistę do dalszej oceny.</p>
+        <div class="checks" id="selectionChips"><span>30 CV</span><span>raport i shortlista</span></div>
+      </div>
+      <div class="order-block">
+        <div class="minilabel">Cena brutto / jeden proces</div><div id="selectedPrice" class="total" aria-live="polite">300,00 zł</div>
+        <div class="minilabel" id="netPrice">243,90 zł netto · 23% VAT</div>
+        <div class="minilabel" id="priceScopeNote">Cena pakietu brutto (60 analiz CV)</div>
+        <div class="order-actions">
+          <a class="button" id="orderLink" href="/preselekcja">Zamów PRESELEKCJĘ ↗</a>
+          <button type="button" id="quoteButton" class="button secondary">Pobierz podsumowanie ↗</button>
+        </div>
+        <div class="minilabel" id="orderNote">Zamówienie obejmuje jeden pakiet 60 analiz CV.</div>
+        <div class="minilabel">Kalkulator nie pobiera płatności i nie aktywuje produktu. Płatność przelewem na fakturę proforma następuje po stronie oferty.</div>
+      </div>
+    </div>
+    <div class="metrics" aria-live="polite">
+      <div class="metric"><div class="eyebrow">Twój zakres</div><strong id="metricCv">30 CV</strong><div class="micro" id="metricCvText">Analiza kandydatów na podstawie wspólnych kryteriów stanowiska.</div></div>
+      <div class="metric"><div class="eyebrow">Ręczna analiza tych CV</div><strong id="metricManual">3,0 h</strong><div class="micro" id="metricManualText">Przy Twoich założeniach. To budżet czasu procesu, nie zmierzona oszczędność.</div></div>
+      <div class="metric"><div class="eyebrow">Przewidywalna cena</div><strong id="metricUnit">10,00 zł</strong><div class="micro" id="metricUnitText">Brutto na CV w wybranej puli; cena obejmuje wszystkie funkcje pakietu.</div></div>
+    </div>
+    <div class="benefit-row">
+      <div class="benefit"><h3>Własne CV. Mniej pracy powtarzalnej.</h3><p id="copyReuseCv">Masz już kandydatów z ogłoszeń lub poleceń? Możesz pracować na własnej puli 30 CV — bez ponownego zlecania ich pozyskania. AI pomaga uporządkować informacje.</p></div>
+      <div class="benefit"><h3>CV pokazuje deklaracje. Sprawdź więcej.</h3><p id="copyProgress">W PRESELEKCJI otrzymujesz wspólne kryteria, dowody z materiałów, braki danych, pytania na rozmowę i shortlistę.</p></div>
+    </div>
+    <p class="fine-print" id="volumeDisclaimer">PRESELEKCJA kosztuje 300 zł brutto za pakiet 60 analiz CV. Większa pula CV to kolejne pakiety: do 60 CV jeden, do 120 CV dwa, do 180 CV trzy. Zakres i dostępność potwierdzamy przed realizacją.</p>
   </section>
 
   <section id="porownaj" class="surface" aria-labelledby="compareTitle">
-    <div class="section-head"><div><div class="eyebrow">02 / Zobacz różnice</div><h2 id="compareTitle">Nie płać za większy zakres, niż potrzebujesz.</h2><p>Jedna pula CV, cztery poziomy sprawdzenia. Zobacz, co otrzymujesz w każdym wariancie i jaki kolejny etap może mieć sens.</p></div></div>
-    <div class="comparison-tools"><div class="small-note" id="tableIntro">Ceny bazowe brutto pakietów (PRESELEKCJA i WERYFIKACJA 60 CV, ASSESSMENT CENTER 50 CV). FREE zawsze obejmuje maksymalnie 5 CV.</div><label class="toggle"><input id="differencesOnly" type="checkbox"> Pokaż tylko różnice</label></div>
+    <div class="section-head"><div><div class="eyebrow">02 / Zobacz różnice</div><h2 id="compareTitle">Nie płać za większy zakres, niż potrzebujesz.</h2><p>Dziś kupisz FREE albo PRESELEKCJĘ. FREE jest opcjonalnym pierwszym krokiem, nie warunkiem zakupu PRESELEKCJI.</p></div></div>
+    <div class="comparison-tools"><div class="small-note" id="tableIntro">Ceny brutto dla 30 CV w PRESELEKCJI. FREE zawsze obejmuje 5 CV.</div></div>
     <div class="compare-wrap"><table aria-label="Porównanie pakietów SkillCheck">
-      <thead><tr><th scope="col">Zakres</th><th scope="col"><button type="button" class="table-choice" data-choose-pack="free">FREE ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="pre">PRESELEKCJA ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="verify">WERYFIKACJA ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="ac">ASSESSMENT CENTER ↗</button></th></tr></thead>
+      <thead><tr><th scope="col">Zakres</th><th scope="col"><button type="button" class="table-choice" data-choose-pack="free">FREE ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="pre">PRESELEKCJA ↗</button></th></tr></thead>
       <tbody>
-        <tr><th scope="row">Cena brutto / proces</th><td id="tableFree">0 zł</td><td id="tablePre">300 zł</td><td id="tableVerify">615 zł</td><td id="tableAc">1499 zł</td></tr>
-        <tr><th scope="row">Analizowane CV</th><td>5 próbnych</td><td class="paidCv">60</td><td class="paidCv">60</td><td class="paidCv">60</td></tr>
-        <tr data-common="yes"><th scope="row">Profil firmy i stanowiska</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
-        <tr data-common="yes"><th scope="row">Pseudonimizacja i ocena dopasowania</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
-        <tr><th scope="row">Shortlista</th><td>Podstawowa</td><td>5–10 osób*</td><td>5–10 osób*</td><td>5–10 osób*</td></tr>
-        <tr><th scope="row">Wykonane rozmowy voicebota</th><td>1 próbna</td><td>do 10</td><td>do 10</td><td>do 10</td></tr>
-        <tr><th scope="row">Ocena rozmowy</th><td>Podstawowa</td><td>Podstawowa</td><td>Pogłębiona</td><td>Pogłębiona</td></tr>
-        <tr><th scope="row">Test kompetencji</th><td>—</td><td>—</td><td>✓</td><td>✓</td></tr>
-        <tr><th scope="row">Case studies i zadania praktyczne</th><td>—</td><td>—</td><td>—</td><td>✓</td></tr>
-        <tr><th scope="row">Assessment Center</th><td>—</td><td>—</td><td>—</td><td>do 5 osób × 2 zadania</td></tr>
-        <tr><th scope="row">Praca eksperta</th><td>—</td><td>—</td><td>—</td><td>3 godziny / proces</td></tr>
-        <tr><th scope="row">Raport kandydata</th><td>Podstawowy</td><td>Podstawowy</td><td>Rozszerzony</td><td>Kompleksowy</td></tr>
+        <tr><th scope="row">Cena brutto / proces</th><td id="tableFree">0 zł</td><td id="tablePre">300 zł</td></tr>
+        <tr><th scope="row">Analizowane CV</th><td>5</td><td class="paidCv">30</td></tr>
+        <tr><th scope="row">Profil firmy i stanowiska</th><td>✓</td><td>✓</td></tr>
+        <tr><th scope="row">Pseudonimizacja i analiza CV przez AI</th><td>✓</td><td>✓</td></tr>
+        <tr><th scope="row">Dowody, braki i pytania na rozmowę</th><td>✓</td><td>✓</td></tr>
+        <tr><th scope="row">Ranking kandydatów</th><td>✓</td><td>✓</td></tr>
+        <tr><th scope="row">Shortlista</th><td>Podstawowa</td><td>5–10 osób*</td></tr>
+        <tr><th scope="row">Raport z eksportem</th><td>Podstawowy</td><td>✓</td></tr>
+        <tr><th scope="row">Ważność analiz</th><td>Próba jednorazowa</td><td>3 miesiące</td></tr>
+        <tr><th scope="row">Płatność</th><td>—</td><td>Przelew na fakturę proforma</td></tr>
       </tbody>
     </table></div>
-    <p class="fine-print">* Shortlista zależy od rzeczywistej puli i dostępnych informacji. Tabela porównuje pakiety bazowe: limit do 10 rozmów, bez dodatków. Rozmowy z botem są w przygotowaniu i nie działają jeszcze w żadnym pakiecie. Opcjonalne 5 rozmów jest wyceniane oddzielnie. FREE obejmuje 5 CV niezależnie od suwaka.</p>
+    <p class="fine-print">* Shortlista zależy od rzeczywistej puli i dostępnych informacji. FREE obejmuje 5 CV niezależnie od suwaka.</p>
+    <div class="agency-caption" style="margin-top:25px">
+      <div><h3>WERYFIKACJA — kolejny etap</h3><p>Pogłębienie sprawdzenia kompetencji szerzej niż we wstępnym zestawieniu materiałów, z rozszerzonym raportem kandydata. Bez ceny i terminu uruchomienia.</p></div>
+      <div><h3>ASSESSMENT CENTER — kolejny etap</h3><p>Zadania praktyczne i obserwacje osadzone w realiach stanowiska. Bez ceny i terminu uruchomienia.</p></div>
+    </div>
+    <p class="fine-print">WERYFIKACJA i ASSESSMENT CENTER to kolejne etapy oferty. Ceny są zatwierdzone: WERYFIKACJA <strong>615 zł brutto za 60 CV</strong> (testy kompetencji, pula CV zwiększana co 5), ASSESSMENT CENTER <strong>1 499 zł brutto za 50 CV</strong> (zadania praktyczne, proces dla 5–6 osób, maksymalnie 10). Oba pakiety są jeszcze w budowie — nie mają terminu uruchomienia i nie można ich dziś kupić. Rozmowy z botem są w przygotowaniu i nie działają w żadnym pakiecie. <a href="/rozmowa">Napisz, jeśli chcesz o nich porozmawiać.</a></p>
   </section>
 
   <section id="agencja" class="surface agency" aria-labelledby="agencyTitle">
-    <div class="section-head"><div><div class="eyebrow">03 / Symulacja budżetu</div><h2 id="agencyTitle">SkillCheck a firma rekrutacyjna</h2><p>Masz własnych kandydatów? Sprawdź, ile kosztuje wybrany zakres SkillCheck w zestawieniu z pełną usługą agencji. <strong>To porównanie budżetów, nie identycznych usług.</strong></p></div><div class="two-kickers">Jedno stanowisko · jedno zatrudnienie</div></div>
+    <div class="section-head"><div><div class="eyebrow">03 / Symulacja budżetu</div><h2 id="agencyTitle">SkillCheck a firma rekrutacyjna</h2><p>Masz własnych kandydatów? Sprawdź, ile kosztuje wybrany zakres SkillCheck w zestawieniu z pełną usługą agencji. <strong>To porównanie budżetów, nie identycznych usług, i nie jest gwarantowaną oszczędnością.</strong></p></div><div class="two-kickers">Jedno stanowisko · jedno zatrudnienie</div></div>
     <div class="agency-inputs">
       <div class="field"><label for="agencyMode">Sposób wyceny agencji</label><div class="input-shell"><select id="agencyMode"><option value="fixed">Stała opłata za zatrudnienie</option><option value="percent">Procent rocznej pensji brutto</option></select></div><small>Edytuj wartości według własnej oferty agencji.</small></div>
       <div class="field" id="fixedFields"><label for="agencyFixed">Opłata agencji netto</label><div class="input-shell"><input type="number" id="agencyFixed" min="0" max="100000000" step="100" value="10000"><span class="unit">PLN</span></div><small>10 000 zł netto: publiczny przykład rekrutacji IT, Be in IT.</small></div>
@@ -364,86 +343,80 @@
       <div class="agency-results" aria-live="polite">
         <div class="agency-card"><div class="label">Opłata agencji netto</div><div class="money" id="agencyCostValue">10 000,00 zł</div><p id="agencyCostCaption">Stała opłata za jedno zatrudnienie. Zakres pełnej usługi agencji.</p></div>
         <div class="agency-card"><div class="label">SkillCheck + budżet klienta netto</div><div class="money" id="skillBudgetValue">1 743,90 zł</div><p id="skillBudgetCaption">243,90 zł netto za PRESELEKCJĘ + 1 500,00 zł kosztów klienta.</p></div>
-        <div class="agency-card" id="deltaCard"><div class="label" id="deltaLabel">Mniejszy budżet w tym scenariuszu</div><div class="money" id="budgetDeltaValue">8 200,00 zł</div><p id="deltaCaption">82,00% niższy budżet względem opłaty agencji. To nie jest gwarantowana oszczędność.</p></div>
+        <div class="agency-card" id="deltaCard"><div class="label" id="deltaLabel">Mniejszy budżet w tym scenariuszu</div><div class="money" id="budgetDeltaValue">8 256,10 zł</div><p id="deltaCaption">82,56% niższy budżet względem opłaty agencji. To nie jest gwarantowana oszczędność.</p></div>
       </div>
     </div>
-    <div id="freeComparison" class="free-comparison" hidden><strong>FREE to próba, nie pełna rekrutacja.</strong><p>FREE obejmuje tylko 5 analiz CV i jedną próbną rozmowę. Porównanie z kosztem pełnej usługi agencji byłoby mylące. Wybierz płatny wariant, aby zobaczyć symulację budżetu.</p><button id="switchToPaid" type="button" class="button small">Porównaj PRESELEKCJĘ ↗</button></div>
+    <div id="freeComparison" class="free-comparison" hidden><strong>FREE to próba, nie pełna rekrutacja.</strong><p>FREE obejmuje tylko 5 analiz CV. Porównanie z kosztem pełnej usługi agencji byłoby mylące. Wybierz PRESELEKCJĘ, aby zobaczyć symulację budżetu.</p><button id="switchToPaid" type="button" class="button small">Porównaj PRESELEKCJĘ ↗</button></div>
     <div class="agency-caption">
-      <div><h3>Co zapewnia planowany SkillCheck?</h3><p>Pracę na CV dostarczonych przez klienta, analizę dopasowania, rozmowy voicebota i raport. W WERYFIKACJI także testy i pogłębiona analiza, a w AC zadania i pracę eksperta. Pozyskanie CV i końcowa decyzja pozostają po stronie klienta.</p></div>
+      <div><h3>Co obejmuje SkillCheck?</h3><p>Pracę na CV dostarczonych przez klienta, zestawienie informacji z wymaganiami stanowiska, dowody i braki danych, ranking, shortlistę oraz raport z eksportem. Pozyskanie CV i końcowa decyzja pozostają po stronie klienta.</p></div>
       <div><h3>Co obejmuje punkt odniesienia agencji?</h3><p>Pełna rekrutacja może obejmować sourcing, selekcję, rozmowy, koordynację procesu, wsparcie zatrudnienia i gwarancję. Przykład Be in IT: rozliczenie success fee po zatrudnieniu; zakres i warunki zgodnie z ofertą konkretnej agencji.</p></div>
     </div>
-    <p class="fine-print">Różnica budżetów nie jest potwierdzoną oszczędnością na tej samej usłudze. Przy braku zatrudnienia agencja w modelu success fee może nie pobrać opłaty; etapy SkillCheck nadal mogą być płatne. Nie oszacowano czasu wakatu, kosztu błędnego zatrudnienia ani jakości wyniku. Symulacja porównuje sam pakiet bazowy <strong>bez dodatków do wyceny</strong>. Kwoty agencji i kosztów klienta porównujemy netto, a cenę pakietu dla klienta prezentujemy brutto.</p>
+    <p class="fine-print">Różnica budżetów nie jest potwierdzoną oszczędnością na tej samej usłudze. Przy braku zatrudnienia agencja w modelu success fee może nie pobrać opłaty; pakiet SkillCheck jest płatny niezależnie od wyniku rekrutacji. Nie oszacowano czasu wakatu, kosztu błędnego zatrudnienia ani jakości wyniku. Kwoty agencji i kosztów klienta porównujemy netto, a cenę pakietu dla klienta prezentujemy również brutto.</p>
   </section>
 
   <section id="zalozenia" class="assumptions" aria-labelledby="assumptionTitle">
     <div class="eyebrow">04 / Założenia i źródła</div><h2 id="assumptionTitle">Wiesz, skąd bierze się każda kwota.</h2>
     <p style="font-size:14px;color:#5b705f;max-width:760px">Symulacja nie ukrywa przyjętych parametrów. Sprawdź sposób liczenia, przykładowe stawki i ograniczenia przed wysłaniem zapytania.</p>
     <details open><summary>Ceny i zasada przeliczania wolumenu</summary>
-      <p>PRESELEKCJA: <strong>300,00 zł brutto</strong> (243,90 zł netto + 23% VAT) za pakiet 60 analiz CV, ważnych 3 miesiące. Przy większej puli CV liczymy kolejne pakiety: do 60 CV jeden, do 120 CV dwa, do 180 CV trzy. Ceny bazowe (decyzje właściciela 2026-11-02): WERYFIKACJA <strong>615,00 zł brutto za 60 analiz CV</strong>, ASSESSMENT CENTER <strong>1 499,00 zł brutto za 50 analiz CV</strong>; VAT 23%. FREE: 0 zł za maksymalnie 5 CV i jedną rozmowę próbną. Podstawa i wyprowadzenie każdej z tych liczb: docs/cennik-2026-11-02.md.</p>
-      <p>Dla WERYFIKACJI i ASSESSMENT CENTER wybór 10, 20, 30 oraz dowolnej wielkości 35–150 CV co 5 jest <strong>roboczą symulacją</strong>. Zmiana kwoty liczona względem puli bazowej danego pakietu (WERYFIKACJA 60 CV, ASSESSMENT CENTER 50 CV) = (liczba CV − pula bazowa) × 0,1652 zł netto × 1,23 VAT, zaokrąglona do grosza. Ceny bazowe są zatwierdzone przez właściciela; wyceny innych wolumenów pozostają roboczą symulacją. Dodatki nie mają zatwierdzonych stawek i nie są wliczone w wyświetlaną kwotę pakietu.</p>
+      <p>PRESELEKCJA: <strong>300,00 zł brutto</strong> (243,90 zł netto + 23% VAT) za pakiet 60 analiz CV, ważnych 3 miesiące od przyznania. To aktualna cena, nie symulacja. Przy większej puli CV liczymy kolejne pakiety: do 60 CV jeden, do 120 CV dwa, do 180 CV trzy. FREE: 0 zł za 5 analiz CV, jedna próba na firmę; rejestracja wymaga numeru NIP i firmowego adresu e-mail.</p>
+      <p>WERYFIKACJA i ASSESSMENT CENTER są pokazane jako kolejne etapy rozwoju oferty, <strong>bez ceny i bez terminu uruchomienia</strong>. Nie podajemy dla nich żadnych kwot, dopóki nie zostaną zatwierdzone.</p>
     </details>
-    <details><summary>Rozmowy, czas i zakres pakietów</summary>
-      <p>FREE: do 5 CV i 1 próbna rozmowa. Płatne pakiety: wybrana liczba CV i do 10 wykonanych rozmów voicebota; możesz zaznaczyć 5 dodatkowych rozmów jako pozycję do indywidualnej wyceny. Przyjęto 9 minut na rozmowę, lecz to <strong>czas pracy bota, nie zmierzona oszczędność czasu rekrutera</strong>. W AC założono do 5 uczestników po 2 zadania i 3 godziny pracy eksperta na cały proces. Ręczne czytanie CV liczymy osobno według parametrów wprowadzonych przez oglądającego.</p>
+    <details><summary>Koszt ręcznej analizy CV</summary>
+      <p>Czas ręcznego czytania liczymy jako: liczba CV × minuty na jedno CV ÷ 60. Koszt tego czasu to liczba godzin × koszt godziny pracy netto. Domyślnie 6 minut na CV i 65 zł za godzinę — obie wartości zmieniasz w kalkulatorze. Przy 50 CV daje to około 5 godzin i 325 zł netto. <strong>To koszt ręcznej analizy przy podanych założeniach, a nie gwarantowana oszczędność dzięki SkillCheck</strong>; porównanie nie uwzględnia czasu potrzebnego na przejrzenie wyników.</p>
     </details>
     <details><summary>Skąd pochodzą przykłady opłat agencji?</summary>
       <p><a href="https://beinit.pl/cennik/" target="_blank" rel="noopener noreferrer">Be in IT — publiczny cennik</a>: 10 000 zł netto + VAT za jedną rekrutację IT, płatność po zatrudnieniu i 3 miesiące gwarancji zgodnie z warunkami. <a href="https://www.hrestie.com/nasze-uslugi" target="_blank" rel="noopener noreferrer">HRESTIE — oferta usług</a>: podstawowa rekrutacja od 15% rocznego wynagrodzenia brutto kandydata. Są to <strong>przykłady konkretnych ofert, a nie średnie rynkowe</strong>; wycenę procentową traktujemy jako szacunek netto do potwierdzenia z agencją.</p>
       <p>Własny koszt klienta 1 500 zł netto to edytowalny przykład: 1 000 zł pozyskanie CV + 500 zł własna obsługa. Może być wyższy, niższy albo zerowy — wpisz własny koszt. Agencja w modelu success fee i SkillCheck rozliczają inne zakresy świadczeń.</p>
     </details>
     <details><summary>Co dalej po wyborze pakietu?</summary>
-      <p>Kalkulator działa lokalnie w przeglądarce. „Zapytaj o ofertę” tworzy podsumowanie wyboru razem z dodatkami, gotowe do skopiowania lub wysłania samodzielnie. „Kup teraz” pokazuje jedynie podgląd kroku zakupowego. <strong>Nie przyjmuje płatności, nie przesyła CV i nie uruchamia usług</strong>. Dostępność funkcji, cenę dodatków i termin trzeba potwierdzić przed zamówieniem. Decyzja rekrutacyjna należy do człowieka.</p>
+      <p>Kalkulator działa lokalnie w przeglądarce. „Pobierz podsumowanie” tworzy opis wyboru gotowy do skopiowania, pobrania lub wysłania pocztą. „Zamów PRESELEKCJĘ” prowadzi na stronę oferty, gdzie składasz zamówienie. <strong>Kalkulator nie przyjmuje płatności, nie przesyła CV i nie uruchamia usług</strong>. Płatność następuje przelewem na podstawie faktury proforma; pakiet uruchamiamy po zaksięgowaniu wpłaty. Płatność online Przelewy24 jest przygotowywana. Decyzja rekrutacyjna należy do człowieka.</p>
     </details>
   </section>
 
   <section class="surface" aria-labelledby="faqTitle">
     <div class="eyebrow">05 / Zanim wybierzesz</div><h2 id="faqTitle" style="font-size:28px;letter-spacing:-.035em;margin:9px 0 18px">Jasne zasady od początku.</h2>
-    <details><summary>Czy muszę zapłacić, żeby wypróbować SkillCheck?</summary><p>FREE jest planowaną jednorazową próbą dla firmy — maksymalnie 5 CV i 1 próbna rozmowa. Wybór próby nie włącza automatycznie pakietu płatnego. Dostępność i sposób uruchomienia potwierdzimy w kontakcie.</p></details>
-    <details><summary>Czy SkillCheck znajduje kandydatów?</summary><p>W tym modelu pracujesz na własnych CV, np. z ogłoszeń, poleceń lub bazy firmy. Pozyskanie kandydatów, organizacja późniejszych etapów i decyzja o zatrudnieniu pozostają po Twojej stronie.</p></details>
-    <details><summary>Czym różni się PRESELEKCJA od WERYFIKACJI?</summary><p>PRESELEKCJA pomaga uporządkować dokumenty, rozmowy i shortlistę. WERYFIKACJA dodaje testy kompetencji, pogłębioną analizę odpowiedzi i rozszerzony raport. Assessment Center pozwala dodatkowo oceniać wykonanie zadań praktycznych.</p></details>
-    <details><summary>Czy 10 rozmów przypada na każdy poziom osobno?</summary><p>Nie. Limit do 10 wykonanych rozmów jest wspólny dla całego procesu w wybranym pakiecie. Rozmowy w wyższych pakietach nie sumują się z PRESELEKCJĄ.</p></details>
-    <details><summary>Czy kalkulator pokazuje gotową ofertę i uruchamia płatność?</summary><p>Nie. Wyliczenia dla 10–150 CV są orientacyjne, a dodatki są do wyceny. „Kup teraz” jest wyłącznie podglądem przyszłego procesu zakupowego. Szczegółową ofertę, dostępność usług i warunki płatności trzeba potwierdzić.</p></details>
+    <details><summary>Czy muszę zapłacić, żeby wypróbować SkillCheck?</summary><p>Nie. FREE to bezpłatna analiza 5 CV, jedna próba na firmę. Do rejestracji potrzebny jest numer NIP i firmowy adres e-mail. Wybór próby nie włącza automatycznie pakietu płatnego.</p></details>
+    <details><summary>Czy SkillCheck znajduje kandydatów?</summary><p>Nie. Pracujesz na własnych CV, np. z ogłoszeń, poleceń lub bazy firmy. Pozyskanie kandydatów, organizacja późniejszych etapów i decyzja o zatrudnieniu pozostają po Twojej stronie.</p></details>
+    <details><summary>Co dokładnie dostaję w PRESELEKCJI?</summary><p>Analizę 60 CV względem wymagań stanowiska: dowody poparte cytatem z materiału, brakujące informacje, pytania na rozmowę, ranking kandydatów, shortlistę i raport z eksportem. Analizy są ważne 3 miesiące od przyznania.</p></details>
+    <details><summary>Jak zapłacę i kiedy uruchomicie pakiet?</summary><p>Przelewem na podstawie faktury proforma. Po zaksięgowaniu wpłaty uruchamiamy pakiet na koncie firmy i wysyłamy fakturę VAT. Płatność online Przelewy24 jest przygotowywana.</p></details>
+    <details><summary>Czy kwoty w kalkulatorze to gwarantowana oszczędność?</summary><p>Nie. Ceny FREE i PRESELEKCJI są aktualne. Koszt ręcznej analizy i porównanie z agencją to symulacje na Twoich założeniach — pokazują budżet procesu, nie potwierdzoną oszczędność.</p></details>
   </section>
 
   <div class="cta-footer"><div class="cta-panel">
     <div><div class="eyebrow" style="color:#b7d4be">Najpierw sprawdź. Potem zdecyduj.</div><h2>5 CV. 0 zł. Pierwszy krok do lepiej uporządkowanej rekrutacji.</h2><p>Zobacz działanie na własnych materiałach, zanim wybierzesz większy zakres. Nie zaczynasz od płatnego pakietu.</p></div>
-    <button type="button" class="button" id="tryFreeBottom">Zapytaj o bezpłatną próbę ↗</button>
+    <a class="button" href="/preselekcja#free">Wypróbuj FREE — 0 zł ↗</a>
   </div></div>
 </main>
-<footer class="wrap"><span>© SkillCheck · Interaktywny podgląd kalkulatora v4 · 19.10.2026</span><span>Decyzje rekrutacyjne pozostają po stronie człowieka · <a href="/regulamin">Regulamin</a> · <a href="/polityka-prywatnosci">Polityka prywatności</a></span><span>KTIG CONSULTING Sp. z o.o., ul. Michała Kajki 10–12, 10-547 Olsztyn · KRS 0001110252 · NIP 7394002294 · REGON 528903093 · <a href="mailto:pomoc@skillcheck.pl">pomoc@skillcheck.pl</a> · <a href="tel:+48730266909">+48 730 266 909</a></span></footer>
+<footer class="wrap"><span>© SkillCheck · Kalkulator kosztu rekrutacji</span><span>Decyzje rekrutacyjne pozostają po stronie człowieka · <a href="/regulamin">Regulamin</a> · <a href="/polityka-prywatnosci">Polityka prywatności</a></span><span>KTIG CONSULTING Sp. z o.o., ul. Michała Kajki 10–12, 10-547 Olsztyn · KRS 0001110252 · NIP 7394002294 · REGON 528903093 · <a href="mailto:pomoc@skillcheck.pl">pomoc@skillcheck.pl</a> · <a href="tel:+48730266909">+48 730 266 909</a></span></footer>
 <dialog id="quoteDialog" aria-labelledby="quoteTitle">
   <div class="dialog-inner"><div class="modal-top"><div><div class="eyebrow">Twój SkillCheck</div><h2 id="quoteTitle">Podsumowanie wyboru</h2><p class="small-note" id="quoteLead">Możesz je skopiować, pobrać lub otworzyć w swojej poczcie. Samodzielnie zatwierdzasz wysłanie.</p></div><button class="icon-btn" type="button" id="closeQuote" aria-label="Zamknij">×</button></div>
     <textarea id="quoteText" aria-label="Podsumowanie zakresu" readonly></textarea>
-    <div class="modal-buttons"><a class="button" id="openLead" href="/rozmowa">Przejdź do zgłoszenia →</a><a class="button secondary" id="openMail" href="mailto:pomoc@skillcheck.pl">Otwórz e-mail ↗</a><button class="button secondary" type="button" id="copyQuote">Kopiuj podsumowanie</button><button class="button secondary" type="button" id="downloadQuote">Pobierz .txt</button></div><div class="status" id="copyStatus" role="status"></div>
+    <div class="modal-buttons"><a class="button" id="openOffer" href="/preselekcja">Przejdź do oferty →</a><a class="button secondary" id="openLead" href="/rozmowa">Napisz do nas →</a><a class="button secondary" id="openMail" href="mailto:pomoc@skillcheck.pl">Otwórz e-mail ↗</a><button class="button secondary" type="button" id="copyQuote">Kopiuj podsumowanie</button><button class="button secondary" type="button" id="downloadQuote">Pobierz .txt</button></div><div class="status" id="copyStatus" role="status"></div>
   </div>
 </dialog>
 <script>
 (()=>{
   'use strict';
-  // PRESELEKCJA: 300 zł brutto za pakiet 60 CV; większa pula = kolejne pakiety.
-  // WERYFIKACJA: 615 zł brutto za 60 CV (decyzja właściciela 2026-11-02).
-  // ASSESSMENT CENTER: 1499 zł brutto za 50 CV (decyzja właściciela 2026-11-02); proces dla 5-6 osób, maks. 10.
-  // Inne wolumeny to robocza symulacja.
+  // Current offer approved by the owner (2026-11-02): FREE 0 zł / 5 analiz CV,
+  // PRESELEKCJA 300 zł brutto za pakiet 60 analiz CV. A larger pool is charged as
+  // further packages. WERYFIKACJA and ASSESSMENT CENTER carry no price here.
   const VAT=1.23;
-  const BASE_GROSS_CENTS={free:0,pre:30000,verify:61500,ac:149900};
+  const BASE_GROSS_CENTS={free:0,pre:30000};
   const PRE_PACKAGE_CV=60;
+  const PRE_NET_CENTS=24390;
+  const FREE_CV=5;
   const prePackages=cv=>Math.max(1,Math.ceil(cv/PRE_PACKAGE_CV));
-  const VOLUME_DELTA_NET_PER_CV=0.1652;
-  // Wolumen, przy którym obowiązuje cena bazowa danego pakietu.
-  const BASE_CV={verify:60,ac:50};
-  // Ogon podpisu na karcie pakietu; część z pulą CV i statusem ceny dokłada render().
-  const PACK_SUB_TAIL={pre:'do 10 rozmów (w przygotowaniu)',verify:'testy i rozszerzony raport',ac:'proces dla 5–6 osób'};
   const PACK={
-    free:{name:'FREE',title:'FREE — poznaj działanie',desc:'Wypróbuj analizę na maksymalnie 5 CV i jednej próbnej rozmowie. To pierwszy krok, nie kompletna rekrutacja.',chip:'5 CV · 1 próbna rozmowa',lead:'Przetestuj na 5 CV bez uruchamiania płatnego pakietu.'},
-    pre:{name:'PRESELEKCJA',title:'PRESELEKCJA — od CV do shortlisty',desc:'Uporządkuj dokumenty, uzupełnij informacje w rozmowach i przygotuj shortlistę do dalszej oceny.',chip:'raport i shortlista',lead:'Wspólne kryteria, odpowiedzi z rozmów i lista osób do kolejnego etapu.'},
-    verify:{name:'WERYFIKACJA',title:'WERYFIKACJA — wyjdź poza deklaracje',desc:'Zestaw CV z odpowiedziami i wynikami testów kompetencji. Przygotuj pogłębiony materiał do decyzji.',chip:'testy i rozszerzony raport',lead:'Same deklaracje z CV to za mało? Sprawdź odpowiedzi i kompetencje.'},
-    ac:{name:'ASSESSMENT CENTER',title:'ASSESSMENT CENTER — zobacz działanie w praktyce',desc:'Połącz preselekcję, rozmowy i testy z zadaniami praktycznymi oraz wsparciem eksperta.',chip:'zadania praktyczne + ekspert',lead:'Przyjrzyj się sposobowi rozwiązywania zadań podobnych do realnej pracy.'}
+    free:{name:'FREE',title:'FREE — poznaj działanie',desc:'Wypróbuj analizę na 5 własnych CV. To pierwszy krok, nie kompletna rekrutacja.',chip:'5 analiz CV',lead:'Przetestuj na 5 CV bez uruchamiania płatnego pakietu.'},
+    pre:{name:'PRESELEKCJA',title:'PRESELEKCJA — od CV do shortlisty',desc:'Uporządkuj dokumenty, porównaj je z wymaganiami stanowiska i przygotuj shortlistę do dalszej oceny.',chip:'raport i shortlista',lead:'W PRESELEKCJI otrzymujesz wspólne kryteria, dowody z materiałów, braki danych, pytania na rozmowę i shortlistę.'}
   };
-  const state={cv:60,pack:'pre',extras:{calls:false,tests:false,cases:false,consult:false}};
+  const state={cv:30,pack:'pre'};
   const $=id=>document.getElementById(id);
   const formatMoney=(value,digits=2)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN',useGrouping:true,minimumFractionDigits:digits,maximumFractionDigits:digits}).format(value);
-  const fmtInt=value=>new Intl.NumberFormat('pl-PL').format(value);
   const percent=value=>new Intl.NumberFormat('pl-PL',{minimumFractionDigits:1,maximumFractionDigits:2}).format(value)+'%';
   const readable=(id,value)=>{$(id).textContent=value;};
   const asMoney=id=>Number($(id).value);
+  const hours1=value=>new Intl.NumberFormat('pl-PL',{minimumFractionDigits:1,maximumFractionDigits:1}).format(value)+' h';
   // Keep displayed assumptions identical to the numbers used by calculations.
   document.querySelectorAll('input[type="number"]').forEach(input=>{
     const notice=document.createElement('small');
@@ -458,42 +431,43 @@
       }else notice.textContent='';
     });
   });
-  const grossCents=(pkg,cv)=>pkg==='free'?0:pkg==='pre'?prePackages(cv)*BASE_GROSS_CENTS.pre:BASE_GROSS_CENTS[pkg]+Math.round((cv-BASE_CV[pkg])*VOLUME_DELTA_NET_PER_CV*VAT*100);
-  const PRE_NET_CENTS=24390;
-  const netCents=(pkg,cv)=>pkg==='pre'?prePackages(cv)*PRE_NET_CENTS:Math.round(grossCents(pkg,cv)/VAT);
+  // A pool larger than one package cannot be ordered from the generic offer page,
+  // whose proforma request covers a single package. Keep the chosen pool by sending
+  // the visitor to the enquiry path, which carries and validates it.
+  const orderTarget=()=>state.pack==='free'
+    ?{href:'/preselekcja#free',cta:'Wypróbuj FREE ↗'}
+    :prePackages(state.cv)===1
+      ?{href:'/preselekcja',cta:'Zamów PRESELEKCJĘ ↗'}
+      :{href:'/rozmowa?'+new URLSearchParams({source:'calculator-v4',pack:'pre',cv:String(state.cv)}),cta:'Zamów '+prePackages(state.cv)+' pakiety ↗'};
+  const grossCents=(pkg,cv)=>pkg==='free'?0:prePackages(cv)*BASE_GROSS_CENTS.pre;
+  const netCents=(pkg,cv)=>pkg==='free'?0:prePackages(cv)*PRE_NET_CENTS;
   const price=(pkg,cv)=>grossCents(pkg,cv)/100;
-  const effectiveCv=()=>state.pack==='free'?5:state.cv;
-  const voiceCount=()=>state.pack==='free'?1:10+(state.extras.calls?5:0);
-  const EXTRA_NAMES={calls:'5 dodatkowych rozmów AI',tests:'Testy kompetencji',cases:'Zadanie / case study',consult:'Konsultacja eksperta'};
-  const isIncluded=(extra,pack=state.pack)=>extra==='tests'?['verify','ac'].includes(pack):extra==='cases'||extra==='consult'?pack==='ac':false;
-  const selectedExtras=()=>Object.entries(state.extras).filter(([key,on])=>on&&!isIncluded(key));
-  function setPack(pkg){if(!PACK[pkg])return;state.pack=pkg;for(const key of Object.keys(state.extras)){if(pkg==='free'||isIncluded(key,pkg))state.extras[key]=false;}render();}
+  const effectiveCv=()=>state.pack==='free'?FREE_CV:state.cv;
+  const manualHours=()=>effectiveCv()*asMoney('timePerCv')/60;
+  const manualCost=()=>manualHours()*asMoney('hourlyTimeCost');
+  function setPack(pkg){if(!PACK[pkg])return;state.pack=pkg;render();}
   function setCv(cv){if(!Number.isInteger(cv)||!([10,20,30].includes(cv)||(cv>=35&&cv<=150&&cv%5===0)))return;state.cv=cv;render();}
   function quote(){
-    const cv=effectiveCv(),pk=PACK[state.pack];
+    const pk=PACK[state.pack];
     const lines=[
-      'SKILLCHECK — ZAPYTANIE O PAKIET',
+      'SKILLCHECK — PODSUMOWANIE WYBORU',
       '', 'Pakiet: '+pk.name,
       'Proces: 1 stanowisko / 1 proces',
       'Wybrana pula CV: '+state.cv,
-      'Analizy CV w wybranym wariancie: '+cv,
-      'Rozmowy voicebota (w przygotowaniu, nie są jeszcze dostępne): '+(state.pack==='free'?'1 próbna':'do '+voiceCount()+' na cały proces'),
-      'Cena symulowana brutto: '+formatMoney(price(state.pack,state.cv)),
-      'Cena symulowana netto: '+formatMoney(netCents(state.pack,state.cv)/100),
-      'Wybrane dodatki: '+(selectedExtras().length?selectedExtras().map(([key])=>EXTRA_NAMES[key]).join(', ')+' — każdy do indywidualnej wyceny':'Brak'),
-      'Koszt dodatków: nie uwzględniony w cenie bazowej; do indywidualnej wyceny',
-      'Dostępność: do potwierdzenia',
-      'Symulacja ręcznego czytania: '+formatMoney((effectiveCv()*asMoney('timePerCv')/60)*asMoney('hourlyTimeCost'),0)+' netto kosztu czasu przy własnych parametrach; NIE jest to gwarantowana oszczędność',
-      '', 'Cel: Proszę o informację o dostępności, terminie, dokładnym zakresie i ostatecznej cenie.',
-      '', 'Uwaga: ceny 10–150 CV stanowią roboczą symulację, nie wiążącą ofertę. FREE obejmuje tylko 5 CV.',
-      'Przygotowano w kalkulatorze SkillCheck v4. To nie jest zamówienie ani zgoda na płatność.'
+      'Analizy CV objęte zamówieniem: '+(state.pack==='free'?String(FREE_CV):prePackages(state.cv)*PRE_PACKAGE_CV+' (pula '+state.cv+' CV mieści się w '+prePackages(state.cv)+' × '+PRE_PACKAGE_CV+')'),
+      'Cena brutto: '+formatMoney(price(state.pack,state.cv)),
+      'Cena netto: '+formatMoney(netCents(state.pack,state.cv)/100),
+      state.pack==='free'?'Zakres FREE: '+FREE_CV+' analiz CV, jedna próba na firmę (weryfikacja NIP i firmowego e-maila).':'Zakres: '+prePackages(state.cv)+' × pakiet '+PRE_PACKAGE_CV+' analiz CV, ważny 3 miesiące od przyznania. Płatność przelewem na fakturę proforma.',
+      'Symulacja ręcznego czytania: '+hours1(manualHours())+' i '+formatMoney(manualCost(),0)+' netto kosztu czasu przy własnych parametrach; NIE jest to gwarantowana oszczędność',
+      '', 'Cel: Proszę o informację o dostępności, terminie i dokładnym zakresie.',
+      '', 'Przygotowano w kalkulatorze SkillCheck. To nie jest zamówienie ani zgoda na płatność.'
     ];
     if(state.pack!=='free'){
       const agency=agencyCostCents()/100,own=netCents(state.pack,state.cv)/100+asMoney('extraCosts');
-      lines.push('', 'Własna symulacja (kwoty netto, bez dodatków do wyceny):',
+      lines.push('', 'Własna symulacja budżetu (kwoty netto):',
         'Opłata agencji: '+formatMoney(agency),
         'Budżet SkillCheck + dodatkowy koszt klienta: '+formatMoney(own),
-        'Różnica budżetów (nie gwarantowana oszczędność): '+formatMoney(agency-own));
+        'Różnica budżetów (nie gwarantowana oszczędność, inny zakres usług): '+formatMoney(agency-own));
     }
     return lines.join('\n');
   }
@@ -514,7 +488,7 @@
     readable('skillBudgetValue',formatMoney(budgetC/100));
     readable('budgetDeltaValue',formatMoney(Math.abs(deltaC)/100));
     readable('agencyCostCaption',$('agencyMode').value==='fixed'?'Stała opłata za zatrudnienie, przy pełnym zakresie usługi agencji.':'Roczna pensja × ustalony procent prowizji. Wynik netto roboczo.');
-    readable('skillBudgetCaption',formatMoney(netC/100)+' za '+PACK[state.pack].name+' + '+formatMoney(extraC/100)+' dodatkowych kosztów klienta. Dodatki do wyceny nie są tu wliczone.');
+    readable('skillBudgetCaption',formatMoney(netC/100)+' za '+PACK[state.pack].name+' + '+formatMoney(extraC/100)+' dodatkowych kosztów klienta.');
     $('deltaCard').classList.toggle('negative',deltaC<0);
     if(deltaC===0){
       readable('deltaLabel','Takie same budżety w tym scenariuszu');
@@ -528,7 +502,7 @@
     }
   }
   function render(){
-    const pk=PACK[state.pack],cv=effectiveCv(),gross=price(state.pack,state.cv),net=netCents(state.pack,state.cv)/100,calls=voiceCount();
+    const pk=PACK[state.pack],cv=effectiveCv(),gross=price(state.pack,state.cv),net=netCents(state.pack,state.cv)/100;
     document.querySelectorAll('[data-cv]').forEach(btn=>btn.setAttribute('aria-pressed',String(Number(btn.dataset.cv)===state.cv)));
     const range=$('volumeSlider');
     range.value=String(Math.max(35,state.cv));
@@ -537,94 +511,71 @@
     readable('volumeValue',state.cv+' CV');
     $('volumeMinus').disabled=state.cv<=10;
     $('volumePlus').disabled=state.cv>=150;
-    let extraCount=0;
-    for(const [key,on] of Object.entries(state.extras)){
-      const el=document.querySelector('[data-extra="'+key+'"]');
-      const unavailable=state.pack==='free'||isIncluded(key);
-      el.disabled=unavailable;el.checked=on&&!unavailable;
-      const suffix=isIncluded(key)?'Już w wybranym pakiecie':state.pack==='free'?'Wybierz płatny wariant, aby dodać':'Po indywidualnej wycenie';
-      readable('extra'+key[0].toUpperCase()+key.slice(1)+'Hint',suffix);
-      if(on&&!unavailable)extraCount++;
-    }
-    readable('extraSelectionSummary',extraCount?('Wybrane dodatki: '+selectedExtras().map(([key])=>EXTRA_NAMES[key]).join(' · ')+'. Cena dodatków wymaga osobnej wyceny.'):'Bez dodatków. Możesz je dodać bez zmiany wariantu bazowego.');
     document.querySelectorAll('[data-pack]').forEach(btn=>btn.setAttribute('aria-pressed',String(btn.dataset.pack===state.pack)));
     document.querySelectorAll('[data-choose-pack]').forEach(btn=>btn.setAttribute('aria-pressed',String(btn.dataset.choosePack===state.pack)));
-    const activeColumn={free:1,pre:2,verify:3,ac:4}[state.pack];
+    const activeColumn={free:1,pre:2}[state.pack];
     document.querySelectorAll('#porownaj table tr').forEach(row=>Array.from(row.children).forEach((cell,index)=>cell.classList.toggle('active-column',index===activeColumn)));
     document.querySelectorAll('[data-package-price]').forEach(el=>el.textContent=formatMoney(price(el.dataset.packagePrice,state.cv),0));
-    // Podpis karty opisuje dokładnie tę pulę CV, dla której policzono cenę na tej samej karcie,
-    // i mówi wprost, czy to zatwierdzona cena bazowa, czy symulacja wolumenu.
-    document.querySelectorAll('[data-package-sub]').forEach(el=>{
-      const name=el.dataset.packageSub;
-      const base=name==='pre'?60:BASE_CV[name];
-      const tag=state.cv===base?'cena bazowa':'symulacja wolumenu';
-      el.textContent='Brutto za '+state.cv+' CV · '+tag+' · '+PACK_SUB_TAIL[name];
-    });
     document.querySelectorAll('.paidCv').forEach(el=>el.textContent=String(state.cv));
-    ['pre','verify','ac'].forEach(name=>readable('table'+(name==='pre'?'Pre':name==='verify'?'Verify':'Ac'),formatMoney(price(name,state.cv),0)));
+    readable('tablePre',formatMoney(price('pre',state.cv),0));
     readable('tableFree','0 zł');
     readable('heroPrice',formatMoney(gross,0));
     readable('heroVolume',cv+' CV');
-    readable('heroCalls',state.pack==='free'?'1 próbna':'do '+calls);
+    readable('heroManual',formatMoney(manualCost(),0));
     readable('heroPerCv',formatMoney(gross/cv));
     document.querySelector('.kpi-caption').textContent='brutto za wybrany zakres '+pk.name;
-    readable('heroPriceNote',state.pack==='free'?'FREE obejmuje tylko 5 CV oraz jedną próbną rozmowę.':state.pack==='pre'?(prePackages(state.cv)===1?'PRESELEKCJA: 300 zł brutto za pakiet 60 CV.':prePackages(state.cv)+' pakiety PRESELEKCJA × 300 zł brutto (po 60 CV).'):state.cv===BASE_CV[state.pack]?'Cena bazowa zatwierdzona dla '+BASE_CV[state.pack]+' CV. Funkcje i termin wymagają potwierdzenia.':'Orientacyjna cena dla '+state.cv+' CV — niezatwierdzona wycena wolumenu.');
+    readable('heroPriceNote',state.pack==='free'?'FREE obejmuje 5 analiz CV, jedna próba na firmę.':prePackages(state.cv)===1?'PRESELEKCJA: 300 zł brutto za pakiet 60 analiz CV.':prePackages(state.cv)+' pakiety PRESELEKCJA × 300 zł brutto (po 60 analiz CV).');
     readable('selectionTitle',pk.title);
     readable('selectionDescription',pk.desc);
     $('selectionChips').replaceChildren();
-    const chips=[cv+' CV',state.pack==='free'?'1 próbna rozmowa AI — w przygotowaniu':'do '+calls+' rozmów AI — w przygotowaniu',pk.chip,...selectedExtras().filter(([key])=>key!=='calls').map(([key])=>EXTRA_NAMES[key]+' · do wyceny')];
-    for(const chip of chips){const s=document.createElement('span');s.textContent=chip;$('selectionChips').append(s);}
+    for(const chip of [cv+' CV',pk.chip]){const s=document.createElement('span');s.textContent=chip;$('selectionChips').append(s);}
     readable('selectedPrice',formatMoney(gross));
-    readable('netPrice',formatMoney(net)+' netto · 23% VAT'+(state.pack==='free'?' — bezpłatna próba':''));
-    readable('quoteButton',state.pack==='free'?'Zapytaj o FREE ↗':'Zapytaj o ofertę ↗');
-    $('buyDemoButton').disabled=state.pack==='free';
-    readable('priceScopeNote',extraCount?'Cena bazowa (bez '+extraCount+' dodatków do wyceny)':(state.pack==='pre'?(prePackages(state.cv)===1?'Cena pakietu brutto (60 CV)':'Cena '+prePackages(state.cv)+' pakietów brutto (po 60 CV)'):'Cena bazowa pakietu · symulacja, nie wiążąca oferta'));
+    readable('netPrice',state.pack==='free'?'Bezpłatna próba — bez faktury':formatMoney(net)+' netto · 23% VAT');
+    const order=orderTarget();
+    $('orderLink').textContent=order.cta;
+    $('orderLink').href=order.href;
+    readable('orderNote',state.pack==='free'?'Zgłoszenie firmy do bezpłatnej próby.':prePackages(state.cv)===1?'Zamówienie obejmuje jeden pakiet 60 analiz CV.':'Wybrana pula to '+state.cv+' CV, czyli '+prePackages(state.cv)+' pakiety. Zamówienie większe niż jeden pakiet ustalamy w zapytaniu — Twoja pula jest w nim zachowana.');
+    readable('priceScopeNote',state.pack==='free'?'Jedna bezpłatna próba na firmę':prePackages(state.cv)===1?'Cena pakietu brutto (60 analiz CV)':'Cena '+prePackages(state.cv)+' pakietów brutto (po 60 analiz CV)');
     readable('metricCv',cv+' CV');
-    readable('metricCvText',state.pack==='free'?'Jednorazowa próba dla firmy, maksymalnie 5 analiz CV.':'Analiza CV według wspólnych kryteriów stanowiska.');
-    readable('metricMinutes',(calls*9)+' min');
-    readable('metricMinutesText',calls+' rozmów × założone 9 min. Czas rozmów bota, nie pomiar zaoszczędzonego czasu.');
+    readable('metricCvText',state.pack==='free'?'Jednorazowa próba dla firmy, 5 analiz CV.':'Analiza CV według wspólnych kryteriów stanowiska.');
+    readable('metricManual',hours1(manualHours()));
     readable('metricUnit',formatMoney(gross/cv));
-    readable('metricUnitText',state.pack==='free'?'Bezpłatne 5 CV; nie jest to cena pełnego procesu.':extraCount?'Średnio brutto / CV w pakiecie bazowym. Nie zawiera dodatków do wyceny.':'Średnio brutto / CV w puli, razem z podstawowymi funkcjami pakietu.');
-    readable('copyReuseCv',state.pack==='free'?'Wypróbuj działanie na 5 własnych CV. Jeśli masz więcej zgłoszeń, po próbie możesz wybrać większy zakres.':'Masz kandydatów z ogłoszeń lub poleceń? Możesz pracować na '+state.cv+' własnych CV, bez ponownego zlecania ich pozyskania. AI pomaga porządkować dane przed kolejnymi rozmowami.');
+    readable('metricUnitText',state.pack==='free'?'Bezpłatne 5 analiz CV; nie jest to cena pełnego procesu.':'Średnio brutto / CV w puli, razem z wszystkimi funkcjami pakietu.');
+    readable('copyReuseCv',state.pack==='free'?'Wypróbuj działanie na 5 własnych CV. Jeśli masz więcej zgłoszeń, po próbie możesz wybrać PRESELEKCJĘ.':'Masz kandydatów z ogłoszeń lub poleceń? Możesz pracować na '+state.cv+' własnych CV, bez ponownego zlecania ich pozyskania. AI pomaga porządkować dane przed rozmowami.');
     readable('copyProgress',pk.lead);
-    readable('tableIntro','Ceny brutto dla '+state.cv+' CV w płatnych pakietach. FREE zawsze obejmuje 5 CV.');
-    readable('volumeDisclaimer',state.pack==='pre'?'PRESELEKCJA kosztuje 300 zł brutto za pakiet 60 analiz CV, ważnych 3 miesiące. Dodatki, zakres i dostępność usług potwierdzamy przed realizacją.':state.cv===BASE_CV[state.pack]?'Przy '+BASE_CV[state.pack]+' CV obowiązuje zatwierdzona cena bazowa. Dodatki, zakres i dostępność usług potwierdzamy przed realizacją.':'Przy '+state.cv+' CV pokazujemy orientacyjną symulację wolumenu, a nie zatwierdzony cennik. Dodatki są do odrębnej wyceny.');
+    readable('tableIntro','Ceny brutto dla '+state.cv+' CV w PRESELEKCJI. FREE zawsze obejmuje 5 CV.');
+    readable('volumeDisclaimer',state.pack==='free'?'FREE kosztuje 0 zł i obejmuje 5 analiz CV, jedna próba na firmę. Rejestracja wymaga numeru NIP i firmowego adresu e-mail.':'PRESELEKCJA kosztuje 300 zł brutto za pakiet 60 analiz CV, ważny 3 miesiące. Większa pula CV to kolejne pakiety: do 60 CV jeden, do 120 CV dwa, do 180 CV trzy. Zakres i dostępność potwierdzamy przed realizacją.');
     renderManualBenefit();
     renderAgency();
     if($('quoteDialog').open)fillQuote();
   }
   function renderManualBenefit(){
-    const mins=asMoney('timePerCv');
-    const hourly=asMoney('hourlyTimeCost');
-    const hours=effectiveCv()*mins/60;
-    readable('manualHours',new Intl.NumberFormat('pl-PL',{minimumFractionDigits:1,maximumFractionDigits:1}).format(hours)+' h');
-    readable('manualCost',formatMoney(hours*hourly,0));
+    readable('manualHours',hours1(manualHours()));
+    readable('manualCost',formatMoney(manualCost(),0));
+    readable('heroManual',formatMoney(manualCost(),0));
+    readable('metricManual',hours1(manualHours()));
   }
   function fillQuote(){
     const text=quote();$('quoteText').value=text;
-    $('openLead').href='/rozmowa?'+new URLSearchParams({source:'calculator-v4',pack:state.pack,cv:String(state.cv),extra:selectedExtras().map(([key])=>key).join(',')});
+    $('openOffer').href=orderTarget().href;
+    $('openOffer').textContent=orderTarget().cta;
+    $('openLead').href='/rozmowa?'+new URLSearchParams({source:'calculator-v4',pack:state.pack,cv:String(state.cv)});
     $('openMail').href='mailto:pomoc@skillcheck.pl?subject='+encodeURIComponent('Zapytanie SkillCheck — '+PACK[state.pack].name+' / '+effectiveCv()+' CV')+'&body='+encodeURIComponent(text);
   }
-  function openQuote(isBuyDemo=false){
+  function openQuote(){
     fillQuote();$('copyStatus').textContent='';
-    readable('quoteTitle',isBuyDemo?'Podgląd zakupu — bez płatności':'Podsumowanie zapytania');
-    readable('quoteLead',isBuyDemo?'Przyszła ścieżka zakupowa jest w przygotowaniu. Niczego nie kupujesz ani nie opłacasz; możesz zamiast tego wysłać zapytanie.':'Możesz skopiować podsumowanie, pobrać plik lub otworzyć je w poczcie. Samodzielnie zatwierdzasz wysłanie.');
     $('quoteDialog').showModal();
   }
-  function openFree(){setPack('free');openQuote();}
   document.querySelectorAll('[data-cv]').forEach(btn=>btn.addEventListener('click',()=>setCv(Number(btn.dataset.cv))));
   document.querySelectorAll('[data-pack]').forEach(btn=>btn.addEventListener('click',()=>setPack(btn.dataset.pack)));
   document.querySelectorAll('[data-choose-pack]').forEach(btn=>btn.addEventListener('click',()=>{setPack(btn.dataset.choosePack);$('kalkulator').scrollIntoView({behavior:'smooth'});}));
   $('volumeSlider').addEventListener('input',event=>setCv(Number(event.target.value)));
   $('volumeMinus').addEventListener('click',()=>setCv(state.cv<=30?(state.cv===30?20:10):state.cv-5));
   $('volumePlus').addEventListener('click',()=>setCv(state.cv<30?(state.cv===10?20:30):state.cv+5));
-  document.querySelectorAll('[data-extra]').forEach(input=>input.addEventListener('change',()=>{if(!input.disabled){state.extras[input.dataset.extra]=input.checked;render();}}));
-  ['timePerCv','hourlyTimeCost'].forEach(id=>$(id).addEventListener('input',renderManualBenefit));
-  $('differencesOnly').addEventListener('change',()=>document.querySelectorAll('[data-common="yes"]').forEach(row=>row.hidden=$('differencesOnly').checked));
+  ['timePerCv','hourlyTimeCost'].forEach(id=>$(id).addEventListener('input',()=>{renderManualBenefit();if($('quoteDialog').open)fillQuote();}));
   ['agencyMode','agencyFixed','agencySalary','agencyCommission','extraCosts'].forEach(id=>$(id).addEventListener('input',()=>{renderAgency();if($('quoteDialog').open)fillQuote();}));
   $('switchToPaid').addEventListener('click',()=>setPack('pre'));
-  $('tryFreeTop').addEventListener('click',openFree);$('tryFreeBottom').addEventListener('click',openFree);
-  $('quoteButton').addEventListener('click',()=>openQuote());$('buyDemoButton').addEventListener('click',()=>openQuote(true));$('closeQuote').addEventListener('click',()=>$('quoteDialog').close());
+  $('quoteButton').addEventListener('click',()=>openQuote());$('closeQuote').addEventListener('click',()=>$('quoteDialog').close());
   $('quoteDialog').addEventListener('click',event=>{if(event.target===$('quoteDialog'))$('quoteDialog').close();});
   $('copyQuote').addEventListener('click',async()=>{
     fillQuote();const content=$('quoteText').value;
@@ -632,7 +583,7 @@
     catch(e){$('quoteText').focus();$('quoteText').select();$('copyStatus').textContent='Zaznaczono tekst. Użyj Ctrl+C (lub Kopiuj) w przeglądarce.';}
   });
   $('downloadQuote').addEventListener('click',()=>{
-    fillQuote();const blob=new Blob(['\ufeff'+$('quoteText').value],{type:'text/plain;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    fillQuote();const blob=new Blob(['﻿'+$('quoteText').value],{type:'text/plain;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
     a.href=url;a.download='SkillCheck_'+state.pack+'_'+effectiveCv()+'CV.txt';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
     $('copyStatus').textContent='Przygotowano plik z podsumowaniem.';
   });

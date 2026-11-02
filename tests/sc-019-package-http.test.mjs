@@ -111,7 +111,10 @@ test('built public route looks up the actual DB policy on each enabled request a
   const disabled = await startApp(t,false,rpcPort);
   before = reads;html = await landing(disabled);
   assert.equal(reads,before,'OFF does not request the catalog');
-  assert.ok(html.includes(pending));
+  // With the catalog OFF both published offers fall back to the owner-approved
+  // sizes: FREE 5 and PRESELEKCJA 60 (owner decision 2026-11-02).
+  assert.match(html,/5 analiz CV/);
+  assert.match(html,/60 analiz CV/);
   assert.doesNotMatch(html,/7 analiz CV|24 analiz CV/);
   before = reads;html = await offerPage(disabled);
   assert.equal(reads,before,'OFF offer page does not request the catalog');

@@ -76,16 +76,11 @@ test('customer-facing package copy does not hardcode grant amounts', async () =>
   assert.match(billing, /sc19AnalysisScope\(sizes\.FREE\)/);
   assert.match(billing, /sc19AnalysisScope\(sizes\.PRESELEKCJA\)/);
   assert.doesNotMatch(billing, /5 analiz CV|60 analiz CV/);
-  // Strażnik dotyczy przydziałów FREE i PRESELEKCJI — te liczby pochodzą z polityki pakietu
-  // (`sc19_package_sizes`) i nie wolno ich wpisywać na sztywno. Karty WERYFIKACJI i ASSESSMENT
-  // CENTER podają swoje zatwierdzone pule jako „60 CV" i „50 CV", bez słowa „analiz", właśnie po to,
-  // żeby nie kolidowały z tym strażnikiem. Rozmiar procesu AC (5–6 osób) nie jest przydziałem
-  // analiz i wyszedł z tego wyrażenia.
-  assert.doesNotMatch(marketing, /5 analiz CV|60 analiz CV/);
-  assert.match(marketing, /sc19OfferScopes/);
-  // FREE i PRESELEKCJA nadal czytają swoje przydziały dynamicznie, nie z literału.
-  assert.match(marketing, /scope:offer\.freeScope/);
-  assert.match(marketing, /preselectionCount \?\? sc19PolicyPendingScope/);
+  assert.doesNotMatch(marketing, /5 analiz CV|60 analiz CV|5–6/);
+  // Counts are rendered through the validating helper, never written into the copy.
+  assert.match(marketing, /sc19AnalysisScope|sc19OfferScopes/);
+  assert.match(marketing, /preselekcjaAnalyses\(catalogEnabled, sizes\)/);
+  assert.match(marketing, /freeAnalyses\(catalogEnabled, sizes\)/);
   assert.match(handoff, /sc19_package_sizes/);
   assert.match(handoff, /touch_updated_at/);
   assert.doesNotMatch(handoff, /exactly 60|FREE \(5 analyses\)/);

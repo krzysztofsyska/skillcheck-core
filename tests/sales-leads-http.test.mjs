@@ -165,17 +165,27 @@ for (const [label, env] of [
 
 
 test('calculator enquiry accepts intent only, including hostile URL inputs', () => {
-  const valid = { source: 'calculator-v4', pack: 'pre', cv: '150', extra: 'calls,tests,cases,consult' };
+  // The calculator offers FREE and PRESELEKCJA only, with no paid add-ons
+  // (owner decision 2026-11-02).
+  const valid = { source: 'calculator-v4', pack: 'pre', cv: '150' };
   const text = calculatorSelection({ ...valid, price: '0', discount: '100', approved: 'true' });
   assert.match(text, /PRESELEKCJA.*150 CV/);
-  assert.match(text, /Konsultacja eksperta/);
   assert.ok(text.length < 1000);
   assert.doesNotMatch(text, /approved|discount|100%|0 zł/);
-  for (const change of [{ pack: '__proto__' }, { pack: '<script>' }, { pack: ['pre', 'free'] }, { cv: ['150', '30'] }, { cv: '151' }, { cv: '15' }, { cv: '35.0' }, { extra: ['calls'] }, { extra: 'calls,calls' }, { extra: '<img>' }, { source: 'other' }]) {
+  for (const change of [{ pack: '__proto__' }, { pack: '<script>' }, { pack: ['pre', 'free'] }, { cv: ['150', '30'] }, { cv: '151' }, { cv: '15' }, { cv: '35.0' }, { source: 'other' }]) {
     assert.equal(calculatorSelection({ ...valid, ...change }), '');
   }
-  assert.match(calculatorSelection({ ...valid, pack: 'free' }), /Dodatki do wyceny: brak/);
-  assert.doesNotMatch(calculatorSelection({ ...valid, pack: 'ac' }), /Dodatki do wyceny:.*Testy kompetencji/);
+  // Packages that are not on sale are never echoed back as an enquiry.
+  for (const pack of ['verify', 'ac']) {
+    assert.equal(calculatorSelection({ ...valid, pack }), '');
+  }
+  assert.match(calculatorSelection({ ...valid, pack: 'free' }), /FREE.*150 CV/);
+  // A leftover add-on parameter from an old link is ignored, never rendered.
+  for (const extra of ['calls,tests,cases,consult', '<img>', ['calls']]) {
+    const withExtra = calculatorSelection({ ...valid, extra });
+    assert.equal(withExtra, calculatorSelection(valid));
+    assert.doesNotMatch(withExtra, /Dodatki|rozmów AI|Konsultacja eksperta|img/);
+  }
 });
 
 test('calculator selection reaches form and remains available when intake is disabled', async t => {
@@ -184,7 +194,7 @@ test('calculator selection reaches form and remains available when intake is dis
     const query = new URLSearchParams({ source: 'calculator-v4', pack: 'pre', cv: '150', extra: 'calls,consult', price: '0' });
     const html = await (await fetch(base + '/rozmowa?' + query)).text();
     assert.match(html, /PRESELEKCJA.*150 CV/);
-    assert.match(html, /Konsultacja eksperta/);
+    assert.doesNotMatch(html, /Konsultacja eksperta|rozmów AI/);
     if (enabled === 'true') {
       assert.match(html, /<textarea[^>]*name="needs"[^>]*>Zapytanie z kalkulatora/);
     } else {
@@ -192,7 +202,7 @@ test('calculator selection reaches form and remains available when intake is dis
       const href = html.match(/href="(mailto:[^"]+)"/)[1].replaceAll('&amp;', '&');
       const body = new URL(href).searchParams.get('body');
       assert.match(body, /PRESELEKCJA.*150 CV/);
-      assert.match(body, /Konsultacja eksperta/);
+      assert.doesNotMatch(body, /Konsultacja eksperta|rozmów AI/);
       assert.doesNotMatch(body, /price|0 zł/);
     }
     const hostile = await (await fetch(base + '/rozmowa?source=calculator-v4&pack=pre&pack=free&cv=150')).text();

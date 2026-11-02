@@ -1,9 +1,12 @@
 // Jedno źródło prawdy dla cen to docs/cennik-2026-11-02.md (do czasu SC-PRICING-W2).
 // Ten test pilnuje dwóch rzeczy naraz:
-//   1. te same liczby w dokumencie cennika, w demie kalkulatora, w komponencie porównania
+//   1. te same liczby w dokumencie cennika, w treści strony, w demie kalkulatora
 //      i w domyślnej konfiguracji kalkulatora wewnętrznego;
-//   2. kontrakt puli CV z SC-PRICING-W2b: krok 5, ręczne wpisanie tylko jako wielokrotność 5,
-//      sprawdzone dla wszystkich trzech pakietów płatnych.
+//   2. kontrakt puli CV: krok 5, ręczne wpisanie tylko jako wielokrotność 5 (SC-PRICING-W2b).
+//
+// Stan oferty po decyzjach właściciela z 2026-11-02: kupić można dziś FREE i PRESELEKCJĘ,
+// natomiast WERYFIKACJA i ASSESSMENT CENTER są pokazywane jako kolejne etapy **z zatwierdzoną
+// ceną** i bez terminu uruchomienia.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -12,15 +15,9 @@ const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
 const demo = read('public/kalkulator-demo.html');
 const cennik = read('docs/cennik-2026-11-02.md');
+const content = read('app/components/marketing/content.ts');
 const comparison = read('app/components/marketing/package-comparison.tsx');
 const internal = read('lib/pricing/internal-calculator.ts');
-
-// Zatwierdzone przez właściciela 2026-11-02. Grosze, brutto.
-const APPROVED = {
-  pre: { grossMinor: 30_000, baseCv: 60 },
-  verify: { grossMinor: 61_500, baseCv: 60 },
-  ac: { grossMinor: 149_900, baseCv: 50 },
-};
 
 const CV_STEP = 5;
 const CV_MIN = 35;
@@ -28,75 +25,56 @@ const CV_MAX = 150;
 // Pule poniżej suwaka, wybierane przyciskiem — zostają poza kontraktem kroku 5.
 const QUICK_CV = [10, 20, 30];
 
-/** Wyciąga literał obiektu z inline'owego skryptu demo, np. BASE_GROSS_CENTS={...}. */
-function demoObject(name) {
-  const m = demo.match(new RegExp(`const ${name}=\\{([^}]*)\\}`));
-  assert.ok(m, `demo kalkulatora nie zawiera stałej ${name}`);
-  return Object.fromEntries(
-    m[1].split(',').map((pair) => {
-      const [k, v] = pair.split(':');
-      return [k.trim(), Number(v)];
-    }),
-  );
-}
-
-test('demo kalkulatora niesie zatwierdzone ceny bazowe i pule CV', () => {
-  const gross = demoObject('BASE_GROSS_CENTS');
-  const baseCv = demoObject('BASE_CV');
-
-  assert.equal(gross.free, 0);
-  for (const [pack, { grossMinor }] of Object.entries(APPROVED)) {
-    assert.equal(gross[pack], grossMinor, `${pack}: cena bazowa w demie`);
-  }
-  // PRESELEKCJA liczy się pakietami po 60 CV, więc jej pula bazowa jest osobną stałą.
-  assert.match(demo, /const PRE_PACKAGE_CV=60/);
-  assert.equal(baseCv.verify, APPROVED.verify.baseCv);
-  assert.equal(baseCv.ac, APPROVED.ac.baseCv);
-});
-
-test('dokument cennika podaje te same liczby co kod', () => {
+test('dokument cennika podaje zatwierdzone liczby', () => {
   assert.match(cennik, /PRESELEKCJA \| 300 zł \| 60/);
   assert.match(cennik, /WERYFIKACJA \| 615 zł \| 60/);
   assert.match(cennik, /ASSESSMENT CENTER \| 1 499 zł \| 50/);
-  // Proces AC jest skalowany na 5–6 osób, maksymalnie 10 — to część oferty, nie tylko opis.
   assert.match(cennik, /5–6 osób, maksymalnie 10/);
   assert.match(cennik, /zwiększana suwakiem \*\*co 5\*\*/, 'cennik zapisuje krok 5 dla puli CV');
 });
 
-test('komponent porównania pakietów nie rozjeżdża się z cennikiem', () => {
-  assert.match(comparison, /price:"615 zł"/);
-  assert.match(comparison, /price:"1 499 zł"/);
-  assert.match(comparison, /60 CV \+ testy kompetencji/);
-  assert.match(comparison, /50 CV \+ testy \+ zadania praktyczne/);
-  // Cena zatwierdzona nie może być opisana jako robocza wizualizacja.
-  assert.match(comparison, /priceApproved:true/);
-  assert.doesNotMatch(comparison, /899/);
-  assert.doesNotMatch(comparison, /1 799|1799/);
+test('kolejne etapy na stronie mają zatwierdzone ceny, nie są bezcenowe', () => {
+  assert.match(content, /price: "615 zł brutto"/);
+  assert.match(content, /price: "1 499 zł brutto"/);
+  assert.match(content, /60 CV · testy kompetencji · pula CV zwiększana co 5/);
+  assert.match(content, /50 CV · zadania praktyczne · proces dla 5–6 osób, maksymalnie 10/);
+  // Cena zatwierdzona, pakiet jeszcze nie do kupienia — obie rzeczy muszą być powiedziane.
+  assert.match(content, /Ceny są zatwierdzone/);
+  assert.match(content, /nie można ich dziś kupić/);
+  assert.match(comparison, /Cena zatwierdzona · pakiet w przygotowaniu/);
+  assert.match(comparison, /stage\.price/);
 });
 
-test('dopłata za CV ponad pulę bazową jest ustawiona tam, gdzie pula skaluje się co 5', () => {
-  // 0,1652 zł netto × 1,23 VAT ≈ 20 groszy brutto — ta sama stawka co w demie i w §2 cennika.
-  assert.match(internal, /WERYFIKACJA: \{ grossMinor: 61_500, cvIncluded: 60, cvOptions: \[[^\]]*\], overageGrossPerCvMinor: 20 \}/);
-  assert.match(internal, /ASSESSMENT_CENTER: \{ grossMinor: 149_900, cvIncluded: 50, cvOptions: \[[^\]]*\], overageGrossPerCvMinor: 20 \}/);
-  assert.match(demo, /const VOLUME_DELTA_NET_PER_CV=0\.1652/);
-  assert.equal(Math.round(0.1652 * 1.23 * 100), 20, 'stawka w kalkulatorze odpowiada stawce z demo');
+test('demo kalkulatora podaje te same ceny etapów co strona', () => {
+  assert.match(demo, /615 zł brutto za 60 CV/);
+  assert.match(demo, /1 499 zł brutto za 50 CV/);
+  assert.match(demo, /proces dla 5–6 osób, maksymalnie 10/);
 });
 
 test('rozmowy z botem są wszędzie oznaczone jako niedostępne', () => {
-  // Cena jest zatwierdzona, rozmowy nie działają — demo nie może obiecywać ich jako gotowych.
-  // Nie chodzi o każde użycie słowa „rozmowa" — tylko o miejsca, które deklarują rozmowy jako
-  // zakres pakietu. Tam klient czyta obietnicę i tam musi stać zastrzeżenie.
-  assert.match(demo, /do 10 rozmów \(w przygotowaniu\)/);           // podpis karty PRESELEKCJI
-  assert.match(demo, /do '\+calls\+' rozmów AI — w przygotowaniu/);  // chip wybranego zakresu
-  assert.match(demo, /Rozmowy voicebota \(w przygotowaniu/);         // podsumowanie zapytania
-  assert.match(demo, /Rozmowy z botem są w przygotowaniu i nie działają jeszcze w żadnym pakiecie/);
-  assert.match(comparison, /Rozmowy z botem — w przygotowaniu/);
+  assert.match(content, /Rozmowy z botem są w przygotowaniu i nie działają w żadnym pakiecie/);
+  assert.match(demo, /Rozmowy z botem są w przygotowaniu i nie działają w żadnym pakiecie/);
+});
+
+test('wycofane ceny nie wracają', () => {
+  for (const stale of ['899', '1799', '1 799', '1845']) {
+    assert.equal(demo.includes(stale), false, `demo: wycofana cena ${stale}`);
+    assert.equal(content.includes(stale), false, `treść strony: wycofana cena ${stale}`);
+    assert.equal(comparison.includes(stale), false, `komponent porównania: wycofana cena ${stale}`);
+  }
 });
 
 test('domyślna konfiguracja kalkulatora wewnętrznego zgadza się z cennikiem', () => {
+  assert.match(internal, /PRESELEKCJA: \{ grossMinor: 30_000, cvIncluded: 60/);
   assert.match(internal, /WERYFIKACJA: \{ grossMinor: 61_500, cvIncluded: 60/);
   assert.match(internal, /ASSESSMENT_CENTER: \{ grossMinor: 149_900, cvIncluded: 50/);
-  assert.match(internal, /PRESELEKCJA: \{ grossMinor: 30_000, cvIncluded: 60/);
+});
+
+test('dopłata za CV ponad pulę bazową jest ustawiona tam, gdzie pula skaluje się co 5', () => {
+  // 0,1652 zł netto × 1,23 VAT ≈ 20 groszy brutto — stawka z §2 cennika.
+  assert.match(internal, /WERYFIKACJA: \{[^}]*overageGrossPerCvMinor: 20 \}/);
+  assert.match(internal, /ASSESSMENT_CENTER: \{[^}]*overageGrossPerCvMinor: 20 \}/);
+  assert.equal(Math.round(0.1652 * 1.23 * 100), 20);
 });
 
 test('suwak puli CV ma krok 5 w całym zakresie', () => {
@@ -119,17 +97,13 @@ function acceptsCv() {
   return new Function('cv', `"use strict";return !(${rejects});`);
 }
 
-test('pula CV przyjmuje tylko wielokrotności 5 — dla każdego pakietu płatnego', () => {
+test('pula CV przyjmuje tylko wielokrotności 5', () => {
   const accepts = acceptsCv();
-  // Reguła jest wspólna dla pakietów, więc sprawdzamy ją jawnie dla każdego z trzech,
-  // żeby regresja na jednym z nich nie przeszła niezauważona.
-  for (const pack of ['pre', 'verify', 'ac']) {
-    for (let cv = CV_MIN; cv <= CV_MAX; cv += CV_STEP) {
-      assert.equal(accepts(cv), true, `${pack}: ${cv} CV powinno być przyjęte`);
-    }
-    for (const cv of [36, 37, 41, 63, 64, 99, 101, 149]) {
-      assert.equal(accepts(cv), false, `${pack}: ${cv} CV nie jest wielokrotnością 5`);
-    }
+  for (let cv = CV_MIN; cv <= CV_MAX; cv += CV_STEP) {
+    assert.equal(accepts(cv), true, `${cv} CV powinno być przyjęte`);
+  }
+  for (const cv of [36, 37, 41, 63, 64, 99, 101, 149]) {
+    assert.equal(accepts(cv), false, `${cv} CV nie jest wielokrotnością 5`);
   }
 });
 
@@ -148,18 +122,4 @@ test('pule poniżej suwaka pozostają dostępne jako osobne przyciski', () => {
   for (const cv of QUICK_CV) {
     assert.equal(accepts(cv), true, `${cv} CV jest pulą wybieraną przyciskiem`);
   }
-});
-
-test('podpisy na kartach pakietów opisują tę samą pulę CV co pokazana cena', () => {
-  // Regresja z review #248: podpis był statyczny, a cena przeliczana dla state.cv.
-  assert.match(demo, /data-package-sub="verify"/);
-  assert.match(demo, /data-package-sub="ac"/);
-  assert.match(demo, /document\.querySelectorAll\('\[data-package-sub\]'\)/);
-  assert.match(demo, /state\.cv===base\?'cena bazowa':'symulacja wolumenu'/);
-});
-
-test('demo nie zawiera wycofanych cen', () => {
-  assert.doesNotMatch(demo, /\b899\b/);
-  assert.doesNotMatch(demo, /\b1845\b/);
-  assert.doesNotMatch(demo, /\b1799\b/);
 });
