@@ -288,6 +288,7 @@
           <a class="button" id="orderLink" href="/preselekcja">Zamów PRESELEKCJĘ ↗</a>
           <button type="button" id="quoteButton" class="button secondary">Pobierz podsumowanie ↗</button>
         </div>
+        <div class="minilabel" id="orderNote">Zamówienie obejmuje jeden pakiet 60 analiz CV.</div>
         <div class="minilabel">Kalkulator nie pobiera płatności i nie aktywuje produktu. Płatność przelewem na fakturę proforma następuje po stronie oferty.</div>
       </div>
     </div>
@@ -430,6 +431,14 @@
       }else notice.textContent='';
     });
   });
+  // A pool larger than one package cannot be ordered from the generic offer page,
+  // whose proforma request covers a single package. Keep the chosen pool by sending
+  // the visitor to the enquiry path, which carries and validates it.
+  const orderTarget=()=>state.pack==='free'
+    ?{href:'/preselekcja#free',cta:'Wypróbuj FREE ↗'}
+    :prePackages(state.cv)===1
+      ?{href:'/preselekcja',cta:'Zamów PRESELEKCJĘ ↗'}
+      :{href:'/rozmowa?'+new URLSearchParams({source:'calculator-v4',pack:'pre',cv:String(state.cv)}),cta:'Zamów '+prePackages(state.cv)+' pakiety ↗'};
   const grossCents=(pkg,cv)=>pkg==='free'?0:prePackages(cv)*BASE_GROSS_CENTS.pre;
   const netCents=(pkg,cv)=>pkg==='free'?0:prePackages(cv)*PRE_NET_CENTS;
   const price=(pkg,cv)=>grossCents(pkg,cv)/100;
@@ -522,8 +531,10 @@
     for(const chip of [cv+' CV',pk.chip]){const s=document.createElement('span');s.textContent=chip;$('selectionChips').append(s);}
     readable('selectedPrice',formatMoney(gross));
     readable('netPrice',state.pack==='free'?'Bezpłatna próba — bez faktury':formatMoney(net)+' netto · 23% VAT');
-    $('orderLink').textContent=pk.cta;
-    $('orderLink').href=pk.href;
+    const order=orderTarget();
+    $('orderLink').textContent=order.cta;
+    $('orderLink').href=order.href;
+    readable('orderNote',state.pack==='free'?'Zgłoszenie firmy do bezpłatnej próby.':prePackages(state.cv)===1?'Zamówienie obejmuje jeden pakiet 60 analiz CV.':'Wybrana pula to '+state.cv+' CV, czyli '+prePackages(state.cv)+' pakiety. Zamówienie większe niż jeden pakiet ustalamy w zapytaniu — Twoja pula jest w nim zachowana.');
     readable('priceScopeNote',state.pack==='free'?'Jedna bezpłatna próba na firmę':prePackages(state.cv)===1?'Cena pakietu brutto (60 analiz CV)':'Cena '+prePackages(state.cv)+' pakietów brutto (po 60 analiz CV)');
     readable('metricCv',cv+' CV');
     readable('metricCvText',state.pack==='free'?'Jednorazowa próba dla firmy, 5 analiz CV.':'Analiza CV według wspólnych kryteriów stanowiska.');
@@ -546,7 +557,8 @@
   }
   function fillQuote(){
     const text=quote();$('quoteText').value=text;
-    $('openOffer').href=PACK[state.pack].href;
+    $('openOffer').href=orderTarget().href;
+    $('openOffer').textContent=orderTarget().cta;
     $('openLead').href='/rozmowa?'+new URLSearchParams({source:'calculator-v4',pack:state.pack,cv:String(state.cv)});
     $('openMail').href='mailto:pomoc@skillcheck.pl?subject='+encodeURIComponent('Zapytanie SkillCheck — '+PACK[state.pack].name+' / '+effectiveCv()+' CV')+'&body='+encodeURIComponent(text);
   }

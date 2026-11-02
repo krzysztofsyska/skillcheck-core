@@ -181,6 +181,12 @@ test('public offer and demo pages respond without an account', async (t) => {
   for (const href of ['/preselekcja', '/preselekcja#free']) {
     assert.ok(hrefs(calculator).includes(href), `calculator CTA to ${href}`);
   }
+  // A pool bigger than one package must not be ordered through the single-package
+  // proforma request: it goes to the enquiry path, which keeps the chosen pool.
+  assert.match(calculator, /const orderTarget=\(\)=>/);
+  assert.match(calculator, /prePackages\(state\.cv\)===1\s*\?\{href:'\/preselekcja'/);
+  assert.match(calculator, /source:'calculator-v4',pack:'pre',cv:String\(state\.cv\)/);
+  assert.match(calculator, /id="orderNote"/);
 
   const orderResponse = await fetch(`${base}/preselekcja`, { redirect: 'manual' });
   assert.equal(orderResponse.status, 200);
