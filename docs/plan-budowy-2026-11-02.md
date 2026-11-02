@@ -105,6 +105,26 @@ tak aby tabele istniały w `skillcheck-preview` i były objęte inwentarzem usuw
 - test inwentarza usuwania na wzorze `tests/sc-step3-erasure-r7.test.mjs`
 - test kolizji blokad z `confirm_erasure_subject` (B1 sekcja 4)
 
+### Ustalenie z 2026-11-02 — C1 to NIE jest przeniesienie plików
+
+Pierwsze rozpoznanie pokazało, że prototyp z `db/isolated/` jest napisany pod stan bazy sprzed
+miesiąca i nie da się go skopiować:
+
+- `sc014-b2-attempts.sql:5` i `sc014-b2-retention.sql:7` wymagają `erasure_inventory_baseline_r5`.
+  Obecny stan to **r10**.
+- `sc014-b2-retention.sql:727` zawiera **wpisany na sztywno podpis schematu**
+  (`b20053a8e9a9…`) i manifest **73 tabel**. Manifest nie zna co najmniej pięciu obiektów, które
+  powstały od tamtej pory: `private.cv_bulk_items`, `private.cv_bulk_worker_nonces`,
+  `private.application_preselection_group_events`, `private.erasure_inventory_baseline_r9`,
+  `private.erasure_inventory_baseline_r10`.
+- Plik sam sprawdza swój podpis (`Unknown schema dependency`, PT409), więc przeniesiony bez zmian
+  **wywróci się na własnym teście**, zamiast cicho przepuścić zły stan. To dobra wiadomość:
+  zabezpieczenie działa.
+
+Wniosek: inwentarz usuwania trzeba **wygenerować od nowa względem r10**, a nie portować.
+Reszta plików (grants, attempts, sesje, drafty) przenosi się bliżej jeden do jednego.
+Szacunek 4–6 dni pozostaje aktualny — ta praca była w nim przewidziana.
+
 ### Security / privacy checks
 - brak plaintext tokenów w jakiejkolwiek tabeli, logu i komunikacie błędu
 - `competency_test_gateway` nie ma `rolcanlogin` poza dedykowanym loginem z osobnym hasłem
