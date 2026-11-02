@@ -75,6 +75,57 @@ test('contact and name detection', () => {
   // Accepted trade-off (documented in PR #250): a whole name made of two job words looks like a
   // headline, so a later name-like line wins. Much rarer than a headline above the name.
   assert.deepEqual(detectName('Junior Lekarz\nZielona Góra'), { first: 'Zielona', last: 'Góra' });
+  // Non-breaking and other horizontal Unicode spaces (Word/PDF exports) never hide a phone or a name.
+  const nbsp = buildExtraction('Anna\u00A0Nowak\nTelefon: +48\u00A0500\u00A0123\u00A0456\ne-mail: anna@example.com', 5, false, suggestRedaction);
+  assert.equal(nbsp.phone, '+48500123456');
+  assert.deepEqual([nbsp.first_name, nbsp.last_name], ['Anna', 'Nowak']);
+  assert.doesNotMatch(nbsp.redacted_text, /500|Nowak|example/);
+  const thin = buildExtraction('Jan Kowalski\ntel. 500\u202F123\u2009456', 6, false, suggestRedaction);
+  assert.equal(thin.phone, '+48500123456');
+  assert.doesNotMatch(thin.redacted_text, /500/);
+  assert.doesNotMatch(suggestRedaction('tel. 600\u00A0700\u00A0800', []), /600/, 'single-CV redaction too');
+  // Word's non-breaking hyphen / en dash, tabs, soft hyphens and zero-width characters never hide data.
+  for (const [input, digits] of [['tel. +48 500\u2011123\u2011456', '+48500123456'], ['tel. 500\u2013123\u2013456', '+48500123456'],
+    ['tel. 500\t123\t456', '+48500123456'], ['tel. 500\u00AD123\u00AD456', '+48500123456'], ['tel. 500\u200B123\u200B456', '+48500123456'],
+    ['tel. \uFF15\uFF10\uFF10 123 456', '+48500123456']]) {
+    const e = buildExtraction('Anna Nowak\n' + input, 7, false, suggestRedaction);
+    assert.equal(e.phone, digits, JSON.stringify(input));
+    assert.doesNotMatch(e.redacted_text.replace(/\D/g, ''), /500123456/, JSON.stringify(input));
+  }
+  assert.doesNotMatch(buildExtraction('Anna No\u00ADwak\nDoświadczenie', 8, false, suggestRedaction).redacted_text, /Nowak|No\u00ADwak/);
+  // Two phones side by side in columns are both redacted; a long single number (IBAN) too.
+  const cols = suggestRedaction('tel. 500 123 456\t600 700 800', []);
+  assert.doesNotMatch(cols, /500|600/);
+  assert.doesNotMatch(suggestRedaction('tel. 500 123 456   600 700 800', []), /500|600/);
+  assert.doesNotMatch(suggestRedaction('IBAN 61 1090 1014 0000 0712 1981 2874', []), /1981/);
+  // A multi-part name stored with a non-breaking space still matches the text.
+  assert.doesNotMatch(suggestRedaction('Anna\u00A0Maria Nowak, analityk', ['Anna\u00A0Maria', 'Nowak']), /Anna|Maria|Nowak/);
+  // Employment periods stay visible for the analysis (Word turns ' - ' into an en dash).
+  for (const dates of ['01.2019 \u2013 12.2022', '1.01.2019\u201331.12.2022', '2019.01.01 - 2022.12.31', '2015\u20132018 2019\u20132022',
+    '2012 2013 2014 2015 2016', '01.2015 - 12.2017 01.2018 - 12.2020']) assert.equal(suggestRedaction(dates, []), dates, dates);
+  // ...but a phone next to a period is still redacted.
+  assert.doesNotMatch(suggestRedaction('600 700 800\t2019\u20132022', []), /600/);
+  assert.match(suggestRedaction('600 700 800\t2019\u20132022', []), /2019\u20132022/);
+  // Wide spacing inside phones never splits them into short visible groups.
+  assert.doesNotMatch(suggestRedaction('tel. 500  123  456\t600  700  800', []), /500|600|123|700/);
+  assert.doesNotMatch(suggestRedaction('tel. 500  123  456', []), /500|123|456/);
+  // Crafted input cannot make the date check slow.
+  const started = Date.now();
+  suggestRedaction('2019' + ' '.repeat(99_000) + '12345', []);
+  assert.ok(Date.now() - started < 2000, 'linear time');
+  // Crafted text cannot make e-mail detection slow; normal addresses are still found.
+  const t0 = Date.now();
+  suggestRedaction('1.'.repeat(47_500), []);
+  buildExtraction('Anna Nowak\n' + '1.'.repeat(47_500), 10, false, suggestRedaction);
+  assert.ok(Date.now() - t0 < 2000, 'e-mail patterns stay linear');
+  assert.equal(detectEmail('kontakt: anna.nowak+cv@poczta.example.pl'), 'anna.nowak+cv@poczta.example.pl');
+  // Over-long (invalid) local parts are still redacted in full.
+  assert.doesNotMatch(suggestRedaction('a'.repeat(65) + '@x.pl', []), /aaaa/);
+  assert.doesNotMatch(suggestRedaction('a.'.repeat(40) + 'b@x.pl', []), /a\.a/);
+  // Dashes in ordinary text stay as written.
+  assert.match(suggestRedaction('JavaScript 2018\u20132024', []), /2018\u20132024/);
+  // If detection and redaction ever disagree, the file stops instead of reaching the AI provider.
+  assert.throws(() => buildExtraction('Anna Nowak\ntel. 500 123 456', 9, false, t => t), /bad_format/);
   const surname = buildExtraction('Jan Ślusarz\nDoświadczenie: spawanie', 4, false, suggestRedaction);
   assert.doesNotMatch(surname.redacted_text, /Ślusarz/, 'a job-word surname is still redacted');
   const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);
