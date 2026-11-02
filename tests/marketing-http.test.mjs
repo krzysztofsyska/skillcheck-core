@@ -222,7 +222,10 @@ test('public offer and demo pages respond without an account', async (t) => {
     const body = url.searchParams.get('body');
     assert.ok(subject && !/zamówienie|zakup|zapłać/i.test(subject), 'email is not a placed order');
     assert.ok(body && body.includes('\r\n'), 'RFC6068 CRLF mail body');
-    assert.doesNotMatch(body, /osoba kontaktowa|numer telefonu|służbowy e-mail|imię i nazwisko/i);
+    assert.doesNotMatch(body, /osoba kontaktowa|numer telefonu|imię i nazwisko/i);
+    // Both enquiries ask for the company identifiers the operator needs to verify
+    // the company, so no extra round of messages is required before activation.
+    assert.match(body, /NIP:/);
     assert.doesNotMatch(body, /PESEL|@example/i);
   }
   assert.ok(homeHrefs.includes('/preselekcja#free'), 'FREE CTA anchors to the FREE section');

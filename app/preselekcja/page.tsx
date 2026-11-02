@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 const preselectionEmail = (scope: string | null) => "mailto:pomoc@skillcheck.pl?subject=" + encodeURIComponent("SkillCheck — PRESELEKCJA: prośba o fakturę proforma")
   + "&body=" + encodeURIComponent(`Nazwa firmy:\r\nNIP:\r\nAdres e-mail konta w SkillCheck:\r\n\r\nProszę o fakturę proforma za pakiet PRESELEKCJA (${scope ? `${scope}, ` : ""}${preselekcjaPrice}). Nie przesyłam CV ani danych kandydatów.`);
 const freeEmail = "mailto:pomoc@skillcheck.pl?subject=" + encodeURIComponent("SkillCheck — zgłoszenie firmy do FREE")
-  + "&body=" + encodeURIComponent("Branża firmy (opcjonalnie):\r\nNazwa stanowiska:\r\n\r\nProszę o warunki weryfikacji firmy i ewentualny dostęp próbny FREE. Nie przesyłam danych osobowych ani CV kandydatów.");
+  + "&body=" + encodeURIComponent("Nazwa firmy:\r\nNIP:\r\nAdres e-mail konta w SkillCheck (firmowy):\r\nBranża firmy (opcjonalnie):\r\nNazwa stanowiska:\r\n\r\nProszę o warunki weryfikacji firmy i dostęp próbny FREE. Nie przesyłam danych osobowych ani CV kandydatów.");
 
 export default async function PreselectionOfferPage() {
   const { preselekcja } = await loadPublicOffer();
