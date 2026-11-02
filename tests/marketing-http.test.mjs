@@ -193,6 +193,8 @@ test('public offer and demo pages respond without an account', async (t) => {
   // only the method that actually works is offered. Przelewy24 may be named as being
   // prepared, never as a way to pay now, because there is no live checkout behind it.
   assert.match(orderText, /faktury proforma/);
+  assert.doesNotMatch(orderText, /Przelewy24[^.]{0,40}(albo|lub) przelew/, 'Przelewy24 is never offered as a way to pay now');
+  assert.doesNotMatch(orderText, /PayPro/);
   if (orderText.includes('Przelewy24')) {
     assert.match(orderText, /Przelewy24 jest przygotowywana/, 'Przelewy24 only as a prepared method');
   }
@@ -235,6 +237,11 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(calculator.match(/PRE_PACKAGE_CV=(\d+);/)?.[1], offerSource.match(/analyses: (\d+),/)?.[1]);
   assert.equal(calculator.match(/PRE_NET_CENTS=(\d+);/)?.[1], offerSource.match(/netPln: "(\d+),(\d+)"/)?.slice(1).join(''));
   assert.equal(calculator.match(/FREE_CV=(\d+);/)?.[1], offerSource.match(/freeOffer = \{\s*analyses: (\d+),/)?.[1], 'calculator FREE size equals the approved offer');
+  assert.equal(
+    calculator.match(/BASE_GROSS_CENTS=\{free:0,pre:(\d+)\}/)?.[1],
+    String(Number(offerSource.match(/grossPln: (\d+),/)?.[1]) * 100),
+    'calculator gross price equals the approved offer',
+  );
   assert.doesNotMatch(comparison, /WERYFIKACJA[^\n]*price:/, 'no price for the later stages');
   assert.doesNotMatch(comparison, /ASSESSMENT CENTER[^\n]*price:/, 'no price for the later stages');
   assert.doesNotMatch(offer, /60 analiz CV|Shortlista 5–10 kandydatów/);

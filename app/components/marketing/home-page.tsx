@@ -2,7 +2,7 @@ import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { loadSc19PackageSizes, loadSc19PublicOfferSizes } from "../../../lib/sc19-package-sizes";
 import { createClient } from "../../../lib/supabase/server";
-import { freeAnalyses, freePrice, isSc19CatalogEnabled, preselekcjaAnalyses, preselekcjaPrice } from "./preselekcja-offer";
+import { freeAnalyses, freePrice, isSc19CatalogEnabled, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
 import {
   assumptions,
   availabilityNote,
@@ -162,7 +162,7 @@ export async function HomePage() {
             <p className={styles.kicker}>Porównanie z agencją</p>
             <h2 id="agency-title">Masz już kandydatów? Porównaj budżety.</h2>
             <p className={styles.intro}>
-              Przykładowy scenariusz dla jednego stanowiska: pełna usługa agencji za 10 000 zł netto wobec PRESELEKCJI za {preselekcjaPrice} powiększonej o 1 500 zł własnych kosztów klienta. Różnica budżetów w tym scenariuszu to około 8 200 zł.
+              Przykładowy scenariusz dla jednego stanowiska, w kwotach netto: pełna usługa agencji za 10 000 zł wobec PRESELEKCJI za {preselekcjaOffer.netPln} zł powiększonej o 1 500 zł własnych kosztów klienta. Różnica budżetów w tym scenariuszu to około 8 256 zł.
             </p>
             <p className={styles.note}>{comparisonNote}</p>
             <div className={styles.actions}>
