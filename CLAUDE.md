@@ -106,3 +106,12 @@ At the end of every work session on this project, the orchestrator/builder sessi
 - Production Supabase: `wsvjawuikxfzjyivxgsu` — read-only from agent sessions.
 - Preview Supabase: `skillcheck-preview` (`orbyscrupgnupifzlqxp`) — test data only; use it for logins, uploads and reports instead of asking the owner.
 - Vercel project: `skillcheck-core`. Every PR to `integration` gets a Preview deployment.
+
+## Delegowanie
+Zanim zaczniesz zadanie, przekaż je właściwemu podagentowi z .claude/agents:
+- płatności, faktury, pakiety -> platnosci
+- limity i koszty AI, abonament -> limity-ai
+- strona, cennik, regulamin, dokumenty -> strona-i-dokumenty
+- błędy CI, testy, buildy -> testy-i-ci
+- literówki, teksty, drobne zmiany -> drobne-poprawki
+Sam rób tylko planowanie i przegląd. Oszczędzaj limit: proste rzeczy zawsze do drobne-poprawki.
