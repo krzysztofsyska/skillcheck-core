@@ -71,13 +71,19 @@ const addon = (code: string, name: string, unit: string, included: Partial<Recor
  * package prices are owner-approved (2026-11-02) and must match `docs/cennik-2026-11-02.md`:
  * PRESELEKCJA 300 zł / 60 CV, WERYFIKACJA 615 zł / 60 CV, ASSESSMENT CENTER 1 499 zł / 50 CV.
  *
- * `overageGrossPerCvMinor` is the per-CV charge above the package's base pool: 0.1652 zł net
- * × 1.23 VAT ≈ 20 grosze gross, the rate in §2 of the pricing doc and the one the public demo
- * applies. It is set for WERYFIKACJA and ASSESSMENT CENTER, whose pools scale by 5 CV.
- * PRESELEKCJA keeps 0 on purpose: it is not sold with an overage but in whole 60 CV packages
- * (60 CV = 300 zł, 120 CV = 600 zł), which this config cannot express — so a scenario above
- * 60 CV on PRESELEKCJA underprices here and must be read as whole packages until the catalog
- * lands in SC-PRICING-W2.
+ * `overageGrossPerCvMinor` is the per-CV charge above the package's base pool. `toOffer()` turns
+ * it into a NET per-unit rate (`netFromGross(20, 2300) = 16`), and the quote engine multiplies
+ * that integer net rate by the number of extra CVs. So the billed rate is 16 gr net / 20 gr gross
+ * per extra CV — integer grosze, not the 0,1652 zł the derivation in §2 of the pricing doc starts
+ * from. The doc records the rounded rate as the one that is actually charged, so the two cannot
+ * drift apart.
+ *
+ * `cvOptions` lists only pools at or above each package's base pool, on purpose. The engine floors
+ * CV overage at zero, so a pool BELOW the base would be quoted at the full base price and look
+ * like a discount that does not exist. PRESELEKCJA is restricted to its base pool alone: it is not
+ * sold with an overage but in whole 60 CV packages (60 = 300 zł, 120 = 600 zł), which this config
+ * cannot express — offering 100 or 150 CV here would quote 300 zł for an order worth 600 or 900 zł.
+ * Whole-package pricing arrives with the catalog in SC-PRICING-W2.
  *
  * Add-on amounts still start at 0 — none of them has an approved rate yet. */
 export function defaultConfig(): InternalConfig {
@@ -85,9 +91,9 @@ export function defaultConfig(): InternalConfig {
     version: 1, vatBasisPoints: 2300, cvCostMinor: 0, paymentFeeBasisPoints: 0, fixedCostPerOrderMinor: 0,
     packages: {
       FREE: { grossMinor: 0, cvIncluded: 5, cvOptions: [1, 2, 3, 4, 5], overageGrossPerCvMinor: 0 },
-      PRESELEKCJA: { grossMinor: 30_000, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 0 },
-      WERYFIKACJA: { grossMinor: 61_500, cvIncluded: 60, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 20 },
-      ASSESSMENT_CENTER: { grossMinor: 149_900, cvIncluded: 50, cvOptions: [30, 50, 60, 100, 150], overageGrossPerCvMinor: 20 },
+      PRESELEKCJA: { grossMinor: 30_000, cvIncluded: 60, cvOptions: [60], overageGrossPerCvMinor: 0 },
+      WERYFIKACJA: { grossMinor: 61_500, cvIncluded: 60, cvOptions: [60, 100, 150], overageGrossPerCvMinor: 20 },
+      ASSESSMENT_CENTER: { grossMinor: 149_900, cvIncluded: 50, cvOptions: [50, 60, 100, 150], overageGrossPerCvMinor: 20 },
     },
     addons: [
       addon('interview', 'Rozmowa AI', 'rozmowa', { WERYFIKACJA: 20, ASSESSMENT_CENTER: 20 }),

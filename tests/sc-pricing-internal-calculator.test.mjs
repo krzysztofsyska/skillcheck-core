@@ -56,6 +56,10 @@ test('costs and margin come only from the internal config and never enter the of
 test('CV overage and per-package add-on prices go through the quote engine', () => {
   const c = defaultConfig();
   c.packages.PRESELEKCJA.overageGrossPerCvMinor = 123; // 1,23 zł gross → 1,00 zł net
+  // The shipped default offers PRESELEKCJA only at its base pool, because it is sold in whole
+  // 60 CV packages and has no overage. This test is about the engine's overage arithmetic, so it
+  // opens a larger pool explicitly alongside the overage rate it sets above.
+  c.packages.PRESELEKCJA.cvOptions = [60, 100];
   const interview = c.addons.find(a => a.code === 'interview');
   interview.packages.PRESELEKCJA.unitGrossMinor = 1_230;
   interview.packages.WERYFIKACJA.unitGrossMinor = 2_460;

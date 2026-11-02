@@ -76,7 +76,12 @@ test('customer-facing package copy does not hardcode grant amounts', async () =>
   assert.match(billing, /sc19AnalysisScope\(sizes\.FREE\)/);
   assert.match(billing, /sc19AnalysisScope\(sizes\.PRESELEKCJA\)/);
   assert.doesNotMatch(billing, /5 analiz CV|60 analiz CV/);
-  assert.doesNotMatch(marketing, /5 analiz CV|60 analiz CV|5–6/);
+  // Strażnik pilnuje jednej rzeczy: przydziały analiz dla FREE i PRESELEKCJI mają pochodzić
+  // z polityki pakietu (`sc19_package_sizes`), nigdy z literału w komponencie.
+  // „5–6" wychodzi z tego wyrażenia — to rozmiar procesu ASSESSMENT CENTER, nie przydział analiz,
+  // i jest zatwierdzoną treścią oferty, której `tests/marketing-http.test.mjs` wymaga na stronie.
+  // Trzymanie go tutaj oznaczałoby, że dwa testy żądają czegoś przeciwnego o tym samym tekście.
+  assert.doesNotMatch(marketing, /5 analiz CV|60 analiz CV/);
   // Counts are rendered through the validating helper, never written into the copy.
   assert.match(marketing, /sc19AnalysisScope|sc19OfferScopes/);
   assert.match(marketing, /preselekcjaAnalyses\(catalogEnabled, sizes\)/);

@@ -18,15 +18,18 @@ na przyszłość w sekcji MODUŁ B.
    szacunku z audytu.
 2. **Rozszerzony raport jest najtańszy i najbardziej opłacalny** — spina w jedną całość rzeczy,
    które już działają, ale nikt ich nie widzi razem.
-3. **Łącznie 32–50 dni roboczych**, czyli realistycznie 2–2,5 miesiąca. Bez voicebota i bez chatbota.
-4. **Są dwie decyzje, które musisz podjąć, zanim ruszy budowa** (D1 i D2 na końcu dokumentu),
-   obie w formie TAK/NIE z rekomendacją.
+3. **Łącznie 35–53 dni roboczych**, czyli realistycznie 2–2,5 miesiąca. Bez voicebota i bez chatbota.
+4. **Jedna decyzja do podjęcia przed startem: D1** (na końcu dokumentu), w formie TAK/NIE
+   z rekomendacją. **D2 jest już rozstrzygnięta** (decyzja właściciela 2026-11-02) i nie blokuje
+   żadnego zadania — szczegóły w sekcji D2.
 
 ### Czego NIE wolno po drodze zrobić
 
-Po zbudowaniu tych modułów **nadal nie będzie można sprzedawać pakietu WERYFIKACJA**
-w kształcie reklamowanym na stronie, bo ten pakiet obiecuje 20 rozmów z botem i analizę rozmowy.
-Powstanie natomiast inny, mniejszy produkt. Jak go nazwać i wycenić — to decyzja D2 poniżej.
+Po zbudowaniu tych modułów pakiet WERYFIKACJA sprzedajemy **pod tą samą nazwą, za 615 zł brutto
+za 60 CV, bez rozmów z botem** (decyzja właściciela 2026-11-02; D2 rozstrzygnięta). Warunek:
+dopóki rozmowy nie działają, **nie wymieniamy ich nigdzie na stronie** — ani w opisie pakietu,
+ani jako funkcji „w przygotowaniu" (decyzja właściciela 2026-11-02, wieczór). Nie wolno natomiast
+reklamować zakresu, którego pakiet nie dostarcza.
 
 ---
 
@@ -42,13 +45,13 @@ SC-PRICING-W1 → W2 → W3 → W4   (niezależnie, do wstawienia między inne z
 ```
 
 **Rekomendowana kolejność:** SC-014-C1…C6, potem SC-015-A…D, a kalkulator wtedy, gdy coś innego
-czeka na review. A+C dają kompletny, pokazywalny produkt w 19–29 dni.
+czeka na review. A+C dają kompletny, pokazywalny produkt w 23–35 dni.
 
 ---
 
 # MODUŁ A — Test kompetencji wykonywany przez kandydata
 
-**Bazowe ID:** SC-014 (kontynuacja) · **Łącznie: 13–20 dni**
+**Bazowe ID:** SC-014 (kontynuacja) · **Łącznie: 17–26 dni** (w tym SC-014-C6: 4–6 dni)
 **Stan wejściowy:** B1 architektura (ARCHITECTURE_REVIEW), B2 prototyp SQL w `db/isolated/`,
 B3 broker HTTP w `lib/competency-attempt-broker*.ts` + `app/api/competency/attempt/route.ts`.
 
@@ -657,10 +660,10 @@ decyzją właściciela, nie merge'em; katalog tylko do odczytu dla ról publiczn
 |---|---|---|
 | A — test kompetencji | SC-014-C1…C6 + reguła R1 | 17–26 |
 | C — rozszerzony raport | SC-015-A…D | 6–9 |
-| D — kalkulator i cennik | SC-PRICING-W1…W4 | 4–7 |
-| **Razem** | **14 zadań** | **27–42** |
-| Rezerwa na review, poprawki i testy regresji (ok. 20%) | | 5–8 |
-| **Suma realistyczna** | | **32–50 dni roboczych** |
+| D — kalkulator i cennik | SC-PRICING-W1, W2, W2b, W3, W4 | 6–9 |
+| **Razem** | **15 zadań** | **29–44** |
+| Rezerwa na review, poprawki i testy regresji (ok. 20%) | | 6–9 |
+| **Suma realistyczna** | | **35–53 dni roboczych** |
 
 Przy dotychczasowym tempie projektu to **2–2,5 miesiąca**.
 
