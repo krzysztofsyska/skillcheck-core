@@ -187,6 +187,11 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(calculator, /prePackages\(state\.cv\)===1\s*\?\{href:'\/preselekcja'/);
   assert.match(calculator, /source:'calculator-v4',pack:'pre',cv:String\(state\.cv\)/);
   assert.match(calculator, /id="orderNote"/);
+  // The downloadable summary must state the real number of packages and analyses,
+  // not a single package, when the chosen pool needs more than one.
+  assert.match(calculator, /Analizy CV objęte zamówieniem: '\+\(state\.pack==='free'\?String\(FREE_CV\):prePackages\(state\.cv\)\*PRE_PACKAGE_CV/);
+  assert.match(calculator, /'Zakres: '\+prePackages\(state\.cv\)\+' × pakiet '\+PRE_PACKAGE_CV/);
+  assert.doesNotMatch(calculator, /Zakres: pakiet 60 analiz CV/, 'summary no longer hardcodes one package');
 
   const orderResponse = await fetch(`${base}/preselekcja`, { redirect: 'manual' });
   assert.equal(orderResponse.status, 200);

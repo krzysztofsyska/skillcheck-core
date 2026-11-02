@@ -407,8 +407,8 @@
   const FREE_CV=5;
   const prePackages=cv=>Math.max(1,Math.ceil(cv/PRE_PACKAGE_CV));
   const PACK={
-    free:{name:'FREE',title:'FREE — poznaj działanie',desc:'Wypróbuj analizę na 5 własnych CV. To pierwszy krok, nie kompletna rekrutacja.',chip:'5 analiz CV',lead:'Przetestuj na 5 CV bez uruchamiania płatnego pakietu.',href:'/preselekcja#free',cta:'Wypróbuj FREE ↗'},
-    pre:{name:'PRESELEKCJA',title:'PRESELEKCJA — od CV do shortlisty',desc:'Uporządkuj dokumenty, porównaj je z wymaganiami stanowiska i przygotuj shortlistę do dalszej oceny.',chip:'raport i shortlista',lead:'W PRESELEKCJI otrzymujesz wspólne kryteria, dowody z materiałów, braki danych, pytania na rozmowę i shortlistę.',href:'/preselekcja',cta:'Zamów PRESELEKCJĘ ↗'}
+    free:{name:'FREE',title:'FREE — poznaj działanie',desc:'Wypróbuj analizę na 5 własnych CV. To pierwszy krok, nie kompletna rekrutacja.',chip:'5 analiz CV',lead:'Przetestuj na 5 CV bez uruchamiania płatnego pakietu.'},
+    pre:{name:'PRESELEKCJA',title:'PRESELEKCJA — od CV do shortlisty',desc:'Uporządkuj dokumenty, porównaj je z wymaganiami stanowiska i przygotuj shortlistę do dalszej oceny.',chip:'raport i shortlista',lead:'W PRESELEKCJI otrzymujesz wspólne kryteria, dowody z materiałów, braki danych, pytania na rozmowę i shortlistę.'}
   };
   const state={cv:30,pack:'pre'};
   const $=id=>document.getElementById(id);
@@ -448,16 +448,16 @@
   function setPack(pkg){if(!PACK[pkg])return;state.pack=pkg;render();}
   function setCv(cv){if(!Number.isInteger(cv)||!([10,20,30].includes(cv)||(cv>=35&&cv<=150&&cv%5===0)))return;state.cv=cv;render();}
   function quote(){
-    const cv=effectiveCv(),pk=PACK[state.pack];
+    const pk=PACK[state.pack];
     const lines=[
       'SKILLCHECK — PODSUMOWANIE WYBORU',
       '', 'Pakiet: '+pk.name,
       'Proces: 1 stanowisko / 1 proces',
       'Wybrana pula CV: '+state.cv,
-      'Analizy CV w wybranym wariancie: '+cv,
+      'Analizy CV objęte zamówieniem: '+(state.pack==='free'?String(FREE_CV):prePackages(state.cv)*PRE_PACKAGE_CV+' (pula '+state.cv+' CV mieści się w '+prePackages(state.cv)+' × '+PRE_PACKAGE_CV+')'),
       'Cena brutto: '+formatMoney(price(state.pack,state.cv)),
       'Cena netto: '+formatMoney(netCents(state.pack,state.cv)/100),
-      state.pack==='free'?'Zakres FREE: 5 analiz CV, jedna próba na firmę (weryfikacja NIP i firmowego e-maila).':'Zakres: pakiet 60 analiz CV, ważny 3 miesiące od przyznania. Płatność przelewem na fakturę proforma.',
+      state.pack==='free'?'Zakres FREE: '+FREE_CV+' analiz CV, jedna próba na firmę (weryfikacja NIP i firmowego e-maila).':'Zakres: '+prePackages(state.cv)+' × pakiet '+PRE_PACKAGE_CV+' analiz CV, ważny 3 miesiące od przyznania. Płatność przelewem na fakturę proforma.',
       'Symulacja ręcznego czytania: '+hours1(manualHours())+' i '+formatMoney(manualCost(),0)+' netto kosztu czasu przy własnych parametrach; NIE jest to gwarantowana oszczędność',
       '', 'Cel: Proszę o informację o dostępności, terminie i dokładnym zakresie.',
       '', 'Przygotowano w kalkulatorze SkillCheck. To nie jest zamówienie ani zgoda na płatność.'
