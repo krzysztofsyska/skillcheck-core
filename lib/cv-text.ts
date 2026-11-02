@@ -190,17 +190,30 @@ export function normalizeForRedaction(text: string) {
 /** @deprecated kept for callers; use normalizeForRedaction. */
 export const normalizeHorizontalSpaces = normalizeForRedaction;
 
+const NUMBER_TAG = "[TELEFON / IDENTYFIKATOR]";
+/**
+ * A run of digits and separators: 9–15 digits is a phone or identifier. A longer run can be several
+ * numbers side by side (columns separated by a tab or wide spacing): each part is judged on its own,
+ * and a part that is still longer than 15 digits (IBAN, card number) is redacted as a whole.
+ */
+function redactNumberRun(match: string): string {
+  const digits = match.replace(/\D/g, "").length;
+  if (digits < 9) return match;
+  if (digits <= 15) return NUMBER_TAG;
+  const parts = match.split(/(\t| {2,})/);
+  if (parts.length === 1) return NUMBER_TAG;
+  return parts.map(part => /^(\t| {2,})$/.test(part) ? part : redactNumberRun(part)).join("");
+}
+
 export function suggestRedaction(text: string, names: string[]) {
   // Word/PDF exports often separate phone digits with non-breaking spaces; without this the number
   // would not match and would stay unredacted.
   let output = normalizeForRedaction(validateCvText(text));
   output = output.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[E-MAIL]");
   output = output.replace(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi, "[LINK]");
-  output = output.replace(/(?<!\d)\+?\d[\d \t().\-\u2010-\u2015\u2212]{7,}\d(?!\d)/g, match => {
-    const digits = match.replace(/\D/g, "");
-    return digits.length >= 9 && digits.length <= 15 ? "[TELEFON / IDENTYFIKATOR]" : match;
-  });
-  for (const name of Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).sort((a,b)=>b.length-a.length)) {
+  output = output.replace(/(?<!\d)\+?\d[\d \t().\-\u2010-\u2015\u2212]{7,}\d(?!\d)/g, redactNumberRun);
+  // Names are normalised the same way as the text, or "Anna\u00A0Maria" from the record would not match.
+  for (const name of Array.from(new Set(names.map(n => normalizeForRedaction(n).trim()).filter(Boolean))).sort((a,b)=>b.length-a.length)) {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     output = output.replace(new RegExp("(?<![\\p{L}\\p{N}])" + escaped + "(?![\\p{L}\\p{N}])", "giu"), "[DANE OSOBOWE]");
   }

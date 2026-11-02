@@ -93,6 +93,13 @@ test('contact and name detection', () => {
     assert.doesNotMatch(e.redacted_text.replace(/\D/g, ''), /500123456/, JSON.stringify(input));
   }
   assert.doesNotMatch(buildExtraction('Anna No\u00ADwak\nDoświadczenie', 8, false, suggestRedaction).redacted_text, /Nowak|No\u00ADwak/);
+  // Two phones side by side in columns are both redacted; a long single number (IBAN) too.
+  const cols = suggestRedaction('tel. 500 123 456\t600 700 800', []);
+  assert.doesNotMatch(cols, /500|600/);
+  assert.doesNotMatch(suggestRedaction('tel. 500 123 456   600 700 800', []), /500|600/);
+  assert.doesNotMatch(suggestRedaction('IBAN 61 1090 1014 0000 0712 1981 2874', []), /1981/);
+  // A multi-part name stored with a non-breaking space still matches the text.
+  assert.doesNotMatch(suggestRedaction('Anna\u00A0Maria Nowak, analityk', ['Anna\u00A0Maria', 'Nowak']), /Anna|Maria|Nowak/);
   // Dashes in ordinary text stay as written.
   assert.match(suggestRedaction('JavaScript 2018\u20132024', []), /2018\u20132024/);
   // If detection and redaction ever disagree, the file stops instead of reaching the AI provider.
