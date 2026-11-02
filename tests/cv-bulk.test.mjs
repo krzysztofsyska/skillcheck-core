@@ -40,6 +40,14 @@ test('contact and name detection', () => {
   assert.deepEqual(detectName('CURRICULUM VITAE\nANNA MARIA NOWAK\nul. Polna 5'), { first: 'Anna', last: 'Maria Nowak' });
   assert.deepEqual(detectName('Jan Kowalski-Nowak\nDoświadczenie'), { first: 'Jan', last: 'Kowalski-Nowak' });
   assert.equal(detectName('Doświadczenie zawodowe\nSpecjalista ds. sprzedaży 2010'), null);
+  // A job-title headline before the name is never taken as the name (it would leave the real name
+  // unredacted and strip the title words from the whole CV).
+  assert.deepEqual(detectName('Java Developer\nAnna Nowak\nul. Polna 5'), { first: 'Anna', last: 'Nowak' });
+  assert.deepEqual(detectName('KIEROWNIK SPRZEDAŻY\nJan Kowalski'), { first: 'Jan', last: 'Kowalski' });
+  assert.deepEqual(detectName('Senior Data Scientist\nPiotr Zieliński'), { first: 'Piotr', last: 'Zieliński' });
+  const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);
+  assert.match(titled.redacted_text, /Java Developer/, 'title words stay as evidence');
+  assert.doesNotMatch(titled.redacted_text, /Nowak/, 'the real name is redacted');
   const extraction = buildExtraction(cvLines.join('\n'), 7, false, suggestRedaction);
   assert.equal(extraction.first_name, 'Katarzyna'); assert.equal(extraction.last_name, 'Wiśniewska');
   assert.equal(extraction.phone, '+48512345678'); assert.equal(extraction.email, 'k.wisniewska@example.com');
@@ -158,6 +166,7 @@ test('AI disabled: bulk intake is refused before any slot is reserved', async ()
   const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
   assert.ok(create.indexOf('bulkIntakeBlocked(screeningAiUserEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
     'createBulkBatch checks the AI flag before reserving');
+  assert.match(create, /status\.error \|\| !Array\.isArray\(listed\)/, 'a failed status read is an error, not an empty batch');
   const page = readFileSync(new URL('page.tsx', dir), 'utf8');
   assert.match(page, /blocked \? <p role="alert">\{blocked\}<\/p>\s*: <BulkUploader/, 'uploader hidden when AI is off');
 });

@@ -101,6 +101,22 @@ const PHONE = /(?<![\d+])(?:\+|00)?(?:48[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3}[
 const HEADING = /\b(?:cv|curriculum|vitae|życiorys|zyciorys|resume|résumé|dane|kontakt|osobowe|profil|o mnie|doświadczenie|wykształcenie|umiejętności|telefon|e-?mail|adres|stanowisko|kandydat)\b/i;
 const NAME_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:-[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)?$/;
 const UPPER_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?$/;
+// Common job-title and seniority words (PL/EN). A line made of such words is a headline like
+// "Java Developer" or "Kierownik Sprzedaży", never a name: taking it as the name would leave the
+// real name unredacted and strip these words from the whole CV.
+const JOB_WORDS = new Set(`developer programista programistka inżynier inzynier engineer manager menedżer menadżer menedzer
+kierownik kierowniczka specjalista specjalistka specialist analityk analityczka analyst konsultant konsultantka consultant
+asystent asystentka assistant dyrektor dyrektorka director prezes księgowy księgowa ksiegowy ksiegowa accountant handlowiec
+przedstawiciel przedstawicielka sprzedawca sprzedawczyni sprzedaży sprzedazy sales koordynator koordynatorka coordinator
+architekt architektka architect tester testerka administrator administratorka technik operator operatorka magazynier
+magazynierka kierowca liderka leader lead head team senior junior mid regular principal staff java python javascript
+typescript frontend front-end backend back-end fullstack full-stack devops designer projektant projektantka graficzka
+recruiter rekruter rekruterka hr marketing account product project owner scrum master data scientist officer nauczyciel
+nauczycielka pielęgniarka pielegniarka lekarz lekarka praktykant praktykantka stażysta stażystka stazysta stazystka student
+studentka absolwent absolwentka customer service obsługi obslugi klienta specjalistów pracownik pracowniczka logistyk
+logistyczka ekonomista ekonomistka prawnik prawniczka radca adwokat fizjoterapeuta fizjoterapeutka mechanik elektryk
+spawacz monter monterka ślusarz slusarz kucharka kelnerka barista recepcjonista recepcjonistka`.split(/\s+/));
+const isJobWord = (w: string) => JOB_WORDS.has(w.toLowerCase());
 const titleCase = (w: string) => w.split('-').map(p => p.charAt(0) + p.slice(1).toLowerCase()).join('-');
 
 export function detectEmail(text: string) {
@@ -141,6 +157,7 @@ export function detectName(text: string): { first: string; last: string } | null
     if (words.length < 2 || words.length > 3) continue;
     const normalized = words.every(w => UPPER_WORD.test(w)) ? words.map(titleCase) : words;
     if (!normalized.every(w => NAME_WORD.test(w))) continue;
+    if (normalized.some(isJobWord)) continue;
     return { first: normalized[0], last: normalized.slice(1).join(' ') };
   }
   return null;
