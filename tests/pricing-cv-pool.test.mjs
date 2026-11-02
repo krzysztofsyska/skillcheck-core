@@ -82,6 +82,20 @@ test('dopłata za CV ponad pulę bazową jest ustawiona tam, gdzie pula skaluje 
   assert.equal(Math.round(0.1652 * 1.23 * 100), 20);
 });
 
+test('cennik podaje efektywną stawkę dopłaty, a nie równe 20 groszy brutto', () => {
+  // Silnik mnoży 16 gr NETTO za sztukę i dolicza VAT raz do zsumowanego netto, więc brutto
+  // za jedno CV wychodzi ok. 0,1968 zł. WERYFIKACJA przy 100 CV = 622,87 zł, nie 623,00 zł.
+  // Cennik musi podawać tę liczbę, inaczej ktoś uzna rozbieżność za błąd i „poprawi" jedną stronę.
+  const baseNet = Math.round(61_500 / 1.23);
+  const expected = Math.round((baseNet + 40 * 16) * 1.23) / 100;
+  assert.equal(expected, 622.87);
+  assert.match(cennik, /622,87 zł/);
+  assert.match(cennik, /16 gr netto za sztukę/);
+  // PRESELEKCJA nie ma dopłaty za CV — sprzedaje się całymi pakietami.
+  assert.match(cennik, /Dotyczy wyłącznie WERYFIKACJI i ASSESSMENT CENTER/);
+  assert.match(internal, /PRESELEKCJA: \{ grossMinor: 30_000, cvIncluded: 60, cvOptions: \[60\], overageGrossPerCvMinor: 0 \}/);
+});
+
 test('suwak puli CV ma krok 5 w całym zakresie', () => {
   assert.match(demo, /id="volumeSlider" min="35" max="150" step="5"/);
   assert.match(demo, /aria-label="Pula CV od 35 do 150, krok 5"/);
