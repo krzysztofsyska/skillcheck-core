@@ -140,6 +140,8 @@ export function detectEmail(text: string) {
 
 /** Polish-first phone detection; returns +48XXXXXXXXX or an international +digits number. */
 export function detectPhone(text: string) {
+  // Repeated horizontal spacing ('+48  500  123  456') reads as one space; line breaks stay.
+  text = text.replace(/[ \t]{2,}/g, ' ');
   // Non-Polish international numbers first (+44 7700 900123, +49 151 12345678): the Polish-shaped pattern below would cut
   // them. Separators never cross a line break, so a year on the next line is not glued to the number.
   for (const match of Array.from(text.matchAll(INTL_PHONE))) {
