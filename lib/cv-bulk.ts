@@ -101,6 +101,31 @@ const PHONE = /(?<![\d+])(?:\+|00)?(?:48[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3}[
 const HEADING = /\b(?:cv|curriculum|vitae|życiorys|zyciorys|resume|résumé|dane|kontakt|osobowe|profil|o mnie|doświadczenie|wykształcenie|umiejętności|telefon|e-?mail|adres|stanowisko|kandydat)\b/i;
 const NAME_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:-[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)?$/;
 const UPPER_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?$/;
+// Common job-title and seniority words (PL/EN), used by isHeadline below. Taking a headline such as
+// "Java Developer" as the name would leave the real name unredacted and strip these words from the
+// whole CV. Many are also surnames or first names, so one such word never makes a line a headline.
+const JOB_WORDS = new Set(`developer programista programistka inżynier inzynier engineer manager menedżer menadżer menedzer
+kierownik kierowniczka specjalista specjalistka specialist analityk analityczka analyst konsultant konsultantka consultant
+asystent asystentka assistant dyrektor dyrektorka director prezes księgowy księgowa ksiegowy ksiegowa accountant handlowiec
+przedstawiciel przedstawicielka sprzedawca sprzedawczyni sprzedaży sprzedazy sales koordynator koordynatorka coordinator
+architekt architektka architect tester testerka administrator administratorka technik operator operatorka magazynier
+magazynierka kierowca liderka leader lead head team senior junior mid regular principal staff java python javascript
+typescript frontend front-end backend back-end fullstack full-stack devops designer projektant projektantka graficzka
+recruiter rekruter rekruterka hr marketing account product project owner scrum master data scientist officer nauczyciel
+nauczycielka pielęgniarka pielegniarka lekarz lekarka praktykant praktykantka stażysta stażystka stazysta stazystka student
+studentka absolwent absolwentka customer service obsługi obslugi klienta specjalistów pracownik pracowniczka logistyk
+logistyczka ekonomista ekonomistka prawnik prawniczka radca adwokat fizjoterapeuta fizjoterapeutka mechanik elektryk
+spawacz monter monterka ślusarz slusarz kucharka kelnerka barista recepcjonista recepcjonistka
+doradca doradczyni opiekun opiekunka ekspedient ekspedientka chef sous zespołu zespolu komputerowy
+finansowy finansowa handlowy handlowa grafik kucharz kelner lider office biura
+budowy budownictwa zarządu zarzadu medyczny medyczna logistyki projektu produkcji magazynu kadr płac plac
+ds. ds nurse software web mobile executive representative główny główna glowny glowna starszy
+starsza młodszy młodsza mlodszy mlodsza samodzielny samodzielna dyplomowany dyplomowana zmiany`.split(/\s+/));
+const isJobWord = (w: string) => JOB_WORDS.has(w.toLowerCase());
+// A headline has at least two job words ("Java Developer", "Kierownik Sprzedaży", "Head Chef").
+// One job word is not enough: it is often a surname or a first name ("Jan Ślusarz", "Ślusarz Jan",
+// "Junior Silva"), and such a real name must win over later lines (cities, schools, headings).
+const isHeadline = (words: string[]) => words.filter(isJobWord).length >= 2;
 const titleCase = (w: string) => w.split('-').map(p => p.charAt(0) + p.slice(1).toLowerCase()).join('-');
 
 export function detectEmail(text: string) {
@@ -135,15 +160,21 @@ export function detectPhone(text: string) {
 /** First line that looks like "Imię Nazwisko" (2-3 capitalised words) in the top of the CV. */
 export function detectName(text: string): { first: string; last: string } | null {
   const lines = text.split('\n').map(l => l.replace(/[|•·,;:]+/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 15);
+  // A name-like line that is not a headline wins; a headline is used only when no other name-like
+  // line exists (e.g. a first name that is also a job word, such as Junior).
+  let fallback: { first: string; last: string } | null = null;
   for (const line of lines) {
     if (HEADING.test(line) || /\d|@/.test(line)) continue;
     const words = line.split(' ');
     if (words.length < 2 || words.length > 3) continue;
     const normalized = words.every(w => UPPER_WORD.test(w)) ? words.map(titleCase) : words;
     if (!normalized.every(w => NAME_WORD.test(w))) continue;
-    return { first: normalized[0], last: normalized.slice(1).join(' ') };
+    const candidate = { first: normalized[0], last: normalized.slice(1).join(' ') };
+    // A headline has at least two job words; see isHeadline.
+    if (!isHeadline(normalized)) return candidate;
+    fallback ??= candidate;
   }
-  return null;
+  return fallback;
 }
 
 export type BulkExtraction = {

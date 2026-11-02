@@ -40,6 +40,42 @@ test('contact and name detection', () => {
   assert.deepEqual(detectName('CURRICULUM VITAE\nANNA MARIA NOWAK\nul. Polna 5'), { first: 'Anna', last: 'Maria Nowak' });
   assert.deepEqual(detectName('Jan Kowalski-Nowak\nDoświadczenie'), { first: 'Jan', last: 'Kowalski-Nowak' });
   assert.equal(detectName('Doświadczenie zawodowe\nSpecjalista ds. sprzedaży 2010'), null);
+  // A job-title headline before the name is never taken as the name (it would leave the real name
+  // unredacted and strip the title words from the whole CV).
+  assert.deepEqual(detectName('Java Developer\nAnna Nowak\nul. Polna 5'), { first: 'Anna', last: 'Nowak' });
+  assert.deepEqual(detectName('KIEROWNIK SPRZEDAŻY\nJan Kowalski'), { first: 'Jan', last: 'Kowalski' });
+  assert.deepEqual(detectName('Senior Data Scientist\nPiotr Zieliński'), { first: 'Piotr', last: 'Zieliński' });
+  // Job words that are also surnames or first names: still detected when nothing else looks like a name,
+  // and a real name line wins over a headline in either order.
+  assert.deepEqual(detectName('Jan Ślusarz\nul. Polna 5'), { first: 'Jan', last: 'Ślusarz' });
+  assert.deepEqual(detectName('John Head\njohn@example.com'), { first: 'John', last: 'Head' });
+  assert.deepEqual(detectName('Jan Ślusarz\nJava Developer'), { first: 'Jan', last: 'Ślusarz' });
+  assert.deepEqual(detectName('Grafik Komputerowy\nAnna Kowal'), { first: 'Anna', last: 'Kowal' });
+  assert.deepEqual(detectName('Doradca Finansowy\nPiotr Nowak'), { first: 'Piotr', last: 'Nowak' });
+  // A surname that is a job word wins over later name-like lines (cities, upper-case headings).
+  assert.deepEqual(detectName('Jan Ślusarz\nul. Polna 5\nZielona Góra'), { first: 'Jan', last: 'Ślusarz' });
+  assert.deepEqual(detectName('Jan Technik\ntel. 600 100 200\nJĘZYKI OBCE'), { first: 'Jan', last: 'Technik' });
+  assert.deepEqual(detectName('Mark Head\nLondon United Kingdom'), { first: 'Mark', last: 'Head' });
+  assert.deepEqual(detectName('Java Developer\nJan Ślusarz'), { first: 'Jan', last: 'Ślusarz' });
+  assert.deepEqual(detectName('Jan Ślusarz\nWykształcenie\nPolitechnika Warszawska'), { first: 'Jan', last: 'Ślusarz' });
+  // A seniority word that is also a first name: a name, unless the whole line is job words.
+  assert.deepEqual(detectName('Junior Silva\nPolitechnika Warszawska'), { first: 'Junior', last: 'Silva' });
+  assert.deepEqual(detectName('Senior Java Developer\nJan Kowalski'), { first: 'Jan', last: 'Kowalski' });
+  assert.deepEqual(detectName('Office Manager\nAnna Nowak'), { first: 'Anna', last: 'Nowak' });
+  // Surname-first order with a job-word surname is still a name.
+  assert.deepEqual(detectName('Ślusarz Jan\nZielona Góra'), { first: 'Ślusarz', last: 'Jan' });
+  assert.deepEqual(detectName('LEKARZ ANNA\nNowy Sącz'), { first: 'Lekarz', last: 'Anna' });
+  assert.deepEqual(detectName('Kierownik Budowy\nJan Kowalski'), { first: 'Jan', last: 'Kowalski' });
+  assert.deepEqual(detectName('Software Developer\nAnna Nowak'), { first: 'Anna', last: 'Nowak' });
+  assert.deepEqual(detectName('Główna Księgowa\nAnna Nowak'), { first: 'Anna', last: 'Nowak' });
+  // Accepted trade-off (documented in PR #250): a whole name made of two job words looks like a
+  // headline, so a later name-like line wins. Much rarer than a headline above the name.
+  assert.deepEqual(detectName('Junior Lekarz\nZielona Góra'), { first: 'Zielona', last: 'Góra' });
+  const surname = buildExtraction('Jan Ślusarz\nDoświadczenie: spawanie', 4, false, suggestRedaction);
+  assert.doesNotMatch(surname.redacted_text, /Ślusarz/, 'a job-word surname is still redacted');
+  const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);
+  assert.match(titled.redacted_text, /Java Developer/, 'title words stay as evidence');
+  assert.doesNotMatch(titled.redacted_text, /Nowak/, 'the real name is redacted');
   const extraction = buildExtraction(cvLines.join('\n'), 7, false, suggestRedaction);
   assert.equal(extraction.first_name, 'Katarzyna'); assert.equal(extraction.last_name, 'Wiśniewska');
   assert.equal(extraction.phone, '+48512345678'); assert.equal(extraction.email, 'k.wisniewska@example.com');
@@ -158,6 +194,7 @@ test('AI disabled: bulk intake is refused before any slot is reserved', async ()
   const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
   assert.ok(create.indexOf('bulkIntakeBlocked(screeningAiUserEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
     'createBulkBatch checks the AI flag before reserving');
+  assert.match(create, /status\.error \|\| !Array\.isArray\(listed\)/, 'a failed status read is an error, not an empty batch');
   const page = readFileSync(new URL('page.tsx', dir), 'utf8');
   assert.match(page, /blocked \? <p role="alert">\{blocked\}<\/p>\s*: <BulkUploader/, 'uploader hidden when AI is off');
 });
