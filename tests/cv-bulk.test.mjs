@@ -37,6 +37,10 @@ test('contact and name detection', () => {
   assert.equal(detectPhone('0048 601222333'), '+48601222333');
   assert.equal(detectPhone('PESEL 90010112345, data 2020-01-15, kod 00-950'), null);
   assert.equal(detectPhone('rok 2019-2024'), null);
+  // A number never takes digits from the next line.
+  assert.equal(detectPhone('Telefon: +48 500 123 456\n12 lat doświadczenia w sprzedaży'), '+48500123456');
+  assert.equal(detectPhone('Telefon: 500 123 456\n12 lat doświadczenia'), '+48500123456');
+  assert.equal(detectPhone('tel. 601-222-333\n2019 - 2024 Kierownik'), '+48601222333');
   assert.deepEqual(detectName('CURRICULUM VITAE\nANNA MARIA NOWAK\nul. Polna 5'), { first: 'Anna', last: 'Maria Nowak' });
   assert.deepEqual(detectName('Jan Kowalski-Nowak\nDoświadczenie'), { first: 'Jan', last: 'Kowalski-Nowak' });
   assert.equal(detectName('Doświadczenie zawodowe\nSpecjalista ds. sprzedaży 2010'), null);
