@@ -273,3 +273,21 @@ test('R1: entire Unicode lowercase mapping agrees with SQL and is idempotent', a
     assert.equal(await value("select has_function_privilege($1,'private.sales_lead_lower_email(text)','execute')", [role]), false);
   }
 });
+
+test('release switch 20261102090000 enables the form only with a request secret, and rolls back', async () => {
+  const up = await readFile(new URL('../supabase/migrations/20261102090000_sales_leads_enable.sql', import.meta.url), 'utf8');
+  const down = await readFile(new URL('../supabase/rollbacks/20261102090000_sales_leads_enable_down.sql', import.meta.url), 'utf8');
+  await reset();
+  await db.exec('update private.sales_lead_settings set leads_enabled=false');
+  await db.exec(up);
+  assert.equal(await value('select leads_enabled from private.sales_lead_settings'), true);
+  await db.exec(up); // idempotent: a second run changes nothing and passes its checks
+  assert.equal(await value('select leads_enabled from private.sales_lead_settings'), true);
+  await db.exec(down);
+  assert.equal(await value('select leads_enabled from private.sales_lead_settings'), false);
+  // Without a signing secret the form could never work: the switch refuses and changes nothing.
+  await db.exec('update private.sales_lead_settings set request_secret_current=null');
+  await assert.rejects(db.exec(up), /sales_lead_request_secret_missing/);
+  await db.exec('rollback').catch(() => {});
+  assert.equal(await value('select leads_enabled from private.sales_lead_settings'), false);
+});
