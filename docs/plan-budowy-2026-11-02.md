@@ -17,7 +17,7 @@ na przyszłość w sekcji MODUŁ B.
    szacunku z audytu.
 2. **Rozszerzony raport jest najtańszy i najbardziej opłacalny** — spina w jedną całość rzeczy,
    które już działają, ale nikt ich nie widzi razem.
-3. **Łącznie 28–43 dni robocze**, czyli realistycznie 1,5–2 miesiąca. Bez voicebota i bez chatbota.
+3. **Łącznie 32–50 dni roboczych**, czyli realistycznie 2–2,5 miesiąca. Bez voicebota i bez chatbota.
 4. **Są dwie decyzje, które musisz podjąć, zanim ruszy budowa** (D1 i D2 na końcu dokumentu),
    obie w formie TAK/NIE z rekomendacją.
 
@@ -35,12 +35,12 @@ Raport (C) konsumuje wynik testu (A), więc A musi być wcześniej. Kalkulator (
 od żadnego z nich.
 
 ```
-SC-014-C1 → C2 → C3 → C4 → C5 → SC-015-A → B → C → D → [D2: pakiet i cena]
+SC-014-C1 → C2 → C3 → C4 → C5 → C6 → SC-015-A → B → C → D → [D2: pakiet i cena]
 
 SC-PRICING-W1 → W2 → W3 → W4   (niezależnie, do wstawienia między inne zadania)
 ```
 
-**Rekomendowana kolejność:** SC-014-C1…C5, potem SC-015-A…D, a kalkulator wtedy, gdy coś innego
+**Rekomendowana kolejność:** SC-014-C1…C6, potem SC-015-A…D, a kalkulator wtedy, gdy coś innego
 czeka na review. A+C dają kompletny, pokazywalny produkt w 19–29 dni.
 
 ---
@@ -241,6 +241,106 @@ i zapisany wersjonowanie.
 
 ---
 
+## SC-014-C6 — AI układa zadanie; rekruter zatwierdza
+
+**Decyzja właściciela 2026-11-02 (rozmowa głosowa).** Do tej pory zadania pisał rekruter ręcznie.
+Właściciel: *„przecież to nie miało być inaczej"* — zadanie ma powstawać automatycznie z profilu
+firmy, profilu stanowiska, nazwy stanowiska oraz z treści CV.
+
+- **LEVEL:** L3 (kontrakt dostawcy AI, dane z CV, koszt) · **SCOPE:** FULLSTACK
+- **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude
+- **DEPENDS ON:** SC-014-C3 · **Szacunek:** 4–6 dni
+
+### Goal
+Rekruter dostaje gotową propozycję zadania i tylko ją zatwierdza, zamiast pisać od zera.
+
+### Dlaczego zadanie jest w dwóch częściach
+
+Gdyby całe zadanie układać pod indywidualne CV, każdy kandydat dostałby inne, o innej trudności,
+a raport i tak postawiłby ich obok siebie. Wyników nie dałoby się uczciwie porównać. Dlatego:
+
+1. **Część wspólna — identyczna dla wszystkich na danym stanowisku.** AI układa treść zadania
+   i kryteria oceny (rubrykę) z profilu firmy, profilu stanowiska i jego nazwy. Powstaje raz
+   na stanowisko, nie raz na kandydata. To ona jest podstawą porównania.
+2. **Część indywidualna — kilka dodatkowych pytań z własnego CV kandydata.** Dotyczą tego, czego
+   w CV brakuje albo co jest niejasne. **Nie są punktowane do wyniku porównywalnego** — stanowią
+   osobną sekcję odpowiedzi i osobną sekcję w raporcie.
+
+Właściciel zaakceptował ten podział: *„Dokładnie robimy tak, jak napisałeś."*
+
+### In scope
+- Generowanie części wspólnej: wejście = profil firmy, profil stanowiska (`tasks`, `kpis`,
+  `required_competencies`, `required_behaviors`, `description`, `autonomy_level`) i nazwa stanowiska.
+  Wyjście = propozycja `ExerciseDefinition` zgodna z istniejącym walidatorem
+  `lib/exercise-definition.ts`, w tym kryteria z progami below/meets/above.
+- Generowanie części indywidualnej: **ponowne użycie tego, co już istnieje.** Analiza CV wypełnia
+  `screening_criterion_results.suggested_question` i `missing_info`, a `lib/interview-gaps.ts`
+  składa z nich listę luk. Pytania indywidualne biorą się stąd, nie z nowej analizy CV.
+  To oszczędza osobne wywołanie modelu na kandydata i daje gotowy ślad pochodzenia.
+- Ekran zatwierdzenia dla rekrutera: propozycja obok profilu stanowiska, edycja każdego pola,
+  zatwierdzenie lub odrzucenie w całości. **Nic nie trafia do kandydata bez zatwierdzenia.**
+- Ślad pochodzenia: dla każdego pytania zapisane, z czego powstało (które kryterium, która wersja
+  profilu stanowiska, która wersja analizy CV, fingerprint wejścia, wersja promptu).
+- Flaga `EXERCISE_AI_ENABLED`, domyślnie wyłączona. Przy wyłączonej rekruter pisze ręcznie, jak dziś.
+
+### Out of scope
+- Ocenianie odpowiedzi przez AI. Ocena pozostaje ludzka (SC-014-C5).
+- Automatyczne wysłanie zadania do kandydata po wygenerowaniu.
+- Nowa analiza CV. Korzystamy z już istniejącej.
+
+### Existing contracts to preserve
+- **CV/provider payload musi pozostać minimalny i zatwierdzony.** Do modelu trafia wyłącznie
+  zredagowana (zanonimizowana) treść CV, tak jak w `lib/screening-ai.ts`. Jeśli redakcja zawiedzie
+  lub jest wyłączona — nie wysyłamy nic.
+- Treść CV i profilu stanowiska są **danymi, nigdy instrukcjami** (prompt injection).
+- Wynik wersjonowany i powiązany z fingerprintem wejścia; człowiek widzi dowody.
+- Brak automatycznej decyzji o zatrudnieniu.
+
+### Acceptance criteria
+1. Dwa zadania wygenerowane dla tego samego stanowiska mają identyczną część wspólną
+   (ten sam `definition`), niezależnie od kandydata.
+2. Część indywidualna istnieje wyłącznie dla kandydatów, którzy mają sprawdzoną przez człowieka
+   analizę CV; bez niej kandydat dostaje samo zadanie wspólne.
+3. Propozycja niezatwierdzona przez rekrutera nie jest osiągalna przez żaden grant kandydata.
+4. Payload wysłany do modelu nie zawiera imienia, nazwiska ani danych kontaktowych kandydata —
+   udowodnione testem na syntetycznym CV zawierającym takie dane.
+5. CV zawierające tekst udający instrukcję (np. „zignoruj poprzednie polecenia") nie zmienia
+   treści ani struktury wygenerowanego zadania.
+6. Przy `EXERCISE_AI_ENABLED=false` ekran działa jak dziś i nie wywołuje modelu.
+
+### Required tests
+- `npm run typecheck`, `npm run build`
+- testy generatora na syntetycznych profilach i CV (fixture jak `fixtures/screening/sc-005-synthetic.json`)
+- test redakcji payloadu i test prompt injection
+- test porównywalności: ta sama część wspólna dla dwóch różnych kandydatów
+
+### Security / privacy checks
+- brak PII w payloadzie i w logach
+- limit kosztu i liczby wywołań per rekrutacja
+- ślad pochodzenia każdego pytania zapisany i czytelny dla człowieka
+
+---
+
+## Reguła R1 — test dostaje tylko ktoś z shortlisty
+
+**Decyzja właściciela 2026-11-02 (rozmowa głosowa).** Weryfikacja dotyczy osób, które przeszły
+preselekcję. Dziś nic tego nie pilnuje: rekruter mógłby wydać link dowolnemu kandydatowi
+w rekrutacji.
+
+Reguła obowiązuje **oba poziomy**, nie tylko interfejs:
+
+- **Baza (SC-014-C1).** Funkcja wydająca grant sprawdza obecność zgłoszenia w
+  `public.recruitment_shortlist_entries` dla tej rekrutacji, pod blokadami opisanymi w SC-014-B1
+  sekcja 4. Brak wpisu = odmowa. Precedens istnieje: `lib/voice/trusted-source-verifier.ts`
+  robi dokładnie taki join dla rozmów głosowych — powtarzamy wzorzec, nie wymyślamy nowego.
+- **Interfejs (SC-014-C3).** Przycisk wydania dostępu jest nieaktywny dla kandydata spoza
+  shortlisty, z czytelnym wyjaśnieniem dlaczego.
+
+Dodatkowe kryterium akceptacji dla SC-014-C1: próba wydania grantu kandydatowi spoza shortlisty
+kończy się odmową na poziomie bazy, również gdy interfejs zostanie ominięty.
+
+---
+
 # MODUŁ B — Chatbot informacyjny — **WYKREŚLONY 2026-11-02**
 
 **Decyzja właściciela 2026-11-02 (rozmowa głosowa): chatbot wypada z planu.**
@@ -397,16 +497,16 @@ Strona przestaje mieć ceny w kodzie i czyta je z katalogu.
 
 | Moduł | Zadania | Dni |
 |---|---|---|
-| A — test kompetencji | SC-014-C1…C5 | 13–20 |
+| A — test kompetencji | SC-014-C1…C6 + reguła R1 | 17–26 |
 | C — rozszerzony raport | SC-015-A…D | 6–9 |
 | D — kalkulator i cennik | SC-PRICING-W1…W4 | 4–7 |
-| **Razem** | **13 zadań** | **23–36** |
-| Rezerwa na review, poprawki i testy regresji (ok. 20%) | | 5–7 |
-| **Suma realistyczna** | | **28–43 dni robocze** |
+| **Razem** | **14 zadań** | **27–42** |
+| Rezerwa na review, poprawki i testy regresji (ok. 20%) | | 5–8 |
+| **Suma realistyczna** | | **32–50 dni roboczych** |
 
-Przy dotychczasowym tempie projektu to **1,5–2 miesiące**.
+Przy dotychczasowym tempie projektu to **2–2,5 miesiąca**.
 
-**Pierwszy kamień milowy (A + C, 19–29 dni):** działający test kompetencji dla kandydata
+**Pierwszy kamień milowy (A + C, 23–35 dni):** działający test kompetencji dla kandydata
 i rozszerzony raport. To jest moment, w którym jest co pokazać klientowi.
 
 Moduł D nie zależy od A, B ani C i może wejść pomiędzy nie, gdy coś innego czeka na review.

@@ -76,7 +76,19 @@ and the "Nothing else ships before the first paid PRESELEKCJA" sentence, for the
 
 Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budowy-2026-11-02.md).
 
-1. **SC-014-C1…C5** — competency test actually taken by the candidate (architecture SC-014-B1 stands; do not redesign it).
+1. **SC-014-C1…C6 + rule R1** — competency test actually taken by the candidate (architecture
+   SC-014-B1 stands; do not redesign it). Two owner decisions added by voice on 2026-11-02:
+   - **SC-014-C6** — the recruiter no longer writes tasks by hand. AI drafts them, the recruiter
+     approves. Two parts: a **shared** task and rubric generated from the company profile, the
+     position profile and the position name, **identical for everyone on that position** (this is
+     what makes results comparable), plus a few **individual** follow-up questions per candidate
+     drawn from the gaps their CV analysis already produced (`suggested_question` / `missing_info`
+     via `lib/interview-gaps.ts`), scored separately and never folded into the comparable result.
+     Nothing reaches a candidate before the recruiter approves it. Only redacted CV text goes to
+     the model, as in `lib/screening-ai.ts`; CV and profile text are data, never instructions.
+   - **Rule R1** — a test grant may only be issued to a candidate on the recruitment's shortlist
+     (`public.recruitment_shortlist_entries`). Enforced in the database, not just the UI; the
+     same join `lib/voice/trusted-source-verifier.ts` already does for voice.
 2. **SC-015-A…D** — extended per-candidate report, without the voice part.
 3. ~~**SC-022** — informational chatbot.~~ **Dropped the same day (owner decision 2026-11-02, by
    voice): "wykreśl go na razie".** No customer buys SkillCheck for a chatbot; it would answer
