@@ -189,9 +189,13 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(order, /PRESELEKCJA — 60 analiz CV za 300 zł brutto/);
   const orderText = order.replaceAll('<!-- -->', '');
   for (const fact of [/243,90 zł netto/, /ważne przez 3 miesiące/, /faktury proforma/, /2 dni roboczych/, /fakturę VAT/]) assert.match(orderText, fact);
-  // Payment methods shown on the offer (owner decision 2026-11-02): Przelewy24 and
-  // a bank transfer on a proforma invoice.
-  assert.match(orderText, /Przelewy24/);
+  // Payment on the offer page (owner decision 2026-11-02, narrowed after review):
+  // only the method that actually works is offered. Przelewy24 may be named as being
+  // prepared, never as a way to pay now, because there is no live checkout behind it.
+  assert.match(orderText, /faktury proforma/);
+  if (orderText.includes('Przelewy24')) {
+    assert.match(orderText, /Przelewy24 jest przygotowywana/, 'Przelewy24 only as a prepared method');
+  }
   assert.ok(hrefs(order).includes('/regulamin') && hrefs(order).includes('/polityka-prywatnosci'));
   assert.doesNotMatch(order, /potwierdzane indywidualnie|pilotaż/);
   assert.match(order, /Cena|cenę|cena/);

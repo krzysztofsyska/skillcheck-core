@@ -134,7 +134,7 @@ export const faq = [
   {
     question: "Jak zapłacę?",
     answer:
-      "Przelewy24 albo przelewem na podstawie faktury proforma. Po zaksięgowaniu wpłaty uruchamiamy pakiet na koncie firmy i wysyłamy fakturę VAT.",
+      "Przelewem na podstawie faktury proforma. Po zaksięgowaniu wpłaty uruchamiamy pakiet na koncie firmy i wysyłamy fakturę VAT. Płatność online Przelewy24 jest przygotowywana i udostępnimy ją w koncie firmy, gdy będzie gotowa.",
   },
   {
     question: "Czy muszę zapłacić, żeby wypróbować SkillCheck?",

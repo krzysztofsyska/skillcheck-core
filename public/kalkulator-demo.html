@@ -299,7 +299,7 @@
           <a class="button" id="orderLink" href="/preselekcja">Zamów PRESELEKCJĘ ↗</a>
           <button type="button" id="quoteButton" class="button secondary">Pobierz podsumowanie ↗</button>
         </div>
-        <div class="minilabel">Kalkulator nie pobiera płatności i nie aktywuje produktu. Płatność Przelewy24 albo przelewem na proformę następuje po stronie oferty.</div>
+        <div class="minilabel">Kalkulator nie pobiera płatności i nie aktywuje produktu. Płatność przelewem na fakturę proforma następuje po stronie oferty.</div>
       </div>
     </div>
     <div class="metrics" aria-live="polite">
@@ -329,7 +329,7 @@
         <tr><th scope="row">Shortlista</th><td>Podstawowa</td><td>5–10 osób*</td></tr>
         <tr><th scope="row">Raport z eksportem</th><td>Podstawowy</td><td>✓</td></tr>
         <tr><th scope="row">Ważność analiz</th><td>Próba jednorazowa</td><td>3 miesiące</td></tr>
-        <tr><th scope="row">Płatność</th><td>—</td><td>Przelewy24 albo przelew na proformę</td></tr>
+        <tr><th scope="row">Płatność</th><td>—</td><td>Przelew na fakturę proforma</td></tr>
       </tbody>
     </table></div>
     <p class="fine-print">* Shortlista zależy od rzeczywistej puli i dostępnych informacji. FREE obejmuje 5 CV niezależnie od suwaka.</p>
@@ -379,7 +379,7 @@
       <p>Własny koszt klienta 1 500 zł netto to edytowalny przykład: 1 000 zł pozyskanie CV + 500 zł własna obsługa. Może być wyższy, niższy albo zerowy — wpisz własny koszt. Agencja w modelu success fee i SkillCheck rozliczają inne zakresy świadczeń.</p>
     </details>
     <details><summary>Co dalej po wyborze pakietu?</summary>
-      <p>Kalkulator działa lokalnie w przeglądarce. „Pobierz podsumowanie” tworzy opis wyboru gotowy do skopiowania, pobrania lub wysłania pocztą. „Zamów PRESELEKCJĘ” prowadzi na stronę oferty, gdzie składasz zamówienie. <strong>Kalkulator nie przyjmuje płatności, nie przesyła CV i nie uruchamia usług</strong>. Płatność następuje przez Przelewy24 albo przelewem na podstawie faktury proforma; pakiet uruchamiamy po zaksięgowaniu wpłaty. Decyzja rekrutacyjna należy do człowieka.</p>
+      <p>Kalkulator działa lokalnie w przeglądarce. „Pobierz podsumowanie” tworzy opis wyboru gotowy do skopiowania, pobrania lub wysłania pocztą. „Zamów PRESELEKCJĘ” prowadzi na stronę oferty, gdzie składasz zamówienie. <strong>Kalkulator nie przyjmuje płatności, nie przesyła CV i nie uruchamia usług</strong>. Płatność następuje przelewem na podstawie faktury proforma; pakiet uruchamiamy po zaksięgowaniu wpłaty. Płatność online Przelewy24 jest przygotowywana. Decyzja rekrutacyjna należy do człowieka.</p>
     </details>
   </section>
 
@@ -388,7 +388,7 @@
     <details><summary>Czy muszę zapłacić, żeby wypróbować SkillCheck?</summary><p>Nie. FREE to bezpłatna analiza 5 CV, jedna próba na firmę. Do rejestracji potrzebny jest numer NIP i firmowy adres e-mail. Wybór próby nie włącza automatycznie pakietu płatnego.</p></details>
     <details><summary>Czy SkillCheck znajduje kandydatów?</summary><p>Nie. Pracujesz na własnych CV, np. z ogłoszeń, poleceń lub bazy firmy. Pozyskanie kandydatów, organizacja późniejszych etapów i decyzja o zatrudnieniu pozostają po Twojej stronie.</p></details>
     <details><summary>Co dokładnie dostaję w PRESELEKCJI?</summary><p>Analizę 60 CV względem wymagań stanowiska: dowody poparte cytatem z materiału, brakujące informacje, pytania na rozmowę, ranking kandydatów, shortlistę i raport z eksportem. Analizy są ważne 3 miesiące od przyznania.</p></details>
-    <details><summary>Jak zapłacę i kiedy uruchomicie pakiet?</summary><p>Przelewy24 albo przelewem na podstawie faktury proforma. Po zaksięgowaniu wpłaty uruchamiamy pakiet na koncie firmy i wysyłamy fakturę VAT.</p></details>
+    <details><summary>Jak zapłacę i kiedy uruchomicie pakiet?</summary><p>Przelewem na podstawie faktury proforma. Po zaksięgowaniu wpłaty uruchamiamy pakiet na koncie firmy i wysyłamy fakturę VAT. Płatność online Przelewy24 jest przygotowywana.</p></details>
     <details><summary>Czy kwoty w kalkulatorze to gwarantowana oszczędność?</summary><p>Nie. Ceny FREE i PRESELEKCJI są aktualne. Koszt ręcznej analizy i porównanie z agencją to symulacje na Twoich założeniach — pokazują budżet procesu, nie potwierdzoną oszczędność.</p></details>
   </section>
 
@@ -459,7 +459,7 @@
       'Analizy CV w wybranym wariancie: '+cv,
       'Cena brutto: '+formatMoney(price(state.pack,state.cv)),
       'Cena netto: '+formatMoney(netCents(state.pack,state.cv)/100),
-      state.pack==='free'?'Zakres FREE: 5 analiz CV, jedna próba na firmę (weryfikacja NIP i firmowego e-maila).':'Zakres: pakiet 60 analiz CV, ważny 3 miesiące od przyznania. Płatność Przelewy24 albo przelewem na proformę.',
+      state.pack==='free'?'Zakres FREE: 5 analiz CV, jedna próba na firmę (weryfikacja NIP i firmowego e-maila).':'Zakres: pakiet 60 analiz CV, ważny 3 miesiące od przyznania. Płatność przelewem na fakturę proforma.',
       'Symulacja ręcznego czytania: '+hours1(manualHours())+' i '+formatMoney(manualCost(),0)+' netto kosztu czasu przy własnych parametrach; NIE jest to gwarantowana oszczędność',
       '', 'Cel: Proszę o informację o dostępności, terminie i dokładnym zakresie.',
       '', 'Przygotowano w kalkulatorze SkillCheck. To nie jest zamówienie ani zgoda na płatność.'
