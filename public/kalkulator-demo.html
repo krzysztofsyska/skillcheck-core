@@ -269,7 +269,7 @@
       <button type="button" class="pack" data-pack="free" aria-pressed="false"><span class="pack-name">✧ FREE</span><span class="pack-desc">Sprawdź na własnych CV, jak wygląda pierwsza analiza.</span><span class="pack-price" data-package-price="free">0 zł</span><span class="pack-sub">5 CV · 1 próbna rozmowa</span></button>
       <button type="button" class="pack" data-pack="pre" aria-pressed="true"><span class="pack-name">≡ PRESELEKCJA</span><span class="pack-desc">Od dokumentów i rozmów AI do shortlisty.</span><span class="pack-price" data-package-price="pre">300 zł</span><span class="pack-sub">Brutto za 60 CV · do 10 rozmów</span></button>
       <button type="button" class="pack" data-pack="verify" aria-pressed="false"><span class="pack-name">◇ WERYFIKACJA</span><span class="pack-desc">Sprawdź odpowiedzi i kompetencje, nie tylko deklaracje.</span><span class="pack-price" data-package-price="verify">615 zł</span><span class="pack-sub">Brutto za 60 CV · testy i rozszerzony raport</span></button>
-      <button type="button" class="pack" data-pack="ac" aria-pressed="false"><span class="pack-name">⊞ ASSESSMENT CENTER</span><span class="pack-desc">Zobacz podejście finalistów do zadań praktycznych.</span><span class="pack-price" data-package-price="ac">1845 zł</span><span class="pack-sub">Do 5 osób · 2 zadania/os. · ekspert</span></button>
+      <button type="button" class="pack" data-pack="ac" aria-pressed="false"><span class="pack-name">⊞ ASSESSMENT CENTER</span><span class="pack-desc">Zobacz podejście finalistów do zadań praktycznych.</span><span class="pack-price" data-package-price="ac">1499 zł</span><span class="pack-sub">Brutto za 50 CV · proces dla 5–6 osób</span></button>
     </div>
     <div class="extra-panel" aria-labelledby="extraTitle">
       <div class="eyebrow">Dostosuj zakres usługi</div>
@@ -420,10 +420,10 @@
   'use strict';
   // PRESELEKCJA: 300 zł brutto za pakiet 60 CV; większa pula = kolejne pakiety.
   // WERYFIKACJA: 615 zł brutto za 60 CV (decyzja właściciela 2026-11-02).
-  // ASSESSMENT CENTER: cena referencyjna nadal dla 50 CV — do potwierdzenia przez właściciela.
+  // ASSESSMENT CENTER: 1499 zł brutto za 50 CV (decyzja właściciela 2026-11-02); proces dla 5-6 osób, maks. 10.
   // Inne wolumeny to robocza symulacja.
   const VAT=1.23;
-  const BASE_GROSS_CENTS={free:0,pre:30000,verify:61500,ac:184500};
+  const BASE_GROSS_CENTS={free:0,pre:30000,verify:61500,ac:149900};
   const PRE_PACKAGE_CV=60;
   const prePackages=cv=>Math.max(1,Math.ceil(cv/PRE_PACKAGE_CV));
   const VOLUME_DELTA_NET_PER_CV=0.1652;
