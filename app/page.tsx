@@ -6,9 +6,9 @@ import { HomePage } from "./components/marketing/home-page";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "SkillCheck — ludzie, kompetencje, świadome decyzje",
+  title: "SkillCheck — masz kandydatów, sprawdź komu warto poświęcić czas",
   description:
-    "Poznaj SkillCheck: od zrozumienia firmy i stanowiska do uporządkowanej oceny kandydatów. Sprawdź dostępne funkcje, przykład raportu i kierunek rozwoju.",
+    "Uporządkuj CV według wymagań stanowiska i przygotuj shortlistę. FREE za 0 zł, PRESELEKCJA za 300 zł brutto. Sprawdź przykład raportu i kalkulator kosztu rekrutacji.",
 };
 
 export default function Home() {

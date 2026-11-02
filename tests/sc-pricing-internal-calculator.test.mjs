@@ -56,9 +56,15 @@ test('costs and margin come only from the internal config and never enter the of
 test('CV overage and per-package add-on prices go through the quote engine', () => {
   const c = defaultConfig();
   c.packages.PRESELEKCJA.overageGrossPerCvMinor = 123; // 1,23 zł gross → 1,00 zł net
+  // The shipped default offers PRESELEKCJA only at its base pool, because it is sold in whole
+  // 60 CV packages and has no overage. This test is about the engine's overage arithmetic, so it
+  // opens a larger pool explicitly alongside the overage rate it sets above.
+  c.packages.PRESELEKCJA.cvOptions = [60, 100];
+  // The shipped default has the interview add-on off everywhere, because bot calls do not work.
+  // This test is about the engine's add-on pricing, so it enables it explicitly.
   const interview = c.addons.find(a => a.code === 'interview');
-  interview.packages.PRESELEKCJA.unitGrossMinor = 1_230;
-  interview.packages.WERYFIKACJA.unitGrossMinor = 2_460;
+  interview.packages.PRESELEKCJA = { enabled: true, included: 0, unitGrossMinor: 1_230 };
+  interview.packages.WERYFIKACJA = { enabled: true, included: 20, unitGrossMinor: 2_460 };
   interview.unitCostMinor = 200;
   const p = calculate(c, scenario('PRESELEKCJA', 100, { interview: 3 }));
   assert.equal(p.quote.lines.find(l => l.kind === 'cv_overage').netMinor, 40 * 100);
@@ -73,7 +79,10 @@ test('CV overage and per-package add-on prices go through the quote engine', () 
 });
 
 test('fewer requested add-ons than included are raised to the included quantity', () => {
-  const r = calculate(defaultConfig(), scenario('WERYFIKACJA', 60, { interview: 5 }));
+  // Same reason as above: the default has no included interviews, so this enables them.
+  const c = defaultConfig();
+  c.addons.find(a => a.code === 'interview').packages.WERYFIKACJA = { enabled: true, included: 20, unitGrossMinor: 0 };
+  const r = calculate(c, scenario('WERYFIKACJA', 60, { interview: 5 }));
   assert.equal(r.ok, true);
   assert.equal(r.quote.lines.find(l => l.code === 'interview').quantity, 20);
 });

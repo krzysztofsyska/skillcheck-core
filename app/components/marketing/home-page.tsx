@@ -2,8 +2,19 @@ import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { loadSc19PackageSizes, loadSc19PublicOfferSizes } from "../../../lib/sc19-package-sizes";
 import { createClient } from "../../../lib/supabase/server";
-import { isSc19CatalogEnabled, preselekcjaAnalyses, preselekcjaPrice } from "./preselekcja-offer";
-import { capabilities, faq, steps, availabilityNote } from "./content";
+import { freeAnalyses, freePrice, isSc19CatalogEnabled, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
+import {
+  assumptions,
+  availabilityNote,
+  benefits,
+  capabilities,
+  comparisonNote,
+  faq,
+  heroLede,
+  heroTitle,
+  sources,
+  steps,
+} from "./content";
 import { PackageComparison } from "./package-comparison";
 import { SiteFooter } from "./site-footer";
 import { SiteHeader } from "./site-header";
@@ -22,6 +33,7 @@ export async function HomePage() {
     async () => loadSc19PackageSizes(await createClient()),
   );
   const preselekcja = preselekcjaAnalyses(catalogEnabled, sizes);
+  const free = freeAnalyses(catalogEnabled, sizes);
   return (
     <main className={styles.page}>
       <SiteHeader />
@@ -30,17 +42,14 @@ export async function HomePage() {
           <div className={`${styles.wrap} ${styles.heroGrid}`}>
             <div>
               <p className={styles.kicker}>Ludzie. Kompetencje. Świadome decyzje.</p>
-              <h1 id="hero-title">Podobne CV. Różni ludzie. Zupełnie inne wyniki w pracy.</h1>
-              <p className={styles.lede}>
-                Budujemy SkillCheck, aby pomóc firmom lepiej zrozumieć, kogo naprawdę potrzebują — i na jakich podstawach wybrać tę osobę. Łączymy wymagania stanowiska, materiały kandydatów i ustrukturyzowaną ocenę w jednym miejscu. Ostateczna decyzja należy do człowieka.
-              </p>
+              <h1 id="hero-title">{heroTitle}</h1>
+              <p className={styles.lede}>{heroLede}</p>
               <div className={styles.actions}>
-                <Link href="/kalkulator" className={styles.primary}>Sprawdź kalkulator pakietów</Link>
-                <Link href="/demo" className={styles.secondary}>Zobacz przykład raportu</Link>
-                <Link href="/preselekcja" className={styles.secondary}>{preselekcja ? `PRESELEKCJA: ${preselekcja} CV za ${preselekcjaPrice}` : "Oferta PRESELEKCJA"}</Link>
+                <Link href="/preselekcja#free" className={styles.primary}>{`Wypróbuj FREE — ${freePrice}`}</Link>
+                <Link href="/kalkulator" className={styles.secondary}>Sprawdź koszt rekrutacji</Link>
               </div>
               <p className={styles.note}>
-                Kalkulator jest interaktywnym podglądem z orientacyjnymi kwotami. Nie uruchamia płatności ani dostępu do usług. Poniżej sprawdzisz, które funkcje są już dostępne.
+                {preselekcja ? `PRESELEKCJA: ${preselekcja} CV za ${preselekcjaPrice}.` : `PRESELEKCJA: ${preselekcjaPrice}.`} {free ? `FREE: bezpłatna analiza ${free} CV, jedna na firmę.` : "FREE: bezpłatna próba, jedna na firmę."} Ta strona niczego nie uruchamia i nie pobiera płatności.
               </p>
             </div>
             <aside className={styles.visionCard} aria-label="Pytanie, od którego zaczynamy">
@@ -52,25 +61,39 @@ export async function HomePage() {
           </div>
         </section>
 
-        <section className={styles.blockAlt} id="dlaczego" aria-labelledby="problem-title">
-          <div className={`${styles.wrap} ${styles.storyGrid}`}>
-            <div><p className={styles.kicker}>Dlaczego powstaje SkillCheck</p><h2 id="problem-title">Za każdą decyzją o zatrudnieniu stoi coś więcej niż kolejny etat.</h2></div>
-            <div><p className={styles.intro}>To czas menedżera, wysiłek zespołu i miesiące wdrożenia. To cele, które czekają na realizację. Gdy zatrudnienie okazuje się nietrafione, firma często wraca do punktu wyjścia.</p><p>Dwie osoby z podobnym doświadczeniem mogą zupełnie inaczej rozwiązywać problemy, podejmować decyzje i pracować samodzielnie. Dlatego warto wiedzieć, co rzeczywiście wynika z materiałów, a co wymaga sprawdzenia w rozmowie lub zadaniu.</p></div>
+        <section className={styles.block} id="korzysci" aria-labelledby="benefits-title">
+          <div className={styles.wrap}>
+            <p className={styles.kicker}>Co z tego masz</p>
+            <h2 id="benefits-title">Cztery powody, dla których warto sprawdzić kandydatów przed rozmową.</h2>
+            <div className={styles.grid}>
+              {benefits.map((item) => (
+                <article key={item.title} className={styles.card}>
+                  <h3>{item.title}</h3>
+                  <p className={styles.planTitle}>{item.claim}</p>
+                  <p>{item.body}</p>
+                </article>
+              ))}
+            </div>
           </div>
         </section>
-        <section className={styles.block} id="dla-kogo" aria-labelledby="audience-title">
-          <div className={styles.wrap}><p className={styles.kicker}>Dla kogo</p><h2 id="audience-title">Dla firm, w których każde zatrudnienie ma znaczenie.</h2>
-            <div className={styles.audienceGrid}>
-              <article className={styles.card}><h3>Właściciele i menedżerowie</h3><p>Gdy sam prowadzisz rekrutację, potrzebujesz jasnych kryteriów i uporządkowanych informacji, do których możesz wrócić przed decyzją.</p></article>
-              <article className={styles.card}><h3>Zespoły HR</h3><p>Gdy w procesie uczestniczy kilka osób, wspólny profil stanowiska i zapisane obserwacje pomagają rozmawiać o tych samych wymaganiach.</p></article>
-              <article className={styles.card}><h3>Agencje rekrutacyjne</h3><p>Gdy pracujesz dla różnych organizacji, ważne jest zrozumienie konkretnego klienta. Rozwój SkillCheck obejmuje także przyszłe rozwiązania dla agencji.</p></article>
+
+        <section className={styles.blockAlt} id="dlaczego" aria-labelledby="problem-title">
+          <div className={`${styles.wrap} ${styles.storyGrid}`}>
+            <div>
+              <p className={styles.kicker}>Dlaczego samo CV nie wystarcza</p>
+              <h2 id="problem-title">Podobne CV. Różni ludzie. Zupełnie inne wyniki w pracy.</h2>
+              <p className={styles.futureQuestion}>CV pokazuje deklaracje. Sprawdź więcej.</p>
+            </div>
+            <div>
+              <p className={styles.intro}>Dwie osoby z podobnym doświadczeniem mogą zupełnie inaczej rozwiązywać problemy, podejmować decyzje i pracować samodzielnie. Z dokumentu nie wynika, które z zapisanych doświadczeń odpowiadają wymaganiom Twojego stanowiska.</p>
+              <p>Za każdą decyzją o zatrudnieniu stoi czas menedżera, wysiłek zespołu i miesiące wdrożenia. Dlatego warto wiedzieć, co rzeczywiście wynika z materiałów, a co wymaga sprawdzenia w rozmowie lub zadaniu.</p>
             </div>
           </div>
         </section>
 
         <section className={styles.block} id="jak-to-dziala" aria-labelledby="jak-title">
           <div className={styles.wrap}>
-            <p className={styles.kicker}>Od potrzeb firmy do decyzji</p><h2 id="jak-title">Najpierw zrozumieć stanowisko. Potem oceniać kandydatów.</h2>
+            <p className={styles.kicker}>Jak działa SkillCheck</p><h2 id="jak-title">Najpierw zrozumieć stanowisko. Potem oceniać kandydatów.</h2>
             <p className={styles.intro}>
               Zakres odpowiedzialności, oczekiwane rezultaty, samodzielność i trudne sytuacje tworzą kontekst oceny. W tym kontekście materiały kandydata nabierają znaczenia.
             </p>
@@ -88,11 +111,12 @@ export async function HomePage() {
           </div>
         </section>
 
-        <section className={styles.blockAlt} id="mozliwosci" aria-labelledby="cap-title">
+        <section className={styles.blockAlt} id="przyklad" aria-labelledby="example-title">
           <div className={styles.wrap}>
-            <h2 id="cap-title">Więcej podstaw do rozmowy. Jaśniejsze kryteria decyzji.</h2>
+            <p className={styles.kicker}>Przykładowy raport</p>
+            <h2 id="example-title">Zobacz, jak wygląda wynik, zanim cokolwiek zamówisz.</h2>
             <p className={styles.intro}>
-              Projektujemy proces, w którym możesz wskazać źródło informacji, zauważyć brak danych i zaplanować kolejny krok weryfikacji.
+              Fikcyjny przykład dla stanowiska przedstawiciela handlowego pokazuje układ informacji: wymagania, dowody z materiałów, braki danych i pytania na rozmowę.
             </p>
             <div className={styles.grid}>
               {capabilities.map((item) => (
@@ -102,27 +126,74 @@ export async function HomePage() {
                 </article>
               ))}
             </div>
+            <div className={styles.actions}>
+              <Link href="/demo" className={styles.primary}>Zobacz przykładowy raport</Link>
+            </div>
           </div>
         </section>
 
-        <section className={styles.future} id="kierunek" aria-labelledby="future-title">
+        <section className={styles.block} id="kalkulator" aria-labelledby="calc-title">
           <div className={`${styles.wrap} ${styles.storyGrid}`}>
-            <div><p className={styles.kicker}>Kierunek rozwoju · Quality of Hire</p><h2 id="future-title">Podpisanie umowy to początek odpowiedzi.</h2><span className={`${styles.status} ${styles.statusPlanned}`}>Planowane</span></div>
-            <div><p className={styles.intro}>Chcemy połączyć to, co wiemy o kandydacie przed zatrudnieniem, z tym, jak radzi sobie później w rzeczywistej pracy.</p><p>Planowany moduł Quality of Hire ma zbierać krótkie oceny po 30 i 90 dniach, a opcjonalnie także po 180. Celem jest lepsze zrozumienie, które kryteria warto uwzględnić w kolejnej rekrutacji.</p><p className={styles.futureQuestion}>Czy zatrudniłbyś tę osobę ponownie?</p><p>To kierunek rozwoju produktu. Moduł nie jest jeszcze dostępny, a jego wartość wymaga potwierdzenia w praktyce.</p></div>
+            <div>
+              <p className={styles.kicker}>Kalkulator czasu i kosztu</p>
+              <h2 id="calc-title">Własne CV. Mniej pracy powtarzalnej.</h2>
+            </div>
+            <div>
+              <p className={styles.intro}>Policz, ile czasu zajmuje ręczne przeczytanie Twojej puli CV i ile kosztuje ten czas. Wpisujesz własną liczbę CV, czas na jeden dokument i koszt godziny pracy.</p>
+              <p>Przy przykładowych założeniach — 50 CV, 6 minut na dokument i 65 zł za godzinę — ręczna analiza to około 5 godzin i 325 zł netto kosztu pracy. To koszt Twojego procesu przy podanych założeniach, a nie gwarantowana oszczędność dzięki SkillCheck.</p>
+              <div className={styles.actions}>
+                <Link href="/kalkulator" className={styles.primary}>Sprawdź koszt rekrutacji</Link>
+              </div>
+            </div>
           </div>
         </section>
 
         <section className={styles.block} id="pakiety" aria-labelledby="pkg-title">
           <div className={styles.wrap}>
-            <p className={styles.kicker}>Od preselekcji do pogłębionej weryfikacji</p>
-            <h2 id="pkg-title">Cztery poziomy. Jedna platforma.</h2>
-            <p className={styles.intro}>Wybierz zakres odpowiadający potrzebom Twojej rekrutacji. Dziś dostępne są FREE i PRESELEKCJA; WERYFIKACJA i ASSESSMENT CENTER są planowane.</p>
+            <p className={styles.kicker}>Wybierz zakres</p>
+            <h2 id="pkg-title">Nie płać za większy zakres, niż potrzebujesz.</h2>
+            <p className={styles.intro}>Dziś kupisz FREE i PRESELEKCJĘ. FREE jest opcjonalnym pierwszym krokiem, a nie warunkiem zakupu PRESELEKCJI.</p>
             <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} />
           </div>
         </section>
 
-        <section className={styles.blockAlt} id="o-nas" aria-labelledby="about-title">
-          <div className={`${styles.wrap} ${styles.storyGrid}`}><div><p className={styles.kicker}>O nas</p><h2 id="about-title">Budujemy technologię, która pomaga lepiej rozumieć ludzi w kontekście pracy.</h2></div><div><p>Za SkillCheck stoi KTIG CONSULTING Sp. z o.o. Rozwijamy platformę wspierającą firmy w porządkowaniu wymagań, materiałów i obserwacji rekrutacyjnych.</p><p>Naszym punktem odniesienia jest konkretna organizacja i rzeczywista praca na stanowisku. AI ma wspierać analizę; odpowiedzialność za decyzję pozostaje po stronie człowieka.</p><p>KTIG CONSULTING Sp. z o.o.<br />ul. Michała Kajki 10–12, 10-547 Olsztyn<br /><a href="mailto:pomoc@skillcheck.pl">pomoc@skillcheck.pl</a></p></div></div>
+        <section className={styles.blockAlt} id="agencja" aria-labelledby="agency-title">
+          <div className={styles.wrap}>
+            <p className={styles.kicker}>Porównanie z agencją</p>
+            <h2 id="agency-title">Masz już kandydatów? Porównaj budżety.</h2>
+            <p className={styles.intro}>
+              Przykładowy scenariusz dla jednego stanowiska, w kwotach netto: pełna usługa agencji za 10 000 zł wobec PRESELEKCJI za {preselekcjaOffer.netPln} zł powiększonej o 1 500 zł własnych kosztów klienta. Różnica budżetów w tym scenariuszu to około 8 256 zł.
+            </p>
+            <p className={styles.note}>{comparisonNote}</p>
+            <div className={styles.actions}>
+              <Link href="/kalkulator" className={styles.secondary}>Zmień założenia w kalkulatorze</Link>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.block} id="zalozenia" aria-labelledby="assumptions-title">
+          <div className={styles.wrap}>
+            <p className={styles.kicker}>Założenia i źródła</p>
+            <h2 id="assumptions-title">Wiesz, skąd bierze się każda kwota.</h2>
+            <p className={styles.intro}>Wszystkie parametry są jawne i edytowalne w kalkulatorze. Ceny FREE i PRESELEKCJI są aktualne; porównanie z agencją jest symulacją budżetów.</p>
+            <div className={styles.grid}>
+              {assumptions.map((item) => (
+                <article key={item.label} className={styles.card}>
+                  <h3>{item.label}</h3>
+                  <p className={styles.planTitle}>{item.value}</p>
+                  <p>{item.note}</p>
+                </article>
+              ))}
+            </div>
+            <ul>
+              {sources.map((source) => (
+                <li key={source.href}>
+                  <a href={source.href} target="_blank" rel="noopener noreferrer">{source.label}</a>{" — "}{source.note}
+                </li>
+              ))}
+            </ul>
+            <p className={styles.note}>Są to przykłady konkretnych ofert, a nie średnie rynkowe. Warunki każdej agencji potwierdza się indywidualnie.</p>
+          </div>
         </section>
 
         <section className={styles.blockAlt} id="faq" aria-labelledby="faq-title">
@@ -136,13 +207,24 @@ export async function HomePage() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        <section className={styles.block} id="o-nas" aria-labelledby="about-title">
+          <div className={`${styles.wrap} ${styles.storyGrid}`}><div><p className={styles.kicker}>O nas</p><h2 id="about-title">Budujemy technologię, która pomaga lepiej rozumieć ludzi w kontekście pracy.</h2></div><div><p>Za SkillCheck stoi KTIG CONSULTING Sp. z o.o. Rozwijamy platformę wspierającą firmy w porządkowaniu wymagań, materiałów i obserwacji rekrutacyjnych.</p><p>Naszym punktem odniesienia jest konkretna organizacja i rzeczywista praca na stanowisku. AI ma wspierać analizę; odpowiedzialność za decyzję pozostaje po stronie człowieka.</p><p>KTIG CONSULTING Sp. z o.o.<br />ul. Michała Kajki 10–12, 10-547 Olsztyn<br /><a href="mailto:pomoc@skillcheck.pl">pomoc@skillcheck.pl</a></p></div></div>
+        </section>
+
+        <section className={styles.blockAlt} id="zgloszenie" aria-labelledby="closing-title">
+          <div className={styles.wrap}>
             <div className={styles.closing}>
-              <h2>Jakiego człowieka potrzebuje Twoja firma?</h2>
+              <p className={styles.kicker}>Najpierw sprawdź. Potem zdecyduj.</p>
+              <h2 id="closing-title">Pierwszy krok do lepiej uporządkowanej rekrutacji.</h2>
               <p>
-                Zobacz fikcyjny przykład raportu lub opowiedz nam o stanowisku, które chcesz obsadzić. Zacznijmy od potrzeb Twojej organizacji.
+                Zgłoś firmę do bezpłatnej próby albo zamów PRESELEKCJĘ. Do rejestracji potrzebny jest numer NIP i firmowy adres e-mail.
               </p>
               <div className={styles.actions}>
-                <Link href="/demo" className={styles.primary}>Zobacz przykład</Link>
+                <Link href="/preselekcja#free" className={styles.primary}>{`Wypróbuj FREE — ${freePrice}`}</Link>
+                <Link href="/preselekcja" className={styles.secondary}>Zamów PRESELEKCJĘ</Link>
                 <Link href="/rozmowa" className={styles.secondary}>Porozmawiajmy o Twojej rekrutacji</Link>
               </div>
             </div>
