@@ -9,6 +9,8 @@ export type BatchItem = {
   id: string; position: number; file_name: string | null; phase: BulkPhase; error_reason: BulkErrorReason | null; ocr_used: boolean;
   application_id: string | null; candidate_name: string | null; has_phone: boolean | null; group_key: BulkGroup | null;
   raw_score: number | null; duplicate_of_application: string | null;
+  /** Server-computed: the group belongs to the analysis the ranking uses now. Missing means outdated. */
+  group_analysis_id?: string | null; group_current?: boolean;
 };
 export type BatchStatus = {
   batch: { id: string; recruitment_id: string; status: 'uploading' | 'processing' | 'completed'; declared_files: number; reserved_slots: number; completed_at: string | null };
@@ -52,7 +54,9 @@ export function BatchProgress({ companyId, recruitmentId, batchId, initial, bill
           {i.duplicate_of_application && <> — <Link href={app(i.duplicate_of_application)}>istniejące zgłoszenie</Link></>}</td>
         <td>{i.application_id && i.candidate_name ? <Link href={app(i.application_id)}>{i.candidate_name}</Link> : '—'}
           {i.application_id && i.has_phone === false && <span> · brak telefonu w CV</span>}</td>
-        <td>{i.group_key ? `${groupLabel[i.group_key]}${i.raw_score !== null ? ` (${Math.round(Number(i.raw_score))} pkt)` : ''}` : '—'}</td>
+        <td>{!i.group_key ? '—' : i.group_current
+          ? `${groupLabel[i.group_key]}${i.raw_score !== null ? ` (${Math.round(Number(i.raw_score))} pkt)` : ''}`
+          : <>{groupLabel[i.group_key]}<br /><strong>Wynik nieaktualny — wymaga ponownej analizy</strong></>}</td>
       </tr>)}</tbody>
     </table>
   </section>;

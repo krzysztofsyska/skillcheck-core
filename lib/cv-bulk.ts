@@ -97,7 +97,8 @@ export class BulkIntakeError extends Error {
 
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 const INTL_PHONE = /(?<![\d+])(?:\+|00)(?!48)[1-9]\d{0,3}(?:[ \t.-]?\(?\d{1,4}\)?){2,6}(?!\d)/g;
-const PHONE = /(?<![\d+])(?:\+|00)?(?:48[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3}[\s.-]?\d{2,3}[\s.-]?\d{2,3}(?!\d)/g;
+// Separators are spaces, tabs, dots or hyphens on the same line: a number never takes digits from the next line.
+const PHONE = /(?<![\d+])(?:\+|00)?(?:48[ \t.-]?)?(?:\(?\d{2,3}\)?[ \t.-]?)?\d{3}[ \t.-]?\d{2,3}[ \t.-]?\d{2,3}(?!\d)/g;
 const HEADING = /\b(?:cv|curriculum|vitae|życiorys|zyciorys|resume|résumé|dane|kontakt|osobowe|profil|o mnie|doświadczenie|wykształcenie|umiejętności|telefon|e-?mail|adres|stanowisko|kandydat)\b/i;
 const NAME_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+(?:-[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+)?$/;
 const UPPER_WORD = /^[A-ZĄĆĘŁŃÓŚŹŻ]{2,}(?:-[A-ZĄĆĘŁŃÓŚŹŻ]{2,})?$/;

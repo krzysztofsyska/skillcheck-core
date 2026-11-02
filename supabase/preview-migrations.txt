@@ -12,3 +12,4 @@
 20261101130300_cv_bulk_erasure_inventory_r10.sql
 20261102100000_cv_bulk_capacity_phone_fix.sql
 20261102110000_cv_bulk_skip_frozen.sql
+20261102120000_cv_bulk_erasure_guards.sql

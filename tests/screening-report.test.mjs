@@ -336,9 +336,49 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
   assert.doesNotMatch(outdated, /83 pkt|pokrycie kryteriów/, 'no historical score shown as current');
 });
 
-test('recruitment page reads every ranking page before marking groups outdated', () => {
-  const page = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(page, /get_screening_ranking[^\n]*\.range\(0,\s*999\)/, 'no single fixed page');
-  assert.match(page, /\.range\(rankingRows\.length, rankingRows\.length \+ 499\)/, 'pages until the ranking is exhausted');
-  assert.match(page, /if \(page\.error \|\| !Array\.isArray\(page\.data\)\) \{ rankingOk = false; break; \}/, 'a failed page fails closed');
+test('ranking currency: every page is read, a failed page fails closed; recruitment and batch pages use it', async () => {
+  const { loadCurrentRanking, withGroupCurrency } = await import('../lib/preselection-currency.ts');
+  const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const rows = Array.from({ length: 1203 }, (_, n) => ({ application_id: id(n), analysis_id: id(10000 + n), eligibility_reason: 'eligible' }));
+  const client = (failAt = -1) => ({ calls: [], rpc(fn, args) {
+    const self = this;
+    return { range(from, to) { self.calls.push([fn, args, from, to]);
+      return Promise.resolve(from === failAt ? { data: null, error: { code: 'X' } } : { data: rows.slice(from, to + 1), error: null }); } };
+  } });
+  const ok = client();
+  const map = await loadCurrentRanking(ok, id(9));
+  assert.equal(map.size, 1203, 'all pages, not only the first');
+  assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499]]);
+  assert.equal(await loadCurrentRanking(client(500), id(9)), null, 'a failed page fails closed');
+  const items = [
+    { application_id: id(1200), group_key: 'passed', group_analysis_id: id(11200) },
+    { application_id: id(1), group_key: 'passed', group_analysis_id: id(99999) },
+    { application_id: id(2), group_key: 'passed' },
+    { application_id: null, group_key: null },
+  ];
+  assert.deepEqual(withGroupCurrency(items, map).map(i => i.group_current), [true, false, false, false]);
+  assert.deepEqual(withGroupCurrency(items, null).map(i => i.group_current), [false, false, false, false], 'unreadable ranking: outdated');
+  for (const file of ['../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', '../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/page.tsx', '../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts']) {
+    const src = readFileSync(new URL(file, import.meta.url), 'utf8');
+    assert.match(src, /loadCurrentRanking\(client, /, file);
+    assert.doesNotMatch(src, /get_screening_ranking[^\n]*\.range\(0,\s*999\)/, file);
+  }
+
+  // The batch page shows an outdated group without its historical score.
+  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url).pathname;
+  const module = new Module(filename); module.filename = filename;
+  const require = createRequire(filename);
+  module.require = name => name === '../actions' ? { bulkProgress: async () => null }
+    : name === 'next/link' ? { __esModule: true, default: ({ children, ...props }) => React.createElement('a', props, children) }
+    : name.endsWith('/lib/cv-bulk') ? require('../../../../../../../lib/cv-bulk.ts') : require(name);
+  module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  const item = { id: id(1), position: 1, file_name: 'cv.pdf', phase: 'done', error_reason: null, ocr_used: false, application_id: id(1),
+    candidate_name: 'Kandydat nr 1', has_phone: true, group_key: 'passed', raw_score: 83.3, duplicate_of_application: null };
+  const render = group_current => renderToStaticMarkup(React.createElement(module.exports.BatchProgress, { companyId: id(1), recruitmentId: id(2), batchId: id(3), billingHref: '/b',
+    initial: { batch: { id: id(3), recruitment_id: id(2), status: 'completed', declared_files: 1, reserved_slots: 1, completed_at: null }, items: [{ ...item, group_current }] } }));
+  assert.match(render(true), /83 pkt/);
+  const outdated = render(false);
+  assert.match(outdated, /Wynik nieaktualny — wymaga ponownej analizy/);
+  assert.doesNotMatch(outdated, /83 pkt/, 'no historical score shown as current');
+  assert.match(render(undefined), /Wynik nieaktualny/, 'missing flag means outdated');
 });

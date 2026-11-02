@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { companyAccess } from '../../../../../../lib/company-access';
 import { bulkIntakeBlocked, validateBatchFiles, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
 import { pumpWithSession } from '../../../../../../lib/cv-bulk-server';
+import { loadCurrentRanking, withGroupCurrency } from '../../../../../../lib/preselection-currency';
 import { screeningAiUserEnabled } from '../../../../../../lib/screening-dispatch';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -54,7 +55,10 @@ export async function bulkProgress(companyId: string, batchId: string) {
   if (!uuid.test(batchId)) return null;
   if (canEdit) { try { await pumpWithSession(client, batchId); } catch { /* status below still shows the state */ } }
   const status = await client.rpc('cv_bulk_batch_status', { target_batch: batchId });
-  return status.error ? null : status.data;
+  if (status.error || !status.data) return null;
+  const data = status.data as { batch: { recruitment_id: string }; items: { application_id: string | null; group_key: unknown; group_analysis_id?: unknown }[] };
+  const ranking = data.items.some(i => i.group_key) ? await loadCurrentRanking(client, data.batch.recruitment_id) : null;
+  return { ...data, items: withGroupCurrency(data.items, ranking) };
 }
 
 export type MoveState = { error?: string; saved?: boolean };

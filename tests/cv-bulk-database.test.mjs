@@ -22,6 +22,7 @@ const fixes = '20261101130200_cv_bulk_review_fixes.sql';
 const r10 = '20261101130300_cv_bulk_erasure_inventory_r10.sql';
 const phoneFix = '20261102100000_cv_bulk_capacity_phone_fix.sql';
 const skipFrozen = '20261102110000_cv_bulk_skip_frozen.sql';
+const erasureGuards = '20261102120000_cv_bulk_erasure_guards.sql';
 const bulkTables = ['private.application_preselection_group_events', 'private.application_preselection_groups',
   'private.cv_bulk_batches', 'private.cv_bulk_items', 'private.cv_bulk_settings'];
 const contract = { payload_schema_version: 1, result_schema_version: 1, prompt_version: 'screening-v1', provider: 'openai', model: 'ranking-test-model', model_revision: 'test-rev' };
@@ -38,7 +39,7 @@ async function install(t, variant = 'legacy', { withBulk = true, withR9 = true }
   await applyMigration(env.db);
   for (const name of chain) await run(env.db, await migration(name));
   if (withBulk) await run(env.db, await migration(bulk));
-  if (withBulk && withR9) for (const name of [r9, fixes, r10, phoneFix, skipFrozen]) await run(env.db, await migration(name));
+  if (withBulk && withR9) for (const name of [r9, fixes, r10, phoneFix, skipFrozen, erasureGuards]) await run(env.db, await migration(name));
   await seedSyntheticPolicy(env.db);
   return env;
 }
@@ -690,8 +691,26 @@ test('SC-BULK-001 R9/R10: erasure inventory lists and purges bulk rows', async t
       const resolutionRevision = (await db.query('select max(revision)::int r from private.erasure_subject_resolutions where anchor_candidate_id=$1', [subject.candidate.id])).rows[0].r;
       await h.asUser(subject.owner);
       subject.resolutionId = await x.resolve(subject, [subject.candidate.id, analyzed.candidate_id, queued.candidate_id].sort(), resolutionRevision);
+      // The duplicate file is older than the 30-day file-name retention; it is linked to the subject
+      // (duplicate_of_application), so clearing its name after the freeze would change the manifest.
+      await h.asAdmin();
+      await db.query("update private.cv_bulk_items set created_at=now()-interval '31 days' where id=$1", [dupItem.id]);
+      const dupNameBefore = (await db.query('select file_name from private.cv_bulk_items where id=$1', [dupItem.id])).rows[0].file_name;
+      assert.ok(dupNameBefore);
+      await h.asUser(subject.owner);
       const balanceBefore = await b.balance(subject.companyId);
       const state = await x.freeze(subject);
+      // A new copy of the frozen subject's CV is still a duplicate (no new record of a person being
+      // erased, slot returned) but is not linked to the frozen application.
+      await h.asUser(subject.owner);
+      const late = (await db.query('select public.cv_bulk_create_batch($1,$2,$3::jsonb) r', [subject.recruitment.id, randomUUID(),
+        JSON.stringify([{ name: 'subject-late-copy.pdf', kind: 'pdf', size: 5 }])])).rows[0].r;
+      const [lateItem] = await b.items(late.batch_id);
+      const lateResult = await b.register(subject, lateItem.id, b.extraction({ first_name: person.first_name, last_name: person.last_name, email: person.email ?? null, name_detected: true }));
+      assert.deepEqual([lateResult.status, lateResult.error_reason, lateResult.duplicate_of_application], ['error', 'duplicate', null]);
+      await h.asAdmin();
+      assert.deepEqual((await db.query('select phase, error_reason, duplicate_of_application, candidate_id, slot_state from private.cv_bulk_items where id=$1', [lateItem.id])).rows[0],
+        { phase: 'error', error_reason: 'duplicate', duplicate_of_application: null, candidate_id: null, slot_state: 'released' }, 'unlinked duplicate, slot returned');
       // A pump after the freeze leaves the frozen rows untouched: settling the finished analysis or
       // starting/expiring the queued file would change the approved manifest and block the purge.
       const groupsBefore = (await (async () => { await h.asAdmin(); return db.query('select count(*)::int n from private.application_preselection_groups where application_id=$1', [analyzed.application_id]); })()).rows[0].n;
@@ -700,6 +719,7 @@ test('SC-BULK-001 R9/R10: erasure inventory lists and purges bulk rows', async t
       assert.deepEqual((await b.items(more.batch_id)).map(r => [r.phase, r.slot_state, r.error_reason]),
         [['analyzing', 'transferred', null], ['queued', 'held', null]], 'frozen items untouched');
       assert.equal((await db.query('select count(*)::int n from private.application_preselection_groups where application_id=$1', [analyzed.application_id])).rows[0].n, groupsBefore, 'no group written');
+      assert.equal((await db.query('select file_name from private.cv_bulk_items where id=$1', [dupItem.id])).rows[0].file_name, dupNameBefore, 'retention skips a duplicate linked to a frozen candidate');
       // Duplicate rows pointing to a frozen candidate are hidden like the candidate itself.
       await h.asUser(subject.owner);
       assert.deepEqual((await db.query('select public.cv_bulk_batch_status($1) r', [batch.batch_id])).rows[0].r.items, []);
@@ -725,6 +745,12 @@ test('SC-BULK-001 R9/R10: erasure inventory lists and purges bulk rows', async t
 test('SC-BULK-001 rollbacks restore R9, R8 and remove the bulk schema', async t => {
   const env = await install(t);
   const { db } = env;
+  await run(db, await rollback('20261102120000_cv_bulk_erasure_guards_down.sql'));
+  assert.equal((await db.query("select to_regprocedure('private.cv_bulk_erasure_guards_installed()') v")).rows[0].v, null);
+  for (const fn of ['public.cv_bulk_register_item(uuid,jsonb)', 'private.cv_bulk_file_name_retention()'])
+    assert.doesNotMatch((await db.query('select prosrc from pg_proc where oid=$1::regprocedure', [fn])).rows[0].prosrc, /erasure_lock_candidate/, fn);
+  assert.doesNotMatch((await db.query("select prosrc from pg_proc where oid='public.cv_bulk_batch_status(uuid)'::regprocedure")).rows[0].prosrc, /group_analysis_id/);
+  await assert.rejects(run(db, await rollback('20261102120000_cv_bulk_erasure_guards_down.sql')), /cv_bulk_erasure_guards_not_installed/);
   await run(db, await rollback('20261102110000_cv_bulk_skip_frozen_down.sql'));
   assert.equal((await db.query("select to_regprocedure('private.cv_bulk_skip_frozen_installed()') v")).rows[0].v, null);
   assert.doesNotMatch((await db.query("select prosrc from pg_proc where oid='private.cv_bulk_pump_batch(private.cv_bulk_batches,jsonb,jsonb)'::regprocedure")).rows[0].prosrc, /erasure_lock_candidate/);
@@ -761,6 +787,7 @@ test('SC-BULK-001 rollbacks restore R9, R8 and remove the bulk schema', async t 
   const r8 = (await db.query('select schema_signature, private.erasure_schema_signature() actual from private.erasure_inventory_baseline_r8')).rows[0];
   assert.equal(r8.actual, r8.schema_signature, 'schema is the reviewed R8 state again');
   // And forward again.
-  for (const name of [bulk, r9, fixes, r10, phoneFix, skipFrozen]) await run(db, await migration(name));
+  for (const name of [bulk, r9, fixes, r10, phoneFix, skipFrozen, erasureGuards]) await run(db, await migration(name));
   await assert.rejects(run(db, await migration(skipFrozen)), /cv_bulk_skip_frozen_already_installed/);
+  await assert.rejects(run(db, await migration(erasureGuards)), /cv_bulk_erasure_guards_already_installed/);
 });
