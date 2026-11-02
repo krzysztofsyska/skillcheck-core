@@ -77,8 +77,9 @@ export const capabilities = [
   },
 ] as const;
 
-// WERYFIKACJA and ASSESSMENT CENTER are shown as later stages, without prices
-// (owner decision 2026-11-02).
+// WERYFIKACJA and ASSESSMENT CENTER are shown as later stages WITH their approved prices, next
+// to the fact that neither can be bought yet (owner decision 2026-11-02, evening). Bot calls are
+// not mentioned here or anywhere else customer-facing until they work.
 export const nextStages = [
   {
     name: "WERYFIKACJA",
