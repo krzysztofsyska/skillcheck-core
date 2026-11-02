@@ -85,17 +85,34 @@ to, co już faktycznie obowiązuje**, żeby przyszła migracja nie otworzyła ic
 
 ```sql
 -- PROPOZYCJA, nie zastosowana.
-alter table private.cv_bulk_items force row level security;
 revoke all on all tables in schema private from anon, authenticated;
 alter default privileges in schema private revoke all on tables from anon, authenticated;
 -- to samo dla schematu checkout
 ```
 
-`force row level security` ma tu konkretny sens: właściciel tabeli (`postgres`) domyślnie omija
-RLS, a wszystkie funkcje `SECURITY DEFINER` działają właśnie jako `postgres`. Dziś to jedyny
-powód, dla którego te funkcje w ogóle czytają te tabele — więc **`force` trzeba wprowadzać razem
-z politykami, nie przed nimi**, inaczej zablokuje działającą aplikację. Dlatego poniżej przy
-każdej tabeli podaję politykę, która musi istnieć **przed** włączeniem `force`.
+#### Dlaczego NIE proponuję tu `force row level security`
+
+W pierwszej wersji tego dokumentu napisałem, że warto dołożyć `force row level security`.
+**Wycofuję to** — przy obecnej architekturze ta opcja nie daje ochrony, o którą chodzi, i może
+wywrócić działającą aplikację. Powód jest w tym, względem jakiej roli Postgres dopasowuje polityki:
+
+- Wszystkie funkcje `SECURITY DEFINER` w tym projekcie należą do `postgres`, więc **wykonują się
+  jako `postgres`**, nie jako `authenticated`.
+- Bez `force` właściciel tabeli omija RLS — i właśnie dlatego te funkcje dziś w ogóle czytają
+  te tabele.
+- Z `force` właściciel przestaje omijać RLS, ale polityki napisane `to authenticated` **nie
+  dotyczą `postgres`**. Efekt: funkcje przestają działać, a polityki nie zaczynają nikogo chronić.
+
+Żeby `force` miało sens, trzeba by albo dopisać równoległe polityki `to postgres`
+(co sprowadza się do „pozwól właścicielowi na wszystko", czyli nic nie zmienia), albo przenieść
+funkcje na osobną rolę właściciela i objąć ją politykami. To przebudowa modelu dostępu, nie
+jednowierszowa migracja — i nie jest potrzebna, dopóki te tabele nie mają żadnego `GRANT`-u
+dla `anon` i `authenticated`.
+
+**Wniosek: realną granicą jest tu brak `GRANT`-u, nie RLS.** Polityki poniżej proponuję jako
+drugą warstwę na wypadek, gdyby ktoś kiedyś taki `GRANT` dodał — same z siebie, bez `GRANT`-u,
+są martwe, i to jest w porządku. Dlatego są to polityki **tylko do odczytu**: mają ograniczać
+ewentualny przyszły odczyt przez klienta, a nie otwierać zapis.
 
 ### `private.cv_bulk_items`, `private.cv_bulk_batches`
 
@@ -103,18 +120,20 @@ Dostęp ma mieć tylko członek firmy będącej właścicielem partii. Helper `p
 już istnieje i jest używany przez `private.cv_bulk_item_for_write`.
 
 ```sql
--- PROPOZYCJA, nie zastosowana.
+-- PROPOZYCJA, nie zastosowana. Tylko odczyt.
 create policy cv_bulk_items_company_read on private.cv_bulk_items
   for select to authenticated
   using (private.has_company_access(company_id));
-
-create policy cv_bulk_items_company_write on private.cv_bulk_items
-  for all to authenticated
-  using (private.has_company_access(company_id, true))
-  with check (private.has_company_access(company_id, true));
 ```
 
-Analogicznie dla `cv_bulk_batches` po `company_id`.
+Analogicznie dla `cv_bulk_batches` po `company_id`, też wyłącznie `for select`.
+
+**Świadomie nie proponuję polityki zapisu.** W pierwszej wersji miałem tu `for all` — to był błąd.
+Gdyby kiedyś doszedł `GRANT` na zapis, taka polityka pozwoliłaby członkowi firmy wstawiać,
+zmieniać i kasować wiersze `cv_bulk_items` **z pominięciem RPC**, a to one pilnują stanu slotów
+i kredytów, powiązań z kandydatem oraz blokad usuwania (`private.cv_bulk_item_for_write`,
+`private.cv_bulk_release_slot`, `private.erasure_lock_candidate`). Bezpośredni CRUD rozjechałby
+stan partii. Zapis ma zostać wyłącznie za funkcjami.
 
 ### `private.application_preselection_groups`, `private.application_preselection_group_events`
 
