@@ -43,7 +43,8 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
   </details>
   <div className={styles.grid}>{nextStages.map(stage=><article key={stage.name} className={styles.card}>
     <p className={styles.planLabel}>Kolejny etap</p><h3>{stage.name}</h3><p className={styles.planTitle}>{stage.title}</p><p>{stage.body}</p>
-    <p className={`${styles.status} ${styles.statusPlanned}`}>Bez ceny i terminu</p>
+    <div className={styles.planPrice}><strong>{stage.price}</strong><p>{stage.scope}</p></div>
+    <p className={`${styles.status} ${styles.statusPlanned}`}>Cena zatwierdzona · pakiet w przygotowaniu</p>
   </article>)}</div>
   <p className={styles.note}>{nextStagesNote} <Link href="/rozmowa">Napisz, jeśli chcesz o nich porozmawiać.</Link></p>
 </>;

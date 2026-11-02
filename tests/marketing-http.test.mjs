@@ -70,15 +70,20 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(home.includes('Po wycenie'), false);
   assert.equal(home.includes('To koncepcja oferty do oceny'), false);
   assert.equal(home.includes('Cena robocza z wizualizacji'), false);
-  // Only FREE and PRESELEKCJA are sold; the later stages carry no price.
+  // Only FREE and PRESELEKCJA can be bought today, but the later stages carry their
+  // approved prices (owner decision 2026-11-02, reconfirmed in chat the same evening).
   assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 0);
   assert.equal((home.match(/>Kolejny etap<\/p>/g) ?? []).length, 2, 'WERYFIKACJA and ASSESSMENT CENTER shown as later stages');
-  for (const price of ['299', '369', '899', '1 799', '1799', '615', '1845']) {
+  assert.match(home, /615 zł brutto/);
+  assert.match(home, /1 499 zł brutto/);
+  assert.match(home, /Cena zatwierdzona · pakiet w przygotowaniu/);
+  assert.match(home, /5–6 osób, maksymalnie 10/);
+  // Withdrawn prices must not come back.
+  for (const price of ['299', '369', '899', '1 799', '1799', '1845']) {
     assert.equal(home.includes(price), false, `stale price ${price} removed from the home page`);
   }
   assert.ok(home.includes('5 analiz CV'), 'approved FREE scope (owner 2026-11-02)');
   assert.ok(home.includes('60 analiz CV'), 'approved PRESELEKCJA scope (owner 2026-10-28)');
-  assert.equal(home.includes('5–6'), false);
   // Voicebot is not shown anywhere on the public offer (owner decision 2026-11-02).
   for (const voice of ['voicebot', 'Voicebot', 'rozmów AI', 'rozmowy AI', 'rozmowa weryfikacyjna', 'Rozmowa weryfikacyjna', 'rozmów z botem', 'rozmowy z botem']) {
     assert.equal(home.includes(voice), false, `no voicebot copy on the home page: ${voice}`);
@@ -166,7 +171,11 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(calculator.includes('buyDemoButton'), false);
   assert.equal(calculator.includes('data-pack="verify"'), false);
   assert.equal(calculator.includes('data-pack="ac"'), false);
-  for (const price of ['299', '369', '899', '1799', '1 799', '615 zł', '1845']) {
+  // The calculator sells only PRESELEKCJA, but it states the approved prices of the two
+  // later stages so the page and the calculator never disagree.
+  assert.match(calculator, /615 zł brutto za 60 CV/);
+  assert.match(calculator, /1 499 zł brutto za 50 CV/);
+  for (const price of ['299', '369', '899', '1799', '1 799', '1845']) {
     assert.equal(calculator.includes(price), false, `stale price ${price} removed from the calculator`);
   }
   for (const voice of ['voicebot', 'Voicebot', 'rozmów AI', 'rozmowy AI', 'rozmów voicebota', 'Rozmowy voicebota', 'próbna rozmowa']) {
