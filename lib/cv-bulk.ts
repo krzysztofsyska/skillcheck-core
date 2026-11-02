@@ -118,13 +118,14 @@ studentka absolwent absolwentka customer service obsługi obslugi klienta specja
 logistyczka ekonomista ekonomistka prawnik prawniczka radca adwokat fizjoterapeuta fizjoterapeutka mechanik elektryk
 spawacz monter monterka ślusarz slusarz kucharka kelnerka barista recepcjonista recepcjonistka
 doradca doradczyni opiekun opiekunka ekspedient ekspedientka chef sous zespołu zespolu komputerowy
-finansowy finansowa handlowy handlowa grafik kucharz kelner lider office biura`.split(/\s+/));
+finansowy finansowa handlowy handlowa grafik kucharz kelner lider office biura
+budowy budownictwa zarządu zarzadu medyczny medyczna logistyki projektu produkcji magazynu kadr płac plac
+it hr ds. ds nurse chef`.split(/\s+/));
 const isJobWord = (w: string) => JOB_WORDS.has(w.toLowerCase());
-// Seniority words are also first names ("Junior Silva"): leading a line, they mark a headline only
-// when every word of the line is a job word ("Senior Java Developer").
-const SENIORITY = new Set(['junior', 'senior', 'mid', 'regular', 'principal', 'staff', 'lead', 'head']);
-const isHeadline = (words: string[]) => words.every(isJobWord)
-  || (isJobWord(words[0]) && !SENIORITY.has(words[0].toLowerCase()));
+// A headline has at least two job words ("Java Developer", "Kierownik Sprzedaży", "Head Chef").
+// One job word is not enough: it is often a surname or a first name ("Jan Ślusarz", "Ślusarz Jan",
+// "Junior Silva"), and such a real name must win over later lines (cities, schools, headings).
+const isHeadline = (words: string[]) => words.filter(isJobWord).length >= 2;
 const titleCase = (w: string) => w.split('-').map(p => p.charAt(0) + p.slice(1).toLowerCase()).join('-');
 
 export function detectEmail(text: string) {
