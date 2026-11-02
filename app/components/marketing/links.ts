@@ -1,6 +1,7 @@
 export const sectionLinks = [
+  { href: "/#korzysci", label: "Korzyści" },
   { href: "/#jak-to-dziala", label: "Jak to działa" },
-  { href: "/#mozliwosci", label: "Możliwości" },
+  { href: "/#przyklad", label: "Przykładowy raport" },
   { href: "/#pakiety", label: "Pakiety" },
   { href: "/#o-nas", label: "O nas" },
   { href: "/#faq", label: "FAQ" },

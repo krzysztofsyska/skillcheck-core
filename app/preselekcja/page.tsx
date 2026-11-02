@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "PRESELEKCJA — oferta i cena | SkillCheck",
-  description: "Pakiet PRESELEKCJA za 300 zł brutto, analizy ważne 3 miesiące. Płatność przelewem na podstawie faktury proforma.",
+  description: "Pakiet PRESELEKCJA za 300 zł brutto, analizy ważne 3 miesiące. Płatność Przelewy24 albo przelewem na podstawie faktury proforma.",
 };
 
 const preselectionEmail = (scope: string | null) => "mailto:pomoc@skillcheck.pl?subject=" + encodeURIComponent("SkillCheck — PRESELEKCJA: prośba o fakturę proforma")
@@ -34,7 +34,7 @@ export default async function PreselectionOfferPage() {
           <li><strong>Cena:</strong> {preselekcjaPrice} ({preselekcjaOffer.netPln} zł netto + 23% VAT), płatność jednorazowa.</li>
           <li><strong>Zakres:</strong> {scope ? `${scope} w ramach jednego pakietu.` : `${sc19PolicyPendingScope}.`}</li>
           <li><strong>Ważność:</strong> analizy są ważne przez {preselekcjaOffer.validityMonths} miesiące od dnia ich przyznania.</li>
-          <li><strong>Płatność:</strong> przelew na podstawie faktury proforma.</li>
+          <li><strong>Płatność:</strong> Przelewy24 albo przelew na podstawie faktury proforma. Dziś zamówienia obsługujemy na proformie — napisz do nas, a wystawimy ją od razu.</li>
           <li><strong>Przyznanie analiz:</strong> po potwierdzeniu płatności — najpóźniej w ciągu 2 dni roboczych od uznania naszego rachunku.</li>
           <li><strong>Faktura:</strong> po zaksięgowaniu płatności wystawiamy fakturę VAT i wysyłamy ją e-mailem.</li>
         </ul>
@@ -55,8 +55,9 @@ export default async function PreselectionOfferPage() {
         <p>Wyniki, ranking i shortlistę zawsze weryfikuje osoba prowadząca rekrutację.</p>
       </section>
       <section id="free" aria-labelledby="free-title">
-        <h2 id="free-title">Chcesz najpierw wypróbować FREE?</h2>
-        <p>Jednorazowy dostęp próbny wymaga weryfikacji firmy. Obecnie aktywację koordynuje operator; samo utworzenie konta nie przyznaje analiz.</p>
+        <h2 id="free-title">Wypróbuj FREE — 0 zł</h2>
+        <p>Bezpłatna analiza CV na własnych dokumentach, jedna próba na firmę. Do zgłoszenia potrzebny jest numer NIP i firmowy adres e-mail. Jednorazowy dostęp próbny wymaga weryfikacji firmy. Obecnie aktywację koordynuje operator; samo utworzenie konta nie przyznaje analiz.</p>
+        <p>FREE jest opcjonalnym pierwszym krokiem, a nie warunkiem zakupu PRESELEKCJI.</p>
         <div className={styles.actions}>
           <a className={styles.secondary} href={freeEmail}>Zgłoś firmę do FREE</a>
           <Link className={styles.secondary} href="/register">Utwórz konto firmowe</Link>

@@ -77,7 +77,10 @@ test('customer-facing package copy does not hardcode grant amounts', async () =>
   assert.match(billing, /sc19AnalysisScope\(sizes\.PRESELEKCJA\)/);
   assert.doesNotMatch(billing, /5 analiz CV|60 analiz CV/);
   assert.doesNotMatch(marketing, /5 analiz CV|60 analiz CV|5–6/);
-  assert.match(marketing, /sc19OfferScopes/);
+  // Counts are rendered through the validating helper, never written into the copy.
+  assert.match(marketing, /sc19AnalysisScope|sc19OfferScopes/);
+  assert.match(marketing, /preselekcjaAnalyses\(catalogEnabled, sizes\)/);
+  assert.match(marketing, /freeAnalyses\(catalogEnabled, sizes\)/);
   assert.match(handoff, /sc19_package_sizes/);
   assert.match(handoff, /touch_updated_at/);
   assert.doesNotMatch(handoff, /exactly 60|FREE \(5 analyses\)/);

@@ -1,9 +1,10 @@
 import { loadSc19PackageSizes, loadSc19PublicOfferSizes, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
 import { createClient } from "../../../lib/supabase/server";
 
-// Current PRESELEKCJA offer approved by the owner on 2026-10-28.
-// The paid grant reads private.sc19_package_policy, so once the SC-019 catalog
-// is enabled its quota wins and an enabled but failing catalog shows no number.
+// Current PRESELEKCJA offer approved by the owner on 2026-10-28, reconfirmed
+// 2026-11-01 and 2026-11-02. The paid grant reads private.sc19_package_policy,
+// so once the SC-019 catalog is enabled its quota wins and an enabled but
+// failing catalog shows no number.
 export const preselekcjaOffer = {
   analyses: 60,
   grossPln: 300,
@@ -11,8 +12,17 @@ export const preselekcjaOffer = {
   validityMonths: 3,
 } as const;
 
+// FREE offer approved by the owner on 2026-11-02: 5 CV, 0 zł, one per company,
+// registration by NIP and a company e-mail address. Same catalog precedence as
+// PRESELEKCJA: a live policy wins, an enabled but failing catalog shows no number.
+export const freeOffer = {
+  analyses: 5,
+  grossPln: 0,
+} as const;
+
 export const preselekcjaPrice = `${preselekcjaOffer.grossPln} zł brutto`;
 export const preselekcjaScope = `${preselekcjaOffer.analyses} analiz CV`;
+export const freePrice = `${freeOffer.grossPln} zł`;
 
 export const isSc19CatalogEnabled = () => process.env.SC19_PACKAGES_ENABLED === "true";
 
@@ -21,8 +31,18 @@ export function preselekcjaAnalyses(catalogEnabled: boolean, sizes: Sc19PackageS
   return catalogEnabled ? null : preselekcjaOffer.analyses;
 }
 
+export function freeAnalyses(catalogEnabled: boolean, sizes: Sc19PackageSizes | null): number | null {
+  if (sizes) return sizes.FREE;
+  return catalogEnabled ? null : freeOffer.analyses;
+}
+
 export async function loadPublicOffer() {
   const catalogEnabled = isSc19CatalogEnabled();
   const sizes = await loadSc19PublicOfferSizes(catalogEnabled, async () => loadSc19PackageSizes(await createClient()));
-  return { catalogEnabled, sizes, preselekcja: preselekcjaAnalyses(catalogEnabled, sizes) };
+  return {
+    catalogEnabled,
+    sizes,
+    preselekcja: preselekcjaAnalyses(catalogEnabled, sizes),
+    free: freeAnalyses(catalogEnabled, sizes),
+  };
 }
