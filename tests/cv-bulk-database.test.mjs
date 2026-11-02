@@ -219,7 +219,7 @@ test('SC-BULK-001 bulk intake on the full migration chain', async t => {
   await t.test('finished analyses of a batch whose page was closed do not hold parallel slots', async () => {
     await h.asAdmin();
     await db.query('update private.cv_bulk_settings set max_parallel_company=2, max_analysis_retries=1');
-    const f = await b.tenant(paymentUsers.owner, 4);
+    const f = await b.tenant(paymentUsers.owner, 5);
     const closed = await b.create(f, 2);
     for (const item of await b.items(closed.batch_id)) await b.register(f, item.id);
     const started = await b.pump(f, closed.batch_id);
@@ -235,7 +235,7 @@ test('SC-BULK-001 bulk intake on the full migration chain', async t => {
     // Running analyses still count: a third batch waits for a free slot.
     const third = await b.create(f, 0 + 1);
     const [t1] = await b.items(third.batch_id);
-    await b.register(f, t1.id);
+    assert.equal((await b.register(f, t1.id)).status, 'queued', 'the third file has a package slot');
     assert.deepEqual((await b.pump(f, third.batch_id)).dispatch, [], 'two analyses still running');
     // A failed analysis with a retry left keeps its slot: its batch retries it without a limit check.
     await b.failAnalysis(next.dispatch[0]);
@@ -246,6 +246,7 @@ test('SC-BULK-001 bulk intake on the full migration chain', async t => {
     for (const attempt of [next.dispatch[1], ...retried.dispatch]) await b.finishAnalysis(attempt, []);
     for (const batch of [closed, open]) await b.pump(f, batch.batch_id);
     const rest = await b.pump(f, third.batch_id);
+    assert.equal(rest.dispatch.length, 1, 'the third batch starts once slots free up');
     for (const attempt of rest.dispatch) await b.finishAnalysis(attempt, []);
     await b.pump(f, third.batch_id);
     await h.asAdmin();
