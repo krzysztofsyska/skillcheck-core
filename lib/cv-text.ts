@@ -1,3 +1,5 @@
+import { normalizeForRedaction } from "./cv-normalize.ts";
+export { normalizeForRedaction };
 export const MAX_CV_LENGTH = 100000;
 export const MAX_CV_BYTES = 200000;
 export const MAX_PDF_BYTES = 750000;
@@ -175,15 +177,47 @@ export async function readDocxText(file: File) {
 }
 
 // Suggestions only: addresses, dates, inflections and indirect identifiers need human review.
+
+const NUMBER_TAG = "[TELEFON / IDENTYFIKATOR]";
+/**
+ * A run of digits and separators: 9–15 digits is a phone or identifier. A longer run can be several
+ * numbers side by side (columns separated by a tab or wide spacing): each part is judged on its own,
+ * and a part that is still longer than 15 digits (IBAN, card number) is redacted as a whole.
+ */
+// A date, year or month.year (optionally day.month.year) — "2019", "01.2019", "1.01.2019", "2019.01.31".
+const DATE_TOKEN = String.raw`(?:\d{1,2}[./]){0,2}\d{4}(?:[./]\d{1,2}){0,2}`;
+// Runs made only of dates joined by dashes, spaces or tabs are employment periods, not identifiers:
+// "01.2019 – 12.2022", "2015–2018 2019–2022", "2012 2013 2014". They stay visible for the analysis.
+// The separator is unambiguous (either a dash with optional spaces, or spaces/tabs only) and runs longer
+// than 120 characters are never dates, so the check stays linear on crafted input.
+const DATE_RUN = new RegExp(String.raw`^${DATE_TOKEN}(?:(?:[ \t]*[-\u2010-\u2015\u2212][ \t]*|[ \t]+)${DATE_TOKEN})*$`);
+const isDateRun = (run: string) => run.length <= 120 && DATE_RUN.test(run.trim())
+  && (run.match(/\d{4}/g) ?? []).every(y => +y >= 1940 && +y <= 2099);
+
+function redactNumberRun(match: string): string {
+  const digits = match.replace(/\D/g, "").length;
+  if (digits < 9) return match;
+  if (isDateRun(match)) return match;
+  if (digits <= 15) return NUMBER_TAG;
+  const parts = match.split(/(\t| {2,})/);
+  if (parts.length === 1) return NUMBER_TAG;
+  // Split only into whole numbers (9+ digits) or employment periods; a phone written with wide spacing
+  // ("500  123  456") would otherwise fall apart into short visible groups, so it is redacted whole.
+  const pieces = parts.filter(part => !/^(\t| {2,})$/.test(part) && /\d/.test(part));
+  if (!pieces.every(part => part.replace(/\D/g, "").length >= 9 || isDateRun(part))) return NUMBER_TAG;
+  return parts.map(part => /^(\t| {2,})$/.test(part) ? part : redactNumberRun(part)).join("");
+}
+
 export function suggestRedaction(text: string, names: string[]) {
-  let output = validateCvText(text);
-  output = output.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[E-MAIL]");
+  // Word/PDF exports often separate phone digits with non-breaking spaces; without this the number
+  // would not match and would stay unredacted.
+  // Normalise first, then validate: compatibility forms can make the text longer than the limit.
+  let output = validateCvText(normalizeForRedaction(text));
+  output = output.replace(/(?<![A-Z0-9._%+-])[A-Z0-9._%+-]{1,256}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}\b/gi, "[E-MAIL]");
   output = output.replace(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi, "[LINK]");
-  output = output.replace(/(?<!\d)\+?\d[\d ().-]{7,}\d(?!\d)/g, match => {
-    const digits = match.replace(/\D/g, "");
-    return digits.length >= 9 && digits.length <= 15 ? "[TELEFON / IDENTYFIKATOR]" : match;
-  });
-  for (const name of Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).sort((a,b)=>b.length-a.length)) {
+  output = output.replace(/(?<!\d)\+?\d[\d \t().\-\u2010-\u2015\u2212]{7,}\d(?!\d)/g, redactNumberRun);
+  // Names are normalised the same way as the text, or "Anna\u00A0Maria" from the record would not match.
+  for (const name of Array.from(new Set(names.map(n => normalizeForRedaction(n).trim()).filter(Boolean))).sort((a,b)=>b.length-a.length)) {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     output = output.replace(new RegExp("(?<![\\p{L}\\p{N}])" + escaped + "(?![\\p{L}\\p{N}])", "giu"), "[DANE OSOBOWE]");
   }

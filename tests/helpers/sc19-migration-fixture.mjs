@@ -91,6 +91,10 @@ export async function bootMigrationDatabase(t) {
   const pool = (database = name) => {
     assert.ok(databases.has(database));
     const value = new pg.Pool({ connectionString: databaseUrl(database), max: 12, connectionTimeoutMillis: 5000 });
+    // An idle pooled client terminated by the server (e.g. another suite's forced drop or a backend
+    // terminated on shutdown) emits 'error' on the pool; unhandled, it fails the whole file after the
+    // subtest already passed. Query errors still reject normally.
+    value.on('error', () => {});
     pools.add(value); return value;
   };
   const db = await connect();

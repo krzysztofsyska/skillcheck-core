@@ -150,6 +150,17 @@ export type ScreeningReport = {
   requirements: { kind: keyof typeof kindLabels; text: string }[]; applications: ReportApplication[];
   groups?: ReportGroupRow[];
 };
+/**
+ * A saved preselection group is current only while it was computed from the analysis the SC-008
+ * ranking uses now, and that analysis is not outdated. A re-analysis outside the batch, a CV or
+ * position change, a missing link or a malformed id all make the saved score historical.
+ */
+export function groupAnalysisCurrent(groupAnalysisId: unknown,
+  ranking: { analysis_id: unknown; eligibility_reason: unknown } | undefined): boolean {
+  if (typeof groupAnalysisId !== 'string' || !/^[0-9a-f-]{36}$/i.test(groupAnalysisId) || !ranking) return false;
+  if (ranking.eligibility_reason === 'stale' || ranking.eligibility_reason === 'needs_reanalysis') return false;
+  return typeof ranking.analysis_id === 'string' && ranking.analysis_id === groupAnalysisId;
+}
 export function parseGroupRow(value: unknown): ReportGroupRow {
   const g = object(value);
   const applicationId = id(g.application_id);
