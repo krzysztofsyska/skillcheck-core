@@ -184,9 +184,18 @@ const NUMBER_TAG = "[TELEFON / IDENTYFIKATOR]";
  * numbers side by side (columns separated by a tab or wide spacing): each part is judged on its own,
  * and a part that is still longer than 15 digits (IBAN, card number) is redacted as a whole.
  */
+// A date, year or month.year (optionally day.month.year) — "2019", "01.2019", "1.01.2019", "2019.01.31".
+const DATE_TOKEN = String.raw`(?:\d{1,2}[./]){0,2}\d{4}(?:[./]\d{1,2}){0,2}`;
+// Runs made only of dates joined by dashes, spaces or tabs are employment periods, not identifiers:
+// "01.2019 – 12.2022", "2015–2018 2019–2022", "2012 2013 2014". They stay visible for the analysis.
+const DATE_RUN = new RegExp(String.raw`^${DATE_TOKEN}(?:[ \t]*[-\u2010-\u2015\u2212]?[ \t]*${DATE_TOKEN})*$`);
+const isDateRun = (run: string) => DATE_RUN.test(run.trim())
+  && (run.match(/\d{4}/g) ?? []).every(y => +y >= 1940 && +y <= 2099);
+
 function redactNumberRun(match: string): string {
   const digits = match.replace(/\D/g, "").length;
   if (digits < 9) return match;
+  if (isDateRun(match)) return match;
   if (digits <= 15) return NUMBER_TAG;
   const parts = match.split(/(\t| {2,})/);
   if (parts.length === 1) return NUMBER_TAG;
@@ -196,7 +205,8 @@ function redactNumberRun(match: string): string {
 export function suggestRedaction(text: string, names: string[]) {
   // Word/PDF exports often separate phone digits with non-breaking spaces; without this the number
   // would not match and would stay unredacted.
-  let output = normalizeForRedaction(validateCvText(text));
+  // Normalise first, then validate: compatibility forms can make the text longer than the limit.
+  let output = validateCvText(normalizeForRedaction(text));
   output = output.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[E-MAIL]");
   output = output.replace(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi, "[LINK]");
   output = output.replace(/(?<!\d)\+?\d[\d \t().\-\u2010-\u2015\u2212]{7,}\d(?!\d)/g, redactNumberRun);

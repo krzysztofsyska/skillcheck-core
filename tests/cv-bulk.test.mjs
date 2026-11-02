@@ -100,6 +100,12 @@ test('contact and name detection', () => {
   assert.doesNotMatch(suggestRedaction('IBAN 61 1090 1014 0000 0712 1981 2874', []), /1981/);
   // A multi-part name stored with a non-breaking space still matches the text.
   assert.doesNotMatch(suggestRedaction('Anna\u00A0Maria Nowak, analityk', ['Anna\u00A0Maria', 'Nowak']), /Anna|Maria|Nowak/);
+  // Employment periods stay visible for the analysis (Word turns ' - ' into an en dash).
+  for (const dates of ['01.2019 \u2013 12.2022', '1.01.2019\u201331.12.2022', '2019.01.01 - 2022.12.31', '2015\u20132018 2019\u20132022',
+    '2012 2013 2014 2015 2016', '01.2015 - 12.2017 01.2018 - 12.2020']) assert.equal(suggestRedaction(dates, []), dates, dates);
+  // ...but a phone next to a period is still redacted.
+  assert.doesNotMatch(suggestRedaction('600 700 800\t2019\u20132022', []), /600/);
+  assert.match(suggestRedaction('600 700 800\t2019\u20132022', []), /2019\u20132022/);
   // Dashes in ordinary text stay as written.
   assert.match(suggestRedaction('JavaScript 2018\u20132024', []), /2018\u20132024/);
   // If detection and redaction ever disagree, the file stops instead of reaching the AI provider.
