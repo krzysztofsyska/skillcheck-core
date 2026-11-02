@@ -8,7 +8,7 @@ bazie ani konfiguracji Vercel.
 ## Co deklaruje pakiet WERYFIKACJA
 
 Źródło: `app/components/marketing/package-comparison.tsx` (wiersze 19, 24–33).
-Cena 899 zł, zakres: „20 rozmów + testy; analizy CV według zatwierdzonej polityki”, funkcje:
+Cena **615 zł za 60 CV** (decyzja właściciela 2026-11-02; w chwili audytu strona podawała 899 zł), zakres: „20 rozmów + testy; analizy CV według zatwierdzonej polityki”, funkcje:
 
 1. Wszystko z Preselekcji
 2. 20 rozmów weryfikacyjnych z botem

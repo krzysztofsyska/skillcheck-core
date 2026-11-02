@@ -465,6 +465,10 @@ zapis zdarzenia dostępu do danych kandydata.
 **Decyzja właściciela 2026-11-02:** prace nad kalkulatorem mają ruszyć.
 Zastępuje wcześniejsze „na razie zostaw, nie spinaj, dopóki nie powiem”.
 
+**Decyzja cenowa właściciela 2026-11-02:** WERYFIKACJA = **615 zł brutto za 60 CV**
+(wcześniej strona podawała 899 zł, a demo kalkulatora 615 zł przy 50 CV — rozbieżność usunięta).
+Cena ASSESSMENT CENTER pozostaje niepotwierdzona: strona podaje 1 799 zł, demo 1 845 zł przy 50 CV.
+
 **Stan wejściowy:** kalkulator istnieje i działa — `app/operator/pricing/`,
 `lib/pricing/internal-calculator.ts`, `lib/pricing/quote-engine.ts`. Zna wszystkie cztery kody
 pakietów (`FREE`, `PRESELEKCJA`, `WERYFIKACJA`, `ASSESSMENT_CENTER`), w przeciwieństwie do warstwy
@@ -489,6 +493,34 @@ Bez zmian w cenach.
 Wdrożenie katalogu cen z `db/isolated/sc-pricing-catalog.sql` do `supabase/migrations/`, tak aby
 kalkulator i strona czytały te same liczby. Ceny wejściowe = dokładnie te, które są dziś na stronie.
 **Migracja nie zmienia żadnej ceny** — przenosi je z kodu do bazy.
+
+## SC-PRICING-W2b — Suwak wolumenu przy każdym pakiecie
+
+**Decyzja właściciela 2026-11-02.** Przy każdym pakiecie klient ma móc zwiększyć pulę CV
+suwakiem **co 5**, albo wpisać liczbę ręcznie — też wyłącznie wielokrotność 5.
+
+- **LEVEL:** L2 · **SCOPE:** FRONTEND · **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude
+- **DEPENDS ON:** SC-PRICING-W2 · **Szacunek:** 1–2 dni
+
+### Wzorzec już istnieje — nie piszemy od zera
+`public/kalkulator-demo.html` ma dokładnie taki suwak: `#volumeSlider`, `min=35 max=150 step=5`,
+z przyciskami minus/plus, opisem dla czytników ekranu (`aria-valuetext`) i paskiem postępu.
+Przenosimy ten wzorzec do właściwej strony oferty, zamiast wymyślać nowy.
+
+### In scope
+- Suwak przy każdym pakiecie płatnym, krok 5.
+- Pole do wpisania liczby ręcznie, z korektą do najbliższej wielokrotności 5 i czytelnym
+  komunikatem, co zostało skorygowane (demo ma już ten mechanizm dla pól liczbowych).
+- Cena przelicza się na żywo z katalogu z SC-PRICING-W2, nigdy z liczb wpisanych w komponencie.
+- Dolna i górna granica puli brane z katalogu, nie z kodu.
+
+### Acceptance criteria
+1. Wpisanie 63 ręcznie daje 60 lub 65, z komunikatem o korekcie — nigdy 63.
+2. Wpisanie liczby spoza zakresu, tekstu albo pustego pola nie wywraca ceny ani nie pokazuje `NaN`.
+3. Suwak i pole ręczne zawsze pokazują tę samą wartość.
+4. Obsługa z klawiatury i czytnika ekranu działa (strzałki zmieniają o 5).
+
+---
 
 ## SC-PRICING-W3 — Konfiguracja opcji płatnych przez klienta
 

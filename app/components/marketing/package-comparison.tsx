@@ -16,12 +16,12 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
   const plans = [
     {name:"FREE", color:styles.planBlue, title:"Wypróbuj SkillCheck", text:"Poznaj docelowy proces na niewielkiej grupie kandydatów.", price:"0 zł", scope:offer.freeScope, current:true, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i analiza CV przez AI", "Dowody, braki i pytania na rozmowę", "Ranking i raport preselekcji", "Jeden pakiet na firmę (weryfikacja NIP)"]},
     {name:"PRESELEKCJA", color:styles.planGreen, title:"Uporządkuj wybór kandydatów", text:"Porównaj materiały z wymaganiami stanowiska i przygotuj shortlistę.", price:preselekcjaPrice, current:true, scope:`${preselectionCount ?? sc19PolicyPendingScope} · ${validity}`, features:["Konto firmy i profil stanowiska", "Pseudonimizacja i analiza CV przez AI", "Dowody, braki i pytania na rozmowę", "Ranking, shortlista i raport z eksportem", "Płatność na podstawie faktury"]},
-    {name:"WERYFIKACJA", color:styles.planPurple, title:"Sprawdź, co naprawdę potrafią", text:"Pogłęb ocenę przez rozmowę, jej analizę i test kompetencji.", price:"899 zł", scope:"20 rozmów + testy; analizy CV według zatwierdzonej polityki", features:["Wszystko z Preselekcji", "20 rozmów weryfikacyjnych z botem", "Analiza odpowiedzi z rozmowy", "Testy kompetencji", "Rozszerzony raport kandydata"]},
+    {name:"WERYFIKACJA", color:styles.planPurple, title:"Sprawdź, co naprawdę potrafią", text:"Pogłęb ocenę przez rozmowę, jej analizę i test kompetencji.", price:"615 zł", scope:"60 analiz CV + testy; rozmowy według zatwierdzonej polityki", features:["Wszystko z Preselekcji", "Rozmowy weryfikacyjne z botem", "Analiza odpowiedzi z rozmowy", "Testy kompetencji", "Rozszerzony raport kandydata"]},
     {name:"ASSESSMENT CENTER", color:styles.planOrange, title:"Zobacz, jak podejdą do pracy", text:"Sprawdź sposób działania w zadaniach osadzonych w realiach stanowiska.", price:"1 799 zł", scope:"20 rozmów + testy + case studies; analizy CV według zatwierdzonej polityki", features:["Wszystko z Weryfikacji", "Case studies i zadania praktyczne", "Ćwiczenia dopasowane do roli", "Pogłębiony proces Assessment Center", "Kompleksowy raport kandydata"]},
   ];
   const rows = [
     ["Konto firmy i profil stanowiska","Tak","Tak","Tak","Tak"],
-    ["Analizy CV", offer.freeAnalyses, analyses === null ? sc19PolicyPendingCell : String(analyses), "Według polityki", "Według polityki"],
+    ["Analizy CV", offer.freeAnalyses, analyses === null ? sc19PolicyPendingCell : String(analyses), "60", "60"],
     ["Pseudonimizacja i analiza CV przez AI","Tak","Tak","Tak","Tak"],
     ["Shortlista / raport preselekcji","Podstawowe","Według oferty","5–10 kandydatów","5–10 kandydatów"],
     ["Rozmowa weryfikacyjna z botem","Nie","Nie","20","20"],

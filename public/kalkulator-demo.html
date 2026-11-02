@@ -258,7 +258,7 @@
         <p class="small-note">Od 35 do 150 CV, dokładnie co 5. Cena i symulacja korzyści aktualizują się razem.</p>
         <div class="range-control">
           <button id="volumeMinus" type="button" class="step-btn" aria-label="Zmniejsz liczbę CV" title="Poprzednia pula albo minus 5 CV">−</button>
-          <input type="range" id="volumeSlider" min="35" max="150" step="5" value="35" aria-label="Pula CV od 35 do 150, krok 5">
+          <input type="range" id="volumeSlider" min="35" max="150" step="5" value="60" aria-label="Pula CV od 35 do 150, krok 5">
           <button id="volumePlus" type="button" class="step-btn" aria-label="Zwiększ liczbę CV" title="Następna pula albo plus 5 CV">+</button>
         </div>
         <div class="range-marks"><span>35 CV</span><span>150 CV</span></div>
@@ -268,7 +268,7 @@
     <div class="packs" role="group" aria-label="Pakiet SkillCheck">
       <button type="button" class="pack" data-pack="free" aria-pressed="false"><span class="pack-name">✧ FREE</span><span class="pack-desc">Sprawdź na własnych CV, jak wygląda pierwsza analiza.</span><span class="pack-price" data-package-price="free">0 zł</span><span class="pack-sub">5 CV · 1 próbna rozmowa</span></button>
       <button type="button" class="pack" data-pack="pre" aria-pressed="true"><span class="pack-name">≡ PRESELEKCJA</span><span class="pack-desc">Od dokumentów i rozmów AI do shortlisty.</span><span class="pack-price" data-package-price="pre">300 zł</span><span class="pack-sub">Brutto za 60 CV · do 10 rozmów</span></button>
-      <button type="button" class="pack" data-pack="verify" aria-pressed="false"><span class="pack-name">◇ WERYFIKACJA</span><span class="pack-desc">Sprawdź odpowiedzi i kompetencje, nie tylko deklaracje.</span><span class="pack-price" data-package-price="verify">615 zł</span><span class="pack-sub">Testy i rozszerzony raport</span></button>
+      <button type="button" class="pack" data-pack="verify" aria-pressed="false"><span class="pack-name">◇ WERYFIKACJA</span><span class="pack-desc">Sprawdź odpowiedzi i kompetencje, nie tylko deklaracje.</span><span class="pack-price" data-package-price="verify">615 zł</span><span class="pack-sub">Brutto za 60 CV · testy i rozszerzony raport</span></button>
       <button type="button" class="pack" data-pack="ac" aria-pressed="false"><span class="pack-name">⊞ ASSESSMENT CENTER</span><span class="pack-desc">Zobacz podejście finalistów do zadań praktycznych.</span><span class="pack-price" data-package-price="ac">1845 zł</span><span class="pack-sub">Do 5 osób · 2 zadania/os. · ekspert</span></button>
     </div>
     <div class="extra-panel" aria-labelledby="extraTitle">
@@ -335,7 +335,7 @@
       <thead><tr><th scope="col">Zakres</th><th scope="col"><button type="button" class="table-choice" data-choose-pack="free">FREE ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="pre">PRESELEKCJA ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="verify">WERYFIKACJA ↗</button></th><th scope="col"><button type="button" class="table-choice" data-choose-pack="ac">ASSESSMENT CENTER ↗</button></th></tr></thead>
       <tbody>
         <tr><th scope="row">Cena brutto / proces</th><td id="tableFree">0 zł</td><td id="tablePre">300 zł</td><td id="tableVerify">615 zł</td><td id="tableAc">1845 zł</td></tr>
-        <tr><th scope="row">Analizowane CV</th><td>5 próbnych</td><td class="paidCv">50</td><td class="paidCv">50</td><td class="paidCv">50</td></tr>
+        <tr><th scope="row">Analizowane CV</th><td>5 próbnych</td><td class="paidCv">60</td><td class="paidCv">60</td><td class="paidCv">60</td></tr>
         <tr data-common="yes"><th scope="row">Profil firmy i stanowiska</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
         <tr data-common="yes"><th scope="row">Pseudonimizacja i ocena dopasowania</th><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
         <tr><th scope="row">Shortlista</th><td>Podstawowa</td><td>5–10 osób*</td><td>5–10 osób*</td><td>5–10 osób*</td></tr>
@@ -418,19 +418,24 @@
 <script>
 (()=>{
   'use strict';
-  // PRESELEKCJA: 300 zł brutto za pakiet 60 CV; większa pula = kolejne pakiety. Pozostałe pakiety: cena referencyjna dla 50 CV, inne wolumeny to robocza symulacja.
+  // PRESELEKCJA: 300 zł brutto za pakiet 60 CV; większa pula = kolejne pakiety.
+  // WERYFIKACJA: 615 zł brutto za 60 CV (decyzja właściciela 2026-11-02).
+  // ASSESSMENT CENTER: cena referencyjna nadal dla 50 CV — do potwierdzenia przez właściciela.
+  // Inne wolumeny to robocza symulacja.
   const VAT=1.23;
   const BASE_GROSS_CENTS={free:0,pre:30000,verify:61500,ac:184500};
   const PRE_PACKAGE_CV=60;
   const prePackages=cv=>Math.max(1,Math.ceil(cv/PRE_PACKAGE_CV));
   const VOLUME_DELTA_NET_PER_CV=0.1652;
+  // Wolumen, przy którym obowiązuje cena bazowa danego pakietu.
+  const BASE_CV={verify:60,ac:50};
   const PACK={
     free:{name:'FREE',title:'FREE — poznaj działanie',desc:'Wypróbuj analizę na maksymalnie 5 CV i jednej próbnej rozmowie. To pierwszy krok, nie kompletna rekrutacja.',chip:'5 CV · 1 próbna rozmowa',lead:'Przetestuj na 5 CV bez uruchamiania płatnego pakietu.'},
     pre:{name:'PRESELEKCJA',title:'PRESELEKCJA — od CV do shortlisty',desc:'Uporządkuj dokumenty, uzupełnij informacje w rozmowach i przygotuj shortlistę do dalszej oceny.',chip:'raport i shortlista',lead:'Wspólne kryteria, odpowiedzi z rozmów i lista osób do kolejnego etapu.'},
     verify:{name:'WERYFIKACJA',title:'WERYFIKACJA — wyjdź poza deklaracje',desc:'Zestaw CV z odpowiedziami i wynikami testów kompetencji. Przygotuj pogłębiony materiał do decyzji.',chip:'testy i rozszerzony raport',lead:'Same deklaracje z CV to za mało? Sprawdź odpowiedzi i kompetencje.'},
     ac:{name:'ASSESSMENT CENTER',title:'ASSESSMENT CENTER — zobacz działanie w praktyce',desc:'Połącz preselekcję, rozmowy i testy z zadaniami praktycznymi oraz wsparciem eksperta.',chip:'zadania praktyczne + ekspert',lead:'Przyjrzyj się sposobowi rozwiązywania zadań podobnych do realnej pracy.'}
   };
-  const state={cv:30,pack:'pre',extras:{calls:false,tests:false,cases:false,consult:false}};
+  const state={cv:60,pack:'pre',extras:{calls:false,tests:false,cases:false,consult:false}};
   const $=id=>document.getElementById(id);
   const formatMoney=(value,digits=2)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN',useGrouping:true,minimumFractionDigits:digits,maximumFractionDigits:digits}).format(value);
   const fmtInt=value=>new Intl.NumberFormat('pl-PL').format(value);
@@ -451,7 +456,7 @@
       }else notice.textContent='';
     });
   });
-  const grossCents=(pkg,cv)=>pkg==='free'?0:pkg==='pre'?prePackages(cv)*BASE_GROSS_CENTS.pre:BASE_GROSS_CENTS[pkg]+Math.round((cv-50)*VOLUME_DELTA_NET_PER_CV*VAT*100);
+  const grossCents=(pkg,cv)=>pkg==='free'?0:pkg==='pre'?prePackages(cv)*BASE_GROSS_CENTS.pre:BASE_GROSS_CENTS[pkg]+Math.round((cv-BASE_CV[pkg])*VOLUME_DELTA_NET_PER_CV*VAT*100);
   const PRE_NET_CENTS=24390;
   const netCents=(pkg,cv)=>pkg==='pre'?prePackages(cv)*PRE_NET_CENTS:Math.round(grossCents(pkg,cv)/VAT);
   const price=(pkg,cv)=>grossCents(pkg,cv)/100;

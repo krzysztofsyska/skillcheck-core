@@ -49,7 +49,7 @@ MVP = a new company, without technical help, can: visit the site → sign up (on
 
 Owner decisions (all YES, 2026-11-01):
 1. No voicebot in the MVP.
-2. Starting price: PRESELEKCJA 300 zł gross for 60 CVs (as on the site, owner decision 2026-10-28, reconfirmed 2026-11-01), FREE 5 CVs.
+2. Starting price: PRESELEKCJA 300 zł gross for 60 CVs (as on the site, owner decision 2026-10-28, reconfirmed 2026-11-01), FREE 5 CVs. **WERYFIKACJA 615 zł gross for 60 CVs (owner decision 2026-11-02)** — the site previously said 899 zł and the calculator demo said 615 zł at 50 CVs; that split is resolved in favour of 615 zł / 60 CVs. ASSESSMENT CENTER is still unresolved (site 1 799 zł, demo 1 845 zł at 50 CVs) and needs an owner decision before it is shown anywhere as final. Every customer-facing surface and every file an agent or LLM reads must carry the same numbers.
 3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). Przelewy24 and Fakturownia automation are frozen until there are paying customers.
 4. Bulk CV upload (PR #228) is part of the MVP.
 5. Everything outside the MVP is labelled `później` and closed; old branches stay (agent sessions cannot delete branches or push tags).
