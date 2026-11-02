@@ -231,7 +231,7 @@ begin
     where g.company_id = company and g.recruitment_id = target_recruitment and not private.erasure_candidate_frozen(c.id)), '[]'::jsonb);
 end;$$;
 
-drop function private.cv_bulk_item_running(uuid);
+drop function private.cv_bulk_item_running(uuid,integer,integer);
 drop function private.cv_bulk_phone_key(text);
 
 commit;

@@ -237,9 +237,17 @@ test('SC-BULK-001 bulk intake on the full migration chain', async t => {
     const [t1] = await b.items(third.batch_id);
     await b.register(f, t1.id);
     assert.deepEqual((await b.pump(f, third.batch_id)).dispatch, [], 'two analyses still running');
+    // A failed analysis with a retry left keeps its slot: its batch retries it without a limit check.
+    await b.failAnalysis(next.dispatch[0]);
+    assert.deepEqual((await b.pump(f, third.batch_id)).dispatch, [], 'failed analysis awaiting its retry still holds a slot');
+    const retried = await b.pump(f, open.batch_id);
+    assert.equal(retried.dispatch.length, 1, 'the open batch retries its failed analysis');
     // Leave no running analyses or changed limits behind for the following subtests.
-    for (const attempt of next.dispatch) await b.finishAnalysis(attempt, []);
+    for (const attempt of [next.dispatch[1], ...retried.dispatch]) await b.finishAnalysis(attempt, []);
     for (const batch of [closed, open]) await b.pump(f, batch.batch_id);
+    const rest = await b.pump(f, third.batch_id);
+    for (const attempt of rest.dispatch) await b.finishAnalysis(attempt, []);
+    await b.pump(f, third.batch_id);
     await h.asAdmin();
     await db.query('update private.cv_bulk_settings set max_parallel_company=4');
   });
@@ -708,7 +716,7 @@ test('SC-BULK-001 rollbacks restore R9, R8 and remove the bulk schema', async t 
   const env = await install(t);
   const { db } = env;
   await run(db, await rollback('20261102100000_cv_bulk_capacity_phone_fix_down.sql'));
-  assert.deepEqual((await db.query("select to_regprocedure('private.cv_bulk_phone_key(text)') k, to_regprocedure('private.cv_bulk_item_running(uuid)') r")).rows[0], { k: null, r: null });
+  assert.deepEqual((await db.query("select to_regprocedure('private.cv_bulk_phone_key(text)') k, to_regprocedure('private.cv_bulk_item_running(uuid,integer,integer)') r")).rows[0], { k: null, r: null });
   assert.doesNotMatch((await db.query("select prosrc from pg_proc where oid='public.get_preselection_groups(uuid)'::regprocedure")).rows[0].prosrc, /analysis_id/);
   await assert.rejects(run(db, await rollback('20261102100000_cv_bulk_capacity_phone_fix_down.sql')), /cv_bulk_capacity_phone_fix_not_installed/);
   await assert.rejects(run(db, await rollback('20261101130100_cv_bulk_erasure_inventory_r9_down.sql')), /sc_r9_down_requires_r10_and_fixes_rollback/);

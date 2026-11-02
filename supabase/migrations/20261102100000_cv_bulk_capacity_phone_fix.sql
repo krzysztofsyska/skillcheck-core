@@ -23,7 +23,7 @@ begin
   if to_regclass('private.erasure_inventory_baseline_r10') is null or to_regclass('private.cv_bulk_items') is null then
     raise exception 'cv_bulk_capacity_phone_fix_requires_r10' using errcode='55000';
   end if;
-  if to_regprocedure('private.cv_bulk_phone_key(text)') is not null or to_regprocedure('private.cv_bulk_item_running(uuid)') is not null then
+  if to_regprocedure('private.cv_bulk_phone_key(text)') is not null or to_regprocedure('private.cv_bulk_item_running(uuid,integer,integer)') is not null then
     raise exception 'cv_bulk_capacity_phone_fix_already_installed' using errcode='55000';
   end if;
 end $phone_fix_preflight$;
@@ -37,13 +37,17 @@ language sql immutable set search_path='' as $$
 $$;
 revoke all on function private.cv_bulk_phone_key(text) from public, anon, authenticated;
 
--- An 'analyzing' item holds a parallel slot only while its analysis can still run.
-create function private.cv_bulk_item_running(target_analysis uuid) returns boolean
+-- An 'analyzing' item holds a parallel slot while its analysis can still run:
+-- no analysis yet, pending/processing, or failed with a retry left (the pump
+-- retries it without a limit check, so it must keep its slot).
+create function private.cv_bulk_item_running(target_analysis uuid, retries integer, max_retries integer) returns boolean
 language sql stable set search_path='' as $$
   select target_analysis is null or exists(select 1 from public.screening_analysis_versions s
-    where s.id = target_analysis and s.execution_status in ('pending','processing') and s.stale_at is null)
+    where s.id = target_analysis and s.stale_at is null
+      and (s.execution_status in ('pending','processing')
+        or (s.execution_status = 'failed' and coalesce(retries, 0) < coalesce(max_retries, 0))))
 $$;
-revoke all on function private.cv_bulk_item_running(uuid) from public, anon, authenticated;
+revoke all on function private.cv_bulk_item_running(uuid,integer,integer) from public, anon, authenticated;
 
 create or replace function public.cv_bulk_register_item(target_item uuid, extracted jsonb) returns jsonb
 language plpgsql security definer set search_path='' as $$
@@ -183,9 +187,9 @@ begin
   -- Count only analyses that are still running. An item of another batch stays 'analyzing' until that
   -- batch is pumped again (its page may be closed), but a finished analysis holds no parallel slot.
   select count(*) into inflight from private.cv_bulk_items i
-    where i.company_id = b.company_id and i.phase = 'analyzing' and private.cv_bulk_item_running(i.analysis_id);
+    where i.company_id = b.company_id and i.phase = 'analyzing' and private.cv_bulk_item_running(i.analysis_id, i.analysis_retries, s.max_analysis_retries);
   select count(*) into inflight_global from private.cv_bulk_items i
-    where i.phase = 'analyzing' and private.cv_bulk_item_running(i.analysis_id);
+    where i.phase = 'analyzing' and private.cv_bulk_item_running(i.analysis_id, i.analysis_retries, s.max_analysis_retries);
   if contract is not null then
     for item in select * from private.cv_bulk_items where batch_id = b.id and phase = 'queued' order by position for update skip locked loop
       exit when inflight >= s.max_parallel_company or inflight_global >= s.max_parallel_global;
@@ -272,7 +276,7 @@ end;$$;
 do $phone_fix_acl$
 begin
   if exists(select 1 from pg_roles where rolname = 'service_role') then
-    revoke all on function private.cv_bulk_phone_key(text), private.cv_bulk_item_running(uuid) from service_role;
+    revoke all on function private.cv_bulk_phone_key(text), private.cv_bulk_item_running(uuid,integer,integer) from service_role;
   end if;
 end $phone_fix_acl$;
 
