@@ -433,6 +433,13 @@ Rozszerzony raport to inny obiekt: **jeden kandydat, wszystkie źródła**.
 **Zasada pustych sekcji:** sekcja bez danych wyświetla „Brak danych w tym obszarze”, nie znika.
 Rekruter ma widzieć, czego nie sprawdzono — to jest część wartości raportu.
 
+**Acceptance criteria:** 1) dokument wskazuje dla każdej sekcji konkretne źródło danych i warunek
+dostępu; 2) rozstrzyga, co raport pokazuje po wycofaniu zgody; 3) nie wprowadza nowej migracji
+ani nowego wywołania AI.
+**Required tests:** typecheck, build (zmiana dokumentacyjna).
+**Security / privacy checks:** projekt nie przewiduje ujawnienia danych innych kandydatów ani
+surowej treści CV poza zakresem już dostępnym rekruterowi tej rekrutacji.
+
 ## SC-015-B — Warstwa odczytu i agregacji
 
 - **LEVEL:** L3 (agregacja danych kandydata, kontrola dostępu) · **SCOPE:** BACKEND
@@ -442,6 +449,14 @@ Rekruter ma widzieć, czego nie sprawdzono — to jest część wartości raport
 że wszystkie rekordy należą do tej firmy, tej rekrutacji i tego kandydata; brakujący lub nadmiarowy
 wiersz blokuje raport, nie jest cicho pomijany. Respektowanie markera wycofania zgody.
 
+**Acceptance criteria:** 1) rekord należący do innej firmy, rekrutacji lub kandydata blokuje raport
+zamiast zostać pominięty; 2) po wycofaniu zgody odczyt jest odmawiany na poziomie warstwy, nie
+tylko ukrywany w UI; 3) brak którejkolwiek sekcji nie wywraca całego raportu.
+**Required tests:** typecheck, build, testy modułu na danych syntetycznych, test izolacji tenantów
+(dwie firmy, ten sam identyfikator kandydata), test odmowy po wycofaniu zgody.
+**Security / privacy checks:** brak zapytań bez `company_id`; brak `service_role`; komunikaty
+błędów nie ujawniają istnienia rekordów innej firmy.
+
 ## SC-015-C — Ekran raportu i druk
 
 - **LEVEL:** L2 · **SCOPE:** FRONTEND · **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude
@@ -450,6 +465,13 @@ wiersz blokuje raport, nie jest cicho pomijany. Respektowanie markera wycofania 
 `app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/report/`
 na wzorze istniejącego raportu rekrutacji, z arkuszem druku i przyciskiem zapisu do PDF przez przeglądarkę.
 
+**Acceptance criteria:** 1) sekcja bez danych pokazuje „Brak danych w tym obszarze”, nie znika;
+2) viewer widzi raport, ale nie może go edytować; 3) widok druku mieści się na stronie A4 bez
+ucinania dowodów; 4) stopka z zastrzeżeniem o braku decyzji o zatrudnieniu jest zawsze widoczna.
+**Required tests:** typecheck, build, test komponentu raportu, test renderu pustych sekcji.
+**Security / privacy checks:** brak danych kandydata w tytule strony i w URL; `robots: noindex`;
+`Referrer-Policy: no-referrer`; brak PII w logach błędów.
+
 ## SC-015-D — Eksport i audyt dostępu
 
 - **LEVEL:** L2 · **SCOPE:** FULLSTACK · **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude
@@ -457,6 +479,13 @@ na wzorze istniejącego raportu rekrutacji, z arkuszem druku i przyciskiem zapis
 
 Eksport CSV na wzór `report/export/route.ts`, ponowne sprawdzenie uprawnień przy eksporcie,
 zapis zdarzenia dostępu do danych kandydata.
+
+**Acceptance criteria:** 1) eksport sprawdza uprawnienia ponownie, nie ufa sesji z widoku;
+2) po wycofaniu zgody eksport jest odmawiany; 3) każdy eksport zostawia wpis audytowy z kim, kiedy
+i czego dotyczył; 4) plik zawiera te same oceny i dowody co ekran.
+**Required tests:** typecheck, build, test HTTP trasy eksportu, test odmowy po wycofaniu zgody.
+**Security / privacy checks:** brak nagłówków cache'ujących plik; nazwa pliku bez nazwiska
+kandydata; CSV odporny na wstrzyknięcie formuły (pola zaczynające się od `=`, `+`, `-`, `@`).
 
 ---
 
@@ -486,6 +515,11 @@ z nich miałyby być konfigurowalne przez klienta. Porównanie z `db/isolated/sc
 i z cenami zapisanymi na sztywno w `package-comparison.tsx`. Wynik: jedna tabela rozbieżności.
 Bez zmian w cenach.
 
+**Acceptance criteria:** 1) tabela wymienia każdą rozbieżność między kalkulatorem, stroną,
+demem i `docs/cennik-2026-11-02.md`; 2) żadna cena nie zostaje zmieniona w tym zadaniu.
+**Required tests:** typecheck, build (zmiana dokumentacyjna).
+**Security / privacy checks:** dokument nie zawiera adresów właścicieli cennika z `PRICING_OWNER_EMAILS`.
+
 ## SC-PRICING-W2 — Katalog cen jako jedno źródło prawdy
 
 - **LEVEL:** L3 (migracja, ceny) · **SCOPE:** BACKEND · **OWNER:** Claude (builder) · **REVIEWER:** niezależna sesja Claude
@@ -494,6 +528,13 @@ Bez zmian w cenach.
 Wdrożenie katalogu cen z `db/isolated/sc-pricing-catalog.sql` do `supabase/migrations/`, tak aby
 kalkulator i strona czytały te same liczby. Ceny wejściowe = dokładnie te, które są dziś na stronie.
 **Migracja nie zmienia żadnej ceny** — przenosi je z kodu do bazy.
+
+**Acceptance criteria:** 1) ceny po migracji są identyczne co do grosza z `docs/cennik-2026-11-02.md`;
+2) strona i kalkulator czytają z katalogu, nie z własnych stałych; 3) rollback odtwarza stan sprzed
+migracji; 4) brak katalogu lub błąd odczytu nie pokazuje ceny zmyślonej ani `NaN`, tylko komunikat.
+**Required tests:** typecheck, build, test migracji, test porównania katalogu z dokumentem cennika.
+**Security / privacy checks:** odczyt katalogu publiczny i wyłącznie do odczytu; zapis tylko dla
+właściciela cennika; RLS włączone; brak `service_role` po stronie klienta.
 
 ## SC-PRICING-W2b — Suwak wolumenu przy każdym pakiecie
 
@@ -531,6 +572,12 @@ Przenosimy ten wzorzec do właściwej strony oferty, zamiast wymyślać nowy.
 Opcje wycenione powyżej zera stają się wyborem klienta w ofercie, zgodnie z kierunkiem wskazanym
 przez właściciela 2026-11-01. Za flagą, domyślnie wyłączone.
 
+**Acceptance criteria:** 1) przy fladze wyłączonej strona wygląda i liczy dokładnie jak dziś;
+2) opcja o cenie zero nie jest pokazywana jako płatna; 3) suma opcji zgadza się z katalogiem.
+**Required tests:** typecheck, build, test wyliczenia sumy opcji, test stanu z flagą wyłączoną.
+**Security / privacy checks:** wybór opcji przez klienta nie zmienia ceny po stronie serwera bez
+ponownego przeliczenia z katalogu — cena nigdy nie pochodzi z pola formularza.
+
 ## SC-PRICING-W4 — Spięcie z cennikiem publicznym
 
 - **LEVEL:** L3 (ceny widoczne dla klienta) · **SCOPE:** FULLSTACK
@@ -538,6 +585,13 @@ przez właściciela 2026-11-01. Za flagą, domyślnie wyłączone.
 - **DEPENDS ON:** SC-PRICING-W3 · **Szacunek:** 1 dzień
 
 Strona przestaje mieć ceny w kodzie i czyta je z katalogu.
+
+**Acceptance criteria:** 1) w `package-comparison.tsx` i w demie nie ma żadnej ceny wpisanej
+na sztywno; 2) zmiana ceny w katalogu zmienia stronę bez wdrożenia kodu; 3) flaga domyślnie
+wyłączona, a przy wyłączonej strona pokazuje ceny dotychczasowe.
+**Required tests:** typecheck, build, test braku cen w kodzie, test odczytu z katalogu.
+**Security / privacy checks:** włączenie flagi zmienia ceny widoczne dla klienta, więc jest
+decyzją właściciela, nie merge'em; katalog tylko do odczytu dla ról publicznych.
 
 > **To zadanie kończy się decyzją właściciela, nie merge'em.** Od chwili włączenia każda zmiana
 > w kalkulatorze zmienia to, co widzi klient na stronie. Zgodnie z `CLAUDE.md` zmiany cen i pakietów

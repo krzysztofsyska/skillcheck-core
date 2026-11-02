@@ -255,8 +255,10 @@ na wyniki rozmowy / testu / obserwacji. Jedyne wystąpienia słowa „Rozszerzon
    odbiera wszystkie uprawnienia tym tabelom dla `public`, `anon` i `authenticated` (linia 75
    robi to samo z sekwencją), żadna późniejsza migracja ich nie przywraca, a schemat `private`
    nie jest wystawiony w Data API. To zabezpieczenie w głąb, nie dziura.
-   Niczego nie zmieniałem — i dobrze, bo włączenie RLS bez polityk zablokowałoby `/rozmowa`
-   przy naprawianiu nieistniejącego problemu.
+   Niczego nie zmieniałem. Włączenie RLS bez polityk i tak nie zepsułoby `/rozmowa`, bo
+   `public.submit_sales_lead` jest `security definer` i działa jako właściciel tabeli, który
+   pomija RLS — ale byłaby to zmiana w bezpieczeństwie wykonana bez potrzeby, więc wymaga
+   osobnej, świadomej decyzji, a nie odruchu na ostrzeżenie doradcy.
 3. **Żadna z funkcji „weryfikacyjnych” nie ma ani jednego wiersza danych.** Zachowania, ćwiczenia,
    obserwacje, etapy, oceny — wszystko 0. Działają analizy CV (68 wersji analiz, 410 wyników kryteriów,
    109 kandydatów), czyli faktycznie używana jest tylko ścieżka PRESELEKCJI.

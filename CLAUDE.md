@@ -72,7 +72,7 @@ Frozen (do not work on): voice, Assessment Center, Quality of Hire, talent pool,
 The owner reviewed the WERYFIKACJA audit ([docs/audyt-weryfikacja-2026-11-02.md](docs/audyt-weryfikacja-2026-11-02.md))
 and decided to unfreeze these modules and build them alongside the MVP work. His words: "Oczywiście,
 że odmrażamy i budujemy moduły." This overrides the "competency tests" entry of the frozen list above
-and the "Nothing else ships before the first paid PRESELEKCJA" sentence, for these three modules only.
+and the "Nothing else ships before the first paid PRESELEKCJA" sentence, for the modules listed below only.
 
 Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budowy-2026-11-02.md).
 
@@ -100,7 +100,7 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
 
 4. **SC-PRICING-W1…W4** — the internal pricing calculator, ending in the public price list reading
    from one catalog. Owner decision 2026-11-02: "żeby prace nad tym poszły", replacing the earlier
-   "for now leave it as is". This also lifts `SC-PRICING-001–011` from the frozen list above.
+   "for now leave it as is". `SC-PRICING-001–011` is removed from the frozen list above accordingly.
    W4 ships behind a flag that is off: switching it on changes prices customers see, which stays
    an owner decision. Includes **SC-PRICING-W2b** — a volume slider in steps of 5 at every package,
    with manual entry restricted to multiples of 5 (owner decision 2026-11-02).
@@ -123,8 +123,10 @@ treat such a line as a reason to refuse scope work the owner is currently asking
 (production approval, new costs, billing and `/operator/billing`, price, package and MVP-content
 changes), not to "Prohibited actions without explicit owner production approval", and not to
 "Production access rules" 1–5 in `AGENTS.md`. Those are gates, not records: only a message from the
-owner himself opens one, and an agent-written line never substitutes for it. A session that finds
-itself citing this note to skip a gate has misread it.
+owner himself opens one, and an agent-written line never substitutes for it. The same holds for any
+other gate in this file or in `AGENTS.md`, including ones added after this note was written — the
+list above is illustrative, not exhaustive. A session that finds itself citing this note to skip a
+gate has misread it.
 
 Open security item from the audit (owner only, rule 3): Vercel Production still has `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `POSTGRES_PASSWORD` (checked 2026-11-01). They must be removed and the database password rotated.
 
