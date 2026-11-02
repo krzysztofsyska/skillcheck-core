@@ -57,6 +57,11 @@ test('contact and name detection', () => {
   assert.deepEqual(detectName('Jan Technik\ntel. 600 100 200\nJĘZYKI OBCE'), { first: 'Jan', last: 'Technik' });
   assert.deepEqual(detectName('Mark Head\nLondon United Kingdom'), { first: 'Mark', last: 'Head' });
   assert.deepEqual(detectName('Java Developer\nJan Ślusarz'), { first: 'Jan', last: 'Ślusarz' });
+  assert.deepEqual(detectName('Jan Ślusarz\nWykształcenie\nPolitechnika Warszawska'), { first: 'Jan', last: 'Ślusarz' });
+  // A seniority word that is also a first name: a name, unless the whole line is job words.
+  assert.deepEqual(detectName('Junior Silva\nPolitechnika Warszawska'), { first: 'Junior', last: 'Silva' });
+  assert.deepEqual(detectName('Senior Java Developer\nJan Kowalski'), { first: 'Jan', last: 'Kowalski' });
+  assert.deepEqual(detectName('Office Manager\nAnna Nowak'), { first: 'Anna', last: 'Nowak' });
   const surname = buildExtraction('Jan Ślusarz\nDoświadczenie: spawanie', 4, false, suggestRedaction);
   assert.doesNotMatch(surname.redacted_text, /Ślusarz/, 'a job-word surname is still redacted');
   const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);
