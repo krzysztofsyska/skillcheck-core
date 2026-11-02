@@ -52,6 +52,11 @@ test('contact and name detection', () => {
   assert.deepEqual(detectName('Jan Ślusarz\nJava Developer'), { first: 'Jan', last: 'Ślusarz' });
   assert.deepEqual(detectName('Grafik Komputerowy\nAnna Kowal'), { first: 'Anna', last: 'Kowal' });
   assert.deepEqual(detectName('Doradca Finansowy\nPiotr Nowak'), { first: 'Piotr', last: 'Nowak' });
+  // A surname that is a job word wins over later name-like lines (cities, upper-case headings).
+  assert.deepEqual(detectName('Jan Ślusarz\nul. Polna 5\nZielona Góra'), { first: 'Jan', last: 'Ślusarz' });
+  assert.deepEqual(detectName('Jan Technik\ntel. 600 100 200\nJĘZYKI OBCE'), { first: 'Jan', last: 'Technik' });
+  assert.deepEqual(detectName('Mark Head\nLondon United Kingdom'), { first: 'Mark', last: 'Head' });
+  assert.deepEqual(detectName('Java Developer\nJan Ślusarz'), { first: 'Jan', last: 'Ślusarz' });
   const surname = buildExtraction('Jan Ślusarz\nDoświadczenie: spawanie', 4, false, suggestRedaction);
   assert.doesNotMatch(surname.redacted_text, /Ślusarz/, 'a job-word surname is still redacted');
   const titled = buildExtraction('Java Developer\nAnna Nowak\nDoświadczenie: Java, Spring', 3, false, suggestRedaction);

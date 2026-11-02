@@ -154,8 +154,8 @@ export function detectPhone(text: string) {
 /** First line that looks like "Imię Nazwisko" (2-3 capitalised words) in the top of the CV. */
 export function detectName(text: string): { first: string; last: string } | null {
   const lines = text.split('\n').map(l => l.replace(/[|•·,;:]+/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 15);
-  // A name-like line without job-title words wins; one with such a word (a headline, or a real
-  // surname such as Ślusarz) is used only when no other name-like line exists.
+  // A name-like line that is not a headline wins; a headline is used only when no other name-like
+  // line exists (e.g. a first name that is also a job word, such as Junior).
   let fallback: { first: string; last: string } | null = null;
   for (const line of lines) {
     if (HEADING.test(line) || /\d|@/.test(line)) continue;
@@ -164,7 +164,9 @@ export function detectName(text: string): { first: string; last: string } | null
     const normalized = words.every(w => UPPER_WORD.test(w)) ? words.map(titleCase) : words;
     if (!normalized.every(w => NAME_WORD.test(w))) continue;
     const candidate = { first: normalized[0], last: normalized.slice(1).join(' ') };
-    if (!normalized.some(isJobWord)) return candidate;
+    // A headline starts with a job word ("Java Developer", "Kierownik Sprzedaży") or is made only of them.
+    // "Jan Ślusarz" is not one: a surname that is also a job word still wins over later lines.
+    if (!(isJobWord(normalized[0]) || normalized.every(isJobWord))) return candidate;
     fallback ??= candidate;
   }
   return fallback;
