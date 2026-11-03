@@ -1,11 +1,11 @@
 /** SC-FREE-AUTO-001: automatic FREE activation for a company whose NIP the
- * Ministry of Finance "Wykaz podatników VAT" (biała lista) confirms as an ACTIVE
- * taxpayer. Owner decision 2026-11-03.
+ * Ministry of Finance "Wykaz podatników VAT" (biała lista) confirms as a
+ * registered taxpayer — 'Czynny' or 'Zwolniony'. Owner decision 2026-11-03.
  *
  * FAIL-CLOSED, ALWAYS. FREE is granted only on a positive, parsed registry
- * answer. Not found, not active, malformed, rate-limited, unreachable or timed
- * out all mean "grant nothing" — the company stays on the existing manual list
- * in /operator/billing, which is untouched and remains the fallback.
+ * answer. Not found, an unknown status, malformed, rate-limited, unreachable or
+ * timed out all mean "grant nothing" — the company stays on the existing manual
+ * list in /operator/billing, which is untouched and remains the fallback.
  *
  * WHY THIS MODULE SIGNS ITS REQUEST. A checksum-valid NIP does not prove the
  * caller represents that company (the reason the operator approval exists), so
@@ -46,10 +46,15 @@ const REFUSING_CODES = new Set<WhitelistErrorCode>([
   'NIP_INVALID', 'NIP_NOT_FOUND', 'NIP_NOT_ACTIVE', 'WHITELIST_ADDRESS_UNPARSEABLE',
 ]);
 
-/** Only an ACTIVE VAT taxpayer ("Czynny") is granted automatically. A
- * VAT-exempt company ("Zwolniony") exists in the registry but is not a czynny
- * podatnik, so it is refused here and reviewed by the operator by hand — the
- * stricter reading of the owner's instruction, and the reversible one. */
+/** Both registry statuses that mean "this company is in the VAT register" are
+ * granted automatically: 'Czynny' (active taxpayer) and 'Zwolniony' (VAT-exempt;
+ * owner decision 2026-11-03 — many small Polish companies are exempt and they
+ * are real companies). Anything else, including an empty or unknown status, is
+ * refused. lib/mf-whitelist.ts already rejects every other status with
+ * NIP_NOT_ACTIVE before the record reaches this function; the check below is the
+ * second, independent gate, so a widened parser cannot widen the grant. */
+export const SC19_TRIAL_AUTO_GRANTING_STATUSES: readonly string[] = Object.freeze(['Czynny', 'Zwolniony']);
+
 export function decideTrialAuto(result: CompanyRecord | WhitelistError | unknown): TrialAutoDecision {
   if (result instanceof WhitelistError) {
     return Object.freeze({
@@ -68,7 +73,7 @@ export function decideTrialAuto(result: CompanyRecord | WhitelistError | unknown
     mfStatus: record.statusVat.slice(0, 32),
     mfName: record.name.slice(0, 300),
   };
-  if (record.statusVat !== 'Czynny') {
+  if (!SC19_TRIAL_AUTO_GRANTING_STATUSES.includes(record.statusVat)) {
     return Object.freeze({ ...evidence, outcome: 'refused', errorCode: 'STATUS_NOT_ACTIVE' });
   }
   return Object.freeze({ ...evidence, outcome: 'granted', errorCode: null });
@@ -85,8 +90,16 @@ export type TrialAutoSignatureInput = Readonly<{
 }>;
 
 /** Operations signed with the one server-held secret. Distinct labels keep a
- * signature valid for one operation from being replayed as another. */
-export type TrialAutoOp = 'auto_claim' | 'digest';
+ * signature valid for one operation from being replayed as another.
+ *
+ * `auto_claim` and `auto_failure` are two different RPCs whose payloads happen
+ * to be structurally similar (company, NIP, then either registry evidence or an
+ * error code). They had the same label at first, which left the two apart only
+ * by the number of payload lines; separate labels make the separation explicit.
+ * `consent` is verified in Node only (lib/marketing-consent.ts) and is
+ * deliberately NOT in the database's whitelist, so a consent signature can
+ * never be presented to any RPC. */
+export type TrialAutoOp = 'auto_claim' | 'auto_failure' | 'digest' | 'consent';
 
 /** `payload` is the operation's own canonical tail, hashed so the signed string
  * has a fixed shape whatever the operation carries. */

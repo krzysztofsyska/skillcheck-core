@@ -195,9 +195,16 @@ test('FREE activation maps the owner, the NIP and the RPC error without calling 
       const fx = billingAccess({ error: { code, message } });
       const url = await redirected(billingAction(fx.access), form('526-104-08-28'));
       assert.equal(url, `/dashboard/${companyId}/billing?status=${status}`, `${code} ${message}`);
-      // Exactly one database call and no network call: without the server secret
-      // nothing else is attempted, so today's behaviour is unchanged.
-      assert.deepEqual(fx.calls, [{ name: 'sc19_claim_trial', args: { target_company: companyId, supplied_nip: '526-104-08-28' } }]);
+      // Every call carries the CANONICAL ten digits, never the separators the
+      // field accepts: the database normalizes before it rebuilds the signed
+      // payload, so signing the raw input made every formatted NIP fail.
+      for (const call of fx.calls) assert.equal(call.args.supplied_nip, '5261040828', `${code} ${message}`);
+      // No network call, and no signed RPC: without the server secret nothing
+      // past the unsigned precheck is attempted, so behaviour is unchanged.
+      const expected = status === 'manual'
+        ? ['sc19_claim_trial', 'sc19_auto_free_precheck']
+        : ['sc19_claim_trial'];
+      assert.deepEqual(fx.calls.map(call => call.name), expected, `${code} ${message}`);
     }
 
     const ok = billingAccess();

@@ -18,8 +18,21 @@
 --     so this migration changes no behaviour until an operator turns it on);
 --   * a request secret of at least 32 bytes is configured;
 --   * the request carries a valid, unexpired, unreplayed HMAC signature;
---   * the registry answer passed in is status 'Czynny'.
+--   * the registry answer passed in is status 'Czynny' or 'Zwolniony'
+--     (owner decision 2026-11-03: VAT-exempt companies are real companies);
+--   * this company has not already tried the automatic path with a DIFFERENT
+--     NIP (private.sc19_auto_free_other_nip_tried).
 -- Anything else raises and the company stays on the existing manual list.
+--
+-- ONE FREE PER NIP, AND HOW A MISTAKE IS UNDONE. A NIP is public, and the
+-- registry answer proves the company exists, not that the caller represents it.
+-- So one account CAN occupy another company's single FREE, once. Two limits and
+-- one remedy bound that: the account may only ever try one NIP automatically,
+-- the occupied NIP is listed for the operator
+-- (public.sc19_operator_taken_trial_nips), and the operator can release it
+-- (public.sc19_operator_release_trial_nip) so the real company can activate
+-- FREE afterwards. A release frees the NIP only; it never changes a balance,
+-- because that is a billing action and belongs to the owner.
 --
 -- WHY THE SIGNATURE. A checksum-valid NIP does not prove the caller represents
 -- that company; that is exactly why the operator approval exists. The registry
@@ -38,7 +51,7 @@
 --
 -- Part C. Read-only operator and digest reporting over the rows above.
 --
--- SC-010 NOTE. Four tables are added, so private.erasure_schema_signature()
+-- SC-010 NOTE. Five tables are added, so private.erasure_schema_signature()
 -- changes and every erasure preview/purge fails closed with
 -- schema_dependency_unknown until the companion inventory revision
 -- (20261103090100_sc_erasure_inventory_r11.sql) runs. That order is mandatory.
@@ -122,6 +135,24 @@ create index sc19_trial_auto_checks_outcome on private.sc19_trial_auto_checks(ou
 create trigger immutable_history before update or delete on private.sc19_trial_auto_checks
   for each row execute function private.contact_immutable();
 
+-- Operator releases of an occupied trial NIP. The remedy for the residual risk
+-- that a public NIP can be occupied once by an account that does not represent
+-- it: the operator frees the NIP so the real company can activate FREE. The
+-- company id is a plain uuid, with no foreign key, deliberately — the audit of
+-- who occupied the NIP must survive even after the release has removed the rows
+-- that linked the two, and the row is never deleted with the company.
+create table private.sc19_trial_nip_releases (
+  id uuid primary key default gen_random_uuid(),
+  nip text not null check (nip ~ '^[0-9]{10}$'),
+  released_company_id uuid,
+  operator_id uuid not null,
+  reason text not null check (length(btrim(reason)) between 8 and 300),
+  released_at timestamptz not null default now()
+);
+create index sc19_trial_nip_releases_nip on private.sc19_trial_nip_releases(nip, released_at desc);
+create trigger immutable_history before update or delete on private.sc19_trial_nip_releases
+  for each row execute function private.contact_immutable();
+
 -- Consent ledger. Append-only by trigger: a withdrawal adds a row, it does not
 -- overwrite the grant, so the full history and both timestamps survive.
 create table private.marketing_consent_events (
@@ -141,10 +172,12 @@ create trigger immutable_history before update or delete on private.marketing_co
 -- No user-facing direct CRUD on any of it; every read and write goes through the
 -- audited SECURITY DEFINER functions below.
 revoke all on private.sc19_trial_auto_settings, private.sc19_trial_auto_nonces,
-  private.sc19_trial_auto_checks, private.marketing_consent_events from public, anon, authenticated;
+  private.sc19_trial_auto_checks, private.sc19_trial_nip_releases,
+  private.marketing_consent_events from public, anon, authenticated;
 alter table private.sc19_trial_auto_settings enable row level security;
 alter table private.sc19_trial_auto_nonces enable row level security;
 alter table private.sc19_trial_auto_checks enable row level security;
+alter table private.sc19_trial_nip_releases enable row level security;
 alter table private.marketing_consent_events enable row level security;
 
 comment on table private.sc19_trial_auto_checks is
@@ -155,6 +188,8 @@ comment on table private.sc19_trial_auto_settings is
   'SC-010: operator switch and request secret for automatic FREE; no personal data.';
 comment on table private.sc19_trial_auto_nonces is
   'SC-010: signed request ids for replay protection; no personal data.';
+comment on table private.sc19_trial_nip_releases is
+  'SC-010: operator releases of an occupied trial NIP (NIP, which company held it, which operator, why, when); company-level data, no candidate data.';
 
 -- ---------------------------------------------------------------------------
 -- Consent wording, held by the database
@@ -178,16 +213,30 @@ revoke all on function private.marketing_consent_text(text) from public, anon, a
 -- Signed-request verification
 
 -- HMAC-SHA256 over the request; both sides are compared as digests so the
--- secret-dependent comparison is constant time. Each request id is accepted
--- once, inside a +-60 s window. `op` separates the operations that share the
--- one secret, so a signature for one can never be replayed as the other.
+-- secret-dependent comparison is constant time. `op` separates the three
+-- operations that share the one secret, so a signature for one can never be
+-- replayed as another. 'consent' is NOT in this list on purpose: that signature
+-- is verified in Node only (lib/marketing-consent.ts) and must never be
+-- presentable to an RPC.
+--
+-- REPLAY WINDOW, EXACTLY WHAT IT IS. The signature is accepted only inside a
+-- +-60 s window, and the nonce insert below makes a SECOND SUCCESSFUL use of the
+-- same request id fail. It does NOT make a retry after a failure fail: the
+-- insert happens in the caller's transaction, so when the calling RPC raises
+-- afterwards (a forbidden caller, a disabled switch, a trial guardrail) the
+-- nonce row is rolled back with it and the same signed request may be presented
+-- again until its 60 s window closes. That is accepted: a request that raises
+-- grants nothing and writes nothing, so repeating it inside one minute achieves
+-- nothing a single attempt would not. Making the nonce survive a rollback would
+-- need its own transaction (dblink or a background worker), which this change
+-- deliberately does not introduce.
 create function private.sc19_trial_auto_verify_signature(op text, request_id uuid, stamp bigint, payload text, signature text)
 returns boolean language plpgsql volatile security definer set search_path='' as $$
 declare secret text; expected text;
 begin
   select s.request_secret into secret from private.sc19_trial_auto_settings s where s.singleton;
   if secret is null or octet_length(secret) < 32 then return false; end if;
-  if op is null or op not in ('auto_claim','digest') then return false; end if;
+  if op is null or op not in ('auto_claim','auto_failure','digest') then return false; end if;
   if request_id is null or stamp is null or signature is null or length(signature) > 200 then return false; end if;
   if abs(extract(epoch from clock_timestamp()) * 1000 - stamp::numeric) > 60000 then return false; end if;
   expected := encode(extensions.hmac(concat_ws(E'\n', 'sc19-trial-auto-v1', op, lower(request_id::text), stamp::text,
@@ -200,17 +249,114 @@ end;
 $$;
 revoke all on function private.sc19_trial_auto_verify_signature(text,uuid,bigint,text,text) from public, anon, authenticated;
 
+-- The only supported way to install or change the request secret, modelled on
+-- private.rotate_sales_lead_request_secret. Without it the column could be set
+-- only by a raw UPDATE, which the owner cannot run (he does not open Supabase)
+-- and an agent session must not run against production — so Part A could never
+-- be switched on. Private: it is called from the approved production SQL step,
+-- never from the Data API, and it never returns or logs the secret.
+create function private.rotate_sc19_trial_auto_secret(new_secret text)
+returns void language plpgsql volatile security definer set search_path='' as $$
+begin
+  if new_secret is null or octet_length(new_secret) < 32 then
+    raise exception 'sc19_trial_auto_secret_invalid' using errcode='22023';
+  end if;
+  update private.sc19_trial_auto_settings
+    set request_secret=new_secret, updated_at=now() where singleton;
+  if not found then raise exception 'sc19_trial_auto_settings_missing' using errcode='55000'; end if;
+  -- Signed requests made with the previous secret stop verifying immediately.
+  -- That is intended: the window is 60 s and a rejected request grants nothing.
+  delete from private.sc19_trial_auto_nonces;
+end;
+$$;
+revoke all on function private.rotate_sc19_trial_auto_secret(text) from public, anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- Part A: automatic FREE
 
--- Records the automatic verification and, only for a confirmed ACTIVE taxpayer,
--- produces the approval row and hands over to the reviewed public.sc19_claim_trial.
+-- One account may only ever use the automatic path for ONE NIP. A NIP is
+-- public, so without this an account could walk a list of other companies' NIPs
+-- and occupy their single FREE one after another.
+--
+-- The account's NIP is the FIRST one whose check actually reached the registry,
+-- or the NIP of its approval. Refusals decided locally before the registry
+-- (AUTO_DISABLED, NIP_TAKEN, ANOTHER_NIP_TRIED) do NOT claim the slot: the
+-- automat being off, or a mistyped NIP bouncing off this very rule, must not
+-- lock an account out of the one NIP it is entitled to check. Once the slot is
+-- taken, that NIP stays retryable for ever — an outage must not burn the
+-- attempt — and every other NIP is refused.
+create function private.sc19_auto_free_other_nip_tried(target_company uuid, normalized text)
+returns boolean language plpgsql stable security definer set search_path='' as $$
+declare claimed text;
+begin
+  select c.nip into claimed from private.sc19_trial_auto_checks c
+    where c.company_id=target_company
+      and coalesce(c.error_code,'') not in ('AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED')
+    order by c.checked_at, c.id limit 1;
+  if claimed is null then
+    select a.nip into claimed from private.sc19_trial_approvals a where a.company_id=target_company;
+  end if;
+  return claimed is not null and claimed <> normalized;
+end;
+$$;
+revoke all on function private.sc19_auto_free_other_nip_tried(uuid,text) from public, anon, authenticated;
+
+-- Asked BEFORE the Ministry of Finance registry is called. Unsigned on purpose:
+-- it grants nothing, changes no balance and tells the company's own owner only
+-- what he could discover by submitting the form anyway. It exists so that a
+-- switched-off automat, a missing secret or a second NIP from the same account
+-- never spends a call against the public registry's low daily quota, and so the
+-- refusal is recorded where the operator can see it.
+--
+-- The refusal row is written once per (company, NIP, reason), so repeated
+-- submissions cannot inflate the audit table.
+create function public.sc19_auto_free_precheck(target_company uuid, supplied_nip text)
+returns table(allowed boolean, reason text)
+language plpgsql volatile security definer set search_path='' as $$
+declare
+  normalized text := replace(replace(btrim(coalesce(supplied_nip,'')), '-', ''), ' ', '');
+  settings private.sc19_trial_auto_settings;
+  refusal text;
+begin
+  if (select auth.uid()) is null or not private.is_company_owner(target_company) then
+    raise exception 'sc19_company_forbidden' using errcode='42501';
+  end if;
+  if not private.sc19_valid_nip(normalized) then
+    raise exception 'sc19_invalid_nip' using errcode='22023';
+  end if;
+  select * into settings from private.sc19_trial_auto_settings where singleton;
+  if settings.singleton is null or not settings.auto_free_enabled
+     or settings.request_secret is null or octet_length(settings.request_secret) < 32 then
+    refusal := 'AUTO_DISABLED';
+  elsif private.sc19_auto_free_other_nip_tried(target_company, normalized) then
+    refusal := 'ANOTHER_NIP_TRIED';
+  elsif exists (select 1 from private.sc19_trial_nips t where t.nip=normalized and t.company_id<>target_company)
+     or exists (select 1 from private.sc19_trial_approvals a where a.nip=normalized and a.company_id<>target_company) then
+    -- Taken by SOMEONE ELSE. This company's own rows are not a refusal: asking
+    -- again for the NIP it already holds is idempotent, not a second attempt.
+    refusal := 'NIP_TAKEN';
+  end if;
+  if refusal is null then return query select true, null::text; return; end if;
+  perform private.sc19_lock_company(target_company);
+  if not exists (select 1 from private.sc19_trial_auto_checks c
+    where c.company_id=target_company and c.nip=normalized and c.error_code=refusal) then
+    insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code)
+      values(target_company,normalized,'refused',refusal);
+  end if;
+  return query select false, refusal;
+end;
+$$;
+revoke all on function public.sc19_auto_free_precheck(uuid,text) from public, anon, authenticated;
+grant execute on function public.sc19_auto_free_precheck(uuid,text) to authenticated;
+
+-- Records the automatic verification and, only for a confirmed registered
+-- taxpayer, produces the approval row and hands over to public.sc19_claim_trial.
 --
 -- The caller must be the signed-in company OWNER (same rule as the manual form)
 -- AND the request must be signed by the server, so neither alone is enough.
--- Only 'Czynny' qualifies: a VAT-exempt ('Zwolniony') company exists in the
--- registry but is not a czynny podatnik, so it is refused here and reviewed by
--- hand — the stricter and reversible reading.
+-- 'Czynny' and 'Zwolniony' both qualify (owner decision 2026-11-03): a VAT-exempt
+-- company is in the register and is a real company, and many small Polish firms
+-- are exempt. Any other status, or a missing one, is refused and reviewed by hand.
 --
 -- A refusal is RETURNED, not raised: raising would roll back the audit row that
 -- tells the operator why this company is waiting. Only a genuinely forbidden or
@@ -252,8 +398,18 @@ begin
 
   perform private.sc19_lock_company(target_company);
 
-  -- Not an ACTIVE taxpayer, or no usable registry answer: record and refuse.
-  if trimmed_status <> 'Czynny' or trimmed_request = '' or trimmed_name = '' then
+  -- One account, one NIP. Re-checked here and not only in the precheck, so the
+  -- rule holds for a caller who goes straight to this RPC through the Data API.
+  if private.sc19_auto_free_other_nip_tried(target_company, normalized) then
+    insert into private.sc19_trial_auto_checks(company_id,nip,outcome,mf_request_id,mf_status,mf_name,error_code)
+      values(target_company,normalized,'refused',nullif(trimmed_request,''),nullif(trimmed_status,''),
+        nullif(trimmed_name,''),'ANOTHER_NIP_TRIED');
+    return query select 'refused'::text, null::integer, 'ANOTHER_NIP_TRIED'::text;
+    return;
+  end if;
+
+  -- Not in the register under a granting status, or no usable registry answer.
+  if trimmed_status not in ('Czynny','Zwolniony') or trimmed_request = '' or trimmed_name = '' then
     insert into private.sc19_trial_auto_checks(company_id,nip,outcome,mf_request_id,mf_status,mf_name,error_code)
       values(target_company,normalized,'refused',nullif(trimmed_request,''),nullif(trimmed_status,''),
         nullif(trimmed_name,''),'STATUS_NOT_ACTIVE');
@@ -289,35 +445,41 @@ $$;
 revoke all on function public.sc19_auto_claim_trial(uuid,text,text,text,text,uuid,bigint,text) from public, anon, authenticated;
 grant execute on function public.sc19_auto_claim_trial(uuid,text,text,text,text,uuid,bigint,text) to authenticated;
 
--- Records an attempt that never reached a usable registry answer (timeout, rate
--- limit, outage, unparseable response) so the operator can see the company is
--- waiting and why. Grants nothing and touches no balance.
+-- Records an attempt the registry refused ('refused': not found, unknown status,
+-- unparseable address) or that never reached a usable answer ('unavailable':
+-- timeout, rate limit, outage), so the operator can see the company is waiting
+-- and why. Grants nothing and touches no balance.
+--
+-- Signed under its OWN op label 'auto_failure'. With the shared 'auto_claim'
+-- label the two RPCs were kept apart only by how many lines their payload had.
 create function public.sc19_auto_record_failure(
-  target_company uuid, supplied_nip text, failure_code text,
+  target_company uuid, supplied_nip text, failure_outcome text, failure_code text,
   request_id uuid, issued_at_ms bigint, request_signature text)
 returns void language plpgsql volatile security definer set search_path='' as $$
 declare
   normalized text := replace(replace(btrim(coalesce(supplied_nip,'')), '-', ''), ' ', '');
   code text := left(btrim(coalesce(failure_code,'')), 48);
+  result text := btrim(coalesce(failure_outcome,''));
   payload text;
 begin
   if (select auth.uid()) is null or not private.is_company_owner(target_company) then
     raise exception 'sc19_company_forbidden' using errcode='42501';
   end if;
-  if not private.sc19_valid_nip(normalized) or code = '' or code !~ '^[A-Z_]{3,48}$' then
+  if not private.sc19_valid_nip(normalized) or code = '' or code !~ '^[A-Z_]{3,48}$'
+     or result not in ('refused','unavailable') then
     raise exception 'sc19_invalid_nip' using errcode='22023';
   end if;
-  payload := concat_ws(E'\n', lower(target_company::text), normalized, code);
-  if not private.sc19_trial_auto_verify_signature('auto_claim', request_id, issued_at_ms, payload, request_signature) then
+  payload := concat_ws(E'\n', lower(target_company::text), normalized, result, code);
+  if not private.sc19_trial_auto_verify_signature('auto_failure', request_id, issued_at_ms, payload, request_signature) then
     raise exception 'sc19_auto_forbidden' using errcode='42501';
   end if;
   perform private.sc19_lock_company(target_company);
   insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code)
-    values(target_company,normalized,'unavailable',code);
+    values(target_company,normalized,result,code);
 end;
 $$;
-revoke all on function public.sc19_auto_record_failure(uuid,text,text,uuid,bigint,text) from public, anon, authenticated;
-grant execute on function public.sc19_auto_record_failure(uuid,text,text,uuid,bigint,text) to authenticated;
+revoke all on function public.sc19_auto_record_failure(uuid,text,text,text,uuid,bigint,text) from public, anon, authenticated;
+grant execute on function public.sc19_auto_record_failure(uuid,text,text,text,uuid,bigint,text) to authenticated;
 
 -- Operator switch for automatic FREE. Billing-adjacent, so operator-only and
 -- audited through the existing operator check.
@@ -345,6 +507,111 @@ end;
 $$;
 revoke all on function public.sc19_operator_auto_free_settings() from public, anon, authenticated;
 grant execute on function public.sc19_operator_auto_free_settings() to authenticated;
+
+-- Every occupied trial NIP, with who occupied it and when, so the operator can
+-- recognise a NIP occupied by an account that does not represent that company.
+create function public.sc19_operator_taken_trial_nips()
+returns table(nip text, company_id uuid, company_name text, approved_at timestamptz,
+  free_claimed boolean, source text)
+language plpgsql stable security definer set search_path='' as $$
+begin
+  perform private.sc19_require_operator();
+  return query
+    select a.nip, a.company_id, c.name, a.approved_at,
+      exists (select 1 from private.sc19_trial_nips t where t.company_id=a.company_id and t.nip=a.nip),
+      case when a.proof_reference like 'mf-biala-lista:%' then 'wykaz VAT' else 'operator' end
+    from private.sc19_trial_approvals a
+    join public.companies c on c.id=a.company_id
+    order by a.approved_at desc, a.nip
+    limit 200;
+end;
+$$;
+revoke all on function public.sc19_operator_taken_trial_nips() from public, anon, authenticated;
+grant execute on function public.sc19_operator_taken_trial_nips() to authenticated;
+
+-- Releases an occupied trial NIP so the company that really holds it can
+-- activate FREE afterwards. The remedy for the one abuse a public NIP allows:
+-- an account that does not represent a company occupying its single FREE.
+--
+-- WHAT IT DOES. It removes the approval row and the claimed-NIP row for that
+-- NIP, re-keys the occupying company's trial journal entry (see below) and
+-- records who released it, when and why.
+--
+-- WHY THE JOURNAL ENTRY IS RE-KEYED. public.sc19_claim_trial writes a journal
+-- row with reference 'trial:<nip>', and private.sc19_credit_journal has UNIQUE
+-- (reference). Deleting only the approval and the claimed-NIP row therefore does
+-- NOT free the NIP: the real company's claim would fail on that unique
+-- constraint and the release would be useless — which is exactly what the first
+-- version of this function did. The reference is an IDEMPOTENCY KEY encoding
+-- "this NIP's one FREE", not an accounting fact, and releasing that key is the
+-- whole point of the operation. So the reference alone is suffixed with the
+-- release id; the row, its company, its reason, its amount and its timestamp are
+-- untouched, and the suffix points at the release that explains it.
+--
+-- WHAT IT DOES NOT DO. It changes no balance, no amount and no package: taking
+-- analyses back is a billing action and belongs to the owner, not to this
+-- function. The occupying company keeps the analyses it was already granted.
+-- The automatic-check audit is untouched too, so the original occupation stays
+-- visible. RESIDUAL RISK, stated plainly: a public NIP can still be occupied
+-- once by an account that does not represent it, and this is the remedy, not a
+-- prevention.
+create function public.sc19_operator_release_trial_nip(supplied_nip text, release_reason text)
+returns table(released_company_id uuid, released_at timestamptz)
+language plpgsql volatile security definer set search_path='' as $$
+declare
+  actor uuid;
+  normalized text := replace(replace(btrim(coalesce(supplied_nip,'')), '-', ''), ' ', '');
+  reason text := btrim(coalesce(release_reason,''));
+  holder uuid;
+  release_id uuid;
+  stamp timestamptz;
+begin
+  actor := private.sc19_require_operator();
+  if not private.sc19_valid_nip(normalized) then
+    raise exception 'sc19_invalid_nip' using errcode='22023';
+  end if;
+  if length(reason) < 8 or length(reason) > 300 then
+    raise exception 'sc19_release_reason_required' using errcode='22023';
+  end if;
+  select a.company_id into holder from private.sc19_trial_approvals a where a.nip=normalized;
+  if holder is null then
+    select t.company_id into holder from private.sc19_trial_nips t where t.nip=normalized;
+  end if;
+  if holder is null then
+    raise exception 'sc19_trial_nip_not_taken' using errcode='22023';
+  end if;
+  perform private.sc19_lock_company(holder);
+  insert into private.sc19_trial_nip_releases(nip,released_company_id,operator_id,reason)
+    values(normalized,holder,actor,reason)
+    returning sc19_trial_nip_releases.id, sc19_trial_nip_releases.released_at into release_id, stamp;
+  delete from private.sc19_trial_nips where nip=normalized;
+  delete from private.sc19_trial_approvals where nip=normalized;
+  -- Columns are qualified: `reason` is also a local variable here.
+  update private.sc19_credit_journal j
+    set reference = 'trial:' || normalized || ':zwolniony:' || release_id::text
+    where j.reason='trial' and j.reference='trial:' || normalized;
+  return query select holder, stamp;
+end;
+$$;
+revoke all on function public.sc19_operator_release_trial_nip(text,text) from public, anon, authenticated;
+grant execute on function public.sc19_operator_release_trial_nip(text,text) to authenticated;
+
+-- The releases themselves, so the operator can see what has already been freed.
+create function public.sc19_operator_trial_nip_releases()
+returns table(nip text, released_company_id uuid, company_name text, reason text, released_at timestamptz)
+language plpgsql stable security definer set search_path='' as $$
+begin
+  perform private.sc19_require_operator();
+  return query
+    select r.nip, r.released_company_id, c.name, r.reason, r.released_at
+    from private.sc19_trial_nip_releases r
+    left join public.companies c on c.id=r.released_company_id
+    order by r.released_at desc, r.id
+    limit 200;
+end;
+$$;
+revoke all on function public.sc19_operator_trial_nip_releases() from public, anon, authenticated;
+grant execute on function public.sc19_operator_trial_nip_releases() to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- Part B: consent
@@ -456,23 +723,29 @@ $$;
 revoke all on function public.sc19_operator_marketing_consents(text) from public, anon, authenticated;
 grant execute on function public.sc19_operator_marketing_consents(text) to authenticated;
 
--- Companies whose FREE was granted automatically: name, NIP, when, how many
--- analyses were granted and how many have been consumed since. Consumption is
--- read from the credit journal, which is the only record of a spend.
+-- EVERY automatic check, not only the grants: the refusals and the outages are
+-- exactly what tells the operator which company is waiting and why, and with
+-- the grant-only filter they were written but visible nowhere.
+--
+-- `used_credits` is the company's LIFETIME consumption from the credit journal,
+-- which is the only record of a spend. It therefore also counts analyses paid
+-- for later under PRESELEKCJA, and is null for anything but a grant; the panel
+-- labels it accordingly rather than implying it is FREE usage.
 create function public.sc19_operator_auto_free_grants()
-returns table(company_id uuid, company_name text, nip text, granted_at timestamptz,
-  granted_credits integer, used_credits integer, mf_status text)
+returns table(company_id uuid, company_name text, nip text, checked_at timestamptz,
+  outcome text, error_code text, granted_credits integer, used_credits integer, mf_status text)
 language plpgsql stable security definer set search_path='' as $$
 begin
   perform private.sc19_require_operator();
   return query
-    select c.id, c.name, g.nip, g.checked_at, g.granted_credits,
-      coalesce((select -sum(j.delta)::integer from private.sc19_credit_journal j
-        where j.company_id=c.id and j.reason in ('analysis_reserve','analysis_release','analysis_retry')), 0),
+    select c.id, c.name, g.nip, g.checked_at, g.outcome, g.error_code, g.granted_credits,
+      case when g.outcome='granted' then
+        coalesce((select -sum(j.delta)::integer from private.sc19_credit_journal j
+          where j.company_id=c.id and j.reason in ('analysis_reserve','analysis_release','analysis_retry')), 0)
+      end,
       g.mf_status
     from private.sc19_trial_auto_checks g
     join public.companies c on c.id=g.company_id
-    where g.outcome='granted'
     order by g.checked_at desc, g.id
     limit 200;
 end;
@@ -487,7 +760,11 @@ grant execute on function public.sc19_operator_auto_free_grants() to authenticat
 create function public.sc19_daily_digest(window_start timestamptz, window_end timestamptz,
   request_id uuid, issued_at_ms bigint, request_signature text)
 returns table(registered integer, auto_free integer, awaiting_manual integer, marketing_consents integer)
-language plpgsql stable security definer set search_path='' as $$
+-- VOLATILE, not stable: verifying the signature prunes and inserts a nonce row,
+-- so this function writes. Declaring it stable let PostgreSQL treat it as
+-- read-only and would allow it inside a read-only transaction, where the nonce
+-- insert — the replay protection — would fail or be skipped.
+language plpgsql volatile security definer set search_path='' as $$
 declare payload text;
 begin
   if window_start is null or window_end is null or window_end <= window_start

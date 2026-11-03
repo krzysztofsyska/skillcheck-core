@@ -7,11 +7,20 @@ import * as validation from '../lib/auth-validation.ts';
 import * as authUrl from '../lib/auth-url.ts';
 import * as legal from '../lib/legal.ts';
 import * as marketingConsent from '../lib/marketing-consent.ts';
+// The real signing module stands in for the 'server-only' wrapper the action
+// imports, so the test exercises the actual HMAC and not a stub.
+import * as consentSigning from '../lib/marketing-consent-signing.ts';
+
+// SC-CONSENT-001: the registration snapshot is HMAC-signed with the server
+// secret, so the action needs one configured. A value local to this test.
+process.env.SC19_TRIAL_AUTO_SECRET = 'o'.repeat(32);
+const EMAIL = 'firma@przyklad.pl';
+const signed = granted => consentSigning.signedConsentDeclaration(granted, EMAIL);
 
 // Loads app/auth/actions.ts with mocked Next.js and Supabase modules.
 // `calls` records every RPC, so a test can see what createCompany did besides
 // creating the company (SC-CONSENT-001 records the registration consent here).
-function load(rpcResult, user = { id: 'u1' }) {
+function load(rpcResult, user = { id: 'u1', email: EMAIL }) {
   const path = new URL('../app/auth/actions.ts', import.meta.url).pathname;
   const mod = new Module(path); mod.filename = path;
   mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
@@ -30,6 +39,7 @@ function load(rpcResult, user = { id: 'u1' }) {
     '../../lib/supabase/server': { async createClient() { return client; } },
     '../../lib/auth-validation': validation, '../../lib/auth-url': authUrl, '../../lib/legal': legal,
     '../../lib/marketing-consent': marketingConsent,
+    '../../lib/marketing-consent-server': consentSigning,
   };
   mod.require = id => id in mocks ? mocks[id] : require(id);
   mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, path);
@@ -60,8 +70,7 @@ async function createWith(user, rpcResult = { data: id, error: null }) {
 }
 
 test('a ticked marketing consent is recorded against the new company', async () => {
-  const declaration = marketingConsent.marketingConsentDeclaration(true);
-  const calls = await createWith({ id: 'u1', user_metadata: { marketing_consent: declaration } });
+  const calls = await createWith({ id: 'u1', email: EMAIL, user_metadata: { marketing_consent: signed(true) } });
   assert.deepEqual(calls.map(([name]) => name), ['ensure_initial_company', 'marketing_consent_grant']);
   assert.deepEqual(calls[1][1], {
     target_company: id, consent_version: marketingConsent.MARKETING_CONSENT_VERSION, consent_source: 'registration',
@@ -70,16 +79,28 @@ test('a ticked marketing consent is recorded against the new company', async () 
   assert.equal('consent_text' in calls[1][1], false);
 });
 
-test('no consent, a withdrawn one or a forged version records nothing', async () => {
+test('no consent, a withdrawn one or a FORGED one records nothing', async () => {
+  const real = signed(true);
   for (const metadata of [
     undefined, {}, { marketing_consent: null },
-    { marketing_consent: marketingConsent.marketingConsentDeclaration(false) },
+    { marketing_consent: signed(false) },
     { marketing_consent: { granted: true, version: 'marketing-9.9' } },
     { marketing_consent: { granted: 'yes', version: marketingConsent.MARKETING_CONSENT_VERSION } },
+    // user_metadata is client-writable: a snapshot the user wrote or edited
+    // themselves must not reach the ledger, or an append-only record would
+    // certify a consent that was never given.
+    { marketing_consent: { version: marketingConsent.MARKETING_CONSENT_VERSION, granted: true, declared_at: real.declared_at } },
+    { marketing_consent: { ...real, sig: '' } },
+    { marketing_consent: { ...real, sig: 'f'.repeat(64) } },
+    { marketing_consent: { ...signed(false), granted: true } },
+    { marketing_consent: { ...real, declared_at: '2030-01-01T00:00:00.000Z' } },
   ]) {
-    const calls = await createWith({ id: 'u1', user_metadata: metadata });
+    const calls = await createWith({ id: 'u1', email: EMAIL, user_metadata: metadata });
     assert.deepEqual(calls.map(([name]) => name), ['ensure_initial_company'], JSON.stringify(metadata));
   }
+  // A valid snapshot belonging to another account records nothing either.
+  const other = await createWith({ id: 'u2', email: 'ktos.inny@przyklad.pl', user_metadata: { marketing_consent: real } });
+  assert.deepEqual(other.map(([name]) => name), ['ensure_initial_company']);
 });
 
 test('a failed consent write never blocks the company', async () => {
@@ -89,7 +110,7 @@ test('a failed consent write never blocks the company', async () => {
     name => name === 'marketing_consent_grant'
       ? { data: null, error: { code: '42501', message: 'sc19_company_forbidden' } }
       : { data: id, error: null },
-    { id: 'u1', user_metadata: { marketing_consent: marketingConsent.marketingConsentDeclaration(true) } },
+    { id: 'u1', email: EMAIL, user_metadata: { marketing_consent: signed(true) } },
   );
   const form = new FormData(); form.set('name', 'Firma');
   let url = null;

@@ -6,15 +6,16 @@
  * or the summary, and the summary carries counts only — no company name, NIP,
  * e-mail or candidate data.
  *
- * DAYLIGHT SAVING TIME. Vercel cron expressions are UTC and cannot follow Polish
- * local time, so 19:00 in Warsaw is 18:00 UTC in winter (CET, UTC+1) and 17:00
- * UTC in summer (CEST, UTC+2). The cron in vercel.json therefore fires at BOTH
- * 17:00 and 18:00 UTC every day, and `isDigestHour` lets exactly one of the two
- * runs through: the one where the Europe/Warsaw wall clock reads 19. The other
- * returns `skipped` without reading anything or sending anything. The mail keeps
+ * DAYLIGHT SAVING TIME. Cron expressions are UTC and cannot follow Polish local
+ * time, so 19:00 in Warsaw is 18:00 UTC in winter (CET, UTC+1) and 17:00 UTC in
+ * summer (CEST, UTC+2). .github/workflows/sc19-daily-digest.yml therefore fires
+ * six times a day (17:00–19:30 UTC, every half hour), and `isDigestHour` lets
+ * through only a run whose Europe/Warsaw wall clock reads 19; the others return
+ * `skipped` without reading anything or sending anything. The mail keeps
  * arriving at 19:00 local on both sides of the March and October changeovers
- * with no code, cron or environment change; on the two changeover days it is
- * still one mail, because only one of the two runs sees hour 19.
+ * with no code, schedule or environment change, and a scheduler up to half an
+ * hour late still produces one. If two runs do land inside that hour, the Resend
+ * idempotency key (one per Warsaw day) still means one mail.
  */
 
 export const DIGEST_LOCAL_HOUR = 19;

@@ -29,9 +29,15 @@ export async function runDailyDigest(now: Date = new Date()): Promise<DigestRunS
   if (!to || !from) return 'unconfigured';
 
   const day = warsawDay(now);
-  // 19:00 local today back to 19:00 local yesterday: a full 24 h, and on the two
-  // DST changeover days it is 23 h or 25 h, which is what "since yesterday
-  // evening" means to a reader.
+  // Exactly 24 h back from the top of the current UTC hour. On the two DST
+  // changeover days that is NOT "since 19:00 local yesterday": in March the
+  // window starts at 18:00 local, so the hour 18:00–19:00 of the previous day is
+  // counted a second time (it was already in that day's summary), and in October
+  // it starts at 20:00 local, so the hour 19:00–20:00 is counted in neither
+  // summary. One hour a year is double-counted and one hour a year is missed, in
+  // counts of new companies. That is accepted for an internal summary rather
+  // than carrying a stored high-water mark; the figures it is compared against
+  // (/operator/billing) are not derived from this window.
   const windowEnd = new Date(now);
   windowEnd.setUTCSeconds(0, 0);
   windowEnd.setUTCMinutes(0);

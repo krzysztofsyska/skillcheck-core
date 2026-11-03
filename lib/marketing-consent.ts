@@ -35,25 +35,93 @@ export type MarketingConsentDeclaration = Readonly<{
   version: string;
   granted: boolean;
   declared_at: string;
+  sig: string;
 }>;
 
-/** Snapshot written into the Supabase user metadata at sign-up, so the choice
- * survives e-mail confirmation and reaches the company created afterwards. */
-export function marketingConsentDeclaration(granted: boolean, now: Date = new Date()): MarketingConsentDeclaration {
-  return Object.freeze({ version: MARKETING_CONSENT_VERSION, granted, declared_at: now.toISOString() });
+/** WHY THE SNAPSHOT IS SIGNED. The consent is recorded against a company, and
+ * the company does not exist yet at sign-up (it is created in /onboarding,
+ * possibly after e-mail confirmation), so the choice has to travel in the
+ * Supabase user metadata. That metadata is CLIENT-WRITABLE: after confirming
+ * the address a user can call auth.updateUser and set
+ * `marketing_consent.granted = true` even though the optional box was left
+ * unticked, and the append-only ledger would then certify a consent that was
+ * never given. Under art. 7(1) GDPR a consent has to be demonstrable, so a
+ * snapshot that anyone can write is not good enough.
+ *
+ * The snapshot therefore carries an HMAC over the ACCOUNT'S E-MAIL ADDRESS, the
+ * version and the declaration time, made with the same server-held secret as the
+ * rest of this change (SC19_TRIAL_AUTO_SECRET) under its own operation label, so
+ * a signature made here can never be presented to a database RPC. The server
+ * writes it at sign-up; /onboarding records the consent only if the signature
+ * verifies for the account that is signed in. No signature, a wrong one, or one
+ * belonging to another account means no consent is recorded — fail-closed. The
+ * wording still comes from the database, never from the snapshot.
+ *
+ * WHY THE E-MAIL AND NOT THE USER ID. The reviewed shape of this fix was
+ * HMAC(user.id ‖ version ‖ declared_at), but the user id does not exist yet when
+ * the snapshot is written: it is created BY the sign-up call that carries the
+ * metadata. Binding to the id would need a second write (auth.updateUser) after
+ * sign-up, which is impossible on the normal path, where e-mail confirmation is
+ * pending and there is no session. The address is known on both sides, is what
+ * the account was created with, and is equally unforgeable without the secret.
+ * If the address is later changed the signature simply stops verifying and no
+ * consent is recorded, which is the safe direction.
+ *
+ * This does not move WHERE consent is collected — that is a separate owner
+ * decision, not yet taken. It only makes the existing snapshot unforgeable. */
+function consentPayload(subject: string, version: string, declaredAt: string): string {
+  return [subject.trim().toLowerCase(), version, declaredAt].join('\n');
+}
+
+/** Deterministic request id for the signature: a snapshot has no request of its
+ * own, and the account is what the signature must be bound to. */
+const consentRequestId = (subject: string) => subject.trim().toLowerCase();
+
+export type ConsentSigner = (payload: string, requestId: string) => string;
+
+/** Snapshot written into the Supabase user metadata at sign-up. `sign` receives
+ * the canonical payload and returns the HMAC; the caller supplies it so this
+ * module never reads the environment. Without a signer the snapshot records
+ * `granted: false` and an empty signature, so nothing can be recorded later. */
+export function marketingConsentDeclaration(granted: boolean, input: {
+  subject?: string | null; sign?: ConsentSigner; now?: Date;
+} = {}): MarketingConsentDeclaration {
+  const declaredAt = (input.now ?? new Date()).toISOString();
+  const subject = (input.subject ?? '').trim();
+  if (!granted || !subject || !input.sign) {
+    return Object.freeze({ version: MARKETING_CONSENT_VERSION, granted: false, declared_at: declaredAt, sig: '' });
+  }
+  return Object.freeze({
+    version: MARKETING_CONSENT_VERSION, granted: true, declared_at: declaredAt,
+    sig: input.sign(consentPayload(subject, MARKETING_CONSENT_VERSION, declaredAt), consentRequestId(subject)),
+  });
 }
 
 /** Reads the sign-up snapshot back. Returns the version to record only when the
- * snapshot is a well-formed grant of a version this build knows; anything else
- * (absent, malformed, withdrawn, unknown version) records nothing. User metadata
- * is client-writable, so only the version is taken from it — never the wording. */
-export function declaredMarketingConsent(metadata: unknown): string | null {
+ * snapshot is a well-formed grant of a version this build knows AND its
+ * signature verifies for this user; anything else (absent, malformed, withdrawn,
+ * unknown version, unsigned, wrongly signed, signed for another account) records
+ * nothing. Only the version is ever taken from the metadata — never the wording.
+ *
+ * `verify` must compare in constant time. Without a verifier nothing is
+ * recorded: an unverifiable snapshot is treated exactly like a forged one. */
+export function declaredMarketingConsent(metadata: unknown, input: {
+  subject?: string | null;
+  verify?: (payload: string, requestId: string, signature: string) => boolean;
+} = {}): string | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const raw = (metadata as { marketing_consent?: unknown }).marketing_consent;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const declaration = raw as { version?: unknown; granted?: unknown };
+  const declaration = raw as { version?: unknown; granted?: unknown; declared_at?: unknown; sig?: unknown };
   if (declaration.granted !== true) return null;
-  return declaration.version === MARKETING_CONSENT_VERSION ? MARKETING_CONSENT_VERSION : null;
+  if (declaration.version !== MARKETING_CONSENT_VERSION) return null;
+  const declaredAt = declaration.declared_at, signature = declaration.sig;
+  if (typeof declaredAt !== 'string' || declaredAt.length > 40
+    || typeof signature !== 'string' || signature.length === 0 || signature.length > 200) return null;
+  const subject = (input.subject ?? '').trim();
+  if (!subject || !input.verify) return null;
+  if (!input.verify(consentPayload(subject, MARKETING_CONSENT_VERSION, declaredAt), consentRequestId(subject), signature)) return null;
+  return MARKETING_CONSENT_VERSION;
 }
 
 export type MarketingConsentState = Readonly<{

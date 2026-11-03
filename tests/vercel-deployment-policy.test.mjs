@@ -8,11 +8,13 @@ const config = JSON.parse(readFileSync(file, 'utf8'));
 
 test('SC deployment allowlist keeps ordinary feature commits out of Vercel', () => {
   assert.equal(config.$schema, 'https://openapi.vercel.sh/vercel.json');
-  assert.deepEqual(Object.keys(config).sort(), ['$schema', 'crons', 'git']);
-  // SC-DIGEST-001: exactly one cron, the internal daily summary. Vercel cron is
-  // UTC only, so 19:00 Europe/Warsaw needs both 17:00 (CEST) and 18:00 (CET);
-  // the handler lets through only the run whose Warsaw hour is 19.
-  assert.deepEqual(config.crons, [{ path: '/api/internal/daily-digest', schedule: '0 17,18 * * *' }]);
+  assert.deepEqual(Object.keys(config).sort(), ['$schema', 'git']);
+  // SC-DIGEST-001: no `crons` block. Vercel passes the value of the environment
+  // variable named CRON_SECRET and no other into a cron request's Authorization
+  // header, and two invocations a day of one path needs a paid plan. The daily
+  // summary is scheduled by .github/workflows/sc19-daily-digest.yml instead,
+  // the pattern cv-bulk-pump.yml already uses. No cost, and no 401.
+  assert.equal('crons' in config, false);
   assert.deepEqual(config.git, {
     deploymentEnabled: {
       '**': false,

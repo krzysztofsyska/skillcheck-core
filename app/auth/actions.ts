@@ -6,7 +6,8 @@ import { createClient } from "../../lib/supabase/server";
 import { credentials } from "../../lib/auth-validation";
 import { authCallbackUrl } from "../../lib/auth-url";
 import { hasLegalAcceptance, LEGAL_ACCEPTANCE_REVISION, LEGAL_ACCEPTED_DOCUMENTS, LEGAL_VERSION } from "../../lib/legal";
-import { declaredMarketingConsent, hasMarketingConsent, marketingConsentDeclaration } from "../../lib/marketing-consent";
+import { hasMarketingConsent } from "../../lib/marketing-consent";
+import { signedConsentDeclaration, verifiedConsentVersion } from "../../lib/marketing-consent-server";
 
 export async function login(form: FormData) {
   const input = credentials(form);
@@ -33,9 +34,12 @@ export async function register(form: FormData) {
       // company, and the company does not exist yet (it is created in
       // /onboarding, possibly after e-mail confirmation). This snapshot carries
       // the choice across; createCompany below turns it into the ledger entry.
-      // Only the VERSION is ever read back from here — the stored wording comes
-      // from the database, because user metadata is client-writable.
-      marketing_consent: marketingConsentDeclaration(hasMarketingConsent(form)),
+      // User metadata is CLIENT-WRITABLE, so the snapshot is HMAC-signed with
+      // the server secret and bound to this address: a user who left the box
+      // unticked cannot set granted=true afterwards and have it recorded. Only
+      // the VERSION is ever read back from here; the wording comes from the
+      // database.
+      marketing_consent: signedConsentDeclaration(hasMarketingConsent(form), input.email),
     },
   } });
   if (error) redirect("/register?message=failed");
@@ -56,10 +60,13 @@ export async function createCompany(form: FormData) {
   if (!name || name.length > 200) redirect("/onboarding?message=invalid");
   const { data: companyId, error } = await client.rpc("ensure_initial_company", { company_name: name });
   if (error) redirect("/onboarding?message=failed");
-  // SC-CONSENT-001: bind the registration-time consent to the new company. A
-  // failure here must not block the company, and nothing is sent anywhere: the
-  // consent is only recorded, and the owner can withdraw it in one click.
-  const consentVersion = declaredMarketingConsent(user.user_metadata);
+  // SC-CONSENT-001: bind the registration-time consent to the new company, but
+  // ONLY if the snapshot's HMAC verifies for this account. An unsigned, wrongly
+  // signed or edited snapshot records nothing, so the ledger never certifies a
+  // consent the user did not give; the owner can still give it in one click in
+  // /dashboard/<id>/zgody. A failure here must not block the company, and
+  // nothing is sent anywhere: the consent is only recorded.
+  const consentVersion = verifiedConsentVersion(user.user_metadata, user.email);
   if (consentVersion && typeof companyId === "string") {
     const { error: consentError } = await client.rpc("marketing_consent_grant", {
       target_company: companyId, consent_version: consentVersion, consent_source: "registration",

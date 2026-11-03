@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { notFound, redirect } from 'next/navigation';
 import { createClient } from '../../../lib/supabase/server';
-import { parseGrantForm, parsePolicyForm, parseTrialForm, sc19OperatorError, type Sc19OperatorNotice } from '../../../lib/sc19-operator';
+import { parseGrantForm, parsePolicyForm, parseReleaseForm, parseTrialForm, sc19OperatorError, type Sc19OperatorNotice } from '../../../lib/sc19-operator';
 
 const done = (status: Sc19OperatorNotice, search = ''): never => {
   revalidatePath('/operator/billing');
@@ -14,7 +14,7 @@ const done = (status: Sc19OperatorNotice, search = ''): never => {
 
 // Every RPC re-checks the current operator allowlist, including revocation.
 async function rpc(name: 'sc19_operator_set_package_policy' | 'sc19_operator_approve_trial'
-  | 'sc19_operator_grant_paid' | 'sc19_operator_set_auto_free',
+  | 'sc19_operator_grant_paid' | 'sc19_operator_set_auto_free' | 'sc19_operator_release_trial_nip',
   args: Record<string, string | number | boolean>, success: Sc19OperatorNotice, search: string) {
   const client = await createClient();
   const { data: { user }, error: authError } = await client.auth.getUser();
@@ -51,6 +51,18 @@ export async function setAutoFree(form: FormData) {
   if (value !== 'true' && value !== 'false') done('invalid');
   if (form.get('confirm') !== 'yes') done('confirm');
   await rpc('sc19_operator_set_auto_free', { enabled: value === 'true' }, 'auto_free_saved', '');
+}
+
+/** Frees a trial NIP that an account occupied without representing the company,
+ * so the real company can activate FREE. The database re-checks the operator
+ * role, demands a reason and records who released what, when and why. It changes
+ * no balance: taking analyses back is a billing action and the owner's decision. */
+export async function releaseTrialNip(form: FormData) {
+  const search = searchOf(form);
+  const input = parseReleaseForm(form);
+  if (!input) done('invalid', search);
+  if (form.get('confirm') !== 'yes') done('confirm', search);
+  await rpc('sc19_operator_release_trial_nip', input!, 'nip_released', search);
 }
 
 export async function grantPaid(form: FormData) {

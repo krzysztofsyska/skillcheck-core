@@ -11,7 +11,11 @@ const notices: Record<string,string> = {
   // SC-FREE-AUTO-001: the registry did not confirm the company, did not answer,
   // or automatic activation is switched off. All of them mean the same thing for
   // the company, and none of them grants anything.
-  manual: 'Nie mogliśmy potwierdzić firmy automatycznie w wykazie podatników VAT. Zgłoszenie trafiło do sprawdzenia przez obsługę SkillCheck — odezwiemy się do Ciebie.',
+  // Deliberately NOT a notice string: the manual path is a form the company has
+  // to reach, so this case renders a link to /rozmowa. Telling a company that
+  // "the request went for checking" while the panel offers no way to reach us
+  // was the whole complaint.
+  manual: '',
   verify: 'Przed aktywacją FREE wymagamy weryfikacji firmy. Wyślij zgłoszenie przez formularz kontaktowy.',
   forbidden: 'Darmową pulę może aktywować tylko właściciel firmy.',
 };
@@ -39,7 +43,14 @@ export default async function CompanyBilling({ params, searchParams }: {
     <Link href={`/dashboard/${companyId}`}>← Panel firmy</Link>
     <p className="eyebrow">SKILLCHECK / PAKIETY</p>
     <h1>Pakiety — {company.name}</h1>
-    {status && Object.hasOwn(notices,status) && <p role="status" className="notice">{notices[status]}</p>}
+    {status === 'manual'
+      ? <div role="status" className="notice">
+          <p>Nie mogliśmy potwierdzić Twojej firmy automatycznie w wykazie podatników VAT, więc FREE nie włączyło się samo.
+            Sprawdzimy zgłoszenie ręcznie — napisz do nas przez formularz, żebyśmy wiedzieli, kogo sprawdzić.</p>
+          <p><Link href="/rozmowa">Zgłoś firmę do weryfikacji FREE →</Link></p>
+        </div>
+      : status && Object.hasOwn(notices,status) && notices[status]
+        ? <p role="status" className="notice">{notices[status]}</p> : null}
     {balance ? <section aria-label="Twój pakiet">
       <h2>{balance.plan}</h2>
       <p><strong>{balance.available}</strong> analiz CV do wykorzystania</p>
@@ -47,7 +58,9 @@ export default async function CompanyBilling({ params, searchParams }: {
     </section> : <>
       <h2>FREE — {sc19AnalysisScope(sizes.FREE)}</h2>
       <p>Jednorazowa próba dla jednej firmy. Podaj NIP — sprawdzimy go automatycznie w wykazie podatników VAT Ministerstwa Finansów.</p>
-      <p>Jeśli wykaz potwierdzi, że firma istnieje i jest czynnym podatnikiem VAT, pakiet FREE włączy się od razu. Jeśli nie potwierdzi albo nie odpowie, sprawdzimy zgłoszenie ręcznie.</p>
+      <p>Jeśli wykaz potwierdzi, że firma istnieje i jest czynnym albo zwolnionym podatnikiem VAT, pakiet FREE włączy się od razu.
+        Jeśli nie potwierdzi albo nie odpowie, sprawdzimy zgłoszenie ręcznie — <Link href="/rozmowa">napisz do nas przez formularz</Link>.</p>
+      <p>Jedna firma może sprawdzić automatycznie jeden NIP. Jeśli pomylisz NIP, dalszą weryfikację zrobimy ręcznie.</p>
       {isOwner ? <form action={activateSc19Free}>
         <input type="hidden" name="companyId" value={companyId} />
         <label>NIP firmy <input type="text" name="nip" inputMode="numeric" autoComplete="off" maxLength={20} required placeholder="10 cyfr" /></label>

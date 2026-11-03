@@ -5,12 +5,17 @@ import {
   MARKETING_CONSENT_FIELD, MARKETING_CONSENT_TEXT, MARKETING_CONSENT_VALUE, MARKETING_CONSENT_VERSION,
   declaredMarketingConsent, hasMarketingConsent, isMarketingConsentActive, marketingConsentDeclaration,
 } from '../lib/marketing-consent.ts';
+import { signedConsentDeclaration, verifiedConsentVersion } from '../lib/marketing-consent-signing.ts';
+
+/** A server secret only this test knows; nothing is read from the environment. */
+const ENV = { SC19_TRIAL_AUTO_SECRET: 's'.repeat(32) };
 
 const migration = readFileSync(new URL('../supabase/migrations/20261103090000_sc19_auto_trial_marketing_consent.sql', import.meta.url), 'utf8');
 const registerPage = readFileSync(new URL('../app/register/page.tsx', import.meta.url), 'utf8');
 const consentPage = readFileSync(new URL('../app/dashboard/[companyId]/zgody/page.tsx', import.meta.url), 'utf8');
 const consentActions = readFileSync(new URL('../app/dashboard/[companyId]/zgody/actions.ts', import.meta.url), 'utf8');
 const authActions = readFileSync(new URL('../app/auth/actions.ts', import.meta.url), 'utf8');
+const consentServer = readFileSync(new URL('../lib/marketing-consent-server.ts', import.meta.url), 'utf8');
 
 const form = value => { const f = new FormData(); if (value !== undefined) f.set(MARKETING_CONSENT_FIELD, value); return f; };
 
@@ -56,37 +61,87 @@ test('the stored wording is the database wording, byte for byte', () => {
   assert.ok(MARKETING_CONSENT_TEXT.includes('dobrowolna'), 'the wording states it is optional');
 });
 
-test('only a well-formed grant of a known version is recorded, and only its version', () => {
-  const granted = marketingConsentDeclaration(true, new Date('2026-11-03T08:00:00Z'));
+test('only a well-formed, correctly SIGNED grant of a known version is recorded', () => {
+  const SUBJECT = 'firma@przyklad.pl';
+  const granted = signedConsentDeclaration(true, SUBJECT, ENV, new Date('2026-11-03T08:00:00Z'));
   assert.equal(granted.granted, true);
   assert.equal(granted.version, MARKETING_CONSENT_VERSION);
   assert.equal(granted.declared_at, '2026-11-03T08:00:00.000Z');
-  assert.equal(declaredMarketingConsent({ marketing_consent: granted }), MARKETING_CONSENT_VERSION);
+  assert.match(granted.sig, /^[0-9a-f]{64}$/, 'the snapshot is signed');
+  assert.equal(verifiedConsentVersion({ marketing_consent: granted }, SUBJECT, ENV), MARKETING_CONSENT_VERSION);
 
   for (const metadata of [
     undefined, null, {}, 'string', [],
     { marketing_consent: null },
-    { marketing_consent: marketingConsentDeclaration(false) },
-    { marketing_consent: { granted: 'true', version: MARKETING_CONSENT_VERSION } },
+    { marketing_consent: signedConsentDeclaration(false, SUBJECT, ENV) },
+    { marketing_consent: { granted: 'true', version: MARKETING_CONSENT_VERSION, declared_at: granted.declared_at, sig: granted.sig } },
     { marketing_consent: { granted: true } },
-    { marketing_consent: { granted: true, version: 'marketing-9.9' } },
-    // User metadata is client-writable, so a forged wording must be ignored.
-    { marketing_consent: { granted: true, version: MARKETING_CONSENT_VERSION, consent_text: 'cokolwiek' } },
+    { marketing_consent: { granted: true, version: 'marketing-9.9', declared_at: granted.declared_at, sig: granted.sig } },
   ]) {
-    const result = declaredMarketingConsent(metadata);
-    assert.ok(result === null || result === MARKETING_CONSENT_VERSION, JSON.stringify(metadata));
-    if (result) assert.equal(result, MARKETING_CONSENT_VERSION, 'only the known version is ever returned');
+    assert.equal(verifiedConsentVersion(metadata, SUBJECT, ENV), null, JSON.stringify(metadata));
   }
-  assert.equal(declaredMarketingConsent({ marketing_consent: { granted: true, version: 'marketing-9.9' } }), null);
+
+  // User metadata is client-writable, so a wording smuggled into the snapshot
+  // must change nothing: only the VERSION is ever taken from here, and the text
+  // stored with the event comes from private.marketing_consent_text.
+  assert.equal(verifiedConsentVersion({ marketing_consent: { ...granted, consent_text: 'cokolwiek' } }, SUBJECT, ENV),
+    MARKETING_CONSENT_VERSION, 'a stray wording field is ignored, not obeyed');
+  assert.match(migration, /wording := private\.marketing_consent_text\(consent_version\)/);
+  const grantFn = migration.slice(migration.indexOf('function public.marketing_consent_grant'), migration.indexOf('function public.marketing_consent_withdraw'));
+  assert.doesNotMatch(grantFn, /consent_text text\b/, 'the RPC has no parameter for the wording at all');
+
+  // The pure reader refuses everything without a verifier: an unverifiable
+  // snapshot is treated exactly like a forged one.
+  assert.equal(declaredMarketingConsent({ marketing_consent: granted }, { subject: SUBJECT }), null);
+  assert.equal(marketingConsentDeclaration(true, {}).granted, false, 'no signer, no grant');
 });
 
-test('registration records the declaration without sending anything', () => {
-  assert.match(authActions, /marketing_consent: marketingConsentDeclaration\(hasMarketingConsent\(form\)\)/);
+test('a consent the user wrote into their own metadata is NOT recorded', () => {
+  // THE ATTACK. user_metadata is client-writable (auth.updateUser). After
+  // confirming the address a user could set marketing_consent.granted = true
+  // even though the optional box was left unticked, and the append-only ledger
+  // would certify a consent that was never given. Under art. 7(1) GDPR the fact
+  // of consent has to be demonstrable, so the snapshot is HMAC-signed and an
+  // unsigned or edited one records nothing.
+  const SUBJECT = 'firma@przyklad.pl';
+  const real = signedConsentDeclaration(true, SUBJECT, ENV, new Date('2026-11-03T08:00:00Z'));
+  const forgeries = {
+    'no signature at all': { version: MARKETING_CONSENT_VERSION, granted: true, declared_at: real.declared_at },
+    'empty signature': { ...real, sig: '' },
+    'invented signature': { ...real, sig: 'f'.repeat(64) },
+    'flipped a declined snapshot to granted': { ...signedConsentDeclaration(false, SUBJECT, ENV, new Date('2026-11-03T08:00:00Z')), granted: true },
+    'kept the signature, moved the time': { ...real, declared_at: '2026-11-03T09:00:00.000Z' },
+    'another version with a valid signature': { ...real, version: 'marketing-9.9' },
+    'oversized signature': { ...real, sig: 'a'.repeat(400) },
+  };
+  for (const [label, marketing_consent] of Object.entries(forgeries)) {
+    assert.equal(verifiedConsentVersion({ marketing_consent }, SUBJECT, ENV), null, label);
+  }
+  // Another account's valid snapshot does not work either.
+  assert.equal(verifiedConsentVersion({ marketing_consent: real }, 'ktos.inny@przyklad.pl', ENV), null, 'bound to one account');
+  // And without a server secret nothing is signed and nothing is recorded.
+  assert.equal(signedConsentDeclaration(true, SUBJECT, {}).granted, false, 'no secret, no signed grant');
+  assert.equal(verifiedConsentVersion({ marketing_consent: real }, SUBJECT, {}), null, 'no secret, nothing recorded');
+  // The consent label is not one the database accepts, so a consent signature
+  // can never be presented to an RPC.
+  assert.doesNotMatch(migration, /not in \('auto_claim','auto_failure','digest','consent'\)/);
+  assert.match(migration, /op not in \('auto_claim','auto_failure','digest'\)/);
+});
+
+test('registration signs the snapshot and verifies it before recording, and sends nothing', () => {
+  assert.match(authActions, /marketing_consent: signedConsentDeclaration\(hasMarketingConsent\(form\), input\.email\)/);
   assert.match(authActions, /marketing_consent_grant/);
   assert.match(authActions, /consent_source: "registration"/);
-  // Only the version crosses from the metadata into the ledger call.
-  assert.match(authActions, /declaredMarketingConsent\(user\.user_metadata\)/);
+  // Only a verified snapshot's version crosses into the ledger call.
+  assert.match(authActions, /verifiedConsentVersion\(user\.user_metadata, user\.email\)/);
+  assert.doesNotMatch(authActions, /declaredMarketingConsent\(/, 'the unverified reader is not used by the action');
   assert.doesNotMatch(authActions, /resend|sendMail|api\.resend\.com/i, 'registration sends no mail');
+  // The application imports the guarded module, so the secret can never be
+  // bundled for the browser.
+  assert.match(authActions, /from "\.\.\/\.\.\/lib\/marketing-consent-server"/);
+  assert.match(consentServer, /^import 'server-only';/m);
+  // And the unguarded form of the registration page never sees the secret.
+  assert.doesNotMatch(registerPage, /SC19_TRIAL_AUTO_SECRET|marketing-consent-signing/);
 });
 
 test('withdrawal is one click, appends, and is owner-only', () => {
@@ -103,7 +158,11 @@ test('withdrawal is one click, appends, and is owner-only', () => {
 });
 
 test('nothing in the consent path can send to a company', () => {
-  for (const [name, source] of Object.entries({ consentPage, consentActions, 'lib/marketing-consent.ts': readFileSync(new URL('../lib/marketing-consent.ts', import.meta.url), 'utf8') })) {
+  for (const [name, source] of Object.entries({
+    consentPage, consentActions,
+    'lib/marketing-consent.ts': readFileSync(new URL('../lib/marketing-consent.ts', import.meta.url), 'utf8'),
+    'lib/marketing-consent-signing.ts': readFileSync(new URL('../lib/marketing-consent-signing.ts', import.meta.url), 'utf8'),
+  })) {
     assert.doesNotMatch(source, /api\.resend\.com|RESEND_API_KEY|sendMail|smtp/i, name);
   }
   // No outbox, recipient column or provider reference in the consent schema.

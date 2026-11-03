@@ -443,10 +443,15 @@ export type Database = {
       };
       sc19_auto_record_failure: {
         Args: {
-          target_company: string; supplied_nip: string; failure_code: string;
+          target_company: string; supplied_nip: string;
+          failure_outcome: 'refused' | 'unavailable'; failure_code: string;
           request_id: string; issued_at_ms: number; request_signature: string;
         };
         Returns: undefined;
+      };
+      sc19_auto_free_precheck: {
+        Args: { target_company: string; supplied_nip: string };
+        Returns: { allowed: boolean; reason: string | null }[];
       };
       sc19_operator_set_auto_free: { Args: { enabled: boolean }; Returns: boolean };
       sc19_operator_auto_free_settings: {
@@ -455,7 +460,29 @@ export type Database = {
       };
       sc19_operator_auto_free_grants: {
         Args: Record<PropertyKey, never>;
-        Returns: { company_id: string; company_name: string; nip: string; granted_at: string; granted_credits: number | null; used_credits: number | null; mf_status: string | null }[];
+        Returns: {
+          company_id: string; company_name: string; nip: string; checked_at: string;
+          outcome: 'granted' | 'refused' | 'unavailable'; error_code: string | null;
+          granted_credits: number | null; used_credits: number | null; mf_status: string | null;
+        }[];
+      };
+      sc19_operator_taken_trial_nips: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          nip: string; company_id: string; company_name: string;
+          approved_at: string | null; free_claimed: boolean; source: string;
+        }[];
+      };
+      sc19_operator_release_trial_nip: {
+        Args: { supplied_nip: string; release_reason: string };
+        Returns: { released_company_id: string; released_at: string }[];
+      };
+      sc19_operator_trial_nip_releases: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          nip: string; released_company_id: string | null; company_name: string | null;
+          reason: string; released_at: string;
+        }[];
       };
       // SC-CONSENT-001 (20261103090000): consent to commercial contact.
       marketing_consent_grant: {

@@ -1,0 +1,127 @@
+# Automatyczne FREE i zgoda na kontakt handlowy — jak to włączyć
+
+Dokument dla właściciela. Opisuje, co trzeba ustawić, żeby trzy rzeczy z tej
+zmiany zaczęły działać na produkcji:
+
+1. **Automatyczne FREE** — nowa firma podaje NIP, sprawdzamy go w wykazie
+   podatników VAT Ministerstwa Finansów i jeśli firma tam jest, pakiet FREE
+   włącza się od razu, bez klikania przez obsługę.
+2. **Zgoda na kontakt handlowy** — osobny, nieobowiązkowy checkbox przy
+   rejestracji, z historią zgód w panelu firmy.
+3. **Codzienne podsumowanie** — jeden wewnętrzny e-mail o 19:00, z samymi
+   liczbami (ile nowych firm, ile FREE, ile czeka na sprawdzenie).
+
+**Nic z tego nie włączy się samo.** Do czasu wykonania kroków poniżej wszystko
+działa dokładnie jak dziś: FREE przyznaje ręcznie obsługa w `/operator/billing`.
+Zgoda przy rejestracji nie zapisze się bez klucza z punktu 2 — firma może ją
+wtedy zaznaczyć jednym kliknięciem w panelu (`Zgody na kontakt handlowy`).
+
+Kolejność jest ważna. Punkty 1–4 można zrobić w jednej sesji.
+
+---
+
+## 1. Migracje bazy
+
+Przez workflow `db-migrate-production`, w tej kolejności, nigdy `supabase db push`:
+
+1. `20261103090000_sc19_auto_trial_marketing_consent.sql`
+2. `20261103090100_sc_erasure_inventory_r11.sql`
+
+Druga jest obowiązkowa zaraz po pierwszej. Między nimi usuwanie danych na
+żądanie jest zablokowane (celowo, żeby nic nie wykonało się „na pół").
+
+## 2. Zmienne w Vercel (Production)
+
+Dodaj, wszystkie jako **Sensitive**:
+
+| Zmienna | Wartość |
+| --- | --- |
+| `SC19_TRIAL_AUTO_SECRET` | losowy ciąg, co najmniej 32 znaki |
+| `SC19_DIGEST_CRON_SECRET` | losowy ciąg, co najmniej 32 znaki, **inny** niż powyższy |
+| `SC19_DIGEST_ENABLED` | `true` (dopiero gdy chcesz dostawać e-mail) |
+| `SC19_DIGEST_RECIPIENT` | jeden wewnętrzny adres, na który ma przyjść podsumowanie |
+| `SC19_DIGEST_SENDER` | adres nadawcy zweryfikowany w Resend |
+
+`SC19_TRIAL_AUTO_SECRET` to ten sam klucz, który podpisuje zgodę z rejestracji.
+Bez niego automatyczne FREE nie zadziała i zgoda z rejestracji się nie zapisze.
+
+Nie dodawaj `CRON_SECRET` — harmonogram nie idzie przez Vercel Cron (patrz
+punkt 4).
+
+Po dodaniu zmiennych zrób **Redeploy** produkcji.
+
+## 3. Ten sam klucz w bazie (zatwierdzony krok SQL)
+
+Baza musi znać ten sam `SC19_TRIAL_AUTO_SECRET`, żeby sprawdzić podpis. Jedno
+polecenie, z tą samą wartością co w Vercel:
+
+```sql
+select private.rotate_sc19_trial_auto_secret('<ta sama wartość co SC19_TRIAL_AUTO_SECRET>');
+```
+
+To jedyny obsługiwany sposób ustawienia tego klucza. Funkcja sprawdza długość
+(min. 32 bajty), zapisuje datę zmiany i czyści stare identyfikatory żądań.
+Tej samej komendy używa się przy każdej późniejszej zmianie klucza: zmień
+wartość w Vercel, zrób redeploy, potem uruchom tę komendę z nową wartością.
+
+Wartości nie wpisuj do żadnego pliku, zgłoszenia ani czatu.
+
+## 4. Harmonogram codziennego podsumowania (GitHub)
+
+Utwórz w GitHubie środowisko `sc19-daily-digest` z jednym sekretem:
+
+- `SC19_DIGEST_CRON_SECRET` — **ta sama wartość** co w Vercel.
+
+Harmonogram jest już w repozytorium
+(`.github/workflows/sc19-daily-digest.yml`) i odpala się sam. Dopóki sekret nie
+istnieje, zadanie tylko wypisuje notkę i nic nie robi.
+
+Dlaczego GitHub, a nie Vercel Cron: Vercel wkłada do żądania wartość zmiennej
+nazwanej dokładnie `CRON_SECRET` i nic innego, a dwa odpalenia dziennie dla
+jednej ścieżki wymagają płatnego planu. Płatny plan to nowy koszt, czyli Twoja
+decyzja, a GitHub Actions nic nie kosztuje i tak samo działa już przy paczkach CV.
+
+## 5. Włączenie automatu
+
+Dopiero teraz, w `/operator/billing`, sekcja **Automatyczne FREE z wykazu VAT**:
+wybierz „włączony", zaznacz potwierdzenie, zapisz. Strona pokazuje też, czy klucz
+podpisu jest ustawiony — jeśli nie, automat i tak nic nie przyzna.
+
+Przed włączeniem upewnij się, że liczba analiz w pakiecie FREE jest ustawiona
+(sekcja **Liczba analiz w pakietach**, FREE = 5). Bez tego każda analiza jest
+odrzucana.
+
+## 6. Sprawdzenie po włączeniu
+
+1. Na koncie testowym: rejestracja z zaznaczonym checkboxem zgody → firma →
+   `Pakiety` → NIP prawdziwej, istniejącej firmy → FREE włącza się od razu.
+2. `/operator/billing` → **Automatyczne sprawdzenia w wykazie VAT**: jest wpis
+   „FREE przyznany" z tym NIP-em.
+3. Ta sama firma, inny NIP → odmowa z powodem „to konto próbowało już innego
+   NIP-u". Tak ma być.
+4. Panel firmy → `Zgody na kontakt handlowy`: zgoda aktywna, przycisk wycofania
+   działa, po wycofaniu widać datę.
+5. Następnego dnia po 19:00: jeden e-mail z liczbami na adres z
+   `SC19_DIGEST_RECIPIENT`.
+
+## 7. Co zrobić, gdy ktoś zajmie NIP cudzej firmy
+
+NIP jest publiczny, więc ktoś może podać NIP firmy, której nie reprezentuje, i
+zająć jej jedyne FREE. Jedno konto może spróbować automatycznie tylko jednego
+NIP-u, ale jednorazowo da się tak zrobić.
+
+Jak to naprawić: `/operator/billing` → sekcja **Zajęte NIP-y** → znajdź NIP →
+„Zwolnij ten NIP" → wpisz, co sprawdzono i kiedy → zapisz. Prawdziwa firma może
+potem normalnie aktywować FREE.
+
+Zwolnienie **nie odbiera** analiz już przyznanych tamtej firmie. Odebranie
+analiz to operacja rozliczeniowa i wymaga Twojej decyzji.
+
+## 8. Jak to wyłączyć
+
+- Automatyczne FREE: `/operator/billing` → „wyłączony". Działa od razu, nic nie
+  trzeba wdrażać. Przyznane FREE zostaje.
+- Codzienne podsumowanie: `SC19_DIGEST_ENABLED=false` w Vercel + redeploy, albo
+  usunięcie sekretu ze środowiska `sc19-daily-digest` w GitHubie.
+- Zgoda na kontakt handlowy: nie ma wyłącznika i nie jest potrzebny — nic nie
+  jest nikomu wysyłane, zgoda jest tylko zapisywana.

@@ -1,9 +1,9 @@
 -- SC-FREE-AUTO-001 / SC-CONSENT-001 / SC-010 R11: reviewed erasure inventory
--- revision for the four tables added by
+-- revision for the five tables added by
 -- 20261103090000_sc19_auto_trial_marketing_consent.sql.
 --
 -- Order is mandatory: R10 (20261101130300) -> auto trial + consent
--- (20261103090000) -> this migration. Without R11 those four tables make every
+-- (20261103090000) -> this migration. Without R11 those five tables make every
 -- erasure preview/purge fail closed with schema_dependency_unknown / PT409.
 --
 -- Inventory classification of what the previous migration added:
@@ -11,20 +11,50 @@
 --     the wording shown, its version, the acting user id, the time granted and
 --     the time withdrawn). NO candidate data: a consent is a statement by the
 --     company's own owner about the company's own contact details, so it is not
---     reachable from public.candidates and gets no candidate adapter. Removed
---     with the company by the restrict-FK order already used for the SC-019
---     accounting tables; append-only otherwise (private.contact_immutable).
+--     reachable from public.candidates and gets no candidate adapter.
 --   private.sc19_trial_auto_checks: audit of the automatic FREE verification
 --     (company id, NIP, what the Ministry of Finance registry answered). NIP and
 --     company name are company data, the same class as the already inventoried
 --     private.sc19_trial_approvals / private.sc19_trial_nips; no candidate data
---     and therefore no adapter. Append-only (private.contact_immutable).
+--     and therefore no adapter.
+--   private.sc19_trial_nip_releases: which trial NIP an operator released, for
+--     which company, by whom and why. Company data, no candidate data. The
+--     company id carries no foreign key, so a release row never blocks anything.
 --   private.sc19_trial_auto_settings: one row holding the operator switch and the
 --     request secret. No personal data.
 --   private.sc19_trial_auto_nonces: signed request ids for replay protection,
 --     deleted after three minutes. No personal data.
 --
--- No adapter changes: none of the four tables is candidate-linked, so the R10
+-- HOW THESE ROWS ARE REMOVED — precisely. The two audit tables and the consent
+-- ledger are APPEND-ONLY: private.contact_immutable() refuses every UPDATE and
+-- DELETE except a DELETE by erasure_purge_owner that the purge manifest allows,
+-- and these tables are granted no privilege and no policy for that role. Their
+-- rows are therefore not deletable at all today, and because their company_id
+-- references public.companies ON DELETE RESTRICT, a company that has such a row
+-- cannot be deleted either.
+--
+-- That is deliberate and is not a regression:
+--   * SC-010 erasure is CANDIDATE-scoped. The purge manifest and
+--     private.erasure_purge_allowed() enumerate candidate-linked rows; none of
+--     these five tables holds candidate data, so none of them is reachable by a
+--     data-subject erasure request and nothing a candidate can ask for is
+--     blocked. Granting erasure_purge_owner access to company-level accounting
+--     and consent tables would widen the purge surface without a reviewed
+--     manifest entry — a separate change with its own review, not a comment fix.
+--   * Company deletion is already restricted, before this migration, by
+--     private.sc19_trial_approvals, private.sc19_trial_nips,
+--     private.sc19_credit_journal and the other SC-019 accounting tables, which
+--     reference public.companies ON DELETE RESTRICT and likewise have no purge
+--     policy. The product has no company-deletion path, and public.companies
+--     itself has no purge grant. These tables add no new block.
+--   * Keeping a consent ledger that cannot be rewritten is the point: under
+--     art. 7(1) GDPR the grant and the withdrawal must stay demonstrable.
+-- An earlier version of this comment claimed the rows are "removed with the
+-- company by the restrict-FK order already used for the SC-019 accounting
+-- tables". They are not removed at all, and unlike those tables these three
+-- also carry the immutability trigger; the wording above is the accurate one.
+--
+-- No adapter changes: none of the five tables is candidate-linked, so the R10
 -- adapters already list every candidate-linked row. Only the four baseline
 -- readers move from R10 to R11, byte-identical apart from the baseline table
 -- name. Signatures are reviewed literals, never learned from the target
@@ -35,7 +65,8 @@ do $r11_preflight$
 declare
   r10_signature text; r10_tables text[]; source text; expected text;
   new_tables text[]:=array['private.marketing_consent_events','private.sc19_trial_auto_checks',
-    'private.sc19_trial_auto_nonces','private.sc19_trial_auto_settings'];
+    'private.sc19_trial_auto_nonces','private.sc19_trial_auto_settings',
+    'private.sc19_trial_nip_releases'];
   actual_tables text[];
 begin
   if to_regclass('private.erasure_inventory_baseline_r10') is null then
@@ -46,7 +77,10 @@ begin
   end if;
   if to_regclass('private.marketing_consent_events') is null
     or to_regclass('private.sc19_trial_auto_checks') is null
+    or to_regclass('private.sc19_trial_nip_releases') is null
     or to_regprocedure('public.sc19_auto_claim_trial(uuid,text,text,text,text,uuid,bigint,text)') is null
+    or to_regprocedure('public.sc19_operator_release_trial_nip(text,text)') is null
+    or to_regprocedure('private.rotate_sc19_trial_auto_secret(text)') is null
     or to_regprocedure('private.marketing_consent_text(text)') is null then
     raise exception 'sc_r11_requires_auto_trial_consent' using errcode='55000';
   end if;
@@ -54,8 +88,8 @@ begin
     into r10_signature,r10_tables;
   case r10_signature
     when '60ce9006204013feeadfea4c169d19896638d43f3e82705ad8a4a59d1df5f8e9' then
-      source:='7dc9fab21dac4ddc8c62a3c081c7dbe32a33472ecbf1bd67be940ab3fc3a13ed';
-      expected:='56eb32010e254a038c908ef9dd1b42b14d012320860b8a8b0949b2ef6fa32bb0';
+      source:='a2c381c1a1140a0baaeece3e21f94300f404d99cc2fe1f7cf46c267a00227f05';
+      expected:='da597738e0b4e6a6d41c5da7ec4f16b6c8416d2dc6bb8d8de514e7b48b19b72e';
     when '689349876329b99935081f1ebcb015104d126558290171662b23ccd67f671837' then
       -- The voice-module variant of R10. No reviewed signature pair exists for it
       -- yet: the current migration chain installs the legacy variant, and the

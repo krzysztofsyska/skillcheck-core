@@ -19,7 +19,9 @@ const record = (overrides = {}) => ({
   requestId: 'req-synthetic-0001', ...overrides,
 });
 
-/** A store that records calls and answers as told. */
+/** A store that records calls and answers as told. The precheck answers "open"
+ * unless a test says otherwise, because that is the production state once the
+ * operator has switched the automat on. */
 function store(answers = {}) {
   const calls = [];
   return {
@@ -27,6 +29,13 @@ function store(answers = {}) {
     async claim(companyId, nip) {
       calls.push(['claim', companyId, nip]);
       return { error: answers.claim ?? null };
+    },
+    async precheck(companyId, nip) {
+      calls.push(['precheck', companyId, nip]);
+      return {
+        data: answers.precheck ?? [{ allowed: true, reason: null }],
+        error: answers.precheckError ?? null,
+      };
     },
     async autoClaim(args) {
       calls.push(['autoClaim', args]);
@@ -76,7 +85,7 @@ test('an operator-approved company is granted without touching the register', as
 test('a company the register does not confirm gets nothing and goes to manual review', async () => {
   for (const [label, body] of [
     ['unknown NIP', { result: { subject: null, requestId: 'req-x' } }],
-    ['VAT-exempt, not czynny', { result: { subject: { ...record({ statusVat: 'Zwolniony' }), workingAddress: 'ul. Testowa 1, 00-001 Warszawa' }, requestId: 'req-x' } }],
+    ['status neither Czynny nor Zwolniony', { result: { subject: { ...record({ statusVat: 'Wykreślony' }), workingAddress: 'ul. Testowa 1, 00-001 Warszawa' }, requestId: 'req-x' } }],
     ['nonsense payload', { result: {} }],
     ['another company\'s NIP in the answer', { result: { subject: { ...record({ nip: '5260250274' }), workingAddress: 'ul. Testowa 1, 00-001 Warszawa' }, requestId: 'req-x' } }],
   ]) {
@@ -84,7 +93,87 @@ test('a company the register does not confirm gets nothing and goes to manual re
     const result = await activateFreeWithWhitelist({ store: s, companyId: COMPANY, nip: NIP, env: env(), fetchImpl: fetchOk(body) });
     assert.equal(result.status, 'manual', label);
     assert.equal(s.calls.some(call => call[0] === 'autoClaim'), false, `${label}: nothing is claimed`);
+    // Owner-visible refusals are audited too, not only outages: with the
+    // grant-only filter they were written nowhere and nobody could see who was
+    // waiting or why.
+    const audit = s.calls.find(call => call[0] === 'recordFailure');
+    assert.ok(audit, `${label}: the refusal is audited`);
+    assert.ok(['refused', 'unavailable'].includes(audit[1].failure_outcome), label);
   }
+});
+
+test('a VAT-exempt company gets FREE automatically (owner decision 2026-11-03)', async () => {
+  // 'Zwolniony' is in the register and is a real company; many small Polish
+  // firms are exempt. The earlier build refused it.
+  const s = store({ claim: NEEDS_VERIFICATION });
+  const result = await activateFreeWithWhitelist({
+    store: s, companyId: COMPANY, nip: NIP, env: env(),
+    fetchImpl: fetchOk({ result: { subject: { ...record({ statusVat: 'Zwolniony' }), workingAddress: 'ul. Testowa 1, 00-001 Warszawa' }, requestId: 'req-synthetic-0001' } }),
+  });
+  assert.equal(result.status, 'activated');
+  assert.equal(result.decision.outcome, 'granted');
+  assert.equal(s.calls.find(call => call[0] === 'autoClaim')[1].mf_status, 'Zwolniony');
+});
+
+test('a NIP typed with separators is granted: every step uses the canonical digits', async () => {
+  // The activation field accepts up to 20 characters, so "526-104-08-28" is a
+  // normal entry. The database normalizes before it rebuilds the signed payload,
+  // so signing the raw input made every formatted NIP fail the signature check
+  // and fall through to manual review AFTER the registry quota had been spent.
+  const formatted = '526-104-08-28', canonical = '5261040828';
+  const seen = [];
+  const s = store({ claim: NEEDS_VERIFICATION });
+  const result = await activateFreeWithWhitelist({
+    store: s, companyId: COMPANY, nip: formatted, env: env(),
+    fetchImpl: async url => {
+      seen.push(url);
+      return { status: 200, ok: true, async json() {
+        return { result: { subject: { ...record({ nip: canonical }), workingAddress: 'ul. Testowa 1, 00-001 Warszawa' }, requestId: 'req-synthetic-0001' } };
+      } };
+    },
+  });
+  assert.equal(result.status, 'activated');
+  assert.match(seen[0], new RegExp(`/search/nip/${canonical}\\?`), 'the registry is asked for the canonical NIP');
+  for (const [name, ...args] of s.calls) {
+    const value = name === 'autoClaim' ? args[0].supplied_nip : name === 'claim' || name === 'precheck' ? args[1] : null;
+    if (value !== null) assert.equal(value, canonical, `${name} receives the canonical NIP`);
+  }
+  // And the signature the database will recompute matches.
+  const auto = s.calls.find(call => call[0] === 'autoClaim')[1];
+  assert.equal(auto.request_signature, signTrialAuto('auto_claim', auto.request_id, auto.issued_at_ms, trialAutoClaimPayload({
+    requestId: auto.request_id, issuedAtMs: auto.issued_at_ms, companyId: COMPANY, nip: canonical,
+    mfRequestId: 'req-synthetic-0001', mfStatus: 'Czynny', mfName: 'FIRMA TESTOWA SP Z OO',
+  }), SECRET));
+});
+
+test('a malformed NIP is rejected before anything is called', async () => {
+  for (const value of ['', '123', '0000000000', '1234563219', 'x'.repeat(40)]) {
+    const s = store({ claim: NEEDS_VERIFICATION });
+    const result = await activateFreeWithWhitelist({ store: s, companyId: COMPANY, nip: value, env: env(), fetchImpl: fetchNever });
+    assert.equal(result.status, 'invalid', JSON.stringify(value));
+    assert.deepEqual(s.calls, [], 'neither the database nor the registry is touched');
+  }
+});
+
+test('the precheck closes the automatic path before the registry quota is spent', async () => {
+  for (const reason of ['AUTO_DISABLED', 'ANOTHER_NIP_TRIED', 'NIP_TAKEN']) {
+    const s = store({ claim: NEEDS_VERIFICATION, precheck: [{ allowed: false, reason }] });
+    const result = await activateFreeWithWhitelist({ store: s, companyId: COMPANY, nip: NIP, env: env(), fetchImpl: fetchNever });
+    assert.equal(result.status, 'manual', reason);
+    assert.equal(result.decision.errorCode, reason);
+    assert.deepEqual(s.calls.map(call => call[0]), ['claim', 'precheck'], `${reason}: the registry is never called`);
+  }
+  // Same for a missing server secret: the precheck row is the audit trail, and
+  // nothing past it could be signed anyway.
+  const bare = store({ claim: NEEDS_VERIFICATION });
+  const nosecret = await activateFreeWithWhitelist({ store: bare, companyId: COMPANY, nip: NIP, env: {}, fetchImpl: fetchNever });
+  assert.equal(nosecret.status, 'manual');
+  assert.deepEqual(bare.calls.map(call => call[0]), ['claim', 'precheck']);
+  // A failed precheck read is treated as closed, not as open.
+  const broken = store({ claim: NEEDS_VERIFICATION, precheckError: { code: '42501', message: 'sc19_company_forbidden' } });
+  const result = await activateFreeWithWhitelist({ store: broken, companyId: COMPANY, nip: NIP, env: env(), fetchImpl: fetchNever });
+  assert.equal(result.status, 'manual');
+  assert.equal(broken.calls.some(call => call[0] === 'autoClaim'), false);
 });
 
 test('a register failure, timeout or rate limit grants nothing', async () => {
@@ -129,7 +218,9 @@ test('without the server secret nothing is attempted: today behaviour is unchang
       env: { SC19_TRIAL_AUTO_SECRET: value },
     });
     assert.equal(result.status, 'manual');
-    assert.deepEqual(s.calls.map(call => call[0]), ['claim'], 'the register is never called');
+    // The precheck is the only database call: it costs nothing, grants nothing
+    // and leaves the operator a row saying this company is waiting.
+    assert.deepEqual(s.calls.map(call => call[0]), ['claim', 'precheck'], 'the register is never called');
   }
   assert.equal(trialAutoEnabled({ SC19_TRIAL_AUTO_SECRET: 'z'.repeat(32) }), true);
 });
@@ -161,13 +252,18 @@ test('the switch being off in the database also grants nothing', async () => {
   assert.equal(result.status, 'manual');
 });
 
-test('only Czynny qualifies; the decision records what the register returned', () => {
+test('Czynny and Zwolniony qualify, nothing else; the decision records the register answer', () => {
   assert.deepEqual({ ...decideTrialAuto(record()) }, {
     outcome: 'granted', mfRequestId: 'req-synthetic-0001', mfStatus: 'Czynny',
     mfName: 'FIRMA TESTOWA SP Z OO', errorCode: null,
   });
-  assert.equal(decideTrialAuto(record({ statusVat: 'Zwolniony' })).outcome, 'refused');
-  assert.equal(decideTrialAuto(record({ statusVat: 'Zwolniony' })).errorCode, 'STATUS_NOT_ACTIVE');
+  // Owner decision 2026-11-03: VAT-exempt companies are granted too.
+  assert.equal(decideTrialAuto(record({ statusVat: 'Zwolniony' })).outcome, 'granted');
+  assert.equal(decideTrialAuto(record({ statusVat: 'Zwolniony' })).errorCode, null);
+  for (const status of ['Wykreślony', 'czynny', 'CZYNNY', 'Zwolniony ', '', 'Aktywny']) {
+    assert.equal(decideTrialAuto(record({ statusVat: status })).outcome, 'refused', JSON.stringify(status));
+    assert.equal(decideTrialAuto(record({ statusVat: status })).errorCode, 'STATUS_NOT_ACTIVE', JSON.stringify(status));
+  }
   for (const code of ['NIP_INVALID', 'NIP_NOT_FOUND', 'NIP_NOT_ACTIVE', 'WHITELIST_ADDRESS_UNPARSEABLE']) {
     assert.equal(decideTrialAuto(new WhitelistError(code)).outcome, 'refused', code);
   }
@@ -193,7 +289,12 @@ test('the signature is domain separated, name bound and refuses a short secret',
   assert.ok(payload.includes(createHash('sha256').update('FIRMA').digest('hex')));
   // A claim signature is not a digest signature.
   const id = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
-  assert.notEqual(signTrialAuto('auto_claim', id, 1, payload, SECRET), signTrialAuto('digest', id, 1, payload, SECRET));
+  // All four labels are distinct, so no signature for one operation can be
+  // presented as another. 'auto_failure' used to share 'auto_claim', which left
+  // the two apart only by how many lines their payload happened to have.
+  const signatures = ['auto_claim', 'auto_failure', 'digest', 'consent']
+    .map(op => signTrialAuto(op, id, 1, payload, SECRET));
+  assert.equal(new Set(signatures).size, 4, 'every operation label signs differently');
   assert.throws(() => signTrialAuto('auto_claim', id, 1, payload, 'short'), /secret_invalid/);
   assert.throws(() => trialAutoCanonical('auto_claim', id, 1.5, payload), /invalid_stamp/);
   // Exactly the construction the database recomputes.

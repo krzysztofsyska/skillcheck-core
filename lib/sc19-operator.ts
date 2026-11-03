@@ -12,6 +12,9 @@ export const sc19OperatorNotices = {
   trial_approved: 'Firma zweryfikowana. Właściciel może teraz aktywować FREE w zakładce Pakiety.',
   paid_granted: 'Pakiet PRESELEKCJA przydzielony. Ponowne użycie tego samego numeru rozliczenia nic nie doda.',
   auto_free_saved: 'Ustawienie automatycznego FREE zapisane. Dotyczy kolejnych aktywacji.',
+  nip_released: 'NIP zwolniony. Firma, która go naprawdę reprezentuje, może teraz aktywować FREE. Przyznanych analiz nie odebrano.',
+  nip_not_taken: 'Ten NIP nie jest zajęty — nie ma czego zwalniać.',
+  release_reason: 'Podaj powód zwolnienia (8–300 znaków): co sprawdzono i kiedy.',
   invalid: 'Sprawdź dane formularza.',
   invalid_nip: 'NIP jest nieprawidłowy (10 cyfr z poprawną sumą kontrolną).',
   conflict: 'Konflikt: ten NIP jest już przypisany do innej firmy albo firma ma zatwierdzony inny NIP.',
@@ -37,6 +40,15 @@ export function parseTrialForm(form: FormData) {
   return { target_company: company, supplied_nip: nip, proof };
 }
 
+/** Releasing an occupied trial NIP. The reason is mandatory and is stored in the
+ * audit, so "why was this NIP freed" always has an answer. */
+export function parseReleaseForm(form: FormData) {
+  const nip = text(form, 'nip').replace(/[\s-]/g, '');
+  const reason = text(form, 'reason');
+  if (!/^[0-9]{10}$/.test(nip) || reason.length < 8 || reason.length > 300) return null;
+  return { supplied_nip: nip, release_reason: reason };
+}
+
 export function parseGrantForm(form: FormData) {
   const company = text(form, 'companyId');
   const reference = text(form, 'settlement');
@@ -49,6 +61,8 @@ export function sc19OperatorError(error: { code?: string; message?: string }): S
   if (message.includes('sc19_invalid_nip')) return 'invalid_nip';
   if (message.includes('sc19_reference_conflict')) return 'reference_conflict';
   if (message.includes('sc19_missing_paid_policy')) return 'missing_policy';
+  if (message.includes('sc19_trial_nip_not_taken')) return 'nip_not_taken';
+  if (message.includes('sc19_release_reason_required')) return 'release_reason';
   if (error.code === '23505') return 'conflict';
   if (error.code === '22023') return 'invalid';
   return 'failed';

@@ -7,33 +7,57 @@ import {
 } from '../lib/sc19-daily-digest.ts';
 
 const vercel = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'));
+const workflow = readFileSync(new URL('../.github/workflows/sc19-daily-digest.yml', import.meta.url), 'utf8');
+const route = readFileSync(new URL('../app/api/internal/daily-digest/route.ts', import.meta.url), 'utf8');
 const counts = { registered: 3, auto_free: 2, awaiting_manual: 1, marketing_consents: 2 };
 const ready = extra => ({
   SC19_DIGEST_ENABLED: 'true', RESEND_API_KEY: 'key',
   SC19_DIGEST_RECIPIENT: 'operator@skillcheck.pl', SC19_DIGEST_SENDER: 'bot@skillcheck.pl', ...extra,
 });
 
-test('the cron fires twice in UTC and exactly one run is 19:00 in Warsaw', () => {
-  // Vercel cron is UTC only. 19:00 Warsaw is 18:00 UTC in winter (CET) and
-  // 17:00 UTC in summer (CEST), so both hours are scheduled and the handler
-  // picks the right one.
-  assert.deepEqual(vercel.crons, [{ path: '/api/internal/daily-digest', schedule: '0 17,18 * * *' }]);
-  const scheduled = ['17', '18'];
+test('the schedule is a GitHub workflow, NOT Vercel Cron, and is authorized by the right secret', () => {
+  // Vercel puts the value of the environment variable named CRON_SECRET — that
+  // name and no other — into a cron request's Authorization header, so a
+  // deployment that provisions only SC19_DIGEST_CRON_SECRET would answer 401 on
+  // every scheduled call and the digest would never run. Two invocations a day
+  // of one path also needs a paid plan, which is a new cost and the owner's
+  // decision. So there is no `crons` block, and the schedule is a workflow, the
+  // pattern .github/workflows/cv-bulk-pump.yml already uses.
+  assert.deepEqual(Object.keys(vercel).sort(), ['$schema', 'git']);
+  assert.equal('crons' in vercel, false);
+  assert.match(workflow, /schedule:\s*\n\s*- cron: '0,30 17,18,19 \* \* \*'/);
+  assert.match(workflow, /secrets\.SC19_DIGEST_CRON_SECRET/);
+  assert.match(workflow, /Authorization: Bearer \$CRON_SECRET/);
+  assert.match(workflow, /if: github\.ref == 'refs\/heads\/main'/, 'production only');
+  assert.match(route, /process\.env\.SC19_DIGEST_CRON_SECRET/);
+  // A retryable provider answer must not report success: the caller then fails
+  // and the next firing in the same Warsaw hour is the retry.
+  assert.match(route, /status === 'failed' \|\| status === 'retry'/);
+});
 
-  const check = (date, expectedHour) => {
-    const hits = scheduled.filter(hour => isDigestHour(new Date(`${date}T${hour}:00:00Z`)));
-    assert.deepEqual(hits, [expectedHour], `${date}: exactly one run at 19:00 local`);
+test('exactly one scheduled run per day is 19:00 in Warsaw', () => {
+  // The workflow fires six times; only a run whose Warsaw wall clock reads 19
+  // does anything. 19:00 Warsaw is 18:00 UTC in winter (CET) and 17:00 UTC in
+  // summer (CEST), and the half-hour firings absorb a late scheduler.
+  const scheduled = ['17:00', '17:30', '18:00', '18:30', '19:00', '19:30'];
+  const check = (date, expected) => {
+    const hits = scheduled.filter(time => isDigestHour(new Date(`${date}T${time}:00Z`)));
+    assert.deepEqual(hits, expected, `${date}: the runs that send`);
   };
-  check('2026-01-15', '18'); // deep winter, CET
-  check('2026-07-15', '17'); // high summer, CEST
-  // The changeover days themselves: still one mail, not zero and not two.
-  check('2026-03-29', '17'); // CET -> CEST
-  check('2026-10-25', '18'); // CEST -> CET
+  check('2026-01-15', ['18:00', '18:30']); // deep winter, CET
+  check('2026-07-15', ['17:00', '17:30']); // high summer, CEST
+  // The changeover days themselves: still inside the hour, not zero runs.
+  check('2026-03-29', ['17:00', '17:30']); // CET -> CEST
+  check('2026-10-25', ['18:00', '18:30']); // CEST -> CET
   // The days either side of each changeover.
-  check('2026-03-28', '18');
-  check('2026-03-30', '17');
-  check('2026-10-24', '17');
-  check('2026-10-26', '18');
+  check('2026-03-28', ['18:00', '18:30']);
+  check('2026-03-30', ['17:00', '17:30']);
+  check('2026-10-24', ['17:00', '17:30']);
+  check('2026-10-26', ['18:00', '18:30']);
+  // Two sending runs are still ONE mail: the Resend idempotency key is per
+  // Warsaw day, so the second is deduplicated by the provider.
+  assert.match(readFileSync(new URL('../lib/sc19-daily-digest.ts', import.meta.url), 'utf8'),
+    /'Idempotency-Key': `sc19-daily-digest-v1\/\$\{input\.day\}`/);
 
   // Every other hour of the day is skipped.
   for (const hour of ['00', '05', '12', '16', '19', '20', '23']) {
