@@ -45,6 +45,7 @@ drop function if exists private.sc19_auto_free_other_nip_tried(uuid,text);
 drop function if exists private.sc19_auto_free_nip_released_from(uuid,text);
 drop function if exists private.sc19_auto_free_local_refusal_codes();
 drop function if exists private.sc19_auto_free_cooldown();
+drop function if exists private.sc19_auto_free_refusal_window();
 drop function if exists private.rotate_sc19_trial_auto_secret(text);
 drop function if exists private.sc19_trial_auto_verify_signature(text,uuid,bigint,text,text);
 drop function if exists private.marketing_consent_text(text);
@@ -66,6 +67,7 @@ begin
         or p.proname like 'rotate_sc19_trial_auto%'
         or p.proname in ('sc19_auto_claim_trial','sc19_auto_record_failure','sc19_daily_digest',
           'sc19_auto_free_precheck','sc19_auto_free_other_nip_tried','sc19_auto_free_cooldown',
+          'sc19_auto_free_refusal_window',
           'sc19_auto_free_local_refusal_codes','sc19_auto_free_nip_released_from',
           'sc19_operator_set_auto_free','sc19_operator_auto_free_settings',
           'sc19_operator_auto_free_grants','sc19_operator_marketing_consents',

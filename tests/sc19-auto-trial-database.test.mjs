@@ -282,6 +282,69 @@ test('the precheck refuses before the register is asked, and audits why', async 
   await assert.rejects(db.query('select * from public.sc19_auto_free_precheck($1,$2)', [b.companyId, nipA]), code('42501'), 'anon');
 });
 
+test('a company that asks again a day later is a fresh request, not a suppressed duplicate', async t => {
+  // THE BUG (bot review finding 4460319655, 2026-11-03). The refusal row was
+  // written "once per (company, NIP, reason), ever", to stop a company clicking
+  // the form from inflating the audit. But the operator's queue in the daily
+  // summary is built from exactly those rows over the LAST DAY, so a company
+  // that asked on Monday, was not dealt with, and asked again on Wednesday wrote
+  // no new row — and from Tuesday evening onwards appeared in no summary at all,
+  // while still waiting. The audit protection was quietly deleting real requests
+  // from the one number the owner acts on.
+  const { db, h, a } = await ready(t, { enabled: false });
+  const rows = async () => (await call(db,
+    "select count(*)::int n from private.sc19_trial_auto_checks where company_id=$1 and error_code='AUTO_DISABLED'",
+    [a.companyId]))[0].n;
+
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'AUTO_DISABLED' });
+  await h.asAdmin();
+  assert.equal(await rows(), 1);
+
+  // Clicking again straight away is still one row: that is what the suppression
+  // is for, and it has not been given up.
+  await h.asUser(users.owner);
+  await precheck(db, a.companyId, nipA);
+  await precheck(db, a.companyId, nipA);
+  await h.asAdmin();
+  assert.equal(await rows(), 1, 'hammering the form does not inflate the audit');
+
+  // Now age the existing row past the refusal window — the same thing the
+  // calendar does while nobody deals with the company — and ask again. (Written
+  // with an explicit interval rather than a sleep, so the test does not depend
+  // on wall-clock time passing. The audit table refuses an UPDATE, so the row is
+  // re-inserted at an older time and the fresh one removed; this is the fixture
+  // acting as the schema owner, not a path any RPC can take.)
+  const aged = (await call(db,
+    `select checked_at - (private.sc19_auto_free_refusal_window() + interval '1 minute') v
+     from private.sc19_trial_auto_checks where company_id=$1`, [a.companyId]))[0].v;
+  await db.query('alter table private.sc19_trial_auto_checks disable trigger immutable_history');
+  await db.query('delete from private.sc19_trial_auto_checks where company_id=$1', [a.companyId]);
+  await db.query(
+    `insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code,checked_at)
+     values($1,$2,'refused','AUTO_DISABLED',$3)`, [a.companyId, nipA, aged]);
+  await db.query('alter table private.sc19_trial_auto_checks enable trigger immutable_history');
+
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'AUTO_DISABLED' });
+  await h.asAdmin();
+  assert.equal(await rows(), 2, 'asking again after the window is a new request the operator must see');
+
+  // And it is back in the operator's queue, which is the point of all of this.
+  const window = await digestWindow(db);
+  const id = randomUUID(), at = Date.now();
+  await h.asUser(null, 'anon');
+  assert.equal((await call(db, 'select * from public.sc19_daily_digest($1,$2,$3,$4,$5)',
+    [window.start, window.end, id, at,
+      signTrialAuto('digest', id, at, digestPayload(window), SECRET)])).at(0).awaiting_manual, 1);
+
+  // The window must stay far shorter than any period the summary is asked about,
+  // or a company re-asking just inside it can still fall between two mails.
+  await h.asAdmin();
+  assert.equal((await call(db,
+    "select private.sc19_auto_free_refusal_window() < interval '1 hour' v"))[0].v, true);
+});
+
 test('a registry refusal and an outage are both recorded, under their own op label', async t => {
   const { db, h, a } = await ready(t);
   await h.asUser(users.owner);

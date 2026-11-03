@@ -346,6 +346,33 @@ create function private.sc19_auto_free_cooldown()
 returns interval language sql immutable set search_path='' as $$ select interval '5 minutes' $$;
 revoke all on function private.sc19_auto_free_cooldown() from public, anon, authenticated;
 
+-- How long one identical locally-decided refusal suppresses the next identical
+-- audit row for the same (company, NIP, reason).
+--
+-- WHY IT IS BOUNDED AT ALL (review finding, bot 2026-11-03). The suppression was
+-- written as "once per (company, NIP, reason), ever", so that a company clicking
+-- the form repeatedly could not inflate the audit table. But the operator's queue
+-- in the daily summary is derived from exactly these rows, over the LAST DAY
+-- (public.sc19_daily_digest). With an unbounded suppression, a company that asked
+-- on Monday, was not dealt with, and asked again on Wednesday wrote no new row —
+-- so from Tuesday evening onwards it was in no summary at all, while still
+-- waiting. The protection against a cluttered audit was quietly deleting real
+-- requests from the one number the owner acts on. The same held for a repeated
+-- 'NIP_TAKEN' or 'ANOTHER_NIP_TRIED'.
+--
+-- It must therefore be MUCH SHORTER than any window the summary is asked about,
+-- or a company re-asking just inside it can still fall between two summaries.
+-- Minutes against a day leaves three orders of magnitude of headroom, and a
+-- company hammering the form still writes at most one row per reason per
+-- interval, which is all the audit protection was ever for. Kept separate from
+-- private.sc19_auto_free_cooldown() on purpose even though the two are equal
+-- today: the cooldown spaces out REGISTRY CALLS and may be retuned for the
+-- registry's sake, which must not silently change what the owner sees in his
+-- mail.
+create function private.sc19_auto_free_refusal_window()
+returns interval language sql immutable set search_path='' as $$ select interval '5 minutes' $$;
+revoke all on function private.sc19_auto_free_refusal_window() from public, anon, authenticated;
+
 -- The audit codes of refusals decided HERE, before the Ministry of Finance
 -- registry was contacted: they spent none of the public daily quota, so they
 -- neither start a cooldown nor claim the one-NIP-per-account slot. One place, so
@@ -445,8 +472,10 @@ revoke all on function private.sc19_auto_free_other_nip_tried(uuid,text) from pu
 -- never spends a call against the public registry's low daily quota, and so the
 -- refusal is recorded where the operator can see it.
 --
--- The refusal row is written once per (company, NIP, reason), so repeated
--- submissions cannot inflate the audit table.
+-- The refusal row is written once per (company, NIP, reason) PER REFUSAL WINDOW,
+-- so repeated submissions cannot inflate the audit table while a company that
+-- asks again a day later is still a fresh request the operator must see. See
+-- private.sc19_auto_free_refusal_window() for why the window is bounded.
 --
 -- COOLDOWN (review finding, bot 2026-11-03). Everything above stops a SECOND
 -- NIP; nothing stopped the SAME NIP being resubmitted over and over after the
@@ -579,8 +608,14 @@ begin
     return query select true, null::text;
     return;
   end if;
+  -- One row per (company, NIP, reason) per refusal window, not one for ever:
+  -- the operator's queue in the daily summary is built from these rows over the
+  -- last day, so a suppression that never ages out hides a company that asked
+  -- again days later and is still waiting. See
+  -- private.sc19_auto_free_refusal_window().
   if not exists (select 1 from private.sc19_trial_auto_checks c
-    where c.company_id=target_company and c.nip=normalized and c.error_code=refusal) then
+    where c.company_id=target_company and c.nip=normalized and c.error_code=refusal
+      and c.checked_at > now() - private.sc19_auto_free_refusal_window()) then
     insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code)
       values(target_company,normalized,'refused',refusal);
   end if;
