@@ -31,6 +31,11 @@ export function sc19PackageSizesFromRows(
   return { FREE: free, PRESELEKCJA: preselection };
 }
 
+/**
+ * Both scopes at once, for surfaces that render FREE and PRESELEKCJA together.
+ * The marketing page now renders each count through sc19AnalysisScope, so this
+ * stays as the shared contract for the billing surfaces and its own tests.
+ */
 export function sc19OfferScopes(sizes: Sc19PackageSizes | null) {
   if (!sizes) {
     return {

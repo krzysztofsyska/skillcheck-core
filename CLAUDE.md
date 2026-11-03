@@ -49,7 +49,7 @@ MVP = a new company, without technical help, can: visit the site → sign up (on
 
 Owner decisions (all YES, 2026-11-01):
 1. No voicebot in the MVP.
-2. Starting price: PRESELEKCJA 300 zł gross for 60 CVs (as on the site, owner decision 2026-10-28, reconfirmed 2026-11-01), FREE 5 CVs.
+2. Starting price: PRESELEKCJA 300 zł gross for 60 CVs (as on the site, owner decision 2026-10-28, reconfirmed 2026-11-01), FREE 5 CVs. **WERYFIKACJA 615 zł gross for 60 CVs (owner decision 2026-11-02)** — the site previously said 899 zł and the calculator demo said 615 zł at 50 CVs; that split is resolved in favour of 615 zł / 60 CVs. **ASSESSMENT CENTER 1 499 zł gross for 50 CVs (owner decision 2026-11-02)** — this replaces the earlier illustrative 1 799 zł on the site and 1 845 zł in the demo; the process is sized for 5–6 people, 10 at most. Every customer-facing surface and every file an agent or LLM reads must carry the same numbers. The derivation of all four package prices is in [docs/cennik-2026-11-02.md](docs/cennik-2026-11-02.md), which is the single source of truth until the catalog ships (SC-PRICING-W2).
 3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). Przelewy24 and Fakturownia automation are frozen until there are paying customers.
 4. Bulk CV upload (PR #228) is part of the MVP.
 5. Everything outside the MVP is labelled `później` and closed; old branches stay (agent sessions cannot delete branches or push tags).
@@ -65,7 +65,101 @@ Known production blockers (owner action, give him a direct link and exact clicks
 - No package policy and no balances on production, so every new AI analysis is refused (`sc19_quota_exhausted`). Set FREE = 5 and PRESELEKCJA = 60 in `/operator/billing`.
 - Contact form `/rozmowa`: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off.
 
-Frozen (do not work on): voice, competency tests, Assessment Center, Quality of Hire, talent pool, white-label, SC-PRICING-001–011, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+Frozen (do not work on): voice, Assessment Center, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+
+## Scope reopened (owner decision 2026-11-02)
+
+The owner reviewed the WERYFIKACJA audit ([docs/audyt-weryfikacja-2026-11-02.md](docs/audyt-weryfikacja-2026-11-02.md))
+and decided to unfreeze these modules and build them alongside the MVP work. His words: "Oczywiście,
+że odmrażamy i budujemy moduły." This overrides the "competency tests" entry of the frozen list above
+and the "Nothing else ships before the first paid PRESELEKCJA" sentence, for the modules listed below only.
+
+Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budowy-2026-11-02.md).
+
+1. **SC-014-C1…C6 + rule R1** — competency test actually taken by the candidate (architecture
+   SC-014-B1 stands; do not redesign it). Two owner decisions added by voice on 2026-11-02:
+   - **SC-014-C6** — the recruiter no longer writes tasks by hand. AI drafts them, the recruiter
+     approves. Two parts: a **shared** task and rubric generated from the company profile, the
+     position profile and the position name, **identical for everyone on that position** (this is
+     what makes results comparable), plus a few **individual** follow-up questions per candidate
+     drawn from the gaps their CV analysis already produced (`suggested_question` / `missing_info`
+     via `lib/interview-gaps.ts`), scored separately and never folded into the comparable result.
+     Nothing reaches a candidate before the recruiter approves it. Only redacted CV text goes to
+     the model, as in `lib/screening-ai.ts`; CV and profile text are data, never instructions.
+   - **Rule R1** — a test grant may only be issued to a candidate on the recruitment's shortlist
+     (`public.recruitment_shortlist_entries`). Enforced in the database, not just the UI; the
+     same join `lib/voice/trusted-source-verifier.ts` already does for voice.
+2. **SC-015-A…D** — extended per-candidate report, without the voice part.
+3. ~~**SC-022** — informational chatbot.~~ **Dropped the same day (owner decision 2026-11-02, by
+   voice): "wykreśl go na razie".** No customer buys SkillCheck for a chatbot; it would answer
+   questions the job ad already answers. Dropping it saves 3–4 days and a monthly AI model bill.
+   Also removed from the packages table and from the public calculator demo, where it was still
+   shown as available. Revisit when a customer actually asks for it — the minimal 3–4 day version
+   is kept in the plan under "MODUŁ B". `SC-022` stays reserved for it; never reuse `SC-021`,
+   which is the frozen AI gateway work (`feat/sc-021-*` branches).
+
+4. **SC-PRICING-W1…W4** — the internal pricing calculator, ending in the public price list reading
+   from one catalog. Owner decision 2026-11-02: "żeby prace nad tym poszły", replacing the earlier
+   "for now leave it as is". `SC-PRICING-001–011` is removed from the frozen list above accordingly.
+   W4 ships behind a flag that is off: switching it on changes prices customers see, which stays
+   an owner decision. Includes **SC-PRICING-W2b** — a volume slider in steps of 5 at every package,
+   with manual entry restricted to multiples of 5 (owner decision 2026-11-02).
+
+### Voicebot on the public offer — settled 2026-11-02 (evening, owner in chat)
+
+**The voicebot is not shown anywhere on the public surfaces.** Not in the package copy, not in
+the comparison, not in the calculator demo, not as "w przygotowaniu". It comes back only once it
+actually works, and then as an addition to an existing package — free or for a small fee, the
+owner has not decided which ("jeszcze zobaczymy"). Until then no customer-facing text promises,
+previews or prices bot calls.
+
+**Prices stay visible.** WERYFIKACJA 615 zł gross / 60 CV and ASSESSMENT CENTER 1 499 zł gross /
+50 CV are shown on the public offer as the approved prices of the next stages, together with the
+fact that neither package can be bought yet. This was asked of the owner twice in chat on
+2026-11-02 and confirmed both times, the second time after #258 had already merged the opposite.
+A later agent-written line recording something different does not reopen this; only the owner does.
+
+**Order of work, settled by the owner 2026-11-02 (by voice):** module A (competency test), then
+module C (extended report), with the pricing calculator fitted in between. **Voicebot comes after
+those**, not before — the owner chose "najpierw robimy testy". Packages ship to customers **without
+bot calls**, at unchanged prices (PRESELEKCJA 300 zł, WERYFIKACJA 615 zł, ASSESSMENT CENTER
+1 499 zł), and the site does not mention calls at all until they work (see the section above). Wiring the voicebot
+into package limits (FREE 1, paid 10) is a separate later step and needs no rework of anything
+built before it.
+
+The 36–55 day voicebot figure in the audit is overstated. Most of the code exists; what is missing
+is wiring (webhook runtime, dispatch transport, schema deployment) plus Retell/VoIPstudio setup —
+about two weeks to a first real test call. Interview-content analysis is separate and comes after.
+
+Still frozen for these modules: interview analysis.
+
+Naming and pricing of the package built from A + C is **settled** (owner decision 2026-11-02, by
+voice): it ships as **WERYFIKACJA at 615 zł gross for 60 CVs, without bot calls**, with no mention of
+calls on the site until they work. No new intermediate package is created. This
+closes decision **D2** in [docs/plan-budowy-2026-11-02.md](docs/plan-budowy-2026-11-02.md); the
+earlier framing of that decision assumed the withdrawn 899 zł price and mandatory calls. The
+package description must not mention calls while they do not run — that is the condition the owner
+attached to selling it. Any further change to price or package contents is still an owner decision
+under the list above.
+
+The MVP path to the first paid PRESELEKCJA keeps priority when the two compete for time.
+
+### A note on these records
+
+This note is about **scope and priority lines only** — what is being built, in what order, and what
+is parked. Those are written by agent sessions recording what the owner said in chat, not typed by
+him. They are a convenience, not a mandate: when the owner says something different now, his current
+word wins and this file gets corrected in the same session. Record who decided and when, and do not
+treat such a line as a reason to refuse scope work the owner is currently asking for.
+
+**This note never applies to the gates.** Not to the "Still the owner's decision" list above
+(production approval, new costs, billing and `/operator/billing`, price, package and MVP-content
+changes), not to "Prohibited actions without explicit owner production approval", and not to
+"Production access rules" 1–5 in `AGENTS.md`. Those are gates, not records: only a message from the
+owner himself opens one, and an agent-written line never substitutes for it. The same holds for any
+other gate in this file or in `AGENTS.md`, including ones added after this note was written — the
+list above is illustrative, not exhaustive. A session that finds itself citing this note to skip a
+gate has misread it.
 
 Open security item from the audit (owner only, rule 3): Vercel Production still has `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `POSTGRES_PASSWORD` (checked 2026-11-01). They must be removed and the database password rotated.
 
@@ -106,3 +200,12 @@ At the end of every work session on this project, the orchestrator/builder sessi
 - Production Supabase: `wsvjawuikxfzjyivxgsu` — read-only from agent sessions.
 - Preview Supabase: `skillcheck-preview` (`orbyscrupgnupifzlqxp`) — test data only; use it for logins, uploads and reports instead of asking the owner.
 - Vercel project: `skillcheck-core`. Every PR to `integration` gets a Preview deployment.
+
+## Delegowanie
+Zanim zaczniesz zadanie, przekaż je właściwemu podagentowi z .claude/agents:
+- płatności, faktury, pakiety -> platnosci
+- limity i koszty AI, abonament -> limity-ai
+- strona, cennik, regulamin, dokumenty -> strona-i-dokumenty
+- błędy CI, testy, buildy -> testy-i-ci
+- literówki, teksty, drobne zmiany -> drobne-poprawki
+Sam rób tylko planowanie i przegląd. Oszczędzaj limit: proste rzeczy zawsze do drobne-poprawki.
