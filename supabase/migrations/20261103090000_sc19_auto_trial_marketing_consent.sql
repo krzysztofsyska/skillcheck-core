@@ -278,6 +278,15 @@ revoke all on function private.rotate_sc19_trial_auto_secret(text) from public, 
 -- ---------------------------------------------------------------------------
 -- Part A: automatic FREE
 
+-- How long a company waits after a registry-reaching attempt that did not grant,
+-- before the automatic path will spend another call on it. One place, so the
+-- precheck and the test read the same number. Five minutes: long enough that a
+-- frustrated retry loop cannot drain the daily quota, short enough that nobody
+-- gives up on a transient outage.
+create function private.sc19_auto_free_cooldown()
+returns interval language sql immutable set search_path='' as $$ select interval '5 minutes' $$;
+revoke all on function private.sc19_auto_free_cooldown() from public, anon, authenticated;
+
 -- One account may only ever use the automatic path for ONE NIP. A NIP is
 -- public, so without this an account could walk a list of other companies' NIPs
 -- and occupy their single FREE one after another.
@@ -289,15 +298,6 @@ revoke all on function private.rotate_sc19_trial_auto_secret(text) from public, 
 -- too-soon retry must not lock an account out of the one NIP it is entitled to
 -- check. Once the slot is taken, that NIP stays retryable for ever — an outage
 -- must not burn the attempt — and every other NIP is refused.
--- How long a company waits after a registry-reaching attempt that did not grant,
--- before the automatic path will spend another call on it. One place, so the
--- precheck and the test read the same number. Five minutes: long enough that a
--- frustrated retry loop cannot drain the daily quota, short enough that nobody
--- gives up on a transient outage.
-create function private.sc19_auto_free_cooldown()
-returns interval language sql immutable set search_path='' as $$ select interval '5 minutes' $$;
-revoke all on function private.sc19_auto_free_cooldown() from public, anon, authenticated;
-
 create function private.sc19_auto_free_other_nip_tried(target_company uuid, normalized text)
 returns boolean language plpgsql stable security definer set search_path='' as $$
 declare claimed text;
