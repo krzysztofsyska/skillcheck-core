@@ -7,12 +7,19 @@ const pln=(v:number)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'
 // Przelewy24 is wired up in a separate task. Until then the checkout screen may
 // point at a hosted payment page configured by the owner; an empty or non-http
 // value keeps the button disabled instead of linking somewhere unexpected.
-const p24CheckoutUrl=()=>{
+const p24CheckoutUrl=(companyId:string)=>{
   const raw=(typeof process==='undefined'?'':process.env.NEXT_PUBLIC_P24_CHECKOUT_URL ?? '').trim();
   if(!raw)return '';
-  try{const url=new URL(raw);return url.protocol==='https:'?url.toString():'';}catch{return '';}
+  try{
+    const url=new URL(raw);
+    if(url.protocol!=='https:')return '';
+    // No server-side order exists in this mode, so the payment must carry the
+    // company reference the operator reconciles it against before granting credits.
+    url.searchParams.set('ref',companyId);
+    return url.toString();
+  }catch{return '';}
 };
-export default function Checkout({companyId}: {companyId:string}) {
+export default function Checkout({companyId,fallbackCredits}: {companyId:string;fallbackCredits:number|null}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
@@ -105,16 +112,20 @@ export default function Checkout({companyId}: {companyId:string}) {
           {busy?'Przetwarzam…':`Zamawiam i płacę ${pln(offer.amountMinor)}`}</button></>}
     </> : fallback ? <section aria-label="Podsumowanie pakietu PRESELEKCJA">
       <h2>{preselekcjaOffer.grossPln} zł brutto</h2>
-      <p>{preselekcjaOffer.analyses} analiz CV • jednorazowo • {preselekcjaOffer.netPln} zł netto + 23% VAT</p>
+      {fallbackCredits===null
+        ? <p>Liczba analiz CV zgodna z zatwierdzoną polityką pakietów • jednorazowo • {preselekcjaOffer.netPln} zł netto + 23% VAT</p>
+        : <p>{fallbackCredits} analiz CV • jednorazowo • {preselekcjaOffer.netPln} zł netto + 23% VAT</p>}
       <p>Analizy ważne {preselekcjaOffer.validityMonths} miesiące od dnia przyznania. Wyniki weryfikuje rekruter; SkillCheck nie podejmuje decyzji o zatrudnieniu.</p>
       <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={fallbackAccepted}
         onChange={e=>setFallbackAccepted(e.target.checked)}/> Akceptuję <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> i potwierdzam zapoznanie się z <a href="/polityka-prywatnosci" target="_blank" rel="noopener">Polityką prywatności</a>.</label>
-      {p24CheckoutUrl()
-        ? <a className="button" href={fallbackAccepted?p24CheckoutUrl():undefined} aria-disabled={!fallbackAccepted}
+      {fallbackCredits!==null&&p24CheckoutUrl(companyId)
+        ? <a className="button" href={fallbackAccepted?p24CheckoutUrl(companyId):undefined} aria-disabled={!fallbackAccepted}
             rel="noopener" onClick={e=>{if(!fallbackAccepted)e.preventDefault();}}>Przejdź do płatności</a>
         : <><button type="button" disabled>Przejdź do płatności</button>
-          <p role="status">Płatność Przelewy24 — konfiguracja w toku</p></>}
-      <p>Analizy przyznajemy po potwierdzeniu płatności. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>
+          <p role="status">{fallbackCredits===null
+            ? 'Zakup chwilowo niedostępny — zatwierdzona liczba analiz jest nieosiągalna.'
+            : 'Płatność Przelewy24 — konfiguracja w toku'}</p></>}
+      <p>W tym trybie zamówienie nie powstaje automatycznie: analizy przyznaje operator po potwierdzeniu wpłaty. Podaj przy płatności numer referencyjny firmy <strong>{companyId}</strong>. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>
     </section> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
     {message&&<p role="status" aria-live="polite">{message}</p>}
     <button type="button" disabled={busy||loading} onClick={()=>{setMessage('');return loadOffers();}}>Odśwież oferty</button>

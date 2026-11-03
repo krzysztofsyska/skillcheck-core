@@ -133,6 +133,8 @@ test('the purchase route resolves server-side and never renders', () => {
   const source = read('app/kup/preselekcja/page.tsx');
   assert.match(source, /auth\.getUser\s*\(/);
   assert.match(source, /redirect\(buyPreselekcjaTarget\(/);
+  // Only an owner may order, so an owned company wins over one the user only recruits for.
+  assert.match(source, /company\.owner_id === user\.id/);
 });
 
 test('the checkout fallback shows the approved package, consent and the payment button', () => {
@@ -140,7 +142,8 @@ test('the checkout fallback shows the approved package, consent and the payment 
   // No dead end when the offers API is unavailable.
   assert.equal(source.includes('Płatności nie są jeszcze dostępne'), false);
   assert.match(source, /setFallback\(true\)/);
-  assert.match(source, /preselekcjaOffer\.analyses/);
+  // The package size now comes from the server as the active policy quota.
+  assert.match(read('app/dashboard/[companyId]/billing/checkout/page.tsx'), /preselekcjaOffer\.analyses/);
   assert.match(source, /preselekcjaOffer\.grossPln/);
   assert.match(source, /preselekcjaOffer\.netPln/);
   assert.match(source, /preselekcjaOffer\.validityMonths/);
@@ -149,8 +152,15 @@ test('the checkout fallback shows the approved package, consent and the payment 
   assert.match(source, /Przejdź do płatności/);
   // An empty or non-https env keeps the button disabled with the configuration note.
   assert.match(source, /NEXT_PUBLIC_P24_CHECKOUT_URL/);
-  assert.match(source, /url\.protocol==='https:'/);
+  assert.match(source, /url\.protocol!=='https:'/);
   assert.match(source, /Płatność Przelewy24 — konfiguracja w toku/);
+  // No server-side order exists in this mode: the payment carries the company
+  // reference and the screen never promises an automatic credit grant.
+  assert.match(source, /searchParams\.set\('ref',companyId\)/);
+  assert.match(source, /analizy przyznaje operator po potwierdzeniu wpłaty/);
+  // The promised package size follows the active policy, not a hardcoded number.
+  assert.match(source, /fallbackCredits/);
+  assert.match(read('app/dashboard/[companyId]/billing/checkout/page.tsx'), /loadSc19PackageSizes\(client\)/);
 });
 
 test('the Przelewy24 API integration is untouched and the env var is documented', () => {

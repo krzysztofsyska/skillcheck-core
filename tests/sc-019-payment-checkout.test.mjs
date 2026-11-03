@@ -20,7 +20,7 @@ const requestKey = o => `sc19:request:${companyId}:${o.id}:${o.termsRevision}`;
 const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
-async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false, p24CheckoutUrl='' } = {}) {
+async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false, p24CheckoutUrl='', fallbackCredits=60 } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
@@ -75,7 +75,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   runInNewContext(compiled, context);
   function render() {
     cursor = 0;
-    tree = context.exports.default({ companyId });
+    tree = context.exports.default({ companyId, fallbackCredits });
     for (const effect of effects.splice(0)) effect();
     return tree;
   }
@@ -252,7 +252,25 @@ test('a configured https address opens only after the terms are accepted', async
   const before = h.find('a', 'Przejdź do płatności');
   assert.ok(before); assert.equal(before.props.href, undefined);
   h.accept();
-  assert.equal(h.find('a', 'Przejdź do płatności').props.href, url);
+  // No server-side order exists in this mode, so the payment must carry the
+  // company reference the operator reconciles it against.
+  assert.equal(h.find('a', 'Przejdź do płatności').props.href, `${url}?ref=${companyId}`);
+  assert.ok(h.find('strong', companyId), 'the reconciliation reference is shown to the customer');
+  assert.ok(h.find('p', 'operator po potwierdzeniu wpłaty'), 'no automatic credit grant is promised');
+});
+
+test('an unavailable approved quota blocks the fallback purchase instead of promising a number', async t => {
+  const h = await harness({ offers: offersDown, p24CheckoutUrl: 'https://pay.fixture.invalid/x', fallbackCredits: null });
+  t.after(h.close);
+  assert.equal(h.find('a', 'Przejdź do płatności'), undefined);
+  assert.equal(h.find('button', 'Przejdź do płatności').props.disabled, true);
+  assert.ok(h.find('p', 'zgodna z zatwierdzoną polityką pakietów'));
+});
+
+test('the fallback shows the active policy quota, not a hardcoded one', async t => {
+  const h = await harness({ offers: offersDown, fallbackCredits: 45 });
+  t.after(h.close);
+  assert.ok(h.find('p', '45'), 'live policy quota shown');
 });
 
 test('a non-https or malformed payment address is never linked', async t => {
