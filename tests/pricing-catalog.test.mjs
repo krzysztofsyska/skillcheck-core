@@ -9,9 +9,10 @@ import { preselekcjaOffer, freeOffer } from '../lib/preselekcja-offer.ts';
 
 // SC-PRICING-W2 — katalog cen jako jedno źródło prawdy.
 // Audyt (docs/audyt-zrodel-cennika-2026-11-03.md) wykazał pięć miejsc z tymi
-// samymi liczbami i test pilnujący tylko dwóch z nich. Ten plik domyka lukę:
-// katalog musi zgadzać się z dokumentem cennika, ze stroną i z kalkulatorem
-// wewnętrznym, inaczej zmiana ceny w jednym miejscu przejdzie niezauważona.
+// samymi liczbami. Cztery z nich pilnuje już tests/pricing-cv-pool.test.mjs
+// (dokument cennika, strona, kalkulator publiczny i kalkulator wewnętrzny).
+// Ten plik dopina do nich katalog, żeby nowe źródło nie stało się szóstą kopią
+// żyjącą własnym życiem.
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const migration = read('supabase/migrations/20261104080000_pricing_catalog.sql');
@@ -78,9 +79,11 @@ test('dodatek pojawia się klientowi dopiero po wycenie i oznaczeniu jako gotowy
     'dodatki są w katalogu, tylko niewidoczne');
   const version = (await db.query('select id from pricing.catalog_versions')).rows[0].id;
   // Gotowy bez ceny jest niemożliwy: nie da się wystawić klientowi pozycji za 0 zł.
+  // Kod musi przejść walidację formatu, inaczej odrzuciłoby go inne ograniczenie
+  // i ten test nie pilnowałby niczego.
   await assert.rejects(db.query(
-    "insert into pricing.addon_options(version_id,code,name,unit,gross_minor,sellable) values($1,'x','X','szt',0,true)",
-    [version]));
+    "insert into pricing.addon_options(version_id,code,name,unit,gross_minor,sellable) values($1,'zero_rate','X','szt',0,true)",
+    [version]), e => e.constraint === 'addon_options_check');
   // Wyceniony i oznaczony jako gotowy — i dopiero wtedy widoczny.
   await db.query("update pricing.addon_options set gross_minor=5000, sellable=true where code='skill_test'");
   const visible = (await db.query('select * from public.pricing_published_addons()')).rows;
@@ -101,9 +104,20 @@ test('klient widzi wyłącznie wersję opublikowaną, i tylko jedną', async () 
     'cena ze szkicu nie trafia do klienta');
   // Druga opublikowana wersja naraz jest niemożliwa.
   await assert.rejects(db.query("update pricing.catalog_versions set status='PUBLISHED',approved=true,published_at=now() where id=$1", [draft]));
-  // Publikacja wymaga akceptacji.
-  await assert.rejects(db.query("insert into pricing.catalog_versions(status,approved,vat_basis_points,published_at) values('PUBLISHED',false,2300,now())"));
-  assert.ok(published);
+  // Publikacja wymaga akceptacji. Najpierw zdejmujemy opublikowaną wersję, żeby
+  // odrzucenie pochodziło z bramki akceptacji, a nie z unikalności publikacji.
+  await db.query("update pricing.catalog_versions set status='SUPERSEDED',published_at=null where id=$1", [published]);
+  await assert.rejects(
+    db.query("insert into pricing.catalog_versions(status,approved,vat_basis_points,published_at) values('PUBLISHED',false,2300,now())"),
+    e => e.constraint === 'catalog_versions_check');
+});
+
+test('pula CV nie może być mniejsza od tej zawartej w pakiecie', async () => {
+  const db = await database();
+  const version = (await db.query('select id from pricing.catalog_versions').then(r => r)).rows[0].id;
+  await assert.rejects(db.query(
+    "insert into pricing.package_prices(version_id,package_code,gross_minor,cv_included,cv_max) values($1,'WERYFIKACJA',61500,60,5)",
+    [version]), e => e.constraint === 'package_prices_check');
 });
 
 test('katalog nie przechowuje kosztów ani marż', async () => {

@@ -51,16 +51,22 @@ nie może być źródłem dla strony, dopóki mieszka tylko w przeglądarce.
 WERYFIKACJA i ASSESSMENT CENTER żyją wyłącznie w kodzie i dokumencie jako „kolejne etapy".
 Katalog z W2 musi umieć wyrazić wszystkie cztery, zanim strona zacznie z niego czytać.
 
-**R4. Test spójności pokrywa dwa źródła z pięciu.** `tests/marketing-http.test.mjs` przypina
-liczby z kalkulatora publicznego (3) do `lib/preselekcja-offer.ts` (2). **Nie pilnuje**
-kalkulatora wewnętrznego (1), dokumentu (4) ani bazy (5). Zmiana ceny w bazie albo w kalkulatorze
-wewnętrznym nie wywróci żadnego testu — przejdzie niezauważona.
+**R4. Test spójności pokrywa cztery źródła z pięciu; niepilnowana zostaje baza.**
+`tests/marketing-http.test.mjs` przypina liczby z kalkulatora publicznego (3) do
+`lib/preselekcja-offer.ts` (2), a `tests/pricing-cv-pool.test.mjs` pilnuje dodatkowo dokumentu
+cennika (4) i kalkulatora wewnętrznego (1) — sprawdzone zmianą ceny WERYFIKACJI w `defaultConfig()`,
+która ten test wywraca. **Niepilnowana zostaje baza (5)**: polityka pakietów i oferta zakupu mogą
+rozjechać się z pozostałymi czterema źródłami i żaden test tego nie wyłapie. To jest realna luka,
+którą ma domknąć katalog z W2.
 
 **R5. Dodatki istnieją tylko w kalkulatorze wewnętrznym i mają zerowe stawki.** 20 pozycji
 (test kompetencji, zadanie/case study, konsultacja ekspercka, konto użytkownika, raport, stanowisko,
 e-mail, SMS, strona OCR, zadanie generowane przez AI, manualny review CV, priorytetowe SLA, godziny
 wsparcia, integracja ATS/API/SSO, branding, lokalizacja, umowa indywidualna, talent pool, quality of
-hire, rozmowa AI). Wszystkie mają `unitGrossMinor = 0` i `unitCostMinor = 0`. Żadne inne miejsce
+hire, rozmowa AI). Wszystkie mają `unitGrossMinor = 0` i `unitCostMinor = 0`. Rozmowa AI jest
+osobnym przypadkiem: `disabledEverywhere(...)` wyłącza ją we wszystkich pakietach, bo voicebot nie
+działa (decyzja właściciela 2026-11-02). Do katalogu wchodzi więc 19 pozycji, bez rozmowy AI, i nie
+należy jej tam dodawać, dopóki voicebot nie zacznie działać. Żadne inne miejsce
 w systemie o nich nie wie. To są właśnie „elementy do wyceny", o których mówił właściciel —
 po akceptacji mają trafiać na stronę jako wybór klienta (SC-PRICING-W3/W4).
 

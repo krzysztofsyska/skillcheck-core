@@ -52,7 +52,9 @@ create table pricing.package_prices (
   -- Dopłata za CV ponad pulę, brutto. 0 oznacza pakiet sprzedawany w całości.
   overage_gross_per_cv_minor integer not null default 0 check (overage_gross_per_cv_minor between 0 and 100000000),
   -- Czy pakiet można dziś kupić. Etap zatwierdzony cenowo, ale niegotowy do
-  -- realizacji, ma cenę w katalogu i `sellable = false`.
+  -- realizacji, ma cenę w katalogu i `sellable = false`. UWAGA: pakiet może być
+  -- gotowy przy cenie 0 — tak jest FREE. Dodatki mają regułę odwrotną (gotowy
+  -- musi być wyceniony), więc nie przenoś jej tutaj.
   sellable boolean not null default false,
   primary key (version_id, package_code),
   check (cv_max >= cv_included)
