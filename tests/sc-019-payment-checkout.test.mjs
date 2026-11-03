@@ -7,7 +7,9 @@ import ts from 'typescript';
 
 // Exercise the shipped component and its event handlers with deterministic
 // browser I/O. This is a component-contract test, not a browser/processor E2E.
-const require = createRequire(import.meta.url);
+// Resolve the component's own relative imports from its real directory, so the
+// shipped shared net/VAT module is exercised rather than a test double.
+const require = createRequire(new URL('../app/dashboard/[companyId]/billing/checkout/checkout.tsx', import.meta.url));
 const source = await readFile(new URL('../app/dashboard/[companyId]/billing/checkout/checkout.tsx', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: {
   jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
@@ -20,7 +22,8 @@ const requestKey = o => `sc19:request:${companyId}:${o.id}:${o.termsRevision}`;
 const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
-async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false } = {}) {
+async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false,
+  checkoutAvailable = true, offersResponse } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
@@ -43,7 +46,8 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   };
   const context = {
     exports: {}, Intl, Date:clientNow===undefined?Date:class extends Date {static now(){return clientNow;}}, AbortController,
-    require(name) { return name === 'react' ? react : require(name); },
+    // Node resolves a TypeScript source only with its extension; Next adds it.
+    require(name) { return name === 'react' ? react : require(name.startsWith('.') ? name + '.ts' : name); },
     crypto: { randomUUID() { return `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`; } },
     sessionStorage: {
       getItem: key => {if(storageUnavailable)throw Error('blocked');return storage.get(key) ?? null;},
@@ -52,7 +56,11 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
     },
     window: { location: { assign: url => redirects.push(url) } },
     async fetch(url, options) {
-      if (url.startsWith('/api/billing/offers?')) return ok({ offers:typeof offers==='function'?offers(++offerReads):offers });
+      if (url.startsWith('/api/billing/offers?')) {
+        offerReads++;
+        if (offersResponse) return offersResponse(offerReads);
+        return ok({ checkoutAvailable, offers:typeof offers==='function'?offers(offerReads):offers });
+      }
       if (url === '/api/billing/checkout') {
         const input = JSON.parse(options.body);
         posts.push(input);
@@ -208,4 +216,85 @@ test('conflicting unresolved purchase is explained without redirect or automatic
  const h=await harness({checkout:async()=>({ok:false,json:async()=>({error:'SC19_PAYMENT_PURCHASE_PENDING'})})});
  t.after(h.close);h.accept();await h.click('Zamawiam');
  assert.equal(h.posts.length,1);assert.deepEqual(h.redirects,[]);assert.ok(h.find('p','nierozliczone zamówienie'));
+});
+
+test('offers load without a provider: full summary with net/VAT/gross and a disabled pay button',async t=>{
+ const h=await harness({checkoutAvailable:false,checkout:async()=>{throw Error('must not POST while checkout is unavailable');}});
+ t.after(h.close);
+ const amounts=h.find('table');
+ assert.ok(amounts,'the order summary is rendered');
+ const rows=JSON.stringify(amounts);
+ // 12345 gross = 10037 net + 2308 VAT at 23%; gross is never recomputed.
+ for(const expected of ['Pakiet','PRESELEKCJA','Liczba analiz CV','100,37','23,08','123,45'])
+  assert.ok(rows.includes(expected),`summary is missing ${expected}`);
+ assert.ok(h.find('details'),'the terms text is rendered');
+ assert.ok(h.find('input'),'the terms-acceptance checkbox is rendered');
+ const button=h.find('button','Zamawiam');
+ assert.ok(button,'the pay button is rendered');
+ assert.equal(button.props.disabled,true,'the pay button is disabled while payment is being activated');
+ h.accept();
+ assert.equal(h.find('button','Zamawiam').props.disabled,true,'accepting the terms does not enable it');
+ await h.find('button','Zamawiam').props.onClick();
+ assert.equal(h.posts.length,0,'no checkout is ever posted while payment is unavailable');
+ assert.deepEqual(h.redirects,[]);
+ assert.ok(h.find('p','w trakcie uruchamiania'),'a clear Polish explanation is shown');
+});
+
+test('a missing checkoutAvailable flag is treated as unavailable and never as a working payment',async t=>{
+ const h=await harness({offersResponse:()=>ok({offers:[offer()]}),checkout:async()=>{throw Error('must not POST');}});
+ t.after(h.close);h.accept();
+ assert.equal(h.find('button','Zamawiam').props.disabled,true);
+ assert.equal(h.posts.length,0);
+});
+
+test('a server that answers SC19_PAYMENTS_DISABLED closes the button without losing the summary',async t=>{
+ const h=await harness({checkout:async()=>({ok:false,json:async()=>({error:'SC19_PAYMENTS_DISABLED'})})});
+ t.after(h.close);h.accept();
+ assert.equal(h.find('button','Zamawiam').props.disabled,false,'the flag said checkout was available');
+ await h.click('Zamawiam');
+ assert.equal(h.posts.length,1);
+ assert.deepEqual(h.redirects,[]);
+ assert.equal(h.find('button','Zamawiam').props.disabled,true);
+ assert.ok(h.find('table'),'the price and summary stay visible');
+ assert.ok(h.find('p','w trakcie uruchamiania'));
+});
+
+// The offer READ itself can be refused: no provider and no catalog, which is what
+// /api/billing/offers answers while SC19_PACKAGES_ENABLED is off. That is not a
+// transport failure, so the page must say payments are being switched on rather
+// than invite a pointless retry, and must never show a priced order form.
+test('an offer read refused with SC19_PAYMENTS_DISABLED is explained, not reported as a load failure',async t=>{
+ const h=await harness({offersResponse:()=>({ok:false,status:503,json:async()=>({error:'SC19_PAYMENTS_DISABLED'})}),
+  checkout:async()=>{throw Error('must not POST');}});
+ t.after(h.close);
+ assert.ok(h.find('p','w trakcie uruchamiania'),'the switching-on explanation is shown');
+ assert.equal(h.find('p','Nie udało się wczytać oferty'),undefined,'not presented as a failed load');
+ assert.equal(h.find('table'),undefined,'no priced order summary without an offer');
+ assert.equal(h.find('button','Zamawiam'),undefined);
+ assert.equal(h.posts.length,0);
+});
+
+test('an offer read that fails for any other reason still asks the visitor to retry',async t=>{
+ const h=await harness({offersResponse:()=>({ok:false,status:503,json:async()=>({error:'SC19_PAYMENT_RETRY'})}),
+  checkout:async()=>{throw Error('must not POST');}});
+ t.after(h.close);
+ assert.ok(h.find('p','Nie udało się wczytać oferty'));
+ assert.equal(h.find('button','Zamawiam'),undefined);
+});
+
+test('an available checkout still renders the breakdown and keeps working',async t=>{
+ const h=await harness({checkout:async()=>ok({orderId:'order-a',status:'awaiting_payment',checkoutUrl:'https://pay.fixture.invalid/a'})});
+ t.after(h.close);
+ assert.ok(JSON.stringify(h.find('table')).includes('123,45'));
+ assert.ok(!h.find('p','w trakcie uruchamiania'));
+ h.accept();await h.click('Zamawiam');
+ assert.deepEqual(h.redirects,['https://pay.fixture.invalid/a']);
+});
+
+test('net and VAT sent by the server are displayed instead of being recomputed in the browser',async t=>{
+ const served={...offer(),amountMinor:30000,netMinor:24390,vatMinor:5610,vatBasisPoints:2300};
+ const h=await harness({offers:[served],checkoutAvailable:false});
+ t.after(h.close);
+ const rows=JSON.stringify(h.find('table'));
+ for(const expected of ['243,90','56,10','300,00'])assert.ok(rows.includes(expected),`missing ${expected}`);
 });
