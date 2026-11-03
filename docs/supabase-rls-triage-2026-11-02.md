@@ -130,9 +130,64 @@ już istnieje i jest używany przez `private.cv_bulk_item_for_write`.
 create policy cv_bulk_items_company_read on private.cv_bulk_items
   for select to authenticated
   using (private.has_company_access(company_id)
+         -- filtr 1: kandydat samego wiersza
          and (candidate_id is null
-              or not private.erasure_candidate_frozen(candidate_id)));
+              or not private.erasure_candidate_frozen(candidate_id))
+         -- filtr 2: kandydat, do którego należy duplikat (ścieżka duplicate_of_application)
+         and (cv_bulk_items.duplicate_of_application is null
+              or exists (select 1 from public.applications d
+                         where d.id = cv_bulk_items.duplicate_of_application
+                           and (d.candidate_id is null
+                                or not private.erasure_candidate_frozen(d.candidate_id)))));
 ```
+
+`public.cv_bulk_batch_status` ma **dwa** filtry zamrożenia, nie jeden (stan z
+`20261102120000_cv_bulk_erasure_guards.sql:163-165`):
+
+```sql
+left join public.applications d on d.id = i.duplicate_of_application
+where i.batch_id = b.id and (i.candidate_id is null or not private.erasure_candidate_frozen(i.candidate_id))
+  and (d.candidate_id is null or not private.erasure_candidate_frozen(d.candidate_id))
+```
+
+Wiersz duplikatu ma `candidate_id = null` i wiąże się z kandydatem wyłącznie przez
+`duplicate_of_application`. Sam pierwszy filtr przepuszczałby więc duplikat wskazujący na
+zamrożonego kandydata i odsłaniał `file_name` oraz powiązanie z jego zgłoszeniem — dokładnie to,
+co RPC chowa. Pierwsza wersja tej polityki miała tylko filtr 1 (wniosek bezpieczeństwa
+bota na PR #259); drugi filtr powyżej to poprawka.
+
+**Uwaga dla każdego, kto kiedyś doda politykę lub widok bezpośredniego odczytu
+`cv_bulk_items`: musi odwzorować OBA filtry zamrożenia (własnego kandydata wiersza i kandydata
+ścieżki duplikatu), bo pominięcie ścieżki duplikatu odsłania dane, które RPC ukrywa.**
+
+Historia tego warunku w migracjach (sprawdzone): `20261101130000_cv_bulk_intake.sql:648` miał
+tylko filtr 1; `20261101130200_cv_bulk_review_fixes.sql:482-484` dodał `left join` i filtr 2;
+`20261102120000_cv_bulk_erasure_guards.sql:163-165` zachował oba bez zmian. Żadna migracja nie
+modyfikuje go po tej ostatniej (jest ostatnią w katalogu `supabase/migrations`).
+
+Dlaczego filtr 2 jest zapisany jako `exists` w formie **dodatniej**, a nie jako
+`not exists (... frozen ...)`:
+
+- Zachowanie jest takie samo jak `left join` w funkcji. `duplicate_of_application is null` →
+  wiersz przechodzi (w funkcji `d` jest wtedy null, więc `d.candidate_id is null`). Duplikat
+  wskazujący na zgłoszenie z `candidate_id = null` → przechodzi (`d.candidate_id is null`).
+  Duplikat wskazujący na zamrożonego kandydata → ukryty. `erasure_candidate_frozen` zwraca
+  zawsze `true`/`false` (nigdy `null`: to `exists(...) or exists(...) or exists(...)`), więc
+  nie ma różnicy w traktowaniu `null`.
+- Podzapytanie w polityce wykonuje się **z uprawnieniami wołającego, z RLS**, a na
+  `public.applications` działa polityka restrykcyjna `erasure_read_guard`
+  (`20261010194230_candidate_erasure_guards.sql:166`), która **ukrywa** zgłoszenia zamrożonych
+  kandydatów. W formie `not exists (select ... where ... and frozen(...))` zamrożone zgłoszenie
+  byłoby niewidoczne dla podzapytania, `not exists` dałoby `true` i duplikat **przeszedłby**
+  (fail-open, czyli ta sama luka innym torem). Forma dodatnia daje fail-closed: gdy zgłoszenia
+  `d` nie widać (zamrożone, izolacja odtworzeniowa, brak dostępu), `exists` jest fałszem i wiersz
+  jest ukryty. Funkcja `SECURITY DEFINER` RLS-u nie stosuje, więc w skrajnym przypadku polityka
+  ukryje o jeden wiersz więcej niż RPC — w stronę bezpieczną.
+
+Uprawnienia, których ta zmiana wymaga: `authenticated` ma już `SELECT` na `public.applications`
+(`20260930000100_skillcheck_core.sql:184`), więc **nie potrzeba nowego `GRANT`-u na tabelę**.
+Potrzebne jest nadal `EXECUTE` na `private.erasure_candidate_frozen(uuid)` (patrz niżej) —
+nowy warunek wywołuje tę funkcję drugi raz, ale to ta sama decyzja L3, nie dodatkowa.
 
 Warunek `erasure_candidate_frozen` odwzorowuje filtr z `public.cv_bulk_batch_status`, które
 ukrywa wiersze kandydatów zamrożonych przez procedurę usuwania danych (oraz wszystkich
@@ -178,6 +233,14 @@ create policy preselection_groups_company on private.application_preselection_gr
                      where a.id = application_id
                        and not private.erasure_candidate_frozen(a.candidate_id)));
 ```
+
+Ścieżka duplikatu tych dwóch tabel nie dotyczy (sprawdzone): `get_preselection_groups`
+(`20261102100000_cv_bulk_capacity_phone_fix.sql:258-274`) i `get_preselection_group_history`
+(`20261101130000_cv_bulk_intake.sql:706-716`) filtrują wyłącznie po kandydacie zgłoszenia, bo
+wiersze grup i zdarzeń istnieją tylko dla prawdziwych zgłoszeń, a nie dla duplikatów
+(duplikat nie dostaje `application_id`, ma tylko `duplicate_of_application`). Proponowana
+tu polityka odwzorowuje więc funkcje w całości. Warunek `exists (... applications a ...)` jest
+w formie dodatniej, czyli fail-closed także wobec `erasure_read_guard`.
 
 Dla tabeli zdarzeń `application_preselection_group_events` identyczny warunek i **tylko
 `select`** — wpisy powstają wyłącznie przez `public.move_preselection_group` i mają zostać
