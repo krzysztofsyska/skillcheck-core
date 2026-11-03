@@ -6,6 +6,7 @@ import { createClient } from "../../lib/supabase/server";
 import { credentials } from "../../lib/auth-validation";
 import { authCallbackUrl } from "../../lib/auth-url";
 import { hasLegalAcceptance, LEGAL_ACCEPTANCE_REVISION, LEGAL_ACCEPTED_DOCUMENTS, LEGAL_VERSION } from "../../lib/legal";
+import { declaredMarketingConsent, hasMarketingConsent, marketingConsentDeclaration } from "../../lib/marketing-consent";
 
 export async function login(form: FormData) {
   const input = credentials(form);
@@ -26,7 +27,16 @@ export async function register(form: FormData) {
   const { data, error } = await client.auth.signUp({ ...input, options: {
     emailRedirectTo,
     // Server-set record of the accepted Regulamin + DPA + privacy notice + Annex 1 (voice) version.
-    data: { legal_acceptance: { version: LEGAL_VERSION, revision: LEGAL_ACCEPTANCE_REVISION, documents: [...LEGAL_ACCEPTED_DOCUMENTS], accepted_at: new Date().toISOString() } },
+    data: {
+      legal_acceptance: { version: LEGAL_VERSION, revision: LEGAL_ACCEPTANCE_REVISION, documents: [...LEGAL_ACCEPTED_DOCUMENTS], accepted_at: new Date().toISOString() },
+      // SC-CONSENT-001: the optional marketing consent is recorded against a
+      // company, and the company does not exist yet (it is created in
+      // /onboarding, possibly after e-mail confirmation). This snapshot carries
+      // the choice across; createCompany below turns it into the ledger entry.
+      // Only the VERSION is ever read back from here — the stored wording comes
+      // from the database, because user metadata is client-writable.
+      marketing_consent: marketingConsentDeclaration(hasMarketingConsent(form)),
+    },
   } });
   if (error) redirect("/register?message=failed");
   if (data.session) redirect("/onboarding");
@@ -46,6 +56,16 @@ export async function createCompany(form: FormData) {
   if (!name || name.length > 200) redirect("/onboarding?message=invalid");
   const { data: companyId, error } = await client.rpc("ensure_initial_company", { company_name: name });
   if (error) redirect("/onboarding?message=failed");
+  // SC-CONSENT-001: bind the registration-time consent to the new company. A
+  // failure here must not block the company, and nothing is sent anywhere: the
+  // consent is only recorded, and the owner can withdraw it in one click.
+  const consentVersion = declaredMarketingConsent(user.user_metadata);
+  if (consentVersion && typeof companyId === "string") {
+    const { error: consentError } = await client.rpc("marketing_consent_grant", {
+      target_company: companyId, consent_version: consentVersion, consent_source: "registration",
+    });
+    if (consentError) console.warn("marketing_consent_registration_failed", consentError.code ?? "-");
+  }
   // Open the new company's dashboard straight away; fall back to the list for an unexpected value.
   redirect(typeof companyId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId) ? `/dashboard/${companyId}` : "/dashboard");
 }

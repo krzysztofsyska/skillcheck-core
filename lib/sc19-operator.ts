@@ -11,6 +11,7 @@ export const sc19OperatorNotices = {
   policy_saved: 'Liczba analiz w pakiecie zapisana. Dotyczy kolejnych aktywacji i przydziałów.',
   trial_approved: 'Firma zweryfikowana. Właściciel może teraz aktywować FREE w zakładce Pakiety.',
   paid_granted: 'Pakiet PRESELEKCJA przydzielony. Ponowne użycie tego samego numeru rozliczenia nic nie doda.',
+  auto_free_saved: 'Ustawienie automatycznego FREE zapisane. Dotyczy kolejnych aktywacji.',
   invalid: 'Sprawdź dane formularza.',
   invalid_nip: 'NIP jest nieprawidłowy (10 cyfr z poprawną sumą kontrolną).',
   conflict: 'Konflikt: ten NIP jest już przypisany do innej firmy albo firma ma zatwierdzony inny NIP.',

@@ -11,6 +11,11 @@ import { reportDatabaseClient } from './helpers/screening-report-database-client
 import { loadScreeningReport } from '../lib/screening-report-source.ts';
 import { exportScreeningReport } from '../lib/screening-report-export.ts';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
+// The billing action now goes through the automatic-FREE flow. The flow module
+// carries no 'server-only' guard, so the real code runs here; only the thin
+// server adapter is substituted, and with no SC19_TRIAL_AUTO_SECRET set the
+// flow behaves exactly as before: claim, and otherwise manual review.
+import { activateFreeWithWhitelist, trialStore } from '../lib/sc19-trial-auto-flow.ts';
 
 // Synthetic composed integration, NOT a deployed runtime/provider/browser test.
 // Auth transport and provider are test doubles; billing, screening, review,
@@ -23,6 +28,7 @@ function activationAction(access) {
   mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
   const mocks = {
     '../../../../lib/company-access': { companyAccess: access },
+    '../../../../lib/sc19-trial-auto-server': { activateFreeWithWhitelist, trialStore },
     'next/cache': { revalidatePath() {} },
     'next/navigation': { redirect(url) { throw Object.assign(new Error('NEXT_REDIRECT'), { url }); } },
   };

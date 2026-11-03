@@ -7,5 +7,11 @@
       "main": true,
       "release/**": true
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/daily-digest",
+      "schedule": "0 17,18 * * *"
+    }
+  ]
 }

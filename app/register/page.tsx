@@ -2,6 +2,7 @@ import Link from "next/link";
 import { register } from "../auth/actions";
 import { SubmitButton } from "../components/submit-button";
 import { LEGAL_ACCEPTANCE_FIELD, LEGAL_ACCEPTANCE_VALUE } from "../../lib/legal";
+import { MARKETING_CONSENT_FIELD, MARKETING_CONSENT_TEXT, MARKETING_CONSENT_VALUE } from "../../lib/marketing-consent";
 import { SiteFooter } from "../components/marketing/site-footer";
 export default async function Register({ searchParams }: { searchParams: Promise<{ message?: string }> }) {
   const { message } = await searchParams;
@@ -14,6 +15,13 @@ export default async function Register({ searchParams }: { searchParams: Promise
       <small id="password-help">Co najmniej 12 znaków.</small>
       <label className="consent"><input type="checkbox" name={LEGAL_ACCEPTANCE_FIELD} value={LEGAL_ACCEPTANCE_VALUE} required />
         <span>Akceptuję <Link href="/regulamin" target="_blank">Regulamin</Link> wraz z <Link href="/regulamin/umowa-powierzenia" target="_blank">Umową powierzenia przetwarzania danych (DPA)</Link> i <Link href="/regulamin/aneks-rozmowy-glosowe" target="_blank">Aneksem nr 1 (rozmowy głosowe)</Link> oraz potwierdzam zapoznanie się z <Link href="/polityka-prywatnosci" target="_blank">Polityką prywatności</Link>. Działam w imieniu firmy i jestem do tego upoważniony/a.</span></label>
+      {/* SC-CONSENT-001: a SEPARATE, unticked, optional consent. It carries no
+          `required` attribute and is never bundled with the Regulamin above, so
+          it cannot become a condition of registering. The wording below is the
+          text the database stores with the consent event. */}
+      <label className="consent"><input type="checkbox" name={MARKETING_CONSENT_FIELD} value={MARKETING_CONSENT_VALUE} />
+        <span>{MARKETING_CONSENT_TEXT}</span></label>
+      <small>Zgoda na kontakt handlowy jest nieobowiązkowa — konto utworzysz bez jej zaznaczenia.</small>
       <SubmitButton>Utwórz konto</SubmitButton>
     </form><p>Masz już konto? <Link href="/login">Zaloguj się</Link></p>
   </section></main><SiteFooter /></>;

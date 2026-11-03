@@ -432,6 +432,50 @@ export type Database = {
       get_preselection_group_history: { Args: { target_application: string }; Returns: Json };
       cv_ai_usage_stats: { Args: { since_days?: number }; Returns: Json };
       sc19_claim_trial: { Args: { target_company: string; supplied_nip: string }; Returns: number };
+      // SC-FREE-AUTO-001 (20261103090000): automatic FREE from the MF VAT register.
+      sc19_auto_claim_trial: {
+        Args: {
+          target_company: string; supplied_nip: string;
+          mf_request_id: string; mf_status: string; mf_name: string;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
+        Returns: { outcome: 'granted' | 'refused'; available: number | null; reason: string | null }[];
+      };
+      sc19_auto_record_failure: {
+        Args: {
+          target_company: string; supplied_nip: string; failure_code: string;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
+        Returns: undefined;
+      };
+      sc19_operator_set_auto_free: { Args: { enabled: boolean }; Returns: boolean };
+      sc19_operator_auto_free_settings: {
+        Args: Record<PropertyKey, never>;
+        Returns: { auto_free_enabled: boolean; secret_configured: boolean; updated_at: string }[];
+      };
+      sc19_operator_auto_free_grants: {
+        Args: Record<PropertyKey, never>;
+        Returns: { company_id: string; company_name: string; nip: string; granted_at: string; granted_credits: number | null; used_credits: number | null; mf_status: string | null }[];
+      };
+      // SC-CONSENT-001 (20261103090000): consent to commercial contact.
+      marketing_consent_grant: {
+        Args: { target_company: string; consent_version: string; consent_source?: 'registration' | 'company_panel' };
+        Returns: string;
+      };
+      marketing_consent_withdraw: { Args: { target_company: string }; Returns: string };
+      marketing_consent_state: {
+        Args: { target_company: string };
+        Returns: { event: 'granted' | 'withdrawn'; consent_version: string; consent_text: string; occurred_at: string }[];
+      };
+      sc19_operator_marketing_consents: {
+        Args: { search?: string | null };
+        Returns: { company_id: string; event: 'granted' | 'withdrawn'; consent_version: string; occurred_at: string }[];
+      };
+      // SC-DIGEST-001 (20261103090000): counts only, signed, no personal data.
+      sc19_daily_digest: {
+        Args: { window_start: string; window_end: string; request_id: string; issued_at_ms: number; request_signature: string };
+        Returns: { registered: number; auto_free: number; awaiting_manual: number; marketing_consents: number }[];
+      };
       sc19_get_balance: {
         Args: { target_company: string };
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; available: number; free_claimed: boolean }[];

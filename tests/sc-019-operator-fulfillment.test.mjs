@@ -165,7 +165,13 @@ test('rollback drops only the operator functions and keeps recorded approvals an
   await h.asAdmin();
   const down = await readFile(new URL('../supabase/rollbacks/20261029100000_sc019_operator_fulfillment_down.sql', import.meta.url), 'utf8');
   await db.query(down);
-  assert.equal((await call(db, "select count(*)::int n from pg_proc where proname like 'sc19_operator%' or proname='sc19_require_operator'"))[0].n, 0);
+  // Only the functions this rollback owns. A later migration
+  // (20261103090000_sc19_auto_trial_marketing_consent.sql) adds operator
+  // functions of its own, removed by its own rollback, so counting every
+  // sc19_operator* name here would assert against the wrong migration.
+  assert.equal((await call(db, `select count(*)::int n from pg_proc where proname='sc19_require_operator'
+    or proname in ('sc19_operator_companies','sc19_operator_package_policy',
+      'sc19_operator_set_package_policy','sc19_operator_approve_trial','sc19_operator_grant_paid')`))[0].n, 0);
   for (const table of ['sc19_package_policy', 'sc19_trial_approvals', 'sc19_balances']) {
     assert.equal((await call(db, `select count(*)::int n from private.${table}`))[0].n, 1, table);
   }

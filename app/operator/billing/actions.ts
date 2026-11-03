@@ -13,8 +13,9 @@ const done = (status: Sc19OperatorNotice, search = ''): never => {
 };
 
 // Every RPC re-checks the current operator allowlist, including revocation.
-async function rpc(name: 'sc19_operator_set_package_policy' | 'sc19_operator_approve_trial' | 'sc19_operator_grant_paid',
-  args: Record<string, string | number>, success: Sc19OperatorNotice, search: string) {
+async function rpc(name: 'sc19_operator_set_package_policy' | 'sc19_operator_approve_trial'
+  | 'sc19_operator_grant_paid' | 'sc19_operator_set_auto_free',
+  args: Record<string, string | number | boolean>, success: Sc19OperatorNotice, search: string) {
   const client = await createClient();
   const { data: { user }, error: authError } = await client.auth.getUser();
   if (authError || !user) redirect('/login');
@@ -41,6 +42,15 @@ export async function approveTrial(form: FormData) {
   if (!input) done('invalid', search);
   if (form.get('confirm') !== 'yes') done('confirm', search);
   await rpc('sc19_operator_approve_trial', input!, 'trial_approved', search);
+}
+
+/** SC-FREE-AUTO-001: the operator switch for automatic FREE. The database holds
+ * the authoritative value (default off) and re-checks the operator role. */
+export async function setAutoFree(form: FormData) {
+  const value = form.get('enabled');
+  if (value !== 'true' && value !== 'false') done('invalid');
+  if (form.get('confirm') !== 'yes') done('confirm');
+  await rpc('sc19_operator_set_auto_free', { enabled: value === 'true' }, 'auto_free_saved', '');
 }
 
 export async function grantPaid(form: FormData) {

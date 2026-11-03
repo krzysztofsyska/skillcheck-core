@@ -8,6 +8,10 @@ const notices: Record<string,string> = {
   invalid: 'Podaj prawidłowy polski NIP.',
   taken: 'Darmowa pula została już przypisana do tego NIP lub firmy.',
   failed: 'Nie udało się aktywować FREE. Skontaktuj się z obsługą SkillCheck.',
+  // SC-FREE-AUTO-001: the registry did not confirm the company, did not answer,
+  // or automatic activation is switched off. All of them mean the same thing for
+  // the company, and none of them grants anything.
+  manual: 'Nie mogliśmy potwierdzić firmy automatycznie w wykazie podatników VAT. Zgłoszenie trafiło do sprawdzenia przez obsługę SkillCheck — odezwiemy się do Ciebie.',
   verify: 'Przed aktywacją FREE wymagamy weryfikacji firmy. Wyślij zgłoszenie przez formularz kontaktowy.',
   forbidden: 'Darmową pulę może aktywować tylko właściciel firmy.',
 };
@@ -42,9 +46,8 @@ export default async function CompanyBilling({ params, searchParams }: {
       <p>Analiza wymaga zatwierdzonej anonimizacji CV i weryfikacji wyniku przez rekrutera. SkillCheck nie podejmuje decyzji o zatrudnieniu.</p>
     </section> : <>
       <h2>FREE — {sc19AnalysisScope(sizes.FREE)}</h2>
-      <p>Jednorazowa próba dla zweryfikowanej firmy. Sam poprawny NIP nie uprawnia do odbioru darmowej puli.</p>
-      <p><Link href="/rozmowa">Zgłoś firmę do weryfikacji FREE →</Link></p>
-      <p>Jeśli SkillCheck już potwierdził Twoją firmę, wpisz zatwierdzony NIP.</p>
+      <p>Jednorazowa próba dla jednej firmy. Podaj NIP — sprawdzimy go automatycznie w wykazie podatników VAT Ministerstwa Finansów.</p>
+      <p>Jeśli wykaz potwierdzi, że firma istnieje i jest czynnym podatnikiem VAT, pakiet FREE włączy się od razu. Jeśli nie potwierdzi albo nie odpowie, sprawdzimy zgłoszenie ręcznie.</p>
       {isOwner ? <form action={activateSc19Free}>
         <input type="hidden" name="companyId" value={companyId} />
         <label>NIP firmy <input type="text" name="nip" inputMode="numeric" autoComplete="off" maxLength={20} required placeholder="10 cyfr" /></label>
