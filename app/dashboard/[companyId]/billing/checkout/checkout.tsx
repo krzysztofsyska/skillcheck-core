@@ -25,7 +25,19 @@ export default function Checkout({companyId}: {companyId:string}) {
     setLoading(true);setAccepted(false);setOffers([]);setSelected('');
     try {
       const r=await fetch(`/api/billing/offers?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',signal});
-      if(!r.ok)throw Error();const data=await r.json();
+      if(!r.ok){
+        // The offer read itself can be unavailable: no payment provider AND no
+        // catalog (SC19_PACKAGES_ENABLED off). Say so with the same wording the
+        // refused purchase uses, instead of "could not load", which would suggest
+        // retrying would help.
+        const failure=await r.json().catch(()=>null);
+        if(failure?.error==='SC19_PAYMENTS_DISABLED'){
+          if(!signal?.aborted){setCheckoutAvailable(false);setMessage(paymentsPending);}
+          return;
+        }
+        throw Error();
+      }
+      const data=await r.json();
       if(!signal?.aborted){
         // Availability is never assumed: only an explicit true opens the pay button.
         setCheckoutAvailable(data.checkoutAvailable===true);

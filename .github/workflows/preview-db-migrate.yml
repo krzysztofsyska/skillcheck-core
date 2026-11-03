@@ -19,7 +19,9 @@
 # offer) and deliberately NOT migrations: writing them from the migration chain
 # would switch billing state on wherever the chain runs, production included,
 # which is an owner action in /operator/billing (CLAUDE.md, AGENTS.md). They are
-# idempotent and get no ledger row, so they are simply re-applied on every run.
+# idempotent and get no ledger row, so they are simply re-applied on every run,
+# on top of whatever Preview testing has produced in the meantime. Each seed is
+# handed the target project ref this job verified, and refuses to run without it.
 #
 # When: every push to `integration` or to a `preview-db/**` branch (a task
 # branch pushed there to be tested on preview before review/merge). No paths
@@ -137,7 +139,11 @@ jobs:
             last_line=$(grep -nvE '^[[:space:]]*$' "$path" | tail -1 | cut -d: -f1)
             [ -n "$commit_line" ] && [ "$commit_line" = "$last_line" ] || { echo "::error::$file must end with its only top-level commit;"; exit 1; }
             echo "seed   $file"
-            psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f "$path"
+            # The seed's own guard refuses to run unless the caller names the
+            # target project, and this is the only place that has checked it
+            # against the connection string (the refusals above). Without -v the
+            # file fails on an unexpanded psql variable, which is the point.
+            psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -v sc19_seed_target_ref="$PREVIEW_REF" -f "$path"
             seeded=$((seeded+1))
           done
           {

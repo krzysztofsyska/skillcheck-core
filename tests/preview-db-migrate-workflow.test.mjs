@@ -299,7 +299,20 @@ test('preview-only seeds live outside the migration chain and are applied to pre
     assert.deepEqual(commits, [lines.findLastIndex(l => l.trim() !== '')],
       `${seed}: single top-level commit; as the last statement`);
     assert.match(text, /PREVIEW-ONLY|preview-only/, `${seed} must state that it is preview-only`);
+    // The guard is a declared project identity, not a count of rows: ordinary
+    // preview testing leaves balances, journal entries, orders and grants behind,
+    // and this file is re-applied on top of them on every run. So a seed takes
+    // the target ref from psql and refuses anything but skillcheck-preview, and
+    // never refuses because the database has been used.
+    assert.match(text, /:'sc19_seed_target_ref'/, `${seed} must take its target project ref from psql`);
+    assert.match(text, /sc19_preview_seed_refuses_production_project/, `${seed} must refuse the production project`);
+    assert.doesNotMatch(text.replace(/^\s*--.*$/gm, ''),
+      /count\(\*\)[^\n]*sc19_(balances|credit_journal|payment_orders|payment_grants)/,
+      `${seed} must not refuse a database merely because it carries preview activity`);
   }
+  // The job hands each seed the ref it verified against the connection string.
+  assert.match(seedStep, /-v sc19_seed_target_ref="\$PREVIEW_REF" -f "\$path"/,
+    'the seed step must declare the verified target project');
 });
 
 // Runs the real workflow step against a scratch PostgreSQL when one is provided (CI: SC19_TEST_DATABASE_URL).

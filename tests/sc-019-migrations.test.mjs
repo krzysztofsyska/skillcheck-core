@@ -8,7 +8,8 @@ import { retentionHarness } from './helpers/retention-scheduler-fixture.mjs';
 import {
   accountingSnapshot, accountingTables, applyMigration, applyPreviewSeeds, assertCurrentInventory,
   assertR6, blockersOf, bootMigrationDatabase, catalogSnapshot, installSource, paymentHarness,
-  paymentUsers, seedCreditData, seedHistoricalOrders, seedSyntheticPolicy, sourceStates,
+  paymentUsers, rawPreviewSeed, renderPreviewSeed, seedCreditData, seedHistoricalOrders,
+  seedSyntheticPolicy, sourceStates,
 } from './helpers/sc19-migration-fixture.mjs';
 
 // These are actual checked-in migrations on disposable native PostgreSQL. The
@@ -180,19 +181,64 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
   await assert.rejects(db.query("update private.sc19_payment_offers set amount_minor=1 where id='preselekcja-60-2026-11-r2'"), /immutable/i);
   await assert.rejects(db.query("delete from private.sc19_payment_offers where id='preselekcja-60-2026-11-r2'"), /immutable/i);
 
-  // The seed refuses a database that carries real commercial activity, whatever
-  // connection string it was handed: a live database's quotas and offers are an
-  // owner action, not a seed's business.
+  // ORDINARY PREVIEW TESTING MUST NOT BLOCK THE NEXT MIGRATION RUN.
+  // preview-db-migrate.yml re-applies this seed on every run, and by then the
+  // test project holds the balances, journal entries, orders and grants that a
+  // FREE claim, an operator grant and a checkout walk leave behind. An earlier
+  // guard refused on exactly those rows, so the first test walk would have
+  // blocked every later Preview migration run.
   const f = await h.seed(users.otherOwner); await h.asAdmin();
-  await db.query("insert into private.sc19_balances(company_id,plan,available) values($1,'PRESELEKCJA',3)", [f.companyId]);
-  // The seed opens its own transaction, so a refusal leaves it aborted: roll it
-  // back, exactly as the preview job's psql -v ON_ERROR_STOP=1 would.
-  await assert.rejects(applyPreviewSeeds(db),
-    error => error.code === '55000' && /sc19_preview_seed_refuses_live_database/.test(error.message));
-  await db.query('rollback');
-  assert.equal((await db.query('select count(*)::int n from private.sc19_balances')).rows[0].n, 1,
-    'a refused seed changes nothing');
-  await db.query('delete from private.sc19_balances');
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
+    values($1,'1111111111','synthetic-preview-activity-proof')`, [f.companyId]);
+  await h.asUser(users.otherOwner);
+  assert.equal((await db.query("select public.sc19_claim_trial($1,'1111111111') credits", [f.companyId])).rows[0].credits, 5,
+    'a company claiming FREE on preview: balance + journal + trial nip');
+  await h.asAdmin();
+  await db.query('select private.sc19_grant_paid($1,$2)', [f.companyId, 'synthetic-preview-activity-settlement']);
+  const orderId = randomUUID();
+  await db.query(`insert into private.sc19_payment_orders(id,company_id,buyer_id,request_id,offer_id,offer_revision,
+    terms_revision,amount_minor,currency,credits,provider,account,mode,status,session_id,checkout_url,payment_id,
+    checkout_deadline_ms)
+    values($1,$2,$3,$4,'preselekcja-60-2026-11-r2','preselekcja-60-v2','preselekcja-terms-2026-11-v2',
+      30000,'PLN',60,'synthetic','preview-walk','test','paid',$5,$6,$7,$8)`,
+  [orderId, f.companyId, paymentUsers.otherOwner, randomUUID(), `session-${orderId}`,
+    `https://pay.fixture.invalid/${orderId}`, `synthetic-paid-${orderId}`, Date.now() + 3600000]);
+  await db.query('insert into private.sc19_payment_grants(payment_key,order_id) values($1,$2)',
+    [`synthetic-paid-${orderId}`, orderId]);
+  const activity = await accountingSnapshot(db);
+  for (const table of ['sc19_balances', 'sc19_credit_journal', 'sc19_payment_orders', 'sc19_payment_grants']) {
+    assert.ok(activity[table].length > 0, `${table} must carry preview activity for this check to mean anything`);
+  }
+  await applyPreviewSeeds(db);
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await accountingSnapshot(db), activity,
+    'the seed reruns cleanly over balance/journal/order/grant rows and touches none of them');
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'],
+    'and the one approved offer is still published after the rerun');
+
+  // What the guard does refuse is the PROJECT, not the data: it demands that the
+  // caller name skillcheck-preview, which only the preview job does (after
+  // checking the connection string). The seed opens its own transaction, so a
+  // refusal leaves it aborted: roll back, exactly as the preview job's
+  // psql -v ON_ERROR_STOP=1 would.
+  for (const [targetRef, code] of [
+    ['wsvjawuikxfzjyivxgsu', 'sc19_preview_seed_refuses_production_project'],
+    ['some-other-project-ref', 'sc19_preview_seed_refuses_unknown_project'],
+    ['', 'sc19_preview_seed_requires_target_ref'],
+  ]) {
+    await assert.rejects(applyPreviewSeeds(db, { targetRef }),
+      error => error.code === '55000' && new RegExp(code).test(error.message), code);
+    await db.query('rollback');
+  }
+  assert.deepEqual(await accountingSnapshot(db), activity, 'a refused seed changes nothing');
+  // And without psql the file does not even parse: the unexpanded target-ref
+  // variable fails before any statement runs, so pasting it into a SQL console
+  // (production included) cannot seed anything.
+  const raw = await rawPreviewSeed();
+  assert.match(raw, /:'sc19_seed_target_ref'/);
+  await assert.rejects(db.query(raw), error => error.code === '42601');
+  await db.query('rollback').catch(() => {});
+  assert.deepEqual(await accountingSnapshot(db), activity, 'an unparameterized run changes nothing');
 
   // And the whole purchase path a Przelewy24 verifier walks: a verified owner
   // reads exactly this offer through the chain's read-only RPC.
@@ -200,6 +246,7 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
   await applyPreviewSeeds(db);
   await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
     values($1,'1234563218','synthetic-preview-seed-proof')`, [a.companyId]);
+  const beforeRead = await accountingSnapshot(db);
   await h.asUser(users.owner);
   const offers = (await db.query('select * from public.sc19_checkout_offers($1)', [a.companyId])).rows;
   assert.equal(offers.length, 1);
@@ -207,11 +254,16 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
   assert.equal(offers[0].amount_minor, 30000);
   assert.equal(offers[0].credits, 60);
   assert.match(offers[0].terms_text, /[ąćęłńóśźż]/);
-  // Reading an offer takes no payment: no order, grant or journal entry appears.
+  // Reading an offer takes no payment: not one order, grant, balance or journal
+  // entry is added to what the earlier preview activity already left behind, and
+  // this company (the one doing the reading) gets nothing at all.
   await h.asAdmin();
+  assert.deepEqual(await accountingSnapshot(db), beforeRead, 'reading an offer writes nothing');
   for (const table of ['sc19_payment_orders', 'sc19_payment_requests', 'sc19_payment_grants',
     'sc19_balances', 'sc19_credit_journal', 'sc19_trial_nips']) {
-    assert.equal((await db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, table);
+    const where = table === 'sc19_payment_grants'
+      ? `where order_id in (select id from private.sc19_payment_orders where company_id=$1)` : 'where company_id=$1';
+    assert.equal((await db.query(`select count(*)::int n from private.${table} ${where}`, [a.companyId])).rows[0].n, 0, table);
   }
   // A paid grant now delivers exactly the number the offer showed.
   assert.equal((await db.query('select private.sc19_grant_paid($1,$2) available',
@@ -226,7 +278,7 @@ test('the preview seed still succeeds after the seeded offer has expired', async
   const h = await setupRankingDatabase(env.db, { throughMigration: null });
   const { db } = env;
   await h.asAdmin();
-  const seed = await readFile(new URL('../supabase/preview-seeds/sc19-preselekcja-offer.sql', import.meta.url), 'utf8');
+  const seed = await renderPreviewSeed();
   const expired = seed.replace('constant bigint := 1830297599000', 'constant bigint := 1000000000000');
   assert.notEqual(expired, seed, 'the pinned validity must still be patchable by this test');
   await db.query(expired);

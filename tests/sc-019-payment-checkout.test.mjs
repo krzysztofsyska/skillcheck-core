@@ -259,6 +259,29 @@ test('a server that answers SC19_PAYMENTS_DISABLED closes the button without los
  assert.ok(h.find('p','w trakcie uruchamiania'));
 });
 
+// The offer READ itself can be refused: no provider and no catalog, which is what
+// /api/billing/offers answers while SC19_PACKAGES_ENABLED is off. That is not a
+// transport failure, so the page must say payments are being switched on rather
+// than invite a pointless retry, and must never show a priced order form.
+test('an offer read refused with SC19_PAYMENTS_DISABLED is explained, not reported as a load failure',async t=>{
+ const h=await harness({offersResponse:()=>({ok:false,status:503,json:async()=>({error:'SC19_PAYMENTS_DISABLED'})}),
+  checkout:async()=>{throw Error('must not POST');}});
+ t.after(h.close);
+ assert.ok(h.find('p','w trakcie uruchamiania'),'the switching-on explanation is shown');
+ assert.equal(h.find('p','Nie udało się wczytać oferty'),undefined,'not presented as a failed load');
+ assert.equal(h.find('table'),undefined,'no priced order summary without an offer');
+ assert.equal(h.find('button','Zamawiam'),undefined);
+ assert.equal(h.posts.length,0);
+});
+
+test('an offer read that fails for any other reason still asks the visitor to retry',async t=>{
+ const h=await harness({offersResponse:()=>({ok:false,status:503,json:async()=>({error:'SC19_PAYMENT_RETRY'})}),
+  checkout:async()=>{throw Error('must not POST');}});
+ t.after(h.close);
+ assert.ok(h.find('p','Nie udało się wczytać oferty'));
+ assert.equal(h.find('button','Zamawiam'),undefined);
+});
+
 test('an available checkout still renders the breakdown and keeps working',async t=>{
  const h=await harness({checkout:async()=>ok({orderId:'order-a',status:'awaiting_payment',checkoutUrl:'https://pay.fixture.invalid/a'})});
  t.after(h.close);

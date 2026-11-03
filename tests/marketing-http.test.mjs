@@ -248,8 +248,20 @@ test('public offer and demo pages respond without an account', async (t) => {
   // The offer page points a logged-out visitor at registration/login, never at a
   // dashboard URL it cannot resolve: the page is public and has no session.
   assert.ok(hrefs(order).includes('/login'), 'offer page CTA for an existing account');
-  assert.match(orderText, /Zamów w panelu firmy/);
-  assert.match(orderText, /Zakup może złożyć wyłącznie właściciel konta firmy/);
+  // This server runs with SC19_PACKAGES_ENABLED=false, which is also what the
+  // production runbook specifies for now. With packages off the company panel
+  // hides the Pakiety entry and the checkout page only shows a "not available
+  // yet" notice, so the public page must not promise an order there: the CTA is
+  // registration, stated as registration.
+  assert.doesNotMatch(orderText, /Zamów w panelu firmy/, 'no panel order is promised while packages are off');
+  assert.match(orderText, /Załóż konto firmowe/);
+  assert.match(orderText, /zamówienia w panelu firmy jeszcze nie składasz/);
+  assert.match(orderText, /po zaksięgowaniu wpłaty z faktury proforma/);
+  const offerPage = readFileSync(new URL('../app/preselekcja/page.tsx', import.meta.url), 'utf8');
+  assert.match(offerPage, /catalogEnabled \? "Zamów w panelu firmy" : "Załóż konto firmowe"/,
+    'the panel-order CTA appears only when SC19_PACKAGES_ENABLED is on');
+  assert.match(offerPage, /Zakup może złożyć wyłącznie właściciel konta firmy/,
+    'the owner-only rule is still stated on the flag-on path');
   assert.ok(hrefs(order).every(href => !href.startsWith('/dashboard')), 'no dashboard URL on the public offer page');
   assert.doesNotMatch(order, /<form[ >]/);
   assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
