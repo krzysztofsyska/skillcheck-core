@@ -43,7 +43,10 @@ To są te, w których faktycznie leżą CV i dane kandydatów, i tam RLS działa
 
 ## 2. Tabele bez polityk, które zawierają dane osobowe
 
-Z 46 tabel dane osobowe trzyma 10. Dzielę je na te, które dotyczą **kandydatów**, i te, które
+Z 46 tabel dane osobowe (lub powiązania z nimi) trzyma 13 — 6 w sekcji 2a i 7 w sekcji 2b
+(dwa wiersze zbiorcze w 2b obejmują po dwie tabele: `sales_pipeline` + `sales_pipeline_events`
+oraz `sc19_trial_nips` + `sc19_trial_approvals`; `private.cv_bulk_batches` jest wliczona, choć
+sama nie ma PII wprost). Dzielę je na te, które dotyczą **kandydatów**, i te, które
 dotyczą **klientów i leadów** — zadanie pytało o kandydatów, ale reszta też jest danymi osobowymi
 i nie ma sensu jej pomijać.
 
@@ -102,6 +105,9 @@ wywrócić działającą aplikację. Powód jest w tym, względem jakiej roli Po
   te tabele.
 - Z `force` właściciel przestaje omijać RLS, ale polityki napisane `to authenticated` **nie
   dotyczą `postgres`**. Efekt: funkcje przestają działać, a polityki nie zaczynają nikogo chronić.
+- Jest też druga gałąź: na Supabase rola `postgres` ma atrybut `BYPASSRLS`, którego `force`
+  nie ogranicza — `force` dotyczy tylko zwolnienia właściciela tabeli, nie atrybutu roli. Jeśli
+  funkcje działają jako `postgres` z `BYPASSRLS`, `force` nie zmienia dla nich niczego.
 
 Żeby `force` miało sens, trzeba by albo dopisać równoległe polityki `to postgres`
 (co sprowadza się do „pozwól właścicielowi na wszystko", czyli nic nie zmienia), albo przenieść
@@ -131,9 +137,18 @@ create policy cv_bulk_items_company_read on private.cv_bulk_items
 Warunek `erasure_candidate_frozen` odwzorowuje filtr z `public.cv_bulk_batch_status`, które
 ukrywa wiersze kandydatów zamrożonych przez procedurę usuwania danych (oraz wszystkich
 kandydatów, gdy trwa izolacja odtworzeniowa). Bez niego druga warstwa odsłaniałaby to, co
-obecne RPC świadomie chowa. Uwaga wykonawcza: funkcja w polityce wykonuje się z uprawnieniami
-wołającego, więc osobne zadanie L3 musi sprawdzić, czy `authenticated` ma `EXECUTE` na tym
-helperze (albo użyć wariantu `SECURITY DEFINER` zwracającego boolean).
+obecne RPC świadomie chowa.
+
+Uwaga wykonawcza, stan faktyczny (sprawdzony w migracjach i w katalogu Preview):
+`private.erasure_candidate_frozen(uuid)` jest już `security definer` i już zwraca boolean, ale
+`EXECUTE` jest na niej jawnie odebrane rolom `public`, `anon` i `authenticated`
+(`20261010194230_candidate_erasure_guards.sql:1266`) i żadna późniejsza migracja go nie nadaje
+ponownie — `authenticated` dostał tam `EXECUTE` tylko na `erasure_row_visible` i
+`candidate_workflow_visible`. Wywołanie funkcji z polityki sprawdza `EXECUTE` roli wołającego
+(`security definer` zmienia, jako kto funkcja *działa*, nie zastępuje prawa jej wywołania). Warunkiem
+działania tej polityki jest więc **nadanie `EXECUTE` roli `authenticated`**, a to samo jest decyzją
+L3. Bez tego każdy odczyt przez tę politykę skończy się `permission denied for function` —
+fail-closed, więc bezpiecznie, ale polityka nie zadziała.
 
 `cv_bulk_batches` nie ma kolumny kandydata, więc tam wystarcza `has_company_access(company_id)`,
 wyłącznie `for select`. Widoczność wierszy kandydatów rozstrzyga się na poziomie `cv_bulk_items`.
@@ -149,7 +164,10 @@ stan partii. Zapis ma zostać wyłącznie za funkcjami.
 
 Obie mają `company_id`, więc ten sam wzorzec, z tym samym zabezpieczeniem przed zamrożonymi
 kandydatami co w `cv_bulk_items` (tak jak `get_preselection_groups` i
-`get_preselection_group_history`, które pomijają zamrożonych):
+`get_preselection_group_history`, które pomijają zamrożonych). Te polityki wołają ten sam helper
+`private.erasure_candidate_frozen`, więc dotyczy ich ta sama uwaga: `EXECUTE` jest dziś odebrane
+`authenticated` i trzeba je nadać (decyzja L3), inaczej polityka skończy się
+`permission denied for function` (fail-closed):
 
 ```sql
 -- PROPOZYCJA, nie zastosowana.
@@ -201,6 +219,13 @@ bezpieczeństwa tej procedury (np. izolację odtworzeniową). Migracja już robi
 Rekomendacja: zostawić bez polityki i bez `GRANT`, a ochronę opisać w komentarzu do tabeli,
 żeby kolejny audyt nie czytał tego jako luki.
 
+Uzgodnienie z tabelą w 2a, gdzie przy tej tabeli stoi „1 funkcja SD dla `authenticated`":
+to `private.erasure_normal_row_guard`, która ma `grant execute ... to authenticated`
+(`20261010205030_erasure_purge_graph.sql:545`) i czyta tę tabelę (`:178`). To jednak pomocnik
+triggera, wywoływany w kontekście zapisu użytkownika, a nie ekran ani RPC czytające dane dla
+użytkownika: nie zwraca wierszy, tylko rzuca `PT409` (`Candidate identity unavailable`), gdy
+identyfikator kandydata jest na liście usuniętych albo trwa izolacja odtworzeniowa.
+
 ### `public.sales_leads`
 
 To jedyna tabela z sekcji 2 leżąca w `public`, czyli w schemacie wystawianym przez PostgREST.
@@ -224,6 +249,12 @@ Ten sam gate operatora co wyżej, `select` dla operatora, zapis tylko przez istn
 
 ### `checkout.orders`
 
+**Dryf schematu:** w `supabase/migrations/` nie ma żadnego pliku tworzącego schemat `checkout`,
+tabelę `checkout.orders` ani funkcje `checkout_*` (sprawdzone wyszukiwaniem w całym repozytorium —
+jedyne trafienie to ten dokument). Wszystkie twierdzenia o `checkout` w tym dokumencie pochodzą
+wyłącznie z odczytu katalogu bazy Preview, nie z migracji. Sam dryf schematu (stan bazy bez
+odpowiednika w repozytorium) to osobne zadanie.
+
 Dostęp wyłącznie przez cztery funkcje `checkout_*`, każda weryfikuje `request_signature` i nie
 używa `auth.uid()` — to ścieżka maszynowa (webhook Przelewy24), nie użytkownik. Polityki dla
 `authenticated` **nie proponuję**; proponuję natomiast jawny `revoke` jak w wariancie domyślnym,
@@ -238,8 +269,17 @@ Gate operatora (`private.sc19_require_operator`). Polityka `select` dla operator
 
 ## 4. Funkcje `SECURITY DEFINER` dostępne dla `authenticated`, które dotykają tych tabel
 
-45 funkcji. Każdą sprawdziłem pod kątem faktycznej kontroli uprawnień — nie po nazwie, tylko
-czytając ciało funkcji i ciała helperów, które wołają.
+Poniżej 43 funkcje: operator 11 + firma 14 + właściciel 6 + HMAC 9 + administracyjne 2 + bez
+gate'u 1. Z nich **42 mają `EXECUTE` dla `authenticated`**; 43. to `cv_bulk_worker_pump`, która
+ma `EXECUTE` wyłącznie dla `anon` (`20261101130000_cv_bulk_intake.sql:753`; `authenticated` ma
+ją jawnie odebraną) i jest tu wyliczona jako ścieżka maszynowa. W pierwszej wersji tego dokumentu
+stało „45 funkcji" — tej liczby nie da się odtworzyć ani z migracji, ani z katalogu Preview
+(porównałem wszystkie funkcje `SECURITY DEFINER` z `EXECUTE` dla `authenticated`; żadna dodatkowa
+nie czyta tabel z sekcji 2 — `find_sales_companies` czyta tylko `companies`,
+`sc19_operator_grant_paid` tabele salda i dziennika kredytów, `get_retention_suggestions` tabele
+sugestii retencji), więc poprawiłem ją na faktyczną. Każdą z tych funkcji sprawdziłem pod kątem
+faktycznej kontroli uprawnień — nie po nazwie, tylko czytając ciało funkcji i ciała helperów,
+które wołają.
 
 ### Gate operatora (`private.sc19_require_operator` / `private.is_platform_operator`)
 
@@ -282,7 +322,8 @@ niż członkostwo w firmie. Dodatkowo blokuje się, gdy trwa izolacja odtworzeni
 `claim_sales_mail`, `finish_sales_mail`, `cv_bulk_worker_pump`, `submit_sales_lead`
 (osiem funkcji) oraz `cv_bulk_finish_notification` (dziewiąta, z dwiema ścieżkami — niżej).
 
-Osiem z nich nie ma ścieżki użytkownika — autoryzacja opiera się na `request_signature`
+(Z dziewięciu `cv_bulk_worker_pump` jest dostępna tylko dla `anon`, pozostałe osiem także dla
+`authenticated`.) Osiem z nich nie ma ścieżki użytkownika — autoryzacja opiera się na `request_signature`
 i `issued_at`. (`submit_sales_lead` odczytuje `auth.uid()`, ale tylko po to, by włączyć go do
 podpisywanego ładunku i zapisać przy leadzie; to nie jest bramka dostępu.) To świadomy wzorzec
 dla workerów i webhooków, ale oznacza, że **bezpieczeństwo tych ośmiu funkcji sprowadza się do
@@ -318,8 +359,12 @@ Brak danych osobowych, brak parametrów. Bez zastrzeżeń.
    z sekcji 3 **plus** test w CI, który sprawdza, że `anon` i `authenticated` nie mają uprawnień
    do żadnej tabeli w `public` bez polityk. Repo ma już wzorzec: `tests/data-api-grants.test.mjs`.
 
-2. **13 tabel bez polityk nie jest osiągalnych przez żadną funkcję `SECURITY DEFINER`** dostępną
-   dla `authenticated`: `checkout.settings`, `private.cv_bulk_worker_nonces`,
+2. **20 tabel bez polityk nie występuje w ciele żadnej funkcji `SECURITY DEFINER`** dostępnej
+   dla `authenticated` (12 pozycji poniżej; `erasure_inventory_baseline` wraz z `_r2`–`_r9` to
+   9 tabel, więc 11 + 9 = 20; sprawdzone bezpośrednim przeszukaniem ciał funkcji w katalogu
+   Preview, bez rozwijania wywołań pomocników — trzy z nich, `checkout.settings`,
+   `private.cv_bulk_worker_nonces` i `private.sales_mail_settings`, czytają pomocniki weryfikacji
+   podpisu wołane z funkcji HMAC z sekcji 4): `checkout.settings`, `private.cv_bulk_worker_nonces`,
    `private.erasure_inventory_baseline` i wersje `_r2`–`_r9`, `private.erasure_restore_checkpoint`,
    `private.erasure_verified_ledger_events`, `private.retention_authorizations`,
    `private.sales_mail_settings`, `private.sc19_analysis_spend`, `private.sc19_payment_grants`,
