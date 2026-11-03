@@ -40,24 +40,41 @@ test('every listed migration exists and is a checked-in file name', () => {
 // The list is an allowlist, so an existing migration that nobody added is simply
 // never applied to preview: the objects it creates are missing there and the
 // feature fails at runtime with no failing check anywhere. The test above only
-// proves that listed entries exist, which cannot catch that. Every SC-019
-// migration ordered after M13 must therefore be listed, or explicitly exempted
-// here with a reason.
-const sc019PreviewExempt = new Map([
+// proves that listed entries exist, which cannot catch that.
+//
+// The set to check is therefore the CHAIN TAIL — every migration ordered after
+// M13 — and not migrations matching a name token. A name pattern (/sc019_|sc19_/)
+// silently misses the next migration of this very chain if it is named anything
+// else: `20261110000000_p24_provider_keys.sql` (the Przelewy24 adapter and its
+// keys, the likely next step) matches nothing and would never reach preview with
+// every check still green. The tail is derived from the file names, so a new
+// migration is in scope the moment it is checked in, whatever it is called.
+const previewChainTail = '20261021084732_sc019_credits_payments_inventory.sql';
+const previewExempt = new Map([
   // M13 and everything up to it was applied to preview before this list existed;
-  // the preview ledger already holds them (checked 2026-11-03).
-  ['20261021084732_sc019_credits_payments_inventory.sql', 'already in the preview ledger'],
+  // the preview ledger already holds them (checked 2026-11-03 against
+  // supabase_migrations.schema_migrations on orbyscrupgnupifzlqxp).
+  ['20261026220100_sc_step3_evidence_extensions.sql', 'already in the preview ledger'],
+  ['20261026220200_sc_step3_evidence_worker.sql', 'already in the preview ledger'],
+  ['20261028120000_sc_step3_erasure_inventory_r7.sql', 'already in the preview ledger'],
   ['20261029100000_sc019_operator_fulfillment.sql', 'already in the preview ledger'],
+  ['20261030160000_sc_step4_interview_decision.sql', 'already in the preview ledger (as 20261031111326_sc_step4_interview_decision)'],
+  // Not yet applied to preview on purpose:
+  ['20261030120000_sc_step3_matrix_change_invalidates_approval.sql',
+    'routines only, not needed for the SC-P24 checkout walk; list it with the Step 3 preview work'],
+  ['20261102090000_sales_leads_enable.sql',
+    'data switch that is deliberately a no-op on preview (no request signing secret there), and the contact form stays off on preview'],
 ]);
-test('every SC-019 migration reaches preview, or is exempted with a reason', () => {
+test('every migration after the chain tail reaches preview, or is exempted with a reason', () => {
   const entries = new Set(list.split('\n').map(l => l.replace(/#.*/, '').trim()).filter(Boolean));
   const all = readdirSync(new URL('../supabase/migrations/', import.meta.url))
     .filter(name => name.endsWith('.sql')).sort();
-  const sc019 = all.filter(name => /sc019_|sc19_/.test(name));
-  assert.ok(sc019.length >= 3, 'the SC-019 chain must be discoverable by name');
-  const missing = sc019.filter(name => !entries.has(name) && !sc019PreviewExempt.has(name));
+  assert.ok(all.includes(previewChainTail), `the chain tail ${previewChainTail} must exist`);
+  const tail = all.filter(name => name > previewChainTail);
+  assert.ok(tail.length >= 3, 'the chain tail must be discoverable');
+  const missing = tail.filter(name => !entries.has(name) && !previewExempt.has(name));
   assert.deepEqual(missing, [],
-    `these SC-019 migrations would never be applied to skillcheck-preview: ${missing.join(', ')}`);
+    `these migrations would never be applied to skillcheck-preview: ${missing.join(', ')}`);
   // The SC-P24 checkout chain specifically, in chain order, since the read-only
   // RPC is what the checkout page needs to show an offer at all.
   for (const name of ['20261103120000_sc019_seed_packages_offer.sql',
@@ -65,9 +82,19 @@ test('every SC-019 migration reaches preview, or is exempted with a reason', () 
     '20261103130100_sc019_offer_terms_diacritics.sql']) {
     assert.ok(entries.has(name), `${name} must be listed for preview`);
   }
-  // An exemption may only name a migration that exists, so the map cannot rot
-  // into a blanket excuse.
-  for (const name of sc019PreviewExempt.keys()) assert.ok(all.includes(name), `stale exemption: ${name}`);
+  // An exemption may only name a migration that exists and is actually in the
+  // tail, so the map cannot rot into a blanket excuse.
+  for (const name of previewExempt.keys()) {
+    assert.ok(all.includes(name), `stale exemption: ${name}`);
+    assert.ok(name > previewChainTail, `exemption outside the chain tail: ${name}`);
+  }
+  // Every listed entry is itself in the tail or an acknowledged pre-list gap, so
+  // the list cannot quietly grow entries the tail check never looks at.
+  const preListed = new Set(['20261008155657_sc005_allow_postgres_set_screening_worker.sql',
+    '20261008155719_sc005_keep_worker_role_explicit_only.sql']);
+  for (const name of entries) {
+    assert.ok(name > previewChainTail || preListed.has(name), `listed outside the checked tail: ${name}`);
+  }
 });
 
 test('a listed migration edited after reaching preview fails unless its resync is acknowledged', () => {

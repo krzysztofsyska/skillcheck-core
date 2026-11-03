@@ -7,9 +7,13 @@
 -- POST /api/billing/checkout and the webhook keep answering
 -- SC19_PAYMENTS_DISABLED and no order can be created.
 --
--- This migration adds ONE read-only function and nothing else. No table, column,
--- constraint, index or trigger is created or altered, so the SC-010 erasure
--- schema signature and the newest erasure inventory baseline are unchanged.
+-- This migration creates ONE routine and no relations: its whole purpose is the
+-- `create or replace function public.sc19_checkout_offers` below, plus that
+-- function's grants. No table, column, constraint, index or trigger is created
+-- or altered. private.erasure_schema_signature() covers relations and their
+-- columns and constraints, not routines, so the SC-010 erasure schema signature
+-- and the newest erasure inventory baseline (a relation allowlist) are unchanged
+-- by it.
 --
 -- Authorization is exactly the one lib/sc19-payment-postgres.ts already enforces
 -- for listOffers, re-checked in the database and not in the client:

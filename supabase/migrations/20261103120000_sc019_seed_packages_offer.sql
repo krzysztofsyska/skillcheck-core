@@ -28,6 +28,18 @@
 -- INSERT below is a no-op ON CONFLICT DO NOTHING; without the re-activation the
 -- postflight would abort with sc019_seed_packages_offer_no_purchasable_offer.
 --
+-- Two conditions mean "there is nothing to publish", not "the chain is broken",
+-- so both only report and return, and the migration still succeeds:
+--   * the offer's own validity has passed (after 2027-12-31 this seed has nothing
+--     left to publish). An abort there would make every fresh database
+--     unbuildable from that date on — new preview branches, restore rehearsals,
+--     CI matrix runs — for a reason that has nothing to do with the schema.
+--   * the stored PRESELEKCJA quota is not the 60 this revision was approved for.
+-- In both cases the end state is "nothing purchasable": the guards deactivate
+-- the revisions this chain issued before returning, so a 60 CV / 300 zł offer
+-- can never stay on sale next to a different stored quota, in whatever order and
+-- however many times the two migrations of this chain run.
+--
 -- This seed does NOT activate a payment provider. resolveSc19PaymentRuntime()
 -- still returns null, so /api/billing/* answers "payments unavailable" until a
 -- reviewed Przelewy24 adapter and its keys exist. The offer exists so the
@@ -39,6 +51,13 @@ declare
   seeded_policy integer;
   seeded_offer integer;
   paid_credits integer;
+  -- 2027-12-31T23:59:59Z, the validity this offer revision was approved with.
+  offer_valid_until constant bigint := 1830297599000;
+  -- Every offer id this SC-P24 chain issues. A guard that stops this chain from
+  -- publishing deactivates all of them, so "nothing to publish" always ends as
+  -- "nothing purchasable" regardless of which of the two migrations ran first or
+  -- how often either is replayed. No row outside this chain is ever touched.
+  chain_offers constant text[] := array['preselekcja-60-2026-11', 'preselekcja-60-2026-11-r2'];
 begin
   if to_regclass('private.sc19_package_policy') is null then
     raise notice 'sc019_seed_packages_offer: SC-019 credit tables are not installed here, nothing seeded';
@@ -75,7 +94,27 @@ begin
   -- decision plus a new offer revision, not an automatic re-pricing.
   select p.credits into paid_credits from private.sc19_package_policy p where p.plan = 'PRESELEKCJA';
   if paid_credits is distinct from 60 then
-    raise notice 'sc019_seed_packages_offer: stored PRESELEKCJA quota is %, not 60; the 60 CV / 300 zl offer is NOT published and nothing is purchasable', paid_credits;
+    -- Skipping the INSERT is not enough: the other migration of this chain may
+    -- already have published its revision while the quota still matched (apply
+    -- 20261103120000, change the quota in /operator/billing, apply
+    -- 20261103130100 — or the reverse). An offer left `approved and active` here
+    -- would sell 60 CV at 300 zl against a stored quota that grants something
+    -- else. The flags are the only mutable columns, so deactivating every
+    -- revision this chain issued is both possible and the complete answer.
+    update private.sc19_payment_offers set active = false, approved = false
+      where id = any(chain_offers) and (active or approved);
+    raise notice 'sc019_seed_packages_offer: stored PRESELEKCJA quota is %, not 60; the 60 CV / 300 zl offer is NOT published and nothing of this chain is purchasable', paid_credits;
+    return;
+  end if;
+
+  -- An offer whose validity has passed has nothing left to publish. Report it and
+  -- finish successfully, so a fresh database can still be built after
+  -- 2027-12-31; deactivate this chain's revisions so a replay cannot leave an
+  -- expired-but-flagged offer behind for a reader that ignores valid_until_ms.
+  if offer_valid_until <= (extract(epoch from now()) * 1000)::bigint then
+    update private.sc19_payment_offers set active = false, approved = false
+      where id = any(chain_offers) and (active or approved);
+    raise notice 'sc019_seed_packages_offer: the PRESELEKCJA offer revision expired at %, nothing is published; issue a new reviewed revision with an owner-approved validity', to_timestamp(offer_valid_until / 1000.0);
     return;
   end if;
 
@@ -101,7 +140,7 @@ begin
     || 'wzor formularza odstapienia jest dostepny pod /regulamin/formularz-odstapienia.' || chr(10)
     || 'Dane osobowe kandydatow sa przetwarzane na podstawie Umowy powierzenia (DPA), '
     || 'dostepnej pod /regulamin/umowa-powierzenia.',
-    1830297599000)
+    offer_valid_until)
   on conflict (id) do nothing;
 
   -- Roll-forward after this migration's own rollback: the row already exists
@@ -118,6 +157,8 @@ begin
     where plan = 'PRESELEKCJA' and approved and active
       and credits = 60 and amount_minor = 30000 and currency = 'PLN'
       and valid_until_ms > (extract(epoch from now()) * 1000)::bigint;
+  -- Reached only when this revision is in date and the stored quota matches, so
+  -- nothing purchasable here really is a broken migration, not an expired offer.
   if seeded_offer = 0 then
     raise exception 'sc019_seed_packages_offer_no_purchasable_offer' using errcode = '55000';
   end if;

@@ -32,6 +32,19 @@
 -- makes the postflight pass; without it the migration would abort with
 -- sc019_offer_terms_diacritics_no_purchasable_offer.
 --
+-- Two conditions mean "there is nothing to publish", not "the chain is broken",
+-- so both only report and return, and the migration still succeeds:
+--   * this revision's validity has passed (after 2027-12-31 there is nothing left
+--     to publish). An abort there would make every fresh database unbuildable
+--     from that date on — new preview branches, restore rehearsals, CI matrix
+--     runs — for a reason that has nothing to do with the schema.
+--   * the stored PRESELEKCJA quota is not the 60 this revision was approved for.
+-- In both cases the end state is "nothing purchasable": the guards deactivate
+-- the revisions this chain issued (including the one 20261103120000 may already
+-- have published before an operator changed the quota) before returning, so a
+-- 60 CV / 300 zł offer can never stay on sale next to a different stored quota,
+-- in whatever order and however many times the two migrations of this chain run.
+--
 -- This does NOT activate a payment provider. resolveSc19PaymentRuntime() still
 -- returns null, so POST /api/billing/checkout and the webhook keep answering
 -- SC19_PAYMENTS_DISABLED and no order can be created.
@@ -41,6 +54,10 @@ do $sc19_offer_terms$
 declare
   purchasable integer;
   paid_credits integer;
+  -- 2027-12-31T23:59:59Z, the validity this offer revision was approved with.
+  offer_valid_until constant bigint := 1830297599000;
+  -- Every offer id this SC-P24 chain issues; see 20261103120000.
+  chain_offers constant text[] := array['preselekcja-60-2026-11', 'preselekcja-60-2026-11-r2'];
 begin
   if to_regclass('private.sc19_payment_offers') is null then
     raise notice 'sc019_offer_terms_diacritics: SC-019 payment tables are not installed here, nothing to do';
@@ -54,9 +71,25 @@ begin
   if to_regclass('private.sc19_package_policy') is not null then
     select p.credits into paid_credits from private.sc19_package_policy p where p.plan = 'PRESELEKCJA';
     if paid_credits is distinct from 60 then
-      raise notice 'sc019_offer_terms_diacritics: stored PRESELEKCJA quota is %, not 60; the accented 60 CV / 300 zl revision is NOT published', paid_credits;
+      -- Returning before the deactivation below would leave whatever
+      -- 20261103120000 published still on sale: a purchasable 60 CV / 300 zl
+      -- offer next to a stored quota that grants a different number. The flags
+      -- are the only mutable columns, so deactivating every revision this chain
+      -- issued is both possible and the complete answer.
+      update private.sc19_payment_offers set active = false, approved = false
+        where id = any(chain_offers) and (active or approved);
+      raise notice 'sc019_offer_terms_diacritics: stored PRESELEKCJA quota is %, not 60; the accented 60 CV / 300 zl revision is NOT published and nothing of this chain is purchasable', paid_credits;
       return;
     end if;
+  end if;
+
+  -- An expired revision has nothing left to publish: report it and finish
+  -- successfully, so a fresh database can still be built after 2027-12-31.
+  if offer_valid_until <= (extract(epoch from now()) * 1000)::bigint then
+    update private.sc19_payment_offers set active = false, approved = false
+      where id = any(chain_offers) and (active or approved);
+    raise notice 'sc019_offer_terms_diacritics: the accented PRESELEKCJA revision expired at %, nothing is published; issue a new reviewed revision with an owner-approved validity', to_timestamp(offer_valid_until / 1000.0);
+    return;
   end if;
 
   insert into private.sc19_payment_offers(
@@ -78,7 +111,7 @@ begin
     || 'wzór formularza odstąpienia jest dostępny pod /regulamin/formularz-odstapienia.' || chr(10)
     || 'Dane osobowe kandydatów są przetwarzane na podstawie Umowy powierzenia (DPA), '
     || 'dostępnej pod /regulamin/umowa-powierzenia.',
-    1830297599000)
+    offer_valid_until)
   on conflict (id) do nothing;
 
   -- Roll-forward after this migration's own rollback: the accented row already
@@ -97,13 +130,19 @@ begin
     where plan = 'PRESELEKCJA' and approved and active
       and credits = 60 and amount_minor = 30000 and currency = 'PLN'
       and valid_until_ms > (extract(epoch from now()) * 1000)::bigint;
+  -- Reached only when this revision is in date and the stored quota matches, so
+  -- nothing purchasable here really is a broken migration, not an expired offer.
   if purchasable = 0 then
     raise exception 'sc019_offer_terms_diacritics_no_purchasable_offer' using errcode = '55000';
   end if;
 
-  -- The accepted terms must not silently lose Polish letters again.
+  -- The terms THIS migration publishes must not silently lose Polish letters
+  -- again. Scoped to its own id on purpose: a later, legitimately ASCII approved
+  -- offer (a different package, a different language) is none of this
+  -- migration's business, and scanning every approved row would turn a ledger
+  -- replay of this file into a failure the moment such an offer exists.
   if exists (select 1 from private.sc19_payment_offers
-    where approved and active and terms_text !~ '[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]') then
+    where id = 'preselekcja-60-2026-11-r2' and terms_text !~ '[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]') then
     raise exception 'sc019_offer_terms_diacritics_missing' using errcode = '55000';
   end if;
 end

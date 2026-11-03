@@ -165,6 +165,42 @@ test('SC-019 migration is exercised by the complete current migration chain', as
   await db.query(termsSql);
   assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'], 'restoring the approved quota publishes it again');
 
+  // The quota guard is evaluated per migration, independently, so skipping the
+  // publish is not enough: the OTHER migration of the chain may already have
+  // published its revision while the quota still matched. The interleaved order
+  // an operator actually produces — apply the seed, change the quota in
+  // /operator/billing, then apply the terms revision — must still end with
+  // nothing purchasable, or a 60 CV / 300 zl offer would sit on sale next to a
+  // stored quota that grants a different number.
+  await db.query(termsDown);
+  await db.query(seedDown);
+  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
+  await db.query(seedSql);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11'], 'the seed published its revision while the quota matched');
+  await db.query("update private.sc19_package_policy set credits=17 where plan='PRESELEKCJA'");
+  await db.query(termsSql);
+  assert.deepEqual(await purchasableIds(), [],
+    'the terms migration deactivates the already published revision instead of leaving it purchasable');
+  // The reverse order, and repeated replays of either migration, reach the same
+  // end state. Nothing of this chain may become purchasable again by itself.
+  for (const sql of [seedSql, termsSql, seedSql, seedSql, termsSql, termsSql]) {
+    await db.query(sql);
+    assert.deepEqual(await purchasableIds(), [], 'no replay of either migration republishes against a differing quota');
+  }
+  // The same divergence reached the other way round: the terms revision is
+  // published first, then the quota changes, then the seed is replayed.
+  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
+  await db.query(termsSql);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2']);
+  await db.query("update private.sc19_package_policy set credits=17 where plan='PRESELEKCJA'");
+  await db.query(seedSql);
+  assert.deepEqual(await purchasableIds(), [],
+    'the seed deactivates the already published accented revision instead of leaving it purchasable');
+  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
+  await db.query(seedSql);
+  await db.query(termsSql);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'], 'restoring the approved quota publishes it again');
+
   // Rolling the seed back stops the purchase path. It does NOT delete package
   // quotas: private.sc19_package_policy has no provenance, and the seeded values
   // are exactly the ones an operator is most likely to have set in
@@ -665,6 +701,75 @@ test('SC-019 migrated payment store supports native concurrency, replay, immutab
     assert.equal(await p.balance(first.companyId), 48);
   });
   await assertR6(db);
+});
+
+// An offer revision expires. After 2027-12-31 the checked-in validity is in the
+// past, and a chain that aborted there would make every fresh database
+// unbuildable from that date on: new preview branches, restore rehearsals, CI
+// matrix runs. An expired offer is "nothing to publish, report it", never an
+// abort. The substitution happens only in the text handed to this disposable
+// database; the checked-in files are untouched.
+const expiredValidity = sql => sql.replaceAll('1830297599000', '1730297599000');
+test('the chain still builds a fresh database after the seeded offer has expired', async t => {
+  const env = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(env.db, { throughMigration: null, transformSql: expiredValidity });
+  const { db } = env;
+  // The whole chain applied: no migration raised, and the schema is still exactly
+  // the reviewed one.
+  await assertCurrentInventory(db);
+  await h.asAdmin();
+  // The owner-approved quotas are still seeded: they do not expire with an offer.
+  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
+    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }]);
+  // Nothing is purchasable, and no row of the chain is left flagged as on sale.
+  assert.deepEqual((await db.query(`select id,active,approved from private.sc19_payment_offers
+    order by id`)).rows.filter(r => r.active || r.approved), [],
+  'an expired revision is not left approved and active');
+  // Replaying either migration stays a no-op that succeeds.
+  for (const name of ['20261103120000_sc019_seed_packages_offer.sql', '20261103130100_sc019_offer_terms_diacritics.sql']) {
+    await db.query(expiredValidity(await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')));
+  }
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0,
+    'replays of an expired chain publish nothing');
+  // The read-only RPC exists and answers an empty list, not an error, so the
+  // checkout page says "no offer" instead of breaking.
+  const a = await h.seed(users.owner);
+  await h.asAdmin();
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
+    values($1,'1234563218','synthetic-expired-offer-proof')`, [a.companyId]);
+  await h.asUser(users.owner);
+  assert.deepEqual((await db.query('select * from public.sc19_checkout_offers($1)', [a.companyId])).rows, []);
+});
+
+test('the diacritics postflight does not fail on a later legitimately ASCII approved offer', async t => {
+  const env = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(env.db, { throughMigration: null });
+  const { db } = env;
+  await h.asAdmin();
+  // A later approved offer whose terms are genuinely ASCII (a different package
+  // or a different language) is none of this migration's business. Scanning
+  // every approved row turned a ledger replay of 20261103130100 into a failure
+  // the moment such a row existed.
+  await db.query(`insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
+    terms_revision,terms_text,valid_until_ms)
+    values('synthetic-ascii-later','ascii-v1','PRESELEKCJA',true,true,30000,'PLN',60,
+      'ascii-terms','PRESELEKCJA 60 CV for 300,00 PLN gross. English terms, no Polish letters.',$1)`,
+  [Date.now() + 86400000]);
+  await db.query(await readFile(new URL('../supabase/migrations/20261103130100_sc019_offer_terms_diacritics.sql', import.meta.url), 'utf8'));
+  // The accented revision is still the one this migration published, unchanged.
+  assert.match((await db.query("select terms_text t from private.sc19_payment_offers where id='preselekcja-60-2026-11-r2'")).rows[0].t,
+    /każdy wynik weryfikuje człowiek/);
+  // And the guard still bites on the row it IS about: a fresh chain in which this
+  // migration's own terms lost their Polish letters must refuse, so narrowing the
+  // scan to one id did not turn the check off.
+  const stripped = await bootMigrationDatabase(t);
+  await assert.rejects(setupRankingDatabase(stripped.db, { throughMigration: null,
+    transformSql: (sql, name) => name === '20261103130100_sc019_offer_terms_diacritics.sql'
+      ? sql.replace(/(values \(\s*'preselekcja-60-2026-11-r2'[\s\S]*?)(\n\s*offer_valid_until\))/,
+        (_, body, tail) => body.replace(/[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/g,
+          c => 'acelnoszzACELNOSZZ'['ąćęłńóśźżĄĆĘŁŃÓŚŹŻ'.indexOf(c)]) + tail)
+      : sql }),
+  error => error.code === '55000' && /sc019_offer_terms_diacritics_missing/.test(error.message));
 });
 
 test('public.sc19_checkout_offers serves the approved offer to a verified owner only, and cannot write', async t => {
