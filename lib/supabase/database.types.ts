@@ -467,7 +467,9 @@ export type Database = {
         }[];
       };
       sc19_operator_taken_trial_nips: {
-        Args: Record<PropertyKey, never>;
+        // Searchable by NIP, company name or company id: the listing is capped
+        // at 200 rows and carries the only release form in the panel.
+        Args: { search: string | null };
         Returns: {
           nip: string; company_id: string; company_name: string;
           approved_at: string | null; free_claimed: boolean; source: string;

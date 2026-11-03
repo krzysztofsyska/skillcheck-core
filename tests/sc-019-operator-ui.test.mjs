@@ -54,6 +54,13 @@ test('release form carries the company the operator verified, and refuses to go 
   assert.match(fields, /name="nip" value=\{row\.nip\}/);
   assert.match(fields, /name="companyId" value=\{row\.company_id\}/,
     'the release form must send the company the line is about');
+
+  // The occupied-NIP listing is capped at 200 rows and carries the only release
+  // form in the panel, so it must take the search box (bot review finding
+  // 4460505084, 2026-11-03). Without it an older occupied NIP has no release
+  // form anywhere and the real company keeps being refused its FREE.
+  assert.match(page, /sc19_operator_taken_trial_nips',\s*\{\s*search: search \|\| null\s*\}/,
+    'the occupied-NIP listing must be filtered by the same search box');
 });
 
 test('database errors map to known panel notices', () => {

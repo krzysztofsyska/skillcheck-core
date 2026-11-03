@@ -798,24 +798,46 @@ grant execute on function public.sc19_operator_auto_free_settings() to authentic
 
 -- Every occupied trial NIP, with who occupied it and when, so the operator can
 -- recognise a NIP occupied by an account that does not represent that company.
-create function public.sc19_operator_taken_trial_nips()
+--
+-- IT IS SEARCHABLE, BECAUSE IT IS THE ONLY WAY IN (review finding, bot
+-- 2026-11-03). The listing is capped at 200 rows, newest first, and the release
+-- form is rendered FROM those rows — it is the only place in the panel where a
+-- NIP can be freed. Without a search, the 201st occupied NIP simply has no
+-- release form anywhere: the remedy for "a NIP occupied by an account that does
+-- not represent that company" would exist for recent occupations only, and the
+-- real company would keep being refused its FREE with nothing the operator could
+-- do about it. The same `search` the companies list and the consent report
+-- already take now filters this one too, so a specific NIP can always be reached
+-- however old it is. It matches the NIP as well as the company name and id,
+-- because the operator arrives here from a NIP, and the digits are normalised
+-- the same way every other entry point normalises them, so a NIP typed with
+-- dashes or spaces still finds its row.
+create function public.sc19_operator_taken_trial_nips(search text default null)
 returns table(nip text, company_id uuid, company_name text, approved_at timestamptz,
   free_claimed boolean, source text)
 language plpgsql stable security definer set search_path='' as $$
+declare
+  needle text := nullif(btrim(coalesce(search,'')),'');
+  digits text := nullif(replace(replace(btrim(coalesce(search,'')), '-', ''), ' ', ''),'');
 begin
   perform private.sc19_require_operator();
+  if length(needle) > 200 then raise exception 'sc19_invalid_search' using errcode='22023'; end if;
   return query
     select a.nip, a.company_id, c.name, a.approved_at,
       exists (select 1 from private.sc19_trial_nips t where t.company_id=a.company_id and t.nip=a.nip),
       case when a.proof_reference like 'mf-biala-lista:%' then 'wykaz VAT' else 'operator' end
     from private.sc19_trial_approvals a
     join public.companies c on c.id=a.company_id
+    where needle is null
+      or (digits is not null and digits ~ '^[0-9]+$' and strpos(a.nip, digits) > 0)
+      or a.company_id::text=lower(needle)
+      or strpos(lower(c.name), lower(needle)) > 0
     order by a.approved_at desc, a.nip
     limit 200;
 end;
 $$;
-revoke all on function public.sc19_operator_taken_trial_nips() from public, anon, authenticated;
-grant execute on function public.sc19_operator_taken_trial_nips() to authenticated;
+revoke all on function public.sc19_operator_taken_trial_nips(text) from public, anon, authenticated;
+grant execute on function public.sc19_operator_taken_trial_nips(text) to authenticated;
 
 -- Releases an occupied trial NIP so the company that really holds it can
 -- activate FREE afterwards. The remedy for the one abuse a public NIP allows:

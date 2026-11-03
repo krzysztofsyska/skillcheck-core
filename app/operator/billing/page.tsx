@@ -51,7 +51,10 @@ export default async function OperatorBillingPage({ searchParams }: {
     client.rpc('sc19_operator_marketing_consents', { search: search || null }),
     client.rpc('sc19_operator_auto_free_grants'),
     client.rpc('sc19_operator_auto_free_settings'),
-    client.rpc('sc19_operator_taken_trial_nips'),
+    // The same search box as the companies list: the listing is capped at 200
+    // rows and the release form is rendered from them, so without a search an
+    // older occupied NIP would have no release form anywhere in the panel.
+    client.rpc('sc19_operator_taken_trial_nips', { search: search || null }),
     client.rpc('sc19_operator_trial_nip_releases'),
   ]);
   if (policy.error?.code === '42501' || companies.error?.code === '42501') notFound();

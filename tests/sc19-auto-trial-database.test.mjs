@@ -590,12 +590,30 @@ test('the operator can release an occupied NIP so the real company can use FREE'
 
   // The operator sees the occupied NIP and who occupied it.
   await h.asUser(operator);
-  const taken = await call(db, 'select * from public.sc19_operator_taken_trial_nips()');
+  const taken = await call(db, 'select * from public.sc19_operator_taken_trial_nips(null)');
   assert.equal(taken.length, 1);
   assert.equal(taken[0].nip, nipA);
   assert.equal(taken[0].company_id, a.companyId);
   assert.equal(taken[0].free_claimed, true);
   assert.equal(taken[0].source, 'wykaz VAT');
+
+  // AND IT IS SEARCHABLE (bot review finding 4460505084, 2026-11-03). The
+  // listing is capped at 200 rows and the release form is rendered from them, so
+  // without a search the 201st occupied NIP has no release form anywhere in the
+  // panel and the real company keeps being refused its FREE. Reachable by NIP,
+  // by company name and by company id; a NIP typed with separators still finds
+  // its row, and a needle that matches nothing returns nothing rather than
+  // everything.
+  const foundBy = async needle =>
+    (await call(db, 'select nip from public.sc19_operator_taken_trial_nips($1)', [needle])).map(r => r.nip);
+  assert.deepEqual(await foundBy(nipA), [nipA], 'by NIP');
+  assert.deepEqual(await foundBy(`${nipA.slice(0, 3)}-${nipA.slice(3, 6)}-${nipA.slice(6)}`), [nipA],
+    'by a NIP typed with separators');
+  assert.deepEqual(await foundBy(a.companyId), [nipA], 'by company id');
+  assert.deepEqual(await foundBy(nipB), [], 'a NIP nobody holds matches nothing, not everything');
+  assert.deepEqual(await foundBy('firma-ktorej-nie-ma'), []);
+  await assert.rejects(db.query('select * from public.sc19_operator_taken_trial_nips($1)', ['x'.repeat(201)]),
+    code('22023'), 'an oversized needle is refused, as in the other operator reports');
 
   // A reason is mandatory, and an unoccupied NIP cannot be released.
   const release = (nipValue, reasonText, company) =>
@@ -660,11 +678,11 @@ test('the operator can release an occupied NIP so the real company can use FREE'
     await h.asUser(who);
     await assert.rejects(db.query('select * from public.sc19_operator_release_trial_nip($1,$2,$3)',
       [nipA, 'proba nieuprawniona', a.companyId]), code('42501'), who);
-    await assert.rejects(db.query('select * from public.sc19_operator_taken_trial_nips()'), code('42501'), who);
+    await assert.rejects(db.query('select * from public.sc19_operator_taken_trial_nips(null)'), code('42501'), who);
     await assert.rejects(db.query('select * from public.sc19_operator_trial_nip_releases()'), code('42501'), who);
   }
   await h.asUser(null, 'anon');
-  await assert.rejects(db.query('select * from public.sc19_operator_taken_trial_nips()'), code('42501'), 'anon');
+  await assert.rejects(db.query('select * from public.sc19_operator_taken_trial_nips(null)'), code('42501'), 'anon');
 });
 
 test('a released NIP cannot be reoccupied by the company it was taken from', async t => {
@@ -744,7 +762,7 @@ test('a stale release form cannot free the NIP of the company that rightfully to
   await h.asUser(users.owner);
   assert.equal((await autoClaim(db, a.companyId, nipA)).outcome, 'granted');
   await h.asUser(operator);
-  const page = (await call(db, 'select * from public.sc19_operator_taken_trial_nips()'))[0];
+  const page = (await call(db, 'select * from public.sc19_operator_taken_trial_nips(null)'))[0];
   assert.equal(page.company_id, a.companyId, 'the page he is looking at says A holds it');
 
   // Meanwhile: a second operator releases it, and company B — the real owner —
@@ -1465,7 +1483,7 @@ const PUBLIC_RPCS = Object.freeze({
   'public.sc19_operator_set_auto_free(boolean)': ['authenticated'],
   'public.sc19_operator_auto_free_settings()': ['authenticated'],
   'public.sc19_operator_auto_free_grants()': ['authenticated'],
-  'public.sc19_operator_taken_trial_nips()': ['authenticated'],
+  'public.sc19_operator_taken_trial_nips(text)': ['authenticated'],
   'public.sc19_operator_release_trial_nip(text,text,uuid)': ['authenticated'],
   'public.sc19_operator_trial_nip_releases()': ['authenticated'],
   'public.marketing_consent_grant(uuid,text)': ['authenticated'],
