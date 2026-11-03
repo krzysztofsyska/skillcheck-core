@@ -6,6 +6,7 @@ import ts from 'typescript';
 import * as validation from '../lib/auth-validation.ts';
 import * as authUrl from '../lib/auth-url.ts';
 import * as legal from '../lib/legal.ts';
+import * as nextPath from '../lib/safe-next-path.ts';
 
 // Loads app/auth/actions.ts with mocked Next.js and Supabase modules.
 function load(rpcResult) {
@@ -19,6 +20,7 @@ function load(rpcResult) {
     'next/headers': { async headers() { return new Map(); } },
     '../../lib/supabase/server': { async createClient() { return client; } },
     '../../lib/auth-validation': validation, '../../lib/auth-url': authUrl, '../../lib/legal': legal,
+    '../../lib/safe-next-path': nextPath,
   };
   mod.require = id => id in mocks ? mocks[id] : require(id);
   mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, path);

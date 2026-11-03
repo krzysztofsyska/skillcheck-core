@@ -20,7 +20,7 @@ const requestKey = o => `sc19:request:${companyId}:${o.id}:${o.termsRevision}`;
 const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
-async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false } = {}) {
+async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false, p24CheckoutUrl='' } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
@@ -42,8 +42,15 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
     },
   };
   const context = {
-    exports: {}, Intl, Date:clientNow===undefined?Date:class extends Date {static now(){return clientNow;}}, AbortController,
-    require(name) { return name === 'react' ? react : require(name); },
+    exports: {}, Intl, Date:clientNow===undefined?Date:class extends Date {static now(){return clientNow;}}, AbortController, URL,
+    // Only the public checkout URL is read; NEXT_PUBLIC_* is inlined in a real build.
+    process: { env: { NEXT_PUBLIC_P24_CHECKOUT_URL: p24CheckoutUrl } },
+    require(name) {
+      if (name === 'react') return react;
+      // The component reads the approved package figures from lib/.
+      if (name.endsWith('/lib/preselekcja-offer')) return require('../lib/preselekcja-offer.ts');
+      return require(name);
+    },
     crypto: { randomUUID() { return `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`; } },
     sessionStorage: {
       getItem: key => {if(storageUnavailable)throw Error('blocked');return storage.get(key) ?? null;},
@@ -208,4 +215,51 @@ test('conflicting unresolved purchase is explained without redirect or automatic
  const h=await harness({checkout:async()=>({ok:false,json:async()=>({error:'SC19_PAYMENT_PURCHASE_PENDING'})})});
  t.after(h.close);h.accept();await h.click('Zamawiam');
  assert.equal(h.posts.length,1);assert.deepEqual(h.redirects,[]);assert.ok(h.find('p','nierozliczone zamówienie'));
+});
+
+// SC-BUY-001: with the offers API unavailable the screen shows the approved
+// package instead of a dead end, and the payment button follows the configured
+// Przelewy24 address. The P24 API integration itself is a separate task.
+const offersDown = () => { throw Error('offers API unavailable'); };
+
+test('offers API down shows the approved package summary and consent, not a dead end', async t => {
+  const h = await harness({ offers: offersDown });
+  t.after(h.close);
+  assert.equal(h.find('p', 'Płatności nie są jeszcze dostępne'), undefined);
+  assert.ok(h.find('h2', '300'), 'gross price shown');
+  assert.ok(h.find('p', 'analiz CV'), 'package scope shown');
+  assert.ok(h.find('p', '60'), 'package size shown');
+  assert.ok(h.find('p', '243,90'), 'net price shown');
+  assert.ok(h.find('p', 'miesiące'), 'validity shown');
+  assert.ok(h.find('input'), 'terms checkbox shown');
+});
+
+test('an unconfigured payment address keeps the button disabled with a clear note', async t => {
+  const h = await harness({ offers: offersDown });
+  t.after(h.close);
+  const button = h.find('button', 'Przejdź do płatności');
+  assert.ok(button); assert.equal(button.props.disabled, true);
+  assert.ok(h.find('p', 'Płatność Przelewy24 — konfiguracja w toku'));
+  h.accept();
+  assert.equal(h.find('button', 'Przejdź do płatności').props.disabled, true);
+});
+
+test('a configured https address opens only after the terms are accepted', async t => {
+  const url = 'https://pay.fixture.invalid/preselekcja';
+  const h = await harness({ offers: offersDown, p24CheckoutUrl: url });
+  t.after(h.close);
+  assert.equal(h.find('button', 'Przejdź do płatności'), undefined);
+  const before = h.find('a', 'Przejdź do płatności');
+  assert.ok(before); assert.equal(before.props.href, undefined);
+  h.accept();
+  assert.equal(h.find('a', 'Przejdź do płatności').props.href, url);
+});
+
+test('a non-https or malformed payment address is never linked', async t => {
+  for (const value of ['http://pay.fixture.invalid/x', 'javascript:alert(1)', 'pay.fixture.invalid', '   ']) {
+    const h = await harness({ offers: offersDown, p24CheckoutUrl: value });
+    t.after(h.close);
+    assert.equal(h.find('a', 'Przejdź do płatności'), undefined, value);
+    assert.equal(h.find('button', 'Przejdź do płatności').props.disabled, true, value);
+  }
 });

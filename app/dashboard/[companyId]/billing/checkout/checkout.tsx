@@ -1,23 +1,34 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { preselekcjaOffer } from '../../../../../lib/preselekcja-offer';
 type Offer={id:string;revision:string;amountMinor:number;currency:string;credits:number;
   termsRevision:string;termsText:string;validUntilMs:number};
 const pln=(v:number)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN'}).format(v/100);
+// Przelewy24 is wired up in a separate task. Until then the checkout screen may
+// point at a hosted payment page configured by the owner; an empty or non-http
+// value keeps the button disabled instead of linking somewhere unexpected.
+const p24CheckoutUrl=()=>{
+  const raw=(typeof process==='undefined'?'':process.env.NEXT_PUBLIC_P24_CHECKOUT_URL ?? '').trim();
+  if(!raw)return '';
+  try{const url=new URL(raw);return url.protocol==='https:'?url.toString():'';}catch{return '';}
+};
 export default function Checkout({companyId}: {companyId:string}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
   const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string}|null>(null);
   const [requestIds]=useState(()=>new Map<string,string>());
+  // Offers API unavailable: show the approved package summary instead of a dead end.
+  const [fallback,setFallback]=useState(false),[fallbackAccepted,setFallbackAccepted]=useState(false);
   const offer=offers.find(o=>o.id===selected);
   async function loadOffers(signal?: AbortSignal) {
-    setLoading(true);setAccepted(false);setOffers([]);setSelected('');
+    setLoading(true);setAccepted(false);setOffers([]);setSelected('');setFallback(false);
     try {
       const r=await fetch(`/api/billing/offers?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',signal});
       if(!r.ok)throw Error();const data=await r.json();
       if(!signal?.aborted){setOffers(data.offers);setSelected(data.offers[0]?.id ?? '');}
     } catch {
-      if(!signal?.aborted)setMessage('Płatności nie są jeszcze dostępne. Cena i warunki oferty oczekują na zatwierdzenie.');
+      if(!signal?.aborted){setFallback(true);setMessage('');}
     } finally {if(!signal?.aborted)setLoading(false);}
   }
   useEffect(()=>{
@@ -92,7 +103,19 @@ export default function Checkout({companyId}: {companyId:string}) {
         <p>Płatność online obsługuje Przelewy24 (PayPro S.A., ul. Pastelowa 8, 60-198 Poznań): szybki przelew, BLIK lub karta, w zakresie metod udostępnionych przez operatora. Analizy przyznajemy po potwierdzeniu płatności przez operatora, zwykle w ciągu kilku minut. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>
         <button type="button" disabled={!accepted||busy||!!paidOrder} onClick={buy}>
           {busy?'Przetwarzam…':`Zamawiam i płacę ${pln(offer.amountMinor)}`}</button></>}
-    </> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
+    </> : fallback ? <section aria-label="Podsumowanie pakietu PRESELEKCJA">
+      <h2>{preselekcjaOffer.grossPln} zł brutto</h2>
+      <p>{preselekcjaOffer.analyses} analiz CV • jednorazowo • {preselekcjaOffer.netPln} zł netto + 23% VAT</p>
+      <p>Analizy ważne {preselekcjaOffer.validityMonths} miesiące od dnia przyznania. Wyniki weryfikuje rekruter; SkillCheck nie podejmuje decyzji o zatrudnieniu.</p>
+      <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={fallbackAccepted}
+        onChange={e=>setFallbackAccepted(e.target.checked)}/> Akceptuję <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> i potwierdzam zapoznanie się z <a href="/polityka-prywatnosci" target="_blank" rel="noopener">Polityką prywatności</a>.</label>
+      {p24CheckoutUrl()
+        ? <a className="button" href={fallbackAccepted?p24CheckoutUrl():undefined} aria-disabled={!fallbackAccepted}
+            rel="noopener" onClick={e=>{if(!fallbackAccepted)e.preventDefault();}}>Przejdź do płatności</a>
+        : <><button type="button" disabled>Przejdź do płatności</button>
+          <p role="status">Płatność Przelewy24 — konfiguracja w toku</p></>}
+      <p>Analizy przyznajemy po potwierdzeniu płatności. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>
+    </section> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
     {message&&<p role="status" aria-live="polite">{message}</p>}
     <button type="button" disabled={busy||loading} onClick={()=>{setMessage('');return loadOffers();}}>Odśwież oferty</button>
     {paidOrder&&<button type="button" disabled={busy} onClick={nextPurchase}>Kup kolejny pakiet</button>}

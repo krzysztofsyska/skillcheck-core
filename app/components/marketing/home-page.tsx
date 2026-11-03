@@ -16,6 +16,7 @@ import {
   steps,
 } from "./content";
 import { PackageComparison } from "./package-comparison";
+import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 import { SiteFooter } from "./site-footer";
 import { SiteHeader } from "./site-header";
 
@@ -45,7 +46,8 @@ export async function HomePage() {
               <h1 id="hero-title">{heroTitle}</h1>
               <p className={styles.lede}>{heroLede}</p>
               <div className={styles.actions}>
-                <Link href="/preselekcja#free" className={styles.primary}>{`Wypróbuj FREE — ${freePrice}`}</Link>
+                <Link href={BUY_PRESELEKCJA_PATH} className={styles.primary}>{BUY_PRESELEKCJA_LABEL}</Link>
+                <Link href="/preselekcja#free" className={styles.secondary}>{`Wypróbuj FREE — ${freePrice}`}</Link>
                 <Link href="/kalkulator" className={styles.secondary}>Sprawdź koszt rekrutacji</Link>
               </div>
               <p className={styles.note}>

@@ -3,6 +3,7 @@ import styles from "../../marketing.module.css";
 import { sc19AnalysisScope, sc19PolicyPendingCell, sc19PolicyPendingScope, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
 import { freeAnalyses, freePrice, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
 import { nextStages, nextStagesNote } from "./content";
+import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 
 export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean }) {
   // Live catalog wins when enabled; an enabled but failing catalog shows no number.
@@ -33,7 +34,10 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
     <h3>{plan.name}</h3><p className={styles.planTitle}>{plan.title}</p><p>{plan.text}</p>
     <ul>{plan.features.map(f=><li key={f}>{f}</li>)}</ul>
     <div className={styles.planPrice}><strong>{plan.price}</strong><p>{plan.scope}</p></div>
-    <Link href={plan.name === "FREE" ? "/preselekcja#free" : "/preselekcja"} className={plan.name === "FREE" ? styles.secondary : styles.primary}>{plan.name === "FREE" ? `Wypróbuj FREE — ${freePrice}` : "Zamów PRESELEKCJĘ"}</Link>
+    {plan.name === "FREE"
+      ? <Link href="/preselekcja#free" className={styles.secondary}>{`Wypróbuj FREE — ${freePrice}`}</Link>
+      : <><Link href={BUY_PRESELEKCJA_PATH} className={styles.primary}>{BUY_PRESELEKCJA_LABEL}</Link>
+        <Link href="/preselekcja" className={styles.secondary}>Poznaj szczegóły oferty</Link></>}
   </article>)}</div>
   <p className={styles.note}>{sizes
     ? `${preselectionNote} Liczba analiz CV pochodzi z zatwierdzonej polityki pakietów. Założenie konta nie aktywuje pakietu. Aktualną dostępność funkcji pokazujemy w sekcji „Jak to działa”.`

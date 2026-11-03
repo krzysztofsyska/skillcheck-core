@@ -2,12 +2,14 @@ import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { sectionLinks } from "./links";
 import { MobileNav } from "./mobile-nav";
+import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 
 const mobileLinks = [
   ...sectionLinks,
   { href: "/login", label: "Zaloguj się" },
   { href: "/kalkulator", label: "Sprawdź koszt rekrutacji" },
   { href: "/preselekcja", label: "Zamów PRESELEKCJĘ" },
+  { href: BUY_PRESELEKCJA_PATH, label: BUY_PRESELEKCJA_LABEL, variant: "primary" as const },
   { href: "/preselekcja#free", label: "Wypróbuj FREE — 0 zł", variant: "primary" as const },
 ];
 
@@ -27,6 +29,7 @@ export function SiteHeader() {
             <Link href="/login" className={styles.loginLink}>Zaloguj się</Link>
             <Link href="/kalkulator" className={styles.navLink}>Sprawdź koszt rekrutacji</Link>
             <Link href="/preselekcja" className={styles.navLink}>Zamów PRESELEKCJĘ</Link>
+            <Link href={BUY_PRESELEKCJA_PATH} className={styles.primary}>{BUY_PRESELEKCJA_LABEL}</Link>
             <Link href="/preselekcja#free" className={styles.primary}>Wypróbuj FREE — 0 zł</Link>
           </nav>
           <MobileNav links={mobileLinks} />
