@@ -115,12 +115,22 @@ test('runner applies the whole checked-in chain on a fresh database and leaves t
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.skillcheck_migration_ledger where statements is null or sha256 is null')).rows[0].n, 0);
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.schema_migrations')).rows[0].n, files.length);
   // The only commercial data the chain seeds are the owner-approved quotas and the
-  // one purchasable PRESELEKCJA offer (20261103120000_sc019_seed_packages_offer).
+  // PRESELEKCJA offer (20261103120000_sc019_seed_packages_offer), re-issued with
+  // accented Polish terms as a new revision by
+  // 20261103130100_sc019_offer_terms_diacritics while the first revision is
+  // deactivated (the offer row is update-immutable, so it is never rewritten).
   // No balance, grant, order or journal entry is created for any company.
   assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
     [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }], 'only the owner-approved quotas');
-  assert.deepEqual((await db.query('select plan,credits,amount_minor,currency from private.sc19_payment_offers')).rows,
-    [{ plan: 'PRESELEKCJA', credits: 60, amount_minor: 30000, currency: 'PLN' }], 'only the approved PRESELEKCJA offer');
+  assert.deepEqual((await db.query('select id,plan,credits,amount_minor,currency,active,approved from private.sc19_payment_offers order by id')).rows,
+    [{ id: 'preselekcja-60-2026-11', plan: 'PRESELEKCJA', credits: 60, amount_minor: 30000, currency: 'PLN', active: false, approved: false },
+      { id: 'preselekcja-60-2026-11-r2', plan: 'PRESELEKCJA', credits: 60, amount_minor: 30000, currency: 'PLN', active: true, approved: true }],
+    'exactly one purchasable PRESELEKCJA offer, at the unchanged approved price');
+  const offered = (await db.query('select terms_text from private.sc19_payment_offers where approved and active')).rows;
+  assert.equal(offered.length, 1);
+  assert.match(offered[0].terms_text, /[ąćęłńóśźż]/, 'the accepted terms are proper Polish');
+  // Reading the offer needs no payment provider; taking a payment still does.
+  assert.notEqual((await db.query("select to_regprocedure('public.sc19_checkout_offers(uuid)') value")).rows[0].value, null);
   for (const table of ['sc19_balances', 'sc19_trial_nips', 'sc19_trial_approvals', 'sc19_credit_journal',
     'sc19_payment_orders', 'sc19_payment_grants', 'sc19_payment_requests']) {
     assert.equal((await db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, `No ${table} rows seeded`);

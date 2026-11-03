@@ -27,10 +27,23 @@ test('SC19 real Next routes: authenticated owner UI and disabled transport',asyn
   const page=await fetch(base+path,{headers});assert.equal(page.status,200);assert.match(await page.text(),/Pakiet PRESELEKCJA/);
   owner=false;assert.match(await (await fetch(base+path,{headers})).text(),/Zamówienie może złożyć właściciel firmy/);owner=true;
  });
- await t.test('all concrete routes refuse activation; no browser success query changes state',async()=>{
-  for(const [p,method] of [['checkout','POST'],['offers?companyId='+company,'GET'],['orders/'+company+'?companyId='+company+'&success=true','GET'],['webhook','POST']]){
+ await t.test('every route that could take money refuses activation; no browser success query changes state',async()=>{
+  // Registering a transaction needs a provider; there is none, so these stay shut.
+  for(const [p,method] of [['checkout','POST'],['orders/'+company+'?companyId='+company+'&success=true','GET'],['webhook','POST']]){
     const r=await fetch(base+'/api/billing/'+p,{method,headers:{...headers,Origin:base,'Content-Type':'application/json'},...(method==='POST'?{body:'{}'}:{})});
     assert.equal(r.status,503);assert.match(r.headers.get('cache-control'),/no-store/);assert.deepEqual(await r.json(),{error:'SC19_PAYMENTS_DISABLED'});
   }
+ });
+ await t.test('reading the offer needs no provider, but the stub database still refuses this company',async()=>{
+  // The read-only catalog is composed even with no provider. Against the synthetic
+  // Supabase stub, public.sc19_checkout_offers is not reachable, so the route must
+  // fail closed rather than invent an offer or expose a database error.
+  const r=await fetch(base+'/api/billing/offers?companyId='+company,{headers});
+  assert.match(r.headers.get('cache-control'),/no-store/);
+  assert.ok([403,409,503].includes(r.status),`unexpected offers status ${r.status}`);
+  const body=await r.json();
+  assert.equal(body.offers,undefined,'no offer is served without a successful authorized read');
+  assert.equal(body.checkoutAvailable,undefined);
+  assert.match(String(body.error),/^SC19_/);
  });
 });

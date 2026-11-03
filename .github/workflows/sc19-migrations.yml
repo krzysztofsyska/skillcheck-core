@@ -8,6 +8,7 @@ on:
       - 'docs/prototypes/sc19-payment-storage.sql'
       - 'docs/sc19-migrations*.md'
       - 'lib/sc19-payment*.ts'
+      - 'lib/sc19-offer-*.ts'
       - 'tests/sc-019-migrations*.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step4-erasure-r8.test.mjs'
