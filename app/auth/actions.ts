@@ -6,31 +6,35 @@ import { createClient } from "../../lib/supabase/server";
 import { credentials } from "../../lib/auth-validation";
 import { authCallbackUrl } from "../../lib/auth-url";
 import { hasLegalAcceptance, LEGAL_ACCEPTANCE_REVISION, LEGAL_ACCEPTED_DOCUMENTS, LEGAL_VERSION } from "../../lib/legal";
+import { nextRedirectTarget, safeNextPath, withNext } from "../../lib/safe-next-path";
 
 export async function login(form: FormData) {
+  // Only an internal path is ever followed; see lib/safe-next-path.ts.
+  const next = safeNextPath(form.get("next"));
   const input = credentials(form);
-  if (!input) redirect("/login?message=invalid");
+  if (!input) redirect(withNext("/login?message=invalid", next));
   const client = await createClient();
   const { error } = await client.auth.signInWithPassword(input);
-  if (error) redirect("/login?message=failed");
-  redirect("/dashboard");
+  if (error) redirect(withNext("/login?message=failed", next));
+  redirect(nextRedirectTarget(next, "/dashboard"));
 }
 export async function register(form: FormData) {
+  const next = safeNextPath(form.get("next"));
   const input = credentials(form);
-  if (!input || input.password.length < 12) redirect("/register?message=invalid");
-  if (!hasLegalAcceptance(form)) redirect("/register?message=terms");
+  if (!input || input.password.length < 12) redirect(withNext("/register?message=invalid", next));
+  if (!hasLegalAcceptance(form)) redirect(withNext("/register?message=terms", next));
   let emailRedirectTo: string;
   try { emailRedirectTo = authCallbackUrl('signup', (await headers()).get('origin')); }
-  catch { redirect('/register?message=unavailable'); }
+  catch { redirect(withNext('/register?message=unavailable', next)); }
   const client = await createClient();
   const { data, error } = await client.auth.signUp({ ...input, options: {
     emailRedirectTo,
     // Server-set record of the accepted Regulamin + DPA + privacy notice + Annex 1 (voice) version.
     data: { legal_acceptance: { version: LEGAL_VERSION, revision: LEGAL_ACCEPTANCE_REVISION, documents: [...LEGAL_ACCEPTED_DOCUMENTS], accepted_at: new Date().toISOString() } },
   } });
-  if (error) redirect("/register?message=failed");
-  if (data.session) redirect("/onboarding");
-  redirect("/login?message=confirm");
+  if (error) redirect(withNext("/register?message=failed", next));
+  if (data.session) redirect(withNext("/onboarding", next));
+  redirect(withNext("/login?message=confirm", next));
 }
 export async function logout() {
   const client = await createClient();
@@ -39,13 +43,16 @@ export async function logout() {
   redirect("/login");
 }
 export async function createCompany(form: FormData) {
+  const next = safeNextPath(form.get("next"));
   const client = await createClient();
   const { data: { user } } = await client.auth.getUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(withNext("/login", next));
   const name = String(form.get("name") ?? "").trim();
-  if (!name || name.length > 200) redirect("/onboarding?message=invalid");
+  if (!name || name.length > 200) redirect(withNext("/onboarding?message=invalid", next));
   const { data: companyId, error } = await client.rpc("ensure_initial_company", { company_name: name });
-  if (error) redirect("/onboarding?message=failed");
+  if (error) redirect(withNext("/onboarding?message=failed", next));
+  // A pending purchase path wins: it resolves the new company itself.
+  if (next) redirect(nextRedirectTarget(next, "/dashboard"));
   // Open the new company's dashboard straight away; fall back to the list for an unexpected value.
   redirect(typeof companyId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId) ? `/dashboard/${companyId}` : "/dashboard");
 }

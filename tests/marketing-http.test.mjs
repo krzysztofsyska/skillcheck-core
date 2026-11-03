@@ -131,11 +131,14 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Sprawdź koszt rekrutacji/);
   assert.match(home, /Wypróbuj FREE — 0 zł/);
   assert.ok(homeHrefs.includes('/preselekcja'), 'marketing points to PRESELEKCJA pilot');
+  // SC-BUY-001: one click from the home page to the package checkout screen.
+  assert.ok(homeHrefs.includes('/kup/preselekcja'), 'home page has the Kup PRESELEKCJĘ button');
+  assert.match(home, /Kup PRESELEKCJĘ/);
   // Every CTA leads to an existing path: FREE, the offer page or the calculator.
   for (const href of homeHrefs.filter((link) => link.startsWith('/') && !link.startsWith('/_next') && !link.startsWith('/legal/'))) {
     const target = href.split('#')[0] || '/';
     assert.ok(
-      ['/', '/demo', '/kalkulator', '/preselekcja', '/rozmowa', '/register', '/login', '/regulamin',
+      ['/', '/demo', '/kalkulator', '/preselekcja', '/kup/preselekcja', '/rozmowa', '/register', '/login', '/regulamin',
         '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
         '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
       `home CTA points at an existing path: ${href}`,
@@ -270,6 +273,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Analiza 60 CV, shortlista i raport/, 'approved PRESELEKCJA description');
   assert.match(home, /Analiza 5 CV/, 'approved FREE description');
   assert.match(order, /zawsze weryfikuje osoba prowadząca rekrutację/);
+  // SC-BUY-001: the offer page carries the same one-click purchase button.
+  assert.ok(hrefs(order).includes('/kup/preselekcja'), 'offer page has the Kup PRESELEKCJĘ button');
+  assert.match(order, /Kup PRESELEKCJĘ/);
   assert.doesNotMatch(order, /<li>Wyniki, ranking, shortlistę i raport weryfikuje/);
   const comparison = readFileSync(new URL('../app/components/marketing/package-comparison.tsx', import.meta.url), 'utf8');
   const lines = comparison.split('\n');
@@ -277,8 +283,12 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.ok(offer, 'PRESELEKCJA offer defined');
   assert.match(offer, /scope:`\$\{preselectionCount \?\? sc19PolicyPendingScope\}/);
   assert.match(comparison, /preselekcjaAnalyses\(catalogEnabled, sizes\)/);
-  const offerSource = readFileSync(new URL('../app/components/marketing/preselekcja-offer.ts', import.meta.url), 'utf8');
-  assert.match(offerSource, /if \(sizes\) return sizes\.PRESELEKCJA;\s*return catalogEnabled \? null : preselekcjaOffer\.analyses;/, 'live catalog wins; enabled failure shows no number');
+  const offerModule = readFileSync(new URL('../app/components/marketing/preselekcja-offer.ts', import.meta.url), 'utf8');
+  assert.match(offerModule, /if \(sizes\) return sizes\.PRESELEKCJA;\s*return catalogEnabled \? null : preselekcjaOffer\.analyses;/, 'live catalog wins; enabled failure shows no number');
+  // The approved figures live in lib/ so the checkout client component reads the
+  // same numbers as the marketing pages; the calculator is checked against them.
+  const offerSource = readFileSync(new URL('../lib/preselekcja-offer.ts', import.meta.url), 'utf8');
+  assert.match(offerModule, /export \{ preselekcjaOffer, freeOffer \} from "\.\.\/\.\.\/\.\.\/lib\/preselekcja-offer";/, 'one source of the approved figures');
   // The static calculator cannot read the catalog: keep its package size and net price equal to the approved offer.
   assert.equal(calculator.match(/PRE_PACKAGE_CV=(\d+);/)?.[1], offerSource.match(/analyses: (\d+),/)?.[1]);
   assert.equal(calculator.match(/PRE_NET_CENTS=(\d+);/)?.[1], offerSource.match(/netPln: "(\d+),(\d+)"/)?.slice(1).join(''));
