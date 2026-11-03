@@ -66,6 +66,10 @@ begin
   -- a database that already carries real commercial activity. skillcheck-preview
   -- is test-only and has none; a live database would, and a seed must never
   -- rewrite or sit beside somebody's real billing state.
+  -- private.sc19_trial_approvals and private.sc19_analysis_spend are deliberately
+  -- NOT counted: a trial approval is an operator verification of a company/NIP,
+  -- not commercial activity, and the FREE preselection walk this seed exists for
+  -- needs one, so counting it would make the seed refuse its own preview database.
   select coalesce(sum(n), 0)::integer into live_rows from (
     select count(*) n from private.sc19_balances
     union all select count(*) from private.sc19_credit_journal

@@ -131,60 +131,142 @@ test('each migration and its ledger row are applied in one transaction', () => {
 // Commercial activation is owner-gated (/operator/billing, CLAUDE.md; "billing
 // and charge actions" in AGENTS.md). A migration runs wherever the chain runs,
 // production included, so no migration may write package quotas or publish a
-// purchasable offer. tests/sc-019-migrations-production-history.test.mjs enforces
-// the same rule against the real production-shaped replay; this check is the
-// static half, so a new migration cannot reintroduce it without being noticed.
-test('no migration writes package quotas or publishes a purchasable offer', () => {
+// purchasable offer.
+//
+// WHAT THIS CHECK IS WORTH. It is a BEST-EFFORT LINT over migration text, not a
+// proof. It reads SQL with regular expressions, so it cannot decide what a
+// migration really does: SQL assembled at runtime from values in another table,
+// a write hidden behind a trigger or a view's `instead of` rule, a rename that
+// makes a different table the commercial one, or simply a form nobody thought of
+// will pass it. Treating a green run here as "no migration can activate
+// commerce" is the mistake this paragraph exists to prevent.
+//
+// THE AUTHORITATIVE GUARD IS tests/sc-019-migrations-production-history.test.mjs.
+// That one replays the real chain against a production-shaped database and then
+// asserts the FINAL TABLE STATE — no package policy rows, no balances, no
+// journal, no grants, no active approved offer — which is the property that
+// actually matters and which no amount of SQL phrasing can talk its way around.
+// This lint exists only to fail fast and locally, with a readable message, for
+// the ordinary shapes a new migration is likely to use. If the two ever
+// disagree, the runtime one is right.
+test('no migration writes package quotas or publishes a purchasable offer (best-effort lint)', () => {
   const dir = new URL('../supabase/migrations/', import.meta.url);
-  const commercial = [
-    [/insert\s+into\s+private\.sc19_package_policy/i, 'writes private.sc19_package_policy'],
-    [/insert\s+into\s+private\.sc19_payment_offers/i, 'inserts a private.sc19_payment_offers row'],
-    [/insert\s+into\s+private\.sc19_balances/i, 'writes private.sc19_balances'],
-    [/insert\s+into\s+private\.sc19_credit_journal/i, 'writes private.sc19_credit_journal'],
-    [/insert\s+into\s+private\.sc19_payment_grants/i, 'writes private.sc19_payment_grants'],
+  // Verb coverage: `insert into`, `copy ... from` and `merge into` all write.
+  // The `private.` schema prefix is OPTIONAL because `set local search_path` (or
+  // a routine without `set search_path = ''`) makes the bare name resolve to the
+  // same table, and each part may be quoted ("private"."sc19_balances").
+  const commercialTables = [
+    ['sc19_package_policy', 'writes private.sc19_package_policy'],
+    ['sc19_payment_offers', 'inserts a private.sc19_payment_offers row'],
+    ['sc19_balances', 'writes private.sc19_balances'],
+    ['sc19_credit_journal', 'writes private.sc19_credit_journal'],
+    ['sc19_payment_grants', 'writes private.sc19_payment_grants'],
   ];
-  // Only code that runs AT MIGRATION TIME counts. DML inside a `create function`
-  // body is the installed RPC (public.sc19_operator_set_package_policy is exactly
-  // how the operator sets a quota) and runs only when somebody calls it; a `do`
-  // block and bare statements run as the migration is applied. So routine bodies
-  // are stripped and everything else, comments aside, is checked.
-  const executable = sql => {
-    let out = '', index = 0;
+  const commercial = commercialTables.map(([table, what]) => [new RegExp(
+    `(?:insert\\s+into|merge\\s+into|copy)\\s+(?:"?private"?\\s*\\.\\s*)?"?${table}"?(?![A-Za-z0-9_])`,
+    'i'), what]);
+
+  // `'insert into private.' || 'sc19_balances...'` is one statement written as two
+  // literals. Fold adjacent literals back together before matching, so splitting a
+  // table name across a `||` buys nothing.
+  const joinLiterals = sql => {
+    let out = sql, previous;
+    do { previous = out; out = out.replace(/'\s*\|\|\s*'/g, ''); } while (out !== previous);
+    return out;
+  };
+
+  // Splits a migration into the code that runs AT MIGRATION TIME and the routine
+  // bodies it installs. A `create function` body runs only when somebody calls
+  // it, which is how the operator sets a quota at all
+  // (public.sc19_operator_set_package_policy, installed by
+  // 20261029100000_sc019_operator_fulfillment.sql), so a body on its own is not
+  // activation. A `do` block, a bare statement and a string literal do run now.
+  const split = sql => {
+    let migrationTime = '', calls = '', index = 0;
+    const bodies = [];
     for (const match of sql.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)?\$/g)) {
       if (match.index < index) continue;
       const close = sql.indexOf(match[0], match.index + match[0].length);
       if (close === -1) break;
       const before = sql.slice(index, match.index);
-      out += before;
-      // A routine body: drop it. Anything else (a `do` block, a string) is kept.
-      if (!/create\s+(or\s+replace\s+)?(function|procedure)\b[\s\S]*$/i.test(before)
-        || /\bdo\s*$/i.test(before)) out += sql.slice(match.index, close + match[0].length);
+      const quoted = sql.slice(match.index, close + match[0].length);
+      const header = /create\s+(?:or\s+replace\s+)?(?:function|procedure)\b[\s\S]*$/i.exec(before);
       index = close + match[0].length;
+      if (!header || /\bdo\s*$/i.test(before)) {
+        // A `do` block, or a dollar-quoted string: it runs now.
+        migrationTime += before + quoted;
+        calls += before + quoted;
+        continue;
+      }
+      // A routine body. Its text does not run now, but remember it and the name
+      // it is installed under; the signature itself is not a call, so it is kept
+      // out of the text searched for calls.
+      migrationTime += before;
+      calls += before.slice(0, header.index);
+      const named = /(?:function|procedure)\s+(?:"?[A-Za-z_][A-Za-z0-9_]*"?\s*\.\s*)?"?([A-Za-z_][A-Za-z0-9_]*)"?/i.exec(header[0]);
+      bodies.push({ routine: named?.[1] ?? null, text: quoted });
     }
-    return out + sql.slice(index);
+    return { migrationTime: migrationTime + sql.slice(index), calls: calls + sql.slice(index), bodies };
   };
+
+  // Is `routine` invoked by code that runs at migration time? Only the forms that
+  // actually execute something count, so `drop function f(...)`,
+  // `grant execute on function f(...)` and the signature itself are not calls.
+  // A routine name inside a string literal is usually not a call: M13 lists its
+  // own routines as `array['public.sc19_claim_trial(uuid,text)', ...]::regprocedure[]`
+  // in a postflight ownership check. A literal handed to `execute` IS run, so that
+  // one keeps its content and everything else is blanked.
+  const literalsForCalls = sql => sql.replace(/'((?:[^']|'')*)'/g, (whole, inner, at, text) =>
+    /\bexecute\s*$/i.test(text.slice(Math.max(0, at - 200), at)) ? ` ${inner} ` : ' ');
+
+  const invokedAtMigrationTime = (calls, routine) => new RegExp(
+    `\\b(?:select|perform|call)\\b[^;]{0,600}?(?<![A-Za-z0-9_])(?:"?[A-Za-z_][A-Za-z0-9_]*"?\\s*\\.\\s*)?"?${routine}"?\\s*\\(`,
+    'i').test(literalsForCalls(calls));
+
+  const findings = sql => {
+    const { migrationTime, calls, bodies } = split(joinLiterals(sql));
+    const found = [];
+    for (const [pattern, what] of commercial) {
+      if (pattern.test(migrationTime)) found.push(what);
+      // Defining a routine that writes these tables is fine; defining it AND
+      // running it in the same file is activation with extra steps.
+      for (const body of bodies) {
+        if (!pattern.test(body.text) || !body.routine) continue;
+        if (invokedAtMigrationTime(calls, body.routine)) {
+          found.push(`${what} through ${body.routine}(), which the same migration calls`);
+        }
+      }
+    }
+    return found;
+  };
+  // Comments carry the reasoning above and name these tables on purpose.
+  const strip = text => text.replace(/^\s*--.*$/gm, '');
+
   let checked = 0;
   for (const name of readdirSync(dir).filter(file => file.endsWith('.sql'))) {
-    // Comments carry the reasoning above and name these tables on purpose.
-    const sql = executable(readFileSync(new URL(name, dir), 'utf8').replace(/^\s*--.*$/gm, ''));
+    const found = findings(strip(readFileSync(new URL(name, dir), 'utf8')));
     checked += 1;
-    for (const [pattern, what] of commercial) {
-      assert.doesNotMatch(sql, pattern,
-        `${name} ${what}: commercial activation is an owner action in /operator/billing, not a migration. Put it in supabase/preview-seeds/ if it is only needed on preview.`);
-    }
+    assert.deepEqual(found, [],
+      `${name} ${found.join('; ')}: commercial activation is an owner action in /operator/billing, not a migration. Put it in supabase/preview-seeds/ if it is only needed on preview.`);
   }
   assert.ok(checked > 25, 'the whole migration directory must be scanned');
-  // The body stripper must not be a blanket excuse: the preview seed does exactly
-  // what this test forbids, inside a `do` block, and must still be detected. If
-  // this stops matching, the check above has gone blind.
-  const seed = executable(readFileSync(
-    new URL('../supabase/preview-seeds/sc19-preselekcja-offer.sql', import.meta.url), 'utf8').replace(/^\s*--.*$/gm, ''));
-  for (const [pattern, what] of commercial.slice(0, 2)) assert.match(seed, pattern, `self-check: ${what}`);
-  // And a routine body genuinely is stripped, so the operator RPC stays allowed.
-  assert.doesNotMatch(executable(readFileSync(
-    new URL('../supabase/migrations/20261029100000_sc019_operator_fulfillment.sql', import.meta.url), 'utf8')),
-  /insert\s+into\s+private\.sc19_package_policy/i,
-  'self-check: DML inside an installed RPC body is not migration-time activation');
+
+  // Self-checks. These prove the lint still sees the two shapes it was written
+  // for; they do NOT prove it sees every shape (see the paragraph above).
+  // The preview seed does exactly what this test forbids, inside a `do` block.
+  const seedFindings = findings(strip(readFileSync(
+    new URL('../supabase/preview-seeds/sc19-preselekcja-offer.sql', import.meta.url), 'utf8')));
+  assert.deepEqual(seedFindings.slice(0, 2),
+    ['writes private.sc19_package_policy', 'inserts a private.sc19_payment_offers row'],
+    'self-check: the preview seed must still be detected');
+  // And the legitimate migrations stay clean: the operator RPC only installs a
+  // body (nothing calls it here), and M13 backfills private.sc19_payment_requests
+  // from orders that already exist, which is not commercial activation.
+  for (const name of ['20261029100000_sc019_operator_fulfillment.sql',
+    '20261021084732_sc019_credits_payments_inventory.sql']) {
+    assert.deepEqual(findings(readFileSync(new URL(name, dir), 'utf8')), [],
+      `self-check: ${name} is legitimate and must not be flagged`);
+  }
 });
 
 test('preview-only seeds live outside the migration chain and are applied to preview only', () => {
