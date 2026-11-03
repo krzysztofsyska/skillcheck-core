@@ -12,6 +12,16 @@
 --     the time withdrawn). NO candidate data: a consent is a statement by the
 --     company's own owner about the company's own contact details, so it is not
 --     reachable from public.candidates and gets no candidate adapter.
+--     Its recorded_seq column (a bigint identity giving the write order, which
+--     is what decides the consent in force) is NOT personal data and needs no
+--     inventory entry of its own: this inventory enumerates RELATIONS, not
+--     columns, and a counter says nothing about any person. It is still inside
+--     the reviewed signatures below, because private.erasure_schema_signature()
+--     hashes every column of every tracked relation; the two literals in the
+--     preflight were therefore recomputed when the column was added, by running
+--     that function against the full chain on PostgreSQL 16. The identity
+--     SEQUENCE the column creates is relkind 'S', which neither the signature
+--     nor the known_tables allowlist tracks, so it adds no inventory surface.
 --   private.sc19_trial_auto_checks: audit of the automatic FREE verification
 --     (company id, NIP, what the Ministry of Finance registry answered). NIP and
 --     company name are company data, the same class as the already inventoried
@@ -88,8 +98,8 @@ begin
     into r10_signature,r10_tables;
   case r10_signature
     when '60ce9006204013feeadfea4c169d19896638d43f3e82705ad8a4a59d1df5f8e9' then
-      source:='a2c381c1a1140a0baaeece3e21f94300f404d99cc2fe1f7cf46c267a00227f05';
-      expected:='da597738e0b4e6a6d41c5da7ec4f16b6c8416d2dc6bb8d8de514e7b48b19b72e';
+      source:='5b12803271c827e54bdfae5e3380b353349c60e7572c64a4d148e6457b560fa0';
+      expected:='0d22eb7a547b1f8838298b034d3d257ca4cba9e81430f5c6b20b9212e4d88b84';
     when '689349876329b99935081f1ebcb015104d126558290171662b23ccd67f671837' then
       -- The voice-module variant of R10. No reviewed signature pair exists for it
       -- yet: the current migration chain installs the legacy variant, and the

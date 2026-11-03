@@ -1154,6 +1154,67 @@ test('consent is granted, withdrawn and granted again, and history is never rewr
   assert.equal((await call(db, 'select count(*)::int n from private.marketing_consent_events where company_id=$1', [a.companyId]))[0].n, 3);
 });
 
+test('a withdrawal recorded after a grant wins even when the grant is stamped later', async t => {
+  // THE BUG (bot review finding 4458164489, 2026-11-03). occurred_at is the
+  // moment the customer declared the consent, and for a registration grant it
+  // arrives from the client inside the signed snapshot, so
+  // private.marketing_consent_record tolerates up to 60 s AHEAD of the database
+  // clock. While every reader picked the current event by
+  // `order by occurred_at desc, id desc`, a grant stored with a future time beat
+  // a withdrawal made a second later with the database's own now(), and `id` is
+  // gen_random_uuid(), so the tiebreak was a coin toss rather than a rescue.
+  // Waiting could not clear it: the stored order never changes. GDPR art. 7(3)
+  // gives the customer the right to withdraw at any time, so the withdrawal must
+  // win whatever the clocks said. The current state is now decided by
+  // recorded_seq, the identity column that follows the write order.
+  const { db, h, a } = await ready(t);
+  await h.asUser(users.owner);
+  // 30 s ahead: inside the tolerance, so the row really is stored with it.
+  const ahead = new Date(Date.now() + 30_000).toISOString();
+  const granted = (await call(db, "select public.marketing_consent_grant_registration($1,'marketing-1.0',$2,$3,$4,$5) at",
+    [a.companyId, ...registrationGrant(a.companyId, 'marketing-1.0', ahead)]))[0].at;
+  assert.equal(granted.toISOString(), ahead, 'the declared time is stored as declared, not replaced by now()');
+  const withdrawn = (await call(db, 'select public.marketing_consent_withdraw($1) at', [a.companyId]))[0].at;
+  assert.ok(withdrawn < granted,
+    `the withdrawal must be stamped EARLIER than the grant for this test to mean anything (${withdrawn.toISOString()} vs ${ahead})`);
+
+  // The company panel shows the withdrawal, not the newer-looking grant.
+  assert.equal((await call(db, 'select * from public.marketing_consent_state($1)', [a.companyId]))[0].event, 'withdrawn',
+    'the panel must show the consent as withdrawn');
+  // So does the operator report.
+  await h.asUser(operator);
+  const report = await call(db, 'select * from public.sc19_operator_marketing_consents(null)');
+  assert.equal(report.length, 1);
+  assert.equal(report[0].event, 'withdrawn', 'the operator report must show the consent as withdrawn');
+  // And the withdrawal RPC itself agrees there is nothing left to withdraw.
+  await h.asUser(users.owner);
+  await assert.rejects(db.query('select public.marketing_consent_withdraw($1)', [a.companyId]),
+    /marketing_consent_not_active/, 'a second withdrawal is refused, so the writer sees the same state');
+
+  // The history keeps BOTH timestamps exactly as they happened, and the write
+  // order is the strictly increasing column, never the time.
+  await h.asAdmin();
+  const history = await call(db,
+    'select event,occurred_at,recorded_seq from private.marketing_consent_events where company_id=$1 order by recorded_seq',
+    [a.companyId]);
+  assert.deepEqual(history.map(row => row.event), ['granted', 'withdrawn']);
+  assert.equal(history[0].occurred_at.toISOString(), ahead, 'occurred_at is untouched: it is the signed fact');
+  assert.ok(history[1].recorded_seq > history[0].recorded_seq, 'recorded_seq follows the write order');
+
+  // Re-granting still works and is seen, even though its now() is EARLIER than
+  // the first row's declared time: the write order decides here too.
+  await h.asUser(users.owner);
+  await db.query("select public.marketing_consent_grant($1,'marketing-1.0')", [a.companyId]);
+  assert.equal((await call(db, 'select * from public.marketing_consent_state($1)', [a.companyId]))[0].event, 'granted');
+  await h.asAdmin();
+  const latest = (await call(db,
+    'select event,occurred_at,recorded_seq from private.marketing_consent_events where company_id=$1 order by recorded_seq desc limit 1',
+    [a.companyId]))[0];
+  assert.equal(latest.event, 'granted');
+  assert.ok(latest.occurred_at < history[0].occurred_at, 'the newest row is the OLDEST by occurred_at');
+  assert.ok(latest.recorded_seq > history[1].recorded_seq);
+});
+
 test('a withdrawn consent cannot be resurrected by replaying the registration grant', async t => {
   // THE ATTACK (bot review finding 4453447875, 2026-11-03). The sign-up snapshot
   // that authorizes a 'registration' row lives in user_metadata, has no expiry
