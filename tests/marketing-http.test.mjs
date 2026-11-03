@@ -99,7 +99,10 @@ test('public offer and demo pages respond without an account', async (t) => {
 
   // SC-LEGAL-001: company data and legal documents required for Przelewy24 shop verification.
   for (const text of ['NIP 7394002294', 'KRS 0001110252', 'REGON 528903093', '+48 730 266 909']) assert.ok(home.includes(text), `footer ${text}`);
-  for (const href of ['/regulamin', '/polityka-prywatnosci', '/ai']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
+  // Every legal document required for the Przelewy24 shop verification is reachable
+  // from the footer of every public page, not only from the registration form.
+  for (const href of ['/regulamin', '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
+    '/polityka-prywatnosci', '/ai']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
   for (const [path, heading, marker, docx] of [
     ['/regulamin', 'Regulamin świadczenia usług SkillCheck', 'PayPro S.A. Agent Rozliczeniowy', '/legal/01_Regulamin_SkillCheck_v1.0.docx'],
     ['/polityka-prywatnosci', 'Polityka prywatności SkillCheck', 'Wykazu podatników VAT', '/legal/02_Polityka_prywatnosci_v1.0.docx'],
@@ -132,7 +135,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   for (const href of homeHrefs.filter((link) => link.startsWith('/') && !link.startsWith('/_next') && !link.startsWith('/legal/'))) {
     const target = href.split('#')[0] || '/';
     assert.ok(
-      ['/', '/demo', '/kalkulator', '/preselekcja', '/rozmowa', '/register', '/login', '/regulamin', '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
+      ['/', '/demo', '/kalkulator', '/preselekcja', '/rozmowa', '/register', '/login', '/regulamin',
+        '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
+        '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
       `home CTA points at an existing path: ${href}`,
     );
   }
@@ -240,6 +245,12 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.ok(homeHrefs.includes('/preselekcja#free'), 'FREE CTA anchors to the FREE section');
   assert.match(order, /id="free"/, 'FREE anchor is on section, below sticky header');
   assert.ok(hrefs(order).includes('/register'));
+  // The offer page points a logged-out visitor at registration/login, never at a
+  // dashboard URL it cannot resolve: the page is public and has no session.
+  assert.ok(hrefs(order).includes('/login'), 'offer page CTA for an existing account');
+  assert.match(orderText, /Zamów w panelu firmy/);
+  assert.match(orderText, /Zakup może złożyć wyłącznie właściciel konta firmy/);
+  assert.ok(hrefs(order).every(href => !href.startsWith('/dashboard')), 'no dashboard URL on the public offer page');
   assert.doesNotMatch(order, /<form[ >]/);
   assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
   assert.match(home, /PRESELEKCJA: 60 CV za 300 zł/);

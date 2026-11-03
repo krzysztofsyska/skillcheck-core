@@ -55,6 +55,7 @@ export default async function CompanyBilling({ params, searchParams }: {
       <h2>PRESELEKCJA — {sc19AnalysisScope(sizes.PRESELEKCJA)}</h2>
       <p>Jednorazowy pakiet z rankingiem kandydatów i raportem. Zamówienie jest obsługiwane przez operatora — kredyty przyznajemy dopiero po potwierdzeniu wpłaty.</p>
       <p><Link className="button" href="/rozmowa">Zamów PRESELEKCJĘ</Link></p>
+      {isOwner && <p><Link href={`/dashboard/${companyId}/billing/checkout`}>Przejdź do zakupu online (Przelewy24) →</Link></p>}
       <p className="notice">Brak płatności automatycznych. Oferta i warunki rozliczenia wymagają potwierdzenia przez obsługę.</p>
     </section>
   </section></main>;

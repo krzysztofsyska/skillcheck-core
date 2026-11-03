@@ -114,7 +114,17 @@ test('runner applies the whole checked-in chain on a fresh database and leaves t
   await assertCurrentInventory(db);
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.skillcheck_migration_ledger where statements is null or sha256 is null')).rows[0].n, 0);
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.schema_migrations')).rows[0].n, files.length);
-  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0, 'No commercial data seeded');
+  // The only commercial data the chain seeds are the owner-approved quotas and the
+  // one purchasable PRESELEKCJA offer (20261103120000_sc019_seed_packages_offer).
+  // No balance, grant, order or journal entry is created for any company.
+  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
+    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }], 'only the owner-approved quotas');
+  assert.deepEqual((await db.query('select plan,credits,amount_minor,currency from private.sc19_payment_offers')).rows,
+    [{ plan: 'PRESELEKCJA', credits: 60, amount_minor: 30000, currency: 'PLN' }], 'only the approved PRESELEKCJA offer');
+  for (const table of ['sc19_balances', 'sc19_trial_nips', 'sc19_trial_approvals', 'sc19_credit_journal',
+    'sc19_payment_orders', 'sc19_payment_grants', 'sc19_payment_requests']) {
+    assert.equal((await db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, `No ${table} rows seeded`);
+  }
 });
 
 test('TLS comes from code: URL ssl parameters are removed so the CA and verification apply', () => {

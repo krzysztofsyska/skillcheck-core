@@ -112,6 +112,7 @@ test('billing page stays closed and does not read a balance while packages are o
     }));
     assert.match(html, /przygotowywane/);
     assert.doesNotMatch(html, /name="nip"|Aktywuj FREE/);
+    assert.doesNotMatch(html, /billing\/checkout/, 'SC19_PAGES flag off hides the checkout link too');
     assert.equal(fx.calls.length, 0);
     const url = await redirected(billingAction(fx.access), form());
     assert.equal(url, '/dashboard');
@@ -142,6 +143,10 @@ test('billing page shows the owner form only to the owner and hides it once a ba
     }));
     assert.match(memberHtml, /FREE może aktywować właściciel firmy/);
     assert.doesNotMatch(memberHtml, /name="nip"/);
+    // The checkout route is owner-only on the page itself, so the link to it uses
+    // the same condition and is never shown to a non-owner member.
+    assert.match(ownerHtml, new RegExp(`href="/dashboard/${companyId}/billing/checkout"`));
+    assert.doesNotMatch(memberHtml, /billing\/checkout/);
 
     const funded = billingAccess({ balance: [{ plan: 'FREE', available: 4 }] });
     const fundedHtml = renderToStaticMarkup(await billingPage(funded.access)({

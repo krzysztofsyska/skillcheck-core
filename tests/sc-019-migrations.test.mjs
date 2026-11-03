@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 import { lifecycleHarness } from './helpers/erasure-lifecycle-fixture.mjs';
 import { retentionHarness } from './helpers/retention-scheduler-fixture.mjs';
@@ -71,10 +72,37 @@ test('SC-019 migration is exercised by the complete current migration chain', as
   await setupRankingDatabase(env.db, { throughMigration: null });
   await assertCurrentInventory(env.db);
   await assert.rejects(env.db.query("update private.erasure_inventory_baseline_r6 set schema_signature=repeat('a',64)"), /immutable/i);
-  for (const table of accountingTables) {
-    assert.equal((await env.db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, 'Fresh install creates no policy/sales/approval/balance');
+  // 20261103120000_sc019_seed_packages_offer seeds the owner-approved quotas and
+  // the single purchasable PRESELEKCJA offer; nothing else is created on a fresh
+  // install (no sales, approval, balance, order, grant or journal entry).
+  for (const table of accountingTables.filter(name => !['sc19_package_policy', 'sc19_payment_offers'].includes(name))) {
+    assert.equal((await env.db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, 'Fresh install creates no sales/approval/balance');
   }
+  assert.deepEqual((await env.db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
+    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }], 'owner-approved quotas (2026-11-02 / 2026-10-28)');
+  assert.deepEqual((await env.db.query(`select plan,active,approved,amount_minor,currency,credits
+    from private.sc19_payment_offers order by id`)).rows,
+  [{ plan: 'PRESELEKCJA', active: true, approved: true, amount_minor: 30000, currency: 'PLN', credits: 60 }],
+  'exactly one purchasable offer: PRESELEKCJA 60 CV / 300 zł gross');
+  // WERYFIKACJA and ASSESSMENT CENTER stay non-purchasable (standing owner decision).
+  for (const sql of ["insert into private.sc19_package_policy(plan,credits) values('WERYFIKACJA',60)",
+    `insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
+      terms_revision,terms_text,valid_until_ms)
+      values('x','x','WERYFIKACJA',true,true,61500,'PLN',60,'x','x',9999999999999)`]) {
+    await assert.rejects(env.db.query(sql), error => error.code === '23514');
+  }
+  // Re-running the seed changes nothing.
+  const seeded = await accountingSnapshot(env.db);
+  await env.db.query(await readFile(new URL('../supabase/migrations/20261103120000_sc019_seed_packages_offer.sql', import.meta.url), 'utf8'));
+  assert.deepEqual(await accountingSnapshot(env.db), seeded, 'the seed migration is idempotent');
+
   const { db, h } = env, f = await h.seed(); await h.asAdmin();
+  // Rolling the seed back leaves no quota, so grants and FREE claims refuse again
+  // and the public catalog shows nothing.
+  await db.query(await readFile(new URL('../supabase/rollbacks/20261103120000_sc019_seed_packages_offer_down.sql', import.meta.url), 'utf8'));
+  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0,
+    'the rollback deactivates the offer; the immutable row itself is never deleted');
   await assert.rejects(db.query('select private.sc19_grant_paid($1,$2)', [f.companyId, 'synthetic-missing-policy-grant']), /sc19_missing_paid_policy/);
   await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
     values($1,'1234563218','synthetic-missing-policy-proof')`, [f.companyId]);

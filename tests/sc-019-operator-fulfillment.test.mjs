@@ -19,11 +19,20 @@ const nipA = nip('526025099'), nipB = nip('951000001');
 
 const code = expected => error => error.code === expected;
 
+// These RPCs are specified against an UNCONFIGURED policy: the operator is the
+// only one who may choose a quota. 20261103120000_sc019_seed_packages_offer
+// seeds the owner-approved quotas at the end of the chain, so its rollback is
+// applied here to restore that precondition. The seed itself and its idempotency
+// are covered in tests/sc-019-migrations.test.mjs.
+const seedRollback = '20261103120000_sc019_seed_packages_offer_down.sql';
+
 async function ready(t) {
   const env = await bootMigrationDatabase(t);
   const h = await setupRankingDatabase(env.db, { throughMigration: null });
   const { db } = env;
   await h.asAdmin();
+  await db.query(await readFile(new URL(`../supabase/rollbacks/${seedRollback}`, import.meta.url), 'utf8'));
+  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0);
   await db.query('insert into public.platform_operators(user_id) values($1)', [operator]);
   const a = await h.seed(users.owner), b = await h.seed(users.otherOwner);
   await h.asAdmin();

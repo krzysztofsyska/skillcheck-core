@@ -41,8 +41,10 @@ export default async function PreselectionOfferPage() {
         <p>Zasady zamówienia, reklamacji i odstąpienia opisuje <Link href="/regulamin">Regulamin</Link>. Dane przetwarzamy zgodnie z <Link href="/polityka-prywatnosci">Polityką prywatności</Link>.</p>
         <div className={styles.actions}>
           <a className={styles.primary} href={preselectionEmail(scope)}>Poproś o fakturę proforma</a>
+          <Link className={styles.secondary} href="/register">Zamów w panelu firmy</Link>
           <Link className={styles.secondary} href="/demo">Zobacz przykładowy raport</Link>
         </div>
+        <p className={styles.note}>Zamówienie w panelu firmy: zaloguj się, wybierz firmę, otwórz <strong>Pakiety</strong> i przejdź do zakupu PRESELEKCJI. Zakup może złożyć wyłącznie właściciel konta firmy. Masz już konto? <Link href="/login">Zaloguj się</Link>.</p>
       </section>
       <section aria-labelledby="pilot-process">
         <h2 id="pilot-process">Jak zamówić?</h2>

@@ -207,12 +207,18 @@ export async function accountingSnapshot(db) {
   return result;
 }
 
-// Explicit test-only commercial inputs. The real fresh migration must leave
-// policy empty; these examples are inserted only after that assertion passes.
+// Explicit test-only commercial inputs. M13 itself must leave policy empty; the
+// only rows allowed to be there already are the owner-approved quotas seeded by
+// 20261103120000_sc019_seed_packages_offer (FREE=5, PRESELEKCJA=60), which the
+// chain applies after M13. Any other row means an unreviewed quota chose itself.
 export async function seedSyntheticPolicy(db) {
   await db.query('reset role');
-  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0);
-  await db.query("insert into private.sc19_package_policy(plan,credits) values('FREE',5),('PRESELEKCJA',60)");
+  const existing = (await db.query('select plan,credits from private.sc19_package_policy order by plan collate "C"')).rows;
+  assert.ok(existing.length === 0 ||
+    JSON.stringify(existing) === JSON.stringify([{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }]),
+  `Unexpected package policy before the synthetic seed: ${JSON.stringify(existing)}`);
+  await db.query(`insert into private.sc19_package_policy(plan,credits) values('FREE',5),('PRESELEKCJA',60)
+    on conflict(plan) do update set credits=excluded.credits`);
 }
 
 export async function seedCreditData(env) {
