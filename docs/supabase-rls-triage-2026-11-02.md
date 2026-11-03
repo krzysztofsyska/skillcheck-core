@@ -54,7 +54,7 @@ i nie ma sensu jej pomijać.
 | `private.cv_bulk_items` | `file_name` (zwykle nazwisko kandydata w nazwie pliku), `candidate_id`, `application_id`, `name_detected` | 7 | nie |
 | `private.application_preselection_groups` | `application_id`, `company_id`, `recruitment_id`, `raw_score`, `coverage` | 3 | nie |
 | `private.application_preselection_group_events` | `application_id`, `actor_id`, `note` (tekst rekrutera o kandydacie) | 2 | nie |
-| `private.retired_candidate_ids` | `candidate_id` — identyfikatory po usunięciu | 1 | nie |
+| `private.retired_candidate_ids` | `candidate_id`, `company_id` — identyfikatory po usunięciu, wraz z firmą, generacją i terminem retencji | 1 | nie |
 | `private.candidate_retention_policies` | `rules` (polityka retencji danych kandydatów), `approved_by` | 5 | nie |
 | `private.cv_bulk_batches` | powiązania partii z firmą i rekrutacją, bez PII wprost | 7 | **tak** (`cv_bulk_finish_notification`) |
 
@@ -123,10 +123,20 @@ już istnieje i jest używany przez `private.cv_bulk_item_for_write`.
 -- PROPOZYCJA, nie zastosowana. Tylko odczyt.
 create policy cv_bulk_items_company_read on private.cv_bulk_items
   for select to authenticated
-  using (private.has_company_access(company_id));
+  using (private.has_company_access(company_id)
+         and (candidate_id is null
+              or not private.erasure_candidate_frozen(candidate_id)));
 ```
 
-Analogicznie dla `cv_bulk_batches` po `company_id`, też wyłącznie `for select`.
+Warunek `erasure_candidate_frozen` odwzorowuje filtr z `public.cv_bulk_batch_status`, które
+ukrywa wiersze kandydatów zamrożonych przez procedurę usuwania danych (oraz wszystkich
+kandydatów, gdy trwa izolacja odtworzeniowa). Bez niego druga warstwa odsłaniałaby to, co
+obecne RPC świadomie chowa. Uwaga wykonawcza: funkcja w polityce wykonuje się z uprawnieniami
+wołającego, więc osobne zadanie L3 musi sprawdzić, czy `authenticated` ma `EXECUTE` na tym
+helperze (albo użyć wariantu `SECURITY DEFINER` zwracającego boolean).
+
+`cv_bulk_batches` nie ma kolumny kandydata, więc tam wystarcza `has_company_access(company_id)`,
+wyłącznie `for select`. Widoczność wierszy kandydatów rozstrzyga się na poziomie `cv_bulk_items`.
 
 **Świadomie nie proponuję polityki zapisu.** W pierwszej wersji miałem tu `for all` — to był błąd.
 Gdyby kiedyś doszedł `GRANT` na zapis, taka polityka pozwoliłaby członkowi firmy wstawiać,
@@ -137,17 +147,23 @@ stan partii. Zapis ma zostać wyłącznie za funkcjami.
 
 ### `private.application_preselection_groups`, `private.application_preselection_group_events`
 
-Obie mają `company_id`, więc ten sam wzorzec:
+Obie mają `company_id`, więc ten sam wzorzec, z tym samym zabezpieczeniem przed zamrożonymi
+kandydatami co w `cv_bulk_items` (tak jak `get_preselection_groups` i
+`get_preselection_group_history`, które pomijają zamrożonych):
 
 ```sql
 -- PROPOZYCJA, nie zastosowana.
 create policy preselection_groups_company on private.application_preselection_groups
   for select to authenticated
-  using (private.has_company_access(company_id));
+  using (private.has_company_access(company_id)
+         and exists (select 1 from public.applications a
+                     where a.id = application_id
+                       and not private.erasure_candidate_frozen(a.candidate_id)));
 ```
 
-Dla tabeli zdarzeń **tylko `select`** — wpisy powstają wyłącznie przez
-`public.move_preselection_group` i mają zostać append-only.
+Dla tabeli zdarzeń `application_preselection_group_events` identyczny warunek i **tylko
+`select`** — wpisy powstają wyłącznie przez `public.move_preselection_group` i mają zostać
+append-only.
 
 ### `private.candidate_retention_policies`
 
@@ -158,17 +174,32 @@ członek. Polityka musi odwzorować dokładnie to, inaczej poszerzy dostęp:
 -- PROPOZYCJA, nie zastosowana.
 create policy retention_policies_owner on private.candidate_retention_policies
   for select to authenticated
-  using (exists (select 1 from public.companies c
-                 where c.id = company_id and c.owner_id = (select auth.uid())));
+  using (private.erasure_owner_visible(company_id));
 ```
+
+`private.erasure_owner_visible` to **nowy** pomocnik (boolean, `SECURITY DEFINER`), który ma
+odwzorować `private.erasure_owner` bez rzucania wyjątku: właściciel firmy
+(`companies.owner_id = auth.uid()`) **oraz** brak izolacji odtworzeniowej
+(`private.erasure_execution_config.restore_isolated`). Sam predykat `owner_id` nie wystarcza,
+bo `erasure_owner` zwraca `PT409` w czasie izolacji, a `get_candidate_retention_policy` przez
+niego przechodzi. Tabela konfiguracji jest w `private` bez uprawnień dla klienta, dlatego
+sprawdzenie musi siedzieć w funkcji `SECURITY DEFINER`, a nie bezpośrednio w polityce.
+Równie dobra, i prostsza, jest druga opcja: nie dawać klientowi bezpośredniego `GRANT`-u
+na tę tabelę i zostawić odczyt wyłącznie przez `get_candidate_retention_policy`.
 
 ### `private.retired_candidate_ids`
 
-Brak kolumny `company_id` — to globalny rejestr identyfikatorów po usunięciu, czytany przez
-`private.erasure_normal_row_guard`. Polityki dla `authenticated` **nie proponuję**: nie ma po czym
-dzielić po firmach, a tabela celowo nie ma być czytana przez klienta. Rekomendacja: zostawić bez
-polityki i bez `GRANT`, a ochronę opisać w komentarzu do tabeli, żeby kolejny audyt nie czytał
-tego jako luki.
+Tabela **ma** kolumnę `company_id` (`not null`, razem z `generation`, `recovery_event_id`
+i `retain_until`; definicja w `20261010205030_erasure_purge_graph.sql`), więc technicznie dałoby
+się ją podzielić po firmach. Polityki dla `authenticated` mimo to **nie proponuję**, z innego
+powodu niż poprzednio: to wewnętrzny rejestr procedury usuwania danych, czytany przez
+`private.erasure_normal_row_guard` i walidację purge, a żaden ekran ani RPC nie czyta go w
+imieniu użytkownika. Polityka tenantowa udostępniałaby firmie listę identyfikatorów
+usuniętych kandydatów bez żadnej potrzeby biznesowej, a przy okazji ominęłaby warunki
+bezpieczeństwa tej procedury (np. izolację odtworzeniową). Migracja już robi jawny
+`revoke all` z tej tabeli dla `public`, `anon` i `authenticated` oraz włącza RLS.
+Rekomendacja: zostawić bez polityki i bez `GRANT`, a ochronę opisać w komentarzu do tabeli,
+żeby kolejny audyt nie czytał tego jako luki.
 
 ### `public.sales_leads`
 
@@ -248,13 +279,23 @@ niż członkostwo w firmie. Dodatkowo blokuje się, gdy trwa izolacja odtworzeni
 ### Gate podpisu HMAC (ścieżki maszynowe)
 
 `checkout_create_order`, `checkout_read_order`, `checkout_update_order`, `checkout_pending_orders`,
-`claim_sales_mail`, `finish_sales_mail`, `cv_bulk_finish_notification`, `cv_bulk_worker_pump`,
-`submit_sales_lead`.
+`claim_sales_mail`, `finish_sales_mail`, `cv_bulk_worker_pump`, `submit_sales_lead`
+(osiem funkcji) oraz `cv_bulk_finish_notification` (dziewiąta, z dwiema ścieżkami — niżej).
 
-Nie używają `auth.uid()` — autoryzacja opiera się na `request_signature` i `issued_at`. To
-świadomy wzorzec dla workerów i webhooków, ale oznacza, że **bezpieczeństwo tych dziewięciu
-funkcji sprowadza się do tajności sekretu HMAC i do poprawnej walidacji okna czasowego**. Nie
-audytowałem tu siły samej weryfikacji — to osobne zadanie, patrz sekcja 5.
+Osiem z nich nie ma ścieżki użytkownika — autoryzacja opiera się na `request_signature`
+i `issued_at`. (`submit_sales_lead` odczytuje `auth.uid()`, ale tylko po to, by włączyć go do
+podpisywanego ładunku i zapisać przy leadzie; to nie jest bramka dostępu.) To świadomy wzorzec
+dla workerów i webhooków, ale oznacza, że **bezpieczeństwo tych ośmiu funkcji sprowadza się do
+tajności sekretu HMAC i do poprawnej walidacji okna czasowego**.
+
+**`cv_bulk_finish_notification` ma dwie ścieżki.** Gdy wywołanie niesie `request_signature`,
+sprawdzany jest podpis HMAC (worker powiadomień). Gdy podpisu brak, funkcja wymaga
+`auth.uid()` oraz `private.has_company_access(company_id, true)` (członek firmy z prawem
+zapisu), a w razie braku rzuca `PT404`. Jej ryzyko to więc suma obu ścieżek: tajność sekretu
+HMAC **i** poprawność bramki firmy. Dodatkowo funkcja jest dostępna dla `anon` (jedynie
+ścieżka HMAC może przejść), co zgadza się z tabelą w sekcji 2a.
+
+Nie audytowałem tu siły samej weryfikacji podpisu — to osobne zadanie, patrz sekcja 5.
 
 ### Uprawnienia administracyjne
 
@@ -288,8 +329,9 @@ Brak danych osobowych, brak parametrów. Bez zastrzeżeń.
    Proponuję osobne zadanie porządkowe: potwierdzić, które rewizje są martwe, i usunąć je migracją.
    **Nie usuwałem niczego.**
 
-3. **Dziewięć funkcji opiera autoryzację wyłącznie na HMAC.** Dotykają `checkout.orders`
-   (dane kontaktowe kupującego) i `public.sales_leads`. Proponuję osobny audyt L3 tej ścieżki:
+3. **Osiem funkcji opiera autoryzację wyłącznie na HMAC, a dziewiąta
+   (`cv_bulk_finish_notification`) na HMAC albo na bramce firmy.** Dotykają `checkout.orders`
+   (dane kontaktowe kupującego), `public.sales_leads` i kolejki powiadomień partii CV. Proponuję osobny audyt L3 tej ścieżki:
    skąd pochodzi sekret, czy okno `issued_at` jest wąskie, czy podpis obejmuje wszystkie
    parametry i czy porównanie jest odporne na timing. To wykracza poza pytanie o RLS, ale jest
    dziś realną granicą bezpieczeństwa dla tych dwóch tabel.
