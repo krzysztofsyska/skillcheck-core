@@ -75,13 +75,11 @@ test('every migration after the chain tail reaches preview, or is exempted with 
   const missing = tail.filter(name => !entries.has(name) && !previewExempt.has(name));
   assert.deepEqual(missing, [],
     `these migrations would never be applied to skillcheck-preview: ${missing.join(', ')}`);
-  // The SC-P24 checkout chain specifically, in chain order, since the read-only
-  // RPC is what the checkout page needs to show an offer at all.
-  for (const name of ['20261103120000_sc019_seed_packages_offer.sql',
-    '20261103130000_sc019_checkout_offers_read.sql',
-    '20261103130100_sc019_offer_terms_diacritics.sql']) {
-    assert.ok(entries.has(name), `${name} must be listed for preview`);
-  }
+  // The SC-P24 read-only checkout RPC is what the checkout page needs to show an
+  // offer at all, so it must reach preview. The commercial seed that fills the
+  // offer is NOT a migration (see the preview-seeds test below).
+  assert.ok(entries.has('20261103130000_sc019_checkout_offers_read.sql'),
+    '20261103130000_sc019_checkout_offers_read.sql must be listed for preview');
   // An exemption may only name a migration that exists and is actually in the
   // tail, so the map cannot rot into a blanket excuse.
   for (const name of previewExempt.keys()) {
@@ -127,6 +125,98 @@ test('each migration and its ledger row are applied in one transaction', () => {
     const commits = lines.flatMap((l, i) => /^commit;\s*$/.test(l) ? [i] : []);
     const last = lines.findLastIndex(l => l.trim() !== '');
     assert.deepEqual(commits, [last], `${entry}: single top-level commit; as the last statement`);
+  }
+});
+
+// Commercial activation is owner-gated (/operator/billing, CLAUDE.md; "billing
+// and charge actions" in AGENTS.md). A migration runs wherever the chain runs,
+// production included, so no migration may write package quotas or publish a
+// purchasable offer. tests/sc-019-migrations-production-history.test.mjs enforces
+// the same rule against the real production-shaped replay; this check is the
+// static half, so a new migration cannot reintroduce it without being noticed.
+test('no migration writes package quotas or publishes a purchasable offer', () => {
+  const dir = new URL('../supabase/migrations/', import.meta.url);
+  const commercial = [
+    [/insert\s+into\s+private\.sc19_package_policy/i, 'writes private.sc19_package_policy'],
+    [/insert\s+into\s+private\.sc19_payment_offers/i, 'inserts a private.sc19_payment_offers row'],
+    [/insert\s+into\s+private\.sc19_balances/i, 'writes private.sc19_balances'],
+    [/insert\s+into\s+private\.sc19_credit_journal/i, 'writes private.sc19_credit_journal'],
+    [/insert\s+into\s+private\.sc19_payment_grants/i, 'writes private.sc19_payment_grants'],
+  ];
+  // Only code that runs AT MIGRATION TIME counts. DML inside a `create function`
+  // body is the installed RPC (public.sc19_operator_set_package_policy is exactly
+  // how the operator sets a quota) and runs only when somebody calls it; a `do`
+  // block and bare statements run as the migration is applied. So routine bodies
+  // are stripped and everything else, comments aside, is checked.
+  const executable = sql => {
+    let out = '', index = 0;
+    for (const match of sql.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)?\$/g)) {
+      if (match.index < index) continue;
+      const close = sql.indexOf(match[0], match.index + match[0].length);
+      if (close === -1) break;
+      const before = sql.slice(index, match.index);
+      out += before;
+      // A routine body: drop it. Anything else (a `do` block, a string) is kept.
+      if (!/create\s+(or\s+replace\s+)?(function|procedure)\b[\s\S]*$/i.test(before)
+        || /\bdo\s*$/i.test(before)) out += sql.slice(match.index, close + match[0].length);
+      index = close + match[0].length;
+    }
+    return out + sql.slice(index);
+  };
+  let checked = 0;
+  for (const name of readdirSync(dir).filter(file => file.endsWith('.sql'))) {
+    // Comments carry the reasoning above and name these tables on purpose.
+    const sql = executable(readFileSync(new URL(name, dir), 'utf8').replace(/^\s*--.*$/gm, ''));
+    checked += 1;
+    for (const [pattern, what] of commercial) {
+      assert.doesNotMatch(sql, pattern,
+        `${name} ${what}: commercial activation is an owner action in /operator/billing, not a migration. Put it in supabase/preview-seeds/ if it is only needed on preview.`);
+    }
+  }
+  assert.ok(checked > 25, 'the whole migration directory must be scanned');
+  // The body stripper must not be a blanket excuse: the preview seed does exactly
+  // what this test forbids, inside a `do` block, and must still be detected. If
+  // this stops matching, the check above has gone blind.
+  const seed = executable(readFileSync(
+    new URL('../supabase/preview-seeds/sc19-preselekcja-offer.sql', import.meta.url), 'utf8').replace(/^\s*--.*$/gm, ''));
+  for (const [pattern, what] of commercial.slice(0, 2)) assert.match(seed, pattern, `self-check: ${what}`);
+  // And a routine body genuinely is stripped, so the operator RPC stays allowed.
+  assert.doesNotMatch(executable(readFileSync(
+    new URL('../supabase/migrations/20261029100000_sc019_operator_fulfillment.sql', import.meta.url), 'utf8')),
+  /insert\s+into\s+private\.sc19_package_policy/i,
+  'self-check: DML inside an installed RPC body is not migration-time activation');
+});
+
+test('preview-only seeds live outside the migration chain and are applied to preview only', () => {
+  const seedDir = new URL('../supabase/preview-seeds/', import.meta.url);
+  const seeds = readdirSync(seedDir).filter(name => name.endsWith('.sql')).sort();
+  assert.ok(seeds.includes('sc19-preselekcja-offer.sql'),
+    'the PRESELEKCJA offer seed must exist, or the Przelewy24 checkout walk has no offer on preview');
+  // Nothing in the migration chain, and nothing the production runner reads, may
+  // name a seed file: supabase/preview-seeds/** is not a migration directory.
+  const migrations = readdirSync(new URL('../supabase/migrations/', import.meta.url));
+  for (const seed of seeds) assert.ok(!migrations.includes(seed), `${seed} must not also be a migration`);
+  assert.doesNotMatch(readFileSync(new URL('../tools/db-migrate/apply.mjs', import.meta.url), 'utf8'),
+    /preview-seeds/, 'the production migration runner must not know about preview seeds');
+  assert.doesNotMatch(readFileSync(new URL('../.github/workflows/db-migrate-production.yml', import.meta.url), 'utf8'),
+    /preview-seeds/, 'the production workflow must not apply preview seeds');
+  // The seed step runs after the refusal checks, inside the one step that holds
+  // the secret, and writes no ledger row (a seed is not a migration).
+  const seedStep = yml.slice(yml.indexOf('seeded=0'));
+  assert.match(seedStep, /supabase\/preview-seeds\/\*\.sql/);
+  assert.doesNotMatch(seedStep, /schema_migrations/, 'a seed gets no ledger row');
+  assert.ok(yml.indexOf('Refusing: connection string points at production') < yml.indexOf('seeded=0'),
+    'the seed loop runs after the production refusal check');
+  // Each seed is a single transaction, as the step requires, and says in its own
+  // text that it is preview-only.
+  for (const seed of seeds) {
+    const text = readFileSync(new URL(seed, seedDir), 'utf8');
+    const lines = text.split('\n');
+    assert.equal(lines.filter(l => /^begin;\s*$/.test(l)).length, 1, seed);
+    const commits = lines.flatMap((l, i) => /^commit;\s*$/.test(l) ? [i] : []);
+    assert.deepEqual(commits, [lines.findLastIndex(l => l.trim() !== '')],
+      `${seed}: single top-level commit; as the last statement`);
+    assert.match(text, /PREVIEW-ONLY|preview-only/, `${seed} must state that it is preview-only`);
   }
 });
 

@@ -14,6 +14,13 @@
 # Each migration file carries its own transaction and preflight/postflight guards;
 # its ledger row is inserted inside that same transaction.
 #
+# After the migrations, every file in supabase/preview-seeds/ is applied. Those
+# are PREVIEW-ONLY commercial seeds (package quotas, the purchasable PRESELEKCJA
+# offer) and deliberately NOT migrations: writing them from the migration chain
+# would switch billing state on wherever the chain runs, production included,
+# which is an owner action in /operator/billing (CLAUDE.md, AGENTS.md). They are
+# idempotent and get no ledger row, so they are simply re-applied on every run.
+#
 # When: every push to `integration` or to a `preview-db/**` branch (a task
 # branch pushed there to be tested on preview before review/merge). No paths
 # filter: a new branch or a non-migration commit must still run; the job is
@@ -111,4 +118,29 @@ jobs:
             echo "### skillcheck-preview migrations"
             echo "- revision: \`$GITHUB_SHA\` (\`$GITHUB_REF_NAME\`)"
             echo "- applied now: $applied"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # supabase/preview-seeds/** is NOT part of the migration chain. Package
+          # quotas and a purchasable offer are owner-gated billing state
+          # (/operator/billing, CLAUDE.md), so they must never be applied by a
+          # migration that production would also run. These files exist only to
+          # make the checkout walk possible on the test project; they run in this
+          # same step, behind the production/preview refusal checked above.
+          seeded=0
+          for path in $(ls supabase/preview-seeds/*.sql 2>/dev/null | sort); do
+            file="$(basename "$path")"
+            [[ "$file" =~ ^[a-z0-9][a-z0-9-]*\.sql$ ]] || { echo "::error::Invalid seed entry: $file"; exit 1; }
+            # Each seed carries its own single transaction and its own guards, and
+            # is idempotent, so it is simply re-applied on every run: no ledger row
+            # is written, because a seed is not a migration.
+            [ "$(grep -cE '^begin;[[:space:]]*$' "$path")" = "1" ] || { echo "::error::$file must open exactly one top-level begin;"; exit 1; }
+            commit_line=$(grep -nE '^commit;[[:space:]]*$' "$path" | cut -d: -f1)
+            last_line=$(grep -nvE '^[[:space:]]*$' "$path" | tail -1 | cut -d: -f1)
+            [ -n "$commit_line" ] && [ "$commit_line" = "$last_line" ] || { echo "::error::$file must end with its only top-level commit;"; exit 1; }
+            echo "seed   $file"
+            psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f "$path"
+            seeded=$((seeded+1))
+          done
+          {
+            echo "### skillcheck-preview seeds (preview-only, never production)"
+            echo "- applied now: $seeded"
           } >> "$GITHUB_STEP_SUMMARY"

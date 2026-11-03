@@ -6,9 +6,9 @@ import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture
 import { lifecycleHarness } from './helpers/erasure-lifecycle-fixture.mjs';
 import { retentionHarness } from './helpers/retention-scheduler-fixture.mjs';
 import {
-  accountingSnapshot, accountingTables, applyMigration, assertCurrentInventory, assertR6, blockersOf,
-  bootMigrationDatabase, catalogSnapshot, installSource, paymentHarness, paymentUsers,
-  seedCreditData, seedHistoricalOrders, seedSyntheticPolicy, sourceStates,
+  accountingSnapshot, accountingTables, applyMigration, applyPreviewSeeds, assertCurrentInventory,
+  assertR6, blockersOf, bootMigrationDatabase, catalogSnapshot, installSource, paymentHarness,
+  paymentUsers, seedCreditData, seedHistoricalOrders, seedSyntheticPolicy, sourceStates,
 } from './helpers/sc19-migration-fixture.mjs';
 
 // These are actual checked-in migrations on disposable native PostgreSQL. The
@@ -72,164 +72,180 @@ test('SC-019 migration is exercised by the complete current migration chain', as
   await setupRankingDatabase(env.db, { throughMigration: null });
   await assertCurrentInventory(env.db);
   await assert.rejects(env.db.query("update private.erasure_inventory_baseline_r6 set schema_signature=repeat('a',64)"), /immutable/i);
-  // 20261103120000_sc019_seed_packages_offer seeds the owner-approved quotas and
-  // the PRESELEKCJA offer, and 20261103130100_sc019_offer_terms_diacritics issues
-  // the accented terms as a NEW revision while deactivating the first one (the
-  // offer row is update-immutable). Nothing else is created on a fresh install
-  // (no sales, approval, balance, order, grant or journal entry).
-  for (const table of accountingTables.filter(name => !['sc19_package_policy', 'sc19_payment_offers'].includes(name))) {
-    assert.equal((await env.db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, 'Fresh install creates no sales/approval/balance');
+  // The complete chain creates NO commercial state at all. Package quotas and a
+  // purchasable offer are owner-gated billing actions (/operator/billing,
+  // CLAUDE.md; "billing and charge actions" in AGENTS.md), and a migration runs
+  // wherever the chain runs, production included, so neither may come from one.
+  // The owner-approved values reach the TEST project through
+  // supabase/preview-seeds/sc19-preselekcja-offer.sql instead.
+  for (const [table, rows] of Object.entries(await accountingSnapshot(env.db))) {
+    assert.deepEqual(rows, [], `the chain activates no commercial state: ${table}`);
   }
-  assert.deepEqual((await env.db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
+  // The read-only RPC the checkout page needs IS installed by the chain: reading
+  // an offer needs no provider and creates no commercial state. With nothing
+  // seeded it answers an empty list to a verified owner, so the page says "no
+  // offer" instead of breaking.
+  assert.notEqual((await env.db.query("select to_regprocedure('public.sc19_checkout_offers(uuid)') v")).rows[0].v, null);
+
+  const { db, h } = env;
+  const f = await h.seed(); await h.asAdmin();
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
+    values($1,'1234563218','synthetic-chain-offer-proof')`, [f.companyId]);
+  await h.asUser(f.owner);
+  assert.deepEqual((await db.query('select * from public.sc19_checkout_offers($1)', [f.companyId])).rows, [],
+    'no offer is on sale until somebody with the authority publishes one');
+  await h.asAdmin();
+  // A paid grant refuses while no quota is configured, which is the correct
+  // production state until the owner sets FREE=5 / PRESELEKCJA=60 himself.
+  await assert.rejects(db.query('select private.sc19_grant_paid($1,$2)', [f.companyId, 'synthetic-chain-no-policy']),
+    /sc19_missing_paid_policy/);
+
+  // WERYFIKACJA and ASSESSMENT CENTER stay non-purchasable (standing owner
+  // decision), enforced by the chain's own check constraints.
+  for (const sql of ["insert into private.sc19_package_policy(plan,credits) values('WERYFIKACJA',60)",
+    `insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
+      terms_revision,terms_text,valid_until_ms)
+      values('x','x','WERYFIKACJA',true,true,61500,'PLN',60,'x','x',9999999999999)`]) {
+    await assert.rejects(db.query(sql), error => error.code === '23514');
+  }
+});
+
+// The preview-only seed on top of the complete chain: this is what
+// skillcheck-preview ends up with, and what the Przelewy24 verifier walks.
+test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA offer', async t => {
+  const env = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(env.db, { throughMigration: null });
+  const { db } = env;
+  await h.asAdmin();
+  await applyPreviewSeeds(db);
+  // The seed is data only: the reviewed schema is untouched.
+  await assertCurrentInventory(db);
+  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
     [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }], 'owner-approved quotas (2026-11-02 / 2026-10-28)');
-  assert.deepEqual((await env.db.query(`select id,plan,active,approved,amount_minor,currency,credits
-    from private.sc19_payment_offers order by id`)).rows,
-  [{ id: 'preselekcja-60-2026-11', plan: 'PRESELEKCJA', active: false, approved: false, amount_minor: 30000, currency: 'PLN', credits: 60 },
-    { id: 'preselekcja-60-2026-11-r2', plan: 'PRESELEKCJA', active: true, approved: true, amount_minor: 30000, currency: 'PLN', credits: 60 }],
-  'the superseded revision stays but is deactivated; exactly one purchasable offer');
-  // Exactly one offer can be bought, with the unchanged owner-approved economics.
-  const purchasable = (await env.db.query(`select id,amount_minor,credits,terms_revision,terms_text
-    from private.sc19_payment_offers where approved and active`)).rows;
+  const purchasable = (await db.query(`select id,amount_minor,credits,currency,terms_revision,terms_text
+    from private.sc19_payment_offers where approved and active
+      and valid_until_ms > (extract(epoch from now())*1000)::bigint`)).rows;
   assert.equal(purchasable.length, 1, 'exactly one purchasable offer: PRESELEKCJA 60 CV / 300 zł gross');
+  assert.equal(purchasable[0].id, 'preselekcja-60-2026-11-r2');
   assert.equal(purchasable[0].amount_minor, 30000);
   assert.equal(purchasable[0].credits, 60);
+  assert.equal(purchasable[0].currency, 'PLN');
   // The terms the customer accepts are properly accented Polish.
   assert.match(purchasable[0].terms_text, /[ąćęłńóśźż]/);
   assert.match(purchasable[0].terms_text, /300,00 zł brutto/);
   assert.match(purchasable[0].terms_text, /243,90 zł netto \+ 56,10 zł VAT 23%/);
   assert.match(purchasable[0].terms_text, /każdy wynik weryfikuje człowiek/);
-  // WERYFIKACJA and ASSESSMENT CENTER stay non-purchasable (standing owner decision).
-  for (const sql of ["insert into private.sc19_package_policy(plan,credits) values('WERYFIKACJA',60)",
-    `insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
-      terms_revision,terms_text,valid_until_ms)
-      values('x','x','WERYFIKACJA',true,true,61500,'PLN',60,'x','x',9999999999999)`]) {
-    await assert.rejects(env.db.query(sql), error => error.code === '23514');
+  // Nothing beyond the quotas and the one offer: no sale, approval, balance,
+  // order, grant or journal entry is invented for anybody.
+  for (const table of accountingTables.filter(name => !['sc19_package_policy', 'sc19_payment_offers'].includes(name))) {
+    assert.equal((await db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, table);
   }
-  // Re-running either seed changes nothing; neither rewrites an issued revision.
-  const seeded = await accountingSnapshot(env.db);
-  for (const name of ['20261103120000_sc019_seed_packages_offer.sql', '20261103130100_sc019_offer_terms_diacritics.sql']) {
-    await env.db.query(await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8'));
-    assert.deepEqual(await accountingSnapshot(env.db), seeded, `${name} is idempotent`);
-  }
+  // Re-running changes nothing.
+  const seeded = await accountingSnapshot(db);
+  await applyPreviewSeeds(db);
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await accountingSnapshot(db), seeded, 'the seed is idempotent');
 
-  const { db, h } = env, f = await h.seed(); await h.asAdmin();
-  const seedSql = await readFile(new URL('../supabase/migrations/20261103120000_sc019_seed_packages_offer.sql', import.meta.url), 'utf8');
-  const termsSql = await readFile(new URL('../supabase/migrations/20261103130100_sc019_offer_terms_diacritics.sql', import.meta.url), 'utf8');
-  const seedDown = await readFile(new URL('../supabase/rollbacks/20261103120000_sc019_seed_packages_offer_down.sql', import.meta.url), 'utf8');
-  const termsDown = await readFile(new URL('../supabase/rollbacks/20261103130100_sc019_offer_terms_diacritics_down.sql', import.meta.url), 'utf8');
   const purchasableIds = async () => (await db.query(`select id from private.sc19_payment_offers
     where approved and active and valid_until_ms > (extract(epoch from now())*1000)::bigint order by id`)).rows.map(r => r.id);
 
-  // Rolling back only the terms revision restores the previously seeded offer, so
-  // the purchase path keeps exactly one purchasable offer either way.
-  await db.query(termsDown);
-  assert.deepEqual((await db.query('select id from private.sc19_payment_offers where approved and active')).rows,
-    [{ id: 'preselekcja-60-2026-11' }], 'the terms rollback re-offers the previous revision and deletes no row');
-  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 2,
-    'an immutable offer row is never deleted by a rollback');
+  // The shown, accepted and granted quantity must be ONE number.
+  // private.sc19_grant_paid() grants the stored PRESELEKCJA quota and an issued
+  // offer row cannot be rewritten, so the 60 CV / 300 zł offer is withdrawn while
+  // the stored quota is something else, rather than mispriced.
+  await db.query("update private.sc19_package_policy set credits=17 where plan='PRESELEKCJA'");
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await purchasableIds(), [],
+    'a differing operator quota withdraws the offer instead of mispricing it');
+  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'], 'restoring the approved quota publishes it again');
 
-  // Roll-forward after that rollback must work. The offer rows are
-  // update-immutable, so the re-insert is a no-op ON CONFLICT DO NOTHING and the
-  // forward migration has to re-activate its own revision, or its own postflight
-  // aborts with sc019_offer_terms_diacritics_no_purchasable_offer.
-  await db.query(termsSql);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'],
-    'rollback -> forward of the terms revision restores exactly the accented offer');
-  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 2, 'no new row is created');
+  // An operator quota already in place is KEPT, never overwritten by the seed.
+  await db.query("update private.sc19_package_policy set credits=4 where plan='FREE'");
+  await applyPreviewSeeds(db);
+  assert.equal((await db.query("select credits from private.sc19_package_policy where plan='FREE'")).rows[0].credits, 4,
+    'the seed never overwrites an operator billing decision');
+  await db.query("update private.sc19_package_policy set credits=5 where plan='FREE'");
 
-  // Both rollbacks, then both forward migrations again, in chain order.
-  await db.query(termsDown);
-  await db.query(seedDown);
-  assert.deepEqual(await purchasableIds(), [], 'after both rollbacks nothing is purchasable');
-  await db.query(seedSql);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11'],
-    'rollback -> forward of the seed re-activates its own offer revision');
-  await db.query(termsSql);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'],
-    'the full rollback -> forward cycle ends in exactly the state the chain produces');
-  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 2);
+  // A manual deactivation on preview is repaired by a re-run, without a new row.
+  await db.query("update private.sc19_payment_offers set active=false where id='preselekcja-60-2026-11-r2'");
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2']);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 1,
+    'no new offer row is ever created by a re-run');
+
+  // The offer row is immutable, so the economics of an issued revision cannot be
+  // edited, and it cannot be deleted either.
+  await assert.rejects(db.query("update private.sc19_payment_offers set amount_minor=1 where id='preselekcja-60-2026-11-r2'"), /immutable/i);
+  await assert.rejects(db.query("delete from private.sc19_payment_offers where id='preselekcja-60-2026-11-r2'"), /immutable/i);
+
+  // The seed refuses a database that carries real commercial activity, whatever
+  // connection string it was handed: a live database's quotas and offers are an
+  // owner action, not a seed's business.
+  const f = await h.seed(users.otherOwner); await h.asAdmin();
+  await db.query("insert into private.sc19_balances(company_id,plan,available) values($1,'PRESELEKCJA',3)", [f.companyId]);
+  // The seed opens its own transaction, so a refusal leaves it aborted: roll it
+  // back, exactly as the preview job's psql -v ON_ERROR_STOP=1 would.
+  await assert.rejects(applyPreviewSeeds(db),
+    error => error.code === '55000' && /sc19_preview_seed_refuses_live_database/.test(error.message));
+  await db.query('rollback');
+  assert.equal((await db.query('select count(*)::int n from private.sc19_balances')).rows[0].n, 1,
+    'a refused seed changes nothing');
+  await db.query('delete from private.sc19_balances');
+
+  // And the whole purchase path a Przelewy24 verifier walks: a verified owner
+  // reads exactly this offer through the chain's read-only RPC.
+  const a = await h.seed(users.owner); await h.asAdmin();
+  await applyPreviewSeeds(db);
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
+    values($1,'1234563218','synthetic-preview-seed-proof')`, [a.companyId]);
+  await h.asUser(users.owner);
+  const offers = (await db.query('select * from public.sc19_checkout_offers($1)', [a.companyId])).rows;
+  assert.equal(offers.length, 1);
+  assert.equal(offers[0].id, 'preselekcja-60-2026-11-r2');
+  assert.equal(offers[0].amount_minor, 30000);
+  assert.equal(offers[0].credits, 60);
+  assert.match(offers[0].terms_text, /[ąćęłńóśźż]/);
+  // Reading an offer takes no payment: no order, grant or journal entry appears.
+  await h.asAdmin();
+  for (const table of ['sc19_payment_orders', 'sc19_payment_requests', 'sc19_payment_grants',
+    'sc19_balances', 'sc19_credit_journal', 'sc19_trial_nips']) {
+    assert.equal((await db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, table);
+  }
+  // A paid grant now delivers exactly the number the offer showed.
+  assert.equal((await db.query('select private.sc19_grant_paid($1,$2) available',
+    [a.companyId, 'synthetic-preview-seed-grant'])).rows[0].available, 60);
+});
+
+// After 2027-12-31 the seeded revision has nothing left to publish. A fresh
+// preview database must still be buildable, so the seed reports and succeeds
+// rather than aborting, and leaves nothing flagged as on sale.
+test('the preview seed still succeeds after the seeded offer has expired', async t => {
+  const env = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(env.db, { throughMigration: null });
+  const { db } = env;
+  await h.asAdmin();
+  const seed = await readFile(new URL('../supabase/preview-seeds/sc19-preselekcja-offer.sql', import.meta.url), 'utf8');
+  const expired = seed.replace('constant bigint := 1830297599000', 'constant bigint := 1000000000000');
+  assert.notEqual(expired, seed, 'the pinned validity must still be patchable by this test');
+  await db.query(expired);
+  await assertCurrentInventory(db);
+  // The quotas do not expire with an offer.
   assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
     [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }]);
-
-  // Neither forward migration publishes a 60 CV offer while the stored quota is
-  // something else: the shown, accepted and granted number cannot diverge.
-  await db.query(termsDown);
-  await db.query(seedDown);
-  await db.query("update private.sc19_package_policy set credits=17 where plan='PRESELEKCJA'");
-  await db.query(seedSql);
-  await db.query(termsSql);
-  assert.deepEqual(await purchasableIds(), [],
-    'a differing operator quota blocks publishing the 60 CV / 300 zl offer instead of mispricing it');
-  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
-  await db.query(seedSql);
-  await db.query(termsSql);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'], 'restoring the approved quota publishes it again');
-
-  // The quota guard is evaluated per migration, independently, so skipping the
-  // publish is not enough: the OTHER migration of the chain may already have
-  // published its revision while the quota still matched. The interleaved order
-  // an operator actually produces — apply the seed, change the quota in
-  // /operator/billing, then apply the terms revision — must still end with
-  // nothing purchasable, or a 60 CV / 300 zl offer would sit on sale next to a
-  // stored quota that grants a different number.
-  await db.query(termsDown);
-  await db.query(seedDown);
-  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
-  await db.query(seedSql);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11'], 'the seed published its revision while the quota matched');
-  await db.query("update private.sc19_package_policy set credits=17 where plan='PRESELEKCJA'");
-  await db.query(termsSql);
-  assert.deepEqual(await purchasableIds(), [],
-    'the terms migration deactivates the already published revision instead of leaving it purchasable');
-  // The reverse order, and repeated replays of either migration, reach the same
-  // end state. Nothing of this chain may become purchasable again by itself.
-  for (const sql of [seedSql, termsSql, seedSql, seedSql, termsSql, termsSql]) {
-    await db.query(sql);
-    assert.deepEqual(await purchasableIds(), [], 'no replay of either migration republishes against a differing quota');
-  }
-  // The same divergence reached the other way round: the terms revision is
-  // published first, then the quota changes, then the seed is replayed.
-  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
-  await db.query(termsSql);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2']);
-  await db.query("update private.sc19_package_policy set credits=17 where plan='PRESELEKCJA'");
-  await db.query(seedSql);
-  assert.deepEqual(await purchasableIds(), [],
-    'the seed deactivates the already published accented revision instead of leaving it purchasable');
-  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
-  await db.query(seedSql);
-  await db.query(termsSql);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'], 'restoring the approved quota publishes it again');
-
-  // Rolling the seed back stops the purchase path. It does NOT delete package
-  // quotas: private.sc19_package_policy has no provenance, and the seeded values
-  // are exactly the ones an operator is most likely to have set in
-  // /operator/billing, where deleting them would break every paid grant.
-  await db.query(termsDown);
-  await db.query(seedDown);
-  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
-    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }],
-    'the rollback never removes an operator billing configuration');
-  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0,
-    'the rollback deactivates the offer; the immutable row itself is never deleted');
-  // A paid grant therefore keeps working after the rollback, with the stored quota.
-  assert.equal((await db.query('select private.sc19_grant_paid($1,$2) available', [f.companyId, 'synthetic-post-rollback-grant'])).rows[0].available, 60);
-
-  // With the quotas actually removed (an operator action, not this rollback),
-  // grants and FREE claims refuse again and the public catalog shows nothing.
-  await db.query('delete from private.sc19_balances');
-  await db.query('delete from private.sc19_credit_journal');
-  await db.query('delete from private.sc19_package_policy');
-  await assert.rejects(db.query('select private.sc19_grant_paid($1,$2)', [f.companyId, 'synthetic-missing-policy-grant']), /sc19_missing_paid_policy/);
+  assert.deepEqual((await db.query('select id,active,approved from private.sc19_payment_offers')).rows
+    .filter(r => r.active || r.approved), [], 'an expired revision is not left approved and active');
+  // Replays stay no-ops that succeed.
+  await db.query(expired);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0);
+  // The read-only RPC answers an empty list, not an error, so the checkout page
+  // says "no offer" instead of breaking.
+  const a = await h.seed(users.owner); await h.asAdmin();
   await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
-    values($1,'1234563218','synthetic-missing-policy-proof')`, [f.companyId]);
-  await h.asUser(f.owner);
-  await assert.rejects(db.query("select public.sc19_claim_trial($1,'1234563218')", [f.companyId]), /sc19_missing_free_policy/);
-  await h.asUser(null, 'anon');
-  assert.deepEqual((await db.query('select * from public.sc19_package_sizes()')).rows, []);
-  await h.asAdmin();
-  const after = await accountingSnapshot(db);
-  for (const table of ['sc19_balances', 'sc19_trial_nips', 'sc19_credit_journal']) assert.deepEqual(after[table], []);
+    values($1,'1234563218','synthetic-expired-offer-proof')`, [a.companyId]);
+  await h.asUser(users.owner);
+  assert.deepEqual((await db.query('select * from public.sc19_checkout_offers($1)', [a.companyId])).rows, []);
 });
 
 const driftCases = [
@@ -703,81 +719,15 @@ test('SC-019 migrated payment store supports native concurrency, replay, immutab
   await assertR6(db);
 });
 
-// An offer revision expires. After 2027-12-31 the checked-in validity is in the
-// past, and a chain that aborted there would make every fresh database
-// unbuildable from that date on: new preview branches, restore rehearsals, CI
-// matrix runs. An expired offer is "nothing to publish, report it", never an
-// abort. The substitution happens only in the text handed to this disposable
-// database; the checked-in files are untouched.
-const expiredValidity = sql => sql.replaceAll('1830297599000', '1730297599000');
-test('the chain still builds a fresh database after the seeded offer has expired', async t => {
-  const env = await bootMigrationDatabase(t);
-  const h = await setupRankingDatabase(env.db, { throughMigration: null, transformSql: expiredValidity });
-  const { db } = env;
-  // The whole chain applied: no migration raised, and the schema is still exactly
-  // the reviewed one.
-  await assertCurrentInventory(db);
-  await h.asAdmin();
-  // The owner-approved quotas are still seeded: they do not expire with an offer.
-  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
-    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }]);
-  // Nothing is purchasable, and no row of the chain is left flagged as on sale.
-  assert.deepEqual((await db.query(`select id,active,approved from private.sc19_payment_offers
-    order by id`)).rows.filter(r => r.active || r.approved), [],
-  'an expired revision is not left approved and active');
-  // Replaying either migration stays a no-op that succeeds.
-  for (const name of ['20261103120000_sc019_seed_packages_offer.sql', '20261103130100_sc019_offer_terms_diacritics.sql']) {
-    await db.query(expiredValidity(await readFile(new URL(`../supabase/migrations/${name}`, import.meta.url), 'utf8')));
-  }
-  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0,
-    'replays of an expired chain publish nothing');
-  // The read-only RPC exists and answers an empty list, not an error, so the
-  // checkout page says "no offer" instead of breaking.
-  const a = await h.seed(users.owner);
-  await h.asAdmin();
-  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
-    values($1,'1234563218','synthetic-expired-offer-proof')`, [a.companyId]);
-  await h.asUser(users.owner);
-  assert.deepEqual((await db.query('select * from public.sc19_checkout_offers($1)', [a.companyId])).rows, []);
-});
-
-test('the diacritics postflight does not fail on a later legitimately ASCII approved offer', async t => {
-  const env = await bootMigrationDatabase(t);
-  const h = await setupRankingDatabase(env.db, { throughMigration: null });
-  const { db } = env;
-  await h.asAdmin();
-  // A later approved offer whose terms are genuinely ASCII (a different package
-  // or a different language) is none of this migration's business. Scanning
-  // every approved row turned a ledger replay of 20261103130100 into a failure
-  // the moment such a row existed.
-  await db.query(`insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
-    terms_revision,terms_text,valid_until_ms)
-    values('synthetic-ascii-later','ascii-v1','PRESELEKCJA',true,true,30000,'PLN',60,
-      'ascii-terms','PRESELEKCJA 60 CV for 300,00 PLN gross. English terms, no Polish letters.',$1)`,
-  [Date.now() + 86400000]);
-  await db.query(await readFile(new URL('../supabase/migrations/20261103130100_sc019_offer_terms_diacritics.sql', import.meta.url), 'utf8'));
-  // The accented revision is still the one this migration published, unchanged.
-  assert.match((await db.query("select terms_text t from private.sc19_payment_offers where id='preselekcja-60-2026-11-r2'")).rows[0].t,
-    /każdy wynik weryfikuje człowiek/);
-  // And the guard still bites on the row it IS about: a fresh chain in which this
-  // migration's own terms lost their Polish letters must refuse, so narrowing the
-  // scan to one id did not turn the check off.
-  const stripped = await bootMigrationDatabase(t);
-  await assert.rejects(setupRankingDatabase(stripped.db, { throughMigration: null,
-    transformSql: (sql, name) => name === '20261103130100_sc019_offer_terms_diacritics.sql'
-      ? sql.replace(/(values \(\s*'preselekcja-60-2026-11-r2'[\s\S]*?)(\n\s*offer_valid_until\))/,
-        (_, body, tail) => body.replace(/[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/g,
-          c => 'acelnoszzACELNOSZZ'['ąćęłńóśźżĄĆĘŁŃÓŚŹŻ'.indexOf(c)]) + tail)
-      : sql }),
-  error => error.code === '55000' && /sc019_offer_terms_diacritics_missing/.test(error.message));
-});
-
 test('public.sc19_checkout_offers serves the approved offer to a verified owner only, and cannot write', async t => {
   const env = await bootMigrationDatabase(t);
   const h = await setupRankingDatabase(env.db, { throughMigration: null });
   const { db } = env;
   await assertCurrentInventory(db);
   await h.asAdmin();
+  // The chain installs the RPC but publishes no offer; the preview-only seed is
+  // what puts one there, so this authorization test applies it first.
+  await applyPreviewSeeds(db);
   const a = await h.seed(users.owner), b = await h.seed(users.otherOwner);
   await h.asAdmin();
   await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter'),($1,$3,'viewer')",

@@ -20,35 +20,20 @@ const nipA = nip('526025099'), nipB = nip('951000001');
 const code = expected => error => error.code === expected;
 
 // These RPCs are specified against an UNCONFIGURED policy: the operator is the
-// only one who may choose a quota. 20261103120000_sc019_seed_packages_offer
-// seeds the owner-approved quotas at the end of the chain, so the fixture clears
-// them administratively to restore that precondition.
-//
-// Its rollback deliberately does NOT do this: private.sc19_package_policy has no
-// provenance, so a rollback that deleted by value would destroy a quota an
-// operator had set through public.sc19_operator_set_package_policy(). Emptying
-// the table is a test-fixture action here, not something any migration does. The
-// seed, its idempotency and its rollback are covered in
-// tests/sc-019-migrations.test.mjs.
-// Both offer rollbacks, in reverse chain order: 130100 issued the accented
-// revision and deactivated the first one, so rolling back only 120000 would
-// leave the accented revision purchasable.
-const seedRollbacks = ['20261103130100_sc019_offer_terms_diacritics_down.sql',
-  '20261103120000_sc019_seed_packages_offer_down.sql'];
-
+// only one who may choose a quota. That is now also what the migration chain
+// leaves behind, since commercial activation is no longer done by any migration
+// (the owner-approved quotas reach the TEST project through
+// supabase/preview-seeds/sc19-preselekcja-offer.sql, which is not a migration).
+// So the precondition holds with no fixture clean-up, and this asserts it.
 async function ready(t) {
   const env = await bootMigrationDatabase(t);
   const h = await setupRankingDatabase(env.db, { throughMigration: null });
   const { db } = env;
   await h.asAdmin();
-  // Stop offering the seeded package first, through the real rollback, so no
-  // purchasable offer survives into an unconfigured-policy fixture.
-  for (const name of seedRollbacks) {
-    await db.query(await readFile(new URL(`../supabase/rollbacks/${name}`, import.meta.url), 'utf8'));
-  }
-  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0);
-  await db.query('delete from private.sc19_package_policy');
-  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0,
+    'the migration chain publishes no purchasable offer');
+  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0,
+    'the migration chain configures no quota: that is the operator\'s decision');
   await db.query('insert into public.platform_operators(user_id) values($1)', [operator]);
   const a = await h.seed(users.owner), b = await h.seed(users.otherOwner);
   await h.asAdmin();

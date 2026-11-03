@@ -207,18 +207,22 @@ export async function accountingSnapshot(db) {
   return result;
 }
 
-// Explicit test-only commercial inputs. M13 itself must leave policy empty; the
-// only rows allowed to be there already are the owner-approved quotas seeded by
-// 20261103120000_sc019_seed_packages_offer (FREE=5, PRESELEKCJA=60), which the
-// chain applies after M13. Any other row means an unreviewed quota chose itself.
+// Explicit test-only commercial inputs. The migration chain must leave policy
+// EMPTY: quotas are an owner action in /operator/billing, never a migration (see
+// supabase/preview-seeds/sc19-preselekcja-offer.sql for the preview-only path).
+// Any row here before the synthetic seed means a quota chose itself.
 export async function seedSyntheticPolicy(db) {
   await db.query('reset role');
-  const existing = (await db.query('select plan,credits from private.sc19_package_policy order by plan collate "C"')).rows;
-  assert.ok(existing.length === 0 ||
-    JSON.stringify(existing) === JSON.stringify([{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }]),
-  `Unexpected package policy before the synthetic seed: ${JSON.stringify(existing)}`);
-  await db.query(`insert into private.sc19_package_policy(plan,credits) values('FREE',5),('PRESELEKCJA',60)
-    on conflict(plan) do update set credits=excluded.credits`);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0,
+    'The migration chain must not seed package quotas');
+  await db.query("insert into private.sc19_package_policy(plan,credits) values('FREE',5),('PRESELEKCJA',60)");
+}
+
+// The preview-only commercial seed, applied in tests that need a purchasable
+// offer on a fully migrated database. It is NOT part of the migration chain.
+export async function applyPreviewSeeds(db) {
+  await db.query('reset role');
+  await db.query(await readFile(new URL('../../supabase/preview-seeds/sc19-preselekcja-offer.sql', import.meta.url), 'utf8'));
 }
 
 export async function seedCreditData(env) {
