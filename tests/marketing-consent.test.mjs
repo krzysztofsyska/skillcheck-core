@@ -12,6 +12,8 @@ import {
 /** A server secret only this test knows; nothing is read from the environment. */
 const ENV = { SC19_TRIAL_AUTO_SECRET: 's'.repeat(32) };
 const COMPANY = '11111111-2222-3333-4444-555555555555';
+/** A declared time in the canonical form signRegistrationConsentGrant signs. */
+const DECLARED = '2026-11-03T08:00:00.000Z';
 
 const migration = readFileSync(new URL('../supabase/migrations/20261103090000_sc19_auto_trial_marketing_consent.sql', import.meta.url), 'utf8');
 const registerPage = readFileSync(new URL('../app/register/page.tsx', import.meta.url), 'utf8');
@@ -71,7 +73,8 @@ test('only a well-formed, correctly SIGNED grant of a known version is recorded'
   assert.equal(granted.version, MARKETING_CONSENT_VERSION);
   assert.equal(granted.declared_at, '2026-11-03T08:00:00.000Z');
   assert.match(granted.sig, /^[0-9a-f]{64}$/, 'the snapshot is signed');
-  assert.equal(verifiedConsentVersion({ marketing_consent: granted }, SUBJECT, ENV), MARKETING_CONSENT_VERSION);
+  assert.deepEqual(verifiedConsentVersion({ marketing_consent: granted }, SUBJECT, ENV),
+    { version: MARKETING_CONSENT_VERSION, declaredAt: '2026-11-03T08:00:00.000Z' });
 
   for (const metadata of [
     undefined, null, {}, 'string', [],
@@ -87,7 +90,7 @@ test('only a well-formed, correctly SIGNED grant of a known version is recorded'
   // User metadata is client-writable, so a wording smuggled into the snapshot
   // must change nothing: only the VERSION is ever taken from here, and the text
   // stored with the event comes from private.marketing_consent_text.
-  assert.equal(verifiedConsentVersion({ marketing_consent: { ...granted, consent_text: 'cokolwiek' } }, SUBJECT, ENV),
+  assert.equal(verifiedConsentVersion({ marketing_consent: { ...granted, consent_text: 'cokolwiek' } }, SUBJECT, ENV)?.version,
     MARKETING_CONSENT_VERSION, 'a stray wording field is ignored, not obeyed');
   assert.match(migration, /wording := private\.marketing_consent_text\(consent_version\)/);
   const grantFn = migration.slice(migration.indexOf('function public.marketing_consent_grant'), migration.indexOf('function public.marketing_consent_withdraw'));
@@ -132,28 +135,84 @@ test('a consent the user wrote into their own metadata is NOT recorded', () => {
   // 'consent_registration' is a DIFFERENT label over a DIFFERENT payload (the
   // company id and the version, not the snapshot), so the client-writable
   // snapshot signature still cannot be presented to the RPC.
-  assert.notEqual(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, ENV).signature,
+  assert.notEqual(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, DECLARED, ENV).signature,
     signedConsentDeclaration(true, 'firma@przyklad.pl', ENV).sig);
 });
 
-test('the registration grant request is signed per company and version, or not made at all', () => {
-  const a = signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, ENV);
+test('the registration grant request is signed per company, version and declared time', () => {
+  const a = signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, DECLARED, ENV);
   assert.match(a.signature, /^[0-9a-f]{64}$/);
   assert.match(a.requestId, /^[0-9a-f-]{36}$/);
+  assert.equal(a.declaredAt, DECLARED, 'the canonical declared time travels with the request');
   // A fresh request id every time, so the database's nonce table makes a second
   // successful use of one request fail.
-  assert.notEqual(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, ENV).requestId, a.requestId);
-  // The company and the version are inside the signature: one accepted request
-  // cannot be replayed for another company or another wording.
-  const fixed = { requestId: a.requestId, issuedAtMs: a.issuedAtMs };
-  const again = (company, version) => signRegistrationConsentGrant(company, version, ENV);
-  assert.notEqual(again('99999999-2222-3333-4444-555555555555', MARKETING_CONSENT_VERSION).signature, a.signature);
-  assert.notEqual(again(COMPANY, 'marketing-9.9').signature, a.signature);
-  assert.ok(fixed.issuedAtMs > 0);
+  assert.notEqual(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, DECLARED, ENV).requestId, a.requestId);
+  // The company, the version AND the declared time are inside the signature: one
+  // accepted request cannot be replayed for another company, another wording or
+  // another moment. Without the time in the payload an owner reaching the RPC
+  // through the Data API could choose the date his consent is recorded under.
+  const again = (company, version, declaredAt) => signRegistrationConsentGrant(company, version, declaredAt, ENV);
+  assert.notEqual(again('99999999-2222-3333-4444-555555555555', MARKETING_CONSENT_VERSION, DECLARED).signature, a.signature);
+  assert.notEqual(again(COMPANY, 'marketing-9.9', DECLARED).signature, a.signature);
+  assert.notEqual(again(COMPANY, MARKETING_CONSENT_VERSION, '2026-11-03T09:00:00.000Z').signature, a.signature,
+    'moving the declared time changes the signature');
+  assert.ok(a.issuedAtMs > 0);
+  // An unusable declared time is signed as absent, not dropped: the database
+  // then stamps the row with its own clock and the consent survives.
+  const undated = again(COMPANY, MARKETING_CONSENT_VERSION, null);
+  assert.equal(undated.declaredAt, null);
+  assert.notEqual(undated.signature, a.signature);
+  assert.equal(again(COMPANY, MARKETING_CONSENT_VERSION, 'nie-data').declaredAt, null);
+  // Equivalent spellings of one instant canonicalise to the same UTC string, so
+  // the payload the database rebuilds with to_char() cannot drift from the one
+  // signed here. (The signatures themselves differ: each call mints a fresh
+  // request id, which is also inside the HMAC.)
+  assert.equal(again(COMPANY, MARKETING_CONSENT_VERSION, '2026-11-03T09:00:00.000+01:00').declaredAt,
+    again(COMPANY, MARKETING_CONSENT_VERSION, '2026-11-03T08:00:00.000Z').declaredAt);
+  assert.equal(again(COMPANY, MARKETING_CONSENT_VERSION, '2026-11-03T08:00:00Z').declaredAt, DECLARED);
   // No secret, no request: then nothing is recorded as a registration consent
   // and the owner gives it in the panel instead.
-  assert.equal(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, {}), null);
-  assert.equal(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, { SC19_TRIAL_AUTO_SECRET: 'zbyt-krotki' }), null);
+  assert.equal(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, DECLARED, {}), null);
+  assert.equal(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, DECLARED, { SC19_TRIAL_AUTO_SECRET: 'zbyt-krotki' }), null);
+});
+
+test('the declared consent time survives into the ledger instead of the onboarding time', () => {
+  // THE BUG (bot review finding, 2026-11-03). The snapshot's declared_at was
+  // verified under the HMAC and then thrown away, and the ledger row took the
+  // column default — so a consent ticked at sign-up was dated at onboarding,
+  // which happens after e-mail confirmation and can be days later. The ledger
+  // exists to prove WHEN the customer consented (GDPR art. 7(1)).
+  const SUBJECT = 'firma@przyklad.pl';
+  const granted = signedConsentDeclaration(true, SUBJECT, ENV, new Date('2026-08-01T06:30:00Z'));
+  const verified = verifiedConsentVersion({ marketing_consent: granted }, SUBJECT, ENV);
+  assert.equal(verified.declaredAt, '2026-08-01T06:30:00.000Z', 'the declared moment comes back, not now()');
+
+  // A time that does not parse does not throw the consent away: it comes back as
+  // null and the database stamps the row itself.
+  const broken = signedConsentDeclaration(true, SUBJECT, ENV, new Date('2026-08-01T06:30:00Z'));
+  const reader = (declared_at, sig) => declaredMarketingConsent({ marketing_consent: { ...broken, declared_at, sig } },
+    { subject: SUBJECT, verify: () => true });
+  assert.equal(reader('nie-data', broken.sig).declaredAt, null, 'unparseable time, consent still recorded');
+  assert.equal(reader(broken.declared_at, broken.sig).declaredAt, '2026-08-01T06:30:00.000Z');
+
+  // The action passes it on, and the RPC takes it as its own parameter.
+  assert.match(authActions, /declared_at: signedGrant\.declaredAt/);
+  assert.match(migration,
+    /create function public\.marketing_consent_grant_registration\(\n\s*target_company uuid, consent_version text, declared_at timestamptz,/);
+  // It is inside the signature the database rebuilds, so it cannot be chosen by
+  // the caller.
+  const registration = migration.slice(migration.indexOf('function public.marketing_consent_grant_registration'));
+  const body = registration.slice(0, registration.indexOf('$$;'));
+  assert.match(body, /to_char\(declared_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS\.MS"Z"'\)/);
+  assert.match(body, /marketing_consent_record\(target_company, consent_version, 'registration', actor, declared_at\)/);
+  // The ledger row is written with that time, not with the default.
+  assert.match(migration, /values\(target_company,'granted',consent_version,wording,consent_source,actor,stamp\)/);
+  // FAIL-SAFE and the stated bound: out of range keeps the consent at now().
+  assert.match(migration, /stamp timestamptz := now\(\);/);
+  assert.match(migration, /declared_at <= now\(\) \+ interval '60 seconds'/);
+  assert.match(migration, /declared_at >= now\(\) - interval '90 days'/);
+  // A panel click has no declared time; it is always stamped now().
+  assert.match(migration, /marketing_consent_record\(target_company, consent_version, 'company_panel', actor, null\)/);
 });
 
 test('registration signs the snapshot and verifies it before recording, and sends nothing', () => {
@@ -170,6 +229,7 @@ test('registration signs the snapshot and verifies it before recording, and send
     /sc19_trial_auto_verify_signature\('consent_registration'/, 'the signature is verified in the database');
   // Only a verified snapshot's version crosses into the ledger call.
   assert.match(authActions, /verifiedConsentVersion\(user\.user_metadata, user\.email\)/);
+  assert.match(authActions, /signRegistrationConsentGrant\(companyId, consent\.version, consent\.declaredAt\)/);
   assert.doesNotMatch(authActions, /declaredMarketingConsent\(/, 'the unverified reader is not used by the action');
   assert.doesNotMatch(authActions, /resend|sendMail|api\.resend\.com/i, 'registration sends no mail');
   // The application imports the guarded module, so the secret can never be

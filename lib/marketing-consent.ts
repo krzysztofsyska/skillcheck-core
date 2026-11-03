@@ -97,18 +97,37 @@ export function marketingConsentDeclaration(granted: boolean, input: {
   });
 }
 
-/** Reads the sign-up snapshot back. Returns the version to record only when the
- * snapshot is a well-formed grant of a version this build knows AND its
- * signature verifies for this user; anything else (absent, malformed, withdrawn,
- * unknown version, unsigned, wrongly signed, signed for another account) records
- * nothing. Only the version is ever taken from the metadata — never the wording.
+/** What a verified sign-up snapshot yields: the version to record, and WHEN the
+ * customer declared it. `declaredAt` is the canonical ISO-8601 UTC form of the
+ * snapshot's own timestamp, or null when that timestamp does not parse. */
+export type VerifiedMarketingConsent = Readonly<{ version: string; declaredAt: string | null }>;
+
+/** Reads the sign-up snapshot back. Returns the version to record and the
+ * declared time only when the snapshot is a well-formed grant of a version this
+ * build knows AND its signature verifies for this user; anything else (absent,
+ * malformed, withdrawn, unknown version, unsigned, wrongly signed, signed for
+ * another account) records nothing. Only the version and the time are ever taken
+ * from the metadata — never the wording.
+ *
+ * WHY THE TIME COMES BACK TOO (bot review finding, 2026-11-03). The consent is
+ * declared at sign-up and recorded against the company later, when the company
+ * is created — after e-mail confirmation, so possibly days later. The ledger
+ * exists to prove WHEN the customer consented, and this function used to verify
+ * the snapshot's `declared_at` under the HMAC and then throw it away, leaving the
+ * database to stamp the row at onboarding. The value is returned canonicalised
+ * so the caller signs and stores exactly one form of it.
+ *
+ * An unparseable timestamp yields `declaredAt: null` rather than rejecting the
+ * whole snapshot: the signature proves the customer did consent, and that fact
+ * must not be lost over a broken date. The database then stamps the row with its
+ * own clock (private.marketing_consent_record).
  *
  * `verify` must compare in constant time. Without a verifier nothing is
  * recorded: an unverifiable snapshot is treated exactly like a forged one. */
 export function declaredMarketingConsent(metadata: unknown, input: {
   subject?: string | null;
   verify?: (payload: string, requestId: string, signature: string) => boolean;
-} = {}): string | null {
+} = {}): VerifiedMarketingConsent | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const raw = (metadata as { marketing_consent?: unknown }).marketing_consent;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -121,7 +140,13 @@ export function declaredMarketingConsent(metadata: unknown, input: {
   const subject = (input.subject ?? '').trim();
   if (!subject || !input.verify) return null;
   if (!input.verify(consentPayload(subject, MARKETING_CONSENT_VERSION, declaredAt), consentRequestId(subject), signature)) return null;
-  return MARKETING_CONSENT_VERSION;
+  // The HMAC covers the raw string; this only normalises what verified into the
+  // single canonical form the signed RPC payload and the ledger row both use.
+  const parsed = Date.parse(declaredAt);
+  return Object.freeze({
+    version: MARKETING_CONSENT_VERSION,
+    declaredAt: Number.isFinite(parsed) ? new Date(parsed).toISOString() : null,
+  });
 }
 
 export type MarketingConsentState = Readonly<{

@@ -34,6 +34,46 @@
 -- FREE afterwards. A release frees the NIP only; it never changes a balance,
 -- because that is a billing action and belongs to the owner.
 --
+-- A RELEASE IS NOT A RESET (bot review finding, 2026-11-03). The remedy above
+-- only worked against an account that had already SPENT its FREE: a release
+-- deletes the approval row, and private.sc19_claim_trial then refuses a second
+-- grant to that company because its balance still carries free_claimed. But the
+-- operator releases a NIP precisely when it was occupied by an account with no
+-- right to it, and that account has usually NOT claimed yet — the operator acts
+-- first. In that state nothing stopped the former holder from submitting the
+-- very same NIP again and recreating the approval before the real company got
+-- there, so the release remedied nothing. Both automatic admission paths now
+-- refuse a NIP that was released FROM this company
+-- (private.sc19_auto_free_nip_released_from, refusal code 'NIP_RELEASED'); the
+-- real company is a different company_id and is not affected.
+--   THE WAY BACK, for a release the operator made by mistake: the operator
+-- approves that company and that NIP again with public.sc19_operator_approve_trial.
+-- That is a deliberate, audited operator act with its own written proof, and it
+-- clears the guard, because the guard looks for a release with no operator
+-- approval standing after it. The automatic path can never clear the guard by
+-- itself: it is refused before it could write an approval, and the approval it
+-- would write is recognisable by its 'mf-biala-lista:' proof reference and does
+-- not count. Section 7 of docs/sc-free-auto-001-wdrozenie.md describes it.
+--
+-- WHEN THE CONSENT WAS GIVEN (bot review finding, 2026-11-03). The registration
+-- consent is declared at sign-up and recorded against the company later, when
+-- the company is created — after e-mail confirmation, which can take days. The
+-- ledger exists to prove WHEN the customer consented, so it stores the declared
+-- moment, not the moment of onboarding. The value is safe to trust: it is inside
+-- the HMAC of the sign-up snapshot (lib/marketing-consent.ts), so it cannot be
+-- edited without the server secret. The bound below is therefore a sanity limit
+-- against our own clock and parsing mistakes, not the security control:
+--   * at most 60 s in the future — clock skew between the Node process and the
+--     database, nothing more;
+--   * at most 90 days in the past — an unconfirmed sign-up may sit for a long
+--     time, but a declaration older than a quarter is far likelier a stale or
+--     broken snapshot than a registration still in progress.
+-- FAIL-SAFE, not fail-closed: a value outside that range, or none at all, does
+-- NOT lose the consent. The row is written with now() instead, and the function
+-- returns the timestamp it actually stored, so the caller can see it differed
+-- and log it. Losing a consent the customer really gave would be the worse
+-- error of the two.
+--
 -- WHY THE SIGNATURE. A checksum-valid NIP does not prove the caller represents
 -- that company; that is exactly why the operator approval exists. The registry
 -- answer is what replaces the operator, so the answer must be unforgeable. This
@@ -314,9 +354,53 @@ revoke all on function private.sc19_auto_free_cooldown() from public, anon, auth
 -- that is exactly what the cooldown must see.
 create function private.sc19_auto_free_local_refusal_codes()
 returns text[] language sql immutable set search_path='' as $$
-  select array['AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED','COOLDOWN']::text[]
+  select array['AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED','COOLDOWN','NIP_RELEASED']::text[]
 $$;
 revoke all on function private.sc19_auto_free_local_refusal_codes() from public, anon, authenticated;
+
+-- A NIP THE OPERATOR TOOK AWAY FROM THIS COMPANY STAYS TAKEN AWAY (bot review
+-- finding, 2026-11-03). See the note at the top of this file for why the release
+-- remedy did not hold without this.
+--
+-- True when some release names this (NIP, company) pair and no operator approval
+-- for the pair stands after it. The two halves are what make the guard both
+-- effective and reversible:
+--
+--   * a release DELETES the approval row, so immediately afterwards there is no
+--     approval and the guard is on. The former holder cannot reoccupy the NIP;
+--   * a later public.sc19_operator_approve_trial for the same company and NIP
+--     puts an approval row back, which turns the guard off. That is the way back
+--     from a release the operator made by mistake, and it is a deliberate,
+--     audited act with its own written proof reference.
+--
+-- An approval the AUTOMATIC path wrote does not count, so the guard cannot clear
+-- itself: such a row carries the 'mf-biala-lista:' proof reference this migration
+-- gives it (public.sc19_operator_approve_trial writes the operator's own proof
+-- plus '[operator:<id>]'). Belt and braces — the automatic path is refused
+-- before it reaches the insert anyway.
+--
+-- No timestamp comparison is needed: a release always leaves the pair with no
+-- approval at all, so "an approval exists" already means "approved again since
+-- the last release". A second release deletes that approval too and the guard
+-- comes back on.
+--
+-- STATED PLAINLY, what this does NOT do: it binds a COMPANY, not a person. An
+-- abuser who registers a brand-new company can try the released NIP again, and
+-- the real company's NIP being public is what makes that possible at all. The
+-- guard closes the hole the release remedy itself opened; it is not a proof of
+-- representation, which the owner deliberately did not ask for.
+create function private.sc19_auto_free_nip_released_from(target_company uuid, normalized text)
+returns boolean language sql stable security definer set search_path='' as $$
+  select exists (
+    select 1 from private.sc19_trial_nip_releases r
+    where r.nip = normalized and r.released_company_id = target_company
+  ) and not exists (
+    select 1 from private.sc19_trial_approvals a
+    where a.company_id = target_company and a.nip = normalized
+      and a.proof_reference not like 'mf-biala-lista:%'
+  );
+$$;
+revoke all on function private.sc19_auto_free_nip_released_from(uuid,text) from public, anon, authenticated;
 
 -- One account may only ever use the automatic path for ONE NIP. A NIP is
 -- public, so without this an account could walk a list of other companies' NIPs
@@ -461,6 +545,11 @@ begin
     refusal := 'AUTO_DISABLED';
   elsif private.sc19_auto_free_other_nip_tried(target_company, normalized) then
     refusal := 'ANOTHER_NIP_TRIED';
+  elsif private.sc19_auto_free_nip_released_from(target_company, normalized) then
+    -- The operator took this NIP away from THIS company. It must not be
+    -- reoccupied automatically, or the release would remedy nothing; only a
+    -- fresh operator approval opens it again.
+    refusal := 'NIP_RELEASED';
   elsif exists (select 1 from private.sc19_trial_nips t where t.nip=normalized and t.company_id<>target_company)
      or exists (select 1 from private.sc19_trial_approvals a where a.nip=normalized and a.company_id<>target_company) then
     -- Taken by SOMEONE ELSE. This company's own rows are not a refusal: asking
@@ -557,6 +646,18 @@ begin
       values(target_company,normalized,'refused',nullif(trimmed_request,''),nullif(trimmed_status,''),
         nullif(trimmed_name,''),'ANOTHER_NIP_TRIED');
     return query select 'refused'::text, null::integer, 'ANOTHER_NIP_TRIED'::text;
+    return;
+  end if;
+
+  -- A NIP the operator released FROM this company stays released. Re-checked
+  -- here and not only in the precheck, so the rule holds for a caller who goes
+  -- straight to this RPC through the Data API — which is where it matters, since
+  -- the former holder is exactly the account that has a reason to try.
+  if private.sc19_auto_free_nip_released_from(target_company, normalized) then
+    insert into private.sc19_trial_auto_checks(company_id,nip,outcome,mf_request_id,mf_status,mf_name,error_code)
+      values(target_company,normalized,'refused',nullif(trimmed_request,''),nullif(trimmed_status,''),
+        nullif(trimmed_name,''),'NIP_RELEASED');
+    return query select 'refused'::text, null::integer, 'NIP_RELEASED'::text;
     return;
   end if;
 
@@ -707,6 +808,13 @@ grant execute on function public.sc19_operator_taken_trial_nips() to authenticat
 -- visible. RESIDUAL RISK, stated plainly: a public NIP can still be occupied
 -- once by an account that does not represent it, and this is the remedy, not a
 -- prevention.
+--
+-- AND THE RELEASE STICKS. The release row this writes is itself the guard: both
+-- automatic admission paths refuse this (NIP, company) pair afterwards
+-- (private.sc19_auto_free_nip_released_from), so the account the NIP was taken
+-- from cannot simply submit it again and beat the real company to it. The pair
+-- is opened again only by public.sc19_operator_approve_trial — the way back from
+-- a release made by mistake.
 create function public.sc19_operator_release_trial_nip(supplied_nip text, release_reason text)
 returns table(released_company_id uuid, released_at timestamptz)
 language plpgsql volatile security definer set search_path='' as $$
@@ -797,15 +905,45 @@ grant execute on function public.sc19_operator_trial_nip_releases() to authentic
 -- marketing_consent_one_registration_per_company enforces the same rule, so two
 -- simultaneous replays cannot both slip through, and any future caller is bound
 -- by it too.
-create function private.marketing_consent_record(target_company uuid, consent_version text, consent_source text, actor uuid)
+--
+-- WHEN IT HAPPENED (bot review finding, 2026-11-03). `declared_at` is the moment
+-- the customer actually ticked the box, carried here from the signed sign-up
+-- snapshot. Before this it was verified in Node and then thrown away, and the
+-- row took the column default — so the ledger dated every registration consent
+-- at ONBOARDING, which can be days later. That is the one fact the ledger exists
+-- to prove (GDPR art. 7(1): the controller must be able to demonstrate that the
+-- data subject consented, and when).
+--
+-- The value is trustworthy because it is inside the snapshot's HMAC, so the
+-- range check below is a sanity limit on our own clocks, not the security
+-- control: up to 60 s ahead (skew between the Node process and the database) and
+-- up to 90 days behind (an unconfirmed sign-up can wait, a quarter-old
+-- declaration is more likely broken than pending). See the header of this file.
+--
+-- FAIL-SAFE. Null, unparseable or out of range does NOT drop the consent: the
+-- row is written with now() instead, and the returned timestamp is the one
+-- stored, so the caller can notice the difference and log it (app/auth/actions.ts
+-- does). A consent the customer gave must never vanish because we distrusted its
+-- clock.
+--
+-- Only 'registration' passes a declared time; a panel click happens now, so
+-- public.marketing_consent_grant passes null and the row is stamped now().
+create function private.marketing_consent_record(target_company uuid, consent_version text, consent_source text, actor uuid,
+  declared_at timestamptz default null)
 returns timestamptz language plpgsql volatile security definer set search_path='' as $$
 declare
   wording text;
   latest private.marketing_consent_events;
   granted_at timestamptz;
+  stamp timestamptz := now();
 begin
   if consent_source is null or consent_source not in ('registration','company_panel') then
     raise exception 'marketing_consent_invalid_source' using errcode='22023';
+  end if;
+  if declared_at is not null
+     and declared_at <= now() + interval '60 seconds'
+     and declared_at >= now() - interval '90 days' then
+    stamp := declared_at;
   end if;
   wording := private.marketing_consent_text(consent_version);
   if wording is null then
@@ -830,13 +968,13 @@ begin
   if latest.id is not null and latest.event='granted' then
     return latest.occurred_at; -- already active: history untouched
   end if;
-  insert into private.marketing_consent_events(company_id,event,consent_version,consent_text,source,actor_id)
-    values(target_company,'granted',consent_version,wording,consent_source,actor)
+  insert into private.marketing_consent_events(company_id,event,consent_version,consent_text,source,actor_id,occurred_at)
+    values(target_company,'granted',consent_version,wording,consent_source,actor,stamp)
     returning occurred_at into granted_at;
   return granted_at;
 end;
 $$;
-revoke all on function private.marketing_consent_record(uuid,text,text,uuid) from public, anon, authenticated;
+revoke all on function private.marketing_consent_record(uuid,text,text,uuid,timestamptz) from public, anon, authenticated;
 
 -- The company's own one-click grant in /dashboard/<id>/zgody. It takes NO source
 -- argument: the source is always 'company_panel', because that is literally
@@ -859,7 +997,8 @@ begin
   if actor is null or not private.is_company_owner(target_company) then
     raise exception 'sc19_company_forbidden' using errcode='42501';
   end if;
-  return private.marketing_consent_record(target_company, consent_version, 'company_panel', actor);
+  -- No declared time: a panel click happens now, so the row is stamped now().
+  return private.marketing_consent_record(target_company, consent_version, 'company_panel', actor, null);
 end;
 $$;
 revoke all on function public.marketing_consent_grant(uuid,text) from public, anon, authenticated;
@@ -871,17 +1010,30 @@ grant execute on function public.marketing_consent_grant(uuid,text) to authentic
 --
 --   * the caller is still the signed-in company OWNER, exactly as for the panel;
 --   * the request carries a fresh HMAC made with the server-held secret under
---     the label 'consent_registration', over this company id and this version.
+--     the label 'consent_registration', over this company id, this version and
+--     the declared time.
 --
 -- The second gate is what makes 'registration' unforgeable from the Data API: a
 -- browser never sees the secret, so only code running on our server — which has
 -- just verified the signed sign-up snapshot in Node — can produce a request the
--- database accepts. The signature covers the company and the version, so one
--- accepted request cannot be replayed for another company or another wording,
--- and the shared nonce table makes a second successful use of the same request
--- id fail.
+-- database accepts. The signature covers the company, the version and the
+-- declared time, so one accepted request cannot be replayed for another company,
+-- another wording or another moment, and the shared nonce table makes a second
+-- successful use of the same request id fail.
+--
+-- WHY declared_at IS A PARAMETER AND IS SIGNED (bot review finding, 2026-11-03).
+-- The ledger has to show WHEN the consent was given, and at sign-up there is no
+-- company to attach it to yet, so the moment travels in the snapshot and arrives
+-- here. It is a timestamp supplied by the request, so it is inside this
+-- signature as well as inside the snapshot's own HMAC: without that, an owner
+-- reaching this RPC through the Data API could pick the date his consent is
+-- recorded under. The canonical form on both sides is UTC with milliseconds, the
+-- exact shape Date.prototype.toISOString() produces, so the Node payload and the
+-- one rebuilt here are byte-identical. Null is signed as '-' and means "no usable
+-- declared time": private.marketing_consent_record then stamps the row now()
+-- rather than losing the consent.
 create function public.marketing_consent_grant_registration(
-  target_company uuid, consent_version text,
+  target_company uuid, consent_version text, declared_at timestamptz,
   request_id uuid, issued_at_ms bigint, request_signature text)
 returns timestamptz language plpgsql volatile security definer set search_path='' as $$
 declare
@@ -891,15 +1043,16 @@ begin
   if actor is null or not private.is_company_owner(target_company) then
     raise exception 'sc19_company_forbidden' using errcode='42501';
   end if;
-  payload := concat_ws(E'\n', lower(target_company::text), coalesce(consent_version,''));
+  payload := concat_ws(E'\n', lower(target_company::text), coalesce(consent_version,''),
+    coalesce(to_char(declared_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), '-'));
   if not private.sc19_trial_auto_verify_signature('consent_registration', request_id, issued_at_ms, payload, request_signature) then
     raise exception 'marketing_consent_unsigned_registration' using errcode='42501';
   end if;
-  return private.marketing_consent_record(target_company, consent_version, 'registration', actor);
+  return private.marketing_consent_record(target_company, consent_version, 'registration', actor, declared_at);
 end;
 $$;
-revoke all on function public.marketing_consent_grant_registration(uuid,text,uuid,bigint,text) from public, anon, authenticated;
-grant execute on function public.marketing_consent_grant_registration(uuid,text,uuid,bigint,text) to authenticated;
+revoke all on function public.marketing_consent_grant_registration(uuid,text,timestamptz,uuid,bigint,text) from public, anon, authenticated;
+grant execute on function public.marketing_consent_grant_registration(uuid,text,timestamptz,uuid,bigint,text) to authenticated;
 
 -- One-click withdrawal. Appends a 'withdrawn' row carrying the version and the
 -- wording that was in force, and the time of withdrawal. The grant row stays.
@@ -1036,6 +1189,38 @@ grant execute on function public.sc19_operator_auto_free_grants() to authenticat
 -- because the scheduler has no session. COUNTS ONLY: no name, NIP, e-mail or
 -- any other identifying value leaves this function, so the summary can be
 -- mailed to an internal address without carrying personal data.
+--
+-- `awaiting_manual` MEANS A QUEUE, SO IT COUNTS ONLY WHAT IS IN IT (bot review
+-- finding, 2026-11-03). It used to count every company created in the window
+-- that had no approval row — which included a company that never asked for FREE
+-- at all, and a company that had gone straight to a paid pack. This is the one
+-- number in a mail the owner reads every evening and acts on, so an inflated
+-- queue makes the whole mail useless. Three conditions now, all of which must
+-- hold:
+--
+--   1. IT ASKED. There is a row in private.sc19_trial_auto_checks for the
+--      company inside the window. That table records EVERY submission of the
+--      FREE form, refusals included — a company that submits its NIP while the
+--      automat is switched off leaves an 'AUTO_DISABLED' row — so it is the
+--      complete record of "this company asked for FREE", which is exactly the
+--      state that needs a human. A reservation still in flight ('IN_FLIGHT')
+--      counts too: a company whose check never came back is waiting as surely as
+--      one the registry refused.
+--   2. IT IS STILL WAITING. No approval row, and no claimed FREE
+--      (private.sc19_trial_nips), so nothing has resolved it since.
+--   3. IT DOES NOT ALREADY HAVE A PAID PACK. plan='PRESELEKCJA' in
+--      private.sc19_balances — the same test public.sc19_claim_trial uses to
+--      refuse a late FREE. Such a company is a customer, not a queue entry.
+--
+-- The window now applies to the REQUEST (checked_at), not to the company's
+-- creation date, which is what the other three counts do too: `registered`
+-- counts companies created in the window and `auto_free` counts checks made in
+-- it. So the figure answers "who asked today and is still waiting", and a
+-- company that registered last week and asked today is counted today — under the
+-- old reading it was invisible for ever.
+--
+-- It is therefore a count of TODAY'S unresolved requests, not of the whole
+-- backlog; /operator/billing is where the full list lives, and the mail says so.
 create function public.sc19_daily_digest(window_start timestamptz, window_end timestamptz,
   request_id uuid, issued_at_ms bigint, request_signature text)
 returns table(registered integer, auto_free integer, awaiting_manual integer, marketing_consents integer)
@@ -1060,9 +1245,14 @@ begin
        where c.created_at >= window_start and c.created_at < window_end),
     (select count(*)::integer from private.sc19_trial_auto_checks g
        where g.outcome='granted' and g.checked_at >= window_start and g.checked_at < window_end),
-    (select count(*)::integer from public.companies c
-       where c.created_at >= window_start and c.created_at < window_end
-         and not exists (select 1 from private.sc19_trial_approvals a where a.company_id=c.id)),
+    (select count(*)::integer from (
+       select distinct g.company_id from private.sc19_trial_auto_checks g
+       where g.checked_at >= window_start and g.checked_at < window_end
+     ) asked
+       where not exists (select 1 from private.sc19_trial_approvals a where a.company_id=asked.company_id)
+         and not exists (select 1 from private.sc19_trial_nips t where t.company_id=asked.company_id)
+         and not exists (select 1 from private.sc19_balances b
+           where b.company_id=asked.company_id and b.plan='PRESELEKCJA')),
     (select count(*)::integer from private.marketing_consent_events e
        where e.event='granted' and e.occurred_at >= window_start and e.occurred_at < window_end);
 end;

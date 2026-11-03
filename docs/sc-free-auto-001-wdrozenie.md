@@ -81,6 +81,24 @@ nazwanej dokładnie `CRON_SECRET` i nic innego, a dwa odpalenia dziennie dla
 jednej ścieżki wymagają płatnego planu. Płatny plan to nowy koszt, czyli Twoja
 decyzja, a GitHub Actions nic nie kosztuje i tak samo działa już przy paczkach CV.
 
+### Co znaczą liczby w tym mailu
+
+- **Nowe firmy** — firmy zarejestrowane w ciągu ostatniej doby.
+- **FREE przyznany automatycznie** — ile razy wykaz VAT potwierdził firmę i FREE
+  włączyło się samo.
+- **Czeka na ręczne sprawdzenie** — firmy, które w ciągu tej doby **same
+  poprosiły** o FREE (podały NIP w panelu) i nadal nie mają zatwierdzenia: ani
+  automat ich nie potwierdził, ani nikt nie zatwierdził ich ręcznie. Nie są tu
+  liczone firmy, które o FREE nigdy nie prosiły, ani te, które mają już pakiet
+  płatny. Dopóki automat jest wyłączony, **każde** zgłoszenie NIP-u ląduje w tej
+  liczbie — i tak ma być, bo właśnie takie zgłoszenia trzeba przejrzeć ręcznie.
+  To liczba zgłoszeń z tej doby, nie całej zaległej kolejki; pełna lista jest w
+  `/operator/billing`.
+- **Zgoda na kontakt handlowy** — ile zgód zostało udzielonych w tej dobie,
+  licząc po **dacie wyrażenia zgody** przez klienta (a nie po dacie, kiedy
+  zapisaliśmy ją przy firmie — te dwie chwile mogą się różnić o kilka dni, jeśli
+  klient potwierdzał e-mail z opóźnieniem).
+
 ## 5. Włączenie automatu
 
 Dopiero teraz, w `/operator/billing`, sekcja **Automatyczne FREE z wykazu VAT**:
@@ -105,6 +123,14 @@ odrzucana.
    firmy", nigdy jako „z rejestracji". Wpis „z rejestracji" może być w rejestrze
    firmy tylko jeden i tylko jako pierwszy; pilnuje tego baza danych, żeby
    rejestr zgód pozostał dowodem, kiedy i gdzie klient zgodę naprawdę wyraził.
+
+   Data przy zgodzie „z rejestracji" to **chwila, w której klient zaznaczył
+   okienko przy zakładaniu konta**, a nie chwila, w której utworzył firmę. Te
+   dwie mogą się różnić o kilka dni, jeśli klient potwierdzał adres e-mail z
+   opóźnieniem — a rejestr zgód ma dowodzić, kiedy zgoda naprawdę została
+   wyrażona. Data jest objęta podpisem, więc nikt nie może jej sobie wybrać.
+   Gdyby przyszła data niemożliwa (z przyszłości albo starsza niż 90 dni), zgoda
+   **nie przepada** — zapisuje się z datą bieżącą.
 5. Następnego dnia po 19:00: jeden e-mail z liczbami na adres z
    `SC19_DIGEST_RECIPIENT`.
 6. NIP, którego wykaz nie potwierdził, od razu drugi raz → komunikat „odczekaj
@@ -138,6 +164,24 @@ potem normalnie aktywować FREE.
 
 Zwolnienie **nie odbiera** analiz już przyznanych tamtej firmie. Odebranie
 analiz to operacja rozliczeniowa i wymaga Twojej decyzji.
+
+### Zwolniony NIP nie wraca do poprzedniego konta
+
+Po zwolnieniu konto, któremu NIP odebrano, **nie może zająć go ponownie** —
+dostanie odmowę i trafi do ręcznego sprawdzenia. Wcześniej mogło: zwolnienie
+usuwało zatwierdzenie, ale nic nie pamiętało, że ten NIP temu konkretnemu kontu
+odebrano, więc poprzedni posiadacz mógł zgłosić ten sam NIP jeszcze raz i zdążyć
+przed prawdziwą firmą. Prawdziwa firma to inne konto i jej to nie dotyczy —
+aktywuje FREE normalnie.
+
+### Gdy zwolniłeś NIP przez pomyłkę
+
+Jeśli NIP został zwolniony omyłkowo i ma wrócić do **tego samego** konta:
+`/operator/billing` → znajdź tę firmę na liście → rozwiń **„Zweryfikuj firmę
+przed FREE"** → wpisz jej NIP i dowód weryfikacji → zaznacz oświadczenie →
+**„Zatwierdź weryfikację"**. To ręczne zatwierdzenie zdejmuje blokadę i firma
+może aktywować FREE. Automat sam blokady nie zdejmie — musi to być świadoma
+decyzja operatora, zapisana z dowodem.
 
 ## 8. Jak to wyłączyć
 

@@ -91,16 +91,34 @@ export async function createCompany(form: FormData) {
   // marketing_consent_registration_not_first, which is logged below and changes
   // nothing — re-granting after a withdrawal is the panel's job, under its own
   // source 'company_panel'.
-  const consentVersion = verifiedConsentVersion(user.user_metadata, user.email);
-  const signedGrant = consentVersion && typeof companyId === "string"
-    ? signRegistrationConsentGrant(companyId, consentVersion) : null;
-  if (consentVersion && signedGrant && typeof companyId === "string") {
-    const { error: consentError } = await client.rpc("marketing_consent_grant_registration", {
-      target_company: companyId, consent_version: consentVersion,
+  //
+  // AND IT IS DATED WHEN THE CUSTOMER GAVE IT, NOT WHEN THE COMPANY WAS CREATED
+  // (review finding, bot 2026-11-03). The box is ticked at sign-up; this action
+  // runs at onboarding, after e-mail confirmation, so the two moments can be days
+  // apart. The ledger has to prove WHEN the consent was given, so the snapshot's
+  // own verified timestamp is passed through and stored as the event time. It is
+  // covered by the snapshot's HMAC and by the request signature made here, so
+  // neither the browser nor an owner calling the Data API can choose it.
+  const consent = verifiedConsentVersion(user.user_metadata, user.email);
+  const signedGrant = consent && typeof companyId === "string"
+    ? signRegistrationConsentGrant(companyId, consent.version, consent.declaredAt) : null;
+  if (consent && signedGrant && typeof companyId === "string") {
+    const { data: storedAt, error: consentError } = await client.rpc("marketing_consent_grant_registration", {
+      target_company: companyId, consent_version: consent.version,
+      declared_at: signedGrant.declaredAt,
       request_id: signedGrant.requestId, issued_at_ms: signedGrant.issuedAtMs,
       request_signature: signedGrant.signature,
     });
     if (consentError) console.warn("marketing_consent_registration_failed", consentError.code ?? "-");
+    // The database keeps the consent even when it refuses the declared time (out
+    // of range, or none), stamping the row with its own clock instead. That is
+    // deliberate — a consent must not be lost over a clock — but it is worth
+    // knowing about, so the difference is logged. No date, address or id is
+    // logged, only that an adjustment happened.
+    else if (signedGrant.declaredAt && typeof storedAt === "string"
+      && Date.parse(storedAt) !== Date.parse(signedGrant.declaredAt)) {
+      console.warn("marketing_consent_declared_at_adjusted");
+    }
   }
   // Open the new company's dashboard straight away; fall back to the list for an unexpected value.
   redirect(typeof companyId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId) ? `/dashboard/${companyId}` : "/dashboard");

@@ -70,16 +70,24 @@ async function createWith(user, rpcResult = { data: id, error: null }) {
 }
 
 test('a ticked marketing consent is recorded against the new company', async () => {
-  const calls = await createWith({ id: 'u1', email: EMAIL, user_metadata: { marketing_consent: signed(true) } });
+  const snapshot = signed(true);
+  const calls = await createWith({ id: 'u1', email: EMAIL, user_metadata: { marketing_consent: snapshot } });
   // The signed RPC, not the panel one: 'registration' is written only against a
   // request signed with the server secret, so an owner calling the Data API
   // himself cannot have the ledger attribute his consent to sign-up.
   assert.deepEqual(calls.map(([name]) => name), ['ensure_initial_company', 'marketing_consent_grant_registration']);
   assert.deepEqual(Object.keys(calls[1][1]).sort(),
-    ['consent_version', 'issued_at_ms', 'request_id', 'request_signature', 'target_company']);
+    ['consent_version', 'declared_at', 'issued_at_ms', 'request_id', 'request_signature', 'target_company']);
   assert.equal(calls[1][1].target_company, id);
   assert.equal(calls[1][1].consent_version, marketingConsent.MARKETING_CONSENT_VERSION);
   assert.match(calls[1][1].request_signature, /^[0-9a-f]{64}$/);
+  // WHEN the customer consented, not when the company was created (bot review
+  // finding, 2026-11-03). The snapshot was declared at sign-up; this action runs
+  // at onboarding, which can be days later, and the ledger has to date the
+  // consent at the former.
+  assert.equal(calls[1][1].declared_at, snapshot.declared_at, 'the time from the snapshot, not now()');
+  assert.match(calls[1][1].declared_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    'canonical UTC with milliseconds, the form the database rebuilds for the signature');
   // Only the version crosses over: the wording comes from the database, and the
   // source is not a parameter of either RPC any more.
   assert.equal('consent_text' in calls[1][1], false);

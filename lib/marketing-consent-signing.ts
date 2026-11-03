@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { signTrialAuto, trialAutoEnabled } from './sc19-trial-auto.ts';
 import {
   declaredMarketingConsent, marketingConsentDeclaration, type MarketingConsentDeclaration,
+  type VerifiedMarketingConsent,
 } from './marketing-consent.ts';
 
 /** SC-CONSENT-001 server side: signs the registration-time consent snapshot and
@@ -62,10 +63,13 @@ export function signedConsentDeclaration(granted: boolean, subject: string | nul
   });
 }
 
-/** The consent version to record, or null. Null for an absent, malformed,
- * withdrawn, unsigned, wrongly signed or foreign-account snapshot. */
+/** The consent version to record AND the moment the customer declared it, or
+ * null. Null for an absent, malformed, withdrawn, unsigned, wrongly signed or
+ * foreign-account snapshot. `declaredAt` is null only when the verified
+ * timestamp does not parse; the consent is still recorded then, stamped by the
+ * database's own clock. */
 export function verifiedConsentVersion(metadata: unknown, subject: string | null | undefined,
-  env: NodeJS.ProcessEnv = process.env): string | null {
+  env: NodeJS.ProcessEnv = process.env): VerifiedMarketingConsent | null {
   const key = secret(env);
   if (!key) return null;
   return declaredMarketingConsent(metadata, {
@@ -84,23 +88,34 @@ export function verifiedConsentVersion(metadata: unknown, subject: string | null
 }
 
 /** What a registration-sourced consent must carry so the database will accept
- * the provenance: a fresh request id, the time, and an HMAC over this company
- * and this version. Mirrors the payload rebuilt in
+ * the provenance: a fresh request id, the time, and an HMAC over this company,
+ * this version and the DECLARED TIME. Mirrors the payload rebuilt in
  * public.marketing_consent_grant_registration exactly. Null when no secret is
  * configured — then no registration consent is recorded at all, and the owner
- * gives it in one click in the company panel instead. */
+ * gives it in one click in the company panel instead.
+ *
+ * THE DECLARED TIME IS SIGNED (bot review finding, 2026-11-03). It is the fact
+ * the ledger exists to prove, and it reaches the database as a request parameter,
+ * so leaving it out of the signature would let an owner calling the Data API
+ * himself choose the date his consent is recorded under. It is canonicalised to
+ * the UTC form Date.prototype.toISOString() produces, which is exactly what
+ * to_char(... 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') rebuilds on the database side;
+ * `declaredAt: null` is signed as '-' and means "no usable time", which the
+ * database answers by stamping now() rather than dropping the consent. */
 export type RegistrationConsentRequest = Readonly<{
-  requestId: string; issuedAtMs: number; signature: string;
+  requestId: string; issuedAtMs: number; signature: string; declaredAt: string | null;
 }>;
 
 export function signRegistrationConsentGrant(companyId: string, version: string,
-  env: NodeJS.ProcessEnv = process.env, now?: Date): RegistrationConsentRequest | null {
+  declaredAt: string | null, env: NodeJS.ProcessEnv = process.env, now?: Date): RegistrationConsentRequest | null {
   const key = secret(env);
   if (!key) return null;
+  const parsed = declaredAt === null ? NaN : Date.parse(declaredAt);
+  const canonical = Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
   const requestId = randomUUID(), issuedAtMs = (now ?? new Date()).getTime();
-  const payload = [companyId.toLowerCase(), version].join('\n');
+  const payload = [companyId.toLowerCase(), version, canonical ?? '-'].join('\n');
   return Object.freeze({
-    requestId, issuedAtMs,
+    requestId, issuedAtMs, declaredAt: canonical,
     signature: signTrialAuto('consent_registration', requestId, issuedAtMs, payload, key),
   });
 }

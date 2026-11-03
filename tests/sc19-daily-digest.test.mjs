@@ -146,3 +146,37 @@ test('the digest never reads or mails a company address', () => {
   const migration = readFileSync(new URL('../supabase/migrations/20261103090000_sc19_auto_trial_marketing_consent.sql', import.meta.url), 'utf8');
   assert.match(migration, /create function public\.sc19_daily_digest[\s\S]*?returns table\(registered integer, auto_free integer, awaiting_manual integer, marketing_consents integer\)/);
 });
+
+test('"awaiting manual review" counts only companies that really asked and are really waiting', () => {
+  // THE BUG (bot review finding, 2026-11-03). The count was "every company
+  // created in the window with no approval row", which swept in a company that
+  // never asked for FREE at all and one that had already bought a paid pack.
+  // This is the number the owner reads every evening at 19:00 and acts on, so an
+  // inflated queue makes the mail useless.
+  const migration = readFileSync(new URL('../supabase/migrations/20261103090000_sc19_auto_trial_marketing_consent.sql', import.meta.url), 'utf8');
+  const digest = migration.slice(migration.indexOf('create function public.sc19_daily_digest'));
+  const body = digest.slice(0, digest.indexOf('$$;'));
+
+  // It no longer starts from public.companies: a company is counted only if it
+  // left a submission in the automatic-check audit inside the window. That table
+  // records EVERY submission of the FREE form, refusals included — a company
+  // submitting its NIP while the automat is off leaves an 'AUTO_DISABLED' row —
+  // so it is the complete record of "this company asked".
+  assert.match(body, /select distinct g\.company_id from private\.sc19_trial_auto_checks g\s*\n\s*where g\.checked_at >= window_start and g\.checked_at < window_end/);
+  // Still waiting: nothing has resolved it.
+  assert.match(body, /not exists \(select 1 from private\.sc19_trial_approvals a where a\.company_id=asked\.company_id\)/);
+  assert.match(body, /not exists \(select 1 from private\.sc19_trial_nips t where t\.company_id=asked\.company_id\)/);
+  // And not already a paying customer — the same test public.sc19_claim_trial
+  // uses to refuse a late FREE.
+  assert.match(body, /not exists \(select 1 from private\.sc19_balances b\s*\n\s*where b\.company_id=asked\.company_id and b\.plan='PRESELEKCJA'\)/);
+
+  // The discarded shape must not come back: counting companies by creation date
+  // with no approval is exactly the overstatement.
+  assert.doesNotMatch(body,
+    /from public\.companies c\s*\n\s*where c\.created_at >= window_start and c\.created_at < window_end\s*\n\s*and not exists \(select 1 from private\.sc19_trial_approvals/);
+
+  // The other three counts are untouched.
+  assert.match(body, /count\(\*\)::integer from public\.companies c\s*\n\s*where c\.created_at >= window_start and c\.created_at < window_end\),/);
+  assert.match(body, /from private\.sc19_trial_auto_checks g\s*\n\s*where g\.outcome='granted'/);
+  assert.match(body, /from private\.marketing_consent_events e\s*\n\s*where e\.event='granted'/);
+});

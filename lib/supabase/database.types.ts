@@ -491,9 +491,12 @@ export type Database = {
         Returns: string;
       };
       // 'registration' is written only here, and only against a server signature.
+      // `declared_at` is when the customer ticked the box at sign-up (null when
+      // the snapshot carried no usable time); it is inside the signature, and the
+      // ledger stores it as the event time instead of the onboarding moment.
       marketing_consent_grant_registration: {
         Args: {
-          target_company: string; consent_version: string;
+          target_company: string; consent_version: string; declared_at: string | null;
           request_id: string; issued_at_ms: number; request_signature: string;
         };
         Returns: string;

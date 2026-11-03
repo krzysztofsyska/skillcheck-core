@@ -49,14 +49,16 @@ async function sessionFor(env, userId) {
   return client;
 }
 
-/** The three extra arguments public.marketing_consent_grant_registration needs,
- * built exactly as signRegistrationConsentGrant() in
- * lib/marketing-consent-signing.ts builds them — so the test proves the two
- * sides agree on the payload, not just that each is self-consistent. */
-function registrationGrant(companyId, version) {
+/** The four extra arguments public.marketing_consent_grant_registration needs —
+ * the declared time, a request id, the request time and the HMAC — built exactly
+ * as signRegistrationConsentGrant() in lib/marketing-consent-signing.ts builds
+ * them, so the test proves the two sides agree on the payload, not just that
+ * each is self-consistent. `declaredAt` is the canonical UTC spelling the
+ * database rebuilds with to_char(); null means "no usable declared time". */
+function registrationGrant(companyId, version, declaredAt = null) {
   const requestId = randomUUID(), issuedAtMs = Date.now();
-  const payload = [companyId.toLowerCase(), version].join('\n');
-  return [requestId, issuedAtMs, signTrialAuto('consent_registration', requestId, issuedAtMs, payload, SECRET)];
+  const payload = [companyId.toLowerCase(), version, declaredAt ?? '-'].join('\n');
+  return [declaredAt, requestId, issuedAtMs, signTrialAuto('consent_registration', requestId, issuedAtMs, payload, SECRET)];
 }
 
 /** Calls the RPC the way lib/sc19-trial-auto-flow.ts does. */
@@ -547,6 +549,173 @@ test('the operator can release an occupied NIP so the real company can use FREE'
   await assert.rejects(db.query('select * from public.sc19_operator_taken_trial_nips()'), code('42501'), 'anon');
 });
 
+test('a released NIP cannot be reoccupied by the company it was taken from', async t => {
+  // THE BUG (bot review finding 4454171268, 2026-11-03). The operator releases a
+  // NIP precisely when an account with no right to it has occupied another
+  // company's single FREE — and he normally gets there BEFORE that account has
+  // claimed. The release deleted the approval row and left no trace that this
+  // NIP had been taken away from THIS company, so the former holder could submit
+  // the very same NIP again, recreate the approval and take the FREE before the
+  // real company got there. The release remedied nothing.
+  const { db, h, a, b } = await ready(t);
+
+  // Company A occupies the NIP it does not hold, and the operator catches it
+  // before the owner has pressed the button: the approval exists, the claim does
+  // not. That is the state the release is actually made in.
+  await h.asUser(users.owner);
+  assert.equal((await autoClaim(db, a.companyId, nipA)).outcome, 'granted');
+  await h.asAdmin();
+  await db.query('delete from private.sc19_trial_nips where company_id=$1', [a.companyId]);
+  await db.query('delete from private.sc19_balances where company_id=$1', [a.companyId]);
+  await db.query("delete from private.sc19_credit_journal where company_id=$1 and reason='trial'", [a.companyId]);
+
+  await h.asUser(operator);
+  await db.query('select * from public.sc19_operator_release_trial_nip($1,$2)',
+    [nipA, 'KRS sprawdzony 2026-11-03: NIP nalezy do innej firmy']);
+
+  // THE REOCCUPATION IS NOW REFUSED, in BOTH automatic admission paths.
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'NIP_RELEASED' });
+  assert.deepEqual(await autoClaim(db, a.companyId, nipA),
+    { outcome: 'refused', available: null, reason: 'NIP_RELEASED' },
+    'and refused when the RPC is called straight through the Data API');
+  await h.asAdmin();
+  assert.equal((await call(db, 'select count(*)::int n from private.sc19_trial_approvals where nip=$1', [nipA]))[0].n, 0,
+    'no approval row was recreated');
+  assert.equal((await call(db, 'select count(*)::int n from private.sc19_trial_nips where nip=$1', [nipA]))[0].n, 0);
+  assert.equal((await call(db, 'select count(*)::int n from private.sc19_balances where company_id=$1', [a.companyId]))[0].n, 0,
+    'and no FREE was granted a second time');
+  // The refusal is audited, so the operator can see the attempt.
+  assert.equal((await call(db, "select count(*)::int n from private.sc19_trial_auto_checks where company_id=$1 and error_code='NIP_RELEASED'", [a.companyId]))[0].n, 2);
+
+  // THE REAL COMPANY IS NOT AFFECTED: the guard binds a (NIP, company) pair.
+  await h.asUser(users.otherOwner);
+  assert.deepEqual(await precheck(db, b.companyId, nipA), { allowed: true, reason: null });
+  assert.deepEqual(await autoClaim(db, b.companyId, nipA), { outcome: 'granted', available: 5, reason: null });
+
+  // A NIP_RELEASED refusal is decided locally, BEFORE the registry, so it spends
+  // no quota and must behave like the other local refusals: it does not start a
+  // cooldown and it does not claim the account's one-NIP slot. The proof is
+  // above — A's second submission came back 'NIP_RELEASED' and not 'COOLDOWN',
+  // which is what a registry-reaching attempt would have produced — plus the
+  // shared list both readers consult. (Read as the schema owner: these helpers
+  // are deliberately unreachable from anon and authenticated.)
+  await h.asAdmin();
+  assert.deepEqual((await call(db, 'select private.sc19_auto_free_local_refusal_codes() c'))[0].c,
+    ['AUTO_DISABLED', 'NIP_TAKEN', 'ANOTHER_NIP_TRIED', 'COOLDOWN', 'NIP_RELEASED']);
+  // A's one-NIP slot is still the NIP it really asked the registry about, and the
+  // refusals did not move it.
+  assert.equal((await call(db, 'select private.sc19_auto_free_other_nip_tried($1,$2) v', [a.companyId, nipA]))[0].v, false);
+  assert.equal((await call(db, 'select private.sc19_auto_free_other_nip_tried($1,$2) v', [a.companyId, nipC]))[0].v, true);
+});
+
+test('an operator can give a mistakenly released NIP back, and only an operator can', async t => {
+  // The reverse of the guard above: a release made in error must be undoable, or
+  // the fix would strand an honest company for ever. The way back is a fresh
+  // operator approval — a deliberate, audited act with its own written proof.
+  // The automatic path can never clear the guard by itself.
+  const { db, h, a } = await ready(t);
+  await h.asUser(users.owner);
+  assert.equal((await autoClaim(db, a.companyId, nipA)).outcome, 'granted');
+  await h.asAdmin();
+  await db.query('delete from private.sc19_trial_nips where company_id=$1', [a.companyId]);
+  await db.query('delete from private.sc19_balances where company_id=$1', [a.companyId]);
+  await db.query("delete from private.sc19_credit_journal where company_id=$1 and reason='trial'", [a.companyId]);
+  await h.asUser(operator);
+  await db.query('select * from public.sc19_operator_release_trial_nip($1,$2)', [nipA, 'zwolnione pomylkowo 2026-11-03']);
+
+  // Blocked, as above...
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'NIP_RELEASED' });
+  // ...and the company itself cannot lift the block, however it asks.
+  await assert.rejects(db.query('select public.sc19_operator_approve_trial($1,$2,$3)',
+    [a.companyId, nipA, 'probuje sam sobie zatwierdzic']), code('42501'), 'the owner cannot approve himself');
+
+  // The operator gives it back.
+  await h.asUser(operator);
+  const approvedAt = (await call(db, 'select public.sc19_operator_approve_trial($1,$2,$3) at',
+    [a.companyId, nipA, 'KRS 0000111111 sprawdzony 2026-11-03, zwolnienie bylo pomylka']))[0].at;
+  assert.ok(approvedAt instanceof Date);
+
+  // The guard is lifted, and the company gets its FREE through the reviewed path.
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null });
+  assert.equal((await call(db, 'select public.sc19_claim_trial($1,$2) credits', [a.companyId, nipA]))[0].credits, 5);
+  await h.asAdmin();
+  // The restored approval is recognisably the OPERATOR'S, not the automat's — an
+  // approval the automatic path writes does not count as a way back, so the
+  // guard cannot clear itself.
+  const proof = (await call(db, 'select proof_reference from private.sc19_trial_approvals where nip=$1', [nipA]))[0].proof_reference;
+  assert.match(proof, /\[operator:/);
+  assert.doesNotMatch(proof, /^mf-biala-lista:/);
+  assert.equal((await call(db, 'select private.sc19_auto_free_nip_released_from($1,$2) v', [a.companyId, nipA]))[0].v, false);
+});
+
+test('the consent ledger is dated when the customer consented, not when we recorded it', async t => {
+  // THE BUG (bot review finding 4454171278, 2026-11-03). The verified declared_at
+  // from the signed sign-up snapshot was discarded and the row took the column
+  // default, so the ledger dated the consent at ONBOARDING — which happens after
+  // e-mail confirmation and can be days later. The ledger exists to prove WHEN
+  // the customer consented (GDPR art. 7(1)).
+  const { db, h, a, b } = await ready(t);
+  const stored = async companyId => {
+    await h.asAdmin();
+    return (await call(db, 'select occurred_at, source from private.marketing_consent_events where company_id=$1', [companyId]))[0];
+  };
+
+  // A consent declared four days before the company existed.
+  const declared = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString();
+  await h.asUser(users.owner);
+  const returned = (await call(db, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
+    [a.companyId, 'marketing-1.0', ...registrationGrant(a.companyId, 'marketing-1.0', declared)]))[0].at;
+  assert.equal(returned.toISOString(), declared, 'the function returns the time it stored');
+  const row = await stored(a.companyId);
+  assert.equal(row.occurred_at.toISOString(), declared, 'the ledger keeps the declared moment');
+  assert.equal(row.source, 'registration');
+  // The panel reads it back unchanged.
+  await h.asUser(users.owner);
+  assert.equal((await call(db, 'select * from public.marketing_consent_state($1)', [a.companyId]))[0].occurred_at.toISOString(), declared);
+
+  // A panel click is always stamped now(): there is nothing to back-date.
+  await h.asUser(users.otherOwner);
+  await db.query("select public.marketing_consent_grant($1,'marketing-1.0')", [b.companyId]);
+  const panel = await stored(b.companyId);
+  assert.equal(panel.source, 'company_panel');
+  assert.ok(Math.abs(panel.occurred_at.getTime() - Date.now()) < 60 * 1000);
+});
+
+test('an implausible declared time does not lose the consent, it only loses the date', async t => {
+  // FAIL-SAFE, and the bound the migration header states. The declared time is
+  // inside the snapshot's HMAC, so it cannot be tampered with; the range check is
+  // a sanity limit on our own clocks (60 s ahead, 90 days behind). A value
+  // outside it must NOT drop the consent — the customer really gave it — so the
+  // row is written with now() instead and the returned value says so.
+  const { db, h, a, b } = await ready(t);
+  const cases = [
+    ['from the future', new Date(Date.now() + 10 * 60 * 1000).toISOString(), a.companyId, users.owner],
+    ['absurdly old', new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString(), b.companyId, users.otherOwner],
+  ];
+  for (const [label, outOfRange, companyId, who] of cases) {
+    await h.asUser(who);
+    const at = (await call(db, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
+      [companyId, 'marketing-1.0', ...registrationGrant(companyId, 'marketing-1.0', outOfRange)]))[0].at;
+    assert.notEqual(at.toISOString(), outOfRange, `${label}: not taken at face value`);
+    assert.ok(Math.abs(at.getTime() - Date.now()) < 60 * 1000, `${label}: stamped with our own clock instead`);
+    await h.asAdmin();
+    const rows = await call(db, 'select occurred_at from private.marketing_consent_events where company_id=$1', [companyId]);
+    assert.equal(rows.length, 1, `${label}: the consent is kept, never silently dropped`);
+    assert.equal(rows[0].occurred_at.toISOString(), at.toISOString());
+  }
+  // No declared time at all behaves the same way: recorded, stamped now().
+  const { db: db2, h: h2, a: a2 } = await ready(t);
+  await h2.asUser(users.owner);
+  const undated = (await call(db2, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
+    [a2.companyId, 'marketing-1.0', ...registrationGrant(a2.companyId, 'marketing-1.0', null)]))[0].at;
+  assert.ok(Math.abs(undated.getTime() - Date.now()) < 60 * 1000);
+  await h2.asAdmin();
+  assert.equal((await call(db2, 'select count(*)::int n from private.marketing_consent_events where company_id=$1', [a2.companyId]))[0].n, 1);
+});
+
 test('the request secret can be installed and rotated without a raw UPDATE', async t => {
   // Without this the column could be set only by a raw UPDATE, which the owner
   // cannot run and an agent session must not run against production, so Part A
@@ -751,7 +920,7 @@ test('the operator sees every automatic check, not only the grants', async t => 
 test('consent is granted, withdrawn and granted again, and history is never rewritten', async t => {
   const { db, h, a } = await ready(t);
   await h.asUser(users.owner);
-  const first = (await call(db, "select public.marketing_consent_grant_registration($1,'marketing-1.0',$2,$3,$4) at",
+  const first = (await call(db, "select public.marketing_consent_grant_registration($1,'marketing-1.0',$2,$3,$4,$5) at",
     [a.companyId, ...registrationGrant(a.companyId, 'marketing-1.0')]))[0].at;
   assert.ok(first instanceof Date);
   let state = (await call(db, 'select * from public.marketing_consent_state($1)', [a.companyId]))[0];
@@ -801,7 +970,7 @@ test('a withdrawn consent cannot be resurrected by replaying the registration gr
   // certifying that the consent was declared "at registration" at a moment when
   // no registration form existed (GDPR art. 7(1), 7(3)).
   const { db, h, a } = await ready(t);
-  const replay = () => db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5) at',
+  const replay = () => db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
     [a.companyId, 'marketing-1.0', ...registrationGrant(a.companyId, 'marketing-1.0')]).then(r => r.rows[0].at);
   const events = async () => {
     await h.asAdmin();
@@ -876,25 +1045,41 @@ test('a signed-in owner cannot pass his own consent off as given at registration
   const signed = registrationGrant(a.companyId, 'marketing-1.0');
 
   // Without a valid server signature, 'registration' cannot be written at all.
+  const DECLARED = '2026-11-03T08:00:00.000Z';
+  const bare = [a.companyId, 'marketing-1.0', '-'].join('\n');
   const unsigned = [
-    ['no signature', [randomUUID(), Date.now(), '0'.repeat(64)]],
-    ['an invented signature', [randomUUID(), Date.now(), 'f'.repeat(64)]],
-    ['an empty signature', [randomUUID(), Date.now(), '']],
+    ['no signature', [null, randomUUID(), Date.now(), '0'.repeat(64)]],
+    ['an invented signature', [null, randomUUID(), Date.now(), 'f'.repeat(64)]],
+    ['an empty signature', [null, randomUUID(), Date.now(), '']],
     // A signature for another operation sharing the same secret is not this one.
     ['a claim signature', (() => { const id = randomUUID(), at = Date.now();
-      return [id, at, signTrialAuto('auto_claim', id, at, [a.companyId, 'marketing-1.0'].join('\n'), SECRET)]; })()],
+      return [null, id, at, signTrialAuto('auto_claim', id, at, bare, SECRET)]; })()],
     // The snapshot label is deliberately outside the database's whitelist.
     ['a snapshot signature', (() => { const id = randomUUID(), at = Date.now();
-      return [id, at, signTrialAuto('consent', id, at, [a.companyId, 'marketing-1.0'].join('\n'), SECRET)]; })()],
+      return [null, id, at, signTrialAuto('consent', id, at, bare, SECRET)]; })()],
     // Valid signature, but for a different company and a different version.
     ['another company', registrationGrant(randomUUID(), 'marketing-1.0')],
     ['another version', registrationGrant(a.companyId, 'marketing-9.9')],
+    // THE DECLARED TIME IS INSIDE THE SIGNATURE (bot review finding,
+    // 2026-11-03). It reaches the database as a request parameter and it is the
+    // fact the ledger exists to prove, so an owner reaching this RPC through the
+    // Data API must not be able to choose the date his consent is recorded
+    // under. A request signed for one moment, presented with another, is refused.
+    ['a time swapped after signing', (() => {
+      const [, id, at, sig] = registrationGrant(a.companyId, 'marketing-1.0', DECLARED);
+      return ['2026-10-01T08:00:00.000Z', id, at, sig]; })()],
+    ['a time added after signing', (() => {
+      const [, id, at, sig] = registrationGrant(a.companyId, 'marketing-1.0', null);
+      return [DECLARED, id, at, sig]; })()],
+    ['a time removed after signing', (() => {
+      const [, id, at, sig] = registrationGrant(a.companyId, 'marketing-1.0', DECLARED);
+      return [null, id, at, sig]; })()],
     // Outside the 60 s window.
     ['an expired request', (() => { const id = randomUUID(), at = Date.now() - 10 * 60 * 1000;
-      return [id, at, signTrialAuto('consent_registration', id, at, [a.companyId, 'marketing-1.0'].join('\n'), SECRET)]; })()],
+      return [null, id, at, signTrialAuto('consent_registration', id, at, bare, SECRET)]; })()],
   ];
   for (const [label, args] of unsigned) {
-    await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5)',
+    await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6)',
       [a.companyId, 'marketing-1.0', ...args]), code('42501'), label);
   }
   await h.asAdmin();
@@ -904,22 +1089,22 @@ test('a signed-in owner cannot pass his own consent off as given at registration
   // A signature is not a substitute for being the owner either.
   for (const who of [users.recruiter, users.otherOwner]) {
     await h.asUser(who);
-    await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5)',
+    await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6)',
       [a.companyId, 'marketing-1.0', ...registrationGrant(a.companyId, 'marketing-1.0')]), code('42501'), who);
   }
   await h.asUser(null, 'anon');
-  await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5)',
+  await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6)',
     [a.companyId, 'marketing-1.0', ...signed]), code('42501'), 'anon');
 
   // THE LEGITIMATE PATH STILL WORKS: owner plus a fresh server signature.
   await h.asUser(users.owner);
-  const at = (await call(db, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5) at',
+  const at = (await call(db, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
     [a.companyId, 'marketing-1.0', ...registrationGrant(a.companyId, 'marketing-1.0')]))[0].at;
   assert.ok(at instanceof Date);
   await h.asAdmin();
   const rows = await call(db, 'select event,source from private.marketing_consent_events where company_id=$1', [a.companyId]);
   assert.deepEqual(rows, [{ event: 'granted', source: 'registration' }]);
-  assert.ok(signed.length === 3, 'the signed request is three values: id, time, HMAC');
+  assert.ok(signed.length === 4, 'the signed request is four values: declared time, id, request time, HMAC');
 });
 
 test('only the owner changes consent; members may read it; outsiders may not', async t => {
@@ -985,7 +1170,11 @@ test('the daily digest returns counts only, and only to a signed caller', async 
   assert.deepEqual(Object.keys(counts).sort(), ['auto_free', 'awaiting_manual', 'marketing_consents', 'registered']);
   assert.equal(counts.registered, 2, 'both seeded companies');
   assert.equal(counts.auto_free, 1);
-  assert.equal(counts.awaiting_manual, 1, 'the company with no approval');
+  // COMPANY B NEVER ASKED FOR FREE, so it is not in the manual queue (bot review
+  // finding, 2026-11-03). The old count was "every company created in the window
+  // with no approval row", which reported it as waiting — and this is the number
+  // the owner reads every evening and acts on.
+  assert.equal(counts.awaiting_manual, 0, 'a company that never asked is not in the queue');
   assert.equal(counts.marketing_consents, 1);
   assert.ok(b.companyId);
 
@@ -993,6 +1182,59 @@ test('the daily digest returns counts only, and only to a signed caller', async 
   const bad = randomUUID(), badAt = Date.now();
   await assert.rejects(db.query('select * from public.sc19_daily_digest($1,$2,$3,$4,$5)',
     [end.toISOString(), start.toISOString(), bad, badAt, 'x'.repeat(64)]), code('22023'), 'reversed window');
+});
+
+test('the manual-review count holds only companies that asked and are still waiting', async t => {
+  // THE BUG (bot review finding 4454171288, 2026-11-03). The count was "every
+  // company created in the window with no approval row", so it swept in a
+  // company that never asked for FREE and one that had already bought a paid
+  // pack. This is the one number in a mail the owner reads every evening at
+  // 19:00 and acts on, so an inflated queue makes the whole mail useless.
+  //
+  // The automat is OFF here, which is how the owner will actually run it at
+  // first: every submission is refused locally with 'AUTO_DISABLED' and is
+  // exactly what needs a human.
+  const { db, h, a, b } = await ready(t, { enabled: false });
+  const end = () => new Date(), start = e => new Date(e.getTime() - 24 * 60 * 60 * 1000);
+  const stamp = value => value.toISOString().replace(/\.\d+Z$/, '');
+  async function digest() {
+    const e = end(), s = start(e);
+    const id = randomUUID(), at = Date.now();
+    const signature = signTrialAuto('digest', id, at, [stamp(s), stamp(e)].join('\n'), SECRET);
+    await h.asUser(null, 'anon');
+    return (await call(db, 'select * from public.sc19_daily_digest($1,$2,$3,$4,$5)',
+      [s.toISOString(), e.toISOString(), id, at, signature])).at(0);
+  }
+
+  // Two companies exist and NEITHER has asked for anything.
+  assert.equal((await digest()).awaiting_manual, 0, 'nobody asked, nobody is waiting');
+  assert.equal((await digest()).registered, 2, 'they are still counted as new companies');
+
+  // Company A submits its NIP. The automat is off, so it goes to the manual list.
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'AUTO_DISABLED' });
+  assert.equal((await digest()).awaiting_manual, 1, 'a company that asked and has no approval is waiting');
+  // Asking twice is one company in the queue, not two.
+  await h.asUser(users.owner);
+  await precheck(db, a.companyId, nipA);
+  assert.equal((await digest()).awaiting_manual, 1, 'counted once per company, not once per submission');
+
+  // The operator verifies it: it leaves the queue.
+  await h.asUser(operator);
+  await db.query('select public.sc19_operator_approve_trial($1,$2,$3)',
+    [a.companyId, nipA, 'KRS 0000111111 sprawdzony 2026-11-03']);
+  assert.equal((await digest()).awaiting_manual, 0, 'an approved company is no longer waiting');
+
+  // A company that asked but already has a PAID pack is a customer, not a queue
+  // entry — and public.sc19_claim_trial would refuse it a late FREE anyway.
+  await h.asUser(users.otherOwner);
+  assert.deepEqual(await precheck(db, b.companyId, nipB), { allowed: false, reason: 'AUTO_DISABLED' });
+  assert.equal((await digest()).awaiting_manual, 1);
+  await h.asAdmin();
+  await db.query("insert into private.sc19_package_policy(plan,credits) values('PRESELEKCJA',60)");
+  await h.asUser(operator);
+  await db.query('select public.sc19_operator_grant_paid($1,$2)', [b.companyId, 'FV/2026/11/0001']);
+  assert.equal((await digest()).awaiting_manual, 0, 'a paying customer is not in the manual queue');
 });
 
 test('the erasure inventory still matches after the new tables', async t => {
@@ -1029,7 +1271,7 @@ const PUBLIC_RPCS = Object.freeze({
   'public.sc19_operator_release_trial_nip(text,text)': ['authenticated'],
   'public.sc19_operator_trial_nip_releases()': ['authenticated'],
   'public.marketing_consent_grant(uuid,text)': ['authenticated'],
-  'public.marketing_consent_grant_registration(uuid,text,uuid,bigint,text)': ['authenticated'],
+  'public.marketing_consent_grant_registration(uuid,text,timestamptz,uuid,bigint,text)': ['authenticated'],
   'public.marketing_consent_withdraw(uuid)': ['authenticated'],
   'public.marketing_consent_state(uuid)': ['authenticated'],
   'public.sc19_operator_marketing_consents(text)': ['authenticated'],
@@ -1070,7 +1312,7 @@ test('the signed functions that write are declared volatile', async t => {
     'public.sc19_auto_record_failure(uuid,text,text,text,uuid,bigint,text)',
     'public.sc19_auto_free_precheck(uuid,text)',
     'public.sc19_operator_release_trial_nip(text,text)',
-    'public.marketing_consent_grant_registration(uuid,text,uuid,bigint,text)',
+    'public.marketing_consent_grant_registration(uuid,text,timestamptz,uuid,bigint,text)',
     'private.rotate_sc19_trial_auto_secret(text)',
   ]) {
     assert.equal((await call(db, 'select provolatile from pg_proc where oid=$1::regprocedure', [fn]))[0].provolatile,
@@ -1107,9 +1349,11 @@ test('the new private tables are unreachable from the Data API roles', async t =
   for (const fn of ['private.marketing_consent_text(text)',
     'private.sc19_trial_auto_verify_signature(text,uuid,bigint,text,text)',
     'private.rotate_sc19_trial_auto_secret(text)',
-    'private.marketing_consent_record(uuid,text,text,uuid)',
+    'private.marketing_consent_record(uuid,text,text,uuid,timestamptz)',
     'private.sc19_auto_free_cooldown()',
-    'private.sc19_auto_free_other_nip_tried(uuid,text)']) {
+    'private.sc19_auto_free_local_refusal_codes()',
+    'private.sc19_auto_free_other_nip_tried(uuid,text)',
+    'private.sc19_auto_free_nip_released_from(uuid,text)']) {
     for (const role of ['anon', 'authenticated']) {
       assert.equal((await call(db, 'select has_function_privilege($1,$2,$3) v', [role, fn, 'execute']))[0].v, false, `${role} ${fn}`);
     }
