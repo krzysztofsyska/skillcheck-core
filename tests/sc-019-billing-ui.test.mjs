@@ -257,3 +257,29 @@ test('billing never presents a grant form with an unavailable or invalid policy'
     }
   });
 });
+
+
+// U1 z przeglądu 6c12d2d: operator podejmuje decyzję na podstawie powodu odmowy,
+// więc każdy kod, który potrafi trafić do jego raportu, musi mieć polską treść.
+// Bez tego fallback pokazuje mu surowy kod (`powód: NIP_RELEASED`) dokładnie tam,
+// gdzie jest potrzebna jego decyzja. Kody zbieramy ze źródeł, nie z listy ręcznej,
+// żeby nowy kod w migracji albo w kliencie wykazu wymusił tu tłumaczenie.
+test('every automatic-check refusal code the operator can see has Polish copy', () => {
+  const sources = [
+    'supabase/migrations/20261103090000_sc19_auto_trial_marketing_consent.sql',
+    'lib/sc19-trial-auto.ts',
+    'lib/sc19-trial-auto-flow.ts',
+  ].map(f => readFileSync(new URL('../' + f, import.meta.url), 'utf8')).join('\n');
+  const codes = new Set(
+    [...sources.matchAll(/'((?:NIP|WHITELIST|STATUS|AUTO|NO_SERVER)_[A-Z_]+|COOLDOWN|IN_FLIGHT|ANOTHER_NIP_TRIED)'/g)]
+      .map(m => m[1]),
+  );
+  assert.ok(codes.has('NIP_RELEASED'), 'the release guard code is among the sources');
+  assert.ok(codes.size >= 12, `expected the known refusal codes, found ${codes.size}`);
+  const page = readFileSync(new URL('../app/operator/billing/page.tsx', import.meta.url), 'utf8');
+  const block = page.match(/const autoReasons: Record<string, string> = \{([\s\S]*?)\n\};/);
+  assert.ok(block, 'the operator page still carries the refusal-code dictionary');
+  const translated = new Set([...block[1].matchAll(/^\s*([A-Z_]+):/gm)].map(m => m[1]));
+  const missing = [...codes].filter(c => !translated.has(c)).sort();
+  assert.deepEqual(missing, [], `refusal codes without Polish copy: ${missing.join(', ')}`);
+});
