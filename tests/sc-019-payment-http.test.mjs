@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 import { resolveSc19PaymentRuntime,composeSc19PaymentRuntime } from '../lib/sc19-payment-runtime.ts';
+import { Sc19PaymentError } from '../lib/sc19-payments.ts';
 const id='00000000-0000-4000-8000-000000000001';
 const origin='https://app.fixture.invalid';
 function harness(extra={}) {
@@ -18,6 +19,51 @@ const checkout=(body='{}',headers={})=>new Request(origin+'/api/billing/checkout
 test('deployment has no provider registration and all routes fail closed',async()=>{
  assert.equal(await resolveSc19PaymentRuntime(),null);const h=createSc19PaymentHttp(null);
  for(const r of [await h.checkout(checkout()),await h.offers(new Request(origin)),await h.order(new Request(origin),id),await h.webhook(checkout())])assert.equal(r.status,503);
+});
+test('without a provider the read-only catalog serves offers while every write route stays refused',async()=>{
+ const seen=[];
+ const catalog={authenticate:async()=>({userId:id}),
+  async listOffers(companyId,userId){seen.push([companyId,userId]);return [{id:'preselekcja',revision:'v2',plan:'PRESELEKCJA',
+   active:true,approved:true,amountMinor:30000,currency:'PLN',credits:60,termsRevision:'terms-v2',
+   termsText:'Warunki z polskimi znakami: ą, ć, ę.',validUntilMs:Date.now()+86400000}];}};
+ const h=createSc19PaymentHttp(null,catalog);
+ // Only the catalog read answers; registering a transaction needs a provider.
+ for(const r of [await h.checkout(checkout()),await h.order(new Request(origin+'?companyId='+id),id),await h.webhook(checkout())]){
+  assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:'SC19_PAYMENTS_DISABLED'});
+ }
+ const r=await h.offers(new Request(origin+'/api/billing/offers?companyId='+id));
+ assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');
+ const body=await r.json();
+ assert.equal(body.checkoutAvailable,false,'the client is told checkout is unavailable, never that it works');
+ assert.equal(body.offers.length,1);
+ const [offer]=body.offers;
+ // Gross stays authoritative; net and VAT are derived from it.
+ assert.equal(offer.amountMinor,30000);assert.equal(offer.netMinor,24390);
+ assert.equal(offer.vatMinor,5610);assert.equal(offer.vatBasisPoints,2300);
+ assert.equal(offer.netMinor+offer.vatMinor,offer.amountMinor);
+ assert.deepEqual(seen,[[id,id]],'the company id is validated and the user comes from the server session');
+ // Authorization is unchanged: anonymous and malformed tenants never reach the store.
+ assert.equal((await createSc19PaymentHttp(null,{...catalog,authenticate:async()=>null})
+  .offers(new Request(origin+'?companyId='+id))).status,403);
+ assert.equal((await h.offers(new Request(origin+'?companyId=not-a-uuid'))).status,400);
+ assert.equal(seen.length,1);
+ // A store refusal (owner / verified-company check) surfaces as 403, not as data.
+ const denied=createSc19PaymentHttp(null,{...catalog,listOffers:async()=>{throw new Sc19PaymentError('SC19_PAYMENT_FORBIDDEN');}});
+ assert.equal((await denied.offers(new Request(origin+'?companyId='+id))).status,403);
+});
+test('a composed provider takes precedence over the read-only catalog for offers',async()=>{
+ let catalogReads=0;
+ const catalog={authenticate:async()=>({userId:id}),async listOffers(){catalogReads++;return [];}};
+ const live=createSc19PaymentHttp({appOrigin:origin,signatureHeader:'fixture-signature',authenticate:async()=>({userId:id}),
+  service:{checkoutEnabled:true},readOrder:async()=>null,
+  listOffers:async()=>[{id:'live-offer',revision:'v1',amountMinor:12345,currency:'PLN',credits:12,
+   termsRevision:'t',termsText:'x',validUntilMs:Date.now()+86400000}]},catalog);
+ const response=await live.offers(new Request(origin+'?companyId='+id));
+ assert.equal(response.status,200);
+ const body=await response.json();
+ assert.equal(body.checkoutAvailable,true);
+ assert.equal(body.offers[0].id,'live-offer');
+ assert.equal(catalogReads,0,'the gated catalog is not consulted once a provider is composed');
 });
 test('CSRF, missing Origin, forged Host, wrong media type and anonymous user are denied',async()=>{
  for(const headers of [{origin:'https://evil.invalid'},{origin:''},{origin:'https://evil.invalid',host:'app.fixture.invalid'},{'sec-fetch-site':'cross-site'},{'content-type':'text/plain'}]){

@@ -1,4 +1,6 @@
 import type { CheckoutOffer } from './sc19-payment-postgres.ts';
+import type { OfferCatalog } from './sc19-offer-catalog.ts';
+import { SC19_VAT_BASIS_POINTS, sc19OfferAmounts } from './sc19-offer-amounts.ts';
 import type { PaymentOrder, createSc19Payments } from './sc19-payments.ts';
 import { Sc19PaymentError } from './sc19-payments.ts';
 export type PaymentHttpRuntime = Readonly<{
@@ -43,9 +45,23 @@ function errorResponse(error: unknown, webhook=false) {
   // No successful acknowledgment until verification AND transaction commit.
   return json({error:code},map[code] ?? (webhook ? 503 : 409));
 }
-export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null) {
-  async function user() {
-    const auth=await runtime!.authenticate();
+/** Serialized offer. `checkoutAvailable` says whether a payment can actually be
+ * taken right now; the gross `amountMinor` stays authoritative and net/VAT are
+ * derived from it, never the other way round. No provider, account, mode,
+ * session or merchant data is ever included. */
+const serializeOffer = (o: CheckoutOffer) => {
+  const amounts=sc19OfferAmounts(o.amountMinor,SC19_VAT_BASIS_POINTS);
+  return {id:o.id,revision:o.revision,amountMinor:o.amountMinor,currency:o.currency,
+    credits:o.credits,termsRevision:o.termsRevision,termsText:o.termsText,validUntilMs:o.validUntilMs,
+    netMinor:amounts?.netMinor ?? null,vatMinor:amounts?.vatMinor ?? null,
+    vatBasisPoints:amounts?.vatBasisPoints ?? null};
+};
+/** `catalog` is a READ-ONLY offer source used only when no payment provider is
+ * composed. It cannot create an order: checkout and the webhook stay bound to
+ * `runtime` and keep answering SC19_PAYMENTS_DISABLED while it is null. */
+export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalog: OfferCatalog | null=null) {
+  async function identify(source: {authenticate(): Promise<{userId: string} | null>}) {
+    const auth=await source.authenticate();
     if(!auth || !uuid.test(auth.userId))throw new Sc19PaymentError('SC19_PAYMENT_FORBIDDEN');
     return auth.userId;
   }
@@ -59,7 +75,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null) {
           throw new Sc19PaymentError('SC19_PAYMENT_ORIGIN');
         if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')
           throw new Sc19PaymentError('SC19_PAYMENT_CONTENT_TYPE');
-        await user();
+        await identify(runtime);
         let input: unknown;
         try { input=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bodyBytes(request,4096))); }
         catch(e) { if(e instanceof Sc19PaymentError)throw e; throw new Sc19PaymentError('SC19_PAYMENT_INVALID'); }
@@ -68,21 +84,28 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null) {
           {orderId:result.orderId,status:'awaiting_payment',checkoutUrl:result.url});
       } catch(e) { return errorResponse(e); }
     },
+    /** Reading an approved offer needs no payment provider, so this is the one
+     * route that still answers while checkout is gated: the price, the terms and
+     * the order summary must be verifiable (Przelewy24 integration review). The
+     * authorization is unchanged either way — a server-authenticated user who
+     * owns the company AND whose company has a private.sc19_trial_approvals row.
+     * `checkoutAvailable:false` tells the client a payment cannot be taken; it
+     * is never faked, and no order can be created down this path. */
     async offers(request: Request) {
-      if(!runtime)return paymentsUnavailable();
+      const source=runtime && runtime.service.checkoutEnabled ? runtime : catalog;
+      if(!source)return paymentsUnavailable();
       try {
-        const uid=await user(); const companyId=new URL(request.url).searchParams.get('companyId') ?? '';
+        const uid=await identify(source); const companyId=new URL(request.url).searchParams.get('companyId') ?? '';
         if(!uuid.test(companyId))throw new Sc19PaymentError('SC19_PAYMENT_INVALID');
-        if(!runtime.service.checkoutEnabled)return paymentsUnavailable();
-        const offers=await runtime.listOffers(companyId,uid);
-        return json({offers:offers.map(o=>({id:o.id,revision:o.revision,amountMinor:o.amountMinor,currency:o.currency,
-          credits:o.credits,termsRevision:o.termsRevision,termsText:o.termsText,validUntilMs:o.validUntilMs}))});
+        const checkoutAvailable=source===runtime;
+        const offers=await source.listOffers(companyId,uid);
+        return json({checkoutAvailable,offers:offers.map(serializeOffer)});
       } catch(e) { return errorResponse(e); }
     },
     async order(request: Request,orderId: string) {
       if(!runtime)return paymentsUnavailable();
       try {
-        const uid=await user(); const companyId=new URL(request.url).searchParams.get('companyId') ?? '';
+        const uid=await identify(runtime); const companyId=new URL(request.url).searchParams.get('companyId') ?? '';
         if(!uuid.test(companyId)||!uuid.test(orderId))throw new Sc19PaymentError('SC19_PAYMENT_INVALID');
         const o=await runtime.readOrder(companyId,uid,orderId);
         if(!o)return json({error:'SC19_PAYMENT_ORDER_MISSING'},404);

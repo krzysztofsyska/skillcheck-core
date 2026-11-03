@@ -8,6 +8,7 @@ on:
       - 'docs/prototypes/sc19-payment-storage.sql'
       - 'docs/sc19-migrations*.md'
       - 'lib/sc19-payment*.ts'
+      - 'lib/sc19-offer-*.ts'
       - 'tests/sc-019-migrations*.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step4-erasure-r8.test.mjs'
@@ -21,6 +22,9 @@ on:
       - 'tools/db-migrate/**'
       - '.github/workflows/db-migrate-production.yml'
       - 'supabase/rollbacks/**'
+      # Preview-only commercial seeds: not migrations, but exercised by
+      # tests/sc-019-migrations.test.mjs, so a change to one must re-run this.
+      - 'supabase/preview-seeds/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
@@ -50,6 +54,9 @@ on:
       - 'tools/db-migrate/**'
       - '.github/workflows/db-migrate-production.yml'
       - 'supabase/rollbacks/**'
+      # Preview-only commercial seeds: not migrations, but exercised by
+      # tests/sc-019-migrations.test.mjs, so a change to one must re-run this.
+      - 'supabase/preview-seeds/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'

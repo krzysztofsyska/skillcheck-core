@@ -19,11 +19,21 @@ const nipA = nip('526025099'), nipB = nip('951000001');
 
 const code = expected => error => error.code === expected;
 
+// These RPCs are specified against an UNCONFIGURED policy: the operator is the
+// only one who may choose a quota. That is now also what the migration chain
+// leaves behind, since commercial activation is no longer done by any migration
+// (the owner-approved quotas reach the TEST project through
+// supabase/preview-seeds/sc19-preselekcja-offer.sql, which is not a migration).
+// So the precondition holds with no fixture clean-up, and this asserts it.
 async function ready(t) {
   const env = await bootMigrationDatabase(t);
   const h = await setupRankingDatabase(env.db, { throughMigration: null });
   const { db } = env;
   await h.asAdmin();
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0,
+    'the migration chain publishes no purchasable offer');
+  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0,
+    'the migration chain configures no quota: that is the operator\'s decision');
   await db.query('insert into public.platform_operators(user_id) values($1)', [operator]);
   const a = await h.seed(users.owner), b = await h.seed(users.otherOwner);
   await h.asAdmin();

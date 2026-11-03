@@ -118,6 +118,7 @@ test('billing page stays closed and does not read a balance while packages are o
     }));
     assert.match(html, /przygotowywane/);
     assert.doesNotMatch(html, /name="nip"|Aktywuj FREE/);
+    assert.doesNotMatch(html, /billing\/checkout/, 'SC19_PAGES flag off hides the checkout link too');
     assert.equal(fx.calls.length, 0);
     const url = await redirected(billingAction(fx.access), form());
     assert.equal(url, '/dashboard');
@@ -157,6 +158,10 @@ test('billing page shows the owner form only to the owner and hides it once a ba
     }));
     assert.match(memberHtml, /FREE może aktywować właściciel firmy/);
     assert.doesNotMatch(memberHtml, /name="nip"/);
+    // The checkout route is owner-only on the page itself, so the link to it uses
+    // the same condition and is never shown to a non-owner member.
+    assert.match(ownerHtml, new RegExp(`href="/dashboard/${companyId}/billing/checkout"`));
+    assert.doesNotMatch(memberHtml, /billing\/checkout/);
 
     const funded = billingAccess({ balance: [{ plan: 'FREE', available: 4 }] });
     const fundedHtml = renderToStaticMarkup(await billingPage(funded.access)({
@@ -217,6 +222,32 @@ test('FREE activation maps the owner, the NIP and the RPC error without calling 
     const ok = billingAccess();
     assert.equal(await redirected(billingAction(ok.access), form()), `/dashboard/${companyId}/billing?status=activated`);
     assert.deepEqual(ok.calls[0].args, { target_company: companyId, supplied_nip: '5261040828' });
+  });
+});
+
+test('the checkout URL renders no priced order summary while packages are off', async () => {
+  const checkoutPage = access => load('app/dashboard/[companyId]/billing/checkout/page.tsx', {
+    'next/link': ({ children, href }) => React.createElement('a', { href }, children),
+    '../../../../../lib/company-access': access,
+    './checkout': () => React.createElement('p', null, 'SYNTHETIC CHECKOUT FORM'),
+  }).default;
+  // Flag off: the link is hidden on the billing page, but the URL is still
+  // reachable and must not render the purchase UI either.
+  await withFlag(undefined, async () => {
+    const fx = billingAccess();
+    const html = renderToStaticMarkup(await checkoutPage(fx.access)({ params: Promise.resolve({ companyId }) }));
+    assert.match(html, /przygotowywane/);
+    assert.doesNotMatch(html, /SYNTHETIC CHECKOUT FORM/, 'no order form while packages are off');
+    assert.doesNotMatch(html, /Jednorazowy zakup analiz CV/);
+  });
+  await withFlag('true', async () => {
+    const owner = billingAccess();
+    const ownerHtml = renderToStaticMarkup(await checkoutPage(owner.access)({ params: Promise.resolve({ companyId }) }));
+    assert.match(ownerHtml, /SYNTHETIC CHECKOUT FORM/);
+    const member = billingAccess({ userId: memberId });
+    const memberHtml = renderToStaticMarkup(await checkoutPage(member.access)({ params: Promise.resolve({ companyId }) }));
+    assert.match(memberHtml, /Zamówienie może złożyć właściciel firmy/);
+    assert.doesNotMatch(memberHtml, /SYNTHETIC CHECKOUT FORM/);
   });
 });
 

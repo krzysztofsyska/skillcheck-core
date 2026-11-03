@@ -523,6 +523,15 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number }[];
       };
+      /** Read-only checkout catalog. Requires an authenticated owner of a company
+       * with an approved trial; raises 42501 otherwise. Creates no order. */
+      sc19_checkout_offers: {
+        Args: { target_company: string };
+        Returns: {
+          id: string; revision: string; plan: 'PRESELEKCJA'; amount_minor: number; currency: 'PLN';
+          credits: number; terms_revision: string; terms_text: string; valid_until_ms: number;
+        }[];
+      };
       sc19_operator_companies: {
         Args: { search?: string | null };
         Returns: { company_id: string; company_name: string; created_at: string; plan: 'FREE' | 'PRESELEKCJA' | null; available: number | null; free_claimed: boolean; approved_nip: string | null; approved_at: string | null }[];
