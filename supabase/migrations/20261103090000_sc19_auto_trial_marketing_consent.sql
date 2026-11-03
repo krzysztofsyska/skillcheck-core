@@ -990,7 +990,13 @@ grant execute on function public.sc19_operator_marketing_consents(text) to authe
 -- row for the same (company, NIP) says how the attempt ended, because the
 -- report answers "what happened and who is waiting", not "what was written".
 -- A reservation with NO later answer is exactly the unresolved attempt the
--- operator must see, so it is still shown.
+-- operator must see, so it is still shown. "Answer" is meant strictly: a later
+-- row carrying one of the LOCALLY decided refusal codes
+-- (private.sc19_auto_free_local_refusal_codes) does not settle a reservation,
+-- because nothing was asked of the registry to produce it. Without that
+-- exclusion the COOLDOWN row that a second, simultaneous submission writes hid
+-- the attempt still in flight, and a company genuinely waiting for the register
+-- was reported as a refusal instead — measured on the parallel-burst scenario.
 create function public.sc19_operator_auto_free_grants()
 returns table(company_id uuid, company_name text, nip text, checked_at timestamptz,
   outcome text, error_code text, granted_credits integer, used_credits integer, mf_status text)
@@ -1011,6 +1017,9 @@ begin
          select 1 from private.sc19_trial_auto_checks later
          where later.company_id=g.company_id and later.nip=g.nip
            and coalesce(later.error_code,'') <> 'IN_FLIGHT'
+           -- Only a row that carries an ANSWER settles a reservation; a locally
+           -- decided refusal never reached the registry (see the note above).
+           and coalesce(later.error_code,'') <> all(private.sc19_auto_free_local_refusal_codes())
            -- Not strictly later: a row written in the same instant is still the
            -- answer to this reservation, while a STRICTLY EARLIER answer belongs
            -- to a previous attempt and must not hide this one.

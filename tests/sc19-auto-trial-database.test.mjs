@@ -453,6 +453,20 @@ test('one automatic check is one row in the operator report', async t => {
     [b.companyId, 'unavailable', 'IN_FLIGHT'],
     [a.companyId, 'granted', null],
   ], 'an unresolved attempt is still shown');
+
+  // AND A COOLDOWN DOES NOT COUNT AS AN ANSWER. Company B submits again while
+  // its first attempt is still in flight, which writes a locally decided
+  // COOLDOWN row — nothing was asked of the registry to produce it. Before the
+  // report excluded the local refusal codes, that row settled the reservation
+  // and the company waiting for the register was listed as a refusal instead.
+  await h.asUser(users.otherOwner);
+  assert.deepEqual(await precheck(db, b.companyId, nipB), { allowed: false, reason: 'COOLDOWN' });
+  await h.asUser(operator);
+  rows = await call(db, 'select * from public.sc19_operator_auto_free_grants()');
+  assert.deepEqual(rows.filter(row => row.company_id === b.companyId).map(row => [row.outcome, row.error_code]), [
+    ['refused', 'COOLDOWN'],
+    ['unavailable', 'IN_FLIGHT'],
+  ], 'the attempt in flight is still reported next to the cooldown it caused');
   assert.ok(nipC, 'the third synthetic NIP stays unused here');
 });
 
