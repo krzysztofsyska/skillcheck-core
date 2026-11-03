@@ -474,7 +474,9 @@ export type Database = {
         }[];
       };
       sc19_operator_release_trial_nip: {
-        Args: { supplied_nip: string; release_reason: string };
+        // `expected_company` is the company the operator was looking at. The
+        // release is refused unless that company still holds the NIP.
+        Args: { supplied_nip: string; release_reason: string; expected_company: string };
         Returns: { released_company_id: string; released_at: string }[];
       };
       sc19_operator_trial_nip_releases: {

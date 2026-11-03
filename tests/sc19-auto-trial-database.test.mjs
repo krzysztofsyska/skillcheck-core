@@ -24,6 +24,50 @@ const call = (db, sql, params) => db.query(sql, params).then(r => r.rows);
 const precheck = (db, companyId, nipValue) =>
   call(db, 'select * from public.sc19_auto_free_precheck($1,$2)', [companyId, nipValue]).then(rows => rows[0]);
 
+/**
+ * The window public.sc19_daily_digest is asked about, READ FROM THE DATABASE
+ * CLOCK at the database's own resolution.
+ *
+ * WHY NOT new Date(). Every timestamp the digest counts is stamped by now(),
+ * which keeps MICROSECONDS; new Date() in Node only has MILLISECONDS. Taking
+ * the window end from Node therefore rounds it DOWN to a whole millisecond,
+ * while the row written a moment earlier sits somewhere inside that same
+ * millisecond — so `checked_at < window_end` is false and the row the test just
+ * created falls outside the window it is supposed to be in. Measured against
+ * this database: when the two land in the same millisecond, the row is dropped
+ * 276 times out of 300. Whether they land in the same millisecond is decided by
+ * how long the RPC happens to take, which is why the same test passes locally
+ * and fails on a faster CI runner (it did, on 2026-11-03, run 41682917726, on
+ * PostgreSQL 16 and 17 alike).
+ *
+ * This is a limit of the harness, not of the count. The half-open window
+ * [start, end) is correct and is NOT widened here: consecutive daily windows
+ * tile without a gap and without counting anything twice, and the boundary
+ * itself is asserted explicitly further down with rows stamped by hand.
+ *
+ * Both bounds come from one `now()` in one statement, so they cannot drift
+ * apart, and both are returned as canonical UTC text with microseconds, which
+ * is also what Node must not reparse into a Date (that would truncate again).
+ */
+async function digestWindow(db, { hours = 24 } = {}) {
+  const row = (await call(db,
+    `select to_char(now() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US') || 'Z' as window_end,
+            to_char((now() - make_interval(hours => $1)) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US') || 'Z'
+              as window_start`, [hours])).at(0);
+  // Guards the whole point of this helper. toISOString() writes three fractional
+  // digits; the database writes six, and a window end rounded down to a whole
+  // millisecond is exactly the failure described above. A bound that arrives
+  // with millisecond precision means somebody has put a Node clock back in.
+  for (const bound of [row.window_start, row.window_end]) {
+    assert.match(bound, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/,
+      'the digest window must keep the database clock\'s microseconds');
+  }
+  return { start: row.window_start, end: row.window_end };
+}
+/** The second-truncated spelling the database rebuilds the signed payload with
+ * (to_char(..,'YYYY-MM-DD"T"HH24:MI:SS')), taken off the text above. */
+const digestPayload = ({ start, end }) => [start.slice(0, 19), end.slice(0, 19)].join('\n');
+
 async function ready(t, { enabled = true, secret = SECRET } = {}) {
   const env = await bootMigrationDatabase(t);
   const h = await setupRankingDatabase(env.db, { throughMigration: null });
@@ -491,12 +535,22 @@ test('the operator can release an occupied NIP so the real company can use FREE'
   assert.equal(taken[0].source, 'wykaz VAT');
 
   // A reason is mandatory, and an unoccupied NIP cannot be released.
-  await assert.rejects(db.query('select * from public.sc19_operator_release_trial_nip($1,$2)', [nipA, 'krótko']), /sc19_release_reason_required/);
-  await assert.rejects(db.query('select * from public.sc19_operator_release_trial_nip($1,$2)', [nipC, 'KRS sprawdzony 2026-11-03']), /sc19_trial_nip_not_taken/);
-  await assert.rejects(db.query('select * from public.sc19_operator_release_trial_nip($1,$2)', ['123', 'KRS sprawdzony 2026-11-03']), code('22023'));
+  const release = (nipValue, reasonText, company) =>
+    db.query('select * from public.sc19_operator_release_trial_nip($1,$2,$3)', [nipValue, reasonText, company]);
+  await assert.rejects(release(nipA, 'krótko', a.companyId), /sc19_release_reason_required/);
+  await assert.rejects(release(nipC, 'KRS sprawdzony 2026-11-03', a.companyId), /sc19_trial_nip_not_taken/);
+  await assert.rejects(release('123', 'KRS sprawdzony 2026-11-03', a.companyId), code('22023'));
+  // The company must be named: the NIP alone would release whoever holds it now.
+  await assert.rejects(release(nipA, 'KRS sprawdzony 2026-11-03', null), /sc19_release_company_required/);
+  // And it must be the company that really holds it.
+  await assert.rejects(release(nipA, 'KRS sprawdzony 2026-11-03', b.companyId), /sc19_trial_nip_holder_changed/);
+  await h.asAdmin();
+  assert.equal((await call(db, 'select count(*)::int n from private.sc19_trial_nip_releases'))[0].n, 0,
+    'a refused release writes nothing');
+  await h.asUser(operator);
 
-  const released = (await call(db, 'select * from public.sc19_operator_release_trial_nip($1,$2)',
-    [nipA, 'KRS sprawdzony 2026-11-03: NIP nalezy do innej firmy']))[0];
+  const released = (await call(db, 'select * from public.sc19_operator_release_trial_nip($1,$2,$3)',
+    [nipA, 'KRS sprawdzony 2026-11-03: NIP nalezy do innej firmy', a.companyId]))[0];
   assert.equal(released.released_company_id, a.companyId);
   assert.ok(released.released_at instanceof Date);
 
@@ -541,7 +595,8 @@ test('the operator can release an occupied NIP so the real company can use FREE'
   // Only an operator may release or list.
   for (const who of [users.owner, users.otherOwner, users.recruiter]) {
     await h.asUser(who);
-    await assert.rejects(db.query('select * from public.sc19_operator_release_trial_nip($1,$2)', [nipA, 'proba nieuprawniona']), code('42501'), who);
+    await assert.rejects(db.query('select * from public.sc19_operator_release_trial_nip($1,$2,$3)',
+      [nipA, 'proba nieuprawniona', a.companyId]), code('42501'), who);
     await assert.rejects(db.query('select * from public.sc19_operator_taken_trial_nips()'), code('42501'), who);
     await assert.rejects(db.query('select * from public.sc19_operator_trial_nip_releases()'), code('42501'), who);
   }
@@ -570,8 +625,8 @@ test('a released NIP cannot be reoccupied by the company it was taken from', asy
   await db.query("delete from private.sc19_credit_journal where company_id=$1 and reason='trial'", [a.companyId]);
 
   await h.asUser(operator);
-  await db.query('select * from public.sc19_operator_release_trial_nip($1,$2)',
-    [nipA, 'KRS sprawdzony 2026-11-03: NIP nalezy do innej firmy']);
+  await db.query('select * from public.sc19_operator_release_trial_nip($1,$2,$3)',
+    [nipA, 'KRS sprawdzony 2026-11-03: NIP nalezy do innej firmy', a.companyId]);
 
   // THE REOCCUPATION IS NOW REFUSED, in BOTH automatic admission paths.
   await h.asUser(users.owner);
@@ -609,6 +664,65 @@ test('a released NIP cannot be reoccupied by the company it was taken from', asy
   assert.equal((await call(db, 'select private.sc19_auto_free_other_nip_tried($1,$2) v', [a.companyId, nipC]))[0].v, true);
 });
 
+test('a stale release form cannot free the NIP of the company that rightfully took it', async t => {
+  // THE BUG (bot review finding 4458164495, 2026-11-03). The release took the
+  // NIP alone and looked the holder up itself, so it released "whoever holds
+  // this NIP right now". The operator panel, though, shows the NIP next to the
+  // company holding it, and he submits that line possibly minutes later. In
+  // between, a second operator can release the NIP and the company that really
+  // owns it can activate FREE on it. The stale submission then hit THAT company:
+  // its approval and its claimed FREE deleted, the key of its journal entry
+  // rewritten and a NIP_RELEASED block placed on it — the remedy turned against
+  // the victim. Nothing in the old signature could tell the two apart.
+  const { db, h, a, b } = await ready(t);
+
+  // Company A occupies a NIP it does not hold; the operator opens the page and
+  // sees the NIP listed against A. (This is the state his form was rendered in.)
+  await h.asUser(users.owner);
+  assert.equal((await autoClaim(db, a.companyId, nipA)).outcome, 'granted');
+  await h.asUser(operator);
+  const page = (await call(db, 'select * from public.sc19_operator_taken_trial_nips()'))[0];
+  assert.equal(page.company_id, a.companyId, 'the page he is looking at says A holds it');
+
+  // Meanwhile: a second operator releases it, and company B — the real owner —
+  // activates FREE on it.
+  await db.query('select * from public.sc19_operator_release_trial_nip($1,$2,$3)',
+    [page.nip, 'zwolnione przez drugiego operatora 2026-11-03', a.companyId]);
+  await h.asUser(users.otherOwner);
+  assert.deepEqual(await autoClaim(db, b.companyId, nipA), { outcome: 'granted', available: 5, reason: null });
+  await h.asAdmin();
+  const before = (await call(db,
+    `select (select count(*)::int from private.sc19_trial_nips where company_id=$1) nips,
+            (select count(*)::int from private.sc19_trial_approvals where company_id=$1) approvals,
+            (select available from private.sc19_balances where company_id=$1) available,
+            (select count(*)::int from private.sc19_credit_journal
+               where company_id=$1 and reason='trial' and reference=$2) journal`,
+    [b.companyId, `trial:${nipA}`]))[0];
+  assert.deepEqual(before, { nips: 1, approvals: 1, available: 5, journal: 1 }, 'B holds it properly');
+
+  // NOW the first operator presses "Zwolnij NIP" on his stale page.
+  await h.asUser(operator);
+  await assert.rejects(db.query('select * from public.sc19_operator_release_trial_nip($1,$2,$3)',
+    [page.nip, 'KRS sprawdzony 2026-11-03: NIP nalezy do innej firmy', page.company_id]),
+    /sc19_trial_nip_holder_changed/, 'the company he verified no longer holds the NIP');
+
+  // B is untouched in every respect the release would have changed.
+  await h.asAdmin();
+  assert.deepEqual((await call(db,
+    `select (select count(*)::int from private.sc19_trial_nips where company_id=$1) nips,
+            (select count(*)::int from private.sc19_trial_approvals where company_id=$1) approvals,
+            (select available from private.sc19_balances where company_id=$1) available,
+            (select count(*)::int from private.sc19_credit_journal
+               where company_id=$1 and reason='trial' and reference=$2) journal`,
+    [b.companyId, `trial:${nipA}`]))[0], before, 'nothing of B was taken away or renamed');
+  assert.equal((await call(db,
+    'select count(*)::int n from private.sc19_trial_nip_releases where released_company_id=$1', [b.companyId]))[0].n, 0,
+    'and no NIP_RELEASED block was written against B');
+  await h.asUser(users.otherOwner);
+  assert.deepEqual(await precheck(db, b.companyId, nipA), { allowed: true, reason: null },
+    'B carries no NIP_RELEASED block: asking again for the NIP it already holds stays idempotent');
+});
+
 test('an operator can give a mistakenly released NIP back, and only an operator can', async t => {
   // The reverse of the guard above: a release made in error must be undoable, or
   // the fix would strand an honest company for ever. The way back is a fresh
@@ -622,7 +736,8 @@ test('an operator can give a mistakenly released NIP back, and only an operator 
   await db.query('delete from private.sc19_balances where company_id=$1', [a.companyId]);
   await db.query("delete from private.sc19_credit_journal where company_id=$1 and reason='trial'", [a.companyId]);
   await h.asUser(operator);
-  await db.query('select * from public.sc19_operator_release_trial_nip($1,$2)', [nipA, 'zwolnione pomylkowo 2026-11-03']);
+  await db.query('select * from public.sc19_operator_release_trial_nip($1,$2,$3)',
+    [nipA, 'zwolnione pomylkowo 2026-11-03', a.companyId]);
 
   // Blocked, as above...
   await h.asUser(users.owner);
@@ -1153,13 +1268,12 @@ test('the daily digest returns counts only, and only to a signed caller', async 
   await autoClaim(db, a.companyId, nipA);
   await db.query("select public.marketing_consent_grant($1,'marketing-1.0')", [a.companyId]);
 
-  const end = new Date(), start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
-  const stamp = value => value.toISOString().replace(/\.\d+Z$/, '');
+  const window = await digestWindow(db);
   const run = (signature, id, at) => db.query('select * from public.sc19_daily_digest($1,$2,$3,$4,$5)',
-    [start.toISOString(), end.toISOString(), id, at, signature]).then(r => r.rows[0]);
+    [window.start, window.end, id, at, signature]).then(r => r.rows[0]);
 
   const requestId = randomUUID(), issuedAtMs = Date.now();
-  const payload = [stamp(start), stamp(end)].join('\n');
+  const payload = digestPayload(window);
   // Unsigned and wrongly signed callers get nothing, including the operator.
   await assert.rejects(run('0'.repeat(64), requestId, issuedAtMs), code('42501'));
   await assert.rejects(run(signTrialAuto('auto_claim', requestId, issuedAtMs, payload, SECRET), requestId, issuedAtMs),
@@ -1181,7 +1295,7 @@ test('the daily digest returns counts only, and only to a signed caller', async 
   // A nonsense window is refused before anything is read.
   const bad = randomUUID(), badAt = Date.now();
   await assert.rejects(db.query('select * from public.sc19_daily_digest($1,$2,$3,$4,$5)',
-    [end.toISOString(), start.toISOString(), bad, badAt, 'x'.repeat(64)]), code('22023'), 'reversed window');
+    [window.end, window.start, bad, badAt, 'x'.repeat(64)]), code('22023'), 'reversed window');
 });
 
 test('the manual-review count holds only companies that asked and are still waiting', async t => {
@@ -1195,15 +1309,16 @@ test('the manual-review count holds only companies that asked and are still wait
   // first: every submission is refused locally with 'AUTO_DISABLED' and is
   // exactly what needs a human.
   const { db, h, a, b } = await ready(t, { enabled: false });
-  const end = () => new Date(), start = e => new Date(e.getTime() - 24 * 60 * 60 * 1000);
-  const stamp = value => value.toISOString().replace(/\.\d+Z$/, '');
-  async function digest() {
-    const e = end(), s = start(e);
+  // The window ends at the database's own `now()`, not at new Date() — see
+  // digestWindow() above for why a millisecond is the difference between this
+  // test measuring the count and measuring the clock.
+  async function digest(window) {
+    const asked = window ?? await digestWindow(db);
     const id = randomUUID(), at = Date.now();
-    const signature = signTrialAuto('digest', id, at, [stamp(s), stamp(e)].join('\n'), SECRET);
+    const signature = signTrialAuto('digest', id, at, digestPayload(asked), SECRET);
     await h.asUser(null, 'anon');
     return (await call(db, 'select * from public.sc19_daily_digest($1,$2,$3,$4,$5)',
-      [s.toISOString(), e.toISOString(), id, at, signature])).at(0);
+      [asked.start, asked.end, id, at, signature])).at(0);
   }
 
   // Two companies exist and NEITHER has asked for anything.
@@ -1229,12 +1344,32 @@ test('the manual-review count holds only companies that asked and are still wait
   // entry — and public.sc19_claim_trial would refuse it a late FREE anyway.
   await h.asUser(users.otherOwner);
   assert.deepEqual(await precheck(db, b.companyId, nipB), { allowed: false, reason: 'AUTO_DISABLED' });
-  assert.equal((await digest()).awaiting_manual, 1);
+  assert.equal((await digest()).awaiting_manual, 1, 'a company that asked and has not been resolved is waiting');
   await h.asAdmin();
   await db.query("insert into private.sc19_package_policy(plan,credits) values('PRESELEKCJA',60)");
   await h.asUser(operator);
   await db.query('select public.sc19_operator_grant_paid($1,$2)', [b.companyId, 'FV/2026/11/0001']);
   assert.equal((await digest()).awaiting_manual, 0, 'a paying customer is not in the manual queue');
+
+  // THE WINDOW IS HALF-OPEN, [start, end), and the two bounds are asserted here
+  // with timestamps written BY HAND instead of being left to whatever the clock
+  // happens to do — which is what used to make this test fail on CI and pass
+  // locally. It matters beyond tidiness: consecutive daily windows share a
+  // bound, so a request stamped exactly on it must be counted by exactly one of
+  // the two mails. Counted by both would double the queue; by neither would lose
+  // the company entirely.
+  // Two more companies, so neither bound needs a row removed afterwards: the
+  // audit table is append-only and refuses a delete.
+  const onStart = await h.seed(users.recruiter), onEnd = await h.seed(users.viewer);
+  await h.asAdmin();
+  const bounds = await digestWindow(db);
+  for (const [company, at] of [[onStart, bounds.start], [onEnd, bounds.end]]) {
+    await db.query(
+      `insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code,checked_at)
+       values($1,$2,'refused','AUTO_DISABLED',$3::timestamptz)`, [company.companyId, nipC, at]);
+  }
+  assert.equal((await digest(bounds)).awaiting_manual, 1,
+    'exactly the request stamped on the start bound is in this window; the one on the end bound is in the next');
 });
 
 test('the erasure inventory still matches after the new tables', async t => {
@@ -1268,7 +1403,7 @@ const PUBLIC_RPCS = Object.freeze({
   'public.sc19_operator_auto_free_settings()': ['authenticated'],
   'public.sc19_operator_auto_free_grants()': ['authenticated'],
   'public.sc19_operator_taken_trial_nips()': ['authenticated'],
-  'public.sc19_operator_release_trial_nip(text,text)': ['authenticated'],
+  'public.sc19_operator_release_trial_nip(text,text,uuid)': ['authenticated'],
   'public.sc19_operator_trial_nip_releases()': ['authenticated'],
   'public.marketing_consent_grant(uuid,text)': ['authenticated'],
   'public.marketing_consent_grant_registration(uuid,text,timestamptz,uuid,bigint,text)': ['authenticated'],
@@ -1311,7 +1446,7 @@ test('the signed functions that write are declared volatile', async t => {
     'public.sc19_auto_claim_trial(uuid,text,text,text,text,uuid,bigint,text)',
     'public.sc19_auto_record_failure(uuid,text,text,text,uuid,bigint,text)',
     'public.sc19_auto_free_precheck(uuid,text)',
-    'public.sc19_operator_release_trial_nip(text,text)',
+    'public.sc19_operator_release_trial_nip(text,text,uuid)',
     'public.marketing_consent_grant_registration(uuid,text,timestamptz,uuid,bigint,text)',
     'private.rotate_sc19_trial_auto_secret(text)',
   ]) {

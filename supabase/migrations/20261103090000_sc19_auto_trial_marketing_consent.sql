@@ -815,7 +815,25 @@ grant execute on function public.sc19_operator_taken_trial_nips() to authenticat
 -- from cannot simply submit it again and beat the real company to it. The pair
 -- is opened again only by public.sc19_operator_approve_trial — the way back from
 -- a release made by mistake.
-create function public.sc19_operator_release_trial_nip(supplied_nip text, release_reason text)
+-- THE RELEASE IS BOUND TO THE COMPANY THE OPERATOR ACTUALLY VERIFIED (review
+-- finding, bot 2026-11-03). It used to take the NIP alone and look the holder up
+-- itself, so it released "whoever holds this NIP right now" — which is not what
+-- the operator decided. The panel lists a NIP next to the company holding it,
+-- and he submits the form from that line, possibly minutes later. In between,
+-- another operator can release the NIP and the company that really owns it can
+-- activate FREE on it. The stale form would then have hit THAT company: its
+-- approval and its claimed FREE deleted, the key of its journal entry rewritten
+-- and a NIP_RELEASED block placed on it — the exact opposite of the remedy this
+-- function exists to be, and done to the victim rather than the occupier.
+--
+-- So the caller states WHICH company it believes holds the NIP, and this
+-- function refuses unless that is still true when it holds the lock. The check
+-- is under the lock, not before it, because the whole point is the gap between
+-- reading the page and submitting it: the company is locked FIRST and the holder
+-- is read afterwards, so no concurrent grant or release can slip between the two
+-- (every write to these two tables takes the holder's company lock as well).
+create function public.sc19_operator_release_trial_nip(supplied_nip text, release_reason text,
+  expected_company uuid)
 returns table(released_company_id uuid, released_at timestamptz)
 language plpgsql volatile security definer set search_path='' as $$
 declare
@@ -833,6 +851,13 @@ begin
   if length(reason) < 8 or length(reason) > 300 then
     raise exception 'sc19_release_reason_required' using errcode='22023';
   end if;
+  if expected_company is null then
+    raise exception 'sc19_release_company_required' using errcode='22023';
+  end if;
+  -- Lock the company the operator verified, then read the holder under that
+  -- lock. Nothing else is locked: a company that is not the one he decided
+  -- about is never touched, not even to be looked at under a lock.
+  perform private.sc19_lock_company(expected_company);
   select a.company_id into holder from private.sc19_trial_approvals a where a.nip=normalized;
   if holder is null then
     select t.company_id into holder from private.sc19_trial_nips t where t.nip=normalized;
@@ -840,7 +865,9 @@ begin
   if holder is null then
     raise exception 'sc19_trial_nip_not_taken' using errcode='22023';
   end if;
-  perform private.sc19_lock_company(holder);
+  if holder <> expected_company then
+    raise exception 'sc19_trial_nip_holder_changed' using errcode='22023';
+  end if;
   insert into private.sc19_trial_nip_releases(nip,released_company_id,operator_id,reason)
     values(normalized,holder,actor,reason)
     returning sc19_trial_nip_releases.id, sc19_trial_nip_releases.released_at into release_id, stamp;
@@ -853,8 +880,8 @@ begin
   return query select holder, stamp;
 end;
 $$;
-revoke all on function public.sc19_operator_release_trial_nip(text,text) from public, anon, authenticated;
-grant execute on function public.sc19_operator_release_trial_nip(text,text) to authenticated;
+revoke all on function public.sc19_operator_release_trial_nip(text,text,uuid) from public, anon, authenticated;
+grant execute on function public.sc19_operator_release_trial_nip(text,text,uuid) to authenticated;
 
 -- The releases themselves, so the operator can see what has already been freed.
 create function public.sc19_operator_trial_nip_releases()

@@ -79,7 +79,7 @@ begin
     or to_regclass('private.sc19_trial_auto_checks') is null
     or to_regclass('private.sc19_trial_nip_releases') is null
     or to_regprocedure('public.sc19_auto_claim_trial(uuid,text,text,text,text,uuid,bigint,text)') is null
-    or to_regprocedure('public.sc19_operator_release_trial_nip(text,text)') is null
+    or to_regprocedure('public.sc19_operator_release_trial_nip(text,text,uuid)') is null
     or to_regprocedure('private.rotate_sc19_trial_auto_secret(text)') is null
     or to_regprocedure('private.marketing_consent_text(text)') is null then
     raise exception 'sc_r11_requires_auto_trial_consent' using errcode='55000';

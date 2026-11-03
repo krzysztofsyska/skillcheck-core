@@ -151,6 +151,10 @@ export default async function OperatorBillingPage({ searchParams }: {
           <details><summary>Zwolnij ten NIP</summary>
             <form action={releaseTrialNip} className={styles.form}>
               <input type="hidden" name="nip" value={row.nip} />
+              {/* The company this line is about. Sent with the form so the
+                  database can refuse the release if the NIP has moved to
+                  another company since this page was rendered. */}
+              <input type="hidden" name="companyId" value={row.company_id} />
               <input type="hidden" name="q" value={search} />
               <label>Powód zwolnienia (co sprawdzono i kiedy) <input name="reason" minLength={8} maxLength={300} required /></label>
               <label className={styles.confirm}><input type="checkbox" name="confirm" value="yes" required /> Sprawdzono, że ta firma nie reprezentuje tego NIP-u.</label>

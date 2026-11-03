@@ -29,7 +29,7 @@ drop function if exists public.sc19_daily_digest(timestamptz,timestamptz,uuid,bi
 drop function if exists public.sc19_operator_auto_free_grants();
 drop function if exists public.sc19_operator_marketing_consents(text);
 drop function if exists public.sc19_operator_trial_nip_releases();
-drop function if exists public.sc19_operator_release_trial_nip(text,text);
+drop function if exists public.sc19_operator_release_trial_nip(text,text,uuid);
 drop function if exists public.sc19_operator_taken_trial_nips();
 drop function if exists public.marketing_consent_state(uuid);
 drop function if exists public.marketing_consent_withdraw(uuid);
