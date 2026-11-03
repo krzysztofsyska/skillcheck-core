@@ -5,6 +5,7 @@ import { SiteFooter } from "../components/marketing/site-footer";
 import styles from "../marketing.module.css";
 import { loadPublicOffer, preselekcjaOffer, preselekcjaPrice } from "../components/marketing/preselekcja-offer";
 import { sc19PolicyPendingScope } from "../../lib/sc19-package-sizes";
+import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../lib/buy-preselekcja";
 
 // The PRESELEKCJA count follows the SC-019 catalog flag and policy per request,
 // as on the home page.
@@ -48,7 +49,8 @@ export default async function PreselectionOfferPage() {
         </ul>
         <p>Zasady zamówienia, reklamacji i odstąpienia opisuje <Link href="/regulamin">Regulamin</Link>. Dane przetwarzamy zgodnie z <Link href="/polityka-prywatnosci">Polityką prywatności</Link>.</p>
         <div className={styles.actions}>
-          <a className={styles.primary} href={preselectionEmail(scope)}>Poproś o fakturę proforma</a>
+          <Link className={styles.primary} href={BUY_PRESELEKCJA_PATH}>{BUY_PRESELEKCJA_LABEL}</Link>
+          <a className={styles.secondary} href={preselectionEmail(scope)}>Poproś o fakturę proforma</a>
           <Link className={styles.secondary} href="/register">{catalogEnabled ? "Zamów w panelu firmy" : "Załóż konto firmowe"}</Link>
           <Link className={styles.secondary} href="/demo">Zobacz przykładowy raport</Link>
         </div>

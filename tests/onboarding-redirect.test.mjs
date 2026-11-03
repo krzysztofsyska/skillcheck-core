@@ -7,6 +7,7 @@ import * as validation from '../lib/auth-validation.ts';
 import * as authUrl from '../lib/auth-url.ts';
 import * as legal from '../lib/legal.ts';
 import * as marketingConsent from '../lib/marketing-consent.ts';
+import * as nextPath from '../lib/safe-next-path.ts';
 // The real signing module stands in for the 'server-only' wrapper the action
 // imports, so the test exercises the actual HMAC and not a stub.
 import * as consentSigning from '../lib/marketing-consent-signing.ts';
@@ -40,6 +41,7 @@ function load(rpcResult, user = { id: 'u1', email: EMAIL }) {
     '../../lib/auth-validation': validation, '../../lib/auth-url': authUrl, '../../lib/legal': legal,
     '../../lib/marketing-consent': marketingConsent,
     '../../lib/marketing-consent-server': consentSigning,
+    '../../lib/safe-next-path': nextPath,
   };
   mod.require = id => id in mocks ? mocks[id] : require(id);
   mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, path);

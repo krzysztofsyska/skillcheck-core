@@ -34,6 +34,9 @@ export async function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     "/login", "/register", "/forgot-password", "/reset-password", "/onboarding", "/dashboard/:path*", "/operator/:path*",
+    // The purchase route reads the session to decide where to send the visitor:
+    // without a refresh a returning user with an expired token reads as anonymous.
+    "/kup/:path*",
     // Home page only when it carries a Supabase auth fallback, so ordinary visits never reach the proxy.
     { source: "/", has: [{ type: "query", key: "code" }] },
     { source: "/", has: [{ type: "query", key: "error" }] },

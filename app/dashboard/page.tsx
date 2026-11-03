@@ -17,6 +17,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     <p className="lead">Tutaj będziesz zarządzać stanowiskami, rekrutacjami i ocenami kandydatów.</p>
     {message === "logout" && <p role="alert">Wylogowanie nie powiodło się. Spróbuj ponownie.</p>}
     {message === "password-updated" && <p role="status" className="notice">Hasło zostało zmienione.</p>}
+    {message === "owner-required" && <p role="status" className="notice">Pakiet PRESELEKCJA zamawia właściciel firmy. Poproś o to osobę, która założyła firmę w SkillCheck, albo załóż własną firmę.</p>}
     <form action={logout}><SubmitButton>Wyloguj się</SubmitButton></form>
   </section></main>;
 }
