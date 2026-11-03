@@ -46,6 +46,7 @@ export type TrialStore = {
 export type TrialActivationStatus =
   | 'activated'   // FREE granted
   | 'manual'      // registry did not confirm, or automation is off: operator review
+  | 'cooldown'    // asked the registry about this company minutes ago: wait and retry
   | 'taken'       // this NIP or company already used its FREE
   | 'invalid'     // malformed NIP
   | 'failed';     // unexpected error
@@ -102,6 +103,14 @@ export async function activateFreeWithWhitelist(input: {
     { allowed?: unknown; reason?: unknown } | null;
   if (gate.error || !gateRow || gateRow.allowed !== true) {
     const reason = typeof gateRow?.reason === 'string' ? gateRow.reason : null;
+    // COOLDOWN is the one refusal the company can fix by itself, by waiting, so
+    // it is NOT reported as "we will check this by hand": that would send a
+    // company to the contact form for a problem that clears in minutes. The
+    // registry has a low daily quota shared by everyone (lib/mf-whitelist.ts),
+    // which is why a retry loop is slowed down here rather than at the registry.
+    if (reason === 'COOLDOWN') {
+      return Object.freeze({ status: 'cooldown', decision: Object.freeze({ outcome: 'refused', errorCode: reason }) });
+    }
     return Object.freeze({ status: 'manual', decision: Object.freeze({ outcome: 'refused', errorCode: reason }) });
   }
   // Without the server secret nothing after this point can be signed, so the

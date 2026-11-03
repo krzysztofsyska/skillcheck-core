@@ -485,8 +485,17 @@ export type Database = {
         }[];
       };
       // SC-CONSENT-001 (20261103090000): consent to commercial contact.
+      // The source is NOT a parameter: this one always records 'company_panel'.
       marketing_consent_grant: {
-        Args: { target_company: string; consent_version: string; consent_source?: 'registration' | 'company_panel' };
+        Args: { target_company: string; consent_version: string };
+        Returns: string;
+      };
+      // 'registration' is written only here, and only against a server signature.
+      marketing_consent_grant_registration: {
+        Args: {
+          target_company: string; consent_version: string;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
         Returns: string;
       };
       marketing_consent_withdraw: { Args: { target_company: string }; Returns: string };

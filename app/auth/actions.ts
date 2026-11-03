@@ -7,7 +7,7 @@ import { credentials } from "../../lib/auth-validation";
 import { authCallbackUrl } from "../../lib/auth-url";
 import { hasLegalAcceptance, LEGAL_ACCEPTANCE_REVISION, LEGAL_ACCEPTED_DOCUMENTS, LEGAL_VERSION } from "../../lib/legal";
 import { hasMarketingConsent } from "../../lib/marketing-consent";
-import { signedConsentDeclaration, verifiedConsentVersion } from "../../lib/marketing-consent-server";
+import { signedConsentDeclaration, signRegistrationConsentGrant, verifiedConsentVersion } from "../../lib/marketing-consent-server";
 
 export async function login(form: FormData) {
   const input = credentials(form);
@@ -66,10 +66,21 @@ export async function createCompany(form: FormData) {
   // consent the user did not give; the owner can still give it in one click in
   // /dashboard/<id>/zgody. A failure here must not block the company, and
   // nothing is sent anywhere: the consent is only recorded.
+  //
+  // TWO signatures, and both are needed. The snapshot one above proves the user
+  // really ticked the box at sign-up. The one made here proves to the DATABASE
+  // that this grant came through this server path: the RPC no longer takes the
+  // source as a parameter, and 'registration' is written only against a request
+  // signed with the server secret, so an owner calling the Data API himself
+  // cannot have the ledger attribute his consent to registration.
   const consentVersion = verifiedConsentVersion(user.user_metadata, user.email);
-  if (consentVersion && typeof companyId === "string") {
-    const { error: consentError } = await client.rpc("marketing_consent_grant", {
-      target_company: companyId, consent_version: consentVersion, consent_source: "registration",
+  const signedGrant = consentVersion && typeof companyId === "string"
+    ? signRegistrationConsentGrant(companyId, consentVersion) : null;
+  if (consentVersion && signedGrant && typeof companyId === "string") {
+    const { error: consentError } = await client.rpc("marketing_consent_grant_registration", {
+      target_company: companyId, consent_version: consentVersion,
+      request_id: signedGrant.requestId, issued_at_ms: signedGrant.issuedAtMs,
+      request_signature: signedGrant.signature,
     });
     if (consentError) console.warn("marketing_consent_registration_failed", consentError.code ?? "-");
   }

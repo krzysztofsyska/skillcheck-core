@@ -21,8 +21,11 @@ async function change(form: FormData, op: 'grant' | 'withdraw') {
   };
   if (user.id !== company.owner_id) back('failed');
   const { error } = op === 'grant'
+    // No source argument: this RPC always records 'company_panel', which is
+    // where the click happened. The provenance is not something a caller may
+    // name — see public.marketing_consent_grant in the migration.
     ? await client.rpc('marketing_consent_grant', {
-      target_company: companyId, consent_version: MARKETING_CONSENT_VERSION, consent_source: 'company_panel',
+      target_company: companyId, consent_version: MARKETING_CONSENT_VERSION,
     })
     : await client.rpc('marketing_consent_withdraw', { target_company: companyId });
   // marketing_consent_not_active: nothing to withdraw; the state already matches.

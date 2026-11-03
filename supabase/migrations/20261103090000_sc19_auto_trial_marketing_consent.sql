@@ -213,11 +213,15 @@ revoke all on function private.marketing_consent_text(text) from public, anon, a
 -- Signed-request verification
 
 -- HMAC-SHA256 over the request; both sides are compared as digests so the
--- secret-dependent comparison is constant time. `op` separates the three
+-- secret-dependent comparison is constant time. `op` separates the four
 -- operations that share the one secret, so a signature for one can never be
--- replayed as another. 'consent' is NOT in this list on purpose: that signature
--- is verified in Node only (lib/marketing-consent.ts) and must never be
--- presentable to an RPC.
+-- replayed as another. 'consent' is NOT in this list on purpose: that is the
+-- snapshot signature stored in the client-writable user metadata, it is verified
+-- in Node only (lib/marketing-consent.ts) and must never be presentable to an
+-- RPC. 'consent_registration' is a DIFFERENT label and a different payload: it
+-- is the fresh, server-made request that proves to the database that a
+-- registration-sourced consent really came through the server action which
+-- checked that snapshot, so the snapshot signature cannot be replayed as one.
 --
 -- REPLAY WINDOW, EXACTLY WHAT IT IS. The signature is accepted only inside a
 -- +-60 s window, and the nonce insert below makes a SECOND SUCCESSFUL use of the
@@ -236,7 +240,7 @@ declare secret text; expected text;
 begin
   select s.request_secret into secret from private.sc19_trial_auto_settings s where s.singleton;
   if secret is null or octet_length(secret) < 32 then return false; end if;
-  if op is null or op not in ('auto_claim','auto_failure','digest') then return false; end if;
+  if op is null or op not in ('auto_claim','auto_failure','digest','consent_registration') then return false; end if;
   if request_id is null or stamp is null or signature is null or length(signature) > 200 then return false; end if;
   if abs(extract(epoch from clock_timestamp()) * 1000 - stamp::numeric) > 60000 then return false; end if;
   expected := encode(extensions.hmac(concat_ws(E'\n', 'sc19-trial-auto-v1', op, lower(request_id::text), stamp::text,
@@ -280,18 +284,27 @@ revoke all on function private.rotate_sc19_trial_auto_secret(text) from public, 
 --
 -- The account's NIP is the FIRST one whose check actually reached the registry,
 -- or the NIP of its approval. Refusals decided locally before the registry
--- (AUTO_DISABLED, NIP_TAKEN, ANOTHER_NIP_TRIED) do NOT claim the slot: the
--- automat being off, or a mistyped NIP bouncing off this very rule, must not
--- lock an account out of the one NIP it is entitled to check. Once the slot is
--- taken, that NIP stays retryable for ever — an outage must not burn the
--- attempt — and every other NIP is refused.
+-- (AUTO_DISABLED, NIP_TAKEN, ANOTHER_NIP_TRIED, COOLDOWN) do NOT claim the slot:
+-- the automat being off, a mistyped NIP bouncing off this very rule, or a
+-- too-soon retry must not lock an account out of the one NIP it is entitled to
+-- check. Once the slot is taken, that NIP stays retryable for ever — an outage
+-- must not burn the attempt — and every other NIP is refused.
+-- How long a company waits after a registry-reaching attempt that did not grant,
+-- before the automatic path will spend another call on it. One place, so the
+-- precheck and the test read the same number. Five minutes: long enough that a
+-- frustrated retry loop cannot drain the daily quota, short enough that nobody
+-- gives up on a transient outage.
+create function private.sc19_auto_free_cooldown()
+returns interval language sql immutable set search_path='' as $$ select interval '5 minutes' $$;
+revoke all on function private.sc19_auto_free_cooldown() from public, anon, authenticated;
+
 create function private.sc19_auto_free_other_nip_tried(target_company uuid, normalized text)
 returns boolean language plpgsql stable security definer set search_path='' as $$
 declare claimed text;
 begin
   select c.nip into claimed from private.sc19_trial_auto_checks c
     where c.company_id=target_company
-      and coalesce(c.error_code,'') not in ('AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED')
+      and coalesce(c.error_code,'') not in ('AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED','COOLDOWN')
     order by c.checked_at, c.id limit 1;
   if claimed is null then
     select a.nip into claimed from private.sc19_trial_approvals a where a.company_id=target_company;
@@ -310,6 +323,19 @@ revoke all on function private.sc19_auto_free_other_nip_tried(uuid,text) from pu
 --
 -- The refusal row is written once per (company, NIP, reason), so repeated
 -- submissions cannot inflate the audit table.
+--
+-- COOLDOWN (review finding, bot 2026-11-03). Everything above stops a SECOND
+-- NIP; nothing stopped the SAME NIP being resubmitted over and over after the
+-- registry refused it or did not answer, and every resubmission spent another
+-- call against a public, keyless registry with a low daily quota — so one
+-- company retrying in frustration could exhaust the quota every other company
+-- needs that day. A registry-reaching attempt that did not end in a grant now
+-- puts this company on a short cooldown. It is deliberately SHORT (minutes, not
+-- hours): the usual reason to retry is a transient outage, and a legitimate
+-- company must never be locked out, only slowed down. The cooldown refusal does
+-- NOT claim the one-NIP slot (see the exclusion list above), so it cannot turn
+-- into a permanent block, and the company is told in plain Polish to try again
+-- in a few minutes.
 create function public.sc19_auto_free_precheck(target_company uuid, supplied_nip text)
 returns table(allowed boolean, reason text)
 language plpgsql volatile security definer set search_path='' as $$
@@ -335,6 +361,17 @@ begin
     -- Taken by SOMEONE ELSE. This company's own rows are not a refusal: asking
     -- again for the NIP it already holds is idempotent, not a second attempt.
     refusal := 'NIP_TAKEN';
+  elsif exists (
+    select 1 from private.sc19_trial_auto_checks c
+    where c.company_id=target_company
+      and c.outcome <> 'granted'
+      -- Only attempts that actually reached the Ministry of Finance registry
+      -- count: a locally decided refusal spent no quota, so it must not delay
+      -- the company's first real attempt.
+      and coalesce(c.error_code,'') not in ('AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED','COOLDOWN')
+      and c.checked_at > now() - private.sc19_auto_free_cooldown()
+  ) then
+    refusal := 'COOLDOWN';
   end if;
   if refusal is null then return query select true, null::text; return; end if;
   perform private.sc19_lock_company(target_company);
@@ -616,20 +653,23 @@ grant execute on function public.sc19_operator_trial_nip_releases() to authentic
 -- ---------------------------------------------------------------------------
 -- Part B: consent
 
--- Grants consent for the company. The wording is read from the database for the
--- named version; the caller cannot supply it. Re-granting an already active
--- consent appends nothing and returns the time of the consent in force.
-create function public.marketing_consent_grant(target_company uuid, consent_version text, consent_source text default 'company_panel')
+-- The one place that appends a 'granted' row, shared by the two public entry
+-- points below. PRIVATE on purpose: `source` is the provenance of the consent —
+-- the proof of WHERE the customer gave it — so no caller reachable through the
+-- Data API may name it. The wording is read from the database for the named
+-- version; the caller cannot supply it. Re-granting an already active consent
+-- appends nothing and returns the time of the consent in force.
+--
+-- The authorization of the caller is NOT done here: each entry point does its
+-- own, because the two are different (owner alone for the panel, owner plus a
+-- server signature for registration).
+create function private.marketing_consent_record(target_company uuid, consent_version text, consent_source text, actor uuid)
 returns timestamptz language plpgsql volatile security definer set search_path='' as $$
 declare
-  actor uuid := (select auth.uid());
   wording text;
   latest private.marketing_consent_events;
   granted_at timestamptz;
 begin
-  if actor is null or not private.is_company_owner(target_company) then
-    raise exception 'sc19_company_forbidden' using errcode='42501';
-  end if;
   if consent_source is null or consent_source not in ('registration','company_panel') then
     raise exception 'marketing_consent_invalid_source' using errcode='22023';
   end if;
@@ -649,8 +689,70 @@ begin
   return granted_at;
 end;
 $$;
-revoke all on function public.marketing_consent_grant(uuid,text,text) from public, anon, authenticated;
-grant execute on function public.marketing_consent_grant(uuid,text,text) to authenticated;
+revoke all on function private.marketing_consent_record(uuid,text,text,uuid) from public, anon, authenticated;
+
+-- The company's own one-click grant in /dashboard/<id>/zgody. It takes NO source
+-- argument: the source is always 'company_panel', because that is literally
+-- where this call comes from.
+--
+-- WHY THE SOURCE IS NOT A PARAMETER (review finding, bot 2026-11-03). This RPC
+-- is executable by every signed-in user through the Data API. While it accepted
+-- a source string and only checked it against a whitelist, an owner could call
+-- it with consent_source='registration' and have the append-only ledger certify
+-- that the consent was given at sign-up even when no signed registration
+-- snapshot ever existed. The whole point of the ledger is to be the proof that
+-- the customer gave the consent and where, so a forgeable provenance destroys
+-- it. A registration-sourced row is now written only by
+-- public.marketing_consent_grant_registration below, which demands a signature
+-- made with the server-held secret.
+create function public.marketing_consent_grant(target_company uuid, consent_version text)
+returns timestamptz language plpgsql volatile security definer set search_path='' as $$
+declare actor uuid := (select auth.uid());
+begin
+  if actor is null or not private.is_company_owner(target_company) then
+    raise exception 'sc19_company_forbidden' using errcode='42501';
+  end if;
+  return private.marketing_consent_record(target_company, consent_version, 'company_panel', actor);
+end;
+$$;
+revoke all on function public.marketing_consent_grant(uuid,text) from public, anon, authenticated;
+grant execute on function public.marketing_consent_grant(uuid,text) to authenticated;
+
+-- The registration-time consent, bound to the new company by the server action
+-- that created it (app/auth/actions.ts createCompany). TWO independent gates,
+-- neither of which alone is enough:
+--
+--   * the caller is still the signed-in company OWNER, exactly as for the panel;
+--   * the request carries a fresh HMAC made with the server-held secret under
+--     the label 'consent_registration', over this company id and this version.
+--
+-- The second gate is what makes 'registration' unforgeable from the Data API: a
+-- browser never sees the secret, so only code running on our server — which has
+-- just verified the signed sign-up snapshot in Node — can produce a request the
+-- database accepts. The signature covers the company and the version, so one
+-- accepted request cannot be replayed for another company or another wording,
+-- and the shared nonce table makes a second successful use of the same request
+-- id fail.
+create function public.marketing_consent_grant_registration(
+  target_company uuid, consent_version text,
+  request_id uuid, issued_at_ms bigint, request_signature text)
+returns timestamptz language plpgsql volatile security definer set search_path='' as $$
+declare
+  actor uuid := (select auth.uid());
+  payload text;
+begin
+  if actor is null or not private.is_company_owner(target_company) then
+    raise exception 'sc19_company_forbidden' using errcode='42501';
+  end if;
+  payload := concat_ws(E'\n', lower(target_company::text), coalesce(consent_version,''));
+  if not private.sc19_trial_auto_verify_signature('consent_registration', request_id, issued_at_ms, payload, request_signature) then
+    raise exception 'marketing_consent_unsigned_registration' using errcode='42501';
+  end if;
+  return private.marketing_consent_record(target_company, consent_version, 'registration', actor);
+end;
+$$;
+revoke all on function public.marketing_consent_grant_registration(uuid,text,uuid,bigint,text) from public, anon, authenticated;
+grant execute on function public.marketing_consent_grant_registration(uuid,text,uuid,bigint,text) to authenticated;
 
 -- One-click withdrawal. Appends a 'withdrawn' row carrying the version and the
 -- wording that was in force, and the time of withdrawal. The grant row stays.

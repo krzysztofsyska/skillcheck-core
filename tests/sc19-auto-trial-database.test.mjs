@@ -39,6 +39,16 @@ async function ready(t, { enabled = true, secret = SECRET } = {}) {
   return { db, h, a, b };
 }
 
+/** The three extra arguments public.marketing_consent_grant_registration needs,
+ * built exactly as signRegistrationConsentGrant() in
+ * lib/marketing-consent-signing.ts builds them — so the test proves the two
+ * sides agree on the payload, not just that each is self-consistent. */
+function registrationGrant(companyId, version) {
+  const requestId = randomUUID(), issuedAtMs = Date.now();
+  const payload = [companyId.toLowerCase(), version].join('\n');
+  return [requestId, issuedAtMs, signTrialAuto('consent_registration', requestId, issuedAtMs, payload, SECRET)];
+}
+
 /** Calls the RPC the way lib/sc19-trial-auto-flow.ts does. */
 function autoClaim(db, companyId, nipValue, mf = {}) {
   const requestId = randomUUID(), issuedAtMs = Date.now();
@@ -155,10 +165,12 @@ test('one account may only try one NIP automatically, and the database enforces 
   assert.equal(direct.outcome, 'refused');
   assert.equal(direct.reason, 'ANOTHER_NIP_TRIED');
 
-  // Retrying the SAME NIP is still allowed, even after the mistaken second one:
-  // an outage, or a NIP that bounced off this very rule, must not burn the one
-  // attempt the account is entitled to.
-  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null });
+  // The SAME NIP is not burned by the mistaken second one — an outage, or a NIP
+  // that bounced off this very rule, must not cost the one attempt the account
+  // is entitled to. What it does get is the short cooldown, because the registry
+  // was just asked about this company (see the cooldown test for the whole
+  // story): the reason is COOLDOWN, never ANOTHER_NIP_TRIED or NIP_TAKEN.
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'COOLDOWN' });
 
   await h.asAdmin();
   assert.equal((await call(db, 'select count(*)::int n from private.sc19_balances'))[0].n, 0);
@@ -230,6 +242,65 @@ test('a registry refusal and an outage are both recorded, under their own op lab
     { outcome: 'unavailable', error_code: 'WHITELIST_TIMEOUT' },
   ]);
   assert.equal((await call(db, 'select count(*)::int n from private.sc19_balances'))[0].n, 0, 'nothing was granted');
+});
+
+test('a company that just failed at the registry waits before it may ask again', async t => {
+  // THE PROBLEM (bot review finding, 2026-11-03). The Ministry of Finance
+  // registry is public, keyless and has a low daily quota shared by every
+  // company. Before this, an owner whose NIP the registry refused — or who hit
+  // an outage — could resubmit the form endlessly, and every submission spent
+  // another call, so one company could drain the day's quota for all the others.
+  const { db, h, a, b } = await ready(t);
+  await h.asUser(users.owner);
+  const fail = (outcome, failureCode) => {
+    const requestId = randomUUID(), issuedAtMs = Date.now();
+    const payload = [a.companyId.toLowerCase(), nipA, outcome, failureCode].join('\n');
+    return db.query('select public.sc19_auto_record_failure($1,$2,$3,$4,$5,$6,$7)',
+      [a.companyId, nipA, outcome, failureCode, requestId, issuedAtMs,
+        signTrialAuto('auto_failure', requestId, issuedAtMs, payload, SECRET)]);
+  };
+
+  // The first attempt is open: nothing has been asked yet.
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null });
+
+  // AN OLD FAILURE DOES NOT THROTTLE: the cooldown expires, so it can never
+  // become a permanent block. The audit table is append-only (an UPDATE raises
+  // 'Immutable contact history'), so the aged row is inserted aged.
+  await h.asAdmin();
+  await db.query(`insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code,checked_at)
+    values($1,$2,'unavailable','WHITELIST_TIMEOUT', now() - private.sc19_auto_free_cooldown() - interval '1 minute')`,
+    [a.companyId, nipA]);
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null },
+    'an attempt older than the cooldown is retryable');
+
+  // A FRESH registry failure throttles the next submission, so the registry is
+  // not asked again — for an outage and for a registry refusal alike.
+  await fail('refused', 'NIP_NOT_FOUND');
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'COOLDOWN' });
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'COOLDOWN' });
+
+  // Another company is unaffected: the cooldown is per account, not global, so
+  // one company's retry loop cannot stop anybody else activating FREE.
+  await h.asUser(users.otherOwner);
+  assert.deepEqual(await precheck(db, b.companyId, nipB), { allowed: true, reason: null });
+
+  // AND NOTHING WAS BURNED. The one-NIP-per-account slot is still this NIP, so
+  // the company is only slowed down, never locked out — and the cooldown gates
+  // the registry call, never the grant: a confirmed answer still activates FREE.
+  await h.asAdmin();
+  assert.equal((await call(db, 'select private.sc19_auto_free_other_nip_tried($1,$2) v', [a.companyId, nipA]))[0].v, false);
+  assert.equal((await call(db, 'select private.sc19_auto_free_other_nip_tried($1,$2) v', [a.companyId, nipB]))[0].v, true);
+  await h.asUser(users.owner);
+  assert.equal((await autoClaim(db, a.companyId, nipA)).outcome, 'granted');
+
+  // The COOLDOWN audit row is written once per (company, NIP), not once per
+  // resubmission, so a retry loop cannot inflate the audit table either.
+  await h.asAdmin();
+  assert.equal((await call(db,
+    "select count(*)::int n from private.sc19_trial_auto_checks where company_id=$1 and error_code='COOLDOWN'",
+    [a.companyId]))[0].n, 1, 'repeats do not inflate the audit table');
+  assert.ok(nipC, 'the third synthetic NIP stays unused here');
 });
 
 test('the operator can release an occupied NIP so the real company can use FREE', async t => {
@@ -513,7 +584,8 @@ test('the operator sees every automatic check, not only the grants', async t => 
 test('consent is granted, withdrawn and granted again, and history is never rewritten', async t => {
   const { db, h, a } = await ready(t);
   await h.asUser(users.owner);
-  const first = (await call(db, "select public.marketing_consent_grant($1,'marketing-1.0','registration') at", [a.companyId]))[0].at;
+  const first = (await call(db, "select public.marketing_consent_grant_registration($1,'marketing-1.0',$2,$3,$4) at",
+    [a.companyId, ...registrationGrant(a.companyId, 'marketing-1.0')]))[0].at;
   assert.ok(first instanceof Date);
   let state = (await call(db, 'select * from public.marketing_consent_state($1)', [a.companyId]))[0];
   assert.equal(state.event, 'granted');
@@ -556,9 +628,71 @@ test('consent wording cannot be supplied by the caller, and unknown versions are
   // There is no parameter for the text at all, and an unknown version is refused.
   await assert.rejects(db.query("select public.marketing_consent_grant($1,'marketing-9.9')", [a.companyId]), code('22023'));
   await assert.rejects(db.query("select public.marketing_consent_grant($1,'')", [a.companyId]), code('22023'));
-  await assert.rejects(db.query("select public.marketing_consent_grant($1,'marketing-1.0','operator')", [a.companyId]), code('22023'));
+  // And no parameter for the SOURCE either: the three-argument form that used to
+  // accept one does not exist (42883 = undefined_function).
+  await assert.rejects(db.query("select public.marketing_consent_grant($1,'marketing-1.0','operator')", [a.companyId]), code('42883'));
+  await assert.rejects(db.query("select public.marketing_consent_grant($1,'marketing-1.0','registration')", [a.companyId]), code('42883'));
   await h.asAdmin();
   assert.equal((await call(db, 'select count(*)::int n from private.marketing_consent_events'))[0].n, 0);
+});
+
+test('a signed-in owner cannot pass his own consent off as given at registration', async t => {
+  // THE ATTACK (bot review finding, 2026-11-03). Verifying the sign-up snapshot
+  // in Node was not enough: public.marketing_consent_grant is executable by every
+  // signed-in user through the Data API, and while it took the source as a
+  // parameter and only whitelisted the string, an owner could call it with
+  // consent_source='registration' with no snapshot at all. The append-only
+  // ledger is the proof of WHERE the customer gave the consent (art. 7(1) GDPR),
+  // so a forgeable provenance destroys the whole record.
+  const { db, h, a } = await ready(t);
+  await h.asUser(users.owner);
+  const signed = registrationGrant(a.companyId, 'marketing-1.0');
+
+  // Without a valid server signature, 'registration' cannot be written at all.
+  const unsigned = [
+    ['no signature', [randomUUID(), Date.now(), '0'.repeat(64)]],
+    ['an invented signature', [randomUUID(), Date.now(), 'f'.repeat(64)]],
+    ['an empty signature', [randomUUID(), Date.now(), '']],
+    // A signature for another operation sharing the same secret is not this one.
+    ['a claim signature', (() => { const id = randomUUID(), at = Date.now();
+      return [id, at, signTrialAuto('auto_claim', id, at, [a.companyId, 'marketing-1.0'].join('\n'), SECRET)]; })()],
+    // The snapshot label is deliberately outside the database's whitelist.
+    ['a snapshot signature', (() => { const id = randomUUID(), at = Date.now();
+      return [id, at, signTrialAuto('consent', id, at, [a.companyId, 'marketing-1.0'].join('\n'), SECRET)]; })()],
+    // Valid signature, but for a different company and a different version.
+    ['another company', registrationGrant(randomUUID(), 'marketing-1.0')],
+    ['another version', registrationGrant(a.companyId, 'marketing-9.9')],
+    // Outside the 60 s window.
+    ['an expired request', (() => { const id = randomUUID(), at = Date.now() - 10 * 60 * 1000;
+      return [id, at, signTrialAuto('consent_registration', id, at, [a.companyId, 'marketing-1.0'].join('\n'), SECRET)]; })()],
+  ];
+  for (const [label, args] of unsigned) {
+    await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5)',
+      [a.companyId, 'marketing-1.0', ...args]), code('42501'), label);
+  }
+  await h.asAdmin();
+  assert.equal((await call(db, 'select count(*)::int n from private.marketing_consent_events'))[0].n, 0,
+    'not one forged provenance reached the ledger');
+
+  // A signature is not a substitute for being the owner either.
+  for (const who of [users.recruiter, users.otherOwner]) {
+    await h.asUser(who);
+    await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5)',
+      [a.companyId, 'marketing-1.0', ...registrationGrant(a.companyId, 'marketing-1.0')]), code('42501'), who);
+  }
+  await h.asUser(null, 'anon');
+  await assert.rejects(db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5)',
+    [a.companyId, 'marketing-1.0', ...signed]), code('42501'), 'anon');
+
+  // THE LEGITIMATE PATH STILL WORKS: owner plus a fresh server signature.
+  await h.asUser(users.owner);
+  const at = (await call(db, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5) at',
+    [a.companyId, 'marketing-1.0', ...registrationGrant(a.companyId, 'marketing-1.0')]))[0].at;
+  assert.ok(at instanceof Date);
+  await h.asAdmin();
+  const rows = await call(db, 'select event,source from private.marketing_consent_events where company_id=$1', [a.companyId]);
+  assert.deepEqual(rows, [{ event: 'granted', source: 'registration' }]);
+  assert.ok(signed.length === 3, 'the signed request is three values: id, time, HMAC');
 });
 
 test('only the owner changes consent; members may read it; outsiders may not', async t => {
@@ -667,7 +801,8 @@ const PUBLIC_RPCS = Object.freeze({
   'public.sc19_operator_taken_trial_nips()': ['authenticated'],
   'public.sc19_operator_release_trial_nip(text,text)': ['authenticated'],
   'public.sc19_operator_trial_nip_releases()': ['authenticated'],
-  'public.marketing_consent_grant(uuid,text,text)': ['authenticated'],
+  'public.marketing_consent_grant(uuid,text)': ['authenticated'],
+  'public.marketing_consent_grant_registration(uuid,text,uuid,bigint,text)': ['authenticated'],
   'public.marketing_consent_withdraw(uuid)': ['authenticated'],
   'public.marketing_consent_state(uuid)': ['authenticated'],
   'public.sc19_operator_marketing_consents(text)': ['authenticated'],
@@ -708,6 +843,7 @@ test('the signed functions that write are declared volatile', async t => {
     'public.sc19_auto_record_failure(uuid,text,text,text,uuid,bigint,text)',
     'public.sc19_auto_free_precheck(uuid,text)',
     'public.sc19_operator_release_trial_nip(text,text)',
+    'public.marketing_consent_grant_registration(uuid,text,uuid,bigint,text)',
     'private.rotate_sc19_trial_auto_secret(text)',
   ]) {
     assert.equal((await call(db, 'select provolatile from pg_proc where oid=$1::regprocedure', [fn]))[0].provolatile,
@@ -744,6 +880,8 @@ test('the new private tables are unreachable from the Data API roles', async t =
   for (const fn of ['private.marketing_consent_text(text)',
     'private.sc19_trial_auto_verify_signature(text,uuid,bigint,text,text)',
     'private.rotate_sc19_trial_auto_secret(text)',
+    'private.marketing_consent_record(uuid,text,text,uuid)',
+    'private.sc19_auto_free_cooldown()',
     'private.sc19_auto_free_other_nip_tried(uuid,text)']) {
     for (const role of ['anon', 'authenticated']) {
       assert.equal((await call(db, 'select has_function_privilege($1,$2,$3) v', [role, fn, 'execute']))[0].v, false, `${role} ${fn}`);

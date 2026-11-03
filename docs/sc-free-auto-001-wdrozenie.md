@@ -103,6 +103,11 @@ odrzucana.
    działa, po wycofaniu widać datę.
 5. Następnego dnia po 19:00: jeden e-mail z liczbami na adres z
    `SC19_DIGEST_RECIPIENT`.
+6. NIP, którego wykaz nie potwierdził, od razu drugi raz → komunikat „odczekaj
+   około 5 minut i spróbuj ponownie". Tak ma być: wykaz Ministerstwa Finansów ma
+   niski dzienny limit zapytań wspólny dla wszystkich firm, więc nie pytamy o tę
+   samą firmę kilka razy pod rząd. Po tych kilku minutach ta sama firma może
+   spróbować jeszcze raz i normalnie dostać FREE — to spowolnienie, nie blokada.
 
 ## 7. Co zrobić, gdy ktoś zajmie NIP cudzej firmy
 

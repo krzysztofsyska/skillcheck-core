@@ -16,6 +16,12 @@ const notices: Record<string,string> = {
   // "the request went for checking" while the panel offers no way to reach us
   // was the whole complaint.
   manual: '',
+  // SC-FREE-AUTO-001: the registry was asked about this firm a few minutes ago
+  // and did not confirm it. Waiting is the fix, so the company is told to wait
+  // rather than sent to the contact form.
+  cooldown: 'Sprawdzaliśmy ten NIP w wykazie podatników VAT kilka minut temu i nie udało się go potwierdzić. '
+    + 'Odczekaj około 5 minut i spróbuj ponownie. Wykaz Ministerstwa Finansów ma dzienny limit zapytań, '
+    + 'który dzielimy ze wszystkimi firmami, dlatego nie pytamy o tę samą firmę kilka razy pod rząd.',
   verify: 'Przed aktywacją FREE wymagamy weryfikacji firmy. Wyślij zgłoszenie przez formularz kontaktowy.',
   forbidden: 'Darmową pulę może aktywować tylko właściciel firmy.',
 };

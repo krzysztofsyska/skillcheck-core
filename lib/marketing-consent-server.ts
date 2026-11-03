@@ -4,4 +4,7 @@ import 'server-only';
  * guard so that tests can exercise it directly; this module is what application
  * code imports, and the guard keeps the server secret it reads out of any client
  * bundle. Same split as ./sc19-trial-auto-server.ts. */
-export { signedConsentDeclaration, verifiedConsentVersion } from './marketing-consent-signing.ts';
+export {
+  signedConsentDeclaration, signRegistrationConsentGrant, verifiedConsentVersion,
+} from './marketing-consent-signing.ts';
+export type { RegistrationConsentRequest } from './marketing-consent-signing.ts';

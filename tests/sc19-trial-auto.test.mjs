@@ -12,6 +12,7 @@ const SECRET = 'x'.repeat(32);
 const COMPANY = '20000000-0000-4000-8000-000000000001';
 // Checksum-valid synthetic NIP; no real company is addressed by these tests.
 const NIP = '1234563218';
+const billingPage = readFileSync(new URL('../app/dashboard/[companyId]/billing/page.tsx', import.meta.url), 'utf8');
 
 const record = (overrides = {}) => ({
   nip: NIP, name: 'FIRMA TESTOWA SP Z OO', statusVat: 'Czynny',
@@ -174,6 +175,22 @@ test('the precheck closes the automatic path before the registry quota is spent'
   const result = await activateFreeWithWhitelist({ store: broken, companyId: COMPANY, nip: NIP, env: env(), fetchImpl: fetchNever });
   assert.equal(result.status, 'manual');
   assert.equal(broken.calls.some(call => call[0] === 'autoClaim'), false);
+});
+
+test('a repeated check of the same company is throttled, not sent to the registry again', async () => {
+  // The Ministry of Finance registry is public, keyless and has a low daily
+  // quota shared by every company. Without this, one owner resubmitting the
+  // form after a refusal or an outage spent another call every time and could
+  // drain the day's quota for everyone else.
+  const s = store({ claim: NEEDS_VERIFICATION, precheck: [{ allowed: false, reason: 'COOLDOWN' }] });
+  const result = await activateFreeWithWhitelist({ store: s, companyId: COMPANY, nip: NIP, env: env(), fetchImpl: fetchNever });
+  assert.deepEqual(s.calls.map(call => call[0]), ['claim', 'precheck'], 'the registry is never called');
+  assert.equal(result.decision.errorCode, 'COOLDOWN');
+  // Its own status, NOT 'manual': waiting fixes this, so the company is told to
+  // wait instead of being sent to the contact form for a manual check.
+  assert.equal(result.status, 'cooldown');
+  assert.match(billingPage, /cooldown: 'Sprawdzaliśmy ten NIP/, 'the panel has a plain-Polish notice for it');
+  assert.match(billingPage, /spróbuj ponownie/, 'and it says the retry is possible');
 });
 
 test('a register failure, timeout or rate limit grants nothing', async () => {

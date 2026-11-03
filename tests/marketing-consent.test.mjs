@@ -5,10 +5,13 @@ import {
   MARKETING_CONSENT_FIELD, MARKETING_CONSENT_TEXT, MARKETING_CONSENT_VALUE, MARKETING_CONSENT_VERSION,
   declaredMarketingConsent, hasMarketingConsent, isMarketingConsentActive, marketingConsentDeclaration,
 } from '../lib/marketing-consent.ts';
-import { signedConsentDeclaration, verifiedConsentVersion } from '../lib/marketing-consent-signing.ts';
+import {
+  signRegistrationConsentGrant, signedConsentDeclaration, verifiedConsentVersion,
+} from '../lib/marketing-consent-signing.ts';
 
 /** A server secret only this test knows; nothing is read from the environment. */
 const ENV = { SC19_TRIAL_AUTO_SECRET: 's'.repeat(32) };
+const COMPANY = '11111111-2222-3333-4444-555555555555';
 
 const migration = readFileSync(new URL('../supabase/migrations/20261103090000_sc19_auto_trial_marketing_consent.sql', import.meta.url), 'utf8');
 const registerPage = readFileSync(new URL('../app/register/page.tsx', import.meta.url), 'utf8');
@@ -125,13 +128,46 @@ test('a consent the user wrote into their own metadata is NOT recorded', () => {
   // The consent label is not one the database accepts, so a consent signature
   // can never be presented to an RPC.
   assert.doesNotMatch(migration, /not in \('auto_claim','auto_failure','digest','consent'\)/);
-  assert.match(migration, /op not in \('auto_claim','auto_failure','digest'\)/);
+  assert.match(migration, /op not in \('auto_claim','auto_failure','digest','consent_registration'\)/);
+  // 'consent_registration' is a DIFFERENT label over a DIFFERENT payload (the
+  // company id and the version, not the snapshot), so the client-writable
+  // snapshot signature still cannot be presented to the RPC.
+  assert.notEqual(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, ENV).signature,
+    signedConsentDeclaration(true, 'firma@przyklad.pl', ENV).sig);
+});
+
+test('the registration grant request is signed per company and version, or not made at all', () => {
+  const a = signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, ENV);
+  assert.match(a.signature, /^[0-9a-f]{64}$/);
+  assert.match(a.requestId, /^[0-9a-f-]{36}$/);
+  // A fresh request id every time, so the database's nonce table makes a second
+  // successful use of one request fail.
+  assert.notEqual(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, ENV).requestId, a.requestId);
+  // The company and the version are inside the signature: one accepted request
+  // cannot be replayed for another company or another wording.
+  const fixed = { requestId: a.requestId, issuedAtMs: a.issuedAtMs };
+  const again = (company, version) => signRegistrationConsentGrant(company, version, ENV);
+  assert.notEqual(again('99999999-2222-3333-4444-555555555555', MARKETING_CONSENT_VERSION).signature, a.signature);
+  assert.notEqual(again(COMPANY, 'marketing-9.9').signature, a.signature);
+  assert.ok(fixed.issuedAtMs > 0);
+  // No secret, no request: then nothing is recorded as a registration consent
+  // and the owner gives it in the panel instead.
+  assert.equal(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, {}), null);
+  assert.equal(signRegistrationConsentGrant(COMPANY, MARKETING_CONSENT_VERSION, { SC19_TRIAL_AUTO_SECRET: 'zbyt-krotki' }), null);
 });
 
 test('registration signs the snapshot and verifies it before recording, and sends nothing', () => {
   assert.match(authActions, /marketing_consent: signedConsentDeclaration\(hasMarketingConsent\(form\), input\.email\)/);
-  assert.match(authActions, /marketing_consent_grant/);
-  assert.match(authActions, /consent_source: "registration"/);
+  // The source is not a parameter of either RPC any more: 'registration' is
+  // written only by the signed function, so a signed-in owner calling the Data
+  // API cannot have the ledger attribute his consent to sign-up.
+  assert.match(authActions, /marketing_consent_grant_registration/);
+  assert.doesNotMatch(authActions, /consent_source/);
+  assert.match(authActions, /request_signature: signedGrant\.signature/);
+  assert.match(migration, /create function public\.marketing_consent_grant\(target_company uuid, consent_version text\)\n/);
+  const registration = migration.slice(migration.indexOf('function public.marketing_consent_grant_registration'));
+  assert.match(registration.slice(0, registration.indexOf('$$;')),
+    /sc19_trial_auto_verify_signature\('consent_registration'/, 'the signature is verified in the database');
   // Only a verified snapshot's version crosses into the ledger call.
   assert.match(authActions, /verifiedConsentVersion\(user\.user_metadata, user\.email\)/);
   assert.doesNotMatch(authActions, /declaredMarketingConsent\(/, 'the unverified reader is not used by the action');
@@ -151,7 +187,7 @@ test('withdrawal is one click, appends, and is owner-only', () => {
   assert.doesNotMatch(consentPage, /<input (?!type="hidden")/, 'the panel asks for nothing to be typed');
   assert.match(consentActions, /user\.id !== company\.owner_id/, 'only the owner may change consent');
   // Appending, not overwriting: the SQL inserts, and nothing updates or deletes.
-  const grant = migration.slice(migration.indexOf('function public.marketing_consent_grant'), migration.indexOf('function public.marketing_consent_state'));
+  const grant = migration.slice(migration.indexOf('function private.marketing_consent_record'), migration.indexOf('function public.marketing_consent_state'));
   assert.match(grant, /insert into private\.marketing_consent_events/);
   assert.doesNotMatch(grant, /update private\.marketing_consent_events|delete from private\.marketing_consent_events/);
   assert.match(migration, /create trigger immutable_history before update or delete on private\.marketing_consent_events/);

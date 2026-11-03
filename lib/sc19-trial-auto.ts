@@ -98,8 +98,15 @@ export type TrialAutoSignatureInput = Readonly<{
  * by the number of payload lines; separate labels make the separation explicit.
  * `consent` is verified in Node only (lib/marketing-consent.ts) and is
  * deliberately NOT in the database's whitelist, so a consent signature can
- * never be presented to any RPC. */
-export type TrialAutoOp = 'auto_claim' | 'auto_failure' | 'digest' | 'consent';
+ * never be presented to any RPC.
+ *
+ * `consent_registration` is the opposite direction and a separate label: it is
+ * the fresh request the server action makes AFTER it has verified the `consent`
+ * snapshot, and it is what proves to the database that a registration-sourced
+ * consent came through our server rather than straight from a browser. Keeping
+ * the two labels apart is what stops the client-writable snapshot signature
+ * being presented to the RPC. */
+export type TrialAutoOp = 'auto_claim' | 'auto_failure' | 'digest' | 'consent' | 'consent_registration';
 
 /** `payload` is the operation's own canonical tail, hashed so the signed string
  * has a fixed shape whatever the operation carries. */

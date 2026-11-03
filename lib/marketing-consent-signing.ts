@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { signTrialAuto, trialAutoEnabled } from './sc19-trial-auto.ts';
 import {
   declaredMarketingConsent, marketingConsentDeclaration, type MarketingConsentDeclaration,
@@ -18,9 +18,20 @@ import {
  * SAME SECRET, OWN LABEL. It is the one server secret used by the rest of this
  * change, SC19_TRIAL_AUTO_SECRET, under the operation label 'consent'. That
  * label is deliberately NOT in the database's whitelist
- * (private.sc19_trial_auto_verify_signature accepts only auto_claim,
- * auto_failure and digest), so a signature produced here can never be presented
- * to an RPC, and no RPC signature can be replayed as a consent.
+ * (private.sc19_trial_auto_verify_signature accepts auto_claim, auto_failure,
+ * digest and consent_registration), so the snapshot signature can never be
+ * presented to an RPC, and no RPC signature can be replayed as a snapshot.
+ *
+ * AND THE SECOND SIGNATURE, FOR THE DATABASE. Verifying the snapshot in Node was
+ * not enough on its own: public.marketing_consent_grant used to take the source
+ * as a parameter and was executable by any signed-in user, so an owner could
+ * call it through the Data API with consent_source='registration' and have the
+ * append-only ledger certify a sign-up consent that never happened (bot review
+ * finding, 2026-11-03). The source is no longer a parameter of that RPC at all;
+ * a registration-sourced row is written only by
+ * public.marketing_consent_grant_registration, which verifies the request
+ * signTrialAuto('consent_registration', ...) below produces. A browser never
+ * holds the secret, so only this server path can record that provenance.
  *
  * FAIL-CLOSED. No secret configured means no snapshot can be signed and none can
  * be verified, so no registration consent is ever recorded. The company owner
@@ -69,5 +80,27 @@ export function verifiedConsentVersion(metadata: unknown, subject: string | null
       const reference = Buffer.from(expected, 'utf8');
       return supplied.length === reference.length && timingSafeEqual(supplied, reference);
     },
+  });
+}
+
+/** What a registration-sourced consent must carry so the database will accept
+ * the provenance: a fresh request id, the time, and an HMAC over this company
+ * and this version. Mirrors the payload rebuilt in
+ * public.marketing_consent_grant_registration exactly. Null when no secret is
+ * configured — then no registration consent is recorded at all, and the owner
+ * gives it in one click in the company panel instead. */
+export type RegistrationConsentRequest = Readonly<{
+  requestId: string; issuedAtMs: number; signature: string;
+}>;
+
+export function signRegistrationConsentGrant(companyId: string, version: string,
+  env: NodeJS.ProcessEnv = process.env, now?: Date): RegistrationConsentRequest | null {
+  const key = secret(env);
+  if (!key) return null;
+  const requestId = randomUUID(), issuedAtMs = (now ?? new Date()).getTime();
+  const payload = [companyId.toLowerCase(), version].join('\n');
+  return Object.freeze({
+    requestId, issuedAtMs,
+    signature: signTrialAuto('consent_registration', requestId, issuedAtMs, payload, key),
   });
 }

@@ -71,12 +71,19 @@ async function createWith(user, rpcResult = { data: id, error: null }) {
 
 test('a ticked marketing consent is recorded against the new company', async () => {
   const calls = await createWith({ id: 'u1', email: EMAIL, user_metadata: { marketing_consent: signed(true) } });
-  assert.deepEqual(calls.map(([name]) => name), ['ensure_initial_company', 'marketing_consent_grant']);
-  assert.deepEqual(calls[1][1], {
-    target_company: id, consent_version: marketingConsent.MARKETING_CONSENT_VERSION, consent_source: 'registration',
-  });
-  // Only the version crosses over: the wording comes from the database.
+  // The signed RPC, not the panel one: 'registration' is written only against a
+  // request signed with the server secret, so an owner calling the Data API
+  // himself cannot have the ledger attribute his consent to sign-up.
+  assert.deepEqual(calls.map(([name]) => name), ['ensure_initial_company', 'marketing_consent_grant_registration']);
+  assert.deepEqual(Object.keys(calls[1][1]).sort(),
+    ['consent_version', 'issued_at_ms', 'request_id', 'request_signature', 'target_company']);
+  assert.equal(calls[1][1].target_company, id);
+  assert.equal(calls[1][1].consent_version, marketingConsent.MARKETING_CONSENT_VERSION);
+  assert.match(calls[1][1].request_signature, /^[0-9a-f]{64}$/);
+  // Only the version crosses over: the wording comes from the database, and the
+  // source is not a parameter of either RPC any more.
   assert.equal('consent_text' in calls[1][1], false);
+  assert.equal('consent_source' in calls[1][1], false);
 });
 
 test('no consent, a withdrawn one or a FORGED one records nothing', async () => {
@@ -107,7 +114,7 @@ test('a failed consent write never blocks the company', async () => {
   // The company is created, the consent write fails: the owner must still reach
   // the dashboard. A consent record is a record, not a gate on registration.
   const loaded = load(
-    name => name === 'marketing_consent_grant'
+    name => name === 'marketing_consent_grant_registration'
       ? { data: null, error: { code: '42501', message: 'sc19_company_forbidden' } }
       : { data: id, error: null },
     { id: 'u1', email: EMAIL, user_metadata: { marketing_consent: signed(true) } },
@@ -116,5 +123,5 @@ test('a failed consent write never blocks the company', async () => {
   let url = null;
   try { await loaded.createCompany(form); } catch (e) { url = e.url ?? null; }
   assert.equal(url, `/dashboard/${id}`, 'the owner still reaches the company dashboard');
-  assert.deepEqual(loaded.calls.map(([name]) => name), ['ensure_initial_company', 'marketing_consent_grant']);
+  assert.deepEqual(loaded.calls.map(([name]) => name), ['ensure_initial_company', 'marketing_consent_grant_registration']);
 });
