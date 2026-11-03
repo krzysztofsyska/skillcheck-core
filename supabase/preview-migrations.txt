@@ -13,6 +13,15 @@
 20261102100000_cv_bulk_capacity_phone_fix.sql
 20261102110000_cv_bulk_skip_frozen.sql
 20261102120000_cv_bulk_erasure_guards.sql
+# SC-FREE-AUTO-001. The automatic FREE trial claim, the marketing-consent
+# ledger and the operator NIP release all live in these two migrations, so
+# without them preview has no public.sc19_claim_trial_auto, no
+# private.sc19_marketing_consent_events and no R11 erasure inventory: signing
+# up as a new company on preview fails and the daily digest cannot be walked
+# there at all. R11 extends the erasure inventory for the tables R10 does not
+# know about, so it must follow the table-creating migration, never precede it.
+20261103090000_sc19_auto_trial_marketing_consent.sql
+20261103090100_sc_erasure_inventory_r11.sql
 # SC-P24-VERIFY-001/002. M13 (20261021084732_sc019_credits_payments_inventory)
 # is already in the preview ledger, so only the read-only checkout RPC needs
 # listing. Without it public.sc19_checkout_offers does not exist on preview, the

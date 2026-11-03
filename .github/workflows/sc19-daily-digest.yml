@@ -1,0 +1,54 @@
+# One internal daily summary of new companies (SC-DIGEST-001, owner decision
+# 2026-11-03). Calls the production route GET /api/internal/daily-digest.
+#
+# Chosen over Vercel Cron, for the same two reasons as cv-bulk-pump.yml:
+#   * Vercel puts the value of the environment variable named CRON_SECRET — that
+#     name and no other — into a cron request's Authorization header, so a
+#     deployment that provisions SC19_DIGEST_CRON_SECRET would get 401 on every
+#     scheduled call;
+#   * two invocations a day of one path needs a paid plan (Hobby allows one daily
+#     invocation per cron job and fires it inside a one-hour window), and a new
+#     cost is the owner's decision. GitHub Actions costs nothing.
+#
+# Why six firings. 19:00 Europe/Warsaw is 17:00 UTC in summer (CEST) and 18:00
+# UTC in winter (CET), and a GitHub schedule is best effort and can be late. The
+# route sends only on a run whose Warsaw wall clock reads 19 and returns
+# {"status":"skipped"} otherwise, so the extra firings read nothing and send
+# nothing. Should two land inside that hour, the Resend idempotency key (one per
+# Warsaw day) still means one mail.
+#
+# Secret (environment `sc19-daily-digest`): SC19_DIGEST_CRON_SECRET — the same
+# value as the Vercel Production env of that name. Until it exists the job only
+# logs a notice.
+name: SkillCheck daily digest
+
+on:
+  schedule:
+    - cron: '0,30 17,18,19 * * *'
+
+permissions: {}
+
+concurrency:
+  group: sc19-daily-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    environment: sc19-daily-digest
+    permissions: {}
+    steps:
+      - name: Call the digest route
+        env:
+          CRON_SECRET: ${{ secrets.SC19_DIGEST_CRON_SECRET }}
+          APP_URL: https://skillcheck.pl
+        run: |
+          if [ -z "${CRON_SECRET:-}" ]; then echo "::notice::SC19_DIGEST_CRON_SECRET not configured yet; nothing to do"; exit 0; fi
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 90 -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/internal/daily-digest")
+          echo "HTTP $code"; head -c 200 /tmp/out.json; echo
+          # 200 covers sent/skipped/disabled/unconfigured. 503 is failed or a
+          # retryable provider answer: fail, so the next firing is the retry.
+          if [ "$code" = "200" ]; then exit 0; fi
+          exit 1

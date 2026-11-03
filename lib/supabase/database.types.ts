@@ -432,6 +432,93 @@ export type Database = {
       get_preselection_group_history: { Args: { target_application: string }; Returns: Json };
       cv_ai_usage_stats: { Args: { since_days?: number }; Returns: Json };
       sc19_claim_trial: { Args: { target_company: string; supplied_nip: string }; Returns: number };
+      // SC-FREE-AUTO-001 (20261103090000): automatic FREE from the MF VAT register.
+      sc19_auto_claim_trial: {
+        Args: {
+          target_company: string; supplied_nip: string;
+          mf_request_id: string; mf_status: string; mf_name: string;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
+        Returns: { outcome: 'granted' | 'refused'; available: number | null; reason: string | null }[];
+      };
+      sc19_auto_record_failure: {
+        Args: {
+          target_company: string; supplied_nip: string;
+          failure_outcome: 'refused' | 'unavailable'; failure_code: string;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
+        Returns: undefined;
+      };
+      sc19_auto_free_precheck: {
+        Args: { target_company: string; supplied_nip: string };
+        Returns: { allowed: boolean; reason: string | null }[];
+      };
+      sc19_operator_set_auto_free: { Args: { enabled: boolean }; Returns: boolean };
+      sc19_operator_auto_free_settings: {
+        Args: Record<PropertyKey, never>;
+        Returns: { auto_free_enabled: boolean; secret_configured: boolean; updated_at: string }[];
+      };
+      sc19_operator_auto_free_grants: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          company_id: string; company_name: string; nip: string; checked_at: string;
+          outcome: 'granted' | 'refused' | 'unavailable'; error_code: string | null;
+          granted_credits: number | null; used_credits: number | null; mf_status: string | null;
+        }[];
+      };
+      sc19_operator_taken_trial_nips: {
+        // Searchable by NIP, company name or company id: the listing is capped
+        // at 200 rows and carries the only release form in the panel.
+        Args: { search: string | null };
+        Returns: {
+          nip: string; company_id: string; company_name: string;
+          approved_at: string | null; free_claimed: boolean; source: string;
+        }[];
+      };
+      sc19_operator_release_trial_nip: {
+        // `expected_company` is the company the operator was looking at. The
+        // release is refused unless that company still holds the NIP.
+        Args: { supplied_nip: string; release_reason: string; expected_company: string };
+        Returns: { released_company_id: string; released_at: string }[];
+      };
+      sc19_operator_trial_nip_releases: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          nip: string; released_company_id: string | null; company_name: string | null;
+          reason: string; released_at: string;
+        }[];
+      };
+      // SC-CONSENT-001 (20261103090000): consent to commercial contact.
+      // The source is NOT a parameter: this one always records 'company_panel'.
+      marketing_consent_grant: {
+        Args: { target_company: string; consent_version: string };
+        Returns: string;
+      };
+      // 'registration' is written only here, and only against a server signature.
+      // `declared_at` is when the customer ticked the box at sign-up (null when
+      // the snapshot carried no usable time); it is inside the signature, and the
+      // ledger stores it as the event time instead of the onboarding moment.
+      marketing_consent_grant_registration: {
+        Args: {
+          target_company: string; consent_version: string; declared_at: string | null;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
+        Returns: string;
+      };
+      marketing_consent_withdraw: { Args: { target_company: string }; Returns: string };
+      marketing_consent_state: {
+        Args: { target_company: string };
+        Returns: { event: 'granted' | 'withdrawn'; consent_version: string; consent_text: string; occurred_at: string }[];
+      };
+      sc19_operator_marketing_consents: {
+        Args: { search?: string | null };
+        Returns: { company_id: string; event: 'granted' | 'withdrawn'; consent_version: string; occurred_at: string }[];
+      };
+      // SC-DIGEST-001 (20261103090000): counts only, signed, no personal data.
+      sc19_daily_digest: {
+        Args: { window_start: string; window_end: string; request_id: string; issued_at_ms: number; request_signature: string };
+        Returns: { registered: number; auto_free: number; awaiting_manual: number; marketing_consents: number }[];
+      };
       sc19_get_balance: {
         Args: { target_company: string };
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; available: number; free_claimed: boolean }[];

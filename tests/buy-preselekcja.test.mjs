@@ -9,6 +9,15 @@ import * as validation from '../lib/auth-validation.ts';
 import * as authUrl from '../lib/auth-url.ts';
 import * as legal from '../lib/legal.ts';
 import * as nextPath from '../lib/safe-next-path.ts';
+import * as marketingConsent from '../lib/marketing-consent.ts';
+// SC-CONSENT-001 also lives in app/auth/actions.ts, so loading that module here
+// needs its two consent dependencies mocked as well. The real signing module
+// stands in for the 'server-only' wrapper the action imports, exactly as
+// tests/onboarding-redirect.test.mjs does it, and the secret is a value local
+// to this test. No consent is recorded in any scenario below: the mocked users
+// carry no signed sign-up snapshot.
+import * as consentSigning from '../lib/marketing-consent-signing.ts';
+process.env.SC19_TRIAL_AUTO_SECRET ??= 'o'.repeat(32);
 
 // SC-BUY-001: one visible "Kup PRESELEKCJĘ" button leads, in a single click, to
 // the package checkout screen. Three redirect scenarios plus `next` validation.
@@ -110,6 +119,8 @@ function loadActions({ signInError = null, rpc = { data: null, error: null }, us
     '../../lib/supabase/server': { async createClient() { return client; } },
     '../../lib/auth-validation': validation, '../../lib/auth-url': authUrl,
     '../../lib/legal': legal, '../../lib/safe-next-path': nextPath,
+    '../../lib/marketing-consent': marketingConsent,
+    '../../lib/marketing-consent-server': consentSigning,
   };
   mod.require = id => id in mocks ? mocks[id] : require(id);
   mod._compile(ts.transpileModule(readFileSync(path, 'utf8'),

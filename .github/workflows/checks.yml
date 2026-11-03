@@ -66,6 +66,9 @@ jobs:
         env:
           SALES_MAIL_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:auth
+      # SC-FREE-AUTO-001 / SC-CONSENT-001 / SC-DIGEST-001 unit tests; the
+      # native-PostgreSQL suite for the same change runs in sc19-migrations.yml.
+      - run: npm run test:marketing-consent
       - run: npm run test:cv
       # Unit tests; the native-PostgreSQL suite (needs full git history) runs in sc19-migrations.yml (PG 16/17).
       - run: npm run test:cv-bulk
