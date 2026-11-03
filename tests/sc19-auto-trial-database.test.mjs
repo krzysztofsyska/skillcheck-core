@@ -36,7 +36,17 @@ async function ready(t, { enabled = true, secret = SECRET } = {}) {
   await db.query("insert into private.sc19_package_policy(plan,credits) values('FREE',5)");
   await db.query('update private.sc19_trial_auto_settings set request_secret=$1, auto_free_enabled=$2 where singleton',
     [secret, enabled]);
-  return { db, h, a, b };
+  return { db, h, a, b, env };
+}
+
+/** A second, independent connection acting as `userId`, for the tests that must
+ * run two calls AT THE SAME TIME: the shared fixture client is one session and
+ * would serialize them by itself, proving nothing. */
+async function sessionFor(env, userId) {
+  const client = await env.connect();
+  await client.query('set role authenticated');
+  await client.query("select set_config('request.jwt.claim.sub',$1,false)", [userId]);
+  return client;
 }
 
 /** The three extra arguments public.marketing_consent_grant_registration needs,
@@ -142,11 +152,20 @@ test('a NIP typed with separators is accepted by the same signature the client m
     [a.companyId, formatted, 'r', 'Czynny', 'F', requestId, issuedAtMs, signature]))[0];
   assert.deepEqual(row, { outcome: 'granted', available: 5, reason: null });
   // The precheck normalizes the same way: the same NIP in either spelling is
-  // one NIP, so it is still this company's own NIP and still allowed.
+  // one NIP, so it is still this company's own NIP and still allowed. (It is
+  // allowed only once in a row, because an allowed precheck reserves the attempt
+  // — see the parallel-submissions test; the point here is the reason it gives,
+  // which is never ANOTHER_NIP_TRIED or NIP_TAKEN for the same digits.)
   assert.deepEqual(await precheck(db, a.companyId, formatted), { allowed: true, reason: null });
-  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null });
-  // A different NIP from the same account is not.
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'COOLDOWN' });
+  // A different NIP from the same account is refused for a different reason, and
+  // that reason is checked before the cooldown, so the two cannot be confused.
   assert.deepEqual(await precheck(db, a.companyId, nipB), { allowed: false, reason: 'ANOTHER_NIP_TRIED' });
+  await h.asAdmin();
+  // The formatted spelling is stored and compared as the canonical digits.
+  assert.deepEqual((await call(db, 'select distinct nip from private.sc19_trial_auto_checks where company_id=$1', [a.companyId])).map(r => r.nip).sort(),
+    [nipA, nipB].sort());
+  await h.asUser(users.owner);
   await h.asAdmin();
   assert.equal((await call(db, 'select nip from private.sc19_trial_nips where company_id=$1', [a.companyId]))[0].nip, nipA);
 });
@@ -260,30 +279,33 @@ test('a company that just failed at the registry waits before it may ask again',
         signTrialAuto('auto_failure', requestId, issuedAtMs, payload, SECRET)]);
   };
 
-  // The first attempt is open: nothing has been asked yet.
+  // The first attempt is open: nothing has been asked yet. Being allowed also
+  // RESERVES the attempt, so the next submission is already throttled even
+  // before the registry has answered this one.
   assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null });
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'COOLDOWN' });
 
-  // AN OLD FAILURE DOES NOT THROTTLE: the cooldown expires, so it can never
-  // become a permanent block. The audit table is append-only (an UPDATE raises
-  // 'Immutable contact history'), so the aged row is inserted aged.
+  // AN OLD ATTEMPT DOES NOT THROTTLE: the cooldown expires, so neither a failed
+  // registry call nor a reservation can become a permanent block. The audit
+  // table is append-only (an UPDATE raises 'Immutable contact history'), so the
+  // aged row is inserted aged, and it is put on the OTHER company because this
+  // one is already inside its own cooldown window.
   await h.asAdmin();
   await db.query(`insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code,checked_at)
     values($1,$2,'unavailable','WHITELIST_TIMEOUT', now() - private.sc19_auto_free_cooldown() - interval '1 minute')`,
-    [a.companyId, nipA]);
-  await h.asUser(users.owner);
-  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null },
+    [b.companyId, nipB]);
+  // Another company is unaffected anyway: the cooldown is per account, not
+  // global, so one company's retry loop cannot stop anybody else activating FREE.
+  await h.asUser(users.otherOwner);
+  assert.deepEqual(await precheck(db, b.companyId, nipB), { allowed: true, reason: null },
     'an attempt older than the cooldown is retryable');
 
-  // A FRESH registry failure throttles the next submission, so the registry is
-  // not asked again — for an outage and for a registry refusal alike.
+  // A FRESH registry failure keeps the next submission throttled, so the registry
+  // is not asked again — for an outage and for a registry refusal alike.
+  await h.asUser(users.owner);
   await fail('refused', 'NIP_NOT_FOUND');
   assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'COOLDOWN' });
   assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: false, reason: 'COOLDOWN' });
-
-  // Another company is unaffected: the cooldown is per account, not global, so
-  // one company's retry loop cannot stop anybody else activating FREE.
-  await h.asUser(users.otherOwner);
-  assert.deepEqual(await precheck(db, b.companyId, nipB), { allowed: true, reason: null });
 
   // AND NOTHING WAS BURNED. The one-NIP-per-account slot is still this NIP, so
   // the company is only slowed down, never locked out — and the cooldown gates
@@ -300,6 +322,53 @@ test('a company that just failed at the registry waits before it may ask again',
   assert.equal((await call(db,
     "select count(*)::int n from private.sc19_trial_auto_checks where company_id=$1 and error_code='COOLDOWN'",
     [a.companyId]))[0].n, 1, 'repeats do not inflate the audit table');
+  assert.ok(nipC, 'the third synthetic NIP stays unused here');
+});
+
+test('parallel submissions from one owner reach the registry once, not N times', async t => {
+  // THE ATTACK (bot review finding 4453447868, 2026-11-03). The cooldown above
+  // throttled only SEQUENTIAL retries. public.sc19_auto_free_precheck returned
+  // "allowed" BEFORE it took the company lock and wrote no row at all, so N
+  // submissions sent at the same time — N browser tabs, or a loop straight
+  // against the Data API, which every signed-in owner can call — each saw an
+  // empty audit table, each was allowed, and each spent its own call against the
+  // public, keyless Ministry of Finance quota that every other company shares.
+  const { db, h, a, env } = await ready(t);
+  const parallel = 6;
+  const sessions = await Promise.all(Array.from({ length: parallel }, () => sessionFor(env, users.owner)));
+  const results = await Promise.all(sessions.map(client =>
+    client.query('select * from public.sc19_auto_free_precheck($1,$2)', [a.companyId, nipA]).then(r => r.rows[0])));
+
+  // Exactly one caller may go on to the registry; the rest are told to wait.
+  const allowed = results.filter(row => row.allowed === true);
+  assert.equal(allowed.length, 1, `only one of ${parallel} simultaneous submissions may ask the registry`);
+  assert.deepEqual(new Set(results.filter(row => !row.allowed).map(row => row.reason)), new Set(['COOLDOWN']));
+
+  await h.asAdmin();
+  // One reservation, and the refusals deduplicated to one row: a burst cannot
+  // inflate the audit table either.
+  const rows = await call(db, `select outcome,error_code,count(*)::int n from private.sc19_trial_auto_checks
+    where company_id=$1 group by 1,2 order by 2`, [a.companyId]);
+  assert.deepEqual(rows, [
+    { outcome: 'refused', error_code: 'COOLDOWN', n: 1 },
+    { outcome: 'unavailable', error_code: 'IN_FLIGHT', n: 1 },
+  ]);
+  // THE RESERVATION COSTS THE COMPANY NOTHING IT IS ENTITLED TO. It is not a
+  // grant, it does not claim the one-NIP-per-account slot (the request can still
+  // stop before the registry — a missing server secret, a dead process — and no
+  // quota is spent then), and it expires with the cooldown, so an outage delays
+  // the company by minutes instead of blocking it.
+  assert.equal((await call(db, 'select count(*)::int n from private.sc19_balances'))[0].n, 0);
+  assert.equal((await call(db, 'select count(*)::int n from private.sc19_trial_approvals'))[0].n, 0);
+  assert.equal((await call(db, 'select private.sc19_auto_free_other_nip_tried($1,$2) v', [a.companyId, nipB]))[0].v, false,
+    'a reservation does not burn the account on that NIP');
+  // Shortening the cooldown to nothing stands in for waiting it out: the same
+  // company is allowed again, so the reservation is a delay and not a lock.
+  await db.query(`create or replace function private.sc19_auto_free_cooldown()
+    returns interval language sql immutable set search_path='' as $$ select interval '0 seconds' $$`);
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null },
+    'after the cooldown the company may try again');
   assert.ok(nipC, 'the third synthetic NIP stays unused here');
 });
 
@@ -620,6 +689,66 @@ test('consent is granted, withdrawn and granted again, and history is never rewr
   await db.query("select public.marketing_consent_grant($1,'marketing-1.0')", [a.companyId]);
   await h.asAdmin();
   assert.equal((await call(db, 'select count(*)::int n from private.marketing_consent_events where company_id=$1', [a.companyId]))[0].n, 3);
+});
+
+test('a withdrawn consent cannot be resurrected by replaying the registration grant', async t => {
+  // THE ATTACK (bot review finding 4453447875, 2026-11-03). The sign-up snapshot
+  // that authorizes a 'registration' row lives in user_metadata, has no expiry
+  // and no one-time marker, and public.ensure_initial_company returns the
+  // EXISTING company when the Server Action runs again — which Next.js resolves
+  // from any route, not only from /onboarding. So the owner could withdraw the
+  // consent and then replay that action: before this fix the ledger appended a
+  // fresh 'granted' row with source 'registration' and the current time, putting
+  // the company back on the marketing list without a new, deliberate act and
+  // certifying that the consent was declared "at registration" at a moment when
+  // no registration form existed (GDPR art. 7(1), 7(3)).
+  const { db, h, a } = await ready(t);
+  const replay = () => db.query('select public.marketing_consent_grant_registration($1,$2,$3,$4,$5) at',
+    [a.companyId, 'marketing-1.0', ...registrationGrant(a.companyId, 'marketing-1.0')]).then(r => r.rows[0].at);
+  const events = async () => {
+    await h.asAdmin();
+    return call(db, 'select event,source from private.marketing_consent_events where company_id=$1 order by occurred_at, id', [a.companyId]);
+  };
+
+  await h.asUser(users.owner);
+  const first = await replay();
+  // An honest double submit of the SAME first grant is tolerated: it appends
+  // nothing and returns the consent in force, so a double click is not an error.
+  assert.deepEqual(await replay(), first);
+  assert.deepEqual(await events(), [{ event: 'granted', source: 'registration' }]);
+
+  await h.asUser(users.owner);
+  await db.query('select public.marketing_consent_withdraw($1)', [a.companyId]);
+  // THE REPLAY IS NOW REFUSED, by the database and not by the route.
+  await assert.rejects(replay(), code('22023'), 'the sign-up snapshot is one-shot');
+  await assert.rejects(replay(), code('22023'), 'and stays refused');
+  assert.deepEqual(await events(), [
+    { event: 'granted', source: 'registration' },
+    { event: 'withdrawn', source: 'company_panel' },
+  ], 'not one new registration row');
+  await h.asUser(users.owner);
+  assert.equal((await call(db, 'select * from public.marketing_consent_state($1)', [a.companyId]))[0].event, 'withdrawn',
+    'the consent stays withdrawn');
+
+  // WITHDRAWAL AND A LATER RE-GRANT STILL WORK — from the panel, under the
+  // provenance that is true of them: the company gave it again in the panel.
+  await db.query("select public.marketing_consent_grant($1,'marketing-1.0')", [a.companyId]);
+  assert.deepEqual(await events(), [
+    { event: 'granted', source: 'registration' },
+    { event: 'withdrawn', source: 'company_panel' },
+    { event: 'granted', source: 'company_panel' },
+  ]);
+  // And with an active panel consent the registration replay is refused too: a
+  // consent given in the panel is never re-labelled as given at sign-up.
+  await h.asUser(users.owner);
+  await assert.rejects(replay(), code('22023'));
+
+  // The guarantee does not rest on the function body alone. Even a direct insert
+  // — which only the schema owner can make — cannot add a second registration row.
+  await h.asAdmin();
+  await assert.rejects(db.query(`insert into private.marketing_consent_events(company_id,event,consent_version,consent_text,source)
+    values($1,'granted','marketing-1.0',private.marketing_consent_text('marketing-1.0'),'registration')`, [a.companyId]),
+  code('23505'), 'at most one registration row per company, enforced by a unique index');
 });
 
 test('consent wording cannot be supplied by the caller, and unknown versions are refused', async t => {

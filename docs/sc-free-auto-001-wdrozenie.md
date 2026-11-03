@@ -100,7 +100,11 @@ odrzucana.
 3. Ta sama firma, inny NIP → odmowa z powodem „to konto próbowało już innego
    NIP-u". Tak ma być.
 4. Panel firmy → `Zgody na kontakt handlowy`: zgoda aktywna, przycisk wycofania
-   działa, po wycofaniu widać datę.
+   działa, po wycofaniu widać datę. Po wycofaniu zgodę można udzielić ponownie
+   tym samym przyciskiem w panelu — w rejestrze zapisze się wtedy jako „z panelu
+   firmy", nigdy jako „z rejestracji". Wpis „z rejestracji" może być w rejestrze
+   firmy tylko jeden i tylko jako pierwszy; pilnuje tego baza danych, żeby
+   rejestr zgód pozostał dowodem, kiedy i gdzie klient zgodę naprawdę wyraził.
 5. Następnego dnia po 19:00: jeden e-mail z liczbami na adres z
    `SC19_DIGEST_RECIPIENT`.
 6. NIP, którego wykaz nie potwierdził, od razu drugi raz → komunikat „odczekaj
@@ -108,6 +112,11 @@ odrzucana.
    niski dzienny limit zapytań wspólny dla wszystkich firm, więc nie pytamy o tę
    samą firmę kilka razy pod rząd. Po tych kilku minutach ta sama firma może
    spróbować jeszcze raz i normalnie dostać FREE — to spowolnienie, nie blokada.
+7. To samo dotyczy zgłoszeń wysłanych **równocześnie** (np. kilka otwartych kart
+   przeglądarki): do wykazu idzie jedno zapytanie, pozostałe dostają ten sam
+   komunikat „odczekaj około 5 minut". W `/operator/billing` widać wtedy wpis
+   „sprawdzenie rozpoczęte, bez odpowiedzi wykazu" — to zarezerwowana próba, nie
+   błąd; nie odbiera firmie jej jednego NIP-u i wygasa po kilku minutach.
 
 ## 7. Co zrobić, gdy ktoś zajmie NIP cudzej firmy
 

@@ -73,6 +73,24 @@ export async function createCompany(form: FormData) {
   // source as a parameter, and 'registration' is written only against a request
   // signed with the server secret, so an owner calling the Data API himself
   // cannot have the ledger attribute his consent to registration.
+  //
+  // AND IT IS ONE-SHOT, GUARANTEED BY THE DATABASE (review finding, bot
+  // 2026-11-03). Neither signature expires or is spent, ensure_initial_company
+  // returns the EXISTING company when this action runs again, and a Server Action
+  // can be invoked from any route — so this call can be replayed at any time,
+  // including after the owner has withdrawn the consent in /dashboard/<id>/zgody.
+  // That must not resurrect the consent, and must not have the append-only ledger
+  // certify "given at registration" long after the sign-up form was gone. The
+  // check is not made here, because ensure_initial_company returns only a uuid
+  // and cannot tell us whether it created the company: it is made in the
+  // database, where it also binds a caller going straight to the Data API.
+  // private.marketing_consent_record accepts a registration row only as the first
+  // event in that company's ledger, and the partial unique index
+  // marketing_consent_one_registration_per_company enforces "at most one" even
+  // for two simultaneous replays. A replay therefore fails with
+  // marketing_consent_registration_not_first, which is logged below and changes
+  // nothing — re-granting after a withdrawal is the panel's job, under its own
+  // source 'company_panel'.
   const consentVersion = verifiedConsentVersion(user.user_metadata, user.email);
   const signedGrant = consentVersion && typeof companyId === "string"
     ? signRegistrationConsentGrant(companyId, consentVersion) : null;

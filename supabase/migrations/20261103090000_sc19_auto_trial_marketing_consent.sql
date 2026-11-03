@@ -45,7 +45,11 @@
 -- Part B. Append-only ledger of the optional consent to commercial contact. The
 -- WORDING IS HELD HERE, in private.marketing_consent_text, and the client may
 -- only name a version: a forged request cannot invent the text it claims was
--- shown. History is never overwritten — a withdrawal appends a row.
+-- shown. History is never overwritten — a withdrawal appends a row. The
+-- provenance is not forgeable and not reusable: a 'registration' row exists at
+-- most once per company and only as the FIRST event in its ledger, so a replay
+-- of the sign-up grant cannot resurrect a withdrawn consent; re-granting later
+-- is the company panel's business, under source 'company_panel'.
 -- NOTHING IN THIS MIGRATION SENDS ANYTHING. There is no outbox, no recipient
 -- column and no provider reference in the consent path.
 --
@@ -166,6 +170,21 @@ create table private.marketing_consent_events (
   occurred_at timestamptz not null default now()
 );
 create index marketing_consent_events_company on private.marketing_consent_events(company_id, occurred_at desc, id desc);
+-- AT MOST ONE 'registration' ROW PER COMPANY, ENFORCED BY THE DATABASE (review
+-- finding, bot 2026-11-03). A company is created once, so a consent declared at
+-- sign-up can be recorded once. Without this index the signed sign-up snapshot
+-- in user_metadata — which has no expiry and no one-time marker — could be
+-- presented again after the owner had WITHDRAWN the consent: the ledger would
+-- then certify that the consent was given "at registration" at a moment when no
+-- registration form was on the screen, and the owner would be back on the
+-- marketing list without a new, deliberate act (GDPR art. 7(1) and 7(3)).
+-- private.marketing_consent_record refuses that case explicitly, with a clear
+-- error; this index is the guarantee that holds even if a future caller forgets
+-- to, and it is also what makes two SIMULTANEOUS registration grants safe.
+-- A withdrawal always records source='company_panel' (it is made in the panel),
+-- so this index never blocks a withdrawal or a later panel re-grant.
+create unique index marketing_consent_one_registration_per_company
+  on private.marketing_consent_events(company_id) where source='registration';
 create trigger immutable_history before update or delete on private.marketing_consent_events
   for each row execute function private.contact_immutable();
 
@@ -287,24 +306,45 @@ create function private.sc19_auto_free_cooldown()
 returns interval language sql immutable set search_path='' as $$ select interval '5 minutes' $$;
 revoke all on function private.sc19_auto_free_cooldown() from public, anon, authenticated;
 
+-- The audit codes of refusals decided HERE, before the Ministry of Finance
+-- registry was contacted: they spent none of the public daily quota, so they
+-- neither start a cooldown nor claim the one-NIP-per-account slot. One place, so
+-- the two readers below cannot drift apart. 'IN_FLIGHT' is deliberately NOT in
+-- this list: a reserved attempt is one that is about to reach the registry, and
+-- that is exactly what the cooldown must see.
+create function private.sc19_auto_free_local_refusal_codes()
+returns text[] language sql immutable set search_path='' as $$
+  select array['AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED','COOLDOWN']::text[]
+$$;
+revoke all on function private.sc19_auto_free_local_refusal_codes() from public, anon, authenticated;
+
 -- One account may only ever use the automatic path for ONE NIP. A NIP is
 -- public, so without this an account could walk a list of other companies' NIPs
 -- and occupy their single FREE one after another.
 --
 -- The account's NIP is the FIRST one whose check actually reached the registry,
 -- or the NIP of its approval. Refusals decided locally before the registry
--- (AUTO_DISABLED, NIP_TAKEN, ANOTHER_NIP_TRIED, COOLDOWN) do NOT claim the slot:
--- the automat being off, a mistyped NIP bouncing off this very rule, or a
--- too-soon retry must not lock an account out of the one NIP it is entitled to
--- check. Once the slot is taken, that NIP stays retryable for ever — an outage
--- must not burn the attempt — and every other NIP is refused.
+-- (private.sc19_auto_free_local_refusal_codes) do NOT claim the slot: the automat
+-- being off, a mistyped NIP bouncing off this very rule, or a too-soon retry must
+-- not lock an account out of the one NIP it is entitled to check. Once the slot
+-- is taken, that NIP stays retryable for ever — an outage must not burn the
+-- attempt — and every other NIP is refused.
+--
+-- A RESERVATION ('IN_FLIGHT') DOES NOT CLAIM THE SLOT EITHER. The precheck
+-- reserves the attempt before the registry is asked (see below), but the request
+-- can still stop between the two — the server secret may be missing, the process
+-- may die — and no quota is spent then. Burning the account's single NIP on an
+-- attempt that never reached the registry would lock an honest company out of
+-- the only NIP it is entitled to check, so the slot is claimed by the recorded
+-- ANSWER, never by the reservation.
 create function private.sc19_auto_free_other_nip_tried(target_company uuid, normalized text)
 returns boolean language plpgsql stable security definer set search_path='' as $$
 declare claimed text;
 begin
   select c.nip into claimed from private.sc19_trial_auto_checks c
     where c.company_id=target_company
-      and coalesce(c.error_code,'') not in ('AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED','COOLDOWN')
+      and coalesce(c.error_code,'') <> 'IN_FLIGHT'
+      and coalesce(c.error_code,'') <> all(private.sc19_auto_free_local_refusal_codes())
     order by c.checked_at, c.id limit 1;
   if claimed is null then
     select a.nip into claimed from private.sc19_trial_approvals a where a.company_id=target_company;
@@ -336,6 +376,36 @@ revoke all on function private.sc19_auto_free_other_nip_tried(uuid,text) from pu
 -- NOT claim the one-NIP slot (see the exclusion list above), so it cannot turn
 -- into a permanent block, and the company is told in plain Polish to try again
 -- in a few minutes.
+--
+-- PARALLEL SUBMISSIONS (second review finding, bot 2026-11-03, on the fix above).
+-- The cooldown as first written throttled only SEQUENTIAL retries: the "allowed"
+-- branch returned before the company lock was taken and wrote no row at all, so
+-- N submissions sent AT THE SAME TIME — N browser tabs, or a loop straight
+-- against the Data API, which every signed-in owner can reach — each saw an empty
+-- audit table, each was allowed, and each spent its own registry call. The
+-- earlier claim in this comment that "a retry loop cannot drain the daily quota"
+-- was therefore true only of a serial loop. Two changes close it:
+--
+--   1. private.sc19_lock_company is taken BEFORE the decision, not after it, so
+--      concurrent prechecks for one company queue up instead of racing. The lock
+--      is the same per-company row lock the rest of the billing path uses, so the
+--      lock ORDER is unchanged and one company's queue never blocks another.
+--   2. The allowed branch RESERVES the attempt: it records an 'IN_FLIGHT' audit
+--      row before returning. The next caller in the queue reads it and gets
+--      COOLDOWN. A volatile function takes a fresh snapshot for each statement it
+--      runs, so the queued caller sees the row the previous one committed.
+--
+-- The reservation is bounded by the same cooldown: once it ages out the company
+-- may try again, so a registry outage — or a request that stops after the
+-- reservation and never reaches the registry — delays the company by minutes and
+-- never blocks it. And the reservation does not claim the one-NIP-per-account
+-- slot (see private.sc19_auto_free_other_nip_tried), so it cannot cost an honest
+-- company the single NIP it is entitled to check.
+--
+-- What this does NOT do: it does not cap the number of registry calls per day,
+-- per account or globally. It serializes them and spaces them out by the cooldown
+-- for one company. A fleet of separate accounts is a different problem and the
+-- MF client's own limits (lib/mf-whitelist.ts) are where it belongs.
 create function public.sc19_auto_free_precheck(target_company uuid, supplied_nip text)
 returns table(allowed boolean, reason text)
 language plpgsql volatile security definer set search_path='' as $$
@@ -350,6 +420,10 @@ begin
   if not private.sc19_valid_nip(normalized) then
     raise exception 'sc19_invalid_nip' using errcode='22023';
   end if;
+  -- Serialize every precheck for this company BEFORE anything is decided, so a
+  -- burst of simultaneous submissions queues here and each caller sees what the
+  -- previous one reserved. Nothing above this line reads or writes state.
+  perform private.sc19_lock_company(target_company);
   select * into settings from private.sc19_trial_auto_settings where singleton;
   if settings.singleton is null or not settings.auto_free_enabled
      or settings.request_secret is null or octet_length(settings.request_secret) < 32 then
@@ -365,16 +439,26 @@ begin
     select 1 from private.sc19_trial_auto_checks c
     where c.company_id=target_company
       and c.outcome <> 'granted'
-      -- Only attempts that actually reached the Ministry of Finance registry
-      -- count: a locally decided refusal spent no quota, so it must not delay
-      -- the company's first real attempt.
-      and coalesce(c.error_code,'') not in ('AUTO_DISABLED','NIP_TAKEN','ANOTHER_NIP_TRIED','COOLDOWN')
+      -- Only attempts that actually reached the Ministry of Finance registry, or
+      -- are on their way to it, count: a locally decided refusal spent no quota,
+      -- so it must not delay the company's first real attempt. An 'IN_FLIGHT'
+      -- reservation does count — that is what stops a parallel burst.
+      and coalesce(c.error_code,'') <> all(private.sc19_auto_free_local_refusal_codes())
       and c.checked_at > now() - private.sc19_auto_free_cooldown()
   ) then
     refusal := 'COOLDOWN';
   end if;
-  if refusal is null then return query select true, null::text; return; end if;
-  perform private.sc19_lock_company(target_company);
+  if refusal is null then
+    -- Allowed: this caller is the one that will ask the registry. Reserve the
+    -- attempt under the lock taken above, so everyone queued behind it gets
+    -- COOLDOWN instead of a second call against the public quota. Recorded as
+    -- 'unavailable' because no answer exists yet; the registry's real answer is
+    -- appended afterwards by sc19_auto_claim_trial or sc19_auto_record_failure.
+    insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code)
+      values(target_company,normalized,'unavailable','IN_FLIGHT');
+    return query select true, null::text;
+    return;
+  end if;
   if not exists (select 1 from private.sc19_trial_auto_checks c
     where c.company_id=target_company and c.nip=normalized and c.error_code=refusal) then
     insert into private.sc19_trial_auto_checks(company_id,nip,outcome,error_code)
@@ -663,6 +747,25 @@ grant execute on function public.sc19_operator_trial_nip_releases() to authentic
 -- The authorization of the caller is NOT done here: each entry point does its
 -- own, because the two are different (owner alone for the panel, owner plus a
 -- server signature for registration).
+--
+-- 'registration' IS ONE-SHOT (review finding, bot 2026-11-03). The sign-up
+-- snapshot that authorizes a registration-sourced row lives in user_metadata and
+-- has neither an expiry nor a one-time marker, and public.ensure_initial_company
+-- returns the EXISTING company when it is called again. So the server action that
+-- binds the consent to the company can be replayed at any later time, from any
+-- route — and before this check the only short-circuit here was "the consent is
+-- already active", which does not hold after a WITHDRAWAL: the replay appended a
+-- fresh 'granted'/'registration' row with the current time. The ledger exists to
+-- prove that the customer gave the consent and WHERE; a row saying "at
+-- registration" written minutes after a withdrawal destroys exactly that proof,
+-- and puts the company back on the marketing list without a new, deliberate act
+-- (GDPR art. 7(1), 7(3)). A registration row is therefore accepted only as the
+-- FIRST event in this company's ledger, and only once; everything afterwards is
+-- the company panel's business, under its own source. The guarantee does not
+-- depend on this code alone: the partial unique index
+-- marketing_consent_one_registration_per_company enforces the same rule, so two
+-- simultaneous replays cannot both slip through, and any future caller is bound
+-- by it too.
 create function private.marketing_consent_record(target_company uuid, consent_version text, consent_source text, actor uuid)
 returns timestamptz language plpgsql volatile security definer set search_path='' as $$
 declare
@@ -680,6 +783,19 @@ begin
   perform private.sc19_lock_company(target_company);
   select * into latest from private.marketing_consent_events
     where company_id=target_company order by occurred_at desc, id desc limit 1;
+  if consent_source='registration' and latest.id is not null then
+    -- The one tolerated repeat: the very same registration grant arriving twice
+    -- (the server action re-run before anything else touched the ledger). It
+    -- appends nothing and returns the consent in force, so an honest double
+    -- submit is not an error. Anything else — a withdrawal in between, or a
+    -- consent given in the panel — is refused: see the note above.
+    if latest.event='granted' and latest.source='registration'
+       and not exists (select 1 from private.marketing_consent_events e
+         where e.company_id=target_company and e.id<>latest.id) then
+      return latest.occurred_at;
+    end if;
+    raise exception 'marketing_consent_registration_not_first' using errcode='22023';
+  end if;
   if latest.id is not null and latest.event='granted' then
     return latest.occurred_at; -- already active: history untouched
   end if;

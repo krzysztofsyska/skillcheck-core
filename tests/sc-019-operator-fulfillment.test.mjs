@@ -165,13 +165,21 @@ test('rollback drops only the operator functions and keeps recorded approvals an
   await h.asAdmin();
   const down = await readFile(new URL('../supabase/rollbacks/20261029100000_sc019_operator_fulfillment_down.sql', import.meta.url), 'utf8');
   await db.query(down);
-  // Only the functions this rollback owns. A later migration
-  // (20261103090000_sc19_auto_trial_marketing_consent.sql) adds operator
-  // functions of its own, removed by its own rollback, so counting every
-  // sc19_operator* name here would assert against the wrong migration.
-  assert.equal((await call(db, `select count(*)::int n from pg_proc where proname='sc19_require_operator'
-    or proname in ('sc19_operator_companies','sc19_operator_package_policy',
-      'sc19_operator_set_package_policy','sc19_operator_approve_trial','sc19_operator_grant_paid')`))[0].n, 0);
+  // Exactly the functions this rollback claims to drop, READ OUT OF THE ROLLBACK
+  // FILE ITSELF. A later migration (20261103090000_sc19_auto_trial_marketing_
+  // consent.sql) adds operator functions of its own, removed by its own
+  // rollback, so counting every sc19_operator* name here would assert against
+  // the wrong migration — but a hand-written list would stop noticing a function
+  // this rollback should remove and does not, which is the whole point of the
+  // assertion. Deriving the list keeps both properties.
+  const dropped = [...down.matchAll(/drop\s+function\s+if\s+exists\s+(public|private)\.([a-z0-9_]+)\s*\(/gi)]
+    .map(match => `${match[1]}.${match[2]}`);
+  assert.ok(dropped.length >= 6, `the rollback must still name its functions: ${dropped.length}`);
+  for (const qualified of dropped) {
+    const [schema, name] = qualified.split('.');
+    assert.equal((await call(db, `select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace
+      where s.nspname=$1 and p.proname=$2`, [schema, name]))[0].n, 0, qualified);
+  }
   for (const table of ['sc19_package_policy', 'sc19_trial_approvals', 'sc19_balances']) {
     assert.equal((await call(db, `select count(*)::int n from private.${table}`))[0].n, 1, table);
   }

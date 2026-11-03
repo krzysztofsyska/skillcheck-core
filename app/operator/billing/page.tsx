@@ -21,6 +21,8 @@ const autoReasons: Record<string, string> = {
   AUTO_DISABLED: 'automat wyłączony lub bez klucza podpisu',
   ANOTHER_NIP_TRIED: 'to konto próbowało już innego NIP-u',
   NIP_TAKEN: 'ten NIP jest już zajęty',
+  COOLDOWN: 'zapytanie do wykazu było przed chwilą — firma czeka kilka minut',
+  IN_FLIGHT: 'sprawdzenie rozpoczęte, bez odpowiedzi wykazu',
   STATUS_NOT_ACTIVE: 'w wykazie nie jest czynnym ani zwolnionym podatnikiem',
   NIP_NOT_FOUND: 'nie ma takiego NIP-u w wykazie',
   NIP_INVALID: 'NIP niepoprawny',

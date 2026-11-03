@@ -113,15 +113,27 @@ test('no consent, a withdrawn one or a FORGED one records nothing', async () => 
 test('a failed consent write never blocks the company', async () => {
   // The company is created, the consent write fails: the owner must still reach
   // the dashboard. A consent record is a record, not a gate on registration.
-  const loaded = load(
-    name => name === 'marketing_consent_grant_registration'
-      ? { data: null, error: { code: '42501', message: 'sc19_company_forbidden' } }
-      : { data: id, error: null },
-    { id: 'u1', email: EMAIL, user_metadata: { marketing_consent: signed(true) } },
-  );
-  const form = new FormData(); form.set('name', 'Firma');
-  let url = null;
-  try { await loaded.createCompany(form); } catch (e) { url = e.url ?? null; }
-  assert.equal(url, `/dashboard/${id}`, 'the owner still reaches the company dashboard');
-  assert.deepEqual(loaded.calls.map(([name]) => name), ['ensure_initial_company', 'marketing_consent_grant_registration']);
+  //
+  // The second case is the replay the database refuses (review finding, bot
+  // 2026-11-03): the snapshot in user_metadata never expires and
+  // ensure_initial_company returns the EXISTING company, so this action can be
+  // re-run after the owner has withdrawn the consent. The one-shot rule is
+  // enforced in the database (private.marketing_consent_record plus the unique
+  // index marketing_consent_one_registration_per_company), and here we only
+  // check that its refusal is swallowed exactly like any other: no new ledger
+  // row, no crash, the owner still lands on his dashboard.
+  for (const error of [
+    { code: '42501', message: 'sc19_company_forbidden' },
+    { code: '22023', message: 'marketing_consent_registration_not_first' },
+  ]) {
+    const loaded = load(
+      name => name === 'marketing_consent_grant_registration' ? { data: null, error } : { data: id, error: null },
+      { id: 'u1', email: EMAIL, user_metadata: { marketing_consent: signed(true) } },
+    );
+    const form = new FormData(); form.set('name', 'Firma');
+    let url = null;
+    try { await loaded.createCompany(form); } catch (e) { url = e.url ?? null; }
+    assert.equal(url, `/dashboard/${id}`, 'the owner still reaches the company dashboard');
+    assert.deepEqual(loaded.calls.map(([name]) => name), ['ensure_initial_company', 'marketing_consent_grant_registration']);
+  }
 });

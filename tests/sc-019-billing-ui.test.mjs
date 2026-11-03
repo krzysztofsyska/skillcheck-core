@@ -138,6 +138,13 @@ test('billing page shows the owner form only to the owner and hides it once a ba
     // The FREE copy now explains the automatic VAT-register check instead of
     // sending the company to the contact form for a manual verification.
     assert.match(ownerHtml, /wykazie podatników VAT/);
+    // But the MANUAL PATH MUST STAY REACHABLE FROM THE FREE BLOCK (bot review
+    // finding, kept asserted): when the register does not confirm or does not
+    // answer, the company must have somewhere to go. Asserted on the FREE part
+    // of the page only, so the PRESELEKCJA block's own link cannot satisfy it.
+    const freeBlock = ownerHtml.slice(ownerHtml.indexOf('FREE —'), ownerHtml.indexOf('PRESELEKCJA'));
+    assert.ok(freeBlock.length > 100, 'the FREE block must be on the page to assert about it');
+    assert.match(freeBlock, /href="\/rozmowa"/);
     assert.deepEqual(owner.calls, [{ name: 'sc19_package_sizes', args: undefined }, { name: 'sc19_get_balance', args: { target_company: companyId } }]);
     assert.match(ownerHtml, /FREE — 3 analiz CV/);
     assert.match(ownerHtml, /PRESELEKCJA — 12 analiz CV/);
