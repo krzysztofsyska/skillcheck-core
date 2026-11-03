@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire, Module } from 'node:module';
 import ts from 'typescript';
 import { nextRedirectTarget, safeNextPath, withNext } from '../lib/safe-next-path.ts';
-import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH, buyPreselekcjaTarget } from '../lib/buy-preselekcja.ts';
+import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH, buyPreselekcjaTarget, selectPurchaseCompany } from '../lib/buy-preselekcja.ts';
 import * as validation from '../lib/auth-validation.ts';
 import * as authUrl from '../lib/auth-url.ts';
 import * as legal from '../lib/legal.ts';
@@ -13,21 +13,38 @@ import * as nextPath from '../lib/safe-next-path.ts';
 // SC-BUY-001: one visible "Kup PRESELEKCJĘ" button leads, in a single click, to
 // the package checkout screen. Three redirect scenarios plus `next` validation.
 
-test('a signed-in user with a company goes straight to that company checkout', () => {
-  const id = '6f1c2b9e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
-  assert.equal(buyPreselekcjaTarget({ signedIn: true, companyId: id }), `/dashboard/${id}/billing/checkout`);
+const OWNER = 'u-owner';
+const owned = { id: '6f1c2b9e-1a2b-4c3d-8e9f-0a1b2c3d4e5f', owner_id: OWNER };
+const someoneElses = { id: 'aaaaaaaa-1111-4222-8333-444444444444', owner_id: 'u-other' };
+
+test('a signed-in owner goes straight to that company checkout', () => {
+  assert.equal(buyPreselekcjaTarget({ userId: OWNER, companies: [owned] }),
+    `/dashboard/${owned.id}/billing/checkout`);
+  // An owned company wins over one the user only recruits for, whatever the order.
+  assert.equal(buyPreselekcjaTarget({ userId: OWNER, companies: [someoneElses, owned] }),
+    `/dashboard/${owned.id}/billing/checkout`);
+  assert.equal(selectPurchaseCompany([someoneElses, owned], OWNER), owned.id);
+  assert.equal(selectPurchaseCompany([someoneElses], OWNER), null);
+  assert.equal(selectPurchaseCompany([], OWNER), null);
 });
 
 test('a signed-in user without a company creates one first and returns here', () => {
-  assert.equal(buyPreselekcjaTarget({ signedIn: true, companyId: null }),
+  assert.equal(buyPreselekcjaTarget({ userId: OWNER, companies: [] }),
     `/onboarding?next=${encodeURIComponent(BUY_PRESELEKCJA_PATH)}`);
 });
 
+test('a recruiter who owns nothing is told why, not sent to a screen that refuses them', () => {
+  assert.equal(buyPreselekcjaTarget({ userId: OWNER, companies: [someoneElses] }),
+    '/dashboard?message=owner-required');
+  assert.match(readFileSync(new URL('../app/dashboard/page.tsx', import.meta.url), 'utf8'),
+    /owner-required/);
+});
+
 test('an anonymous visitor registers first and returns here', () => {
-  assert.equal(buyPreselekcjaTarget({ signedIn: false, companyId: null }),
+  assert.equal(buyPreselekcjaTarget({ userId: null, companies: [] }),
     `/register?next=${encodeURIComponent(BUY_PRESELEKCJA_PATH)}`);
-  // A stale company id never shortcuts the sign-in requirement.
-  assert.equal(buyPreselekcjaTarget({ signedIn: false, companyId: 'abc' }),
+  // A readable company never shortcuts the sign-in requirement.
+  assert.equal(buyPreselekcjaTarget({ userId: null, companies: [owned] }),
     `/register?next=${encodeURIComponent(BUY_PRESELEKCJA_PATH)}`);
 });
 
@@ -157,6 +174,15 @@ test('every next consumer re-validates before redirecting', () => {
 
 test('with packages not launched the checkout screen says so instead of implying automatic activation', () => {
   const page = read('app/dashboard/[companyId]/billing/checkout/page.tsx');
+  // The promised quota is verified against the live policy in EVERY state —
+  // the flag decides how a package is activated, not whether the number is real.
+  assert.match(page, /let fallbackCredits: number\|null;\s*\n\s*try\{fallbackCredits=\(await loadSc19PackageSizes\(client\)\)\.PRESELEKCJA;\}catch\{fallbackCredits=null;\}/);
+  assert.equal(/fallbackCredits[^;]*=\s*preselekcjaOffer\.analyses/.test(page), false,
+    'the marketing figure is never shown as the purchasable quota');
+  // The flag, not an API failure, selects manual fulfilment.
+  assert.match(page, /packagesEnabled=\{packagesEnabled\}/);
+  assert.match(read('app/dashboard/[companyId]/billing/checkout/checkout.tsx'),
+    /if\(!packagesEnabled\)\{setFallback\(true\)/);
   // Same statement as the billing page makes when SC19_PACKAGES_ENABLED is off,
   // so the purchase screen never contradicts the rest of the product.
   assert.match(page, /!packagesEnabled&&/);

@@ -250,6 +250,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Analiza 60 CV, shortlista i raport/, 'approved PRESELEKCJA description');
   assert.match(home, /Analiza 5 CV/, 'approved FREE description');
   assert.match(order, /zawsze weryfikuje osoba prowadząca rekrutację/);
+  // SC-BUY-001: the offer page carries the same one-click purchase button.
+  assert.ok(hrefs(order).includes('/kup/preselekcja'), 'offer page has the Kup PRESELEKCJĘ button');
+  assert.match(order, /Kup PRESELEKCJĘ/);
   assert.doesNotMatch(order, /<li>Wyniki, ranking, shortlistę i raport weryfikuje/);
   const comparison = readFileSync(new URL('../app/components/marketing/package-comparison.tsx', import.meta.url), 'utf8');
   const lines = comparison.split('\n');

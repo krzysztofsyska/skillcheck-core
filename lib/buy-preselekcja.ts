@@ -7,21 +7,35 @@ import { withNext } from "./safe-next-path.ts";
 export const BUY_PRESELEKCJA_PATH = "/kup/preselekcja";
 export const BUY_PRESELEKCJA_LABEL = "Kup PRESELEKCJĘ";
 
+export type PurchaseCompany = { id: string; owner_id: string | null };
+
 export type BuyPreselekcjaState = {
-  /** Signed-in user, or null for an anonymous visitor. */
-  signedIn: boolean;
-  /** The company whose checkout should open, or null when the user has none. */
-  companyId: string | null;
+  /** Signed-in user's id, or null for an anonymous visitor. */
+  userId: string | null;
+  /** Companies the user can read, as returned by the RLS-scoped query. */
+  companies: PurchaseCompany[];
 };
 
 /**
+ * Only the owner of a company may order for it, so an owned company wins over
+ * one the user merely recruits for.
+ */
+export function selectPurchaseCompany(companies: PurchaseCompany[], userId: string): string | null {
+  return companies.find(company => company.owner_id === userId)?.id ?? null;
+}
+
+/**
  * Where a visitor clicking "Kup PRESELEKCJĘ" goes:
- *  - signed in with a company -> that company's checkout screen,
- *  - signed in without a company -> onboarding, returning here afterwards,
+ *  - signed in, owns a company -> that company's checkout screen,
+ *  - signed in, no company at all -> onboarding, returning here afterwards,
+ *  - signed in, only companies owned by someone else -> the company list with
+ *    an explanation, because the checkout screen would just refuse them,
  *  - anonymous -> registration, returning here after sign-up/sign-in.
  */
-export function buyPreselekcjaTarget({ signedIn, companyId }: BuyPreselekcjaState): string {
-  if (!signedIn) return withNext("/register", BUY_PRESELEKCJA_PATH);
-  if (!companyId) return withNext("/onboarding", BUY_PRESELEKCJA_PATH);
+export function buyPreselekcjaTarget({ userId, companies }: BuyPreselekcjaState): string {
+  if (!userId) return withNext("/register", BUY_PRESELEKCJA_PATH);
+  if (companies.length === 0) return withNext("/onboarding", BUY_PRESELEKCJA_PATH);
+  const companyId = selectPurchaseCompany(companies, userId);
+  if (!companyId) return "/dashboard?message=owner-required";
   return `/dashboard/${companyId}/billing/checkout`;
 }

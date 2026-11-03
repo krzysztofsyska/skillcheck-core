@@ -20,7 +20,7 @@ const requestKey = o => `sc19:request:${companyId}:${o.id}:${o.termsRevision}`;
 const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
-async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false, p24CheckoutUrl='', fallbackCredits=60 } = {}) {
+async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false, p24CheckoutUrl='', fallbackCredits=60, packagesEnabled=true } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
@@ -75,7 +75,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   runInNewContext(compiled, context);
   function render() {
     cursor = 0;
-    tree = context.exports.default({ companyId, fallbackCredits });
+    tree = context.exports.default({ companyId, fallbackCredits, packagesEnabled });
     for (const effect of effects.splice(0)) effect();
     return tree;
   }
@@ -280,4 +280,14 @@ test('a non-https or malformed payment address is never linked', async t => {
     assert.equal(h.find('a', 'Przejdź do płatności'), undefined, value);
     assert.equal(h.find('button', 'Przejdź do płatności').props.disabled, true, value);
   }
+});
+
+test('with packages not launched the screen never offers the automatic payment form', async t => {
+  // Manual fulfilment is a decision, not an API failure: the offers endpoint is
+  // not even consulted, so the live "Zamawiam i płacę" flow cannot appear.
+  const h = await harness({ packagesEnabled: false, offers: () => { throw Error('must not be called'); } });
+  t.after(h.close);
+  assert.equal(h.find('button', 'Zamawiam'), undefined);
+  assert.ok(h.find('h2', '300'), 'the package summary is shown instead');
+  assert.ok(h.find('p', 'operator po potwierdzeniu wpłaty'));
 });

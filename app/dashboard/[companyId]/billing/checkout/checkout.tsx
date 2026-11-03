@@ -19,7 +19,7 @@ const p24CheckoutUrl=(companyId:string)=>{
     return url.toString();
   }catch{return '';}
 };
-export default function Checkout({companyId,fallbackCredits}: {companyId:string;fallbackCredits:number|null}) {
+export default function Checkout({companyId,fallbackCredits,packagesEnabled}: {companyId:string;fallbackCredits:number|null;packagesEnabled:boolean}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
@@ -31,6 +31,9 @@ export default function Checkout({companyId,fallbackCredits}: {companyId:string;
   const payUrl=p24CheckoutUrl(companyId);
   async function loadOffers(signal?: AbortSignal) {
     setLoading(true);setAccepted(false);setOffers([]);setSelected('');setFallback(false);
+    // With packages not launched, activation is manual by decision, not because
+    // an API happened to fail: never show the automatic-payment offer form.
+    if(!packagesEnabled){setFallback(true);setMessage('');setLoading(false);return;}
     try {
       const r=await fetch(`/api/billing/offers?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',signal});
       if(!r.ok)throw Error();const data=await r.json();
