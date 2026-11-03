@@ -7,6 +7,8 @@ const pln=(v:number)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'
 // Przelewy24 is wired up in a separate task. Until then the checkout screen may
 // point at a hosted payment page configured by the owner; an empty or non-http
 // value keeps the button disabled instead of linking somewhere unexpected.
+const PROFORMA_MAIL='mailto:pomoc@skillcheck.pl?subject='+encodeURIComponent('SkillCheck — PRESELEKCJA: prośba o fakturę proforma')
+  +'&body='+encodeURIComponent(`Nazwa firmy:\r\nNIP:\r\nAdres e-mail konta w SkillCheck:\r\n\r\nProszę o fakturę proforma za pakiet PRESELEKCJA (${preselekcjaOffer.grossPln} zł brutto). Nie przesyłam CV ani danych kandydatów.`);
 const p24CheckoutUrl=(companyId:string)=>{
   const raw=(typeof process==='undefined'?'':process.env.NEXT_PUBLIC_P24_CHECKOUT_URL ?? '').trim();
   if(!raw)return '';
@@ -29,6 +31,10 @@ export default function Checkout({companyId,fallbackCredits,packagesEnabled}: {c
   const [fallback,setFallback]=useState(false),[fallbackAccepted,setFallbackAccepted]=useState(false);
   const offer=offers.find(o=>o.id===selected);
   const payUrl=p24CheckoutUrl(companyId);
+  // The price on this screen is the owner-approved one. Pairing it with a quota
+  // the owner did not approve would quietly sell a different package, so an
+  // unexpected policy value blocks the purchase just like an unreadable one.
+  const quotaApproved=fallbackCredits===preselekcjaOffer.analyses;
   async function loadOffers(signal?: AbortSignal) {
     setLoading(true);setAccepted(false);setOffers([]);setSelected('');setFallback(false);
     // With packages not launched, activation is manual by decision, not because
@@ -122,13 +128,18 @@ export default function Checkout({companyId,fallbackCredits,packagesEnabled}: {c
       <p>Analizy ważne {preselekcjaOffer.validityMonths} miesiące od dnia przyznania. Wyniki weryfikuje rekruter; SkillCheck nie podejmuje decyzji o zatrudnieniu.</p>
       <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={fallbackAccepted}
         onChange={e=>setFallbackAccepted(e.target.checked)}/> Akceptuję <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> i potwierdzam zapoznanie się z <a href="/polityka-prywatnosci" target="_blank" rel="noopener">Polityką prywatności</a>.</label>
-      {fallbackCredits!==null&&payUrl
+      {quotaApproved&&payUrl
         ? <a className="button" href={fallbackAccepted?payUrl:undefined} aria-disabled={!fallbackAccepted}
             rel="noopener" onClick={e=>{if(!fallbackAccepted)e.preventDefault();}}>Przejdź do płatności</a>
         : <><button type="button" disabled>Przejdź do płatności</button>
           <p role="status">{fallbackCredits===null
             ? 'Zakup chwilowo niedostępny — zatwierdzona liczba analiz jest nieosiągalna.'
-            : 'Płatność Przelewy24 — konfiguracja w toku'}</p></>}
+            : !quotaApproved
+              ? 'Zakup chwilowo niedostępny — zakres pakietu różni się od zatwierdzonej oferty.'
+              : 'Płatność Przelewy24 — konfiguracja w toku'}</p>
+          {/* Online payment is not configured, so the manual route the company
+              actually sells through must be reachable from this screen. */}
+          <p>Pakiet możesz zamówić na fakturę proforma: <a href={PROFORMA_MAIL}>napisz do nas</a> albo skorzystaj z <a href="/rozmowa">formularza kontaktowego</a>. Podaj nazwę firmy, NIP i numer referencyjny poniżej.</p></>}
       <p>W tym trybie zamówienie nie powstaje automatycznie: analizy przyznaje operator po potwierdzeniu wpłaty. Podaj przy płatności numer referencyjny firmy <strong>{companyId}</strong>. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>
     </section> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
     {message&&<p role="status" aria-live="polite">{message}</p>}

@@ -104,6 +104,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   render();
   return { storage, posts, redirects, statusReads, find, click,
     uuidCount: () => sequence,
+    offerReads: () => offerReads,
     accept() { find('input').props.onChange({ target: { checked: true } }); render(); },
     close() { for (const hook of hooks) hook?.cleanup?.(); },
   };
@@ -271,6 +272,7 @@ test('the fallback shows the active policy quota, not a hardcoded one', async t 
   const h = await harness({ offers: offersDown, fallbackCredits: 45 });
   t.after(h.close);
   assert.ok(h.find('p', '45'), 'live policy quota shown');
+  assert.equal(h.find('p', '60'), undefined, 'the marketing figure is not shown as the quota');
 });
 
 test('a non-https or malformed payment address is never linked', async t => {
@@ -287,7 +289,28 @@ test('with packages not launched the screen never offers the automatic payment f
   // not even consulted, so the live "Zamawiam i płacę" flow cannot appear.
   const h = await harness({ packagesEnabled: false, offers: () => { throw Error('must not be called'); } });
   t.after(h.close);
+  // The decisive assertion: the endpoint is never consulted, so this fails if
+  // the flag is ignored and the screen merely falls back on an API error.
+  assert.equal(h.offerReads(), 0, 'the offers endpoint is not consulted at all');
   assert.equal(h.find('button', 'Zamawiam'), undefined);
   assert.ok(h.find('h2', '300'), 'the package summary is shown instead');
   assert.ok(h.find('p', 'operator po potwierdzeniu wpłaty'));
+});
+
+test('an unapproved policy quota blocks the purchase instead of pairing it with the approved price', async t => {
+  const h = await harness({ offers: offersDown, p24CheckoutUrl: 'https://pay.fixture.invalid/x', fallbackCredits: 45 });
+  t.after(h.close);
+  assert.equal(h.find('a', 'Przejdź do płatności'), undefined);
+  assert.equal(h.find('button', 'Przejdź do płatności').props.disabled, true);
+  assert.ok(h.find('p', 'różni się od zatwierdzonej oferty'));
+});
+
+test('with online payment unconfigured the manual proforma route is offered', async t => {
+  const h = await harness({ offers: offersDown });
+  t.after(h.close);
+  assert.equal(h.find('a', 'Przejdź do płatności'), undefined);
+  const mail = h.find('a', 'napisz do nas');
+  assert.ok(mail, 'proforma contact offered');
+  assert.match(mail.props.href, /^mailto:pomoc@skillcheck\.pl\?subject=/);
+  assert.ok(h.find('a', 'formularza kontaktowego'));
 });
