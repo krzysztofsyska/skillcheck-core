@@ -11,6 +11,7 @@ const pln=(v:number)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'
 const breakdown=(offer: Offer)=>typeof offer.netMinor==='number'&&typeof offer.vatMinor==='number'
   ?{netMinor:offer.netMinor,vatMinor:offer.vatMinor,vatBasisPoints:offer.vatBasisPoints ?? null}
   :sc19OfferAmounts(offer.amountMinor);
+const verificationPending='Twoja firma czeka na weryfikację — do tego czasu zakupu nie można złożyć. Odświeżenie strony tego nie zmieni. Napisz do nas przez formularz kontaktowy (/rozmowa) albo na pomoc@skillcheck.pl, a potwierdzimy firmę i odblokujemy zamówienie.';
 const paymentsPending='Płatność online jest w trakcie uruchamiania (trwa weryfikacja u operatora płatności Przelewy24). Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
 export default function Checkout({companyId}: {companyId:string}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
@@ -33,6 +34,13 @@ export default function Checkout({companyId}: {companyId:string}) {
         const failure=await r.json().catch(()=>null);
         if(failure?.error==='SC19_PAYMENTS_DISABLED'){
           if(!signal?.aborted){setCheckoutAvailable(false);setMessage(paymentsPending);}
+          return;
+        }
+        // A brand-new company has no approval yet, so the offer read is refused.
+        // Refreshing can never help: what is missing is a verification only
+        // SkillCheck can grant, so name the real next step instead.
+        if(failure?.error==='SC19_PAYMENT_FORBIDDEN'){
+          if(!signal?.aborted){setCheckoutAvailable(false);setMessage(verificationPending);}
           return;
         }
         throw Error();

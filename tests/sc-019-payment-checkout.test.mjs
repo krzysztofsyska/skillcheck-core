@@ -274,6 +274,19 @@ test('an offer read refused with SC19_PAYMENTS_DISABLED is explained, not report
  assert.equal(h.posts.length,0);
 });
 
+test('a company still awaiting verification is told so, not asked to retry',async t=>{
+ // A brand-new company has no approval row, so the offer read is refused with
+ // 403. Refreshing can never fix that, and the copy must not suggest it can.
+ const h=await harness({offersResponse:()=>({ok:false,status:403,json:async()=>({error:'SC19_PAYMENT_FORBIDDEN'})}),
+  checkout:async()=>{throw Error('must not POST');}});
+ t.after(h.close);
+ assert.ok(h.find('p','czeka na weryfikację'),'the real next step is named');
+ assert.ok(h.find('p','pomoc@skillcheck.pl'),'a way to ask for it is given');
+ assert.equal(h.find('p','Nie udało się wczytać oferty'),undefined,'not presented as a failed load');
+ assert.equal(h.find('button','Zamawiam'),undefined);
+ assert.equal(h.posts.length,0);
+});
+
 test('an offer read that fails for any other reason still asks the visitor to retry',async t=>{
  const h=await harness({offersResponse:()=>({ok:false,status:503,json:async()=>({error:'SC19_PAYMENT_RETRY'})}),
   checkout:async()=>{throw Error('must not POST');}});
