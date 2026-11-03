@@ -13,11 +13,10 @@ export function safeNextPath(value: unknown): string | null {
   const candidate = value.trim();
   if (!candidate || candidate.length > 512) return null;
   if (!candidate.startsWith("/")) return null;
-  // Protocol-relative and backslash forms resolve to another origin.
-  if (candidate.startsWith("//") || candidate.startsWith("/\\")) return null;
+  // Protocol-relative and backslash forms resolve to another origin. A browser
+  // reads "\" as "/", so it is rejected anywhere, not just at the start.
+  if (candidate.startsWith("//") || candidate.includes("\\")) return null;
   if (CONTROL_CHARACTERS.test(candidate)) return null;
-  // A second absolute path inside the value (e.g. "/a\\/evil") never happens in
-  // our own links; parse against a fixed base and require the origin to survive.
   let parsed: URL;
   try {
     parsed = new URL(candidate, "https://skillcheck.invalid");
@@ -26,7 +25,21 @@ export function safeNextPath(value: unknown): string | null {
   }
   if (parsed.origin !== "https://skillcheck.invalid") return null;
   if (parsed.username || parsed.password) return null;
-  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  // Dot segments are resolved AFTER the checks above, so "/..//evil.example"
+  // normalises to "//evil.example". The returned value is the one that reaches
+  // redirect(), so it is validated too — this keeps the function idempotent.
+  const path = `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) return null;
+  return path;
+}
+
+/**
+ * The only way a `next` value may reach redirect(). Re-validates a value that
+ * crossed a request boundary (hidden form field, query string) and falls back
+ * to a known-safe path, so no caller ever redirects to an unchecked string.
+ */
+export function nextRedirectTarget(next: unknown, fallback: string): string {
+  return safeNextPath(next) ?? fallback;
 }
 
 /** Appends a validated `next` to a path, or returns the path unchanged. */

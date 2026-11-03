@@ -6,7 +6,7 @@ import { createClient } from "../../lib/supabase/server";
 import { credentials } from "../../lib/auth-validation";
 import { authCallbackUrl } from "../../lib/auth-url";
 import { hasLegalAcceptance, LEGAL_ACCEPTANCE_REVISION, LEGAL_ACCEPTED_DOCUMENTS, LEGAL_VERSION } from "../../lib/legal";
-import { safeNextPath, withNext } from "../../lib/safe-next-path";
+import { nextRedirectTarget, safeNextPath, withNext } from "../../lib/safe-next-path";
 
 export async function login(form: FormData) {
   // Only an internal path is ever followed; see lib/safe-next-path.ts.
@@ -16,7 +16,7 @@ export async function login(form: FormData) {
   const client = await createClient();
   const { error } = await client.auth.signInWithPassword(input);
   if (error) redirect(withNext("/login?message=failed", next));
-  redirect(next ?? "/dashboard");
+  redirect(nextRedirectTarget(next, "/dashboard"));
 }
 export async function register(form: FormData) {
   const next = safeNextPath(form.get("next"));
@@ -52,7 +52,7 @@ export async function createCompany(form: FormData) {
   const { data: companyId, error } = await client.rpc("ensure_initial_company", { company_name: name });
   if (error) redirect(withNext("/onboarding?message=failed", next));
   // A pending purchase path wins: it resolves the new company itself.
-  if (next) redirect(next);
+  if (next) redirect(nextRedirectTarget(next, "/dashboard"));
   // Open the new company's dashboard straight away; fall back to the list for an unexpected value.
   redirect(typeof companyId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId) ? `/dashboard/${companyId}` : "/dashboard");
 }

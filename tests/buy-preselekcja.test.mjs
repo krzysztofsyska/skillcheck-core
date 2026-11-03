@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire, Module } from 'node:module';
 import ts from 'typescript';
-import { safeNextPath, withNext } from '../lib/safe-next-path.ts';
+import { nextRedirectTarget, safeNextPath, withNext } from '../lib/safe-next-path.ts';
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH, buyPreselekcjaTarget } from '../lib/buy-preselekcja.ts';
 import * as validation from '../lib/auth-validation.ts';
 import * as authUrl from '../lib/auth-url.ts';
@@ -39,7 +39,31 @@ test('only internal paths survive next validation — no open redirect', () => {
     '/\\evil.example', '\\\\evil.example', 'javascript:alert(1)', 'data:text/html,x',
     'kup/preselekcja', '', '   ', null, undefined, 42, {},
     '/ok\nSet-Cookie: a=b', '/ok\u0000', '/' + 'a'.repeat(600),
+    // Dot segments are resolved after the prefix check, so a leading "/.." can
+    // hide a protocol-relative target: these must be rejected on the OUTPUT.
+    '/..//evil.example', '/.//evil.example', '/a/../..//evil.example',
+    '/./\\/evil', '/../\\/evil.example', '/a\\/evil', '/\\\\evil.example',
   ]) assert.equal(safeNextPath(value), null, `rejected: ${String(value)}`);
+});
+
+test('safeNextPath is idempotent — what it returns, it also accepts unchanged', () => {
+  for (const value of [
+    '/kup/preselekcja', '/dashboard/x/billing/checkout?a=1#b', '/a/../b', '/./a',
+    '/..//evil.example', '/a/../..//evil.example', '/./\\/evil', '/%2f%2fevil.example',
+  ]) {
+    const once = safeNextPath(value);
+    assert.equal(safeNextPath(once), once, `idempotent for: ${value}`);
+    if (once !== null) {
+      assert.ok(once.startsWith('/') && !once.startsWith('//') && !once.includes('\\'),
+        `accepted value stays internal: ${value} -> ${once}`);
+    }
+  }
+});
+
+test('nextRedirectTarget never hands redirect() an unvalidated value', () => {
+  assert.equal(nextRedirectTarget('/kup/preselekcja', '/dashboard'), '/kup/preselekcja');
+  for (const value of ['//evil.example', '/..//evil.example', 'https://evil.example', null, '/a\\/evil'])
+    assert.equal(nextRedirectTarget(value, '/dashboard'), '/dashboard', `fallback for: ${String(value)}`);
 });
 
 test('withNext appends only a validated target and leaves the path alone otherwise', () => {
@@ -98,8 +122,11 @@ test('the first company hands the visitor back to the purchase path', async () =
   assert.equal(await target(() => loadActions({ rpc: { data: id, error: null } }).createCompany(form)), BUY_PRESELEKCJA_PATH);
   const plain = new FormData(); plain.set('name', 'Firma');
   assert.equal(await target(() => loadActions({ rpc: { data: id, error: null } }).createCompany(plain)), `/dashboard/${id}`);
-  const external = new FormData(); external.set('name', 'Firma'); external.set('next', '//evil.example');
-  assert.equal(await target(() => loadActions({ rpc: { data: id, error: null } }).createCompany(external)), `/dashboard/${id}`);
+  for (const hostile of ['//evil.example', '/..//evil.example', '/a\\/evil', 'https://evil.example']) {
+    const external = new FormData(); external.set('name', 'Firma'); external.set('next', hostile);
+    const landed = await target(() => loadActions({ rpc: { data: id, error: null } }).createCompany(external));
+    assert.ok(landed === `/dashboard/${id}` || landed === '/dashboard', `never leaves the origin: ${hostile} -> ${landed}`);
+  }
 });
 
 // Surfaces: the button exists where the owner asked for it, and the dashboard
@@ -127,6 +154,17 @@ test('the dashboard billing page orders through the checkout screen', () => {
   const source = read('app/dashboard/[companyId]/billing/page.tsx');
   assert.match(source, /href=\{`\/dashboard\/\$\{companyId\}\/billing\/checkout`\}>Zamów PRESELEKCJĘ</);
   assert.equal(/href="\/rozmowa">Zamów PRESELEKCJĘ/.test(source), false);
+});
+
+test('every next consumer re-validates before redirecting', () => {
+  // A value that crossed a request boundary is never passed to redirect() raw.
+  const onboarding = read('app/onboarding/page.tsx');
+  assert.match(onboarding, /nextRedirectTarget\(next, "\/dashboard"\)/);
+  for (const raw of [/redirect\(next\)/, /redirect\(next \?\?/, /\? next :/])
+    assert.equal(raw.test(onboarding), false, `no raw redirect of next in onboarding: ${raw}`);
+  const actions = read('app/auth/actions.ts');
+  for (const raw of [/redirect\(next\)/, /redirect\(next \?\?/])
+    assert.equal(raw.test(actions), false, `no raw redirect of next in auth actions: ${raw}`);
 });
 
 test('the purchase route resolves server-side and never renders', () => {
