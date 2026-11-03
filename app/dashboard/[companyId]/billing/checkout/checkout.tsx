@@ -1,51 +1,52 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { preselekcjaOffer } from '../../../../../lib/preselekcja-offer';
+import { sc19OfferAmounts } from '../../../../../lib/sc19-offer-amounts';
 type Offer={id:string;revision:string;amountMinor:number;currency:string;credits:number;
-  termsRevision:string;termsText:string;validUntilMs:number};
+  termsRevision:string;termsText:string;validUntilMs:number;
+  netMinor?:number|null;vatMinor?:number|null;vatBasisPoints?:number|null};
 const pln=(v:number)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN'}).format(v/100);
-// Przelewy24 is wired up in a separate task. Until then the checkout screen may
-// point at a hosted payment page configured by the owner; an empty or non-http
-// value keeps the button disabled instead of linking somewhere unexpected.
-const PROFORMA_MAIL='mailto:pomoc@skillcheck.pl?subject='+encodeURIComponent('SkillCheck — PRESELEKCJA: prośba o fakturę proforma')
-  +'&body='+encodeURIComponent(`Nazwa firmy:\r\nNIP:\r\nAdres e-mail konta w SkillCheck:\r\n\r\nProszę o fakturę proforma za pakiet PRESELEKCJA (${preselekcjaOffer.grossPln} zł brutto). Nie przesyłam CV ani danych kandydatów.`);
-const p24CheckoutUrl=(companyId:string)=>{
-  const raw=(typeof process==='undefined'?'':process.env.NEXT_PUBLIC_P24_CHECKOUT_URL ?? '').trim();
-  if(!raw)return '';
-  try{
-    const url=new URL(raw);
-    if(url.protocol!=='https:')return '';
-    // No server-side order exists in this mode, so the payment must carry the
-    // company reference the operator reconciles it against before granting credits.
-    url.searchParams.set('ref',companyId);
-    return url.toString();
-  }catch{return '';}
-};
-export default function Checkout({companyId,fallbackCredits,packagesEnabled}: {companyId:string;fallbackCredits:number|null;packagesEnabled:boolean}) {
+// Gross is authoritative: it is what the server charges and what a settlement is
+// matched against. Net and VAT are derived from it; the server sends them, and the
+// same shared formula is the fallback so the two can never disagree.
+const breakdown=(offer: Offer)=>typeof offer.netMinor==='number'&&typeof offer.vatMinor==='number'
+  ?{netMinor:offer.netMinor,vatMinor:offer.vatMinor,vatBasisPoints:offer.vatBasisPoints ?? null}
+  :sc19OfferAmounts(offer.amountMinor);
+const paymentsPending='Płatność online jest w trakcie uruchamiania (trwa weryfikacja u operatora płatności Przelewy24). Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
+export default function Checkout({companyId}: {companyId:string}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
+  const [checkoutAvailable,setCheckoutAvailable]=useState(true);
   const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string}|null>(null);
   const [requestIds]=useState(()=>new Map<string,string>());
-  // Offers API unavailable: show the approved package summary instead of a dead end.
-  const [fallback,setFallback]=useState(false),[fallbackAccepted,setFallbackAccepted]=useState(false);
   const offer=offers.find(o=>o.id===selected);
-  const payUrl=p24CheckoutUrl(companyId);
-  // The price on this screen is the owner-approved one. Pairing it with a quota
-  // the owner did not approve would quietly sell a different package, so an
-  // unexpected policy value blocks the purchase just like an unreadable one.
-  const quotaApproved=fallbackCredits===preselekcjaOffer.analyses;
+  const amounts=offer&&breakdown(offer);
   async function loadOffers(signal?: AbortSignal) {
-    setLoading(true);setAccepted(false);setOffers([]);setSelected('');setFallback(false);
-    // With packages not launched, activation is manual by decision, not because
-    // an API happened to fail: never show the automatic-payment offer form.
-    if(!packagesEnabled){setFallback(true);setMessage('');setLoading(false);return;}
+    setLoading(true);setAccepted(false);setOffers([]);setSelected('');
     try {
       const r=await fetch(`/api/billing/offers?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',signal});
-      if(!r.ok)throw Error();const data=await r.json();
-      if(!signal?.aborted){setOffers(data.offers);setSelected(data.offers[0]?.id ?? '');}
+      if(!r.ok){
+        // The offer read itself can be unavailable: no payment provider AND no
+        // catalog (SC19_PACKAGES_ENABLED off). Say so with the same wording the
+        // refused purchase uses, instead of "could not load", which would suggest
+        // retrying would help.
+        const failure=await r.json().catch(()=>null);
+        if(failure?.error==='SC19_PAYMENTS_DISABLED'){
+          if(!signal?.aborted){setCheckoutAvailable(false);setMessage(paymentsPending);}
+          return;
+        }
+        throw Error();
+      }
+      const data=await r.json();
+      if(!signal?.aborted){
+        // Availability is never assumed: only an explicit true opens the pay button.
+        setCheckoutAvailable(data.checkoutAvailable===true);
+        setOffers(data.offers);setSelected(data.offers[0]?.id ?? '');
+        if(data.checkoutAvailable!==true&&data.offers?.length>0)setMessage('');
+      }
     } catch {
-      if(!signal?.aborted){setFallback(true);setMessage('');}
+      if(!signal?.aborted){setCheckoutAvailable(false);
+        setMessage('Nie udało się wczytać oferty. Odśwież stronę lub spróbuj ponownie za chwilę.');}
     } finally {if(!signal?.aborted)setLoading(false);}
   }
   useEffect(()=>{
@@ -77,7 +78,9 @@ export default function Checkout({companyId,fallbackCredits,packagesEnabled}: {c
     setOrderId('');setPaidOrder(null);setAccepted(false);setMessage('Możesz złożyć kolejne zamówienie.');
   }
   async function buy() {
-    if(!offer||!accepted||busy||loading||paidOrder)return;
+    // Never post while checkout is unavailable: the server refuses it anyway
+    // (SC19_PAYMENTS_DISABLED), and the button is rendered disabled.
+    if(!offer||!accepted||busy||loading||paidOrder||!checkoutAvailable)return;
     setBusy(true);setMessage('');
     try {
       // Best-effort retry hint. The durable server invariant also protects new
@@ -98,6 +101,9 @@ export default function Checkout({companyId,fallbackCredits,packagesEnabled}: {c
         if(data.error==='SC19_PAYMENT_PURCHASE_PENDING'){
           setMessage('Firma ma już nierozliczone zamówienie z innymi warunkami. Dokończ je lub skontaktuj się z obsługą przed kolejnym zakupem.');return;
         }
+        if(data.error==='SC19_PAYMENTS_DISABLED'){
+          setCheckoutAvailable(false);setMessage(paymentsPending);return;
+        }
         throw Error();
       }
       setOrderId(data.orderId);
@@ -114,34 +120,21 @@ export default function Checkout({companyId,fallbackCredits,packagesEnabled}: {c
         {offers.map(o=><option key={o.id} value={o.id}>{o.credits} analiz CV — {pln(o.amountMinor)} brutto</option>)}
       </select></label>
       {offer&&<><h2>{pln(offer.amountMinor)} brutto</h2><p>{offer.credits} analiz CV • jednorazowo • analizy ważne 3 miesiące od przyznania</p>
+        <table><caption>Podsumowanie zamówienia</caption><tbody>
+          <tr><th scope="row">Pakiet</th><td>PRESELEKCJA</td></tr>
+          <tr><th scope="row">Liczba analiz CV</th><td>{offer.credits}</td></tr>
+          {amounts&&<tr><th scope="row">Cena netto</th><td>{pln(amounts.netMinor)}</td></tr>}
+          {amounts&&<tr><th scope="row">VAT{typeof amounts.vatBasisPoints==='number'?` ${amounts.vatBasisPoints/100}%`:''}</th><td>{pln(amounts.vatMinor)}</td></tr>}
+          <tr><th scope="row">Cena brutto</th><td>{pln(offer.amountMinor)}</td></tr>
+        </tbody></table>
         <details open><summary>Warunki oferty · {offer.termsRevision}</summary><p style={{whiteSpace:'pre-wrap'}}>{offer.termsText}</p></details>
         <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={accepted} disabled={busy}
           onChange={e=>setAccepted(e.target.checked)}/> Akceptuję powyższe warunki oferty oraz <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> i potwierdzam zapoznanie się z <a href="/polityka-prywatnosci" target="_blank" rel="noopener">Polityką prywatności</a>.</label>
         <p>Płatność online obsługuje Przelewy24 (PayPro S.A., ul. Pastelowa 8, 60-198 Poznań): szybki przelew, BLIK lub karta, w zakresie metod udostępnionych przez operatora. Analizy przyznajemy po potwierdzeniu płatności przez operatora, zwykle w ciągu kilku minut. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>
-        <button type="button" disabled={!accepted||busy||!!paidOrder} onClick={buy}>
-          {busy?'Przetwarzam…':`Zamawiam i płacę ${pln(offer.amountMinor)}`}</button></>}
-    </> : fallback ? <section aria-label="Podsumowanie pakietu PRESELEKCJA">
-      <h2>{preselekcjaOffer.grossPln} zł brutto</h2>
-      {fallbackCredits===null
-        ? <p>Liczba analiz CV zgodna z zatwierdzoną polityką pakietów • jednorazowo • {preselekcjaOffer.netPln} zł netto + 23% VAT</p>
-        : <p>{fallbackCredits} analiz CV • jednorazowo • {preselekcjaOffer.netPln} zł netto + 23% VAT</p>}
-      <p>Analizy ważne {preselekcjaOffer.validityMonths} miesiące od dnia przyznania. Wyniki weryfikuje rekruter; SkillCheck nie podejmuje decyzji o zatrudnieniu.</p>
-      <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={fallbackAccepted}
-        onChange={e=>setFallbackAccepted(e.target.checked)}/> Akceptuję <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> i potwierdzam zapoznanie się z <a href="/polityka-prywatnosci" target="_blank" rel="noopener">Polityką prywatności</a>.</label>
-      {quotaApproved&&payUrl
-        ? <a className="button" href={fallbackAccepted?payUrl:undefined} aria-disabled={!fallbackAccepted}
-            rel="noopener" onClick={e=>{if(!fallbackAccepted)e.preventDefault();}}>Przejdź do płatności</a>
-        : <><button type="button" disabled>Przejdź do płatności</button>
-          <p role="status">{fallbackCredits===null
-            ? 'Zakup chwilowo niedostępny — zatwierdzona liczba analiz jest nieosiągalna.'
-            : !quotaApproved
-              ? 'Zakup chwilowo niedostępny — zakres pakietu różni się od zatwierdzonej oferty.'
-              : 'Płatność Przelewy24 — konfiguracja w toku'}</p>
-          {/* Online payment is not configured, so the manual route the company
-              actually sells through must be reachable from this screen. */}
-          <p>Pakiet możesz zamówić na fakturę proforma: <a href={PROFORMA_MAIL}>napisz do nas</a> albo skorzystaj z <a href="/rozmowa">formularza kontaktowego</a>. Podaj nazwę firmy, NIP i numer referencyjny poniżej.</p></>}
-      <p>W tym trybie zamówienie nie powstaje automatycznie: analizy przyznaje operator po potwierdzeniu wpłaty. Podaj przy płatności numer referencyjny firmy <strong>{companyId}</strong>. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>
-    </section> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
+        {!checkoutAvailable&&<p role="status" aria-live="polite">{paymentsPending}</p>}
+        <button type="button" disabled={!checkoutAvailable||!accepted||busy||!!paidOrder} onClick={buy}>
+          {busy?'Przetwarzam…':checkoutAvailable?`Zamawiam i płacę ${pln(offer.amountMinor)}`:`Zamawiam i płacę ${pln(offer.amountMinor)} — wkrótce`}</button></>}
+    </> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
     {message&&<p role="status" aria-live="polite">{message}</p>}
     <button type="button" disabled={busy||loading} onClick={()=>{setMessage('');return loadOffers();}}>Odśwież oferty</button>
     {paidOrder&&<button type="button" disabled={busy} onClick={nextPurchase}>Kup kolejny pakiet</button>}

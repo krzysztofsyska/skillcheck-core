@@ -22,7 +22,15 @@ const freeEmail = "mailto:pomoc@skillcheck.pl?subject=" + encodeURIComponent("Sk
   + "&body=" + encodeURIComponent("Nazwa firmy:\r\nNIP:\r\nAdres e-mail konta w SkillCheck (firmowy):\r\nBranża firmy (opcjonalnie):\r\nNazwa stanowiska:\r\n\r\nProszę o warunki weryfikacji firmy i dostęp próbny FREE. Nie przesyłam danych osobowych ani CV kandydatów.");
 
 export default async function PreselectionOfferPage() {
-  const { preselekcja } = await loadPublicOffer();
+  // catalogEnabled is SC19_PACKAGES_ENABLED, the same release switch the company
+  // panel reads. With it off the dashboard hides the Pakiety entry and
+  // billing/checkout only shows a "not available yet" notice, so a public CTA
+  // promising an order in the panel would send a prospect to a dead end.
+  // The CTA is therefore kept but stated as what it really is while the switch is
+  // off — registration only — rather than hidden: creating the company account is
+  // a real next step (the operator activates the package on that account after the
+  // transfer), so removing it would make the page less useful, not more honest.
+  const { preselekcja, catalogEnabled } = await loadPublicOffer();
   const scope = preselekcja === null ? null : `${preselekcja} analiz CV`;
   return <main className={styles.page}>
     <SiteHeader />
@@ -43,8 +51,12 @@ export default async function PreselectionOfferPage() {
         <div className={styles.actions}>
           <Link className={styles.primary} href={BUY_PRESELEKCJA_PATH}>{BUY_PRESELEKCJA_LABEL}</Link>
           <a className={styles.secondary} href={preselectionEmail(scope)}>Poproś o fakturę proforma</a>
+          <Link className={styles.secondary} href="/register">{catalogEnabled ? "Zamów w panelu firmy" : "Załóż konto firmowe"}</Link>
           <Link className={styles.secondary} href="/demo">Zobacz przykładowy raport</Link>
         </div>
+        {catalogEnabled
+          ? <p className={styles.note}>Zamówienie w panelu firmy: zaloguj się, wybierz firmę, otwórz <strong>Pakiety</strong> i przejdź do zakupu PRESELEKCJI. Zakup może złożyć wyłącznie właściciel konta firmy. Masz już konto? <Link href="/login">Zaloguj się</Link>.</p>
+          : <p className={styles.note}>Konto firmowe służy na razie tylko do rejestracji — zamówienia w panelu firmy jeszcze nie składasz. Pakiet uruchamiamy na Twoim koncie po zaksięgowaniu wpłaty z faktury proforma. Masz już konto? <Link href="/login">Zaloguj się</Link>.</p>}
       </section>
       <section aria-labelledby="pilot-process">
         <h2 id="pilot-process">Jak zamówić?</h2>

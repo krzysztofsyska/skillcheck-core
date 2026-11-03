@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 import { lifecycleHarness } from './helpers/erasure-lifecycle-fixture.mjs';
 import { retentionHarness } from './helpers/retention-scheduler-fixture.mjs';
 import {
-  accountingSnapshot, accountingTables, applyMigration, assertCurrentInventory, assertR6, blockersOf,
-  bootMigrationDatabase, catalogSnapshot, installSource, paymentHarness, paymentUsers,
-  seedCreditData, seedHistoricalOrders, seedSyntheticPolicy, sourceStates,
+  accountingSnapshot, accountingTables, applyMigration, applyPreviewSeeds, assertCurrentInventory,
+  assertR6, blockersOf, bootMigrationDatabase, catalogSnapshot, installSource, paymentHarness,
+  paymentUsers, rawPreviewSeed, renderPreviewSeed, seedCreditData, seedHistoricalOrders,
+  seedSyntheticPolicy, sourceStates,
 } from './helpers/sc19-migration-fixture.mjs';
 
 // These are actual checked-in migrations on disposable native PostgreSQL. The
@@ -71,19 +73,231 @@ test('SC-019 migration is exercised by the complete current migration chain', as
   await setupRankingDatabase(env.db, { throughMigration: null });
   await assertCurrentInventory(env.db);
   await assert.rejects(env.db.query("update private.erasure_inventory_baseline_r6 set schema_signature=repeat('a',64)"), /immutable/i);
-  for (const table of accountingTables) {
-    assert.equal((await env.db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, 'Fresh install creates no policy/sales/approval/balance');
+  // The complete chain creates NO commercial state at all. Package quotas and a
+  // purchasable offer are owner-gated billing actions (/operator/billing,
+  // CLAUDE.md; "billing and charge actions" in AGENTS.md), and a migration runs
+  // wherever the chain runs, production included, so neither may come from one.
+  // The owner-approved values reach the TEST project through
+  // supabase/preview-seeds/sc19-preselekcja-offer.sql instead.
+  for (const [table, rows] of Object.entries(await accountingSnapshot(env.db))) {
+    assert.deepEqual(rows, [], `the chain activates no commercial state: ${table}`);
   }
-  const { db, h } = env, f = await h.seed(); await h.asAdmin();
-  await assert.rejects(db.query('select private.sc19_grant_paid($1,$2)', [f.companyId, 'synthetic-missing-policy-grant']), /sc19_missing_paid_policy/);
+  // The read-only RPC the checkout page needs IS installed by the chain: reading
+  // an offer needs no provider and creates no commercial state. With nothing
+  // seeded it answers an empty list to a verified owner, so the page says "no
+  // offer" instead of breaking.
+  assert.notEqual((await env.db.query("select to_regprocedure('public.sc19_checkout_offers(uuid)') v")).rows[0].v, null);
+
+  const { db, h } = env;
+  const f = await h.seed(); await h.asAdmin();
   await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
-    values($1,'1234563218','synthetic-missing-policy-proof')`, [f.companyId]);
+    values($1,'1234563218','synthetic-chain-offer-proof')`, [f.companyId]);
   await h.asUser(f.owner);
-  await assert.rejects(db.query("select public.sc19_claim_trial($1,'1234563218')", [f.companyId]), /sc19_missing_free_policy/);
-  await h.asUser(null, 'anon');
-  assert.deepEqual((await db.query('select * from public.sc19_package_sizes()')).rows, []);
-  const after = await accountingSnapshot(db);
-  for (const table of ['sc19_balances', 'sc19_trial_nips', 'sc19_credit_journal']) assert.deepEqual(after[table], []);
+  assert.deepEqual((await db.query('select * from public.sc19_checkout_offers($1)', [f.companyId])).rows, [],
+    'no offer is on sale until somebody with the authority publishes one');
+  await h.asAdmin();
+  // A paid grant refuses while no quota is configured, which is the correct
+  // production state until the owner sets FREE=5 / PRESELEKCJA=60 himself.
+  await assert.rejects(db.query('select private.sc19_grant_paid($1,$2)', [f.companyId, 'synthetic-chain-no-policy']),
+    /sc19_missing_paid_policy/);
+
+  // WERYFIKACJA and ASSESSMENT CENTER stay non-purchasable (standing owner
+  // decision), enforced by the chain's own check constraints.
+  for (const sql of ["insert into private.sc19_package_policy(plan,credits) values('WERYFIKACJA',60)",
+    `insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
+      terms_revision,terms_text,valid_until_ms)
+      values('x','x','WERYFIKACJA',true,true,61500,'PLN',60,'x','x',9999999999999)`]) {
+    await assert.rejects(db.query(sql), error => error.code === '23514');
+  }
+});
+
+// The preview-only seed on top of the complete chain: this is what
+// skillcheck-preview ends up with, and what the Przelewy24 verifier walks.
+test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA offer', async t => {
+  const env = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(env.db, { throughMigration: null });
+  const { db } = env;
+  await h.asAdmin();
+  await applyPreviewSeeds(db);
+  // The seed is data only: the reviewed schema is untouched.
+  await assertCurrentInventory(db);
+  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
+    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }], 'owner-approved quotas (2026-11-02 / 2026-10-28)');
+  const purchasable = (await db.query(`select id,amount_minor,credits,currency,terms_revision,terms_text
+    from private.sc19_payment_offers where approved and active
+      and valid_until_ms > (extract(epoch from now())*1000)::bigint`)).rows;
+  assert.equal(purchasable.length, 1, 'exactly one purchasable offer: PRESELEKCJA 60 CV / 300 zł gross');
+  assert.equal(purchasable[0].id, 'preselekcja-60-2026-11-r2');
+  assert.equal(purchasable[0].amount_minor, 30000);
+  assert.equal(purchasable[0].credits, 60);
+  assert.equal(purchasable[0].currency, 'PLN');
+  // The terms the customer accepts are properly accented Polish.
+  assert.match(purchasable[0].terms_text, /[ąćęłńóśźż]/);
+  assert.match(purchasable[0].terms_text, /300,00 zł brutto/);
+  assert.match(purchasable[0].terms_text, /243,90 zł netto \+ 56,10 zł VAT 23%/);
+  assert.match(purchasable[0].terms_text, /każdy wynik weryfikuje człowiek/);
+  // Nothing beyond the quotas and the one offer: no sale, approval, balance,
+  // order, grant or journal entry is invented for anybody.
+  for (const table of accountingTables.filter(name => !['sc19_package_policy', 'sc19_payment_offers'].includes(name))) {
+    assert.equal((await db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, table);
+  }
+  // Re-running changes nothing.
+  const seeded = await accountingSnapshot(db);
+  await applyPreviewSeeds(db);
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await accountingSnapshot(db), seeded, 'the seed is idempotent');
+
+  const purchasableIds = async () => (await db.query(`select id from private.sc19_payment_offers
+    where approved and active and valid_until_ms > (extract(epoch from now())*1000)::bigint order by id`)).rows.map(r => r.id);
+
+  // The shown, accepted and granted quantity must be ONE number.
+  // private.sc19_grant_paid() grants the stored PRESELEKCJA quota and an issued
+  // offer row cannot be rewritten, so the 60 CV / 300 zł offer is withdrawn while
+  // the stored quota is something else, rather than mispriced.
+  await db.query("update private.sc19_package_policy set credits=17 where plan='PRESELEKCJA'");
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await purchasableIds(), [],
+    'a differing operator quota withdraws the offer instead of mispricing it');
+  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'], 'restoring the approved quota publishes it again');
+
+  // An operator quota already in place is KEPT, never overwritten by the seed.
+  await db.query("update private.sc19_package_policy set credits=4 where plan='FREE'");
+  await applyPreviewSeeds(db);
+  assert.equal((await db.query("select credits from private.sc19_package_policy where plan='FREE'")).rows[0].credits, 4,
+    'the seed never overwrites an operator billing decision');
+  await db.query("update private.sc19_package_policy set credits=5 where plan='FREE'");
+
+  // A manual deactivation on preview is repaired by a re-run, without a new row.
+  await db.query("update private.sc19_payment_offers set active=false where id='preselekcja-60-2026-11-r2'");
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2']);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 1,
+    'no new offer row is ever created by a re-run');
+
+  // The offer row is immutable, so the economics of an issued revision cannot be
+  // edited, and it cannot be deleted either.
+  await assert.rejects(db.query("update private.sc19_payment_offers set amount_minor=1 where id='preselekcja-60-2026-11-r2'"), /immutable/i);
+  await assert.rejects(db.query("delete from private.sc19_payment_offers where id='preselekcja-60-2026-11-r2'"), /immutable/i);
+
+  // ORDINARY PREVIEW TESTING MUST NOT BLOCK THE NEXT MIGRATION RUN.
+  // preview-db-migrate.yml re-applies this seed on every run, and by then the
+  // test project holds the balances, journal entries, orders and grants that a
+  // FREE claim, an operator grant and a checkout walk leave behind. An earlier
+  // guard refused on exactly those rows, so the first test walk would have
+  // blocked every later Preview migration run.
+  const f = await h.seed(users.otherOwner); await h.asAdmin();
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
+    values($1,'1111111111','synthetic-preview-activity-proof')`, [f.companyId]);
+  await h.asUser(users.otherOwner);
+  assert.equal((await db.query("select public.sc19_claim_trial($1,'1111111111') credits", [f.companyId])).rows[0].credits, 5,
+    'a company claiming FREE on preview: balance + journal + trial nip');
+  await h.asAdmin();
+  await db.query('select private.sc19_grant_paid($1,$2)', [f.companyId, 'synthetic-preview-activity-settlement']);
+  const orderId = randomUUID();
+  await db.query(`insert into private.sc19_payment_orders(id,company_id,buyer_id,request_id,offer_id,offer_revision,
+    terms_revision,amount_minor,currency,credits,provider,account,mode,status,session_id,checkout_url,payment_id,
+    checkout_deadline_ms)
+    values($1,$2,$3,$4,'preselekcja-60-2026-11-r2','preselekcja-60-v2','preselekcja-terms-2026-11-v2',
+      30000,'PLN',60,'synthetic','preview-walk','test','paid',$5,$6,$7,$8)`,
+  [orderId, f.companyId, paymentUsers.otherOwner, randomUUID(), `session-${orderId}`,
+    `https://pay.fixture.invalid/${orderId}`, `synthetic-paid-${orderId}`, Date.now() + 3600000]);
+  await db.query('insert into private.sc19_payment_grants(payment_key,order_id) values($1,$2)',
+    [`synthetic-paid-${orderId}`, orderId]);
+  const activity = await accountingSnapshot(db);
+  for (const table of ['sc19_balances', 'sc19_credit_journal', 'sc19_payment_orders', 'sc19_payment_grants']) {
+    assert.ok(activity[table].length > 0, `${table} must carry preview activity for this check to mean anything`);
+  }
+  await applyPreviewSeeds(db);
+  await applyPreviewSeeds(db);
+  assert.deepEqual(await accountingSnapshot(db), activity,
+    'the seed reruns cleanly over balance/journal/order/grant rows and touches none of them');
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'],
+    'and the one approved offer is still published after the rerun');
+
+  // What the guard does refuse is the PROJECT, not the data: it demands that the
+  // caller name skillcheck-preview, which only the preview job does (after
+  // checking the connection string). The seed opens its own transaction, so a
+  // refusal leaves it aborted: roll back, exactly as the preview job's
+  // psql -v ON_ERROR_STOP=1 would.
+  for (const [targetRef, code] of [
+    ['wsvjawuikxfzjyivxgsu', 'sc19_preview_seed_refuses_production_project'],
+    ['some-other-project-ref', 'sc19_preview_seed_refuses_unknown_project'],
+    ['', 'sc19_preview_seed_requires_target_ref'],
+  ]) {
+    await assert.rejects(applyPreviewSeeds(db, { targetRef }),
+      error => error.code === '55000' && new RegExp(code).test(error.message), code);
+    await db.query('rollback');
+  }
+  assert.deepEqual(await accountingSnapshot(db), activity, 'a refused seed changes nothing');
+  // And without psql the file does not even parse: the unexpanded target-ref
+  // variable fails before any statement runs, so pasting it into a SQL console
+  // (production included) cannot seed anything.
+  const raw = await rawPreviewSeed();
+  assert.match(raw, /:'sc19_seed_target_ref'/);
+  await assert.rejects(db.query(raw), error => error.code === '42601');
+  await db.query('rollback').catch(() => {});
+  assert.deepEqual(await accountingSnapshot(db), activity, 'an unparameterized run changes nothing');
+
+  // And the whole purchase path a Przelewy24 verifier walks: a verified owner
+  // reads exactly this offer through the chain's read-only RPC.
+  const a = await h.seed(users.owner); await h.asAdmin();
+  await applyPreviewSeeds(db);
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
+    values($1,'1234563218','synthetic-preview-seed-proof')`, [a.companyId]);
+  const beforeRead = await accountingSnapshot(db);
+  await h.asUser(users.owner);
+  const offers = (await db.query('select * from public.sc19_checkout_offers($1)', [a.companyId])).rows;
+  assert.equal(offers.length, 1);
+  assert.equal(offers[0].id, 'preselekcja-60-2026-11-r2');
+  assert.equal(offers[0].amount_minor, 30000);
+  assert.equal(offers[0].credits, 60);
+  assert.match(offers[0].terms_text, /[ąćęłńóśźż]/);
+  // Reading an offer takes no payment: not one order, grant, balance or journal
+  // entry is added to what the earlier preview activity already left behind, and
+  // this company (the one doing the reading) gets nothing at all.
+  await h.asAdmin();
+  assert.deepEqual(await accountingSnapshot(db), beforeRead, 'reading an offer writes nothing');
+  for (const table of ['sc19_payment_orders', 'sc19_payment_requests', 'sc19_payment_grants',
+    'sc19_balances', 'sc19_credit_journal', 'sc19_trial_nips']) {
+    const where = table === 'sc19_payment_grants'
+      ? `where order_id in (select id from private.sc19_payment_orders where company_id=$1)` : 'where company_id=$1';
+    assert.equal((await db.query(`select count(*)::int n from private.${table} ${where}`, [a.companyId])).rows[0].n, 0, table);
+  }
+  // A paid grant now delivers exactly the number the offer showed.
+  assert.equal((await db.query('select private.sc19_grant_paid($1,$2) available',
+    [a.companyId, 'synthetic-preview-seed-grant'])).rows[0].available, 60);
+});
+
+// After 2027-12-31 the seeded revision has nothing left to publish. A fresh
+// preview database must still be buildable, so the seed reports and succeeds
+// rather than aborting, and leaves nothing flagged as on sale.
+test('the preview seed still succeeds after the seeded offer has expired', async t => {
+  const env = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(env.db, { throughMigration: null });
+  const { db } = env;
+  await h.asAdmin();
+  const seed = await renderPreviewSeed();
+  const expired = seed.replace('constant bigint := 1830297599000', 'constant bigint := 1000000000000');
+  assert.notEqual(expired, seed, 'the pinned validity must still be patchable by this test');
+  await db.query(expired);
+  await assertCurrentInventory(db);
+  // The quotas do not expire with an offer.
+  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
+    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }]);
+  assert.deepEqual((await db.query('select id,active,approved from private.sc19_payment_offers')).rows
+    .filter(r => r.active || r.approved), [], 'an expired revision is not left approved and active');
+  // Replays stay no-ops that succeed.
+  await db.query(expired);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0);
+  // The read-only RPC answers an empty list, not an error, so the checkout page
+  // says "no offer" instead of breaking.
+  const a = await h.seed(users.owner); await h.asAdmin();
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
+    values($1,'1234563218','synthetic-expired-offer-proof')`, [a.companyId]);
+  await h.asUser(users.owner);
+  assert.deepEqual((await db.query('select * from public.sc19_checkout_offers($1)', [a.companyId])).rows, []);
 });
 
 const driftCases = [
@@ -555,4 +769,89 @@ test('SC-019 migrated payment store supports native concurrency, replay, immutab
     assert.equal(await p.balance(first.companyId), 48);
   });
   await assertR6(db);
+});
+
+test('public.sc19_checkout_offers serves the approved offer to a verified owner only, and cannot write', async t => {
+  const env = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(env.db, { throughMigration: null });
+  const { db } = env;
+  await assertCurrentInventory(db);
+  await h.asAdmin();
+  // The chain installs the RPC but publishes no offer; the preview-only seed is
+  // what puts one there, so this authorization test applies it first.
+  await applyPreviewSeeds(db);
+  const a = await h.seed(users.owner), b = await h.seed(users.otherOwner);
+  await h.asAdmin();
+  await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter'),($1,$3,'viewer')",
+    [a.companyId, users.recruiter, users.viewer]);
+  const read = company => db.query('select * from public.sc19_checkout_offers($1)', [company]).then(r => r.rows);
+
+  // Unverified company: an owner still gets 42501, not an empty list, so the RPC
+  // cannot be used to probe which companies exist or to bypass the approval gate.
+  await h.asUser(users.owner);
+  await assert.rejects(read(a.companyId), error => error.code === '42501' && /verified_company/.test(error.message));
+  await h.asAdmin();
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
+    values($1,'1234563218','synthetic-offer-proof')`, [a.companyId]);
+
+  await h.asUser(users.owner);
+  const offers = await read(a.companyId);
+  assert.equal(offers.length, 1, 'the one approved, active, unexpired PRESELEKCJA offer');
+  assert.equal(offers[0].plan, 'PRESELEKCJA');
+  assert.equal(offers[0].amount_minor, 30000);
+  assert.equal(offers[0].credits, 60);
+  assert.equal(offers[0].currency, 'PLN');
+  assert.match(offers[0].terms_text, /[ąćęłńóśźż]/);
+  // No balance, NIP, proof, order, session, provider or merchant ever travels.
+  assert.deepEqual(Object.keys(offers[0]).sort(),
+    ['amount_minor', 'credits', 'currency', 'id', 'plan', 'revision', 'terms_revision', 'terms_text', 'valid_until_ms']);
+
+  // Every other principal is refused, including a recruiter and a viewer of the
+  // very same company: reading the offer is an owner action, as the purchase is.
+  for (const who of [users.recruiter, users.viewer, users.otherOwner, users.outsider]) {
+    await h.asUser(who);
+    await assert.rejects(read(a.companyId), denied, String(who));
+  }
+  await h.asUser(users.owner);
+  await assert.rejects(read(b.companyId), denied, 'another tenant');
+  await assert.rejects(read(null), denied, 'a null company');
+  await h.asUser(null, 'anon');
+  await assert.rejects(read(a.companyId), denied, 'anon');
+  // anon must not even hold EXECUTE on it, and the private table stays revoked.
+  await h.asAdmin();
+  assert.equal((await db.query("select has_function_privilege('anon','public.sc19_checkout_offers(uuid)','execute') ok")).rows[0].ok, false);
+  assert.equal((await db.query("select has_function_privilege('authenticated','public.sc19_checkout_offers(uuid)','execute') ok")).rows[0].ok, true);
+  for (const role of ['anon', 'authenticated']) {
+    assert.equal((await db.query('select has_table_privilege($1,\'private.sc19_payment_offers\',\'select\') ok', [role])).rows[0].ok, false, role);
+  }
+
+  // Deactivating the offer empties the catalog without any authorization change,
+  // and a verified owner still gets a successful empty read rather than an error.
+  await db.query("update private.sc19_payment_offers set active=false where id='preselekcja-60-2026-11-r2'");
+  await h.asUser(users.owner);
+  assert.deepEqual(await read(a.companyId), []);
+  await h.asAdmin();
+  await db.query("update private.sc19_payment_offers set active=true where id='preselekcja-60-2026-11-r2'");
+  // An expired offer is not served either.
+  await db.query(`insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
+    terms_revision,terms_text,valid_until_ms)
+    values('synthetic-expired','expired-v1','PRESELEKCJA',true,true,30000,'PLN',60,'expired-terms','Wygasłe warunki.',$1)`,
+  [Date.now() - 1000]);
+  await h.asUser(users.owner);
+  assert.deepEqual((await read(a.companyId)).map(o => o.id), ['preselekcja-60-2026-11-r2']);
+
+  // The read is stable: no order, grant, request, journal entry or balance appears.
+  await h.asAdmin();
+  for (const table of ['sc19_payment_orders', 'sc19_payment_requests', 'sc19_payment_grants',
+    'sc19_balances', 'sc19_credit_journal', 'sc19_trial_nips']) {
+    assert.equal((await db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, table);
+  }
+  await assertCurrentInventory(db);
+
+  // The rollback removes the read without touching anything else.
+  await db.query(await readFile(new URL('../supabase/rollbacks/20261103130000_sc019_checkout_offers_read_down.sql', import.meta.url), 'utf8'));
+  assert.equal((await db.query("select to_regprocedure('public.sc19_checkout_offers(uuid)') value")).rows[0].value, null);
+  assert.equal((await db.query(`select count(*)::int n from private.sc19_payment_offers
+    where approved and active and valid_until_ms > (extract(epoch from now())*1000)::bigint`)).rows[0].n, 1,
+  'the rollback leaves the purchasable offer untouched');
 });

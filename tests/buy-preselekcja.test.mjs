@@ -156,9 +156,10 @@ test('the approved label and the dashboard purchase path are the ones shipped', 
   // tests/sc-019-payment-checkout.test.mjs. Only value assertions belong here.
   assert.equal(BUY_PRESELEKCJA_LABEL, 'Kup PRESELEKCJĘ');
   assert.equal(BUY_PRESELEKCJA_PATH, '/kup/preselekcja');
+  // The dashboard route to the checkout screen is owned by SC-P24-VERIFY-001;
+  // this task only guarantees the public one-click path still ends there.
   const billing = read('app/dashboard/[companyId]/billing/page.tsx');
-  assert.match(billing, /href=\{`\/dashboard\/\$\{companyId\}\/billing\/checkout`\}>Zamów PRESELEKCJĘ</);
-  assert.equal(/href="\/rozmowa">Zamów PRESELEKCJĘ/.test(billing), false);
+  assert.match(billing, /href=\{`\/dashboard\/\$\{companyId\}\/billing\/checkout`\}/);
 });
 
 test('every next consumer re-validates before redirecting', () => {
@@ -172,24 +173,3 @@ test('every next consumer re-validates before redirecting', () => {
     assert.equal(raw.test(actions), false, `no raw redirect of next in auth actions: ${raw}`);
 });
 
-test('with packages not launched the checkout screen says so instead of implying automatic activation', () => {
-  const page = read('app/dashboard/[companyId]/billing/checkout/page.tsx');
-  // The promised quota is verified against the live policy in EVERY state —
-  // the flag decides how a package is activated, not whether the number is real.
-  assert.match(page, /let fallbackCredits: number\|null;\s*\n\s*try\{fallbackCredits=\(await loadSc19PackageSizes\(client\)\)\.PRESELEKCJA;\}catch\{fallbackCredits=null;\}/);
-  assert.equal(/fallbackCredits[^;]*=\s*preselekcjaOffer\.analyses/.test(page), false,
-    'the marketing figure is never shown as the purchasable quota');
-  // The flag, not an API failure, selects manual fulfilment.
-  assert.match(page, /packagesEnabled=\{packagesEnabled\}/);
-  assert.match(read('app/dashboard/[companyId]/billing/checkout/checkout.tsx'),
-    /if\(!packagesEnabled\)\{setFallback\(true\)/);
-  // Same statement as the billing page makes when SC19_PACKAGES_ENABLED is off,
-  // so the purchase screen never contradicts the rest of the product.
-  assert.match(page, /!packagesEnabled&&/);
-  assert.match(page, /Automatyczne przyznawanie pakietów nie jest jeszcze uruchomione/);
-  assert.match(page, /analizy dodajemy ręcznie po potwierdzeniu wpłaty/);
-});
-
-test('the Przelewy24 API integration is untouched and the env var is documented', () => {
-  assert.match(read('.env.example'), /^NEXT_PUBLIC_P24_CHECKOUT_URL=$/m);
-});

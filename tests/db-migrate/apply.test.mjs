@@ -114,7 +114,20 @@ test('runner applies the whole checked-in chain on a fresh database and leaves t
   await assertCurrentInventory(db);
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.skillcheck_migration_ledger where statements is null or sha256 is null')).rows[0].n, 0);
   assert.equal((await db.query('select count(*)::int n from supabase_migrations.schema_migrations')).rows[0].n, files.length);
-  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0, 'No commercial data seeded');
+  // This is the runner the PRODUCTION workflow uses, so the decisive assertion is
+  // that applying the whole chain activates NO commercial state. Package quotas
+  // and a purchasable offer are owner actions in /operator/billing (CLAUDE.md;
+  // "billing and charge actions" in AGENTS.md), so no migration may write them;
+  // the preview-only path is supabase/preview-seeds/, which this runner never
+  // reads. No quota, offer, balance, grant, order or journal entry is created.
+  for (const table of ['sc19_package_policy', 'sc19_payment_offers', 'sc19_balances', 'sc19_trial_nips',
+    'sc19_trial_approvals', 'sc19_credit_journal', 'sc19_payment_orders', 'sc19_payment_grants',
+    'sc19_payment_requests']) {
+    assert.equal((await db.query(`select count(*)::int n from private.${table}`)).rows[0].n, 0, `No ${table} rows seeded`);
+  }
+  // Reading an offer needs no payment provider and creates nothing, so the chain
+  // does install the read-only RPC the checkout page needs.
+  assert.notEqual((await db.query("select to_regprocedure('public.sc19_checkout_offers(uuid)') value")).rows[0].value, null);
 });
 
 test('TLS comes from code: URL ssl parameters are removed so the CA and verification apply', () => {
