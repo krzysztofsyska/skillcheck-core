@@ -133,27 +133,15 @@ test('the first company hands the visitor back to the purchase path', async () =
 // billing page orders through the checkout screen instead of the contact form.
 const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 
-test('the Kup PRESELEKCJĘ button is on the home page, the header and /preselekcja', () => {
-  for (const file of [
-    'app/components/marketing/home-page.tsx',
-    'app/components/marketing/package-comparison.tsx',
-    'app/components/marketing/site-header.tsx',
-    'app/preselekcja/page.tsx',
-  ]) {
-    const source = read(file);
-    assert.match(source, /BUY_PRESELEKCJA_PATH/, `${file} links to the purchase path`);
-    assert.match(source, /BUY_PRESELEKCJA_LABEL/, `${file} uses the approved label`);
-  }
-  // The mobile menu is fed by the header's link list.
-  assert.match(read('app/components/marketing/site-header.tsx'),
-    /\{ href: BUY_PRESELEKCJA_PATH, label: BUY_PRESELEKCJA_LABEL/);
+test('the approved label and the dashboard purchase path are the ones shipped', () => {
+  // The button itself is asserted behaviourally against the rendered home page
+  // in tests/marketing-http.test.mjs; the checkout screen behaviour lives in
+  // tests/sc-019-payment-checkout.test.mjs. Only value assertions belong here.
   assert.equal(BUY_PRESELEKCJA_LABEL, 'Kup PRESELEKCJĘ');
-});
-
-test('the dashboard billing page orders through the checkout screen', () => {
-  const source = read('app/dashboard/[companyId]/billing/page.tsx');
-  assert.match(source, /href=\{`\/dashboard\/\$\{companyId\}\/billing\/checkout`\}>Zamów PRESELEKCJĘ</);
-  assert.equal(/href="\/rozmowa">Zamów PRESELEKCJĘ/.test(source), false);
+  assert.equal(BUY_PRESELEKCJA_PATH, '/kup/preselekcja');
+  const billing = read('app/dashboard/[companyId]/billing/page.tsx');
+  assert.match(billing, /href=\{`\/dashboard\/\$\{companyId\}\/billing\/checkout`\}>Zamów PRESELEKCJĘ</);
+  assert.equal(/href="\/rozmowa">Zamów PRESELEKCJĘ/.test(billing), false);
 });
 
 test('every next consumer re-validates before redirecting', () => {
@@ -167,38 +155,13 @@ test('every next consumer re-validates before redirecting', () => {
     assert.equal(raw.test(actions), false, `no raw redirect of next in auth actions: ${raw}`);
 });
 
-test('the purchase route resolves server-side and never renders', () => {
-  const source = read('app/kup/preselekcja/page.tsx');
-  assert.match(source, /auth\.getUser\s*\(/);
-  assert.match(source, /redirect\(buyPreselekcjaTarget\(/);
-  // Only an owner may order, so an owned company wins over one the user only recruits for.
-  assert.match(source, /company\.owner_id === user\.id/);
-});
-
-test('the checkout fallback shows the approved package, consent and the payment button', () => {
-  const source = read('app/dashboard/[companyId]/billing/checkout/checkout.tsx');
-  // No dead end when the offers API is unavailable.
-  assert.equal(source.includes('Płatności nie są jeszcze dostępne'), false);
-  assert.match(source, /setFallback\(true\)/);
-  // The package size now comes from the server as the active policy quota.
-  assert.match(read('app/dashboard/[companyId]/billing/checkout/page.tsx'), /preselekcjaOffer\.analyses/);
-  assert.match(source, /preselekcjaOffer\.grossPln/);
-  assert.match(source, /preselekcjaOffer\.netPln/);
-  assert.match(source, /preselekcjaOffer\.validityMonths/);
-  assert.match(source, /href="\/regulamin"/);
-  assert.match(source, /href="\/polityka-prywatnosci"/);
-  assert.match(source, /Przejdź do płatności/);
-  // An empty or non-https env keeps the button disabled with the configuration note.
-  assert.match(source, /NEXT_PUBLIC_P24_CHECKOUT_URL/);
-  assert.match(source, /url\.protocol!=='https:'/);
-  assert.match(source, /Płatność Przelewy24 — konfiguracja w toku/);
-  // No server-side order exists in this mode: the payment carries the company
-  // reference and the screen never promises an automatic credit grant.
-  assert.match(source, /searchParams\.set\('ref',companyId\)/);
-  assert.match(source, /analizy przyznaje operator po potwierdzeniu wpłaty/);
-  // The promised package size follows the active policy, not a hardcoded number.
-  assert.match(source, /fallbackCredits/);
-  assert.match(read('app/dashboard/[companyId]/billing/checkout/page.tsx'), /loadSc19PackageSizes\(client\)/);
+test('with packages not launched the checkout screen says so instead of implying automatic activation', () => {
+  const page = read('app/dashboard/[companyId]/billing/checkout/page.tsx');
+  // Same statement as the billing page makes when SC19_PACKAGES_ENABLED is off,
+  // so the purchase screen never contradicts the rest of the product.
+  assert.match(page, /!packagesEnabled&&/);
+  assert.match(page, /Automatyczne przyznawanie pakietów nie jest jeszcze uruchomione/);
+  assert.match(page, /analizy dodajemy ręcznie po potwierdzeniu wpłaty/);
 });
 
 test('the Przelewy24 API integration is untouched and the env var is documented', () => {

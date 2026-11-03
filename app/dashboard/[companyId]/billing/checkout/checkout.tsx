@@ -28,6 +28,7 @@ export default function Checkout({companyId,fallbackCredits}: {companyId:string;
   // Offers API unavailable: show the approved package summary instead of a dead end.
   const [fallback,setFallback]=useState(false),[fallbackAccepted,setFallbackAccepted]=useState(false);
   const offer=offers.find(o=>o.id===selected);
+  const payUrl=p24CheckoutUrl(companyId);
   async function loadOffers(signal?: AbortSignal) {
     setLoading(true);setAccepted(false);setOffers([]);setSelected('');setFallback(false);
     try {
@@ -118,8 +119,8 @@ export default function Checkout({companyId,fallbackCredits}: {companyId:string;
       <p>Analizy ważne {preselekcjaOffer.validityMonths} miesiące od dnia przyznania. Wyniki weryfikuje rekruter; SkillCheck nie podejmuje decyzji o zatrudnieniu.</p>
       <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={fallbackAccepted}
         onChange={e=>setFallbackAccepted(e.target.checked)}/> Akceptuję <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> i potwierdzam zapoznanie się z <a href="/polityka-prywatnosci" target="_blank" rel="noopener">Polityką prywatności</a>.</label>
-      {fallbackCredits!==null&&p24CheckoutUrl(companyId)
-        ? <a className="button" href={fallbackAccepted?p24CheckoutUrl(companyId):undefined} aria-disabled={!fallbackAccepted}
+      {fallbackCredits!==null&&payUrl
+        ? <a className="button" href={fallbackAccepted?payUrl:undefined} aria-disabled={!fallbackAccepted}
             rel="noopener" onClick={e=>{if(!fallbackAccepted)e.preventDefault();}}>Przejdź do płatności</a>
         : <><button type="button" disabled>Przejdź do płatności</button>
           <p role="status">{fallbackCredits===null
