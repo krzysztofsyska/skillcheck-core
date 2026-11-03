@@ -114,8 +114,16 @@ odrzucana.
    spróbować jeszcze raz i normalnie dostać FREE — to spowolnienie, nie blokada.
 7. To samo dotyczy zgłoszeń wysłanych **równocześnie** (np. kilka otwartych kart
    przeglądarki): do wykazu idzie jedno zapytanie, pozostałe dostają ten sam
-   komunikat „odczekaj około 5 minut". W `/operator/billing` widać wtedy wpis
-   „sprawdzenie rozpoczęte, bez odpowiedzi wykazu" — to zarezerwowana próba, nie
+   komunikat „odczekaj około 5 minut".
+
+   Przy **każdym** sprawdzeniu system najpierw zapisuje rezerwację, a dopiero
+   potem pyta wykaz — więc w rejestrze (zapisywanym raz na zawsze, nic się z
+   niego nie usuwa) zawsze stoi najpierw wpis „sprawdzenie rozpoczęte, bez
+   odpowiedzi wykazu", a po nim właściwy wynik. W `/operator/billing` widzisz
+   **jeden wiersz na jedno zdarzenie**: gdy odpowiedź wykazu już jest, lista
+   pokazuje tylko ją. Wpis „sprawdzenie rozpoczęte, bez odpowiedzi wykazu"
+   zostaje na liście wtedy, gdy odpowiedzi nie ma — czyli przy zgłoszeniach
+   równoczesnych albo gdy wykaz nie odpowiedział. To zarezerwowana próba, nie
    błąd; nie odbiera firmie jej jednego NIP-u i wygasa po kilku minutach.
 
 ## 7. Co zrobić, gdy ktoś zajmie NIP cudzej firmy

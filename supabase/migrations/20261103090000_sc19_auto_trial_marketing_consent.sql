@@ -392,8 +392,31 @@ revoke all on function private.sc19_auto_free_other_nip_tried(uuid,text) from pu
 --      lock ORDER is unchanged and one company's queue never blocks another.
 --   2. The allowed branch RESERVES the attempt: it records an 'IN_FLIGHT' audit
 --      row before returning. The next caller in the queue reads it and gets
---      COOLDOWN. A volatile function takes a fresh snapshot for each statement it
---      runs, so the queued caller sees the row the previous one committed.
+--      COOLDOWN.
+--
+-- WHAT ACTUALLY CARRIES THE GUARANTEE (corrected after the fourth review; an
+-- earlier wording of this comment credited it to the function being `volatile`,
+-- which is wrong and was measured to be wrong). It is the row lock PLUS the
+-- READ COMMITTED isolation level, in that order:
+--
+--   * the row lock makes the queued caller WAIT for the previous one to commit;
+--   * READ COMMITTED then gives that caller a FRESH snapshot for the statement
+--     it runs after the wait, so it SEES the reservation that just committed.
+--
+-- Volatility is a planner and inlining property; it has nothing to do with
+-- snapshots. Under REPEATABLE READ the snapshot is taken once per transaction,
+-- so the queued caller waits for the lock and then still reads its own stale
+-- snapshot, in which no reservation exists — and `select ... for update` raises
+-- no serialization error there, because nobody UPDATED the company row. The
+-- reviewer reproduced exactly that: four simultaneous prechecks under REPEATABLE
+-- READ produced four "allowed" answers and four registry calls, i.e. the whole
+-- finding came back. Today nothing runs this path at another level (PostgREST
+-- uses READ COMMITTED), but the mechanism must not depend on that staying true
+-- by accident, so the function now REFUSES any other isolation level up front,
+-- the same way the erasure guards do
+-- (20261010194230_candidate_erasure_guards.sql). The check is one
+-- current_setting() read, costs nothing per call, and cannot change the
+-- behaviour of the normal READ COMMITTED path.
 --
 -- The reservation is bounded by the same cooldown: once it ages out the company
 -- may try again, so a registry outage — or a request that stops after the
@@ -419,6 +442,14 @@ begin
   end if;
   if not private.sc19_valid_nip(normalized) then
     raise exception 'sc19_invalid_nip' using errcode='22023';
+  end if;
+  -- Fail closed on any isolation level that would break the serialization below
+  -- (see the comment above the function). Same guard, same errcode as the
+  -- erasure guards in 20261010194230_candidate_erasure_guards.sql. A refused
+  -- precheck sends the company to manual review; it never silently allows a
+  -- second registry call.
+  if current_setting('transaction_isolation') not in ('read committed','read uncommitted') then
+    raise exception using errcode='PT409',message='Automatic FREE precheck requires read committed';
   end if;
   -- Serialize every precheck for this company BEFORE anything is decided, so a
   -- burst of simultaneous submissions queues here and each caller sees what the
@@ -949,6 +980,17 @@ grant execute on function public.sc19_operator_marketing_consents(text) to authe
 -- which is the only record of a spend. It therefore also counts analyses paid
 -- for later under PRESELEKCJA, and is null for anything but a grant; the panel
 -- labels it accordingly rather than implying it is FREE usage.
+--
+-- ONE EVENT, ONE ROW (fourth review, U2). The precheck reserves an attempt as
+-- 'unavailable'/'IN_FLIGHT' before it calls the registry, and the registry's
+-- real answer is a SEPARATE append-only row. So every successful FREE left two
+-- rows in this report: the grant, and next to it a line that reads like an
+-- outage. The audit table is append-only and stays untouched — the reservation
+-- is real history and nothing is deleted. It is only HIDDEN HERE once a later
+-- row for the same (company, NIP) says how the attempt ended, because the
+-- report answers "what happened and who is waiting", not "what was written".
+-- A reservation with NO later answer is exactly the unresolved attempt the
+-- operator must see, so it is still shown.
 create function public.sc19_operator_auto_free_grants()
 returns table(company_id uuid, company_name text, nip text, checked_at timestamptz,
   outcome text, error_code text, granted_credits integer, used_credits integer, mf_status text)
@@ -964,6 +1006,16 @@ begin
       g.mf_status
     from private.sc19_trial_auto_checks g
     join public.companies c on c.id=g.company_id
+    where coalesce(g.error_code,'') <> 'IN_FLIGHT'
+       or not exists (
+         select 1 from private.sc19_trial_auto_checks later
+         where later.company_id=g.company_id and later.nip=g.nip
+           and coalesce(later.error_code,'') <> 'IN_FLIGHT'
+           -- Not strictly later: a row written in the same instant is still the
+           -- answer to this reservation, while a STRICTLY EARLIER answer belongs
+           -- to a previous attempt and must not hide this one.
+           and later.checked_at >= g.checked_at and later.id <> g.id
+       )
     order by g.checked_at desc, g.id
     limit 200;
 end;

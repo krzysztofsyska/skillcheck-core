@@ -372,6 +372,90 @@ test('parallel submissions from one owner reach the registry once, not N times',
   assert.ok(nipC, 'the third synthetic NIP stays unused here');
 });
 
+test('parallel submissions under REPEATABLE READ cannot ask the registry twice', async t => {
+  // WHAT THE SERIALIZATION ABOVE REALLY RESTS ON (fourth review, U1). The
+  // reservation only reaches the next caller because READ COMMITTED gives it a
+  // fresh snapshot after it waits for the row lock — not because the function is
+  // `volatile`, which has nothing to do with snapshots. Reproduced by the
+  // reviewer: under REPEATABLE READ the queued caller waits for the lock and
+  // then still reads its own transaction-wide snapshot, in which no reservation
+  // exists, so four simultaneous prechecks all answered "allowed" and the whole
+  // finding came back. `select ... for update` raises nothing there either,
+  // because the company row is never UPDATED.
+  //
+  // Nothing in the repository runs this path at another level today (PostgREST
+  // uses READ COMMITTED), so this is a guard against a future default, a pool
+  // setting or a caller's own transaction. The function fails closed instead.
+  const { db, h, a, env } = await ready(t);
+  const parallel = 4;
+  const sessions = await Promise.all(Array.from({ length: parallel }, () => sessionFor(env, users.owner)));
+  const results = await Promise.all(sessions.map(async client => {
+    await client.query('begin isolation level repeatable read');
+    try {
+      const row = (await client.query('select * from public.sc19_auto_free_precheck($1,$2)', [a.companyId, nipA])).rows[0];
+      await client.query('commit');
+      return { allowed: row.allowed === true, error: null };
+    } catch (error) {
+      await client.query('rollback');
+      return { allowed: false, error: error.code };
+    }
+  }));
+
+  // Never "all allowed", which is the failure the reviewer reproduced. Here the
+  // guard refuses every one of them, with the same errcode the erasure guards
+  // use for the same condition.
+  assert.equal(results.filter(row => row.allowed).length, 0,
+    'no caller may be allowed at an isolation level where the reservation is invisible');
+  assert.deepEqual(new Set(results.map(row => row.error)), new Set(['PT409']),
+    'the precheck refuses outright instead of silently letting a second registry call through');
+
+  await h.asAdmin();
+  // No reservation was written, so nothing was spent and nothing has to age out.
+  assert.equal((await call(db, 'select count(*)::int n from private.sc19_trial_auto_checks where company_id=$1',
+    [a.companyId]))[0].n, 0, 'a refused precheck writes no audit row at all');
+  // READ COMMITTED, the level this path actually runs at, is untouched by the
+  // guard: the normal first submission is still allowed.
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null },
+    'the guard does not change the behaviour of the normal path');
+});
+
+test('one automatic check is one row in the operator report', async t => {
+  // Every successful FREE writes TWO append-only rows: the reservation the
+  // precheck makes before it calls the registry, and the registry's answer. The
+  // operator used to see both, so each success stood next to a line that reads
+  // like an outage (fourth review, U2). The audit table is unchanged and nothing
+  // is deleted from it — the report just hides a reservation once a later row
+  // for the same company and NIP says how the attempt ended.
+  const { db, h, a, b } = await ready(t);
+  await h.asUser(users.owner);
+  assert.deepEqual(await precheck(db, a.companyId, nipA), { allowed: true, reason: null });
+  assert.equal((await autoClaim(db, a.companyId, nipA)).outcome, 'granted');
+  await h.asAdmin();
+  // Both rows are really in the audit table; only the report collapses them.
+  assert.deepEqual(await call(db, `select outcome,error_code from private.sc19_trial_auto_checks
+    where company_id=$1 order by checked_at, id`, [a.companyId]), [
+    { outcome: 'unavailable', error_code: 'IN_FLIGHT' },
+    { outcome: 'granted', error_code: null },
+  ], 'the reservation stays in the append-only audit table');
+  await h.asUser(operator);
+  let rows = await call(db, 'select * from public.sc19_operator_auto_free_grants()');
+  assert.deepEqual(rows.map(row => [row.outcome, row.error_code]), [['granted', null]],
+    'one event, one row');
+
+  // A reservation with NO answer yet is exactly what the operator must see, so
+  // it is still listed. Company B reserves and stops there.
+  await h.asUser(users.otherOwner);
+  assert.deepEqual(await precheck(db, b.companyId, nipB), { allowed: true, reason: null });
+  await h.asUser(operator);
+  rows = await call(db, 'select * from public.sc19_operator_auto_free_grants()');
+  assert.deepEqual(rows.map(row => [row.company_id, row.outcome, row.error_code]), [
+    [b.companyId, 'unavailable', 'IN_FLIGHT'],
+    [a.companyId, 'granted', null],
+  ], 'an unresolved attempt is still shown');
+  assert.ok(nipC, 'the third synthetic NIP stays unused here');
+});
+
 test('the operator can release an occupied NIP so the real company can use FREE', async t => {
   const { db, h, a, b } = await ready(t);
   // Company A occupies the NIP; it is NOT the company that holds it.
