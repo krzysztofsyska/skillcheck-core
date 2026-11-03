@@ -113,19 +113,77 @@ test('SC-019 migration is exercised by the complete current migration chain', as
   }
 
   const { db, h } = env, f = await h.seed(); await h.asAdmin();
+  const seedSql = await readFile(new URL('../supabase/migrations/20261103120000_sc019_seed_packages_offer.sql', import.meta.url), 'utf8');
+  const termsSql = await readFile(new URL('../supabase/migrations/20261103130100_sc019_offer_terms_diacritics.sql', import.meta.url), 'utf8');
+  const seedDown = await readFile(new URL('../supabase/rollbacks/20261103120000_sc019_seed_packages_offer_down.sql', import.meta.url), 'utf8');
+  const termsDown = await readFile(new URL('../supabase/rollbacks/20261103130100_sc019_offer_terms_diacritics_down.sql', import.meta.url), 'utf8');
+  const purchasableIds = async () => (await db.query(`select id from private.sc19_payment_offers
+    where approved and active and valid_until_ms > (extract(epoch from now())*1000)::bigint order by id`)).rows.map(r => r.id);
+
   // Rolling back only the terms revision restores the previously seeded offer, so
   // the purchase path keeps exactly one purchasable offer either way.
-  await db.query(await readFile(new URL('../supabase/rollbacks/20261103130100_sc019_offer_terms_diacritics_down.sql', import.meta.url), 'utf8'));
+  await db.query(termsDown);
   assert.deepEqual((await db.query('select id from private.sc19_payment_offers where approved and active')).rows,
     [{ id: 'preselekcja-60-2026-11' }], 'the terms rollback re-offers the previous revision and deletes no row');
   assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 2,
     'an immutable offer row is never deleted by a rollback');
-  // Rolling the seed back leaves no quota, so grants and FREE claims refuse again
-  // and the public catalog shows nothing.
-  await db.query(await readFile(new URL('../supabase/rollbacks/20261103120000_sc019_seed_packages_offer_down.sql', import.meta.url), 'utf8'));
-  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0);
+
+  // Roll-forward after that rollback must work. The offer rows are
+  // update-immutable, so the re-insert is a no-op ON CONFLICT DO NOTHING and the
+  // forward migration has to re-activate its own revision, or its own postflight
+  // aborts with sc019_offer_terms_diacritics_no_purchasable_offer.
+  await db.query(termsSql);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'],
+    'rollback -> forward of the terms revision restores exactly the accented offer');
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 2, 'no new row is created');
+
+  // Both rollbacks, then both forward migrations again, in chain order.
+  await db.query(termsDown);
+  await db.query(seedDown);
+  assert.deepEqual(await purchasableIds(), [], 'after both rollbacks nothing is purchasable');
+  await db.query(seedSql);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11'],
+    'rollback -> forward of the seed re-activates its own offer revision');
+  await db.query(termsSql);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'],
+    'the full rollback -> forward cycle ends in exactly the state the chain produces');
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 2);
+  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
+    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }]);
+
+  // Neither forward migration publishes a 60 CV offer while the stored quota is
+  // something else: the shown, accepted and granted number cannot diverge.
+  await db.query(termsDown);
+  await db.query(seedDown);
+  await db.query("update private.sc19_package_policy set credits=17 where plan='PRESELEKCJA'");
+  await db.query(seedSql);
+  await db.query(termsSql);
+  assert.deepEqual(await purchasableIds(), [],
+    'a differing operator quota blocks publishing the 60 CV / 300 zl offer instead of mispricing it');
+  await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
+  await db.query(seedSql);
+  await db.query(termsSql);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'], 'restoring the approved quota publishes it again');
+
+  // Rolling the seed back stops the purchase path. It does NOT delete package
+  // quotas: private.sc19_package_policy has no provenance, and the seeded values
+  // are exactly the ones an operator is most likely to have set in
+  // /operator/billing, where deleting them would break every paid grant.
+  await db.query(termsDown);
+  await db.query(seedDown);
+  assert.deepEqual((await db.query('select plan,credits from private.sc19_package_policy order by plan')).rows,
+    [{ plan: 'FREE', credits: 5 }, { plan: 'PRESELEKCJA', credits: 60 }],
+    'the rollback never removes an operator billing configuration');
   assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0,
     'the rollback deactivates the offer; the immutable row itself is never deleted');
+  // A paid grant therefore keeps working after the rollback, with the stored quota.
+  assert.equal((await db.query('select private.sc19_grant_paid($1,$2) available', [f.companyId, 'synthetic-post-rollback-grant'])).rows[0].available, 60);
+
+  // With the quotas actually removed (an operator action, not this rollback),
+  // grants and FREE claims refuse again and the public catalog shows nothing.
+  await db.query('delete from private.sc19_balances');
+  await db.query('delete from private.sc19_credit_journal');
+  await db.query('delete from private.sc19_package_policy');
   await assert.rejects(db.query('select private.sc19_grant_paid($1,$2)', [f.companyId, 'synthetic-missing-policy-grant']), /sc19_missing_paid_policy/);
   await db.query(`insert into private.sc19_trial_approvals(company_id,nip,proof_reference)
     values($1,'1234563218','synthetic-missing-policy-proof')`, [f.companyId]);
@@ -133,6 +191,7 @@ test('SC-019 migration is exercised by the complete current migration chain', as
   await assert.rejects(db.query("select public.sc19_claim_trial($1,'1234563218')", [f.companyId]), /sc19_missing_free_policy/);
   await h.asUser(null, 'anon');
   assert.deepEqual((await db.query('select * from public.sc19_package_sizes()')).rows, []);
+  await h.asAdmin();
   const after = await accountingSnapshot(db);
   for (const table of ['sc19_balances', 'sc19_trial_nips', 'sc19_credit_journal']) assert.deepEqual(after[table], []);
 });

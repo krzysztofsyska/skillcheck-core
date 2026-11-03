@@ -65,7 +65,6 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
     if(!auth || !uuid.test(auth.userId))throw new Sc19PaymentError('SC19_PAYMENT_FORBIDDEN');
     return auth.userId;
   }
-  const user=() => identify(runtime!);
   return {
     async checkout(request: Request) {
       if(!runtime || !runtime.service.checkoutEnabled)return paymentsUnavailable();
@@ -76,7 +75,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
           throw new Sc19PaymentError('SC19_PAYMENT_ORIGIN');
         if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')
           throw new Sc19PaymentError('SC19_PAYMENT_CONTENT_TYPE');
-        await user();
+        await identify(runtime);
         let input: unknown;
         try { input=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await bodyBytes(request,4096))); }
         catch(e) { if(e instanceof Sc19PaymentError)throw e; throw new Sc19PaymentError('SC19_PAYMENT_INVALID'); }
@@ -106,7 +105,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
     async order(request: Request,orderId: string) {
       if(!runtime)return paymentsUnavailable();
       try {
-        const uid=await user(); const companyId=new URL(request.url).searchParams.get('companyId') ?? '';
+        const uid=await identify(runtime); const companyId=new URL(request.url).searchParams.get('companyId') ?? '';
         if(!uuid.test(companyId)||!uuid.test(orderId))throw new Sc19PaymentError('SC19_PAYMENT_INVALID');
         const o=await runtime.readOrder(companyId,uid,orderId);
         if(!o)return json({error:'SC19_PAYMENT_ORDER_MISSING'},404);

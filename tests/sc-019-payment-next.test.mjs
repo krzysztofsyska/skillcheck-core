@@ -18,7 +18,11 @@ test('SC19 real Next routes: authenticated owner UI and disabled transport',asyn
  const reservation=createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));
  const base=`http://127.0.0.1:${port}`,path=`/dashboard/${company}/billing/checkout`;
  const child=spawn(process.execPath,['node_modules/next/dist/bin/next','start','--hostname','127.0.0.1','--port',String(port)],{
-  env:{...process.env,VERCEL_ENV:'',NEXT_PUBLIC_SUPABASE_URL:`http://127.0.0.1:${stub.address().port}`,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'synthetic-public-key',NEXT_PUBLIC_SITE_URL:base},stdio:['ignore','pipe','pipe']});
+  // The checkout page is behind SC19_PACKAGES_ENABLED, exactly like billing/page.tsx
+  // and billing/actions.ts, so the purchase UI only renders with the flag on. The
+  // flag-off behaviour of this same page is asserted in tests/sc-019-billing-ui.test.mjs
+  // (a server component reads the flag per request, so one server cannot show both).
+  env:{...process.env,VERCEL_ENV:'',SC19_PACKAGES_ENABLED:'true',NEXT_PUBLIC_SUPABASE_URL:`http://127.0.0.1:${stub.address().port}`,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'synthetic-public-key',NEXT_PUBLIC_SITE_URL:base},stdio:['ignore','pipe','pipe']});
  let logs='';child.stdout.on('data',d=>logs+=d);child.stderr.on('data',d=>logs+=d);t.after(()=>child.kill());
  let ready=false;for(let i=0;i<100;i++){if(child.exitCode!==null)throw Error(logs);try{ready=(await fetch(base)).ok;}catch{}if(ready)break;await new Promise(r=>setTimeout(r,100));}assert.ok(ready,'Next server ready');
  const headers={Cookie:'sb-127-auth-token='+cookieValue};
@@ -40,10 +44,15 @@ test('SC19 real Next routes: authenticated owner UI and disabled transport',asyn
   // fail closed rather than invent an offer or expose a database error.
   const r=await fetch(base+'/api/billing/offers?companyId='+company,{headers});
   assert.match(r.headers.get('cache-control'),/no-store/);
-  assert.ok([403,409,503].includes(r.status),`unexpected offers status ${r.status}`);
+  // Deterministic against this stub: the RPC is unreachable, so the catalog maps a
+  // non-42501 failure to SC19_PAYMENT_RETRY -> 503. This is exactly the shape the
+  // checkout page showed on Preview while the SC-019 migrations were missing from
+  // supabase/preview-migrations.txt, which is why that list is now asserted to be
+  // complete in tests/preview-db-migrate-workflow.test.mjs.
   const body=await r.json();
+  assert.equal(r.status,503,`unexpected offers status ${r.status}: ${JSON.stringify(body)}`);
+  assert.deepEqual(body,{error:'SC19_PAYMENT_RETRY'});
   assert.equal(body.offers,undefined,'no offer is served without a successful authorized read');
   assert.equal(body.checkoutAvailable,undefined);
-  assert.match(String(body.error),/^SC19_/);
  });
 });

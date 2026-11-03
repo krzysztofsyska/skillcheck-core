@@ -13,3 +13,12 @@
 20261102100000_cv_bulk_capacity_phone_fix.sql
 20261102110000_cv_bulk_skip_frozen.sql
 20261102120000_cv_bulk_erasure_guards.sql
+# SC-P24-VERIFY-001/002. M13 (20261021084732_sc019_credits_payments_inventory)
+# is already in the preview ledger, so these three only need listing themselves:
+# the seed, the read-only checkout RPC and the accented terms revision. Without
+# them public.sc19_checkout_offers does not exist on preview, the catalog maps
+# the error to SC19_PAYMENT_RETRY (503) and the checkout page shows
+# "Nie udało się wczytać oferty".
+20261103120000_sc019_seed_packages_offer.sql
+20261103130000_sc019_checkout_offers_read.sql
+20261103130100_sc019_offer_terms_diacritics.sql

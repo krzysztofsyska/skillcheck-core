@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
 const yml = readFileSync(new URL('../.github/workflows/preview-db-migrate.yml', import.meta.url), 'utf8');
@@ -35,6 +35,39 @@ test('every listed migration exists and is a checked-in file name', () => {
     assert.ok(existsSync(new URL(`../supabase/migrations/${entry}`, import.meta.url)), entry);
   }
   assert.deepEqual([...entries].sort(), entries, 'listed in migration order');
+});
+
+// The list is an allowlist, so an existing migration that nobody added is simply
+// never applied to preview: the objects it creates are missing there and the
+// feature fails at runtime with no failing check anywhere. The test above only
+// proves that listed entries exist, which cannot catch that. Every SC-019
+// migration ordered after M13 must therefore be listed, or explicitly exempted
+// here with a reason.
+const sc019PreviewExempt = new Map([
+  // M13 and everything up to it was applied to preview before this list existed;
+  // the preview ledger already holds them (checked 2026-11-03).
+  ['20261021084732_sc019_credits_payments_inventory.sql', 'already in the preview ledger'],
+  ['20261029100000_sc019_operator_fulfillment.sql', 'already in the preview ledger'],
+]);
+test('every SC-019 migration reaches preview, or is exempted with a reason', () => {
+  const entries = new Set(list.split('\n').map(l => l.replace(/#.*/, '').trim()).filter(Boolean));
+  const all = readdirSync(new URL('../supabase/migrations/', import.meta.url))
+    .filter(name => name.endsWith('.sql')).sort();
+  const sc019 = all.filter(name => /sc019_|sc19_/.test(name));
+  assert.ok(sc019.length >= 3, 'the SC-019 chain must be discoverable by name');
+  const missing = sc019.filter(name => !entries.has(name) && !sc019PreviewExempt.has(name));
+  assert.deepEqual(missing, [],
+    `these SC-019 migrations would never be applied to skillcheck-preview: ${missing.join(', ')}`);
+  // The SC-P24 checkout chain specifically, in chain order, since the read-only
+  // RPC is what the checkout page needs to show an offer at all.
+  for (const name of ['20261103120000_sc019_seed_packages_offer.sql',
+    '20261103130000_sc019_checkout_offers_read.sql',
+    '20261103130100_sc019_offer_terms_diacritics.sql']) {
+    assert.ok(entries.has(name), `${name} must be listed for preview`);
+  }
+  // An exemption may only name a migration that exists, so the map cannot rot
+  // into a blanket excuse.
+  for (const name of sc019PreviewExempt.keys()) assert.ok(all.includes(name), `stale exemption: ${name}`);
 });
 
 test('a listed migration edited after reaching preview fails unless its resync is acknowledged', () => {
