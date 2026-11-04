@@ -59,7 +59,11 @@ export type CandidateCriterionRow = {
   human_evidence: unknown;
 };
 
-export type AnalysisState = { execution_status: string } | null;
+export type AnalysisState = {
+  execution_status: string;
+  /** Materiał zmienił się po analizie albo rekruter odesłał ją do powtórzenia. */
+  outdated?: boolean;
+} | null;
 
 const verdicts = new Set(['supported', 'partial', 'missing', 'contradicted']);
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -82,6 +86,11 @@ function quotes(value: unknown): EvidenceQuote[] {
  */
 export function requirementStatus(analysis: AnalysisState, row: CandidateCriterionRow | undefined): RequirementStatus {
   if (!analysis || analysis.execution_status === 'pending' || analysis.execution_status === 'processing') return 'in_progress';
+  // Rekruter odesłał analizę do powtórzenia albo materiał zmienił się po niej.
+  // Wynik dalej stoi w bazie jako `completed` ze `stale_at` pustym, więc bez tego
+  // raport pokazywałby „Potwierdzone w CV" dla analizy, którą człowiek już odrzucił —
+  // i rozjechałby się z porównaniem, które ten sam przypadek nazywa nieaktualnym.
+  if (analysis.outdated) return 'outdated';
   if (analysis.execution_status !== 'completed' || !row) return 'unavailable';
   if (row.verdict == null) return 'legacy';
   // Odrzucony wiersz nie jest dowodem w żadną stronę: wymaganie zostaje otwarte,
@@ -123,17 +132,19 @@ export function buildCandidateRequirement(
 ): CandidateRequirement {
   const status = requirementStatus(analysis, row);
   const edited = !!row && row.human_status === 'edited';
-  const rejected = status === 'rejected';
-  // Przy odrzuconym wierszu nie publikujemy ani werdyktu AI, ani jego cytatów.
-  const evidence = rejected || !row ? [] : quotes(edited ? row.human_evidence ?? row.evidence : row.evidence);
-  const missingInfo = rejected || !row ? null : text(edited ? row.human_missing_info ?? row.missing_info : row.missing_info);
-  const saved = rejected || !row ? null : text(edited ? row.human_suggested_question ?? row.suggested_question : row.suggested_question);
+  // Dowód publikuje tylko status, który naprawdę mówi coś o treści CV. Odrzucony
+  // wiersz, analiza nieaktualna, w toku albo starszego typu nie publikują ani
+  // werdyktu AI, ani jego cytatów — inaczej na ekranie zostałby dowód bez wyniku.
+  const publishes = !!row && verdicts.has(status);
+  const evidence = publishes ? quotes(edited ? row.human_evidence ?? row.evidence : row.evidence) : [];
+  const missingInfo = publishes ? text(edited ? row.human_missing_info ?? row.missing_info : row.missing_info) : null;
+  const saved = publishes ? text(edited ? row.human_suggested_question ?? row.suggested_question : row.suggested_question) : null;
   return {
     ...requirement, mark, status,
     quotes: evidence,
     missingInfo,
     question: isRequirementGap(status) ? saved ?? fallbackGapQuestion : null,
-    corrected: edited || rejected,
+    corrected: edited || status === 'rejected',
   };
 }
 
@@ -153,7 +164,9 @@ export function summariseCandidateReport(rows: readonly CandidateRequirement[]):
     requiredTotal: required.length,
     requiredSupported: required.filter(r => r.status === 'supported').length,
     requiredGaps: required.filter(r => isRequirementGap(r.status)).length,
-    requiredPending: required.filter(r => r.status === 'in_progress' || r.status === 'unavailable' || r.status === 'legacy').length,
+    // Wszystko, co nie mówi nic o treści CV: czeka na wynik, na sprawdzenie, jest
+    // nieaktualne, starszego typu albo wyniku nie ma. Nigdy nie jest to „brak informacji".
+    requiredPending: required.filter(r => !verdicts.has(r.status) && r.status !== 'rejected').length,
     unmarkedTotal: rows.filter(r => r.mark === 'unmarked').length,
     additionalTotal: rows.filter(r => r.mark === 'additional').length,
   };

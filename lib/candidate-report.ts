@@ -54,6 +54,8 @@ export type CandidateReport = {
   documentVersion: number | null;
   /** Analiza jest, ale CV albo wymagania zmieniły się po niej. */
   stale: boolean;
+  /** Rekruter odesłał tę analizę do powtórzenia (`needs_reanalysis`). */
+  reanalysisRequested: boolean;
   /** Analiza nie zawiera macierzy dowodów (sprzed Step 3). */
   legacyAnalysis: boolean;
   analysisStatus: string | null;
@@ -95,11 +97,30 @@ export async function loadCandidateReport(
     throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
   }
 
+  // Rekruter mógł odesłać całą analizę do powtórzenia. Taki wynik zostaje w bazie
+  // jako `completed` ze `stale_at` pustym, więc bez tego odczytu raport pokazywałby
+  // werdykty z analizy, którą człowiek już odrzucił.
+  const reviewRows = analysis
+    ? await client.from('screening_result_reviews')
+      .select('analysis_id,review_version,disposition')
+      .eq('company_id', companyId).eq('analysis_id', analysis.id)
+      .order('review_version', { ascending: false }).limit(1)
+    : { data: [], error: null };
+  if (reviewRows.error) throw new CandidateReportError('Nie udało się wczytać historii sprawdzenia.');
+  const latestReview = (reviewRows.data ?? [])[0] as { analysis_id?: string; disposition?: string } | undefined;
+  if (analysis && latestReview?.analysis_id && latestReview.analysis_id !== analysis.id) {
+    throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
+  }
+  const reanalysisRequested = latestReview?.disposition === 'needs_reanalysis';
+
   const flags = await loadRequirementFlags(client, companyId, context.position.id);
   const requirements = positionRequirements(context.position);
   const marks = resolveRequirementMarks(requirements, flags);
   const byCriterion = new Map(rows.map(row => [row.criterion_id, row]));
-  const analysisState: AnalysisState = analysis ? { execution_status: analysis.execution_status } : null;
+  const stale = !!analysis && screeningStatus(analysis, fingerprint) === 'stale';
+  const analysisState: AnalysisState = analysis
+    ? { execution_status: analysis.execution_status, outdated: stale || reanalysisRequested }
+    : null;
   const built = sortByRequirementMark(requirements, marks).map(requirement =>
     buildCandidateRequirement(requirement, marks.get(requirement.id) ?? 'unmarked', analysisState,
       criterionRowFor(requirement, byCriterion.get(requirement.id))));
@@ -110,7 +131,9 @@ export async function loadCandidateReport(
     applicationId,
     analysisVersion: analysis?.analysis_version ?? null,
     documentVersion: analysis?.candidate_document_version ?? null,
-    stale: !!analysis && screeningStatus(analysis, fingerprint) === 'stale',
+    stale,
+    /** Rekruter odesłał tę analizę do powtórzenia. */
+    reanalysisRequested,
     // Analiza częściowo zmigrowana też zasługuje na ostrzeżenie: wystarczy jeden wiersz bez werdyktu.
     legacyAnalysis: !!analysis && analysis.execution_status === 'completed' && rows.some(row => row.verdict == null),
     analysisStatus: analysis?.execution_status ?? null,

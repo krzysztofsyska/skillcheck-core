@@ -12,6 +12,7 @@ import {
 import {
   positionRequirements, resolveRequirementMarks, sortByRequirementMark,
 } from '../lib/requirement-flags.ts';
+import { prepareScreening } from '../lib/screening.ts';
 
 const position = {
   tasks: ['Dostarczanie przesyłek', 'Rozliczanie tras'],
@@ -122,6 +123,116 @@ test('wiersz analizy z innym tekstem nie dokleja się do nowego wymagania', () =
   assert.equal(buildCandidateRequirement(licence, 'required', completed, criterionRowFor(licence, stale)).status, 'supported');
   // Brak snapshotu w wierszu też nie przechodzi — nie zgadujemy.
   assert.equal(criterionRowFor(licence, row()), undefined);
+});
+
+// --- pełny odczyt raportu przez loadCandidateReport (nie tylko czyste funkcje) ---
+
+// Podwójny klient w kształcie PostgREST: filtry, sortowanie i limity działają,
+// więc test przechodzi tą samą drogą co produkcja, zamiast składać wynik ręcznie.
+function loaderClient(data) {
+  function query(table) {
+    const q = { eqs: [], order: null, limit: Infinity, single: false };
+    return {
+      select() { return this; },
+      eq(key, value) { q.eqs.push([key, value]); return this; },
+      order(key, options) { q.order = [key, options?.ascending === false]; return this; },
+      limit(value) { q.limit = value; return this; },
+      maybeSingle() { q.single = true; return this; },
+      then(resolve, reject) {
+        return Promise.resolve().then(() => {
+          let rows = (data[table] ?? []).filter(r => q.eqs.every(([k, v]) => r[k] === v));
+          if (q.order) {
+            const [key, descending] = q.order;
+            rows = [...rows].sort((a, b) => String(a[key]).localeCompare(String(b[key])));
+            if (descending) rows.reverse();
+          }
+          rows = rows.slice(0, q.limit);
+          return { data: q.single ? rows[0] ?? null : structuredClone(rows), error: null };
+        }).then(resolve, reject);
+      },
+    };
+  }
+  return { from: table => query(table), rpc: name => query(name) };
+}
+
+const id = n => `0000000${n}-0000-4000-8000-00000000000${n}`;
+const route = { companyId: id(1), recruitmentId: id(2), applicationId: id(3) };
+const loaderData = ({ competencyText = 'Prawo jazdy kategorii B', snapshot = 'Prawo jazdy kategorii B',
+  disposition = null, verdict = 'supported' } = {}) => withFingerprint({
+  applications: [{ id: route.applicationId, company_id: route.companyId, recruitment_id: route.recruitmentId,
+    candidate_id: id(4), status: 'new', updated_at: '2026-11-04T10:00:00Z' }],
+  recruitments: [{ id: route.recruitmentId, company_id: route.companyId, position_id: id(5),
+    name: 'Rekrutacja', status: 'open', updated_at: '2026-11-04T10:00:00Z' }],
+  positions: [{ id: id(5), company_id: route.companyId, title: 'Kurier', status: 'active',
+    tasks: ['Dostarczanie przesyłek'], kpis: ['Terminowość dostaw'],
+    required_competencies: [competencyText], updated_at: '2026-11-04T10:00:00Z' }],
+  candidate_documents: [{ id: id(6), company_id: route.companyId, candidate_id: id(4), version: 1,
+    status: 'reviewed', reviewed_by: id(7), reviewed_at: '2026-11-04T10:00:00Z',
+    redacted_text: 'Dostarczanie przesyłek, terminowość dostaw, prawo jazdy kategorii B.' }],
+  screening_analysis_versions: [{ id: id(8), company_id: route.companyId, application_id: route.applicationId,
+    recruitment_id: route.recruitmentId, analysis_version: 1, execution_status: 'completed',
+    input_fingerprint: 'fp', stale_at: null, candidate_document_version: 1 }],
+  screening_criterion_results: [{ analysis_id: id(8), company_id: route.companyId, criterion_id: 'competency:1',
+    criterion_text_snapshot: snapshot, verdict,
+    evidence: [{ start: 0, end: 23, quote: 'prawo jazdy kategorii B' }],
+    missing_info: null, suggested_question: null, human_status: 'unreviewed',
+    human_verdict: null, human_missing_info: null, human_suggested_question: null, human_evidence: null }],
+  screening_result_reviews: disposition
+    ? [{ analysis_id: id(8), company_id: route.companyId, review_version: 1, disposition }] : [],
+  position_requirement_flags: [{ criterion_id: 'competency:1', criterion_text: competencyText, flag: 'required' }],
+});
+
+// Analiza jest aktualna tylko wtedy, gdy jej odcisk zgadza się z materiałem.
+// Liczymy go tą samą funkcją co produkcja, żeby fixture nie udawał aktualności.
+function withFingerprint(data) {
+  data.screening_analysis_versions[0].input_fingerprint = prepareScreening({
+    companyId: route.companyId, application: data.applications[0],
+    recruitment: data.recruitments[0], position: data.positions[0],
+    document: data.candidate_documents[0],
+  }).fingerprint;
+  return data;
+}
+
+test('loadCandidateReport: zmieniona treść wymagania nie dziedziczy cudzego wyniku', async () => {
+  const { loadCandidateReport } = await import('../lib/candidate-report.ts');
+  const same = await loadCandidateReport(loaderClient(loaderData()), route);
+  const found = same.requirements.find(r => r.id === 'competency:1');
+  assert.equal(found.status, 'supported');
+  assert.equal(found.quotes[0].quote, 'prawo jazdy kategorii B');
+  assert.equal(same.summary.requiredSupported, 1);
+
+  // Profil zmieniony po analizie: ten sam identyfikator, inny tekst.
+  const changed = await loadCandidateReport(
+    loaderClient(loaderData({ competencyText: 'Prawo jazdy kategorii C' })), route);
+  const stale = changed.requirements.find(r => r.id === 'competency:1');
+  assert.equal(stale.text, 'Prawo jazdy kategorii C');
+  assert.equal(stale.status, 'unavailable', 'nowe wymaganie nie dostaje werdyktu poprzedniego');
+  assert.deepEqual(stale.quotes, []);
+  assert.equal(changed.summary.requiredSupported, 0);
+});
+
+test('loadCandidateReport: analiza odesłana do powtórzenia nie pokazuje werdyktów', async () => {
+  const { loadCandidateReport } = await import('../lib/candidate-report.ts');
+  const report = await loadCandidateReport(
+    loaderClient(loaderData({ disposition: 'needs_reanalysis' })), route);
+  assert.equal(report.reanalysisRequested, true);
+  const found = report.requirements.find(r => r.id === 'competency:1');
+  assert.equal(found.status, 'outdated');
+  assert.deepEqual(found.quotes, [], 'nie zostaje cytat bez wyniku');
+  assert.equal(report.summary.requiredSupported, 0);
+  // Zatwierdzona analiza zachowuje się normalnie.
+  const approved = await loadCandidateReport(loaderClient(loaderData({ disposition: 'approved' })), route);
+  assert.equal(approved.requirements.find(r => r.id === 'competency:1').status, 'supported');
+});
+
+test('loadCandidateReport: jeden wiersz bez werdyktu wystarczy do ostrzeżenia o starszej analizie', async () => {
+  const { loadCandidateReport } = await import('../lib/candidate-report.ts');
+  const data = loaderData();
+  data.screening_criterion_results.push({ ...data.screening_criterion_results[0],
+    criterion_id: 'task:1', criterion_text_snapshot: 'Dostarczanie przesyłek', verdict: null });
+  const report = await loadCandidateReport(loaderClient(data), route);
+  assert.equal(report.legacyAnalysis, true);
+  assert.equal(report.requirements.find(r => r.id === 'task:1').status, 'legacy');
 });
 
 // --- porównanie: jedno i pięć fikcyjnych CV ---
