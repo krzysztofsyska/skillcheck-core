@@ -1,10 +1,14 @@
 import { kindLabels, matrixVerdictLabels, preselectionGroupLabels, rankingStatusLabel, ratingLabels, reviewedEvidenceAnalysis, shortlistLabel, type ScreeningReport } from '../../../../../../lib/screening-report';
+import { buildCandidateComparison, MAX_COMPARISON_CANDIDATES } from '../../../../../../lib/candidate-comparison';
+import { noMissingDataDisclaimer, requirementStatusLabels } from '../../../../../../lib/requirement-status';
+import { criterionKindLabels, requirementMarkLabels } from '../../../../../../lib/requirement-flags';
 import styles from './report.module.css';
 
 const number = (n: number | null) => n === null ? '—' : n.toLocaleString('pl-PL', { maximumFractionDigits: 3 });
 export function ScreeningReportView({ report, basePath }: { report: ScreeningReport; basePath: string }) {
   const selected = report.applications.filter(a => a.shortlist);
   const groupsById = new Map((report.groups ?? []).map(g => [g.application_id, g]));
+  const comparison = buildCandidateComparison(report, report.requirementFlags ?? []);
   return <>
     <p className="eyebrow">SKILLCHECK · PRESELEKCJA</p><h1>Raport preselekcji</h1>
     <h2>{report.recruitmentName}</h2><p>{report.companyName} · {report.positionTitle}</p>
@@ -27,7 +31,33 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
           <td>{g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie'}</td>
         </tr>)}</tbody></table></div>
     </>}
-    <h2>Porównanie zgłoszeń</h2>
+    <h2>Porównanie wymagań i kandydatów</h2>
+    <p>Wiersze to wymagania aktualnego profilu stanowiska, kolumny to kandydaci — najwyżej {MAX_COMPARISON_CANDIDATES}.
+      Najpierw wymagania konieczne, potem nieoznaczone, na końcu dodatkowe. Oznaczenia ustawia się w profilu stanowiska.</p>
+    <p className="notice">„Analiza w toku" znaczy, że wynik jeszcze nie jest gotowy — to co innego niż „brak informacji w CV”. {noMissingDataDisclaimer}</p>
+    {comparison.omitted > 0 && <p role="status">Pokazano {comparison.candidates.length} z {report.applications.length} kandydatów.
+      Pozostałych {comparison.omitted} znajdziesz w tabeli rankingu poniżej.</p>}
+    {!comparison.candidates.length ? <p>W tej rekrutacji nie ma jeszcze zgłoszeń.</p>
+      : !comparison.rows.length ? <p>Profil stanowiska nie ma jeszcze wymagań do porównania.</p>
+      : <div className={styles.tableWrap}><table className={styles.table}>
+        <caption>Wymagania stanowiska wobec kandydatów</caption>
+        <thead><tr><th scope="col">Wymaganie</th><th scope="col">Oznaczenie</th>
+          {comparison.candidates.map(candidate => <th scope="col" key={candidate.applicationId}>
+            <a href={`${basePath}/applications/${candidate.applicationId}/report`}>{candidate.applicationId.slice(0, 8)}</a>
+            {candidate.shortlisted && <><br /><small>shortlista</small></>}
+          </th>)}
+        </tr></thead>
+        <tbody>{comparison.rows.map(row => <tr key={row.id}>
+          <th scope="row"><small>{criterionKindLabels[row.kind]}</small><br />{row.text}</th>
+          <td>{requirementMarkLabels[row.mark]}</td>
+          {row.cells.map(cell => <td key={cell.applicationId}>
+            <strong>{requirementStatusLabels[cell.status]}</strong>
+            {cell.corrected && <><br /><small>skorygowane przez rekrutera</small></>}
+            {cell.quote && <blockquote className={styles.text}>{cell.quote}</blockquote>}
+          </td>)}
+        </tr>)}</tbody>
+      </table></div>}
+    <h2>Ranking i shortlista</h2>
     {!!report.groups?.length && <p className="notice">Dla analiz z macierzą dowodów system nie przelicza dowodów automatycznie na miejsce w tej tabeli. Kolejność i wynik pokazuje tabela „Preselekcja automatyczna” powyżej, a o wyborze kandydata decyduje rekruter (np. przenosząc go między grupami).</p>}
     <p>Wynik i pokrycie pochodzą z rankingu (wynik oznaczony „(grupa)” pochodzi z tabeli grup). Pokrycie to udział kryteriów, dla których są wystarczające dane. Sugestia obejmuje maksymalnie {report.targetSize} osób.</p>
     {!report.applications.length ? <p>W tej rekrutacji nie ma jeszcze zgłoszeń.</p> : <div className={styles.tableWrap}><table className={styles.table}>
@@ -51,7 +81,8 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
     {report.applications.map(({ ranking: r, criteria }) => <article className={styles.application} id={`application-${r.application_id}`} key={r.application_id}>
       <h3>Zgłoszenie {r.application_id.slice(0, 8)}</h3><p className={styles.meta}>{r.application_id}</p>
       <p>{rankingStatusLabel({ ranking: r, criteria }, !!groupsById.get(r.application_id) && !groupsById.get(r.application_id)!.stale)} · Polityka: {r.ranking_policy_version}</p>
-      <p className={styles.controls}><a href={`${basePath}/applications/${r.application_id}/screening`}>Otwórz preselekcję zgłoszenia</a></p>
+      <p className={styles.controls}><a href={`${basePath}/applications/${r.application_id}/screening`}>Otwórz preselekcję zgłoszenia</a>
+        {' · '}<a href={`${basePath}/applications/${r.application_id}/report`}>Raport kandydata</a></p>
       {!criteria.length ? <p>Brak aktualnych, zatwierdzonych dowodów do raportu. Sprawdź status zgłoszenia.</p> : criteria.map(c => <section className={styles.criterion} key={c.id}>
         <h4>{kindLabels[c.kind]}: {c.text}</h4>{c.matrixVerdict
           ? <p><strong>{matrixVerdictLabels[c.matrixVerdict]}</strong>{c.reviewedChange ? ' · Skorygowane przez człowieka' : ' · Sprawdzone przez człowieka'}</p>

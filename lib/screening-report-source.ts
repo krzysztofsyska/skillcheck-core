@@ -166,6 +166,14 @@ export async function loadScreeningReport(
   }
   const rechecked = await readSource();
   requireReport(JSON.stringify(source) === JSON.stringify(rechecked));
+  // SC-015 / #268. Oznaczenia wymagań są czytane poza readSource celowo: nie wchodzą
+  // do porównania spójności, bo ich zmiana niczego w analizach nie unieważnia.
+  // Brak funkcji (baza sprzed migracji) znaczy „nic jeszcze nie oznaczono".
+  const flagResult = await client.rpc('position_requirement_flags' as never, {
+    target_company: p.companyId, target_position: source.position.id,
+  } as never);
+  if (flagResult.error && !['PGRST202', '42883'].includes(flagResult.error.code ?? '')) checked(flagResult, true);
+  const requirementFlags = (!flagResult.error && Array.isArray(flagResult.data) ? flagResult.data : []) as ScreeningReport['requirementFlags'];
   const report: ScreeningReport = {
     version: REPORT_VERSION, generatedAt: new Date().toISOString(), companyId: p.companyId, companyName: source.company.name,
     recruitmentId: p.recruitmentId, recruitmentName: source.recruitment.name, positionTitle: source.position.title, targetSize: p.targetSize,
@@ -178,6 +186,8 @@ export async function loadScreeningReport(
       .map(ranking => ({ ranking, shortlist: source.shortlist.find(s => s.application_id === ranking.application_id) ?? null,
         criteria: details.get(ranking.application_id) ?? [] })),
     groups: source.groups,
+    positionId: source.position.id,
+    requirementFlags,
   };
   if (Buffer.byteLength(JSON.stringify(report), 'utf8') > 10 * 1024 * 1024) throw new ScreeningReportError('too_large');
   return report;

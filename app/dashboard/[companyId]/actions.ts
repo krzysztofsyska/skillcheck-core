@@ -3,6 +3,30 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { companyAccess } from "../../../lib/company-access";
 import { parsePosition, type EditorState } from "../../../lib/position-fields";
+import { requirementFlags } from "../../../lib/requirement-flags";
+
+// SC-015 / #268 — oznaczenie jednego wymagania jako konieczne albo dodatkowe.
+// Zapis idzie wyłącznie przez funkcję bazy, która sama sprawdza dostęp do firmy
+// i zgodność tekstu wymagania z aktualnym profilem stanowiska. Nie dotyka
+// public.positions, więc nie unieważnia żadnej analizy CV ani korekt rekrutera.
+export async function setRequirementFlag(companyId: string, positionId: string, _state: EditorState, form: FormData): Promise<EditorState> {
+  const { client, canEdit } = await companyAccess(companyId);
+  if (!canEdit) return { error: "Masz dostęp tylko do odczytu." };
+  const criterionId = String(form.get("criterionId") ?? "");
+  const expectedText = String(form.get("expectedText") ?? "");
+  const choice = String(form.get("flag") ?? "");
+  if (!/^(task|kpi|competency):[1-9][0-9]{0,2}$/.test(criterionId)) return { error: "Nie rozpoznano wymagania. Odśwież stronę." };
+  if (choice !== "unmarked" && !(requirementFlags as readonly string[]).includes(choice)) return { error: "Wybierz: konieczne, dodatkowe albo nieoznaczone." };
+  const { error } = await client.rpc("set_position_requirement_flag" as never, {
+    target_company: companyId, target_position: positionId, target_criterion: criterionId,
+    expected_text: expectedText, next_flag: choice === "unmarked" ? null : choice,
+  } as never);
+  if (error?.code === "PT409") return { error: "Treść wymagania zmieniła się. Odśwież stronę i oznacz je ponownie." };
+  if (error?.code === "42501") return { error: "Masz dostęp tylko do odczytu." };
+  if (error) return { error: "Nie udało się zapisać oznaczenia." };
+  revalidatePath(`/dashboard/${companyId}/positions/${positionId}`);
+  return { saved: true };
+}
 
 export async function savePosition(companyId: string, positionId: string | null, _state: EditorState, form: FormData): Promise<EditorState> {
   const { client, canEdit } = await companyAccess(companyId);
