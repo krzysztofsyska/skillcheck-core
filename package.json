@@ -28,7 +28,7 @@
     "test:legal": "node --experimental-strip-types --test tests/legal.test.mjs tests/legal-docx-sync.test.mjs",
     "test:marketing-consent": "node --experimental-strip-types --test tests/marketing-consent.test.mjs tests/sc19-trial-auto.test.mjs tests/sc19-daily-digest.test.mjs",
     "test:auto-free-db": "node --experimental-strip-types --test --test-concurrency=1 tests/sc19-auto-trial-database.test.mjs",
-    "test:buy-preselekcja": "node --test tests/buy-preselekcja.test.mjs",
+    "test:buy-preselekcja": "node --experimental-strip-types --test tests/buy-preselekcja.test.mjs tests/buy-next-email-confirmation.test.mjs",
     "test:live-check": "node --test tests/live-check.test.mjs tests/live-membership.test.mjs tests/live-final-audit.test.mjs",
     "test:behavior-guide": "node --test tests/behavior-guide.test.mjs",
     "test:behavior-assessments": "node --test tests/behavior-assessment.test.mjs tests/behavior-database.test.mjs",
