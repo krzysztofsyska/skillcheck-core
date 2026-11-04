@@ -1,4 +1,4 @@
-// SC-BUY-001 (bot review finding, PR #266): a visitor who clicks
+// SC-BUY-002 (bot review finding, PR #266): a visitor who clicks
 // "Kup PRESELEKCJĘ" before signing up must still land on the checkout screen
 // after confirming the e-mail address. The target travels:
 //   /kup/preselekcja -> /register?next=... -> confirmation link -> /auth/callback
@@ -113,11 +113,9 @@ function loadCallback() {
   mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
   const require = createRequire(path);
   const mocks = {
-    'next/server': {
-      NextResponse: {
-        redirect(url) { return { url: String(url), headers: new Map([['set', function () {}]]) }; },
-      },
-    },
+    // NextResponse.redirect stands in for the real one: the route only reads the
+    // resulting URL and sets two headers on it.
+    'next/server': { NextResponse: { redirect: url => ({ url: String(url), headers: { set() {} } }) } },
     '../../../lib/supabase/server': {
       async createClient() {
         return { auth: { async exchangeCodeForSession() { return { data: {}, error: null }; } } };
@@ -126,9 +124,6 @@ function loadCallback() {
     '../../../lib/auth-url': authUrl,
     '../../../lib/safe-next-path': nextPath,
   };
-  // NextResponse.redirect returns a plain object here, so `headers.set` has to
-  // exist as a method rather than a Map entry.
-  mocks['next/server'].NextResponse.redirect = url => ({ url: String(url), headers: { set() {} } });
   mod.require = id => id in mocks ? mocks[id] : require(id);
   mod._compile(ts.transpileModule(readFileSync(path, 'utf8'),
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, path);

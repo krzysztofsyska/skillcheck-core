@@ -12,7 +12,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   if (error) throw new Error("Nie udało się odczytać firm. Spróbuj ponownie.");
   const { message, next: nextParam } = await searchParams;
   const next = safeNextPath(nextParam);
-  // SC-BUY-001: the purchase target arrives here after e-mail confirmation, so it
+  // SC-BUY-002: the purchase target arrives here after e-mail confirmation, so it
   // must reach onboarding too — a new account has no company yet and would
   // otherwise finish in the company list instead of on the checkout screen.
   if (!companies.length) redirect(withNext("/onboarding", next));

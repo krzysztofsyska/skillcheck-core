@@ -21,6 +21,9 @@ Dla aktualnego adresu gałęzi testowej:
 - https://skillcheck-core-git-feat-te-a48cba-krzysztofs-projects-b7ce87b5.vercel.app/auth/callback
 - https://skillcheck-core-git-feat-te-a48cba-krzysztofs-projects-b7ce87b5.vercel.app/auth/callback?flow=recovery
 
+### Link potwierdzający niesie teraz parametr (SC-BUY-002, 2026-11-04)
+Rejestracja rozpoczęta z „Kup PRESELEKCJĘ" buduje `emailRedirectTo` z celem zakupu, więc adres ma postać `…/auth/callback?next=%2Fkup%2Fpreselekcja`. Dla **produkcji** to bez znaczenia: Supabase dopuszcza bez zastrzeżeń każdy adres, którego schemat, host i port zgadzają się z Site URL, razem z query stringiem. Dla **Preview** origin to `VERCEL_BRANCH_URL`, czyli nie Site URL, więc adres przechodzi przez dopasowanie do listy Additional Redirect URLs — a powyższe wpisy gałęziowe są dokładne i bez query stringu. Jeżeli wpis nie jest globem, link potwierdzający z Preview trafi na Site URL, gdzie nie ma cookie weryfikatora PKCE, i skończy się komunikatem `message=callback`. Nie jest to open redirect ani utrata danych, ale przejście ścieżki zakupu na Preview z włączonym potwierdzaniem adresu wymaga wpisu globowego (`…/auth/callback**`). Przy okazji: powyższe wpisy gałęziowe wskazują na nieaktualny host (`feat-te-a48cba…`) i wymagają odświeżenia niezależnie od tej zmiany.
+
 Jeśli testy zaczynają się na adresie konkretnego wdrożenia (VERCEL_URL), jego callbacki również muszą być dopuszczone; powyższe cztery wpisy obejmują produkcję i stały adres gałęzi. Przed zmianą ustawień potwierdzić aktualne domeny; nie rozszerzać allowlisty na wszystkie projekty/konta. Dla localhost dodać tylko używany port na czas testów. W Vercel systemowe zmienne wdrożenia są włączone, a kod produkcji może użyć VERCEL_PROJECT_PRODUCTION_URL. Osobna NEXT_PUBLIC_SITE_URL nie jest obecnie ustawiona w projekcie; jeżeli zostanie dodana, skonfigurować ją osobno dla produkcji.
 
 ## Weryfikacja

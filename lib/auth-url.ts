@@ -37,7 +37,7 @@ export function appOrigin(requestOrigin?: string | null, env: AuthEnvironment = 
   return origins[0];
 }
 
-/** SC-BUY-001: `next` carries the purchase target through e-mail confirmation.
+/** SC-BUY-002: `next` carries the purchase target through e-mail confirmation.
  * It is validated here and AGAIN in the callback, because the confirmation link
  * leaves our control between the two. Recovery links never carry it: a password
  * reset must land on /reset-password and nowhere a stale link could point. */
@@ -52,7 +52,14 @@ export function callbackDestination(flow: string | null) {
 }
 
 /** Where the home page sends Supabase's Site URL fallback: a PKCE code goes to the callback, an auth
- * error to the login notice; anything else stays on the home page (null). */
+ * error to the login notice; anything else stays on the home page (null).
+ *
+ * `code` is rebuilt ALONE, on purpose. This is the hardened path for links that
+ * FAILED Supabase's redirect allowlist and were rewritten to the Site URL, so
+ * every other parameter here is untrusted and is dropped — including the
+ * SC-BUY-002 purchase target, which is simply lost on this path. Do not "fix"
+ * that by forwarding parameters: a visitor who lands here still reaches the
+ * dashboard and can click "Kup PRESELEKCJĘ" again. */
 export function homeAuthFallback(params: URLSearchParams): string | null {
   const code = params.get('code');
   if (code && /^[A-Za-z0-9_-]{1,512}$/.test(code)) return '/auth/callback?' + new URLSearchParams({ code });
