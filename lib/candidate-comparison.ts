@@ -38,6 +38,15 @@ export type CandidateComparison = {
 };
 
 const inProgressReasons = new Set(['pending', 'processing']);
+// Raport rekrutacji wczytuje wiersze macierzy tylko dla analiz sprawdzonych przez
+// człowieka (lib/screening-report-source.ts), więc pusta lista kryteriów ma kilka
+// różnych znaczeń. Komórka ma mówić, które z nich zaszło — „brak wyniku analizy"
+// przy wyniku, który istnieje i tylko czeka na sprawdzenie, byłoby nieprawdą.
+const reasonStatuses: Record<string, RequirementStatus> = {
+  pending: 'in_progress', processing: 'in_progress',
+  no_human_review: 'awaiting_review',
+  stale: 'outdated', needs_reanalysis: 'outdated', review_inconsistent: 'outdated',
+};
 
 /**
  * Wymagania aktualnego profilu z identyfikatorami analizy. Raport niesie wymagania
@@ -59,7 +68,8 @@ export function comparisonRequirements(requirements: ScreeningReport['requiremen
  * pojedynczego CV — włącznie z rozróżnieniem analizy w toku od braku informacji.
  */
 export function comparisonStatus(application: ReportApplication, criterion: ReportCriterion | undefined): RequirementStatus {
-  if (inProgressReasons.has(application.ranking.eligibility_reason)) return 'in_progress';
+  const fromReason = reasonStatuses[application.ranking.eligibility_reason];
+  if (fromReason) return fromReason;
   if (!criterion) return 'unavailable';
   if (criterion.matrixVerdict === null) return 'legacy';
   if (criterion.matrixVerdict === 'rejected') return 'rejected';

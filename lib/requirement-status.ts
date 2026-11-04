@@ -12,7 +12,7 @@
 import type { PositionRequirement, RequirementMark } from './requirement-flags.ts';
 
 export const requirementStatuses = [
-  'in_progress', 'unavailable', 'legacy', 'rejected',
+  'in_progress', 'awaiting_review', 'outdated', 'unavailable', 'legacy', 'rejected',
   'supported', 'partial', 'missing', 'contradicted',
 ] as const;
 export type RequirementStatus = typeof requirementStatuses[number];
@@ -21,6 +21,9 @@ export const requirementStatusLabels: Record<RequirementStatus, string> = {
   // „Analiza w toku" i „Brak informacji w CV" to dwa różne stany i nigdy nie dzielą etykiety:
   // pierwszy znaczy, że nikt jeszcze nie sprawdził, drugi — że sprawdzono i w CV nic nie ma.
   in_progress: 'Analiza w toku',
+  // Analiza jest gotowa, ale nikt jej jeszcze nie sprawdził — to też nie jest brak informacji w CV.
+  awaiting_review: 'Oczekuje na sprawdzenie przez człowieka',
+  outdated: 'Wynik nieaktualny',
   unavailable: 'Brak wyniku analizy',
   legacy: 'Analiza starszego typu',
   rejected: 'Wiersz odrzucony przez rekrutera',
@@ -87,6 +90,20 @@ export function requirementStatus(analysis: AnalysisState, row: CandidateCriteri
   const edited = row.human_status === 'edited';
   const verdict = edited ? row.human_verdict ?? row.verdict : row.verdict;
   return verdicts.has(verdict) ? verdict as RequirementStatus : 'unavailable';
+}
+
+/**
+ * Wiersz analizy dla wymagania — albo nic, gdy wiersz dotyczy innego wymagania.
+ * Identyfikator kryterium (`task:1`, `competency:1`) jest pozycyjny, więc po zmianie
+ * profilu stanowiska wskazuje inny tekst niż ten, na którym analiza pracowała.
+ * Bez tego sprawdzenia nowe wymaganie dostałoby werdykt i cytat poprzedniego.
+ * Ta sama zasada rządzi oznaczeniami (lib/requirement-flags.ts) i porównaniem.
+ */
+export function criterionRowFor<T extends { criterion_text_snapshot?: string | null }>(
+  requirement: Pick<PositionRequirement, 'text'>, row: T | undefined,
+): T | undefined {
+  if (!row) return undefined;
+  return (row.criterion_text_snapshot ?? '').trim() === requirement.text.trim() ? row : undefined;
 }
 
 export type CandidateRequirement = PositionRequirement & {

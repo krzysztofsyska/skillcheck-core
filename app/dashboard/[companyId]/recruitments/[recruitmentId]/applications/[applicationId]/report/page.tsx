@@ -82,7 +82,7 @@ export default async function CandidateReportPage({ params }: { params: Promise<
       <p role="status">Analiza CV jeszcze trwa. Wymagania czekają na wynik — to nie to samo co brak informacji w CV.</p>}
     {(report.analysisStatus === 'failed' || report.analysisStatus === 'cancelled') &&
       <p role="status">Ostatnia analiza nie zakończyła się wynikiem. <Link href={screeningPath(route)}>Sprawdź jej stan</Link>.</p>}
-    {report.legacyAnalysis && <p className="notice">Ostatnia analiza jest starszego typu i nie zawiera zestawienia dowodów.
+    {report.legacyAnalysis && <p className="notice">Część wymagań pochodzi z analizy starszego typu, bez zestawienia dowodów.
       {' '}<Link href={screeningPath(route)}>Uruchom nową analizę</Link>.</p>}
     {report.stale && <p className="notice">CV albo wymagania zmieniły się po tej analizie, więc wynik może być nieaktualny.
       {' '}<Link href={screeningPath(route)}>Uruchom analizę ponownie</Link>.</p>}

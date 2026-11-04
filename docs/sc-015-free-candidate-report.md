@@ -19,7 +19,7 @@ tych tablic podbija `positions.updated_at`, a trigger `screening_position_stale`
 z `stale_reason = 'position_changed'`. Samo oznaczenie wymagania kasowałoby więc pracę
 rekrutera i wymuszało płatną ponowną analizę CV.
 
-Oznaczenia żyją dlatego w osobnej tabeli `public.position_requirement_flags`, poza zasięgiem
+Oznaczenia żyją dlatego w osobnej tabeli `requirements.position_flags`, poza zasięgiem
 tego triggera. Zapis oznaczenia nie dotyka `positions`, nie zmienia `positions.updated_at`,
 nie zmienia `input_fingerprint` analizy i nie uruchamia ponownej analizy. Test
 `tests/position-requirement-flags-database.test.mjs` pilnuje tego wprost.
@@ -57,13 +57,28 @@ W obu widokach: **konieczne → nieoznaczone → dodatkowe**, a wewnątrz grupy 
 `criterion_order` (czyli zadania, potem KPI, potem kompetencje — w kolejności z profilu).
 Nieoznaczone stoją przed dodatkowymi, bo nikt jeszcze nie stwierdził, że są mniej ważne.
 
+### Dlaczego osobny schemat i brak klucza obcego
+
+`private.erasure_schema_signature()` (`20261010190255_candidate_retention_preview.sql`)
+obejmuje relacje w `public` i `private` i jest przypięta do baseline'u inwentarza usuwania
+danych kandydatów. Nowa relacja w tych schematach blokowałaby każdy podgląd i każde usunięcie
+danych kandydata (`schema_dependency_unknown`) aż do nowej, osobno zatwierdzonej rewizji
+inwentarza. Tabela nie zawiera danych kandydata — trzyma tekst wymagania stanowiska i etykietę
+— więc do tego inwentarza nie należy. To ten sam wybór, co w `20261104080000_pricing_catalog.sql`.
+
+Ta sama sygnatura liczy również ograniczenia wskazujące na śledzone relacje (`confrelid`),
+więc **klucz obcy do `public.positions` zmieniłby ją mimo innego schematu**. Tabela go nie ma.
+
 ### Kto może zapisać
 
-Zapis wyłącznie przez `public.set_position_requirement_flag` (`security definer`), który
-sprawdza `private.has_company_access(target_company, true)`. Tabela ma RLS tylko do odczytu
-dla `authenticated`, bez `insert/update/delete`, oraz złożony klucz obcy
-`(company_id, position_id) → positions(company_id, id)` — identyfikator stanowiska z innej
-firmy nie da się połączyć, niezależnie od polityk.
+Zapis wyłącznie przez `public.set_position_requirement_flag` (`security definer`), odczyt przez
+`public.position_requirement_flags` — obie z `search_path = ''` i obie sprawdzają
+`private.has_company_access` (zapis z `write_access = true`) oraz to, że stanowisko istnieje pod
+tym samym `company_id`. Obcy `position_id` podany pod własnym `company_id` kończy się `42501`.
+
+Tabela ma włączone RLS **bez polityk** i bez żadnych grantów dla `anon` i `authenticated`,
+a schemat `requirements` nie ma nawet `usage` — jedyna droga do danych to te dwie funkcje.
+Spójność ze stanowiskiem wymuszają właśnie one, w miejsce klucza obcego.
 
 ## 2. Status wymagania u kandydata
 
@@ -158,7 +173,16 @@ stałą `MAX_COMPARISON_CANDIDATES = 5` i nie korzysta z parametru `size` raport
 
 Wiersze porównania to wymagania **aktualnego** profilu stanowiska, pogrupowane jak wyżej.
 Kandydat analizowany na innej wersji wymagań nie ma w danym wierszu wyniku — komórka mówi
-„Brak wyniku analizy", a nie „brak informacji".
+„Brak wyniku analizy", a nie „brak informacji". **Ta sama zasada obowiązuje w raporcie
+pojedynczego CV**: wiersz analizy liczy się tylko wtedy, gdy jego `criterion_text_snapshot`
+zgadza się z tekstem wymagania w aktualnym profilu. Identyfikator kryterium jest pozycyjny,
+więc bez tego sprawdzenia nowe wymaganie dostałoby werdykt i cytat poprzedniego.
+
+Pusta lista kryteriów w raporcie rekrutacji ma kilka znaczeń, bo ten raport wczytuje wiersze
+macierzy tylko dla analiz sprawdzonych przez człowieka. Komórka mówi które: „Analiza w toku"
+(`pending`, `processing`), „Oczekuje na sprawdzenie przez człowieka" (`no_human_review`),
+„Wynik nieaktualny" (`stale`, `needs_reanalysis`, `review_inconsistent`), a „Brak wyniku
+analizy" dopiero wtedy, gdy wyniku faktycznie nie ma.
 
 Tabela rankingu i shortlisty zostaje na stronie jako osobna sekcja: niesie miejsce, sugestię
 i decyzję człowieka, czego macierz wymagań nie pokazuje.

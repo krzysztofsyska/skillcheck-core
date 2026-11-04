@@ -3,11 +3,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildCandidateRequirement, fallbackGapQuestion, requirementStatus,
+  buildCandidateRequirement, criterionRowFor, fallbackGapQuestion, requirementStatus,
   requirementStatusLabels, summariseCandidateReport,
 } from '../lib/candidate-report.ts';
 import {
-  buildCandidateComparison, comparisonCandidates, MAX_COMPARISON_CANDIDATES,
+  buildCandidateComparison, comparisonCandidates, comparisonStatus, MAX_COMPARISON_CANDIDATES,
 } from '../lib/candidate-comparison.ts';
 import {
   positionRequirements, resolveRequirementMarks, sortByRequirementMark,
@@ -105,6 +105,25 @@ test('kolejność: konieczne, potem nieoznaczone, na końcu dodatkowe', () => {
     ['kpi:1', 'task:2', 'competency:1', 'task:1']);
 });
 
+test('wiersz analizy z innym tekstem nie dokleja się do nowego wymagania', () => {
+  // Profil zmieniony po analizie: competency:1 to dziś kategoria C, a analiza
+  // pracowała na kategorii B. Bez sprawdzenia tekstu raport pokazałby przy nowym
+  // wymaganiu cudzy werdykt i cudzy cytat — i policzył je jako potwierdzone.
+  const stale = {
+    ...row({ verdict: 'supported', evidence: [{ start: 0, end: 24, quote: 'prawo jazdy kategorii B' }] }),
+    criterion_text_snapshot: 'Prawo jazdy kategorii B',
+  };
+  const current = { ...licence, text: 'Prawo jazdy kategorii C' };
+  const built = buildCandidateRequirement(current, 'required', completed, criterionRowFor(current, stale));
+  assert.equal(built.status, 'unavailable');
+  assert.deepEqual(built.quotes, []);
+  assert.equal(summariseCandidateReport([built]).requiredSupported, 0);
+  // Ten sam tekst nadal przechodzi.
+  assert.equal(buildCandidateRequirement(licence, 'required', completed, criterionRowFor(licence, stale)).status, 'supported');
+  // Brak snapshotu w wierszu też nie przechodzi — nie zgadujemy.
+  assert.equal(criterionRowFor(licence, row()), undefined);
+});
+
 // --- porównanie: jedno i pięć fikcyjnych CV ---
 
 const criterion = (requirement, verdict, quote, reviewedChange = false) => ({
@@ -119,7 +138,8 @@ const application = (index, { verdict = 'supported', reason = 'insufficient_evid
     rankable: false, eligibility_reason: reason, shortlist_entry_id: null,
   },
   shortlist: shortlist ? { entry_id: 'e' + index } : null,
-  criteria: reason === 'pending' || reason === 'processing' ? []
+  // Raport rekrutacji wczytuje kryteria tylko dla analiz sprawdzonych przez człowieka.
+  criteria: reason !== 'insufficient_evidence' && reason !== 'eligible' ? []
     : requirements.map(r => criterion(r, r.id === 'competency:1' ? 'missing' : verdict,
       r.id === 'competency:1' ? null : 'cytat ' + index, reviewedChange)),
 });
@@ -162,6 +182,24 @@ test('porównanie pięciu CV, limit pięciu kolumn i analiza w toku', () => {
   const pending = buildCandidateComparison(report([application(1, { reason: 'processing' })]));
   for (const row of pending.rows) assert.equal(row.cells[0].status, 'in_progress');
   assert.equal(pending.candidates[0].inProgress, true);
+});
+
+test('pusta lista kryteriów nie znaczy od razu „brak wyniku analizy"', () => {
+  // Raport rekrutacji wczytuje macierz tylko dla analiz sprawdzonych przez człowieka,
+  // więc komórka musi powiedzieć, czego naprawdę brakuje.
+  const reason = r => comparisonStatus({ ranking: { eligibility_reason: r }, criteria: [] }, undefined);
+  assert.equal(reason('no_human_review'), 'awaiting_review');
+  assert.equal(reason('stale'), 'outdated');
+  assert.equal(reason('needs_reanalysis'), 'outdated');
+  assert.equal(reason('review_inconsistent'), 'outdated');
+  assert.equal(reason('processing'), 'in_progress');
+  assert.equal(reason('no_completed_result'), 'unavailable');
+  // Żadna z tych etykiet nie udaje braku informacji w CV.
+  for (const status of ['awaiting_review', 'outdated', 'unavailable', 'in_progress']) {
+    assert.notEqual(requirementStatusLabels[status], requirementStatusLabels.missing);
+  }
+  const comparison = buildCandidateComparison(report([application(1, { reason: 'no_human_review' })]));
+  for (const row of comparison.rows) assert.equal(row.cells[0].status, 'awaiting_review');
 });
 
 test('shortlista człowieka idzie na początek, dalej miejsce w rankingu', () => {

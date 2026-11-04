@@ -15,7 +15,7 @@ import {
   type CriterionKind, type PositionRequirement, type RequirementFlagRow, type RequirementMark,
 } from './requirement-flags.ts';
 import {
-  buildCandidateRequirement, summariseCandidateReport,
+  buildCandidateRequirement, criterionRowFor, summariseCandidateReport,
   type AnalysisState, type CandidateCriterionRow, type CandidateReportSummary, type CandidateRequirement,
 } from './requirement-status.ts';
 
@@ -86,11 +86,11 @@ export async function loadCandidateReport(
 
   const resultRows = analysis
     ? await client.from('screening_criterion_results')
-      .select('analysis_id,criterion_id,verdict,evidence,missing_info,suggested_question,human_status,human_verdict,human_missing_info,human_suggested_question,human_evidence')
+      .select('analysis_id,criterion_id,criterion_text_snapshot,verdict,evidence,missing_info,suggested_question,human_status,human_verdict,human_missing_info,human_suggested_question,human_evidence')
       .eq('company_id', companyId).eq('analysis_id', analysis.id).order('criterion_order')
     : { data: [], error: null };
   if (resultRows.error) throw new CandidateReportError('Nie udało się wczytać macierzy dowodów.');
-  const rows = (resultRows.data ?? []) as (CandidateCriterionRow & { analysis_id?: string })[];
+  const rows = (resultRows.data ?? []) as (CandidateCriterionRow & { analysis_id?: string; criterion_text_snapshot?: string })[];
   if (analysis && rows.some(row => row.analysis_id && row.analysis_id !== analysis.id)) {
     throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
   }
@@ -101,7 +101,8 @@ export async function loadCandidateReport(
   const byCriterion = new Map(rows.map(row => [row.criterion_id, row]));
   const analysisState: AnalysisState = analysis ? { execution_status: analysis.execution_status } : null;
   const built = sortByRequirementMark(requirements, marks).map(requirement =>
-    buildCandidateRequirement(requirement, marks.get(requirement.id) ?? 'unmarked', analysisState, byCriterion.get(requirement.id)));
+    buildCandidateRequirement(requirement, marks.get(requirement.id) ?? 'unmarked', analysisState,
+      criterionRowFor(requirement, byCriterion.get(requirement.id))));
 
   return {
     recruitmentName: context.recruitment.name,
@@ -110,7 +111,8 @@ export async function loadCandidateReport(
     analysisVersion: analysis?.analysis_version ?? null,
     documentVersion: analysis?.candidate_document_version ?? null,
     stale: !!analysis && screeningStatus(analysis, fingerprint) === 'stale',
-    legacyAnalysis: !!analysis && analysis.execution_status === 'completed' && rows.length > 0 && rows.every(row => row.verdict == null),
+    // Analiza częściowo zmigrowana też zasługuje na ostrzeżenie: wystarczy jeden wiersz bez werdyktu.
+    legacyAnalysis: !!analysis && analysis.execution_status === 'completed' && rows.some(row => row.verdict == null),
     analysisStatus: analysis?.execution_status ?? null,
     requirements: built,
     summary: summariseCandidateReport(built),
