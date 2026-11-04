@@ -26,7 +26,7 @@ export async function register(form: FormData) {
   if (!input || input.password.length < 12) redirect(withNext("/register?message=invalid", next));
   if (!hasLegalAcceptance(form)) redirect(withNext("/register?message=terms", next));
   let emailRedirectTo: string;
-  try { emailRedirectTo = authCallbackUrl('signup', (await headers()).get('origin')); }
+  try { emailRedirectTo = authCallbackUrl('signup', (await headers()).get('origin'), process.env, next); }
   catch { redirect(withNext('/register?message=unavailable', next)); }
   const client = await createClient();
   const { data, error } = await client.auth.signUp({ ...input, options: {

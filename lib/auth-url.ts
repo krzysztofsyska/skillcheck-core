@@ -1,3 +1,5 @@
+import { safeNextPath } from './safe-next-path.ts';
+
 type AuthEnvironment = {
   NEXT_PUBLIC_SITE_URL?: string; VERCEL_ENV?: string; NODE_ENV?: string;
   VERCEL_BRANCH_URL?: string; VERCEL_URL?: string; VERCEL_PROJECT_PRODUCTION_URL?: string;
@@ -35,8 +37,15 @@ export function appOrigin(requestOrigin?: string | null, env: AuthEnvironment = 
   return origins[0];
 }
 
-export function authCallbackUrl(flow: 'signup' | 'recovery', requestOrigin?: string | null, env: AuthEnvironment = process.env) {
-  return appOrigin(requestOrigin, env) + '/auth/callback' + (flow === 'recovery' ? '?flow=recovery' : '');
+/** SC-BUY-001: `next` carries the purchase target through e-mail confirmation.
+ * It is validated here and AGAIN in the callback, because the confirmation link
+ * leaves our control between the two. Recovery links never carry it: a password
+ * reset must land on /reset-password and nowhere a stale link could point. */
+export function authCallbackUrl(flow: 'signup' | 'recovery', requestOrigin?: string | null, env: AuthEnvironment = process.env, next?: unknown) {
+  const callback = appOrigin(requestOrigin, env) + '/auth/callback';
+  if (flow === 'recovery') return callback + '?flow=recovery';
+  const target = safeNextPath(next);
+  return target ? callback + '?next=' + encodeURIComponent(target) : callback;
 }
 export function callbackDestination(flow: string | null) {
   return flow === "recovery" ? "/reset-password" : "/dashboard";
