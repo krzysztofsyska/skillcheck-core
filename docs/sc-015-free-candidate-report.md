@@ -110,8 +110,12 @@ stanem całej analizy: wiersz odrzucony zostaje `rejected`, nawet gdy analiza je
 inaczej nieaktualność przywracałaby na ekran cytat, który rekruter wprost odrzucił.
 
 **Potwierdzenie, którego nikt nie sprawdził, nie jest potwierdzeniem.** Werdykt `supported`
-przy `human_status = 'unreviewed'` daje `awaiting_review`, nie `supported`, i nie liczy się do
-liczby potwierdzonych wymagań koniecznych. To ta sama zasada, którą stosuje
+daje `awaiting_review`, nie `supported`, dopóki sprawdzenie nie jest domknięte na obu
+stopniach: wiersz ma `human_status` `accepted` albo `edited`, **oraz** cała analiza ma zapisany
+przegląd (`screening_result_reviews`). Taki wymóg stawia też baza, która nie pozwala zatwierdzić
+analizy, póki któryś wiersz jest niesprawdzony. Domyślnie liczy się wyłącznie wyraźna akceptacja
+człowieka: nieznany, nowy stan przeglądu czyta się jako oczekujący, nie jako potwierdzenie.
+Wymaganie w stanie `awaiting_review` nie liczy się do liczby potwierdzonych wymagań koniecznych. To ta sama zasada, którą stosuje
 `lib/interview-gaps.ts` (`source: 'unverified'`) i którą pokazuje macierz dowodów
 („Niezweryfikowane"); wymaga jej też reguła, że dowód i przegląd człowieka są obowiązkowe przy
 analizie AI. Werdykty mówiące o luce (`partial`, `missing`, `contradicted`) idą dalej bez

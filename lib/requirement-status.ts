@@ -81,6 +81,8 @@ export type AnalysisState = {
   execution_status: string;
   /** Materiał zmienił się po analizie albo rekruter odesłał ją do powtórzenia. */
   outdated?: boolean;
+  /** Wiersze są, ale całej analizy nikt jeszcze nie zatwierdził. */
+  awaitingReview?: boolean;
 } | null;
 
 const verdicts = new Set(['supported', 'partial', 'missing', 'contradicted']);
@@ -123,7 +125,17 @@ export function requirementStatus(analysis: AnalysisState, row: CandidateCriteri
   // zasada, którą stosuje lib/interview-gaps.ts (`source: 'unverified'` zamiast
   // `supported`) i którą pokazuje macierz dowodów („Niezweryfikowane"). Werdykty
   // mówiące o luce idą dalej: one o nic nie przesądzają, tylko rodzą pytanie.
-  if (row.human_status === 'unreviewed' && verdict === 'supported') return 'awaiting_review';
+  //
+  // Sprawdzenie jest dwustopniowe — najpierw wiersze, potem cała analiza — i oba
+  // stopnie muszą być domknięte. Inaczej rekruter, który zaakceptował jeden wiersz,
+  // widziałby w raporcie potwierdzone wymaganie, którego porównanie tych samych
+  // danych pokazać odmawia.
+  //
+  // Domyślnie „niesprawdzone": liczy się wyłącznie wyraźna akceptacja człowieka.
+  // Gdyby doszedł piąty stan przeglądu wiersza, ma czytać się jako oczekujący na
+  // sprawdzenie, a nie jako „Potwierdzone w CV".
+  const rowReviewed = row.human_status === 'accepted' || edited;
+  if (verdict === 'supported' && (!rowReviewed || analysis.awaitingReview)) return 'awaiting_review';
   return verdict as RequirementStatus;
 }
 

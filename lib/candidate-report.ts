@@ -112,6 +112,10 @@ export async function loadCandidateReport(
     throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
   }
   const reanalysisRequested = latestReview?.disposition === 'needs_reanalysis';
+  // Sprawdzenie jest dwustopniowe: najpierw wiersze macierzy, potem cała analiza.
+  // Dopóki drugiego stopnia nie ma, raport nie nazywa niczego potwierdzonym — tak
+  // samo jak porównanie, które dla takiej analizy pokazuje „oczekuje na sprawdzenie".
+  const awaitingReview = !latestReview;
 
   const flags = await loadRequirementFlags(client, companyId, context.position.id);
   const requirements = positionRequirements(context.position);
@@ -119,7 +123,7 @@ export async function loadCandidateReport(
   const byCriterion = new Map(rows.map(row => [row.criterion_id, row]));
   const stale = !!analysis && screeningStatus(analysis, fingerprint) === 'stale';
   const analysisState: AnalysisState = analysis
-    ? { execution_status: analysis.execution_status, outdated: stale || reanalysisRequested }
+    ? { execution_status: analysis.execution_status, outdated: stale || reanalysisRequested, awaitingReview }
     : null;
   const built = sortByRequirementMark(requirements, marks).map(requirement =>
     buildCandidateRequirement(requirement, marks.get(requirement.id) ?? 'unmarked', analysisState,

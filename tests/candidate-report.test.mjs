@@ -108,6 +108,12 @@ test('potwierdzenie, którego nikt nie sprawdził, nie jest potwierdzeniem', () 
   // Sprawdzone potwierdzenie liczy się normalnie.
   assert.equal(buildCandidateRequirement(licence, 'required', completed,
     row({ verdict: 'supported', human_status: 'accepted' })).status, 'supported');
+  // Nieznany stan przeglądu czyta się jako niesprawdzony, nie jako potwierdzenie.
+  assert.equal(buildCandidateRequirement(licence, 'required', completed,
+    row({ verdict: 'supported', human_status: 'jakiś_nowy_stan' })).status, 'awaiting_review');
+  // Korekta człowieka na „supported" to sprawdzenie samo w sobie.
+  assert.equal(buildCandidateRequirement(licence, 'required', completed,
+    row({ verdict: 'missing', human_status: 'edited', human_verdict: 'supported' })).status, 'supported');
   // Werdykt o luce idzie dalej mimo braku sprawdzenia: on o niczym nie przesądza.
   assert.equal(buildCandidateRequirement(licence, 'required', completed,
     row({ verdict: 'missing', evidence: [], human_status: 'unreviewed' })).status, 'missing');
@@ -198,7 +204,7 @@ function loaderClient(data) {
 const id = n => `0000000${n}-0000-4000-8000-00000000000${n}`;
 const route = { companyId: id(1), recruitmentId: id(2), applicationId: id(3) };
 const loaderData = ({ competencyText = 'Prawo jazdy kategorii B', snapshot = 'Prawo jazdy kategorii B',
-  disposition = null, verdict = 'supported' } = {}) => withFingerprint({
+  disposition = 'approved', verdict = 'supported' } = {}) => withFingerprint({
   applications: [{ id: route.applicationId, company_id: route.companyId, recruitment_id: route.recruitmentId,
     candidate_id: id(4), status: 'new', updated_at: '2026-11-04T10:00:00Z' }],
   recruitments: [{ id: route.recruitmentId, company_id: route.companyId, position_id: id(5),
@@ -217,6 +223,8 @@ const loaderData = ({ competencyText = 'Prawo jazdy kategorii B', snapshot = 'Pr
     evidence: [{ start: 0, end: 23, quote: 'prawo jazdy kategorii B' }],
     missing_info: null, suggested_question: null, human_status: 'accepted',
     human_verdict: null, human_missing_info: null, human_suggested_question: null, human_evidence: null }],
+  // Sprawdzenie jest dwustopniowe, więc „ścieżka szczęśliwa" ma domknięty także
+  // przegląd całej analizy; disposition: null znaczy, że go jeszcze nie ma.
   screening_result_reviews: disposition
     ? [{ analysis_id: id(8), company_id: route.companyId, review_version: 1, disposition }] : [],
   position_requirement_flags: [{ criterion_id: 'competency:1', criterion_text: competencyText, flag: 'required' }],
@@ -280,6 +288,22 @@ test('loadCandidateReport: analiza odesłana do powtórzenia nie uchodzi za potw
     { analysis_id: id(8), company_id: route.companyId, review_version: 10, disposition: 'approved' },
   ];
   assert.equal((await loadCandidateReport(loaderClient(settled), route)).reanalysisRequested, false);
+});
+
+test('loadCandidateReport: niezatwierdzona analiza nie daje potwierdzeń, tak jak porównanie', async () => {
+  const { loadCandidateReport } = await import('../lib/candidate-report.ts');
+  // Wiersz zaakceptowany, ale przeglądu całej analizy jeszcze nie ma. Porównanie
+  // dla takiej analizy pokazuje „Oczekuje na sprawdzenie przez człowieka", więc
+  // raport nie może w tym samym momencie mówić „Potwierdzone w CV".
+  const report = await loadCandidateReport(loaderClient(loaderData({ disposition: null })), route);
+  const found = report.requirements.find(r => r.id === 'competency:1');
+  assert.equal(found.status, 'awaiting_review');
+  assert.equal(report.summary.requiredSupported, 0);
+  assert.equal(report.summary.requiredPending, 1);
+  assert.equal(found.quotes.length, 1, 'dowód zostaje na ekranie do sprawdzenia');
+  // Oba widoki nazywają ten sam przypadek tak samo.
+  assert.equal(found.status,
+    comparisonStatus({ ranking: { eligibility_reason: 'no_human_review' }, criteria: [] }, undefined));
 });
 
 test('loadCandidateReport: nieaktualny materiał nie wymazuje cytatów rekruterowi', async () => {
