@@ -33,6 +33,24 @@ export const requirementStatusLabels: Record<RequirementStatus, string> = {
   contradicted: 'Sprzeczne dane',
 };
 
+/**
+ * Czy przy tym statusie widok pokazuje cytat, „czego brakuje" i pytanie.
+ * Jedno źródło dla obu widoków — inaczej to samo wymaganie u tego samego
+ * kandydata raz miałoby cytat, a raz nie.
+ *
+ * Publikują cztery werdykty oraz `outdated` i `awaiting_review`: zamknięta
+ * rekrutacja, zatrudniony kandydat, zmienione CV czy brak sprawdzenia nie są
+ * powodem, żeby wymazać rekruterowi dowód, który i tak widzi w macierzy — a
+ * etykieta mówi wprost, że to jeszcze nie jest potwierdzenie.
+ *
+ * Nie publikują `rejected` (rekruter odrzucił ten dowód), `in_progress`,
+ * `legacy` i `unavailable` — tam dowodu albo nie ma, albo został odrzucony.
+ */
+const publishingStatuses = new Set<RequirementStatus>([
+  'supported', 'partial', 'missing', 'contradicted', 'outdated', 'awaiting_review',
+]);
+export const statusPublishesEvidence = (status: RequirementStatus) => publishingStatuses.has(status);
+
 /** Statusy, przy których widok podaje pytanie na rozmowę. */
 const gapStatuses = new Set<RequirementStatus>(['partial', 'missing', 'contradicted', 'rejected']);
 export const isRequirementGap = (status: RequirementStatus) => gapStatuses.has(status);
@@ -86,19 +104,27 @@ function quotes(value: unknown): EvidenceQuote[] {
  */
 export function requirementStatus(analysis: AnalysisState, row: CandidateCriterionRow | undefined): RequirementStatus {
   if (!analysis || analysis.execution_status === 'pending' || analysis.execution_status === 'processing') return 'in_progress';
-  // Rekruter odesłał analizę do powtórzenia albo materiał zmienił się po niej.
-  // Wynik dalej stoi w bazie jako `completed` ze `stale_at` pustym, więc bez tego
-  // raport pokazywałby „Potwierdzone w CV" dla analizy, którą człowiek już odrzucił —
-  // i rozjechałby się z porównaniem, które ten sam przypadek nazywa nieaktualnym.
-  if (analysis.outdated) return 'outdated';
-  if (analysis.execution_status !== 'completed' || !row) return 'unavailable';
+  if (analysis.execution_status !== 'completed' || !row) return analysis.outdated ? 'outdated' : 'unavailable';
   if (row.verdict == null) return 'legacy';
+  // Decyzje człowieka o pojedynczym wierszu idą PRZED stanem całej analizy.
   // Odrzucony wiersz nie jest dowodem w żadną stronę: wymaganie zostaje otwarte,
   // a rekruter układa pytanie sam. Ta sama zasada co w lib/interview-gaps.ts.
+  // Gdyby `outdated` sprawdzać wcześniej, nieaktualna analiza przywracałaby na
+  // ekran cytat AI, który rekruter wprost odrzucił.
   if (row.human_status === 'rejected') return 'rejected';
+  // Rekruter odesłał analizę do powtórzenia albo materiał zmienił się po niej.
+  // Wynik dalej stoi w bazie jako `completed` ze `stale_at` pustym, więc bez tego
+  // raport pokazywałby „Potwierdzone w CV" dla analizy, którą człowiek już odrzucił.
+  if (analysis.outdated) return 'outdated';
   const edited = row.human_status === 'edited';
   const verdict = edited ? row.human_verdict ?? row.verdict : row.verdict;
-  return verdicts.has(verdict) ? verdict as RequirementStatus : 'unavailable';
+  if (!verdicts.has(verdict)) return 'unavailable';
+  // Potwierdzenie, którego nikt nie sprawdził, nie jest potwierdzeniem. To ta sama
+  // zasada, którą stosuje lib/interview-gaps.ts (`source: 'unverified'` zamiast
+  // `supported`) i którą pokazuje macierz dowodów („Niezweryfikowane"). Werdykty
+  // mówiące o luce idą dalej: one o nic nie przesądzają, tylko rodzą pytanie.
+  if (row.human_status === 'unreviewed' && verdict === 'supported') return 'awaiting_review';
+  return verdict as RequirementStatus;
 }
 
 /**
@@ -132,15 +158,7 @@ export function buildCandidateRequirement(
 ): CandidateRequirement {
   const status = requirementStatus(analysis, row);
   const edited = !!row && row.human_status === 'edited';
-  // Dowód publikuje status, który mówi coś o treści CV, oraz wynik nieaktualny.
-  // Odrzucony wiersz, analiza w toku i analiza starszego typu nie publikują ani
-  // werdyktu AI, ani cytatów — inaczej na ekranie zostałby dowód bez wyniku.
-  //
-  // `outdated` publikuje świadomie: rekrutacja zamknięta, kandydat zatrudniony czy
-  // zmienione CV nie są powodem, żeby wymazać rekruterowi cytaty, które i tak widzi
-  // w macierzy dowodów. Sam status i baner mówią, że wynik jest nieaktualny, a do
-  // `requiredSupported` to wymaganie i tak się nie liczy.
-  const publishes = !!row && (verdicts.has(status) || status === 'outdated');
+  const publishes = !!row && statusPublishesEvidence(status);
   const evidence = publishes ? quotes(edited ? row.human_evidence ?? row.evidence : row.evidence) : [];
   const missingInfo = publishes ? text(edited ? row.human_missing_info ?? row.missing_info : row.missing_info) : null;
   const saved = publishes ? text(edited ? row.human_suggested_question ?? row.suggested_question : row.suggested_question) : null;

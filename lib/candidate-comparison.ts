@@ -5,7 +5,7 @@
 // żeby to samo wymaganie u tego samego kandydata nie nazywało się w dwóch widokach inaczej.
 // Porównanie nie liczy wyniku, nie ustawia kolejności merytorycznej i nie sugeruje decyzji.
 
-import { type RequirementStatus } from './requirement-status.ts';
+import { statusPublishesEvidence, type RequirementStatus } from './requirement-status.ts';
 import {
   positionRequirements, resolveRequirementMarks, sortByRequirementMark,
   type PositionRequirement, type RequirementFlagRow, type RequirementMark,
@@ -38,7 +38,6 @@ export type CandidateComparison = {
 };
 
 const inProgressReasons = new Set(['pending', 'processing']);
-const verdictStatuses = new Set<RequirementStatus>(['supported', 'partial', 'missing', 'contradicted']);
 // Raport rekrutacji wczytuje wiersze macierzy tylko dla analiz sprawdzonych przez
 // człowieka (lib/screening-report-source.ts), więc pusta lista kryteriów ma kilka
 // różnych znaczeń. Komórka ma mówić, które z nich zaszło — „brak wyniku analizy"
@@ -109,10 +108,9 @@ export function buildCandidateComparison(
       return {
         applicationId: application.ranking.application_id,
         status,
-        // Tak jak w raporcie pojedynczego CV: cytat tylko przy werdykcie, który
-        // mówi coś o treści CV. Wiersz starszego typu nie publikuje tu cytatu,
-        // skoro raport też go nie publikuje — inaczej dwa widoki różniłyby się.
-        quote: verdictStatuses.has(status) ? criterion?.evidence[0]?.quote ?? null : null,
+        // Ta sama reguła publikowania, co w raporcie pojedynczego CV — jedna
+        // funkcja, żeby widoki nie rozjechały się przy żadnym statusie.
+        quote: statusPublishesEvidence(status) ? criterion?.evidence[0]?.quote ?? null : null,
         corrected: !!criterion?.reviewedChange,
       };
     }),

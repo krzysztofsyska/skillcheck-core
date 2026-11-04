@@ -13,6 +13,7 @@ import {
   positionRequirements, resolveRequirementMarks, sortByRequirementMark,
 } from '../lib/requirement-flags.ts';
 import { prepareScreening } from '../lib/screening.ts';
+import { buildInterviewGaps } from '../lib/interview-gaps.ts';
 
 const position = {
   tasks: ['Dostarczanie przesyłek', 'Rozliczanie tras'],
@@ -25,7 +26,7 @@ const licence = requirements.find(r => r.id === 'competency:1');
 const row = (overrides = {}) => ({
   criterion_id: 'competency:1', verdict: 'supported',
   evidence: [{ start: 0, end: 7, quote: 'dowód AI' }],
-  missing_info: null, suggested_question: null, human_status: 'unreviewed',
+  missing_info: null, suggested_question: null, human_status: 'accepted',
   human_verdict: null, human_missing_info: null, human_suggested_question: null, human_evidence: null,
   ...overrides,
 });
@@ -75,6 +76,41 @@ test('korekta rekrutera wygrywa, odrzucony wiersz nie publikuje dowodu AI', () =
   assert.deepEqual(rejected.quotes, []);
   assert.equal(rejected.question, fallbackGapQuestion);
   assert.equal(rejected.corrected, true);
+});
+
+test('odrzucony wiersz zostaje odrzucony także w nieaktualnej analizie', () => {
+  // Decyzja człowieka o wierszu bije stan całej analizy. Inaczej nieaktualna
+  // analiza przywracałaby na ekran cytat AI, który rekruter wprost odrzucił.
+  const rejected = row({ human_status: 'rejected', missing_info: 'czegoś brakuje' });
+  for (const analysis of [completed, { execution_status: 'completed', outdated: true }]) {
+    const built = buildCandidateRequirement(licence, 'required', analysis, rejected);
+    assert.equal(built.status, 'rejected');
+    assert.deepEqual(built.quotes, []);
+    assert.equal(built.missingInfo, null);
+    assert.equal(built.question, fallbackGapQuestion);
+    assert.equal(built.corrected, true);
+  }
+});
+
+test('potwierdzenie, którego nikt nie sprawdził, nie jest potwierdzeniem', () => {
+  const unreviewed = buildCandidateRequirement(licence, 'required', completed,
+    row({ verdict: 'supported', human_status: 'unreviewed' }));
+  assert.equal(unreviewed.status, 'awaiting_review');
+  assert.equal(summariseCandidateReport([unreviewed]).requiredSupported, 0);
+  assert.equal(summariseCandidateReport([unreviewed]).requiredPending, 1);
+  // Dowód zostaje na ekranie — etykieta mówi, że czeka na sprawdzenie.
+  assert.equal(unreviewed.quotes.length, 1);
+  // Zgodność z lib/interview-gaps.ts: tam ten sam wiersz nie liczy się jako supported.
+  assert.equal(buildInterviewGaps([{ id: 'x', criterion_id: 'competency:1', criterion_kind: 'competency',
+    criterion_text_snapshot: licence.text, criterion_order: 1, verdict: 'supported',
+    missing_info: null, suggested_question: null, human_status: 'unreviewed',
+    human_verdict: null, human_missing_info: null, human_suggested_question: null }]).supported, 0);
+  // Sprawdzone potwierdzenie liczy się normalnie.
+  assert.equal(buildCandidateRequirement(licence, 'required', completed,
+    row({ verdict: 'supported', human_status: 'accepted' })).status, 'supported');
+  // Werdykt o luce idzie dalej mimo braku sprawdzenia: on o niczym nie przesądza.
+  assert.equal(buildCandidateRequirement(licence, 'required', completed,
+    row({ verdict: 'missing', evidence: [], human_status: 'unreviewed' })).status, 'missing');
 });
 
 test('starszy profil: brak oznaczeń znaczy nieoznaczone, nie konieczne', () => {
@@ -179,7 +215,7 @@ const loaderData = ({ competencyText = 'Prawo jazdy kategorii B', snapshot = 'Pr
   screening_criterion_results: [{ analysis_id: id(8), company_id: route.companyId, criterion_id: 'competency:1',
     criterion_text_snapshot: snapshot, verdict,
     evidence: [{ start: 0, end: 23, quote: 'prawo jazdy kategorii B' }],
-    missing_info: null, suggested_question: null, human_status: 'unreviewed',
+    missing_info: null, suggested_question: null, human_status: 'accepted',
     human_verdict: null, human_missing_info: null, human_suggested_question: null, human_evidence: null }],
   screening_result_reviews: disposition
     ? [{ analysis_id: id(8), company_id: route.companyId, review_version: 1, disposition }] : [],

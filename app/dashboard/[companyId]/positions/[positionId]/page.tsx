@@ -12,7 +12,10 @@ export default async function PositionPage({params,searchParams}:{params:Promise
   if(error) throw new Error("Nie udało się wczytać stanowiska.");
   if(!position) notFound();
   const requirements=positionRequirements(position);
-  const marks=Object.fromEntries(resolveRequirementMarks(requirements,await loadRequirementFlags(client,companyId,position.id))) as Record<string,RequirementMark>;
+  // Chwilowy błąd odczytu oznaczeń nie może wywalić całego profilu stanowiska:
+  // wtedy po prostu nic nie jest jeszcze oznaczone, a rekruter może oznaczyć od nowa.
+  const flags=await loadRequirementFlags(client,companyId,position.id).catch(()=>[]);
+  const marks=Object.fromEntries(resolveRequirementMarks(requirements,flags)) as Record<string,RequirementMark>;
   const {saved}=await searchParams;
   return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← {company.name}</Link><p className="eyebrow">PROFIL STANOWISKA</p><h1>{position.title}</h1>
     {saved==="1"&&<p role="status" className="notice">Profil stanowiska został zapisany.</p>}

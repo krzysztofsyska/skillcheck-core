@@ -98,24 +98,37 @@ po `review_version desc`) oraz wiersz macierzy dowodów (`screening_criterion_re
 | status | warunek | etykieta |
 | --- | --- | --- |
 | `in_progress` | brak analizy albo `execution_status in ('pending','processing')` | Analiza w toku |
-| `awaiting_review` | wynik gotowy, nikt go jeszcze nie sprawdził (`no_human_review`) | Oczekuje na sprawdzenie przez człowieka |
+| `awaiting_review` | wynik gotowy, nikt go jeszcze nie sprawdził: `human_status = 'unreviewed'` przy werdykcie `supported`, albo cała analiza z `no_human_review` | Oczekuje na sprawdzenie przez człowieka |
 | `outdated` | rekruter odesłał analizę do powtórzenia (`needs_reanalysis`) albo materiał zmienił się po niej | Wynik nieaktualny |
 | `unavailable` | analiza `failed` / `cancelled`, albo brak wiersza dla wymagania | Brak wyniku analizy |
 | `legacy` | `verdict is null` (analiza sprzed macierzy dowodów) | Analiza starszego typu |
 | `rejected` | `human_status = 'rejected'` | Wiersz odrzucony przez rekrutera |
 | `supported` / `partial` / `missing` / `contradicted` | `execution_status = 'completed'`, werdykt po korekcie | Potwierdzone w CV / Częściowo potwierdzone / Brak informacji w CV / Sprzeczne dane |
 
+**Kolejność sprawdzania ma znaczenie.** Decyzja człowieka o pojedynczym wierszu idzie przed
+stanem całej analizy: wiersz odrzucony zostaje `rejected`, nawet gdy analiza jest nieaktualna —
+inaczej nieaktualność przywracałaby na ekran cytat, który rekruter wprost odrzucił.
+
+**Potwierdzenie, którego nikt nie sprawdził, nie jest potwierdzeniem.** Werdykt `supported`
+przy `human_status = 'unreviewed'` daje `awaiting_review`, nie `supported`, i nie liczy się do
+liczby potwierdzonych wymagań koniecznych. To ta sama zasada, którą stosuje
+`lib/interview-gaps.ts` (`source: 'unverified'`) i którą pokazuje macierz dowodów
+(„Niezweryfikowane"); wymaga jej też reguła, że dowód i przegląd człowieka są obowiązkowe przy
+analizie AI. Werdykty mówiące o luce (`partial`, `missing`, `contradicted`) idą dalej bez
+sprawdzenia: one o niczym nie przesądzają, tylko rodzą pytanie na rozmowę.
+
 Werdykt odesłany do powtórzenia nie jest potwierdzeniem: taki wynik zostaje w bazie jako
 `completed` ze `stale_at` pustym, więc bez odczytu `screening_result_reviews` raport
 pokazywałby „Potwierdzone w CV" dla analizy, którą człowiek już odrzucił.
 
-**Co publikuje cytat.** Cytaty, „czego brakuje" i pytanie publikują cztery werdykty oraz
-`outdated`. `outdated` publikuje świadomie: zamknięta rekrutacja, zatrudniony kandydat czy
-zmienione CV nie są powodem, żeby wymazać rekruterowi cytaty, które i tak widzi w macierzy
-dowodów — status i baner mówią, że wynik jest nieaktualny, a do liczby potwierdzonych
-wymagań koniecznych takie wymaganie się nie liczy. `in_progress`, `awaiting_review`,
-`unavailable`, `legacy` i `rejected` nie publikują nic, żeby na ekranie nie został dowód
-bez wyniku. Ta sama zasada obowiązuje w obu widokach.
+**Co publikuje cytat.** Rozstrzyga `statusPublishesEvidence` w `lib/requirement-status.ts` —
+jedna funkcja dla obu widoków, żeby to samo wymaganie u tego samego kandydata nie miało raz
+cytatu, a raz nie. Publikują cztery werdykty oraz `outdated` i `awaiting_review`: zamknięta
+rekrutacja, zatrudniony kandydat, zmienione CV czy brak sprawdzenia nie są powodem, żeby
+wymazać rekruterowi dowód, który i tak widzi w macierzy dowodów — a etykieta mówi wprost, że
+to jeszcze nie jest potwierdzenie, i do liczby potwierdzonych wymagań koniecznych takie
+wymaganie się nie liczy. Nie publikują `rejected` (rekruter odrzucił ten dowód), `in_progress`,
+`legacy` ani `unavailable` — tam dowodu albo nie ma, albo został odrzucony.
 
 **Analiza w toku to nie to samo co brak informacji.** `in_progress` znaczy, że nikt jeszcze
 nie sprawdził tego wymagania. `missing` znaczy, że analiza się skończyła i w CV nie ma na ten
