@@ -132,10 +132,15 @@ export function buildCandidateRequirement(
 ): CandidateRequirement {
   const status = requirementStatus(analysis, row);
   const edited = !!row && row.human_status === 'edited';
-  // Dowód publikuje tylko status, który naprawdę mówi coś o treści CV. Odrzucony
-  // wiersz, analiza nieaktualna, w toku albo starszego typu nie publikują ani
-  // werdyktu AI, ani jego cytatów — inaczej na ekranie zostałby dowód bez wyniku.
-  const publishes = !!row && verdicts.has(status);
+  // Dowód publikuje status, który mówi coś o treści CV, oraz wynik nieaktualny.
+  // Odrzucony wiersz, analiza w toku i analiza starszego typu nie publikują ani
+  // werdyktu AI, ani cytatów — inaczej na ekranie zostałby dowód bez wyniku.
+  //
+  // `outdated` publikuje świadomie: rekrutacja zamknięta, kandydat zatrudniony czy
+  // zmienione CV nie są powodem, żeby wymazać rekruterowi cytaty, które i tak widzi
+  // w macierzy dowodów. Sam status i baner mówią, że wynik jest nieaktualny, a do
+  // `requiredSupported` to wymaganie i tak się nie liczy.
+  const publishes = !!row && (verdicts.has(status) || status === 'outdated');
   const evidence = publishes ? quotes(edited ? row.human_evidence ?? row.evidence : row.evidence) : [];
   const missingInfo = publishes ? text(edited ? row.human_missing_info ?? row.missing_info : row.missing_info) : null;
   const saved = publishes ? text(edited ? row.human_suggested_question ?? row.suggested_question : row.suggested_question) : null;

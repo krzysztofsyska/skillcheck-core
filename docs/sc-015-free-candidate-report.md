@@ -91,16 +91,31 @@ składanie wiersza, podsumowanie) i nie importuje klienta Supabase, więc mogą 
 Reacta i porównanie. `lib/candidate-report.ts` dokłada do tego sam odczyt z bazy i re-eksportuje
 czysty kontrakt, żeby strony miały jedno miejsce do importu.
 
-Wejście: stan analizy (`screening_analysis_versions.execution_status`, `stale_at`) oraz
-wiersz macierzy dowodów (`screening_criterion_results`).
+Wejście: stan analizy (`screening_analysis_versions.execution_status`, `stale_at`,
+`input_fingerprint`), najnowszy przegląd analizy (`screening_result_reviews.disposition`,
+po `review_version desc`) oraz wiersz macierzy dowodów (`screening_criterion_results`).
 
 | status | warunek | etykieta |
 | --- | --- | --- |
 | `in_progress` | brak analizy albo `execution_status in ('pending','processing')` | Analiza w toku |
+| `awaiting_review` | wynik gotowy, nikt go jeszcze nie sprawdził (`no_human_review`) | Oczekuje na sprawdzenie przez człowieka |
+| `outdated` | rekruter odesłał analizę do powtórzenia (`needs_reanalysis`) albo materiał zmienił się po niej | Wynik nieaktualny |
 | `unavailable` | analiza `failed` / `cancelled`, albo brak wiersza dla wymagania | Brak wyniku analizy |
 | `legacy` | `verdict is null` (analiza sprzed macierzy dowodów) | Analiza starszego typu |
 | `rejected` | `human_status = 'rejected'` | Wiersz odrzucony przez rekrutera |
 | `supported` / `partial` / `missing` / `contradicted` | `execution_status = 'completed'`, werdykt po korekcie | Potwierdzone w CV / Częściowo potwierdzone / Brak informacji w CV / Sprzeczne dane |
+
+Werdykt odesłany do powtórzenia nie jest potwierdzeniem: taki wynik zostaje w bazie jako
+`completed` ze `stale_at` pustym, więc bez odczytu `screening_result_reviews` raport
+pokazywałby „Potwierdzone w CV" dla analizy, którą człowiek już odrzucił.
+
+**Co publikuje cytat.** Cytaty, „czego brakuje" i pytanie publikują cztery werdykty oraz
+`outdated`. `outdated` publikuje świadomie: zamknięta rekrutacja, zatrudniony kandydat czy
+zmienione CV nie są powodem, żeby wymazać rekruterowi cytaty, które i tak widzi w macierzy
+dowodów — status i baner mówią, że wynik jest nieaktualny, a do liczby potwierdzonych
+wymagań koniecznych takie wymaganie się nie liczy. `in_progress`, `awaiting_review`,
+`unavailable`, `legacy` i `rejected` nie publikują nic, żeby na ekranie nie został dowód
+bez wyniku. Ta sama zasada obowiązuje w obu widokach.
 
 **Analiza w toku to nie to samo co brak informacji.** `in_progress` znaczy, że nikt jeszcze
 nie sprawdził tego wymagania. `missing` znaczy, że analiza się skończyła i w CV nie ma na ten

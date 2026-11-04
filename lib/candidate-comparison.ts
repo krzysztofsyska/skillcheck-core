@@ -38,6 +38,7 @@ export type CandidateComparison = {
 };
 
 const inProgressReasons = new Set(['pending', 'processing']);
+const verdictStatuses = new Set<RequirementStatus>(['supported', 'partial', 'missing', 'contradicted']);
 // Raport rekrutacji wczytuje wiersze macierzy tylko dla analiz sprawdzonych przez
 // człowieka (lib/screening-report-source.ts), więc pusta lista kryteriów ma kilka
 // różnych znaczeń. Komórka ma mówić, które z nich zaszło — „brak wyniku analizy"
@@ -104,10 +105,14 @@ export function buildCandidateComparison(
       // Kandydat analizowany na innej wersji wymagań nie ma w tym wierszu wyniku:
       // komórka mówi „brak wyniku analizy", nigdy „brak informacji w CV".
       const criterion = application.criteria.find(c => c.id === requirement.id && c.text === requirement.text);
+      const status = comparisonStatus(application, criterion);
       return {
         applicationId: application.ranking.application_id,
-        status: comparisonStatus(application, criterion),
-        quote: criterion?.evidence[0]?.quote ?? null,
+        status,
+        // Tak jak w raporcie pojedynczego CV: cytat tylko przy werdykcie, który
+        // mówi coś o treści CV. Wiersz starszego typu nie publikuje tu cytatu,
+        // skoro raport też go nie publikuje — inaczej dwa widoki różniłyby się.
+        quote: verdictStatuses.has(status) ? criterion?.evidence[0]?.quote ?? null : null,
         corrected: !!criterion?.reviewedChange,
       };
     }),

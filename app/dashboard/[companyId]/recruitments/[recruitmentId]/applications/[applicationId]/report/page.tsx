@@ -92,7 +92,8 @@ export default async function CandidateReportPage({ params }: { params: Promise<
       ? <p>Żadne wymaganie nie jest jeszcze oznaczone jako konieczne. Oznacz wymagania w profilu stanowiska,
           żeby raport zaczynał się od tych, na których Ci zależy.</p>
       : <p>Z {summary.requiredTotal} wymagań koniecznych: {summary.requiredSupported} ma potwierdzenie w CV,
-          {' '}{summary.requiredGaps} wymaga wyjaśnienia na rozmowie, {summary.requiredPending} czeka na wynik analizy.</p>}
+          {' '}{summary.requiredGaps} wymaga wyjaśnienia na rozmowie, {summary.requiredPending} czeka na wynik analizy
+          albo na sprawdzenie przez człowieka.</p>}
     <p>Pozostałe wymagania: {summary.unmarkedTotal} nieoznaczonych, {summary.additionalTotal} dodatkowych.</p>
     {report.analysisVersion !== null && <p><small>Analiza w wersji {report.analysisVersion}, CV v{report.documentVersion}.</small></p>}
 

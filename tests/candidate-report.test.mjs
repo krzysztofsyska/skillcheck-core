@@ -143,7 +143,11 @@ function loaderClient(data) {
           let rows = (data[table] ?? []).filter(r => q.eqs.every(([k, v]) => r[k] === v));
           if (q.order) {
             const [key, descending] = q.order;
-            rows = [...rows].sort((a, b) => String(a[key]).localeCompare(String(b[key])));
+            // Kolumny takie jak review_version są w bazie liczbami, a nie tekstem:
+            // sortowanie tekstowe stawiałoby wersję 10 przed 2 i test nie dowodziłby,
+            // że loader bierze najnowszy przegląd.
+            rows = [...rows].sort((a, b) => typeof a[key] === 'number' && typeof b[key] === 'number'
+              ? a[key] - b[key] : String(a[key]).localeCompare(String(b[key])));
             if (descending) rows.reverse();
           }
           rows = rows.slice(0, q.limit);
@@ -211,18 +215,52 @@ test('loadCandidateReport: zmieniona treść wymagania nie dziedziczy cudzego wy
   assert.equal(changed.summary.requiredSupported, 0);
 });
 
-test('loadCandidateReport: analiza odesłana do powtórzenia nie pokazuje werdyktów', async () => {
+test('loadCandidateReport: analiza odesłana do powtórzenia nie uchodzi za potwierdzenie', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   const report = await loadCandidateReport(
     loaderClient(loaderData({ disposition: 'needs_reanalysis' })), route);
   assert.equal(report.reanalysisRequested, true);
   const found = report.requirements.find(r => r.id === 'competency:1');
   assert.equal(found.status, 'outdated');
-  assert.deepEqual(found.quotes, [], 'nie zostaje cytat bez wyniku');
-  assert.equal(report.summary.requiredSupported, 0);
+  assert.equal(report.summary.requiredSupported, 0, 'odrzucona analiza nie liczy się jako potwierdzenie');
+  assert.equal(report.summary.requiredPending, 1);
   // Zatwierdzona analiza zachowuje się normalnie.
   const approved = await loadCandidateReport(loaderClient(loaderData({ disposition: 'approved' })), route);
   assert.equal(approved.requirements.find(r => r.id === 'competency:1').status, 'supported');
+
+  // Liczy się najnowszy przegląd, nie pierwszy ani ostatni wstawiony.
+  const many = loaderData({ disposition: 'approved' });
+  many.screening_result_reviews = [
+    { analysis_id: id(8), company_id: route.companyId, review_version: 10, disposition: 'needs_reanalysis' },
+    { analysis_id: id(8), company_id: route.companyId, review_version: 2, disposition: 'approved' },
+  ];
+  assert.equal((await loadCandidateReport(loaderClient(many), route)).reanalysisRequested, true);
+  many.screening_result_reviews.reverse();
+  assert.equal((await loadCandidateReport(loaderClient(many), route)).reanalysisRequested, true);
+  // Odwrotnie: najnowszy przegląd zatwierdza mimo starszego żądania powtórki.
+  const settled = loaderData();
+  settled.screening_result_reviews = [
+    { analysis_id: id(8), company_id: route.companyId, review_version: 2, disposition: 'needs_reanalysis' },
+    { analysis_id: id(8), company_id: route.companyId, review_version: 10, disposition: 'approved' },
+  ];
+  assert.equal((await loadCandidateReport(loaderClient(settled), route)).reanalysisRequested, false);
+});
+
+test('loadCandidateReport: nieaktualny materiał nie wymazuje cytatów rekruterowi', async () => {
+  const { loadCandidateReport } = await import('../lib/candidate-report.ts');
+  // Zamknięta rekrutacja albo zmienione CV sprawiają, że odcisk materiału się nie
+  // zgadza. Wynik jest wtedy nieaktualny — ale rekruter ma dalej widzieć cytaty,
+  // tak jak widzi je w macierzy dowodów. Liczy się tylko to, żeby takie wymaganie
+  // nie uchodziło za potwierdzone.
+  const data = loaderData();
+  data.screening_analysis_versions[0].input_fingerprint = 'odcisk-sprzed-zmiany';
+  const report = await loadCandidateReport(loaderClient(data), route);
+  assert.equal(report.stale, true);
+  const found = report.requirements.find(r => r.id === 'competency:1');
+  assert.equal(found.status, 'outdated');
+  assert.equal(found.quotes[0].quote, 'prawo jazdy kategorii B', 'cytat zostaje na ekranie');
+  assert.equal(report.summary.requiredSupported, 0, 'ale wymaganie nie uchodzi za potwierdzone');
+  assert.equal(report.summary.requiredPending, 1);
 });
 
 test('loadCandidateReport: jeden wiersz bez werdyktu wystarczy do ostrzeżenia o starszej analizie', async () => {
