@@ -62,11 +62,15 @@ begin
     raise exception using errcode='22023',message='Invalid sheet';
   end if;
   for item in select value from jsonb_array_elements(sheet) loop
-    if jsonb_typeof(item) is distinct from 'object' or item-'criterionIndex'-'rating'-'evidence'<>'{}'::jsonb
+    if jsonb_typeof(item) is distinct from 'object' or item-'criterionIndex'-'rating'-'evidence'-'context'<>'{}'::jsonb
       or item->'criterionIndex' is distinct from to_jsonb(idx)
       or coalesce(item->>'rating','') not in ('meets','above','below','insufficient_data')
-      or jsonb_typeof(item->'evidence') is distinct from 'string' or length(item->>'evidence')>10000
-      or ((item->>'rating'='insufficient_data') <> (private.behavior_trim(item->>'evidence')='')) then
+      or jsonb_typeof(item->'evidence') is distinct from 'string' or length(item->>'evidence')>4000
+      or jsonb_typeof(item->'context') is distinct from 'string' or length(item->>'context')>2000
+      or (item->>'rating'='insufficient_data' and private.behavior_trim(item->>'evidence')<>'')
+      or (item->>'rating'<>'insufficient_data' and
+          (length(private.behavior_trim(item->>'evidence'))<10 or
+           length(private.behavior_trim(item->>'context'))<5)) then
       raise exception using errcode='22023',message='Invalid observation';
     end if;
     idx:=idx+1;
