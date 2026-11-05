@@ -63,7 +63,8 @@ export async function PairedAssessorSheets({route,definition}:{
         const author = record(sheet)?.authorId;
         return <div key={j}><strong>Asesor {j+1}{typeof author==='string' && ' · '+(author===user.id?'Ty':author)}</strong>
           <p>{behaviorRatings.find(([value])=>value===item?.rating)?.[1]}</p>
-          {typeof item?.evidence==='string' && <p className="cv-text">{item.evidence}</p>}</div>;
+          {typeof item?.evidence==='string' && <p className="cv-text">{item.evidence}</p>}
+          {typeof item?.context==='string' && item.context && <p>Okoliczności: {item.context}</p>}</div>;
       })}</article>})}</section>;
   }
   if (report.state!=='pending' || report.ownSubmitted!==false)
@@ -73,15 +74,17 @@ export async function PairedAssessorSheets({route,definition}:{
     if (!previewEnabled()) throw new Error('Arkusze niedostępne.');
     const {client}=await loadBehaviorContext(route);
     const observations=definition.criteria.map((_,i)=>({criterionIndex:i,
-      rating:String(form.get('rating'+i)),evidence:String(form.get('evidence'+i)??'').trim()}));
+      rating:String(form.get('rating'+i)),evidence:String(form.get('evidence'+i)??'').trim(),
+      context:String(form.get('context'+i)??'').trim()}));
     const saved=await client.rpc('ac_submit_sheet',{pair_id:id,sheet:observations});
     if (saved.error) throw new Error('Nie zapisano arkusza. Sprawdź dowody i aktualny stan oceny.');
     revalidatePath(path);
   }
   return <section><h2>Twój niezależny arkusz</h2>
-    <p>Do każdej oceny wpisz dowód. Przy braku danych pozostaw pole dowodu puste. Po oddaniu arkusz zostaje zamknięty.</p>
+    <p>Przy ocenie wpisz dowód (co najmniej 10 znaków) oraz kontekst obserwacji (co najmniej 5 znaków). Przy braku danych pozostaw dowód pusty. Po oddaniu arkusz zostaje zamknięty.</p>
     <form action={submit}>{definition.criteria.map((c,i)=><fieldset key={i}><legend>{c.competency}</legend>
       <label>Ocena<select name={'rating'+i} defaultValue="insufficient_data">{behaviorRatings.map(([v,label])=><option key={v} value={v}>{label}</option>)}</select></label>
-      <label>Dowód<textarea name={'evidence'+i} maxLength={10000}/></label>
+      <label>Dowód<textarea name={'evidence'+i} maxLength={4000}/></label>
+      <label>Kontekst obserwacji<textarea name={'context'+i} maxLength={2000}/></label>
     </fieldset>)}<button>Oddaj swój arkusz</button></form></section>;
 }
