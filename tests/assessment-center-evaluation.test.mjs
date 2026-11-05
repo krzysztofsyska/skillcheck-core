@@ -44,3 +44,23 @@ test('requires behavioral evidence and context, disallows evidence for insuffici
   rows[0].context = 'Podczas rozmowy z klientem.'; rows[1].evidence = 'Nie wiadomo';
   assert.throws(() => evaluateAssessmentCenter(definition(), rows));
 });
+
+
+test('rejects oversized observation and contextual text', () => {
+  const tooLongEvidence = observations();
+  tooLongEvidence[0].evidence = 'x'.repeat(4001);
+  assert.throws(() => evaluateAssessmentCenter(definition(), tooLongEvidence));
+  const tooLongContext = observations();
+  tooLongContext[0].context = 'x'.repeat(2001);
+  assert.throws(() => evaluateAssessmentCenter(definition(), tooLongContext));
+});
+
+test('normalizes whitespace and does not treat whitespace as evidence', () => {
+  const empty = observations();
+  empty[0].evidence = ' '.repeat(15);
+  assert.throws(() => evaluateAssessmentCenter(definition(), empty));
+  const valid = observations();
+  valid[0].evidence = '  Zadał dwa pytania otwarte.  ';
+  const result = evaluateAssessmentCenter(definition(), valid);
+  assert.equal(result.criteria[0].evidence, 'Zadał dwa pytania otwarte.');
+});
