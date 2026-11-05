@@ -13,7 +13,7 @@ const breakdown=(offer: Offer)=>typeof offer.netMinor==='number'&&typeof offer.v
   :sc19OfferAmounts(offer.amountMinor);
 const verificationPending='Twoja firma czeka na weryfikację — do tego czasu zakupu nie można złożyć. Odświeżenie strony tego nie zmieni. Napisz do nas przez formularz kontaktowy (/rozmowa) albo na pomoc@skillcheck.pl, a potwierdzimy firmę i odblokujemy zamówienie.';
 const paymentsPending='Płatność online jest w trakcie uruchamiania (trwa weryfikacja u operatora płatności Przelewy24). Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
-export default function Checkout({companyId}: {companyId:string}) {
+export default function Checkout({companyId,sandbox=false}: {companyId:string;sandbox?:boolean}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
@@ -60,14 +60,19 @@ export default function Checkout({companyId}: {companyId:string}) {
   useEffect(()=>{
     const abort=new AbortController();
     void loadOffers(abort.signal);
-    try { setOrderId(sessionStorage.getItem(`sc19:order:${companyId}`) ?? ''); } catch { /* unavailable storage: status can be retried in this session */ }
+    const returned = sandbox && new URLSearchParams(window.location.search).get('p24');
+    if (returned && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(returned)) {
+      setOrderId(returned);
+      try { sessionStorage.setItem(`sc19:order:${companyId}`, returned); } catch { /* optional */ }
+      void status(returned);
+    } else try { setOrderId(sessionStorage.getItem(`sc19:order:${companyId}`) ?? ''); } catch { /* unavailable storage: status can be retried in this session */ }
     return ()=>abort.abort();
-  },[companyId]);
+  },[companyId,sandbox]);
   async function status(id=orderId) {
     if(!id)return;
     setBusy(true);
     try {
-      const r=await fetch(`/api/billing/orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store'});
+      const r=await fetch(`/api/billing/orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',method:sandbox?'POST':'GET'});
       if(!r.ok)throw Error(); const data=await r.json();
       setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision}:null);
       setMessage(data.status==='paid' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.` :
@@ -83,6 +88,11 @@ export default function Checkout({companyId}: {companyId:string}) {
       sessionStorage.removeItem(key);
       sessionStorage.removeItem(`sc19:order:${companyId}`);
     } catch { /* Server-side order invariant does not depend on browser storage. */ }
+    if (sandbox) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('p24');
+      window.history.replaceState(window.history.state,'',url);
+    }
     setOrderId('');setPaidOrder(null);setAccepted(false);setMessage('Możesz złożyć kolejne zamówienie.');
   }
   async function buy() {
@@ -122,6 +132,7 @@ export default function Checkout({companyId}: {companyId:string}) {
     finally {setBusy(false);}
   }
   return <section aria-busy={loading||busy}>
+    {sandbox&&<p role="note">Płatność testowa w Sandboxie Przelewy24. Środki nie zostaną pobrane.</p>}
     <p>Pakiet FREE nie wymaga płatności i nie korzysta z tego formularza.</p>
     {loading ? <p role="status">Wczytuję ofertę…</p> : offers.length>0 ? <>
       <label>Wariant <select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setAccepted(false);}}>

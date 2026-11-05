@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { companyAccess } from '../../../../../lib/company-access';
+import { sc19PreviewPaymentConfig } from '../../../../../lib/sc19-payment-preview';
 import Checkout from './checkout';
 export default async function CheckoutPage({params}: {params: Promise<{companyId: string}>}) {
   const {companyId}=await params;
@@ -14,7 +15,7 @@ export default async function CheckoutPage({params}: {params: Promise<{companyId
     <h1>Pakiet PRESELEKCJA</h1>
     {!enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
       <p>Jednorazowy zakup analiz CV. Wyniki wymagają oceny rekrutera.</p>
-      {company.owner_id===user.id ? <Checkout companyId={companyId}/> :
+      {company.owner_id===user.id ? <Checkout companyId={companyId} sandbox={!!sc19PreviewPaymentConfig(process.env)}/> :
         <p role="status">Zamówienie może złożyć właściciel firmy.</p>}
     </>}
   </main>;
