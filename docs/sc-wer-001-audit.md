@@ -28,3 +28,12 @@ BASE: integration @ 7f172d72176fa87719efb81d8db583d3ed5d21af
 - Moduł AC #271 ma osobny kontrakt obserwacji; współdzielone mają być nazwy kompetencji i zasady braku automatycznej decyzji, nie tabele ani skale wyników.
 
 Brak zmian w istniejącym kodzie, DB, billing, FREE i PRESELEKCJI.
+
+
+## Uzupełnienie audytu — 2026-11-05: pokrycie i bramka B4
+
+- W repo istnieją testy B2 na izolowanym PostgreSQL: `tests/competency-attempt.test.mjs` (rotacja i replay, wersja definicji, timer, ocena człowieka), `tests/competency-retention.test.mjs` (retencja i wycofanie) oraz `tests/competency-validation.test.mjs` (zgodność walidacji odpowiedzi i rubryki JS/SQL).
+- B3 ma testy kontraktu HTTP i sesji w `tests/competency-broker-contract.test.mjs`, PostgreSQL/TLS i dwóch firm w `tests/competency-broker-postgres.test.mjs` oraz przeglądarkowy test izolowanego **harnessu** w `tests/competency-broker-browser.test.mjs`. Ich istnienie nie potwierdza przejścia najnowszego przebiegu; w tej iteracji przeanalizowano ich treść, ale nie uruchomiono pełnej bazy testowej.
+- Na `integration` w `supabase/migrations/` nie ma aktywnej migracji SC-014 B2. Jest `db/isolated/`, ale nie stanowi wdrożonego schematu ani produkcyjnej autoryzacji kandydata. Najnowszy przeglądany łańcuch zawiera już inwentarz R11 (`20261103090100_sc_erasure_inventory_r11.sql`), więc historyczne założenie planu C1 o baseline R10 wymaga ponownej weryfikacji przed jakąkolwiek nową migracją.
+- B4 nie można bezpiecznie podłączyć do realnego przepływu, dopóki C1 nie włączy aktualnego schematu z inwentarzem usuwania, C2 nie uruchomi brokera w Preview, a C3 nie zapewni autoryzowanego wydawania/rotacji uprawnień i reguły shortlisty R1. Sama strona w repo bez tych zależności byłaby pozornie gotowa i niezdatna do testu end-to-end.
+- Następny etap implementacyjny: najpierw testy C1 (bieżąca sygnatura R11, izolacja firmy, TTL/replay/withdrawal, shortlist R1), następnie tylko zaakceptowana nowa migracja na środowisku testowym. Bez zmian w PRESELEKCJI, płatnościach ani produkcji.
