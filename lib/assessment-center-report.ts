@@ -48,6 +48,7 @@ export function buildAssessmentCenterReport(
   let authorId: string | null = null;
   if (observationInput !== null) {
     const row = object(observationInput);
+    const observationRows = row.observations;
     matches(row, {
       company_id: scope.companyId,
       recruitment_id: scope.recruitmentId,
@@ -56,17 +57,17 @@ export function buildAssessmentCenterReport(
     });
     if (!Number.isSafeInteger(row.version) || (row.version as number) < 1 ||
         typeof row.author_id !== 'string' || !row.author_id ||
-        !Array.isArray(row.observations) || row.observations.length !== definition.criteria.length) {
+        !Array.isArray(observationRows) || observationRows.length !== definition.criteria.length) {
       throw new Error('Nieprawidłowa historia obserwacji AC.');
     }
     reviewVersion = row.version as number;
     authorId = row.author_id;
     observations = Array.from({ length: definition.criteria.length }, (_, i) => {
       // A sparse array must not silently become a missing observation.
-      if (!Object.prototype.hasOwnProperty.call(row.observations, i)) {
+      if (!Object.prototype.hasOwnProperty.call(observationRows, i)) {
         throw new Error('Niekompletna historia obserwacji AC.');
       }
-      const item = object(row.observations[i]);
+      const item = object(observationRows[i]);
       if (item.criterionIndex !== i || typeof item.rating !== 'string' ||
           !ratings.includes(item.rating as AssessmentCenterRating) ||
           typeof item.evidence !== 'string' || item.evidence.length > 10000) {
