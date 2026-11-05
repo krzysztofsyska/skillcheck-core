@@ -38,7 +38,9 @@ export function candidateDocument(nonce:string) {
     try {await action();}catch(e) {
       el('message').textContent=e.message==='409'?'Stan zadania zmienił się lub czas minął. Zachowaj swoją odpowiedź i odśwież stronę.':
         'Nie udało się potwierdzić operacji. Zachowaj treść i odśwież stronę, aby sprawdzić stan.';
-      // Unknown mutation outcome: refresh/inspect before any further mutation.
+      // Unknown mutation outcome: never retry automatically; keep a selectable copy of unsent text.
+      const answer = el('answer').value;
+      if (answer) { el('recovery-text').value = answer; el('recovery').hidden = false; }
       return;
     }finally{busy=false;}
     el('controls').disabled=false;
@@ -68,5 +70,9 @@ export function candidateDocument(nonce:string) {
 <section hidden id="work"><h2>Instrukcja</h2><p id="instructions"></p><h3>Oczekiwany rezultat</h3><p id="output"></p>
 <p>Termin: <time id="until"></time></p><label>Twoja odpowiedź <textarea maxlength="20000" id="answer" rows="12"></textarea></label>
 <button id="save">Zapisz szkic</button><button id="submit">Wyślij odpowiedź ostateczną</button></section>
-<p id="receipt" hidden>Możesz zamknąć tę stronę.</p></fieldset><noscript>Ta strona wymaga JavaScript.</noscript></main></body></html>`;
+<p id="receipt" hidden>Możesz zamknąć tę stronę.</p></fieldset>
+<section id="recovery" hidden><h2>Kopia odpowiedzi do skopiowania</h2>
+<p>Skopiuj poniższy tekst przed odświeżeniem. Nie wysyłaj go ponownie bez sprawdzenia stanu zadania.</p>
+<label>Twoja zachowana odpowiedź<textarea id="recovery-text" readonly rows="12"></textarea></label></section>
+<noscript>Ta strona wymaga JavaScript.</noscript></main></body></html>`;
 }
