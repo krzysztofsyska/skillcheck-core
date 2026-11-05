@@ -408,6 +408,8 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      list_competency_test_attempts: { Args: { target:string }; Returns:Json };
+      read_competency_test_response: { Args: { target:string }; Returns:Json };
       // SC-BULK-001 bulk CV intake (jsonb results are validated in lib/cv-bulk-runner.ts).
       cv_bulk_create_batch: { Args: { target_recruitment: string; request_key: string; files: Json }; Returns: Json };
       cv_bulk_register_item: { Args: { target_item: string; extracted: Json }; Returns: Json };

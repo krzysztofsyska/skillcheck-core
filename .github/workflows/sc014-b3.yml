@@ -2,6 +2,10 @@ name: SC014 B3 isolated HTTP PostgreSQL HTTPS browser
 on:
   pull_request:
     paths:
+      - 'app/zadanie-kompetencyjne/**'
+      - 'lib/competency-candidate-document.ts'
+      - 'lib/competency-staff-response.ts'
+      - 'tests/competency-candidate-journey.test.mjs'
       - 'app/api/competency/attempt/**'
       - 'lib/competency-attempt-broker*.ts'
       - 'lib/competency-attempt-transport.ts'
@@ -21,6 +25,10 @@ on:
   push:
     branches: [integration]
     paths:
+      - 'app/zadanie-kompetencyjne/**'
+      - 'lib/competency-candidate-document.ts'
+      - 'lib/competency-staff-response.ts'
+      - 'tests/competency-candidate-journey.test.mjs'
       - 'app/api/competency/attempt/**'
       - 'lib/competency-attempt-broker*.ts'
       - 'lib/competency-attempt-transport.ts'
@@ -105,6 +113,7 @@ jobs:
           node --test --test-isolation=none --test-concurrency=1
           tests/competency-broker-postgres.test.mjs
           tests/competency-broker-browser.test.mjs
+          tests/competency-candidate-journey.test.mjs
           tests/competency-broker-security.test.mjs
       - name: Actual enabled route and production TLS pool + Redis REST
         env:

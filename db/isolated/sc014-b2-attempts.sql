@@ -351,8 +351,27 @@ begin
  select * into a from public.competency_test_attempts where id=target for update nowait;
  if a.state is distinct from 'submitted' then raise exception using errcode='PT404',message='Resource unavailable';end if;
  return jsonb_build_object('attemptId',a.id,'workSample',a.work_sample,'definitionId',a.definition_entry_id,
+ 'companyId',a.company_id,'applicationId',a.application_id,'recruitmentId',a.recruitment_id,
  'reviews',(select coalesce(jsonb_agg(to_jsonb(r) order by version),'[]'::jsonb) from public.competency_test_review_entries r where attempt_id=a.id));
 end;$$;
+
+-- Staff-only index. Candidate gateway, viewers and other firms have no access.
+-- Check withdrawal/restore and membership using the same locks as response reads.
+create function private.competency_staff_attempt_index(target uuid) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare app public.applications;
+begin
+ app:=private.competency_lock_application(target,true);
+ return (select coalesce(jsonb_agg(jsonb_build_object('id',s.id,'state',s.state,'version',s.version)
+   order by s.started_at desc,s.id),'[]'::jsonb) from (
+   select a.id,a.state,d.version,a.started_at from public.competency_test_attempts a
+   join public.exercise_definition_entries d on d.id=a.definition_entry_id and d.company_id=a.company_id and d.recruitment_id=a.recruitment_id
+   where a.company_id=app.company_id and a.candidate_id=app.candidate_id and a.application_id=app.id
+     and a.recruitment_id=app.recruitment_id order by a.started_at desc,a.id limit 50
+ ) s);
+end;$$;
+create function public.list_competency_test_attempts(target uuid) returns jsonb
+language sql security invoker set search_path='' return private.competency_staff_attempt_index(target);
 create function public.save_competency_test_review(target uuid,expected_version bigint,observations jsonb) returns uuid
 language plpgsql security definer set search_path='' as $$
 declare a public.competency_test_attempts;d public.exercise_definition_entries;v bigint;scored jsonb;result uuid;
@@ -416,7 +435,8 @@ create index competency_cancellation_candidates on private.competency_test_cance
 grant execute on function public.create_competency_test_grant(uuid,uuid,timestamptz,uuid),
  public.get_competency_test_grant_status(uuid),public.rotate_competency_test_grant(uuid,bigint,uuid),
  public.revoke_competency_test_grant(uuid,uuid),public.read_competency_test_response(uuid),
- public.save_competency_test_review(uuid,bigint,jsonb) to authenticated;
+ public.save_competency_test_review(uuid,bigint,jsonb),public.list_competency_test_attempts(uuid),
+ private.competency_staff_attempt_index(uuid) to authenticated;
 grant execute on function private.exchange_candidate_competency_test_session(text),
  private.inspect_candidate_competency_test(bytea),private.start_candidate_competency_test(bytea,uuid),
  private.save_candidate_competency_test_draft(bytea,text,bigint,uuid),private.submit_candidate_competency_test(bytea,jsonb,uuid),

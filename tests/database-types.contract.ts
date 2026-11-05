@@ -133,6 +133,8 @@ type ExpectedFunctions =
   | "claim_screening_attempt_v2"
   | "screening_attempt_result_schema_version"
   | "cv_bulk_create_batch"
+  | "list_competency_test_attempts"
+  | "read_competency_test_response"
   | "cv_bulk_register_item"
   | "cv_bulk_fail_item"
   | "cv_bulk_close_upload"

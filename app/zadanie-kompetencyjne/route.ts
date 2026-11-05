@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { candidateDocument } from '../../lib/competency-candidate-document';
+import { candidateDocument } from '../../lib/competency-candidate-document.ts';
 
 export const dynamic = 'force-dynamic';
 export function GET(request:Request) {
