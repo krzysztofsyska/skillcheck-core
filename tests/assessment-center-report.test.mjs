@@ -54,6 +54,8 @@ test('fail closed on foreign company, recruitment, application and rubric revisi
 test('rejects malformed, out-of-order, forged or misleading evidence rows',()=>{
   const invalid=[
     {...entry(),observations:[entry().observations[0]]},
+    {...entry(),observations:Object.assign(Array(2), {1:entry().observations[1]})},
+    {...entry(),observations:Object.assign(Array(2), {0:entry().observations[0]})},
     {...entry(),observations:[entry().observations[1],entry().observations[0]]},
     {...entry(),observations:[{...entry().observations[0],rating:'hire'},entry().observations[1]]},
     {...entry(),observations:[{...entry().observations[0],evidence:' '},entry().observations[1]]},
