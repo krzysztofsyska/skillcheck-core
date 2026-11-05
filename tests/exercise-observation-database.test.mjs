@@ -81,8 +81,15 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
       const submit='select public.ac_submit_sheet($1,$2)';
       const read='select public.ac_read_pair($1) report';
       const report=async()=>(await db.query(read,[pair])).rows[0].report;
-      const sheet=observations();
+      const sheet=observations().map(row=>({...row,context:row.rating==='insufficient_data'?'':'Podczas rozmowy z klientem.'}));
       await deny(submit,[pair,JSON.stringify(sheet.slice(0,1))],'22023');
+      const missingContext=sheet.map(row=>({...row}));
+      delete missingContext[0].context;
+      await deny(submit,[pair,JSON.stringify(missingContext)],'22023');
+      await deny(submit,[pair,JSON.stringify([{...sheet[0],context:'X'},sheet[1]])],'22023');
+      await deny(submit,[pair,JSON.stringify([{...sheet[0],evidence:'Za mało'},sheet[1]])],'22023');
+      await deny(submit,[pair,JSON.stringify([{...sheet[0],context:'X'.repeat(2001)},sheet[1]])],'22023');
+      await deny(submit,[pair,JSON.stringify([{...sheet[0],evidence:'X'.repeat(4001)},sheet[1]])],'22023');
       await db.query(submit,[pair,JSON.stringify(sheet)]);
       assert.deepEqual(await report(),{state:'pending',ownSubmitted:true});
       await deny(submit,[pair,JSON.stringify(sheet)],'PT409');
@@ -91,12 +98,14 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
       await as(recruiter);
       assert.deepEqual(await report(),{state:'pending',ownSubmitted:false});
       await deny('select * from private.ac_paired_sheets');
-      sheet[0]={criterionIndex:0,rating:'below',evidence:'Brak terminu w finalnym planie.'};
+      sheet[0]={criterionIndex:0,rating:'below',evidence:'Brak terminu w finalnym planie.',context:'W symulacji rozmowy z klientem.'};
       await db.query(submit,[pair,JSON.stringify(sheet)]);
       const result=await report();
       assert.equal(result.state,'ready');assert.equal(result.definitionId,ac);
       assert.deepEqual(result.sheets.map(s=>s.authorId),[ownerA,recruiter]);
       assert.deepEqual(result.sheets.map(s=>s.observations[0].rating),['meets','below']);
+      assert.deepEqual(result.sheets.map(s=>s.observations[0].context),
+        ['Podczas rozmowy z klientem.','W symulacji rozmowy z klientem.']);
       await as(ownerA);assert.deepEqual(await report(),result);
       await db.query('delete from public.company_members where company_id=$1 and user_id=$2',[a.company,recruiter]);
       await as(recruiter);await deny(read,[pair]);
