@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
+import { buildAssessmentCenterReport } from '../lib/assessment-center-report.ts';
+import { parseExerciseObservations } from '../lib/exercise-observation.ts';
 
 test('exercise observations preserve evidence, immutable rubric and tenant boundaries', async t => {
   const db=new PGlite(); t.after(()=>db.close());
@@ -13,6 +15,7 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
     '20261002000100_behavior_assessments','20261002000200_behavior_conflict_response','20261002000300_exercise_definitions','20261004000100_exercise_observations'])
     await db.exec(await readFile(new URL('../supabase/migrations/'+name+'.sql',import.meta.url),'utf8'));
   const [ownerA,ownerB,recruiter,viewer]=[1,2,3,4].map(n=>'00000000-0000-0000-0000-00000000000'+n);
+  await db.exec(await readFile(new URL('../db/isolated/sc-ac-paired-sheets.sql',import.meta.url),'utf8'));
   for(const id of [ownerA,ownerB,recruiter,viewer]) await db.query('insert into auth.users values($1)',[id]);
   const as=async(id,role='authenticated')=>{await db.exec('reset role;set role '+role);await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id??'']);};
   const definition={kind:'competency_test',title:'TEST',instructions:'Zadanie',expectedOutput:'Praca',durationMinutes:20,
@@ -36,13 +39,76 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
   const sql='select public.save_exercise_observations($1,$2,$3,$4,$5) id';
   const args=(version=0,target=a,items=observations())=>[target.application,target.revision,version,' Praca TEST ',JSON.stringify(items)];
   const deny=(query,values=[],code='42501')=>assert.rejects(db.query(query,values),e=>e.code===code);
+  await t.test('AC evidence saved by the recruiter reaches the report for the same applicant and rubric',async()=>{
+    await db.exec('begin');
+    try {
+    const acRevision=(await db.query('select public.save_exercise_definition($1,gen_random_uuid(),$2,0,$3,$4) id',
+      [a.recruitment,JSON.stringify({...definition,kind:'assessment_center'}),a.position.id,a.position.stamp])).rows[0].id;
+    await as(recruiter);
+    const revision=(await db.query('select * from public.exercise_definition_entries where id=$1',[acRevision])).rows[0];
+    const form=new FormData();
+    form.set('workSample','Praca TEST');
+    for (const item of observations()) {
+      form.append('rating',item.rating);form.append('evidence',item.evidence);
+    }
+    const payload=parseExerciseObservations(revision.definition,form);
+    const entry=(await db.query(sql,[a.application,acRevision,0,payload.workSample,JSON.stringify(payload.observations)])).rows[0].id;
+    const row=(await db.query('select * from public.exercise_observation_entries where id=$1',[entry])).rows[0];
+    const report=buildAssessmentCenterReport({companyId:a.company,recruitmentId:a.recruitment,
+      applicationId:a.application,definitionEntryId:acRevision},revision,row);
+    assert.equal(report.authorId,recruiter);
+    assert.equal(report.evidencedCriteria,1);
+    assert.equal(report.criteria[0].observerNote,'Wskazał termin.');
+    assert.equal(report.criteria[1].source,'missing');
+    } finally { await db.exec('rollback'); }
+  });
+  await t.test('two assessors submit independently; reveal is atomic and tenant-scoped',async()=>{
+    await db.exec('begin');
+    const deny=async(query,values=[],code='42501')=>{
+      await db.exec('savepoint negative_case');
+      try { await assert.rejects(db.query(query,values),err=>err.code===code); }
+      finally { await db.exec('rollback to negative_case; release negative_case'); }
+    };
+    try {
+      const ac=(await db.query('select public.save_exercise_definition($1,gen_random_uuid(),$2,0,$3,$4) id',
+        [a.recruitment,JSON.stringify({...definition,kind:'assessment_center'}),a.position.id,a.position.stamp])).rows[0].id;
+      const assign='select public.ac_assign_pair($1,$2,$3,$4) id';
+      await deny(assign,[a.application,ac,ownerA,viewer]);
+      await deny(assign,[a.application,a.revision,ownerA,recruiter]);
+      const pair=(await db.query(assign,[a.application,ac,ownerA,recruiter])).rows[0].id;
+      const find=()=>db.query('select public.ac_find_pair($1,$2) id',[a.application,ac]);
+      assert.equal((await find()).rows[0].id,pair);
+      const submit='select public.ac_submit_sheet($1,$2)';
+      const read='select public.ac_read_pair($1) report';
+      const report=async()=>(await db.query(read,[pair])).rows[0].report;
+      const sheet=observations();
+      await deny(submit,[pair,JSON.stringify(sheet.slice(0,1))],'22023');
+      await db.query(submit,[pair,JSON.stringify(sheet)]);
+      assert.deepEqual(await report(),{state:'pending',ownSubmitted:true});
+      await deny(submit,[pair,JSON.stringify(sheet)],'PT409');
+      await as(ownerB);await deny(read,[pair]);await deny(submit,[pair,JSON.stringify(sheet)]);
+      await as(viewer);await deny(read,[pair]);assert.equal((await find()).rows[0].id,null);
+      await as(recruiter);
+      assert.deepEqual(await report(),{state:'pending',ownSubmitted:false});
+      await deny('select * from private.ac_paired_sheets');
+      sheet[0]={criterionIndex:0,rating:'below',evidence:'Brak terminu w finalnym planie.'};
+      await db.query(submit,[pair,JSON.stringify(sheet)]);
+      const result=await report();
+      assert.equal(result.state,'ready');assert.equal(result.definitionId,ac);
+      assert.deepEqual(result.sheets.map(s=>s.authorId),[ownerA,recruiter]);
+      assert.deepEqual(result.sheets.map(s=>s.observations[0].rating),['meets','below']);
+      await as(ownerA);assert.deepEqual(await report(),result);
+      await db.query('delete from public.company_members where company_id=$1 and user_id=$2',[a.company,recruiter]);
+      await as(recruiter);await deny(read,[pair]);
+    } finally { await db.exec('rollback'); }
+  });
   await t.test('owner and recruiter append attributed revisions; missing data stays distinct',async()=>{
     await db.query(sql,args()); await as(recruiter); await db.query(sql,args(1));
-    const rows=(await db.query('select * from public.exercise_observation_entries order by version')).rows;
+    const rows=(await db.query('select * from public.exercise_observation_entries where definition_entry_id=$1 order by version',[a.revision])).rows;
     assert.equal(rows.length,2);assert.deepEqual(rows.map(r=>r.author_id),[ownerA,recruiter]);
     assert.equal(rows[0].work_sample,'Praca TEST');assert.equal(rows[0].observations[0].evidence,'Wskazał termin.');
     assert.equal(rows[0].observations[1].rating,'insufficient_data');
-    assert.equal((await db.query('select version from public.latest_exercise_observations')).rows[0].version,2);
+    assert.equal((await db.query('select version from public.latest_exercise_observations where definition_entry_id=$1',[a.revision])).rows[0].version,2);
   });
   await t.test('viewer reads only; other firms cannot read or mix definitions and applications',async()=>{
     await as(viewer);assert.equal((await db.query('select * from public.latest_exercise_observations')).rows.length,1);await deny(sql,args(2));

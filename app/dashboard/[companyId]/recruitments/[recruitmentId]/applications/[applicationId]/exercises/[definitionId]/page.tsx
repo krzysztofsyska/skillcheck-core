@@ -4,6 +4,7 @@ import {loadBehaviorContext,type BehaviorRoute} from '../../../../../../../../..
 import {behaviorEditingOpen,behaviorSchemaMissing,behaviorRatings,parseHistoryBefore} from '../../../../../../../../../lib/behavior-assessment';
 import {exerciseUuid} from '../../../../../../../../../lib/exercise-context';
 import {ExerciseObservationForm} from '../../../../exercise-observation-form';
+import {PairedAssessorSheets} from '../../../../paired-assessor-sheets';
 import {buildAssessmentCenterReport} from '../../../../../../../../../lib/assessment-center-report';
 export default async function Observations({params,searchParams}:{params:Promise<BehaviorRoute&{definitionId:string}>;searchParams:Promise<{before?:string}>}){
   const route=await params;const {before}=await searchParams;
@@ -54,6 +55,7 @@ export default async function Observations({params,searchParams}:{params:Promise
           </div>)}</dl>
         </>}
       </section>}
+      {!cursor && <PairedAssessorSheets route={route} definition={definition.definition}/>}
       <h2>Historia obserwacji</h2>
       {rows.length===0&&<p>Brak zapisanych obserwacji na tej stronie.</p>}
       {rows.map(entry=><article key={entry.id}><h3>Wersja oceny {entry.version}</h3><p>{entry.created_at} · Autor: {entry.author_id===user.id?'Ty':entry.author_id}</p>
