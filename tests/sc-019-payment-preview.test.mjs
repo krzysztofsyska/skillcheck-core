@@ -1,11 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { X509Certificate } from 'node:crypto';
+import { createSecureContext } from 'node:tls';
+import { previewPoolTls } from '../lib/sc19-payment-preview-tls.ts';
 import { PGlite } from '@electric-sql/pglite';
 import { sc19PreviewPaymentConfig } from '../lib/sc19-payment-preview.ts';
 import { createPostgresPaymentStore } from '../lib/sc19-payment-postgres.ts';
 
 const ref = 'orbyscrupgnupifzlqxp';
+test('the preview payment pool verifies TLS using the two official hosted database roots', () => {
+  assert.equal(previewPoolTls.rejectUnauthorized, true);
+  assert.doesNotThrow(() => createSecureContext(previewPoolTls));
+  const certs = previewPoolTls.ca.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g);
+  assert.deepEqual(certs.map(pem => new X509Certificate(pem).fingerprint256), [
+    '80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA',
+    '5F:9B:77:95:1A:7A:A1:30:3F:9B:58:EE:A9:BF:A8:9E:35:8C:FD:C1:5F:97:86:FF:10:D4:93:0A:72:2C:9A:E2',
+  ]);
+});
 const env = { VERCEL:'1', VERCEL_ENV:'preview', VERCEL_GIT_COMMIT_REF:'integration',
   VERCEL_BRANCH_URL:'skillcheck-branch.vercel.app', VERCEL_URL:'skillcheck-hash.vercel.app',
   NEXT_PUBLIC_SUPABASE_URL:`https://${ref}.supabase.co`, P24_SANDBOX:'true', P24_MERCHANT_ID:'12345',
