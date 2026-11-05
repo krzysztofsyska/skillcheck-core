@@ -8,6 +8,11 @@ begin
   if current_setting('sc19.preview_ref',true) is distinct from 'orbyscrupgnupifzlqxp' then
     raise exception 'Sandbox database required';
   end if;
+  -- Read on the designated hosted Preview itself. A copied psql argument or a
+  -- connection to a different cluster cannot satisfy this independent check.
+  if (select system_identifier from pg_catalog.pg_control_system()) <> 7692130048193495360 then
+    raise exception 'Unexpected database cluster';
+  end if;
   -- Refuse reuse of a pre-existing identity whose privileges we do not control.
   if exists (select 1 from pg_roles where rolname='sc19_p24_preview') then
     raise exception 'Sandbox payment role already exists';

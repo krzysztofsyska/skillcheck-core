@@ -13,7 +13,7 @@ const breakdown=(offer: Offer)=>typeof offer.netMinor==='number'&&typeof offer.v
   :sc19OfferAmounts(offer.amountMinor);
 const verificationPending='Twoja firma czeka na weryfikację — do tego czasu zakupu nie można złożyć. Odświeżenie strony tego nie zmieni. Napisz do nas przez formularz kontaktowy (/rozmowa) albo na pomoc@skillcheck.pl, a potwierdzimy firmę i odblokujemy zamówienie.';
 const paymentsPending='Płatność online jest w trakcie uruchamiania (trwa weryfikacja u operatora płatności Przelewy24). Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
-export default function Checkout({companyId,sandbox=false}: {companyId:string;sandbox?:boolean}) {
+export default function Checkout({companyId,sandbox=false,statusOnly=false}: {companyId:string;sandbox?:boolean;statusOnly?:boolean}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
@@ -59,7 +59,7 @@ export default function Checkout({companyId,sandbox=false}: {companyId:string;sa
   }
   useEffect(()=>{
     const abort=new AbortController();
-    void loadOffers(abort.signal);
+    if (!statusOnly) void loadOffers(abort.signal);
     const returned = sandbox && new URLSearchParams(window.location.search).get('p24');
     if (returned && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(returned)) {
       setOrderId(returned);
@@ -67,7 +67,7 @@ export default function Checkout({companyId,sandbox=false}: {companyId:string;sa
       void status(returned);
     } else try { setOrderId(sessionStorage.getItem(`sc19:order:${companyId}`) ?? ''); } catch { /* unavailable storage: status can be retried in this session */ }
     return ()=>abort.abort();
-  },[companyId,sandbox]);
+  },[companyId,sandbox,statusOnly]);
   async function status(id=orderId) {
     if(!id)return;
     setBusy(true);
@@ -131,6 +131,11 @@ export default function Checkout({companyId,sandbox=false}: {companyId:string;sa
     } catch {setMessage('Nie udało się otworzyć płatności. Ponów próbę — serwer sprawdzi istniejące zamówienie.');}
     finally {setBusy(false);}
   }
+  if (statusOnly) return <section aria-busy={busy}>
+    <h2>Status zamówienia testowego</h2>
+    <p role="status">{message || 'Sprawdzamy potwierdzenie w Przelewy24…'}</p>
+    <button type="button" disabled={!orderId || busy} onClick={()=>status()}>Sprawdź status zamówienia</button>
+  </section>;
   return <section aria-busy={loading||busy}>
     {sandbox&&<p role="note">Płatność testowa w Sandboxie Przelewy24. Środki nie zostaną pobrane.</p>}
     <p>Pakiet FREE nie wymaga płatności i nie korzysta z tego formularza.</p>

@@ -23,7 +23,7 @@ const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
 async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false,
-  checkoutAvailable = true, offersResponse, sandbox = false, search = '' } = {}) {
+  checkoutAvailable = true, offersResponse, sandbox = false, search = '', statusOnly = false } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
@@ -76,7 +76,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   runInNewContext(compiled, context);
   function render() {
     cursor = 0;
-    tree = context.exports.default({ companyId, sandbox });
+    tree = context.exports.default({ companyId, sandbox, statusOnly });
     for (const effect of effects.splice(0)) effect();
     return tree;
   }
@@ -322,4 +322,15 @@ test('return from the sandbox requests the authenticated order status and cannot
   assert.equal(method,'POST');
   assert.equal(h.statusReads.length,1);
   assert.equal(h.find('button','Kup kolejny'),undefined);
+});
+
+test('flag-off sandbox return reads the pending order without loading offers or selling a new package', async t => {
+  const id = '00000000-0000-4000-8000-000000000003';
+  const h = await harness({ sandbox:true, statusOnly:true, search:`?p24=${id}`,
+    offersResponse:()=>assert.fail('status-only must not load offers'), order:async()=>ok({status:'paid',credits:60}) });
+  t.after(h.close);
+  assert.equal(h.statusReads.length,1);
+  assert.equal(h.find('button','Zamawiam'),undefined);
+  assert.equal(h.find('button','Kup kolejny'),undefined);
+  assert.ok(h.find('button','Sprawdź status'));
 });

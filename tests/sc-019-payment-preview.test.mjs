@@ -45,7 +45,11 @@ test('dedicated preview role runs the actual order store and cannot edit compani
   const expand = value => setup.replace(":'sc19_seed_target_ref'", "'" + value + "'");
   await assert.rejects(db.exec(expand('wsvjawuikxfzjyivxgsu')), /Sandbox database required/);
   await db.exec('rollback');
-  await db.exec(expand(ref));
+  await assert.rejects(db.exec(expand(ref)), /Unexpected database cluster/);
+  await db.exec('rollback');
+  assert.equal((await db.query("select 1 from pg_roles where rolname='sc19_p24_preview'")).rows.length,0);
+  const cluster = (await db.query('select system_identifier::text as id from pg_control_system()')).rows[0].id;
+  await db.exec(expand(ref).replace('7692130048193495360',cluster));
   const company='00000000-0000-4000-8000-000000000001', user='00000000-0000-4000-8000-000000000002';
   const orderId='00000000-0000-4000-8000-000000000003';
   await db.query('insert into public.companies values ($1,$2)',[company,user]);
