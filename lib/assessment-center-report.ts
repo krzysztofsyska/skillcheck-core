@@ -61,8 +61,12 @@ export function buildAssessmentCenterReport(
     }
     reviewVersion = row.version as number;
     authorId = row.author_id;
-    observations = row.observations.map((raw, i) => {
-      const item = object(raw);
+    observations = Array.from({ length: definition.criteria.length }, (_, i) => {
+      // A sparse array must not silently become a missing observation.
+      if (!Object.prototype.hasOwnProperty.call(row.observations, i)) {
+        throw new Error('Niekompletna historia obserwacji AC.');
+      }
+      const item = object(row.observations[i]);
       if (item.criterionIndex !== i || typeof item.rating !== 'string' ||
           !ratings.includes(item.rating as AssessmentCenterRating) ||
           typeof item.evidence !== 'string' || item.evidence.length > 10000) {
