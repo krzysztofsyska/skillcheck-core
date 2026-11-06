@@ -278,7 +278,7 @@ async function renderRecruitmentPurchase(enabled) {
 test('recruitment shows purchase links only while package sales are enabled',async()=>{
   const html=await renderRecruitmentPurchase(true);
   const prefix='/dashboard/'+owned.id+'/billing';
-  assert.ok(html.includes('href="'+prefix+'">Pakiet i pozostałe analizy CV</a>'));
+  assert.ok(html.includes('href="'+prefix+'?recruitmentId=bbbbbbbb-1111-4222-8333-444444444444">Pakiet i pozostałe analizy CV</a>'));
   assert.ok(html.includes('href="'+prefix+'/checkout?recruitmentId=bbbbbbbb-1111-4222-8333-444444444444">Kup kolejną PRESELEKCJĘ</a>'));
   const disabled=await renderRecruitmentPurchase(false);
   assert.equal(disabled.includes('/billing/checkout?recruitmentId='),false);
@@ -309,6 +309,62 @@ test('checkout returns only to a valid in-company recruitment path, never an ext
   for(const invalid of ['//evil.example','https://evil.example','../operator',valid+'/../operator',null,[valid]]) {
     const html=await renderReturnFromCheckout(invalid);
     assert.ok(html.includes('href="/dashboard/'+owned.id+'">'),String(invalid));
+    assert.ok(!html.includes('evil.example'),String(invalid));
+  }
+});
+
+
+// A recruitment's context must survive a visit to the shared company catalogue,
+// without granting extra purchase rights or accepting a caller-controlled URL.
+async function renderBillingFromRecruitment(recruitmentId, enabled=true) {
+  const file='app/dashboard/[companyId]/billing/page.tsx';
+  const abs=new URL('../'+file,import.meta.url).pathname;
+  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(new URL('../',import.meta.url).pathname);
+  const req=createRequire(abs);
+  const client={rpc:async()=>({data:[{plan:'FREE',available:4}],error:null})};
+  const mocks={
+    'next/link':{default:({children,...props})=>createElement('a',props,children)},
+    '../../../../lib/company-access':{companyAccess:async()=>({
+      client,company:{...owned,name:'Firma próbna'},user:{id:OWNER},
+    })},
+    '../../../../lib/sc19-package-sizes':{
+      loadSc19PackageSizes:async()=>({FREE:5,PRESELEKCJA:60}),
+      sc19AnalysisScope:n=>String(n)+' analiz',
+    },
+    './actions':{activateSc19Free:async()=>{}},
+  };
+  mod.require=id=>id in mocks?mocks[id]:req(id);
+  mod._compile(ts.transpileModule(readFileSync(abs,'utf8'),{compilerOptions:{
+    module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,
+  }}).outputText,abs);
+  const previous=process.env.SC19_PACKAGES_ENABLED;
+  try {
+    if(enabled)process.env.SC19_PACKAGES_ENABLED='true';else delete process.env.SC19_PACKAGES_ENABLED;
+    const output=await mod.exports.default({
+      params:Promise.resolve({companyId:owned.id}),
+      searchParams:Promise.resolve({recruitmentId}),
+    });
+    return renderToStaticMarkup(output);
+  } finally {
+    if(previous===undefined)delete process.env.SC19_PACKAGES_ENABLED;
+    else process.env.SC19_PACKAGES_ENABLED=previous;
+  }
+}
+test('company catalogue preserves the recruitment return and checkout context',async()=>{
+  const id='bbbbbbbb-1111-4222-8333-444444444444',base='/dashboard/'+owned.id;
+  const html=await renderBillingFromRecruitment(id);
+  assert.ok(html.includes('href="'+base+'/recruitments/'+id+'">'),html.slice(0,300));
+  assert.ok(html.includes('href="'+base+'/billing/checkout?recruitmentId='+id+'">'));
+  const disabled=await renderBillingFromRecruitment(id,false);
+  assert.ok(disabled.includes('href="'+base+'/recruitments/'+id+'">'));
+  assert.ok(!disabled.includes('/billing/checkout?recruitmentId='));
+});
+test('company catalogue rejects invalid or arbitrary return URLs',async()=>{
+  const id='bbbbbbbb-1111-4222-8333-444444444444',base='/dashboard/'+owned.id;
+  for(const invalid of ['https://evil.example','//evil.example','../admin',id+'/..',null,[id]]) {
+    const html=await renderBillingFromRecruitment(invalid);
+    assert.ok(html.includes('href="'+base+'">'),String(invalid));
+    assert.ok(html.includes('href="'+base+'/billing/checkout">'),String(invalid));
     assert.ok(!html.includes('evil.example'),String(invalid));
   }
 });
