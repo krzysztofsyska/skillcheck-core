@@ -173,6 +173,61 @@ test('extraction: local OCR reads scans and photos, rejects unreadable ones', { 
   await assert.rejects(extractBulkCv(renderCv([], { blank: true }), 'image', ocrImage), reason('unreadable_scan'));
 });
 
+test('PDF OCR: digitally printed header cannot hide a scanned CV body', async () => {
+  const header = 'Katarzyna Wisniewska, tel. +48 500 123 456, e-mail: anna@example.com';
+  const matchingLines = cvLines.map(line => line.replace('Wiśniewska', 'Wisniewska'));
+  matchingLines.splice(1, 0, 'Java Developer'); // a job heading must not be counted as another person
+  const mixed = scannedPdf(matchingLines, { textOverlay: [header] });
+  let calls = 0;
+  const scanOcr = async () => {
+    calls++;
+    return { text: [header, ...matchingLines].join('\n'), confidence: 94 };
+  };
+  const result = await extractBulkCv(mixed, 'pdf', scanOcr);
+  assert.equal(calls, 1, 'OCR runs even when a sparse digital text layer is present');
+  assert.equal(result.ocrUsed, true);
+  assert.match(result.text, /Excel, SQL/, 'the scanned work history is included');
+  assert.match(result.text, /Katarzyna Wisniewska/, 'consistent digital name is preserved');
+  assert.match(result.text, /Java Developer/, 'an ordinary job headline is kept, not treated as a conflicting identity');
+  assert.match(result.text, /500 123 456/, 'the original digital phone survives imperfect OCR');
+  assert.match(result.text, /anna@example.com/, 'the digital e-mail remains in the complete OCR result');
+  await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: cvLines.join('\n'), confidence: 94 })),
+    reason('unreadable_scan'), 'OCR omitting the reliable contact header is rejected, never merged');
+  const crossedHeader = 'Anna Testowa, tel. +48 500 123 456';
+  const crossed = scannedPdf(cvLines, { textOverlay: [crossedHeader] });
+  await assert.rejects(extractBulkCv(crossed, 'pdf', async () => ({
+    text: [crossedHeader, ...cvLines].join('\n'), confidence: 94,
+  })), reason('unreadable_scan'), 'an additional name in the OCR body must be rejected even when the digital header matches');
+  const accentedHeader = 'Anna Wisniewska, tel. +48 500 123 456';
+  const accented = scannedPdf(cvLines, { textOverlay: [accentedHeader] });
+  await assert.rejects(extractBulkCv(accented, 'pdf', async () => ({
+    text: [accentedHeader, 'Anna Wiśniewska', ...cvLines].join('\n'), confidence: 94,
+  })), reason('unreadable_scan'), 'the same surname with different diacritics is not safe to redact automatically');
+  await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: header, confidence: 90 })),
+    reason('unreadable_scan'), 'header-only OCR is never accepted as a complete CV');
+  await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: '', confidence: 0 })),
+    reason('unreadable_scan'), 'blank OCR cannot quietly discard the scan');
+
+  // An ordinary short PDF without any large embedded scan must avoid OCR.
+  const shortText = await extractBulkCv(textPdf(['Anna Nowak', 'Doswiadczenie zawodowe od 2017 roku w obsludze klienta']), 'pdf',
+    async () => assert.fail('text-only PDF must not trigger OCR'));
+  assert.equal(shortText.ocrUsed, false);
+});
+
+test('PDF OCR: tiny inline images cannot indefinitely block sparse-text extraction', { timeout: 10000 }, async () => {
+  const headerLines = ['Anna Nowak', 'E-mail: anna@example.com', 'Doświadczenie zawodowe od 2017 roku w analizie SQL'];
+  const pdf = textPdf(headerLines, { inlineImage: true });
+  const start = Date.now();
+  // pdf-parse may hang on the inline operand. A bounded attempt must complete,
+  // and OCR with a nonidentical digital layer must be rejected rather than merged.
+  await assert.rejects(extractBulkCv(pdf, 'pdf', async () => ({
+    text: 'Dodatkowa treść zeskanowana. Analiza wymagań, planowanie raportów i dokumentowanie wyników. ' +
+      'Weryfikowanie kompletności danych przez analityka w kolejnych latach pracy z dokumentami.',
+    confidence: 94,
+  }), { deadline: Date.now() + 7000 }), reason('unreadable_scan'));
+  assert.ok(Date.now() - start < 7000, 'inline-image inspection finishes within the extraction budget');
+});
+
 test('batch e-mail carries counts and a link only', async () => {
   const n = { batch_id: '11111111-1111-4111-8111-111111111111', recruitment_id: '22222222-2222-4222-8222-222222222222', company_id: '33333333-3333-4333-8333-333333333333',
     email: 'rekruter@example.com', recruitment_name: 'Księgowa <b>', files: 60, done: 52, errors: 8, passed: 12, review: 25, rejected: 15 };
