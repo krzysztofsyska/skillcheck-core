@@ -246,6 +246,23 @@ function withFingerprint(data) {
   return data;
 }
 
+test('loadCandidateReport: zakończona analiza z pustą macierzą pokazuje ostrzeżenie', async () => {
+  const { loadCandidateReport } = await import('../lib/candidate-report.ts');
+  const legacy = loaderData();
+  legacy.screening_criterion_results = [];
+  const report = await loadCandidateReport(loaderClient(legacy), route);
+  assert.equal(report.analysisStatus, 'completed');
+  assert.equal(report.legacyAnalysis, true, 'brak wierszy nie może wyglądać jak kompletna nowa analiza');
+  assert.equal(report.requirements.find(r => r.id === 'competency:1').status, 'unavailable');
+  assert.equal(report.summary.requiredSupported, 0);
+
+  const pending = loaderData();
+  pending.screening_criterion_results = [];
+  pending.screening_analysis_versions[0].execution_status = 'processing';
+  const inProgress = await loadCandidateReport(loaderClient(pending), route);
+  assert.equal(inProgress.legacyAnalysis, false, 'pusty wynik analizy w toku nie jest starszym formatem');
+});
+
 test('loadCandidateReport: zmieniona treść wymagania nie dziedziczy cudzego wyniku', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   const same = await loadCandidateReport(loaderClient(loaderData()), route);
