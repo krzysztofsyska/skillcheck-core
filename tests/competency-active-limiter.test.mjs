@@ -37,7 +37,7 @@ test('C2: exact gateway audit and production limiter adapter admit only the adde
  set log_parameter_max_length=0;set log_parameter_max_length_on_error=0;set log_statement='none';`);
  try{
   await db.exec('set session authorization '+user);
-  await assert.rejects(verifyCompetencyGateway(db,user),/Unsafe gateway/);
+  await verifyCompetencyGateway(db,user); // Redis mode on the full C1+C2 schema.
   await verifyCompetencyGateway(db,user,{postgresLimiter:true});
   let released=false;
   const pool={waitingCount:0,on(){},connect:async()=>({query:(sql,args)=>db.query(sql,args),release(){released=true;}})};

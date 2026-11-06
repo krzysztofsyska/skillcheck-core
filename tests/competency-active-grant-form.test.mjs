@@ -20,8 +20,9 @@ function load(name,mocks){
  const code=ts.transpileModule(readFileSync(new URL(directory+name,import.meta.url),'utf8'),{
   compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText;
  runInNewContext(code,{exports,process,FormData,URL,crypto:{randomUUID},require(name){
+  if(name in mocks)return mocks[name];
   if(name==='react')return React;if(name==='react/jsx-runtime')return jsxRuntime;
-  if(name in mocks)return mocks[name];throw new Error('Unexpected form dependency: '+name);
+  throw new Error('Unexpected form dependency: '+name);
  }});return exports;
 }
 
@@ -47,7 +48,15 @@ test('C3 mounted grant form rotates consecutively and retries an uncertain recei
   '../../../../../lib/competency-staff':staff,'../../../../../lib/competency-test':evaluation,
   '../../../../../lib/competency-staff-response':response
  });
- const {CompetencyGrantForm}=load('competency-forms.tsx',{'./competency-actions':actions});
+ let actionFinished;
+ // Observe the actual reducer's promise while retaining React's real hook and
+ // transition. Dispatch returns void; act alone cannot await PostgreSQL I/O.
+ const observedReact={...React,useActionState(reducer,...options){
+  return React.useActionState((...args)=>{
+   const completion=reducer(...args);actionFinished.resolve(completion);return completion;
+  },...options);
+ }};
+ const {CompetencyGrantForm}=load('competency-forms.tsx',{'./competency-actions':actions,react:observedReact});
  let props={route,definitionId:f.definitionId,canIssue:true},tree;
  await act(async()=>{tree=create(React.createElement(CompetencyGrantForm,props));});
  t.after(async()=>{await act(async()=>tree.unmount());});
@@ -55,7 +64,8 @@ test('C3 mounted grant form rotates consecutively and retries an uncertain recei
  const requestKey=()=>form().findByProps({name:'requestKey'}).props.value;
  const link=()=>tree.root.findAllByType('textarea').find(node=>node.props.readOnly)?.props.value;
  async function submit(){const current=form(),data=new FormData();data.set('requestKey',requestKey());data.set('hours','24');
-  await act(async()=>{React.startTransition(()=>current.props.action(data));});}
+  actionFinished=Promise.withResolvers();
+  await act(async()=>{React.startTransition(()=>current.props.action(data));await actionFinished.promise;});}
  async function refresh(){await h.asUser(f.owner);const current=staff.parseCompetencyAccess(await call('public.list_competency_test_access',[f.application.id]));
   props={...props,grant:current.access[0]};await act(async()=>tree.update(React.createElement(CompetencyGrantForm,props)));return props.grant.revision;}
  const issueKey=requestKey();await submit();assert.ok(link());assert.equal(await refresh(),1);assert.ok(link(),'revalidation preserves the one-time link');

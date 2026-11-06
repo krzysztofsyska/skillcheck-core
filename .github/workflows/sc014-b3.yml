@@ -134,6 +134,7 @@ jobs:
           tests/competency-candidate-journey.test.mjs
           tests/competency-active-journey.test.mjs
           tests/competency-active-grant-form.test.mjs
+          tests/competency-review-form-browser.test.mjs
           tests/competency-broker-security.test.mjs
       - name: Actual enabled routes and TLS pools with Redis and PostgreSQL limiters
         env:

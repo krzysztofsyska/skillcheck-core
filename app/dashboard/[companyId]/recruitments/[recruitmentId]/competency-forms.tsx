@@ -50,12 +50,18 @@ export function CompetencyGrantForm({route,definitionId,grant,canIssue}:GrantPro
 }
 export function CompetencyReviewForm({route,attemptId,version,definition}:{route:BehaviorRoute;attemptId:string;version:number;definition:ExerciseDefinition}){
  const [state,action,pending]=useActionState(saveCompetencyReview.bind(null,route,attemptId,version),{});
- return <form action={action}><h3>Ocena rekrutera — nowa wersja</h3><p>Oceń wyłącznie dowody w oddanej pracy. Cytat musi dokładnie odpowiadać tekstowi kandydata.</p>
+ const [rows,setRows]=useState(()=>definition.criteria.map(()=>({rating:'insufficient_data',evidence:''})));
+ function update(index:number,field:'rating'|'evidence',value:string){
+  setRows(current=>current.map((row,i)=>i===index?{...row,[field]:value}:row));
+ }
+ // A resolved action can contain an error. Retain the draft through React's
+ // native form reset; a successfully revalidated review remounts with a new key.
+ return <form action={action} onReset={event=>event.preventDefault()}><h3>Ocena rekrutera — nowa wersja</h3><p>Oceń wyłącznie dowody w oddanej pracy. Cytat musi dokładnie odpowiadać tekstowi kandydata.</p>
  {definition.criteria.map((criterion,i)=><fieldset key={i}><legend>{criterion.competency}</legend>
  <p>Poniżej: {criterion.below}</p><p>Zgodnie: {criterion.meets}</p><p>Powyżej: {criterion.above}</p>
- <label>Poziom<select name={'rating-'+i} defaultValue="insufficient_data">
+ <label>Poziom<select name={'rating-'+i} value={rows[i].rating} onChange={event=>update(i,'rating',event.target.value)}>
  <option value="insufficient_data">Brak wystarczających danych</option><option value="below">Poniżej wymagań</option>
  <option value="meets">Zgodnie z wymaganiami</option><option value="above">Powyżej wymagań</option></select></label>
- <label>Dokładny cytat (puste przy braku danych)<textarea name={'evidence-'+i} maxLength={10000} rows={3}/></label>
+ <label>Dokładny cytat (puste przy braku danych)<textarea name={'evidence-'+i} maxLength={10000} rows={3} value={rows[i].evidence} onChange={event=>update(i,'evidence',event.target.value)}/></label>
  </fieldset>)}<button disabled={pending}>Zapisz ocenę z dowodami</button><Status state={state}/></form>;
 }
