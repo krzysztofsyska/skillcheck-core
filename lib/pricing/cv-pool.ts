@@ -12,6 +12,23 @@
  * przeliczenie na podstawie katalogu.
  */
 
+/**
+ * Brutto → netto w groszach, pół w górę. Kopia `netFromGross`
+ * z `lib/pricing/internal-calculator.ts`, co do znaku.
+ *
+ * Nie importujemy jej stamtąd, bo ten plik ciągnie `quote-engine.ts`, którego
+ * składni nie uruchomi `node --test` bez transpilacji — a ten moduł ma działać
+ * w przeglądarce, na serwerze i w teście jednostkowym bez narzutu. Zgodność
+ * pilnują testy przypięte do liczb z `docs/cennik-2026-11-02.md`: jeśli kiedyś
+ * rozjedzie się z silnikiem, 622,87 zł przestanie się zgadzać.
+ */
+const netFromGross = (grossMinor: number, vatBasisPoints: number): number =>
+  Math.floor((grossMinor * 10_000 * 2 + (10_000 + vatBasisPoints)) / (2 * (10_000 + vatBasisPoints)));
+
+/** VAT od kwoty netto, zaokrąglany w górę przy połowie — jak `vatOf` w silniku wyceny. */
+const vatOf = (netMinor: number, vatBasisPoints: number) =>
+  Math.floor((netMinor * vatBasisPoints * 2 + 10_000) / 20_000);
+
 export type CvPoolBounds = {
   /** Pula wliczona w cenę bazową pakietu (`cv_included`). */
   min: number;
@@ -93,52 +110,67 @@ export function resolveCvPool(input: unknown, bounds: CvPoolBounds): CvPoolResol
 export type CvPoolPrice = {
   /** Pula, za którą policzono cenę — zawsze po korekcie. */
   cvCount: number;
-  /** Cena brutto w groszach. */
+  /** Cena netto w groszach; to ona jest jednostką rozliczenia. */
+  netMinor: number;
+  /** Cena brutto w groszach: netto plus VAT doliczony raz do sumy. */
   grossMinor: number;
   /** Ile CV ponad pulę wliczoną w cenę bazową. */
   overageCv: number;
 };
 
 export type CvPoolPackage = CvPoolBounds & {
-  /** Cena bazowa brutto w groszach za pulę `min`. */
+  /** `gross_minor` z katalogu: cena bazowa brutto w groszach za pulę `min`. */
   baseGrossMinor: number;
-  /** Dopłata brutto w groszach za jedno CV ponad pulę bazową; 0 = pakiet w całości. */
+  /** `overage_gross_per_cv_minor`: dopłata brutto za jedno CV ponad pulę; 0 = pakiet w całości. */
   overageGrossPerCvMinor: number;
+  /** `vat_basis_points` z katalogu, np. 2300 dla 23%. */
+  vatBasisPoints: number;
 };
 
 /**
  * Cena nigdy nie pochodzi z pola formularza ani z parametru adresu — zawsze
  * z przeliczenia katalogu dla puli, którą katalog dopuszcza.
+ *
+ * Arytmetyka jest celowo taka sama jak w `lib/pricing/quote-engine.ts`: jednostką
+ * rozliczenia jest NETTO, a VAT dolicza się raz do zsumowanego netto. Dopłata
+ * 20 gr brutto za CV to 16 gr netto, więc WERYFIKACJA przy 100 CV kosztuje
+ * 622,87 zł, a nie 623,00 zł. Ta różnica jest opisana w docs/cennik-2026-11-02.md
+ * i nie wolno jej „poprawić" po jednej ze stron — dwie formuły to dwie ceny
+ * za to samo.
+ *
+ * Rzuca `CvPoolError`, więc miejsce wywołania musi złapać wyjątek i pokazać
+ * komunikat; te funkcje nie są totalne.
  */
 export function cvPoolPrice(input: unknown, pkg: CvPoolPackage): CvPoolPrice & CvPoolResolution {
   const resolution = resolveCvPool(input, pkg);
   if (!Number.isSafeInteger(pkg.baseGrossMinor) || pkg.baseGrossMinor < 0
-    || !Number.isSafeInteger(pkg.overageGrossPerCvMinor) || pkg.overageGrossPerCvMinor < 0) {
+    || !Number.isSafeInteger(pkg.overageGrossPerCvMinor) || pkg.overageGrossPerCvMinor < 0
+    || !Number.isSafeInteger(pkg.vatBasisPoints) || pkg.vatBasisPoints < 0 || pkg.vatBasisPoints > 10_000) {
     throw new CvPoolError('invalid_bounds');
   }
+  // Katalog pozwala zwiększyć pulę, ale nie podaje stawki za CV ponad pulę:
+  // to niespójny wiersz, nie pakiet sprzedawany w całości. Cichy powrót do puli
+  // bazowej byłby wyceną czegoś innego, niż klient poprosił. Pakiet w całości
+  // (dziś PRESELEKCJA) ma w katalogu cv_max = cv_included i tu nie wpada.
+  if (pkg.max > pkg.min && pkg.overageGrossPerCvMinor === 0) throw new CvPoolError('invalid_bounds');
   const overageCv = resolution.value - pkg.min;
-  if (overageCv > 0 && pkg.overageGrossPerCvMinor === 0) {
-    // Pakiet sprzedawany w całości (dziś PRESELEKCJA): katalog nie zna ceny za
-    // CV ponad pulę, więc nie wolno jej zmyślić — zostaje pula bazowa.
-    return {
-      value: pkg.min,
-      corrected: true,
-      message: `Ten pakiet sprzedajemy w całości, z pulą ${pkg.min} CV.`,
-      cvCount: pkg.min,
-      grossMinor: pkg.baseGrossMinor,
-      overageCv: 0,
-    };
-  }
-  return {
-    ...resolution,
-    cvCount: resolution.value,
-    grossMinor: pkg.baseGrossMinor + overageCv * pkg.overageGrossPerCvMinor,
-    overageCv,
-  };
+  const baseNetMinor = netFromGross(pkg.baseGrossMinor, pkg.vatBasisPoints);
+  const overageNetMinor = netFromGross(pkg.overageGrossPerCvMinor, pkg.vatBasisPoints);
+  const netMinor = baseNetMinor + overageCv * overageNetMinor;
+  const grossMinor = netMinor + vatOf(netMinor, pkg.vatBasisPoints);
+  if (!Number.isSafeInteger(netMinor) || !Number.isSafeInteger(grossMinor)) throw new CvPoolError('invalid_bounds');
+  return { ...resolution, cvCount: resolution.value, netMinor, grossMinor, overageCv };
 }
 
-/** „615,00 zł" z groszy, bez zaokrągleń w drugą stronę. */
+/**
+ * „615,00 zł", „1 499,00 zł" — z groszy, bez zaokrągleń. Spacja przed tysiącami
+ * wymuszona jawnie: domyślne grupowanie w pl-PL nie dzieli liczb czterocyfrowych,
+ * a cała reszta powierzchni pisze ASSESSMENT CENTER jako „1 499 zł".
+ */
 export function formatGross(grossMinor: number) {
   if (!Number.isSafeInteger(grossMinor) || grossMinor < 0) throw new CvPoolError('invalid_bounds');
-  return `${(grossMinor / 100).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`;
+  const whole = Math.floor(grossMinor / 100);
+  const cents = String(grossMinor % 100).padStart(2, '0');
+  const grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return `${grouped},${cents} zł`;
 }

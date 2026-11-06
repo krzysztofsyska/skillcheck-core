@@ -12,6 +12,7 @@ on:
       - 'docs/cennik-2026-11-02.md'
       - 'app/components/marketing/package-comparison.tsx'
       - 'app/components/marketing/content.ts'
+      - 'package.json'
       - '.github/workflows/sc-pricing-engine.yml'
 permissions:
   contents: read

@@ -3,6 +3,7 @@
 // jako dane, tak jak wejdą z `public.pricing_published_packages`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   CvPoolError,
   cvPoolOptions,
@@ -11,10 +12,12 @@ import {
   resolveCvPool,
 } from '../lib/pricing/cv-pool.ts';
 
-// Odpowiednik wiersza katalogu dla WERYFIKACJI: 60 CV w cenie, do 150, krok 5.
-const weryfikacja = { min: 60, max: 150, step: 5, baseGrossMinor: 61_500, overageGrossPerCvMinor: 20 };
-// PRESELEKCJA sprzedaje się w całości: brak dopłaty za CV ponad pulę.
-const preselekcja = { min: 60, max: 60, step: 5, baseGrossMinor: 30_000, overageGrossPerCvMinor: 0 };
+const VAT = 2300;
+// Odpowiedniki wierszy katalogu (supabase/migrations/20261104080000_pricing_catalog.sql).
+const weryfikacja = { min: 60, max: 150, step: 5, baseGrossMinor: 61_500, overageGrossPerCvMinor: 20, vatBasisPoints: VAT };
+const assessmentCenter = { min: 50, max: 150, step: 5, baseGrossMinor: 149_900, overageGrossPerCvMinor: 20, vatBasisPoints: VAT };
+// PRESELEKCJA sprzedaje się w całości: jedna dozwolona pula, brak dopłaty za CV.
+const preselekcja = { min: 60, max: 60, step: 5, baseGrossMinor: 30_000, overageGrossPerCvMinor: 0, vatBasisPoints: VAT };
 const bounds = { min: 60, max: 150, step: 5 };
 
 test('dozwolone pule to wielokrotności kroku w granicach katalogu', () => {
@@ -63,8 +66,14 @@ test('tekst, puste pole i ułamek nie wywracają ceny', () => {
   }
   // Liczba ułamkowa w zakresie jest zaokrąglana do kroku, nie odrzucana.
   assert.equal(resolveCvPool(62.4, bounds).value, 60);
-  // Ta sama liczba jako tekst z suwaka działa identycznie.
+  // Ta sama liczba jako tekst z suwaka działa identycznie, również z zerem
+  // wiodącym i spacjami wokół — tak przychodzą wartości z pola formularza.
   assert.deepEqual(resolveCvPool('65', bounds), resolveCvPool(65, bounds));
+  assert.equal(resolveCvPool('065', bounds).value, 65);
+  assert.equal(resolveCvPool('  70  ', bounds).value, 70);
+  // Dokładnie pół kroku zaokrągla się w górę, deterministycznie.
+  assert.equal(resolveCvPool(62.5, bounds).value, 65);
+  assert.equal(Object.is(resolveCvPool(-0, bounds).value, -0), false);
 });
 
 test('cena bierze się z katalogu, nie z pola formularza', () => {
@@ -72,15 +81,44 @@ test('cena bierze się z katalogu, nie z pola formularza', () => {
   assert.equal(base.grossMinor, 61_500);
   assert.equal(base.overageCv, 0);
   assert.equal(formatGross(base.grossMinor), '615,00 zł');
-  const bigger = cvPoolPrice(100, weryfikacja);
-  assert.equal(bigger.cvCount, 100);
-  assert.equal(bigger.overageCv, 40);
-  assert.equal(bigger.grossMinor, 61_500 + 40 * 20);
-  assert.equal(formatGross(bigger.grossMinor), '623,00 zł');
   // Wartość skorygowana jest tą, za którą liczymy — nigdy wpisana.
   const corrected = cvPoolPrice('103', weryfikacja);
   assert.equal(corrected.cvCount, 105);
-  assert.equal(corrected.grossMinor, 61_500 + 45 * 20);
+});
+
+test('dopłata liczy się od netto, dokładnie jak w silniku wyceny', () => {
+  // docs/cennik-2026-11-02.md: jednostką jest 16 gr NETTO, a VAT dolicza się raz
+  // do sumy, więc WERYFIKACJA przy 100 CV to 622,87 zł, a nie 623,00 zł.
+  // Dwie formuły oznaczałyby dwie ceny za to samo.
+  const bigger = cvPoolPrice(100, weryfikacja);
+  assert.equal(bigger.cvCount, 100);
+  assert.equal(bigger.overageCv, 40);
+  const baseNet = Math.round(61_500 / 1.23);
+  assert.equal(bigger.netMinor, baseNet + 40 * 16);
+  assert.equal(bigger.grossMinor, 62_287);
+  assert.equal(formatGross(bigger.grossMinor), '622,87 zł');
+  assert.notEqual(bigger.grossMinor, 61_500 + 40 * 20);
+});
+
+test('wynik zgadza się z dokumentem cennika, a nie tylko sam ze sobą', () => {
+  // Jedyne źródło prawdy do czasu przepięcia strony na katalog. Jeśli ten moduł
+  // kiedyś policzy inaczej niż silnik, ta liczba przestanie się zgadzać.
+  const cennik = readFileSync(new URL('../docs/cennik-2026-11-02.md', import.meta.url), 'utf8');
+  assert.match(cennik, /622,87 zł/);
+  assert.match(cennik, /16 gr netto za sztukę/);
+  assert.equal(formatGross(cvPoolPrice(100, weryfikacja).grossMinor), '622,87 zł');
+});
+
+test('ASSESSMENT CENTER: pula bazowa 50, krok 5 i ta sama arytmetyka', () => {
+  const base = cvPoolPrice(50, assessmentCenter);
+  assert.equal(base.cvCount, 50);
+  assert.equal(base.grossMinor, 149_900);
+  assert.equal(formatGross(base.grossMinor), '1 499,00 zł');
+  assert.equal(cvPoolPrice(53, assessmentCenter).cvCount, 55);
+  const bigger = cvPoolPrice(100, assessmentCenter);
+  assert.equal(bigger.overageCv, 50);
+  assert.equal(bigger.netMinor, Math.round(149_900 / 1.23) + 50 * 16);
+  assert.equal(cvPoolOptions(assessmentCenter)[0], 50);
 });
 
 test('pakiet sprzedawany w całości nie dostaje wymyślonej dopłaty', () => {
@@ -91,13 +129,25 @@ test('pakiet sprzedawany w całości nie dostaje wymyślonej dopłaty', () => {
   assert.equal(clamped.grossMinor, 30_000);
   assert.equal(clamped.overageCv, 0);
   assert.equal(clamped.corrected, true);
-  // A gdyby katalog dopuścił większą pulę bez stawki za CV ponad pulę, cena nie
-  // może zostać zmyślona: zostaje pula bazowa i jasny komunikat.
-  const widened = cvPoolPrice(100, { ...preselekcja, max: 150 });
-  assert.equal(widened.cvCount, 60);
-  assert.equal(widened.grossMinor, 30_000);
-  assert.equal(widened.overageCv, 0);
-  assert.match(widened.message, /w całości/);
+});
+
+test('katalog dopuszczający większą pulę bez stawki za CV to błąd, nie cicha korekta', () => {
+  // Cichy powrót do 60 CV wycenia coś innego, niż klient poprosił. Lepiej
+  // komunikat o błędzie konfiguracji niż zaniżona pula w cenie bazowej.
+  assert.throws(() => cvPoolPrice(100, { ...preselekcja, max: 150 }),
+    error => error instanceof CvPoolError);
+  assert.throws(() => cvPoolPrice(60, { ...preselekcja, max: 150 }),
+    error => error instanceof CvPoolError);
+});
+
+test('kwoty formatują się tak, jak pisze je reszta powierzchni', () => {
+  assert.equal(formatGross(0), '0,00 zł');
+  assert.equal(formatGross(1), '0,01 zł');
+  assert.equal(formatGross(99), '0,99 zł');
+  assert.equal(formatGross(30_000), '300,00 zł');
+  assert.equal(formatGross(61_500), '615,00 zł');
+  assert.equal(formatGross(149_900), '1 499,00 zł');
+  assert.equal(formatGross(100_000_000), '1 000 000,00 zł');
 });
 
 test('niespójny katalog kończy się błędem, nie ceną', () => {
