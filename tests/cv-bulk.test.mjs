@@ -174,7 +174,7 @@ test('extraction: local OCR reads scans and photos, rejects unreadable ones', { 
 });
 
 test('PDF OCR: digitally printed header cannot hide a scanned CV body', async () => {
-  const header = 'Naglowek systemowy: zalacznik do rekrutacji';
+  const header = 'Anna Testowa, tel. +48 500 123 456, e-mail: anna@example.com';
   const mixed = scannedPdf(cvLines, { textOverlay: [header] });
   let calls = 0;
   const scanOcr = async () => {
@@ -185,6 +185,9 @@ test('PDF OCR: digitally printed header cannot hide a scanned CV body', async ()
   assert.equal(calls, 1, 'OCR runs even when a sparse digital text layer is present');
   assert.equal(result.ocrUsed, true);
   assert.match(result.text, /Excel, SQL/, 'the scanned work history is included');
+  assert.match(result.text, /Anna Testowa/, 'reliable digital contact header is preserved');
+  assert.match(result.text, /500 123 456/, 'the original digital phone survives imperfect OCR');
+  assert.match(result.text, /anna@example.com/, 'the original digital e-mail survives imperfect OCR');
   await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: header, confidence: 90 })),
     reason('unreadable_scan'), 'header-only OCR is never accepted as a complete CV');
   await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: '', confidence: 0 })),
@@ -194,6 +197,21 @@ test('PDF OCR: digitally printed header cannot hide a scanned CV body', async ()
   const shortText = await extractBulkCv(textPdf(['Anna Nowak', 'Doswiadczenie zawodowe od 2017 roku w obsludze klienta']), 'pdf',
     async () => assert.fail('text-only PDF must not trigger OCR'));
   assert.equal(shortText.ocrUsed, false);
+});
+
+test('PDF OCR: tiny inline images cannot indefinitely block sparse-text extraction', { timeout: 10000 }, async () => {
+  const pdf = textPdf(['Anna Nowak', 'E-mail: anna@example.com', 'Doświadczenie zawodowe od 2017 roku w analizie SQL'],
+    { inlineImage: true });
+  const start = Date.now();
+  // Depending on the pdf-parse implementation, inline images are either skipped
+  // or bounded inspection falls back to OCR of the complete page.
+  const result = await extractBulkCv(pdf, 'pdf', async () => ({
+    text: 'Doświadczenie zawodowe od 2017 roku w analizie SQL. Dodatkowa treść zeskanowana.',
+    confidence: 94,
+  }), { deadline: Date.now() + 7000 });
+  assert.match(result.text, /Anna Nowak/);
+  assert.match(result.text, /anna@example.com/);
+  assert.ok(Date.now() - start < 7000, 'inline-image inspection respects the extraction budget');
 });
 
 test('batch e-mail carries counts and a link only', async () => {
