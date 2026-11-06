@@ -14,6 +14,9 @@ on:
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/preview-migration-stream.mjs'
+      - 'tests/preview-db-migrate-workflow.test.mjs'
+      - '.github/workflows/preview-db-migrate.yml'
       - 'db/components/sc-ac-paired-sheets.sql'
       - 'tests/assessment-center-active-*.mjs'
       - 'tests/helpers/assessment-center-active-fixture.mjs'
@@ -53,6 +56,9 @@ on:
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/preview-migration-stream.mjs'
+      - 'tests/preview-db-migrate-workflow.test.mjs'
+      - '.github/workflows/preview-db-migrate.yml'
       - 'db/components/sc-ac-paired-sheets.sql'
       - 'tests/assessment-center-active-*.mjs'
       - 'tests/helpers/assessment-center-active-fixture.mjs'
@@ -144,7 +150,7 @@ jobs:
           set +e
           node --experimental-strip-types --test --test-concurrency=1 \
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
-            tests/sc-019-migrations-mvp-e2e.test.mjs \
+            tests/sc-019-migrations-mvp-e2e.test.mjs tests/preview-db-migrate-workflow.test.mjs \
             tests/competency-active-migration.test.mjs tests/competency-active-concurrency.test.mjs tests/competency-active-limiter.test.mjs tests/competency-active-staff.test.mjs \
             tests/assessment-center-active-database.test.mjs tests/assessment-center-active-concurrency.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
@@ -157,6 +163,7 @@ jobs:
           tail -n 250 sc19-migrations.log
           exit "$test_result"
         env:
+          PREVIEW_MIGRATE_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
