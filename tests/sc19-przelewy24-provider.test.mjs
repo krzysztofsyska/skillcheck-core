@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 import { createSc19Payments } from '../lib/sc19-payments.ts';
 import { createPrzelewy24Provider, przelewy24NotificationSignature, przelewy24Sign, sessionIdFor } from '../lib/sc19-przelewy24-provider.ts';
 import { createFakturowniaClient } from '../lib/fakturownia-client.ts';
@@ -142,6 +143,23 @@ test('a verified, settled payment grants the order credits exactly once', async 
   assert.equal(h.st.credits.get(id(1)), 60);
 });
 
+test('owner refresh reads the real session by id, verifies the amount and shares the idempotent webhook grant', async () => {
+  const h = harness();
+  const result = await h.checkout();
+  const order = h.st.orders.get(result.orderId);
+  await h.service.refreshSettlement(order);
+  assert.equal(h.st.credits.size, 0);
+  const raw = h.api.pay(order.sessionId);
+  const tx = h.api.s.tx.get(order.sessionId);
+  tx.amount = 100;
+  await assert.rejects(h.service.refreshSettlement(order), /P24_ORDER_INVALID/);
+  assert.equal(h.api.s.verifies.length, 0);
+  tx.amount = order.amountMinor;
+  await h.service.refreshSettlement(order);
+  await h.notify(raw);
+  assert.equal(h.st.credits.get(order.companyId), 60);
+});
+
 test('notifications signed with a wrong CRC, for another merchant, or with extra fields are refused', async () => {
   const h = harness();
   const out = await h.checkout();
@@ -204,4 +222,25 @@ test('paid VAT invoice is issued once, gross-exact and marked paid', async () =>
   await assert.rejects(client.createPaidInvoice(input), e => e.code === 'FAKTUROWNIA_REQUEST_REJECTED');
   assert.equal(posts.length, 1);
   await assert.rejects(client.createPaidInvoice({ ...input, oid: 'free-text' }), e => e.code === 'FAKTUROWNIA_REQUEST_REJECTED');
+});
+
+test('P24 HTTP callback verifies the signature inside the JSON; protected-preview refresh authorizes the owner first', async () => {
+  const h=harness();
+  const result=await h.checkout();
+  const raw=h.api.pay(sessionIdFor(result.orderId));
+  const appOrigin='https://preview.fixture.invalid';
+  const runtime={appOrigin, signatureHeader:null, service:h.service, authenticate:async()=>({userId:id(2)}),
+    readOrder:async(company,user,order)=>company===id(1)&&user===id(2)?h.st.orders.get(order):null};
+  const http=createSc19PaymentHttp(runtime);
+  const post=(origin=appOrigin)=>new Request(appOrigin+'/api/billing/orders/'+result.orderId+'?companyId='+id(1),
+    {method:'POST',headers:{origin}});
+  assert.equal((await http.order(post('https://evil.invalid'),result.orderId)).status,403);
+  const foreign=createSc19PaymentHttp({...runtime,authenticate:async()=>({userId:id(3)})});
+  assert.equal((await foreign.order(post(),result.orderId)).status,404);
+  assert.equal(h.api.s.verifies.length,0);
+  const spoofed=new Request(appOrigin,{method:'POST',headers:{'x-signature':przelewy24NotificationSignature(raw)},body:'{}'});
+  assert.equal((await http.webhook(spoofed)).ok,false);
+  assert.equal((await http.webhook(new Request(appOrigin,{method:'POST',body:raw}))).status,200);
+  assert.equal((await (await http.order(post(),result.orderId)).json()).status,'paid');
+  assert.equal(h.st.credits.get(id(1)),60);
 });
