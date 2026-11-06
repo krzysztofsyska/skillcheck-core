@@ -18,10 +18,12 @@ const stream = (dict, data) => Buffer.concat([Buffer.from(`<< ${dict} /Length ${
 const ascii = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ł/g, 'l').replace(/Ł/g, 'L');
 
 /** PDF with a real text layer, one line per entry. */
-export function textPdf(lines) {
+export function textPdf(lines, { inlineImage = false } = {}) {
   const ops = ['BT /F1 12 Tf 72 760 Td 16 TL'];
   for (const line of lines) ops.push(`(${ascii(line).replace(/[()\\]/g, '\\$&')}) Tj T*`);
   ops.push('ET');
+  // A tiny inline image, e.g. a PDF icon, can trigger the pdf-parse 2.4.5 getImage hang.
+  if (inlineImage) ops.push('q 1 0 0 1 45 45 cm BI /W 1 /H 1 /CS /RGB /BPC 8 /F /AHx ID FF0000> EI Q');
   return assemble(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Count 1 /Kids [4 0 R] >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>',
