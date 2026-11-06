@@ -2,10 +2,12 @@
 -- było, zadania powstawały wyłącznie ręcznie przez public.save_exercise_definition
 -- i tak dzieje się nadal, bo ta migracja tamtej ścieżki nie zmieniała.
 --
--- Usuwa wyłącznie własne obiekty w schemacie `exercise_ai`. Nie dotyka żadnej
--- relacji w 'public' ani 'private', więc private.erasure_schema_signature() i
--- baseline inwentarza usuwania danych kandydata pozostają nietknięte — tak samo
--- jak przy zakładaniu tego schematu.
+-- Usuwa wyłącznie własne obiekty w schemacie `exercise_ai`. Ani ta migracja, ani
+-- jej wycofanie nie dodaje i nie usuwa niczego w 'public' ani 'private' — także
+-- żadnego więzu PRZYCHODZĄCEGO do tych schematów, bo tabele celowo nie mają
+-- kluczy obcych poza własny schemat. Dlatego private.erasure_schema_signature()
+-- i baseline inwentarza usuwania danych kandydata pozostają nietknięte w obie
+-- strony, co pilnuje test w tests/exercise-ai-database.test.mjs.
 begin;
 drop function if exists exercise_ai.approve_proposal(uuid);
 drop function if exists exercise_ai.record_proposal(uuid,uuid,jsonb,integer);

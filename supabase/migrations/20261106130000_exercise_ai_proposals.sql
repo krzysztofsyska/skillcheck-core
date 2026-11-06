@@ -7,10 +7,24 @@
 -- usuwania danych kandydata (obecnie r13). Te dane nie dotyczą kandydata — wiersz
 -- opisuje propozycję zadania dla STANOWISKA, wspólną dla wszystkich kandydatów —
 -- więc nowy schemat trzyma je poza tą kontrolą, zamiast wymuszać nowy baseline.
--- Ten sam wzorzec i to samo uzasadnienie co przy katalogu cen (20261104080000).
--- Sygnatura SC-010 pozostaje niezmieniona przez tę migrację.
+-- Ten sam wzorzec co przy katalogu cen (20261104080000).
 --
--- Co ta migracja ROBI: zakłada schemat, jedną tabelę i trzy funkcje. Czego NIE robi:
+-- UWAGA, warunek tego wzorca: sygnatura liczy także więzy PRZYCHODZĄCE do
+-- 'public'/'private' z DOWOLNEGO schematu (`k.confrelid in (select oid from tracked)`),
+-- co jest napisane wprost w komentarzu nad tą funkcją. Klucz obcy z `exercise_ai`
+-- do `public.recruitments` zmieniłby więc sygnaturę i wywrócił usuwanie danych
+-- kandydata na `PT409 'Unknown schema dependency'`. Katalog cen ma wyłącznie więzy
+-- wewnątrz własnego schematu i tylko dlatego został poza kontrolą. Dlatego tutaj
+-- NIE MA kluczy obcych do 'public': spójność sprawdzają funkcje niżej, które i tak
+-- blokują wiersz rekrutacji i wpis definicji przed zapisem.
+--
+-- Kosztem jest brak `on delete cascade`: skasowanie rekrutacji zostawi tu wiersze
+-- sieroty. Są nieszkodliwe — nie zawierają danych kandydata, a polityka odczytu
+-- wymaga dostępu do firmy — i nie wracają do obiegu, bo obie funkcje zapisu
+-- wymagają istniejącej rekrutacji. Sprzątanie ich dopiszemy, gdy kasowanie
+-- rekrutacji w ogóle powstanie; dziś nie ma takiej ścieżki w repozytorium.
+--
+-- Co ta migracja ROBI: zakłada schemat, dwie tabele i cztery funkcje. Czego NIE robi:
 -- nie dotyka żadnej istniejącej relacji, kolumny, polityki RLS ani funkcji; nie
 -- zmienia ścieżki wydawania dostępu kandydatowi; nie włącza niczego w interfejsie
 -- (flaga EXERCISE_AI_ENABLED pozostaje wyłączona).
@@ -49,10 +63,8 @@ create table exercise_ai.proposals (
   -- która poszła do kandydata, i raport ma to pokazywać wprost.
   approval_mode text check (approval_mode in ('manual','auto')),
   check ((approved_by is null) = (approved_at is null)),
-  check ((approved_at is null) = (approval_mode is null)),
-  foreign key (company_id, recruitment_id) references public.recruitments(company_id, id) on delete cascade,
-  foreign key (company_id, recruitment_id, definition_entry_id)
-    references public.exercise_definition_entries(company_id, recruitment_id, id) on delete cascade
+  check ((approved_at is null) = (approval_mode is null))
+  -- Celowo bez kluczy obcych do 'public' — patrz nagłówek migracji.
 );
 create index exercise_ai_proposals_recruitment_idx on exercise_ai.proposals(company_id, recruitment_id, created_at desc);
 
@@ -70,10 +82,13 @@ create table exercise_ai.recruitment_settings (
   company_id uuid not null,
   recruitment_id uuid not null,
   auto_release boolean not null default false,
+  -- Pułap liczby propozycji dla tej rekrutacji. Trzymany w bazie, bo limit podany
+  -- w wywołaniu wybiera klient, a rachunek u dostawcy przychodzi i tak.
+  draft_ceiling integer not null default 20 check (draft_ceiling between 1 and 1000),
   set_by uuid not null references auth.users(id) on delete restrict,
   set_at timestamptz not null default now(),
-  primary key (company_id, recruitment_id),
-  foreign key (company_id, recruitment_id) references public.recruitments(company_id, id) on delete cascade
+  primary key (company_id, recruitment_id)
+  -- Celowo bez klucza obcego do 'public' — patrz nagłówek migracji.
 );
 alter table exercise_ai.recruitment_settings enable row level security;
 revoke all on exercise_ai.recruitment_settings from public, anon, authenticated;
@@ -105,10 +120,20 @@ grant execute on function exercise_ai.set_auto_release(uuid,boolean) to authenti
 -- i która wersja profilu stanowiska. Bez tego wpis byłby tylko tekstem bez źródła.
 create function exercise_ai.validate_provenance(value jsonb) returns jsonb
 language plpgsql immutable set search_path = '' as $$
-declare field text; maximum integer;
+declare field text; maximum integer; known text[] := array['provider','model','model_revision',
+  'prompt_version','payload_schema_version','result_schema_version','input_fingerprint',
+  'position_id','position_updated_at'];
 begin
   if value is null or jsonb_typeof(value) <> 'object' then
     raise exception 'Invalid provenance' using errcode = '22023';
+  end if;
+  -- Ślad ma być śladem, nie workiem na dowolną treść: ograniczony rozmiar i
+  -- wyłącznie znane pola. Inaczej dałoby się tu przemycić cokolwiek.
+  if pg_catalog.pg_column_size(value) > 4000 then
+    raise exception 'Provenance too large' using errcode = '22023';
+  end if;
+  if exists (select 1 from pg_catalog.jsonb_object_keys(value) k where k <> all(known)) then
+    raise exception 'Unknown provenance field' using errcode = '22023';
   end if;
   foreach field in array array['provider','model','prompt_version','input_fingerprint','position_id'] loop
     maximum := case field when 'input_fingerprint' then 64 else 200 end;
@@ -151,12 +176,15 @@ create function exercise_ai.record_proposal(target_recruitment uuid, target_defi
 returns uuid language plpgsql security definer set search_path = '' as $$
 declare
   actor uuid := (select auth.uid()); recruitment public.recruitments%rowtype;
-  entry public.exercise_definition_entries%rowtype; used integer; proposal_id uuid; auto_release boolean;
+  entry public.exercise_definition_entries%rowtype; used integer; proposal_id uuid;
+  auto_release boolean; ceiling integer;
 begin
   if actor is null then raise exception 'Authentication required' using errcode = '42501'; end if;
   if draft_limit is null or draft_limit < 1 or draft_limit > 1000 then
     raise exception 'Invalid draft limit' using errcode = '22023';
   end if;
+  -- `draft_limit` wybiera klient, więc sam w sobie niczego nie chroni. Wiążący
+  -- jest pułap z bazy; argument może go wyłącznie obniżyć.
   select * into recruitment from public.recruitments r
     where r.id = target_recruitment and private.has_company_access(r.company_id, true) for share;
   if not found then raise exception 'No write access' using errcode = '42501'; end if;
@@ -164,18 +192,27 @@ begin
     where e.id = target_definition_entry and e.company_id = recruitment.company_id
       and e.recruitment_id = recruitment.id;
   if not found then raise exception 'No definition' using errcode = '42501'; end if;
+  -- Ślad pochodzenia musi opisywać TEN wpis definicji, nie dowolny. Dobrze
+  -- zbudowany, ale nieprawdziwy ślad jest gorszy od braku śladu: wygląda na
+  -- źródło, a prowadzi donikąd. Wersję profilu bierzemy z wpisu, który już mamy.
+  if (new_provenance->>'position_id')::uuid is distinct from entry.position_id
+    or (new_provenance->>'position_updated_at')::timestamptz is distinct from entry.position_updated_at then
+    raise exception 'Provenance does not match the definition' using errcode = '22023';
+  end if;
   -- Serializuje równoległe żądania tej samej rekrutacji, żeby limit nie dał się
   -- obejść dwoma kliknięciami naraz.
   perform pg_advisory_xact_lock(hashtextextended('exercise_ai:' || recruitment.id::text, 0));
   select count(*) into used from exercise_ai.proposals p
     where p.company_id = recruitment.company_id and p.recruitment_id = recruitment.id;
-  if used >= draft_limit then raise exception 'Draft limit reached' using errcode = 'PT429'; end if;
   -- Ustawienie czyta się TU, w tej samej transakcji co zapis, a nie przyjmuje
   -- z wywołania: inaczej klient mógłby zażądać automatu dla rekrutacji, w której
   -- rekruter go nie włączył. Brak wiersza = zatwierdzanie ręczne.
-  select coalesce((select s.auto_release from exercise_ai.recruitment_settings s
-    where s.company_id = recruitment.company_id and s.recruitment_id = recruitment.id), false)
-    into auto_release;
+  select coalesce(s.auto_release, false), coalesce(s.draft_ceiling, 20)
+    into auto_release, ceiling
+    from (select 1) one
+    left join exercise_ai.recruitment_settings s
+      on s.company_id = recruitment.company_id and s.recruitment_id = recruitment.id;
+  if used >= least(draft_limit, ceiling) then raise exception 'Draft limit reached' using errcode = 'PT429'; end if;
   insert into exercise_ai.proposals(company_id, recruitment_id, definition_entry_id, provenance, created_by,
       approved_by, approved_at, approval_mode)
     values(recruitment.company_id, recruitment.id, entry.id,
