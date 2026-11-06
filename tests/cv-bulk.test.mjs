@@ -579,6 +579,33 @@ test('failed notification acknowledgement is reported, never mistaken for succes
   }), /cv_bulk_worker_pump_invalid_response/, 'an invalid worker response is not an empty successful run');
 });
 
+test('notification RPC must acknowledge a real lease update for both session and signed pumps', async () => {
+  const batchId = '55555555-5555-4555-8555-555555555555';
+  const notify = { batch_id: batchId, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: null,
+    recruitment_name: 'Synthetic', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  for (const acknowledgement of [false, null, 'true', { updated: true }]) {
+    const confirmed = [];
+    const rpc = async (fn, args) => {
+      if (fn === 'cv_bulk_pump') return { data: { dispatch: [], notify }, error: null };
+      if (fn === 'cv_bulk_worker_pump') return { data: [{ dispatch: [], notify }], error: null };
+      assert.equal(fn, 'cv_bulk_finish_notification');
+      confirmed.push(args.target_batch);
+      return { data: acknowledgement, error: null };
+    };
+    const deps = { rpc, dispatch: async () => ({ accepted: true }),
+      aiEnabled: false, origin: () => 'https://example.test', env: {} };
+    await assert.rejects(pumpBatch(deps, batchId),
+      error => error.message === 'cv_bulk_notification_finish_failed',
+      'a false/non-boolean session acknowledgement cannot be reported as success');
+    await assert.rejects(pumpAllSigned({ ...deps, secret: 's'.repeat(32),
+      digest: value => createHash('sha256').update(value).digest('hex') }),
+    error => error.message === 'cv_bulk_worker_delivery_failed',
+    'a false/non-boolean signed acknowledgement cannot be reported as success');
+    assert.deepEqual(confirmed, [batchId, batchId], 'both paths attempt finalization once');
+  }
+});
+
 test('signed scheduler rejects each malformed claimed batch while delivering the valid ones', async () => {
   const attemptId = '44444444-4444-4444-8444-444444444444';
   const batchId = '55555555-5555-4555-8555-555555555555';
