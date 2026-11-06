@@ -250,36 +250,39 @@ test('one account may only try one NIP automatically, and the database enforces 
 });
 
 test('the precheck refuses before the register is asked, and audits why', async t => {
-  const off = await ready(t, { enabled: false });
-  await off.h.asUser(users.owner);
-  assert.deepEqual(await precheck(off.db, off.a.companyId, nipA), { allowed: false, reason: 'AUTO_DISABLED' });
-  await off.h.asAdmin();
-  // The row the operator needs: this company tried, and nothing happened.
-  const row = (await call(off.db, 'select outcome,error_code,nip from private.sc19_trial_auto_checks where company_id=$1',
-    [off.a.companyId]))[0];
-  assert.deepEqual(row, { outcome: 'refused', error_code: 'AUTO_DISABLED', nip: nipA });
+  // Cluster-wide capability roles must be released with each disposable DB.
+  await t.test('disabled switch is audited', async st => {
+    const off = await ready(st, { enabled: false });
+    await off.h.asUser(users.owner);
+    assert.deepEqual(await precheck(off.db, off.a.companyId, nipA), { allowed: false, reason: 'AUTO_DISABLED' });
+    await off.h.asAdmin();
+    // The row the operator needs: this company tried, and nothing happened.
+    const row = (await call(off.db, 'select outcome,error_code,nip from private.sc19_trial_auto_checks where company_id=$1',
+      [off.a.companyId]))[0];
+    assert.deepEqual(row, { outcome: 'refused', error_code: 'AUTO_DISABLED', nip: nipA });
+  });
+  await t.test('missing secret is disabled', async st => {
+    const bare = await ready(st, { secret: null });
+    await bare.h.asUser(users.owner);
+    assert.deepEqual(await precheck(bare.db, bare.a.companyId, nipA), { allowed: false, reason: 'AUTO_DISABLED' });
+  });
+  await t.test('taken NIP and caller validation', async st => {
+    const { db, h, a, b } = await ready(st);
+    await h.asUser(users.owner);
+    assert.equal((await autoClaim(db, a.companyId, nipA)).outcome, 'granted');
+    await h.asUser(users.otherOwner);
+    assert.deepEqual(await precheck(db, b.companyId, nipA), { allowed: false, reason: 'NIP_TAKEN' });
 
-  // No secret in the database is the same refusal, for the same reason.
-  const bare = await ready(t, { secret: null });
-  await bare.h.asUser(users.owner);
-  assert.deepEqual(await precheck(bare.db, bare.a.companyId, nipA), { allowed: false, reason: 'AUTO_DISABLED' });
-
-  // A NIP already taken by another company is refused without a register call.
-  const { db, h, a, b } = await ready(t);
-  await h.asUser(users.owner);
-  assert.equal((await autoClaim(db, a.companyId, nipA)).outcome, 'granted');
-  await h.asUser(users.otherOwner);
-  assert.deepEqual(await precheck(db, b.companyId, nipA), { allowed: false, reason: 'NIP_TAKEN' });
-
-  // Only the owner may ask, and a malformed NIP is refused outright.
-  for (const who of [users.recruiter, users.viewer, users.owner]) {
-    await h.asUser(who);
-    await assert.rejects(db.query('select * from public.sc19_auto_free_precheck($1,$2)', [b.companyId, nipA]), code('42501'), who);
-  }
-  await h.asUser(users.otherOwner);
-  await assert.rejects(db.query('select * from public.sc19_auto_free_precheck($1,$2)', [b.companyId, '123']), code('22023'));
-  await h.asUser(null, 'anon');
-  await assert.rejects(db.query('select * from public.sc19_auto_free_precheck($1,$2)', [b.companyId, nipA]), code('42501'), 'anon');
+    // Only the owner may ask, and a malformed NIP is refused outright.
+    for (const who of [users.recruiter, users.viewer, users.owner]) {
+      await h.asUser(who);
+      await assert.rejects(db.query('select * from public.sc19_auto_free_precheck($1,$2)', [b.companyId, nipA]), code('42501'), who);
+    }
+    await h.asUser(users.otherOwner);
+    await assert.rejects(db.query('select * from public.sc19_auto_free_precheck($1,$2)', [b.companyId, '123']), code('22023'));
+    await h.asUser(null, 'anon');
+    await assert.rejects(db.query('select * from public.sc19_auto_free_precheck($1,$2)', [b.companyId, nipA]), code('42501'), 'anon');
+  });
 });
 
 test('a company that asks again a day later is a fresh request, not a suppressed duplicate', async t => {
@@ -886,30 +889,33 @@ test('an implausible declared time does not lose the consent, it only loses the 
   // a sanity limit on our own clocks (60 s ahead, 90 days behind). A value
   // outside it must NOT drop the consent — the customer really gave it — so the
   // row is written with now() instead and the returned value says so.
-  const { db, h, a, b } = await ready(t);
-  const cases = [
-    ['from the future', new Date(Date.now() + 10 * 60 * 1000).toISOString(), a.companyId, users.owner],
-    ['absurdly old', new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString(), b.companyId, users.otherOwner],
-  ];
-  for (const [label, outOfRange, companyId, who] of cases) {
-    await h.asUser(who);
-    const at = (await call(db, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
-      [companyId, 'marketing-1.0', ...registrationGrant(companyId, 'marketing-1.0', outOfRange)]))[0].at;
-    assert.notEqual(at.toISOString(), outOfRange, `${label}: not taken at face value`);
-    assert.ok(Math.abs(at.getTime() - Date.now()) < 60 * 1000, `${label}: stamped with our own clock instead`);
-    await h.asAdmin();
-    const rows = await call(db, 'select occurred_at from private.marketing_consent_events where company_id=$1', [companyId]);
-    assert.equal(rows.length, 1, `${label}: the consent is kept, never silently dropped`);
-    assert.equal(rows[0].occurred_at.toISOString(), at.toISOString());
-  }
-  // No declared time at all behaves the same way: recorded, stamped now().
-  const { db: db2, h: h2, a: a2 } = await ready(t);
-  await h2.asUser(users.owner);
-  const undated = (await call(db2, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
-    [a2.companyId, 'marketing-1.0', ...registrationGrant(a2.companyId, 'marketing-1.0', null)]))[0].at;
-  assert.ok(Math.abs(undated.getTime() - Date.now()) < 60 * 1000);
-  await h2.asAdmin();
-  assert.equal((await call(db2, 'select count(*)::int n from private.marketing_consent_events where company_id=$1', [a2.companyId]))[0].n, 1);
+  await t.test('out-of-range declared dates', async st => {
+    const { db, h, a, b } = await ready(st);
+    const cases = [
+      ['from the future', new Date(Date.now() + 10 * 60 * 1000).toISOString(), a.companyId, users.owner],
+      ['absurdly old', new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString(), b.companyId, users.otherOwner],
+    ];
+    for (const [label, outOfRange, companyId, who] of cases) {
+      await h.asUser(who);
+      const at = (await call(db, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
+        [companyId, 'marketing-1.0', ...registrationGrant(companyId, 'marketing-1.0', outOfRange)]))[0].at;
+      assert.notEqual(at.toISOString(), outOfRange, `${label}: not taken at face value`);
+      assert.ok(Math.abs(at.getTime() - Date.now()) < 60 * 1000, `${label}: stamped with our own clock instead`);
+      await h.asAdmin();
+      const rows = await call(db, 'select occurred_at from private.marketing_consent_events where company_id=$1', [companyId]);
+      assert.equal(rows.length, 1, `${label}: the consent is kept, never silently dropped`);
+      assert.equal(rows[0].occurred_at.toISOString(), at.toISOString());
+    }
+  });
+  await t.test('missing declared date', async st => {
+    const { db: db2, h: h2, a: a2 } = await ready(st);
+    await h2.asUser(users.owner);
+    const undated = (await call(db2, 'select public.marketing_consent_grant_registration($1,$2,$3,$4,$5,$6) at',
+      [a2.companyId, 'marketing-1.0', ...registrationGrant(a2.companyId, 'marketing-1.0', null)]))[0].at;
+    assert.ok(Math.abs(undated.getTime() - Date.now()) < 60 * 1000);
+    await h2.asAdmin();
+    assert.equal((await call(db2, 'select count(*)::int n from private.marketing_consent_events where company_id=$1', [a2.companyId]))[0].n, 1);
+  });
 });
 
 test('the request secret can be installed and rotated without a raw UPDATE', async t => {
@@ -1047,17 +1053,20 @@ test('no FREE after a paid pack, even with a confirmed register answer', async t
 });
 
 test('with the switch off, or without a secret, nothing is granted', async t => {
-  const off = await ready(t, { enabled: false });
-  await off.h.asUser(users.owner);
-  await assert.rejects(autoClaim(off.db, off.a.companyId, nipA), /sc19_auto_disabled/);
-  await off.h.asAdmin();
-  assert.equal((await call(off.db, 'select count(*)::int n from private.sc19_balances'))[0].n, 0);
-
-  const bare = await ready(t, { secret: null });
-  await bare.h.asUser(users.owner);
-  await assert.rejects(autoClaim(bare.db, bare.a.companyId, nipB), code('42501'), 'no secret means no signature can pass');
-  await bare.h.asAdmin();
-  assert.equal((await call(bare.db, 'select count(*)::int n from private.sc19_balances'))[0].n, 0);
+  await t.test('disabled switch', async st => {
+    const off = await ready(st, { enabled: false });
+    await off.h.asUser(users.owner);
+    await assert.rejects(autoClaim(off.db, off.a.companyId, nipA), /sc19_auto_disabled/);
+    await off.h.asAdmin();
+    assert.equal((await call(off.db, 'select count(*)::int n from private.sc19_balances'))[0].n, 0);
+  });
+  await t.test('missing secret', async st => {
+    const bare = await ready(st, { secret: null });
+    await bare.h.asUser(users.owner);
+    await assert.rejects(autoClaim(bare.db, bare.a.companyId, nipB), code('42501'), 'no secret means no signature can pass');
+    await bare.h.asAdmin();
+    assert.equal((await call(bare.db, 'select count(*)::int n from private.sc19_balances'))[0].n, 0);
+  });
 });
 
 test('the operator path still works and is still the fallback', async t => {
@@ -1516,7 +1525,9 @@ test('the manual-review count holds only companies that asked and are still wait
 
 test('the erasure inventory still matches after the new tables', async t => {
   const env = await bootMigrationDatabase(t);
-  await setupRankingDatabase(env.db, { throughMigration: null });
+  // This historical contract compares the exact R11 output. The normal ready()
+  // fixture and current competency migration suite still replay the full chain.
+  await setupRankingDatabase(env.db, { throughMigration: '20261103090100_sc_erasure_inventory_r11.sql' });
   // R11 must cover the four new tables, or every erasure preview fails closed.
   await assertCurrentInventory(env.db);
   await env.db.query('reset role');
@@ -1642,7 +1653,7 @@ const forward = name => readFileSync(new URL(`../supabase/migrations/${name}`, i
 
 test('both rollbacks run in order, restore the reviewed R10 state and re-apply', async t => {
   const env = await bootMigrationDatabase(t);
-  await setupRankingDatabase(env.db, { throughMigration: null });
+  await setupRankingDatabase(env.db, { throughMigration: '20261103090100_sc_erasure_inventory_r11.sql' });
   const { db } = env;
   await db.query('reset role');
 
@@ -1673,7 +1684,7 @@ test('both rollbacks run in order, restore the reviewed R10 state and re-apply',
 
 test('the forward pair refuses to run twice and refuses a wrong order', async t => {
   const env = await bootMigrationDatabase(t);
-  await setupRankingDatabase(env.db, { throughMigration: null });
+  await setupRankingDatabase(env.db, { throughMigration: '20261103090100_sc_erasure_inventory_r11.sql' });
   const { db } = env;
   await db.query('reset role');
   await assert.rejects(db.query(forward('20261103090000_sc19_auto_trial_marketing_consent.sql')),

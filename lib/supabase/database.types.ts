@@ -408,6 +408,13 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      list_competency_test_access: { Args:{target:string}; Returns:Json };
+      create_competency_test_grant: { Args:{target_application:string;target_definition:string;start_by:string;request_key:string}; Returns:Json };
+      rotate_competency_test_grant: { Args:{target:string;expected_revision:number;request_key:string}; Returns:Json };
+      revoke_competency_test_grant: { Args:{target:string;request_key:string}; Returns:Json };
+      save_competency_test_review: { Args:{target:string;expected_version:number;observations:Json}; Returns:string };
+      list_competency_test_attempts: { Args: { target:string }; Returns:Json };
+      read_competency_test_response: { Args: { target:string }; Returns:Json };
       // SC-BULK-001 bulk CV intake (jsonb results are validated in lib/cv-bulk-runner.ts).
       cv_bulk_create_batch: { Args: { target_recruitment: string; request_key: string; files: Json }; Returns: Json };
       cv_bulk_register_item: { Args: { target_item: string; extracted: Json }; Returns: Json };
