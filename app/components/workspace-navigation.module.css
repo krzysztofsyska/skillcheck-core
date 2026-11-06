@@ -1,0 +1,29 @@
+.header {
+  background: #fff;
+  border-bottom: 1px solid #e5e9f0;
+}
+
+.navigation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px 20px;
+}
+
+.navigation a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.brand {
+  margin-right: auto;
+  font-weight: 700;
+}
+
+@media print {
+  .header { display: none; }
+}

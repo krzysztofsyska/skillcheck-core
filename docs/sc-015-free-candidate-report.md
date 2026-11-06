@@ -125,6 +125,16 @@ Werdykt odesłany do powtórzenia nie jest potwierdzeniem: taki wynik zostaje w 
 `completed` ze `stale_at` pustym, więc bez odczytu `screening_result_reviews` raport
 pokazywałby „Potwierdzone w CV" dla analizy, którą człowiek już odrzucił.
 
+Zatwierdzenie całej analizy obowiązuje tylko dla zgodnej rewizji:
+`screening_result_reviews.review_version` musi równać się
+`screening_analysis_versions.latest_review_version`. Korekta wiersza macierzy podbija
+rewizję analizy, pozostawiając poprzedni przegląd w historii. Do ponownego zatwierdzenia
+raport pokazuje „Wynik nieaktualny”, jak porównanie dla `review_inconsistent`, i nie
+liczy wymagań jako potwierdzonych. Gdy nigdy nie było przeglądu i rewizja wynosi zero,
+pozostaje „Oczekuje na sprawdzenie przez człowieka”. Odczyt analizy jest ponawiany po
+wczytaniu macierzy i przeglądu; zmiana w międzyczasie przerywa renderowanie i prosi o
+odświeżenie, zamiast łączyć wiersze z zatwierdzeniem innej wersji.
+
 **Co publikuje cytat.** Rozstrzyga `statusPublishesEvidence` w `lib/requirement-status.ts` —
 jedna funkcja dla obu widoków, żeby to samo wymaganie u tego samego kandydata nie miało raz
 cytatu, a raz nie. Publikują cztery werdykty oraz `outdated` i `awaiting_review`: zamknięta

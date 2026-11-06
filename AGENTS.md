@@ -10,9 +10,9 @@ Do not require the owner to copy handoffs between agents.
 
 ## Roles
 
-Owner decision 2026-10-31: Cursor and Codex are retired; Claude holds both the orchestrator and builder roles. See `CLAUDE.md`.
+Owner decision 2026-11-05: Codex coordinates and implements programming work across the entire SkillCheck project. See `CLAUDE.md`.
 
-- **Claude / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
+- **Codex / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
 - **Independent REVIEWER** — a separate agent session with fresh context that did not write the change; reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
 - **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.

@@ -23,7 +23,7 @@ const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
 async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false,
-  checkoutAvailable = true, offersResponse } = {}) {
+  checkoutAvailable = true, offersResponse, sandbox = false, search = '', statusOnly = false } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
@@ -45,7 +45,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
     },
   };
   const context = {
-    exports: {}, Intl, Date:clientNow===undefined?Date:class extends Date {static now(){return clientNow;}}, AbortController,
+    exports: {}, Intl, URLSearchParams, Date:clientNow===undefined?Date:class extends Date {static now(){return clientNow;}}, AbortController,
     // Node resolves a TypeScript source only with its extension; Next adds it.
     require(name) { return name === 'react' ? react : require(name.startsWith('.') ? name + '.ts' : name); },
     crypto: { randomUUID() { return `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`; } },
@@ -54,7 +54,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
       setItem: (key, value) => {if(storageUnavailable)throw Error('blocked');storage.set(key, value);},
       removeItem: key => {if(storageUnavailable)throw Error('blocked');storage.delete(key);},
     },
-    window: { location: { assign: url => redirects.push(url) } },
+    window: { location: { search, assign: url => redirects.push(url) } },
     async fetch(url, options) {
       if (url.startsWith('/api/billing/offers?')) {
         offerReads++;
@@ -68,7 +68,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
       }
       if (url.startsWith('/api/billing/orders/')) {
         statusReads.push(url);
-        return order(url);
+        return order(url,options);
       }
       throw Error(`Unexpected request: ${url}`);
     },
@@ -76,7 +76,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   runInNewContext(compiled, context);
   function render() {
     cursor = 0;
-    tree = context.exports.default({ companyId });
+    tree = context.exports.default({ companyId, sandbox, statusOnly });
     for (const effect of effects.splice(0)) effect();
     return tree;
   }
@@ -310,4 +310,27 @@ test('net and VAT sent by the server are displayed instead of being recomputed i
  t.after(h.close);
  const rows=JSON.stringify(h.find('table'));
  for(const expected of ['243,90','56,10','300,00'])assert.ok(rows.includes(expected),`missing ${expected}`);
+});
+
+test('return from the sandbox requests the authenticated order status and cannot claim success from the URL', async t => {
+  const id = '00000000-0000-4000-8000-000000000003';
+  let method;
+  const h = await harness({ sandbox:true, search:`?p24=${id}&success=true`, order:async (url,options) => {
+    assert.ok(url.includes(id)); method=options.method; return ok({status:'awaiting_payment'});
+  } });
+  t.after(h.close);
+  assert.equal(method,'POST');
+  assert.equal(h.statusReads.length,1);
+  assert.equal(h.find('button','Kup kolejny'),undefined);
+});
+
+test('flag-off sandbox return reads the pending order without loading offers or selling a new package', async t => {
+  const id = '00000000-0000-4000-8000-000000000003';
+  const h = await harness({ sandbox:true, statusOnly:true, search:`?p24=${id}`,
+    offersResponse:()=>assert.fail('status-only must not load offers'), order:async()=>ok({status:'paid',credits:60}) });
+  t.after(h.close);
+  assert.equal(h.statusReads.length,1);
+  assert.equal(h.find('button','Zamawiam'),undefined);
+  assert.equal(h.find('button','Kup kolejny'),undefined);
+  assert.ok(h.find('button','Sprawdź status'));
 });

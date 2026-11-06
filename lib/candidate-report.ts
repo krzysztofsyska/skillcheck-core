@@ -73,10 +73,11 @@ export async function loadCandidateReport(
   let fingerprint: string | undefined;
   try { fingerprint = prepareScreening(context).fingerprint; } catch { fingerprint = undefined; }
 
-  const latest = await client.from('screening_analysis_versions')
-    .select('id,company_id,application_id,recruitment_id,analysis_version,execution_status,input_fingerprint,stale_at,candidate_document_version')
+  const readLatestAnalysis = () => client.from('screening_analysis_versions')
+    .select('id,company_id,application_id,recruitment_id,analysis_version,execution_status,input_fingerprint,stale_at,candidate_document_version,latest_review_version')
     .eq('company_id', companyId).eq('application_id', applicationId).eq('recruitment_id', recruitmentId)
     .order('analysis_version', { ascending: false }).limit(1).maybeSingle();
+  const latest = await readLatestAnalysis();
   if (latest.error) throw new CandidateReportError('Nie udało się wczytać analizy.');
   const analysis = latest.data;
   // Wynik z innej firmy, innej rekrutacji albo innego zgłoszenia przerywa raport,
@@ -107,7 +108,7 @@ export async function loadCandidateReport(
       .order('review_version', { ascending: false }).limit(1)
     : { data: [], error: null };
   if (reviewRows.error) throw new CandidateReportError('Nie udało się wczytać historii sprawdzenia.');
-  const latestReview = (reviewRows.data ?? [])[0] as { analysis_id?: string; disposition?: string } | undefined;
+  const latestReview = (reviewRows.data ?? [])[0] as { analysis_id?: string; review_version?: number; disposition?: string } | undefined;
   if (analysis && latestReview?.analysis_id && latestReview.analysis_id !== analysis.id) {
     throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
   }
@@ -115,15 +116,27 @@ export async function loadCandidateReport(
   // Sprawdzenie jest dwustopniowe: najpierw wiersze macierzy, potem cała analiza.
   // Dopóki drugiego stopnia nie ma, raport nie nazywa niczego potwierdzonym — tak
   // samo jak porównanie, które dla takiej analizy pokazuje „oczekuje na sprawdzenie".
-  const awaitingReview = !latestReview;
+  // Korekta macierzy podbija rewizję analizy bez usuwania starego przeglądu.
+  // Historyczna akceptacja nie zatwierdza nowych wierszy; jak w rankingu,
+  // niezgodne rewizje oznaczają review_inconsistent / wynik nieaktualny.
+  const reviewInconsistent = !!analysis && (latestReview?.review_version ?? 0) !== analysis.latest_review_version;
+  const awaitingReview = !latestReview || reviewInconsistent
+    || !['approved', 'approved_with_changes'].includes(latestReview.disposition ?? '');
 
   const flags = await loadRequirementFlags(client, companyId, context.position.id);
+  // Odczyty przez Data API nie są jedną transakcją. Zmiana wiersza pomiędzy
+  // odczytem analizy a macierzy unieważnia ich wspólny obraz także wtedy, gdy
+  // oba historyczne numery przeglądu początkowo się zgadzały.
+  const rechecked = await readLatestAnalysis();
+  if (rechecked.error || JSON.stringify(rechecked.data) !== JSON.stringify(analysis)) {
+    throw new CandidateReportError('Wynik lub przegląd zmienił się podczas odczytu. Odśwież raport.');
+  }
   const requirements = positionRequirements(context.position);
   const marks = resolveRequirementMarks(requirements, flags);
   const byCriterion = new Map(rows.map(row => [row.criterion_id, row]));
   const stale = !!analysis && screeningStatus(analysis, fingerprint) === 'stale';
   const analysisState: AnalysisState = analysis
-    ? { execution_status: analysis.execution_status, outdated: stale || reanalysisRequested, awaitingReview }
+    ? { execution_status: analysis.execution_status, outdated: stale || reanalysisRequested || reviewInconsistent, awaitingReview }
     : null;
   const built = sortByRequirementMark(requirements, marks).map(requirement =>
     buildCandidateRequirement(requirement, marks.get(requirement.id) ?? 'unmarked', analysisState,

@@ -1,3 +1,4 @@
+import { przelewy24NotificationSignature } from './sc19-przelewy24-provider.ts';
 import type { CheckoutOffer } from './sc19-payment-postgres.ts';
 import type { OfferCatalog } from './sc19-offer-catalog.ts';
 import { SC19_VAT_BASIS_POINTS, sc19OfferAmounts } from './sc19-offer-amounts.ts';
@@ -9,7 +10,7 @@ export type PaymentHttpRuntime = Readonly<{
   readOrder(companyId: string,userId: string,orderId: string): Promise<PaymentOrder | null>;
   listOffers(companyId: string,userId: string): Promise<CheckoutOffer[]>;
   appOrigin: string;
-  signatureHeader: string;
+  signatureHeader: string | null;
 }>;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{
@@ -107,8 +108,18 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
       try {
         const uid=await identify(runtime); const companyId=new URL(request.url).searchParams.get('companyId') ?? '';
         if(!uuid.test(companyId)||!uuid.test(orderId))throw new Sc19PaymentError('SC19_PAYMENT_INVALID');
-        const o=await runtime.readOrder(companyId,uid,orderId);
+        let o=await runtime.readOrder(companyId,uid,orderId);
         if(!o)return json({error:'SC19_PAYMENT_ORDER_MISSING'},404);
+        if (request.method === 'POST') {
+          if (request.headers.get('origin') !== runtime.appOrigin ||
+              ['cross-site','none'].includes(request.headers.get('sec-fetch-site') ?? ''))
+            throw new Sc19PaymentError('SC19_PAYMENT_ORIGIN');
+          if (o.status === 'awaiting_payment' && o.sessionId) {
+            await runtime.service.refreshSettlement(o);
+            o = await runtime.readOrder(companyId,uid,orderId);
+            if (!o) return json({error:'SC19_PAYMENT_ORDER_MISSING'},404);
+          }
+        }
         // No payment IDs, merchant, buyer, NIP, or hosted-session URL in status reads.
         return json({orderId:o.id,status:o.status,amountMinor:o.amountMinor,currency:o.currency,
           credits:o.credits,offerId:o.offerId,termsRevision:o.termsRevision});
@@ -118,8 +129,10 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
       // Deliberately independent of the new-checkout gate; orders must drain.
       if(!runtime)return paymentsUnavailable();
       try {
-        const signature=request.headers.get(runtime.signatureHeader) ?? '';
-        const result=await runtime.service.notification(await bodyBytes(request,262144),signature);
+        const raw = await bodyBytes(request,262144);
+        const signature = runtime.signatureHeader === null ? przelewy24NotificationSignature(raw) :
+          request.headers.get(runtime.signatureHeader) ?? '';
+        const result=await runtime.service.notification(raw,signature);
         return json({state:result.state});
       } catch(e) { return errorResponse(e,true); }
     },

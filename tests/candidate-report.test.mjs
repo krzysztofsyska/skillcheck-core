@@ -171,11 +171,11 @@ test('wiersz analizy z innym tekstem nie dokleja się do nowego wymagania', () =
 
 // Podwójny klient w kształcie PostgREST: filtry, sortowanie i limity działają,
 // więc test przechodzi tą samą drogą co produkcja, zamiast składać wynik ręcznie.
-function loaderClient(data) {
+function loaderClient(data, afterRead = () => {}) {
   function query(table) {
-    const q = { eqs: [], order: null, limit: Infinity, single: false };
+    const q = { eqs: [], order: null, limit: Infinity, single: false, columns: '*' };
     return {
-      select() { return this; },
+      select(columns = '*') { q.columns = columns; return this; },
       eq(key, value) { q.eqs.push([key, value]); return this; },
       order(key, options) { q.order = [key, options?.ascending === false]; return this; },
       limit(value) { q.limit = value; return this; },
@@ -193,7 +193,11 @@ function loaderClient(data) {
             if (descending) rows.reverse();
           }
           rows = rows.slice(0, q.limit);
-          return { data: q.single ? rows[0] ?? null : structuredClone(rows), error: null };
+          if (q.columns !== '*') rows = rows.map(row => Object.fromEntries(
+            q.columns.split(',').map(key => [key, row[key]])));
+          const result = { data: structuredClone(q.single ? rows[0] ?? null : rows), error: null };
+          afterRead(table);
+          return result;
         }).then(resolve, reject);
       },
     };
@@ -217,7 +221,8 @@ const loaderData = ({ competencyText = 'Prawo jazdy kategorii B', snapshot = 'Pr
     redacted_text: 'Dostarczanie przesyłek, terminowość dostaw, prawo jazdy kategorii B.' }],
   screening_analysis_versions: [{ id: id(8), company_id: route.companyId, application_id: route.applicationId,
     recruitment_id: route.recruitmentId, analysis_version: 1, execution_status: 'completed',
-    input_fingerprint: 'fp', stale_at: null, candidate_document_version: 1 }],
+    input_fingerprint: 'fp', stale_at: null, candidate_document_version: 1,
+    latest_review_version: disposition ? 1 : 0 }],
   screening_criterion_results: [{ analysis_id: id(8), company_id: route.companyId, criterion_id: 'competency:1',
     criterion_text_snapshot: snapshot, verdict,
     evidence: [{ start: 0, end: 23, quote: 'prawo jazdy kategorii B' }],
@@ -274,6 +279,7 @@ test('loadCandidateReport: analiza odesłana do powtórzenia nie uchodzi za potw
 
   // Liczy się najnowszy przegląd, nie pierwszy ani ostatni wstawiony.
   const many = loaderData({ disposition: 'approved' });
+  many.screening_analysis_versions[0].latest_review_version = 10;
   many.screening_result_reviews = [
     { analysis_id: id(8), company_id: route.companyId, review_version: 10, disposition: 'needs_reanalysis' },
     { analysis_id: id(8), company_id: route.companyId, review_version: 2, disposition: 'approved' },
@@ -283,6 +289,7 @@ test('loadCandidateReport: analiza odesłana do powtórzenia nie uchodzi za potw
   assert.equal((await loadCandidateReport(loaderClient(many), route)).reanalysisRequested, true);
   // Odwrotnie: najnowszy przegląd zatwierdza mimo starszego żądania powtórki.
   const settled = loaderData();
+  settled.screening_analysis_versions[0].latest_review_version = 10;
   settled.screening_result_reviews = [
     { analysis_id: id(8), company_id: route.companyId, review_version: 2, disposition: 'needs_reanalysis' },
     { analysis_id: id(8), company_id: route.companyId, review_version: 10, disposition: 'approved' },
@@ -304,6 +311,49 @@ test('loadCandidateReport: niezatwierdzona analiza nie daje potwierdzeń, tak ja
   // Oba widoki nazywają ten sam przypadek tak samo.
   assert.equal(found.status,
     comparisonStatus({ ranking: { eligibility_reason: 'no_human_review' }, criteria: [] }, undefined));
+});
+
+test('loadCandidateReport: poprawka macierzy unieważnia historyczne zatwierdzenie, ponowny review je przywraca', async () => {
+  const { loadCandidateReport } = await import('../lib/candidate-report.ts');
+  const data = loaderData();
+  // Ta sama analiza i materiał; zmienia się tylko wiersz macierzy. RPC podbija
+  // rewizję analizy, zachowując poprzedni przegląd w historii.
+  data.screening_analysis_versions[0].latest_review_version = 2;
+  data.screening_criterion_results[0].human_status = 'edited';
+  data.screening_criterion_results[0].human_verdict = 'supported';
+  data.screening_criterion_results[0].human_evidence = [{ start: 0, end: 7, quote: 'korekta' }];
+  const report = await loadCandidateReport(loaderClient(data), route);
+  const found = report.requirements.find(r => r.id === 'competency:1');
+  assert.equal(found.status,
+    comparisonStatus({ ranking: { eligibility_reason: 'review_inconsistent' }, criteria: [] }, undefined));
+  assert.equal(report.summary.requiredSupported, 0);
+  assert.equal(report.summary.requiredPending, 1);
+  assert.equal(found.corrected, true);
+  assert.equal(found.quotes[0].quote, 'korekta');
+
+  // Nowy przegląd całej macierzy jest osobną rewizją, zgodną z wersją analizy.
+  data.screening_analysis_versions[0].latest_review_version = 3;
+  data.screening_result_reviews.push({ analysis_id: id(8), company_id: route.companyId,
+    review_version: 3, disposition: 'approved' });
+  const approved = await loadCandidateReport(loaderClient(data), route);
+  assert.equal(approved.requirements.find(r => r.id === 'competency:1').status, 'supported');
+  assert.equal(approved.summary.requiredSupported, 1);
+});
+
+test('loadCandidateReport: zmiana macierzy między odczytami nie publikuje mieszanego raportu', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  for (const changeAfter of ['screening_analysis_versions', 'screening_criterion_results']) {
+    const data = loaderData();
+    let changed = false;
+    const client = loaderClient(data, table => {
+      if (table === changeAfter && !changed) {
+        changed = true;
+        data.screening_analysis_versions[0].latest_review_version++;
+        data.screening_criterion_results[0].human_status = 'rejected';
+      }
+    });
+    await assert.rejects(() => loadCandidateReport(client, route), CandidateReportError);
+  }
 });
 
 test('loadCandidateReport: nieaktualny materiał nie wymazuje cytatów rekruterowi', async () => {
