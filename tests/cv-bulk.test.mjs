@@ -291,7 +291,8 @@ test('session pump: AI disabled sends no contract; notification outcome is repor
 test('session bulk pump fails closed on a malformed successful RPC response', async () => {
   const batchId = '55555555-5555-4555-8555-555555555555';
   for (const malformed of [null, [], {}, { dispatch: [] }, { dispatch: 'not an array', notify: null },
-    { dispatch: [], notify: { batch_id: 'invalid' } }, { dispatch: [], notify: [] }]) {
+    { dispatch: [], notify: { batch_id: 'invalid' } }, { dispatch: [], notify: [] },
+    { dispatch: [], notify: null, error: '23505' }]) {
     let dispatches = 0;
     const calls = [];
     const rpc = async (fn, args) => {
@@ -586,7 +587,8 @@ test('signed scheduler rejects each malformed claimed batch while delivering the
     recruitment_name: 'Syntetyczna', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
   const good = { dispatch: [attemptId], notify };
   const malformed = [null, [], {}, { dispatch: [] }, { dispatch: 'not an array', notify: null },
-    { dispatch: [], notify: { batch_id: 'invalid' } }, { dispatch: [], notify: [] }];
+    { dispatch: [], notify: { batch_id: 'invalid' } }, { dispatch: [], notify: [] },
+    { dispatch: [], notify: null, error: '23505' }];
   for (const bad of malformed) {
     const dispatched = [], acknowledged = [];
     const rpc = async (fn, args) => {
