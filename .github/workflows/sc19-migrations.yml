@@ -14,6 +14,9 @@ on:
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/sc-c6-compose.mjs'
+      - 'db/components/exercise-ai-proposals.sql'
+      - 'tests/exercise-ai-*.test.mjs'
       - 'scripts/preview-migration-stream.mjs'
       - 'tests/preview-db-migrate-workflow.test.mjs'
       - '.github/workflows/preview-db-migrate.yml'
@@ -56,6 +59,9 @@ on:
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/sc-c6-compose.mjs'
+      - 'db/components/exercise-ai-proposals.sql'
+      - 'tests/exercise-ai-*.test.mjs'
       - 'scripts/preview-migration-stream.mjs'
       - 'tests/preview-db-migrate-workflow.test.mjs'
       - '.github/workflows/preview-db-migrate.yml'
@@ -145,6 +151,7 @@ jobs:
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_restore" --version
       - run: node scripts/sc-wer-c1-compose.mjs --check
       - run: node scripts/sc-ac-compose.mjs --check
+      - run: node scripts/sc-c6-compose.mjs --check
       - name: Real migration, concurrency, ACL, purge and native restore
         run: |
           set +e
@@ -153,6 +160,7 @@ jobs:
             tests/sc-019-migrations-mvp-e2e.test.mjs tests/preview-db-migrate-workflow.test.mjs \
             tests/competency-active-migration.test.mjs tests/competency-active-concurrency.test.mjs tests/competency-active-limiter.test.mjs tests/competency-active-staff.test.mjs \
             tests/assessment-center-active-database.test.mjs tests/assessment-center-active-concurrency.test.mjs \
+            tests/exercise-ai-inventory.test.mjs tests/exercise-ai-concurrency.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/cv-bulk-database.test.mjs tests/sc-step3-evidence-worker.test.mjs \
             tests/sc-019-operator-fulfillment.test.mjs tests/sc19-auto-trial-database.test.mjs \

@@ -13,7 +13,7 @@ export const c1Sql = () => readFile(new URL(`../../supabase/migrations/${c1Migra
 
 // Native PG16/17 is mandatory in CI. An explicit local PGlite 17 path is only
 // a fast development runner; it never substitutes the native concurrency gate.
-export async function activeBoot(t, { install = true,fullChain=false } = {}) {
+export async function activeBoot(t, { install = true,fullChain=false,throughMigration } = {}) {
  let env;
  if (process.env.SC_WER_PGLITE_PATH) {
   const root = pathToFileURL(process.env.SC_WER_PGLITE_PATH + '/');
@@ -31,7 +31,7 @@ export async function activeBoot(t, { install = true,fullChain=false } = {}) {
   const original=db[method].bind(db);
   db[method]=async(...args)=>{try{return await original(...args);}catch(error){delete error.query;delete error.params;throw error;}};
  }
- const h = await setupRankingDatabase(db,{throughMigration:install?(fullChain?null:c1Migration):'20261104120000_position_requirement_flags.sql'});
+ const h = await setupRankingDatabase(db,{throughMigration:throughMigration??(install?(fullChain?null:c1Migration):'20261104120000_position_requirement_flags.sql')});
  env.h = h;
  const call = async (name,args=[],client=db) => {
   assert.match(name,/^(public|private)\.[a-z_]+$/);
