@@ -58,6 +58,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
       - name: Apply listed migrations to preview
         env:
           DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
@@ -80,7 +83,7 @@ jobs:
           select count(*) from supabase_migrations.schema_migrations where name = :'name';
           SQL
             )
-            body_sha=$(printf '%s' "$(cat "$path")" | sha256sum | cut -d' ' -f1)
+            body_sha=$(node scripts/preview-migration-stream.mjs hash "$path")
             if [ "$done_count" != "0" ]; then
               # A listed migration edited after it reached preview must never be skipped silently.
               ledger_sha=$(psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v name="$name" <<'SQL'
@@ -92,10 +95,7 @@ jobs:
               # branch can never move the ledger back from a newer resync.
               if grep -qxF "$body_sha  $file  $ledger_sha" supabase/preview-resynced.txt 2>/dev/null; then
                 # Recorded manual resync (changed objects re-created on preview): store the current text.
-                psql "$DATABASE_URL" -qAt -v ON_ERROR_STOP=1 -v name="$name" -v body="$(cat "$path")" <<'SQL'
-          update supabase_migrations.schema_migrations set statements = array[:'body']
-            where version = (select max(version) from supabase_migrations.schema_migrations where name = :'name');
-          SQL
+                node scripts/preview-migration-stream.mjs resync "$path" | psql "$DATABASE_URL" -X -qAt -v ON_ERROR_STOP=1
                 echo "resync $file (acknowledged in supabase/preview-resynced.txt)"; continue
               fi
               echo "::error::$file changed after it was applied to preview (ledger $ledger_sha, file $body_sha). Re-create the changed objects on preview, then add \"$body_sha  $file  $ledger_sha\" to supabase/preview-resynced.txt."
@@ -109,11 +109,9 @@ jobs:
             commit_line=$(grep -nE '^commit;[[:space:]]*$' "$path" | cut -d: -f1)
             last_line=$(grep -nvE '^[[:space:]]*$' "$path" | tail -1 | cut -d: -f1)
             [ -n "$commit_line" ] && [ "$commit_line" = "$last_line" ] || { echo "::error::$file must end with its only top-level commit;"; exit 1; }
-            {
-              awk -v n="$commit_line" 'NR != n' "$path"
-              echo "insert into supabase_migrations.schema_migrations(version, name, statements) values (:'ledger_version', :'ledger_name', array[:'ledger_body']);"
-              echo "commit;"
-            } | psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -v ledger_version="$version" -v ledger_name="$name" -v ledger_body="$(cat "$path")"
+            # Large SQL files travel only over stdin. Passing the ledger body with -v
+            # exceeds Linux's per-argument limit before psql can execute anything.
+            node scripts/preview-migration-stream.mjs apply "$path" | psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1
             applied=$((applied+1))
           done < supabase/preview-migrations.txt
           {
