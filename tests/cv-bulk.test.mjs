@@ -288,6 +288,26 @@ test('session pump: AI disabled sends no contract; notification outcome is repor
   assert.deepEqual(parsePump({ dispatch: 'x', notify: { batch_id: 'nope' } }), { dispatch: [], notify: null });
 });
 
+test('bulk pump dispatches a repeated attempt only once per response (session and signed scheduler)', async () => {
+  const first = '44444444-4444-4444-8444-444444444444';
+  const second = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const response = { dispatch: [first, first.toUpperCase(), 'invalid', second, first, second], notify: null };
+  assert.deepEqual(parsePump(response).dispatch, [first, second], 'valid UUIDs are unique regardless of case');
+
+  const dispatched = [];
+  const rpc = async fn => ({ data: fn === 'cv_bulk_worker_pump' ? [response] : response, error: null });
+  const deps = { rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+    aiEnabled: true, origin: () => 'https://example.test', env: {} };
+
+  await pumpBatch(deps, '55555555-5555-4555-8555-555555555555');
+  assert.deepEqual(dispatched, [first, second], 'signed-in pump invokes each attempt once');
+  dispatched.length = 0;
+
+  const count = await pumpAllSigned({ ...deps, secret: 's'.repeat(32), digest: text => createHash('sha256').update(text).digest('hex') });
+  assert.equal(count, 1);
+  assert.deepEqual(dispatched, [first, second], 'cron pump invokes each attempt once');
+});
+
 test('detectPhone: international prefixes and no gluing across lines', () => {
   assert.equal(detectPhone('Telefon: +44 7700 900123'), '+447700900123');
   assert.equal(detectPhone('tel. +49 151 12345678'), '+4915112345678');
