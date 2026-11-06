@@ -174,25 +174,33 @@ test('extraction: local OCR reads scans and photos, rejects unreadable ones', { 
 });
 
 test('PDF OCR: digitally printed header cannot hide a scanned CV body', async () => {
-  const header = 'Anna Testowa, tel. +48 500 123 456, e-mail: anna@example.com';
-  const mixed = scannedPdf(cvLines, { textOverlay: [header] });
+  const header = 'Katarzyna Wisniewska, tel. +48 500 123 456, e-mail: anna@example.com';
+  const matchingLines = cvLines.map(line => line.replace('Wiśniewska', 'Wisniewska'));
+  const mixed = scannedPdf(matchingLines, { textOverlay: [header] });
   let calls = 0;
   const scanOcr = async () => {
     calls++;
-    return { text: [header, ...cvLines].join('\n'), confidence: 94 };
+    return { text: [header, ...matchingLines].join('\n'), confidence: 94 };
   };
   const result = await extractBulkCv(mixed, 'pdf', scanOcr);
   assert.equal(calls, 1, 'OCR runs even when a sparse digital text layer is present');
   assert.equal(result.ocrUsed, true);
   assert.match(result.text, /Excel, SQL/, 'the scanned work history is included');
-  assert.match(result.text, /Anna Testowa/, 'reliable digital contact header is preserved');
+  assert.match(result.text, /Katarzyna Wisniewska/, 'consistent digital name is preserved');
   assert.match(result.text, /500 123 456/, 'the original digital phone survives imperfect OCR');
   assert.match(result.text, /anna@example.com/, 'the digital e-mail remains in the complete OCR result');
   await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: cvLines.join('\n'), confidence: 94 })),
     reason('unreadable_scan'), 'OCR omitting the reliable contact header is rejected, never merged');
-  const accented = scannedPdf(cvLines, { textOverlay: ['Anna Wisniewska, tel. +48 500 123 456'] });
-  await assert.rejects(extractBulkCv(accented, 'pdf', async () => ({ text: ['Anna Wiśniewska', ...cvLines].join('\n'), confidence: 94 })),
-    reason('unreadable_scan'), 'a different surname spelling must never be appended after the digital identity');
+  const crossedHeader = 'Anna Testowa, tel. +48 500 123 456';
+  const crossed = scannedPdf(cvLines, { textOverlay: [crossedHeader] });
+  await assert.rejects(extractBulkCv(crossed, 'pdf', async () => ({
+    text: [crossedHeader, ...cvLines].join('\n'), confidence: 94,
+  })), reason('unreadable_scan'), 'an additional name in the OCR body must be rejected even when the digital header matches');
+  const accentedHeader = 'Anna Wisniewska, tel. +48 500 123 456';
+  const accented = scannedPdf(cvLines, { textOverlay: [accentedHeader] });
+  await assert.rejects(extractBulkCv(accented, 'pdf', async () => ({
+    text: [accentedHeader, 'Anna Wiśniewska', ...cvLines].join('\n'), confidence: 94,
+  })), reason('unreadable_scan'), 'the same surname with different diacritics is not safe to redact automatically');
   await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: header, confidence: 90 })),
     reason('unreadable_scan'), 'header-only OCR is never accepted as a complete CV');
   await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: '', confidence: 0 })),
