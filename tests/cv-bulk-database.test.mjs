@@ -889,3 +889,57 @@ test('SC-BULK-001: concurrent recruiter pumps in two tenants cannot exceed the g
     gate.release();
   }
 });
+
+test('SC-BULK-001: signed scheduler pumps registered CVs before batch upload closes', async t => {
+  const env = await install(t);
+  const { db, h } = env;
+  const b = bulkHarness(env);
+  await run(db, await migration('20261106230000_cv_bulk_global_capacity_lock.sql'));
+  await run(db, await migration('20261106231000_cv_bulk_uploading_scheduler.sql'));
+  const secret = 'w'.repeat(40);
+  await h.asAdmin();
+  await db.query('update private.cv_bulk_settings set worker_secret=$1', [secret]);
+
+  const f = await b.tenant(paymentUsers.owner, 3);
+  const batch = await b.create(f, 2);
+  const [registered, stillUploading] = await b.items(batch.batch_id);
+  assert.equal((await b.register(f, registered.id)).status, 'queued');
+  const idle = await b.create(f, 1); // one file still awaiting upload; cron must not claim it.
+  await h.asAdmin();
+  assert.equal((await db.query('select status from private.cv_bulk_batches where id=$1', [batch.batch_id])).rows[0].status, 'uploading');
+
+  const signedPump = async activeContract => {
+    await h.asAdmin();
+    const payload = activeContract ? JSON.stringify(activeContract) : null;
+    const price = JSON.stringify(pricing);
+    const extra = (await db.query("select encode(extensions.digest(coalesce($1::jsonb::text,'') || '|' || coalesce($2::jsonb::text,''), 'sha256'), 'hex') d",
+      [payload, price])).rows[0].d;
+    const id = randomUUID(), stamp = Date.now();
+    const signature = createHmac('sha256', secret).update(['cv-bulk-v1', 'pump', id, String(stamp), '-', extra].join('\n')).digest('hex');
+    await h.asUser(null, 'anon');
+    const result = (await db.query('select public.cv_bulk_worker_pump($1,$2,$3,$4::jsonb,$5::jsonb) r',
+      [id, stamp, signature, payload, price])).rows[0].r;
+    await h.asAdmin();
+    return result;
+  };
+  const result = await signedPump(contract);
+  assert.equal(result.find(x => x.batch_id === idle.batch_id), undefined, 'fresh uploads with no queued files are ignored');
+  const mine = result.find(x => x.batch_id === batch.batch_id);
+  assert.equal(mine?.dispatch.length, 1, 'registered CV is dispatched without a two-hour delay');
+  let rows = await b.items(batch.batch_id);
+  assert.deepEqual(rows.map(x => [x.phase, x.slot_state]), [['analyzing', 'transferred'], ['awaiting_upload', 'held']]);
+  assert.equal((await db.query('select status from private.cv_bulk_batches where id=$1', [batch.batch_id])).rows[0].status,
+    'uploading', 'signed scheduler never closes an active upload');
+
+  // The existing abandoned-upload rule still releases a truly missing file after two hours.
+  await db.query("update private.cv_bulk_batches set created_at=now()-interval '121 minutes' where id=$1", [batch.batch_id]);
+  await signedPump(null);
+  rows = await b.items(batch.batch_id);
+  assert.deepEqual(rows.map(x => [x.phase, x.slot_state, x.error_reason]),
+    [['analyzing', 'transferred', null], ['error', 'released', 'not_uploaded']]);
+
+  await run(db, await rollback('20261106231000_cv_bulk_uploading_scheduler_down.sql'));
+  const body = (await db.query("select pg_get_functiondef('public.cv_bulk_worker_pump(uuid,bigint,text,jsonb,jsonb)'::regprocedure) s")).rows[0].s;
+  assert.match(body, /cv_bulk_global_capacity_v1/, 'rollback preserves global capacity safety');
+  assert.doesNotMatch(body, /cv_bulk_scheduler_uploading_ready_v1/, 'rollback removes only this selector change');
+});
