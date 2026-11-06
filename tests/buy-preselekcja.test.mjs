@@ -220,7 +220,8 @@ test('the approved label and the dashboard purchase path are the ones shipped', 
   // The dashboard route to the checkout screen is owned by SC-P24-VERIFY-001;
   // this task only guarantees the public one-click path still ends there.
   const billing = read('app/dashboard/[companyId]/billing/page.tsx');
-  assert.match(billing, /href=\{`\/dashboard\/\$\{companyId\}\/billing\/checkout`\}/);
+  assert.match(billing, /const checkoutHref = `\/dashboard\/\$\{companyId\}\/billing\/checkout` \+/);
+  assert.match(billing, /href=\{checkoutHref\}/);
 });
 
 test('every next consumer re-validates before redirecting', () => {
