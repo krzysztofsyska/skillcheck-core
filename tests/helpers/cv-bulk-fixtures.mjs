@@ -47,11 +47,18 @@ export function renderCv(lines, { type = 'image/png', noise = false, width = 124
 export function scannedPdf(lines, options = {}) {
   const jpeg = renderCv(lines, { ...options, type: 'image/jpeg' });
   const width = options.width ?? 1240, height = Math.max(400, 120 + lines.length * 52);
-  const content = Buffer.from(`q 612 0 0 ${Math.round(612 * height / width)} 0 0 cm /Im0 Do Q`);
-  return assemble(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>',
+  // A scan may include a digitally generated text header. The original extractor
+  // accepted that header as the whole CV and silently omitted the scanned body.
+  const overlay = options.textOverlay ?? [];
+  const layer = overlay.length ? '\nBT /F1 12 Tf 72 760 Td 16 TL\n' +
+    overlay.map(line => '(' + ascii(line).replace(/[()\\]/g, '\\$&') + ') Tj T*').join('\n') + '\nET' : '';
+  const content = Buffer.from(`q 612 0 0 ${Math.round(612 * height / width)} 0 0 cm /Im0 Do Q${layer}`);
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 4 0 R >> ${overlay.length ? '/Font << /F1 6 0 R >>' : ''} >> /Contents 5 0 R >>`,
     stream(`/Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode`, jpeg),
-    stream('', content)]);
+    stream('', content)];
+  if (overlay.length) objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  return assemble(objects);
 }
 
 const xmlEscape = s => s.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c]);
