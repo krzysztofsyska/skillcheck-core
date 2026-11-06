@@ -208,17 +208,14 @@ test('PDF OCR: tiny inline images cannot indefinitely block sparse-text extracti
   const headerLines = ['Anna Nowak', 'E-mail: anna@example.com', 'Doświadczenie zawodowe od 2017 roku w analizie SQL'];
   const pdf = textPdf(headerLines, { inlineImage: true });
   const start = Date.now();
-  // Depending on the pdf-parse implementation, inline images are either skipped
-  // or bounded inspection falls back to OCR of the complete page.
-  const result = await extractBulkCv(pdf, 'pdf', async () => ({
-    text: headerLines.join('\n') + '\n' + 'Dodatkowa treść zeskanowana. ' +
-      'Analiza wymagań, planowanie raportów i dokumentowanie wyników w pracy zespołowej. ' +
-      'Utrzymywanie procesów kontroli jakości i weryfikowanie kompletności danych.',
+  // pdf-parse may hang on the inline operand. A bounded attempt must complete,
+  // and OCR with a nonidentical digital layer must be rejected rather than merged.
+  await assert.rejects(extractBulkCv(pdf, 'pdf', async () => ({
+    text: 'Dodatkowa treść zeskanowana. Analiza wymagań, planowanie raportów i dokumentowanie wyników. ' +
+      'Weryfikowanie kompletności danych przez analityka w kolejnych latach pracy z dokumentami.',
     confidence: 94,
-  }), { deadline: Date.now() + 7000 });
-  assert.match(result.text, /Anna Nowak/);
-  assert.match(result.text, /anna@example.com/);
-  assert.ok(Date.now() - start < 7000, 'inline-image inspection respects the extraction budget');
+  }), { deadline: Date.now() + 7000 }), reason('unreadable_scan'));
+  assert.ok(Date.now() - start < 7000, 'inline-image inspection finishes within the extraction budget');
 });
 
 test('batch e-mail carries counts and a link only', async () => {
