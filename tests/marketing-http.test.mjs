@@ -90,7 +90,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   }
   assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
-  for (const href of ['/demo', '/register', '/login', '/#korzysci', '/#jak-to-dziala', '/#przyklad', '/#pakiety', '/#faq']) {
+  for (const href of ['/demo', '/register', '/login', '/dashboard', '/#korzysci', '/#jak-to-dziala', '/#przyklad', '/#pakiety', '/#faq']) {
     assert.ok(homeHrefs.includes(href), `home link ${href}`);
   }
   assert.equal(home.includes('<form'), false);
@@ -138,7 +138,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   for (const href of homeHrefs.filter((link) => link.startsWith('/') && !link.startsWith('/_next') && !link.startsWith('/legal/'))) {
     const target = href.split('#')[0] || '/';
     assert.ok(
-      ['/', '/demo', '/kalkulator', '/preselekcja', '/kup/preselekcja', '/rozmowa', '/register', '/login', '/regulamin',
+      ['/', '/demo', '/kalkulator', '/preselekcja', '/kup/preselekcja', '/rozmowa', '/register', '/login', '/dashboard', '/regulamin',
         '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
         '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
       `home CTA points at an existing path: ${href}`,
