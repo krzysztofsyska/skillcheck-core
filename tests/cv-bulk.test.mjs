@@ -528,3 +528,19 @@ test('upload route checks write access before reading the file', async () => {
   assert.ok(forbidden > 0 && forbidden < src.indexOf('request.formData()'), 'forbidden before formData');
   assert.match(src, /ocrImage, \{ deadline \}\)/);
 });
+
+
+test('bulk upload failures never log untrusted CV parser or OCR exception text', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/items/[itemId]/route.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('} catch (error) {');
+  const end = source.indexOf("const result = await client.rpc('cv_bulk_register_item'", start);
+  assert.ok(start >= 0 && end > start, 'extract failure handler must remain present');
+  const failure = source.slice(start, end);
+  // OCR/format parsers may include unredacted names, contact details or file paths in Error.name/message.
+  // A fixed operational marker is enough; no exception object or its properties reach the log.
+  const logging = [...failure.matchAll(/console\.(?:error|warn|log|info|debug)\s*\(([^;]*)\);/g)];
+  assert.deepEqual(logging.map(match => match[1].trim()), ["'cv_bulk_extract_failed'"]);
+  assert.doesNotMatch(failure, /error\.(?:name|message|stack)|String\s*\(\s*error\s*\)|JSON\.stringify\s*\(\s*error\s*\)/);
+  assert.match(failure, /error: 'extract_failed'/, 'retries remain possible on infrastructure errors');
+});
