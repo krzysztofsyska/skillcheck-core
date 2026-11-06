@@ -1,6 +1,6 @@
 import {
   BULK_EXTRACT_BUDGET_MS, BULK_MAX_FILE_BYTES, BULK_MAX_IMAGE_PIXELS, BULK_MAX_OCR_ATTEMPTS, BULK_MAX_OCR_PAGES, BULK_MAX_PDF_PAGES,
-  BULK_OCR_MAX_SIDE, BulkIntakeError, OcrTimeoutError, type BulkFileKind,
+  BULK_OCR_MAX_SIDE, BulkIntakeError, OcrTimeoutError, detectName, type BulkFileKind,
 } from './cv-bulk.ts';
 import { MAX_CV_LENGTH, readDocxBufferForBulk, validateCvText } from './cv-text.ts';
 
@@ -22,6 +22,24 @@ const PDF_IMAGE_INSPECTION_MAX_MS = 1_500;
 const MAX_RAW_TEXT = MAX_CV_LENGTH * 8;
 
 const visibleLength = (text: string) => { let n = 0; for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) > 32) n++; return n; };
+
+/** A mixed PDF containing more than one plausible identity is unsafe for automatic redaction.
+ * Only the opening lines are considered; long work-history sections can contain unrelated names.
+ * False positives fail closed and require the candidate to provide a complete text PDF/DOCX. */
+function hasConflictingHeaderNames(ocrText: string): boolean {
+  const names = new Set<string>();
+  for (const line of ocrText.split('\n').slice(0, 15)) {
+    for (const section of line.split(/[,;|]+/)) {
+      const prefix = section.split(/\b(?:tel\.?|telefon|e-?mail)\b/i)[0]?.trim() ?? '';
+      const identity = detectName(prefix);
+      if (identity) {
+        names.add(`${identity.first} ${identity.last}`.toLocaleLowerCase('pl'));
+        if (names.size > 1) return true;
+      }
+    }
+  }
+  return false;
+}
 
 // Linear clean-up only: every step is a single pass (no backtracking regex on candidate-controlled runs of spaces).
 function finish(text: string, ocrTried = false) {
@@ -180,7 +198,8 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
         // Require exact preservation of the digital layer in a full-page OCR result.
         // Joining two readings can leave an alternative spelling of a candidate's name
         // unredacted, so an inconsistent result is rejected rather than sent to AI.
-        if (mixedScan && (read === null || visibleLength(read) <= pageTextLength || !read.includes(text))) {
+        if (mixedScan && (read === null || visibleLength(read) <= pageTextLength ||
+          !read.includes(text) || hasConflictingHeaderNames(read))) {
           throw new BulkIntakeError('unreadable_scan');
         }
         if (read !== null) {
