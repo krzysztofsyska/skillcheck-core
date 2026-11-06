@@ -28,14 +28,25 @@ const notices: Record<string,string> = {
 
 export default async function CompanyBilling({ params, searchParams }: {
   params: Promise<{ companyId: string }>;
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{ status?: string; recruitmentId?: string | string[] }>;
 }) {
   const { companyId } = await params;
   const { client, company, user } = await companyAccess(companyId);
   const enabled = process.env.SC19_PACKAGES_ENABLED === 'true';
-  const { status } = await searchParams;
+  const { status, recruitmentId } = await searchParams;
+  // Only a UUID can carry the originating recruitment through the billing
+  // catalogue. Never trust caller-provided paths or cross-company redirects.
+  const sourceId = typeof recruitmentId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(recruitmentId)
+    ? recruitmentId : null;
+  const backHref = sourceId
+    ? `/dashboard/${companyId}/recruitments/${sourceId}`
+    : `/dashboard/${companyId}`;
+  const checkoutHref = `/dashboard/${companyId}/billing/checkout` +
+    (sourceId ? `?recruitmentId=${encodeURIComponent(sourceId)}` : '');
+  const backLabel = sourceId ? 'Wróć do rekrutacji' : 'Panel firmy';
   if (!enabled) return <main className="workspace"><section>
-    <Link href={`/dashboard/${companyId}`}>← Panel firmy</Link>
+    <Link href={backHref}>← {backLabel}</Link>
     <h1>Pakiety SkillCheck</h1>
     <p className="notice">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Analizy nie są jeszcze przydzielane automatycznie.</p>
   </section></main>;
@@ -46,7 +57,7 @@ export default async function CompanyBilling({ params, searchParams }: {
   const balance = data?.[0] ?? null;
   const isOwner = user.id === company.owner_id;
   return <main className="workspace"><section>
-    <Link href={`/dashboard/${companyId}`}>← Panel firmy</Link>
+    <Link href={backHref}>← {backLabel}</Link>
     <p className="eyebrow">SKILLCHECK / PAKIETY</p>
     <h1>Pakiety — {company.name}</h1>
     {status === 'manual'
@@ -77,7 +88,7 @@ export default async function CompanyBilling({ params, searchParams }: {
       <h2>PRESELEKCJA — {sc19AnalysisScope(sizes.PRESELEKCJA)}</h2>
       <p>Jednorazowy pakiet z rankingiem kandydatów i raportem. Zamówienie jest obsługiwane przez operatora — kredyty przyznajemy dopiero po potwierdzeniu wpłaty.</p>
       <p><Link className="button" href="/rozmowa">Zamów PRESELEKCJĘ</Link></p>
-      {isOwner && <p><Link href={`/dashboard/${companyId}/billing/checkout`}>Przejdź do zakupu online (Przelewy24) →</Link></p>}
+      {isOwner && <p><Link href={checkoutHref}>Przejdź do zakupu online (Przelewy24) →</Link></p>}
       <p className="notice">Brak płatności automatycznych. Oferta i warunki rozliczenia wymagają potwierdzenia przez obsługę.</p>
     </section>
   </section></main>;
