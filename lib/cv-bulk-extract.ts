@@ -13,6 +13,9 @@ const MIN_OCR_CONFIDENCE = 55;
 const MIN_TEXT_CHARS = 40;
 /** A PDF page with less text than this in its text layer is treated as a scan. */
 const MIN_PAGE_TEXT_CHARS = 20;
+/** A sparse text layer can be just a header over a scanned CV: inspect large embedded images. */
+const SPARSE_PAGE_TEXT_MAX_CHARS = 240;
+const MIN_SCAN_IMAGE_PIXELS = 350_000;
 /** Raw text this long cannot become a valid CV even after whitespace clean-up: rejected without any regex work. */
 const MAX_RAW_TEXT = MAX_CV_LENGTH * 8;
 
@@ -130,10 +133,25 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
       let text: string;
       try { text = (await parser.getText({ partial: [page], pageJoiner: '', parseHyperlinks: false })).pages[0]?.text.trim() ?? ''; }
       catch { throw new BulkIntakeError('protected_pdf'); } // damaged content stream
-      // Near-empty page: OCR it, within a hard cap on OCR runs. A page where OCR finds almost no
-      // characters (a blank or decorative page) is kept as it is; a page with text OCR cannot read
-      // reliably fails the file (ocrRead). Only the whole document must reach the minimum length.
-      if (visibleLength(text) < MIN_PAGE_TEXT_CHARS) {
+      // A short text layer can be only a digitally printed header over a rasterized CV.
+      // Check for a substantial image without extracting its bytes; decorative small images
+      // do not turn a normal text PDF into an OCR job.
+      const pageTextLength = visibleLength(text);
+      let mixedScan = false;
+      if (pageTextLength >= MIN_PAGE_TEXT_CHARS && pageTextLength < SPARSE_PAGE_TEXT_MAX_CHARS) {
+        remaining(deadline);
+        try {
+          const embedded = await parser.getImage({
+            partial: [page], imageThreshold: 300, imageBuffer: false, imageDataUrl: false,
+          });
+          mixedScan = (embedded.pages[0]?.images ?? []).some(image =>
+            image.width >= 800 && image.height >= 300 &&
+            image.width * image.height >= MIN_SCAN_IMAGE_PIXELS);
+        } catch { throw new BulkIntakeError('protected_pdf'); }
+      }
+      // Near-empty pages also need OCR. Never silently accept a header when the
+      // image containing the rest of the CV could not be read.
+      if (pageTextLength < MIN_PAGE_TEXT_CHARS || mixedScan) {
         // Out of OCR runs: the page cannot be read, so the file fails rather than losing a page silently.
         if (attempts >= BULK_MAX_OCR_ATTEMPTS) throw new BulkIntakeError('unreadable_scan');
         attempts++;
@@ -149,6 +167,11 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
         const shot = await parser.getScreenshot({ partial: [page], scale, imageBuffer: true, imageDataUrl: false });
         const data = shot.pages[0]?.data;
         const read = data?.length ? await ocrRead(ocr, Buffer.from(data), deadline) : null;
+        // OCR must recover more content than the sparse header. Otherwise the scanned
+        // body may have been omitted and analysing the remaining text would be unsafe.
+        if (mixedScan && (read === null || visibleLength(read) <= pageTextLength)) {
+          throw new BulkIntakeError('unreadable_scan');
+        }
         if (read !== null) {
           if (++ocrPages > BULK_MAX_OCR_PAGES) throw new BulkIntakeError('unreadable_scan');
           text = read;
