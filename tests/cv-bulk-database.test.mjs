@@ -791,3 +791,101 @@ test('SC-BULK-001 rollbacks restore R9, R8 and remove the bulk schema', async t 
   await assert.rejects(run(db, await migration(skipFrozen)), /cv_bulk_skip_frozen_already_installed/);
   await assert.rejects(run(db, await migration(erasureGuards)), /cv_bulk_erasure_guards_already_installed/);
 });
+
+
+test('SC-BULK-001: both authenticated and signed bulk pumps serialize global slots; rollback restores wrappers', async t => {
+  const { db, h } = await install(t);
+  await run(db, await migration('20261106230000_cv_bulk_global_capacity_lock.sql'));
+  await h.asAdmin();
+  const names = ['cv_bulk_pump(uuid,jsonb,jsonb)', 'cv_bulk_worker_pump(uuid,bigint,text,jsonb,jsonb)'];
+  for (const name of names) {
+    const fn = (await db.query("select pg_get_functiondef(('public.' || $1)::regprocedure) as body", [name])).rows[0].body;
+    const globalLock = fn.indexOf("pg_advisory_xact_lock(hashtextextended('cv_bulk_global_capacity_v1'");
+    const companyLock = fn.includes('private.sc19_lock_company')
+      ? fn.indexOf('private.sc19_lock_company') : fn.indexOf('from public.companies where id = target.company_id for update');
+    assert.ok(globalLock >= 0, name + ' uses global capacity lock');
+    assert.ok(companyLock > globalLock, name + ' takes global lock before company lock');
+    assert.match(fn, /if contract is not null then perform pg_advisory_xact_lock/,
+      name + ' does not block inactive AI sessions');
+  }
+  await run(db, await rollback('20261106230000_cv_bulk_global_capacity_lock_down.sql'));
+  await h.asAdmin();
+  for (const name of names) {
+    const fn = (await db.query("select pg_get_functiondef(('public.' || $1)::regprocedure) as body", [name])).rows[0].body;
+    assert.doesNotMatch(fn, /cv_bulk_global_capacity_v1/, name + ' rollback removes global lock');
+  }
+});
+test('SC-BULK-001: concurrent recruiter pumps in two tenants cannot exceed the global capacity', async t => {
+  const env = await install(t);
+  const { db, h } = env;
+  await run(db, await migration('20261106230000_cv_bulk_global_capacity_lock.sql'));
+  await h.asAdmin();
+  await db.query('update private.cv_bulk_settings set max_parallel_global=1, max_parallel_company=2, pricing=$1::jsonb',
+    [JSON.stringify(pricing)]);
+  const b = bulkHarness(env);
+  const batches = [];
+  for (let i = 0; i < 2; i++) {
+    const tenant = await b.tenant(paymentUsers.owner, 1);
+    const batch = await b.create(tenant, 1);
+    const [item] = await b.items(batch.batch_id);
+    assert.equal((await b.register(tenant, item.id)).status, 'queued');
+    batches.push({ tenant, batch });
+  }
+
+  await h.asAdmin();
+  const pool = env.pool();
+  const gate = await pool.connect();
+  const pumps = await Promise.all([pool.connect(), pool.connect()]);
+  let inFlight = [];
+  try {
+    // Hold the same lock outside both tenants to force overlapping pump calls.
+    // Once both are waiting, releasing it must allow at most one new analysis.
+    await gate.query('begin');
+    await gate.query("select pg_advisory_xact_lock(hashtextextended('cv_bulk_global_capacity_v1', 0))");
+    const gatePid = (await gate.query('select pg_backend_pid() pid')).rows[0].pid;
+    const pids = [];
+    for (let i = 0; i < pumps.length; i++) {
+      await pumps[i].query('begin');
+      await pumps[i].query('set local role authenticated');
+      await pumps[i].query("select set_config('request.jwt.claim.sub',$1,true)", [batches[i].tenant.owner]);
+      await pumps[i].query("set local statement_timeout='20s'");
+      pids.push((await pumps[i].query('select pg_backend_pid() pid')).rows[0].pid);
+    }
+    inFlight = pumps.map(async (client, i) => {
+      try {
+        const result = (await client.query('select public.cv_bulk_pump($1,$2::jsonb,$3::jsonb) r',
+          [batches[i].batch.batch_id, JSON.stringify(contract), JSON.stringify(pricing)])).rows[0].r;
+        // Each transaction must commit separately to release the advisory xact lock.
+        await client.query('commit');
+        return result;
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      }
+    });
+    let blocked = false;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const waiters = await db.query(
+        'select pid from pg_stat_activity where pid=any($1::integer[]) and $2::integer = any(pg_blocking_pids(pid))',
+        [pids, gatePid]);
+      if (waiters.rows.length === 2) { blocked = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    assert.equal(blocked, true, 'both tenant pumps must block on the same global advisory lock');
+    await gate.query('commit');
+    const result = await Promise.all(inFlight);
+    assert.equal(result.reduce((n, r) => n + r.dispatch.length, 0), 1, 'only one global analysis slot');
+    const counted = (await db.query("select count(*)::int n from private.cv_bulk_items where phase='analyzing'")).rows[0].n;
+    assert.equal(counted, 1, 'the second tenant did not exceed the global slot count');
+  } finally {
+    // A failed assertion must never leave blocked connections or an open transaction.
+    await gate.query('rollback').catch(() => {});
+    await Promise.allSettled(inFlight);
+    await Promise.all(pumps.map(async client => {
+      await client.query('rollback').catch(() => {});
+      client.release();
+    }));
+    gate.release();
+  }
+});
