@@ -16,6 +16,8 @@ const MIN_PAGE_TEXT_CHARS = 20;
 /** A sparse text layer can be just a header over a scanned CV: inspect large embedded images. */
 const SPARSE_PAGE_TEXT_MAX_CHARS = 240;
 const MIN_SCAN_IMAGE_PIXELS = 350_000;
+/** pdf-parse 2.4.5 can indefinitely await inline-image operands in getImage(). */
+const PDF_IMAGE_INSPECTION_MAX_MS = 1_500;
 /** Raw text this long cannot become a valid CV even after whitespace clean-up: rejected without any regex work. */
 const MAX_RAW_TEXT = MAX_CV_LENGTH * 8;
 
@@ -139,15 +141,23 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
       const pageTextLength = visibleLength(text);
       let mixedScan = false;
       if (pageTextLength >= MIN_PAGE_TEXT_CHARS && pageTextLength < SPARSE_PAGE_TEXT_MAX_CHARS) {
-        remaining(deadline);
+        // pdf-parse 2.4.5 resolves inline-image objects as names; for inline images
+        // the lookup can remain pending forever. Time-bound inspection and, on timeout,
+        // force OCR of the full page instead of accepting a potentially incomplete header.
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-          const embedded = await parser.getImage({
+          const imageCheck = parser.getImage({
             partial: [page], imageThreshold: 300, imageBuffer: false, imageDataUrl: false,
           });
-          mixedScan = (embedded.pages[0]?.images ?? []).some(image =>
+          const timeout = new Promise<null>(resolve => {
+            timer = setTimeout(() => resolve(null), Math.min(remaining(deadline), PDF_IMAGE_INSPECTION_MAX_MS));
+          });
+          const embedded = await Promise.race([imageCheck, timeout]);
+          mixedScan = embedded === null || (embedded.pages[0]?.images ?? []).some(image =>
             image.width >= 800 && image.height >= 300 &&
             image.width * image.height >= MIN_SCAN_IMAGE_PIXELS);
         } catch { throw new BulkIntakeError('protected_pdf'); }
+        finally { if (timer !== undefined) clearTimeout(timer); }
       }
       // Near-empty pages also need OCR. Never silently accept a header when the
       // image containing the rest of the CV could not be read.
@@ -174,7 +184,9 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
         }
         if (read !== null) {
           if (++ocrPages > BULK_MAX_OCR_PAGES) throw new BulkIntakeError('unreadable_scan');
-          text = read;
+          // Text layers can contain reliable contact details which OCR may miss.
+          // Preserve them even when OCR recovers more of the scanned page.
+          text = mixedScan && !read.includes(text) ? `${text}\n${read}` : read;
           ocrUsed = true;
         }
       }
