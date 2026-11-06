@@ -6,7 +6,7 @@ import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-pr
 
 const mobileLinks = [
   ...sectionLinks,
-  { href: "/login", label: "Zaloguj się" },
+  { href: "/dashboard", label: "Moje konto" },
   { href: "/kalkulator", label: "Sprawdź koszt rekrutacji" },
   { href: BUY_PRESELEKCJA_PATH, label: BUY_PRESELEKCJA_LABEL, variant: "primary" as const },
   { href: "/preselekcja", label: "Poznaj szczegóły oferty" },
@@ -26,7 +26,7 @@ export function SiteHeader() {
                 {link.label}
               </Link>
             ))}
-            <Link href="/login" className={styles.loginLink}>Zaloguj się</Link>
+            <Link href="/dashboard" className={styles.loginLink}>Moje konto</Link>
             <Link href="/kalkulator" className={styles.navLink}>Sprawdź koszt rekrutacji</Link>
             <Link href="/preselekcja" className={styles.navLink}>Poznaj szczegóły oferty</Link>
             <Link href="/preselekcja#free" className={styles.navLink}>Wypróbuj FREE — 0 zł</Link>

@@ -15,7 +15,6 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
     '20261002000100_behavior_assessments','20261002000200_behavior_conflict_response','20261002000300_exercise_definitions','20261004000100_exercise_observations'])
     await db.exec(await readFile(new URL('../supabase/migrations/'+name+'.sql',import.meta.url),'utf8'));
   const [ownerA,ownerB,recruiter,viewer]=[1,2,3,4].map(n=>'00000000-0000-0000-0000-00000000000'+n);
-  await db.exec(await readFile(new URL('../db/isolated/sc-ac-paired-sheets.sql',import.meta.url),'utf8'));
   for(const id of [ownerA,ownerB,recruiter,viewer]) await db.query('insert into auth.users values($1)',[id]);
   const as=async(id,role='authenticated')=>{await db.exec('reset role;set role '+role);await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id??'']);};
   const definition={kind:'competency_test',title:'TEST',instructions:'Zadanie',expectedOutput:'Praca',durationMinutes:20,
@@ -60,81 +59,6 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
     assert.equal(report.evidencedCriteria,1);
     assert.equal(report.criteria[0].observerNote,'Wskazał termin.');
     assert.equal(report.criteria[1].source,'missing');
-    } finally { await db.exec('rollback'); }
-  });
-  await t.test('two assessors submit independently; reveal is atomic and tenant-scoped',async()=>{
-    await db.exec('begin');
-    const deny=async(query,values=[],code='42501')=>{
-      await db.exec('savepoint negative_case');
-      try { await assert.rejects(db.query(query,values),err=>err.code===code); }
-      finally { await db.exec('rollback to negative_case; release negative_case'); }
-    };
-    try {
-      const ac=(await db.query('select public.save_exercise_definition($1,gen_random_uuid(),$2,0,$3,$4) id',
-        [a.recruitment,JSON.stringify({...definition,kind:'assessment_center'}),a.position.id,a.position.stamp])).rows[0].id;
-      const assign='select public.ac_assign_pair($1,$2,$3,$4) id';
-      // No assessor assignment after withdrawal or for inactive recruitment/position.
-      await db.query("update public.applications set status='withdrawn' where id=$1",[a.application]);
-      await deny(assign,[a.application,ac,ownerA,recruiter]);
-      await db.query("update public.applications set status='new' where id=$1",[a.application]);
-      await db.query("update public.recruitments set status='paused' where id=$1",[a.recruitment]);
-      await deny(assign,[a.application,ac,ownerA,recruiter]);
-      await db.query("update public.recruitments set status='draft' where id=$1",[a.recruitment]);
-      await db.query("update public.positions set status='archived' where id=$1",[a.position.id]);
-      await deny(assign,[a.application,ac,ownerA,recruiter]);
-      await db.query("update public.positions set status='draft' where id=$1",[a.position.id]);
-      await deny(assign,[a.application,ac,ownerA,viewer]);
-      await deny(assign,[a.application,a.revision,ownerA,recruiter]);
-      const pair=(await db.query(assign,[a.application,ac,ownerA,recruiter])).rows[0].id;
-      const find=()=>db.query('select public.ac_find_pair($1,$2) id',[a.application,ac]);
-      assert.equal((await find()).rows[0].id,pair);
-      const submit='select public.ac_submit_sheet($1,$2)';
-      const read='select public.ac_read_pair($1) report';
-      const report=async()=>(await db.query(read,[pair])).rows[0].report;
-      const sheet=observations().map(row=>({...row,context:row.rating==='insufficient_data'?'':'Podczas rozmowy z klientem.'}));
-      // A valid assignment must not authorize submission after the workflow becomes inactive.
-      await db.query("update public.applications set status='withdrawn' where id=$1",[a.application]);
-      await deny(submit,[pair,JSON.stringify(sheet)]);
-      await db.query("update public.applications set status='new' where id=$1",[a.application]);
-      await db.query("update public.recruitments set status='paused' where id=$1",[a.recruitment]);
-      await deny(submit,[pair,JSON.stringify(sheet)]);
-      await db.query("update public.recruitments set status='draft' where id=$1",[a.recruitment]);
-      await db.query("update public.positions set status='archived' where id=$1",[a.position.id]);
-      await deny(submit,[pair,JSON.stringify(sheet)]);
-      await db.query("update public.positions set status='draft' where id=$1",[a.position.id]);
-      // The second assessor also loses write access immediately after membership revocation.
-      await db.query('delete from public.company_members where company_id=$1 and user_id=$2',[a.company,recruiter]);
-      await as(recruiter);
-      await deny(submit,[pair,JSON.stringify(sheet)]);
-      await as(ownerA);
-      await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter')",[a.company,recruiter]);
-      await deny(submit,[pair,JSON.stringify(sheet.slice(0,1))],'22023');
-      const missingContext=sheet.map(row=>({...row}));
-      delete missingContext[0].context;
-      await deny(submit,[pair,JSON.stringify(missingContext)],'22023');
-      await deny(submit,[pair,JSON.stringify([{...sheet[0],context:'X'},sheet[1]])],'22023');
-      await deny(submit,[pair,JSON.stringify([{...sheet[0],evidence:'Za mało'},sheet[1]])],'22023');
-      await deny(submit,[pair,JSON.stringify([{...sheet[0],context:'X'.repeat(2001)},sheet[1]])],'22023');
-      await deny(submit,[pair,JSON.stringify([{...sheet[0],evidence:'X'.repeat(4001)},sheet[1]])],'22023');
-      await db.query(submit,[pair,JSON.stringify(sheet)]);
-      assert.deepEqual(await report(),{state:'pending',ownSubmitted:true});
-      await deny(submit,[pair,JSON.stringify(sheet)],'PT409');
-      await as(ownerB);await deny(read,[pair]);await deny(submit,[pair,JSON.stringify(sheet)]);
-      await as(viewer);await deny(read,[pair]);assert.equal((await find()).rows[0].id,null);
-      await as(recruiter);
-      assert.deepEqual(await report(),{state:'pending',ownSubmitted:false});
-      await deny('select * from private.ac_paired_sheets');
-      sheet[0]={criterionIndex:0,rating:'below',evidence:'Brak terminu w finalnym planie.',context:'W symulacji rozmowy z klientem.'};
-      await db.query(submit,[pair,JSON.stringify(sheet)]);
-      const result=await report();
-      assert.equal(result.state,'ready');assert.equal(result.definitionId,ac);
-      assert.deepEqual(result.sheets.map(s=>s.authorId),[ownerA,recruiter]);
-      assert.deepEqual(result.sheets.map(s=>s.observations[0].rating),['meets','below']);
-      assert.deepEqual(result.sheets.map(s=>s.observations[0].context),
-        ['Podczas rozmowy z klientem.','W symulacji rozmowy z klientem.']);
-      await as(ownerA);assert.deepEqual(await report(),result);
-      await db.query('delete from public.company_members where company_id=$1 and user_id=$2',[a.company,recruiter]);
-      await as(recruiter);await deny(read,[pair]);
     } finally { await db.exec('rollback'); }
   });
   await t.test('owner and recruiter append attributed revisions; missing data stays distinct',async()=>{

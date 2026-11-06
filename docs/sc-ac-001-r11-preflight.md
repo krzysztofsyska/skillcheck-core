@@ -1,3 +1,7 @@
+# Aktualizacja 2026-11-06
+
+Założenia poniżej zachowano jako historię preflight. Implementację aktywnego kontraktu R13, jego kolejność po R12/C1, rollback i testy opisuje [sc-ac-001-contract.md](sc-ac-001-contract.md). Prototyp isolated zastąpiono składnikiem aktywnej migracji.
+
 # SC-AC-001 / #271 — bramka AC/R11 przed aktywną migracją
 
 STATUS: DESIGN_ONLY. PR #272, gałąź `feat/sc-ac-scenario-foundation`, baza `integration`. Nie jest to migracja, nie uruchamia AC w Preview.

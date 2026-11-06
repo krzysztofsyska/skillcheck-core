@@ -103,12 +103,14 @@ const LOGGING_AUDIT = [
 
 export async function verifyCompetencyGateway(
   client: CompetencyConnection,
-  expectedUser: string
+  expectedUser: string,
+  options: {postgresLimiter?:boolean} = {}
 ): Promise<void> {
   if (!/^competency_gateway_[a-z0-9_]{1,40}$/.test(expectedUser)) {
     throw new Error('Gateway login not approved');
   }
-  const identities = (await client.query(PRIVILEGE_AUDIT, [GATEWAY_FUNCTIONS])).rows;
+  const allowed = options.postgresLimiter ? [...GATEWAY_FUNCTIONS,'private.consume_competency_rate_limit(text,bigint)'] : GATEWAY_FUNCTIONS;
+  const identities = (await client.query(PRIVILEGE_AUDIT, [allowed])).rows;
   if (identities.length !== 2) throw new Error('Unsafe gateway identity');
   for (const identity of identities) {
     const login = identity.is_login === true;
@@ -120,7 +122,7 @@ export async function verifyCompetencyGateway(
         identity.gateway_memberships !== (login ? 1 : 0) ||
         identity.forbidden_schemas !== 0 || identity.forbidden_relations !== 0 ||
         identity.forbidden_sequences !== 0 || identity.forbidden_functions !== 0 ||
-        identity.allowed_functions !== (login ? 0 : GATEWAY_FUNCTIONS.length) ||
+        identity.allowed_functions !== (login ? 0 : allowed.length) ||
         identity.private_usage !== !login || identity.database_create) {
       throw new Error('Unsafe gateway privileges');
     }

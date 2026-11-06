@@ -2,6 +2,18 @@ name: SC014 B3 isolated HTTP PostgreSQL HTTPS browser
 on:
   pull_request:
     paths:
+      - 'app/zadanie-kompetencyjne/**'
+      - 'lib/competency-candidate-document.ts'
+      - 'lib/competency-staff-response.ts'
+      - 'lib/competency-staff.ts'
+      - 'lib/competency-postgres-limiter.ts'
+      - 'app/dashboard/**/competency-forms.tsx'
+      - 'app/dashboard/**/competency-actions.ts'
+      - 'tests/competency-active-*.mjs'
+      - 'tests/helpers/competency-active-fixture.mjs'
+      - 'supabase/migrations/*sc_wer*'
+      - 'tests/competency-candidate-journey.test.mjs'
+      - 'tests/competency-candidate-document.test.mjs'
       - 'app/api/competency/attempt/**'
       - 'lib/competency-attempt-broker*.ts'
       - 'lib/competency-attempt-transport.ts'
@@ -21,6 +33,18 @@ on:
   push:
     branches: [integration]
     paths:
+      - 'app/zadanie-kompetencyjne/**'
+      - 'lib/competency-candidate-document.ts'
+      - 'lib/competency-staff-response.ts'
+      - 'lib/competency-staff.ts'
+      - 'lib/competency-postgres-limiter.ts'
+      - 'app/dashboard/**/competency-forms.tsx'
+      - 'app/dashboard/**/competency-actions.ts'
+      - 'tests/competency-active-*.mjs'
+      - 'tests/helpers/competency-active-fixture.mjs'
+      - 'supabase/migrations/*sc_wer*'
+      - 'tests/competency-candidate-journey.test.mjs'
+      - 'tests/competency-candidate-document.test.mjs'
       - 'app/api/competency/attempt/**'
       - 'lib/competency-attempt-broker*.ts'
       - 'lib/competency-attempt-transport.ts'
@@ -69,7 +93,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y redis-tools postgresql-client
       - name: Install isolated Chromium testing dependency (not an application dependency)
         run: |
-          npm install --no-save --package-lock=false playwright@1.56.1
+          npm install --no-save --package-lock=false playwright@1.56.1 react-test-renderer@19.3.1
           npx playwright install --with-deps chromium
       - name: Confirm isolated resources only
         run: |
@@ -96,21 +120,28 @@ jobs:
           echo '127.0.0.1 sc014-broker-db.test' | sudo tee -a /etc/hosts
           psql 'host=sc014-broker-db.test user=postgres dbname=postgres sslmode=verify-full' -c 'select ssl from pg_stat_ssl where pid=pg_backend_pid()'
       - name: B3 strict HTTP/Cookie/CSRF/limits supplemental contracts
-        run: node --test --test-isolation=none --test-concurrency=1 tests/competency-broker-contract.test.mjs tests/competency-broker-role.test.mjs
+        run: node --test --test-isolation=none --test-concurrency=1 tests/competency-broker-contract.test.mjs tests/competency-broker-role.test.mjs tests/competency-candidate-document.test.mjs
       - name: B3 real HTTPS PostgreSQL16 Redis/Chromium browser evidence
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           NODE_OPTIONS: '--no-warnings'
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
         run: >-
           node --test --test-isolation=none --test-concurrency=1
           tests/competency-broker-postgres.test.mjs
           tests/competency-broker-browser.test.mjs
+          tests/competency-candidate-journey.test.mjs
+          tests/competency-active-journey.test.mjs
+          tests/competency-active-grant-form.test.mjs
           tests/competency-broker-security.test.mjs
-      - name: Actual enabled route and production TLS pool + Redis REST
+      - name: Actual enabled routes and TLS pools with Redis and PostgreSQL limiters
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC014_B3_TEST_PG_CA: ${{ runner.temp }}/sc014-b3-pg.crt
-        run: node --test --test-concurrency=1 tests/competency-broker-route.test.mjs
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+        run: node --test --test-concurrency=1 tests/competency-broker-route.test.mjs tests/competency-active-route.test.mjs
       - name: Accepted B2 PostgreSQL16 and SC-010 regression
         env:
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres

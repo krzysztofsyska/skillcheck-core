@@ -26,7 +26,10 @@ function clientFor(data, options = {}) {
           if (table === 'get_screening_ranking' && q.from === 0) rankingReads++;
           options.onQuery?.(q, data, rankingReads);
           if (options.error?.[table]) return { data: null, error: { code: options.error[table], message: 'SECRET_INTERNAL_DETAILS' } };
-          if (args) {
+          if (args && table === 'position_requirement_flags') {
+            // SC-015 / #268: oznaczenia wymagań są per stanowisko, nie per rekrutacja.
+            assert.equal(args.target_company, company); assert.ok('target_position' in args);
+          } else if (args) {
             assert.equal(args.target_recruitment, recruitment); assert.ok(!('company_id' in args));
             if (table === 'get_recruitment_shortlist') assert.equal(args.include_removed, false);
           }
@@ -185,7 +188,7 @@ test('React report renders status/evidence and escapes hostile content', async (
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name.endsWith('.module.css') ? { default: new Proxy({}, { get: (_, key) => String(key) }), __esModule: true }
-    : name.endsWith('/screening-report') ? require(name+'.ts') : require(name);
+    : /\/lib\/[a-z-]+$/.test(name) ? require(name+'.ts') : require(name);
   module._compile(ts.transpileModule(readFileSync(filename,'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const html = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView,{report,basePath:'/dashboard/test'}));
   assert.match(html,/Raport preselekcji/); assert.match(html,/Spełnia wymagania/); assert.match(html,/Nie jest decyzją o zatrudnieniu/);
@@ -285,7 +288,7 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name.endsWith('.module.css') ? { default: new Proxy({}, { get: (_, key) => String(key) }), __esModule: true }
-    : name.endsWith('/screening-report') ? require(name + '.ts') : require(name);
+    : /\/lib\/[a-z-]+$/.test(name) ? require(name + '.ts') : require(name);
   module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const html = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report, basePath: '/dashboard/test' }));
   assert.match(html, /Sprawdzone przez człowieka — wynik w tabeli grup/);

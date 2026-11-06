@@ -24,7 +24,8 @@ export function evaluateAssessmentCenter(
     const raw = observationsInput[index];
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Nieprawidłowa obserwacja.');
     const row = raw as Record<string, unknown>;
-    if (row.criterionIndex !== index || !['below', 'meets', 'above', 'insufficient_data'].includes(String(row.rating))
+    if (Object.keys(row).some(key => !['criterionIndex', 'rating', 'evidence', 'context'].includes(key))
+      || row.criterionIndex !== index || !['below', 'meets', 'above', 'insufficient_data'].includes(String(row.rating))
       || typeof row.rating !== 'string' || typeof row.evidence !== 'string'
       || typeof row.context !== 'string' || row.evidence.length > 4000 || row.context.length > 2000) {
       throw new Error('Nieprawidłowa ocena, indeks lub uzasadnienie.');

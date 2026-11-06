@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire, Module } from 'node:module';
 import ts from 'typescript';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { nextRedirectTarget, safeNextPath, withNext } from '../lib/safe-next-path.ts';
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH, buyPreselekcjaTarget, selectPurchaseCompany } from '../lib/buy-preselekcja.ts';
 import * as validation from '../lib/auth-validation.ts';
@@ -160,6 +162,54 @@ test('the first company hands the visitor back to the purchase path', async () =
 // Surfaces: the button exists where the owner asked for it, and the dashboard
 // billing page orders through the checkout screen instead of the contact form.
 const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+
+function renderWorkspace(params) {
+  function loadComponent(file, mocks) {
+    const path = new URL(`../${file}`, import.meta.url).pathname;
+    const mod = new Module(path); mod.filename = path;
+    mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+    const require = createRequire(path);
+    mod.require = id => id in mocks ? mocks[id] : require(id);
+    mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: {
+      module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
+    } }).outputText, path);
+    return mod.exports;
+  }
+  const navigation = loadComponent('app/components/workspace-navigation.tsx', {
+    'next/navigation': { useParams: () => params },
+    '../../lib/buy-preselekcja': { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH },
+    './workspace-navigation.module.css': { default: {} },
+  });
+  const { default: Layout } = loadComponent('app/dashboard/layout.tsx', {
+    '../components/workspace-navigation': navigation,
+  });
+  return renderToStaticMarkup(createElement(Layout, null,
+    createElement('main', null, 'Treść panelu firmy')));
+}
+
+test('every dashboard page offers a way to the public site and another purchase', () => {
+  for (const params of [{}, { companyId: owned.id }, {
+    companyId: owned.id, recruitmentId: 'recruitment-1', applicationId: 'application-1',
+  }]) {
+    const html = renderWorkspace(params);
+    assert.match(html, /aria-label="Nawigacja konta"/);
+    assert.match(html, /href="\/">SkillCheck — strona główna<\/a>/);
+    assert.match(html, /href="\/#pakiety">Oferta i pakiety<\/a>/);
+    assert.match(html, /href="\/dashboard">Moje konto<\/a>/);
+    const purchase = params.companyId
+      ? `/dashboard/${owned.id}/billing/checkout` : '/kup/preselekcja';
+    assert.ok(html.includes(`href="${purchase}">Kup PRESELEKCJĘ</a>`));
+    assert.match(html, /<main>Treść panelu firmy<\/main>/);
+  }
+});
+
+test('purchase navigation stays in the selected company rather than choosing the first one', () => {
+  const otherOwnedCompany = 'bbbbbbbb-1111-4222-8333-444444444444';
+  const html = renderWorkspace({ companyId: otherOwnedCompany });
+  assert.ok(html.includes(`href="/dashboard/${otherOwnedCompany}/billing/checkout"`));
+  assert.equal(html.includes(`href="/dashboard/${owned.id}/billing/checkout"`), false);
+  assert.equal(html.includes('href="/kup/preselekcja"'), false);
+});
 
 test('the approved label and the dashboard purchase path are the ones shipped', () => {
   // The button itself is asserted behaviourally against the rendered home page

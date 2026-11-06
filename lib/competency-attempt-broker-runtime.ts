@@ -5,6 +5,8 @@
 import { createCompetencyBroker, competencyBrokerMethodDenied, type GatewayLease } from './competency-attempt-broker.ts';
 import { createRedisRestLimiter, type SharedRateLimiter } from './competency-broker-limiter.ts';
 import { verifyCompetencyGateway } from './competency-broker-role.ts';
+import { createPostgresSharedLimiter } from './competency-postgres-limiter.ts';
+import { competencyGatewayTls } from './competency-broker-tls.ts';
 
 const HEADERS = {
   'Cache-Control': 'private, no-store, max-age=0',
@@ -46,6 +48,7 @@ export interface CompetencyGatewayRuntime {
   sourceKey: Buffer;
   limiter: SharedRateLimiter;
   pool: CompetencyGatewayPool;
+  postgresLimiter?:boolean;
   trustedSource(request: Request): string | null;
   onConnection?(): void; // test-only observation hook; no PII
 }
@@ -77,7 +80,7 @@ export function createCompetencyGatewayRuntime(options: CompetencyGatewayRuntime
       try {
         // Audit both the real LOGIN and the gateway permissions it will acquire
         // on this exact connection before any capability-bearing B2 query.
-        await verifyCompetencyGateway(client, options.expectedUser);
+        await verifyCompetencyGateway(client, options.expectedUser,{postgresLimiter:options.postgresLimiter});
         options.onConnection?.();
         return {
           query: (sql, args) => client.query(sql, args),
@@ -105,12 +108,13 @@ async function construct(): Promise<BrokerHandler> {
   const redisUrl = process.env.COMPETENCY_BROKER_LIMITER_REST_URL || '';
   const redisToken = process.env.COMPETENCY_BROKER_LIMITER_REST_TOKEN || '';
   const dsn = databaseUrl();
-  const limiter = createRedisRestLimiter(redisUrl, redisToken);
+  const limiterKind=process.env.COMPETENCY_BROKER_LIMITER;
+  if(limiterKind!=='postgres'&&limiterKind!=='redis')throw new Error('Shared limiter required');
   // No pool exists on default-disabled integration/preview/production builds.
   const pg = await import('pg');
   const pool = new pg.Pool({
     connectionString: dsn,
-    ssl: { rejectUnauthorized: true },
+    ssl: competencyGatewayTls(dsn),
     max: 4,
     maxUses: 100,
     connectionTimeoutMillis: 2000,
@@ -119,6 +123,8 @@ async function construct(): Promise<BrokerHandler> {
     allowExitOnIdle: true,
     options: '-c statement_timeout=5000 -c lock_timeout=1500 -c idle_in_transaction_session_timeout=8000'
   });
+  const limiter = limiterKind==='postgres'
+    ?createPostgresSharedLimiter(pool,new URL(dsn).username):createRedisRestLimiter(redisUrl,redisToken);
   return createCompetencyGatewayRuntime({
     expectedOrigin: origin,
     expectedUser: new URL(dsn).username,
@@ -126,6 +132,7 @@ async function construct(): Promise<BrokerHandler> {
     sourceKey,
     limiter,
     pool,
+    postgresLimiter:limiterKind==='postgres',
     // Only Vercel ingress rewrites X-Forwarded-For. Reject untrusted local
     // headers and forwarding chains; never accept caller X-Real-IP.
     trustedSource(request) {

@@ -17,7 +17,7 @@ import {createCompetencyGatewayRuntime} from '../../lib/competency-attempt-broke
 import {verifyCompetencyGateway} from '../../lib/competency-broker-role.ts';
 import {createRedisRestLimiter} from '../../lib/competency-broker-limiter.ts';
 
-function tlsFixture(t) {
+export function tlsFixture(t) {
  const dir=mkdtempSync(join(tmpdir(),'sc014-b3-'));
  t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const key=join(dir,'tls.key'),cert=join(dir,'tls.crt');

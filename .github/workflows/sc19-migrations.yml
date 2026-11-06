@@ -10,6 +10,13 @@ on:
       - 'lib/sc19-payment*.ts'
       - 'lib/sc19-offer-*.ts'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/competency-active-*.mjs'
+      - 'tests/helpers/competency-active-fixture.mjs'
+      - 'scripts/sc-wer-c1-compose.mjs'
+      - 'scripts/sc-ac-compose.mjs'
+      - 'db/components/sc-ac-paired-sheets.sql'
+      - 'tests/assessment-center-active-*.mjs'
+      - 'tests/helpers/assessment-center-active-fixture.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step4-erasure-r8.test.mjs'
       - 'tests/cv-bulk-database.test.mjs'
@@ -42,6 +49,13 @@ on:
     paths:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/competency-active-*.mjs'
+      - 'tests/helpers/competency-active-fixture.mjs'
+      - 'scripts/sc-wer-c1-compose.mjs'
+      - 'scripts/sc-ac-compose.mjs'
+      - 'db/components/sc-ac-paired-sheets.sql'
+      - 'tests/assessment-center-active-*.mjs'
+      - 'tests/helpers/assessment-center-active-fixture.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step4-erasure-r8.test.mjs'
       - 'tests/cv-bulk-database.test.mjs'
@@ -123,12 +137,16 @@ jobs:
           fi
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_dump" --version
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_restore" --version
+      - run: node scripts/sc-wer-c1-compose.mjs --check
+      - run: node scripts/sc-ac-compose.mjs --check
       - name: Real migration, concurrency, ACL, purge and native restore
         run: |
           set +e
           node --experimental-strip-types --test --test-concurrency=1 \
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
             tests/sc-019-migrations-mvp-e2e.test.mjs \
+            tests/competency-active-migration.test.mjs tests/competency-active-concurrency.test.mjs tests/competency-active-limiter.test.mjs tests/competency-active-staff.test.mjs \
+            tests/assessment-center-active-database.test.mjs tests/assessment-center-active-concurrency.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/cv-bulk-database.test.mjs tests/sc-step3-evidence-worker.test.mjs \
             tests/sc-019-operator-fulfillment.test.mjs tests/sc19-auto-trial-database.test.mjs \

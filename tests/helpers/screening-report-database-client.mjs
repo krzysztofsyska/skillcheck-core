@@ -1,7 +1,7 @@
 // Test-only transport adapter. Every read/RPC executes production SQL under the
 // fixture's authenticated PostgreSQL role and RLS; no ranking rows are invented.
 const tables = new Set(['companies','recruitments','positions','applications','screening_analysis_versions','screening_result_reviews','screening_criterion_results','screening_criterion_review_overrides']);
-const functions = new Set(['get_screening_ranking','get_recruitment_shortlist','get_preselection_groups']);
+const functions = new Set(['get_screening_ranking','get_recruitment_shortlist','get_preselection_groups','position_requirement_flags']);
 // Functions returning one scalar (jsonb): PostgREST returns the value itself, not rows.
 const scalarFunctions = new Set(['get_preselection_groups']);
 const identifier = value => { if (!/^[a-z_][a-z_0-9]*$/.test(value)) throw Error('Invalid test SQL identifier'); return '"'+value+'"'; };

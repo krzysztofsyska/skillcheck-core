@@ -1516,7 +1516,9 @@ test('the manual-review count holds only companies that asked and are still wait
 
 test('the erasure inventory still matches after the new tables', async t => {
   const env = await bootMigrationDatabase(t);
-  await setupRankingDatabase(env.db, { throughMigration: null });
+  // This historical contract compares the exact R11 output. The normal ready()
+  // fixture and current competency migration suite still replay the full chain.
+  await setupRankingDatabase(env.db, { throughMigration: '20261103090100_sc_erasure_inventory_r11.sql' });
   // R11 must cover the four new tables, or every erasure preview fails closed.
   await assertCurrentInventory(env.db);
   await env.db.query('reset role');
@@ -1642,7 +1644,7 @@ const forward = name => readFileSync(new URL(`../supabase/migrations/${name}`, i
 
 test('both rollbacks run in order, restore the reviewed R10 state and re-apply', async t => {
   const env = await bootMigrationDatabase(t);
-  await setupRankingDatabase(env.db, { throughMigration: null });
+  await setupRankingDatabase(env.db, { throughMigration: '20261103090100_sc_erasure_inventory_r11.sql' });
   const { db } = env;
   await db.query('reset role');
 
@@ -1673,7 +1675,7 @@ test('both rollbacks run in order, restore the reviewed R10 state and re-apply',
 
 test('the forward pair refuses to run twice and refuses a wrong order', async t => {
   const env = await bootMigrationDatabase(t);
-  await setupRankingDatabase(env.db, { throughMigration: null });
+  await setupRankingDatabase(env.db, { throughMigration: '20261103090100_sc_erasure_inventory_r11.sql' });
   const { db } = env;
   await db.query('reset role');
   await assert.rejects(db.query(forward('20261103090000_sc19_auto_trial_marketing_consent.sql')),

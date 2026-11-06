@@ -36,3 +36,8 @@
 # after these migrations. See supabase/preview-seeds/sc19-preselekcja-offer.sql.
 20261103130000_sc019_checkout_offers_read.sql
 20261104080000_pricing_catalog.sql
+20261104120000_position_requirement_flags.sql
+20261106063720_sc_wer_c1_inventory_r12.sql
+20261106065733_sc_wer_broker_limiter.sql
+20261106070123_sc_wer_staff_access.sql
+20261106120000_sc_ac_inventory_r13.sql
