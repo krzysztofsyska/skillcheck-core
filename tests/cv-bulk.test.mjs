@@ -288,6 +288,30 @@ test('session pump: AI disabled sends no contract; notification outcome is repor
   assert.deepEqual(parsePump({ dispatch: 'x', notify: { batch_id: 'nope' } }), { dispatch: [], notify: null });
 });
 
+test('session bulk pump fails closed on a malformed successful RPC response', async () => {
+  const batchId = '55555555-5555-4555-8555-555555555555';
+  for (const malformed of [null, [], {}, { dispatch: [] }, { dispatch: 'not an array', notify: null }]) {
+    let dispatches = 0;
+    const calls = [];
+    const rpc = async (fn, args) => {
+      calls.push([fn, args]);
+      return { data: malformed, error: null };
+    };
+    await assert.rejects(
+      pumpBatch({ rpc, dispatch: async () => { dispatches++; return { accepted: true }; },
+        aiEnabled: false, origin: () => 'https://example.test', env: {} }, batchId),
+      /cv_bulk_pump_invalid_response/,
+      'invalid payload must not be mistaken for an empty batch',
+    );
+    assert.equal(dispatches, 0);
+    assert.deepEqual(calls.map(([fn]) => fn), ['cv_bulk_pump'], 'no dispatch or notification acknowledgement on failure');
+  }
+  const rpc = async () => ({ data: { dispatch: [], notify: null }, error: null });
+  assert.deepEqual(await pumpBatch({ rpc, dispatch: async () => ({ accepted: true }),
+    aiEnabled: false, origin: () => 'https://example.test', env: {} }, batchId),
+  { dispatch: [], notify: null }, 'a legitimately empty RPC response still succeeds');
+});
+
 test('bulk pump dispatches a repeated attempt only once per response (session and signed scheduler)', async () => {
   const first = '44444444-4444-4444-8444-444444444444';
   const second = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

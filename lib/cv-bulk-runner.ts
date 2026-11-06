@@ -55,6 +55,13 @@ export async function pumpBatch(deps: PumpDeps, batchId: string) {
   const env = deps.env ?? process.env;
   const { data, error } = await deps.rpc('cv_bulk_pump', { target_batch: batchId, contract: bulkContract(deps.aiEnabled), pricing: bulkPricing(env) });
   if (error) throw new Error('cv_bulk_pump_failed');
+  // PostgreSQL always returns an object containing dispatch[] and notify (possibly null).
+  // A null/partial successful RPC response must never be shown as an empty successful pump.
+  if (!data || typeof data !== 'object' || Array.isArray(data) ||
+      !Array.isArray((data as { dispatch?: unknown }).dispatch) ||
+      !Object.prototype.hasOwnProperty.call(data, 'notify')) {
+    throw new Error('cv_bulk_pump_invalid_response');
+  }
   const result = parsePump(data);
   await deliver(deps, result, async (batch, outcome) => {
     const { error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome });
