@@ -176,6 +176,7 @@ test('extraction: local OCR reads scans and photos, rejects unreadable ones', { 
 test('PDF OCR: digitally printed header cannot hide a scanned CV body', async () => {
   const header = 'Katarzyna Wisniewska, tel. +48 500 123 456, e-mail: anna@example.com';
   const matchingLines = cvLines.map(line => line.replace('Wiśniewska', 'Wisniewska'));
+  matchingLines.splice(1, 0, 'Java Developer'); // a job heading must not be counted as another person
   const mixed = scannedPdf(matchingLines, { textOverlay: [header] });
   let calls = 0;
   const scanOcr = async () => {
@@ -187,6 +188,7 @@ test('PDF OCR: digitally printed header cannot hide a scanned CV body', async ()
   assert.equal(result.ocrUsed, true);
   assert.match(result.text, /Excel, SQL/, 'the scanned work history is included');
   assert.match(result.text, /Katarzyna Wisniewska/, 'consistent digital name is preserved');
+  assert.match(result.text, /Java Developer/, 'an ordinary job headline is kept, not treated as a conflicting identity');
   assert.match(result.text, /500 123 456/, 'the original digital phone survives imperfect OCR');
   assert.match(result.text, /anna@example.com/, 'the digital e-mail remains in the complete OCR result');
   await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: cvLines.join('\n'), confidence: 94 })),
