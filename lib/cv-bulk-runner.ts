@@ -75,8 +75,9 @@ export async function pumpBatch(deps: PumpDeps, batchId: string) {
   if (!isPumpEnvelope(data)) throw new Error('cv_bulk_pump_invalid_response');
   const result = parsePump(data);
   await deliver(deps, result, async (batch, outcome) => {
-    const { error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome });
-    if (finishError) throw new Error('cv_bulk_notification_finish_failed');
+    const { data: acknowledged, error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome });
+    // SQL returns false when no sending lease was finalized; no RPC error is not enough.
+    if (finishError || acknowledged !== true) throw new Error('cv_bulk_notification_finish_failed');
   });
   return result;
 }
@@ -110,9 +111,9 @@ export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (
     }
     return deliver(deps, parsePump(one), async (batch, outcome) => {
       const id = randomUUID(), at = Date.now();
-      const { error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
+      const { data: acknowledged, error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
         request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
-      if (finishError) throw new Error('cv_bulk_notification_finish_failed');
+      if (finishError || acknowledged !== true) throw new Error('cv_bulk_notification_finish_failed');
     });
   }));
   // Do not let malformed claimed batches masquerade as success. Valid batches still
