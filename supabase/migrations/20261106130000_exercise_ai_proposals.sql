@@ -18,11 +18,18 @@
 -- NIE MA kluczy obcych do 'public': spójność sprawdzają funkcje niżej, które i tak
 -- blokują wiersz rekrutacji i wpis definicji przed zapisem.
 --
--- Kosztem jest brak `on delete cascade`: skasowanie rekrutacji zostawi tu wiersze
--- sieroty. Są nieszkodliwe — nie zawierają danych kandydata, a polityka odczytu
--- wymaga dostępu do firmy — i nie wracają do obiegu, bo obie funkcje zapisu
--- wymagają istniejącej rekrutacji. Sprzątanie ich dopiszemy, gdy kasowanie
--- rekrutacji w ogóle powstanie; dziś nie ma takiej ścieżki w repozytorium.
+-- Kosztem jest brak `on delete cascade`: skasowanie rekrutacji zostawia tu wiersze
+-- sieroty. Taka ścieżka ISTNIEJE — `recruitments.remove` w lib/supabase/skillcheck.ts,
+-- rola `authenticated` ma `delete` na `public.recruitments` z polityką `tenant_delete`,
+-- a wyzwalacz `aa_erasure_parent_guard` blokuje kasowanie dopiero, gdy są zgłoszenia
+-- kandydatów. Rekrutacja bez zgłoszeń, czyli dokładnie ta, w której powstają szkice,
+-- kasuje się swobodnie.
+--
+-- Same sieroty nie zawierają danych kandydata, ale groźne jest ich PONOWNE
+-- PODCZEPIENIE: rekrutacja skasowana i utworzona z tym samym identyfikatorem
+-- odziedziczyłaby ustawienie automatu, którego nikt dla niej nie włączył, i zużyty
+-- limit. Dlatego obie funkcje zapisu porównują czas zapisu wiersza z czasem powstania
+-- rekrutacji i traktują starsze wiersze jak nieistniejące.
 --
 -- Co ta migracja ROBI: zakłada schemat, dwie tabele i cztery funkcje. Czego NIE robi:
 -- nie dotyka żadnej istniejącej relacji, kolumny, polityki RLS ani funkcji; nie
@@ -105,6 +112,11 @@ begin
   select * into recruitment from public.recruitments r
     where r.id = target_recruitment and private.has_company_access(r.company_id, true) for share;
   if not found then raise exception 'No write access' using errcode = '42501'; end if;
+  -- Ustawienie starsze niż sama rekrutacja pochodzi z poprzedniej o tym samym
+  -- identyfikatorze i nie może zostać odziedziczone — nadpisujemy je w całości.
+  delete from exercise_ai.recruitment_settings s
+    where s.company_id = recruitment.company_id and s.recruitment_id = recruitment.id
+      and s.set_at < recruitment.created_at;
   insert into exercise_ai.recruitment_settings(company_id, recruitment_id, auto_release, set_by)
     values(recruitment.company_id, recruitment.id, enabled, actor)
     on conflict (company_id, recruitment_id)
@@ -134,6 +146,10 @@ begin
   end if;
   if exists (select 1 from pg_catalog.jsonb_object_keys(value) k where k <> all(known)) then
     raise exception 'Unknown provenance field' using errcode = '22023';
+  end if;
+  if value ? 'model_revision' and jsonb_typeof(value->'model_revision') = 'string'
+    and length(value->>'model_revision') > 200 then
+    raise exception 'Invalid provenance revision' using errcode = '22023';
   end if;
   foreach field in array array['provider','model','prompt_version','input_fingerprint','position_id'] loop
     maximum := case field when 'input_fingerprint' then 64 else 200 end;
@@ -177,7 +193,7 @@ returns uuid language plpgsql security definer set search_path = '' as $$
 declare
   actor uuid := (select auth.uid()); recruitment public.recruitments%rowtype;
   entry public.exercise_definition_entries%rowtype; used integer; proposal_id uuid;
-  auto_release boolean; ceiling integer;
+  auto_release boolean; ceiling integer; position public.positions%rowtype;
 begin
   if actor is null then raise exception 'Authentication required' using errcode = '42501'; end if;
   if draft_limit is null or draft_limit < 1 or draft_limit > 1000 then
@@ -202,8 +218,11 @@ begin
   -- Serializuje równoległe żądania tej samej rekrutacji, żeby limit nie dał się
   -- obejść dwoma kliknięciami naraz.
   perform pg_advisory_xact_lock(hashtextextended('exercise_ai:' || recruitment.id::text, 0));
+  -- Wiersze starsze niż sama rekrutacja pochodzą z poprzedniej o tym samym
+  -- identyfikatorze i nie zużywają limitu tej.
   select count(*) into used from exercise_ai.proposals p
-    where p.company_id = recruitment.company_id and p.recruitment_id = recruitment.id;
+    where p.company_id = recruitment.company_id and p.recruitment_id = recruitment.id
+      and p.created_at >= recruitment.created_at;
   -- Ustawienie czyta się TU, w tej samej transakcji co zapis, a nie przyjmuje
   -- z wywołania: inaczej klient mógłby zażądać automatu dla rekrutacji, w której
   -- rekruter go nie włączył. Brak wiersza = zatwierdzanie ręczne.
@@ -211,8 +230,20 @@ begin
     into auto_release, ceiling
     from (select 1) one
     left join exercise_ai.recruitment_settings s
-      on s.company_id = recruitment.company_id and s.recruitment_id = recruitment.id;
+      on s.company_id = recruitment.company_id and s.recruitment_id = recruitment.id
+      and s.set_at >= recruitment.created_at;
   if used >= least(draft_limit, ceiling) then raise exception 'Draft limit reached' using errcode = 'PT429'; end if;
+  -- Automat zwalnia zadanie bez niczyjej lektury, więc musi sprawdzać to samo, co
+  -- sprawdza człowiek w approve_proposal. Wpis definicji powstał, gdy rekrutacja
+  -- była otwarta, ale status mógł się zmienić PÓŹNIEJ i nic go tu nie czytało.
+  -- Propozycja wtedy powstaje, ale niezwolniona: ślad zostaje, zadanie nie wychodzi.
+  if auto_release then
+    select * into position from public.positions p
+      where p.company_id = recruitment.company_id and p.id = recruitment.position_id for share;
+    if recruitment.status not in ('draft','open') or not found or position.status = 'archived' then
+      auto_release := false;
+    end if;
+  end if;
   insert into exercise_ai.proposals(company_id, recruitment_id, definition_entry_id, provenance, created_by,
       approved_by, approved_at, approval_mode)
     values(recruitment.company_id, recruitment.id, entry.id,

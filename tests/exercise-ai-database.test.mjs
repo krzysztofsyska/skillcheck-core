@@ -72,8 +72,12 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
   const saveDefinition = async (target = a, title = 'Zadanie') => {
     exerciseCounter += 1;
     const exercise = '10000000-0000-0000-0000-' + String(exerciseCounter).padStart(12, '0');
+    // Znacznik profilu czytamy na świeżo: zmiana statusu stanowiska go przesuwa,
+    // a zapis definicji wymaga aktualnego (PT409 'Position changed').
+    const stamp = (await db.query('select updated_at::text value from public.positions where id=$1',
+      [target.position.id])).rows[0].value;
     return (await db.query('select public.save_exercise_definition($1,$2,$3::jsonb,$4,$5,$6) id',
-      [target.recruitment, exercise, JSON.stringify(definition(title)), 0, target.position.id, target.position.stamp])).rows[0].id;
+      [target.recruitment, exercise, JSON.stringify(definition(title)), 0, target.position.id, stamp])).rows[0].id;
   };
   /** Ślad pochodzenia musi opisywać ten wpis definicji, więc domyślnie bierzemy go z bazy. */
   const traceFor = async (entry, overrides = {}) => {
@@ -177,8 +181,9 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
     await as(ownerA);
     const fresh = await seed(ownerA);
     await db.query('select exercise_ai.set_auto_release($1,false)', [fresh.recruitment]);
-    // Pułapu nie da się ruszyć z roli aplikacji — ma tylko odczyt. Na potrzeby
-    // testu ustawiamy go poza nią, tak jak zrobiłby to operator w bazie.
+    // Pułapu nie da się ruszyć z roli aplikacji — ma tylko odczyt. `reset role`
+    // wraca do roli właściciela bazy (w PGlite superużytkownika), więc to nie jest
+    // obejście uprawnień, tylko ustawienie wartości tak, jak zrobiłby to operator.
     await db.exec('reset role');
     await db.query('update exercise_ai.recruitment_settings set draft_ceiling=1 where recruitment_id=$1', [fresh.recruitment]);
     await as(ownerA);
@@ -221,6 +226,49 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
     assert.equal((await db.query('select count(*)::int c from exercise_ai.proposals')).rows[0].c > 0, true);
     assert.equal(Number((await db.query('select count(*)::int c from exercise_ai.proposals where company_id=$1', [a.company])).rows[0].c), 0,
       'firma B nie widzi propozycji firmy A');
+  });
+
+  await t.test('automat nie wypuszcza zadania z zamkniętej rekrutacji ani zarchiwizowanego stanowiska', async () => {
+    // Wpis definicji powstaje przy otwartej rekrutacji, ale status może się zmienić
+    // PÓŹNIEJ. Automat musi sprawdzać to samo, co sprawdza człowiek.
+    await as(ownerA);
+    const fresh = await seed(ownerA);
+    await db.query('select exercise_ai.set_auto_release($1,true)', [fresh.recruitment]);
+    const closed = await saveDefinition(fresh);
+    await db.query("update public.recruitments set status='closed' where id=$1", [fresh.recruitment]);
+    await record(closed, fresh);
+    let row = (await db.query('select * from exercise_ai.proposals where definition_entry_id=$1', [closed])).rows[0];
+    assert.equal(row.approved_at, null, 'zamknięta rekrutacja: propozycja zostaje, ale niezwolniona');
+    assert.equal(row.approval_mode, null);
+    await db.query("update public.recruitments set status='open' where id=$1", [fresh.recruitment]);
+    const archived = await saveDefinition(fresh);
+    await db.query("update public.positions set status='archived' where id=$1", [fresh.position.id]);
+    await record(archived, fresh);
+    row = (await db.query('select * from exercise_ai.proposals where definition_entry_id=$1', [archived])).rows[0];
+    assert.equal(row.approval_mode, null, 'zarchiwizowane stanowisko: to samo');
+    await db.query("update public.positions set status='draft' where id=$1", [fresh.position.id]);
+    // Przy otwartej rekrutacji i żywym stanowisku automat działa jak dotąd.
+    const ok = await saveDefinition(fresh);
+    await record(ok, fresh);
+    assert.equal((await db.query('select approval_mode from exercise_ai.proposals where definition_entry_id=$1', [ok])).rows[0].approval_mode, 'auto');
+  });
+
+  await t.test('rekrutacja utworzona ponownie z tym samym id nie dziedziczy ustawień ani zużytego limitu', async () => {
+    await as(ownerA);
+    const fresh = await seed(ownerA);
+    await db.query('select exercise_ai.set_auto_release($1,true)', [fresh.recruitment]);
+    const old = await saveDefinition(fresh);
+    await record(old, fresh);
+    // Kasowanie rekrutacji bez zgłoszeń jest zwykłą, dostępną operacją.
+    await db.query('delete from public.recruitments where id=$1', [fresh.recruitment]);
+    await db.query("insert into public.recruitments(company_id,id,position_id,name) values($1,$2,$3,'TEST')",
+      [fresh.company, fresh.recruitment, fresh.position.id]);
+    const entry = await saveDefinition(fresh);
+    await record(entry, fresh, null, 1);
+    const row = (await db.query('select * from exercise_ai.proposals where definition_entry_id=$1', [entry])).rows[0];
+    assert.equal(row.approval_mode, null, 'odziedziczony automat zwolniłby zadanie, którego nikt nie włączył');
+    // Sierota nie zużyła limitu nowej rekrutacji — zapis przy limicie 1 przeszedł.
+    assert.ok(row.id);
   });
 
   await t.test('viewer nie zwalnia zadań', async () => {
