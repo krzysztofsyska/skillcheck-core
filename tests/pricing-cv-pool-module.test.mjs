@@ -4,6 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createRequire, Module } from 'node:module';
+import ts from 'typescript';
 import {
   CvPoolError,
   cvPoolOptions,
@@ -151,12 +153,14 @@ test('kwoty formatują się tak, jak pisze je reszta powierzchni', () => {
 });
 
 test('niespójny katalog kończy się błędem, nie ceną', () => {
+  // Tylko wiersze, których nie da się zinterpretować. Pula bazowa i zakres
+  // niedzielące się przez krok są dozwolone przez katalog i liczone niżej.
   for (const broken of [
     { min: 60, max: 50, step: 5 },
     { min: 60, max: 150, step: 0 },
-    { min: 61, max: 150, step: 5 },
-    { min: 60, max: 148, step: 5 },
+    { min: -5, max: 150, step: 5 },
     { min: 60, max: 150, step: 2.5 },
+    { min: 60.5, max: 150, step: 5 },
   ]) {
     assert.throws(() => resolveCvPool(60, broken), error => error instanceof CvPoolError);
     assert.throws(() => cvPoolOptions(broken), error => error instanceof CvPoolError);
@@ -171,4 +175,62 @@ test('granice i krok pochodzą z danych, więc zmiana katalogu zmienia kontrakt'
   assert.deepEqual(cvPoolOptions(tenStep), [50, 60, 70, 80, 90, 100]);
   assert.equal(resolveCvPool(63, tenStep).value, 60);
   assert.match(resolveCvPool(63, tenStep).message, /co 10/);
+});
+
+// Prawdziwy silnik wyceny, załadowany przez transpilację (quote-engine.ts używa
+// składni, której `node --test` sam nie rozbierze). Ten sam wzorzec, co w
+// tests/sc-pricing-engine.test.mjs.
+const enginePath = new URL('../lib/pricing/quote-engine.ts', import.meta.url).pathname;
+const engineModule = new Module(enginePath);
+engineModule.filename = enginePath;
+engineModule.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+engineModule.require = createRequire(enginePath);
+engineModule._compile(ts.transpileModule(readFileSync(enginePath, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, enginePath);
+const { quoteOffer } = engineModule.exports;
+const engineNet = (grossMinor, vat) =>
+  Math.floor((grossMinor * 10_000 * 2 + (10_000 + vat)) / (2 * (10_000 + vat)));
+
+test('wynik zgadza się z silnikiem wyceny stopień po stopniu, nie w jednym punkcie', () => {
+  for (const vat of [2300, 500, 800, 777, 10_000]) {
+    for (const row of [
+      { base: 61_500, overage: 20, min: 60, max: 150, step: 5 },
+      { base: 149_900, overage: 20, min: 50, max: 150, step: 5 },
+      { base: 30_000, overage: 7, min: 60, max: 300, step: 5 },
+    ]) {
+      const offer = {
+        versionId: 'cmp-v1', status: 'PUBLISHED', approved: true, currency: 'PLN', vatBasisPoints: vat,
+        plans: [{
+          code: 'WERYFIKACJA', baseNetMinor: engineNet(row.base, vat), commercialStatus: 'purchasable',
+          cvIncluded: row.min, cvPolicy: { quick: [], range: { min: row.min, max: row.max, step: row.step } },
+          cvOverageRule: { method: 'per_unit', unitMinor: engineNet(row.overage, vat) }, capabilityCode: null,
+        }],
+        services: [], planServices: [], discounts: [],
+      };
+      for (let cv = row.min; cv <= row.max; cv += row.step) {
+        const quote = quoteOffer(offer,
+          { expectedVersionId: 'cmp-v1', packageCode: 'WERYFIKACJA', cvCount: cv, addons: [] }, new Set(), {});
+        const mine = cvPoolPrice(cv, {
+          min: row.min, max: row.max, step: row.step,
+          baseGrossMinor: row.base, overageGrossPerCvMinor: row.overage, vatBasisPoints: vat,
+        });
+        assert.equal(mine.netMinor, quote.netMinor, `netto przy ${cv} CV, VAT ${vat}`);
+        assert.equal(mine.grossMinor, quote.grossMinor, `brutto przy ${cv} CV, VAT ${vat}`);
+      }
+    }
+  }
+});
+
+test('katalog dopuszcza pulę bazową i zakres niedzielące się przez krok', () => {
+  // `pricing.package_prices` tego nie wymaga, a silnik takie wiersze liczy:
+  // drabinka idzie od puli bazowej co krok, a ostatni stopień leży pod cv_max.
+  assert.deepEqual(cvPoolOptions({ min: 55, max: 155, step: 10 }), [55, 65, 75, 85, 95, 105, 115, 125, 135, 145, 155]);
+  const odd = { min: 50, max: 148, step: 20 };
+  assert.deepEqual(cvPoolOptions(odd), [50, 70, 90, 110, 130]);
+  assert.equal(resolveCvPool(148, odd).value, 130);
+  assert.match(resolveCvPool(148, odd).message, /130 CV/);
+  // Wiersz, w którym żaden stopień nie wychodzi ponad pulę bazową, to wciąż
+  // pakiet w całości, a nie błąd konfiguracji.
+  assert.equal(cvPoolPrice(62, { ...preselekcja, max: 62 }).cvCount, 60);
 });

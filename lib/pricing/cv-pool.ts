@@ -18,9 +18,10 @@
  *
  * Nie importujemy jej stamtąd, bo ten plik ciągnie `quote-engine.ts`, którego
  * składni nie uruchomi `node --test` bez transpilacji — a ten moduł ma działać
- * w przeglądarce, na serwerze i w teście jednostkowym bez narzutu. Zgodność
- * pilnują testy przypięte do liczb z `docs/cennik-2026-11-02.md`: jeśli kiedyś
- * rozjedzie się z silnikiem, 622,87 zł przestanie się zgadzać.
+ * w przeglądarce, na serwerze i w teście jednostkowym bez narzutu. Zgodności
+ * pilnuje test, który ładuje prawdziwy `quote-engine.ts` przez transpilację i
+ * porównuje netto i brutto stopień po stopniu, przy kilku stawkach VAT — nie
+ * tylko jedna liczba z cennika.
  */
 const netFromGross = (grossMinor: number, vatBasisPoints: number): number =>
   Math.floor((grossMinor * 10_000 * 2 + (10_000 + vatBasisPoints)) / (2 * (10_000 + vatBasisPoints)));
@@ -56,22 +57,32 @@ export class CvPoolError extends Error {
   }
 }
 
+/**
+ * Katalog wymusza tylko `cv_step between 1 and 1000` i `cv_max >= cv_included`.
+ * Nie wymaga, żeby pula bazowa ani zakres dzieliły się przez krok, a silnik
+ * wyceny takie wiersze normalnie liczy — drabinka idzie wtedy od puli bazowej
+ * co krok, a ostatni dopuszczalny stopień leży poniżej `cv_max`. Ten moduł musi
+ * przyjmować to samo, co katalog, bo katalog ma się zmieniać bez wdrożenia.
+ * Błędem konfiguracji jest dopiero wiersz, którego nie da się zinterpretować.
+ */
 function assertBounds(bounds: CvPoolBounds) {
   const { min, max, step } = bounds;
   if (![min, max, step].every(value => Number.isSafeInteger(value))
-    || step < 1 || min < 0 || max < min
-    || min % step !== 0 || (max - min) % step !== 0) {
-    // Katalog z niespójną pulą jest błędem konfiguracji, nie wyborem klienta:
-    // lepiej pokazać komunikat niż policzyć cenę za pulę, której nie da się kupić.
+    || step < 1 || min < 0 || max < min) {
     throw new CvPoolError('invalid_bounds');
   }
+}
+
+/** Najwyższy stopień drabinki mieszczący się w `cv_max`; `cv_max` nie musi na niego trafiać. */
+function topOfRange(bounds: CvPoolBounds) {
+  return bounds.min + Math.floor((bounds.max - bounds.min) / bounds.step) * bounds.step;
 }
 
 /** Dozwolone wartości puli, od wliczonej w cenę do maksymalnej z katalogu. */
 export function cvPoolOptions(bounds: CvPoolBounds): number[] {
   assertBounds(bounds);
   const options: number[] = [];
-  for (let value = bounds.min; value <= bounds.max; value += bounds.step) options.push(value);
+  for (let value = bounds.min; value <= topOfRange(bounds); value += bounds.step) options.push(value);
   return options;
 }
 
@@ -93,17 +104,19 @@ export function resolveCvPool(input: unknown, bounds: CvPoolBounds): CvPoolResol
   if (parsed < min) {
     return { value: min, corrected: true, message: `Najmniejsza pula w tym pakiecie to ${min} CV.` };
   }
-  if (parsed > max) {
-    return { value: max, corrected: true, message: `Największa pula w tym pakiecie to ${max} CV.` };
+  const top = topOfRange(bounds);
+  if (parsed > top) {
+    return { value: top, corrected: true, message: `Największa pula w tym pakiecie to ${top} CV.` };
   }
-  // W zakresie: zaokrąglamy do najbliższej wielokrotności kroku, przy remisie w górę.
+  // W zakresie: zaokrąglamy do najbliższego stopnia drabinki, przy remisie w górę.
   const steps = Math.round((parsed - min) / step);
-  const value = Math.min(max, min + steps * step);
+  const value = Math.min(top, min + steps * step);
   if (value === parsed) return { value, corrected: false, message: null };
+  const shown = Number.isInteger(parsed) ? String(parsed) : String(parsed).replace('.', ',');
   return {
     value,
     corrected: true,
-    message: `Pulę CV zmienia się co ${step}. Zamiast ${parsed} ustawiono ${value}.`,
+    message: `Pulę CV zmienia się co ${step}. Zamiast ${shown} ustawiono ${value}.`,
   };
 }
 
@@ -152,7 +165,13 @@ export function cvPoolPrice(input: unknown, pkg: CvPoolPackage): CvPoolPrice & C
   // to niespójny wiersz, nie pakiet sprzedawany w całości. Cichy powrót do puli
   // bazowej byłby wyceną czegoś innego, niż klient poprosił. Pakiet w całości
   // (dziś PRESELEKCJA) ma w katalogu cv_max = cv_included i tu nie wpada.
-  if (pkg.max > pkg.min && pkg.overageGrossPerCvMinor === 0) throw new CvPoolError('invalid_bounds');
+  // Liczy się drabinka, nie samo `cv_max`: wiersz, w którym żaden stopień nie
+  // wychodzi ponad pulę bazową, jest pakietem w całości i jest w porządku.
+  // Uwaga na przyszłość: sprzedaż PRESELEKCJI w całych blokach po 60 CV
+  // (60 = 300 zł, 120 = 600 zł) to osobna reguła cenowa, nie dopłata za CV —
+  // taki wiersz trafi tu w ten warunek i ma to być sygnał do jej dopisania,
+  // a nie błąd do obejścia.
+  if (topOfRange(pkg) > pkg.min && pkg.overageGrossPerCvMinor === 0) throw new CvPoolError('invalid_bounds');
   const overageCv = resolution.value - pkg.min;
   const baseNetMinor = netFromGross(pkg.baseGrossMinor, pkg.vatBasisPoints);
   const overageNetMinor = netFromGross(pkg.overageGrossPerCvMinor, pkg.vatBasisPoints);
