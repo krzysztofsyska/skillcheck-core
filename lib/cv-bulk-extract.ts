@@ -177,16 +177,15 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
         const shot = await parser.getScreenshot({ partial: [page], scale, imageBuffer: true, imageDataUrl: false });
         const data = shot.pages[0]?.data;
         const read = data?.length ? await ocrRead(ocr, Buffer.from(data), deadline) : null;
-        // OCR must recover more content than the sparse header. Otherwise the scanned
-        // body may have been omitted and analysing the remaining text would be unsafe.
-        if (mixedScan && (read === null || visibleLength(read) <= pageTextLength)) {
+        // Require exact preservation of the digital layer in a full-page OCR result.
+        // Joining two readings can leave an alternative spelling of a candidate's name
+        // unredacted, so an inconsistent result is rejected rather than sent to AI.
+        if (mixedScan && (read === null || visibleLength(read) <= pageTextLength || !read.includes(text))) {
           throw new BulkIntakeError('unreadable_scan');
         }
         if (read !== null) {
           if (++ocrPages > BULK_MAX_OCR_PAGES) throw new BulkIntakeError('unreadable_scan');
-          // Text layers can contain reliable contact details which OCR may miss.
-          // Preserve them even when OCR recovers more of the scanned page.
-          text = mixedScan && !read.includes(text) ? `${text}\n${read}` : read;
+          text = read;
           ocrUsed = true;
         }
       }
