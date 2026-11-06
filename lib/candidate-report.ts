@@ -152,7 +152,10 @@ export async function loadCandidateReport(
     /** Rekruter odesłał tę analizę do powtórzenia. */
     reanalysisRequested,
     // Analiza częściowo zmigrowana też zasługuje na ostrzeżenie: wystarczy jeden wiersz bez werdyktu.
-    legacyAnalysis: !!analysis && analysis.execution_status === 'completed' && rows.some(row => row.verdict == null),
+    // Zakończona analiza bez żadnych wierszy też nie ma macierzy dowodów;
+    // nie może być przedstawiana jako raport nowego typu.
+    legacyAnalysis: !!analysis && analysis.execution_status === 'completed'
+      && (rows.length === 0 || rows.some(row => row.verdict == null)),
     analysisStatus: analysis?.execution_status ?? null,
     requirements: built,
     summary: summariseCandidateReport(built),
