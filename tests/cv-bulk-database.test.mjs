@@ -791,3 +791,27 @@ test('SC-BULK-001 rollbacks restore R9, R8 and remove the bulk schema', async t 
   await assert.rejects(run(db, await migration(skipFrozen)), /cv_bulk_skip_frozen_already_installed/);
   await assert.rejects(run(db, await migration(erasureGuards)), /cv_bulk_erasure_guards_already_installed/);
 });
+
+
+test('SC-BULK-001: both authenticated and signed bulk pumps serialize global slots; rollback restores wrappers', async t => {
+  const { db, h } = await install(t);
+  await run(db, await migration('20261106230000_cv_bulk_global_capacity_lock.sql'));
+  await h.asAdmin();
+  const names = ['cv_bulk_pump(uuid,jsonb,jsonb)', 'cv_bulk_worker_pump(uuid,bigint,text,jsonb,jsonb)'];
+  for (const name of names) {
+    const fn = (await db.query("select pg_get_functiondef(('public.' || $1)::regprocedure) as body", [name])).rows[0].body;
+    const globalLock = fn.indexOf("pg_advisory_xact_lock(hashtextextended('cv_bulk_global_capacity_v1'");
+    const companyLock = fn.includes('private.sc19_lock_company')
+      ? fn.indexOf('private.sc19_lock_company') : fn.indexOf('from public.companies where id = target.company_id for update');
+    assert.ok(globalLock >= 0, name + ' uses global capacity lock');
+    assert.ok(companyLock > globalLock, name + ' takes global lock before company lock');
+    assert.match(fn, /if contract is not null then perform pg_advisory_xact_lock/,
+      name + ' does not block inactive AI sessions');
+  }
+  await run(db, await rollback('20261106230000_cv_bulk_global_capacity_lock_down.sql'));
+  await h.asAdmin();
+  for (const name of names) {
+    const fn = (await db.query("select pg_get_functiondef(('public.' || $1)::regprocedure) as body", [name])).rows[0].body;
+    assert.doesNotMatch(fn, /cv_bulk_global_capacity_v1/, name + ' rollback removes global lock');
+  }
+});
