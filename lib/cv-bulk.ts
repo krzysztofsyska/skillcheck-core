@@ -220,6 +220,44 @@ export function validateBatchFiles(files: BulkFileMeta[]) {
     size: Math.max(0, Math.min(Number.isFinite(f.size) ? Math.floor(f.size) : 0, 2_147_483_647)) }));
 }
 
+/** Validate both RPC envelopes before handing upload IDs to the browser.
+ * A partial status read must not silently skip files and close their held slots.
+ * No CV content is inspected; only registration metadata is compared.
+ */
+export type VerifiedBulkRegistration = {
+  batchId: string; reserved: number; overLimit: number; items: { id: string; position: number }[];
+};
+export function verifyBulkRegistration(created: unknown, status: unknown, recruitmentId: string, files: BulkFileMeta[]): VerifiedBulkRegistration | null {
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  const isUuid = (value: unknown): value is string =>
+    typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (!record(created) || !record(status) || !record(status.batch) || !Array.isArray(status.items)) return null;
+  const batch = status.batch;
+  const reserved = created.reserved_slots, overLimit = created.over_limit;
+  if (!isUuid(created.batch_id) || !isUuid(batch.id) || !isUuid(batch.recruitment_id) ||
+    batch.id.toLowerCase() !== created.batch_id.toLowerCase() ||
+    batch.recruitment_id.toLowerCase() !== recruitmentId.toLowerCase() ||
+    !Number.isInteger(reserved) || (reserved as number) < 0 || (reserved as number) > files.length ||
+    overLimit !== files.length - (reserved as number) ||
+    batch.declared_files !== files.length || batch.reserved_slots !== reserved ||
+    status.items.length !== files.length) return null;
+
+  const positions = new Set<number>(), ids = new Set<string>();
+  const items: { id: string; position: number }[] = [];
+  for (const entry of status.items) {
+    if (!record(entry) || !isUuid(entry.id) || !Number.isInteger(entry.position)) return null;
+    const position = entry.position as number;
+    if (position < 1 || position > files.length || positions.has(position) || ids.has(entry.id.toLowerCase())) return null;
+    const file = files[position - 1];
+    if (entry.file_name !== file.name || entry.file_kind !== file.kind) return null;
+    positions.add(position);
+    ids.add(entry.id.toLowerCase());
+    items.push({ id: entry.id, position });
+  }
+  return { batchId: created.batch_id, reserved: reserved as number, overLimit: overLimit as number, items };
+}
+
 export type BulkPricing = { input_per_mtok: string; cached_input_per_mtok: string; output_per_mtok: string; currency: string; version: string };
 
 const decimal = (value: string | undefined) => value && /^\d{1,6}(?:\.\d{1,6})?$/.test(value.trim()) ? value.trim() : null;
