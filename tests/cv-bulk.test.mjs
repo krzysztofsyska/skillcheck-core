@@ -173,6 +173,29 @@ test('extraction: local OCR reads scans and photos, rejects unreadable ones', { 
   await assert.rejects(extractBulkCv(renderCv([], { blank: true }), 'image', ocrImage), reason('unreadable_scan'));
 });
 
+test('PDF OCR: digitally printed header cannot hide a scanned CV body', async () => {
+  const header = 'Naglowek systemowy: zalacznik do rekrutacji';
+  const mixed = scannedPdf(cvLines, { textOverlay: [header] });
+  let calls = 0;
+  const scanOcr = async () => {
+    calls++;
+    return { text: cvLines.join('\n'), confidence: 94 };
+  };
+  const result = await extractBulkCv(mixed, 'pdf', scanOcr);
+  assert.equal(calls, 1, 'OCR runs even when a sparse digital text layer is present');
+  assert.equal(result.ocrUsed, true);
+  assert.match(result.text, /Excel, SQL/, 'the scanned work history is included');
+  await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: header, confidence: 90 })),
+    reason('unreadable_scan'), 'header-only OCR is never accepted as a complete CV');
+  await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: '', confidence: 0 })),
+    reason('unreadable_scan'), 'blank OCR cannot quietly discard the scan');
+
+  // An ordinary short PDF without any large embedded scan must avoid OCR.
+  const shortText = await extractBulkCv(textPdf(['Anna Nowak', 'Doswiadczenie zawodowe od 2017 roku w obsludze klienta']), 'pdf',
+    async () => assert.fail('text-only PDF must not trigger OCR'));
+  assert.equal(shortText.ocrUsed, false);
+});
+
 test('batch e-mail carries counts and a link only', async () => {
   const n = { batch_id: '11111111-1111-4111-8111-111111111111', recruitment_id: '22222222-2222-4222-8222-222222222222', company_id: '33333333-3333-4333-8333-333333333333',
     email: 'rekruter@example.com', recruitment_name: 'Księgowa <b>', files: 60, done: 52, errors: 8, passed: 12, review: 25, rejected: 15 };
