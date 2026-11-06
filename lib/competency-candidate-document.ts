@@ -27,7 +27,9 @@ export function candidateDocument(nonce:string) {
       el('start').hidden=false;el('message').textContent='Czas na wykonanie: '+view.durationMinutes+' min. Licznik ruszy po rozpoczęciu.';return;
     }
     if(view.state!=='in_progress') throw new Error('invalid');
-    deadline=Date.parse(view.deadlineAt); if(!Number.isFinite(deadline)||deadline<=Date.now()) throw new Error('expired');
+    // The database has already checked expiry. A candidate's device clock is
+    // untrusted; the timestamp below is display-only, never an access gate.
+    deadline=Date.parse(view.deadlineAt); if(!Number.isFinite(deadline)) throw new Error('invalid');
     el('title').textContent=view.test.title;el('instructions').textContent=view.test.instructions;
     el('output').textContent=view.test.expectedOutput;el('until').textContent=new Date(deadline).toLocaleString('pl-PL');
     el('answer').value=view.draft.text;version=view.draft.version;el('work').hidden=false;

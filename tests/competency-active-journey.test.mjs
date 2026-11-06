@@ -10,7 +10,7 @@ import {createCompetencyBroker,B3_ENDPOINT} from '../lib/competency-attempt-brok
 import {GET} from '../app/zadanie-kompetencyjne/route.ts';
 import {competencyReport,parseCompetencyAccess} from '../lib/competency-staff.ts';
 
-test('C1-C3 synthetic journey: shortlist, issued invitation, browser answer, human evidence and report',async t=>{
+test('C1-C3 synthetic journey: server-authorized work and draft recovery despite a fast device clock',async t=>{
  const e=await activeBoot(t,{fullChain:true}),{db,h,call}=e;
  const f=await e.seed();await h.asAdmin();
  await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter')",[f.companyId,users.recruiter]);
@@ -37,8 +37,15 @@ test('C1-C3 synthetic journey: shortlist, issued invitation, browser answer, hum
   acquire:async()=>({query:(sql,values)=>db.query(sql,values),release(){}})});
  const browser=await chromium.launch({headless:true,executablePath:process.env.SKILLCHECK_TEST_CHROME});t.after(()=>browser.close());
  const page=await browser.newPage({ignoreHTTPSErrors:true});
+ // The immutable exercise lasts 60 minutes. A clock two hours ahead used to
+ // hide an otherwise valid server response, including its recovered draft.
+ await page.addInitScript(()=>{const now=Date.now.bind(Date);Date.now=()=>now()+2*60*60*1000;});
  await page.goto(origin+'/zadanie-kompetencyjne#grant='+g.token);
+ const started=page.waitForResponse(r=>r.request().postDataJSON()?.operation==='start');
  await page.getByRole('button',{name:'Rozpocznij zadanie'}).click();assert.equal(new URL(page.url()).hash,'');
+ const active=await(await started).json();
+ assert.equal(active.state,'in_progress');
+ assert.ok(await page.evaluate(()=>Date.now())>Date.parse(active.deadlineAt),'device considers the valid server deadline past');
  const answer='Plan wdrożenia obejmuje terminy i komunikację.';
  await page.getByLabel('Twoja odpowiedź').fill(answer);await page.getByRole('button',{name:'Zapisz szkic'}).click();
  await page.getByText('Szkic zapisany.').waitFor();await page.reload();

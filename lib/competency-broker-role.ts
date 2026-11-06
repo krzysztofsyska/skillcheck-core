@@ -9,7 +9,7 @@
  */
 import type { CompetencyConnection } from './competency-attempt-transport.ts';
 
-// Only these six B2 entry points are callable after SET LOCAL ROLE. Match
+// These six B2 entry points are required after SET LOCAL ROLE. Match
 // exact overloads, not function names, owner, or SECURITY DEFINER alone.
 // Resolve identities through catalogs: LOGIN intentionally lacks private USAGE,
 // so resolving a private name through regprocedure input can itself be denied.
@@ -21,9 +21,11 @@ const GATEWAY_FUNCTIONS = [
   'private.submit_candidate_competency_test(bytea,jsonb,uuid)',
   'private.status_candidate_competency_test(bytea)'
 ];
+const POSTGRES_LIMITER_FUNCTION='private.consume_competency_rate_limit(text,bigint)';
 const PRIVILEGE_AUDIT = `
 with allowed_functions as (
-  select p.oid from pg_catalog.pg_proc p
+  select p.oid,pg_catalog.format('%I.%I(%s)',n.nspname,p.proname,
+    replace(pg_catalog.oidvectortypes(p.proargtypes),', ',',')) as signature from pg_catalog.pg_proc p
   join pg_catalog.pg_namespace n on n.oid=p.pronamespace
   where pg_catalog.format('%I.%I(%s)',n.nspname,p.proname,
     replace(pg_catalog.oidvectortypes(p.proargtypes),', ',','))=any($1::text[])
@@ -88,6 +90,8 @@ select r.rolname as role_name, r.rolname=session_user as is_login,
         and p.oid in (select oid from allowed_functions)))) as forbidden_functions,
  (select count(*)::int from allowed_functions f
   where f.oid is not null and has_function_privilege(r.oid,f.oid,'EXECUTE')) as allowed_functions,
+ (select count(*)::int from allowed_functions f where f.signature <> $2) as installed_core_functions,
+ (select count(*)::int from allowed_functions f where f.signature = $2) as installed_limiter_functions,
  has_schema_privilege(r.oid,'private','USAGE') as private_usage,
  has_database_privilege(r.oid,current_database(),'CREATE') as database_create
 from pg_roles r where r.rolname=session_user or r.rolname='competency_test_gateway'
@@ -109,8 +113,10 @@ export async function verifyCompetencyGateway(
   if (!/^competency_gateway_[a-z0-9_]{1,40}$/.test(expectedUser)) {
     throw new Error('Gateway login not approved');
   }
-  const allowed = options.postgresLimiter ? [...GATEWAY_FUNCTIONS,'private.consume_competency_rate_limit(text,bigint)'] : GATEWAY_FUNCTIONS;
-  const identities = (await client.query(PRIVILEGE_AUDIT, [allowed])).rows;
+  // C2 installs this one exact capability regardless of the runtime's limiter
+  // selection. Redis remains valid on that schema; it cannot allow any other
+  // overload/function, and all six core capabilities must still be present.
+  const identities = (await client.query(PRIVILEGE_AUDIT, [[...GATEWAY_FUNCTIONS,POSTGRES_LIMITER_FUNCTION],POSTGRES_LIMITER_FUNCTION])).rows;
   if (identities.length !== 2) throw new Error('Unsafe gateway identity');
   for (const identity of identities) {
     const login = identity.is_login === true;
@@ -122,7 +128,10 @@ export async function verifyCompetencyGateway(
         identity.gateway_memberships !== (login ? 1 : 0) ||
         identity.forbidden_schemas !== 0 || identity.forbidden_relations !== 0 ||
         identity.forbidden_sequences !== 0 || identity.forbidden_functions !== 0 ||
-        identity.allowed_functions !== (login ? 0 : allowed.length) ||
+        identity.installed_core_functions !== GATEWAY_FUNCTIONS.length ||
+        ![0,1].includes(identity.installed_limiter_functions as number) ||
+        (options.postgresLimiter && identity.installed_limiter_functions !== 1) ||
+        identity.allowed_functions !== (login ? 0 : GATEWAY_FUNCTIONS.length + Number(identity.installed_limiter_functions)) ||
         identity.private_usage !== !login || identity.database_create) {
       throw new Error('Unsafe gateway privileges');
     }

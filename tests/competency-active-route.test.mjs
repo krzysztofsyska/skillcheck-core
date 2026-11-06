@@ -10,7 +10,7 @@ import {activeBoot,observations} from './helpers/competency-active-fixture.mjs';
 import {tlsFixture,httpsPost,httpSession} from './helpers/competency-broker-harness.mjs';
 import {competencyReport} from '../lib/competency-staff.ts';
 
-test('C2 actual enabled route uses TLS gateway login, shared Postgres limiter and complete report',async t=>{
+for(const limiterKind of ['postgres','redis'])test(`C2 full-chain enabled route uses TLS gateway login, ${limiterKind} limiter and complete report`,async t=>{
  assert.equal(process.env.SC_WER_PGLITE_PATH,undefined,'Native route evidence required');
  assert.ok(process.env.SC014_B3_TEST_PG_CA,'Disposable workflow TLS certificate required');
  let child,cleanup=async()=>{};t.after(async()=>{if(child&&child.exitCode===null){child.kill();await once(child,'exit');}await cleanup();});
@@ -27,7 +27,8 @@ test('C2 actual enabled route uses TLS gateway login, shared Postgres limiter an
  child=fork(new URL('./helpers/competency-broker-route-server.mjs',import.meta.url),[],{
   execArgv:[],stdio:['ignore','ignore','pipe','ipc'],env:{...process.env,NODE_EXTRA_CA_CERTS:ca,SC014_TEST_TLS_KEY:key,SC014_TEST_TLS_CERT:cert,
    COMPETENCY_BROKER_ENABLED:'true',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL:'1',VERCEL_ENV:'preview',
-   COMPETENCY_BROKER_GATEWAY_DATABASE_URL:dsn.toString(),COMPETENCY_BROKER_LIMITER:'postgres',
+   COMPETENCY_BROKER_GATEWAY_DATABASE_URL:dsn.toString(),COMPETENCY_BROKER_LIMITER:limiterKind,
+   COMPETENCY_BROKER_LIMITER_REST_TOKEN:'isolated-route-fixture-token',
    COMPETENCY_BROKER_CSRF_KEY:randomBytes(32).toString('hex'),COMPETENCY_BROKER_SOURCE_HMAC_KEY:randomBytes(32).toString('hex')}});
  const ready=await Promise.race([once(child,'message').then(([value])=>value),once(child,'exit').then(()=>{throw new Error('Route process exited');}),
   new Promise((_,reject)=>{const timer=setTimeout(()=>reject(new Error('Route readiness timeout')),15000);timer.unref();})]);
