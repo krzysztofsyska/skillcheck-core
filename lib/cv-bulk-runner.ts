@@ -29,7 +29,10 @@ export function bulkContract(aiEnabled: boolean) {
 // invalid attempt IDs. A claimed scheduler batch must never disappear as a successful no-op.
 function isPumpEnvelope(value: unknown): value is { dispatch: unknown[]; notify: unknown } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const record = value as { dispatch?: unknown; notify?: unknown };
+  const record = value as { dispatch?: unknown; notify?: unknown; error?: unknown };
+  // SQL isolates batch failures and returns { dispatch: [], notify: null, error: sqlstate }.
+  // Such a batch was not processed successfully and must remain visible as a failure.
+  if (record.error !== undefined && record.error !== null) return false;
   if (!Array.isArray(record.dispatch) || !Object.prototype.hasOwnProperty.call(record, 'notify')) return false;
   const n = record.notify;
   return n === null || (n !== undefined && typeof n === 'object' && !Array.isArray(n) &&
