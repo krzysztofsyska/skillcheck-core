@@ -42,3 +42,4 @@
 20261106070123_sc_wer_staff_access.sql
 20261106120000_sc_ac_inventory_r13.sql
 20261106130000_exercise_ai_proposals.sql
+20261106140000_exercise_ai_grant_guard.sql
