@@ -92,6 +92,22 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
       const read='select public.ac_read_pair($1) report';
       const report=async()=>(await db.query(read,[pair])).rows[0].report;
       const sheet=observations().map(row=>({...row,context:row.rating==='insufficient_data'?'':'Podczas rozmowy z klientem.'}));
+      // A valid assignment must not authorize submission after the workflow becomes inactive.
+      await db.query("update public.applications set status='withdrawn' where id=$1",[a.application]);
+      await deny(submit,[pair,JSON.stringify(sheet)]);
+      await db.query("update public.applications set status='new' where id=$1",[a.application]);
+      await db.query("update public.recruitments set status='paused' where id=$1",[a.recruitment]);
+      await deny(submit,[pair,JSON.stringify(sheet)]);
+      await db.query("update public.recruitments set status='draft' where id=$1",[a.recruitment]);
+      await db.query("update public.positions set status='archived' where id=$1",[a.position.id]);
+      await deny(submit,[pair,JSON.stringify(sheet)]);
+      await db.query("update public.positions set status='draft' where id=$1",[a.position.id]);
+      // The second assessor also loses write access immediately after membership revocation.
+      await db.query('delete from public.company_members where company_id=$1 and user_id=$2',[a.company,recruiter]);
+      await as(recruiter);
+      await deny(submit,[pair,JSON.stringify(sheet)]);
+      await as(ownerA);
+      await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter')",[a.company,recruiter]);
       await deny(submit,[pair,JSON.stringify(sheet.slice(0,1))],'22023');
       const missingContext=sheet.map(row=>({...row}));
       delete missingContext[0].context;
