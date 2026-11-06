@@ -369,6 +369,25 @@ Właściciel zaakceptował ten podział: *„Dokładnie robimy tak, jak napisał
    treści ani struktury wygenerowanego zadania.
 6. Przy `EXERCISE_AI_ENABLED=false` ekran działa jak dziś i nie wywołuje modelu.
 
+### C6 krok 2b — granica zatwierdzenia w bazie
+
+Migracja `20261106140000_exercise_ai_grant_guard.sql` blokuje niezwolnioną propozycję AI
+we wspólnym sprawdzeniu dostępu przy wydaniu/odnowieniu grantu, wymianie tokenu oraz
+każdym użyciu sesji i powtórzeniu żądania. Definicja po wydaniu dowolnego grantu nie może
+zostać przeklasyfikowana na propozycję AI — również po cofnięciu grantu. Ręczne zadania
+oraz propozycje zwolnione ręcznie/automatycznie pozostają dostępne.
+
+Dwa zmienione RPC wymagają `READ COMMITTED` (domyślnej izolacji aplikacji). Przy
+`REPEATABLE READ` lub `SERIALIZABLE` zwracają `PT409`: stary snapshot może nie widzieć
+nowej klasyfikacji AI, także gdy definicja wygląda w nim na ręczną. Wspólna blokada
+definicji dla dostępu i wyłączna dla rejestracji zapobiegają wyścigowi dołączenia AI
+z wydaniem grantu. Nie zmieniamy schematu ani sygnatury inwentarza R14.
+
+Starsze granty do później dołączonej, niezwolnionej propozycji są blokowane po stronie
+kandydata; rekruter nadal odczytuje i ocenia historyczne odpowiedzi. Operacyjne wycofanie
+wstrzymuje nowe rejestracje AI, zachowując tę granicę, historię i działające ręczne/zatwierdzone
+zadania. Nowa aktywacja rejestracji wymaga sprawdzonej migracji naprzód.
+
 ### Required tests
 - `npm run typecheck`, `npm run build`
 - testy generatora na syntetycznych profilach i CV (fixture jak `fixtures/screening/sc-005-synthetic.json`)

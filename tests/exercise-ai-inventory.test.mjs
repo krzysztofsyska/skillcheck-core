@@ -14,7 +14,7 @@ const provenance=f=>({provider:'synthetic',model:'fixture',prompt_version:'v1',p
  input_fingerprint:'a'.repeat(64),position_id:f.position.id,position_updated_at:f.position.updated_at});
 
 test('C6 R14: full migration chain, erasure with AI provenance, fail closed drift and operational rollback',async t=>{
- const e=await activeBoot(t,{fullChain:true}),{db,h,x}=e;
+ const e=await activeBoot(t,{fullChain:true,throughMigration:migration}),{db,h,x}=e;
  await h.asAdmin();
  const baseline=(await db.query('select *,private.erasure_schema_signature() actual from private.erasure_inventory_baseline_r14')).rows[0];
  assert.equal(baseline.actual,signature);assert.equal(baseline.schema_signature,signature);

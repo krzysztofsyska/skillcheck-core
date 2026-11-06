@@ -15,6 +15,8 @@ on:
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
       - 'scripts/sc-c6-compose.mjs'
+      - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
       - 'db/components/exercise-ai-proposals.sql'
       - 'tests/exercise-ai-*.test.mjs'
       - 'scripts/preview-migration-stream.mjs'
@@ -60,6 +62,8 @@ on:
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
       - 'scripts/sc-c6-compose.mjs'
+      - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
       - 'db/components/exercise-ai-proposals.sql'
       - 'tests/exercise-ai-*.test.mjs'
       - 'scripts/preview-migration-stream.mjs'
@@ -161,6 +165,7 @@ jobs:
             tests/competency-active-migration.test.mjs tests/competency-active-concurrency.test.mjs tests/competency-active-limiter.test.mjs tests/competency-active-staff.test.mjs \
             tests/assessment-center-active-database.test.mjs tests/assessment-center-active-concurrency.test.mjs \
             tests/exercise-ai-inventory.test.mjs tests/exercise-ai-concurrency.test.mjs \
+            tests/exercise-ai-grant-guard.test.mjs tests/exercise-ai-grant-guard-concurrency.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/cv-bulk-database.test.mjs tests/sc-step3-evidence-worker.test.mjs \
             tests/sc-019-operator-fulfillment.test.mjs tests/sc19-auto-trial-database.test.mjs \
