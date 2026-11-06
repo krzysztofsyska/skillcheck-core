@@ -9,7 +9,7 @@ export const acDefinition = () => ({kind:'assessment_center',title:'Symulacja ro
 export const acSheet = () => [{criterionIndex:0,rating:'meets',evidence:'Zadał otwarte pytanie.',context:'Rozmowa z klientem.'},
  {criterionIndex:1,rating:'insufficient_data',evidence:'',context:''}];
 export async function acBoot(t, options = {}) {
- const e = await activeBoot(t,{...options,fullChain:true});
+ const e = await activeBoot(t,{throughMigration:acMigration,...options,fullChain:true});
  const {h,db,call}=e;
  const seed = async options => {
   const f=await e.seed({shortlist:false,...options});

@@ -1,4 +1,5 @@
-// SC-014-C6 krok 2a — propozycje AI na prawdziwej migracji, odtworzonej w PGlite.
+// SC-014-C6 — domena propozycji AI odtworzona w PGlite.
+// Pełny wrapper R14 jest sprawdzany w exercise-ai-inventory.test.mjs.
 // Sprawdzamy zachowanie bazy, nie kodu aplikacji: limit wywołań, ślad pochodzenia,
 // zwolnienie propozycji (ręczne albo automatyczne) i izolację firm.
 import test from 'node:test';
@@ -13,8 +14,7 @@ const MIGRATIONS = [
   '20261002000100_behavior_assessments',
   '20261002000200_behavior_conflict_response',
   '20261002000300_exercise_definitions',
-  '20261106130000_exercise_ai_proposals',
-];
+  ];
 
 const provenance = (overrides = {}) => ({
   provider: 'openai',
@@ -38,6 +38,8 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
   for (const name of MIGRATIONS) {
     await db.exec(await readFile(new URL('../supabase/migrations/' + name + '.sql', import.meta.url), 'utf8'));
   }
+
+  await db.exec(await readFile(new URL('../db/components/exercise-ai-proposals.sql', import.meta.url), 'utf8'));
 
   const ids = [1, 2, 3, 4].map(n => '00000000-0000-0000-0000-00000000000' + n);
   const [ownerA, ownerB, recruiter, viewer] = ids;
@@ -107,13 +109,14 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
   await t.test('ślad pochodzenia bez źródła jest odrzucany', async () => {
     await as(ownerA);
     for (const broken of [
-      provenance({ input_fingerprint: 'nie-jest-odciskiem' }),
-      provenance({ provider: '' }),
-      provenance({ prompt_version: undefined }),
-      provenance({ payload_schema_version: 0 }),
-      provenance({ payload_schema_version: 1.5 }),
-      provenance({ position_updated_at: 'wczoraj' }),
-      provenance({ model_revision: 7 }),
+      { input_fingerprint: 'nie-jest-odciskiem' },
+      { provider: '' },
+      { prompt_version: undefined },
+      { payload_schema_version: 0 },
+      { payload_schema_version: 1.5 },
+      { position_updated_at: 'wczoraj' },
+      { position_id: 'not-a-uuid' },
+      { model_revision: 7 },
     ]) {
       const entry = await saveDefinition();
       await rejects(record(entry, a, { ...(await traceFor(entry)), ...broken }), '22023');
@@ -325,6 +328,57 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
     assert.equal((await db.query('select approval_mode from exercise_ai.proposals where definition_entry_id=$1', [entry])).rows[0].approval_mode, 'auto');
   });
 
+  await t.test('odtworzenie id i dokładnego created_at nie przywraca zgody na automat', async () => {
+    await as(ownerA);
+    const fresh = await seed(ownerA);
+    await db.query('select exercise_ai.set_auto_release($1,true)', [fresh.recruitment]);
+    const stamp = (await db.query('select created_at::text stamp from public.recruitments where id=$1', [fresh.recruitment])).rows[0].stamp;
+    await db.query('delete from public.recruitments where id=$1', [fresh.recruitment]);
+    await db.query("insert into public.recruitments(company_id,id,position_id,name,created_at) values($1,$2,$3,'REPLAY',$4)",
+      [fresh.company, fresh.recruitment, fresh.position.id, stamp]);
+    const entry = await saveDefinition(fresh);
+    await record(entry, fresh);
+    assert.equal((await db.query('select approval_mode from exercise_ai.proposals where definition_entry_id=$1', [entry])).rows[0].approval_mode, null);
+  });
+
+  await t.test('niepoprawny UUID śladu zwraca 22023 przy prawidłowej dacie', async () => {
+    await as(ownerA);
+    const entry = await saveDefinition();
+    await rejects(record(entry, a, await traceFor(entry, { position_id: 'not-a-uuid' })), '22023');
+  });
+
+  await t.test('odtworzenie id i dokładnego created_at nie dziedziczy automatu ani pułapu', async () => {
+    await as(ownerA);
+    const fresh = await seed(ownerA);
+    await db.query('select exercise_ai.set_auto_release($1,true)', [fresh.recruitment]);
+    await record(await saveDefinition(fresh), fresh);
+    const stamp = (await db.query('select created_at::text stamp from public.recruitments where id=$1', [fresh.recruitment])).rows[0].stamp;
+    await db.exec('reset role');
+    await db.query('update exercise_ai.recruitment_settings set draft_ceiling=1 where recruitment_id=$1', [fresh.recruitment]);
+    await as(ownerA);
+    await db.query('delete from public.recruitments where id=$1', [fresh.recruitment]);
+    await db.query("insert into public.recruitments(company_id,id,position_id,name,created_at) values($1,$2,$3,'REPLAY',$4)",
+      [fresh.company, fresh.recruitment, fresh.position.id, stamp]);
+    const entry = await saveDefinition(fresh);
+    await record(entry, fresh, null, 1);
+    assert.equal((await db.query('select approval_mode from exercise_ai.proposals where definition_entry_id=$1', [entry])).rows[0].approval_mode, null);
+    await record(await saveDefinition(fresh), fresh, null, 20);
+  });
+
+  for (const approved of [false, true]) await t.test(`usunięta definicja nie podlega zatwierdzeniu (wcześniej zatwierdzona: ${approved})`, async () => {
+    await as(ownerA);
+    const fresh = await seed(ownerA);
+    const entry = await saveDefinition(fresh);
+    await record(entry, fresh);
+    if (approved) await db.query('select exercise_ai.approve_proposal($1)', [entry]);
+    const stamp = (await db.query('select created_at::text stamp from public.recruitments where id=$1', [fresh.recruitment])).rows[0].stamp;
+    await db.query('delete from public.recruitments where id=$1', [fresh.recruitment]);
+    await db.query("insert into public.recruitments(company_id,id,position_id,name,created_at) values($1,$2,$3,'REPLAY',$4)",
+      [fresh.company, fresh.recruitment, fresh.position.id, stamp]);
+    await rejects(db.query('select exercise_ai.approve_proposal($1)', [entry]), '42501');
+    assert.equal((await db.query('select count(*)::int c from exercise_ai.proposals where definition_entry_id=$1', [entry])).rows[0].c, 0);
+  });
+
   await t.test('viewer nie zwalnia zadań', async () => {
     await as(ownerA);
     const entry = await saveDefinition();
@@ -349,14 +403,12 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
     const rows = (await db.query(`select n.nspname from pg_class c join pg_namespace n on n.oid=c.relnamespace
       where c.relkind='r' and c.relname in ('proposals','recruitment_settings')`)).rows;
     assert.deepEqual([...new Set(rows.map(r => r.nspname))], ['exercise_ai']);
-    // Sedno uzasadnienia osobnego schematu: żadnego więzu PRZYCHODZĄCEGO do
-    // 'public' ani 'private'. Taki więź trafia do sygnatury inwentarza niezależnie
-    // od tego, w jakim schemacie leży tabela, która go zakłada.
-    const incoming = (await db.query(`select k.conname from pg_constraint k
+    const incoming = (await db.query(`select k.confdeltype from pg_constraint k
       join pg_class c on c.oid=k.conrelid join pg_namespace n on n.oid=c.relnamespace
       join pg_class f on f.oid=k.confrelid join pg_namespace fn on fn.oid=f.relnamespace
-      where n.nspname='exercise_ai' and fn.nspname in ('public','private')`)).rows;
-    assert.deepEqual(incoming, [], 'klucz obcy do public/private zmieniłby sygnaturę inwentarza');
+      where n.nspname='exercise_ai' and fn.nspname='public'`)).rows;
+    assert.equal(incoming.length, 2);
+    assert.ok(incoming.every(k => k.confdeltype === 'c'), 'cykl życia wymuszają FK CASCADE');
   });
 
   await t.test('bez logowania nie da się zapisać ani zwolnić propozycji', async () => {
@@ -364,35 +416,4 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
     await rejects(db.query('select exercise_ai.record_proposal($1,$2,$3::jsonb,$4)',
       [a.recruitment, '10000000-0000-0000-0000-000000000001', JSON.stringify(provenance()), 20]), '42501');
   });
-});
-
-// Sedno uzasadnienia osobnego schematu, sprawdzone wprost: sygnatura inwentarza
-// usuwania danych kandydata ma być identyczna przed i po tej migracji oraz po jej
-// wycofaniu. Poprzednia wersja tej zmiany miała klucze obce do `public` i sygnaturę
-// zmieniała — czego ówczesny test nie wykrywał, bo pytał tylko o to, w jakim
-// schemacie leżą tabele.
-//
-// Bierzemy PRAWDZIWE ciało funkcji z migracji, która ją zakłada, zamiast
-// przepisywać regułę do testu: inaczej test pilnowałby własnej kopii reguły.
-test('migracja nie rusza sygnatury inwentarza usuwania danych kandydata', async t => {
-  const db = new PGlite(); t.after(() => db.close());
-  await db.exec(`create role anon nologin; create role authenticated nologin; create schema auth;
-    create table auth.users(id uuid primary key);
-    create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
-    grant usage on schema auth to anon,authenticated; grant execute on function auth.uid() to anon,authenticated;`);
-  for (const name of MIGRATIONS.filter(n => n !== '20261106130000_exercise_ai_proposals')) {
-    await db.exec(await readFile(new URL('../supabase/migrations/' + name + '.sql', import.meta.url), 'utf8'));
-  }
-  const retention = await readFile(new URL('../supabase/migrations/20261010190255_candidate_retention_preview.sql', import.meta.url), 'utf8');
-  for (const fn of ['erasure_hash', 'erasure_schema_signature']) {
-    const match = retention.match(new RegExp('create function private\\.' + fn + '[\\s\\S]*?\\n\\$\\$;'));
-    assert.ok(match, `nie znaleziono private.${fn} w migracji retencji`);
-    await db.exec(match[0]);
-  }
-  const signature = async () => (await db.query('select private.erasure_schema_signature() value')).rows[0].value;
-  const before = await signature();
-  await db.exec(await readFile(new URL('../supabase/migrations/20261106130000_exercise_ai_proposals.sql', import.meta.url), 'utf8'));
-  assert.equal(await signature(), before, 'migracja zmieniła sygnaturę inwentarza');
-  await db.exec(await readFile(new URL('../supabase/rollbacks/20261106130000_exercise_ai_proposals_down.sql', import.meta.url), 'utf8'));
-  assert.equal(await signature(), before, 'wycofanie zmieniło sygnaturę inwentarza');
 });
