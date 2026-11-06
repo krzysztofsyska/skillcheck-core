@@ -253,7 +253,7 @@ async function renderRecruitmentPurchase(enabled) {
   };
   const client={from:query,rpc:async()=>({data:[],error:null})};
   const mocks={
-    'next/link':({children,...props})=>createElement('a',props,children),
+    'next/link':{default:({children,...props})=>createElement('a',props,children)},
     'next/navigation':{notFound(){throw Error('not-found');}},
     '../../../../../lib/company-access':{companyAccess:async()=>({client,canEdit:true})},
     './assessment-forms':{StageForm:()=>null,StageControls:()=>null},
@@ -289,10 +289,10 @@ async function renderReturnFromCheckout(recruitmentId) {
   const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(new URL('../',import.meta.url).pathname);
   const req=createRequire(abs);
   const mocks={
-    'next/link':({children,...props})=>createElement('a',props,children),
+    'next/link':{default:({children,...props})=>createElement('a',props,children)},
     '../../../../../lib/company-access':{companyAccess:async()=>({company:{owner_id:OWNER},user:{id:OWNER}})},
     '../../../../../lib/sc19-payment-preview.ts':{sc19PreviewPaymentConfig:()=>null},
-    './checkout':()=>createElement('div',null,'Oferta'),
+    './checkout':{default:()=>createElement('div',null,'Oferta')},
   };
   mod.require=id=>id in mocks?mocks[id]:req(id);
   mod._compile(ts.transpileModule(readFileSync(abs,'utf8'),{compilerOptions:{
