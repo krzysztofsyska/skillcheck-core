@@ -7,6 +7,7 @@ Stan: przygotowane do niezależnego review SQL i natywnych testów PostgreSQL 16
 - Źródło R11: `0d22eb7a547b1f8838298b034d3d257ca4cba9e81430f5c6b20b9212e4d88b84`.
 - R12 na pełnym czystym replay PostgreSQL 17.5/PGlite: `48afc7b117acb3640b1521c9b8b2e525e89d653d9e2981edf2b1209f9515eaba`. Natywne PG16/17 muszą potwierdzić ten sam literał.
 - Preflight sprawdza pełny zestaw tabel, brak R12 i zajętych nazw wrapperów oraz źródło, właściciela, ACL i konfigurację ośmiu nadpisywanych/owijanych funkcji.
+- Zastane role gateway/marker mogą istnieć tylko bez własnych obiektów, jawnych ACL, initial ACL i przypisanych policies. Sprawdzenie zależności całego klastra odrzuca drift przed nadaniem dostępu do schematu private; nie usuwa cudzych uprawnień. Role z poprawnymi atrybutami, bez takich zależności, są akceptowane.
 - `erasure_inventory_rows_r11` i `erasure_row_candidates_r11` zachowują bieżący łańcuch bulk CV → Step 4 → wcześniejsze adaptery. Nie włączono wariantu voice.
 - `preview_candidate_erasure` oblicza blocker współdzielonego anulowania przed hashem manifestu. Trzy pozostałe czytniki zmieniają wyłącznie nazwę baseline. Istniejące `erasure_check_purge_scope` i `erasure_purge_rows` pozostają bez zmian.
 - Obecny `erasure_purge_engine` zachowuje validate/ACK/lease/restore/context i kontrolę hashów. Siedem usunięć następuje dopiero po `mode=delete`, przed rodzicami FK; każde sprawdza licznik manifestu. Zachowany właściciel `erasure_purge_owner`.

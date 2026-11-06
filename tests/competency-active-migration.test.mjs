@@ -55,6 +55,38 @@ for(const variant of ['relation','function','acl','config']) test(`C1: ${variant
  assert.equal((await db.query("select to_regclass('private.competency_test_grants') v")).rows[0].v,null);
 });
 
+for(const variant of ['gateway_execute','marker_execute','marker_owner']) test(`C1: pre-existing ${variant} privilege fails without changing its ACL`,async t=>{
+ const {db}=await activeBoot(t,{install:false});
+ await db.exec(`do $$begin
+  if not exists(select 1 from pg_roles where rolname='competency_test_gateway') then
+   create role competency_test_gateway nologin noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls;end if;
+  if not exists(select 1 from pg_roles where rolname='competency_test_marker_writer') then
+   create role competency_test_marker_writer nologin noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls;end if;
+ end;$$;`);
+ if(variant==='gateway_execute')await db.exec('grant execute on function private.screening_material(uuid,boolean) to competency_test_gateway');
+ if(variant==='marker_execute')await db.exec('grant execute on function private.screening_material(uuid,boolean) to competency_test_marker_writer');
+ if(variant==='marker_owner')await db.exec('create schema hostile_marker_owned authorization competency_test_marker_writer');
+ const before=await catalogSnapshot(db);
+ const dependencies=async()=> (await db.query(`select d.dbid,d.classid,d.objid,d.objsubid,d.deptype,r.rolname from pg_shdepend d
+  join pg_roles r on r.oid=d.refobjid where d.refclassid='pg_authid'::regclass
+  and r.rolname in ('competency_test_gateway','competency_test_marker_writer') order by d.dbid,d.classid,d.objid,d.objsubid,d.deptype,r.rolname`)).rows;
+ const roleBefore=await dependencies();assert.ok(roleBefore.length>0);
+ await assert.rejects(run(db,await c1Sql()),/sc_wer_source_role_privileges_unreviewed/);
+ assert.deepEqual(await catalogSnapshot(db),before);assert.deepEqual(await dependencies(),roleBefore);
+ assert.equal((await db.query("select to_regclass('private.competency_test_grants') v")).rows[0].v,null);
+});
+
+test('C1: clean pre-existing cluster roles remain valid',async t=>{
+ const {db}=await activeBoot(t,{install:false});
+ await db.exec(`do $$begin
+  if not exists(select 1 from pg_roles where rolname='competency_test_gateway') then
+   create role competency_test_gateway nologin noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls;end if;
+  if not exists(select 1 from pg_roles where rolname='competency_test_marker_writer') then
+   create role competency_test_marker_writer nologin noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls;end if;
+ end;$$;`);
+ await run(db,await c1Sql());await assertCurrentInventory(db);
+});
+
 test('C1: SQL shortlist gate, capability exchange, evidence review and tenant isolation',async t=>{
  const e=await activeBoot(t),{db,h,seed,issue,call,asGateway}=e;
  const notSelected=await seed({shortlist:false});await assert.rejects(issue(notSelected),denied);

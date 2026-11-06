@@ -7,6 +7,8 @@ on:
       - 'lib/competency-staff-response.ts'
       - 'lib/competency-staff.ts'
       - 'lib/competency-postgres-limiter.ts'
+      - 'app/dashboard/**/competency-forms.tsx'
+      - 'app/dashboard/**/competency-actions.ts'
       - 'tests/competency-active-*.mjs'
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'supabase/migrations/*sc_wer*'
@@ -36,6 +38,8 @@ on:
       - 'lib/competency-staff-response.ts'
       - 'lib/competency-staff.ts'
       - 'lib/competency-postgres-limiter.ts'
+      - 'app/dashboard/**/competency-forms.tsx'
+      - 'app/dashboard/**/competency-actions.ts'
       - 'tests/competency-active-*.mjs'
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'supabase/migrations/*sc_wer*'
@@ -89,7 +93,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y redis-tools postgresql-client
       - name: Install isolated Chromium testing dependency (not an application dependency)
         run: |
-          npm install --no-save --package-lock=false playwright@1.56.1
+          npm install --no-save --package-lock=false playwright@1.56.1 react-test-renderer@19.3.1
           npx playwright install --with-deps chromium
       - name: Confirm isolated resources only
         run: |
@@ -129,6 +133,7 @@ jobs:
           tests/competency-broker-browser.test.mjs
           tests/competency-candidate-journey.test.mjs
           tests/competency-active-journey.test.mjs
+          tests/competency-active-grant-form.test.mjs
           tests/competency-broker-security.test.mjs
       - name: Actual enabled routes and TLS pools with Redis and PostgreSQL limiters
         env:

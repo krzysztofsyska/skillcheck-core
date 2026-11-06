@@ -103,6 +103,15 @@ begin
  if to_regprocedure('private.erasure_inventory_rows_r11(uuid,uuid[])') is not null
  or to_regprocedure('private.erasure_row_candidates_r11(text,jsonb)') is not null then
   raise exception 'sc_wer_adapter_name_taken' using errcode='55000';end if;
+ -- A clean pre-existing NOLOGIN role is valid (roles are cluster-wide), but
+ -- ownership or explicit grants survive schema signatures and would become
+ -- reachable as soon as this migration grants private USAGE. Never repair or
+ -- silently revoke an unreviewed role: reject the whole transaction instead.
+ if exists(select 1 from pg_shdepend d join pg_roles r on r.oid=d.refobjid
+  where d.refclassid='pg_authid'::regclass
+   and r.rolname in ('competency_test_gateway','competency_test_marker_writer')
+   and d.deptype in ('o','a','i','r')) then
+  raise exception 'sc_wer_source_role_privileges_unreviewed' using errcode='55000';end if;
 end $preflight$;`];
 output.push(noTransaction(text.validation));
 let attempts = noTransaction(text.attempts).replace(/-- SC-014-B2[^\n]*\n/, '-- Active competency capability protocol.\n');

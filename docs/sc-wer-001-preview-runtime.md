@@ -15,6 +15,8 @@ Runtime wymaga jawnego wyboru `postgres` lub `redis`. W trybie postgres audyt ga
 
 Rekruter widzi sekret raz, w kontrolce do skopiowania. Link używa fragmentu `#grant=`, który istniejąca strona B4 natychmiast usuwa z historii; token nie jest parametrem query ani trasą HTTP. Serwer nie odczytuje wcześniej wydanego sekretu, nie loguje go i nie umieszcza w rewalidowanej ścieżce. Po odświeżeniu konieczna jest rotacja, jeśli link został utracony. Każda akcja ponownie sprawdza rolę i kontekst firmy/rekrutacji/aplikacji; SQL egzekwuje R1 niezależnie od UI.
 
+Każda potwierdzona operacja w formularzu dostaje nowy klucz następnego żądania. Przy utracie odpowiedzi zachowane są klucz i oczekiwana rewizja poprzedniej operacji, także po odświeżeniu statusu bez przeładowania strony. Ponowienie odczytuje zapisany rezultat i nie obraca linku ponownie. Stary podgląd znika przy rozpoczęciu kolejnej operacji; niepewna odpowiedź nie pozostawia go jako aktualnego.
+
 Oceny testu pozostają w tabelach competency. Nie są ocenami AC ani raportem preselekcji. Brak cytatu oznacza brak danych. Pokrycie poniżej 60% nie daje wyniku zbiorczego. Raport nie podejmuje decyzji zatrudnieniowej.
 
 Lokalna weryfikacja: pełny replay i 13 testów C1/C2/C3 na PostgreSQL 17.5/PGlite, w tym Chromium → rzeczywisty dokument B4 → broker → SQL → ocena człowieka → parser raportu: PASS. Typecheck i build: PASS. Natywne macierze PG16/17 oraz rzeczywisty eksport trasy Next z dedykowanym loginem i zaufanym TLS są osobnymi obowiązkowymi testami CI. Lokalny test przeglądarki nie jest dowodem aktywacji środowiska Preview.

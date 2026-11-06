@@ -5,7 +5,7 @@ import {exerciseUuid} from '../../../../../lib/exercise-context';
 import {competencyActionError,parseCompetencyAccess} from '../../../../../lib/competency-staff';
 import {evaluateCompetencyTest} from '../../../../../lib/competency-test';
 import {staffWorkSample} from '../../../../../lib/competency-staff-response';
-export type CompetencyActionState={error?:string;message?:string;link?:string};
+export type CompetencyActionState={error?:string;message?:string;link?:string;confirmed?:true};
 function enabled(){return process.env.COMPETENCY_CANDIDATE_PREVIEW==='true'&&
  (process.env.VERCEL_ENV==='preview'||process.env.NODE_ENV==='development');}
 const path=(r:BehaviorRoute)=>`/dashboard/${r.companyId}/recruitments/${r.recruitmentId}/applications/${r.applicationId}/exercises`;
@@ -27,7 +27,9 @@ async function grantAction(route:BehaviorRoute,kind:'issue'|'rotate'|'revoke',ta
  let result;
  if(kind==='issue'){
   if(!current.shortlisted)return {error:'Wydanie dostępu wymaga aktywnego wpisu na shortliście.'};
-  if(current.access.some(g=>g.definitionId===target))return {message:'Ta wersja ma już wydany dostęp. Odśwież status; sekret można zastąpić przez rotację.'};
+  if(current.access.some(g=>g.definitionId===target)){
+   revalidatePath(path(route));return {confirmed:true,message:'Ta wersja ma już wydany dostęp. Sekret można zastąpić przez rotację.'};
+  }
   const definition=await client.from('exercise_definition_entries').select('id,definition').eq('company_id',route.companyId).eq('recruitment_id',route.recruitmentId).eq('id',target).maybeSingle();
   if(definition.error||definition.data?.definition.kind!=='competency_test')return {error:'Nie znaleziono wersji testu.'};
   const hours=Number(form.get('hours'));if(!Number.isInteger(hours)||hours<1||hours>168)return {error:'Termin rozpoczęcia: od 1 do 168 godzin.'};
@@ -38,17 +40,19 @@ async function grantAction(route:BehaviorRoute,kind:'issue'|'rotate'|'revoke',ta
   const grant=current.access.find(g=>g.grantId===target);
   if(!grant)return {error:'Nie znaleziono dostępu w tym zgłoszeniu.'};
   if(kind==='rotate'){
-   if(!current.shortlisted||!Number.isSafeInteger(revision)||revision!==grant.revision)return {error:'Odśwież aktualny dostęp i shortlistę.'};
+   // SQL checks expected_revision after its idempotency receipt. A retry of an
+   // uncertain successful request must retain its original revision and key.
+   if(!current.shortlisted||!Number.isSafeInteger(revision)||revision<1)return {error:'Odśwież aktualny dostęp i shortlistę.'};
    result=await client.rpc('rotate_competency_test_grant',{target,expected_revision:revision,request_key:requestKey});
   }else result=await client.rpc('revoke_competency_test_grant',{target,request_key:requestKey});
  }
  if(result.error)return {error:competencyActionError(result.error.code)};
  revalidatePath(path(route));
  const value=result.data;
- if(kind==='revoke')return {message:'Dostęp odwołany. Poprzedni link i sesje są nieważne.'};
+ if(kind==='revoke')return {confirmed:true,message:'Dostęp odwołany. Poprzedni link i sesje są nieważne.'};
  if(!value||typeof value!=='object'||Array.isArray(value)||typeof value.token!=='string'||!/^[0-9a-f]{64}$/.test(value.token))
-  return {message:'Operacja została wcześniej zapisana. Sekretu nie można odczytać ponownie; użyj rotacji.'};
- return {link:origin.origin+'/zadanie-kompetencyjne#grant='+value.token};
+  return {confirmed:true,message:'Operacja została wcześniej zapisana. Sekretu nie można odczytać ponownie; użyj rotacji.'};
+ return {confirmed:true,link:origin.origin+'/zadanie-kompetencyjne#grant='+value.token};
 }
 export async function issueCompetencyGrant(route:BehaviorRoute,definitionId:string,_state:CompetencyActionState,form:FormData){return grantAction(route,'issue',definitionId,0,form);}
 export async function rotateCompetencyGrant(route:BehaviorRoute,grantId:string,revision:number,_state:CompetencyActionState,form:FormData){return grantAction(route,'rotate',grantId,revision,form);}
