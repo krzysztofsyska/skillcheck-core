@@ -28,8 +28,11 @@ begin
   select a.company_id,a.recruitment_id,a.id,d.id,first_id,second_id
     from public.applications a join public.exercise_definition_entries d
       on d.company_id=a.company_id and d.recruitment_id=a.recruitment_id
+    join public.recruitments r on r.id=a.recruitment_id and r.company_id=a.company_id
+    join public.positions p on p.id=r.position_id and p.company_id=a.company_id
     join public.companies c on c.id=a.company_id
     where a.id=application and d.id=revision and d.definition->>'kind'='assessment_center'
+      and a.status in ('new','in_progress') and r.status in ('draft','open') and p.status<>'archived'
       and private.is_company_owner(c.id) and first_id<>second_id
       and not exists (
         select 1 from unnest(array[first_id,second_id]) participant
