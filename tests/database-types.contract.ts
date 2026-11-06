@@ -133,6 +133,7 @@ type ExpectedFunctions =
   | "claim_screening_attempt_v2"
   | "screening_attempt_result_schema_version"
   | "cv_bulk_create_batch"
+  | "ac_assign_pair" | "ac_find_pair" | "ac_read_pair" | "ac_submit_sheet"
   | "list_competency_test_attempts"
   | "list_competency_test_access"
   | "create_competency_test_grant"

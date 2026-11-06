@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
+import { buildAssessmentCenterReport } from '../lib/assessment-center-report.ts';
+import { parseExerciseObservations } from '../lib/exercise-observation.ts';
 
 test('exercise observations preserve evidence, immutable rubric and tenant boundaries', async t => {
   const db=new PGlite(); t.after(()=>db.close());
@@ -36,13 +38,36 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
   const sql='select public.save_exercise_observations($1,$2,$3,$4,$5) id';
   const args=(version=0,target=a,items=observations())=>[target.application,target.revision,version,' Praca TEST ',JSON.stringify(items)];
   const deny=(query,values=[],code='42501')=>assert.rejects(db.query(query,values),e=>e.code===code);
+  await t.test('AC evidence saved by the recruiter reaches the report for the same applicant and rubric',async()=>{
+    await db.exec('begin');
+    try {
+    const acRevision=(await db.query('select public.save_exercise_definition($1,gen_random_uuid(),$2,0,$3,$4) id',
+      [a.recruitment,JSON.stringify({...definition,kind:'assessment_center'}),a.position.id,a.position.stamp])).rows[0].id;
+    await as(recruiter);
+    const revision=(await db.query('select * from public.exercise_definition_entries where id=$1',[acRevision])).rows[0];
+    const form=new FormData();
+    form.set('workSample','Praca TEST');
+    for (const item of observations()) {
+      form.append('rating',item.rating);form.append('evidence',item.evidence);
+    }
+    const payload=parseExerciseObservations(revision.definition,form);
+    const entry=(await db.query(sql,[a.application,acRevision,0,payload.workSample,JSON.stringify(payload.observations)])).rows[0].id;
+    const row=(await db.query('select * from public.exercise_observation_entries where id=$1',[entry])).rows[0];
+    const report=buildAssessmentCenterReport({companyId:a.company,recruitmentId:a.recruitment,
+      applicationId:a.application,definitionEntryId:acRevision},revision,row);
+    assert.equal(report.authorId,recruiter);
+    assert.equal(report.evidencedCriteria,1);
+    assert.equal(report.criteria[0].observerNote,'Wskazał termin.');
+    assert.equal(report.criteria[1].source,'missing');
+    } finally { await db.exec('rollback'); }
+  });
   await t.test('owner and recruiter append attributed revisions; missing data stays distinct',async()=>{
     await db.query(sql,args()); await as(recruiter); await db.query(sql,args(1));
-    const rows=(await db.query('select * from public.exercise_observation_entries order by version')).rows;
+    const rows=(await db.query('select * from public.exercise_observation_entries where definition_entry_id=$1 order by version',[a.revision])).rows;
     assert.equal(rows.length,2);assert.deepEqual(rows.map(r=>r.author_id),[ownerA,recruiter]);
     assert.equal(rows[0].work_sample,'Praca TEST');assert.equal(rows[0].observations[0].evidence,'Wskazał termin.');
     assert.equal(rows[0].observations[1].rating,'insufficient_data');
-    assert.equal((await db.query('select version from public.latest_exercise_observations')).rows[0].version,2);
+    assert.equal((await db.query('select version from public.latest_exercise_observations where definition_entry_id=$1',[a.revision])).rows[0].version,2);
   });
   await t.test('viewer reads only; other firms cannot read or mix definitions and applications',async()=>{
     await as(viewer);assert.equal((await db.query('select * from public.latest_exercise_observations')).rows.length,1);await deny(sql,args(2));

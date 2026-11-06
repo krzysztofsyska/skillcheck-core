@@ -408,6 +408,10 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      ac_assign_pair: {Args:{application:string;revision:string;first_id:string;second_id:string};Returns:string};
+      ac_find_pair: {Args:{application:string;revision:string};Returns:string|null};
+      ac_read_pair: {Args:{pair_id:string};Returns:Json};
+      ac_submit_sheet: {Args:{pair_id:string;sheet:Json};Returns:undefined};
       list_competency_test_access: { Args:{target:string}; Returns:Json };
       create_competency_test_grant: { Args:{target_application:string;target_definition:string;start_by:string;request_key:string}; Returns:Json };
       rotate_competency_test_grant: { Args:{target:string;expected_revision:number;request_key:string}; Returns:Json };
