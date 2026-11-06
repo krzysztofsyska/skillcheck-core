@@ -20,6 +20,6 @@ export const runtime='nodejs';
 // state of the switch and give the UI something it does not understand.
 export async function GET(request: Request) {
   if(process.env.SC19_PACKAGES_ENABLED!=='true')return paymentsUnavailable();
-  const [payments,catalog]=await Promise.all([resolveSc19PaymentRuntime(),resolveSc19OfferCatalog()]);
+  const [payments,catalog]=await Promise.all([resolveSc19PaymentRuntime(request),resolveSc19OfferCatalog()]);
   return createSc19PaymentHttp(payments,catalog).offers(request);
 }

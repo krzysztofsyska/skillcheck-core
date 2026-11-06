@@ -19,6 +19,7 @@
     "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs tests/screening-synthetic-fixture.test.mjs tests/screening-ui.test.mjs tests/screening-evidence.test.mjs tests/screening-evidence-schema.test.mjs tests/screening-evidence-database.test.mjs tests/screening-claim-routing.test.mjs tests/interview-gaps.test.mjs tests/screening-worker-edge-imports.test.mjs",
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
     "test:screening-report": "node --test tests/screening-report.test.mjs",
+    "test:candidate-report": "node --experimental-strip-types --test tests/candidate-report.test.mjs tests/position-requirement-flags-database.test.mjs",
     "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
     "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
@@ -72,6 +73,7 @@
     "mammoth": "1.13.0",
     "next": "16.4.3",
     "pdf-parse": "2.4.5",
+    "pg": "8.16.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tesseract.js": "7.0.0",
@@ -84,7 +86,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/yauzl": "3.4.0",
-    "pg": "^8.16.3",
     "typescript": "^5.9.0"
   }
 }

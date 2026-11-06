@@ -1,4 +1,5 @@
 import type { ScreeningRating } from './supabase/database.types';
+import type { RequirementFlagRow } from './requirement-flags.ts';
 
 export const REPORT_VERSION = 'screening-report-v1';
 export const MAX_REPORT_APPLICATIONS = 500;
@@ -149,6 +150,10 @@ export type ScreeningReport = {
   recruitmentId: string; recruitmentName: string; positionTitle: string; targetSize: number;
   requirements: { kind: keyof typeof kindLabels; text: string }[]; applications: ReportApplication[];
   groups?: ReportGroupRow[];
+  /** SC-015 / #268. Oznaczenia wymagań konieczne/dodatkowe; brak = wszystko nieoznaczone.
+   * Tylko dla widoku porównania — eksport CSV ich nie zawiera (decyzja właściciela 2026-11-04). */
+  positionId?: string;
+  requirementFlags?: RequirementFlagRow[];
 };
 /**
  * A saved preselection group is current only while it was computed from the analysis the SC-008

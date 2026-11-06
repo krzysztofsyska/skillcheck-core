@@ -4,16 +4,16 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
-## Who does what (owner decision 2026-10-31)
+## Who does what (owner decision 2026-11-05)
 
-Cursor and Codex are no longer used. ChatGPT is no longer the orchestrator.
+Codex coordinates and implements programming work across the entire SkillCheck project.
 
-- **Claude** — orchestrator and builder: picks the next task, writes the code, runs the tests, opens the PR to `integration`.
-- **Independent reviewer** — a separate Claude agent started with fresh context that did not write the change. It reviews architecture, security, correctness, tests and scope against the current PR commit and returns PASS / PASS WITH FIXES / FAIL. This satisfies "independent review" in the Review loop of `AGENTS.md`. The verdict is posted as a PR comment (not a GitHub "Approve", see rule 5 in `AGENTS.md`) and names the full SHA of the reviewed commit; a merge into `integration` needs a PASS (or PASS WITH FIXES with every fix made and checked again) whose SHA equals the current PR head; any push after the verdict needs a new review.
+- **Codex** — orchestrator and builder: picks the next task, writes the code, runs the tests, opens the PR to `integration`.
+- **Independent reviewer** — a separate reviewer agent started with fresh context that did not write the change. It reviews architecture, security, correctness, tests and scope against the current PR commit and returns PASS / PASS WITH FIXES / FAIL. This satisfies "independent review" in the Review loop of `AGENTS.md`. The verdict is posted as a PR comment (not a GitHub "Approve", see rule 5 in `AGENTS.md`) and names the full SHA of the reviewed commit; a merge into `integration` needs a PASS (or PASS WITH FIXES with every fix made and checked again) whose SHA equals the current PR head; any push after the verdict needs a new review.
 - **CI** — deterministic checks, unchanged.
 - **Owner (Krzysztof)** — production approval, merging the promotion PR into `main`, new costs, external or irreversible actions. Nothing else.
 
-Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as builder or Codex as reviewer, read them as the roles above. Do not hand work off to Cursor, Codex or ChatGPT. The `chatgpt-codex-connector` bot still reviews PRs automatically. Do not wait for it; handle its findings only if it has posted. Before merging, every bot finding on any commit of the PR that the current head has not fixed is verified and either fixed or answered in its thread with a reason, and the independent reviewer's verdict on the current head lists each bot finding as fixed or rejected. Security findings are always fixed on the branch before merging (owner decision 2026-11-01); only if the builder considers one invalid is the PR blocked and the owner asked one YES/NO question in Polish with a recommendation. Fixed security findings need no owner decision.
+Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as builder or Codex as reviewer, read them as the roles above. Earlier builder assignments transfer to Codex. Preserve work already in progress. The `chatgpt-codex-connector` bot still reviews PRs automatically. Do not wait for it; handle its findings only if it has posted. Before merging, every bot finding on any commit of the PR that the current head has not fixed is verified and either fixed or answered in its thread with a reason, and the independent reviewer's verdict on the current head lists each bot finding as fixed or rejected. Security findings are always fixed on the branch before merging (owner decision 2026-11-01); only if the builder considers one invalid is the PR blocked and the owner asked one YES/NO question in Polish with a recommendation. Fixed security findings need no owner decision.
 
 ## How the owner works
 
@@ -53,7 +53,7 @@ Owner decisions (all YES, 2026-11-01):
 3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). Przelewy24 and Fakturownia automation are frozen until there are paying customers.
 4. Bulk CV upload (PR #228) is part of the MVP.
 5. Everything outside the MVP is labelled `później` and closed; old branches stay (agent sessions cannot delete branches or push tags).
-6. `main` and `integration` are protected: merges only through PRs with green required checks. Claude is the only builder.
+6. `main` and `integration` are protected: merges only through PRs with green required checks. Codex is the designated builder.
 
 Order of work:
 1. Housekeeping (this PR, branch protection, `później` labels).
