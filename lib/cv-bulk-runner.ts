@@ -30,7 +30,7 @@ export function parsePump(value: unknown): PumpResult {
   // Prevent a malformed/retried pump response from dispatching the same attempt twice.
   // UUIDs are case-insensitive in PostgreSQL, so normalize before deduplication.
   const dispatch = Array.isArray(v.dispatch)
-    ? [...new Set(v.dispatch.filter((x): x is string => typeof x === 'string' && uuid.test(x)).map(id => id.toLowerCase()))]
+    ? Array.from(new Set(v.dispatch.filter((x): x is string => typeof x === 'string' && uuid.test(x)).map(id => id.toLowerCase())))
     : [];
   const n = v.notify as BulkNotify | null | undefined;
   return { dispatch, notify: n && typeof n === 'object' && typeof n.batch_id === 'string' && uuid.test(n.batch_id) ? n : null };
