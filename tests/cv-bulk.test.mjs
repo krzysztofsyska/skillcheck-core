@@ -206,7 +206,9 @@ test('PDF OCR: tiny inline images cannot indefinitely block sparse-text extracti
   // Depending on the pdf-parse implementation, inline images are either skipped
   // or bounded inspection falls back to OCR of the complete page.
   const result = await extractBulkCv(pdf, 'pdf', async () => ({
-    text: 'Doświadczenie zawodowe od 2017 roku w analizie SQL. Dodatkowa treść zeskanowana.',
+    text: 'Doświadczenie zawodowe od 2017 roku w analizie SQL. Dodatkowa treść zeskanowana. ' +
+      'Analiza wymagań, planowanie raportów i dokumentowanie wyników w pracy zespołowej. ' +
+      'Utrzymywanie procesów kontroli jakości i weryfikowanie kompletności danych.',
     confidence: 94,
   }), { deadline: Date.now() + 7000 });
   assert.match(result.text, /Anna Nowak/);
