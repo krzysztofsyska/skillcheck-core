@@ -16,10 +16,19 @@ export const EXERCISE_AI_PAYLOAD_SCHEMA_VERSION = 1;
 export const EXERCISE_AI_RESULT_SCHEMA_VERSION = 1;
 export const EXERCISE_AI_MAX_OUTPUT_TOKENS = 4000;
 export const EXERCISE_AI_REQUEST_TIMEOUT_MS = 60000;
+/** Upper bound on the raw response text before it is parsed as JSON. */
+export const EXERCISE_AI_MAX_RESPONSE_CHARS = 200_000;
 export const EXERCISE_AI_MAX_RETRIES = 2;
 
-/** Hard ceiling per recruitment, so a loop in the UI cannot run up a model bill. */
+/**
+ * Hard ceiling per recruitment, so a loop in the UI cannot run up a model bill.
+ * DECLARED HERE, NOT YET ENFORCED: the counter it needs lands with the migration
+ * in step 2 of SC-014-C6. Nothing in this module meters calls.
+ */
 export const EXERCISE_AI_MAX_DRAFTS_PER_RECRUITMENT = 20;
+
+/** The rubric validator accepts at most 12 criteria, one per required competency. */
+export const EXERCISE_AI_MAX_CRITERIA = 12;
 /** The individual part stays small: it supplements, never replaces, the shared task. */
 export const EXERCISE_AI_MAX_INDIVIDUAL_QUESTIONS = 5;
 
@@ -99,10 +108,28 @@ const trimmedList = (values: readonly string[] | null | undefined, max: number) 
  */
 export function exerciseDraftPayload(input: ExerciseDraftInput) {
   const position = input.position;
-  const competencies = trimmedList(position.required_competencies, 12);
+  const competencies = trimmedList(position.required_competencies, EXERCISE_AI_MAX_CRITERIA + 1);
+  // Tasks and KPIs are context for the model, so taking the first 20 of a very
+  // long list is deliberate. Competencies are not context: each one becomes a
+  // rubric criterion, so dropping any would silently produce a rubric that
+  // ignores part of the position — the recruiter would never see what is
+  // missing. A profile with too many is refused instead.
   const tasks = trimmedList(position.tasks, 20);
   if (!trimmed(position.title) || competencies.length === 0 || tasks.length === 0) {
     throw new ExerciseAiError('exercise_ai_input_incomplete', 'Position profile is incomplete.');
+  }
+  if (competencies.length > EXERCISE_AI_MAX_CRITERIA) {
+    throw new ExerciseAiError('exercise_ai_input_incomplete', 'Position profile has too many competencies.');
+  }
+  // Checked here, not after the model answers: a profile fault must not be
+  // reported to the recruiter as a failed model proposal, and must not cost a
+  // model call at all. Both limits mirror what the rubric validator accepts.
+  if (competencies.some(value => value.length > 200)) {
+    throw new ExerciseAiError('exercise_ai_input_incomplete', 'A required competency is too long for a rubric criterion.');
+  }
+  const keys = competencies.map(value => value.normalize('NFKC').toLocaleLowerCase('pl-PL').replace(/\s+/g, ' '));
+  if (new Set(keys).size !== keys.length) {
+    throw new ExerciseAiError('exercise_ai_input_incomplete', 'Required competencies repeat.');
   }
   return {
     schema_version: EXERCISE_AI_PAYLOAD_SCHEMA_VERSION,
@@ -244,14 +271,18 @@ export function parseExerciseDraftOutput(
 
 /**
  * The database layer that issues candidate grants
- * (`private.competency_validate_definition`) measures the same maxima in UTF-16
- * units after NFKC normalisation, which can be longer than the raw string the
- * TypeScript validator measured. A draft that passes here and fails there would
- * save as a definition nobody can ever hand to a candidate (`PT422`), so the
- * generator refuses it up front rather than storing a dead rubric.
+ * (`private.competency_validate_definition`) measures the same maxima with
+ * `private.competency_utf16_length` on the **raw** value — it counts 2 for an
+ * astral code point, which is exactly what JavaScript `String.length` counts.
+ * It does not normalise before measuring; NFKC is used there only to compare
+ * competencies and anchors for duplicates. So the faithful mirror is the raw
+ * UTF-16 length: normalising first would both reject drafts the gateway accepts
+ * (a ligature expands) and accept drafts it rejects with `PT422` (a decomposed
+ * accent composes). A rubric that fails there could never be handed to a
+ * candidate, so the generator refuses it here instead of storing a dead rubric.
  */
 export function assertExerciseDraftFitsGrantLimits(definition: ExerciseDefinition) {
-  const normalized = (value: string) => value.normalize('NFKC').trim().length;
+  const measured = (value: string) => value.length;
   const fields: [string, number][] = [
     [definition.title, 200],
     [definition.instructions, 10000],
@@ -260,7 +291,7 @@ export function assertExerciseDraftFitsGrantLimits(definition: ExerciseDefinitio
   for (const criterion of definition.criteria) {
     fields.push([criterion.competency, 200], [criterion.below, 2000], [criterion.meets, 2000], [criterion.above, 2000]);
   }
-  if (fields.some(([value, max]) => normalized(value) > max)) {
+  if (fields.some(([value, max]) => measured(value) > max)) {
     throw new ExerciseAiError('exercise_ai_invalid_output', 'Draft exceeds the rubric length the candidate gateway accepts.');
   }
 }
@@ -274,19 +305,35 @@ export type ExerciseAiResponse = {
   usage?: { input_tokens?: number; output_tokens?: number };
 };
 
-function collectDraftText(response: ExerciseAiResponse) {
-  if (typeof response.output_text === 'string' && response.output_text.trim()) return response.output_text;
-  const chunks: string[] = [];
+/**
+ * A response may carry both a refusal and `output_text`. Taking the shortcut
+ * first would parse the refusal away as a successful draft, so the structured
+ * output is always inspected for a refusal before any text is returned.
+ */
+function assertNoRefusal(response: ExerciseAiResponse) {
   for (const item of response.output ?? []) {
     const row = asRecord(item);
     if (!row) continue;
     if (row.type === 'refusal' || row.refusal) throw new ExerciseAiError('exercise_ai_refusal', 'Model refused.');
     for (const part of Array.isArray(row.content) ? row.content : []) {
       const piece = asRecord(part);
-      if (!piece) continue;
-      if (piece.type === 'refusal' || typeof piece.refusal === 'string') {
+      if (piece && (piece.type === 'refusal' || typeof piece.refusal === 'string')) {
         throw new ExerciseAiError('exercise_ai_refusal', 'Model refused.');
       }
+    }
+  }
+}
+
+function collectDraftText(response: ExerciseAiResponse) {
+  assertNoRefusal(response);
+  if (typeof response.output_text === 'string' && response.output_text.trim()) return response.output_text;
+  const chunks: string[] = [];
+  for (const item of response.output ?? []) {
+    const row = asRecord(item);
+    if (!row) continue;
+    for (const part of Array.isArray(row.content) ? row.content : []) {
+      const piece = asRecord(part);
+      if (!piece) continue;
       if ((piece.type === 'output_text' || piece.type === 'text') && typeof piece.text === 'string') chunks.push(piece.text);
     }
   }
@@ -311,6 +358,11 @@ export function parseExerciseDraftResponse(
   }
   const text = collectDraftText(response);
   if (!text) throw new ExerciseAiError('exercise_ai_invalid_output', 'Empty model response.');
+  // EXERCISE_AI_MAX_OUTPUT_TOKENS bounds a legitimate draft well below this, so
+  // anything larger is not a draft and is refused before it reaches JSON.parse.
+  if (text.length > EXERCISE_AI_MAX_RESPONSE_CHARS) {
+    throw new ExerciseAiError('exercise_ai_invalid_output', 'Model response exceeds the expected size.');
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -414,8 +466,11 @@ export function buildIndividualQuestions(
   const questions: IndividualQuestion[] = [];
   const seen = new Set<string>();
   for (const gap of gaps) {
-    // Only a gap a human can stand behind: an unreviewed or rejected row carries
-    // no confirmed question, so the recruiter writes their own if they want one.
+    // A rejected row carries no question, and an unreviewed `supported` row
+    // arrives here as 'unverified'. Note that an unreviewed row WITH a gap
+    // verdict still arrives as 'matrix', so this filter alone is not the
+    // human-review guarantee: `individualQuestionsAllowed` is, and the two are
+    // always used together. Never call this function without that gate.
     if (gap.source !== 'matrix' && gap.source !== 'edited') continue;
     const question = gap.question?.trim();
     const requirement = gap.requirement?.trim();

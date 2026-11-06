@@ -76,17 +76,28 @@ test('an incomplete position profile is refused before any request is built', ()
 });
 
 test('no candidate data can reach the provider: the payload has no place for it', () => {
+  // Fully fictional CV with the kind of data that must never be sent.
+  const syntheticCv = {
+    real_person: false,
+    contains_contact_data: true,
+    cv_text: 'Anna Przykładowa, anna.przykladowa@example.invalid, +48 600 100 200, ur. 1991-04-02.',
+  };
+  // The input type has no field for any of it; extra keys are simply not read.
   const payload = exerciseDraftPayload({
-    position: { ...position, description: 'Kandydat: Jan Kowalski, jan@example.com, 600100200.' },
+    position,
     company,
+    candidate: syntheticCv,
+    cv_text: syntheticCv.cv_text,
+    application_id: '00000000-0000-0000-0000-000000000001',
   });
-  const request = buildExerciseDraftRequest(payload);
-  const sent = JSON.stringify(request);
-  // The position description is company-authored text and travels as data, but
-  // nothing in the contract accepts a CV, an application or a candidate record.
-  assert.ok(!('cv_text' in payload));
-  assert.ok(!sent.includes('candidate'));
-  assert.ok(!sent.includes('application'));
+  const sent = JSON.stringify(buildExerciseDraftRequest(payload));
+  for (const secret of ['Anna Przykładowa', 'anna.przykladowa@example.invalid', '600 100 200', '1991-04-02',
+    '00000000-0000-0000-0000-000000000001']) {
+    assert.equal(sent.includes(secret), false, `payload wysłany do modelu zawiera ${secret}`);
+  }
+  // Stated positively: the user slot carries exactly the allowlisted profile keys.
+  const userSlot = JSON.parse(buildExerciseDraftRequest(payload).input[1].content);
+  assert.deepEqual(Object.keys(userSlot).sort(), ['schema_version', 'untrusted_company', 'untrusted_position']);
 });
 
 test('structured output is strict and the prompt treats profile text as data', () => {
@@ -137,13 +148,49 @@ test('a draft with a different number of criteria than the profile is refused', 
     error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
 });
 
-test('a draft that would be too long for the candidate gateway is refused here', () => {
+test('length is measured exactly as the candidate gateway measures it', () => {
   const payload = exerciseDraftPayload({ position, company });
-  // NFKC expands this ligature to two characters, so the database layer would
-  // measure more than the TypeScript validator did and reject the grant.
-  const long = { ...draft, title: 'ﬁ'.repeat(150) };
-  assert.equal(long.title.length, 150);
-  assert.throws(() => parseExerciseDraftOutput(long, payload),
+  // The gateway counts raw UTF-16 units (private.competency_utf16_length), the
+  // same unit as JavaScript String.length, and does NOT normalise first.
+  // Too long raw: the gateway would raise PT422, so it is refused here.
+  const tooLong = { ...draft, instructions: 'a'.repeat(10_001) };
+  assert.throws(() => parseExerciseDraftOutput(tooLong, payload),
+    error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
+  // Decomposed accents: 300 raw units, 150 after NFKC. Measuring normalised
+  // would let this through and the grant would then fail — so it is refused.
+  const decomposed = { ...draft, title: 'é'.repeat(150) };
+  assert.equal(decomposed.title.length, 300);
+  assert.equal(decomposed.title.normalize('NFKC').length, 150);
+  assert.throws(() => parseExerciseDraftOutput(decomposed, payload),
+    error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
+  // A ligature is one raw unit and the gateway accepts it, so it must not be
+  // rejected here just because NFKC would expand it.
+  const ligature = { ...draft, title: 'ﬁ'.repeat(150) };
+  assert.equal(ligature.title.length, 150);
+  assert.equal(parseExerciseDraftOutput(ligature, payload).title, ligature.title);
+});
+
+test('a position profile the rubric cannot hold is refused before any model call', () => {
+  const tooMany = { ...position, required_competencies: Array.from({ length: 13 }, (_, i) => `Kompetencja ${i}`) };
+  assert.throws(() => exerciseDraftPayload({ position: tooMany, company }),
+    error => error instanceof ExerciseAiError && error.code === 'exercise_ai_input_incomplete');
+  // Exactly twelve still works — the limit is the rubric's, not an arbitrary cut.
+  const twelve = { ...position, required_competencies: Array.from({ length: 12 }, (_, i) => `Kompetencja ${i}`) };
+  assert.equal(exerciseDraftPayload({ position: twelve, company }).untrusted_position.required_competencies.length, 12);
+  const tooLong = { ...position, required_competencies: ['a'.repeat(201), 'Komunikacja pisemna'] };
+  assert.throws(() => exerciseDraftPayload({ position: tooLong, company }),
+    error => error instanceof ExerciseAiError && error.code === 'exercise_ai_input_incomplete');
+  const repeated = { ...position, required_competencies: ['Komunikacja', 'komunikacja  '] };
+  assert.throws(() => exerciseDraftPayload({ position: repeated, company }),
+    error => error instanceof ExerciseAiError && error.code === 'exercise_ai_input_incomplete');
+});
+
+test('a refusal is not masked by output_text, and an oversized body is refused', () => {
+  const payload = exerciseDraftPayload({ position, company });
+  assert.throws(() => parseExerciseDraftResponse({
+    status: 'completed', output_text: JSON.stringify(draft), output: [{ type: 'refusal' }],
+  }, payload), error => error instanceof ExerciseAiError && error.code === 'exercise_ai_refusal');
+  assert.throws(() => parseExerciseDraftResponse(completed('x'.repeat(200_001)), payload),
     error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
 });
 
@@ -226,6 +273,16 @@ test('individual questions are deduplicated and capped', () => {
   assert.equal(buildIndividualQuestions(many, 99).length, EXERCISE_AI_MAX_INDIVIDUAL_QUESTIONS);
   const duplicated = [gap({ id: 'a', question: 'Ile  zgłoszeń?' }), gap({ id: 'b', question: 'ile zgłoszeń?' })];
   assert.deepEqual(buildIndividualQuestions(duplicated).map(item => item.sourceResultId), ['a']);
+});
+
+test('an unreviewed gap row is stopped by the gate, not by the question builder', () => {
+  // A row with a gap verdict and human_status 'unreviewed' still looks like
+  // 'matrix', so the builder accepts it. The guarantee comes from the gate:
+  // the two are always used together, and the database refuses to mark an
+  // analysis approved while any row is unreviewed.
+  const unreviewedRow = gap({ id: 'row-x', source: 'matrix' });
+  assert.equal(buildIndividualQuestions([unreviewedRow]).length, 1);
+  assert.equal(individualQuestionsAllowed({ analysisReviewVersion: 1, latestReview: null }), false);
 });
 
 test('individual part requires a current human approval of the whole analysis', () => {
