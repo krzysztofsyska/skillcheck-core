@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   EXERCISE_AI_MAX_INDIVIDUAL_QUESTIONS,
   ExerciseAiError,
+  assertExerciseDraftFitsGrantLimits,
   buildExerciseDraftRequest,
   buildIndividualQuestions,
   exerciseAiContract,
@@ -148,6 +149,45 @@ test('a draft with a different number of criteria than the profile is refused', 
     error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
 });
 
+test('the length guard mirrors the gateway when called on its own', () => {
+  // Called directly with definitions parseExerciseDefinition would never emit,
+  // because today it enforces the same maxima first. This test is what fails
+  // if that validator ever starts trimming or normalising before measuring,
+  // or if its limits drift away from the gateway's.
+  const definition = (overrides) => ({
+    kind: 'competency_test',
+    title: 'Zadanie',
+    instructions: 'Instrukcja',
+    expectedOutput: 'Rezultat',
+    durationMinutes: 45,
+    criteria: [{ competency: 'Komunikacja', below: 'A', meets: 'B', above: 'C' }],
+    ...overrides,
+  });
+  // Raw UTF-16 units are what private.competency_utf16_length counts.
+  assert.throws(() => assertExerciseDraftFitsGrantLimits(definition({ title: 'a'.repeat(201) })),
+    error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
+  assert.throws(() => assertExerciseDraftFitsGrantLimits(definition({ instructions: 'a'.repeat(10_001) })),
+    error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
+  assert.throws(() => assertExerciseDraftFitsGrantLimits(definition({ expectedOutput: 'a'.repeat(4001) })),
+    error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
+  assert.throws(() => assertExerciseDraftFitsGrantLimits(definition({
+    criteria: [{ competency: 'a'.repeat(201), below: 'A', meets: 'B', above: 'C' }],
+  })), error => error instanceof ExerciseAiError);
+  assert.throws(() => assertExerciseDraftFitsGrantLimits(definition({
+    criteria: [{ competency: 'Komunikacja', below: 'a'.repeat(2001), meets: 'B', above: 'C' }],
+  })), error => error instanceof ExerciseAiError);
+  // An astral code point costs two units on both sides, so 100 emoji fit in a
+  // 200-unit title and 101 do not.
+  assert.equal(assertExerciseDraftFitsGrantLimits(definition({ title: '\u{1F600}'.repeat(100) })), undefined);
+  assert.throws(() => assertExerciseDraftFitsGrantLimits(definition({ title: '\u{1F600}'.repeat(101) })),
+    error => error instanceof ExerciseAiError);
+  // Measured raw, never normalised: a ligature is one unit (the gateway accepts
+  // it), a decomposed accent is two (the gateway rejects it with PT422).
+  assert.equal(assertExerciseDraftFitsGrantLimits(definition({ title: 'ﬁ'.repeat(200) })), undefined);
+  assert.throws(() => assertExerciseDraftFitsGrantLimits(definition({ title: 'é'.repeat(101) })),
+    error => error instanceof ExerciseAiError);
+});
+
 test('length is measured exactly as the candidate gateway measures it', () => {
   const payload = exerciseDraftPayload({ position, company });
   // The gateway counts raw UTF-16 units (private.competency_utf16_length), the
@@ -192,6 +232,11 @@ test('a refusal is not masked by output_text, and an oversized body is refused',
   }, payload), error => error instanceof ExerciseAiError && error.code === 'exercise_ai_refusal');
   assert.throws(() => parseExerciseDraftResponse(completed('x'.repeat(200_001)), payload),
     error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
+  // A refusal of an unexpected shape must not be read past either.
+  assert.throws(() => parseExerciseDraftResponse({
+    status: 'completed', output_text: JSON.stringify(draft),
+    output: [{ type: 'message', content: [{ refusal: { text: 'nie' } }] }],
+  }, payload), error => error instanceof ExerciseAiError && error.code === 'exercise_ai_refusal');
 });
 
 test('two candidates on the same position get the identical shared part', () => {

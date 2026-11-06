@@ -227,6 +227,12 @@ function asRecord(value: unknown): Record<string, unknown> | null {
  * The model never chooses the exercise kind and never adds competencies of its
  * own: the criteria set is pinned to the position profile, which is what makes
  * two candidates on the same position comparable.
+ *
+ * The binding is POSITIONAL — the model's own competency names are discarded,
+ * so anchors returned in a different order than the profile's competencies end
+ * up under the wrong competency. Nothing here can detect that without trusting
+ * the names, so the recruiter approval screen in step 3 must show each pinned
+ * competency next to its three anchors.
  */
 export function parseExerciseDraftOutput(
   input: unknown,
@@ -278,8 +284,16 @@ export function parseExerciseDraftOutput(
  * competencies and anchors for duplicates. So the faithful mirror is the raw
  * UTF-16 length: normalising first would both reject drafts the gateway accepts
  * (a ligature expands) and accept drafts it rejects with `PT422` (a decomposed
- * accent composes). A rubric that fails there could never be handed to a
- * candidate, so the generator refuses it here instead of storing a dead rubric.
+ * accent composes).
+ *
+ * DEFENCE IN DEPTH, NOT THE LIVE GUARD. Today `parseExerciseDefinition` already
+ * enforces every one of these maxima on the raw string, so for a draft that
+ * came through it this function cannot fire. It is kept because the two
+ * validators are only equal by coincidence of their numbers: if
+ * `exercise-definition.ts` ever starts trimming or normalising before
+ * measuring, or its limits move, that drift would silently produce rubrics the
+ * candidate gateway rejects with `PT422` — and this assertion, called directly
+ * by its own test, is what fails first.
  */
 export function assertExerciseDraftFitsGrantLimits(definition: ExerciseDefinition) {
   const measured = (value: string) => value.length;
@@ -317,7 +331,9 @@ function assertNoRefusal(response: ExerciseAiResponse) {
     if (row.type === 'refusal' || row.refusal) throw new ExerciseAiError('exercise_ai_refusal', 'Model refused.');
     for (const part of Array.isArray(row.content) ? row.content : []) {
       const piece = asRecord(part);
-      if (piece && (piece.type === 'refusal' || typeof piece.refusal === 'string')) {
+      // Any truthy `refusal`, not only a string: an unexpected shape must not
+      // be read past as if the model had answered. Same rule as item level.
+      if (piece && (piece.type === 'refusal' || piece.refusal)) {
         throw new ExerciseAiError('exercise_ai_refusal', 'Model refused.');
       }
     }
@@ -448,6 +464,11 @@ export type ScreeningReviewState = {
  * human actually signed off. Per-row `human_status` is not enough — a matrix
  * edit bumps the analysis revision, so a historical approval stops covering the
  * rows it was given for. Same two-step rule as the candidate report.
+ *
+ * Staleness is NOT an input here. `lib/candidate-report.ts` additionally folds
+ * `stale_at` and fingerprint drift into its gate, so the caller added in step
+ * 2/3 has to pass that as well: judged by these fields alone, a CV re-uploaded
+ * after approval would leave the approval standing.
  */
 export function individualQuestionsAllowed(state: ScreeningReviewState) {
   const review = state.latestReview;
