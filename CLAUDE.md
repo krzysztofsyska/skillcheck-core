@@ -111,7 +111,13 @@ Asked directly whether building Assessment Center was his decision, since it was
 frozen list above while SC-AC-001 (#272) had been merged into `integration` that morning. His
 answer: *"Tak, budowa weryfikacji i assessment center jest moją decyzją i trzeba to po prostu
 robić."* Assessment Center is therefore removed from the frozen list and is in scope alongside
-the modules below. WERYFIKACJA was already in scope via SC-014 and SC-015; this confirms it.
+the modules listed above in this section (SC-014, SC-015, SC-PRICING). WERYFIKACJA was already in
+scope via SC-014 and SC-015; this confirms it. Nothing else moves: the voicebot, interview analysis,
+Quality of Hire, talent pool, white-label and the Przelewy24/Fakturownia automation stay frozen.
+
+For the record, the sequence was: #272 merged into `integration` that morning and its migration
+`20261106120000_sc_ac_inventory_r13.sql` was applied on the Preview database (test data only)
+before the module was unfrozen.
 
 This changes what is built, not the gates. Price, package contents and anything touching
 production still need a separate owner decision under the list above, and
