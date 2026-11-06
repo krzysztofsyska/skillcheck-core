@@ -25,6 +25,18 @@ export function bulkContract(aiEnabled: boolean) {
     prompt_version: c.prompt_version, provider: c.provider, model: c.model, model_revision: c.model_revision };
 }
 
+// RPC envelope validation is strict even though parsePump intentionally skips individual
+// invalid attempt IDs. A claimed scheduler batch must never disappear as a successful no-op.
+function isPumpEnvelope(value: unknown): value is { dispatch: unknown[]; notify: unknown } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as { dispatch?: unknown; notify?: unknown };
+  if (!Array.isArray(record.dispatch) || !Object.prototype.hasOwnProperty.call(record, 'notify')) return false;
+  const n = record.notify;
+  return n === null || (n !== undefined && typeof n === 'object' && !Array.isArray(n) &&
+    typeof (n as { batch_id?: unknown }).batch_id === 'string' &&
+    uuid.test((n as { batch_id: string }).batch_id));
+}
+
 export function parsePump(value: unknown): PumpResult {
   const v = (value ?? {}) as { dispatch?: unknown; notify?: unknown };
   // Prevent a malformed/retried pump response from dispatching the same attempt twice.
@@ -57,11 +69,7 @@ export async function pumpBatch(deps: PumpDeps, batchId: string) {
   if (error) throw new Error('cv_bulk_pump_failed');
   // PostgreSQL always returns an object containing dispatch[] and notify (possibly null).
   // A null/partial successful RPC response must never be shown as an empty successful pump.
-  if (!data || typeof data !== 'object' || Array.isArray(data) ||
-      !Array.isArray((data as { dispatch?: unknown }).dispatch) ||
-      !Object.prototype.hasOwnProperty.call(data, 'notify')) {
-    throw new Error('cv_bulk_pump_invalid_response');
-  }
+  if (!isPumpEnvelope(data)) throw new Error('cv_bulk_pump_invalid_response');
   const result = parsePump(data);
   await deliver(deps, result, async (batch, outcome) => {
     const { error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome });
@@ -91,14 +99,22 @@ export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (
   if (error) throw new Error('cv_bulk_worker_pump_failed');
   // Malformed RPC output must not look like an empty successful scheduler run.
   if (!Array.isArray(data)) throw new Error('cv_bulk_worker_pump_invalid_response');
-  const results = await Promise.allSettled(data.map(one => deliver(deps, parsePump(one), async (batch, outcome) => {
-    const id = randomUUID(), at = Date.now();
-    const { error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
-      request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
-    if (finishError) throw new Error('cv_bulk_notification_finish_failed');
-  })));
-  // Try every claimed batch, even if finalizing another one fails. Do not surface
-  // provider/DB error details: they may include candidate or email data.
+  let malformed = false;
+  const results = await Promise.allSettled(data.map(one => {
+    if (!isPumpEnvelope(one)) {
+      malformed = true;
+      return Promise.reject(new Error('cv_bulk_worker_pump_invalid_response'));
+    }
+    return deliver(deps, parsePump(one), async (batch, outcome) => {
+      const id = randomUUID(), at = Date.now();
+      const { error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
+        request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
+      if (finishError) throw new Error('cv_bulk_notification_finish_failed');
+    });
+  }));
+  // Do not let malformed claimed batches masquerade as success. Valid batches still
+  // finish independently; never expose provider/DB contents in the error.
+  if (malformed) throw new Error('cv_bulk_worker_pump_invalid_response');
   if (results.some(result => result.status === 'rejected')) throw new Error('cv_bulk_worker_delivery_failed');
   return data.length;
 }
