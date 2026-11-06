@@ -73,6 +73,16 @@ test('exercise observations preserve evidence, immutable rubric and tenant bound
       const ac=(await db.query('select public.save_exercise_definition($1,gen_random_uuid(),$2,0,$3,$4) id',
         [a.recruitment,JSON.stringify({...definition,kind:'assessment_center'}),a.position.id,a.position.stamp])).rows[0].id;
       const assign='select public.ac_assign_pair($1,$2,$3,$4) id';
+      // No assessor assignment after withdrawal or for inactive recruitment/position.
+      await db.query("update public.applications set status='withdrawn' where id=$1",[a.application]);
+      await deny(assign,[a.application,ac,ownerA,recruiter]);
+      await db.query("update public.applications set status='new' where id=$1",[a.application]);
+      await db.query("update public.recruitments set status='paused' where id=$1",[a.recruitment]);
+      await deny(assign,[a.application,ac,ownerA,recruiter]);
+      await db.query("update public.recruitments set status='draft' where id=$1",[a.recruitment]);
+      await db.query("update public.positions set status='archived' where id=$1",[a.position.id]);
+      await deny(assign,[a.application,ac,ownerA,recruiter]);
+      await db.query("update public.positions set status='draft' where id=$1",[a.position.id]);
       await deny(assign,[a.application,ac,ownerA,viewer]);
       await deny(assign,[a.application,a.revision,ownerA,recruiter]);
       const pair=(await db.query(assign,[a.application,ac,ownerA,recruiter])).rows[0].id;
