@@ -41,3 +41,5 @@
 20261106065733_sc_wer_broker_limiter.sql
 20261106070123_sc_wer_staff_access.sql
 20261106120000_sc_ac_inventory_r13.sql
+# SC-BULK-001: serialize global in-flight screening slots across companies. Preview only.
+20261106230000_cv_bulk_global_capacity_lock.sql
