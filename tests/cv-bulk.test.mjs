@@ -353,7 +353,7 @@ test('AI disabled: bulk intake is refused before any slot is reserved', async ()
   const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
   assert.ok(create.indexOf('bulkIntakeBlocked(screeningAiUserEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
     'createBulkBatch checks the AI flag before reserving');
-  assert.match(create, /!status\\.error && verifyBulkRegistration\\(created\\.data, status\\.data, recruitmentId, checked\\)/,
+  assert.match(create, /!status\.error && verifyBulkRegistration\(created\.data, status\.data, recruitmentId, checked\)/,
     'file metadata and both RPC envelopes are checked before handing upload IDs to the browser');
   const page = readFileSync(new URL('page.tsx', dir), 'utf8');
   assert.match(page, /blocked \? <p role="alert">\{blocked\}<\/p>\s*: <BulkUploader/, 'uploader hidden when AI is off');
@@ -392,8 +392,8 @@ test('bulk registration validates complete RPC output before uploading or closin
   const { readFileSync } = await import('node:fs');
   const actions = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
   const close = actions.slice(actions.indexOf('export async function closeBulkUpload'), actions.indexOf('export async function bulkProgress'));
-  assert.match(close, /!Number\\.isInteger\\(result\\.data\\)/, 'close rejects a missing or malformed released-slot count');
-  assert.match(close, /\\(result\\.data as number\\) < 0/, 'close refuses negative slot counts');
+  assert.match(close, /!Number\.isInteger\(result\.data\)/, 'close rejects a missing or malformed released-slot count');
+  assert.match(close, /\(result\.data as number\) < 0/, 'close refuses negative slot counts');
 });
 
 test('finish(): long runs of spaces are linear, over-length text is rejected, never truncated', async () => {
