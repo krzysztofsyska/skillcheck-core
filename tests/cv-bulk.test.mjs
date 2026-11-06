@@ -4,7 +4,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import {
   BULK_MAX_FILE_BYTES, BulkIntakeError, buildExtraction, bulkEmail, bulkFileKind, bulkMailEnabled, bulkPricing, detectEmail,
-  detectName, detectPhone, displayFileName, isIgnoredZipEntry, sendBulkEmail, validateBatchFiles,
+  detectName, detectPhone, displayFileName, isIgnoredZipEntry, sendBulkEmail, validateBatchFiles, verifyBulkRegistration,
 } from '../lib/cv-bulk.ts';
 import { extractBulkCv } from '../lib/cv-bulk-extract.ts';
 import { closeOcr, ocrImage } from '../lib/cv-ocr.ts';
@@ -353,9 +353,47 @@ test('AI disabled: bulk intake is refused before any slot is reserved', async ()
   const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
   assert.ok(create.indexOf('bulkIntakeBlocked(screeningAiUserEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
     'createBulkBatch checks the AI flag before reserving');
-  assert.match(create, /status\.error \|\| !Array\.isArray\(listed\)/, 'a failed status read is an error, not an empty batch');
+  assert.match(create, /!status\\.error && verifyBulkRegistration\\(created\\.data, status\\.data, recruitmentId, checked\\)/,
+    'file metadata and both RPC envelopes are checked before handing upload IDs to the browser');
   const page = readFileSync(new URL('page.tsx', dir), 'utf8');
   assert.match(page, /blocked \? <p role="alert">\{blocked\}<\/p>\s*: <BulkUploader/, 'uploader hidden when AI is off');
+});
+
+test('bulk registration validates complete RPC output before uploading or closing held slots', async () => {
+  const recruitmentId = '11111111-1111-4111-8111-111111111111';
+  const batchId = '22222222-2222-4222-8222-222222222222';
+  const files = [{ name: 'a.pdf', kind: 'pdf', size: 50 }, { name: 'b.docx', kind: 'docx', size: 70 }];
+  const created = { batch_id: batchId, reserved_slots: 1, over_limit: 1 };
+  const status = { batch: { id: batchId, recruitment_id: recruitmentId, declared_files: 2, reserved_slots: 1 },
+    items: [
+      { id: '33333333-3333-4333-8333-333333333333', position: 1, file_name: 'a.pdf', file_kind: 'pdf' },
+      { id: '44444444-4444-4444-8444-444444444444', position: 2, file_name: 'b.docx', file_kind: 'docx' },
+    ] };
+  assert.deepEqual(verifyBulkRegistration(created, status, recruitmentId, files), {
+    batchId, reserved: 1, overLimit: 1, items: status.items.map(({ id, position }) => ({ id, position })),
+  });
+  const cases = [
+    [null, status], [{}, status], [{ ...created, batch_id: 'bad' }, status],
+    [{ ...created, reserved_slots: 3 }, status], [{ ...created, over_limit: 0 }, status],
+    [created, null], [created, { ...status, batch: { ...status.batch, id: 'bad' } }],
+    [created, { ...status, batch: { ...status.batch, recruitment_id: batchId } }],
+    [created, { ...status, batch: { ...status.batch, declared_files: 1 } }],
+    [created, { ...status, batch: { ...status.batch, reserved_slots: 2 } }],
+    [created, { ...status, items: status.items.slice(0, 1) }],
+    [created, { ...status, items: [status.items[0], status.items[0]] }],
+    [created, { ...status, items: [{ ...status.items[0], id: 'bad' }, status.items[1]] }],
+    [created, { ...status, items: [{ ...status.items[0], position: 3 }, status.items[1]] }],
+    [created, { ...status, items: [{ ...status.items[0], file_name: 'other.pdf' }, status.items[1]] }],
+    [created, { ...status, items: [{ ...status.items[0], file_kind: 'txt' }, status.items[1]] }],
+  ];
+  for (const [badCreated, badStatus] of cases) {
+    assert.equal(verifyBulkRegistration(badCreated, badStatus, recruitmentId, files), null);
+  }
+  const { readFileSync } = await import('node:fs');
+  const actions = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
+  const close = actions.slice(actions.indexOf('export async function closeBulkUpload'), actions.indexOf('export async function bulkProgress'));
+  assert.match(close, /!Number\\.isInteger\\(result\\.data\\)/, 'close rejects a missing or malformed released-slot count');
+  assert.match(close, /\\(result\\.data as number\\) < 0/, 'close refuses negative slot counts');
 });
 
 test('finish(): long runs of spaces are linear, over-length text is rejected, never truncated', async () => {
