@@ -234,3 +234,81 @@ test('every next consumer re-validates before redirecting', () => {
     assert.equal(raw.test(actions), false, `no raw redirect of next in auth actions: ${raw}`);
 });
 
+
+
+// SC-019 / #283: route-level regression. A recruitment can reach checkout without
+// pretending that unavailable extras are purchasable. The checkout reconstructs
+// the return link from a UUID, never from an arbitrary URL.
+async function renderRecruitmentPurchase(enabled) {
+  const file='app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx';
+  const abs=new URL('../'+file,import.meta.url).pathname;
+  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(new URL('../',import.meta.url).pathname);
+  const req=createRequire(abs);
+  const recruitmentId='bbbbbbbb-1111-4222-8333-444444444444';
+  const query=table=>{
+    const obj={select(){return this;},eq(){return this;},order(){return this;},in(){return this;},
+      maybeSingle:async()=>({data:{id:recruitmentId,name:'Rekrutacja próbna',position_id:owned.id},error:null}),
+      then(resolve){return Promise.resolve({data:[],error:null}).then(resolve);}};
+    return obj;
+  };
+  const client={from:query,rpc:async()=>({data:[],error:null})};
+  const mocks={
+    'next/link':{default:({children,...props})=>createElement('a',props,children)},
+    'next/navigation':{notFound(){throw Error('not-found');}},
+    '../../../../../lib/company-access':{companyAccess:async()=>({client,canEdit:true})},
+    './assessment-forms':{StageForm:()=>null,StageControls:()=>null},
+    './bulk/groups':{PreselectionGroups:()=>null},
+    '../../../../../lib/screening-report':{groupAnalysisCurrent:()=>false},
+    '../../../../../lib/preselection-currency':{loadCurrentRanking:async()=>new Map()},
+  };
+  mod.require=id=>id in mocks?mocks[id]:req(id);
+  mod._compile(ts.transpileModule(readFileSync(abs,'utf8'),{compilerOptions:{
+    module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,
+  }}).outputText,abs);
+  const previous=process.env.SC19_PACKAGES_ENABLED;
+  try {
+    if(enabled)process.env.SC19_PACKAGES_ENABLED='true';else delete process.env.SC19_PACKAGES_ENABLED;
+    const output=await mod.exports.default({params:Promise.resolve({companyId:owned.id,recruitmentId})});
+    return renderToStaticMarkup(output);
+  } finally {
+    if(previous===undefined)delete process.env.SC19_PACKAGES_ENABLED;
+    else process.env.SC19_PACKAGES_ENABLED=previous;
+  }
+}
+test('recruitment shows purchase links only while package sales are enabled',async()=>{
+  const html=await renderRecruitmentPurchase(true);
+  const prefix='/dashboard/'+owned.id+'/billing';
+  assert.ok(html.includes('href="'+prefix+'">Pakiet i pozostałe analizy CV</a>'));
+  assert.ok(html.includes('href="'+prefix+'/checkout?recruitmentId=bbbbbbbb-1111-4222-8333-444444444444">Kup kolejną PRESELEKCJĘ</a>'));
+  const disabled=await renderRecruitmentPurchase(false);
+  assert.equal(disabled.includes('/billing/checkout?recruitmentId='),false);
+});
+async function renderReturnFromCheckout(recruitmentId) {
+  const file='app/dashboard/[companyId]/billing/checkout/page.tsx';
+  const abs=new URL('../'+file,import.meta.url).pathname;
+  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(new URL('../',import.meta.url).pathname);
+  const req=createRequire(abs);
+  const mocks={
+    'next/link':{default:({children,...props})=>createElement('a',props,children)},
+    '../../../../../lib/company-access':{companyAccess:async()=>({company:{owner_id:OWNER},user:{id:OWNER}})},
+    '../../../../../lib/sc19-payment-preview.ts':{sc19PreviewPaymentConfig:()=>null},
+    './checkout':{default:()=>createElement('div',null,'Oferta')},
+  };
+  mod.require=id=>id in mocks?mocks[id]:req(id);
+  mod._compile(ts.transpileModule(readFileSync(abs,'utf8'),{compilerOptions:{
+    module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,
+  }}).outputText,abs);
+  const output=await mod.exports.default({
+    params:Promise.resolve({companyId:owned.id}),searchParams:Promise.resolve({recruitmentId}),
+  });
+  return renderToStaticMarkup(output);
+}
+test('checkout returns only to a valid in-company recruitment path, never an external URL',async()=>{
+  const valid='bbbbbbbb-1111-4222-8333-444444444444';
+  assert.ok((await renderReturnFromCheckout(valid)).includes('href="/dashboard/'+owned.id+'/recruitments/'+valid+'">'));
+  for(const invalid of ['//evil.example','https://evil.example','../operator',valid+'/../operator',null,[valid]]) {
+    const html=await renderReturnFromCheckout(invalid);
+    assert.ok(html.includes('href="/dashboard/'+owned.id+'">'),String(invalid));
+    assert.ok(!html.includes('evil.example'),String(invalid));
+  }
+});
