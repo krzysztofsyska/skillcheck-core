@@ -526,6 +526,52 @@ test('scheduler pump delivers every returned batch, in parallel', async () => {
   assert.equal(peak, 3, 'batches are delivered in parallel, bounded by the per-request timeouts');
 });
 
+
+test('failed notification acknowledgement is reported, never mistaken for success', async () => {
+  const batchId = '55555555-5555-4555-8555-555555555555';
+  const notify = { batch_id: batchId, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: null,
+    recruitment_name: 'Rekrutacja', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  const rpc = async fn => fn === 'cv_bulk_pump'
+    ? { data: { dispatch: [], notify }, error: null }
+    : { data: null, error: { message: 'private content from DB' } };
+  const deps = { rpc, dispatch: async () => ({ accepted: true }), aiEnabled: false,
+    origin: () => 'https://example.test', env: {} };
+  await assert.rejects(pumpBatch(deps, batchId), error => error.message === 'cv_bulk_notification_finish_failed',
+    'session failures are visible without forwarding DB content');
+  await assert.rejects(pumpAllSigned({ ...deps,
+    rpc: async fn => fn === 'cv_bulk_worker_pump'
+      ? { data: [{ dispatch: [], notify }, { dispatch: [], notify: { ...notify, batch_id: '66666666-6666-4666-8666-666666666666' } }], error: null }
+      : { data: null, error: { message: 'private content from DB' } },
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), error => error.message === 'cv_bulk_worker_delivery_failed',
+  'scheduler failures remain visible without leaking provider/DB messages');
+
+  await assert.rejects(pumpAllSigned({ ...deps,
+    rpc: async () => ({ data: { dispatch: [] }, error: null }),
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), /cv_bulk_worker_pump_invalid_response/, 'an invalid worker response is not an empty successful run');
+});
+
+test('scheduler still processes every claimed batch when one notification acknowledgement fails', async () => {
+  const ids = ['55555555-5555-4555-8555-555555555555', '66666666-6666-4666-8666-666666666666'];
+  const finished = [];
+  const notify = id => ({ batch_id: id, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: null,
+    recruitment_name: 'Rekrutacja', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 });
+  const rpc = async (fn, args) => {
+    if (fn === 'cv_bulk_worker_pump') return { data: ids.map(id => ({ dispatch: [], notify: notify(id) })), error: null };
+    finished.push(args.target_batch);
+    return { data: args.target_batch !== ids[0], error: args.target_batch === ids[0] ? { message: 'sensitive database error' } : null };
+  };
+  await assert.rejects(pumpAllSigned({
+    rpc, dispatch: async () => ({ accepted: true }), aiEnabled: false,
+    origin: () => 'https://example.test', env: {},
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), error => error.message === 'cv_bulk_worker_delivery_failed');
+  assert.deepEqual(finished.sort(), ids, 'a failed acknowledgement never skips remaining claimed batches');
+});
+
 test('uploader: one request key per file set, synchronous double-click guard, OCR files one at a time', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/uploader.tsx', import.meta.url), 'utf8');

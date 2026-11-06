@@ -56,7 +56,10 @@ export async function pumpBatch(deps: PumpDeps, batchId: string) {
   const { data, error } = await deps.rpc('cv_bulk_pump', { target_batch: batchId, contract: bulkContract(deps.aiEnabled), pricing: bulkPricing(env) });
   if (error) throw new Error('cv_bulk_pump_failed');
   const result = parsePump(data);
-  await deliver(deps, result, async (batch, outcome) => { await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome }); });
+  await deliver(deps, result, async (batch, outcome) => {
+    const { error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome });
+    if (finishError) throw new Error('cv_bulk_notification_finish_failed');
+  });
   return result;
 }
 
@@ -79,13 +82,18 @@ export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (
   const { data, error } = await deps.rpc('cv_bulk_worker_pump', { request_id: requestId, issued_at_ms: stamp,
     request_signature: bulkWorkerSignature(deps.secret, 'pump', requestId, stamp, null, extra), contract, pricing });
   if (error) throw new Error('cv_bulk_worker_pump_failed');
-  const batches = Array.isArray(data) ? data : [];
-  await Promise.all(batches.map(one => deliver(deps, parsePump(one), async (batch, outcome) => {
+  // Malformed RPC output must not look like an empty successful scheduler run.
+  if (!Array.isArray(data)) throw new Error('cv_bulk_worker_pump_invalid_response');
+  const results = await Promise.allSettled(data.map(one => deliver(deps, parsePump(one), async (batch, outcome) => {
     const id = randomUUID(), at = Date.now();
-    await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
+    const { error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
       request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
-  }).catch(() => undefined)));
-  return batches.length;
+    if (finishError) throw new Error('cv_bulk_notification_finish_failed');
+  })));
+  // Try every claimed batch, even if finalizing another one fails. Do not surface
+  // provider/DB error details: they may include candidate or email data.
+  if (results.some(result => result.status === 'rejected')) throw new Error('cv_bulk_worker_delivery_failed');
+  return data.length;
 }
 
 /** PostgreSQL jsonb::text rendering for flat objects of strings/numbers: keys by length then bytes, ", " and ": " separators. */
