@@ -28,8 +28,14 @@
 -- Same sieroty nie zawierają danych kandydata, ale groźne jest ich PONOWNE
 -- PODCZEPIENIE: rekrutacja skasowana i utworzona z tym samym identyfikatorem
 -- odziedziczyłaby ustawienie automatu, którego nikt dla niej nie włączył, i zużyty
--- limit. Dlatego obie funkcje zapisu porównują czas zapisu wiersza z czasem powstania
--- rekrutacji i traktują starsze wiersze jak nieistniejące.
+-- limit. Dlatego każdy wiersz zapamiętuje `recruitment_created_at` — wcielenie
+-- rekrutacji, do którego należy — a funkcje zapisu porównują je na RÓWNOŚĆ.
+--
+-- Celowo nie jest to porównanie „starsze/nowsze". `public.recruitments` ma dla roli
+-- `authenticated` niekolumnowy `grant insert`, więc wywołujący wybiera sobie
+-- `created_at`. Nierówność byłaby wtedy przełącznikiem w rękach klienta: data w
+-- przyszłości kasowałaby limit propozycji, a data w przeszłości przywracała
+-- odziedziczony automat. Równość jest odporna w obie strony.
 --
 -- Co ta migracja ROBI: zakłada schemat, dwie tabele i cztery funkcje. Czego NIE robi:
 -- nie dotyka żadnej istniejącej relacji, kolumny, polityki RLS ani funkcji; nie
@@ -57,6 +63,9 @@ create table exercise_ai.proposals (
   -- Wpis definicji, który powstał z tej propozycji. Niezmienny, jak cała historia
   -- public.exercise_definition_entries.
   definition_entry_id uuid not null unique,
+  -- Wcielenie rekrutacji, do którego należy ten wiersz. Pisane wyłącznie przez
+  -- funkcję, nigdy z argumentu — patrz nagłówek migracji.
+  recruitment_created_at timestamptz not null,
   -- Ślad pochodzenia: z czego powstała propozycja. Walidowany niżej, żeby nie dało
   -- się zapisać wpisu bez możliwości odtworzenia, na jakich danych powstał.
   provenance jsonb not null,
@@ -92,6 +101,8 @@ create table exercise_ai.recruitment_settings (
   -- Pułap liczby propozycji dla tej rekrutacji. Trzymany w bazie, bo limit podany
   -- w wywołaniu wybiera klient, a rachunek u dostawcy przychodzi i tak.
   draft_ceiling integer not null default 20 check (draft_ceiling between 1 and 1000),
+  -- Jak wyżej: wcielenie rekrutacji, do którego należy to ustawienie.
+  recruitment_created_at timestamptz not null,
   set_by uuid not null references auth.users(id) on delete restrict,
   set_at timestamptz not null default now(),
   primary key (company_id, recruitment_id)
@@ -112,15 +123,18 @@ begin
   select * into recruitment from public.recruitments r
     where r.id = target_recruitment and private.has_company_access(r.company_id, true) for share;
   if not found then raise exception 'No write access' using errcode = '42501'; end if;
-  -- Ustawienie starsze niż sama rekrutacja pochodzi z poprzedniej o tym samym
-  -- identyfikatorze i nie może zostać odziedziczone — nadpisujemy je w całości.
-  delete from exercise_ai.recruitment_settings s
-    where s.company_id = recruitment.company_id and s.recruitment_id = recruitment.id
-      and s.set_at < recruitment.created_at;
-  insert into exercise_ai.recruitment_settings(company_id, recruitment_id, auto_release, set_by)
-    values(recruitment.company_id, recruitment.id, enabled, actor)
+  -- Bez kasowania wiersza: pułap ustawiony przez operatora ma przetrwać przełączanie
+  -- automatu. Resetujemy go wyłącznie wtedy, gdy wiersz należy do poprzedniego
+  -- wcielenia rekrutacji o tym samym identyfikatorze.
+  insert into exercise_ai.recruitment_settings(company_id, recruitment_id, auto_release, set_by,
+      recruitment_created_at)
+    values(recruitment.company_id, recruitment.id, enabled, actor, recruitment.created_at)
     on conflict (company_id, recruitment_id)
-    do update set auto_release = excluded.auto_release, set_by = excluded.set_by, set_at = now();
+    do update set auto_release = excluded.auto_release, set_by = excluded.set_by, set_at = now(),
+      draft_ceiling = case
+        when exercise_ai.recruitment_settings.recruitment_created_at is distinct from excluded.recruitment_created_at
+        then 20 else exercise_ai.recruitment_settings.draft_ceiling end,
+      recruitment_created_at = excluded.recruitment_created_at;
   return enabled;
 end;
 $$;
@@ -218,11 +232,10 @@ begin
   -- Serializuje równoległe żądania tej samej rekrutacji, żeby limit nie dał się
   -- obejść dwoma kliknięciami naraz.
   perform pg_advisory_xact_lock(hashtextextended('exercise_ai:' || recruitment.id::text, 0));
-  -- Wiersze starsze niż sama rekrutacja pochodzą z poprzedniej o tym samym
-  -- identyfikatorze i nie zużywają limitu tej.
+  -- Wiersze z poprzedniego wcielenia rekrutacji nie zużywają limitu tej.
   select count(*) into used from exercise_ai.proposals p
     where p.company_id = recruitment.company_id and p.recruitment_id = recruitment.id
-      and p.created_at >= recruitment.created_at;
+      and p.recruitment_created_at = recruitment.created_at;
   -- Ustawienie czyta się TU, w tej samej transakcji co zapis, a nie przyjmuje
   -- z wywołania: inaczej klient mógłby zażądać automatu dla rekrutacji, w której
   -- rekruter go nie włączył. Brak wiersza = zatwierdzanie ręczne.
@@ -231,7 +244,7 @@ begin
     from (select 1) one
     left join exercise_ai.recruitment_settings s
       on s.company_id = recruitment.company_id and s.recruitment_id = recruitment.id
-      and s.set_at >= recruitment.created_at;
+      and s.recruitment_created_at = recruitment.created_at;
   if used >= least(draft_limit, ceiling) then raise exception 'Draft limit reached' using errcode = 'PT429'; end if;
   -- Automat zwalnia zadanie bez niczyjej lektury, więc musi sprawdzać to samo, co
   -- sprawdza człowiek w approve_proposal. Wpis definicji powstał, gdy rekrutacja
@@ -245,9 +258,9 @@ begin
     end if;
   end if;
   insert into exercise_ai.proposals(company_id, recruitment_id, definition_entry_id, provenance, created_by,
-      approved_by, approved_at, approval_mode)
+      recruitment_created_at, approved_by, approved_at, approval_mode)
     values(recruitment.company_id, recruitment.id, entry.id,
-      exercise_ai.validate_provenance(new_provenance), actor,
+      exercise_ai.validate_provenance(new_provenance), actor, recruitment.created_at,
       case when auto_release then actor end,
       case when auto_release then now() end,
       case when auto_release then 'auto' end)

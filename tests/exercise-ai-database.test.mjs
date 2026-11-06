@@ -271,6 +271,60 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
     assert.ok(row.id);
   });
 
+  await t.test('data utworzenia rekrutacji wybrana przez klienta nie kasuje limitu', async () => {
+    // `authenticated` ma niekolumnowy grant insert na public.recruitments, więc
+    // wywołujący wybiera sobie created_at. Przy porównaniu „starsze/nowsze" data
+    // w przyszłości kasowałaby limit całkowicie.
+    await as(ownerA);
+    const future = '20000000-0000-0000-0000-000000000001';
+    await db.query(`insert into public.recruitments(company_id,id,position_id,name,created_at)
+      values($1,$2,$3,'PRZYSZŁOŚĆ', now() + interval '10 years')`, [a.company, future, a.position.id]);
+    const target = { company: a.company, position: a.position, recruitment: future };
+    await record(await saveDefinition(target), target, null, 1);
+    await rejects(record(await saveDefinition(target), target, null, 1), 'PT429');
+  });
+
+  await t.test('data w przeszłości nie przywraca odziedziczonego automatu', async () => {
+    await as(ownerA);
+    const fresh = await seed(ownerA);
+    await db.query('select exercise_ai.set_auto_release($1,true)', [fresh.recruitment]);
+    await db.query('delete from public.recruitments where id=$1', [fresh.recruitment]);
+    await db.query(`insert into public.recruitments(company_id,id,position_id,name,created_at)
+      values($1,$2,$3,'TEST','1999-01-01T00:00:00Z')`, [fresh.company, fresh.recruitment, fresh.position.id]);
+    const entry = await saveDefinition(fresh);
+    await record(entry, fresh);
+    assert.equal((await db.query('select approval_mode from exercise_ai.proposals where definition_entry_id=$1', [entry])).rows[0].approval_mode,
+      null, 'automat z poprzedniego wcielenia rekrutacji nie może zostać odziedziczony');
+  });
+
+  await t.test('pułap operatora przeżywa przełączanie automatu', async () => {
+    await as(ownerA);
+    const fresh = await seed(ownerA);
+    await db.query('select exercise_ai.set_auto_release($1,true)', [fresh.recruitment]);
+    await db.exec('reset role');
+    await db.query('update exercise_ai.recruitment_settings set draft_ceiling=1 where recruitment_id=$1', [fresh.recruitment]);
+    await as(ownerA);
+    await db.query('select exercise_ai.set_auto_release($1,false)', [fresh.recruitment]);
+    await db.query('select exercise_ai.set_auto_release($1,true)', [fresh.recruitment]);
+    assert.equal((await db.query('select draft_ceiling from exercise_ai.recruitment_settings where recruitment_id=$1', [fresh.recruitment])).rows[0].draft_ceiling,
+      1, 'przełączenie automatu nie może po cichu przywrócić domyślnego pułapu');
+  });
+
+  await t.test('rekrutacja, ustawienie i propozycja w jednej transakcji działają', async () => {
+    // now() jest stabilne w transakcji, więc równość dat musi trafić.
+    await as(ownerA);
+    const id = '20000000-0000-0000-0000-000000000002';
+    await db.exec('begin');
+    await db.query("insert into public.recruitments(company_id,id,position_id,name) values($1,$2,$3,'JEDNA TRANSAKCJA')",
+      [a.company, id, a.position.id]);
+    await db.query('select exercise_ai.set_auto_release($1,true)', [id]);
+    const target = { company: a.company, position: a.position, recruitment: id };
+    const entry = await saveDefinition(target);
+    await record(entry, target);
+    await db.exec('commit');
+    assert.equal((await db.query('select approval_mode from exercise_ai.proposals where definition_entry_id=$1', [entry])).rows[0].approval_mode, 'auto');
+  });
+
   await t.test('viewer nie zwalnia zadań', async () => {
     await as(ownerA);
     const entry = await saveDefinition();
