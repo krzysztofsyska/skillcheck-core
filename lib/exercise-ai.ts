@@ -325,19 +325,23 @@ export type ExerciseAiResponse = {
  * output is always inspected for a refusal before any text is returned.
  */
 function assertNoRefusal(response: ExerciseAiResponse) {
-  for (const item of response.output ?? []) {
-    const row = asRecord(item);
-    if (!row) continue;
-    if (row.type === 'refusal' || row.refusal) throw new ExerciseAiError('exercise_ai_refusal', 'Model refused.');
-    for (const part of Array.isArray(row.content) ? row.content : []) {
-      const piece = asRecord(part);
-      // Any truthy `refusal`, not only a string: an unexpected shape must not
-      // be read past as if the model had answered. Same rule as item level.
-      if (piece && (piece.type === 'refusal' || piece.refusal)) {
-        throw new ExerciseAiError('exercise_ai_refusal', 'Model refused.');
-      }
-    }
-  }
+  // Detection is structural, by PRESENCE of a `refusal` key anywhere in the
+  // output tree, not by its value and not at two hard-coded depths. A refusal
+  // left as an empty string, a `content` that arrives as an object instead of
+  // an array, or a part nested one level deeper would otherwise be read past
+  // as if the model had answered. Presence is the right rule here because a
+  // successful draft has no `refusal` key at all; if a provider ever starts
+  // sending `refusal: null` on success, this must become a null/undefined
+  // check rather than go back to inspecting only two levels.
+  const refused = (node: unknown, depth: number): boolean => {
+    if (depth > 6) return false;
+    if (Array.isArray(node)) return node.some(child => refused(child, depth + 1));
+    const row = asRecord(node);
+    if (!row) return false;
+    if (row.type === 'refusal' || 'refusal' in row) return true;
+    return ['content', 'output', 'parts'].some(key => key in row && refused(row[key], depth + 1));
+  };
+  if (refused(response.output ?? [], 0)) throw new ExerciseAiError('exercise_ai_refusal', 'Model refused.');
 }
 
 function collectDraftText(response: ExerciseAiResponse) {

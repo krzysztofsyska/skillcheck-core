@@ -232,11 +232,28 @@ test('a refusal is not masked by output_text, and an oversized body is refused',
   }, payload), error => error instanceof ExerciseAiError && error.code === 'exercise_ai_refusal');
   assert.throws(() => parseExerciseDraftResponse(completed('x'.repeat(200_001)), payload),
     error => error instanceof ExerciseAiError && error.code === 'exercise_ai_invalid_output');
-  // A refusal of an unexpected shape must not be read past either.
-  assert.throws(() => parseExerciseDraftResponse({
-    status: 'completed', output_text: JSON.stringify(draft),
-    output: [{ type: 'message', content: [{ refusal: { text: 'nie' } }] }],
-  }, payload), error => error instanceof ExerciseAiError && error.code === 'exercise_ai_refusal');
+  // A refusal of an unexpected shape must not be read past either: a falsy but
+  // present value, a `content` that is an object rather than an array, and a
+  // part nested deeper than one level all count as a refusal.
+  for (const output of [
+    [{ type: 'message', content: [{ refusal: { text: 'nie' } }] }],
+    [{ type: 'message', refusal: '' }],
+    [{ type: 'message', content: [{ refusal: '' }] }],
+    [{ type: 'message', content: [{ refusal: false }] }],
+    [{ type: 'message', content: { type: 'refusal', refusal: 'nie' } }],
+    [{ type: 'message', content: [{ type: 'output_text', content: [{ type: 'refusal' }] }] }],
+    [{ type: 'message', output: [{ type: 'refusal' }] }],
+  ]) {
+    assert.throws(() => parseExerciseDraftResponse({
+      status: 'completed', output_text: JSON.stringify(draft), output,
+    }, payload), error => error instanceof ExerciseAiError && error.code === 'exercise_ai_refusal',
+    `odmowa przeoczona dla kształtu ${JSON.stringify(output)}`);
+  }
+  // A clean response still parses: no `refusal` key anywhere.
+  assert.equal(parseExerciseDraftResponse({
+    status: 'completed',
+    output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(draft) }] }],
+  }, payload).definition.kind, 'competency_test');
 });
 
 test('two candidates on the same position get the identical shared part', () => {
