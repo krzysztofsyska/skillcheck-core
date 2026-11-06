@@ -28,10 +28,15 @@ const visibleLength = (text: string) => { let n = 0; for (let i = 0; i < text.le
  * False positives fail closed and require the candidate to provide a complete text PDF/DOCX. */
 function hasConflictingHeaderNames(ocrText: string): boolean {
   const names = new Set<string>();
+  // detectName treats professional headlines (e.g. "Java Developer") as fallback only.
+  // Give each line the same real-name context as the complete CV, so a job title
+  // does not become a second identity while another genuine name is still rejected.
+  const reference = detectName(ocrText);
+  const referenceLine = reference ? `${reference.first} ${reference.last}` : null;
   for (const line of ocrText.split('\n').slice(0, 15)) {
     for (const section of line.split(/[,;|]+/)) {
       const prefix = section.split(/\b(?:tel\.?|telefon|e-?mail)\b/i)[0]?.trim() ?? '';
-      const identity = detectName(prefix);
+      const identity = detectName(referenceLine ? `${prefix}\n${referenceLine}` : prefix);
       if (identity) {
         names.add(`${identity.first} ${identity.last}`.toLocaleLowerCase('pl'));
         if (names.size > 1) return true;
