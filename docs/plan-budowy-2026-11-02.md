@@ -388,6 +388,22 @@ kandydata; rekruter nadal odczytuje i ocenia historyczne odpowiedzi. Operacyjne 
 wstrzymuje nowe rejestracje AI, zachowując tę granicę, historię i działające ręczne/zatwierdzone
 zadania. Nowa aktywacja rejestracji wymaga sprawdzonej migracji naprzód.
 
+### C6 krok 3a — API odczytu i zatwierdzenia dla rekrutera
+
+Migracja `20261106150000_exercise_ai_recruiter_api.sql` udostępnia dwa RPC w `public`:
+`read_exercise_ai_proposal` i `approve_exercise_ai_proposal`. Oba wymagają identyfikatorów
+firmy, rekrutacji i konkretnego wpisu definicji oraz uprawnień właściciela/rekrutera.
+Odczyt zwraca dokładny wpis z zapisanym profilem stanowiska, pochodzenie i stan zatwierdzenia;
+nie podmienia historycznego profilu na aktualny. Zatwierdzenie wymaga również znacznika
+`expected_position_updated_at` zgodnego z odczytanym wpisem i deleguje do istniejącego
+mechanizmu zatwierdzania. Późniejsze zmiany aktualnego profilu nie unieważniają ponownego
+zatwierdzenia tej samej wersji. Zamknięcie rekrutacji lub archiwizacja stanowiska blokują
+zatwierdzenie, zachowując odczyt historii. Viewer i kandydat nie mają dostępu do tych RPC.
+
+Schemat `exercise_ai` nie jest dodawany do Data API. Operacyjne wycofanie odbiera dostęp
+do dwóch nowych RPC, zachowując historię i granicę dostępu kandydata z kroku 2b. Ten etap
+nie dodaje ekranu, generowania, edycji, odrzucania ani aktywacji dostawcy AI.
+
 ### Required tests
 - `npm run typecheck`, `npm run build`
 - testy generatora na syntetycznych profilach i CV (fixture jak `fixtures/screening/sc-005-synthetic.json`)

@@ -43,3 +43,4 @@
 20261106120000_sc_ac_inventory_r13.sql
 20261106130000_exercise_ai_proposals.sql
 20261106140000_exercise_ai_grant_guard.sql
+20261106150000_exercise_ai_recruiter_api.sql

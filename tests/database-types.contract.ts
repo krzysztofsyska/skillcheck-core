@@ -141,6 +141,8 @@ type ExpectedFunctions =
   | "revoke_competency_test_grant"
   | "save_competency_test_review"
   | "read_competency_test_response"
+  | "read_exercise_ai_proposal"
+  | "approve_exercise_ai_proposal"
   | "cv_bulk_register_item"
   | "cv_bulk_fail_item"
   | "cv_bulk_close_upload"
@@ -560,3 +562,14 @@ type _ErasureRequestArgs = Expect<Equal<Database["public"]["Functions"]["request
 type _ErasureCancelArgs = Expect<Equal<Database["public"]["Functions"]["cancel_candidate_erasure"]["Args"], {
   target_request: string; expected_generation: number; request_key: string;
 }>>;
+
+// Public recruiter API must require full tenant/recruitment/revision context.
+type _AiReadArgs = Expect<Equal<
+  Keys<Database['public']['Functions']['read_exercise_ai_proposal']['Args']>,
+  'target_company' | 'target_recruitment' | 'target_definition'
+>>;
+type _AiApproveArgs = Expect<Equal<
+  Keys<Database['public']['Functions']['approve_exercise_ai_proposal']['Args']>,
+  'target_company' | 'target_recruitment' | 'target_definition' | 'expected_position_updated_at'
+>>;
+type _AiApprovalResult = Expect<Equal<Database['public']['Functions']['approve_exercise_ai_proposal']['Returns'], string>>;
