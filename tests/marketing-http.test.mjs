@@ -90,7 +90,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   }
   assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
-  for (const href of ['/demo', '/register', '/login', '/#korzysci', '/#jak-to-dziala', '/#przyklad', '/#pakiety', '/#faq']) {
+  for (const href of ['/demo', '/register', '/login', '/dashboard', '/#korzysci', '/#jak-to-dziala', '/#przyklad', '/#pakiety', '/#faq']) {
     assert.ok(homeHrefs.includes(href), `home link ${href}`);
   }
   assert.equal(home.includes('<form'), false);
@@ -138,7 +138,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   for (const href of homeHrefs.filter((link) => link.startsWith('/') && !link.startsWith('/_next') && !link.startsWith('/legal/'))) {
     const target = href.split('#')[0] || '/';
     assert.ok(
-      ['/', '/demo', '/kalkulator', '/preselekcja', '/kup/preselekcja', '/rozmowa', '/register', '/login', '/regulamin',
+      ['/', '/demo', '/kalkulator', '/preselekcja', '/kup/preselekcja', '/rozmowa', '/register', '/login', '/dashboard', '/regulamin',
         '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
         '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
       `home CTA points at an existing path: ${href}`,
@@ -248,8 +248,8 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.ok(homeHrefs.includes('/preselekcja#free'), 'FREE CTA anchors to the FREE section');
   assert.match(order, /id="free"/, 'FREE anchor is on section, below sticky header');
   assert.ok(hrefs(order).includes('/register'));
-  // The offer page points a logged-out visitor at registration/login, never at a
-  // dashboard URL it cannot resolve: the page is public and has no session.
+  // The offer remains public. Account navigation resolves the signed-in company
+  // list or the existing login guard without guessing a company's private URL.
   assert.ok(hrefs(order).includes('/login'), 'offer page CTA for an existing account');
   // This server runs with SC19_PACKAGES_ENABLED=false, which is also what the
   // production runbook specifies for now. With packages off the company panel
@@ -265,7 +265,8 @@ test('public offer and demo pages respond without an account', async (t) => {
     'the panel-order CTA appears only when SC19_PACKAGES_ENABLED is on');
   assert.match(offerPage, /Zakup może złożyć wyłącznie właściciel konta firmy/,
     'the owner-only rule is still stated on the flag-on path');
-  assert.ok(hrefs(order).every(href => !href.startsWith('/dashboard')), 'no dashboard URL on the public offer page');
+  assert.ok(hrefs(order).includes('/dashboard'), 'public offer links back to the account');
+  assert.ok(hrefs(order).every(href => !href.startsWith('/dashboard/')), 'no tenant-specific URL on the public offer page');
   assert.doesNotMatch(order, /<form[ >]/);
   assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
   assert.match(home, /PRESELEKCJA: 60 CV za 300 zł/);
