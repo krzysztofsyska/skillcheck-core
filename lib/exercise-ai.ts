@@ -18,6 +18,8 @@ export const EXERCISE_AI_MAX_OUTPUT_TOKENS = 4000;
 export const EXERCISE_AI_REQUEST_TIMEOUT_MS = 60000;
 /** Upper bound on the raw response text before it is parsed as JSON. */
 export const EXERCISE_AI_MAX_RESPONSE_CHARS = 200_000;
+export const EXERCISE_AI_MAX_PAYLOAD_BYTES = 32_000;
+export const EXERCISE_AI_MAX_REQUEST_BYTES = 48_000;
 export const EXERCISE_AI_MAX_RETRIES = 2;
 
 /**
@@ -65,6 +67,7 @@ export const EXERCISE_AI_ERROR_CODES = [
   'exercise_ai_network_error',
   'exercise_ai_quota_exhausted',
   'exercise_ai_input_incomplete',
+  'exercise_ai_input_too_large',
 ] as const;
 export type ExerciseAiErrorCode = typeof EXERCISE_AI_ERROR_CODES[number];
 
@@ -90,6 +93,7 @@ export function sanitizeExerciseAiError(code: ExerciseAiErrorCode) {
     case 'exercise_ai_network_error': return 'Nie udało się połączyć z modelem.';
     case 'exercise_ai_quota_exhausted': return 'Wyczerpano limit propozycji dla tej rekrutacji.';
     case 'exercise_ai_input_incomplete': return 'Uzupełnij profil stanowiska: wymagane kompetencje i zadania.';
+    case 'exercise_ai_input_too_large': return 'Profil jest zbyt obszerny do przygotowania propozycji. Skróć opisy lub listy wymagań; nie zużyto próby AI.';
     default: return 'Nie udało się przygotować propozycji.';
   }
 }
@@ -108,9 +112,28 @@ const trimmedList = (values: readonly string[] | null | undefined, max: number) 
  */
 export function exerciseDraftPayload(input: ExerciseDraftInput) {
   const position = input.position;
+  // Validate every supplied allowlisted field before trimming/list processing.
+  // Reject excess context explicitly: never silently drop a task constraint.
+  const boundedText = (value: string | null | undefined, bytes: number) => {
+    if (typeof value === 'string' && (value.length > bytes || Buffer.byteLength(value, 'utf8') > bytes))
+      throw new ExerciseAiError('exercise_ai_input_too_large', 'Profile field exceeds byte limit.');
+  };
+  const boundedList = (values: readonly string[] | null | undefined, count: number, bytes: number) => {
+    if (!Array.isArray(values)) return;
+    if (values.length > count) throw new ExerciseAiError('exercise_ai_input_too_large', 'Profile list exceeds count limit.');
+    values.forEach(value => boundedText(value, bytes));
+  };
+  boundedText(position.title, 800); boundedText(position.description, 10_000);
+  boundedList(position.tasks, 20, 2_000); boundedList(position.kpis, 20, 2_000);
+  boundedList(position.required_behaviors, 20, 2_000);
+  boundedList(position.required_competencies, EXERCISE_AI_MAX_CRITERIA + 1, 800);
+  if (input.company) {
+    boundedText(input.company.industry, 800); boundedText(input.company.description, 10_000);
+    boundedText(input.company.work_environment, 4_000); boundedText(input.company.size_band, 32);
+    boundedList(input.company.company_values, 12, 800);
+  }
   const competencies = trimmedList(position.required_competencies, EXERCISE_AI_MAX_CRITERIA + 1);
-  // Tasks and KPIs are context for the model, so taking the first 20 of a very
-  // long list is deliberate. Competencies are not context: each one becomes a
+  // Each required competency becomes a
   // rubric criterion, so dropping any would silently produce a rubric that
   // ignores part of the position — the recruiter would never see what is
   // missing. A profile with too many is refused instead.
@@ -131,7 +154,7 @@ export function exerciseDraftPayload(input: ExerciseDraftInput) {
   if (new Set(keys).size !== keys.length) {
     throw new ExerciseAiError('exercise_ai_input_incomplete', 'Required competencies repeat.');
   }
-  return {
+  const payload = {
     schema_version: EXERCISE_AI_PAYLOAD_SCHEMA_VERSION,
     untrusted_position: {
       title: trimmed(position.title),
@@ -152,6 +175,9 @@ export function exerciseDraftPayload(input: ExerciseDraftInput) {
       }
       : null,
   };
+  if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > EXERCISE_AI_MAX_PAYLOAD_BYTES)
+    throw new ExerciseAiError('exercise_ai_input_too_large', 'Profile payload exceeds byte limit.');
+  return payload;
 }
 
 export const exerciseDraftSystemPrompt = [

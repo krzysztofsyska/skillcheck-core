@@ -1,6 +1,7 @@
 import type { ExerciseDefinition } from './exercise-definition.ts';
 import {
   ExerciseAiError, exerciseDraftPayload, exerciseDraftProvenance, sanitizeExerciseAiError,
+  buildExerciseDraftRequest, EXERCISE_AI_MAX_REQUEST_BYTES,
   type ExerciseDraftInput, type ExerciseDraftProvenance, type ExerciseAiErrorCode,
 } from './exercise-ai.ts';
 
@@ -23,7 +24,12 @@ const result = (item: GenerationReservation): ExerciseGenerationResult => item.s
 /** Commit reservation before provider I/O, persist outcome before reporting success. */
 export async function generateExerciseDraft(input: ExerciseDraftInput, position: {id:string;updated_at:string}, deps: Dependencies): Promise<ExerciseGenerationResult> {
   try {
-    const payload = exerciseDraftPayload(input); const provenance = exerciseDraftProvenance(payload, position);
+    const payload = exerciseDraftPayload(input);
+    // Envelope escaping may expand profile JSON further; check the actual wire
+    // body before committing a reservation, as well as at the provider boundary.
+    if (Buffer.byteLength(JSON.stringify(buildExerciseDraftRequest(payload)), 'utf8') > EXERCISE_AI_MAX_REQUEST_BYTES)
+      throw new ExerciseAiError('exercise_ai_input_too_large', 'Provider request exceeds byte limit.');
+    const provenance = exerciseDraftProvenance(payload, position);
     const reservation = await deps.reserve(provenance.input_fingerprint);
     if (!reservation.claimed) return result(reservation);
     let definition: ExerciseDefinition;

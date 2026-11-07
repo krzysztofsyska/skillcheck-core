@@ -1,6 +1,6 @@
 import {
   buildExerciseDraftRequest, ExerciseAiError, EXERCISE_AI_MAX_RESPONSE_CHARS,
-  EXERCISE_AI_REQUEST_TIMEOUT_MS, mapExerciseAiHttpError,
+  EXERCISE_AI_REQUEST_TIMEOUT_MS, EXERCISE_AI_MAX_REQUEST_BYTES, mapExerciseAiHttpError,
   parseExerciseDraftResponse, type exerciseDraftPayload, type ExerciseAiResponse,
 } from './exercise-ai.ts';
 
@@ -8,13 +8,16 @@ import {
 export async function requestExerciseDraft(payload: ReturnType<typeof exerciseDraftPayload>, apiKey: string,
   fetcher: typeof fetch = fetch) {
   if (!apiKey) throw new ExerciseAiError('exercise_ai_auth_error', 'Missing provider configuration');
+  const body = JSON.stringify(buildExerciseDraftRequest(payload));
+  if (Buffer.byteLength(body, 'utf8') > EXERCISE_AI_MAX_REQUEST_BYTES)
+    throw new ExerciseAiError('exercise_ai_input_too_large', 'Provider request exceeds byte limit.');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), EXERCISE_AI_REQUEST_TIMEOUT_MS);
   try {
     const response = await fetcher('https://api.openai.com/v1/responses', {
       method: 'POST', redirect: 'error', signal: controller.signal,
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildExerciseDraftRequest(payload)),
+      body,
     });
     if (!response.ok) throw new ExerciseAiError(mapExerciseAiHttpError(response.status), 'Provider failed');
     if (!response.body) throw new ExerciseAiError('exercise_ai_invalid_output', 'Missing response');

@@ -7,6 +7,29 @@ const position={id:'position',updated_at:'2026-11-07T00:00:00Z',title:'Planista'
 const input={position,company:null};
 const output={title:'Plan',instructions:'Przygotuj plan działania.',expectedOutput:'Plan.',durationMinutes:20,criteria:[{competency:'Planowanie',below:'Pomija terminy.',meets:'Podaje terminy.',above:'Uwzględnia ryzyka.'}]};
 const definition={kind:'competency_test',...output};
+test('oversized ASCII, multibyte, per-field and aggregate input consume no reservation or provider call',async()=>{
+ const cases=[
+  {...input,position:{...position,description:'a'.repeat(2_000_000)}},
+  {...input,position:{...position,description:'😀'.repeat(2501)}},
+  {...input,position:{...position,tasks:['a'.repeat(2001)]}},
+  {...input,position:{...position,tasks:Array(21).fill('Task')}},
+  {...input,position:{...position,tasks:Array(20).fill('a'.repeat(1700))}},
+  {...input,position:{...position,tasks:Array(20).fill('😀'.repeat(425))}},
+  {...input,company:{description:'ą'.repeat(5001)}},
+  // All raw fields fit; JSON and then the Responses user-content escaping expand.
+  {...input,position:{...position,tasks:Array(15).fill('"'.repeat(1000))}},
+ ];
+ for(const candidate of cases){let reservations=0,calls=0;
+  const result=await generateExerciseDraft(candidate,position,{reserve:async()=>{reservations++;return {status:'reserved',claimed:true};},provide:async()=>{calls++;return {definition};},finish:async()=>({status:'completed',exercise_id:'unexpected'})});
+  assert.match(result.error,/Profil jest zbyt obszerny/);assert.equal(reservations,0);assert.equal(calls,0);
+ }
+});
+test('provider boundary refuses an oversized complete request even when caller bypasses payload validation',async()=>{
+ for(const value of ['a'.repeat(50_000),'😀'.repeat(13_000)]) {
+  const payload=exerciseDraftPayload(input);payload.untrusted_position.description=value;
+  let calls=0;await assert.rejects(requestExerciseDraft(payload,'synthetic-key',async()=>{calls++;return Response.json({});}),e=>e.code==='exercise_ai_input_too_large');assert.equal(calls,0);
+ }
+});
 test('generation commits reservation before one call, stores provenance and replays without provider I/O',async()=>{
  let stored=null,calls=0;const order=[];
  const deps={reserve:async()=>{order.push('reserve');return stored??{status:'reserved',claimed:true};},provide:async()=>{order.push('provide');calls++;return {definition};},
