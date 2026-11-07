@@ -73,11 +73,25 @@ test('public offer and demo pages respond without an account', async (t) => {
   // Only FREE and PRESELEKCJA can be bought today, but the later stages carry their
   // approved prices (owner decision 2026-11-02, reconfirmed in chat the same evening).
   assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 0);
-  assert.equal((home.match(/>Kolejny etap<\/p>/g) ?? []).length, 2, 'WERYFIKACJA and ASSESSMENT CENTER shown as later stages');
+  assert.match(home, /id="planowane-pakiety"/);
   assert.match(home, /615 zł brutto/);
   assert.match(home, /1 499 zł brutto/);
   assert.match(home, /Cena zatwierdzona · pakiet w przygotowaniu/);
-  assert.match(home, /5–6 osób, maksymalnie 10/);
+  assert.match(home, /do 10 testowanych osób/);
+  assert.match(home, /do 6 finalistów/);
+  assert.match(home, /Rozszerzenie do 7–10 osób wymaga osobnej oferty/);
+  const futureStart = home.indexOf('id="planowane-pakiety"');
+  const futureEnd = home.indexOf('To plan rozwoju.', futureStart);
+  assert.ok(futureStart > -1 && futureEnd > futureStart);
+  const future = home.slice(futureStart, futureEnd);
+  assert.ok(hrefs(future).length === 2 && hrefs(future).every(href => href === '/rozmowa'), 'future offers link only to contact, never checkout');
+  assert.match(future, /Nie można ich jeszcze kupić/);
+  assert.match(future, /Nie obejmuje zewnętrznego asesora/);
+  const previewStart = home.indexOf('id="przyklady-pakietow"');
+  assert.ok(previewStart > futureStart && previewStart < futureEnd, 'demo is inside planned offers');
+  const preview = home.slice(previewStart, home.indexOf('Co planujemy w tej cenie?', previewStart));
+  for (const copy of ['Demonstracja na fikcyjnych danych.', 'Przykładowy test', 'Przykładowe ćwiczenie', 'Fragment raportu: Kandydat A', 'Brak danych.', 'Pokaż klucz i uzasadnienie']) assert.ok(preview.includes(copy), copy);
+  assert.equal(/<form[\s>]|<input[\s>]|<textarea[\s>]/.test(preview), false, 'demo collects no candidate data');
   // Withdrawn prices must not come back.
   for (const price of ['299', '369', '899', '1 799', '1799', '1845']) {
     assert.equal(home.includes(price), false, `stale price ${price} removed from the home page`);

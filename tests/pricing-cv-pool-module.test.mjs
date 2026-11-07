@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 // SC-PRICING-W2b — kontrakt puli CV liczonej z katalogu cen.
 // Test nie zna żadnej ceny ani granicy z kodu strony: wszystkie liczby wchodzą
 // jako dane, tak jak wejdą z `public.pricing_published_packages`.
@@ -180,10 +181,10 @@ test('granice i krok pochodzą z danych, więc zmiana katalogu zmienia kontrakt'
 // Prawdziwy silnik wyceny, załadowany przez transpilację (quote-engine.ts używa
 // składni, której `node --test` sam nie rozbierze). Ten sam wzorzec, co w
 // tests/sc-pricing-engine.test.mjs.
-const enginePath = new URL('../lib/pricing/quote-engine.ts', import.meta.url).pathname;
+const enginePath = fileURLToPath(new URL('../lib/pricing/quote-engine.ts', import.meta.url));
 const engineModule = new Module(enginePath);
 engineModule.filename = enginePath;
-engineModule.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+engineModule.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
 engineModule.require = createRequire(enginePath);
 engineModule._compile(ts.transpileModule(readFileSync(enginePath, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
