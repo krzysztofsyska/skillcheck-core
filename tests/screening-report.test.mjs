@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createRequire, Module } from 'node:module';
 import ts from 'typescript';
 import React from 'react';
@@ -211,7 +212,7 @@ test('CSV preserves quotes/newlines/Polish text and neutralizes formulas and con
 test('React report renders status/evidence and escapes hostile content', async () => {
   const data = fixture(); data.screening_criterion_results[0].evidence[0].quote = '<img src=x onerror=alert(1)>';
   const report = await load(data);
-  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx',import.meta.url).pathname;
+  const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx',import.meta.url));
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name.endsWith('.module.css') ? { default: new Proxy({}, { get: (_, key) => String(key) }), __esModule: true }
@@ -356,7 +357,7 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   assert.equal(rankingStatusLabel(report.applications[0], true), 'Sprawdzone przez człowieka — wynik w tabeli grup');
   // Without a group row (e.g. a single-CV evidence analysis) the label never points to the groups table.
   assert.equal(rankingStatusLabel(report.applications[0], false), 'Sprawdzone przez człowieka');
-  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx', import.meta.url).pathname;
+  const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx', import.meta.url));
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name.endsWith('.module.css') ? { default: new Proxy({}, { get: (_, key) => String(key) }), __esModule: true }
@@ -406,7 +407,7 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
   assert.equal(groupAnalysisCurrent(a, undefined), false, 'no ranking row (e.g. ranking unreadable): fail closed');
   for (const bad of [null, undefined, '', 'not-a-uuid', 42]) assert.equal(groupAnalysisCurrent(bad, { analysis_id: a, eligibility_reason: 'eligible' }), false);
 
-  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/groups.tsx', import.meta.url).pathname;
+  const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/groups.tsx', import.meta.url));
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name === './actions' ? { movePreselectionGroup: async () => ({}) }
@@ -522,7 +523,7 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   }
 
   // The batch page shows an outdated group without its historical score.
-  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url).pathname;
+  const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url));
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name === '../actions' ? { bulkProgress: async () => null }

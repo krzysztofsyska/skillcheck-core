@@ -85,13 +85,15 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
         const html=await response.text();assert.match(html,/Raport kandydata/);return html;
       };
       let comparison=await (await read()).text();
-      assert.equal((comparison.match(/href="[^"]+\/applications\/[^/]+\/report"/g)??[]).length,10,'five comparison headings and five detail links');
+      for(let i=0;i<5;i++) assert.ok(comparison.includes(`/applications/${uuid(100+i)}/report`),'each candidate has its own report link');
       for(let i=0;i<5;i++) {assert.ok(comparison.includes(`DowodCV_${i}`));assert.ok((await one(i)).includes(`DowodCV_${i}`));}
       const corrected=data.screening_criterion_results[0];
       Object.assign(corrected,{human_status:'edited',human_verdict:'supported',human_evidence:[{start:0,end:13,quote:'KorektaCV_zero'}]});
       data.screening_analysis_versions[0].latest_review_version=3;
       data.screening_result_reviews[0].review_version=3;
-      data.screening_result_reviews[0].disposition='approved_with_changes';
+      // Matrix corrections are stored on the result row; legacy rating
+      // overrides alone use approved_with_changes and their separate table.
+      data.screening_result_reviews[0].disposition='approved';
       comparison=await (await read()).text();
       assert.ok(comparison.includes('KorektaCV_zero'));assert.ok(!comparison.includes('DowodCV_0'));
       const changed=await one(0);assert.ok(changed.includes('KorektaCV_zero'));assert.ok(!changed.includes('DowodCV_0'));
@@ -99,14 +101,17 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
         assert.ok(comparison.includes(`DowodCV_${i}`));
         const unchanged=await one(i);assert.ok(unchanged.includes(`DowodCV_${i}`));assert.ok(!unchanged.includes('KorektaCV_zero'));
       }
-      // A revoked human approval must disappear from both surfaces on reload.
+      // A revoked approval cannot remain confirmed. The individual report
+      // deliberately retains historical evidence with an outdated warning.
       data.screening_result_reviews[0].disposition='needs_reanalysis';
       data.get_screening_ranking[0].eligibility_reason='needs_reanalysis';
       data.get_screening_ranking[0].rankable=false;
       data.get_screening_ranking[0].rank=null;
       comparison=await (await read()).text();
       assert.ok(!comparison.includes('KorektaCV_zero'));
-      assert.ok(!(await one(0)).includes('KorektaCV_zero'));
+      const revokedReport=await one(0);
+      assert.match(revokedReport,/Wynik nieaktualny/);
+      assert.doesNotMatch(revokedReport,/<strong>Potwierdzone w CV<\/strong>/);
     } finally {
       for(const key of Object.keys(data)) delete data[key];Object.assign(data,saved);
     }
