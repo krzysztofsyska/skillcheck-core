@@ -108,7 +108,9 @@ export function buildCandidateComparison(
     cells: chosen.map(application => {
       // Kandydat analizowany na innej wersji wymagań nie ma w tym wierszu wyniku:
       // komórka mówi „brak wyniku analizy", nigdy „brak informacji w CV".
-      const criterion = application.criteria.find(c => c.id === requirement.id && c.text === requirement.text);
+      // Mirror criterionRowFor in the single-CV report: harmless surrounding whitespace
+      // must not change whether a snapshot belongs to the current requirement.
+      const criterion = application.criteria.find(c => c.id === requirement.id && c.text.trim() === requirement.text.trim());
       const status = comparisonStatus(application, criterion);
       return {
         applicationId: application.ranking.application_id,

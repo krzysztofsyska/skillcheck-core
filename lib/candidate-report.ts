@@ -88,11 +88,14 @@ export async function loadCandidateReport(
     throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
   }
 
-  const resultRows = analysis
-    ? await client.from('screening_criterion_results')
+  // Read the same criterion projection twice: analysis and review revisions alone
+  // cannot detect a response changed between two separate Data API requests.
+  const readCriterionRows = () => analysis
+    ? client.from('screening_criterion_results')
       .select('analysis_id,criterion_id,criterion_text_snapshot,verdict,evidence,missing_info,suggested_question,human_status,human_verdict,human_missing_info,human_suggested_question,human_evidence')
       .eq('company_id', companyId).eq('analysis_id', analysis.id).order('criterion_order')
-    : { data: [], error: null };
+    : Promise.resolve({ data: [], error: null });
+  const resultRows = await readCriterionRows();
   if (resultRows.error) throw new CandidateReportError('Nie udało się wczytać macierzy dowodów.');
   if (resultRows.data !== null && !Array.isArray(resultRows.data)) {
     throw new CandidateReportError('Macierz dowodów ma nieprawidłowy format.');
@@ -162,6 +165,16 @@ export async function loadCandidateReport(
     const recheckedReview = await readLatestReview();
     if (recheckedReview.error || JSON.stringify(recheckedReview.data) !== JSON.stringify(reviewRows.data)) {
       throw new CandidateReportError('Wynik lub przegląd zmienił się podczas odczytu. Odśwież raport.');
+    }
+  }
+  // A concurrent criterion correction can alter the rendered verdict or quote
+  // without appearing in either of the two snapshots above. Fail closed rather
+  // than showing a mixed FREE/PRESELEKCJA report.
+  if (analysis) {
+    const recheckedCriteria = await readCriterionRows();
+    if (recheckedCriteria.error
+      || JSON.stringify(recheckedCriteria.data) !== JSON.stringify(resultRows.data)) {
+      throw new CandidateReportError('Macierz dowodów zmieniła się podczas odczytu. Odśwież raport.');
     }
   }
   const requirements = positionRequirements(context.position);

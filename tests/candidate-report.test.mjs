@@ -486,6 +486,30 @@ test('loadCandidateReport: review zmienione w trakcie odczytu nie zatwierdza sta
   assert.equal((await loadCandidateReport(loaderClient(loaderData()), route)).summary.requiredSupported, 1);
 });
 
+test('loadCandidateReport: równoległa zmiana macierzy bez zmiany analizy lub review unieważnia raport', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  for (const scenario of ['rejected', 'quote-changed', 'row-deleted']) {
+    const data = loaderData();
+    let criterionReads = 0;
+    const client = loaderClient(data, table => {
+      if (table !== 'screening_criterion_results' || ++criterionReads !== 1) return;
+      // The first query has already returned a snapshot. No analysis/review
+      // revision changes here: only a second matrix read can catch the race.
+      if (scenario === 'rejected') data.screening_criterion_results[0].human_status = 'rejected';
+      if (scenario === 'quote-changed') {
+        data.screening_criterion_results[0].evidence = [{ start: 0, end: 9, quote: 'inny cytat' }];
+      }
+      if (scenario === 'row-deleted') data.screening_criterion_results = [];
+    });
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Macierz dowodów zmieniła się/.test(error.message),
+      scenario);
+    assert.equal(criterionReads, 2, 'both snapshots must come from the same scoped query');
+  }
+  const stable = await loadCandidateReport(loaderClient(loaderData()), route);
+  assert.equal(stable.summary.requiredSupported, 1, 'unchanged human-approved evidence still works');
+});
+
 test('loadCandidateReport: nieaktualny materiał nie wymazuje cytatów rekruterowi', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   // Zamknięta rekrutacja albo zmienione CV sprawiają, że odcisk materiału się nie
@@ -594,6 +618,26 @@ test('porównanie FREE pokazuje pierwszy niepusty cytat, jak raport pojedynczego
   ];
   const compared = buildCandidateComparison(report([candidate]));
   assert.equal(compared.rows.find(r => r.id === requirements[0].id).cells[0].quote, 'dowód 2');
+});
+
+test('porównanie i raport pojedynczego CV identycznie rozpoznają tekst wymagania', () => {
+  const whitespace = application(1);
+  whitespace.criteria[0].text = `  ${requirements[0].text}  `;
+  const expected = criterionRowFor(requirements[0], {
+    criterion_text_snapshot: whitespace.criteria[0].text,
+  });
+  assert.ok(expected, 'raport pojedynczego CV akceptuje nieistotne białe znaki');
+  const same = buildCandidateComparison(report([whitespace]));
+  const cell = same.rows.find(r => r.id === requirements[0].id).cells[0];
+  assert.equal(cell.status, 'supported', 'porównanie nie może odrzucać tego samego tekstu');
+  assert.equal(cell.quote, 'cytat 1');
+
+  // Real changes in the requirement must still never inherit another verdict.
+  whitespace.criteria[0].text = requirements[0].text + ' (inne wymaganie)';
+  const changed = buildCandidateComparison(report([whitespace]));
+  const stale = changed.rows.find(r => r.id === requirements[0].id).cells[0];
+  assert.equal(stale.status, 'unavailable');
+  assert.equal(stale.quote, null);
 });
 
 test('pusta lista kryteriów nie znaczy od razu „brak wyniku analizy"', () => {
