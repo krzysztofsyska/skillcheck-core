@@ -64,6 +64,8 @@ test('single analysis grouping: v1/v2 completion, replay, manual choice, scope, 
   for(const role of ['anon','authenticated','screening_worker']) {
     assert.equal((await db.query("select has_function_privilege($1,'private.screening_apply_single_group(uuid,uuid)','execute') allowed",[role])).rows[0].allowed,false);
   }
+  // Prepare the rollback subject before freezing the shared recruitment.
+  const post=await seed({tenant:f,shortlist:false});
   await h.asUser(v2.owner);await x.policy(v2,0,lifecycleRules);v2.resolutionId=await x.resolve(v2,[v2.candidate.id]);
   await x.freeze(v2);
   await h.asAdmin();
@@ -73,7 +75,7 @@ test('single analysis grouping: v1/v2 completion, replay, manual choice, scope, 
   await db.exec(await readFile(new URL('../supabase/rollbacks/20261107170432_single_analysis_preselection_group_down.sql',import.meta.url),'utf8'));
   assert.equal((await db.query('select private.erasure_schema_signature() value')).rows[0].value,signature);
   assert.equal((await db.query("select to_regprocedure('private.screening_apply_single_group(uuid,uuid)') value")).rows[0].value,null);
-  const post=await seed({tenant:f,shortlist:false});const ps=await h.start(post),pclaim=await h.claim(ps);
+  const ps=await h.start(post),pclaim=await h.claim(ps);
   await h.finishClaim(ps,pclaim,Array(5).fill('above'));
   assert.equal(await group(post.application.id),undefined,'rollback restores old individual completion');
 });
