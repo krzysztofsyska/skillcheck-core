@@ -355,11 +355,12 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   assert.equal(await loadCurrentRanking(client(500), id(9)), null, 'a failed page fails closed');
   const rankingClient = data => ({ rpc: () => ({ range: (from, to) =>
     Promise.resolve({ data: data.slice(from, to + 1), error: null }) }) });
-  const duplicate = { ...rows[0], application_id: rows[0].application_id.toUpperCase(), analysis_id: id(99999) };
-  assert.equal(await loadCurrentRanking(rankingClient([rows[0], duplicate]), id(9)), null,
-    'duplicate candidate IDs (including alternate case) fail closed');
-  assert.equal(await loadCurrentRanking(rankingClient([...rows.slice(0, 500), duplicate]), id(9)), null,
-    'a duplicate across pagination boundaries cannot override the first row');
+  const withLetters = { ...rows[0], application_id: 'aabbccdd-aabb-4ccd-8eaf-aabbccddeeff' };
+  const duplicate = { ...withLetters, application_id: withLetters.application_id.toUpperCase(), analysis_id: id(99999) };
+  assert.equal(await loadCurrentRanking(rankingClient([withLetters, duplicate]), id(9)), null,
+    'duplicate candidate IDs with different letter casing fail closed');
+  assert.equal(await loadCurrentRanking(rankingClient([...rows.slice(0, 499), withLetters, duplicate]), id(9)), null,
+    'a differently cased duplicate across pagination boundaries cannot override the first row');
   for (const malformed of [null, {}, { ...rows[0], application_id: 'not-a-uuid' }]) {
     assert.equal(await loadCurrentRanking(rankingClient([rows[0], malformed]), id(9)), null,
       'a malformed ranking page cannot confirm any group as current');
