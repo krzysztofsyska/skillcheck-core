@@ -158,12 +158,14 @@ export type ScreeningReport = {
 /**
  * A saved preselection group is current only while it was computed from the analysis the SC-008
  * ranking uses now, and that analysis is not outdated. A re-analysis outside the batch, a CV or
- * position change, a missing link or a malformed id all make the saved score historical.
+ * position change, a missing human-approved result, a missing link or a malformed id all make the saved score historical.
  */
 export function groupAnalysisCurrent(groupAnalysisId: unknown,
   ranking: { analysis_id: unknown; eligibility_reason: unknown } | undefined): boolean {
   if (!isUuid(groupAnalysisId) || !ranking || !isUuid(ranking.analysis_id)) return false;
-  if (ranking.eligibility_reason === 'stale' || ranking.eligibility_reason === 'needs_reanalysis') return false;
+  // A matching analysis UUID alone does not prove a valid, human-reviewed result.
+  // Pending/failed/unreviewed rankings may still reference a historical analysis.
+  if (ranking.eligibility_reason !== 'eligible' && ranking.eligibility_reason !== 'insufficient_evidence') return false;
   // PostgreSQL UUIDs are case-insensitive; a differently cased Data API value must not make a current group appear stale.
   return ranking.analysis_id.toLowerCase() === groupAnalysisId.toLowerCase();
 }

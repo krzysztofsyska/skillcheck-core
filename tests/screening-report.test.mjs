@@ -297,6 +297,31 @@ test('a group computed from an older analysis is stale after a re-analysis outsi
   await assert.rejects(load(data));
 });
 
+test('a saved group is historical when the ranking no longer has a human-reviewed result', async () => {
+  // An RPC may still return the previous analysis_id while a retry is pending or
+  // a human has not approved it. A matching UUID must not publish its old score.
+  for (const reason of [
+    'no_human_review', 'pending', 'processing', 'failed', 'cancelled',
+    'no_completed_result', 'result_incomplete', 'review_inconsistent',
+  ]) {
+    const data = fixture();
+    Object.assign(data.get_screening_ranking[0], {
+      rank: null, rankable: false, raw_score: null,
+      eligibility_reason: reason, suggested_shortlist: false,
+    });
+    data.get_preselection_groups = [{
+      application_id: application, candidate_name: 'Kandydat testowy', group_key: 'passed',
+      source: 'auto', raw_score: 95, coverage: 1,
+      analysis_id: data.get_screening_ranking[0].analysis_id,
+    }];
+    const report = await load(data);
+    assert.equal(report.groups.length, 1);
+    assert.equal(report.groups[0].stale, true, reason);
+    const csv = screeningReportCsv(report);
+    assert.match(csv, /Wynik nieaktualny — wymaga ponownej analizy/, reason);
+  }
+});
+
 test('a reviewed evidence-matrix candidate shows the group score, not "too few rated criteria / 0%"', async () => {
   const data = fixture();
   // v2 analysis after human review: neutral legacy rating, so SC-008 reports insufficient_evidence (Step 3 rule).
@@ -352,6 +377,12 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
   assert.equal(groupAnalysisCurrent(a, { analysis_id: b, eligibility_reason: 'eligible' }), false, 're-analysed outside the batch');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'stale' }), false, 'CV or position changed');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'needs_reanalysis' }), false);
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'insufficient_evidence' }), true,
+    'human-reviewed evidence matrix remains valid without an automated score');
+  for (const reason of ['no_human_review', 'pending', 'processing', 'failed', 'cancelled', 'no_completed_result',
+    'result_incomplete', 'review_inconsistent', 'unknown']) {
+    assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: reason }), false, reason);
+  }
   assert.equal(groupAnalysisCurrent(a, undefined), false, 'no ranking row (e.g. ranking unreadable): fail closed');
   for (const bad of [null, undefined, '', 'not-a-uuid', 42]) assert.equal(groupAnalysisCurrent(bad, { analysis_id: a, eligibility_reason: 'eligible' }), false);
 
