@@ -62,6 +62,33 @@ test('report uses current reviewed evidence, whitelists fields, and leaves sourc
   }
 });
 
+test('comparison report rejects malformed and duplicate requirement-flag RPC rows', async () => {
+  const flag = { criterion_id: 'task:1', criterion_text: 'Raportowanie', flag: 'required' };
+  const malformed = [
+    [flag, { ...flag, flag: 'additional' }], // ambiguous required/optional
+    [null], [{ ...flag, criterion_id: null }],
+    [{ ...flag, criterion_id: '  ' }],
+    [{ ...flag, criterion_text: null }],
+    [{ ...flag, flag: null }],
+  ];
+  for (const rows of malformed) {
+    const data = fixture();
+    data.position_requirement_flags = rows;
+    await assert.rejects(() => load(data), error => error?.code === 'changed');
+  }
+
+  const oldProfile = await load(fixture());
+  assert.deepEqual(oldProfile.requirementFlags, [], 'missing flags remain a valid legacy profile');
+  const current = fixture();
+  current.position_requirement_flags = [flag];
+  assert.deepEqual((await load(current)).requirementFlags, [flag]);
+
+  const unknown = fixture();
+  unknown.position_requirement_flags = [{ ...flag, flag: 'legacy-unknown' }];
+  assert.equal((await load(unknown)).requirementFlags[0].flag, 'legacy-unknown',
+    'unknown text flag is handled as unmarked by the shared resolver');
+});
+
 test('only indicated review overrides apply; empty evidence/explanation survive and null rating preserves AI', async () => {
   const data = fixture(); data.screening_result_reviews[0].disposition = 'approved_with_changes';
   data.screening_criterion_review_overrides.push({ id: uuid(11), company_id: company, review_id: review, criterion_result_id: result,

@@ -11,7 +11,7 @@ import { loadScreeningContext } from './screening-flow.ts';
 import { prepareScreening } from './screening.ts';
 import { screeningStatus, type ScreeningRoute } from './screening-ui.ts';
 import {
-  countRequirementMarks, positionRequirements, resolveRequirementMarks, sortByRequirementMark,
+  countRequirementMarks, parseRequirementFlagRows, positionRequirements, resolveRequirementMarks, sortByRequirementMark,
   type CriterionKind, type PositionRequirement, type RequirementFlagRow, type RequirementMark,
 } from './requirement-flags.ts';
 import {
@@ -41,8 +41,9 @@ export async function loadRequirementFlags(
     if (result.error.code === '42501') throw new CandidateReportError('Brak dostępu do oznaczeń wymagań.');
     throw new CandidateReportError('Nie udało się wczytać oznaczeń wymagań.');
   }
-  const rows = (result.data ?? []) as RequirementFlagRow[];
-  if (!Array.isArray(rows)) throw new CandidateReportError('Nie udało się wczytać oznaczeń wymagań.');
+  // Ten sam kontrakt RPC obowiązuje raport pojedynczego CV i porównanie.
+  const rows = parseRequirementFlagRows(result.data);
+  if (!rows) throw new CandidateReportError('Oznaczenia wymagań są niespójne. Odśwież raport.');
   return rows;
 }
 
