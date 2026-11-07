@@ -345,6 +345,10 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
   const { groupAnalysisCurrent } = await import('../lib/screening-report.ts');
   const a = '00000000-0000-4000-8000-0000000000a1', b = '00000000-0000-4000-8000-0000000000b2';
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'eligible' }), true);
+  assert.equal(groupAnalysisCurrent(a.toUpperCase(), { analysis_id: a, eligibility_reason: 'eligible' }), true, 'UUIDs are case-insensitive');
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a.toUpperCase(), eligibility_reason: 'eligible' }), true);
+  assert.equal(groupAnalysisCurrent('a'.repeat(36), { analysis_id: 'a'.repeat(36), eligibility_reason: 'eligible' }), false,
+    'matching malformed IDs may never establish currency');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: b, eligibility_reason: 'eligible' }), false, 're-analysed outside the batch');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'stale' }), false, 'CV or position changed');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'needs_reanalysis' }), false);
@@ -384,6 +388,13 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
     Promise.resolve({ data: data.slice(from, to + 1), error: null }) }) });
   const withLetters = { ...rows[0], application_id: 'aabbccdd-aabb-4ccd-8eaf-aabbccddeeff' };
   const duplicate = { ...withLetters, application_id: withLetters.application_id.toUpperCase(), analysis_id: id(99999) };
+  const upperRow = { ...withLetters, application_id: withLetters.application_id.toUpperCase(),
+    analysis_id: 'aabbccdd-aabb-4cdd-8eaf-aabbccddeeff' };
+  const upperMap = await loadCurrentRanking(rankingClient([upperRow]), id(9));
+  assert.equal(upperMap.has(withLetters.application_id), true, 'ranking map must use canonical keys');
+  assert.deepEqual(withGroupCurrency([{ application_id: withLetters.application_id.toUpperCase(),
+    group_key: 'passed', group_analysis_id: upperRow.analysis_id.toUpperCase() }], upperMap)
+    .map(item => item.group_current), [true], 'mixed-case source IDs refer to the same group');
   assert.equal(await loadCurrentRanking(rankingClient([withLetters, duplicate]), id(9)), null,
     'duplicate candidate IDs with different letter casing fail closed');
   assert.equal(await loadCurrentRanking(rankingClient([...rows.slice(0, 499), withLetters, duplicate]), id(9)), null,
