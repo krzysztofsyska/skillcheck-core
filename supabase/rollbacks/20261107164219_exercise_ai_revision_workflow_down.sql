@@ -87,4 +87,82 @@ begin
   return proposal.id;
 end;
 $$;
+create or replace function exercise_ai.record_proposal(target_recruitment uuid, target_definition_entry uuid,
+  new_provenance jsonb, draft_limit integer)
+returns uuid language plpgsql security definer set search_path = '' as $$
+declare
+  actor uuid := (select auth.uid()); recruitment public.recruitments%rowtype;
+  entry public.exercise_definition_entries%rowtype; used integer; proposal_id uuid;
+  auto_release boolean; ceiling integer; position public.positions%rowtype;
+begin
+  if actor is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+ -- Absence checks must see the latest committed classification, not an old snapshot.
+ if current_setting('transaction_isolation') <> 'read committed' then
+  raise exception using errcode='PT409',message='Read committed transaction required';end if;
+  if draft_limit is null or draft_limit < 1 or draft_limit > 1000 then
+    raise exception 'Invalid draft limit' using errcode = '22023';
+  end if;
+  -- `draft_limit` wybiera klient, więc sam w sobie niczego nie chroni. Wiążący
+  -- jest pułap z bazy; argument może go wyłącznie obniżyć.
+  select * into recruitment from public.recruitments r
+    where r.id = target_recruitment and private.has_company_access(r.company_id, true) for share;
+  if not found then raise exception 'No write access' using errcode = '42501'; end if;
+  select * into entry from public.exercise_definition_entries e
+    where e.id = target_definition_entry and e.company_id = recruitment.company_id
+      and e.recruitment_id = recruitment.id for update nowait;
+  if not found then raise exception 'No definition' using errcode = '42501'; end if;
+  -- Classification is fixed once any grant exists, including revoked grants.
+  -- This preserves historical answers and prevents retroactive AI retagging.
+  if exists(select 1 from private.competency_test_grants g
+    where g.company_id=entry.company_id and g.recruitment_id=entry.recruitment_id
+      and g.definition_entry_id=entry.id) then
+    raise exception 'Definition already granted' using errcode='PT409';
+  end if;
+  new_provenance := exercise_ai.validate_provenance(new_provenance);
+  -- Ślad pochodzenia musi opisywać TEN wpis definicji, nie dowolny. Dobrze
+  -- zbudowany, ale nieprawdziwy ślad jest gorszy od braku śladu: wygląda na
+  -- źródło, a prowadzi donikąd. Wersję profilu bierzemy z wpisu, który już mamy.
+  if (new_provenance->>'position_id')::uuid is distinct from entry.position_id
+    or (new_provenance->>'position_updated_at')::timestamptz is distinct from entry.position_updated_at then
+    raise exception 'Provenance does not match the definition' using errcode = '22023';
+  end if;
+  -- Serializuje równoległe żądania tej samej rekrutacji, żeby limit nie dał się
+  -- obejść dwoma kliknięciami naraz.
+  perform pg_advisory_xact_lock(hashtextextended('exercise_ai:' || recruitment.id::text, 0));
+  -- Usunięcie rekrutacji usuwa propozycje przez definicję (FK CASCADE).
+  select count(*) into used from exercise_ai.proposals p
+    where p.company_id = recruitment.company_id and p.recruitment_id = recruitment.id;
+  -- Ustawienie czyta się TU, w tej samej transakcji co zapis, a nie przyjmuje
+  -- z wywołania: inaczej klient mógłby zażądać automatu dla rekrutacji, w której
+  -- rekruter go nie włączył. Brak wiersza = zatwierdzanie ręczne.
+  select coalesce(s.auto_release, false), coalesce(s.draft_ceiling, 20)
+    into auto_release, ceiling
+    from (select 1) one
+    left join exercise_ai.recruitment_settings s
+      on s.company_id = recruitment.company_id and s.recruitment_id = recruitment.id;
+  if used >= least(draft_limit, ceiling) then raise exception 'Draft limit reached' using errcode = 'PT429'; end if;
+  -- Automat zwalnia zadanie bez niczyjej lektury, więc musi sprawdzać to samo, co
+  -- sprawdza człowiek w approve_proposal. Wpis definicji powstał, gdy rekrutacja
+  -- była otwarta, ale status mógł się zmienić PÓŹNIEJ i nic go tu nie czytało.
+  -- Propozycja wtedy powstaje, ale niezwolniona: ślad zostaje, zadanie nie wychodzi.
+  if auto_release then
+    select * into position from public.positions p
+      where p.company_id = recruitment.company_id and p.id = recruitment.position_id for share;
+    if recruitment.status not in ('draft','open') or not found or position.status = 'archived' then
+      auto_release := false;
+    end if;
+  end if;
+  insert into exercise_ai.proposals(company_id, recruitment_id, definition_entry_id, provenance, created_by,
+      approved_by, approved_at, approval_mode)
+    values(recruitment.company_id, recruitment.id, entry.id,
+      new_provenance, actor,
+      case when auto_release then actor end,
+      case when auto_release then now() end,
+      case when auto_release then 'auto' end)
+    returning id into proposal_id;
+  return proposal_id;
+exception when lock_not_available then
+  raise exception 'Definition busy' using errcode='PT409';
+end;
+$$;
 commit;
