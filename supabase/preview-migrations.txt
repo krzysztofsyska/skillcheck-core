@@ -47,3 +47,4 @@
 # SC-BULK-001: serialize global in-flight screening slots across companies. Preview only.
 20261106230000_cv_bulk_global_capacity_lock.sql
 20261106231000_cv_bulk_uploading_scheduler.sql
+20261107170432_single_analysis_preselection_group.sql
