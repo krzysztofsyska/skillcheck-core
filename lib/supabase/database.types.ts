@@ -554,6 +554,15 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number }[];
       };
+      pricing_published_packages: {
+        Args: Record<PropertyKey, never>;
+        Returns: { package_code: string; gross_minor: number; cv_included: number; cv_step: number;
+          cv_max: number; overage_gross_per_cv_minor: number; sellable: boolean; vat_basis_points: number }[];
+      };
+      pricing_published_addons: {
+        Args: Record<PropertyKey, never>;
+        Returns: { code: string; name: string; unit: string; gross_minor: number }[];
+      };
       /** Read-only checkout catalog. Requires an authenticated owner of a company
        * with an approved trial; raises 42501 otherwise. Creates no order. */
       sc19_checkout_offers: {
