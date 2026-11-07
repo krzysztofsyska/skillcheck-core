@@ -185,6 +185,11 @@ begin
  quote:=sc19_commerce.quote(target_company,expected_quote->>'kind',expected_quote->>'code',
   expected_quote->>'packageCode',(expected_quote->>'quantity')::integer);
  if quote is distinct from expected_quote then raise exception 'commerce_stale_quote' using errcode='22023';end if;
+ -- P24 uses SERIALIZABLE: a company row lock alone does not refresh its snapshot.
+ -- Write a new version of the already-verified approval without changing proof or
+ -- approved_at. P24's FOR SHARE approval read must retry a stale snapshot (40001).
+ -- Do not touch companies: its erasure guard would lock every candidate.
+ update private.sc19_trial_approvals set approved_at=approved_at where company_id=target_company;
  insert into sc19_commerce.orders(company_id,buyer_id,request_id,version_id,kind,code,package_code,quantity,
   gross_minor,cv_credits,service_code,service_units,terms_revision,terms_text)
  values(target_company,auth.uid(),request_key,(quote->>'versionId')::uuid,quote->>'kind',quote->>'code',

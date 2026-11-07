@@ -185,4 +185,41 @@ test('catalog orders: real SQL authorization, snapshots, settlement, service con
   await assert.rejects(c.query('select * from sc19_commerce.orders'),no('42501'));
   await h.asUser(b.owner);await assert.rejects(db.query('select private.sc19_has_pending_catalog_order($1)',[b.companyId]),no('42501'));
  });
+ await t.test('native mixed-isolation catalog and actual-role P24 checkout exclude each other in both lock orders',async()=>{
+  await h.asUser(b.owner);
+  for(const o of await call('public.sc19_catalog_orders',[b.companyId]))if(o.status==='pending')await call('public.sc19_cancel_catalog_order',[b.companyId,o.id]);
+  await h.asAdmin();await db.exec('update sc19_commerce.settings set enabled=true');
+  const approvalBefore=(await db.query('select approved_at from private.sc19_trial_approvals where company_id=$1',[b.companyId])).rows[0].approved_at;
+  const quote=(await opts(b)).find(q=>q.code==='PRESELEKCJA');
+  const buyer=await e.connect();await buyer.query('set role authenticated');await buyer.query("select set_config('request.jwt.claim.sub',$1,false)",[b.owner]);
+  const buyerPid=(await buyer.query('select pg_backend_pid() pid')).rows[0].pid;
+  let lastPaymentPid,retries=0;
+  const pool={connect:async()=>{const c=await e.connect();await c.query('set role sc19_p24_preview');lastPaymentPid=(await c.query('select pg_backend_pid() pid')).rows[0].pid;
+   return {query:async(...args)=>{try{return await c.query(...args);}catch(error){if(error.code==='40001')retries++;throw error;}},release(){}};}};
+  const store=createPostgresPaymentStore(pool);
+  const waitBlocked=async pid=>{await h.asAdmin();for(let i=0;i<100;i++){if(pid()&&(await db.query('select cardinality(pg_blocking_pids($1))>0 blocked',[pid()])).rows[0].blocked)return;await new Promise(resolve=>setTimeout(resolve,10));}assert.fail('expected controlled lock wait');};
+  const newOrder=()=>{const id=randomUUID();return {id,companyId:b.companyId,buyerId:b.owner,requestId:id,offerId:'commerce-p24',offerRevision:'v1',termsRevision:'v1',amountMinor:30000,currency:'PLN',credits:60,
+   scope:{provider:'przelewy24',mode:'test',account:'12345'},status:'awaiting_payment',sessionId:null,checkoutUrl:null,paymentId:null,checkoutDeadlineMs:Date.now()+600000};};
+  // Catalog owns the lock; P24 establishes SERIALIZABLE snapshot before waiting.
+  await buyer.query('begin');let catalogId;
+  try {
+   catalogId=await call('public.sc19_create_catalog_order',[b.companyId,randomUUID(),JSON.stringify(quote),true],buyer);
+   const order=newOrder();
+   const payment=store.transaction(async tx=>{await tx.companyAccess(b.companyId,b.owner);await tx.insertOrder(order);await tx.bindRequest(b.companyId,order.requestId,order.id);}).then(()=>null,error=>error);
+   await waitBlocked(()=>lastPaymentPid);await buyer.query('commit');
+   assert.match(String(await payment),/SC19_PAYMENT_REQUEST_CONFLICT/);assert.ok(retries>=1,'stale snapshot actually retried');
+   await h.asAdmin();assert.equal((await db.query('select count(*)::int n from private.sc19_payment_orders where id=$1',[order.id])).rows[0].n,0);
+  }finally{await buyer.query('rollback');}
+  await h.asUser(b.owner);await call('public.sc19_cancel_catalog_order',[b.companyId,catalogId]);
+  // P24 owns the lock; the catalog RC statement must see its committed order.
+  let entered,release;const started=new Promise(resolve=>{entered=resolve;});const hold=new Promise(resolve=>{release=resolve;});
+  const order=newOrder(),key=randomUUID();
+  const payment=store.transaction(async tx=>{await tx.companyAccess(b.companyId,b.owner);await tx.insertOrder(order);await tx.bindRequest(b.companyId,order.requestId,order.id);entered();await hold;});
+  await Promise.race([started,payment.then(()=>{throw Error('P24 completed before controlled lock wait');})]);
+  const catalog=call('public.sc19_create_catalog_order',[b.companyId,key,JSON.stringify(quote),true],buyer).then(()=>null,error=>error);
+  try {await waitBlocked(()=>buyerPid);}finally{release();}
+  await payment;assert.equal((await catalog)?.code,'23505');
+  await h.asAdmin();assert.equal((await db.query('select count(*)::int n from sc19_commerce.orders where request_id=$1',[key])).rows[0].n,0);
+  assert.deepEqual((await db.query('select approved_at from private.sc19_trial_approvals where company_id=$1',[b.companyId])).rows[0].approved_at,approvalBefore,'serialization preserves verification timestamp');
+ });
 });

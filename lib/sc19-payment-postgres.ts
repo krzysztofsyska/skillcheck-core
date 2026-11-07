@@ -80,8 +80,12 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
             return r.rows[0] ? orderRow(r.rows[0]) : null;
           },
           async insertOrder(o) {
-            // Company lock is already held. Serialize catalog/manual and P24
-            // purchases too; never leave two independently payable orders.
+            // Keep the boundary safe even when a caller has not used companyAccess.
+            // Catalog creation versions the approval under the company lock. This
+            // locking read forces a stale SERIALIZABLE snapshot to retry (40001).
+            await lockCompany(o.companyId);
+            const approved = await c.query('select company_id from private.sc19_trial_approvals where company_id=$1 for share', [o.companyId]);
+            if (!approved.rows.length) fail('SC19_PAYMENT_FORBIDDEN');
             const commerce = await c.query("select to_regprocedure('private.sc19_has_pending_catalog_order(uuid)') as routine");
             if (commerce.rows[0]?.routine) {
               const pending = await c.query('select private.sc19_has_pending_catalog_order($1) as pending', [o.companyId]);

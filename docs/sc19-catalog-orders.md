@@ -4,6 +4,8 @@ Zakup jest dostępny w istniejącej kasie firmy, z zachowaniem linku powrotnego 
 
 Ten etap korzysta z wdrożonego katalogu `pricing.package_prices` / `addon_options` w groszach brutto, nie publikuje innej wersji silnika netto `pln-v1`. Snapshot zamówienia obejmuje wersję, pełne warunki, produkt, ilość, cenę i przyznawane jednostki. Baza porównuje cały pokazany snapshot z ponowną wyceną pod blokadą; żadna kwota z przeglądarki nie jest zaufana. Publikacja nowego katalogu wymaga ponownej akceptacji.
 
+Katalog wymaga READ COMMITTED i ponownie sprawdza weryfikację po blokadzie firmy. P24 zachowuje SERIALIZABLE: utworzenie zamówienia katalogowego zapisuje nową wersję wiersza zatwierdzenia firmy bez zmiany jego danych, a P24 blokuje ten wiersz FOR SHARE. Starszy snapshot P24 dostaje błąd serializacji i jest ponawiany przez istniejący adapter; sama blokada firmy nie odświeża snapshotu. Nie aktualizujemy firmy ani jej kandydatów w tym celu. Ograniczona rola P24 odczytuje konflikt przez prywatną funkcję zwracającą boolean, bez dostępu do schematu ani tabel zamówień katalogowych.
+
 ## Gotowość i aktywacja
 
 - `SC19_CATALOG_ORDERS_ENABLED` domyślnie nieustawiona/OFF; `sc19_commerce.settings.enabled=false`. Żadna flaga środowiskowa ani produkcyjna nie została zmieniona.
