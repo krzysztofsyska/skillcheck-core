@@ -143,6 +143,7 @@ test('catalog orders: real SQL authorization, snapshots, settlement, service con
  await t.test('native verification revocation wins while order waits for company lock',async()=>{
   assert.equal(e.embedded,undefined,'native independent connections required');
   const quote=(await opts(b)).find(q=>q.code==='PRESELEKCJA'),key=randomUUID();
+  const cancellable=await make(b,quote);
   const operator=await e.connect(),buyer=await e.connect();
   for(const [c,id] of [[operator,users.outsider],[buyer,b.owner]]){await c.query('set role authenticated');await c.query("select set_config('request.jwt.claim.sub',$1,false)",[id]);}
   await operator.query('begin');
@@ -156,6 +157,16 @@ test('catalog orders: real SQL authorization, snapshots, settlement, service con
    await operator.query('commit');assert.equal((await pending)?.code,'42501');
    assert.equal((await db.query('select count(*)::int n from sc19_commerce.orders where request_id=$1',[key])).rows[0].n,0);
   }finally{await operator.query('rollback');}
+  // Verification revocation still blocks purchasing, but does not trap an unpaid order.
+  await assert.rejects(make(b,quote),no('42501'));
+  for(const actor of [a.owner,users.viewer,users.outsider]){
+   await h.asUser(actor);await assert.rejects(call('public.sc19_cancel_catalog_order',[b.companyId,cancellable]),no('42501'));
+  }
+  await h.asAdmin();await db.query('update public.companies set owner_id=$1 where id=$2',[users.recruiter,b.companyId]);
+  await h.asUser(b.owner);await assert.rejects(call('public.sc19_cancel_catalog_order',[b.companyId,cancellable]),no('42501'));
+  await h.asAdmin();await db.query('update public.companies set owner_id=$1 where id=$2',[b.owner,b.companyId]);
+  await h.asUser(b.owner);await call('public.sc19_cancel_catalog_order',[b.companyId,cancellable]);
+  assert.equal((await call('public.sc19_catalog_orders',[b.companyId])).find(o=>o.id===cancellable).status,'cancelled');
   await h.asAdmin();await db.query("insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,'8567346215','synthetic-restored')",[b.companyId]);
   await buyer.query('begin isolation level repeatable read');
   await assert.rejects(call('public.sc19_create_catalog_order',[b.companyId,randomUUID(),JSON.stringify(quote),true],buyer),no('25001'));

@@ -227,9 +227,13 @@ create function public.sc19_cancel_catalog_order(target_company uuid,target_orde
 language plpgsql security definer set search_path='' as $$
 begin
  if current_setting('transaction_isolation')<>'read committed' then raise exception 'commerce_read_committed_required' using errcode='25001';end if;
- perform sc19_commerce.authorize(target_company,true);
+ -- Cancelling an existing unpaid obligation requires current ownership, not
+ -- purchase eligibility: revoking verification must not trap the owner here.
+ perform sc19_commerce.authorize(target_company);
+ if not private.is_company_owner(target_company) then raise exception 'commerce_forbidden' using errcode='42501';end if;
  perform private.sc19_lock_company(target_company);
- perform sc19_commerce.authorize(target_company,true);
+ perform sc19_commerce.authorize(target_company);
+ if not private.is_company_owner(target_company) then raise exception 'commerce_forbidden' using errcode='42501';end if;
  update sc19_commerce.orders set status='cancelled' where id=target_order and company_id=target_company and status='pending';
  if not found then raise exception 'commerce_order_unavailable' using errcode='22023';end if;
 end;$$;
