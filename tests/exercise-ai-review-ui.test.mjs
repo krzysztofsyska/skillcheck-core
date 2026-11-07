@@ -113,3 +113,32 @@ test('C6 action sanitizes read/approve errors and preserves retry instead of cla
  const r=await action({result:{data:null,error:{code:'PGRST202',message:'secret detail'}}},confirmed());assert.equal(r.calls.length,1);assert.doesNotMatch(r.result.error,/secret detail/);
 });
 
+test('C6 rejected proposal shows reason and history, offers a new correction but never approval/rejection again',async()=>{
+ const p=proposal();p.proposal.provenance.workflow={state:'rejected',reason:'Brak szczegółów'};
+ const r=await render({result:{data:p,error:null}});assert.match(r.html,/Brak szczegółów/);assert.match(r.html,/data-ai-editor/);
+ assert.doesNotMatch(r.html,/data-approval|data-rejection/);assert.match(r.html,/Odrzucona:/);
+});
+
+async function mutation(name,options={},form=new FormData(),ctx=context) {
+ const a=access(options),revalidated=[];
+ const mod=load(basePath+'exercise-ai-actions.ts',{'next/cache':{revalidatePath:(...args)=>revalidated.push(args)},
+ '../../../../../lib/exercise-context':{exerciseContext:async()=>a.value},'../../../../../lib/exercise-ai-review':reviewHelpers,
+ '../../../../../lib/exercise-definition':definitionHelpers});
+ const args=[ids.company,ctx,...(name==='editExerciseAiProposal'?[stamp]:[]),{},form];
+ const result=await withFlag(options.flag??'true',()=>mod[name](...args));return {result,calls:a.calls,revalidated};
+}
+const definitionForm=()=>{const f=new FormData();for(const [key,value] of Object.entries(entry.definition)){
+ if(key==='criteria')for(const criterion of value)for(const [k,v] of Object.entries(criterion))f.append(k,v);else f.set(key,String(value));}return f;};
+const rejectionForm=()=>{const f=new FormData();f.set('reason','Niepełne kryteria');return f;};
+test('C6 edits/rejections validate inputs, flag and role before scoped RPC and sanitize failures',async()=>{
+ for(const [name,form] of [['editExerciseAiProposal',definitionForm],['rejectExerciseAiProposal',rejectionForm]]){
+  for(const options of [{flag:'false'},{canEdit:false},{editable:false}]){const r=await mutation(name,options,form());assert.ok(r.result.error);assert.equal(r.calls.length,0);}
+  const invalid=await mutation(name,{},new FormData());assert.ok(invalid.result.error);assert.equal(invalid.calls.length,0);
+  const invalidContext=await mutation(name,{},form(),{...context,definitionId:'../other'});assert.ok(invalidContext.result.error);assert.equal(invalidContext.calls.length,0);
+  const good=await mutation(name,{},form());assert.equal(good.calls.length,1);assert.equal(good.calls[0].args.target_company,ids.company);
+  assert.equal(good.calls[0].args.target_definition,ids.definition);assert.equal(good.calls[0].args.expected_position_updated_at,stamp);
+  assert.equal(good.revalidated.length,1);assert.ok(name.startsWith('edit')?good.result.entryId:good.result.rejected);
+  for(const code of ['PT409','55000','42501']){const r=await mutation(name,{approveResult:{data:null,error:{code,message:'secret detail'}}},form());assert.ok(r.result.error);assert.doesNotMatch(r.result.error,/secret detail/);assert.equal(r.revalidated.length,0);}
+ }
+});
+

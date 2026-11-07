@@ -33,6 +33,13 @@ export default async function Exercise({params,searchParams}: {
   const reviewUnavailable=aiReviewEnabled && !noProposal && !review;
   const provenance=review?.proposal.provenance;
   const lifecycle=exerciseAiLifecycle(provenance??null);
+  const historyOrigins=new Map(await Promise.all(rows.map(async row=>{
+    if(process.env.EXERCISE_AI_ENABLED!=='true' || !canEdit) return [row.id,null] as const;
+    if(row.id===entry.id && review) return [row.id,review.proposal] as const;
+    if(row.id===entry.id && !before) return [row.id,null] as const;
+    const result=await client.rpc('read_exercise_ai_proposal',{target_company:companyId,target_recruitment:recruitmentId,target_definition:row.id});
+    return [row.id,!result.error && exerciseAiReviewMatches(result.data,row) ? result.data.proposal : null] as const;
+  })));
   const origin=provenance && typeof provenance==='object' && !Array.isArray(provenance) ? provenance : null;
   const changed = entry.position_id !== position.id || entry.position_updated_at !== position.updated_at;
   return <main className="workspace"><section><Link href={base}>← Zadania</Link><h1>{entry.definition.title}</h1>
@@ -76,6 +83,11 @@ export default async function Exercise({params,searchParams}: {
     {editable && !before && !review && !reviewUnavailable && <ExerciseForm companyId={companyId} initial={entry.definition} context={{recruitmentId,exerciseId,expectedVersion:entry.version,positionId:position.id,positionUpdatedAt:position.updated_at}}/>}
     <h2>Historia definicji</h2>
     {rows.map(row => <article key={row.id}><h3>Wersja {row.version} — {row.definition.title}</h3>
+      {historyOrigins.get(row.id) && <p>Pochodzenie: AI{exerciseAiLifecycle(historyOrigins.get(row.id)!.provenance).edited ? ' z korektą rekrutera' : ''}.
+        {exerciseAiLifecycle(historyOrigins.get(row.id)!.provenance).state==='rejected' && <> Odrzucona: {exerciseAiLifecycle(historyOrigins.get(row.id)!.provenance).reason}</>}
+        {exerciseAiLifecycle(historyOrigins.get(row.id)!.provenance).state==='superseded' && <> Zastąpiona nowszą wersją.</>}
+        {historyOrigins.get(row.id)!.approvedAt && <> Zatwierdzona.</>}
+      </p>}
       <p>{row.created_at} · Autor: {row.author_id === user.id ? 'Ty' : row.author_id}</p>
       <p>{row.definition.kind === 'competency_test' ? 'Test kompetencji' : 'Assessment Center'} · {row.definition.durationMinutes} min</p>
       <h4>Instrukcja</h4><p className="cv-text">{row.definition.instructions}</p>
