@@ -173,6 +173,7 @@ jobs:
             tests/exercise-ai-inventory.test.mjs tests/exercise-ai-concurrency.test.mjs \
             tests/exercise-ai-grant-guard.test.mjs tests/exercise-ai-grant-guard-concurrency.test.mjs \
             tests/exercise-ai-recruiter-api.test.mjs tests/exercise-ai-recruiter-api-concurrency.test.mjs \
+            tests/exercise-ai-revision.test.mjs tests/exercise-ai-revision-concurrency.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/cv-bulk-database.test.mjs tests/sc-step3-evidence-worker.test.mjs \
             tests/sc-019-operator-fulfillment.test.mjs tests/sc19-auto-trial-database.test.mjs \

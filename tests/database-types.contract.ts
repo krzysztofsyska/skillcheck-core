@@ -154,6 +154,8 @@ type ExpectedFunctions =
   | "read_competency_test_response"
   | "read_exercise_ai_proposal"
   | "approve_exercise_ai_proposal"
+  | "edit_exercise_ai_proposal"
+  | "reject_exercise_ai_proposal"
   | "cv_bulk_register_item"
   | "cv_bulk_fail_item"
   | "cv_bulk_close_upload"
