@@ -30,3 +30,12 @@ export function exerciseAiApprovalError(code?: string) {
   return 'Nie udało się zatwierdzić propozycji. Spróbuj ponownie.';
 }
 
+/** Lifecycle fields are written exclusively by the database revision workflow. */
+export function exerciseAiLifecycle(provenance: ExerciseAiProposalReview['proposal']['provenance']) {
+  if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance)) return {state:'pending',reason:null,edited:false};
+  const workflow=provenance.workflow;
+  const value=workflow && typeof workflow==='object' && !Array.isArray(workflow) ? workflow : null;
+  const state=value?.state==='rejected' || value?.state==='superseded' ? value.state : 'pending';
+  return {state,reason:typeof value?.reason==='string' ? value.reason : null,edited:!!provenance.human_edit};
+}
+
