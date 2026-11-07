@@ -174,7 +174,7 @@ test('catalog orders: real SQL authorization, snapshots, settlement, service con
   const order={id,companyId:b.companyId,buyerId:b.owner,requestId:id,offerId:'commerce-p24',offerRevision:'v1',termsRevision:'v1',amountMinor:30000,currency:'PLN',credits:60,
    scope:{provider:'przelewy24',mode:'test',account:'12345'},status:'awaiting_payment',sessionId:null,checkoutUrl:null,paymentId:null,checkoutDeadlineMs:Date.now()+600000};
   await db.exec('update sc19_commerce.settings set enabled=false');
-  await store.transaction(async tx=>{assert.deepEqual(await tx.companyAccess(b.companyId,b.owner),{owner:true,verified:true});await tx.insertOrder(order);await tx.bindRequest(b.companyId,id,id);await tx.saveOrder({...order,status:'paid'});});
+  await store.transaction(async tx=>{assert.deepEqual(await tx.companyAccess(b.companyId,b.owner),{owner:true,verified:true});await tx.insertOrder(order);await tx.bindRequest(b.companyId,id,id);await tx.saveOrder({...order,status:'paid',paymentId:'synthetic-p24-paid',sessionId:'synthetic-session',checkoutUrl:'https://sandbox.przelewy24.pl/trnRequest/synthetic'});});
   assert.equal((await store.readOrder(b.companyId,b.owner,id)).status,'paid');
   await h.asAdmin();await db.exec('update sc19_commerce.settings set enabled=true');
   const quote=(await opts(b)).find(q=>q.code==='PRESELEKCJA');await make(b,quote);
