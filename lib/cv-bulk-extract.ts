@@ -1,6 +1,6 @@
 import {
   BULK_EXTRACT_BUDGET_MS, BULK_MAX_FILE_BYTES, BULK_MAX_IMAGE_PIXELS, BULK_MAX_OCR_ATTEMPTS, BULK_MAX_OCR_PAGES, BULK_MAX_PDF_PAGES,
-  BULK_OCR_MAX_SIDE, BulkIntakeError, OcrTimeoutError, type BulkFileKind,
+  BULK_OCR_MAX_SIDE, BulkIntakeError, OcrTimeoutError, detectName, type BulkFileKind,
 } from './cv-bulk.ts';
 import { MAX_CV_LENGTH, readDocxBufferForBulk, validateCvText } from './cv-text.ts';
 
@@ -13,10 +13,38 @@ const MIN_OCR_CONFIDENCE = 55;
 const MIN_TEXT_CHARS = 40;
 /** A PDF page with less text than this in its text layer is treated as a scan. */
 const MIN_PAGE_TEXT_CHARS = 20;
+/** A sparse text layer can be just a header over a scanned CV: inspect large embedded images. */
+const SPARSE_PAGE_TEXT_MAX_CHARS = 240;
+const MIN_SCAN_IMAGE_PIXELS = 350_000;
+/** pdf-parse 2.4.5 can indefinitely await inline-image operands in getImage(). */
+const PDF_IMAGE_INSPECTION_MAX_MS = 1_500;
 /** Raw text this long cannot become a valid CV even after whitespace clean-up: rejected without any regex work. */
 const MAX_RAW_TEXT = MAX_CV_LENGTH * 8;
 
 const visibleLength = (text: string) => { let n = 0; for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) > 32) n++; return n; };
+
+/** A mixed PDF containing more than one plausible identity is unsafe for automatic redaction.
+ * Only the opening lines are considered; long work-history sections can contain unrelated names.
+ * False positives fail closed and require the candidate to provide a complete text PDF/DOCX. */
+function hasConflictingHeaderNames(ocrText: string): boolean {
+  const names = new Set<string>();
+  // detectName treats professional headlines (e.g. "Java Developer") as fallback only.
+  // Give each line the same real-name context as the complete CV, so a job title
+  // does not become a second identity while another genuine name is still rejected.
+  const reference = detectName(ocrText);
+  const referenceLine = reference ? `${reference.first} ${reference.last}` : null;
+  for (const line of ocrText.split('\n').slice(0, 15)) {
+    for (const section of line.split(/[,;|]+/)) {
+      const prefix = section.split(/\b(?:tel\.?|telefon|e-?mail)\b/i)[0]?.trim() ?? '';
+      const identity = detectName(referenceLine ? `${prefix}\n${referenceLine}` : prefix);
+      if (identity) {
+        names.add(`${identity.first} ${identity.last}`.toLocaleLowerCase('pl'));
+        if (names.size > 1) return true;
+      }
+    }
+  }
+  return false;
+}
 
 // Linear clean-up only: every step is a single pass (no backtracking regex on candidate-controlled runs of spaces).
 function finish(text: string, ocrTried = false) {
@@ -130,10 +158,33 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
       let text: string;
       try { text = (await parser.getText({ partial: [page], pageJoiner: '', parseHyperlinks: false })).pages[0]?.text.trim() ?? ''; }
       catch { throw new BulkIntakeError('protected_pdf'); } // damaged content stream
-      // Near-empty page: OCR it, within a hard cap on OCR runs. A page where OCR finds almost no
-      // characters (a blank or decorative page) is kept as it is; a page with text OCR cannot read
-      // reliably fails the file (ocrRead). Only the whole document must reach the minimum length.
-      if (visibleLength(text) < MIN_PAGE_TEXT_CHARS) {
+      // A short text layer can be only a digitally printed header over a rasterized CV.
+      // Check for a substantial image without extracting its bytes; decorative small images
+      // do not turn a normal text PDF into an OCR job.
+      const pageTextLength = visibleLength(text);
+      let mixedScan = false;
+      if (pageTextLength >= MIN_PAGE_TEXT_CHARS && pageTextLength < SPARSE_PAGE_TEXT_MAX_CHARS) {
+        // pdf-parse 2.4.5 resolves inline-image objects as names; for inline images
+        // the lookup can remain pending forever. Time-bound inspection and, on timeout,
+        // force OCR of the full page instead of accepting a potentially incomplete header.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const imageCheck = parser.getImage({
+            partial: [page], imageThreshold: 300, imageBuffer: false, imageDataUrl: false,
+          });
+          const timeout = new Promise<null>(resolve => {
+            timer = setTimeout(() => resolve(null), Math.min(remaining(deadline), PDF_IMAGE_INSPECTION_MAX_MS));
+          });
+          const embedded = await Promise.race([imageCheck, timeout]);
+          mixedScan = embedded === null || (embedded.pages[0]?.images ?? []).some(image =>
+            image.width >= 800 && image.height >= 300 &&
+            image.width * image.height >= MIN_SCAN_IMAGE_PIXELS);
+        } catch { throw new BulkIntakeError('protected_pdf'); }
+        finally { if (timer !== undefined) clearTimeout(timer); }
+      }
+      // Near-empty pages also need OCR. Never silently accept a header when the
+      // image containing the rest of the CV could not be read.
+      if (pageTextLength < MIN_PAGE_TEXT_CHARS || mixedScan) {
         // Out of OCR runs: the page cannot be read, so the file fails rather than losing a page silently.
         if (attempts >= BULK_MAX_OCR_ATTEMPTS) throw new BulkIntakeError('unreadable_scan');
         attempts++;
@@ -149,6 +200,13 @@ async function readPdf(bytes: Buffer, ocr: OcrFn, deadline: number) {
         const shot = await parser.getScreenshot({ partial: [page], scale, imageBuffer: true, imageDataUrl: false });
         const data = shot.pages[0]?.data;
         const read = data?.length ? await ocrRead(ocr, Buffer.from(data), deadline) : null;
+        // Require exact preservation of the digital layer in a full-page OCR result.
+        // Joining two readings can leave an alternative spelling of a candidate's name
+        // unredacted, so an inconsistent result is rejected rather than sent to AI.
+        if (mixedScan && (read === null || visibleLength(read) <= pageTextLength ||
+          !read.includes(text) || hasConflictingHeaderNames(read))) {
+          throw new BulkIntakeError('unreadable_scan');
+        }
         if (read !== null) {
           if (++ocrPages > BULK_MAX_OCR_PAGES) throw new BulkIntakeError('unreadable_scan');
           text = read;

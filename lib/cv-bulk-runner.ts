@@ -25,9 +25,28 @@ export function bulkContract(aiEnabled: boolean) {
     prompt_version: c.prompt_version, provider: c.provider, model: c.model, model_revision: c.model_revision };
 }
 
+// RPC envelope validation is strict even though parsePump intentionally skips individual
+// invalid attempt IDs. A claimed scheduler batch must never disappear as a successful no-op.
+function isPumpEnvelope(value: unknown): value is { dispatch: unknown[]; notify: unknown } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as { dispatch?: unknown; notify?: unknown; error?: unknown };
+  // SQL isolates batch failures and returns { dispatch: [], notify: null, error: sqlstate }.
+  // Such a batch was not processed successfully and must remain visible as a failure.
+  if (record.error !== undefined && record.error !== null) return false;
+  if (!Array.isArray(record.dispatch) || !Object.prototype.hasOwnProperty.call(record, 'notify')) return false;
+  const n = record.notify;
+  return n === null || (n !== undefined && typeof n === 'object' && !Array.isArray(n) &&
+    typeof (n as { batch_id?: unknown }).batch_id === 'string' &&
+    uuid.test((n as { batch_id: string }).batch_id));
+}
+
 export function parsePump(value: unknown): PumpResult {
   const v = (value ?? {}) as { dispatch?: unknown; notify?: unknown };
-  const dispatch = Array.isArray(v.dispatch) ? v.dispatch.filter((x): x is string => typeof x === 'string' && uuid.test(x)) : [];
+  // Prevent a malformed/retried pump response from dispatching the same attempt twice.
+  // UUIDs are case-insensitive in PostgreSQL, so normalize before deduplication.
+  const dispatch = Array.isArray(v.dispatch)
+    ? Array.from(new Set(v.dispatch.filter((x): x is string => typeof x === 'string' && uuid.test(x)).map(id => id.toLowerCase())))
+    : [];
   const n = v.notify as BulkNotify | null | undefined;
   return { dispatch, notify: n && typeof n === 'object' && typeof n.batch_id === 'string' && uuid.test(n.batch_id) ? n : null };
 }
@@ -51,8 +70,15 @@ export async function pumpBatch(deps: PumpDeps, batchId: string) {
   const env = deps.env ?? process.env;
   const { data, error } = await deps.rpc('cv_bulk_pump', { target_batch: batchId, contract: bulkContract(deps.aiEnabled), pricing: bulkPricing(env) });
   if (error) throw new Error('cv_bulk_pump_failed');
+  // PostgreSQL always returns an object containing dispatch[] and notify (possibly null).
+  // A null/partial successful RPC response must never be shown as an empty successful pump.
+  if (!isPumpEnvelope(data)) throw new Error('cv_bulk_pump_invalid_response');
   const result = parsePump(data);
-  await deliver(deps, result, async (batch, outcome) => { await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome }); });
+  await deliver(deps, result, async (batch, outcome) => {
+    const { data: acknowledged, error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome });
+    // SQL returns false when no sending lease was finalized; no RPC error is not enough.
+    if (finishError || acknowledged !== true) throw new Error('cv_bulk_notification_finish_failed');
+  });
   return result;
 }
 
@@ -75,13 +101,43 @@ export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (
   const { data, error } = await deps.rpc('cv_bulk_worker_pump', { request_id: requestId, issued_at_ms: stamp,
     request_signature: bulkWorkerSignature(deps.secret, 'pump', requestId, stamp, null, extra), contract, pricing });
   if (error) throw new Error('cv_bulk_worker_pump_failed');
-  const batches = Array.isArray(data) ? data : [];
-  await Promise.all(batches.map(one => deliver(deps, parsePump(one), async (batch, outcome) => {
-    const id = randomUUID(), at = Date.now();
-    await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
-      request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
-  }).catch(() => undefined)));
-  return batches.length;
+  // Malformed RPC output must not look like an empty successful scheduler run.
+  if (!Array.isArray(data)) throw new Error('cv_bulk_worker_pump_invalid_response');
+  let malformed = false;
+  // The SQL worker normally returns each attempt and notification lease once. A malformed
+  // cross-batch response must not dispatch an attempt or finalize a notification twice.
+  // Continue delivering unrelated claims, but report the invariant violation to the caller.
+  const seenAttempts = new Set<string>(), seenNotifications = new Set<string>();
+  const results = await Promise.allSettled(data.map(one => {
+    if (!isPumpEnvelope(one)) {
+      malformed = true;
+      return Promise.reject(new Error('cv_bulk_worker_pump_invalid_response'));
+    }
+    const result = parsePump(one);
+    result.dispatch = result.dispatch.filter(id => {
+      if (seenAttempts.has(id)) { malformed = true; return false; }
+      seenAttempts.add(id);
+      return true;
+    });
+    if (result.notify) {
+      const id = result.notify.batch_id.toLowerCase();
+      if (seenNotifications.has(id)) {
+        malformed = true;
+        result.notify = null;
+      } else seenNotifications.add(id);
+    }
+    return deliver(deps, result, async (batch, outcome) => {
+      const id = randomUUID(), at = Date.now();
+      const { data: acknowledged, error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
+        request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
+      if (finishError || acknowledged !== true) throw new Error('cv_bulk_notification_finish_failed');
+    });
+  }));
+  // Do not let malformed claimed batches masquerade as success. Valid batches still
+  // finish independently; never expose provider/DB contents in the error.
+  if (malformed) throw new Error('cv_bulk_worker_pump_invalid_response');
+  if (results.some(result => result.status === 'rejected')) throw new Error('cv_bulk_worker_delivery_failed');
+  return data.length;
 }
 
 /** PostgreSQL jsonb::text rendering for flat objects of strings/numbers: keys by length then bytes, ", " and ": " separators. */

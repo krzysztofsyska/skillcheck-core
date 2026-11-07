@@ -62,6 +62,33 @@ test('report uses current reviewed evidence, whitelists fields, and leaves sourc
   }
 });
 
+test('comparison report rejects malformed and duplicate requirement-flag RPC rows', async () => {
+  const flag = { criterion_id: 'task:1', criterion_text: 'Raportowanie', flag: 'required' };
+  const malformed = [
+    [flag, { ...flag, flag: 'additional' }], // ambiguous required/optional
+    [null], [{ ...flag, criterion_id: null }],
+    [{ ...flag, criterion_id: '  ' }],
+    [{ ...flag, criterion_text: null }],
+    [{ ...flag, flag: null }],
+  ];
+  for (const rows of malformed) {
+    const data = fixture();
+    data.position_requirement_flags = rows;
+    await assert.rejects(() => load(data), error => error?.code === 'changed');
+  }
+
+  const oldProfile = await load(fixture());
+  assert.deepEqual(oldProfile.requirementFlags, [], 'missing flags remain a valid legacy profile');
+  const current = fixture();
+  current.position_requirement_flags = [flag];
+  assert.deepEqual((await load(current)).requirementFlags, [flag]);
+
+  const unknown = fixture();
+  unknown.position_requirement_flags = [{ ...flag, flag: 'legacy-unknown' }];
+  assert.equal((await load(unknown)).requirementFlags[0].flag, 'legacy-unknown',
+    'unknown text flag is handled as unmarked by the shared resolver');
+});
+
 test('only indicated review overrides apply; empty evidence/explanation survive and null rating preserves AI', async () => {
   const data = fixture(); data.screening_result_reviews[0].disposition = 'approved_with_changes';
   data.screening_criterion_review_overrides.push({ id: uuid(11), company_id: company, review_id: review, criterion_result_id: result,
@@ -270,6 +297,31 @@ test('a group computed from an older analysis is stale after a re-analysis outsi
   await assert.rejects(load(data));
 });
 
+test('a saved group is historical when the ranking no longer has a human-reviewed result', async () => {
+  // An RPC may still return the previous analysis_id while a retry is pending or
+  // a human has not approved it. A matching UUID must not publish its old score.
+  for (const reason of [
+    'no_human_review', 'pending', 'processing', 'failed', 'cancelled',
+    'no_completed_result', 'result_incomplete', 'review_inconsistent',
+  ]) {
+    const data = fixture();
+    Object.assign(data.get_screening_ranking[0], {
+      rank: null, rankable: false, raw_score: null,
+      eligibility_reason: reason, suggested_shortlist: false,
+    });
+    data.get_preselection_groups = [{
+      application_id: application, candidate_name: 'Kandydat testowy', group_key: 'passed',
+      source: 'auto', raw_score: 95, coverage: 1,
+      analysis_id: data.get_screening_ranking[0].analysis_id,
+    }];
+    const report = await load(data);
+    assert.equal(report.groups.length, 1);
+    assert.equal(report.groups[0].stale, true, reason);
+    const csv = screeningReportCsv(report);
+    assert.match(csv, /Wynik nieaktualny — wymaga ponownej analizy/, reason);
+  }
+});
+
 test('a reviewed evidence-matrix candidate shows the group score, not "too few rated criteria / 0%"', async () => {
   const data = fixture();
   // v2 analysis after human review: neutral legacy rating, so SC-008 reports insufficient_evidence (Step 3 rule).
@@ -318,9 +370,19 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
   const { groupAnalysisCurrent } = await import('../lib/screening-report.ts');
   const a = '00000000-0000-4000-8000-0000000000a1', b = '00000000-0000-4000-8000-0000000000b2';
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'eligible' }), true);
+  assert.equal(groupAnalysisCurrent(a.toUpperCase(), { analysis_id: a, eligibility_reason: 'eligible' }), true, 'UUIDs are case-insensitive');
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a.toUpperCase(), eligibility_reason: 'eligible' }), true);
+  assert.equal(groupAnalysisCurrent('a'.repeat(36), { analysis_id: 'a'.repeat(36), eligibility_reason: 'eligible' }), false,
+    'matching malformed IDs may never establish currency');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: b, eligibility_reason: 'eligible' }), false, 're-analysed outside the batch');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'stale' }), false, 'CV or position changed');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'needs_reanalysis' }), false);
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'insufficient_evidence' }), true,
+    'human-reviewed evidence matrix remains valid without an automated score');
+  for (const reason of ['no_human_review', 'pending', 'processing', 'failed', 'cancelled', 'no_completed_result',
+    'result_incomplete', 'review_inconsistent', 'unknown']) {
+    assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: reason }), false, reason);
+  }
   assert.equal(groupAnalysisCurrent(a, undefined), false, 'no ranking row (e.g. ranking unreadable): fail closed');
   for (const bad of [null, undefined, '', 'not-a-uuid', 42]) assert.equal(groupAnalysisCurrent(bad, { analysis_id: a, eligibility_reason: 'eligible' }), false);
 
@@ -343,16 +405,48 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   const { loadCurrentRanking, withGroupCurrency } = await import('../lib/preselection-currency.ts');
   const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const rows = Array.from({ length: 1203 }, (_, n) => ({ application_id: id(n), analysis_id: id(10000 + n), eligibility_reason: 'eligible' }));
-  const client = (failAt = -1) => ({ calls: [], rpc(fn, args) {
+  const client = (failAt = -1) => ({ calls: [], orders: [], rpc(fn, args) {
     const self = this;
-    return { range(from, to) { self.calls.push([fn, args, from, to]);
-      return Promise.resolve(from === failAt ? { data: null, error: { code: 'X' } } : { data: rows.slice(from, to + 1), error: null }); } };
+    return { order(column, options) {
+      self.orders.push([column, options?.ascending]);
+      return { range(from, to) { self.calls.push([fn, args, from, to]);
+        return Promise.resolve(from === failAt ? { data: null, error: { code: 'X' } } : { data: rows.slice(from, to + 1), error: null }); } };
+    } };
   } });
   const ok = client();
   const map = await loadCurrentRanking(ok, id(9));
   assert.equal(map.size, 1203, 'all pages, not only the first');
   assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499]]);
+  assert.deepEqual(ok.orders, Array(3).fill(null).map(() => ['application_id', true]),
+    'all ranking pages must use a stable application UUID order');
   assert.equal(await loadCurrentRanking(client(500), id(9)), null, 'a failed page fails closed');
+  const rankingClient = data => ({ rpc: () => ({ order: (column, options) => {
+    assert.equal(column, 'application_id');
+    assert.equal(options?.ascending, true);
+    return { range: (from, to) => Promise.resolve({ data: data.slice(from, to + 1), error: null }) };
+  } }) });
+  const withLetters = { ...rows[0], application_id: 'aabbccdd-aabb-4ccd-8eaf-aabbccddeeff' };
+  const duplicate = { ...withLetters, application_id: withLetters.application_id.toUpperCase(), analysis_id: id(99999) };
+  const upperRow = { ...withLetters, application_id: withLetters.application_id.toUpperCase(),
+    analysis_id: 'aabbccdd-aabb-4cdd-8eaf-aabbccddeeff' };
+  const upperMap = await loadCurrentRanking(rankingClient([upperRow]), id(9));
+  assert.equal(upperMap.has(withLetters.application_id), true, 'ranking map must use canonical keys');
+  assert.deepEqual(withGroupCurrency([{ application_id: withLetters.application_id.toUpperCase(),
+    group_key: 'passed', group_analysis_id: upperRow.analysis_id.toUpperCase() }], upperMap)
+    .map(item => item.group_current), [true], 'mixed-case source IDs refer to the same group');
+  assert.equal(await loadCurrentRanking(rankingClient([withLetters, duplicate]), id(9)), null,
+    'duplicate candidate IDs with different letter casing fail closed');
+  assert.equal(await loadCurrentRanking(rankingClient([...rows.slice(0, 499), withLetters, duplicate]), id(9)), null,
+    'a differently cased duplicate across pagination boundaries cannot override the first row');
+  for (const malformed of [null, {}, { ...rows[0], application_id: 'not-a-uuid' }]) {
+    assert.equal(await loadCurrentRanking(rankingClient([rows[0], malformed]), id(9)), null,
+      'a malformed ranking page cannot confirm any group as current');
+  }
+  const oversized = Array.from({ length: 20500 }, (_, n) => ({
+    ...rows[0], application_id: id(n), analysis_id: id(10000 + n),
+  }));
+  assert.equal(await loadCurrentRanking(rankingClient(oversized), id(9)), null,
+    'a truncated ranking cannot mark the first 20k groups current while omitting the rest');
   const items = [
     { application_id: id(1200), group_key: 'passed', group_analysis_id: id(11200) },
     { application_id: id(1), group_key: 'passed', group_analysis_id: id(99999) },

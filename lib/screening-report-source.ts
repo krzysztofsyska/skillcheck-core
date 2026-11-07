@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
+import { parseRequirementFlagRows } from './requirement-flags.ts';
 import {
   MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
@@ -173,7 +174,10 @@ export async function loadScreeningReport(
     target_company: p.companyId, target_position: source.position.id,
   } as never);
   if (flagResult.error && !['PGRST202', '42883'].includes(flagResult.error.code ?? '')) checked(flagResult, true);
-  const requirementFlags = (!flagResult.error && Array.isArray(flagResult.data) ? flagResult.data : []) as ScreeningReport['requirementFlags'];
+  // Nie traktuj niepoprawnego RPC jako braku oznaczeń; to mogłoby po cichu
+  // przenieść wymaganie „konieczne” do „nieoznaczone” w porównaniu CV.
+  const requirementFlags = flagResult.error ? [] : parseRequirementFlagRows(flagResult.data);
+  requireReport(requirementFlags !== null);
   const report: ScreeningReport = {
     version: REPORT_VERSION, generatedAt: new Date().toISOString(), companyId: p.companyId, companyName: source.company.name,
     recruitmentId: p.recruitmentId, recruitmentName: source.recruitment.name, positionTitle: source.position.title, targetSize: p.targetSize,

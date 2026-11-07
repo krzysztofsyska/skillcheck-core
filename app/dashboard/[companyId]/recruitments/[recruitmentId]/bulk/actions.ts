@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { companyAccess } from '../../../../../../lib/company-access';
-import { bulkIntakeBlocked, validateBatchFiles, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
+import { bulkIntakeBlocked, groupMoveConfirmed, validateBatchFiles, verifyBulkRegistration, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
 import { pumpWithSession } from '../../../../../../lib/cv-bulk-server';
 import { loadCurrentRanking, withGroupCurrency } from '../../../../../../lib/preselection-currency';
 import { screeningAiUserEnabled } from '../../../../../../lib/screening-dispatch';
@@ -27,16 +27,18 @@ export async function createBulkBatch(companyId: string, recruitmentId: string, 
       ? 'Rekrutacja jest wstrzymana lub zamknięta albo stanowisko jest w archiwum.'
       : 'Nie udało się utworzyć paczki. Odśwież stronę i spróbuj ponownie.' };
   }
-  const result = created.data as { batch_id: string; reserved_slots: number; over_limit: number };
-  const status = await client.rpc('cv_bulk_batch_status', { target_batch: result.batch_id });
-  const listed = (status.data as { items?: { id: string; position: number }[] } | null)?.items;
-  // A failed read must not look like an empty batch: the uploader would close it and mark every file
-  // as not uploaded. Returning an error keeps the request key, so a retry reuses the same batch.
-  if (status.error || !Array.isArray(listed) || (checked.length > 0 && listed.length === 0)) {
+  // Never use an unverified RPC identifier to read another record or begin uploads.
+  const createdId = (created.data && typeof created.data === 'object' && !Array.isArray(created.data))
+    ? (created.data as { batch_id?: unknown }).batch_id : null;
+  if (typeof createdId !== 'string' || !uuid.test(createdId)) {
     return { error: 'Nie udało się przygotować wysyłania. Spróbuj ponownie — paczka zostanie wznowiona.' };
   }
-  const items = listed.map(i => ({ id: i.id, position: i.position }));
-  return { batchId: result.batch_id, reserved: result.reserved_slots, overLimit: result.over_limit, items };
+  const status = await client.rpc('cv_bulk_batch_status', { target_batch: createdId });
+  // A partial/mismatched read must not cause the uploader to skip items and close held slots.
+  // The same request key lets a retry safely resume the registered batch.
+  const verified = !status.error && verifyBulkRegistration(created.data, status.data, recruitmentId, checked);
+  if (!verified) return { error: 'Nie udało się przygotować wysyłania. Spróbuj ponownie — paczka zostanie wznowiona.' };
+  return verified;
 }
 
 /** Ends uploading; unsent files give their package slots back. */
@@ -44,9 +46,13 @@ export async function closeBulkUpload(companyId: string, batchId: string) {
   const { client, canEdit } = await companyAccess(companyId);
   if (!canEdit || !uuid.test(batchId)) return { error: 'Brak dostępu.' };
   const result = await client.rpc('cv_bulk_close_upload', { target_batch: batchId });
-  if (result.error) return { error: 'Nie udało się zamknąć wysyłania.' };
+  // SQL returns the non-negative count of released slots. A null or malformed
+  // successful RPC response is not proof that uploading was closed.
+  if (result.error || !Number.isInteger(result.data) || (result.data as number) < 0) {
+    return { error: 'Nie udało się zamknąć wysyłania.' };
+  }
   try { await pumpWithSession(client, batchId); } catch { /* the progress page pumps again */ }
-  return { released: result.data ?? 0 };
+  return { released: result.data as number };
 }
 
 /** Progress page heartbeat: advances the queue (recruiters only) and returns the status. */
@@ -73,6 +79,7 @@ export async function movePreselectionGroup(companyId: string, recruitmentId: st
   const result = await client.rpc('move_preselection_group', { target_application: applicationId, new_group: group,
     expected_updated_at: expectedUpdatedAt, move_note: note || null });
   if (result.error) return { error: result.error.code === 'PT409' ? 'Grupa zmieniła się w międzyczasie. Odśwież stronę.' : 'Nie udało się przenieść kandydata.' };
+  if (!groupMoveConfirmed(result.data)) return { error: 'Nie udało się potwierdzić zapisu grupy. Odśwież stronę i sprawdź wynik.' };
   revalidatePath(`/dashboard/${companyId}/recruitments/${recruitmentId}`);
   return { saved: true };
 }

@@ -131,6 +131,14 @@ export type ExerciseDefinitionEntry = {
   version: number; definition: ExerciseDefinition; position_id: string; position_updated_at: string;
   position_snapshot: BehaviorAssessmentEntry['position_snapshot']; author_id: string; created_at: string;
 };
+/** One immutable AI proposal revision returned by the recruiter-only public RPC. */
+export type ExerciseAiProposalReview = {
+  definitionEntry: ExerciseDefinitionEntry;
+  proposal: {
+    id: string; provenance: Json; createdBy: string; createdAt: string;
+    approvedBy: string | null; approvedAt: string | null; approvalMode: 'manual' | 'auto' | null;
+  };
+};
 export type ExerciseObservationEntry = {
   id: string; company_id: string; recruitment_id: string; application_id: string;
   definition_entry_id: string; version: number; work_sample: string;
@@ -408,6 +416,14 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      read_exercise_ai_proposal: {
+        Args: { target_company: string; target_recruitment: string; target_definition: string };
+        Returns: ExerciseAiProposalReview;
+      };
+      approve_exercise_ai_proposal: {
+        Args: { target_company: string; target_recruitment: string; target_definition: string; expected_position_updated_at: string };
+        Returns: string;
+      };
       ac_assign_pair: {Args:{application:string;revision:string;first_id:string;second_id:string};Returns:string};
       ac_find_pair: {Args:{application:string;revision:string};Returns:string|null};
       ac_read_pair: {Args:{pair_id:string};Returns:Json};

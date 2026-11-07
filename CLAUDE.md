@@ -65,7 +65,7 @@ Known production blockers (owner action, give him a direct link and exact clicks
 - No package policy and no balances on production, so every new AI analysis is refused (`sc19_quota_exhausted`). Set FREE = 5 and PRESELEKCJA = 60 in `/operator/billing`.
 - Contact form `/rozmowa`: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off.
 
-Frozen (do not work on): voice, Assessment Center, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+Frozen (do not work on): voice, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
 
 ## Scope reopened (owner decision 2026-11-02)
 
@@ -104,6 +104,26 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
    W4 ships behind a flag that is off: switching it on changes prices customers see, which stays
    an owner decision. Includes **SC-PRICING-W2b** — a volume slider in steps of 5 at every package,
    with manual entry restricted to multiples of 5 (owner decision 2026-11-02).
+
+### Assessment Center unfrozen — owner in chat, 2026-11-06, 11:00 Europe/Warsaw
+
+Asked directly whether building Assessment Center was his decision, since it was still on the
+frozen list above while SC-AC-001 (#272) had been merged into `integration` that morning. His
+answer: *"Tak, budowa weryfikacji i assessment center jest moją decyzją i trzeba to po prostu
+robić."* Assessment Center is therefore removed from the frozen list and is in scope alongside
+the modules listed above in this section (SC-014, SC-015, SC-PRICING). WERYFIKACJA was already in
+scope via SC-014 and SC-015; this confirms it. Nothing else moves: the voicebot, interview analysis,
+Quality of Hire, talent pool, white-label and the Przelewy24/Fakturownia automation stay frozen.
+
+For the record, the sequence was: #272 merged into `integration` that morning and its migration
+`20261106120000_sc_ac_inventory_r13.sql` was applied on the Preview database (test data only)
+before the module was unfrozen.
+
+This changes what is built, not the gates. Price, package contents and anything touching
+production still need a separate owner decision under the list above, and
+`docs/plan-budowy-2026-11-02.md` still has Assessment Center outside the scope of that particular
+plan document — the order of work there (module A, then C, calculator in between) stands unless
+the owner says otherwise.
 
 ### Voicebot on the public offer — settled 2026-11-02 (evening, owner in chat)
 

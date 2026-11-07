@@ -82,6 +82,21 @@ export const groupLabel: Record<BulkGroup, string> = {
   passed: 'Przeszli sito', review: 'Do decyzji rekrutera', rejected: 'Nie spełniają kryteriów',
 };
 
+/** PostgreSQL move_preselection_group returns timestamptz only after it records the change.
+ * A transport-level success with null/malformed data is not proof of a saved move. */
+export function groupMoveConfirmed(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return false;
+  const [, y, m, d, h, min, s, zone] = match;
+  const year = Number(y), month = Number(m), day = Number(d);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (!days || day < 1 || day > days || Number(h) > 23 || Number(min) > 59 || Number(s) > 59) return false;
+  if (zone !== 'Z' && (Number(zone.slice(1, 3)) > 23 || Number(zone.slice(4)) > 59)) return false;
+  return Number.isFinite(Date.parse(value));
+}
+
 export type BulkFileErrorReason = Exclude<BulkErrorReason, 'over_limit' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible'>;
 
 /** OCR could not finish within the time left for this file. */
@@ -218,6 +233,44 @@ export function validateBatchFiles(files: BulkFileMeta[]) {
   if (files.length > BULK_MAX_FILES) throw new Error(`Jedna paczka może mieć maksymalnie ${BULK_MAX_FILES} plików.`);
   return files.map(f => ({ name: displayFileName(String(f.name ?? '')), kind: bulkFileKind(String(f.name ?? '')),
     size: Math.max(0, Math.min(Number.isFinite(f.size) ? Math.floor(f.size) : 0, 2_147_483_647)) }));
+}
+
+/** Validate both RPC envelopes before handing upload IDs to the browser.
+ * A partial status read must not silently skip files and close their held slots.
+ * No CV content is inspected; only registration metadata is compared.
+ */
+export type VerifiedBulkRegistration = {
+  batchId: string; reserved: number; overLimit: number; items: { id: string; position: number }[];
+};
+export function verifyBulkRegistration(created: unknown, status: unknown, recruitmentId: string, files: BulkFileMeta[]): VerifiedBulkRegistration | null {
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  const isUuid = (value: unknown): value is string =>
+    typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (!record(created) || !record(status) || !record(status.batch) || !Array.isArray(status.items)) return null;
+  const batch = status.batch;
+  const reserved = created.reserved_slots, overLimit = created.over_limit;
+  if (!isUuid(created.batch_id) || !isUuid(batch.id) || !isUuid(batch.recruitment_id) ||
+    batch.id.toLowerCase() !== created.batch_id.toLowerCase() ||
+    batch.recruitment_id.toLowerCase() !== recruitmentId.toLowerCase() ||
+    !Number.isInteger(reserved) || (reserved as number) < 0 || (reserved as number) > files.length ||
+    overLimit !== files.length - (reserved as number) ||
+    batch.declared_files !== files.length || batch.reserved_slots !== reserved ||
+    status.items.length !== files.length) return null;
+
+  const positions = new Set<number>(), ids = new Set<string>();
+  const items: { id: string; position: number }[] = [];
+  for (const entry of status.items) {
+    if (!record(entry) || !isUuid(entry.id) || !Number.isInteger(entry.position)) return null;
+    const position = entry.position as number;
+    if (position < 1 || position > files.length || positions.has(position) || ids.has(entry.id.toLowerCase())) return null;
+    const file = files[position - 1];
+    if (entry.file_name !== file.name || entry.file_kind !== file.kind) return null;
+    positions.add(position);
+    ids.add(entry.id.toLowerCase());
+    items.push({ id: entry.id, position });
+  }
+  return { batchId: created.batch_id, reserved: reserved as number, overLimit: overLimit as number, items };
 }
 
 export type BulkPricing = { input_per_mtok: string; cached_input_per_mtok: string; output_per_mtok: string; currency: string; version: string };

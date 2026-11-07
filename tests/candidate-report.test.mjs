@@ -171,7 +171,7 @@ test('wiersz analizy z innym tekstem nie dokleja się do nowego wymagania', () =
 
 // Podwójny klient w kształcie PostgREST: filtry, sortowanie i limity działają,
 // więc test przechodzi tą samą drogą co produkcja, zamiast składać wynik ręcznie.
-function loaderClient(data, afterRead = () => {}) {
+function loaderClient(data, afterRead = () => {}, modifyResult = (_table, result) => result) {
   function query(table) {
     const q = { eqs: [], order: null, limit: Infinity, single: false, columns: '*' };
     return {
@@ -197,7 +197,7 @@ function loaderClient(data, afterRead = () => {}) {
             q.columns.split(',').map(key => [key, row[key]])));
           const result = { data: structuredClone(q.single ? rows[0] ?? null : rows), error: null };
           afterRead(table);
-          return result;
+          return modifyResult(table, result);
         }).then(resolve, reject);
       },
     };
@@ -246,6 +246,23 @@ function withFingerprint(data) {
   return data;
 }
 
+test('loadCandidateReport: zakończona analiza z pustą macierzą pokazuje ostrzeżenie', async () => {
+  const { loadCandidateReport } = await import('../lib/candidate-report.ts');
+  const legacy = loaderData();
+  legacy.screening_criterion_results = [];
+  const report = await loadCandidateReport(loaderClient(legacy), route);
+  assert.equal(report.analysisStatus, 'completed');
+  assert.equal(report.legacyAnalysis, true, 'brak wierszy nie może wyglądać jak kompletna nowa analiza');
+  assert.equal(report.requirements.find(r => r.id === 'competency:1').status, 'unavailable');
+  assert.equal(report.summary.requiredSupported, 0);
+
+  const pending = loaderData();
+  pending.screening_criterion_results = [];
+  pending.screening_analysis_versions[0].execution_status = 'processing';
+  const inProgress = await loadCandidateReport(loaderClient(pending), route);
+  assert.equal(inProgress.legacyAnalysis, false, 'pusty wynik analizy w toku nie jest starszym formatem');
+});
+
 test('loadCandidateReport: zmieniona treść wymagania nie dziedziczy cudzego wyniku', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   const same = await loadCandidateReport(loaderClient(loaderData()), route);
@@ -262,6 +279,96 @@ test('loadCandidateReport: zmieniona treść wymagania nie dziedziczy cudzego wy
   assert.equal(stale.status, 'unavailable', 'nowe wymaganie nie dostaje werdyktu poprzedniego');
   assert.deepEqual(stale.quotes, []);
   assert.equal(changed.summary.requiredSupported, 0);
+});
+
+test('loadCandidateReport: duplikat lub wiersz z obcej analizy nie zmienia potwierdzeń', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  const mutations = [
+    rows => rows.push({ ...rows[0], verdict: 'missing', evidence: [], human_status: 'accepted' }),
+    rows => { rows[0].analysis_id = id(9); },
+    rows => { delete rows[0].analysis_id; },
+    rows => { rows[0].criterion_id = ''; },
+    rows => { rows[0].criterion_id = null; },
+  ];
+  for (const mutate of mutations) {
+    // Wstrzykujemy wadliwy wiersz dopiero PO filtrach PostgREST. Zmiana w
+    // źródłowej tablicy testowej byłaby odfiltrowana przez .eq('analysis_id')
+    // i nie sprawdziłaby walidacji odpowiedzi w loadCandidateReport.
+    const client = loaderClient(loaderData(), () => {}, (table, result) => {
+      if (table === 'screening_criterion_results') mutate(result.data);
+      return result;
+    });
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Macierz dowodów jest niespójna/.test(error.message));
+  }
+  // Prawidłowy raport nadal pokazuje zatwierdzone wymaganie i jego źródło.
+  const valid = await loadCandidateReport(loaderClient(loaderData()), route);
+  assert.equal(valid.requirements.find(r => r.id === 'competency:1').status, 'supported');
+  assert.equal(valid.summary.requiredSupported, 1);
+});
+
+test('loadCandidateReport: niespójne oznaczenia nie zmieniają podsumowania FREE', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  const malformed = [
+    rows => null, // SETOF RPC must return an array, including when it is empty
+    rows => rows[0], // list payload must not be a single object
+    rows => [...rows, { ...rows[0], flag: 'additional' }], // ambiguity: required or additional?
+    rows => [null],
+    rows => [{ ...rows[0], criterion_id: null }],
+    rows => [{ ...rows[0], criterion_id: '   ' }],
+    rows => [{ ...rows[0], criterion_text: null }],
+    rows => [{ ...rows[0], flag: null }],
+  ];
+  for (const mutate of malformed) {
+    // Inject after RPC processing, not into the source fixture: the bad
+    // provider response must reach loadRequirementFlags unchanged.
+    const client = loaderClient(loaderData(), () => {}, (table, result) =>
+      table === 'position_requirement_flags' ? { ...result, data: mutate(result.data) } : result);
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Oznaczenia wymagań są niespójne/.test(error.message));
+  }
+
+  const legacy = loaderData();
+  legacy.position_requirement_flags = [];
+  const empty = await loadCandidateReport(loaderClient(legacy), route);
+  assert.equal(empty.summary.requiredTotal, 0);
+  assert.equal(empty.summary.unmarkedTotal, empty.requirements.length);
+
+  const unknownFlag = loaderData();
+  unknownFlag.position_requirement_flags[0].flag = 'legacy-unknown';
+  const unknown = await loadCandidateReport(loaderClient(unknownFlag), route);
+  assert.equal(unknown.summary.requiredTotal, 0, 'unknown text flag remains unmarked');
+  const valid = await loadCandidateReport(loaderClient(loaderData()), route);
+  assert.equal(valid.summary.requiredSupported, 1);
+});
+
+test('loadCandidateReport: niespójna odpowiedź historii przeglądu nie potwierdza CV', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  const malformed = [
+    rows => null,
+    rows => ({ ...rows[0] }), // PostgREST list query must return an array
+    rows => [...rows, { ...rows[0] }], // limit(1) contract broken
+    rows => [null],
+    rows => [{ ...rows[0], analysis_id: id(9) }],
+    rows => [{ ...rows[0], analysis_id: undefined }],
+    rows => [{ ...rows[0], review_version: '1' }],
+    rows => [{ ...rows[0], review_version: 0 }],
+    rows => [{ ...rows[0], disposition: null }],
+    rows => [{ ...rows[0], disposition: '   ' }],
+  ];
+  for (const mutate of malformed) {
+    // Fault injection happens AFTER PostgREST filters, projection and limit,
+    // otherwise the fixture would hide mismatched rows from the loader.
+    const client = loaderClient(loaderData(), () => {}, (table, result) =>
+      table === 'screening_result_reviews' ? { ...result, data: mutate(result.data) } : result);
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Historia sprawdzenia jest niespójna/.test(error.message));
+  }
+
+  // An absent review is legitimate, but it must never turn into an approval.
+  const unreviewed = await loadCandidateReport(loaderClient(loaderData({ disposition: null })), route);
+  assert.equal(unreviewed.summary.requiredSupported, 0);
+  assert.equal(unreviewed.requirements.find(r => r.id === 'competency:1').status, 'awaiting_review');
 });
 
 test('loadCandidateReport: analiza odesłana do powtórzenia nie uchodzi za potwierdzenie', async () => {

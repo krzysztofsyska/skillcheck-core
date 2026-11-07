@@ -11,7 +11,7 @@ import { loadScreeningContext } from './screening-flow.ts';
 import { prepareScreening } from './screening.ts';
 import { screeningStatus, type ScreeningRoute } from './screening-ui.ts';
 import {
-  countRequirementMarks, positionRequirements, resolveRequirementMarks, sortByRequirementMark,
+  countRequirementMarks, parseRequirementFlagRows, positionRequirements, resolveRequirementMarks, sortByRequirementMark,
   type CriterionKind, type PositionRequirement, type RequirementFlagRow, type RequirementMark,
 } from './requirement-flags.ts';
 import {
@@ -41,8 +41,9 @@ export async function loadRequirementFlags(
     if (result.error.code === '42501') throw new CandidateReportError('Brak dostępu do oznaczeń wymagań.');
     throw new CandidateReportError('Nie udało się wczytać oznaczeń wymagań.');
   }
-  const rows = (result.data ?? []) as RequirementFlagRow[];
-  if (!Array.isArray(rows)) throw new CandidateReportError('Nie udało się wczytać oznaczeń wymagań.');
+  // Ten sam kontrakt RPC obowiązuje raport pojedynczego CV i porównanie.
+  const rows = parseRequirementFlagRows(result.data);
+  if (!rows) throw new CandidateReportError('Oznaczenia wymagań są niespójne. Odśwież raport.');
   return rows;
 }
 
@@ -93,9 +94,23 @@ export async function loadCandidateReport(
       .eq('company_id', companyId).eq('analysis_id', analysis.id).order('criterion_order')
     : { data: [], error: null };
   if (resultRows.error) throw new CandidateReportError('Nie udało się wczytać macierzy dowodów.');
+  if (resultRows.data !== null && !Array.isArray(resultRows.data)) {
+    throw new CandidateReportError('Macierz dowodów ma nieprawidłowy format.');
+  }
   const rows = (resultRows.data ?? []) as (CandidateCriterionRow & { analysis_id?: string; criterion_text_snapshot?: string })[];
-  if (analysis && rows.some(row => row.analysis_id && row.analysis_id !== analysis.id)) {
-    throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
+  if (analysis) {
+    // Każdy dowód musi należeć do odczytanej analizy. Brak analysis_id, pusty
+    // criterion_id lub duplikat nie może nadpisać wcześniejszego werdyktu
+    // w Map i niejawnie zmienić podsumowania raportu.
+    const seenCriteria = new Set<string>();
+    for (const row of rows) {
+      if (!row || row.analysis_id !== analysis.id
+        || typeof row.criterion_id !== 'string' || !row.criterion_id
+        || seenCriteria.has(row.criterion_id)) {
+        throw new CandidateReportError('Macierz dowodów jest niespójna. Odśwież raport.');
+      }
+      seenCriteria.add(row.criterion_id);
+    }
   }
 
   // Rekruter mógł odesłać całą analizę do powtórzenia. Taki wynik zostaje w bazie
@@ -108,9 +123,20 @@ export async function loadCandidateReport(
       .order('review_version', { ascending: false }).limit(1)
     : { data: [], error: null };
   if (reviewRows.error) throw new CandidateReportError('Nie udało się wczytać historii sprawdzenia.');
-  const latestReview = (reviewRows.data ?? [])[0] as { analysis_id?: string; review_version?: number; disposition?: string } | undefined;
-  if (analysis && latestReview?.analysis_id && latestReview.analysis_id !== analysis.id) {
-    throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
+  // Lista z filtrem i limit(1) musi być tablicą z najwyżej jednym wierszem.
+  // W przeciwnym razie uszkodzona odpowiedź Data API mogłaby potwierdzić
+  // dowody przeglądem bez powiązania z bieżącą analizą (albo złej rewizji).
+  if (!Array.isArray(reviewRows.data) || reviewRows.data.length > 1) {
+    throw new CandidateReportError('Historia sprawdzenia jest niespójna. Odśwież raport.');
+  }
+  const latestReview = reviewRows.data[0] as
+    { analysis_id?: string; review_version?: number; disposition?: string } | undefined;
+  if (reviewRows.data.length && (!analysis || !latestReview || typeof latestReview !== 'object'
+    || latestReview.analysis_id !== analysis.id
+    || typeof latestReview.review_version !== 'number' || !Number.isSafeInteger(latestReview.review_version)
+    || latestReview.review_version < 1
+    || typeof latestReview.disposition !== 'string' || !latestReview.disposition.trim())) {
+    throw new CandidateReportError('Historia sprawdzenia jest niespójna. Odśwież raport.');
   }
   const reanalysisRequested = latestReview?.disposition === 'needs_reanalysis';
   // Sprawdzenie jest dwustopniowe: najpierw wiersze macierzy, potem cała analiza.
@@ -152,7 +178,10 @@ export async function loadCandidateReport(
     /** Rekruter odesłał tę analizę do powtórzenia. */
     reanalysisRequested,
     // Analiza częściowo zmigrowana też zasługuje na ostrzeżenie: wystarczy jeden wiersz bez werdyktu.
-    legacyAnalysis: !!analysis && analysis.execution_status === 'completed' && rows.some(row => row.verdict == null),
+    // Zakończona analiza bez żadnych wierszy też nie ma macierzy dowodów;
+    // nie może być przedstawiana jako raport nowego typu.
+    legacyAnalysis: !!analysis && analysis.execution_status === 'completed'
+      && (rows.length === 0 || rows.some(row => row.verdict == null)),
     analysisStatus: analysis?.execution_status ?? null,
     requirements: built,
     summary: summariseCandidateReport(built),
