@@ -101,27 +101,35 @@ export async function loadScreeningReport(
   const analysisIds = reviewed.map(r => r.analysis_id!);
   const reviewIds = reviewed.map(r => r.review_id!);
   requireReport(new Set(analysisIds).size === analysisIds.length && new Set(reviewIds).size === reviewIds.length);
-  const analyses = await batches(analysisIds, (ids, from, to) => client.from('screening_analysis_versions')
-    .select('id,application_id,recruitment_id,execution_status,stale_at,latest_review_version,criteria_snapshot')
-    .eq('company_id', p.companyId).eq('recruitment_id', p.recruitmentId).in('id', ids).order('id').range(from, to));
-  const reviews = await batches(reviewIds, (ids, from, to) => client.from('screening_result_reviews')
-    .select('id,analysis_id,review_version,disposition').eq('company_id', p.companyId).in('id', ids).order('id').range(from, to));
-  const results = await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
-    .select('id,analysis_id,criterion_id,criterion_kind,criterion_order,criterion_text_snapshot,rating,evidence,explanation')
-    .eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to));
-  // Step 3 matrix reviews live in columns that exist only after the Step 3 migrations.
-  // Before they reach a database (42703 undefined column) no row can carry one, so the
-  // legacy report stays available; any other error still fails closed.
-  const matrixFields = 'id,analysis_id,verdict,human_status,human_verdict,human_evidence';
-  const probe = analysisIds.length ? await client.from('screening_criterion_results').select(matrixFields)
-    .eq('company_id', p.companyId).in('analysis_id', analysisIds.slice(0, 50)).order('id').range(0, 0) : null;
-  if (probe?.error && probe.error.code !== '42703') checked(probe);
-  const matrix = probe && !probe.error ? await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
-    .select(matrixFields).eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to)) : [];
-  const overrides = await batches(reviewIds, (ids, from, to) => client.from('screening_criterion_review_overrides')
-    .select('id,review_id,criterion_result_id,rating_override,evidence_override,explanation_override')
-    .eq('company_id', p.companyId).in('review_id', ids).order('id').range(from, to));
-  [analyses, reviews, results, matrix, overrides].forEach(uniqueIds);
+  // A report spans multiple queries. Re-read the evidence and human-review rows
+  // before publishing: a concurrent correction must not leave stale citations
+  // in a report whose ranking metadata did not change.
+  const readDetailSnapshot = async () => {
+    const analyses = await batches(analysisIds, (ids, from, to) => client.from('screening_analysis_versions')
+      .select('id,application_id,recruitment_id,execution_status,stale_at,latest_review_version,criteria_snapshot')
+      .eq('company_id', p.companyId).eq('recruitment_id', p.recruitmentId).in('id', ids).order('id').range(from, to));
+    const reviews = await batches(reviewIds, (ids, from, to) => client.from('screening_result_reviews')
+      .select('id,analysis_id,review_version,disposition').eq('company_id', p.companyId).in('id', ids).order('id').range(from, to));
+    const results = await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
+      .select('id,analysis_id,criterion_id,criterion_kind,criterion_order,criterion_text_snapshot,rating,evidence,explanation')
+      .eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to));
+    // Step 3 matrix reviews live in columns that exist only after the Step 3 migrations.
+    // Before they reach a database (42703 undefined column) no row can carry one, so the
+    // legacy report stays available; any other error still fails closed.
+    const matrixFields = 'id,analysis_id,verdict,human_status,human_verdict,human_evidence';
+    const probe = analysisIds.length ? await client.from('screening_criterion_results').select(matrixFields)
+      .eq('company_id', p.companyId).in('analysis_id', analysisIds.slice(0, 50)).order('id').range(0, 0) : null;
+    if (probe?.error && probe.error.code !== '42703') checked(probe);
+    const matrix = probe && !probe.error ? await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
+      .select(matrixFields).eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to)) : [];
+    const overrides = await batches(reviewIds, (ids, from, to) => client.from('screening_criterion_review_overrides')
+      .select('id,review_id,criterion_result_id,rating_override,evidence_override,explanation_override')
+      .eq('company_id', p.companyId).in('review_id', ids).order('id').range(from, to));
+    [analyses, reviews, results, matrix, overrides].forEach(uniqueIds);
+    return { analyses, reviews, results, matrix, overrides };
+  };
+  const firstDetails = await readDetailSnapshot();
+  const { analyses, reviews, results, matrix, overrides } = firstDetails;
   requireReport(matrix.every(m => results.some(r => r.id === m.id && r.analysis_id === m.analysis_id)));
   requireReport(analyses.length === reviewed.length && reviews.length === reviewed.length);
   // Detect relationships outside the requested result set even if the backend contract regresses.
@@ -169,6 +177,8 @@ export async function loadScreeningReport(
     }
     details.set(row.application_id, rendered);
   }
+  const latestDetails = await readDetailSnapshot();
+  requireReport(JSON.stringify(firstDetails) === JSON.stringify(latestDetails));
   const rechecked = await readSource();
   requireReport(JSON.stringify(source) === JSON.stringify(rechecked));
   // SC-015 / #268. Oznaczenia wymagań są czytane poza readSource celowo: nie wchodzą
