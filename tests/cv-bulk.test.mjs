@@ -279,7 +279,7 @@ test('signed scheduler pump binds the exact jsonb contract text', async () => {
 
 test('session pump: AI disabled sends no contract; notification outcome is reported once', async () => {
   const calls = [];
-  const notify = { batch_id: '55555555-5555-4555-8555-555555555555', recruitment_id: 'r', company_id: 'c', email: 'a@b.pl', recruitment_name: 'R', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  const notify = { batch_id: '55555555-5555-4555-8555-555555555555', recruitment_id: '22222222-2222-4222-8222-222222222222', company_id: '33333333-3333-4333-8333-333333333333', email: 'a@b.pl', recruitment_name: 'R', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
   const rpc = async (fn, args) => { calls.push([fn, args]); return fn === 'cv_bulk_pump' ? { data: { dispatch: [], notify }, error: null } : { data: true, error: null }; };
   const result = await pumpBatch({ rpc, dispatch: async () => ({ accepted: true }), aiEnabled: false, origin: () => 'https://x', env: {} }, notify.batch_id);
   assert.equal(calls[0][1].contract, null);
@@ -312,6 +312,56 @@ test('session bulk pump fails closed on a malformed successful RPC response', as
   assert.deepEqual(await pumpBatch({ rpc, dispatch: async () => ({ accepted: true }),
     aiEnabled: false, origin: () => 'https://example.test', env: {} }, batchId),
   { dispatch: [], notify: null }, 'a legitimately empty RPC response still succeeds');
+});
+
+test('malformed bulk notification leases are neither mailed nor acknowledged; unrelated scheduler claims still run', async () => {
+  const notify = {
+    batch_id: '55555555-5555-4555-8555-555555555555',
+    recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333',
+    email: null, recruitment_name: 'Synthetic', files: 2, done: 1,
+    errors: 1, passed: 1, review: 0, rejected: 0,
+  };
+  const bad = [
+    { batch_id: notify.batch_id }, // absent tenant, recruitment and counters
+    { ...notify, company_id: null },
+    { ...notify, recruitment_id: 'not-a-uuid' },
+    { ...notify, email: { address: 'fake@example.test' } },
+    { ...notify, recruitment_name: 17 },
+    { ...notify, done: '1' },
+    { ...notify, errors: -1 },
+    { ...notify, files: 1.5 },
+    { ...notify, passed: Number.POSITIVE_INFINITY },
+  ];
+  for (const value of bad) {
+    const rpcCalls = [];
+    const rpc = async (fn, args) => {
+      rpcCalls.push([fn, args]);
+      return { data: { dispatch: [], notify: value }, error: null };
+    };
+    await assert.rejects(pumpBatch({ rpc, dispatch: async () => assert.fail('no dispatch'),
+      aiEnabled: false, origin: () => 'https://example.test', env: {} }, notify.batch_id),
+    /cv_bulk_pump_invalid_response/);
+    assert.deepEqual(rpcCalls.map(([fn]) => fn), ['cv_bulk_pump'],
+      'a malformed lease must remain unacknowledged for retry');
+  }
+  const claimed = [], acknowledgements = [];
+  const rpc = async (fn, args) => {
+    if (fn === 'cv_bulk_worker_pump') return { data: [
+      { dispatch: [], notify: { ...notify, files: null } },
+      { dispatch: ['44444444-4444-4444-8444-444444444444'], notify },
+    ], error: null };
+    acknowledgements.push(args.target_batch);
+    return { data: true, error: null };
+  };
+  await assert.rejects(pumpAllSigned({
+    rpc, dispatch: async id => { claimed.push(id); return { accepted: true }; },
+    aiEnabled: false, origin: () => 'https://example.test', env: {},
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), /cv_bulk_worker_pump_invalid_response/);
+  assert.deepEqual(claimed, ['44444444-4444-4444-8444-444444444444']);
+  assert.deepEqual(acknowledgements, [notify.batch_id],
+    'only the valid lease is finalized despite its malformed sibling');
 });
 
 test('bulk pump dispatches a repeated attempt only once per response (session and signed scheduler)', async () => {
