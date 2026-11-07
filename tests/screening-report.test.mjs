@@ -481,6 +481,19 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   assert.deepEqual(withGroupCurrency([{ application_id: withLetters.application_id.toUpperCase(),
     group_key: 'passed', group_analysis_id: upperRow.analysis_id.toUpperCase() }], upperMap)
     .map(item => item.group_current), [true], 'mixed-case source IDs refer to the same group');
+  assert.deepEqual(withGroupCurrency([{ application_id: withLetters.application_id.toUpperCase(),
+    group_key: 'passed', analysis_id: upperRow.analysis_id.toUpperCase() }], upperMap)
+    .map(item => item.group_current), [true],
+    'recruitment RPC uses analysis_id, not group_analysis_id; mixed-case UUIDs remain current');
+  assert.equal(withGroupCurrency([{ application_id: withLetters.application_id,
+    group_key: 'passed', group_analysis_id: null, analysis_id: upperRow.analysis_id }], upperMap)[0].group_current, false,
+    'an explicitly absent batch analysis link cannot be replaced by another field');
+  assert.equal(withGroupCurrency([{ application_id: 'not-a-uuid',
+    group_key: 'passed', analysis_id: upperRow.analysis_id }], upperMap)[0].group_current, false,
+    'invalid recruitment group IDs cannot be confirmed');
+  const recruitmentPage = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', import.meta.url), 'utf8');
+  assert.match(recruitmentPage, /withGroupCurrency\\s*\\(/,
+    'the recruitment screen must use the same normalized currency check as bulk progress');
   assert.equal(await loadCurrentRanking(rankingClient([withLetters, duplicate]), id(9)), null,
     'duplicate candidate IDs with different letter casing fail closed');
   assert.equal(await loadCurrentRanking(rankingClient([...rows.slice(0, 499), withLetters, duplicate]), id(9)), null,
