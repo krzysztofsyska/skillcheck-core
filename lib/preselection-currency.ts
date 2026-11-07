@@ -31,7 +31,10 @@ export async function loadCurrentRanking(client: Pick<SupabaseClient<Database>, 
     }
     // A truncated ranking cannot establish currency for *any* group.
     if (rows.length > 20000) return null;
-    if (page.data.length < 500) break;
+    // PostgREST may cap RPC responses below the requested 500 rows. A short page
+    // is not proof of EOF: only an empty page is. Otherwise later candidates
+    // could be omitted while their earlier saved group scores appear current.
+    if (page.data.length === 0) break;
   }
   return new Map(rows.map(r => [r.application_id, r] as const));
 }
