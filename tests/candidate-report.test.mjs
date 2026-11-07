@@ -596,6 +596,26 @@ test('porównanie FREE pokazuje pierwszy niepusty cytat, jak raport pojedynczego
   assert.equal(compared.rows.find(r => r.id === requirements[0].id).cells[0].quote, 'dowód 2');
 });
 
+test('porównanie i raport pojedynczego CV identycznie rozpoznają tekst wymagania', () => {
+  const whitespace = application(1);
+  whitespace.criteria[0].text = `  ${requirements[0].text}  `;
+  const expected = criterionRowFor(requirements[0], {
+    criterion_text_snapshot: whitespace.criteria[0].text,
+  });
+  assert.ok(expected, 'raport pojedynczego CV akceptuje nieistotne białe znaki');
+  const same = buildCandidateComparison(report([whitespace]));
+  const cell = same.rows.find(r => r.id === requirements[0].id).cells[0];
+  assert.equal(cell.status, 'supported', 'porównanie nie może odrzucać tego samego tekstu');
+  assert.equal(cell.quote, 'cytat 1');
+
+  // Real changes in the requirement must still never inherit another verdict.
+  whitespace.criteria[0].text = requirements[0].text + ' (inne wymaganie)';
+  const changed = buildCandidateComparison(report([whitespace]));
+  const stale = changed.rows.find(r => r.id === requirements[0].id).cells[0];
+  assert.equal(stale.status, 'unavailable');
+  assert.equal(stale.quote, null);
+});
+
 test('pusta lista kryteriów nie znaczy od razu „brak wyniku analizy"', () => {
   // Raport rekrutacji wczytuje macierz tylko dla analiz sprawdzonych przez człowieka,
   // więc komórka musi powiedzieć, czego naprawdę brakuje.
