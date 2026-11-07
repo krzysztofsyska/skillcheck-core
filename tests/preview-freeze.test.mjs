@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { allowPreviewWrites, runGuard } from '../scripts/preview-freeze-guard.mjs';
 
-const policy = { enabled: true, baselineSha: '5b2cc11131c0cca5f4f9bd5010245092e36b1dcf' };
+const policy = { enabled: true, baselineSha: '4db85e268a3b203fdf3f0a4c9d0636d33346d6a8' };
 test('freeze denies writes; only an explicit valid disabled policy permits them', () => {
   assert.equal(allowPreviewWrites(JSON.stringify(policy)), false);
   assert.equal(allowPreviewWrites(JSON.stringify({ ...policy, enabled: false })), true);
