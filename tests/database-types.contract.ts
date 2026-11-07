@@ -19,6 +19,11 @@ type Equal<Left, Right> =
     ? true
     : false;
 type Expect<Value extends true> = Value;
+type PublishedCatalogPackage = Database['public']['Functions']['pricing_published_packages']['Returns'][number];
+type PublishedCatalogAddon = Database['public']['Functions']['pricing_published_addons']['Returns'][number];
+type PublishedCatalogPackageFields = Expect<Equal<keyof PublishedCatalogPackage,
+  'package_code' | 'gross_minor' | 'cv_included' | 'cv_step' | 'cv_max' | 'overage_gross_per_cv_minor' | 'sellable' | 'vat_basis_points'>>;
+type PublishedCatalogAddonFields = Expect<Equal<keyof PublishedCatalogAddon, 'code' | 'name' | 'unit' | 'gross_minor'>>;
 type Keys<Value> = keyof Value;
 type NullableKeys<Value> = {
   [Key in keyof Value]-?: null extends Value[Key] ? Key : never;
