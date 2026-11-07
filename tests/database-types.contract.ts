@@ -19,6 +19,9 @@ type Equal<Left, Right> =
     ? true
     : false;
 type Expect<Value extends true> = Value;
+type CatalogCreateArguments = Expect<Equal<keyof Database['public']['Functions']['sc19_create_catalog_order']['Args'], 'target_company'|'request_key'|'expected_quote'|'accepted'>>;
+type CatalogSettlementArguments = Expect<Equal<keyof Database['public']['Functions']['sc19_settle_catalog_order']['Args'], 'target_order'|'settlement_reference'|'confirmed_gross'|'confirmed_currency'>>;
+type CatalogOrderId = Expect<Equal<Database['public']['Functions']['sc19_create_catalog_order']['Returns'],string>>;
 type PublishedCatalogPackage = Database['public']['Functions']['pricing_published_packages']['Returns'][number];
 type PublishedCatalogAddon = Database['public']['Functions']['pricing_published_addons']['Returns'][number];
 type PublishedCatalogPackageFields = Expect<Equal<keyof PublishedCatalogPackage,
@@ -77,6 +80,8 @@ type ExpectedFunctions =
   | "sc19_checkout_offers"
   | "sc19_operator_companies" | "sc19_operator_package_policy" | "sc19_operator_set_package_policy"
   | "sc19_operator_approve_trial" | "sc19_operator_grant_paid"
+  | "sc19_catalog_order_options" | "sc19_catalog_orders" | "sc19_catalog_entitlements"
+  | "sc19_create_catalog_order" | "sc19_cancel_catalog_order" | "sc19_settle_catalog_order"
   | "sc19_auto_claim_trial" | "sc19_auto_record_failure" | "sc19_auto_free_precheck"
   | "sc19_operator_set_auto_free" | "sc19_operator_auto_free_settings" | "sc19_operator_auto_free_grants"
   | "sc19_operator_taken_trial_nips" | "sc19_operator_release_trial_nip" | "sc19_operator_trial_nip_releases"

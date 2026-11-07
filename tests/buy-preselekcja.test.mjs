@@ -300,6 +300,7 @@ async function renderReturnFromCheckout(recruitmentId) {
     '../../../../../lib/company-access':{companyAccess:async()=>({company:{owner_id:OWNER},user:{id:OWNER}})},
     '../../../../../lib/sc19-payment-preview.ts':{sc19PreviewPaymentConfig:()=>null},
     './checkout':{default:({recruitmentId})=>createElement('div',{'data-recruitment':recruitmentId},'Oferta')},
+    './catalog-orders':{default:()=>null},
   };
   mod.require=id=>id in mocks?mocks[id]:req(id);
   mod._compile(ts.transpileModule(readFileSync(abs,'utf8'),{compilerOptions:{
