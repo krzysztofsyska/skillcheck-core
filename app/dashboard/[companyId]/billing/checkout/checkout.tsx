@@ -13,13 +13,16 @@ const breakdown=(offer: Offer)=>typeof offer.netMinor==='number'&&typeof offer.v
   :sc19OfferAmounts(offer.amountMinor);
 const verificationPending='Twoja firma czeka na weryfikację — do tego czasu zakupu nie można złożyć. Odświeżenie strony tego nie zmieni. Napisz do nas przez formularz kontaktowy (/rozmowa) albo na pomoc@skillcheck.pl, a potwierdzimy firmę i odblokujemy zamówienie.';
 const paymentsPending='Płatność online jest w trakcie uruchamiania (trwa weryfikacja u operatora płatności Przelewy24). Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
-export default function Checkout({companyId,sandbox=false,statusOnly=false}: {companyId:string;sandbox?:boolean;statusOnly?:boolean}) {
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${companyId.toLowerCase()}:${orderId.toLowerCase()}`;
+export default function Checkout({companyId,recruitmentId,sandbox=false,statusOnly=false}: {companyId:string;recruitmentId?:string;sandbox?:boolean;statusOnly?:boolean}) {
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
   const [checkoutAvailable,setCheckoutAvailable]=useState(true);
   const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string}|null>(null);
   const [requestIds]=useState(()=>new Map<string,string>());
+  const [returnedRecruitment,setReturnedRecruitment]=useState<string|null>(null);
   const offer=offers.find(o=>o.id===selected);
   const amounts=offer&&breakdown(offer);
   async function loadOffers(signal?: AbortSignal) {
@@ -59,9 +62,16 @@ export default function Checkout({companyId,sandbox=false,statusOnly=false}: {co
   }
   useEffect(()=>{
     const abort=new AbortController();
+    setReturnedRecruitment(null);
     if (!statusOnly) void loadOffers(abort.signal);
     const returned = sandbox && new URLSearchParams(window.location.search).get('p24');
     if (returned && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(returned)) {
+      // Optional same-tab navigation hint, never payment evidence or an access grant.
+      // The destination checks membership; storage can only supply a UUID, never a URL.
+      if (uuid(companyId)) try {
+        const saved = sessionStorage.getItem(contextKey(companyId, returned));
+        setReturnedRecruitment(uuid(saved) ? saved.toLowerCase() : null);
+      } catch { setReturnedRecruitment(null); }
       setOrderId(returned);
       try { sessionStorage.setItem(`sc19:order:${companyId}`, returned); } catch { /* optional */ }
       void status(returned);
@@ -125,18 +135,25 @@ export default function Checkout({companyId,sandbox=false,statusOnly=false}: {co
         throw Error();
       }
       setOrderId(data.orderId);
+      if (uuid(companyId) && uuid(data.orderId) && uuid(recruitmentId)) try {
+        sessionStorage.setItem(contextKey(companyId, data.orderId), recruitmentId.toLowerCase());
+      } catch { /* Navigation may fall back to the company panel; checkout still works. */ }
       try {sessionStorage.setItem(`sc19:order:${companyId}`,data.orderId);} catch { /* optional */ }
       if(data.status==='paid'){await status(data.orderId);return;}
       window.location.assign(data.checkoutUrl);
     } catch {setMessage('Nie udało się otworzyć płatności. Ponów próbę — serwer sprawdzi istniejące zamówienie.');}
     finally {setBusy(false);}
   }
+  const returnLink = !uuid(recruitmentId) && uuid(companyId) && returnedRecruitment
+    ? <p><a href={`/dashboard/${companyId}/recruitments/${returnedRecruitment}`}>Wróć do rekrutacji</a></p> : null;
   if (statusOnly) return <section aria-busy={busy}>
+    {returnLink}
     <h2>Status zamówienia testowego</h2>
     <p role="status">{message || 'Sprawdzamy potwierdzenie w Przelewy24…'}</p>
     <button type="button" disabled={!orderId || busy} onClick={()=>status()}>Sprawdź status zamówienia</button>
   </section>;
   return <section aria-busy={loading||busy}>
+    {returnLink}
     {sandbox&&<p role="note">Płatność testowa w Sandboxie Przelewy24. Środki nie zostaną pobrane.</p>}
     <p>Pakiet FREE nie wymaga płatności i nie korzysta z tego formularza.</p>
     {loading ? <p role="status">Wczytuję ofertę…</p> : offers.length>0 ? <>

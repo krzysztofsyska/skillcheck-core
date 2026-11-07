@@ -23,7 +23,8 @@ const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
 async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false,
-  checkoutAvailable = true, offersResponse, sandbox = false, search = '', statusOnly = false } = {}) {
+  checkoutAvailable = true, offersResponse, sandbox = false, search = '', statusOnly = false,
+  recruitmentId, currentCompany = companyId } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
@@ -76,7 +77,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   runInNewContext(compiled, context);
   function render() {
     cursor = 0;
-    tree = context.exports.default({ companyId, sandbox, statusOnly });
+    tree = context.exports.default({ companyId: currentCompany, recruitmentId, sandbox, statusOnly });
     for (const effect of effects.splice(0)) effect();
     return tree;
   }
@@ -333,4 +334,73 @@ test('flag-off sandbox return reads the pending order without loading offers or 
   assert.equal(h.find('button','Zamawiam'),undefined);
   assert.equal(h.find('button','Kup kolejny'),undefined);
   assert.ok(h.find('button','Sprawdź status'));
+});
+
+const recruitment = 'bbbbbbbb-1111-4222-8333-444444444444';
+const returnOrder = 'aaaaaaaa-1111-4222-8333-444444444444';
+const returnKey = (company = companyId, id = returnOrder) => `sc19:recruitment:${company}:${id}`;
+
+test('checkout remembers a recruitment per order and restores navigation after the external return', async t => {
+  const departing = await harness({ recruitmentId: recruitment.toUpperCase(), checkout: async () =>
+    ok({orderId:returnOrder,status:'awaiting_payment',checkoutUrl:'https://pay.fixture.invalid/order'}) });
+  t.after(departing.close);
+  departing.accept(); await departing.click('Zamawiam');
+  assert.equal(departing.storage.get(returnKey()), recruitment);
+  assert.deepEqual(departing.redirects, ['https://pay.fixture.invalid/order']);
+  assert.deepEqual(Object.keys(departing.posts[0]).sort(), ['companyId','offerId','requestId','termsRevision']);
+  const returned = await harness({ sandbox:true, search:`?p24=${returnOrder}`, entries:[...departing.storage],
+    order:async()=>ok({status:'awaiting_payment'}) });
+  t.after(returned.close);
+  assert.equal(returned.find('a','Wróć do rekrutacji').props.href, `/dashboard/${companyId}/recruitments/${recruitment}`);
+  assert.equal(returned.statusReads.length, 1);
+  assert.ok(returned.find('p','Czekamy na potwierdzenie'));
+  assert.ok(returned.find('p','Powrót ze strony operatora nie jest potwierdzeniem'));
+  assert.equal(returned.find('button','Kup kolejny'), undefined);
+});
+
+test('return navigation works with packages off without loading offers', async t => {
+  const h = await harness({ sandbox:true,statusOnly:true,search:`?p24=${returnOrder}`,
+    entries:[[returnKey(),recruitment]],offersResponse:()=>assert.fail('no offers'),
+    order:async()=>ok({status:'awaiting_payment'}) });
+  t.after(h.close);
+  assert.equal(h.find('a','Wróć do rekrutacji').props.href, `/dashboard/${companyId}/recruitments/${recruitment}`);
+  assert.equal(h.find('button','Zamawiam'),undefined);
+});
+
+test('return navigation never crosses company or order scopes', async t => {
+  for (const entries of [
+    [[returnKey('cccccccc-1111-4222-8333-444444444444'),recruitment]],
+    [[returnKey(companyId,'dddddddd-1111-4222-8333-444444444444'),recruitment]],
+  ]) {
+    const h=await harness({sandbox:true,search:`?p24=${returnOrder}`,entries,order:async()=>ok({status:'awaiting_payment'})});
+    t.after(h.close); assert.equal(h.find('a','Wróć do rekrutacji'),undefined);
+  }
+});
+
+test('missing, malformed or inaccessible return hints fall back without affecting order status', async t => {
+  for(const saved of [null,'','https://evil.example','//evil.example','../operator',recruitment+'/../operator',JSON.stringify([recruitment])]) {
+    const h=await harness({sandbox:true,search:`?p24=${returnOrder}`,entries:saved===null?[]:[[returnKey(),saved]],
+      order:async()=>ok({status:'awaiting_payment'})});
+    t.after(h.close); assert.equal(h.find('a','Wróć do rekrutacji'),undefined); assert.equal(h.statusReads.length,1);
+  }
+  const h=await harness({sandbox:true,search:`?p24=${returnOrder}`,storageUnavailable:true,
+    order:async()=>ok({status:'awaiting_payment'})});
+  t.after(h.close); assert.equal(h.find('a','Wróć do rekrutacji'),undefined); assert.equal(h.statusReads.length,1);
+});
+
+test('blocked storage or invalid recruitment hints cannot prevent a checkout redirect', async t => {
+  for(const options of [{recruitmentId:recruitment,storageUnavailable:true},{recruitmentId:'https://evil.example'},
+    {recruitmentId:[recruitment]},{recruitmentId:undefined}]) {
+    const h=await harness({...options,checkout:async()=>ok({orderId:returnOrder,status:'awaiting_payment',checkoutUrl:'https://pay.fixture.invalid/order'})});
+    t.after(h.close);h.accept();await h.click('Zamawiam');
+    assert.deepEqual(h.redirects,['https://pay.fixture.invalid/order']);
+    assert.equal(h.storage.has(returnKey()),false);
+  }
+});
+
+test('stored context alone never creates a return link without a sandbox order return', async t => {
+  for(const options of [{sandbox:false,search:`?p24=${returnOrder}`},{sandbox:true,search:''},{sandbox:true,search:'?p24=invalid'}]) {
+    const h=await harness({...options,entries:[[returnKey(),recruitment]]});
+    t.after(h.close);assert.equal(h.find('a','Wróć do rekrutacji'),undefined);assert.equal(h.statusReads.length,0);
+  }
 });
