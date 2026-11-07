@@ -1,3 +1,4 @@
+import { FutureOfferPreview } from "./future-offer-preview";
 import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { sc19AnalysisScope, sc19PolicyPendingCell, sc19PolicyPendingScope, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
@@ -50,6 +51,7 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
     <p>WERYFIKACJA i ASSESSMENT CENTER są w przygotowaniu. Poniżej przedstawiamy planowany zakres, nie dostępne dziś funkcje pakietów. Nie można ich jeszcze kupić; nie podajemy terminu uruchomienia. Ostateczne warunki będą dostępne przed zakupem.</p>
     <p>Zacznij od dostępnej PRESELEKCJI. Gdy potrzebujesz głębszej oceny, zobacz, co przygotowujemy dla Twojego zespołu.</p>
   </div>
+  <FutureOfferPreview />
   <div className={styles.futureGrid}>{futureOffers.map(stage=><article key={stage.name} className={styles.futureCard}>
     <p className={`${styles.status} ${styles.statusPlanned}`}>Cena zatwierdzona · pakiet w przygotowaniu</p>
     <h3>{stage.name}</h3><p className={styles.planTitle}>{stage.outcome}</p>

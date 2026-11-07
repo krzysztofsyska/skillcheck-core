@@ -87,6 +87,11 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.ok(hrefs(future).length === 2 && hrefs(future).every(href => href === '/rozmowa'), 'future offers link only to contact, never checkout');
   assert.match(future, /Nie można ich jeszcze kupić/);
   assert.match(future, /Nie obejmuje zewnętrznego asesora/);
+  const previewStart = home.indexOf('id="przyklady-pakietow"');
+  assert.ok(previewStart > futureStart && previewStart < futureEnd, 'demo is inside planned offers');
+  const preview = home.slice(previewStart, home.indexOf('Co planujemy w tej cenie?', previewStart));
+  for (const copy of ['Demonstracja na fikcyjnych danych.', 'Przykładowy test', 'Przykładowe ćwiczenie', 'Fragment raportu: Kandydat A', 'Brak danych.', 'Pokaż klucz i uzasadnienie']) assert.ok(preview.includes(copy), copy);
+  assert.equal(/<form[\s>]|<input[\s>]|<textarea[\s>]/.test(preview), false, 'demo collects no candidate data');
   // Withdrawn prices must not come back.
   for (const price of ['299', '369', '899', '1 799', '1799', '1845']) {
     assert.equal(home.includes(price), false, `stale price ${price} removed from the home page`);

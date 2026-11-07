@@ -556,3 +556,18 @@
 .page .futureCard details { margin-bottom: 20px; }
 .page .futureCard a:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 4px; }
 @media (max-width: 760px) { .futureGrid { grid-template-columns: 1fr; } }
+
+.page .offerPreview { margin: 28px 0 36px; scroll-margin-top: 110px; }
+.page .previewGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.page .previewPanel { min-width: 0; padding: 24px; border: 1px solid #cbd5e1; border-radius: 16px; background: white; }
+.page .previewPanel h4, .page .previewValue h4 { margin: 0 0 16px; font-size: 1.15rem; }
+.page .previewPanel li { margin-bottom: 10px; }
+.page .previewPanel details { margin: 16px 0; }
+.page .previewPanel summary { cursor: pointer; }
+.page .previewPanel summary:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 4px; }
+.page .previewPanel blockquote { margin: 12px 0; padding-left: 14px; border-left: 3px solid #2563eb; }
+.page .previewNotice, .page .previewValue { padding: 20px; background: #e8eefb; border-radius: 12px; }
+.page .previewValue { margin-top: 20px; }
+.page .previewEvidence dt { font-weight: 700; margin-top: 18px; }
+.page .previewEvidence dd { margin: 6px 0 0; }
+@media (max-width: 1050px) { .page .previewGrid { grid-template-columns: 1fr; } }
