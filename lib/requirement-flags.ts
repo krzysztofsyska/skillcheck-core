@@ -26,6 +26,23 @@ export const criterionKindLabels: Record<CriterionKind, string> = {
 export type PositionRequirement = { id: string; kind: CriterionKind; text: string; order: number };
 export type RequirementFlagRow = { criterion_id: string; criterion_text: string; flag: string };
 
+/** Shared guard for the requirement-flags RPC used by both FREE report views.
+ * A duplicated ID would otherwise silently overwrite a required/optional mark.
+ * Unknown textual flags are retained so historic values still map to 'unmarked'.
+ */
+export function parseRequirementFlagRows(value: unknown): RequirementFlagRow[] | null {
+  if (!Array.isArray(value)) return null;
+  const seen = new Set<string>();
+  for (const row of value) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)
+      || typeof row.criterion_id !== 'string' || !row.criterion_id.trim()
+      || typeof row.criterion_text !== 'string' || typeof row.flag !== 'string'
+      || seen.has(row.criterion_id)) return null;
+    seen.add(row.criterion_id);
+  }
+  return value as RequirementFlagRow[];
+}
+
 const criterionIdPattern = /^(task|kpi|competency):[1-9][0-9]{0,2}$/;
 
 /**
