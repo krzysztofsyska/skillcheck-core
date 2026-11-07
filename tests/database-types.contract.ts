@@ -73,6 +73,7 @@ type ExpectedFunctions =
   | "sc19_claim_trial"
   | "sc19_get_balance"
   | "sc19_package_sizes"
+  | "pricing_published_packages" | "pricing_published_addons"
   | "sc19_checkout_offers"
   | "sc19_operator_companies" | "sc19_operator_package_policy" | "sc19_operator_set_package_policy"
   | "sc19_operator_approve_trial" | "sc19_operator_grant_paid"
