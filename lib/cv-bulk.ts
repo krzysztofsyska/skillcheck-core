@@ -82,6 +82,14 @@ export const groupLabel: Record<BulkGroup, string> = {
   passed: 'Przeszli sito', review: 'Do decyzji rekrutera', rejected: 'Nie spełniają kryteriów',
 };
 
+/** PostgreSQL move_preselection_group returns timestamptz only after it records the change.
+ * A transport-level success with null/malformed data is not proof of a saved move. */
+export function groupMoveConfirmed(value: unknown): boolean {
+  return typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+    Number.isFinite(Date.parse(value));
+}
+
 export type BulkFileErrorReason = Exclude<BulkErrorReason, 'over_limit' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible'>;
 
 /** OCR could not finish within the time left for this file. */
