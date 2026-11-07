@@ -416,10 +416,37 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   const ok = client();
   const map = await loadCurrentRanking(ok, id(9));
   assert.equal(map.size, 1203, 'all pages, not only the first');
-  assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499]]);
-  assert.deepEqual(ok.orders, Array(3).fill(null).map(() => ['application_id', true]),
+  assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499], [1203, 1702]],
+    'an empty page, not a short page, ends pagination');
+  assert.deepEqual(ok.orders, Array(4).fill(null).map(() => ['application_id', true]),
     'all ranking pages must use a stable application UUID order');
   assert.equal(await loadCurrentRanking(client(500), id(9)), null, 'a failed page fails closed');
+  // A PostgREST installation can enforce a smaller max_rows than the requested
+  // range. Each short page must be followed by the next offset until an empty
+  // page, or cached group scores can be shown as current despite missing rows.
+  const cappedClient = (failFrom = -1) => ({ calls: [], rpc() {
+    const self = this;
+    return { order(column, options) {
+      assert.equal(column, 'application_id');
+      assert.equal(options?.ascending, true);
+      return { range(from, to) {
+        self.calls.push([from, to]);
+        return Promise.resolve(from === failFrom
+          ? { data: null, error: { code: 'X' } }
+          : { data: rows.slice(from, Math.min(to + 1, from + 37)), error: null });
+      } };
+    } };
+  } });
+  const capped = cappedClient();
+  const complete = await loadCurrentRanking(capped, id(9));
+  assert.equal(complete?.size, 1203, 'short RPC pages must not truncate later candidates');
+  assert.deepEqual(capped.calls.at(-1), [1203, 1702], 'the last probe establishes EOF');
+  assert.equal(capped.calls.length, Math.ceil(1203 / 37) + 1);
+  assert.equal(withGroupCurrency([{ application_id: id(1202), group_key: 'passed',
+    group_analysis_id: id(11202) }], complete)[0].group_current, true,
+    'the final candidate must still be included in currency checks');
+  assert.equal(await loadCurrentRanking(cappedClient(37), id(9)), null,
+    'a failed short-page continuation must invalidate the whole ranking');
   const rankingClient = data => ({ rpc: () => ({ order: (column, options) => {
     assert.equal(column, 'application_id');
     assert.equal(options?.ascending, true);
