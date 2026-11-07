@@ -8,6 +8,75 @@ import {
 } from './helpers/sc19-migration-fixture.mjs';
 import { setupExecutionLedger } from './helpers/erasure-execution-fixture.mjs';
 import { retentionHarness } from './helpers/retention-scheduler-fixture.mjs';
+import { activeBoot } from './helpers/competency-active-fixture.mjs';
+import { lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
+import { users } from './helpers/screening-ranking-fixture.mjs';
+
+test('single analysis grouping: v1/v2 completion, replay, manual choice, scope, erasure and rollback', async t => {
+  const {db,h,seed,x} = await activeBoot(t,{fullChain:true});
+  const group = async app => {await h.asAdmin();return (await db.query('select * from private.application_preselection_groups where application_id=$1',[app])).rows[0];};
+  const events = async app => {await h.asAdmin();return (await db.query('select count(*)::int n from private.application_preselection_group_events where application_id=$1',[app])).rows[0].n;};
+  const f=await seed({shortlist:false});
+  const started=await h.start(f),claimed=await h.claim(started);
+  await h.finishClaim(started,claimed,Array(5).fill('above'));
+  let g=await group(f.application.id);
+  assert.deepEqual([g.group_key,g.source,Number(g.raw_score)],['passed','auto',100]);
+  await h.asUser(f.owner);
+  assert.equal((await h.row(f)).eligibility_reason,'no_human_review');
+  assert.equal((await h.shortlist(f)).length,0);
+  assert.equal((await db.query('select status from public.applications where id=$1',[f.application.id])).rows[0].status,'new');
+  const count=await events(f.application.id);
+  await h.finishClaim(started,claimed,Array(5).fill('above'));
+  assert.equal(await events(f.application.id),count);
+  assert.deepEqual(await group(f.application.id),g,'completion replay is side-effect free');
+  await h.asUser(f.owner);
+  await db.query("select public.move_preselection_group($1,'rejected',$2,'Synthetic manual decision')",[f.application.id,g.updated_at]);
+  const again=await h.start(f,{force:true}),claimAgain=await h.claim(again);
+  await h.finishClaim(again,claimAgain,Array(5).fill('above'));
+  g=await group(f.application.id);
+  assert.deepEqual([g.group_key,g.source,g.analysis_id],['rejected','manual',again.analysis_id]);
+
+  const v2=await seed({tenant:f,shortlist:false});
+  await h.asAdmin();
+  const fingerprint=(await db.query("select private.screening_material($1,false)->>'input_fingerprint' value",[v2.application.id])).rows[0].value;
+  await h.asUser(v2.owner);
+  const a=(await db.query("select * from public.start_screening_analysis($1,$2,1,2,'screening-evidence-v2','openai','ranking-test-model',null,$3,false)",[v2.application.id,fingerprint,randomUUID()])).rows[0];
+  await h.asWorker();
+  const c=(await db.query('select * from public.claim_screening_attempt_v2($1)',[a.attempt_id])).rows[0];
+  const rows=c.criteria_snapshot.map(r=>({criterion_id:r.id,verdict:'supported',evidence:[{start:0,end:3,quote:'SQL',document_id:c.candidate_document_id}],missing_info:'',suggested_question:'',explanation:'Synthetic.'}));
+  const finishV2=async()=>{await h.asWorker();return db.query('select public.complete_screening_evidence($1,$2,$3,$4,$5::jsonb)',[a.attempt_id,c.lease_token,c.input_fingerprint,c.analysis_contract_hash,JSON.stringify(rows)]);};
+  await finishV2();
+  const v2g=await group(v2.application.id);
+  assert.deepEqual([v2g.group_key,Number(v2g.raw_score),Number(v2g.coverage)],['passed',100,1],'v2 groups final verdicts, not intermediate neutral legacy ratings');
+  await finishV2();assert.deepEqual(await group(v2.application.id),v2g);
+
+  const other=await seed({owner:users.otherOwner,shortlist:false});
+  await h.asAdmin();
+  for(const [app,analysis] of [[other.application.id,a.analysis_id],[randomUUID(),a.analysis_id],[v2.application.id,randomUUID()]])
+    await db.query('select private.screening_apply_single_group($1,$2)',[app,analysis]);
+  assert.equal(await group(other.application.id),undefined);
+  const pending=await h.start(other),pc=await h.claim(pending);
+  await h.asAdmin();await db.query('select private.screening_apply_single_group($1,$2)',[other.application.id,pending.analysis_id]);
+  assert.equal(await group(other.application.id),undefined,'processing results are not grouped');
+  await h.asWorker();await db.query("select public.fail_screening_attempt($1,$2,$3,$4,'provider_timeout','Synthetic')",[pending.attempt_id,pc.lease_token,pc.input_fingerprint,pc.analysis_contract_hash]);
+  await h.asAdmin();await db.query('select private.screening_apply_single_group($1,$2)',[other.application.id,pending.analysis_id]);
+  assert.equal(await group(other.application.id),undefined,'failed results are not grouped');
+  for(const role of ['anon','authenticated','screening_worker']) {
+    assert.equal((await db.query("select has_function_privilege($1,'private.screening_apply_single_group(uuid,uuid)','execute') allowed",[role])).rows[0].allowed,false);
+  }
+  await h.asUser(v2.owner);await x.policy(v2,0,lifecycleRules);v2.resolutionId=await x.resolve(v2,[v2.candidate.id]);
+  await x.freeze(v2);
+  await h.asAdmin();
+  await assert.rejects(db.query('select private.screening_apply_single_group($1,$2)',[v2.application.id,a.analysis_id]),e=>e.code==='PT409');
+  assert.deepEqual(await group(v2.application.id),v2g,'freeze preserves grouping and history');
+  const signature=(await db.query('select private.erasure_schema_signature() value')).rows[0].value;
+  await db.exec(await readFile(new URL('../supabase/rollbacks/20261107170432_single_analysis_preselection_group_down.sql',import.meta.url),'utf8'));
+  assert.equal((await db.query('select private.erasure_schema_signature() value')).rows[0].value,signature);
+  assert.equal((await db.query("select to_regprocedure('private.screening_apply_single_group(uuid,uuid)') value")).rows[0].value,null);
+  const post=await seed({tenant:f,shortlist:false});const ps=await h.start(post),pclaim=await h.claim(ps);
+  await h.finishClaim(ps,pclaim,Array(5).fill('above'));
+  assert.equal(await group(post.application.id),undefined,'rollback restores old individual completion');
+});
 
 // Real checked-in migrations on disposable native PostgreSQL (CI: PG 16/17).
 const chain = [
