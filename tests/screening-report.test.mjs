@@ -258,6 +258,26 @@ test('automatic preselection groups appear in the report and CSV without per-row
   assert.doesNotMatch(csv, /Obca Osoba/);
 });
 
+test('preselection group RPC rejects duplicate entries and malformed analysis links', async () => {
+  const data = fixture();
+  const group = {
+    application_id: application, candidate_name: 'Kandydat testowy', group_key: 'passed',
+    source: 'auto', raw_score: 80, coverage: 0.8,
+    analysis_id: data.get_screening_ranking[0].analysis_id,
+  };
+  for (const rows of [
+    [group, { ...group, group_key: 'review', raw_score: 40 }],
+    [{ ...group, analysis_id: '-'.repeat(36) }],
+    [{ ...group, analysis_id: 'a'.repeat(36) }],
+  ]) {
+    data.get_preselection_groups = rows;
+    await assert.rejects(() => load(data), error => error?.code === 'changed',
+      'a duplicated candidate or malformed UUID must invalidate the report');
+  }
+  data.get_preselection_groups = [group];
+  assert.equal((await load(data)).groups.length, 1, 'one valid group still appears');
+});
+
 test('report still loads before the bulk migration (groups RPC missing)', async () => {
   const report = await load(fixture(), { error: { get_preselection_groups: 'PGRST202' } });
   assert.deepEqual(report.groups, []);
