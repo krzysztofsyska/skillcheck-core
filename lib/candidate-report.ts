@@ -41,9 +41,25 @@ export async function loadRequirementFlags(
     if (result.error.code === '42501') throw new CandidateReportError('Brak dostępu do oznaczeń wymagań.');
     throw new CandidateReportError('Nie udało się wczytać oznaczeń wymagań.');
   }
-  const rows = (result.data ?? []) as RequirementFlagRow[];
-  if (!Array.isArray(rows)) throw new CandidateReportError('Nie udało się wczytać oznaczeń wymagań.');
-  return rows;
+  // RPC zwraca listę. Pusta lista jest poprawna (starszy profil), ale NULL,
+  // uszkodzony wiersz lub dwa oznaczenia tego samego wymagania nie mogą
+  // po cichu zmienić liczby wymagań koniecznych w raporcie FREE.
+  if (!Array.isArray(result.data)) {
+    throw new CandidateReportError('Oznaczenia wymagań są niespójne. Odśwież raport.');
+  }
+  const seen = new Set<string>();
+  for (const row of result.data) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)
+      || typeof row.criterion_id !== 'string' || !row.criterion_id.trim()
+      || typeof row.criterion_text !== 'string' || typeof row.flag !== 'string'
+      || seen.has(row.criterion_id)) {
+      throw new CandidateReportError('Oznaczenia wymagań są niespójne. Odśwież raport.');
+    }
+    seen.add(row.criterion_id);
+  }
+  // Nieznana *tekstowa* etykieta zachowuje kompatybilność z historycznymi
+  // profilami: resolveRequirementMarks oznaczy ją jako 'unmarked'.
+  return result.data as RequirementFlagRow[];
 }
 
 export type CandidateReport = {
