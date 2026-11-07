@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { companyAccess } from '../../../../../../lib/company-access';
-import { bulkIntakeBlocked, validateBatchFiles, verifyBulkRegistration, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
+import { bulkIntakeBlocked, groupMoveConfirmed, validateBatchFiles, verifyBulkRegistration, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
 import { pumpWithSession } from '../../../../../../lib/cv-bulk-server';
 import { loadCurrentRanking, withGroupCurrency } from '../../../../../../lib/preselection-currency';
 import { screeningAiUserEnabled } from '../../../../../../lib/screening-dispatch';
@@ -79,6 +79,7 @@ export async function movePreselectionGroup(companyId: string, recruitmentId: st
   const result = await client.rpc('move_preselection_group', { target_application: applicationId, new_group: group,
     expected_updated_at: expectedUpdatedAt, move_note: note || null });
   if (result.error) return { error: result.error.code === 'PT409' ? 'Grupa zmieniła się w międzyczasie. Odśwież stronę.' : 'Nie udało się przenieść kandydata.' };
+  if (!groupMoveConfirmed(result.data)) return { error: 'Nie udało się potwierdzić zapisu grupy. Odśwież stronę i sprawdź wynik.' };
   revalidatePath(`/dashboard/${companyId}/recruitments/${recruitmentId}`);
   return { saved: true };
 }
