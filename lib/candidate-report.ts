@@ -122,9 +122,20 @@ export async function loadCandidateReport(
       .order('review_version', { ascending: false }).limit(1)
     : { data: [], error: null };
   if (reviewRows.error) throw new CandidateReportError('Nie udało się wczytać historii sprawdzenia.');
-  const latestReview = (reviewRows.data ?? [])[0] as { analysis_id?: string; review_version?: number; disposition?: string } | undefined;
-  if (analysis && latestReview?.analysis_id && latestReview.analysis_id !== analysis.id) {
-    throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
+  // Lista z filtrem i limit(1) musi być tablicą z najwyżej jednym wierszem.
+  // W przeciwnym razie uszkodzona odpowiedź Data API mogłaby potwierdzić
+  // dowody przeglądem bez powiązania z bieżącą analizą (albo złej rewizji).
+  if (!Array.isArray(reviewRows.data) || reviewRows.data.length > 1) {
+    throw new CandidateReportError('Historia sprawdzenia jest niespójna. Odśwież raport.');
+  }
+  const latestReview = reviewRows.data[0] as
+    { analysis_id?: string; review_version?: number; disposition?: string } | undefined;
+  if (reviewRows.data.length && (!analysis || !latestReview || typeof latestReview !== 'object'
+    || latestReview.analysis_id !== analysis.id
+    || typeof latestReview.review_version !== 'number' || !Number.isSafeInteger(latestReview.review_version)
+    || latestReview.review_version < 1
+    || typeof latestReview.disposition !== 'string' || !latestReview.disposition.trim())) {
+    throw new CandidateReportError('Historia sprawdzenia jest niespójna. Odśwież raport.');
   }
   const reanalysisRequested = latestReview?.disposition === 'needs_reanalysis';
   // Sprawdzenie jest dwustopniowe: najpierw wiersze macierzy, potem cała analiza.
