@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { companyAccess } from '../../../../lib/company-access';
 import { loadSc19PackageSizes, sc19AnalysisScope } from '../../../../lib/sc19-package-sizes';
 import { activateSc19Free } from './actions';
+import { loadCompanyCatalog } from '../../../../lib/sc19-company-catalog';
+import { formatGross } from '../../../../lib/pricing/cv-pool';
 
 const notices: Record<string,string> = {
   activated: 'Pakiet FREE został aktywowany.',
@@ -56,6 +58,8 @@ export default async function CompanyBilling({ params, searchParams }: {
   if (error) throw new Error('Nie można odczytać limitu analiz firmy.');
   const balance = data?.[0] ?? null;
   const isOwner = user.id === company.owner_id;
+  const catalogEnabled = process.env.SC19_CATALOG_ENABLED === 'true';
+  const catalog = catalogEnabled ? await loadCompanyCatalog(client) : null;
   return <main className="workspace"><section>
     <Link href={backHref}>← {backLabel}</Link>
     <p className="eyebrow">SKILLCHECK / PAKIETY</p>
@@ -84,6 +88,24 @@ export default async function CompanyBilling({ params, searchParams }: {
         <button type="submit" className="button">Aktywuj FREE</button>
       </form> : <p className="notice">FREE może aktywować właściciel firmy.</p>}
     </>}
+    {catalogEnabled && <section aria-label="Katalog pakietów">
+      <h2>Katalog pakietów</h2>
+      <p>Ceny katalogowe brutto za podstawową pulę CV. Ten podgląd nie zmienia Twojego pakietu ani pozostałych analiz.
+        Dostępność zamówienia, jego cenę i warunki potwierdzisz w kasie przed zakupem.</p>
+      {catalog ? <>
+        <table><caption>Pakiety z opublikowanego katalogu</caption>
+          <thead><tr><th scope="col">Pakiet</th><th scope="col">Pula CV</th><th scope="col">Cena brutto</th><th scope="col">Dostępność</th></tr></thead>
+          <tbody>{catalog.packages.map(pkg => <tr key={pkg.code}>
+            <th scope="row">{pkg.name}</th><td>{pkg.cvIncluded}</td><td>{formatGross(pkg.grossMinor)}</td><td>{pkg.availability}</td>
+          </tr>)}</tbody>
+        </table>
+        <h3>Dodatki</h3>
+        <p>Zakup dodatków nie jest jeszcze dostępny. Pozycje poniżej nie są doliczane do zamówienia.</p>
+        {catalog.addons.length > 0 ? <ul>{catalog.addons.map(addon => <li key={addon.code}>
+          {addon.name}: {formatGross(addon.grossMinor)} brutto / {addon.unit} — niedostępny do zakupu
+        </li>)}</ul> : <p>Brak dodatków dostępnych do prezentacji.</p>}
+      </> : <p role="status">Nie można teraz odczytać katalogu. Spróbuj ponownie później.</p>}
+    </section>}
     <section>
       <h2>PRESELEKCJA — {sc19AnalysisScope(sizes.PRESELEKCJA)}</h2>
       <p>Jednorazowy pakiet z rankingiem kandydatów i raportem. Zamówienie jest obsługiwane przez operatora — kredyty przyznajemy dopiero po potwierdzeniu wpłaty.</p>

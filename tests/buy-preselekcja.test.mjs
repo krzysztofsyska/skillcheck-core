@@ -13,6 +13,8 @@ import * as authUrl from '../lib/auth-url.ts';
 import * as legal from '../lib/legal.ts';
 import * as nextPath from '../lib/safe-next-path.ts';
 import * as marketingConsent from '../lib/marketing-consent.ts';
+import * as companyCatalog from '../lib/sc19-company-catalog.ts';
+import * as cvPool from '../lib/pricing/cv-pool.ts';
 // SC-CONSENT-001 also lives in app/auth/actions.ts, so loading that module here
 // needs its two consent dependencies mocked as well. The real signing module
 // stands in for the 'server-only' wrapper the action imports, exactly as
@@ -351,6 +353,8 @@ async function renderBillingFromRecruitment(recruitmentId, enabled=true) {
       loadSc19PackageSizes:async()=>({FREE:5,PRESELEKCJA:60}),
       sc19AnalysisScope:n=>String(n)+' analiz',
     },
+    '../../../../lib/sc19-company-catalog':companyCatalog,
+    '../../../../lib/pricing/cv-pool':cvPool,
     './actions':{activateSc19Free:async()=>{}},
   };
   mod.require=id=>id in mocks?mocks[id]:req(id);

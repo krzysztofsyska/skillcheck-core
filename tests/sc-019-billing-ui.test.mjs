@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire, Module } from 'node:module';
@@ -10,11 +11,16 @@ const companyId = '00000000-0000-4000-8000-000000000011';
 const ownerId = '00000000-0000-4000-8000-000000000001';
 const memberId = '00000000-0000-4000-8000-000000000002';
 
+const publishedPackages = () => ['FREE','PRESELEKCJA','WERYFIKACJA','ASSESSMENT_CENTER'].map((package_code,i) => ({
+  package_code,gross_minor:[0,32100,65400,150100][i],cv_included:[5,60,60,50][i],cv_step:5,
+  cv_max:[5,60,150,150][i],overage_gross_per_cv_minor:0,sellable:true,vat_basis_points:2300,
+}));
+
 function load(file, mocks = {}) {
-  const path = new URL('../' + file, import.meta.url).pathname;
+  const path = fileURLToPath(new URL('../' + file, import.meta.url));
   const mod = new Module(path);
   mod.filename = path;
-  mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+  mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
   const req = createRequire(path);
   mod.require = id => id in mocks ? mocks[id] : req(id);
   mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), {
@@ -75,6 +81,8 @@ function billingPage(access) {
     '../../../../lib/company-access': access,
     './actions': { activateSc19Free() {} },
     '../../../../lib/sc19-package-sizes': load('lib/sc19-package-sizes.ts'),
+    '../../../../lib/sc19-company-catalog': load('lib/sc19-company-catalog.ts'),
+    '../../../../lib/pricing/cv-pool': load('lib/pricing/cv-pool.ts'),
   }).default;
 }
 
@@ -313,4 +321,79 @@ test('every automatic-check refusal code the operator can see has Polish copy', 
   const translated = new Set([...block[1].matchAll(/^\s*([A-Z_]+):/gm)].map(m => m[1]));
   const missing = [...codes].filter(c => !translated.has(c)).sort();
   assert.deepEqual(missing, [], `refusal codes without Polish copy: ${missing.join(', ')}`);
+});
+
+async function catalogPage({packages=publishedPackages(),addons=[],catalogError=null,throws=false,userId=ownerId,
+  catalogFlag='true',packagesFlag='true'}={}) {
+  const old=process.env.SC19_CATALOG_ENABLED;
+  if(catalogFlag===undefined)delete process.env.SC19_CATALOG_ENABLED;else process.env.SC19_CATALOG_ENABLED=catalogFlag;
+  const fx=billingAccess({userId,balance:[{plan:'FREE',available:4}]});
+  const original=fx.client.rpc;
+  fx.client.rpc=async(name,args)=>{
+    if(!name.startsWith('pricing_published_'))return original(name,args);
+    fx.calls.push({name,args});
+    if(throws)throw new Error('private database details');
+    return {data:name==='pricing_published_packages'?packages:addons,error:catalogError};
+  };
+  try {
+    return await withFlag(packagesFlag,async()=>({calls:fx.calls,html:renderToStaticMarkup(await billingPage(fx.access)({
+      params:Promise.resolve({companyId}),searchParams:Promise.resolve({recruitmentId:'bbbbbbbb-1111-4222-8333-444444444444'}),
+    }))}));
+  } finally {if(old===undefined)delete process.env.SC19_CATALOG_ENABLED;else process.env.SC19_CATALOG_ENABLED=old;}
+}
+
+test('company catalog is read-only for owner and member, using published prices without enabling unready packages',async()=>{
+  for(const userId of [ownerId,memberId]) {
+    const {html,calls}=await catalogPage({userId});
+    const section=html.split('aria-label="Katalog pakietów"')[1].split('</section>')[0];
+    assert.match(section,/321,00 zł/);assert.match(section,/654,00 zł/);assert.match(section,/1 501,00 zł/);
+    assert.doesNotMatch(section,/300,00 zł|615,00 zł|1 499,00 zł/);
+    assert.match(section,/WERYFIKACJA<\/th>.*?Niedostępny do zakupu/);
+    assert.match(section,/ASSESSMENT CENTER<\/th>.*?Niedostępny do zakupu/);
+    assert.doesNotMatch(section,/<a |<button|<form/);
+    assert.match(section,/Dostępność zamówienia, jego cenę i warunki potwierdzisz w kasie/);
+    assert.deepEqual(calls.filter(c=>c.name.startsWith('pricing_')).map(c=>c.name).sort(),['pricing_published_addons','pricing_published_packages']);
+    assert.match(html,/4<\/strong> analiz CV/);
+    assert.match(html,/recruitments\/bbbbbbbb-1111-4222-8333-444444444444/);
+    assert.equal(html.includes('/billing/checkout?recruitmentId='),userId===ownerId);
+  }
+});
+
+test('catalog requires both exact flags and performs no optional reads otherwise',async()=>{
+  for(const options of [{catalogFlag:'false'},{catalogFlag:'TRUE'},{catalogFlag:''},{packagesFlag:'false'}]) {
+    const {html,calls}=await catalogPage(options);
+    assert.doesNotMatch(html,/aria-label="Katalog pakietów"/);
+    assert.equal(calls.some(c=>c.name.startsWith('pricing_')),false);
+  }
+});
+
+test('missing or invalid published catalog shows only a safe notice, with no invented prices',async()=>{
+  const duplicate=publishedPackages();duplicate[3]=duplicate[2];
+  const broken=publishedPackages();broken[1].gross_minor='32100';
+  const sellable=publishedPackages();sellable[1].sellable='true';
+  const negative=publishedPackages();negative[1].gross_minor=-1;
+  for(const options of [{packages:[]},{packages:null},{packages:{}},{packages:duplicate},{packages:broken},
+    {packages:sellable},{packages:negative},{addons:null},{catalogError:{message:'private database details'}},{throws:true}]) {
+    const {html}=await catalogPage(options);
+    assert.match(html,/Nie można teraz odczytać katalogu/);
+    assert.doesNotMatch(html,/321,00 zł|private database details/);
+    assert.match(html,/4<\/strong> analiz CV/);
+  }
+});
+
+test('only reviewed addon names are visible and no addon becomes purchasable from catalog data',async()=>{
+  const {html}=await catalogPage({addons:[
+    {code:'report',name:'untrusted name',unit:'untrusted unit',gross_minor:1234},
+    {code:'ocr_page',name:'other',unit:'other',gross_minor:567},
+    {code:'interview',name:'voicebot',unit:'call',gross_minor:999},
+    {code:'unknown_service',name:'promised new service',unit:'unit',gross_minor:999},
+  ]});
+  assert.match(html,/Raport PDF\/CSV: 12,34 zł brutto \/ raport/);
+  assert.match(html,/Strona OCR: 5,67 zł brutto \/ strona/);
+  assert.match(html,/Zakup dodatków nie jest jeszcze dostępny/);
+  assert.doesNotMatch(html,/voicebot|untrusted|promised new service/);
+  const bad=await catalogPage({addons:[{code:'report',gross_minor:0}]});
+  assert.match(bad.html,/Nie można teraz odczytać katalogu/);
+  const duplicate=await catalogPage({addons:[{code:'report',gross_minor:100},{code:'report',gross_minor:200}]});
+  assert.match(duplicate.html,/Nie można teraz odczytać katalogu/);
 });
