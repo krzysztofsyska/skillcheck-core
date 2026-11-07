@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import { parseRequirementFlagRows } from './requirement-flags.ts';
 import {
-  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, parseGroupRow, parseRanking, parseShortlist,
+  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, isUuid, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
@@ -86,9 +86,13 @@ export async function loadScreeningReport(
       groups = (groupResult.data as unknown[]).map(row => {
         const group = parseGroupRow(row);
         const source = (row ?? {}) as { analysis_id?: unknown };
-        requireReport(source.analysis_id === undefined || source.analysis_id === null || (typeof source.analysis_id === 'string' && /^[0-9a-f-]{36}$/i.test(source.analysis_id)));
+        requireReport(source.analysis_id === undefined || source.analysis_id === null || isUuid(source.analysis_id));
         return { ...group, stale: !groupAnalysisCurrent(source.analysis_id, rankingById.get(group.application_id)) };
       }).filter(g => ids.has(g.application_id));
+      // The SQL contract returns at most one preselection group per application.
+      // A malformed/duplicated RPC response must not double-count a candidate
+      // or display contradictory groups in the report and CSV.
+      requireReport(new Set(groups.map(g => g.application_id.toLowerCase())).size === groups.length);
     }
     return { company, recruitment, position, applications, rankings, shortlist, groups };
   };
