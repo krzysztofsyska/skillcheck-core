@@ -144,12 +144,21 @@ export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (
   // The SQL worker normally returns each attempt and notification lease once. A malformed
   // cross-batch response must not dispatch an attempt or finalize a notification twice.
   // Continue delivering unrelated claims, but report the invariant violation to the caller.
-  const seenAttempts = new Set<string>(), seenNotifications = new Set<string>();
+  const seenBatches = new Set<string>(), seenAttempts = new Set<string>(), seenNotifications = new Set<string>();
   const results = await Promise.allSettled(data.map(one => {
     if (!isWorkerPumpEnvelope(one)) {
       malformed = true;
       return Promise.reject(new Error('cv_bulk_worker_pump_invalid_response'));
     }
+    // Each scheduler claim is a single batch lease. Two rows for the same
+    // batch must not dispatch different attempts or finalize separate leases,
+    // even when the attempt/notification IDs themselves are unique.
+    const claimId = one.batch_id.toLowerCase();
+    if (seenBatches.has(claimId)) {
+      malformed = true;
+      return Promise.reject(new Error('cv_bulk_worker_pump_invalid_response'));
+    }
+    seenBatches.add(claimId);
     const result = parsePump(one);
     result.dispatch = result.dispatch.filter(id => {
       if (seenAttempts.has(id)) { malformed = true; return false; }
