@@ -97,10 +97,12 @@ export async function loadCandidateReport(
     : Promise.resolve({ data: [], error: null });
   const resultRows = await readCriterionRows();
   if (resultRows.error) throw new CandidateReportError('Nie udało się wczytać macierzy dowodów.');
-  if (resultRows.data !== null && !Array.isArray(resultRows.data)) {
+  // A successful PostgREST array query has an array payload, even when empty.
+  // A null payload must not masquerade as zero evidence in a completed CV report.
+  if (!Array.isArray(resultRows.data)) {
     throw new CandidateReportError('Macierz dowodów ma nieprawidłowy format.');
   }
-  const rows = (resultRows.data ?? []) as (CandidateCriterionRow & { analysis_id?: string; criterion_text_snapshot?: string })[];
+  const rows = resultRows.data as (CandidateCriterionRow & { analysis_id?: string; criterion_text_snapshot?: string })[];
   if (analysis) {
     // Każdy dowód musi należeć do odczytanej analizy. Brak analysis_id, pusty
     // criterion_id lub duplikat nie może nadpisać wcześniejszego werdyktu
