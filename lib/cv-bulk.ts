@@ -82,6 +82,21 @@ export const groupLabel: Record<BulkGroup, string> = {
   passed: 'Przeszli sito', review: 'Do decyzji rekrutera', rejected: 'Nie spełniają kryteriów',
 };
 
+/** PostgreSQL move_preselection_group returns timestamptz only after it records the change.
+ * A transport-level success with null/malformed data is not proof of a saved move. */
+export function groupMoveConfirmed(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return false;
+  const [, y, m, d, h, min, s, zone] = match;
+  const year = Number(y), month = Number(m), day = Number(d);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (!days || day < 1 || day > days || Number(h) > 23 || Number(min) > 59 || Number(s) > 59) return false;
+  if (zone !== 'Z' && (Number(zone.slice(1, 3)) > 23 || Number(zone.slice(4)) > 59)) return false;
+  return Number.isFinite(Date.parse(value));
+}
+
 export type BulkFileErrorReason = Exclude<BulkErrorReason, 'over_limit' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible'>;
 
 /** OCR could not finish within the time left for this file. */

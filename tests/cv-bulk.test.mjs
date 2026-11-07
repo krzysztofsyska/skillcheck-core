@@ -765,3 +765,23 @@ test('bulk upload failures never log untrusted CV parser or OCR exception text',
   assert.doesNotMatch(failure, /error\.(?:name|message|stack)|String\s*\(\s*error\s*\)|JSON\.stringify\s*\(\s*error\s*\)/);
   assert.match(failure, /error: 'extract_failed'/, 'retries remain possible on infrastructure errors');
 });
+
+
+test('manual preselection group changes require a valid RPC timestamp before success', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { groupMoveConfirmed } = await import('../lib/cv-bulk.ts');
+  assert.equal(groupMoveConfirmed('2026-11-07T01:38:44.123456+00:00'), true, 'PostgreSQL timestamptz');
+  assert.equal(groupMoveConfirmed('2026-11-07T01:38:44Z'), true, 'UTC timestamptz');
+  assert.equal(groupMoveConfirmed('2024-02-29T23:59:59+01:00'), true, 'leap day');
+  for (const value of [null, false, true, 1, {}, [], 'true', '', '2026-11-07',
+    '2026-11-07T01:38:44', 'not-a-timestamp', '2026-99-07T01:38:44Z',
+    '2026-02-30T01:38:44Z', '2026-04-31T01:38:44+00:00',
+    '2025-02-29T12:00:00Z', '2026-12-00T12:00:00Z',
+    '2026-11-07T24:00:00Z', '2026-11-07T12:60:00Z',
+    '2026-11-07T01:00:00+24:00']) {
+    assert.equal(groupMoveConfirmed(value), false, 'invalid/missing acknowledgements cannot pass');
+  }
+  const action = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
+  assert.match(action, /if \(!groupMoveConfirmed\(result\.data\)\) return \{ error:/,
+    'the server action must check the actual RPC return before claiming success');
+});
