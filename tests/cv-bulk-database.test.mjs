@@ -14,7 +14,7 @@ import { users } from './helpers/screening-ranking-fixture.mjs';
 
 test('single analysis grouping: v1/v2 completion, replay, manual choice, scope, erasure and rollback', async t => {
   const {db,h,seed,x} = await activeBoot(t,{fullChain:true});
-  const group = async app => {await h.asAdmin();return (await db.query('select * from private.application_preselection_groups where application_id=$1',[app])).rows[0];};
+  const group = async app => {await h.asAdmin();return (await db.query('select g.*, g.updated_at::text as updated_at from private.application_preselection_groups g where application_id=$1',[app])).rows[0];};
   const events = async app => {await h.asAdmin();return (await db.query('select count(*)::int n from private.application_preselection_group_events where application_id=$1',[app])).rows[0].n;};
   const f=await seed({shortlist:false});
   const started=await h.start(f),claimed=await h.claim(started);
