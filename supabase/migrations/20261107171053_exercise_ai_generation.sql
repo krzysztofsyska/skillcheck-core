@@ -1,8 +1,10 @@
 -- Durable call reservations, bounded by the existing recruitment ceiling.
 -- No new identity/FK lifecycle: metadata is erased with recruitment settings.
 begin;
-do $$ begin if private.erasure_schema_signature() is distinct from '75eca00dc4b8bbf7959e18a144beda51a70b0377ab4cc306e59b2cef56402688' then
- raise exception 'c6_generation_requires_r14' using errcode='55000';end if;end $$;
+do $$ begin if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
+ raise exception 'c6_generation_requires_r15' using errcode='55000';end if;
+ if not exists(select 1 from private.erasure_inventory_baseline_r15 where singleton and schema_signature='1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44') then
+  raise exception 'c6_generation_requires_reviewed_r15' using errcode='55000';end if;end $$;
 alter table exercise_ai.recruitment_settings add column generation_requests jsonb not null default '{}'::jsonb
  check(jsonb_typeof(generation_requests)='object' and octet_length(generation_requests::text)<=1000000);
 
@@ -97,6 +99,6 @@ do $acl$ declare o record;g record;begin
   execute format('grant execute on function %s to authenticated',o.oid::regprocedure);
  end loop;
 end $acl$;
-do $$ begin if private.erasure_schema_signature() is distinct from '75eca00dc4b8bbf7959e18a144beda51a70b0377ab4cc306e59b2cef56402688' then
+do $$ begin if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
  raise exception 'c6_generation_inventory_changed' using errcode='55000';end if;end $$;
 commit;

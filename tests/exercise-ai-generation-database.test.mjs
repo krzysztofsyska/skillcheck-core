@@ -6,8 +6,15 @@ import {guardBoot,denied} from './helpers/exercise-ai-grant-guard-fixture.mjs';
 const migration='20261107171053_exercise_ai_generation.sql';
 test('C6 durable generation: tenant/actor/snapshot binding, single claim, quota, timeout and atomic pending completion',async t=>{
  const e=await guardBoot(t),{db,h}=e;await e.install();
- for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql',migration])
+ for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration]) {
+  if(name==='20261107164252_sc019_catalog_orders.sql') {
+   await assert.rejects(db.exec(await readFile(new URL('../supabase/migrations/'+migration,import.meta.url),'utf8')),
+    error=>error.code==='55000'&&error.message==='c6_generation_requires_r15');
+   await db.exec('rollback');
+   assert.equal((await db.query("select count(*)::int n from information_schema.columns where table_schema='exercise_ai' and table_name='recruitment_settings' and column_name='generation_requests'")).rows[0].n,0);
+  }
   await db.exec(await readFile(new URL('../supabase/migrations/'+name,import.meta.url),'utf8'));
+ }
  const f=await e.seed(),key=randomUUID(),fingerprint='a'.repeat(64);
  const companyStamp=(await db.query('select updated_at::text from public.company_profiles where company_id=$1',[f.companyId])).rows[0]?.updated_at??null;
  const args=[f.companyId,f.recruitment.id,key,f.position.updated_at,companyStamp,fingerprint];
@@ -25,7 +32,7 @@ test('C6 durable generation: tenant/actor/snapshot binding, single claim, quota,
  assert.equal((await finish(key,null,null,'exercise_ai_timeout')).definition_id,done.definition_id,'completion cannot become failure');
  assert.equal((await reserve()).exercise_id,done.exercise_id);
  await h.asAdmin();assert.equal((await db.query('select approved_at from exercise_ai.proposals where definition_entry_id=$1',[done.definition_id])).rows[0].approved_at,null);
- assert.equal((await db.query('select private.erasure_schema_signature() value')).rows[0].value,'75eca00dc4b8bbf7959e18a144beda51a70b0377ab4cc306e59b2cef56402688');
+ assert.equal((await db.query('select private.erasure_schema_signature() value')).rows[0].value,'1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44');
  await h.asUser(f.owner);
  const crash=randomUUID();await reserve([args[0],args[1],crash,...args.slice(3)]);
  await h.asAdmin();await db.query("update exercise_ai.recruitment_settings set generation_requests=jsonb_set(generation_requests,array[$1,'expires_at'],to_jsonb('2000-01-01T00:00:00Z'::text)) where recruitment_id=$2",[crash,f.recruitment.id]);
@@ -43,7 +50,7 @@ test('C6 durable generation: tenant/actor/snapshot binding, single claim, quota,
 test('C6 native two sessions cannot claim one generation twice or overspend last slot',async t=>{
  assert.equal(process.env.SC_WER_PGLITE_PATH,undefined,'Native connections required');
  const e=await guardBoot(t),{db,h}=e,rival=await e.connect();await e.install();
- for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql',migration])
+ for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration])
   await db.exec(await readFile(new URL('../supabase/migrations/'+name,import.meta.url),'utf8'));
  const f=await e.seed(),key=randomUUID(),stamp=(await db.query('select updated_at::text from public.company_profiles where company_id=$1',[f.companyId])).rows[0]?.updated_at??null;
  await rival.exec("set role authenticated;set lock_timeout='100ms'");await rival.query("select set_config('request.jwt.claim.sub',$1,false)",[f.owner]);
