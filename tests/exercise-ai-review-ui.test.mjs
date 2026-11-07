@@ -7,6 +7,7 @@ import ts from 'typescript';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as reviewHelpers from '../lib/exercise-ai-review.ts';
+import * as definitionHelpers from '../lib/exercise-definition.ts';
 
 const ids={company:'aaaaaaaa-1111-4222-8333-444444444444',recruitment:'bbbbbbbb-1111-4222-8333-444444444444',exercise:'cccccccc-1111-4222-8333-444444444444',definition:'dddddddd-1111-4222-8333-444444444444'};
 const stamp='2026-11-06T10:00:00+00:00';
@@ -43,8 +44,8 @@ async function render(options={}) {
  '../../../../../../../lib/exercise-context':{exerciseContext:async()=>a.value,exerciseUuid:/^[a-f0-9-]{36}$/i},
  '../../../../../../../lib/behavior-assessment':{parseHistoryBefore:()=>null,behaviorSchemaMissing:()=>false},
  '../../../../../../../lib/exercise-ai-review':reviewHelpers,
- '../../exercise-form':{ExerciseForm:()=>createElement('div',{'data-manual':'yes'},'Manual editor')},
- '../../exercise-ai-approval':{ExerciseAiApproval:props=>{forms.push(props);return createElement('div',{'data-approval':'yes'},'Approval');}},
+ '../../exercise-form':{ExerciseForm:props=>createElement('div',{[props.aiContext?'data-ai-editor':'data-manual']:'yes'},'Editor')},
+ '../../exercise-ai-approval':{ExerciseAiRejection:()=>createElement('div',{'data-rejection':'yes'},'Reject'),ExerciseAiApproval:props=>{forms.push(props);return createElement('div',{'data-approval':'yes'},'Approval');}},
  });
  const html=await withFlag(options.flag??'true',async()=>renderToStaticMarkup(await mod.default({params:Promise.resolve({companyId:ids.company,recruitmentId:ids.recruitment,exerciseId:ids.exercise}),searchParams:Promise.resolve({})})));
  return {html,forms,calls:a.calls};
@@ -82,6 +83,7 @@ async function action(options={},form=new FormData(),ctx=context) {
  'next/cache':{revalidatePath:(...args)=>revalidated.push(args)},
  '../../../../../lib/exercise-context':{exerciseContext:async()=>a.value},
  '../../../../../lib/exercise-ai-review':reviewHelpers,
+ '../../../../../lib/exercise-definition':definitionHelpers,
  });
  const result=await withFlag(options.flag??'true',()=>mod.approveExerciseAiProposal(ids.company,ctx,{},form));
  return {result,calls:a.calls,revalidated};

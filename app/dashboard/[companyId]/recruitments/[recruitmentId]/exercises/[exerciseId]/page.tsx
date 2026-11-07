@@ -3,8 +3,8 @@ import { notFound } from 'next/navigation';
 import { exerciseContext, exerciseUuid } from '../../../../../../../lib/exercise-context';
 import { parseHistoryBefore, behaviorSchemaMissing } from '../../../../../../../lib/behavior-assessment';
 import { ExerciseForm } from '../../exercise-form';
-import { ExerciseAiApproval } from '../../exercise-ai-approval';
-import { exerciseAiReviewMatches } from '../../../../../../../lib/exercise-ai-review';
+import { ExerciseAiApproval, ExerciseAiRejection } from '../../exercise-ai-approval';
+import { exerciseAiReviewMatches, exerciseAiLifecycle } from '../../../../../../../lib/exercise-ai-review';
 export default async function Exercise({params,searchParams}: {
   params:Promise<{companyId:string;recruitmentId:string;exerciseId:string}>; searchParams:Promise<{before?:string}>;
 }) {
@@ -32,6 +32,7 @@ export default async function Exercise({params,searchParams}: {
   const review=reviewResult && !reviewResult.error && exerciseAiReviewMatches(reviewResult.data,entry) ? reviewResult.data : null;
   const reviewUnavailable=aiReviewEnabled && !noProposal && !review;
   const provenance=review?.proposal.provenance;
+  const lifecycle=exerciseAiLifecycle(provenance??null);
   const origin=provenance && typeof provenance==='object' && !Array.isArray(provenance) ? provenance : null;
   const changed = entry.position_id !== position.id || entry.position_updated_at !== position.updated_at;
   return <main className="workspace"><section><Link href={base}>← Zadania</Link><h1>{entry.definition.title}</h1>
@@ -58,11 +59,19 @@ export default async function Exercise({params,searchParams}: {
         {typeof origin.provider==='string' && <p>Dostawca: {origin.provider}</p>}
         {typeof origin.model==='string' && <p>Model: {origin.model}</p>}
       </details>}
-      {review.proposal.approvalMode==='manual' ? <p role="status">Ta wersja została zatwierdzona przez rekrutera.</p>
+      {lifecycle.edited && <p>Treść została skorygowana przez rekrutera. Zachowano pierwotne źródło AI i wcześniejsze wersje w historii.</p>}
+      {lifecycle.state==='rejected' ? <p role="status">Propozycja odrzucona. Powód: {lifecycle.reason}</p>
+        : lifecycle.state==='superseded' ? <p role="status">Propozycja zastąpiona nową wersją.</p>
+        : review.proposal.approvalMode==='manual' ? <p role="status">Ta wersja została zatwierdzona przez rekrutera.</p>
         : review.proposal.approvalMode==='auto' ? <p role="status">Ta wersja została zwolniona automatycznie, bez potwierdzenia przeczytania przez rekrutera.</p>
         : editable ? <ExerciseAiApproval key={entry.id} companyId={companyId} context={{recruitmentId,exerciseId,definitionId:entry.id,positionUpdatedAt:entry.position_updated_at}}/>
         : <p role="status">Zatwierdzanie jest zamknięte dla tej rekrutacji lub stanowiska.</p>}
-      <p>Edycja i odrzucanie propozycji nie są jeszcze dostępne w tym widoku.</p>
+      {editable && lifecycle.state==='pending' && !review.proposal.approvedAt && <ExerciseAiRejection key={'reject-'+entry.id} companyId={companyId} context={{recruitmentId,exerciseId,definitionId:entry.id,positionUpdatedAt:entry.position_updated_at}}/>}
+      {editable && lifecycle.state!=='superseded' && <details><summary>Popraw treść jako nową wersję</summary>
+        <ExerciseForm key={entry.id} companyId={companyId} initial={entry.definition}
+          aiContext={{recruitmentId,exerciseId,definitionId:entry.id,positionUpdatedAt:entry.position_updated_at}}
+          context={{recruitmentId,exerciseId,expectedVersion:entry.version,positionId:position.id,positionUpdatedAt:position.updated_at}}/>
+      </details>}
     </section>}
     {editable && !before && !review && !reviewUnavailable && <ExerciseForm companyId={companyId} initial={entry.definition} context={{recruitmentId,exerciseId,expectedVersion:entry.version,positionId:position.id,positionUpdatedAt:position.updated_at}}/>}
     <h2>Historia definicji</h2>
