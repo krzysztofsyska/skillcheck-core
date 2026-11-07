@@ -21,7 +21,7 @@
     "test:screening-report": "node --test tests/screening-report.test.mjs",
     "test:candidate-report": "node --experimental-strip-types --test tests/candidate-report.test.mjs tests/position-requirement-flags-database.test.mjs",
     "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
-    "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-ai.test.mjs tests/exercise-ai-database.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs tests/assessment-center-evaluation.test.mjs tests/assessment-center-report.test.mjs tests/assessment-center-pair.test.mjs",
+    "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-definition.test.mjs tests/exercise-ai.test.mjs tests/exercise-ai-review-ui.test.mjs tests/exercise-ai-database.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs tests/assessment-center-evaluation.test.mjs tests/assessment-center-report.test.mjs tests/assessment-center-pair.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
     "test:pricing-cv-pool": "node --test tests/pricing-cv-pool.test.mjs tests/pricing-cv-pool-module.test.mjs",
