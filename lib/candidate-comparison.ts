@@ -70,6 +70,11 @@ export function comparisonRequirements(requirements: ScreeningReport['requiremen
 export function comparisonStatus(application: ReportApplication, criterion: ReportCriterion | undefined): RequirementStatus {
   const fromReason = reasonStatuses[application.ranking.eligibility_reason];
   if (fromReason) return fromReason;
+  // Only a completed, human-reviewed analysis can publish a matrix verdict.
+  // Even malformed input with a stale criterion must not turn a failed or
+  // cancelled analysis into a confirmed qualification.
+  if (application.ranking.eligibility_reason !== 'eligible'
+    && application.ranking.eligibility_reason !== 'insufficient_evidence') return 'unavailable';
   if (!criterion) return 'unavailable';
   if (criterion.matrixVerdict === null) return 'legacy';
   if (criterion.matrixVerdict === 'rejected') return 'rejected';
@@ -110,7 +115,11 @@ export function buildCandidateComparison(
         status,
         // Ta sama reguła publikowania, co w raporcie pojedynczego CV — jedna
         // funkcja, żeby widoki nie rozjechały się przy żadnym statusie.
-        quote: statusPublishesEvidence(status) ? criterion?.evidence[0]?.quote ?? null : null,
+        // The single-CV report skips empty citations. Keep the same first
+        // usable quote here, rather than showing a blank first entry.
+        quote: statusPublishesEvidence(status)
+          ? criterion?.evidence.find(item => typeof item.quote === 'string' && item.quote.trim())?.quote ?? null
+          : null,
         corrected: !!criterion?.reviewedChange,
       };
     }),
