@@ -116,12 +116,11 @@ export async function loadCandidateReport(
   // Rekruter mógł odesłać całą analizę do powtórzenia. Taki wynik zostaje w bazie
   // jako `completed` ze `stale_at` pustym, więc bez tego odczytu raport pokazywałby
   // werdykty z analizy, którą człowiek już odrzucił.
-  const reviewRows = analysis
-    ? await client.from('screening_result_reviews')
-      .select('analysis_id,review_version,disposition')
-      .eq('company_id', companyId).eq('analysis_id', analysis.id)
-      .order('review_version', { ascending: false }).limit(1)
-    : { data: [], error: null };
+  const readLatestReview = () => client.from('screening_result_reviews')
+    .select('analysis_id,review_version,disposition')
+    .eq('company_id', companyId).eq('analysis_id', analysis!.id)
+    .order('review_version', { ascending: false }).limit(1);
+  const reviewRows = analysis ? await readLatestReview() : { data: [], error: null };
   if (reviewRows.error) throw new CandidateReportError('Nie udało się wczytać historii sprawdzenia.');
   // Lista z filtrem i limit(1) musi być tablicą z najwyżej jednym wierszem.
   // W przeciwnym razie uszkodzona odpowiedź Data API mogłaby potwierdzić
@@ -156,6 +155,14 @@ export async function loadCandidateReport(
   const rechecked = await readLatestAnalysis();
   if (rechecked.error || JSON.stringify(rechecked.data) !== JSON.stringify(analysis)) {
     throw new CandidateReportError('Wynik lub przegląd zmienił się podczas odczytu. Odśwież raport.');
+  }
+  // A review can change independently of the analysis row between Data API reads.
+  // Never publish a mixed snapshot where a revoked/changed review still approves evidence.
+  if (analysis) {
+    const recheckedReview = await readLatestReview();
+    if (recheckedReview.error || JSON.stringify(recheckedReview.data) !== JSON.stringify(reviewRows.data)) {
+      throw new CandidateReportError('Wynik lub przegląd zmienił się podczas odczytu. Odśwież raport.');
+    }
   }
   const requirements = positionRequirements(context.position);
   const marks = resolveRequirementMarks(requirements, flags);
