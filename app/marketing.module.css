@@ -547,3 +547,12 @@
 @media(max-width:600px) { .packageCards { grid-template-columns:1fr; } }
 
 @media (min-width:981px) { .desktopNav { gap:2px; } .page .desktopNav a { font-size:.85rem; padding-left:7px; padding-right:7px; } }
+
+.futureIntro { margin: 32px 0 20px; max-width: 78ch; }
+.futureGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.page .futureCard { min-width: 0; padding: clamp(20px, 3vw, 32px); background: #fff; border: 1px solid #cbd5e1; border-radius: 20px; }
+.page .futureCard h4 { margin: 24px 0 10px; font-size: 1.05rem; }
+.page .futureCard li { margin-bottom: 10px; }
+.page .futureCard details { margin-bottom: 20px; }
+.page .futureCard a:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 4px; }
+@media (max-width: 760px) { .futureGrid { grid-template-columns: 1fr; } }

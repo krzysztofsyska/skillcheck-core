@@ -2,7 +2,7 @@ import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { sc19AnalysisScope, sc19PolicyPendingCell, sc19PolicyPendingScope, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
 import { freeAnalyses, freePrice, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
-import { nextStages, nextStagesNote } from "./content";
+import { futureOffers } from "./future-offers";
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 
 export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean }) {
@@ -45,11 +45,39 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
   <details className={styles.packageDetails}><summary>Porównaj FREE i PRESELEKCJĘ</summary>
     <div className={styles.tableScroll} role="region" aria-label="Porównanie pakietów — przewijaj poziomo na telefonie" tabIndex={0}><table className={styles.packageTable}><caption>Zakres pakietów dostępnych dzisiaj</caption><thead><tr><th scope="col">Co otrzymujesz?</th>{plans.map(p=><th scope="col" key={p.name} className={p.color}>{p.name}</th>)}</tr></thead><tbody>{rows.map(row=><tr key={row[0]}><th scope="row">{row[0]}</th>{row.slice(1).map((v,i)=><td key={i}>{v}</td>)}</tr>)}</tbody></table></div>
   </details>
-  <div className={styles.grid}>{nextStages.map(stage=><article key={stage.name} className={styles.card}>
-    <p className={styles.planLabel}>Kolejny etap</p><h3>{stage.name}</h3><p className={styles.planTitle}>{stage.title}</p><p>{stage.body}</p>
-    <div className={styles.planPrice}><strong>{stage.price}</strong><p>{stage.scope}</p></div>
+  <div id="planowane-pakiety" className={styles.futureIntro}>
+    <h3>CV to początek. Zaplanuj kolejny krok.</h3>
+    <p>WERYFIKACJA i ASSESSMENT CENTER są w przygotowaniu. Poniżej przedstawiamy planowany zakres, nie dostępne dziś funkcje pakietów. Nie można ich jeszcze kupić; nie podajemy terminu uruchomienia. Ostateczne warunki będą dostępne przed zakupem.</p>
+    <p>Zacznij od dostępnej PRESELEKCJI. Gdy potrzebujesz głębszej oceny, zobacz, co przygotowujemy dla Twojego zespołu.</p>
+  </div>
+  <div className={styles.futureGrid}>{futureOffers.map(stage=><article key={stage.name} className={styles.futureCard}>
     <p className={`${styles.status} ${styles.statusPlanned}`}>Cena zatwierdzona · pakiet w przygotowaniu</p>
+    <h3>{stage.name}</h3><p className={styles.planTitle}>{stage.outcome}</p>
+    <div className={styles.planPrice}><strong>{stage.price}</strong><p>{stage.scope}</p></div>
+    <h4>Co planujemy w tej cenie?</h4>
+    <ul>{stage.features.map(feature=><li key={feature}>{feature}</li>)}</ul>
+    <h4>Kto wykonuje pracę?</h4>
+    <p><strong>SkillCheck: </strong>{stage.system}</p>
+    <p><strong>Twój zespół: </strong>{stage.client}</p>
+    <p><strong>Czas uczestnika: </strong>{stage.effort}</p>
+    {stage.exercises.length > 0 && <><h4>Ćwiczenia w pakiecie</h4><ol>{stage.exercises.map(exercise=><li key={exercise}>{exercise}</li>)}</ol></>}
+    <details className={styles.packageDetails}>
+      <summary>Raport i warunki planowanego pakietu</summary>
+      <p>{stage.result}</p>
+      <p>Jedno stanowisko, 3 miesiące od aktywacji. Jedno podejście do testu na osobę. Ponowienie z powodu potwierdzonego problemu technicznego nie zużywa kolejnego miejsca; poprawa wyniku nie jest wliczona.</p>
+      <p>Cena obejmuje narzędzia i materiały. Nie obejmuje zewnętrznego asesora, pozyskania kandydatów ani organizacji sesji przez SkillCheck.</p>
+    </details>
+    <Link href="/rozmowa" className={styles.secondary}>{stage.name === "WERYFIKACJA" ? "Zapytaj o plan Weryfikacji" : "Zapytaj o plan Assessment Center"}</Link>
+    <p className={styles.note}>Zapytanie nie jest zakupem ani rezerwacją. Termin uruchomienia nie został ustalony.</p>
   </article>)}</div>
-  <p className={styles.note}>{nextStagesNote} <Link href="/rozmowa">Napisz, jeśli chcesz o nich porozmawiać.</Link></p>
+  <div className={styles.futureIntro}>
+    <h3>Co musi powstać przed uruchomieniem?</h3>
+    <ol>
+      <li><strong>Test i dostęp kandydata:</strong> przygotowanie i zatwierdzenie wspólnego zestawu, limity uczestników oraz obsługa podejść.</li>
+      <li><strong>Ocena oparta na dowodach:</strong> arkusze rekrutera, trzy ćwiczenia AC i niezależne obserwacje dwóch oceniających.</li>
+      <li><strong>Kompletne raporty:</strong> połączenie wyników, porównanie kandydatów oraz sprawdzenie całej ścieżki przed udostępnieniem sprzedaży.</li>
+    </ol>
+    <p>To plan rozwoju. Poszczególne elementy mogą być przygotowane wcześniej, ale cały pakiet udostępnimy dopiero po sprawdzeniu procesu od początku do końca.</p>
+  </div>
 </>;
 }
