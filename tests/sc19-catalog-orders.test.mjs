@@ -90,6 +90,18 @@ test('catalog orders: real SQL authorization, snapshots, settlement, service con
   assert.equal((await db.query(`select count(*)::int n from pg_proc p join pg_namespace n on n.oid=p.pronamespace
    where n.nspname='sc19_commerce' and has_function_privilege('authenticated',p.oid,'execute')`)).rows[0].n,0);
  });
+ await t.test('simultaneous native settlement retries grant one package',async()=>{
+  // Embedded development runs cannot prove concurrency; native CI always runs it.
+  if(e.embedded)return;
+  const quote=(await opts(b)).find(q=>q.code==='PRESELEKCJA');
+  const id=await make(b,quote),before=await balance(b.companyId);
+  const clients=await Promise.all([e.connect(),e.connect()]);
+  for(const c of clients){await c.query('set role authenticated');await c.query("select set_config('request.jwt.claim.sub',$1,false)",[users.outsider]);}
+  await Promise.all(clients.map(c=>call('public.sc19_settle_catalog_order',[id,'synthetic-concurrent',quote.grossMinor,'PLN'],c)));
+  assert.equal(await balance(b.companyId),before+quote.cvCredits);
+  await h.asUser(b.owner);assert.ok((await call('public.sc19_catalog_entitlements',[b.companyId])).some(r=>r.code==='package:PRESELEKCJA'));
+  await h.asUser(a.owner);await assert.rejects(call('public.sc19_catalog_entitlements',[b.companyId]),no('42501'));
+ });
  await t.test('R15 erases candidate but preserves company accounting and other tenant',async()=>{
   await h.asAdmin();
   const before=(await db.query('select * from sc19_commerce.orders order by id')).rows;

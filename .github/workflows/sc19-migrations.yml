@@ -156,6 +156,7 @@ jobs:
       - run: node scripts/sc-wer-c1-compose.mjs --check
       - run: node scripts/sc-ac-compose.mjs --check
       - run: node scripts/sc-c6-compose.mjs --check
+      - run: node scripts/sc19-commerce-inventory-compose.mjs --check
       - name: Real migration, concurrency, ACL, purge and native restore
         run: |
           set +e

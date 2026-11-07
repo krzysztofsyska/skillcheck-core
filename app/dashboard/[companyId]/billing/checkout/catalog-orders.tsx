@@ -1,20 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '../../../../../lib/supabase/database.types';
-import { catalogOrders, catalogQuotes, catalogRpc, catalogOrderName } from '../../../../../lib/sc19-catalog-orders';
+import { catalogEntitlements, catalogOrders, catalogQuotes, catalogRpc, catalogOrderName } from '../../../../../lib/sc19-catalog-orders';
 import { formatGross } from '../../../../../lib/pricing/cv-pool';
 import { cancelCatalogOrder, placeCatalogOrder } from './catalog-actions';
 
 export default async function CatalogOrders({client,companyId,isOwner,recruitmentId,status}: {
  client: SupabaseClient<Database>; companyId:string; isOwner:boolean; recruitmentId?:string; status?:string;
 }) {
- const [options,history]=await Promise.all([
+ const [options,history,balance]=await Promise.all([
   catalogRpc(client,'sc19_catalog_order_options',{target_company:companyId}),
   catalogRpc(client,'sc19_catalog_orders',{target_company:companyId}),
+  catalogRpc(client,'sc19_catalog_entitlements',{target_company:companyId}),
  ]);
- if(options.error||history.error)return <p role="status">Nie można teraz odczytać zamówień katalogowych. Spróbuj ponownie później.</p>;
- let quotes,orders;
- try {quotes=catalogQuotes(options.data);orders=catalogOrders(history.data);}catch{return <p role="status">Nie można teraz odczytać zamówień katalogowych.</p>;}
+ if(options.error||history.error||balance.error)return <p role="status">Nie można teraz odczytać zamówień katalogowych. Spróbuj ponownie później.</p>;
+ let quotes,orders,entitlements;
+ try {quotes=catalogQuotes(options.data);orders=catalogOrders(history.data);entitlements=catalogEntitlements(balance.data);}catch{return <p role="status">Nie można teraz odczytać zamówień katalogowych.</p>;}
  const pending=orders.some(o=>o.status==='pending');
  const notices:Record<string,string>={created:'Zamówienie zapisane. Obsługa przygotuje rozliczenie; jednostki pojawią się po potwierdzeniu wpłaty.',
   pending:'Istnieje już zamówienie oczekujące na płatność albo użyto wcześniej tego numeru żądania. Sprawdź listę poniżej i płatność Przelewy24.',
@@ -22,6 +23,7 @@ export default async function CatalogOrders({client,companyId,isOwner,recruitmen
   cancelled:'Zamówienie anulowane. Nie przyznano jednostek.',failed:'Nie udało się zapisać zmiany. Odśwież stronę i spróbuj ponownie.'};
  return <section aria-label="Zamówienia pakietów i dodatków">
   <h2>Pakiety i dodatki z katalogu</h2>
+  {entitlements.length>0?<ul aria-label="Zakupione pakiety i pozostałe jednostki">{entitlements.map(e=><li key={e.code}>{e.code.startsWith('package:')?`Zakupiony pakiet ${catalogOrderName(e.code.slice(8))}`:`${catalogOrderName(e.code)}: dostępne ${e.available}, wykorzystane ${e.used}`}</li>)}</ul>:null}
   {status&&notices[status]&&<p role="status">{notices[status]}</p>}
   <p>Zakup rozliczany przez obsługę na podstawie potwierdzonej wpłaty. Nowy pakiet kupujesz w całości — zachowujesz pozostałe jednostki, bez częściowego zwrotu za poprzedni pakiet.</p>
   {quotes.length===0?<p>Obecnie brak dodatkowych produktów gotowych do zamówienia. Niewdrożonych usług nie sprzedajemy.</p>:quotes.map(quote=><form key={`${quote.kind}:${quote.code}:${quote.packageCode}`} action={placeCatalogOrder}>

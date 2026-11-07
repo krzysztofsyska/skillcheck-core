@@ -40,9 +40,10 @@ test('catalog UI shows accepted terms and pending state; only operator action ca
   './catalog-actions':{placeCatalogOrder(){},cancelCatalogOrder(){}},
  }).default;
  const order={id:memberId,company_id:companyId,code:'skill_test',package_code:'PRESELEKCJA',quantity:1,gross_minor:5000,cv_credits:0,service_units:1,terms_text:quote.termsText,status:'pending',accepted_at:new Date().toISOString()};
- const client={rpc:async name=>({data:name==='sc19_catalog_order_options'?[quote]:[order],error:null})};
+ const client={rpc:async name=>({data:name==='sc19_catalog_order_options'?[quote]:name==='sc19_catalog_orders'?[order]:[{code:'skill_test',available:2,used:1}],error:null})};
  const html=renderToStaticMarkup(await component({client,companyId,isOwner:true,recruitmentId:companyId}));
  assert.match(html,/Syntetyczne pełne warunki/);assert.match(html,/disabled=""/);assert.match(html,/Anuluj nieopłacone zamówienie/);
+ assert.match(html,/dostępne 2, wykorzystane 1/);
  const member=renderToStaticMarkup(await component({client,companyId,isOwner:false}));assert.doesNotMatch(member,/type="submit"/);
  let authorized=false,calls=0;
  const action=load('app/operator/billing/catalog-order-actions.ts',{

@@ -187,6 +187,16 @@ begin
   select * from sc19_commerce.orders where target_company is null or company_id=target_company order by accepted_at desc limit 100) o),'[]');
 end;$$;
 
+create function public.sc19_catalog_entitlements(target_company uuid) returns jsonb
+language plpgsql security definer set search_path='' as $$
+begin
+ perform sc19_commerce.authorize(target_company);
+ return coalesce((select jsonb_agg(jsonb_build_object('code',code,'available',available,'used',used) order by code)
+ from sc19_commerce.entitlements where company_id=target_company),'[]');
+end;$$;
+revoke all on function public.sc19_catalog_entitlements(uuid) from public,anon,authenticated;
+grant execute on function public.sc19_catalog_entitlements(uuid) to authenticated;
+
 create function public.sc19_cancel_catalog_order(target_company uuid,target_order uuid) returns void
 language plpgsql security definer set search_path='' as $$
 begin

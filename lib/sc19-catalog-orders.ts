@@ -28,7 +28,12 @@ export function catalogOrders(value: unknown): CatalogOrder[] {
   throw Error('Orders unavailable');
  return value as CatalogOrder[];
 }
-type RpcName = 'sc19_catalog_order_options' | 'sc19_catalog_orders' | 'sc19_create_catalog_order'
+export function catalogEntitlements(value: unknown): {code:string;available:number;used:number}[] {
+ if(!Array.isArray(value)||value.length>100||value.some(r=>!obj(r)||!str(r.code)||!num(r.available)||!num(r.used)))throw Error('Entitlements unavailable');
+ return value;
+}
+
+type RpcName = 'sc19_catalog_order_options' | 'sc19_catalog_orders' | 'sc19_catalog_entitlements' | 'sc19_create_catalog_order'
  | 'sc19_cancel_catalog_order' | 'sc19_settle_catalog_order';
 /** Narrow RPC facade until generated DB types are refreshed; all read results
  * are decoded above, inputs are revalidated by the database under its lock. */
