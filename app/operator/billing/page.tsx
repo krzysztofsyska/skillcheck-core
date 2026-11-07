@@ -6,6 +6,7 @@ import { salesOperator } from '../sales/access';
 import { sc19OperatorNotices } from '../../../lib/sc19-operator';
 import { approveTrial, grantPaid, releaseTrialNip, savePolicy, setAutoFree } from './actions';
 import styles from '../sales/sales.module.css';
+import OperatorCatalogOrders from './catalog-orders';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Pakiety firm | SkillCheck', robots: { index: false, follow: false } };
@@ -40,10 +41,10 @@ const autoReasons: Record<string, string> = {
  * PRESELEKCJA grants. Payment is confirmed outside the browser; this panel
  * only records the operator's decision through audited RPCs. */
 export default async function OperatorBillingPage({ searchParams }: {
-  searchParams: Promise<{ status?: string; q?: string }>;
+  searchParams: Promise<{ status?: string; q?: string; catalogStatus?: string }>;
 }) {
   const client = await salesOperator();
-  const { status, q } = await searchParams;
+  const { status, q, catalogStatus } = await searchParams;
   const search = (q ?? '').trim().slice(0, 200);
   const [policy, companies, consents, autoChecks, autoSettings, takenNips, releases] = await Promise.all([
     client.rpc('sc19_operator_package_policy'),
@@ -77,6 +78,7 @@ export default async function OperatorBillingPage({ searchParams }: {
   const notice = status && Object.hasOwn(sc19OperatorNotices, status) ? sc19OperatorNotices[status as keyof typeof sc19OperatorNotices] : null;
 
   return <main className={styles.page}>
+    {process.env.SC19_CATALOG_ORDERS_ENABLED==='true'&&<OperatorCatalogOrders client={client} status={catalogStatus}/>}
     <nav><Link href="/operator/sales">Proces sprzedaży</Link><Link href="/operator/leads">Zgłoszenia</Link><Link href="/">Strona główna</Link></nav>
     <header><p className={styles.eyebrow}>SKILLCHECK · PAKIETY</p><h1>Pakiety firm</h1>
       <p>Weryfikacja firm przed FREE i przydział PRESELEKCJI po potwierdzonej wpłacie. Każda operacja jest sprawdzana w bazie i zapisywana w dzienniku analiz.</p></header>

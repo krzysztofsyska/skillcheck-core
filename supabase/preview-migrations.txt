@@ -48,3 +48,4 @@
 20261106230000_cv_bulk_global_capacity_lock.sql
 20261106231000_cv_bulk_uploading_scheduler.sql
 20261107164219_exercise_ai_revision_workflow.sql
+20261107164252_sc019_catalog_orders.sql

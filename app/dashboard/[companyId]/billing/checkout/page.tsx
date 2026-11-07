@@ -2,9 +2,10 @@ import Link from 'next/link';
 import { companyAccess } from '../../../../../lib/company-access';
 import { sc19PreviewPaymentConfig } from '../../../../../lib/sc19-payment-preview.ts';
 import Checkout from './checkout';
-export default async function CheckoutPage({params,searchParams}: {params: Promise<{companyId: string}>;searchParams:Promise<{p24?:string|string[];recruitmentId?:string|string[]}>}) {
+import CatalogOrders from './catalog-orders';
+export default async function CheckoutPage({params,searchParams}: {params: Promise<{companyId: string}>;searchParams:Promise<{p24?:string|string[];recruitmentId?:string|string[];catalogStatus?:string}>}) {
   const {companyId}=await params;
-  const {company,user}=await companyAccess(companyId);
+  const {company,user,client}=await companyAccess(companyId);
   // Same flag as billing/page.tsx and billing/actions.ts. With packages off the
   // link to this page is hidden, but the URL is still reachable, so without this
   // guard it would render a full priced order summary for a package that is not
@@ -30,5 +31,7 @@ export default async function CheckoutPage({params,searchParams}: {params: Promi
       {company.owner_id===user.id ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} sandbox={sandbox}/> :
         <p role="status">Zamówienie może złożyć właściciel firmy.</p>}
     </>}
+    {enabled && process.env.SC19_CATALOG_ORDERS_ENABLED==='true' && <CatalogOrders client={client} companyId={companyId}
+      isOwner={company.owner_id===user.id} recruitmentId={backToRecruitment?recruitmentId:undefined} status={query.catalogStatus}/>}
   </main>;
 }
