@@ -281,6 +281,27 @@ test('loadCandidateReport: zmieniona treść wymagania nie dziedziczy cudzego wy
   assert.equal(changed.summary.requiredSupported, 0);
 });
 
+test('loadCandidateReport: duplikat lub wiersz z obcej analizy nie zmienia potwierdzeń', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  const mutations = [
+    rows => rows.push({ ...rows[0], verdict: 'missing', evidence: [], human_status: 'accepted' }),
+    rows => { rows[0].analysis_id = id(9); },
+    rows => { delete rows[0].analysis_id; },
+    rows => { rows[0].criterion_id = ''; },
+    rows => { rows[0].criterion_id = null; },
+  ];
+  for (const mutate of mutations) {
+    const data = loaderData();
+    mutate(data.screening_criterion_results);
+    await assert.rejects(() => loadCandidateReport(loaderClient(data), route),
+      error => error instanceof CandidateReportError && /Macierz dowodów jest niespójna/.test(error.message));
+  }
+  // Prawidłowy raport nadal pokazuje zatwierdzone wymaganie i jego źródło.
+  const valid = await loadCandidateReport(loaderClient(loaderData()), route);
+  assert.equal(valid.requirements.find(r => r.id === 'competency:1').status, 'supported');
+  assert.equal(valid.summary.requiredSupported, 1);
+});
+
 test('loadCandidateReport: analiza odesłana do powtórzenia nie uchodzi za potwierdzenie', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   const report = await loadCandidateReport(
