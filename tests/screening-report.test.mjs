@@ -174,6 +174,38 @@ test('empty recruitment is a valid report only when RPCs exist; oversize is not 
   await assert.rejects(load(data), e => e.code === 'too_large');
 });
 
+test('concurrent evidence or reviewer corrections invalidate a mixed screening report', async () => {
+  const verify = async (table, mutate, setup = () => {}) => {
+    const data = fixture(); setup(data);
+    let reads = 0;
+    await assert.rejects(() => load(data, {
+      onQuery(q, source) {
+        if (q.table !== table || q.from !== 0) return;
+        // Do not count the v2 matrix probe as the criterion evidence read.
+        if (table === 'screening_criterion_results' && !q.fields.includes('criterion_text_snapshot')) return;
+        if (++reads === 2) mutate(source);
+      },
+    }), error => error?.code === 'changed', `concurrent ${table} mutation must not publish stale data`);
+    assert.equal(reads, 2, `re-read the complete ${table} data before exporting`);
+  };
+
+  await verify('screening_criterion_results', source => {
+    source.screening_criterion_results[0].evidence = [{ start: 0, end: 7, quote: 'Poprawka' }];
+  });
+  await verify('screening_result_reviews', source => {
+    source.screening_result_reviews[0].disposition = 'rejected';
+  });
+  await verify('screening_criterion_review_overrides', source => {
+    source.screening_criterion_review_overrides[0].explanation_override = 'Skorygowany opis';
+  }, source => {
+    source.screening_result_reviews[0].disposition = 'approved_with_changes';
+    source.screening_criterion_review_overrides.push({
+      id: uuid(11), company_id: company, review_id: review, criterion_result_id: result,
+      rating_override: null, evidence_override: null, explanation_override: 'Pierwotny opis',
+    });
+  });
+});
+
 test('changed metadata, ranking, new review, shortlist or revoked access blocks mixed exports', async () => {
   for (const change of [
     d => { d.get_screening_ranking[0].raw_score = 51; },
