@@ -30,8 +30,10 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
     const offset=Number(url.searchParams.get('offset')??0), limit=Number(url.searchParams.get('limit')??1000);
     rows=rows.slice(offset,offset+limit);
     const fields=url.searchParams.get('select');
-    if(fields) rows=rows.map(r=>Object.fromEntries(fields.split(',').map(k=>[k,r[k]])));
-    res.end(JSON.stringify(rows));
+    if(fields && fields !== '*') rows=rows.map(r=>Object.fromEntries(fields.split(',').map(k=>[k,r[k]])));
+    // PostgREST maybeSingle uses an object media type. Preserve that real SDK
+    // contract when exercising the individual candidate route below.
+    res.end(JSON.stringify(req.headers.accept?.includes('application/vnd.pgrst.object+json') ? rows[0] ?? null : rows));
   });
   await new Promise(r=>stub.listen(0,'127.0.0.1',r));
   t.after(()=>{stub.closeAllConnections();stub.close();});
@@ -57,6 +59,57 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
     assert.match(await csv.text(),/Tworzy raporty/);
     assert.ok(requests.every(r=>r.auth==='Bearer '+token));
     assert.ok(requests.filter(r=>r.table==='get_screening_ranking').every(r=>JSON.parse(r.body).target_size===5));
+  });
+  await t.test('five CVs: a human correction changes one candidate in both real report routes',async()=>{
+    const saved = structuredClone(data);
+    try {
+      data.companies[0].owner_id = userId;
+      data.company_members = [];
+      data.candidate_documents = [];
+      data.position_requirement_flags = [{ criterion_id:'task:1', criterion_text:'Raportowanie', flag:'required' }];
+      for (const table of ['applications','get_screening_ranking','screening_analysis_versions','screening_result_reviews','screening_criterion_results']) {
+        data[table] = Array.from({length:5},(_,i)=>{
+          const row = structuredClone(saved[table][0]);
+          const app=uuid(100+i), analysis=uuid(200+i), review=uuid(300+i);
+          if(table==='applications') Object.assign(row,{id:app,candidate_id:uuid(500+i),status:'new'});
+          if(table==='get_screening_ranking') Object.assign(row,{application_id:app,analysis_id:analysis,review_id:review,rank:i+1});
+          if(table==='screening_analysis_versions') Object.assign(row,{id:analysis,application_id:app,analysis_version:1});
+          if(table==='screening_result_reviews') Object.assign(row,{id:review,analysis_id:analysis});
+          if(table==='screening_criterion_results') Object.assign(row,{id:uuid(400+i),analysis_id:analysis,verdict:'supported',human_status:'accepted',evidence:[{start:0,end:9,quote:`DowodCV_${i}`} ]});
+          return row;
+        });
+      }
+      const one = async i => {
+        const response=await fetch(base+path.replace('/report',`/applications/${uuid(100+i)}/report`),{headers:{Cookie:cookie}});
+        assert.equal(response.status,200);
+        const html=await response.text();assert.match(html,/Raport kandydata/);return html;
+      };
+      let comparison=await (await read()).text();
+      assert.equal((comparison.match(/href="[^"]+\/applications\/[^/]+\/report"/g)??[]).length,10,'five comparison headings and five detail links');
+      for(let i=0;i<5;i++) {assert.ok(comparison.includes(`DowodCV_${i}`));assert.ok((await one(i)).includes(`DowodCV_${i}`));}
+      const corrected=data.screening_criterion_results[0];
+      Object.assign(corrected,{human_status:'edited',human_verdict:'supported',human_evidence:[{start:0,end:13,quote:'KorektaCV_zero'}]});
+      data.screening_analysis_versions[0].latest_review_version=3;
+      data.screening_result_reviews[0].review_version=3;
+      data.screening_result_reviews[0].disposition='approved_with_changes';
+      comparison=await (await read()).text();
+      assert.ok(comparison.includes('KorektaCV_zero'));assert.ok(!comparison.includes('DowodCV_0'));
+      const changed=await one(0);assert.ok(changed.includes('KorektaCV_zero'));assert.ok(!changed.includes('DowodCV_0'));
+      for(let i=1;i<5;i++) {
+        assert.ok(comparison.includes(`DowodCV_${i}`));
+        const unchanged=await one(i);assert.ok(unchanged.includes(`DowodCV_${i}`));assert.ok(!unchanged.includes('KorektaCV_zero'));
+      }
+      // A revoked human approval must disappear from both surfaces on reload.
+      data.screening_result_reviews[0].disposition='needs_reanalysis';
+      data.get_screening_ranking[0].eligibility_reason='needs_reanalysis';
+      data.get_screening_ranking[0].rankable=false;
+      data.get_screening_ranking[0].rank=null;
+      comparison=await (await read()).text();
+      assert.ok(!comparison.includes('KorektaCV_zero'));
+      assert.ok(!(await one(0)).includes('KorektaCV_zero'));
+    } finally {
+      for(const key of Object.keys(data)) delete data[key];Object.assign(data,saved);
+    }
   });
   await t.test('missing SC008 disables download without a misleading empty report',async()=>{
     unavailable=true;
