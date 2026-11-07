@@ -5,7 +5,11 @@ import { activeBoot,users } from './helpers/competency-active-fixture.mjs';
 import { lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
 
 test('catalog orders: real SQL authorization, snapshots, settlement, service consumption',async t=>{
- const e=await activeBoot(t,{fullChain:true});const {db,h,call}=e;
+ const e=await activeBoot(t,{fullChain:true});const {db,h}=e;
+ const call=async(name,args=[],client=db)=>{
+  assert.match(name,/^public\.sc19_[a-z_]+$/);
+  return (await client.query(`select ${name}(${args.map((_,i)=>'$'+(i+1)).join(',')}) result`,args)).rows[0].result;
+ };
  const a=await e.seed(),b=await e.seed({owner:users.otherOwner});
  await h.asAdmin();
  await db.query('insert into public.platform_operators(user_id) values($1)',[users.outsider]);

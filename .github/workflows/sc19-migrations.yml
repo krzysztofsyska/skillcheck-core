@@ -157,6 +157,11 @@ jobs:
       - run: node scripts/sc-ac-compose.mjs --check
       - run: node scripts/sc-c6-compose.mjs --check
       - run: node scripts/sc19-commerce-inventory-compose.mjs --check
+      - name: Catalog orders, settlement and erasure
+        run: node --experimental-strip-types --test tests/sc19-catalog-orders.test.mjs
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
       - name: Real migration, concurrency, ACL, purge and native restore
         run: |
           set +e
@@ -168,7 +173,6 @@ jobs:
             tests/exercise-ai-inventory.test.mjs tests/exercise-ai-concurrency.test.mjs \
             tests/exercise-ai-grant-guard.test.mjs tests/exercise-ai-grant-guard-concurrency.test.mjs \
             tests/exercise-ai-recruiter-api.test.mjs tests/exercise-ai-recruiter-api-concurrency.test.mjs \
-            tests/sc19-catalog-orders.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/cv-bulk-database.test.mjs tests/sc-step3-evidence-worker.test.mjs \
             tests/sc-019-operator-fulfillment.test.mjs tests/sc19-auto-trial-database.test.mjs \
