@@ -205,7 +205,17 @@ test('export uses safe errors and no-store; anonymous, cross-tenant and missing 
 
 test('CSV preserves quotes/newlines/Polish text and neutralizes formulas and control prefixes', () => {
   assert.equal(csvCell('Zażółć; "cytat"\nnowy'), '"Zażółć; ""cytat""\nnowy"');
-  for (const input of ['=1+1','+CMD','-CMD','@SUM(A1)','\t=1',' \r\n+CMD','\u0000=1','\uFEFF@CMD']) assert.ok(csvCell(input).startsWith('"\''));
+  for (const input of [
+    '=1+1', '+CMD', '-CMD', '@SUM(A1)', '\t=1', ' \r\n+CMD', '\u0000=1', '\uFEFF@CMD',
+    '\u200b=HYPERLINK("https://example.invalid")', // zero-width space
+    '\u200d+CMD', // zero-width joiner
+    '\u200e@CMD', // left-to-right mark
+    '\u202e-CMD', // right-to-left override
+    '\u2060=1+1', // word joiner
+    '\u00ad=1+1', // soft hyphen
+    '\u061c@CMD', // Arabic letter mark
+  ]) assert.ok(csvCell(input).startsWith('"\''), JSON.stringify(input));
+  assert.equal(csvCell('\u200bWynik'), '"\u200bWynik"', 'benign invisible prefix must remain unchanged');
   assert.equal(csvCell(null),'""'); assert.equal(csvCell(0),'"0"');
 });
 
