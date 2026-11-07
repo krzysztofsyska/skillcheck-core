@@ -3,8 +3,7 @@ import { notFound } from "next/navigation";
 import { companyAccess } from "../../../../../lib/company-access";
 import { StageForm, StageControls } from "./assessment-forms";
 import { PreselectionGroups, type GroupRow } from "./bulk/groups";
-import { groupAnalysisCurrent } from "../../../../../lib/screening-report";
-import { loadCurrentRanking } from "../../../../../lib/preselection-currency";
+import { loadCurrentRanking, withGroupCurrency } from "../../../../../lib/preselection-currency";
 export default async function Recruitment({params}: {params:Promise<{companyId:string;recruitmentId:string}>}) {
   const {companyId,recruitmentId}=await params;
   const {client,canEdit}=await companyAccess(companyId);
@@ -22,9 +21,14 @@ export default async function Recruitment({params}: {params:Promise<{companyId:s
   // If the ranking cannot be read, every group is shown as outdated (fail closed).
   // Every ranking page is read; any failed page marks every group outdated (fail closed).
   const rankingById = groups.error ? null : await loadCurrentRanking(client, recruitmentId);
-  const groupRows: GroupRow[] = (groups.error ? [] : (groups.data ?? []) as (Omit<GroupRow,'stale'> & {analysis_id?:unknown})[])
-    .map(g=>({...g, stale: !groupAnalysisCurrent(g.analysis_id, rankingById?.get(g.application_id))}));
-  return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link><h1>{recruitment.name}</h1><p><Link href={`/dashboard/${companyId}/positions/${recruitment.position_id}`}>Profil stanowiska</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/interview-guide`}>Przewodnik rozmowy</Link></p><p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/exercises`}>Zadania kompetencyjne i Assessment Center</Link></p><p>{canEdit && <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}><strong>Wgraj wiele CV</strong></Link>}{canEdit ? ' — ' : ''}<Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}>paczki CV i postęp przetwarzania</Link></p>
+  // Reuse the batch/report currency rule: PostgreSQL UUIDs are case-insensitive,
+  // while the ranking map uses normalized keys. A missing link still means stale.
+  const groupRows: GroupRow[] = withGroupCurrency(
+    groups.error ? [] : (groups.data ?? []) as (Omit<GroupRow,'stale'> & {analysis_id?:unknown})[],
+    rankingById,
+  ).map(({group_current, ...row})=>({...row, stale: !group_current}));
+  return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link><h1>{recruitment.name}</h1><p><Link href={`/dashboard/${companyId}/positions/${recruitment.position_id}`}>Profil stanowiska</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/interview-guide`}>Przewodnik rozmowy</Link></p><p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/exercises`}>Zadania kompetencyjne i Assessment Center</Link></p>
+    {process.env.SC19_PACKAGES_ENABLED === 'true' && <p className="lead"><Link href={`/dashboard/${companyId}/billing?recruitmentId=${encodeURIComponent(recruitmentId)}`}>Pakiet i pozostałe analizy CV</Link> · <Link href={`/dashboard/${companyId}/billing/checkout?recruitmentId=${encodeURIComponent(recruitmentId)}`}>Kup kolejną PRESELEKCJĘ</Link></p>}<p>{canEdit && <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}><strong>Wgraj wiele CV</strong></Link>}{canEdit ? ' — ' : ''}<Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}>paczki CV i postęp przetwarzania</Link></p>
     <h2 id="preselekcja">Wyniki preselekcji (grupy)</h2>
     <PreselectionGroups companyId={companyId} recruitmentId={recruitmentId} rows={groupRows} canEdit={canEdit}/>
     <h2 id="candidates">Kandydaci w rekrutacji</h2>

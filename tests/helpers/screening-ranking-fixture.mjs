@@ -9,7 +9,12 @@ export const users = Object.fromEntries(['owner', 'otherOwner', 'recruiter', 'vi
 // Forward-migration tests pass throughMigration: null to exercise the whole
 // current checked-in chain. Both PGlite and pg (exec = query) use real SQL.
 export const historicalRankingMigration = '20261012031039_retention_scheduler_inventory.sql';
-export async function setupRankingDatabase(db, { defaultTargetSize, throughMigration = historicalRankingMigration } = {}) {
+// `transformSql(sql, name)` lets a forward-migration test apply the real chain
+// with one reviewed substitution (e.g. an offer validity moved into the past, to
+// prove the chain still builds a fresh database after its offer expires). It
+// never touches a checked-in file, only the text handed to this disposable
+// database, and it is a no-op by default.
+export async function setupRankingDatabase(db, { defaultTargetSize, throughMigration = historicalRankingMigration, transformSql } = {}) {
   await db.exec(`
     do $$ begin
       if not exists(select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
@@ -37,6 +42,7 @@ export async function setupRankingDatabase(db, { defaultTargetSize, throughMigra
       assert.notEqual(replaced, sql, 'alternate policy fixture must replace initial seed');
       sql = replaced;
     }
+    if (transformSql) sql = transformSql(sql, name);
     await db.exec(sql);
   }
   for (const id of Object.values(users)) await db.query('insert into auth.users values($1)', [id]);

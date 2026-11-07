@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
+import { parseRequirementFlagRows } from './requirement-flags.ts';
 import {
-  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, parseGroupRow, parseRanking, parseShortlist,
+  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, isUuid, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
@@ -85,9 +86,13 @@ export async function loadScreeningReport(
       groups = (groupResult.data as unknown[]).map(row => {
         const group = parseGroupRow(row);
         const source = (row ?? {}) as { analysis_id?: unknown };
-        requireReport(source.analysis_id === undefined || source.analysis_id === null || (typeof source.analysis_id === 'string' && /^[0-9a-f-]{36}$/i.test(source.analysis_id)));
+        requireReport(source.analysis_id === undefined || source.analysis_id === null || isUuid(source.analysis_id));
         return { ...group, stale: !groupAnalysisCurrent(source.analysis_id, rankingById.get(group.application_id)) };
       }).filter(g => ids.has(g.application_id));
+      // The SQL contract returns at most one preselection group per application.
+      // A malformed/duplicated RPC response must not double-count a candidate
+      // or display contradictory groups in the report and CSV.
+      requireReport(new Set(groups.map(g => g.application_id.toLowerCase())).size === groups.length);
     }
     return { company, recruitment, position, applications, rankings, shortlist, groups };
   };
@@ -166,6 +171,17 @@ export async function loadScreeningReport(
   }
   const rechecked = await readSource();
   requireReport(JSON.stringify(source) === JSON.stringify(rechecked));
+  // SC-015 / #268. Oznaczenia wymagań są czytane poza readSource celowo: nie wchodzą
+  // do porównania spójności, bo ich zmiana niczego w analizach nie unieważnia.
+  // Brak funkcji (baza sprzed migracji) znaczy „nic jeszcze nie oznaczono".
+  const flagResult = await client.rpc('position_requirement_flags' as never, {
+    target_company: p.companyId, target_position: source.position.id,
+  } as never);
+  if (flagResult.error && !['PGRST202', '42883'].includes(flagResult.error.code ?? '')) checked(flagResult, true);
+  // Nie traktuj niepoprawnego RPC jako braku oznaczeń; to mogłoby po cichu
+  // przenieść wymaganie „konieczne” do „nieoznaczone” w porównaniu CV.
+  const requirementFlags = flagResult.error ? [] : parseRequirementFlagRows(flagResult.data);
+  requireReport(requirementFlags !== null);
   const report: ScreeningReport = {
     version: REPORT_VERSION, generatedAt: new Date().toISOString(), companyId: p.companyId, companyName: source.company.name,
     recruitmentId: p.recruitmentId, recruitmentName: source.recruitment.name, positionTitle: source.position.title, targetSize: p.targetSize,
@@ -178,6 +194,8 @@ export async function loadScreeningReport(
       .map(ranking => ({ ranking, shortlist: source.shortlist.find(s => s.application_id === ranking.application_id) ?? null,
         criteria: details.get(ranking.application_id) ?? [] })),
     groups: source.groups,
+    positionId: source.position.id,
+    requirementFlags,
   };
   if (Buffer.byteLength(JSON.stringify(report), 'utf8') > 10 * 1024 * 1024) throw new ScreeningReportError('too_large');
   return report;

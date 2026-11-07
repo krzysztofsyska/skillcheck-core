@@ -5,6 +5,7 @@ import {createServer} from 'node:https';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import * as route from '../../app/api/competency/attempt/route.ts';
+import {GET as candidatePage} from '../../app/zadanie-kompetencyjne/route.ts';
 
 const tls={key:readFileSync(process.env.SC014_TEST_TLS_KEY),cert:readFileSync(process.env.SC014_TEST_TLS_CERT)};
 const server=createServer(tls,async(req,res)=>{
@@ -22,11 +23,11 @@ const server=createServer(tls,async(req,res)=>{
    if(!/^[01]$/.test(raw))throw Error('Invalid Redis fixture response');
    res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({result:Number(raw)}));return;
   }
-  if(path!=='/api/competency/attempt'){res.writeHead(404);res.end();return;}
+  if(path!=='/api/competency/attempt'&&path!=='/zadanie-kompetencyjne'){res.writeHead(404);res.end();return;}
   const method=req.method||'GET';
   const request=new Request(process.env.COMPETENCY_BROKER_ORIGIN+path,{method,headers:req.headers,
    ...(method==='POST'?{body:req,duplex:'half'}:{})});
-  const handler=route[method];
+  const handler=path==='/zadanie-kompetencyjne'&&method==='GET'?candidatePage:route[method];
   const reply=handler?await handler(request):new Response(null,{status:405});
   for(const [name,value] of reply.headers)if(name!=='set-cookie')res.setHeader(name,value);
   const cookies=reply.headers.getSetCookie();if(cookies.length)res.setHeader('set-cookie',cookies);

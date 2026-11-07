@@ -2,13 +2,15 @@ import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { sectionLinks } from "./links";
 import { MobileNav } from "./mobile-nav";
+import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 
 const mobileLinks = [
   ...sectionLinks,
-  { href: "/login", label: "Zaloguj się" },
+  { href: "/dashboard", label: "Moje konto" },
   { href: "/kalkulator", label: "Sprawdź koszt rekrutacji" },
-  { href: "/preselekcja", label: "Zamów PRESELEKCJĘ" },
-  { href: "/preselekcja#free", label: "Wypróbuj FREE — 0 zł", variant: "primary" as const },
+  { href: BUY_PRESELEKCJA_PATH, label: BUY_PRESELEKCJA_LABEL, variant: "primary" as const },
+  { href: "/preselekcja", label: "Poznaj szczegóły oferty" },
+  { href: "/preselekcja#free", label: "Wypróbuj FREE — 0 zł" },
 ];
 
 export function SiteHeader() {
@@ -24,10 +26,11 @@ export function SiteHeader() {
                 {link.label}
               </Link>
             ))}
-            <Link href="/login" className={styles.loginLink}>Zaloguj się</Link>
+            <Link href="/dashboard" className={styles.loginLink}>Moje konto</Link>
             <Link href="/kalkulator" className={styles.navLink}>Sprawdź koszt rekrutacji</Link>
-            <Link href="/preselekcja" className={styles.navLink}>Zamów PRESELEKCJĘ</Link>
-            <Link href="/preselekcja#free" className={styles.primary}>Wypróbuj FREE — 0 zł</Link>
+            <Link href="/preselekcja" className={styles.navLink}>Poznaj szczegóły oferty</Link>
+            <Link href="/preselekcja#free" className={styles.navLink}>Wypróbuj FREE — 0 zł</Link>
+            <Link href={BUY_PRESELEKCJA_PATH} className={styles.primary}>{BUY_PRESELEKCJA_LABEL}</Link>
           </nav>
           <MobileNav links={mobileLinks} />
         </div>

@@ -67,8 +67,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ com
     extracted = buildExtraction(text, item.position, ocrUsed, suggestRedaction);
   } catch (error) {
     if (error instanceof BulkIntakeError) return fail(error.reason);
-    // Library/infrastructure error only (name and first line), never file content.
-    console.error('cv_bulk_extract_failed', error instanceof Error ? `${error.name}: ${String(error.message).split('\n')[0].slice(0, 160)}` : typeof error);
+    // Parser/OCR exception messages and names can contain candidate text or filenames.
+    // Report only a fixed code; the client sees a retryable error and the slot remains held.
+    console.error('cv_bulk_extract_failed');
     // Transient server problem: the slot stays held and the browser may retry.
     return Response.json({ error: 'extract_failed' }, { status: 503, headers });
   }

@@ -76,6 +76,7 @@ export interface PaymentProvider {
    * Throw on missing/invalid verification or uncertain provider response.
    * Do not accept a success redirect, browser JSON or screenshot as evidence.
    */
+  readSettlement?(order: PaymentOrder): Promise<VerifiedPayment | null>;
   verifyAndRetrieve(rawBody: Uint8Array, signature: string): Promise<VerifiedPayment | null>;
 }
 export type PaymentDependencies = Readonly<{
@@ -250,7 +251,21 @@ export function createSc19Payments(deps: PaymentDependencies) {
     if (!(raw instanceof Uint8Array) || raw.byteLength === 0 || raw.byteLength > 262144 ||
         typeof signature !== 'string' || signature.length === 0 || signature.length > 8192)
       return deny('SC19_PAYMENT_NOTIFICATION_INVALID');
-    const payment = clone(await deps.provider.verifyAndRetrieve(new Uint8Array(raw), signature));
+    return applySettlement(clone(await deps.provider.verifyAndRetrieve(new Uint8Array(raw), signature)));
+  }
+
+  // Called only after the HTTP handler has authorized a read of THIS order.
+  async function refreshSettlement(order: PaymentOrder) {
+    fulfillmentGate();
+    requireOrderScope(order);
+    if (!deps.provider.readSettlement || !order.sessionId) return;
+    const payment = await deps.provider.readSettlement(order);
+    if (payment && (payment.orderId !== order.id || payment.sessionId !== order.sessionId))
+      return deny('SC19_PAYMENT_ORDER_MISMATCH');
+    await applySettlement(payment);
+  }
+
+  async function applySettlement(payment: VerifiedPayment | null) {
     if (payment === null) return { state: 'ignored' as const };
     if (!payment || !sameScope(payment.scope, scope) || !stringId(payment.eventId) ||
         !stringId(payment.sessionId) || !stringId(payment.paymentId) ||
@@ -288,5 +303,5 @@ export function createSc19Payments(deps: PaymentDependencies) {
       return { state: previouslyGrantedTo === null ? 'applied' as const : 'already_applied' as const, orderId: order.id };
     });
   }
-  return Object.freeze({ checkout, notification, checkoutEnabled });
+  return Object.freeze({ checkout, notification, refreshSettlement, checkoutEnabled });
 }

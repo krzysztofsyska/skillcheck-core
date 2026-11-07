@@ -4,6 +4,8 @@ import {loadBehaviorContext,type BehaviorRoute} from '../../../../../../../../..
 import {behaviorEditingOpen,behaviorSchemaMissing,behaviorRatings,parseHistoryBefore} from '../../../../../../../../../lib/behavior-assessment';
 import {exerciseUuid} from '../../../../../../../../../lib/exercise-context';
 import {ExerciseObservationForm} from '../../../../exercise-observation-form';
+import {PairedAssessorSheets} from '../../../../paired-assessor-sheets';
+import {buildAssessmentCenterReport} from '../../../../../../../../../lib/assessment-center-report';
 export default async function Observations({params,searchParams}:{params:Promise<BehaviorRoute&{definitionId:string}>;searchParams:Promise<{before?:string}>}){
   const route=await params;const {before}=await searchParams;
   const {client,canEdit,user,application,recruitment,position,candidate}=await loadBehaviorContext(route);
@@ -19,6 +21,15 @@ export default async function Observations({params,searchParams}:{params:Promise
   if(history.error&&!behaviorSchemaMissing(history.error.code))throw new Error('Nie udało się wczytać obserwacji.');
   const base=`/dashboard/${route.companyId}/recruitments/${route.recruitmentId}/applications/${route.applicationId}/exercises`;
   const rows=history.data?.slice(0,20)??[];
+  let report = null;
+  let reportUnavailable = false;
+  if (!cursor && !history.error && definition.definition.kind === 'assessment_center') {
+    try {
+      report = buildAssessmentCenterReport({...route, definitionEntryId: definition.id}, definition, rows[0] ?? null);
+    } catch {
+      reportUnavailable = true;
+    }
+  }
   const changed=rubric.data.position_id!==position.id||rubric.data.position_updated_at!==position.updated_at;
   return <main className="workspace"><section><Link href={base}>← Wersje zadań</Link>
     <h1>{rubric.data.definition.title} — wersja zadania {rubric.data.version}</h1><p>{candidate.first_name} {candidate.last_name}</p>
@@ -32,6 +43,19 @@ export default async function Observations({params,searchParams}:{params:Promise
         {definition.definition.criteria.map((criterion,index)=><div key={index}><h3>{criterion.competency}</h3><p>Poniżej: {criterion.below}</p><p>Zgodnie: {criterion.meets}</p><p>Powyżej: {criterion.above}</p></div>)}
         <pre className="cv-text">{JSON.stringify(definition.position_snapshot,null,2)}</pre>
       </details>
+      {reportUnavailable && <p role="status">Nie udało się potwierdzić danych do raportu AC.</p>}
+      {report && <section aria-label="Raport Assessment Center">
+        <h2>Raport Assessment Center</h2>
+        {report.reviewVersion === null ? <p>Ćwiczenie oczekuje na pierwszą obserwację.</p> : <>
+          <p>Wersja oceny {report.reviewVersion} · udokumentowane kryteria: {report.evidencedCriteria} z {report.totalCriteria}</p>
+          <dl>{report.criteria.map(criterion => <div key={criterion.criterionIndex}>
+            <dt>{criterion.competency}</dt>
+            <dd>{behaviorRatings.find(([key]) => key === criterion.rating)?.[1]}</dd>
+            {criterion.observerNote && <dd className="cv-text">{criterion.observerNote}</dd>}
+          </div>)}</dl>
+        </>}
+      </section>}
+      {!cursor && <PairedAssessorSheets route={route} definition={definition.definition}/>}
       <h2>Historia obserwacji</h2>
       {rows.length===0&&<p>Brak zapisanych obserwacji na tej stronie.</p>}
       {rows.map(entry=><article key={entry.id}><h3>Wersja oceny {entry.version}</h3><p>{entry.created_at} · Autor: {entry.author_id===user.id?'Ty':entry.author_id}</p>

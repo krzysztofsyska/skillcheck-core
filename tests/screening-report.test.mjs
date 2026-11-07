@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createRequire, Module } from 'node:module';
 import ts from 'typescript';
 import React from 'react';
@@ -26,7 +27,10 @@ function clientFor(data, options = {}) {
           if (table === 'get_screening_ranking' && q.from === 0) rankingReads++;
           options.onQuery?.(q, data, rankingReads);
           if (options.error?.[table]) return { data: null, error: { code: options.error[table], message: 'SECRET_INTERNAL_DETAILS' } };
-          if (args) {
+          if (args && table === 'position_requirement_flags') {
+            // SC-015 / #268: oznaczenia wymagań są per stanowisko, nie per rekrutacja.
+            assert.equal(args.target_company, company); assert.ok('target_position' in args);
+          } else if (args) {
             assert.equal(args.target_recruitment, recruitment); assert.ok(!('company_id' in args));
             if (table === 'get_recruitment_shortlist') assert.equal(args.include_removed, false);
           }
@@ -57,6 +61,33 @@ test('report uses current reviewed evidence, whitelists fields, and leaves sourc
     assert.doesNotMatch(q.fields, /input_cv_text_snapshot|binding_snapshot|source_text|redacted_text|provider|result_summary|review_note|reviewer_id/);
     assert.ok(q.eqs.some(([k,v]) => k === (q.table === 'companies' ? 'id' : 'company_id') && v === company));
   }
+});
+
+test('comparison report rejects malformed and duplicate requirement-flag RPC rows', async () => {
+  const flag = { criterion_id: 'task:1', criterion_text: 'Raportowanie', flag: 'required' };
+  const malformed = [
+    [flag, { ...flag, flag: 'additional' }], // ambiguous required/optional
+    [null], [{ ...flag, criterion_id: null }],
+    [{ ...flag, criterion_id: '  ' }],
+    [{ ...flag, criterion_text: null }],
+    [{ ...flag, flag: null }],
+  ];
+  for (const rows of malformed) {
+    const data = fixture();
+    data.position_requirement_flags = rows;
+    await assert.rejects(() => load(data), error => error?.code === 'changed');
+  }
+
+  const oldProfile = await load(fixture());
+  assert.deepEqual(oldProfile.requirementFlags, [], 'missing flags remain a valid legacy profile');
+  const current = fixture();
+  current.position_requirement_flags = [flag];
+  assert.deepEqual((await load(current)).requirementFlags, [flag]);
+
+  const unknown = fixture();
+  unknown.position_requirement_flags = [{ ...flag, flag: 'legacy-unknown' }];
+  assert.equal((await load(unknown)).requirementFlags[0].flag, 'legacy-unknown',
+    'unknown text flag is handled as unmarked by the shared resolver');
 });
 
 test('only indicated review overrides apply; empty evidence/explanation survive and null rating preserves AI', async () => {
@@ -181,11 +212,11 @@ test('CSV preserves quotes/newlines/Polish text and neutralizes formulas and con
 test('React report renders status/evidence and escapes hostile content', async () => {
   const data = fixture(); data.screening_criterion_results[0].evidence[0].quote = '<img src=x onerror=alert(1)>';
   const report = await load(data);
-  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx',import.meta.url).pathname;
+  const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx',import.meta.url));
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name.endsWith('.module.css') ? { default: new Proxy({}, { get: (_, key) => String(key) }), __esModule: true }
-    : name.endsWith('/screening-report') ? require(name+'.ts') : require(name);
+    : /\/lib\/[a-z-]+$/.test(name) ? require(name+'.ts') : require(name);
   module._compile(ts.transpileModule(readFileSync(filename,'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const html = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView,{report,basePath:'/dashboard/test'}));
   assert.match(html,/Raport preselekcji/); assert.match(html,/Spełnia wymagania/); assert.match(html,/Nie jest decyzją o zatrudnieniu/);
@@ -228,6 +259,26 @@ test('automatic preselection groups appear in the report and CSV without per-row
   assert.doesNotMatch(csv, /Obca Osoba/);
 });
 
+test('preselection group RPC rejects duplicate entries and malformed analysis links', async () => {
+  const data = fixture();
+  const group = {
+    application_id: application, candidate_name: 'Kandydat testowy', group_key: 'passed',
+    source: 'auto', raw_score: 80, coverage: 0.8,
+    analysis_id: data.get_screening_ranking[0].analysis_id,
+  };
+  for (const rows of [
+    [group, { ...group, group_key: 'review', raw_score: 40 }],
+    [{ ...group, analysis_id: '-'.repeat(36) }],
+    [{ ...group, analysis_id: 'a'.repeat(36) }],
+  ]) {
+    data.get_preselection_groups = rows;
+    await assert.rejects(() => load(data), error => error?.code === 'changed',
+      'a duplicated candidate or malformed UUID must invalidate the report');
+  }
+  data.get_preselection_groups = [group];
+  assert.equal((await load(data)).groups.length, 1, 'one valid group still appears');
+});
+
 test('report still loads before the bulk migration (groups RPC missing)', async () => {
   const report = await load(fixture(), { error: { get_preselection_groups: 'PGRST202' } });
   assert.deepEqual(report.groups, []);
@@ -267,6 +318,31 @@ test('a group computed from an older analysis is stale after a re-analysis outsi
   await assert.rejects(load(data));
 });
 
+test('a saved group is historical when the ranking no longer has a human-reviewed result', async () => {
+  // An RPC may still return the previous analysis_id while a retry is pending or
+  // a human has not approved it. A matching UUID must not publish its old score.
+  for (const reason of [
+    'no_human_review', 'pending', 'processing', 'failed', 'cancelled',
+    'no_completed_result', 'result_incomplete', 'review_inconsistent',
+  ]) {
+    const data = fixture();
+    Object.assign(data.get_screening_ranking[0], {
+      rank: null, rankable: false, raw_score: null,
+      eligibility_reason: reason, suggested_shortlist: false,
+    });
+    data.get_preselection_groups = [{
+      application_id: application, candidate_name: 'Kandydat testowy', group_key: 'passed',
+      source: 'auto', raw_score: 95, coverage: 1,
+      analysis_id: data.get_screening_ranking[0].analysis_id,
+    }];
+    const report = await load(data);
+    assert.equal(report.groups.length, 1);
+    assert.equal(report.groups[0].stale, true, reason);
+    const csv = screeningReportCsv(report);
+    assert.match(csv, /Wynik nieaktualny — wymaga ponownej analizy/, reason);
+  }
+});
+
 test('a reviewed evidence-matrix candidate shows the group score, not "too few rated criteria / 0%"', async () => {
   const data = fixture();
   // v2 analysis after human review: neutral legacy rating, so SC-008 reports insufficient_evidence (Step 3 rule).
@@ -281,11 +357,11 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   assert.equal(rankingStatusLabel(report.applications[0], true), 'Sprawdzone przez człowieka — wynik w tabeli grup');
   // Without a group row (e.g. a single-CV evidence analysis) the label never points to the groups table.
   assert.equal(rankingStatusLabel(report.applications[0], false), 'Sprawdzone przez człowieka');
-  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx', import.meta.url).pathname;
+  const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/report/report-view.tsx', import.meta.url));
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name.endsWith('.module.css') ? { default: new Proxy({}, { get: (_, key) => String(key) }), __esModule: true }
-    : name.endsWith('/screening-report') ? require(name + '.ts') : require(name);
+    : /\/lib\/[a-z-]+$/.test(name) ? require(name + '.ts') : require(name);
   module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const html = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report, basePath: '/dashboard/test' }));
   assert.match(html, /Sprawdzone przez człowieka — wynik w tabeli grup/);
@@ -315,13 +391,23 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
   const { groupAnalysisCurrent } = await import('../lib/screening-report.ts');
   const a = '00000000-0000-4000-8000-0000000000a1', b = '00000000-0000-4000-8000-0000000000b2';
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'eligible' }), true);
+  assert.equal(groupAnalysisCurrent(a.toUpperCase(), { analysis_id: a, eligibility_reason: 'eligible' }), true, 'UUIDs are case-insensitive');
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a.toUpperCase(), eligibility_reason: 'eligible' }), true);
+  assert.equal(groupAnalysisCurrent('a'.repeat(36), { analysis_id: 'a'.repeat(36), eligibility_reason: 'eligible' }), false,
+    'matching malformed IDs may never establish currency');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: b, eligibility_reason: 'eligible' }), false, 're-analysed outside the batch');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'stale' }), false, 'CV or position changed');
   assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'needs_reanalysis' }), false);
+  assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: 'insufficient_evidence' }), true,
+    'human-reviewed evidence matrix remains valid without an automated score');
+  for (const reason of ['no_human_review', 'pending', 'processing', 'failed', 'cancelled', 'no_completed_result',
+    'result_incomplete', 'review_inconsistent', 'unknown']) {
+    assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: reason }), false, reason);
+  }
   assert.equal(groupAnalysisCurrent(a, undefined), false, 'no ranking row (e.g. ranking unreadable): fail closed');
   for (const bad of [null, undefined, '', 'not-a-uuid', 42]) assert.equal(groupAnalysisCurrent(bad, { analysis_id: a, eligibility_reason: 'eligible' }), false);
 
-  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/groups.tsx', import.meta.url).pathname;
+  const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/groups.tsx', import.meta.url));
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name === './actions' ? { movePreselectionGroup: async () => ({}) }
@@ -340,16 +426,88 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   const { loadCurrentRanking, withGroupCurrency } = await import('../lib/preselection-currency.ts');
   const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const rows = Array.from({ length: 1203 }, (_, n) => ({ application_id: id(n), analysis_id: id(10000 + n), eligibility_reason: 'eligible' }));
-  const client = (failAt = -1) => ({ calls: [], rpc(fn, args) {
+  const client = (failAt = -1) => ({ calls: [], orders: [], rpc(fn, args) {
     const self = this;
-    return { range(from, to) { self.calls.push([fn, args, from, to]);
-      return Promise.resolve(from === failAt ? { data: null, error: { code: 'X' } } : { data: rows.slice(from, to + 1), error: null }); } };
+    return { order(column, options) {
+      self.orders.push([column, options?.ascending]);
+      return { range(from, to) { self.calls.push([fn, args, from, to]);
+        return Promise.resolve(from === failAt ? { data: null, error: { code: 'X' } } : { data: rows.slice(from, to + 1), error: null }); } };
+    } };
   } });
   const ok = client();
   const map = await loadCurrentRanking(ok, id(9));
   assert.equal(map.size, 1203, 'all pages, not only the first');
-  assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499]]);
+  assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499], [1203, 1702]],
+    'an empty page, not a short page, ends pagination');
+  assert.deepEqual(ok.orders, Array(4).fill(null).map(() => ['application_id', true]),
+    'all ranking pages must use a stable application UUID order');
   assert.equal(await loadCurrentRanking(client(500), id(9)), null, 'a failed page fails closed');
+  // A PostgREST installation can enforce a smaller max_rows than the requested
+  // range. Each short page must be followed by the next offset until an empty
+  // page, or cached group scores can be shown as current despite missing rows.
+  const cappedClient = (failFrom = -1) => ({ calls: [], rpc() {
+    const self = this;
+    return { order(column, options) {
+      assert.equal(column, 'application_id');
+      assert.equal(options?.ascending, true);
+      return { range(from, to) {
+        self.calls.push([from, to]);
+        return Promise.resolve(from === failFrom
+          ? { data: null, error: { code: 'X' } }
+          : { data: rows.slice(from, Math.min(to + 1, from + 37)), error: null });
+      } };
+    } };
+  } });
+  const capped = cappedClient();
+  const complete = await loadCurrentRanking(capped, id(9));
+  assert.equal(complete?.size, 1203, 'short RPC pages must not truncate later candidates');
+  assert.deepEqual(capped.calls.at(-1), [1203, 1702], 'the last probe establishes EOF');
+  assert.equal(capped.calls.length, Math.ceil(1203 / 37) + 1);
+  assert.equal(withGroupCurrency([{ application_id: id(1202), group_key: 'passed',
+    group_analysis_id: id(11202) }], complete)[0].group_current, true,
+    'the final candidate must still be included in currency checks');
+  assert.equal(await loadCurrentRanking(cappedClient(37), id(9)), null,
+    'a failed short-page continuation must invalidate the whole ranking');
+  const rankingClient = data => ({ rpc: () => ({ order: (column, options) => {
+    assert.equal(column, 'application_id');
+    assert.equal(options?.ascending, true);
+    return { range: (from, to) => Promise.resolve({ data: data.slice(from, to + 1), error: null }) };
+  } }) });
+  const withLetters = { ...rows[0], application_id: 'aabbccdd-aabb-4ccd-8eaf-aabbccddeeff' };
+  const duplicate = { ...withLetters, application_id: withLetters.application_id.toUpperCase(), analysis_id: id(99999) };
+  const upperRow = { ...withLetters, application_id: withLetters.application_id.toUpperCase(),
+    analysis_id: 'aabbccdd-aabb-4cdd-8eaf-aabbccddeeff' };
+  const upperMap = await loadCurrentRanking(rankingClient([upperRow]), id(9));
+  assert.equal(upperMap.has(withLetters.application_id), true, 'ranking map must use canonical keys');
+  assert.deepEqual(withGroupCurrency([{ application_id: withLetters.application_id.toUpperCase(),
+    group_key: 'passed', group_analysis_id: upperRow.analysis_id.toUpperCase() }], upperMap)
+    .map(item => item.group_current), [true], 'mixed-case source IDs refer to the same group');
+  assert.deepEqual(withGroupCurrency([{ application_id: withLetters.application_id.toUpperCase(),
+    group_key: 'passed', analysis_id: upperRow.analysis_id.toUpperCase() }], upperMap)
+    .map(item => item.group_current), [true],
+    'recruitment RPC uses analysis_id, not group_analysis_id; mixed-case UUIDs remain current');
+  assert.equal(withGroupCurrency([{ application_id: withLetters.application_id,
+    group_key: 'passed', group_analysis_id: null, analysis_id: upperRow.analysis_id }], upperMap)[0].group_current, false,
+    'an explicitly absent batch analysis link cannot be replaced by another field');
+  assert.equal(withGroupCurrency([{ application_id: 'not-a-uuid',
+    group_key: 'passed', analysis_id: upperRow.analysis_id }], upperMap)[0].group_current, false,
+    'invalid recruitment group IDs cannot be confirmed');
+  const recruitmentPage = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', import.meta.url), 'utf8');
+  assert.match(recruitmentPage, /withGroupCurrency\s*\(/,
+    'the recruitment screen must use the same normalized currency check as bulk progress');
+  assert.equal(await loadCurrentRanking(rankingClient([withLetters, duplicate]), id(9)), null,
+    'duplicate candidate IDs with different letter casing fail closed');
+  assert.equal(await loadCurrentRanking(rankingClient([...rows.slice(0, 499), withLetters, duplicate]), id(9)), null,
+    'a differently cased duplicate across pagination boundaries cannot override the first row');
+  for (const malformed of [null, {}, { ...rows[0], application_id: 'not-a-uuid' }]) {
+    assert.equal(await loadCurrentRanking(rankingClient([rows[0], malformed]), id(9)), null,
+      'a malformed ranking page cannot confirm any group as current');
+  }
+  const oversized = Array.from({ length: 20500 }, (_, n) => ({
+    ...rows[0], application_id: id(n), analysis_id: id(10000 + n),
+  }));
+  assert.equal(await loadCurrentRanking(rankingClient(oversized), id(9)), null,
+    'a truncated ranking cannot mark the first 20k groups current while omitting the rest');
   const items = [
     { application_id: id(1200), group_key: 'passed', group_analysis_id: id(11200) },
     { application_id: id(1), group_key: 'passed', group_analysis_id: id(99999) },
@@ -365,7 +523,7 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   }
 
   // The batch page shows an outdated group without its historical score.
-  const filename = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url).pathname;
+  const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url));
   const module = new Module(filename); module.filename = filename;
   const require = createRequire(filename);
   module.require = name => name === '../actions' ? { bulkProgress: async () => null }

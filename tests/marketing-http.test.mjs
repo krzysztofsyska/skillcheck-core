@@ -73,11 +73,25 @@ test('public offer and demo pages respond without an account', async (t) => {
   // Only FREE and PRESELEKCJA can be bought today, but the later stages carry their
   // approved prices (owner decision 2026-11-02, reconfirmed in chat the same evening).
   assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 0);
-  assert.equal((home.match(/>Kolejny etap<\/p>/g) ?? []).length, 2, 'WERYFIKACJA and ASSESSMENT CENTER shown as later stages');
+  assert.match(home, /id="planowane-pakiety"/);
   assert.match(home, /615 zł brutto/);
   assert.match(home, /1 499 zł brutto/);
   assert.match(home, /Cena zatwierdzona · pakiet w przygotowaniu/);
-  assert.match(home, /5–6 osób, maksymalnie 10/);
+  assert.match(home, /do 10 testowanych osób/);
+  assert.match(home, /do 6 finalistów/);
+  assert.match(home, /Rozszerzenie do 7–10 osób wymaga osobnej oferty/);
+  const futureStart = home.indexOf('id="planowane-pakiety"');
+  const futureEnd = home.indexOf('To plan rozwoju.', futureStart);
+  assert.ok(futureStart > -1 && futureEnd > futureStart);
+  const future = home.slice(futureStart, futureEnd);
+  assert.ok(hrefs(future).length === 2 && hrefs(future).every(href => href === '/rozmowa'), 'future offers link only to contact, never checkout');
+  assert.match(future, /Nie można ich jeszcze kupić/);
+  assert.match(future, /Nie obejmuje zewnętrznego asesora/);
+  const previewStart = home.indexOf('id="przyklady-pakietow"');
+  assert.ok(previewStart > futureStart && previewStart < futureEnd, 'demo is inside planned offers');
+  const preview = home.slice(previewStart, home.indexOf('Co planujemy w tej cenie?', previewStart));
+  for (const copy of ['Demonstracja na fikcyjnych danych.', 'Przykładowy test', 'Przykładowe ćwiczenie', 'Fragment raportu: Kandydat A', 'Brak danych.', 'Pokaż klucz i uzasadnienie']) assert.ok(preview.includes(copy), copy);
+  assert.equal(/<form[\s>]|<input[\s>]|<textarea[\s>]/.test(preview), false, 'demo collects no candidate data');
   // Withdrawn prices must not come back.
   for (const price of ['299', '369', '899', '1 799', '1799', '1845']) {
     assert.equal(home.includes(price), false, `stale price ${price} removed from the home page`);
@@ -90,7 +104,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   }
   assert.match(home, /KTIG CONSULTING/);
   const homeHrefs = hrefs(home);
-  for (const href of ['/demo', '/register', '/login', '/#korzysci', '/#jak-to-dziala', '/#przyklad', '/#pakiety', '/#faq']) {
+  for (const href of ['/demo', '/register', '/login', '/dashboard', '/#korzysci', '/#jak-to-dziala', '/#przyklad', '/#pakiety', '/#faq']) {
     assert.ok(homeHrefs.includes(href), `home link ${href}`);
   }
   assert.equal(home.includes('<form'), false);
@@ -99,7 +113,10 @@ test('public offer and demo pages respond without an account', async (t) => {
 
   // SC-LEGAL-001: company data and legal documents required for Przelewy24 shop verification.
   for (const text of ['NIP 7394002294', 'KRS 0001110252', 'REGON 528903093', '+48 730 266 909']) assert.ok(home.includes(text), `footer ${text}`);
-  for (const href of ['/regulamin', '/polityka-prywatnosci', '/ai']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
+  // Every legal document required for the Przelewy24 shop verification is reachable
+  // from the footer of every public page, not only from the registration form.
+  for (const href of ['/regulamin', '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
+    '/polityka-prywatnosci', '/ai']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
   for (const [path, heading, marker, docx] of [
     ['/regulamin', 'Regulamin świadczenia usług SkillCheck', 'PayPro S.A. Agent Rozliczeniowy', '/legal/01_Regulamin_SkillCheck_v1.0.docx'],
     ['/polityka-prywatnosci', 'Polityka prywatności SkillCheck', 'Wykazu podatników VAT', '/legal/02_Polityka_prywatnosci_v1.0.docx'],
@@ -128,11 +145,16 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Sprawdź koszt rekrutacji/);
   assert.match(home, /Wypróbuj FREE — 0 zł/);
   assert.ok(homeHrefs.includes('/preselekcja'), 'marketing points to PRESELEKCJA pilot');
+  // SC-BUY-001: one click from the home page to the package checkout screen.
+  assert.ok(homeHrefs.includes('/kup/preselekcja'), 'home page has the Kup PRESELEKCJĘ button');
+  assert.match(home, /Kup PRESELEKCJĘ/);
   // Every CTA leads to an existing path: FREE, the offer page or the calculator.
   for (const href of homeHrefs.filter((link) => link.startsWith('/') && !link.startsWith('/_next') && !link.startsWith('/legal/'))) {
     const target = href.split('#')[0] || '/';
     assert.ok(
-      ['/', '/demo', '/kalkulator', '/preselekcja', '/rozmowa', '/register', '/login', '/regulamin', '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
+      ['/', '/demo', '/kalkulator', '/preselekcja', '/kup/preselekcja', '/rozmowa', '/register', '/login', '/dashboard', '/regulamin',
+        '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
+        '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
       `home CTA points at an existing path: ${href}`,
     );
   }
@@ -240,6 +262,25 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.ok(homeHrefs.includes('/preselekcja#free'), 'FREE CTA anchors to the FREE section');
   assert.match(order, /id="free"/, 'FREE anchor is on section, below sticky header');
   assert.ok(hrefs(order).includes('/register'));
+  // The offer remains public. Account navigation resolves the signed-in company
+  // list or the existing login guard without guessing a company's private URL.
+  assert.ok(hrefs(order).includes('/login'), 'offer page CTA for an existing account');
+  // This server runs with SC19_PACKAGES_ENABLED=false, which is also what the
+  // production runbook specifies for now. With packages off the company panel
+  // hides the Pakiety entry and the checkout page only shows a "not available
+  // yet" notice, so the public page must not promise an order there: the CTA is
+  // registration, stated as registration.
+  assert.doesNotMatch(orderText, /Zamów w panelu firmy/, 'no panel order is promised while packages are off');
+  assert.match(orderText, /Załóż konto firmowe/);
+  assert.match(orderText, /zamówienia w panelu firmy jeszcze nie składasz/);
+  assert.match(orderText, /po zaksięgowaniu wpłaty z faktury proforma/);
+  const offerPage = readFileSync(new URL('../app/preselekcja/page.tsx', import.meta.url), 'utf8');
+  assert.match(offerPage, /catalogEnabled \? "Zamów w panelu firmy" : "Załóż konto firmowe"/,
+    'the panel-order CTA appears only when SC19_PACKAGES_ENABLED is on');
+  assert.match(offerPage, /Zakup może złożyć wyłącznie właściciel konta firmy/,
+    'the owner-only rule is still stated on the flag-on path');
+  assert.ok(hrefs(order).includes('/dashboard'), 'public offer links back to the account');
+  assert.ok(hrefs(order).every(href => !href.startsWith('/dashboard/')), 'no tenant-specific URL on the public offer page');
   assert.doesNotMatch(order, /<form[ >]/);
   assert.doesNotMatch(order, /Zapłać|Kup teraz|Aktywuj pakiet/);
   assert.match(home, /PRESELEKCJA: 60 CV za 300 zł/);
@@ -247,6 +288,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.match(home, /Analiza 60 CV, shortlista i raport/, 'approved PRESELEKCJA description');
   assert.match(home, /Analiza 5 CV/, 'approved FREE description');
   assert.match(order, /zawsze weryfikuje osoba prowadząca rekrutację/);
+  // SC-BUY-001: the offer page carries the same one-click purchase button.
+  assert.ok(hrefs(order).includes('/kup/preselekcja'), 'offer page has the Kup PRESELEKCJĘ button');
+  assert.match(order, /Kup PRESELEKCJĘ/);
   assert.doesNotMatch(order, /<li>Wyniki, ranking, shortlistę i raport weryfikuje/);
   const comparison = readFileSync(new URL('../app/components/marketing/package-comparison.tsx', import.meta.url), 'utf8');
   const lines = comparison.split('\n');
@@ -254,8 +298,12 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.ok(offer, 'PRESELEKCJA offer defined');
   assert.match(offer, /scope:`\$\{preselectionCount \?\? sc19PolicyPendingScope\}/);
   assert.match(comparison, /preselekcjaAnalyses\(catalogEnabled, sizes\)/);
-  const offerSource = readFileSync(new URL('../app/components/marketing/preselekcja-offer.ts', import.meta.url), 'utf8');
-  assert.match(offerSource, /if \(sizes\) return sizes\.PRESELEKCJA;\s*return catalogEnabled \? null : preselekcjaOffer\.analyses;/, 'live catalog wins; enabled failure shows no number');
+  const offerModule = readFileSync(new URL('../app/components/marketing/preselekcja-offer.ts', import.meta.url), 'utf8');
+  assert.match(offerModule, /if \(sizes\) return sizes\.PRESELEKCJA;\s*return catalogEnabled \? null : preselekcjaOffer\.analyses;/, 'live catalog wins; enabled failure shows no number');
+  // The approved figures live in lib/ so the checkout client component reads the
+  // same numbers as the marketing pages; the calculator is checked against them.
+  const offerSource = readFileSync(new URL('../lib/preselekcja-offer.ts', import.meta.url), 'utf8');
+  assert.match(offerModule, /export \{ preselekcjaOffer, freeOffer \} from "\.\.\/\.\.\/\.\.\/lib\/preselekcja-offer";/, 'one source of the approved figures');
   // The static calculator cannot read the catalog: keep its package size and net price equal to the approved offer.
   assert.equal(calculator.match(/PRE_PACKAGE_CV=(\d+);/)?.[1], offerSource.match(/analyses: (\d+),/)?.[1]);
   assert.equal(calculator.match(/PRE_NET_CENTS=(\d+);/)?.[1], offerSource.match(/netPln: "(\d+),(\d+)"/)?.slice(1).join(''));

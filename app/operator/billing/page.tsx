@@ -4,13 +4,37 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { salesOperator } from '../sales/access';
 import { sc19OperatorNotices } from '../../../lib/sc19-operator';
-import { approveTrial, grantPaid, savePolicy } from './actions';
+import { approveTrial, grantPaid, releaseTrialNip, savePolicy, setAutoFree } from './actions';
 import styles from '../sales/sales.module.css';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Pakiety firm | SkillCheck', robots: { index: false, follow: false } };
 
 const dates = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Warsaw' });
+
+/** Plain Polish for the machine codes the automatic check records. An unknown
+ * code is shown as it is rather than hidden. */
+const autoOutcomes: Record<string, string> = {
+  granted: 'FREE przyznany', refused: 'odmowa', unavailable: 'brak odpowiedzi wykazu',
+};
+const autoReasons: Record<string, string> = {
+  AUTO_DISABLED: 'automat wyłączony lub bez klucza podpisu',
+  ANOTHER_NIP_TRIED: 'to konto próbowało już innego NIP-u',
+  NIP_TAKEN: 'ten NIP jest już zajęty',
+  NIP_RELEASED: 'ten NIP został tej firmie odebrany przez operatora',
+  COOLDOWN: 'zapytanie do wykazu było przed chwilą — firma czeka kilka minut',
+  IN_FLIGHT: 'sprawdzenie rozpoczęte, bez odpowiedzi wykazu',
+  STATUS_NOT_ACTIVE: 'w wykazie nie jest czynnym ani zwolnionym podatnikiem',
+  NIP_NOT_FOUND: 'nie ma takiego NIP-u w wykazie',
+  NIP_INVALID: 'NIP niepoprawny',
+  NIP_NOT_ACTIVE: 'status w wykazie nie uprawnia do FREE',
+  WHITELIST_ADDRESS_UNPARSEABLE: 'nie udało się odczytać adresu z wykazu',
+  WHITELIST_UNAVAILABLE: 'wykaz niedostępny',
+  WHITELIST_RATE_LIMITED: 'wykaz ograniczył zapytania',
+  WHITELIST_TIMEOUT: 'wykaz nie odpowiedział na czas',
+  WHITELIST_RESPONSE_INVALID: 'wykaz odpowiedział nieoczekiwanie',
+  NO_SERVER_SECRET: 'brak klucza podpisu na serwerze',
+};
 
 /** SC-019 operator fulfillment: package policy, FREE verification and paid
  * PRESELEKCJA grants. Payment is confirmed outside the browser; this panel
@@ -21,12 +45,34 @@ export default async function OperatorBillingPage({ searchParams }: {
   const client = await salesOperator();
   const { status, q } = await searchParams;
   const search = (q ?? '').trim().slice(0, 200);
-  const [policy, companies] = await Promise.all([
+  const [policy, companies, consents, autoChecks, autoSettings, takenNips, releases] = await Promise.all([
     client.rpc('sc19_operator_package_policy'),
     client.rpc('sc19_operator_companies', { search: search || null }),
+    client.rpc('sc19_operator_marketing_consents', { search: search || null }),
+    client.rpc('sc19_operator_auto_free_grants'),
+    client.rpc('sc19_operator_auto_free_settings'),
+    // The same search box as the companies list: the listing is capped at 200
+    // rows and the release form is rendered from them, so without a search an
+    // older occupied NIP would have no release form anywhere in the panel.
+    client.rpc('sc19_operator_taken_trial_nips', { search: search || null }),
+    client.rpc('sc19_operator_trial_nip_releases'),
   ]);
   if (policy.error?.code === '42501' || companies.error?.code === '42501') notFound();
   if (policy.error || companies.error || !policy.data || !companies.data) throw new Error('Nie udało się odczytać pakietów.');
+  // Consent and automatic-FREE reporting is additional information: a failure
+  // there must not hide the package panel the operator needs to do their job.
+  // But a failed READ must never read as "nothing to show": an empty fallback
+  // turned an outage into "no consent" and "no company got FREE". Each of these
+  // sections therefore distinguishes "could not be read" from "empty".
+  const consentsFailed = Boolean(consents.error) || !consents.data;
+  const consentByCompany = new Map((consents.data ?? []).map(row => [row.company_id, row]));
+  const checksFailed = Boolean(autoChecks.error) || !autoChecks.data;
+  const autoFree = autoChecks.data ?? [];
+  const nipsFailed = Boolean(takenNips.error) || !takenNips.data;
+  const taken = takenNips.data ?? [];
+  const releasesFailed = Boolean(releases.error) || !releases.data;
+  const released = releases.data ?? [];
+  const auto = autoSettings.data?.[0] ?? null;
   const credits = Object.fromEntries(policy.data.map(row => [row.plan, row.credits]));
   const notice = status && Object.hasOwn(sc19OperatorNotices, status) ? sc19OperatorNotices[status as keyof typeof sc19OperatorNotices] : null;
 
@@ -48,6 +94,83 @@ export default async function OperatorBillingPage({ searchParams }: {
       </form>
     </section>
 
+    {/* SC-FREE-AUTO-001: the switch and the record of what it did. Turning it
+        on changes who may receive FREE without an operator, so it is an
+        operator action with an explicit confirmation. */}
+    <section className={styles.card} aria-labelledby="auto-free">
+      <h2 id="auto-free">Automatyczne FREE z wykazu VAT</h2>
+      {auto ? <p>Automat jest <strong>{auto.auto_free_enabled ? 'włączony' : 'wyłączony'}</strong>
+        {auto.secret_configured ? '' : ' · brak klucza podpisu na serwerze, więc i tak nic nie przyzna'}
+        {auto.updated_at ? ` · zmieniono ${dates.format(new Date(auto.updated_at))}` : ''}</p>
+        : <p>Nie udało się odczytać ustawień automatu.</p>}
+      <p className={styles.hint}>Przy włączonym automacie firma dostaje FREE tylko wtedy, gdy wykaz podatników VAT
+        potwierdzi, że NIP istnieje i jest czynnym podatnikiem. Każda inna odpowiedź, brak odpowiedzi lub błąd
+        oznacza brak przyznania i ręczne sprawdzenie poniżej.</p>
+      {/* The select shows the CURRENT state, so it reads as the state and not as
+          a "toggle" whose meaning is the opposite of what it says. Choose the
+          state you want and save; saving the state it already has changes nothing. */}
+      <form action={setAutoFree} className={styles.form}>
+        <label>Automat ma być <select name="enabled" defaultValue={auto?.auto_free_enabled ? 'true' : 'false'}>
+          <option value="true">włączony</option><option value="false">wyłączony</option></select></label>
+        <label className={styles.confirm}><input type="checkbox" name="confirm" value="yes" required /> Rozumiem, że przy włączonym automacie FREE przyznaje się bez udziału operatora.</label>
+        <button type="submit">Zapisz</button>
+      </form>
+    </section>
+
+    {/* SC-FREE-AUTO-001: every automatic check, not only the grants. A refusal
+        or an outage is exactly what says which company is waiting and why. */}
+    <section aria-labelledby="auto-free-list">
+      <h2 id="auto-free-list">Automatyczne sprawdzenia w wykazie VAT</h2>
+      <p className={styles.hint}>Do 200 ostatnich sprawdzeń, od najnowszego. Źródłem decyzji był wykaz podatników VAT, nie operator.
+        „Zużyte analizy” to zużycie z całego konta firmy (również z pakietów płatnych), nie tylko z FREE.</p>
+      {checksFailed ? <p className={styles.empty}>Nie udało się odczytać listy sprawdzeń. Odśwież stronę.</p>
+        : !autoFree.length ? <p className={styles.empty}>Nie było jeszcze żadnego automatycznego sprawdzenia.</p>
+        : <ol className={styles.list}>{autoFree.map(row => <li key={`${row.company_id}-${row.checked_at}-${row.outcome}`} className={styles.card}>
+          <div className={styles.cardTitle}><h3>{row.company_name}</h3>
+            <span className={styles.badge}>{autoOutcomes[row.outcome] ?? row.outcome}</span></div>
+          <p className={styles.hint}>NIP {row.nip} · {dates.format(new Date(row.checked_at))}
+            {row.mf_status ? ` · status w wykazie: ${row.mf_status}` : ''}
+            {row.error_code ? ` · powód: ${autoReasons[row.error_code] ?? row.error_code}` : ''}</p>
+          {row.outcome === 'granted' && <p className={styles.hint}>
+            {row.granted_credits ?? 0} analiz przyznanych · zużyte analizy na koncie firmy (łącznie): {row.used_credits ?? 0}</p>}
+        </li>)}</ol>}
+    </section>
+
+    {/* Blocker remedy: a NIP is public, so one account can occupy another
+        company's single FREE once. Releasing the NIP lets the real company
+        activate FREE afterwards. It does NOT take analyses back — that is a
+        billing action and the owner's decision. */}
+    <section aria-labelledby="taken-nips">
+      <h2 id="taken-nips">Zajęte NIP-y (jedno FREE na NIP)</h2>
+      <p className={styles.hint}>Do 200 NIP-ów, od najnowszego. Jeśli NIP zajęła firma, która go nie reprezentuje, zwolnij go —
+        prawdziwa firma będzie mogła wtedy aktywować FREE. Zwolnienie nie odbiera już przyznanych analiz.</p>
+      {nipsFailed ? <p className={styles.empty}>Nie udało się odczytać listy zajętych NIP-ów. Odśwież stronę.</p>
+        : !taken.length ? <p className={styles.empty}>Żaden NIP nie jest jeszcze zajęty.</p>
+        : <ol className={styles.list}>{taken.map(row => <li key={row.nip} className={styles.card}>
+          <div className={styles.cardTitle}><h3>NIP {row.nip}</h3>
+            <span className={styles.badge}>{row.free_claimed ? 'FREE wykorzystany' : 'FREE czeka na aktywację'}</span></div>
+          <p className={styles.hint}>{row.company_name} · ID {row.company_id}
+            {row.approved_at ? ` · zajęty ${dates.format(new Date(row.approved_at))}` : ''} · źródło: {row.source}</p>
+          <details><summary>Zwolnij ten NIP</summary>
+            <form action={releaseTrialNip} className={styles.form}>
+              <input type="hidden" name="nip" value={row.nip} />
+              {/* The company this line is about. Sent with the form so the
+                  database can refuse the release if the NIP has moved to
+                  another company since this page was rendered. */}
+              <input type="hidden" name="companyId" value={row.company_id} />
+              <input type="hidden" name="q" value={search} />
+              <label>Powód zwolnienia (co sprawdzono i kiedy) <input name="reason" minLength={8} maxLength={300} required /></label>
+              <label className={styles.confirm}><input type="checkbox" name="confirm" value="yes" required /> Sprawdzono, że ta firma nie reprezentuje tego NIP-u.</label>
+              <button type="submit">Zwolnij NIP</button>
+            </form></details>
+        </li>)}</ol>}
+      <h3>Zwolnione NIP-y</h3>
+      {releasesFailed ? <p className={styles.empty}>Nie udało się odczytać historii zwolnień.</p>
+        : !released.length ? <p className={styles.empty}>Nic jeszcze nie zwolniono.</p>
+        : <ul>{released.map(row => <li key={`${row.nip}-${row.released_at}`}>NIP {row.nip} · {row.company_name ?? row.released_company_id}
+          {' · '}{dates.format(new Date(row.released_at))} · {row.reason}</li>)}</ul>}
+    </section>
+
     <section aria-labelledby="companies">
       <h2 id="companies">Firmy</h2>
       <form method="get" className={styles.filters}>
@@ -60,6 +183,16 @@ export default async function OperatorBillingPage({ searchParams }: {
           <div className={styles.cardTitle}><h2>{company.company_name}</h2>
             <span className={styles.badge}>{company.plan ? `${company.plan} · ${company.available} analiz` : 'Brak pakietu'}</span></div>
           <p className={styles.hint}>ID {company.company_id} · utworzona {dates.format(new Date(company.created_at))}</p>
+          {/* SC-CONSENT-001: consent state per company. The wording is not
+              repeated here; the operator needs the state and the time. */}
+          <p className={styles.hint}>Zgoda na kontakt handlowy: {(() => {
+            // A failed read is NOT "no consent": saying "nie wyrażona" during an
+            // outage would show the operator false consent data.
+            if (consentsFailed) return 'nie udało się odczytać';
+            const consent = consentByCompany.get(company.company_id);
+            if (!consent) return 'nie wyrażona';
+            return `${consent.event === 'granted' ? 'aktywna' : 'wycofana'} · ${consent.consent_version} · ${dates.format(new Date(consent.occurred_at))}`;
+          })()}</p>
           {company.approved_nip
             ? <p>Zweryfikowana: NIP {company.approved_nip}{company.approved_at ? ` · ${dates.format(new Date(company.approved_at))}` : ''}{company.free_claimed ? ' · FREE aktywowany' : ' · FREE czeka na aktywację przez właściciela'}</p>
             : <details><summary>Zweryfikuj firmę przed FREE</summary>
