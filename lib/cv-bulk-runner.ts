@@ -37,10 +37,17 @@ function isBulkNotify(value: unknown): value is BulkNotify {
     typeof n[k] === 'string' && uuid.test(n[k] as string))) return false;
   if (n.email !== null && (typeof n.email !== 'string' || !n.email.trim())) return false;
   if (n.recruitment_name !== null && typeof n.recruitment_name !== 'string') return false;
-  return ['files', 'done', 'errors', 'passed', 'review', 'rejected'].every(k => {
+  if (!['files', 'done', 'errors', 'passed', 'review', 'rejected'].every(k => {
     const count = n[k];
     return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
-  });
+  })) return false;
+  // A notification summarizes one completed batch. Never mail or acknowledge
+  // impossible totals from a malformed SQL/RPC payload. Subtraction avoids
+  // precision loss when the input contains large (but safe) integer counts.
+  const files = n.files as number, done = n.done as number, errors = n.errors as number;
+  const passed = n.passed as number, review = n.review as number, rejected = n.rejected as number;
+  return done <= files && errors <= files - done &&
+    passed <= done && review <= done - passed && rejected <= done - passed - review;
 }
 
 function isPumpEnvelope(value: unknown): value is { dispatch: unknown[]; notify: unknown } {
@@ -88,6 +95,11 @@ export async function pumpBatch(deps: PumpDeps, batchId: string) {
   // A null/partial successful RPC response must never be shown as an empty successful pump.
   if (!isPumpEnvelope(data)) throw new Error('cv_bulk_pump_invalid_response');
   const result = parsePump(data);
+  // A session request is for one particular batch. Do not send a link or
+  // acknowledge a lease for a different batch if the RPC response is mixed up.
+  if (result.notify && result.notify.batch_id.toLowerCase() !== batchId.toLowerCase()) {
+    throw new Error('cv_bulk_pump_invalid_response');
+  }
   await deliver(deps, result, async (batch, outcome) => {
     const { data: acknowledged, error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome });
     // SQL returns false when no sending lease was finalized; no RPC error is not enough.
