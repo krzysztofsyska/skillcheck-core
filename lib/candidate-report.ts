@@ -93,9 +93,23 @@ export async function loadCandidateReport(
       .eq('company_id', companyId).eq('analysis_id', analysis.id).order('criterion_order')
     : { data: [], error: null };
   if (resultRows.error) throw new CandidateReportError('Nie udało się wczytać macierzy dowodów.');
+  if (resultRows.data !== null && !Array.isArray(resultRows.data)) {
+    throw new CandidateReportError('Macierz dowodów ma nieprawidłowy format.');
+  }
   const rows = (resultRows.data ?? []) as (CandidateCriterionRow & { analysis_id?: string; criterion_text_snapshot?: string })[];
-  if (analysis && rows.some(row => row.analysis_id && row.analysis_id !== analysis.id)) {
-    throw new CandidateReportError('Dane analizy nie pasują do tego zgłoszenia.');
+  if (analysis) {
+    // Każdy dowód musi należeć do odczytanej analizy. Brak analysis_id, pusty
+    // criterion_id lub duplikat nie może nadpisać wcześniejszego werdyktu
+    // w Map i niejawnie zmienić podsumowania raportu.
+    const seenCriteria = new Set<string>();
+    for (const row of rows) {
+      if (!row || row.analysis_id !== analysis.id
+        || typeof row.criterion_id !== 'string' || !row.criterion_id
+        || seenCriteria.has(row.criterion_id)) {
+        throw new CandidateReportError('Macierz dowodów jest niespójna. Odśwież raport.');
+      }
+      seenCriteria.add(row.criterion_id);
+    }
   }
 
   // Rekruter mógł odesłać całą analizę do powtórzenia. Taki wynik zostaje w bazie
