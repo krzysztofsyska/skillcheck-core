@@ -573,6 +573,29 @@ test('porównanie pięciu CV, limit pięciu kolumn i analiza w toku', () => {
   assert.equal(pending.candidates[0].inProgress, true);
 });
 
+test('porównanie FREE nie potwierdza dowodu z nieukończonej lub uszkodzonej analizy', () => {
+  for (const reason of ['failed', 'cancelled', 'no_completed_result', 'result_incomplete']) {
+    const candidate = application(1, { reason });
+    // Corrupt source: a stale evidence row is present despite the ranking reason.
+    // The normal loader omits it, but the view must still fail closed.
+    candidate.criteria = [criterion(requirements[0], 'supported', 'fikcyjny cytat')];
+    const compared = buildCandidateComparison(report([candidate]));
+    const cell = compared.rows.find(r => r.id === requirements[0].id).cells[0];
+    assert.equal(cell.status, 'unavailable', reason);
+    assert.equal(cell.quote, null, reason);
+  }
+});
+
+test('porównanie FREE pokazuje pierwszy niepusty cytat, jak raport pojedynczego CV', () => {
+  const candidate = application(1);
+  candidate.criteria[0].evidence = [
+    { start: 0, end: 2, quote: '  ' },
+    { start: 2, end: 9, quote: 'dowód 2' },
+  ];
+  const compared = buildCandidateComparison(report([candidate]));
+  assert.equal(compared.rows.find(r => r.id === requirements[0].id).cells[0].quote, 'dowód 2');
+});
+
 test('pusta lista kryteriów nie znaczy od razu „brak wyniku analizy"', () => {
   // Raport rekrutacji wczytuje macierz tylko dla analiz sprawdzonych przez człowieka,
   // więc komórka musi powiedzieć, czego naprawdę brakuje.
