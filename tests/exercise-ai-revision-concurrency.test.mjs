@@ -42,7 +42,7 @@ test('C6 native concurrency: reject/approve and edit/edit serialize on exact rev
  // Manual revision first: no retroactive origin may be attached to its ancestor.
  const b=await e.seed();await configure(b);
  await db.exec('begin');try{
-  await manual(b);await assert.rejects(e.record(b,rival),denied('55P03'));await db.exec('commit');
+  await manual(b);await assert.rejects(e.record(b,rival),denied('PT409'));await db.exec('commit');
  }finally{await db.exec('rollback');}
  await assert.rejects(e.record(b,rival),denied('PT409'));
  // An older MVCC snapshot must not bypass the absence check after acquiring a lock.
