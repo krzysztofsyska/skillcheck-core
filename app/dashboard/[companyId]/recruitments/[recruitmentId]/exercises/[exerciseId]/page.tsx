@@ -31,6 +31,8 @@ export default async function Exercise({params,searchParams}: {
   const noProposal=reviewResult?.error?.code==='PT404';
   const review=reviewResult && !reviewResult.error && exerciseAiReviewMatches(reviewResult.data,entry) ? reviewResult.data : null;
   const reviewUnavailable=aiReviewEnabled && !noProposal && !review;
+  const provenance=review?.proposal.provenance;
+  const origin=provenance && typeof provenance==='object' && !Array.isArray(provenance) ? provenance : null;
   const changed = entry.position_id !== position.id || entry.position_updated_at !== position.updated_at;
   return <main className="workspace"><section><Link href={base}>← Zadania</Link><h1>{entry.definition.title}</h1>
     {changed && <p role="status">Profil stanowiska zmienił się od ostatniego zapisu. Sprawdź instrukcję i kryteria przed zapisaniem nowej wersji.</p>}
@@ -48,7 +50,14 @@ export default async function Exercise({params,searchParams}: {
       <p>Samodzielność: {entry.position_snapshot.autonomy_level ?? 'Nie określono'}</p>
       {(['tasks','kpis','required_competencies','required_behaviors'] as const).map((key,i)=><div key={key}>
         <h4>{['Zadania','KPI','Kompetencje','Wymagania zachowań'][i]}</h4><ul>{entry.position_snapshot[key].map((text,j)=><li key={j}>{text}</li>)}</ul></div>)}
-      <details><summary>Pochodzenie propozycji</summary><pre className="cv-text">{JSON.stringify(review.proposal.provenance,null,2)}</pre></details>
+      <h3>Pochodzenie propozycji</h3>
+      <p>Propozycja przygotowana przez AI. Zapisany profil stanowiska: {entry.position_snapshot.title}.</p>
+      <p>Wersja profilu z dnia: <time dateTime={entry.position_updated_at}>{new Date(entry.position_updated_at).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw'})}</time> (czas warszawski).</p>
+      {origin && (typeof origin.provider==='string' || typeof origin.model==='string') && <details>
+        <summary>Narzędzie użyte do przygotowania propozycji</summary>
+        {typeof origin.provider==='string' && <p>Dostawca: {origin.provider}</p>}
+        {typeof origin.model==='string' && <p>Model: {origin.model}</p>}
+      </details>}
       {review.proposal.approvalMode==='manual' ? <p role="status">Ta wersja została zatwierdzona przez rekrutera.</p>
         : review.proposal.approvalMode==='auto' ? <p role="status">Ta wersja została zwolniona automatycznie, bez potwierdzenia przeczytania przez rekrutera.</p>
         : editable ? <ExerciseAiApproval key={entry.id} companyId={companyId} context={{recruitmentId,exerciseId,definitionId:entry.id,positionUpdatedAt:entry.position_updated_at}}/>

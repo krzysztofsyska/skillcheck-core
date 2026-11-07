@@ -54,6 +54,9 @@ test('C6 UI shows exact historical task/profile and approval context, escapes te
  assert.match(r.html,/Historyczny profil/);assert.match(r.html,/Zapisana propozycja/);
  assert.match(r.html,/&lt;script&gt;unsafe/);assert.doesNotMatch(r.html,/<script>/);
  assert.doesNotMatch(r.html,/New current profile|data-manual/);assert.match(r.html,/model-fixture/);
+ assert.match(r.html,/Propozycja przygotowana przez AI/);assert.match(r.html,/Zapisany profil stanowiska: Historyczny profil/);
+ assert.match(r.html,/Wersja profilu z dnia/);assert.match(r.html,/Narzędzie użyte do przygotowania propozycji/);
+ assert.doesNotMatch(r.html,/input_fingerprint|prompt_version|payload_schema_version/);
  assert.equal(r.forms.length,1);assert.deepEqual(r.forms[0].context,context);
  assert.deepEqual(r.calls,[{name:'read_exercise_ai_proposal',args:{target_company:ids.company,target_recruitment:ids.recruitment,target_definition:ids.definition}}]);
 });
