@@ -314,6 +314,26 @@ test('session bulk pump fails closed on a malformed successful RPC response', as
   { dispatch: [], notify: null }, 'a legitimately empty RPC response still succeeds');
 });
 
+test('session pump rejects cross-batch notification leases before mail or acknowledgement', async () => {
+  const requested = '55555555-5555-4555-8555-555555555555';
+  const foreign = '66666666-6666-4666-8666-666666666666';
+  const notify = {
+    batch_id: foreign, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333',
+    email: 'synthetic@example.test', recruitment_name: 'Fikcyjna rekrutacja',
+    files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0,
+  };
+  const calls = [];
+  const rpc = async (fn, args) => { calls.push([fn, args]); return { data: { dispatch: [], notify }, error: null }; };
+  await assert.rejects(pumpBatch({
+    rpc, dispatch: async () => assert.fail('foreign lease must not dispatch'),
+    aiEnabled: false, origin: () => 'https://example.test',
+    env: { CV_BULK_MAIL_ENABLED: 'true', RESEND_API_KEY: 'test-only' },
+    fetcher: async () => assert.fail('foreign lease must not send mail'),
+  }, requested), /cv_bulk_pump_invalid_response/);
+  assert.deepEqual(calls.map(([fn]) => fn), ['cv_bulk_pump']);
+});
+
 test('malformed bulk notification leases are neither mailed nor acknowledged; unrelated scheduler claims still run', async () => {
   const notify = {
     batch_id: '55555555-5555-4555-8555-555555555555',
@@ -332,6 +352,11 @@ test('malformed bulk notification leases are neither mailed nor acknowledged; un
     { ...notify, errors: -1 },
     { ...notify, files: 1.5 },
     { ...notify, passed: Number.POSITIVE_INFINITY },
+    { ...notify, files: 1, done: 2, errors: 0 },
+    { ...notify, files: 2, done: 1, errors: 2 },
+    { ...notify, files: 2, done: 1, passed: 2 },
+    { ...notify, files: 2, done: 1, passed: 1, review: 1 },
+    { ...notify, files: 2, done: 1, passed: 1, rejected: 1 },
   ];
   for (const value of bad) {
     const rpcCalls = [];
