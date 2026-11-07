@@ -420,6 +420,14 @@ export type Database = {
         Args: { target_company: string; target_recruitment: string; target_definition: string };
         Returns: ExerciseAiProposalReview;
       };
+      reserve_exercise_ai_generation: {
+        Args: {target_company:string;target_recruitment:string;request_key:string;expected_position_updated_at:string;expected_company_updated_at:string|null;input_fingerprint:string};
+        Returns: Json;
+      };
+      finish_exercise_ai_generation: {
+        Args: {target_company:string;target_recruitment:string;request_key:string;input_fingerprint:string;new_definition:Json|null;new_provenance:Json|null;error_code:string|null};
+        Returns: Json;
+      };
       edit_exercise_ai_proposal: {
         Args: {target_company:string;target_recruitment:string;target_definition:string;expected_position_updated_at:string;new_definition:Json;expected_current_position_updated_at:string};
         Returns:string;

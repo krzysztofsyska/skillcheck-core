@@ -22,8 +22,8 @@ export const EXERCISE_AI_MAX_RETRIES = 2;
 
 /**
  * Hard ceiling per recruitment, so a loop in the UI cannot run up a model bill.
- * DECLARED HERE, NOT YET ENFORCED: the counter it needs lands with the migration
- * in step 2 of SC-014-C6. Nothing in this module meters calls.
+ * Enforced by reserve_exercise_ai_generation before provider I/O. Failed and
+ * interrupted calls consume a slot; human edits do not consume a model call.
  */
 export const EXERCISE_AI_MAX_DRAFTS_PER_RECRUITMENT = 20;
 

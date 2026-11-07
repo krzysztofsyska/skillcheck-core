@@ -150,6 +150,8 @@ type ExpectedFunctions =
   | "read_exercise_ai_proposal"
   | "approve_exercise_ai_proposal"
   | "edit_exercise_ai_proposal"
+  | "reserve_exercise_ai_generation"
+  | "finish_exercise_ai_generation"
   | "reject_exercise_ai_proposal"
   | "cv_bulk_register_item"
   | "cv_bulk_fail_item"
