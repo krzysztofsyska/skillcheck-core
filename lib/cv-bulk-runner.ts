@@ -27,6 +27,22 @@ export function bulkContract(aiEnabled: boolean) {
 
 // RPC envelope validation is strict even though parsePump intentionally skips individual
 // invalid attempt IDs. A claimed scheduler batch must never disappear as a successful no-op.
+/** Only a complete, tenant-bound database notification can be sent or acknowledged.
+ * A damaged RPC response must keep the SQL lease retryable instead of mailing a broken link.
+ */ 
+function isBulkNotify(value: unknown): value is BulkNotify {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const n = value as Record<string, unknown>;
+  if (!['batch_id', 'recruitment_id', 'company_id'].every(k =>
+    typeof n[k] === 'string' && uuid.test(n[k] as string))) return false;
+  if (n.email !== null && (typeof n.email !== 'string' || !n.email.trim())) return false;
+  if (n.recruitment_name !== null && typeof n.recruitment_name !== 'string') return false;
+  return ['files', 'done', 'errors', 'passed', 'review', 'rejected'].every(k => {
+    const count = n[k];
+    return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
+  });
+}
+
 function isPumpEnvelope(value: unknown): value is { dispatch: unknown[]; notify: unknown } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as { dispatch?: unknown; notify?: unknown; error?: unknown };
@@ -35,9 +51,7 @@ function isPumpEnvelope(value: unknown): value is { dispatch: unknown[]; notify:
   if (record.error !== undefined && record.error !== null) return false;
   if (!Array.isArray(record.dispatch) || !Object.prototype.hasOwnProperty.call(record, 'notify')) return false;
   const n = record.notify;
-  return n === null || (n !== undefined && typeof n === 'object' && !Array.isArray(n) &&
-    typeof (n as { batch_id?: unknown }).batch_id === 'string' &&
-    uuid.test((n as { batch_id: string }).batch_id));
+  return n === null || isBulkNotify(n);
 }
 
 export function parsePump(value: unknown): PumpResult {
@@ -48,7 +62,7 @@ export function parsePump(value: unknown): PumpResult {
     ? Array.from(new Set(v.dispatch.filter((x): x is string => typeof x === 'string' && uuid.test(x)).map(id => id.toLowerCase())))
     : [];
   const n = v.notify as BulkNotify | null | undefined;
-  return { dispatch, notify: n && typeof n === 'object' && typeof n.batch_id === 'string' && uuid.test(n.batch_id) ? n : null };
+  return { dispatch, notify: isBulkNotify(n) ? n : null };
 }
 
 async function deliver(deps: PumpDeps, result: PumpResult, finish: (batch: string, outcome: 'sent' | 'failed' | 'skipped') => Promise<void>) {
