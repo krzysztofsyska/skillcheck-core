@@ -61,6 +61,17 @@ function isPumpEnvelope(value: unknown): value is { dispatch: unknown[]; notify:
   return n === null || isBulkNotify(n);
 }
 
+/** The signed SQL scheduler attaches the claimed batch UUID to every row.
+ * Never deliver a notification lease whose batch differs from that claim.
+ * Missing/malformed batch identities cannot be used to authorize delivery.
+ */
+function isWorkerPumpEnvelope(value: unknown): value is { batch_id: string; dispatch: unknown[]; notify: BulkNotify | null } {
+  if (!isPumpEnvelope(value)) return false;
+  const claim = value as { batch_id?: unknown; notify: BulkNotify | null };
+  return typeof claim.batch_id === 'string' && uuid.test(claim.batch_id)
+    && (!claim.notify || claim.notify.batch_id.toLowerCase() === claim.batch_id.toLowerCase());
+}
+
 export function parsePump(value: unknown): PumpResult {
   const v = (value ?? {}) as { dispatch?: unknown; notify?: unknown };
   // Prevent a malformed/retried pump response from dispatching the same attempt twice.
@@ -135,7 +146,7 @@ export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (
   // Continue delivering unrelated claims, but report the invariant violation to the caller.
   const seenAttempts = new Set<string>(), seenNotifications = new Set<string>();
   const results = await Promise.allSettled(data.map(one => {
-    if (!isPumpEnvelope(one)) {
+    if (!isWorkerPumpEnvelope(one)) {
       malformed = true;
       return Promise.reject(new Error('cv_bulk_worker_pump_invalid_response'));
     }
