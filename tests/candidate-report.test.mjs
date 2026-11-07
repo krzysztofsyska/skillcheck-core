@@ -171,7 +171,7 @@ test('wiersz analizy z innym tekstem nie dokleja się do nowego wymagania', () =
 
 // Podwójny klient w kształcie PostgREST: filtry, sortowanie i limity działają,
 // więc test przechodzi tą samą drogą co produkcja, zamiast składać wynik ręcznie.
-function loaderClient(data, afterRead = () => {}) {
+function loaderClient(data, afterRead = () => {}, modifyResult = (_table, result) => result) {
   function query(table) {
     const q = { eqs: [], order: null, limit: Infinity, single: false, columns: '*' };
     return {
@@ -197,7 +197,7 @@ function loaderClient(data, afterRead = () => {}) {
             q.columns.split(',').map(key => [key, row[key]])));
           const result = { data: structuredClone(q.single ? rows[0] ?? null : rows), error: null };
           afterRead(table);
-          return result;
+          return modifyResult(table, result);
         }).then(resolve, reject);
       },
     };
@@ -291,9 +291,14 @@ test('loadCandidateReport: duplikat lub wiersz z obcej analizy nie zmienia potwi
     rows => { rows[0].criterion_id = null; },
   ];
   for (const mutate of mutations) {
-    const data = loaderData();
-    mutate(data.screening_criterion_results);
-    await assert.rejects(() => loadCandidateReport(loaderClient(data), route),
+    // Wstrzykujemy wadliwy wiersz dopiero PO filtrach PostgREST. Zmiana w
+    // źródłowej tablicy testowej byłaby odfiltrowana przez .eq('analysis_id')
+    // i nie sprawdziłaby walidacji odpowiedzi w loadCandidateReport.
+    const client = loaderClient(loaderData(), () => {}, (table, result) => {
+      if (table === 'screening_criterion_results') mutate(result.data);
+      return result;
+    });
+    await assert.rejects(() => loadCandidateReport(client, route),
       error => error instanceof CandidateReportError && /Macierz dowodów jest niespójna/.test(error.message));
   }
   // Prawidłowy raport nadal pokazuje zatwierdzone wymaganie i jego źródło.
