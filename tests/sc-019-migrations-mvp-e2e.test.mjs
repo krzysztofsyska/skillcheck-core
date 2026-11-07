@@ -204,7 +204,7 @@ test('FREE and signed fake payment feed real screening, human review, shortlist 
     const value = await loadScreeningReport(reportDatabaseClient(db, () => ({ id: first.owner })), first.companyId, first.recruitment.id, '5');
     assert.equal(value.applications.length, 5);
     assert.equal(value.applications.filter(row => row.ranking.eligibility_reason === 'eligible').length, 5);
-    assert.equal(value.groups.length, 4, 'bulk groups reach the same report');
+    assert.equal(value.groups.length, 5, 'single and bulk analyses reach the same provisional group report');
     const sixth = await h.candidate(first, 'synthetic-sixth');
     await assert.rejects(h.start(sixth), /sc19_quota_exhausted/);
     await assertBalance(0);

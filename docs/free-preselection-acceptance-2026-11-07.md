@@ -14,7 +14,7 @@ verification, not production activation or a successful real payment.
 | Old automatic groups treated as current after CV/requirements change | `preselectionGroupCurrent` and shared ranking currency in report, recruitment and batch views; report tests cover stale analysis, older analysis, missing human review and pagination | Implemented; 24 report tests passed locally after file-URL portability fix |
 | Caller-supplied pricing poisons usage stats | Pump reads DB-held validated pricing; native test supplies attacker price 999 and verifies no cost/pricing value is stored | Implemented; native CI verifies |
 | Signed scheduler lacks replay nonce | `private.cv_bulk_worker_nonces` introduced in review-fixes migration and included in R10; signed background pump test rejects unsigned and replayed calls | Implemented; native CI verifies |
-| Single analysis outside bulk receives no automatic group | Only bulk pump calls `private.cv_bulk_apply_auto_group`; new composed test deliberately observes four groups for five analyses | **Remaining implementation**, separate follow-up; not hidden by changing the expected count |
+| Single analysis outside bulk receives no automatic group | #330 adds completion hooks for v1/v2 through `private.screening_apply_single_group`; the composed path expects five groups for five analyses. Regressions cover replay, manual decisions, incomplete/failed results, tenant binding, frozen candidates and rollback | Implemented in #330; final merged-base native CI and independent review remain release gates |
 | Queued files keep credits while AI is disabled | UI denies new bulk intake before reservation; old queued files release after 24 hours; unit and native tests cover both | Implemented |
 | Groups absent from report/CSV until every row reviewed | Report has a separate explicitly provisional automatic-group section; CSV carries application IDs, not names; test verifies group export without per-row approval | Implemented; confirmed locally |
 | Text header hides scanned PDF body | Extraction checks image/text coverage and runs OCR; rejects missing or contradictory contact/name evidence; `cv-bulk.test.mjs` has mixed-PDF regression cases | Implemented; local OCR regressions passed |
@@ -63,5 +63,6 @@ synthetic authenticated roles and signed fake provider events; extraction is
 tested separately. These tests do not prove live signup email delivery, NIP
 registry availability, an AI-provider request, P24 settlement or production
 configuration. No real CV, external contact, payment, provider cost or production
-mutation was performed. #266 remains HOLD. Do not close all of #233 until the
-single-analysis grouping follow-up is implemented and independently reviewed.
+mutation was performed. #266 remains HOLD. The single-analysis grouping change in #330
+does not approve candidates or change application status. Do not close all of #233 until the
+single-analysis grouping passes native CI and independent review on its final integration base.
