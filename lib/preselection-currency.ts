@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
-import { groupAnalysisCurrent } from './screening-report.ts';
+import { groupAnalysisCurrent, isUuid } from './screening-report.ts';
 
 export type RankingRow = { application_id: string; analysis_id: unknown; eligibility_reason: unknown };
 
@@ -39,9 +39,16 @@ export async function loadCurrentRanking(client: Pick<SupabaseClient<Database>, 
   return new Map(rows.map(r => [r.application_id, r] as const));
 }
 
-/** Marks each bulk item's group as current or not, by the same rule as the report (fail closed). */
-export function withGroupCurrency<T extends { application_id: string | null; group_key: unknown; group_analysis_id?: unknown }>(
-  items: T[], ranking: Map<string, RankingRow> | null): (T & { group_current: boolean })[] {
-  return items.map(i => ({ ...i, group_current: !!i.group_key && !!i.application_id
-    && groupAnalysisCurrent(i.group_analysis_id, ranking?.get(i.application_id.toLowerCase())) }));
+/** Both RPCs expose a group analysis ID, but the batch RPC calls it group_analysis_id
+ * and the recruitment RPC calls it analysis_id. Apply the same fail-closed rule to both.
+ * An explicitly null group_analysis_id never falls back to an unrelated analysis_id. */
+export function withGroupCurrency<T extends {
+  application_id: string | null; group_key: unknown; group_analysis_id?: unknown; analysis_id?: unknown;
+}>(items: T[], ranking: Map<string, RankingRow> | null): (T & { group_current: boolean })[] {
+  return items.map(i => ({ ...i, group_current: !!i.group_key
+    && isUuid(i.application_id)
+    && groupAnalysisCurrent(
+      Object.prototype.hasOwnProperty.call(i, 'group_analysis_id') ? i.group_analysis_id : i.analysis_id,
+      ranking?.get(i.application_id.toLowerCase()),
+    ) }));
 }
