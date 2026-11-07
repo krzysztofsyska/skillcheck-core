@@ -261,7 +261,10 @@ async function renderRecruitmentPurchase(enabled) {
     './assessment-forms':{StageForm:()=>null,StageControls:()=>null},
     './bulk/groups':{PreselectionGroups:()=>null},
     '../../../../../lib/screening-report':{groupAnalysisCurrent:()=>false},
-    '../../../../../lib/preselection-currency':{loadCurrentRanking:async()=>new Map()},
+    '../../../../../lib/preselection-currency':{
+      loadCurrentRanking:async()=>new Map(),
+      withGroupCurrency:rows=>rows.map(row=>({...row,group_current:false})),
+    },
   };
   mod.require=id=>id in mocks?mocks[id]:req(id);
   mod._compile(ts.transpileModule(readFileSync(abs,'utf8'),{compilerOptions:{
