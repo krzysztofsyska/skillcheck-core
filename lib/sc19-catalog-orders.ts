@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Database, Json } from './supabase/database.types';
+import type { Database } from './supabase/database.types';
 
 export type CatalogQuote = { versionId: string; kind: 'package' | 'addon'; code: string; packageCode: string;
  quantity: number; grossMinor: number; cvCredits: number; serviceCode: string | null; serviceUnits: number;
@@ -35,10 +35,9 @@ export function catalogEntitlements(value: unknown): {code:string;available:numb
 
 type RpcName = 'sc19_catalog_order_options' | 'sc19_catalog_orders' | 'sc19_catalog_entitlements' | 'sc19_create_catalog_order'
  | 'sc19_cancel_catalog_order' | 'sc19_settle_catalog_order';
-/** Narrow RPC facade until generated DB types are refreshed; all read results
- * are decoded above, inputs are revalidated by the database under its lock. */
-export function catalogRpc(client: SupabaseClient<Database>, name: RpcName, args: Record<string, Json> = {}) {
- return client.rpc(name as never, args as never);
+/** Typed transport; JSON read results are decoded above before rendering. */
+export function catalogRpc<Name extends RpcName>(client: SupabaseClient<Database>, name: Name, args: Database['public']['Functions'][Name]['Args']) {
+ return client.rpc(name, args);
 }
 export const catalogOrderName = (code: string) => ({ skill_test: 'Test kompetencji',
  ASSESSMENT_CENTER: 'ASSESSMENT CENTER' }[code] ?? code);

@@ -181,10 +181,16 @@ end;$$;
 create function public.sc19_catalog_orders(target_company uuid default null) returns jsonb
 language plpgsql security definer set search_path='' as $$
 begin
- if target_company is null then perform private.sc19_require_operator();
- else perform sc19_commerce.authorize(target_company);end if;
+ if target_company is null then
+  perform private.sc19_require_operator();
+  -- Bounded work queue: settled history cannot hide an outstanding obligation.
+  -- Processing the oldest rows exposes the next batch, even with >100 pending.
+  return coalesce((select jsonb_agg(to_jsonb(o)-'buyer_id'-'settlement_reference'-'settled_by'-'request_id' order by o.accepted_at,o.id) from (
+   select * from sc19_commerce.orders where status='pending' order by accepted_at,id limit 100) o),'[]');
+ end if;
+ perform sc19_commerce.authorize(target_company);
  return coalesce((select jsonb_agg(to_jsonb(o)-'buyer_id'-'settlement_reference'-'settled_by'-'request_id') from (
-  select * from sc19_commerce.orders where target_company is null or company_id=target_company order by accepted_at desc limit 100) o),'[]');
+  select * from sc19_commerce.orders where company_id=target_company order by accepted_at desc,id desc limit 100) o),'[]');
 end;$$;
 
 create function public.sc19_catalog_entitlements(target_company uuid) returns jsonb

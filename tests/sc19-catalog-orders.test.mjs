@@ -121,4 +121,21 @@ test('catalog orders: real SQL authorization, snapshots, settlement, service con
   assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[b.candidate.id])).rows[0].n,1);
   assert.deepEqual((await db.query('select * from sc19_commerce.orders order by id')).rows,before);
  });
+ await t.test('operator oldest pending queue remains actionable beyond 100 orders',async()=>{
+  await h.asAdmin();
+  const template=(await db.query("select id from sc19_commerce.orders where status='paid' and cv_credits>0 limit 1")).rows[0].id;
+  await db.query(`insert into sc19_commerce.orders(company_id,buyer_id,request_id,version_id,kind,code,package_code,quantity,gross_minor,cv_credits,service_code,service_units,terms_revision,terms_text,status)
+   select o.company_id,o.buyer_id,gen_random_uuid(),o.version_id,o.kind,o.code,o.package_code,o.quantity,o.gross_minor,o.cv_credits,o.service_code,o.service_units,o.terms_revision,o.terms_text,'cancelled'
+   from sc19_commerce.orders o cross join generate_series(1,101) where o.id=$1`,[template]);
+  await db.query(`with companies as(insert into public.companies(name,owner_id) select 'Queue fixture '||i,$2 from generate_series(1,101) i returning id)
+   insert into sc19_commerce.orders(company_id,buyer_id,request_id,version_id,kind,code,package_code,quantity,gross_minor,cv_credits,service_code,service_units,terms_revision,terms_text,accepted_at)
+   select c.id,o.buyer_id,gen_random_uuid(),o.version_id,o.kind,o.code,o.package_code,o.quantity,o.gross_minor,o.cv_credits,o.service_code,o.service_units,o.terms_revision,o.terms_text,'2000-01-01'::timestamptz
+   from companies c cross join sc19_commerce.orders o where o.id=$1`,[template,a.owner]);
+  await h.asUser(users.outsider);const queue=await call('public.sc19_catalog_orders');
+  assert.equal(queue.length,100);assert.ok(queue.every(o=>o.status==='pending'));
+  assert.deepEqual(queue.map(o=>o.id),queue.map(o=>o.id).sort());
+  await settle(queue[0].id,queue[0].gross_minor,'synthetic-queue-first');
+  const next=await call('public.sc19_catalog_orders');assert.equal(next.length,100);
+  assert.ok(!next.some(o=>o.id===queue[0].id));assert.ok(next.some(o=>!queue.some(before=>before.id===o.id)));
+ });
 });
