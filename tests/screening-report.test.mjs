@@ -353,6 +353,22 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   assert.equal(map.size, 1203, 'all pages, not only the first');
   assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499]]);
   assert.equal(await loadCurrentRanking(client(500), id(9)), null, 'a failed page fails closed');
+  const rankingClient = data => ({ rpc: () => ({ range: (from, to) =>
+    Promise.resolve({ data: data.slice(from, to + 1), error: null }) }) });
+  const duplicate = { ...rows[0], application_id: rows[0].application_id.toUpperCase(), analysis_id: id(99999) };
+  assert.equal(await loadCurrentRanking(rankingClient([rows[0], duplicate]), id(9)), null,
+    'duplicate candidate IDs (including alternate case) fail closed');
+  assert.equal(await loadCurrentRanking(rankingClient([...rows.slice(0, 500), duplicate]), id(9)), null,
+    'a duplicate across pagination boundaries cannot override the first row');
+  for (const malformed of [null, {}, { ...rows[0], application_id: 'not-a-uuid' }]) {
+    assert.equal(await loadCurrentRanking(rankingClient([rows[0], malformed]), id(9)), null,
+      'a malformed ranking page cannot confirm any group as current');
+  }
+  const oversized = Array.from({ length: 20500 }, (_, n) => ({
+    ...rows[0], application_id: id(n), analysis_id: id(10000 + n),
+  }));
+  assert.equal(await loadCurrentRanking(rankingClient(oversized), id(9)), null,
+    'a truncated ranking cannot mark the first 20k groups current while omitting the rest');
   const items = [
     { application_id: id(1200), group_key: 'passed', group_analysis_id: id(11200) },
     { application_id: id(1), group_key: 'passed', group_analysis_id: id(99999) },
