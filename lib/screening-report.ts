@@ -206,7 +206,7 @@ export function csvCell(value: string | number | null): string {
   // Spreadsheet importers may ignore invisible formatting characters before a
   // formula introducer. Treat these like whitespace instead of trusting the
   // first *visible* character; keep the original cell content after the quote.
-  const formulaPrefix = /^[\s\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]*[=+@-]/u;
+  const formulaPrefix = /^[\s\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]*[=+@-]/;
   if (typeof value === 'string' && formulaPrefix.test(input)) input = "'" + input;
   input = input.replace(/\u0000/g, '');
   return '"' + input.replace(/"/g, '""') + '"';
