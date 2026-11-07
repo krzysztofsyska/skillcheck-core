@@ -263,7 +263,7 @@ test('signed scheduler pump binds the exact jsonb contract text', async () => {
   const calls = [];
   const rpc = async (fn, args) => {
     calls.push([fn, args]);
-    if (fn === 'cv_bulk_worker_pump') return { data: [{ batch_id: 'b', dispatch: ['44444444-4444-4444-8444-444444444444', 'bad'], notify: null }], error: null };
+    if (fn === 'cv_bulk_worker_pump') return { data: [{ batch_id: '55555555-5555-4555-8555-555555555555', dispatch: ['44444444-4444-4444-8444-444444444444', 'bad'], notify: null }], error: null };
     return { data: true, error: null };
   };
   const dispatched = [];
@@ -373,8 +373,8 @@ test('malformed bulk notification leases are neither mailed nor acknowledged; un
   const claimed = [], acknowledgements = [];
   const rpc = async (fn, args) => {
     if (fn === 'cv_bulk_worker_pump') return { data: [
-      { dispatch: [], notify: { ...notify, files: null } },
-      { dispatch: ['44444444-4444-4444-8444-444444444444'], notify },
+      { batch_id: notify.batch_id, dispatch: [], notify: { ...notify, files: null } },
+      { batch_id: notify.batch_id, dispatch: ['44444444-4444-4444-8444-444444444444'], notify },
     ], error: null };
     acknowledgements.push(args.target_batch);
     return { data: true, error: null };
@@ -396,7 +396,7 @@ test('bulk pump dispatches a repeated attempt only once per response (session an
   assert.deepEqual(parsePump(response).dispatch, [first, second], 'valid UUIDs are unique regardless of case');
 
   const dispatched = [];
-  const rpc = async fn => ({ data: fn === 'cv_bulk_worker_pump' ? [response] : response, error: null });
+  const rpc = async fn => ({ data: fn === 'cv_bulk_worker_pump' ? [{ ...response, batch_id: '55555555-5555-4555-8555-555555555555' }] : response, error: null });
   const deps = { rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
     aiEnabled: true, origin: () => 'https://example.test', env: {} };
 
@@ -421,9 +421,9 @@ test('signed scheduler deduplicates claims across distinct response rows', async
     passed: 1, review: 0, rejected: 0,
   });
   const response = [
-    { dispatch: [attemptA], notify: notify(batchA) },
-    { dispatch: [attemptA.toUpperCase()], notify: notify(batchA.toUpperCase()) },
-    { dispatch: [attemptB], notify: notify(batchB) },
+    { batch_id: batchA, dispatch: [attemptA], notify: notify(batchA) },
+    { batch_id: batchA.toUpperCase(), dispatch: [attemptA.toUpperCase()], notify: notify(batchA.toUpperCase()) },
+    { batch_id: batchB, dispatch: [attemptB], notify: notify(batchB) },
   ];
   const dispatched = [], acknowledged = [];
   const rpc = async (fn, args) => {
@@ -442,6 +442,45 @@ test('signed scheduler deduplicates claims across distinct response rows', async
     'an attempt shared by two batches is dispatched only once, regardless of UUID case');
   assert.deepEqual(acknowledged.sort(), [batchA, batchB].sort(),
     'notification leases are finalized once while unrelated batches proceed');
+});
+
+test('signed scheduler rejects foreign or missing batch identity without delivering its lease', async () => {
+  const batchA = '55555555-5555-4555-8555-555555555555';
+  const batchB = '66666666-6666-4666-8666-666666666666';
+  const attempt = '44444444-4444-4444-8444-444444444444';
+  const notify = { batch_id: batchB, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: 'synthetic@example.test',
+    recruitment_name: 'Fikcyjna', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  for (const wrongId of [batchA, null, undefined, 'not-a-uuid']) {
+    const dispatched = [], acknowledged = [];
+    const invalid = { dispatch: [], notify, ...(wrongId === undefined ? {} : { batch_id: wrongId }) };
+    const rpc = async (fn, args) => {
+      if (fn === 'cv_bulk_worker_pump') return { data: [
+        invalid, { batch_id: batchA, dispatch: [attempt], notify: null },
+      ], error: null };
+      acknowledged.push(args.target_batch);
+      return { data: true, error: null };
+    };
+    await assert.rejects(pumpAllSigned({
+      rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+      aiEnabled: false, origin: () => 'https://example.test',
+      env: { CV_BULK_MAIL_ENABLED: 'true', RESEND_API_KEY: 'test-only' },
+      fetcher: async () => assert.fail('foreign/malformed lease must not send e-mail'),
+      secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+    }), error => error.message === 'cv_bulk_worker_pump_invalid_response');
+    assert.deepEqual(dispatched, [attempt], 'unrelated valid dispatch must proceed');
+    assert.deepEqual(acknowledged, [], 'a foreign/malformed lease must stay unacknowledged for retry');
+  }
+  const acknowledged = [];
+  const rpc = async (fn, args) => fn === 'cv_bulk_worker_pump'
+    ? { data: [{ batch_id: batchB.toUpperCase(), dispatch: [], notify: { ...notify, email: null } }], error: null }
+    : (acknowledged.push(args.target_batch), { data: true, error: null });
+  assert.equal(await pumpAllSigned({
+    rpc, dispatch: async () => ({ accepted: true }), aiEnabled: false,
+    origin: () => 'https://example.test', env: {}, secret: 's'.repeat(32),
+    digest: value => createHash('sha256').update(value).digest('hex'),
+  }), 1, 'UUID case must not affect a valid claim');
+  assert.deepEqual(acknowledged, [batchB]);
 });
 
 test('detectPhone: international prefixes and no gluing across lines', () => {
@@ -684,7 +723,7 @@ test('OCR queue: time spent waiting behind another job counts towards the deadli
 
 test('scheduler pump delivers every returned batch, in parallel', async () => {
   const rpc = async fn => fn === 'cv_bulk_worker_pump'
-    ? { data: [1, 2, 3].map(n => ({ batch_id: `b${n}`, dispatch: [`${n}${n}${n}${n}${n}${n}${n}${n}-4444-4444-8444-444444444444`], notify: null })), error: null }
+    ? { data: [1, 2, 3].map(n => ({ batch_id: `55555555-5555-4555-8555-55555555555${n}`, dispatch: [`${n}${n}${n}${n}${n}${n}${n}${n}-4444-4444-8444-444444444444`], notify: null })), error: null }
     : { data: true, error: null };
   let inFlight = 0, peak = 0;
   const dispatched = [];
@@ -715,7 +754,7 @@ test('failed notification acknowledgement is reported, never mistaken for succes
     'session failures are visible without forwarding DB content');
   await assert.rejects(pumpAllSigned({ ...deps,
     rpc: async fn => fn === 'cv_bulk_worker_pump'
-      ? { data: [{ dispatch: [], notify }, { dispatch: [], notify: { ...notify, batch_id: '66666666-6666-4666-8666-666666666666' } }], error: null }
+      ? { data: [{ batch_id: notify.batch_id, dispatch: [], notify }, { batch_id: '66666666-6666-4666-8666-666666666666', dispatch: [], notify: { ...notify, batch_id: '66666666-6666-4666-8666-666666666666' } }], error: null }
       : { data: null, error: { message: 'private content from DB' } },
     secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
   }), error => error.message === 'cv_bulk_worker_delivery_failed',
@@ -736,7 +775,7 @@ test('notification RPC must acknowledge a real lease update for both session and
     const confirmed = [];
     const rpc = async (fn, args) => {
       if (fn === 'cv_bulk_pump') return { data: { dispatch: [], notify }, error: null };
-      if (fn === 'cv_bulk_worker_pump') return { data: [{ dispatch: [], notify }], error: null };
+      if (fn === 'cv_bulk_worker_pump') return { data: [{ batch_id: notify.batch_id, dispatch: [], notify }], error: null };
       assert.equal(fn, 'cv_bulk_finish_notification');
       confirmed.push(args.target_batch);
       return { data: acknowledgement, error: null };
@@ -760,7 +799,7 @@ test('signed scheduler rejects each malformed claimed batch while delivering the
   const notify = { batch_id: batchId, recruitment_id: '22222222-2222-4222-8222-222222222222',
     company_id: '33333333-3333-4333-8333-333333333333', email: null,
     recruitment_name: 'Syntetyczna', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
-  const good = { dispatch: [attemptId], notify };
+  const good = { batch_id: batchId, dispatch: [attemptId], notify };
   const malformed = [null, [], {}, { dispatch: [] }, { dispatch: 'not an array', notify: null },
     { dispatch: [], notify: { batch_id: 'invalid' } }, { dispatch: [], notify: [] },
     { dispatch: [], notify: null, error: '23505' }];
@@ -790,7 +829,7 @@ test('scheduler still processes every claimed batch when one notification acknow
     company_id: '33333333-3333-4333-8333-333333333333', email: null,
     recruitment_name: 'Rekrutacja', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 });
   const rpc = async (fn, args) => {
-    if (fn === 'cv_bulk_worker_pump') return { data: ids.map(id => ({ dispatch: [], notify: notify(id) })), error: null };
+    if (fn === 'cv_bulk_worker_pump') return { data: ids.map(id => ({ batch_id: id, dispatch: [], notify: notify(id) })), error: null };
     finished.push(args.target_batch);
     return { data: args.target_batch !== ids[0], error: args.target_batch === ids[0] ? { message: 'sensitive database error' } : null };
   };
