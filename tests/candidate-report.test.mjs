@@ -463,6 +463,29 @@ test('loadCandidateReport: zmiana macierzy między odczytami nie publikuje miesz
   }
 });
 
+test('loadCandidateReport: review zmienione w trakcie odczytu nie zatwierdza starego wyniku FREE', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  for (const scenario of ['revoke', 'new-review']) {
+    const data = loaderData({ disposition: scenario === 'new-review' ? null : 'approved' });
+    let reviewReads = 0;
+    const client = loaderClient(data, table => {
+      if (table !== 'screening_result_reviews' || ++reviewReads !== 1) return;
+      // Change the review without changing screening_analysis_versions. Its existing
+      // final re-read alone must not treat the first review as a consistent snapshot.
+      if (scenario === 'revoke') data.screening_result_reviews[0].disposition = 'needs_reanalysis';
+      else data.screening_result_reviews.push({
+        analysis_id: id(8), company_id: route.companyId,
+        review_version: 1, disposition: 'approved',
+      });
+    });
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Wynik lub przegląd zmienił się/.test(error.message),
+      scenario);
+  }
+  // An unchanged reviewed analysis remains available.
+  assert.equal((await loadCandidateReport(loaderClient(loaderData()), route)).summary.requiredSupported, 1);
+});
+
 test('loadCandidateReport: nieaktualny materiał nie wymazuje cytatów rekruterowi', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   // Zamknięta rekrutacja albo zmienione CV sprawiają, że odcisk materiału się nie
