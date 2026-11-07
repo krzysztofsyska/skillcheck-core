@@ -78,6 +78,22 @@ test('korekta rekrutera wygrywa, odrzucony wiersz nie publikuje dowodu AI', () =
   assert.equal(rejected.corrected, true);
 });
 
+test('FREE: uszkodzony zakres cytatu nie jest zastępowany fikcyjną pozycją w CV', () => {
+  const valid = { start: 10, end: 25, quote: 'prawidłowy dowód' };
+  const built = buildCandidateRequirement(licence, 'required', completed, row({
+    evidence: [
+      { quote: 'bez zakresu' },
+      { start: -1, end: 3, quote: 'ujemny offset' },
+      { start: 8, end: 3, quote: 'odwrócony zakres' },
+      { start: 1.5, end: 4, quote: 'ułamkowy offset' },
+      { start: 0, end: 1_000_001, quote: 'poza limitem' },
+      valid,
+    ],
+  }));
+  assert.deepEqual(built.quotes, [valid], 'only real, bounded offsets may reach either report view');
+  assert.equal(built.status, 'supported', 'one corrupt citation does not erase the human-reviewed verdict');
+});
+
 test('odrzucony wiersz zostaje odrzucony także w nieaktualnej analizie', () => {
   // Decyzja człowieka o wierszu bije stan całej analizy. Inaczej nieaktualna
   // analiza przywracałaby na ekran cytat AI, który rekruter wprost odrzucił.
@@ -508,6 +524,22 @@ test('loadCandidateReport: równoległa zmiana macierzy bez zmiany analizy lub r
   }
   const stable = await loadCandidateReport(loaderClient(loaderData()), route);
   assert.equal(stable.summary.requiredSupported, 1, 'unchanged human-approved evidence still works');
+});
+
+test('loadCandidateReport: pusta odpowiedź RPC nie udaje braku dowodów kandydata', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  for (const faultyRead of [1, 2]) {
+    let reads = 0;
+    const client = loaderClient(loaderData(), () => {}, (table, result) => {
+      if (table === 'screening_criterion_results' && ++reads === faultyRead) {
+        return { ...result, data: null, error: null };
+      }
+      return result;
+    });
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Macierz dowodów/.test(error.message));
+  }
+  assert.equal((await loadCandidateReport(loaderClient(loaderData()), route)).summary.requiredSupported, 1);
 });
 
 test('loadCandidateReport: nieaktualny materiał nie wymazuje cytatów rekruterowi', async () => {
