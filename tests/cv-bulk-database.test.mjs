@@ -64,8 +64,8 @@ test('single analysis grouping: v1/v2 completion, replay, manual choice, scope, 
   for(const role of ['anon','authenticated','screening_worker']) {
     assert.equal((await db.query("select has_function_privilege($1,'private.screening_apply_single_group(uuid,uuid)','execute') allowed",[role])).rows[0].allowed,false);
   }
-  // Prepare the rollback subject before freezing the shared recruitment.
-  const post=await seed({tenant:f,shortlist:false});
+  // Prepare an independent rollback subject before freezing the first recruitment.
+  const post=await seed({tenant:other,shortlist:false});
   await h.asUser(v2.owner);await x.policy(v2,0,lifecycleRules);v2.resolutionId=await x.resolve(v2,[v2.candidate.id]);
   await x.freeze(v2);
   await h.asAdmin();
