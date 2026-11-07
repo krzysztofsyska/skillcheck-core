@@ -18,14 +18,14 @@ test('SC deployment allowlist keeps ordinary feature commits out of Vercel', () 
   assert.deepEqual(config.git, {
     deploymentEnabled: {
       '**': false,
-      integration: true,
+      integration: false,
       main: true,
       'release/**': true,
     },
   });
 });
 
-test('SC deployment examples: only integration, main and release are eligible', () => {
+test('SC deployment examples: freeze holds integration; main and release remain eligible', () => {
   const rules = config.git.deploymentEnabled;
   // Vercel's documented priority: any matching true rule beats a false rule.
   // The assertions above fix the rule set, and these examples test intent.
@@ -35,10 +35,11 @@ test('SC deployment examples: only integration, main and release are eligible', 
     if (pattern === 'release/**') return branch.startsWith('release/');
     return false;
   });
-  for (const branch of ['main', 'integration', 'release/sales-only-20261011', 'release/v1/hotfix']) {
+  for (const branch of ['main', 'release/sales-only-20261011', 'release/v1/hotfix']) {
     assert.equal(isEligible(branch), true, branch);
   }
   for (const branch of [
+    'integration',
     'feat/sc-019mvp-free-preselection',
     'feat/sc-021-ai-gateway-foundation',
     'fix/sc005-safe-diagnostics',
