@@ -344,12 +344,16 @@ test('a group computed from an older analysis is stale after a re-analysis outsi
     group_key: 'passed', source: 'auto', raw_score: 90, coverage: 1, updated_at: timestamp, application_status: 'new' };
   // Same analysis as the ranking: current.
   data.get_preselection_groups = [{ ...row, analysis_id: data.get_screening_ranking[0].analysis_id }];
-  assert.equal((await load(data)).groups[0].stale, false);
+  const current = await load(data);
+  assert.equal(current.groups[0].stale, false);
+  assert.match(screeningReportCsv(current), new RegExp(`"${application}";"Przeszli sito";"90";"1";"Automatycznie";"Aktualny"`));
   // The ranking now uses a newer completed analysis: the saved score is historical.
   data.get_preselection_groups = [{ ...row, analysis_id: uuid(99) }];
   const report = await load(data);
   assert.equal(report.groups[0].stale, true);
-  assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
+  const staleGroupRow = screeningReportCsv(report).split('\r\n').find(line => line.includes('"Przeszli sito"'));
+  assert.equal(staleGroupRow, `"${application}";"Przeszli sito";"";"";"Automatycznie";"Wynik nieaktualny — wymaga ponownej analizy"`,
+    'historical score and coverage must not be exported as current');
   // No link to an analysis (erased, or an older RPC without the field): never shown as current.
   data.get_preselection_groups = [{ ...row, analysis_id: null }];
   assert.equal((await load(data)).groups[0].stale, true);
@@ -414,6 +418,7 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   // A stale group score is never shown as the candidate's score.
   const staleHtml = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report: { ...report, groups: report.groups.map(g => ({ ...g, stale: true })) }, basePath: '/dashboard/test' }));
   assert.doesNotMatch(staleHtml, /\(grupa\)<\/small>/);
+  assert.doesNotMatch(staleHtml, /83,33/, 'historical group score must not appear in the report');
   // CSV agrees with the page: the same status, no misleading 0 coverage.
   const csv = screeningReportCsv(report);
   assert.match(csv, /"Sprawdzone przez człowieka — wynik w tabeli grup"/);

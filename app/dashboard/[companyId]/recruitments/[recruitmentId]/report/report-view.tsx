@@ -27,7 +27,7 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
         <tbody>{report.groups.map(g => <tr key={g.application_id}>
           <td>{preselectionGroupLabels[g.group]}{g.stale && <><br /><strong>Wynik nieaktualny — wymaga ponownej analizy</strong></>}</td>
           <td><a href={`${basePath}/applications/${g.application_id}/screening`}>{g.candidate_name}</a></td>
-          <td>{number(g.raw_score)}</td><td>{g.coverage === null ? '—' : `${number(g.coverage * 100)}%`}</td>
+          <td>{g.stale ? '—' : number(g.raw_score)}</td><td>{g.stale || g.coverage === null ? '—' : `${number(g.coverage * 100)}%`}</td>
           <td>{g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie'}</td>
         </tr>)}</tbody></table></div>
     </>}
