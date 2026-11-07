@@ -1,6 +1,6 @@
 -- SC-019 / #283: catalog orders and operator-confirmed settlement.
--- Company accounting only, no candidate data. Separate schema preserves the
--- candidate-erasure inventory. No prices, package quantities or runtime enabled.
+-- Company accounting only, no candidate data. R15 reviews the incoming company
+-- foreign keys. No prices, package quantities or runtime enabled.
 begin;
 do $commerce_preflight$ begin
  if private.erasure_schema_signature() is distinct from '75eca00dc4b8bbf7959e18a144beda51a70b0377ab4cc306e59b2cef56402688' then raise exception 'commerce_source_schema_unreviewed' using errcode='55000';end if;
@@ -34,7 +34,7 @@ create table sc19_commerce.product_rules (
  prerequisites text[] not null default '{}',
  exclusions text[] not null default '{}',
  primary key(version_id,kind,code,package_code),
- check(kind <> 'addon' or (service_code is not null and included_units=0)),
+ check(kind <> 'addon' or (service_code is not null and code=service_code and included_units=0)),
  check(kind <> 'package' or code=package_code),
  check(included_units=0 or service_code is not null)
 );
@@ -155,6 +155,10 @@ begin
    or previous.quantity is distinct from (expected_quote->>'quantity')::integer
    or previous.version_id::text is distinct from expected_quote->>'versionId'
    or previous.terms_revision is distinct from expected_quote->>'termsRevision'
+   or previous.terms_text is distinct from expected_quote->>'termsText'
+   or previous.cv_credits is distinct from (expected_quote->>'cvCredits')::integer
+   or previous.service_code is distinct from expected_quote->>'serviceCode'
+   or previous.service_units is distinct from (expected_quote->>'serviceUnits')::integer
    or previous.gross_minor is distinct from (expected_quote->>'grossMinor')::integer then
    raise exception 'commerce_request_conflict' using errcode='23505';end if;
   return previous.id;
@@ -313,7 +317,7 @@ create table private.erasure_inventory_baseline_r15 (
 alter table private.erasure_inventory_baseline_r15 enable row level security;
 create trigger immutable_history before update or delete on private.erasure_inventory_baseline_r15
  for each row execute function private.contact_immutable();
-insert into private.erasure_inventory_baseline_r15 select true,'PENDING_NATIVE_SIGNATURE',known_tables||array['private.erasure_inventory_baseline_r15'] from private.erasure_inventory_baseline_r14 where singleton;
+insert into private.erasure_inventory_baseline_r15 select true,'1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44',known_tables||array['private.erasure_inventory_baseline_r15'] from private.erasure_inventory_baseline_r14 where singleton;
 do $acl$ declare g record;begin
  revoke all on private.erasure_inventory_baseline_r15 from public;
  for g in select distinct r.rolname from pg_class c cross join lateral aclexplode(c.relacl) a join pg_roles r on r.oid=a.grantee where c.oid='private.erasure_inventory_baseline_r15'::regclass and a.grantee<>c.relowner loop execute format('revoke all on private.erasure_inventory_baseline_r15 from %I',g.rolname);end loop;
@@ -459,6 +463,6 @@ declare d private.retention_delegations;t private.retention_ticks;c private.eras
  'holds',(select count(*) from private.erasure_holds where company_id=target_company and released_at is null));
 end;$$;
 do $commerce_postflight$ begin
- if private.erasure_schema_signature() is distinct from 'PENDING_NATIVE_SIGNATURE' then raise exception 'commerce_final_schema_mismatch:%',private.erasure_schema_signature() using errcode='55000';end if;
+ if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then raise exception 'commerce_final_schema_mismatch:%',private.erasure_schema_signature() using errcode='55000';end if;
 end $commerce_postflight$;
 commit;

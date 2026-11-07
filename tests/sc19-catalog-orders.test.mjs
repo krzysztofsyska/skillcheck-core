@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { activeBoot,users } from './helpers/competency-active-fixture.mjs';
+import { lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
 
 test('catalog orders: real SQL authorization, snapshots, settlement, service consumption',async t=>{
  const e=await activeBoot(t,{fullChain:true});const {db,h,call}=e;
@@ -88,5 +89,20 @@ test('catalog orders: real SQL authorization, snapshots, settlement, service con
   await h.asAdmin();
   assert.equal((await db.query(`select count(*)::int n from pg_proc p join pg_namespace n on n.oid=p.pronamespace
    where n.nspname='sc19_commerce' and has_function_privilege('authenticated',p.oid,'execute')`)).rows[0].n,0);
+ });
+ await t.test('R15 erases candidate but preserves company accounting and other tenant',async()=>{
+  await h.asAdmin();
+  const before=(await db.query('select * from sc19_commerce.orders order by id')).rows;
+  await h.asUser(a.owner);
+  assert.ok(!(await e.x.preview(a)).blockers.includes('schema_dependency_unknown'));
+  await h.asAdmin();await db.exec('create table public.commerce_unknown(candidate_id uuid)');
+  await h.asUser(a.owner);assert.ok((await e.x.preview(a)).blockers.includes('schema_dependency_unknown'));
+  await h.asAdmin();await db.exec('drop table public.commerce_unknown');
+  await h.asUser(a.owner);await e.x.policy(a,0,lifecycleRules);a.resolutionId=await e.x.resolve(a);await e.x.configure();
+  const state=await e.x.freeze(a);await e.x.transition(state.request_id,0,'authorized');await e.x.transition(state.request_id,1,'erasing');await e.x.purge(state.request_id,2);
+  await h.asAdmin();
+  assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[a.candidate.id])).rows[0].n,0);
+  assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1',[b.candidate.id])).rows[0].n,1);
+  assert.deepEqual((await db.query('select * from sc19_commerce.orders order by id')).rows,before);
  });
 });

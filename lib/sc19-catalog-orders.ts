@@ -15,7 +15,7 @@ const str = (v: unknown, max = 160) => typeof v === 'string' && v.length > 0 && 
 export function catalogQuotes(value: unknown): CatalogQuote[] {
  if (!Array.isArray(value) || value.length > 100) throw Error('Catalog unavailable');
  for (const r of value) if (!obj(r) || !catalogUuid(r.versionId) || !['package','addon'].includes(String(r.kind)) ||
-  !str(r.code) || !str(r.packageCode) || !num(r.quantity) || !num(r.grossMinor) || !num(r.cvCredits) ||
+  !str(r.code) || !str(r.packageCode) || !num(r.quantity) || Number(r.quantity)<1 || Number(r.quantity)>1000 || !num(r.grossMinor) || Number(r.grossMinor)<1 || !num(r.cvCredits) ||
   !num(r.serviceUnits) || !(r.serviceCode === null || str(r.serviceCode)) || !str(r.termsRevision) || !str(r.termsText,20000))
   throw Error('Catalog unavailable');
  return value as CatalogQuote[];
