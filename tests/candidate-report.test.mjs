@@ -307,6 +307,41 @@ test('loadCandidateReport: duplikat lub wiersz z obcej analizy nie zmienia potwi
   assert.equal(valid.summary.requiredSupported, 1);
 });
 
+test('loadCandidateReport: niespójne oznaczenia nie zmieniają podsumowania FREE', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  const malformed = [
+    rows => null, // SETOF RPC must return an array, including when it is empty
+    rows => rows[0], // list payload must not be a single object
+    rows => [...rows, { ...rows[0], flag: 'additional' }], // ambiguity: required or additional?
+    rows => [null],
+    rows => [{ ...rows[0], criterion_id: null }],
+    rows => [{ ...rows[0], criterion_id: '   ' }],
+    rows => [{ ...rows[0], criterion_text: null }],
+    rows => [{ ...rows[0], flag: null }],
+  ];
+  for (const mutate of malformed) {
+    // Inject after RPC processing, not into the source fixture: the bad
+    // provider response must reach loadRequirementFlags unchanged.
+    const client = loaderClient(loaderData(), () => {}, (table, result) =>
+      table === 'position_requirement_flags' ? { ...result, data: mutate(result.data) } : result);
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Oznaczenia wymagań są niespójne/.test(error.message));
+  }
+
+  const legacy = loaderData();
+  legacy.position_requirement_flags = [];
+  const empty = await loadCandidateReport(loaderClient(legacy), route);
+  assert.equal(empty.summary.requiredTotal, 0);
+  assert.equal(empty.summary.unmarkedTotal, empty.requirements.length);
+
+  const unknownFlag = loaderData();
+  unknownFlag.position_requirement_flags[0].flag = 'legacy-unknown';
+  const unknown = await loadCandidateReport(loaderClient(unknownFlag), route);
+  assert.equal(unknown.summary.requiredTotal, 0, 'unknown text flag remains unmarked');
+  const valid = await loadCandidateReport(loaderClient(loaderData()), route);
+  assert.equal(valid.summary.requiredSupported, 1);
+});
+
 test('loadCandidateReport: niespójna odpowiedź historii przeglądu nie potwierdza CV', async () => {
   const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
   const malformed = [
