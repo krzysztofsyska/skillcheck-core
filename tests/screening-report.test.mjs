@@ -405,18 +405,26 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   const { loadCurrentRanking, withGroupCurrency } = await import('../lib/preselection-currency.ts');
   const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const rows = Array.from({ length: 1203 }, (_, n) => ({ application_id: id(n), analysis_id: id(10000 + n), eligibility_reason: 'eligible' }));
-  const client = (failAt = -1) => ({ calls: [], rpc(fn, args) {
+  const client = (failAt = -1) => ({ calls: [], orders: [], rpc(fn, args) {
     const self = this;
-    return { range(from, to) { self.calls.push([fn, args, from, to]);
-      return Promise.resolve(from === failAt ? { data: null, error: { code: 'X' } } : { data: rows.slice(from, to + 1), error: null }); } };
+    return { order(column, options) {
+      self.orders.push([column, options?.ascending]);
+      return { range(from, to) { self.calls.push([fn, args, from, to]);
+        return Promise.resolve(from === failAt ? { data: null, error: { code: 'X' } } : { data: rows.slice(from, to + 1), error: null }); } };
+    } };
   } });
   const ok = client();
   const map = await loadCurrentRanking(ok, id(9));
   assert.equal(map.size, 1203, 'all pages, not only the first');
   assert.deepEqual(ok.calls.map(c => [c[2], c[3]]), [[0, 499], [500, 999], [1000, 1499]]);
+  assert.deepEqual(ok.orders, Array(3).fill(null).map(() => ['application_id', true]),
+    'all ranking pages must use a stable application UUID order');
   assert.equal(await loadCurrentRanking(client(500), id(9)), null, 'a failed page fails closed');
-  const rankingClient = data => ({ rpc: () => ({ range: (from, to) =>
-    Promise.resolve({ data: data.slice(from, to + 1), error: null }) }) });
+  const rankingClient = data => ({ rpc: () => ({ order: (column, options) => {
+    assert.equal(column, 'application_id');
+    assert.equal(options?.ascending, true);
+    return { range: (from, to) => Promise.resolve({ data: data.slice(from, to + 1), error: null }) };
+  } }) });
   const withLetters = { ...rows[0], application_id: 'aabbccdd-aabb-4ccd-8eaf-aabbccddeeff' };
   const duplicate = { ...withLetters, application_id: withLetters.application_id.toUpperCase(), analysis_id: id(99999) };
   const upperRow = { ...withLetters, application_id: withLetters.application_id.toUpperCase(),

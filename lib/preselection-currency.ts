@@ -13,7 +13,10 @@ export async function loadCurrentRanking(client: Pick<SupabaseClient<Database>, 
   const seen = new Set<string>();
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   while (true) {
+    // Offset pagination needs a deterministic key, not the RPC's implicit row order.
+    // Otherwise a multi-page recruitment can silently miss or duplicate candidates.
     const page = await client.rpc('get_screening_ranking', { target_recruitment: recruitmentId, target_size: 10 })
+      .order('application_id', { ascending: true })
       .range(rows.length, rows.length + 499);
     if (page.error || !Array.isArray(page.data)) return null;
     for (const value of page.data as unknown[]) {
