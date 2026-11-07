@@ -37,8 +37,10 @@ function isBulkNotify(value: unknown): value is BulkNotify {
     typeof n[k] === 'string' && uuid.test(n[k] as string))) return false;
   if (n.email !== null && (typeof n.email !== 'string' || !n.email.trim())) return false;
   if (n.recruitment_name !== null && typeof n.recruitment_name !== 'string') return false;
-  return ['files', 'done', 'errors', 'passed', 'review', 'rejected'].every(k =>
-    typeof n[k] === 'number' && Number.isSafeInteger(n[k]) && (n[k] as number) >= 0);
+  return ['files', 'done', 'errors', 'passed', 'review', 'rejected'].every(k => {
+    const count = n[k];
+    return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
+  });
 }
 
 function isPumpEnvelope(value: unknown): value is { dispatch: unknown[]; notify: unknown } {
