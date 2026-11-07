@@ -24,7 +24,7 @@ export async function loadCurrentRanking(client: Pick<SupabaseClient<Database>, 
       const id = row.application_id.toLowerCase();
       if (seen.has(id)) return null;
       seen.add(id);
-      rows.push(row as RankingRow);
+      rows.push({ ...row, application_id: id } as RankingRow);
     }
     // A truncated ranking cannot establish currency for *any* group.
     if (rows.length > 20000) return null;
@@ -37,5 +37,5 @@ export async function loadCurrentRanking(client: Pick<SupabaseClient<Database>, 
 export function withGroupCurrency<T extends { application_id: string | null; group_key: unknown; group_analysis_id?: unknown }>(
   items: T[], ranking: Map<string, RankingRow> | null): (T & { group_current: boolean })[] {
   return items.map(i => ({ ...i, group_current: !!i.group_key && !!i.application_id
-    && groupAnalysisCurrent(i.group_analysis_id, ranking?.get(i.application_id)) }));
+    && groupAnalysisCurrent(i.group_analysis_id, ranking?.get(i.application_id.toLowerCase())) }));
 }

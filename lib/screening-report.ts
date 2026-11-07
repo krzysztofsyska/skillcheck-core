@@ -162,9 +162,10 @@ export type ScreeningReport = {
  */
 export function groupAnalysisCurrent(groupAnalysisId: unknown,
   ranking: { analysis_id: unknown; eligibility_reason: unknown } | undefined): boolean {
-  if (typeof groupAnalysisId !== 'string' || !/^[0-9a-f-]{36}$/i.test(groupAnalysisId) || !ranking) return false;
+  if (!isUuid(groupAnalysisId) || !ranking || !isUuid(ranking.analysis_id)) return false;
   if (ranking.eligibility_reason === 'stale' || ranking.eligibility_reason === 'needs_reanalysis') return false;
-  return typeof ranking.analysis_id === 'string' && ranking.analysis_id === groupAnalysisId;
+  // PostgreSQL UUIDs are case-insensitive; a differently cased Data API value must not make a current group appear stale.
+  return ranking.analysis_id.toLowerCase() === groupAnalysisId.toLowerCase();
 }
 export function parseGroupRow(value: unknown): ReportGroupRow {
   const g = object(value);
