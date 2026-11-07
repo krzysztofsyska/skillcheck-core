@@ -492,7 +492,7 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
     group_key: 'passed', analysis_id: upperRow.analysis_id }], upperMap)[0].group_current, false,
     'invalid recruitment group IDs cannot be confirmed');
   const recruitmentPage = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', import.meta.url), 'utf8');
-  assert.match(recruitmentPage, /withGroupCurrency\\s*\\(/,
+  assert.match(recruitmentPage, /withGroupCurrency\s*\(/,
     'the recruitment screen must use the same normalized currency check as bulk progress');
   assert.equal(await loadCurrentRanking(rankingClient([withLetters, duplicate]), id(9)), null,
     'duplicate candidate IDs with different letter casing fail closed');
