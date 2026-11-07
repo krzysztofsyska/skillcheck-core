@@ -10,12 +10,25 @@ export type RankingRow = { application_id: string; analysis_id: unknown; eligibi
  */
 export async function loadCurrentRanking(client: Pick<SupabaseClient<Database>, 'rpc'>, recruitmentId: string) {
   const rows: RankingRow[] = [];
+  const seen = new Set<string>();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   while (true) {
     const page = await client.rpc('get_screening_ranking', { target_recruitment: recruitmentId, target_size: 10 })
       .range(rows.length, rows.length + 499);
     if (page.error || !Array.isArray(page.data)) return null;
-    rows.push(...(page.data as RankingRow[]));
-    if (page.data.length < 500 || rows.length > 20000) break;
+    for (const value of page.data as unknown[]) {
+      const row = value as Partial<RankingRow> | null;
+      // Duplicate or malformed ranking rows must never override an older status
+      // and make a saved group appear current. UUIDs are case-insensitive in SQL.
+      if (!row || typeof row.application_id !== 'string' || !uuid.test(row.application_id)) return null;
+      const id = row.application_id.toLowerCase();
+      if (seen.has(id)) return null;
+      seen.add(id);
+      rows.push(row as RankingRow);
+    }
+    // A truncated ranking cannot establish currency for *any* group.
+    if (rows.length > 20000) return null;
+    if (page.data.length < 500) break;
   }
   return new Map(rows.map(r => [r.application_id, r] as const));
 }
