@@ -307,6 +307,35 @@ test('loadCandidateReport: duplikat lub wiersz z obcej analizy nie zmienia potwi
   assert.equal(valid.summary.requiredSupported, 1);
 });
 
+test('loadCandidateReport: niespójna odpowiedź historii przeglądu nie potwierdza CV', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  const malformed = [
+    rows => null,
+    rows => ({ ...rows[0] }), // PostgREST list query must return an array
+    rows => [...rows, { ...rows[0] }], // limit(1) contract broken
+    rows => [null],
+    rows => [{ ...rows[0], analysis_id: id(9) }],
+    rows => [{ ...rows[0], analysis_id: undefined }],
+    rows => [{ ...rows[0], review_version: '1' }],
+    rows => [{ ...rows[0], review_version: 0 }],
+    rows => [{ ...rows[0], disposition: null }],
+    rows => [{ ...rows[0], disposition: '   ' }],
+  ];
+  for (const mutate of malformed) {
+    // Fault injection happens AFTER PostgREST filters, projection and limit,
+    // otherwise the fixture would hide mismatched rows from the loader.
+    const client = loaderClient(loaderData(), () => {}, (table, result) =>
+      table === 'screening_result_reviews' ? { ...result, data: mutate(result.data) } : result);
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Historia sprawdzenia jest niespójna/.test(error.message));
+  }
+
+  // An absent review is legitimate, but it must never turn into an approval.
+  const unreviewed = await loadCandidateReport(loaderClient(loaderData({ disposition: null })), route);
+  assert.equal(unreviewed.summary.requiredSupported, 0);
+  assert.equal(unreviewed.requirements.find(r => r.id === 'competency:1').status, 'awaiting_review');
+});
+
 test('loadCandidateReport: analiza odesłana do powtórzenia nie uchodzi za potwierdzenie', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   const report = await loadCandidateReport(
