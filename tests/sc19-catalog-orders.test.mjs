@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { createPostgresPaymentStore } from '../lib/sc19-payment-postgres.ts';
 import { activeBoot,users } from './helpers/competency-active-fixture.mjs';
 import { lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
 
@@ -137,5 +139,50 @@ test('catalog orders: real SQL authorization, snapshots, settlement, service con
   await settle(queue[0].id,queue[0].gross_minor,'synthetic-queue-first');
   const next=await call('public.sc19_catalog_orders');assert.equal(next.length,100);
   assert.ok(!next.some(o=>o.id===queue[0].id));assert.ok(next.some(o=>!queue.some(before=>before.id===o.id)));
+ });
+ await t.test('native verification revocation wins while order waits for company lock',async()=>{
+  assert.equal(e.embedded,undefined,'native independent connections required');
+  const quote=(await opts(b)).find(q=>q.code==='PRESELEKCJA'),key=randomUUID();
+  const operator=await e.connect(),buyer=await e.connect();
+  for(const [c,id] of [[operator,users.outsider],[buyer,b.owner]]){await c.query('set role authenticated');await c.query("select set_config('request.jwt.claim.sub',$1,false)",[id]);}
+  await operator.query('begin');
+  try {
+   await operator.query('select public.sc19_operator_release_trial_nip($1,$2,$3)',['8567346215','Synthetic verification revoked',b.companyId]);
+   const pid=(await buyer.query('select pg_backend_pid() pid')).rows[0].pid;
+   const pending=call('public.sc19_create_catalog_order',[b.companyId,key,JSON.stringify(quote),true],buyer).then(()=>null,error=>error);
+   await h.asAdmin();let blocked=false;
+   for(let i=0;i<100&&!blocked;i++){blocked=(await db.query('select cardinality(pg_blocking_pids($1))>0 blocked',[pid])).rows[0].blocked;if(!blocked)await new Promise(resolve=>setTimeout(resolve,10));}
+   assert.ok(blocked,'buyer must be waiting behind operator company lock');
+   await operator.query('commit');assert.equal((await pending)?.code,'42501');
+   assert.equal((await db.query('select count(*)::int n from sc19_commerce.orders where request_id=$1',[key])).rows[0].n,0);
+  }finally{await operator.query('rollback');}
+  await h.asAdmin();await db.query("insert into private.sc19_trial_approvals(company_id,nip,proof_reference) values($1,'8567346215','synthetic-restored')",[b.companyId]);
+  await buyer.query('begin isolation level repeatable read');
+  await assert.rejects(call('public.sc19_create_catalog_order',[b.companyId,randomUUID(),JSON.stringify(quote),true],buyer),no('25001'));
+  await buyer.query('rollback');
+ });
+ await t.test('actual restricted P24 role can create with commerce OFF and blocks a pending catalog order',async()=>{
+  await h.asAdmin();
+  const setup=await readFile(new URL('../supabase/preview-setup/sc19-p24-runtime.sql',import.meta.url),'utf8');
+  const cluster=(await db.query('select system_identifier::text id from pg_control_system()')).rows[0].id;
+  // Only the isolated fixture's cluster identity is substituted, exactly as the existing preview-role test.
+  await db.exec(setup.replace(":'sc19_seed_target_ref'","'orbyscrupgnupifzlqxp'").replace('7692130048193495360',cluster));
+  await db.exec(`insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,terms_revision,terms_text,valid_until_ms)
+   values('commerce-p24','v1','PRESELEKCJA',true,true,30000,'PLN',60,'v1','Synthetic',4102444800000)`);
+  const pool={connect:async()=>{const c=await e.connect();await c.query('set role sc19_p24_preview');return {query:(...args)=>c.query(...args),release(){}};}};
+  const store=createPostgresPaymentStore(pool),id=randomUUID();
+  const order={id,companyId:b.companyId,buyerId:b.owner,requestId:id,offerId:'commerce-p24',offerRevision:'v1',termsRevision:'v1',amountMinor:30000,currency:'PLN',credits:60,
+   scope:{provider:'przelewy24',mode:'test',account:'12345'},status:'awaiting_payment',sessionId:null,checkoutUrl:null,paymentId:null,checkoutDeadlineMs:Date.now()+600000};
+  await db.exec('update sc19_commerce.settings set enabled=false');
+  await store.transaction(async tx=>{assert.deepEqual(await tx.companyAccess(b.companyId,b.owner),{owner:true,verified:true});await tx.insertOrder(order);await tx.bindRequest(b.companyId,id,id);await tx.saveOrder({...order,status:'paid'});});
+  assert.equal((await store.readOrder(b.companyId,b.owner,id)).status,'paid');
+  await h.asAdmin();await db.exec('update sc19_commerce.settings set enabled=true');
+  const quote=(await opts(b)).find(q=>q.code==='PRESELEKCJA');await make(b,quote);
+  await h.asAdmin();await db.exec('update sc19_commerce.settings set enabled=false');
+  await assert.rejects(store.transaction(async tx=>{await tx.companyAccess(b.companyId,b.owner);await tx.insertOrder({...order,id:randomUUID(),requestId:randomUUID()});}),/SC19_PAYMENT_REQUEST_CONFLICT/);
+  const c=await pool.connect();
+  assert.equal((await c.query("select has_schema_privilege(current_user,'sc19_commerce','USAGE') allowed")).rows[0].allowed,false);
+  await assert.rejects(c.query('select * from sc19_commerce.orders'),no('42501'));
+  await h.asUser(b.owner);await assert.rejects(db.query('select private.sc19_has_pending_catalog_order($1)',[b.companyId]),no('42501'));
  });
 });

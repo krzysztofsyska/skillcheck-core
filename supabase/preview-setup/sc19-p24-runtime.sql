@@ -21,6 +21,12 @@ end
 $guard$;
 create role sc19_p24_preview nologin noinherit nobypassrls;
 grant usage on schema private, public to sc19_p24_preview;
+-- Commerce may be installed before this dedicated role is provisioned.
+do $commerce_acl$ begin
+ if to_regprocedure('private.sc19_has_pending_catalog_order(uuid)') is not null then
+  grant execute on function private.sc19_has_pending_catalog_order(uuid) to sc19_p24_preview;
+ end if;
+end $commerce_acl$;
 
 -- FOR UPDATE / FOR SHARE need UPDATE privilege and a policy that can see the row.
 -- No update to these three read/lock-only relations can pass the restrictive check.

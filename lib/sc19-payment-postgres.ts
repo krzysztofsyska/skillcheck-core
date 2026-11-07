@@ -82,10 +82,10 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
           async insertOrder(o) {
             // Company lock is already held. Serialize catalog/manual and P24
             // purchases too; never leave two independently payable orders.
-            const commerce = await c.query("select to_regclass('sc19_commerce.orders') as relation");
-            if (commerce.rows[0]?.relation) {
-              const pending = await c.query("select id from sc19_commerce.orders where company_id=$1 and status='pending'", [o.companyId]);
-              if (pending.rows.length) fail('SC19_PAYMENT_REQUEST_CONFLICT');
+            const commerce = await c.query("select to_regprocedure('private.sc19_has_pending_catalog_order(uuid)') as routine");
+            if (commerce.rows[0]?.routine) {
+              const pending = await c.query('select private.sc19_has_pending_catalog_order($1) as pending', [o.companyId]);
+              if (pending.rows[0]?.pending === true) fail('SC19_PAYMENT_REQUEST_CONFLICT');
             }
             await c.query(`insert into private.sc19_payment_orders
               (id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,

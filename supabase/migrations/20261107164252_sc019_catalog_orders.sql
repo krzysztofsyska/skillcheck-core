@@ -73,6 +73,18 @@ alter table sc19_commerce.orders enable row level security;
 alter table sc19_commerce.entitlements enable row level security;
 revoke all on all tables in schema sc19_commerce from public,anon,authenticated;
 
+-- Payment adapters need only a conflict bit, never access to the commerce schema.
+create function private.sc19_has_pending_catalog_order(target_company uuid) returns boolean
+language sql security definer set search_path='' as $$
+ select exists(select 1 from sc19_commerce.orders where company_id=target_company and status='pending')
+$$;
+revoke all on function private.sc19_has_pending_catalog_order(uuid) from public,anon,authenticated;
+do $runtime_acl$ begin
+ if exists(select 1 from pg_roles where rolname='sc19_p24_preview') then
+  grant execute on function private.sc19_has_pending_catalog_order(uuid) to sc19_p24_preview;
+ end if;
+end $runtime_acl$;
+
 create function sc19_commerce.authorize(cid uuid,buy boolean default false) returns void
 language plpgsql security definer set search_path='' as $$
 begin
@@ -144,8 +156,11 @@ create function public.sc19_create_catalog_order(target_company uuid,request_key
 language plpgsql security definer set search_path='' as $$
 declare quote jsonb; previous sc19_commerce.orders; oid uuid;
 begin
+ if current_setting('transaction_isolation')<>'read committed' then raise exception 'commerce_read_committed_required' using errcode='25001';end if;
  perform sc19_commerce.authorize(target_company,true);
  perform private.sc19_lock_company(target_company);
+ -- A concurrent NIP release may have committed while the company lock waited.
+ perform sc19_commerce.authorize(target_company,true);
  if accepted is distinct from true or request_key is null or jsonb_typeof(expected_quote) is distinct from 'object' then
   raise exception 'commerce_invalid' using errcode='22023';end if;
  select * into previous from sc19_commerce.orders where company_id=target_company and request_id=request_key;
@@ -206,8 +221,10 @@ grant execute on function public.sc19_catalog_entitlements(uuid) to authenticate
 create function public.sc19_cancel_catalog_order(target_company uuid,target_order uuid) returns void
 language plpgsql security definer set search_path='' as $$
 begin
+ if current_setting('transaction_isolation')<>'read committed' then raise exception 'commerce_read_committed_required' using errcode='25001';end if;
  perform sc19_commerce.authorize(target_company,true);
  perform private.sc19_lock_company(target_company);
+ perform sc19_commerce.authorize(target_company,true);
  update sc19_commerce.orders set status='cancelled' where id=target_order and company_id=target_company and status='pending';
  if not found then raise exception 'commerce_order_unavailable' using errcode='22023';end if;
 end;$$;
