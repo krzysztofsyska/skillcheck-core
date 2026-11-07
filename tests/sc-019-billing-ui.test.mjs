@@ -238,6 +238,7 @@ test('the checkout URL renders no priced order summary while packages are off', 
     'next/link': ({ children, href }) => React.createElement('a', { href }, children),
     '../../../../../lib/company-access': access,
     './checkout': () => React.createElement('p', null, 'SYNTHETIC CHECKOUT FORM'),
+    './catalog-orders': () => React.createElement('p', null, 'SYNTHETIC CATALOG ORDERS'),
   }).default;
   // Flag off: the link is hidden on the billing page, but the URL is still
   // reachable and must not render the purchase UI either.
