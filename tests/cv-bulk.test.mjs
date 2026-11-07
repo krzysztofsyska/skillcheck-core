@@ -334,6 +334,41 @@ test('bulk pump dispatches a repeated attempt only once per response (session an
   assert.deepEqual(dispatched, [first, second], 'cron pump invokes each attempt once');
 });
 
+test('signed scheduler deduplicates claims across distinct response rows', async () => {
+  const attemptA = '44444444-4444-4444-8444-444444444444';
+  const attemptB = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const batchA = '55555555-5555-4555-8555-555555555555';
+  const batchB = '66666666-6666-4666-8666-666666666666';
+  const notify = id => ({
+    batch_id: id, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333',
+    email: null, recruitment_name: 'Synthetic', files: 1, done: 1, errors: 0,
+    passed: 1, review: 0, rejected: 0,
+  });
+  const response = [
+    { dispatch: [attemptA], notify: notify(batchA) },
+    { dispatch: [attemptA.toUpperCase()], notify: notify(batchA.toUpperCase()) },
+    { dispatch: [attemptB], notify: notify(batchB) },
+  ];
+  const dispatched = [], acknowledged = [];
+  const rpc = async (fn, args) => {
+    if (fn === 'cv_bulk_worker_pump') return { data: response, error: null };
+    assert.equal(fn, 'cv_bulk_finish_notification');
+    acknowledged.push(args.target_batch);
+    return { data: true, error: null };
+  };
+  await assert.rejects(pumpAllSigned({
+    rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+    aiEnabled: false, origin: () => 'https://example.test', env: {},
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), error => error.message === 'cv_bulk_worker_pump_invalid_response',
+  'duplicated scheduler claims must not be reported as successful');
+  assert.deepEqual(dispatched.sort(), [attemptA, attemptB].sort(),
+    'an attempt shared by two batches is dispatched only once, regardless of UUID case');
+  assert.deepEqual(acknowledged.sort(), [batchA, batchB].sort(),
+    'notification leases are finalized once while unrelated batches proceed');
+});
+
 test('detectPhone: international prefixes and no gluing across lines', () => {
   assert.equal(detectPhone('Telefon: +44 7700 900123'), '+447700900123');
   assert.equal(detectPhone('tel. +49 151 12345678'), '+4915112345678');

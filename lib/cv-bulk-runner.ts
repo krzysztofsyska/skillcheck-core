@@ -104,12 +104,29 @@ export async function pumpAllSigned(deps: PumpDeps & { secret: string; digest: (
   // Malformed RPC output must not look like an empty successful scheduler run.
   if (!Array.isArray(data)) throw new Error('cv_bulk_worker_pump_invalid_response');
   let malformed = false;
+  // The SQL worker normally returns each attempt and notification lease once. A malformed
+  // cross-batch response must not dispatch an attempt or finalize a notification twice.
+  // Continue delivering unrelated claims, but report the invariant violation to the caller.
+  const seenAttempts = new Set<string>(), seenNotifications = new Set<string>();
   const results = await Promise.allSettled(data.map(one => {
     if (!isPumpEnvelope(one)) {
       malformed = true;
       return Promise.reject(new Error('cv_bulk_worker_pump_invalid_response'));
     }
-    return deliver(deps, parsePump(one), async (batch, outcome) => {
+    const result = parsePump(one);
+    result.dispatch = result.dispatch.filter(id => {
+      if (seenAttempts.has(id)) { malformed = true; return false; }
+      seenAttempts.add(id);
+      return true;
+    });
+    if (result.notify) {
+      const id = result.notify.batch_id.toLowerCase();
+      if (seenNotifications.has(id)) {
+        malformed = true;
+        result.notify = null;
+      } else seenNotifications.add(id);
+    }
+    return deliver(deps, result, async (batch, outcome) => {
       const id = randomUUID(), at = Date.now();
       const { data: acknowledged, error: finishError } = await deps.rpc('cv_bulk_finish_notification', { target_batch: batch, outcome, request_id: id, issued_at_ms: at,
         request_signature: bulkWorkerSignature(deps.secret, 'notify', id, at, batch, outcome) });
