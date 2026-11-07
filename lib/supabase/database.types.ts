@@ -599,6 +599,12 @@ export type Database = {
       sc19_operator_set_package_policy: { Args: { target_plan: 'FREE' | 'PRESELEKCJA'; target_credits: number }; Returns: number };
       sc19_operator_approve_trial: { Args: { target_company: string; supplied_nip: string; proof: string }; Returns: string };
       sc19_operator_grant_paid: { Args: { target_company: string; settlement_reference: string }; Returns: number };
+      sc19_catalog_order_options: { Args: { target_company: string }; Returns: Json };
+      sc19_catalog_orders: { Args: { target_company?: string }; Returns: Json };
+      sc19_catalog_entitlements: { Args: { target_company: string }; Returns: Json };
+      sc19_create_catalog_order: { Args: { target_company: string; request_key: string; expected_quote: Json; accepted: boolean }; Returns: string };
+      sc19_cancel_catalog_order: { Args: { target_company: string; target_order: string }; Returns: undefined };
+      sc19_settle_catalog_order: { Args: { target_order: string; settlement_reference: string; confirmed_gross: number; confirmed_currency: string }; Returns: undefined };
       configure_retention_schedule: {
         Args: { target_company: string; expected_revision: number; policy_revision: number; execution_mode?: 'suggest_only' | 'automatic'; max_batch?: number; request_key?: string | null };
         Returns: string;

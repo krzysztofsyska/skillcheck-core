@@ -11,6 +11,51 @@ const companyId = '00000000-0000-4000-8000-000000000011';
 const ownerId = '00000000-0000-4000-8000-000000000001';
 const memberId = '00000000-0000-4000-8000-000000000002';
 
+test('catalog purchase actions validate consent, owner, quantities, and retain recruitment context',async()=>{
+ const facade=load('lib/sc19-catalog-orders.ts');
+ const quote={versionId:companyId,kind:'package',code:'PRESELEKCJA',packageCode:'PRESELEKCJA',quantity:1,grossMinor:30000,cvCredits:60,serviceCode:null,serviceUnits:0,termsRevision:'v1',termsText:'Pełne warunki'};
+ const original=process.env.SC19_CATALOG_ORDERS_ENABLED;process.env.SC19_CATALOG_ORDERS_ENABLED='true';
+ try {await withFlag('true',async()=>{
+  let actor=ownerId,error=null;const calls=[];
+  const actions=load('app/dashboard/[companyId]/billing/checkout/catalog-actions.ts',{
+   'next/navigation':{redirect},'next/cache':{revalidatePath(){}},
+   '../../../../../lib/company-access':{companyAccess:async()=>({company:{owner_id:ownerId},user:{id:actor},client:{rpc:async(name,args)=>{calls.push({name,args});return {error};}}})},
+   '../../../../../lib/sc19-catalog-orders':facade,
+  });
+  const form=()=>{const f=new FormData();for(const [k,v] of Object.entries({companyId,recruitmentId:companyId,requestId:memberId,quote:JSON.stringify(quote),accepted:'yes'}))f.set(k,v);return f;};
+  assert.match(await redirected(actions.placeCatalogOrder,form()),/recruitmentId=.*catalogStatus=created/);assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].args.expected_quote,quote);
+  actor=memberId;await redirected(actions.placeCatalogOrder,form());assert.equal(calls.length,1);
+  actor=ownerId;const noConsent=form();noConsent.delete('accepted');await redirected(actions.placeCatalogOrder,noConsent);assert.equal(calls.length,1);
+  for(const quantity of [0,1001,1.5]){const f=form();f.set('quote',JSON.stringify({...quote,quantity}));await redirected(actions.placeCatalogOrder,f);}assert.equal(calls.length,1);
+  error={code:'22023',message:'internal SQL details'};const url=await redirected(actions.placeCatalogOrder,form());assert.match(url,/catalogStatus=changed/);assert.doesNotMatch(url,/internal/);
+ });}finally{if(original===undefined)delete process.env.SC19_CATALOG_ORDERS_ENABLED;else process.env.SC19_CATALOG_ORDERS_ENABLED=original;}
+});
+
+test('catalog UI shows accepted terms and pending state; only operator action can confirm verified amount',async()=>{
+ const facade=load('lib/sc19-catalog-orders.ts');
+ const quote={versionId:companyId,kind:'addon',code:'skill_test',packageCode:'PRESELEKCJA',quantity:1,grossMinor:5000,cvCredits:0,serviceCode:'skill_test',serviceUnits:1,termsRevision:'v1',termsText:'Syntetyczne pełne warunki'};
+ const component=load('app/dashboard/[companyId]/billing/checkout/catalog-orders.tsx',{
+  '../../../../../lib/sc19-catalog-orders':facade,'../../../../../lib/pricing/cv-pool':load('lib/pricing/cv-pool.ts'),
+  './catalog-actions':{placeCatalogOrder(){},cancelCatalogOrder(){}},
+ }).default;
+ const order={id:memberId,company_id:companyId,code:'skill_test',package_code:'PRESELEKCJA',quantity:1,gross_minor:5000,cv_credits:0,service_units:1,terms_text:quote.termsText,status:'pending',accepted_at:new Date().toISOString()};
+ const client={rpc:async name=>({data:name==='sc19_catalog_order_options'?[quote]:name==='sc19_catalog_orders'?[order]:[{code:'skill_test',available:2,used:1}],error:null})};
+ const html=renderToStaticMarkup(await component({client,companyId,isOwner:true,recruitmentId:companyId}));
+ assert.match(html,/Syntetyczne pełne warunki/);assert.match(html,/disabled=""/);assert.match(html,/Anuluj nieopłacone zamówienie/);
+ assert.match(html,/dostępne 2, wykorzystane 1/);
+ const member=renderToStaticMarkup(await component({client,companyId,isOwner:false}));assert.doesNotMatch(member,/type="submit"/);
+ let authorized=false,calls=0;
+ const action=load('app/operator/billing/catalog-order-actions.ts',{
+  'next/navigation':{redirect},'next/cache':{revalidatePath(){}},'../../../lib/sc19-catalog-orders':facade,
+  '../sales/access':{salesOperator:async()=>{if(!authorized)throw Error('unauthorized');return {rpc:async()=>{calls++;return {error:null};}};}},
+ }).settleCatalogOrder;
+ const f=new FormData();f.set('orderId',memberId);f.set('settlement','synthetic-paid-1');f.set('amountMinor','5000');f.set('confirm','yes');
+ await assert.rejects(action(f),/unauthorized/);assert.equal(calls,0);authorized=true;
+ const unconfirmed=new FormData();unconfirmed.set('orderId',memberId);await redirected(action,unconfirmed);assert.equal(calls,0);
+ assert.match(await redirected(action,f),/catalogStatus=paid/);assert.equal(calls,1);
+});
+
 const publishedPackages = () => ['FREE','PRESELEKCJA','WERYFIKACJA','ASSESSMENT_CENTER'].map((package_code,i) => ({
   package_code,gross_minor:[0,32100,65400,150100][i],cv_included:[5,60,60,50][i],cv_step:5,
   cv_max:[5,60,150,150][i],overage_gross_per_cv_minor:0,sellable:true,vat_basis_points:2300,
@@ -238,6 +283,7 @@ test('the checkout URL renders no priced order summary while packages are off', 
     'next/link': ({ children, href }) => React.createElement('a', { href }, children),
     '../../../../../lib/company-access': access,
     './checkout': () => React.createElement('p', null, 'SYNTHETIC CHECKOUT FORM'),
+    './catalog-orders': () => React.createElement('p', null, 'SYNTHETIC CATALOG ORDERS'),
   }).default;
   // Flag off: the link is hidden on the billing page, but the URL is still
   // reachable and must not render the purchase UI either.
