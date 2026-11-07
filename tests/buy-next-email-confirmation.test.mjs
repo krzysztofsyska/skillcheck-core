@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 // SC-BUY-002 (bot review finding, PR #266): a visitor who clicks
 // "Kup PRESELEKCJĘ" before signing up must still land on the checkout screen
 // after confirming the e-mail address. The target travels:
@@ -46,9 +47,9 @@ test('a password-reset link never carries a purchase target', () => {
 // --- register(): the target reaches Supabase as part of emailRedirectTo -----
 
 function loadActions() {
-  const path = new URL('../app/auth/actions.ts', import.meta.url).pathname;
+  const path = fileURLToPath(new URL('../app/auth/actions.ts', import.meta.url));
   const mod = new Module(path); mod.filename = path;
-  mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+  mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
   const require = createRequire(path);
   const signUps = [];
   const client = {
@@ -108,9 +109,9 @@ test('an ordinary sign-up, or a hostile target, produces a plain confirmation li
 // --- /auth/callback: the confirmed account is sent on with the target --------
 
 function loadCallback() {
-  const path = new URL('../app/auth/callback/route.ts', import.meta.url).pathname;
+  const path = fileURLToPath(new URL('../app/auth/callback/route.ts', import.meta.url));
   const mod = new Module(path); mod.filename = path;
-  mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+  mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
   const require = createRequire(path);
   const mocks = {
     // NextResponse.redirect stands in for the real one: the route only reads the
@@ -160,9 +161,9 @@ test('a callback without a code still goes to the login notice', async () => {
 // --- /dashboard: the last hop, on to onboarding or to the target ------------
 
 function loadDashboard(companies) {
-  const path = new URL('../app/dashboard/page.tsx', import.meta.url).pathname;
+  const path = fileURLToPath(new URL('../app/dashboard/page.tsx', import.meta.url));
   const mod = new Module(path); mod.filename = path;
-  mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+  mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
   const require = createRequire(path);
   const client = {
     auth: { async getUser() { return { data: { user: { id: 'u1', email: 'firma@przyklad.pl' } } }; } },

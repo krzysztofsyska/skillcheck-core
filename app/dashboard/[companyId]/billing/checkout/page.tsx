@@ -25,9 +25,9 @@ export default async function CheckoutPage({params,searchParams}: {params: Promi
       ← {backToRecruitment ? 'Wróć do rekrutacji' : 'Panel firmy'}
     </Link>
     <h1>Pakiet PRESELEKCJA</h1>
-    {!enabled && returning ? <Checkout companyId={companyId} sandbox statusOnly/> : !enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
+    {!enabled && returning ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} sandbox statusOnly/> : !enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
       <p>Jednorazowy zakup analiz CV. Wyniki wymagają oceny rekrutera.</p>
-      {company.owner_id===user.id ? <Checkout companyId={companyId} sandbox={sandbox}/> :
+      {company.owner_id===user.id ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} sandbox={sandbox}/> :
         <p role="status">Zamówienie może złożyć właściciel firmy.</p>}
     </>}
   </main>;

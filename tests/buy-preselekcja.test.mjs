@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -104,9 +105,9 @@ test('withNext appends only a validated target and leaves the path alone otherwi
 // The auth actions carry a validated `next` through sign-in, sign-up and the
 // first company, so the visitor lands back on the purchase path.
 function loadActions({ signInError = null, rpc = { data: null, error: null }, user = { id: 'u1' } } = {}) {
-  const path = new URL('../app/auth/actions.ts', import.meta.url).pathname;
+  const path = fileURLToPath(new URL('../app/auth/actions.ts', import.meta.url));
   const mod = new Module(path); mod.filename = path;
-  mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+  mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
   const require = createRequire(path);
   const client = {
     auth: {
@@ -165,9 +166,9 @@ const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'
 
 function renderWorkspace(params) {
   function loadComponent(file, mocks) {
-    const path = new URL(`../${file}`, import.meta.url).pathname;
+    const path = fileURLToPath(new URL(`../${file}`, import.meta.url));
     const mod = new Module(path); mod.filename = path;
-    mod.paths = Module._nodeModulePaths(new URL('../', import.meta.url).pathname);
+    mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
     const require = createRequire(path);
     mod.require = id => id in mocks ? mocks[id] : require(id);
     mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: {
@@ -242,8 +243,8 @@ test('every next consumer re-validates before redirecting', () => {
 // the return link from a UUID, never from an arbitrary URL.
 async function renderRecruitmentPurchase(enabled) {
   const file='app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx';
-  const abs=new URL('../'+file,import.meta.url).pathname;
-  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(new URL('../',import.meta.url).pathname);
+  const abs=fileURLToPath(new URL('../'+file,import.meta.url));
+  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(fileURLToPath(new URL('../',import.meta.url)));
   const req=createRequire(abs);
   const recruitmentId='bbbbbbbb-1111-4222-8333-444444444444';
   const query=table=>{
@@ -286,14 +287,14 @@ test('recruitment shows purchase links only while package sales are enabled',asy
 });
 async function renderReturnFromCheckout(recruitmentId) {
   const file='app/dashboard/[companyId]/billing/checkout/page.tsx';
-  const abs=new URL('../'+file,import.meta.url).pathname;
-  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(new URL('../',import.meta.url).pathname);
+  const abs=fileURLToPath(new URL('../'+file,import.meta.url));
+  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(fileURLToPath(new URL('../',import.meta.url)));
   const req=createRequire(abs);
   const mocks={
     'next/link':{default:({children,...props})=>createElement('a',props,children)},
     '../../../../../lib/company-access':{companyAccess:async()=>({company:{owner_id:OWNER},user:{id:OWNER}})},
     '../../../../../lib/sc19-payment-preview.ts':{sc19PreviewPaymentConfig:()=>null},
-    './checkout':{default:()=>createElement('div',null,'Oferta')},
+    './checkout':{default:({recruitmentId})=>createElement('div',{'data-recruitment':recruitmentId},'Oferta')},
   };
   mod.require=id=>id in mocks?mocks[id]:req(id);
   mod._compile(ts.transpileModule(readFileSync(abs,'utf8'),{compilerOptions:{
@@ -314,13 +315,28 @@ test('checkout returns only to a valid in-company recruitment path, never an ext
   }
 });
 
+test('checkout passes only a validated recruitment hint to the payment component',async()=>{
+  const previous=process.env.SC19_PACKAGES_ENABLED;
+  process.env.SC19_PACKAGES_ENABLED='true';
+  try {
+    const valid='bbbbbbbb-1111-4222-8333-444444444444';
+    assert.ok((await renderReturnFromCheckout(valid)).includes('data-recruitment="'+valid+'"'));
+    for(const invalid of ['https://evil.example',valid+'/../operator',[valid],undefined]) {
+      assert.equal((await renderReturnFromCheckout(invalid)).includes('data-recruitment='),false);
+    }
+  } finally {
+    if(previous===undefined)delete process.env.SC19_PACKAGES_ENABLED;
+    else process.env.SC19_PACKAGES_ENABLED=previous;
+  }
+});
+
 
 // A recruitment's context must survive a visit to the shared company catalogue,
 // without granting extra purchase rights or accepting a caller-controlled URL.
 async function renderBillingFromRecruitment(recruitmentId, enabled=true) {
   const file='app/dashboard/[companyId]/billing/page.tsx';
-  const abs=new URL('../'+file,import.meta.url).pathname;
-  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(new URL('../',import.meta.url).pathname);
+  const abs=fileURLToPath(new URL('../'+file,import.meta.url));
+  const mod=new Module(abs);mod.filename=abs;mod.paths=Module._nodeModulePaths(fileURLToPath(new URL('../',import.meta.url)));
   const req=createRequire(abs);
   const client={rpc:async()=>({data:[{plan:'FREE',available:4}],error:null})};
   const mocks={
