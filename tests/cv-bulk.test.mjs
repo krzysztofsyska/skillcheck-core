@@ -444,6 +444,42 @@ test('signed scheduler deduplicates claims across distinct response rows', async
     'notification leases are finalized once while unrelated batches proceed');
 });
 
+test('signed scheduler rejects repeated batch claims with different attempt IDs but keeps other batches running', async () => {
+  const batchA = '55555555-5555-4555-8555-555555555555';
+  const batchB = '66666666-6666-4666-8666-666666666666';
+  const attemptA = '44444444-4444-4444-8444-444444444444';
+  const attemptDuplicate = '77777777-7777-4777-8777-777777777777';
+  const attemptB = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const notify = id => ({
+    batch_id: id, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333',
+    email: null, recruitment_name: 'Synthetic', files: 1, done: 1, errors: 0,
+    passed: 1, review: 0, rejected: 0,
+  });
+  const response = [
+    { batch_id: batchA, dispatch: [attemptA], notify: notify(batchA) },
+    { batch_id: batchA.toUpperCase(), dispatch: [attemptDuplicate], notify: notify(batchA.toUpperCase()) },
+    { batch_id: batchB, dispatch: [attemptB], notify: notify(batchB) },
+  ];
+  const dispatched = [], acknowledged = [];
+  const rpc = async (fn, args) => {
+    if (fn === 'cv_bulk_worker_pump') return { data: response, error: null };
+    assert.equal(fn, 'cv_bulk_finish_notification');
+    acknowledged.push(args.target_batch);
+    return { data: true, error: null };
+  };
+  await assert.rejects(pumpAllSigned({
+    rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+    aiEnabled: false, origin: () => 'https://example.test', env: {},
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), error => error.message === 'cv_bulk_worker_pump_invalid_response',
+  'a duplicated batch claim must not be treated as a second independent lease');
+  assert.deepEqual(dispatched.sort(), [attemptA, attemptB].sort(),
+    'different attempt IDs in the duplicate row must not be dispatched');
+  assert.deepEqual(acknowledged.sort(), [batchA, batchB].sort(),
+    'duplicate lease remains unacknowledged while unrelated batch finishes');
+});
+
 test('signed scheduler rejects foreign or missing batch identity without delivering its lease', async () => {
   const batchA = '55555555-5555-4555-8555-555555555555';
   const batchB = '66666666-6666-4666-8666-666666666666';
