@@ -56,7 +56,11 @@ export function isIgnoredZipEntry(name: string) {
   const path = name.replace(/\\/g, '/');
   const parts = path.split('/');
   const base = parts.pop() ?? '';
-  return !base || parts.includes('__MACOSX') || base.startsWith('.') || base.toLowerCase() === 'thumbs.db';
+  // Hidden metadata directories and __MACOSX variants may contain files with CV-like
+  // extensions. Exclude their descendants, including mixed-case and Windows ZIP paths,
+  // before reserving a package slot or extracting any candidate information.
+  return !base || parts.some(part => part.startsWith('.') || part.toLowerCase() === '__macosx')
+    || base.startsWith('.') || base.toLowerCase() === 'thumbs.db';
 }
 
 export function displayFileName(name: string) {
