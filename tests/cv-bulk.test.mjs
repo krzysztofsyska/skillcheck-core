@@ -958,3 +958,29 @@ test('manual preselection group changes require a valid RPC timestamp before suc
   assert.match(action, /if \(!groupMoveConfirmed\(result\.data\)\) return \{ error:/,
     'the server action must check the actual RPC return before claiming success');
 });
+
+test('bulk redaction refuses residual candidate names before unattended AI analysis', () => {
+  const cv = 'Anna Nowak\nDoświadczenie: SQL i Excel';
+  const cleaned = buildExtraction(cv, 1, false, suggestRedaction);
+  assert.equal(cleaned.name_detected, true);
+  assert.doesNotMatch(cleaned.redacted_text, /Anna|Nowak/, 'normal redaction still accepts a CV');
+
+  // A plausible CV without a phone or e-mail used to pass through unchanged,
+  // including if the redactor replaced only one of the two name parts.
+  for (const redact of [
+    text => text,
+    text => text.replace('Anna', '[DANE OSOBOWE]'),
+    text => text.replace('Nowak', '[DANE OSOBOWE]'),
+    text => text.replace('Anna', 'An\u200Bna'),
+  ]) assert.throws(() => buildExtraction(cv, 1, false, redact),
+    error => error instanceof BulkIntakeError && error.reason === 'bad_format');
+
+  const hyphen = 'Anna Kowalski-Nowak\nDoświadczenie: Java';
+  assert.throws(() => buildExtraction(hyphen, 2, false,
+    text => text.replace('Anna', '[DANE OSOBOWE]').replace('Kowalski-', '[DANE OSOBOWE]')),
+  error => error instanceof BulkIntakeError && error.reason === 'bad_format',
+  'a leaked part of a hyphenated surname must not reach the provider');
+
+  const noDetectedName = buildExtraction('SQL\nDoświadczenie w analizach danych', 3, false, text => text);
+  assert.equal(noDetectedName.name_detected, false, 'anonymous CVs are not rejected solely for missing a name');
+});
