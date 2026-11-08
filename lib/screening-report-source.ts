@@ -22,6 +22,10 @@ async function allRows<T>(query: (from: number, to: number) => PromiseLike<DbRes
   const rows: T[] = [];
   while (true) {
     const page = checked(await query(rows.length, rows.length + 199), rpc);
+    // A successful PostgREST/RPC list response must be an array. A malformed
+    // object with a falsy `length` must not masquerade as an empty page and
+    // silently drop candidates or human-reviewed evidence from the report.
+    if (!Array.isArray(page) || page.length > 200) throw new ScreeningReportError('changed');
     if (!page.length) return rows;
     rows.push(...page);
     if (rows.length > max) throw new ScreeningReportError('too_large');
