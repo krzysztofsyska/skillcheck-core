@@ -5,7 +5,7 @@
 // żeby to samo wymaganie u tego samego kandydata nie nazywało się w dwóch widokach inaczej.
 // Porównanie nie liczy wyniku, nie ustawia kolejności merytorycznej i nie sugeruje decyzji.
 
-import { statusPublishesEvidence, type RequirementStatus } from './requirement-status.ts';
+import { firstEvidenceQuote, statusPublishesEvidence, type RequirementStatus } from './requirement-status.ts';
 import {
   positionRequirements, resolveRequirementMarks, sortByRequirementMark,
   type PositionRequirement, type RequirementFlagRow, type RequirementMark,
@@ -120,7 +120,7 @@ export function buildCandidateComparison(
         // The single-CV report skips empty citations. Keep the same first
         // usable quote here, rather than showing a blank first entry.
         quote: statusPublishesEvidence(status)
-          ? criterion?.evidence.find(item => typeof item.quote === 'string' && item.quote.trim())?.quote ?? null
+          ? firstEvidenceQuote(criterion?.evidence)
           : null,
         corrected: !!criterion?.reviewedChange,
       };
