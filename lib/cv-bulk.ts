@@ -51,12 +51,20 @@ export function bulkFileKind(name: string): BulkFileKind {
 
 /** Archive entries that are not CVs (folders, OS metadata) are skipped, not counted. */
 export function isIgnoredZipEntry(name: string) {
-  const base = name.split('/').pop() ?? '';
-  return !base || name.endsWith('/') || name.startsWith('__MACOSX/') || base.startsWith('.') || base === 'Thumbs.db';
+  // ZIP normally uses '/', but some archives contain backslash paths. Metadata
+  // directories are not CVs even when nested or written with Windows separators.
+  const path = name.replace(/\\/g, '/');
+  const parts = path.split('/');
+  const base = parts.pop() ?? '';
+  return !base || parts.includes('__MACOSX') || base.startsWith('.') || base.toLowerCase() === 'thumbs.db';
 }
 
 export function displayFileName(name: string) {
-  const base = (name.split(/[\\/]/).pop() ?? name).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  // Bidi overrides/isolates and invisible format characters can make a filename
+  // appear to have another extension in the recruiter UI. Never preserve them.
+  const base = (name.split(/[\\/]/).pop() ?? name)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g, '')
+    .trim();
   return (base || 'plik').slice(0, 255);
 }
 
