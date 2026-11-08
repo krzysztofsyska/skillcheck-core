@@ -39,3 +39,16 @@ export function buyPreselekcjaTarget({ userId, companies }: BuyPreselekcjaState)
   if (!companyId) return "/dashboard?message=owner-required";
   return `/dashboard/${companyId}/billing/checkout`;
 }
+
+/** Preserve the originating recruitment when an authenticated user purchases from
+ * the workspace header. IDs are URL path parameters, never trusted redirect URLs;
+ * company membership and purchase ownership are still checked by checkout.
+ */
+export function workspacePurchasePath(companyId: string | string[] | undefined, recruitmentId?: string | string[]): string {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (typeof companyId !== 'string' || !uuid.test(companyId)) return BUY_PRESELEKCJA_PATH;
+  const checkout = `/dashboard/${companyId}/billing/checkout`;
+  return typeof recruitmentId === 'string' && uuid.test(recruitmentId)
+    ? `${checkout}?recruitmentId=${encodeURIComponent(recruitmentId)}`
+    : checkout;
+}
