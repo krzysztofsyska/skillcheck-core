@@ -38,7 +38,8 @@ function clientFor(data, options = {}) {
           if (q.sort) rows = [...rows].sort((a,b) => String(a[q.sort]).localeCompare(String(b[q.sort])));
           rows = rows.slice(q.from, Math.min(q.to + 1, q.from + (options.cap ?? 200)));
           if (q.fields !== '*') rows = rows.map(row => Object.fromEntries(q.fields.split(',').map(k => [k, row[k]])));
-          return { data: structuredClone(q.single ? rows[0] ?? null : rows), error: null };
+          const response = structuredClone(q.single ? rows[0] ?? null : rows);
+          return { data: options.responseData?.(q, response) ?? response, error: null };
         }).then(resolve, reject);
       },
     }; return builder;
@@ -172,6 +173,34 @@ test('empty recruitment is a valid report only when RPCs exist; oversize is not 
   assert.equal((await load(data)).applications.length, 0);
   for (let n = 100; n < 601; n++) data.applications.push({ id: uuid(n), company_id: company, recruitment_id: recruitment, updated_at: timestamp });
   await assert.rejects(load(data), e => e.code === 'too_large');
+});
+
+test('malformed successful paginated Data API results cannot silently produce an empty report', async () => {
+  const empty = fixture();
+  empty.applications = []; empty.get_screening_ranking = [];
+  // Before the guard, each malformed page was treated as length=0 (an empty
+  // recruitment or shortlist) despite PostgREST never returning this shape.
+  for (const table of ['applications', 'get_screening_ranking', 'get_recruitment_shortlist']) {
+    for (const payload of [{ length: 0 }, { 0: { id: application }, length: 1 }, 'invalid-array']) {
+      await assert.rejects(
+        () => load(empty, { responseData(q, value) {
+          return q.table === table && q.from === 0 ? payload : value;
+        } }),
+        error => error?.code === 'changed',
+        `malformed ${table} payload must not look like no candidates`,
+      );
+    }
+  }
+  // A proxy ignoring a requested 200-row range is also inconsistent; never
+  // accept a page larger than the requested slice.
+  await assert.rejects(
+    () => load(fixture(), { responseData(q, value) {
+      return q.table === 'applications' && q.from === 0
+        ? Array.from({ length: 201 }, () => value[0])
+        : value;
+    } }),
+    error => error?.code === 'changed',
+  );
 });
 
 test('concurrent evidence or reviewer corrections invalidate a mixed screening report', async () => {
