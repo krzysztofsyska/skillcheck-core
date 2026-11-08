@@ -260,7 +260,8 @@ export function parseScreeningProviderOutput(input: unknown, claim: ScreeningWor
       throw new ScreeningProviderError('openai_invalid_output', 'Invalid criterion result.', 'criterion_result');
     }
     seen.add(row.criterion_id);
-    const evidence = evidenceFromExactQuotes(claim.input_cv_text_snapshot, row.evidence_quotes.map(String));
+    // Pass the unmodified model values to the runtime string validator; never coerce JSON primitives into CV evidence.
+    const evidence = evidenceFromExactQuotes(claim.input_cv_text_snapshot, row.evidence_quotes as string[]);
     if (row.rating !== 'insufficient_data' && evidence.length === 0) {
       throw new ScreeningProviderError('openai_invalid_output', 'Supported ratings require evidence.', 'missing_evidence');
     }
