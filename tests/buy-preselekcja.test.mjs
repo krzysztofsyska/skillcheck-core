@@ -7,7 +7,7 @@ import ts from 'typescript';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { nextRedirectTarget, safeNextPath, withNext } from '../lib/safe-next-path.ts';
-import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH, buyPreselekcjaTarget, selectPurchaseCompany } from '../lib/buy-preselekcja.ts';
+import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH, buyPreselekcjaTarget, selectPurchaseCompany, workspacePurchasePath } from '../lib/buy-preselekcja.ts';
 import * as validation from '../lib/auth-validation.ts';
 import * as authUrl from '../lib/auth-url.ts';
 import * as legal from '../lib/legal.ts';
@@ -392,4 +392,20 @@ test('company catalogue rejects invalid or arbitrary return URLs',async()=>{
     assert.ok(html.includes('href="'+base+'/billing/checkout">'),String(invalid));
     assert.ok(!html.includes('evil.example'),String(invalid));
   }
+});
+
+test('workspace purchase link returns to the originating recruitment and refuses untrusted path IDs', () => {
+  const recruitment = 'deadbeef-1234-4567-89ab-1234567890ab';
+  assert.equal(workspacePurchasePath(owned.id, recruitment),
+    `/dashboard/${owned.id}/billing/checkout?recruitmentId=${recruitment}`);
+  assert.equal(workspacePurchasePath(owned.id), `/dashboard/${owned.id}/billing/checkout`);
+  assert.equal(workspacePurchasePath(owned.id, ['a', 'b']), `/dashboard/${owned.id}/billing/checkout`);
+  for (const bad of ['//evil.example', '../recruitments', 'https://evil.example', 'x?next=//evil.example']) {
+    assert.equal(workspacePurchasePath(owned.id, bad), `/dashboard/${owned.id}/billing/checkout`);
+    assert.equal(workspacePurchasePath(bad, recruitment), BUY_PRESELEKCJA_PATH);
+  }
+  assert.equal(workspacePurchasePath(undefined, recruitment), BUY_PRESELEKCJA_PATH);
+  const header = readFileSync(new URL('../app/components/workspace-navigation.tsx', import.meta.url), 'utf8');
+  assert.match(header, /workspacePurchasePath\(companyId, recruitmentId\)/,
+    'the actual workspace CTA uses the validated helper, not a company-only link');
 });
