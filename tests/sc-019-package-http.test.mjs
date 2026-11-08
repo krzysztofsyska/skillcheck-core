@@ -97,6 +97,10 @@ test('built public route looks up the actual DB policy on each enabled request a
   assert.match(html,/7 analiz CV/);assert.match(html,/24 analiz CV/);
   html = await offerPage(enabled);
   assert.match(html,/PRESELEKCJA — 24 analiz CV za 300 zł brutto/);
+  assert.match(html, /Aktualne opcje zamówienia i płatności sprawdzisz w panelu firmy/);
+  assert.match(html, /Jak zamówić z pomocą obsługi\?/);
+  assert.match(html, /Poproś o fakturę proforma/);
+  assert.doesNotMatch(html, /Płatność online Przelewy24 jest przygotowywana/);
   assert.doesNotMatch(html,/60 analiz CV/);
   for (mode of ['rpc-error','missing-rpc','empty','null','missing-plan','invalid-zero','invalid-fraction','invalid-range','invalid-string','duplicate']) {
     before = reads;html = await landing(enabled);
@@ -119,5 +123,8 @@ test('built public route looks up the actual DB policy on each enabled request a
   before = reads;html = await offerPage(disabled);
   assert.equal(reads,before,'OFF offer page does not request the catalog');
   assert.match(html,/PRESELEKCJA — 60 analiz CV za 300 zł brutto/);
+  assert.match(html, /Zamówienie z pomocą obsługi: poproś o fakturę proforma/);
+  assert.doesNotMatch(html, /Aktualne opcje zamówienia i płatności sprawdzisz w panelu firmy/);
+  assert.doesNotMatch(html, /Płatność online Przelewy24 jest przygotowywana/);
   assert.deepEqual(unexpected,[],'only the safe catalog RPC is requested');
 });
