@@ -24,7 +24,15 @@ test('file kinds, archive entries and display names', () => {
   assert.equal(isIgnoredZipEntry('folder/'), true);
   assert.equal(isIgnoredZipEntry('folder/.DS_Store'), true);
   assert.equal(isIgnoredZipEntry('folder/cv.pdf'), false);
+  assert.equal(isIgnoredZipEntry('folder\\__MACOSX\\resume.pdf'), true, 'Windows separators cannot expose OS metadata');
+  assert.equal(isIgnoredZipEntry('folder\\Thumbs.DB'), true, 'metadata names are case-insensitive');
+  assert.equal(isIgnoredZipEntry('folder\\cv.pdf'), false, 'ordinary Windows-style ZIP paths remain valid');
   assert.equal(displayFileName('a/b\\c/cv\u0000.pdf'), 'cv.pdf');
+  assert.equal(displayFileName('folder/CV\u202efdP.exe'), 'CVfdP.exe', 'bidi override cannot spoof the extension');
+  assert.equal(displayFileName('folder/\u2066CV\u2069\u200b\ufeff.pdf'), 'CV.pdf', 'invisible format marks are removed');
+  assert.equal(displayFileName('folder/\u202a\u202c'), 'plik', 'empty names use the fallback');
+  assert.deepEqual(validateBatchFiles([{ name: 'folder/CV\u202efdP.exe', kind: 'pdf', size: 5 }]),
+    [{ name: 'CVfdP.exe', kind: 'other', size: 5 }], 'a spoofed extension does not change the detected file kind');
   assert.throws(() => validateBatchFiles([]), /co najmniej jeden/);
   assert.throws(() => validateBatchFiles(Array.from({ length: 101 }, () => ({ name: 'a.pdf', kind: 'pdf', size: 1 }))), /100/);
   assert.deepEqual(validateBatchFiles([{ name: 'x/CV.Pdf', kind: 'other', size: 12.7 }]), [{ name: 'CV.Pdf', kind: 'pdf', size: 12 }]);
