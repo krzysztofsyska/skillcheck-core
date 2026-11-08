@@ -24,6 +24,11 @@ test('file kinds, archive entries and display names', () => {
   assert.equal(isIgnoredZipEntry('folder/'), true);
   assert.equal(isIgnoredZipEntry('folder/.DS_Store'), true);
   assert.equal(isIgnoredZipEntry('folder/cv.pdf'), false);
+  assert.equal(isIgnoredZipEntry('folder/__macosx/cv.pdf'), true, 'macOS metadata folder is case-insensitive');
+  assert.equal(isIgnoredZipEntry('folder/__MaCoSx/nested/cv.docx'), true, 'nested mixed-case macOS metadata is excluded');
+  assert.equal(isIgnoredZipEntry('folder/.cache/cv.pdf'), true, 'CV-like files in hidden metadata folders are excluded');
+  assert.equal(isIgnoredZipEntry('folder\\.Spotlight-V100\\cv.pdf'), true, 'Windows-style hidden folders are excluded');
+  assert.equal(isIgnoredZipEntry('folder/__MACOSXresume/cv.pdf'), false, 'ordinary similarly named directories remain valid');
   assert.equal(isIgnoredZipEntry('folder\\__MACOSX\\resume.pdf'), true, 'Windows separators cannot expose OS metadata');
   assert.equal(isIgnoredZipEntry('folder\\Thumbs.DB'), true, 'metadata names are case-insensitive');
   assert.equal(isIgnoredZipEntry('folder\\cv.pdf'), false, 'ordinary Windows-style ZIP paths remain valid');
