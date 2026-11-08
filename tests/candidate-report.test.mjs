@@ -294,9 +294,14 @@ test('SC-005: context rejects foreign and malformed Data API identities before C
   assert.equal(valid.document.candidate_id, valid.application.candidate_id);
 
   // SQL UUIDs compare case-insensitively; a case-only difference is not a new tenant.
-  const uppercase = loaderClient(loaderData(), () => {}, (table, result) =>
-    table === 'applications' ? { ...result, data: { ...result.data, id: route.applicationId.toUpperCase() } } : result);
-  assert.equal((await loadScreeningContext(uppercase, route)).application.id.toLowerCase(), route.applicationId);
+  const hexId = 'abcdef03-0000-4000-8000-00000000000a';
+  const hexRoute = { ...route, applicationId: hexId };
+  const hexData = JSON.parse(JSON.stringify(loaderData()).split(route.applicationId).join(hexId));
+  assert.notEqual(hexId.toUpperCase(), hexId);
+  const uppercase = loaderClient(hexData, () => {}, (table, result) =>
+    table === 'applications' ? { ...result, data: { ...result.data, id: hexId.toUpperCase() } } : result);
+  const upper = await loadScreeningContext(uppercase, hexRoute);
+  assert.equal(upper.application.id, hexId.toUpperCase());
 });
 
 test('loadCandidateReport: zakończona analiza z pustą macierzą pokazuje ostrzeżenie', async () => {
