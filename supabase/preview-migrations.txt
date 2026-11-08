@@ -50,3 +50,4 @@
 20261107164219_exercise_ai_revision_workflow.sql
 20261107164252_sc019_catalog_orders.sql
 20261107170432_single_analysis_preselection_group.sql
+20261107171053_exercise_ai_generation.sql

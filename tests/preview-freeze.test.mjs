@@ -41,7 +41,7 @@ test('checked-in freeze pins baseline with no infrastructure or candidate metada
 
 for (const [file, job] of [['preview-db-migrate.yml', 'migrate'], ['preview-ai-smoke.yml', 'smoke']]) {
   test(`${file}: trusted preflight gates environment and secrets at job level`, () => {
-    const yml = readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8');
+    const yml = readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
     const preflight = yml.split('  preflight:\n')[1]?.split(`  ${job}:\n`)[0];
     assert.ok(preflight);
     assert.match(preflight, /ref: refs\/heads\/integration\n/);
