@@ -40,6 +40,18 @@ export type BulkErrorReason = 'over_limit' | 'unreadable_scan' | 'protected_pdf'
   | 'no_text' | 'ocr_timeout' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible';
 export type BulkGroup = 'passed' | 'review' | 'rejected';
 
+/** A manual group move must resolve to the exact application in the route,
+ * not merely to any application the signed-in user can edit in another company. */
+export function bulkMoveTargetMatches(value: unknown, companyId: string, recruitmentId: string, applicationId: string): boolean {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (![companyId, recruitmentId, applicationId].every(id => uuid.test(id))) return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return ([['company_id', companyId], ['recruitment_id', recruitmentId], ['id', applicationId]] as const)
+    .every(([key, expected]) => typeof row[key] === 'string' && uuid.test(row[key]) && row[key].toLowerCase() === expected.toLowerCase());
+}
+
+
 export function bulkFileKind(name: string): BulkFileKind {
   const lower = name.toLowerCase();
   if (lower.endsWith('.pdf')) return 'pdf';
