@@ -4,7 +4,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import {
   BULK_MAX_FILE_BYTES, BulkIntakeError, buildExtraction, bulkEmail, bulkFileKind, bulkMailEnabled, bulkPricing, detectEmail,
-  detectName, detectPhone, displayFileName, isIgnoredZipEntry, bulkMoveTargetMatches, sendBulkEmail, validateBatchFiles, verifyBulkRegistration,
+  detectName, detectPhone, displayFileName, isIgnoredZipEntry, bulkBatchRouteMatches, bulkMoveTargetMatches, sendBulkEmail, validateBatchFiles, verifyBulkRegistration,
 } from '../lib/cv-bulk.ts';
 import { extractBulkCv } from '../lib/cv-bulk-extract.ts';
 import { closeOcr, ocrImage } from '../lib/cv-ocr.ts';
@@ -1007,4 +1007,44 @@ test('bulk redaction refuses residual candidate names before unattended AI analy
 
   const noDetectedName = buildExtraction('SQL\nDoświadczenie w analizach danych', 3, false, text => text);
   assert.equal(noDetectedName.name_detected, false, 'anonymous CVs are not rejected solely for missing a name');
+});
+
+
+test('bulk status and route are bound before reading or mutating any other company batch', async () => {
+  const batchId = '11111111-1111-4111-8111-111111111111';
+  const recruitmentId = '22222222-2222-4222-8222-222222222222';
+  const other = '33333333-3333-4333-8333-333333333333';
+  const status = { batch: { id: batchId, recruitment_id: recruitmentId }, items: [] };
+  assert.equal(bulkBatchRouteMatches(status, batchId, recruitmentId), true);
+  assert.equal(bulkBatchRouteMatches({ batch: { ...status.batch, id: batchId.toUpperCase(), recruitment_id: recruitmentId.toUpperCase() } },
+    batchId, recruitmentId), true, 'UUID casing is irrelevant');
+  for (const bad of [null, {}, [], { batch: [] }, { batch: {} },
+    { batch: { ...status.batch, id: other } }, { batch: { ...status.batch, recruitment_id: other } },
+    { batch: { ...status.batch, id: 42 } }, { batch: { ...status.batch, recruitment_id: 'bad' } }]) {
+    assert.equal(bulkBatchRouteMatches(bad, batchId, recruitmentId), false);
+  }
+  assert.equal(bulkBatchRouteMatches(status, other, recruitmentId), false);
+  assert.equal(bulkBatchRouteMatches(status, batchId, other), false);
+  assert.equal(bulkBatchRouteMatches(status, 'bad', recruitmentId), false);
+
+  const { readFileSync } = await import('node:fs');
+  const actions = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
+  const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
+  assert.ok(create.indexOf(".eq('company_id', companyId)") < create.indexOf("client.rpc('cv_bulk_create_batch'"),
+    'reservation checks route company first');
+  const close = actions.slice(actions.indexOf('export async function closeBulkUpload'), actions.indexOf('export async function bulkProgress'));
+  assert.ok(close.indexOf('bulkBatchRouteMatches(') < close.indexOf("client.rpc('cv_bulk_close_upload'"),
+    'close verifies batch ID before writing');
+  assert.ok(close.indexOf(".eq('company_id', companyId)") < close.indexOf("client.rpc('cv_bulk_close_upload'"),
+    'close verifies company before writing');
+  const progress = actions.slice(actions.indexOf('export async function bulkProgress'), actions.indexOf('export type MoveState'));
+  assert.ok(progress.indexOf(".eq('company_id', companyId)") < progress.indexOf('pumpWithSession('),
+    'heartbeat checks company before pumping');
+  assert.ok(progress.indexOf('bulkBatchRouteMatches(before.data') < progress.indexOf('pumpWithSession('),
+    'heartbeat checks batch identity before pumping');
+  const page = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /\.eq\('id', recruitmentId\)\.eq\('company_id', companyId\)/);
+  assert.match(page, /bulkBatchRouteMatches\(raw, batchId, recruitmentId\)/);
+  const ui = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url), 'utf8');
+  assert.match(ui, /bulkProgress\(companyId, recruitmentId, batchId\)/);
 });

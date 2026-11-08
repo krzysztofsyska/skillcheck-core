@@ -42,6 +42,22 @@ export type BulkGroup = 'passed' | 'review' | 'rejected';
 
 /** A manual group move must resolve to the exact application in the route,
  * not merely to any application the signed-in user can edit in another company. */
+/** Verify a bulk status belongs to the exact route batch and recruitment before
+ * displaying candidate links or starting a background pump. A user can belong to
+ * multiple companies, so an authorized RPC by itself does not bind the URL. */
+export function bulkBatchRouteMatches(value: unknown, batchId: string, recruitmentId: string): boolean {
+  const validUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!validUuid.test(batchId) || !validUuid.test(recruitmentId) ||
+    !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const batch = (value as { batch?: unknown }).batch;
+  if (!batch || typeof batch !== 'object' || Array.isArray(batch)) return false;
+  const b = batch as Record<string, unknown>;
+  return typeof b.id === 'string' && validUuid.test(b.id) &&
+    typeof b.recruitment_id === 'string' && validUuid.test(b.recruitment_id) &&
+    b.id.toLowerCase() === batchId.toLowerCase() &&
+    b.recruitment_id.toLowerCase() === recruitmentId.toLowerCase();
+}
+
 export function bulkMoveTargetMatches(value: unknown, companyId: string, recruitmentId: string, applicationId: string): boolean {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (![companyId, recruitmentId, applicationId].every(id => uuid.test(id))) return false;

@@ -25,13 +25,13 @@ export function BatchProgress({ companyId, recruitmentId, batchId, initial, bill
     if (finished) return;
     let stop = false;
     const tick = async () => {
-      const next = await bulkProgress(companyId, batchId).catch(() => null) as BatchStatus | null;
+      const next = await bulkProgress(companyId, recruitmentId, batchId).catch(() => null) as BatchStatus | null;
       if (!stop && next) setData(next);
       if (!stop) setTimeout(tick, 4000);
     };
     const timer = setTimeout(tick, 1500);
     return () => { stop = true; clearTimeout(timer); };
-  }, [companyId, batchId, finished]);
+  }, [companyId, recruitmentId, batchId, finished]);
 
   const items = data.items;
   const count = (phase: BulkPhase) => items.filter(i => i.phase === phase).length;

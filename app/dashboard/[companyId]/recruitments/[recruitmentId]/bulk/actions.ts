@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { companyAccess } from '../../../../../../lib/company-access';
-import { bulkIntakeBlocked, bulkMoveTargetMatches, groupMoveConfirmed, validateBatchFiles, verifyBulkRegistration, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
+import { bulkIntakeBlocked, bulkBatchRouteMatches, bulkMoveTargetMatches, groupMoveConfirmed, validateBatchFiles, verifyBulkRegistration, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
 import { pumpWithSession } from '../../../../../../lib/cv-bulk-server';
 import { loadCurrentRanking, withGroupCurrency } from '../../../../../../lib/preselection-currency';
 import { screeningAiUserEnabled } from '../../../../../../lib/screening-dispatch';
@@ -19,6 +19,11 @@ export async function createBulkBatch(companyId: string, recruitmentId: string, 
   const blocked = bulkIntakeBlocked(screeningAiUserEnabled());
   if (blocked) return { error: blocked };
   if (!uuid.test(recruitmentId) || !uuid.test(requestKey)) return { error: 'Odśwież stronę i spróbuj ponownie.' };
+  // Bind the URL company to the recruitment before the RPC reserves package credits.
+  // A recruiter can edit more than one company, so membership alone is insufficient.
+  const recruitment = await client.from('recruitments').select('id')
+    .eq('id', recruitmentId).eq('company_id', companyId).maybeSingle();
+  if (recruitment.error || !recruitment.data) return { error: 'Nie znaleziono rekrutacji w tej firmie.' };
   let checked;
   try { checked = validateBatchFiles(files); } catch (error) { return { error: (error as Error).message }; }
   const created = await client.rpc('cv_bulk_create_batch', { target_recruitment: recruitmentId, request_key: requestKey, files: checked });
@@ -45,6 +50,16 @@ export async function createBulkBatch(companyId: string, recruitmentId: string, 
 export async function closeBulkUpload(companyId: string, batchId: string) {
   const { client, canEdit } = await companyAccess(companyId);
   if (!canEdit || !uuid.test(batchId)) return { error: 'Brak dostępu.' };
+  // A batch from another company must not be closed through this company's URL.
+  const status = await client.rpc('cv_bulk_batch_status', { target_batch: batchId });
+  const batch = status.data && typeof status.data === 'object' && !Array.isArray(status.data)
+    ? (status.data as { batch?: { recruitment_id?: string } }).batch : null;
+  const recruitmentId = batch?.recruitment_id;
+  if (status.error || typeof recruitmentId !== 'string' ||
+    !bulkBatchRouteMatches(status.data, batchId, recruitmentId)) return { error: 'Brak dostępu.' };
+  const recruitment = await client.from('recruitments').select('id')
+    .eq('id', recruitmentId).eq('company_id', companyId).maybeSingle();
+  if (recruitment.error || !recruitment.data) return { error: 'Brak dostępu.' };
   const result = await client.rpc('cv_bulk_close_upload', { target_batch: batchId });
   // SQL returns the non-negative count of released slots. A null or malformed
   // successful RPC response is not proof that uploading was closed.
@@ -56,12 +71,18 @@ export async function closeBulkUpload(companyId: string, batchId: string) {
 }
 
 /** Progress page heartbeat: advances the queue (recruiters only) and returns the status. */
-export async function bulkProgress(companyId: string, batchId: string) {
+export async function bulkProgress(companyId: string, recruitmentId: string, batchId: string) {
   const { client, canEdit } = await companyAccess(companyId);
-  if (!uuid.test(batchId)) return null;
+  if (!uuid.test(recruitmentId) || !uuid.test(batchId)) return null;
+  const recruitment = await client.from('recruitments').select('id')
+    .eq('id', recruitmentId).eq('company_id', companyId).maybeSingle();
+  if (recruitment.error || !recruitment.data) return null;
+  // Verify batch ownership before the pump, not only when rendering its result.
+  const before = await client.rpc('cv_bulk_batch_status', { target_batch: batchId });
+  if (before.error || !bulkBatchRouteMatches(before.data, batchId, recruitmentId)) return null;
   if (canEdit) { try { await pumpWithSession(client, batchId); } catch { /* status below still shows the state */ } }
-  const status = await client.rpc('cv_bulk_batch_status', { target_batch: batchId });
-  if (status.error || !status.data) return null;
+  const status = canEdit ? await client.rpc('cv_bulk_batch_status', { target_batch: batchId }) : before;
+  if (status.error || !bulkBatchRouteMatches(status.data, batchId, recruitmentId)) return null;
   const data = status.data as { batch: { recruitment_id: string }; items: { application_id: string | null; group_key: unknown; group_analysis_id?: unknown }[] };
   const ranking = data.items.some(i => i.group_key) ? await loadCurrentRanking(client, data.batch.recruitment_id) : null;
   return { ...data, items: withGroupCurrency(data.items, ranking) };
