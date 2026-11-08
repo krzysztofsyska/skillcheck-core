@@ -2,17 +2,16 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../lib/buy-preselekcja";
+import { BUY_PRESELEKCJA_LABEL, workspacePurchasePath } from "../../lib/buy-preselekcja";
 import styles from "./workspace-navigation.module.css";
 
 export function WorkspaceNavigation() {
   const params = useParams();
   const companyId = params?.companyId;
-  // Keep purchases in the company currently being viewed. The checkout page
-  // continues to verify membership and ownership on the server.
-  const purchasePath = typeof companyId === "string"
-    ? `/dashboard/${encodeURIComponent(companyId)}/billing/checkout`
-    : BUY_PRESELEKCJA_PATH;
+  const recruitmentId = params?.recruitmentId;
+  // Keep the originating recruitment on the checkout return path; the server
+  // still verifies membership and ownership before authorizing a purchase.
+  const purchasePath = workspacePurchasePath(companyId, recruitmentId);
 
   return <header className={styles.header}>
     <nav className={styles.navigation} aria-label="Nawigacja konta">
