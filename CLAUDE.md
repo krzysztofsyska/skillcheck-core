@@ -4,6 +4,8 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
+> **Bieżący punkt wejścia — SC-CONTEXT (8.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera aktualne SHA, status implementacji/review i HOLD wydania. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
+
 ## Who does what (owner decision 2026-11-05)
 
 Codex coordinates and implements programming work across the entire SkillCheck project.
