@@ -180,7 +180,7 @@ function renderWorkspace(params) {
   }
   const navigation = loadComponent('app/components/workspace-navigation.tsx', {
     'next/navigation': { useParams: () => params },
-    '../../lib/buy-preselekcja': { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH },
+    '../../lib/buy-preselekcja': { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH, workspacePurchasePath },
     './workspace-navigation.module.css': { default: {} },
   });
   const { default: Layout } = loadComponent('app/dashboard/layout.tsx', {
@@ -405,6 +405,8 @@ test('workspace purchase link returns to the originating recruitment and refuses
     assert.equal(workspacePurchasePath(bad, recruitment), BUY_PRESELEKCJA_PATH);
   }
   assert.equal(workspacePurchasePath(undefined, recruitment), BUY_PRESELEKCJA_PATH);
+  const rendered = renderWorkspace({ companyId: owned.id, recruitmentId: recruitment });
+  assert.ok(rendered.includes(`href="/dashboard/${owned.id}/billing/checkout?recruitmentId=${recruitment}">Kup PRESELEKCJĘ</a>`));
   const header = readFileSync(new URL('../app/components/workspace-navigation.tsx', import.meta.url), 'utf8');
   assert.match(header, /workspacePurchasePath\(companyId, recruitmentId\)/,
     'the actual workspace CTA uses the validated helper, not a company-only link');
