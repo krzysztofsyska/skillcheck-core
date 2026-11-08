@@ -47,16 +47,12 @@ export async function createBulkBatch(companyId: string, recruitmentId: string, 
 }
 
 /** Ends uploading; unsent files give their package slots back. */
-export async function closeBulkUpload(companyId: string, batchId: string) {
+export async function closeBulkUpload(companyId: string, recruitmentId: string, batchId: string) {
   const { client, canEdit } = await companyAccess(companyId);
-  if (!canEdit || !uuid.test(batchId)) return { error: 'Brak dostępu.' };
+  if (!canEdit || !uuid.test(recruitmentId) || !uuid.test(batchId)) return { error: 'Brak dostępu.' };
   // A batch from another company must not be closed through this company's URL.
   const status = await client.rpc('cv_bulk_batch_status', { target_batch: batchId });
-  const batch = status.data && typeof status.data === 'object' && !Array.isArray(status.data)
-    ? (status.data as { batch?: { recruitment_id?: string } }).batch : null;
-  const recruitmentId = batch?.recruitment_id;
-  if (status.error || typeof recruitmentId !== 'string' ||
-    !bulkBatchRouteMatches(status.data, batchId, recruitmentId)) return { error: 'Brak dostępu.' };
+  if (status.error || !bulkBatchRouteMatches(status.data, batchId, recruitmentId)) return { error: 'Brak dostępu.' };
   const recruitment = await client.from('recruitments').select('id')
     .eq('id', recruitmentId).eq('company_id', companyId).maybeSingle();
   if (recruitment.error || !recruitment.data) return { error: 'Brak dostępu.' };

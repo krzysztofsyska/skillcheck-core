@@ -40,8 +40,6 @@ export type BulkErrorReason = 'over_limit' | 'unreadable_scan' | 'protected_pdf'
   | 'no_text' | 'ocr_timeout' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible';
 export type BulkGroup = 'passed' | 'review' | 'rejected';
 
-/** A manual group move must resolve to the exact application in the route,
- * not merely to any application the signed-in user can edit in another company. */
 /** Verify a bulk status belongs to the exact route batch and recruitment before
  * displaying candidate links or starting a background pump. A user can belong to
  * multiple companies, so an authorized RPC by itself does not bind the URL. */
@@ -58,6 +56,8 @@ export function bulkBatchRouteMatches(value: unknown, batchId: string, recruitme
     b.recruitment_id.toLowerCase() === recruitmentId.toLowerCase();
 }
 
+/** A manual group move must resolve to the exact application in the route,
+ * not merely to any application the signed-in user can edit in another company. */
 export function bulkMoveTargetMatches(value: unknown, companyId: string, recruitmentId: string, applicationId: string): boolean {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (![companyId, recruitmentId, applicationId].every(id => uuid.test(id))) return false;
