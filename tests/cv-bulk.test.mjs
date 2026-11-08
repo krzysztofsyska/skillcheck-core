@@ -1047,7 +1047,7 @@ test('bulk status and route are bound before reading or mutating any other compa
   assert.match(page, /bulkBatchRouteMatches\(raw, batchId, recruitmentId\)/);
   assert.match(close, /closeBulkUpload\(companyId: string, recruitmentId: string, batchId: string\)/, 'exact recruitment is required to close batch');
   const uploader = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/uploader.tsx', import.meta.url), 'utf8');
-  assert.match(uploader, /closeBulkUpload\(props.companyId, props.recruitmentId, created.batchId\)/);
+  assert.match(uploader, /closeBulkUpload\(props.companyId, props.recruitmentId, batchId\)/);
   const ui = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url), 'utf8');
   assert.match(ui, /bulkProgress\(companyId, recruitmentId, batchId\)/);
 });
