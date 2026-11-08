@@ -672,7 +672,7 @@ test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
   // Scanner noise on a blank page (no word-like run) is still blank, even with low confidence.
   const noise = async () => ({ text: '| \u2014 ~ .', confidence: 20 });
   assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', noise)).text, /Katarzyna Wisniewska/);
-  // A confident short read (page number, footer) is still skipped.
+  // A confident bare page number is still skipped; short word-like skills are not.
   const footer = async () => ({ text: '2', confidence: 95 });
   const withoutFooter = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer);
   assert.match(withoutFooter.text, /Katarzyna Wisniewska/);
