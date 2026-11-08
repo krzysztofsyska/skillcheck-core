@@ -216,6 +216,18 @@ export type BulkExtraction = {
   source_text: string; redacted_text: string; name_detected: boolean; ocr_used: boolean;
 };
 
+/** Fail closed if a detected name survives automatic redaction.
+ * Contacts have separate detectors, but a partial name replacement must also
+ * block unattended bulk intake before any text is sent to an AI provider.
+ */
+function unredactedCandidateName(redacted: string, candidate: { first: string; last: string }) {
+  const fragments = [candidate.first, candidate.last, ...candidate.last.split(/[^\p{L}\p{N}]+/u).filter(part => part.length >= 3)];
+  return fragments.some(fragment => {
+    const escaped = fragment.replace(/[|\\{}()[\]^$+*?.]/g, '\\/** Candidate identity for the database; no name -> neutral placeholder with the file position. */');
+    return new RegExp('(?<![\\p{L}\\p{N}])' + escaped + '(?![\\p{L}\\p{N}])', 'iu').test(redacted);
+  });
+}
+
 /** Candidate identity for the database; no name -> neutral placeholder with the file position. */
 export function buildExtraction(text: string, position: number, ocrUsed: boolean,
   redact: (text: string, names: string[]) => string): BulkExtraction {
@@ -231,7 +243,12 @@ export function buildExtraction(text: string, position: number, ocrUsed: boolean
   const redacted = redact(text, names);
   // Detection and redaction must never drift apart: the approved text goes to the AI provider without
   // a human check, so a phone or e-mail still visible after redaction stops the file.
-  if (detectPhone(redacted) || detectEmail(redacted)) throw new BulkIntakeError('bad_format');
+  // Normalise provider-bound text again: invisible characters introduced by
+  // a failed redactor must not hide a residual name, telephone or e-mail.
+  const inspected = normalizeForRedaction(redacted);
+  if (detectPhone(inspected) || detectEmail(inspected) || (name && unredactedCandidateName(inspected, name))) {
+    throw new BulkIntakeError('bad_format');
+  }
   return {
     first_name: first.slice(0, 100), last_name: last.slice(0, 100), email, phone,
     source_text: text, redacted_text: redacted, name_detected: !!name, ocr_used: ocrUsed,
