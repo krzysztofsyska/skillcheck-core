@@ -104,6 +104,11 @@ function quotes(value: unknown): EvidenceQuote[] {
   }).slice(0, 5);
 }
 
+/** Pierwszy cytat z prawidłowym zakresem — wspólny dla raportu CV i porównania. */
+export function firstEvidenceQuote(value: unknown): string | null {
+  return quotes(value)[0]?.quote ?? null;
+}
+
 /**
  * Status jednego wymagania u jednego kandydata. Jedyne miejsce, w którym kolumny
  * macierzy dowodów zamieniają się na stan pokazywany człowiekowi.
