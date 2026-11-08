@@ -237,7 +237,9 @@ export function screeningReportCsv(report: ScreeningReport): string {
     // Exports keep the SC-009 rule: candidates by application ID only, no names (the screen may show names).
     rows.push([], ['Preselekcja automatyczna (grupy z analizy AI, do weryfikacji przez człowieka)'],
       ['Zgłoszenie', 'Grupa', 'Wynik', 'Pokrycie', 'Źródło grupy', 'Aktualność']);
-    for (const g of report.groups) rows.push([g.application_id, preselectionGroupLabels[g.group], g.raw_score, g.coverage,
+    for (const g of report.groups) rows.push([g.application_id, preselectionGroupLabels[g.group],
+      // A historical classification stays visible, but its score and coverage must not be read as current.
+      g.stale ? null : g.raw_score, g.stale ? null : g.coverage,
       g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie', g.stale ? 'Wynik nieaktualny — wymaga ponownej analizy' : 'Aktualny']);
   }
   const csv = '\uFEFF' + rows.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';

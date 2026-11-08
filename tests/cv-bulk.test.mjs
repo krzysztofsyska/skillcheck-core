@@ -24,7 +24,20 @@ test('file kinds, archive entries and display names', () => {
   assert.equal(isIgnoredZipEntry('folder/'), true);
   assert.equal(isIgnoredZipEntry('folder/.DS_Store'), true);
   assert.equal(isIgnoredZipEntry('folder/cv.pdf'), false);
+  assert.equal(isIgnoredZipEntry('folder/__macosx/cv.pdf'), true, 'macOS metadata folder is case-insensitive');
+  assert.equal(isIgnoredZipEntry('folder/__MaCoSx/nested/cv.docx'), true, 'nested mixed-case macOS metadata is excluded');
+  assert.equal(isIgnoredZipEntry('folder/.cache/cv.pdf'), true, 'CV-like files in hidden metadata folders are excluded');
+  assert.equal(isIgnoredZipEntry('folder\\.Spotlight-V100\\cv.pdf'), true, 'Windows-style hidden folders are excluded');
+  assert.equal(isIgnoredZipEntry('folder/__MACOSXresume/cv.pdf'), false, 'ordinary similarly named directories remain valid');
+  assert.equal(isIgnoredZipEntry('folder\\__MACOSX\\resume.pdf'), true, 'Windows separators cannot expose OS metadata');
+  assert.equal(isIgnoredZipEntry('folder\\Thumbs.DB'), true, 'metadata names are case-insensitive');
+  assert.equal(isIgnoredZipEntry('folder\\cv.pdf'), false, 'ordinary Windows-style ZIP paths remain valid');
   assert.equal(displayFileName('a/b\\c/cv\u0000.pdf'), 'cv.pdf');
+  assert.equal(displayFileName('folder/CV\u202efdP.exe'), 'CVfdP.exe', 'bidi override cannot spoof the extension');
+  assert.equal(displayFileName('folder/\u2066CV\u2069\u200b\ufeff.pdf'), 'CV.pdf', 'invisible format marks are removed');
+  assert.equal(displayFileName('folder/\u202a\u202c'), 'plik', 'empty names use the fallback');
+  assert.deepEqual(validateBatchFiles([{ name: 'folder/CV\u202efdP.exe', kind: 'pdf', size: 5 }]),
+    [{ name: 'CVfdP.exe', kind: 'other', size: 5 }], 'a spoofed extension does not change the detected file kind');
   assert.throws(() => validateBatchFiles([]), /co najmniej jeden/);
   assert.throws(() => validateBatchFiles(Array.from({ length: 101 }, () => ({ name: 'a.pdf', kind: 'pdf', size: 1 }))), /100/);
   assert.deepEqual(validateBatchFiles([{ name: 'x/CV.Pdf', kind: 'other', size: 12.7 }]), [{ name: 'CV.Pdf', kind: 'pdf', size: 12 }]);
@@ -664,9 +677,19 @@ test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
   // Scanner noise on a blank page (no word-like run) is still blank, even with low confidence.
   const noise = async () => ({ text: '| \u2014 ~ .', confidence: 20 });
   assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', noise)).text, /Katarzyna Wisniewska/);
-  // A confident short read (page number, footer) is still skipped.
+  // A confident bare page number is still skipped; short word-like skills are not.
   const footer = async () => ({ text: '2', confidence: 95 });
-  assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer)).text, /Katarzyna Wisniewska/);
+  const withoutFooter = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer);
+  assert.match(withoutFooter.text, /Katarzyna Wisniewska/);
+  assert.doesNotMatch(withoutFooter.text, /\n2$/, 'a bare page number is still skipped');
+  // A page consisting of a short, confidently read skill/qualification must not
+  // disappear from the approved text that the automatic screening will receive.
+  for (const skill of ['SQL', 'Prawo jazdy B']) {
+    const confident = async () => ({ text: skill, confidence: 95 });
+    const out = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', confident);
+    assert.ok(out.text.includes(skill), `short CV evidence preserved: ${skill}`);
+    assert.equal(out.ocrUsed, true);
+  }
   // A scan where OCR finds nothing on any page is still unreadable.
   await assert.rejects(extractBulkCv(scannedPdf(cvLines), 'pdf', blankOcr), reason('unreadable_scan'));
 });
@@ -934,4 +957,30 @@ test('manual preselection group changes require a valid RPC timestamp before suc
   const action = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
   assert.match(action, /if \(!groupMoveConfirmed\(result\.data\)\) return \{ error:/,
     'the server action must check the actual RPC return before claiming success');
+});
+
+test('bulk redaction refuses residual candidate names before unattended AI analysis', () => {
+  const cv = 'Anna Nowak\nDoświadczenie: SQL i Excel';
+  const cleaned = buildExtraction(cv, 1, false, suggestRedaction);
+  assert.equal(cleaned.name_detected, true);
+  assert.doesNotMatch(cleaned.redacted_text, /Anna|Nowak/, 'normal redaction still accepts a CV');
+
+  // A plausible CV without a phone or e-mail used to pass through unchanged,
+  // including if the redactor replaced only one of the two name parts.
+  for (const redact of [
+    text => text,
+    text => text.replace('Anna', '[DANE OSOBOWE]'),
+    text => text.replace('Nowak', '[DANE OSOBOWE]'),
+    text => text.replace('Anna', 'An\u200Bna'),
+  ]) assert.throws(() => buildExtraction(cv, 1, false, redact),
+    error => error instanceof BulkIntakeError && error.reason === 'bad_format');
+
+  const hyphen = 'Anna Kowalski-Nowak\nDoświadczenie: Java';
+  assert.throws(() => buildExtraction(hyphen, 2, false,
+    text => text.replace('Anna', '[DANE OSOBOWE]').replace('Kowalski-', '[DANE OSOBOWE]')),
+  error => error instanceof BulkIntakeError && error.reason === 'bad_format',
+  'a leaked part of a hyphenated surname must not reach the provider');
+
+  const noDetectedName = buildExtraction('SQL\nDoświadczenie w analizach danych', 3, false, text => text);
+  assert.equal(noDetectedName.name_detected, false, 'anonymous CVs are not rejected solely for missing a name');
 });

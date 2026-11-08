@@ -38,7 +38,8 @@ function clientFor(data, options = {}) {
           if (q.sort) rows = [...rows].sort((a,b) => String(a[q.sort]).localeCompare(String(b[q.sort])));
           rows = rows.slice(q.from, Math.min(q.to + 1, q.from + (options.cap ?? 200)));
           if (q.fields !== '*') rows = rows.map(row => Object.fromEntries(q.fields.split(',').map(k => [k, row[k]])));
-          return { data: structuredClone(q.single ? rows[0] ?? null : rows), error: null };
+          const response = structuredClone(q.single ? rows[0] ?? null : rows);
+          return { data: options.responseData?.(q, response) ?? response, error: null };
         }).then(resolve, reject);
       },
     }; return builder;
@@ -60,6 +61,33 @@ test('report uses current reviewed evidence, whitelists fields, and leaves sourc
     assert.notEqual(q.fields, '*');
     assert.doesNotMatch(q.fields, /input_cv_text_snapshot|binding_snapshot|source_text|redacted_text|provider|result_summary|review_note|reviewer_id/);
     assert.ok(q.eqs.some(([k,v]) => k === (q.table === 'companies' ? 'id' : 'company_id') && v === company));
+  }
+});
+
+test('report rejects mis-scoped source identities even if the Data API accepted its filters', async () => {
+  // A broken view or mocked PostgREST response must never mix another tenant's
+  // company, recruitment, position or application into a downloadable report.
+  const cases = [
+    ['companies', 'id', uuid(90)],
+    ['recruitments', 'id', uuid(90)],
+    ['recruitments', 'company_id', uuid(90)],
+    ['recruitments', 'position_id', 'invalid-position-id'],
+    ['positions', 'id', uuid(90)],
+    ['positions', 'company_id', uuid(90)],
+    ['applications', 'id', 'invalid-application-id'],
+    ['applications', 'company_id', uuid(90)],
+    ['applications', 'recruitment_id', uuid(90)],
+  ];
+  for (const [table, field, value] of cases) {
+    const client = clientFor(fixture(), {
+      responseData(q, response) {
+        if (q.table !== table || response === null) return response;
+        const corrupt = row => ({ ...row, [field]: value });
+        return Array.isArray(response) ? response.map((row, i) => i === 0 ? corrupt(row) : row) : corrupt(response);
+      },
+    });
+    await assert.rejects(() => loadScreeningReport(client, company, recruitment),
+      error => error?.code === 'changed', `${table}.${field} must fail closed`);
   }
 });
 
@@ -174,6 +202,66 @@ test('empty recruitment is a valid report only when RPCs exist; oversize is not 
   await assert.rejects(load(data), e => e.code === 'too_large');
 });
 
+test('malformed successful paginated Data API results cannot silently produce an empty report', async () => {
+  const empty = fixture();
+  empty.applications = []; empty.get_screening_ranking = [];
+  // Before the guard, each malformed page was treated as length=0 (an empty
+  // recruitment or shortlist) despite PostgREST never returning this shape.
+  for (const table of ['applications', 'get_screening_ranking', 'get_recruitment_shortlist']) {
+    for (const payload of [{ length: 0 }, { 0: { id: application }, length: 1 }, 'invalid-array']) {
+      await assert.rejects(
+        () => load(empty, { responseData(q, value) {
+          return q.table === table && q.from === 0 ? payload : value;
+        } }),
+        error => error?.code === 'changed',
+        `malformed ${table} payload must not look like no candidates`,
+      );
+    }
+  }
+  // A proxy ignoring a requested 200-row range is also inconsistent; never
+  // accept a page larger than the requested slice.
+  await assert.rejects(
+    () => load(fixture(), { responseData(q, value) {
+      return q.table === 'applications' && q.from === 0
+        ? Array.from({ length: 201 }, () => value[0])
+        : value;
+    } }),
+    error => error?.code === 'changed',
+  );
+});
+
+test('concurrent evidence or reviewer corrections invalidate a mixed screening report', async () => {
+  const verify = async (table, mutate, setup = () => {}) => {
+    const data = fixture(); setup(data);
+    let reads = 0;
+    await assert.rejects(() => load(data, {
+      onQuery(q, source) {
+        if (q.table !== table || q.from !== 0) return;
+        // Do not count the v2 matrix probe as the criterion evidence read.
+        if (table === 'screening_criterion_results' && !q.fields.includes('criterion_text_snapshot')) return;
+        if (++reads === 2) mutate(source);
+      },
+    }), error => error?.code === 'changed', `concurrent ${table} mutation must not publish stale data`);
+    assert.equal(reads, 2, `re-read the complete ${table} data before exporting`);
+  };
+
+  await verify('screening_criterion_results', source => {
+    source.screening_criterion_results[0].evidence = [{ start: 0, end: 7, quote: 'Poprawka' }];
+  });
+  await verify('screening_result_reviews', source => {
+    source.screening_result_reviews[0].disposition = 'rejected';
+  });
+  await verify('screening_criterion_review_overrides', source => {
+    source.screening_criterion_review_overrides[0].explanation_override = 'Skorygowany opis';
+  }, source => {
+    source.screening_result_reviews[0].disposition = 'approved_with_changes';
+    source.screening_criterion_review_overrides.push({
+      id: uuid(11), company_id: company, review_id: review, criterion_result_id: result,
+      rating_override: null, evidence_override: null, explanation_override: 'Pierwotny opis',
+    });
+  });
+});
+
 test('changed metadata, ranking, new review, shortlist or revoked access blocks mixed exports', async () => {
   for (const change of [
     d => { d.get_screening_ranking[0].raw_score = 51; },
@@ -257,16 +345,26 @@ test('automatic preselection groups appear in the report and CSV without per-row
   data.get_preselection_groups = [
     { application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true, group_key: 'passed',
       source: 'auto', raw_score: 87.5, coverage: 0.875, updated_at: timestamp, application_status: 'new', analysis_id: data.get_screening_ranking[0].analysis_id },
-    // A row for an application outside this recruitment is never shown.
-    { application_id: uuid(61), candidate_id: uuid(62), candidate_name: 'Obca Osoba', has_phone: false, group_key: 'rejected',
-      source: 'auto', raw_score: 0, coverage: 1, updated_at: timestamp, application_status: 'new' },
   ];
   const report = await load(data), csv = screeningReportCsv(report);
   assert.equal(report.groups.length, 1);
   assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875, stale: false });
   assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, new RegExp(`"${application}";"Przeszli sito";"87.5";"0.875";"Automatycznie";"Aktualny"`));
   assert.doesNotMatch(csv, /Jan Testowy/, 'CSV keeps candidates by application ID only');
-  assert.doesNotMatch(csv, /Obca Osoba/);
+});
+
+test('preselection group RPC fails closed for a foreign application instead of silently hiding it', async () => {
+  const data = fixture();
+  data.get_preselection_groups = [{
+    application_id: uuid(61), candidate_id: uuid(62), candidate_name: 'Obca Osoba', has_phone: false,
+    group_key: 'rejected', source: 'auto', raw_score: 0, coverage: 1, updated_at: timestamp,
+    application_status: 'new', analysis_id: uuid(63),
+  }];
+  await assert.rejects(() => load(data), error => error?.code === 'changed',
+    'an out-of-recruitment result from a trusted RPC must invalidate the export');
+  const csvResponse = await exportScreeningReport(clientFor(data), company, recruitment);
+  assert.equal(csvResponse.status, 409, 'an inconsistent RPC must not produce a downloadable CSV');
+  assert.equal((await csvResponse.json()).error, 'changed');
 });
 
 test('preselection group RPC rejects duplicate entries and malformed analysis links', async () => {
@@ -312,12 +410,16 @@ test('a group computed from an older analysis is stale after a re-analysis outsi
     group_key: 'passed', source: 'auto', raw_score: 90, coverage: 1, updated_at: timestamp, application_status: 'new' };
   // Same analysis as the ranking: current.
   data.get_preselection_groups = [{ ...row, analysis_id: data.get_screening_ranking[0].analysis_id }];
-  assert.equal((await load(data)).groups[0].stale, false);
+  const current = await load(data);
+  assert.equal(current.groups[0].stale, false);
+  assert.match(screeningReportCsv(current), new RegExp(`"${application}";"Przeszli sito";"90";"1";"Automatycznie";"Aktualny"`));
   // The ranking now uses a newer completed analysis: the saved score is historical.
   data.get_preselection_groups = [{ ...row, analysis_id: uuid(99) }];
   const report = await load(data);
   assert.equal(report.groups[0].stale, true);
-  assert.match(screeningReportCsv(report), /Wynik nieaktualny — wymaga ponownej analizy/);
+  const staleGroupRow = screeningReportCsv(report).split('\r\n').find(line => line.includes('"Przeszli sito"'));
+  assert.equal(staleGroupRow, `"${application}";"Przeszli sito";"";"";"Automatycznie";"Wynik nieaktualny — wymaga ponownej analizy"`,
+    'historical score and coverage must not be exported as current');
   // No link to an analysis (erased, or an older RPC without the field): never shown as current.
   data.get_preselection_groups = [{ ...row, analysis_id: null }];
   assert.equal((await load(data)).groups[0].stale, true);
@@ -382,6 +484,7 @@ test('a reviewed evidence-matrix candidate shows the group score, not "too few r
   // A stale group score is never shown as the candidate's score.
   const staleHtml = renderToStaticMarkup(React.createElement(module.exports.ScreeningReportView, { report: { ...report, groups: report.groups.map(g => ({ ...g, stale: true })) }, basePath: '/dashboard/test' }));
   assert.doesNotMatch(staleHtml, /\(grupa\)<\/small>/);
+  assert.doesNotMatch(staleHtml, /83,33/, 'historical group score must not appear in the report');
   // CSV agrees with the page: the same status, no misleading 0 coverage.
   const csv = screeningReportCsv(report);
   assert.match(csv, /"Sprawdzone przez człowieka — wynik w tabeli grup"/);

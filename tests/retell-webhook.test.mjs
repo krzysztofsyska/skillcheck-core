@@ -87,6 +87,24 @@ test("only the configured outbound agent version is accepted after authenticatio
   rejected(() => readRetellWebhook(enc("{}"), sign(enc("{}")), { ...config, agentId: "x" }, now));
 });
 
+test("signed Retell timestamps outside the JS Date range are rejected without retry", () => {
+  // Retell payloads are signed, but an invalid timestamp is still untrusted
+  // provider input. 8.64e15 is a valid Date; larger *safe* integers are not.
+  for (const [event, timestamp] of [
+    ["call_started", "start_timestamp"],
+    ["call_ended", "end_timestamp"],
+    ["call_analyzed", "end_timestamp"],
+  ]) {
+    for (const invalid of [8_640_000_000_000_001, Number.MAX_SAFE_INTEGER]) {
+      rejected(() => deliver({ event, call: call({ [timestamp]: invalid }) }));
+    }
+  }
+  const boundary = deliver({ event: "call_ended", call: call({
+    end_timestamp: 8_640_000_000_000_000,
+  }) });
+  assert.equal(boundary.occurredAt, new Date(8_640_000_000_000_000).toISOString());
+});
+
 test("unknown authentic events are acknowledged as ignored with a stable receipt", () => {
   const first = deliver({ event: "transcript_updated", call: call() });
   assert.equal(first.kind, "ignored");

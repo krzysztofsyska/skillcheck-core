@@ -78,6 +78,22 @@ test('korekta rekrutera wygrywa, odrzucony wiersz nie publikuje dowodu AI', () =
   assert.equal(rejected.corrected, true);
 });
 
+test('FREE: uszkodzony zakres cytatu nie jest zastępowany fikcyjną pozycją w CV', () => {
+  const valid = { start: 10, end: 25, quote: 'prawidłowy dowód' };
+  const built = buildCandidateRequirement(licence, 'required', completed, row({
+    evidence: [
+      { quote: 'bez zakresu' },
+      { start: -1, end: 3, quote: 'ujemny offset' },
+      { start: 8, end: 3, quote: 'odwrócony zakres' },
+      { start: 1.5, end: 4, quote: 'ułamkowy offset' },
+      { start: 0, end: 1_000_001, quote: 'poza limitem' },
+      valid,
+    ],
+  }));
+  assert.deepEqual(built.quotes, [valid], 'only real, bounded offsets may reach either report view');
+  assert.equal(built.status, 'supported', 'one corrupt citation does not erase the human-reviewed verdict');
+});
+
 test('odrzucony wiersz zostaje odrzucony także w nieaktualnej analizie', () => {
   // Decyzja człowieka o wierszu bije stan całej analizy. Inaczej nieaktualna
   // analiza przywracałaby na ekran cytat AI, który rekruter wprost odrzucił.
@@ -510,6 +526,22 @@ test('loadCandidateReport: równoległa zmiana macierzy bez zmiany analizy lub r
   assert.equal(stable.summary.requiredSupported, 1, 'unchanged human-approved evidence still works');
 });
 
+test('loadCandidateReport: pusta odpowiedź RPC nie udaje braku dowodów kandydata', async () => {
+  const { loadCandidateReport, CandidateReportError } = await import('../lib/candidate-report.ts');
+  for (const faultyRead of [1, 2]) {
+    let reads = 0;
+    const client = loaderClient(loaderData(), () => {}, (table, result) => {
+      if (table === 'screening_criterion_results' && ++reads === faultyRead) {
+        return { ...result, data: null, error: null };
+      }
+      return result;
+    });
+    await assert.rejects(() => loadCandidateReport(client, route),
+      error => error instanceof CandidateReportError && /Macierz dowodów/.test(error.message));
+  }
+  assert.equal((await loadCandidateReport(loaderClient(loaderData()), route)).summary.requiredSupported, 1);
+});
+
 test('loadCandidateReport: nieaktualny materiał nie wymazuje cytatów rekruterowi', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   // Zamknięta rekrutacja albo zmienione CV sprawiają, że odcisk materiału się nie
@@ -618,6 +650,30 @@ test('porównanie FREE pokazuje pierwszy niepusty cytat, jak raport pojedynczego
   ];
   const compared = buildCandidateComparison(report([candidate]));
   assert.equal(compared.rows.find(r => r.id === requirements[0].id).cells[0].quote, 'dowód 2');
+});
+
+test('porównanie FREE odrzuca uszkodzone offsety cytatów tak jak raport jednego CV', () => {
+  const candidate = application(1);
+  const invalid = [
+    { quote: 'bez zakresu' },
+    { start: -1, end: 5, quote: 'ujemny' },
+    { start: 8, end: 3, quote: 'odwrócony' },
+    { start: 0, end: 1_000_001, quote: 'poza limitem' },
+    { start: 2, end: 7, quote: 'ważny' },
+  ];
+  candidate.criteria[0].evidence = invalid;
+  const compared = buildCandidateComparison(report([candidate]));
+  const cell = compared.rows.find(r => r.id === requirements[0].id).cells[0];
+  const single = buildCandidateRequirement(requirements[0], 'required', completed,
+    row({ criterion_id: requirements[0].id, evidence: invalid }));
+  assert.equal(cell.status, 'supported');
+  assert.equal(cell.quote, single.quotes[0]?.quote ?? null);
+  assert.equal(cell.quote, 'ważny');
+
+  // With no valid anchored quote, neither view may display an invented citation.
+  candidate.criteria[0].evidence = invalid.slice(0, -1);
+  const empty = buildCandidateComparison(report([candidate]));
+  assert.equal(empty.rows.find(r => r.id === requirements[0].id).cells[0].quote, null);
 });
 
 test('porównanie i raport pojedynczego CV identycznie rozpoznają tekst wymagania', () => {

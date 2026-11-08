@@ -91,8 +91,14 @@ export function verifyRetellWebhookSignature(
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
+// Number.isSafeInteger is not enough: Date supports only +/-8.64e15 ms, while
+// a larger safe integer makes toISOString() throw RangeError. Signed but corrupt
+// timestamps must be rejected as payload errors (400), not retried as 503s.
+const maxDateMs = 8_640_000_000_000_000;
 const iso = (ms: unknown): string | undefined =>
-  Number.isSafeInteger(ms) && (ms as number) > 0 ? new Date(ms as number).toISOString() : undefined;
+  Number.isSafeInteger(ms) && (ms as number) > 0 && (ms as number) <= maxDateMs
+    ? new Date(ms as number).toISOString()
+    : undefined;
 
 function minimizeTranscript(value: unknown): readonly RetellUtterance[] | null {
   if (value === undefined || value === null) return null;

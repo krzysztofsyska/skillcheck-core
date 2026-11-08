@@ -65,7 +65,7 @@ function remaining(deadline: number) {
 }
 
 /**
- * OCR with the per-file time budget. Null only for a blank page (nothing found) or a confident short read;
+ * OCR with the per-file time budget. Null only for a blank/noise page (no word-like run);
  * real text read with low confidence fails the file as an unreadable scan instead of being dropped,
  * so a CV is never analysed with a silently missing page.
  */
@@ -85,7 +85,9 @@ async function ocrRead(ocr: OcrFn, image: Buffer, deadline: number) {
   const wordLike = new RegExp('[\\p{L}\\p{N}]{3,}', 'u').test(text);
   if (visible < MIN_PAGE_TEXT_CHARS && !wordLike) return null;
   if (result.confidence < MIN_OCR_CONFIDENCE) throw new BulkIntakeError('unreadable_scan');
-  if (visible < MIN_PAGE_TEXT_CHARS) return null; // a confident short read: page number, footer
+  // A confident short word may be the entire qualification on a page (e.g. "SQL"
+  // or "Prawo jazdy B"). Discarding it would silently feed an incomplete CV to AI.
+  // Bare page numbers/punctuation were already classified as blank above.
   return text;
 }
 

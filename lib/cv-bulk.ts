@@ -51,12 +51,24 @@ export function bulkFileKind(name: string): BulkFileKind {
 
 /** Archive entries that are not CVs (folders, OS metadata) are skipped, not counted. */
 export function isIgnoredZipEntry(name: string) {
-  const base = name.split('/').pop() ?? '';
-  return !base || name.endsWith('/') || name.startsWith('__MACOSX/') || base.startsWith('.') || base === 'Thumbs.db';
+  // ZIP normally uses '/', but some archives contain backslash paths. Metadata
+  // directories are not CVs even when nested or written with Windows separators.
+  const path = name.replace(/\\/g, '/');
+  const parts = path.split('/');
+  const base = parts.pop() ?? '';
+  // Hidden metadata directories and __MACOSX variants may contain files with CV-like
+  // extensions. Exclude their descendants, including mixed-case and Windows ZIP paths,
+  // before reserving a package slot or extracting any candidate information.
+  return !base || parts.some(part => part.startsWith('.') || part.toLowerCase() === '__macosx')
+    || base.startsWith('.') || base.toLowerCase() === 'thumbs.db';
 }
 
 export function displayFileName(name: string) {
-  const base = (name.split(/[\\/]/).pop() ?? name).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  // Bidi overrides/isolates and invisible format characters can make a filename
+  // appear to have another extension in the recruiter UI. Never preserve them.
+  const base = (name.split(/[\\/]/).pop() ?? name)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g, '')
+    .trim();
   return (base || 'plik').slice(0, 255);
 }
 
@@ -204,6 +216,18 @@ export type BulkExtraction = {
   source_text: string; redacted_text: string; name_detected: boolean; ocr_used: boolean;
 };
 
+/** Fail closed if a detected name survives automatic redaction.
+ * Contacts have separate detectors, but a partial name replacement must also
+ * block unattended bulk intake before any text is sent to an AI provider.
+ */
+function unredactedCandidateName(redacted: string, candidate: { first: string; last: string }) {
+  const fragments = [candidate.first, candidate.last, ...candidate.last.split(/[\s\-’']+/).filter(part => part.length >= 3)];
+  return fragments.some(fragment => {
+    const escaped = fragment.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+    return new RegExp('(?<![\\p{L}\\p{N}])' + escaped + '(?![\\p{L}\\p{N}])', 'iu').test(redacted);
+  });
+}
+
 /** Candidate identity for the database; no name -> neutral placeholder with the file position. */
 export function buildExtraction(text: string, position: number, ocrUsed: boolean,
   redact: (text: string, names: string[]) => string): BulkExtraction {
@@ -219,7 +243,12 @@ export function buildExtraction(text: string, position: number, ocrUsed: boolean
   const redacted = redact(text, names);
   // Detection and redaction must never drift apart: the approved text goes to the AI provider without
   // a human check, so a phone or e-mail still visible after redaction stops the file.
-  if (detectPhone(redacted) || detectEmail(redacted)) throw new BulkIntakeError('bad_format');
+  // Normalise provider-bound text again: invisible characters introduced by
+  // a failed redactor must not hide a residual name, telephone or e-mail.
+  const inspected = normalizeForRedaction(redacted);
+  if (detectPhone(inspected) || detectEmail(inspected) || (name && unredactedCandidateName(inspected, name))) {
+    throw new BulkIntakeError('bad_format');
+  }
   return {
     first_name: first.slice(0, 100), last_name: last.slice(0, 100), email, phone,
     source_text: text, redacted_text: redacted, name_detected: !!name, ocr_used: ocrUsed,

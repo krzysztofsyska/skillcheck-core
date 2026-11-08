@@ -94,10 +94,19 @@ function quotes(value: unknown): EvidenceQuote[] {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
     const e = item as Record<string, unknown>;
     if (typeof e.quote !== 'string' || !e.quote.trim()) return [];
-    const start = Number.isSafeInteger(e.start) ? e.start as number : 0;
-    const end = Number.isSafeInteger(e.end) ? e.end as number : start + e.quote.length;
+    // An absent or corrupt offset is not evidence of the beginning of the CV.
+    // Never fabricate a citation range from the quote length; omit the damaged
+    // citation while preserving any other correctly anchored evidence.
+    if (!Number.isSafeInteger(e.start) || !Number.isSafeInteger(e.end)) return [];
+    const start = e.start as number, end = e.end as number;
+    if (start < 0 || end < start || end > 1_000_000) return [];
     return [{ start, end, quote: e.quote }];
   }).slice(0, 5);
+}
+
+/** Pierwszy cytat z prawidłowym zakresem — wspólny dla raportu CV i porównania. */
+export function firstEvidenceQuote(value: unknown): string | null {
+  return quotes(value)[0]?.quote ?? null;
 }
 
 /**
