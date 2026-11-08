@@ -262,6 +262,48 @@ function withFingerprint(data) {
   return data;
 }
 
+test('SC-005: context rejects foreign and malformed Data API identities before CV reporting or AI', async () => {
+  const { loadScreeningContext, ScreeningNotFoundError } = await import('../lib/screening-flow.ts');
+  // Every mutation happens AFTER filtering and projection: test the trust boundary,
+  // not the mock's normal equality filters. No production or customer data.
+  const cases = [
+    ['applications', 'id', id(9)],
+    ['applications', 'company_id', id(9)],
+    ['applications', 'recruitment_id', id(9)],
+    ['applications', 'candidate_id', 'invalid-candidate-id'],
+    ['recruitments', 'id', id(9)],
+    ['recruitments', 'company_id', id(9)],
+    ['recruitments', 'position_id', 'invalid-position-id'],
+    ['positions', 'id', id(9)],
+    ['positions', 'company_id', id(9)],
+    ['candidate_documents', 'id', 'invalid-document-id'],
+    ['candidate_documents', 'company_id', id(9)],
+    ['candidate_documents', 'candidate_id', id(9)],
+  ];
+  for (const [table, field, value] of cases) {
+    const client = loaderClient(loaderData(), () => {}, (selectedTable, result) => {
+      if (selectedTable !== table || !result.data) return result;
+      return { ...result, data: { ...result.data, [field]: value } };
+    });
+    await assert.rejects(() => loadScreeningContext(client, route),
+      error => error instanceof ScreeningNotFoundError,
+      `Mismatched ${table}.${field} must never reach a CV or provider payload`);
+  }
+  const valid = await loadScreeningContext(loaderClient(loaderData()), route);
+  assert.equal(valid.application.id, route.applicationId);
+  assert.equal(valid.document.candidate_id, valid.application.candidate_id);
+
+  // SQL UUIDs compare case-insensitively; a case-only difference is not a new tenant.
+  const hexId = 'abcdef03-0000-4000-8000-00000000000a';
+  const hexRoute = { ...route, applicationId: hexId };
+  const hexData = JSON.parse(JSON.stringify(loaderData()).split(route.applicationId).join(hexId));
+  assert.notEqual(hexId.toUpperCase(), hexId);
+  const uppercase = loaderClient(hexData, () => {}, (table, result) =>
+    table === 'applications' ? { ...result, data: { ...result.data, id: hexId.toUpperCase() } } : result);
+  const upper = await loadScreeningContext(uppercase, hexRoute);
+  assert.equal(upper.application.id, hexId.toUpperCase());
+});
+
 test('loadCandidateReport: zakończona analiza z pustą macierzą pokazuje ostrzeżenie', async () => {
   const { loadCandidateReport } = await import('../lib/candidate-report.ts');
   const legacy = loaderData();
