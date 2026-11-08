@@ -335,8 +335,9 @@ test('preselection group RPC fails closed for a foreign application instead of s
   }];
   await assert.rejects(() => load(data), error => error?.code === 'changed',
     'an out-of-recruitment result from a trusted RPC must invalidate the export');
-  await assert.rejects(() => exportScreeningReport(clientFor(data), company, recruitment),
-    error => error?.code === 'changed');
+  const csvResponse = await exportScreeningReport(clientFor(data), company, recruitment);
+  assert.equal(csvResponse.status, 409, 'an inconsistent RPC must not produce a downloadable CSV');
+  assert.equal((await csvResponse.json()).error, 'changed');
 });
 
 test('preselection group RPC rejects duplicate entries and malformed analysis links', async () => {
