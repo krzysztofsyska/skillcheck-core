@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateAutoRelease, classifyReleaseFiles } from '../../tools/agent-pipeline/lib/auto-release.mjs';
+import { sha256 } from '../../tools/agent-pipeline/lib/canonical.mjs';
+import { evaluateAutoRelease, classifyReleaseFiles, isRecognisedAdditiveSql } from '../../tools/agent-pipeline/lib/auto-release.mjs';
 import { protectionFromRulesets } from '../../tools/agent-pipeline/lib/protection.mjs';
 
 const I = 'a'.repeat(40), M = 'b'.repeat(40);
@@ -26,7 +27,12 @@ policy.environments = { owner_acceptance: { name: 'oa', id: 1 }, production_appr
 const environments = { oa: reviewerEnv(1), pa: reviewerEnv(2), ar: mainOnly(3) };
 
 const task = { task_id: 'T1', integration_source: 'verified_ci_review' };
-const good = () => ({
+const withVerdict = i => {
+  i.scopeVerdict = { source: 'trusted_independent_scope_reader', verdict: 'LOW_RISK_COMPATIBLE', repository: i.current?.repository,
+    base_sha: i.current?.mainSha, head_sha: i.current?.integrationSha, manifest_hash: sha256(i.promotion.manifest) };
+  return i;
+};
+const good0 = () => ({
   trusted: { p24Hold: false },
   current: { repository: 'r/r', integrationSha: I, mainSha: M },
   promotion: { blockedReason: null, manifest: { integration_sha: I, main_sha: M, tasks: [task], files: ['app/page.tsx'] },
@@ -37,8 +43,9 @@ const good = () => ({
   codex: { completed: true, head_sha: I, open_findings: 0 },
   migrations: [], lock: { held: false, inflight: 0 }, released: [],
 });
-const deny = (mut, code) => {
-  const i = good(); mut(i);
+const good = () => withVerdict(good0());
+const deny = (mut, code, rebind = false) => {
+  const i = good(); mut(i); if (rebind && i.promotion && i.current) withVerdict(i);
   const r = evaluateAutoRelease(i);
   assert.equal(r.decision, 'DENY'); assert.ok(r.reasons.some(x => x.startsWith(code)), `${code} in ${r.reasons}`);
 };
@@ -52,10 +59,10 @@ test('compliant low-risk release with full evidence is qualified and bound', () 
   assert.equal(r.decision, 'ALLOW'); assert.match(r.binding, /^[0-9a-f]{64}$/);
 });
 test('additive migration with recovery plan is qualified', () => {
-  const i = good(); i.promotion.manifest.files.push('supabase/migrations/20261108_x.sql');
+  const i = good0(); i.promotion.manifest.files.push('supabase/migrations/20261108_x.sql');
   i.migrations = [{ path: 'supabase/migrations/20261108_x.sql', sql: 'alter table t add column c text; -- drop table x' }];
   i.promotion.runbook = { id: 'x', backup: 'pitr', rollback_db_compatible: true };
-  assert.equal(evaluateAutoRelease(i).decision, 'ALLOW');
+  assert.equal(evaluateAutoRelease(withVerdict(i)).decision, 'ALLOW');
 });
 test('P24 hold denies; anything but literal false keeps hold', () => {
   deny(i => { i.trusted = { p24Hold: true }; }, 'P24_HOLD');
@@ -63,11 +70,19 @@ test('P24 hold denies; anything but literal false keeps hold', () => {
   deny(i => { i.trusted = { p24Hold: 'false' }; }, 'P24_HOLD');
   deny(i => { i.trusted = undefined; }, 'P24_HOLD');
 });
-test('destructive / access DB changes deny', () => {
-  for (const sql of ['drop table t;', 'truncate t;', 'delete from t;', 'alter table t drop column c;', 'update t set a=1;', 'grant all on t to anon;', 'create policy p on t using (true);']) {
+test('only explicitly recognised additive SQL qualifies; everything else is not proven', () => {
+  const bad = ['drop table t;', 'truncate t;', 'delete from t;', 'alter table t drop column c;', 'update t set a=1;', 'grant all on t to anon;',
+    'create policy p on t using (true);', 'drop view v;', 'do $$ begin delete from t; end $$;', 'select purge_all();', 'create table t(a int);',
+    'alter table t add column c text not null;', 'alter table t add column c text default now();', 'create unique index i on t(a);',
+    'alter table t add column c text; drop view v;', 'create or replace function f() returns int as $f$ select 1 $f$ language sql;',
+    'alter table t add column c text default \'x\\\'; drop table t; --\';', '', '   ', 'comment on table t is \'x\';', 'insert into t values (1);'];
+  for (const sql of bad) {
+    assert.equal(isRecognisedAdditiveSql(sql), false, sql);
     deny(i => { i.promotion.manifest.files.push('supabase/migrations/m.sql'); i.migrations = [{ path: 'supabase/migrations/m.sql', sql }];
-      i.promotion.runbook = { id: 'x', backup: 'b', rollback_db_compatible: true }; }, sql.startsWith('grant') || sql.startsWith('create') ? 'ACCESS_CHANGE_DB' : 'DESTRUCTIVE_DB');
+      i.promotion.runbook = { id: 'x', backup: 'b', rollback_db_compatible: true }; }, 'MIGRATION_', true);
   }
+  for (const sql of ['alter table t add column c text;', 'ALTER TABLE public.t ADD COLUMN IF NOT EXISTS c integer default 0;', 'create index if not exists i on t (a, b);'])
+    assert.equal(isRecognisedAdditiveSql(sql), true, sql);
 });
 test('unreadable migration denies', () => deny(i => { i.promotion.manifest.files.push('supabase/migrations/m.sql'); }, 'MIGRATION_UNREADABLE'));
 test('payments, sends, pipeline/secrets paths need owner consent', () => {
@@ -109,4 +124,32 @@ test('parallel or duplicate release and incompatible rollback deny', () => {
   deny(i => { i.promotion.manifest.files.push('supabase/migrations/m.sql'); i.migrations = [{ path: 'supabase/migrations/m.sql', sql: 'create table t(a int);' }];
     i.promotion.runbook = { id: 'x', backup: 'b', rollback_db_compatible: false }; }, 'MIGRATION_RECOVERY');
   deny(i => { i.promotion.smokeTests = []; }, 'MISSING_SMOKE_OR_ROLLBACK');
+});
+
+test('scope verdict is required, trusted, and bound to repo/base/head/manifest hash', () => {
+  deny(i => { i.scopeVerdict = undefined; }, 'SCOPE_VERDICT_MISSING');
+  deny(i => { i.scopeVerdict.source = 'builder'; }, 'SCOPE_VERDICT_MISMATCH');
+  deny(i => { i.scopeVerdict.verdict = 'NEEDS_OWNER_CONSENT'; }, 'SCOPE_VERDICT_MISMATCH');
+  deny(i => { i.scopeVerdict.repository = 'x/y'; }, 'SCOPE_VERDICT_MISMATCH');
+  deny(i => { i.scopeVerdict.base_sha = 'c'.repeat(40); }, 'SCOPE_VERDICT_MISMATCH');
+  deny(i => { i.scopeVerdict.head_sha = 'c'.repeat(40); }, 'SCOPE_VERDICT_MISMATCH');
+  deny(i => { i.scopeVerdict.manifest_hash = 'd'.repeat(64); }, 'SCOPE_VERDICT_MISMATCH');
+  // manifest changed after the verdict (e.g. payment logic hidden in app/page.tsx added later) -> stale verdict
+  deny(i => { i.promotion.manifest.files.push('app/other.tsx'); }, 'SCOPE_VERDICT_MISMATCH');
+});
+test('malformed input returns DENY and never throws', () => {
+  for (const bad of [undefined, null, 5, 'x', [], {}]) assert.equal(evaluateAutoRelease(bad).decision, 'DENY');
+  const muts = [
+    i => { i.promotion.manifest.files = null; }, i => { i.promotion.manifest.files = {}; }, i => { i.promotion.manifest.files = [null, 5, {}]; },
+    i => { i.promotion.manifest.files = ['']; }, i => { i.promotion.manifest.tasks = null; }, i => { i.promotion.manifest.tasks = [null]; },
+    i => { i.promotion.manifest.tasks = ['x', 1]; }, i => { i.promotion.manifest = null; }, i => { i.promotion.manifest = 'x'; },
+    i => { i.migrations = null; i.promotion.manifest.files.push('supabase/migrations/m.sql'); },
+    i => { i.migrations = [null, 5, 'x', {}, { path: 5, sql: {} }]; i.promotion.manifest.files.push('supabase/migrations/m.sql'); },
+    i => { i.migrations = { path: 'x' }; }, i => { i.rulesets = 'x'; }, i => { i.rulesets = [null]; }, i => { i.policy = null; },
+    i => { i.environments = 5; }, i => { i.ci = 5; }, i => { i.review = 'x'; }, i => { i.codex = []; }, i => { i.lock = 'x'; },
+    i => { i.released = 'x'; }, i => { i.scopeVerdict = 5; }, i => { i.current = 'x'; }, i => { i.trusted = 5; },
+  ];
+  for (const m of muts) { const i = good(); m(i); let r; assert.doesNotThrow(() => { r = evaluateAutoRelease(i); }); assert.equal(r.decision, 'DENY'); }
+  assert.equal(classifyReleaseFiles(null).reasons[0], 'INVALID_FILES');
+  assert.equal(classifyReleaseFiles([1]).reasons[0], 'INVALID_FILES');
 });
