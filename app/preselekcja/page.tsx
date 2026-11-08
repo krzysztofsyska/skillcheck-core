@@ -43,7 +43,9 @@ export default async function PreselectionOfferPage() {
           <li><strong>Cena:</strong> {preselekcjaPrice} ({preselekcjaOffer.netPln} zł netto + 23% VAT), płatność jednorazowa.</li>
           <li><strong>Zakres:</strong> {scope ? `${scope} w ramach jednego pakietu.` : `${sc19PolicyPendingScope}.`}</li>
           <li><strong>Ważność:</strong> analizy są ważne przez {preselekcjaOffer.validityMonths} miesiące od dnia ich przyznania.</li>
-          <li><strong>Płatność:</strong> przelew na podstawie faktury proforma — napisz do nas, a wystawimy ją od razu. Płatność online Przelewy24 jest przygotowywana; udostępnimy ją w koncie firmy, gdy będzie gotowa.</li>
+          <li><strong>Płatność:</strong> {catalogEnabled
+            ? "Aktualne opcje zamówienia i płatności sprawdzisz w panelu firmy. Możesz też poprosić obsługę o fakturę proforma i zapłacić przelewem."
+            : "Zamówienie z pomocą obsługi: poproś o fakturę proforma i zapłać przelewem. Samo założenie konta nie uruchamia pakietu."}</li>
           <li><strong>Przyznanie analiz:</strong> po potwierdzeniu płatności — najpóźniej w ciągu 2 dni roboczych od uznania naszego rachunku.</li>
           <li><strong>Faktura:</strong> po zaksięgowaniu płatności wystawiamy fakturę VAT i wysyłamy ją e-mailem.</li>
         </ul>
@@ -59,7 +61,7 @@ export default async function PreselectionOfferPage() {
           : <p className={styles.note}>Konto firmowe służy na razie tylko do rejestracji — zamówienia w panelu firmy jeszcze nie składasz. Pakiet uruchamiamy na Twoim koncie po zaksięgowaniu wpłaty z faktury proforma. Masz już konto? <Link href="/login">Zaloguj się</Link>.</p>}
       </section>
       <section aria-labelledby="pilot-process">
-        <h2 id="pilot-process">Jak zamówić?</h2>
+        <h2 id="pilot-process">Jak zamówić z pomocą obsługi?</h2>
         <ol>
           <li>Załóż konto firmowe w SkillCheck i zaakceptuj Regulamin.</li>
           <li>Napisz do nas z nazwą firmy, NIP i adresem e-mail konta — wystawimy fakturę proforma.</li>
