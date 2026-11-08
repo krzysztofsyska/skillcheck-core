@@ -126,7 +126,7 @@ export function BulkUploader(props: Props) {
     });
     try {
       await Promise.all([...drain(ocrLane, BULK_OCR_UPLOAD_CONCURRENCY), ...drain(textLane, BULK_UPLOAD_CONCURRENCY)]);
-      await closeBulkUpload(props.companyId, created.batchId);
+      await closeBulkUpload(props.companyId, props.recruitmentId, created.batchId);
     } catch {
       // The batch exists either way: its page shows what arrived, and an upload left open is closed
       // by the background pump. Never leave the button stuck on "Tworzę paczkę…".
