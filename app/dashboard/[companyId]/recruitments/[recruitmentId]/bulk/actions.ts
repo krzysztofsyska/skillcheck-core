@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { companyAccess } from '../../../../../../lib/company-access';
-import { bulkIntakeBlocked, groupMoveConfirmed, validateBatchFiles, verifyBulkRegistration, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
+import { bulkIntakeBlocked, bulkMoveTargetMatches, groupMoveConfirmed, validateBatchFiles, verifyBulkRegistration, type BulkFileMeta, type BulkGroup } from '../../../../../../lib/cv-bulk';
 import { pumpWithSession } from '../../../../../../lib/cv-bulk-server';
 import { loadCurrentRanking, withGroupCurrency } from '../../../../../../lib/preselection-currency';
 import { screeningAiUserEnabled } from '../../../../../../lib/screening-dispatch';
@@ -73,7 +73,17 @@ export async function movePreselectionGroup(companyId: string, recruitmentId: st
   const { client, canEdit } = await companyAccess(companyId);
   if (!canEdit) return { error: 'Masz dostęp tylko do odczytu.' };
   const group = String(form.get('group') ?? '') as BulkGroup;
-  if (!['passed', 'review', 'rejected'].includes(group) || !uuid.test(applicationId)) return { error: 'Wybierz grupę.' };
+  if (!['passed', 'review', 'rejected'].includes(group) || !uuid.test(applicationId) || !uuid.test(recruitmentId)) {
+    return { error: 'Wybierz grupę.' };
+  }
+  // The RPC verifies permissions for its target company, but it does not receive
+  // the company/recruitment IDs from the page. Bind the route to the exact target
+  // before changing a group, including users with membership in several firms.
+  const target = await client.from('applications').select('id,company_id,recruitment_id')
+    .eq('id', applicationId).eq('company_id', companyId).eq('recruitment_id', recruitmentId).maybeSingle();
+  if (target.error || !bulkMoveTargetMatches(target.data, companyId, recruitmentId, applicationId)) {
+    return { error: 'Nie znaleziono kandydata w tej rekrutacji.' };
+  }
   const note = String(form.get('note') ?? '').trim();
   if (note.length > 500) return { error: 'Uzasadnienie może mieć do 500 znaków.' };
   const result = await client.rpc('move_preselection_group', { target_application: applicationId, new_group: group,

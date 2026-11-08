@@ -142,6 +142,10 @@ export async function loadScreeningReport(
     if (probe?.error && probe.error.code !== '42703') checked(probe);
     const matrix = probe && !probe.error ? await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
       .select(matrixFields).eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to)) : [];
+    // When the v2 columns exist, matrix and base evidence project the same
+    // criterion-result rows. A partial matrix response must never resurrect
+    // AI evidence that a human rejected or corrected.
+    if (probe && !probe.error) requireReport(matrix.length === results.length);
     const overrides = await batches(reviewIds, (ids, from, to) => client.from('screening_criterion_review_overrides')
       .select('id,review_id,criterion_result_id,rating_override,evidence_override,explanation_override')
       .eq('company_id', p.companyId).in('review_id', ids).order('id').range(from, to));
