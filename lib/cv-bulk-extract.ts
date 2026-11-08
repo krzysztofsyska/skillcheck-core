@@ -85,7 +85,9 @@ async function ocrRead(ocr: OcrFn, image: Buffer, deadline: number) {
   const wordLike = new RegExp('[\\p{L}\\p{N}]{3,}', 'u').test(text);
   if (visible < MIN_PAGE_TEXT_CHARS && !wordLike) return null;
   if (result.confidence < MIN_OCR_CONFIDENCE) throw new BulkIntakeError('unreadable_scan');
-  if (visible < MIN_PAGE_TEXT_CHARS) return null; // a confident short read: page number, footer
+  // A confident short word may be the entire qualification on a page (e.g. "SQL"
+  // or "Prawo jazdy B"). Discarding it would silently feed an incomplete CV to AI.
+  // Bare page numbers/punctuation were already classified as blank above.
   return text;
 }
 
