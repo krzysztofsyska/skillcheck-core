@@ -4,7 +4,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import {
   BULK_MAX_FILE_BYTES, BulkIntakeError, buildExtraction, bulkEmail, bulkFileKind, bulkMailEnabled, bulkPricing, detectEmail,
-  detectName, detectPhone, displayFileName, isIgnoredZipEntry, sendBulkEmail, validateBatchFiles, verifyBulkRegistration,
+  detectName, detectPhone, displayFileName, isIgnoredZipEntry, bulkMoveTargetMatches, sendBulkEmail, validateBatchFiles, verifyBulkRegistration,
 } from '../lib/cv-bulk.ts';
 import { extractBulkCv } from '../lib/cv-bulk-extract.ts';
 import { closeOcr, ocrImage } from '../lib/cv-ocr.ts';
@@ -939,6 +939,29 @@ test('bulk upload failures never log untrusted CV parser or OCR exception text',
   assert.match(failure, /error: 'extract_failed'/, 'retries remain possible on infrastructure errors');
 });
 
+
+test('manual preselection move is bound to the exact company and recruitment route', async () => {
+  const companyId = '11111111-1111-4111-8111-111111111111';
+  const recruitmentId = '22222222-2222-4222-8222-222222222222';
+  const applicationId = '33333333-3333-4333-8333-333333333333';
+  const row = { id: applicationId, company_id: companyId, recruitment_id: recruitmentId };
+  assert.equal(bulkMoveTargetMatches(row, companyId, recruitmentId, applicationId), true);
+  assert.equal(bulkMoveTargetMatches({ ...row, id: applicationId.toUpperCase() }, companyId, recruitmentId, applicationId), true);
+  for (const value of [null, [], {}, { ...row, id: '44444444-4444-4444-8444-444444444444' },
+    { ...row, company_id: '44444444-4444-4444-8444-444444444444' },
+    { ...row, recruitment_id: '44444444-4444-4444-8444-444444444444' },
+    { ...row, company_id: undefined }, { ...row, id: 7 }]) {
+    assert.equal(bulkMoveTargetMatches(value, companyId, recruitmentId, applicationId), false);
+  }
+  assert.equal(bulkMoveTargetMatches(row, 'not-a-uuid', recruitmentId, applicationId), false);
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
+  const move = source.slice(source.indexOf('export async function movePreselectionGroup'));
+  assert.match(move, /\.eq\('company_id', companyId\)\.eq\('recruitment_id', recruitmentId\)/);
+  assert.match(move, /bulkMoveTargetMatches\(target\.data, companyId, recruitmentId, applicationId\)/);
+  assert.ok(move.indexOf('bulkMoveTargetMatches(') < move.indexOf("client.rpc('move_preselection_group'"),
+    'route must be verified before the write RPC');
+});
 
 test('manual preselection group changes require a valid RPC timestamp before success', async () => {
   const { readFileSync } = await import('node:fs');
