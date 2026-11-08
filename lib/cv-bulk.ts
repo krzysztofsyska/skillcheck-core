@@ -223,7 +223,7 @@ export type BulkExtraction = {
 function unredactedCandidateName(redacted: string, candidate: { first: string; last: string }) {
   const fragments = [candidate.first, candidate.last, ...candidate.last.split(/[^\p{L}\p{N}]+/u).filter(part => part.length >= 3)];
   return fragments.some(fragment => {
-    const escaped = fragment.replace(/[|\\{}()[\]^$+*?.]/g, '\\/** Candidate identity for the database; no name -> neutral placeholder with the file position. */');
+    const escaped = fragment.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
     return new RegExp('(?<![\\p{L}\\p{N}])' + escaped + '(?![\\p{L}\\p{N}])', 'iu').test(redacted);
   });
 }
