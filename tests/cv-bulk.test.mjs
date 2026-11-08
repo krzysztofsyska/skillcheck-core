@@ -943,9 +943,10 @@ test('bulk upload failures never log untrusted CV parser or OCR exception text',
 test('manual preselection move is bound to the exact company and recruitment route', async () => {
   const companyId = '11111111-1111-4111-8111-111111111111';
   const recruitmentId = '22222222-2222-4222-8222-222222222222';
-  const applicationId = '33333333-3333-4333-8333-333333333333';
+  const applicationId = 'a3333333-b333-4333-8333-c33333333333';
   const row = { id: applicationId, company_id: companyId, recruitment_id: recruitmentId };
   assert.equal(bulkMoveTargetMatches(row, companyId, recruitmentId, applicationId), true);
+  assert.notEqual(applicationId.toUpperCase(), applicationId, 'fixture contains hex letters');
   assert.equal(bulkMoveTargetMatches({ ...row, id: applicationId.toUpperCase() }, companyId, recruitmentId, applicationId), true);
   for (const value of [null, [], {}, { ...row, id: '44444444-4444-4444-8444-444444444444' },
     { ...row, company_id: '44444444-4444-4444-8444-444444444444' },
