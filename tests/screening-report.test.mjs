@@ -340,6 +340,23 @@ test('v2 evidence rows publish the human matrix review, never the discarded AI c
   assert.equal((await load(fixture())).applications[0].criteria[0].matrixVerdict, null, 'Legacy v1 rows keep their rating only');
 });
 
+test('a partial v2 matrix response fails closed instead of restoring rejected AI evidence', async () => {
+  const data = fixture();
+  Object.assign(data.screening_criterion_results[0], {
+    verdict: 'supported', human_status: 'rejected', human_evidence: null,
+  });
+  // The one-row probe succeeds, but the full matrix projection is truncated.
+  // Without parity validation the report would publish the original AI quote.
+  const options = { responseData(q, rows) {
+    if (q.table === 'screening_criterion_results' && q.fields.includes('human_status') && q.to > 0) return [];
+    return rows;
+  } };
+  await assert.rejects(() => load(data, options), error => error?.code === 'changed');
+  const response = await exportScreeningReport(clientFor(data, options), company, recruitment);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, 'changed');
+});
+
 test('automatic preselection groups appear in the report and CSV without per-row review', async () => {
   const data = fixture();
   data.get_preselection_groups = [
