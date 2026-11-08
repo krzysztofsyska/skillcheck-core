@@ -646,7 +646,7 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   ];
   assert.deepEqual(withGroupCurrency(items, map).map(i => i.group_current), [true, false, false, false]);
   assert.deepEqual(withGroupCurrency(items, null).map(i => i.group_current), [false, false, false, false], 'unreadable ranking: outdated');
-  for (const file of ['../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', '../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/page.tsx', '../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts']) {
+  for (const file of ['../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', '../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/page.tsx', '../lib/cv-bulk-actions.ts']) {
     const src = readFileSync(new URL(file, import.meta.url), 'utf8');
     assert.match(src, /loadCurrentRanking\(client, /, file);
     assert.doesNotMatch(src, /get_screening_ranking[^\n]*\.range\(0,\s*999\)/, file);

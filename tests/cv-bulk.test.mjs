@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
@@ -13,6 +14,12 @@ import { bulkContract, bulkWorkerSignature, canonicalJsonb, parsePump, pumpAllSi
 import { docx, protectedPdf, renderCv, scannedPdf, textPdf } from './helpers/cv-bulk-fixtures.mjs';
 
 test.after(() => closeOcr());
+
+// The bulk server-action bodies live in lib/cv-bulk-actions.ts (dependency-injected core); the
+// 'use server' wrapper stays in bulk/actions.ts. Source-level checks read both files together.
+function actionSources(dir = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/', import.meta.url)) {
+  return readFileSync(new URL('../lib/cv-bulk-actions.ts', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('actions.ts', dir), 'utf8');
+}
 
 const cvLines = ['Katarzyna Wiśniewska', 'tel. +48 512 345 678', 'k.wisniewska@example.com', 'Doświadczenie: obsługa klienta, Excel, SQL',
   'Specjalista ds. raportowania, 2019-2024', 'Wykształcenie: Uniwersytet Ekonomiczny'];
@@ -547,9 +554,9 @@ test('AI disabled: bulk intake is refused before any slot is reserved', async ()
   assert.match(bulkIntakeBlocked(false), /Analiza AI jest teraz wyłączona/);
   const { readFileSync } = await import('node:fs');
   const dir = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/', import.meta.url);
-  const actions = readFileSync(new URL('actions.ts', dir), 'utf8');
+  const actions = actionSources(dir);
   const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
-  assert.ok(create.indexOf('bulkIntakeBlocked(screeningAiUserEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
+  assert.ok(create.indexOf('bulkIntakeBlocked(deps.aiEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
     'createBulkBatch checks the AI flag before reserving');
   assert.match(create, /!status\.error && verifyBulkRegistration\(created\.data, status\.data, recruitmentId, checked\)/,
     'file metadata and both RPC envelopes are checked before handing upload IDs to the browser');
@@ -588,7 +595,7 @@ test('bulk registration validates complete RPC output before uploading or closin
     assert.equal(verifyBulkRegistration(badCreated, badStatus, recruitmentId, files), null);
   }
   const { readFileSync } = await import('node:fs');
-  const actions = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
+  const actions = actionSources();
   const close = actions.slice(actions.indexOf('export async function closeBulkUpload'), actions.indexOf('export async function bulkProgress'));
   assert.match(close, /!Number\.isInteger\(result\.data\)/, 'close rejects a missing or malformed released-slot count');
   assert.match(close, /\(result\.data as number\) < 0/, 'close refuses negative slot counts');
@@ -956,7 +963,7 @@ test('manual preselection move is bound to the exact company and recruitment rou
   }
   assert.equal(bulkMoveTargetMatches(row, 'not-a-uuid', recruitmentId, applicationId), false);
   const { readFileSync } = await import('node:fs');
-  const source = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
+  const source = actionSources();
   const move = source.slice(source.indexOf('export async function movePreselectionGroup'));
   assert.match(move, /\.eq\('company_id', companyId\)\.eq\('recruitment_id', recruitmentId\)/);
   assert.match(move, /bulkMoveTargetMatches\(target\.data, companyId, recruitmentId, applicationId\)/);
@@ -978,7 +985,7 @@ test('manual preselection group changes require a valid RPC timestamp before suc
     '2026-11-07T01:00:00+24:00']) {
     assert.equal(groupMoveConfirmed(value), false, 'invalid/missing acknowledgements cannot pass');
   }
-  const action = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
+  const action = actionSources();
   assert.match(action, /if \(!groupMoveConfirmed\(result\.data\)\) return \{ error:/,
     'the server action must check the actual RPC return before claiming success');
 });
@@ -1028,7 +1035,7 @@ test('bulk status and route are bound before reading or mutating any other compa
   assert.equal(bulkBatchRouteMatches(status, 'bad', recruitmentId), false);
 
   const { readFileSync } = await import('node:fs');
-  const actions = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/actions.ts', import.meta.url), 'utf8');
+  const actions = actionSources();
   const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
   assert.ok(create.indexOf(".eq('company_id', companyId)") < create.indexOf("client.rpc('cv_bulk_create_batch'"),
     'reservation checks route company first');
@@ -1038,14 +1045,14 @@ test('bulk status and route are bound before reading or mutating any other compa
   assert.ok(close.indexOf(".eq('company_id', companyId)") < close.indexOf("client.rpc('cv_bulk_close_upload'"),
     'close verifies company before writing');
   const progress = actions.slice(actions.indexOf('export async function bulkProgress'), actions.indexOf('export type MoveState'));
-  assert.ok(progress.indexOf(".eq('company_id', companyId)") < progress.indexOf('pumpWithSession('),
+  assert.ok(progress.indexOf(".eq('company_id', companyId)") < progress.indexOf('deps.pump('),
     'heartbeat checks company before pumping');
-  assert.ok(progress.indexOf('bulkBatchRouteMatches(before.data') < progress.indexOf('pumpWithSession('),
+  assert.ok(progress.indexOf('bulkBatchRouteMatches(before.data') < progress.indexOf('deps.pump('),
     'heartbeat checks batch identity before pumping');
   const page = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /\.eq\('id', recruitmentId\)\.eq\('company_id', companyId\)/);
   assert.match(page, /bulkBatchRouteMatches\(raw, batchId, recruitmentId\)/);
-  assert.match(close, /closeBulkUpload\(companyId: string, recruitmentId: string, batchId: string\)/, 'exact recruitment is required to close batch');
+  assert.match(close, /closeBulkUploadCore\(deps: BulkActionDeps, companyId: string, recruitmentId: string, batchId: string\)/, 'exact recruitment is required to close batch');
   const uploader = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/uploader.tsx', import.meta.url), 'utf8');
   assert.match(uploader, /closeBulkUpload\(props.companyId, props.recruitmentId, created.batchId\)/);
   const ui = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url), 'utf8');
