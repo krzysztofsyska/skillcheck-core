@@ -92,7 +92,11 @@ export async function loadScreeningReport(
         const source = (row ?? {}) as { analysis_id?: unknown };
         requireReport(source.analysis_id === undefined || source.analysis_id === null || isUuid(source.analysis_id));
         return { ...group, stale: !groupAnalysisCurrent(source.analysis_id, rankingById.get(group.application_id)) };
-      }).filter(g => ids.has(g.application_id));
+      });
+      // The RPC is scoped to this recruitment. A foreign/stale application row
+      // is a contract violation, not an empty result: silently filtering it
+      // could conceal a broken tenant/recruitment filter or a partial export.
+      requireReport(groups.every(g => ids.has(g.application_id)));
       // The SQL contract returns at most one preselection group per application.
       // A malformed/duplicated RPC response must not double-count a candidate
       // or display contradictory groups in the report and CSV.
