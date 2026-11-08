@@ -672,9 +672,19 @@ test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
   // Scanner noise on a blank page (no word-like run) is still blank, even with low confidence.
   const noise = async () => ({ text: '| \u2014 ~ .', confidence: 20 });
   assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', noise)).text, /Katarzyna Wisniewska/);
-  // A confident short read (page number, footer) is still skipped.
+  // A confident bare page number is still skipped; short word-like skills are not.
   const footer = async () => ({ text: '2', confidence: 95 });
-  assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer)).text, /Katarzyna Wisniewska/);
+  const withoutFooter = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer);
+  assert.match(withoutFooter.text, /Katarzyna Wisniewska/);
+  assert.doesNotMatch(withoutFooter.text, /\n2$/, 'a bare page number is still skipped');
+  // A page consisting of a short, confidently read skill/qualification must not
+  // disappear from the approved text that the automatic screening will receive.
+  for (const skill of ['SQL', 'Prawo jazdy B']) {
+    const confident = async () => ({ text: skill, confidence: 95 });
+    const out = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', confident);
+    assert.ok(out.text.includes(skill), `short CV evidence preserved: ${skill}`);
+    assert.equal(out.ocrUsed, true);
+  }
   // A scan where OCR finds nothing on any page is still unreadable.
   await assert.rejects(extractBulkCv(scannedPdf(cvLines), 'pdf', blankOcr), reason('unreadable_scan'));
 });
