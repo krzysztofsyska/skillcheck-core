@@ -318,16 +318,25 @@ test('automatic preselection groups appear in the report and CSV without per-row
   data.get_preselection_groups = [
     { application_id: application, candidate_id: uuid(60), candidate_name: 'Jan Testowy', has_phone: true, group_key: 'passed',
       source: 'auto', raw_score: 87.5, coverage: 0.875, updated_at: timestamp, application_status: 'new', analysis_id: data.get_screening_ranking[0].analysis_id },
-    // A row for an application outside this recruitment is never shown.
-    { application_id: uuid(61), candidate_id: uuid(62), candidate_name: 'Obca Osoba', has_phone: false, group_key: 'rejected',
-      source: 'auto', raw_score: 0, coverage: 1, updated_at: timestamp, application_status: 'new' },
   ];
   const report = await load(data), csv = screeningReportCsv(report);
   assert.equal(report.groups.length, 1);
   assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875, stale: false });
   assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, new RegExp(`"${application}";"Przeszli sito";"87.5";"0.875";"Automatycznie";"Aktualny"`));
   assert.doesNotMatch(csv, /Jan Testowy/, 'CSV keeps candidates by application ID only');
-  assert.doesNotMatch(csv, /Obca Osoba/);
+});
+
+test('preselection group RPC fails closed for a foreign application instead of silently hiding it', async () => {
+  const data = fixture();
+  data.get_preselection_groups = [{
+    application_id: uuid(61), candidate_id: uuid(62), candidate_name: 'Obca Osoba', has_phone: false,
+    group_key: 'rejected', source: 'auto', raw_score: 0, coverage: 1, updated_at: timestamp,
+    application_status: 'new', analysis_id: uuid(63),
+  }];
+  await assert.rejects(() => load(data), error => error?.code === 'changed',
+    'an out-of-recruitment result from a trusted RPC must invalidate the export');
+  await assert.rejects(() => exportScreeningReport(clientFor(data), company, recruitment),
+    error => error?.code === 'changed');
 });
 
 test('preselection group RPC rejects duplicate entries and malformed analysis links', async () => {
