@@ -43,7 +43,7 @@ export type BulkGroup = 'passed' | 'review' | 'rejected';
 /** A manual group move must resolve to the exact application in the route,
  * not merely to any application the signed-in user can edit in another company. */
 export function bulkMoveTargetMatches(value: unknown, companyId: string, recruitmentId: string, applicationId: string): boolean {
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (![companyId, recruitmentId, applicationId].every(id => uuid.test(id))) return false;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
