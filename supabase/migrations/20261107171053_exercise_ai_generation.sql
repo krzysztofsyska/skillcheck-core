@@ -15,7 +15,7 @@ declare r public.recruitments;p public.positions;c public.company_profiles;s exe
  item jsonb;used integer;actor uuid:=auth.uid();
 begin
  if current_setting('transaction_isolation')<>'read committed' then raise exception 'Read committed required' using errcode='PT409';end if;
- perform private.competency_authority(target_company,true);
+ perform private.competency_authority(target_company);
  if request_key is null or input_fingerprint is null or input_fingerprint !~ '^[0-9a-f]{64}$' then raise exception 'Invalid request' using errcode='22023';end if;
  select * into r from public.recruitments where id=target_recruitment and company_id=target_company for share;
  if not found then raise exception 'Resource unavailable' using errcode='PT404';end if;
@@ -55,7 +55,7 @@ declare r public.recruitments;p public.positions;c public.company_profiles;s exe
  item jsonb;entry_id uuid;exercise_id uuid:=gen_random_uuid();trace jsonb;
 begin
  if current_setting('transaction_isolation')<>'read committed' then raise exception 'Read committed required' using errcode='PT409';end if;
- perform private.competency_authority(target_company,true);
+ perform private.competency_authority(target_company);
  select * into r from public.recruitments where id=target_recruitment and company_id=target_company for share;
  if not found then raise exception 'Resource unavailable' using errcode='PT404';end if;
  select * into p from public.positions where id=r.position_id and company_id=target_company for share;

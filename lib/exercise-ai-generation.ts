@@ -5,7 +5,7 @@ import {
   type ExerciseDraftInput, type ExerciseDraftProvenance, type ExerciseAiErrorCode,
 } from './exercise-ai.ts';
 
-export type ExerciseGenerationResult = { error?: string; exerciseId?: string };
+export type ExerciseGenerationResult = { error?: string; exerciseId?: string; terminalFailure?: boolean };
 export type GenerationReservation = {
   claimed?: boolean; status: 'reserved' | 'completed' | 'failed';
   exercise_id?: string; error?: ExerciseAiErrorCode;
@@ -17,7 +17,7 @@ type Dependencies = {
   provide: (payload: ReturnType<typeof exerciseDraftPayload>) => Promise<{ definition: ExerciseDefinition }>;
 };
 const result = (item: GenerationReservation): ExerciseGenerationResult => item.status === 'completed' && item.exercise_id
-  ? { exerciseId: item.exercise_id } : { error: item.status === 'failed'
+  ? { exerciseId: item.exercise_id } : { ...(item.status === 'failed' ? {terminalFailure:true} : {}), error: item.status === 'failed'
     ? sanitizeExerciseAiError(item.error ?? 'exercise_ai_server_error')
     : 'To żądanie już trwa. Odśwież stronę później. Nie wysyłamy go ponownie do modelu.' };
 
@@ -36,8 +36,7 @@ export async function generateExerciseDraft(input: ExerciseDraftInput, position:
     try { ({definition} = await deps.provide(payload)); }
     catch (error) {
       const code = error instanceof ExerciseAiError ? error.code : 'exercise_ai_server_error';
-      await deps.finish(provenance.input_fingerprint, null, null, code);
-      return {error: sanitizeExerciseAiError(code)};
+      return result(await deps.finish(provenance.input_fingerprint, null, null, code));
     }
     // A completion transport failure does not invoke the provider again. The same
     // request key may recover a committed result; otherwise the slot stays spent.

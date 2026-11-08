@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {Module,createRequire} from 'node:module';
 import ts from 'typescript';
+import {createElement} from 'react';
 import * as generation from '../lib/exercise-ai-generation.ts';
 import * as contract from '../lib/exercise-ai.ts';
 const base='app/dashboard/[companyId]/recruitments/[recruitmentId]/';
@@ -11,7 +12,7 @@ const companyId='aaaaaaaa-1111-4222-8333-444444444444',recruitmentId='bbbbbbbb-1
 const stamp='2026-11-07T00:00:00Z';
 function load(file,mocks){const absolute=fileURLToPath(new URL('../'+file,import.meta.url)),m=new Module(absolute),req=createRequire(absolute);
  m.filename=absolute;m.paths=Module._nodeModulePaths(fileURLToPath(new URL('../',import.meta.url)));m.require=id=>Object.hasOwn(mocks,id)?mocks[id]:req(id);
- m._compile(ts.transpileModule(readFileSync(absolute,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,absolute);return m.exports;}
+ m._compile(ts.transpileModule(readFileSync(absolute,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,absolute);return m.exports;}
 async function run(options={}){
  const oldFlag=process.env.EXERCISE_AI_ENABLED,oldKey=process.env.OPENAI_API_KEY;
  process.env.EXERCISE_AI_ENABLED=options.flag??'true';process.env.OPENAI_API_KEY=options.key??'synthetic-only';
@@ -38,4 +39,23 @@ test('generation action binds scoped reservation and completion, consumes once a
  assert.equal(r.rpc[1].new_provenance.position_updated_at,stamp);
  const replay=await run({claimed:false});assert.ok(replay.result.error);assert.ok(!replay.calls.includes('provider'));
  for(const code of ['PT429','PT409','42501']){const failed=await run({rpcError:code});assert.ok(failed.result.error);assert.doesNotMatch(failed.result.error,/private/);assert.ok(!failed.calls.includes('provider'));}
+});
+test('form preserves recovery key and rotates/reset only on an explicit confirmed-failure new-attempt click',()=>{
+ let activeKey=requestKey,state={},pending=false;const bindings=[];
+ const mod=load(base+'exercise-generation-form.tsx',{
+  react:{createElement,useState:initial=>[activeKey,value=>{activeKey=value;}],useActionState:(action,initial)=>{bindings.push({action,initial});return [state,action,pending];}},
+  'next/link':{default:()=>null},'./exercise-generation-action':{generateExerciseProposal:()=>assert.fail('render/click must not call provider action')},
+ });
+ const props={companyId,recruitmentId,requestKey,positionStamp:stamp,companyStamp:null};
+ const children=node=>Array.isArray(node)?node.flatMap(children):node&&typeof node==='object'?[node,...children(node.props?.children)]:[];
+ const render=()=>{const wrapper=mod.ExerciseGenerationForm(props);return {wrapper,nodes:children(wrapper.type(wrapper.props))};};
+ for(const current of [{},{error:'uncertain'},{error:'already reserved'}]){state=current;const r=render();assert.equal(r.wrapper.key,requestKey);assert.equal(r.nodes.some(n=>n.type==='button'&&n.props.type==='button'),false);}
+ state={error:'failed',terminalFailure:true};let r=render();assert.equal(activeKey,requestKey);
+ const next=r.nodes.find(n=>n.type==='button'&&n.props.type==='button');assert.ok(next);assert.equal(next.props.disabled,false);
+ assert.equal(r.nodes.find(n=>n.type==='fieldset').props.disabled,true);
+ pending=true;r=render();assert.equal(r.nodes.find(n=>n.type==='button'&&n.props.type==='button').props.disabled,true);pending=false;
+ next.props.onClick();assert.notEqual(activeKey,requestKey);assert.match(activeKey,/^[0-9a-f-]{36}$/);
+ state={};r=render();assert.equal(r.wrapper.key,activeKey);assert.equal(r.nodes.find(n=>n.type==='fieldset').props.disabled,undefined);
+ const consent=r.nodes.find(n=>n.type==='input');assert.equal(consent.props.defaultChecked,undefined);assert.equal(consent.props.checked,undefined);
+ assert.deepEqual(bindings.at(-1).initial,{});assert.equal(r.nodes.some(n=>n.type==='button'&&n.props.type==='button'),false);
 });

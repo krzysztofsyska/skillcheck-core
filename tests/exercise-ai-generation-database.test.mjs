@@ -3,7 +3,32 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {guardBoot,denied} from './helpers/exercise-ai-grant-guard-fixture.mjs';
+import {users} from './helpers/competency-active-fixture.mjs';
 const migration='20261107171053_exercise_ai_generation.sql';
+test('C6 non-owner recruiter completes a pending draft; viewers, other tenants and other actors cannot use the reservation',async t=>{
+ const e=await guardBoot(t),{db,h}=e;await e.install();
+ for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration])
+  await db.exec(await readFile(new URL('../supabase/migrations/'+name,import.meta.url),'utf8'));
+ const f=await e.seed(),foreign=await e.seed({owner:users.otherOwner}),key=randomUUID(),fingerprint='a'.repeat(64);
+ await h.asAdmin();
+ await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter'),($1,$3,'viewer'),($1,$4,'recruiter')",[f.companyId,users.recruiter,users.viewer,users.outsider]);
+ const stamp=(await db.query('select updated_at::text from public.company_profiles where company_id=$1',[f.companyId])).rows[0]?.updated_at??null;
+ const args=[f.companyId,f.recruitment.id,key,f.position.updated_at,stamp,fingerprint];
+ const reserve=()=>e.call('public.reserve_exercise_ai_generation',args);
+ const trace={provider:'synthetic',model:'fixture',prompt_version:'v1',payload_schema_version:1,result_schema_version:1,input_fingerprint:fingerprint,position_id:f.position.id,position_updated_at:f.position.updated_at};
+ const finish=()=>e.call('public.finish_exercise_ai_generation',[f.companyId,f.recruitment.id,key,fingerprint,JSON.stringify(f.definition),JSON.stringify(trace),null]);
+ for(const actor of [users.viewer,users.otherOwner,null]) {await h.asUser(actor);await assert.rejects(reserve(),denied('PT404'));await assert.rejects(finish(),denied('PT404'));}
+ await h.asUser(users.recruiter);assert.equal((await reserve()).claimed,true);
+ await assert.rejects(e.call('public.reserve_exercise_ai_generation',[foreign.companyId,foreign.recruitment.id,randomUUID(),foreign.position.updated_at,null,fingerprint]),denied('PT404'));
+ for(const actor of [users.outsider,f.owner]) {await h.asUser(actor);await assert.rejects(reserve(),denied('PT409'));await assert.rejects(finish(),denied('PT404'));}
+ await h.asAdmin();await db.query("update public.company_members set role='viewer' where company_id=$1 and user_id=$2",[f.companyId,users.recruiter]);
+ await h.asUser(users.recruiter);await assert.rejects(finish(),denied('PT404'));
+ await h.asAdmin();await db.query("update public.company_members set role='recruiter' where company_id=$1 and user_id=$2",[f.companyId,users.recruiter]);
+ await h.asUser(users.recruiter);const done=await finish();assert.equal(done.status,'completed');assert.equal((await finish()).definition_id,done.definition_id);
+ const row=(await db.query('select created_by,approved_at,approval_mode from exercise_ai.proposals where definition_entry_id=$1',[done.definition_id])).rows[0];
+ assert.equal(row.created_by,users.recruiter);assert.equal(row.approved_at,null);assert.equal(row.approval_mode,null);
+ assert.equal((await db.query('select author_id from public.exercise_definition_entries where id=$1',[done.definition_id])).rows[0].author_id,users.recruiter);
+});
 test('C6 durable generation: tenant/actor/snapshot binding, single claim, quota, timeout and atomic pending completion',async t=>{
  const e=await guardBoot(t),{db,h}=e;await e.install();
  for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration]) {
