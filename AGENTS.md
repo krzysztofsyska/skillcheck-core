@@ -163,6 +163,10 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 
 The required status `production-approval-attestation` (`.github/workflows/production-approval-attestation.yml`) passes only after the owner approves the `production-approval` environment for the exact PR head SHA. While agent sessions act through the owner's identity (rule 5, variant B), the separation between an agent and the owner's approval is procedural, not technical: GitHub would accept an approval or a `main` merge made with that identity. Only the owner approves and merges into `main`. Moving agent writes to the `skillcheck-agent-ks[bot]` App token restores the technical separation.
 
+## Continuous release policy (owner decision 2026-11-08, issue #369)
+
+Within the scope approved in [docs/continuous-release-policy.md](docs/continuous-release-policy.md), the per-release owner click in the Production loop is replaced by a trusted, fail-closed automatic preflight, **once that publisher is implemented and verified**. Until then the Production loop above applies unchanged. HOLD P24 stays absolute. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent. All technical protections remain.
+
 ## Agent controller
 
 SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. An integration merge is authorized by verified CI plus independent review (not PR prose); production approval remains a separate owner-only GitHub Environment approval. Do not enable the controller, merge, or deploy from a task implementation.
