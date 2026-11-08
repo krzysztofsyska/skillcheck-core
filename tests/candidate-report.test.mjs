@@ -652,6 +652,30 @@ test('porównanie FREE pokazuje pierwszy niepusty cytat, jak raport pojedynczego
   assert.equal(compared.rows.find(r => r.id === requirements[0].id).cells[0].quote, 'dowód 2');
 });
 
+test('porównanie FREE odrzuca uszkodzone offsety cytatów tak jak raport jednego CV', () => {
+  const candidate = application(1);
+  const invalid = [
+    { quote: 'bez zakresu' },
+    { start: -1, end: 5, quote: 'ujemny' },
+    { start: 8, end: 3, quote: 'odwrócony' },
+    { start: 0, end: 1_000_001, quote: 'poza limitem' },
+    { start: 2, end: 7, quote: 'ważny' },
+  ];
+  candidate.criteria[0].evidence = invalid;
+  const compared = buildCandidateComparison(report([candidate]));
+  const cell = compared.rows.find(r => r.id === requirements[0].id).cells[0];
+  const single = buildCandidateRequirement(requirements[0], 'required', completed,
+    row({ criterion_id: requirements[0].id, evidence: invalid }));
+  assert.equal(cell.status, 'supported');
+  assert.equal(cell.quote, single.quotes[0]?.quote ?? null);
+  assert.equal(cell.quote, 'ważny');
+
+  // With no valid anchored quote, neither view may display an invented citation.
+  candidate.criteria[0].evidence = invalid.slice(0, -1);
+  const empty = buildCandidateComparison(report([candidate]));
+  assert.equal(empty.rows.find(r => r.id === requirements[0].id).cells[0].quote, null);
+});
+
 test('porównanie i raport pojedynczego CV identycznie rozpoznają tekst wymagania', () => {
   const whitespace = application(1);
   whitespace.criteria[0].text = `  ${requirements[0].text}  `;
