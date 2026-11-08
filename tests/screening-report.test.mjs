@@ -64,6 +64,33 @@ test('report uses current reviewed evidence, whitelists fields, and leaves sourc
   }
 });
 
+test('report rejects mis-scoped source identities even if the Data API accepted its filters', async () => {
+  // A broken view or mocked PostgREST response must never mix another tenant's
+  // company, recruitment, position or application into a downloadable report.
+  const cases = [
+    ['companies', 'id', uuid(90)],
+    ['recruitments', 'id', uuid(90)],
+    ['recruitments', 'company_id', uuid(90)],
+    ['recruitments', 'position_id', 'invalid-position-id'],
+    ['positions', 'id', uuid(90)],
+    ['positions', 'company_id', uuid(90)],
+    ['applications', 'id', 'invalid-application-id'],
+    ['applications', 'company_id', uuid(90)],
+    ['applications', 'recruitment_id', uuid(90)],
+  ];
+  for (const [table, field, value] of cases) {
+    const client = clientFor(fixture(), {
+      responseData(q, response) {
+        if (q.table !== table || response === null) return response;
+        const corrupt = row => ({ ...row, [field]: value });
+        return Array.isArray(response) ? response.map((row, i) => i === 0 ? corrupt(row) : row) : corrupt(response);
+      },
+    });
+    await assert.rejects(() => loadScreeningReport(client, company, recruitment),
+      error => error?.code === 'changed', `${table}.${field} must fail closed`);
+  }
+});
+
 test('comparison report rejects malformed and duplicate requirement-flag RPC rows', async () => {
   const flag = { criterion_id: 'task:1', criterion_text: 'Raportowanie', flag: 'required' };
   const malformed = [

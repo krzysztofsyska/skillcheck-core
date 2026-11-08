@@ -49,12 +49,24 @@ export async function loadScreeningReport(
   if (authError || !user) throw new ScreeningReportError('unauthenticated');
   const readSource = async () => {
     const company = checked(await client.from('companies').select('id,name,updated_at').eq('id', p.companyId).maybeSingle());
+    // Query filters are necessary, but the response must also prove its tenant and
+    // recruitment links before any candidate data is assembled into an export.
+    requireReport(isUuid(company.id) && company.id.toLowerCase() === p.companyId);
     const recruitment = checked(await client.from('recruitments').select('id,company_id,position_id,name,updated_at')
       .eq('company_id', p.companyId).eq('id', p.recruitmentId).maybeSingle());
+    requireReport(isUuid(recruitment.id) && recruitment.id.toLowerCase() === p.recruitmentId &&
+      isUuid(recruitment.company_id) && recruitment.company_id.toLowerCase() === p.companyId &&
+      isUuid(recruitment.position_id));
     const position = checked(await client.from('positions').select('id,company_id,title,tasks,kpis,required_competencies,updated_at')
       .eq('company_id', p.companyId).eq('id', recruitment.position_id).maybeSingle());
-    const applications = await allRows((from, to) => client.from('applications').select('id,updated_at')
+    requireReport(isUuid(position.id) && position.id.toLowerCase() === recruitment.position_id.toLowerCase() &&
+      isUuid(position.company_id) && position.company_id.toLowerCase() === p.companyId);
+    const applications = await allRows((from, to) => client.from('applications').select('id,company_id,recruitment_id,updated_at')
       .eq('company_id', p.companyId).eq('recruitment_id', p.recruitmentId).order('id').range(from, to), MAX_REPORT_APPLICATIONS);
+    // Never accept a partial/mis-scoped Data API response merely because a filter was sent.
+    // This also protects exports if a future view/RPC changes its filtering contract.
+    requireReport(applications.every(a => isUuid(a.id) && isUuid(a.company_id) && isUuid(a.recruitment_id) &&
+      a.company_id.toLowerCase() === p.companyId && a.recruitment_id.toLowerCase() === p.recruitmentId));
     const rankings = (await allRows((from, to) => client.rpc('get_screening_ranking', {
       target_recruitment: p.recruitmentId, target_size: p.targetSize,
     }).order('application_id').range(from, to), MAX_REPORT_APPLICATIONS, true)).map(parseRanking);
