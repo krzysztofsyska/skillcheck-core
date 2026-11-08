@@ -60,7 +60,7 @@ test('compliant low-risk release with full evidence is qualified and bound', () 
 });
 test('additive migration with recovery plan is qualified', () => {
   const i = good0(); i.promotion.manifest.files.push('supabase/migrations/20261108_x.sql');
-  i.migrations = [{ path: 'supabase/migrations/20261108_x.sql', sql: 'alter table t add column c text; -- drop table x' }];
+  i.migrations = [{ path: 'supabase/migrations/20261108_x.sql', sql: 'alter table t add column c text' }];
   i.promotion.runbook = { id: 'x', backup: 'pitr', rollback_db_compatible: true };
   assert.equal(evaluateAutoRelease(withVerdict(i)).decision, 'ALLOW');
 });
@@ -152,4 +152,19 @@ test('malformed input returns DENY and never throws', () => {
   for (const m of muts) { const i = good(); m(i); let r; assert.doesNotThrow(() => { r = evaluateAutoRelease(i); }); assert.equal(r.decision, 'DENY'); }
   assert.equal(classifyReleaseFiles(null).reasons[0], 'INVALID_FILES');
   assert.equal(classifyReleaseFiles([1]).reasons[0], 'INVALID_FILES');
+});
+
+test('SQL comment markers (even inside literals) are refused; repository must be valid in current and verdict', () => {
+  for (const sql of [
+    "alter table public.companies add column c text default '/*'; delete from public.company_members; select '*/';",
+    "alter table t add column c text default '--'",
+    "alter table t add column c text default '/*'; drop table t; -- */'",
+    "alter table t add column c text /* x */",
+  ]) assert.equal(isRecognisedAdditiveSql(sql), false, sql);
+  assert.equal(isRecognisedAdditiveSql('alter table t add column c text'), true);
+  for (const bad of [undefined, null, '', '   ', 'noslash', 5, {}]) {
+    deny(i => { i.current.repository = bad; delete i.scopeVerdict; }, 'CURRENT_REPOSITORY_INVALID');
+    deny(i => { i.scopeVerdict.repository = bad; }, 'SCOPE_VERDICT_MISMATCH');
+  }
+  deny(i => { delete i.current.repository; delete i.scopeVerdict.repository; }, 'CURRENT_REPOSITORY_INVALID');
 });

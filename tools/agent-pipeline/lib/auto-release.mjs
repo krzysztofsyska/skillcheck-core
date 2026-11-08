@@ -22,8 +22,11 @@ const ADD_COLUMN = new RegExp(`^alter table (?:if exists )?${ID} add column (?:i
 const ADD_INDEX = new RegExp(`^create index (?:if not exists )?"?[a-z_][a-z0-9_]*"? on ${ID} \\("?[a-z_][a-z0-9_]*"?(?:, ?"?[a-z_][a-z0-9_]*"?)*\\)$`, 'i');
 export function isRecognisedAdditiveSql(sql) {
   if (typeof sql !== 'string' || !sql.trim() || sql.length > 100000) return false;
-  const text = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
-  if (text.includes('$') || text.includes('\\') || /\/\*|\*\//.test(text)) return false;
+  // Fail closed: any comment marker anywhere (even inside a literal) is refused
+  // BEFORE any normalisation, so comment stripping can never hide a statement.
+  if (sql.includes('--') || sql.includes('/*') || sql.includes('*/')) return false;
+  const text = sql;
+  if (text.includes('$') || text.includes('\\')) return false;
   const statements = text.split(';').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
   if (!statements.length) return false;
   return statements.every(st => ADD_COLUMN.test(st) || ADD_INDEX.test(st));
@@ -62,6 +65,8 @@ function evaluateUnsafe(input) {
   const deny = [];
   const { promotion, current, trusted, ci, review, codex, lock } = input;
   if (trusted?.p24Hold !== false) deny.push('P24_HOLD');
+  const repoOk = x => typeof x?.repository === 'string' && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(x.repository);
+  if (!repoOk(current)) deny.push('CURRENT_REPOSITORY_INVALID');
   if (!current || !SHA.test(current.integrationSha ?? '') || !SHA.test(current.mainSha ?? '')) deny.push('CURRENT_STATE_UNKNOWN');
   if (!promotion) deny.push('NO_PROMOTION_MANIFEST');
   else {
@@ -93,7 +98,7 @@ function evaluateUnsafe(input) {
   const expectedHash = promotion?.manifest && current ? sha256(promotion.manifest) : null;
   const verdictOk = v && typeof v === 'object' && v.source === 'trusted_independent_scope_reader'
     && v.verdict === 'LOW_RISK_COMPATIBLE' && expectedHash
-    && v.repository === current.repository && v.base_sha === current.mainSha
+    && repoOk(v) && repoOk(current) && v.repository === current.repository && v.base_sha === current.mainSha
     && v.head_sha === current.integrationSha && v.manifest_hash === expectedHash;
   if (!v) deny.push('SCOPE_VERDICT_MISSING');
   else if (!verdictOk) deny.push('SCOPE_VERDICT_MISMATCH_OR_UNTRUSTED');
@@ -109,7 +114,7 @@ function evaluateUnsafe(input) {
   if (!lock || lock.held !== false || lock.inflight !== 0) deny.push('RELEASE_NOT_SERIALIZED');
   if (!Array.isArray(input.released) || input.released.includes(current?.integrationSha)) deny.push('DUPLICATE_OR_UNKNOWN_RELEASE_STATE');
   const reasons = [...new Set(deny)];
-  const binding = current && promotion?.manifest ? sha256({ repository: current.repository, base: current.mainSha, head: current.integrationSha, manifest: promotion.manifest }) : null;
+  const binding = repoOk(current) && promotion?.manifest ? sha256({ repository: current.repository, base: current.mainSha, head: current.integrationSha, manifest: promotion.manifest }) : null;
   return reasons.length ? { decision: 'DENY', reasons, binding: null }
     : { decision: 'ALLOW', reasons: [], binding, note: 'Qualification only; publishing needs the trusted publisher (activation stage).' };
 }
