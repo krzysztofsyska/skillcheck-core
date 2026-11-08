@@ -65,7 +65,7 @@ function remaining(deadline: number) {
 }
 
 /**
- * OCR with the per-file time budget. Null only for a blank page (nothing found) or a confident short read;
+ * OCR with the per-file time budget. Null only for a blank/noise page (no word-like run);
  * real text read with low confidence fails the file as an unreadable scan instead of being dropped,
  * so a CV is never analysed with a silently missing page.
  */
