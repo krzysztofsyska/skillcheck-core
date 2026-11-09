@@ -29,6 +29,7 @@ export function plan(record, obs) {
 function planNext(record, obs) {
   if (obs.kind === 'promotion' || record?.binding?.lane === 'promotion') return planPromotion(record, obs);
   if (!record || record.state === 'BACKLOG') return openTask(obs);
+  if (record.technical_state === 'WAITING_POST_MERGE_CI' || record.binding?.post_merge_ci?.blocked) return postMergeStep(record, obs);
   if (record.state === 'BLOCKED') return resumeOrHold(record, obs);
   if (record.state === 'ACCEPTED' || record.state === 'DONE') return done(record);
   if (record.binding?.merge?.phase === 'awaiting_confirmation') return confirmMerge(record, obs);
@@ -698,7 +699,26 @@ function confirmMerge(record, obs) {
   if (reconciled.state === 'MERGED_AWAITING_DEPLOYMENT') {
     next.state = record.binding.approval?.gate === 'B' ? 'MERGED_AWAITING_DEPLOYMENT' : 'ACCEPTED';
     if (record.binding.lane === 'promotion' || record.binding.approval?.gate === 'B') next.state = 'MERGED_AWAITING_DEPLOYMENT';
+    else { next.technical_state = 'WAITING_POST_MERGE_CI'; next.binding.merge.confirmed_at = obs.now; }
   }
+  return done(next);
+}
+
+function postMergeStep(record, obs) {
+  const result = obs.github.postMergeCi;
+  if (result?.ok === true && result.headSha === record.binding.merge?.mergeCommitSha) {
+    const next = touch(record, obs.now, { state: 'ACCEPTED', technical_state: null, blocked_reason: null });
+    next.binding.post_merge_ci = { ...result, blocked: false, verified_at: obs.now };
+    return done(next);
+  }
+  const started = Date.parse(record.binding.merge?.confirmed_at ?? record.last_transition_at);
+  const timeout = obs.policy.post_merge_ci?.timeout_ms ?? obs.policy.timeouts.ci_review_ms;
+  const expired = !Number.isFinite(started) || Date.parse(obs.now) - started >= timeout;
+  if ((!result || result.pending) && !expired) return done(record);
+  const reason = expired ? 'POST_MERGE_CI_TIMEOUT' : result?.reason ?? 'POST_MERGE_CI_UNCONFIRMED';
+  if (record.blocked_reason === reason) return done(record);
+  const next = block(record, reason, obs.now, 'WAITING_POST_MERGE_CI');
+  next.binding.post_merge_ci = { ...(result ?? {}), blocked: true };
   return done(next);
 }
 
@@ -751,7 +771,8 @@ export function fold(record, effect, result, obs) {
       const next = touch(record, now);
       next.binding.merge = { ...record.binding.merge, phase: 'settled', mergeCommitSha: result.mergeCommitSha, retry: false };
       next.state = effect.gate === 'B' ? 'MERGED_AWAITING_DEPLOYMENT' : 'ACCEPTED';
-      next.technical_state = effect.gate === 'B' ? 'MERGED_AWAITING_DEPLOYMENT' : null;
+      next.technical_state = effect.gate === 'B' ? 'MERGED_AWAITING_DEPLOYMENT' : 'WAITING_POST_MERGE_CI';
+      next.binding.merge.confirmed_at = now;
       return next;
     }
     return block(record, 'MERGE_UNKNOWN', now);

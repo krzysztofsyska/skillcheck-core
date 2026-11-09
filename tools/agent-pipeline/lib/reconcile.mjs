@@ -184,6 +184,12 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
   }
   const promotion = github.readComparison ? await preparePromotion(github, policy, records, integration?.commit?.sha, main?.commit?.sha) : null;
   const evidence = await readEvidence(github, policy, records);
+  const postMergeCi = {};
+  for (const record of Object.values(records)) {
+    if (record.technical_state === 'WAITING_POST_MERGE_CI' || record.binding?.post_merge_ci?.blocked) {
+      postMergeCi[record.task_id] = await github.readPostMergeCi(record.binding.merge?.mergeCommitSha);
+    }
+  }
   const approvals = await readApprovals(github, policy, records);
   const policySha = main?.commit?.sha;
   if (!/^[a-f0-9]{40}$/.test(policySha ?? '')) throw new Error('POLICY_COMMIT_MISSING');
@@ -202,6 +208,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
       branches,
       cursor: cursorState,
       evidence,
+      postMergeCi,
       approvals,
       protection,
       mergeLock: projection.mergeLock ?? null,

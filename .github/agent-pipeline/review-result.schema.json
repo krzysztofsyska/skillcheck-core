@@ -55,6 +55,8 @@
         }
       }
     },
-    "limitations": { "type": "array", "items": { "type": "string" } }
+    "limitations": { "type": "array", "items": { "type": "string" } },
+    "full_diff_reviewed": { "type": "boolean" },
+    "reviewed_commits": { "type": "array", "items": { "type": "string", "pattern": "^[a-f0-9]{40}$" } }
   }
 }

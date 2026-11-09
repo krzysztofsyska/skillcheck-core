@@ -9,6 +9,7 @@ import { validateReview } from './review.mjs';
 import { parseContract } from './contract.mjs';
 import { buildNotification } from './notifications.mjs';
 import { touch } from './record.mjs';
+import { historyCoverage } from './history.mjs';
 
 export function validatePair(record, pair, policy) {
   const common = { policySha: record.policy_sha, headSha: record.head_sha, baseSha: record.base_sha, runAttempt: 1 };
@@ -50,6 +51,7 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
       || pull.head.repo?.id !== policy.repository_id || pull.base.repo?.id !== policy.repository_id
       || pull.base.ref !== (effect.gate === 'B' ? 'main' : 'integration')
       || (effect.gate === 'B' && pull.head.ref !== 'integration')) throw new Error('APPROVAL_STALE');
+  if (pull.mergeable !== true) throw new Error(pull.mergeable === false ? 'MERGE_CONFLICT' : 'MERGEABILITY_UNKNOWN');
   if (effect.gate === 'A') {
     const issue = await github.readIssue(record.issue_number);
     if (parseContract(issue.body).hash !== record.contract_hash) throw new Error('CONTRACT_EDITED');
@@ -59,6 +61,10 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   const pair = evidence[record.task_id];
   const checked = validatePair(record, pair, policy);
   if (!checked.ci.pass || !checked.review.pass) throw new Error('EVIDENCE_STALE');
+  const comparison = await github.readComparison(record.base_sha, record.head_sha);
+  if (!historyCoverage(pair.review.payload, comparison.commits.map(c => c.sha))) throw new Error('INCOMPLETE_HISTORY_REVIEW');
+  const quality = await github.readMergeQuality(record.pr_number, record.head_sha, pull.base.ref);
+  if (!quality.ok) throw new Error(quality.reason);
   const request = record.binding.approval;
   const automatic = effect.gate === 'A' && policy.integration_merge_policy === 'verified_ci_review';
   const frozen = record.binding.auto_integration;
