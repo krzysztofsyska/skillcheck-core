@@ -1,7 +1,7 @@
 // SC-021-A: OpenAI Responses API adapter (the only active provider).
 import type { AdapterCall, AiProviderAdapter, GatewayRequest, ProviderReply, TokenUsage } from './contract.ts';
 import { AiGatewayError } from './contract.ts';
-import { postJson, record, tokenCount } from './http.ts';
+import { MAX_PROVIDER_RESPONSE_BYTES, postJson, record, tokenCount } from './http.ts';
 
 export const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
@@ -54,12 +54,20 @@ export function parseOpenAiResponse(raw: unknown): ProviderReply {
   }
   const outputText = chunks.length ? chunks.join('') : null;
   const status = refused ? 'refused' : body.status === 'completed' ? 'completed' : 'incomplete';
-  return { status, outputText, usage, providerRequestId };
+  return { status, outputText, usage, providerRequestId, body };
 }
 
-export function createOpenAiAdapter(options: { apiKey: string; fetchImpl?: typeof fetch }): AiProviderAdapter {
+export function createOpenAiAdapter(options: {
+  apiKey: string; fetchImpl?: typeof fetch;
+  /** Lower response cap for a caller whose legacy path enforced one (exercise generation). */
+  maxResponseBytes?: number;
+}): AiProviderAdapter {
   if (typeof options.apiKey !== 'string' || !options.apiKey.trim()) {
     throw new AiGatewayError('auth_error', 'not_billed');
+  }
+  const maxResponseBytes = options.maxResponseBytes ?? MAX_PROVIDER_RESPONSE_BYTES;
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1 || maxResponseBytes > MAX_PROVIDER_RESPONSE_BYTES) {
+    throw new Error('SC021_INVALID_RESPONSE_CAP');
   }
   const fetchImpl = options.fetchImpl ?? fetch;
   return {
@@ -74,7 +82,7 @@ export function createOpenAiAdapter(options: { apiKey: string; fetchImpl?: typeo
       const raw = await postJson(fetchImpl, OPENAI_RESPONSES_URL, {
         authorization: 'Bearer ' + options.apiKey,
         'x-client-request-id': call.attemptId,
-      }, body, call.signal);
+      }, body, call.signal, maxResponseBytes);
       return parseOpenAiResponse(raw);
     },
   };

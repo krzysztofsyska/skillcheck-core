@@ -2,19 +2,24 @@
 // Order of checks on every call: server-only → context → authorization → route → payload
 // privacy → adapter allowlist → physical attempt(s). Every physical attempt is reported to
 // `onAttempt` (the SC-021-B ledger hook) with its own attemptId, so retries are visible.
-import { randomUUID } from 'node:crypto';
+// No Node-only APIs (Buffer, node:crypto): the screening worker bundles this for Supabase Edge (Deno).
 import { detectEmail, detectPhone } from '../cv-bulk.ts';
 import { normalizeForRedaction } from '../cv-normalize.ts';
 import {
   AiGatewayError, isAiTask, isActiveProvider, isTransient,
   type AiProvider, type AiProviderAdapter, type AiTask, type BillingCertainty,
-  type GatewayRequest, type TokenUsage,
+  type GatewayRequest, type ProviderReply, type TokenUsage,
 } from './contract.ts';
 import { resolveRoute, type AiRoutingPolicy, type ResolvedModel } from './policy.ts';
 
 /** Identity of the business operation. Built by trusted server code, never from browser JSON. */
 export type AiCallContext = {
-  companyId: string;
+  /**
+   * Tenant of the operation, from trusted server state. `null` only for `cv_screening`, whose trusted
+   * principal does not carry the tenant yet: the screening worker claim (SC-021-A2). SC-021-B binds the company into
+   * the claim before any per-company ledger or budget relies on it. Missing (`undefined`) is invalid.
+   */
+  companyId: string | null;
   /** Stable across retries of one business operation (correlation ID). */
   operationId: string;
   task: AiTask;
@@ -25,7 +30,7 @@ export type AiCallContext = {
 export type AttemptRecord = {
   attemptId: string;
   operationId: string;
-  companyId: string;
+  companyId: string | null;
   task: AiTask;
   policyVersion: string;
   modelKey: string;
@@ -52,6 +57,16 @@ export type AiCallResult = {
   operationId: string;
   attemptId: string;
   attempts: number;
+};
+
+/**
+ * `runRaw` result: the provider answered (completed, refused or incomplete). The caller's own result
+ * contract parses `providerBody` exactly as it parsed a direct provider response before the gateway.
+ */
+export type AiRawCallResult = Omit<AiCallResult, 'outputText'> & {
+  status: 'completed' | 'refused' | 'incomplete';
+  outputText: string | null;
+  providerBody: unknown;
 };
 
 export type AiGatewayOptions = {
@@ -83,7 +98,10 @@ function withDeadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error
 const BREAKER_CODES = new Set(['server_error', 'timeout', 'network_error', 'model_unavailable']);
 
 function assertContext(ctx: AiCallContext) {
-  if (!ctx || typeof ctx !== 'object' || !UUID.test(ctx.companyId) || !UUID.test(ctx.operationId)
+  // A null tenant is allowed only for the task whose trusted principal lacks it today (worker claim).
+  if (!ctx || typeof ctx !== 'object'
+    || (ctx.companyId === null ? ctx.task !== 'cv_screening' : !UUID.test(ctx.companyId))
+    || !UUID.test(ctx.operationId)
     || !isAiTask(ctx.task)
     || (ctx.processId != null && !UUID.test(ctx.processId))
     || (ctx.candidatePseudonym != null && !PSEUDONYM.test(ctx.candidatePseudonym))) {
@@ -91,7 +109,10 @@ function assertContext(ctx: AiCallContext) {
   }
 }
 
-function assertRequest(request: GatewayRequest) {
+const utf8Bytes = (text: string) => new TextEncoder().encode(text).byteLength;
+
+/** Validates the request; returns the serialised output schema ('' without one). */
+function assertRequest(request: GatewayRequest): string {
   if (!request || typeof request.system !== 'string' || typeof request.user !== 'string'
     || !request.system.trim() || !request.user.trim()
     || !Number.isSafeInteger(request.maxOutputTokens) || request.maxOutputTokens < 1 || request.maxOutputTokens > 32_000
@@ -101,6 +122,12 @@ function assertRequest(request: GatewayRequest) {
       || !request.jsonSchema.schema || typeof request.jsonSchema.schema !== 'object'))) {
     throw new AiGatewayError('invalid_request');
   }
+  if (request.jsonSchema === undefined) return '';
+  // A circular or otherwise unserialisable schema (BigInt, throwing toJSON) can never be sent.
+  let schema: string | undefined;
+  try { schema = JSON.stringify(request.jsonSchema.schema); } catch { throw new AiGatewayError('invalid_request'); }
+  if (typeof schema !== 'string') throw new AiGatewayError('invalid_request');
+  return schema;
 }
 
 /** Contact data in the outgoing payload means redaction failed upstream: stop before the provider. */
@@ -110,7 +137,10 @@ export function containsContactData(text: string) {
 }
 
 export function createAiGateway(options: AiGatewayOptions) {
-  if (typeof window !== 'undefined') throw new Error('SC021_SERVER_ONLY');
+  // Browser bundles only. Deno (Supabase Edge, the screening worker) may define `window` but is server-side.
+  if (typeof window !== 'undefined' && typeof (globalThis as { Deno?: unknown }).Deno === 'undefined') {
+    throw new Error('SC021_SERVER_ONLY');
+  }
   if (typeof options.authorize !== 'function') throw new Error('SC021_AUTHORIZE_REQUIRED');
   if (typeof options.onAttempt !== 'function') throw new Error('SC021_ATTEMPT_HOOK_REQUIRED');
   const adapters = new Map<AiProvider, AiProviderAdapter>();
@@ -139,7 +169,9 @@ export function createAiGateway(options: AiGatewayOptions) {
   const recordAttempt = (r: AttemptRecord) =>
     withDeadline(Promise.resolve().then(() => options.onAttempt(r)), ATTEMPT_HOOK_TIMEOUT_MS, () => new Error('SC021_ATTEMPT_HOOK_TIMEOUT'));
 
-  async function run(ctx: AiCallContext, request: GatewayRequest): Promise<AiCallResult> {
+  type Answered = { reply: ProviderReply; model: ResolvedModel; attemptId: string; attempt: number };
+
+  async function execute(ctx: AiCallContext, request: GatewayRequest): Promise<Answered> {
     assertContext(ctx);
     let allowed = false;
     try { allowed = (await options.authorize(ctx)) === true; } catch { allowed = false; }
@@ -155,14 +187,13 @@ export function createAiGateway(options: AiGatewayOptions) {
     const models: ResolvedModel[] = resolved.models.filter(m => adapters.has(m.provider));
     if (models.length === 0) throw new AiGatewayError('no_available_model');
 
-    assertRequest(request);
+    const schema = assertRequest(request);
     // Everything the adapter sends counts: instructions, payload and the output schema.
-    const schemaBytes = request.jsonSchema ? Buffer.byteLength(JSON.stringify(request.jsonSchema.schema), 'utf8') : 0;
-    if (Buffer.byteLength(request.system, 'utf8') + Buffer.byteLength(request.user, 'utf8') + schemaBytes > route.maxInputBytes) {
+    if (utf8Bytes(request.system) + utf8Bytes(request.user) + utf8Bytes(schema) > route.maxInputBytes) {
       throw new AiGatewayError('payload_too_large');
     }
     if (route.blockContactData && (containsContactData(request.user) || containsContactData(request.system)
-      || (request.jsonSchema !== undefined && containsContactData(JSON.stringify(request.jsonSchema.schema))))) {
+      || (schema !== '' && containsContactData(schema)))) {
       throw new AiGatewayError('payload_not_redacted');
     }
 
@@ -171,7 +202,7 @@ export function createAiGateway(options: AiGatewayOptions) {
     for (let attempt = 1; attempt <= route.maxAttempts; attempt++) {
       const model = models[index];
       const adapter = adapters.get(model.provider)!;
-      const attemptId = randomUUID();
+      const attemptId = globalThis.crypto.randomUUID();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), route.timeoutMs);
       const started = now();
@@ -180,7 +211,7 @@ export function createAiGateway(options: AiGatewayOptions) {
         policyVersion: options.policy.version, modelKey: model.key, provider: model.provider,
         model: model.model, revision: model.revision, attempt,
       };
-      let reply;
+      let reply: ProviderReply;
       try {
         reply = await withDeadline(
           adapter.invoke({ model: model.model, revision: model.revision, request, attemptId, signal: controller.signal }),
@@ -214,16 +245,36 @@ export function createAiGateway(options: AiGatewayOptions) {
       clearTimeout(timer);
       failures.delete(model.key);
       await recordAttempt({ ...base, outcome: reply.status, billing: 'billed', usage: reply.usage, providerRequestId: reply.providerRequestId, latencyMs: now() - started });
-      if (reply.status === 'refused') throw new AiGatewayError('refusal', 'maybe_billed');
-      if (reply.status !== 'completed' || reply.outputText === null) throw new AiGatewayError('incomplete', 'maybe_billed');
-      return {
-        outputText: reply.outputText, usage: reply.usage, provider: model.provider, model: model.model,
-        revision: model.revision, modelKey: model.key, policyVersion: options.policy.version,
-        operationId: ctx.operationId, attemptId, attempts: attempt,
-      };
+      return { reply, model, attemptId, attempt };
     }
     throw lastError;
   }
 
-  return { run };
+  const meta = (ctx: AiCallContext, { reply, model, attemptId, attempt }: Answered) => ({
+    usage: reply.usage, provider: model.provider, model: model.model,
+    revision: model.revision, modelKey: model.key, policyVersion: options.policy.version,
+    operationId: ctx.operationId, attemptId, attempts: attempt,
+  });
+
+  /** Provider-neutral call: refused and incomplete answers become errors. */
+  async function run(ctx: AiCallContext, request: GatewayRequest): Promise<AiCallResult> {
+    const answered = await execute(ctx, request);
+    const { reply } = answered;
+    if (reply.status === 'refused') throw new AiGatewayError('refusal', 'maybe_billed');
+    if (reply.status !== 'completed' || reply.outputText === null) throw new AiGatewayError('incomplete', 'maybe_billed');
+    return { outputText: reply.outputText, ...meta(ctx, answered) };
+  }
+
+  /**
+   * Same checks, routing, retries and attempt records as `run`, but every provider answer is
+   * returned with its parsed envelope, so a module whose result contract predates the gateway
+   * (screening, exercise generation) keeps parsing refusals and truncation exactly as before.
+   */
+  async function runRaw(ctx: AiCallContext, request: GatewayRequest): Promise<AiRawCallResult> {
+    const answered = await execute(ctx, request);
+    const { reply } = answered;
+    return { status: reply.status, outputText: reply.outputText, providerBody: reply.body, ...meta(ctx, answered) };
+  }
+
+  return { run, runRaw };
 }

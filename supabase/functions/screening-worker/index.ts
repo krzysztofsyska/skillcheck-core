@@ -7,6 +7,8 @@ import {
 } from "../../../lib/screening-hmac.ts";
 import { callOpenAiResponses, runScreeningAttempt } from "../../../lib/screening-worker.ts";
 import { screeningClaimRpcName } from "../../../lib/screening-claim-route.ts";
+import { isAiGatewayEnabled } from "../../../lib/ai-gateway/contract.ts";
+import { createScreeningGatewayCall } from "../../../lib/screening-gateway.ts";
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 
@@ -122,13 +124,17 @@ function workerStore(sql: ReturnType<typeof postgres>) {
 function createRuntime() {
   const sql = postgres(env("SUPABASE_DB_URL"), { prepare: false, max: 1 });
   const apiKey = env("OPENAI_API_KEY");
+  // SC-021-A2: off unless AI_GATEWAY_ENABLED is exactly "true"; off = the direct call below, unchanged.
+  const viaGateway = isAiGatewayEnabled(env("AI_GATEWAY_ENABLED"))
+    ? createScreeningGatewayCall({ apiKey, log: entry => console.log(JSON.stringify(entry)) })
+    : null;
   return {
     sql,
     runtime: {
       enabled: env("SCREENING_AI_ENABLED") === "true",
       store: workerStore(sql),
-      async callOpenAi(request: Parameters<typeof callOpenAiResponses>[1]) {
-        return callOpenAiResponses(apiKey, request);
+      async callOpenAi(request: Parameters<typeof callOpenAiResponses>[1], claim: Parameters<NonNullable<typeof viaGateway>>[1]) {
+        return viaGateway ? viaGateway(request, claim) : callOpenAiResponses(apiKey, request);
       },
       sleep: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
       log(entry: Record<string, unknown>) {
