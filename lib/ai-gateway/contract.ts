@@ -73,21 +73,29 @@ export type AiProviderAdapter = {
  * `maybe_billed`: transport error, timeout or 5xx — the model may have run and may be charged.
  */
 export type BillingCertainty = 'not_billed' | 'maybe_billed';
+/** Billing of one physical attempt: `billed` once the provider answered with a result. */
+export type AttemptBilling = 'billed' | BillingCertainty;
 
 export const AI_GATEWAY_ERROR_CODES = [
   'invalid_context', 'unauthorized', 'unknown_task', 'route_disabled', 'no_available_model',
   'provider_inactive', 'payload_not_redacted', 'payload_too_large', 'invalid_request',
   'bad_request', 'auth_error', 'rate_limit', 'model_unavailable', 'server_error',
   'timeout', 'network_error', 'invalid_response', 'refusal', 'incomplete',
+  // SC-021-B: the attempt could not be recorded in the ledger (hook error or hook timeout).
+  'ledger_error',
 ] as const;
 export type AiGatewayErrorCode = typeof AI_GATEWAY_ERROR_CODES[number];
 
 export class AiGatewayError extends Error {
   readonly code: AiGatewayErrorCode;
-  readonly billing: BillingCertainty;
+  /**
+   * Provider errors carry `not_billed` / `maybe_billed`. Only `ledger_error` can carry `billed`: the
+   * provider answered (and charged) but the attempt could not be recorded.
+   */
+  readonly billing: AttemptBilling;
   /** HTTP status of a provider rejection, when there was one (callers map it to their own codes). */
   readonly httpStatus?: number;
-  constructor(code: AiGatewayErrorCode, billing: BillingCertainty = 'not_billed', httpStatus?: number) {
+  constructor(code: AiGatewayErrorCode, billing: AttemptBilling = 'not_billed', httpStatus?: number) {
     // The message is the code only: never echo provider bodies, prompts or CV text.
     super(code);
     this.name = 'AiGatewayError';

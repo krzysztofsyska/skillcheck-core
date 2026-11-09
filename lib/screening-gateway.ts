@@ -11,6 +11,7 @@
 import { AiGatewayError } from './ai-gateway/contract.ts';
 import { defaultAiPolicy } from './ai-gateway/default-policy.ts';
 import { createAiGateway } from './ai-gateway/gateway.ts';
+import { createLedgerHook, type LedgerWriter } from './ai-gateway/ledger.ts';
 import { createOpenAiAdapter } from './ai-gateway/openai.ts';
 import type { AiRoutingPolicy } from './ai-gateway/policy.ts';
 import { attemptLogEntry, gatewayRequestFromResponsesBody, pinnedRouteModel } from './ai-gateway/responses-bridge.ts';
@@ -40,6 +41,13 @@ export function screeningErrorFromGateway(error: unknown): ScreeningProviderErro
   }
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Tenant bound into the claim by the worker (SC-021-B); null when it is missing or malformed. */
+export function screeningClaimCompany(claim: ScreeningWorkerClaim): string | null {
+  return typeof claim.company_id === 'string' && UUID.test(claim.company_id) ? claim.company_id : null;
+}
+
 /** The worker claim is the trusted principal: a leased attempt that passed the contract check. */
 export function screeningClaimAuthorizes(claim: ScreeningWorkerClaim, operationId: string, nowMs: number) {
   const leaseUntil = Date.parse(claim.lease_expires_at);
@@ -51,6 +59,8 @@ export function screeningClaimAuthorizes(claim: ScreeningWorkerClaim, operationI
 export type ScreeningGatewayOptions = {
   apiKey: string;
   log: (entry: ReturnType<typeof attemptLogEntry>) => void;
+  /** SC-021-B: durable ledger write (public.record_screening_ai_attempt as screening_worker). Required. */
+  recordAttempt: LedgerWriter;
   fetchImpl?: typeof fetch;
   policy?: AiRoutingPolicy;
   now?: () => number;
@@ -63,6 +73,7 @@ export type ScreeningGatewayOptions = {
 export function createScreeningGatewayCall(options: ScreeningGatewayOptions) {
   const policy = options.policy ?? defaultAiPolicy;
   const now = options.now ?? Date.now;
+  const ledger = createLedgerHook(options.recordAttempt);
   return async function callScreeningViaGateway(request: ScreeningOpenAiRequest, claim: ScreeningWorkerClaim): Promise<ScreeningOpenAiResponse> {
     try {
       const { model, request: gatewayRequest } = gatewayRequestFromResponsesBody(request);
@@ -70,18 +81,23 @@ export function createScreeningGatewayCall(options: ScreeningGatewayOptions) {
       if (model !== pinnedRouteModel(policy, 'cv_screening') || model !== claim.model) {
         throw new ScreeningProviderError('contract_mismatch', 'Analysis contract mismatch.', 'contract_mismatch');
       }
+      // The tenant comes from the database (claim transaction), never from the dispatch request.
+      // Without it there is no ledger row to attribute the cost to: refuse before any provider I/O.
+      const companyId = screeningClaimCompany(claim);
+      if (companyId === null) throw new ScreeningProviderError('worker_internal_error', 'Claim tenant unavailable.');
       const gateway = createAiGateway({
         policy,
         adapters: [createOpenAiAdapter({ apiKey: options.apiKey, fetchImpl: options.fetchImpl })],
-        authorize: async ctx => ctx.task === 'cv_screening' && ctx.companyId === null
+        authorize: async ctx => ctx.task === 'cv_screening' && ctx.companyId === companyId
           && screeningClaimAuthorizes(claim, ctx.operationId, now()),
         onAttempt: async record => {
           try { options.log(attemptLogEntry(record)); } catch { /* a log sink failure never fails the analysis */ }
+          // The durable record is not optional: a failure here is `ledger_error` (not retried).
+          await ledger(record);
         },
         now,
       });
-      // companyId: the worker claim does not carry the tenant yet; SC-021-B binds it before budgets.
-      const result = await gateway.runRaw({ companyId: null, operationId: claim.attempt_id, task: 'cv_screening' }, gatewayRequest);
+      const result = await gateway.runRaw({ companyId, operationId: claim.attempt_id, task: 'cv_screening' }, gatewayRequest);
       return result.providerBody as ScreeningOpenAiResponse;
     } catch (error) {
       throw screeningErrorFromGateway(error);

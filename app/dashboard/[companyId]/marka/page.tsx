@@ -8,6 +8,7 @@ import { brandAssetHref, loadPublishedBrand } from "../../../../lib/brand-server
 import { BrandHeader, CandidatePanelPreview } from "../../../components/brand/brand-frame";
 import { SubmitButton } from "../../../components/submit-button";
 import { publishBrandDraft, rollbackBrand, saveBrandDraft, uploadBrandAsset } from "./actions";
+import { BrandMessagePreviews } from "../../../components/brand/brand-message-preview";
 
 const messages: Record<string, string> = {
   draft_saved: "Szkic zapisany. Sprawdź podgląd poniżej i opublikuj, gdy wszystko się zgadza.",
@@ -71,6 +72,8 @@ export default async function BrandPage({ params, searchParams }: {
   const href = (id: string | null | undefined) => id ? brandAssetHref(companyId, id) : null;
   const published = state.versions.find(v => v.status === "published") ?? null;
   const checks = contrastChecks(config.colors);
+  const publishedConfig = published ? parseBrandConfig(published.config) : null;
+  const previewBrand: BrandConfig | null = state.draft && draftConfig?.ok ? config : publishedConfig?.ok ? publishedConfig.value : null;
 
   return <main className="workspace"><section>
     <nav><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link></nav>
@@ -135,6 +138,11 @@ export default async function BrandPage({ params, searchParams }: {
         <div className="actions"><SubmitButton>Opublikuj tę wersję</SubmitButton></div>
       </form>
     </> : <p>Zapisz szkic, aby zobaczyć podgląd i móc go opublikować.</p>}
+
+    <h2>Wiadomości do kandydatów (podgląd)</h2>
+    <p>Tak będą wyglądały wiadomości do kandydatów w Twojej marce{state.draft && draftConfig?.ok ? " (według szkicu)" : ""}.
+      Stopka z informacjami prawnymi jest stała. <strong>Wysyłka jest wyłączona</strong> — nic nie trafia do kandydatów.</p>
+    <BrandMessagePreviews brand={previewBrand} controllerName={company.name} />
 
     <h2>4. Historia wersji</h2>
     {state.versions.length ? <ul className="companies">{state.versions.map(v => {

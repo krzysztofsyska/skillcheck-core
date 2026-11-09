@@ -64,7 +64,7 @@ Gdy jest włączona:
 | ponowienia | trasa robi 1 fizyczną próbę; screening zachowuje własną pętlę (3 próby, te same przerwy), generowanie zadań — 1 próbę |
 | hash kontraktu analizy | bez zmian (test z wartościami stałymi) |
 | autoryzacja | screening: claim workera (to samo `attempt_id`, niewygasła dzierżawa); zadania: członkostwo w firmie i uprawnienia sprawdzone przez `exerciseContext`, klucz żądania, rekrutacja. Nigdy dane z przeglądarki |
-| rejestr prób | `onAttempt` zapisuje jedną linię JSON na fizyczną próbę (identyfikatory, model, wynik, tokeny, czas) — bez promptu, CV, profilu i klucza. Trwały rejestr = SC-021-B |
+| rejestr prób | `onAttempt` zapisuje jedną linię JSON na fizyczną próbę (identyfikatory, model, wynik, tokeny, czas) — bez promptu, CV, profilu i klucza. Od SC-021-B także trwały wiersz w `ai_ledger.attempts` ([docs/sc-021-b-ai-ledger.md](sc-021-b-ai-ledger.md)) |
 | Supabase Edge | gateway nie używa `Buffer` ani `node:crypto` (Deno ich nie ma globalnie); stałe modelu zadań w `lib/exercise-ai-model.ts`, żeby worker nie ładował `exercise-ai.ts`; test grafu importów to pilnuje |
 
 ### Blokada danych kontaktowych — świadomie wyłączona na obu trasach (warunek z review A)
@@ -85,14 +85,14 @@ osobnego kodu błędu z komunikatem i migracji — do zrobienia razem z SC-021-B
 
 ### Znane, udokumentowane różnice (tylko przy włączonej fladze)
 
-- `companyId` w kontekście screeningu to `null`: claim workera nie zawiera firmy. SC-021-B musi dodać firmę
-  do claimu, zanim rejestr lub budżety będą liczone per firma.
+- ~~`companyId` w kontekście screeningu to `null`~~ — od SC-021-B worker dokleja do claimu firmę odczytaną
+  z bazy (`public.screening_attempt_tenant`), a gateway wymaga `companyId` (UUID) dla każdego zadania.
 - Odpowiedź dostawcy większa niż 2 MB (screening) jest odrzucana jako `openai_invalid_output`; ścieżka
   bezpośrednia nie miała limitu. Generowanie zadań zachowuje swój dotychczasowy limit (800 000 bajtów).
 - Odpowiedź będąca poprawnym JSON-em, ale nie obiektem (np. `[]`), ma w logu powód `response_not_json`
   zamiast `invalid_envelope`; kod błędu jest ten sam.
 - Brak klucza API: zamiast wysłania żądania i odpowiedzi 401 — od razu `openai_auth_error` / `exercise_ai_auth_error`, bez wywołania.
-- Każde żądanie przez gateway ma dodatkowy nagłówek `x-client-request-id` (identyfikator próby) i `redirect: 'error'`;
+- Każde żądanie przez gateway ma dodatkowy nagłówek `x-client-request-id` (od SC-021-B: osobny losowy identyfikator, nigdzie niezapisywany — nie `attemptId` z rejestru) i `redirect: 'error'`;
   przy odpowiedzi innej niż 2xx treść odpowiedzi jest od razu porzucana. Treść żądania jest identyczna.
 - Błąd połączenia przed odpowiedzią to zawsze `openai_network_error` (ponawiany jak dotąd). Ścieżka bezpośrednia
   rozpoznawała go po treści komunikatu, a komunikaty `fetch` w Deno (np. „error sending request…”) do wzorca nie
@@ -102,13 +102,13 @@ osobnego kodu błędu z komunikatem i migracji — do zrobienia razem z SC-021-B
   płacić drugi raz (wcześniej zwykle `worker_internal_error` / `exercise_ai_network_error`, też bez ponowienia).
 - Autoryzacja screeningu porównuje zegar workera z `lease_expires_at` z bazy. Dzierżawa trwa 5 min, a najdłuższa
   pętla prób ok. 3 min; różnica zegarów powyżej ok. 2 min mogłaby odrzucić ostatnią próbę (bez wywołania dostawcy).
-- `companyId: null` jest przyjmowane wyłącznie dla zadania `cv_screening`; każde inne zadanie z `null` → `invalid_context`.
+- ~~`companyId: null` jest przyjmowane wyłącznie dla zadania `cv_screening`~~ — od SC-021-B `null` → `invalid_context` dla każdego zadania.
 - Ochrona „tylko serwer” w gatewayu uwzględnia Deno (który może mieć globalne `window`), żeby worker Edge nie był
   przez nią blokowany.
 
 ## Czego tu jeszcze nie ma (następne zadania)
 
-- **SC-021-B** — trwały rejestr prób i kosztów w Supabase (`onAttempt`), cenniki wersjonowane, RLS,
+- **SC-021-B** (zrobione, [docs/sc-021-b-ai-ledger.md](sc-021-b-ai-ledger.md)) — trwały rejestr prób i kosztów w Supabase (`onAttempt`), cenniki wersjonowane, RLS,
   retencja zgodna z SC-010 (wymaga nowej bazy inwentarza R5 — patrz zamknięty PR #108). Warunki z review A:
   zapis idempotentny po `attemptId`; błąd hooka → `ledger_error` z zachowaniem informacji o naliczeniu.
   Warunek z A2: firma w claimie workera screeningu.

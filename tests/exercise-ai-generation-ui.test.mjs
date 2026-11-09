@@ -14,7 +14,9 @@ function load(file,mocks){const absolute=fileURLToPath(new URL('../'+file,import
  m.filename=absolute;m.paths=Module._nodeModulePaths(fileURLToPath(new URL('../',import.meta.url)));m.require=id=>Object.hasOwn(mocks,id)?mocks[id]:req(id);
  m._compile(ts.transpileModule(readFileSync(absolute,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,absolute);return m.exports;}
 async function run(options={}){
- const oldFlag=process.env.EXERCISE_AI_ENABLED,oldKey=process.env.OPENAI_API_KEY;
+ const oldFlag=process.env.EXERCISE_AI_ENABLED,oldKey=process.env.OPENAI_API_KEY,oldGateway=process.env.AI_GATEWAY_ENABLED;
+ let writerArgs=null;
+ if(options.gateway)process.env.AI_GATEWAY_ENABLED='true';else delete process.env.AI_GATEWAY_ENABLED;
  process.env.EXERCISE_AI_ENABLED=options.flag??'true';process.env.OPENAI_API_KEY=options.key??'synthetic-only';
  const calls=[],rpc=[];const position={id:'position',updated_at:stamp,title:'Planista',tasks:['Plan'],required_competencies:['Planowanie'],kpis:[],required_behaviors:[]};
  const client={from:()=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:null,error:null})}),rpc:async(name,args)=>{
@@ -23,13 +25,19 @@ async function run(options={}){
  }};
  const mod=load(base+'exercise-generation-action.ts',{'next/cache':{revalidatePath:()=>calls.push('revalidate')},
  '../../../../../lib/exercise-context':{exerciseUuid:/^[a-f0-9-]{36}$/i,exerciseContext:async()=>{calls.push('access');return {client,canEdit:options.canEdit??true,editable:true,position,base:'/exercises'};}},
- '../../../../../lib/exercise-ai':contract,'../../../../../lib/exercise-ai-generation':generation,
+ '../../../../../lib/exercise-ai':contract,
+ '../../../../../lib/ai-gateway/contract':{isAiGatewayEnabled:value=>value==='true'},
+ '../../../../../lib/ai-ledger-writer':{exerciseLedgerWriterFromEnv:(...args)=>{writerArgs=args;return options.writer??null;}},'../../../../../lib/exercise-ai-generation':generation,
  '../../../../../lib/exercise-ai-provider':{requestExerciseDraft:async(payload,key,fetcher,trust)=>{assert.equal(key,'synthetic-only');calls.push('provider');
-  assert.equal(fetcher,fetch);assert.deepEqual(trust,{companyId,operationId:requestKey,recruitmentId,mayGenerate:true});assert.equal(payload.untrusted_company,null);return {definition:{kind:'competency_test',title:'Plan'}};}},
+  const {recordAttempt,...trusted}=trust;
+  if(options.gateway){assert.equal(recordAttempt,options.writer);assert.deepEqual(writerArgs,[companyId,recruitmentId]);}else assert.equal(recordAttempt,null);
+  assert.equal(fetcher,fetch);assert.deepEqual(trusted,{companyId,operationId:requestKey,recruitmentId,mayGenerate:true});assert.equal(payload.untrusted_company,null);
+  return {definition:{kind:'competency_test',title:'Plan'}};}},
  });
  const form=new FormData();if(options.confirm!==false)form.set('confirm','yes');
  try{return {result:await mod.generateExerciseProposal(companyId,recruitmentId,requestKey,options.stamp??stamp,null,{},form),calls,rpc};}
- finally {if(oldFlag===undefined)delete process.env.EXERCISE_AI_ENABLED;else process.env.EXERCISE_AI_ENABLED=oldFlag;if(oldKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=oldKey;}
+ finally {if(oldFlag===undefined)delete process.env.EXERCISE_AI_ENABLED;else process.env.EXERCISE_AI_ENABLED=oldFlag;if(oldKey===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=oldKey;
+  if(oldGateway===undefined)delete process.env.AI_GATEWAY_ENABLED;else process.env.AI_GATEWAY_ENABLED=oldGateway;}
 }
 test('generation action gates disabled/viewer/consent/configuration/stale profile before reservation and provider',async()=>{
  for(const o of [{flag:'false'},{canEdit:false},{confirm:false},{key:''},{stamp:'stale'}]){const r=await run(o);assert.ok(r.result.error);assert.ok(!r.calls.includes('provider'));assert.equal(r.rpc.length,0);}
@@ -59,4 +67,12 @@ test('form preserves recovery key and rotates/reset only on an explicit confirme
  state={};r=render();assert.equal(r.wrapper.key,activeKey);assert.equal(r.nodes.find(n=>n.type==='fieldset').props.disabled,undefined);
  const consent=r.nodes.find(n=>n.type==='input');assert.equal(consent.props.defaultChecked,undefined);assert.equal(consent.props.checked,undefined);
  assert.deepEqual(bindings.at(-1).initial,{});assert.equal(r.nodes.some(n=>n.type==='button'&&n.props.type==='button'),false);
+});
+test('SC-021-B: with the gateway on, generation needs the server-only ledger writer and refuses before reserving without it',async()=>{
+ const missing=await run({gateway:true});
+ assert.match(missing.result.error,/Rejestr kosztów AI/);assert.deepEqual(missing.calls,['access']);assert.equal(missing.rpc.length,0);
+ const writer=async()=>{};
+ const ok=await run({gateway:true,writer});
+ assert.deepEqual(ok.calls,['access','reserve_exercise_ai_generation','provider','finish_exercise_ai_generation','revalidate']);
+ assert.ok(!ok.calls.includes('record_exercise_ai_attempt'),'the recruiter session never writes the ledger');
 });

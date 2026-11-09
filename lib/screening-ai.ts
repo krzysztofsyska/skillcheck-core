@@ -25,6 +25,12 @@ export type ScreeningProviderErrorCode = typeof SCREENING_PROVIDER_ERROR_CODES[n
 
 export type ScreeningWorkerClaim = {
   analysis_id: string;
+  /**
+   * SC-021-B: tenant of the claimed attempt, read by the worker from the database in the claim
+   * transaction (public.screening_attempt_tenant). Not part of the claim RPC result; only the
+   * AI gateway path uses it.
+   */
+  company_id?: string | null;
   candidate_document_id?: string | null;
   attempt_id: string;
   lease_token: string;

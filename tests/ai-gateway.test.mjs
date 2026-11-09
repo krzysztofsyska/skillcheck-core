@@ -338,7 +338,10 @@ test('gateway stops waiting even when an adapter ignores the abort signal', asyn
 test('a failing ledger hook fails the call instead of returning unrecorded work', async () => {
   const gw = createAiGateway({ policy: defaultAiPolicy, adapters: [fakeAdapter([completed()])], authorize: allow,
     onAttempt: async () => { throw new Error('ledger down'); } });
-  await assert.rejects(gw.run(ctx, request), /ledger down/);
+  // SC-021-B: any hook failure is ledger_error; the billing flag of the attempt is kept (an answered
+  // attempt stays billed), and the raw hook error text never leaves the gateway.
+  await assert.rejects(gw.run(ctx, request), e => e instanceof AiGatewayError && e.code === 'ledger_error'
+    && e.billing === 'billed' && e.message === 'ledger_error');
 });
 
 function fakeFetch(handler) {
@@ -362,7 +365,9 @@ test('OpenAI adapter: request shape, key only in header, usage and refusal parsi
   assert.equal(body.id, 'resp_9', 'the parsed envelope is kept for runRaw callers');
   assert.equal(calls[0].url, OPENAI_RESPONSES_URL);
   assert.equal(calls[0].init.headers.authorization, 'Bearer sk-synthetic');
-  assert.equal(calls[0].init.headers['x-client-request-id'], 'att-1');
+  // SC-021-B: a fresh random id, never the stored attempt id (no persisted link to the provider record).
+  assert.match(calls[0].init.headers['x-client-request-id'], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(calls[0].init.headers['x-client-request-id'], 'att-1');
   assert.equal(calls[0].init.redirect, 'error');
   assert.equal(calls[0].init.body.includes('sk-synthetic'), false);
   assert.equal(JSON.parse(calls[0].init.body).store, false);
@@ -463,20 +468,14 @@ test('A2: the adapter response cap can be lowered for a caller, never raised', a
   assert.throws(() => createOpenAiAdapter({ apiKey: 'k', maxResponseBytes: 0 }));
 });
 
-test('A2: a null tenant is accepted only explicitly (worker claim); missing stays invalid', async () => {
-  const seen = [];
-  const gw = createAiGateway({ policy: policyWith({ cv_screening: route() }), adapters: [fakeAdapter([completed()])],
-    authorize: async c => { seen.push(c.companyId); return true; } });
-  const records = [];
-  const gw2 = createRaw({ policy: policyWith({ cv_screening: route() }), adapters: [fakeAdapter([completed()])], authorize: allow,
-    onAttempt: async r => { records.push(r); } });
-  await gw.run({ ...ctx, companyId: null }, request);
-  assert.deepEqual(seen, [null]);
-  await gw2.run({ ...ctx, companyId: null }, request);
-  assert.equal(records[0].companyId, null);
+test('SC-021-B: the tenant is always a UUID, for every task including cv_screening', async () => {
+  const calls = [];
+  const gw = createAiGateway({ policy: policyWith({ cv_screening: route() }), adapters: [fakeAdapter([completed()], calls)], authorize: allow });
   const { companyId, ...withoutCompany } = ctx;
-  await assert.rejects(gw.run(withoutCompany, request), e => e.code === 'invalid_context');
-  await assert.rejects(gw.run({ ...ctx, companyId: '' }, request), e => e.code === 'invalid_context');
+  for (const bad of [{ ...ctx, companyId: null }, withoutCompany, { ...ctx, companyId: '' }, { ...ctx, companyId: 'not-a-uuid' }]) {
+    await assert.rejects(gw.run(bad, request), e => e.code === 'invalid_context');
+  }
+  assert.equal(calls.length, 0);
 });
 
 // Review condition from SC-021-A: measure the contact-data guard on realistic single-CV payloads
@@ -586,11 +585,11 @@ test('A2 review: the server-only guard blocks browsers but not Deno (Supabase Ed
   }
 });
 
-test('A2 review: a null tenant is invalid for every task except cv_screening', async () => {
+test('A2 review: a null tenant is invalid for every task (SC-021-B removed the cv_screening exception)', async () => {
   const policy = policyWith({ cv_screening: route(), exercise_generation: route() });
   const calls = [];
   const gw = createAiGateway({ policy, adapters: [fakeAdapter([completed()], calls)], authorize: allow });
-  for (const task of ['exercise_generation', 'report_summary']) {
+  for (const task of ['cv_screening', 'exercise_generation', 'report_summary']) {
     await assert.rejects(gw.run({ ...ctx, task, companyId: null }, request), e => e.code === 'invalid_context', task);
   }
   assert.equal(calls.length, 0);
