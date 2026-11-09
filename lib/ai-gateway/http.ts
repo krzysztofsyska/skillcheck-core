@@ -12,15 +12,15 @@ export function httpStatusError(status: number): AiGatewayError {
     400: 'bad_request', 422: 'bad_request', 401: 'auth_error', 403: 'auth_error',
     404: 'model_unavailable', 429: 'rate_limit',
   };
-  if (notBilled[status]) return new AiGatewayError(notBilled[status], 'not_billed');
-  if (status === 408) return new AiGatewayError('timeout', 'maybe_billed');
+  if (notBilled[status]) return new AiGatewayError(notBilled[status], 'not_billed', status);
+  if (status === 408) return new AiGatewayError('timeout', 'maybe_billed', status);
   // Any other 4xx (409, 413, 415, …) is a rejection before the model ran: not billed, not retried.
-  if (status >= 400 && status < 500) return new AiGatewayError('bad_request', 'not_billed');
-  return new AiGatewayError('server_error', 'maybe_billed');
+  if (status >= 400 && status < 500) return new AiGatewayError('bad_request', 'not_billed', status);
+  return new AiGatewayError('server_error', 'maybe_billed', status);
 }
 
 export async function postJson(fetchImpl: typeof fetch, url: string, headers: Record<string, string>,
-  body: string, signal: AbortSignal): Promise<unknown> {
+  body: string, signal: AbortSignal, maxResponseBytes = MAX_PROVIDER_RESPONSE_BYTES): Promise<unknown> {
   let response: Response;
   try {
     response = await fetchImpl(url, {
@@ -46,7 +46,7 @@ export async function postJson(fetchImpl: typeof fetch, url: string, headers: Re
       const chunk = await reader.read();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
-      if (bytes > MAX_PROVIDER_RESPONSE_BYTES) {
+      if (bytes > maxResponseBytes) {
         await reader.cancel();
         throw new AiGatewayError('invalid_response', 'maybe_billed');
       }
@@ -55,7 +55,9 @@ export async function postJson(fetchImpl: typeof fetch, url: string, headers: Re
     text += decoder.decode();
   } catch (error) {
     if (error instanceof AiGatewayError) throw error;
-    throw new AiGatewayError(signal.aborted ? 'timeout' : 'network_error', 'maybe_billed');
+    // The provider already answered 2xx, so the model ran and is billed: a broken body is not a
+    // transient network error worth another (billed) attempt.
+    throw new AiGatewayError(signal.aborted ? 'timeout' : 'invalid_response', 'maybe_billed');
   } finally {
     try { reader.releaseLock(); } catch { /* ignore */ }
   }

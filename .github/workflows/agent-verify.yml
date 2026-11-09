@@ -25,12 +25,28 @@ permissions:
 
 jobs:
   verify:
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/agent-control-runtime') && github.event_name == 'workflow_dispatch' && github.run_attempt == 1
     name: Agent verify / artifact
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
     steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: workflow-source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Authorize policy source before executing commands
+        working-directory: workflow-source
+        run: node tools/agent-pipeline/authorize-control-source.mjs
+        env:
+          POLICY_SHA: ${{ inputs.policy_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Checkout trusted policy
         uses: actions/checkout@v4
         with:

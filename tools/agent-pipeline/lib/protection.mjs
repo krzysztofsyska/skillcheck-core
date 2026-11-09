@@ -1,5 +1,8 @@
+import { controlPlane } from './control-plane.mjs';
 // Validate effective rules, identities and exact branch targets, not ruleset names.
 export function protectionFromRulesets(rulesets, policy = {}, environments = {}) {
+  const control = controlPlane(policy);
+  const operational = control.mode === 'integration-only';
   const active = (rulesets ?? []).filter(r => r.enforcement === 'active' && r.target === 'branch');
   const covers = (r, branch) => {
     const refs = r.conditions?.ref_name;
@@ -22,37 +25,40 @@ export function protectionFromRulesets(rulesets, policy = {}, environments = {})
       && policy.required_checks[branch].every(context => checks.required_status_checks?.some(c => c.context === context && c.integration_id === appId));
   };
   const stateRules = active.filter(r => covers(r, 'agent-state') && noBypass(r)).flatMap(r => r.rules ?? []);
-  const mainOnly = configured => {
+  const branchOnly = (configured, branch) => {
     const e = environments[configured?.name];
     return Number.isInteger(configured?.id) && e?.id === configured.id
       && e.deployment_branch_policy?.custom_branch_policies === true
       && Array.isArray(e.branch_policies) && e.branch_policies.length === 1
-      && e.branch_policies[0].name === 'main' && e.branch_policies[0].type === 'branch';
+      && e.branch_policies[0].name === branch && e.branch_policies[0].type === 'branch';
   };
-  const unattendedEnvironmentOk = configured => {
+  const unattendedEnvironmentOk = (configured, branch = 'main') => {
     const rules = environments[configured?.name]?.protection_rules;
     // GitHub may include branch_policy here even with no approval/timer gate.
     // Its exact main-only restriction is checked independently above. Missing
     // evidence, reviewer/timer gates and unknown rule types are not unattended.
-    return mainOnly(configured) && Array.isArray(rules)
+    return branchOnly(configured, branch) && Array.isArray(rules)
       && rules.every(rule => rule?.type === 'branch_policy');
   };
   const environmentOk = configured => {
     const e = environments[configured?.name];
     const reviewers = e?.protection_rules?.find(r => r.type === 'required_reviewers');
-    return mainOnly(configured)
+    return branchOnly(configured, 'main')
       && reviewers?.prevent_self_review === true && reviewers.reviewers?.length === 1
       && reviewers.reviewers[0].type === 'User' && reviewers.reviewers[0].reviewer?.id === policy.owner?.id
       && e.can_admins_bypass === false;
   };
   return {
-    exclusiveWritersConfirmed: writer('main', 'pull_request') && writer('integration', 'pull_request') && writer('agent-state', 'always'),
+    controlPlaneMode: control.mode,
+    controlProtected: operational ? quality(control.branch) : quality('main'),
+    exclusiveWritersConfirmed: writer(control.branch, 'pull_request') && writer('integration', 'pull_request') && writer('agent-state', 'always'),
     scOps001Exception: JSON.stringify(rulesets).includes('SC-OPS-001'),
     mainProtected: quality('main'), integrationProtected: quality('integration'),
     agentStateProtected: has(stateRules, 'deletion') && has(stateRules, 'non_fast_forward'),
     qualityGatesBypass: active.some(r => ['quality-gates', 'agent-state-integrity'].includes(r.name) && !noBypass(r)),
     administrationWriteUsed: false,
-    requiredChecksPinnedToApp: quality('main') && quality('integration'),
-    environmentsConfirmed: environmentOk(policy.environments?.owner_acceptance) && environmentOk(policy.environments?.production_approval) && unattendedEnvironmentOk(policy.environments?.agent_review),
+    requiredChecksPinnedToApp: quality(control.branch) && quality('integration'),
+    environmentsConfirmed: environmentOk(policy.environments?.owner_acceptance) && environmentOk(policy.environments?.production_approval) && unattendedEnvironmentOk(policy.environments?.agent_review, control.branch)
+      && (!operational || unattendedEnvironmentOk(policy.environments?.agent_control, control.branch)),
   };
 }

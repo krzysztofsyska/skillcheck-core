@@ -1,3 +1,4 @@
+import { assertControlEffect } from './control-plane.mjs';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { fold, plan } from './transitions.mjs';
 
@@ -55,6 +56,8 @@ export function guardEffects(effects, observation) {
   const allowed = [];
   const suppressed = [];
   for (const effect of effects) {
+    try { assertControlEffect(observation.policy, effect); }
+    catch { suppressed.push(effect); continue; }
     if (!effect.external) {
       allowed.push(effect);
       continue;

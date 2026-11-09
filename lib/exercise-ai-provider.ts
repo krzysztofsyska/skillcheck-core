@@ -3,10 +3,36 @@ import {
   EXERCISE_AI_REQUEST_TIMEOUT_MS, EXERCISE_AI_MAX_REQUEST_BYTES, mapExerciseAiHttpError,
   parseExerciseDraftResponse, type exerciseDraftPayload, type ExerciseAiResponse,
 } from './exercise-ai.ts';
+import { AiGatewayError, isAiGatewayEnabled } from './ai-gateway/contract.ts';
+import { defaultAiPolicy } from './ai-gateway/default-policy.ts';
+import { createAiGateway } from './ai-gateway/gateway.ts';
+import { createOpenAiAdapter } from './ai-gateway/openai.ts';
+import type { AiRoutingPolicy } from './ai-gateway/policy.ts';
+import { attemptLogEntry, gatewayRequestFromResponsesBody, pinnedRouteModel } from './ai-gateway/responses-bridge.ts';
 
-/** Exactly one attempt. A lost response may already be billed; never retry here. */
+/**
+ * Trusted server context for the AI gateway path (SC-021-A2), built by the server action from the
+ * verified company membership — never from browser input.
+ */
+export type ExerciseGatewayTrust = {
+  companyId: string;
+  /** The generation request key, already validated as a UUID and bound to the reservation. */
+  operationId: string;
+  recruitmentId: string;
+  /** canEdit && editable, as verified by exerciseContext. */
+  mayGenerate: boolean;
+};
+
+/**
+ * Exactly one attempt. A lost response may already be billed; never retry here.
+ * With `trust` and AI_GATEWAY_ENABLED=true the call goes through the AI gateway; otherwise the
+ * direct path below runs unchanged.
+ */
 export async function requestExerciseDraft(payload: ReturnType<typeof exerciseDraftPayload>, apiKey: string,
-  fetcher: typeof fetch = fetch) {
+  fetcher: typeof fetch = fetch, trust?: ExerciseGatewayTrust) {
+  if (trust && isAiGatewayEnabled(process.env.AI_GATEWAY_ENABLED)) {
+    return requestExerciseDraftViaGateway(payload, apiKey, trust, { fetcher });
+  }
   if (!apiKey) throw new ExerciseAiError('exercise_ai_auth_error', 'Missing provider configuration');
   const body = JSON.stringify(buildExerciseDraftRequest(payload));
   if (Buffer.byteLength(body, 'utf8') > EXERCISE_AI_MAX_REQUEST_BYTES)
@@ -41,4 +67,53 @@ export async function requestExerciseDraft(payload: ReturnType<typeof exerciseDr
     if (error instanceof ExerciseAiError) throw error;
     throw new ExerciseAiError(controller.signal.aborted ? 'exercise_ai_timeout' : 'exercise_ai_network_error', 'Provider unavailable');
   } finally { clearTimeout(timer); }
+}
+
+
+/** AiGatewayError → the code the direct path produced for the same failure. */
+export function exerciseErrorFromGateway(error: unknown): ExerciseAiError {
+  if (error instanceof ExerciseAiError) return error;
+  // The direct path reported any other failure after the request left as a network error.
+  if (!(error instanceof AiGatewayError)) return new ExerciseAiError('exercise_ai_network_error', 'Provider unavailable');
+  if (error.httpStatus !== undefined) return new ExerciseAiError(mapExerciseAiHttpError(error.httpStatus), 'Provider failed');
+  switch (error.code) {
+    case 'timeout': return new ExerciseAiError('exercise_ai_timeout', 'Provider unavailable');
+    case 'network_error': return new ExerciseAiError('exercise_ai_network_error', 'Provider unavailable');
+    case 'invalid_response': return new ExerciseAiError('exercise_ai_invalid_output', 'Invalid response');
+    case 'payload_too_large': return new ExerciseAiError('exercise_ai_input_too_large', 'Provider request exceeds byte limit.');
+    // Missing key, or refused before provider I/O (authorization, policy, request shape).
+    default: return new ExerciseAiError('exercise_ai_auth_error', 'Provider configuration unavailable');
+  }
+}
+
+export async function requestExerciseDraftViaGateway(payload: ReturnType<typeof exerciseDraftPayload>, apiKey: string,
+  trust: ExerciseGatewayTrust, options: { fetcher?: typeof fetch; policy?: AiRoutingPolicy;
+    log?: (entry: ReturnType<typeof attemptLogEntry>) => void } = {}) {
+  if (!apiKey) throw new ExerciseAiError('exercise_ai_auth_error', 'Missing provider configuration');
+  const legacy = buildExerciseDraftRequest(payload);
+  if (Buffer.byteLength(JSON.stringify(legacy), 'utf8') > EXERCISE_AI_MAX_REQUEST_BYTES)
+    throw new ExerciseAiError('exercise_ai_input_too_large', 'Provider request exceeds byte limit.');
+  const policy = options.policy ?? defaultAiPolicy;
+  const log = options.log ?? (entry => console.info(JSON.stringify(entry)));
+  let body: unknown;
+  try {
+    const { model, request } = gatewayRequestFromResponsesBody(legacy);
+    // The draft provenance names this model; the gateway may not route anywhere else.
+    if (model !== pinnedRouteModel(policy, 'exercise_generation')) throw new AiGatewayError('route_disabled');
+    const gateway = createAiGateway({
+      policy,
+      adapters: [createOpenAiAdapter({ apiKey, fetchImpl: options.fetcher ?? fetch, maxResponseBytes: EXERCISE_AI_MAX_RESPONSE_CHARS * 4 })],
+      authorize: async ctx => trust.mayGenerate === true && ctx.task === 'exercise_generation'
+        && ctx.companyId === trust.companyId && ctx.operationId === trust.operationId && ctx.processId === trust.recruitmentId,
+      onAttempt: async record => {
+        try { log(attemptLogEntry(record)); } catch { /* a log sink failure never fails the draft */ }
+      },
+    });
+    body = (await gateway.runRaw({
+      companyId: trust.companyId, operationId: trust.operationId, processId: trust.recruitmentId, task: 'exercise_generation',
+    }, request)).providerBody;
+  } catch (error) {
+    throw exerciseErrorFromGateway(error);
+  }
+  return parseExerciseDraftResponse(body as ExerciseAiResponse, payload);
 }

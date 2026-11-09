@@ -60,7 +60,8 @@ export type ScreeningWorkerStore = {
 export type ScreeningWorkerRuntime = {
   enabled: boolean;
   store: ScreeningWorkerStore;
-  callOpenAi(request: ReturnType<typeof buildScreeningOpenAiRequest>): Promise<ScreeningOpenAiResponse>;
+  /** `claim` is the trusted context the AI gateway path (SC-021-A2) authorizes against. */
+  callOpenAi(request: ReturnType<typeof buildScreeningOpenAiRequest>, claim: ScreeningWorkerClaim): Promise<ScreeningOpenAiResponse>;
   sleep(ms: number): Promise<void>;
   log(entry: ScreeningWorkerLog): void;
   now?: () => number;
@@ -168,7 +169,7 @@ export async function runScreeningAttempt(attemptId: string, runtime: ScreeningW
   let lastCode: ScreeningProviderErrorCode = 'worker_internal_error';
   for (let attempt = 0; attempt <= SCREENING_OPENAI_MAX_RETRIES; attempt += 1) {
     try {
-      const response = await runtime.callOpenAi(request);
+      const response = await runtime.callOpenAi(request, claim);
       const parsed = parseScreeningOpenAiResponse(response, claim);
       await runtime.store.complete({
         attemptId: claim.attempt_id,

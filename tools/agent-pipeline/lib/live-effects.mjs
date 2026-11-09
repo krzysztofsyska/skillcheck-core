@@ -1,3 +1,4 @@
+import { controlPlane, assertControlEffect, integrationOnly, isProductionRecord, assertCurrentControlRevision } from './control-plane.mjs';
 import { filesOutside } from './scope.mjs';
 import { requiredReviewChecks } from './transitions.mjs';
 import { sha256 } from './canonical.mjs';
@@ -22,10 +23,12 @@ export function validatePair(record, pair, policy) {
   };
 }
 
-export async function publishEvidence(github, policy, record, pair) {
+export async function publishEvidence(github, policy, record, pair, policySha) {
+  if (integrationOnly(policy) && isProductionRecord(record)) return;
   if (!record.head_sha || !record.review_request_id || !pair?.ci || !pair?.review) return;
   const validated = validatePair(record, pair, policy);
   for (const kind of ['ci', 'review']) {
+    await assertCurrentControlRevision({ github, policy, policySha });
     await github.publishCheck({ head: record.head_sha, name: `sc-agent/${kind}`,
       externalId: `${record.task_id}:${record.review_request_id}:${kind}`,
       conclusion: validated[kind].pass ? 'success' : 'failure',
@@ -33,21 +36,23 @@ export async function publishEvidence(github, policy, record, pair) {
   }
 }
 
-export async function guardedMerge({ github, journal, policy, flags, effect }) {
+export async function guardedMerge({ github, journal, policy, policySha, flags, effect }) {
+  assertControlEffect(policy, effect);
   if (!flags.enabled || !flags.mergeEnabled) throw new Error('MERGE_DISABLED');
   const snapshot = await journal.assertOwned();
   const record = snapshot.tasks[effect.record.task_id];
+  assertControlEffect(policy, { ...effect, record });
   if (!record || record.binding.merge?.phase !== 'awaiting_confirmation') throw new Error('MERGE_INTENT_MISSING');
   const protection = await github.readProtection();
   if (!evaluatePreflight(protection).ok) throw new Error('PROTECTION_UNCONFIRMED');
-  const [pull, main, base, evidence, approvals] = await Promise.all([
-    github.readPull(record.pr_number), github.readBranch('main'),
+  const [pull, control, base, evidence, approvals] = await Promise.all([
+    github.readPull(record.pr_number), github.readBranch(controlPlane(policy).branch),
     github.readBranch(effect.gate === 'B' ? 'main' : 'integration'),
     readEvidence(github, policy, { [record.task_id]: record }),
     readApprovals(github, policy, { [record.task_id]: record }),
   ]);
   if (pull.merged) return { merged: true, mergeCommitSha: pull.merge_commit_sha };
-  if (main.commit.sha !== record.policy_sha || pull.state !== 'open'
+  if (control.commit.sha !== record.policy_sha || pull.state !== 'open'
       || pull.head.repo?.id !== policy.repository_id || pull.base.repo?.id !== policy.repository_id
       || pull.base.ref !== (effect.gate === 'B' ? 'main' : 'integration')
       || (effect.gate === 'B' && pull.head.ref !== 'integration')) throw new Error('APPROVAL_STALE');
@@ -98,15 +103,24 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
     approval: result, gate: effect.gate, runbook: record.binding.promotion?.runbook,
     owner: policy.repository.split('/')[0], repo: policy.repository.split('/')[1], prNumber: record.pr_number });
   if (!decision.ok) throw new Error(decision.reason);
-  if (pull.draft) await github.readyPull(pull.node_id);
-  await publishEvidence(github, policy, record, pair);
+  if (pull.draft) {
+    await assertCurrentControlRevision({ github, policy, policySha });
+    await github.readyPull(pull.node_id);
+  }
+  await publishEvidence(github, policy, record, pair, policySha);
   const name = effect.gate === 'B' ? 'production-approval' : automatic ? 'integration-ready' : 'owner-acceptance';
   const checkId = automatic ? `${record.task_id}:${record.review_request_id}:integration-ready` : request.request_id;
+  await assertCurrentControlRevision({ github, policy, policySha });
   await github.publishCheck({ head: record.head_sha, name: `sc-agent/${name}`, externalId: checkId, conclusion: 'success',
     summary: JSON.stringify(automatic ? frozen : request.canonical) });
-  if (effect.gate === 'B') await github.publishCheck({ head: record.head_sha, name: 'sc-agent/promotion-scope', externalId: request.request_id, conclusion: 'success', summary: JSON.stringify(record.binding.promotion) });
+  if (effect.gate === 'B') {
+    await assertCurrentControlRevision({ github, policy, policySha });
+    await github.publishCheck({ head: record.head_sha, name: 'sc-agent/promotion-scope', externalId: request.request_id, conclusion: 'success', summary: JSON.stringify(record.binding.promotion) });
+  }
   // No writer except this holder can move the base; GitHub strict rules apply.
   await journal.assertOwned();
+  await assertCurrentControlRevision({ github, policy, policySha });
+  if ((await github.readBranch(controlPlane(policy).branch)).commit?.sha !== record.policy_sha) throw new Error('POLICY_STALE');
   return github.merge({ prNumber: record.pr_number, sha: record.head_sha });
 }
 
@@ -120,7 +134,8 @@ function readinessDeliverable(record, pending, policy) {
   return policy?.integration_merge_policy === 'verified_ci_review';
 }
 
-export async function drainOutbox({ github, journal, policy, record, now }) {
+export async function drainOutbox({ github, journal, policy, policySha, record, now }) {
+  await assertCurrentControlRevision({ github, policy, policySha });
   const kinds = ['READY_FOR_OWNER', 'READY_FOR_PROD', 'BLOCKED', 'DONE'];
   let pending = record.binding.pending_notification;
   if (kinds.includes(record.state) && record.binding.last_notified_state !== record.state && (!pending || pending.kind !== record.state)) {
@@ -154,11 +169,23 @@ export async function drainOutbox({ github, journal, policy, record, now }) {
     return next;
   }
   if (!delivered) {
+    await assertCurrentControlRevision({ github, policy, policySha });
     const next = touch(record, now); next.binding.pending_notification.delivery_phase = 'unknown';
     await journal.save(next, { action: 'outbox-send' }, record); record = next;
     const scope = record.binding.approval?.canonical ?? record.binding.auto_integration ?? null;
     const digest = record.binding.approval?.digest ?? record.binding.auto_integration?.review_digest ?? 'none';
     const body = `${marker}\n${pending.body}\naction: ${runUrl || pending.action_url || ''}\n\nApproval scope (immutable digest ${digest}):\n${JSON.stringify(scope, null, 2)}\n`;
+    // Persist the intent before sending, then recheck because the control ref
+    // can move during that write. A rejected guard proves no send was attempted;
+    // preserve retryability under the same journal CAS/lock before propagating.
+    try {
+      await assertCurrentControlRevision({ github, policy, policySha });
+    } catch (error) {
+      const retry = touch(record, now);
+      retry.binding.pending_notification.delivery_phase = 'retry';
+      await journal.save(retry, { action: 'outbox-send-not-attempted' }, record);
+      throw error;
+    }
     try {
       if (matches[0]) await github.updateComment(matches[0].id, body);
       else await github.comment({ issueNumber: record.issue_number, body });
@@ -181,7 +208,8 @@ export async function drainOutbox({ github, journal, policy, record, now }) {
 
 // Old approval is already invalidated in the journal. Cancellation is a separate,
 // bounded cleanup operation and never restores authorization.
-export async function cancelStaleApprovals({ github, journal, policy, record, now }) {
+export async function cancelStaleApprovals({ github, journal, policy, policySha, record, now }) {
+  await assertCurrentControlRevision({ github, policy, policySha });
   for (const item of record.binding.stale_approvals ?? []) {
     if (item.cancelled || item.cancel_attempts >= 3) continue;
     const next = touch(record, now);
@@ -191,11 +219,17 @@ export async function cancelStaleApprovals({ github, journal, policy, record, no
     try {
       const run = await findRun(github, policy, item.gate === 'A' ? 'accept' : 'promote', item.request_id, item.run_id);
       if (!run || run.head_sha !== item.policy_sha) continue;
-      if (run.status !== 'completed') await github.cancelRun(run.id);
+      if (run.status !== 'completed') {
+        await assertCurrentControlRevision({ github, policy, policySha });
+        await github.cancelRun(run.id);
+      }
       const settled = touch(record, now);
       settled.binding.stale_approvals.find(p => p.request_id === item.request_id).cancelled = true;
       await journal.save(settled, { action: 'approval-cancelled' }, record); record = settled;
-    } catch { /* next tick reads run status before another bounded cancel */ }
+    } catch (error) {
+      if (['POLICY_STALE', 'POLICY_COMMIT_MISSING'].includes(error.message)) throw error;
+      /* next tick reads run status before another bounded cancel */
+    }
   }
   return record;
 }
