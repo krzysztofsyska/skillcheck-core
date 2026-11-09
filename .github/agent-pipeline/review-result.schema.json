@@ -15,7 +15,9 @@
     "verdict",
     "acceptance_checks",
     "findings",
-    "limitations"
+    "limitations",
+    "full_diff_reviewed",
+    "reviewed_commits"
   ],
   "properties": {
     "schema_version": { "const": 1 },

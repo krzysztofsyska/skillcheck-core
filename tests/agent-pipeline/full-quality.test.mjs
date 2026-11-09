@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -80,4 +80,9 @@ test('known pre-mutation pending gate waits and later retries without manual res
   assert.equal(calls,2);assert.equal(second.record.state,'ACCEPTED');assert.equal(second.record.technical_state,'WAITING_POST_MERGE_CI');
   const failure=fold(record,{type:'github.merge',gate:'A'},{blocked:true,reason:'MERGE_CONFLICT',repair:true},obs);
   assert.equal(failure.state,'FIXING');assert.equal(failure.binding.dispatch.action,'followup');
+});
+
+test('structured review schema requires every declared property', () => {
+ const schema=JSON.parse(readFileSync('.github/agent-pipeline/review-result.schema.json','utf8'));
+ assert.deepEqual(Object.keys(schema.properties).filter(key=>!schema.required.includes(key)),[]);
 });
