@@ -28,7 +28,14 @@ Produkcja pokazuje gałąź `main` (commit `a474846`).
 **PROJEKT — do zatwierdzenia.** Strona `/platnosci-i-reklamacje` (`app/platnosci-i-reklamacje/page.tsx`)
 streszcza zapisy regulaminu o płatnościach (§ 7), terminie realizacji (§ 8), reklamacjach (§ 10)
 i odstąpieniu od umowy oraz zwrotach (§ 11). Nie dodaje żadnych nowych zasad; każda sekcja odsyła do
-właściwego paragrafu, a wstęp mówi, że wiążący jest regulamin. Mimo to jest to tekst o prawach klienta
+właściwego paragrafu, a wstęp mówi, że wiążący jest regulamin.
+
+**Jedna świadoma różnica wobec regulaminu:** § 7 ust. 1 regulaminu wymienia płatność online Przelewy24 jako
+dostępną. Strona mówi, że dziś płaci się przelewem z faktury proforma, a Przelewy24 „jest przygotowywana” —
+tak jak pozostałe strony oferty i zgodnie ze stanem faktycznym. Do decyzji właściciela (i prawnika), czy
+do czasu uruchomienia płatności online poprawić regulamin, czy zostawić tę różnicę.
+
+Promocja na produkcję musi zawierać osobne pytanie TAK/NIE o akceptację tej strony. Mimo to jest to tekst o prawach klienta
 i nie powinien trafić na produkcję bez przeczytania przez właściciela (najlepiej także przez prawnika,
 który przygotował regulamin). Treść samego regulaminu nie została zmieniona.
 

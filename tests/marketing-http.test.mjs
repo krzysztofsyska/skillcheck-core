@@ -157,7 +157,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.ok(summaryHtml.includes(`${preselekcjaOffer.grossPln} zł brutto`), 'price from the shared offer');
   assert.ok(summaryHtml.includes(COMPANY.email));
   for (const href of ['/regulamin', '/regulamin/formularz-odstapienia', '/#pakiety', '/kontakt']) assert.ok(hrefs(summaryHtml).includes(href), `summary link ${href}`);
-  for (const paragraph of ['§ 3 i § 6', '§ 7', '§ 8', '§ 10', '§ 11']) assert.ok(summaryHtml.includes(`Regulamin, ${paragraph}`), paragraph);
+  for (const paragraph of ['§ 2, § 3 i § 6', '§ 7', '§ 8', '§ 10', '§ 2 i § 11', '§ 1']) assert.ok(summaryHtml.includes(`Regulamin, ${paragraph}<`), paragraph);
+  // Figures and addressees taken from the Regulamin; a later edit must not change them silently.
+  for (const fact of ['2 dni roboczych', 'w ciągu 14 dni od jej otrzymania', 'w ciągu 14 dni od zawarcia umowy', 'wyłącznie przedsiębiorcy na prawach konsumenta', 'niezgodności usługi cyfrowej z umową']) assert.ok(summaryHtml.includes(fact), fact);
   assert.doesNotMatch(summaryHtml, /voicebot|rozmow[ay] głosow|DRAFT/i);
   // Same rule as the offer pages: Przelewy24 only as a method being prepared.
   assert.match(summaryHtml, /Przelewy24 jest przygotowywana/);
