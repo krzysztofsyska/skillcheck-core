@@ -658,7 +658,8 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   const require = createRequire(filename);
   module.require = name => name === '../actions' ? { bulkProgress: async () => null }
     : name === 'next/link' ? { __esModule: true, default: ({ children, ...props }) => React.createElement('a', props, children) }
-    : name.endsWith('/lib/cv-bulk') ? require('../../../../../../../lib/cv-bulk.ts') : require(name);
+    : name.endsWith('/lib/cv-bulk') ? require('../../../../../../../lib/cv-bulk.ts')
+    : name.endsWith('/lib/cv-bulk-poll') ? require('../../../../../../../lib/cv-bulk-poll.ts') : require(name);
   module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const item = { id: id(1), position: 1, file_name: 'cv.pdf', phase: 'done', error_reason: null, ocr_used: false, application_id: id(1),
     candidate_name: 'Kandydat nr 1', has_phone: true, group_key: 'passed', raw_score: 83.3, duplicate_of_application: null };
