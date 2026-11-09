@@ -176,7 +176,13 @@ type ExpectedFunctions =
   | "brand_rollback"
   | "brand_published"
   | "brand_asset"
-  | "brand_editor_state";
+  | "brand_editor_state"
+  | "tenant_domain_claim"
+  | "tenant_domain_activate"
+  | "tenant_domain_deactivate"
+  | "tenant_domain_revoke"
+  | "tenant_domain_state"
+  | "tenant_domain_resolve";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;

@@ -448,6 +448,16 @@ export type Database = {
         Args: { target_company: string };
         Returns: Json;
       };
+      // SC-020-B: domeny klienta. Weryfikacja DNS/TLS celowo poza API (rola tenant_domain_verifier).
+      tenant_domain_claim: {
+        Args: { target_company: string; target_hostname: string; target_kind: "subdomain" | "custom" };
+        Returns: { domain_id: string; status: string; verification_token: string }[];
+      };
+      tenant_domain_activate: { Args: { target_company: string; target_domain: string }; Returns: string };
+      tenant_domain_deactivate: { Args: { target_company: string; target_domain: string }; Returns: string };
+      tenant_domain_revoke: { Args: { target_company: string; target_domain: string }; Returns: string };
+      tenant_domain_state: { Args: { target_company: string }; Returns: Json };
+      tenant_domain_resolve: { Args: { target_host: string }; Returns: string | null };
       read_exercise_ai_proposal: {
         Args: { target_company: string; target_recruitment: string; target_definition: string };
         Returns: ExerciseAiProposalReview;
