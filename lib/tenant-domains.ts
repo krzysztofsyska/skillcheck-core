@@ -241,11 +241,10 @@ export async function decideTenant(input: {
   if (!tenantDomainsEnabled(input.env)) return { kind: 'disabled' };
   const parsed = parseRequestHost(input.host, input.forwardedHost);
   if (!parsed.ok) return { kind: 'bad_host' };
-  // Reserved suffixes (skillcheck.pl, vercel.app, ...) can never be a customer domain (the database refuses them too):
-  // platform aliases such as www or extra *.vercel.app names never depend on the lookup and never get its 503.
-  if (platformHostnames(input.env).has(parsed.hostname) || !isValidHostname(parsed.hostname) || isReservedHostname(parsed.hostname)) {
-    return { kind: 'platform' };
-  }
+  // No shortcut for reserved suffixes: platform subdomains (<label>.<subdomain_base>, e.g. under skillcheck.pl)
+  // are real tenants. Every platform alias must therefore be listed in platformHostnames (NEXT_PUBLIC_SITE_URL /
+  // VERCEL_*) before white-label is switched on, or a failed lookup answers it with 503.
+  if (platformHostnames(input.env).has(parsed.hostname) || !isValidHostname(parsed.hostname)) return { kind: 'platform' };
   let value: unknown;
   try {
     value = await input.resolve(parsed.hostname);
