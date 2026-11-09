@@ -185,7 +185,7 @@ create table ai_ledger.attempts (
   check (task <> 'cv_screening' or provider_request_id is null)
 );
 create index attempts_company_created on ai_ledger.attempts (company_id, created_at desc);
-create index attempts_operation on ai_ledger.attempts (operation_id);
+create index attempts_operation on ai_ledger.attempts (operation_id, task, company_id, process_id);
 
 -- Rejestr jest tylko dopisywany (dokument finansowy). SC-021-C, wprowadzając rozliczanie
 -- rezerwacji (reserved → settled), zastąpi ten wyzwalacz przejściem dozwolonym jawnie.
@@ -332,12 +332,21 @@ begin
   if not allow_new then
     raise exception 'AI attempt operation closed' using errcode = 'PT409';
   end if;
-  -- Limit i spójność firmy liczone per (operacja, zadanie): wiersze innego zadania nie blokują zapisu.
-  select count(*) into used from ai_ledger.attempts where operation_id = v_operation and task = expected_task;
+  -- Limit i spójność liczone per tożsamość operacji, nie per samo operation_id:
+  --   * screening: (zadanie, operation_id) — id próby analizy jest globalnie unikalne, więc ten sam
+  --     operation_id w innej firmie oznacza konflikt;
+  --   * pozostałe zadania (generowanie zadań): (zadanie, firma, proces, operation_id) — klucz
+  --     rezerwacji wybiera klient i jest unikalny tylko w obrębie rekrutacji, więc ten sam klucz w
+  --     innej rekrutacji lub firmie to osobna operacja (osobny limit), nie konflikt.
+  -- Wiersze innego zadania nie blokują zapisu. attempt_id pozostaje globalnie unikalny.
+  select count(*) into used from ai_ledger.attempts a
+  where a.operation_id = v_operation and a.task = expected_task
+    and (expected_task = 'cv_screening' or (a.company_id = tenant and a.process_id is not distinct from process));
   if used >= least(max_rows, 16) then
     raise exception 'AI attempt limit' using errcode = 'PT429';
   end if;
-  if exists (select 1 from ai_ledger.attempts where operation_id = v_operation and task = expected_task and company_id <> tenant) then
+  if expected_task = 'cv_screening' and exists (select 1 from ai_ledger.attempts
+      where operation_id = v_operation and task = expected_task and company_id <> tenant) then
     raise exception 'AI attempt conflict' using errcode = 'PT409';
   end if;
 

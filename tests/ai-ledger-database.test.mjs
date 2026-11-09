@@ -265,6 +265,32 @@ test('SC-021-B exercise ledger: only the server writer role, bound to a live res
   assert.equal((await db.query('select count(*)::int n from ai_ledger.attempts')).rows[0].n, 0);
 });
 
+test('SC-021-B exercise operation identity is (company, recruitment, key): the same client key elsewhere is a separate operation', async t => {
+  const e = await boot(t), { db, h } = e;
+  const f = await e.seed(), foreign = await e.seed({ owner: users.otherOwner });
+  await h.asUser(f.owner);
+  const second = await h.insert('recruitments', { company_id: f.companyId, position_id: f.position.id, name: 'Second recruitment', status: 'open' });
+  const key = randomUUID(), fingerprint = 'a'.repeat(64);
+  const stampOf = async c => { await h.asAdmin(); return (await db.query('select updated_at::text from public.company_profiles where company_id=$1', [c])).rows[0]?.updated_at ?? null; };
+  const reserve = async (owner, company, recruitment, position) => { const stamp = await stampOf(company); await h.asUser(owner);
+    assert.equal((await e.call('public.reserve_exercise_ai_generation', [company, recruitment, key, position.updated_at, stamp, fingerprint])).claimed, true); };
+  await reserve(f.owner, f.companyId, f.recruitment.id, f.position);
+  await reserve(f.owner, f.companyId, second.id, f.position);
+  await reserve(foreign.owner, foreign.companyId, foreign.recruitment.id, foreign.position);
+  const ex = (company, over = {}) => attempt(key, company, { task: 'exercise_generation', model_key: 'openai-exercise', ...over });
+  const targets = [f, { ...f, recruitment: second }, foreign];
+  for (const target of targets) assert.equal((await e.exercise(target, ex(target.companyId))).status, 'settled');
+  const rows = await e.rows('operation_id=$1', [key]);
+  assert.deepEqual(rows.map(r => `${r.company_id}/${r.process_id}`).sort(),
+    [`${f.companyId}/${f.recruitment.id}`, `${f.companyId}/${second.id}`, `${foreign.companyId}/${foreign.recruitment.id}`].sort());
+  // The cap of 1 still holds within one recruitment.
+  for (const target of targets) await assert.rejects(e.exercise(target, ex(target.companyId, { attempt: 2 })), denied('PT429'));
+  // attempt_id stays globally unique: reusing one in another recruitment is a conflict, not a second row.
+  await assert.rejects(e.exercise({ ...f, recruitment: second }, { ...ex(f.companyId), attempt_id: rows.find(r => r.process_id === f.recruitment.id).attempt_id }),
+    denied('PT409', 'PT429'));
+  assert.equal((await e.rows('operation_id=$1', [key])).length, 3);
+});
+
 test('SC-021-B concurrency: two connections cannot double-write one attempt or exceed a cap', async t => {
   const e = await boot(t), { db, h } = e;
   const f = await e.seed(), op = await e.screeningAttempt(f);

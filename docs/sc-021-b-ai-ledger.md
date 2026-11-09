@@ -33,7 +33,16 @@ identyfikator żądania u dostawcy (tylko poza screeningiem), czas trwania, znac
 Każda fizyczna próba ma własny `attempt_id`, więc ponowienia są osobnymi wierszami z tym samym
 `operation_id`. Zapis jest idempotentny: ten sam `attempt_id` i ta sama treść → istniejący wiersz
 (nic nie liczy się dwa razy); ta sama `attempt_id` i inna treść → błąd konfliktu, bez nadpisania.
-Limit wierszy na (operację, zadanie): screening 16, generowanie zadań = liczba prób trasy (1).
+Tożsamość operacji (korelacja dla panelu D i dla limitów):
+- screening: `operation_id` (id próby analizy, globalnie unikalny); ten sam `operation_id` w innej
+  firmie to konflikt;
+- generowanie zadań: **(firma, rekrutacja = `process_id`, `operation_id`)** — klucz rezerwacji wybiera
+  klient i jest unikalny tylko w obrębie rekrutacji, więc ten sam klucz w innej rekrutacji lub firmie
+  to osobna operacja z własnym limitem. D musi grupować próby generowania po tej trójce, nie po samym
+  `operation_id`.
+
+`attempt_id` jest zawsze globalnie unikalny. Limit wierszy na operację: screening 16, generowanie
+zadań = liczba prób trasy (1).
 Rejestr, cennik i lista dozwolonych tras są tylko dopisywane (wyzwalacz).
 
 ## Bezpieczeństwo
