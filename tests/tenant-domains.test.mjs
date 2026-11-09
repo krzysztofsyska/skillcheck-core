@@ -11,7 +11,7 @@ import {
   tenantDomainsEnabled, tenantOriginFromHeader, tenantRoute, verificationRecord,
 } from '../lib/tenant-domains.ts';
 import { checkDomain } from '../lib/tenant-domain-verifier.ts';
-import { isPublicAddress, verifierStoreFromEnv } from '../lib/tenant-domain-network.ts';
+import { isPublicAddress, verifierDatabaseTls, verifierStoreFromEnv } from '../lib/tenant-domain-network.ts';
 import { appOrigin, authCallbackUrl } from '../lib/auth-url.ts';
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -148,37 +148,47 @@ test('verifier flow: reads host and token from the store, records DNS then TLS, 
   const calls = [];
   const store = (target, dnsResult = 'verified', tlsResult = 'verified') => ({
     target: async (c, d) => { calls.push(['target', c, d]); return target; },
-    recordDns: async (c, d, t, ok) => { calls.push(['dns', c, d, t, ok]); return dnsResult; },
-    recordTls: async (c, d, t, ok) => { calls.push(['tls', c, d, t, ok]); return tlsResult; },
+    recordDns: async (c, d, t, ok, actor) => { calls.push(['dns', c, d, t, ok, actor]); return dnsResult; },
+    recordTls: async (c, d, t, ok, actor) => { calls.push(['tls', c, d, t, ok, actor]); return tlsResult; },
   });
   const target = { hostname: 'kariera.firma-a.pl', kind: 'custom', status: 'pending', verification_token: TOKEN };
   const dnsOk = { resolveTxt: async () => [[verificationRecord('kariera.firma-a.pl', TOKEN).value]] };
   const dnsDown = { resolveTxt: async () => { throw Object.assign(new Error('x'), { code: 'ETIMEOUT' }); } };
   const tlsOk = { isReady: async () => true };
   const D = '33333333-3333-4333-8333-333333333333';
-  assert.deepEqual(await checkDomain({ store: store(target), dns: dnsOk, tls: tlsOk }, A, D), { result: 'checked', status: 'verified', tls: true });
+  const OWNER = '44444444-4444-4444-8444-444444444444';
+  assert.deepEqual(await checkDomain({ store: store(target), dns: dnsOk, tls: tlsOk }, A, D, OWNER), { result: 'checked', status: 'verified', tls: true });
   assert.deepEqual(calls.map(c => c[0]), ['target', 'dns', 'tls']);
   assert.equal(calls[1][3], TOKEN);
+  assert.equal(calls[1][5], OWNER);
+  assert.deepEqual(await checkDomain({ store: store(target), dns: dnsOk, tls: tlsOk }, A, D, 'nobody'), { result: 'not_found' });
   calls.length = 0;
-  assert.deepEqual(await checkDomain({ store: store(target), dns: dnsDown, tls: tlsOk }, A, D), { result: 'dns_unavailable', status: 'pending' });
+  assert.deepEqual(await checkDomain({ store: store(target), dns: dnsDown, tls: tlsOk }, A, D, OWNER), { result: 'dns_unavailable', status: 'pending' });
   assert.deepEqual(calls.map(c => c[0]), ['target']);
-  assert.deepEqual(await checkDomain({ store: store(target, 'conflict'), dns: dnsOk, tls: tlsOk }, A, D), { result: 'conflict' });
-  assert.deepEqual(await checkDomain({ store: store(null), dns: dnsOk, tls: tlsOk }, A, D), { result: 'not_found' });
-  assert.deepEqual(await checkDomain({ store: store(target), dns: dnsOk, tls: tlsOk }, 'x', D), { result: 'not_found' });
+  assert.deepEqual(await checkDomain({ store: store(target, 'conflict'), dns: dnsOk, tls: tlsOk }, A, D, OWNER), { result: 'conflict' });
+  assert.deepEqual(await checkDomain({ store: store(null), dns: dnsOk, tls: tlsOk }, A, D, OWNER), { result: 'not_found' });
+  assert.deepEqual(await checkDomain({ store: store(target), dns: dnsOk, tls: tlsOk }, 'x', D, OWNER), { result: 'not_found' });
   const thrower = { isReady: async () => { throw new Error('tls'); } };
   calls.length = 0;
-  assert.deepEqual(await checkDomain({ store: store(target, 'verified', 'verified'), dns: dnsOk, tls: thrower }, A, D), { result: 'checked', status: 'verified', tls: false });
+  assert.deepEqual(await checkDomain({ store: store(target, 'verified', 'verified'), dns: dnsOk, tls: thrower }, A, D, OWNER), { result: 'checked', status: 'verified', tls: false });
   assert.equal(calls.at(-1)[4], false);
   // Subdomain: no DNS lookup (platform zone), straight to TLS.
   calls.length = 0;
-  await checkDomain({ store: store({ ...target, kind: 'subdomain', status: 'verified' }), dns: dnsDown, tls: tlsOk }, A, D);
+  await checkDomain({ store: store({ ...target, kind: 'subdomain', status: 'verified' }), dns: dnsDown, tls: tlsOk }, A, D, OWNER);
   assert.deepEqual(calls.map(c => c[0]), ['target', 'tls']);
   assert.equal(verifierStoreFromEnv({}), null, 'no verifier credentials -> verification unavailable');
   assert.equal(verifierStoreFromEnv({ TENANT_DOMAIN_VERIFIER_DATABASE_URL: 'https://x' }), null);
+  for (const url of ['postgres://u:p@db.abcdefghijklmnopqrst.supabase.co:5432/postgres?sslmode=disable', 'postgres://u:p@h/db#x', 'not a url'])
+    assert.equal(verifierStoreFromEnv({ TENANT_DOMAIN_VERIFIER_DATABASE_URL: url }), null, url);
+  const hosted = verifierDatabaseTls(new URL('postgres://u:p@db.abcdefghijklmnopqrst.supabase.co:5432/postgres'));
+  assert.equal(hosted.rejectUnauthorized, true);
+  assert.match(hosted.ca, /BEGIN CERTIFICATE/, 'hosted Supabase uses the reviewed Supabase roots');
+  assert.ok(verifierDatabaseTls(new URL('postgres://u:p@aws-0-eu-central-1.pooler.supabase.com:6543/postgres')).ca);
+  assert.deepEqual(verifierDatabaseTls(new URL('postgres://u:p@ci.example.org/postgres')), { rejectUnauthorized: true });
 });
 
 test('TLS check never connects to private or local addresses', () => {
-  for (const address of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.168.1.1', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '224.0.0.1'])
+  for (const address of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.168.1.1', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '224.0.0.1', '64:ff9b::7f00:1', '64:ff9b:1::1', '2002:7f00:1::1', 'fec0::1', '::7f00:1', '192.0.0.1', '::ffff:127.0.0.1', '2001:db8::1', 'not-an-ip'])
     assert.equal(isPublicAddress(address), false, address);
-  for (const address of ['8.8.8.8', '76.76.21.21', '2606:4700::1111']) assert.equal(isPublicAddress(address), true, address);
+  for (const address of ['8.8.8.8', '76.76.21.21', '2606:4700::1111', '::ffff:8.8.8.8', '2a00:1450:4001:80b::200e']) assert.equal(isPublicAddress(address), true, address);
 });

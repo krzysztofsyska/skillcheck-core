@@ -35,13 +35,14 @@ async function boot(t) {
     return (await call('select public.tenant_domain_state($1) s', [company]))[0].s;
   };
   const verifier = async () => { await db.exec('reset role'); await db.exec('set role tenant_domain_verifier'); };
-  const dns = async (company, id, token, ok) => {
+  const ownerOf = { [a.companyId]: users.owner, [b.companyId]: users.otherOwner };
+  const dns = async (company, id, token, ok, actor = ownerOf[company]) => {
     await verifier();
-    return (await call('select tenant_domains.record_dns_check($1,$2,$3,$4) r', [company, id, token, ok]))[0].r;
+    return (await call('select tenant_domains.record_dns_check($1,$2,$3,$4,$5) r', [company, id, token, ok, actor]))[0].r;
   };
-  const tls = async (company, id, token, ok) => {
+  const tls = async (company, id, token, ok, actor = ownerOf[company]) => {
     await verifier();
-    return (await call('select tenant_domains.record_tls_check($1,$2,$3,$4) r', [company, id, token, ok]))[0].r;
+    return (await call('select tenant_domains.record_tls_check($1,$2,$3,$4,$5) r', [company, id, token, ok, actor]))[0].r;
   };
   const owner = async (fn, company, id, user = users.owner) => {
     await as(user);
@@ -84,6 +85,7 @@ test('SC-020-B customer domains: lifecycle, isolation, takeover and permissions'
     const verifierExec = (await db.query(`select p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname='tenant_domains' and has_function_privilege('tenant_domain_verifier',p.oid,'EXECUTE') order by 1`)).rows.map(r => r.proname);
     assert.deepEqual(verifierExec, ['record_dns_check', 'record_tls_check', 'verifier_target']);
+    assert.equal((await db.query("select has_function_privilege('authenticated','tenant_domains.require_acting_owner(uuid,uuid)','EXECUTE') p")).rows[0].p, false);
   });
 
   await t.test('only the company owner manages domains; recruiters, viewers, outsiders and the other tenant are refused', async () => {
@@ -111,10 +113,13 @@ test('SC-020-B customer domains: lifecycle, isolation, takeover and permissions'
     assert.equal(c.status, 'pending');
     assert.match(c.verification_token, /^[0-9a-f]{64}$/);
     await e.as(users.owner);
-    await assert.rejects(db.query('select tenant_domains.record_dns_check($1,$2,$3,true)', [a.companyId, c.domain_id, c.verification_token]), forbidden);
+    await assert.rejects(db.query('select tenant_domains.record_dns_check($1,$2,$3,true,$4)', [a.companyId, c.domain_id, c.verification_token, users.owner]), forbidden);
     await assert.rejects(db.query("update tenant_domains.domains set status='active'"), forbidden);
     await assert.rejects(e.owner('tenant_domain_activate', a.companyId, c.domain_id), code('55000'));
     await assert.rejects(e.dns(a.companyId, c.domain_id, '0'.repeat(64), true), code('PT409'));
+    await assert.rejects(e.dns(a.companyId, c.domain_id, null, true), code('PT409'), 'NULL token never passes the stale guard');
+    await assert.rejects(e.dns(a.companyId, c.domain_id, c.verification_token, true, users.recruiter), forbidden, 'actor must be the owner');
+    await assert.rejects(e.dns(a.companyId, c.domain_id, c.verification_token, true, null), forbidden);
     // Weryfikator nie przestawi domeny innej firmy, podając jej identyfikator z cudzą firmą.
     await assert.rejects(e.dns(b.companyId, c.domain_id, c.verification_token, true), code('P0002'));
     assert.equal(await e.dns(a.companyId, c.domain_id, c.verification_token, false), 'pending');
@@ -177,6 +182,27 @@ test('SC-020-B customer domains: lifecycle, isolation, takeover and permissions'
     assert.equal(d.tls_ready_at, null);
     assert.equal(await e.dns(a.companyId, c.domain_id, c.verification_token, true), 'verified');
     await assert.rejects(e.owner('tenant_domain_activate', a.companyId, c.domain_id), code('55000'), 'TLS must be checked again');
+  });
+
+  await t.test('an abandoned (stale) holder never blocks the current DNS owner; a fresh holder does', async () => {
+    const c = await e.activeDomain(a.companyId, 'porzucona.firma-a.pl', users.owner);
+    const other = await e.claim(b.companyId, 'porzucona.firma-a.pl', 'custom', users.otherOwner);
+    assert.equal(await e.dns(b.companyId, other.domain_id, other.verification_token, true), 'conflict', 'fresh holder wins');
+    await h.asAdmin();
+    await db.query("alter table tenant_domains.domains disable trigger domains_guard");
+    await db.query("update tenant_domains.domains set last_verified_at = now() - interval '200 days' where id=$1", [c.domain_id]);
+    await db.query("alter table tenant_domains.domains enable trigger domains_guard");
+    assert.equal(await e.dns(b.companyId, other.domain_id, other.verification_token, true), 'verified');
+    const old = (await e.state(a.companyId)).domains.find(x => x.id === c.domain_id);
+    assert.equal(old.status, 'pending');
+    assert.equal(old.tls_ready_at, null);
+    await h.asAdmin();
+    const lapsed = (await db.query("select actor from tenant_domains.events where domain_id=$1 and action='verification_lapsed'", [c.domain_id])).rows;
+    assert.equal(lapsed.length, 1);
+    const verifiedBy = (await db.query("select actor from tenant_domains.events where domain_id=$1 and action='verified'", [other.domain_id])).rows;
+    assert.deepEqual(verifiedBy, [{ actor: users.otherOwner }], 'the clicking owner is recorded');
+    await e.owner('tenant_domain_revoke', b.companyId, other.domain_id, users.otherOwner);
+    await e.owner('tenant_domain_revoke', a.companyId, c.domain_id);
   });
 
   await t.test('a fresh verification survives a single failed re-check; TLS failure never drops an active host', async () => {

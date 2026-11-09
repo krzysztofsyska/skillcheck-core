@@ -48,6 +48,7 @@ export default async function CompanyDomains({ params, searchParams }: {
   const state = data as unknown as DomainState;
   const hidden = (id: string) => <><input type="hidden" name="companyId" value={companyId} /><input type="hidden" name="domainId" value={id} /></>;
   const hosts = new Map(state.domains.map(d => [d.id, d.hostname]));
+  const now = Date.now();
 
   return <main className="workspace"><section>
     {back}
@@ -86,7 +87,13 @@ export default async function CompanyDomains({ params, searchParams }: {
               <p>Wartość: <code>{record.value}</code></p>
               {d.pending_expires_at && <p>Zgłoszenie ważne do {dates.format(new Date(d.pending_expires_at))}.</p>}
             </div>}
-            {d.status !== 'revoked' && <p>Rekord DNS zostaw na stałe: sprawdzamy go ponownie co najmniej raz na {state.reverify_days} dni.</p>}
+            {d.kind === 'custom' && d.status !== 'revoked' && <p>Rekord DNS zostaw na stałe. Kliknij „Sprawdź” co najmniej raz na {state.reverify_days} dni —
+              bez tego domena przestanie działać i panel wróci na adres platformy.</p>}
+            {d.kind === 'custom' && (d.status === 'verified' || d.status === 'active') && d.last_verified_at && (() => {
+              const due = new Date(d.last_verified_at).getTime() + state.reverify_days * 86_400_000;
+              const left = Math.ceil((due - now) / 86_400_000);
+              return left <= 7 ? <p className="notice">{left > 0 ? `Weryfikacja wygasa za ${left} d. (${dates.format(new Date(due))}) — kliknij „Sprawdź”.` : 'Weryfikacja wygasła — kliknij „Sprawdź”, aby domena znów działała.'}</p> : null;
+            })()}
             {d.status !== 'revoked' && <div className="actions">
               <form action={verifyDomain}>{hidden(d.id)}<button type="submit" className="button">Sprawdź</button></form>
               {d.status === 'verified' && d.tls_ready_at && <form action={activateDomain}>{hidden(d.id)}<button type="submit" className="button">Włącz</button></form>}
@@ -100,7 +107,7 @@ export default async function CompanyDomains({ params, searchParams }: {
 
     {state.events.length > 0 && <section aria-labelledby="log">
       <h2 id="log">Historia zmian</h2>
-      <ul>{state.events.map((e, i) => <li key={i}>{dates.format(new Date(e.at))} — {hosts.get(e.domain_id) ?? 'domena'}: {actionLabel[e.action] ?? e.action}{e.by_owner ? ' (właściciel)' : ' (system)'}</li>)}</ul>
+      <ul>{state.events.map((e, i) => <li key={i}>{dates.format(new Date(e.at))} — {hosts.get(e.domain_id) ?? 'domena'}: {actionLabel[e.action] ?? e.action}{e.by_owner ? ' (właściciel)' : ' (automatycznie)'}</li>)}</ul>
     </section>}
   </section></main>;
 }

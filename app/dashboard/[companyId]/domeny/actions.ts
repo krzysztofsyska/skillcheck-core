@@ -55,7 +55,7 @@ async function domainId(form: FormData, back: (status: DomainNotice) => never) {
 }
 
 export async function verifyDomain(form: FormData) {
-  const { client, companyId, back } = await ownerContext(form);
+  const { client, companyId, back, user } = await ownerContext(form);
   const id = await domainId(form, back);
   // Uprawnienie potwierdza klient RLS (tylko właściciel odczyta stan); dopiero
   // potem połączenie weryfikatora, które czyta host i token z bazy.
@@ -67,7 +67,7 @@ export async function verifyDomain(form: FormData) {
   if (!store) back('verifier_unavailable');
   let outcome: Awaited<ReturnType<typeof checkDomain>> | null = null;
   try {
-    outcome = await checkDomain({ store: store!, dns: systemDnsResolver, tls: systemTlsChecker }, companyId, id);
+    outcome = await checkDomain({ store: store!, dns: systemDnsResolver, tls: systemTlsChecker }, companyId, id, user.id);
   } catch {
     outcome = null;
   }

@@ -441,17 +441,29 @@ begin
 end;
 $$;
 
+-- Sprawdzenie zleca właściciel firmy (serwer potwierdził to klientem RLS);
+-- weryfikator przekazuje jego identyfikator do dziennika. Inny identyfikator = odmowa.
+create function tenant_domains.require_acting_owner(target_company uuid, acting_owner uuid) returns void
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  if acting_owner is null or not exists (select 1 from public.companies c where c.id = target_company and c.owner_id = acting_owner) then
+    raise exception 'tenant_domain_forbidden' using errcode = '42501';
+  end if;
+end;
+$$;
+
 -- Wynik sprawdzenia DNS TXT. Token musi się zgadzać (wiersz nie zmienił się
 -- od odczytu celu). Zwraca nowy status albo 'conflict', gdy host ma już
 -- inna firma (nic nie zmienia).
-create function tenant_domains.record_dns_check(target_company uuid, target_domain uuid, expected_token text, dns_ok boolean)
+create function tenant_domains.record_dns_check(target_company uuid, target_domain uuid, expected_token text, dns_ok boolean, acting_owner uuid)
 returns text language plpgsql security definer set search_path = '' as $$
-declare d tenant_domains.domains; cfg tenant_domains.settings;
+declare d tenant_domains.domains; cfg tenant_domains.settings; stale record;
 begin
   if dns_ok is null then raise exception 'tenant_domain_bad_check' using errcode = '22023'; end if;
+  perform tenant_domains.require_acting_owner(target_company, acting_owner);
   perform tenant_domains.expire_pending(target_company);
   d := tenant_domains.lock_domain(target_company, target_domain);
-  if d.verification_token <> expected_token or d.status = 'revoked' then
+  if expected_token is null or d.verification_token is distinct from expected_token or d.status = 'revoked' then
     raise exception 'tenant_domain_stale_check' using errcode = 'PT409';
   end if;
   select * into cfg from tenant_domains.settings s where s.singleton;
@@ -459,27 +471,36 @@ begin
   perform pg_advisory_xact_lock(hashtextextended('tenant_domains:' || d.hostname, 0));
   if dns_ok then
     if d.status = 'pending' then
+      -- Inna firma trzymająca host z NIEświeżą weryfikacją (porzucona domena)
+      -- nie blokuje bieżącego właściciela DNS: jej wpis wraca do pending.
+      for stale in update tenant_domains.domains o set status = 'pending', activated_at = null, tls_ready_at = null,
+                     pending_expires_at = clock_timestamp() + make_interval(days => cfg.pending_days)
+                   where o.hostname = d.hostname and o.id <> d.id and o.kind = 'custom'
+                     and o.status in ('verified', 'active') and not tenant_domains.fresh(o)
+                   returning o.company_id, o.id loop
+        perform tenant_domains.log(stale.company_id, stale.id, 'verification_lapsed', null);
+      end loop;
       if exists (select 1 from tenant_domains.domains o where o.hostname = d.hostname and o.id <> d.id
                  and o.status in ('verified', 'active')) then
-        perform tenant_domains.log(target_company, d.id, 'verification_conflict', null);
+        perform tenant_domains.log(target_company, d.id, 'verification_conflict', acting_owner);
         return 'conflict';
       end if;
       update tenant_domains.domains set status = 'verified', pending_expires_at = null,
         verified_at = clock_timestamp(), last_verified_at = clock_timestamp() where id = d.id;
-      perform tenant_domains.log(target_company, d.id, 'verified', null);
+      perform tenant_domains.log(target_company, d.id, 'verified', acting_owner);
       return 'verified';
     end if;
     update tenant_domains.domains set last_verified_at = clock_timestamp() where id = d.id;
-    perform tenant_domains.log(target_company, d.id, 'reverified', null);
+    perform tenant_domains.log(target_company, d.id, 'reverified', acting_owner);
     return d.status;
   end if;
-  perform tenant_domains.log(target_company, d.id, 'verification_failed', null);
+  perform tenant_domains.log(target_company, d.id, 'verification_failed', acting_owner);
   if d.status in ('verified', 'active') and not tenant_domains.fresh(d) then
     -- Weryfikacja wygasła i nie da się jej odnowić: host przestaje wskazywać
     -- firmę i wymaga ponownej weryfikacji (ochrona przed wiszącą domeną).
     update tenant_domains.domains set status = 'pending', activated_at = null, tls_ready_at = null,
       pending_expires_at = clock_timestamp() + make_interval(days => cfg.pending_days) where id = d.id;
-    perform tenant_domains.log(target_company, d.id, 'verification_lapsed', null);
+    perform tenant_domains.log(target_company, d.id, 'verification_lapsed', acting_owner);
     return 'pending';
   end if;
   return d.status;
@@ -489,13 +510,14 @@ $$;
 -- Wynik sprawdzenia TLS. Gotowość zapisywana tylko dla domeny zweryfikowanej
 -- lub aktywnej; niepowodzenie zdejmuje gotowość tylko z nieaktywnej domeny
 -- (aktywnej nie wyłącza pojedynczy błąd sieci — tylko dziennik).
-create function tenant_domains.record_tls_check(target_company uuid, target_domain uuid, expected_token text, tls_ok boolean)
+create function tenant_domains.record_tls_check(target_company uuid, target_domain uuid, expected_token text, tls_ok boolean, acting_owner uuid)
 returns text language plpgsql security definer set search_path = '' as $$
 declare d tenant_domains.domains;
 begin
   if tls_ok is null then raise exception 'tenant_domain_bad_check' using errcode = '22023'; end if;
+  perform tenant_domains.require_acting_owner(target_company, acting_owner);
   d := tenant_domains.lock_domain(target_company, target_domain);
-  if d.verification_token <> expected_token or d.status = 'revoked' then
+  if expected_token is null or d.verification_token is distinct from expected_token or d.status = 'revoked' then
     raise exception 'tenant_domain_stale_check' using errcode = 'PT409';
   end if;
   if d.status not in ('verified', 'active') then
@@ -503,10 +525,10 @@ begin
   end if;
   if tls_ok then
     update tenant_domains.domains set tls_ready_at = clock_timestamp() where id = d.id;
-    perform tenant_domains.log(target_company, d.id, 'tls_ready', null);
+    perform tenant_domains.log(target_company, d.id, 'tls_ready', acting_owner);
   else
     if d.status = 'verified' then update tenant_domains.domains set tls_ready_at = null where id = d.id; end if;
-    perform tenant_domains.log(target_company, d.id, 'tls_failed', null);
+    perform tenant_domains.log(target_company, d.id, 'tls_failed', acting_owner);
   end if;
   return d.status;
 end;
@@ -539,8 +561,8 @@ end
 $grants$;
 grant usage on schema tenant_domains to tenant_domain_verifier;
 grant execute on function tenant_domains.verifier_target(uuid, uuid) to tenant_domain_verifier;
-grant execute on function tenant_domains.record_dns_check(uuid, uuid, text, boolean) to tenant_domain_verifier;
-grant execute on function tenant_domains.record_tls_check(uuid, uuid, text, boolean) to tenant_domain_verifier;
+grant execute on function tenant_domains.record_dns_check(uuid, uuid, text, boolean, uuid) to tenant_domain_verifier;
+grant execute on function tenant_domains.record_tls_check(uuid, uuid, text, boolean, uuid) to tenant_domain_verifier;
 
 do $postflight$
 begin
