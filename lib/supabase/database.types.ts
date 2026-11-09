@@ -458,6 +458,42 @@ export type Database = {
       tenant_domain_revoke: { Args: { target_company: string; target_domain: string }; Returns: string };
       tenant_domain_state: { Args: { target_company: string }; Returns: Json };
       tenant_domain_resolve: { Args: { target_host: string }; Returns: string | null };
+      // SC-021-D: operator-only AI cost and margin reads (each re-checks the operator in the database).
+      sc021_operator_ai_costs: {
+        Args: { from_month: string; to_month: string; group_by: string };
+        Returns: { group_key: string; group_label: string; company_id: string | null; company_name: string | null;
+          attempts: number; operations: number; confirmed_count: number; placeholder_count: number; unpriced_count: number;
+          unknown_count: number; released_count: number; reserved_count: number; bounds_exceeded_count: number;
+          cost_micros: Json; confirmed_pln_minor: number | null; placeholder_pln_minor: number | null;
+          fx_missing: boolean; fx_placeholder: boolean }[];
+      };
+      sc021_operator_margin: {
+        Args: { from_month: string; to_month: string; group_by: string };
+        Returns: { group_key: string; group_label: string; company_id: string | null; company_name: string | null;
+          paid_orders: number; revenue_gross_minor: number; revenue_net_minor: number; payments_without_amount: number;
+          ai_cost_pln_minor: number | null; other_costs_minor: number; margin_minor: number | null;
+          margin_status: 'confirmed' | 'estimated' | 'unavailable'; reasons: string[] }[];
+      };
+      sc021_operator_fx_rates: {
+        Args: Record<PropertyKey, never>;
+        Returns: { id: string; base_currency: 'USD' | 'EUR'; quote_currency: 'PLN'; rate_micros: number; valid_from: string;
+          placeholder: boolean; source_note: string; created_at: string; from_migration: boolean }[];
+      };
+      sc021_operator_add_fx_rate: {
+        Args: { request_key: string; base_currency: string; rate_micros: number; valid_from: string; source_note: string; placeholder: boolean };
+        Returns: string;
+      };
+      sc021_operator_other_costs: {
+        Args: { from_month: string; to_month: string };
+        Returns: { id: string; period_month: string; company_id: string; company_name: string | null; package_code: string | null;
+          category: 'payment_fee' | 'sms' | 'email' | 'other'; amount_minor: number; note: string | null; supersedes: string | null;
+          superseded: boolean; created_at: string }[];
+      };
+      sc021_operator_add_other_cost: {
+        Args: { request_key: string; period_month: string; target_company: string; package_code: string | null; category: string;
+          amount_minor: number; note: string | null; supersedes: string | null };
+        Returns: string;
+      };
       read_exercise_ai_proposal: {
         Args: { target_company: string; target_recruitment: string; target_definition: string };
         Returns: ExerciseAiProposalReview;

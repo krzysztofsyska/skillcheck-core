@@ -1,0 +1,93 @@
+# SC-021-D — panel kosztów AI i marży
+
+TASK: SC-021-D · Issue #81 · LEVEL: L3 · SCOPE: FULLSTACK · OWNER: Claude (builder) ·
+REVIEWER: niezależna sesja · DEPENDS ON: SC-021-B (rejestr prób) · równolegle z SC-021-C (budżety) ·
+PRODUCTION_APPROVAL: NO.
+
+## Co dostarcza
+
+| element | rola |
+|---|---|
+| `supabase/migrations/20261110090000_sc021_cost_dashboard.sql` | kursy walut (`ai_ledger.fx_rates`), inne koszty zmienne (`ai_ledger.other_cost_lines`), funkcje odczytu i zapisu operatora |
+| `app/operator/ai-costs/` | strona `/operator/ai-costs`: podsumowanie, marża, koszty w przekrojach, kursy, inne koszty |
+| `lib/ai-cost-dashboard.ts` | parsowanie okresu i formularzy, formatowanie kwot (liczby całkowite, bez float) |
+| `tests/ai-cost-dashboard*.test.mjs` | testy bez bazy i na PostgreSQL 16 (dwie syntetyczne firmy) |
+
+Panel jest **wyłącznie dla operatora** (ta sama bramka co `/operator/billing`: `salesOperator()` w aplikacji,
+`private.sc19_require_operator()` w każdej funkcji bazy, z odwołaniem uprawnień od razu). Firmy go nie
+widzą; marża i przychód są wewnętrzne. Członek firmy nadal widzi tylko własne wiersze rejestru (RLS z SC-021-B),
+ale żadnego nowego widoku dla firm nie dodajemy — to decyzja produktowa na później.
+
+## Przekroje kosztów
+
+Firma, rekrutacja, kandydat, pakiet, model, dostawca, rodzaj zadania, miesiąc (czas Europe/Warsaw),
+zakres miesięcy włącznie, najwyżej 24.
+
+- **Operacja** (reguła z SC-021-B): screening = `operation_id`; generowanie zadań = (firma, rekrutacja,
+  `operation_id`). Ponowienia jednej analizy to jedna operacja, wiele wywołań.
+- **Kandydat** wyłącznie jako pseudonim `K-XXXXXXXXXX` (skrót z identyfikatora zgłoszenia); funkcja nie
+  zwraca identyfikatora zgłoszenia, imion, e-maili ani CV.
+- **Pakiet** = pakiet firmy w chwili wywołania: ostatnie z opłaconego zamówienia pakietu, ręcznego
+  przydziału PRESELEKCJI, aktywacji FREE; inaczej „Bez pakietu”.
+
+## Koszt potwierdzony a szacunek
+
+| klasa | znaczenie | w kwotach |
+|---|---|---|
+| zatwierdzone | stawka `approved` | „Koszt (stawki zatwierdzone)” |
+| testowe | stawka `placeholder` | osobno, jako **„szacunek (stawki testowe)”** |
+| bez stawki | koszt `NULL` | tylko liczba; koszt zaniżony |
+| nieznany | `unknown` (mogło być naliczone) | tylko liczba |
+| nienaliczone | `released` | 0 |
+| zarezerwowane | `reserved` (SC-021-C) | nie wliczane; punkt rozszerzenia |
+
+Ponad limit tokenów trasy (`bounds_exceeded`) to osobny licznik anomalii.
+
+## Kursy walut
+
+Koszt jest w walucie stawki (mikro-jednostki), przychód w złotych (grosze). Kurs: PLN za 1 USD/EUR ×1 000 000,
+od daty, ze źródłem i flagą „testowy”. Wybór dla wywołania: kurs prawdziwy przed testowym, potem najnowsza
+data, przy tej samej dacie najnowszy wpis (poprawka). Tylko dopisywanie, autor i czas w każdym wierszu.
+
+W migracji jest **tylko kurs testowy USD→PLN 4,000000** — to nie jest kurs NBP ani rynkowy. Prawdziwy kurs
+wpisuje operator w panelu. **Brak kursu → koszt w złotych i marża „niedostępne”**, nigdy zgadywane.
+
+## Marża kontrybucyjna
+
+`marża = przychód netto − koszt AI (PLN) − inne koszty zmienne`, per firma / pakiet / miesiąc.
+
+- **Przychód**: opłacone zamówienia katalogowe (`sc19_commerce.orders`, status `paid`, data rozliczenia).
+  Netto = `round_half_up(brutto · 10000 / (10000 + VAT_bp))` per zamówienie, VAT z wersji katalogu, z której
+  zamówienie wyceniono. Ceny nie są zmieniane.
+- **Wpłaty bez kwoty**: ręczny przydział PRESELEKCJI (`sc19_grant_paid`, dziennik analiz) nie zapisuje kwoty —
+  liczony jako „wpłata bez kwoty”, przychód 0, marża oznaczona jako szacunek.
+- **Inne koszty**: wpisuje operator (opłata za płatność, SMS, e-mail, inne), netto w PLN, na miesiąc i firmę,
+  opcjonalnie pakiet. Poprawka = nowy wiersz zastępujący poprzedni (raz), historia zostaje. Nic nie zasiano.
+- **Status**: `niedostępna` (brak kursu), `szacunek` (kurs testowy, stawki testowe, wywołania bez stawki lub
+  nieznane, rezerwacje, wpłaty bez kwoty), inaczej `potwierdzona`. Powody są pokazane obok.
+
+Zaokrąglenia (całkowite, `numeric`): koszt PLN = `ceil(Σ cost_micros · kurs_micros / 10^10)` na grupę (w górę —
+koszt nigdy niedoszacowany; suma grup może przekroczyć całość o < 1 gr na grupę).
+
+## Bezpieczeństwo i SC-010
+
+- Nowe tabele w `ai_ledger`, bez kluczy obcych do `public`/`private` → sygnatura R15 bez zmian (preflight
+  i postflight w migracji, test). Kandydat tylko jako pseudonim.
+- Brak dostępu do tabel dla `anon`/`authenticated`/workerów; odczyt i zapis wyłącznie przez funkcje
+  `SECURITY DEFINER` z `search_path=''`, `EXECUTE` tylko dla `authenticated`, operator sprawdzany w środku.
+- Tabele tylko do dopisywania (wyzwalacz z SC-021-B), także dla właściciela tabel.
+- Formularze: klucz żądania (ponowne wysłanie nie dubluje wpisu), potwierdzenie, walidacja w aplikacji i w bazie.
+
+## Punkt rozszerzenia dla SC-021-C
+
+Rezerwacje (`status = 'reserved'`, `reserved_micros`) są liczone osobno i nie wchodzą do kosztu ani marży
+(powód `reserved_not_counted`). Gdy C rozliczy rezerwację do `settled`, wiersz sam przejdzie do właściwej
+klasy — panel czyta bieżący status. Waluta rezerwacji bez stawki jest pokazywana jako „waluta nieznana”.
+
+## Testy
+
+- `npm run test:ai-cost` — okres, formularze, formatowanie, statyczne sprawdzenie strony.
+- `npm run test:ai-cost-db` — PostgreSQL 16 (CI `checks.yml`): reguły grupowania (ten sam klucz generowania
+  w dwóch firmach = dwie operacje), klasy kosztu, brak/test/prawdziwy kurs, netto z VAT, marża (w tym
+  ujemna i potwierdzona), wersjonowanie innych kosztów, idempotencja, operator / członek / odwołany operator /
+  anon / worker, tylko dopisywanie, pseudonimy kandydatów.

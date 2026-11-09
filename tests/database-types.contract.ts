@@ -184,7 +184,13 @@ type ExpectedFunctions =
   | "tenant_domain_deactivate"
   | "tenant_domain_revoke"
   | "tenant_domain_state"
-  | "tenant_domain_resolve";
+  | "tenant_domain_resolve"
+  | "sc021_operator_ai_costs"
+  | "sc021_operator_margin"
+  | "sc021_operator_fx_rates"
+  | "sc021_operator_add_fx_rate"
+  | "sc021_operator_other_costs"
+  | "sc021_operator_add_other_cost";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
