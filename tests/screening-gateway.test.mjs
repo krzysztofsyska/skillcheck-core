@@ -15,8 +15,11 @@ import { validatePolicy } from '../lib/ai-gateway/policy.ts';
 import { defaultAiPolicy } from '../lib/ai-gateway/default-policy.ts';
 
 const NOW = Date.parse('2026-11-09T12:00:00Z');
+const COMPANY = 'c1111111-1111-4111-8111-111111111111';
 const claimV1 = {
   analysis_id: 'a1111111-1111-4111-8111-111111111111',
+  // SC-021-B: bound by the worker from the database in the claim transaction.
+  company_id: COMPANY,
   attempt_id: 'a2222222-2222-4222-8222-222222222222',
   lease_token: 'a'.repeat(64),
   lease_expires_at: '2026-11-09T12:10:00Z',
@@ -76,11 +79,12 @@ function storeFor(claim) {
 async function runPath(path, claim, respond, extra = {}) {
   const { impl, calls: fetches } = fakeFetch(respond);
   const { store, calls } = storeFor(claim);
-  const logs = [], gatewayLogs = [], sleeps = [];
+  const logs = [], gatewayLogs = [], sleeps = [], ledger = [];
   const timeoutMs = extra.timeoutMs ?? 60000;
   const policy = extra.policy ?? defaultAiPolicy;
   const viaGateway = createScreeningGatewayCall({
     apiKey: extra.apiKey ?? 'sk-synthetic', fetchImpl: impl, policy, now: () => NOW, log: e => gatewayLogs.push(e),
+    recordAttempt: extra.recordAttempt ?? (async p => { ledger.push(p); }),
   });
   const result = await runScreeningAttempt(claim.attempt_id, {
     enabled: true, store,
@@ -91,7 +95,7 @@ async function runPath(path, claim, respond, extra = {}) {
     log: entry => logs.push(entry),
     now: () => NOW,
   });
-  return { result, fetches, calls, logs, gatewayLogs, sleeps };
+  return { result, fetches, calls, logs, gatewayLogs, sleeps, ledger };
 }
 
 const comparable = run => ({
@@ -174,7 +178,7 @@ test('every physical attempt is logged without CV text, criteria, prompt or key'
   assert.deepEqual(run.gatewayLogs.map(l => [l.attempt, l.outcome, l.billing]), [[1, 'server_error', 'maybe_billed'], [1, 'completed', 'billed']]);
   for (const l of run.gatewayLogs) {
     assert.equal(l.operation_id, claimV1.attempt_id);
-    assert.equal(l.company_id, null);
+    assert.equal(l.company_id, COMPANY);
     assert.equal(l.task, 'cv_screening');
   }
   assert.notEqual(run.gatewayLogs[0].attempt_id, run.gatewayLogs[1].attempt_id);
@@ -196,7 +200,7 @@ test('the worker claim is the trusted context: an expired lease or a foreign mod
     assert.equal(run.calls.fail.length, 1);
     assert.equal(run.sleeps.length, 0, 'refused before provider I/O: never retried');
   }
-  const viaGateway = createScreeningGatewayCall({ apiKey: 'k', now: () => NOW, log: () => {},
+  const viaGateway = createScreeningGatewayCall({ apiKey: 'k', now: () => NOW, log: () => {}, recordAttempt: async () => {},
     fetchImpl: async () => { throw new Error('must not be called'); } });
   await assert.rejects(viaGateway({ ...buildScreeningOpenAiRequest(claimV1), model: 'gpt-other' }, claimV1),
     e => e.code === 'contract_mismatch');
@@ -242,4 +246,43 @@ test('a Deno-style connection error is retried as a network error; a body broken
   const broken = await runPath('gateway', claimV1, () => new Response(new ReadableStream({ pull(c) { c.error(new TypeError('terminated')); } })));
   assert.equal(broken.result.code, 'openai_invalid_output');
   assert.equal(broken.fetches.length, 1, 'the model already ran: never pay twice');
+});
+
+test('SC-021-B: every physical attempt is written to the ledger with the claim tenant and without the provider request id', async () => {
+  const run = await runPath('gateway', claimV1, n => n < 2 ? json({}, 500) : json(completed(successV1)));
+  assert.equal(run.result.status, 'completed');
+  assert.deepEqual(run.ledger.map(p => [p.company_id, p.operation_id, p.task, p.outcome, p.billing, p.input_tokens, p.provider_request_id]), [
+    [COMPANY, claimV1.attempt_id, 'cv_screening', 'server_error', 'maybe_billed', null, null],
+    [COMPANY, claimV1.attempt_id, 'cv_screening', 'completed', 'billed', 120, null],
+  ]);
+  assert.equal(new Set(run.ledger.map(p => p.attempt_id)).size, 2, 'each retry has its own attempt id');
+  const text = JSON.stringify(run.ledger);
+  for (const secret of ['SQL i raporty', 'Analiza danych', 'sk-synthetic', claimV1.lease_token]) assert.equal(text.includes(secret), false, secret);
+});
+
+test('SC-021-B: a claim without a database-bound tenant never reaches the provider', async () => {
+  for (const company_id of [undefined, null, '', 'not-a-uuid']) {
+    const run = await runPath('gateway', { ...claimV1, company_id }, () => json(completed(successV1)));
+    assert.equal(run.fetches.length, 0);
+    assert.equal(run.result.code, 'worker_internal_error');
+    assert.equal(run.sleeps.length, 0);
+    assert.equal(run.ledger.length, 0);
+  }
+});
+
+test('SC-021-B: an attempt that cannot be recorded fails the analysis without another provider call', async () => {
+  const run = await runPath('gateway', claimV1, () => json(completed(successV1)), { recordAttempt: async () => { throw new Error('db down'); } });
+  assert.equal(run.fetches.length, 1);
+  assert.equal(run.result.code, 'worker_internal_error');
+  assert.equal(run.calls.complete.length, 0, 'unrecorded work is never returned as a result');
+  assert.equal(run.sleeps.length, 0, 'not retried: the model may already have been billed');
+  assert.equal(screeningErrorFromGateway(new AiGatewayError('ledger_error', 'maybe_billed')).code, 'worker_internal_error');
+});
+
+test('SC-021-B: the Edge worker binds the tenant in the claim transaction and records attempts as screening_worker', () => {
+  const source = readFileSync('supabase/functions/screening-worker/index.ts', 'utf8');
+  assert.match(source, /select public\.screening_attempt_tenant\(\$\{attemptId\}::uuid\) as company_id/);
+  assert.match(source, /return \{ \.\.\.claimed, company_id: tenant\[0\]\?\.company_id \?\? null \};/);
+  assert.match(source, /store: gatewayEnabled \? withClaimTenant\(sql, workerStore\(sql\)\) : workerStore\(sql\)/);
+  assert.match(source, /set local role screening_worker"\);\n\s*await tx`select public\.record_screening_ai_attempt\(\$\{tx\.json\(payload\)\}::jsonb\)`/);
 });

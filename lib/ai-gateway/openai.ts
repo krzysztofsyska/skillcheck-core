@@ -81,7 +81,9 @@ export function createOpenAiAdapter(options: {
       }
       const raw = await postJson(fetchImpl, OPENAI_RESPONSES_URL, {
         authorization: 'Bearer ' + options.apiKey,
-        'x-client-request-id': call.attemptId,
+        // SC-021-B: a fresh random id per request, never stored. The ledger's attemptId is not sent,
+        // so nothing persisted in SkillCheck links to the provider-side record of the request.
+        'x-client-request-id': globalThis.crypto.randomUUID(),
       }, body, call.signal, maxResponseBytes);
       return parseOpenAiResponse(raw);
     },
