@@ -1,3 +1,4 @@
+import { controlPlane } from './control-plane.mjs';
 import { sha256 } from './canonical.mjs';
 import { parseContract } from './contract.mjs';
 import { filesOutside } from './scope.mjs';
@@ -77,7 +78,7 @@ export function validateBuilderFiles(files, allowed, baseTree = []) {
 export function createClaudeBuilderClient({ github, policy, policySha }) {
   const root=`/repos/${policy.repository}`;
   const trusted=run=>run.workflow_id===policy.claude_builder?.workflow_id && run.path===policy.claude_builder?.workflow_path
-    && run.event==='workflow_dispatch' && run.head_branch==='main' && run.head_sha===policySha
+    && run.event==='workflow_dispatch' && run.head_branch===controlPlane(policy).branch && run.head_sha===policySha
     && run.actor?.id===policy.controller_actor_id && run.run_attempt===1;
   async function recordFor(agentId) {
     const records=Object.values((await github.readProjection()).tasks);
@@ -101,7 +102,7 @@ export function createClaudeBuilderClient({ github, policy, policySha }) {
     if(existing.length===1)return {agent:{id:agentId,latestRunId:String(existing[0].id)},run:{id:String(existing[0].id)}};
     if(all.some(r=>r.display_title?.startsWith(`sc-builder:${agentId}:`)&&r.status!=='completed'))deny('BUILDER_BUSY');
     if(all.filter(r=>r.display_title?.startsWith(`sc-builder:${agentId}:`)).length>=policy.limits.repair_rounds+1)deny('CLAUDE_RUN_LIMIT');
-    await github.dispatch({workflow:'claude-code-dispatch.yml',ref:'main',inputs:{request_id:packet.request_id,agent_id:agentId,builder_packet:JSON.stringify(packet)}});
+    await github.dispatch({workflow:'claude-code-dispatch.yml',ref:controlPlane(policy).branch,inputs:{request_id:packet.request_id,agent_id:agentId,builder_packet:JSON.stringify(packet)}});
     return {agent:{id:agentId},run:null};
   }
   async function publish(run,record) {

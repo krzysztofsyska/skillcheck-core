@@ -4,7 +4,8 @@ export function evaluatePreflight(protection) {
   if (protection.scOps001Exception) return { ok: false, reason: 'SC_OPS_001_REJECTED' };
   if (!protection.exclusiveWritersConfirmed) return { ok: false, reason: 'EXCLUSIVE_WRITERS_UNCONFIRMED' };
   if (protection.qualityGatesBypass) return { ok: false, reason: 'QUALITY_GATE_BYPASS' };
-  if (!protection.mainProtected || !protection.integrationProtected || !protection.agentStateProtected) {
+  if ((protection.controlPlaneMode === 'integration-only' ? !protection.controlProtected : !protection.mainProtected)
+      || !protection.integrationProtected || !protection.agentStateProtected) {
     return { ok: false, reason: 'PROTECTION_UNCONFIRMED' };
   }
   if (protection.environmentsConfirmed !== true) return { ok: false, reason: 'ENVIRONMENTS_UNCONFIRMED' };
@@ -13,6 +14,9 @@ export function evaluatePreflight(protection) {
 }
 
 export function decideMerge(input) {
+  if (input.protection?.controlPlaneMode === 'integration-only' && input.gate !== 'A') {
+    return { ok: false, reason: 'PRODUCTION_DISABLED_FOR_CONTROL_PLANE' };
+  }
   if (!input.flags?.mergeEnabled) return { ok: false, reason: 'MERGE_DISABLED' };
   if (!input.flags?.enabled && !input.simulation) return { ok: false, reason: 'PIPELINE_DISABLED' };
   const preflight = evaluatePreflight(input.protection);

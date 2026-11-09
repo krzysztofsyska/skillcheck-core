@@ -1,4 +1,4 @@
-const FORBIDDEN_REFS = new Set(['main', 'integration', 'agent-state']);
+const FORBIDDEN_REFS = new Set(['main', 'integration', 'agent-state', 'agent-control-runtime']);
 
 export function matchAllowed(file, patterns) {
   return patterns.some(pattern => globMatch(file, pattern));

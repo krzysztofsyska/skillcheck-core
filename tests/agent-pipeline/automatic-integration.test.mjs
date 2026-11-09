@@ -207,6 +207,7 @@ test('readiness is delivered while merge is disabled and production still waits 
   policy.controller_actor_id = 456;
   const comments = [];
   const github = {
+    async readBranch() { return { commit: { sha: 'd'.repeat(40) } }; },
     async readComments() { return comments; },
     async comment({ body }) {
       const item = { id: comments.length + 1, body, user: { id: policy.controller_actor_id } };
@@ -217,7 +218,7 @@ test('readiness is delivered while merge is disabled and production still waits 
   };
   const ready = taskRecord({ state: 'READY_FOR_OWNER', issue_number: 7, pr_number: 50 });
   ready.binding.approval = null;
-  const delivered = await drainOutbox({ github, journal: createMemoryJournal(), policy, record: ready, now: '2026-10-13T12:00:00.000Z' });
+  const delivered = await drainOutbox({ github, policySha: 'd'.repeat(40), journal: createMemoryJournal(), policy, record: ready, now: '2026-10-13T12:00:00.000Z' });
   assert.equal(delivered.binding.pending_notification, null);
   assert.equal(delivered.binding.last_notified_state, 'READY_FOR_OWNER');
   assert.equal(delivered.binding.approval, null);
@@ -232,7 +233,7 @@ test('readiness is delivered while merge is disabled and production still waits 
     kind: 'READY_FOR_OWNER', headSha: accepted.head_sha, baseSha: accepted.base_sha, result: 'READY_FOR_OWNER',
     evidenceUrl: `${policy.repository_url}/pull/50`, actionUrl: null,
   });
-  const cleaned = await drainOutbox({ github, journal: createMemoryJournal(), policy, record: accepted, now: '2026-10-13T12:00:00.000Z' });
+  const cleaned = await drainOutbox({ github, policySha: 'd'.repeat(40), journal: createMemoryJournal(), policy, record: accepted, now: '2026-10-13T12:00:00.000Z' });
   assert.equal(cleaned.state, 'ACCEPTED');
   assert.equal(cleaned.binding.pending_notification, null);
   assert.equal(cleaned.binding.last_notified_state, 'READY_FOR_OWNER');
@@ -245,7 +246,7 @@ test('readiness is delivered while merge is disabled and production still waits 
     kind: 'READY_FOR_PROD', headSha: production.head_sha, baseSha: production.base_sha, result: 'READY_FOR_PROD',
     evidenceUrl: `${policy.repository_url}/pull/51`, actionUrl: null,
   });
-  const held = await drainOutbox({ github, journal: createMemoryJournal(), policy, record: production, now: '2026-10-13T12:00:00.000Z' });
+  const held = await drainOutbox({ github, policySha: 'd'.repeat(40), journal: createMemoryJournal(), policy, record: production, now: '2026-10-13T12:00:00.000Z' });
   assert.equal(held.binding.pending_notification.kind, 'READY_FOR_PROD');
   assert.equal(comments.filter(item => item.body.includes('READY_FOR_PROD')).length, 0);
 
@@ -302,18 +303,19 @@ test('unconfirmed readiness delivery stops blocking the next task', async () => 
   });
   record.binding.pending_notification.delivery_phase = 'unknown';
   const github = {
+    async readBranch() { return { commit: { sha: 'd'.repeat(40) } }; },
     async readComments() { return []; },
     async comment() { throw Object.assign(new Error('transport'), { status: 500 }); },
     async updateComment() { throw Object.assign(new Error('transport'), { status: 500 }); },
   };
   let current = record;
   for (let i = 0; i < policy.limits.transport_attempts; i++) {
-    current = await drainOutbox({ github, journal: createMemoryJournal(), policy, record: current, now: '2026-10-14T08:00:00.000Z' });
+    current = await drainOutbox({ github, policySha: 'd'.repeat(40), journal: createMemoryJournal(), policy, record: current, now: '2026-10-14T08:00:00.000Z' });
   }
   assert.equal(current.binding.pending_notification.unknown_attempts, policy.limits.transport_attempts);
   assert.equal(current.binding.pending_notification.delivery_phase, 'unknown');
   assert.equal(current.binding.reports.at(-1).kind, 'NOTIFICATION_UNCONFIRMED');
-  const again = await drainOutbox({ github, journal: createMemoryJournal(), policy, record: current, now: '2026-10-14T08:00:00.000Z' });
+  const again = await drainOutbox({ github, policySha: 'd'.repeat(40), journal: createMemoryJournal(), policy, record: current, now: '2026-10-14T08:00:00.000Z' });
   assert.equal(again.binding.pending_notification.unknown_attempts, policy.limits.transport_attempts);
   const work = assembleWork({
     policy, policySha: 'd'.repeat(40), now: '2026-10-14T08:00:00.000Z', secrets: {},

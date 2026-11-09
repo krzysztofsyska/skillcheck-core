@@ -1,3 +1,4 @@
+import { integrationOnly, isProductionRecord, OPERATIONAL_BRANCH } from './control-plane.mjs';
 import { operationKey, sha256 } from './canonical.mjs';
 import { approvalDigest, approvalStillCurrent, evaluateApproval, gateAPayload, gateBPayload } from './approval.mjs';
 import { buildCreatePayload, buildFollowupPayload, createAgentId, reconcileListedRuns } from './cursor.mjs';
@@ -28,6 +29,11 @@ export function plan(record, obs) {
 }
 
 function planNext(record, obs) {
+  if (record?.binding?.branch === OPERATIONAL_BRANCH) return done(block(record, 'REF_FORBIDDEN', obs.now));
+  if (integrationOnly(obs.policy) && (obs.kind === 'promotion' || isProductionRecord(record))) {
+    return record ? done(block(record, 'PRODUCTION_DISABLED_FOR_CONTROL_PLANE', obs.now))
+      : { record: null, effects: [], journal: null };
+  }
   if (obs.kind === 'promotion' || record?.binding?.lane === 'promotion') return planPromotion(record, obs);
   if (!record || record.state === 'BACKLOG') return openTask(obs);
   if (record.technical_state === 'WAITING_POST_MERGE_CI' || record.binding?.post_merge_ci?.blocked) return postMergeStep(record, obs);
