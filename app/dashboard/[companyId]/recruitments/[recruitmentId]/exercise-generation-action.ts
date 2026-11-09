@@ -36,7 +36,9 @@ export async function generateExerciseProposal(companyId:string,recruitmentId:st
         input_fingerprint:fingerprint,new_definition:definition as unknown as Json,new_provenance:provenance as unknown as Json,error_code:error});
       return readResult(r.data,r.error);
     },
-    provide:payload=>requestExerciseDraft(payload,key),
+    // Trusted context for the AI gateway path (used only when AI_GATEWAY_ENABLED=true): the company
+    // whose membership exerciseContext verified, the validated request key and the recruitment.
+    provide:payload=>requestExerciseDraft(payload,key,fetch,{companyId,operationId:requestKey,recruitmentId,mayGenerate:canEdit&&editable}),
   });
   if(result.exerciseId) revalidatePath(base,'layout');
   return result;

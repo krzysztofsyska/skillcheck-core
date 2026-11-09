@@ -43,3 +43,16 @@ test('the Deno mapping pins the same zod version as package-lock.json', () => {
   const lock = JSON.parse(readFileSync(resolve('package-lock.json'), 'utf8'));
   assert.equal(config.imports.zod, `npm:zod@${lock.packages['node_modules/zod'].version}`);
 });
+
+test('the AI gateway path is in the worker bundle and uses no Deno-missing globals', () => {
+  const { seen } = graph();
+  for (const file of ['lib/screening-gateway.ts', 'lib/ai-gateway/gateway.ts', 'lib/ai-gateway/openai.ts', 'lib/ai-gateway/default-policy.ts']) {
+    assert.ok(seen.has(resolve(file)), `${file} is reachable from the worker`);
+  }
+  // Supabase Edge (Deno) has no global Buffer: a module that uses it must import it from node:buffer.
+  for (const file of seen) {
+    const code = readFileSync(file, 'utf8').replace(/\/\/.*$/gm, '');
+    if (/\bBuffer\./.test(code)) assert.match(code, /import\s*\{[^}]*\bBuffer\b[^}]*\}\s*from\s*['"]node:buffer['"]/, `${file} uses Buffer without importing it`);
+  }
+  assert.ok(!seen.has(resolve('lib/exercise-ai.ts')), 'exercise-ai.ts (database types, Node crypto) stays out of the worker');
+});

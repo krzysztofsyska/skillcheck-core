@@ -56,6 +56,11 @@ export type ProviderReply = {
   outputText: string | null;
   usage: TokenUsage | null;
   providerRequestId: string | null;
+  /**
+   * The parsed provider envelope, for callers whose result contract parses it themselves
+   * (`runRaw`). Server-only: never logged, never passed to `onAttempt`.
+   */
+  body?: unknown;
 };
 
 export type AiProviderAdapter = {
@@ -80,13 +85,24 @@ export type AiGatewayErrorCode = typeof AI_GATEWAY_ERROR_CODES[number];
 export class AiGatewayError extends Error {
   readonly code: AiGatewayErrorCode;
   readonly billing: BillingCertainty;
-  constructor(code: AiGatewayErrorCode, billing: BillingCertainty = 'not_billed') {
+  /** HTTP status of a provider rejection, when there was one (callers map it to their own codes). */
+  readonly httpStatus?: number;
+  constructor(code: AiGatewayErrorCode, billing: BillingCertainty = 'not_billed', httpStatus?: number) {
     // The message is the code only: never echo provider bodies, prompts or CV text.
     super(code);
     this.name = 'AiGatewayError';
     this.code = code;
     this.billing = billing;
+    if (Number.isInteger(httpStatus) && httpStatus! >= 100 && httpStatus! <= 599) this.httpStatus = httpStatus;
   }
+}
+
+/**
+ * SC-021-A2 server-side switch. Off unless exactly 'true': with it off, screening and exercise
+ * generation call the provider exactly as before the gateway existed.
+ */
+export function isAiGatewayEnabled(value: string | undefined) {
+  return value === 'true';
 }
 
 /** Errors worth another attempt. Others (auth, bad request, refusal) fail the same way again. */
