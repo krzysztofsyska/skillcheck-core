@@ -1,4 +1,5 @@
 import { parseContract } from './contract.mjs';
+import { reservedBuilderBudget } from './claude-builder.mjs';
 
 export function assembleWork({ policy, policySha, now, secrets, prompts = null, snapshot }) {
   const integrationSha = snapshot.integrationSha ?? null;
@@ -33,10 +34,11 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   const terminal = items.filter(i => i.record && ['ACCEPTED', 'DONE', 'BLOCKED'].includes(i.record.state));
   const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId))));
   const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && notificationBlocksQueue(i.record, policy));
+  const postMerge = items.filter(i => i.record?.technical_state === 'WAITING_POST_MERGE_CI' || i.record?.binding?.post_merge_ci?.blocked);
   // One active task per repository. A reconcilable accepted report still runs
   // before new work. An unconfirmed report past the transport bound does not,
   // including in the terminal fallback, so a later DONE or BLOCKED report can run.
-  const selected = active.length ? active : acceptedOutbox.length ? [acceptedOutbox[0]] : fresh.length ? [fresh[0]] : terminalWork(terminal, policy);
+  const selected = postMerge.length ? [postMerge[0]] : active.length ? active : acceptedOutbox.length ? [acceptedOutbox[0]] : fresh.length ? [fresh[0]] : terminalWork(terminal, policy);
   return { items: selected, integrationSha, mainSha, read: snapshot.read ?? 'github' };
 }
 
@@ -51,6 +53,7 @@ function observe({ policy, policySha, now, secrets, prompts, snapshot, issue, re
   const approval = record?.approval_request_id ? snapshot.approvals?.[record.approval_request_id] ?? null : null;
   return {
     now,
+    builderReservedUsd: reservedBuilderBudget(Object.values(snapshot.records ?? {})),
     dependenciesReady: String(parseContract(issue?.body ?? '').depends_on ?? '').split(/[, ]+/).filter(x => x && x !== 'NONE').every(id => recordsDependency(snapshot, id)),
     kind: record?.binding?.lane === 'promotion' ? 'promotion' : 'task',
     simulation: false,
@@ -81,6 +84,7 @@ function observe({ policy, policySha, now, secrets, prompts, snapshot, issue, re
       protection: snapshot.protection ?? null,
       ci: evidence.ci ?? null,
       review: evidence.review ?? null,
+      postMergeCi: snapshot.postMergeCi?.[record?.task_id] ?? null,
     },
     cursor: agentId ? snapshot.cursor?.[agentId] ?? null : null,
     approval,
@@ -121,6 +125,7 @@ export function cursorSnapshot(agent, runsPayload) {
   const runs = listed.map(run => ({
     id: run.id,
     status: run.status,
+    operationVerified: run.operationVerified === true,
     result: run.result ?? null, git: run.git ?? null,
     createdAt: run.createdAt ?? run.created_at ?? null,
   })).filter(run => run.id);

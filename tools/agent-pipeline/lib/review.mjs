@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { validateSchema } from './schema.mjs';
+import { historyCoverage } from './history.mjs';
 const schema = JSON.parse(readFileSync(new URL('../../../.github/agent-pipeline/review-result.schema.json', import.meta.url), 'utf8'));
 const VERDICTS = new Set(['PASS', 'PASS_WITH_FIXES', 'FAIL']);
 const CHECK_STATUSES = new Set(['PASS', 'FAIL', 'NOT_RUN', 'SKIPPED']);
@@ -67,6 +68,9 @@ export function validateReview(envelope, expected) {
     return reject('evidence_gap_blocks_pass');
   }
   if (payload.verdict === 'PASS' && payload.findings.some(item => ['major', 'blocker'].includes(item.severity))) return reject('unresolved_blocker');
+  if (payload.verdict === 'PASS' && payload.findings.some(item => item.required_fix.trim())) return reject('unresolved_required_finding');
+  if (payload.verdict === 'PASS' && !historyCoverage(payload, payload.reviewed_commits)) return reject('incomplete_history_review');
+  if (expected.commitShas && !historyCoverage(payload, expected.commitShas)) return reject('incomplete_history_review');
   if (validateSchema(schema, payload)) return reject('schema_invalid');
   return { ok: true, payload, pass: payload.verdict === 'PASS', fixes: payload.verdict === 'PASS_WITH_FIXES', fail: payload.verdict === 'FAIL' };
 }

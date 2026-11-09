@@ -6,6 +6,7 @@ export { protectionFromRulesets } from './protection.mjs';
 import { withTransportRetry } from './transport.mjs';
 import { canonicalJson } from './canonical.mjs';
 import { withRulesetEvidence } from './ruleset-evidence.mjs';
+import { evaluateChecks, evaluateDiscussion } from './quality.mjs';
 
 export function githubAppJwt({ appId, privateKey, now = Date.now() }) {
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -189,8 +190,48 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       return request(`/repos/${owner}/${repo}/actions/runs/${runId}/approvals`);
     },
     async readJobs(runId) {
-      const payload = await request(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs`);
-      return payload.jobs ?? [];
+      return pages(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs?filter=latest`, 'jobs');
+    },
+    async readReviewThreads(number) {
+      const result = []; let cursor = null;
+      for (let page = 0; page < 100; page++) {
+        const response = await request('/graphql', { method: 'POST', body: {
+          query: 'query($owner:String!,$repo:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{id isResolved} pageInfo{hasNextPage endCursor}}}}}',
+          variables: { owner, repo, number, cursor },
+        } });
+        const data = response.data?.repository?.pullRequest?.reviewThreads;
+        if (response.errors?.length || !Array.isArray(data?.nodes) || typeof data.pageInfo?.hasNextPage !== 'boolean') throw new Error('REVIEW_THREADS_UNCONFIRMED');
+        result.push(...data.nodes);
+        if (!data.pageInfo.hasNextPage) return result;
+        if (!data.pageInfo.endCursor || cursor === data.pageInfo.endCursor) throw new Error('REVIEW_THREADS_INCOMPLETE');
+        cursor = data.pageInfo.endCursor;
+      }
+      throw new Error('REVIEW_THREADS_INCOMPLETE');
+    },
+    async readMergeQuality(number, head, baseRef) {
+      const [rules, checks, statuses, threads, reviews] = await Promise.all([
+        pages(`/repos/${owner}/${repo}/rules/branches/${encodeURIComponent(baseRef)}`),
+        pages(`/repos/${owner}/${repo}/commits/${head}/check-runs?filter=latest`, 'check_runs'),
+        pages(`/repos/${owner}/${repo}/commits/${head}/statuses`),
+        this.readReviewThreads(number), pages(`/repos/${owner}/${repo}/pulls/${number}/reviews`),
+      ]);
+      const required = rules.filter(r => r.type === 'required_status_checks').flatMap(r => r.parameters?.required_status_checks ?? []);
+      const check = evaluateChecks({ head, checks, statuses, required, controllerAppId: policy.controller_app_id,
+        generated: policy.required_checks?.[baseRef] ?? [] });
+      return check.ok ? evaluateDiscussion(threads, reviews) : check;
+    },
+    async readPostMergeCi(head) {
+      const configured = policy.post_merge_ci;
+      if (!configured?.workflow_id || !configured.path) return { ok: false, reason: 'POST_MERGE_CONFIGURATION_MISSING' };
+      const runs = await pages(`/repos/${owner}/${repo}/actions/workflows/${configured.workflow_id}/runs?head_sha=${head}&event=push`, 'workflow_runs');
+      const candidates = runs.filter(r => r.head_sha === head && r.head_branch === 'integration' && r.event === 'push'
+        && r.workflow_id === configured.workflow_id && r.path === configured.path);
+      candidates.sort((a, b) => b.id - a.id || b.run_attempt - a.run_attempt);
+      const run = candidates[0];
+      if (!run || run.status !== 'completed') return { ok: false, pending: true, reason: 'POST_MERGE_CI_PENDING' };
+      const jobs = await this.readJobs(run.id);
+      if (run.conclusion !== 'success' || !jobs.length || jobs.some(j => j.status !== 'completed' || j.conclusion !== 'success')) return { ok: false, reason: 'POST_MERGE_CI_FAILED', runId: run.id };
+      return { ok: true, runId: run.id, runAttempt: run.run_attempt, headSha: head };
     },
     async readStateFile(path) {
       return request(`/repos/${owner}/${repo}/contents/${path}?ref=agent-state`);
