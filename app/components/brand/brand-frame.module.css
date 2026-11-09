@@ -1,0 +1,20 @@
+.frame{background:var(--brand-background);color:var(--brand-text);min-height:100%}
+.frame :global(a){color:var(--brand-primary)}
+.frame :global(.button),.frame :global(button){background:var(--brand-primary);color:var(--brand-on-primary);border-color:var(--brand-primary)}
+.frame :global(.eyebrow){color:var(--brand-accent)}
+.headerPrimary,.headerLight{display:flex;align-items:center;padding:14px 24px;border-bottom:1px solid rgba(0,0,0,.08)}
+.headerPrimary{background:var(--brand-primary);color:var(--brand-on-primary)}
+.headerLight{background:var(--brand-background);color:var(--brand-text)}
+.brand{display:inline-flex;align-items:center;gap:12px;font-weight:700;font-size:18px;text-decoration:none}
+.headerPrimary .brand{color:var(--brand-on-primary)!important}
+.headerLight .brand{color:var(--brand-primary)!important}
+.logo{display:block;height:36px;width:auto;max-width:200px;object-fit:contain}
+.footer{max-width:1080px;margin:0 auto;padding:16px 40px 32px}
+.legal{font-size:13px;line-height:1.5;opacity:.85;margin:0}
+.candidate{border:1px solid rgba(0,0,0,.12);border-radius:12px;overflow:hidden;background:var(--brand-background);color:var(--brand-text);max-width:520px}
+.candidateBar{display:flex;gap:10px;align-items:center;padding:12px 16px;background:var(--brand-primary);color:var(--brand-on-primary)}
+.candidateBar .logo{height:32px}
+.candidateBody{padding:20px}
+.candidateBody h3{margin-top:0}
+.accent{color:var(--brand-accent);font-weight:700}
+.button{display:inline-block;margin:8px 0 16px;padding:10px 18px;border-radius:8px;background:var(--brand-primary);color:var(--brand-on-primary);font-weight:700}

@@ -169,7 +169,14 @@ type ExpectedFunctions =
   | "get_preselection_groups"
   | "move_preselection_group"
   | "get_preselection_group_history"
-  | "cv_ai_usage_stats";
+  | "cv_ai_usage_stats"
+  | "brand_register_asset"
+  | "brand_save_draft"
+  | "brand_publish_draft"
+  | "brand_rollback"
+  | "brand_published"
+  | "brand_asset"
+  | "brand_editor_state";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;

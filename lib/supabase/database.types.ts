@@ -416,6 +416,38 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      /** SC-020-A brand configuration (20261109190000_sc020_brand_configuration.sql).
+       * Writes and the editor state are owner-only (42501 otherwise); published
+       * reads are for any company member. */
+      brand_register_asset: {
+        Args: { target_company: string; asset_kind: string; object_path: string; asset_mime: string; asset_size: number; asset_sha256: string };
+        Returns: string;
+      };
+      brand_save_draft: {
+        Args: { target_company: string; draft_config: Json; logo: string | null; favicon: string | null };
+        Returns: string;
+      };
+      brand_publish_draft: {
+        Args: { target_company: string; expected_draft: string; expected_updated_at: string };
+        Returns: string;
+      };
+      brand_rollback: {
+        Args: { target_company: string; target_version: string };
+        Returns: string;
+      };
+      brand_published: {
+        Args: { target_company: string };
+        Returns: { version_id: string; version_no: number; config: Json; logo_asset_id: string | null;
+          favicon_asset_id: string | null; published_at: string }[];
+      };
+      brand_asset: {
+        Args: { target_company: string; target_asset: string };
+        Returns: { object_path: string; mime: string; kind: string; byte_size: number; sha256: string }[];
+      };
+      brand_editor_state: {
+        Args: { target_company: string };
+        Returns: Json;
+      };
       read_exercise_ai_proposal: {
         Args: { target_company: string; target_recruitment: string; target_definition: string };
         Returns: ExerciseAiProposalReview;
