@@ -24,7 +24,8 @@ async function run(options={}){
  const mod=load(base+'exercise-generation-action.ts',{'next/cache':{revalidatePath:()=>calls.push('revalidate')},
  '../../../../../lib/exercise-context':{exerciseUuid:/^[a-f0-9-]{36}$/i,exerciseContext:async()=>{calls.push('access');return {client,canEdit:options.canEdit??true,editable:true,position,base:'/exercises'};}},
  '../../../../../lib/exercise-ai':contract,'../../../../../lib/exercise-ai-generation':generation,
- '../../../../../lib/exercise-ai-provider':{requestExerciseDraft:async(payload,key)=>{assert.equal(key,'synthetic-only');calls.push('provider');assert.equal(payload.untrusted_company,null);return {definition:{kind:'competency_test',title:'Plan'}};}},
+ '../../../../../lib/exercise-ai-provider':{requestExerciseDraft:async(payload,key,fetcher,trust)=>{assert.equal(key,'synthetic-only');calls.push('provider');
+  assert.equal(fetcher,fetch);assert.deepEqual(trust,{companyId,operationId:requestKey,recruitmentId,mayGenerate:true});assert.equal(payload.untrusted_company,null);return {definition:{kind:'competency_test',title:'Plan'}};}},
  });
  const form=new FormData();if(options.confirm!==false)form.set('confirm','yes');
  try{return {result:await mod.generateExerciseProposal(companyId,recruitmentId,requestKey,options.stamp??stamp,null,{},form),calls,rpc};}

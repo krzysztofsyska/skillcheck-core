@@ -8,6 +8,11 @@ import { createAiGateway as createRaw, containsContactData } from '../lib/ai-gat
 const createAiGateway = opts => createRaw({ onAttempt: async () => {}, ...opts });
 import { buildOpenAiResponsesBody, createOpenAiAdapter, parseOpenAiResponse, OPENAI_RESPONSES_URL } from '../lib/ai-gateway/openai.ts';
 import { createAnthropicAdapter } from '../lib/ai-gateway/anthropic.ts';
+import { isAiGatewayEnabled } from '../lib/ai-gateway/contract.ts';
+import { attemptLogEntry, gatewayRequestFromResponsesBody, pinnedRouteModel } from '../lib/ai-gateway/responses-bridge.ts';
+import { suggestRedaction } from '../lib/cv-text.ts';
+import { screeningAllowlistPayload } from '../lib/screening-ai.ts';
+import { buildExerciseDraftRequest, exerciseDraftPayload, EXERCISE_AI_MODEL } from '../lib/exercise-ai.ts';
 import { MAX_PROVIDER_RESPONSE_BYTES } from '../lib/ai-gateway/http.ts';
 import { screeningAnalysisContractHash } from '../lib/screening.ts';
 import {
@@ -149,7 +154,9 @@ test('payload with contact data or over the size limit never reaches the provide
   assert.equal(containsContactData('tel. 500 123 456'), true);
   assert.equal(containsContactData('SQL, raporty 2019-2024'), false);
   const calls = [];
-  const gw = createAiGateway({ policy: defaultAiPolicy, adapters: [fakeAdapter([], calls)], authorize: allow });
+  // A route with the guard on (the default policy turns it off per route in A2, see the guard parity test).
+  const guarded = policyWith({ cv_screening: route({ strategy: 'pinned', candidates: ['cheap'], maxAttempts: 1, maxInputBytes: 200_000 }) });
+  const gw = createAiGateway({ policy: guarded, adapters: [fakeAdapter([], calls)], authorize: allow });
   await assert.rejects(gw.run(ctx, { ...request, user: 'mail: a.b@example.com' }), e => e.code === 'payload_not_redacted');
   await assert.rejects(gw.run(ctx, { ...request, system: 'Firma: kontakt 500 123 456' }), e => e.code === 'payload_not_redacted');
   await assert.rejects(gw.run(ctx, { ...request, jsonSchema: { name: 's', schema: { description: 'hr@example.com' } } }), e => e.code === 'payload_not_redacted');
@@ -349,8 +356,10 @@ test('OpenAI adapter: request shape, key only in header, usage and refusal parsi
   }));
   const adapter = createOpenAiAdapter({ apiKey: 'sk-synthetic', fetchImpl: impl });
   const reply = await adapter.invoke({ model: 'm', revision: null, request, attemptId: 'att-1', signal: new AbortController().signal });
-  assert.deepEqual(reply, { status: 'completed', outputText: '{"x":1}', providerRequestId: 'resp_9',
+  const { body, ...neutral } = reply;
+  assert.deepEqual(neutral, { status: 'completed', outputText: '{"x":1}', providerRequestId: 'resp_9',
     usage: { inputTokens: 20, cachedInputTokens: 4, outputTokens: 7 } });
+  assert.equal(body.id, 'resp_9', 'the parsed envelope is kept for runRaw callers');
   assert.equal(calls[0].url, OPENAI_RESPONSES_URL);
   assert.equal(calls[0].init.headers.authorization, 'Bearer sk-synthetic');
   assert.equal(calls[0].init.headers['x-client-request-id'], 'att-1');
@@ -391,4 +400,209 @@ test('Anthropic adapter (inactive) works against a synthetic endpoint only', asy
   assert.equal(reply.status, 'completed');
   assert.deepEqual(reply.usage, { inputTokens: 17, cachedInputTokens: 2, outputTokens: 3 });
   assert.equal(calls[0].init.headers['x-api-key'], 'synthetic');
+});
+
+// ---------------------------------------------------------------- SC-021-A2
+
+test('A2 flag: the gateway is used only when AI_GATEWAY_ENABLED is exactly "true"', () => {
+  assert.equal(isAiGatewayEnabled('true'), true);
+  for (const value of [undefined, '', 'false', 'TRUE', '1', 'yes', ' true']) assert.equal(isAiGatewayEnabled(value), false, String(value));
+});
+
+test('A2: a circular or unserialisable output schema is invalid_request and never reaches the provider', async () => {
+  const calls = [];
+  const gw = createAiGateway({ policy: policyWith({ cv_screening: route() }), adapters: [fakeAdapter([], calls)], authorize: allow });
+  const circular = { type: 'object' }; circular.self = circular;
+  await assert.rejects(gw.run(ctx, { ...request, jsonSchema: { name: 's', schema: circular } }),
+    e => e instanceof AiGatewayError && e.code === 'invalid_request');
+  await assert.rejects(gw.run(ctx, { ...request, jsonSchema: { name: 's', schema: { max: 10n } } }),
+    e => e instanceof AiGatewayError && e.code === 'invalid_request');
+  await assert.rejects(gw.runRaw(ctx, { ...request, jsonSchema: { name: 's', schema: circular } }), e => e.code === 'invalid_request');
+  assert.equal(calls.length, 0);
+});
+
+test('A2: runRaw returns refused and incomplete answers with the provider envelope; run still throws', async () => {
+  const records = [];
+  const envelope = { id: 'resp_r', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } };
+  const gw = createRaw({
+    policy: policyWith({ cv_screening: route({ maxAttempts: 1 }) }), authorize: allow,
+    adapters: [fakeAdapter([
+      { status: 'incomplete', outputText: null, usage: null, providerRequestId: 'resp_r', body: envelope },
+      { status: 'refused', outputText: null, usage: null, providerRequestId: 'resp_s', body: { id: 'resp_s' } },
+      { status: 'incomplete', outputText: null, usage: null, providerRequestId: 'resp_t', body: envelope },
+    ])],
+    onAttempt: async r => { records.push(r); },
+  });
+  const raw = await gw.runRaw(ctx, request);
+  assert.equal(raw.status, 'incomplete');
+  assert.equal(raw.providerBody, envelope);
+  assert.equal(raw.outputText, null);
+  assert.equal(raw.attempts, 1);
+  const refused = await gw.runRaw(ctx, request);
+  assert.equal(refused.status, 'refused');
+  await assert.rejects(gw.run(ctx, request), e => e.code === 'incomplete');
+  assert.deepEqual(records.map(r => r.outcome), ['incomplete', 'refused', 'incomplete']);
+  for (const r of records) assert.equal(Object.hasOwn(r, 'body') || Object.hasOwn(r, 'providerBody'), false, 'envelope never reaches the attempt hook');
+});
+
+test('A2: provider rejections carry the HTTP status, so callers keep their own status mapping', async () => {
+  for (const [status, code] of [[401, 'auth_error'], [404, 'model_unavailable'], [418, 'bad_request'], [504, 'server_error'], [408, 'timeout']]) {
+    const adapter = createOpenAiAdapter({ apiKey: 'k', fetchImpl: fakeFetch(() => jsonResponse({}, status)).impl });
+    await assert.rejects(adapter.invoke({ model: 'm', revision: null, request, attemptId: 'a', signal: new AbortController().signal }),
+      e => e.code === code && e.httpStatus === status);
+  }
+  assert.equal(new AiGatewayError('timeout', 'maybe_billed').httpStatus, undefined);
+  assert.equal(new AiGatewayError('timeout', 'maybe_billed', 99).httpStatus, undefined);
+});
+
+test('A2: the adapter response cap can be lowered for a caller, never raised', async () => {
+  const small = createOpenAiAdapter({ apiKey: 'k', maxResponseBytes: 100, fetchImpl: async () => new Response('x'.repeat(101)) });
+  await assert.rejects(small.invoke({ model: 'm', revision: null, request, attemptId: 'a', signal: new AbortController().signal }),
+    e => e.code === 'invalid_response');
+  assert.throws(() => createOpenAiAdapter({ apiKey: 'k', maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES + 1 }));
+  assert.throws(() => createOpenAiAdapter({ apiKey: 'k', maxResponseBytes: 0 }));
+});
+
+test('A2: a null tenant is accepted only explicitly (worker claim); missing stays invalid', async () => {
+  const seen = [];
+  const gw = createAiGateway({ policy: policyWith({ cv_screening: route() }), adapters: [fakeAdapter([completed()])],
+    authorize: async c => { seen.push(c.companyId); return true; } });
+  const records = [];
+  const gw2 = createRaw({ policy: policyWith({ cv_screening: route() }), adapters: [fakeAdapter([completed()])], authorize: allow,
+    onAttempt: async r => { records.push(r); } });
+  await gw.run({ ...ctx, companyId: null }, request);
+  assert.deepEqual(seen, [null]);
+  await gw2.run({ ...ctx, companyId: null }, request);
+  assert.equal(records[0].companyId, null);
+  const { companyId, ...withoutCompany } = ctx;
+  await assert.rejects(gw.run(withoutCompany, request), e => e.code === 'invalid_context');
+  await assert.rejects(gw.run({ ...ctx, companyId: '' }, request), e => e.code === 'invalid_context');
+});
+
+// Review condition from SC-021-A: measure the contact-data guard on realistic single-CV payloads
+// and recruiter-typed criteria before routing screening through the gateway with it on.
+const realisticCvs = [
+  ['Anna Kowalska\nTel. +48 600 123 456 | anna.kowalska@example.com\nDoświadczenie\n2019-03 – 2024-06 Specjalistka ds. sprzedaży, Firma X Sp. z o.o.\n'
+    + 'Zwiększyłam sprzedaż o 35% (z 1 200 000 zł do 1 620 000 zł).\nNIP firmy: 123-456-32-18, KRS 0000123456\nKontakt: tel. 22 123 45 67, www.example.com\n'
+    + 'Wykształcenie: 2014–2019 SGH, ekonomia', ['Anna', 'Kowalska']],
+  ['Jan Nowak  | 500-123-456 | jan@nowak.pl\n2015 - 2018 Księgowy, 2018 - 2024 Główny księgowy\nBudżet działu 2 500 000 zł; obsługa 150 klientów; faktury 3000/mies.\n'
+    + 'PESEL 90010112345\nKod pocztowy 00-950 Warszawa, ul. Prosta 12/4\nUmiejętności: SAP FI, Excel (VBA), Power BI; certyfikat ACCA F3 (2020)', ['Jan', 'Nowak']],
+  ['Piotr Wiśniewski\n+44 7700 900123 · piotr.w@mail.co.uk\nSenior Java Developer 01.2020 – obecnie\n- migracja 40 mikroserwisów, SLA 99,95%\n'
+    + '- zespół 8 osób, budżet projektu 3,2 mln zł\nJava 17, Spring Boot 3, Kafka, PostgreSQL 15, AWS (EKS, RDS)', ['Piotr', 'Wiśniewski']],
+];
+const typicalCriteria = [
+  { id: 'task:1', kind: 'task', text: 'Przygotowanie raportów sprzedaży w Excelu i Power BI' },
+  { id: 'kpi:1', kind: 'kpi', text: 'Sprzedaż 2 500 000 zł rocznie, marża min. 18%' },
+  { id: 'kpi:2', kind: 'kpi', text: 'Obsługa min. 150 klientów, NPS > 40' },
+  { id: 'competency:1', kind: 'competency', text: 'Kontakt z klientem przez telefon i e-mail' },
+  { id: 'task:2', kind: 'task', text: 'Raporty dla 3 regionów w latach 2019-2024, zespół 12 osób' },
+];
+
+test('A2 guard parity: redacted single CVs with typical criteria pass the contact-data detector', () => {
+  for (const [source, names] of realisticCvs) {
+    const redacted = suggestRedaction(source, names);
+    const user = JSON.stringify(screeningAllowlistPayload({ payload_schema_version: 1, input_cv_text_snapshot: redacted, criteria_snapshot: typicalCriteria }));
+    assert.equal(containsContactData(user), false, redacted);
+    // The unredacted CV is caught, so the detector is not simply blind to this text.
+    assert.equal(containsContactData(source), true);
+  }
+});
+
+test('A2 guard parity: recruiter-typed 9-digit figures read as phone numbers, so the guard is off per route', () => {
+  // Analyses with such criteria succeed today; with the guard on they would end as payload_not_redacted,
+  // which screening has no error code for. Hence the deliberate per-route choice in default-policy.ts.
+  for (const text of ['Zarządzanie budżetem 500 000 000 zł', 'Wolumen 600 000 000 transakcji rocznie']) {
+    assert.equal(containsContactData(JSON.stringify({ criteria: [{ id: 'kpi:9', kind: 'kpi', text }] })), true, text);
+  }
+  assert.equal(defaultAiPolicy.routes.cv_screening.blockContactData, false);
+  assert.equal(defaultAiPolicy.routes.exercise_generation.blockContactData, false);
+  // Backstop only: a 100 000-character CV of two-byte Polish letters plus JSON escaping must still fit.
+  assert.ok(defaultAiPolicy.routes.cv_screening.maxInputBytes >= 2 * 100_000 * 3);
+});
+
+test('A2 bridge: existing request bodies round-trip byte for byte, tampered bodies are refused', () => {
+  const claim = {
+    payload_schema_version: 1, result_schema_version: 2, input_cv_text_snapshot: 'SQL i raporty.\n"cytat"',
+    criteria_snapshot: [{ id: 'task:1', kind: 'task', text: 'Analiza danych' }],
+  };
+  const bodies = [
+    buildScreeningOpenAiRequest(claim),
+    buildScreeningOpenAiRequest({ ...claim, result_schema_version: 1 }),
+    buildExerciseDraftRequest(exerciseDraftPayload({
+      position: { title: 'Planista', description: null, tasks: ['Plan produkcji'], kpis: [], autonomy_level: 2,
+        required_competencies: ['Planowanie'], required_behaviors: [] },
+      company: null,
+    })),
+  ];
+  for (const body of bodies) {
+    const { model, request: bridged } = gatewayRequestFromResponsesBody(body);
+    assert.equal(JSON.stringify(buildOpenAiResponsesBody(model, bridged)), JSON.stringify(body));
+  }
+  const good = bodies[0];
+  for (const bad of [
+    { ...good, temperature: 0 },
+    { ...good, store: true },
+    { ...good, input: [good.input[0]] },
+    { ...good, input: [good.input[0], { role: 'assistant', content: 'x' }] },
+    { ...good, text: { format: { ...good.text.format, strict: false } } },
+    { ...good, reasoning: { effort: 'max' } },
+    null, 'body',
+  ]) {
+    assert.throws(() => gatewayRequestFromResponsesBody(bad), e => e instanceof AiGatewayError && e.code === 'invalid_request');
+  }
+});
+
+test('A2: both wired routes are pinned to the models their result contracts name', () => {
+  assert.equal(pinnedRouteModel(defaultAiPolicy, 'cv_screening'), SCREENING_OPENAI_MODEL);
+  assert.equal(pinnedRouteModel(defaultAiPolicy, 'exercise_generation'), EXERCISE_AI_MODEL);
+  assert.equal(pinnedRouteModel(defaultAiPolicy, 'report_summary'), null, 'no route');
+  assert.equal(pinnedRouteModel(policyWith({ cv_screening: route() }), 'cv_screening'), null, 'not pinned');
+});
+
+test('A2: the attempt log line carries no prompt, payload or provider body', async () => {
+  const lines = [];
+  const gw = createRaw({ policy: policyWith({ cv_screening: route() }), authorize: allow,
+    adapters: [fakeAdapter([{ ...completed('{"secret":"CV text"}'), body: { output_text: 'CV text' } }])],
+    onAttempt: async r => { lines.push(JSON.stringify(attemptLogEntry(r))); } });
+  await gw.runRaw(ctx, { ...request, user: '{"cv_text":"Unikalny tekst CV 4711"}' });
+  assert.equal(lines.length, 1);
+  for (const marker of ['Unikalny', '4711', 'CV text', 'Evaluate.', 'secret']) assert.equal(lines[0].includes(marker), false, marker);
+  assert.deepEqual(Object.keys(JSON.parse(lines[0])).sort(), ['attempt', 'attempt_id', 'billing', 'cached_input_tokens', 'company_id', 'event',
+    'input_tokens', 'latency_ms', 'model', 'model_key', 'operation_id', 'outcome', 'output_tokens', 'policy_version', 'provider',
+    'provider_request_id', 'task'].sort());
+});
+
+test('A2 review: the server-only guard blocks browsers but not Deno (Supabase Edge)', () => {
+  const opts = { policy: defaultAiPolicy, adapters: [], authorize: allow };
+  const hadWindow = Object.hasOwn(globalThis, 'window'), hadDeno = Object.hasOwn(globalThis, 'Deno');
+  try {
+    globalThis.window = {};
+    assert.throws(() => createAiGateway(opts), /SC021_SERVER_ONLY/);
+    globalThis.Deno = { env: {} };
+    assert.doesNotThrow(() => createAiGateway(opts));
+  } finally {
+    if (!hadWindow) delete globalThis.window;
+    if (!hadDeno) delete globalThis.Deno;
+  }
+});
+
+test('A2 review: a null tenant is invalid for every task except cv_screening', async () => {
+  const policy = policyWith({ cv_screening: route(), exercise_generation: route() });
+  const calls = [];
+  const gw = createAiGateway({ policy, adapters: [fakeAdapter([completed()], calls)], authorize: allow });
+  for (const task of ['exercise_generation', 'report_summary']) {
+    await assert.rejects(gw.run({ ...ctx, task, companyId: null }, request), e => e.code === 'invalid_context', task);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('A2 review: a body broken after a 2xx answer is invalid_response, never a retryable network error', async () => {
+  let pulls = 0;
+  const stream = new ReadableStream({ pull(controller) {
+    if (pulls++ === 0) controller.enqueue(new TextEncoder().encode('{"status":'));
+    else controller.error(new TypeError('terminated'));
+  } });
+  const adapter = createOpenAiAdapter({ apiKey: 'k', fetchImpl: async () => new Response(stream) });
+  await assert.rejects(adapter.invoke({ model: 'm', revision: null, request, attemptId: 'a', signal: new AbortController().signal }),
+    e => e.code === 'invalid_response' && e.billing === 'maybe_billed');
 });
