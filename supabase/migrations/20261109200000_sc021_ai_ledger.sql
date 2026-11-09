@@ -27,15 +27,21 @@
 -- wyzwalacza w 'public' lub 'private'; dodaje jedynie funkcje. Sygnatura SC-010 pozostaje
 -- niezmieniona (preflight i postflight).
 --
--- Kto zapisuje (żadnych danych firmy z wejścia przeglądarki):
+-- Kto zapisuje (wyłącznie role serwerowe; żadnych danych firmy z wejścia przeglądarki):
 --   * screening — rola screening_worker (worker Edge, ten sam, który trzyma claim),
 --     public.record_screening_ai_attempt: firma, rekrutacja i zgłoszenie wyprowadzone z
 --     public.screening_analysis_attempts po `operation_id` (= attempt_id claimu);
---   * generowanie zadań — akcja serwera działa jako zalogowany rekruter (aplikacja nie
---     ma klucza service_role), public.record_exercise_ai_attempt: uprawnienie
---     private.competency_authority + aktywna rezerwacja tego samego użytkownika
---     (exercise_ai.recruitment_settings.generation_requests[operation_id], status
---     'reserved'). Nowe wiersze tylko w czasie trwającej generacji, maks. 16 na operację.
+--   * generowanie zadań — nowa rola NOLOGIN `ai_ledger_writer`, osiągana wyłącznie przez
+--     serwerowe połączenie AI_LEDGER_DATABASE_URL (login z członkostwem w tej roli i hasło
+--     tworzy operator/właściciel osobno; ta migracja NIE tworzy loginu ani hasła).
+--     ai_ledger.record_exercise_attempt nie korzysta z auth.uid(): firma i rekrutacja muszą
+--     zgadzać się z rezerwacją generacji (exercise_ai.recruitment_settings.generation_requests
+--     [operation_id]), która musi mieć status 'reserved' i niewygasłe expires_at; ta sama blokada
+--     `exercise_ai:` co reserve/finish; dostawca, model, klucz modelu i wersja polityki z listy
+--     dozwolonych (ai_ledger.route_allowlist); tokeny ograniczone limitami trasy; maks. tyle
+--     wierszy na operację, ile prób ma trasa (1).
+-- Identyfikator próby (`attempt_id`) NIE jest wysyłany do dostawcy: nagłówek
+-- x-client-request-id niesie osobny, losowy identyfikator, którego nigdzie nie zapisujemy.
 -- Kto czyta: członek firmy, wyłącznie wiersze swojej firmy (RLS, private.has_company_access).
 -- Cennik (`ai_ledger.prices`): brak dostępu dla anon/authenticated.
 --
@@ -67,6 +73,21 @@ begin
 end
 $preflight$;
 
+-- Rola serwerowa zapisu prób generowania zadań. NOLOGIN: login (członkostwo + hasło) to osobny
+-- krok operatora, warunek włączenia AI_GATEWAY_ENABLED. Rola nie dziedziczy niczego.
+do $role$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'ai_ledger_writer') then
+    create role ai_ledger_writer nologin nosuperuser nocreatedb nocreaterole noinherit nobypassrls;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'ai_ledger_writer'
+      and (rolsuper or rolcreatedb or rolcreaterole or rolbypassrls or rolinherit or rolcanlogin or rolreplication))
+    or exists (select 1 from pg_auth_members where member = 'ai_ledger_writer'::regrole) then
+    raise exception 'sc021b_unsafe_writer_role' using errcode = '55000';
+  end if;
+end
+$role$;
+
 create schema ai_ledger;
 revoke all on schema ai_ledger from public;
 
@@ -93,6 +114,22 @@ create table ai_ledger.prices (
   check (valid_to is null or valid_to > valid_from)
 );
 create unique index prices_version_key on ai_ledger.prices (provider, model, coalesce(model_revision, ''), price_version);
+
+-- Dozwolone wpisy polityki dla zapisów z roli ai_ledger_writer (generowanie zadań). Zmiana polityki
+-- (model, wersja) wymaga nowego wiersza tutaj — zapis z nieznanym wpisem jest odrzucany.
+create table ai_ledger.route_allowlist (
+  task text not null check (task in ('exercise_generation')),
+  provider text not null check (provider in ('openai', 'anthropic')),
+  model text not null check (model ~ '^[A-Za-z0-9._:-]{1,100}$'),
+  model_revision text check (model_revision is null or model_revision ~ '^[A-Za-z0-9._:-]{1,100}$'),
+  model_key text not null check (model_key ~ '^[A-Za-z0-9._:-]{1,64}$'),
+  policy_version text not null check (policy_version ~ '^[A-Za-z0-9._:-]{1,64}$'),
+  max_attempts integer not null check (max_attempts between 1 and 16),
+  max_input_tokens integer not null check (max_input_tokens between 1 and 2000000),
+  max_output_tokens integer not null check (max_output_tokens between 1 and 200000),
+  created_at timestamptz not null default clock_timestamp(),
+  primary key (task, provider, model, model_key, policy_version)
+);
 
 -- Jedna fizyczna próba = jeden wiersz. `attempt_id` (UNIQUE) jest kluczem idempotencji.
 create table ai_ledger.attempts (
@@ -157,16 +194,19 @@ create trigger attempts_append_only before update or delete on ai_ledger.attempt
   for each row execute function ai_ledger.append_only();
 create trigger prices_append_only before update or delete on ai_ledger.prices
   for each row execute function ai_ledger.append_only();
+create trigger route_allowlist_append_only before update or delete on ai_ledger.route_allowlist
+  for each row execute function ai_ledger.append_only();
 
 alter table ai_ledger.prices enable row level security;
 alter table ai_ledger.attempts enable row level security;
-revoke all on ai_ledger.prices, ai_ledger.attempts from public;
+alter table ai_ledger.route_allowlist enable row level security;
+revoke all on ai_ledger.prices, ai_ledger.attempts, ai_ledger.route_allowlist from public;
 do $revoke$
 declare r text;
 begin
   foreach r in array array['anon', 'authenticated', 'service_role', 'screening_worker'] loop
     if exists (select 1 from pg_roles where rolname = r) then
-      execute format('revoke all on ai_ledger.prices, ai_ledger.attempts from %I', r);
+      execute format('revoke all on ai_ledger.prices, ai_ledger.attempts, ai_ledger.route_allowlist from %I', r);
       execute format('revoke all on sequence ai_ledger.attempts_id_seq from %I', r);
     end if;
   end loop;
@@ -203,7 +243,7 @@ $$;
 -- Wspólny zapis. Nie jest dostępny dla żadnej roli poza właścicielem; wołają go wyłącznie
 -- dwie funkcje public.record_*_ai_attempt, które ustalają firmę z zaufanego stanu bazy.
 create function ai_ledger.record_attempt(tenant uuid, process uuid, subject uuid, expected_task text,
-  payload jsonb, keep_request_id boolean, allow_new boolean)
+  payload jsonb, keep_request_id boolean, allow_new boolean, max_rows integer)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   keys text[] := array['attempt_id','operation_id','company_id','task','attempt','provider','model','model_revision',
@@ -287,11 +327,12 @@ begin
   if not allow_new then
     raise exception 'AI attempt operation closed' using errcode = 'PT409';
   end if;
-  select count(*) into used from ai_ledger.attempts where operation_id = v_operation;
-  if used >= 16 then
+  -- Limit i spójność firmy liczone per (operacja, zadanie): wiersze innego zadania nie blokują zapisu.
+  select count(*) into used from ai_ledger.attempts where operation_id = v_operation and task = expected_task;
+  if used >= least(max_rows, 16) then
     raise exception 'AI attempt limit' using errcode = 'PT429';
   end if;
-  if exists (select 1 from ai_ledger.attempts where operation_id = v_operation and company_id <> tenant) then
+  if exists (select 1 from ai_ledger.attempts where operation_id = v_operation and task = expected_task and company_id <> tenant) then
     raise exception 'AI attempt conflict' using errcode = 'PT409';
   end if;
 
@@ -335,7 +376,7 @@ begin
   join public.screening_analysis_versions v on v.id = t.analysis_id and v.company_id = t.company_id
   where t.id = (attempt->>'operation_id')::uuid;
   if tenant is null then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
-  return ai_ledger.record_attempt(tenant, process, subject, 'cv_screening', attempt, false, true);
+  return ai_ledger.record_attempt(tenant, process, subject, 'cv_screening', attempt, false, true, 16);
 end;
 $$;
 
@@ -350,25 +391,45 @@ begin
 end;
 $$;
 
--- Generowanie zadań: rekruter z uprawnieniem do generacji i jego własna, trwająca rezerwacja.
-create function public.record_exercise_ai_attempt(target_company uuid, target_recruitment uuid, attempt jsonb)
+-- Generowanie zadań: wyłącznie rola ai_ledger_writer (połączenie serwerowe). Bez auth.uid():
+-- firma i rekrutacja (przekazane przez serwer z zaufanego kontekstu) muszą wskazywać rezerwację
+-- generacji o kluczu `operation_id`; nowe wiersze tylko gdy jest 'reserved' i nie wygasła.
+create function ai_ledger.record_exercise_attempt(target_company uuid, target_recruitment uuid, attempt jsonb)
 returns jsonb language plpgsql security definer set search_path = '' as $$
-declare item jsonb;
+declare op uuid; item jsonb; allowed ai_ledger.route_allowlist; live boolean;
 begin
-  perform private.competency_authority(target_company);
-  if jsonb_typeof(attempt) is distinct from 'object' or jsonb_typeof(attempt->'operation_id') is distinct from 'string'
+  if target_company is null or target_recruitment is null or jsonb_typeof(attempt) is distinct from 'object'
+    or jsonb_typeof(attempt->'operation_id') is distinct from 'string'
     or lower(attempt->>'operation_id') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
     raise exception 'Invalid AI attempt' using errcode = '22023';
   end if;
-  select s.generation_requests->lower(attempt->>'operation_id') into item
-  from exercise_ai.recruitment_settings s
-  join public.recruitments r on r.id = s.recruitment_id and r.company_id = s.company_id
-  where s.company_id = target_company and s.recruitment_id = target_recruitment;
-  if item is null or item->>'actor' is distinct from auth.uid()::text then
-    raise exception 'Resource unavailable' using errcode = 'PT404';
+  op := (attempt->>'operation_id')::uuid;
+  -- Klucz rezerwacji wybiera klient: nie może podszyć się pod operację screeningu ani innego zadania.
+  if exists (select 1 from public.screening_analysis_attempts where id = op)
+    or exists (select 1 from ai_ledger.attempts where operation_id = op and task <> 'exercise_generation') then
+    raise exception 'AI attempt conflict' using errcode = 'PT409';
   end if;
+  perform 1 from public.recruitments r where r.id = target_recruitment and r.company_id = target_company;
+  if not found then raise exception 'Resource unavailable' using errcode = 'PT404'; end if;
+  -- Ta sama blokada co reserve/finish: zakończenie generacji czeka na zapis próby i odwrotnie.
+  perform pg_advisory_xact_lock(hashtextextended('exercise_ai:' || target_recruitment::text, 0));
+  select s.generation_requests->op::text into item from exercise_ai.recruitment_settings s
+  where s.company_id = target_company and s.recruitment_id = target_recruitment;
+  if item is null then raise exception 'Resource unavailable' using errcode = 'PT404'; end if;
+  select * into allowed from ai_ledger.route_allowlist a
+  where a.task = 'exercise_generation' and a.provider = attempt->>'provider' and a.model = attempt->>'model'
+    and a.model_revision is not distinct from (attempt->>'model_revision')
+    and a.model_key = attempt->>'model_key' and a.policy_version = attempt->>'policy_version';
+  if not found then raise exception 'AI attempt route not allowed' using errcode = '22023'; end if;
+  if jsonb_typeof(attempt->'input_tokens') = 'number' and (
+      (attempt->>'input_tokens')::numeric > allowed.max_input_tokens
+      or jsonb_typeof(attempt->'output_tokens') is distinct from 'number'
+      or (attempt->>'output_tokens')::numeric > allowed.max_output_tokens) then
+    raise exception 'AI attempt tokens out of bounds' using errcode = '22023';
+  end if;
+  live := item->>'status' = 'reserved' and (item->>'expires_at')::timestamptz > clock_timestamp();
   return ai_ledger.record_attempt(target_company, target_recruitment, null, 'exercise_generation', attempt, true,
-    item->>'status' = 'reserved');
+    live, allowed.max_attempts);
 end;
 $$;
 
@@ -378,11 +439,11 @@ begin
   for o in select p.oid, p.proowner from pg_proc p where p.oid = any(array[
     'ai_ledger.price_for(text,text,text,timestamptz)'::regprocedure,
     'ai_ledger.cost_micros(ai_ledger.prices,integer,integer,integer)'::regprocedure,
-    'ai_ledger.record_attempt(uuid,uuid,uuid,text,jsonb,boolean,boolean)'::regprocedure,
+    'ai_ledger.record_attempt(uuid,uuid,uuid,text,jsonb,boolean,boolean,integer)'::regprocedure,
     'ai_ledger.append_only()'::regprocedure,
     'public.record_screening_ai_attempt(jsonb)'::regprocedure,
     'public.screening_attempt_tenant(uuid)'::regprocedure,
-    'public.record_exercise_ai_attempt(uuid,uuid,jsonb)'::regprocedure]) loop
+    'ai_ledger.record_exercise_attempt(uuid,uuid,jsonb)'::regprocedure]) loop
     execute format('revoke all on function %s from public', o.oid::regprocedure);
     for g in select distinct r.rolname from pg_proc p cross join lateral aclexplode(p.proacl) a
       join pg_roles r on r.oid = a.grantee where p.oid = o.oid and a.grantee <> o.proowner loop
@@ -392,7 +453,8 @@ begin
 end
 $acl$;
 grant execute on function public.record_screening_ai_attempt(jsonb), public.screening_attempt_tenant(uuid) to screening_worker;
-grant execute on function public.record_exercise_ai_attempt(uuid, uuid, jsonb) to authenticated;
+grant usage on schema ai_ledger to ai_ledger_writer;
+grant execute on function ai_ledger.record_exercise_attempt(uuid, uuid, jsonb) to ai_ledger_writer;
 
 -- Stawki TESTOWE (placeholder). To NIE są ceny OpenAI. Koszty liczone na nich są oznaczone
 -- price_placeholder = true. Prawdziwe stawki wymagają osobnego, zatwierdzonego wiersza (approved).
@@ -401,6 +463,13 @@ insert into ai_ledger.prices (provider, model, model_revision, price_version, cu
 values ('openai', 'gpt-5.4-mini-2026-03-17', null, 'placeholder-test-2026-11-09', 'USD',
   1000000, 500000, 2000000, true, false, '2026-11-09T00:00:00Z',
   'Stawki testowe SC-021-B, nie są cenami dostawcy. Do zastąpienia zatwierdzoną wersją.');
+
+-- Wpis polityki generowania zadań z lib/ai-gateway/default-policy.ts (sc021-a2-2026-11-09):
+-- 1 próba; wejście ograniczone limitem bajtów żądania (48 000 B → ≤ 48 000 tokenów),
+-- wyjście limitem max_output_tokens (4 000).
+insert into ai_ledger.route_allowlist (task, provider, model, model_revision, model_key, policy_version,
+  max_attempts, max_input_tokens, max_output_tokens)
+values ('exercise_generation', 'openai', 'gpt-5.4-mini-2026-03-17', null, 'openai-exercise', 'sc021-a2-2026-11-09', 1, 48000, 4000);
 
 do $postflight$
 begin

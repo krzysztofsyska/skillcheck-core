@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
 import { lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
+import { createExerciseLedgerWriter } from '../lib/ai-ledger-writer.ts';
 
 const migration = '20261109200000_sc021_ai_ledger.sql';
 const r15 = '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44';
@@ -31,8 +32,17 @@ async function boot(t) {
   [f.application.id])).rows[0].id; };
   const asWorker = () => h.asWorker();
   const screening = async (payload, client = db) => (await client.query('select public.record_screening_ai_attempt($1::jsonb) r', [JSON.stringify(payload)])).rows[0].r;
-  const exercise = async (f, payload) => (await db.query('select public.record_exercise_ai_attempt($1,$2,$3::jsonb) r',
-    [f.companyId, f.recruitment.id, JSON.stringify(payload)])).rows[0].r;
+  // The server-only writer path: role ai_ledger_writer in its own transaction (as lib/ai-ledger-writer.ts).
+  const exercise = async (f, payload, client = db) => {
+    await client.query('reset role');
+    await client.query('begin');
+    try {
+      await client.query('set local role ai_ledger_writer');
+      const r = (await client.query('select ai_ledger.record_exercise_attempt($1,$2,$3::jsonb) r',
+        [f.companyId, f.recruitment.id, JSON.stringify(payload)])).rows[0].r;
+      await client.query('commit'); return r;
+    } catch (error) { await client.query('rollback'); throw error; }
+  };
   const rows = async (where = 'true', params = []) => { await h.asAdmin(); return (await db.query(`select * from ai_ledger.attempts where ${where} order by id`, params)).rows; };
   return { ...e, screeningAttempt, asWorker, screening, exercise, rows };
 }
@@ -116,7 +126,7 @@ test('SC-021-B screening ledger: trusted tenant, idempotency, retries, status ma
     await h.asUser(role[1], role[0]);
     await assert.rejects(e.screening(attempt(opA, a.companyId)), denied('42501'));
     await assert.rejects(db.query('select public.screening_attempt_tenant($1)', [opA]), denied('42501'));
-    await assert.rejects(db.query('select ai_ledger.record_attempt($1,null,null,$2,$3::jsonb,true,true)',
+    await assert.rejects(db.query('select ai_ledger.record_attempt($1,null,null,$2,$3::jsonb,true,true,16)',
       [a.companyId, 'cv_screening', JSON.stringify(attempt(opA, a.companyId))]), denied('42501'));
     await assert.rejects(db.query('select * from ai_ledger.prices'), denied('42501'));
   }
@@ -135,7 +145,7 @@ test('SC-021-B screening ledger: trusted tenant, idempotency, retries, status ma
   await assert.rejects(db.query('select * from ai_ledger.attempts'), denied('42501'));
   await e.asWorker();
   await assert.rejects(db.query('select * from ai_ledger.attempts'), denied('42501'));
-  await assert.rejects(db.query('select public.record_exercise_ai_attempt($1,$2,$3::jsonb)',
+  await assert.rejects(db.query('select ai_ledger.record_exercise_attempt($1,$2,$3::jsonb)',
     [a.companyId, a.recruitment.id, JSON.stringify(attempt(opA, a.companyId, { task: 'exercise_generation' }))]), denied('42501'));
 
   // Per-operation cap bounds what any writer can add to one operation.
@@ -147,48 +157,122 @@ test('SC-021-B screening ledger: trusted tenant, idempotency, retries, status ma
   assert.equal((await e.screening(first)).replayed, true, 'an existing attempt still replays at the cap');
 });
 
-test('SC-021-B exercise ledger: only the reserving recruiter during a live reservation, company from the reservation', async t => {
+test('SC-021-B exercise ledger: only the server writer role, bound to a live reservation, allowlisted route, cap 1, token bounds', async t => {
   const e = await boot(t), { db, h } = e;
   const f = await e.seed(), foreign = await e.seed({ owner: users.otherOwner });
   await h.asAdmin();
   await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter'),($1,$3,'viewer')",
     [f.companyId, users.recruiter, users.viewer]);
+  const writer = (await db.query("select rolcanlogin, rolinherit, rolsuper, rolbypassrls from pg_roles where rolname='ai_ledger_writer'")).rows[0];
+  assert.deepEqual(writer, { rolcanlogin: false, rolinherit: false, rolsuper: false, rolbypassrls: false });
   const stamp = (await db.query('select updated_at::text from public.company_profiles where company_id=$1', [f.companyId])).rows[0]?.updated_at ?? null;
-  const key = randomUUID(), fingerprint = 'a'.repeat(64);
-  await h.asUser(users.recruiter);
-  assert.equal((await e.call('public.reserve_exercise_ai_generation', [f.companyId, f.recruitment.id, key, f.position.updated_at, stamp, fingerprint])).claimed, true);
-  const payload = attempt(key, f.companyId, { task: 'exercise_generation', model_key: 'openai-exercise', provider_request_id: 'req_ex_1' });
+  const fingerprint = 'a'.repeat(64);
+  const reserve = async key => { await h.asUser(users.recruiter);
+    assert.equal((await e.call('public.reserve_exercise_ai_generation', [f.companyId, f.recruitment.id, key, f.position.updated_at, stamp, fingerprint])).claimed, true); };
+  const key = randomUUID(); await reserve(key);
+  const ex = (op, over = {}) => attempt(op, f.companyId, { task: 'exercise_generation', model_key: 'openai-exercise', provider_request_id: 'req_ex_1', ...over });
+  const payload = ex(key);
 
-  for (const actor of [users.viewer, users.owner, users.otherOwner, users.outsider]) {
-    await h.asUser(actor);
-    await assert.rejects(e.exercise(f, payload), denied('PT404'), actor);
+  // No API role can execute it any more: not the recruiter's session, not anon, not the worker.
+  for (const [role, id] of [['authenticated', users.recruiter], ['authenticated', users.owner], ['anon', null], ['screening_worker', null]]) {
+    await h.asUser(id, role);
+    await assert.rejects(db.query('select ai_ledger.record_exercise_attempt($1,$2,$3::jsonb)', [f.companyId, f.recruitment.id, JSON.stringify(payload)]),
+      denied('42501'), role);
   }
-  await h.asUser(null, 'anon');
-  await assert.rejects(e.exercise(f, payload), denied('42501', 'PT404'));
-  await h.asUser(users.recruiter);
-  await assert.rejects(e.exercise(f, attempt(randomUUID(), f.companyId, { task: 'exercise_generation' })), denied('PT404'));
+  await h.asAdmin();
+  assert.equal((await db.query("select to_regprocedure('public.record_exercise_ai_attempt(uuid,uuid,jsonb)') v")).rows[0].v, null);
+
+  // Bound to the reservation: wrong company/recruitment pairing, unknown key, payload tenant mismatch.
+  await assert.rejects(e.exercise({ ...f, companyId: foreign.companyId }, payload), denied('PT404'));
+  await assert.rejects(e.exercise({ ...f, companyId: foreign.companyId, recruitment: foreign.recruitment }, payload), denied('PT404'));
+  await assert.rejects(e.exercise(f, ex(randomUUID())), denied('PT404'));
   await assert.rejects(e.exercise(f, { ...payload, company_id: foreign.companyId }), denied('42501'));
   await assert.rejects(e.exercise(f, { ...payload, task: 'cv_screening' }), denied('22023'));
-  await assert.rejects(e.exercise({ ...f, companyId: foreign.companyId, recruitment: foreign.recruitment }, payload), denied('PT404'));
+  // Allowlisted route entry only; tokens bounded by the route's request and output limits.
+  for (const bad of [{ model: 'gpt-other' }, { model_key: 'openai-screening' }, { policy_version: 'forged-1' }, { provider: 'anthropic' },
+    { model_revision: 'r1' }, { input_tokens: 48001, cached_input_tokens: 0 }, { output_tokens: 4001 }, { input_tokens: 2147483647, cached_input_tokens: 0 }]) {
+    await assert.rejects(e.exercise(f, ex(key, bad)), denied('22023'), JSON.stringify(bad));
+  }
 
-  const r = await e.exercise(f, payload);
-  assert.equal(r.status, 'settled'); assert.equal(r.cost_micros, 5);
-  assert.equal((await e.exercise(f, payload)).replayed, true);
+  // Through the real server-only writer (lib/ai-ledger-writer.ts) on its own connection.
+  const own = await e.connect();
+  const write = createExerciseLedgerWriter(async () => ({ query: (sql, v) => own.query(sql, v), release: () => {} }), f.companyId, f.recruitment.id);
+  await write(payload);
+  await write(payload); // replay
   const [row] = await e.rows('attempt_id=$1', [payload.attempt_id]);
+  assert.equal(row.status, 'settled'); assert.equal(Number(row.cost_micros), 5);
   assert.equal(row.company_id, f.companyId); assert.equal(row.process_id, f.recruitment.id);
   assert.equal(row.candidate_ref, null); assert.equal(row.provider_request_id, 'req_ex_1');
-  assert.equal(row.task, 'exercise_generation');
+  assert.equal((await e.rows('operation_id=$1', [key])).length, 1);
+  // Database text never leaves the writer.
+  await assert.rejects(write({ ...payload, output_tokens: 6 }), error => error.message === 'SC021_LEDGER_WRITE_FAILED');
 
-  // After the reservation is finished no new attempt can be added; the recorded one still replays.
+  // Cap = route maxAttempts (1): a second physical attempt for the same generation is refused.
+  await assert.rejects(e.exercise(f, ex(key, { attempt: 2 })), denied('PT429'));
+  // Expired reservation: no new rows (a replay still answers).
+  const late = randomUUID(); await reserve(late);
+  await h.asAdmin();
+  await db.query("update exercise_ai.recruitment_settings set generation_requests=jsonb_set(generation_requests,array[$1,'expires_at'],to_jsonb('2000-01-01T00:00:00Z'::text)) where recruitment_id=$2",
+    [late, f.recruitment.id]);
+  await assert.rejects(e.exercise(f, ex(late)), denied('PT409'));
+  // Finished reservation: no new rows; the recorded one still replays.
+  const done = randomUUID(); await reserve(done);
+  const doneAttempt = ex(done);
+  await e.exercise(f, doneAttempt);
   await h.asUser(users.recruiter);
-  assert.equal((await db.query('select count(*)::int n from ai_ledger.attempts')).rows[0].n, 1, 'recruiter reads own company rows');
-  await e.call('public.finish_exercise_ai_generation', [f.companyId, f.recruitment.id, key, fingerprint, null, null, 'exercise_ai_network_error']);
-  await assert.rejects(e.exercise(f, attempt(key, f.companyId, { task: 'exercise_generation', attempt: 2 })), denied('PT409'));
-  assert.equal((await e.exercise(f, payload)).replayed, true);
+  await e.call('public.finish_exercise_ai_generation', [f.companyId, f.recruitment.id, done, fingerprint, null, null, 'exercise_ai_network_error']);
+  assert.equal((await e.exercise(f, doneAttempt)).replayed, true);
+  const after = randomUUID(); await reserve(after);
+  await h.asUser(users.recruiter);
+  await e.call('public.finish_exercise_ai_generation', [f.companyId, f.recruitment.id, after, fingerprint, null, null, 'exercise_ai_network_error']);
+  await assert.rejects(e.exercise(f, ex(after)), denied('PT409'));
+
+  // A client-chosen request key cannot target a screening operation.
+  const op = await e.screeningAttempt(f);
+  await reserve(op);
+  await assert.rejects(e.exercise(f, ex(op)), denied('PT409'));
+  await e.asWorker(); await e.screening(attempt(op, f.companyId));
+  await assert.rejects(e.exercise(f, ex(op)), denied('PT409'));
+
+  // Reads stay tenant-scoped.
   await h.asUser(users.viewer);
-  assert.equal((await db.query('select count(*)::int n from ai_ledger.attempts')).rows[0].n, 1);
+  assert.equal((await db.query("select count(*)::int n from ai_ledger.attempts where task='exercise_generation'")).rows[0].n, 2);
   await h.asUser(users.otherOwner);
   assert.equal((await db.query('select count(*)::int n from ai_ledger.attempts')).rows[0].n, 0);
+});
+
+test('SC-021-B concurrency: two connections cannot double-write one attempt or exceed a cap', async t => {
+  const e = await boot(t), { db, h } = e;
+  const f = await e.seed(), op = await e.screeningAttempt(f);
+  const a = await e.connect(), b = await e.connect();
+  for (const c of [a, b]) await c.query('set role screening_worker');
+  const write = (client, payload) => client.query('select public.record_screening_ai_attempt($1::jsonb) r', [JSON.stringify(payload)]).then(r => r.rows[0].r);
+  // Same attempt_id from two sessions at once: exactly one row, the other is a replay.
+  const same = attempt(op, f.companyId);
+  const both = await Promise.all([write(a, same), write(b, same)]);
+  assert.equal(both[0].ledger_id, both[1].ledger_id);
+  assert.deepEqual(both.map(r => r.replayed).sort(), [false, true]);
+  assert.equal((await e.rows('attempt_id=$1', [same.attempt_id])).length, 1);
+  // Fill to one below the cap, then race two new attempts: the cap holds.
+  await e.asWorker();
+  for (let n = 1; n < 15; n++) await e.screening(attempt(op, f.companyId, { attempt: 2 }));
+  const race = await Promise.allSettled([write(a, attempt(op, f.companyId, { attempt: 3 })), write(b, attempt(op, f.companyId, { attempt: 3 }))]);
+  assert.deepEqual(race.map(r => r.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(race.find(r => r.status === 'rejected').reason.code, 'PT429');
+  assert.equal((await e.rows('operation_id=$1', [op])).length, 16);
+
+  // Exercise cap (1) under a race, through two writer-role sessions.
+  const stamp = (await db.query('select updated_at::text from public.company_profiles where company_id=$1', [f.companyId])).rows[0]?.updated_at ?? null;
+  const key = randomUUID();
+  await h.asUser(f.owner);
+  await e.call('public.reserve_exercise_ai_generation', [f.companyId, f.recruitment.id, key, f.position.updated_at, stamp, 'a'.repeat(64)]);
+  await h.asAdmin();
+  for (const c of [a, b]) await c.query('reset role');
+  const ex = () => attempt(key, f.companyId, { task: 'exercise_generation', model_key: 'openai-exercise' });
+  const exRace = await Promise.allSettled([e.exercise(f, ex(), a), e.exercise(f, ex(), b)]);
+  assert.deepEqual(exRace.map(r => r.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(exRace.find(r => r.status === 'rejected').reason.code, 'PT429');
+  assert.equal((await e.rows('operation_id=$1', [key])).length, 1);
 });
 
 test('SC-021-B erasure: purge keeps the cost row and leaves nothing that maps it to the candidate', async t => {

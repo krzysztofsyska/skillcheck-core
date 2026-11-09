@@ -12,7 +12,7 @@ PRODUCTION_APPROVAL: NO (działa tylko przy `AI_GATEWAY_ENABLED=true`, które ni
 | `lib/ai-gateway/ledger.ts` | hook `onAttempt` (`createLedgerHook`): jedna próba → jeden wiersz; błąd zapisu → `ledger_error` |
 | `lib/ai-gateway/gateway.ts` | każdy błąd lub przekroczenie czasu hooka (`SC021_ATTEMPT_HOOK_TIMEOUT`) → `ledger_error` z zachowaną informacją o naliczeniu |
 | `lib/screening-gateway.ts`, worker Edge | firma z bazy (`public.screening_attempt_tenant`) w claimie; zapis próby jako `screening_worker` |
-| `lib/exercise-ai-provider.ts`, akcja generowania | zapis próby sesją rekrutera, związany w bazie z jego rezerwacją generacji |
+| `lib/ai-ledger-writer.ts`, `lib/exercise-ai-provider.ts`, akcja generowania | zapis próby generowania zadań wyłącznie przez serwerowe połączenie `AI_LEDGER_DATABASE_URL` jako rola `ai_ledger_writer`, związany w bazie z rezerwacją generacji |
 
 Wiersz rejestru: firma, rekrutacja, pseudonim kandydata (tylko screening), `operation_id`
 (wspólny dla ponowień), `attempt_id` (UNIQUE, klucz idempotencji), numer próby, zadanie,
@@ -33,30 +33,40 @@ identyfikator żądania u dostawcy (tylko poza screeningiem), czas trwania, znac
 Każda fizyczna próba ma własny `attempt_id`, więc ponowienia są osobnymi wierszami z tym samym
 `operation_id`. Zapis jest idempotentny: ten sam `attempt_id` i ta sama treść → istniejący wiersz
 (nic nie liczy się dwa razy); ta sama `attempt_id` i inna treść → błąd konfliktu, bez nadpisania.
-Maksymalnie 16 wierszy na operację. Rejestr i cennik są tylko dopisywane (wyzwalacz).
+Limit wierszy na (operację, zadanie): screening 16, generowanie zadań = liczba prób trasy (1).
+Rejestr, cennik i lista dozwolonych tras są tylko dopisywane (wyzwalacz).
 
 ## Bezpieczeństwo
 
-- **Firma zawsze z zaufanego stanu bazy**, nigdy z wejścia:
-  - screening: funkcja zapisu wyprowadza firmę, rekrutację i zgłoszenie z
-    `public.screening_analysis_attempts` po `operation_id` (= `attempt_id` claimu workera).
-    Worker dokleja do claimu firmę odczytaną z bazy (`screening_attempt_tenant`); gateway ma więc
-    `companyId` zawsze ustawione — wyjątek `null` dla screeningu z A2 został usunięty;
-  - generowanie zadań: `private.competency_authority` + rezerwacja w
-    `exercise_ai.recruitment_settings.generation_requests[operation_id]` należąca do tego samego
-    użytkownika; nowe wiersze tylko gdy rezerwacja ma status `reserved` (trwająca generacja).
+- **Zapisują wyłącznie role serwerowe**, nigdy sesja użytkownika:
+  - screening: rola `screening_worker` (worker Edge). `record_screening_ai_attempt` wyprowadza firmę,
+    rekrutację i zgłoszenie z `public.screening_analysis_attempts` po `operation_id` (= `attempt_id`
+    claimu). Worker dokleja do claimu firmę odczytaną z bazy (`screening_attempt_tenant`); gateway
+    wymaga `companyId` dla każdego zadania (wyjątek `null` dla screeningu z A2 usunięty);
+  - generowanie zadań: nowa rola **NOLOGIN `ai_ledger_writer`** (bez dziedziczenia, bez innych praw),
+    osiągana tylko przez serwerowe połączenie `AI_LEDGER_DATABASE_URL` (`lib/ai-ledger-writer.ts`,
+    login `ai_ledger_<nazwa>` z hasłem, nie localhost). `ai_ledger.record_exercise_attempt` nie używa
+    `auth.uid()`; firma i rekrutacja z zaufanego kontekstu serwera muszą wskazywać rezerwację generacji
+    o kluczu `operation_id` w statusie `reserved` z niewygasłym `expires_at`; ta sama blokada
+    `exercise_ai:` co reserve/finish; dostawca, model, rewizja, klucz modelu i wersja polityki muszą być
+    na liście `ai_ledger.route_allowlist`; tokeny ograniczone limitami trasy (wejście ≤ 48 000, wyjście
+    ≤ 4 000); maks. 1 wiersz na generację; klucz nie może być operacją screeningu ani innego zadania.
+    Sesja rekrutera nie może wywołać tej funkcji (test).
   - `company_id` przesłany w danych jest tylko sprawdzany; niezgodność → odmowa.
-- **Zapis**: `record_screening_ai_attempt` i `screening_attempt_tenant` — tylko rola
-  `screening_worker`; `record_exercise_ai_attempt` — tylko `authenticated` z powyższym powiązaniem
-  (aplikacja nie ma klucza `service_role`; akcja serwera działa sesją rekrutera). Rdzeń
-  `ai_ledger.record_attempt` nie jest dostępny dla nikogo poza właścicielem. Brak bezpośredniego
-  INSERT/UPDATE/DELETE dla jakiejkolwiek roli API.
+- **Warunek włączenia `AI_GATEWAY_ENABLED=true`** (krok operatora/właściciela, nie ta zmiana): utworzyć
+  login `ai_ledger_<nazwa>` z hasłem, członkostwem wyłącznie w `ai_ledger_writer`, i ustawić
+  `AI_LEDGER_DATABASE_URL` po stronie serwera. Bez tego, przy włączonej fladze, generowanie zadań
+  odmawia przed rezerwacją i przed wywołaniem dostawcy („Rejestr kosztów AI jest niedostępny”).
 - **Odczyt**: RLS — członek firmy (właściciel, rekruter, przeglądający) widzi wyłącznie wiersze
-  swojej firmy (`private.has_company_access`). `anon`: brak dostępu. Cennik: brak dostępu.
-- Błąd zapisu nigdy nie przepuszcza niezarejestrowanej pracy: gateway zwraca `ledger_error`, a
-  próba z odpowiedzią, której nie udało się zapisać, jest `maybe_billed` (nigdy `not_billed`).
-  Screening kończy się `worker_internal_error` (bez ponowienia), generowanie zadań
+  swojej firmy (`private.has_company_access`). `anon`: brak dostępu. Cennik i lista tras: brak dostępu.
+- Rdzeń `ai_ledger.record_attempt` nie jest dostępny dla nikogo poza właścicielem. Brak
+  bezpośredniego INSERT/UPDATE/DELETE dla jakiejkolwiek roli API.
+- Błąd zapisu nigdy nie przepuszcza niezarejestrowanej pracy: gateway zwraca `ledger_error`
+  z **niezmienioną** flagą naliczenia próby (odpowiedź dostawcy, której nie udało się zapisać, zostaje
+  `billed`). Screening kończy się `worker_internal_error` (bez ponowienia), generowanie zadań
   `exercise_ai_server_error`. Komunikat błędu to sam kod (bez tekstu z bazy).
+- Równoległe zapisy: blokada doradcza na operację; test na dwóch połączeniach — ten sam `attempt_id`
+  daje jeden wiersz, a limit wierszy trzyma się przy wyścigu.
 
 ## Retencja i usuwanie danych kandydata (SC-010)
 
@@ -76,9 +86,9 @@ tabele wszystkich schematów — po purge żadna nie zawiera id próby ani id zg
 zostaje wyłącznie w zatwierdzonych tabelach rozliczeń SC-019 (bez danych kandydata, ten sam
 precedens co R11). Wiersz kosztu zostaje.
 
-Uwaga: `attempt_id` jest wysyłany do dostawcy jako `x-client-request-id` (od A). Jego powiązanie z
-treścią żądania istnieje tylko w logach dostawcy (poza SkillCheck), objętych umową powierzenia i
-retencją dostawcy — tak samo jak dotąd identyfikatory odpowiedzi w tabelach screeningu.
+`attempt_id` **nie jest** wysyłany do dostawcy: nagłówek `x-client-request-id` niesie osobny, losowy
+identyfikator, którego SkillCheck nigdzie nie zapisuje. Rejestr nie ma więc żadnego klucza do rekordu
+żądania u dostawcy.
 
 ## Ceny (wersjonowane, tylko stawki testowe)
 
@@ -91,6 +101,10 @@ W migracji jest **wyłącznie** wersja `placeholder-test-2026-11-09` (`placehold
 ceny OpenAI. Koszt policzony na niej ma `price_placeholder = true`, więc panel (D) może pokazać
 „szacunek na stawkach testowych”. Prawdziwe stawki to osobny, zatwierdzony wiersz.
 
+Cennik jest dziś w pełni „tylko do dopisywania”, więc zatwierdzonej stawki nie da się zamknąć
+(`valid_to`). SC-021-C dopuści jednorazowe ustawienie `valid_to` (z pustego na datę) dla stawki,
+bez zmiany samych stawek.
+
 Koszt: `ceil(((wejście − cache)·s_wejście + cache·s_cache + wyjście·s_wyjście) / 1 000 000)` —
 arytmetyka całkowita (`numeric`, bez liczb zmiennoprzecinkowych), zaokrąglenie **w górę**.
 
@@ -100,11 +114,14 @@ arytmetyka całkowita (`numeric`, bez liczb zmiennoprzecinkowych), zaokrąglenie
   wyzwalacz „tylko dopisywanie” trzeba wtedy zastąpić jawnie dozwolonym przejściem), budżety
   80%/100%, override, polityka operatora; zatwierdzone stawki dostawcy (decyzja właściciela).
 - **D**: panel kosztów i marży (odczyt przez RLS lub funkcję odczytu).
-- Zastąpienie zapisu sesją rekrutera rolą serwerową, gdy aplikacja będzie miała własną tożsamość serwera.
+- C: jednorazowe zamknięcie stawki (`valid_to`), patrz wyżej.
+- Utworzenie loginu dla `ai_ledger_writer` i ustawienie `AI_LEDGER_DATABASE_URL` (operator/właściciel)
+  przed włączeniem flagi.
 
 ## Testy
 
 - `npm run test:ai-gateway` — gateway + hook rejestru (`tests/ai-ledger.test.mjs`), bez sieci.
 - `npm run test:ai-ledger-db` — PostgreSQL (CI: PG16, `checks.yml`): dwie firmy, izolacja odczytu,
-  brak zapisu z klienta, idempotencja, ponowienia, konflikt, ceny (testowa, zatwierdzona, brak),
-  purge kandydata, rollback.
+  brak zapisu z klienta (także sesją rekrutera), rola `ai_ledger_writer` (rezerwacja, wygaśnięcie,
+  limit 1, lista tras, limity tokenów, kolizja z operacją screeningu), idempotencja, ponowienia,
+  konflikt, ceny (testowa, zatwierdzona, brak), wyścigi na dwóch połączeniach, purge kandydata, rollback.

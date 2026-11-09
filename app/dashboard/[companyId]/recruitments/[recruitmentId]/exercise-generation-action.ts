@@ -4,6 +4,8 @@ import { exerciseContext, exerciseUuid } from '../../../../../lib/exercise-conte
 import { ExerciseAiError } from '../../../../../lib/exercise-ai';
 import { generateExerciseDraft, type ExerciseGenerationResult, type GenerationReservation } from '../../../../../lib/exercise-ai-generation';
 import { requestExerciseDraft } from '../../../../../lib/exercise-ai-provider';
+import { isAiGatewayEnabled } from '../../../../../lib/ai-gateway/contract';
+import { exerciseLedgerWriterFromEnv } from '../../../../../lib/ai-ledger-writer';
 import type { Json } from '../../../../../lib/supabase/database.types';
 
 export async function generateExerciseProposal(companyId:string,recruitmentId:string,requestKey:string,
@@ -20,6 +22,10 @@ export async function generateExerciseProposal(companyId:string,recruitmentId:st
   // Configuration is checked before spending a reservation; never expose the key.
   const key=process.env.OPENAI_API_KEY;
   if(!key) return {error:'Konfiguracja modelu jest niedostępna.'};
+  // SC-021-B: on the gateway path every attempt must reach the AI ledger through the server-only
+  // writer connection. Without it, refuse before reserving or calling the provider (fail closed).
+  const recordAttempt=isAiGatewayEnabled(process.env.AI_GATEWAY_ENABLED)?exerciseLedgerWriterFromEnv(companyId,recruitmentId):null;
+  if(isAiGatewayEnabled(process.env.AI_GATEWAY_ENABLED) && !recordAttempt) return {error:'Rejestr kosztów AI jest niedostępny. Propozycje AI są chwilowo wyłączone.'};
   const readResult=(data:Json|null,error:{code?:string}|null):GenerationReservation=>{
     if(error?.code==='PT429') throw new ExerciseAiError('exercise_ai_quota_exhausted','Quota exhausted');
     if(error || !data || typeof data!=='object' || Array.isArray(data) || !['reserved','completed','failed'].includes(String(data.status))) throw Error('Generation state unavailable');
@@ -38,13 +44,9 @@ export async function generateExerciseProposal(companyId:string,recruitmentId:st
     },
     // Trusted context for the AI gateway path (used only when AI_GATEWAY_ENABLED=true): the company
     // whose membership exerciseContext verified, the validated request key and the recruitment.
-    // SC-021-B: each physical attempt is written to the AI ledger with the recruiter's session; the
-    // database binds the row to this request key's live reservation and derives the company from it.
-    provide:payload=>requestExerciseDraft(payload,key,fetch,{companyId,operationId:requestKey,recruitmentId,mayGenerate:canEdit&&editable,
-      recordAttempt:async attempt=>{
-        const r=await client.rpc('record_exercise_ai_attempt',{target_company:companyId,target_recruitment:recruitmentId,attempt:attempt as unknown as Json});
-        if(r.error) throw Error('AI ledger unavailable');
-      }}),
+    // SC-021-B: each physical attempt is written to the AI ledger by the server-only writer; the
+    // database binds the row to this request key's live reservation.
+    provide:payload=>requestExerciseDraft(payload,key,fetch,{companyId,operationId:requestKey,recruitmentId,mayGenerate:canEdit&&editable,recordAttempt}),
   });
   if(result.exerciseId) revalidatePath(base,'layout');
   return result;

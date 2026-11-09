@@ -92,7 +92,7 @@ osobnego kodu błędu z komunikatem i migracji — do zrobienia razem z SC-021-B
 - Odpowiedź będąca poprawnym JSON-em, ale nie obiektem (np. `[]`), ma w logu powód `response_not_json`
   zamiast `invalid_envelope`; kod błędu jest ten sam.
 - Brak klucza API: zamiast wysłania żądania i odpowiedzi 401 — od razu `openai_auth_error` / `exercise_ai_auth_error`, bez wywołania.
-- Każde żądanie przez gateway ma dodatkowy nagłówek `x-client-request-id` (identyfikator próby) i `redirect: 'error'`;
+- Każde żądanie przez gateway ma dodatkowy nagłówek `x-client-request-id` (od SC-021-B: osobny losowy identyfikator, nigdzie niezapisywany — nie `attemptId` z rejestru) i `redirect: 'error'`;
   przy odpowiedzi innej niż 2xx treść odpowiedzi jest od razu porzucana. Treść żądania jest identyczna.
 - Błąd połączenia przed odpowiedzią to zawsze `openai_network_error` (ponawiany jak dotąd). Ścieżka bezpośrednia
   rozpoznawała go po treści komunikatu, a komunikaty `fetch` w Deno (np. „error sending request…”) do wzorca nie

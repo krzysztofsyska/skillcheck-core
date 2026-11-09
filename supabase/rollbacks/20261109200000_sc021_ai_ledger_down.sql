@@ -10,8 +10,9 @@ begin
   end if;
 end
 $guard$;
-drop function if exists public.record_exercise_ai_attempt(uuid, uuid, jsonb);
 drop function if exists public.record_screening_ai_attempt(jsonb);
 drop function if exists public.screening_attempt_tenant(uuid);
 drop schema if exists ai_ledger cascade;
+-- The NOLOGIN role ai_ledger_writer is cluster-wide and kept (operator logins may be members of it);
+-- without the schema it can do nothing.
 commit;

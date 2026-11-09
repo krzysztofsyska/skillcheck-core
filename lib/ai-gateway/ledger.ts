@@ -6,7 +6,7 @@
 // billing certainty, token counts and latency. The database derives the company, process and
 // candidate reference from trusted state (the screening attempt / the generation reservation)
 // and only checks `company_id` from this payload for consistency.
-import { AiGatewayError, type BillingCertainty } from './contract.ts';
+import { AiGatewayError } from './contract.ts';
 import type { AttemptRecord } from './gateway.ts';
 
 /** Exactly the keys `ai_ledger.record_attempt` accepts; anything else is refused by the database. */
@@ -60,15 +60,6 @@ export function ledgerPayload(record: AttemptRecord): LedgerAttemptPayload {
   };
 }
 
-/**
- * Billing certainty to report when an attempt could not be recorded. An answered attempt
- * (`billed`) that is missing from the ledger may still be charged: it is `maybe_billed`, never
- * `not_billed`. Only an attempt the provider refused before running stays `not_billed`.
- */
-export function unrecordedBilling(billing: AttemptRecord['billing']): BillingCertainty {
-  return billing === 'not_billed' ? 'not_billed' : 'maybe_billed';
-}
-
 /** `onAttempt` hook writing every physical attempt to the ledger; any failure is `ledger_error`. */
 export function createLedgerHook(write: LedgerWriter) {
   if (typeof write !== 'function') throw new Error('SC021_LEDGER_WRITER_REQUIRED');
@@ -77,7 +68,8 @@ export function createLedgerHook(write: LedgerWriter) {
       await write(ledgerPayload(record));
     } catch {
       // The writer's error may carry database text; only the code leaves this function.
-      throw new AiGatewayError('ledger_error', unrecordedBilling(record.billing));
+      // The billing flag is kept as it was: an answered attempt stays `billed`.
+      throw new AiGatewayError('ledger_error', record.billing);
     }
   };
 }

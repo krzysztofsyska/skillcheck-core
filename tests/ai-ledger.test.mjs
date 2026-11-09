@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { AiGatewayError, AI_GATEWAY_ERROR_CODES } from '../lib/ai-gateway/contract.ts';
 import { validatePolicy } from '../lib/ai-gateway/policy.ts';
 import { createAiGateway, ATTEMPT_HOOK_TIMEOUT_MS } from '../lib/ai-gateway/gateway.ts';
-import { createLedgerHook, ledgerPayload, unrecordedBilling } from '../lib/ai-gateway/ledger.ts';
+import { createLedgerHook, ledgerPayload } from '../lib/ai-gateway/ledger.ts';
 
 const COMPANY = '11111111-1111-4111-8111-111111111111';
 const OP = '33333333-3333-4333-8333-333333333333';
@@ -69,18 +69,13 @@ test('retries are visible: two physical attempts, two payloads with distinct att
   assert.equal(new Set(written.map(p => p.attempt_id)).size, 2);
 });
 
-test('unrecorded billing: an answered or possibly billed attempt is maybe_billed, never not_billed', () => {
-  assert.equal(unrecordedBilling('billed'), 'maybe_billed');
-  assert.equal(unrecordedBilling('maybe_billed'), 'maybe_billed');
-  assert.equal(unrecordedBilling('not_billed'), 'not_billed');
-});
-
 test('a writer failure becomes ledger_error with the billing flag of the attempt that failed to record', async () => {
   const secret = 'duplicate key value violates unique constraint "attempts_attempt_id_key" DETAIL: company 1111';
   const failing = createLedgerHook(async () => { throw new Error(secret); });
-  // Completed answer that could not be recorded: maybe_billed, and the draft/analysis is not returned.
+  // Completed answer that could not be recorded: still billed (the code says recording failed), and
+  // the draft/analysis is not returned.
   await assert.rejects(gateway([completed], failing).run(ctx('exercise_generation'), request),
-    e => e instanceof AiGatewayError && e.code === 'ledger_error' && e.billing === 'maybe_billed' && !e.message.includes('duplicate'));
+    e => e instanceof AiGatewayError && e.code === 'ledger_error' && e.billing === 'billed' && !e.message.includes('duplicate'));
   // A provider refusal before running (not billed) that could not be recorded stays not_billed.
   await assert.rejects(gateway([new AiGatewayError('auth_error', 'not_billed', 401)], failing).run(ctx('exercise_generation'), request),
     e => e.code === 'ledger_error' && e.billing === 'not_billed');
@@ -108,14 +103,48 @@ test('the gateway hook timeout (SC021_ATTEMPT_HOOK_TIMEOUT) is mapped to ledger_
   t.mock.timers.tick(ATTEMPT_HOOK_TIMEOUT_MS);
   const error = await outcome;
   assert.ok(error instanceof AiGatewayError, String(error));
-  assert.equal(error.code, 'ledger_error'); assert.equal(error.billing, 'maybe_billed');
+  assert.equal(error.code, 'ledger_error'); assert.equal(error.billing, 'billed');
 });
 
 test('any other hook error (not from createLedgerHook) is also ledger_error at the gateway', async () => {
   await assert.rejects(gateway([completed], async () => { throw new TypeError('boom'); }).run(ctx('cv_screening'), request),
-    e => e instanceof AiGatewayError && e.code === 'ledger_error' && e.billing === 'maybe_billed');
+    e => e instanceof AiGatewayError && e.code === 'ledger_error' && e.billing === 'billed');
 });
 
 test('a ledger writer is required', () => {
   assert.throws(() => createLedgerHook(undefined), /SC021_LEDGER_WRITER_REQUIRED/);
+});
+
+test('server-only ledger DSN: ai_ledger_* login with a password, no loopback, otherwise null (fail closed)', async () => {
+  const { aiLedgerDatabaseUrl } = await import('../lib/ai-ledger-writer.ts');
+  assert.ok(aiLedgerDatabaseUrl('postgresql://ai_ledger_app:pw@db.example.supabase.co:5432/postgres'));
+  for (const bad of [undefined, '', 'not a url', 'mysql://ai_ledger_app:pw@db.example.com/x',
+    'postgresql://postgres:pw@db.example.com/postgres', 'postgresql://authenticated:pw@db.example.com/postgres',
+    'postgresql://ai_ledger_app@db.example.com/postgres', 'postgresql://ai_ledger_app:pw@localhost/postgres',
+    'postgresql://ai_ledger_app:pw@127.0.0.1/postgres', 'postgresql://ai_ledger_app:pw@db.example.com/postgres?sslmode=disable']) {
+    assert.equal(aiLedgerDatabaseUrl(bad), null, String(bad));
+  }
+});
+
+test('ledger writer: one transaction as ai_ledger_writer, committed before resolving; errors masked and rolled back', async () => {
+  const { createExerciseLedgerWriter, exerciseLedgerWriterFromEnv } = await import('../lib/ai-ledger-writer.ts');
+  const log = []; let released = 0;
+  const client = fail => ({ async query(sql, values) { log.push([sql, values]); if (fail && sql.startsWith('select')) throw new Error('PT409 AI attempt conflict detail'); return { rows: [] }; },
+    release() { released++; } });
+  const payload = { attempt_id: 'x', operation_id: OP };
+  await createExerciseLedgerWriter(async () => client(false), COMPANY, '44444444-4444-4444-8444-444444444444')(payload);
+  assert.deepEqual(log.map(l => l[0]), ['begin isolation level read committed', 'set local role ai_ledger_writer',
+    'select ai_ledger.record_exercise_attempt($1::uuid,$2::uuid,$3::jsonb) as result', 'commit']);
+  assert.deepEqual(log[2][1], [COMPANY, '44444444-4444-4444-8444-444444444444', JSON.stringify(payload)]);
+  log.length = 0;
+  await assert.rejects(createExerciseLedgerWriter(async () => client(true), COMPANY, OP)(payload), e => e.message === 'SC021_LEDGER_WRITE_FAILED');
+  assert.equal(log.at(-1)[0], 'rollback');
+  assert.equal(released, 2);
+  const saved = process.env.AI_LEDGER_DATABASE_URL;
+  try {
+    delete process.env.AI_LEDGER_DATABASE_URL;
+    assert.equal(exerciseLedgerWriterFromEnv(COMPANY, OP), null);
+    process.env.AI_LEDGER_DATABASE_URL = 'postgresql://postgres:pw@db.example.com/postgres';
+    assert.equal(exerciseLedgerWriterFromEnv(COMPANY, OP), null);
+  } finally { if (saved === undefined) delete process.env.AI_LEDGER_DATABASE_URL; else process.env.AI_LEDGER_DATABASE_URL = saved; }
 });

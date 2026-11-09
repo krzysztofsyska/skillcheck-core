@@ -466,10 +466,6 @@ export type Database = {
         Args: {target_company:string;target_recruitment:string;request_key:string;expected_position_updated_at:string;expected_company_updated_at:string|null;input_fingerprint:string};
         Returns: Json;
       };
-      record_exercise_ai_attempt: {
-        Args: {target_company:string;target_recruitment:string;attempt:Json};
-        Returns: Json;
-      };
       record_screening_ai_attempt: {
         Args: {attempt:Json};
         Returns: Json;

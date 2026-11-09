@@ -171,6 +171,9 @@ test('SC-021-B: a draft whose attempt cannot be recorded is not returned, and th
   assert.equal(f.calls.length, 1);
   assert.equal(exerciseErrorFromGateway(new AiGatewayError('ledger_error', 'maybe_billed')).code, 'exercise_ai_server_error');
   const none = fakeFetch(() => Response.json({}));
-  await assert.rejects(requestExerciseDraftViaGateway(payload, 'k', { ...trust, recordAttempt: undefined }, { fetcher: none.impl, log: silent }));
+  for (const recordAttempt of [undefined, null]) {
+    await assert.rejects(requestExerciseDraftViaGateway(payload, 'k', { ...trust, recordAttempt }, { fetcher: none.impl, log: silent }),
+      e => e.code === 'exercise_ai_auth_error');
+  }
   assert.equal(none.calls.length, 0, 'no ledger writer, no provider call');
 });

@@ -7,7 +7,7 @@ import { detectEmail, detectPhone } from '../cv-bulk.ts';
 import { normalizeForRedaction } from '../cv-normalize.ts';
 import {
   AiGatewayError, isAiTask, isActiveProvider, isTransient,
-  type AiProvider, type AiProviderAdapter, type AiTask, type BillingCertainty,
+  type AiProvider, type AiProviderAdapter, type AiTask, type AttemptBilling,
   type GatewayRequest, type ProviderReply, type TokenUsage,
 } from './contract.ts';
 import { resolveRoute, type AiRoutingPolicy, type ResolvedModel } from './policy.ts';
@@ -39,7 +39,7 @@ export type AttemptRecord = {
   attempt: number;
   outcome: 'completed' | 'refused' | 'incomplete' | AiGatewayError['code'];
   /** `billed` once the provider answered with a result; see BillingCertainty otherwise. */
-  billing: 'billed' | BillingCertainty;
+  billing: AttemptBilling;
   usage: TokenUsage | null;
   providerRequestId: string | null;
   latencyMs: number;
@@ -76,8 +76,8 @@ export type AiGatewayOptions = {
   /**
    * Ledger hook (SC-021-B, `createLedgerHook`). Required, so no physical attempt goes unrecorded. Awaited,
    * bounded by ATTEMPT_HOOK_TIMEOUT_MS; if it throws or times out, the call fails with `ledger_error`
-   * instead of returning unrecorded work. The error keeps the billing certainty of that attempt
-   * (an answered attempt that was not recorded is `maybe_billed`, never `not_billed`).
+   * instead of returning unrecorded work. The error keeps the billing flag of that attempt unchanged
+   * (an answered attempt that was not recorded stays `billed`).
    */
   onAttempt: (record: AttemptRecord) => Promise<void>;
   now?: () => number;
@@ -166,13 +166,13 @@ export function createAiGateway(options: AiGatewayOptions) {
     failures.set(key, state);
   };
 
-  // Any hook failure, including SC021_ATTEMPT_HOOK_TIMEOUT, is `ledger_error`. An attempt the provider
-  // answered (or may have run) is never reported as not billed just because recording failed.
+  // Any hook failure, including SC021_ATTEMPT_HOOK_TIMEOUT, is `ledger_error`, keeping the attempt's
+  // billing flag as it was (`billed` stays `billed`): the code itself says recording failed.
   const recordAttempt = async (r: AttemptRecord) => {
     try {
       await withDeadline(Promise.resolve().then(() => options.onAttempt(r)), ATTEMPT_HOOK_TIMEOUT_MS, () => new Error('SC021_ATTEMPT_HOOK_TIMEOUT'));
     } catch {
-      throw new AiGatewayError('ledger_error', r.billing === 'not_billed' ? 'not_billed' : 'maybe_billed');
+      throw new AiGatewayError('ledger_error', r.billing);
     }
   };
 

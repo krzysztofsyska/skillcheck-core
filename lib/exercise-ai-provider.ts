@@ -23,10 +23,11 @@ export type ExerciseGatewayTrust = {
   /** canEdit && editable, as verified by exerciseContext. */
   mayGenerate: boolean;
   /**
-   * SC-021-B: durable ledger write (public.record_exercise_ai_attempt with the recruiter's session,
-   * bound in the database to this generation reservation). Required on the gateway path.
+   * SC-021-B: durable ledger write through the server-only ai_ledger_writer connection
+   * (lib/ai-ledger-writer.ts), bound in the database to this generation reservation.
+   * Required on the gateway path; without it no provider call is made.
    */
-  recordAttempt: LedgerWriter;
+  recordAttempt: LedgerWriter | null;
 };
 
 /**
@@ -98,6 +99,8 @@ export async function requestExerciseDraftViaGateway(payload: ReturnType<typeof 
   trust: ExerciseGatewayTrust, options: { fetcher?: typeof fetch; policy?: AiRoutingPolicy;
     log?: (entry: ReturnType<typeof attemptLogEntry>) => void } = {}) {
   if (!apiKey) throw new ExerciseAiError('exercise_ai_auth_error', 'Missing provider configuration');
+  // Fail closed before any provider call: no ledger, no billed work.
+  if (typeof trust.recordAttempt !== 'function') throw new ExerciseAiError('exercise_ai_auth_error', 'AI ledger unavailable');
   const legacy = buildExerciseDraftRequest(payload);
   if (Buffer.byteLength(JSON.stringify(legacy), 'utf8') > EXERCISE_AI_MAX_REQUEST_BYTES)
     throw new ExerciseAiError('exercise_ai_input_too_large', 'Provider request exceeds byte limit.');

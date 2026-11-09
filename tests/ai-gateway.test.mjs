@@ -338,10 +338,10 @@ test('gateway stops waiting even when an adapter ignores the abort signal', asyn
 test('a failing ledger hook fails the call instead of returning unrecorded work', async () => {
   const gw = createAiGateway({ policy: defaultAiPolicy, adapters: [fakeAdapter([completed()])], authorize: allow,
     onAttempt: async () => { throw new Error('ledger down'); } });
-  // SC-021-B: any hook failure is ledger_error; an answered (billed) attempt that was not recorded
-  // is maybe_billed, never not_billed, and the raw hook error text never leaves the gateway.
+  // SC-021-B: any hook failure is ledger_error; the billing flag of the attempt is kept (an answered
+  // attempt stays billed), and the raw hook error text never leaves the gateway.
   await assert.rejects(gw.run(ctx, request), e => e instanceof AiGatewayError && e.code === 'ledger_error'
-    && e.billing === 'maybe_billed' && e.message === 'ledger_error');
+    && e.billing === 'billed' && e.message === 'ledger_error');
 });
 
 function fakeFetch(handler) {
@@ -365,7 +365,9 @@ test('OpenAI adapter: request shape, key only in header, usage and refusal parsi
   assert.equal(body.id, 'resp_9', 'the parsed envelope is kept for runRaw callers');
   assert.equal(calls[0].url, OPENAI_RESPONSES_URL);
   assert.equal(calls[0].init.headers.authorization, 'Bearer sk-synthetic');
-  assert.equal(calls[0].init.headers['x-client-request-id'], 'att-1');
+  // SC-021-B: a fresh random id, never the stored attempt id (no persisted link to the provider record).
+  assert.match(calls[0].init.headers['x-client-request-id'], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(calls[0].init.headers['x-client-request-id'], 'att-1');
   assert.equal(calls[0].init.redirect, 'error');
   assert.equal(calls[0].init.body.includes('sk-synthetic'), false);
   assert.equal(JSON.parse(calls[0].init.body).store, false);
