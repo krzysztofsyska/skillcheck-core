@@ -66,6 +66,13 @@ jobs:
         env:
           SALES_MAIL_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:auth
+      # SC-020-B customer domains: host rules, spoofing, routing, auth URLs, DNS/TLS fakes,
+      # then the native-PostgreSQL lifecycle/isolation suite (two synthetic companies).
+      - run: npm run test:tenant-domains
+      - run: npm run test:tenant-domains-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       # SC-FREE-AUTO-001 / SC-CONSENT-001 / SC-DIGEST-001 unit tests; the
       # native-PostgreSQL suite for the same change runs in sc19-migrations.yml.
       - run: npm run test:marketing-consent
@@ -124,6 +131,7 @@ jobs:
       - run: npm run build
       - run: npm run test:pdf-bundle
       - run: npm run test:http
+      - run: npm run test:tenant-domains-http
       - run: npm run test:screening-report-http
       - run: npm run test:cv-bulk-progress-http
       - run: npm run test:ac-report-http
