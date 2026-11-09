@@ -8,6 +8,7 @@ import { buildNotification } from './notifications.mjs';
 import { block, newRecord, touch } from './record.mjs';
 import { validateReview } from './review.mjs';
 import { filesOutside } from './scope.mjs';
+import { builderConfiguration } from './claude-builder.mjs';
 
 const ACTIVE_RUN = new Set(['CREATING', 'RUNNING']);
 const TERMINAL_RUN = new Set(['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED']);
@@ -29,6 +30,7 @@ export function plan(record, obs) {
 function planNext(record, obs) {
   if (obs.kind === 'promotion' || record?.binding?.lane === 'promotion') return planPromotion(record, obs);
   if (!record || record.state === 'BACKLOG') return openTask(obs);
+  if (record.technical_state === 'WAITING_POST_MERGE_CI' || record.binding?.post_merge_ci?.blocked) return postMergeStep(record, obs);
   if (record.state === 'BLOCKED') return resumeOrHold(record, obs);
   if (record.state === 'ACCEPTED' || record.state === 'DONE') return done(record);
   if (record.binding?.merge?.phase === 'awaiting_confirmation') return confirmMerge(record, obs);
@@ -287,12 +289,32 @@ function dispatchStep(record, obs) {
   }
   const pre = touch(record, obs.now);
   pre.binding.dispatch = { ...dispatch, phase: 'awaiting_confirmation', started_at: obs.now };
+  if (obs.policy.builder_provider === 'claude-code') {
+    let config;
+    try { config=builderConfiguration(obs.policy); } catch(error) { return done(block(record,error.code,obs.now)); }
+    const requestId=sha256(dispatch.operationKey);
+    const reserved=pre.binding.builder_reservations??[];
+    if(!reserved.some(r=>r.request_id===requestId)) {
+      if(!Number.isFinite(obs.builderReservedUsd) || obs.builderReservedUsd+config.max_run_usd>config.max_total_usd) return done(block(record,'CLAUDE_BUDGET_EXHAUSTED',obs.now));
+      reserved.push({request_id:requestId,limit_usd:config.max_run_usd,at:obs.now});
+    }
+    pre.binding.builder_reservations=reserved;
+  }
   return { record: pre, preEffectRecord: pre, effects: [effect], journal: journalFor(pre, 'dispatch') };
 }
 
 function buildingStep(record, obs) {
   const run = currentRun(obs, record);
-  if (!run) return done(record);
+  if (!run) {
+    const started=Date.parse(record.binding.dispatch?.started_at ?? record.last_transition_at);
+    return Date.parse(obs.now)-started>=obs.policy.timeouts.build_ms ? done(block(record,'BUILD_TIMEOUT',obs.now)) : done(record);
+  }
+  if (!record.cursor_run_id) {
+    if (obs.policy.builder_provider === 'claude-code' && !run.operationVerified) return done(block(record,'BUILDER_RUN_UNTRUSTED',obs.now));
+    const next=touch(record,obs.now,{cursor_run_id:run.id});
+    next.binding.known_run_ids=[...new Set([...record.binding.known_run_ids,run.id])];
+    return done(next);
+  }
   if (ACTIVE_RUN.has(run.status)) {
     const started = Date.parse(run.createdAt || record.binding.dispatch?.started_at || obs.now);
     if (Date.parse(obs.now) - started >= obs.policy.timeouts.build_ms) return done(block(record, 'BUILD_TIMEOUT', obs.now));
@@ -302,6 +324,9 @@ function buildingStep(record, obs) {
     return done(block(record, run.status === 'EXPIRED' ? 'SESSION_EXPIRED' : 'CURSOR_RUN_FAILED', obs.now));
   }
   if (!TERMINAL_RUN.has(run.status) || run.status !== 'FINISHED') return done(record);
+  if (run.git?.pendingPublication && record.binding.builder_published_run_id !== run.id) {
+    return effect(touch(record, obs.now), [{type:'cursor.publish',external:true,agentId:record.cursor_agent_id,runId:run.id}]);
+  }
   if (record.cursor_run_id && obs.cursor?.agent?.latestRunId && obs.cursor.agent.latestRunId !== record.cursor_run_id) {
     return done(record);
   }
@@ -698,7 +723,26 @@ function confirmMerge(record, obs) {
   if (reconciled.state === 'MERGED_AWAITING_DEPLOYMENT') {
     next.state = record.binding.approval?.gate === 'B' ? 'MERGED_AWAITING_DEPLOYMENT' : 'ACCEPTED';
     if (record.binding.lane === 'promotion' || record.binding.approval?.gate === 'B') next.state = 'MERGED_AWAITING_DEPLOYMENT';
+    else { next.technical_state = 'WAITING_POST_MERGE_CI'; next.binding.merge.confirmed_at = obs.now; }
   }
+  return done(next);
+}
+
+function postMergeStep(record, obs) {
+  const result = obs.github.postMergeCi;
+  if (result?.ok === true && result.headSha === record.binding.merge?.mergeCommitSha) {
+    const next = touch(record, obs.now, { state: 'ACCEPTED', technical_state: null, blocked_reason: null });
+    next.binding.post_merge_ci = { ...result, blocked: false, verified_at: obs.now };
+    return done(next);
+  }
+  const started = Date.parse(record.binding.merge?.confirmed_at ?? record.last_transition_at);
+  const timeout = obs.policy.post_merge_ci?.timeout_ms ?? obs.policy.timeouts.ci_review_ms;
+  const expired = !Number.isFinite(started) || Date.parse(obs.now) - started >= timeout;
+  if ((!result || result.pending) && !expired) return done(record);
+  const reason = expired ? 'POST_MERGE_CI_TIMEOUT' : result?.reason ?? 'POST_MERGE_CI_UNCONFIRMED';
+  if (record.blocked_reason === reason) return done(record);
+  const next = block(record, reason, obs.now, 'WAITING_POST_MERGE_CI');
+  next.binding.post_merge_ci = { ...(result ?? {}), blocked: true };
   return done(next);
 }
 
@@ -721,6 +765,10 @@ export function fold(record, effect, result, obs) {
   const now = obs.now;
   if (effect.type === 'cursor.create' || effect.type === 'cursor.get') return foldCursorCreate(record, effect, result, now);
   if (effect.type === 'cursor.followup') return foldFollowup(record, result, now);
+  if (effect.type === 'cursor.publish') {
+    if (!result?.commit || result.runId !== effect.runId) return block(record, result?.error?.code ?? 'BUILDER_PUBLICATION_UNKNOWN', now);
+    const next = touch(record, now); next.binding.builder_published_run_id = result.runId; return next;
+  }
   if (effect.type === 'cursor.listRuns') return foldListedRuns(record, result, now);
   if (effect.type === 'github.createPr') {
     if (result?.lost || result?.timeout) return record;
@@ -746,12 +794,24 @@ export function fold(record, effect, result, obs) {
     return next;
   }
   if (effect.type === 'github.merge') {
+    if (result?.blocked === true) {
+      const next = touch(record, now, { state: 'READY_FOR_OWNER', technical_state: 'WAITING_CI', blocked_reason: result.reason });
+      next.binding.merge = null;
+      // The merge HTTP mutation was never attempted. Keep waiting for native
+      // checks, or feed a definite failure/conflict into the same repair loop.
+      if (result.repair && effect.gate === 'A') return beginRepair(next, obs, [{
+        id: result.reason, severity: 'major', path: '.', line: 0,
+        description: result.reason, required_fix: 'Read the current CI/review and resolve this blocker on the existing task branch.',
+      }]).record;
+      return next;
+    }
     if (result?.lost || result?.timeout) return record;
     if (result?.merged && result.mergeCommitSha) {
       const next = touch(record, now);
       next.binding.merge = { ...record.binding.merge, phase: 'settled', mergeCommitSha: result.mergeCommitSha, retry: false };
       next.state = effect.gate === 'B' ? 'MERGED_AWAITING_DEPLOYMENT' : 'ACCEPTED';
-      next.technical_state = effect.gate === 'B' ? 'MERGED_AWAITING_DEPLOYMENT' : null;
+      next.technical_state = effect.gate === 'B' ? 'MERGED_AWAITING_DEPLOYMENT' : 'WAITING_POST_MERGE_CI';
+      next.binding.merge.confirmed_at = now;
       return next;
     }
     return block(record, 'MERGE_UNKNOWN', now);
@@ -789,6 +849,7 @@ function settleCreate(record, result, now) {
     cursor_agent_id: record.cursor_agent_id,
     cursor_run_id: result.run?.id ?? null,
   });
+  next.binding.builder_operation = record.binding.dispatch?.operationKey;
   next.binding.dispatch = { phase: 'settled', action: 'create', started_at: now };
   if (result.run?.id) next.binding.known_run_ids = [...new Set([...record.binding.known_run_ids, result.run.id])];
   return next;
@@ -812,6 +873,7 @@ function foldFollowup(record, result, now) {
   if (!result?.run?.id) return block(record, 'DISPATCH_UNKNOWN', now, 'DISPATCH_UNKNOWN');
   const next = touch(record, now, { state: 'FIXING', technical_state: null, cursor_run_id: result.run.id, repair_round: record.repair_round + 1 });
   next.binding.known_run_ids = [...new Set([...record.binding.known_run_ids, result.run.id])];
+  next.binding.builder_operation = record.binding.dispatch?.operationKey;
   next.binding.dispatch = { phase: 'settled', action: 'followup' };
   return next;
 }
@@ -915,7 +977,7 @@ function shaDrift(record, obs) {
 function currentRun(obs, record) {
   const runs = obs.cursor?.runs ?? [];
   if (record.cursor_run_id) return runs.find(run => run.id === record.cursor_run_id) ?? null;
-  return runs[0] ?? null;
+  return runs.find(run=>run.id===obs.cursor?.agent?.latestRunId) ?? runs[0] ?? null;
 }
 
 function cursorBusy(obs) {

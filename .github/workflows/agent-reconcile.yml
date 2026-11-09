@@ -1,10 +1,10 @@
 name: Agent reconcile
 
-# Frozen with the agent pipeline (owner decision 2026-11-02): Claude is the
-# only builder, so nothing is dispatched. Automatic runs (every 5 minutes and
-# on every comment) are switched off; the workflow stays for manual runs.
+# One scheduler for both builder backends. Disabled flags prevent dispatch.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: read
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   reconcile:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.AGENT_PIPELINE_ENABLED == 'true')
     runs-on: ubuntu-latest
     environment: agent-control
     timeout-minutes: 10

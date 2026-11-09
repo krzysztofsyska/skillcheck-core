@@ -29,7 +29,7 @@ function verifiedTask() {
     head_sha: record.head_sha,
     base_sha: record.base_sha,
     contract_hash: record.contract_hash,
-    verdict: 'PASS',
+    verdict: 'PASS', full_diff_reviewed: true, reviewed_commits: [record.head_sha],
     acceptance_checks: record.binding.required_tests.map(id => ({ id, status: 'PASS', required: true })),
     findings: [],
     limitations: [],
@@ -452,6 +452,7 @@ function acceptedRecord() {
   });
   record.binding.approval = null;
   record.binding.merge = { mergeCommitSha: 'e'.repeat(40), gate: 'A' };
+  record.binding.post_merge_ci = {ok:true,headSha:'e'.repeat(40),runId:900};
   record.binding.auto_integration = {
     source: 'verified_ci_review', head_sha: record.head_sha, base_sha: record.base_sha,
     policy_sha: record.policy_sha, contract_hash: record.contract_hash,

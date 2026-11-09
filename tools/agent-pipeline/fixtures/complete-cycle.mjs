@@ -244,7 +244,7 @@ function reviewEnvelope(policy, policySha, record, pass) {
       head_sha: pass ? H2 : H1,
       base_sha: BASE,
       contract_hash: record.contract_hash,
-      verdict: pass ? 'PASS' : 'PASS_WITH_FIXES',
+      verdict: pass ? 'PASS' : 'PASS_WITH_FIXES', full_diff_reviewed: true, reviewed_commits: [record.head_sha],
       acceptance_checks: requiredReviewChecks(record).map(id => ({ id, status: 'PASS', required: true })),
       findings: pass ? [] : [{ id: 'fix-copy', severity: 'minor', path: 'app/demo/page.tsx', line: 3, description: 'Copy is unclear', required_fix: 'Rewrite the heading' }],
       limitations: [],
