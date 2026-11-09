@@ -92,7 +92,19 @@ osobnego kodu błędu z komunikatem i migracji — do zrobienia razem z SC-021-B
 - Odpowiedź będąca poprawnym JSON-em, ale nie obiektem (np. `[]`), ma w logu powód `response_not_json`
   zamiast `invalid_envelope`; kod błędu jest ten sam.
 - Brak klucza API: zamiast wysłania żądania i odpowiedzi 401 — od razu `openai_auth_error` / `exercise_ai_auth_error`, bez wywołania.
-- Każde żądanie przez gateway ma dodatkowy nagłówek `x-client-request-id` (identyfikator próby); treść żądania jest identyczna.
+- Każde żądanie przez gateway ma dodatkowy nagłówek `x-client-request-id` (identyfikator próby) i `redirect: 'error'`;
+  przy odpowiedzi innej niż 2xx treść odpowiedzi jest od razu porzucana. Treść żądania jest identyczna.
+- Błąd połączenia przed odpowiedzią to zawsze `openai_network_error` (ponawiany jak dotąd). Ścieżka bezpośrednia
+  rozpoznawała go po treści komunikatu, a komunikaty `fetch` w Deno (np. „error sending request…”) do wzorca nie
+  pasowały, więc kończyły się `worker_internal_error` bez ponowienia. Przez gateway działa to zgodnie z zamiarem.
+- Zerwanie połączenia w trakcie czytania odpowiedzi 2xx (model już się wykonał i jest naliczony) to
+  `invalid_response` → `openai_invalid_output` / `exercise_ai_invalid_output`, **bez ponowienia** — żeby nie
+  płacić drugi raz (wcześniej zwykle `worker_internal_error` / `exercise_ai_network_error`, też bez ponowienia).
+- Autoryzacja screeningu porównuje zegar workera z `lease_expires_at` z bazy. Dzierżawa trwa 5 min, a najdłuższa
+  pętla prób ok. 3 min; różnica zegarów powyżej ok. 2 min mogłaby odrzucić ostatnią próbę (bez wywołania dostawcy).
+- `companyId: null` jest przyjmowane wyłącznie dla zadania `cv_screening`; każde inne zadanie z `null` → `invalid_context`.
+- Ochrona „tylko serwer” w gatewayu uwzględnia Deno (który może mieć globalne `window`), żeby worker Edge nie był
+  przez nią blokowany.
 
 ## Czego tu jeszcze nie ma (następne zadania)
 
@@ -105,6 +117,6 @@ osobnego kodu błędu z komunikatem i migracji — do zrobienia razem z SC-021-B
 
 ## Testy
 
-`npm run test:ai-gateway` — 37 testów syntetycznych, bez sieci i bez kluczy.
+`npm run test:ai-gateway` — 40 testów syntetycznych, bez sieci i bez kluczy.
 A2: `tests/screening-gateway.test.mjs` (w `test:screening`) i `tests/exercise-ai-gateway.test.mjs`
 (w `test:assessments`) porównują ścieżkę bezpośrednią i przez gateway na tych samych sztucznych odpowiedziach.

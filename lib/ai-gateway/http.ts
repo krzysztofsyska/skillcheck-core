@@ -55,7 +55,9 @@ export async function postJson(fetchImpl: typeof fetch, url: string, headers: Re
     text += decoder.decode();
   } catch (error) {
     if (error instanceof AiGatewayError) throw error;
-    throw new AiGatewayError(signal.aborted ? 'timeout' : 'network_error', 'maybe_billed');
+    // The provider already answered 2xx, so the model ran and is billed: a broken body is not a
+    // transient network error worth another (billed) attempt.
+    throw new AiGatewayError(signal.aborted ? 'timeout' : 'invalid_response', 'maybe_billed');
   } finally {
     try { reader.releaseLock(); } catch { /* ignore */ }
   }

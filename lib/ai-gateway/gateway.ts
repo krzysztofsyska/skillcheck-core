@@ -15,8 +15,8 @@ import { resolveRoute, type AiRoutingPolicy, type ResolvedModel } from './policy
 /** Identity of the business operation. Built by trusted server code, never from browser JSON. */
 export type AiCallContext = {
   /**
-   * Tenant of the operation, from trusted server state. `null` only where the trusted principal does
-   * not carry the tenant yet: the screening worker claim (SC-021-A2). SC-021-B binds the company into
+   * Tenant of the operation, from trusted server state. `null` only for `cv_screening`, whose trusted
+   * principal does not carry the tenant yet: the screening worker claim (SC-021-A2). SC-021-B binds the company into
    * the claim before any per-company ledger or budget relies on it. Missing (`undefined`) is invalid.
    */
   companyId: string | null;
@@ -98,7 +98,9 @@ function withDeadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error
 const BREAKER_CODES = new Set(['server_error', 'timeout', 'network_error', 'model_unavailable']);
 
 function assertContext(ctx: AiCallContext) {
-  if (!ctx || typeof ctx !== 'object' || (ctx.companyId !== null && !UUID.test(ctx.companyId))
+  // A null tenant is allowed only for the task whose trusted principal lacks it today (worker claim).
+  if (!ctx || typeof ctx !== 'object'
+    || (ctx.companyId === null ? ctx.task !== 'cv_screening' : !UUID.test(ctx.companyId))
     || !UUID.test(ctx.operationId)
     || !isAiTask(ctx.task)
     || (ctx.processId != null && !UUID.test(ctx.processId))
@@ -135,7 +137,10 @@ export function containsContactData(text: string) {
 }
 
 export function createAiGateway(options: AiGatewayOptions) {
-  if (typeof window !== 'undefined') throw new Error('SC021_SERVER_ONLY');
+  // Browser bundles only. Deno (Supabase Edge, the screening worker) may define `window` but is server-side.
+  if (typeof window !== 'undefined' && typeof (globalThis as { Deno?: unknown }).Deno === 'undefined') {
+    throw new Error('SC021_SERVER_ONLY');
+  }
   if (typeof options.authorize !== 'function') throw new Error('SC021_AUTHORIZE_REQUIRED');
   if (typeof options.onAttempt !== 'function') throw new Error('SC021_ATTEMPT_HOOK_REQUIRED');
   const adapters = new Map<AiProvider, AiProviderAdapter>();

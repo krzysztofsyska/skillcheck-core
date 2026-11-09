@@ -571,3 +571,38 @@ test('A2: the attempt log line carries no prompt, payload or provider body', asy
     'input_tokens', 'latency_ms', 'model', 'model_key', 'operation_id', 'outcome', 'output_tokens', 'policy_version', 'provider',
     'provider_request_id', 'task'].sort());
 });
+
+test('A2 review: the server-only guard blocks browsers but not Deno (Supabase Edge)', () => {
+  const opts = { policy: defaultAiPolicy, adapters: [], authorize: allow };
+  const hadWindow = Object.hasOwn(globalThis, 'window'), hadDeno = Object.hasOwn(globalThis, 'Deno');
+  try {
+    globalThis.window = {};
+    assert.throws(() => createAiGateway(opts), /SC021_SERVER_ONLY/);
+    globalThis.Deno = { env: {} };
+    assert.doesNotThrow(() => createAiGateway(opts));
+  } finally {
+    if (!hadWindow) delete globalThis.window;
+    if (!hadDeno) delete globalThis.Deno;
+  }
+});
+
+test('A2 review: a null tenant is invalid for every task except cv_screening', async () => {
+  const policy = policyWith({ cv_screening: route(), exercise_generation: route() });
+  const calls = [];
+  const gw = createAiGateway({ policy, adapters: [fakeAdapter([completed()], calls)], authorize: allow });
+  for (const task of ['exercise_generation', 'report_summary']) {
+    await assert.rejects(gw.run({ ...ctx, task, companyId: null }, request), e => e.code === 'invalid_context', task);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('A2 review: a body broken after a 2xx answer is invalid_response, never a retryable network error', async () => {
+  let pulls = 0;
+  const stream = new ReadableStream({ pull(controller) {
+    if (pulls++ === 0) controller.enqueue(new TextEncoder().encode('{"status":'));
+    else controller.error(new TypeError('terminated'));
+  } });
+  const adapter = createOpenAiAdapter({ apiKey: 'k', fetchImpl: async () => new Response(stream) });
+  await assert.rejects(adapter.invoke({ model: 'm', revision: null, request, attemptId: 'a', signal: new AbortController().signal }),
+    e => e.code === 'invalid_response' && e.billing === 'maybe_billed');
+});

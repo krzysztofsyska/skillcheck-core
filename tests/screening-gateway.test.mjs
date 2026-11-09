@@ -234,3 +234,12 @@ test('the Edge worker uses the gateway only behind AI_GATEWAY_ENABLED and keeps 
   assert.match(source, /isAiGatewayEnabled\(env\("AI_GATEWAY_ENABLED"\)\)/);
   assert.match(source, /viaGateway \? viaGateway\(request, claim\) : callOpenAiResponses\(apiKey, request\)/);
 });
+
+test('a Deno-style connection error is retried as a network error; a body broken after 200 is not retried', async () => {
+  const connect = await runPath('gateway', claimV1, () => { throw new TypeError('error sending request for url (https://api.openai.com/v1/responses): client error (Connect)'); });
+  assert.equal(connect.result.code, 'openai_network_error');
+  assert.equal(connect.fetches.length, SCREENING_OPENAI_MAX_RETRIES + 1);
+  const broken = await runPath('gateway', claimV1, () => new Response(new ReadableStream({ pull(c) { c.error(new TypeError('terminated')); } })));
+  assert.equal(broken.result.code, 'openai_invalid_output');
+  assert.equal(broken.fetches.length, 1, 'the model already ran: never pay twice');
+});
