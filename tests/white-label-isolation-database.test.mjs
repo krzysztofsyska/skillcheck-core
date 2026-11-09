@@ -2,7 +2,7 @@
 // tenant_domains, funkcje public.brand_* / public.tenant_domain_*, Storage),
 // dwie firmy, próby obejścia przez obcą firmę i członków bez uprawnień,
 // błędna/odwołana/nieświeża domena, przywracanie marki i domeny oraz
-// cykliczna ponowna weryfikacja DNS (rola tenant_domain_verifier).
+// cykliczna ponowna weryfikacja DNS (osobna rola tenant_domain_reverifier).
 // Natywny PostgreSQL, pełny łańcuch migracji, dane syntetyczne.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -278,6 +278,20 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
     await e.as(users.owner);
     const history = (await e.one('select public.tenant_domain_state($1)', [a.companyId])).events.filter(ev => ev.domain_id === a1.id);
     assert.deepEqual(history.slice(0, 2).map(ev => [ev.action, ev.by_owner]), [['verification_lapsed', false], ['verification_failed', false]]);
+    // An already expired domain is NOT renewed by the job even when the record is present: back to pending for the owner.
+    const extra = await e.activeDomain(a.companyId, 'praca.firma-a.pl');
+    await h.asAdmin();
+    await db.query("update tenant_domains.domains set last_verified_at = clock_timestamp() - interval '31 days' where id=$1", [extra.domain_id]);
+    const expired = await reverifyDueDomains({ store: store(), dns: { resolveTxt: async () => record(extra.verification_token) }, env: on });
+    assert.deepEqual([expired.renewed, expired.lapsed], [0, 1]);
+    await h.asAdmin();
+    const extraRow = await domainOf('praca.firma-a.pl');
+    assert.equal(extraRow.status, 'pending');
+    assert.ok(new Date(extraRow.last_verified_at) < new Date(Date.now() - 30 * 86400_000), 'not renewed');
+    assert.equal(await e.resolve('praca.firma-a.pl'), null);
+    await h.asAdmin();
+    assert.deepEqual((await rows('select action, actor from tenant_domains.events where domain_id=$1 order by id desc limit 1', [extra.domain_id]))[0],
+      { action: 'verification_lapsed', actor: null });
   });
 
   await t.test('revoked domain: never resolves again; a new claim needs a new token and a new verification', async () => {

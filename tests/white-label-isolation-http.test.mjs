@@ -333,6 +333,7 @@ test('SC-020-D: two companies, two customer domains, every cross-tenant path ref
       for (const path of ['/operator/billing', `/dashboard/${B}`, '/login']) {
         const res = await page(hostA, path, users.otherOwner);
         assert.equal(res.status, 503, path);
+        assert.equal(res.headers['retry-after'], '30');
         assert.match(res.headers['cache-control'], /no-store/);
       }
       assert.equal((await page(platform, '/login', null)).status, 200, 'platform host does not depend on the lookup');

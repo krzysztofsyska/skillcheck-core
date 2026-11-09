@@ -54,5 +54,5 @@
 # SC-020-A: white-label brand configuration (separate branding schema, private brand-assets bucket).
 20261109190000_sc020_brand_configuration.sql
 20261109200000_sc020_customer_domains.sql
-# SC-020-D: scheduled DNS re-verification functions for the verifier role (no login, no schedule).
+# SC-020-D: scheduled DNS re-verification role tenant_domain_reverifier and its two functions (no login, no schedule).
 20261109210000_sc020d_domain_reverification.sql

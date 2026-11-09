@@ -71,9 +71,10 @@ async function runPass(store: ReverifyStore, dns: DnsTxtResolver, options: { lim
       const dns = await checkDnsOwnership(deps.dns, target.hostname, target.verification_token, options.timeoutMs);
       if (dns === 'unavailable') { summary.unavailable += 1; continue; }
       const status = await deps.store.record(target.company_id, target.domain_id, target.verification_token, dns === 'ok');
+      // An already expired domain is never renewed by the job: it returns 'pending' even with the record present.
       if (status === 'skipped') summary.skipped += 1;
-      else if (dns === 'ok') summary.renewed += 1;
       else if (status === 'pending') summary.lapsed += 1;
+      else if (dns === 'ok') summary.renewed += 1;
       else summary.failed += 1;
     } catch {
       summary.errors += 1;

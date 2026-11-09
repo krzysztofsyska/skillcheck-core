@@ -13,8 +13,9 @@
 --   * tenant_domains.reverify_due(max_rows) — lista własnych domen, którym
 --     zbliża się termin ponownej weryfikacji (host, token; nic więcej),
 --   * tenant_domains.record_scheduled_dns_check(...) — zapis wyniku. Może
---     wyłącznie ODNOWIĆ weryfikację domeny już zweryfikowanej/aktywnej albo
---     zapisać niepowodzenie (a po terminie cofnąć domenę do `pending`).
+--     wyłącznie ODNOWIĆ weryfikację domeny zweryfikowanej/aktywnej, która
+--     jeszcze nie wygasła, albo zapisać niepowodzenie. Domenę już wygasłą cofa
+--     do `pending` (także gdy rekord jest), więc nigdy nie przywraca jej sama.
 --     Nigdy nie weryfikuje domeny `pending`, nie włącza domeny, nie zmienia TLS
 --     i nie dotyka domen innych firm. Zdarzenia mają actor = NULL
 --     („automatycznie” w historii właściciela).
@@ -52,19 +53,25 @@ begin
   if not exists (select 1 from pg_roles where rolname = 'tenant_domain_reverifier') then
     create role tenant_domain_reverifier nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
   end if;
+  -- Rola istniejąca wcześniej w klastrze: wymuszamy te same atrybuty i odmawiamy, gdy ktoś ją dziedziczy.
+  alter role tenant_domain_reverifier nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+  if exists (select 1 from pg_auth_members m where m.roleid = 'tenant_domain_reverifier'::regrole) then
+    raise exception 'sc020d_reverifier_has_members' using errcode = '55000';
+  end if;
 end
 $role$;
 
 -- Domeny do ponownego sprawdzenia: własne, zweryfikowane lub aktywne, których
--- ostatnia udana weryfikacja jest starsza niż (reverify_days - 7) dni (co
--- najmniej 1 dzień) — czyli zanim wygasną. Najstarsze najpierw.
+-- ostatnia udana weryfikacja jest starsza niż max(reverify_days - 7,
+-- połowa reverify_days) dni — czyli zanim wygasną. Także już wygasłe (te zadanie
+-- tylko cofa do `pending`). Najstarsze najpierw.
 create function tenant_domains.reverify_due(max_rows integer)
 returns table (company_id uuid, domain_id uuid, hostname text, verification_token text)
 language sql stable security definer set search_path = '' as $$
   select d.company_id, d.id, d.hostname, d.verification_token
     from tenant_domains.domains d, tenant_domains.settings s
    where s.singleton and d.kind = 'custom' and d.status in ('verified', 'active')
-     and d.last_verified_at <= clock_timestamp() - make_interval(days => greatest(s.reverify_days - 7, 1))
+     and d.last_verified_at <= clock_timestamp() - make_interval(days => greatest(s.reverify_days - 7, ceil(s.reverify_days / 2.0)::integer))
    order by d.last_verified_at, d.id
    limit least(greatest(coalesce(max_rows, 0), 0), 500)
 $$;
@@ -88,21 +95,23 @@ begin
     return 'skipped';
   end if;
   select * into cfg from tenant_domains.settings s where s.singleton;
-  if dns_ok then
-    update tenant_domains.domains set last_verified_at = clock_timestamp() where id = d.id;
-    perform tenant_domains.log(target_company, d.id, 'reverified', null);
-    return d.status;
-  end if;
-  if not exists (select 1 from (select e.action, e.actor from tenant_domains.events e
+  -- Kolejne niepowodzenia w oknie przed terminem: jeden wpis, nie po jednym na przebieg.
+  if not dns_ok and not exists (select 1 from (select e.action, e.actor from tenant_domains.events e
                                  where e.company_id = target_company and e.domain_id = d.id order by e.id desc limit 1) last
                   where last.action = 'verification_failed' and last.actor is null) then
     perform tenant_domains.log(target_company, d.id, 'verification_failed', null);
   end if;
   if not tenant_domains.fresh(d) then
+    -- Już wygasła: zadanie NIE odnawia jej nawet przy obecnym rekordzie. Domena
+    -- wraca do `pending` i wymaga sprawdzenia przez właściciela.
     update tenant_domains.domains set status = 'pending', activated_at = null, tls_ready_at = null,
       pending_expires_at = clock_timestamp() + make_interval(days => cfg.pending_days) where id = d.id;
     perform tenant_domains.log(target_company, d.id, 'verification_lapsed', null);
     return 'pending';
+  end if;
+  if dns_ok then
+    update tenant_domains.domains set last_verified_at = clock_timestamp() where id = d.id;
+    perform tenant_domains.log(target_company, d.id, 'reverified', null);
   end if;
   return d.status;
 end;

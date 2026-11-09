@@ -13,6 +13,7 @@ function plain(status: 400 | 404 | 503) {
     status, headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
   response.headers.set("Cache-Control", "private, no-store");
+  if (status === 503) response.headers.set("Retry-After", "30");
   return response;
 }
 

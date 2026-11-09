@@ -33,6 +33,7 @@ export default async function WhiteLabelHistory({ params }: { params: Promise<{ 
     <p className="lead">Kto i kiedy zmienił wygląd panelu lub domeny firmy. Wcześniejszą wersję marki przywrócisz na stronie{" "}
       <Link href={`/dashboard/${companyId}/marka`}>Wygląd panelu</Link>, a domenę wyłączysz lub odwołasz na stronie{" "}
       <Link href={`/dashboard/${companyId}/domeny`}>Domeny</Link>.</p>
+    <p>Pokazujemy ostatnie zmiany: do 100 zmian wyglądu panelu i do 50 zmian domen.</p>
     {(brand.error || domains.error) && <p className="notice" role="status">Część historii jest chwilowo niedostępna.</p>}
     {entries.length ? <ul>{entries.map((e, i) => <li key={i}>{dates.format(new Date(e.at))} — {e.area === "marka" ? "Marka" : "Domena"} ({e.subject}): {e.action} — {e.who}</li>)}</ul>
       : <p>Brak zmian.</p>}
