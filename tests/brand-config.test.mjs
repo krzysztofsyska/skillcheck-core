@@ -183,6 +183,10 @@ test('review SC-020-A #1: namespace prefixes, CSS escapes and entities cannot by
     '<svg xmlns="http://www.w3.org/2000/svg"><!-- a -- b --><rect/></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:red}<!-- x --></style></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><!-- never closed <rect/></svg>',
+    // Review #4: XML 1.1 line-ending normalisation (NEL, U+2028) as an attribute separator.
+    '<?xml version="1.1"?><svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"\u0085onload="x"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"\u2028onload="x"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red" \u00e9onload="x"/></svg>',
   ];
   for (const source of bypasses) {
     const result = validateBrandAsset(raw(source), 'logo');

@@ -220,9 +220,12 @@ function validateIco(bytes: Uint8Array): string | null {
  *  - href / xlink:href tylko "#id";
  *  - w CSS (element <style>, atrybut style i każda wartość atrybutu) tylko
  *    funkcje z listy, a url() wyłącznie w postaci url(#id); bez @, \ i /*;
- *  - bez komentarzy, DOCTYPE/ENTITY, CDATA, instrukcji przetwarzania (poza
- *    deklaracją XML na początku), encji innych niż &amp; &lt; &gt; &quot; &apos;
- *    oraz schematów javascript:/vbscript:/data:.
+ *  - poprawne komentarze (bez „--” w środku) są pomijane, ale nie w <style>;
+ *  - deklaracja XML tylko na początku, w wersji 1.0 i bez kodowania albo z UTF-8;
+ *  - bez DOCTYPE/ENTITY, CDATA, innych instrukcji przetwarzania, encji innych niż
+ *    &amp; &lt; &gt; &quot; &apos;, znaków sterujących (C0 poza \t\n\r, C1),
+ *    U+2028/U+2029/U+FFFE/U+FFFF oraz schematów javascript:/vbscript:/data:;
+ *  - nazwy atrybutów tylko z liter ASCII, cyfr i znaków _ . : -.
  */
 export function svgProblems(source: string): string[] {
   const problems = new Set<string>();
@@ -231,10 +234,10 @@ export function svgProblems(source: string): string[] {
   // XML 1.0 zabrania tych znaków; ESC jest też potrzebny do przełączania trybu
   // kodowań typu ISO-2022-JP (review #3 #1).
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/.test(text)) fail('Znaki sterujące są niedozwolone.');
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029\ufffe\uffff]/.test(text)) fail('Znaki sterujące są niedozwolone.');
   // Deklaracja XML tylko bez kodowania albo z UTF-8: parser nie może czytać
   // pliku inaczej niż ten skaner.
-  const decl = /^\s*<\?xml\s+version\s*=\s*(["'])1\.[01]\1(\s+encoding\s*=\s*(["'])utf-8\3)?(\s+standalone\s*=\s*(["'])(yes|no)\5)?\s*\?>/i.exec(text);
+  const decl = /^\s*<\?xml\s+version\s*=\s*(["'])1\.0\1(\s+encoding\s*=\s*(["'])utf-8\3)?(\s+standalone\s*=\s*(["'])(yes|no)\5)?\s*\?>/i.exec(text);
   if (decl) text = text.slice(decl[0].length);
   const lower = text.toLowerCase();
   if (/(javascript|vbscript|data)\s*:/.test(lower)) fail('Schematy javascript:, vbscript: i data: są niedozwolone.');
@@ -288,7 +291,7 @@ export function svgProblems(source: string): string[] {
       while (i < n && !isSpace(lower[i]) && !'=/>"\'<'.includes(lower[i])) i++;
       const attr = lower.slice(attrStart, i);
       while (i < n && isSpace(lower[i])) i++;
-      if (!attr || lower[i] !== '=') { fail('Nieprawidłowy atrybut w pliku SVG.'); break; }
+      if (!/^[a-z_][a-z0-9_.:-]*$/.test(attr) || lower[i] !== '=') { fail('Nieprawidłowy atrybut w pliku SVG.'); break; }
       i++;
       while (i < n && isSpace(lower[i])) i++;
       const quote = lower[i];
