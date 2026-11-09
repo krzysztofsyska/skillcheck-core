@@ -36,6 +36,8 @@ export function isPublicAddress(address: string): boolean {
     }
     if (g0 === 0x64 && g1 === 0xff9b) return false; // NAT64 64:ff9b::/96 i 64:ff9b:1::/48
     if (g0 === 0x2002) return false; // 6to4
+    if (g0 === 0x2001 && g1 === 0) return false; // Teredo 2001::/32
+    if (groups.slice(0, 4).every(g => g === 0) && groups[4] === 0xffff && groups[5] === 0) return false; // ::ffff:0:0:0/96 (IPv4-translated)
     if (g0 === 0x2001 && g1 === 0x0db8) return false; // dokumentacja
     if ((g0 & 0xfe00) === 0xfc00) return false; // ULA fc00::/7
     if ((g0 & 0xffc0) === 0xfe80 || (g0 & 0xffc0) === 0xfec0) return false; // link-local, site-local

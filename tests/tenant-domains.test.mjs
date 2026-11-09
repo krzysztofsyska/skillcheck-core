@@ -188,7 +188,7 @@ test('verifier flow: reads host and token from the store, records DNS then TLS, 
 });
 
 test('TLS check never connects to private or local addresses', () => {
-  for (const address of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.168.1.1', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '224.0.0.1', '64:ff9b::7f00:1', '64:ff9b:1::1', '2002:7f00:1::1', 'fec0::1', '::7f00:1', '192.0.0.1', '::ffff:127.0.0.1', '2001:db8::1', 'not-an-ip'])
+  for (const address of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.168.1.1', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '224.0.0.1', '64:ff9b::7f00:1', '64:ff9b:1::1', '2002:7f00:1::1', 'fec0::1', '::7f00:1', '192.0.0.1', '::ffff:127.0.0.1', '2001:db8::1', '2001:0:4136:e378::1', '::ffff:0:7f00:1', 'not-an-ip'])
     assert.equal(isPublicAddress(address), false, address);
   for (const address of ['8.8.8.8', '76.76.21.21', '2606:4700::1111', '::ffff:8.8.8.8', '2a00:1450:4001:80b::200e']) assert.equal(isPublicAddress(address), true, address);
 });

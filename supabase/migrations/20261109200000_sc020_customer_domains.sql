@@ -461,6 +461,10 @@ declare d tenant_domains.domains; cfg tenant_domains.settings; stale record;
 begin
   if dns_ok is null then raise exception 'tenant_domain_bad_check' using errcode = '22023'; end if;
   perform tenant_domains.require_acting_owner(target_company, acting_owner);
+  -- Kolejność blokad: najpierw host (blokada doradcza), potem wiersz — tak samo
+  -- dla każdej firmy, więc równoległe sprawdzenia tego hosta się nie zakleszczą.
+  perform pg_advisory_xact_lock(hashtextextended('tenant_domains:' || d2.hostname, 0))
+    from tenant_domains.domains d2 where d2.company_id = target_company and d2.id = target_domain;
   perform tenant_domains.expire_pending(target_company);
   d := tenant_domains.lock_domain(target_company, target_domain);
   if expected_token is null or d.verification_token is distinct from expected_token or d.status = 'revoked' then
@@ -468,7 +472,6 @@ begin
   end if;
   select * into cfg from tenant_domains.settings s where s.singleton;
   if d.kind = 'subdomain' then return d.status; end if;
-  perform pg_advisory_xact_lock(hashtextextended('tenant_domains:' || d.hostname, 0));
   if dns_ok then
     if d.status = 'pending' then
       -- Inna firma trzymająca host z NIEświeżą weryfikacją (porzucona domena)
