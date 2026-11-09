@@ -53,9 +53,16 @@ begin
   if not exists (select 1 from pg_roles where rolname = 'tenant_domain_reverifier') then
     create role tenant_domain_reverifier nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
   end if;
-  -- Rola istniejąca wcześniej w klastrze: wymuszamy te same atrybuty i odmawiamy, gdy ktoś ją dziedziczy.
-  alter role tenant_domain_reverifier nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
-  if exists (select 1 from pg_auth_members m where m.roleid = 'tenant_domain_reverifier'::regrole) then
+  -- Rola istniejąca wcześniej w klastrze: tylko z tymi samymi atrybutami i bez członków; inaczej odmowa
+  -- (bez ALTER ROLE — na Supabase migracje nie działają jako superuser).
+  if exists (select 1 from pg_roles r where r.rolname = 'tenant_domain_reverifier'
+             and (r.rolcanlogin or r.rolsuper or r.rolcreatedb or r.rolcreaterole or r.rolinherit or r.rolreplication or r.rolbypassrls)) then
+    raise exception 'sc020d_reverifier_unexpected_attributes' using errcode = '55000';
+  end if;
+  -- PostgreSQL 16+: twórca bez superusera (Supabase `postgres`) dostaje automatycznie członkostwo
+  -- ADMIN bez INHERIT i bez SET — to nie daje uprawnień roli. Odmawiamy przy każdym innym.
+  if exists (select 1 from pg_auth_members m where m.roleid = 'tenant_domain_reverifier'::regrole
+             and (m.inherit_option or m.set_option)) then
     raise exception 'sc020d_reverifier_has_members' using errcode = '55000';
   end if;
 end

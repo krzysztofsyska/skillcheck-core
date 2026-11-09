@@ -87,7 +87,7 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
       const attributes = (await rows('select rolcanlogin, rolbypassrls, rolsuper, rolinherit, rolcreaterole, rolcreatedb from pg_roles where rolname=$1', [role]))[0];
       assert.deepEqual(attributes, { rolcanlogin: false, rolbypassrls: false, rolsuper: false, rolinherit: false, rolcreaterole: false, rolcreatedb: false },
         `${role}: no login was created`);
-      assert.equal((await rows("select count(*)::int n from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname=$1", [role]))[0].n, 0, `${role} granted to nobody`);
+      assert.equal((await rows("select count(*)::int n from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname=$1 and (m.inherit_option or m.set_option)", [role]))[0].n, 0, `${role}: nobody inherits it or can SET ROLE to it`);
     }
     // Storage: private bucket, only SELECT and INSERT policies (no overwrite, no delete), both scoped by company.
     const policies = await rows("select policyname, cmd, roles::text[] roles from pg_policies where schemaname='storage' and tablename='objects' order by 1");
