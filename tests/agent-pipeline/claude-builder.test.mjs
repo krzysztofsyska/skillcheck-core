@@ -113,9 +113,14 @@ test('model workflow has no GitHub write token and no direct label scheduler',()
  const source=readFileSync(file,'utf8');assert.equal(source.includes('id-token: write'),false);assert.equal(source.includes('APP_PRIVATE_KEY'),false);assert.equal(source.includes('issues:\n    types'),false);
  assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.execution_file/);assert.match(source,/--setting-sources user/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
  assert.equal(parseContract('TASK: SC-020\nOWNER: Claude Code\nSTATUS: READY').ready,false);
+ const model=w.jobs.model.steps.find(step=>step.id==='builder');
+ assert.match(model.with.claude_args,/--restricted(?:\s|$)/);
+ assert.match(model.with.claude_args,/--strict-mcp-config/);
+ assert.match(model.with.claude_args,/--mcp-config '\{"mcpServers":\{\}\}'/);
+ assert.equal(/--add-dir|--settings\s|bypassPermissions|skip-permissions|--plugin/.test(model.with.claude_args),false);
 });
 
-test('full controller uses Claude adapter, publishes commit and Draft PR, then CI/review repairs same branch', async()=>{
+test('full Claude controller repairs, merges, blocks on post-merge CI and automatically starts next approved task', async()=>{
  const {httpWorld}=await import('./http-world.mjs');
  const {reconcileFromEnv}=await import('../../tools/agent-pipeline/lib/reconcile.mjs');
  const w=httpWorld({claude:true}),previous=globalThis.fetch;globalThis.fetch=w.fetch;
@@ -134,6 +139,29 @@ test('full controller uses Claude adapter, publishes commit and Draft PR, then C
   assert.ok(w.runs.some(r=>r.workflow_id===w.policy.workflow_ids.verify));
   assert.ok(w.runs.some(r=>r.workflow_id===w.policy.workflow_ids.review));
   assert.equal(w.mergeCount,0);
+  w.extraIssues.push({number:81,user:{id:w.policy.owner.id,login:w.policy.owner.login},body:contractBody().replace('SC-DEMO-001','SC-DEMO-002').replace('OWNER: Cursor','OWNER: Claude Code').replace('DEPENDS_ON: NONE','DEPENDS_ON: SC-DEMO-001')});
+  const second=()=>Object.values(w.projection()).find(r=>r.task_id==='SC-DEMO-002');
+  w.env.AGENT_PIPELINE_MERGE_ENABLED='true';
+  for(let i=0;i<20&&w.mergeCount===0;i++)await reconcileFromEnv(w.env,{policy:w.policy});
+  assert.equal(w.mergeCount,1,JSON.stringify(task()));
+  assert.equal(w.pulls[0].merged,true);assert.equal(w.pulls[0].draft,false);
+  const merged=task().binding.merge.mergeCommitSha;
+  const post=w.runs.find(r=>r.workflow_id===w.policy.post_merge_ci.workflow_id&&r.head_sha===merged);
+  assert.ok(post);post.status='in_progress';post.conclusion=null;
+  for(let i=0;i<4;i++)await reconcileFromEnv(w.env,{policy:w.policy});
+  assert.equal(task().technical_state,'WAITING_POST_MERGE_CI');assert.equal(second(),undefined);
+  assert.equal(w.runs.filter(r=>r.workflow_id===w.policy.claude_builder.workflow_id).length,2);
+  post.status='completed';post.conclusion='failure';
+  for(let i=0;i<4;i++)await reconcileFromEnv(w.env,{policy:w.policy});
+  assert.equal(task().state,'BLOCKED');assert.equal(task().binding.post_merge_ci.blocked,true);assert.equal(second(),undefined);
+  assert.equal(w.runs.filter(r=>r.workflow_id===w.policy.claude_builder.workflow_id).length,2);
+  post.conclusion='success';post.run_attempt=2;
+  for(let i=0;i<20&&w.runs.filter(r=>r.workflow_id===w.policy.claude_builder.workflow_id).length<3;i++)await reconcileFromEnv(w.env,{policy:w.policy});
+  assert.equal(task().state,'ACCEPTED');assert.equal(task().technical_state,null);
+  assert.equal(task().binding.post_merge_ci.headSha,merged);assert.equal(task().binding.post_merge_ci.runAttempt,2);
+  assert.equal(second()?.state,'BUILDING',JSON.stringify(second()));assert.equal(second().base_sha,merged);
+  assert.equal(w.runs.filter(r=>r.workflow_id===w.policy.claude_builder.workflow_id).length,3);
+  assert.equal(w.mergeCount,1);assert.equal(w.branches.main,'d'.repeat(40));
  } finally {globalThis.fetch=previous;}
 });
 

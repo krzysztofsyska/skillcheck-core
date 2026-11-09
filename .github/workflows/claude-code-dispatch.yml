@@ -105,6 +105,7 @@ jobs:
             --max-budget-usd ${{ needs.authorize.outputs.max_run_usd }}
             --tools Read,Glob,Grep
             --allowedTools Read,Glob,Grep
+            --restricted
             --setting-sources user
             --strict-mcp-config
             --mcp-config '{"mcpServers":{}}'
