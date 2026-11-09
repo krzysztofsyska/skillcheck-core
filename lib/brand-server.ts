@@ -47,3 +47,12 @@ export function brandErrorStatus(message: string | undefined) {
   }
   return 'failed';
 }
+
+/**
+ * SC-020-C: tytuł karty/wydruku strony panelu firmy. Z opublikowaną marką —
+ * „<tytuł> | <marka klienta>”, bez niej — dotychczasowe „<tytuł> | SkillCheck”.
+ */
+export async function brandedTitle(companyId: string, base: string) {
+  const brand = await loadPublishedBrand(companyId);
+  return `${base} | ${brand ? brand.config.brandName : 'SkillCheck'}`;
+}

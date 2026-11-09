@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { companyAccess } from '../../../../../../../../lib/company-access';
+import { brandedTitle } from '../../../../../../../../lib/brand-server';
 import { ScreeningNotFoundError } from '../../../../../../../../lib/screening-flow';
 import { isUuid, screeningPath, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
 import {
@@ -12,7 +13,11 @@ import styles from '../screening/screening.module.css';
 
 export const dynamic = 'force-dynamic';
 // Bez danych kandydata w tytule i w adresie strony.
-export const metadata = { title: 'Raport kandydata | SkillCheck', robots: { index: false, follow: false }, referrer: 'no-referrer' };
+// SC-020-C: tytuł (także nagłówek wydruku/PDF) w marce klienta, jeśli jest opublikowana.
+export async function generateMetadata({ params }: { params: Promise<{ companyId: string }> }) {
+  const { companyId } = await params;
+  return { title: await brandedTitle(companyId, 'Raport kandydata'), robots: { index: false, follow: false }, referrer: 'no-referrer' as const };
+}
 
 const groupHeadings: Record<RequirementMark, string> = {
   required: 'Wymagania konieczne',
