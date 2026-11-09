@@ -1,0 +1,35 @@
+name: Claude Code task dispatcher
+
+# Draft integration workflow. This file alone does not activate automation
+# until trusted default-branch workflow, repository credentials and owner gates
+# are explicitly provisioned and verified.
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Approved issue number (SC-020 #21 or SC-021 #81)'
+        required: true
+        type: choice
+        options: ['21', '81']
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  preflight:
+    if: github.repository == 'krzysztofsyska/skillcheck-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate approved scope and report required integration
+        env:
+          TASK: ${{ inputs.task }}
+        run: |
+          case "$TASK" in
+            21|81) echo "Approved issue #$TASK";;
+            *) echo "Unapproved issue"; exit 1;;
+          esac
+          echo "::notice::Preflight only. Claude Code runner requires a trusted GitHub App identity, protected secrets and separate implementation/review gates."
+          echo "::error::Claude Code execution is not yet configured. Fail closed."
+          exit 1
