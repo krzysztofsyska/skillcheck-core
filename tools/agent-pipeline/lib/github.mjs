@@ -1,3 +1,4 @@
+import { controlPlane, integrationOnly } from './control-plane.mjs';
 import { completeComparison } from './comparison.mjs';
 import { createSign } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
@@ -75,7 +76,9 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
         detailed.push(withRulesetEvidence(await request(`/repos/${owner}/${repo}/rulesets/${item.id}`), policy));
       }
       const environments = {};
-      for (const e of [policy.environments?.owner_acceptance, policy.environments?.production_approval, policy.environments?.agent_review]) {
+      const configured = [policy.environments?.owner_acceptance, policy.environments?.production_approval, policy.environments?.agent_review];
+      if (integrationOnly(policy)) configured.push(policy.environments?.agent_control);
+      for (const e of configured) {
         if (!e?.name) continue;
         const path = `/repos/${owner}/${repo}/environments/${encodeURIComponent(e.name)}`;
         const env = await request(path);
@@ -269,16 +272,26 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       return request(`/repos/${owner}/${repo}/check-runs${matches.length ? `/${matches[0].id}` : ''}`, { method: matches.length ? 'PATCH' : 'POST', body });
     },
     async createPull({ head, base, title, body }) {
+      if (integrationOnly(policy) && base !== 'integration') throw new Error('PRODUCTION_DISABLED_FOR_CONTROL_PLANE');
       return request(`/repos/${owner}/${repo}/pulls`, { method: 'POST', body: { head, base, title, body, draft: true } });
     },
-    async dispatch({ workflow, inputs, ref = 'main' }) {
+    async dispatch({ workflow, inputs, ref = controlPlane(policy).branch }) {
       const file = workflow.split('/').at(-1);
+      if (integrationOnly(policy)) {
+        const allowed = ['reconcile', 'verify', 'review'].map(kind => policy.workflows?.[kind]?.split('/').at(-1));
+        if (policy.builder_provider === 'claude-code') allowed.push(policy.claude_builder?.workflow_path?.split('/').at(-1));
+        if (ref !== controlPlane(policy).branch || !allowed.includes(file)) throw new Error('PRODUCTION_DISABLED_FOR_CONTROL_PLANE');
+      }
       await request(`/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(file)}/dispatches`, { method: 'POST', body: { ref, inputs: stringifyInputs(inputs) } });
       // Resolve on the next tick by exact request ID, actor, workflow and policy
       // commit. Never adopt an arbitrary recently created run.
       return { run_id: null, dispatched: true };
     },
     async merge({ prNumber, sha }) {
+      if (integrationOnly(policy)) {
+        const pull = await request(`/repos/${owner}/${repo}/pulls/${prNumber}`);
+        if (pull.base?.ref !== 'integration' || pull.base?.repo?.id !== policy.repository_id) throw new Error('PRODUCTION_DISABLED_FOR_CONTROL_PLANE');
+      }
       const result = await request(`/repos/${owner}/${repo}/pulls/${prNumber}/merge`, { method: 'PUT', body: { sha, merge_method: 'merge' } });
       return { merged: result.merged === true, mergeCommitSha: result.sha ?? null };
     },
