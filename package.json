@@ -63,7 +63,7 @@
     "test:erasure-service": "node --test tests/erasure-service.test.mjs tests/erasure-service-backend.test.mjs",
     "test:ai-gateway": "node --test tests/ai-gateway.test.mjs",
     "test:competency": "node --test tests/competency-test.test.mjs",
-    "test:brand": "node --experimental-strip-types --test tests/brand-config.test.mjs tests/brand-ui.test.mjs",
+    "test:brand": "node --experimental-strip-types --test tests/brand-config.test.mjs tests/brand-ui.test.mjs tests/brand-messages.test.mjs",
     "test:brand-db": "node --experimental-strip-types --test --test-concurrency=1 tests/brand-database.test.mjs",
     "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs tests/sc19-przelewy24-provider.test.mjs",
     "smoke:preview": "node scripts/preview-smoke.cjs",

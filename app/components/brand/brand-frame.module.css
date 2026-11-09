@@ -18,3 +18,11 @@
 .candidateBody h3{margin-top:0}
 .accent{color:var(--brand-accent);font-weight:700}
 .button{display:inline-block;margin:8px 0 16px;padding:10px 18px;border-radius:8px;background:var(--brand-primary);color:var(--brand-on-primary);font-weight:700}
+/* SC-020-C: wydruk / PDF w marce klienta. Ramka marki (nagłówek z logo i stała
+   stopka prawna) zostaje w wydruku z kolorami marki; pasek konta operatora jest
+   ukrywany w wydruku przez workspace-navigation.module.css. */
+@media print{
+  .frame{background:#fff}
+  .headerPrimary,.headerLight{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .footer{padding:8mm 0 0;break-inside:avoid}
+}
