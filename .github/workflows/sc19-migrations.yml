@@ -8,7 +8,23 @@ on:
       - 'docs/prototypes/sc19-payment-storage.sql'
       - 'docs/sc19-migrations*.md'
       - 'lib/sc19-payment*.ts'
+      - 'lib/sc19-offer-*.ts'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/competency-active-*.mjs'
+      - 'tests/helpers/competency-active-fixture.mjs'
+      - 'scripts/sc-wer-c1-compose.mjs'
+      - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/sc-c6-compose.mjs'
+      - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
+      - 'db/components/exercise-ai-proposals.sql'
+      - 'tests/exercise-ai-*.test.mjs'
+      - 'scripts/preview-migration-stream.mjs'
+      - 'tests/preview-db-migrate-workflow.test.mjs'
+      - '.github/workflows/preview-db-migrate.yml'
+      - 'db/components/sc-ac-paired-sheets.sql'
+      - 'tests/assessment-center-active-*.mjs'
+      - 'tests/helpers/assessment-center-active-fixture.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step4-erasure-r8.test.mjs'
       - 'tests/cv-bulk-database.test.mjs'
@@ -16,10 +32,14 @@ on:
       - 'supabase/rollbacks/*cv_bulk*'
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
+      - 'tests/sc19-auto-trial-database.test.mjs'
       - 'tests/db-migrate/**'
       - 'tools/db-migrate/**'
       - '.github/workflows/db-migrate-production.yml'
       - 'supabase/rollbacks/**'
+      # Preview-only commercial seeds: not migrations, but exercised by
+      # tests/sc-019-migrations.test.mjs, so a change to one must re-run this.
+      - 'supabase/preview-seeds/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
@@ -37,6 +57,21 @@ on:
     paths:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/competency-active-*.mjs'
+      - 'tests/helpers/competency-active-fixture.mjs'
+      - 'scripts/sc-wer-c1-compose.mjs'
+      - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/sc-c6-compose.mjs'
+      - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
+      - 'db/components/exercise-ai-proposals.sql'
+      - 'tests/exercise-ai-*.test.mjs'
+      - 'scripts/preview-migration-stream.mjs'
+      - 'tests/preview-db-migrate-workflow.test.mjs'
+      - '.github/workflows/preview-db-migrate.yml'
+      - 'db/components/sc-ac-paired-sheets.sql'
+      - 'tests/assessment-center-active-*.mjs'
+      - 'tests/helpers/assessment-center-active-fixture.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step4-erasure-r8.test.mjs'
       - 'tests/cv-bulk-database.test.mjs'
@@ -44,10 +79,14 @@ on:
       - 'supabase/rollbacks/*cv_bulk*'
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
+      - 'tests/sc19-auto-trial-database.test.mjs'
       - 'tests/db-migrate/**'
       - 'tools/db-migrate/**'
       - '.github/workflows/db-migrate-production.yml'
       - 'supabase/rollbacks/**'
+      # Preview-only commercial seeds: not migrations, but exercised by
+      # tests/sc-019-migrations.test.mjs, so a change to one must re-run this.
+      - 'supabase/preview-seeds/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
@@ -114,21 +153,39 @@ jobs:
           fi
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_dump" --version
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_restore" --version
+      - run: node scripts/sc-wer-c1-compose.mjs --check
+      - run: node scripts/sc-ac-compose.mjs --check
+      - run: node scripts/sc-c6-compose.mjs --check
+      - run: node scripts/sc19-commerce-inventory-compose.mjs --check
+      - name: Catalog orders, settlement and erasure
+        run: node --experimental-strip-types --test tests/sc19-catalog-orders.test.mjs
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
       - name: Real migration, concurrency, ACL, purge and native restore
         run: |
           set +e
           node --experimental-strip-types --test --test-concurrency=1 \
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
-            tests/sc-019-migrations-mvp-e2e.test.mjs \
+            tests/sc-019-migrations-mvp-e2e.test.mjs tests/preview-db-migrate-workflow.test.mjs \
+            tests/competency-active-migration.test.mjs tests/competency-active-concurrency.test.mjs tests/competency-active-limiter.test.mjs tests/competency-active-staff.test.mjs \
+            tests/assessment-center-active-database.test.mjs tests/assessment-center-active-concurrency.test.mjs \
+            tests/exercise-ai-inventory.test.mjs tests/exercise-ai-concurrency.test.mjs \
+            tests/exercise-ai-grant-guard.test.mjs tests/exercise-ai-grant-guard-concurrency.test.mjs \
+            tests/exercise-ai-recruiter-api.test.mjs tests/exercise-ai-recruiter-api-concurrency.test.mjs \
+            tests/exercise-ai-revision.test.mjs tests/exercise-ai-revision-concurrency.test.mjs \
+            tests/exercise-ai-generation-database.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/cv-bulk-database.test.mjs tests/sc-step3-evidence-worker.test.mjs \
-            tests/sc-019-operator-fulfillment.test.mjs tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
+            tests/sc-019-operator-fulfillment.test.mjs tests/sc19-auto-trial-database.test.mjs \
+            tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
             tests/db-migrate/normalize-line-endings.test.mjs \
             > sc19-migrations.log 2>&1
           test_result=$?
           tail -n 250 sc19-migrations.log
           exit "$test_result"
         env:
+          PREVIEW_MIGRATE_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}

@@ -19,11 +19,21 @@ const nipA = nip('526025099'), nipB = nip('951000001');
 
 const code = expected => error => error.code === expected;
 
+// These RPCs are specified against an UNCONFIGURED policy: the operator is the
+// only one who may choose a quota. That is now also what the migration chain
+// leaves behind, since commercial activation is no longer done by any migration
+// (the owner-approved quotas reach the TEST project through
+// supabase/preview-seeds/sc19-preselekcja-offer.sql, which is not a migration).
+// So the precondition holds with no fixture clean-up, and this asserts it.
 async function ready(t) {
   const env = await bootMigrationDatabase(t);
   const h = await setupRankingDatabase(env.db, { throughMigration: null });
   const { db } = env;
   await h.asAdmin();
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers where approved and active')).rows[0].n, 0,
+    'the migration chain publishes no purchasable offer');
+  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0,
+    'the migration chain configures no quota: that is the operator\'s decision');
   await db.query('insert into public.platform_operators(user_id) values($1)', [operator]);
   const a = await h.seed(users.owner), b = await h.seed(users.otherOwner);
   await h.asAdmin();
@@ -165,7 +175,21 @@ test('rollback drops only the operator functions and keeps recorded approvals an
   await h.asAdmin();
   const down = await readFile(new URL('../supabase/rollbacks/20261029100000_sc019_operator_fulfillment_down.sql', import.meta.url), 'utf8');
   await db.query(down);
-  assert.equal((await call(db, "select count(*)::int n from pg_proc where proname like 'sc19_operator%' or proname='sc19_require_operator'"))[0].n, 0);
+  // Exactly the functions this rollback claims to drop, READ OUT OF THE ROLLBACK
+  // FILE ITSELF. A later migration (20261103090000_sc19_auto_trial_marketing_
+  // consent.sql) adds operator functions of its own, removed by its own
+  // rollback, so counting every sc19_operator* name here would assert against
+  // the wrong migration — but a hand-written list would stop noticing a function
+  // this rollback should remove and does not, which is the whole point of the
+  // assertion. Deriving the list keeps both properties.
+  const dropped = [...down.matchAll(/drop\s+function\s+if\s+exists\s+(public|private)\.([a-z0-9_]+)\s*\(/gi)]
+    .map(match => `${match[1]}.${match[2]}`);
+  assert.ok(dropped.length >= 6, `the rollback must still name its functions: ${dropped.length}`);
+  for (const qualified of dropped) {
+    const [schema, name] = qualified.split('.');
+    assert.equal((await call(db, `select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace
+      where s.nspname=$1 and p.proname=$2`, [schema, name]))[0].n, 0, qualified);
+  }
   for (const table of ['sc19_package_policy', 'sc19_trial_approvals', 'sc19_balances']) {
     assert.equal((await call(db, `select count(*)::int n from private.${table}`))[0].n, 1, table);
   }

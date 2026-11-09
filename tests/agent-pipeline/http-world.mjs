@@ -1,7 +1,9 @@
+import { controlPlane } from '../../tools/agent-pipeline/lib/control-plane.mjs';
 import { generateKeyPairSync, createHash } from 'node:crypto';
 import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
 import { parseBuilderExecution } from '../../tools/agent-pipeline/lib/builder-output.mjs';
 import { contractBody } from './helpers.mjs';
+export const CONTROL = 'f'.repeat(40);
 export const MAIN = 'd'.repeat(40), BASE = 'c'.repeat(40), H1 = 'a'.repeat(40), H2 = 'b'.repeat(40), MERGED = 'e'.repeat(40);
 export function configuredPolicy() {
   const p = loadPolicy(); p.controller_app_id = 123; p.controller_actor_id = 456;
@@ -12,13 +14,20 @@ export function configuredPolicy() {
 export function protectionFixtures(policy) {
   const rules = [];
   const make = (name, refs, entries, bypass = []) => { rules.push({ id: rules.length + 1, name, target: 'branch', enforcement: 'active', conditions: { ref_name: { include: refs.map(r => `refs/heads/${r}`), exclude: [] } }, rules: entries, bypass_actors: bypass }); };
-  make('writers-only', ['main','integration'], [{type:'update'}], [{actor_type:'Integration', actor_id:policy.controller_app_id, bypass_mode:'pull_request'}]);
+  make('writers-only', [...new Set(['main','integration',controlPlane(policy).branch])], [{type:'update'}], [{actor_type:'Integration', actor_id:policy.controller_app_id, bypass_mode:'pull_request'}]);
   make('state-writers', ['agent-state'], [{type:'update'}], [{actor_type:'Integration', actor_id:policy.controller_app_id, bypass_mode:'always'}]);
-  for(const branch of ['main','integration']) make('quality-gates', [branch], [{type:'pull_request'},{type:'deletion'},{type:'non_fast_forward'},{type:'required_status_checks',parameters:{strict_required_status_checks_policy:true,required_status_checks:policy.required_checks[branch].map(context=>({context,integration_id:policy.controller_app_id}))}}]);
+  for(const branch of [...new Set(['main','integration',controlPlane(policy).branch])]) make('quality-gates', [branch], [{type:'pull_request'},{type:'deletion'},{type:'non_fast_forward'},{type:'required_status_checks',parameters:{strict_required_status_checks_policy:true,required_status_checks:policy.required_checks[branch].map(context=>({context,integration_id:policy.controller_app_id}))}}]);
   make('agent-state-integrity',['agent-state'],[{type:'deletion'},{type:'non_fast_forward'}]);
   const environments = {};
   for(const e of [policy.environments.owner_acceptance,policy.environments.production_approval,policy.environments.agent_review]) environments[e.name] = {...e,can_admins_bypass:false,deployment_branch_policy:{custom_branch_policies:true},branch_policies:[{name:'main',type:'branch'}],protection_rules:[{type:'required_reviewers',prevent_self_review:true,reviewers:[{type:'User',reviewer:{id:policy.owner.id}}]}]};
   environments[policy.environments.agent_review.name].protection_rules = [{type:'branch_policy'}];
+  if (controlPlane(policy).mode === 'integration-only') {
+    for (const configured of [policy.environments.agent_control, policy.environments.agent_review]) {
+      environments[configured.name] = { ...configured, can_admins_bypass: false,
+        deployment_branch_policy: { custom_branch_policies: true },
+        branch_policies: [{ name: controlPlane(policy).branch, type: 'branch' }], protection_rules: [{ type: 'branch_policy' }] };
+    }
+  }
   return {rules,environments};
 }
 const hash = value => createHash('sha1').update(JSON.stringify(value)).digest('hex');
@@ -29,14 +38,20 @@ export const zipped = object => {
  const local=Buffer.concat([h,name,data]);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(1,8);end.writeUInt16LE(1,10);end.writeUInt32LE(central.length+name.length,12);end.writeUInt32LE(local.length,16);
  return Buffer.concat([local,central,name,end]);
 };
-export function httpWorld({claude=false}={}) {
-  const policy=configuredPolicy(), protection=protectionFixtures(policy);
+export function httpWorld({claude=false, operational=false}={}) {
+  const policy=configuredPolicy();
+  if (operational) {
+    policy.control_plane = { branch: 'agent-control-runtime', mode: 'integration-only' };
+    policy.required_checks['agent-control-runtime'] = [...policy.required_checks.integration];
+  }
+  const protection=protectionFixtures(policy);
+  const policySha = operational ? CONTROL : MAIN;
   if(claude){policy.builder_provider='claude-code';policy.claude_builder={enabled:true,cost_approved:true,workflow_id:2001,workflow_path:'.github/workflows/claude-code-dispatch.yml',max_run_usd:1,max_total_usd:4,max_turns:12};}
   const issueNumber=claude?21:7;
   const issueBody=()=>claude?contractBody().replace('OWNER: Cursor','OWNER: Claude Code'):contractBody();
   const privateKey=generateKeyPairSync('rsa',{modulusLength:2048}).privateKey.export({type:'pkcs8',format:'pem'});
-  const env={AGENT_PIPELINE_ENABLED:'true',AGENT_PIPELINE_MERGE_ENABLED:'false',GITHUB_REPOSITORY:policy.repository,AGENT_POLICY_COMMIT:MAIN,GITHUB_RUN_ID:'1',CURSOR_API_KEY:'test-cursor',AGENT_PIPELINE_APP_ID:'123',AGENT_PIPELINE_APP_INSTALLATION_ID:'9',AGENT_PIPELINE_APP_PRIVATE_KEY:privateKey};
-  const w={policy,env,protection,calls:[],branches:{main:MAIN,integration:BASE},stateHead:null,blobs:{},trees:{},commits:{},pulls:[],runs:[],artifacts:{},comments:[],checks:[],extraIssues:[],cursor:null,repair:0,approveA:false,approveB:false,mergeCount:0,loseComment:false,loseMerge:false,corruptRun:false};
+  const env={AGENT_PIPELINE_ENABLED:'true',AGENT_PIPELINE_MERGE_ENABLED:'false',GITHUB_REPOSITORY:policy.repository,AGENT_POLICY_COMMIT:policySha,GITHUB_RUN_ID:'1',CURSOR_API_KEY:'test-cursor',AGENT_PIPELINE_APP_ID:'123',AGENT_PIPELINE_APP_INSTALLATION_ID:'9',AGENT_PIPELINE_APP_PRIVATE_KEY:privateKey};
+  const w={policy,env,protection,calls:[],branches:{main:MAIN,integration:BASE,...(operational?{'agent-control-runtime':CONTROL}:{})},stateHead:null,blobs:{},trees:{},commits:{},pulls:[],runs:[],artifacts:{},comments:[],checks:[],extraIssues:[],cursor:null,repair:0,approveA:false,approveB:false,mergeCount:0,loseComment:false,loseMerge:false,corruptRun:false};
   if(claude){w.commits[BASE]={tree:{sha:BASE}};w.trees[BASE]={};}
   const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
   const missing=()=>json({message:'not found'},404);
@@ -48,15 +63,15 @@ export function httpWorld({claude=false}={}) {
     const visit=sha=>{if(excluded.has(sha)||seen.has(sha))return;seen.add(sha);parents(sha).forEach(visit);commits.push(sha);};visit(head);
     return commits;
   }
-  function createRun(kind,inputs) {
+  function createRun(kind,inputs,ref) {
     const id=100+w.runs.length, approved=kind==='accept'?w.approveA:kind==='promote'?w.approveB:true;
-    const run={id,workflow_id:policy.workflow_ids[kind],path:policy.workflows[kind],event:'workflow_dispatch',head_branch:'main',head_sha:MAIN,actor:{id:policy.controller_actor_id},display_title:`sc-agent:${inputs.request_id}`,run_attempt:1,status:approved?'completed':'waiting',conclusion:approved?'success':null,html_url:`https://github.com/${policy.repository}/actions/runs/${id}`};
+    const run={id,workflow_id:policy.workflow_ids[kind],path:policy.workflows[kind],event:'workflow_dispatch',head_branch:ref,head_sha:w.branches[ref],actor:{id:policy.controller_actor_id},display_title:`sc-agent:${inputs.request_id}`,run_attempt:1,status:approved?'completed':'waiting',conclusion:approved?'success':null,html_url:`https://github.com/${policy.repository}/actions/runs/${id}`};
     w.runs.push(run);
-    if(kind==='builder'){const packet=JSON.parse(inputs.builder_packet);run.workflow_id=policy.claude_builder.workflow_id;run.path=policy.claude_builder.workflow_path;run.display_title=`sc-builder:${packet.agent_id}:${packet.request_id}`;w.repair=packet.head_sha===packet.base_sha?0:1;w.artifacts[id]={schema_version:1,run_id:id,run_attempt:1,policy_sha:MAIN,packet,files:parseBuilderExecution(JSON.stringify([{type:'result',subtype:'success',is_error:false,structured_output:{files:[{path:'app/demo/page.tsx',content:w.repair?'fixed':'needs fix'}]}}]),packet.allowed_files)};}
-    else if(kind==='verify') w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:MAIN,head_sha:inputs.head_sha,base_sha:inputs.base_sha,conclusion:'success',jobs:[{conclusion:'success'}],commands_executed:policy.required_ci_commands};
+    if(kind==='builder'){const packet=JSON.parse(inputs.builder_packet);run.workflow_id=policy.claude_builder.workflow_id;run.path=policy.claude_builder.workflow_path;run.display_title=`sc-builder:${packet.agent_id}:${packet.request_id}`;w.repair=packet.head_sha===packet.base_sha?0:1;w.artifacts[id]={schema_version:1,run_id:id,run_attempt:1,policy_sha:policySha,packet,files:parseBuilderExecution(JSON.stringify([{type:'result',subtype:'success',is_error:false,structured_output:{files:[{path:'app/demo/page.tsx',content:w.repair?'fixed':'needs fix'}]}}]),packet.allowed_files)};}
+    else if(kind==='verify') w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:policySha,head_sha:inputs.head_sha,base_sha:inputs.base_sha,conclusion:'success',jobs:[{conclusion:'success'}],commands_executed:policy.required_ci_commands};
     else if(kind==='review') {
       const packet=JSON.parse(inputs.review_packet); const pass=w.repair>0;
-      w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:MAIN,payload:{schema_version:1,request_id:packet.request_id,repository_id:policy.repository_id,pr_number:packet.pr_number,head_sha:packet.head_sha,base_sha:packet.base_sha,contract_hash:packet.contract_hash,verdict:pass?'PASS':'PASS_WITH_FIXES',full_diff_reviewed:true,reviewed_commits:comparedCommits(packet.base_sha,packet.head_sha),acceptance_checks:packet.required_checks.map(id=>({id,status:'PASS',required:true})),findings:pass?[]:[{id:'fix',severity:'minor',path:'app/demo/page.tsx',line:1,description:'fix copy',required_fix:'fix copy'}],limitations:[]}};
+      w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:policySha,payload:{schema_version:1,request_id:packet.request_id,repository_id:policy.repository_id,pr_number:packet.pr_number,head_sha:packet.head_sha,base_sha:packet.base_sha,contract_hash:packet.contract_hash,verdict:pass?'PASS':'PASS_WITH_FIXES',full_diff_reviewed:true,reviewed_commits:comparedCommits(packet.base_sha,packet.head_sha),acceptance_checks:packet.required_checks.map(id=>({id,status:'PASS',required:true})),findings:pass?[]:[{id:'fix',severity:'minor',path:'app/demo/page.tsx',line:1,description:'fix copy',required_fix:'fix copy'}],limitations:[]}};
     } else w.artifacts[id]={request_id:inputs.request_id,digest:inputs.digest,gate:kind==='accept'?'A':'B'};
     return run;
   }
@@ -112,7 +127,7 @@ export function httpWorld({claude=false}={}) {
     if(/^\/pulls\/\d+$/.test(path))return json(w.pulls.find(p=>p.number===Number(path.split('/')[2])));
     if(path.endsWith('/merge')&&method==='PUT'){const p=w.pulls.find(p=>p.number===Number(path.split('/')[2]));w.mergeCount++;if(claude)w.commits[MERGED]={tree:w.commits[p.head.sha].tree,parents:[w.branches[p.base.ref],p.head.sha]};p.merged=true;p.state='closed';p.merge_commit_sha=MERGED;w.branches[p.base.ref]=MERGED;if(p.base.ref==='integration')w.runs.push({id:900,workflow_id:policy.post_merge_ci.workflow_id,path:policy.post_merge_ci.path,event:'push',head_branch:'integration',head_sha:MERGED,status:'completed',conclusion:'success',run_attempt:1});if(w.loseMerge){w.loseMerge=false;throw Error('lost after accepted merge');}return json({merged:true,sha:MERGED,message:'merged'});}
     if(path===`/actions/workflows/${policy.post_merge_ci.workflow_id}/runs`)return json({workflow_runs:w.runs.filter(r=>r.workflow_id===policy.post_merge_ci.workflow_id)});
-    if(path.includes('/actions/workflows/')){const file=decodeURIComponent(path.split('/')[3]),kind=file==='claude-code-dispatch.yml'?'builder':Object.keys(policy.workflows).find(k=>policy.workflows[k].endsWith('/'+file));if(method==='POST'){createRun(kind,body.inputs);if(kind==='builder'&&w.loseBuilderDispatch){w.loseBuilderDispatch=false;throw Error('lost builder dispatch response');}return new Response(null,{status:204});}return json({workflow_runs:w.runs.filter(r=>r.workflow_id===(kind==='builder'?policy.claude_builder.workflow_id:policy.workflow_ids[kind]))});}
+    if(path.includes('/actions/workflows/')){const file=decodeURIComponent(path.split('/')[3]),kind=file==='claude-code-dispatch.yml'?'builder':Object.keys(policy.workflows).find(k=>policy.workflows[k].endsWith('/'+file));if(method==='POST'){createRun(kind,body.inputs,body.ref);if(kind==='builder'&&w.loseBuilderDispatch){w.loseBuilderDispatch=false;throw Error('lost builder dispatch response');}return new Response(null,{status:204});}return json({workflow_runs:w.runs.filter(r=>r.workflow_id===(kind==='builder'?policy.claude_builder.workflow_id:policy.workflow_ids[kind]))});}
     if(path.startsWith('/actions/runs/')) {const id=Number(path.split('/')[3]);const run=w.runs.find(r=>r.id===id);if(!run)return json({id,status:'completed'});
       if(path.endsWith('/cancel')&&method==='POST'){run.status='completed';run.conclusion='cancelled';return new Response(null,{status:202});}
       const gate=w.artifacts[id]?.gate;if(gate==='A'&&w.approveA||gate==='B'&&w.approveB){run.status='completed';run.conclusion='success';}

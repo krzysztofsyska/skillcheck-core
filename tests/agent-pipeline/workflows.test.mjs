@@ -52,7 +52,7 @@ test('workflow YAML parses and the permission model stays fail-closed', () => {
 });
 
 
-test('model uses an isolated environment on main, without controller credentials', () => {
+test('model uses an isolated environment on a trusted source, without controller credentials', () => {
   const parsed = spawnSync('python3', ['-c', 'import yaml,json; print(json.dumps(yaml.safe_load(open(".github/workflows/agent-review.yml"))["jobs"]))'], { encoding: 'utf8' });
   assert.equal(parsed.status, 0, parsed.stderr);
   const jobs = JSON.parse(parsed.stdout);
@@ -60,16 +60,21 @@ test('model uses an isolated environment on main, without controller credentials
   const authorize = jobs.authorize;
   assert.equal(model.environment, 'agent-review');
   assert.equal(model.needs, 'authorize');
-  assert.equal(model.if, "success() && needs.authorize.outputs.allowed == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && vars.AGENT_PIPELINE_ENABLED == 'true'");
+  assert.equal(model.if, "success() && needs.authorize.outputs.allowed == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/agent-control-runtime') && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && vars.AGENT_PIPELINE_ENABLED == 'true'");
   assert.deepEqual(model.permissions, { contents: 'read' });
   assert.equal(model.env, undefined);
   const secrets = [...JSON.stringify(model).matchAll(/secrets\.([A-Z_]+)/g)].map(m => m[1]);
   assert.deepEqual(secrets, ['OPENAI_API_KEY']);
   assert.equal(authorize.environment, undefined);
-  assert.equal(authorize.if, "github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && vars.AGENT_PIPELINE_ENABLED == 'true'");
+  assert.equal(authorize.if, "(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/agent-control-runtime') && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && vars.AGENT_PIPELINE_ENABLED == 'true'");
   assert.deepEqual(authorize.permissions, { contents: 'read' });
   assert.equal(JSON.stringify(authorize).includes('secrets.'), false);
-  assert.equal(JSON.stringify(authorize).includes('inputs'), false);
+  assert.deepEqual([...JSON.stringify(authorize).matchAll(/inputs\.([a-z_]+)/g)].map(match => match[1]), ['policy_sha']);
+  assert.equal(authorize.steps[2].env.POLICY_SHA, '${{ inputs.policy_sha }}');
+  assert.equal(authorize.steps[2].env.GITHUB_TOKEN, '${{ github.token }}');
+  assert.equal(JSON.stringify(model).includes('GITHUB_TOKEN'), false);
+  assert.equal(JSON.stringify(model).includes('github.token'), false);
+  assert.equal(JSON.stringify(model).includes('AGENT_PIPELINE_APP'), false);
   assert.equal(authorize.steps[0].with.ref, '${{ github.sha }}');
   assert.equal(authorize.steps[0].with['persist-credentials'], false);
   assert.match(authorize.steps[2].run, /authorize-review-dispatch\.mjs/);

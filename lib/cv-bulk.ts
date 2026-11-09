@@ -40,6 +40,34 @@ export type BulkErrorReason = 'over_limit' | 'unreadable_scan' | 'protected_pdf'
   | 'no_text' | 'ocr_timeout' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible';
 export type BulkGroup = 'passed' | 'review' | 'rejected';
 
+/** Verify a bulk status belongs to the exact route batch and recruitment before
+ * displaying candidate links or starting a background pump. A user can belong to
+ * multiple companies, so an authorized RPC by itself does not bind the URL. */
+export function bulkBatchRouteMatches(value: unknown, batchId: string, recruitmentId: string): boolean {
+  const validUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!validUuid.test(batchId) || !validUuid.test(recruitmentId) ||
+    !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const batch = (value as { batch?: unknown }).batch;
+  if (!batch || typeof batch !== 'object' || Array.isArray(batch)) return false;
+  const b = batch as Record<string, unknown>;
+  return typeof b.id === 'string' && validUuid.test(b.id) &&
+    typeof b.recruitment_id === 'string' && validUuid.test(b.recruitment_id) &&
+    b.id.toLowerCase() === batchId.toLowerCase() &&
+    b.recruitment_id.toLowerCase() === recruitmentId.toLowerCase();
+}
+
+/** A manual group move must resolve to the exact application in the route,
+ * not merely to any application the signed-in user can edit in another company. */
+export function bulkMoveTargetMatches(value: unknown, companyId: string, recruitmentId: string, applicationId: string): boolean {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (![companyId, recruitmentId, applicationId].every(id => uuid.test(id))) return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return ([['company_id', companyId], ['recruitment_id', recruitmentId], ['id', applicationId]] as const)
+    .every(([key, expected]) => typeof row[key] === 'string' && uuid.test(row[key]) && row[key].toLowerCase() === expected.toLowerCase());
+}
+
+
 export function bulkFileKind(name: string): BulkFileKind {
   const lower = name.toLowerCase();
   if (lower.endsWith('.pdf')) return 'pdf';
@@ -51,12 +79,24 @@ export function bulkFileKind(name: string): BulkFileKind {
 
 /** Archive entries that are not CVs (folders, OS metadata) are skipped, not counted. */
 export function isIgnoredZipEntry(name: string) {
-  const base = name.split('/').pop() ?? '';
-  return !base || name.endsWith('/') || name.startsWith('__MACOSX/') || base.startsWith('.') || base === 'Thumbs.db';
+  // ZIP normally uses '/', but some archives contain backslash paths. Metadata
+  // directories are not CVs even when nested or written with Windows separators.
+  const path = name.replace(/\\/g, '/');
+  const parts = path.split('/');
+  const base = parts.pop() ?? '';
+  // Hidden metadata directories and __MACOSX variants may contain files with CV-like
+  // extensions. Exclude their descendants, including mixed-case and Windows ZIP paths,
+  // before reserving a package slot or extracting any candidate information.
+  return !base || parts.some(part => part.startsWith('.') || part.toLowerCase() === '__macosx')
+    || base.startsWith('.') || base.toLowerCase() === 'thumbs.db';
 }
 
 export function displayFileName(name: string) {
-  const base = (name.split(/[\\/]/).pop() ?? name).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  // Bidi overrides/isolates and invisible format characters can make a filename
+  // appear to have another extension in the recruiter UI. Never preserve them.
+  const base = (name.split(/[\\/]/).pop() ?? name)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g, '')
+    .trim();
   return (base || 'plik').slice(0, 255);
 }
 
@@ -81,6 +121,21 @@ export const errorLabel: Record<BulkErrorReason, string> = {
 export const groupLabel: Record<BulkGroup, string> = {
   passed: 'Przeszli sito', review: 'Do decyzji rekrutera', rejected: 'Nie spełniają kryteriów',
 };
+
+/** PostgreSQL move_preselection_group returns timestamptz only after it records the change.
+ * A transport-level success with null/malformed data is not proof of a saved move. */
+export function groupMoveConfirmed(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return false;
+  const [, y, m, d, h, min, s, zone] = match;
+  const year = Number(y), month = Number(m), day = Number(d);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (!days || day < 1 || day > days || Number(h) > 23 || Number(min) > 59 || Number(s) > 59) return false;
+  if (zone !== 'Z' && (Number(zone.slice(1, 3)) > 23 || Number(zone.slice(4)) > 59)) return false;
+  return Number.isFinite(Date.parse(value));
+}
 
 export type BulkFileErrorReason = Exclude<BulkErrorReason, 'over_limit' | 'duplicate' | 'not_uploaded' | 'analysis_failed' | 'not_eligible'>;
 
@@ -189,6 +244,18 @@ export type BulkExtraction = {
   source_text: string; redacted_text: string; name_detected: boolean; ocr_used: boolean;
 };
 
+/** Fail closed if a detected name survives automatic redaction.
+ * Contacts have separate detectors, but a partial name replacement must also
+ * block unattended bulk intake before any text is sent to an AI provider.
+ */
+function unredactedCandidateName(redacted: string, candidate: { first: string; last: string }) {
+  const fragments = [candidate.first, candidate.last, ...candidate.last.split(/[\s\-’']+/).filter(part => part.length >= 3)];
+  return fragments.some(fragment => {
+    const escaped = fragment.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+    return new RegExp('(?<![\\p{L}\\p{N}])' + escaped + '(?![\\p{L}\\p{N}])', 'iu').test(redacted);
+  });
+}
+
 /** Candidate identity for the database; no name -> neutral placeholder with the file position. */
 export function buildExtraction(text: string, position: number, ocrUsed: boolean,
   redact: (text: string, names: string[]) => string): BulkExtraction {
@@ -204,7 +271,12 @@ export function buildExtraction(text: string, position: number, ocrUsed: boolean
   const redacted = redact(text, names);
   // Detection and redaction must never drift apart: the approved text goes to the AI provider without
   // a human check, so a phone or e-mail still visible after redaction stops the file.
-  if (detectPhone(redacted) || detectEmail(redacted)) throw new BulkIntakeError('bad_format');
+  // Normalise provider-bound text again: invisible characters introduced by
+  // a failed redactor must not hide a residual name, telephone or e-mail.
+  const inspected = normalizeForRedaction(redacted);
+  if (detectPhone(inspected) || detectEmail(inspected) || (name && unredactedCandidateName(inspected, name))) {
+    throw new BulkIntakeError('bad_format');
+  }
   return {
     first_name: first.slice(0, 100), last_name: last.slice(0, 100), email, phone,
     source_text: text, redacted_text: redacted, name_detected: !!name, ocr_used: ocrUsed,
@@ -218,6 +290,44 @@ export function validateBatchFiles(files: BulkFileMeta[]) {
   if (files.length > BULK_MAX_FILES) throw new Error(`Jedna paczka może mieć maksymalnie ${BULK_MAX_FILES} plików.`);
   return files.map(f => ({ name: displayFileName(String(f.name ?? '')), kind: bulkFileKind(String(f.name ?? '')),
     size: Math.max(0, Math.min(Number.isFinite(f.size) ? Math.floor(f.size) : 0, 2_147_483_647)) }));
+}
+
+/** Validate both RPC envelopes before handing upload IDs to the browser.
+ * A partial status read must not silently skip files and close their held slots.
+ * No CV content is inspected; only registration metadata is compared.
+ */
+export type VerifiedBulkRegistration = {
+  batchId: string; reserved: number; overLimit: number; items: { id: string; position: number }[];
+};
+export function verifyBulkRegistration(created: unknown, status: unknown, recruitmentId: string, files: BulkFileMeta[]): VerifiedBulkRegistration | null {
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  const isUuid = (value: unknown): value is string =>
+    typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (!record(created) || !record(status) || !record(status.batch) || !Array.isArray(status.items)) return null;
+  const batch = status.batch;
+  const reserved = created.reserved_slots, overLimit = created.over_limit;
+  if (!isUuid(created.batch_id) || !isUuid(batch.id) || !isUuid(batch.recruitment_id) ||
+    batch.id.toLowerCase() !== created.batch_id.toLowerCase() ||
+    batch.recruitment_id.toLowerCase() !== recruitmentId.toLowerCase() ||
+    !Number.isInteger(reserved) || (reserved as number) < 0 || (reserved as number) > files.length ||
+    overLimit !== files.length - (reserved as number) ||
+    batch.declared_files !== files.length || batch.reserved_slots !== reserved ||
+    status.items.length !== files.length) return null;
+
+  const positions = new Set<number>(), ids = new Set<string>();
+  const items: { id: string; position: number }[] = [];
+  for (const entry of status.items) {
+    if (!record(entry) || !isUuid(entry.id) || !Number.isInteger(entry.position)) return null;
+    const position = entry.position as number;
+    if (position < 1 || position > files.length || positions.has(position) || ids.has(entry.id.toLowerCase())) return null;
+    const file = files[position - 1];
+    if (entry.file_name !== file.name || entry.file_kind !== file.kind) return null;
+    positions.add(position);
+    ids.add(entry.id.toLowerCase());
+    items.push({ id: entry.id, position });
+  }
+  return { batchId: created.batch_id, reserved: reserved as number, overLimit: overLimit as number, items };
 }
 
 export type BulkPricing = { input_per_mtok: string; cached_input_per_mtok: string; output_per_mtok: string; currency: string; version: string };

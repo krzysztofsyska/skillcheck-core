@@ -13,3 +13,41 @@
 20261102100000_cv_bulk_capacity_phone_fix.sql
 20261102110000_cv_bulk_skip_frozen.sql
 20261102120000_cv_bulk_erasure_guards.sql
+# SC-FREE-AUTO-001. The automatic FREE trial claim, the marketing-consent
+# ledger and the operator NIP release all live in these two migrations, so
+# without them preview has no public.sc19_claim_trial_auto, no
+# private.sc19_marketing_consent_events and no R11 erasure inventory: signing
+# up as a new company on preview fails and the daily digest cannot be walked
+# there at all. R11 extends the erasure inventory for the tables R10 does not
+# know about, so it must follow the table-creating migration, never precede it.
+20261103090000_sc19_auto_trial_marketing_consent.sql
+20261103090100_sc_erasure_inventory_r11.sql
+# SC-P24-VERIFY-001/002. M13 (20261021084732_sc019_credits_payments_inventory)
+# is already in the preview ledger, so only the read-only checkout RPC needs
+# listing. Without it public.sc19_checkout_offers does not exist on preview, the
+# catalog maps the error to SC19_PAYMENT_RETRY (503) and the checkout page shows
+# "Nie udało się wczytać oferty".
+#
+# The commercial seed (package quotas and the purchasable PRESELEKCJA offer) is
+# deliberately NOT a migration and is not listed here: a migration that wrote it
+# would switch billing state on wherever the chain runs, including production,
+# which is an owner action in /operator/billing (CLAUDE.md, AGENTS.md). It lives
+# in supabase/preview-seeds/ and the same workflow applies it to preview only,
+# after these migrations. See supabase/preview-seeds/sc19-preselekcja-offer.sql.
+20261103130000_sc019_checkout_offers_read.sql
+20261104080000_pricing_catalog.sql
+20261104120000_position_requirement_flags.sql
+20261106063720_sc_wer_c1_inventory_r12.sql
+20261106065733_sc_wer_broker_limiter.sql
+20261106070123_sc_wer_staff_access.sql
+20261106120000_sc_ac_inventory_r13.sql
+20261106130000_exercise_ai_proposals.sql
+20261106140000_exercise_ai_grant_guard.sql
+20261106150000_exercise_ai_recruiter_api.sql
+# SC-BULK-001: serialize global in-flight screening slots across companies. Preview only.
+20261106230000_cv_bulk_global_capacity_lock.sql
+20261106231000_cv_bulk_uploading_scheduler.sql
+20261107164219_exercise_ai_revision_workflow.sql
+20261107164252_sc019_catalog_orders.sql
+20261107170432_single_analysis_preselection_group.sql
+20261107171053_exercise_ai_generation.sql

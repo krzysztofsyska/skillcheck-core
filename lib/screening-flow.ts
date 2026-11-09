@@ -7,21 +7,43 @@ import type { ScreeningDispatchResult } from './screening-dispatch.ts';
 
 export class ScreeningNotFoundError extends Error {}
 
+// Verify identities in responses as well as filters: a malformed Data API/view
+// response must never be used to build a CV report or AI provider payload.
+const sameUuid = (actual: unknown, expected: unknown) =>
+  isUuid(actual) && isUuid(expected) && actual.toLowerCase() === expected.toLowerCase();
+
 export async function loadScreeningContext(client: SupabaseClient<Database>, route: ScreeningRoute) {
   if (!Object.values(route).every(isUuid)) throw new ScreeningNotFoundError('Nie znaleziono zgłoszenia.');
   const { companyId, recruitmentId, applicationId } = route;
   const application = await client.from('applications').select('*').eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('id', applicationId).maybeSingle();
   if (application.error) throw new Error('Nie udało się wczytać zgłoszenia.');
-  if (!application.data) throw new ScreeningNotFoundError('Nie znaleziono zgłoszenia.');
+  if (!application.data || !sameUuid(application.data.id, applicationId)
+    || !sameUuid(application.data.company_id, companyId)
+    || !sameUuid(application.data.recruitment_id, recruitmentId)
+    || !isUuid(application.data.candidate_id)) {
+    throw new ScreeningNotFoundError('Nie znaleziono zgłoszenia.');
+  }
   const recruitment = await client.from('recruitments').select('*').eq('company_id', companyId).eq('id', recruitmentId).maybeSingle();
   if (recruitment.error) throw new Error('Nie udało się wczytać rekrutacji.');
-  if (!recruitment.data) throw new ScreeningNotFoundError('Nie znaleziono rekrutacji.');
+  if (!recruitment.data || !sameUuid(recruitment.data.id, recruitmentId)
+    || !sameUuid(recruitment.data.company_id, companyId)
+    || !isUuid(recruitment.data.position_id)) {
+    throw new ScreeningNotFoundError('Nie znaleziono rekrutacji.');
+  }
   const [position, document] = await Promise.all([
     client.from('positions').select('*').eq('company_id', companyId).eq('id', recruitment.data.position_id).maybeSingle(),
     client.from('candidate_documents').select('id,company_id,candidate_id,version,status,reviewed_by,reviewed_at,redacted_text').eq('company_id', companyId).eq('candidate_id', application.data.candidate_id).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(1).maybeSingle(),
   ]);
   if (position.error || document.error) throw new Error('Nie udało się wczytać wymagań lub CV.');
-  if (!position.data) throw new ScreeningNotFoundError('Nie znaleziono stanowiska.');
+  if (!position.data || !sameUuid(position.data.id, recruitment.data.position_id)
+    || !sameUuid(position.data.company_id, companyId)) {
+    throw new ScreeningNotFoundError('Nie znaleziono stanowiska.');
+  }
+  if (document.data && (!isUuid(document.data.id)
+    || !sameUuid(document.data.company_id, companyId)
+    || !sameUuid(document.data.candidate_id, application.data.candidate_id))) {
+    throw new ScreeningNotFoundError('Nie znaleziono CV.');
+  }
   return { companyId, application: application.data, recruitment: recruitment.data, position: position.data, document: document.data };
 }
 

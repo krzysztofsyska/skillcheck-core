@@ -16,6 +16,7 @@ export default async function CompanyDashboard({params}:{params:Promise<{company
     {!canEdit && <p className="notice">Masz dostęp tylko do odczytu.</p>}
     {process.env.SC19_PACKAGES_ENABLED === 'true' && <p className="lead"><Link href={`/dashboard/${companyId}/billing`}>Twój pakiet SkillCheck i pozostałe analizy CV →</Link></p>}
     <p className="lead"><Link href={`/dashboard/${companyId}/candidates`}>Kandydaci w bazie firmy: {candidates.count ?? 0}</Link></p>
+    <p className="lead"><Link href={`/dashboard/${companyId}/zgody`}>Zgody na kontakt handlowy →</Link></p>
     <div className="actions">{canEdit && <Link className="button" href={`/dashboard/${companyId}/positions/new`}>Kogo potrzebujesz? Utwórz stanowisko</Link>}</div>
     <h2>Stanowiska</h2><p>Ostatnie 50 stanowisk.</p>
     {positions.data.length ? <ul className="companies">{positions.data.map(p=><li key={p.id}><Link href={`/dashboard/${companyId}/positions/${p.id}`}>{p.title}</Link><span className="badge">{labels[p.status]}</span></li>)}</ul> : <p>Nie masz jeszcze stanowisk. Zacznij od określenia, kogo potrzebujesz.</p>}

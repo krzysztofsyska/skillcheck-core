@@ -207,12 +207,42 @@ export async function accountingSnapshot(db) {
   return result;
 }
 
-// Explicit test-only commercial inputs. The real fresh migration must leave
-// policy empty; these examples are inserted only after that assertion passes.
+// Explicit test-only commercial inputs. The migration chain must leave policy
+// EMPTY: quotas are an owner action in /operator/billing, never a migration (see
+// supabase/preview-seeds/sc19-preselekcja-offer.sql for the preview-only path).
+// Any row here before the synthetic seed means a quota chose itself.
 export async function seedSyntheticPolicy(db) {
   await db.query('reset role');
-  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_package_policy')).rows[0].n, 0,
+    'The migration chain must not seed package quotas');
   await db.query("insert into private.sc19_package_policy(plan,credits) values('FREE',5),('PRESELEKCJA',60)");
+}
+
+// The project ref the seed accepts, and the target the preview job declares.
+export const previewProjectRef = 'orbyscrupgnupifzlqxp';
+const previewSeedUrl = new URL('../../supabase/preview-seeds/sc19-preselekcja-offer.sql', import.meta.url);
+const seedTargetVariable = ":'sc19_seed_target_ref'";
+
+export const rawPreviewSeed = () => readFile(previewSeedUrl, 'utf8');
+
+/**
+ * The seed as psql hands it to the server: the one `:'sc19_seed_target_ref'`
+ * reference is replaced by the declared target project ref, quoted exactly as
+ * psql quotes it. node-postgres does no psql substitution, so a test applying
+ * the raw file would only ever see the syntax error the unexpanded variable
+ * causes (which is itself asserted in tests/sc-019-migrations.test.mjs).
+ */
+export async function renderPreviewSeed({ targetRef = previewProjectRef } = {}) {
+  const text = await rawPreviewSeed();
+  assert.ok(text.includes(seedTargetVariable), 'the seed must take its target project ref from psql');
+  return text.replaceAll(seedTargetVariable, `'${targetRef.replaceAll("'", "''")}'`);
+}
+
+// The preview-only commercial seed, applied in tests that need a purchasable
+// offer on a fully migrated database. It is NOT part of the migration chain.
+export async function applyPreviewSeeds(db, options) {
+  await db.query('reset role');
+  await db.query(await renderPreviewSeed(options));
 }
 
 export async function seedCreditData(env) {

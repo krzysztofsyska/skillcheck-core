@@ -19,5 +19,7 @@ export const footerLinks = [
 export const legalLinks = [
   { href: "/regulamin", label: "Regulamin" },
   { href: "/polityka-prywatnosci", label: "Polityka prywatności" },
+  { href: "/regulamin/umowa-powierzenia", label: "Umowa powierzenia (DPA)" },
+  { href: "/regulamin/formularz-odstapienia", label: "Formularz odstąpienia" },
   { href: "/ai", label: "AI i nadzór człowieka" },
 ] as const;

@@ -1,3 +1,4 @@
+import { controlPlane, integrationOnly, workflowRef, assertControlEffect } from './control-plane.mjs';
 import { preparePromotion } from './promotion.mjs';
 import { guardedMerge, publishEvidence, drainOutbox, cancelStaleApprovals } from './live-effects.mjs';
 import { readEvidence, readApprovals } from './evidence.mjs';
@@ -146,12 +147,14 @@ export function dispatchInputs(effect) {
 }
 
 export async function loadWorkFromClients({ github, cursor = null, policy, now, secrets, prompts = null, policyCommit = null }) {
-  const [integration, main, issues, pulls, projection] = await Promise.all([
+  const controlBranch = controlPlane(policy).branch;
+  const [integration, main, issues, pulls, projection, control] = await Promise.all([
     github.readBranch('integration'),
     github.readBranch('main'),
     github.readIssues(),
     github.readPulls(),
     github.readProjection(),
+    github.readBranch(controlBranch),
   ]);
   let protection = null;
   try {
@@ -163,7 +166,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
     if (error.status !== 401 && error.status !== 403 && error.status !== 404
         && error.message !== 'RULESET_BYPASS_UNVERIFIABLE') throw error;
   }
-  if (policyCommit && policyCommit !== main?.commit?.sha) throw new Error('POLICY_STALE');
+  if (policyCommit && policyCommit !== control?.commit?.sha) throw new Error('POLICY_STALE');
   if (github.readRepository && (await github.readRepository()).id !== policy.repository_id) throw new Error('REPOSITORY_MISMATCH');
   const records = projection.tasks ?? {};
   for (const record of Object.values(records)) {
@@ -183,7 +186,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
       cursorState[record.cursor_agent_id] = await readCursor(cursor, record.cursor_agent_id);
     }
   }
-  const promotion = github.readComparison ? await preparePromotion(github, policy, records, integration?.commit?.sha, main?.commit?.sha) : null;
+  const promotion = !integrationOnly(policy) && github.readComparison ? await preparePromotion(github, policy, records, integration?.commit?.sha, main?.commit?.sha) : null;
   const evidence = await readEvidence(github, policy, records);
   const postMergeCi = {};
   for (const record of Object.values(records)) {
@@ -192,7 +195,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
     }
   }
   const approvals = await readApprovals(github, policy, records);
-  const policySha = main?.commit?.sha;
+  const policySha = control?.commit?.sha;
   if (!/^[a-f0-9]{40}$/.test(policySha ?? '')) throw new Error('POLICY_COMMIT_MISSING');
   return assembleWork({
     policy,
@@ -299,6 +302,11 @@ export async function defaultPorts(env, policy, configuration, flags) {
       }
     },
     async execute(effect) {
+      assertControlEffect(policy, effect);
+      // Revalidate the trusted control revision before any external effect.
+      if ((await github.readBranch(controlPlane(policy).branch)).commit?.sha !== env.AGENT_POLICY_COMMIT) {
+        throw new Error('POLICY_STALE');
+      }
       if (effect.type === 'cursor.create') {
         await github.createBranch(effect.branch, effect.baseSha);
         return normalizeCursorCreate(await cursor.createAgent(effect.payload));
@@ -316,7 +324,7 @@ export async function defaultPorts(env, policy, configuration, flags) {
       if (effect.type === 'cursor.listRuns') return cursor.listRuns(effect.agentId);
       if (effect.type === 'github.createPr') return github.createPull({ head: effect.head, base: effect.base, title: effect.taskId, body: `${effect.marker}\nTASK: ${effect.taskId}\nSCOPE: ${effect.scope || 'OPERATIONS'}\nLEVEL: ${effect.level || 'L3'}\nOWNER_APPROVAL: PENDING\nPRODUCTION_APPROVAL: PENDING\nREVIEW_VERDICT: PENDING\nPROMOTION: ${effect.base === 'main' ? 'YES' : 'NO'}` });
       if (effect.type === 'github.dispatch') {
-        return github.dispatch({ workflow: basename(policy.workflows[effect.workflow]), inputs: dispatchInputs(effect) });
+        return github.dispatch({ workflow: basename(policy.workflows[effect.workflow]), inputs: dispatchInputs(effect), ref: workflowRef(policy, effect.workflow) });
       }
       if (effect.type === 'github.merge') return guardedMerge({ github, journal: this.journal, policy, flags, effect });
       if (effect.type === 'notify') return { deferred: true }; // durable outbox after transition

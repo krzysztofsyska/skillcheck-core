@@ -19,6 +19,14 @@ type Equal<Left, Right> =
     ? true
     : false;
 type Expect<Value extends true> = Value;
+type CatalogCreateArguments = Expect<Equal<keyof Database['public']['Functions']['sc19_create_catalog_order']['Args'], 'target_company'|'request_key'|'expected_quote'|'accepted'>>;
+type CatalogSettlementArguments = Expect<Equal<keyof Database['public']['Functions']['sc19_settle_catalog_order']['Args'], 'target_order'|'settlement_reference'|'confirmed_gross'|'confirmed_currency'>>;
+type CatalogOrderId = Expect<Equal<Database['public']['Functions']['sc19_create_catalog_order']['Returns'],string>>;
+type PublishedCatalogPackage = Database['public']['Functions']['pricing_published_packages']['Returns'][number];
+type PublishedCatalogAddon = Database['public']['Functions']['pricing_published_addons']['Returns'][number];
+type PublishedCatalogPackageFields = Expect<Equal<keyof PublishedCatalogPackage,
+  'package_code' | 'gross_minor' | 'cv_included' | 'cv_step' | 'cv_max' | 'overage_gross_per_cv_minor' | 'sellable' | 'vat_basis_points'>>;
+type PublishedCatalogAddonFields = Expect<Equal<keyof PublishedCatalogAddon, 'code' | 'name' | 'unit' | 'gross_minor'>>;
 type Keys<Value> = keyof Value;
 type NullableKeys<Value> = {
   [Key in keyof Value]-?: null extends Value[Key] ? Key : never;
@@ -68,8 +76,18 @@ type ExpectedFunctions =
   | "sc19_claim_trial"
   | "sc19_get_balance"
   | "sc19_package_sizes"
+  | "pricing_published_packages" | "pricing_published_addons"
+  | "sc19_checkout_offers"
   | "sc19_operator_companies" | "sc19_operator_package_policy" | "sc19_operator_set_package_policy"
   | "sc19_operator_approve_trial" | "sc19_operator_grant_paid"
+  | "sc19_catalog_order_options" | "sc19_catalog_orders" | "sc19_catalog_entitlements"
+  | "sc19_create_catalog_order" | "sc19_cancel_catalog_order" | "sc19_settle_catalog_order"
+  | "sc19_auto_claim_trial" | "sc19_auto_record_failure" | "sc19_auto_free_precheck"
+  | "sc19_operator_set_auto_free" | "sc19_operator_auto_free_settings" | "sc19_operator_auto_free_grants"
+  | "sc19_operator_taken_trial_nips" | "sc19_operator_release_trial_nip" | "sc19_operator_trial_nip_releases"
+  | "marketing_consent_grant" | "marketing_consent_grant_registration"
+  | "marketing_consent_withdraw" | "marketing_consent_state"
+  | "sc19_operator_marketing_consents" | "sc19_daily_digest"
   | "submit_sales_lead"
   | "list_sales_leads"
   | "list_sales_leads_inbox"
@@ -126,6 +144,20 @@ type ExpectedFunctions =
   | "claim_screening_attempt_v2"
   | "screening_attempt_result_schema_version"
   | "cv_bulk_create_batch"
+  | "ac_assign_pair" | "ac_find_pair" | "ac_read_pair" | "ac_submit_sheet"
+  | "list_competency_test_attempts"
+  | "list_competency_test_access"
+  | "create_competency_test_grant"
+  | "rotate_competency_test_grant"
+  | "revoke_competency_test_grant"
+  | "save_competency_test_review"
+  | "read_competency_test_response"
+  | "read_exercise_ai_proposal"
+  | "approve_exercise_ai_proposal"
+  | "edit_exercise_ai_proposal"
+  | "reserve_exercise_ai_generation"
+  | "finish_exercise_ai_generation"
+  | "reject_exercise_ai_proposal"
   | "cv_bulk_register_item"
   | "cv_bulk_fail_item"
   | "cv_bulk_close_upload"
@@ -545,3 +577,14 @@ type _ErasureRequestArgs = Expect<Equal<Database["public"]["Functions"]["request
 type _ErasureCancelArgs = Expect<Equal<Database["public"]["Functions"]["cancel_candidate_erasure"]["Args"], {
   target_request: string; expected_generation: number; request_key: string;
 }>>;
+
+// Public recruiter API must require full tenant/recruitment/revision context.
+type _AiReadArgs = Expect<Equal<
+  Keys<Database['public']['Functions']['read_exercise_ai_proposal']['Args']>,
+  'target_company' | 'target_recruitment' | 'target_definition'
+>>;
+type _AiApproveArgs = Expect<Equal<
+  Keys<Database['public']['Functions']['approve_exercise_ai_proposal']['Args']>,
+  'target_company' | 'target_recruitment' | 'target_definition' | 'expected_position_updated_at'
+>>;
+type _AiApprovalResult = Expect<Equal<Database['public']['Functions']['approve_exercise_ai_proposal']['Returns'], string>>;

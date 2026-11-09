@@ -1,7 +1,9 @@
+import { workflowRef, integrationOnly } from './control-plane.mjs';
 import { basename } from 'node:path';
 import { historyCoverage } from './history.mjs';
 
 export async function findRun(github, policy, kind, requestId, recordedId) {
+  if (integrationOnly(policy) && ['accept', 'promote'].includes(kind)) return null;
   let run;
   if (recordedId) run = await github.readRun(recordedId);
   else {
@@ -11,7 +13,7 @@ export async function findRun(github, policy, kind, requestId, recordedId) {
     run = matches[0];
   }
   if (run.workflow_id !== policy.workflow_ids[kind] || run.path !== policy.workflows[kind]
-      || run.event !== 'workflow_dispatch' || run.head_branch !== 'main'
+      || run.event !== 'workflow_dispatch' || run.head_branch !== workflowRef(policy, kind)
       || run.actor?.id !== policy.controller_actor_id
       || run.display_title !== `sc-agent:${requestId}`) return null;
   return run;

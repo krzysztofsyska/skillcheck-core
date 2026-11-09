@@ -23,10 +23,11 @@ Dane Kandydatów, które firmy wprowadzają do SkillCheck, przetwarzamy na polec
 | Zamówienia, płatności, faktury i KSeF | dane z zamówienia, kwota, status płatności, dane do faktury | art. 6 ust. 1 lit. b i c RODO (umowa, obowiązki podatkowe i rachunkowe) |
 | Reklamacje i odstąpienie od umowy | treść zgłoszenia, dane kontaktowe, dane zamówienia | art. 6 ust. 1 lit. b, c i f RODO |
 | Odpowiedź na zapytanie z formularza kontaktowego | imię, nazwa firmy, e-mail, opcjonalnie telefon, opis potrzeb | art. 6 ust. 1 lit. f RODO, a przed zawarciem umowy na Twoje żądanie – lit. b |
+| Marketing własnych usług – przedstawianie ofert i informacji o usługach SkillCheck | służbowy e-mail, nazwa firmy, treść i wersja zgody, data jej wyrażenia i wycofania | art. 6 ust. 1 lit. a RODO (Twoja odrębna, dobrowolna zgoda), którą możesz wycofać w każdej chwili jednym kliknięciem w panelu firmy, bez wpływu na zgodność z prawem przetwarzania przed wycofaniem |
 | Bezpieczeństwo Serwisu i ochrona przed nadużyciami | adres IP (w postaci skrótu), identyfikatory sesji, logi zdarzeń | art. 6 ust. 1 lit. f RODO |
 | Ustalenie, dochodzenie i obrona roszczeń | dane niezbędne do wykazania stanu sprawy | art. 6 ust. 1 lit. f RODO |
 
-Podanie danych jest dobrowolne, ale bez nich nie założysz Konta, nie złożysz zamówienia ani nie otrzymasz faktury. Nie wysyłamy informacji handlowych bez odrębnej zgody.
+Podanie danych jest dobrowolne, ale bez nich nie założysz Konta, nie złożysz zamówienia ani nie otrzymasz faktury. Nie wysyłamy informacji handlowych bez odrębnej zgody. Zgoda na kontakt handlowy jest osobnym, niezaznaczonym domyślnie oświadczeniem – nie jest warunkiem rejestracji ani korzystania z SkillCheck, a jej wycofanie nie ogranicza żadnej innej funkcji Serwisu. Zapis o wyrażeniu i wycofaniu zgody przechowujemy także po wycofaniu, aby móc wykazać, co i kiedy zostało oświadczone.
 
 # 4. Skąd mamy dane
 
@@ -61,7 +62,7 @@ Niektórzy dostawcy (Vercel, Resend, OpenAI) mogą przetwarzać dane lub zapewni
 
 # 8. Twoje prawa
 
-Masz prawo do dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania, przenoszenia danych (gdy podstawą jest umowa) oraz do wniesienia sprzeciwu wobec przetwarzania opartego na naszym uzasadnionym interesie. Aby skorzystać z praw, napisz na pomoc@skillcheck.pl. Masz także prawo wnieść skargę do Prezesa Urzędu Ochrony Danych Osobowych (ul. Stawki 2, 00-193 Warszawa, uodo.gov.pl).
+Masz prawo do dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania, przenoszenia danych (gdy podstawą jest umowa) oraz do wniesienia sprzeciwu wobec przetwarzania opartego na naszym uzasadnionym interesie. Jeżeli przetwarzamy dane na podstawie Twojej zgody, masz prawo wycofać ją w każdej chwili – zgodę na kontakt handlowy wycofasz jednym kliknięciem w panelu firmy, w zakładce „Zgody”. Aby skorzystać z praw, napisz na pomoc@skillcheck.pl. Masz także prawo wnieść skargę do Prezesa Urzędu Ochrony Danych Osobowych (ul. Stawki 2, 00-193 Warszawa, uodo.gov.pl).
 
 Nie podejmujemy wobec Ciebie decyzji opartych wyłącznie na zautomatyzowanym przetwarzaniu, które wywołują skutki prawne lub w podobny sposób istotnie na Ciebie wpływają.
 

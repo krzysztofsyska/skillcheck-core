@@ -1,5 +1,7 @@
+import { controlPlane } from './control-plane.mjs';
 import { builderConfiguration } from './claude-builder.mjs';
 export function assessConfiguration(env, flags, policy = {}) {
+  controlPlane(policy);
   if (!flags.enabled) return { ok: true, mode: 'read-only', missing: [] };
   const missing = [];
   if (policy.builder_provider === 'claude-code') {

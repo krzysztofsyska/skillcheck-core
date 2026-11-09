@@ -1,3 +1,4 @@
+import { controlPlane, assertControlEffect, integrationOnly, isProductionRecord } from './control-plane.mjs';
 import { filesOutside } from './scope.mjs';
 import { requiredReviewChecks } from './transitions.mjs';
 import { sha256 } from './canonical.mjs';
@@ -23,6 +24,7 @@ export function validatePair(record, pair, policy) {
 }
 
 export async function publishEvidence(github, policy, record, pair) {
+  if (integrationOnly(policy) && isProductionRecord(record)) return;
   if (!record.head_sha || !record.review_request_id || !pair?.ci || !pair?.review) return;
   const validated = validatePair(record, pair, policy);
   for (const kind of ['ci', 'review']) {
@@ -34,20 +36,22 @@ export async function publishEvidence(github, policy, record, pair) {
 }
 
 export async function guardedMerge({ github, journal, policy, flags, effect }) {
+  assertControlEffect(policy, effect);
   if (!flags.enabled || !flags.mergeEnabled) throw new Error('MERGE_DISABLED');
   const snapshot = await journal.assertOwned();
   const record = snapshot.tasks[effect.record.task_id];
+  assertControlEffect(policy, { ...effect, record });
   if (!record || record.binding.merge?.phase !== 'awaiting_confirmation') throw new Error('MERGE_INTENT_MISSING');
   const protection = await github.readProtection();
   if (!evaluatePreflight(protection).ok) throw new Error('PROTECTION_UNCONFIRMED');
-  const [pull, main, base, evidence, approvals] = await Promise.all([
-    github.readPull(record.pr_number), github.readBranch('main'),
+  const [pull, control, base, evidence, approvals] = await Promise.all([
+    github.readPull(record.pr_number), github.readBranch(controlPlane(policy).branch),
     github.readBranch(effect.gate === 'B' ? 'main' : 'integration'),
     readEvidence(github, policy, { [record.task_id]: record }),
     readApprovals(github, policy, { [record.task_id]: record }),
   ]);
   if (pull.merged) return { merged: true, mergeCommitSha: pull.merge_commit_sha };
-  if (main.commit.sha !== record.policy_sha || pull.state !== 'open'
+  if (control.commit.sha !== record.policy_sha || pull.state !== 'open'
       || pull.head.repo?.id !== policy.repository_id || pull.base.repo?.id !== policy.repository_id
       || pull.base.ref !== (effect.gate === 'B' ? 'main' : 'integration')
       || (effect.gate === 'B' && pull.head.ref !== 'integration')) throw new Error('APPROVAL_STALE');
@@ -107,6 +111,7 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   if (effect.gate === 'B') await github.publishCheck({ head: record.head_sha, name: 'sc-agent/promotion-scope', externalId: request.request_id, conclusion: 'success', summary: JSON.stringify(record.binding.promotion) });
   // No writer except this holder can move the base; GitHub strict rules apply.
   await journal.assertOwned();
+  if ((await github.readBranch(controlPlane(policy).branch)).commit?.sha !== record.policy_sha) throw new Error('POLICY_STALE');
   return github.merge({ prNumber: record.pr_number, sha: record.head_sha });
 }
 

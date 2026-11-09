@@ -1,10 +1,11 @@
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { createHash, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import {
   BULK_MAX_FILE_BYTES, BulkIntakeError, buildExtraction, bulkEmail, bulkFileKind, bulkMailEnabled, bulkPricing, detectEmail,
-  detectName, detectPhone, displayFileName, isIgnoredZipEntry, sendBulkEmail, validateBatchFiles,
+  detectName, detectPhone, displayFileName, isIgnoredZipEntry, bulkBatchRouteMatches, bulkMoveTargetMatches, sendBulkEmail, validateBatchFiles, verifyBulkRegistration,
 } from '../lib/cv-bulk.ts';
 import { extractBulkCv } from '../lib/cv-bulk-extract.ts';
 import { closeOcr, ocrImage } from '../lib/cv-ocr.ts';
@@ -13,6 +14,12 @@ import { bulkContract, bulkWorkerSignature, canonicalJsonb, parsePump, pumpAllSi
 import { docx, protectedPdf, renderCv, scannedPdf, textPdf } from './helpers/cv-bulk-fixtures.mjs';
 
 test.after(() => closeOcr());
+
+// The bulk server-action bodies live in lib/cv-bulk-actions.ts (dependency-injected core); the
+// 'use server' wrapper stays in bulk/actions.ts. Source-level checks read both files together.
+function actionSources(dir = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/', import.meta.url)) {
+  return readFileSync(new URL('../lib/cv-bulk-actions.ts', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('actions.ts', dir), 'utf8');
+}
 
 const cvLines = ['Katarzyna Wiśniewska', 'tel. +48 512 345 678', 'k.wisniewska@example.com', 'Doświadczenie: obsługa klienta, Excel, SQL',
   'Specjalista ds. raportowania, 2019-2024', 'Wykształcenie: Uniwersytet Ekonomiczny'];
@@ -24,7 +31,20 @@ test('file kinds, archive entries and display names', () => {
   assert.equal(isIgnoredZipEntry('folder/'), true);
   assert.equal(isIgnoredZipEntry('folder/.DS_Store'), true);
   assert.equal(isIgnoredZipEntry('folder/cv.pdf'), false);
+  assert.equal(isIgnoredZipEntry('folder/__macosx/cv.pdf'), true, 'macOS metadata folder is case-insensitive');
+  assert.equal(isIgnoredZipEntry('folder/__MaCoSx/nested/cv.docx'), true, 'nested mixed-case macOS metadata is excluded');
+  assert.equal(isIgnoredZipEntry('folder/.cache/cv.pdf'), true, 'CV-like files in hidden metadata folders are excluded');
+  assert.equal(isIgnoredZipEntry('folder\\.Spotlight-V100\\cv.pdf'), true, 'Windows-style hidden folders are excluded');
+  assert.equal(isIgnoredZipEntry('folder/__MACOSXresume/cv.pdf'), false, 'ordinary similarly named directories remain valid');
+  assert.equal(isIgnoredZipEntry('folder\\__MACOSX\\resume.pdf'), true, 'Windows separators cannot expose OS metadata');
+  assert.equal(isIgnoredZipEntry('folder\\Thumbs.DB'), true, 'metadata names are case-insensitive');
+  assert.equal(isIgnoredZipEntry('folder\\cv.pdf'), false, 'ordinary Windows-style ZIP paths remain valid');
   assert.equal(displayFileName('a/b\\c/cv\u0000.pdf'), 'cv.pdf');
+  assert.equal(displayFileName('folder/CV\u202efdP.exe'), 'CVfdP.exe', 'bidi override cannot spoof the extension');
+  assert.equal(displayFileName('folder/\u2066CV\u2069\u200b\ufeff.pdf'), 'CV.pdf', 'invisible format marks are removed');
+  assert.equal(displayFileName('folder/\u202a\u202c'), 'plik', 'empty names use the fallback');
+  assert.deepEqual(validateBatchFiles([{ name: 'folder/CV\u202efdP.exe', kind: 'pdf', size: 5 }]),
+    [{ name: 'CVfdP.exe', kind: 'other', size: 5 }], 'a spoofed extension does not change the detected file kind');
   assert.throws(() => validateBatchFiles([]), /co najmniej jeden/);
   assert.throws(() => validateBatchFiles(Array.from({ length: 101 }, () => ({ name: 'a.pdf', kind: 'pdf', size: 1 }))), /100/);
   assert.deepEqual(validateBatchFiles([{ name: 'x/CV.Pdf', kind: 'other', size: 12.7 }]), [{ name: 'CV.Pdf', kind: 'pdf', size: 12 }]);
@@ -173,6 +193,61 @@ test('extraction: local OCR reads scans and photos, rejects unreadable ones', { 
   await assert.rejects(extractBulkCv(renderCv([], { blank: true }), 'image', ocrImage), reason('unreadable_scan'));
 });
 
+test('PDF OCR: digitally printed header cannot hide a scanned CV body', async () => {
+  const header = 'Katarzyna Wisniewska, tel. +48 500 123 456, e-mail: anna@example.com';
+  const matchingLines = cvLines.map(line => line.replace('Wiśniewska', 'Wisniewska'));
+  matchingLines.splice(1, 0, 'Java Developer'); // a job heading must not be counted as another person
+  const mixed = scannedPdf(matchingLines, { textOverlay: [header] });
+  let calls = 0;
+  const scanOcr = async () => {
+    calls++;
+    return { text: [header, ...matchingLines].join('\n'), confidence: 94 };
+  };
+  const result = await extractBulkCv(mixed, 'pdf', scanOcr);
+  assert.equal(calls, 1, 'OCR runs even when a sparse digital text layer is present');
+  assert.equal(result.ocrUsed, true);
+  assert.match(result.text, /Excel, SQL/, 'the scanned work history is included');
+  assert.match(result.text, /Katarzyna Wisniewska/, 'consistent digital name is preserved');
+  assert.match(result.text, /Java Developer/, 'an ordinary job headline is kept, not treated as a conflicting identity');
+  assert.match(result.text, /500 123 456/, 'the original digital phone survives imperfect OCR');
+  assert.match(result.text, /anna@example.com/, 'the digital e-mail remains in the complete OCR result');
+  await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: cvLines.join('\n'), confidence: 94 })),
+    reason('unreadable_scan'), 'OCR omitting the reliable contact header is rejected, never merged');
+  const crossedHeader = 'Anna Testowa, tel. +48 500 123 456';
+  const crossed = scannedPdf(cvLines, { textOverlay: [crossedHeader] });
+  await assert.rejects(extractBulkCv(crossed, 'pdf', async () => ({
+    text: [crossedHeader, ...cvLines].join('\n'), confidence: 94,
+  })), reason('unreadable_scan'), 'an additional name in the OCR body must be rejected even when the digital header matches');
+  const accentedHeader = 'Anna Wisniewska, tel. +48 500 123 456';
+  const accented = scannedPdf(cvLines, { textOverlay: [accentedHeader] });
+  await assert.rejects(extractBulkCv(accented, 'pdf', async () => ({
+    text: [accentedHeader, 'Anna Wiśniewska', ...cvLines].join('\n'), confidence: 94,
+  })), reason('unreadable_scan'), 'the same surname with different diacritics is not safe to redact automatically');
+  await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: header, confidence: 90 })),
+    reason('unreadable_scan'), 'header-only OCR is never accepted as a complete CV');
+  await assert.rejects(extractBulkCv(mixed, 'pdf', async () => ({ text: '', confidence: 0 })),
+    reason('unreadable_scan'), 'blank OCR cannot quietly discard the scan');
+
+  // An ordinary short PDF without any large embedded scan must avoid OCR.
+  const shortText = await extractBulkCv(textPdf(['Anna Nowak', 'Doswiadczenie zawodowe od 2017 roku w obsludze klienta']), 'pdf',
+    async () => assert.fail('text-only PDF must not trigger OCR'));
+  assert.equal(shortText.ocrUsed, false);
+});
+
+test('PDF OCR: tiny inline images cannot indefinitely block sparse-text extraction', { timeout: 10000 }, async () => {
+  const headerLines = ['Anna Nowak', 'E-mail: anna@example.com', 'Doświadczenie zawodowe od 2017 roku w analizie SQL'];
+  const pdf = textPdf(headerLines, { inlineImage: true });
+  const start = Date.now();
+  // pdf-parse may hang on the inline operand. A bounded attempt must complete,
+  // and OCR with a nonidentical digital layer must be rejected rather than merged.
+  await assert.rejects(extractBulkCv(pdf, 'pdf', async () => ({
+    text: 'Dodatkowa treść zeskanowana. Analiza wymagań, planowanie raportów i dokumentowanie wyników. ' +
+      'Weryfikowanie kompletności danych przez analityka w kolejnych latach pracy z dokumentami.',
+    confidence: 94,
+  }), { deadline: Date.now() + 7000 }), reason('unreadable_scan'));
+  assert.ok(Date.now() - start < 7000, 'inline-image inspection finishes within the extraction budget');
+});
+
 test('batch e-mail carries counts and a link only', async () => {
   const n = { batch_id: '11111111-1111-4111-8111-111111111111', recruitment_id: '22222222-2222-4222-8222-222222222222', company_id: '33333333-3333-4333-8333-333333333333',
     email: 'rekruter@example.com', recruitment_name: 'Księgowa <b>', files: 60, done: 52, errors: 8, passed: 12, review: 25, rejected: 15 };
@@ -208,7 +283,7 @@ test('signed scheduler pump binds the exact jsonb contract text', async () => {
   const calls = [];
   const rpc = async (fn, args) => {
     calls.push([fn, args]);
-    if (fn === 'cv_bulk_worker_pump') return { data: [{ batch_id: 'b', dispatch: ['44444444-4444-4444-8444-444444444444', 'bad'], notify: null }], error: null };
+    if (fn === 'cv_bulk_worker_pump') return { data: [{ batch_id: '55555555-5555-4555-8555-555555555555', dispatch: ['44444444-4444-4444-8444-444444444444', 'bad'], notify: null }], error: null };
     return { data: true, error: null };
   };
   const dispatched = [];
@@ -224,13 +299,244 @@ test('signed scheduler pump binds the exact jsonb contract text', async () => {
 
 test('session pump: AI disabled sends no contract; notification outcome is reported once', async () => {
   const calls = [];
-  const notify = { batch_id: '55555555-5555-4555-8555-555555555555', recruitment_id: 'r', company_id: 'c', email: 'a@b.pl', recruitment_name: 'R', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  const notify = { batch_id: '55555555-5555-4555-8555-555555555555', recruitment_id: '22222222-2222-4222-8222-222222222222', company_id: '33333333-3333-4333-8333-333333333333', email: 'a@b.pl', recruitment_name: 'R', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
   const rpc = async (fn, args) => { calls.push([fn, args]); return fn === 'cv_bulk_pump' ? { data: { dispatch: [], notify }, error: null } : { data: true, error: null }; };
   const result = await pumpBatch({ rpc, dispatch: async () => ({ accepted: true }), aiEnabled: false, origin: () => 'https://x', env: {} }, notify.batch_id);
   assert.equal(calls[0][1].contract, null);
   assert.deepEqual(calls[1], ['cv_bulk_finish_notification', { target_batch: notify.batch_id, outcome: 'skipped' }], 'mail disabled -> skipped');
   assert.equal(result.notify.batch_id, notify.batch_id);
   assert.deepEqual(parsePump({ dispatch: 'x', notify: { batch_id: 'nope' } }), { dispatch: [], notify: null });
+});
+
+test('session bulk pump fails closed on a malformed successful RPC response', async () => {
+  const batchId = '55555555-5555-4555-8555-555555555555';
+  for (const malformed of [null, [], {}, { dispatch: [] }, { dispatch: 'not an array', notify: null },
+    { dispatch: [], notify: { batch_id: 'invalid' } }, { dispatch: [], notify: [] },
+    { dispatch: [], notify: null, error: '23505' }]) {
+    let dispatches = 0;
+    const calls = [];
+    const rpc = async (fn, args) => {
+      calls.push([fn, args]);
+      return { data: malformed, error: null };
+    };
+    await assert.rejects(
+      pumpBatch({ rpc, dispatch: async () => { dispatches++; return { accepted: true }; },
+        aiEnabled: false, origin: () => 'https://example.test', env: {} }, batchId),
+      /cv_bulk_pump_invalid_response/,
+      'invalid payload must not be mistaken for an empty batch',
+    );
+    assert.equal(dispatches, 0);
+    assert.deepEqual(calls.map(([fn]) => fn), ['cv_bulk_pump'], 'no dispatch or notification acknowledgement on failure');
+  }
+  const rpc = async () => ({ data: { dispatch: [], notify: null }, error: null });
+  assert.deepEqual(await pumpBatch({ rpc, dispatch: async () => ({ accepted: true }),
+    aiEnabled: false, origin: () => 'https://example.test', env: {} }, batchId),
+  { dispatch: [], notify: null }, 'a legitimately empty RPC response still succeeds');
+});
+
+test('session pump rejects cross-batch notification leases before mail or acknowledgement', async () => {
+  const requested = '55555555-5555-4555-8555-555555555555';
+  const foreign = '66666666-6666-4666-8666-666666666666';
+  const notify = {
+    batch_id: foreign, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333',
+    email: 'synthetic@example.test', recruitment_name: 'Fikcyjna rekrutacja',
+    files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0,
+  };
+  const calls = [];
+  const rpc = async (fn, args) => { calls.push([fn, args]); return { data: { dispatch: [], notify }, error: null }; };
+  await assert.rejects(pumpBatch({
+    rpc, dispatch: async () => assert.fail('foreign lease must not dispatch'),
+    aiEnabled: false, origin: () => 'https://example.test',
+    env: { CV_BULK_MAIL_ENABLED: 'true', RESEND_API_KEY: 'test-only' },
+    fetcher: async () => assert.fail('foreign lease must not send mail'),
+  }, requested), /cv_bulk_pump_invalid_response/);
+  assert.deepEqual(calls.map(([fn]) => fn), ['cv_bulk_pump']);
+});
+
+test('malformed bulk notification leases are neither mailed nor acknowledged; unrelated scheduler claims still run', async () => {
+  const notify = {
+    batch_id: '55555555-5555-4555-8555-555555555555',
+    recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333',
+    email: null, recruitment_name: 'Synthetic', files: 2, done: 1,
+    errors: 1, passed: 1, review: 0, rejected: 0,
+  };
+  const bad = [
+    { batch_id: notify.batch_id }, // absent tenant, recruitment and counters
+    { ...notify, company_id: null },
+    { ...notify, recruitment_id: 'not-a-uuid' },
+    { ...notify, email: { address: 'fake@example.test' } },
+    { ...notify, recruitment_name: 17 },
+    { ...notify, done: '1' },
+    { ...notify, errors: -1 },
+    { ...notify, files: 1.5 },
+    { ...notify, passed: Number.POSITIVE_INFINITY },
+    { ...notify, files: 1, done: 2, errors: 0 },
+    { ...notify, files: 2, done: 1, errors: 2 },
+    { ...notify, files: 2, done: 1, passed: 2 },
+    { ...notify, files: 2, done: 1, passed: 1, review: 1 },
+    { ...notify, files: 2, done: 1, passed: 1, rejected: 1 },
+  ];
+  for (const value of bad) {
+    const rpcCalls = [];
+    const rpc = async (fn, args) => {
+      rpcCalls.push([fn, args]);
+      return { data: { dispatch: [], notify: value }, error: null };
+    };
+    await assert.rejects(pumpBatch({ rpc, dispatch: async () => assert.fail('no dispatch'),
+      aiEnabled: false, origin: () => 'https://example.test', env: {} }, notify.batch_id),
+    /cv_bulk_pump_invalid_response/);
+    assert.deepEqual(rpcCalls.map(([fn]) => fn), ['cv_bulk_pump'],
+      'a malformed lease must remain unacknowledged for retry');
+  }
+  const claimed = [], acknowledgements = [];
+  const rpc = async (fn, args) => {
+    if (fn === 'cv_bulk_worker_pump') return { data: [
+      { batch_id: notify.batch_id, dispatch: [], notify: { ...notify, files: null } },
+      { batch_id: notify.batch_id, dispatch: ['44444444-4444-4444-8444-444444444444'], notify },
+    ], error: null };
+    acknowledgements.push(args.target_batch);
+    return { data: true, error: null };
+  };
+  await assert.rejects(pumpAllSigned({
+    rpc, dispatch: async id => { claimed.push(id); return { accepted: true }; },
+    aiEnabled: false, origin: () => 'https://example.test', env: {},
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), /cv_bulk_worker_pump_invalid_response/);
+  assert.deepEqual(claimed, ['44444444-4444-4444-8444-444444444444']);
+  assert.deepEqual(acknowledgements, [notify.batch_id],
+    'only the valid lease is finalized despite its malformed sibling');
+});
+
+test('bulk pump dispatches a repeated attempt only once per response (session and signed scheduler)', async () => {
+  const first = '44444444-4444-4444-8444-444444444444';
+  const second = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const response = { dispatch: [first, first.toUpperCase(), 'invalid', second, first, second], notify: null };
+  assert.deepEqual(parsePump(response).dispatch, [first, second], 'valid UUIDs are unique regardless of case');
+
+  const dispatched = [];
+  const rpc = async fn => ({ data: fn === 'cv_bulk_worker_pump' ? [{ ...response, batch_id: '55555555-5555-4555-8555-555555555555' }] : response, error: null });
+  const deps = { rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+    aiEnabled: true, origin: () => 'https://example.test', env: {} };
+
+  await pumpBatch(deps, '55555555-5555-4555-8555-555555555555');
+  assert.deepEqual(dispatched, [first, second], 'signed-in pump invokes each attempt once');
+  dispatched.length = 0;
+
+  const count = await pumpAllSigned({ ...deps, secret: 's'.repeat(32), digest: text => createHash('sha256').update(text).digest('hex') });
+  assert.equal(count, 1);
+  assert.deepEqual(dispatched, [first, second], 'cron pump invokes each attempt once');
+});
+
+test('signed scheduler deduplicates claims across distinct response rows', async () => {
+  const attemptA = '44444444-4444-4444-8444-444444444444';
+  const attemptB = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const batchA = '55555555-5555-4555-8555-555555555555';
+  const batchB = '66666666-6666-4666-8666-666666666666';
+  const notify = id => ({
+    batch_id: id, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333',
+    email: null, recruitment_name: 'Synthetic', files: 1, done: 1, errors: 0,
+    passed: 1, review: 0, rejected: 0,
+  });
+  const response = [
+    { batch_id: batchA, dispatch: [attemptA], notify: notify(batchA) },
+    { batch_id: batchA.toUpperCase(), dispatch: [attemptA.toUpperCase()], notify: notify(batchA.toUpperCase()) },
+    { batch_id: batchB, dispatch: [attemptB], notify: notify(batchB) },
+  ];
+  const dispatched = [], acknowledged = [];
+  const rpc = async (fn, args) => {
+    if (fn === 'cv_bulk_worker_pump') return { data: response, error: null };
+    assert.equal(fn, 'cv_bulk_finish_notification');
+    acknowledged.push(args.target_batch);
+    return { data: true, error: null };
+  };
+  await assert.rejects(pumpAllSigned({
+    rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+    aiEnabled: false, origin: () => 'https://example.test', env: {},
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), error => error.message === 'cv_bulk_worker_pump_invalid_response',
+  'duplicated scheduler claims must not be reported as successful');
+  assert.deepEqual(dispatched.sort(), [attemptA, attemptB].sort(),
+    'an attempt shared by two batches is dispatched only once, regardless of UUID case');
+  assert.deepEqual(acknowledged.sort(), [batchA, batchB].sort(),
+    'notification leases are finalized once while unrelated batches proceed');
+});
+
+test('signed scheduler rejects repeated batch claims with different attempt IDs but keeps other batches running', async () => {
+  const batchA = '55555555-5555-4555-8555-555555555555';
+  const batchB = '66666666-6666-4666-8666-666666666666';
+  const attemptA = '44444444-4444-4444-8444-444444444444';
+  const attemptDuplicate = '77777777-7777-4777-8777-777777777777';
+  const attemptB = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const notify = id => ({
+    batch_id: id, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333',
+    email: null, recruitment_name: 'Synthetic', files: 1, done: 1, errors: 0,
+    passed: 1, review: 0, rejected: 0,
+  });
+  const response = [
+    { batch_id: batchA, dispatch: [attemptA], notify: notify(batchA) },
+    { batch_id: batchA.toUpperCase(), dispatch: [attemptDuplicate], notify: notify(batchA.toUpperCase()) },
+    { batch_id: batchB, dispatch: [attemptB], notify: notify(batchB) },
+  ];
+  const dispatched = [], acknowledged = [];
+  const rpc = async (fn, args) => {
+    if (fn === 'cv_bulk_worker_pump') return { data: response, error: null };
+    assert.equal(fn, 'cv_bulk_finish_notification');
+    acknowledged.push(args.target_batch);
+    return { data: true, error: null };
+  };
+  await assert.rejects(pumpAllSigned({
+    rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+    aiEnabled: false, origin: () => 'https://example.test', env: {},
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), error => error.message === 'cv_bulk_worker_pump_invalid_response',
+  'a duplicated batch claim must not be treated as a second independent lease');
+  assert.deepEqual(dispatched.sort(), [attemptA, attemptB].sort(),
+    'different attempt IDs in the duplicate row must not be dispatched');
+  assert.deepEqual(acknowledged.sort(), [batchA, batchB].sort(),
+    'duplicate lease remains unacknowledged while unrelated batch finishes');
+});
+
+test('signed scheduler rejects foreign or missing batch identity without delivering its lease', async () => {
+  const batchA = '55555555-5555-4555-8555-555555555555';
+  const batchB = '66666666-6666-4666-8666-666666666666';
+  const attempt = '44444444-4444-4444-8444-444444444444';
+  const notify = { batch_id: batchB, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: 'synthetic@example.test',
+    recruitment_name: 'Fikcyjna', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  for (const wrongId of [batchA, null, undefined, 'not-a-uuid']) {
+    const dispatched = [], acknowledged = [];
+    const invalid = { dispatch: [], notify, ...(wrongId === undefined ? {} : { batch_id: wrongId }) };
+    const rpc = async (fn, args) => {
+      if (fn === 'cv_bulk_worker_pump') return { data: [
+        invalid, { batch_id: batchA, dispatch: [attempt], notify: null },
+      ], error: null };
+      acknowledged.push(args.target_batch);
+      return { data: true, error: null };
+    };
+    await assert.rejects(pumpAllSigned({
+      rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+      aiEnabled: false, origin: () => 'https://example.test',
+      env: { CV_BULK_MAIL_ENABLED: 'true', RESEND_API_KEY: 'test-only' },
+      fetcher: async () => assert.fail('foreign/malformed lease must not send e-mail'),
+      secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+    }), error => error.message === 'cv_bulk_worker_pump_invalid_response');
+    assert.deepEqual(dispatched, [attempt], 'unrelated valid dispatch must proceed');
+    assert.deepEqual(acknowledged, [], 'a foreign/malformed lease must stay unacknowledged for retry');
+  }
+  const acknowledged = [];
+  const rpc = async (fn, args) => fn === 'cv_bulk_worker_pump'
+    ? { data: [{ batch_id: batchB.toUpperCase(), dispatch: [], notify: { ...notify, email: null } }], error: null }
+    : (acknowledged.push(args.target_batch), { data: true, error: null });
+  assert.equal(await pumpAllSigned({
+    rpc, dispatch: async () => ({ accepted: true }), aiEnabled: false,
+    origin: () => 'https://example.test', env: {}, secret: 's'.repeat(32),
+    digest: value => createHash('sha256').update(value).digest('hex'),
+  }), 1, 'UUID case must not affect a valid claim');
+  assert.deepEqual(acknowledged, [batchB]);
 });
 
 test('detectPhone: international prefixes and no gluing across lines', () => {
@@ -248,13 +554,51 @@ test('AI disabled: bulk intake is refused before any slot is reserved', async ()
   assert.match(bulkIntakeBlocked(false), /Analiza AI jest teraz wyłączona/);
   const { readFileSync } = await import('node:fs');
   const dir = new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/', import.meta.url);
-  const actions = readFileSync(new URL('actions.ts', dir), 'utf8');
+  const actions = actionSources(dir);
   const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
-  assert.ok(create.indexOf('bulkIntakeBlocked(screeningAiUserEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
+  assert.ok(create.indexOf('bulkIntakeBlocked(deps.aiEnabled())') > 0 && create.indexOf('bulkIntakeBlocked') < create.indexOf("rpc('cv_bulk_create_batch'"),
     'createBulkBatch checks the AI flag before reserving');
-  assert.match(create, /status\.error \|\| !Array\.isArray\(listed\)/, 'a failed status read is an error, not an empty batch');
+  assert.match(create, /!status\.error && verifyBulkRegistration\(created\.data, status\.data, recruitmentId, checked\)/,
+    'file metadata and both RPC envelopes are checked before handing upload IDs to the browser');
   const page = readFileSync(new URL('page.tsx', dir), 'utf8');
   assert.match(page, /blocked \? <p role="alert">\{blocked\}<\/p>\s*: <BulkUploader/, 'uploader hidden when AI is off');
+});
+
+test('bulk registration validates complete RPC output before uploading or closing held slots', async () => {
+  const recruitmentId = '11111111-1111-4111-8111-111111111111';
+  const batchId = '22222222-2222-4222-8222-222222222222';
+  const files = [{ name: 'a.pdf', kind: 'pdf', size: 50 }, { name: 'b.docx', kind: 'docx', size: 70 }];
+  const created = { batch_id: batchId, reserved_slots: 1, over_limit: 1 };
+  const status = { batch: { id: batchId, recruitment_id: recruitmentId, declared_files: 2, reserved_slots: 1 },
+    items: [
+      { id: '33333333-3333-4333-8333-333333333333', position: 1, file_name: 'a.pdf', file_kind: 'pdf' },
+      { id: '44444444-4444-4444-8444-444444444444', position: 2, file_name: 'b.docx', file_kind: 'docx' },
+    ] };
+  assert.deepEqual(verifyBulkRegistration(created, status, recruitmentId, files), {
+    batchId, reserved: 1, overLimit: 1, items: status.items.map(({ id, position }) => ({ id, position })),
+  });
+  const cases = [
+    [null, status], [{}, status], [{ ...created, batch_id: 'bad' }, status],
+    [{ ...created, reserved_slots: 3 }, status], [{ ...created, over_limit: 0 }, status],
+    [created, null], [created, { ...status, batch: { ...status.batch, id: 'bad' } }],
+    [created, { ...status, batch: { ...status.batch, recruitment_id: batchId } }],
+    [created, { ...status, batch: { ...status.batch, declared_files: 1 } }],
+    [created, { ...status, batch: { ...status.batch, reserved_slots: 2 } }],
+    [created, { ...status, items: status.items.slice(0, 1) }],
+    [created, { ...status, items: [status.items[0], status.items[0]] }],
+    [created, { ...status, items: [{ ...status.items[0], id: 'bad' }, status.items[1]] }],
+    [created, { ...status, items: [{ ...status.items[0], position: 3 }, status.items[1]] }],
+    [created, { ...status, items: [{ ...status.items[0], file_name: 'other.pdf' }, status.items[1]] }],
+    [created, { ...status, items: [{ ...status.items[0], file_kind: 'txt' }, status.items[1]] }],
+  ];
+  for (const [badCreated, badStatus] of cases) {
+    assert.equal(verifyBulkRegistration(badCreated, badStatus, recruitmentId, files), null);
+  }
+  const { readFileSync } = await import('node:fs');
+  const actions = actionSources();
+  const close = actions.slice(actions.indexOf('export async function closeBulkUpload'), actions.indexOf('export async function bulkProgress'));
+  assert.match(close, /!Number\.isInteger\(result\.data\)/, 'close rejects a missing or malformed released-slot count');
+  assert.match(close, /\(result\.data as number\) < 0/, 'close refuses negative slot counts');
 });
 
 test('finish(): long runs of spaces are linear, over-length text is rejected, never truncated', async () => {
@@ -340,9 +684,19 @@ test('PDF OCR: a blank page in a text PDF is skipped, not fatal', async () => {
   // Scanner noise on a blank page (no word-like run) is still blank, even with low confidence.
   const noise = async () => ({ text: '| \u2014 ~ .', confidence: 20 });
   assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', noise)).text, /Katarzyna Wisniewska/);
-  // A confident short read (page number, footer) is still skipped.
+  // A confident bare page number is still skipped; short word-like skills are not.
   const footer = async () => ({ text: '2', confidence: 95 });
-  assert.match((await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer)).text, /Katarzyna Wisniewska/);
+  const withoutFooter = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', footer);
+  assert.match(withoutFooter.text, /Katarzyna Wisniewska/);
+  assert.doesNotMatch(withoutFooter.text, /\n2$/, 'a bare page number is still skipped');
+  // A page consisting of a short, confidently read skill/qualification must not
+  // disappear from the approved text that the automatic screening will receive.
+  for (const skill of ['SQL', 'Prawo jazdy B']) {
+    const confident = async () => ({ text: skill, confidence: 95 });
+    const out = await extractBulkCv(Buffer.from(pdf, 'latin1'), 'pdf', confident);
+    assert.ok(out.text.includes(skill), `short CV evidence preserved: ${skill}`);
+    assert.equal(out.ocrUsed, true);
+  }
   // A scan where OCR finds nothing on any page is still unreadable.
   await assert.rejects(extractBulkCv(scannedPdf(cvLines), 'pdf', blankOcr), reason('unreadable_scan'));
 });
@@ -435,7 +789,7 @@ test('OCR queue: time spent waiting behind another job counts towards the deadli
 
 test('scheduler pump delivers every returned batch, in parallel', async () => {
   const rpc = async fn => fn === 'cv_bulk_worker_pump'
-    ? { data: [1, 2, 3].map(n => ({ batch_id: `b${n}`, dispatch: [`${n}${n}${n}${n}${n}${n}${n}${n}-4444-4444-8444-444444444444`], notify: null })), error: null }
+    ? { data: [1, 2, 3].map(n => ({ batch_id: `55555555-5555-4555-8555-55555555555${n}`, dispatch: [`${n}${n}${n}${n}${n}${n}${n}${n}-4444-4444-8444-444444444444`], notify: null })), error: null }
     : { data: true, error: null };
   let inFlight = 0, peak = 0;
   const dispatched = [];
@@ -449,6 +803,108 @@ test('scheduler pump delivers every returned batch, in parallel', async () => {
   assert.equal(count, 3);
   assert.equal(dispatched.length, 3, 'no counted re-send is left undelivered');
   assert.equal(peak, 3, 'batches are delivered in parallel, bounded by the per-request timeouts');
+});
+
+
+test('failed notification acknowledgement is reported, never mistaken for success', async () => {
+  const batchId = '55555555-5555-4555-8555-555555555555';
+  const notify = { batch_id: batchId, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: null,
+    recruitment_name: 'Rekrutacja', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  const rpc = async fn => fn === 'cv_bulk_pump'
+    ? { data: { dispatch: [], notify }, error: null }
+    : { data: null, error: { message: 'private content from DB' } };
+  const deps = { rpc, dispatch: async () => ({ accepted: true }), aiEnabled: false,
+    origin: () => 'https://example.test', env: {} };
+  await assert.rejects(pumpBatch(deps, batchId), error => error.message === 'cv_bulk_notification_finish_failed',
+    'session failures are visible without forwarding DB content');
+  await assert.rejects(pumpAllSigned({ ...deps,
+    rpc: async fn => fn === 'cv_bulk_worker_pump'
+      ? { data: [{ batch_id: notify.batch_id, dispatch: [], notify }, { batch_id: '66666666-6666-4666-8666-666666666666', dispatch: [], notify: { ...notify, batch_id: '66666666-6666-4666-8666-666666666666' } }], error: null }
+      : { data: null, error: { message: 'private content from DB' } },
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), error => error.message === 'cv_bulk_worker_delivery_failed',
+  'scheduler failures remain visible without leaking provider/DB messages');
+
+  await assert.rejects(pumpAllSigned({ ...deps,
+    rpc: async () => ({ data: { dispatch: [] }, error: null }),
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), /cv_bulk_worker_pump_invalid_response/, 'an invalid worker response is not an empty successful run');
+});
+
+test('notification RPC must acknowledge a real lease update for both session and signed pumps', async () => {
+  const batchId = '55555555-5555-4555-8555-555555555555';
+  const notify = { batch_id: batchId, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: null,
+    recruitment_name: 'Synthetic', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  for (const acknowledgement of [false, null, 'true', { updated: true }]) {
+    const confirmed = [];
+    const rpc = async (fn, args) => {
+      if (fn === 'cv_bulk_pump') return { data: { dispatch: [], notify }, error: null };
+      if (fn === 'cv_bulk_worker_pump') return { data: [{ batch_id: notify.batch_id, dispatch: [], notify }], error: null };
+      assert.equal(fn, 'cv_bulk_finish_notification');
+      confirmed.push(args.target_batch);
+      return { data: acknowledgement, error: null };
+    };
+    const deps = { rpc, dispatch: async () => ({ accepted: true }),
+      aiEnabled: false, origin: () => 'https://example.test', env: {} };
+    await assert.rejects(pumpBatch(deps, batchId),
+      error => error.message === 'cv_bulk_notification_finish_failed',
+      'a false/non-boolean session acknowledgement cannot be reported as success');
+    await assert.rejects(pumpAllSigned({ ...deps, secret: 's'.repeat(32),
+      digest: value => createHash('sha256').update(value).digest('hex') }),
+    error => error.message === 'cv_bulk_worker_delivery_failed',
+    'a false/non-boolean signed acknowledgement cannot be reported as success');
+    assert.deepEqual(confirmed, [batchId, batchId], 'both paths attempt finalization once');
+  }
+});
+
+test('signed scheduler rejects each malformed claimed batch while delivering the valid ones', async () => {
+  const attemptId = '44444444-4444-4444-8444-444444444444';
+  const batchId = '55555555-5555-4555-8555-555555555555';
+  const notify = { batch_id: batchId, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: null,
+    recruitment_name: 'Syntetyczna', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 };
+  const good = { batch_id: batchId, dispatch: [attemptId], notify };
+  const malformed = [null, [], {}, { dispatch: [] }, { dispatch: 'not an array', notify: null },
+    { dispatch: [], notify: { batch_id: 'invalid' } }, { dispatch: [], notify: [] },
+    { dispatch: [], notify: null, error: '23505' }];
+  for (const bad of malformed) {
+    const dispatched = [], acknowledged = [];
+    const rpc = async (fn, args) => {
+      if (fn === 'cv_bulk_worker_pump') return { data: [bad, good], error: null };
+      assert.equal(fn, 'cv_bulk_finish_notification');
+      acknowledged.push(args.target_batch);
+      return { data: true, error: null };
+    };
+    await assert.rejects(pumpAllSigned({
+      rpc, dispatch: async id => { dispatched.push(id); return { accepted: true }; },
+      aiEnabled: false, origin: () => 'https://example.test', env: {},
+      secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+    }), error => error.message === 'cv_bulk_worker_pump_invalid_response',
+    'malformed scheduler item must fail instead of reporting a successful count');
+    assert.deepEqual(dispatched, [attemptId], 'valid claim is dispatched despite another malformed claim');
+    assert.deepEqual(acknowledged, [batchId], 'valid notification is finalized despite malformed sibling');
+  }
+});
+
+test('scheduler still processes every claimed batch when one notification acknowledgement fails', async () => {
+  const ids = ['55555555-5555-4555-8555-555555555555', '66666666-6666-4666-8666-666666666666'];
+  const finished = [];
+  const notify = id => ({ batch_id: id, recruitment_id: '22222222-2222-4222-8222-222222222222',
+    company_id: '33333333-3333-4333-8333-333333333333', email: null,
+    recruitment_name: 'Rekrutacja', files: 1, done: 1, errors: 0, passed: 1, review: 0, rejected: 0 });
+  const rpc = async (fn, args) => {
+    if (fn === 'cv_bulk_worker_pump') return { data: ids.map(id => ({ batch_id: id, dispatch: [], notify: notify(id) })), error: null };
+    finished.push(args.target_batch);
+    return { data: args.target_batch !== ids[0], error: args.target_batch === ids[0] ? { message: 'sensitive database error' } : null };
+  };
+  await assert.rejects(pumpAllSigned({
+    rpc, dispatch: async () => ({ accepted: true }), aiEnabled: false,
+    origin: () => 'https://example.test', env: {},
+    secret: 's'.repeat(32), digest: value => createHash('sha256').update(value).digest('hex'),
+  }), error => error.message === 'cv_bulk_worker_delivery_failed');
+  assert.deepEqual(finished.sort(), ids, 'a failed acknowledgement never skips remaining claimed batches');
 });
 
 test('uploader: one request key per file set, synchronous double-click guard, OCR files one at a time', async () => {
@@ -472,4 +928,133 @@ test('upload route checks write access before reading the file', async () => {
   const forbidden = src.indexOf("{ error: 'forbidden' }");
   assert.ok(forbidden > 0 && forbidden < src.indexOf('request.formData()'), 'forbidden before formData');
   assert.match(src, /ocrImage, \{ deadline \}\)/);
+});
+
+
+test('bulk upload failures never log untrusted CV parser or OCR exception text', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/items/[itemId]/route.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('} catch (error) {');
+  const end = source.indexOf("const result = await client.rpc('cv_bulk_register_item'", start);
+  assert.ok(start >= 0 && end > start, 'extract failure handler must remain present');
+  const failure = source.slice(start, end);
+  // OCR/format parsers may include unredacted names, contact details or file paths in Error.name/message.
+  // A fixed operational marker is enough; no exception object or its properties reach the log.
+  const logging = [...failure.matchAll(/console\.(?:error|warn|log|info|debug)\s*\(([^;]*)\);/g)];
+  assert.deepEqual(logging.map(match => match[1].trim()), ["'cv_bulk_extract_failed'"]);
+  assert.doesNotMatch(failure, /error\.(?:name|message|stack)|String\s*\(\s*error\s*\)|JSON\.stringify\s*\(\s*error\s*\)/);
+  assert.match(failure, /error: 'extract_failed'/, 'retries remain possible on infrastructure errors');
+});
+
+
+test('manual preselection move is bound to the exact company and recruitment route', async () => {
+  const companyId = '11111111-1111-4111-8111-111111111111';
+  const recruitmentId = '22222222-2222-4222-8222-222222222222';
+  const applicationId = 'a3333333-b333-4333-8333-c33333333333';
+  const row = { id: applicationId, company_id: companyId, recruitment_id: recruitmentId };
+  assert.equal(bulkMoveTargetMatches(row, companyId, recruitmentId, applicationId), true);
+  assert.notEqual(applicationId.toUpperCase(), applicationId, 'fixture contains hex letters');
+  assert.equal(bulkMoveTargetMatches({ ...row, id: applicationId.toUpperCase() }, companyId, recruitmentId, applicationId), true);
+  for (const value of [null, [], {}, { ...row, id: '44444444-4444-4444-8444-444444444444' },
+    { ...row, company_id: '44444444-4444-4444-8444-444444444444' },
+    { ...row, recruitment_id: '44444444-4444-4444-8444-444444444444' },
+    { ...row, company_id: undefined }, { ...row, id: 7 }]) {
+    assert.equal(bulkMoveTargetMatches(value, companyId, recruitmentId, applicationId), false);
+  }
+  assert.equal(bulkMoveTargetMatches(row, 'not-a-uuid', recruitmentId, applicationId), false);
+  const { readFileSync } = await import('node:fs');
+  const source = actionSources();
+  const move = source.slice(source.indexOf('export async function movePreselectionGroup'));
+  assert.match(move, /\.eq\('company_id', companyId\)\.eq\('recruitment_id', recruitmentId\)/);
+  assert.match(move, /bulkMoveTargetMatches\(target\.data, companyId, recruitmentId, applicationId\)/);
+  assert.ok(move.indexOf('bulkMoveTargetMatches(') < move.indexOf("client.rpc('move_preselection_group'"),
+    'route must be verified before the write RPC');
+});
+
+test('manual preselection group changes require a valid RPC timestamp before success', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { groupMoveConfirmed } = await import('../lib/cv-bulk.ts');
+  assert.equal(groupMoveConfirmed('2026-11-07T01:38:44.123456+00:00'), true, 'PostgreSQL timestamptz');
+  assert.equal(groupMoveConfirmed('2026-11-07T01:38:44Z'), true, 'UTC timestamptz');
+  assert.equal(groupMoveConfirmed('2024-02-29T23:59:59+01:00'), true, 'leap day');
+  for (const value of [null, false, true, 1, {}, [], 'true', '', '2026-11-07',
+    '2026-11-07T01:38:44', 'not-a-timestamp', '2026-99-07T01:38:44Z',
+    '2026-02-30T01:38:44Z', '2026-04-31T01:38:44+00:00',
+    '2025-02-29T12:00:00Z', '2026-12-00T12:00:00Z',
+    '2026-11-07T24:00:00Z', '2026-11-07T12:60:00Z',
+    '2026-11-07T01:00:00+24:00']) {
+    assert.equal(groupMoveConfirmed(value), false, 'invalid/missing acknowledgements cannot pass');
+  }
+  const action = actionSources();
+  assert.match(action, /if \(!groupMoveConfirmed\(result\.data\)\) return \{ error:/,
+    'the server action must check the actual RPC return before claiming success');
+});
+
+test('bulk redaction refuses residual candidate names before unattended AI analysis', () => {
+  const cv = 'Anna Nowak\nDoświadczenie: SQL i Excel';
+  const cleaned = buildExtraction(cv, 1, false, suggestRedaction);
+  assert.equal(cleaned.name_detected, true);
+  assert.doesNotMatch(cleaned.redacted_text, /Anna|Nowak/, 'normal redaction still accepts a CV');
+
+  // A plausible CV without a phone or e-mail used to pass through unchanged,
+  // including if the redactor replaced only one of the two name parts.
+  for (const redact of [
+    text => text,
+    text => text.replace('Anna', '[DANE OSOBOWE]'),
+    text => text.replace('Nowak', '[DANE OSOBOWE]'),
+    text => text.replace('Anna', 'An\u200Bna'),
+  ]) assert.throws(() => buildExtraction(cv, 1, false, redact),
+    error => error instanceof BulkIntakeError && error.reason === 'bad_format');
+
+  const hyphen = 'Anna Kowalski-Nowak\nDoświadczenie: Java';
+  assert.throws(() => buildExtraction(hyphen, 2, false,
+    text => text.replace('Anna', '[DANE OSOBOWE]').replace('Kowalski-', '[DANE OSOBOWE]')),
+  error => error instanceof BulkIntakeError && error.reason === 'bad_format',
+  'a leaked part of a hyphenated surname must not reach the provider');
+
+  const noDetectedName = buildExtraction('SQL\nDoświadczenie w analizach danych', 3, false, text => text);
+  assert.equal(noDetectedName.name_detected, false, 'anonymous CVs are not rejected solely for missing a name');
+});
+
+
+test('bulk status and route are bound before reading or mutating any other company batch', async () => {
+  const batchId = '11111111-1111-4111-8111-111111111111';
+  const recruitmentId = '22222222-2222-4222-8222-222222222222';
+  const other = '33333333-3333-4333-8333-333333333333';
+  const status = { batch: { id: batchId, recruitment_id: recruitmentId }, items: [] };
+  assert.equal(bulkBatchRouteMatches(status, batchId, recruitmentId), true);
+  assert.equal(bulkBatchRouteMatches({ batch: { ...status.batch, id: batchId.toUpperCase(), recruitment_id: recruitmentId.toUpperCase() } },
+    batchId, recruitmentId), true, 'UUID casing is irrelevant');
+  for (const bad of [null, {}, [], { batch: [] }, { batch: {} },
+    { batch: { ...status.batch, id: other } }, { batch: { ...status.batch, recruitment_id: other } },
+    { batch: { ...status.batch, id: 42 } }, { batch: { ...status.batch, recruitment_id: 'bad' } }]) {
+    assert.equal(bulkBatchRouteMatches(bad, batchId, recruitmentId), false);
+  }
+  assert.equal(bulkBatchRouteMatches(status, other, recruitmentId), false);
+  assert.equal(bulkBatchRouteMatches(status, batchId, other), false);
+  assert.equal(bulkBatchRouteMatches(status, 'bad', recruitmentId), false);
+
+  const { readFileSync } = await import('node:fs');
+  const actions = actionSources();
+  const create = actions.slice(actions.indexOf('export async function createBulkBatch'), actions.indexOf('export async function closeBulkUpload'));
+  assert.ok(create.indexOf(".eq('company_id', companyId)") < create.indexOf("client.rpc('cv_bulk_create_batch'"),
+    'reservation checks route company first');
+  const close = actions.slice(actions.indexOf('export async function closeBulkUpload'), actions.indexOf('export async function bulkProgress'));
+  assert.ok(close.indexOf('bulkBatchRouteMatches(') < close.indexOf("client.rpc('cv_bulk_close_upload'"),
+    'close verifies batch ID before writing');
+  assert.ok(close.indexOf(".eq('company_id', companyId)") < close.indexOf("client.rpc('cv_bulk_close_upload'"),
+    'close verifies company before writing');
+  const progress = actions.slice(actions.indexOf('export async function bulkProgress'), actions.indexOf('export type MoveState'));
+  assert.ok(progress.indexOf(".eq('company_id', companyId)") < progress.indexOf('deps.pump('),
+    'heartbeat checks company before pumping');
+  assert.ok(progress.indexOf('bulkBatchRouteMatches(before.data') < progress.indexOf('deps.pump('),
+    'heartbeat checks batch identity before pumping');
+  const page = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /\.eq\('id', recruitmentId\)\.eq\('company_id', companyId\)/);
+  assert.match(page, /bulkBatchRouteMatches\(raw, batchId, recruitmentId\)/);
+  assert.match(close, /closeBulkUploadCore\(deps: BulkActionDeps, companyId: string, recruitmentId: string, batchId: string\)/, 'exact recruitment is required to close batch');
+  const uploader = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/uploader.tsx', import.meta.url), 'utf8');
+  assert.match(uploader, /closeBulkUpload\(props.companyId, props.recruitmentId, batchId\)/);
+  const ui = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/progress.tsx', import.meta.url), 'utf8');
+  assert.match(ui, /bulkProgress\(companyId, recruitmentId, batchId\)/);
 });

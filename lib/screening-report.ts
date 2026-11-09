@@ -1,4 +1,5 @@
 import type { ScreeningRating } from './supabase/database.types';
+import type { RequirementFlagRow } from './requirement-flags.ts';
 
 export const REPORT_VERSION = 'screening-report-v1';
 export const MAX_REPORT_APPLICATIONS = 500;
@@ -149,17 +150,24 @@ export type ScreeningReport = {
   recruitmentId: string; recruitmentName: string; positionTitle: string; targetSize: number;
   requirements: { kind: keyof typeof kindLabels; text: string }[]; applications: ReportApplication[];
   groups?: ReportGroupRow[];
+  /** SC-015 / #268. Oznaczenia wymagań konieczne/dodatkowe; brak = wszystko nieoznaczone.
+   * Tylko dla widoku porównania — eksport CSV ich nie zawiera (decyzja właściciela 2026-11-04). */
+  positionId?: string;
+  requirementFlags?: RequirementFlagRow[];
 };
 /**
  * A saved preselection group is current only while it was computed from the analysis the SC-008
  * ranking uses now, and that analysis is not outdated. A re-analysis outside the batch, a CV or
- * position change, a missing link or a malformed id all make the saved score historical.
+ * position change, a missing human-approved result, a missing link or a malformed id all make the saved score historical.
  */
 export function groupAnalysisCurrent(groupAnalysisId: unknown,
   ranking: { analysis_id: unknown; eligibility_reason: unknown } | undefined): boolean {
-  if (typeof groupAnalysisId !== 'string' || !/^[0-9a-f-]{36}$/i.test(groupAnalysisId) || !ranking) return false;
-  if (ranking.eligibility_reason === 'stale' || ranking.eligibility_reason === 'needs_reanalysis') return false;
-  return typeof ranking.analysis_id === 'string' && ranking.analysis_id === groupAnalysisId;
+  if (!isUuid(groupAnalysisId) || !ranking || !isUuid(ranking.analysis_id)) return false;
+  // A matching analysis UUID alone does not prove a valid, human-reviewed result.
+  // Pending/failed/unreviewed rankings may still reference a historical analysis.
+  if (ranking.eligibility_reason !== 'eligible' && ranking.eligibility_reason !== 'insufficient_evidence') return false;
+  // PostgreSQL UUIDs are case-insensitive; a differently cased Data API value must not make a current group appear stale.
+  return ranking.analysis_id.toLowerCase() === groupAnalysisId.toLowerCase();
 }
 export function parseGroupRow(value: unknown): ReportGroupRow {
   const g = object(value);
@@ -195,7 +203,11 @@ export function shortlistLabel(entry: ShortlistRow | null) {
 // Quote every cell and neutralize spreadsheet formulas even after control/space prefixes.
 export function csvCell(value: string | number | null): string {
   let input = value === null ? '' : String(value);
-  if (typeof value === 'string' && /^[\s\u0000-\u001f\u007f-\u009f\ufeff]*[=+@-]/.test(input)) input = "'" + input;
+  // Spreadsheet importers may ignore invisible formatting characters before a
+  // formula introducer. Treat these like whitespace instead of trusting the
+  // first *visible* character; keep the original cell content after the quote.
+  const formulaPrefix = /^[\s\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]*[=+@-]/;
+  if (typeof value === 'string' && formulaPrefix.test(input)) input = "'" + input;
   input = input.replace(/\u0000/g, '');
   return '"' + input.replace(/"/g, '""') + '"';
 }
@@ -225,7 +237,9 @@ export function screeningReportCsv(report: ScreeningReport): string {
     // Exports keep the SC-009 rule: candidates by application ID only, no names (the screen may show names).
     rows.push([], ['Preselekcja automatyczna (grupy z analizy AI, do weryfikacji przez człowieka)'],
       ['Zgłoszenie', 'Grupa', 'Wynik', 'Pokrycie', 'Źródło grupy', 'Aktualność']);
-    for (const g of report.groups) rows.push([g.application_id, preselectionGroupLabels[g.group], g.raw_score, g.coverage,
+    for (const g of report.groups) rows.push([g.application_id, preselectionGroupLabels[g.group],
+      // A historical classification stays visible, but its score and coverage must not be read as current.
+      g.stale ? null : g.raw_score, g.stale ? null : g.coverage,
       g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie', g.stale ? 'Wynik nieaktualny — wymaga ponownej analizy' : 'Aktualny']);
   }
   const csv = '\uFEFF' + rows.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';

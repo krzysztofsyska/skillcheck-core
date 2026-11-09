@@ -129,6 +129,25 @@ test('provider output must match the exact criterion set and rating enum', () =>
   }, claim), error => error.code === 'openai_invalid_output');
 });
 
+test('provider never coerces non-string JSON values into exact CV evidence', () => {
+  const syntheticClaim = { ...claim, input_cv_text_snapshot: '42 true null SQL' };
+  const outputWithQuote = quote => ({
+    criteria: [
+      { criterion_id: 'task:1', rating: 'meets', evidence_quotes: [quote], explanation: 'Synthetic evidence.' },
+      { criterion_id: 'kpi:1', rating: 'insufficient_data', evidence_quotes: [], explanation: '' },
+    ],
+  });
+  for (const invalid of [42, true, null, ['SQL']]) {
+    assert.throws(
+      () => parseScreeningProviderOutput(outputWithQuote(invalid), syntheticClaim),
+      error => error.code === 'openai_invalid_output',
+      `Unexpectedly accepted ${JSON.stringify(invalid)} as a quote`,
+    );
+  }
+  const valid = parseScreeningProviderOutput(outputWithQuote('42'), syntheticClaim);
+  assert.deepEqual(valid[0].evidence, [{ start: 0, end: 2, quote: '42' }]);
+});
+
 test('refusals and malformed OpenAI envelopes become sanitized codes', () => {
   assert.throws(() => parseScreeningOpenAiResponse({
     status: 'incomplete', incomplete_details: { reason: 'content_filter' },

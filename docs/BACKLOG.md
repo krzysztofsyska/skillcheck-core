@@ -1,5 +1,17 @@
 # SkillCheck — Development Backlog
 
+> **ARCHIWUM:** tabela i kolejka poniżej opisują punkt startowy z 4 października 2026 r.; ich dawne statusy `BACKLOG`, `REVIEW` i `DONE` nie są aktualnym przydziałem prac. Treść historyczna pozostaje bez zmian. Bieżącym źródłem zleceń są [issue #284](https://github.com/krzysztofsyska/skillcheck-core/issues/284), powiązane issue/PR oraz `AGENTS.md`.
+
+## Aktualny punkt wejścia — 8 listopada 2026 r.
+
+- **Baza kodu:** `integration` @ `d9b55973311623c2fc31649104a0ac608c7763d4`. [PR #354](https://github.com/krzysztofsyska/skillcheck-core/pull/354) (SC-005, kontrola powiązań firmy/rekrutacji/CV) scalono **wyłącznie do integration**, po [niezależnym review PASS bieżącego SHA](https://github.com/krzysztofsyska/skillcheck-core/pull/354#issuecomment-6722809776) i zielonych testach. Kod na `integration` **nie oznacza działania na produkcji**.
+- **Zakres i pozostałe braki:** [issue #284](https://github.com/krzysztofsyska/skillcheck-core/issues/284) pozostaje otwarte dla SC-005–016 i SC-019; priorytet FREE/PRESELEKCJA, potem pozostałe moduły według zależności. Stan szczegółowy sprawdzać w aktualnych issue i PR, nie w historycznej tabeli poniżej.
+- **WERYFIKACJA/AC:** [PR #358](https://github.com/krzysztofsyska/skillcheck-core/pull/358) poprawiający kontrolę kontekstu ćwiczenia jest scalony do `integration`, ale [issue #338](https://github.com/krzysztofsyska/skillcheck-core/issues/338) (konta, uprawnienia i pełny przepływ) nadal jest otwarte. Nie oznaczać całego modułu jako gotowego.
+- **Blokady wydania:** [Draft PR #266 — HOLD P24](https://github.com/krzysztofsyska/skillcheck-core/pull/266) pozostaje otwarty i niescalony do `main`; wspólne Preview jest zamrożone zgodnie z [issue #337](https://github.com/krzysztofsyska/skillcheck-core/issues/337). Brak zgody na produkcję, płatności lub nowe koszty.
+- **Role i bramki:** Codex planuje i koordynuje, Claude wykonuje przydzielony zakres; osobna sesja wykonuje niezależny review aktualnego SHA. Testy i review są warunkiem scalenia do `integration`, a produkcja wymaga osobnej decyzji właściciela (zob. `AGENTS.md` i [issue #355](https://github.com/krzysztofsyska/skillcheck-core/issues/355)).
+
+---
+
 Punkt startowy: po merge PR #1 do main, 2026-10-04.
 
 ## Status istniejącego produktu

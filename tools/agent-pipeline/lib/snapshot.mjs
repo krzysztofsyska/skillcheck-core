@@ -1,3 +1,4 @@
+import { integrationOnly } from './control-plane.mjs';
 import { parseContract } from './contract.mjs';
 import { reservedBuilderBudget } from './claude-builder.mjs';
 
@@ -24,7 +25,7 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
     if (seen.has(taskId)) continue;
     items.push({ record, observation: observe({ policy, policySha, now, secrets, prompts, snapshot, issue: null, record, pulls, integrationSha, mainSha }) });
   }
-  if (snapshot.promotion && !records[snapshot.promotion.taskId]) {
+  if (!integrationOnly(policy) && snapshot.promotion && !records[snapshot.promotion.taskId]) {
     const obs = observe({ policy, policySha, now, secrets, prompts, snapshot, issue: null, record: null, pulls, integrationSha, mainSha });
     obs.kind = 'promotion'; obs.promotion = snapshot.promotion;
     obs.github.pull = pulls.find(p => p.headRef === 'integration' && p.baseRef === 'main' && p.headRepositoryId === policy.repository_id && p.baseRepositoryId === policy.repository_id) ?? null;

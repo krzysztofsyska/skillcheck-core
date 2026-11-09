@@ -131,6 +131,14 @@ export type ExerciseDefinitionEntry = {
   version: number; definition: ExerciseDefinition; position_id: string; position_updated_at: string;
   position_snapshot: BehaviorAssessmentEntry['position_snapshot']; author_id: string; created_at: string;
 };
+/** One immutable AI proposal revision returned by the recruiter-only public RPC. */
+export type ExerciseAiProposalReview = {
+  definitionEntry: ExerciseDefinitionEntry;
+  proposal: {
+    id: string; provenance: Json; createdBy: string; createdAt: string;
+    approvedBy: string | null; approvedAt: string | null; approvalMode: 'manual' | 'auto' | null;
+  };
+};
 export type ExerciseObservationEntry = {
   id: string; company_id: string; recruitment_id: string; application_id: string;
   definition_entry_id: string; version: number; work_sample: string;
@@ -408,6 +416,41 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      read_exercise_ai_proposal: {
+        Args: { target_company: string; target_recruitment: string; target_definition: string };
+        Returns: ExerciseAiProposalReview;
+      };
+      reserve_exercise_ai_generation: {
+        Args: {target_company:string;target_recruitment:string;request_key:string;expected_position_updated_at:string;expected_company_updated_at:string|null;input_fingerprint:string};
+        Returns: Json;
+      };
+      finish_exercise_ai_generation: {
+        Args: {target_company:string;target_recruitment:string;request_key:string;input_fingerprint:string;new_definition:Json|null;new_provenance:Json|null;error_code:string|null};
+        Returns: Json;
+      };
+      edit_exercise_ai_proposal: {
+        Args: {target_company:string;target_recruitment:string;target_definition:string;expected_position_updated_at:string;new_definition:Json;expected_current_position_updated_at:string};
+        Returns:string;
+      };
+      reject_exercise_ai_proposal: {
+        Args: {target_company:string;target_recruitment:string;target_definition:string;expected_position_updated_at:string;rejection_reason:string};
+        Returns:string;
+      };
+      approve_exercise_ai_proposal: {
+        Args: { target_company: string; target_recruitment: string; target_definition: string; expected_position_updated_at: string };
+        Returns: string;
+      };
+      ac_assign_pair: {Args:{application:string;revision:string;first_id:string;second_id:string};Returns:string};
+      ac_find_pair: {Args:{application:string;revision:string};Returns:string|null};
+      ac_read_pair: {Args:{pair_id:string};Returns:Json};
+      ac_submit_sheet: {Args:{pair_id:string;sheet:Json};Returns:undefined};
+      list_competency_test_access: { Args:{target:string}; Returns:Json };
+      create_competency_test_grant: { Args:{target_application:string;target_definition:string;start_by:string;request_key:string}; Returns:Json };
+      rotate_competency_test_grant: { Args:{target:string;expected_revision:number;request_key:string}; Returns:Json };
+      revoke_competency_test_grant: { Args:{target:string;request_key:string}; Returns:Json };
+      save_competency_test_review: { Args:{target:string;expected_version:number;observations:Json}; Returns:string };
+      list_competency_test_attempts: { Args: { target:string }; Returns:Json };
+      read_competency_test_response: { Args: { target:string }; Returns:Json };
       // SC-BULK-001 bulk CV intake (jsonb results are validated in lib/cv-bulk-runner.ts).
       cv_bulk_create_batch: { Args: { target_recruitment: string; request_key: string; files: Json }; Returns: Json };
       cv_bulk_register_item: { Args: { target_item: string; extracted: Json }; Returns: Json };
@@ -432,6 +475,93 @@ export type Database = {
       get_preselection_group_history: { Args: { target_application: string }; Returns: Json };
       cv_ai_usage_stats: { Args: { since_days?: number }; Returns: Json };
       sc19_claim_trial: { Args: { target_company: string; supplied_nip: string }; Returns: number };
+      // SC-FREE-AUTO-001 (20261103090000): automatic FREE from the MF VAT register.
+      sc19_auto_claim_trial: {
+        Args: {
+          target_company: string; supplied_nip: string;
+          mf_request_id: string; mf_status: string; mf_name: string;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
+        Returns: { outcome: 'granted' | 'refused'; available: number | null; reason: string | null }[];
+      };
+      sc19_auto_record_failure: {
+        Args: {
+          target_company: string; supplied_nip: string;
+          failure_outcome: 'refused' | 'unavailable'; failure_code: string;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
+        Returns: undefined;
+      };
+      sc19_auto_free_precheck: {
+        Args: { target_company: string; supplied_nip: string };
+        Returns: { allowed: boolean; reason: string | null }[];
+      };
+      sc19_operator_set_auto_free: { Args: { enabled: boolean }; Returns: boolean };
+      sc19_operator_auto_free_settings: {
+        Args: Record<PropertyKey, never>;
+        Returns: { auto_free_enabled: boolean; secret_configured: boolean; updated_at: string }[];
+      };
+      sc19_operator_auto_free_grants: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          company_id: string; company_name: string; nip: string; checked_at: string;
+          outcome: 'granted' | 'refused' | 'unavailable'; error_code: string | null;
+          granted_credits: number | null; used_credits: number | null; mf_status: string | null;
+        }[];
+      };
+      sc19_operator_taken_trial_nips: {
+        // Searchable by NIP, company name or company id: the listing is capped
+        // at 200 rows and carries the only release form in the panel.
+        Args: { search: string | null };
+        Returns: {
+          nip: string; company_id: string; company_name: string;
+          approved_at: string | null; free_claimed: boolean; source: string;
+        }[];
+      };
+      sc19_operator_release_trial_nip: {
+        // `expected_company` is the company the operator was looking at. The
+        // release is refused unless that company still holds the NIP.
+        Args: { supplied_nip: string; release_reason: string; expected_company: string };
+        Returns: { released_company_id: string; released_at: string }[];
+      };
+      sc19_operator_trial_nip_releases: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          nip: string; released_company_id: string | null; company_name: string | null;
+          reason: string; released_at: string;
+        }[];
+      };
+      // SC-CONSENT-001 (20261103090000): consent to commercial contact.
+      // The source is NOT a parameter: this one always records 'company_panel'.
+      marketing_consent_grant: {
+        Args: { target_company: string; consent_version: string };
+        Returns: string;
+      };
+      // 'registration' is written only here, and only against a server signature.
+      // `declared_at` is when the customer ticked the box at sign-up (null when
+      // the snapshot carried no usable time); it is inside the signature, and the
+      // ledger stores it as the event time instead of the onboarding moment.
+      marketing_consent_grant_registration: {
+        Args: {
+          target_company: string; consent_version: string; declared_at: string | null;
+          request_id: string; issued_at_ms: number; request_signature: string;
+        };
+        Returns: string;
+      };
+      marketing_consent_withdraw: { Args: { target_company: string }; Returns: string };
+      marketing_consent_state: {
+        Args: { target_company: string };
+        Returns: { event: 'granted' | 'withdrawn'; consent_version: string; consent_text: string; occurred_at: string }[];
+      };
+      sc19_operator_marketing_consents: {
+        Args: { search?: string | null };
+        Returns: { company_id: string; event: 'granted' | 'withdrawn'; consent_version: string; occurred_at: string }[];
+      };
+      // SC-DIGEST-001 (20261103090000): counts only, signed, no personal data.
+      sc19_daily_digest: {
+        Args: { window_start: string; window_end: string; request_id: string; issued_at_ms: number; request_signature: string };
+        Returns: { registered: number; auto_free: number; awaiting_manual: number; marketing_consents: number }[];
+      };
       sc19_get_balance: {
         Args: { target_company: string };
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; available: number; free_claimed: boolean }[];
@@ -439,6 +569,24 @@ export type Database = {
       sc19_package_sizes: {
         Args: Record<PropertyKey, never>;
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number }[];
+      };
+      pricing_published_packages: {
+        Args: Record<PropertyKey, never>;
+        Returns: { package_code: string; gross_minor: number; cv_included: number; cv_step: number;
+          cv_max: number; overage_gross_per_cv_minor: number; sellable: boolean; vat_basis_points: number }[];
+      };
+      pricing_published_addons: {
+        Args: Record<PropertyKey, never>;
+        Returns: { code: string; name: string; unit: string; gross_minor: number }[];
+      };
+      /** Read-only checkout catalog. Requires an authenticated owner of a company
+       * with an approved trial; raises 42501 otherwise. Creates no order. */
+      sc19_checkout_offers: {
+        Args: { target_company: string };
+        Returns: {
+          id: string; revision: string; plan: 'PRESELEKCJA'; amount_minor: number; currency: 'PLN';
+          credits: number; terms_revision: string; terms_text: string; valid_until_ms: number;
+        }[];
       };
       sc19_operator_companies: {
         Args: { search?: string | null };
@@ -451,6 +599,12 @@ export type Database = {
       sc19_operator_set_package_policy: { Args: { target_plan: 'FREE' | 'PRESELEKCJA'; target_credits: number }; Returns: number };
       sc19_operator_approve_trial: { Args: { target_company: string; supplied_nip: string; proof: string }; Returns: string };
       sc19_operator_grant_paid: { Args: { target_company: string; settlement_reference: string }; Returns: number };
+      sc19_catalog_order_options: { Args: { target_company: string }; Returns: Json };
+      sc19_catalog_orders: { Args: { target_company?: string }; Returns: Json };
+      sc19_catalog_entitlements: { Args: { target_company: string }; Returns: Json };
+      sc19_create_catalog_order: { Args: { target_company: string; request_key: string; expected_quote: Json; accepted: boolean }; Returns: string };
+      sc19_cancel_catalog_order: { Args: { target_company: string; target_order: string }; Returns: undefined };
+      sc19_settle_catalog_order: { Args: { target_order: string; settlement_reference: string; confirmed_gross: number; confirmed_currency: string }; Returns: undefined };
       configure_retention_schedule: {
         Args: { target_company: string; expected_revision: number; policy_revision: number; execution_mode?: 'suggest_only' | 'automatic'; max_batch?: number; request_key?: string | null };
         Returns: string;
