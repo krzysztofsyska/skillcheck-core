@@ -51,7 +51,7 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
       || pull.head.repo?.id !== policy.repository_id || pull.base.repo?.id !== policy.repository_id
       || pull.base.ref !== (effect.gate === 'B' ? 'main' : 'integration')
       || (effect.gate === 'B' && pull.head.ref !== 'integration')) throw new Error('APPROVAL_STALE');
-  if (pull.mergeable !== true) throw new Error(pull.mergeable === false ? 'MERGE_CONFLICT' : 'MERGEABILITY_UNKNOWN');
+  if (pull.mergeable !== true) return { blocked: true, reason: pull.mergeable === false ? 'MERGE_CONFLICT' : 'MERGEABILITY_UNKNOWN', repair: pull.mergeable === false };
   if (effect.gate === 'A') {
     const issue = await github.readIssue(record.issue_number);
     if (parseContract(issue.body).hash !== record.contract_hash) throw new Error('CONTRACT_EDITED');
@@ -64,7 +64,7 @@ export async function guardedMerge({ github, journal, policy, flags, effect }) {
   const comparison = await github.readComparison(record.base_sha, record.head_sha);
   if (!historyCoverage(pair.review.payload, comparison.commits.map(c => c.sha))) throw new Error('INCOMPLETE_HISTORY_REVIEW');
   const quality = await github.readMergeQuality(record.pr_number, record.head_sha, pull.base.ref);
-  if (!quality.ok) throw new Error(quality.reason);
+  if (!quality.ok) return { blocked: true, reason: quality.reason, repair: ['REQUIRED_CHECK_FAILED', 'CHECK_FAILED', 'STATUS_FAILED'].includes(quality.reason) };
   const request = record.binding.approval;
   const automatic = effect.gate === 'A' && policy.integration_merge_policy === 'verified_ci_review';
   const frozen = record.binding.auto_integration;

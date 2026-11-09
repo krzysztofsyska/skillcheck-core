@@ -8,6 +8,7 @@ import { freezeHistory, historyCoverage } from '../../tools/agent-pipeline/lib/h
 import { evaluateChecks, evaluateDiscussion } from '../../tools/agent-pipeline/lib/quality.mjs';
 import { plan, fold } from '../../tools/agent-pipeline/lib/transitions.mjs';
 import { assembleWork } from '../../tools/agent-pipeline/lib/snapshot.mjs';
+import { tick, createMemoryJournal } from '../../tools/agent-pipeline/lib/controller.mjs';
 import { observation, taskRecord, HEAD, BASE } from './helpers.mjs';
 
 const check = () => ({ id: 1, name: 'verify', head_sha: HEAD, app: { id: 15368 }, status: 'completed', conclusion: 'success' });
@@ -62,4 +63,21 @@ test('post-merge CI blocks next task, records exact evidence and recovers after 
   assert.notEqual(plan(blocked,obs).record.technical_state,null);
   obs.github.postMergeCi={ok:true,headSha:merged,runId:10,runAttempt:2};
   const ready=plan(blocked,obs).record;assert.equal(ready.state,'ACCEPTED');assert.equal(ready.technical_state,null);assert.equal(ready.binding.post_merge_ci.runId,10);
+});
+
+test('known pre-mutation pending gate waits and later retries without manual resume', async () => {
+  const obs=observation({simulation:false,flags:{enabled:true,mergeEnabled:true},preflight:{ok:true},lockHolder:'holder',mergeLock:{holder:'holder'}});
+  const record=taskRecord({state:'READY_FOR_OWNER',review_run_id:1,ci_run_id:2});
+  record.binding.evidence={ci:{pass:true},review:{pass:true}};
+  obs.github.ci={run_id:2};obs.github.review={run_id:1,payload:{verdict:'PASS'}};
+  obs.github.pull={headSha:HEAD,baseSha:BASE};
+  obs.github.protection={exclusiveWritersConfirmed:true,mainProtected:true,integrationProtected:true,agentStateProtected:true,environmentsConfirmed:true,requiredChecksPinnedToApp:true};
+  const journal=createMemoryJournal();let calls=0;
+  const ports={async execute(){calls++;return calls===1?{blocked:true,reason:'REQUIRED_CHECK_PENDING'}:{merged:true,mergeCommitSha:'e'.repeat(40)};}};
+  const first=await tick({record,observation:obs,journal,ports});
+  assert.equal(first.record.state,'READY_FOR_OWNER');assert.equal(first.record.binding.merge,null);
+  const second=await tick({record:first.record,observation:obs,journal,ports});
+  assert.equal(calls,2);assert.equal(second.record.state,'ACCEPTED');assert.equal(second.record.technical_state,'WAITING_POST_MERGE_CI');
+  const failure=fold(record,{type:'github.merge',gate:'A'},{blocked:true,reason:'MERGE_CONFLICT',repair:true},obs);
+  assert.equal(failure.state,'FIXING');assert.equal(failure.binding.dispatch.action,'followup');
 });

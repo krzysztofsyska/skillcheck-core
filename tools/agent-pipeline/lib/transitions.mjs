@@ -766,6 +766,17 @@ export function fold(record, effect, result, obs) {
     return next;
   }
   if (effect.type === 'github.merge') {
+    if (result?.blocked === true) {
+      const next = touch(record, now, { state: 'READY_FOR_OWNER', technical_state: 'WAITING_CI', blocked_reason: result.reason });
+      next.binding.merge = null;
+      // The merge HTTP mutation was never attempted. Keep waiting for native
+      // checks, or feed a definite failure/conflict into the same repair loop.
+      if (result.repair && effect.gate === 'A') return beginRepair(next, obs, [{
+        id: result.reason, severity: 'major', path: '.', line: 0,
+        description: result.reason, required_fix: 'Read the current CI/review and resolve this blocker on the existing task branch.',
+      }]).record;
+      return next;
+    }
     if (result?.lost || result?.timeout) return record;
     if (result?.merged && result.mergeCommitSha) {
       const next = touch(record, now);

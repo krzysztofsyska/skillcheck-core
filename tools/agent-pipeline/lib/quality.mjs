@@ -16,18 +16,21 @@ export function evaluateChecks({ head, checks, statuses, required, controllerApp
     if (deferred(requirement)) continue; // validated evidence is published by guardedMerge
     const check = latest.get(`${requirement.integration_id}:${requirement.context}`);
     if (!check) return fail('REQUIRED_CHECK_MISSING');
-    if (check.status !== 'completed' || check.conclusion !== 'success') return fail('REQUIRED_CHECK_NOT_SUCCESS');
+    if (check.status !== 'completed') return fail('REQUIRED_CHECK_PENDING');
+    if (check.conclusion !== 'success') return fail('REQUIRED_CHECK_FAILED');
   }
   for (const check of latest.values()) {
     if (check.app.id === controllerAppId && generated.includes(check.name)) continue;
-    if (check.status !== 'completed' || check.conclusion !== 'success') return fail('CHECK_NOT_SUCCESS');
+    if (check.status !== 'completed') return fail('CHECK_PENDING');
+    if (check.conclusion !== 'success') return fail('CHECK_FAILED');
   }
   const recent = new Map();
   for (const status of statuses) {
     if (!status.context || !Number.isSafeInteger(status.id)) return fail('STATUS_UNCONFIRMED');
     if (!recent.has(status.context) || recent.get(status.context).id < status.id) recent.set(status.context, status);
   }
-  if ([...recent.values()].some(s => s.state !== 'success')) return fail('STATUS_NOT_SUCCESS');
+  if ([...recent.values()].some(s => s.state === 'pending')) return fail('STATUS_PENDING');
+  if ([...recent.values()].some(s => s.state !== 'success')) return fail('STATUS_FAILED');
   return { ok: true };
 }
 
