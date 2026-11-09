@@ -78,7 +78,7 @@ function cleanDeadline(value: unknown): string {
   if (typeof value !== 'string') throw new Error('Termin: wymagana data.');
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) throw new Error('Termin: wymagana data.');
-  return date.toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', dateStyle: 'long', timeStyle: 'short' });
+  return `${date.toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', dateStyle: 'long', timeStyle: 'short' })} (czasu polskiego)`;
 }
 
 const escapeHtml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -90,7 +90,10 @@ export function legalFooterLines(controllerName: string): string[] {
   return [
     `Administratorem Twoich danych osobowych w tej rekrutacji jest ${controller}${controller.endsWith('.') ? '' : '.'}`,
     `Operatorem platformy technicznej jest ${COMPANY.name}, ${COMPANY.address}, KRS ${COMPANY.krs}, NIP ${COMPANY.nip}.`,
-    'Masz prawo dostępu do swoich danych, ich sprostowania, usunięcia lub ograniczenia przetwarzania oraz wniesienia skargi do Prezesa UODO. Aby skorzystać z tych praw, odpowiedz na tę wiadomość albo skontaktuj się z administratorem.',
+    'Przysługuje Ci prawo dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania, przenoszenia danych, '
+      + 'sprzeciwu wobec przetwarzania oraz cofnięcia zgody, jeśli przetwarzanie się na niej opiera (bez wpływu na zgodność '
+      + 'z prawem przetwarzania przed jej cofnięciem), a także prawo wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych.',
+    `Aby skorzystać z tych praw albo uzyskać pełną informację o przetwarzaniu danych w tej rekrutacji, skontaktuj się z administratorem: ${controller}${controller.endsWith('.') ? '' : '.'}`,
     'Decyzje w rekrutacji podejmują ludzie. Narzędzia pomocnicze nie podejmują decyzji o zatrudnieniu ani o odrzuceniu kandydatury.',
   ];
 }
@@ -174,6 +177,11 @@ export function renderBrandMessage(input: BrandMessageInput): BrandMessageResult
 // Wysyłka
 
 export type BrandMessageDelivery = { status: 'not_sent'; reason: 'transport_disabled' };
+/**
+ * Przyszły transport (po zgodzie właściciela na wysyłki): nazwę nadawcy zapisuje
+ * w nagłówku From zakodowaną wg RFC 2047 lub w cudzysłowie (nazwa marki może
+ * zawierać „"” i „,”); CR/LF są już odrzucane przy walidacji.
+ */
 export interface BrandMessageTransport {
   send(message: BrandMessage, recipient: string): Promise<BrandMessageDelivery>;
 }

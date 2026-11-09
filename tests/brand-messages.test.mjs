@@ -35,6 +35,9 @@ test('every message kind renders only the customer brand, with the fixed legal f
     assert.match(m.legalFooter, /Administratorem Twoich danych osobowych w tej rekrutacji jest Acme Sp\. z o\.o\./);
     assert.ok(m.legalFooter.includes(COMPANY.name) && m.legalFooter.includes(COMPANY.krs), 'platform operator named');
     assert.match(m.legalFooter, /Decyzje w rekrutacji podejmują ludzie/);
+    assert.match(m.legalFooter, /przenoszenia danych, sprzeciwu wobec przetwarzania oraz cofnięcia zgody/);
+    assert.match(m.legalFooter, /skontaktuj się z administratorem: Acme Sp\. z o\.o\./);
+    assert.doesNotMatch(m.legalFooter, /odpowiedz na tę wiadomość/, 'no assumption about where replies go');
   }
 });
 
@@ -69,7 +72,7 @@ test('inputs are validated and escaped; only https links are allowed', () => {
 
 test('the invitation names the deadline in Warsaw time and the process-closed text makes no automated decision', () => {
   const invite = renderBrandMessage(input()).value;
-  assert.match(invite.text, /1 grudnia 2026/);
+  assert.match(invite.text, /1 grudnia 2026 17:00 \(czasu polskiego\)/);
   assert.match(invite.text, /Rozpocznij zadanie: https:\/\/example\.com\/zadanie/);
   const closed = renderBrandMessage(input({ kind: 'process_closed' })).value;
   assert.match(closed.text, /Decyzję podjął zespół rekrutacyjny/);
@@ -104,14 +107,43 @@ test('editor preview shows each message in a fully sandboxed frame', () => {
   assert.match(html, /Temat:<\/strong> Acme Kariera: zaproszenie/);
 });
 
-test('report titles use the published brand, otherwise stay unchanged', () => {
+test('report titles use the published brand, otherwise stay unchanged', async () => {
   for (const file of ['app/dashboard/[companyId]/recruitments/[recruitmentId]/report/page.tsx',
     'app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/report/page.tsx']) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
-    assert.match(source, /export async function generateMetadata/);
     assert.match(source, /brandedTitle\(companyId, 'Raport (preselekcji|kandydata)'\)/);
-    assert.doesNotMatch(source, /\| SkillCheck'/);
   }
-  const server = readFileSync(new URL('../lib/brand-server.ts', import.meta.url), 'utf8');
-  assert.match(server, /`\$\{base\} \| \$\{brand \? brand\.config\.brandName : 'SkillCheck'\}`/);
+  // Behaviour: brandedTitle with and without a published brand, via the real loader and a stubbed RLS client.
+  const path = fileURLToPath(new URL('../lib/brand-server.ts', import.meta.url));
+  const companyId = '11111111-2222-4333-8444-555555555555';
+  let rpcResult;
+  const mocks = {
+    react: { cache: fn => fn },
+    './supabase/server': { createClient: async () => ({ rpc: async (name, args) => {
+      assert.equal(name, 'brand_published'); assert.deepEqual(args, { target_company: companyId }); return rpcResult; } }) },
+    './brand-config': brandConfig,
+  };
+  const mod = new Module(path); mod.filename = path;
+  mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
+  const require = createRequire(path);
+  mod.require = id => id in mocks ? mocks[id] : require(id);
+  mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, path);
+  const previous = process.env.WHITE_LABEL_ENABLED;
+  process.env.WHITE_LABEL_ENABLED = 'true';
+  try {
+    rpcResult = { data: [{ version_id: 'v', version_no: 1, config: brand, logo_asset_id: null, favicon_asset_id: null }], error: null };
+    assert.equal(await mod.exports.brandedTitle(companyId, 'Raport kandydata'), 'Raport kandydata | Acme Kariera');
+    rpcResult = { data: [], error: null };
+    assert.equal(await mod.exports.brandedTitle(companyId, 'Raport kandydata'), 'Raport kandydata | SkillCheck');
+    rpcResult = { data: null, error: { message: 'brand_forbidden' } };
+    assert.equal(await mod.exports.brandedTitle(companyId, 'Raport preselekcji'), 'Raport preselekcji | SkillCheck', 'no access -> no brand');
+    rpcResult = { data: [{ version_id: 'v', version_no: 1, config: { ...brand, brandName: '<x>' }, logo_asset_id: null, favicon_asset_id: null }], error: null };
+    assert.equal(await mod.exports.brandedTitle(companyId, 'Raport kandydata'), 'Raport kandydata | SkillCheck', 'invalid stored config is ignored');
+    process.env.WHITE_LABEL_ENABLED = 'false';
+    rpcResult = { data: [{ version_id: 'v', version_no: 1, config: brand, logo_asset_id: null, favicon_asset_id: null }], error: null };
+    assert.equal(await mod.exports.brandedTitle(companyId, 'Raport kandydata'), 'Raport kandydata | SkillCheck', 'feature off');
+  } finally {
+    if (previous === undefined) delete process.env.WHITE_LABEL_ENABLED; else process.env.WHITE_LABEL_ENABLED = previous;
+  }
 });
