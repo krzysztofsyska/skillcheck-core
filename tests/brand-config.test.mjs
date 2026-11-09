@@ -175,6 +175,14 @@ test('review SC-020-A #1: namespace prefixes, CSS escapes and entities cannot by
     '<svg xmlns="http://www.w3.org/2000/svg"><rect fill=url(#g)/></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><g></rect></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg><rect/>',
+    // Review #3: a declared encoding that a real parser would honour differently.
+    '<?xml version="1.0" encoding="ISO-2022-JP"?><svg xmlns="http://www.w3.org/2000/svg"><rect x="\u001b$B"!\u001b(Bbc=" onmouseover=\'alert`1`\' width=\'1\'/>" y="1"/></svg>',
+    '<?xml version="1.0" encoding="ISO-2022-JP"?><svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>',
+    '<?xml version="1.0" encoding="utf-16"?><svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect x="\u001b"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><!-- a -- b --><rect/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:red}<!-- x --></style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><!-- never closed <rect/></svg>',
   ];
   for (const source of bypasses) {
     const result = validateBrandAsset(raw(source), 'logo');
@@ -185,6 +193,9 @@ test('review SC-020-A #1: namespace prefixes, CSS escapes and entities cannot by
     + '<defs><linearGradient id="g"><stop offset="0" stop-color="#123456"/></linearGradient></defs>'
     + '<style>.a{fill:url(#g)}</style><g class="a"><path d="M0 0L10 10"/><text xml:space="preserve">A &amp; B</text></g></svg>';
   assert.ok(validateBrandAsset(raw(allowed), 'logo').ok, 'a typical static logo stays accepted');
+  const illustrator = '<?xml version="1.0" encoding="UTF-8"?>\n<!-- Generator: Adobe Illustrator 28.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->\n'
+    + '<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 10 10"><g><path d="M0 0h10v10z" fill="#1f3a5f"/></g></svg>';
+  assert.ok(validateBrandAsset(raw(illustrator), 'logo').ok, 'an exporter comment and UTF-8 declaration are fine');
 });
 
 test('TS and SQL text rules agree: code points for length, C1 controls rejected, link contrast 4.5:1', () => {

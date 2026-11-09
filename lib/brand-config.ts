@@ -228,7 +228,13 @@ export function svgProblems(source: string): string[] {
   const problems = new Set<string>();
   const fail = (message: string) => { problems.add(message); };
   let text = source.replace(/^\ufeff/, '');
-  const decl = /^\s*<\?xml\s[^?<>]*\?>/.exec(text);
+  // XML 1.0 zabrania tych znaków; ESC jest też potrzebny do przełączania trybu
+  // kodowań typu ISO-2022-JP (review #3 #1).
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/.test(text)) fail('Znaki sterujące są niedozwolone.');
+  // Deklaracja XML tylko bez kodowania albo z UTF-8: parser nie może czytać
+  // pliku inaczej niż ten skaner.
+  const decl = /^\s*<\?xml\s+version\s*=\s*(["'])1\.[01]\1(\s+encoding\s*=\s*(["'])utf-8\3)?(\s+standalone\s*=\s*(["'])(yes|no)\5)?\s*\?>/i.exec(text);
   if (decl) text = text.slice(decl[0].length);
   const lower = text.toLowerCase();
   if (/(javascript|vbscript|data)\s*:/.test(lower)) fail('Schematy javascript:, vbscript: i data: są niedozwolone.');
@@ -247,7 +253,18 @@ export function svgProblems(source: string): string[] {
     else if (!stack.length && chunk.trim()) fail('Treść poza elementem <svg> jest niedozwolona.');
     if (lt === -1) break;
     i = lt + 1;
-    if (lower[i] === '!' || lower[i] === '?') { fail('Komentarze, DOCTYPE, CDATA i instrukcje przetwarzania są niedozwolone.'); break; }
+    if (lower.startsWith('!--', i) && stack.at(-1) !== 'style') {
+      // Zwykły komentarz (np. „Generator: Adobe Illustrator”) jest pomijany,
+      // jeśli jest poprawny (bez „--” w środku); w <style> — niedozwolony.
+      const end = lower.indexOf('-->', i + 3);
+      if (end === -1 || lower.slice(i + 3, end).includes('--')) { fail('Nieprawidłowy komentarz w pliku SVG.'); break; }
+      i = end + 3;
+      continue;
+    }
+    if (lower[i] === '!' || lower[i] === '?') {
+      fail('DOCTYPE, CDATA i instrukcje przetwarzania są niedozwolone — zapisz plik jako zwykły SVG bez metadanych edytora.');
+      break;
+    }
     const closing = lower[i] === '/';
     if (closing) i++;
     const nameStart = i;
