@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { historyCoverage } from './history.mjs';
 
 export async function findRun(github, policy, kind, requestId, recordedId) {
   let run;
@@ -38,8 +39,16 @@ export async function readEvidence(github, policy, records) {
       if (kind === 'verify') {
         if (body.head_sha !== record.head_sha || body.base_sha !== record.base_sha) continue;
         const jobs = await github.readJobs(run.id);
-        pair.ci = { ...body, conclusion: run.conclusion, jobs: jobs.map(j => ({ name: j.name, conclusion: j.conclusion })) };
-      } else pair.review = body;
+        pair.ci = { ...body, conclusion: run.conclusion, jobs: jobs.map(j => ({ name: j.name, conclusion: j.status === 'completed' ? j.conclusion : 'pending' })) };
+      } else {
+        if (body.payload?.verdict === 'PASS') {
+          let comparison;
+          try { comparison = await github.readComparison(record.base_sha, record.head_sha); }
+          catch (error) { if (error.message === 'PROMOTION_DIFF_INCOMPLETE') continue; throw error; }
+          if (!historyCoverage(body.payload, comparison.commits.map(c => c.sha))) continue;
+        }
+        pair.review = body;
+      }
     }
     evidence[record.task_id] = pair;
   }

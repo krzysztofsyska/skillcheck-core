@@ -120,5 +120,10 @@
     "max_run_usd": 0,
     "max_total_usd": 0,
     "max_turns": 12
+  },
+  "post_merge_ci": {
+    "workflow_id": 371409699,
+    "path": ".github/workflows/checks.yml",
+    "timeout_ms": 2700000
   }
 }

@@ -48,7 +48,7 @@ function payload(patch = {}) {
     verdict: 'PASS',
     acceptance_checks: [{ id: 'npm run typecheck', status: 'PASS', required: true }],
     findings: [],
-    limitations: [],
+    limitations: [], full_diff_reviewed: false, reviewed_commits: [],
     ...patch,
   };
 }

@@ -5,7 +5,7 @@ import { collectAutoReleaseInput, qualifyRelease } from '../../tools/agent-pipel
 const I = 'a'.repeat(40), M = 'b'.repeat(40);
 const record = { state: 'ACCEPTED', task_id: 'T1', head_sha: 'c'.repeat(40), base_sha: 'd'.repeat(40), policy_sha: 'p', contract_hash: 'h',
   ci_run_id: 1, review_run_id: 2, issue_number: 5,
-  binding: { merge: { mergeCommitSha: 'e'.repeat(40) },
+  binding: { post_merge_ci:{ok:true,headSha:'e'.repeat(40)}, merge: { mergeCommitSha: 'e'.repeat(40) },
     auto_integration: { source: 'verified_ci_review', head_sha: 'c'.repeat(40), base_sha: 'd'.repeat(40), policy_sha: 'p', contract_hash: 'h',
       ci_run_id: 1, review_run_id: 2, ci_digest: 'x', review_digest: 'y' } } };
 const plan = { id: 'r', operations: [{}], rollback: 'redeploy', smoke_tests: ['s'] };

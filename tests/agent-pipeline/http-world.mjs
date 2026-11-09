@@ -47,7 +47,7 @@ export function httpWorld({claude=false}={}) {
     else if(kind==='verify') w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:MAIN,head_sha:inputs.head_sha,base_sha:inputs.base_sha,conclusion:'success',jobs:[{conclusion:'success'}],commands_executed:policy.required_ci_commands};
     else if(kind==='review') {
       const packet=JSON.parse(inputs.review_packet); const pass=w.repair>0;
-      w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:MAIN,payload:{schema_version:1,request_id:packet.request_id,repository_id:policy.repository_id,pr_number:packet.pr_number,head_sha:packet.head_sha,base_sha:packet.base_sha,contract_hash:packet.contract_hash,verdict:pass?'PASS':'PASS_WITH_FIXES',acceptance_checks:packet.required_checks.map(id=>({id,status:'PASS',required:true})),findings:pass?[]:[{id:'fix',severity:'minor',path:'app/demo/page.tsx',line:1,description:'fix copy',required_fix:'fix copy'}],limitations:[]}};
+      w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:MAIN,payload:{schema_version:1,request_id:packet.request_id,repository_id:policy.repository_id,pr_number:packet.pr_number,head_sha:packet.head_sha,base_sha:packet.base_sha,contract_hash:packet.contract_hash,verdict:pass?'PASS':'PASS_WITH_FIXES',full_diff_reviewed:true,reviewed_commits:packet.head_sha===MERGED?[H2,MERGED]:[packet.head_sha],acceptance_checks:packet.required_checks.map(id=>({id,status:'PASS',required:true})),findings:pass?[]:[{id:'fix',severity:'minor',path:'app/demo/page.tsx',line:1,description:'fix copy',required_fix:'fix copy'}],limitations:[]}};
     } else w.artifacts[id]={request_id:inputs.request_id,digest:inputs.digest,gate:kind==='accept'?'A':'B'};
     return run;
   }
@@ -70,9 +70,13 @@ export function httpWorld({claude=false}={}) {
         repositories:body.repository_ids.map(id=>({id})),
         permissions:{metadata:'read',...body.permissions}});
     }
+    if(u.pathname==='/graphql'&&body.query.startsWith('query'))return json({data:{repository:{pullRequest:{reviewThreads:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}}}}});
     if(u.pathname==='/graphql') {w.pulls.forEach(p=>{if(p.node_id===body.variables.id)p.draft=false;});return json({data:{}});}
     const path=u.pathname.replace(`/repos/${policy.repository}`,'');
     if(path===''&&method==='GET')return json({id:policy.repository_id});
+    if(path.startsWith('/rules/branches/'))return json(protection.rules.filter(r=>r.conditions.ref_name.include.includes('refs/heads/'+decodeURIComponent(path.split('/').at(-1)))).flatMap(r=>r.rules));
+    if(path.endsWith('/statuses'))return json([]);
+    if(path.endsWith('/reviews'))return json([]);
     if(path==='/rulesets')return json(protection.rules);
     if(path.startsWith('/rulesets/'))return json(protection.rules.find(r=>r.id===Number(path.split('/').at(-1))));
     if(path.startsWith('/environments/')) {const name=decodeURIComponent(path.split('/')[2]), e=protection.environments[name];return json(path.endsWith('deployment-branch-policies')?{branch_policies:e.branch_policies}:e);}
@@ -94,15 +98,16 @@ export function httpWorld({claude=false}={}) {
     if(path==='/git/refs/heads/agent-state'&&method==='PATCH'){if(body.force)throw Error('force forbidden');if(w.commits[body.sha].parents[0]!==w.stateHead)return json({},422);w.stateHead=body.sha;return json({object:{sha:body.sha}});}
     if(path.startsWith('/compare/')){const [base,head]=path.slice(9).split('...');const commits=head===MERGED?[H2,MERGED]:head===base?[]:[head];return json({status:head===base?'identical':'ahead',files:[{filename:'app/demo/page.tsx'}],commits:commits.map(sha=>({sha})),total_commits:commits.length});}
     if(path==='/pulls'&&method==='GET')return json(w.pulls.filter(p=>p.state==='open'));
-    if(path==='/pulls'&&method==='POST'){const p={number:50+w.pulls.length,node_id:`node-${w.pulls.length}`,user:{id:policy.controller_actor_id},state:'open',draft:true,body:body.body,head:{ref:body.head,sha:w.branches[body.head],repo:{id:policy.repository_id}},base:{ref:body.base,sha:w.branches[body.base],repo:{id:policy.repository_id}},merged:false};w.pulls.push(p);return json(p);}
+    if(path==='/pulls'&&method==='POST'){const p={number:50+w.pulls.length,node_id:`node-${w.pulls.length}`,user:{id:policy.controller_actor_id},state:'open',draft:true,mergeable:true,body:body.body,head:{ref:body.head,sha:w.branches[body.head],repo:{id:policy.repository_id}},base:{ref:body.base,sha:w.branches[body.base],repo:{id:policy.repository_id}},merged:false};w.pulls.push(p);return json(p);}
     if(/^\/pulls\/\d+$/.test(path))return json(w.pulls.find(p=>p.number===Number(path.split('/')[2])));
-    if(path.endsWith('/merge')&&method==='PUT'){const p=w.pulls.find(p=>p.number===Number(path.split('/')[2]));w.mergeCount++;p.merged=true;p.state='closed';p.merge_commit_sha=MERGED;w.branches[p.base.ref]=MERGED;if(w.loseMerge){w.loseMerge=false;throw Error('lost after accepted merge');}return json({merged:true,sha:MERGED,message:'merged'});}
+    if(path.endsWith('/merge')&&method==='PUT'){const p=w.pulls.find(p=>p.number===Number(path.split('/')[2]));w.mergeCount++;p.merged=true;p.state='closed';p.merge_commit_sha=MERGED;w.branches[p.base.ref]=MERGED;if(p.base.ref==='integration')w.runs.push({id:900,workflow_id:policy.post_merge_ci.workflow_id,path:policy.post_merge_ci.path,event:'push',head_branch:'integration',head_sha:MERGED,status:'completed',conclusion:'success',run_attempt:1});if(w.loseMerge){w.loseMerge=false;throw Error('lost after accepted merge');}return json({merged:true,sha:MERGED,message:'merged'});}
+    if(path===`/actions/workflows/${policy.post_merge_ci.workflow_id}/runs`)return json({workflow_runs:w.runs.filter(r=>r.workflow_id===policy.post_merge_ci.workflow_id)});
     if(path.includes('/actions/workflows/')){const file=decodeURIComponent(path.split('/')[3]),kind=file==='claude-code-dispatch.yml'?'builder':Object.keys(policy.workflows).find(k=>policy.workflows[k].endsWith('/'+file));if(method==='POST'){createRun(kind,body.inputs);return new Response(null,{status:204});}return json({workflow_runs:w.runs.filter(r=>r.workflow_id===(kind==='builder'?policy.claude_builder.workflow_id:policy.workflow_ids[kind]))});}
     if(path.startsWith('/actions/runs/')) {const id=Number(path.split('/')[3]);const run=w.runs.find(r=>r.id===id);if(!run)return json({id,status:'completed'});
       if(path.endsWith('/cancel')&&method==='POST'){run.status='completed';run.conclusion='cancelled';return new Response(null,{status:202});}
       const gate=w.artifacts[id]?.gate;if(gate==='A'&&w.approveA||gate==='B'&&w.approveB){run.status='completed';run.conclusion='success';}
       if(path.endsWith('/artifacts'))return json({artifacts:[{id,name:gate==='A'?'sc-agent-accept':gate==='B'?'sc-agent-promote':run.path.includes('claude-code')?'sc-agent-build':run.path.includes('verify')?'sc-agent-ci':'sc-agent-review',expired:false,workflow_run:{id}}]});
-      if(path.endsWith('/jobs'))return json({jobs:[{name:'verify',conclusion:run.conclusion}]});
+      if(path.endsWith('/jobs'))return json({jobs:[{name:'verify',status:run.status,conclusion:run.conclusion}]});
       if(path.endsWith('/approvals'))return json(run.status==='completed'?[{state:'approved',user:{id:policy.owner.id,type:'User'},environments:[gate==='A'?policy.environments.owner_acceptance:policy.environments.production_approval]}]:[]);
       return json(run);
     }
@@ -110,7 +115,7 @@ export function httpWorld({claude=false}={}) {
     if(path.endsWith('/comments')&&method==='GET')return json(w.comments);
     if(path.endsWith('/comments')&&method==='POST'){const c={id:w.comments.length+1,body:body.body,user:{id:policy.controller_actor_id}};w.comments.push(c);if(w.loseComment){w.loseComment=false;throw Error('lost comment response');}return json(c);}
     if(path.startsWith('/issues/comments/')&&method==='PATCH'){const c=w.comments.find(c=>c.id===Number(path.split('/').at(-1)));c.body=body.body;return json(c);}
-    if(path.endsWith('/check-runs')&&method==='GET')return json({check_runs:w.checks});
+    if(path.endsWith('/check-runs')&&method==='GET')return json({check_runs:w.checks.filter(c=>c.head_sha===path.split('/')[2])});
     if(path.startsWith('/check-runs')){let c=w.checks.find(c=>c.id===Number(path.split('/').at(-1)));if(!c){c={id:w.checks.length+1,app:{id:policy.controller_app_id}};w.checks.push(c);}Object.assign(c,body);return json(c);}
     throw Error(`Unhandled mock ${method} ${path}`);
   };
