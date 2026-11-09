@@ -199,14 +199,17 @@ $$;
 revoke all on function private.brand_object_company(text) from public;
 
 -- Limit obiektów firmy w koszyku dla polityki zapisu (polityka sama nie może
--- policzyć wierszy tej samej tabeli bez RLS). Bez Storage: false.
+-- policzyć wierszy tej samej tabeli bez RLS). Bez Storage: false. Tylko dla
+-- właściciela tej firmy (nie ujawnia stanu cudzych firm) i pod tą samą blokadą
+-- doradczą co rejestracja, więc równoległe zapisy nie przekroczą limitu.
 create function private.brand_storage_quota_ok(object_name text) returns boolean
-language plpgsql stable security definer set search_path = '' as $$
+language plpgsql volatile security definer set search_path = '' as $$
 declare company uuid := private.brand_object_company(object_name); total bigint;
 begin
-  if company is null or to_regclass('storage.objects') is null then
+  if company is null or to_regclass('storage.objects') is null or not private.is_company_owner(company) then
     return false;
   end if;
+  perform pg_advisory_xact_lock(hashtextextended('sc020:' || company::text, 0));
   execute 'select count(*) from storage.objects where bucket_id = $1 and name like $2'
     into total using 'brand-assets', company::text || '/%';
   return total < 60;

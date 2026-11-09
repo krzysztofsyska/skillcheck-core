@@ -163,6 +163,18 @@ test('review SC-020-A #1: namespace prefixes, CSS escapes and entities cannot by
     '<svg xmlns="http://www.w3.org/2000/svg"><rect ev:event="click"/></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><marquee/></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><text>&nbsp;</text></svg>',
+    // Review #2: url() parsing tricks, comments, other image functions, '>' inside attribute values.
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:url("https://evil.example/a)b")}</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:url(https://evil.example/a</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:u<!-- -->rl(https://evil.example/a)}</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>svg{mask-image:image-set("https://evil.example/m.svg" 1x)}</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" data-a=">" xmlns:x="http://www.w3.org/1999/xlink"><pattern id="p>" x:href="https://evil.example/p.svg"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>rect{fill:u/**/rl(https://evil.example/a)}</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(https://evil.example/a)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><pattern href="https://evil.example/p.svg"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect fill=url(#g)/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><g></rect></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg><rect/>',
   ];
   for (const source of bypasses) {
     const result = validateBrandAsset(raw(source), 'logo');

@@ -57,7 +57,9 @@ export async function uploadBrandAsset(form: FormData) {
     // Zawsze typ niewykonywalny: Storage nie serwuje stąd obrazu/SVG jako treści.
     contentType: 'application/octet-stream', upsert: false, cacheControl: '300',
   });
-  if (stored.error) back('asset_invalid');
+  // Właściciel jest już sprawdzony, więc odmowa polityki Storage oznacza w praktyce
+  // limit 60 obiektów firmy w koszyku.
+  if (stored.error) back(/row-level security|policy|403|unauthorized/i.test(`${stored.error.message} ${(stored.error as { statusCode?: string }).statusCode ?? ''}`) ? 'asset_limit' : 'asset_invalid');
   const { error } = await client.rpc('brand_register_asset', {
     target_company: companyId, asset_kind: kind, object_path: path, asset_mime: checked.value.mime,
     asset_size: bytes.length, asset_sha256: createHash('sha256').update(bytes).digest('hex'),

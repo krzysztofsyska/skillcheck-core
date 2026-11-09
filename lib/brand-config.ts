@@ -211,60 +211,105 @@ function validateIco(bytes: Uint8Array): string | null {
 }
 
 /**
- * SVG jest odrzucany (nie „czyszczony”), jeśli zawiera cokolwiek, co może
- * wykonać kod, wczytać zasób z zewnątrz albo zmienić parser: skrypty,
- * foreignObject, atrybuty zdarzeń (on*), odwołania href/xlink:href poza
- * kotwicami w tym samym pliku, url() poza kotwicami, @import, DOCTYPE/ENTITY,
- * instrukcje przetwarzania (poza deklaracją XML), CDATA, osadzanie
- * (iframe/embed/object/image/audio/video), animacje zmieniające atrybuty
- * (set/animate) oraz schematy javascript:/data:/vbscript:.
+ * SVG jest odrzucany (nie „czyszczony”), jeśli wychodzi poza ścisłą listę
+ * dozwolonych. Plik jest skanowany jak XML (z uwzględnieniem cudzysłowów w
+ * wartościach atrybutów), a nie wyrażeniami regularnymi na surowym tekście:
+ *  - elementy tylko z listy (rysujące, bez aktywnej treści), bez prefiksów;
+ *  - atrybuty z prefiksem tylko xmlns:xlink, xlink:href, xml:space, xml:lang;
+ *    przestrzenie nazw tylko SVG i xlink; brak atrybutów on*;
+ *  - href / xlink:href tylko "#id";
+ *  - w CSS (element <style>, atrybut style i każda wartość atrybutu) tylko
+ *    funkcje z listy, a url() wyłącznie w postaci url(#id); bez @, \ i /*;
+ *  - bez komentarzy, DOCTYPE/ENTITY, CDATA, instrukcji przetwarzania (poza
+ *    deklaracją XML na początku), encji innych niż &amp; &lt; &gt; &quot; &apos;
+ *    oraz schematów javascript:/vbscript:/data:.
  */
 export function svgProblems(source: string): string[] {
-  const problems: string[] = [];
-  const lower = source.toLowerCase();
-  const rule = (ok: boolean, message: string) => { if (!ok) problems.push(message); };
-  const withoutDecl = lower.replace(/^﻿?\s*<\?xml[^?]*\?>/, '');
-  rule(/^\s*(<!--[\s\S]*?-->\s*)*<svg[\s>]/.test(withoutDecl), 'Plik nie zaczyna się od elementu <svg>.');
-  rule(!/<\?/.test(withoutDecl), 'Instrukcje przetwarzania XML są niedozwolone.');
-  rule(!/<!doctype|<!entity/.test(lower), 'DOCTYPE i ENTITY są niedozwolone.');
-  rule(!/<!\[cdata\[/.test(lower), 'Sekcje CDATA są niedozwolone.');
-  rule(!/<\s*script/.test(lower), 'Skrypty są niedozwolone.');
-  rule(!/<\s*foreignobject/.test(lower), 'Element foreignObject jest niedozwolony.');
-  rule(!/<\s*(iframe|embed|object|image|img|audio|video|use|a|set|animate|animatemotion|animatetransform|handler|listener|feimage)[\s/>]/.test(lower),
-    'Osadzone zasoby, odnośniki i animacje są niedozwolone.');
-  rule(!/[\s/"']on[a-z]+\s*=/.test(lower), 'Atrybuty zdarzeń (on…) są niedozwolone.');
-  rule(!/(javascript|vbscript|data)\s*:/.test(lower.replace(/xmlns(:[a-z]+)?\s*=\s*("[^"]*"|'[^']*')/g, '')),
-    'Schematy javascript:, vbscript: i data: są niedozwolone.');
-  rule(!/@import/.test(lower), '@import jest niedozwolony.');
-  for (const match of Array.from(lower.matchAll(/(?:^|[\s"'])(?:xlink:)?href\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/g))) {
-    const value = (match[2] ?? match[3] ?? match[4] ?? '').trim();
-    if (!/^#[a-z0-9_-]+$/.test(value)) { problems.push('Odwołania do zasobów spoza pliku są niedozwolone.'); break; }
-  }
-  for (const match of Array.from(lower.matchAll(/url\s*\(\s*(['"]?)([^)'"]*)\1\s*\)/g))) {
-    if (!/^#[a-z0-9_-]+$/.test(match[2].trim())) { problems.push('url() może wskazywać tylko na elementy tego pliku.'); break; }
-  }
-  // Lista dozwolonych (review SC-020-A #1): powyższe reguły są tylko dodatkową
-  // warstwą; o przyjęciu decyduje poniższa lista elementów, atrybutów i przestrzeni nazw.
-  rule(!lower.includes('\\'), 'Znak \\ (ucieczki CSS) jest niedozwolony.');
-  rule(!/&#/.test(lower) && !/&(?!(amp|lt|gt|quot|apos);)/.test(lower), 'Encje znakowe są niedozwolone.');
-  const body = lower.replace(/<!--[\s\S]*?-->/g, '').replace(/^﻿?\s*<\?xml[^?]*\?>/, '');
-  for (const match of Array.from(body.matchAll(/<\/?\s*([^\s/>]+)/g))) {
-    if (!SVG_ELEMENTS.has(match[1])) { problems.push(`Element <${match[1].slice(0, 40)}> jest niedozwolony.`); break; }
-  }
-  for (const tag of Array.from(body.matchAll(/<\s*[^\s/>!?]+([^>]*)>/g))) {
-    for (const attr of Array.from(tag[1].matchAll(/([^\s=/<>"']+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/g))) {
-      const name = attr[1];
-      const value = (attr[3] ?? attr[4] ?? attr[5] ?? '').trim();
-      if (name.includes(':') && !PREFIXED_ATTRIBUTES.has(name)) { problems.push(`Atrybut ${name.slice(0, 40)} jest niedozwolony.`); continue; }
-      if (name === 'xmlns' && value !== SVG_NS) problems.push('Dozwolona jest tylko przestrzeń nazw SVG.');
-      if (name === 'xmlns:xlink' && value !== XLINK_NS) problems.push('Nieprawidłowa przestrzeń nazw xlink.');
-      if (name === 'style' && /[@\\]/.test(value)) problems.push('Reguły @ w stylach są niedozwolone.');
+  const problems = new Set<string>();
+  const fail = (message: string) => { problems.add(message); };
+  let text = source.replace(/^\ufeff/, '');
+  const decl = /^\s*<\?xml\s[^?<>]*\?>/.exec(text);
+  if (decl) text = text.slice(decl[0].length);
+  const lower = text.toLowerCase();
+  if (/(javascript|vbscript|data)\s*:/.test(lower)) fail('Schematy javascript:, vbscript: i data: są niedozwolone.');
+  if (lower.includes('\\')) fail('Znak \\ (ucieczki CSS) jest niedozwolony.');
+  if (/&(?!(amp|lt|gt|quot|apos);)/.test(lower)) fail('Encje znakowe są niedozwolone.');
+
+  const stack: string[] = [];
+  let sawRoot = false;
+  let i = 0;
+  const n = lower.length;
+  const isSpace = (c: string) => c === ' ' || c === '\t' || c === '\n' || c === '\r';
+  while (i < n && problems.size === 0) {
+    const lt = lower.indexOf('<', i);
+    const chunk = lower.slice(i, lt === -1 ? n : lt);
+    if (stack.at(-1) === 'style') checkCss(chunk, fail);
+    else if (!stack.length && chunk.trim()) fail('Treść poza elementem <svg> jest niedozwolona.');
+    if (lt === -1) break;
+    i = lt + 1;
+    if (lower[i] === '!' || lower[i] === '?') { fail('Komentarze, DOCTYPE, CDATA i instrukcje przetwarzania są niedozwolone.'); break; }
+    const closing = lower[i] === '/';
+    if (closing) i++;
+    const nameStart = i;
+    while (i < n && !isSpace(lower[i]) && lower[i] !== '>' && lower[i] !== '/') i++;
+    const name = lower.slice(nameStart, i);
+    if (!SVG_ELEMENTS.has(name)) { fail(`Element <${name.slice(0, 40)}> jest niedozwolony.`); break; }
+    if (closing) {
+      while (i < n && isSpace(lower[i])) i++;
+      if (lower[i] !== '>' || stack.pop() !== name) { fail('Nieprawidłowa struktura pliku SVG.'); break; }
+      i++;
+      continue;
     }
+    if (!sawRoot) { if (name !== 'svg') { fail('Plik nie zaczyna się od elementu <svg>.'); break; } sawRoot = true; }
+    else if (!stack.length) { fail('Treść poza elementem <svg> jest niedozwolona.'); break; }
+    let selfClosing = false;
+    for (;;) {
+      while (i < n && isSpace(lower[i])) i++;
+      if (lower[i] === '>') { i++; break; }
+      if (lower[i] === '/' && lower[i + 1] === '>') { i += 2; selfClosing = true; break; }
+      const attrStart = i;
+      while (i < n && !isSpace(lower[i]) && !'=/>"\'<'.includes(lower[i])) i++;
+      const attr = lower.slice(attrStart, i);
+      while (i < n && isSpace(lower[i])) i++;
+      if (!attr || lower[i] !== '=') { fail('Nieprawidłowy atrybut w pliku SVG.'); break; }
+      i++;
+      while (i < n && isSpace(lower[i])) i++;
+      const quote = lower[i];
+      if (quote !== '"' && quote !== "'") { fail('Wartości atrybutów muszą być w cudzysłowie.'); break; }
+      const close = lower.indexOf(quote, i + 1);
+      if (close === -1) { fail('Nieprawidłowy atrybut w pliku SVG.'); break; }
+      checkAttribute(attr, lower.slice(i + 1, close).trim(), fail);
+      i = close + 1;
+    }
+    if (problems.size) break;
+    if (!selfClosing) stack.push(name);
   }
-  for (const style of Array.from(body.matchAll(/<style[^>]*>([\s\S]*?)<\/style\s*>/g))) {
-    if (/[@\\]/.test(style[1])) { problems.push('Reguły @ w stylach są niedozwolone.'); break; }
+  if (!problems.size && (!sawRoot || stack.length)) fail('Nieprawidłowa struktura pliku SVG.');
+  return Array.from(problems);
+}
+
+function checkAttribute(name: string, value: string, fail: (message: string) => void) {
+  if (name.includes(':') && !PREFIXED_ATTRIBUTES.has(name)) return fail(`Atrybut ${name.slice(0, 40)} jest niedozwolony.`);
+  if (name.startsWith('on')) return fail('Atrybuty zdarzeń (on…) są niedozwolone.');
+  if (value.includes('<')) return fail('Nieprawidłowy atrybut w pliku SVG.');
+  if (name === 'xmlns') return value === SVG_NS ? undefined : fail('Dozwolona jest tylko przestrzeń nazw SVG.');
+  if (name === 'xmlns:xlink') return value === XLINK_NS ? undefined : fail('Nieprawidłowa przestrzeń nazw xlink.');
+  if (name === 'href' || name === 'xlink:href') {
+    return /^#[a-z0-9_-]+$/.test(value) ? undefined : fail('Odwołania do zasobów spoza pliku są niedozwolone.');
   }
-  return Array.from(new Set(problems));
+  checkCss(value, fail);
+}
+
+/** CSS lub wartość atrybutu: tylko funkcje z listy, url() wyłącznie url(#id). */
+function checkCss(css: string, fail: (message: string) => void) {
+  if (/[@\\]|\/\*|<!--|-->/.test(css)) return fail('Reguły @, ucieczki i komentarze w stylach są niedozwolone.');
+  const calls = Array.from(css.matchAll(/([a-z0-9_-]*)\s*\(/g));
+  for (const call of calls) {
+    if (!CSS_FUNCTIONS.has(call[1])) return fail(`Funkcja ${call[1].slice(0, 40) || '()'} w stylach jest niedozwolona.`);
+  }
+  const urls = calls.filter(call => call[1] === 'url').length;
+  const strict = Array.from(css.matchAll(/url\(\s*(['"]?)#[a-z0-9_-]+\1\s*\)/g)).length;
+  if (urls !== strict) fail('url() może wskazywać tylko na elementy tego pliku.');
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -274,6 +319,8 @@ const PREFIXED_ATTRIBUTES = new Set(['xmlns:xlink', 'xlink:href', 'xml:space', '
 const SVG_ELEMENTS = new Set(['svg', 'g', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text',
   'tspan', 'defs', 'lineargradient', 'radialgradient', 'stop', 'clippath', 'mask', 'pattern', 'title', 'desc', 'symbol',
   'style']);
+/** Funkcje dozwolone w CSS i wartościach atrybutów (kolory, transformacje, url(#id)). */
+const CSS_FUNCTIONS = new Set(['url', 'rgb', 'rgba', 'hsl', 'hsla', 'matrix', 'translate', 'scale', 'rotate', 'skewx', 'skewy']);
 
 function decodeSvg(bytes: Uint8Array): string | null {
   try {

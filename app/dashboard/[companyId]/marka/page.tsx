@@ -19,7 +19,7 @@ const messages: Record<string, string> = {
   color_invalid: "Nieprawidłowy kolor — użyj zapisu #RRGGBB.",
   config_invalid: "Nieprawidłowa konfiguracja.",
   asset_invalid: "Nie przyjęto pliku.",
-  asset_limit: "Osiągnięto limit 50 plików marki dla firmy.",
+  asset_limit: "Osiągnięto limit plików marki dla firmy (50 plików). Pliki marki są przechowywane na stałe jako historia; aby zwiększyć limit, skontaktuj się z obsługą.",
   draft_changed: "Szkic zmienił się po wyświetleniu podglądu. Sprawdź podgląd jeszcze raz i opublikuj ponownie.",
   version_unavailable: "Tej wersji nie można przywrócić.",
   forbidden: "Markę może zmieniać tylko właściciel konta firmy.",

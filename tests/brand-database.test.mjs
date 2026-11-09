@@ -263,6 +263,9 @@ test('SC-020-A brand configuration: isolation, permissions, validation, publish 
     await assert.rejects(e.register(c, 'favicon', 'png', 10), code('54000'));
     for (let i = 51; i < 60; i++) await e.upload(c, 'favicon', 'png', 10);
     await assert.rejects(e.upload(c, 'favicon', 'png', 10), code('42501'), 'storage quota per company');
+    await h.asUser(users.otherOwner);
+    assert.equal((await db.query('select private.brand_storage_quota_ok($1) v', [`${a.companyId}/logo/${randomUUID()}.png`])).rows[0].v, false,
+      'the quota helper reveals nothing about another company');
     await h.asUser(users.owner);
     await e.upload(a.companyId, 'logo', 'png', 10);
   });
