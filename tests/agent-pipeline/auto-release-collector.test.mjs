@@ -23,7 +23,7 @@ const readers = (over = {}) => {
     readMigrationSql: async () => 'select 1',
     readCiEvidence: async sha => ({ head_sha: sha, completed: true, conclusion: 'success' }),
     readReviewEvidence: async sha => ({ head_sha: sha, completed: true, conclusion: 'success', verdict: 'PASS' }),
-    readCodexEvidence: async sha => ({ head_sha: sha, completed: true, open_findings: 0 }),
+    readCodexEvidence: async () => ({ source: 'trusted_codex_reader' }),
     readScopeVerdict: async () => undefined,
     readLock: async () => ({ held: false, inflight: 0 }), readReleased: async () => [],
     ...over,

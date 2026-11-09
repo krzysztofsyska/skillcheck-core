@@ -199,6 +199,33 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       return completeComparison(request, `/repos/${owner}/${repo}`, base, head);
 
     },
+    // #369 4b read-only Codex evidence readers.
+    async readPullsForCommit(sha) {
+      if (!/^[0-9a-f]{40}$/.test(sha ?? '')) throw new Error('SHA_INVALID');
+      return pages(`/repos/${owner}/${repo}/commits/${sha}/pulls`);
+    },
+    async readCommit(sha) {
+      if (!/^[0-9a-f]{40}$/.test(sha ?? '')) throw new Error('SHA_INVALID');
+      return request(`/repos/${owner}/${repo}/commits/${sha}`);
+    },
+    async readReviews(number) { return pages(`/repos/${owner}/${repo}/pulls/${Number(number)}/reviews`); },
+    // Only exception to GET-only: ONE fixed read-only GraphQL query (no mutation, no caller-supplied query text).
+    async readReviewThreads(number) {
+      if (!Number.isInteger(number) || number <= 0) throw new Error('PR_NUMBER_INVALID');
+      const query = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{isResolved isOutdated}}}}}';
+      const all = []; const seen = new Set(); let cursor = null;
+      for (let i = 0; i < 50; i++) {
+        const res = await request('/graphql', { method: 'POST', body: { query, variables: { o: owner, r: repo, n: number, c: cursor } } });
+        const t = res?.data?.repository?.pullRequest?.reviewThreads;
+        if (res?.errors?.length || !t || !Array.isArray(t.nodes) || typeof t.pageInfo?.hasNextPage !== 'boolean') throw new Error('REVIEW_THREADS_INCOMPLETE');
+        all.push(...t.nodes);
+        if (!t.pageInfo.hasNextPage) return all;
+        cursor = t.pageInfo.endCursor;
+        if (typeof cursor !== 'string' || seen.has(cursor)) throw new Error('REVIEW_THREADS_CURSOR_LOOP');
+        seen.add(cursor);
+      }
+      throw new Error('REVIEW_THREADS_LIMIT');
+    },
     async readReleasePlan(ref) {
       try { const file = await request(`/repos/${owner}/${repo}/contents/.github/agent-pipeline/production-runbook.json?ref=${ref}`); return JSON.parse(decodeGithubContent(file)); }
       catch (error) { if (error.status === 404) return null; throw error; }
