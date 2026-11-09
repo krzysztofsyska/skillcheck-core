@@ -51,3 +51,5 @@
 20261107164252_sc019_catalog_orders.sql
 20261107170432_single_analysis_preselection_group.sql
 20261107171053_exercise_ai_generation.sql
+# SC-020-A: white-label brand configuration (separate branding schema, private brand-assets bucket).
+20261109190000_sc020_brand_configuration.sql

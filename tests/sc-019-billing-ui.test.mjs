@@ -316,6 +316,7 @@ test('company dashboard links to billing only while the package flag is on', asy
   const page = load('app/dashboard/[companyId]/page.tsx', {
     'next/link': ({ children, href }) => React.createElement('a', { href }, children),
     '../../../lib/company-access': access,
+    '../../../lib/brand-config': { brandingEnabled: () => false },
     './forms': { ProfileForm() { return null; }, RecruitmentForm() { return null; } },
   }).default;
   await withFlag(undefined, async () => {

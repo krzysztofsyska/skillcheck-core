@@ -171,6 +171,44 @@ test('malformed actors and incomplete counts cannot establish visibility', async
   }
 });
 
+test('actor diagnostics distinguish absent, null, malformed and duplicate data without exposing values', async () => {
+  const without = (key) => Object.fromEntries(Object.entries(app()).filter(([name]) => name !== key));
+  for (const [nodes, detail] of [
+    [[null], 'node:null'],
+    [[TOKEN], 'node:invalid'],
+    [[without('id')], 'id:missing'],
+    [[{ ...app(), id: null }], 'id:null'],
+    [[{ ...app(), id: { raw: TOKEN } }], 'id:invalid'],
+    [[without('bypassMode')], 'bypassMode:missing'],
+    [[{ ...app(), bypassMode: null }], 'bypassMode:null'],
+    [[{ ...app(), bypassMode: TOKEN }], 'bypassMode:invalid'],
+    [[{ ...app(), id: TOKEN }, { ...app(), id: TOKEN }], 'id:duplicate'],
+    [[without('actor')], 'actor:missing'],
+    [[{ ...app(), actor: TOKEN }], 'actor:invalid'],
+    [[{ ...app(), actor: {} }], 'actor.__typename:missing'],
+    [[{ ...app(), actor: { __typename: null } }], 'actor.__typename:null'],
+    [[{ ...app(), actor: { __typename: { raw: TOKEN } } }], 'actor.__typename:invalid'],
+    [[{ ...app(), actor: { __typename: 'App' } }], 'actor.databaseId:missing'],
+    [[{ ...app(), actor: { __typename: 'App', databaseId: TOKEN } }], 'actor.databaseId:invalid'],
+  ]) {
+    const { result, writer } = await run(response(body(WRITER, connection(nodes))));
+    assert.equal(result.capability, null);
+    assert.equal(writer.reason, 'ACTOR_DATA_INCOMPLETE');
+    assert.equal(writer.detail_code, detail);
+    assert.deepEqual(Object.keys(writer).sort(), ['capability', 'control', 'detail_code', 'reason', 'ruleset_id']);
+  }
+});
+
+test('schema-nullable actor and App databaseId remain unmatched controls, never malformed-data diagnostics', async () => {
+  for (const actor of [null, { __typename: 'App', databaseId: null }]) {
+    const { writer } = await run(response(body(WRITER, connection([{ ...app(), actor }]))));
+    assert.equal(writer.capability, null);
+    assert.equal(writer.reason, 'CONTROL_CHANGED_OR_REDACTED');
+    assert.equal(Object.hasOwn(writer, 'detail_code'), false);
+  }
+  assert.equal(Object.hasOwn((await run()).writer, 'detail_code'), false);
+});
+
 test('final pages require the requested endCursor field with its nullable String type', async () => {
   for (const pageInfo of [{ hasNextPage: false }, { hasNextPage: false, endCursor: 7 }, { hasNextPage: false, endCursor: {} }]) {
     const { result, writer } = await run(response(body(WRITER, connection([app()], { pageInfo }))));

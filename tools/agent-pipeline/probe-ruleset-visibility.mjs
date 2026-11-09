@@ -30,6 +30,10 @@ function observation(control, capability, reason, extra = {}) {
   return { ruleset_id: control.rulesetId, control: control.kind, capability, reason, ...extra };
 }
 
+function fieldProblem(object, key) {
+  return !Object.hasOwn(object, key) ? 'missing' : object[key] === null ? 'null' : 'invalid';
+}
+
 async function readControl(control, { token, fetchImpl }) {
   let cursor = null;
   let expectedCount;
@@ -83,18 +87,30 @@ async function readControl(control, { token, fetchImpl }) {
     if (expectedCount !== undefined && expectedCount !== connection.totalCount) return observation(control, null, 'COUNT_CHANGED');
     expectedCount = connection.totalCount;
     for (const actor of connection.nodes) {
-      if (!actor || typeof actor.id !== 'string' || !actor.id
-          || !['ALWAYS', 'PULL_REQUEST', 'EXEMPT'].includes(actor.bypassMode)
-          || actors.has(actor.id)) return observation(control, null, 'ACTOR_DATA_INCOMPLETE');
+      // Emit only fixed field names and categories, never response values.
+      const incomplete = detail_code => observation(control, null, 'ACTOR_DATA_INCOMPLETE', { detail_code });
+      if (!actor || typeof actor !== 'object' || Array.isArray(actor)) {
+        return incomplete(actor === null ? 'node:null' : 'node:invalid');
+      }
+      if (typeof actor.id !== 'string' || !actor.id) return incomplete(`id:${fieldProblem(actor, 'id')}`);
+      if (!['ALWAYS', 'PULL_REQUEST', 'EXEMPT'].includes(actor.bypassMode)) {
+        return incomplete(`bypassMode:${fieldProblem(actor, 'bypassMode')}`);
+      }
+      if (actors.has(actor.id)) return incomplete('id:duplicate');
       // Role/deploy-key bypasses may have a null actor; this probe never uses
       // the list to authorize protection. The positive control needs an App.
-      if (actor.actor !== null && (!actor.actor || typeof actor.actor.__typename !== 'string')) {
-        return observation(control, null, 'ACTOR_DATA_INCOMPLETE');
+      if (actor.actor !== null) {
+        if (!actor.actor || typeof actor.actor !== 'object' || Array.isArray(actor.actor)) {
+          return incomplete(`actor:${fieldProblem(actor, 'actor')}`);
+        }
+        if (typeof actor.actor.__typename !== 'string') {
+          return incomplete(`actor.__typename:${fieldProblem(actor.actor, '__typename')}`);
+        }
       }
       if (actor.actor?.__typename === 'App' && (!Object.hasOwn(actor.actor, 'databaseId')
           || (actor.actor.databaseId !== null && (!Number.isInteger(actor.actor.databaseId)
             || actor.actor.databaseId < -2147483648 || actor.actor.databaseId > 2147483647)))) {
-        return observation(control, null, 'ACTOR_DATA_INCOMPLETE');
+        return incomplete(`actor.databaseId:${fieldProblem(actor.actor, 'databaseId')}`);
       }
       actors.set(actor.id, actor);
     }
