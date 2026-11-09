@@ -6,8 +6,9 @@ import type { ExerciseBudgetClient } from './ai-ledger-writer.ts';
 
 /**
  * Reserves the generation's budget, runs `generate`, then frees what it did not use (only when
- * this call created the reservation: a concurrent duplicate of the same request key never frees
- * the budget of the call that is still running). Refusals return a Polish message instead.
+ * this call created the reservation). The database also refuses the release while the generation
+ * of this key is still 'reserved', so a concurrent duplicate that lost the draft slot never frees
+ * the hold of the call that won it. Refusals return a Polish message instead.
  */
 export async function withExerciseBudget<T extends { error?: string }>(budget: ExerciseBudgetClient, requestKey: string,
   generate: () => Promise<T>): Promise<T | { error: string }> {

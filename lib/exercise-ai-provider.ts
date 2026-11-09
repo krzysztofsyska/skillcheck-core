@@ -114,7 +114,7 @@ export function exerciseErrorFromGateway(error: unknown): ExerciseAiError {
   switch (error.code) {
     // SC-021-B: the attempt could not be recorded; the draft is not returned (the call may be billed).
     case 'ledger_error': return new ExerciseAiError('exercise_ai_server_error', 'Provider unavailable');
-    // SC-021-C: the action refuses over-budget generations before spending a slot (exerciseBudgetGate);
+    // SC-021-C: the action refuses over-budget generations before spending a slot (withExerciseBudget);
     // here the slot is already reserved, so only a code finish_exercise_ai_generation accepts is used.
     case 'budget_exceeded':
     case 'budget_unconfigured':

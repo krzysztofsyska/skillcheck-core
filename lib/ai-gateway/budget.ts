@@ -19,6 +19,11 @@ export type BudgetReserver = (operationId: string) => Promise<unknown>;
 /**
  * Mirror of the seeded rows of `ai_ledger.budget_estimates`. Tests pin both to the code limits
  * (screening and exercise request limits, retry counts) and to the migration.
+ *
+ * Screening's 120 000 input tokens is an approximation, not an enforced cap: the gateway path does
+ * not cap screening requests by tokens (a byte cap at that size would refuse Polish CVs of up to
+ * 100 000 characters that work today). Settled attempts always carry their exact cost; only unknown
+ * attempts and the hold use this estimate. Exercise generation is bounded (48 000-byte request).
  */
 export const BUDGET_ESTIMATES = Object.freeze({
   cv_screening: Object.freeze({ max_input_tokens: 120_000, max_output_tokens: 4_000, attempts_per_operation: 3 }),

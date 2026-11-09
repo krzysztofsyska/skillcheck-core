@@ -210,7 +210,9 @@ test('SC-021-C operator path: only platform operators, audited overrides (raise,
 
   // Raise: the limit grows while the override is active, in the budget currency only.
   const raise = await e.op('ai_ledger.operator_grant_override', [a.companyId, 'raise', SCREENING_OP, 'USD', tomorrow, 'Klient czeka na fakturę']);
-  await e.op('ai_ledger.operator_grant_override', [a.companyId, 'raise', 10 ** 9, 'PLN', tomorrow, 'Inna waluta nie działa']);
+  // A raise in another currency than the budget (or without a budget) would change nothing: refused.
+  await assert.rejects(e.op('ai_ledger.operator_grant_override', [a.companyId, 'raise', 10 ** 9, 'PLN', tomorrow, 'Inna waluta nie działa']), denied('22023'));
+  await assert.rejects(e.op('ai_ledger.operator_grant_override', [b.companyId, 'raise', 10 ** 9, 'USD', tomorrow, 'Brak budżetu firmy']), denied('22023'));
   const s = await e.status(a.companyId, users.owner);
   assert.equal(num(s.limit_micros), 2 * SCREENING_OP); assert.equal(num(s.raise_micros), SCREENING_OP);
   assert.equal((await e.reserveScreening(p2.attemptId)).allowed, true);
@@ -239,7 +241,7 @@ test('SC-021-C operator path: only platform operators, audited overrides (raise,
   const audit = await e.callAny('ai_ledger.operator_budget_audit', [a.companyId, 50]);
   void audit;
   const auditRows = await e.rows('budget_audit', 'company_id=$1', [a.companyId]);
-  assert.deepEqual(auditRows.map(r => r.action), ['set_company_budget', 'grant_override', 'grant_override', 'revoke_override', 'grant_override']);
+  assert.deepEqual(auditRows.map(r => r.action), ['set_company_budget', 'grant_override', 'revoke_override', 'grant_override']);
   for (const row of auditRows) { assert.equal(row.actor, e.operator); assert.ok(row.reason.length >= 8); }
   await h.asAdmin();
   for (const sql of ['update ai_ledger.budget_audit set reason=\'changed reason\'', 'delete from ai_ledger.budget_audit',
@@ -280,12 +282,13 @@ test('SC-021-C exercise budget: server writer only, before the generation slot, 
     JSON.stringify(attempt(key, f.companyId, { task: 'exercise_generation', model_key: 'openai-exercise' }))]));
   assert.deepEqual(usage(await e.status(f.companyId, users.owner)), { state: 'ok', limit: 2 * EXERCISE_OP, settled: 1200, unknown: 0,
     reserved: EXERCISE_OP - 1200, committed: EXERCISE_OP });
+  // As in the action: the generation finishes, then the budget is released.
+  await h.asUser(users.recruiter);
+  await e.call('public.finish_exercise_ai_generation', [f.companyId, f.recruitment.id, key, 'a'.repeat(64), null, null, 'exercise_ai_network_error']);
   await client.release(key);
   assert.deepEqual(usage(await e.status(f.companyId, users.owner)), { state: 'ok', limit: 2 * EXERCISE_OP, settled: 1200, unknown: 0, reserved: 0, committed: 1200 });
   assert.ok((await e.rows('budget_reservations', 'operation_id=$1', [key]))[0].released_at);
   // A finished generation needs no reservation (no provider call will follow).
-  await h.asUser(users.recruiter);
-  await e.call('public.finish_exercise_ai_generation', [f.companyId, f.recruitment.id, key, 'a'.repeat(64), null, null, 'exercise_ai_network_error']);
   assert.deepEqual(await client.reserve(key), { allowed: true, created: false, skipped: true });
   const done = randomUUID();
   await h.asUser(users.recruiter);
@@ -293,18 +296,57 @@ test('SC-021-C exercise budget: server writer only, before the generation slot, 
   await e.call('public.finish_exercise_ai_generation', [f.companyId, f.recruitment.id, done, 'a'.repeat(64), null, null, 'exercise_ai_network_error']);
   assert.deepEqual(await client.reserve(done), { allowed: true, created: false, skipped: true });
 
+  // A released reservation without attempts (e.g. the request failed before the slot) is re-armed only
+  // after a full budget check: a new version of the hold, never a free pass.
+  const k4 = randomUUID();
+  assert.equal((await client.reserve(k4)).created, true);
+  await client.release(k4);
+  const rearmed = await client.reserve(k4);
+  assert.equal(rearmed.created, true); assert.equal(rearmed.arm, 2);
+  assert.deepEqual((await e.rows('budget_reservations', 'operation_id=$1', [k4])).map(r => [r.arm, r.released_at !== null]), [[1, true], [2, false]]);
+  await client.release(k4);
+
+  // A concurrent duplicate of the same key that lost the draft slot cannot free the winner's hold:
+  // release is refused while the generation of that key is still 'reserved'.
+  const k5 = randomUUID();
+  assert.equal((await client.reserve(k5)).created, true);
+  await h.asUser(users.recruiter);
+  await e.call('public.reserve_exercise_ai_generation', [f.companyId, f.recruitment.id, k5, f.position.updated_at, stamp, 'a'.repeat(64)]);
+  await client.release(k5);
+  await h.asAdmin();
+  assert.equal((await db.query('select released_at from ai_ledger.budget_reservations where operation_id=$1', [k5])).rows[0].released_at, null);
+  assert.equal(num((await e.status(f.companyId, users.owner)).reserved_micros), EXERCISE_OP);
+  // ... and once that generation finishes, the hold stops counting (implicit release).
+  await h.asUser(users.recruiter);
+  await e.call('public.finish_exercise_ai_generation', [f.companyId, f.recruitment.id, k5, 'a'.repeat(64), null, null, 'exercise_ai_network_error']);
+  assert.equal(num((await e.status(f.companyId, users.owner)).reserved_micros), 0);
+
   // Room for one more operation only.
   const k2 = randomUUID(), k3 = randomUUID();
   assert.equal((await client.reserve(k2)).allowed, true);
   assert.deepEqual(await client.reserve(k3), { allowed: false, code: 'budget_exceeded' });
+  const expire = async key => {
+    await h.asAdmin();
+    await db.query('set session_replication_role = replica');
+    await db.query("update ai_ledger.budget_reservations set expires_at=created_at+interval '1 millisecond' where operation_id=$1", [key]);
+    await db.query('set session_replication_role = origin');
+  };
   // Crash without release: the reservation stops holding once it expires.
-  await h.asAdmin();
-  await db.query('set session_replication_role = replica');
-  await db.query("update ai_ledger.budget_reservations set expires_at=created_at+interval '1 millisecond' where operation_id=$1", [k2]);
-  await db.query('set session_replication_role = origin');
+  await expire(k2);
   assert.equal((await client.reserve(k3)).allowed, true);
-  // ... and the expired operation itself is still not cut off (existing reservation).
-  assert.equal((await client.reserve(k2)).allowed, true);
+  // The expired key without attempts gets no free pass: full check, refused over budget (no re-use of
+  // released or expired keys past the 100% block).
+  assert.deepEqual(await client.reserve(k2), { allowed: false, code: 'budget_exceeded' });
+  // An operation with attempts in the ledger is in flight: never cut off, even expired and over budget.
+  await h.asUser(users.recruiter);
+  await e.call('public.reserve_exercise_ai_generation', [f.companyId, f.recruitment.id, k3, f.position.updated_at, stamp, 'a'.repeat(64)]);
+  await e.asWriter(c => c.query('select ai_ledger.record_exercise_attempt($1,$2,$3::jsonb)', [f.companyId, f.recruitment.id,
+    JSON.stringify(attempt(k3, f.companyId, { task: 'exercise_generation', model_key: 'openai-exercise' }))]));
+  await expire(k3);
+  await e.op('ai_ledger.operator_set_company_budget', [f.companyId, 1000, 'USD', REASON]);
+  assert.equal((await e.status(f.companyId, users.owner)).state, 'exceeded');
+  assert.deepEqual({ ...(await client.reserve(k3)), reservation_id: undefined }, { allowed: true, created: false, reservation_id: undefined });
+  assert.deepEqual(await client.reserve(k2), { allowed: false, code: 'budget_exceeded' });
 
   // Bound to the company's recruitment; keys of screening operations are refused.
   const wrong = createExerciseBudgetClient(async () => ({ query: (sql, v) => own.query(sql, v), release: () => {} }), f.companyId, foreign.recruitment.id);
@@ -394,4 +436,26 @@ test('SC-021-C migration: refuses a second install; rollback refuses non-empty b
   await assert.rejects(db.exec(down), error => error.code === '55000' && /sc021c_rollback_budgets_not_empty/.test(error.message));
   await db.exec('rollback');
   assert.equal((await e.rows('plan_budgets')).length, 1);
+});
+
+test('SC-021-C periods follow Europe/Warsaw months (DST included); a jump from under 80% past 100% records both events', async t => {
+  const e = await boot(t), { db, h } = e;
+  await h.asAdmin();
+  const bounds = async at => { const r = (await db.query('select * from ai_ledger.period_bounds($1::timestamptz)', [at])).rows[0];
+    return [r.period_start.toISOString(), r.period_end.toISOString()]; };
+  // Mid-March (CET) → March ends at the CEST switch-over month boundary.
+  assert.deepEqual(await bounds('2026-03-15T12:00:00Z'), ['2026-02-28T23:00:00.000Z', '2026-03-31T22:00:00.000Z']);
+  // 22:30 UTC on 31 March is already 1 April in Warsaw (CEST, +2).
+  assert.deepEqual(await bounds('2026-03-31T22:30:00Z'), ['2026-03-31T22:00:00.000Z', '2026-04-30T22:00:00.000Z']);
+  assert.deepEqual(await bounds('2026-03-31T21:30:00Z'), ['2026-02-28T23:00:00.000Z', '2026-03-31T22:00:00.000Z']);
+  // October (CEST) ends at 23:00 UTC because November starts in CET (+1).
+  assert.deepEqual(await bounds('2026-10-31T22:30:00Z'), ['2026-09-30T22:00:00.000Z', '2026-10-31T23:00:00.000Z']);
+  assert.deepEqual(await bounds('2026-10-31T23:30:00Z'), ['2026-10-31T23:00:00.000Z', '2026-11-30T23:00:00.000Z']);
+
+  const f = await e.seed();
+  await e.op('ai_ledger.operator_set_company_budget', [f.companyId, 300000, 'USD', REASON]);
+  const p = await e.processing(f);
+  assert.deepEqual(await e.reserveScreening(p.attemptId), { allowed: false, code: 'budget_exceeded' });
+  assert.deepEqual((await e.rows('budget_events', 'company_id=$1', [f.companyId])).map(r => r.kind).sort(), ['blocked_100', 'warning_80']);
+  assert.equal((await e.status(f.companyId, users.owner)).state, 'ok');
 });

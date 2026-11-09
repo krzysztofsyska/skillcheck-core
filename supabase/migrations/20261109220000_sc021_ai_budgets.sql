@@ -17,8 +17,11 @@
 -- wejścia i wyjścia × stawka zatwierdzona albo testowa) × liczba prób operacji. Rezerwacja
 -- przestaje trzymać kwotę, gdy: zostanie zwolniona, wygaśnie (expires_at) albo operacja biznesowa
 -- się zakończy (próba analizy nie jest już pending/processing; generacja nie jest już 'reserved').
--- Operacja, która ma rezerwację, nigdy nie jest odcinana (ponowienia przechodzą); blokowane są
--- tylko NOWE operacje.
+-- Operacja w toku nigdy nie jest odcinana: przechodzi bez nowego sprawdzenia, gdy ma żywą rezerwację
+-- (niezwolnioną, niewygasłą) albo ma już próby w rejestrze. Rezerwacja zwolniona/wygasła bez prób
+-- (np. klucz żądania użyty ponownie) przechodzi pełne sprawdzenie i dostaje nową wersję (`arm`).
+-- Szacunek jest przybliżony: tokeny wejścia nie są twardo ograniczone w ścieżce screeningu (limit
+-- CV to 100 000 znaków); rzeczywisty koszt rozliczonej próby jest zawsze dokładny.
 --
 -- Schemat ai_ledger leży poza public/private: sygnatura SC-010 (R15) bez zmian (preflight i
 -- postflight). Tabele nie mają kluczy obcych do public/private i nie przechowują danych kandydata
@@ -124,9 +127,12 @@ create table ai_ledger.budget_reservations (
   created_at timestamptz not null default clock_timestamp(),
   expires_at timestamptz not null,
   released_at timestamptz,
+  -- Wersja rezerwacji operacji: nowa tylko po pełnym sprawdzeniu, gdy poprzednia nie trzyma już
+  -- kwoty, a operacja nie ma prób. Liczy się zawsze najnowsza wersja.
+  arm integer not null default 1 check (arm between 1 and 1000),
   check (reserved_micros = per_attempt_micros * attempts),
   check (expires_at > created_at),
-  unique (task, company_id, process_id, operation_id)
+  unique (task, company_id, process_id, operation_id, arm)
 );
 create index budget_reservations_company on ai_ledger.budget_reservations (company_id, period_start);
 create index budget_reservations_operation on ai_ledger.budget_reservations (operation_id, task);
@@ -296,14 +302,25 @@ begin
     coalesce(sum(coalesce(x.r_per, x.live_per, 0)) filter (where x.known is null), 0)
   into settled_micros, unknown_micros
   from (
-    select case when a.status = 'released' then 0
-        when a.status = 'settled' and a.cost_micros is not null and a.currency = cur then a.cost_micros end known,
-      r.per_attempt_micros r_per,
-      (select case when e.currency = cur then e.per_attempt_micros end from ai_ledger.attempt_estimate(a.task, at) e) live_per
-    from ai_ledger.attempts a
-    left join ai_ledger.budget_reservations r on r.task = a.task and r.company_id = a.company_id
-      and r.process_id = a.process_id and r.operation_id = a.operation_id and r.currency = cur
-    where a.company_id = target_company and a.created_at >= p_start and a.created_at < p_end
+    with est as (
+      -- Bieżący szacunek liczony raz na zadanie (nie na wiersz).
+      select t.task, case when e.currency = cur then e.per_attempt_micros end per_attempt
+      from unnest(array['cv_screening', 'exercise_generation']) t(task)
+      cross join lateral ai_ledger.attempt_estimate(t.task, at) e
+    )
+    select k.known,
+      case when k.known is null then (select r.per_attempt_micros from ai_ledger.budget_reservations r
+        where r.task = k.task and r.company_id = k.company_id and r.process_id = k.process_id
+          and r.operation_id = k.operation_id and r.currency = cur order by r.arm desc limit 1) end r_per,
+      est.per_attempt live_per
+    from (
+      select a.task, a.company_id, a.process_id, a.operation_id,
+        case when a.status = 'released' then 0
+          when a.status = 'settled' and a.cost_micros is not null and a.currency = cur then a.cost_micros end known
+      from ai_ledger.attempts a
+      where a.company_id = target_company and a.created_at >= p_start and a.created_at < p_end
+    ) k
+    left join est on est.task = k.task and k.known is null
   ) x;
   -- Aktywne rezerwacje trzymają tylko to, czego ich próby jeszcze nie zużyły.
   select coalesce(sum(greatest(0, r.reserved_micros - coalesce(u.used, 0))), 0) into reserved_micros
@@ -366,13 +383,17 @@ begin
   end if;
   perform pg_advisory_xact_lock(hashtextextended('ai_budget:' || target_company::text, 0));
   select * into existing from ai_ledger.budget_reservations r
-  where r.task = target_task and r.company_id = target_company and r.process_id = target_process and r.operation_id = op;
-  if found then
-    -- Operacja już rozpoczęta: nigdy nie jest odcinana (ponowienia przechodzą).
+  where r.task = target_task and r.company_id = target_company and r.process_id = target_process and r.operation_id = op
+  order by r.arm desc limit 1;
+  -- Operacja w toku nie jest odcinana: żywa rezerwacja albo próby już w rejestrze → bez nowego sprawdzenia.
+  -- Rezerwacja zwolniona/wygasła bez prób (np. ponownie użyty klucz żądania) przechodzi pełne sprawdzenie.
+  if found and ((existing.released_at is null and existing.expires_at > at)
+      or exists (select 1 from ai_ledger.attempts a where a.task = target_task and a.company_id = target_company
+        and a.process_id = target_process and a.operation_id = op)) then
     return jsonb_build_object('allowed', true, 'created', false, 'reservation_id', existing.id);
   end if;
   if target_task = 'cv_screening' and exists (select 1 from ai_ledger.budget_reservations r
-      where r.task = 'cv_screening' and r.operation_id = op) then
+      where r.task = 'cv_screening' and r.operation_id = op and r.company_id <> target_company) then
     raise exception 'AI budget conflict' using errcode = 'PT409';
   end if;
   select * into pb from ai_ledger.period_bounds(at);
@@ -389,16 +410,18 @@ begin
   committed := u.settled_micros + u.unknown_micros + u.reserved_micros;
   amount := e.per_attempt_micros * e.attempts;
   if committed + amount > lim and b.bypass_override_id is null then
+    -- Skok z < 80% od razu ponad 100%: zapisujemy też ostrzeżenie (raz na okres).
     insert into ai_ledger.budget_events (company_id, period_start, kind, limit_micros, committed_micros, currency)
-    values (target_company, pb.period_start, 'blocked_100', lim, committed, b.currency)
+    values (target_company, pb.period_start, 'warning_80', lim, committed + amount, b.currency),
+      (target_company, pb.period_start, 'blocked_100', lim, committed, b.currency)
     on conflict (company_id, period_start, kind) do nothing;
     return jsonb_build_object('allowed', false, 'code', 'budget_exceeded');
   end if;
   insert into ai_ledger.budget_reservations (task, company_id, process_id, operation_id, period_start, currency,
-    per_attempt_micros, attempts, reserved_micros, estimate_id, price_id, bypass_override_id, created_at, expires_at)
+    per_attempt_micros, attempts, reserved_micros, estimate_id, price_id, bypass_override_id, created_at, expires_at, arm)
   values (target_task, target_company, target_process, op, pb.period_start, b.currency,
     e.per_attempt_micros, e.attempts, amount, e.estimate_id, e.price_id,
-    case when committed + amount > lim then b.bypass_override_id end, at, at + ttl)
+    case when committed + amount > lim then b.bypass_override_id end, at, at + ttl, coalesce(existing.arm, 0) + 1)
   returning id into rid;
   if (committed + amount) * 100 >= lim * 80 then
     insert into ai_ledger.budget_events (company_id, period_start, kind, limit_micros, committed_micros, currency)
@@ -406,7 +429,7 @@ begin
     on conflict (company_id, period_start, kind) do nothing;
   end if;
   return jsonb_build_object('allowed', true, 'created', true, 'reservation_id', rid,
-    'bypass', committed + amount > lim);
+    'bypass', committed + amount > lim, 'arm', coalesce(existing.arm, 0) + 1);
 end;
 $$;
 
@@ -451,8 +474,15 @@ $$;
 
 create function ai_ledger.release_exercise_budget(target_company uuid, target_recruitment uuid, op uuid)
 returns boolean language plpgsql security definer set search_path = '' as $$
-declare n integer;
+declare n integer; item jsonb;
 begin
+  -- Ta sama blokada co rezerwacja generacji: zwolnienie nie wyprzedzi cudzego zajęcia miejsca.
+  perform pg_advisory_xact_lock(hashtextextended('exercise_ai:' || target_recruitment::text, 0));
+  select s.generation_requests->op::text into item from exercise_ai.recruitment_settings s
+  where s.company_id = target_company and s.recruitment_id = target_recruitment;
+  -- Generacja tego klucza wciąż trwa (np. równoległe wywołanie z tym samym kluczem zajęło miejsce):
+  -- nie zwalniamy; kwota przestanie się liczyć, gdy generacja opuści 'reserved' albo wygaśnie.
+  if item is not null and item->>'status' = 'reserved' then return false; end if;
   update ai_ledger.budget_reservations set released_at = clock_timestamp()
   where task = 'exercise_generation' and company_id = target_company and process_id = target_recruitment
     and operation_id = op and released_at is null;
@@ -523,11 +553,18 @@ $$;
 create function ai_ledger.operator_grant_override(target_company uuid, override_kind text, new_extra_micros bigint,
   new_currency text, new_expires_at timestamptz, change_reason text)
 returns uuid language plpgsql security definer set search_path = '' as $$
-declare actor uuid := ai_ledger.require_operator(); rid uuid;
+declare actor uuid := ai_ledger.require_operator(); rid uuid; b record;
 begin
   perform 1 from public.companies where id = target_company;
   if not found then raise exception 'Resource unavailable' using errcode = 'PT404'; end if;
   perform pg_advisory_xact_lock(hashtextextended('ai_budget:' || target_company::text, 0));
+  -- Podniesienie limitu musi być w walucie obowiązującego budżetu (inaczej nic by nie zmieniło).
+  if override_kind = 'raise' then
+    select * into b from ai_ledger.effective_budget(target_company, clock_timestamp());
+    if b.source is null or new_currency is distinct from b.currency then
+      raise exception 'Override currency must match the budget' using errcode = '22023';
+    end if;
+  end if;
   insert into ai_ledger.budget_overrides (company_id, kind, extra_micros, currency, expires_at, created_by, reason)
   values (target_company, override_kind, new_extra_micros, new_currency, new_expires_at, actor, btrim(change_reason))
   returning id into rid;
