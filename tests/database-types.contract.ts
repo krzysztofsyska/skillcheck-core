@@ -157,6 +157,8 @@ type ExpectedFunctions =
   | "edit_exercise_ai_proposal"
   | "reserve_exercise_ai_generation"
   | "finish_exercise_ai_generation"
+  | "record_screening_ai_attempt"
+  | "screening_attempt_tenant"
   | "reject_exercise_ai_proposal"
   | "cv_bulk_register_item"
   | "cv_bulk_fail_item"
@@ -169,7 +171,20 @@ type ExpectedFunctions =
   | "get_preselection_groups"
   | "move_preselection_group"
   | "get_preselection_group_history"
-  | "cv_ai_usage_stats";
+  | "cv_ai_usage_stats"
+  | "brand_register_asset"
+  | "brand_save_draft"
+  | "brand_publish_draft"
+  | "brand_rollback"
+  | "brand_published"
+  | "brand_asset"
+  | "brand_editor_state"
+  | "tenant_domain_claim"
+  | "tenant_domain_activate"
+  | "tenant_domain_deactivate"
+  | "tenant_domain_revoke"
+  | "tenant_domain_state"
+  | "tenant_domain_resolve";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;

@@ -1,0 +1,120 @@
+name: Claude Code task dispatcher
+run-name: sc-builder:${{ inputs.agent_id }}:${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        required: true
+        type: string
+      agent_id:
+        required: true
+        type: string
+      builder_packet:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: claude-builder-${{ inputs.agent_id }}
+  cancel-in-progress: false
+jobs:
+  authorize:
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/agent-control-runtime') && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && vars.AGENT_PIPELINE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    outputs:
+      allowed: ${{ steps.authorize.outputs.allowed }}
+      head_sha: ${{ steps.authorize.outputs.head_sha }}
+      max_turns: ${{ steps.authorize.outputs.max_turns }}
+      max_run_usd: ${{ steps.authorize.outputs.max_run_usd }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: authorize
+        run: node tools/agent-pipeline/authorize-builder.mjs
+        env:
+          BUILDER_PACKET: ${{ inputs.builder_packet }}
+          ACTOR_ID: ${{ github.actor_id }}
+          PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sc-builder-input
+          path: |
+            builder-packet.json
+            builder-prompt.txt
+  model:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: claude-code-development
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: trusted
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.head_sha }}
+          persist-credentials: false
+          path: task
+      - uses: actions/download-artifact@v4
+        with:
+          name: sc-builder-input
+      - name: Check existing credential presence
+        env:
+          HAS_API: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: test "$HAS_API" = true || test "$HAS_OAUTH" = true
+      - name: Revalidate reservation after environment wait
+        run: node trusted/tools/agent-pipeline/authorize-builder.mjs
+        env:
+          BUILDER_PACKET: ${{ inputs.builder_packet }}
+          ACTOR_ID: ${{ github.actor_id }}
+          PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Export source as data without Git or agent configuration
+        run: node trusted/tools/agent-pipeline/prepare-builder-source.mjs
+      - name: Isolated builder without a GitHub write credential
+        id: builder
+        uses: anthropics/claude-code-action/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe
+        env:
+          CLAUDE_WORKING_DIR: ${{ github.workspace }}/builder-source
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt_file: ${{ github.workspace }}/builder-prompt.txt
+          show_full_output: 'false'
+          claude_args: >-
+            --max-turns ${{ needs.authorize.outputs.max_turns }}
+            --max-budget-usd ${{ needs.authorize.outputs.max_run_usd }}
+            --tools Read,Glob,Grep
+            --allowedTools Read,Glob,Grep
+            --restricted
+            --setting-sources user
+            --strict-mcp-config
+            --mcp-config '{"mcpServers":{}}'
+            --json-schema '{"type":"object","additionalProperties":false,"required":["files"],"properties":{"files":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":["string","null"]}}}}}}'
+      - name: Collect file data only
+        run: node trusted/tools/agent-pipeline/collect-builder.mjs
+        env:
+          BUILDER_EXECUTION_FILE: ${{ steps.builder.outputs.execution_file }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sc-agent-build
+          path: build-result.json

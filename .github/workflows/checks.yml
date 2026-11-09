@@ -44,6 +44,12 @@ jobs:
       - run: npm run test:legal
       - run: npm run test:buy-preselekcja
       - run: npm run test:pricing-catalog
+      # SC-020-A white-label: brand config/asset validation and the native-PostgreSQL tenant isolation suite.
+      - run: npm run test:brand
+      - run: npm run test:brand-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       - run: npm run test:db
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
@@ -66,6 +72,13 @@ jobs:
         env:
           SALES_MAIL_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:auth
+      # SC-020-B customer domains: host rules, spoofing, routing, auth URLs, DNS/TLS fakes,
+      # then the native-PostgreSQL lifecycle/isolation suite (two synthetic companies).
+      - run: npm run test:tenant-domains
+      - run: npm run test:tenant-domains-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       # SC-FREE-AUTO-001 / SC-CONSENT-001 / SC-DIGEST-001 unit tests; the
       # native-PostgreSQL suite for the same change runs in sc19-migrations.yml.
       - run: npm run test:marketing-consent
@@ -73,6 +86,11 @@ jobs:
       # Unit tests; the native-PostgreSQL suite (needs full git history) runs in sc19-migrations.yml (PG 16/17).
       - run: npm run test:cv-bulk
       - run: npm run test:screening
+      - run: npm run test:ai-gateway
+      - run: npm run test:ai-ledger-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       - run: node --test tests/sc-019-billing-prototype.test.mjs tests/sc-019-billing-ui.test.mjs
       - run: node --test tests/sc-019-package-display.test.mjs
       - run: node --experimental-strip-types --test tests/sc-019-operator-ui.test.mjs
@@ -123,7 +141,10 @@ jobs:
       - run: npm run build
       - run: npm run test:pdf-bundle
       - run: npm run test:http
+      - run: npm run test:tenant-domains-http
       - run: npm run test:screening-report-http
+      - run: npm run test:cv-bulk-progress-http
+      - run: npm run test:ac-report-http
       - run: npm run test:auth-http
       - run: npm run test:marketing
       - run: node --test tests/sc-019-package-http.test.mjs

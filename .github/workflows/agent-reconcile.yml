@@ -1,10 +1,10 @@
 name: Agent reconcile
 
-# Frozen with the agent pipeline (owner decision 2026-11-02): Claude is the
-# only builder, so nothing is dispatched. Automatic runs (every 5 minutes and
-# on every comment) are switched off; the workflow stays for manual runs.
+# One scheduler for both builder backends. Disabled flags prevent dispatch.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: read
@@ -14,8 +14,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize:
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/agent-control-runtime') && (github.event_name == 'workflow_dispatch' || vars.AGENT_PIPELINE_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.source.outputs.allowed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: source
+        run: node tools/agent-pipeline/authorize-control-source.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
   reconcile:
-    if: github.ref == 'refs/heads/main'
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/agent-control-runtime') && (github.event_name == 'workflow_dispatch' || vars.AGENT_PIPELINE_ENABLED == 'true')
     runs-on: ubuntu-latest
     environment: agent-control
     timeout-minutes: 10

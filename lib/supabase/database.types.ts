@@ -416,6 +416,48 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      /** SC-020-A brand configuration (20261109190000_sc020_brand_configuration.sql).
+       * Writes and the editor state are owner-only (42501 otherwise); published
+       * reads are for any company member. */
+      brand_register_asset: {
+        Args: { target_company: string; asset_kind: string; object_path: string; asset_mime: string; asset_size: number; asset_sha256: string };
+        Returns: string;
+      };
+      brand_save_draft: {
+        Args: { target_company: string; draft_config: Json; logo: string | null; favicon: string | null };
+        Returns: string;
+      };
+      brand_publish_draft: {
+        Args: { target_company: string; expected_draft: string; expected_updated_at: string };
+        Returns: string;
+      };
+      brand_rollback: {
+        Args: { target_company: string; target_version: string };
+        Returns: string;
+      };
+      brand_published: {
+        Args: { target_company: string };
+        Returns: { version_id: string; version_no: number; config: Json; logo_asset_id: string | null;
+          favicon_asset_id: string | null; published_at: string }[];
+      };
+      brand_asset: {
+        Args: { target_company: string; target_asset: string };
+        Returns: { object_path: string; mime: string; kind: string; byte_size: number; sha256: string }[];
+      };
+      brand_editor_state: {
+        Args: { target_company: string };
+        Returns: Json;
+      };
+      // SC-020-B: domeny klienta. Weryfikacja DNS/TLS celowo poza API (rola tenant_domain_verifier).
+      tenant_domain_claim: {
+        Args: { target_company: string; target_hostname: string; target_kind: "subdomain" | "custom" };
+        Returns: { domain_id: string; status: string; verification_token: string }[];
+      };
+      tenant_domain_activate: { Args: { target_company: string; target_domain: string }; Returns: string };
+      tenant_domain_deactivate: { Args: { target_company: string; target_domain: string }; Returns: string };
+      tenant_domain_revoke: { Args: { target_company: string; target_domain: string }; Returns: string };
+      tenant_domain_state: { Args: { target_company: string }; Returns: Json };
+      tenant_domain_resolve: { Args: { target_host: string }; Returns: string | null };
       read_exercise_ai_proposal: {
         Args: { target_company: string; target_recruitment: string; target_definition: string };
         Returns: ExerciseAiProposalReview;
@@ -423,6 +465,14 @@ export type Database = {
       reserve_exercise_ai_generation: {
         Args: {target_company:string;target_recruitment:string;request_key:string;expected_position_updated_at:string;expected_company_updated_at:string|null;input_fingerprint:string};
         Returns: Json;
+      };
+      record_screening_ai_attempt: {
+        Args: {attempt:Json};
+        Returns: Json;
+      };
+      screening_attempt_tenant: {
+        Args: {target_attempt:string};
+        Returns: string;
       };
       finish_exercise_ai_generation: {
         Args: {target_company:string;target_recruitment:string;request_key:string;input_fingerprint:string;new_definition:Json|null;new_provenance:Json|null;error_code:string|null};

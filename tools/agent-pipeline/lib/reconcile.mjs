@@ -1,3 +1,4 @@
+import { controlPlane, integrationOnly, workflowRef, assertControlEffect, assertCurrentControlRevision } from './control-plane.mjs';
 import { preparePromotion } from './promotion.mjs';
 import { guardedMerge, publishEvidence, drainOutbox, cancelStaleApprovals } from './live-effects.mjs';
 import { readEvidence, readApprovals } from './evidence.mjs';
@@ -11,6 +12,7 @@ import { assessConfiguration } from './configuration.mjs';
 import { flagsFromEnv, loadPolicy } from './policy.mjs';
 import { evaluatePreflight } from './merge.mjs';
 import { createCursorClient } from './cursor.mjs';
+import { createClaudeBuilderClient } from './claude-builder.mjs';
 import { createGitHubClient, createInstallationToken } from './github.mjs';
 import { assembleWork, cursorSnapshot } from './snapshot.mjs';
 
@@ -68,9 +70,11 @@ export async function reconcile({
     };
     const result = await tickImpl({ record: item.record ?? null, observation, journal, ports });
     if (flags.enabled && ports.github && result.record) {
-      result.record = await cancelStaleApprovals({ github: ports.github, journal, policy, record: result.record, now });
-      await publishEvidence(ports.github, policy, result.record, { ci: observation.github.ci, review: observation.github.review });
-      result.record = await drainOutbox({ github: ports.github, journal, policy, record: result.record, now });
+      const context = { github: ports.github, journal, policy, policySha: ports.policySha, now };
+      await assertCurrentControlRevision(context);
+      result.record = await cancelStaleApprovals({ ...context, record: result.record });
+      await publishEvidence(ports.github, policy, result.record, { ci: observation.github.ci, review: observation.github.review }, ports.policySha);
+      result.record = await drainOutbox({ ...context, record: result.record });
     }
     results.push(result);
   }
@@ -90,7 +94,7 @@ export async function reconcile({
 
 export async function reconcileFromEnv(env = process.env, overrides = {}) {
   const flags = overrides.flags ?? flagsFromEnv(env);
-  const configuration = overrides.configuration ?? assessConfiguration(env, flags);
+  const configuration = overrides.configuration ?? assessConfiguration(env, flags, overrides.policy ?? loadPolicy());
   const policy = overrides.policy ?? loadPolicy();
   if (flags.enabled && configuration.ok) {
     const missing = [];
@@ -145,12 +149,14 @@ export function dispatchInputs(effect) {
 }
 
 export async function loadWorkFromClients({ github, cursor = null, policy, now, secrets, prompts = null, policyCommit = null }) {
-  const [integration, main, issues, pulls, projection] = await Promise.all([
+  const controlBranch = controlPlane(policy).branch;
+  const [integration, main, issues, pulls, projection, control] = await Promise.all([
     github.readBranch('integration'),
     github.readBranch('main'),
     github.readIssues(),
     github.readPulls(),
     github.readProjection(),
+    github.readBranch(controlBranch),
   ]);
   let protection = null;
   try {
@@ -162,7 +168,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
     if (error.status !== 401 && error.status !== 403 && error.status !== 404
         && error.message !== 'RULESET_BYPASS_UNVERIFIABLE') throw error;
   }
-  if (policyCommit && policyCommit !== main?.commit?.sha) throw new Error('POLICY_STALE');
+  if (policyCommit && policyCommit !== control?.commit?.sha) throw new Error('POLICY_STALE');
   if (github.readRepository && (await github.readRepository()).id !== policy.repository_id) throw new Error('REPOSITORY_MISMATCH');
   const records = projection.tasks ?? {};
   for (const record of Object.values(records)) {
@@ -182,10 +188,16 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
       cursorState[record.cursor_agent_id] = await readCursor(cursor, record.cursor_agent_id);
     }
   }
-  const promotion = github.readComparison ? await preparePromotion(github, policy, records, integration?.commit?.sha, main?.commit?.sha) : null;
+  const promotion = !integrationOnly(policy) && github.readComparison ? await preparePromotion(github, policy, records, integration?.commit?.sha, main?.commit?.sha) : null;
   const evidence = await readEvidence(github, policy, records);
+  const postMergeCi = {};
+  for (const record of Object.values(records)) {
+    if (record.technical_state === 'WAITING_POST_MERGE_CI' || record.binding?.post_merge_ci?.blocked) {
+      postMergeCi[record.task_id] = await github.readPostMergeCi(record.binding.merge?.mergeCommitSha);
+    }
+  }
   const approvals = await readApprovals(github, policy, records);
-  const policySha = main?.commit?.sha;
+  const policySha = control?.commit?.sha;
   if (!/^[a-f0-9]{40}$/.test(policySha ?? '')) throw new Error('POLICY_COMMIT_MISSING');
   return assembleWork({
     policy,
@@ -202,6 +214,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
       branches,
       cursor: cursorState,
       evidence,
+      postMergeCi,
       approvals,
       protection,
       mergeLock: projection.mergeLock ?? null,
@@ -217,13 +230,13 @@ async function loadWorkFromEnv(env, policy, flags, configuration, sharedGithub) 
   if (!token && !sharedGithub) { if (flags.enabled) throw new Error('BLOCKED_CONFIGURATION'); return { items: [], read: 'skipped-no-token' }; }
   const repository = env.GITHUB_REPOSITORY || env.AGENT_PIPELINE_REPOSITORY || policy.repository;
   const github = sharedGithub ?? createGitHubClient({ fetch: globalThis.fetch, token, repository, policy });
-  const cursor = env.CURSOR_API_KEY ? createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base }) : null;
+  const cursor = policy.builder_provider === 'claude-code' ? createClaudeBuilderClient({github, policy, policySha:env.AGENT_POLICY_COMMIT}) : env.CURSOR_API_KEY ? createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base }) : null;
   const work = await loadWorkFromClients({
     github,
     cursor,
     policy,
     now: new Date().toISOString(),
-    secrets: secretsFromEnv(env),
+    secrets: secretsFromEnv(env, policy),
     prompts: readPrompts(),
     policyCommit: env.AGENT_POLICY_COMMIT,
   });
@@ -279,9 +292,11 @@ export async function defaultPorts(env, policy, configuration, flags) {
     } },
   });
   const github = createGitHubClient({ fetch: globalThis.fetch, token, repository, policy });
-  const cursor = createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base });
+  const policySha = env.AGENT_POLICY_COMMIT;
+  const cursor = policy.builder_provider === 'claude-code' ? createClaudeBuilderClient({github, policy, policySha:env.AGENT_POLICY_COMMIT}) : createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base });
   return {
     github,
+    policySha,
     async readProtection() {
       try {
         return await github.readProtection();
@@ -291,6 +306,9 @@ export async function defaultPorts(env, policy, configuration, flags) {
       }
     },
     async execute(effect) {
+      assertControlEffect(policy, effect);
+      // Revalidate the trusted control revision before any external effect.
+      await assertCurrentControlRevision({ github, policy, policySha });
       if (effect.type === 'cursor.create') {
         await github.createBranch(effect.branch, effect.baseSha);
         return normalizeCursorCreate(await cursor.createAgent(effect.payload));
@@ -304,12 +322,13 @@ export async function defaultPorts(env, policy, configuration, flags) {
         return normalizeCursorCreate(raw);
       }
       if (effect.type === 'cursor.followup') return normalizeCursorRun(await cursor.createRun(effect.agentId, effect.payload));
+      if (effect.type === 'cursor.publish') return cursor.publishRun(effect.agentId, effect.runId);
       if (effect.type === 'cursor.listRuns') return cursor.listRuns(effect.agentId);
       if (effect.type === 'github.createPr') return github.createPull({ head: effect.head, base: effect.base, title: effect.taskId, body: `${effect.marker}\nTASK: ${effect.taskId}\nSCOPE: ${effect.scope || 'OPERATIONS'}\nLEVEL: ${effect.level || 'L3'}\nOWNER_APPROVAL: PENDING\nPRODUCTION_APPROVAL: PENDING\nREVIEW_VERDICT: PENDING\nPROMOTION: ${effect.base === 'main' ? 'YES' : 'NO'}` });
       if (effect.type === 'github.dispatch') {
-        return github.dispatch({ workflow: basename(policy.workflows[effect.workflow]), inputs: dispatchInputs(effect) });
+        return github.dispatch({ workflow: basename(policy.workflows[effect.workflow]), inputs: dispatchInputs(effect), ref: workflowRef(policy, effect.workflow) });
       }
-      if (effect.type === 'github.merge') return guardedMerge({ github, journal: this.journal, policy, flags, effect });
+      if (effect.type === 'github.merge') return guardedMerge({ github, journal: this.journal, policy, policySha, flags, effect });
       if (effect.type === 'notify') return { deferred: true }; // durable outbox after transition
       throw new Error(`unsupported effect ${effect.type}`);
     },
@@ -357,13 +376,14 @@ function normalizeCursorCreate(payload) {
 }
 
 function normalizeCursorRun(payload) {
+  if (payload?.pending) return {lost:true};
   const run = payload?.run ?? payload ?? {};
   return { run: run.id ? { id: run.id, status: run.status ?? null } : null, status: payload?.status ?? null };
 }
 
-function secretsFromEnv(env) {
+function secretsFromEnv(env, policy) {
   return {
-    cursor: Boolean(env.CURSOR_API_KEY),
+    cursor: policy.builder_provider === 'claude-code' || Boolean(env.CURSOR_API_KEY),
     openai: Boolean(env.OPENAI_API_KEY),
     githubApp: Boolean(env.AGENT_PIPELINE_APP_ID && env.AGENT_PIPELINE_APP_PRIVATE_KEY),
   };

@@ -8,14 +8,14 @@ import type { CompanyProfile, PositionSnapshot } from './supabase/database.types
 // hire/reject signal, and no candidate data reaches the provider: the shared
 // part is built from the company profile and the position profile only.
 
-export const EXERCISE_AI_PROVIDER = 'openai';
-export const EXERCISE_AI_MODEL = 'gpt-5.4-mini-2026-03-17';
-export const EXERCISE_AI_MODEL_REVISION = null;
+import {
+  EXERCISE_AI_PROVIDER, EXERCISE_AI_MODEL, EXERCISE_AI_MODEL_REVISION, EXERCISE_AI_REQUEST_TIMEOUT_MS,
+} from './exercise-ai-model.ts';
+export { EXERCISE_AI_PROVIDER, EXERCISE_AI_MODEL, EXERCISE_AI_MODEL_REVISION, EXERCISE_AI_REQUEST_TIMEOUT_MS };
 export const EXERCISE_AI_PROMPT_VERSION = 'exercise-draft-v1';
 export const EXERCISE_AI_PAYLOAD_SCHEMA_VERSION = 1;
 export const EXERCISE_AI_RESULT_SCHEMA_VERSION = 1;
 export const EXERCISE_AI_MAX_OUTPUT_TOKENS = 4000;
-export const EXERCISE_AI_REQUEST_TIMEOUT_MS = 60000;
 /** Upper bound on the raw response text before it is parsed as JSON. */
 export const EXERCISE_AI_MAX_RESPONSE_CHARS = 200_000;
 export const EXERCISE_AI_MAX_PAYLOAD_BYTES = 32_000;
