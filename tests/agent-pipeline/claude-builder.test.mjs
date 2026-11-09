@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { builderConfiguration, packetFor, validatePacket, validateBuilderFiles, createClaudeBuilderClient } from '../../tools/agent-pipeline/lib/claude-builder.mjs';
+import { parseBuilderOutput } from '../../tools/agent-pipeline/lib/builder-output.mjs';
 import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
 import { sha256 } from '../../tools/agent-pipeline/lib/canonical.mjs';
 import { parseContract } from '../../tools/agent-pipeline/lib/contract.mjs';
@@ -108,7 +111,7 @@ test('model workflow has no GitHub write token and no direct label scheduler',()
  const file='.github/workflows/claude-code-dispatch.yml';const r=spawnSync('python3',['-c','import json,yaml,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))',file],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);
  const w=JSON.parse(r.stdout);assert.deepEqual(w.jobs.model.permissions,{contents:'read',issues:'read',actions:'read'});
  const source=readFileSync(file,'utf8');assert.equal(source.includes('id-token: write'),false);assert.equal(source.includes('APP_PRIVATE_KEY'),false);assert.equal(source.includes('issues:\n    types'),false);
- assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);assert.match(source,/--tools Read,Edit,Write,Glob,Grep/);
+ assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.structured_output/);assert.match(source,/--setting-sources ""/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
  assert.equal(parseContract('TASK: SC-020\nOWNER: Claude Code\nSTATUS: READY').ready,false);
 });
 
@@ -116,6 +119,7 @@ test('full controller uses Claude adapter, publishes commit and Draft PR, then C
  const {httpWorld}=await import('./http-world.mjs');
  const {reconcileFromEnv}=await import('../../tools/agent-pipeline/lib/reconcile.mjs');
  const w=httpWorld({claude:true}),previous=globalThis.fetch;globalThis.fetch=w.fetch;
+ w.loseBuilderDispatch=true;w.loseBuilderRef=true;
  const task=()=>Object.values(w.projection()).find(r=>r.task_id==='SC-DEMO-001');
  try {
   for(let i=0;i<90&&task()?.state!=='READY_FOR_OWNER';i++)await reconcileFromEnv(w.env,{policy:w.policy});
@@ -126,9 +130,37 @@ test('full controller uses Claude adapter, publishes commit and Draft PR, then C
   const builds=w.runs.filter(r=>r.workflow_id===w.policy.claude_builder.workflow_id);
   assert.equal(builds.length,2);assert.equal(task().binding.known_run_ids.length,2);
   assert.equal(task().binding.builder_reservations.length,2);
-  assert.equal(w.calls.filter(c=>c.method==='PATCH'&&c.url.includes('/git/refs/heads/feat/')).length,2);
+  assert.equal(w.calls.filter(c=>c.method==='PATCH'&&c.url.includes('/git/refs/heads/feat/')).length,2, 'lost responses recovered without duplicate commit publication');
   assert.ok(w.runs.some(r=>r.workflow_id===w.policy.workflow_ids.verify));
   assert.ok(w.runs.some(r=>r.workflow_id===w.policy.workflow_ids.review));
   assert.equal(w.mergeCount,0);
  } finally {globalThis.fetch=previous;}
+});
+
+
+test('structured model output is parsed as file data and rejects malformed/oversized output',()=>{
+ for(const value of [undefined,'','not-json','null','[]','{}',JSON.stringify({files:[],extra:'x'}),'x'.repeat(1600*1024)])assert.throws(()=>parseBuilderOutput(value,['app/**']));
+ const output={files:[{path:'app/demo/page.tsx',content:'export default function Demo(){return null;}'}]};
+ assert.deepEqual(parseBuilderOutput(JSON.stringify(output),['app/**']),output.files);
+ const collector=readFileSync('tools/agent-pipeline/collect-builder.mjs','utf8');
+ assert.equal(/spawn|exec|eval|import\(/.test(collector),false);
+ const prep=readFileSync('tools/agent-pipeline/prepare-builder-source.mjs','utf8');
+ assert.match(prep,/cat-file/);assert.match(prep,/\\.claude/);assert.match(prep,/\\.mcp/);
+});
+
+
+test('actual source exporter excludes model startup config and Git metadata',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'sc-builder-source-')),task=join(dir,'task');mkdirSync(task);
+ const run=(command,args,cwd=task)=>{const result=spawnSync(command,args,{cwd,encoding:'utf8'});assert.equal(result.status,0,result.stderr);return result;};
+ try{
+  run('git',['init']);run('git',['config','user.name','Test']);run('git',['config','user.email','test@example.invalid']);
+  mkdirSync(join(task,'.claude'));writeFileSync(join(task,'.claude/settings.json'),JSON.stringify({hooks:{SessionStart:[{hooks:[{type:'command',command:'touch executed'}]}]}}));
+  writeFileSync(join(task,'.mcp.json'),'untrusted');writeFileSync(join(task,'CLAUDE.md'),'project guidance');writeFileSync(join(task,'code.ts'),'export const answer=42;');
+  run('git',['add','.']);run('git',['commit','-m','fixture']);
+  run(process.execPath,[resolve('tools/agent-pipeline/prepare-builder-source.mjs')],dir);
+  assert.equal(readFileSync(join(dir,'builder-source/code.ts'),'utf8'),'export const answer=42;');
+  assert.equal(existsSync(join(dir,'builder-source/.git')),false);assert.equal(existsSync(join(dir,'builder-source/.claude')),false);
+  assert.equal(existsSync(join(dir,'builder-source/.mcp.json')),false);assert.equal(existsSync(join(dir,'builder-source/CLAUDE.md')),false);
+  assert.equal(existsSync(join(dir,'builder-source/CLAUDE.md.txt')),true);assert.equal(existsSync(join(task,'executed')),false);
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });

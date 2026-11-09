@@ -1,5 +1,6 @@
 import { generateKeyPairSync, createHash } from 'node:crypto';
 import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
+import { parseBuilderOutput } from '../../tools/agent-pipeline/lib/builder-output.mjs';
 import { contractBody } from './helpers.mjs';
 export const MAIN = 'd'.repeat(40), BASE = 'c'.repeat(40), H1 = 'a'.repeat(40), H2 = 'b'.repeat(40), MERGED = 'e'.repeat(40);
 export function configuredPolicy() {
@@ -43,7 +44,7 @@ export function httpWorld({claude=false}={}) {
     const id=100+w.runs.length, approved=kind==='accept'?w.approveA:kind==='promote'?w.approveB:true;
     const run={id,workflow_id:policy.workflow_ids[kind],path:policy.workflows[kind],event:'workflow_dispatch',head_branch:'main',head_sha:MAIN,actor:{id:policy.controller_actor_id},display_title:`sc-agent:${inputs.request_id}`,run_attempt:1,status:approved?'completed':'waiting',conclusion:approved?'success':null,html_url:`https://github.com/${policy.repository}/actions/runs/${id}`};
     w.runs.push(run);
-    if(kind==='builder'){const packet=JSON.parse(inputs.builder_packet);run.workflow_id=policy.claude_builder.workflow_id;run.path=policy.claude_builder.workflow_path;run.display_title=`sc-builder:${packet.agent_id}:${packet.request_id}`;w.repair=packet.head_sha===packet.base_sha?0:1;w.artifacts[id]={schema_version:1,run_id:id,run_attempt:1,policy_sha:MAIN,packet,files:[{path:'app/demo/page.tsx',content:w.repair?'fixed':'needs fix'}]};}
+    if(kind==='builder'){const packet=JSON.parse(inputs.builder_packet);run.workflow_id=policy.claude_builder.workflow_id;run.path=policy.claude_builder.workflow_path;run.display_title=`sc-builder:${packet.agent_id}:${packet.request_id}`;w.repair=packet.head_sha===packet.base_sha?0:1;w.artifacts[id]={schema_version:1,run_id:id,run_attempt:1,policy_sha:MAIN,packet,files:parseBuilderOutput(JSON.stringify({files:[{path:'app/demo/page.tsx',content:w.repair?'fixed':'needs fix'}]}),packet.allowed_files)};}
     else if(kind==='verify') w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:MAIN,head_sha:inputs.head_sha,base_sha:inputs.base_sha,conclusion:'success',jobs:[{conclusion:'success'}],commands_executed:policy.required_ci_commands};
     else if(kind==='review') {
       const packet=JSON.parse(inputs.review_packet); const pass=w.repair>0;
@@ -90,7 +91,7 @@ export function httpWorld({claude=false}={}) {
     }
     if(path==='/git/blobs'&&method==='POST'){const sha=hash(body);w.blobs[sha]=body.content;return json({sha});}
     if(path.startsWith('/git/trees/')&&method==='GET'){const tree=w.trees[path.split('/').at(-1)]??{};return json({truncated:false,tree:Object.entries(tree).map(([path,sha])=>({path,sha,mode:'100644',type:'blob'}))});}
-    if(path.startsWith('/git/refs/heads/feat/')&&method==='PATCH'){const name=path.slice('/git/refs/heads/'.length);const c=w.commits[body.sha];if(body.force||c.parents[0]!==w.branches[name])return json({},422);w.branches[name]=body.sha;for(const p of w.pulls)if(p.head.ref===name)p.head.sha=body.sha;return json({object:{sha:body.sha}});}
+    if(path.startsWith('/git/refs/heads/feat/')&&method==='PATCH'){const name=path.slice('/git/refs/heads/'.length);const c=w.commits[body.sha];if(body.force||c.parents[0]!==w.branches[name])return json({},422);w.branches[name]=body.sha;for(const p of w.pulls)if(p.head.ref===name)p.head.sha=body.sha;if(w.loseBuilderRef){w.loseBuilderRef=false;throw Error('lost builder ref response');}return json({object:{sha:body.sha}});}
     if(path==='/git/trees'&&method==='POST'){const tree={...(w.trees[body.base_tree]??{})};for(const entry of body.tree)tree[entry.path]=entry.sha;const sha=hash(tree);w.trees[sha]=tree;return json({sha});}
     if(path==='/git/commits'&&method==='POST'){const sha=hash(body);w.commits[sha]={...body,tree:{sha:body.tree}};return json({sha});}
     if(path.startsWith('/git/commits/')){const c=w.commits[path.split('/').at(-1)];return json(c?{...c,parents:(c.parents??[]).map(p=>typeof p==='string'?{sha:p}:p)}:null);}
@@ -102,7 +103,7 @@ export function httpWorld({claude=false}={}) {
     if(/^\/pulls\/\d+$/.test(path))return json(w.pulls.find(p=>p.number===Number(path.split('/')[2])));
     if(path.endsWith('/merge')&&method==='PUT'){const p=w.pulls.find(p=>p.number===Number(path.split('/')[2]));w.mergeCount++;p.merged=true;p.state='closed';p.merge_commit_sha=MERGED;w.branches[p.base.ref]=MERGED;if(p.base.ref==='integration')w.runs.push({id:900,workflow_id:policy.post_merge_ci.workflow_id,path:policy.post_merge_ci.path,event:'push',head_branch:'integration',head_sha:MERGED,status:'completed',conclusion:'success',run_attempt:1});if(w.loseMerge){w.loseMerge=false;throw Error('lost after accepted merge');}return json({merged:true,sha:MERGED,message:'merged'});}
     if(path===`/actions/workflows/${policy.post_merge_ci.workflow_id}/runs`)return json({workflow_runs:w.runs.filter(r=>r.workflow_id===policy.post_merge_ci.workflow_id)});
-    if(path.includes('/actions/workflows/')){const file=decodeURIComponent(path.split('/')[3]),kind=file==='claude-code-dispatch.yml'?'builder':Object.keys(policy.workflows).find(k=>policy.workflows[k].endsWith('/'+file));if(method==='POST'){createRun(kind,body.inputs);return new Response(null,{status:204});}return json({workflow_runs:w.runs.filter(r=>r.workflow_id===(kind==='builder'?policy.claude_builder.workflow_id:policy.workflow_ids[kind]))});}
+    if(path.includes('/actions/workflows/')){const file=decodeURIComponent(path.split('/')[3]),kind=file==='claude-code-dispatch.yml'?'builder':Object.keys(policy.workflows).find(k=>policy.workflows[k].endsWith('/'+file));if(method==='POST'){createRun(kind,body.inputs);if(kind==='builder'&&w.loseBuilderDispatch){w.loseBuilderDispatch=false;throw Error('lost builder dispatch response');}return new Response(null,{status:204});}return json({workflow_runs:w.runs.filter(r=>r.workflow_id===(kind==='builder'?policy.claude_builder.workflow_id:policy.workflow_ids[kind]))});}
     if(path.startsWith('/actions/runs/')) {const id=Number(path.split('/')[3]);const run=w.runs.find(r=>r.id===id);if(!run)return json({id,status:'completed'});
       if(path.endsWith('/cancel')&&method==='POST'){run.status='completed';run.conclusion='cancelled';return new Response(null,{status:202});}
       const gate=w.artifacts[id]?.gate;if(gate==='A'&&w.approveA||gate==='B'&&w.approveB){run.status='completed';run.conclusion='success';}

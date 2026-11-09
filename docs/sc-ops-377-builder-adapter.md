@@ -14,6 +14,9 @@ The controller records intent before dispatch. The workflow accepts only the
 controller App actor, first attempt, exact trusted main policy SHA, approved issue,
 contract hash, reserved operation and branch/head. A model job has no GitHub write
 credential, App key, reviewer key or production secret. It can return file data.
+The model can only Read/Glob/Grep an exported data directory without Git metadata,
+agent hooks/settings/plugins or MCP configuration. It returns structured JSON
+file contents; the collector only parses that data and never executes model code.
 The controller downloads that run's bound artifact, independently revalidates
 the journal, contract, branch and scope, and creates a commit with a fixed parent.
 It never runs model code. The ordinary controller then creates the Draft PR,
