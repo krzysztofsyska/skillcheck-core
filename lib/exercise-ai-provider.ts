@@ -6,6 +6,7 @@ import {
 import { AiGatewayError, isAiGatewayEnabled } from './ai-gateway/contract.ts';
 import { defaultAiPolicy } from './ai-gateway/default-policy.ts';
 import { createAiGateway } from './ai-gateway/gateway.ts';
+import { createLedgerHook, type LedgerWriter } from './ai-gateway/ledger.ts';
 import { createOpenAiAdapter } from './ai-gateway/openai.ts';
 import type { AiRoutingPolicy } from './ai-gateway/policy.ts';
 import { attemptLogEntry, gatewayRequestFromResponsesBody, pinnedRouteModel } from './ai-gateway/responses-bridge.ts';
@@ -21,6 +22,11 @@ export type ExerciseGatewayTrust = {
   recruitmentId: string;
   /** canEdit && editable, as verified by exerciseContext. */
   mayGenerate: boolean;
+  /**
+   * SC-021-B: durable ledger write (public.record_exercise_ai_attempt with the recruiter's session,
+   * bound in the database to this generation reservation). Required on the gateway path.
+   */
+  recordAttempt: LedgerWriter;
 };
 
 /**
@@ -77,6 +83,8 @@ export function exerciseErrorFromGateway(error: unknown): ExerciseAiError {
   if (!(error instanceof AiGatewayError)) return new ExerciseAiError('exercise_ai_network_error', 'Provider unavailable');
   if (error.httpStatus !== undefined) return new ExerciseAiError(mapExerciseAiHttpError(error.httpStatus), 'Provider failed');
   switch (error.code) {
+    // SC-021-B: the attempt could not be recorded; the draft is not returned (the call may be billed).
+    case 'ledger_error': return new ExerciseAiError('exercise_ai_server_error', 'Provider unavailable');
     case 'timeout': return new ExerciseAiError('exercise_ai_timeout', 'Provider unavailable');
     case 'network_error': return new ExerciseAiError('exercise_ai_network_error', 'Provider unavailable');
     case 'invalid_response': return new ExerciseAiError('exercise_ai_invalid_output', 'Invalid response');
@@ -95,6 +103,7 @@ export async function requestExerciseDraftViaGateway(payload: ReturnType<typeof 
     throw new ExerciseAiError('exercise_ai_input_too_large', 'Provider request exceeds byte limit.');
   const policy = options.policy ?? defaultAiPolicy;
   const log = options.log ?? (entry => console.info(JSON.stringify(entry)));
+  const ledger = createLedgerHook(trust.recordAttempt);
   let body: unknown;
   try {
     const { model, request } = gatewayRequestFromResponsesBody(legacy);
@@ -107,6 +116,7 @@ export async function requestExerciseDraftViaGateway(payload: ReturnType<typeof 
         && ctx.companyId === trust.companyId && ctx.operationId === trust.operationId && ctx.processId === trust.recruitmentId,
       onAttempt: async record => {
         try { log(attemptLogEntry(record)); } catch { /* a log sink failure never fails the draft */ }
+        await ledger(record);
       },
     });
     body = (await gateway.runRaw({

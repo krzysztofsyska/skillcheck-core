@@ -79,6 +79,8 @@ export const AI_GATEWAY_ERROR_CODES = [
   'provider_inactive', 'payload_not_redacted', 'payload_too_large', 'invalid_request',
   'bad_request', 'auth_error', 'rate_limit', 'model_unavailable', 'server_error',
   'timeout', 'network_error', 'invalid_response', 'refusal', 'incomplete',
+  // SC-021-B: the attempt could not be recorded in the ledger (hook error or hook timeout).
+  'ledger_error',
 ] as const;
 export type AiGatewayErrorCode = typeof AI_GATEWAY_ERROR_CODES[number];
 

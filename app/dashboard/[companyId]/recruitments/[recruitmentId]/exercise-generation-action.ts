@@ -38,7 +38,13 @@ export async function generateExerciseProposal(companyId:string,recruitmentId:st
     },
     // Trusted context for the AI gateway path (used only when AI_GATEWAY_ENABLED=true): the company
     // whose membership exerciseContext verified, the validated request key and the recruitment.
-    provide:payload=>requestExerciseDraft(payload,key,fetch,{companyId,operationId:requestKey,recruitmentId,mayGenerate:canEdit&&editable}),
+    // SC-021-B: each physical attempt is written to the AI ledger with the recruiter's session; the
+    // database binds the row to this request key's live reservation and derives the company from it.
+    provide:payload=>requestExerciseDraft(payload,key,fetch,{companyId,operationId:requestKey,recruitmentId,mayGenerate:canEdit&&editable,
+      recordAttempt:async attempt=>{
+        const r=await client.rpc('record_exercise_ai_attempt',{target_company:companyId,target_recruitment:recruitmentId,attempt:attempt as unknown as Json});
+        if(r.error) throw Error('AI ledger unavailable');
+      }}),
   });
   if(result.exerciseId) revalidatePath(base,'layout');
   return result;

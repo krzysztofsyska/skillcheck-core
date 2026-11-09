@@ -19,13 +19,17 @@ async function run(options={}){
  const calls=[],rpc=[];const position={id:'position',updated_at:stamp,title:'Planista',tasks:['Plan'],required_competencies:['Planowanie'],kpis:[],required_behaviors:[]};
  const client={from:()=>({select(){return this;},eq(){return this;},maybeSingle:async()=>({data:null,error:null})}),rpc:async(name,args)=>{
   calls.push(name);rpc.push(args);if(options.rpcError)return {data:null,error:{code:options.rpcError,message:'private'}};
+  if(name==='record_exercise_ai_attempt'&&options.ledgerError)return {data:null,error:{code:'PT404',message:'private'}};
   return {error:null,data:name.startsWith('reserve')?{status:'reserved',claimed:options.claimed??true}:{status:'completed',exercise_id:'saved'}};
  }};
  const mod=load(base+'exercise-generation-action.ts',{'next/cache':{revalidatePath:()=>calls.push('revalidate')},
  '../../../../../lib/exercise-context':{exerciseUuid:/^[a-f0-9-]{36}$/i,exerciseContext:async()=>{calls.push('access');return {client,canEdit:options.canEdit??true,editable:true,position,base:'/exercises'};}},
  '../../../../../lib/exercise-ai':contract,'../../../../../lib/exercise-ai-generation':generation,
  '../../../../../lib/exercise-ai-provider':{requestExerciseDraft:async(payload,key,fetcher,trust)=>{assert.equal(key,'synthetic-only');calls.push('provider');
-  assert.equal(fetcher,fetch);assert.deepEqual(trust,{companyId,operationId:requestKey,recruitmentId,mayGenerate:true});assert.equal(payload.untrusted_company,null);return {definition:{kind:'competency_test',title:'Plan'}};}},
+  const {recordAttempt,...trusted}=trust;assert.equal(typeof recordAttempt,'function');
+  assert.equal(fetcher,fetch);assert.deepEqual(trusted,{companyId,operationId:requestKey,recruitmentId,mayGenerate:true});assert.equal(payload.untrusted_company,null);
+  if(options.ledger) await options.ledger(recordAttempt);
+  return {definition:{kind:'competency_test',title:'Plan'}};}},
  });
  const form=new FormData();if(options.confirm!==false)form.set('confirm','yes');
  try{return {result:await mod.generateExerciseProposal(companyId,recruitmentId,requestKey,options.stamp??stamp,null,{},form),calls,rpc};}
@@ -59,4 +63,12 @@ test('form preserves recovery key and rotates/reset only on an explicit confirme
  state={};r=render();assert.equal(r.wrapper.key,activeKey);assert.equal(r.nodes.find(n=>n.type==='fieldset').props.disabled,undefined);
  const consent=r.nodes.find(n=>n.type==='input');assert.equal(consent.props.defaultChecked,undefined);assert.equal(consent.props.checked,undefined);
  assert.deepEqual(bindings.at(-1).initial,{});assert.equal(r.nodes.some(n=>n.type==='button'&&n.props.type==='button'),false);
+});
+test('SC-021-B: the ledger writer records through the scoped RPC with the server-side company and recruitment only',async()=>{
+ const attempt={attempt_id:'dddddddd-1111-4222-8333-444444444444',operation_id:requestKey,company_id:companyId};
+ const r=await run({ledger:async write=>{await write(attempt);}});
+ assert.deepEqual(r.calls,['access','reserve_exercise_ai_generation','provider','record_exercise_ai_attempt','finish_exercise_ai_generation','revalidate']);
+ assert.deepEqual(r.rpc[1],{target_company:companyId,target_recruitment:recruitmentId,attempt});
+ let thrown;await run({ledgerError:true,ledger:async write=>{try{await write(attempt);}catch(error){thrown=error;}}});
+ assert.ok(thrown instanceof Error);assert.doesNotMatch(String(thrown.message),/private|PT404/);
 });

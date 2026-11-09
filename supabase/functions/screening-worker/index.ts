@@ -16,6 +16,23 @@ function env(name: string) {
   return Deno.env.get(name) ?? "";
 }
 
+// SC-021-B (AI gateway path only): bind the claimed attempt's company, read from the database as
+// screening_worker, so the gateway context and the ledger never take the tenant from the dispatch.
+function withClaimTenant(sql: ReturnType<typeof postgres>, store: ReturnType<typeof workerStore>) {
+  return {
+    ...store,
+    async claim(attemptId: string) {
+      const claimed = await store.claim(attemptId);
+      if (!claimed) return claimed;
+      const tenant = await sql.begin(async tx => {
+        await tx.unsafe("set local role screening_worker");
+        return await tx`select public.screening_attempt_tenant(${attemptId}::uuid) as company_id`;
+      });
+      return { ...claimed, company_id: tenant[0]?.company_id ?? null };
+    },
+  };
+}
+
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
     status,
@@ -125,14 +142,26 @@ function createRuntime() {
   const sql = postgres(env("SUPABASE_DB_URL"), { prepare: false, max: 1 });
   const apiKey = env("OPENAI_API_KEY");
   // SC-021-A2: off unless AI_GATEWAY_ENABLED is exactly "true"; off = the direct call below, unchanged.
-  const viaGateway = isAiGatewayEnabled(env("AI_GATEWAY_ENABLED"))
-    ? createScreeningGatewayCall({ apiKey, log: entry => console.log(JSON.stringify(entry)) })
+  const gatewayEnabled = isAiGatewayEnabled(env("AI_GATEWAY_ENABLED"));
+  const viaGateway = gatewayEnabled
+    ? createScreeningGatewayCall({
+      apiKey,
+      log: entry => console.log(JSON.stringify(entry)),
+      // SC-021-B: one durable ledger row per physical attempt, committed in its own transaction
+      // (it must survive a later failure of the analysis). Company is derived by the database.
+      recordAttempt: async payload => {
+        await sql.begin(async tx => {
+          await tx.unsafe("set local role screening_worker");
+          await tx`select public.record_screening_ai_attempt(${tx.json(payload)}::jsonb)`;
+        });
+      },
+    })
     : null;
   return {
     sql,
     runtime: {
       enabled: env("SCREENING_AI_ENABLED") === "true",
-      store: workerStore(sql),
+      store: gatewayEnabled ? withClaimTenant(sql, workerStore(sql)) : workerStore(sql),
       async callOpenAi(request: Parameters<typeof callOpenAiResponses>[1], claim: Parameters<NonNullable<typeof viaGateway>>[1]) {
         return viaGateway ? viaGateway(request, claim) : callOpenAiResponses(apiKey, request);
       },

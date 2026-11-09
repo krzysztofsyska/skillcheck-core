@@ -11,7 +11,9 @@ import { defaultAiPolicy } from '../lib/ai-gateway/default-policy.ts';
 const COMPANY = 'aaaaaaaa-1111-4222-8333-444444444444';
 const RECRUITMENT = 'bbbbbbbb-1111-4222-8333-444444444444';
 const REQUEST_KEY = 'cccccccc-1111-4222-8333-444444444444';
-const trust = { companyId: COMPANY, operationId: REQUEST_KEY, recruitmentId: RECRUITMENT, mayGenerate: true };
+const ledgerWrites = [];
+const trust = { companyId: COMPANY, operationId: REQUEST_KEY, recruitmentId: RECRUITMENT, mayGenerate: true,
+  recordAttempt: async p => { ledgerWrites.push(p); } };
 const position = { id: 'position', updated_at: '2026-11-07T00:00:00Z', title: 'Planista', tasks: ['Planowanie'],
   required_competencies: ['Planowanie'], kpis: [], required_behaviors: [], autonomy_level: 2 };
 // A company profile with a legitimate office phone and e-mail: drafts like this succeed today.
@@ -148,4 +150,27 @@ test('unknown gateway failures map to codes the recruiter already sees', () => {
   for (const code of ['unauthorized', 'invalid_context', 'route_disabled', 'no_available_model', 'invalid_request', 'payload_not_redacted']) {
     assert.equal(exerciseErrorFromGateway(new AiGatewayError(code)).code, 'exercise_ai_auth_error', code);
   }
+});
+
+test('SC-021-B: each physical attempt is written to the ledger with the trusted company and no profile text', async () => {
+  const writes = [];
+  const f = fakeFetch(() => Response.json({ id: 'resp_ex', status: 'completed', output_text: JSON.stringify(output),
+    usage: { input_tokens: 30, output_tokens: 9, input_tokens_details: { cached_tokens: 0 } } }));
+  await requestExerciseDraftViaGateway(payload, 'sk-secret', { ...trust, recordAttempt: async p => { writes.push(p); } }, { fetcher: f.impl, log: silent });
+  assert.equal(writes.length, 1);
+  assert.deepEqual([writes[0].company_id, writes[0].operation_id, writes[0].task, writes[0].billing, writes[0].input_tokens, writes[0].provider_request_id],
+    [COMPANY, REQUEST_KEY, 'exercise_generation', 'billed', 30, 'resp_ex']);
+  const text = JSON.stringify(writes);
+  for (const secret of ['Planista', 'Logistyka', 'hr@firma', 'sk-secret', 'Przygotuj plan']) assert.equal(text.includes(secret), false, secret);
+});
+
+test('SC-021-B: a draft whose attempt cannot be recorded is not returned, and the call is not repeated', async () => {
+  const f = fakeFetch(() => Response.json({ status: 'completed', output_text: JSON.stringify(output) }));
+  await assert.rejects(requestExerciseDraftViaGateway(payload, 'k', { ...trust, recordAttempt: async () => { throw new Error('PT404 Resource unavailable'); } },
+    { fetcher: f.impl, log: silent }), e => e.code === 'exercise_ai_server_error' && !String(e.message).includes('PT404'));
+  assert.equal(f.calls.length, 1);
+  assert.equal(exerciseErrorFromGateway(new AiGatewayError('ledger_error', 'maybe_billed')).code, 'exercise_ai_server_error');
+  const none = fakeFetch(() => Response.json({}));
+  await assert.rejects(requestExerciseDraftViaGateway(payload, 'k', { ...trust, recordAttempt: undefined }, { fetcher: none.impl, log: silent }));
+  assert.equal(none.calls.length, 0, 'no ledger writer, no provider call');
 });

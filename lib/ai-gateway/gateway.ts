@@ -15,11 +15,10 @@ import { resolveRoute, type AiRoutingPolicy, type ResolvedModel } from './policy
 /** Identity of the business operation. Built by trusted server code, never from browser JSON. */
 export type AiCallContext = {
   /**
-   * Tenant of the operation, from trusted server state. `null` only for `cv_screening`, whose trusted
-   * principal does not carry the tenant yet: the screening worker claim (SC-021-A2). SC-021-B binds the company into
-   * the claim before any per-company ledger or budget relies on it. Missing (`undefined`) is invalid.
+   * Tenant of the operation, from trusted server state (company membership; for screening the
+   * worker claim, which SC-021-B binds to the attempt's company). Always a UUID.
    */
-  companyId: string | null;
+  companyId: string;
   /** Stable across retries of one business operation (correlation ID). */
   operationId: string;
   task: AiTask;
@@ -30,7 +29,7 @@ export type AiCallContext = {
 export type AttemptRecord = {
   attemptId: string;
   operationId: string;
-  companyId: string | null;
+  companyId: string;
   task: AiTask;
   policyVersion: string;
   modelKey: string;
@@ -75,8 +74,10 @@ export type AiGatewayOptions = {
   /** Must prove the caller may act for ctx.companyId (membership, worker claim, …). Fail closed. */
   authorize: (ctx: AiCallContext) => Promise<boolean>;
   /**
-   * Ledger hook (SC-021-B). Required, so no physical attempt goes unrecorded. Awaited, bounded by
-   * ATTEMPT_HOOK_TIMEOUT_MS; if it throws or times out, the call fails instead of returning unrecorded work.
+   * Ledger hook (SC-021-B, `createLedgerHook`). Required, so no physical attempt goes unrecorded. Awaited,
+   * bounded by ATTEMPT_HOOK_TIMEOUT_MS; if it throws or times out, the call fails with `ledger_error`
+   * instead of returning unrecorded work. The error keeps the billing certainty of that attempt
+   * (an answered attempt that was not recorded is `maybe_billed`, never `not_billed`).
    */
   onAttempt: (record: AttemptRecord) => Promise<void>;
   now?: () => number;
@@ -98,9 +99,8 @@ function withDeadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error
 const BREAKER_CODES = new Set(['server_error', 'timeout', 'network_error', 'model_unavailable']);
 
 function assertContext(ctx: AiCallContext) {
-  // A null tenant is allowed only for the task whose trusted principal lacks it today (worker claim).
   if (!ctx || typeof ctx !== 'object'
-    || (ctx.companyId === null ? ctx.task !== 'cv_screening' : !UUID.test(ctx.companyId))
+    || typeof ctx.companyId !== 'string' || !UUID.test(ctx.companyId)
     || !UUID.test(ctx.operationId)
     || !isAiTask(ctx.task)
     || (ctx.processId != null && !UUID.test(ctx.processId))
@@ -166,8 +166,15 @@ export function createAiGateway(options: AiGatewayOptions) {
     failures.set(key, state);
   };
 
-  const recordAttempt = (r: AttemptRecord) =>
-    withDeadline(Promise.resolve().then(() => options.onAttempt(r)), ATTEMPT_HOOK_TIMEOUT_MS, () => new Error('SC021_ATTEMPT_HOOK_TIMEOUT'));
+  // Any hook failure, including SC021_ATTEMPT_HOOK_TIMEOUT, is `ledger_error`. An attempt the provider
+  // answered (or may have run) is never reported as not billed just because recording failed.
+  const recordAttempt = async (r: AttemptRecord) => {
+    try {
+      await withDeadline(Promise.resolve().then(() => options.onAttempt(r)), ATTEMPT_HOOK_TIMEOUT_MS, () => new Error('SC021_ATTEMPT_HOOK_TIMEOUT'));
+    } catch {
+      throw new AiGatewayError('ledger_error', r.billing === 'not_billed' ? 'not_billed' : 'maybe_billed');
+    }
+  };
 
   type Answered = { reply: ProviderReply; model: ResolvedModel; attemptId: string; attempt: number };
 
