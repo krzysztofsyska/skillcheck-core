@@ -11,6 +11,7 @@ import { assessConfiguration } from './configuration.mjs';
 import { flagsFromEnv, loadPolicy } from './policy.mjs';
 import { evaluatePreflight } from './merge.mjs';
 import { createCursorClient } from './cursor.mjs';
+import { createClaudeBuilderClient } from './claude-builder.mjs';
 import { createGitHubClient, createInstallationToken } from './github.mjs';
 import { assembleWork, cursorSnapshot } from './snapshot.mjs';
 
@@ -90,7 +91,7 @@ export async function reconcile({
 
 export async function reconcileFromEnv(env = process.env, overrides = {}) {
   const flags = overrides.flags ?? flagsFromEnv(env);
-  const configuration = overrides.configuration ?? assessConfiguration(env, flags);
+  const configuration = overrides.configuration ?? assessConfiguration(env, flags, overrides.policy ?? loadPolicy());
   const policy = overrides.policy ?? loadPolicy();
   if (flags.enabled && configuration.ok) {
     const missing = [];
@@ -217,13 +218,13 @@ async function loadWorkFromEnv(env, policy, flags, configuration, sharedGithub) 
   if (!token && !sharedGithub) { if (flags.enabled) throw new Error('BLOCKED_CONFIGURATION'); return { items: [], read: 'skipped-no-token' }; }
   const repository = env.GITHUB_REPOSITORY || env.AGENT_PIPELINE_REPOSITORY || policy.repository;
   const github = sharedGithub ?? createGitHubClient({ fetch: globalThis.fetch, token, repository, policy });
-  const cursor = env.CURSOR_API_KEY ? createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base }) : null;
+  const cursor = policy.builder_provider === 'claude-code' ? createClaudeBuilderClient({github, policy, policySha:env.AGENT_POLICY_COMMIT}) : env.CURSOR_API_KEY ? createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base }) : null;
   const work = await loadWorkFromClients({
     github,
     cursor,
     policy,
     now: new Date().toISOString(),
-    secrets: secretsFromEnv(env),
+    secrets: secretsFromEnv(env, policy),
     prompts: readPrompts(),
     policyCommit: env.AGENT_POLICY_COMMIT,
   });
@@ -279,7 +280,7 @@ export async function defaultPorts(env, policy, configuration, flags) {
     } },
   });
   const github = createGitHubClient({ fetch: globalThis.fetch, token, repository, policy });
-  const cursor = createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base });
+  const cursor = policy.builder_provider === 'claude-code' ? createClaudeBuilderClient({github, policy, policySha:env.AGENT_POLICY_COMMIT}) : createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base });
   return {
     github,
     async readProtection() {
@@ -304,6 +305,7 @@ export async function defaultPorts(env, policy, configuration, flags) {
         return normalizeCursorCreate(raw);
       }
       if (effect.type === 'cursor.followup') return normalizeCursorRun(await cursor.createRun(effect.agentId, effect.payload));
+      if (effect.type === 'cursor.publish') return cursor.publishRun(effect.agentId, effect.runId);
       if (effect.type === 'cursor.listRuns') return cursor.listRuns(effect.agentId);
       if (effect.type === 'github.createPr') return github.createPull({ head: effect.head, base: effect.base, title: effect.taskId, body: `${effect.marker}\nTASK: ${effect.taskId}\nSCOPE: ${effect.scope || 'OPERATIONS'}\nLEVEL: ${effect.level || 'L3'}\nOWNER_APPROVAL: PENDING\nPRODUCTION_APPROVAL: PENDING\nREVIEW_VERDICT: PENDING\nPROMOTION: ${effect.base === 'main' ? 'YES' : 'NO'}` });
       if (effect.type === 'github.dispatch') {
@@ -357,13 +359,14 @@ function normalizeCursorCreate(payload) {
 }
 
 function normalizeCursorRun(payload) {
+  if (payload?.pending) return {lost:true};
   const run = payload?.run ?? payload ?? {};
   return { run: run.id ? { id: run.id, status: run.status ?? null } : null, status: payload?.status ?? null };
 }
 
-function secretsFromEnv(env) {
+function secretsFromEnv(env, policy) {
   return {
-    cursor: Boolean(env.CURSOR_API_KEY),
+    cursor: policy.builder_provider === 'claude-code' || Boolean(env.CURSOR_API_KEY),
     openai: Boolean(env.OPENAI_API_KEY),
     githubApp: Boolean(env.AGENT_PIPELINE_APP_ID && env.AGENT_PIPELINE_APP_PRIVATE_KEY),
   };

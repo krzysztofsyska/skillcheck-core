@@ -8,6 +8,7 @@ import { buildNotification } from './notifications.mjs';
 import { block, newRecord, touch } from './record.mjs';
 import { validateReview } from './review.mjs';
 import { filesOutside } from './scope.mjs';
+import { builderConfiguration } from './claude-builder.mjs';
 
 const ACTIVE_RUN = new Set(['CREATING', 'RUNNING']);
 const TERMINAL_RUN = new Set(['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED']);
@@ -287,12 +288,32 @@ function dispatchStep(record, obs) {
   }
   const pre = touch(record, obs.now);
   pre.binding.dispatch = { ...dispatch, phase: 'awaiting_confirmation', started_at: obs.now };
+  if (obs.policy.builder_provider === 'claude-code') {
+    let config;
+    try { config=builderConfiguration(obs.policy); } catch(error) { return done(block(record,error.code,obs.now)); }
+    const requestId=sha256(dispatch.operationKey);
+    const reserved=pre.binding.builder_reservations??[];
+    if(!reserved.some(r=>r.request_id===requestId)) {
+      if(!Number.isFinite(obs.builderReservedUsd) || obs.builderReservedUsd+config.max_run_usd>config.max_total_usd) return done(block(record,'CLAUDE_BUDGET_EXHAUSTED',obs.now));
+      reserved.push({request_id:requestId,limit_usd:config.max_run_usd,at:obs.now});
+    }
+    pre.binding.builder_reservations=reserved;
+  }
   return { record: pre, preEffectRecord: pre, effects: [effect], journal: journalFor(pre, 'dispatch') };
 }
 
 function buildingStep(record, obs) {
   const run = currentRun(obs, record);
-  if (!run) return done(record);
+  if (!run) {
+    const started=Date.parse(record.binding.dispatch?.started_at ?? record.last_transition_at);
+    return Date.parse(obs.now)-started>=obs.policy.timeouts.build_ms ? done(block(record,'BUILD_TIMEOUT',obs.now)) : done(record);
+  }
+  if (!record.cursor_run_id) {
+    if (obs.policy.builder_provider === 'claude-code' && !run.operationVerified) return done(block(record,'BUILDER_RUN_UNTRUSTED',obs.now));
+    const next=touch(record,obs.now,{cursor_run_id:run.id});
+    next.binding.known_run_ids=[...new Set([...record.binding.known_run_ids,run.id])];
+    return done(next);
+  }
   if (ACTIVE_RUN.has(run.status)) {
     const started = Date.parse(run.createdAt || record.binding.dispatch?.started_at || obs.now);
     if (Date.parse(obs.now) - started >= obs.policy.timeouts.build_ms) return done(block(record, 'BUILD_TIMEOUT', obs.now));
@@ -302,6 +323,9 @@ function buildingStep(record, obs) {
     return done(block(record, run.status === 'EXPIRED' ? 'SESSION_EXPIRED' : 'CURSOR_RUN_FAILED', obs.now));
   }
   if (!TERMINAL_RUN.has(run.status) || run.status !== 'FINISHED') return done(record);
+  if (run.git?.pendingPublication && record.binding.builder_published_run_id !== run.id) {
+    return effect(touch(record, obs.now), [{type:'cursor.publish',external:true,agentId:record.cursor_agent_id,runId:run.id}]);
+  }
   if (record.cursor_run_id && obs.cursor?.agent?.latestRunId && obs.cursor.agent.latestRunId !== record.cursor_run_id) {
     return done(record);
   }
@@ -721,6 +745,10 @@ export function fold(record, effect, result, obs) {
   const now = obs.now;
   if (effect.type === 'cursor.create' || effect.type === 'cursor.get') return foldCursorCreate(record, effect, result, now);
   if (effect.type === 'cursor.followup') return foldFollowup(record, result, now);
+  if (effect.type === 'cursor.publish') {
+    if (!result?.commit || result.runId !== effect.runId) return block(record, result?.error?.code ?? 'BUILDER_PUBLICATION_UNKNOWN', now);
+    const next = touch(record, now); next.binding.builder_published_run_id = result.runId; return next;
+  }
   if (effect.type === 'cursor.listRuns') return foldListedRuns(record, result, now);
   if (effect.type === 'github.createPr') {
     if (result?.lost || result?.timeout) return record;
@@ -789,6 +817,7 @@ function settleCreate(record, result, now) {
     cursor_agent_id: record.cursor_agent_id,
     cursor_run_id: result.run?.id ?? null,
   });
+  next.binding.builder_operation = record.binding.dispatch?.operationKey;
   next.binding.dispatch = { phase: 'settled', action: 'create', started_at: now };
   if (result.run?.id) next.binding.known_run_ids = [...new Set([...record.binding.known_run_ids, result.run.id])];
   return next;
@@ -812,6 +841,7 @@ function foldFollowup(record, result, now) {
   if (!result?.run?.id) return block(record, 'DISPATCH_UNKNOWN', now, 'DISPATCH_UNKNOWN');
   const next = touch(record, now, { state: 'FIXING', technical_state: null, cursor_run_id: result.run.id, repair_round: record.repair_round + 1 });
   next.binding.known_run_ids = [...new Set([...record.binding.known_run_ids, result.run.id])];
+  next.binding.builder_operation = record.binding.dispatch?.operationKey;
   next.binding.dispatch = { phase: 'settled', action: 'followup' };
   return next;
 }
@@ -915,7 +945,7 @@ function shaDrift(record, obs) {
 function currentRun(obs, record) {
   const runs = obs.cursor?.runs ?? [];
   if (record.cursor_run_id) return runs.find(run => run.id === record.cursor_run_id) ?? null;
-  return runs[0] ?? null;
+  return runs.find(run=>run.id===obs.cursor?.agent?.latestRunId) ?? runs[0] ?? null;
 }
 
 function cursorBusy(obs) {

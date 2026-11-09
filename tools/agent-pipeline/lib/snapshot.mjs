@@ -1,4 +1,5 @@
 import { parseContract } from './contract.mjs';
+import { reservedBuilderBudget } from './claude-builder.mjs';
 
 export function assembleWork({ policy, policySha, now, secrets, prompts = null, snapshot }) {
   const integrationSha = snapshot.integrationSha ?? null;
@@ -51,6 +52,7 @@ function observe({ policy, policySha, now, secrets, prompts, snapshot, issue, re
   const approval = record?.approval_request_id ? snapshot.approvals?.[record.approval_request_id] ?? null : null;
   return {
     now,
+    builderReservedUsd: reservedBuilderBudget(Object.values(snapshot.records ?? {})),
     dependenciesReady: String(parseContract(issue?.body ?? '').depends_on ?? '').split(/[, ]+/).filter(x => x && x !== 'NONE').every(id => recordsDependency(snapshot, id)),
     kind: record?.binding?.lane === 'promotion' ? 'promotion' : 'task',
     simulation: false,
@@ -121,6 +123,7 @@ export function cursorSnapshot(agent, runsPayload) {
   const runs = listed.map(run => ({
     id: run.id,
     status: run.status,
+    operationVerified: run.operationVerified === true,
     result: run.result ?? null, git: run.git ?? null,
     createdAt: run.createdAt ?? run.created_at ?? null,
   })).filter(run => run.id);

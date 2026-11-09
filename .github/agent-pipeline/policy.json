@@ -110,5 +110,15 @@
   ],
   "controller_app_id": 5216184,
   "controller_actor_id": 338844913,
-  "integration_merge_policy": "verified_ci_review"
+  "integration_merge_policy": "verified_ci_review",
+  "builder_provider": "cursor",
+  "claude_builder": {
+    "enabled": false,
+    "cost_approved": false,
+    "workflow_id": null,
+    "workflow_path": ".github/workflows/claude-code-dispatch.yml",
+    "max_run_usd": 0,
+    "max_total_usd": 0,
+    "max_turns": 12
+  }
 }

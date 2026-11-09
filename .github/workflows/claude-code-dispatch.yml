@@ -1,67 +1,109 @@
 name: Claude Code task dispatcher
+run-name: sc-builder:${{ inputs.agent_id }}:${{ inputs.request_id }}
 on:
   workflow_dispatch:
     inputs:
-      task:
-        description: Approved issue number
+      request_id:
         required: true
-        type: choice
-        options: ['21', '81']
-  issues:
-    types: [labeled]
-
+        type: string
+      agent_id:
+        required: true
+        type: string
+      builder_packet:
+        required: true
+        type: string
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
-  actions: read
-  id-token: write
-
 concurrency:
-  group: claude-task-${{ github.event.issue.number || inputs.task }}
+  group: claude-builder-${{ inputs.agent_id }}
   cancel-in-progress: false
-
 jobs:
-  claude:
-    if: >-
-      github.repository == 'krzysztofsyska/skillcheck-core' &&
-      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-       (github.event_name == 'issues' && github.event.label.name == 'claude-code-ready' &&
-        (github.event.issue.number == 21 || github.event.issue.number == 81) &&
-        github.event.sender.login == 'krzysztofsyska'))
+  authorize:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && vars.AGENT_PIPELINE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    outputs:
+      allowed: ${{ steps.authorize.outputs.allowed }}
+      head_sha: ${{ steps.authorize.outputs.head_sha }}
+      max_turns: ${{ steps.authorize.outputs.max_turns }}
+      max_run_usd: ${{ steps.authorize.outputs.max_run_usd }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: authorize
+        run: node tools/agent-pipeline/authorize-builder.mjs
+        env:
+          BUILDER_PACKET: ${{ inputs.builder_packet }}
+          ACTOR_ID: ${{ github.actor_id }}
+          PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sc-builder-input
+          path: |
+            builder-packet.json
+            builder-prompt.txt
+  model:
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: claude-code-development
+    permissions:
+      contents: read
+      issues: read
+      actions: read
     steps:
-      - name: Require configured authentication
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: trusted
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.head_sha }}
+          persist-credentials: false
+          path: task
+      - uses: actions/download-artifact@v4
+        with:
+          name: sc-builder-input
+      - name: Check existing credential presence
         env:
           HAS_API: ${{ secrets.ANTHROPIC_API_KEY != '' }}
           HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
-        run: |
-          if [ "$HAS_API" != "true" ] && [ "$HAS_OAUTH" != "true" ]; then
-            echo "::error::Claude Code credential missing. Configure protected environment secret before running."
-            exit 1
-          fi
-      - name: Claude Code implement approved task
-        uses: anthropics/claude-code-action@v1
+        run: test "$HAS_API" = true || test "$HAS_OAUTH" = true
+      - name: Revalidate reservation after environment wait
+        run: node trusted/tools/agent-pipeline/authorize-builder.mjs
+        env:
+          BUILDER_PACKET: ${{ inputs.builder_packet }}
+          ACTOR_ID: ${{ github.actor_id }}
+          PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Isolated builder without a GitHub write credential
+        uses: anthropics/claude-code-action/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe
+        env:
+          CLAUDE_WORKING_DIR: ${{ github.workspace }}/task
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          base_branch: integration
-          additional_permissions: |
-            actions: read
-          prompt: |
-            Read AGENTS.md and CLAUDE.md on the trusted integration branch.
-            Implement ONLY the next unimplemented and dependency-ready stage of
-            GitHub issue #${{ github.event.issue.number || inputs.task }}.
-            Approved tasks: #21 SC-020 client-only white-label and #81 SC-021
-            provider-neutral gateway with OpenAI as the only active provider.
-            Check existing PRs and branches first, avoid duplication.
-            Create a task branch from integration; implement code, unit tests
-            and security tests, commit and prepare a draft PR to integration.
-            Never modify main, production, repo settings, secrets, DNS or
-            payment services. Do not contact candidates or incur new charges
-            outside existing approved credentials. Do not merge any PR.
-            Report commit SHA, CI and blockers to the issue.
-          claude_args: |
-            --max-turns 12
+          prompt_file: ${{ github.workspace }}/builder-prompt.txt
+          show_full_output: 'false'
+          claude_args: >-
+            --max-turns ${{ needs.authorize.outputs.max_turns }}
+            --max-budget-usd ${{ needs.authorize.outputs.max_run_usd }}
+            --tools Read,Edit,Write,Glob,Grep
+      - name: Collect file data only
+        run: node trusted/tools/agent-pipeline/collect-builder.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sc-agent-build
+          path: build-result.json
