@@ -4,7 +4,8 @@ import { controlPlane, assertPolicyExecution, assertControlEffect, workflowRef }
 import { findRun } from '../../tools/agent-pipeline/lib/evidence.mjs';
 import { createGitHubClient } from '../../tools/agent-pipeline/lib/github.mjs';
 import { loadWorkFromClients, reconcileFromEnv, defaultPorts } from '../../tools/agent-pipeline/lib/reconcile.mjs';
-import { guardedMerge } from '../../tools/agent-pipeline/lib/live-effects.mjs';
+import { guardedMerge, publishEvidence, drainOutbox, cancelStaleApprovals } from '../../tools/agent-pipeline/lib/live-effects.mjs';
+import { createMemoryJournal } from '../../tools/agent-pipeline/lib/controller.mjs';
 import { protectionFromRulesets } from '../../tools/agent-pipeline/lib/protection.mjs';
 import { evaluatePreflight, decideMerge } from '../../tools/agent-pipeline/lib/merge.mjs';
 import { plan } from '../../tools/agent-pipeline/lib/transitions.mjs';
@@ -141,6 +142,101 @@ test('a control branch move before an effect prevents dispatch', async () => {
     await assert.rejects(ports.execute({ type: 'github.dispatch', workflow: 'review', requestId: 'r' }), /POLICY_STALE/);
     assert.equal(w.calls.slice(before).some(c => c.method !== 'GET'), false);
   } finally { globalThis.fetch = original; }
+});
+
+test('a control move after loadWork blocks post-tick checks even when no effect is planned', async () => {
+  const w = httpWorld({ operational: true }); const original = globalThis.fetch;
+  globalThis.fetch = w.fetch;
+  const task = () => Object.values(w.projection()).find(r => r.task_id === 'SC-DEMO-001');
+  const completedReview = () => w.runs.find(r => r.path === w.policy.workflows.review
+    && w.artifacts[r.id]?.payload?.request_id === task()?.review_request_id
+    && w.artifacts[r.id]?.payload?.verdict === 'PASS');
+  try {
+    for (let i = 0; i < 60 && !completedReview(); i++) await reconcileFromEnv(w.env, { policy: w.policy });
+    assert.ok(completedReview(), 'repair and fresh review completed');
+    assert.equal(task().review_run_id, null, 'next tick adopts the review without a dispatch');
+    const before = w.checks.length;
+    let moved = false;
+    globalThis.fetch = async (url, options) => {
+      const response = await w.fetch(url, options);
+      if (!moved && new URL(url).pathname.endsWith('/branches/agent-control-runtime')) {
+        moved = true; w.branches['agent-control-runtime'] = MAIN;
+      }
+      return response;
+    };
+    await assert.rejects(reconcileFromEnv(w.env, { policy: w.policy }), /POLICY_STALE/);
+    assert.equal(moved, true);
+    assert.equal(w.checks.length, before, 'no stale CI/review publication');
+    assert.equal(w.mergeCount, 0);
+  } finally { globalThis.fetch = original; }
+});
+
+test('source revision is checked before each check, not once per publication batch', async () => {
+  let live = CONTROL;
+  const checks = [];
+  const github = {
+    async readBranch() { return { commit: { sha: live } }; },
+    async publishCheck(check) { checks.push(check); live = MAIN; },
+  };
+  const record = taskRecord({ review_request_id: 'r' });
+  await assert.rejects(publishEvidence(github, operational(), record, { ci: {}, review: {} }, CONTROL), /POLICY_STALE/);
+  assert.equal(checks.length, 1, 'the second check must not be published by the retired source');
+});
+
+test('outbox rechecks executing SHA after reads and never sends from a retired source', async () => {
+  for (const existingComment of [false, true]) {
+    let live = CONTROL;
+    const sent = [];
+    const record = taskRecord({ state: 'BLOCKED', issue_number: 7, policy_sha: MAIN });
+    const github = {
+      async readBranch() { return { commit: { sha: live } }; },
+      async readComments() {
+        live = MAIN;
+        return existingComment ? [{ id: 1, user: { id: operational().controller_actor_id }, body: `skillcheck-report:${record.task_id}` }] : [];
+      },
+      async comment(value) { sent.push(value); },
+      async updateComment(...value) { sent.push(value); },
+    };
+    await assert.rejects(drainOutbox({ github, journal: createMemoryJournal(), policy: operational(),
+      policySha: CONTROL, record, now: '2026-11-09T00:00:00Z' }), /POLICY_STALE/);
+    assert.deepEqual(sent, []);
+  }
+});
+
+test('a current executor can report stale task records without trusting their policy SHA', async () => {
+  const comments = [];
+  const github = {
+    async readBranch() { return { commit: { sha: CONTROL } }; },
+    async readComments() { return []; },
+    async comment(value) { comments.push(value); },
+  };
+  const record = taskRecord({ state: 'BLOCKED', issue_number: 7, policy_sha: MAIN });
+  const result = await drainOutbox({ github, journal: createMemoryJournal(), policy: operational(),
+    policySha: CONTROL, record, now: '2026-11-09T00:00:00Z' });
+  assert.equal(comments.length, 1);
+  assert.equal(result.binding.last_notified_state, 'BLOCKED');
+  await assert.rejects(drainOutbox({ github, journal: createMemoryJournal(), policy: operational(),
+    record, now: '2026-11-09T00:00:00Z' }), /POLICY_COMMIT_MISSING/);
+});
+
+test('stale approval cleanup rejects a source move before cancellation', async () => {
+  const policy = observation().policy;
+  let live = MAIN; const cancelled = [];
+  const record = taskRecord();
+  record.binding.stale_approvals = [{ gate: 'A', request_id: 'old', run_id: 30, policy_sha: BASE, cancel_attempts: 0 }];
+  const github = {
+    async readBranch() { return { commit: { sha: live } }; },
+    async readRun() {
+      live = CONTROL;
+      return { id: 30, workflow_id: policy.workflow_ids.accept, path: policy.workflows.accept,
+        event: 'workflow_dispatch', head_branch: 'main', head_sha: BASE,
+        actor: { id: policy.controller_actor_id }, display_title: 'sc-agent:old', run_attempt: 1, status: 'waiting' };
+    },
+    async cancelRun(id) { cancelled.push(id); },
+  };
+  await assert.rejects(cancelStaleApprovals({ github, journal: createMemoryJournal(), policy,
+    policySha: MAIN, record, now: '2026-11-09T00:00:00Z' }), /POLICY_STALE/);
+  assert.deepEqual(cancelled, []);
 });
 
 test('operational HTTP cycle builds, repairs, reviews, merges integration and advances without touching main', async () => {

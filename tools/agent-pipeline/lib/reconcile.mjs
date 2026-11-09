@@ -1,4 +1,4 @@
-import { controlPlane, integrationOnly, workflowRef, assertControlEffect } from './control-plane.mjs';
+import { controlPlane, integrationOnly, workflowRef, assertControlEffect, assertCurrentControlRevision } from './control-plane.mjs';
 import { preparePromotion } from './promotion.mjs';
 import { guardedMerge, publishEvidence, drainOutbox, cancelStaleApprovals } from './live-effects.mjs';
 import { readEvidence, readApprovals } from './evidence.mjs';
@@ -70,9 +70,11 @@ export async function reconcile({
     };
     const result = await tickImpl({ record: item.record ?? null, observation, journal, ports });
     if (flags.enabled && ports.github && result.record) {
-      result.record = await cancelStaleApprovals({ github: ports.github, journal, policy, record: result.record, now });
-      await publishEvidence(ports.github, policy, result.record, { ci: observation.github.ci, review: observation.github.review });
-      result.record = await drainOutbox({ github: ports.github, journal, policy, record: result.record, now });
+      const context = { github: ports.github, journal, policy, policySha: ports.policySha, now };
+      await assertCurrentControlRevision(context);
+      result.record = await cancelStaleApprovals({ ...context, record: result.record });
+      await publishEvidence(ports.github, policy, result.record, { ci: observation.github.ci, review: observation.github.review }, ports.policySha);
+      result.record = await drainOutbox({ ...context, record: result.record });
     }
     results.push(result);
   }
@@ -290,9 +292,11 @@ export async function defaultPorts(env, policy, configuration, flags) {
     } },
   });
   const github = createGitHubClient({ fetch: globalThis.fetch, token, repository, policy });
+  const policySha = env.AGENT_POLICY_COMMIT;
   const cursor = policy.builder_provider === 'claude-code' ? createClaudeBuilderClient({github, policy, policySha:env.AGENT_POLICY_COMMIT}) : createCursorClient({ fetch: globalThis.fetch, apiKey: env.CURSOR_API_KEY, baseUrl: policy.cursor_api_base });
   return {
     github,
+    policySha,
     async readProtection() {
       try {
         return await github.readProtection();
@@ -304,9 +308,7 @@ export async function defaultPorts(env, policy, configuration, flags) {
     async execute(effect) {
       assertControlEffect(policy, effect);
       // Revalidate the trusted control revision before any external effect.
-      if ((await github.readBranch(controlPlane(policy).branch)).commit?.sha !== env.AGENT_POLICY_COMMIT) {
-        throw new Error('POLICY_STALE');
-      }
+      await assertCurrentControlRevision({ github, policy, policySha });
       if (effect.type === 'cursor.create') {
         await github.createBranch(effect.branch, effect.baseSha);
         return normalizeCursorCreate(await cursor.createAgent(effect.payload));
@@ -326,7 +328,7 @@ export async function defaultPorts(env, policy, configuration, flags) {
       if (effect.type === 'github.dispatch') {
         return github.dispatch({ workflow: basename(policy.workflows[effect.workflow]), inputs: dispatchInputs(effect), ref: workflowRef(policy, effect.workflow) });
       }
-      if (effect.type === 'github.merge') return guardedMerge({ github, journal: this.journal, policy, flags, effect });
+      if (effect.type === 'github.merge') return guardedMerge({ github, journal: this.journal, policy, policySha, flags, effect });
       if (effect.type === 'notify') return { deferred: true }; // durable outbox after transition
       throw new Error(`unsupported effect ${effect.type}`);
     },

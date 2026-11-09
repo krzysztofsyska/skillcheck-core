@@ -28,9 +28,16 @@ export async function assertPolicyExecution({ policy, github, env, policySha = e
       || !SHA.test(policySha ?? '') || policySha !== env.GITHUB_SHA) {
     throw new Error('CONTROL_SOURCE_UNTRUSTED');
   }
-  const current = await github.readBranch(branch);
-  if (current?.commit?.sha !== policySha) throw new Error('POLICY_STALE');
+  await assertCurrentControlRevision({ policy, github, policySha });
   return policySha;
+}
+
+// policySha is the executing checkout's immutable revision, not a task record:
+// a current controller must still be able to report a stale task as blocked.
+export async function assertCurrentControlRevision({ policy, github, policySha }) {
+  if (!SHA.test(policySha ?? '')) throw new Error('POLICY_COMMIT_MISSING');
+  const current = await github.readBranch(controlPlane(policy).branch);
+  if (current?.commit?.sha !== policySha) throw new Error('POLICY_STALE');
 }
 
 export function isProductionRecord(record) {
