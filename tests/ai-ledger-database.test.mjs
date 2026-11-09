@@ -6,8 +6,9 @@ import { readFile } from 'node:fs/promises';
 import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
 import { lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
 import { createExerciseLedgerWriter } from '../lib/ai-ledger-writer.ts';
+import { EXERCISE_LEDGER_ROUTE } from '../lib/ai-gateway/ledger.ts';
 
-const migration = '20261109200000_sc021_ai_ledger.sql';
+const migration = '20261109210000_sc021_ai_ledger.sql';
 const r15 = '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44';
 const denied = (...codes) => error => codes.includes(error.code);
 const MODEL = 'gpt-5.4-mini-2026-03-17';
@@ -126,7 +127,7 @@ test('SC-021-B screening ledger: trusted tenant, idempotency, retries, status ma
     await h.asUser(role[1], role[0]);
     await assert.rejects(e.screening(attempt(opA, a.companyId)), denied('42501'));
     await assert.rejects(db.query('select public.screening_attempt_tenant($1)', [opA]), denied('42501'));
-    await assert.rejects(db.query('select ai_ledger.record_attempt($1,null,null,$2,$3::jsonb,true,true,16)',
+    await assert.rejects(db.query('select ai_ledger.record_attempt($1,null,null,$2,$3::jsonb,true,true,16,false)',
       [a.companyId, 'cv_screening', JSON.stringify(attempt(opA, a.companyId))]), denied('42501'));
     await assert.rejects(db.query('select * from ai_ledger.prices'), denied('42501'));
   }
@@ -173,6 +174,12 @@ test('SC-021-B exercise ledger: only the server writer role, bound to a live res
   const ex = (op, over = {}) => attempt(op, f.companyId, { task: 'exercise_generation', model_key: 'openai-exercise', provider_request_id: 'req_ex_1', ...over });
   const payload = ex(key);
 
+  // The allowlist row equals the code policy (also pinned without a database in tests/ai-ledger.test.mjs).
+  await h.asAdmin();
+  const [route] = (await db.query("select provider,model,model_revision,model_key,policy_version,max_attempts,max_input_tokens,max_output_tokens from ai_ledger.route_allowlist where task='exercise_generation'")).rows;
+  assert.deepEqual(route, EXERCISE_LEDGER_ROUTE);
+  assert.equal((await db.query('select count(*)::int n from ai_ledger.route_allowlist')).rows[0].n, 1);
+
   // No API role can execute it any more: not the recruiter's session, not anon, not the worker.
   for (const [role, id] of [['authenticated', users.recruiter], ['authenticated', users.owner], ['anon', null], ['screening_worker', null]]) {
     await h.asUser(id, role);
@@ -190,7 +197,7 @@ test('SC-021-B exercise ledger: only the server writer role, bound to a live res
   await assert.rejects(e.exercise(f, { ...payload, task: 'cv_screening' }), denied('22023'));
   // Allowlisted route entry only; tokens bounded by the route's request and output limits.
   for (const bad of [{ model: 'gpt-other' }, { model_key: 'openai-screening' }, { policy_version: 'forged-1' }, { provider: 'anthropic' },
-    { model_revision: 'r1' }, { input_tokens: 48001, cached_input_tokens: 0 }, { output_tokens: 4001 }, { input_tokens: 2147483647, cached_input_tokens: 0 }]) {
+    { model_revision: 'r1' }, { input_tokens: 2147483648, cached_input_tokens: 0 }, { output_tokens: -1 }]) {
     await assert.rejects(e.exercise(f, ex(key, bad)), denied('22023'), JSON.stringify(bad));
   }
 
@@ -227,16 +234,33 @@ test('SC-021-B exercise ledger: only the server writer role, bound to a live res
   await e.call('public.finish_exercise_ai_generation', [f.companyId, f.recruitment.id, after, fingerprint, null, null, 'exercise_ai_network_error']);
   await assert.rejects(e.exercise(f, ex(after)), denied('PT409'));
 
-  // A client-chosen request key cannot target a screening operation.
+  // Tokens above the route bounds: a real billed attempt is never dropped; it is recorded and flagged.
+  for (const over of [{ input_tokens: 48001, cached_input_tokens: 0 }, { output_tokens: 4001 }]) {
+    const k = randomUUID(); await reserve(k);
+    const r = await e.exercise(f, ex(k, over));
+    assert.equal(r.status, 'settled');
+    const [flagged] = await e.rows('operation_id=$1', [k]);
+    assert.equal(flagged.bounds_exceeded, true, JSON.stringify(over));
+  }
+  const [inBounds] = await e.rows('attempt_id=$1', [payload.attempt_id]);
+  assert.equal(inBounds.bounds_exceeded, false);
+
+  // A client-chosen request key cannot target a screening operation: refused at reservation,
+  // i.e. before any provider call (trigger on exercise_ai.recruitment_settings).
   const op = await e.screeningAttempt(f);
-  await reserve(op);
-  await assert.rejects(e.exercise(f, ex(op)), denied('PT409'));
+  await h.asUser(users.recruiter);
+  await assert.rejects(e.call('public.reserve_exercise_ai_generation', [f.companyId, f.recruitment.id, op, f.position.updated_at, stamp, fingerprint]),
+    denied('PT409'));
   await e.asWorker(); await e.screening(attempt(op, f.companyId));
+  await h.asUser(users.recruiter);
+  await assert.rejects(e.call('public.reserve_exercise_ai_generation', [f.companyId, f.recruitment.id, op, f.position.updated_at, stamp, fingerprint]),
+    denied('PT409'));
+  // The ledger function refuses it too (defence in depth), even without a reservation.
   await assert.rejects(e.exercise(f, ex(op)), denied('PT409'));
 
   // Reads stay tenant-scoped.
   await h.asUser(users.viewer);
-  assert.equal((await db.query("select count(*)::int n from ai_ledger.attempts where task='exercise_generation'")).rows[0].n, 2);
+  assert.equal((await db.query("select count(*)::int n from ai_ledger.attempts where task='exercise_generation'")).rows[0].n, 4);
   await h.asUser(users.otherOwner);
   assert.equal((await db.query('select count(*)::int n from ai_ledger.attempts')).rows[0].n, 0);
 });

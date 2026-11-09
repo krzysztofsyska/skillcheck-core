@@ -177,3 +177,11 @@ test('SC-021-B: a draft whose attempt cannot be recorded is not returned, and th
   }
   assert.equal(none.calls.length, 0, 'no ledger writer, no provider call');
 });
+
+test('SC-021-B: a policy the ledger would refuse is stopped before any provider call', async () => {
+  const other = validatePolicy({ ...JSON.parse(JSON.stringify(defaultAiPolicy)), version: 'sc021-unlisted' });
+  const f = fakeFetch(() => Response.json({ status: 'completed', output_text: JSON.stringify(output) }));
+  await assert.rejects(requestExerciseDraftViaGateway(payload, 'k', trust, { fetcher: f.impl, policy: other, log: silent }),
+    e => e.code === 'exercise_ai_auth_error');
+  assert.equal(f.calls.length, 0);
+});

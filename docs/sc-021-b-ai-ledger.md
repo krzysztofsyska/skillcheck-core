@@ -8,7 +8,7 @@ PRODUCTION_APPROVAL: NO (działa tylko przy `AI_GATEWAY_ENABLED=true`, które ni
 
 | element | rola |
 |---|---|
-| `supabase/migrations/20261109200000_sc021_ai_ledger.sql` | schemat `ai_ledger`: tabela prób `attempts`, cennik `prices`, funkcje zapisu |
+| `supabase/migrations/20261109210000_sc021_ai_ledger.sql` | schemat `ai_ledger`: tabela prób `attempts`, cennik `prices`, funkcje zapisu |
 | `lib/ai-gateway/ledger.ts` | hook `onAttempt` (`createLedgerHook`): jedna próba → jeden wiersz; błąd zapisu → `ledger_error` |
 | `lib/ai-gateway/gateway.ts` | każdy błąd lub przekroczenie czasu hooka (`SC021_ATTEMPT_HOOK_TIMEOUT`) → `ledger_error` z zachowaną informacją o naliczeniu |
 | `lib/screening-gateway.ts`, worker Edge | firma z bazy (`public.screening_attempt_tenant`) w claimie; zapis próby jako `screening_worker` |
@@ -50,13 +50,36 @@ Rejestr, cennik i lista dozwolonych tras są tylko dopisywane (wyzwalacz).
     o kluczu `operation_id` w statusie `reserved` z niewygasłym `expires_at`; ta sama blokada
     `exercise_ai:` co reserve/finish; dostawca, model, rewizja, klucz modelu i wersja polityki muszą być
     na liście `ai_ledger.route_allowlist`; tokeny ograniczone limitami trasy (wejście ≤ 48 000, wyjście
-    ≤ 4 000); maks. 1 wiersz na generację; klucz nie może być operacją screeningu ani innego zadania.
+    ≤ 4 000; powyżej — zapis z flagą `bounds_exceeded`); maks. 1 wiersz na generację; klucz nie może
+    być operacją screeningu ani innego zadania.
     Sesja rekrutera nie może wywołać tej funkcji (test).
   - `company_id` przesłany w danych jest tylko sprawdzany; niezgodność → odmowa.
 - **Warunek włączenia `AI_GATEWAY_ENABLED=true`** (krok operatora/właściciela, nie ta zmiana): utworzyć
   login `ai_ledger_<nazwa>` z hasłem, członkostwem wyłącznie w `ai_ledger_writer`, i ustawić
   `AI_LEDGER_DATABASE_URL` po stronie serwera. Bez tego, przy włączonej fladze, generowanie zadań
   odmawia przed rezerwacją i przed wywołaniem dostawcy („Rejestr kosztów AI jest niedostępny”).
+  Dokładne polecenia (na docelowej bazie; hasło generowane i przechowywane wyłącznie w magazynie sekretów):
+
+  ```sql
+  create role ai_ledger_<nazwa> login noinherit nocreatedb nocreaterole nobypassrls connection limit 5 password '...';
+  grant ai_ledger_writer to ai_ledger_<nazwa>;
+  ```
+
+  Login nie dostaje nic poza domyślnymi prawami roli PUBLIC (np. `USAGE` na schemacie `public` i
+  `EXECUTE` funkcji udostępnionych PUBLIC — w tym repozytorium nowe funkcje mają PUBLIC odebrane) oraz
+  prawem `SET ROLE ai_ledger_writer` (z `noinherit` nie korzysta z uprawnień roli bez jawnego
+  `set local role`, co robi `lib/ai-ledger-writer.ts`). Login nie może być członkiem żadnej innej roli.
+- **Limity czasu zapisu**: połączenie ≤ 3 s, każde polecenie ≤ 4 s. Gateway czeka na hook 10 s; zapis
+  już wysłany może zatwierdzić się później. Skutek: zarejestrowana próba i nieudany szkic
+  (`ledger_error`) — nigdy płatne wywołanie bez wpisu w rejestrze.
+- **Lista dozwolonych tras** (`ai_ledger.route_allowlist`) jest przypięta do kodu: test porównuje wiersz
+  migracji z `EXERCISE_LEDGER_ROUTE` (`lib/ai-gateway/ledger.ts`), z `defaultAiPolicy`
+  (dostawca, model, rewizja, klucz, wersja polityki, liczba prób) i z limitami żądania; ścieżka
+  generowania sprawdza zgodność polityki **przed** wywołaniem dostawcy. Tokeny ponad limity trasy nie
+  powodują odrzucenia płatnej próby: wiersz jest zapisany z flagą `bounds_exceeded = true`.
+- **Kolizja klucza rezerwacji**: klucz równy id próby screeningu (lub mający wiersze rejestru innego
+  zadania) jest odrzucany już przy `reserve_exercise_ai_generation` (wyzwalacz na
+  `exercise_ai.recruitment_settings`, poza `public`/`private`), czyli przed wywołaniem dostawcy.
 - **Odczyt**: RLS — członek firmy (właściciel, rekruter, przeglądający) widzi wyłącznie wiersze
   swojej firmy (`private.has_company_access`). `anon`: brak dostępu. Cennik i lista tras: brak dostępu.
 - Rdzeń `ai_ledger.record_attempt` nie jest dostępny dla nikogo poza właścicielem. Brak

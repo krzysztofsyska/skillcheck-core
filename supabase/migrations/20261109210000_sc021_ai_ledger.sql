@@ -38,8 +38,10 @@
 --     zgadzać się z rezerwacją generacji (exercise_ai.recruitment_settings.generation_requests
 --     [operation_id]), która musi mieć status 'reserved' i niewygasłe expires_at; ta sama blokada
 --     `exercise_ai:` co reserve/finish; dostawca, model, klucz modelu i wersja polityki z listy
---     dozwolonych (ai_ledger.route_allowlist); tokeny ograniczone limitami trasy; maks. tyle
---     wierszy na operację, ile prób ma trasa (1).
+--     dozwolonych (ai_ledger.route_allowlist); tokeny ponad limity trasy → wiersz z flagą
+--     bounds_exceeded (płatnej próby nie odrzucamy); maks. tyle wierszy na operację, ile prób ma
+--     trasa (1). Klucz rezerwacji kolidujący z operacją screeningu jest odrzucany już przy
+--     rezerwacji (wyzwalacz na exercise_ai.recruitment_settings).
 -- Identyfikator próby (`attempt_id`) NIE jest wysyłany do dostawcy: nagłówek
 -- x-client-request-id niesie osobny, losowy identyfikator, którego nigdzie nie zapisujemy.
 -- Kto czyta: członek firmy, wyłącznie wiersze swojej firmy (RLS, private.has_company_access).
@@ -164,6 +166,9 @@ create table ai_ledger.attempts (
   content_hash text not null check (content_hash ~ '^[0-9a-f]{64}$'),
   created_at timestamptz not null default clock_timestamp(),
   settled_at timestamptz,
+  -- Tokeny powyżej limitów trasy (lista dozwolonych). Próba i tak jest zapisana: płatnego wywołania
+  -- nigdy nie odrzucamy z rejestru; flaga sygnalizuje anomalię do sprawdzenia.
+  bounds_exceeded boolean not null default false,
   check ((input_tokens is null) = (cached_input_tokens is null) and (input_tokens is null) = (output_tokens is null)),
   check (cached_input_tokens is null or cached_input_tokens <= input_tokens),
   check ((billing = 'billed') = (outcome in ('completed', 'refused', 'incomplete'))),
@@ -243,7 +248,7 @@ $$;
 -- Wspólny zapis. Nie jest dostępny dla żadnej roli poza właścicielem; wołają go wyłącznie
 -- dwie funkcje public.record_*_ai_attempt, które ustalają firmę z zaufanego stanu bazy.
 create function ai_ledger.record_attempt(tenant uuid, process uuid, subject uuid, expected_task text,
-  payload jsonb, keep_request_id boolean, allow_new boolean, max_rows integer)
+  payload jsonb, keep_request_id boolean, allow_new boolean, max_rows integer, exceeded boolean)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   keys text[] := array['attempt_id','operation_id','company_id','task','attempt','provider','model','model_revision',
@@ -308,7 +313,7 @@ begin
   end if;
   v_request := case when keep_request_id then payload->>'provider_request_id' end;
 
-  normalized := jsonb_build_object('tenant', tenant, 'process', process, 'subject', subject)
+  normalized := jsonb_build_object('tenant', tenant, 'process', process, 'subject', subject, 'bounds_exceeded', exceeded)
     || (payload - 'provider_request_id') || jsonb_build_object('provider_request_id', v_request,
       'attempt_id', v_attempt, 'operation_id', v_operation, 'company_id', tenant);
   digest := encode(sha256(convert_to(normalized::text, 'UTF8')), 'hex');
@@ -348,13 +353,13 @@ begin
   insert into ai_ledger.attempts (attempt_id, operation_id, company_id, process_id, candidate_ref, task, attempt_no,
     provider, model, model_revision, model_key, policy_version, outcome, billing, status,
     input_tokens, cached_input_tokens, output_tokens, price_id, price_version, price_placeholder, currency,
-    cost_micros, provider_request_id, latency_ms, content_hash, settled_at)
+    cost_micros, provider_request_id, latency_ms, content_hash, settled_at, bounds_exceeded)
   values (v_attempt, v_operation, tenant, process, subject, expected_task, (payload->>'attempt')::integer,
     payload->>'provider', payload->>'model', payload->>'model_revision', payload->>'model_key', payload->>'policy_version',
     v_outcome, v_billing, v_status, v_in, v_cached, v_out,
     price.id, price.price_version, case when price.id is not null then price.placeholder end, price.currency,
     case when v_status = 'released' then 0 else cost end, v_request, (payload->>'latency_ms')::integer, digest,
-    case when v_status = 'settled' then clock_timestamp() end)
+    case when v_status = 'settled' then clock_timestamp() end, coalesce(exceeded, false))
   returning id into row_id;
   return jsonb_build_object('ledger_id', row_id, 'attempt_id', v_attempt, 'status', v_status,
     'cost_micros', case when v_status = 'released' then 0 else cost end, 'priced', price.id is not null,
@@ -376,7 +381,7 @@ begin
   join public.screening_analysis_versions v on v.id = t.analysis_id and v.company_id = t.company_id
   where t.id = (attempt->>'operation_id')::uuid;
   if tenant is null then raise exception 'Attempt unavailable' using errcode = '42501'; end if;
-  return ai_ledger.record_attempt(tenant, process, subject, 'cv_screening', attempt, false, true, 16);
+  return ai_ledger.record_attempt(tenant, process, subject, 'cv_screening', attempt, false, true, 16, false);
 end;
 $$;
 
@@ -396,7 +401,7 @@ $$;
 -- generacji o kluczu `operation_id`; nowe wiersze tylko gdy jest 'reserved' i nie wygasła.
 create function ai_ledger.record_exercise_attempt(target_company uuid, target_recruitment uuid, attempt jsonb)
 returns jsonb language plpgsql security definer set search_path = '' as $$
-declare op uuid; item jsonb; allowed ai_ledger.route_allowlist; live boolean;
+declare op uuid; item jsonb; allowed ai_ledger.route_allowlist; live boolean; exceeded boolean := false;
 begin
   if target_company is null or target_recruitment is null or jsonb_typeof(attempt) is distinct from 'object'
     or jsonb_typeof(attempt->'operation_id') is distinct from 'string'
@@ -421,17 +426,38 @@ begin
     and a.model_revision is not distinct from (attempt->>'model_revision')
     and a.model_key = attempt->>'model_key' and a.policy_version = attempt->>'policy_version';
   if not found then raise exception 'AI attempt route not allowed' using errcode = '22023'; end if;
-  if jsonb_typeof(attempt->'input_tokens') = 'number' and (
-      (attempt->>'input_tokens')::numeric > allowed.max_input_tokens
-      or jsonb_typeof(attempt->'output_tokens') is distinct from 'number'
-      or (attempt->>'output_tokens')::numeric > allowed.max_output_tokens) then
-    raise exception 'AI attempt tokens out of bounds' using errcode = '22023';
+  -- Tokeny ponad limity trasy: zapis z flagą bounds_exceeded (nigdy utrata płatnej próby).
+  -- Format i zakres liczb sprawdza ai_ledger.record_attempt.
+  if jsonb_typeof(attempt->'input_tokens') = 'number' and jsonb_typeof(attempt->'output_tokens') = 'number' then
+    exceeded := (attempt->>'input_tokens')::numeric > allowed.max_input_tokens
+      or (attempt->>'output_tokens')::numeric > allowed.max_output_tokens;
   end if;
   live := item->>'status' = 'reserved' and (item->>'expires_at')::timestamptz > clock_timestamp();
   return ai_ledger.record_attempt(target_company, target_recruitment, null, 'exercise_generation', attempt, true,
-    live, allowed.max_attempts);
+    live, allowed.max_attempts, exceeded);
 end;
 $$;
+
+-- Klucz rezerwacji generacji wybiera klient. Kolizja z operacją screeningu albo z wierszami rejestru
+-- innego zadania jest odrzucana już przy rezerwacji, czyli przed jakimkolwiek wywołaniem dostawcy.
+-- Wyzwalacz w schemacie exercise_ai (poza public/private): sygnatura SC-010 bez zmian.
+create function ai_ledger.reject_colliding_generation_key() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare k text;
+begin
+  for k in select key from jsonb_object_keys(new.generation_requests) key
+    where tg_op = 'INSERT' or not (old.generation_requests ? key) loop
+    if k ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' and (
+        exists (select 1 from public.screening_analysis_attempts where id = k::uuid)
+        or exists (select 1 from ai_ledger.attempts where operation_id = k::uuid and task <> 'exercise_generation')) then
+      raise exception 'Request key unavailable' using errcode = 'PT409';
+    end if;
+  end loop;
+  return new;
+end;
+$$;
+create trigger generation_key_not_colliding before insert or update of generation_requests on exercise_ai.recruitment_settings
+  for each row execute function ai_ledger.reject_colliding_generation_key();
 
 do $acl$
 declare o record; g record;
@@ -439,7 +465,8 @@ begin
   for o in select p.oid, p.proowner from pg_proc p where p.oid = any(array[
     'ai_ledger.price_for(text,text,text,timestamptz)'::regprocedure,
     'ai_ledger.cost_micros(ai_ledger.prices,integer,integer,integer)'::regprocedure,
-    'ai_ledger.record_attempt(uuid,uuid,uuid,text,jsonb,boolean,boolean,integer)'::regprocedure,
+    'ai_ledger.record_attempt(uuid,uuid,uuid,text,jsonb,boolean,boolean,integer,boolean)'::regprocedure,
+    'ai_ledger.reject_colliding_generation_key()'::regprocedure,
     'ai_ledger.append_only()'::regprocedure,
     'public.record_screening_ai_attempt(jsonb)'::regprocedure,
     'public.screening_attempt_tenant(uuid)'::regprocedure,

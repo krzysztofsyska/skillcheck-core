@@ -52,6 +52,9 @@ export function createExerciseLedgerWriter(connect: AiLedgerConnect, companyId: 
   };
 }
 
+// Timeouts: connect ≤ 3 s, each statement ≤ 4 s. The gateway stops waiting for the hook after 10 s,
+// but a write already in flight may still COMMIT afterwards. The outcome is then a recorded attempt
+// with a failed draft (ledger_error) — never an unrecorded paid call.
 let pool: Pool | undefined;
 
 /**
@@ -62,7 +65,7 @@ export function exerciseLedgerWriterFromEnv(companyId: string, recruitmentId: st
   const url = aiLedgerDatabaseUrl(process.env.AI_LEDGER_DATABASE_URL);
   if (!url) return null;
   const database = pool ??= new Pool({ connectionString: url, ssl: previewPoolTls, max: 2, maxUses: 100,
-    connectionTimeoutMillis: 6000, query_timeout: 8000, idleTimeoutMillis: 15000, allowExitOnIdle: true, options: '' })
+    connectionTimeoutMillis: 3000, query_timeout: 4000, idleTimeoutMillis: 15000, allowExitOnIdle: true, options: '' })
     .on('error', () => { /* pg discards a broken idle client; never log credentials */ });
   return createExerciseLedgerWriter(() => database.connect(), companyId, recruitmentId);
 }

@@ -148,3 +148,27 @@ test('ledger writer: one transaction as ai_ledger_writer, committed before resol
     assert.equal(exerciseLedgerWriterFromEnv(COMPANY, OP), null);
   } finally { if (saved === undefined) delete process.env.AI_LEDGER_DATABASE_URL; else process.env.AI_LEDGER_DATABASE_URL = saved; }
 });
+
+test('exercise ledger route is pinned: migration allowlist row = EXERCISE_LEDGER_ROUTE = default policy and request limits', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { EXERCISE_LEDGER_ROUTE } = await import('../lib/ai-gateway/ledger.ts');
+  const { defaultAiPolicy, DEFAULT_AI_POLICY_VERSION } = await import('../lib/ai-gateway/default-policy.ts');
+  const { resolveRoute } = await import('../lib/ai-gateway/policy.ts');
+  const { EXERCISE_AI_MAX_OUTPUT_TOKENS, EXERCISE_AI_MAX_REQUEST_BYTES } = await import('../lib/exercise-ai.ts');
+  const { exerciseRouteMatchesLedger } = await import('../lib/exercise-ai-provider.ts');
+  const sql = readFileSync(new URL('../supabase/migrations/20261109210000_sc021_ai_ledger.sql', import.meta.url), 'utf8');
+  const m = sql.match(/insert into ai_ledger\.route_allowlist \(task, provider, model, model_revision, model_key, policy_version,\s*max_attempts, max_input_tokens, max_output_tokens\)\s*values \('exercise_generation', '([^']+)', '([^']+)', null, '([^']+)', '([^']+)', (\d+), (\d+), (\d+)\);/);
+  assert.ok(m, 'allowlist insert found');
+  assert.equal((sql.match(/insert into ai_ledger\.route_allowlist/g) ?? []).length, 1);
+  assert.deepEqual({ provider: m[1], model: m[2], model_revision: null, model_key: m[3], policy_version: m[4],
+    max_attempts: Number(m[5]), max_input_tokens: Number(m[6]), max_output_tokens: Number(m[7]) }, { ...EXERCISE_LEDGER_ROUTE });
+  const { route, models: [model] } = resolveRoute(defaultAiPolicy, 'exercise_generation');
+  assert.deepEqual([model.provider, model.model, model.revision, model.key, DEFAULT_AI_POLICY_VERSION, route.maxAttempts],
+    [EXERCISE_LEDGER_ROUTE.provider, EXERCISE_LEDGER_ROUTE.model, EXERCISE_LEDGER_ROUTE.model_revision, EXERCISE_LEDGER_ROUTE.model_key,
+      EXERCISE_LEDGER_ROUTE.policy_version, EXERCISE_LEDGER_ROUTE.max_attempts]);
+  assert.equal(EXERCISE_LEDGER_ROUTE.max_output_tokens, EXERCISE_AI_MAX_OUTPUT_TOKENS);
+  assert.equal(EXERCISE_LEDGER_ROUTE.max_input_tokens, EXERCISE_AI_MAX_REQUEST_BYTES);
+  assert.equal(exerciseRouteMatchesLedger(defaultAiPolicy), true);
+  const other = validatePolicy({ ...JSON.parse(JSON.stringify(defaultAiPolicy)), version: 'sc021-next' });
+  assert.equal(exerciseRouteMatchesLedger(other), false);
+});

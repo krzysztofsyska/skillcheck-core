@@ -1,5 +1,5 @@
 // SC-021-B: durable ledger of physical AI attempts (`ai_ledger.attempts`, migration
-// 20261109200000_sc021_ai_ledger.sql). Server-only; bundled into the screening worker (Deno),
+// 20261109210000_sc021_ai_ledger.sql). Server-only; bundled into the screening worker (Deno),
 // so no Node-only APIs here.
 //
 // The hook never sends a prompt, CV text or provider body: only identifiers, model, outcome,
@@ -34,6 +34,23 @@ export type LedgerAttemptPayload = {
 export type LedgerWriter = (payload: LedgerAttemptPayload) => Promise<void>;
 
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Mirror of the `exercise_generation` row of `ai_ledger.route_allowlist` (migration
+ * 20261109210000_sc021_ai_ledger.sql). Tests pin it to that row, to defaultAiPolicy and to the
+ * exercise request limits; the exercise path compares its policy to it before any provider call,
+ * so a policy change that the database would refuse never reaches a paid call.
+ */
+export const EXERCISE_LEDGER_ROUTE = Object.freeze({
+  provider: 'openai',
+  model: 'gpt-5.4-mini-2026-03-17',
+  model_revision: null,
+  model_key: 'openai-exercise',
+  policy_version: 'sc021-a2-2026-11-09',
+  max_attempts: 1,
+  max_input_tokens: 48_000,
+  max_output_tokens: 4_000,
+} as const);
 
 export function ledgerPayload(record: AttemptRecord): LedgerAttemptPayload {
   return {

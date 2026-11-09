@@ -55,4 +55,4 @@
 20261109190000_sc020_brand_configuration.sql
 20261109200000_sc020_customer_domains.sql
 # SC-021-B: AI attempt ledger (ai_ledger schema, placeholder test rates only).
-20261109200000_sc021_ai_ledger.sql
+20261109210000_sc021_ai_ledger.sql
