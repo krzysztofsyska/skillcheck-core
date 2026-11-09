@@ -1,0 +1,39 @@
+name: Agent ruleset visibility probe
+
+on:
+  pull_request:
+    branches: [integration]
+    paths:
+      - .github/workflows/agent-ruleset-visibility.yml
+      - tools/agent-pipeline/probe-ruleset-visibility.mjs
+      - tests/agent-pipeline/ruleset-visibility-probe.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  visibility:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test probe contracts
+        run: node --test tests/agent-pipeline/ruleset-visibility-probe.test.mjs
+      - name: Observe current Actions token capability
+        run: node tools/agent-pipeline/probe-ruleset-visibility.mjs > ruleset-visibility.json
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROBE_TOKEN_SOURCE: github-actions-token
+      - name: Display capability observation (not protection authorization)
+        run: cat ruleset-visibility.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruleset-visibility-observation
+          path: ruleset-visibility.json
+          retention-days: 7
