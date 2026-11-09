@@ -2,12 +2,16 @@
  * SC-020-D — cykliczna ponowna weryfikacja DNS własnych domen (projekt + kod,
  * bez uruchomienia). Zadanie czyta listę domen, którym zbliża się termin
  * (tenant_domains.reverify_due), sprawdza rekord TXT i zapisuje wynik
- * (tenant_domains.record_scheduled_dns_check) — wyłącznie przez rolę
- * `tenant_domain_verifier`.
+ * (tenant_domains.record_scheduled_dns_check)
+ *
+ * — wyłącznie przez OSOBNĄ rolę `tenant_domain_reverifier` i osobny adres
+ * TENANT_DOMAIN_REVERIFY_DATABASE_URL, nigdy przez poświadczenie aplikacji
+ * webowej (`tenant_domain_verifier`), żeby jego wyciek nie pozwalał odnawiać
+ * domen bez właściciela.
  *
  * Fail closed: bez WHITE_LABEL (lib/white-label-flag.ts), bez
- * TENANT_DOMAIN_REVERIFY_ENABLED=true albo bez połączenia weryfikatora
- * (TENANT_DOMAIN_VERIFIER_DATABASE_URL) zadanie nic nie robi i zwraca
+ * TENANT_DOMAIN_REVERIFY_ENABLED=true albo bez połączenia
+ * (TENANT_DOMAIN_REVERIFY_DATABASE_URL) zadanie nic nie robi i zwraca
  * 'unconfigured'. Login roli, sekret i harmonogram (cron) to decyzja
  * operatora/właściciela; ten moduł ich nie tworzy.
  *
@@ -21,6 +25,8 @@ export type ReverifyTarget = { company_id: string; domain_id: string; hostname: 
 export interface ReverifyStore {
   due(limit: number): Promise<ReverifyTarget[]>;
   record(companyId: string, domainId: string, token: string, ok: boolean): Promise<string>;
+  /** Zamknięcie połączenia po przebiegu (jedna pula na cały przebieg). */
+  close?(): Promise<void>;
 }
 export type ReverifySummary = {
   status: 'done'; checked: number; renewed: number; failed: number; lapsed: number; unavailable: number; skipped: number; errors: number;
@@ -39,7 +45,19 @@ export async function reverifyDueDomains(
   deps: { store: ReverifyStore | null; dns: DnsTxtResolver; env: WhiteLabelEnvironment },
   options: { limit?: number; timeoutMs?: number } = {},
 ): Promise<ReverifyResult> {
-  if (!deps.store || !reverifyEnabled(deps.env)) return { status: 'unconfigured' };
+  if (!deps.store || !reverifyEnabled(deps.env)) {
+    await deps.store?.close?.();
+    return { status: 'unconfigured' };
+  }
+  try {
+    return await runPass(deps.store, deps.dns, options);
+  } finally {
+    await deps.store.close?.();
+  }
+}
+
+async function runPass(store: ReverifyStore, dns: DnsTxtResolver, options: { limit?: number; timeoutMs?: number }): Promise<ReverifySummary> {
+  const deps = { store, dns };
   const limit = Math.min(Math.max(Math.trunc(options.limit ?? 100), 1), 500);
   const summary: ReverifySummary = { status: 'done', checked: 0, renewed: 0, failed: 0, lapsed: 0, unavailable: 0, skipped: 0, errors: 0 };
   const targets = await deps.store.due(limit);

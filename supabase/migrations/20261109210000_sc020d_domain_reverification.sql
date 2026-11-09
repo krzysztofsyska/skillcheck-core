@@ -2,8 +2,14 @@
 --
 -- Dotąd właściciel firmy musiał co najmniej raz na `reverify_days` kliknąć
 -- „Sprawdź”; inaczej domena przestawała wskazywać firmę. Ta migracja dodaje
--- dwie funkcje dla roli `tenant_domain_verifier` (NOLOGIN), z których korzysta
--- zadanie cykliczne w lib/tenant-domain-reverify.ts:
+-- osobną rolę `tenant_domain_reverifier` (NOLOGIN) i dwie funkcje wyłącznie
+-- dla niej, z których korzysta zadanie cykliczne w lib/tenant-domain-reverify.ts.
+-- Osobna rola, a nie `tenant_domain_verifier`: tamtą rolą posługuje się serwer
+-- aplikacji po kliknięciu właściciela (record_dns_check wymaga identyfikatora
+-- właściciela). Gdyby te same dane logowania mogły też wypisać domeny wszystkich
+-- firm i odnowić je bez właściciela, wyciek poświadczenia aplikacji pozwalałby
+-- utrzymywać porzuconą domenę przy życiu. Zadanie cykliczne dostaje więc własną
+-- rolę i własny adres połączenia (TENANT_DOMAIN_REVERIFY_DATABASE_URL):
 --   * tenant_domains.reverify_due(max_rows) — lista własnych domen, którym
 --     zbliża się termin ponownej weryfikacji (host, token; nic więcej),
 --   * tenant_domains.record_scheduled_dns_check(...) — zapis wyniku. Może
@@ -12,6 +18,10 @@
 --     Nigdy nie weryfikuje domeny `pending`, nie włącza domeny, nie zmienia TLS
 --     i nie dotyka domen innych firm. Zdarzenia mają actor = NULL
 --     („automatycznie” w historii właściciela).
+--
+-- Kolejne niepowodzenia w oknie przed terminem nie zaśmiecają historii: wpis
+-- 'verification_failed' (automatyczny) zapisujemy, tylko gdy ostatni wpis tej
+-- domeny nie jest już takim samym wpisem.
 --
 -- Bez loginu dla roli, bez sekretu i bez harmonogramu: uruchomienie zadania
 -- (login roli, sekret, cron) to osobna decyzja operatora/właściciela. Bez tego
@@ -28,7 +38,7 @@ begin
   if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
     raise exception 'sc020d_source_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
   end if;
-  if to_regnamespace('tenant_domains') is null or to_regrole('tenant_domain_verifier') is null then
+  if to_regnamespace('tenant_domains') is null then
     raise exception 'sc020d_requires_sc020b' using errcode = '55000';
   end if;
   if to_regprocedure('tenant_domains.reverify_due(integer)') is not null then
@@ -36,6 +46,14 @@ begin
   end if;
 end
 $preflight$;
+
+do $role$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'tenant_domain_reverifier') then
+    create role tenant_domain_reverifier nologin nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+  end if;
+end
+$role$;
 
 -- Domeny do ponownego sprawdzenia: własne, zweryfikowane lub aktywne, których
 -- ostatnia udana weryfikacja jest starsza niż (reverify_days - 7) dni (co
@@ -75,7 +93,11 @@ begin
     perform tenant_domains.log(target_company, d.id, 'reverified', null);
     return d.status;
   end if;
-  perform tenant_domains.log(target_company, d.id, 'verification_failed', null);
+  if not exists (select 1 from (select e.action, e.actor from tenant_domains.events e
+                                 where e.company_id = target_company and e.domain_id = d.id order by e.id desc limit 1) last
+                  where last.action = 'verification_failed' and last.actor is null) then
+    perform tenant_domains.log(target_company, d.id, 'verification_failed', null);
+  end if;
   if not tenant_domains.fresh(d) then
     update tenant_domains.domains set status = 'pending', activated_at = null, tls_ready_at = null,
       pending_expires_at = clock_timestamp() + make_interval(days => cfg.pending_days) where id = d.id;
@@ -95,10 +117,12 @@ begin
     if exists (select 1 from pg_roles where rolname = 'anon') then execute format('revoke all on function %s from anon', fn); end if;
     if exists (select 1 from pg_roles where rolname = 'authenticated') then execute format('revoke all on function %s from authenticated', fn); end if;
     if exists (select 1 from pg_roles where rolname = 'service_role') then execute format('revoke all on function %s from service_role', fn); end if;
-    execute format('grant execute on function %s to tenant_domain_verifier', fn);
+    execute format('revoke all on function %s from tenant_domain_verifier', fn);
+    execute format('grant execute on function %s to tenant_domain_reverifier', fn);
   end loop;
 end
 $grants$;
+grant usage on schema tenant_domains to tenant_domain_reverifier;
 
 do $postflight$
 begin

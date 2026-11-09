@@ -70,4 +70,11 @@ test('scheduled re-verification: fail closed, outage writes nothing, renew/fail/
   assert.equal((await reverifyDueDomains({ store: failing, dns, env: on })).errors, 2, 'one failure does not stop the run');
   const skipping = { async due() { return rows.slice(0, 1); }, async record() { return 'skipped'; } };
   assert.equal((await reverifyDueDomains({ store: skipping, dns, env: on })).skipped, 1);
+  // The run's single connection is closed after the pass, after a failure and when unconfigured.
+  let closed = 0;
+  const closing = extra => ({ async due() { return rows.slice(0, 1); }, async record() { return 'active'; }, async close() { closed += 1; }, ...extra });
+  await reverifyDueDomains({ store: closing(), dns, env: on });
+  await assert.rejects(reverifyDueDomains({ store: closing({ async due() { throw new Error('db'); } }), dns, env: on }));
+  await reverifyDueDomains({ store: closing(), dns, env: {} });
+  assert.equal(closed, 3);
 });

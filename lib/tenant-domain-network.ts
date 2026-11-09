@@ -90,48 +90,76 @@ export const systemTlsChecker: TlsReadinessChecker = {
 };
 
 type VerifierRun = <T>(sql: string, params: unknown[]) => Promise<T>;
+type Environment = { readonly [key: string]: string | undefined };
 
-/**
- * Połączenie z rolą tenant_domain_verifier (osobne, krótkotrwałe).
- * TENANT_DOMAIN_VERIFIER_DATABASE_URL nieustawione lub błędne -> null
- * (weryfikacja niedostępna; nic nie omija tej roli). Login dla roli tworzy operator.
- */
-function verifierRunFromEnv(env: { readonly [key: string]: string | undefined }): VerifierRun | null {
-  const raw = env['TENANT_DOMAIN_VERIFIER_DATABASE_URL'];
+type DatabaseConfig = { raw: string; url: URL; loopback: boolean };
+
+/** Adres bazy z `variable`; null, gdy nieustawiony lub błędny (fail closed). */
+function databaseConfig(env: Environment, variable: string): DatabaseConfig | null {
+  const raw = env[variable];
   if (!raw) return null;
   let url: URL;
   try { url = new URL(raw); } catch { return null; }
   // Parametry w adresie (np. sslmode) nadpisałyby ustawienia TLS w pg — odrzucamy je.
   if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.search || url.hash || !url.hostname) return null;
-  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+  return { raw, url, loopback: ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) };
+}
+
+function databasePool(config: DatabaseConfig, singleUse: boolean) {
+  const pool = new Pool({
+    connectionString: config.raw,
+    // Loopback (tests, local dev) has no TLS; every remote database requires a verified certificate.
+    ssl: (config.loopback ? false : verifierDatabaseTls(config.url)) as { rejectUnauthorized: boolean },
+    max: 1, maxUses: singleUse ? 1 : Infinity, connectionTimeoutMillis: 5000, query_timeout: 10000, idleTimeoutMillis: 1000,
+    allowExitOnIdle: true, options: '-c statement_timeout=10000',
+  });
+  pool.on('error', () => {});
+  return pool;
+}
+
+/** Jedno zapytanie w transakcji z przełączeniem na `role` (rola bez dostępu do tabel). */
+function runAs(pool: Pool, role: 'tenant_domain_verifier' | 'tenant_domain_reverifier'): VerifierRun {
   return async <T>(sql: string, params: unknown[]): Promise<T> => {
-    const pool = new Pool({
-      connectionString: raw,
-      // Loopback (tests, local dev) has no TLS; every remote database requires a verified certificate.
-      ssl: (loopback ? false : verifierDatabaseTls(url)) as { rejectUnauthorized: boolean },
-      max: 1, maxUses: 1, connectionTimeoutMillis: 5000, query_timeout: 10000, idleTimeoutMillis: 1000,
-      allowExitOnIdle: true, options: '-c statement_timeout=10000',
-    });
-    pool.on('error', () => {});
     const client = await pool.connect();
+    let broken = false;
     try {
       await client.query('begin');
-      await client.query('set local role tenant_domain_verifier');
+      await client.query(`set local role ${role}`);
       const result = await client.query(sql, params);
       await client.query('commit');
       return result.rows as T;
     } catch (error) {
+      broken = true;
       await client.query('rollback').catch(() => {});
       throw error;
     } finally {
-      client.release(true);
+      // `set local role` ends with the transaction; a connection that failed is never reused.
+      client.release(broken);
+    }
+  };
+}
+
+/**
+ * Połączenie z rolą tenant_domain_verifier (osobne, krótkotrwałe: nowa pula na
+ * każde zapytanie, zamykana od razu). TENANT_DOMAIN_VERIFIER_DATABASE_URL
+ * nieustawione lub błędne -> null (weryfikacja niedostępna; nic nie omija tej
+ * roli). Login dla roli tworzy operator.
+ */
+function verifierRunFromEnv(env: Environment): VerifierRun | null {
+  const config = databaseConfig(env, 'TENANT_DOMAIN_VERIFIER_DATABASE_URL');
+  if (!config) return null;
+  return async <T>(sql: string, params: unknown[]): Promise<T> => {
+    const pool = databasePool(config, true);
+    try {
+      return await runAs(pool, 'tenant_domain_verifier')<T>(sql, params);
+    } finally {
       await pool.end().catch(() => {});
     }
   };
 }
 
 /** Magazyn weryfikacji zleconej przez właściciela (SC-020-B). */
-export function verifierStoreFromEnv(env: { readonly [key: string]: string | undefined } = process.env): VerifierStore | null {
+export function verifierStoreFromEnv(env: Environment = process.env): VerifierStore | null {
   const run = verifierRunFromEnv(env);
   if (!run) return null;
   return {
@@ -149,16 +177,26 @@ export function verifierStoreFromEnv(env: { readonly [key: string]: string | und
   };
 }
 
-/** SC-020-D: magazyn zadania cyklicznej weryfikacji (ta sama rola i to samo połączenie). */
-export function reverifyStoreFromEnv(env: { readonly [key: string]: string | undefined } = process.env): ReverifyStore | null {
-  const run = verifierRunFromEnv(env);
-  if (!run) return null;
+/**
+ * SC-020-D: magazyn zadania cyklicznej weryfikacji. OSOBNA rola
+ * `tenant_domain_reverifier` i OSOBNY adres TENANT_DOMAIN_REVERIFY_DATABASE_URL
+ * (nie poświadczenie aplikacji webowej). Jedna pula na cały przebieg; zamyka ją
+ * `close()` (wywołuje je reverifyDueDomains). Nieustawione -> null.
+ */
+export function reverifyStoreFromEnv(env: Environment = process.env): ReverifyStore | null {
+  const config = databaseConfig(env, 'TENANT_DOMAIN_REVERIFY_DATABASE_URL');
+  if (!config) return null;
+  const pool = databasePool(config, false);
+  const run = runAs(pool, 'tenant_domain_reverifier');
   return {
     async due(limit) {
       return run<ReverifyTarget[]>('select company_id::text, domain_id::text, hostname, verification_token from tenant_domains.reverify_due($1::integer)', [limit]);
     },
     async record(companyId, domainId, token, ok) {
       return (await run<{ r: string }[]>('select tenant_domains.record_scheduled_dns_check($1::uuid,$2::uuid,$3,$4) r', [companyId, domainId, token, ok]))[0].r;
+    },
+    async close() {
+      await pool.end().catch(() => {});
     },
   };
 }

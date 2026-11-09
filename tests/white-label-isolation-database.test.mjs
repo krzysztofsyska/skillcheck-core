@@ -21,9 +21,9 @@ const OWNER_RPCS = [
 const MEMBER_RPCS = ['public.brand_published(uuid)', 'public.brand_asset(uuid,uuid)'];
 const VERIFIER_FUNCTIONS = [
   'tenant_domains.verifier_target(uuid,uuid)', 'tenant_domains.record_dns_check(uuid,uuid,text,boolean,uuid)',
-  'tenant_domains.record_tls_check(uuid,uuid,text,boolean,uuid)', 'tenant_domains.reverify_due(integer)',
-  'tenant_domains.record_scheduled_dns_check(uuid,uuid,text,boolean)',
+  'tenant_domains.record_tls_check(uuid,uuid,text,boolean,uuid)',
 ];
+const REVERIFIER_FUNCTIONS = ['tenant_domains.reverify_due(integer)', 'tenant_domains.record_scheduled_dns_check(uuid,uuid,text,boolean)'];
 
 test('SC-020-D white-label isolation: grants, cross-tenant access, domains, rollback, scheduled re-verification', async t => {
   const e = await bootWhiteLabel(t);
@@ -39,7 +39,7 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
     assert.ok(tables.length >= 6);
     for (const table of tables) {
       assert.equal(table.relrowsecurity, true, `${table.nspname}.${table.relname} has RLS`);
-      for (const role of ['public', 'anon', 'authenticated', 'tenant_domain_verifier']) {
+      for (const role of ['public', 'anon', 'authenticated', 'tenant_domain_verifier', 'tenant_domain_reverifier']) {
         const grantee = role === 'public' ? 'anon' : role;
         assert.equal((await rows(`select has_table_privilege($1,$2,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') p`,
           [grantee, `${table.nspname}.${table.relname}`]))[0].p, false, `${role} on ${table.nspname}.${table.relname}`);
@@ -50,8 +50,10 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
         assert.equal((await rows("select has_schema_privilege($1,$2,'USAGE') u", [role, schema]))[0].u, false, `${role} usage ${schema}`);
       }
     }
-    assert.equal((await rows("select has_schema_privilege('tenant_domain_verifier','branding','USAGE') u"))[0].u, false);
-    // Functions inside the two schemas: nobody but the verifier (and only its five) may execute anything.
+    for (const role of ['tenant_domain_verifier', 'tenant_domain_reverifier']) {
+      assert.equal((await rows("select has_schema_privilege($1,'branding','USAGE') u", [role]))[0].u, false, role);
+    }
+    // Functions inside the two schemas: nobody but the two verifier roles, each only its own set, may execute anything.
     const internal = await rows(`select p.oid::regprocedure::text fn from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname in ('branding','tenant_domains')`);
     for (const { fn } of internal) {
@@ -60,8 +62,10 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
       }
       assert.equal((await rows("select has_function_privilege('tenant_domain_verifier',$1,'EXECUTE') x", [fn]))[0].x,
         VERIFIER_FUNCTIONS.includes(fn), `verifier ${fn}`);
+      assert.equal((await rows("select has_function_privilege('tenant_domain_reverifier',$1,'EXECUTE') x", [fn]))[0].x,
+        REVERIFIER_FUNCTIONS.includes(fn), `reverifier ${fn}`);
     }
-    for (const fn of VERIFIER_FUNCTIONS) assert.ok(internal.some(row => row.fn === fn), `${fn} exists`);
+    for (const fn of [...VERIFIER_FUNCTIONS, ...REVERIFIER_FUNCTIONS]) assert.ok(internal.some(row => row.fn === fn), `${fn} exists`);
     // The public entry points: exact allow-list per role, all SECURITY DEFINER with an empty search_path.
     const entry = await rows(`select p.oid::regprocedure::text fn, p.prosecdef, p.proconfig from pg_proc p
       where p.pronamespace='public'::regnamespace and (p.proname like 'brand\\_%' or p.proname like 'tenant\\_domain\\_%')`);
@@ -77,9 +81,14 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
       assert.equal(anon, fn === 'public.tenant_domain_resolve(text)', `anon ${fn}`);
       assert.equal(auth, true, `authenticated ${fn}`);
       assert.equal(verifier, false, `verifier ${fn}`);
+      assert.equal((await rows("select has_function_privilege('tenant_domain_reverifier',$1,'EXECUTE') x", [fn]))[0].x, false, `reverifier ${fn}`);
     }
-    const verifierRole = (await rows("select rolcanlogin, rolbypassrls, rolsuper, rolinherit from pg_roles where rolname='tenant_domain_verifier'"))[0];
-    assert.deepEqual(verifierRole, { rolcanlogin: false, rolbypassrls: false, rolsuper: false, rolinherit: false }, 'no login was created');
+    for (const role of ['tenant_domain_verifier', 'tenant_domain_reverifier']) {
+      const attributes = (await rows('select rolcanlogin, rolbypassrls, rolsuper, rolinherit, rolcreaterole, rolcreatedb from pg_roles where rolname=$1', [role]))[0];
+      assert.deepEqual(attributes, { rolcanlogin: false, rolbypassrls: false, rolsuper: false, rolinherit: false, rolcreaterole: false, rolcreatedb: false },
+        `${role}: no login was created`);
+      assert.equal((await rows("select count(*)::int n from pg_auth_members m join pg_roles r on r.oid=m.roleid where r.rolname=$1", [role]))[0].n, 0, `${role} granted to nobody`);
+    }
     // Storage: private bucket, only SELECT and INSERT policies (no overwrite, no delete), both scoped by company.
     const policies = await rows("select policyname, cmd, roles::text[] roles from pg_policies where schemaname='storage' and tablename='objects' order by 1");
     assert.deepEqual(policies, [
@@ -195,12 +204,19 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
     // A: due (25 of 30 days), B: fresh (not due).
     await db.query("update tenant_domains.domains set last_verified_at = clock_timestamp() - interval '25 days' where id=$1", [a1.id]);
     // API roles cannot list or record.
+    const reverifier = async () => { await db.exec('reset role'); await db.exec('set role tenant_domain_reverifier'); };
     for (const role of ['anon', 'authenticated']) {
       await h.asUser(users.owner, role);
       await assert.rejects(db.query('select * from tenant_domains.reverify_due(10)'), forbidden, role);
       await assert.rejects(db.query('select tenant_domains.record_scheduled_dns_check($1,$2,$3,true)', [a.companyId, a1.id, a1.verification_token]), forbidden, role);
     }
+    // The web app's verifier credential cannot list or renew without an owner; the scheduler cannot act as an owner.
     await e.verifier();
+    await assert.rejects(db.query('select * from tenant_domains.reverify_due(10)'), forbidden);
+    await assert.rejects(db.query('select tenant_domains.record_scheduled_dns_check($1,$2,$3,true)', [a.companyId, a1.id, a1.verification_token]), forbidden);
+    await reverifier();
+    await assert.rejects(db.query('select tenant_domains.record_dns_check($1,$2,$3,true,$4)', [a.companyId, a1.id, a1.verification_token, users.owner]), forbidden);
+    await assert.rejects(db.query('select * from tenant_domains.verifier_target($1,$2)', [a.companyId, a1.id]), forbidden);
     const due = await rows('select * from tenant_domains.reverify_due(10)');
     assert.deepEqual(due.map(d => d.hostname), ['kariera.firma-a.pl'], 'only the due custom domain; the pending stolen claim and fresh B are not listed');
     assert.deepEqual(Object.keys(due[0]).sort(), ['company_id', 'domain_id', 'hostname', 'verification_token']);
@@ -212,25 +228,26 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
     await h.asAdmin();
     const pending = (await rows("select * from tenant_domains.domains where status='pending' limit 1"))[0];
     assert.ok(pending, 'the conflicting claim stays pending');
-    await e.verifier();
+    await reverifier();
     assert.equal(await e.one('select tenant_domains.record_scheduled_dns_check($1,$2,$3,true)', [pending.company_id, pending.id, pending.verification_token]), 'skipped');
 
     // Through the real store (role switch over a loopback connection) and a fake DNS resolver.
     await h.asAdmin();
     const url = e.databaseUrl(e.name);
-    const store = reverifyStoreFromEnv({ TENANT_DOMAIN_VERIFIER_DATABASE_URL: url });
+    const store = () => reverifyStoreFromEnv({ TENANT_DOMAIN_REVERIFY_DATABASE_URL: url });
+    assert.equal(reverifyStoreFromEnv({ TENANT_DOMAIN_VERIFIER_DATABASE_URL: url }), null, 'never the web app credential');
     const record = token => [[`skillcheck-domain-verification=${token}`]];
     const on = { VERCEL_ENV: 'preview', TENANT_DOMAIN_REVERIFY_ENABLED: 'true' };
     // Fail closed when not configured.
-    assert.deepEqual(await reverifyDueDomains({ store, dns: { resolveTxt: async () => record(a1.verification_token) }, env: { VERCEL_ENV: 'preview' } }), { status: 'unconfigured' });
-    assert.deepEqual(await reverifyDueDomains({ store, dns: { resolveTxt: async () => [] }, env: { ...on, VERCEL_ENV: 'production' } }), { status: 'unconfigured' });
+    assert.deepEqual(await reverifyDueDomains({ store: store(), dns: { resolveTxt: async () => record(a1.verification_token) }, env: { VERCEL_ENV: 'preview' } }), { status: 'unconfigured' });
+    assert.deepEqual(await reverifyDueDomains({ store: store(), dns: { resolveTxt: async () => [] }, env: { ...on, VERCEL_ENV: 'production' } }), { status: 'unconfigured' });
     assert.deepEqual(await reverifyDueDomains({ store: reverifyStoreFromEnv({}), dns: { resolveTxt: async () => [] }, env: on }), { status: 'unconfigured' });
     // Resolver outage: nothing written.
-    const outage = await reverifyDueDomains({ store, dns: { resolveTxt: async () => { throw Object.assign(new Error('x'), { code: 'ETIMEOUT' }); } }, env: on });
+    const outage = await reverifyDueDomains({ store: store(), dns: { resolveTxt: async () => { throw Object.assign(new Error('x'), { code: 'ETIMEOUT' }); } }, env: on });
     assert.equal(outage.unavailable, 1);
     assert.equal(outage.renewed + outage.failed + outage.lapsed, 0);
     // Record present: renewed, no longer due, event by "automatic" (actor null).
-    const renewed = await reverifyDueDomains({ store, dns: { resolveTxt: async () => record(a1.verification_token) }, env: on });
+    const renewed = await reverifyDueDomains({ store: store(), dns: { resolveTxt: async () => record(a1.verification_token) }, env: on });
     assert.equal(renewed.renewed, 1);
     await h.asAdmin();
     const after = await domainOf('kariera.firma-a.pl');
@@ -238,14 +255,22 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
     assert.equal(after.status, 'active');
     const last = (await rows('select action, actor from tenant_domains.events where domain_id=$1 order by id desc limit 1', [a1.id]))[0];
     assert.deepEqual(last, { action: 'reverified', actor: null });
-    await e.verifier();
+    await reverifier();
     assert.equal((await rows('select * from tenant_domains.reverify_due(10)')).length, 0);
     // Record gone after the deadline: the domain lapses to pending and stops resolving; B is untouched.
     await h.asAdmin();
     await db.query("update tenant_domains.domains set last_verified_at = clock_timestamp() - interval '31 days' where id=$1", [a1.id]);
     assert.equal(await e.resolve('kariera.firma-a.pl'), null, 'a stale domain never resolves, even before the job runs');
     await h.asAdmin();
-    const lapsed = await reverifyDueDomains({ store, dns: { resolveTxt: async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); } }, env: on });
+    // Failures inside the warning window are logged once, not once per run.
+    await db.query("update tenant_domains.domains set last_verified_at = clock_timestamp() - interval '25 days' where id=$1", [a1.id]);
+    const missing = { resolveTxt: async () => { throw Object.assign(new Error('x'), { code: 'ENOTFOUND' }); } };
+    for (let run = 0; run < 3; run += 1) assert.equal((await reverifyDueDomains({ store: store(), dns: missing, env: on })).failed, 1);
+    await h.asAdmin();
+    assert.equal((await rows("select count(*)::int n from tenant_domains.events where domain_id=$1 and action='verification_failed' and actor is null", [a1.id]))[0].n, 1);
+    assert.equal((await domainOf('kariera.firma-a.pl')).status, 'active', 'still fresh: not lapsed yet');
+    await db.query("update tenant_domains.domains set last_verified_at = clock_timestamp() - interval '31 days' where id=$1", [a1.id]);
+    const lapsed = await reverifyDueDomains({ store: store(), dns: missing, env: on });
     assert.equal(lapsed.lapsed, 1);
     await h.asAdmin();
     assert.equal((await domainOf('kariera.firma-a.pl')).status, 'pending');
