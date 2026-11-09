@@ -85,7 +85,7 @@ test('on company A\'s domain only company A\'s panel is reachable', async () => 
   assert.deepEqual(tenantRoute(`/dashboard/${A}/positions/x`, A), { kind: 'continue' });
   assert.deepEqual(tenantRoute(`/dashboard/${B}`, A), { kind: 'not_found' });
   assert.deepEqual(tenantRoute(`/DASHBOARD/${B.toUpperCase()}/candidates`, A), { kind: 'not_found' });
-  assert.deepEqual(tenantRoute('/dashboard', A), { kind: 'redirect', location: `/dashboard/${A}` });
+  assert.deepEqual(tenantRoute('/dashboard', A), { kind: 'continue' }, 'company list (own company + logout) stays reachable');
   assert.deepEqual(tenantRoute('/onboarding', A), { kind: 'redirect', location: `/dashboard/${A}` });
   for (const path of ['/operator', '/operator/billing', '/Operator/x']) assert.deepEqual(tenantRoute(path, A), { kind: 'not_found' }, path);
   for (const path of ['/login', '/auth/callback', '/register', '/kup/preselekcja']) assert.deepEqual(tenantRoute(path, A), { kind: 'continue' }, path);
@@ -191,4 +191,51 @@ test('TLS check never connects to private or local addresses', () => {
   for (const address of ['10.0.0.1', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.168.1.1', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '224.0.0.1', '64:ff9b::7f00:1', '64:ff9b:1::1', '2002:7f00:1::1', 'fec0::1', '::7f00:1', '192.0.0.1', '::ffff:127.0.0.1', '2001:db8::1', '2001:0:4136:e378::1', '::ffff:0:7f00:1', 'not-an-ip'])
     assert.equal(isPublicAddress(address), false, address);
   for (const address of ['8.8.8.8', '76.76.21.21', '2606:4700::1111', '::ffff:8.8.8.8', '2a00:1450:4001:80b::200e']) assert.equal(isPublicAddress(address), true, address);
+});
+
+test('company list on a customer domain shows only that company and keeps the logout button', async () => {
+  const { default: ts } = await import('typescript');
+  const { createRequire, Module } = await import('node:module');
+  const { readFileSync } = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const React = (await import('react')).default;
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const nextPath = await import('../lib/safe-next-path.ts');
+  const load = tenant => {
+    const path = fileURLToPath(new URL('../app/dashboard/page.tsx', import.meta.url));
+    const mod = new Module(path); mod.filename = path;
+    mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
+    const require = createRequire(path);
+    const client = {
+      auth: { async getUser() { return { data: { user: { id: 'u1', email: 'a@b.pl' } } }; } },
+      from: () => ({ select: () => ({ order: async () => ({ data: [{ id: A, name: 'Firma A' }, { id: B, name: 'Firma B' }], error: null }) }) }),
+    };
+    const mocks = {
+      'next/navigation': { redirect(url) { const e = new Error('REDIRECT'); e.url = url; throw e; } },
+      'next/headers': { async headers() { return new Map(tenant ? [['x-skillcheck-tenant-company', tenant]] : []); } },
+      'next/link': { default: props => React.createElement('a', { href: props.href }, props.children) },
+      '../../lib/supabase/server': { async createClient() { return client; } },
+      '../../lib/safe-next-path': nextPath,
+      '../../lib/auth-url': { TENANT_COMPANY_HEADER: 'x-skillcheck-tenant-company' },
+      '../auth/actions': { logout() {} },
+      '../components/submit-button': { SubmitButton: props => React.createElement('button', null, props.children) },
+    };
+    mod.require = id => id in mocks ? mocks[id] : require(id);
+    mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+    }).outputText, path);
+    return mod.exports.default;
+  };
+  const render = async tenant => renderToStaticMarkup(await load(tenant)({ searchParams: Promise.resolve({}) }));
+  const onA = await render(A);
+  assert.match(onA, /Firma A/);
+  assert.doesNotMatch(onA, /Firma B/);
+  assert.match(onA, /Wyloguj się/);
+  const other = await render('33333333-3333-4333-8333-333333333333');
+  assert.doesNotMatch(other, /Firma A|Firma B/);
+  assert.match(other, /nie ma dostępu/);
+  assert.match(other, /Wyloguj się/);
+  const platform = await render(null);
+  assert.match(platform, /Firma A/);
+  assert.match(platform, /Firma B/);
 });

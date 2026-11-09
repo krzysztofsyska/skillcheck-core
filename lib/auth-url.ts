@@ -1,6 +1,6 @@
 import { safeNextPath } from './safe-next-path.ts';
 // SC-020-B: the trusted tenant-host header (set only by proxy.ts) for auth callbacks on customer domains.
-export { TENANT_HOST_HEADER, tenantOriginFromHeader } from './tenant-domains.ts';
+export { TENANT_COMPANY_HEADER, TENANT_HOST_HEADER, tenantOriginFromHeader } from './tenant-domains.ts';
 
 type AuthEnvironment = {
   NEXT_PUBLIC_SITE_URL?: string; VERCEL_ENV?: string; NODE_ENV?: string;

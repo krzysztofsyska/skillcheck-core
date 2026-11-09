@@ -83,8 +83,11 @@ test('proxy: host spoofing, tenant routing and safe fallback on a real server', 
   assert.equal((await get(port, `/dashboard/${B}/candidates`, a)).status, 404);
   assert.equal((await get(port, '/operator/billing', a)).status, 404);
   const home = await get(port, '/dashboard', a);
-  assert.equal(home.status, 307);
-  assert.match(home.headers.location, new RegExp(`/dashboard/${A}$`));
+  assert.equal(home.status, 307, 'company list (with logout) still needs a session');
+  assert.match(home.headers.location, /\/login$/);
+  const onboarding = await get(port, '/onboarding', a);
+  assert.equal(onboarding.status, 307);
+  assert.match(onboarding.headers.location, new RegExp(`/dashboard/${A}$`));
   const own = await get(port, `/dashboard/${A}`, a);
   assert.equal(own.status, 307, 'own panel still needs a session');
   assert.match(own.headers.location, /\/login$/);

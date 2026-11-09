@@ -174,6 +174,8 @@ function loadDashboard(companies) {
     'next/link': { default: () => null },
     '../../lib/supabase/server': { async createClient() { return client; } },
     '../../lib/safe-next-path': nextPath,
+    'next/headers': { async headers() { return new Map(); } },
+    '../../lib/auth-url': { TENANT_COMPANY_HEADER: 'x-skillcheck-tenant-company' },
     '../auth/actions': { logout() {} },
     '../components/submit-button': { SubmitButton: () => null },
   };

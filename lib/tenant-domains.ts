@@ -183,8 +183,9 @@ export function tenantDomainsEnabled(env: { readonly [key: string]: string | und
 export type TenantRoute = { kind: 'continue' } | { kind: 'not_found' } | { kind: 'redirect'; location: string };
 
 /**
- * Na domenie firmy X dostępny jest tylko panel firmy X. Panel operatora,
- * zakładanie nowej firmy i panel innej firmy — nie. To druga warstwa obok
+ * Na domenie firmy X dostępny jest tylko panel firmy X (i lista firm z samą
+ * firmą X oraz wylogowaniem). Panel operatora, zakładanie nowej firmy i panel
+ * innej firmy — nie. To druga warstwa obok
  * ciasteczek przypisanych do hosta i RLS.
  */
 export function tenantRoute(pathname: string, tenantCompanyId: string): TenantRoute {
@@ -193,7 +194,7 @@ export function tenantRoute(pathname: string, tenantCompanyId: string): TenantRo
   const path = pathname.toLowerCase();
   if (path === '/operator' || path.startsWith('/operator/')) return { kind: 'not_found' };
   if (path === '/onboarding' || path.startsWith('/onboarding/')) return { kind: 'redirect', location: home };
-  if (path === '/dashboard' || path === '/dashboard/') return { kind: 'redirect', location: home };
+  // '/dashboard' stays reachable (it lists only this company and holds the logout button).
   if (path.startsWith('/dashboard/')) {
     const segment = path.slice('/dashboard/'.length).split('/')[0];
     if (segment !== tenantCompanyId.toLowerCase()) return { kind: 'not_found' };
