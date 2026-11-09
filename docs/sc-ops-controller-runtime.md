@@ -56,6 +56,11 @@ runtime descriptor is a new immutable installation candidate, with new CI and
 independent review. Copying an old PASS to the new SHA is not permitted.
 Runtime branch updates require their own controlled installation; normal tasks
 still merge only to `integration`, and cannot update their own executor.
+That installer/updater is not implemented: the integration-only executor cannot
+emit `sc-agent/integration-ready` for a runtime-branch merge. The configuration
+fragment above is not an autonomous installation/update procedure. Do not
+activate it until an independently reviewed installation path satisfies these
+protections; do not remove checks or add a bypass to resolve this dependency.
 
 The existing preflight requires:
 

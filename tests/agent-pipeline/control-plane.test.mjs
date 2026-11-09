@@ -219,6 +219,49 @@ test('a current executor can report stale task records without trusting their po
     record, now: '2026-11-09T00:00:00Z' }), /POLICY_COMMIT_MISSING/);
 });
 
+test('a rejected outbox guard preserves delivery for the next controller revision', async () => {
+  for (const moveDuring of ['read', 'intent']) {
+    for (const update of [false, true]) {
+      const policy = operational(); let live = CONTROL; let moved = false;
+      const record = taskRecord({ state: 'BLOCKED', issue_number: 7, policy_sha: CONTROL });
+      const stored = createMemoryJournal();
+      const comments = update ? [{ id: 1, user: { id: policy.controller_actor_id }, body: `skillcheck-report:${record.task_id}` }] : [];
+      const writes = [];
+      const journal = {
+        async save(next, entry, expected) {
+          assert.deepEqual(stored.load(next.task_id), expected, 'compensation must retain the expected journal revision');
+          await stored.save(next, entry);
+          if (!moved && moveDuring === 'intent' && entry.action === 'outbox-send') {
+            moved = true; live = MAIN;
+          }
+        },
+      };
+      await stored.save(record, { action: 'fixture' });
+      const github = {
+        async readBranch() { return { commit: { sha: live } }; },
+        async readComments() {
+          if (!moved && moveDuring === 'read') { moved = true; live = MAIN; }
+          return comments;
+        },
+        async comment(value) {
+          writes.push(value); comments.push({ id: 1, user: { id: policy.controller_actor_id }, body: value.body });
+        },
+        async updateComment(id, body) { writes.push({ id, body }); comments[0].body = body; },
+      };
+      const args = { github, journal, policy, now: '2026-11-09T00:00:00Z' };
+      await assert.rejects(drainOutbox({ ...args, policySha: CONTROL, record }), /POLICY_STALE/);
+      assert.equal(writes.length, 0, `${moveDuring}: retired source did not send`);
+      assert.notEqual(stored.load(record.task_id).binding.pending_notification.delivery_phase, 'unknown');
+      let current = stored.load(record.task_id);
+      for (let i = 0; i < 4; i++) current = await drainOutbox({ ...args, policySha: MAIN, record: current });
+      assert.equal(writes.length, 1, `${moveDuring}: current source sends exactly once`);
+      assert.equal(current.binding.pending_notification, null);
+      assert.equal(current.binding.last_notified_state, 'BLOCKED');
+      assert.equal(current.binding.reports.some(r => r.kind === 'NOTIFICATION_UNCONFIRMED'), false);
+    }
+  }
+});
+
 test('stale approval cleanup rejects a source move before cancellation', async () => {
   const policy = observation().policy;
   let live = MAIN; const cancelled = [];

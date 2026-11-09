@@ -169,13 +169,23 @@ export async function drainOutbox({ github, journal, policy, policySha, record, 
     return next;
   }
   if (!delivered) {
+    await assertCurrentControlRevision({ github, policy, policySha });
     const next = touch(record, now); next.binding.pending_notification.delivery_phase = 'unknown';
     await journal.save(next, { action: 'outbox-send' }, record); record = next;
     const scope = record.binding.approval?.canonical ?? record.binding.auto_integration ?? null;
     const digest = record.binding.approval?.digest ?? record.binding.auto_integration?.review_digest ?? 'none';
     const body = `${marker}\n${pending.body}\naction: ${runUrl || pending.action_url || ''}\n\nApproval scope (immutable digest ${digest}):\n${JSON.stringify(scope, null, 2)}\n`;
-    // Keep source rejection outside the delivery catch: no send was attempted.
-    await assertCurrentControlRevision({ github, policy, policySha });
+    // Persist the intent before sending, then recheck because the control ref
+    // can move during that write. A rejected guard proves no send was attempted;
+    // preserve retryability under the same journal CAS/lock before propagating.
+    try {
+      await assertCurrentControlRevision({ github, policy, policySha });
+    } catch (error) {
+      const retry = touch(record, now);
+      retry.binding.pending_notification.delivery_phase = 'retry';
+      await journal.save(retry, { action: 'outbox-send-not-attempted' }, record);
+      throw error;
+    }
     try {
       if (matches[0]) await github.updateComment(matches[0].id, body);
       else await github.comment({ issueNumber: record.issue_number, body });
