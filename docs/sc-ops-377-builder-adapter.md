@@ -15,7 +15,10 @@ controller App actor, first attempt, exact trusted main policy SHA, approved iss
 contract hash, reserved operation and branch/head. A model job has no GitHub write
 credential, App key, reviewer key or production secret. It can return file data.
 The model can only Read/Glob/Grep an exported data directory without Git metadata,
-agent hooks/settings/plugins or MCP configuration. It returns structured JSON
+agent hooks/settings/plugins or MCP configuration. Project/local settings are
+disabled; only trusted action user settings on the fresh hosted runner are loaded.
+The explicit tool list excludes writes and shell execution; strict empty MCP
+excludes additional server tools. It returns structured JSON
 file contents; the collector only parses that data and never executes model code.
 The collector receives the small `execution_file` path, reads the pinned action's
 JSON message array and selects only a successful final `structured_output`.

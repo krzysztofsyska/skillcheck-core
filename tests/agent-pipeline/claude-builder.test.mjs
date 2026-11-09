@@ -111,7 +111,7 @@ test('model workflow has no GitHub write token and no direct label scheduler',()
  const file='.github/workflows/claude-code-dispatch.yml';const r=spawnSync('python3',['-c','import json,yaml,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))',file],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);
  const w=JSON.parse(r.stdout);assert.deepEqual(w.jobs.model.permissions,{contents:'read',issues:'read',actions:'read'});
  const source=readFileSync(file,'utf8');assert.equal(source.includes('id-token: write'),false);assert.equal(source.includes('APP_PRIVATE_KEY'),false);assert.equal(source.includes('issues:\n    types'),false);
- assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.execution_file/);assert.match(source,/--setting-sources ""/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
+ assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.execution_file/);assert.match(source,/--setting-sources user/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
  assert.equal(parseContract('TASK: SC-020\nOWNER: Claude Code\nSTATUS: READY').ready,false);
 });
 
