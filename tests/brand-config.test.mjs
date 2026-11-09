@@ -146,6 +146,43 @@ test('svg with script, foreignObject, handlers, external references or parser tr
   assert.deepEqual(svgProblems('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M0 0"/></svg>'), []);
 });
 
+test('review SC-020-A #1: namespace prefixes, CSS escapes and entities cannot bypass the SVG filter', () => {
+  const raw = text => new TextEncoder().encode(text);
+  const bypasses = [
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"><s:script>alert(document.domain)</s:script></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"><s:foreignObject><p>x</p></s:foreignObject></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg" xmlns:l="http://www.w3.org/1999/xlink"><s:image l:href="https://evil.example/t.png"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>@\\69mport "https://evil.example/x.css";</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:\\75rl(https://evil.example/a)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><h:iframe xmlns:h="http://www.w3.org/1999/xhtml" src="https://evil.example"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>@&#105;mport url(x)</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>@media print{rect{fill:red}}</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect style="x:1;@import"/></svg>',
+    '<svg xmlns="http://www.w3.org/1999/xhtml"><rect/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="https://evil.example/ns"><rect/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect ev:event="click"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><marquee/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><text>&nbsp;</text></svg>',
+  ];
+  for (const source of bypasses) {
+    const result = validateBrandAsset(raw(source), 'logo');
+    assert.equal(result.ok, false, source);
+    assert.match(result.error, /SVG odrzucony/);
+  }
+  const allowed = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10">'
+    + '<defs><linearGradient id="g"><stop offset="0" stop-color="#123456"/></linearGradient></defs>'
+    + '<style>.a{fill:url(#g)}</style><g class="a"><path d="M0 0L10 10"/><text xml:space="preserve">A &amp; B</text></g></svg>';
+  assert.ok(validateBrandAsset(raw(allowed), 'logo').ok, 'a typical static logo stays accepted');
+});
+
+test('TS and SQL text rules agree: code points for length, C1 controls rejected, link contrast 4.5:1', () => {
+  assert.ok(parseBrandConfig(config({ brandName: '🚀'.repeat(80) })).ok, '80 code points fit, as in PostgreSQL length()');
+  assert.equal(parseBrandConfig(config({ brandName: '🚀'.repeat(81) })).ok, false);
+  assert.match(parseBrandConfig(config({ brandName: 'Acme\u0085' })).error, /niedozwolone znaki/);
+  const weakLink = parseBrandConfig(config({ colors: { ...DEFAULT_BRAND_CONFIG.colors, primary: '#888888', onPrimary: '#000000' } }));
+  assert.match(weakLink.error, /Kolor główny na tle/);
+});
+
 test('object path matches the storage policy shape and refuses traversal', () => {
   const company = '11111111-2222-4333-8444-555555555555', object = '66666666-7777-4888-8999-000000000000';
   assert.equal(brandObjectPath(company, 'logo', object, 'svg'), `${company}/logo/${object}.svg`);

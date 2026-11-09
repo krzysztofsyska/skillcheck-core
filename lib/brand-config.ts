@@ -48,7 +48,7 @@ const COLOR_LABELS: Record<keyof BrandColors, string> = {
   text: 'kolor tekstu', accent: 'kolor akcentu',
 };
 // eslint-disable-next-line no-control-regex
-const FORBIDDEN_TEXT = /[\u0000-\u001f\u007f<>]/;
+const FORBIDDEN_TEXT = /[\u0000-\u001f\u007f-\u009f<>]/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -87,7 +87,7 @@ export function contrastChecks(colors: BrandColors): ContrastCheck[] {
   return [
     check('Tekst na tle', colors.text, colors.background, MIN_TEXT_CONTRAST),
     check('Tekst na kolorze głównym', colors.onPrimary, colors.primary, MIN_TEXT_CONTRAST),
-    check('Kolor główny na tle (linki, przyciski)', colors.primary, colors.background, MIN_UI_CONTRAST),
+    check('Kolor główny na tle (linki, przyciski)', colors.primary, colors.background, MIN_TEXT_CONTRAST),
     check('Akcent na tle', colors.accent, colors.background, MIN_UI_CONTRAST),
   ];
 }
@@ -95,7 +95,9 @@ export function contrastChecks(colors: BrandColors): ContrastCheck[] {
 function text(value: unknown, label: string, min: number, max: number): BrandResult<string> {
   if (typeof value !== 'string') return { ok: false, error: `${label}: wymagany tekst.` };
   const trimmed = value.trim();
-  if (trimmed.length < min || trimmed.length > max) {
+  // Długość w punktach kodowych, jak length() w PostgreSQL (nie w jednostkach UTF-16).
+  const length = Array.from(trimmed).length;
+  if (length < min || length > max) {
     return { ok: false, error: min === 0 ? `${label}: najwyżej ${max} znaków.` : `${label}: od ${min} do ${max} znaków.` };
   }
   if (FORBIDDEN_TEXT.test(trimmed)) return { ok: false, error: `${label}: niedozwolone znaki (np. < > lub znaki sterujące).` };
@@ -241,8 +243,37 @@ export function svgProblems(source: string): string[] {
   for (const match of Array.from(lower.matchAll(/url\s*\(\s*(['"]?)([^)'"]*)\1\s*\)/g))) {
     if (!/^#[a-z0-9_-]+$/.test(match[2].trim())) { problems.push('url() może wskazywać tylko na elementy tego pliku.'); break; }
   }
+  // Lista dozwolonych (review SC-020-A #1): powyższe reguły są tylko dodatkową
+  // warstwą; o przyjęciu decyduje poniższa lista elementów, atrybutów i przestrzeni nazw.
+  rule(!lower.includes('\\'), 'Znak \\ (ucieczki CSS) jest niedozwolony.');
+  rule(!/&#/.test(lower) && !/&(?!(amp|lt|gt|quot|apos);)/.test(lower), 'Encje znakowe są niedozwolone.');
+  const body = lower.replace(/<!--[\s\S]*?-->/g, '').replace(/^﻿?\s*<\?xml[^?]*\?>/, '');
+  for (const match of Array.from(body.matchAll(/<\/?\s*([^\s/>]+)/g))) {
+    if (!SVG_ELEMENTS.has(match[1])) { problems.push(`Element <${match[1].slice(0, 40)}> jest niedozwolony.`); break; }
+  }
+  for (const tag of Array.from(body.matchAll(/<\s*[^\s/>!?]+([^>]*)>/g))) {
+    for (const attr of Array.from(tag[1].matchAll(/([^\s=/<>"']+)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/g))) {
+      const name = attr[1];
+      const value = (attr[3] ?? attr[4] ?? attr[5] ?? '').trim();
+      if (name.includes(':') && !PREFIXED_ATTRIBUTES.has(name)) { problems.push(`Atrybut ${name.slice(0, 40)} jest niedozwolony.`); continue; }
+      if (name === 'xmlns' && value !== SVG_NS) problems.push('Dozwolona jest tylko przestrzeń nazw SVG.');
+      if (name === 'xmlns:xlink' && value !== XLINK_NS) problems.push('Nieprawidłowa przestrzeń nazw xlink.');
+      if (name === 'style' && /[@\\]/.test(value)) problems.push('Reguły @ w stylach są niedozwolone.');
+    }
+  }
+  for (const style of Array.from(body.matchAll(/<style[^>]*>([\s\S]*?)<\/style\s*>/g))) {
+    if (/[@\\]/.test(style[1])) { problems.push('Reguły @ w stylach są niedozwolone.'); break; }
+  }
   return Array.from(new Set(problems));
 }
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const XLINK_NS = 'http://www.w3.org/1999/xlink';
+const PREFIXED_ATTRIBUTES = new Set(['xmlns:xlink', 'xlink:href', 'xml:space', 'xml:lang']);
+/** Elementy rysujące bez aktywnej treści (porównywane po zamianie na małe litery). */
+const SVG_ELEMENTS = new Set(['svg', 'g', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text',
+  'tspan', 'defs', 'lineargradient', 'radialgradient', 'stop', 'clippath', 'mask', 'pattern', 'title', 'desc', 'symbol',
+  'style']);
 
 function decodeSvg(bytes: Uint8Array): string | null {
   try {

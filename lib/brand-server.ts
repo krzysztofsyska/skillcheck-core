@@ -42,7 +42,7 @@ export const loadPublishedBrand = cache(async (companyId: string): Promise<Publi
 export function brandErrorStatus(message: string | undefined) {
   const text = message ?? '';
   for (const key of ['brand_contrast_insufficient', 'brand_color_invalid', 'brand_config_invalid', 'brand_asset_invalid',
-    'brand_draft_changed', 'brand_version_unavailable', 'brand_forbidden', 'brand_storage_unavailable']) {
+    'brand_draft_changed', 'brand_asset_limit', 'brand_version_unavailable', 'brand_forbidden', 'brand_storage_unavailable']) {
     if (text.includes(key)) return key.replace(/^brand_/, '');
   }
   return 'failed';

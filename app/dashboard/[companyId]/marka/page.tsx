@@ -19,6 +19,7 @@ const messages: Record<string, string> = {
   color_invalid: "Nieprawidłowy kolor — użyj zapisu #RRGGBB.",
   config_invalid: "Nieprawidłowa konfiguracja.",
   asset_invalid: "Nie przyjęto pliku.",
+  asset_limit: "Osiągnięto limit 50 plików marki dla firmy.",
   draft_changed: "Szkic zmienił się po wyświetleniu podglądu. Sprawdź podgląd jeszcze raz i opublikuj ponownie.",
   version_unavailable: "Tej wersji nie można przywrócić.",
   forbidden: "Markę może zmieniać tylko właściciel konta firmy.",
@@ -148,6 +149,6 @@ export default async function BrandPage({ params, searchParams }: {
 
     <h2>Dziennik zmian</h2>
     {state.events.length ? <ul>{state.events.slice(0, 30).map((e, i) => <li key={i}>{when(e.at)} — {actionLabels[e.action] ?? e.action}
-      {e.actor === user.id ? " (Ty)" : ""}</li>)}</ul> : <p>Brak zmian.</p>}
+      {e.actor === user.id ? " (Ty)" : ` (użytkownik …${e.actor.slice(-6)})`}</li>)}</ul> : <p>Brak zmian.</p>}
   </section></main>;
 }

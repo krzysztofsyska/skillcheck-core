@@ -54,7 +54,8 @@ export async function uploadBrandAsset(form: FormData) {
   if (!checked.ok) return;
   const path = brandObjectPath(companyId, kind, randomUUID(), checked.value.extension);
   const stored = await client.storage.from(BRAND_ASSET_BUCKET).upload(path, bytes, {
-    contentType: checked.value.mime, upsert: false, cacheControl: '300',
+    // Zawsze typ niewykonywalny: Storage nie serwuje stąd obrazu/SVG jako treści.
+    contentType: 'application/octet-stream', upsert: false, cacheControl: '300',
   });
   if (stored.error) back('asset_invalid');
   const { error } = await client.rpc('brand_register_asset', {

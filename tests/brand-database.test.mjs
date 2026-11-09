@@ -48,9 +48,9 @@ async function boot(t) {
     [a.companyId, users.recruiter, users.viewer]);
   const rpc = async (name, args) => (await db.query(`select * from public.${name}(${args.map((_, i) => `$${i + 1}`).join(',')})`, args)).rows;
   const one = async (name, args) => Object.values((await rpc(name, args))[0])[0];
-  const upload = async (companyId, kind = 'logo', ext = 'png', size = 120, path) => {
+  const upload = async (companyId, kind = 'logo', ext = 'png', size = 120, path, mimetype = 'application/octet-stream', client = db) => {
     path ??= `${companyId}/${kind}/${randomUUID()}.${ext}`;
-    await db.query("insert into storage.objects(bucket_id,name,metadata) values('brand-assets',$1,jsonb_build_object('size',$2::int))", [path, size]);
+    await client.query("insert into storage.objects(bucket_id,name,metadata) values('brand-assets',$1,jsonb_build_object('size',$2::int,'mimetype',$3::text))", [path, size, mimetype]);
     return path;
   };
   const mime = { png: 'image/png', svg: 'image/svg+xml', ico: 'image/x-icon', webp: 'image/webp' };
@@ -65,7 +65,7 @@ async function boot(t) {
     const s = await state(companyId);
     return one('brand_publish_draft', [companyId, s.draft.id, s.draft.updated_at]);
   };
-  return { db, h, a, b, rpc, one, upload, register, draft, state, publish };
+  return { ...env, db, h, a, b, rpc, one, upload, register, draft, state, publish };
 }
 
 test('SC-020-A brand configuration: isolation, permissions, validation, publish and rollback', async t => {
@@ -76,7 +76,7 @@ test('SC-020-A brand configuration: isolation, permissions, validation, publish 
     await h.asAdmin();
     assert.equal((await db.query('select private.erasure_schema_signature() v')).rows[0].v, signature);
     const bucket = (await db.query("select public, file_size_limit, allowed_mime_types from storage.buckets where id='brand-assets'")).rows[0];
-    assert.deepEqual(bucket, { public: false, file_size_limit: '524288', allowed_mime_types: ['image/png', 'image/svg+xml', 'image/x-icon', 'image/webp'] });
+    assert.deepEqual(bucket, { public: false, file_size_limit: '524288', allowed_mime_types: ['application/octet-stream'] });
     for (const role of ['anon', 'authenticated']) {
       assert.equal((await db.query("select has_schema_privilege($1,'branding','USAGE') v", [role])).rows[0].v, false);
       for (const fn of ['brand_save_draft(uuid,jsonb,uuid,uuid)', 'brand_published(uuid)', 'brand_rollback(uuid,uuid)']) {
@@ -107,6 +107,9 @@ test('SC-020-A brand configuration: isolation, permissions, validation, publish 
     await assert.rejects(e.one('brand_register_asset', [a.companyId, 'logo', ico, 'image/x-icon', 50, 'a'.repeat(64)]), code('22023'));
     const big = await e.upload(a.companyId, 'favicon', 'png', 131073);
     await assert.rejects(e.one('brand_register_asset', [a.companyId, 'favicon', big, 'image/png', 131073, 'a'.repeat(64)]), code('22023'));
+    // Storage must hold the object as the non-renderable type, never as an image/SVG.
+    const typed = await e.upload(a.companyId, 'logo', 'svg', 80, undefined, 'image/svg+xml');
+    await assert.rejects(e.one('brand_register_asset', [a.companyId, 'logo', typed, 'image/svg+xml', 80, 'a'.repeat(64)]), code('22023'));
     // An object that does not exist in storage cannot be registered.
     await assert.rejects(e.one('brand_register_asset', [a.companyId, 'logo', `${a.companyId}/logo/${randomUUID()}.png`, 'image/png', 100, 'a'.repeat(64)]), code('22023'));
     // The same object twice is refused.
@@ -125,6 +128,9 @@ test('SC-020-A brand configuration: isolation, permissions, validation, publish 
       await assert.rejects(e.upload(a.companyId), code('42501'), 'members other than the owner cannot upload');
       assert.ok((await db.query("select count(*)::int n from storage.objects where bucket_id='brand-assets'")).rows[0].n > 0, 'members read their company assets');
     }
+    await h.asUser(users.owner);
+    assert.equal((await db.query("update storage.objects set metadata='{}' where bucket_id='brand-assets'")).rowCount, 0, 'no overwrite');
+    assert.equal((await db.query("delete from storage.objects where bucket_id='brand-assets'")).rowCount, 0, 'no delete');
     await h.asUser(users.otherOwner);
     assert.equal((await db.query("select count(*)::int n from storage.objects where name like $1", [`${a.companyId}/%`])).rows[0].n, 0, 'B cannot list A objects');
     await assert.rejects(e.register(a.companyId), code('42501'));
@@ -149,14 +155,18 @@ test('SC-020-A brand configuration: isolation, permissions, validation, publish 
       config({ recruiterPanel: { headerStyle: 'dark' } }),
       config({ candidatePanel: { headline: 'x', intro: 'y'.repeat(601) } }),
       config({ candidatePanel: { headline: 'x' } }),
+      config({ brandName: '🚀'.repeat(81) }),
+      config({ brandName: 'Acme\u0085' }),
+      config({ colors: { ...config().colors, primary: '#888888', onPrimary: '#000000' } }),
     ];
     for (const cfg of bad) await assert.rejects(e.draft(a.companyId, cfg), code('22023'), JSON.stringify(cfg));
+    // Same rule as lib/brand-config.ts: 80 code points is the limit, not 80 UTF-16 units.
+    await e.draft(a.companyId, config({ brandName: '🚀'.repeat(80) }));
     await assert.rejects(e.draft(a.companyId, config(), faviconA), code('22023'), 'favicon used as logo');
     await h.asUser(users.otherOwner);
     const logoB = await e.register(b.companyId);
     await h.asUser(users.owner);
     await assert.rejects(e.draft(a.companyId, config(), logoB), code('22023'), 'asset of another company');
-    assert.equal((await e.state(a.companyId)).draft, null);
   });
 
   let v1, v2;
@@ -243,6 +253,49 @@ test('SC-020-A brand configuration: isolation, permissions, validation, publish 
     assert.ok(!JSON.stringify(sb).includes(a.companyId));
   });
 
+  await t.test('limits: 50 registered assets and 60 stored objects per company', async () => {
+    const owner = randomUUID();
+    await h.asAdmin();
+    await db.query('insert into auth.users values($1)', [owner]);
+    await h.asUser(owner);
+    const c = (await db.query('select public.create_company($1) id', ['Tenant C'])).rows[0].id;
+    for (let i = 0; i < 50; i++) await e.register(c, 'favicon', 'png', 10);
+    await assert.rejects(e.register(c, 'favicon', 'png', 10), code('54000'));
+    for (let i = 51; i < 60; i++) await e.upload(c, 'favicon', 'png', 10);
+    await assert.rejects(e.upload(c, 'favicon', 'png', 10), code('42501'), 'storage quota per company');
+    await h.asUser(users.owner);
+    await e.upload(a.companyId, 'logo', 'png', 10);
+  });
+
+  await t.test('concurrent publish and rollback get distinct, contiguous version numbers', async () => {
+    const asOwner = async () => {
+      const client = await e.connect();
+      await client.query("set role authenticated");
+      await client.query("select set_config('request.jwt.claim.sub',$1,false)", [users.otherOwner]);
+      return client;
+    };
+    const [one, two] = [await asOwner(), await asOwner()];
+    await h.asUser(users.otherOwner);
+    const before = (await e.state(b.companyId)).versions;
+    const first = before.at(-1).id;
+    await e.draft(b.companyId, config({ brandName: 'Beta 2' }));
+    const s = await e.state(b.companyId);
+    await e.one('brand_publish_draft', [b.companyId, s.draft.id, s.draft.updated_at]);
+    await e.draft(b.companyId, config({ brandName: 'Beta 3' }));
+    const s3 = await e.state(b.companyId);
+    await one.query('begin');
+    await one.query('select public.brand_publish_draft($1,$2,$3)', [b.companyId, s3.draft.id, s3.draft.updated_at]);
+    const racing = two.query('select public.brand_rollback($1,$2)', [b.companyId, first]);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await one.query('commit');
+    await racing;
+    const after = (await e.state(b.companyId)).versions;
+    const numbers = after.map(v => v.version_no).sort((x, y) => x - y);
+    assert.deepEqual(numbers, Array.from({ length: numbers.length }, (_, i) => i + 1));
+    assert.equal(after.filter(v => v.status === 'published').length, 1);
+    assert.equal(after.find(v => v.status === 'published').rolled_back_from, first, 'the later transaction wins');
+  });
+
   await t.test('history is immutable even for the table owner path', async () => {
     await h.asAdmin();
     await assert.rejects(db.query("update branding.versions set config='{}' where status='superseded'"), code('42501'));
@@ -250,6 +303,16 @@ test('SC-020-A brand configuration: isolation, permissions, validation, publish 
     await assert.rejects(db.query('delete from branding.versions'), code('42501'));
     await assert.rejects(db.query('update branding.assets set kind=kind'), code('42501'));
     await assert.rejects(db.query('delete from branding.events'), code('42501'));
+    // Future company purge path: only the company named in the transaction-local setting.
+    await db.query('begin');
+    await db.query("select set_config('branding.purge_company',$1,true)", [b.companyId]);
+    await assert.rejects(db.query('delete from branding.events where company_id=$1', [a.companyId]), code('42501'));
+    await db.query('rollback');
+    await db.query('begin');
+    await db.query("select set_config('branding.purge_company',$1,true)", [b.companyId]);
+    for (const table of ['events', 'versions', 'assets']) await db.query(`delete from branding.${table} where company_id=$1`, [b.companyId]);
+    await db.query('rollback');
+    assert.ok((await db.query('select count(*)::int n from branding.versions where company_id=$1', [b.companyId])).rows[0].n > 0);
     assert.equal((await db.query('select private.erasure_schema_signature() v')).rows[0].v, signature);
   });
 });

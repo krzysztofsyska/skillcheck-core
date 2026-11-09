@@ -30,6 +30,19 @@
 -- Zawartość pliku jest walidowana na serwerze przed zapisem i ponownie przy
 -- każdym serwowaniu (lib/brand-config.ts), więc ominięcie walidacji przez
 -- bezpośredni zapis do Storage nie prowadzi do wyświetlenia pliku.
+-- Koszyk przyjmuje WYŁĄCZNIE typ application/octet-stream: Storage nigdy nie
+-- serwuje stąd obrazu ani SVG jako treści wykonywalnej, nawet przez podpisany
+-- lub uwierzytelniony adres. Prawdziwy typ ustala trasa aplikacji po walidacji.
+-- Zasada: aplikacja nie wydaje przeglądarkom surowych adresów Storage tego
+-- koszyka (żadnych signed URL); pliki idą tylko przez trasę
+-- /dashboard/<firma>/marka/zasob/<plik>.
+-- Limity: 50 zarejestrowanych plików na firmę (brand_register_asset) i 60
+-- obiektów na firmę w koszyku (polityka zapisu), 512 KB na obiekt.
+-- Usuwanie: historia jest niezmienna dla wszystkich ról. Jedyny wyjątek to
+-- przyszła, uprzywilejowana procedura usuwania firmy, która w tej samej
+-- transakcji ustawi set_config('branding.purge_company', '<uuid firmy>', true);
+-- wtedy wyzwalacze pozwalają usunąć wiersze tylko tej firmy. Nic w tej
+-- migracji tego nie robi.
 begin;
 
 do $preflight$
@@ -125,9 +138,18 @@ begin
 end
 $revoke$;
 
+create function branding.purge_allowed(target_company uuid) returns boolean
+language sql stable set search_path = '' as $$
+  select coalesce(current_setting('branding.purge_company', true), '') = target_company::text
+$$;
+revoke all on function branding.purge_allowed(uuid) from public;
+
 create function branding.guard_immutable() returns trigger
 language plpgsql set search_path = '' as $$
 begin
+  if tg_op = 'DELETE' and branding.purge_allowed(old.company_id) then
+    return old;
+  end if;
   raise exception 'brand_history_immutable' using errcode = '42501';
 end;
 $$;
@@ -140,6 +162,9 @@ create function branding.guard_version() returns trigger
 language plpgsql set search_path = '' as $$
 begin
   if tg_op = 'DELETE' then
+    if branding.purge_allowed(old.company_id) then
+      return old;
+    end if;
     raise exception 'brand_history_immutable' using errcode = '42501';
   end if;
   if new.id <> old.id or new.company_id <> old.company_id or new.created_by <> old.created_by
@@ -173,6 +198,22 @@ language sql immutable set search_path = '' as $$
 $$;
 revoke all on function private.brand_object_company(text) from public;
 
+-- Limit obiektów firmy w koszyku dla polityki zapisu (polityka sama nie może
+-- policzyć wierszy tej samej tabeli bez RLS). Bez Storage: false.
+create function private.brand_storage_quota_ok(object_name text) returns boolean
+language plpgsql stable security definer set search_path = '' as $$
+declare company uuid := private.brand_object_company(object_name); total bigint;
+begin
+  if company is null or to_regclass('storage.objects') is null then
+    return false;
+  end if;
+  execute 'select count(*) from storage.objects where bucket_id = $1 and name like $2'
+    into total using 'brand-assets', company::text || '/%';
+  return total < 60;
+end;
+$$;
+revoke all on function private.brand_storage_quota_ok(text) from public;
+
 -- Kontrast WCAG 2.x dla dwóch kolorów #rrggbb.
 create function private.brand_luminance(hex text) returns double precision
 language plpgsql immutable set search_path = '' as $$
@@ -204,7 +245,7 @@ language sql immutable set search_path = '' as $$
   select jsonb_typeof(value) = 'string'
     and length(btrim(value #>> '{}')) between min_len and max_len
     and (value #>> '{}') = btrim(value #>> '{}')
-    and (value #>> '{}') !~ '[[:cntrl:]<>]'
+    and (value #>> '{}') !~ '[\x01-\x1f\x7f-\x9f<>]'
 $$;
 create function private.brand_validate_config(config jsonb) returns jsonb
 language plpgsql immutable set search_path = '' as $$
@@ -236,7 +277,7 @@ begin
   end loop;
   if private.brand_contrast(colors ->> 'text', colors ->> 'background') < 4.5
      or private.brand_contrast(colors ->> 'onPrimary', colors ->> 'primary') < 4.5
-     or private.brand_contrast(colors ->> 'primary', colors ->> 'background') < 3
+     or private.brand_contrast(colors ->> 'primary', colors ->> 'background') < 4.5
      or private.brand_contrast(colors ->> 'accent', colors ->> 'background') < 3 then
     raise exception 'brand_contrast_insufficient' using errcode = '22023';
   end if;
@@ -276,6 +317,7 @@ declare
   ext text := substring(object_path from '\.([a-z]+)$');
   stored_size bigint;
   stored_owner text;
+  stored_mime text;
   expected_mime text;
   size_limit integer;
 begin
@@ -297,12 +339,16 @@ begin
   if to_regclass('storage.objects') is null then
     raise exception 'brand_storage_unavailable' using errcode = '55000';
   end if;
-  execute 'select (metadata ->> ''size'')::bigint, owner_id from storage.objects where bucket_id = $1 and name = $2'
-    into stored_size, stored_owner using 'brand-assets', object_path;
-  if stored_size is distinct from asset_size or stored_owner is distinct from auth.uid()::text then
+  execute 'select (metadata ->> ''size'')::bigint, owner_id, metadata ->> ''mimetype'' from storage.objects where bucket_id = $1 and name = $2'
+    into stored_size, stored_owner, stored_mime using 'brand-assets', object_path;
+  if stored_size is distinct from asset_size or stored_owner is distinct from auth.uid()::text
+     or stored_mime is distinct from 'application/octet-stream' then
     raise exception 'brand_asset_invalid' using errcode = '22023';
   end if;
   perform pg_advisory_xact_lock(hashtextextended('sc020:' || target_company::text, 0));
+  if (select count(*) from branding.assets where company_id = target_company) >= 50 then
+    raise exception 'brand_asset_limit' using errcode = '54000';
+  end if;
   insert into branding.assets (company_id, kind, object_path, mime, byte_size, sha256, created_by)
     values (target_company, asset_kind, object_path, asset_mime, asset_size, asset_sha256, auth.uid())
     returning id into saved;
@@ -450,7 +496,7 @@ begin
     execute format('grant execute on function %s to authenticated', fn);
   end loop;
   -- Funkcje pomocnicze potrzebne politykom Storage (wywoływane jako użytkownik).
-  grant execute on function private.brand_object_company(text) to authenticated;
+  grant execute on function private.brand_object_company(text), private.brand_storage_quota_ok(text) to authenticated;
 end
 $grants$;
 
@@ -464,14 +510,14 @@ begin
     return;
   end if;
   execute $sql$insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-    values ('brand-assets', 'brand-assets', false, 524288,
-            array['image/png', 'image/svg+xml', 'image/x-icon', 'image/webp'])
+    values ('brand-assets', 'brand-assets', false, 524288, array['application/octet-stream'])
     on conflict (id) do update set public = false, file_size_limit = 524288,
-            allowed_mime_types = array['image/png', 'image/svg+xml', 'image/x-icon', 'image/webp']$sql$;
+            allowed_mime_types = array['application/octet-stream']$sql$;
   execute $sql$create policy sc020_brand_assets_read on storage.objects for select to authenticated
     using (bucket_id = 'brand-assets' and private.has_company_access(private.brand_object_company(name)))$sql$;
   execute $sql$create policy sc020_brand_assets_insert on storage.objects for insert to authenticated
-    with check (bucket_id = 'brand-assets' and private.is_company_owner(private.brand_object_company(name)))$sql$;
+    with check (bucket_id = 'brand-assets' and private.is_company_owner(private.brand_object_company(name))
+                and private.brand_storage_quota_ok(name))$sql$;
 end
 $storage$;
 
