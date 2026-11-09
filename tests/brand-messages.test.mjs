@@ -147,3 +147,12 @@ test('report titles use the published brand, otherwise stay unchanged', async ()
     if (previous === undefined) delete process.env.WHITE_LABEL_ENABLED; else process.env.WHITE_LABEL_ENABLED = previous;
   }
 });
+
+test('printing a dark brand keeps the legal footer readable (Codex finding on #387)', () => {
+  const css = readFileSync(new URL('../app/components/brand/brand-frame.module.css', import.meta.url), 'utf8');
+  const print = css.slice(css.indexOf('@media print'));
+  assert.match(print, /\.frame\{background:#fff;color:#111\}/, 'white print background comes with dark text');
+  assert.match(print, /\.frame :global\(a\)\{color:#111\}/);
+  assert.match(print, /\.footer,\.legal\{color:#111;opacity:1\}/);
+  assert.match(print, /print-color-adjust:exact/, 'header keeps the validated brand colour pair');
+});

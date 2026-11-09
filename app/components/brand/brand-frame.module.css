@@ -22,7 +22,12 @@
    stopka prawna) zostaje w wydruku z kolorami marki; pasek konta operatora jest
    ukrywany w wydruku przez workspace-navigation.module.css. */
 @media print{
-  .frame{background:#fff}
+  /* Białe tło wydruku zawsze z ciemnym tekstem — także przy ciemnej marce
+     (inaczej stopka prawna byłaby biała na białym). Nagłówek zachowuje
+     sprawdzoną parę kolorów marki dzięki print-color-adjust. */
+  .frame{background:#fff;color:#111}
+  .frame :global(a){color:#111}
+  .footer,.legal{color:#111;opacity:1}
   .headerPrimary,.headerLight{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .footer{padding:8mm 0 0;break-inside:avoid}
 }
