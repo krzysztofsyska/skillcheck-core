@@ -110,7 +110,9 @@ function databasePool(config: DatabaseConfig, singleUse: boolean) {
     connectionString: config.raw,
     // Loopback (tests, local dev) has no TLS; every remote database requires a verified certificate.
     ssl: (config.loopback ? false : verifierDatabaseTls(config.url)) as { rejectUnauthorized: boolean },
-    max: 1, maxUses: singleUse ? 1 : Infinity, connectionTimeoutMillis: 5000, query_timeout: 10000, idleTimeoutMillis: 1000,
+    max: 1, maxUses: singleUse ? 1 : Infinity, connectionTimeoutMillis: 5000, query_timeout: 10000,
+    // A run's pool stays open between DNS checks; a single-use pool closes at once.
+    idleTimeoutMillis: singleUse ? 1000 : 30000,
     allowExitOnIdle: true, options: '-c statement_timeout=10000',
   });
   pool.on('error', () => {});

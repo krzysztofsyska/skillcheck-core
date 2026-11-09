@@ -70,7 +70,7 @@ $role$;
 
 -- Domeny do ponownego sprawdzenia: własne, zweryfikowane lub aktywne, których
 -- ostatnia udana weryfikacja jest starsza niż max(reverify_days - 7,
--- połowa reverify_days) dni — czyli zanim wygasną. Także już wygasłe (te zadanie
+-- połowa reverify_days, zaokrąglona w dół) dni — czyli zanim wygasną. Także już wygasłe (te zadanie
 -- tylko cofa do `pending`). Najstarsze najpierw.
 create function tenant_domains.reverify_due(max_rows integer)
 returns table (company_id uuid, domain_id uuid, hostname text, verification_token text)
@@ -78,7 +78,7 @@ language sql stable security definer set search_path = '' as $$
   select d.company_id, d.id, d.hostname, d.verification_token
     from tenant_domains.domains d, tenant_domains.settings s
    where s.singleton and d.kind = 'custom' and d.status in ('verified', 'active')
-     and d.last_verified_at <= clock_timestamp() - make_interval(days => greatest(s.reverify_days - 7, ceil(s.reverify_days / 2.0)::integer))
+     and d.last_verified_at <= clock_timestamp() - make_interval(days => greatest(s.reverify_days - 7, floor(s.reverify_days / 2.0)::integer))
    order by d.last_verified_at, d.id
    limit least(greatest(coalesce(max_rows, 0), 0), 500)
 $$;

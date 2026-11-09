@@ -74,6 +74,10 @@ test('host -> tenant: only active resolved hosts pick a company; everything else
   assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', preview, async () => { throw new Error('db down'); }), { kind: 'unavailable' });
   assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', preview, async () => 'not-a-uuid'), { kind: 'unavailable' });
   assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', preview, async () => undefined), { kind: 'platform' });
+  // Platform aliases on reserved suffixes never query the database, so a lookup failure cannot 503 them.
+  for (const alias of ['www.skillcheck.pl', 'skillcheck.pl', 'skillcheck-core-other-alias.vercel.app']) {
+    assert.deepEqual(await decide(alias, '/login', alias, preview, async () => { throw new Error('db down'); }), { kind: 'platform' }, alias);
+  }
   assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', null), (await decide('kariera.firma-a.pl')), 'missing X-Forwarded-Host is fine');
   // Production: disabled until the owner switches it on; nothing resolves.
   assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', { VERCEL_ENV: 'production' }), { kind: 'disabled' });

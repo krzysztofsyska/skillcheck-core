@@ -15,6 +15,12 @@
  * 'unconfigured'. Login roli, sekret i harmonogram (cron) to decyzja
  * operatora/właściciela; ten moduł ich nie tworzy.
  *
+ * Uruchomienie (decyzja operatora, poza tym kodem): osobny login z prawem
+ * SET ROLE na `tenant_domain_reverifier` nadanym PO migracji (migracja odmawia,
+ * gdy ktoś już ma INHERIT/SET na tej roli), adres w
+ * TENANT_DOMAIN_REVERIFY_DATABASE_URL, TENANT_DOMAIN_REVERIFY_ENABLED=true i
+ * harmonogram (np. raz dziennie). Login nie dostaje innych uprawnień.
+ *
  * Awaria resolvera DNS ('unavailable') nie jest dowodem braku rekordu: nic
  * nie zapisujemy, żeby awaria sieci nie wyłączała domen klientów.
  */

@@ -241,7 +241,11 @@ export async function decideTenant(input: {
   if (!tenantDomainsEnabled(input.env)) return { kind: 'disabled' };
   const parsed = parseRequestHost(input.host, input.forwardedHost);
   if (!parsed.ok) return { kind: 'bad_host' };
-  if (platformHostnames(input.env).has(parsed.hostname) || !isValidHostname(parsed.hostname)) return { kind: 'platform' };
+  // Reserved suffixes (skillcheck.pl, vercel.app, ...) can never be a customer domain (the database refuses them too):
+  // platform aliases such as www or extra *.vercel.app names never depend on the lookup and never get its 503.
+  if (platformHostnames(input.env).has(parsed.hostname) || !isValidHostname(parsed.hostname) || isReservedHostname(parsed.hostname)) {
+    return { kind: 'platform' };
+  }
   let value: unknown;
   try {
     value = await input.resolve(parsed.hostname);
