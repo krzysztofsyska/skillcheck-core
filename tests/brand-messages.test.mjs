@@ -155,4 +155,7 @@ test('printing a dark brand keeps the legal footer readable (Codex finding on #3
   assert.match(print, /\.frame :global\(a\)\{color:#111\}/);
   assert.match(print, /\.footer,\.legal\{color:#111;opacity:1\}/);
   assert.match(print, /print-color-adjust:exact/, 'header keeps the validated brand colour pair');
+  assert.match(print, /\.frame :global\(\.eyebrow\)\{color:#111\}/, 'accent-coloured eyebrow prints dark');
+  assert.match(print, /\.candidate\{background:#fff;color:#111\}/, 'candidate preview legal text prints dark on white');
+  assert.match(print, /\.candidateBar,\.button\{[^}]*print-color-adjust:exact/, 'bars on brand primary keep their validated pair');
 });

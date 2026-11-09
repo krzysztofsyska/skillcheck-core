@@ -28,6 +28,11 @@
   .frame{background:#fff;color:#111}
   .frame :global(a){color:#111}
   .footer,.legal{color:#111;opacity:1}
+  /* Elementy w kolorach marki poza nagłówkiem: na wydruku ciemne na białym. */
+  .frame :global(.eyebrow){color:#111}
+  .candidate{background:#fff;color:#111}
+  .candidateBar,.button{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .accent{color:#111}
   .headerPrimary,.headerLight{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .footer{padding:8mm 0 0;break-inside:avoid}
 }
