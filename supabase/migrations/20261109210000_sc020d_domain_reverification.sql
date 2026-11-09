@@ -10,7 +10,7 @@
 -- firm i odnowić je bez właściciela, wyciek poświadczenia aplikacji pozwalałby
 -- utrzymywać porzuconą domenę przy życiu. Zadanie cykliczne dostaje więc własną
 -- rolę i własny adres połączenia (TENANT_DOMAIN_REVERIFY_DATABASE_URL):
---   * tenant_domains.reverify_due(max_rows) — lista własnych domen, którym
+--   * tenant_domains.reverify_due(max_rows, kursor) — lista (stronicowana) własnych domen, którym
 --     zbliża się termin ponownej weryfikacji (host, token; nic więcej),
 --   * tenant_domains.record_scheduled_dns_check(...) — zapis wyniku. Może
 --     wyłącznie ODNOWIĆ weryfikację domeny zweryfikowanej/aktywnej, która
@@ -42,7 +42,7 @@ begin
   if to_regnamespace('tenant_domains') is null then
     raise exception 'sc020d_requires_sc020b' using errcode = '55000';
   end if;
-  if to_regprocedure('tenant_domains.reverify_due(integer)') is not null then
+  if to_regprocedure('tenant_domains.reverify_due(integer,timestamptz,uuid)') is not null then
     raise exception 'sc020d_already_installed' using errcode = '55000';
   end if;
 end
@@ -72,13 +72,15 @@ $role$;
 -- ostatnia udana weryfikacja jest starsza niż max(reverify_days - 7,
 -- połowa reverify_days, zaokrąglona w dół) dni — czyli zanim wygasną. Także już wygasłe (te zadanie
 -- tylko cofa do `pending`). Najstarsze najpierw.
-create function tenant_domains.reverify_due(max_rows integer)
-returns table (company_id uuid, domain_id uuid, hostname text, verification_token text)
+create function tenant_domains.reverify_due(max_rows integer, after_verified timestamptz, after_domain uuid)
+returns table (company_id uuid, domain_id uuid, hostname text, verification_token text, last_verified_at timestamptz)
 language sql stable security definer set search_path = '' as $$
-  select d.company_id, d.id, d.hostname, d.verification_token
+  select d.company_id, d.id, d.hostname, d.verification_token, d.last_verified_at
     from tenant_domains.domains d, tenant_domains.settings s
    where s.singleton and d.kind = 'custom' and d.status in ('verified', 'active')
      and d.last_verified_at <= clock_timestamp() - make_interval(days => greatest(s.reverify_days - 7, floor(s.reverify_days / 2.0)::integer))
+     -- Kursor (stronicowanie): domeny, których DNS stale nie odpowiada, nie blokują pozostałych w tym samym przebiegu.
+     and (after_verified is null or (d.last_verified_at, d.id) > (after_verified, coalesce(after_domain, '00000000-0000-0000-0000-000000000000'::uuid)))
    order by d.last_verified_at, d.id
    limit least(greatest(coalesce(max_rows, 0), 0), 500)
 $$;
@@ -127,7 +129,7 @@ $$;
 do $grants$
 declare fn regprocedure;
 begin
-  foreach fn in array array['tenant_domains.reverify_due(integer)',
+  foreach fn in array array['tenant_domains.reverify_due(integer,timestamptz,uuid)',
                             'tenant_domains.record_scheduled_dns_check(uuid,uuid,text,boolean)']::regprocedure[] loop
     execute format('revoke all on function %s from public', fn);
     if exists (select 1 from pg_roles where rolname = 'anon') then execute format('revoke all on function %s from anon', fn); end if;

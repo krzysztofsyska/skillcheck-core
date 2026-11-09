@@ -23,7 +23,7 @@ const VERIFIER_FUNCTIONS = [
   'tenant_domains.verifier_target(uuid,uuid)', 'tenant_domains.record_dns_check(uuid,uuid,text,boolean,uuid)',
   'tenant_domains.record_tls_check(uuid,uuid,text,boolean,uuid)',
 ];
-const REVERIFIER_FUNCTIONS = ['tenant_domains.reverify_due(integer)', 'tenant_domains.record_scheduled_dns_check(uuid,uuid,text,boolean)'];
+const REVERIFIER_FUNCTIONS = ['tenant_domains.reverify_due(integer,timestamp with time zone,uuid)', 'tenant_domains.record_scheduled_dns_check(uuid,uuid,text,boolean)'];
 
 test('SC-020-D white-label isolation: grants, cross-tenant access, domains, rollback, scheduled re-verification', async t => {
   const e = await bootWhiteLabel(t);
@@ -207,20 +207,24 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
     const reverifier = async () => { await db.exec('reset role'); await db.exec('set role tenant_domain_reverifier'); };
     for (const role of ['anon', 'authenticated']) {
       await h.asUser(users.owner, role);
-      await assert.rejects(db.query('select * from tenant_domains.reverify_due(10)'), forbidden, role);
+      await assert.rejects(db.query('select * from tenant_domains.reverify_due(10,null,null)'), forbidden, role);
       await assert.rejects(db.query('select tenant_domains.record_scheduled_dns_check($1,$2,$3,true)', [a.companyId, a1.id, a1.verification_token]), forbidden, role);
     }
     // The web app's verifier credential cannot list or renew without an owner; the scheduler cannot act as an owner.
     await e.verifier();
-    await assert.rejects(db.query('select * from tenant_domains.reverify_due(10)'), forbidden);
+    await assert.rejects(db.query('select * from tenant_domains.reverify_due(10,null,null)'), forbidden);
     await assert.rejects(db.query('select tenant_domains.record_scheduled_dns_check($1,$2,$3,true)', [a.companyId, a1.id, a1.verification_token]), forbidden);
     await reverifier();
     await assert.rejects(db.query('select tenant_domains.record_dns_check($1,$2,$3,true,$4)', [a.companyId, a1.id, a1.verification_token, users.owner]), forbidden);
     await assert.rejects(db.query('select * from tenant_domains.verifier_target($1,$2)', [a.companyId, a1.id]), forbidden);
-    const due = await rows('select * from tenant_domains.reverify_due(10)');
+    const due = await rows('select * from tenant_domains.reverify_due(10,null,null)');
     assert.deepEqual(due.map(d => d.hostname), ['kariera.firma-a.pl'], 'only the due custom domain; the pending stolen claim and fresh B are not listed');
-    assert.deepEqual(Object.keys(due[0]).sort(), ['company_id', 'domain_id', 'hostname', 'verification_token']);
-    assert.equal((await rows('select * from tenant_domains.reverify_due(0)')).length, 0);
+    assert.deepEqual(Object.keys(due[0]).sort(), ['company_id', 'domain_id', 'hostname', 'last_verified_at', 'verification_token']);
+    // The cursor moves past a row: the same domain is not returned again in the same pass.
+    // (Full microsecond precision as text — a JS Date would round it, exactly why the store formats it in SQL.)
+    const cursor = (await rows('select domain_id, last_verified_at::text t from tenant_domains.reverify_due(10,null,null)'))[0];
+    assert.equal((await rows('select * from tenant_domains.reverify_due(10,$1::timestamptz,$2)', [cursor.t, cursor.domain_id])).length, 0);
+    assert.equal((await rows('select * from tenant_domains.reverify_due(0,null,null)')).length, 0);
     // Wrong token or wrong company: refused.
     await assert.rejects(db.query('select tenant_domains.record_scheduled_dns_check($1,$2,$3,true)', [a.companyId, a1.id, 'f'.repeat(64)]), code('PT409'));
     await assert.rejects(db.query('select tenant_domains.record_scheduled_dns_check($1,$2,$3,true)', [b.companyId, a1.id, a1.verification_token]), code('P0002'));
@@ -243,7 +247,8 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
     assert.deepEqual(await reverifyDueDomains({ store: store(), dns: { resolveTxt: async () => [] }, env: { ...on, VERCEL_ENV: 'production' } }), { status: 'unconfigured' });
     assert.deepEqual(await reverifyDueDomains({ store: reverifyStoreFromEnv({}), dns: { resolveTxt: async () => [] }, env: on }), { status: 'unconfigured' });
     // Resolver outage: nothing written.
-    const outage = await reverifyDueDomains({ store: store(), dns: { resolveTxt: async () => { throw Object.assign(new Error('x'), { code: 'ETIMEOUT' }); } }, env: on });
+    const outage = await reverifyDueDomains({ store: store(), dns: { resolveTxt: async () => { throw Object.assign(new Error('x'), { code: 'ETIMEOUT' }); } }, env: on }, { limit: 1 });
+    // Page size 1: the SQL-formatted cursor moves past the failing row (a rounded cursor would return it 40 times).
     assert.equal(outage.unavailable, 1);
     assert.equal(outage.renewed + outage.failed + outage.lapsed, 0);
     // Record present: renewed, no longer due, event by "automatic" (actor null).
@@ -256,7 +261,7 @@ test('SC-020-D white-label isolation: grants, cross-tenant access, domains, roll
     const last = (await rows('select action, actor from tenant_domains.events where domain_id=$1 order by id desc limit 1', [a1.id]))[0];
     assert.deepEqual(last, { action: 'reverified', actor: null });
     await reverifier();
-    assert.equal((await rows('select * from tenant_domains.reverify_due(10)')).length, 0);
+    assert.equal((await rows('select * from tenant_domains.reverify_due(10,null,null)')).length, 0);
     // Record gone after the deadline: the domain lapses to pending and stops resolving; B is untouched.
     await h.asAdmin();
     await db.query("update tenant_domains.domains set last_verified_at = clock_timestamp() - interval '31 days' where id=$1", [a1.id]);

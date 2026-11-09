@@ -44,10 +44,10 @@ test('scheduled re-verification: fail closed, outage writes nothing, renew/fail/
     async record(company, domain, token, ok) { writes.push([domain, ok]); return domain === D2 && !ok ? 'pending' : 'active'; },
   });
   const rows = [
-    { company_id: A, domain_id: D1, hostname: 'kariera.firma-a.pl', verification_token: T1 },
-    { company_id: A, domain_id: D2, hostname: 'praca.firma-a.pl', verification_token: T2 },
-    { company_id: 'x', domain_id: D2, hostname: 'praca.firma-a.pl', verification_token: T2 },
-    { company_id: A, domain_id: D2, hostname: 'localhost', verification_token: T2 },
+    { company_id: A, domain_id: D1, hostname: 'kariera.firma-a.pl', verification_token: T1, last_verified_at: '2026-10-01T00:00:00.000000Z' },
+    { company_id: A, domain_id: D2, hostname: 'praca.firma-a.pl', verification_token: T2, last_verified_at: '2026-10-02T00:00:00.000000Z' },
+    { company_id: 'x', domain_id: D2, hostname: 'praca.firma-a.pl', verification_token: T2, last_verified_at: '2026-10-02T00:00:00.000000Z' },
+    { company_id: A, domain_id: D2, hostname: 'localhost', verification_token: T2, last_verified_at: '2026-10-02T00:00:00.000000Z' },
   ];
   const txt = { [`_skillcheck-challenge.kariera.firma-a.pl`]: [[`skillcheck-domain-verification=${T1}`]] };
   const dns = { async resolveTxt(name) { if (name in txt) return txt[name]; throw Object.assign(new Error('no'), { code: 'ENOTFOUND' }); } };
@@ -70,6 +70,26 @@ test('scheduled re-verification: fail closed, outage writes nothing, renew/fail/
   assert.equal((await reverifyDueDomains({ store: failing, dns, env: on })).errors, 2, 'one failure does not stop the run');
   const skipping = { async due() { return rows.slice(0, 1); }, async record() { return 'skipped'; } };
   assert.equal((await reverifyDueDomains({ store: skipping, dns, env: on })).skipped, 1);
+  // Pagination: domains whose DNS keeps failing do not starve the rest of the queue.
+  const queue = Array.from({ length: 5 }, (_, i) => ({ company_id: A, domain_id: `cccccccc-cccc-4ccc-8ccc-00000000000${i}`,
+    hostname: `d${i}.firma-a.pl`, verification_token: String(i).repeat(64), last_verified_at: `2026-10-0${i + 1}T00:00:00.000000Z` }));
+  const pages = [];
+  const paged = {
+    async due(limit, after) {
+      pages.push(after);
+      const start = after ? queue.findIndex(row => row.domain_id === after.domain_id) + 1 : 0;
+      return queue.slice(start, start + limit);
+    },
+    async record() { return 'active'; },
+  };
+  const flaky = { async resolveTxt(name) {
+    if (/^_skillcheck-challenge\.d[01]\./.test(name)) throw Object.assign(new Error('t'), { code: 'ETIMEOUT' });
+    const i = Number(name.match(/\.d(\d)\./)[1]);
+    return [[`skillcheck-domain-verification=${String(i).repeat(64)}`]];
+  } };
+  const all = await reverifyDueDomains({ store: paged, dns: flaky, env: on }, { limit: 2 });
+  assert.deepEqual([all.checked, all.unavailable, all.renewed], [5, 2, 3]);
+  assert.deepEqual(pages.map(p => p?.domain_id ?? null), [null, queue[1].domain_id, queue[3].domain_id]);
   // The run's single connection is closed after the pass, after a failure and when unconfigured.
   let closed = 0;
   const closing = extra => ({ async due() { return rows.slice(0, 1); }, async record() { return 'active'; }, async close() { closed += 1; }, ...extra });

@@ -191,8 +191,12 @@ export function reverifyStoreFromEnv(env: Environment = process.env): ReverifySt
   const pool = databasePool(config, false);
   const run = runAs(pool, 'tenant_domain_reverifier');
   return {
-    async due(limit) {
-      return run<ReverifyTarget[]>('select company_id::text, domain_id::text, hostname, verification_token from tenant_domains.reverify_due($1::integer)', [limit]);
+    async due(limit, after) {
+      const rows = await run<(Omit<ReverifyTarget, 'last_verified_at'> & { last_verified_at: string })[]>(
+        "select company_id::text, domain_id::text, hostname, verification_token, to_char(last_verified_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') last_verified_at"
+        + ' from tenant_domains.reverify_due($1::integer, $2::timestamptz, $3::uuid)',
+        [limit, after?.last_verified_at ?? null, after?.domain_id ?? null]);
+      return rows;
     },
     async record(companyId, domainId, token, ok) {
       return (await run<{ r: string }[]>('select tenant_domains.record_scheduled_dns_check($1::uuid,$2::uuid,$3,$4) r', [companyId, domainId, token, ok]))[0].r;

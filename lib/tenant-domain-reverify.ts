@@ -27,9 +27,11 @@
 import { checkDnsOwnership, isValidHostname, type DnsTxtResolver } from './tenant-domains.ts';
 import { whiteLabelEnabled, type WhiteLabelEnvironment } from './white-label-flag.ts';
 
-export type ReverifyTarget = { company_id: string; domain_id: string; hostname: string; verification_token: string };
+export type ReverifyTarget = { company_id: string; domain_id: string; hostname: string; verification_token: string; last_verified_at: string };
+export type ReverifyCursor = { last_verified_at: string; domain_id: string };
 export interface ReverifyStore {
-  due(limit: number): Promise<ReverifyTarget[]>;
+  /** Następna strona zaległych domen po kursorze (null = od początku), najstarsze najpierw. */
+  due(limit: number, after: ReverifyCursor | null): Promise<ReverifyTarget[]>;
   record(companyId: string, domainId: string, token: string, ok: boolean): Promise<string>;
   /** Zamknięcie połączenia po przebiegu (jedna pula na cały przebieg). */
   close?(): Promise<void>;
@@ -62,29 +64,44 @@ export async function reverifyDueDomains(
   }
 }
 
+const MAX_PAGES = 40;
+
+/**
+ * Cały przebieg: strony po `limit` domen (kursor po last_verified_at, id), aż
+ * do końca kolejki albo MAX_PAGES stron. Domeny, których DNS stale nie
+ * odpowiada, nie blokują pozostałych (kursor przesuwa się zawsze).
+ */
 async function runPass(store: ReverifyStore, dns: DnsTxtResolver, options: { limit?: number; timeoutMs?: number }): Promise<ReverifySummary> {
-  const deps = { store, dns };
   const limit = Math.min(Math.max(Math.trunc(options.limit ?? 100), 1), 500);
   const summary: ReverifySummary = { status: 'done', checked: 0, renewed: 0, failed: 0, lapsed: 0, unavailable: 0, skipped: 0, errors: 0 };
-  const targets = await deps.store.due(limit);
-  for (const target of targets.slice(0, limit)) {
-    if (!UUID.test(target.company_id) || !UUID.test(target.domain_id) || !isValidHostname(target.hostname) || !TOKEN.test(target.verification_token)) {
-      summary.errors += 1;
-      continue;
-    }
-    summary.checked += 1;
-    try {
-      const dns = await checkDnsOwnership(deps.dns, target.hostname, target.verification_token, options.timeoutMs);
-      if (dns === 'unavailable') { summary.unavailable += 1; continue; }
-      const status = await deps.store.record(target.company_id, target.domain_id, target.verification_token, dns === 'ok');
-      // An already expired domain is never renewed by the job: it returns 'pending' even with the record present.
-      if (status === 'skipped') summary.skipped += 1;
-      else if (status === 'pending') summary.lapsed += 1;
-      else if (dns === 'ok') summary.renewed += 1;
-      else summary.failed += 1;
-    } catch {
-      summary.errors += 1;
-    }
+  let after: ReverifyCursor | null = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const targets: ReverifyTarget[] = (await store.due(limit, after)).slice(0, limit);
+    for (const target of targets) await checkOne(store, dns, target, summary, options.timeoutMs);
+    if (targets.length < limit) break;
+    const last: ReverifyTarget | undefined = targets[targets.length - 1];
+    if (!last || typeof last.last_verified_at !== 'string' || !UUID.test(last.domain_id)) break;
+    after = { last_verified_at: last.last_verified_at, domain_id: last.domain_id };
   }
   return summary;
+}
+
+async function checkOne(store: ReverifyStore, dns: DnsTxtResolver, target: ReverifyTarget, summary: ReverifySummary, timeoutMs?: number) {
+  if (!UUID.test(target.company_id) || !UUID.test(target.domain_id) || !isValidHostname(target.hostname) || !TOKEN.test(target.verification_token)) {
+    summary.errors += 1;
+    return;
+  }
+  summary.checked += 1;
+  try {
+    const result = await checkDnsOwnership(dns, target.hostname, target.verification_token, timeoutMs);
+    if (result === 'unavailable') { summary.unavailable += 1; return; }
+    const status = await store.record(target.company_id, target.domain_id, target.verification_token, result === 'ok');
+    // An already expired domain is never renewed by the job: it returns 'pending' even with the record present.
+    if (status === 'skipped') summary.skipped += 1;
+    else if (status === 'pending') summary.lapsed += 1;
+    else if (result === 'ok') summary.renewed += 1;
+    else summary.failed += 1;
+  } catch {
+    summary.errors += 1;
+  }
 }
