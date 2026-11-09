@@ -34,6 +34,9 @@ PRODUCTION_APPROVAL: NO (biblioteka nie jest jeszcze podłączona do żadnej śc
   Każda fizyczna próba ma własny `attemptId` i trafia do `onAttempt` — dodatkowe rzeczywiste
   wywołania są widoczne; `operationId` (correlation ID) jest wspólny dla operacji.
 - **Dostępność.** Prosty circuit breaker per model (domyślnie 3 błędy → 60 s przerwy); trasy `pinned` nie zmieniają modelu.
+- **Limity czasu.** Gateway przestaje czekać po `timeoutMs` nawet gdy adapter ignoruje sygnał przerwania;
+  hook `onAttempt` jest obowiązkowy i ma limit 10 s.
+- **Prywatność** obejmuje `system`, `user` i schemat JSON (wszystko, co trafia do dostawcy).
 - **Rollback routingu** = powrót do poprzedniej wersji polityki (test w `tests/ai-gateway.test.mjs`).
 
 ## Zgodność ze screeningiem
@@ -45,6 +48,11 @@ screeningu (model, prompt, schemat) się nie zmienia.
 ## Czego tu jeszcze nie ma (następne zadania)
 
 - **SC-021-A2** — podłączenie screeningu i generowania zadań do gatewaya (za flagą, domyślnie wyłączoną).
+  Warunek z review A: dziś detektor telefonu/e-maila działa tylko w ścieżce masowego uploadu CV;
+  pojedyncze CV i kryteria wpisane przez rekrutera nie są nim sprawdzane. Zanim screening przejdzie
+  przez gateway z `blockContactData: true`, A2 musi mieć test zgodności na prawdziwych, zredagowanych
+  pojedynczych CV i kryteriach (żeby analizy, które dziś przechodzą, nie zaczęły kończyć się
+  `payload_not_redacted`) — albo świadomie zmienić zachowanie i opisać to w PR.
 - **SC-021-B** — trwały rejestr prób i kosztów w Supabase (`onAttempt`), cenniki wersjonowane, RLS,
   retencja zgodna z SC-010 (wymaga nowej bazy inwentarza R5 — patrz zamknięty PR #108).
 - **SC-021-C** — budżety 80%/100%, rezerwacja, override, polityka zarządzana przez operatora.
@@ -52,4 +60,4 @@ screeningu (model, prompt, schemat) się nie zmienia.
 
 ## Testy
 
-`npm run test:ai-gateway` — 23 testy syntetyczne, bez sieci i bez kluczy.
+`npm run test:ai-gateway` — 25 testów syntetycznych, bez sieci i bez kluczy.

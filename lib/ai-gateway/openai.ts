@@ -16,7 +16,7 @@ export function buildOpenAiResponsesBody(model: string, request: GatewayRequest)
     ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
     max_output_tokens: request.maxOutputTokens,
     input: [
-      { role: 'system', content: request.system },
+      { role: request.instructionRole ?? 'system', content: request.system },
       { role: 'user', content: request.user },
     ],
     ...(request.jsonSchema ? {

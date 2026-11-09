@@ -169,7 +169,8 @@ The MVP path to the first paid PRESELEKCJA keeps priority when the two compete f
 ### SC-020 and SC-021 reopened (owner decision 2026-11-09)
 
 The owner ordered development of **SC-020 white-label** (issue #21) and **SC-021 AI gateway & cost
-control** (issue #81), A–D each, in his message of 2026-11-09. This removes white-label and SC-021
+control** (issue #81), A–D each, in his own message typed into the Claude Code session of 2026-11-09
+(https://claude.ai/code/session_01TVLzgbHVMAPJSAtb449hht), confirming the issue #21/#81 reopen comments. This removes white-label and SC-021
 from the frozen list above. Approved variants: white-label shows **only the customer's own brand**
 (no switch back to SkillCheck, legally required operator/controller notices stay); the AI gateway
 is multi-provider in design but **only OpenAI is active** — other providers get adapters and

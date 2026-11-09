@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { ACTIVE_AI_PROVIDERS, AiGatewayError } from '../lib/ai-gateway/contract.ts';
 import { validatePolicy, resolveRoute } from '../lib/ai-gateway/policy.ts';
 import { defaultAiPolicy } from '../lib/ai-gateway/default-policy.ts';
-import { createAiGateway, containsContactData } from '../lib/ai-gateway/gateway.ts';
+import { createAiGateway as createRaw, containsContactData } from '../lib/ai-gateway/gateway.ts';
+const createAiGateway = opts => createRaw({ onAttempt: async () => {}, ...opts });
 import { buildOpenAiResponsesBody, createOpenAiAdapter, parseOpenAiResponse, OPENAI_RESPONSES_URL } from '../lib/ai-gateway/openai.ts';
 import { createAnthropicAdapter } from '../lib/ai-gateway/anthropic.ts';
 import { MAX_PROVIDER_RESPONSE_BYTES } from '../lib/ai-gateway/http.ts';
@@ -114,6 +115,7 @@ test('an adapter for an inactive provider cannot be registered', () => {
 
 test('authorization is mandatory and fails closed', async () => {
   assert.throws(() => createAiGateway({ policy: defaultAiPolicy, adapters: [] }), /SC021_AUTHORIZE_REQUIRED/);
+  assert.throws(() => createRaw({ policy: defaultAiPolicy, adapters: [], authorize: allow }), /SC021_ATTEMPT_HOOK_REQUIRED/);
   for (const authorize of [async () => false, async () => { throw new Error('db'); }, async () => 'yes']) {
     const calls = [];
     const gw = createAiGateway({ policy: defaultAiPolicy, adapters: [fakeAdapter([completed()], calls)], authorize });
@@ -149,6 +151,8 @@ test('payload with contact data or over the size limit never reaches the provide
   const calls = [];
   const gw = createAiGateway({ policy: defaultAiPolicy, adapters: [fakeAdapter([], calls)], authorize: allow });
   await assert.rejects(gw.run(ctx, { ...request, user: 'mail: a.b@example.com' }), e => e.code === 'payload_not_redacted');
+  await assert.rejects(gw.run(ctx, { ...request, system: 'Firma: kontakt 500 123 456' }), e => e.code === 'payload_not_redacted');
+  await assert.rejects(gw.run(ctx, { ...request, jsonSchema: { name: 's', schema: { description: 'hr@example.com' } } }), e => e.code === 'payload_not_redacted');
   await assert.rejects(gw.run(ctx, { ...request, user: 'x'.repeat(300_000) }), e => e.code === 'payload_too_large');
   await assert.rejects(gw.run(ctx, { ...request, maxOutputTokens: 0 }), e => e.code === 'invalid_request');
   assert.equal(calls.length, 0);
@@ -171,6 +175,24 @@ test('screening parity: gateway OpenAI body equals the current screening request
     maxOutputTokens: SCREENING_OPENAI_MAX_OUTPUT_TOKENS, reasoningEffort: 'low',
   });
   assert.equal(JSON.stringify(viaGateway), JSON.stringify(current));
+
+  // Legacy v1 claims (role 'developer', v1 schema) are reproduced too.
+  const legacy = { ...claim, result_schema_version: 1, prompt_version: 'screening-v1' };
+  const currentV1 = buildScreeningOpenAiRequest(legacy);
+  const viaGatewayV1 = buildOpenAiResponsesBody(SCREENING_OPENAI_MODEL, {
+    system: currentV1.input[0].content, user: currentV1.input[1].content, instructionRole: 'developer',
+    jsonSchema: { name: currentV1.text.format.name, schema: currentV1.text.format.schema },
+    maxOutputTokens: SCREENING_OPENAI_MAX_OUTPUT_TOKENS, reasoningEffort: 'low',
+  });
+  assert.equal(currentV1.input[0].role, 'developer');
+  assert.equal(JSON.stringify(viaGatewayV1), JSON.stringify(currentV1));
+});
+
+test('policy is frozen all the way down', () => {
+  assert.ok(Object.isFrozen(defaultAiPolicy.models) && Object.isFrozen(defaultAiPolicy.routes));
+  assert.ok(Object.isFrozen(defaultAiPolicy.models['openai-screening']));
+  assert.ok(Object.isFrozen(defaultAiPolicy.routes.cv_screening.candidates));
+  assert.throws(() => { 'use strict'; defaultAiPolicy.models['openai-screening'].provider = 'anthropic'; }, TypeError);
 });
 
 test('success returns output, model and policy version; attempt is recorded as billed', async () => {
@@ -253,7 +275,7 @@ test('pinned route never falls back to another model', async () => {
     authorize: allow, sleep: noSleep,
   });
   await assert.rejects(gw.run(ctx, request), e => e.code === 'model_unavailable');
-  assert.ok(calls.every(c => c.model === 'm-cheap'));
+  assert.equal(calls.length, 1, 'missing pinned model is not resent');
 });
 
 test('circuit breaker takes a failing model out of rotation until the cooldown ends', async () => {
@@ -281,6 +303,14 @@ test('timeout aborts the provider call', async () => {
     policy: policyWith({ cv_screening: route({ maxAttempts: 1 }) }),
     adapters: [fakeAdapter([call => new Promise((_, reject) => call.signal.addEventListener('abort', () => reject(new Error('aborted'))))])],
     authorize: allow,
+  });
+  await assert.rejects(gw.run(ctx, request), e => e.code === 'timeout' && e.billing === 'maybe_billed');
+});
+
+test('gateway stops waiting even when an adapter ignores the abort signal', async () => {
+  const gw = createAiGateway({
+    policy: policyWith({ cv_screening: route({ maxAttempts: 1 }) }),
+    adapters: [fakeAdapter([() => new Promise(() => {})])], authorize: allow,
   });
   await assert.rejects(gw.run(ctx, request), e => e.code === 'timeout' && e.billing === 'maybe_billed');
 });
@@ -322,7 +352,8 @@ test('OpenAI adapter: request shape, key only in header, usage and refusal parsi
 
 test('OpenAI adapter: HTTP and transport errors carry billing certainty', async () => {
   const cases = [[401, 'auth_error', 'not_billed'], [429, 'rate_limit', 'not_billed'], [404, 'model_unavailable', 'not_billed'],
-    [500, 'server_error', 'maybe_billed'], [408, 'timeout', 'maybe_billed']];
+    [500, 'server_error', 'maybe_billed'], [408, 'timeout', 'maybe_billed'],
+    [413, 'bad_request', 'not_billed'], [409, 'bad_request', 'not_billed'], [415, 'bad_request', 'not_billed']];
   for (const [status, code, billing] of cases) {
     const adapter = createOpenAiAdapter({ apiKey: 'k', fetchImpl: fakeFetch(() => jsonResponse({ error: { message: 'secret detail' } }, status)).impl });
     await assert.rejects(adapter.invoke({ model: 'm', revision: null, request, attemptId: 'a', signal: new AbortController().signal }),
@@ -340,11 +371,11 @@ test('OpenAI adapter: HTTP and transport errors carry billing certainty', async 
 test('Anthropic adapter (inactive) works against a synthetic endpoint only', async () => {
   const { impl, calls } = fakeFetch(() => jsonResponse({
     id: 'msg_1', stop_reason: 'end_turn', content: [{ type: 'text', text: '{"ok":true}' }],
-    usage: { input_tokens: 10, cache_read_input_tokens: 2, output_tokens: 3 },
+    usage: { input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 5, output_tokens: 3 },
   }));
   const adapter = createAnthropicAdapter({ apiKey: 'synthetic', fetchImpl: impl });
   const reply = await adapter.invoke({ model: 'a-1', revision: null, request, attemptId: 'a', signal: new AbortController().signal });
   assert.equal(reply.status, 'completed');
-  assert.deepEqual(reply.usage, { inputTokens: 12, cachedInputTokens: 2, outputTokens: 3 });
+  assert.deepEqual(reply.usage, { inputTokens: 17, cachedInputTokens: 2, outputTokens: 3 });
   assert.equal(calls[0].init.headers['x-api-key'], 'synthetic');
 });

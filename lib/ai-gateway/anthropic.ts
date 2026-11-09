@@ -24,9 +24,11 @@ export function parseAnthropicResponse(raw: unknown): ProviderReply {
   const body = record(raw);
   if (!body) throw new AiGatewayError('invalid_response', 'maybe_billed');
   const u = record(body.usage);
+  const cacheWrite = u && tokenCount(u.cache_creation_input_tokens) ? u.cache_creation_input_tokens : 0;
   const usage = u && tokenCount(u.input_tokens) && tokenCount(u.output_tokens)
     ? {
-      inputTokens: u.input_tokens + (tokenCount(u.cache_read_input_tokens) ? u.cache_read_input_tokens : 0),
+      // Cache writes are billed input; cache reads are the cached (cheaper) part.
+      inputTokens: u.input_tokens + cacheWrite + (tokenCount(u.cache_read_input_tokens) ? u.cache_read_input_tokens : 0),
       cachedInputTokens: tokenCount(u.cache_read_input_tokens) ? u.cache_read_input_tokens : 0,
       outputTokens: u.output_tokens,
     }

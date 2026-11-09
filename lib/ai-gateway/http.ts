@@ -14,6 +14,8 @@ export function httpStatusError(status: number): AiGatewayError {
   };
   if (notBilled[status]) return new AiGatewayError(notBilled[status], 'not_billed');
   if (status === 408) return new AiGatewayError('timeout', 'maybe_billed');
+  // Any other 4xx (409, 413, 415, …) is a rejection before the model ran: not billed, not retried.
+  if (status >= 400 && status < 500) return new AiGatewayError('bad_request', 'not_billed');
   return new AiGatewayError('server_error', 'maybe_billed');
 }
 

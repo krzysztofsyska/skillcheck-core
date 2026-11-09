@@ -110,7 +110,9 @@ export function validatePolicy(raw: unknown): AiRoutingPolicy {
       maxInputBytes: int(r.maxInputBytes, 1, 2_000_000),
     };
   }
-  return Object.freeze({ version: root.version, models, routes });
+  for (const m of Object.values(models)) Object.freeze(m);
+  for (const r of Object.values(routes)) { Object.freeze(r!.candidates); Object.freeze(r); }
+  return Object.freeze({ version: root.version, models: Object.freeze(models), routes: Object.freeze(routes) });
 }
 
 export type ResolvedModel = ModelEntry & { key: string };

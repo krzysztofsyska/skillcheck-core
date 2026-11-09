@@ -59,8 +59,11 @@ export type AiGatewayOptions = {
   adapters: AiProviderAdapter[];
   /** Must prove the caller may act for ctx.companyId (membership, worker claim, …). Fail closed. */
   authorize: (ctx: AiCallContext) => Promise<boolean>;
-  /** Ledger hook (SC-021-B). Awaited; if it throws, the call fails instead of returning unrecorded work. */
-  onAttempt?: (record: AttemptRecord) => Promise<void>;
+  /**
+   * Ledger hook (SC-021-B). Required, so no physical attempt goes unrecorded. Awaited, bounded by
+   * ATTEMPT_HOOK_TIMEOUT_MS; if it throws or times out, the call fails instead of returning unrecorded work.
+   */
+  onAttempt: (record: AttemptRecord) => Promise<void>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   breaker?: { failureThreshold: number; cooldownMs: number };
@@ -68,6 +71,15 @@ export type AiGatewayOptions = {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PSEUDONYM = /^[A-Za-z0-9:_-]{1,80}$/;
+export const ATTEMPT_HOOK_TIMEOUT_MS = 10_000;
+
+/** Rejects when `promise` does not settle within `ms`; the timer never outlives the race. */
+function withDeadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(onTimeout()), ms); });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
 const BREAKER_CODES = new Set(['server_error', 'timeout', 'network_error', 'model_unavailable']);
 
 function assertContext(ctx: AiCallContext) {
@@ -83,6 +95,7 @@ function assertRequest(request: GatewayRequest) {
   if (!request || typeof request.system !== 'string' || typeof request.user !== 'string'
     || !request.system.trim() || !request.user.trim()
     || !Number.isSafeInteger(request.maxOutputTokens) || request.maxOutputTokens < 1 || request.maxOutputTokens > 32_000
+    || (request.instructionRole !== undefined && !['system', 'developer'].includes(request.instructionRole))
     || (request.reasoningEffort !== undefined && !['low', 'medium', 'high'].includes(request.reasoningEffort))
     || (request.jsonSchema !== undefined && (!/^[A-Za-z0-9_-]{1,64}$/.test(request.jsonSchema.name)
       || !request.jsonSchema.schema || typeof request.jsonSchema.schema !== 'object'))) {
@@ -99,6 +112,7 @@ export function containsContactData(text: string) {
 export function createAiGateway(options: AiGatewayOptions) {
   if (typeof window !== 'undefined') throw new Error('SC021_SERVER_ONLY');
   if (typeof options.authorize !== 'function') throw new Error('SC021_AUTHORIZE_REQUIRED');
+  if (typeof options.onAttempt !== 'function') throw new Error('SC021_ATTEMPT_HOOK_REQUIRED');
   const adapters = new Map<AiProvider, AiProviderAdapter>();
   for (const adapter of options.adapters) {
     // An adapter for an inactive provider is refused at construction, not silently ignored.
@@ -122,6 +136,9 @@ export function createAiGateway(options: AiGatewayOptions) {
     failures.set(key, state);
   };
 
+  const recordAttempt = (r: AttemptRecord) =>
+    withDeadline(Promise.resolve().then(() => options.onAttempt(r)), ATTEMPT_HOOK_TIMEOUT_MS, () => new Error('SC021_ATTEMPT_HOOK_TIMEOUT'));
+
   async function run(ctx: AiCallContext, request: GatewayRequest): Promise<AiCallResult> {
     assertContext(ctx);
     let allowed = false;
@@ -142,7 +159,8 @@ export function createAiGateway(options: AiGatewayOptions) {
     if (Buffer.byteLength(request.system, 'utf8') + Buffer.byteLength(request.user, 'utf8') > route.maxInputBytes) {
       throw new AiGatewayError('payload_too_large');
     }
-    if (route.blockContactData && containsContactData(request.user)) {
+    if (route.blockContactData && (containsContactData(request.user) || containsContactData(request.system)
+      || (request.jsonSchema !== undefined && containsContactData(JSON.stringify(request.jsonSchema.schema))))) {
       throw new AiGatewayError('payload_not_redacted');
     }
 
@@ -162,17 +180,23 @@ export function createAiGateway(options: AiGatewayOptions) {
       };
       let reply;
       try {
-        reply = await adapter.invoke({ model: model.model, revision: model.revision, request, attemptId, signal: controller.signal });
+        reply = await withDeadline(
+          adapter.invoke({ model: model.model, revision: model.revision, request, attemptId, signal: controller.signal }),
+          route.timeoutMs + 50,
+          () => { controller.abort(); return new AiGatewayError('timeout', 'maybe_billed'); },
+        );
       } catch (raw) {
         const error = raw instanceof AiGatewayError
           ? raw
           : new AiGatewayError(controller.signal.aborted ? 'timeout' : 'network_error', 'maybe_billed');
         clearTimeout(timer);
-        await options.onAttempt?.({ ...base, outcome: error.code, billing: error.billing, usage: null, providerRequestId: null, latencyMs: now() - started });
+        await recordAttempt({ ...base, outcome: error.code, billing: error.billing, usage: null, providerRequestId: null, latencyMs: now() - started });
         lastError = error;
         if (BREAKER_CODES.has(error.code)) noteFailure(model.key);
         if (!isTransient(error.code)) throw error;
         if (error.billing === 'maybe_billed' && !route.retryMaybeBilled) throw error;
+        // A pinned route has nowhere else to go; resending to a missing model only wastes time.
+        if (error.code === 'model_unavailable' && route.strategy === 'pinned') throw error;
         if (attempt === route.maxAttempts) break;
         // Move to the next eligible model when this one is unavailable; pinned routes have one.
         if ((error.code === 'model_unavailable' || !isAvailable(model.key)) && route.strategy !== 'pinned') {
@@ -185,7 +209,7 @@ export function createAiGateway(options: AiGatewayOptions) {
       }
       clearTimeout(timer);
       failures.delete(model.key);
-      await options.onAttempt?.({ ...base, outcome: reply.status, billing: 'billed', usage: reply.usage, providerRequestId: reply.providerRequestId, latencyMs: now() - started });
+      await recordAttempt({ ...base, outcome: reply.status, billing: 'billed', usage: reply.usage, providerRequestId: reply.providerRequestId, latencyMs: now() - started });
       if (reply.status === 'refused') throw new AiGatewayError('refusal', 'maybe_billed');
       if (reply.status !== 'completed' || reply.outputText === null) throw new AiGatewayError('incomplete', 'maybe_billed');
       return {

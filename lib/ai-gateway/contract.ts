@@ -38,6 +38,8 @@ export type GatewayRequest = {
   jsonSchema?: { name: string; schema: Record<string, unknown> };
   maxOutputTokens: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
+  /** Role of the fixed instructions; legacy screening v1 used 'developer'. Default 'system'. */
+  instructionRole?: 'system' | 'developer';
 };
 
 /** What an adapter is asked to run: the request plus the resolved model. */
