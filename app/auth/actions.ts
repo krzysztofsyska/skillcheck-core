@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { createClient } from "../../lib/supabase/server";
 import { credentials } from "../../lib/auth-validation";
-import { authCallbackUrl } from "../../lib/auth-url";
+import { TENANT_HOST_HEADER, authCallbackUrl, tenantOriginFromHeader } from "../../lib/auth-url";
 import { hasLegalAcceptance, LEGAL_ACCEPTANCE_REVISION, LEGAL_ACCEPTED_DOCUMENTS, LEGAL_VERSION } from "../../lib/legal";
 import { hasMarketingConsent } from "../../lib/marketing-consent";
 import { signedConsentDeclaration, signRegistrationConsentGrant, verifiedConsentVersion } from "../../lib/marketing-consent-server";
@@ -26,7 +26,7 @@ export async function register(form: FormData) {
   if (!input || input.password.length < 12) redirect(withNext("/register?message=invalid", next));
   if (!hasLegalAcceptance(form)) redirect(withNext("/register?message=terms", next));
   let emailRedirectTo: string;
-  try { emailRedirectTo = authCallbackUrl('signup', (await headers()).get('origin'), process.env, next); }
+  try { const h = await headers(); emailRedirectTo = authCallbackUrl('signup', h.get('origin'), process.env, next, tenantOriginFromHeader(h.get(TENANT_HOST_HEADER))); }
   catch { redirect(withNext('/register?message=unavailable', next)); }
   const client = await createClient();
   const { data, error } = await client.auth.signUp({ ...input, options: {
@@ -141,7 +141,7 @@ export async function requestPasswordReset(form: FormData) {
   validation.set("password", "validation-only");
   if (!credentials(validation)) redirect("/forgot-password?message=invalid");
   let redirectTo: string;
-  try { redirectTo = authCallbackUrl('recovery', (await headers()).get('origin')); } catch { redirect("/forgot-password?message=unavailable"); }
+  try { const h = await headers(); redirectTo = authCallbackUrl('recovery', h.get('origin'), process.env, undefined, tenantOriginFromHeader(h.get(TENANT_HOST_HEADER))); } catch { redirect("/forgot-password?message=unavailable"); }
   const client = await createClient();
   const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo });
   if (error?.code === "over_email_send_rate_limit") redirect("/forgot-password?message=rate-limit");
