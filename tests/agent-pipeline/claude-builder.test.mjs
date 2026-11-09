@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, truncateSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { builderConfiguration, packetFor, validatePacket, validateBuilderFiles, createClaudeBuilderClient } from '../../tools/agent-pipeline/lib/claude-builder.mjs';
-import { parseBuilderOutput } from '../../tools/agent-pipeline/lib/builder-output.mjs';
+import { parseBuilderOutput, parseBuilderExecution, readBuilderExecution } from '../../tools/agent-pipeline/lib/builder-output.mjs';
 import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
 import { sha256 } from '../../tools/agent-pipeline/lib/canonical.mjs';
 import { parseContract } from '../../tools/agent-pipeline/lib/contract.mjs';
@@ -111,7 +111,7 @@ test('model workflow has no GitHub write token and no direct label scheduler',()
  const file='.github/workflows/claude-code-dispatch.yml';const r=spawnSync('python3',['-c','import json,yaml,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))',file],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);
  const w=JSON.parse(r.stdout);assert.deepEqual(w.jobs.model.permissions,{contents:'read',issues:'read',actions:'read'});
  const source=readFileSync(file,'utf8');assert.equal(source.includes('id-token: write'),false);assert.equal(source.includes('APP_PRIVATE_KEY'),false);assert.equal(source.includes('issues:\n    types'),false);
- assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.structured_output/);assert.match(source,/--setting-sources ""/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
+ assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.execution_file/);assert.match(source,/--setting-sources ""/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
  assert.equal(parseContract('TASK: SC-020\nOWNER: Claude Code\nSTATUS: READY').ready,false);
 });
 
@@ -143,9 +143,32 @@ test('structured model output is parsed as file data and rejects malformed/overs
  const output={files:[{path:'app/demo/page.tsx',content:'export default function Demo(){return null;}'}]};
  assert.deepEqual(parseBuilderOutput(JSON.stringify(output),['app/**']),output.files);
  const collector=readFileSync('tools/agent-pipeline/collect-builder.mjs','utf8');
- assert.equal(/spawn|exec|eval|import\(/.test(collector),false);
+ assert.equal(/child_process|\bspawn\(|\bexec\(|\beval\(|import\(/.test(collector),false);
  const prep=readFileSync('tools/agent-pipeline/prepare-builder-source.mjs','utf8');
  assert.match(prep,/cat-file/);assert.match(prep,/\\.claude/);assert.match(prep,/\\.mcp/);
+});
+
+test('execution log parser accepts only the pinned action successful final result',()=>{
+ const result={type:'result',subtype:'success',is_error:false,structured_output:{files:[{path:'app/demo/a.ts',content:'safe'}]}};
+ assert.deepEqual(parseBuilderExecution(JSON.stringify([{type:'system',subtype:'init'},result]),['app/**']),result.structured_output.files);
+ for(const value of [undefined,'','not-json','{}','[]',JSON.stringify([null]),JSON.stringify([result,result]),JSON.stringify([result,{type:'assistant'}]),JSON.stringify([{...result,is_error:true}]),JSON.stringify([{...result,subtype:'error_max_turns'}]),JSON.stringify([{type:'result',subtype:'success',is_error:false}])])assert.throws(()=>parseBuilderExecution(value,['app/**']));
+});
+
+test('collector transports more than 128 KiB through a bounded file and never publishes execution logs',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'sc-builder-output-')),execution=join(dir,'claude-execution-output.json');
+ const files=[{path:'app/demo/large.ts',content:'x'.repeat(180*1024)}];
+ try {
+  writeFileSync(join(dir,'builder-packet.json'),JSON.stringify({policy_sha:HEAD,allowed_files:['app/**']}));
+  writeFileSync(execution,JSON.stringify([{type:'assistant',message:'private-log-sentinel'},{type:'result',subtype:'success',is_error:false,structured_output:{files}}]));
+  const result=spawnSync(process.execPath,[resolve('tools/agent-pipeline/collect-builder.mjs')],{cwd:dir,encoding:'utf8',env:{...process.env,BUILDER_EXECUTION_FILE:execution,RUNNER_TEMP:dir,GITHUB_RUN_ID:'123',GITHUB_RUN_ATTEMPT:'1'}});
+  assert.equal(result.status,0,result.stderr);assert.equal(result.stdout,'');
+  const artifact=readFileSync(join(dir,'build-result.json'),'utf8');
+  assert.deepEqual(JSON.parse(artifact).files,files);assert.equal(artifact.includes('private-log-sentinel'),false);
+  assert.throws(()=>readBuilderExecution(join(dir,'other.json'),dir,['app/**']),/PATH_INVALID/);
+  truncateSync(execution,33*1024*1024);assert.throws(()=>readBuilderExecution(execution,dir,['app/**']),/TOO_LARGE/);
+  rmSync(execution);assert.throws(()=>readBuilderExecution(execution,dir,['app/**']));
+  symlinkSync(join(dir,'builder-packet.json'),execution);assert.throws(()=>readBuilderExecution(execution,dir,['app/**']));
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
 

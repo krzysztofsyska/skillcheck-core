@@ -17,6 +17,10 @@ credential, App key, reviewer key or production secret. It can return file data.
 The model can only Read/Glob/Grep an exported data directory without Git metadata,
 agent hooks/settings/plugins or MCP configuration. It returns structured JSON
 file contents; the collector only parses that data and never executes model code.
+The collector receives the small `execution_file` path, reads the pinned action's
+JSON message array and selects only a successful final `structured_output`.
+It validates sizes and file data before publishing; raw execution logs are never
+uploaded. This avoids Linux's per-environment-variable limit for larger patches.
 The controller downloads that run's bound artifact, independently revalidates
 the journal, contract, branch and scope, and creates a commit with a fixed parent.
 It never runs model code. The ordinary controller then creates the Draft PR,

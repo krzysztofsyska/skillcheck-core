@@ -1,6 +1,6 @@
 import { generateKeyPairSync, createHash } from 'node:crypto';
 import { loadPolicy } from '../../tools/agent-pipeline/lib/policy.mjs';
-import { parseBuilderOutput } from '../../tools/agent-pipeline/lib/builder-output.mjs';
+import { parseBuilderExecution } from '../../tools/agent-pipeline/lib/builder-output.mjs';
 import { contractBody } from './helpers.mjs';
 export const MAIN = 'd'.repeat(40), BASE = 'c'.repeat(40), H1 = 'a'.repeat(40), H2 = 'b'.repeat(40), MERGED = 'e'.repeat(40);
 export function configuredPolicy() {
@@ -44,7 +44,7 @@ export function httpWorld({claude=false}={}) {
     const id=100+w.runs.length, approved=kind==='accept'?w.approveA:kind==='promote'?w.approveB:true;
     const run={id,workflow_id:policy.workflow_ids[kind],path:policy.workflows[kind],event:'workflow_dispatch',head_branch:'main',head_sha:MAIN,actor:{id:policy.controller_actor_id},display_title:`sc-agent:${inputs.request_id}`,run_attempt:1,status:approved?'completed':'waiting',conclusion:approved?'success':null,html_url:`https://github.com/${policy.repository}/actions/runs/${id}`};
     w.runs.push(run);
-    if(kind==='builder'){const packet=JSON.parse(inputs.builder_packet);run.workflow_id=policy.claude_builder.workflow_id;run.path=policy.claude_builder.workflow_path;run.display_title=`sc-builder:${packet.agent_id}:${packet.request_id}`;w.repair=packet.head_sha===packet.base_sha?0:1;w.artifacts[id]={schema_version:1,run_id:id,run_attempt:1,policy_sha:MAIN,packet,files:parseBuilderOutput(JSON.stringify({files:[{path:'app/demo/page.tsx',content:w.repair?'fixed':'needs fix'}]}),packet.allowed_files)};}
+    if(kind==='builder'){const packet=JSON.parse(inputs.builder_packet);run.workflow_id=policy.claude_builder.workflow_id;run.path=policy.claude_builder.workflow_path;run.display_title=`sc-builder:${packet.agent_id}:${packet.request_id}`;w.repair=packet.head_sha===packet.base_sha?0:1;w.artifacts[id]={schema_version:1,run_id:id,run_attempt:1,policy_sha:MAIN,packet,files:parseBuilderExecution(JSON.stringify([{type:'result',subtype:'success',is_error:false,structured_output:{files:[{path:'app/demo/page.tsx',content:w.repair?'fixed':'needs fix'}]}}]),packet.allowed_files)};}
     else if(kind==='verify') w.artifacts[id]={workflow_id:run.workflow_id,workflow_path:run.path,run_id:id,run_attempt:1,policy_sha:MAIN,head_sha:inputs.head_sha,base_sha:inputs.base_sha,conclusion:'success',jobs:[{conclusion:'success'}],commands_executed:policy.required_ci_commands};
     else if(kind==='review') {
       const packet=JSON.parse(inputs.review_packet); const pass=w.repair>0;
