@@ -84,7 +84,8 @@ test('SC-020-B customer domains: lifecycle, isolation, takeover and permissions'
     assert.deepEqual(anonExec, ['tenant_domain_resolve']);
     const verifierExec = (await db.query(`select p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname='tenant_domains' and has_function_privilege('tenant_domain_verifier',p.oid,'EXECUTE') order by 1`)).rows.map(r => r.proname);
-    assert.deepEqual(verifierExec, ['record_dns_check', 'record_tls_check', 'verifier_target']);
+    // SC-020-D (20261109210000) adds the two scheduled re-verification functions, verifier-only.
+    assert.deepEqual(verifierExec, ['record_dns_check', 'record_scheduled_dns_check', 'record_tls_check', 'reverify_due', 'verifier_target']);
     assert.equal((await db.query("select has_function_privilege('authenticated','tenant_domains.require_acting_owner(uuid,uuid)','EXECUTE') p")).rows[0].p, false);
   });
 
