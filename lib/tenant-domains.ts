@@ -11,6 +11,8 @@
  * `config.matcher` w proxy.ts (patrz TENANT_TRUSTED_PATH_PREFIXES i test).
  */
 
+import { whiteLabelEnabled, type WhiteLabelEnvironment } from './white-label-flag.ts';
+
 export const TENANT_COMPANY_HEADER = 'x-skillcheck-tenant-company';
 export const TENANT_HOST_HEADER = 'x-skillcheck-tenant-host';
 /** Trasy, na których proxy zawsze działa, więc nagłówki firmy są wiarygodne. */
@@ -174,10 +176,9 @@ export function platformHostnames(env: HostEnvironment): Set<string> {
   return hosts;
 }
 
-/** Ta sama flaga co SC-020-A: na produkcji wyłączone, dopóki właściciel nie zdecyduje. */
-export function tenantDomainsEnabled(env: { readonly [key: string]: string | undefined }): boolean {
-  if (env['VERCEL_ENV'] === 'production') return env['WHITE_LABEL_ENABLED'] === 'true';
-  return env['WHITE_LABEL_ENABLED'] !== 'false';
+/** Ta sama flaga co SC-020-A (SC-020-D: jedna funkcja, lib/white-label-flag.ts). */
+export function tenantDomainsEnabled(env: WhiteLabelEnvironment): boolean {
+  return whiteLabelEnabled(env);
 }
 
 export type TenantRoute = { kind: 'continue' } | { kind: 'not_found' } | { kind: 'redirect'; location: string };
@@ -219,12 +220,18 @@ export type TenantDecision =
   | { kind: 'disabled' }
   | { kind: 'bad_host' }
   | { kind: 'platform' }
+  | { kind: 'unavailable' }
   | { kind: 'tenant'; companyId: string; hostname: string; route: TenantRoute };
 
 /**
  * Cała decyzja proxy dla jednego żądania. `resolve` pyta bazę
- * (public.tenant_domain_resolve); jej błąd lub brak wyniku = host bez firmy
- * (zachowanie platformy), nigdy zgadywanie firmy.
+ * (public.tenant_domain_resolve); brak wyniku = host bez firmy (zachowanie
+ * platformy), nigdy zgadywanie firmy.
+ *
+ * SC-020-D: BŁĄD zapytania (baza niedostępna, zła odpowiedź) na hoście spoza
+ * platformy kończy się 'unavailable' (proxy: 503), a nie zachowaniem
+ * platformy. Inaczej chwilowa awaria zdejmowałaby z domeny firmy ograniczenie
+ * tras (np. panel operatora na domenie klienta).
  */
 export async function decideTenant(input: {
   host: string | null; forwardedHost: string | null; pathname: string;
@@ -235,13 +242,14 @@ export async function decideTenant(input: {
   const parsed = parseRequestHost(input.host, input.forwardedHost);
   if (!parsed.ok) return { kind: 'bad_host' };
   if (platformHostnames(input.env).has(parsed.hostname) || !isValidHostname(parsed.hostname)) return { kind: 'platform' };
-  let companyId: string | null = null;
+  let value: unknown;
   try {
-    const value = await input.resolve(parsed.hostname);
-    companyId = typeof value === 'string' && UUID.test(value) ? value : null;
+    value = await input.resolve(parsed.hostname);
   } catch {
-    companyId = null;
+    return { kind: 'unavailable' };
   }
-  if (!companyId) return { kind: 'platform' };
+  if (value === null || value === undefined) return { kind: 'platform' };
+  if (typeof value !== 'string' || !UUID.test(value)) return { kind: 'unavailable' };
+  const companyId = value;
   return { kind: 'tenant', companyId, hostname: parsed.hostname, route: tenantRoute(input.pathname, companyId) };
 }

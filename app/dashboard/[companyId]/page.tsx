@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { companyAccess } from "../../../lib/company-access";
-import { brandingEnabled } from "../../../lib/brand-config";
+import { whiteLabelEnabled } from "../../../lib/white-label-flag";
 import { ProfileForm, RecruitmentForm } from "./forms";
 const labels:Record<string,string>={draft:"Szkic",active:"Aktywne",archived:"Archiwum",open:"Otwarta",paused:"Wstrzymana",closed:"Zamknięta"};
 export default async function CompanyDashboard({params}:{params:Promise<{companyId:string}>}) {
   const {companyId}=await params;
-  const {client,company,canEdit}=await companyAccess(companyId);
+  const {client,company,user,canEdit}=await companyAccess(companyId);
+  const isOwner=company.owner_id===user.id;
   const [positions,recruitments,candidates,profile]=await Promise.all([
     client.from("positions").select("*").eq("company_id",companyId).order("created_at",{ascending:false}).limit(50),
     client.from("recruitments").select("*").eq("company_id",companyId).order("created_at",{ascending:false}).limit(50),
@@ -18,7 +19,9 @@ export default async function CompanyDashboard({params}:{params:Promise<{company
     {process.env.SC19_PACKAGES_ENABLED === 'true' && <p className="lead"><Link href={`/dashboard/${companyId}/billing`}>Twój pakiet SkillCheck i pozostałe analizy CV →</Link></p>}
     <p className="lead"><Link href={`/dashboard/${companyId}/candidates`}>Kandydaci w bazie firmy: {candidates.count ?? 0}</Link></p>
     <p className="lead"><Link href={`/dashboard/${companyId}/zgody`}>Zgody na kontakt handlowy →</Link></p>
-    {brandingEnabled() && <p className="lead"><Link href={`/dashboard/${companyId}/marka`}>Wygląd panelu w marce firmy →</Link></p>}
+    {whiteLabelEnabled() && <p className="lead"><Link href={`/dashboard/${companyId}/marka`}>Wygląd panelu w marce firmy →</Link></p>}
+    {whiteLabelEnabled() && isOwner && <p className="lead"><Link href={`/dashboard/${companyId}/domeny`}>Adres panelu w domenie firmy →</Link></p>}
+    {whiteLabelEnabled() && isOwner && <p className="lead"><Link href={`/dashboard/${companyId}/zmiany-marki`}>Historia zmian marki i domen →</Link></p>}
     <div className="actions">{canEdit && <Link className="button" href={`/dashboard/${companyId}/positions/new`}>Kogo potrzebujesz? Utwórz stanowisko</Link>}</div>
     <h2>Stanowiska</h2><p>Ostatnie 50 stanowisk.</p>
     {positions.data.length ? <ul className="companies">{positions.data.map(p=><li key={p.id}><Link href={`/dashboard/${companyId}/positions/${p.id}`}>{p.title}</Link><span className="badge">{labels[p.status]}</span></li>)}</ul> : <p>Nie masz jeszcze stanowisk. Zacznij od określenia, kogo potrzebujesz.</p>}

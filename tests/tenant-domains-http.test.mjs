@@ -49,7 +49,7 @@ test('proxy: host spoofing, tenant routing and safe fallback on a real server', 
   const port = await listen(reservation);
   await new Promise(resolve => reservation.close(resolve));
   const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], {
-    env: { ...process.env, VERCEL_ENV: '', WHITE_LABEL_ENABLED: '', NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${supabasePort}`,
+    env: { ...process.env, VERCEL_ENV: '', WHITE_LABEL_ENABLED: 'true', NEXT_PUBLIC_SUPABASE_URL: `http://127.0.0.1:${supabasePort}`,
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'test-only-public-key', NEXT_PUBLIC_SITE_URL: `http://127.0.0.1:${port}` },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

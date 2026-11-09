@@ -12,6 +12,7 @@ import { Pool } from 'pg';
 import { previewPoolTls } from './sc19-payment-preview-tls.ts';
 import type { DnsTxtResolver, TlsReadinessChecker } from './tenant-domains.ts';
 import type { VerifierStore } from './tenant-domain-verifier.ts';
+import type { ReverifyStore, ReverifyTarget } from './tenant-domain-reverify.ts';
 
 export const systemDnsResolver: DnsTxtResolver = { resolveTxt: name => dns.resolveTxt(name) };
 
@@ -88,12 +89,14 @@ export const systemTlsChecker: TlsReadinessChecker = {
   },
 };
 
+type VerifierRun = <T>(sql: string, params: unknown[]) => Promise<T>;
+
 /**
- * Magazyn przez osobne połączenie z rolą tenant_domain_verifier.
- * TENANT_DOMAIN_VERIFIER_DATABASE_URL nieustawione -> null (weryfikacja
- * niedostępna; nic nie omija tej roli). Login dla roli tworzy operator.
+ * Połączenie z rolą tenant_domain_verifier (osobne, krótkotrwałe).
+ * TENANT_DOMAIN_VERIFIER_DATABASE_URL nieustawione lub błędne -> null
+ * (weryfikacja niedostępna; nic nie omija tej roli). Login dla roli tworzy operator.
  */
-export function verifierStoreFromEnv(env: { readonly [key: string]: string | undefined } = process.env): VerifierStore | null {
+function verifierRunFromEnv(env: { readonly [key: string]: string | undefined }): VerifierRun | null {
   const raw = env['TENANT_DOMAIN_VERIFIER_DATABASE_URL'];
   if (!raw) return null;
   let url: URL;
@@ -101,7 +104,7 @@ export function verifierStoreFromEnv(env: { readonly [key: string]: string | und
   // Parametry w adresie (np. sslmode) nadpisałyby ustawienia TLS w pg — odrzucamy je.
   if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.search || url.hash || !url.hostname) return null;
   const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
-  const run = async <T>(sql: string, params: unknown[]): Promise<T> => {
+  return async <T>(sql: string, params: unknown[]): Promise<T> => {
     const pool = new Pool({
       connectionString: raw,
       // Loopback (tests, local dev) has no TLS; every remote database requires a verified certificate.
@@ -125,6 +128,12 @@ export function verifierStoreFromEnv(env: { readonly [key: string]: string | und
       await pool.end().catch(() => {});
     }
   };
+}
+
+/** Magazyn weryfikacji zleconej przez właściciela (SC-020-B). */
+export function verifierStoreFromEnv(env: { readonly [key: string]: string | undefined } = process.env): VerifierStore | null {
+  const run = verifierRunFromEnv(env);
+  if (!run) return null;
   return {
     async target(companyId, domainId) {
       const rows = await run<{ hostname: string; kind: string; status: string; verification_token: string }[]>(
@@ -136,6 +145,20 @@ export function verifierStoreFromEnv(env: { readonly [key: string]: string | und
     },
     async recordTls(companyId, domainId, token, ok, actingOwner) {
       return (await run<{ r: string }[]>('select tenant_domains.record_tls_check($1::uuid,$2::uuid,$3,$4,$5::uuid) r', [companyId, domainId, token, ok, actingOwner]))[0].r;
+    },
+  };
+}
+
+/** SC-020-D: magazyn zadania cyklicznej weryfikacji (ta sama rola i to samo połączenie). */
+export function reverifyStoreFromEnv(env: { readonly [key: string]: string | undefined } = process.env): ReverifyStore | null {
+  const run = verifierRunFromEnv(env);
+  if (!run) return null;
+  return {
+    async due(limit) {
+      return run<ReverifyTarget[]>('select company_id::text, domain_id::text, hostname, verification_token from tenant_domains.reverify_due($1::integer)', [limit]);
+    },
+    async record(companyId, domainId, token, ok) {
+      return (await run<{ r: string }[]>('select tenant_domains.record_scheduled_dns_check($1::uuid,$2::uuid,$3,$4) r', [companyId, domainId, token, ok]))[0].r;
     },
   };
 }
