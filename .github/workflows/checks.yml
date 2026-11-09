@@ -124,6 +124,7 @@ jobs:
       - run: npm run test:pdf-bundle
       - run: npm run test:http
       - run: npm run test:screening-report-http
+      - run: npm run test:cv-bulk-progress-http
       - run: npm run test:auth-http
       - run: npm run test:marketing
       - run: node --test tests/sc-019-package-http.test.mjs
