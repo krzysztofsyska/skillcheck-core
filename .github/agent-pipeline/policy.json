@@ -110,5 +110,10 @@
   ],
   "controller_app_id": 5216184,
   "controller_actor_id": 338844913,
-  "integration_merge_policy": "verified_ci_review"
+  "integration_merge_policy": "verified_ci_review",
+  "post_merge_ci": {
+    "workflow_id": 371409699,
+    "path": ".github/workflows/checks.yml",
+    "timeout_ms": 2700000
+  }
 }

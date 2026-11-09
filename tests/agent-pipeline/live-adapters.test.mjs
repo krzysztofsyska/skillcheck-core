@@ -120,7 +120,7 @@ test('preflight validates exact branches, identities, checks and environments',(
 
 test('review schema and required tests cannot be downgraded by model',()=>{
  const expected={workflowId:1,workflowPath:'review',runId:2,runAttempt:1,policySha:MAIN,requestId:'request',repositoryId:1043384454,prNumber:38,headSha:'a'.repeat(40),baseSha:'b'.repeat(40),contractHash:'c'.repeat(64),requiredChecks:['test']};
- const envelope={workflow_id:1,workflow_path:'review',run_id:2,run_attempt:1,policy_sha:MAIN,payload:{schema_version:1,request_id:'request',repository_id:1043384454,pr_number:38,head_sha:expected.headSha,base_sha:expected.baseSha,contract_hash:expected.contractHash,verdict:'PASS',acceptance_checks:[{id:'test',required:true,status:'PASS'}],findings:[],limitations:[]}};
+ const envelope={workflow_id:1,workflow_path:'review',run_id:2,run_attempt:1,policy_sha:MAIN,payload:{schema_version:1,request_id:'request',repository_id:1043384454,pr_number:38,head_sha:expected.headSha,base_sha:expected.baseSha,contract_hash:expected.contractHash,verdict:'PASS',full_diff_reviewed:true,reviewed_commits:[expected.headSha],acceptance_checks:[{id:'test',required:true,status:'PASS'}],findings:[],limitations:[]}};
  assert.equal(validateReview(envelope,expected).pass,true);
  for(const change of [p=>{p.acceptance_checks[0]={id:'test',required:false,status:'NOT_RUN'};},p=>{p.extra=true;},p=>{p.findings=[{id:'x',severity:'blocker',path:'x',line:1,description:'bad',required_fix:'fix'}];},p=>{p.acceptance_checks.push(p.acceptance_checks[0]);}]){const e=structuredClone(envelope);change(e.payload);assert.equal(validateReview(e,expected).pass,false);}
  assert.notEqual(parseContract(contractBody()+'\nGoal: A').hash,parseContract(contractBody()+'\nGoal: B').hash);
@@ -168,7 +168,7 @@ test('read retry is bounded; mutations are not blindly retried',async()=>{
 
 test('promotion refuses an unaccounted commit and a missing runbook',async()=>{
  const {preparePromotion}=await import('../../tools/agent-pipeline/lib/promotion.mjs');
- const record={task_id:'SC-X',state:'ACCEPTED',issue_number:7,base_sha:'c'.repeat(40),head_sha:'b'.repeat(40),binding:{approval:{gate:'A',digest:'x',run_id:1},merge:{mergeCommitSha:'e'.repeat(40)}}};
+ const record={task_id:'SC-X',state:'ACCEPTED',issue_number:7,base_sha:'c'.repeat(40),head_sha:'b'.repeat(40),binding:{post_merge_ci:{ok:true,headSha:'e'.repeat(40)},approval:{gate:'A',digest:'x',run_id:1},merge:{mergeCommitSha:'e'.repeat(40)}}};
  let extra=false,runbook=null;
  const github={async readComparison(base,head){return {status:'ahead',commits:(head==='e'.repeat(40)?['b'.repeat(40),'e'.repeat(40),...(extra?['f'.repeat(40)]:[])]:['b'.repeat(40)]).map(sha=>({sha})),files:[{filename:'app/demo/page.tsx'}]};},async readReleasePlan(){return runbook;}};
  let result=await preparePromotion(github,configuredPolicy(),{'SC-X':record},'e'.repeat(40),MAIN);assert.equal(result.blockedReason,'MISSING_RUNBOOK');
