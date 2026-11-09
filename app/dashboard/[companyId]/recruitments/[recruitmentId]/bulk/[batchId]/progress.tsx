@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { errorLabel, groupLabel, statusLabel, type BulkErrorReason, type BulkGroup, type BulkPhase } from '../../../../../../../lib/cv-bulk';
+import { createProgressPoller } from '../../../../../../../lib/cv-bulk-poll';
 import { bulkProgress } from '../actions';
 
 export type BatchItem = {
@@ -17,21 +18,30 @@ export type BatchStatus = {
   items: BatchItem[];
 };
 
-export function BatchProgress({ companyId, recruitmentId, batchId, initial, billingHref }:
-  { companyId: string; recruitmentId: string; batchId: string; initial: BatchStatus; billingHref: string }) {
+type Props = { companyId: string; recruitmentId: string; batchId: string; initial: BatchStatus; billingHref: string };
+
+/** Keyed by ids: a different batch/recruitment remounts, so no state or timer of the previous one survives. */
+export function BatchProgress(props: Props) {
+  return <BatchProgressInner key={`${props.companyId}:${props.recruitmentId}:${props.batchId}`} {...props} />;
+}
+
+function BatchProgressInner({ companyId, recruitmentId, batchId, initial, billingHref }: Props) {
   const [data, setData] = useState(initial);
-  const finished = data.batch.status === 'completed';
+  const [stale, setStale] = useState(false);
+  const pollerRef = useRef<ReturnType<typeof createProgressPoller<BatchStatus>> | null>(null);
   useEffect(() => {
-    if (finished) return;
-    let stop = false;
-    const tick = async () => {
-      const next = await bulkProgress(companyId, recruitmentId, batchId).catch(() => null) as BatchStatus | null;
-      if (!stop && next) setData(next);
-      if (!stop) setTimeout(tick, 4000);
-    };
-    const timer = setTimeout(tick, 1500);
-    return () => { stop = true; clearTimeout(timer); };
-  }, [companyId, recruitmentId, batchId, finished]);
+    if (initial.batch.status === 'completed') return;
+    const poller = createProgressPoller<BatchStatus>({
+      read: () => bulkProgress(companyId, recruitmentId, batchId) as Promise<BatchStatus | null>,
+      onData: setData,
+      onStale: setStale,
+      isCompleted: d => d.batch.status === 'completed',
+    });
+    pollerRef.current = poller;
+    poller.start();
+    return () => { poller.stop(); pollerRef.current = null; };
+  }, [companyId, recruitmentId, batchId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finished = data.batch.status === 'completed';
 
   const items = data.items;
   const count = (phase: BulkPhase) => items.filter(i => i.phase === phase).length;
@@ -41,6 +51,7 @@ export function BatchProgress({ companyId, recruitmentId, batchId, initial, bill
   const app = (id: string) => `/dashboard/${companyId}/recruitments/${recruitmentId}/applications/${id}/screening`;
   return <section aria-live="polite">
     <p><strong>{finished ? 'Paczka zakończona.' : 'Przetwarzanie w toku — nie zamykaj tej strony do końca przetwarzania.'}</strong></p>
+    {stale && !finished && <p role="status">Nie udało się odświeżyć postępu. Pokazane dane mogą być nieaktualne. <button type="button" onClick={() => pollerRef.current?.retry()}>Spróbuj ponownie</button></p>}
     <progress max={items.length || 1} value={settled} aria-label="Postęp paczki" /> <span>{settled} z {items.length}</span>
     <p>Gotowe: {done} · W toku: {count('analyzing')} · Oczekuje: {count('queued') + count('awaiting_upload')} · Błędy: {errors}</p>
     {overLimit > 0 && <p role="status">{overLimit} plików nie przetworzono, bo pakiet się wyczerpał. <Link href={billingHref}>Zamów pakiet PRESELEKCJA</Link> i wgraj je w nowej paczce.</p>}
