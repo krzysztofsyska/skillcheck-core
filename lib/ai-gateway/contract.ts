@@ -83,6 +83,10 @@ export const AI_GATEWAY_ERROR_CODES = [
   'timeout', 'network_error', 'invalid_response', 'refusal', 'incomplete',
   // SC-021-B: the attempt could not be recorded in the ledger (hook error or hook timeout).
   'ledger_error',
+  // SC-021-C: refused before any provider call (always not_billed). `budget_exceeded`: a new operation
+  // would cross 100% of the company's AI-cost budget; `budget_unconfigured`: no budget (or no rate in
+  // the budget currency) — fail closed; `budget_unavailable`: the budget check itself failed.
+  'budget_exceeded', 'budget_unconfigured', 'budget_unavailable',
 ] as const;
 export type AiGatewayErrorCode = typeof AI_GATEWAY_ERROR_CODES[number];
 

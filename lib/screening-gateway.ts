@@ -12,6 +12,7 @@ import { AiGatewayError } from './ai-gateway/contract.ts';
 import { defaultAiPolicy } from './ai-gateway/default-policy.ts';
 import { createAiGateway } from './ai-gateway/gateway.ts';
 import { createLedgerHook, type LedgerWriter } from './ai-gateway/ledger.ts';
+import { createBudgetGuard, type BudgetReserver } from './ai-gateway/budget.ts';
 import { createOpenAiAdapter } from './ai-gateway/openai.ts';
 import type { AiRoutingPolicy } from './ai-gateway/policy.ts';
 import { attemptLogEntry, gatewayRequestFromResponsesBody, pinnedRouteModel } from './ai-gateway/responses-bridge.ts';
@@ -31,6 +32,10 @@ export function screeningErrorFromGateway(error: unknown): ScreeningProviderErro
     return new ScreeningProviderError(mapScreeningHttpError(error.httpStatus), 'Provider HTTP error.', 'http_error', error.httpStatus);
   }
   switch (error.code) {
+    // SC-021-C: refused before the provider; the analysis fails with a clear, non-retryable status.
+    case 'budget_exceeded': return new ScreeningProviderError('ai_budget_exceeded', 'AI budget exceeded.');
+    case 'budget_unconfigured':
+    case 'budget_unavailable': return new ScreeningProviderError('ai_budget_unavailable', 'AI budget unavailable.');
     case 'timeout': return new ScreeningProviderError('openai_timeout', 'Provider timed out.');
     case 'network_error': return new ScreeningProviderError('openai_network_error', 'Provider unavailable.');
     case 'invalid_response': return new ScreeningProviderError('openai_invalid_output', 'Response was not JSON.', 'response_not_json');
@@ -61,6 +66,12 @@ export type ScreeningGatewayOptions = {
   log: (entry: ReturnType<typeof attemptLogEntry>) => void;
   /** SC-021-B: durable ledger write (public.record_screening_ai_attempt as screening_worker). Required. */
   recordAttempt: LedgerWriter;
+  /**
+   * SC-021-C: reserves the operation's budget (public.reserve_screening_ai_budget as screening_worker)
+   * before its first physical attempt; idempotent per operation, so worker retries pass. Required:
+   * without it every call fails with ai_budget_unavailable before any provider I/O.
+   */
+  reserveBudget: BudgetReserver;
   fetchImpl?: typeof fetch;
   policy?: AiRoutingPolicy;
   now?: () => number;
@@ -74,6 +85,7 @@ export function createScreeningGatewayCall(options: ScreeningGatewayOptions) {
   const policy = options.policy ?? defaultAiPolicy;
   const now = options.now ?? Date.now;
   const ledger = createLedgerHook(options.recordAttempt);
+  const budget = createBudgetGuard(options.reserveBudget);
   return async function callScreeningViaGateway(request: ScreeningOpenAiRequest, claim: ScreeningWorkerClaim): Promise<ScreeningOpenAiResponse> {
     try {
       const { model, request: gatewayRequest } = gatewayRequestFromResponsesBody(request);
@@ -95,6 +107,7 @@ export function createScreeningGatewayCall(options: ScreeningGatewayOptions) {
           // The durable record is not optional: a failure here is `ledger_error` (not retried).
           await ledger(record);
         },
+        beforeOperation: budget,
         now,
       });
       const result = await gateway.runRaw({ companyId, operationId: claim.attempt_id, task: 'cv_screening' }, gatewayRequest);
