@@ -155,6 +155,8 @@ test('payload with contact data or over the size limit never reaches the provide
   await assert.rejects(gw.run(ctx, { ...request, jsonSchema: { name: 's', schema: { description: 'hr@example.com' } } }), e => e.code === 'payload_not_redacted');
   await assert.rejects(gw.run(ctx, { ...request, user: 'x'.repeat(300_000) }), e => e.code === 'payload_too_large');
   await assert.rejects(gw.run(ctx, { ...request, maxOutputTokens: 0 }), e => e.code === 'invalid_request');
+  await assert.rejects(gw.run(ctx, { ...request, jsonSchema: { name: 's', schema: { description: 'x'.repeat(300_000) } } }),
+    e => e.code === 'payload_too_large', 'output schema counts toward the input limit');
   assert.equal(calls.length, 0);
 });
 
@@ -296,6 +298,17 @@ test('circuit breaker takes a failing model out of rotation until the cooldown e
   clock = 1000;
   replies.push(completed());
   assert.equal((await gw.run(ctx, request)).modelKey, 'cheap');
+});
+
+test('pinned route stops retrying once the breaker opens', async () => {
+  const calls = [];
+  const gw = createAiGateway({
+    policy: policyWith({ cv_screening: route({ strategy: 'pinned', candidates: ['cheap'], maxAttempts: 4, retryMaybeBilled: true }) }),
+    adapters: [fakeAdapter(Array.from({ length: 4 }, () => new AiGatewayError('server_error', 'maybe_billed')), calls)],
+    authorize: allow, sleep: noSleep, now: () => 0,
+  });
+  await assert.rejects(gw.run(ctx, request), e => e.code === 'server_error');
+  assert.equal(calls.length, 3, 'default threshold 3 opens the breaker; the 4th call is not made');
 });
 
 test('timeout aborts the provider call', async () => {

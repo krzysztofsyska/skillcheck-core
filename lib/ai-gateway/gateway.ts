@@ -156,7 +156,9 @@ export function createAiGateway(options: AiGatewayOptions) {
     if (models.length === 0) throw new AiGatewayError('no_available_model');
 
     assertRequest(request);
-    if (Buffer.byteLength(request.system, 'utf8') + Buffer.byteLength(request.user, 'utf8') > route.maxInputBytes) {
+    // Everything the adapter sends counts: instructions, payload and the output schema.
+    const schemaBytes = request.jsonSchema ? Buffer.byteLength(JSON.stringify(request.jsonSchema.schema), 'utf8') : 0;
+    if (Buffer.byteLength(request.system, 'utf8') + Buffer.byteLength(request.user, 'utf8') + schemaBytes > route.maxInputBytes) {
       throw new AiGatewayError('payload_too_large');
     }
     if (route.blockContactData && (containsContactData(request.user) || containsContactData(request.system)
@@ -199,8 +201,10 @@ export function createAiGateway(options: AiGatewayOptions) {
         if (error.code === 'model_unavailable' && route.strategy === 'pinned') throw error;
         if (attempt === route.maxAttempts) break;
         // Move to the next eligible model when this one is unavailable; pinned routes have one.
-        if ((error.code === 'model_unavailable' || !isAvailable(model.key)) && route.strategy !== 'pinned') {
-          if (index + 1 >= models.length) break;
+        if (error.code === 'model_unavailable' || !isAvailable(model.key)) {
+          // The model is out (missing, or its breaker just opened): never resend to it.
+          // Pinned routes and the last eligible model end here; others move to the next model.
+          if (route.strategy === 'pinned' || index + 1 >= models.length) break;
           index += 1;
         } else {
           await sleep(Math.min(8_000, 500 * 2 ** (attempt - 1)));

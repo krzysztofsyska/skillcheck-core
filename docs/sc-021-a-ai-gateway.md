@@ -60,4 +60,4 @@ screeningu (model, prompt, schemat) się nie zmienia.
 
 ## Testy
 
-`npm run test:ai-gateway` — 25 testów syntetycznych, bez sieci i bez kluczy.
+`npm run test:ai-gateway` — 26 testów syntetycznych, bez sieci i bez kluczy.
