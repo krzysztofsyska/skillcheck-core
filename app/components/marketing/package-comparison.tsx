@@ -6,7 +6,9 @@ import { freeAnalyses, freePrice, preselekcjaAnalyses, preselekcjaOffer, presele
 import { futureOffers } from "./future-offers";
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 
-export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean }) {
+export function PackageComparison({ sizes, catalogEnabled = false, futureOffersEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean; futureOffersEnabled?: boolean }) {
+  // WERYFIKACJA and ASSESSMENT CENTER are hidden from the public offer unless PUBLIC_FUTURE_OFFERS_ENABLED=true
+  // (owner decision 2026-11-10, Przelewy24 verification). Their copy stays in future-offers.ts and below.
   // Live catalog wins when enabled; an enabled but failing catalog shows no number.
   // With the catalog off, the owner-approved FREE and PRESELEKCJA offers are shown.
   const analyses = preselekcjaAnalyses(catalogEnabled, sizes);
@@ -46,6 +48,7 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
   <details className={styles.packageDetails}><summary>Porównaj FREE i PRESELEKCJĘ</summary>
     <div className={styles.tableScroll} role="region" aria-label="Porównanie pakietów — przewijaj poziomo na telefonie" tabIndex={0}><table className={styles.packageTable}><caption>Zakres pakietów dostępnych dzisiaj</caption><thead><tr><th scope="col">Co otrzymujesz?</th>{plans.map(p=><th scope="col" key={p.name} className={p.color}>{p.name}</th>)}</tr></thead><tbody>{rows.map(row=><tr key={row[0]}><th scope="row">{row[0]}</th>{row.slice(1).map((v,i)=><td key={i}>{v}</td>)}</tr>)}</tbody></table></div>
   </details>
+  {futureOffersEnabled && <>
   <div id="planowane-pakiety" className={styles.futureIntro}>
     <h3>CV to początek. Zaplanuj kolejny krok.</h3>
     <p>WERYFIKACJA i ASSESSMENT CENTER są w przygotowaniu. Poniżej przedstawiamy planowany zakres, nie dostępne dziś funkcje pakietów. Nie można ich jeszcze kupić; nie podajemy terminu uruchomienia. Ostateczne warunki będą dostępne przed zakupem.</p>
@@ -81,5 +84,6 @@ export function PackageComparison({ sizes, catalogEnabled = false }: { sizes: Sc
     </ol>
     <p>To plan rozwoju. Poszczególne elementy mogą być przygotowane wcześniej, ale cały pakiet udostępnimy dopiero po sprawdzeniu procesu od początku do końca.</p>
   </div>
+  </>}
 </>;
 }

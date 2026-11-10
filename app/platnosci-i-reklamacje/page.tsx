@@ -9,6 +9,7 @@ import { SiteHeader } from "../components/marketing/site-header";
 import { SiteFooter } from "../components/marketing/site-footer";
 import { loadPublicOffer, preselekcjaOffer, preselekcjaPrice } from "../components/marketing/preselekcja-offer";
 import { COMPANY, LEGAL_DOCUMENTS } from "../../lib/legal";
+import { isPublicFutureOffersEnabled } from "../../lib/public-future-offers";
 import marketing from "../marketing.module.css";
 import styles from "../rozmowa/rozmowa.module.css";
 
@@ -36,7 +37,7 @@ export default async function PaymentsAndComplaintsPage() {
         Szczegóły i aktualne ceny znajdziesz w sekcji <Link href="/#pakiety">Pakiety</Link>.</p>
       <p>Przed złożeniem zamówienia serwis pokazuje nazwę pakietu, liczbę analiz, okres ważności, cenę netto, kwotę VAT i cenę brutto w złotych. Ceny są cenami brutto, chyba że oznaczono inaczej. Nie ma kosztów dostawy.
         Pakiet FREE jest jednorazowym, bezpłatnym pakietem próbnym dla jednej firmy (jednego numeru NIP).
-        Pakiety WERYFIKACJA i ASSESSMENT CENTER mają charakter informacyjny i nie są dostępne do zakupu do czasu opublikowania dla nich oferty.</p>
+        {isPublicFutureOffersEnabled() && " Pakiety WERYFIKACJA i ASSESSMENT CENTER mają charakter informacyjny i nie są dostępne do zakupu do czasu opublikowania dla nich oferty."}</p>
       {full("§ 2, § 3 i § 6")}
 
       <h2>Metody płatności</h2>
