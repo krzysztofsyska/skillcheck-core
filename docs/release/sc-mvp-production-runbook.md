@@ -11,7 +11,7 @@ Powiązane: draft PR #86 (promocja), PR #160 (zgodność migracji), `docs/releas
 | Kandydat | `integration` @ `5f5df6a6d9a22832359908db744db7a1be94da0d` (554 commity, 47 kroków PR, 368 plików) |
 | Produkcja Vercel | `dpl_FAdsWMLnAyYVe19v6sNEY4Ci9zqm`, READY, `main` @ `76760b7ffb7e95231fc7af313cc67bc8d36fefe1` |
 | Supabase produkcja | `wsvjawuikxfzjyivxgsu` („white Label”), **PostgreSQL 17.6**, 19 migracji, ostatnia `20261011165916 sales_retention_cron_extension` |
-| Historia migracji | identyczna z `tests/fixtures/sc19-production-history.json` (19 pozycji) |
+| Historia migracji | identyczna z `tests/fixtures/sc19-production-history-2026-10-24.json` (19 pozycji; stan na 2026-10-24, potem produkcja urosła do 49 — aktualny stan: `tests/fixtures/sc19-production-history.json`) |
 | Obiekty docelowe SC-010 | brak (`private.candidate_retention_policies`, `erasure_execution_config`, `erasure_executions`, `retention_delegations`, `erasure_inventory_baseline_r4`) |
 | Role | istnieje tylko `screening_worker`; ról erasure brak |
 | Rozszerzenia | `pg_cron 1.6.4`, `pgcrypto 1.3` |

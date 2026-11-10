@@ -44,6 +44,7 @@ on:
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
       - 'tests/fixtures/sc19-production-history.json'
+      - 'tests/fixtures/sc19-production-history-2026-10-24.json'
       - 'tests/fixtures/sc19-hosted-acl-differences.json'
       - 'tests/fixtures/sc19-rehearsal.Dockerfile'
       - 'tests/helpers/sc19-migration-fixture.mjs'
@@ -91,6 +92,7 @@ on:
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
       - 'tests/fixtures/sc19-production-history.json'
+      - 'tests/fixtures/sc19-production-history-2026-10-24.json'
       - 'tests/fixtures/sc19-hosted-acl-differences.json'
       - 'tests/fixtures/sc19-rehearsal.Dockerfile'
       - 'tests/helpers/sc19-migration-fixture.mjs'
@@ -209,7 +211,7 @@ jobs:
         include:
           - { postgres: '16', image_tag: '16', label: '16' }
           - { postgres: '17', image_tag: '17', label: '17' }
-          # Exact minor of production project wsvjawuikxfzjyivxgsu (read 2026-10-24).
+          # Exact minor of production project wsvjawuikxfzjyivxgsu (PostgreSQL 17.6, 49 migrations; state read 2026-11-10).
           - { postgres: '17', image_tag: '17.6', label: '17.6-production' }
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -256,6 +258,28 @@ jobs:
         run: |
           set -o pipefail
           node --test tests/sc-019-migrations-production-history.test.mjs 2>&1 | tee sc19-production-history.log
+      - name: Rehearse the release from the CURRENT production state (49 recorded migrations, read 2026-11-10)
+        env:
+          SC19_REHEARSAL_DISPOSABLE: 'yes'
+          SC19_CURRENT_REHEARSAL_DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:55434/sc19_production_current
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          set -o pipefail
+          # Third disposable cluster: roles are cluster-wide and pg_cron accepts one database per cluster,
+          # so the legacy (2026-10-24) rehearsal above cannot share a cluster with this one.
+          docker run -d --name sc19-current -p 127.0.0.1:55434:5432 \
+            -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_current \
+            sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_production_current
+          ready=''
+          for attempt in $(seq 1 60); do
+            if docker exec sc19-current pg_isready -h 127.0.0.1 -U supabase_admin -d sc19_production_current >/dev/null; then
+              ready=$(docker exec -e PGPASSWORD=synthetic-only sc19-current psql -h 127.0.0.1 -U supabase_admin -d sc19_production_current -tAc 'select 1' 2>/dev/null) || ready=''
+              [ "$ready" = 1 ] && break
+            fi
+            sleep 1
+          done
+          [ "$ready" = 1 ] || { echo "::error::current-state rehearsal server did not become ready over TCP"; docker logs --tail 50 sc19-current; exit 1; }
+          node --test tests/sc-019-migrations-production-current.test.mjs 2>&1 | tee -a sc19-production-history.log
       - name: Reproduce the inspected production state (CRLF functions), normalization and M13
         if: matrix.postgres == '17'
         env:
@@ -288,4 +312,4 @@ jobs:
           retention-days: 7
       - name: Remove only this job's disposable container
         if: always()
-        run: docker rm -f sc19-rehearsal sc19-hosted || true
+        run: docker rm -f sc19-rehearsal sc19-hosted sc19-current || true

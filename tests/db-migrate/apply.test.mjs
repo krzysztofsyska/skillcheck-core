@@ -41,8 +41,8 @@ test('every repository migration has the begin/commit frame the runner removes',
   assert.throws(() => unframe('begin;\nbegin;\ncommit;\n', 'x'), /exactly one/);
 });
 
-test('observed production history: the full pending chain has no gaps, skipping M13 is refused', async () => {
-  const history = JSON.parse(await readFile(new URL('../fixtures/sc19-production-history.json', import.meta.url), 'utf8')).history;
+test('LEGACY (2026-10-24) observed production history: the full pending chain has no gaps, skipping M13 is refused', async () => {
+  const history = JSON.parse(await readFile(new URL('../fixtures/sc19-production-history-2026-10-24.json', import.meta.url), 'utf8')).history;
   const recorded = new Set(history.map(entry => entry.name));
   const files = (await readdir(repoDir)).filter(name => name.endsWith('.sql')).sort();
   const pending = files.filter(file => !recorded.has(file.replace(/^\d+_/, '').replace(/\.sql$/, '')));
