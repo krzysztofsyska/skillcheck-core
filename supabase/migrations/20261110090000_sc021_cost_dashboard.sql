@@ -24,7 +24,8 @@
 --   unpriced    — settled, brak stawki (koszt NULL; koszt zaniżony);
 --   unknown     — maybe billed bez tokenów (koszt nieznany);
 --   released    — not billed (0);
---   reserved    — rezerwacja SC-021-C (nie wliczana do kosztu; punkt rozszerzenia).
+--   reserved    — wiersz rejestru w statusie reserved (nie wliczany). Żywe rezerwacje SC-021-C
+--                 (ai_ledger.budget_reservations) są pokazywane osobno: liczba i niewykorzystana kwota.
 -- bounds_exceeded to osobna flaga (anomalia), niezależna od klasy.
 --
 -- Zaokrąglenia (arytmetyka całkowita na numeric, bez float):
@@ -40,7 +41,8 @@ begin
   end if;
   if to_regclass('ai_ledger.attempts') is null or to_regclass('sc19_commerce.orders') is null
     or to_regclass('pricing.catalog_versions') is null or to_regclass('private.sc19_credit_journal') is null
-    or to_regprocedure('private.sc19_require_operator()') is null then
+    or to_regprocedure('private.sc19_require_operator()') is null
+    or to_regclass('ai_ledger.budget_reservations') is null then
     raise exception 'sc021d_dependency_missing' using errcode = '55000';
   end if;
   if to_regclass('ai_ledger.fx_rates') is not null or to_regclass('ai_ledger.other_cost_lines') is not null then
@@ -235,6 +237,52 @@ language sql immutable set search_path = '' as $$
     when 'ASSESSMENT_CENTER' then 'ASSESSMENT CENTER' else 'Bez pakietu' end
 $$;
 
+-- Rezerwacje budżetu SC-021-C (ai_ledger.budget_reservations). Panel pokazuje żywe rezerwacje osobno
+-- (liczba i niewykorzystana kwota), nigdy jako koszt ani wywołanie. Reguła „żywa” i „pozostałość” są
+-- TE SAME co w ai_ledger.budget_usage (SC-021-C); test porównuje sumy z budget_usage, żeby kopie się
+-- nie rozjechały.
+create function ai_ledger.reservation_is_live(r ai_ledger.budget_reservations, at timestamptz) returns boolean
+language sql stable set search_path = '' as $$
+  select r.released_at is null and r.expires_at > at
+    and case r.task
+      when 'cv_screening' then exists (select 1 from public.screening_analysis_attempts t
+        where t.id = r.operation_id and t.company_id = r.company_id and t.status in ('pending', 'processing'))
+      when 'exercise_generation' then coalesce((select s.generation_requests->r.operation_id::text->>'status' = 'reserved'
+          and ((s.generation_requests->r.operation_id::text->>'expires_at')::timestamptz > at)
+          or not (s.generation_requests ? r.operation_id::text)
+        from exercise_ai.recruitment_settings s where s.company_id = r.company_id and s.recruitment_id = r.process_id), true)
+      else false end
+$$;
+
+-- Pozostałość = rezerwacja − koszt już zapisanych prób operacji (w walucie rezerwacji; próba bez
+-- znanego kosztu liczy się stawką rezerwacji), min. 0.
+create function ai_ledger.reservation_unused_micros(r ai_ledger.budget_reservations) returns bigint
+language sql stable set search_path = '' as $$
+  select greatest(0, r.reserved_micros - coalesce((select sum(case when a.status = 'released' then 0
+      when a.status = 'settled' and a.cost_micros is not null and a.currency = r.currency then a.cost_micros
+      else r.per_attempt_micros end)
+    from ai_ledger.attempts a
+    where a.task = r.task and a.company_id = r.company_id and a.process_id = r.process_id and a.operation_id = r.operation_id), 0))::bigint
+$$;
+
+-- Żywe rezerwacje utworzone przed końcem okresu (ta sama reguła co budget_usage), z wymiarami panelu.
+create function ai_ledger.live_reservations(from_ts timestamptz, to_ts timestamptz, at timestamptz)
+returns table (company_id uuid, process_id uuid, candidate_ref uuid, task text, provider text, model text,
+  currency text, unused_micros bigint, package_code text, month date)
+language sql stable set search_path = '' as $$
+  with ranges as materialized (select * from ai_ledger.package_ranges())
+  select r.company_id, r.process_id,
+    case when r.task = 'cv_screening' then (select v.application_id from public.screening_analysis_attempts t
+      join public.screening_analysis_versions v on v.id = t.analysis_id and v.company_id = t.company_id
+      where t.id = r.operation_id and t.company_id = r.company_id) end,
+    r.task, p.provider, p.model, r.currency, ai_ledger.reservation_unused_micros(r),
+    coalesce(g.package_code, 'BRAK'), ai_ledger.warsaw_month(greatest(r.created_at, from_ts))
+  from ai_ledger.budget_reservations r
+  join ai_ledger.prices p on p.id = r.price_id
+  left join ranges g on g.company_id = r.company_id and r.created_at >= g.t_from and (g.t_to is null or r.created_at < g.t_to)
+  where r.created_at < to_ts and ai_ledger.reservation_is_live(r, at)
+$$;
+
 -- Koszty AI w przekroju. Kandydat wyłącznie jako pseudonim (skrót z identyfikatora zgłoszenia);
 -- funkcja nigdy nie zwraca identyfikatora zgłoszenia ani danych osobowych.
 create function public.sc021_operator_ai_costs(from_month date, to_month date, group_by text)
@@ -243,7 +291,8 @@ returns table (group_key text, group_label text, company_id uuid, company_name t
   confirmed_count bigint, placeholder_count bigint, unpriced_count bigint, unknown_count bigint,
   released_count bigint, reserved_count bigint, bounds_exceeded_count bigint,
   cost_micros jsonb, confirmed_pln_minor bigint, placeholder_pln_minor bigint,
-  fx_missing boolean, fx_placeholder boolean, fx_stale boolean)
+  fx_missing boolean, fx_placeholder boolean, fx_stale boolean,
+  live_reservations bigint, reservations_unused_micros jsonb)
 language plpgsql stable security definer set search_path = '' as $$
 declare f timestamptz; t timestamptz;
 begin
@@ -267,7 +316,21 @@ begin
         when 'task' then c.task
         when 'month' then to_char(c.month, 'YYYY-MM')
       end k
-    from ai_ledger.cost_rows(f, t) c
+    from (
+      select 'a' src, x.company_id, x.process_id, x.candidate_ref, x.task, x.provider, x.model, x.op_key, x.cost_class,
+        x.currency, x.cost_micros, x.reserved_micros, x.bounds_exceeded, x.rate_micros, x.rate_placeholder, x.rate_stale,
+        x.package_code, x.month, null::bigint unused
+      from ai_ledger.cost_rows(f, t) x
+      union all
+      select 'r', y.company_id, y.process_id, y.candidate_ref, y.task, y.provider, y.model, null, null,
+        y.currency, null, null, false, null, null, null, y.package_code, y.month, y.unused_micros
+      from ai_ledger.live_reservations(f, t, clock_timestamp()) y
+    ) c
+  ),
+  held as (
+    select h.k, jsonb_object_agg(h.cur, h.unused) j
+    from (select x.k, x.currency cur, sum(x.unused) unused from base x where x.src = 'r' group by 1, 2) h
+    group by h.k
   ),
   money as (
     select b.k, jsonb_object_agg(b.cur, jsonb_build_object('confirmed', b.confirmed, 'placeholder', b.placeholder, 'reserved', b.reserved)) j
@@ -284,7 +347,8 @@ begin
       case when group_by in ('company', 'recruitment', 'candidate') and count(distinct b.company_id) = 1
         then (array_agg(b.company_id))[1] end cid,
       (array_agg(b.process_id))[1] pid,
-      count(*) n, count(distinct b.op_key) ops,
+      count(*) filter (where b.src = 'a') n, count(distinct b.op_key) filter (where b.src = 'a') ops,
+      count(*) filter (where b.src = 'r') n_held,
       count(*) filter (where b.cost_class = 'confirmed') c_confirmed,
       count(*) filter (where b.cost_class = 'placeholder') c_placeholder,
       count(*) filter (where b.cost_class = 'unpriced') c_unpriced,
@@ -292,8 +356,8 @@ begin
       count(*) filter (where b.cost_class = 'released') c_released,
       count(*) filter (where b.cost_class = 'reserved') c_reserved,
       count(*) filter (where b.bounds_exceeded) c_bounds,
-      bool_or(b.cost_class = 'confirmed' and b.rate_micros is null) miss_confirmed,
-      bool_or(b.cost_class = 'placeholder' and b.rate_micros is null) miss_placeholder,
+      coalesce(bool_or(b.cost_class = 'confirmed' and b.rate_micros is null), false) miss_confirmed,
+      coalesce(bool_or(b.cost_class = 'placeholder' and b.rate_micros is null), false) miss_placeholder,
       coalesce(sum(b.cost_micros::numeric * b.rate_micros) filter (where b.cost_class = 'confirmed'), 0) pln_confirmed,
       coalesce(sum(b.cost_micros::numeric * b.rate_micros) filter (where b.cost_class = 'placeholder'), 0) pln_placeholder,
       coalesce(bool_or(b.cost_class in ('confirmed', 'placeholder') and b.rate_placeholder), false) fx_ph,
@@ -319,9 +383,11 @@ begin
     coalesce(m.j, '{}'::jsonb),
     case when a.miss_confirmed then null else ceil(a.pln_confirmed / 10000000000)::bigint end,
     case when a.miss_placeholder then null else ceil(a.pln_placeholder / 10000000000)::bigint end,
-    a.miss_confirmed or a.miss_placeholder, a.fx_ph, a.fx_old
+    a.miss_confirmed or a.miss_placeholder, a.fx_ph, a.fx_old,
+    a.n_held, coalesce(hd.j, '{}'::jsonb)
   from agg a
   left join money m on m.k = a.k
+  left join held hd on hd.k = a.k
   left join public.companies co on co.id = a.cid
   left join public.recruitments rc on group_by = 'recruitment' and rc.id = a.pid
   order by a.k;
@@ -376,6 +442,10 @@ begin
       select 'ai', a.cid, a.pkg, a.mon, null, null, null, a.cost_class, a.cost_micros, a.rate_micros, a.rate_placeholder, a.rate_stale, null from ai a
       union all
       select 'oth', o.cid, o.pkg, o.mon, null, null, null, null, null, null, null, null, o.amount_minor from oth o
+      union all
+      -- Żywe rezerwacje SC-021-C: nie są kosztem, ale marża z nimi jest szacunkiem.
+      select 'res', y.company_id, y.package_code, y.month, null, null, null, 'held', null, null, null, null, null
+      from ai_ledger.live_reservations(f, t, clock_timestamp()) y
     ) x
   ),
   agg as (
@@ -391,7 +461,7 @@ begin
       coalesce(bool_or(k.src = 'ai' and k.cls = 'placeholder'), false) price_ph,
       coalesce(bool_or(k.src = 'ai' and k.cls = 'unpriced'), false) unpriced,
       coalesce(bool_or(k.src = 'ai' and k.cls = 'unknown'), false) unknown,
-      coalesce(bool_or(k.src = 'ai' and k.cls = 'reserved'), false) reserved,
+      coalesce(bool_or((k.src = 'ai' and k.cls = 'reserved') or k.src = 'res'), false) reserved,
       ceil(coalesce(sum(k.micros::numeric * k.rate) filter (where k.src = 'ai' and k.cls in ('confirmed', 'placeholder')), 0)
         / 10000000000)::bigint ai_pln,
       coalesce(sum(k.other) filter (where k.src = 'oth'), 0)::bigint other
@@ -462,19 +532,27 @@ begin
 end;
 $$;
 
-create function public.sc021_operator_other_costs(from_month date, to_month date)
+-- Lista innych kosztów: filtr firmy i stronicowanie (stała kolejność: miesiąc, czas wpisu, id —
+-- malejąco), żeby każdy wpis wpływający na marżę dało się znaleźć i poprawić.
+create function public.sc021_operator_other_costs(from_month date, to_month date, target_company uuid default null,
+  page_offset integer default 0, page_size integer default 100)
 returns table (id uuid, period_month date, company_id uuid, company_name text, package_code text, category text,
   amount_minor bigint, note text, supersedes uuid, superseded boolean, created_at timestamptz)
 language plpgsql stable security definer set search_path = '' as $$
 declare f timestamptz; t timestamptz;
 begin
   perform private.sc19_require_operator();
+  if page_offset is null or page_offset not between 0 and 1000000 or page_size is null or page_size not between 1 and 500 then
+    raise exception 'sc021d_invalid_page' using errcode = '22023';
+  end if;
   select r.from_ts, r.to_ts into f, t from ai_ledger.month_range(from_month, to_month) r;
   return query select l.id, l.period_month, l.company_id, co.name, l.package_code, l.category, l.amount_minor, l.note,
     l.supersedes, exists (select 1 from ai_ledger.other_cost_lines s where s.supersedes = l.id), l.created_at
   from ai_ledger.other_cost_lines l left join public.companies co on co.id = l.company_id
   where l.period_month >= ai_ledger.warsaw_month(f) and l.period_month < ai_ledger.warsaw_month(t)
-  order by l.period_month desc, co.name, l.created_at desc limit 500;
+    and (target_company is null or l.company_id = target_company)
+  order by l.period_month desc, l.created_at desc, l.id desc
+  offset page_offset limit page_size;
 end;
 $$;
 
@@ -536,13 +614,16 @@ begin
     'ai_ledger.is_catalog_settlement(text)'::regprocedure,
     'ai_ledger.package_ranges()'::regprocedure,
     'ai_ledger.candidate_pseudonym(uuid)'::regprocedure,
+    'ai_ledger.reservation_is_live(ai_ledger.budget_reservations,timestamptz)'::regprocedure,
+    'ai_ledger.reservation_unused_micros(ai_ledger.budget_reservations)'::regprocedure,
+    'ai_ledger.live_reservations(timestamptz,timestamptz,timestamptz)'::regprocedure,
     'ai_ledger.cost_rows(timestamptz,timestamptz)'::regprocedure,
     'ai_ledger.package_label(text)'::regprocedure,
     'public.sc021_operator_ai_costs(date,date,text)'::regprocedure,
     'public.sc021_operator_margin(date,date,text)'::regprocedure,
     'public.sc021_operator_fx_rates()'::regprocedure,
     'public.sc021_operator_add_fx_rate(uuid,text,bigint,timestamptz,text,boolean)'::regprocedure,
-    'public.sc021_operator_other_costs(date,date)'::regprocedure,
+    'public.sc021_operator_other_costs(date,date,uuid,integer,integer)'::regprocedure,
     'public.sc021_operator_add_other_cost(uuid,date,uuid,text,text,bigint,text,uuid)'::regprocedure]) loop
     execute format('revoke all on function %s from public', o.oid::regprocedure);
     for g in select distinct r.rolname from pg_proc p cross join lateral aclexplode(p.proacl) a
@@ -555,7 +636,7 @@ $acl$;
 -- Wyłącznie sesja zalogowana; każda funkcja sama sprawdza aktualną listę operatorów (z odwołaniem).
 grant execute on function public.sc021_operator_ai_costs(date, date, text), public.sc021_operator_margin(date, date, text),
   public.sc021_operator_fx_rates(), public.sc021_operator_add_fx_rate(uuid, text, bigint, timestamptz, text, boolean),
-  public.sc021_operator_other_costs(date, date),
+  public.sc021_operator_other_costs(date, date, uuid, integer, integer),
   public.sc021_operator_add_other_cost(uuid, date, uuid, text, text, bigint, text, uuid) to authenticated;
 
 -- Kurs TESTOWY USD→PLN (placeholder). To NIE jest kurs NBP ani rynkowy. Marża policzona na nim

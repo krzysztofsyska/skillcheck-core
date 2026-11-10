@@ -43,7 +43,7 @@ export const MARGIN_REASONS: Record<string, string> = {
   placeholder_prices: 'część kosztu AI na stawkach testowych',
   unpriced_attempts: 'część wywołań AI bez stawki (koszt zaniżony)',
   unknown_attempts: 'część wywołań AI z nieznanym kosztem',
-  reserved_not_counted: 'rezerwacje budżetu nie są wliczone',
+  reserved_not_counted: 'rezerwacje budżetu w toku (koszt jeszcze niewliczony)',
   payments_without_amount: 'wpłaty bez kwoty w systemie (ręczny przydział)',
 };
 

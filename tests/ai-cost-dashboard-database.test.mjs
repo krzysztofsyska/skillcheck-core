@@ -73,6 +73,27 @@ async function scenario(e) {
   await insert({ company: b.companyId, process: b.recruitment.id, candidate: b.application.id, kind: 'reserved', reserved: 300 });
   await insert({ company: b.companyId, process: b.recruitment.id, candidate: b.application.id, kind: 'settled', p: prices.usd, cost: 7000000,
     createdAt: `${e.month.old.slice(0, 8)}11T12:00:00Z` });
+  // SC-021-C budget reservations (rows matching C's schema). Live: an exercise hold without attempts (1000),
+  // the `shared` exercise hold with one recorded attempt of unknown cost (3000 − 1000 = 2000), and a screening
+  // hold on an attempt the worker is processing (1000). Not live: released, expired.
+  const { db, h } = e;
+  const c = await h.candidate(b); const started = await h.start(c); await h.claim(started);
+  await h.asAdmin();
+  const estimate = async task => (await db.query('select id from ai_ledger.budget_estimates where task=$1 order by created_at desc limit 1', [task])).rows[0].id;
+  const hold = async ({ task = 'exercise_generation', company, process, op = randomUUID(), per, attempts = 1, created = "now()",
+    expires = "now() + interval '1 hour'", released = false }) => {
+    await h.asAdmin();
+    await db.query(`insert into ai_ledger.budget_reservations(task,company_id,process_id,operation_id,period_start,currency,per_attempt_micros,
+      attempts,reserved_micros,estimate_id,price_id,created_at,expires_at,released_at)
+      values($1,$2,$3,$4,ai_ledger.warsaw_month(now())::timestamp at time zone 'Europe/Warsaw','USD',$5::bigint,$6::int,$5::bigint*$6::int,$7,$8,${created},${expires},
+      case when $9 then now() end)`, [task, company, process, op, per, attempts, await estimate(task), prices.placeholder.id, released]);
+    return op;
+  };
+  await hold({ company: a.companyId, process: a.recruitment.id, per: 1000 });
+  await hold({ company: a.companyId, process: a.recruitment.id, op: shared, per: 1000, attempts: 3 });
+  await hold({ task: 'cv_screening', company: b.companyId, process: b.recruitment.id, op: started.attempt_id, per: 500, attempts: 2 });
+  await hold({ company: b.companyId, process: b.recruitment.id, per: 9000, released: true });
+  await hold({ company: b.companyId, process: b.recruitment.id, per: 9000, created: "now() - interval '2 hours'", expires: "now() - interval '1 hour'" });
 }
 
 test('SC-021-D cost views: grouping rules, cost classes, placeholder/missing FX, pseudonymous candidates', async t => {
@@ -82,6 +103,18 @@ test('SC-021-D cost views: grouping rules, cost classes, placeholder/missing FX,
   const [total] = await e.costs('total');
   // 8 attempts in the period; operations: op1, placeholder op, A exercise, B exercise (same key, other company), EUR op, reservation.
   assert.deepEqual(classes(total), { attempts: 8, operations: 6, confirmed: 3, placeholder: 1, unpriced: 1, unknown: 1, released: 1, reserved: 1, bounds: 1 });
+  // Live SC-021-C reservations: shown separately (count + unused amount), never as cost or attempts.
+  assert.equal(n(total.live_reservations), 3);
+  assert.deepEqual(total.reservations_unused_micros, { USD: 4000 });
+  // C's own usage function agrees on the unused amount held (same liveness and remainder rule).
+  await h.asAdmin();
+  for (const [company, held] of [[a.companyId, 3000], [b.companyId, 1000]]) {
+    const pb = (await db.query('select * from ai_ledger.period_bounds(now())')).rows[0];
+    const c = (await db.query("select reserved_micros from ai_ledger.budget_usage($1,$2,$3,'USD',now())", [company, pb.period_start, pb.period_end])).rows[0];
+    const d = (await db.query('select coalesce(sum(unused_micros),0)::bigint v from ai_ledger.live_reservations($1,$2,now()) where company_id=$3',
+      [pb.period_start, pb.period_end, company])).rows[0];
+    assert.equal(Number(c.reserved_micros), held); assert.equal(Number(d.v), held);
+  }
   assert.deepEqual(total.cost_micros, { USD: { confirmed: 3000000, placeholder: 500000, reserved: 0 }, EUR: { confirmed: 1000000, placeholder: 0, reserved: 0 },
     '?': { confirmed: 0, placeholder: 0, reserved: 300 } });
   // EUR has no rate: confirmed PLN cost is unavailable, never guessed. Placeholder USD→PLN 4.000000: 0.5 USD → 200 gr.
@@ -94,6 +127,8 @@ test('SC-021-D cost views: grouping rules, cost classes, placeholder/missing FX,
   assert.equal(n(byCompany[a.companyId].confirmed_pln_minor), 400); assert.equal(byCompany[a.companyId].fx_missing, false);
   assert.equal(byCompany[a.companyId].company_id, a.companyId); assert.ok(byCompany[a.companyId].company_name);
   assert.deepEqual(classes(byCompany[b.companyId]), { attempts: 3, operations: 3, confirmed: 2, placeholder: 0, unpriced: 0, unknown: 0, released: 0, reserved: 1, bounds: 0 });
+  assert.deepEqual([n(byCompany[a.companyId].live_reservations), byCompany[a.companyId].reservations_unused_micros], [2, { USD: 3000 }]);
+  assert.deepEqual([n(byCompany[b.companyId].live_reservations), byCompany[b.companyId].reservations_unused_micros], [1, { USD: 1000 }]);
   assert.equal(byCompany[b.companyId].confirmed_pln_minor, null); assert.equal(byCompany[b.companyId].fx_missing, true);
 
   const byRecruitment = await e.costs('recruitment');
@@ -104,11 +139,13 @@ test('SC-021-D cost views: grouping rules, cost classes, placeholder/missing FX,
 
   // Candidates appear only as a pseudonym; the application id never leaves the function.
   const byCandidate = await e.costs('candidate');
-  assert.equal(byCandidate.length, 3);
+  // A, B, `none` (exercise rows and holds) and the candidate whose screening is only reserved so far.
+  assert.equal(byCandidate.length, 4);
+  assert.deepEqual(byCandidate.filter(r => n(r.attempts) === 0).map(r => n(r.live_reservations)), [1]);
   const none = byCandidate.find(r => r.group_key === 'none');
   assert.equal(n(none.attempts), 2); assert.equal(n(none.operations), 2, 'exercise operation = (company, recruitment, key)');
   for (const r of byCandidate.filter(r => r.group_key !== 'none')) assert.match(r.group_key, /^K-[0-9A-F]{16}$/);
-  assert.deepEqual(byCandidate.filter(r => r.group_key !== 'none').map(r => n(r.attempts)).sort(), [2, 4]);
+  assert.deepEqual(byCandidate.filter(r => r.group_key !== 'none' && n(r.attempts) > 0).map(r => n(r.attempts)).sort(), [2, 4]);
   const serialized = JSON.stringify(byCandidate);
   for (const id of [a.application.id, b.application.id, a.candidate?.id, b.candidate?.id].filter(Boolean)) assert.ok(!serialized.includes(id));
 
@@ -192,6 +229,27 @@ test('SC-021-D margin: net revenue from paid catalog orders, other variable cost
   await addCost(randomUUID(), { company: a.companyId, pkg: null, category: 'email', amount: 30 });
   const listed = (await db.query('select * from public.sc021_operator_other_costs($1,$2)', [e.month.old, e.month.n])).rows;
   assert.deepEqual(listed.map(r => [n(r.amount_minor), r.superseded]).sort(), [[120, false], [150, true], [30, false], [999, false]]);
+  // Paging and company filter: every line that affects the margin can be found and corrected.
+  for (let i = 0; i < 3; i++) await addCost(randomUUID(), { company: a.companyId, pkg: null, category: 'other', amount: 1, note: `page ${i}` });
+  const page = async (offset, size, company = null) => (await db.query('select * from public.sc021_operator_other_costs($1,$2,$3,$4,$5)',
+    [e.month.old, e.month.n, company, offset, size])).rows;
+  const all = await page(0, 500);
+  assert.equal(all.length, 7);
+  const pages = [await page(0, 3), await page(3, 3), await page(6, 3)];
+  assert.deepEqual(pages.map(p => p.length), [3, 3, 1]);
+  assert.deepEqual(pages.flat().map(r => r.id), all.map(r => r.id), 'stable order across pages');
+  const last = pages[2][0];
+  // The oldest line (B's 999 in the earlier month) sits on the last page; correct it there (same amount, new note).
+  assert.deepEqual([n(last.amount_minor), last.company_id, last.superseded], [999, b.companyId, false]);
+  await addCost(randomUUID(), { month: e.month.old, company: b.companyId, pkg: null, category: 'sms', amount: 999, note: 'corrected',
+    supersedes: last.id });
+  assert.equal((await page(0, 500)).find(r => r.id === last.id).superseded, true);
+  assert.deepEqual([...new Set((await page(0, 500, b.companyId)).map(r => r.company_id))], [b.companyId]);
+  for (const [offset, size] of [[-1, 3], [0, 0], [0, 501]]) await assert.rejects(page(offset, size), denied('22023'));
+  // Remove the extra lines' effect from the totals below: correct them to 0.
+  for (const r of (await page(0, 500, a.companyId)).filter(r => !r.superseded && r.category === 'other' && n(r.amount_minor) === 1)) {
+    await addCost(randomUUID(), { company: a.companyId, pkg: null, category: 'other', amount: 0, note: null, supersedes: r.id });
+  }
 
   // Only the placeholder USD rate: B has an EUR cost without a rate → margin unavailable; A is estimated.
   let byCompany = Object.fromEntries((await e.margin('company')).map(r => [r.group_key, r]));
@@ -199,7 +257,7 @@ test('SC-021-D margin: net revenue from paid catalog orders, other variable cost
   assert.deepEqual([n(ma.paid_orders), n(ma.revenue_gross_minor), n(ma.revenue_net_minor), n(ma.payments_without_amount)], [1, 30000, 24390, 1]);
   // A's AI cost: (1.0 + 0.5) USD × 4.000000 → 600 gr; other 120 (the corrected version only) + 30.
   assert.deepEqual([n(ma.ai_cost_pln_minor), n(ma.other_costs_minor), n(ma.margin_minor), ma.margin_status], [600, 150, 24390 - 600 - 150, 'estimated']);
-  assert.deepEqual(ma.reasons.sort(), ['fx_placeholder', 'payments_without_amount', 'placeholder_prices', 'unknown_attempts', 'unpriced_attempts']);
+  assert.deepEqual(ma.reasons.sort(), ['fx_placeholder', 'payments_without_amount', 'placeholder_prices', 'reserved_not_counted', 'unknown_attempts', 'unpriced_attempts']);
   assert.deepEqual([n(mb.revenue_net_minor), mb.ai_cost_pln_minor, mb.margin_minor, mb.margin_status], [0, null, null, 'unavailable']);
   assert.ok(mb.reasons.includes('fx_missing') && mb.reasons.includes('reserved_not_counted'));
   let [total] = await e.margin('total');
@@ -239,7 +297,7 @@ test('SC-021-D access: operator only; members, revoked operators and anon are re
     ['select * from public.sc021_operator_ai_costs($1,$2,$3)', [e.month.m, e.month.m, 'total']],
     ['select * from public.sc021_operator_margin($1,$2,$3)', [e.month.m, e.month.m, 'total']],
     ['select * from public.sc021_operator_fx_rates()', []],
-    ['select * from public.sc021_operator_other_costs($1,$2)', [e.month.m, e.month.m]],
+    ['select * from public.sc021_operator_other_costs($1,$2,$3,$4,$5)', [e.month.m, e.month.m, null, 0, 100]],
     ['select public.sc021_operator_add_fx_rate($1,$2,$3,$4,$5,$6)', [randomUUID(), 'USD', 4000000, '2026-01-01', 'Synthetic', false]],
     ['select public.sc021_operator_add_other_cost($1,$2,$3,$4,$5,$6,$7,$8)', [randomUUID(), e.month.m, a.companyId, null, 'sms', 1, null, null]],
   ];

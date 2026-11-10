@@ -72,6 +72,8 @@ test('the panel is operator-only, read-only apart from the two audited forms, an
   assert.match(page, /robots: \{ index: false, follow: false \}/);
   assert.match(page, /szacunek \(stawki testowe\)/);
   assert.match(page, /kurs testowy/);
+  assert.match(page, /następna strona/);
+  assert.match(page, /target_company: costCompany/);
   assert.deepEqual([...new Set([...actions.matchAll(/'(sc021_operator_[a-z_]+)'/g)].map(m => m[1]))].sort(), ['sc021_operator_add_fx_rate', 'sc021_operator_add_other_cost']);
   for (const source of [page, actions]) {
     assert.doesNotMatch(source, /service_role|SUPABASE_SERVICE|createAdminClient/);

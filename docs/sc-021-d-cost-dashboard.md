@@ -42,7 +42,7 @@ zakres miesięcy włącznie, najwyżej 24.
 | bez stawki | koszt `NULL` | tylko liczba; koszt zaniżony |
 | nieznany | `unknown` (mogło być naliczone) | tylko liczba |
 | nienaliczone | `released` | 0 |
-| zarezerwowane | `reserved` (SC-021-C) | nie wliczane; punkt rozszerzenia |
+| zarezerwowane | wiersz rejestru `reserved` (dziś nie powstaje) | nie wliczane; żywe rezerwacje C — osobno, patrz niżej |
 
 Ponad limit tokenów trasy (`bounds_exceeded`) to osobny licznik anomalii.
 
@@ -103,11 +103,23 @@ gdy rejestr urośnie, można połączyć sumę z przekrojem (`grouping sets`) w 
 (`sc021d_rollback_operator_data_present`), gdy operator wpisał kurs lub inny koszt — to dane finansowe.
 Rejestr prób B zostaje. Test: wycofanie i ponowna migracja, sygnatura SC-010 bez zmian.
 
-## Punkt rozszerzenia dla SC-021-C
+## Rezerwacje budżetu (SC-021-C)
 
-Rezerwacje (`status = 'reserved'`, `reserved_micros`) są liczone osobno i nie wchodzą do kosztu ani marży
-(powód `reserved_not_counted`). Gdy C rozliczy rezerwację do `settled`, wiersz sam przejdzie do właściwej
-klasy — panel czyta bieżący status. Waluta rezerwacji bez stawki jest pokazywana jako „waluta nieznana”.
+Rezerwacje żyją w `ai_ledger.budget_reservations` (C). Panel pokazuje dla każdej grupy **liczbę żywych
+rezerwacji i niewykorzystaną kwotę** (rezerwacja − koszt już zapisanych prób operacji, min. 0), osobno —
+nigdy jako koszt ani jako wywołanie. Reguła „żywa” (niezwolniona, niewygasła, operacja wciąż w toku) i
+„pozostałość” są takie same jak w `ai_ledger.budget_usage` z C; test porównuje sumy D z `budget_usage`, żeby
+kopie się nie rozjechały. Liczy się każda żywa rezerwacja utworzona przed końcem okresu (jak w C); w przekroju
+„miesiąc” trafia do miesiąca utworzenia albo pierwszego miesiąca okresu. Gdy w grupie jest żywa rezerwacja,
+marża ma powód `reserved_not_counted` i status „szacunek”. Wiersze rejestru w statusie `reserved` (jeśli
+kiedyś powstaną) również nie są kosztem.
+
+Kolejność wycofania: najpierw D, potem C (funkcje D używają typu wiersza `budget_reservations`).
+
+## Inne koszty — lista
+
+Lista ma filtr firmy i strony po 100 wpisów w stałej kolejności (miesiąc, czas wpisu, id — malejąco), z
+linkami „poprzednia / następna strona”, więc każdy wpis wpływający na marżę da się znaleźć i poprawić.
 
 Zdarzenia budżetu z C (np. `warning_80`) nie są dziś czytane przez D. Przy przyszłej integracji: zdarzenie
 `warning_80` zapisane przy **odrzuconym** skoku ponad 100% zawiera hipotetyczną kwotę zobowiązaną — pokazywać

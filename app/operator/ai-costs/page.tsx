@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { salesOperator } from '../sales/access';
 import {
   AI_COST_NOTICES, COST_GROUPINGS, MARGIN_GROUPINGS, MARGIN_STATUS, OTHER_COST_CATEGORIES, PACKAGE_CODES,
-  describeCostMicros, describeReasons, formatPln, formatRate, parseGrouping, parsePeriod, type CostGrouping, type CostMicros, type MarginGrouping,
+  describeCostMicros, describeReasons, formatMicros, formatPln, formatRate, parseGrouping, parsePeriod, type CostGrouping, type CostMicros, type MarginGrouping,
 } from '../../../lib/ai-cost-dashboard';
 import { addFxRate, addOtherCost } from './actions';
 import styles from '../sales/sales.module.css';
@@ -15,13 +15,18 @@ import own from './ai-costs.module.css';
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Koszty AI i marża | SkillCheck', robots: { index: false, follow: false } };
 
+const OTHER_COSTS_PAGE = 100;
+const describeHeld = (held: Record<string, number>) => {
+  const parts = Object.entries(held ?? {}).map(([currency, micros]) => formatMicros(micros, currency));
+  return parts.length ? ` (${parts.join(', ')} niewykorzystane)` : '';
+};
 const dates = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium', timeZone: 'Europe/Warsaw' });
 
 /** SC-021-D: internal AI cost and contribution-margin panel. Operator only (the same gate as
  * /operator/billing); every RPC re-checks the operator in the database. Read-only apart from the
  * two append-only forms (exchange rates, other variable costs). Never shown to companies. */
 export default async function OperatorAiCostsPage({ searchParams }: {
-  searchParams: Promise<{ from?: string; to?: string; view?: string; margin?: string; status?: string; cq?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; view?: string; margin?: string; status?: string; cq?: string; oc?: string; op?: string }>;
 }) {
   const client = await salesOperator();
   const params = await searchParams;
@@ -31,13 +36,16 @@ export default async function OperatorAiCostsPage({ searchParams }: {
   const range = { from_month: period.from, to_month: period.to };
   // Company picker for the cost form: the operator list is capped at 200, so it is searchable.
   const companySearch = (params.cq ?? '').trim().slice(0, 200);
+  // Other cost lines: optional company filter and pages of 100 in a stable order.
+  const costCompany = typeof params.oc === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.oc) ? params.oc : null;
+  const costPage = Math.min(Math.max(Number.parseInt(params.op ?? '0', 10) || 0, 0), 9999);
   const [costTotal, costRows, marginTotal, marginRows, rates, otherCosts, companies] = await Promise.all([
     client.rpc('sc021_operator_ai_costs', { ...range, group_by: 'total' }),
     client.rpc('sc021_operator_ai_costs', { ...range, group_by: view }),
     client.rpc('sc021_operator_margin', { ...range, group_by: 'total' }),
     client.rpc('sc021_operator_margin', { ...range, group_by: marginView }),
     client.rpc('sc021_operator_fx_rates'),
-    client.rpc('sc021_operator_other_costs', range),
+    client.rpc('sc021_operator_other_costs', { ...range, target_company: costCompany, page_offset: costPage * OTHER_COSTS_PAGE, page_size: OTHER_COSTS_PAGE + 1 }),
     client.rpc('sc19_operator_companies', { search: companySearch || null }),
   ]);
   if ([costTotal, costRows, marginTotal, marginRows, rates, otherCosts].some(r => r.error?.code === '42501')) notFound();
@@ -48,6 +56,10 @@ export default async function OperatorAiCostsPage({ searchParams }: {
   const notice = params.status && Object.hasOwn(AI_COST_NOTICES, params.status) ? AI_COST_NOTICES[params.status as keyof typeof AI_COST_NOTICES] : null;
   const query = new URLSearchParams({ from: period.from.slice(0, 7), to: period.to.slice(0, 7), view, margin: marginView }).toString();
   const month = period.from.slice(0, 7);
+  const costLines = (otherCosts.data ?? []).slice(0, OTHER_COSTS_PAGE);
+  const hasNextCosts = (otherCosts.data ?? []).length > OTHER_COSTS_PAGE;
+  const costLink = (pageNo: number) => `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(query)),
+    ...(companySearch ? { cq: companySearch } : {}), ...(costCompany ? { oc: costCompany } : {}), op: String(pageNo) })}#other`;
 
   return <main className={styles.page}>
     <nav><Link href="/operator/billing">Pakiety firm</Link><Link href="/operator/sales">Proces sprzedaży</Link><Link href="/">Strona główna</Link></nav>
@@ -76,7 +88,9 @@ export default async function OperatorAiCostsPage({ searchParams }: {
           <li>Koszt na stawkach zatwierdzonych: <strong>{formatPln(total.confirmed_pln_minor)}</strong> ({total.confirmed_count} wywołań)</li>
           <li>Szacunek (stawki testowe): <strong>{formatPln(total.placeholder_pln_minor)}</strong> ({total.placeholder_count} wywołań)</li>
           <li>Bez stawki — koszt nieznany: {total.unpriced_count} · Wynik nieznany, mogło być naliczone: {total.unknown_count}
-            · Nienaliczone: {total.released_count} · Zarezerwowane, niewliczone: {total.reserved_count}</li>
+            · Nienaliczone: {total.released_count}</li>
+          {(total.live_reservations > 0 || total.reserved_count > 0) && <li>Rezerwacje budżetu w toku (niewliczone do kosztu):
+            {' '}{total.live_reservations}{describeHeld(total.reservations_unused_micros as Record<string, number>)}</li>}
           {total.bounds_exceeded_count > 0 && <li>Ponad limit tokenów trasy (do sprawdzenia): {total.bounds_exceeded_count}</li>}
         </ul>
         {total.fx_missing && <p className={styles.hint}>Brak kursu dla części walut — kwoty w złotych są niedostępne. Dodaj kurs poniżej.</p>}
@@ -120,7 +134,7 @@ export default async function OperatorAiCostsPage({ searchParams }: {
             <td>{formatPln(row.confirmed_pln_minor)} <span className={styles.hint}>({row.confirmed_count})</span></td>
             <td>{formatPln(row.placeholder_pln_minor)} <span className={styles.hint}>({row.placeholder_count})</span></td>
             <td className={styles.hint}>bez stawki {row.unpriced_count} · nieznany {row.unknown_count} · nienaliczone {row.released_count}
-              {row.reserved_count > 0 ? ` · zarezerwowane ${row.reserved_count}` : ''}
+              {row.live_reservations > 0 ? ` · rezerwacje w toku ${row.live_reservations}${describeHeld(row.reservations_unused_micros as Record<string, number>)}` : ''}
               {row.bounds_exceeded_count > 0 ? ` · ponad limit ${row.bounds_exceeded_count}` : ''}
               {row.fx_missing ? ' · brak kursu' : ''}{row.fx_placeholder ? ' · kurs testowy' : ''}{row.fx_stale ? ' · kurs starszy niż 45 dni' : ''}</td>
           </tr>)}</tbody>
@@ -152,8 +166,8 @@ export default async function OperatorAiCostsPage({ searchParams }: {
       <h2 id="other">Inne koszty zmienne (netto, w złotych)</h2>
       <p className={styles.hint}>Np. opłaty za płatności, SMS-y. Wpisuje tylko operator. Poprawka zastępuje poprzednią wersję, historia zostaje.</p>
       {otherCosts.error ? <p className={styles.empty}>Nie udało się odczytać kosztów. Odśwież stronę.</p>
-        : !(otherCosts.data ?? []).length ? <p className={styles.empty}>Brak wpisów w tym okresie.</p>
-        : <ul>{otherCosts.data!.map(line => <li key={line.id}>{line.period_month.slice(0, 7)} · {line.company_name ?? 'Firma usunięta'}
+        : !costLines.length ? <p className={styles.empty}>{costPage > 0 ? 'Brak wpisów na tej stronie.' : 'Brak wpisów w tym okresie.'}</p>
+        : <ul>{costLines.map(line => <li key={line.id}>{line.period_month.slice(0, 7)} · {line.company_name ?? 'Firma usunięta'}
           {line.package_code ? ` · ${line.package_code}` : ''} · {OTHER_COST_CATEGORIES[line.category]}: <strong>{formatPln(line.amount_minor)}</strong>
           {line.note ? ` · ${line.note}` : ''}{line.superseded ? ' · zastąpione nowszą wersją' : ''}
           {!line.superseded && <details><summary>Popraw</summary>
@@ -168,6 +182,17 @@ export default async function OperatorAiCostsPage({ searchParams }: {
               <button type="submit">Zapisz poprawkę</button>
             </form></details>}
         </li>)}</ul>}
+      <nav aria-label="Strony innych kosztów">
+        {costPage > 0 && <Link href={costLink(costPage - 1)}>poprzednia strona</Link>}
+        {hasNextCosts && <Link href={costLink(costPage + 1)}>następna strona</Link>}
+      </nav>
+      {companies.data && <form className={styles.filters} method="get" action="#other">
+        {Object.entries({ from: period.from.slice(0, 7), to: period.to.slice(0, 7), view, margin: marginView, cq: companySearch }).map(([k, v]) =>
+          <input key={k} type="hidden" name={k} value={v} />)}
+        <label>Pokaż koszty firmy <select name="oc" defaultValue={costCompany ?? ''}><option value="">wszystkie firmy</option>
+          {companies.data.map(c => <option key={c.company_id} value={c.company_id}>{c.company_name}</option>)}</select></label>
+        <button type="submit">Pokaż</button>
+      </form>}
       <details open={Boolean(companySearch)}><summary>Dodaj koszt</summary>
         <form className={styles.filters} method="get">
           {Object.entries({ from: period.from.slice(0, 7), to: period.to.slice(0, 7), view, margin: marginView }).map(([k, v]) =>

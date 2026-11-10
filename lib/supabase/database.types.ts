@@ -465,7 +465,8 @@ export type Database = {
           attempts: number; operations: number; confirmed_count: number; placeholder_count: number; unpriced_count: number;
           unknown_count: number; released_count: number; reserved_count: number; bounds_exceeded_count: number;
           cost_micros: Json; confirmed_pln_minor: number | null; placeholder_pln_minor: number | null;
-          fx_missing: boolean; fx_placeholder: boolean; fx_stale: boolean }[];
+          fx_missing: boolean; fx_placeholder: boolean; fx_stale: boolean;
+          live_reservations: number; reservations_unused_micros: Json }[];
       };
       sc021_operator_margin: {
         Args: { from_month: string; to_month: string; group_by: string };
@@ -484,7 +485,7 @@ export type Database = {
         Returns: string;
       };
       sc021_operator_other_costs: {
-        Args: { from_month: string; to_month: string };
+        Args: { from_month: string; to_month: string; target_company?: string | null; page_offset?: number; page_size?: number };
         Returns: { id: string; period_month: string; company_id: string; company_name: string | null; package_code: string | null;
           category: 'payment_fee' | 'sms' | 'email' | 'other'; amount_minor: number; note: string | null; supersedes: string | null;
           superseded: boolean; created_at: string }[];
