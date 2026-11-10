@@ -107,7 +107,7 @@ test('SC-021-D cost views: grouping rules, cost classes, placeholder/missing FX,
   assert.equal(byCandidate.length, 3);
   const none = byCandidate.find(r => r.group_key === 'none');
   assert.equal(n(none.attempts), 2); assert.equal(n(none.operations), 2, 'exercise operation = (company, recruitment, key)');
-  for (const r of byCandidate.filter(r => r.group_key !== 'none')) assert.match(r.group_key, /^K-[0-9A-F]{10}$/);
+  for (const r of byCandidate.filter(r => r.group_key !== 'none')) assert.match(r.group_key, /^K-[0-9A-F]{16}$/);
   assert.deepEqual(byCandidate.filter(r => r.group_key !== 'none').map(r => n(r.attempts)).sort(), [2, 4]);
   const serialized = JSON.stringify(byCandidate);
   for (const id of [a.application.id, b.application.id, a.candidate?.id, b.candidate?.id].filter(Boolean)) assert.ok(!serialized.includes(id));
@@ -142,6 +142,8 @@ test('SC-021-D cost views: grouping rules, cost classes, placeholder/missing FX,
   await add(randomUUID(), 'USD', 4100000, 'Synthetic real-flagged test rate');
   [withEur] = await e.costs('total');
   assert.equal(n(withEur.confirmed_pln_minor), 1660); assert.equal(n(withEur.placeholder_pln_minor), 205); assert.equal(withEur.fx_placeholder, false);
+  // A real rate beats a placeholder even when old; a rate older than 45 days at the call is flagged.
+  assert.equal(withEur.fx_stale, true);
   await e.asOperator();
   const rates = (await db.query('select * from public.sc021_operator_fx_rates()')).rows;
   assert.equal(rates.length, 3);
@@ -186,15 +188,17 @@ test('SC-021-D margin: net revenue from paid catalog orders, other variable cost
     await assert.rejects(addCost(randomUUID(), bad), denied('22023'), JSON.stringify(bad));
   }
   await addCost(randomUUID(), { month: e.month.old, company: b.companyId, pkg: null, category: 'sms', amount: 999 });
+  // Without a package: attributed to the company's package at the end of that month (A: PRESELEKCJA order).
+  await addCost(randomUUID(), { company: a.companyId, pkg: null, category: 'email', amount: 30 });
   const listed = (await db.query('select * from public.sc021_operator_other_costs($1,$2)', [e.month.old, e.month.n])).rows;
-  assert.deepEqual(listed.map(r => [n(r.amount_minor), r.superseded]).sort(), [[120, false], [150, true], [999, false]]);
+  assert.deepEqual(listed.map(r => [n(r.amount_minor), r.superseded]).sort(), [[120, false], [150, true], [30, false], [999, false]]);
 
   // Only the placeholder USD rate: B has an EUR cost without a rate → margin unavailable; A is estimated.
   let byCompany = Object.fromEntries((await e.margin('company')).map(r => [r.group_key, r]));
   const ma = byCompany[a.companyId], mb = byCompany[b.companyId];
   assert.deepEqual([n(ma.paid_orders), n(ma.revenue_gross_minor), n(ma.revenue_net_minor), n(ma.payments_without_amount)], [1, 30000, 24390, 1]);
-  // A's AI cost: (1.0 + 0.5) USD × 4.000000 → 600 gr; other 120 (the corrected version only).
-  assert.deepEqual([n(ma.ai_cost_pln_minor), n(ma.other_costs_minor), n(ma.margin_minor), ma.margin_status], [600, 120, 24390 - 600 - 120, 'estimated']);
+  // A's AI cost: (1.0 + 0.5) USD × 4.000000 → 600 gr; other 120 (the corrected version only) + 30.
+  assert.deepEqual([n(ma.ai_cost_pln_minor), n(ma.other_costs_minor), n(ma.margin_minor), ma.margin_status], [600, 150, 24390 - 600 - 150, 'estimated']);
   assert.deepEqual(ma.reasons.sort(), ['fx_placeholder', 'payments_without_amount', 'placeholder_prices', 'unknown_attempts', 'unpriced_attempts']);
   assert.deepEqual([n(mb.revenue_net_minor), mb.ai_cost_pln_minor, mb.margin_minor, mb.margin_status], [0, null, null, 'unavailable']);
   assert.ok(mb.reasons.includes('fx_missing') && mb.reasons.includes('reserved_not_counted'));
@@ -206,16 +210,20 @@ test('SC-021-D margin: net revenue from paid catalog orders, other variable cost
   await db.query("select public.sc021_operator_add_fx_rate($1,'EUR',4300000,'2026-01-01',$2,false)", [randomUUID(), 'Synthetic test rate']);
   await db.query("select public.sc021_operator_add_fx_rate($1,'USD',4100000,'2026-01-01',$2,false)", [randomUUID(), 'Synthetic test rate']);
   byCompany = Object.fromEntries((await e.margin('company')).map(r => [r.group_key, r]));
-  assert.deepEqual([n(byCompany[a.companyId].ai_cost_pln_minor), n(byCompany[a.companyId].margin_minor)], [615, 24390 - 615 - 120]);
+  assert.deepEqual([n(byCompany[a.companyId].ai_cost_pln_minor), n(byCompany[a.companyId].margin_minor)], [615, 24390 - 615 - 150]);
   assert.ok(!byCompany[a.companyId].reasons.includes('fx_placeholder'));
+  assert.ok(byCompany[a.companyId].reasons.includes('fx_stale'), 'real rate from January is older than 45 days');
   // B: 2 USD × 4.1 + 1 EUR × 4.3 = 1250 gr; no revenue with an amount → negative margin, still estimated.
   assert.deepEqual([n(byCompany[b.companyId].ai_cost_pln_minor), n(byCompany[b.companyId].margin_minor), byCompany[b.companyId].margin_status],
     [1250, -1250, 'estimated']);
   [total] = await e.margin('total');
   assert.deepEqual([n(total.revenue_net_minor), n(total.ai_cost_pln_minor), n(total.other_costs_minor), n(total.margin_minor)],
-    [24390, 1865, 120, 24390 - 1865 - 120]);
+    [24390, 1865, 150, 24390 - 1865 - 150]);
   const byPackage = await e.margin('package');
-  assert.deepEqual(byPackage.map(r => r.group_key), ['PRESELEKCJA']);
+  assert.deepEqual(byPackage.map(r => [r.group_key, n(r.other_costs_minor)]), [['PRESELEKCJA', 150]]);
+  // A fresh real rate for the older month (same value): that month is no longer stale.
+  await e.asOperator();
+  await db.query("select public.sc021_operator_add_fx_rate($1,'USD',4100000,$2,$3,false)", [randomUUID(), `${e.month.old}T00:00:00Z`, 'Synthetic test rate']);
   const byMonth = Object.fromEntries((await e.margin('month', e.month.old, e.month.n)).map(r => [r.group_key, r]));
   assert.equal(n(byMonth[e.month.old.slice(0, 7)].other_costs_minor), 999);
   assert.equal(n(byMonth[e.month.old.slice(0, 7)].ai_cost_pln_minor), 2870, '7 USD × 4.1');
@@ -274,4 +282,56 @@ test('SC-021-D access: operator only; members, revoked operators and anon are re
     where s.nspname='public' and p.proname like 'sc021_operator_%' order by 1`)).rows;
   assert.equal(defs.length, 6);
   for (const d of defs) { assert.equal(d.prosecdef, true, d.proname); assert.deepEqual(d.proconfig, ['search_path=""'], d.proname); }
+});
+
+test('SC-021-D rollback refuses with operator data; pseudonym key is private', async t => {
+  const e = await boot(t), { db, h, a } = e;
+  await scenario(e);
+  const { readFile } = await import('node:fs/promises');
+  const up = await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8');
+  const down = await readFile(new URL('../supabase/rollbacks/20261110090000_sc021_cost_dashboard_down.sql', import.meta.url), 'utf8');
+  const signature = async () => (await db.query('select private.erasure_schema_signature() v')).rows[0].v;
+  await h.asAdmin();
+  const ledgerRows = (await db.query('select count(*)::int n from ai_ledger.attempts')).rows[0].n;
+  // The pseudonym key is never readable by API roles; pseudonyms are keyed (not a plain hash of the id).
+  const pseudonym = (await db.query('select ai_ledger.candidate_pseudonym($1) p', [a.application.id])).rows[0].p;
+  assert.match(pseudonym, /^K-[0-9A-F]{16}$/);
+  const plain = (await db.query("select upper(left(encode(sha256(convert_to($1::text,'UTF8')),'hex'),16)) p", [a.application.id])).rows[0].p;
+  assert.notEqual(pseudonym.slice(2), plain);
+  for (const [role, id] of [['authenticated', users.owner], ['authenticated', operator], ['anon', null]]) {
+    await h.asUser(id, role);
+    await assert.rejects(db.query('select * from ai_ledger.pseudonym_key'), denied('42501'));
+    await assert.rejects(db.query('select ai_ledger.candidate_pseudonym($1)', [a.application.id]), denied('42501'));
+  }
+  // Operator-entered data blocks the rollback.
+  await e.asOperator();
+  await db.query("select public.sc021_operator_add_fx_rate($1,'EUR',4300000,'2026-01-01','Synthetic',false)", [randomUUID()]);
+  await h.asAdmin();
+  await assert.rejects(db.query(down), error => error.message.includes('sc021d_rollback_operator_data_present'));
+  await db.query('rollback').catch(() => {});
+  assert.notEqual((await db.query("select to_regclass('ai_ledger.fx_rates') v")).rows[0].v, null);
+  assert.equal(await signature(), r15);
+  assert.equal((await db.query('select count(*)::int n from ai_ledger.attempts')).rows[0].n, ledgerRows);
+});
+
+test('SC-021-D rollback: up → down → up with only the migration seed, SC-010 signature unchanged', async t => {
+  const fresh = await boot(t);
+  await scenario(fresh);
+  const { readFile } = await import('node:fs/promises');
+  const up = await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8');
+  const down = await readFile(new URL('../supabase/rollbacks/20261110090000_sc021_cost_dashboard_down.sql', import.meta.url), 'utf8');
+  await fresh.h.asAdmin();
+  await fresh.db.query(down);
+  for (const name of ['ai_ledger.fx_rates', 'ai_ledger.other_cost_lines', 'ai_ledger.pseudonym_key']) {
+    assert.equal((await fresh.db.query('select to_regclass($1) v', [name])).rows[0].v, null, name);
+  }
+  assert.equal((await fresh.db.query("select to_regprocedure('public.sc021_operator_margin(date,date,text)') v")).rows[0].v, null);
+  assert.notEqual((await fresh.db.query("select to_regclass('ai_ledger.attempts') v")).rows[0].v, null, 'B ledger untouched');
+  assert.equal((await fresh.db.query('select private.erasure_schema_signature() v')).rows[0].v, r15);
+  await fresh.db.query(up);
+  assert.equal((await fresh.db.query('select private.erasure_schema_signature() v')).rows[0].v, r15);
+  assert.equal((await fresh.db.query('select count(*)::int n from ai_ledger.fx_rates')).rows[0].n, 1);
+  await fresh.h.asUser(operator);
+  // B ledger rows survive the round trip and are read again.
+  assert.equal(Number((await fresh.db.query("select attempts from public.sc021_operator_ai_costs($1,$1,'total')", [fresh.month.m])).rows[0].attempts), 8);
 });

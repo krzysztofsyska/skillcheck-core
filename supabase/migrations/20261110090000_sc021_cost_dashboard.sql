@@ -132,13 +132,15 @@ language sql immutable set search_path = '' as $$
   end
 $$;
 
--- Kurs waluty → PLN obowiązujący w chwili `at`: kurs prawdziwy przed testowym, najnowszy
--- valid_from, przy tej samej dacie najnowszy wpis (korekta). PLN = 1. Brak → brak wiersza.
-create function ai_ledger.fx_to_pln(currency text, at timestamptz, out rate_micros bigint, out placeholder boolean)
+-- Kurs waluty → PLN obowiązujący w chwili `at` (= created_at próby): kurs prawdziwy przed testowym
+-- (także starszy — wtedy marża dostaje powód fx_stale, gdy ma > 45 dni), najnowszy valid_from, przy
+-- tej samej dacie najnowszy wpis (korekta). PLN = 1. Brak → brak wiersza.
+create function ai_ledger.fx_to_pln(currency text, at timestamptz, out rate_micros bigint, out placeholder boolean,
+  out stale boolean)
 returns setof record language sql stable set search_path = '' as $$
-  select 1000000::bigint, false where currency = 'PLN'
+  select 1000000::bigint, false, false where currency = 'PLN'
   union all
-  (select f.rate_micros, f.placeholder from ai_ledger.fx_rates f
+  (select f.rate_micros, f.placeholder, not f.placeholder and f.valid_from < at - interval '45 days' from ai_ledger.fx_rates f
    where currency <> 'PLN' and f.base_currency = currency and f.quote_currency = 'PLN' and f.valid_from <= at
    order by f.placeholder asc, f.valid_from desc, f.created_at desc, f.id
    limit 1)
@@ -152,23 +154,28 @@ $$;
 
 -- Wpłaty bez kwoty w systemie: przydział PRESELEKCJI z dziennika analiz, który nie jest
 -- rozliczeniem zamówienia katalogowego (ręczny przydział operatora, przyszłe P24).
+-- Porównanie po settlement_reference (unikalny indeks), nie po wyrażeniu na kolumnie.
 create function ai_ledger.is_catalog_settlement(reference text) returns boolean
 language sql stable set search_path = '' as $$
-  select exists (select 1 from sc19_commerce.orders o where o.status = 'paid' and 'settlement:' || o.settlement_reference = reference)
+  select reference like 'settlement:%' and exists (select 1 from sc19_commerce.orders o
+    where o.settlement_reference = substr(reference, 12) and o.status = 'paid')
 $$;
 
--- Pakiet firmy w chwili `at`: ostatnie zdarzenie przed `at` — opłacone zamówienie pakietu
--- (jego kod), ręczny przydział PRESELEKCJI, aktywacja FREE. Brak → 'BRAK'.
-create function ai_ledger.company_package_at(target uuid, at timestamptz) returns text
+-- Oś czasu pakietu każdej firmy, liczona raz na zapytanie: zdarzenia (opłacone zamówienie pakietu
+-- → jego kod, ręczny przydział PRESELEKCJI, aktywacja FREE) jako przedziały [od, do następnego).
+-- Pakiet w chwili t = przedział zawierający t; brak → 'BRAK'.
+create function ai_ledger.package_ranges()
+returns table (company_id uuid, package_code text, t_from timestamptz, t_to timestamptz)
 language sql stable set search_path = '' as $$
-  select coalesce((select s.pkg from (
-      select o.package_code pkg, o.settled_at t from sc19_commerce.orders o
-      where o.company_id = target and o.status = 'paid' and o.kind = 'package' and o.settled_at <= at
-      union all
-      select case j.reason when 'trial' then 'FREE' else 'PRESELEKCJA' end, j.created_at from private.sc19_credit_journal j
-      where j.company_id = target and j.created_at <= at and j.reason in ('trial', 'paid_grant')
-        and not ai_ledger.is_catalog_settlement(j.reference)
-    ) s order by s.t desc limit 1), 'BRAK')
+  select e.company_id, e.pkg, e.t, lead(e.t) over (partition by e.company_id order by e.t, e.pkg)
+  from (
+    select o.company_id, o.package_code pkg, o.settled_at t from sc19_commerce.orders o
+    where o.status = 'paid' and o.kind = 'package'
+    union all
+    select j.company_id, case j.reason when 'trial' then 'FREE' else 'PRESELEKCJA' end, j.created_at
+    from private.sc19_credit_journal j
+    where j.reason in ('trial', 'paid_grant') and not ai_ledger.is_catalog_settlement(j.reference)
+  ) e
 $$;
 
 -- Wiersze kosztu w okresie, z klasą, tożsamością operacji (reguła z SC-021-B), kursem i pakietem.
@@ -176,19 +183,50 @@ $$;
 create function ai_ledger.cost_rows(from_ts timestamptz, to_ts timestamptz)
 returns table (company_id uuid, process_id uuid, candidate_ref uuid, task text, provider text, model text,
   op_key text, cost_class text, currency text, cost_micros bigint, reserved_micros bigint, bounds_exceeded boolean,
-  rate_micros bigint, rate_placeholder boolean, package_code text, month date)
+  rate_micros bigint, rate_placeholder boolean, rate_stale boolean, package_code text, month date)
 language sql stable set search_path = '' as $$
+  with ranges as materialized (select * from ai_ledger.package_ranges())
   select a.company_id, a.process_id, a.candidate_ref, a.task, a.provider, a.model,
     case when a.task = 'cv_screening' then 's:' || a.operation_id
       else 'x:' || a.company_id || ':' || coalesce(a.process_id::text, '-') || ':' || a.operation_id end,
     ai_ledger.cost_class(a.status, a.price_id, a.price_placeholder),
     a.currency, a.cost_micros, a.reserved_micros, a.bounds_exceeded,
-    fx.rate_micros, fx.placeholder,
-    ai_ledger.company_package_at(a.company_id, a.created_at),
+    fx.rate_micros, fx.placeholder, fx.stale,
+    coalesce(r.package_code, 'BRAK'),
     ai_ledger.warsaw_month(a.created_at)
   from ai_ledger.attempts a
   left join lateral ai_ledger.fx_to_pln(a.currency, a.created_at) fx on true
+  left join ranges r on r.company_id = a.company_id and a.created_at >= r.t_from and (r.t_to is null or a.created_at < r.t_to)
   where a.created_at >= from_ts and a.created_at < to_ts
+$$;
+
+-- Klucz pseudonimów kandydatów: losowy, generowany raz w migracji, nigdy nie zwracany; bez niego
+-- pseudonimu nie da się policzyć z identyfikatora zgłoszenia. Brak dostępu dla ról API.
+create table ai_ledger.pseudonym_key (
+  singleton boolean primary key default true check (singleton),
+  secret bytea not null check (length(secret) = 32)
+);
+alter table ai_ledger.pseudonym_key enable row level security;
+revoke all on ai_ledger.pseudonym_key from public;
+insert into ai_ledger.pseudonym_key (secret) values (extensions.gen_random_bytes(32));
+create trigger pseudonym_key_append_only before update or delete on ai_ledger.pseudonym_key
+  for each row execute function ai_ledger.append_only();
+do $revoke_key$
+declare r text;
+begin
+  foreach r in array array['anon', 'authenticated', 'service_role', 'screening_worker', 'ai_ledger_writer'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('revoke all on ai_ledger.pseudonym_key from %I', r);
+    end if;
+  end loop;
+end
+$revoke_key$;
+
+-- Pseudonim: 'K-' + 16 znaków HMAC-SHA256(klucz, id zgłoszenia).
+create function ai_ledger.candidate_pseudonym(candidate_ref uuid) returns text
+language sql stable set search_path = '' as $$
+  select 'K-' || upper(left(encode(extensions.hmac(convert_to(candidate_ref::text, 'UTF8'), k.secret, 'sha256'), 'hex'), 16))
+  from ai_ledger.pseudonym_key k where k.singleton
 $$;
 
 create function ai_ledger.package_label(code text) returns text
@@ -205,7 +243,7 @@ returns table (group_key text, group_label text, company_id uuid, company_name t
   confirmed_count bigint, placeholder_count bigint, unpriced_count bigint, unknown_count bigint,
   released_count bigint, reserved_count bigint, bounds_exceeded_count bigint,
   cost_micros jsonb, confirmed_pln_minor bigint, placeholder_pln_minor bigint,
-  fx_missing boolean, fx_placeholder boolean)
+  fx_missing boolean, fx_placeholder boolean, fx_stale boolean)
 language plpgsql stable security definer set search_path = '' as $$
 declare f timestamptz; t timestamptz;
 begin
@@ -222,7 +260,7 @@ begin
         when 'company' then c.company_id::text
         when 'recruitment' then c.company_id || ':' || coalesce(c.process_id::text, '-')
         when 'candidate' then case when c.candidate_ref is null then 'none'
-          else 'K-' || upper(left(encode(sha256(convert_to('sc021d:' || c.candidate_ref::text, 'UTF8')), 'hex'), 10)) end
+          else ai_ledger.candidate_pseudonym(c.candidate_ref) end
         when 'package' then c.package_code
         when 'model' then c.provider || ':' || c.model
         when 'provider' then c.provider
@@ -258,7 +296,8 @@ begin
       bool_or(b.cost_class = 'placeholder' and b.rate_micros is null) miss_placeholder,
       coalesce(sum(b.cost_micros::numeric * b.rate_micros) filter (where b.cost_class = 'confirmed'), 0) pln_confirmed,
       coalesce(sum(b.cost_micros::numeric * b.rate_micros) filter (where b.cost_class = 'placeholder'), 0) pln_placeholder,
-      coalesce(bool_or(b.cost_class in ('confirmed', 'placeholder') and b.rate_placeholder), false) fx_ph
+      coalesce(bool_or(b.cost_class in ('confirmed', 'placeholder') and b.rate_placeholder), false) fx_ph,
+      coalesce(bool_or(b.cost_class in ('confirmed', 'placeholder') and b.rate_stale), false) fx_old
     from base b group by b.k
   )
   select a.k,
@@ -280,7 +319,7 @@ begin
     coalesce(m.j, '{}'::jsonb),
     case when a.miss_confirmed then null else ceil(a.pln_confirmed / 10000000000)::bigint end,
     case when a.miss_placeholder then null else ceil(a.pln_placeholder / 10000000000)::bigint end,
-    a.miss_confirmed or a.miss_placeholder, a.fx_ph
+    a.miss_confirmed or a.miss_placeholder, a.fx_ph, a.fx_old
   from agg a
   left join money m on m.k = a.k
   left join public.companies co on co.id = a.cid
@@ -316,8 +355,13 @@ begin
     where j.reason = 'paid_grant' and j.created_at >= f and j.created_at < t and not ai_ledger.is_catalog_settlement(j.reference)
   ),
   ai as (select c.company_id cid, c.package_code pkg, c.month mon, c.* from ai_ledger.cost_rows(f, t) c),
+  -- Koszt bez pakietu przypisujemy pakietowi firmy na koniec swojego miesiąca (czas Europe/Warsaw).
   oth as (
-    select l.company_id cid, coalesce(l.package_code, 'BRAK') pkg, l.period_month mon, l.amount_minor
+    select l.company_id cid, coalesce(l.package_code, (select r.package_code from ai_ledger.package_ranges() r
+        where r.company_id = l.company_id and r.t_from < ((l.period_month + interval '1 month')::timestamp at time zone 'Europe/Warsaw')
+          and (r.t_to is null or r.t_to >= ((l.period_month + interval '1 month')::timestamp at time zone 'Europe/Warsaw'))
+        order by r.t_from desc limit 1), 'BRAK') pkg,
+      l.period_month mon, l.amount_minor
     from ai_ledger.other_cost_lines l
     where l.period_month >= ai_ledger.warsaw_month(f) and l.period_month < ai_ledger.warsaw_month(t)
       and not exists (select 1 from ai_ledger.other_cost_lines s where s.supersedes = l.id)
@@ -327,11 +371,11 @@ begin
       else to_char(x.mon, 'YYYY-MM') end k, x.*
     from (
       select 'rev' src, r.cid, r.pkg, r.mon, r.gross, r.net, r.no_amount, null::text cls, null::bigint micros,
-        null::bigint rate, null::boolean rate_ph, null::bigint other from rev r
+        null::bigint rate, null::boolean rate_ph, null::boolean rate_stale, null::bigint other from rev r
       union all
-      select 'ai', a.cid, a.pkg, a.mon, null, null, null, a.cost_class, a.cost_micros, a.rate_micros, a.rate_placeholder, null from ai a
+      select 'ai', a.cid, a.pkg, a.mon, null, null, null, a.cost_class, a.cost_micros, a.rate_micros, a.rate_placeholder, a.rate_stale, null from ai a
       union all
-      select 'oth', o.cid, o.pkg, o.mon, null, null, null, null, null, null, null, o.amount_minor from oth o
+      select 'oth', o.cid, o.pkg, o.mon, null, null, null, null, null, null, null, null, o.amount_minor from oth o
     ) x
   ),
   agg as (
@@ -343,6 +387,7 @@ begin
       count(*) filter (where k.src = 'rev' and k.no_amount) no_amount,
       coalesce(bool_or(k.src = 'ai' and k.cls in ('confirmed', 'placeholder') and k.rate is null), false) fx_missing,
       coalesce(bool_or(k.src = 'ai' and k.cls in ('confirmed', 'placeholder') and k.rate_ph), false) fx_ph,
+      coalesce(bool_or(k.src = 'ai' and k.cls in ('confirmed', 'placeholder') and k.rate_stale), false) fx_stale,
       coalesce(bool_or(k.src = 'ai' and k.cls = 'placeholder'), false) price_ph,
       coalesce(bool_or(k.src = 'ai' and k.cls = 'unpriced'), false) unpriced,
       coalesce(bool_or(k.src = 'ai' and k.cls = 'unknown'), false) unknown,
@@ -356,6 +401,7 @@ begin
     select a.*, array_remove(array[
         case when a.fx_missing then 'fx_missing' end,
         case when a.fx_ph then 'fx_placeholder' end,
+        case when a.fx_stale then 'fx_stale' end,
         case when a.price_ph then 'placeholder_prices' end,
         case when a.unpriced then 'unpriced_attempts' end,
         case when a.unknown then 'unknown_attempts' end,
@@ -488,7 +534,8 @@ begin
     'ai_ledger.fx_to_pln(text,timestamptz)'::regprocedure,
     'ai_ledger.net_from_gross(bigint,integer)'::regprocedure,
     'ai_ledger.is_catalog_settlement(text)'::regprocedure,
-    'ai_ledger.company_package_at(uuid,timestamptz)'::regprocedure,
+    'ai_ledger.package_ranges()'::regprocedure,
+    'ai_ledger.candidate_pseudonym(uuid)'::regprocedure,
     'ai_ledger.cost_rows(timestamptz,timestamptz)'::regprocedure,
     'ai_ledger.package_label(text)'::regprocedure,
     'public.sc021_operator_ai_costs(date,date,text)'::regprocedure,

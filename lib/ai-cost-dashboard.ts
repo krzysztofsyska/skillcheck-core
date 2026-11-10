@@ -39,6 +39,7 @@ export const MARGIN_STATUS = {
 export const MARGIN_REASONS: Record<string, string> = {
   fx_missing: 'brak kursu waluty — marży nie da się policzyć',
   fx_placeholder: 'kurs waluty testowy',
+  fx_stale: 'kurs starszy niż 45 dni',
   placeholder_prices: 'część kosztu AI na stawkach testowych',
   unpriced_attempts: 'część wywołań AI bez stawki (koszt zaniżony)',
   unknown_attempts: 'część wywołań AI z nieznanym kosztem',

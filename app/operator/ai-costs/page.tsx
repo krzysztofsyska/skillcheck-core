@@ -21,7 +21,7 @@ const dates = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium', timeZone: 
  * /operator/billing); every RPC re-checks the operator in the database. Read-only apart from the
  * two append-only forms (exchange rates, other variable costs). Never shown to companies. */
 export default async function OperatorAiCostsPage({ searchParams }: {
-  searchParams: Promise<{ from?: string; to?: string; view?: string; margin?: string; status?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; view?: string; margin?: string; status?: string; cq?: string }>;
 }) {
   const client = await salesOperator();
   const params = await searchParams;
@@ -29,6 +29,8 @@ export default async function OperatorAiCostsPage({ searchParams }: {
   const view = parseGrouping<CostGrouping>(params.view, COST_GROUPINGS, 'company');
   const marginView = parseGrouping<MarginGrouping>(params.margin, MARGIN_GROUPINGS, 'company');
   const range = { from_month: period.from, to_month: period.to };
+  // Company picker for the cost form: the operator list is capped at 200, so it is searchable.
+  const companySearch = (params.cq ?? '').trim().slice(0, 200);
   const [costTotal, costRows, marginTotal, marginRows, rates, otherCosts, companies] = await Promise.all([
     client.rpc('sc021_operator_ai_costs', { ...range, group_by: 'total' }),
     client.rpc('sc021_operator_ai_costs', { ...range, group_by: view }),
@@ -36,7 +38,7 @@ export default async function OperatorAiCostsPage({ searchParams }: {
     client.rpc('sc021_operator_margin', { ...range, group_by: marginView }),
     client.rpc('sc021_operator_fx_rates'),
     client.rpc('sc021_operator_other_costs', range),
-    client.rpc('sc19_operator_companies', { search: null }),
+    client.rpc('sc19_operator_companies', { search: companySearch || null }),
   ]);
   if ([costTotal, costRows, marginTotal, marginRows, rates, otherCosts].some(r => r.error?.code === '42501')) notFound();
   if (costTotal.error || costRows.error || marginTotal.error || marginRows.error || !costTotal.data || !costRows.data
@@ -79,6 +81,7 @@ export default async function OperatorAiCostsPage({ searchParams }: {
         </ul>
         {total.fx_missing && <p className={styles.hint}>Brak kursu dla części walut — kwoty w złotych są niedostępne. Dodaj kurs poniżej.</p>}
         {total.fx_placeholder && <p className={styles.hint}>Przeliczenie na złote używa kursu testowego — to szacunek.</p>}
+        {total.fx_stale && <p className={styles.hint}>Część kosztu przeliczono kursem starszym niż 45 dni — dodaj aktualny kurs.</p>}
         <p className={styles.hint}>W walucie dostawcy: {describeCostMicros(total.cost_micros as CostMicros).join(' · ') || 'brak kosztów'}</p>
       </>}
       {margin && <p>Marża w okresie: <strong>{formatPln(margin.margin_minor)}</strong> — {MARGIN_STATUS[margin.margin_status]}
@@ -88,7 +91,8 @@ export default async function OperatorAiCostsPage({ searchParams }: {
     <section aria-labelledby="margin">
       <h2 id="margin">Marża według: {MARGIN_GROUPINGS[marginView].toLowerCase()}</h2>
       <p className={styles.hint}>Marża = przychód netto (opłacone zamówienia, brutto minus VAT z cennika) − koszt AI w złotych − inne koszty zmienne.
-        Ręczne przydziały pakietu nie mają kwoty w systemie, więc ich przychód nie jest wliczony.</p>
+        Ręczne przydziały pakietu nie mają kwoty w systemie, więc ich przychód nie jest wliczony.
+        Koszt AI liczy się do pakietu, który firma miała w chwili wywołania; inny koszt bez wskazanego pakietu — do pakietu firmy na koniec miesiąca.</p>
       {!marginRows.data.length ? <p className={styles.empty}>Brak przychodu i kosztów w tym okresie.</p> :
         <div className={own.scroll}><table className={own.table}>
           <thead><tr><th scope="col">{MARGIN_GROUPINGS[marginView]}</th><th scope="col">Opłacone zamówienia</th><th scope="col">Przychód netto</th>
@@ -118,7 +122,7 @@ export default async function OperatorAiCostsPage({ searchParams }: {
             <td className={styles.hint}>bez stawki {row.unpriced_count} · nieznany {row.unknown_count} · nienaliczone {row.released_count}
               {row.reserved_count > 0 ? ` · zarezerwowane ${row.reserved_count}` : ''}
               {row.bounds_exceeded_count > 0 ? ` · ponad limit ${row.bounds_exceeded_count}` : ''}
-              {row.fx_missing ? ' · brak kursu' : ''}{row.fx_placeholder ? ' · kurs testowy' : ''}</td>
+              {row.fx_missing ? ' · brak kursu' : ''}{row.fx_placeholder ? ' · kurs testowy' : ''}{row.fx_stale ? ' · kurs starszy niż 45 dni' : ''}</td>
           </tr>)}</tbody>
         </table></div>}
     </section>
@@ -164,7 +168,14 @@ export default async function OperatorAiCostsPage({ searchParams }: {
               <button type="submit">Zapisz poprawkę</button>
             </form></details>}
         </li>)}</ul>}
-      <details><summary>Dodaj koszt</summary>
+      <details open={Boolean(companySearch)}><summary>Dodaj koszt</summary>
+        <form className={styles.filters} method="get">
+          {Object.entries({ from: period.from.slice(0, 7), to: period.to.slice(0, 7), view, margin: marginView }).map(([k, v]) =>
+            <input key={k} type="hidden" name={k} value={v} />)}
+          <label>Szukaj firmy (nazwa lub ID) <input name="cq" defaultValue={companySearch} maxLength={200} /></label>
+          <button type="submit">Szukaj</button>
+        </form>
+        {companies.data && companies.data.length >= 200 && <p className={styles.hint}>Pokazano pierwsze 200 firm — zawęź wyszukiwanie, jeśli brakuje firmy.</p>}
         {companies.error || !companies.data ? <p className={styles.empty}>Nie udało się odczytać listy firm.</p> :
           <form action={addOtherCost} className={styles.form}>
             <input type="hidden" name="requestKey" value={randomUUID()} /><input type="hidden" name="back" value={query} />

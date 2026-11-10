@@ -25,10 +25,13 @@ zakres miesięcy włącznie, najwyżej 24.
 
 - **Operacja** (reguła z SC-021-B): screening = `operation_id`; generowanie zadań = (firma, rekrutacja,
   `operation_id`). Ponowienia jednej analizy to jedna operacja, wiele wywołań.
-- **Kandydat** wyłącznie jako pseudonim `K-XXXXXXXXXX` (skrót z identyfikatora zgłoszenia); funkcja nie
+- **Kandydat** wyłącznie jako pseudonim `K-` + 16 znaków HMAC-SHA256 identyfikatora zgłoszenia z tajnym
+  kluczem (`ai_ledger.pseudonym_key`, 32 losowe bajty generowane raz w migracji, niedostępne dla żadnej roli
+  API i nigdy niezwracane). Bez klucza pseudonimu nie da się policzyć z identyfikatora zgłoszenia. Funkcja nie
   zwraca identyfikatora zgłoszenia, imion, e-maili ani CV.
 - **Pakiet** = pakiet firmy w chwili wywołania: ostatnie z opłaconego zamówienia pakietu, ręcznego
-  przydziału PRESELEKCJI, aktywacji FREE; inaczej „Bez pakietu”.
+  przydziału PRESELEKCJI, aktywacji FREE; inaczej „Bez pakietu”. Oś czasu pakietów liczona raz na zapytanie
+  (przedziały od zdarzenia do następnego), nie osobno dla każdego wywołania.
 
 ## Koszt potwierdzony a szacunek
 
@@ -46,8 +49,15 @@ Ponad limit tokenów trasy (`bounds_exceeded`) to osobny licznik anomalii.
 ## Kursy walut
 
 Koszt jest w walucie stawki (mikro-jednostki), przychód w złotych (grosze). Kurs: PLN za 1 USD/EUR ×1 000 000,
-od daty, ze źródłem i flagą „testowy”. Wybór dla wywołania: kurs prawdziwy przed testowym, potem najnowsza
-data, przy tej samej dacie najnowszy wpis (poprawka). Tylko dopisywanie, autor i czas w każdym wierszu.
+od daty, ze źródłem i flagą „testowy”. Tylko dopisywanie, autor i czas w każdym wierszu.
+
+- Kurs wybierany jest **dla każdego wywołania osobno, według chwili wywołania** (`created_at` próby).
+- Kolejność: kurs prawdziwy przed testowym (**także starszy** — prawdziwy zawsze wygrywa z testowym), potem
+  najnowsza data obowiązywania, przy tej samej dacie najnowszy wpis (poprawka).
+- Gdy zastosowany kurs prawdziwy jest starszy niż 45 dni względem wywołania, marża dostaje powód
+  „kurs starszy niż 45 dni” (`fx_stale`) i status „szacunek”.
+- Data „obowiązuje od” z formularza oznacza **północ UTC** tego dnia, a miesiące panelu liczone są w czasie
+  **Europe/Warsaw** — kurs wpisany na 1. dzień miesiąca zaczyna obowiązywać o 1:00/2:00 czasu polskiego.
 
 W migracji jest **tylko kurs testowy USD→PLN 4,000000** — to nie jest kurs NBP ani rynkowy. Prawdziwy kurs
 wpisuje operator w panelu. **Brak kursu → koszt w złotych i marża „niedostępne”**, nigdy zgadywane.
@@ -63,8 +73,10 @@ wpisuje operator w panelu. **Brak kursu → koszt w złotych i marża „niedost
   liczony jako „wpłata bez kwoty”, przychód 0, marża oznaczona jako szacunek.
 - **Inne koszty**: wpisuje operator (opłata za płatność, SMS, e-mail, inne), netto w PLN, na miesiąc i firmę,
   opcjonalnie pakiet. Poprawka = nowy wiersz zastępujący poprzedni (raz), historia zostaje. Nic nie zasiano.
-- **Status**: `niedostępna` (brak kursu), `szacunek` (kurs testowy, stawki testowe, wywołania bez stawki lub
-  nieznane, rezerwacje, wpłaty bez kwoty), inaczej `potwierdzona`. Powody są pokazane obok.
+  W marży według pakietu koszt bez wskazanego pakietu trafia do pakietu firmy **na koniec swojego miesiąca**
+  (czas Europe/Warsaw). Wybór firmy w formularzu ma wyszukiwarkę (lista operatora ma limit 200 wyników).
+- **Status**: `niedostępna` (brak kursu), `szacunek` (kurs testowy lub starszy niż 45 dni, stawki testowe,
+  wywołania bez stawki lub nieznane, rezerwacje, wpłaty bez kwoty), inaczej `potwierdzona`. Powody są pokazane obok.
 
 Zaokrąglenia (całkowite, `numeric`): koszt PLN = `ceil(Σ cost_micros · kurs_micros / 10^10)` na grupę (w górę —
 koszt nigdy niedoszacowany; suma grup może przekroczyć całość o < 1 gr na grupę).
@@ -78,16 +90,33 @@ koszt nigdy niedoszacowany; suma grup może przekroczyć całość o < 1 gr na g
 - Tabele tylko do dopisywania (wyzwalacz z SC-021-B), także dla właściciela tabel.
 - Formularze: klucz żądania (ponowne wysłanie nie dubluje wpisu), potwierdzenie, walidacja w aplikacji i w bazie.
 
+## Wydajność
+
+Strona wywołuje 4 odczyty (koszty: suma i przekrój; marża: suma i przekrój), każdy przegląda wiersze rejestru
+z okresu (indeks `attempts_company_created`, maks. 24 miesiące). Przy obecnych wolumenach to akceptowane;
+gdy rejestr urośnie, można połączyć sumę z przekrojem (`grouping sets`) w jednym wywołaniu. Sprawdzenie
+„rozliczenie zamówienia katalogowego” używa unikalnego indeksu `settlement_reference`.
+
+## Wycofanie
+
+`supabase/rollbacks/20261110090000_sc021_cost_dashboard_down.sql` usuwa funkcje i trzy tabele D, ale odmawia
+(`sc021d_rollback_operator_data_present`), gdy operator wpisał kurs lub inny koszt — to dane finansowe.
+Rejestr prób B zostaje. Test: wycofanie i ponowna migracja, sygnatura SC-010 bez zmian.
+
 ## Punkt rozszerzenia dla SC-021-C
 
 Rezerwacje (`status = 'reserved'`, `reserved_micros`) są liczone osobno i nie wchodzą do kosztu ani marży
 (powód `reserved_not_counted`). Gdy C rozliczy rezerwację do `settled`, wiersz sam przejdzie do właściwej
 klasy — panel czyta bieżący status. Waluta rezerwacji bez stawki jest pokazywana jako „waluta nieznana”.
 
+Zdarzenia budżetu z C (np. `warning_80`) nie są dziś czytane przez D. Przy przyszłej integracji: zdarzenie
+`warning_80` zapisane przy **odrzuconym** skoku ponad 100% zawiera hipotetyczną kwotę zobowiązaną — pokazywać
+je jako „operacja odrzucona”, nie jako „zużycie osiągnęło 80%”.
+
 ## Testy
 
 - `npm run test:ai-cost` — okres, formularze, formatowanie, statyczne sprawdzenie strony.
-- `npm run test:ai-cost-db` — PostgreSQL 16 (CI `checks.yml`): reguły grupowania (ten sam klucz generowania
+- `npm run test:ai-cost-db` — PostgreSQL 16 (CI `checks.yml`): wycofanie i ponowna migracja, prywatny klucz pseudonimów, reguły grupowania (ten sam klucz generowania
   w dwóch firmach = dwie operacje), klasy kosztu, brak/test/prawdziwy kurs, netto z VAT, marża (w tym
   ujemna i potwierdzona), wersjonowanie innych kosztów, idempotencja, operator / członek / odwołany operator /
   anon / worker, tylko dopisywanie, pseudonimy kandydatów.

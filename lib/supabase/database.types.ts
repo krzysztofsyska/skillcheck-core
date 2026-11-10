@@ -465,7 +465,7 @@ export type Database = {
           attempts: number; operations: number; confirmed_count: number; placeholder_count: number; unpriced_count: number;
           unknown_count: number; released_count: number; reserved_count: number; bounds_exceeded_count: number;
           cost_micros: Json; confirmed_pln_minor: number | null; placeholder_pln_minor: number | null;
-          fx_missing: boolean; fx_placeholder: boolean }[];
+          fx_missing: boolean; fx_placeholder: boolean; fx_stale: boolean }[];
       };
       sc021_operator_margin: {
         Args: { from_month: string; to_month: string; group_by: string };
