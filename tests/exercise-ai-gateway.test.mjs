@@ -13,7 +13,7 @@ const RECRUITMENT = 'bbbbbbbb-1111-4222-8333-444444444444';
 const REQUEST_KEY = 'cccccccc-1111-4222-8333-444444444444';
 const ledgerWrites = [];
 const trust = { companyId: COMPANY, operationId: REQUEST_KEY, recruitmentId: RECRUITMENT, mayGenerate: true,
-  recordAttempt: async p => { ledgerWrites.push(p); } };
+  recordAttempt: async p => { ledgerWrites.push(p); }, reserveBudget: async () => ({ allowed: true, created: false }) };
 const position = { id: 'position', updated_at: '2026-11-07T00:00:00Z', title: 'Planista', tasks: ['Planowanie'],
   required_competencies: ['Planowanie'], kpis: [], required_behaviors: [], autonomy_level: 2 };
 // A company profile with a legitimate office phone and e-mail: drafts like this succeed today.

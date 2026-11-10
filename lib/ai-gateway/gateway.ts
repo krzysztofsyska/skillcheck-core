@@ -80,6 +80,13 @@ export type AiGatewayOptions = {
    * (an answered attempt that was not recorded stays `billed`).
    */
   onAttempt: (record: AttemptRecord) => Promise<void>;
+  /**
+   * SC-021-C budget hook (`createBudgetGuard`). Awaited once per call, after authorization, routing
+   * and payload checks and before the first physical attempt, bounded by ATTEMPT_HOOK_TIMEOUT_MS.
+   * A thrown budget AiGatewayError is passed through; any other failure or a timeout is
+   * `budget_unavailable`. Always not billed: nothing has been sent.
+   */
+  beforeOperation?: (ctx: AiCallContext) => Promise<void>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   breaker?: { failureThreshold: number; cooldownMs: number };
@@ -96,6 +103,7 @@ function withDeadline<T>(promise: Promise<T>, ms: number, onTimeout: () => Error
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
+const BUDGET_CODES = new Set(['budget_exceeded', 'budget_unconfigured', 'budget_unavailable']);
 const BREAKER_CODES = new Set(['server_error', 'timeout', 'network_error', 'model_unavailable']);
 
 function assertContext(ctx: AiCallContext) {
@@ -143,6 +151,7 @@ export function createAiGateway(options: AiGatewayOptions) {
   }
   if (typeof options.authorize !== 'function') throw new Error('SC021_AUTHORIZE_REQUIRED');
   if (typeof options.onAttempt !== 'function') throw new Error('SC021_ATTEMPT_HOOK_REQUIRED');
+  if (options.beforeOperation !== undefined && typeof options.beforeOperation !== 'function') throw new Error('SC021_BUDGET_HOOK_INVALID');
   const adapters = new Map<AiProvider, AiProviderAdapter>();
   for (const adapter of options.adapters) {
     // An adapter for an inactive provider is refused at construction, not silently ignored.
@@ -202,6 +211,15 @@ export function createAiGateway(options: AiGatewayOptions) {
     if (route.blockContactData && (containsContactData(request.user) || containsContactData(request.system)
       || (schema !== '' && containsContactData(schema)))) {
       throw new AiGatewayError('payload_not_redacted');
+    }
+
+    if (options.beforeOperation) {
+      try {
+        await withDeadline(Promise.resolve().then(() => options.beforeOperation!(ctx)), ATTEMPT_HOOK_TIMEOUT_MS, () => new Error('SC021_BUDGET_HOOK_TIMEOUT'));
+      } catch (error) {
+        if (error instanceof AiGatewayError && BUDGET_CODES.has(error.code)) throw new AiGatewayError(error.code);
+        throw new AiGatewayError('budget_unavailable');
+      }
     }
 
     let index = 0;

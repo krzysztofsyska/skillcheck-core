@@ -7,6 +7,7 @@ import { AiGatewayError, isAiGatewayEnabled } from './ai-gateway/contract.ts';
 import { defaultAiPolicy } from './ai-gateway/default-policy.ts';
 import { createAiGateway } from './ai-gateway/gateway.ts';
 import { createLedgerHook, EXERCISE_LEDGER_ROUTE, type LedgerWriter } from './ai-gateway/ledger.ts';
+import { createBudgetGuard, type BudgetReserver } from './ai-gateway/budget.ts';
 import { resolveRoute } from './ai-gateway/policy.ts';
 import { createOpenAiAdapter } from './ai-gateway/openai.ts';
 import type { AiRoutingPolicy } from './ai-gateway/policy.ts';
@@ -29,6 +30,12 @@ export type ExerciseGatewayTrust = {
    * Required on the gateway path; without it no provider call is made.
    */
   recordAttempt: LedgerWriter | null;
+  /**
+   * SC-021-C: budget reservation for this generation (ai_ledger.reserve_exercise_budget through the
+   * same server-only connection). The action reserves before the generation slot; the gateway checks
+   * it again (idempotent) before the provider call. Required on the gateway path.
+   */
+  reserveBudget: BudgetReserver | null;
 };
 
 /**
@@ -107,6 +114,11 @@ export function exerciseErrorFromGateway(error: unknown): ExerciseAiError {
   switch (error.code) {
     // SC-021-B: the attempt could not be recorded; the draft is not returned (the call may be billed).
     case 'ledger_error': return new ExerciseAiError('exercise_ai_server_error', 'Provider unavailable');
+    // SC-021-C: the action refuses over-budget generations before spending a slot (withExerciseBudget);
+    // here the slot is already reserved, so only a code finish_exercise_ai_generation accepts is used.
+    case 'budget_exceeded':
+    case 'budget_unconfigured':
+    case 'budget_unavailable': return new ExerciseAiError('exercise_ai_server_error', 'AI budget unavailable');
     case 'timeout': return new ExerciseAiError('exercise_ai_timeout', 'Provider unavailable');
     case 'network_error': return new ExerciseAiError('exercise_ai_network_error', 'Provider unavailable');
     case 'invalid_response': return new ExerciseAiError('exercise_ai_invalid_output', 'Invalid response');
@@ -122,6 +134,7 @@ export async function requestExerciseDraftViaGateway(payload: ReturnType<typeof 
   if (!apiKey) throw new ExerciseAiError('exercise_ai_auth_error', 'Missing provider configuration');
   // Fail closed before any provider call: no ledger, no billed work.
   if (typeof trust.recordAttempt !== 'function') throw new ExerciseAiError('exercise_ai_auth_error', 'AI ledger unavailable');
+  if (typeof trust.reserveBudget !== 'function') throw new ExerciseAiError('exercise_ai_auth_error', 'AI budget unavailable');
   const legacy = buildExerciseDraftRequest(payload);
   if (Buffer.byteLength(JSON.stringify(legacy), 'utf8') > EXERCISE_AI_MAX_REQUEST_BYTES)
     throw new ExerciseAiError('exercise_ai_input_too_large', 'Provider request exceeds byte limit.');
@@ -144,6 +157,7 @@ export async function requestExerciseDraftViaGateway(payload: ReturnType<typeof 
         try { log(attemptLogEntry(record)); } catch { /* a log sink failure never fails the draft */ }
         await ledger(record);
       },
+      beforeOperation: createBudgetGuard(trust.reserveBudget),
     });
     body = (await gateway.runRaw({
       companyId: trust.companyId, operationId: trust.operationId, processId: trust.recruitmentId, task: 'exercise_generation',
