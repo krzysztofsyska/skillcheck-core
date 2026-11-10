@@ -26,17 +26,35 @@ begin;
 -- kończy się zerem nawet gdy transakcja została wycofana, a nieudane cofnięcie
 -- wygląda jak udane.
 --
--- Limit MUSI być mniejszy niż deadlock_timeout (domyślnie 1 s). To nie jest
--- kosmetyka: `lock table ... nowait` niżej chroni tylko tabele, które skrypt
--- WYMIENIA, a `drop schema ... cascade` bierze dodatkowo blokady niejawne, bez
--- NOWAIT — m.in. na sekwencji tożsamości, której `lock table` w ogóle nie potrafi
--- zablokować (PostgreSQL odmawia: "not supported for sequences"). Przy limicie
--- 5 s to detektor zakleszczeń odzywał się pierwszy i potrafił wybrać na ofiarę
--- transakcję klienta. Przy 500 ms rollback odpada WCZEŚNIEJ, niż cykl zdąży
--- zostać wykryty — czyli sam rezygnuje, zamiast przerwać pracę klienta.
--- Zmierzone: 5 s -> klient ginie z "deadlock detected"; 500 ms -> rollback
--- odpada z 55P03, klient commituje.
+-- Limit jest mniejszy niż deadlock_timeout (domyślnie 1 s), ale UWAGA: sam w
+-- sobie NICZEGO NIE GWARANTUJE i wcześniejsza wersja tego komentarza twierdziła
+-- inaczej, błędnie. `lock_timeout` liczy się od KAŻDEJ pojedynczej próby pobrania
+-- blokady, a `deadlock_timeout` — od chwili, gdy dany czekający się zablokował.
+-- To dwa różne zegary startujące w różnych momentach, więc „limit poniżej
+-- deadlock_timeout" nie przesądza, kto odpadnie pierwszy. Zawęża tylko okno,
+-- w którym ofiarą może paść klient.
+--
+-- Prawdziwą ochroną jest KRÓTKIE TRZYMANIE BLOKAD: `drop schema ... cascade`
+-- wykonuje się zaraz po guardzie, a wszystkie pozostałe instrukcje (polityki,
+-- revoke, drop function, postflight) idą PO nim. Każda instrukcja to osobna
+-- podróż do serwera, więc przy zdalnym połączeniu to one dawały długie okno.
+-- Zmierzone na łączu 30 ms: poprzednia kolejność trzymała blokady 1274 ms,
+-- ta kolejność — 228 ms.
+--
+-- Czego to nadal NIE załatwia: `drop schema ... cascade` bierze blokady niejawne,
+-- bez NOWAIT, m.in. na sekwencji tożsamości, której `lock table` w ogóle nie
+-- potrafi objąć (PostgreSQL odmawia: "not supported for sequences"). Ryzyko jest
+-- zmniejszone, nie wyeliminowane. DLATEGO: uruchamiaj ten skrypt przy
+-- wstrzymanym ruchu aplikacji, a nie w szczycie.
 set local lock_timeout = '500ms';
+
+do $preflight$
+begin
+  if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
+    raise exception 'sc020b_rollback_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
+  end if;
+end
+$preflight$;
 
 do $guard$
 begin
@@ -71,10 +89,12 @@ begin
     -- bierze je od razu, albo odmawia (55P03), a transakcja klienta przechodzi bez
     -- szwanku. `drop schema ... cascade` bierze dodatkowo, niejawnie i bez NOWAIT,
     -- ACCESS EXCLUSIVE na indeksach, sekwencji events_id_seq i relacjach toast tych
-    -- tabel. Dla indeksów i toastów to bezpieczne, bo są dziećmi wymienionych tabel.
+    -- tabel. Dla indeksów i toastów żadna ścieżka aplikacji nie dosięgnie ich bez
+    -- blokady na rodzicu.
     -- DLA SEKWENCJI NIE: `select ... from pg_sequences` blokuje ją bez blokady na
     -- tabeli, a `lock table` nie umie objąć sekwencji. Ta reszta jest ograniczona
-    -- czasowo przez `lock_timeout` ustawiony poniżej deadlock_timeout. Czekania na poziomie WIERSZA NOWAIT by nie objął, ale ten
+    -- czasowo przez `lock_timeout` ustawiony poniżej deadlock_timeout. Czekania na
+    -- poziomie WIERSZA NOWAIT by nie objął, ale ten
     -- plik nie wykonuje żadnego DML, więc kwestia nie powstaje.
     --
     -- UWAGA PRZY ROZBUDOWIE: nowa TABELA w schemacie `tenant_domains` wypada poza
@@ -88,13 +108,13 @@ begin
 end
 $guard$;
 
-do $preflight$
-begin
-  if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
-    raise exception 'sc020b_rollback_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
-  end if;
-end
-$preflight$;
+-- 4. Schemat `tenant_domains` wraz z tabelami, indeksami, wyzwalaczami i funkcjami.
+--    CASCADE jest bezpieczne: guard powyżej potwierdził brak zgłoszeń domen i zdarzeń
+--    oraz brak obiektów SC-020-D, a migracja nie tworzyła kluczy obcych z
+--    'public'/'private' do tego schematu. Ginie też wiersz `settings`, ale to
+--    konfiguracja, którą migracja zakłada na nowo z wartościami domyślnymi — jego
+--    utrata jest zamierzona i dlatego nie liczy się do guardu pustości.
+drop schema if exists tenant_domains cascade;
 
 -- 1. Nadania dla roli weryfikatora (odwrotnie niż w migracji). Rola zostaje.
 do $grants$
@@ -125,6 +145,7 @@ begin
 end
 $anon$;
 
+
 -- 3. Funkcje wystawione aplikacji (public.tenant_domain_*), odwrotnie niż w migracji.
 drop function if exists public.tenant_domain_resolve(text);
 drop function if exists public.tenant_domain_state(uuid);
@@ -132,14 +153,6 @@ drop function if exists public.tenant_domain_revoke(uuid, uuid);
 drop function if exists public.tenant_domain_deactivate(uuid, uuid);
 drop function if exists public.tenant_domain_activate(uuid, uuid);
 drop function if exists public.tenant_domain_claim(uuid, text, text);
-
--- 4. Schemat `tenant_domains` wraz z tabelami, indeksami, wyzwalaczami i funkcjami.
---    CASCADE jest bezpieczne: guard powyżej potwierdził brak zgłoszeń domen i zdarzeń
---    oraz brak obiektów SC-020-D, a migracja nie tworzyła kluczy obcych z
---    'public'/'private' do tego schematu. Ginie też wiersz `settings`, ale to
---    konfiguracja, którą migracja zakłada na nowo z wartościami domyślnymi — jego
---    utrata jest zamierzona i dlatego nie liczy się do guardu pustości.
-drop schema if exists tenant_domains cascade;
 
 do $postflight$
 begin

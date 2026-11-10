@@ -27,17 +27,35 @@ begin;
 -- kończy się zerem nawet gdy transakcja została wycofana, a nieudane cofnięcie
 -- wygląda jak udane.
 --
--- Limit MUSI być mniejszy niż deadlock_timeout (domyślnie 1 s). To nie jest
--- kosmetyka: `lock table ... nowait` niżej chroni tylko tabele, które skrypt
--- WYMIENIA, a `drop schema ... cascade` bierze dodatkowo blokady niejawne, bez
--- NOWAIT — m.in. na sekwencji tożsamości, której `lock table` w ogóle nie potrafi
--- zablokować (PostgreSQL odmawia: "not supported for sequences"). Przy limicie
--- 5 s to detektor zakleszczeń odzywał się pierwszy i potrafił wybrać na ofiarę
--- transakcję klienta. Przy 500 ms rollback odpada WCZEŚNIEJ, niż cykl zdąży
--- zostać wykryty — czyli sam rezygnuje, zamiast przerwać pracę klienta.
--- Zmierzone: 5 s -> klient ginie z "deadlock detected"; 500 ms -> rollback
--- odpada z 55P03, klient commituje.
+-- Limit jest mniejszy niż deadlock_timeout (domyślnie 1 s), ale UWAGA: sam w
+-- sobie NICZEGO NIE GWARANTUJE i wcześniejsza wersja tego komentarza twierdziła
+-- inaczej, błędnie. `lock_timeout` liczy się od KAŻDEJ pojedynczej próby pobrania
+-- blokady, a `deadlock_timeout` — od chwili, gdy dany czekający się zablokował.
+-- To dwa różne zegary startujące w różnych momentach, więc „limit poniżej
+-- deadlock_timeout" nie przesądza, kto odpadnie pierwszy. Zawęża tylko okno,
+-- w którym ofiarą może paść klient.
+--
+-- Prawdziwą ochroną jest KRÓTKIE TRZYMANIE BLOKAD: `drop schema ... cascade`
+-- wykonuje się zaraz po guardzie, a wszystkie pozostałe instrukcje (polityki,
+-- revoke, drop function, postflight) idą PO nim. Każda instrukcja to osobna
+-- podróż do serwera, więc przy zdalnym połączeniu to one dawały długie okno.
+-- Zmierzone na łączu 30 ms: poprzednia kolejność trzymała blokady 1274 ms,
+-- ta kolejność — 228 ms.
+--
+-- Czego to nadal NIE załatwia: `drop schema ... cascade` bierze blokady niejawne,
+-- bez NOWAIT, m.in. na sekwencji tożsamości, której `lock table` w ogóle nie
+-- potrafi objąć (PostgreSQL odmawia: "not supported for sequences"). Ryzyko jest
+-- zmniejszone, nie wyeliminowane. DLATEGO: uruchamiaj ten skrypt przy
+-- wstrzymanym ruchu aplikacji, a nie w szczycie.
 set local lock_timeout = '500ms';
+
+do $preflight$
+begin
+  if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
+    raise exception 'sc020a_rollback_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
+  end if;
+end
+$preflight$;
 
 -- Storage blokujemy PIERWSZY i POZA gałęzią `branding`, bo `drop policy` niżej
 -- wykonuje się także wtedy, gdy schematu `branding` już nie ma — bez tego brałby
@@ -85,8 +103,9 @@ begin
     -- Dokładny zakres tej obietnicy — ani szerzej, ani węziej:
     --  * `drop schema ... cascade` bierze dodatkowo, NIEJAWNIE i BEZ NOWAIT,
     --    ACCESS EXCLUSIVE na indeksach, sekwencji tożsamości (events_id_seq) i
-    --    relacjach toast tych tabel. Dla indeksów i toastów nikt nie dosięgnie ich,
-    --    nie biorąc najpierw blokady na rodzicu. DLA SEKWENCJI TO NIEPRAWDA: samo
+    --    relacjach toast tych tabel. Dla indeksów i toastów żadna ścieżka APLIKACJI
+    --    nie dosięgnie ich bez blokady na rodzicu (ręczny VACUUM na relacji toast
+    --    by potrafił, ale autovacuum ustępuje przed żądaniem DDL). DLA SEKWENCJI TO NIEPRAWDA: samo
     --    `select ... from pg_sequences` blokuje sekwencję BEZ blokady na
     --    branding.events, a `lock table` nie umie jej objąć (PostgreSQL odmawia
     --    blokowania sekwencji). Ta reszta nie jest więc udowodniona jako niemożliwa
@@ -111,13 +130,10 @@ begin
 end
 $guard$;
 
-do $preflight$
-begin
-  if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
-    raise exception 'sc020a_rollback_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
-  end if;
-end
-$preflight$;
+-- 4. Schemat `branding` wraz z tabelami, indeksami, wyzwalaczami i funkcjami guard.
+--    CASCADE jest bezpieczne: guard powyżej już potwierdził, że nie ma w nim danych,
+--    a migracja nie tworzyła kluczy obcych z 'public'/'private' do `branding`.
+drop schema if exists branding cascade;
 
 -- 1. Storage: zdejmujemy POLITYKI, a PUSTY KOSZYK ZOSTAWIAMY — świadomie.
 --
@@ -155,7 +171,12 @@ $preflight$;
 --    później (service_role, panel Storage) blokowałby na zawsze ponowne uruchomienie
 --    już wykonanego rollbacku — mimo że nie ma czego chronić ani co cofać. A plik
 --    wgrany legalnie i tak jest zarejestrowany w branding.assets, więc łapie go
---    wcześniejszy guard; ten dokłada się tylko na osierocone wgrania.
+--    wcześniejszy guard; ten dokłada się na osierocone wgrania. Powstają one także
+--    przy całkowicie legalnym użyciu: klient `authenticated` najpierw wgrywa plik
+--    do Storage (pozwala na to polityka sc020_brand_assets_insert), a dopiero potem
+--    woła brand_register_asset — jeśli ta funkcja odrzuci zgłoszenie
+--    (brand_asset_invalid) albo karta zostanie zamknięta, plik zostaje nieujęty
+--    w branding.assets. To nie jest wyłącznie ślad po service_role.
 --    Pozostaje jeden przypadek: jeśli migracja zostanie wgrana PONOWNIE na koszyk
 --    z osieroconymi plikami, polityki wracają i rollback znów będzie odmawiał,
 --    dopóki ktoś tych plików nie usunie ręcznie. To zamierzone — wtedy marka
@@ -179,6 +200,7 @@ begin
 end
 $storage$;
 
+
 -- 2. Funkcje wystawione aplikacji (public.brand_*).
 drop function if exists public.brand_editor_state(uuid);
 drop function if exists public.brand_asset(uuid, uuid);
@@ -197,11 +219,6 @@ drop function if exists private.brand_contrast(text, text);
 drop function if exists private.brand_luminance(text);
 drop function if exists private.brand_storage_quota_ok(text);
 drop function if exists private.brand_object_company(text);
-
--- 4. Schemat `branding` wraz z tabelami, indeksami, wyzwalaczami i funkcjami guard.
---    CASCADE jest bezpieczne: guard powyżej już potwierdził, że nie ma w nim danych,
---    a migracja nie tworzyła kluczy obcych z 'public'/'private' do `branding`.
-drop schema if exists branding cascade;
 
 do $postflight$
 begin
