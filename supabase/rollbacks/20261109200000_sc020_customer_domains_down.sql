@@ -61,10 +61,16 @@ begin
     -- nie kolidują ze sobą; koliduje dopiero ACCESS EXCLUSIVE rollbacku.
     -- `lock table` bierze pozycje z listy SEKWENCYJNIE, więc bez NOWAIT rollback
     -- czeka na pozycję n, trzymając już 1..n-1 — i to oczekiwanie domyka cykl.
-    -- Z NOWAIT rollback nie czeka na żadną blokadę TABELI: albo bierze wszystko od
-    -- razu, albo odmawia (55P03), a transakcja klienta przechodzi bez szwanku.
-    -- NOWAIT nie obejmowałby czekania na poziomie wiersza ani blokad branych
-    -- niejawnie — ten plik nie wykonuje żadnego DML, więc kwestia nie powstaje.
+    -- Z NOWAIT rollback nie czeka na blokadę żadnej tabeli, którą WYMIENIA: albo
+    -- bierze je od razu, albo odmawia (55P03), a transakcja klienta przechodzi bez
+    -- szwanku. `drop schema ... cascade` bierze dodatkowo, niejawnie i bez NOWAIT,
+    -- ACCESS EXCLUSIVE na indeksach, sekwencji events_id_seq i relacjach toast tych
+    -- tabel — bezpiecznie wyłącznie dlatego, że każda z nich jest dzieckiem tabeli
+    -- już wymienionej. Czekania na poziomie WIERSZA NOWAIT by nie objął, ale ten
+    -- plik nie wykonuje żadnego DML, więc kwestia nie powstaje.
+    --
+    -- UWAGA PRZY ROZBUDOWIE: nowa TABELA w schemacie `tenant_domains` wypada poza
+    -- listę NOWAIT — dopisz ją. To samo dotyczy dodania instrukcji DML.
     lock table tenant_domains.settings, tenant_domains.domains, tenant_domains.events
       in access exclusive mode nowait;
     if exists (select 1 from tenant_domains.domains) or exists (select 1 from tenant_domains.events) then
