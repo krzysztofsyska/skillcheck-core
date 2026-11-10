@@ -116,7 +116,8 @@ test('public offer and demo pages respond without an account', async (t) => {
   // Every legal document required for the Przelewy24 shop verification is reachable
   // from the footer of every public page, not only from the registration form.
   for (const href of ['/regulamin', '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
-    '/polityka-prywatnosci', '/ai']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
+    '/polityka-prywatnosci', '/ai', '/platnosci-i-reklamacje', '/kontakt']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
+  assert.match(home, />Regulamin sklepu</, 'footer names the shop terms');
   for (const [path, heading, marker, docx] of [
     ['/regulamin', 'Regulamin świadczenia usług SkillCheck', 'PayPro S.A. Agent Rozliczeniowy', '/legal/01_Regulamin_SkillCheck_v1.0.docx'],
     ['/polityka-prywatnosci', 'Polityka prywatności SkillCheck', 'Wykazu podatników VAT', '/legal/02_Polityka_prywatnosci_v1.0.docx'],
@@ -139,6 +140,31 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(home.includes('Kup teraz'), false);
   assert.equal(home.includes('127.0.0.1:9'), false);
 
+  // SC-P24-VERIFY-002: contact and payments/complaints summary, public, data from shared sources.
+  const { COMPANY } = await import('../lib/legal.ts');
+  const { preselekcjaOffer } = await import('../lib/preselekcja-offer.ts');
+  const contact = await fetch(`${base}/kontakt`, { redirect: 'manual' });
+  assert.equal(contact.status, 200);
+  const contactHtml = await contact.text();
+  for (const value of [COMPANY.name, 'ul. Michała Kajki', COMPANY.krs, COMPANY.nip, COMPANY.regon, COMPANY.email, COMPANY.phone]) {
+    assert.ok(contactHtml.includes(value), `/kontakt has ${value}`);
+  }
+  assert.ok(hrefs(contactHtml).includes('/rozmowa'));
+  const summary = await fetch(`${base}/platnosci-i-reklamacje`, { redirect: 'manual' });
+  assert.equal(summary.status, 200);
+  const summaryHtml = await summary.text();
+  assert.ok(summaryHtml.includes('<h1>Płatności, reklamacje i odstąpienie od umowy</h1>'));
+  assert.ok(summaryHtml.includes(`${preselekcjaOffer.grossPln} zł brutto`), 'price from the shared offer');
+  assert.ok(summaryHtml.includes(COMPANY.email));
+  for (const href of ['/regulamin', '/regulamin/formularz-odstapienia', '/#pakiety', '/kontakt']) assert.ok(hrefs(summaryHtml).includes(href), `summary link ${href}`);
+  for (const paragraph of ['§ 2, § 3 i § 6', '§ 7', '§ 8', '§ 10', '§ 2 i § 11', '§ 1']) assert.ok(summaryHtml.includes(`Regulamin, ${paragraph}<`), paragraph);
+  // Figures and addressees taken from the Regulamin; a later edit must not change them silently.
+  for (const fact of ['2 dni roboczych', 'w ciągu 14 dni od jej otrzymania', 'w ciągu 14 dni od zawarcia umowy', 'wyłącznie przedsiębiorcy na prawach konsumenta', 'niezgodności usługi cyfrowej z umową']) assert.ok(summaryHtml.includes(fact), fact);
+  assert.doesNotMatch(summaryHtml, /voicebot|rozmow[ay] głosow|DRAFT/i);
+  // Same rule as the offer pages: Przelewy24 only as a method being prepared.
+  assert.match(summaryHtml, /Przelewy24 jest przygotowywana/);
+  assert.doesNotMatch(summaryHtml, /zapłacić online przez Przelewy24/);
+
 
   // Sales pilot intake is available without enabling paid checkout or AI.
   assert.ok(homeHrefs.includes('/kalkulator'), 'marketing links to clickable calculator');
@@ -153,7 +179,7 @@ test('public offer and demo pages respond without an account', async (t) => {
     const target = href.split('#')[0] || '/';
     assert.ok(
       ['/', '/demo', '/kalkulator', '/preselekcja', '/kup/preselekcja', '/rozmowa', '/register', '/login', '/dashboard', '/regulamin',
-        '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
+        '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia', '/platnosci-i-reklamacje', '/kontakt',
         '/polityka-prywatnosci', '/ai', '/prywatnosc'].includes(target),
       `home CTA points at an existing path: ${href}`,
     );

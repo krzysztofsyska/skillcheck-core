@@ -17,7 +17,9 @@ export const footerLinks = [
 ] as const;
 
 export const legalLinks = [
-  { href: "/regulamin", label: "Regulamin" },
+  { href: "/regulamin", label: "Regulamin sklepu" },
+  { href: "/platnosci-i-reklamacje", label: "Płatności, reklamacje i odstąpienie" },
+  { href: "/kontakt", label: "Kontakt" },
   { href: "/polityka-prywatnosci", label: "Polityka prywatności" },
   { href: "/regulamin/umowa-powierzenia", label: "Umowa powierzenia (DPA)" },
   { href: "/regulamin/formularz-odstapienia", label: "Formularz odstąpienia" },
