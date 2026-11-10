@@ -19,6 +19,10 @@ const FUTURE_OFFERS_BLOCK = /[ \t]*<!--future-offers:start-->[\s\S]*?<!--future-
  * When the switch is off the blocks are removed from the HTML that leaves the server; when on, only the markers go.
  */
 export function renderCalculatorHtml(html: string, futureOffersEnabled: boolean): string {
-  if (futureOffersEnabled) return html.replace(/[ \t]*<!--future-offers:(?:start|end)-->[ \t]*\r?\n?/g, "");
-  return html.replace(FUTURE_OFFERS_BLOCK, "");
+  const result = futureOffersEnabled
+    ? html.replace(/[ \t]*<!--future-offers:(?:start|end)-->[ \t]*\r?\n?/g, "")
+    : html.replace(FUTURE_OFFERS_BLOCK, "");
+  // Fail closed: an unpaired marker would leave an announced-package block on the page.
+  if (result.includes("future-offers:")) throw new Error("future_offers_marker_unpaired");
+  return result;
 }

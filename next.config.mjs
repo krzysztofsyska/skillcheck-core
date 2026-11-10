@@ -14,7 +14,7 @@ const config = {
   serverExternalPackages: ['pdf-parse', 'pdfjs-dist', 'tesseract.js', 'tesseract.js-core', '@napi-rs/canvas'],
   // PDF.js loads its worker and native canvas bindings dynamically.
   outputFileTracingIncludes: {
-    '/kalkulator/demo-html': ['./public/kalkulator-demo.html'],
+    '/kalkulator/demo-html': ['./content/kalkulator-demo.html'],
     '/dashboard/**': [
       './node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
       './node_modules/@napi-rs/canvas/**',
@@ -47,7 +47,7 @@ const config = {
     ],
   },
   // The static calculator page is served through a route so the announced packages can be hidden
-  // (PUBLIC_FUTURE_OFFERS_ENABLED). beforeFiles wins over the file in public/.
+  // (PUBLIC_FUTURE_OFFERS_ENABLED). The file lives in content/ (not public/), so no encoded URL can reach it statically.
   async rewrites() {
     return { beforeFiles: [{ source: '/kalkulator-demo.html', destination: '/kalkulator/demo-html' }], afterFiles: [], fallback: [] };
   },

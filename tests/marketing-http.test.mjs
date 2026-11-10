@@ -187,6 +187,12 @@ test('public offer and demo pages respond without an account', async (t) => {
   const calculatorRoute = await fetch(`${base}/kalkulator`, { redirect: 'manual' });
   assert.equal(calculatorRoute.status, 307);
   assert.equal(new URL(calculatorRoute.headers.get('location'), base).pathname, '/kalkulator-demo.html');
+  // Encoded spellings of the address must never return the unfiltered file (404 is fine, it fails closed).
+  for (const variant of ['/kalkulator-demo%2Ehtml', '/kalkulator-demo%2ehtml', '/kalkulator-demo.htm%6C', '/kalkulator%2Ddemo.html', '/%6Balkulator-demo.html', '/content/kalkulator-demo.html']) {
+    const response = await fetch(`${base}${variant}`);
+    const body = await response.text();
+    assert.equal(/WERYFIKACJA|ASSESSMENT CENTER|615 zł|future-offers:/.test(body), false, `no announced packages via ${variant}`);
+  }
   const calculatorResponse = await fetch(`${base}/kalkulator-demo.html`);
   assert.equal(calculatorResponse.status, 200);
   assert.ok(calculatorResponse.headers.get('content-type')?.includes('text/html'));
@@ -369,7 +375,7 @@ test('announced packages appear only when PUBLIC_FUTURE_OFFERS_ENABLED is exactl
   for (const value of ['', 'false', 'TRUE', 'True', '1', 'yes', ' true']) assert.equal(isPublicFutureOffersEnabled({ PUBLIC_FUTURE_OFFERS_ENABLED: value }), false, `"${value}" means off`);
   assert.equal(isPublicFutureOffersEnabled({ PUBLIC_FUTURE_OFFERS_ENABLED: 'true' }), true);
 
-  const source = readFileSync(new URL('../public/kalkulator-demo.html', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../content/kalkulator-demo.html', import.meta.url), 'utf8');
   const off = renderCalculatorHtml(source, false);
   const on = renderCalculatorHtml(source, true);
   assert.equal(off.includes('WERYFIKACJA'), false);
@@ -379,6 +385,7 @@ test('announced packages appear only when PUBLIC_FUTURE_OFFERS_ENABLED is exactl
   // Only the marked blocks differ; the PRESELEKCJA calculator is the same either way.
   assert.ok(off.includes('data-pack="pre"') && on.includes('data-pack="pre"'));
   assert.ok(source.includes('615 zł brutto za 60 CV'), 'the copy stays in the source file');
+  assert.throws(() => renderCalculatorHtml('<p>a</p><!--future-offers:start--><p>WERYFIKACJA</p>', false), /unpaired/, 'unpaired marker fails closed');
   // The copy also stays in the offer data module.
   const offers = readFileSync(new URL('../app/components/marketing/future-offers.ts', import.meta.url), 'utf8');
   assert.ok(offers.includes('WERYFIKACJA') && offers.includes('ASSESSMENT CENTER'));
