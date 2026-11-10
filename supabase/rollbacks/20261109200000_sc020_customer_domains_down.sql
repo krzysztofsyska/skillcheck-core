@@ -26,11 +26,17 @@ begin;
 -- kończy się zerem nawet gdy transakcja została wycofana, a nieudane cofnięcie
 -- wygląda jak udane.
 --
--- Całą ochronę przed zakleszczeniem daje `lock table ... nowait` niżej, NIE ten
--- limit: przy deadlock_timeout = 1 s detektor zakleszczeń zadziała cztery sekundy
--- wcześniej, więc limit nigdy nie uchroni przed cyklem. Jest tu tylko po to, żeby
--- zwykłe, bezcykliczne czekanie nie trwało w nieskończoność.
-set local lock_timeout = '5s';
+-- Limit MUSI być mniejszy niż deadlock_timeout (domyślnie 1 s). To nie jest
+-- kosmetyka: `lock table ... nowait` niżej chroni tylko tabele, które skrypt
+-- WYMIENIA, a `drop schema ... cascade` bierze dodatkowo blokady niejawne, bez
+-- NOWAIT — m.in. na sekwencji tożsamości, której `lock table` w ogóle nie potrafi
+-- zablokować (PostgreSQL odmawia: "not supported for sequences"). Przy limicie
+-- 5 s to detektor zakleszczeń odzywał się pierwszy i potrafił wybrać na ofiarę
+-- transakcję klienta. Przy 500 ms rollback odpada WCZEŚNIEJ, niż cykl zdąży
+-- zostać wykryty — czyli sam rezygnuje, zamiast przerwać pracę klienta.
+-- Zmierzone: 5 s -> klient ginie z "deadlock detected"; 500 ms -> rollback
+-- odpada z 55P03, klient commituje.
+set local lock_timeout = '500ms';
 
 do $guard$
 begin
@@ -61,10 +67,18 @@ begin
     -- nie kolidują ze sobą; koliduje dopiero ACCESS EXCLUSIVE rollbacku.
     -- `lock table` bierze pozycje z listy SEKWENCYJNIE, więc bez NOWAIT rollback
     -- czeka na pozycję n, trzymając już 1..n-1 — i to oczekiwanie domyka cykl.
-    -- Z NOWAIT rollback nie czeka na żadną blokadę TABELI: albo bierze wszystko od
-    -- razu, albo odmawia (55P03), a transakcja klienta przechodzi bez szwanku.
-    -- NOWAIT nie obejmowałby czekania na poziomie wiersza ani blokad branych
-    -- niejawnie — ten plik nie wykonuje żadnego DML, więc kwestia nie powstaje.
+    -- Z NOWAIT rollback nie czeka na blokadę żadnej tabeli, którą WYMIENIA: albo
+    -- bierze je od razu, albo odmawia (55P03), a transakcja klienta przechodzi bez
+    -- szwanku. `drop schema ... cascade` bierze dodatkowo, niejawnie i bez NOWAIT,
+    -- ACCESS EXCLUSIVE na indeksach, sekwencji events_id_seq i relacjach toast tych
+    -- tabel. Dla indeksów i toastów to bezpieczne, bo są dziećmi wymienionych tabel.
+    -- DLA SEKWENCJI NIE: `select ... from pg_sequences` blokuje ją bez blokady na
+    -- tabeli, a `lock table` nie umie objąć sekwencji. Ta reszta jest ograniczona
+    -- czasowo przez `lock_timeout` ustawiony poniżej deadlock_timeout. Czekania na poziomie WIERSZA NOWAIT by nie objął, ale ten
+    -- plik nie wykonuje żadnego DML, więc kwestia nie powstaje.
+    --
+    -- UWAGA PRZY ROZBUDOWIE: nowa TABELA w schemacie `tenant_domains` wypada poza
+    -- listę NOWAIT — dopisz ją. To samo dotyczy dodania instrukcji DML.
     lock table tenant_domains.settings, tenant_domains.domains, tenant_domains.events
       in access exclusive mode nowait;
     if exists (select 1 from tenant_domains.domains) or exists (select 1 from tenant_domains.events) then

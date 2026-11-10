@@ -1,6 +1,7 @@
 -- Rollback SC-020-A (konfiguracja marki firmy, white-label etap A).
 -- Odtwarza stan sprzed migracji: schemat `branding` nie istniał, nie było funkcji
--- public.brand_*/private.brand_*, koszyka `brand-assets` ani polityk na storage.objects.
+-- public.brand_*/private.brand_* ani polityk na storage.objects. JEDEN wyjątek:
+-- pusty wiersz koszyka `brand-assets` zostaje celowo — uzasadnienie w punkcie 1.
 --
 -- Historia marki jest w migracji NIEZMIENNA dla wszystkich ról (wyzwalacze
 -- guard_immutable/guard_version), a wersje opublikowane są dokumentem decyzji klienta.
@@ -8,8 +9,10 @@
 -- WYŁĄCZNIE, gdy nie ma żadnej wersji, pliku ani zdarzenia. Usunięcie istniejącej marki
 -- klienta to decyzja właściciela, nie rollback.
 --
--- Koszyk `brand-assets` usuwamy tylko wtedy, gdy jest pusty. Obiekty w Storage nie są
--- objęte transakcją bazy, a ich kasowanie nie jest odwracalne.
+-- Koszyka `brand-assets` NIE usuwamy (patrz punkt 1). Jeżeli zostały w nim pliki,
+-- rollback odmawia, zamiast zdejmować polityki, które ich pilnują. Obiekty w Storage
+-- nie są objęte transakcją bazy, a ich kasowanie nie jest odwracalne — usunięcie
+-- samego koszyka to osobny krok przez API Storage.
 --
 -- Rola: migracja nie tworzy żadnej roli, więc nie ma czego cofać.
 --
@@ -24,19 +27,26 @@ begin;
 -- kończy się zerem nawet gdy transakcja została wycofana, a nieudane cofnięcie
 -- wygląda jak udane.
 --
--- Całą ochronę przed zakleszczeniem daje `lock table ... nowait` niżej, NIE ten
--- limit: przy deadlock_timeout = 1 s detektor zakleszczeń zadziała cztery sekundy
--- wcześniej, więc limit nigdy nie uchroni przed cyklem. Jest tu tylko po to, żeby
--- zwykłe, bezcykliczne czekanie nie trwało w nieskończoność.
-set local lock_timeout = '5s';
+-- Limit MUSI być mniejszy niż deadlock_timeout (domyślnie 1 s). To nie jest
+-- kosmetyka: `lock table ... nowait` niżej chroni tylko tabele, które skrypt
+-- WYMIENIA, a `drop schema ... cascade` bierze dodatkowo blokady niejawne, bez
+-- NOWAIT — m.in. na sekwencji tożsamości, której `lock table` w ogóle nie potrafi
+-- zablokować (PostgreSQL odmawia: "not supported for sequences"). Przy limicie
+-- 5 s to detektor zakleszczeń odzywał się pierwszy i potrafił wybrać na ofiarę
+-- transakcję klienta. Przy 500 ms rollback odpada WCZEŚNIEJ, niż cykl zdąży
+-- zostać wykryty — czyli sam rezygnuje, zamiast przerwać pracę klienta.
+-- Zmierzone: 5 s -> klient ginie z "deadlock detected"; 500 ms -> rollback
+-- odpada z 55P03, klient commituje.
+set local lock_timeout = '500ms';
 
--- Storage blokujemy PIERWSZY i POZA gałęzią `branding`, bo `drop policy` oraz
--- `delete from storage.buckets` niżej wykonują się także wtedy, gdy schematu
--- `branding` już nie ma — bez tego brałyby swoje blokady zupełnie bez NOWAIT.
+-- Storage blokujemy PIERWSZY i POZA gałęzią `branding`, bo `drop policy` niżej
+-- wykonuje się także wtedy, gdy schematu `branding` już nie ma — bez tego brałby
+-- swoją blokadę zupełnie bez NOWAIT. (Wcześniejsze wersje miały tu także
+-- `delete from storage.buckets`; tej instrukcji już nie ma.)
 -- Potrzebna jest DOKŁADNIE JEDNA tabela: storage.objects, bo brand_register_asset
 -- czyta ją przed zapisem do branding.assets, a `drop policy` niżej i tak bierze na
--- niej ACCESS EXCLUSIVE. Nic więcej ze schematu `storage` nie jest tu ruszane —
--- patrz komentarz przy koszyku poniżej.
+-- niej ACCESS EXCLUSIVE. Skrypt nie wykonuje żadnego DML na schemacie `storage`,
+-- więc nic więcej stamtąd nie jest blokowane — patrz komentarz przy koszyku poniżej.
 do $storagelock$
 begin
   if to_regclass('storage.objects') is not null then
@@ -69,14 +79,26 @@ begin
     -- 1..n-1 — i to oczekiwanie domyka cykl z aplikacją. Żadna stała kolejność
     -- tego nie rozwiąże, bo aplikacja używa obu kolejności (np. brand_save_draft
     -- czyta assets przed zapisem do versions). Z NOWAIT rollback nie czeka na
-    -- ŻADNĄ blokadę tabeli: albo bierze wszystko od razu, albo odmawia (55P03), a
-    -- transakcja klienta przechodzi bez szwanku.
+    -- blokadę żadnej tabeli, którą WYMIENIA: albo bierze je od razu, albo odmawia
+    -- (55P03), a transakcja klienta przechodzi bez szwanku.
     --
-    -- Zakres tej obietnicy: dotyczy blokad TABEL. NOWAIT nie obejmuje czekania na
-    -- poziomie wiersza ani blokad branych niejawnie przez późniejsze instrukcje —
-    -- dlatego ten skrypt celowo nie wykonuje już żadnego DML na schemacie
-    -- `storage` (patrz komentarz przy koszyku). Każda nowa instrukcja DML w tym
-    -- pliku ponownie otwiera tę furtkę. Dla ręcznego skryptu to właściwy
+    -- Dokładny zakres tej obietnicy — ani szerzej, ani węziej:
+    --  * `drop schema ... cascade` bierze dodatkowo, NIEJAWNIE i BEZ NOWAIT,
+    --    ACCESS EXCLUSIVE na indeksach, sekwencji tożsamości (events_id_seq) i
+    --    relacjach toast tych tabel. Dla indeksów i toastów nikt nie dosięgnie ich,
+    --    nie biorąc najpierw blokady na rodzicu. DLA SEKWENCJI TO NIEPRAWDA: samo
+    --    `select ... from pg_sequences` blokuje sekwencję BEZ blokady na
+    --    branding.events, a `lock table` nie umie jej objąć (PostgreSQL odmawia
+    --    blokowania sekwencji). Ta reszta nie jest więc udowodniona jako niemożliwa
+    --    — jest OGRANICZONA CZASOWO przez `set local lock_timeout` na początku
+    --    pliku, ustawiony poniżej deadlock_timeout, żeby to rollback odpadł
+    --    pierwszy, a nie klient.
+    --  * NOWAIT nie obejmuje czekania na poziomie WIERSZA. Dlatego ten skrypt
+    --    celowo nie wykonuje żadnego DML (patrz komentarz przy koszyku).
+    --
+    -- UWAGA PRZY ROZBUDOWIE: nowa TABELA w schemacie `branding` wypada poza listę
+    -- NOWAIT i przywraca ryzyko zakleszczenia — dopisz ją do `lock table`. To samo
+    -- dotyczy dodania jakiejkolwiek instrukcji DML. Dla ręcznego skryptu to właściwy
     -- wybór — lepiej spróbować ponownie niż przerwać pracę klienta.
     lock table branding.versions, branding.assets, branding.events
       in access exclusive mode nowait;
@@ -112,26 +134,47 @@ $preflight$;
 --
 --    Zamiast blokować pół schematu `storage` na żywym projekcie, nie usuwamy
 --    koszyka. Zostaje pusty wiersz konfiguracji — tak samo jak zostają role
---    NOLOGIN w rollbackach SC-020-B/D i w sc021_ai_ledger_down. Jest nieszkodliwy:
---    bez polityk nikt do niego nie zapisze ani nic z niego nie odczyta, a ponowne
---    wgranie migracji i tak zakłada go przez `on conflict do update`.
+--    NOLOGIN w rollbackach SC-020-B/D i w sc021_ai_ledger_down. Zakres tej
+--    nieszkodliwości, dokładnie: po zdjęciu polityk ŻADEN klient `anon` ani
+--    `authenticated` nic do niego nie zapisze ani z niego nie odczyta. Rola
+--    `service_role`, `postgres` i usługa Storage omijają RLS i nadal go widzą —
+--    to nie jest koszyk nieosiągalny, tylko niedostępny z przeglądarki.
+--    Ponowne wgranie migracji zakłada go przez `on conflict do update`.
+--
+--    Skutek uboczny: `on conflict do update` w migracji NADPISUJE ustawienia
+--    istniejącego koszyka o tym samym `id` (public, file_size_limit, allowed_mime_types),
+--    a rollback ich nie przywraca — zostają nadpisane na stałe.
 --
 --    Guard pustości zostaje, bo pliki w koszyku oznaczają, że ktoś wciąż używa
 --    marki — wtedy rollback ma odmówić, a nie zdejmować polityki chroniące te pliki.
 --    Liczenie jest wolne od wyścigu dzięki blokadzie NOWAIT na storage.objects.
 --    Jeśli chcesz usunąć sam koszyk, zrób to osobno, przez API Storage.
+--
+--    Guard działa TYLKO dopóki polityki istnieją, i liczy PRZED ich zdjęciem.
+--    Inaczej byłby pułapką: koszyk zostaje po rollbacku, więc plik wrzucony do niego
+--    później (service_role, panel Storage) blokowałby na zawsze ponowne uruchomienie
+--    już wykonanego rollbacku — mimo że nie ma czego chronić ani co cofać. A plik
+--    wgrany legalnie i tak jest zarejestrowany w branding.assets, więc łapie go
+--    wcześniejszy guard; ten dokłada się tylko na osierocone wgrania.
+--    Pozostaje jeden przypadek: jeśli migracja zostanie wgrana PONOWNIE na koszyk
+--    z osieroconymi plikami, polityki wracają i rollback znów będzie odmawiał,
+--    dopóki ktoś tych plików nie usunie ręcznie. To zamierzone — wtedy marka
+--    znowu działa i pliki znowu są chronione.
 do $storage$
 declare leftover bigint;
 begin
   if to_regclass('storage.objects') is null then
     raise notice 'sc020a: brak schematu storage, polityki pominięte';
   else
+    if exists (select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects'
+               and policyname in ('sc020_brand_assets_read', 'sc020_brand_assets_insert')) then
+      execute 'select count(*) from storage.objects where bucket_id = $1' into leftover using 'brand-assets';
+      if leftover > 0 then
+        raise exception 'sc020a_rollback_bucket_not_empty:%', leftover using errcode = '55000';
+      end if;
+    end if;
     execute 'drop policy if exists sc020_brand_assets_insert on storage.objects';
     execute 'drop policy if exists sc020_brand_assets_read on storage.objects';
-    execute 'select count(*) from storage.objects where bucket_id = $1' into leftover using 'brand-assets';
-    if leftover > 0 then
-      raise exception 'sc020a_rollback_bucket_not_empty:%', leftover using errcode = '55000';
-    end if;
   end if;
 end
 $storage$;
