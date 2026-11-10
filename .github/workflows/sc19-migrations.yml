@@ -11,6 +11,7 @@ on:
       - 'lib/sc19-offer-*.ts'
       - 'tests/sc-019-migrations*.mjs'
       - 'tests/competency-active-*.mjs'
+      - 'tests/sc-wer-r12-rollback-from-production.test.mjs'
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
@@ -59,6 +60,7 @@ on:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
       - 'tests/competency-active-*.mjs'
+      - 'tests/sc-wer-r12-rollback-from-production.test.mjs'
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
@@ -280,6 +282,27 @@ jobs:
           done
           [ "$ready" = 1 ] || { echo "::error::current-state rehearsal server did not become ready over TCP"; docker logs --tail 50 sc19-current; exit 1; }
           node --test tests/sc-019-migrations-production-current.test.mjs 2>&1 | tee -a sc19-production-history.log
+      - name: SC-WER r12 rollback from the state the release reaches after r12 (production history replay)
+        env:
+          SC19_REHEARSAL_DISPOSABLE: 'yes'
+          SC19_R12_ROLLBACK_DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:55435/sc19_r12_rollback
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          set -o pipefail
+          # Fourth disposable cluster (cluster-wide roles, one pg_cron database per cluster).
+          docker run -d --name sc19-r12 -p 127.0.0.1:55435:5432 \
+            -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_r12_rollback \
+            sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_r12_rollback
+          ready=''
+          for attempt in $(seq 1 60); do
+            if docker exec sc19-r12 pg_isready -h 127.0.0.1 -U supabase_admin -d sc19_r12_rollback >/dev/null; then
+              ready=$(docker exec -e PGPASSWORD=synthetic-only sc19-r12 psql -h 127.0.0.1 -U supabase_admin -d sc19_r12_rollback -tAc 'select 1' 2>/dev/null) || ready=''
+              [ "$ready" = 1 ] && break
+            fi
+            sleep 1
+          done
+          [ "$ready" = 1 ] || { echo "::error::r12 rollback rehearsal server did not become ready over TCP"; docker logs --tail 50 sc19-r12; exit 1; }
+          node --test tests/sc-wer-r12-rollback-from-production.test.mjs 2>&1 | tee -a sc19-production-history.log
       - name: Reproduce the inspected production state (CRLF functions), normalization and M13
         if: matrix.postgres == '17'
         env:
@@ -312,4 +335,4 @@ jobs:
           retention-days: 7
       - name: Remove only this job's disposable container
         if: always()
-        run: docker rm -f sc19-rehearsal sc19-hosted sc19-current || true
+        run: docker rm -f sc19-rehearsal sc19-hosted sc19-current sc19-r12 || true
