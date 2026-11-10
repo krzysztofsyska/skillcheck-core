@@ -56,17 +56,24 @@ const acl=`do $acl$ declare o record;g record;begin
  for g in select distinct r.rolname from pg_proc p cross join lateral aclexplode(p.proacl) a join pg_roles r on r.oid=a.grantee where p.oid=o.oid and a.grantee<>o.proowner loop
  execute format('revoke all on function %s from %I',o.oid::regprocedure,g.rolname);end loop;end loop;end $acl$;
 ${names.map(n=>`alter function ${n} owner to postgres;\ngrant execute on function ${n} to authenticated;`).join('\n')}`;
-writeFileSync('supabase/migrations/20261107164219_exercise_ai_revision_workflow.sql',`-- Generated from pinned reviewed functions by scripts/sc-c6-revision-compose.mjs.
+const migrationPath='supabase/migrations/20261107164219_exercise_ai_revision_workflow.sql';
+const migrationSql=`-- Generated from pinned reviewed functions by scripts/sc-c6-revision-compose.mjs.
 -- Function-only change: no new storage, erasure inventory or runtime activation.
 begin;\n${preflight}\n${newSave}\n${newRecord}\n${newApprove}\n${read('db/components/exercise-ai-revision-workflow.sql')}\n${acl}
 do $postflight$ begin if private.erasure_schema_signature() is distinct from '${signature}' then raise exception 'c6_revision_inventory_changed' using errcode='55000';end if;end $postflight$;
-commit;\n`);
+commit;\n`;
 // Rollback is deliberately blocked after any revised/rejected proposal exists:
 // removing the lifecycle gate would make rejected proposals approvable again.
-writeFileSync('supabase/rollbacks/20261107164219_exercise_ai_revision_workflow_down.sql',`begin;
+const rollbackPath='supabase/rollbacks/20261107164219_exercise_ai_revision_workflow_down.sql';
+const rollbackSql=`begin;
 do $$ begin if exists(select 1 from exercise_ai.proposals where provenance ? 'workflow' or provenance ? 'human_edit') then raise exception 'c6_revision_rollback_requires_forward_fix' using errcode='55000';end if;end $$;
 ${names.map(n=>`drop function ${n};`).join('\n')}
 ${save.replace('create function','create or replace function')}
 ${approve.replace('create function','create or replace function')}
 ${record.replace('create function','create or replace function')}
-commit;\n`);
+commit;\n`;
+// Two generated files, both checked: CI runs `--check` so a hand edit of either one cannot drift from this script.
+const outputs=[[migrationPath,migrationSql],[rollbackPath,rollbackSql]];
+if(process.argv.includes('--check')){
+ for(const [path,sql] of outputs) if(readFileSync(path,'utf8')!==sql) throw Error('Regenerate C6 revision workflow: '+path);
+} else for(const [path,sql] of outputs) writeFileSync(path,sql);

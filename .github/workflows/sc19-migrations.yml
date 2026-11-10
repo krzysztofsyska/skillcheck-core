@@ -17,6 +17,9 @@ on:
       - 'scripts/sc-ac-compose.mjs'
       - 'scripts/sc-c6-compose.mjs'
       - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'scripts/sc-c6-revision-compose.mjs'
+      - 'scripts/sc19-commerce-inventory-compose.mjs'
+      - 'db/components/exercise-ai-revision-workflow.sql'
       - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
       - 'db/components/exercise-ai-proposals.sql'
       - 'tests/exercise-ai-*.test.mjs'
@@ -66,6 +69,9 @@ on:
       - 'scripts/sc-ac-compose.mjs'
       - 'scripts/sc-c6-compose.mjs'
       - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'scripts/sc-c6-revision-compose.mjs'
+      - 'scripts/sc19-commerce-inventory-compose.mjs'
+      - 'db/components/exercise-ai-revision-workflow.sql'
       - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
       - 'db/components/exercise-ai-proposals.sql'
       - 'tests/exercise-ai-*.test.mjs'
@@ -161,6 +167,8 @@ jobs:
       - run: node scripts/sc-ac-compose.mjs --check
       - run: node scripts/sc-c6-compose.mjs --check
       - run: node scripts/sc19-commerce-inventory-compose.mjs --check
+      - run: node scripts/sc-c6-grant-guard-compose.mjs --check
+      - run: node scripts/sc-c6-revision-compose.mjs --check
       - name: Catalog orders, settlement and erasure
         run: node --experimental-strip-types --test tests/sc19-catalog-orders.test.mjs
         env:
