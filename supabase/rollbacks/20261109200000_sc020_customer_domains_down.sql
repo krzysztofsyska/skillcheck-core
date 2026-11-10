@@ -63,14 +63,16 @@ begin;
 -- instrukcji ZWĘŻA okno powstania zakleszczenia (patrz liczby wyżej), ale
 -- POSZERZA okno między `drop schema` a COMMIT-em, w którym realizuje się ta
 -- druga awaria — ten sam mechanizm dotyczy tego pliku (pomiary w pliku SC-020-A).
--- UCZCIWIE O BILANSIE, bo łatwo tu o zbyt optymistyczny wniosek. Przestawienie
--- ELIMINUJE tryb ZAKLESZCZENIA (40P01): stara kolejność formowała je w 11 z 18
--- prób, nowa w 0 z 54. NIE eliminuje natomiast awarii klienta — zamienia jeden
--- tryb na drugi, w szerszym oknie: zmierzone 6 z 27 prób (stara) wobec 18 z 27
--- (nowa). Co istotne, 40P01 jest klasą ponawialną, a XX000 nie.
--- Nie twierdzimy więc, że jest bezpieczniej dla klienta pod ruchem. Zyskiem jest
--- to, że rollback kończy się przewidywalnie (zawsze commit albo czysta odmowa),
--- zamiast losowo ginąć lub zabijać klienta zakleszczeniem.
+-- UCZCIWIE O BILANSIE, bo łatwo tu o zbyt optymistyczny wniosek. Wszystkie liczby
+-- niżej zmierzono na pliku SC-020-A; dla SC-020-B mechanizm jest ten sam.
+-- Pochodzą z DWÓCH RÓŻNYCH serii prób, więc nie da się ich wprost dodawać:
+--   * seria licząca tylko zakleszczenia: stara kolejność formowała je w 11 z 18
+--     prób, nowa w 0 z 54 — tryb 40P01 zostaje WYELIMINOWANY;
+--   * seria licząca WSZYSTKIE tryby awarii klienta: stara 6 z 27, nowa 18 z 27.
+-- Czyli przestawienie usuwa zakleszczenia, ale łączną liczbę awarii klienta pod
+-- ruchem ZWIĘKSZA — i zamienia klasę ponawialną (40P01) na nieponawialną (XX000).
+-- Nie twierdzimy zatem, że jest bezpieczniej dla klienta. Zyskiem jest wyłącznie
+-- to, że znika tryb, w którym to baza arbitralnie wybiera ofiarę.
 -- WNIOSEK PRAKTYCZNY: ŻADNA z tych kolejności nie jest bezpieczna przy
 -- równoległym ruchu. To nie jest ostrożnościowa formułka — to wynik pomiaru.
 --
@@ -125,7 +127,7 @@ begin
     -- tabel. Dla indeksów i toastów żadna ścieżka aplikacji nie dosięgnie ich bez
     -- blokady na rodzicu.
     -- DLA SEKWENCJI NIE: `select ... from pg_sequences` blokuje ją bez blokady na
-    -- tabeli, a `lock table` nie umie objąć sekwencji. Ta reszta jest NIE ograniczona
+    -- tabeli, a `lock table` nie umie objąć sekwencji. Ta reszta NIE jest ograniczona
     -- przez `lock_timeout`: na tej ścieżce czekającym jest klient, nie rollback
     -- (patrz akapit "CZEGO TO NIE ZAŁATWIA" na początku pliku). Czekania na
     -- poziomie WIERSZA NOWAIT by nie objął, ale ten
