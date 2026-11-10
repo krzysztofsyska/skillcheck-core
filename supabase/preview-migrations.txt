@@ -56,5 +56,7 @@
 20261109200000_sc020_customer_domains.sql
 # SC-021-B: AI attempt ledger (ai_ledger schema, placeholder test rates only).
 20261109210000_sc021_ai_ledger.sql
+# SC-020-D: scheduled DNS re-verification role tenant_domain_reverifier and its two functions (no login, no schedule).
+20261109220000_sc020d_domain_reverification.sql
 # SC-021-D: AI cost and margin dashboard (operator-only reads, placeholder FX rate only).
 20261110090000_sc021_cost_dashboard.sql

@@ -84,6 +84,7 @@ test('SC-020-B customer domains: lifecycle, isolation, takeover and permissions'
     assert.deepEqual(anonExec, ['tenant_domain_resolve']);
     const verifierExec = (await db.query(`select p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname='tenant_domains' and has_function_privilege('tenant_domain_verifier',p.oid,'EXECUTE') order by 1`)).rows.map(r => r.proname);
+    // SC-020-D's scheduled re-verification functions belong to a separate role (tenant_domain_reverifier), not this one.
     assert.deepEqual(verifierExec, ['record_dns_check', 'record_tls_check', 'verifier_target']);
     assert.equal((await db.query("select has_function_privilege('authenticated','tenant_domains.require_acting_owner(uuid,uuid)','EXECUTE') p")).rows[0].p, false);
   });

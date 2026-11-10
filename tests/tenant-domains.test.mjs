@@ -70,8 +70,15 @@ test('host -> tenant: only active resolved hosts pick a company; everything else
   let calls = 0;
   await decide('skillcheck-core-abc.vercel.app', '/dashboard', 'skillcheck-core-abc.vercel.app', preview, async () => { calls += 1; return A; });
   assert.equal(calls, 0, 'platform hosts never consult the database');
-  assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', preview, async () => { throw new Error('db down'); }), { kind: 'platform' });
-  assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', preview, async () => 'not-a-uuid'), { kind: 'platform' });
+  // SC-020-D: a failed or malformed lookup fails closed (503), never as the unrestricted platform.
+  assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', preview, async () => { throw new Error('db down'); }), { kind: 'unavailable' });
+  assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', preview, async () => 'not-a-uuid'), { kind: 'unavailable' });
+  assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', preview, async () => undefined), { kind: 'platform' });
+  // A platform subdomain of a company (<label>.<subdomain_base>) is a tenant like any customer domain: restricted
+  // routes when resolved, 503 when the lookup fails — never the unrestricted platform.
+  const sub = 'acme.klienci.skillcheck.pl';
+  assert.deepEqual(await decide(sub, '/operator', sub, preview, async () => A), { kind: 'tenant', companyId: A, hostname: sub, route: { kind: 'not_found' } });
+  assert.deepEqual(await decide(sub, '/login', sub, preview, async () => { throw new Error('db down'); }), { kind: 'unavailable' });
   assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', null), (await decide('kariera.firma-a.pl')), 'missing X-Forwarded-Host is fine');
   // Production: disabled until the owner switches it on; nothing resolves.
   assert.deepEqual(await decide('kariera.firma-a.pl', '/dashboard', 'kariera.firma-a.pl', { VERCEL_ENV: 'production' }), { kind: 'disabled' });
@@ -226,7 +233,7 @@ test('company list on a customer domain shows only that company and keeps the lo
     }).outputText, path);
     return mod.exports.default;
   };
-  const render = async tenant => renderToStaticMarkup(await load(tenant)({ searchParams: Promise.resolve({}) }));
+  const render = async (tenant, params = {}) => renderToStaticMarkup(await load(tenant)({ searchParams: Promise.resolve(params) }));
   const onA = await render(A);
   assert.match(onA, /Firma A/);
   assert.doesNotMatch(onA, /Firma B/);
@@ -238,4 +245,31 @@ test('company list on a customer domain shows only that company and keeps the lo
   const platform = await render(null);
   assert.match(platform, /Firma A/);
   assert.match(platform, /Firma B/);
+  // SC-020-D: without access to the tenant company, `next` is not followed on its domain.
+  const blocked = await render('33333333-3333-4333-8333-333333333333', { next: '/kup/preselekcja' });
+  assert.match(blocked, /nie ma dostępu/);
+  await assert.rejects(render(A, { next: '/kup/preselekcja' }), error => error.url === '/kup/preselekcja');
+  await assert.rejects(render(null, { next: '/kup/preselekcja' }), error => error.url === '/kup/preselekcja');
+});
+
+test('SC-020-D: one white-label flag for brand and domains, same answer in every environment', async () => {
+  const { whiteLabelEnabled } = await import('../lib/white-label-flag.ts');
+  const { brandingEnabled } = await import('../lib/brand-config.ts');
+  const cases = [
+    [{}, false], [{ NODE_ENV: 'production' }, false], [{ NODE_ENV: 'test' }, false], [{ NODE_ENV: 'development' }, true],
+    [{ VERCEL_ENV: 'preview' }, true], [{ VERCEL_ENV: 'production' }, false], [{ VERCEL_ENV: 'development' }, false],
+    [{ VERCEL_ENV: 'production', NODE_ENV: 'development' }, false],
+    [{ VERCEL_ENV: 'production', WHITE_LABEL_ENABLED: 'true' }, true], [{ VERCEL_ENV: 'preview', WHITE_LABEL_ENABLED: 'false' }, false],
+    [{ NODE_ENV: 'production', WHITE_LABEL_ENABLED: 'true' }, true], [{ NODE_ENV: 'development', WHITE_LABEL_ENABLED: 'false' }, false],
+    [{ VERCEL_ENV: 'preview', WHITE_LABEL_ENABLED: 'TRUE' }, true], [{ VERCEL_ENV: 'production', WHITE_LABEL_ENABLED: '1' }, false],
+  ];
+  for (const [env, expected] of cases) {
+    assert.equal(whiteLabelEnabled(env), expected, JSON.stringify(env));
+    assert.equal(brandingEnabled(env), expected, 'brand: ' + JSON.stringify(env));
+    assert.equal(tenantDomainsEnabled(env), expected, 'domains: ' + JSON.stringify(env));
+  }
+  // No other module reads the variable directly.
+  const { execFileSync } = await import('node:child_process');
+  const readers = execFileSync('git', ['grep', '-l', 'WHITE_LABEL_ENABLED', '--', 'app', 'lib', 'proxy.ts'], { encoding: 'utf8' }).trim().split('\n');
+  assert.deepEqual(readers, ['lib/white-label-flag.ts']);
 });
