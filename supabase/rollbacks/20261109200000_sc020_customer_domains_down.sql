@@ -61,8 +61,10 @@ begin
     -- nie kolidują ze sobą; koliduje dopiero ACCESS EXCLUSIVE rollbacku.
     -- `lock table` bierze pozycje z listy SEKWENCYJNIE, więc bez NOWAIT rollback
     -- czeka na pozycję n, trzymając już 1..n-1 — i to oczekiwanie domyka cykl.
-    -- Z NOWAIT rollback nigdy nie jest stroną czekającą: albo bierze wszystko od
+    -- Z NOWAIT rollback nie czeka na żadną blokadę TABELI: albo bierze wszystko od
     -- razu, albo odmawia (55P03), a transakcja klienta przechodzi bez szwanku.
+    -- NOWAIT nie obejmowałby czekania na poziomie wiersza ani blokad branych
+    -- niejawnie — ten plik nie wykonuje żadnego DML, więc kwestia nie powstaje.
     lock table tenant_domains.settings, tenant_domains.domains, tenant_domains.events
       in access exclusive mode nowait;
     if exists (select 1 from tenant_domains.domains) or exists (select 1 from tenant_domains.events) then
