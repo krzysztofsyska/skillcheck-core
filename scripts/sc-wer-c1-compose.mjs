@@ -299,10 +299,13 @@ ${markerStart}
 set local role competency_test_marker_writer;
 drop function ${writer};
 ${markerEnd}
-do $$declare f record;begin
- for f in select p.oid::regprocedure signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-  where n.nspname||'.'||p.proname=any(array[${[...newFunctions,'private.erasure_competency_row_guard'].map(t=>`'${t}'`).join(',')}]) loop
-  execute format('drop function if exists %s cascade',f.signature);
+-- Signatures are materialized BEFORE any drop: a lazy regprocedure cast prints a bare OID once an earlier
+-- \`drop ... cascade\` in the same loop has removed a dependent function (syntax error at "19476").
+do $$declare sigs text[];s text;begin
+ select array_agg(p.oid::regprocedure::text) into sigs from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname||'.'||p.proname=any(array[${[...newFunctions,'private.erasure_competency_row_guard'].map(t=>`'${t}'`).join(',')}]);
+ foreach s in array coalesce(sigs,'{}'::text[]) loop
+  execute format('drop function if exists %s cascade',s);
  end loop;
 end;$$;
 ${order.map(table=>`drop table ${table} cascade;`).join('\n')}
