@@ -31,7 +31,7 @@ export function classifyFile(path) {
   if (path.startsWith('supabase/')) return 'supabase-other';
   if (path.startsWith('.github/')) return 'ci-governance';
   if (path.startsWith('app/api/')) return 'api';
-  if (path.startsWith('app/') || path.startsWith('components/') || path.startsWith('public/')) return 'frontend';
+  if (path.startsWith('app/') || path.startsWith('components/') || path.startsWith('public/') || path.startsWith('content/')) return 'frontend';
   if (path.startsWith('lib/') || path.startsWith('db/') || path === 'proxy.ts') return 'backend';
   if (path.startsWith('tools/') || path.startsWith('scripts/')) return 'tooling';
   if (path.startsWith('tests/') || path.startsWith('fixtures/')) return 'tests';

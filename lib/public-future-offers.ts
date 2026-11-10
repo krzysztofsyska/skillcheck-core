@@ -3,7 +3,7 @@
 // Owner decision 2026-11-10: while Przelewy24 verifies the shop, the public offer must contain only
 // what a verifier can actually buy (FREE and PRESELEKCJA). The packages are hidden, not deleted: their
 // copy stays in the code (app/components/marketing/future-offers.ts and the marked blocks of
-// public/kalkulator-demo.html) and comes back by setting one variable.
+// content/kalkulator-demo.html) and comes back by setting one variable.
 //
 // This switch only decides what the public pages show. It grants no access, enables no checkout and
 // touches neither billing nor the module work behind the packages.

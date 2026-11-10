@@ -16,7 +16,8 @@ export async function GET() {
   try {
     const html = await readFile(path.join(process.cwd(), "content", "kalkulator-demo.html"), "utf8");
     return new Response(renderCalculatorHtml(html, isPublicFutureOffersEnabled()), { headers });
-  } catch {
+  } catch (error) {
+    console.error("kalkulator_demo_html_failed", error instanceof Error ? error.message : "unknown");
     return new Response(fallback, { status: 503, headers: { ...headers, "Retry-After": "30" } });
   }
 }
