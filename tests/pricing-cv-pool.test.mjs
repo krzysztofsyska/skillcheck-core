@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
-const demo = read('public/kalkulator-demo.html');
+const demo = read('content/kalkulator-demo.html');
 const cennik = read('docs/cennik-2026-11-02.md');
 const content = read('app/components/marketing/content.ts');
 const future = read('app/components/marketing/future-offers.ts');

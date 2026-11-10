@@ -16,6 +16,7 @@ import {
   steps,
 } from "./content";
 import { PackageComparison } from "./package-comparison";
+import { isPublicFutureOffersEnabled } from "../../../lib/public-future-offers";
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 import { SiteFooter } from "./site-footer";
 import { SiteHeader } from "./site-header";
@@ -155,7 +156,7 @@ export async function HomePage() {
             <p className={styles.kicker}>Wybierz zakres</p>
             <h2 id="pkg-title">Nie płać za większy zakres, niż potrzebujesz.</h2>
             <p className={styles.intro}>Dziś kupisz FREE i PRESELEKCJĘ. FREE jest opcjonalnym pierwszym krokiem, a nie warunkiem zakupu PRESELEKCJI.</p>
-            <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} />
+            <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} futureOffersEnabled={isPublicFutureOffersEnabled()} />
           </div>
         </section>
 

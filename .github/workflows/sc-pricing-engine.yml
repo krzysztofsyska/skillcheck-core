@@ -8,7 +8,7 @@ on:
       - 'tests/pricing-cv-pool.test.mjs'
       - 'tests/pricing-cv-pool-module.test.mjs'
       - 'app/operator/pricing/**'
-      - 'public/kalkulator-demo.html'
+      - 'content/kalkulator-demo.html'
       - 'docs/cennik-2026-11-02.md'
       - 'app/components/marketing/package-comparison.tsx'
       - 'app/components/marketing/content.ts'
