@@ -68,6 +68,9 @@ export const EXERCISE_AI_ERROR_CODES = [
   'exercise_ai_quota_exhausted',
   'exercise_ai_input_incomplete',
   'exercise_ai_input_too_large',
+  // SC-021-C: shown by the action before any generation slot is used; never passed to finish.
+  'exercise_ai_budget_exceeded',
+  'exercise_ai_budget_unavailable',
 ] as const;
 export type ExerciseAiErrorCode = typeof EXERCISE_AI_ERROR_CODES[number];
 
@@ -94,6 +97,8 @@ export function sanitizeExerciseAiError(code: ExerciseAiErrorCode) {
     case 'exercise_ai_quota_exhausted': return 'Wyczerpano limit propozycji dla tej rekrutacji.';
     case 'exercise_ai_input_incomplete': return 'Uzupełnij profil stanowiska: wymagane kompetencje i zadania.';
     case 'exercise_ai_input_too_large': return 'Profil jest zbyt obszerny do przygotowania propozycji. Skróć opisy lub listy wymagań; nie zużyto próby AI.';
+    case 'exercise_ai_budget_exceeded': return 'Miesięczny limit kosztów AI Twojej firmy został wyczerpany. Napisz zadanie ręcznie albo skontaktuj się z obsługą SkillCheck. Nie zużyto próby AI.';
+    case 'exercise_ai_budget_unavailable': return 'Limit kosztów AI Twojej firmy nie jest ustawiony albo jest chwilowo niedostępny. Napisz zadanie ręcznie albo skontaktuj się z obsługą SkillCheck. Nie zużyto próby AI.';
     default: return 'Nie udało się przygotować propozycji.';
   }
 }
