@@ -3,6 +3,7 @@
 // attestation and never reads candidate code as authorization.
 import { sha256 } from './canonical.mjs';
 import { protectionFromRulesets } from './protection.mjs';
+import { codexAggregateProblems } from './codex-evidence.mjs';
 
 // Release scope that always needs separate owner consent (path based; it is a
 // denylist on top of the evidence checks, never proof of safety by itself).
@@ -56,7 +57,7 @@ export function classifyReleaseFiles(files, migrations = []) {
  * @param input.trusted    { p24Hold } from trusted configuration; ONLY literal false releases the hold
  * @param input.rulesets / input.policy / input.environments  raw evidence for protectionFromRulesets
  * @param input.ci / input.review  per-SHA evidence { head_sha, conclusion, completed }
- * @param input.codex      automatic review state { completed, open_findings } for the head SHA
+ * @param input.codex      aggregate from createCodexEvidenceReader (see codex-evidence.mjs); trusted.codexReviewerId pins the reviewer
  * @param input.migrations [{ path, sql }] read by the trusted caller
  * @param input.lock       { held, inflight } release serialization state
  * @param input.released   array of integration SHAs already released (idempotency)
@@ -91,7 +92,9 @@ function evaluateUnsafe(input) {
   const fresh = e => e && e.completed === true && e.conclusion === 'success' && current && e.head_sha === current.integrationSha;
   if (!fresh(ci)) deny.push('CI_MISSING_OR_STALE');
   if (!fresh(review) || review.verdict !== 'PASS') deny.push('REVIEW_MISSING_OR_STALE');
-  if (!(codex && codex.completed === true && codex.head_sha === current?.integrationSha && codex.open_findings === 0)) deny.push('AUTO_REVIEW_PENDING_OR_FINDINGS');
+  // Codex evidence is a per-task aggregate bound to repo/base/head/manifest; review SHA and merge SHA are distinct.
+  const codexProblems = codexAggregateProblems(codex, { current, manifest: promotion?.manifest, reviewerId: trusted?.codexReviewerId });
+  if (codexProblems.length) deny.push('AUTO_REVIEW_PENDING_OR_FINDINGS', ...codexProblems);
   // Independent semantic verdict for the WHOLE release, bound to repo/base/head/manifest.
   // Must come from a trusted independent reader, never from builder JSON/labels.
   const v = input.scopeVerdict;

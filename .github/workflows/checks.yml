@@ -79,6 +79,11 @@ jobs:
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_PG_MAJOR: '16'
+      # SC-020-D white-label isolation: grant/RLS audit, cross-tenant negatives, rollback, scheduled re-verification.
+      - run: npm run test:white-label-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       # SC-FREE-AUTO-001 / SC-CONSENT-001 / SC-DIGEST-001 unit tests; the
       # native-PostgreSQL suite for the same change runs in sc19-migrations.yml.
       - run: npm run test:marketing-consent
@@ -88,6 +93,17 @@ jobs:
       - run: npm run test:screening
       - run: npm run test:ai-gateway
       - run: npm run test:ai-ledger-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+      # SC-021-C AI-cost budgets: two companies, 80%/100%, reservations, overrides, two-connection race.
+      - run: npm run test:ai-budget-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+      # SC-021-D: operator AI cost and margin panel (helpers, then native PostgreSQL, two synthetic companies).
+      - run: npm run test:ai-cost
+      - run: npm run test:ai-cost-db
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_PG_MAJOR: '16'
@@ -142,6 +158,11 @@ jobs:
       - run: npm run test:pdf-bundle
       - run: npm run test:http
       - run: npm run test:tenant-domains-http
+      # SC-020-D: two-company negative suite on a real `next start` over native PostgreSQL (RLS as the signed-in user).
+      - run: npm run test:white-label-http
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       - run: npm run test:screening-report-http
       - run: npm run test:cv-bulk-progress-http
       - run: npm run test:ac-report-http

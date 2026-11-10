@@ -310,13 +310,14 @@ test('company dashboard links to billing only while the package flag is on', asy
     companyAccess: async () => ({
       client: { from: () => query({ data: [], error: null, count: 0 }) },
       company: { name: 'Acme', owner_id: ownerId },
+      user: { id: ownerId },
       canEdit: true,
     }),
   };
   const page = load('app/dashboard/[companyId]/page.tsx', {
     'next/link': ({ children, href }) => React.createElement('a', { href }, children),
     '../../../lib/company-access': access,
-    '../../../lib/brand-config': { brandingEnabled: () => false },
+    '../../../lib/white-label-flag': { whiteLabelEnabled: () => false },
     './forms': { ProfileForm() { return null; }, RecruitmentForm() { return null; } },
   }).default;
   await withFlag(undefined, async () => {
@@ -329,6 +330,30 @@ test('company dashboard links to billing only while the package flag is on', asy
   });
 });
 
+
+// SC-020-D: domains and the white-label change history are linked from the company panel, for the owner only.
+test('company dashboard links to domains and white-label history for the owner only, while white-label is on', async () => {
+  const render = async (userId, enabled) => {
+    const page = load('app/dashboard/[companyId]/page.tsx', {
+      'next/link': ({ children, href }) => React.createElement('a', { href }, children),
+      '../../../lib/company-access': { companyAccess: async () => ({
+        client: { from: () => query({ data: [], error: null, count: 0 }) },
+        company: { name: 'Acme', owner_id: ownerId }, user: { id: userId }, canEdit: true,
+      }) },
+      '../../../lib/white-label-flag': { whiteLabelEnabled: () => enabled },
+      './forms': { ProfileForm() { return null; }, RecruitmentForm() { return null; } },
+    }).default;
+    return renderToStaticMarkup(await page({ params: Promise.resolve({ companyId }) }));
+  };
+  const owner = await render(ownerId, true);
+  assert.match(owner, new RegExp(`/dashboard/${companyId}/domeny`));
+  assert.match(owner, new RegExp(`/dashboard/${companyId}/zmiany-marki`));
+  assert.match(owner, new RegExp(`/dashboard/${companyId}/marka`));
+  const member = await render(memberId, true);
+  assert.doesNotMatch(member, /\/domeny|\/zmiany-marki/);
+  assert.match(member, new RegExp(`/dashboard/${companyId}/marka`));
+  assert.doesNotMatch(await render(ownerId, false), /\/domeny|\/zmiany-marki|\/marka/);
+});
 
 test('billing never presents a grant form with an unavailable or invalid policy', async () => {
   await withFlag('true', async () => {

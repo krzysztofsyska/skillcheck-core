@@ -26,21 +26,26 @@ const reviewerEnv = id => ({ ...mainOnly(id), can_admins_bypass: false,
 policy.environments = { owner_acceptance: { name: 'oa', id: 1 }, production_approval: { name: 'pa', id: 2 }, agent_review: { name: 'ar', id: 3 } };
 const environments = { oa: reviewerEnv(1), pa: reviewerEnv(2), ar: mainOnly(3) };
 
-const task = { task_id: 'T1', integration_source: 'verified_ci_review' };
+const H = 'd'.repeat(40), G = 'e'.repeat(40), RID = 99;
+const task = { task_id: 'T1', integration_source: 'verified_ci_review', head_sha: H, merge_sha: G };
+const codexFor = i => ({ source: 'trusted_codex_reader', repository: i.current?.repository, base_sha: i.current?.mainSha, head_sha: i.current?.integrationSha,
+  manifest_hash: sha256(i.promotion.manifest), complete: true, completed: true, open_findings: 0, covered_commits: [G],
+  entries: [{ task_id: 'T1', pr_number: 5, task_head_sha: H, review_head_sha: H, task_merge_sha: G, merge_commit_sha: G, review_id: 11,
+    reviewer_id: RID, reviewer_login: 'chatgpt-codex-connector[bot]', review_state: 'COMMENTED', completed: true, open_findings: 0 }] });
 const withVerdict = i => {
   i.scopeVerdict = { source: 'trusted_independent_scope_reader', verdict: 'LOW_RISK_COMPATIBLE', repository: i.current?.repository,
     base_sha: i.current?.mainSha, head_sha: i.current?.integrationSha, manifest_hash: sha256(i.promotion.manifest) };
+  i.codex = codexFor(i);
   return i;
 };
 const good0 = () => ({
-  trusted: { p24Hold: false },
+  trusted: { p24Hold: false, codexReviewerId: RID },
   current: { repository: 'r/r', integrationSha: I, mainSha: M },
-  promotion: { blockedReason: null, manifest: { integration_sha: I, main_sha: M, tasks: [task], files: ['app/page.tsx'] },
+  promotion: { blockedReason: null, manifest: { integration_sha: I, main_sha: M, tasks: [task], commits: [H, G], files: ['app/page.tsx'] },
     runbook: { id: 'x' }, smokeTests: ['smoke'], rollback: 'redeploy previous' },
   rulesets, policy, environments,
   ci: { completed: true, conclusion: 'success', head_sha: I },
   review: { completed: true, conclusion: 'success', head_sha: I, verdict: 'PASS' },
-  codex: { completed: true, head_sha: I, open_findings: 0 },
   migrations: [], lock: { held: false, inflight: 0 }, released: [],
 });
 const good = () => withVerdict(good0());
@@ -101,7 +106,7 @@ test('missing, stale or failing CI/review/auto-review deny', () => {
   deny(i => { i.codex = undefined; }, 'AUTO_REVIEW_PENDING');
 });
 test('changed head/base SHA or unknown state denies', () => {
-  deny(i => { i.current.integrationSha = 'c'.repeat(40); i.ci.head_sha = i.review.head_sha = i.codex.head_sha = 'c'.repeat(40); }, 'SHA_CHANGED');
+  deny(i => { i.current.integrationSha = 'c'.repeat(40); i.ci.head_sha = i.review.head_sha = 'c'.repeat(40); }, 'SHA_CHANGED');
   deny(i => { i.current.mainSha = 'c'.repeat(40); }, 'SHA_CHANGED');
   deny(i => { i.current = undefined; }, 'CURRENT_STATE_UNKNOWN');
 });
@@ -167,4 +172,21 @@ test('SQL comment markers (even inside literals) are refused; repository must be
     deny(i => { i.scopeVerdict.repository = bad; }, 'SCOPE_VERDICT_MISMATCH');
   }
   deny(i => { delete i.current.repository; delete i.scopeVerdict.repository; }, 'CURRENT_REPOSITORY_INVALID');
+});
+
+test('codex aggregate: review/merge SHA confusion, coverage, identity and findings all DENY', () => {
+  const c = f => (i) => f(i.codex, i);
+  deny(c(x => { x.entries[0].review_head_sha = G; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.entries[0].merge_commit_sha = H; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.entries = []; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.entries.push({ ...x.entries[0] }); }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.covered_commits = [H]; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.entries[0].reviewer_id = 1; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.entries[0].review_state = 'DISMISSED'; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.entries[0].review_state = 'CHANGES_REQUESTED'; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.entries[0].open_findings = 1; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.source = 'builder'; }), 'AUTO_REVIEW_PENDING');
+  deny(c(x => { x.manifest_hash = '0'.repeat(64); }), 'AUTO_REVIEW_PENDING');
+  deny(i => { i.trusted.codexReviewerId = undefined; }, 'AUTO_REVIEW_PENDING');
+  deny(i => { i.promotion.manifest.commits = [H]; i.codex = codexFor(i); }, 'AUTO_REVIEW_PENDING');
 });

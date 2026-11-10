@@ -85,6 +85,8 @@ async function runPath(path, claim, respond, extra = {}) {
   const viaGateway = createScreeningGatewayCall({
     apiKey: extra.apiKey ?? 'sk-synthetic', fetchImpl: impl, policy, now: () => NOW, log: e => gatewayLogs.push(e),
     recordAttempt: extra.recordAttempt ?? (async p => { ledger.push(p); }),
+    // SC-021-C: idempotent per operation (worker retries reuse the reservation).
+    reserveBudget: extra.reserveBudget ?? (async () => ({ allowed: true, created: true })),
   });
   const result = await runScreeningAttempt(claim.attempt_id, {
     enabled: true, store,
@@ -201,6 +203,7 @@ test('the worker claim is the trusted context: an expired lease or a foreign mod
     assert.equal(run.sleeps.length, 0, 'refused before provider I/O: never retried');
   }
   const viaGateway = createScreeningGatewayCall({ apiKey: 'k', now: () => NOW, log: () => {}, recordAttempt: async () => {},
+    reserveBudget: async () => ({ allowed: true, created: true }),
     fetchImpl: async () => { throw new Error('must not be called'); } });
   await assert.rejects(viaGateway({ ...buildScreeningOpenAiRequest(claimV1), model: 'gpt-other' }, claimV1),
     e => e.code === 'contract_mismatch');

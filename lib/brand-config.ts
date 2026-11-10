@@ -3,6 +3,7 @@
 // (private.brand_validate_config w 20261109190000_sc020_brand_configuration.sql);
 // baza jest ostateczną granicą, ten moduł daje czytelne komunikaty i chroni
 // serwowanie plików.
+import { whiteLabelEnabled } from './white-label-flag.ts';
 
 export const BRAND_ASSET_BUCKET = 'brand-assets';
 export const BRAND_ASSET_KINDS = ['logo', 'favicon'] as const;
@@ -403,9 +404,8 @@ export function brandAssetHeaders(mime: BrandMime, size: number): Record<string,
   };
 }
 
-/** Czy white-label jest włączony w tym środowisku (domyślnie: tylko Preview/dev). */
+/** Czy white-label jest włączony w tym środowisku (domyślnie: tylko Preview/dev).
+ * SC-020-D: ta sama decyzja co domeny klienta — lib/white-label-flag.ts. */
 export function brandingEnabled(env: Record<string, string | undefined> = process.env) {
-  if (env.WHITE_LABEL_ENABLED === 'true') return true;
-  if (env.WHITE_LABEL_ENABLED === 'false') return false;
-  return env.VERCEL_ENV === 'preview' || env.NODE_ENV === 'development';
+  return whiteLabelEnabled(env);
 }

@@ -18,7 +18,7 @@ async function attempt(errors, code, fn) {
  * @param readers  injected, read-only:
  *   repository, readBranchSha(name), readRecords(), readComparisonComplete(base, head) -> {status, commits, files, complete},
  *   readReleasePlan(ref), readRulesets(), readEnvironments(), readMigrationSql(path, ref),
- *   readCiEvidence(sha), readReviewEvidence(sha), readCodexEvidence(sha), readScopeVerdict({base, head, manifest}),
+ *   readCiEvidence(sha), readReviewEvidence(sha), readCodexEvidence({repository, base, head, manifest}), readScopeVerdict({base, head, manifest}),
  *   readLock(), readReleased()
  * @param trusted  { p24Hold } from trusted configuration; passed through untouched
  * @param policy   pipeline policy (for protection evaluation)
@@ -62,8 +62,9 @@ export async function collectAutoReleaseInput({ readers, trusted, policy }) {
 
   input.ci = await attempt(errors, 'READ_CI_FAILED', () => r.readCiEvidence(integrationSha));
   input.review = await attempt(errors, 'READ_REVIEW_FAILED', () => r.readReviewEvidence(integrationSha));
-  input.codex = await attempt(errors, 'READ_CODEX_FAILED', () => r.readCodexEvidence(integrationSha));
   if (input.promotion?.manifest) {
+    input.codex = await attempt(errors, 'READ_CODEX_FAILED',
+      () => r.readCodexEvidence({ repository: r.repository, base: mainSha, head: integrationSha, manifest: input.promotion.manifest }));
     input.scopeVerdict = await attempt(errors, 'READ_SCOPE_VERDICT_FAILED',
       () => r.readScopeVerdict({ base: mainSha, head: integrationSha, manifest: input.promotion.manifest }));
   }
