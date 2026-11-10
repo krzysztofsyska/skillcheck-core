@@ -45,3 +45,6 @@ Separate stage, needs owner-provided items that agents must not create:
 3. Executor: the existing `agent-promote` identity merges the `integration -> main` PR only on `ALLOW`; Vercel production deploy happens from `main` as today; smoke without real payments/contacts; failure freezes later releases.
 4. Concrete BLOCKERS before activation: (a) P24 hold must be released by the owner in trusted config; (b) the `production-approval` environment currently requires the owner as reviewer, so an unattended release needs an owner-made change to that environment or a new unattended environment — agents may not change it; (c) no DB backup/PITR evidence reader exists yet; (d) the Codex review state reader is not implemented; (e) the independent trusted scope-verdict reader does not exist, so `scopeVerdict` cannot be produced for real yet.
 Until (a)–(d) are resolved the status is IMPLEMENTED (qualification + tests), not LIVE.
+
+## Stage 4c (#369): CI evidence reader
+`readCiEvidence(sha)` in `auto-release-readers.mjs` is read-only (GET). It accepts only one `sc-agent/ci` check run for the exact SHA created by the pinned `controller_app_id`; partial, duplicate, foreign-app or other-SHA results are refused. Review, Codex, scope-verdict, backup, lock and ledger readers are still missing, so the collector still returns DENY. Status: IMPLEMENTED (offline tests), not LIVE.

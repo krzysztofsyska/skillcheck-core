@@ -46,6 +46,21 @@ export function createAutoReleaseReaders({ client, repository, policy = {} }) {
       }
       return out;
     },
+    // Stage 4c: CI evidence for the exact SHA. Accepts only the check run named in policy
+    // (default sc-agent/ci) created by the pinned controller App; anything partial,
+    // duplicated, foreign or for another SHA yields no `completed:true/success` evidence.
+    async readCiEvidence(sha) {
+      if (!SHA.test(sha ?? '')) throw new Error('CI_REF_INVALID');
+      const appId = policy.controller_app_id;
+      if (!Number.isInteger(appId)) throw new Error('CI_APP_NOT_PINNED');
+      const name = policy.required_checks?.integration?.[0] ?? 'sc-agent/ci';
+      const res = await get(`${root}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&per_page=100`);
+      if (!Array.isArray(res?.check_runs) || res.total_count !== res.check_runs.length || res.check_runs.length >= 100) throw new Error('CI_INCOMPLETE');
+      const mine = res.check_runs.filter(c => c.name === name && c.app?.id === appId && c.head_sha === sha);
+      if (mine.length !== 1) throw new Error('CI_NOT_UNIQUE');
+      const c = mine[0];
+      return { head_sha: c.head_sha, completed: c.status === 'completed', conclusion: c.conclusion ?? null };
+    },
     async readMigrationSql(path, ref) {
       if (!SAFE_PATH.test(path) || path.includes('..') || !SHA.test(ref ?? '')) throw new Error('MIGRATION_REF_INVALID');
       const file = await get(`${root}/contents/${path}?ref=${ref}`);
