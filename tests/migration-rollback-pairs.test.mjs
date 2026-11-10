@@ -50,10 +50,13 @@ test('rollback files are named _down.sql and wrapped in a transaction', () => {
     assert.match(sql, /\bcommit;\s*$/i, `${file} does not end with commit;`);
     // Without this, an empty `begin; commit;` would satisfy the pairing check and
     // the missing rollback would stay invisible. Not proof of correctness — just
-    // proof that something is actually undone. `update`/`insert` are in the list
-    // because a migration that only flipped a settings row is correctly undone by
-    // flipping it back — see 20261102090000_sales_leads_enable_down.sql.
-    assert.match(sql, /^\s*(drop|alter|revoke|delete|insert|update|do)\b/im,
+    // proof that something is actually undone. `update` is in the list because a
+    // migration that only flipped a settings row is correctly undone by flipping it
+    // back; three checked-in rollbacks need it and nothing else —
+    // 20261102090000_sales_leads_enable_down.sql,
+    // 20261106230000_cv_bulk_global_capacity_lock_down.sql and
+    // 20261107164252_sc019_catalog_orders_down.sql.
+    assert.match(sql, /^\s*(drop|alter|revoke|delete|update|do)\b/im,
       `${file} contains no undo statement`);
   }
 });

@@ -17,6 +17,36 @@
 -- sygnatura inwentarza SC-010 ma pozostać ta sama — sprawdzane na wejściu i na wyjściu.
 -- Idempotentny: ponowne uruchomienie na czystej bazie nic nie robi i nie zgłasza błędu.
 begin;
+-- UWAGA DLA OPERATORA: odmowa jest NORMALNYM wynikiem tego skryptu. Przy
+-- równoległym ruchu rollback świadomie rezygnuje (55P03) zamiast czekać lub
+-- zakleszczyć się z aplikacją — wtedy po prostu uruchom go ponownie. Uruchamiaj
+-- przez `psql -v ON_ERROR_STOP=1` albo sprawdzaj kod wyjścia: bez tego psql
+-- kończy się zerem nawet gdy transakcja została wycofana, a nieudane cofnięcie
+-- wygląda jak udane.
+--
+-- Całą ochronę przed zakleszczeniem daje `lock table ... nowait` niżej, NIE ten
+-- limit: przy deadlock_timeout = 1 s detektor zakleszczeń zadziała cztery sekundy
+-- wcześniej, więc limit nigdy nie uchroni przed cyklem. Jest tu tylko po to, żeby
+-- zwykłe, bezcykliczne czekanie nie trwało w nieskończoność.
+set local lock_timeout = '5s';
+
+-- Storage blokujemy PIERWSZY i POZA gałęzią `branding`, bo `drop policy` oraz
+-- `delete from storage.buckets` niżej wykonują się także wtedy, gdy schematu
+-- `branding` już nie ma — bez tego brałyby swoje blokady zupełnie bez NOWAIT.
+-- Oba obiekty są konieczne: brand_register_asset czyta storage.objects przed
+-- zapisem do branding.assets, a `delete from storage.buckets` bierze blokadę na
+-- storage.buckets DOPIERO na końcu skryptu. Nieobjęta blokada = rollback znów
+-- może czekać, a wtedy cykl się domyka i ofiarą pada transakcja klienta.
+do $storagelock$
+begin
+  if to_regclass('storage.objects') is not null then
+    lock table storage.objects in access exclusive mode nowait;
+  end if;
+  if to_regclass('storage.buckets') is not null then
+    lock table storage.buckets in access exclusive mode nowait;
+  end if;
+end
+$storagelock$;
 
 -- Zagnieżdżone `if` celowo: PL/pgSQL przygotowuje zapytanie dopiero przy wykonaniu
 -- instrukcji, więc odwołanie do branding.* nie jest parsowane, gdy schematu nie ma.
@@ -35,9 +65,18 @@ begin
     -- AccessShareLock, który nie wstrzymuje INSERT-u: bez tego aplikacja mogła
     -- wstawić i zatwierdzić wiersz między sprawdzeniem a `drop schema cascade`,
     -- i ten wiersz zostałby skasowany. Skrypt bywa uruchamiany ręcznie na żywym
-    -- Preview, więc okno jest realne. ACCESS EXCLUSIVE trzyma się do końca
-    -- transakcji, więc równoległy zapis czeka albo trafia już na brak schematu.
-    lock table branding.versions, branding.assets, branding.events in access exclusive mode;
+    -- Preview, więc okno jest realne.
+    --
+    -- NOWAIT JEST ISTOTNE, nie ozdobne. `lock table` bierze pozycje z listy
+    -- SEKWENCYJNIE, więc bez NOWAIT rollback czeka na pozycję n, trzymając już
+    -- 1..n-1 — i to oczekiwanie domyka cykl z aplikacją. Żadna stała kolejność
+    -- tego nie rozwiąże, bo aplikacja używa obu kolejności (np. brand_save_draft
+    -- czyta assets przed zapisem do versions). Z NOWAIT rollback nigdy nie jest
+    -- stroną czekającą: albo bierze wszystko od razu, albo odmawia (55P03), a
+    -- transakcja klienta przechodzi bez szwanku. Dla ręcznego skryptu to właściwy
+    -- wybór — lepiej spróbować ponownie niż przerwać pracę klienta.
+    lock table branding.versions, branding.assets, branding.events
+      in access exclusive mode nowait;
     if exists (select 1 from branding.versions)
        or exists (select 1 from branding.assets)
        or exists (select 1 from branding.events) then
@@ -56,9 +95,9 @@ end
 $preflight$;
 
 -- 1. Storage: najpierw polityki, potem pusty koszyk (odwrotnie niż w migracji).
---    NIE ZAMIENIAJ TEJ KOLEJNOŚCI. `drop policy` bierze AccessExclusiveLock na
---    storage.objects i trzyma go do końca transakcji, więc liczenie obiektów
---    poniżej jest wolne od wyścigu dokładnie dzięki temu, że polityki lecą pierwsze.
+--    Liczenie obiektów poniżej jest wolne od wyścigu dzięki blokadom NOWAIT na
+--    storage.objects i storage.buckets wziętym na początku skryptu — nie dzięki
+--    kolejności `drop policy`, jak mówił wcześniejszy komentarz.
 --    Koszyk `brand-assets` należy do SC-020-A i jest usuwany bezwarunkowo, choć
 --    migracja zakłada go przez `on conflict do update`: gdyby ktoś utworzył koszyk
 --    o tej nazwie wcześniej, rollback zabierze też jego ustawienia. Żaden plik nie
