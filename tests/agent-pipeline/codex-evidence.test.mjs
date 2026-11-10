@@ -91,3 +91,11 @@ test('review threads: errors, loops and bad numbers are refused', async () => {
   await assert.rejects(gh([page([], 'c'), page([], 'c')]).client.readReviewThreads(5), /REVIEW_THREADS_CURSOR_LOOP/);
   await assert.rejects(gh([]).client.readReviewThreads('5; mutation'), /PR_NUMBER_INVALID/);
 });
+import { readFileSync } from 'node:fs';
+test('github client defines readReviewThreads exactly once and the query keeps id + isResolved + isOutdated', async () => {
+  const src = readFileSync(new URL('../../tools/agent-pipeline/lib/github.mjs', import.meta.url), 'utf8');
+  assert.equal((src.match(/async readReviewThreads\(/g) ?? []).length, 1);
+  const { client, sent } = gh([page([{ id: 'T', isResolved: true, isOutdated: false }])]);
+  await client.readReviewThreads('5');
+  assert.match(sent[0].body.query, /nodes\{id isResolved isOutdated\}/);
+});

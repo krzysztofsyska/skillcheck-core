@@ -195,22 +195,6 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
     async readJobs(runId) {
       return pages(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs?filter=latest`, 'jobs');
     },
-    async readReviewThreads(number) {
-      const result = []; let cursor = null;
-      for (let page = 0; page < 100; page++) {
-        const response = await request('/graphql', { method: 'POST', body: {
-          query: 'query($owner:String!,$repo:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$cursor){nodes{id isResolved} pageInfo{hasNextPage endCursor}}}}}',
-          variables: { owner, repo, number, cursor },
-        } });
-        const data = response.data?.repository?.pullRequest?.reviewThreads;
-        if (response.errors?.length || !Array.isArray(data?.nodes) || typeof data.pageInfo?.hasNextPage !== 'boolean') throw new Error('REVIEW_THREADS_UNCONFIRMED');
-        result.push(...data.nodes);
-        if (!data.pageInfo.hasNextPage) return result;
-        if (!data.pageInfo.endCursor || cursor === data.pageInfo.endCursor) throw new Error('REVIEW_THREADS_INCOMPLETE');
-        cursor = data.pageInfo.endCursor;
-      }
-      throw new Error('REVIEW_THREADS_INCOMPLETE');
-    },
     async readMergeQuality(number, head, baseRef) {
       const [rules, checks, statuses, threads, reviews] = await Promise.all([
         pages(`/repos/${owner}/${repo}/rules/branches/${encodeURIComponent(baseRef)}`),
@@ -254,9 +238,10 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
     },
     async readReviews(number) { return pages(`/repos/${owner}/${repo}/pulls/${Number(number)}/reviews`); },
     // Only exception to GET-only: ONE fixed read-only GraphQL query (no mutation, no caller-supplied query text).
-    async readReviewThreads(number) {
+    async readReviewThreads(rawNumber) {
+      const number = Number(rawNumber);
       if (!Number.isInteger(number) || number <= 0) throw new Error('PR_NUMBER_INVALID');
-      const query = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{isResolved isOutdated}}}}}';
+      const query = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{id isResolved isOutdated}}}}}';
       const all = []; const seen = new Set(); let cursor = null;
       for (let i = 0; i < 50; i++) {
         const res = await request('/graphql', { method: 'POST', body: { query, variables: { o: owner, r: repo, n: number, c: cursor } } });
