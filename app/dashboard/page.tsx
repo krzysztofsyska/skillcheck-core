@@ -24,7 +24,10 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   if (!companies.length && !tenant) redirect(withNext("/onboarding", next));
   // An account that already has a company can go straight to the target.
   // "/dashboard" itself is excluded, because that would loop.
-  if (next && next !== "/dashboard" && !next.startsWith("/dashboard?")) redirect(nextRedirectTarget(next, "/dashboard"));
+  // SC-020-D: on a customer's domain an account without access to that company stays here (with the
+  // notice and the logout button) instead of following `next` to a page it cannot open on this host.
+  const blockedOnTenant = Boolean(tenant) && !companies.length;
+  if (next && !blockedOnTenant && next !== "/dashboard" && !next.startsWith("/dashboard?")) redirect(nextRedirectTarget(next, "/dashboard"));
   return <main><section><p className="eyebrow">SKILLCHECK</p><h1>Twoje firmy</h1>
     <p>Jesteś zalogowany jako {user.email}.</p>
     {tenant && !companies.length && <p role="status" className="notice">To konto nie ma dostępu do panelu tej firmy. Wyloguj się i zaloguj kontem firmy.</p>}

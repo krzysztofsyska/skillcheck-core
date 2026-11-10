@@ -188,7 +188,7 @@ test('budget estimates are pinned to the code limits and to the migration seed',
   assert.deepEqual(BUDGET_ESTIMATES.exercise_generation, { max_input_tokens: EXERCISE_LEDGER_ROUTE.max_input_tokens,
     max_output_tokens: EXERCISE_AI_MAX_OUTPUT_TOKENS, attempts_per_operation: EXERCISE_LEDGER_ROUTE.max_attempts });
   assert.ok(EXERCISE_AI_MAX_REQUEST_BYTES <= BUDGET_ESTIMATES.exercise_generation.max_input_tokens);
-  const sql = await readFile(new URL('../supabase/migrations/20261109220000_sc021_ai_budgets.sql', import.meta.url), 'utf8');
+  const sql = await readFile(new URL('../supabase/migrations/20261109230000_sc021_ai_budgets.sql', import.meta.url), 'utf8');
   for (const [task, model] of [['cv_screening', SCREENING_OPENAI_MODEL], ['exercise_generation', EXERCISE_AI_MODEL]]) {
     const e = BUDGET_ESTIMATES[task];
     assert.ok(sql.includes(`('${task}', 'openai', '${model}', null, ${e.max_input_tokens}, ${e.max_output_tokens}, ${e.attempts_per_operation},`), task);

@@ -5,11 +5,15 @@ import { getSupabaseEnv } from "./lib/supabase/env";
 import { homeAuthFallback } from "./lib/auth-url";
 import { TENANT_COMPANY_HEADER, TENANT_HOST_HEADER, decideTenant, hostOnlyCookieOptions } from "./lib/tenant-domains";
 
-function plain(status: number) {
-  const response = new NextResponse(status === 400 ? "Nieprawidłowy adres." : "Nie znaleziono.", {
+const plainText: Record<number, string> = {
+  400: "Nieprawidłowy adres.", 404: "Nie znaleziono.", 503: "Usługa chwilowo niedostępna. Spróbuj ponownie za chwilę.",
+};
+function plain(status: 400 | 404 | 503) {
+  const response = new NextResponse(plainText[status], {
     status, headers: { "Content-Type": "text/plain; charset=utf-8" },
   });
   response.headers.set("Cache-Control", "private, no-store");
+  if (status === 503) response.headers.set("Retry-After", "30");
   return response;
 }
 
@@ -33,6 +37,8 @@ export async function proxy(request: NextRequest) {
     },
   });
   if (decision.kind === "bad_host") return plain(400);
+  // SC-020-D: fail closed when a customer's host cannot be resolved right now.
+  if (decision.kind === "unavailable") return plain(503);
   if (decision.kind === "tenant") {
     if (decision.route.kind === "not_found") return plain(404);
     if (decision.route.kind === "redirect") {

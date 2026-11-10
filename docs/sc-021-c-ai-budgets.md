@@ -8,7 +8,7 @@ PRODUCTION_APPROVAL: NO (działa tylko przy `AI_GATEWAY_ENABLED=true`, które ni
 
 | element | rola |
 |---|---|
-| `supabase/migrations/20261109220000_sc021_ai_budgets.sql` | budżety, rezerwacje, zdarzenia 80%/100%, overridy, audyt, zamknięcie stawki |
+| `supabase/migrations/20261109230000_sc021_ai_budgets.sql` | budżety, rezerwacje, zdarzenia 80%/100%, overridy, audyt, zamknięcie stawki |
 | `lib/ai-gateway/budget.ts` | hook `beforeOperation` (`createBudgetGuard`), odczyt decyzji bazy (fail closed) |
 | `lib/ai-gateway/gateway.ts` | hook budżetu po autoryzacji i kontroli danych, przed pierwszą próbą |
 | `lib/screening-gateway.ts`, worker Edge | rezerwacja `public.reserve_screening_ai_budget` jako `screening_worker` |

@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
 import { createExerciseBudgetClient } from '../lib/ai-ledger-writer.ts';
 
-const migration = '20261109220000_sc021_ai_budgets.sql';
+const migration = '20261109230000_sc021_ai_budgets.sql';
 const r15 = '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44';
 const denied = (...codes) => error => codes.includes(error.code);
 const MODEL = 'gpt-5.4-mini-2026-03-17';

@@ -1,4 +1,4 @@
-// SC-021-C: AI cost budgets (migration 20261109220000_sc021_ai_budgets.sql).
+// SC-021-C: AI cost budgets (migration 20261109230000_sc021_ai_budgets.sql).
 // Server-only; bundled into the screening worker (Deno), so no Node-only APIs here.
 //
 // Before the first physical attempt of an operation the caller reserves the operation's worst-case
