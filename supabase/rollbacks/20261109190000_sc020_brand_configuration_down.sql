@@ -1,7 +1,7 @@
 -- Rollback SC-020-A (konfiguracja marki firmy, white-label etap A).
 -- Odtwarza stan sprzed migracji: schemat `branding` nie istniał, nie było funkcji
 -- public.brand_*/private.brand_* ani polityk na storage.objects. JEDEN wyjątek:
--- pusty wiersz koszyka `brand-assets` zostaje celowo — uzasadnienie w punkcie 1.
+-- pusty wiersz koszyka `brand-assets` zostaje celowo — uzasadnienie w punkcie 2.
 --
 -- Historia marki jest w migracji NIEZMIENNA dla wszystkich ról (wyzwalacze
 -- guard_immutable/guard_version), a wersje opublikowane są dokumentem decyzji klienta.
@@ -9,7 +9,7 @@
 -- WYŁĄCZNIE, gdy nie ma żadnej wersji, pliku ani zdarzenia. Usunięcie istniejącej marki
 -- klienta to decyzja właściciela, nie rollback.
 --
--- Koszyka `brand-assets` NIE usuwamy (patrz punkt 1). Jeżeli zostały w nim pliki,
+-- Koszyka `brand-assets` NIE usuwamy (patrz punkt 2). Jeżeli zostały w nim pliki,
 -- rollback odmawia, zamiast zdejmować polityki, które ich pilnują. Obiekty w Storage
 -- nie są objęte transakcją bazy, a ich kasowanie nie jest odwracalne — usunięcie
 -- samego koszyka to osobny krok przez API Storage.
@@ -48,11 +48,25 @@ begin;
 --   * łączny czas trzymania blokad: ok. 1390 ms -> 1330 ms (praktycznie bez zmian).
 -- Aplikacja czeka więc nadal mniej więcej tyle samo; rzadziej natomiast ginie.
 --
--- Czego to nadal NIE załatwia: `drop schema ... cascade` bierze blokady niejawne,
--- bez NOWAIT, m.in. na sekwencji tożsamości, której `lock table` w ogóle nie
--- potrafi objąć (PostgreSQL odmawia: "not supported for sequences"). Ryzyko jest
--- zmniejszone, nie wyeliminowane. DLATEGO: uruchamiaj ten skrypt przy
--- wstrzymanym ruchu aplikacji, a nie w szczycie.
+-- CZEGO TO NIE ZAŁATWIA — i gdzie ta zmiana pogarsza sprawę. `drop schema ...
+-- cascade` bierze blokady niejawne, bez NOWAIT, m.in. na sekwencji tożsamości,
+-- której `lock table` w ogóle nie potrafi objąć (PostgreSQL odmawia: "not
+-- supported for sequences"). Zostaje więc ścieżka, na której KLIENT blokuje się
+-- na tej sekwencji, czeka całą resztę transakcji rollbacku i kończy błędem
+-- `XX000 could not open relation with OID ...`, a rollback wychodzi z zerem.
+-- `lock_timeout` tego NIE ogranicza — czekającym jest tu klient, nie rollback.
+-- Co gorsza, `XX000` to klasa `internal_error`, więc logika ponawiania oparta na
+-- 40001/40P01/55P03/57014 tego nie złapie.
+--
+-- To jest świadomy kompromis tej zmiany, nie przeoczenie: przestawienie
+-- instrukcji ZWĘŻA okno powstania zakleszczenia (patrz liczby wyżej), ale
+-- POSZERZA okno między `drop schema` a COMMIT-em, w którym realizuje się ta
+-- druga awaria — zmierzone dla tego pliku ok. 122 ms -> ok. 1101 ms.
+-- Zamiana jest opłacalna, bo klient ginął wcześniej znacznie częściej
+-- (11 z 18 prób wobec 0 z 54), ale cena istnieje.
+--
+-- I TO JEST KONKRETNY POWÓD poniższego zalecenia, nie ostrożnościowy frazes:
+-- uruchamiaj ten skrypt przy wstrzymanym ruchu aplikacji, a nie w szczycie.
 set local lock_timeout = '500ms';
 
 do $preflight$
@@ -115,10 +129,9 @@ begin
     --    `select ... from pg_sequences` blokuje sekwencję BEZ blokady na
     --    branding.events, a `lock table` nie umie jej objąć (PostgreSQL odmawia
     --    blokowania sekwencji). Ta reszta nie jest więc udowodniona jako niemożliwa
-    --    — jest tylko OGRANICZONA CZASOWO przez `set local lock_timeout` na
-    --    początku pliku. Patrz komentarz przy tym ustawieniu: limit NIE przesądza,
-    --    kto odpadnie pierwszy. Ryzyko zmniejsza krótkie okno pobierania blokad,
-    --    a nie sam limit.
+    --    — i NIE jest ograniczona przez `set local lock_timeout`: na tej ścieżce
+    --    czekającym jest klient, a nie rollback. Patrz akapit "CZEGO TO NIE
+    --    ZAŁATWIA" na początku pliku.
     --  * NOWAIT nie obejmuje czekania na poziomie WIERSZA. Dlatego ten skrypt
     --    celowo nie wykonuje żadnego DML (patrz komentarz przy koszyku).
     --

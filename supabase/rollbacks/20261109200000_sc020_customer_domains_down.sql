@@ -8,7 +8,8 @@
 -- odmawia, dopóki tego nie zrobiono, zamiast po cichu usuwać cudze obiekty.
 --
 -- Zgłoszenia domen i ich dziennik są dowodem, kto i kiedy objął dany host (tabele są
--- niezmienne dla wszystkich ról). Dlatego — wzorem 20261109210000_sc021_ai_ledger_down.sql
+-- niezmienne dla wszystkich ról). Dlatego — wzorem
+-- 20261109210000_sc021_ai_ledger_down.sql
 -- — rollback wykonuje się WYŁĄCZNIE, gdy nie ma żadnej domeny ani zdarzenia. Wiersz
 -- `settings` zakłada sama migracja (wartości domyślne), więc nie blokuje cofnięcia.
 --
@@ -44,14 +45,29 @@ begin;
 -- powstać cykl — NIE czas blokowania aplikacji. Same blokady są trzymane do
 -- COMMIT-u w obu kolejnościach. Zmierzone na łączu 30 ms, ten plik:
 --   * okno pobierania blokad: 719 ms -> 166 ms (to jest zysk),
---   * łączny czas trzymania blokad: ok. 840 ms -> 780 ms (praktycznie bez zmian).
+--   * łączny czas trzymania blokad: ok. 840 ms -> 715 ms (krócej, ale nie o to
+--     tu chodzi — zysk jest w linijce wyżej).
 -- Aplikacja czeka więc nadal mniej więcej tyle samo; rzadziej natomiast ginie.
 --
--- Czego to nadal NIE załatwia: `drop schema ... cascade` bierze blokady niejawne,
--- bez NOWAIT, m.in. na sekwencji tożsamości, której `lock table` w ogóle nie
--- potrafi objąć (PostgreSQL odmawia: "not supported for sequences"). Ryzyko jest
--- zmniejszone, nie wyeliminowane. DLATEGO: uruchamiaj ten skrypt przy
--- wstrzymanym ruchu aplikacji, a nie w szczycie.
+-- CZEGO TO NIE ZAŁATWIA — i gdzie ta zmiana pogarsza sprawę. `drop schema ...
+-- cascade` bierze blokady niejawne, bez NOWAIT, m.in. na sekwencji tożsamości,
+-- której `lock table` w ogóle nie potrafi objąć (PostgreSQL odmawia: "not
+-- supported for sequences"). Zostaje więc ścieżka, na której KLIENT blokuje się
+-- na tej sekwencji, czeka całą resztę transakcji rollbacku i kończy błędem
+-- `XX000 could not open relation with OID ...`, a rollback wychodzi z zerem.
+-- `lock_timeout` tego NIE ogranicza — czekającym jest tu klient, nie rollback.
+-- Co gorsza, `XX000` to klasa `internal_error`, więc logika ponawiania oparta na
+-- 40001/40P01/55P03/57014 tego nie złapie.
+--
+-- To jest świadomy kompromis tej zmiany, nie przeoczenie: przestawienie
+-- instrukcji ZWĘŻA okno powstania zakleszczenia (patrz liczby wyżej), ale
+-- POSZERZA okno między `drop schema` a COMMIT-em, w którym realizuje się ta
+-- druga awaria — ten sam mechanizm dotyczy tego pliku (pomiary w pliku SC-020-A).
+-- Zamiana jest opłacalna, bo klient ginął wcześniej znacznie częściej
+-- (11 z 18 prób wobec 0 z 54), ale cena istnieje.
+--
+-- I TO JEST KONKRETNY POWÓD poniższego zalecenia, nie ostrożnościowy frazes:
+-- uruchamiaj ten skrypt przy wstrzymanym ruchu aplikacji, a nie w szczycie.
 set local lock_timeout = '500ms';
 
 do $preflight$
@@ -85,7 +101,8 @@ begin
     -- NOWAIT JEST ISTOTNE, nie ozdobne. Rozstrzyga ono problem KOLEJNOŚCI BLOKAD
     -- MIĘDZY TABELAMI, opisany niżej. Czym innym jest KOLEJNOŚĆ INSTRUKCJI w tym
     -- pliku (patrz nagłówek) — ona skraca okno powstania cyklu. Obie rzeczy są
-    -- potrzebne i dotyczą różnych problemów. Żadna stała kolejność go nie rozwiąże, bo aplikacja
+    -- potrzebne i dotyczą różnych problemów. Problemu zakleszczenia nie rozwiąże żadna
+    -- stała kolejność blokad, bo aplikacja
     -- używa OBU: tenant_domain_claim czyta settings przed zapisem do domains, ale
     -- record_dns_check, tenant_domain_state, tenant_domain_activate,
     -- tenant_domain_resolve i record_scheduled_dns_check (SC-020-D) dotykają
@@ -100,9 +117,9 @@ begin
     -- tabel. Dla indeksów i toastów żadna ścieżka aplikacji nie dosięgnie ich bez
     -- blokady na rodzicu.
     -- DLA SEKWENCJI NIE: `select ... from pg_sequences` blokuje ją bez blokady na
-    -- tabeli, a `lock table` nie umie objąć sekwencji. Ta reszta jest ograniczona
-    -- czasowo przez `lock_timeout` — który sam w sobie nie przesądza, kto odpadnie
-    -- pierwszy (patrz komentarz przy tym ustawieniu). Czekania na
+    -- tabeli, a `lock table` nie umie objąć sekwencji. Ta reszta jest NIE ograniczona
+    -- przez `lock_timeout`: na tej ścieżce czekającym jest klient, nie rollback
+    -- (patrz akapit "CZEGO TO NIE ZAŁATWIA" na początku pliku). Czekania na
     -- poziomie WIERSZA NOWAIT by nie objął, ale ten
     -- plik nie wykonuje żadnego DML, więc kwestia nie powstaje.
     --
