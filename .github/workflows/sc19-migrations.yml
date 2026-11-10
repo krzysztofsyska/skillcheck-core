@@ -17,6 +17,9 @@ on:
       - 'scripts/sc-ac-compose.mjs'
       - 'scripts/sc-c6-compose.mjs'
       - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'scripts/sc-c6-revision-compose.mjs'
+      - 'scripts/sc19-commerce-inventory-compose.mjs'
+      - 'db/components/exercise-ai-revision-workflow.sql'
       - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
       - 'db/components/exercise-ai-proposals.sql'
       - 'tests/exercise-ai-*.test.mjs'
@@ -66,6 +69,9 @@ on:
       - 'scripts/sc-ac-compose.mjs'
       - 'scripts/sc-c6-compose.mjs'
       - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'scripts/sc-c6-revision-compose.mjs'
+      - 'scripts/sc19-commerce-inventory-compose.mjs'
+      - 'db/components/exercise-ai-revision-workflow.sql'
       - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
       - 'db/components/exercise-ai-proposals.sql'
       - 'tests/exercise-ai-*.test.mjs'
@@ -135,6 +141,14 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
+      # Offline generator checks first: they must not depend on the network step below (a failed
+      # curl there once skipped all of them).
+      - run: node scripts/sc-wer-c1-compose.mjs --check
+      - run: node scripts/sc-ac-compose.mjs --check
+      - run: node scripts/sc-c6-compose.mjs --check
+      - run: node scripts/sc19-commerce-inventory-compose.mjs --check
+      - run: node scripts/sc-c6-grant-guard-compose.mjs --check
+      - run: node scripts/sc-c6-revision-compose.mjs --check
       - name: Matching native dump and restore clients
         env:
           PG_MAJOR: ${{ matrix.postgres }}
@@ -157,10 +171,6 @@ jobs:
           fi
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_dump" --version
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_restore" --version
-      - run: node scripts/sc-wer-c1-compose.mjs --check
-      - run: node scripts/sc-ac-compose.mjs --check
-      - run: node scripts/sc-c6-compose.mjs --check
-      - run: node scripts/sc19-commerce-inventory-compose.mjs --check
       - name: Catalog orders, settlement and erasure
         run: node --experimental-strip-types --test tests/sc19-catalog-orders.test.mjs
         env:
