@@ -17,6 +17,33 @@
 -- sygnatura inwentarza SC-010 ma pozostać ta sama — sprawdzane na wejściu i na wyjściu.
 -- Idempotentny: ponowne uruchomienie na czystej bazie nic nie robi i nie zgłasza błędu.
 begin;
+-- UWAGA DLA OPERATORA: odmowa jest NORMALNYM wynikiem tego skryptu. Przy
+-- równoległym ruchu rollback świadomie rezygnuje (55P03) zamiast czekać lub
+-- zakleszczyć się z aplikacją — wtedy po prostu uruchom go ponownie. Uruchamiaj
+-- przez `psql -v ON_ERROR_STOP=1` albo sprawdzaj kod wyjścia: bez tego psql
+-- kończy się zerem nawet gdy transakcja została wycofana, a nieudane cofnięcie
+-- wygląda jak udane.
+--
+-- Całą ochronę przed zakleszczeniem daje `lock table ... nowait` niżej, NIE ten
+-- limit: przy deadlock_timeout = 1 s detektor zakleszczeń zadziała cztery sekundy
+-- wcześniej, więc limit nigdy nie uchroni przed cyklem. Jest tu tylko po to, żeby
+-- zwykłe, bezcykliczne czekanie nie trwało w nieskończoność.
+set local lock_timeout = '5s';
+
+-- Storage blokujemy PIERWSZY i POZA gałęzią `branding`, bo `drop policy` oraz
+-- `delete from storage.buckets` niżej wykonują się także wtedy, gdy schematu
+-- `branding` już nie ma — bez tego brałyby swoje blokady zupełnie bez NOWAIT.
+-- Potrzebna jest DOKŁADNIE JEDNA tabela: storage.objects, bo brand_register_asset
+-- czyta ją przed zapisem do branding.assets, a `drop policy` niżej i tak bierze na
+-- niej ACCESS EXCLUSIVE. Nic więcej ze schematu `storage` nie jest tu ruszane —
+-- patrz komentarz przy koszyku poniżej.
+do $storagelock$
+begin
+  if to_regclass('storage.objects') is not null then
+    lock table storage.objects in access exclusive mode nowait;
+  end if;
+end
+$storagelock$;
 
 -- Zagnieżdżone `if` celowo: PL/pgSQL przygotowuje zapytanie dopiero przy wykonaniu
 -- instrukcji, więc odwołanie do branding.* nie jest parsowane, gdy schematu nie ma.
@@ -35,9 +62,24 @@ begin
     -- AccessShareLock, który nie wstrzymuje INSERT-u: bez tego aplikacja mogła
     -- wstawić i zatwierdzić wiersz między sprawdzeniem a `drop schema cascade`,
     -- i ten wiersz zostałby skasowany. Skrypt bywa uruchamiany ręcznie na żywym
-    -- Preview, więc okno jest realne. ACCESS EXCLUSIVE trzyma się do końca
-    -- transakcji, więc równoległy zapis czeka albo trafia już na brak schematu.
-    lock table branding.versions, branding.assets, branding.events in access exclusive mode;
+    -- Preview, więc okno jest realne.
+    --
+    -- NOWAIT JEST ISTOTNE, nie ozdobne. `lock table` bierze pozycje z listy
+    -- SEKWENCYJNIE, więc bez NOWAIT rollback czeka na pozycję n, trzymając już
+    -- 1..n-1 — i to oczekiwanie domyka cykl z aplikacją. Żadna stała kolejność
+    -- tego nie rozwiąże, bo aplikacja używa obu kolejności (np. brand_save_draft
+    -- czyta assets przed zapisem do versions). Z NOWAIT rollback nie czeka na
+    -- ŻADNĄ blokadę tabeli: albo bierze wszystko od razu, albo odmawia (55P03), a
+    -- transakcja klienta przechodzi bez szwanku.
+    --
+    -- Zakres tej obietnicy: dotyczy blokad TABEL. NOWAIT nie obejmuje czekania na
+    -- poziomie wiersza ani blokad branych niejawnie przez późniejsze instrukcje —
+    -- dlatego ten skrypt celowo nie wykonuje już żadnego DML na schemacie
+    -- `storage` (patrz komentarz przy koszyku). Każda nowa instrukcja DML w tym
+    -- pliku ponownie otwiera tę furtkę. Dla ręcznego skryptu to właściwy
+    -- wybór — lepiej spróbować ponownie niż przerwać pracę klienta.
+    lock table branding.versions, branding.assets, branding.events
+      in access exclusive mode nowait;
     if exists (select 1 from branding.versions)
        or exists (select 1 from branding.assets)
        or exists (select 1 from branding.events) then
@@ -55,28 +97,40 @@ begin
 end
 $preflight$;
 
--- 1. Storage: najpierw polityki, potem pusty koszyk (odwrotnie niż w migracji).
---    NIE ZAMIENIAJ TEJ KOLEJNOŚCI. `drop policy` bierze AccessExclusiveLock na
---    storage.objects i trzyma go do końca transakcji, więc liczenie obiektów
---    poniżej jest wolne od wyścigu dokładnie dzięki temu, że polityki lecą pierwsze.
---    Koszyk `brand-assets` należy do SC-020-A i jest usuwany bezwarunkowo, choć
---    migracja zakłada go przez `on conflict do update`: gdyby ktoś utworzył koszyk
---    o tej nazwie wcześniej, rollback zabierze też jego ustawienia. Żaden plik nie
---    ginie — guard wyżej przepuszcza wyłącznie pusty koszyk.
+-- 1. Storage: zdejmujemy POLITYKI, a PUSTY KOSZYK ZOSTAWIAMY — świadomie.
+--
+--    Wcześniejsze wersje tego pliku kasowały wiersz `storage.buckets`. To jedno
+--    `delete` okazało się źródłem powtarzających się zakleszczeń: usunięcie koszyka
+--    uruchamia kontrolę więzów na KAŻDEJ tabeli, która ma klucz obcy do
+--    storage.buckets (w Supabase to m.in. s3_multipart_uploads,
+--    s3_multipart_uploads_parts i bucket_lifecycle_states — zestaw zależy od wersji
+--    Storage). Te blokady brane są NIEJAWNIE, na końcu skryptu, gdy rollback trzyma
+--    już ACCESS EXCLUSIVE na storage.objects — więc może czekać, a wtedy ofiarą
+--    cyklu pada transakcja klienta. Część tego czekania jest na poziomie WIERSZA
+--    (kontrola NO ACTION robi `select ... for key share`), czego `lock table ...
+--    nowait` nie jest w stanie objąć w ogóle.
+--
+--    Zamiast blokować pół schematu `storage` na żywym projekcie, nie usuwamy
+--    koszyka. Zostaje pusty wiersz konfiguracji — tak samo jak zostają role
+--    NOLOGIN w rollbackach SC-020-B/D i w sc021_ai_ledger_down. Jest nieszkodliwy:
+--    bez polityk nikt do niego nie zapisze ani nic z niego nie odczyta, a ponowne
+--    wgranie migracji i tak zakłada go przez `on conflict do update`.
+--
+--    Guard pustości zostaje, bo pliki w koszyku oznaczają, że ktoś wciąż używa
+--    marki — wtedy rollback ma odmówić, a nie zdejmować polityki chroniące te pliki.
+--    Liczenie jest wolne od wyścigu dzięki blokadzie NOWAIT na storage.objects.
+--    Jeśli chcesz usunąć sam koszyk, zrób to osobno, przez API Storage.
 do $storage$
 declare leftover bigint;
 begin
   if to_regclass('storage.objects') is null then
-    raise notice 'sc020a: brak schematu storage, polityki i koszyk pominięte';
+    raise notice 'sc020a: brak schematu storage, polityki pominięte';
   else
     execute 'drop policy if exists sc020_brand_assets_insert on storage.objects';
     execute 'drop policy if exists sc020_brand_assets_read on storage.objects';
-    if to_regclass('storage.buckets') is not null then
-      execute 'select count(*) from storage.objects where bucket_id = $1' into leftover using 'brand-assets';
-      if leftover > 0 then
-        raise exception 'sc020a_rollback_bucket_not_empty:%', leftover using errcode = '55000';
-      end if;
-      execute 'delete from storage.buckets where id = $1' using 'brand-assets';
+    execute 'select count(*) from storage.objects where bucket_id = $1' into leftover using 'brand-assets';
+    if leftover > 0 then
+      raise exception 'sc020a_rollback_bucket_not_empty:%', leftover using errcode = '55000';
     end if;
   end if;
 end
