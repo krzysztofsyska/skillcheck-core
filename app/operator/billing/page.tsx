@@ -79,7 +79,7 @@ export default async function OperatorBillingPage({ searchParams }: {
 
   return <main className={styles.page}>
     {process.env.SC19_CATALOG_ORDERS_ENABLED==='true'&&<OperatorCatalogOrders client={client} status={catalogStatus}/>}
-    <nav><Link href="/operator/sales">Proces sprzedaży</Link><Link href="/operator/leads">Zgłoszenia</Link><Link href="/">Strona główna</Link></nav>
+    <nav><Link href="/operator/sales">Proces sprzedaży</Link><Link href="/operator/leads">Zgłoszenia</Link><Link href="/operator/ai-costs">Koszty AI i marża</Link><Link href="/">Strona główna</Link></nav>
     <header><p className={styles.eyebrow}>SKILLCHECK · PAKIETY</p><h1>Pakiety firm</h1>
       <p>Weryfikacja firm przed FREE i przydział PRESELEKCJI po potwierdzonej wpłacie. Każda operacja jest sprawdzana w bazie i zapisywana w dzienniku analiz.</p></header>
     {notice && <p role="status" className={styles.empty}>{notice}</p>}

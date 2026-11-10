@@ -60,3 +60,5 @@
 20261109220000_sc020d_domain_reverification.sql
 # SC-021-C: AI-cost budgets (reservations, 80% warning, 100% block, operator overrides); no budgets seeded.
 20261109230000_sc021_ai_budgets.sql
+# SC-021-D: AI cost and margin dashboard (operator-only reads, placeholder FX rate only).
+20261110090000_sc021_cost_dashboard.sql

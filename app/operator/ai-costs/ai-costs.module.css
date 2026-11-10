@@ -1,0 +1,9 @@
+.scroll { overflow-x: auto; margin: 16px 0 32px; border: 1px solid #d5deea; border-radius: 12px; background: white; }
+.table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 15px; }
+.table th, .table td { text-align: left; vertical-align: top; padding: 12px 14px; border-bottom: 1px solid #e6ecf4; }
+.table thead th { background: #f4f7fb; font-size: 14px; color: #52647c; }
+.table tbody tr:last-child th, .table tbody tr:last-child td { border-bottom: none; }
+.status { display: inline-block; margin-top: 4px; border-radius: 20px; padding: 3px 10px; font-size: 13px; font-weight: 600; background: #edf2ff; color: #244bb0; }
+.status[data-status="estimated"] { background: #fff3da; color: #805300; }
+.status[data-status="unavailable"] { background: #f4ecec; color: #813636; }
+.status[data-status="confirmed"] { background: #e8f5eb; color: #235e33; }
