@@ -459,3 +459,37 @@ test('SC-021-C periods follow Europe/Warsaw months (DST included); a jump from u
   assert.deepEqual((await e.rows('budget_events', 'company_id=$1', [f.companyId])).map(r => r.kind).sort(), ['blocked_100', 'warning_80']);
   assert.equal((await e.status(f.companyId, users.owner)).state, 'ok');
 });
+
+test('SC-021-C month boundary: a live hold reserved at 23:59 on the last day (Europe/Warsaw) carries into the new month', async t => {
+  const e = await boot(t), { db, h } = e;
+  const f = await e.seed();
+  await e.op('ai_ledger.operator_set_company_budget', [f.companyId, 2 * SCREENING_OP - 1000, 'USD', REASON]);
+  const p1 = await e.processing(f), p2 = await e.processing(f);
+  assert.equal((await e.reserveScreening(p1.attemptId)).created, true);
+  // Move the reservation to 23:59 Warsaw on the last day of the previous month; it stays live
+  // (not released, not expired, analysis still processing). Triggers bypassed only for this setup.
+  await h.asAdmin();
+  const [cur] = (await db.query('select * from ai_ledger.period_bounds(now())')).rows;
+  const [prev] = (await db.query("select * from ai_ledger.period_bounds($1::timestamptz - interval '1 minute')", [cur.period_start])).rows;
+  await db.query('set session_replication_role = replica');
+  await db.query("update ai_ledger.budget_reservations set created_at=$2::timestamptz - interval '1 minute', period_start=$3, expires_at=now()+interval '15 minutes' where operation_id=$1",
+    [p1.attemptId, cur.period_start, prev.period_start]);
+  await db.query('set session_replication_role = origin');
+  // Its attempt lands after midnight, in the new month.
+  await e.record(attempt(p1.attemptId, f.companyId)); // 1 200
+  const usageAt = async (period) => { await h.asAdmin(); return Object.fromEntries(Object.entries((await db.query(
+    'select * from ai_ledger.budget_usage($1,$2,$3,$4,now())', [f.companyId, period.period_start, period.period_end, 'USD'])).rows[0]).map(([k, v]) => [k, Number(v)])); };
+  // New month: the attempt plus the carried remainder of the live hold, nothing counted twice.
+  assert.deepEqual(usage(await e.status(f.companyId, users.owner)), { state: 'ok', limit: 2 * SCREENING_OP - 1000, settled: 1200, unknown: 0,
+    reserved: SCREENING_OP - 1200, committed: SCREENING_OP });
+  // A new operation cannot take the whole new-month limit while the old one is still running.
+  assert.deepEqual(await e.reserveScreening(p2.attemptId), { allowed: false, code: 'budget_exceeded' });
+  // The old operation is in flight: never cut off.
+  assert.equal((await e.reserveScreening(p1.attemptId)).allowed, true);
+  // Once it ends, the hold stops; the old month keeps none of the new-month attempt.
+  await h.asAdmin();
+  await db.query("update public.screening_analysis_attempts set status='failed', finished_at=clock_timestamp() where id=$1", [p1.attemptId]);
+  assert.deepEqual(await usageAt(prev), { settled_micros: 0, unknown_micros: 0, reserved_micros: 0 });
+  assert.deepEqual(await usageAt(cur), { settled_micros: 1200, unknown_micros: 0, reserved_micros: 0 });
+  assert.equal((await e.reserveScreening(p2.attemptId)).allowed, true);
+});

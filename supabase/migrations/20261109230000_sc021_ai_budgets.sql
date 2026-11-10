@@ -322,7 +322,11 @@ begin
     ) k
     left join est on est.task = k.task and k.known is null
   ) x;
-  -- Aktywne rezerwacje trzymają tylko to, czego ich próby jeszcze nie zużyły.
+  -- Aktywne rezerwacje trzymają tylko to, czego ich próby (z dowolnego okresu) jeszcze nie zużyły.
+  -- Liczy się KAŻDA wciąż żywa rezerwacja utworzona przed końcem okresu, także z poprzedniego miesiąca:
+  -- operacja rozpoczęta tuż przed północą ostatniego dnia, której próby wpadną już w nowy miesiąc,
+  -- obciąża nowy okres, dopóki trwa. Próby liczą się w okresie swojego created_at; pozostałość
+  -- = rezerwacja − koszt już zapisanych prób operacji (min. 0), więc nic nie liczy się podwójnie.
   select coalesce(sum(greatest(0, r.reserved_micros - coalesce(u.used, 0))), 0) into reserved_micros
   from ai_ledger.budget_reservations r
   left join lateral (
@@ -332,7 +336,7 @@ begin
     from ai_ledger.attempts a
     where a.task = r.task and a.company_id = r.company_id and a.process_id = r.process_id and a.operation_id = r.operation_id
   ) u on true
-  where r.company_id = target_company and r.period_start = p_start and r.currency = cur
+  where r.company_id = target_company and r.created_at < p_end and r.currency = cur
     and r.released_at is null and r.expires_at > at
     and case r.task
       when 'cv_screening' then exists (select 1 from public.screening_analysis_attempts t

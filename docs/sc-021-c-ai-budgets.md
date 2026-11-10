@@ -29,7 +29,9 @@ PRODUCTION_APPROVAL: NO (działa tylko przy `AI_GATEWAY_ENABLED=true`, które ni
   Każda zmiana to nowa wersja (stare zostają), wpisywana tylko funkcją operatora.
 - **Zaangażowany koszt** = rozliczony (`settled` z ceną w walucie budżetu) + niepewny (`unknown`,
   bez wyceny albo w innej walucie — liczony najgorszym szacunkiem jednej próby) + część aktywnych
-  rezerwacji, której ich próby jeszcze nie zużyły (bez podwójnego liczenia).
+  rezerwacji, której ich próby jeszcze nie zużyły (bez podwójnego liczenia). Próby liczą się w
+  miesiącu swojego zapisu; pozostałość każdej wciąż żywej rezerwacji obciąża bieżący miesiąc, także
+  gdy rezerwację utworzono w poprzednim (operacja rozpoczęta tuż przed północą ostatniego dnia).
 - **Stan**: `ok`, `warning` (≥ 80%), `exceeded` (≥ 100%), `unconfigured`.
 
 ## Reguły
