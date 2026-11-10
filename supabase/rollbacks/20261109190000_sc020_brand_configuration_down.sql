@@ -35,12 +35,18 @@ begin;
 -- deadlock_timeout" nie przesądza, kto odpadnie pierwszy. Zawęża tylko okno,
 -- w którym ofiarą może paść klient.
 --
--- Prawdziwą ochroną jest KRÓTKIE TRZYMANIE BLOKAD: `drop schema ... cascade`
--- wykonuje się zaraz po guardzie, a wszystkie pozostałe instrukcje (polityki,
--- revoke, drop function, postflight) idą PO nim. Każda instrukcja to osobna
--- podróż do serwera, więc przy zdalnym połączeniu to one dawały długie okno.
--- Zmierzone na łączu 30 ms: poprzednia kolejność trzymała blokady 1274 ms,
--- ta kolejność — 228 ms.
+-- Prawdziwą ochroną jest SZYBKIE DOJŚCIE DO `drop schema ... cascade`: wykonuje
+-- się ono zaraz po guardzie, a wszystkie pozostałe instrukcje (polityki,
+-- drop function, postflight) idą PO nim. Każda instrukcja to osobna podróż do
+-- serwera, więc przy zdalnym połączeniu to one wydłużały drogę do tej jednej
+-- instrukcji, która naprawdę może czekać.
+--
+-- UWAGA NA NAZWĘ: skraca się okno POBIERANIA blokad, czyli czas, w którym może
+-- powstać cykl — NIE czas blokowania aplikacji. Same blokady są trzymane do
+-- COMMIT-u w obu kolejnościach. Zmierzone na łączu 30 ms, ten plik:
+--   * okno pobierania blokad: 1274 ms -> 228 ms (to jest zysk),
+--   * łączny czas trzymania blokad: ok. 1390 ms -> 1330 ms (praktycznie bez zmian).
+-- Aplikacja czeka więc nadal mniej więcej tyle samo; rzadziej natomiast ginie.
 --
 -- Czego to nadal NIE załatwia: `drop schema ... cascade` bierze blokady niejawne,
 -- bez NOWAIT, m.in. na sekwencji tożsamości, której `lock table` w ogóle nie
@@ -109,9 +115,10 @@ begin
     --    `select ... from pg_sequences` blokuje sekwencję BEZ blokady na
     --    branding.events, a `lock table` nie umie jej objąć (PostgreSQL odmawia
     --    blokowania sekwencji). Ta reszta nie jest więc udowodniona jako niemożliwa
-    --    — jest OGRANICZONA CZASOWO przez `set local lock_timeout` na początku
-    --    pliku, ustawiony poniżej deadlock_timeout, żeby to rollback odpadł
-    --    pierwszy, a nie klient.
+    --    — jest tylko OGRANICZONA CZASOWO przez `set local lock_timeout` na
+    --    początku pliku. Patrz komentarz przy tym ustawieniu: limit NIE przesądza,
+    --    kto odpadnie pierwszy. Ryzyko zmniejsza krótkie okno pobierania blokad,
+    --    a nie sam limit.
     --  * NOWAIT nie obejmuje czekania na poziomie WIERSZA. Dlatego ten skrypt
     --    celowo nie wykonuje żadnego DML (patrz komentarz przy koszyku).
     --
@@ -130,12 +137,12 @@ begin
 end
 $guard$;
 
--- 4. Schemat `branding` wraz z tabelami, indeksami, wyzwalaczami i funkcjami guard.
+-- 1. Schemat `branding` wraz z tabelami, indeksami, wyzwalaczami i funkcjami guard.
 --    CASCADE jest bezpieczne: guard powyżej już potwierdził, że nie ma w nim danych,
 --    a migracja nie tworzyła kluczy obcych z 'public'/'private' do `branding`.
 drop schema if exists branding cascade;
 
--- 1. Storage: zdejmujemy POLITYKI, a PUSTY KOSZYK ZOSTAWIAMY — świadomie.
+-- 2. Storage: zdejmujemy POLITYKI, a PUSTY KOSZYK ZOSTAWIAMY — świadomie.
 --
 --    Wcześniejsze wersje tego pliku kasowały wiersz `storage.buckets`. To jedno
 --    `delete` okazało się źródłem powtarzających się zakleszczeń: usunięcie koszyka
@@ -201,7 +208,7 @@ end
 $storage$;
 
 
--- 2. Funkcje wystawione aplikacji (public.brand_*).
+-- 3. Funkcje wystawione aplikacji (public.brand_*).
 drop function if exists public.brand_editor_state(uuid);
 drop function if exists public.brand_asset(uuid, uuid);
 drop function if exists public.brand_published(uuid);
@@ -210,7 +217,7 @@ drop function if exists public.brand_publish_draft(uuid, uuid, timestamptz);
 drop function if exists public.brand_save_draft(uuid, jsonb, uuid, uuid);
 drop function if exists public.brand_register_asset(uuid, text, text, text, integer, text);
 
--- 3. Funkcje pomocnicze w `private` (kolejność odwrotna do migracji).
+-- 4. Funkcje pomocnicze w `private` (kolejność odwrotna do migracji).
 drop function if exists private.brand_check_asset(uuid, uuid, text);
 drop function if exists private.brand_require_owner(uuid);
 drop function if exists private.brand_validate_config(jsonb);

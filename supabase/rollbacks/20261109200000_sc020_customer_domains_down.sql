@@ -34,12 +34,18 @@ begin;
 -- deadlock_timeout" nie przesądza, kto odpadnie pierwszy. Zawęża tylko okno,
 -- w którym ofiarą może paść klient.
 --
--- Prawdziwą ochroną jest KRÓTKIE TRZYMANIE BLOKAD: `drop schema ... cascade`
--- wykonuje się zaraz po guardzie, a wszystkie pozostałe instrukcje (polityki,
--- revoke, drop function, postflight) idą PO nim. Każda instrukcja to osobna
--- podróż do serwera, więc przy zdalnym połączeniu to one dawały długie okno.
--- Zmierzone na łączu 30 ms: poprzednia kolejność trzymała blokady 1274 ms,
--- ta kolejność — 228 ms.
+-- Prawdziwą ochroną jest SZYBKIE DOJŚCIE DO `drop schema ... cascade`: wykonuje
+-- się ono zaraz po guardzie, a wszystkie pozostałe instrukcje (revoke,
+-- drop function, postflight) idą PO nim. Każda instrukcja to osobna podróż do
+-- serwera, więc przy zdalnym połączeniu to one wydłużały drogę do tej jednej
+-- instrukcji, która naprawdę może czekać.
+--
+-- UWAGA NA NAZWĘ: skraca się okno POBIERANIA blokad, czyli czas, w którym może
+-- powstać cykl — NIE czas blokowania aplikacji. Same blokady są trzymane do
+-- COMMIT-u w obu kolejnościach. Zmierzone na łączu 30 ms, ten plik:
+--   * okno pobierania blokad: 719 ms -> 166 ms (to jest zysk),
+--   * łączny czas trzymania blokad: ok. 840 ms -> 780 ms (praktycznie bez zmian).
+-- Aplikacja czeka więc nadal mniej więcej tyle samo; rzadziej natomiast ginie.
 --
 -- Czego to nadal NIE załatwia: `drop schema ... cascade` bierze blokady niejawne,
 -- bez NOWAIT, m.in. na sekwencji tożsamości, której `lock table` w ogóle nie
@@ -76,8 +82,10 @@ begin
     -- `settings` jest na liście dlatego, że `drop schema cascade` ją usuwa —
     -- i tylko dlatego. Nie liczy się do pustości (jej wiersz zakłada sama migracja).
     --
-    -- NOWAIT JEST ISTOTNE, nie ozdobne, i to ono — nie kolejność — rozwiązuje
-    -- problem zakleszczenia. Żadna stała kolejność go nie rozwiąże, bo aplikacja
+    -- NOWAIT JEST ISTOTNE, nie ozdobne. Rozstrzyga ono problem KOLEJNOŚCI BLOKAD
+    -- MIĘDZY TABELAMI, opisany niżej. Czym innym jest KOLEJNOŚĆ INSTRUKCJI w tym
+    -- pliku (patrz nagłówek) — ona skraca okno powstania cyklu. Obie rzeczy są
+    -- potrzebne i dotyczą różnych problemów. Żadna stała kolejność go nie rozwiąże, bo aplikacja
     -- używa OBU: tenant_domain_claim czyta settings przed zapisem do domains, ale
     -- record_dns_check, tenant_domain_state, tenant_domain_activate,
     -- tenant_domain_resolve i record_scheduled_dns_check (SC-020-D) dotykają
@@ -93,7 +101,8 @@ begin
     -- blokady na rodzicu.
     -- DLA SEKWENCJI NIE: `select ... from pg_sequences` blokuje ją bez blokady na
     -- tabeli, a `lock table` nie umie objąć sekwencji. Ta reszta jest ograniczona
-    -- czasowo przez `lock_timeout` ustawiony poniżej deadlock_timeout. Czekania na
+    -- czasowo przez `lock_timeout` — który sam w sobie nie przesądza, kto odpadnie
+    -- pierwszy (patrz komentarz przy tym ustawieniu). Czekania na
     -- poziomie WIERSZA NOWAIT by nie objął, ale ten
     -- plik nie wykonuje żadnego DML, więc kwestia nie powstaje.
     --
@@ -108,7 +117,7 @@ begin
 end
 $guard$;
 
--- 4. Schemat `tenant_domains` wraz z tabelami, indeksami, wyzwalaczami i funkcjami.
+-- 1. Schemat `tenant_domains` wraz z tabelami, indeksami, wyzwalaczami i funkcjami.
 --    CASCADE jest bezpieczne: guard powyżej potwierdził brak zgłoszeń domen i zdarzeń
 --    oraz brak obiektów SC-020-D, a migracja nie tworzyła kluczy obcych z
 --    'public'/'private' do tego schematu. Ginie też wiersz `settings`, ale to
@@ -116,26 +125,19 @@ $guard$;
 --    utrata jest zamierzona i dlatego nie liczy się do guardu pustości.
 drop schema if exists tenant_domains cascade;
 
--- 1. Nadania dla roli weryfikatora (odwrotnie niż w migracji). Rola zostaje.
-do $grants$
-begin
-  if exists (select 1 from pg_roles where rolname = 'tenant_domain_verifier')
-     and to_regnamespace('tenant_domains') is not null then
-    if to_regprocedure('tenant_domains.record_tls_check(uuid,uuid,text,boolean,uuid)') is not null then
-      revoke execute on function tenant_domains.record_tls_check(uuid, uuid, text, boolean, uuid) from tenant_domain_verifier;
-    end if;
-    if to_regprocedure('tenant_domains.record_dns_check(uuid,uuid,text,boolean,uuid)') is not null then
-      revoke execute on function tenant_domains.record_dns_check(uuid, uuid, text, boolean, uuid) from tenant_domain_verifier;
-    end if;
-    if to_regprocedure('tenant_domains.verifier_target(uuid,uuid)') is not null then
-      revoke execute on function tenant_domains.verifier_target(uuid, uuid) from tenant_domain_verifier;
-    end if;
-    revoke usage on schema tenant_domains from tenant_domain_verifier;
-  end if;
-end
-$grants$;
+-- 2. Nadania dla roli weryfikatora: NIE MA CZEGO ZDEJMOWAĆ.
+--    `drop schema ... cascade` wyżej usuwa schemat razem z funkcjami i razem z
+--    wszystkimi nadaniami na nich oraz na samym schemacie. Wcześniejsza wersja
+--    miała tu blok `revoke` wykonywany PRZED usunięciem schematu; po przestawieniu
+--    kolejności (patrz nagłówek) jego warunek `to_regnamespace('tenant_domains')`
+--    jest już NULL, więc blok nigdy się nie wykonywał — został usunięty zamiast
+--    zostawiony jako martwy kod w skrypcie niszczącym.
+--    UWAGA PRZY ROZBUDOWIE: gdyby trzeba było zdjąć nadanie, którego `drop schema`
+--    NIE obejmuje (na funkcji w `public`, członkostwo w roli), musi ono trafić
+--    PRZED `drop schema` — tutaj byłoby bez efektu.
+--    Rola `tenant_domain_verifier` zostaje (patrz nagłówek).
 
--- 2. Nadanie dla anon na publicznym rozpoznawaniu hosta (migracja nadaje je warunkowo).
+-- 3. Nadanie dla anon na publicznym rozpoznawaniu hosta (migracja nadaje je warunkowo).
 do $anon$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon')
@@ -146,7 +148,7 @@ end
 $anon$;
 
 
--- 3. Funkcje wystawione aplikacji (public.tenant_domain_*), odwrotnie niż w migracji.
+-- 4. Funkcje wystawione aplikacji (public.tenant_domain_*), odwrotnie niż w migracji.
 drop function if exists public.tenant_domain_resolve(text);
 drop function if exists public.tenant_domain_state(uuid);
 drop function if exists public.tenant_domain_revoke(uuid, uuid);
