@@ -7,6 +7,7 @@ import ts from 'typescript';
 import {createElement} from 'react';
 import * as generation from '../lib/exercise-ai-generation.ts';
 import * as contract from '../lib/exercise-ai.ts';
+import * as budgetGate from '../lib/exercise-ai-budget.ts';
 const base='app/dashboard/[companyId]/recruitments/[recruitmentId]/';
 const companyId='aaaaaaaa-1111-4222-8333-444444444444',recruitmentId='bbbbbbbb-1111-4222-8333-444444444444',requestKey='cccccccc-1111-4222-8333-444444444444';
 const stamp='2026-11-07T00:00:00Z';
@@ -15,7 +16,7 @@ function load(file,mocks){const absolute=fileURLToPath(new URL('../'+file,import
  m._compile(ts.transpileModule(readFileSync(absolute,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,absolute);return m.exports;}
 async function run(options={}){
  const oldFlag=process.env.EXERCISE_AI_ENABLED,oldKey=process.env.OPENAI_API_KEY,oldGateway=process.env.AI_GATEWAY_ENABLED;
- let writerArgs=null;
+ let writerArgs=null,budgetArgs=null;
  if(options.gateway)process.env.AI_GATEWAY_ENABLED='true';else delete process.env.AI_GATEWAY_ENABLED;
  process.env.EXERCISE_AI_ENABLED=options.flag??'true';process.env.OPENAI_API_KEY=options.key??'synthetic-only';
  const calls=[],rpc=[];const position={id:'position',updated_at:stamp,title:'Planista',tasks:['Plan'],required_competencies:['Planowanie'],kpis:[],required_behaviors:[]};
@@ -27,10 +28,14 @@ async function run(options={}){
  '../../../../../lib/exercise-context':{exerciseUuid:/^[a-f0-9-]{36}$/i,exerciseContext:async()=>{calls.push('access');return {client,canEdit:options.canEdit??true,editable:true,position,base:'/exercises'};}},
  '../../../../../lib/exercise-ai':contract,
  '../../../../../lib/ai-gateway/contract':{isAiGatewayEnabled:value=>value==='true'},
- '../../../../../lib/ai-ledger-writer':{exerciseLedgerWriterFromEnv:(...args)=>{writerArgs=args;return options.writer??null;}},'../../../../../lib/exercise-ai-generation':generation,
+ '../../../../../lib/ai-ledger-writer':{exerciseLedgerWriterFromEnv:(...args)=>{writerArgs=args;return options.writer??null;},
+  exerciseBudgetFromEnv:(...args)=>{budgetArgs=args;return options.budget??null;}},
+ '../../../../../lib/exercise-ai-budget':budgetGate,'../../../../../lib/exercise-ai-generation':generation,
  '../../../../../lib/exercise-ai-provider':{requestExerciseDraft:async(payload,key,fetcher,trust)=>{assert.equal(key,'synthetic-only');calls.push('provider');
-  const {recordAttempt,...trusted}=trust;
-  if(options.gateway){assert.equal(recordAttempt,options.writer);assert.deepEqual(writerArgs,[companyId,recruitmentId]);}else assert.equal(recordAttempt,null);
+  const {recordAttempt,reserveBudget,...trusted}=trust;
+  if(options.gateway){assert.equal(recordAttempt,options.writer);assert.deepEqual(writerArgs,[companyId,recruitmentId]);
+   assert.equal(reserveBudget,options.budget.reserve);assert.deepEqual(budgetArgs,[companyId,recruitmentId]);}
+  else {assert.equal(recordAttempt,null);assert.equal(reserveBudget,null);}
   assert.equal(fetcher,fetch);assert.deepEqual(trusted,{companyId,operationId:requestKey,recruitmentId,mayGenerate:true});assert.equal(payload.untrusted_company,null);
   return {definition:{kind:'competency_test',title:'Plan'}};}},
  });
@@ -72,7 +77,22 @@ test('SC-021-B: with the gateway on, generation needs the server-only ledger wri
  const missing=await run({gateway:true});
  assert.match(missing.result.error,/Rejestr kosztów AI/);assert.deepEqual(missing.calls,['access']);assert.equal(missing.rpc.length,0);
  const writer=async()=>{};
- const ok=await run({gateway:true,writer});
+ const noBudget=await run({gateway:true,writer});
+ assert.match(noBudget.result.error,/Rejestr kosztów AI/);assert.deepEqual(noBudget.calls,['access']);
+ const budgetLog=[];
+ const budget={reserve:async key=>{budgetLog.push(['reserve',key]);return {allowed:true,created:true};},release:async key=>{budgetLog.push(['release',key]);}};
+ const ok=await run({gateway:true,writer,budget});
  assert.deepEqual(ok.calls,['access','reserve_exercise_ai_generation','provider','finish_exercise_ai_generation','revalidate']);
  assert.ok(!ok.calls.includes('record_exercise_ai_attempt'),'the recruiter session never writes the ledger');
+ assert.deepEqual(budgetLog,[['reserve',requestKey],['release',requestKey]]);
+});
+test('SC-021-C: over budget, generation is refused with a Polish message before the draft slot is reserved',async()=>{
+ const writer=async()=>{};
+ for(const [answer,pattern] of [[{allowed:false,code:'budget_exceeded'},/limit kosztów AI Twojej firmy został wyczerpany/],
+  [{allowed:false,code:'budget_unconfigured'},/nie jest ustawiony/]]){
+  const log=[];
+  const r=await run({gateway:true,writer,budget:{reserve:async()=>{log.push('reserve');return answer;},release:async()=>{log.push('release');}}});
+  assert.match(r.result.error,pattern);assert.match(r.result.error,/Nie zużyto próby AI/);
+  assert.deepEqual(r.calls,['access']);assert.equal(r.rpc.length,0);assert.deepEqual(log,['reserve']);
+ }
 });

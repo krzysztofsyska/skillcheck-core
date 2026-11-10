@@ -155,6 +155,15 @@ function createRuntime() {
           await tx`select public.record_screening_ai_attempt(${tx.json(payload)}::jsonb)`;
         });
       },
+      // SC-021-C: reserve the analysis attempt's AI-cost budget before its first provider call, in
+      // its own committed transaction. Idempotent per attempt; company derived by the database.
+      reserveBudget: async operationId => {
+        const rows = await sql.begin(async tx => {
+          await tx.unsafe("set local role screening_worker");
+          return await tx`select public.reserve_screening_ai_budget(${operationId}::uuid) as decision`;
+        });
+        return rows[0]?.decision ?? null;
+      },
     })
     : null;
   return {

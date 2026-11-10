@@ -20,6 +20,9 @@ export const SCREENING_PROVIDER_ERROR_CODES = [
   'openai_network_error',
   'contract_mismatch',
   'worker_internal_error',
+  // SC-021-C (AI gateway path only): refused before any provider call, never retried.
+  'ai_budget_exceeded',
+  'ai_budget_unavailable',
 ] as const;
 export type ScreeningProviderErrorCode = typeof SCREENING_PROVIDER_ERROR_CODES[number];
 
@@ -206,6 +209,8 @@ export function sanitizeScreeningError(code: ScreeningProviderErrorCode) {
     case 'openai_server_error': return 'Usługa modelu jest chwilowo niedostępna.';
     case 'openai_network_error': return 'Nie udało się połączyć z modelem.';
     case 'contract_mismatch': return 'Kontrakt analizy jest niezgodny.';
+    case 'ai_budget_exceeded': return 'Miesięczny limit kosztów AI firmy został wyczerpany. Analiza nie została wysłana do modelu. Skontaktuj się z obsługą SkillCheck.';
+    case 'ai_budget_unavailable': return 'Limit kosztów AI firmy nie jest ustawiony albo jest chwilowo niedostępny. Analiza nie została wysłana do modelu. Skontaktuj się z obsługą SkillCheck.';
     default: return 'Analiza nie została ukończona.';
   }
 }
