@@ -4,7 +4,7 @@ Task #159, L3. Base: `afbe86278627b0cc0d411158c710743617a3c134`.
 Architecture reviewed independently by `/root/migration_review` before implementation.
 
 The 2026-10-23 read-only migration inventory of project `wsvjawuikxfzjyivxgsu`
-contains the same 19 entries as `tests/fixtures/sc19-production-history.json`.
+contained the same 19 entries as `tests/fixtures/sc19-production-history-2026-10-24.json` (the historical state; `tests/fixtures/sc19-production-history.json` now holds the 49 entries read on 2026-11-10).
 The five migration files changed here are pending, not remotely applied. This
 change does not authorize remote execution or production promotion.
 

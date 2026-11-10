@@ -325,7 +325,7 @@ Podsumowanie: w `supabase_migrations.schema_migrations` jest 31 wierszy, w repoz
 | `20261008155719` | `sc005_keep_worker_role_explicit_only` |
 | `20261011165916` | `sales_retention_cron_extension` |
 
-Odtwarza je fixture `tests/fixtures/sc19-production-history.json`
+Odtwarza je fixture `tests/fixtures/sc19-production-history-2026-10-24.json`
 (zob. `docs/release/sc-mvp-production-runbook.md`). Od #200 są też w `supabase/migrations` z tymi samymi numerami.
 
 ### Różnice numeracji (7) — ta sama nazwa, inna wersja
