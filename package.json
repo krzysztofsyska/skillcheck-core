@@ -69,6 +69,8 @@
     "test:ai-gateway": "node --test tests/ai-gateway.test.mjs tests/ai-ledger.test.mjs tests/ai-budget.test.mjs",
     "test:ai-ledger-db": "node --test --test-concurrency=1 tests/ai-ledger-database.test.mjs",
     "test:ai-budget-db": "node --test --test-concurrency=1 tests/ai-budget-database.test.mjs",
+    "test:ai-cost": "node --test tests/ai-cost-dashboard.test.mjs",
+    "test:ai-cost-db": "node --test --test-concurrency=1 tests/ai-cost-dashboard-database.test.mjs",
     "test:competency": "node --test tests/competency-test.test.mjs",
     "test:brand": "node --experimental-strip-types --test tests/brand-config.test.mjs tests/brand-ui.test.mjs tests/brand-messages.test.mjs",
     "test:brand-db": "node --experimental-strip-types --test --test-concurrency=1 tests/brand-database.test.mjs",
