@@ -61,9 +61,17 @@ begin;
 -- To jest świadomy kompromis tej zmiany, nie przeoczenie: przestawienie
 -- instrukcji ZWĘŻA okno powstania zakleszczenia (patrz liczby wyżej), ale
 -- POSZERZA okno między `drop schema` a COMMIT-em, w którym realizuje się ta
--- druga awaria — zmierzone dla tego pliku ok. 122 ms -> ok. 1101 ms.
--- Zamiana jest opłacalna, bo klient ginął wcześniej znacznie częściej
--- (11 z 18 prób wobec 0 z 54), ale cena istnieje.
+-- druga awaria — zmierzone dla tego pliku ok. 150 ms -> ok. 1100 ms.
+-- UCZCIWIE O BILANSIE, bo łatwo tu o zbyt optymistyczny wniosek. Przestawienie
+-- ELIMINUJE tryb ZAKLESZCZENIA (40P01): stara kolejność formowała je w 11 z 18
+-- prób, nowa w 0 z 54. NIE eliminuje natomiast awarii klienta — zamienia jeden
+-- tryb na drugi, w szerszym oknie: zmierzone 6 z 27 prób (stara) wobec 18 z 27
+-- (nowa). Co istotne, 40P01 jest klasą ponawialną, a XX000 nie.
+-- Nie twierdzimy więc, że jest bezpieczniej dla klienta pod ruchem. Zyskiem jest
+-- to, że rollback kończy się przewidywalnie (zawsze commit albo czysta odmowa),
+-- zamiast losowo ginąć lub zabijać klienta zakleszczeniem.
+-- WNIOSEK PRAKTYCZNY: ŻADNA z tych kolejności nie jest bezpieczna przy
+-- równoległym ruchu. To nie jest ostrożnościowa formułka — to wynik pomiaru.
 --
 -- I TO JEST KONKRETNY POWÓD poniższego zalecenia, nie ostrożnościowy frazes:
 -- uruchamiaj ten skrypt przy wstrzymanym ruchu aplikacji, a nie w szczycie.
