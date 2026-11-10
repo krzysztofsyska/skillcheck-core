@@ -25,6 +25,19 @@ begin;
 do $guard$
 begin
   if to_regnamespace('branding') is not null then
+    -- Schemat bez kompletu tabel = przerwana instalacja. Mówimy to wprost, zamiast
+    -- wysypywać się na „relation does not exist" przy pierwszym `exists`.
+    if to_regclass('branding.versions') is null or to_regclass('branding.assets') is null
+       or to_regclass('branding.events') is null then
+      raise exception 'sc020a_rollback_partial_install' using errcode = '55000';
+    end if;
+    -- Blokada MUSI poprzedzać sprawdzenie pustości. Samo `select` bierze tylko
+    -- AccessShareLock, który nie wstrzymuje INSERT-u: bez tego aplikacja mogła
+    -- wstawić i zatwierdzić wiersz między sprawdzeniem a `drop schema cascade`,
+    -- i ten wiersz zostałby skasowany. Skrypt bywa uruchamiany ręcznie na żywym
+    -- Preview, więc okno jest realne. ACCESS EXCLUSIVE trzyma się do końca
+    -- transakcji, więc równoległy zapis czeka albo trafia już na brak schematu.
+    lock table branding.versions, branding.assets, branding.events in access exclusive mode;
     if exists (select 1 from branding.versions)
        or exists (select 1 from branding.assets)
        or exists (select 1 from branding.events) then
@@ -43,6 +56,13 @@ end
 $preflight$;
 
 -- 1. Storage: najpierw polityki, potem pusty koszyk (odwrotnie niż w migracji).
+--    NIE ZAMIENIAJ TEJ KOLEJNOŚCI. `drop policy` bierze AccessExclusiveLock na
+--    storage.objects i trzyma go do końca transakcji, więc liczenie obiektów
+--    poniżej jest wolne od wyścigu dokładnie dzięki temu, że polityki lecą pierwsze.
+--    Koszyk `brand-assets` należy do SC-020-A i jest usuwany bezwarunkowo, choć
+--    migracja zakłada go przez `on conflict do update`: gdyby ktoś utworzył koszyk
+--    o tej nazwie wcześniej, rollback zabierze też jego ustawienia. Żaden plik nie
+--    ginie — guard wyżej przepuszcza wyłącznie pusty koszyk.
 do $storage$
 declare leftover bigint;
 begin

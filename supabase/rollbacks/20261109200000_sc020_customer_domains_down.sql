@@ -27,6 +27,17 @@ begin
        or to_regprocedure('tenant_domains.record_scheduled_dns_check(uuid,uuid,text,boolean)') is not null then
       raise exception 'sc020b_rollback_requires_sc020d_down' using errcode = '55000';
     end if;
+    -- Schemat bez kompletu tabel = przerwana instalacja. Mówimy to wprost, zamiast
+    -- wysypywać się na „relation does not exist" przy pierwszym `exists`.
+    if to_regclass('tenant_domains.domains') is null or to_regclass('tenant_domains.events') is null
+       or to_regclass('tenant_domains.settings') is null then
+      raise exception 'sc020b_rollback_partial_install' using errcode = '55000';
+    end if;
+    -- Blokada MUSI poprzedzać sprawdzenie pustości — patrz komentarz w
+    -- 20261109190000_sc020_brand_configuration_down.sql. Samo `select` nie
+    -- wstrzymuje INSERT-u, więc bez tego zgłoszenie domeny wstawione i
+    -- zatwierdzone w trakcie sprawdzania zostałoby skasowane przez CASCADE.
+    lock table tenant_domains.domains, tenant_domains.events in access exclusive mode;
     if exists (select 1 from tenant_domains.domains) or exists (select 1 from tenant_domains.events) then
       raise exception 'sc020b_rollback_domains_not_empty' using errcode = '55000';
     end if;
