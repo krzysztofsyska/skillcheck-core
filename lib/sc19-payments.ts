@@ -52,15 +52,19 @@ export interface PaymentTransaction {
 }
 export interface PaymentStore {
   /** Commit all writes on success; rollback ALL writes on any error. Implement
-   * unique(company_id,request_id), one awaiting_payment per company, immutable
-   * request aliases, row locks and bounded serialization retries.
+   * unique(company_id,request_id), one awaiting_payment per company (an order
+   * past its deadline without a provider session is reopened, never replaced),
+   * immutable request aliases, row locks and bounded serialization retries.
    */
   transaction<T>(work: (tx: PaymentTransaction) => Promise<T>): Promise<T>;
 }
 export interface PaymentProvider {
   /** Reuse the exact same idempotency key for retries after timeout/restart.
-   * Must refuse reuse after the provider's deduplication window expires unless
-   * the original session is positively reconciled. Never create a second charge.
+   * Never create a second charge. After the order's checkout deadline this is
+   * called again only when lookupCheckout has positively confirmed that no
+   * session exists for the key AND the order's exact offer revision is still on
+   * sale; the key (and the provider session derived from the order id) is the
+   * same, so it is the one registration that never happened, not a new charge.
    */
   createCheckout(order: PaymentOrder, idempotencyKey: string): Promise<HostedCheckout>;
   /** READ ONLY: find the original provider session by durable order/key.
@@ -182,6 +186,41 @@ export function createSc19Payments(deps: PaymentDependencies) {
     const found = clone(await deps.provider.lookupCheckout(clone(order), checkoutKey(order)));
     return found === null ? null : bindHosted(order, validateHosted(order, found), userId);
   }
+  const storedCheckout = (order: PaymentOrder): HostedCheckout => {
+    if (!order.sessionId || !order.checkoutUrl || !safeCheckoutUrl(order.checkoutUrl))
+      return deny('SC19_PAYMENT_CHECKOUT_INVALID');
+    return { orderId: order.id, sessionId: order.sessionId, url: order.checkoutUrl,
+      scope, amountMinor: order.amountMinor, currency: order.currency,
+      paymentKind: 'one_time' as const };
+  };
+  /** Past the deadline, the provider has POSITIVELY confirmed that no session
+   * exists for this order's key (lookupCheckout throws on any uncertainty). The
+   * provider session id is derived from the order id, so registering now is the
+   * very same registration that never happened: any payment stays attributable
+   * to this one order, and the customer pays the exact snapshot they accepted,
+   * only while that offer revision is still on sale. Re-checked under the row
+   * lock; no provider I/O inside the transaction. */
+  async function reopenAbsentSession(order: PaymentOrder, userId: string):
+      Promise<HostedCheckout | { orderId: string; paid: true } | { reopen: PaymentOrder }> {
+    return deps.store.transaction(async tx => {
+      const current = await tx.order(order.id);
+      if (!current) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      requireOrderScope(current);
+      const access = await tx.companyAccess(current.companyId, userId);
+      if (access.owner !== true || access.verified !== true ||
+          current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
+      if (current.status === 'paid') return { orderId: current.id, paid: true as const };
+      if (current.status !== 'awaiting_payment') return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      if (current.sessionId && current.checkoutUrl) return storedCheckout(current);
+      if (current.sessionId !== null || current.checkoutUrl !== null)
+        return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      const offer = clone(await tx.offer(current.offerId));
+      if (!offerValid(offer, current.offerId, current.termsRevision) ||
+          offer.revision !== current.offerRevision || offer.amountMinor !== current.amountMinor ||
+          offer.credits !== current.credits) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      return { reopen: clone(current) };
+    });
+  }
 
   async function checkout(input: unknown): Promise<HostedCheckout | { orderId: string; paid: true }> {
     checkoutGate();
@@ -230,20 +269,19 @@ export function createSc19Payments(deps: PaymentDependencies) {
       return created;
     });
     if (order.status === 'paid') return { orderId: order.id, paid: true };
-    if (order.sessionId && order.checkoutUrl) {
-      if (!safeCheckoutUrl(order.checkoutUrl)) return deny('SC19_PAYMENT_CHECKOUT_INVALID');
-      return { orderId: order.id, sessionId: order.sessionId, url: order.checkoutUrl,
-        scope, amountMinor: order.amountMinor, currency: order.currency,
-        paymentKind: 'one_time' as const };
-    }
+    if (order.sessionId && order.checkoutUrl) return storedCheckout(order);
+    let pending = order;
     if (Date.now() >= order.checkoutDeadlineMs) {
       const recovered = await reconcileSession(order, userId);
-      return recovered ?? deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      if (recovered) return recovered;
+      const reopened = await reopenAbsentSession(order, userId);
+      if (!('reopen' in reopened)) return reopened;
+      pending = reopened.reopen;
     }
     // Durable order exists before the external call; retry with SAME key only.
-    const hosted = validateHosted(order,
-      clone(await deps.provider.createCheckout(clone(order), checkoutKey(order))));
-    return bindHosted(order, hosted, userId);
+    const hosted = validateHosted(pending,
+      clone(await deps.provider.createCheckout(clone(pending), checkoutKey(pending))));
+    return bindHosted(pending, hosted, userId);
   }
 
   async function notification(raw: Uint8Array, signature: string) {

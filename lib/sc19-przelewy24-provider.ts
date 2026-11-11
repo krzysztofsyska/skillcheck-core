@@ -50,11 +50,17 @@ const TOKEN = /^[A-Za-z0-9-]{8,100}$/;
 const TIMEOUT_MS = 10_000;
 const NOTIFY_KEYS = ['merchantId', 'posId', 'sessionId', 'amount', 'originAmount', 'currency', 'orderId', 'methodId', 'statement', 'sign'];
 
+/** Only a fixed code and the provider's numeric HTTP status: never the
+ * provider's message text, the request or any credential. */
 export class Przelewy24Error extends Error {
   readonly code: string;
-  constructor(code: string) { super(code); this.name = 'Przelewy24Error'; this.code = code; }
+  readonly httpStatus: number | null;
+  constructor(code: string, httpStatus: number | null = null) {
+    super(code); this.name = 'Przelewy24Error'; this.code = code;
+    this.httpStatus = Number.isSafeInteger(httpStatus) ? httpStatus : null;
+  }
 }
-const fail = (code: string): never => { throw new Przelewy24Error(code); };
+const fail = (code: string, httpStatus: number | null = null): never => { throw new Przelewy24Error(code, httpStatus); };
 
 /** sha384 over compact JSON with unescaped slashes/unicode, as the operator's SDKs do. */
 export function przelewy24Sign(fields: Record<string, string | number>): string {
@@ -118,9 +124,11 @@ export function createPrzelewy24Provider(deps: Przelewy24ProviderDeps, fetchImpl
   async function findSession(sessionId: string) {
     const r = await call('GET', `/api/v1/transaction/by/sessionId/${encodeURIComponent(sessionId)}`);
     if (r.status === 404) return null;
+    // Wrong POS id / API key for this environment (sandbox vs production).
+    if (r.status === 401) return fail('P24_UNAUTHORIZED', 401);
     const d = (r.data as { data?: Record<string, unknown> } | null)?.data;
     if (r.status !== 200 || !d || d.sessionId !== sessionId || !posInt(d.orderId) || !Number.isSafeInteger(d.amount) ||
-        d.currency !== 'PLN' || ![0, 1, 2, 3].includes(d.status as number)) return fail('P24_RESPONSE_INVALID');
+        d.currency !== 'PLN' || ![0, 1, 2, 3].includes(d.status as number)) return fail('P24_RESPONSE_INVALID', r.status);
     return d as { orderId: number; amount: number; status: 0 | 1 | 2 | 3 };
   }
 
@@ -148,7 +156,9 @@ export function createPrzelewy24Provider(deps: Przelewy24ProviderDeps, fetchImpl
       const r = await call('POST', '/api/v1/transaction/register', {
         merchantId: c.merchantId, posId, sessionId, amount: order.amountMinor, currency: 'PLN',
         description: deps.description(order).slice(0, 1024), email, country: 'PL', language: 'pl',
-        urlReturn: returnUrl, urlStatus: statusUrl.href, timeLimit: 30, waitForResult: false,
+        // 0 = no time limit. The order keeps returning this same stored link, so
+        // the link must stay payable; a paid notification is honoured whenever it arrives.
+        urlReturn: returnUrl, urlStatus: statusUrl.href, timeLimit: 0, waitForResult: false,
         regulationAccept: false, encoding: 'UTF-8', sign,
       });
       const token = (r.data as { data?: { token?: unknown } } | null)?.data?.token;
@@ -156,8 +166,13 @@ export function createPrzelewy24Provider(deps: Przelewy24ProviderDeps, fetchImpl
       // Rejected or lost response: Przelewy24 never returns the original token
       // again, so a session that already exists cannot be safely re-exposed.
       // Refuse instead of registering a second charge; owner reconciles.
+      // 401 means the credentials are wrong, so a session read would fail too.
+      if (r.status === 401) return fail('P24_UNAUTHORIZED', 401);
       const existing = await findSession(sessionId);
-      return fail(existing ? 'P24_SESSION_EXISTS' : 'P24_REGISTER_REJECTED');
+      if (existing) return fail('P24_SESSION_EXISTS', r.status);
+      // Only classify the provider's message; it is never stored, returned or logged.
+      const error = (r.data as { error?: unknown } | null)?.error;
+      return fail(typeof error === 'string' && /crc|sign/i.test(error) ? 'P24_SIGN_REJECTED' : 'P24_REGISTER_REJECTED', r.status);
     },
     async lookupCheckout(order: PaymentOrder, key: string): Promise<HostedCheckout | null> {
       checkOrder(order, key);

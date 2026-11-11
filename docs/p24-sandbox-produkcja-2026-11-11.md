@@ -111,14 +111,24 @@ obciążeniem i nie zmieniamy go. W praktyce:
   możesz zapłacić. Nic nie trzeba czekać ani odblokowywać.
 * To samo dzieje się w nowej karcie, na innym urządzeniu i po wyczyszczeniu
   pamięci przeglądarki — zamówienie jest zapisane na serwerze.
-* **Ale:** transakcję rejestrujemy w Przelewy24 z limitem czasu 30 minut. Jeżeli
-  wrócisz po tym czasie, Przelewy24 może już nie przyjąć płatności z tego linku,
-  a nasz system nadal podaje ten sam link. Wtedy to jedno zamówienie trzeba
-  usunąć w bazie (niżej), żeby można było złożyć nowe.
+* Link do płatności **nie wygasa po 30 minutach** — transakcję rejestrujemy w
+  Przelewy24 bez limitu czasu. Do tego samego linku można wrócić później i
+  zapłacić; potwierdzenie płatności przyjmujemy bez względu na to, kiedy dotrze.
+* Jeżeli strona płatności **w ogóle się nie otworzyła** (na przykład Przelewy24
+  odrzuciło rejestrację), kolejne kliknięcie „Zamawiam i płacę” samo otwiera to
+  samo zamówienie na nowo — pod warunkiem, że ta sama oferta (ta sama cena,
+  liczba analiz i warunki) jest nadal w sprzedaży. Najpierw sprawdzamy w
+  Przelewy24, że dla tego zamówienia na pewno nie ma zarejestrowanej transakcji; gdy nie da się
+  tego potwierdzić, nic nie rejestrujemy.
+* Gdy płatność się nie udaje, komunikat na ekranie podaje dodatkowy kod
+  Przelewy24 (np. `SC19_PAYMENT_RETRY / P24_UNAUTHORIZED` — złe dane dostępowe
+  do Przelewy24 w tym środowisku, `P24_SIGN_REJECTED` — zły klucz CRC). Ten sam
+  kod, bez żadnych danych prywatnych, trafia do logów Vercel jako
+  `SC19_P24_FAILURE`.
 
-**Jak nie wpaść w ten przypadek:** w trakcie prób albo dokończ płatność, albo
-wróć do linku w ciągu 30 minut. Dokończona płatność zawsze zwalnia miejsce na
-kolejne zamówienie.
+**Kiedy zostaje tylko odblokowanie ręczne:** niezapłacone zamówienie, którego
+oferty już nie ma w sprzedaży albo która się zmieniła (inna cena, liczba analiz
+lub wersja warunków). Wtedy ekran mówi, że ponawianie nie pomoże.
 
 **Awaryjne odblokowanie (zapis do produkcyjnej bazy — robi to tylko
 właściciel).** W Supabase Studio produkcyjnego projektu

@@ -470,3 +470,25 @@ test('an order that can no longer be reconciled is named as such, not offered a 
   assert.match(message,/Ponawianie nie pomoże/);
   assert.equal(h.redirects.length,0);
 });
+
+// SC-P24-UNBLOCK-001: the server names a Przelewy24 failure with a fixed code in
+// `detail`. The screen shows it next to the generic code so support can tell a
+// wrong key from an outage; anything not in the fixed format is never rendered.
+test('a named Przelewy24 failure shows its code; anything else in detail is ignored', async t => {
+  const failing = detail => harness({ checkout: async () => ({ ok:false, status:503,
+    json: async () => ({ error:'SC19_PAYMENT_RETRY', ...(detail === undefined ? {} : { detail }) }) }) });
+  const named = await failing('P24_UNAUTHORIZED');
+  t.after(named.close);
+  named.accept();
+  await named.click('Zamawiam');
+  assert.match(String(named.find('p','pomoc@skillcheck.pl').props.children), /kod: SC19_PAYMENT_RETRY \/ P24_UNAUTHORIZED\./);
+  for (const detail of [undefined, '<b>P24_UNAUTHORIZED</b>', 'Incorrect CRC value', 'P24_unauthorized', 42]) {
+    const h = await failing(detail);
+    t.after(h.close);
+    h.accept();
+    await h.click('Zamawiam');
+    const message = String(h.find('p','pomoc@skillcheck.pl').props.children);
+    assert.match(message, /kod: SC19_PAYMENT_RETRY\.$/, String(detail));
+    assert.equal(h.redirects.length, 0);
+  }
+});

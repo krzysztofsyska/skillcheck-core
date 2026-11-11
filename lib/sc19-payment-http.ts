@@ -1,4 +1,4 @@
-import { przelewy24NotificationSignature } from './sc19-przelewy24-provider.ts';
+import { Przelewy24Error, przelewy24NotificationSignature } from './sc19-przelewy24-provider.ts';
 import type { CheckoutOffer } from './sc19-payment-postgres.ts';
 import type { OfferCatalog } from './sc19-offer-catalog.ts';
 import { SC19_VAT_BASIS_POINTS, sc19OfferAmounts } from './sc19-offer-amounts.ts';
@@ -35,8 +35,19 @@ async function bodyBytes(request: Request, max: number) {
   for(const chunk of chunks) { all.set(chunk,offset); offset+=chunk.byteLength; }
   return all;
 }
+const P24_DETAIL=/^P24_[A-Z_]{3,40}$/;
 function errorResponse(error: unknown, webhook=false) {
   const code=error instanceof Sc19PaymentError ? error.code : 'SC19_PAYMENT_RETRY';
+  // Name the Przelewy24 failure: fixed code and numeric HTTP status only, never
+  // the provider's message, the request or a credential. The public webhook
+  // body stays unchanged; the authenticated buyer gets the code as `detail`.
+  let detail: string | null=null;
+  if(error instanceof Przelewy24Error) {
+    const p24=P24_DETAIL.test(error.code) ? error.code : 'P24_UNKNOWN';
+    const status=Number.isSafeInteger(error.httpStatus) ? error.httpStatus : null;
+    console.error('SC19_P24_FAILURE',p24,status ?? '-');
+    if(!webhook && p24!=='P24_UNKNOWN')detail=p24;
+  }
   const map: Record<string,number> = {
     SC19_PAYMENTS_DISABLED:503, SC19_PAYMENT_RETRY:503, SC19_PAYMENT_FORBIDDEN:403, SC19_PAYMENT_INVALID:400,
     SC19_PAYMENT_BODY_TOO_LARGE:413, SC19_PAYMENT_ORIGIN:403, SC19_PAYMENT_CONTENT_TYPE:415,
@@ -44,7 +55,7 @@ function errorResponse(error: unknown, webhook=false) {
     SC19_PAYMENT_NOTIFICATION_INVALID:400, SC19_PAYMENT_ORDER_MISSING:404,
   };
   // No successful acknowledgment until verification AND transaction commit.
-  return json({error:code},map[code] ?? (webhook ? 503 : 409));
+  return json(detail ? {error:code,detail} : {error:code},map[code] ?? (webhook ? 503 : 409));
 }
 /** Serialized offer. `checkoutAvailable` says whether a payment can actually be
  * taken right now; the gross `amountMinor` stays authoritative and net/VAT are
