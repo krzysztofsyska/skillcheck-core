@@ -34,9 +34,20 @@ export type LegalDocumentKey = keyof typeof LEGAL_DOCUMENTS;
 
 /** Registration form field and the only accepted value. */
 export const LEGAL_ACCEPTANCE_FIELD = 'legal_acceptance';
-/** Accepted document set. Bump when a document is added, so a stale form cannot record acceptance of an older set. */
-export const LEGAL_ACCEPTANCE_REVISION = `${LEGAL_VERSION}+aneks1`;
-export const LEGAL_ACCEPTED_DOCUMENTS = ['regulamin', 'dpa', 'polityka-prywatnosci', 'aneks-1-rozmowy-glosowe'] as const;
+/**
+ * Accepted document set. Change the revision whenever the wording or the set of accepted documents
+ * changes, so a stale form cannot record acceptance of an older set and the stored value tells
+ * which text a customer agreed to (it is kept in the auth user metadata, see app/auth/actions.ts).
+ *
+ * History (the stored `revision` values):
+ * - `1.0+aneks1` (until 2026-11-11): Regulamin + DPA + Polityka prywatności + Aneks nr 1 (rozmowy głosowe).
+ * - `1.0+r2` (from 2026-11-11, owner decision): Regulamin + DPA + Polityka prywatności. The voice
+ *   annex is no longer part of the mandatory registration consent; the voicebot is not offered
+ *   (CLAUDE.md, "Voicebot on the public offer"). The annex document itself stays published at
+ *   LEGAL_DOCUMENTS.aneks1.href, because accounts created under `1.0+aneks1` accepted it.
+ */
+export const LEGAL_ACCEPTANCE_REVISION = `${LEGAL_VERSION}+r2`;
+export const LEGAL_ACCEPTED_DOCUMENTS = ['regulamin', 'dpa', 'polityka-prywatnosci'] as const;
 export const LEGAL_ACCEPTANCE_VALUE = `v${LEGAL_ACCEPTANCE_REVISION}`;
 
 export function hasLegalAcceptance(form: FormData): boolean {
