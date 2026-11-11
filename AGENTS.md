@@ -169,7 +169,35 @@ The required status `production-approval-attestation` (`.github/workflows/produc
 
 ## Continuous release policy (owner decision 2026-11-08, issue #369)
 
-Within the scope approved in [docs/continuous-release-policy.md](docs/continuous-release-policy.md), the per-release owner click in the Production loop is replaced by a trusted, fail-closed automatic preflight, **once that publisher is implemented and verified**. Until then the Production loop above applies unchanged. HOLD P24 stays absolute. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent. All technical protections remain.
+Within the scope approved in [docs/continuous-release-policy.md](docs/continuous-release-policy.md), the per-release owner click in the Production loop is replaced by a trusted, fail-closed automatic preflight, **once that publisher is implemented and verified**. Until then the Production loop above applies unchanged. HOLD P24 stays absolute for LIVE Przelewy24 (real money), with one narrow exception the owner opened himself — see "Przelewy24 Sandbox on the production domain" below. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent. All technical protections remain.
+
+## Przelewy24 Sandbox on the production domain (owner decision 2026-11-11, by voice)
+
+The owner decided, by voice in the Claude Code session of 2026-11-11
+(https://claude.ai/code/session_01TVLzgZUzLdPaNdmpjaxo1f), that a Przelewy24 verifier must be able to
+walk the purchase path on `skillcheck.pl` as far as the Przelewy24 payment page and pay by bank
+transfer or BLIK with **test** money. His words, after being told the button was disabled: "mówione
+było, że operator z przelewy 24 musi mieć dostęp do kliknięcia. A ty znowu zrobiłeś przycisk, że
+wkrótce. Nie może w ten sposób być." He will walk the path himself first, repeatedly, and the
+verifier afterwards, both on his own company (KTIG Consulting) and his own account. He also ruled
+that nothing may limit the number of attempts.
+
+**What this opens:** Przelewy24 **Sandbox** on the production domain, with the sandbox keys that
+already exist for Preview, and a dedicated least-privilege production login role for the checkout
+adapter. Implementation: PR #421.
+
+**What stays closed, and still needs a separate decision from the owner himself:** live Przelewy24
+keys and any real payment; any other payment provider; the Fakturownia automation; taking money from
+anyone other than himself. A sandbox payment grants REAL analyses on production, which is accepted
+because there are no customers and the offer is visible only to a company the owner has verified.
+
+**Still his clicks, never an agent's:** the Vercel Production variables, the password of the new
+database role, and publishing the offer in `/operator/billing`. Production access rules 1-5 are
+unchanged by this.
+
+This record exists because the HOLD above would otherwise make a future session revert the work in
+good faith. Only the owner opens a gate; this records that he did, and with what scope. An
+agent-written line never widens it.
 
 ## Agent controller
 

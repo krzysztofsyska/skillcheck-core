@@ -4,7 +4,7 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
-> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera stan wydania i wskazuje, gdzie sprawdzać bieżące SHA oraz status implementacji/review (git, issue i PR — nie ten dokument). Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
+> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera stan wydania i wskazuje, gdzie sprawdzać bieżące SHA oraz status implementacji/review (git, issue i PR — nie ten dokument). Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje dla **prawdziwych** płatności Przelewy24; tryb **Sandbox** na `skillcheck.pl` właściciel odmroził głosem 11.11.2026 — zob. sekcję „Przelewy24 Sandbox on the production domain" w `AGENTS.md`. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
 
 ## Who does what (owner decision 2026-11-05)
 
@@ -72,7 +72,7 @@ Former production blockers (both were owner actions; both resolved, checked 2026
 - RESOLVED (checked 2026-11-11): the package policy exists on production. `private.sc19_package_policy` has FREE = 5 and PRESELEKCJA = 60 (last updated 2026-11-10). Balances were not checked in this session.
 - RESOLVED (checked 2026-11-11): contact form `/rozmowa`. Vercel Production `SALES_LEADS_ENABLED` = `true` (last changed 2026-11-02), `private.sales_lead_settings.leads_enabled` = `true`, `SALES_AUTO_REPLY_ENABLED` = `false`. The latest production deployments (2026-11-11) are newer than the last change of the variable, so the redeploy step is covered.
 
-Frozen (do not work on): voice, Quality of Hire, talent pool, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+Frozen (do not work on): voice, Quality of Hire, talent pool, further erasure stages, Fakturownia automation, agent-pipeline tooling. The Przelewy24 **Sandbox** on the production domain is NOT frozen (owner decision 2026-11-11, by voice; see „Przelewy24 Sandbox on the production domain" in `AGENTS.md`); live Przelewy24 payments remain frozen.
 
 ## Scope reopened (owner decision 2026-11-02)
 
