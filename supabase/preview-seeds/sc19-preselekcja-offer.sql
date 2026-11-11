@@ -177,8 +177,9 @@ begin
   update private.sc19_payment_offers set active = true, approved = true
     where id = 'preselekcja-60-2026-11-r3' and not (active and approved);
 
-  -- A preview database that received the earlier ASCII revision stops offering
-  -- it. The row stays: it is undeletable and a paid order would reference it.
+  -- A preview database that received an earlier revision (the ASCII one, or r2
+  -- whose terms text v3 corrects) stops offering it. The rows stay: they are
+  -- undeletable and a paid order would reference them.
   update private.sc19_payment_offers set active = false, approved = false
     where id = any(superseded) and (active or approved);
 
