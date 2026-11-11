@@ -12,6 +12,13 @@ export const sc19OperatorNotices = {
   trial_approved: 'Firma zweryfikowana. Właściciel może teraz aktywować FREE w zakładce Pakiety.',
   paid_granted: 'Pakiet PRESELEKCJA przydzielony. Ponowne użycie tego samego numeru rozliczenia nic nie doda.',
   auto_free_saved: 'Ustawienie automatycznego FREE zapisane. Dotyczy kolejnych aktywacji.',
+  offer_published: 'Oferta PRESELEKCJA opublikowana. Zweryfikowana firma widzi teraz pakiet, cenę i regulamin na stronie zakupu.',
+  offer_catalog_mismatch: 'Nic nie opublikowano: cena albo liczba CV w cenniku nie zgadza się z ofertą. Najpierw uzgodnij cennik.',
+  offer_catalog_missing: 'Nic nie opublikowano: w cenniku nie ma opublikowanej wersji z pakietem PRESELEKCJA.',
+  offer_not_sellable: 'Nic nie opublikowano: cennik oznacza ten pakiet jako niedostępny do kupienia.',
+  offer_policy_mismatch: 'Nic nie opublikowano: liczba analiz w pakiecie PRESELEKCJA jest inna niż liczba sprzedawana w ofercie. Ustaw ją wyżej na tej stronie.',
+  offer_expired: 'Nic nie opublikowano: ta wersja oferty straciła ważność. Potrzebna jest nowa, przejrzana wersja — zgłoś to zespołowi.',
+  offer_revision_differs: 'Nic nie opublikowano: pod tym identyfikatorem jest już oferta o innych warunkach. Zgłoś to zespołowi — potrzebny jest nowy numer wersji.',
   nip_released: 'NIP zwolniony. Firma, która go naprawdę reprezentuje, może teraz aktywować FREE. Przyznanych analiz nie odebrano.',
   nip_not_taken: 'Ten NIP nie jest zajęty — nie ma czego zwalniać.',
   release_reason: 'Podaj powód zwolnienia (8–300 znaków): co sprawdzono i kiedy.',
@@ -68,6 +75,16 @@ export function parseGrantForm(form: FormData) {
 
 export function sc19OperatorError(error: { code?: string; message?: string }): Sc19OperatorNotice {
   const message = error.message ?? '';
+  // SC-019 offer publication. Each refusal says what to fix; none of them is a
+  // reason to retry the same click, so they are never folded into 'failed'.
+  if (message.includes('sc19_offer_catalog_mismatch')) return 'offer_catalog_mismatch';
+  if (message.includes('sc19_offer_catalog_not_sellable')) return 'offer_not_sellable';
+  if (message.includes('sc19_offer_catalog_missing')) return 'offer_catalog_missing';
+  if (message.includes('sc19_offer_policy_mismatch')) return 'offer_policy_mismatch';
+  if (message.includes('sc19_offer_policy_missing')) return 'missing_policy';
+  if (message.includes('sc19_offer_revision_expired')) return 'offer_expired';
+  if (message.includes('sc19_offer_stored_revision_differs')) return 'offer_revision_differs';
+  if (message.includes('sc19_offer_publication_not_unique')) return 'failed';
   if (message.includes('sc19_invalid_nip')) return 'invalid_nip';
   if (message.includes('sc19_reference_conflict')) return 'reference_conflict';
   if (message.includes('sc19_missing_paid_policy')) return 'missing_policy';

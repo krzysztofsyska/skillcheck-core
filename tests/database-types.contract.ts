@@ -80,6 +80,7 @@ type ExpectedFunctions =
   | "sc19_checkout_offers"
   | "sc19_operator_companies" | "sc19_operator_package_policy" | "sc19_operator_set_package_policy"
   | "sc19_operator_approve_trial" | "sc19_operator_grant_paid"
+  | "sc19_operator_published_offer" | "sc19_operator_publish_offer"
   | "sc19_catalog_order_options" | "sc19_catalog_orders" | "sc19_catalog_entitlements"
   | "sc19_create_catalog_order" | "sc19_cancel_catalog_order" | "sc19_settle_catalog_order"
   | "sc19_auto_claim_trial" | "sc19_auto_record_failure" | "sc19_auto_free_precheck"
