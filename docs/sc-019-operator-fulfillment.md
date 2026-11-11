@@ -53,8 +53,10 @@ usuwa tylko funkcje; zapisane zatwierdzenia, polityka i salda zostają.
 - Przydział PRESELEKCJI nie zapisuje identyfikatora operatora (dziennik M13 ma tylko
   `reference`). Dodanie kolumny audytowej zmienia sygnaturę inwentarza i wymaga R8 —
   osobne zadanie L3.
-- Płatności online (Przelewy24/Fakturownia) nadal wyłączone: `resolveSc19PaymentRuntime`
-  zwraca `null`. Ten panel obsługuje decyzję właściciela z 2026-10-24: PRESELEKCJA na
+- Płatności online (Fakturownia i **prawdziwe** Przelewy24) nadal wyłączone. Od 11.11.2026
+  `resolveSc19PaymentRuntime` zwraca runtime także na produkcji, ale **wyłącznie** w trybie
+  Sandbox Przelewy24 i tylko gdy właściciel ustawi zmienne produkcyjne (PR #421, decyzja
+  właściciela 2026-11-11 — zob. `AGENTS.md`). Bez nich nadal `null`. Ten panel obsługuje decyzję właściciela z 2026-10-24: PRESELEKCJA na
   fakturę, przydział przez operatora po zaksięgowaniu wpłaty.
 
 ## Kolejność uruchomienia (wymaga zgody właściciela na produkcję)
