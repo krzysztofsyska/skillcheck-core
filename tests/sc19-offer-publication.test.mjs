@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPreviewSeeds, assertCurrentInventory, bootMigrationDatabase } from './helpers/sc19-migration-fixture.mjs';
+import { applyPreviewSeeds, assertCurrentInventory, bootMigrationDatabase,
+  renderPreviewSeed } from './helpers/sc19-migration-fixture.mjs';
 import { readFile } from 'node:fs/promises';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 
@@ -428,4 +429,51 @@ test('re-applying the preview seed over the r2 offer leaves only r3', async t =>
   assert.equal(live[0].terms_md5, REVISION.termsMd5,
     'the seed and private.sc19_offer_revision() publish the same terms, byte for byte');
   assert.equal(live[0].terms_length, REVISION.termsLength);
+});
+
+// A purchasable offer whose id no list in the seed mentions. The seed used to
+// withdraw from a hand-maintained array of earlier ids, so an id nobody wrote
+// down survived and the Preview checkout showed TWO purchasable offers; its
+// closing guard only refused zero. Both halves are fixed: withdrawal is by
+// identity against the published id, and the guard refuses anything but one.
+const plantedUnlisted = db => db.query(`insert into private.sc19_payment_offers(id,revision,plan,
+  active,approved,amount_minor,currency,credits,terms_revision,terms_text,valid_until_ms)
+  values('preselekcja-60-2026-11-r9','preselekcja-60-v9','PRESELEKCJA',true,true,
+    30000,'PLN',60,'preselekcja-terms-2026-11-v9','Warunki rewizji, ktorej nikt nie wypisal',$1)`,
+  [String(REVISION.validUntilMs)]);
+
+test('the preview seed withdraws a purchasable offer no list names, not only the ones it remembers', async t => {
+  const { db, h } = await ready(t);
+  await plantedUnlisted(db);
+  assert.deepEqual((await purchasable(db)).map(o => o.id), ['preselekcja-60-2026-11-r9'],
+    'the planted offer really is purchasable before the seed runs');
+  await applyPreviewSeeds(db);
+  await h.asAdmin();
+  const live = await purchasable(db);
+  assert.deepEqual(live.map(o => o.id), [REVISION.offerId],
+    'exactly one purchasable offer: an unlisted revision does not survive the seed');
+  assert.equal(live[0].terms_md5, REVISION.termsMd5);
+  assert.deepEqual((await rows(db, `select active, approved, terms_revision
+    from private.sc19_payment_offers where id='preselekcja-60-2026-11-r9'`))[0],
+    { active: false, approved: false, terms_revision: 'preselekcja-terms-2026-11-v9' },
+    'the immutable row keeps its own terms and is only deactivated');
+});
+
+test('the preview seed refuses to finish with two purchasable offers', async t => {
+  const { db, h } = await ready(t);
+  await plantedUnlisted(db);
+  // The withdrawal removed as a mutation, exactly the damage the old `superseded`
+  // list caused by omission. The guard, not the list, must stop it.
+  const seed = await renderPreviewSeed();
+  const broken = seed.replace(`  update private.sc19_payment_offers set active = false, approved = false
+    where id <> offer_id and (active or approved);`, '');
+  assert.notEqual(broken, seed, 'the withdrawal statement must be substitutable');
+  await db.query('reset role');
+  await assert.rejects(db.query(broken), message('sc19_preview_seed_not_exactly_one_offer'));
+  // The seed opens its own transaction, so the refusal leaves it aborted.
+  await db.query('rollback');
+  await h.asAdmin();
+  // It raised inside the transaction the seed opens, so nothing was published.
+  assert.deepEqual((await purchasable(db)).map(o => o.id), ['preselekcja-60-2026-11-r9'],
+    'a refused seed leaves the database as it found it');
 });

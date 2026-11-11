@@ -71,11 +71,13 @@ declare
   production_ref constant text := 'wsvjawuikxfzjyivxgsu';
   -- 2027-12-31T23:59:59Z, the validity this offer revision was approved with.
   offer_valid_until constant bigint := 1830297599000;
-  -- Every offer id this seed has ever issued, so a Preview database that already
-  -- received the earlier ASCII revision (…-2026-11) or the earlier terms revision
-  -- (…-r2, whose terms text is corrected in v3) ends with exactly one purchasable
-  -- offer. Those rows are immutable: they are only deactivated, never rewritten.
-  superseded constant text[] := array['preselekcja-60-2026-11', 'preselekcja-60-2026-11-r2'];
+  -- The one revision this seed publishes. Everything else purchasable is
+  -- withdrawn by identity against this id, never from a hand-maintained list of
+  -- earlier ids: a list only withdraws what somebody remembered to add to it,
+  -- and the revision before this one was missing from it. This is the same
+  -- `id <> rev.offer_id` rule public.sc19_operator_publish_offer() uses, so both
+  -- routes to a Preview database leave the same single purchasable offer.
+  offer_id constant text := 'preselekcja-60-2026-11-r3';
 begin
   -- SECOND LINE OF DEFENCE: the project this run is aimed at, NOT the data it
   -- finds there.
@@ -129,21 +131,23 @@ begin
   -- holds for PRESELEKCJA, and the offer row below carries `credits` in a column
   -- that is immutable once issued, so the two cannot be reconciled afterwards.
   -- The offer is therefore not published while the stored quota differs from the
-  -- 60 this revision was approved for, and anything this seed already published
+  -- 60 this revision was approved for, and every offer already in the database
   -- is withdrawn.
   if (select credits from private.sc19_package_policy where plan = 'PRESELEKCJA') is distinct from 60 then
+    -- Nothing may stay purchasable: every revision this seed could have issued
+    -- sells 60 analyses, and the stored quota is not 60.
     update private.sc19_payment_offers set active = false, approved = false
-      where id = any(superseded || array['preselekcja-60-2026-11-r3']) and (active or approved);
+      where active or approved;
     raise notice 'sc19-preselekcja-offer: stored PRESELEKCJA quota is not 60; the 60 CV / 300 zl offer is NOT published and nothing this seed issued is purchasable';
     return;
   end if;
 
   -- An expired revision has nothing left to publish. Report and finish, so a
   -- fresh preview database can still be built after 2027-12-31, and withdraw
-  -- anything this seed published so no reader that ignores valid_until_ms sees it.
+  -- every offer so no reader that ignores valid_until_ms sees one.
   if offer_valid_until <= (extract(epoch from now()) * 1000)::bigint then
     update private.sc19_payment_offers set active = false, approved = false
-      where id = any(superseded || array['preselekcja-60-2026-11-r3']) and (active or approved);
+      where active or approved;
     raise notice 'sc19-preselekcja-offer: the PRESELEKCJA offer revision expired at %, nothing is published; issue a new reviewed revision with an owner-approved validity', to_timestamp(offer_valid_until / 1000.0);
     return;
   end if;
@@ -154,7 +158,7 @@ begin
     amount_minor, currency, credits,
     terms_revision, terms_text, valid_until_ms)
   values (
-    'preselekcja-60-2026-11-r3', 'preselekcja-60-v3', 'PRESELEKCJA', true, true,
+    offer_id, 'preselekcja-60-v3', 'PRESELEKCJA', true, true,
     30000, 'PLN', 60,
     'preselekcja-terms-2026-11-v3',
     'PRESELEKCJA — jednorazowy pakiet 60 analiz CV za 300,00 zł brutto '
@@ -175,27 +179,38 @@ begin
   -- Re-run after a manual deactivation on preview: the row already exists, so the
   -- INSERT above did nothing and the two mutable flags are set here instead.
   update private.sc19_payment_offers set active = true, approved = true
-    where id = 'preselekcja-60-2026-11-r3' and not (active and approved);
+    where id = offer_id and not (active and approved);
 
-  -- A preview database that received an earlier revision (the ASCII one, or r2
-  -- whose terms text v3 corrects) stops offering it. The rows stay: they are
-  -- undeletable and a paid order would reference them.
+  -- Every other revision a preview database may hold (the ASCII one, r2 whose
+  -- terms text v3 corrects, or anything a Preview walk left behind) stops being
+  -- offered. Withdrawn by identity, not from a list, so an id nobody wrote down
+  -- cannot survive this. The rows stay: they are undeletable and a paid order
+  -- would reference them.
   update private.sc19_payment_offers set active = false, approved = false
-    where id = any(superseded) and (active or approved);
+    where id <> offer_id and (active or approved);
 
   select count(*)::integer into seeded_offer from private.sc19_payment_offers
-    where plan = 'PRESELEKCJA' and approved and active
-      and credits = 60 and amount_minor = 30000 and currency = 'PLN'
+    where approved and active
       and valid_until_ms > (extract(epoch from now()) * 1000)::bigint;
   -- Reached only when this revision is in date and the stored quota matches, so
-  -- nothing purchasable here really is a broken seed, not an expired offer.
-  if seeded_offer = 0 then
+  -- anything but exactly one purchasable offer here really is a broken seed, not
+  -- an expired offer. Two is as wrong as none: a second purchasable offer would
+  -- show the customer a choice nobody approved.
+  if seeded_offer <> 1 then
+    raise exception 'sc19_preview_seed_not_exactly_one_offer' using errcode = '55000',
+      detail = format('%s purchasable offers after the seed; expected exactly 1.', seeded_offer);
+  end if;
+  -- And the one that survived is this revision, with the approved economics.
+  if not exists (select 1 from private.sc19_payment_offers
+    where id = offer_id and plan = 'PRESELEKCJA' and approved and active
+      and credits = 60 and amount_minor = 30000 and currency = 'PLN'
+      and valid_until_ms > (extract(epoch from now()) * 1000)::bigint) then
     raise exception 'sc19_preview_seed_no_purchasable_offer' using errcode = '55000';
   end if;
 
   -- The terms the customer accepts must not silently lose Polish letters.
   if exists (select 1 from private.sc19_payment_offers
-    where id = 'preselekcja-60-2026-11-r3' and terms_text !~ '[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]') then
+    where id = offer_id and terms_text !~ '[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]') then
     raise exception 'sc19_preview_seed_terms_diacritics_missing' using errcode = '55000';
   end if;
 end
