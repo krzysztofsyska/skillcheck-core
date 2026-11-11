@@ -63,9 +63,14 @@ Order of work:
 3. Fix blockers; review and merge #228.
 4. Production unblockers (owner switches, see below), then the same walk on Production.
 
+State as of 2026-11-11 (checked by read-only queries; no writes):
+- Release: `main` = `01429af586c487843259d424d9b4ed24e6c6a70c` (merge of PR #266 from `integration`, merged by the owner). 24 migrations were applied to production through `db-migrate-production` (run 43011755458, success) after the owner's approval in `production-approval`. Two production deployments of this SHA are `READY`.
+- Registration consent: version `1.0+r2`, without the voice-calls annex (PR #409, commit `16752f6`).
+- Voice-calls annex withdrawn from publication, archived copy in `docs/legal/withdrawn/v1.0/` (PR #410, commit `6c32302`, owner decision). Reason: § 1 ust. 2–3 of the annex would have taken effect on 2026-11-13 for accounts that never accepted it.
+
 Known production blockers (owner action, give him a direct link and exact clicks):
-- No package policy and no balances on production, so every new AI analysis is refused (`sc19_quota_exhausted`). Set FREE = 5 and PRESELEKCJA = 60 in `/operator/billing`.
-- Contact form `/rozmowa`: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off.
+- RESOLVED (checked 2026-11-11): the package policy exists on production. `private.sc19_package_policy` has FREE = 5 and PRESELEKCJA = 60 (last updated 2026-11-10). Balances were not checked in this session.
+- RESOLVED (checked 2026-11-11): contact form `/rozmowa`. Vercel Production `SALES_LEADS_ENABLED` = `true` (last changed 2026-11-02), `private.sales_lead_settings.leads_enabled` = `true`, `SALES_AUTO_REPLY_ENABLED` = `false`. The latest production deployments (2026-11-11) are newer than the last change of the variable, so the redeploy step is covered.
 
 Frozen (do not work on): voice, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
 
@@ -195,7 +200,9 @@ other gate in this file or in `AGENTS.md`, including ones added after this note 
 list above is illustrative, not exhaustive. A session that finds itself citing this note to skip a
 gate has misread it.
 
-Open security item from the audit (owner only, rule 3): Vercel Production still has `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `POSTGRES_PASSWORD` (checked 2026-11-01). They must be removed and the database password rotated.
+Open security item from the audit (owner only, rule 3):
+- Done: the variables `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL` and `POSTGRES_PASSWORD` are no longer present in Vercel Production (found 2026-11-11 in the project variable list; values not read). The removal date is unknown.
+- Still open: rotation of the database password. It cannot be confirmed from outside, and the owner has not confirmed that it was done.
 
 ## Keep the process light
 
