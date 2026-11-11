@@ -56,7 +56,7 @@ const secretShape = (value: string | undefined) =>
  * is the whole point of the diagnostic. Anything long enough to be a key or a
  * password is reported by length instead, so a value pasted into the wrong
  * variable is never echoed back. */
-const publicShape = (value: string | undefined, max = 64) =>
+export const publicShape = (value: string | undefined, max = 64) =>
   value === undefined ? 'missing' : value === '' ? 'empty' :
     value.length > max || !/^[\x20-\x7E]*$/.test(value) ? `length:${value.length}` : `value:${value}`;
 

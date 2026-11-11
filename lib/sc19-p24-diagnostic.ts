@@ -18,7 +18,22 @@
  * a documented read-only credential check that creates no transaction.
  */
 import { PRZELEWY24_ORIGIN } from './sc19-przelewy24-provider.ts';
-import { sc19SandboxPaymentGate, type Sc19GateRefusal } from './sc19-payment-preview.ts';
+import { publicShape, sc19SandboxPaymentGate, type Sc19GateReason } from './sc19-payment-preview.ts';
+
+/** The deployment gate is not the only thing that can answer 503 before the
+ * provider is ever called: `SC19_PACKAGES_ENABLED` becomes `enabled` in
+ * `lib/sc19-payment-preview-runtime.ts`, then `checkoutEnabled` in
+ * `lib/sc19-payments.ts`, and `lib/sc19-payment-http.ts` refuses on it. It is a
+ * runtime switch, not a gate condition, so it is checked HERE and never inside
+ * `sc19…PaymentGate()`: those decisions must stay exactly what #421 reviewed. */
+export type Sc19DiagnosticReason = Sc19GateReason | 'packages_flag';
+export type Sc19DiagnosticRefusal = Readonly<{ reason: Sc19DiagnosticReason; shape: string }>;
+
+/** `null` when packages are switched on. Shared by the rendered panel and the
+ * server action, so the page and the probe can never disagree. */
+export const sc19PackagesRefusal = (env: NodeJS.ProcessEnv): Sc19DiagnosticRefusal | null =>
+  env.SC19_PACKAGES_ENABLED === 'true' ? null
+    : { reason: 'packages_flag', shape: publicShape(env.SC19_PACKAGES_ENABLED, 16) };
 
 /** How the operator's API answered a read-only credential check.
  *  ok           — the POS id and API key are accepted (CRC is NOT checked by it)
@@ -28,8 +43,9 @@ import { sc19SandboxPaymentGate, type Sc19GateRefusal } from './sc19-payment-pre
 export type Sc19P24ProbeOutcome = 'ok' | 'unauthorized' | 'http' | 'unreachable';
 export type Sc19P24Probe = Readonly<{ outcome: Sc19P24ProbeOutcome; status: number | null }>;
 export type Sc19P24Diagnostic = Readonly<{
-  /** `null` when the gate resolved: the payment runtime exists on this deployment. */
-  refusal: Sc19GateRefusal | null;
+  /** `null` when nothing in the configuration refuses: the payment runtime exists
+   * on this deployment AND checkout is switched on. */
+  refusal: Sc19DiagnosticRefusal | null;
   probe: Sc19P24Probe | null;
 }>;
 
@@ -63,16 +79,21 @@ export async function sc19P24CredentialProbe(
   return { outcome: 'http', status };
 }
 
-/** The whole picture for one deployment. The gate verdict is the real one: it is
- * the same function the request path calls, so the panel can never claim the
- * runtime is fine while checkout refuses. The probe runs only when the gate
- * resolved, because without a configuration there are no credentials to check. */
+/** The whole picture for one deployment, in the order the request path refuses:
+ * first the deployment gate — the same function the request path calls, so the
+ * panel can never claim the runtime is fine while checkout refuses — then the
+ * `SC19_PACKAGES_ENABLED` switch, which also answers 503 before the provider is
+ * reached. The probe runs only once BOTH pass: sending an operator to look at
+ * Przelewy24 for a configuration fault is the confusion this module exists to
+ * end, and without a configuration there are no credentials to check anyway. */
 export async function sc19P24Diagnostic(
   env: NodeJS.ProcessEnv, fetchImpl?: ProbeFetch,
 ): Promise<Sc19P24Diagnostic> {
   // No request origin: the panel asks about the deployment, not about one request.
   const gate = sc19SandboxPaymentGate(env);
   if (!gate.ok) return { refusal: gate.refusal, probe: null };
+  const packages = sc19PackagesRefusal(env);
+  if (packages) return { refusal: packages, probe: null };
   return { refusal: null, probe: await sc19P24CredentialProbe(gate.config, fetchImpl) };
 }
 

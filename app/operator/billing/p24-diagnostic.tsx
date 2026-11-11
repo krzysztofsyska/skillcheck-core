@@ -1,5 +1,6 @@
 import 'server-only';
-import { sc19SandboxPaymentGate, type Sc19GateReason } from '../../../lib/sc19-payment-preview';
+import { sc19SandboxPaymentGate } from '../../../lib/sc19-payment-preview';
+import { sc19PackagesRefusal, type Sc19DiagnosticReason } from '../../../lib/sc19-p24-diagnostic';
 import styles from '../sales/sales.module.css';
 import { checkP24 } from './actions';
 
@@ -12,7 +13,7 @@ import { checkP24 } from './actions';
  * and for the handful of variables that are public by construction — the Vercel
  * environment, the branch, the sandbox flag, the NEXT_PUBLIC_* addresses — the
  * value itself, because that is what names a typo. */
-const reasons: Record<Sc19GateReason, { what: string; fix: string }> = {
+const reasons: Record<Sc19DiagnosticReason, { what: string; fix: string }> = {
   not_vercel: { what: 'to nie jest wdrożenie na Vercelu (zmienna VERCEL)',
     fix: 'płatności działają tylko na wdrożeniu Vercela — nic do ustawienia' },
   vercel_env: { what: 'środowisko wdrożenia (VERCEL_ENV) nie jest ani „production”, ani „preview”',
@@ -37,6 +38,8 @@ const reasons: Record<Sc19GateReason, { what: string; fix: string }> = {
     fix: 'skopiuj klucz CRC z panelu Przelewy24 (sekcja „Moje dane” / konfiguracja) — uwaga na spację na końcu' },
   p24_api_key: { what: 'P24_API_KEY jest pusty albo krótszy niż 16 znaków',
     fix: 'skopiuj „klucz do raportów” (API key) z panelu Przelewy24 — uwaga na spację na końcu' },
+  packages_flag: { what: 'SC19_PACKAGES_ENABLED nie ma dokładnej wartości true, więc serwer odmawia płatności jeszcze przed połączeniem z Przelewy24',
+    fix: 'ustaw SC19_PACKAGES_ENABLED na true — małymi literami, bez spacji — i wdróż ponownie' },
   database_url: { what: 'adres bazy dla płatności (SC19_P24_CHECKOUT_DATABASE_URL na produkcji) nie zgadza się z oczekiwanym',
     fix: 'podpowiedź po dwukropku mówi, które części adresu są nie takie: username to nazwa roli, port musi być 6543, query oznacza doklejone parametry' },
 };
@@ -54,7 +57,10 @@ export default function P24Diagnostic({ probe }: { probe?: string }) {
   // The same function the request path calls, with no request origin: this says
   // whether the deployment can take payments at all, not whether one click could.
   const gate = sc19SandboxPaymentGate(process.env);
-  const refusal = gate.ok ? null : gate.refusal;
+  // The same two checks, in the same order, as the server action behind the
+  // button: a panel that said "wszystkie warunki przechodzą" while the server
+  // refuses would send the operator to Przelewy24 for a configuration fault.
+  const refusal = gate.ok ? sc19PackagesRefusal(process.env) : gate.refusal;
   const known = refusal && reasons[refusal.reason];
   return (
     <section className={styles.card}>
@@ -79,7 +85,9 @@ export default function P24Diagnostic({ probe }: { probe?: string }) {
             Nie zakłada żadnej transakcji i nikogo nie obciąża.</p>
         </>
       )}
-      {probe ? <p><strong>Wynik sprawdzenia:</strong> {probes[probe] ?? probes.unknown}</p> : null}
+      {/* The probe result travels in the query string, so a reloaded or bookmarked
+          address could otherwise print "klucze przyjęte" under a fresh refusal. */}
+      {probe && !refusal ? <p><strong>Wynik sprawdzenia:</strong> {probes[probe] ?? probes.unknown}</p> : null}
       <p>Żadna wartość klucza, hasła ani adresu bazy nie jest tu pokazywana ani zapisywana.</p>
     </section>
   );

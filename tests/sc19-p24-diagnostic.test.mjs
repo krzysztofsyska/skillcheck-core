@@ -6,7 +6,7 @@ import {
   sc19ProductionSandboxPaymentGate, sc19SandboxPaymentConfig, sc19SandboxPaymentGate,
 } from '../lib/sc19-payment-preview.ts';
 import {
-  sc19P24CredentialProbe, sc19P24Diagnostic, sc19P24DiagnosticCode,
+  sc19P24CredentialProbe, sc19P24Diagnostic, sc19P24DiagnosticCode, sc19PackagesRefusal,
 } from '../lib/sc19-p24-diagnostic.ts';
 
 const ref = 'orbyscrupgnupifzlqxp';
@@ -19,6 +19,7 @@ const productionEnv = Object.freeze({
   NEXT_PUBLIC_SUPABASE_URL: `https://${productionRef}.supabase.co`,
   NEXT_PUBLIC_SITE_URL: 'https://skillcheck.pl',
   P24_MERCHANT_ID: '428647', P24_POS_ID: '428647', P24_CRC: CRC, P24_API_KEY: API_KEY,
+  SC19_PACKAGES_ENABLED: 'true',
   SC19_P24_CHECKOUT_DATABASE_URL:
     `postgresql://sc19_p24_checkout.${productionRef}:${PASSWORD}@aws-1-eu-west-1.pooler.supabase.com:6543/postgres`,
 });
@@ -174,6 +175,49 @@ test('the diagnostic probes only once the gate resolved, and its code carries no
     assert.match(code, /^(gate|provider)_[a-z_]{1,40}$/);
     for (const secret of [CRC, API_KEY, PASSWORD]) assert.equal(code.includes(secret), false);
   }
+});
+
+// SC19_PACKAGES_ENABLED is not a gate condition — it is a runtime switch that
+// `lib/sc19-payment-http.ts` refuses on BEFORE the provider is called. A panel
+// that ignored it would say "all conditions pass" and send the operator to
+// Przelewy24 for a configuration fault, which is the confusion this file exists
+// to end (independent review F1 / Codex P2 on PR #425).
+test('the packages switch refuses in the diagnostic, and never inside the gate', async () => {
+  let probed = 0;
+  const fetchImpl = async () => { probed += 1; return { status: 200 }; };
+  for (const [value, shape] of [[undefined, 'missing'], ['', 'empty'], ['True', 'value:True'],
+    ['false', 'value:false'], [API_KEY + API_KEY, `length:${(API_KEY + API_KEY).length}`]]) {
+    const env = { ...productionEnv, SC19_PACKAGES_ENABLED: value };
+    if (value === undefined) delete env.SC19_PACKAGES_ENABLED;
+    assert.deepEqual(sc19PackagesRefusal(env), { reason: 'packages_flag', shape });
+    const result = await sc19P24Diagnostic(env, fetchImpl);
+    assert.deepEqual(result, { refusal: { reason: 'packages_flag', shape }, probe: null });
+    assert.equal(sc19P24DiagnosticCode(result), 'gate_packages_flag');
+    // The deployment gate must stay exactly what #421 reviewed: this flag is not
+    // one of its conditions and must not change its verdict either way.
+    assert.equal(sc19ProductionSandboxPaymentGate(env).ok, true);
+    assert.notEqual(sc19ProductionSandboxPaymentConfig(env), null);
+    for (const secret of [CRC, API_KEY, PASSWORD]) assert.equal(shape.includes(secret), false);
+  }
+  assert.equal(probed, 0, 'a refused switch must not make the operator probe Przelewy24');
+  assert.equal(sc19PackagesRefusal(productionEnv), null);
+  // A gate refusal still wins: it is the first thing the request path refuses on.
+  const both = await sc19P24Diagnostic({ ...productionEnv, SC19_PACKAGES_ENABLED: 'no', P24_SANDBOX: 'no' }, fetchImpl);
+  assert.equal(both.refusal.reason, 'sandbox_flag');
+  assert.equal(probed, 0);
+});
+
+// The rendered panel and the server action behind the button must refuse on the
+// same two things in the same order, or the page contradicts its own button.
+test('the panel asks the same two questions as the server action', async () => {
+  const panel = await readFile(new URL('../app/operator/billing/p24-diagnostic.tsx', import.meta.url), 'utf8');
+  assert.match(panel, /const refusal = gate\.ok \? sc19PackagesRefusal\(process\.env\) : gate\.refusal;/);
+  assert.match(panel, /packages_flag: \{ what:/);
+  // A stale ?p24= code must not be printed next to a fresh refusal.
+  assert.match(panel, /\{probe && !refusal \?/);
+  // The operator page must outlive its own 8 s probe plus two Supabase round trips.
+  const page = await readFile(new URL('../app/operator/billing/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /export const maxDuration = 60;/);
 });
 
 // A killed invocation never reaches our error handling: the client gets the

@@ -11,6 +11,12 @@ import OperatorCatalogOrders from './catalog-orders';
 import P24Diagnostic from './p24-diagnostic';
 
 export const dynamic = 'force-dynamic';
+// SC-P24-DIAG-001: the checkP24 server action runs in this route segment and does
+// two Supabase round trips plus an 8 s probe. On the platform default (10 s / 15 s)
+// the one outcome the operator most needs — no answer from the payment operator —
+// is the likeliest to be killed, and a killed invocation answers with HTML and no
+// sentence at all.
+export const maxDuration = 60;
 export const metadata: Metadata = { title: 'Pakiety firm | SkillCheck', robots: { index: false, follow: false } };
 
 const dates = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Warsaw' });
