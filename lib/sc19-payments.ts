@@ -61,10 +61,12 @@ export interface PaymentStore {
 export interface PaymentProvider {
   /** Reuse the exact same idempotency key for retries after timeout/restart.
    * Never create a second charge. After the order's checkout deadline this is
-   * called again only when lookupCheckout has positively confirmed that no
-   * session exists for the key AND the order's exact offer revision is still on
-   * sale; the key (and the provider session derived from the order id) is the
-   * same, so it is the one registration that never happened, not a new charge.
+   * called again only when lookupCheckout's session read answered "not found"
+   * for the key AND the order's exact offer revision is still on sale; the key
+   * (and the provider session derived from the order id) is the same, so it is
+   * the one registration that never happened, not a new charge. Even if that
+   * read were wrong, a second URL can never be bound or returned: bindHosted
+   * refuses it with SC19_PAYMENT_SESSION_CONFLICT.
    */
   createCheckout(order: PaymentOrder, idempotencyKey: string): Promise<HostedCheckout>;
   /** READ ONLY: find the original provider session by durable order/key.
@@ -193,13 +195,19 @@ export function createSc19Payments(deps: PaymentDependencies) {
       scope, amountMinor: order.amountMinor, currency: order.currency,
       paymentKind: 'one_time' as const };
   };
-  /** Past the deadline, the provider has POSITIVELY confirmed that no session
-   * exists for this order's key (lookupCheckout throws on any uncertainty). The
-   * provider session id is derived from the order id, so registering now is the
-   * very same registration that never happened: any payment stays attributable
-   * to this one order, and the customer pays the exact snapshot they accepted,
-   * only while that offer revision is still on sale. Re-checked under the row
-   * lock; no provider I/O inside the transaction. */
+  /** Past the deadline, the provider's session read answered "not found" for this
+   * order's key (lookupCheckout throws on any uncertainty). The provider session
+   * id is derived from the order id, so registering now is the very same
+   * registration that never happened: any payment stays attributable to this one
+   * order, and the customer pays the exact snapshot they accepted, only while
+   * that offer revision is still on sale. Even if that read were wrong, a second
+   * URL can never be bound or returned: bindHosted refuses it with
+   * SC19_PAYMENT_SESSION_CONFLICT. Re-checked under the row lock; no provider I/O
+   * inside the transaction.
+   * An order that already HAS a stored link is returned without an offer re-check
+   * (storedCheckout). With timeLimit 0 that link stays payable at its snapshot
+   * price after the offer ends. Accepted for the Sandbox; the owner decides
+   * before any live use. */
   async function reopenAbsentSession(order: PaymentOrder, userId: string):
       Promise<HostedCheckout | { orderId: string; paid: true } | { reopen: PaymentOrder }> {
     return deps.store.transaction(async tx => {

@@ -156,6 +156,9 @@ test('a rejected register is named: wrong CRC/sign vs other rejection, each with
   const other = harness();
   other.api.s.registerReply = reply(400, { error: 'Invalid email', code: 400 });
   await assert.rejects(other.checkout(), named('P24_REGISTER_REJECTED', 400));
+  const design = harness();
+  design.api.s.registerReply = reply(400, { error: 'Session assigned to another design', code: 400 });
+  await assert.rejects(design.checkout(), named('P24_REGISTER_REJECTED', 400));
   const noBody = harness();
   noBody.api.s.registerReply = reply(500, null);
   await assert.rejects(noBody.checkout(), named('P24_REGISTER_REJECTED', 500));

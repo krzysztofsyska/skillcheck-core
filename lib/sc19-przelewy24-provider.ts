@@ -172,7 +172,7 @@ export function createPrzelewy24Provider(deps: Przelewy24ProviderDeps, fetchImpl
       if (existing) return fail('P24_SESSION_EXISTS', r.status);
       // Only classify the provider's message; it is never stored, returned or logged.
       const error = (r.data as { error?: unknown } | null)?.error;
-      return fail(typeof error === 'string' && /crc|sign/i.test(error) ? 'P24_SIGN_REJECTED' : 'P24_REGISTER_REJECTED', r.status);
+      return fail(typeof error === 'string' && /\b(crc|sign(ature)?)\b/i.test(error) ? 'P24_SIGN_REJECTED' : 'P24_REGISTER_REJECTED', r.status);
     },
     async lookupCheckout(order: PaymentOrder, key: string): Promise<HostedCheckout | null> {
       checkOrder(order, key);

@@ -492,3 +492,18 @@ test('a named Przelewy24 failure shows its code; anything else in detail is igno
     assert.equal(h.redirects.length, 0);
   }
 });
+
+// A lost Przelewy24 answer leaves a session behind: retrying cannot help, so the
+// screen says so and names the code instead of the generic "Ponów próbę".
+test('an existing Przelewy24 session says that retrying will not help', async t => {
+  const h = await harness({ checkout: async () => ({ ok:false, status:503,
+    json: async () => ({ error:'SC19_PAYMENT_RETRY', detail:'P24_SESSION_EXISTS' }) }) });
+  t.after(h.close);
+  h.accept();
+  await h.click('Zamawiam');
+  const message = String(h.find('p','pomoc@skillcheck.pl').props.children);
+  assert.match(message, /Ponawianie nie pomoże/);
+  assert.match(message, /kod: P24_SESSION_EXISTS\./);
+  assert.doesNotMatch(message, /Ponów próbę/);
+  assert.equal(h.redirects.length, 0);
+});
