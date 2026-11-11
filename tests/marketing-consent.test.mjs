@@ -303,6 +303,6 @@ test('the privacy policy states the purpose, the basis and the right to withdraw
   assert.match(row, /wycofać w każdej chwili/, 'the right to withdraw');
   assert.match(policy, /nie jest warunkiem rejestracji/);
   // Annex 1 (voice interviews) must not be touched by this change.
-  const annex = readFileSync(new URL('../docs/legal/v1.0/06_Aneks_1_Rozmowy_glosowe.md', import.meta.url), 'utf8');
+  const annex = readFileSync(new URL('../docs/legal/withdrawn/v1.0/06_Aneks_1_Rozmowy_glosowe.md', import.meta.url), 'utf8');
   assert.doesNotMatch(annex, /kontakt handlowy|marketing/i, 'Annex 1 is unchanged');
 });

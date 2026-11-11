@@ -166,7 +166,7 @@ ale **nic z tego nie jest podłączone do aplikacji ani wdrożone**.
 | Panel zatwierdzania planu (React) | `components/voice/VoicePlanApprovalPanel.tsx` |
 | Konfiguracja agenta | `config/retell/skillcheck-interview-v1/agent.json`, `conversation-flow.json` |
 | Testy | `tests/retell-*.test.mjs`, `tests/voice-*.test.mjs` (kilkanaście plików, przechodzą w CI) |
-| Aneks prawny | `docs/legal/v1.0/06_Aneks_1_Rozmowy_glosowe.md`, `public/legal/06_Aneks_1_Rozmowy_glosowe_v1.0.docx` |
+| Aneks prawny (wycofany z publikacji 11.11.2026, kopia archiwalna) | `docs/legal/withdrawn/v1.0/06_Aneks_1_Rozmowy_glosowe.md`, `docs/legal/withdrawn/v1.0/06_Aneks_1_Rozmowy_glosowe_v1.0.docx` |
 
 ### Dlaczego to nie działa
 
