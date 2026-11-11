@@ -4,7 +4,7 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
-> **Bieżący punkt wejścia — SC-CONTEXT (8.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera aktualne SHA, status implementacji/review i HOLD wydania. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
+> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera stan wydania i wskazuje, gdzie sprawdzać bieżące SHA oraz status implementacji/review (git, issue i PR — nie ten dokument). Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
 
 ## Who does what (owner decision 2026-11-05)
 
@@ -63,11 +63,16 @@ Order of work:
 3. Fix blockers; review and merge #228.
 4. Production unblockers (owner switches, see below), then the same walk on Production.
 
-Known production blockers (owner action, give him a direct link and exact clicks):
-- No package policy and no balances on production, so every new AI analysis is refused (`sc19_quota_exhausted`). Set FREE = 5 and PRESELEKCJA = 60 in `/operator/billing`.
-- Contact form `/rozmowa`: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off.
+State as of 2026-11-11 (checked by read-only queries; no writes):
+- Release: `main` = `01429af586c487843259d424d9b4ed24e6c6a70c` (merge of PR #266 from `integration`, merged by the owner). 24 migrations were applied to production through `db-migrate-production` (run 43011755458, success) after the owner's approval in `production-approval`. Two production deployments of this SHA are `READY`.
+- Registration consent: version `1.0+r2`, without the voice-calls annex (PR #409, commit `16752f6`).
+- Voice-calls annex withdrawn from publication, archived copy in `docs/legal/withdrawn/v1.0/` (PR #410, commit `6c32302`, owner decision). Reason: § 1 ust. 2–3 of the annex would have taken effect on 2026-11-13 for accounts that never accepted it.
 
-Frozen (do not work on): voice, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+Former production blockers (both were owner actions; both resolved, checked 2026-11-11; history kept):
+- RESOLVED (checked 2026-11-11): the package policy exists on production. `private.sc19_package_policy` has FREE = 5 and PRESELEKCJA = 60 (last updated 2026-11-10). Balances were not checked in this session.
+- RESOLVED (checked 2026-11-11): contact form `/rozmowa`. Vercel Production `SALES_LEADS_ENABLED` = `true` (last changed 2026-11-02), `private.sales_lead_settings.leads_enabled` = `true`, `SALES_AUTO_REPLY_ENABLED` = `false`. The latest production deployments (2026-11-11) are newer than the last change of the variable, so the redeploy step is covered.
+
+Frozen (do not work on): voice, Quality of Hire, talent pool, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
 
 ## Scope reopened (owner decision 2026-11-02)
 
@@ -98,7 +103,7 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
    Also removed from the packages table and from the public calculator demo, where it was still
    shown as available. Revisit when a customer actually asks for it — the minimal 3–4 day version
    is kept in the plan under "MODUŁ B". `SC-022` stays reserved for it; never reuse `SC-021`,
-   which is the frozen AI gateway work (`feat/sc-021-*` branches).
+   which is the SC-021 AI gateway work (`feat/sc-021-*` branches), odmrożona 2026-11-09 — zob. sekcję „SC-020 and SC-021 reopened" niżej.
 
 4. **SC-PRICING-W1…W4** — the internal pricing calculator, ending in the public price list reading
    from one catalog. Owner decision 2026-11-02: "żeby prace nad tym poszły", replacing the earlier
@@ -115,7 +120,8 @@ answer: *"Tak, budowa weryfikacji i assessment center jest moją decyzją i trze
 robić."* Assessment Center is therefore removed from the frozen list and is in scope alongside
 the modules listed above in this section (SC-014, SC-015, SC-PRICING). WERYFIKACJA was already in
 scope via SC-014 and SC-015; this confirms it. Nothing else moves: the voicebot, interview analysis,
-Quality of Hire, talent pool, white-label and the Przelewy24/Fakturownia automation stay frozen.
+Quality of Hire, talent pool and the Przelewy24/Fakturownia automation stay frozen. (White-label
+was reopened on 2026-11-09 — see the „SC-020 and SC-021 reopened" section below.)
 
 For the record, the sequence was: #272 merged into `integration` that morning and its migration
 `20261106120000_sc_ac_inventory_r13.sql` was applied on the Preview database (test data only)
@@ -195,7 +201,9 @@ other gate in this file or in `AGENTS.md`, including ones added after this note 
 list above is illustrative, not exhaustive. A session that finds itself citing this note to skip a
 gate has misread it.
 
-Open security item from the audit (owner only, rule 3): Vercel Production still has `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `POSTGRES_PASSWORD` (checked 2026-11-01). They must be removed and the database password rotated.
+Open security item from the audit (owner only, rule 3):
+- Done: the variables `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL` and `POSTGRES_PASSWORD` are no longer present in Vercel Production (found 2026-11-11 in the project variable list; values not read). The removal date is unknown.
+- Still open: rotation of the database password. It cannot be confirmed from outside, and the owner has not confirmed that it was done.
 
 ## Keep the process light
 

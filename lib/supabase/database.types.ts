@@ -684,6 +684,31 @@ export type Database = {
         Returns: { plan: 'FREE' | 'PRESELEKCJA'; credits: number; updated_at: string }[];
       };
       sc19_operator_set_package_policy: { Args: { target_plan: 'FREE' | 'PRESELEKCJA'; target_credits: number }; Returns: number };
+      /** SC-019 offer publication. The reviewed offer (price, CV count, terms) is a
+       * constant in the migration, so neither RPC takes an economic argument: the
+       * operator decides whether to publish, never what. `published_*` is null
+       * until something is published; `refusal` names why publishing is refused. */
+      sc19_operator_published_offer: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          published_offer_id: string | null; published_revision: string | null;
+          published_terms_revision: string | null; published_amount_minor: number | null;
+          published_credits: number | null; published_valid_until_ms: number | null;
+          published_at: string | null; expires_in_days: number | null; expiring_soon: boolean | null;
+          revision_offer_id: string; revision_revision: string; revision_terms_revision: string;
+          revision_amount_minor: number; revision_credits: number; revision_valid_until_ms: number;
+          catalog_gross_minor: number | null; catalog_cv_included: number | null;
+          catalog_sellable: boolean | null; policy_credits: number | null;
+          publishable: boolean; refusal: string | null;
+        }[];
+      };
+      sc19_operator_publish_offer: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          offer_id: string; revision: string; amount_minor: number; credits: number;
+          terms_revision: string; valid_until_ms: number; published_at: string; withdrawn: number;
+        }[];
+      };
       sc19_operator_approve_trial: { Args: { target_company: string; supplied_nip: string; proof: string }; Returns: string };
       sc19_operator_grant_paid: { Args: { target_company: string; settlement_reference: string }; Returns: number };
       sc19_catalog_order_options: { Args: { target_company: string }; Returns: Json };
