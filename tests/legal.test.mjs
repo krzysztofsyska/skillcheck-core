@@ -118,7 +118,9 @@ test('the voice annex is not published: no page, no download, no registry entry'
 test('nothing in code, content, docs, public or config links to the voice annex', () => {
   const roots = ['app', 'lib', 'content', 'docs', 'supabase', 'scripts', 'tools', 'config', 'public'];
   const textFile = (p) => /\.(tsx?|mjs|cjs|js|json|md|html|css|sql|txt|xml|ya?ml)$/i.test(p);
-  const skip = (p) => p.startsWith('docs/legal/withdrawn'); // the archive itself
+  // The archive itself, and the generated promotion manifest: it records the paths of every file a release
+  // touched, including the annex route that #410 deleted. That is history, not a link to a published page.
+  const skip = (p) => p.startsWith('docs/legal/withdrawn') || p === 'docs/release/promotion-manifest.json';
   const linkPattern = /aneks-rozmowy-glosowe|aneks-1-|LEGAL_DOCUMENTS\.aneks1|documentKey=["{']aneks1|legal\/06_Aneks|(?:docs|public)\/legal\/(?:v\d[\w.]*\/)?06_Aneks|\baneks1\s*:/i;
   const hits = roots.flatMap((r) => walk(r, skip)).filter(textFile)
     .filter((p) => linkPattern.test(readFileSync(repo(p), 'utf8')));
