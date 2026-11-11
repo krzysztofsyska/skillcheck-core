@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { companyAccess } from '../../../../../lib/company-access';
-import { sc19PreviewPaymentConfig } from '../../../../../lib/sc19-payment-preview.ts';
+import { sc19SandboxPaymentConfig } from '../../../../../lib/sc19-payment-preview.ts';
 import Checkout from './checkout';
 import CatalogOrders from './catalog-orders';
 export default async function CheckoutPage({params,searchParams}: {params: Promise<{companyId: string}>;searchParams:Promise<{p24?:string|string[];recruitmentId?:string|string[];catalogStatus?:string}>}) {
@@ -11,7 +11,7 @@ export default async function CheckoutPage({params,searchParams}: {params: Promi
   // guard it would render a full priced order summary for a package that is not
   // being sold yet.
   const enabled=process.env.SC19_PACKAGES_ENABLED==='true';
-  const sandbox = !!sc19PreviewPaymentConfig(process.env);
+  const sandbox = !!sc19SandboxPaymentConfig(process.env);
   const query=await searchParams;
   const returnId = query?.p24;
   // Never follow a caller-provided URL. Reconstruct an in-tenant link from a UUID only;

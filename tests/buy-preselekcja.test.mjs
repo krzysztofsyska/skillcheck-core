@@ -298,7 +298,7 @@ async function renderReturnFromCheckout(recruitmentId) {
   const mocks={
     'next/link':{default:({children,...props})=>createElement('a',props,children)},
     '../../../../../lib/company-access':{companyAccess:async()=>({company:{owner_id:OWNER},user:{id:OWNER}})},
-    '../../../../../lib/sc19-payment-preview.ts':{sc19PreviewPaymentConfig:()=>null},
+    '../../../../../lib/sc19-payment-preview.ts':{sc19PreviewPaymentConfig:()=>null,sc19SandboxPaymentConfig:()=>null},
     './checkout':{default:({recruitmentId})=>createElement('div',{'data-recruitment':recruitmentId},'Oferta')},
     './catalog-orders':{default:()=>null},
   };
