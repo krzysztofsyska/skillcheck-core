@@ -3,9 +3,9 @@ import { previewPoolTls } from './sc19-payment-preview-tls.ts';
 import { createClient } from './supabase/server.ts';
 import { composeSc19PaymentRuntime } from './sc19-payment-runtime.ts';
 import { createPrzelewy24Provider, PRZELEWY24_ORIGIN } from './sc19-przelewy24-provider.ts';
-import type { sc19PreviewPaymentConfig } from './sc19-payment-preview.ts';
+import type { sc19SandboxPaymentConfig } from './sc19-payment-preview.ts';
 
-type Config = NonNullable<ReturnType<typeof sc19PreviewPaymentConfig>>;
+type Config = NonNullable<ReturnType<typeof sc19SandboxPaymentConfig>>;
 let pool: Pool | undefined;
 
 export async function previewRuntime(config: Config) {

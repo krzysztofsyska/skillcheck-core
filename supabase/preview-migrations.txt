@@ -64,3 +64,5 @@
 20261110090000_sc021_cost_dashboard.sql
 # SC-019: operator publication of the reviewed PRESELEKCJA offer (functions and grants only; publishes nothing by itself).
 20261111090000_sc19_offer_publication.sql
+# SC-P24: dedicated least-privilege login role for the Przelewy24 sandbox checkout (role, grants and policies only; no password, no data).
+20261111140000_sc19_p24_checkout_role.sql
