@@ -13,6 +13,13 @@ const breakdown=(offer: Offer)=>typeof offer.netMinor==='number'&&typeof offer.v
   :sc19OfferAmounts(offer.amountMinor);
 const verificationPending='Twoja firma czeka na weryfikację — do tego czasu zakupu nie można złożyć. Odświeżenie strony tego nie zmieni. Napisz do nas przez formularz kontaktowy (/rozmowa) albo na pomoc@skillcheck.pl, a potwierdzimy firmę i odblokujemy zamówienie.';
 const paymentsPending='Płatność online jest w trakcie uruchamiania (trwa weryfikacja u operatora płatności Przelewy24). Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
+// The sandbox runs on the production domain too, so that a Przelewy24 verifier can
+// pay with test money (owner decision 2026-11-11). Nothing is charged, but the
+// analyses ARE granted on this account, which is exactly what makes the walk
+// meaningful — so the screen says both, and promises no payment method of its own
+// beyond what the operator's sandbox offers.
+const sandboxNotice='Płatność testowa w Sandboxie Przelewy24: żadne pieniądze nie zostaną pobrane. Analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
+const reconciliationRequired='Tego zamówienia nie można już otworzyć ani potwierdzić automatycznie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy — odblokujemy zamówienie i będziesz mógł złożyć nowe.';
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${companyId.toLowerCase()}:${orderId.toLowerCase()}`;
 export default function Checkout({companyId,recruitmentId,sandbox=false,statusOnly=false}: {companyId:string;recruitmentId?:string;sandbox?:boolean;statusOnly?:boolean}) {
@@ -132,6 +139,12 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
         if(data.error==='SC19_PAYMENTS_DISABLED'){
           setCheckoutAvailable(false);setMessage(paymentsPending);return;
         }
+        // The order exists but its payment session can no longer be opened or
+        // confirmed automatically. Retrying cannot help and the next purchase stays
+        // blocked until we clear this one, so say that instead of "try again".
+        if(data.error==='SC19_PAYMENT_RECONCILIATION_REQUIRED'){
+          setMessage(reconciliationRequired);return;
+        }
         throw Error();
       }
       setOrderId(data.orderId);
@@ -154,7 +167,7 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
   </section>;
   return <section aria-busy={loading||busy}>
     {returnLink}
-    {sandbox&&<p role="note">Płatność testowa w Sandboxie Przelewy24. Środki nie zostaną pobrane.</p>}
+    {sandbox&&<p role="note">{sandboxNotice}</p>}
     <p>Pakiet FREE nie wymaga płatności i nie korzysta z tego formularza.</p>
     {loading ? <p role="status">Wczytuję ofertę…</p> : offers.length>0 ? <>
       <label>Wariant <select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setAccepted(false);}}>
