@@ -80,6 +80,56 @@ test('database errors map to known panel notices', () => {
     'nip_holder_changed']) assert.ok(sc19OperatorNotices[value]);
 });
 
+// SC-019 offer publication. The operator publishes a reviewed offer; he does not
+// draft one. Everything economic or legal about it lives in the database
+// function, so the panel must offer a confirmation and a button and NOTHING an
+// operator could type a price, a CV count or a contract clause into.
+test('the publish-offer form carries no economic or legal input', async () => {
+  const page = await readFile(new URL('../app/operator/billing/page.tsx', import.meta.url), 'utf8');
+  const actions = await readFile(new URL('../app/operator/billing/actions.ts', import.meta.url), 'utf8');
+  const start = page.indexOf('action={publishOffer}');
+  assert.ok(start > 0, 'the panel must offer publication');
+  const fields = page.slice(start, page.indexOf('</form>', start));
+  assert.match(fields, /name="confirm" value="yes" required/, 'publication needs an explicit confirmation');
+  assert.doesNotMatch(fields, /<input(?![^>]*type="checkbox")|<select|<textarea/,
+    'the form must carry no field other than the confirmation checkbox');
+  for (const forbidden of ['amount', 'price', 'cena', 'credits', 'terms', 'regulamin']) {
+    assert.doesNotMatch(fields, new RegExp(`name="[^"]*${forbidden}`, 'i'),
+      `the operator must not be able to supply ${forbidden}`);
+  }
+  // The server action sends no argument either, so a crafted POST cannot smuggle one.
+  const action = actions.slice(actions.indexOf('export async function publishOffer'));
+  assert.match(action.slice(0, action.indexOf('\n}')), /sc19_operator_publish_offer', \{\}/);
+
+  // A failed read must not read as "nothing published": republishing blind is
+  // exactly what the panel is there to prevent.
+  assert.match(page, /offerFailed = Boolean\(offer\.error\)/);
+  // The expiry warning the owner asked for (owner decision 2026-11-11).
+  assert.match(page, /expiring_soon &&/);
+  assert.match(page, /wygasa w ciągu 30 dni/);
+});
+
+test('offer refusals get their own notices, never a bare "try again"', () => {
+  for (const [message, notice] of [
+    ['sc19_offer_catalog_mismatch', 'offer_catalog_mismatch'],
+    ['sc19_offer_catalog_not_sellable', 'offer_not_sellable'],
+    ['sc19_offer_catalog_missing', 'offer_catalog_missing'],
+    ['sc19_offer_policy_mismatch', 'offer_policy_mismatch'],
+    ['sc19_offer_policy_missing', 'missing_policy'],
+    ['sc19_offer_revision_expired', 'offer_expired'],
+    ['sc19_offer_stored_revision_differs', 'offer_revision_differs'],
+  ]) {
+    assert.equal(sc19OperatorError({ code: '55000', message }), notice, message);
+    assert.ok(sc19OperatorNotices[notice], `${notice} needs a message`);
+  }
+  // Every refusal says plainly that nothing was published, so a refused click is
+  // never read as a half-done publication.
+  for (const notice of ['offer_catalog_mismatch', 'offer_catalog_missing', 'offer_not_sellable',
+    'offer_policy_mismatch', 'offer_expired', 'offer_revision_differs']) {
+    assert.match(sc19OperatorNotices[notice], /^Nic nie opublikowano/, notice);
+  }
+});
+
 test('operator panel is gated by the operator check and never reads balances directly', async () => {
   const page = await readFile(new URL('../app/operator/billing/page.tsx', import.meta.url), 'utf8');
   const actions = await readFile(new URL('../app/operator/billing/actions.ts', import.meta.url), 'utf8');

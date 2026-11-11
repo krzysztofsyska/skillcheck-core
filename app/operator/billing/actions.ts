@@ -14,7 +14,8 @@ const done = (status: Sc19OperatorNotice, search = ''): never => {
 
 // Every RPC re-checks the current operator allowlist, including revocation.
 async function rpc(name: 'sc19_operator_set_package_policy' | 'sc19_operator_approve_trial'
-  | 'sc19_operator_grant_paid' | 'sc19_operator_set_auto_free' | 'sc19_operator_release_trial_nip',
+  | 'sc19_operator_grant_paid' | 'sc19_operator_set_auto_free' | 'sc19_operator_release_trial_nip'
+  | 'sc19_operator_publish_offer',
   args: Record<string, string | number | boolean>, success: Sc19OperatorNotice, search: string) {
   const client = await createClient();
   const { data: { user }, error: authError } = await client.auth.getUser();
@@ -63,6 +64,18 @@ export async function releaseTrialNip(form: FormData) {
   if (!input) done('invalid', search);
   if (form.get('confirm') !== 'yes') done('confirm', search);
   await rpc('sc19_operator_release_trial_nip', input!, 'nip_released', search);
+}
+
+/** SC-019 offer publication: makes the approved PRESELEKCJA package, its price
+ * and its terms visible on the checkout page of a verified company. The offer
+ * itself — price, number of CV analyses and the whole contract text — is a
+ * reviewed constant in the database function, so there is nothing to parse here:
+ * the operator decides whether to publish, never what. The database re-checks
+ * the operator role, the price catalog and the granted quota, and refuses rather
+ * than publish an offer that disagrees with either. */
+export async function publishOffer(form: FormData) {
+  if (form.get('confirm') !== 'yes') done('confirm');
+  await rpc('sc19_operator_publish_offer', {}, 'offer_published', '');
 }
 
 export async function grantPaid(form: FormData) {
