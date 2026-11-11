@@ -5,9 +5,9 @@ import { SC19_VAT_BASIS_POINTS, sc19OfferAmounts } from '../lib/sc19-offer-amoun
 
 const future = Date.now() + 86_400_000;
 const row = (extra = {}) => ({
-  id: 'preselekcja-60-2026-11-r2', revision: 'preselekcja-60-v2', plan: 'PRESELEKCJA',
+  id: 'preselekcja-60-2026-11-r3', revision: 'preselekcja-60-v3', plan: 'PRESELEKCJA',
   amount_minor: 30000, currency: 'PLN', credits: 60,
-  terms_revision: 'preselekcja-terms-2026-11-v2', terms_text: 'Warunki: ą, ć, ę, ł, ń, ó, ś, ź, ż.',
+  terms_revision: 'preselekcja-terms-2026-11-v3', terms_text: 'Warunki: ą, ć, ę, ł, ń, ó, ś, ź, ż.',
   valid_until_ms: future, ...extra,
 });
 

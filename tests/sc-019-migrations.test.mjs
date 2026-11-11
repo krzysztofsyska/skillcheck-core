@@ -127,7 +127,7 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
     from private.sc19_payment_offers where approved and active
       and valid_until_ms > (extract(epoch from now())*1000)::bigint`)).rows;
   assert.equal(purchasable.length, 1, 'exactly one purchasable offer: PRESELEKCJA 60 CV / 300 zł gross');
-  assert.equal(purchasable[0].id, 'preselekcja-60-2026-11-r2');
+  assert.equal(purchasable[0].id, 'preselekcja-60-2026-11-r3');
   assert.equal(purchasable[0].amount_minor, 30000);
   assert.equal(purchasable[0].credits, 60);
   assert.equal(purchasable[0].currency, 'PLN');
@@ -160,7 +160,7 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
     'a differing operator quota withdraws the offer instead of mispricing it');
   await db.query("update private.sc19_package_policy set credits=60 where plan='PRESELEKCJA'");
   await applyPreviewSeeds(db);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'], 'restoring the approved quota publishes it again');
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r3'], 'restoring the approved quota publishes it again');
 
   // An operator quota already in place is KEPT, never overwritten by the seed.
   await db.query("update private.sc19_package_policy set credits=4 where plan='FREE'");
@@ -170,16 +170,16 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
   await db.query("update private.sc19_package_policy set credits=5 where plan='FREE'");
 
   // A manual deactivation on preview is repaired by a re-run, without a new row.
-  await db.query("update private.sc19_payment_offers set active=false where id='preselekcja-60-2026-11-r2'");
+  await db.query("update private.sc19_payment_offers set active=false where id='preselekcja-60-2026-11-r3'");
   await applyPreviewSeeds(db);
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2']);
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r3']);
   assert.equal((await db.query('select count(*)::int n from private.sc19_payment_offers')).rows[0].n, 1,
     'no new offer row is ever created by a re-run');
 
   // The offer row is immutable, so the economics of an issued revision cannot be
   // edited, and it cannot be deleted either.
-  await assert.rejects(db.query("update private.sc19_payment_offers set amount_minor=1 where id='preselekcja-60-2026-11-r2'"), /immutable/i);
-  await assert.rejects(db.query("delete from private.sc19_payment_offers where id='preselekcja-60-2026-11-r2'"), /immutable/i);
+  await assert.rejects(db.query("update private.sc19_payment_offers set amount_minor=1 where id='preselekcja-60-2026-11-r3'"), /immutable/i);
+  await assert.rejects(db.query("delete from private.sc19_payment_offers where id='preselekcja-60-2026-11-r3'"), /immutable/i);
 
   // ORDINARY PREVIEW TESTING MUST NOT BLOCK THE NEXT MIGRATION RUN.
   // preview-db-migrate.yml re-applies this seed on every run, and by then the
@@ -199,7 +199,7 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
   await db.query(`insert into private.sc19_payment_orders(id,company_id,buyer_id,request_id,offer_id,offer_revision,
     terms_revision,amount_minor,currency,credits,provider,account,mode,status,session_id,checkout_url,payment_id,
     checkout_deadline_ms)
-    values($1,$2,$3,$4,'preselekcja-60-2026-11-r2','preselekcja-60-v2','preselekcja-terms-2026-11-v2',
+    values($1,$2,$3,$4,'preselekcja-60-2026-11-r3','preselekcja-60-v3','preselekcja-terms-2026-11-v3',
       30000,'PLN',60,'synthetic','preview-walk','test','paid',$5,$6,$7,$8)`,
   [orderId, f.companyId, paymentUsers.otherOwner, randomUUID(), `session-${orderId}`,
     `https://pay.fixture.invalid/${orderId}`, `synthetic-paid-${orderId}`, Date.now() + 3600000]);
@@ -213,7 +213,7 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
   await applyPreviewSeeds(db);
   assert.deepEqual(await accountingSnapshot(db), activity,
     'the seed reruns cleanly over balance/journal/order/grant rows and touches none of them');
-  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r2'],
+  assert.deepEqual(await purchasableIds(), ['preselekcja-60-2026-11-r3'],
     'and the one approved offer is still published after the rerun');
 
   // What the guard does refuse is the PROJECT, not the data: it demands that the
@@ -250,7 +250,7 @@ test('the preview-only seed publishes exactly the owner-approved PRESELEKCJA off
   await h.asUser(users.owner);
   const offers = (await db.query('select * from public.sc19_checkout_offers($1)', [a.companyId])).rows;
   assert.equal(offers.length, 1);
-  assert.equal(offers[0].id, 'preselekcja-60-2026-11-r2');
+  assert.equal(offers[0].id, 'preselekcja-60-2026-11-r3');
   assert.equal(offers[0].amount_minor, 30000);
   assert.equal(offers[0].credits, 60);
   assert.match(offers[0].terms_text, /[ąćęłńóśźż]/);
@@ -827,18 +827,18 @@ test('public.sc19_checkout_offers serves the approved offer to a verified owner 
 
   // Deactivating the offer empties the catalog without any authorization change,
   // and a verified owner still gets a successful empty read rather than an error.
-  await db.query("update private.sc19_payment_offers set active=false where id='preselekcja-60-2026-11-r2'");
+  await db.query("update private.sc19_payment_offers set active=false where id='preselekcja-60-2026-11-r3'");
   await h.asUser(users.owner);
   assert.deepEqual(await read(a.companyId), []);
   await h.asAdmin();
-  await db.query("update private.sc19_payment_offers set active=true where id='preselekcja-60-2026-11-r2'");
+  await db.query("update private.sc19_payment_offers set active=true where id='preselekcja-60-2026-11-r3'");
   // An expired offer is not served either.
   await db.query(`insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
     terms_revision,terms_text,valid_until_ms)
     values('synthetic-expired','expired-v1','PRESELEKCJA',true,true,30000,'PLN',60,'expired-terms','Wygasłe warunki.',$1)`,
   [Date.now() - 1000]);
   await h.asUser(users.owner);
-  assert.deepEqual((await read(a.companyId)).map(o => o.id), ['preselekcja-60-2026-11-r2']);
+  assert.deepEqual((await read(a.companyId)).map(o => o.id), ['preselekcja-60-2026-11-r3']);
 
   // The read is stable: no order, grant, request, journal entry or balance appears.
   await h.asAdmin();

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertCurrentInventory, bootMigrationDatabase } from './helpers/sc19-migration-fixture.mjs';
+import { applyPreviewSeeds, assertCurrentInventory, bootMigrationDatabase } from './helpers/sc19-migration-fixture.mjs';
 import { readFile } from 'node:fs/promises';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 
@@ -17,18 +17,20 @@ const operator = users.outsider;
 // Repeated here on purpose: a test that read the constants from the function it
 // tests would accept any change to them.
 const REVISION = Object.freeze({
-  offerId: 'preselekcja-60-2026-11-r2',
-  revision: 'preselekcja-60-v2',
-  termsRevision: 'preselekcja-terms-2026-11-v2',
+  offerId: 'preselekcja-60-2026-11-r3',
+  revision: 'preselekcja-60-v3',
+  termsRevision: 'preselekcja-terms-2026-11-v3',
   amountMinor: 30000,
   credits: 60,
   currency: 'PLN',
   validUntilMs: 1830297599000n,
-  // The legal text, byte for byte, as published on the TEST project
-  // skillcheck-preview (row read 2026-11-11). Diacritics included: terms that
-  // silently lose Polish letters are not the terms that were reviewed.
-  termsMd5: 'a535d6098abdc3240e12eca8e22ad46e',
-  termsLength: 750,
+  // The legal text, byte for byte. Diacritics included: terms that silently
+  // lose Polish letters are not the terms that were reviewed. v3 corrects two
+  // sentences of v2 (payment confirmation covers the bank-transfer branch too,
+  // Regulamin § 7.3 / § 8.1; and the § 10–11 citation no longer claims to cover
+  // ordering, which is § 6), so the md5 below is the v3 text.
+  termsMd5: '1d0cb88d68dde09b708944d8bf49b9d1',
+  termsLength: 802,
 });
 
 const code = expected => error => error.code === expected;
@@ -384,4 +386,46 @@ test('a verified company sees the published offer through the checkout read path
   const other = await h.seed(users.otherOwner);
   await assert.rejects(db.query('select * from public.sc19_checkout_offers($1)', [other.companyId]),
     code('42501'), 'an unverified company is still refused');
+});
+
+// The TEST project skillcheck-preview already holds the earlier revision
+// preselekcja-60-2026-11-r2, published by the seed and immutable. v3 corrects
+// two sentences of its terms, so both ways a Preview database can reach the new
+// revision must end with exactly one purchasable offer: the r2 row stays, with
+// its own terms, deactivated.
+const publishedR2 = db => db.query(`insert into private.sc19_payment_offers(id,revision,plan,
+  active,approved,amount_minor,currency,credits,terms_revision,terms_text,valid_until_ms)
+  values('preselekcja-60-2026-11-r2','preselekcja-60-v2','PRESELEKCJA',true,true,
+    30000,'PLN',60,'preselekcja-terms-2026-11-v2','Warunki rewizji v2',$1)`,
+  [String(REVISION.validUntilMs)]);
+
+test('publishing over the r2 offer a Preview database holds withdraws it and leaves only r3', async t => {
+  const { db, h } = await ready(t);
+  await publishedR2(db);
+  assert.deepEqual((await purchasable(db)).map(o => o.id), ['preselekcja-60-2026-11-r2']);
+  await setQuota(db, h, 60);
+  await h.asUser(operator);
+  const published = await publish(db);
+  assert.equal(published[0].offer_id, REVISION.offerId);
+  assert.equal(published[0].withdrawn, 1, 'the r2 revision was withdrawn');
+  await h.asAdmin();
+  const live = await purchasable(db);
+  assert.deepEqual(live.map(o => o.id), [REVISION.offerId], 'never two purchasable offers');
+  assert.equal(live[0].terms_md5, REVISION.termsMd5);
+  assert.deepEqual((await rows(db, `select active, approved, terms_revision
+    from private.sc19_payment_offers where id='preselekcja-60-2026-11-r2'`))[0],
+    { active: false, approved: false, terms_revision: 'preselekcja-terms-2026-11-v2' },
+    'the immutable r2 row keeps its own terms and is only deactivated');
+});
+
+test('re-applying the preview seed over the r2 offer leaves only r3', async t => {
+  const { db, h } = await ready(t);
+  await publishedR2(db);
+  await applyPreviewSeeds(db);
+  await h.asAdmin();
+  const live = await purchasable(db);
+  assert.deepEqual(live.map(o => o.id), [REVISION.offerId]);
+  assert.equal(live[0].terms_md5, REVISION.termsMd5,
+    'the seed and private.sc19_offer_revision() publish the same terms, byte for byte');
+  assert.equal(live[0].terms_length, REVISION.termsLength);
 });

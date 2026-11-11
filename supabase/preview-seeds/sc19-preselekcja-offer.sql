@@ -72,8 +72,10 @@ declare
   -- 2027-12-31T23:59:59Z, the validity this offer revision was approved with.
   offer_valid_until constant bigint := 1830297599000;
   -- Every offer id this seed has ever issued, so a Preview database that already
-  -- received the earlier ASCII revision ends with exactly one purchasable offer.
-  superseded constant text[] := array['preselekcja-60-2026-11'];
+  -- received the earlier ASCII revision (…-2026-11) or the earlier terms revision
+  -- (…-r2, whose terms text is corrected in v3) ends with exactly one purchasable
+  -- offer. Those rows are immutable: they are only deactivated, never rewritten.
+  superseded constant text[] := array['preselekcja-60-2026-11', 'preselekcja-60-2026-11-r2'];
 begin
   -- SECOND LINE OF DEFENCE: the project this run is aimed at, NOT the data it
   -- finds there.
@@ -131,7 +133,7 @@ begin
   -- is withdrawn.
   if (select credits from private.sc19_package_policy where plan = 'PRESELEKCJA') is distinct from 60 then
     update private.sc19_payment_offers set active = false, approved = false
-      where id = any(superseded || array['preselekcja-60-2026-11-r2']) and (active or approved);
+      where id = any(superseded || array['preselekcja-60-2026-11-r3']) and (active or approved);
     raise notice 'sc19-preselekcja-offer: stored PRESELEKCJA quota is not 60; the 60 CV / 300 zl offer is NOT published and nothing this seed issued is purchasable';
     return;
   end if;
@@ -141,7 +143,7 @@ begin
   -- anything this seed published so no reader that ignores valid_until_ms sees it.
   if offer_valid_until <= (extract(epoch from now()) * 1000)::bigint then
     update private.sc19_payment_offers set active = false, approved = false
-      where id = any(superseded || array['preselekcja-60-2026-11-r2']) and (active or approved);
+      where id = any(superseded || array['preselekcja-60-2026-11-r3']) and (active or approved);
     raise notice 'sc19-preselekcja-offer: the PRESELEKCJA offer revision expired at %, nothing is published; issue a new reviewed revision with an owner-approved validity', to_timestamp(offer_valid_until / 1000.0);
     return;
   end if;
@@ -152,17 +154,18 @@ begin
     amount_minor, currency, credits,
     terms_revision, terms_text, valid_until_ms)
   values (
-    'preselekcja-60-2026-11-r2', 'preselekcja-60-v2', 'PRESELEKCJA', true, true,
+    'preselekcja-60-2026-11-r3', 'preselekcja-60-v3', 'PRESELEKCJA', true, true,
     30000, 'PLN', 60,
-    'preselekcja-terms-2026-11-v2',
+    'preselekcja-terms-2026-11-v3',
     'PRESELEKCJA — jednorazowy pakiet 60 analiz CV za 300,00 zł brutto '
     || '(243,90 zł netto + 56,10 zł VAT 23%).' || chr(10)
     || 'Analizy są ważne 3 miesiące od dnia ich przyznania i nie przechodzą na kolejny okres.' || chr(10)
-    || 'Analizy przyznajemy po potwierdzeniu płatności przez operatora płatności.' || chr(10)
+    || 'Analizy przyznajemy po zaksięgowaniu wpłaty na naszym rachunku, a przy '
+    || 'płatności online — po jej potwierdzeniu przez operatora płatności.' || chr(10)
     || 'Faktura VAT jest wystawiana po zaksięgowaniu płatności i wysyłana e-mailem.' || chr(10)
     || 'Wynik analizy jest informacją wspierającą rekrutera. SkillCheck nie podejmuje '
     || 'decyzji o zatrudnieniu — każdy wynik weryfikuje człowiek.' || chr(10)
-    || 'Zasady zamówienia, reklamacji i odstąpienia opisuje Regulamin (§ 10–11); '
+    || 'Zasady reklamacji i odstąpienia opisuje Regulamin (§ 10–11); '
     || 'wzór formularza odstąpienia jest dostępny pod /regulamin/formularz-odstapienia.' || chr(10)
     || 'Dane osobowe kandydatów są przetwarzane na podstawie Umowy powierzenia (DPA), '
     || 'dostępnej pod /regulamin/umowa-powierzenia.',
@@ -172,7 +175,7 @@ begin
   -- Re-run after a manual deactivation on preview: the row already exists, so the
   -- INSERT above did nothing and the two mutable flags are set here instead.
   update private.sc19_payment_offers set active = true, approved = true
-    where id = 'preselekcja-60-2026-11-r2' and not (active and approved);
+    where id = 'preselekcja-60-2026-11-r3' and not (active and approved);
 
   -- A preview database that received the earlier ASCII revision stops offering
   -- it. The row stays: it is undeletable and a paid order would reference it.
@@ -191,7 +194,7 @@ begin
 
   -- The terms the customer accepts must not silently lose Polish letters.
   if exists (select 1 from private.sc19_payment_offers
-    where id = 'preselekcja-60-2026-11-r2' and terms_text !~ '[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]') then
+    where id = 'preselekcja-60-2026-11-r3' and terms_text !~ '[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]') then
     raise exception 'sc19_preview_seed_terms_diacritics_missing' using errcode = '55000';
   end if;
 end

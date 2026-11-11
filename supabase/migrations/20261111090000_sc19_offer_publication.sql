@@ -32,13 +32,24 @@
 -- is a new reviewed migration that replaces these constants, which keeps the
 -- legal artifact in code review where it belongs.
 --
--- The constants are the ones already live on the TEST project skillcheck-preview
+-- The economics are the ones already live on the TEST project skillcheck-preview
 -- (row preselekcja-60-2026-11-r2, read 2026-11-11): 30000 minor units PLN =
--- 300,00 zl gross for 60 CV analyses, terms revision preselekcja-terms-2026-11-v2,
--- terms text md5 a535d6098abdc3240e12eca8e22ad46e, valid until 1830297599000
+-- 300,00 zl gross for 60 CV analyses, valid until 1830297599000
 -- (2027-12-31T23:59:59Z). Price and contents are the owner's decision of
 -- 2026-10-28, reconfirmed 2026-11-01 and 2026-11-02; source of truth
 -- docs/cennik-2026-11-02.md. Nothing here changes a price or a package.
+--
+-- The TERMS TEXT is revision preselekcja-terms-2026-11-v3 (offer id
+-- preselekcja-60-2026-11-r3, terms md5 1d0cb88d68dde09b708944d8bf49b9d1), which
+-- corrects two sentences of the v2 text this file first carried. v2 said analyses
+-- are granted "po potwierdzeniu płatności przez operatora płatności", which is
+-- only the online branch of Regulamin § 7.3 and is false for the bank-transfer
+-- sales this offer actually serves (Regulamin § 7.1 b, § 7.3, § 8.1; owner
+-- decision 2026-11-01), and it cited "§ 10–11" for "zasady zamówienia" when
+-- ordering is § 6 and § 10–11 are complaints and withdrawal. An issued offer row
+-- is immutable, so a corrected text is a NEW revision; this migration has never
+-- been applied to production, so the correction costs only the new id. The
+-- economics (price, CV count, currency, plan, validity) are untouched by it.
 --
 -- WHAT IT REFUSES
 --
@@ -103,18 +114,27 @@ returns table(offer_id text, revision text, terms_revision text, terms_text text
   plan text, amount_minor integer, currency text, credits integer, valid_until_ms bigint)
 language sql immutable set search_path = '' as $$
   select
-    'preselekcja-60-2026-11-r2',
-    'preselekcja-60-v2',
-    'preselekcja-terms-2026-11-v2',
+    'preselekcja-60-2026-11-r3',
+    'preselekcja-60-v3',
+    'preselekcja-terms-2026-11-v3',
     -- 30000 minor units PLN = 300,00 zl gross (243,90 zl net + 56,10 zl VAT 23%).
     'PRESELEKCJA — jednorazowy pakiet 60 analiz CV za 300,00 zł brutto '
     || '(243,90 zł netto + 56,10 zł VAT 23%).' || chr(10)
     || 'Analizy są ważne 3 miesiące od dnia ich przyznania i nie przechodzą na kolejny okres.' || chr(10)
-    || 'Analizy przyznajemy po potwierdzeniu płatności przez operatora płatności.' || chr(10)
+    -- Both payment branches, as Regulamin § 7.1 a)/b), § 7.3 and § 8.1 have them:
+    -- a traditional transfer is paid when our account is credited, an online
+    -- payment when the payment operator confirms it. The earlier revision named
+    -- only the operator, which is false for the bank-transfer sales this offer
+    -- actually serves (owner decision 2026-11-01: first sales by transfer).
+    || 'Analizy przyznajemy po zaksięgowaniu wpłaty na naszym rachunku, a przy '
+    || 'płatności online — po jej potwierdzeniu przez operatora płatności.' || chr(10)
     || 'Faktura VAT jest wystawiana po zaksięgowaniu płatności i wysyłana e-mailem.' || chr(10)
     || 'Wynik analizy jest informacją wspierającą rekrutera. SkillCheck nie podejmuje '
     || 'decyzji o zatrudnieniu — każdy wynik weryfikuje człowiek.' || chr(10)
-    || 'Zasady zamówienia, reklamacji i odstąpienia opisuje Regulamin (§ 10–11); '
+    -- § 10 is complaints and § 11 withdrawal; ordering is § 6, so the earlier
+    -- revision cited the wrong paragraphs for "zamówienia". Same wording as
+    -- app/dashboard/[companyId]/billing/checkout/checkout.tsx.
+    || 'Zasady reklamacji i odstąpienia opisuje Regulamin (§ 10–11); '
     || 'wzór formularza odstąpienia jest dostępny pod /regulamin/formularz-odstapienia.' || chr(10)
     || 'Dane osobowe kandydatów są przetwarzane na podstawie Umowy powierzenia (DPA), '
     || 'dostępnej pod /regulamin/umowa-powierzenia.',
