@@ -1,5 +1,7 @@
 # Preview payment test freeze
 
+> **Status (2026-11-11): the freeze described here has been LIFTED, see "Release" below. The text that follows documents how the hold worked.**
+
 This change is a local preparation until reviewed and merged into integration.
 It does not itself freeze a running environment. The minimal policy lives in
 `config/preview-freeze.json`; deployment URLs, database fingerprints and payment
@@ -55,6 +57,38 @@ queued migration/seed changes against the frozen DB state. In the release change
 set `enabled` to false and restore `git.deploymentEnabled.integration` to true;
 update the policy contract test intentionally. Do not expire a hold by date or
 override it from a task branch. Keep the production release process unchanged.
+
+### Status: LIFTED on 2026-11-11
+
+The hold described above is no longer in force. Owner decision of 2026-11-11,
+taken together with the production release SC-RELEASE-20261104.
+
+- Reason: the payment tests on the pinned Preview (commit `4db85e26`, freeze of
+  2026-11-07, PR #337) are finished, and the release needs a Preview built from
+  current `integration` to walk the whole MVP path before production.
+- Done in the release change set: `config/preview-freeze.json` has
+  `enabled: false` (the `baselineSha` is kept as a historical record);
+  `vercel.json` has `git.deploymentEnabled.integration: true` (`"**": false`,
+  `main` and `release/**` are unchanged); `tests/preview-freeze.test.mjs` and
+  `tests/vercel-deployment-policy.test.mjs` now pin the lifted state, so flipping
+  either file back fails them.
+- Queued migration/seed check, done against the live `skillcheck-preview` ledger
+  (read-only) before the change: of the 35 migrations listed in
+  `supabase/preview-migrations.txt`, 26 are already applied with identical text
+  (skipped), none is changed-after-applied, and 9 are new: the nine migrations
+  from `20261107164252_sc019_catalog_orders` to `20261110090000_sc021_cost_dashboard`.
+  The preview schema signature (`75eca00d...`) equals the source signature the
+  first of them requires. The commercial seed is data-only and
+  `on conflict do nothing`: the quotas (FREE 5, PRESELEKCJA 60) and the offer
+  `preselekcja-60-2026-11-r2` (active, approved) already exist, so it changes
+  nothing. The first push to `integration` after the lift therefore runs
+  `Migrate skillcheck-preview` and applies those nine migrations.
+- Never create another branch to get a Preview: the Preview environment
+  variables are pinned to `gitBranch: integration`; any other branch inherits
+  the general `NEXT_PUBLIC_SUPABASE_URL`, which points at the production
+  database.
+- The old Preview deployment of `4db85e26` is immutable and stays reachable at
+  its own address.
 
 ## Local checks
 
