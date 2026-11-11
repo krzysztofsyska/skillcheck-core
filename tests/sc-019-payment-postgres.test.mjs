@@ -223,6 +223,21 @@ for(const dependency of dependencies) test(`PostgreSQL16 payment adapter against
    const h=sessions.get('sc19:'+row.id);await notify(payment(h),runtime(id(11),{enabled:false}).service);
    assert.equal((await runtime().readOrder(id(1),id(11),row.id)).status,'paid');
  });
+ await t.test('expired order whose session was never registered is reopened in place with the same key (#427)',async()=>{
+   const stuck=randomUUID();
+   await pool.query(`insert into private.sc19_payment_orders
+     (id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms)
+     select $1,company_id,buyer_id,$2,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,'awaiting_payment',1
+     from private.sc19_payment_orders where id=$3`,[stuck,randomUUID(),hosted.orderId]);
+   const orders=await count('sc19_payment_orders');
+   const reopened=await runtime().service.checkout(request());
+   assert.equal(reopened.orderId,stuck);assert.equal(await count('sc19_payment_orders'),orders);
+   assert.ok(sessions.has('sc19:'+stuck));
+   const row=(await pool.query('select status,session_id,checkout_url from private.sc19_payment_orders where id=$1',[stuck])).rows[0];
+   assert.deepEqual(row,{status:'awaiting_payment',session_id:reopened.sessionId,checkout_url:reopened.url});
+   await notify(payment(reopened));
+   assert.equal((await runtime().readOrder(id(1),id(11),stuck)).status,'paid');
+ });
  await t.test('paid fulfillment races real quota spend/refund with no deadlock/lost update',async()=>{
    const before=await balance(id(1)),analysis=randomUUID();
    await pool.query('insert into public.screening_analysis_versions(id,company_id) values($1,$2)',[analysis,id(1)]);

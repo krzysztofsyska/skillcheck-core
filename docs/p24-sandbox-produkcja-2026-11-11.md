@@ -111,14 +111,30 @@ obciążeniem i nie zmieniamy go. W praktyce:
   możesz zapłacić. Nic nie trzeba czekać ani odblokowywać.
 * To samo dzieje się w nowej karcie, na innym urządzeniu i po wyczyszczeniu
   pamięci przeglądarki — zamówienie jest zapisane na serwerze.
-* **Ale:** transakcję rejestrujemy w Przelewy24 z limitem czasu 30 minut. Jeżeli
-  wrócisz po tym czasie, Przelewy24 może już nie przyjąć płatności z tego linku,
-  a nasz system nadal podaje ten sam link. Wtedy to jedno zamówienie trzeba
-  usunąć w bazie (niżej), żeby można było złożyć nowe.
+* Link do płatności **nie wygasa po 30 minutach** — transakcję rejestrujemy w
+  Przelewy24 bez limitu czasu. Do tego samego linku można wrócić później i
+  zapłacić; potwierdzenie płatności przyjmujemy bez względu na to, kiedy dotrze.
+* Jeżeli strona płatności **w ogóle się nie otworzyła** (na przykład Przelewy24
+  odrzuciło rejestrację), kolejne kliknięcie „Zamawiam i płacę” samo otwiera to
+  samo zamówienie na nowo — pod warunkiem, że ta sama oferta (ta sama cena,
+  liczba analiz i warunki) jest nadal w sprzedaży. Najpierw sprawdzamy w
+  Przelewy24, że dla tego zamówienia na pewno nie ma zarejestrowanej transakcji; gdy nie da się
+  tego potwierdzić, nic nie rejestrujemy.
+* Gdy płatność się nie udaje, komunikat na ekranie podaje dodatkowy kod
+  Przelewy24 (np. `SC19_PAYMENT_RETRY / P24_UNAUTHORIZED` — złe dane dostępowe
+  do Przelewy24 w tym środowisku, `P24_SIGN_REJECTED` — zły klucz CRC). Ten sam
+  kod, bez żadnych danych prywatnych, trafia do logów Vercel jako
+  `SC19_P24_FAILURE`.
 
-**Jak nie wpaść w ten przypadek:** w trakcie prób albo dokończ płatność, albo
-wróć do linku w ciągu 30 minut. Dokończona płatność zawsze zwalnia miejsce na
-kolejne zamówienie.
+**Kiedy zostaje tylko odblokowanie ręczne:**
+
+* niezapłacone zamówienie, którego oferty już nie ma w sprzedaży albo która się
+  zmieniła (inna cena, liczba analiz lub wersja warunków). Wtedy ekran mówi, że
+  ponawianie nie pomoże;
+* rejestracja dotarła do Przelewy24, ale odpowiedź się zgubiła. Każde kliknięcie
+  pokazuje `SC19_PAYMENT_RETRY / P24_SESSION_EXISTS` i ponawianie nie pomaga.
+  Napisz do pomocy technicznej. **Nie usuwaj zamówienia:** sesja płatności
+  istnieje.
 
 **Awaryjne odblokowanie (zapis do produkcyjnej bazy — robi to tylko
 właściciel).** W Supabase Studio produkcyjnego projektu
@@ -126,8 +142,9 @@ właściciel).** W Supabase Studio produkcyjnego projektu
 podstawiając identyfikator zablokowanego zamówienia:
 
 ```sql
--- 1. Sprawdź, co blokuje (powinno być dokładnie jedno zamówienie, niezapłacone):
-select id, created_at, status from private.sc19_payment_orders
+-- 1. Sprawdź, co blokuje (powinno być dokładnie jedno zamówienie, niezapłacone).
+--    Usuwać wolno tylko zamówienie z session_id = null (bez linku do płatności):
+select id, created_at, status, session_id from private.sc19_payment_orders
  where company_id = '<ID FIRMY>' and status = 'awaiting_payment';
 
 -- 2. Usuń je razem z aliasami prób. Wyzwalacze celowo zabraniają usuwania
@@ -135,18 +152,29 @@ select id, created_at, status from private.sc19_payment_orders
 begin;
 alter table private.sc19_payment_orders disable trigger sc19_order_immutable;
 alter table private.sc19_payment_requests disable trigger sc19_request_immutable;
-delete from private.sc19_payment_requests where order_id = '<ID ZAMÓWIENIA>';
+delete from private.sc19_payment_requests where order_id = '<ID ZAMÓWIENIA>'
+ and exists (select 1 from private.sc19_payment_orders
+             where id = '<ID ZAMÓWIENIA>' and session_id is null);
 delete from private.sc19_payment_orders
- where id = '<ID ZAMÓWIENIA>' and status = 'awaiting_payment';
+ where id = '<ID ZAMÓWIENIA>' and status = 'awaiting_payment' and session_id is null;
 alter table private.sc19_payment_requests enable trigger sc19_request_immutable;
 alter table private.sc19_payment_orders enable trigger sc19_order_immutable;
 commit;
 ```
 
-Nigdy nie usuwaj w ten sposób zamówienia ze statusem `paid` ani zamówienia, za
-które płatność mogła zostać wykonana — najpierw kliknij „Sprawdź status
-zamówienia” na ekranie zakupu; jeśli płatność doszła, analizy zostaną przyznane i
-zamówienie samo się zamknie.
+Nigdy nie usuwaj w ten sposób zamówienia ze statusem `paid` ani zamówienia z
+linkiem do płatności (`session_id` nie jest pusty). Link nie wygasa, więc
+usunięte zamówienie mogłoby nadal zostać opłacone: pieniądze trafiłyby do
+Przelewy24, a nie byłoby zamówienia, na które można by je zaksięgować. Zamówienie
+z linkiem kończy się przez zapłacenie tego linku; najpierw kliknij „Sprawdź status
+zamówienia” na ekranie zakupu — jeśli płatność doszła, analizy zostaną przyznane
+i zamówienie samo się zamknie.
+
+**Znana konsekwencja:** ponieważ link nie ma limitu czasu, niezapłacone
+zamówienie z linkiem pozostaje płatne po cenie i na warunkach zaakceptowanych
+przy jego założeniu — nawet po wycofaniu oferty albo zmianie jej ceny. W
+Sandboxie jest to nieszkodliwe. Przed włączeniem prawdziwych płatności decyzja
+należy do właściciela.
 
 Docelowe rozwiązanie (bez wchodzenia do bazy) to przycisk „Anuluj zamówienie i
 zacznij od nowa” na ekranie zakupu, odmawiany w chwili, gdy dla zamówienia

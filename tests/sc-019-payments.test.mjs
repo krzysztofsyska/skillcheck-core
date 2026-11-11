@@ -67,6 +67,7 @@ function harness(config = {}) {
     },
     async lookupCheckout(order, key) {
       state.lookupCalls.push({ orderId: order.id, key });
+      state.onLookup?.(order);
       if (state.failLookup) throw Error('provider lookup is uncertain');
       return structuredClone(state.providerSessions.get(key) ?? null);
     },
@@ -178,16 +179,95 @@ test('expired unbound order retrieves original checkout with no second payment',
   assert.equal(h.state.createCalls.length, 1);
 });
 
-test('absent or ambiguous lookup after deadline cannot start another payment', async () => {
+test('absent lookup with a changed offer, or an ambiguous lookup, after deadline cannot start another payment', async () => {
   const h = harness(); h.state.failProvider = true;
   await assert.rejects(h.service.checkout(request()), /timeout/);
   const [order] = h.state.orders.values(); h.state.orders.set(order.id, { ...order, checkoutDeadlineMs: 1 });
   h.state.providerSessions.clear(); h.state.failProvider = false;
+  h.state.offer.revision = 'revision-v2';
   await rejects(h.service.checkout(request()), 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
-  h.state.failLookup = true;
+  h.state.offer.revision = 'revision-v1'; h.state.failLookup = true;
   await assert.rejects(h.service.checkout(request()), /provider lookup is uncertain/);
   assert.equal(h.state.createCalls.length, 1);
   assert.equal(h.state.grants.size, 0);
+});
+
+// SC-P24-UNBLOCK-001 (#427): an order past its deadline whose provider session was
+// never registered is reopened with the SAME key, never replaced by a new order.
+async function expiredWithoutSession(h) {
+  h.state.failProvider = true;
+  await assert.rejects(h.service.checkout(request()), /timeout/);
+  const [order] = h.state.orders.values();
+  h.state.orders.set(order.id, { ...order, checkoutDeadlineMs: 1 });
+  h.state.providerSessions.clear(); h.state.failProvider = false;
+  return order;
+}
+
+test('expired session-less order with provider-confirmed absence and the same offer registers with the same key', async () => {
+  const h = harness(); const order = await expiredWithoutSession(h);
+  const hosted = await h.service.checkout(request({ requestId: id(11) }));
+  assert.equal(hosted.orderId, order.id);
+  assert.equal(h.state.lookupCalls.length, 1);
+  assert.equal(h.state.createCalls.length, 2);
+  assert.equal(h.state.createCalls[1].key, `sc19:${order.id}`);
+  assert.equal(h.state.createCalls[1].key, h.state.createCalls[0].key);
+  assert.equal(h.state.createCalls[1].order.amountMinor, 12345);
+  const saved = h.state.orders.get(order.id);
+  assert.equal(saved.sessionId, hosted.sessionId); assert.equal(saved.checkoutUrl, hosted.url);
+  assert.equal(saved.status, 'awaiting_payment'); assert.equal(h.state.orders.size, 1);
+  // The next click returns the stored link without any provider call.
+  assert.deepEqual(await h.service.checkout(request()), hosted);
+  assert.equal(h.state.createCalls.length, 2); assert.equal(h.state.lookupCalls.length, 1);
+  assert.equal(h.state.grants.size, 0);
+});
+
+test('a withdrawn, expired or changed offer keeps an expired session-less order closed, with no registration', async () => {
+  for (const update of [{ active: false }, { approved: false }, { validUntilMs: 1 }, { revision: 'revision-v2' },
+    { amountMinor: 12346 }, { credits: 13 }, { termsRevision: 'terms-v2' }, { id: 'another-offer' }]) {
+    const h = harness(); await expiredWithoutSession(h);
+    Object.assign(h.state.offer, update);
+    await rejects(h.service.checkout(request()), 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+    assert.equal(h.state.createCalls.length, 1, JSON.stringify(update));
+    assert.equal([...h.state.orders.values()][0].sessionId, null);
+  }
+  const gone = harness(); await expiredWithoutSession(gone); gone.state.offer = null;
+  await rejects(gone.service.checkout(request()), 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+  assert.equal(gone.state.createCalls.length, 1);
+});
+
+test('an uncertain provider lookup never reopens an expired session-less order', async () => {
+  const h = harness(); await expiredWithoutSession(h); h.state.failLookup = true;
+  await assert.rejects(h.service.checkout(request()), /provider lookup is uncertain/);
+  assert.equal(h.state.createCalls.length, 1);
+});
+
+test('a buyer who lost owner or verified status cannot reopen, even after the lookup', async () => {
+  for (const key of ['owner', 'verified']) {
+    const before = harness(); await expiredWithoutSession(before); before.state.access[key] = false;
+    await rejects(before.service.checkout(request()), 'SC19_PAYMENT_FORBIDDEN');
+    assert.equal(before.state.createCalls.length, 1); assert.equal(before.state.lookupCalls.length, 0);
+    const during = harness(); await expiredWithoutSession(during);
+    during.state.onLookup = () => { during.state.access[key] = false; };
+    await rejects(during.service.checkout(request()), 'SC19_PAYMENT_FORBIDDEN');
+    assert.equal(during.state.createCalls.length, 1); assert.equal(during.state.lookupCalls.length, 1);
+  }
+});
+
+test('an order paid or bound meanwhile is reported as such instead of being registered again', async () => {
+  const paid = harness(); const order = await expiredWithoutSession(paid);
+  paid.state.onLookup = () => { paid.state.orders.set(order.id, { ...paid.state.orders.get(order.id), status: 'paid' }); };
+  assert.deepEqual(await paid.service.checkout(request()), { orderId: order.id, paid: true });
+  assert.equal(paid.state.createCalls.length, 1);
+  const bound = harness(); const other = await expiredWithoutSession(bound);
+  bound.state.onLookup = () => { bound.state.orders.set(other.id, { ...bound.state.orders.get(other.id),
+    sessionId: 'checkout-meanwhile', checkoutUrl: 'https://pay.fixture.invalid/meanwhile' }); };
+  const hosted = await bound.service.checkout(request());
+  assert.equal(hosted.sessionId, 'checkout-meanwhile'); assert.equal(hosted.url, 'https://pay.fixture.invalid/meanwhile');
+  assert.equal(bound.state.createCalls.length, 1);
+  const half = harness(); const third = await expiredWithoutSession(half);
+  half.state.onLookup = () => { half.state.orders.set(third.id, { ...half.state.orders.get(third.id), sessionId: 'checkout-half' }); };
+  await rejects(half.service.checkout(request()), 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+  assert.equal(half.state.createCalls.length, 1);
 });
 
 test('checkout URL must match exact approved HTTPS origin, no credentials or fragment', async () => {
@@ -405,8 +485,15 @@ test('unresolved purchase cannot be bypassed with another offer, terms, merchant
   const original=h.state.orders.get(hosted.orderId);
   h.state.orders.set(original.id,{...original,sessionId:null,checkoutUrl:null,checkoutDeadlineMs:1});
   h.state.providerSessions.clear();
-  await rejects(h.service.checkout(request({requestId:id(14)})),'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+  h.state.offer.revision='revision-v2';
+  await rejects(h.service.checkout(request({requestId:id(15)})),'SC19_PAYMENT_RECONCILIATION_REQUIRED');
   assert.equal(h.state.orders.size,1);assert.equal(h.state.createCalls.length,1);
+  // The same offer still on sale reopens THIS order with the same key, never a new one.
+  h.state.offer.revision='revision-v1';
+  const reopened=await h.service.checkout(request({requestId:id(14)}));
+  assert.equal(reopened.orderId,original.id);
+  assert.equal(h.state.orders.size,1);assert.equal(h.state.createCalls.length,2);
+  assert.equal(new Set(h.state.createCalls.map(c=>c.key)).size,1);
 });
 
 test('server expiry rejects a new order at the deadline but preserves an accepted immutable order',async()=>{

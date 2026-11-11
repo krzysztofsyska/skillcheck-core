@@ -24,7 +24,11 @@ const sandboxNotice='Płatność testowa w Sandboxie Przelewy24: żadne pieniąd
  * operator, and it contains no private data. */
 const checkoutFailed=(code:string)=>
   `Nie udało się otworzyć płatności. Ponów próbę — serwer sprawdzi istniejące zamówienie. Jeśli to się powtarza, napisz na pomoc@skillcheck.pl i podaj kod: ${code}.`;
+/** Optional Przelewy24 failure code from the server, e.g. P24_UNAUTHORIZED. Only a
+ * fixed-format code is ever rendered, never anything else the response carries. */
+const p24Detail=(value:unknown)=>typeof value==='string'&&/^P24_[A-Z_]{3,40}$/.test(value)?value:null;
 const reconciliationRequired='Tego zamówienia nie można już otworzyć ani potwierdzić automatycznie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy — odblokujemy zamówienie i będziesz mógł złożyć nowe.';
+const sessionExists='Płatność dla tego zamówienia została już rozpoczęta u operatora, ale nie możemy bezpiecznie pokazać jej ponownie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy i kod: P24_SESSION_EXISTS.';
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${companyId.toLowerCase()}:${orderId.toLowerCase()}`;
 export default function Checkout({companyId,recruitmentId,sandbox=false,statusOnly=false}: {companyId:string;recruitmentId?:string;sandbox?:boolean;statusOnly?:boolean}) {
@@ -157,7 +161,12 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
         // Anything else: name the code instead of hiding it. These are short machine
         // codes (SC19_PAYMENT_RETRY, HTTP 503) with nothing private in them, and they
         // are the difference between "retry" and "the payment operator is refusing us".
-        setMessage(checkoutFailed(typeof data.error==='string'?data.error:`HTTP ${response.status}`));return;
+        const code=typeof data.error==='string'?data.error:`HTTP ${response.status}`;
+        const detail=p24Detail(data.detail);
+        // The operator already has a session for this order and its link was lost:
+        // a retry would hit the same answer, so do not offer one.
+        if(detail==='P24_SESSION_EXISTS'){setMessage(sessionExists);return;}
+        setMessage(checkoutFailed(detail?`${code} / ${detail}`:code));return;
       }
       setOrderId(data.orderId);
       if (uuid(companyId) && uuid(data.orderId) && uuid(recruitmentId)) try {

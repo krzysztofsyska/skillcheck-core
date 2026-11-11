@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 import { resolveSc19PaymentRuntime,composeSc19PaymentRuntime } from '../lib/sc19-payment-runtime.ts';
 import { Sc19PaymentError } from '../lib/sc19-payments.ts';
+import { Przelewy24Error } from '../lib/sc19-przelewy24-provider.ts';
 const id='00000000-0000-4000-8000-000000000001';
 const origin='https://app.fixture.invalid';
 function harness(extra={}) {
@@ -125,4 +126,37 @@ test('offers and checkout share the composed service gate, including unapproved 
    appOrigin:origin,signatureHeader:'fixture-signature',checkoutOrigins:[],enabled:true,liveApproved:false,...allowed});
   assert.equal(runtime.service.checkoutEnabled,true);
  }
+});
+
+// SC-P24-UNBLOCK-001: a Przelewy24 failure stays SC19_PAYMENT_RETRY / 503, but is
+// named. The authenticated checkout gets the fixed code as `detail`; the public
+// webhook body is unchanged. Only the code and the numeric status are logged.
+test('Przelewy24 failures are named for the buyer and in logs, never in the webhook body',async t=>{
+ const logged=[];t.mock.method(console,'error',(...args)=>{logged.push(args);});
+ const failing=(error)=>harness({service:{checkoutEnabled:true,
+  checkout:async()=>{throw error;},notification:async()=>{throw error;}}}).http;
+ const unauthorized=new Przelewy24Error('P24_UNAUTHORIZED',401);
+ const r=await failing(unauthorized).checkout(checkout());
+ assert.equal(r.status,503);
+ assert.deepEqual(await r.json(),{error:'SC19_PAYMENT_RETRY',detail:'P24_UNAUTHORIZED'});
+ const w=await failing(unauthorized).webhook(new Request(origin,{method:'POST',headers:{'fixture-signature':'valid'},body:'{}'}));
+ assert.equal(w.status,503);
+ assert.deepEqual(await w.json(),{error:'SC19_PAYMENT_RETRY'});
+ assert.deepEqual(logged,[['SC19_P24_FAILURE','P24_UNAUTHORIZED',401],['SC19_P24_FAILURE','P24_UNAUTHORIZED',401]]);
+ logged.length=0;
+ const noStatus=await failing(new Przelewy24Error('P24_UNAVAILABLE')).checkout(checkout());
+ assert.deepEqual(await noStatus.json(),{error:'SC19_PAYMENT_RETRY',detail:'P24_UNAVAILABLE'});
+ assert.deepEqual(logged,[['SC19_P24_FAILURE','P24_UNAVAILABLE','-']]);
+ logged.length=0;
+ // A code outside the fixed format is neither returned nor logged verbatim.
+ const odd=await failing(new Przelewy24Error('P24_ secret text <b>',400)).checkout(checkout());
+ assert.deepEqual(await odd.json(),{error:'SC19_PAYMENT_RETRY'});
+ assert.deepEqual(logged,[['SC19_P24_FAILURE','P24_UNKNOWN',400]]);
+ logged.length=0;
+ // Anything that is not a Przelewy24 failure stays exactly as before: no detail, no log.
+ const generic=await failing(Error('database password')).checkout(checkout());
+ assert.deepEqual(await generic.json(),{error:'SC19_PAYMENT_RETRY'});
+ const coded=await failing(new Sc19PaymentError('SC19_PAYMENT_RECONCILIATION_REQUIRED')).checkout(checkout());
+ assert.equal(coded.status,409);assert.deepEqual(await coded.json(),{error:'SC19_PAYMENT_RECONCILIATION_REQUIRED'});
+ assert.deepEqual(logged,[]);
 });
