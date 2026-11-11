@@ -404,3 +404,35 @@ test('stored context alone never creates a return link without a sandbox order r
     t.after(h.close);assert.equal(h.find('a','Wróć do rekrutacji'),undefined);assert.equal(h.statusReads.length,0);
   }
 });
+
+// The paragraph below the accepted offer terms must say the same thing the terms
+// say. Until PR #413 it claimed the operator's confirmation was the only trigger
+// ("Analizy przyznajemy po potwierdzeniu płatności przez operatora, zwykle w
+// ciągu kilku minut."), which is false for a traditional transfer (Regulamin
+// § 7.3) and contradicted the corrected terms rendered one line above it, both
+// under a single acceptance checkbox.
+test('the delivery sentence under the terms is true for both payment branches', async t => {
+  const h = await harness({ checkoutAvailable: false, checkout: async () => { throw Error('must not POST'); } });
+  t.after(h.close);
+  const paragraph = h.find('p', 'Płatność online obsługuje Przelewy24');
+  assert.ok(paragraph, 'the payment paragraph is rendered under the terms');
+  const text = String(paragraph.props.children);
+  // Regulamin § 7.3: online — operator confirmation; transfer — our account credited.
+  // Regulamin § 8.1: granted "niezwłocznie po potwierdzeniu płatności".
+  assert.ok(text.includes('Analizy przyznajemy niezwłocznie po potwierdzeniu płatności'),
+    'the § 8.1 trigger is stated');
+  assert.ok(text.includes('po zaksięgowaniu wpłaty na naszym rachunku'),
+    'the bank-transfer branch of § 7.3 is not left out');
+  assert.ok(text.includes('przy płatności online — po jej potwierdzeniu przez operatora'),
+    'the online branch of § 7.3 stays, with the operator named');
+  assert.ok(text.includes('Zasady reklamacji i odstąpienia opisuje'), 'the § 10–11 pointer stays');
+  // The old sentence made the operator the only trigger. It must not come back,
+  // in this file or anywhere else the checkout screen renders.
+  assert.ok(!source.includes('Analizy przyznajemy po potwierdzeniu płatności przez operatora'),
+    'the operator-only delivery claim is gone from the checkout source');
+  // And the regulation it has to agree with still says what the sentence claims.
+  const regulamin = await readFile(new URL('../docs/legal/v1.0/01_Regulamin_SkillCheck.md', import.meta.url), 'utf8');
+  assert.ok(regulamin.includes('niezwłocznie po potwierdzeniu płatności'), 'Regulamin § 8.1 unchanged');
+  assert.ok(regulamin.includes('albo z chwilą uznania rachunku bankowego Usługodawcy'),
+    'Regulamin § 7.3 still covers the transfer branch');
+});

@@ -81,8 +81,12 @@ taken together with the production release SC-RELEASE-20261104.
   first of them requires. The commercial seed is data-only and
   `on conflict do nothing`: the quotas (FREE 5, PRESELEKCJA 60) and the offer
   `preselekcja-60-2026-11-r2` (active, approved) already exist, so it changes
-  nothing. The first push to `integration` after the lift therefore runs
-  `Migrate skillcheck-preview` and applies those nine migrations.
+  nothing. **This is the state before PR #413 and is historical only:** that PR
+  corrects two sentences of the offer terms, so the seed now issues the new
+  revision `preselekcja-60-2026-11-r3` and withdraws `…-r2` (the r2 row stays,
+  deactivated, with its own terms). The first push to `integration` after the
+  lift therefore runs `Migrate skillcheck-preview` and applies those nine
+  migrations.
 - Never create another branch to get a Preview: the Preview environment
   variables are pinned to `gitBranch: integration`; any other branch inherits
   the general `NEXT_PUBLIC_SUPABASE_URL`, which points at the production

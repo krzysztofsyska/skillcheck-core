@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { salesOperator } from '../sales/access';
 import { sc19OperatorNotices } from '../../../lib/sc19-operator';
-import { approveTrial, grantPaid, releaseTrialNip, savePolicy, setAutoFree } from './actions';
+import { approveTrial, grantPaid, publishOffer, releaseTrialNip, savePolicy, setAutoFree } from './actions';
+import { formatGross } from '../../../lib/pricing/cv-pool';
 import styles from '../sales/sales.module.css';
 import OperatorCatalogOrders from './catalog-orders';
 
@@ -18,6 +19,18 @@ const dates = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium', timeStyle:
 const autoOutcomes: Record<string, string> = {
   granted: 'FREE przyznany', refused: 'odmowa', unavailable: 'brak odpowiedzi wykazu',
 };
+/** Why publishing the offer is refused, in the operator's own words. The reason
+ * comes from the database, which checks the same things the publishing function
+ * checks, so the panel names the thing to fix instead of failing on the click. */
+const offerRefusals: Record<string, string> = {
+  catalog_missing: 'w cenniku nie ma opublikowanej wersji z pakietem PRESELEKCJA',
+  catalog_not_sellable: 'cennik oznacza ten pakiet jako niedostępny do kupienia',
+  catalog_mismatch: 'cena albo liczba CV w cenniku nie zgadza się z ofertą',
+  policy_missing: 'nie ustawiono liczby analiz w pakiecie PRESELEKCJA (sekcja powyżej)',
+  policy_mismatch: 'liczba analiz w pakiecie jest inna niż liczba sprzedawana w ofercie',
+  revision_expired: 'ta wersja oferty straciła ważność — potrzebna jest nowa, przejrzana wersja',
+};
+
 const autoReasons: Record<string, string> = {
   AUTO_DISABLED: 'automat wyłączony lub bez klucza podpisu',
   ANOTHER_NIP_TRIED: 'to konto próbowało już innego NIP-u',
@@ -46,7 +59,7 @@ export default async function OperatorBillingPage({ searchParams }: {
   const client = await salesOperator();
   const { status, q, catalogStatus } = await searchParams;
   const search = (q ?? '').trim().slice(0, 200);
-  const [policy, companies, consents, autoChecks, autoSettings, takenNips, releases] = await Promise.all([
+  const [policy, companies, consents, autoChecks, autoSettings, takenNips, releases, offer] = await Promise.all([
     client.rpc('sc19_operator_package_policy'),
     client.rpc('sc19_operator_companies', { search: search || null }),
     client.rpc('sc19_operator_marketing_consents', { search: search || null }),
@@ -57,6 +70,7 @@ export default async function OperatorBillingPage({ searchParams }: {
     // older occupied NIP would have no release form anywhere in the panel.
     client.rpc('sc19_operator_taken_trial_nips', { search: search || null }),
     client.rpc('sc19_operator_trial_nip_releases'),
+    client.rpc('sc19_operator_published_offer'),
   ]);
   if (policy.error?.code === '42501' || companies.error?.code === '42501') notFound();
   if (policy.error || companies.error || !policy.data || !companies.data) throw new Error('Nie udało się odczytać pakietów.');
@@ -74,6 +88,10 @@ export default async function OperatorBillingPage({ searchParams }: {
   const releasesFailed = Boolean(releases.error) || !releases.data;
   const released = releases.data ?? [];
   const auto = autoSettings.data?.[0] ?? null;
+  // A failed read must not read as "no offer published": that would invite a
+  // second publication of something already live.
+  const offerFailed = Boolean(offer.error) || !offer.data?.length;
+  const offerState = offer.data?.[0] ?? null;
   const credits = Object.fromEntries(policy.data.map(row => [row.plan, row.credits]));
   const notice = status && Object.hasOwn(sc19OperatorNotices, status) ? sc19OperatorNotices[status as keyof typeof sc19OperatorNotices] : null;
 
@@ -94,6 +112,43 @@ export default async function OperatorBillingPage({ searchParams }: {
         <label className={styles.confirm}><input type="checkbox" name="confirm" value="yes" required /> Zmiana dotyczy kolejnych aktywacji i przydziałów, nie istniejących sald.</label>
         <button type="submit">Zapisz</button>
       </form>
+    </section>
+
+    {/* SC-019 offer publication. Without a published offer a verified company
+        sees nothing to buy on the checkout page. What is published — price,
+        number of CV analyses and the whole terms text — is fixed in the database
+        and reviewed in code; the operator decides only WHETHER to publish. */}
+    <section className={styles.card} aria-labelledby="offer">
+      <h2 id="offer">Oferta na stronie zakupu</h2>
+      {offerFailed ? <p className={styles.empty}>Nie udało się odczytać stanu oferty. Odśwież stronę i nie publikuj „na wszelki wypadek”.</p>
+        : offerState!.published_offer_id ? <>
+          <p>Opublikowana: <strong>PRESELEKCJA — {formatGross(offerState!.published_amount_minor!)} brutto
+            za {offerState!.published_credits} analiz CV</strong></p>
+          <p className={styles.hint}>Wersja regulaminu: {offerState!.published_terms_revision}
+            {' · '}opublikowano {offerState!.published_at ? dates.format(new Date(offerState!.published_at)) : 'nieznana data'}
+            {' · '}ważna do {dates.format(new Date(Number(offerState!.published_valid_until_ms)))}
+            {typeof offerState!.expires_in_days === 'number' ? ` (${offerState!.expires_in_days} dni)` : ''}</p>
+          {offerState!.expiring_soon && <p role="alert" className={styles.empty}>
+            <strong>Oferta wygasa w ciągu 30 dni.</strong> Po tej dacie klient przestanie widzieć pakiet
+            do kupienia i nie będzie o tym żadnego komunikatu. Zgłoś zespołowi przygotowanie nowej,
+            przejrzanej wersji oferty, zanim ta straci ważność.</p>}
+        </> : <p>Żadna oferta nie jest opublikowana. Zweryfikowana firma nie widzi dziś nic do kupienia
+          na stronie zakupu.</p>}
+
+      {!offerFailed && <>
+        <p className={styles.hint}>Publikacja wystawi: PRESELEKCJA — {formatGross(offerState!.revision_amount_minor)} brutto
+          za {offerState!.revision_credits} analiz CV, regulamin {offerState!.revision_terms_revision},
+          ważna do {dates.format(new Date(Number(offerState!.revision_valid_until_ms)))}.
+          Cena, liczba analiz i treść regulaminu są ustalone w kodzie i nie da się ich tu zmienić.
+          Publikacja nie włącza płatności online — sprzedaż idzie przelewem, a pakiet przydzielasz niżej po wpłacie.</p>
+        {offerState!.publishable
+          ? <form action={publishOffer} className={styles.form}>
+              <label className={styles.confirm}><input type="checkbox" name="confirm" value="yes" required /> Rozumiem, że po publikacji zweryfikowana firma zobaczy ten pakiet, tę cenę i ten regulamin.</label>
+              <button type="submit">Opublikuj ofertę</button>
+            </form>
+          : <p role="alert" className={styles.empty}>Publikacja jest teraz niemożliwa:{' '}
+            {offerRefusals[offerState!.refusal ?? ''] ?? offerState!.refusal}. Dopóki to trwa, nic nie zostanie opublikowane.</p>}
+      </>}
     </section>
 
     {/* SC-FREE-AUTO-001: the switch and the record of what it did. Turning it

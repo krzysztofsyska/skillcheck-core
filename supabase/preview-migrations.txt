@@ -62,3 +62,5 @@
 20261109230000_sc021_ai_budgets.sql
 # SC-021-D: AI cost and margin dashboard (operator-only reads, placeholder FX rate only).
 20261110090000_sc021_cost_dashboard.sql
+# SC-019: operator publication of the reviewed PRESELEKCJA offer (functions and grants only; publishes nothing by itself).
+20261111090000_sc19_offer_publication.sql
