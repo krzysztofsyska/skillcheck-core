@@ -160,6 +160,7 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
    - deletes branches it did not create.
 
    Any such action by an agent session is an incident under rule 4.
+6. Settings tables are read by named columns, never with `select *`. `private.sales_lead_settings` and `private.sc19_trial_auto_settings` are the known examples: they keep secrets (`request_secret`, `request_secret_current`, `request_secret_previous` and similar) next to ordinary settings, so a plain read exposes the secret. Never read a secret column, not even in a test or diagnostic query. To check that a secret is configured, use a presence test (`request_secret is not null`, `octet_length(request_secret_current) >= 32`), never its value.
 
 The required status `production-approval-attestation` (`.github/workflows/production-approval-attestation.yml`) passes only after the owner approves the `production-approval` environment for the exact PR head SHA. While agent sessions act through the owner's identity (rule 5, variant B), the separation between an agent and the owner's approval is procedural, not technical: GitHub would accept an approval or a `main` merge made with that identity. Only the owner approves and merges into `main`. Moving agent writes to the `skillcheck-agent-ks[bot]` App token restores the technical separation.
 

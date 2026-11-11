@@ -4,7 +4,7 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
-> **Bieżący punkt wejścia — SC-CONTEXT (8.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera aktualne SHA, status implementacji/review i HOLD wydania. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
+> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera aktualne SHA i status implementacji/review. Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
 
 ## Who does what (owner decision 2026-11-05)
 
@@ -68,11 +68,11 @@ State as of 2026-11-11 (checked by read-only queries; no writes):
 - Registration consent: version `1.0+r2`, without the voice-calls annex (PR #409, commit `16752f6`).
 - Voice-calls annex withdrawn from publication, archived copy in `docs/legal/withdrawn/v1.0/` (PR #410, commit `6c32302`, owner decision). Reason: § 1 ust. 2–3 of the annex would have taken effect on 2026-11-13 for accounts that never accepted it.
 
-Known production blockers (owner action, give him a direct link and exact clicks):
+Former production blockers (both were owner actions; both resolved, checked 2026-11-11; history kept):
 - RESOLVED (checked 2026-11-11): the package policy exists on production. `private.sc19_package_policy` has FREE = 5 and PRESELEKCJA = 60 (last updated 2026-11-10). Balances were not checked in this session.
 - RESOLVED (checked 2026-11-11): contact form `/rozmowa`. Vercel Production `SALES_LEADS_ENABLED` = `true` (last changed 2026-11-02), `private.sales_lead_settings.leads_enabled` = `true`, `SALES_AUTO_REPLY_ENABLED` = `false`. The latest production deployments (2026-11-11) are newer than the last change of the variable, so the redeploy step is covered.
 
-Frozen (do not work on): voice, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+Frozen (do not work on): voice, Quality of Hire, talent pool, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
 
 ## Scope reopened (owner decision 2026-11-02)
 
