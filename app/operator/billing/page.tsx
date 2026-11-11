@@ -8,6 +8,7 @@ import { approveTrial, grantPaid, publishOffer, releaseTrialNip, savePolicy, set
 import { formatGross } from '../../../lib/pricing/cv-pool';
 import styles from '../sales/sales.module.css';
 import OperatorCatalogOrders from './catalog-orders';
+import P24Diagnostic from './p24-diagnostic';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Pakiety firm | SkillCheck', robots: { index: false, follow: false } };
@@ -54,10 +55,10 @@ const autoReasons: Record<string, string> = {
  * PRESELEKCJA grants. Payment is confirmed outside the browser; this panel
  * only records the operator's decision through audited RPCs. */
 export default async function OperatorBillingPage({ searchParams }: {
-  searchParams: Promise<{ status?: string; q?: string; catalogStatus?: string }>;
+  searchParams: Promise<{ status?: string; q?: string; catalogStatus?: string; p24?: string }>;
 }) {
   const client = await salesOperator();
-  const { status, q, catalogStatus } = await searchParams;
+  const { status, q, catalogStatus, p24 } = await searchParams;
   const search = (q ?? '').trim().slice(0, 200);
   const [policy, companies, consents, autoChecks, autoSettings, takenNips, releases, offer] = await Promise.all([
     client.rpc('sc19_operator_package_policy'),
@@ -101,6 +102,7 @@ export default async function OperatorBillingPage({ searchParams }: {
     <header><p className={styles.eyebrow}>SKILLCHECK · PAKIETY</p><h1>Pakiety firm</h1>
       <p>Weryfikacja firm przed FREE i przydział PRESELEKCJI po potwierdzonej wpłacie. Każda operacja jest sprawdzana w bazie i zapisywana w dzienniku analiz.</p></header>
     {notice && <p role="status" className={styles.empty}>{notice}</p>}
+    <P24Diagnostic probe={p24}/>
 
     <section className={styles.card} aria-labelledby="policy">
       <h2 id="policy">Liczba analiz w pakietach</h2>

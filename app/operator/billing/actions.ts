@@ -78,6 +78,28 @@ export async function publishOffer(form: FormData) {
   await rpc('sc19_operator_publish_offer', {}, 'offer_published', '');
 }
 
+/** SC-P24-DIAG-001: asks Przelewy24, read-only, whether they accept this
+ * deployment's POS id and API key, and reports only the outcome.
+ *
+ * It re-checks the operator allowlist itself, because a server action is its own
+ * endpoint and must never inherit the page's check. It takes no input, so there
+ * is nothing an operator could point it at: the credentials come from the gate,
+ * the address is the sandbox constant. It creates no transaction, charges
+ * nobody, and the redirect carries one short code — never a key, a shape hint or
+ * a connection string. */
+export async function checkP24() {
+  const client = await createClient();
+  const { data: { user }, error: authError } = await client.auth.getUser();
+  if (authError || !user) redirect('/login');
+  const { data, error } = await client.rpc('platform_operator_status');
+  if (error) throw new Error('Nie udało się sprawdzić dostępu.');
+  if (data !== true) notFound();
+  const { sc19P24Diagnostic, sc19P24DiagnosticCode } = await import('../../../lib/sc19-p24-diagnostic');
+  const code = sc19P24DiagnosticCode(await sc19P24Diagnostic(process.env));
+  revalidatePath('/operator/billing');
+  redirect(`/operator/billing?${new URLSearchParams({ p24: code })}`);
+}
+
 export async function grantPaid(form: FormData) {
   const search = searchOf(form);
   const input = parseGrantForm(form);
