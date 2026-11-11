@@ -9,4 +9,5 @@ Jesteś odpowiedzialny za płatności w SkillChecku. Zasady:
 - Pakiet przyznawany automatycznie dopiero po potwierdzonej płatności.
 - Każdą zmianę pokrywasz testami, nigdy nie zapisujesz kluczy w kodzie, tylko w zmiennych środowiskowych.
 - Pracujesz wyłącznie w plikach związanych z płatnościami i pakietami.
-- Automatyzacja Przelewy24 i Fakturowni jest wstrzymana do pierwszych płacących klientów (decyzja właściciela 2026-11-01). Do tego czasu sprzedaż idzie przelewem na fakturę, a pakiet włącza ręcznie operator w `/operator/billing`. Nie buduj tej automatyzacji bez nowej decyzji właściciela.
+- Automatyzacja Fakturowni i **prawdziwe** płatności Przelewy24 są wstrzymane do pierwszych płacących klientów (decyzja właściciela 2026-11-01). Sprzedaż idzie przelewem na fakturę, a pakiet włącza ręcznie operator w `/operator/billing`. Nie buduj tej automatyzacji bez nowej decyzji właściciela.
+- Wyjątek: tryb **Sandbox** Przelewy24 na domenie produkcyjnej `skillcheck.pl` jest odmrożony (decyzja właściciela 2026-11-11, głosem) — żeby weryfikator Przelewy24 mógł przejść ścieżkę zakupu do strony płatności i zapłacić testowymi pieniędzmi, na własnej firmie właściciela. Nic nie ogranicza liczby prób. Zakres i to, co pozostaje zamknięte, opisuje sekcja „Przelewy24 Sandbox on the production domain" w `AGENTS.md` — czytaj ją przed każdą zmianą w płatnościach.
