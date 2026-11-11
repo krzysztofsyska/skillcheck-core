@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
-import { parseLegalMarkdown, parseInline, hasLegalAcceptance, LEGAL_DOCUMENTS, LEGAL_VERSION, LEGAL_ACCEPTANCE_VALUE } from '../lib/legal.ts';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { parseLegalMarkdown, parseInline, hasLegalAcceptance, LEGAL_DOCUMENTS, LEGAL_VERSION, LEGAL_ACCEPTANCE_VALUE, LEGAL_ACCEPTANCE_REVISION, LEGAL_ACCEPTED_DOCUMENTS } from '../lib/legal.ts';
 
 const dir = new URL(`../docs/legal/v${LEGAL_VERSION}/`, import.meta.url);
 
@@ -61,8 +61,62 @@ test('registration acceptance requires the exact current version value', () => {
   assert.equal(hasLegalAcceptance(form()), false);
   assert.equal(hasLegalAcceptance(form('on')), false);
   assert.equal(hasLegalAcceptance(form('v0.9')), false);
-  assert.equal(hasLegalAcceptance(form(`v${LEGAL_VERSION}`)), false, 'stale form without Annex 1 is rejected');
+  assert.equal(hasLegalAcceptance(form(`v${LEGAL_VERSION}`)), false, 'a bare version is rejected');
+  assert.equal(hasLegalAcceptance(form('v1.0+aneks1')), false, 'a stale form from the Annex 1 consent is rejected');
   assert.equal(hasLegalAcceptance(form(LEGAL_ACCEPTANCE_VALUE)), true);
+});
+
+// Owner decision 2026-11-11: the voice annex is not part of the mandatory registration consent
+// (the voicebot is not offered, CLAUDE.md "Voicebot on the public offer"). These tests pin the
+// consent wording and its version so a later change cannot silently bring it back or reuse a version.
+const repo = (path) => new URL(`../${path}`, import.meta.url);
+const consentLabel = () => {
+  const page = readFileSync(repo('app/register/page.tsx'), 'utf8');
+  const start = page.indexOf('name={LEGAL_ACCEPTANCE_FIELD}');
+  const end = page.indexOf('</label>', start);
+  assert.ok(start > 0 && end > start, 'the mandatory consent label is found on /register');
+  return page.slice(start, end);
+};
+
+test('the consent version is r2, differs from the Annex 1 consent, and the documents match the label', () => {
+  assert.equal(LEGAL_ACCEPTANCE_REVISION, '1.0+r2');
+  assert.equal(LEGAL_ACCEPTANCE_VALUE, 'v1.0+r2');
+  assert.notEqual(LEGAL_ACCEPTANCE_REVISION, `${LEGAL_VERSION}+aneks1`, 'changed wording must not reuse the old revision');
+  assert.deepEqual([...LEGAL_ACCEPTED_DOCUMENTS], ['regulamin', 'dpa', 'polityka-prywatnosci']);
+  const label = consentLabel();
+  for (const href of ['/regulamin"', '/regulamin/umowa-powierzenia"', '/polityka-prywatnosci"']) assert.ok(label.includes(`href="${href}`), href);
+  assert.equal((label.match(/<Link /g) ?? []).length, LEGAL_ACCEPTED_DOCUMENTS.length, 'one link per accepted document');
+});
+
+test('the mandatory registration consent does not mention or link the voice annex', () => {
+  const label = consentLabel();
+  assert.doesNotMatch(label, /aneks|g[łl]osow|voice|asystent/i);
+  assert.match(label, /upoważniony\/a/, 'the authority statement stays');
+});
+
+test('the voice annex is not a condition anywhere in the customer-facing code', () => {
+  const allowed = new Set(['lib/legal.ts', 'app/regulamin/aneks-rozmowy-glosowe/page.tsx']);
+  const walk = (dir) => readdirSync(repo(dir), { withFileTypes: true }).flatMap((e) => {
+    const p = `${dir}/${e.name}`;
+    return e.isDirectory() ? walk(p) : /\.(tsx?|mjs|html)$/.test(e.name) ? [p] : [];
+  });
+  const hits = ['app', 'components', 'lib'].filter((d) => existsSync(repo(d))).flatMap(walk)
+    .filter((p) => !allowed.has(p) && /aneks-rozmowy-glosowe|aneks1|aneks-1|Aneks(em)? nr 1/.test(readFileSync(repo(p), 'utf8')));
+  assert.deepEqual(hits, [], 'only the registry and the annex page itself refer to the annex');
+});
+
+test('the Regulamin and the DPA do not make the voice annex mandatory', () => {
+  for (const file of ['01_Regulamin_SkillCheck.md', '03_Umowa_powierzenia_DPA.md']) {
+    assert.doesNotMatch(readFileSync(new URL(file, dir), 'utf8'), /Aneks/, file);
+  }
+});
+
+test('the voice annex stays published at its own address for accounts that accepted it', () => {
+  assert.ok(existsSync(repo('app/regulamin/aneks-rozmowy-glosowe/page.tsx')), 'the annex page route exists');
+  assert.equal(LEGAL_DOCUMENTS.aneks1.href, '/regulamin/aneks-rozmowy-glosowe');
+  assert.ok(readdirSync(dir).includes(LEGAL_DOCUMENTS.aneks1.file), 'the annex markdown exists');
+  assert.ok(existsSync(repo(`public${LEGAL_DOCUMENTS.aneks1.docx}`)), 'the annex .docx exists');
+  assert.match(readFileSync(repo('app/regulamin/aneks-rozmowy-glosowe/page.tsx'), 'utf8'), /documentKey="aneks1"/);
 });
 
 test('annex 1 (voice interviews) lists voice sub-processors, retention and no recording', () => {

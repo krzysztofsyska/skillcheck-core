@@ -31,7 +31,7 @@ export async function register(form: FormData) {
   const client = await createClient();
   const { data, error } = await client.auth.signUp({ ...input, options: {
     emailRedirectTo,
-    // Server-set record of the accepted Regulamin + DPA + privacy notice + Annex 1 (voice) version.
+    // Server-set record of the accepted Regulamin + DPA + privacy notice version (see lib/legal.ts for the revision history).
     data: {
       legal_acceptance: { version: LEGAL_VERSION, revision: LEGAL_ACCEPTANCE_REVISION, documents: [...LEGAL_ACCEPTED_DOCUMENTS], accepted_at: new Date().toISOString() },
       // SC-CONSENT-001: the optional marketing consent is recorded against a
