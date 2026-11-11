@@ -436,3 +436,37 @@ test('the delivery sentence under the terms is true for both payment branches', 
   assert.ok(regulamin.includes('albo z chwilą uznania rachunku bankowego Usługodawcy'),
     'Regulamin § 7.3 still covers the transfer branch');
 });
+
+// The sandbox now also runs on the production domain (owner decision 2026-11-11),
+// where a test payment grants REAL analyses on the real account. That is the point
+// of the verifier's walk, so the screen must say both halves of it plainly: nothing
+// is charged, and the analyses are granted anyway. It must promise no payment
+// method of its own beyond what the operator offers.
+test('the sandbox notice says that nothing is charged AND that the analyses are still granted', async t => {
+  const sandbox = await harness({ sandbox:true });
+  t.after(sandbox.close);
+  const note = sandbox.find('p','Sandboxie Przelewy24');
+  assert.ok(note,'the sandbox notice is shown');
+  const text = String(note.props.children);
+  assert.match(text,/żadne pieniądze nie zostaną pobrane/);
+  assert.match(text,/Analizy CV zostaną jednak przyznane na tym koncie/);
+  assert.doesNotMatch(text,/proforma|faktur|kart[ąay]|BLIK|przelewem/i);
+  const live = await harness({ sandbox:false });
+  t.after(live.close);
+  assert.equal(live.find('p','Sandboxie Przelewy24'),undefined,'not shown outside the sandbox');
+});
+
+// A buyer who abandons an unpaid payment can be left with an order whose provider
+// session can no longer be opened; `checkout()` then answers
+// SC19_PAYMENT_RECONCILIATION_REQUIRED and the one-unresolved-order rule blocks the
+// next purchase. Retrying cannot clear it, so the screen must not invite a retry.
+test('an order that can no longer be reconciled is named as such, not offered a retry', async t => {
+  const h = await harness({ checkout: async () => ({ ok:false,
+    json: async () => ({ error:'SC19_PAYMENT_RECONCILIATION_REQUIRED' }) }) });
+  t.after(h.close);
+  h.accept();
+  await h.click('Zamawiam');
+  const message = String(h.find('p','pomoc@skillcheck.pl').props.children);
+  assert.match(message,/Ponawianie nie pomoże/);
+  assert.equal(h.redirects.length,0);
+});

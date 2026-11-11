@@ -44,7 +44,9 @@ Zmiana nazwy odnośnika na „Regulamin sklepu” też jest do potwierdzenia: ty
 
 ## 3. Ścieżka testowa dla weryfikatora
 
-### Stan faktyczny
+> **NIEAKTUALNE od 11.11.2026.** Właściciel zdecydował głosem 11.11.2026, że weryfikator musi móc przejść ścieżkę zakupu **na `skillcheck.pl`** aż do strony płatności i zapłacić testowymi pieniędzmi. Tryb Sandbox Przelewy24 na domenie produkcyjnej został wdrożony w PR #421; zakres decyzji opisuje sekcja „Przelewy24 Sandbox on the production domain" w `AGENTS.md`, a kroki uruchomienia `docs/p24-sandbox-produkcja-2026-11-11.md`. Opis poniżej zachowany jako stan z 9.11.2026 — nie stosuj go jako instrukcji.
+
+### Stan faktyczny (9.11.2026, historyczny)
 
 - Płatność testowa (sandbox Przelewy24) działa wyłącznie w wersji testowej serwisu zbudowanej z gałęzi
   `integration`, na testowej bazie `skillcheck-preview`. Kod odmawia jej uruchomienia gdziekolwiek indziej
@@ -70,6 +72,7 @@ Kroki wynikają z kodu; pełne przejście na żywo trzeba powtórzyć po odsłon
 
 Na produkcji (`https://skillcheck.pl`) weryfikator widzi strony publiczne i dokumenty; płatność online
 pozostaje wyłączona do czasu aktywacji konta przez Przelewy24 i osobnej zgody właściciela.
+**Zdanie powyżej jest nieaktualne od 11.11.2026** — zob. notatkę na początku sekcji 3.
 
 ## 4. Czego brakuje do kliknięcia „Przekaż do weryfikacji”
 

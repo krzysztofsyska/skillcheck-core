@@ -1,4 +1,4 @@
-import { sc19PreviewPaymentConfig } from './sc19-payment-preview.ts';
+import { sc19SandboxPaymentConfig } from './sc19-payment-preview.ts';
 import type { PaymentDependencies } from './sc19-payments.ts';
 import { createSc19Payments } from './sc19-payments.ts';
 import { createPostgresPaymentStore, type PaymentSqlPool } from './sc19-payment-postgres.ts';
@@ -17,7 +17,7 @@ export function composeSc19PaymentRuntime(config: Omit<PaymentDependencies,'stor
     signatureHeader:config.signatureHeader});
 }
 export async function resolveSc19PaymentRuntime(request?: Request): Promise<PaymentHttpRuntime | null> {
-  const config = sc19PreviewPaymentConfig(process.env, request && new URL(request.url).origin);
+  const config = sc19SandboxPaymentConfig(process.env, request && new URL(request.url).origin);
   if (!config) return null;
   const { previewRuntime } = await import('./sc19-payment-preview-runtime.ts');
   return previewRuntime(config);

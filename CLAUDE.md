@@ -4,7 +4,7 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
-> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera stan wydania i wskazuje, gdzie sprawdzać bieżące SHA oraz status implementacji/review (git, issue i PR — nie ten dokument). Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
+> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera stan wydania i wskazuje, gdzie sprawdzać bieżące SHA oraz status implementacji/review (git, issue i PR — nie ten dokument). Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje dla **prawdziwych** płatności Przelewy24; tryb **Sandbox** na `skillcheck.pl` właściciel odmroził głosem 11.11.2026 — zob. sekcję „Przelewy24 Sandbox on the production domain" w `AGENTS.md`. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
 
 ## Who does what (owner decision 2026-11-05)
 
@@ -52,7 +52,7 @@ MVP = a new company, without technical help, can: visit the site → sign up (on
 Owner decisions (all YES, 2026-11-01):
 1. No voicebot in the MVP.
 2. Starting price: PRESELEKCJA 300 zł gross for 60 CVs (as on the site, owner decision 2026-10-28, reconfirmed 2026-11-01), FREE 5 CVs. **WERYFIKACJA 615 zł gross for 60 CVs (owner decision 2026-11-02)** — the site previously said 899 zł and the calculator demo said 615 zł at 50 CVs; that split is resolved in favour of 615 zł / 60 CVs. **ASSESSMENT CENTER 1 499 zł gross for 50 CVs (owner decision 2026-11-02)** — this replaces the earlier illustrative 1 799 zł on the site and 1 845 zł in the demo; the process is sized for 5–6 people, 10 at most. Every customer-facing surface and every file an agent or LLM reads must carry the same numbers. The derivation of all four package prices is in [docs/cennik-2026-11-02.md](docs/cennik-2026-11-02.md), which is the single source of truth until the catalog ships (SC-PRICING-W2).
-3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). Przelewy24 and Fakturownia automation are frozen until there are paying customers.
+3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). The Fakturownia automation and **live** Przelewy24 payments are frozen until there are paying customers. The Przelewy24 **Sandbox** on the production domain is not (owner decision 2026-11-11, by voice; see „Przelewy24 Sandbox on the production domain" in `AGENTS.md`) — it exists so the Przelewy24 verifier can walk the purchase path, and it takes no money from anyone.
 4. Bulk CV upload (PR #228) is part of the MVP.
 5. Everything outside the MVP is labelled `później` and closed; old branches stay (agent sessions cannot delete branches or push tags).
 6. `main` and `integration` are protected: merges only through PRs with green required checks. Codex is the designated builder.
@@ -72,7 +72,7 @@ Former production blockers (both were owner actions; both resolved, checked 2026
 - RESOLVED (checked 2026-11-11): the package policy exists on production. `private.sc19_package_policy` has FREE = 5 and PRESELEKCJA = 60 (last updated 2026-11-10). Balances were not checked in this session.
 - RESOLVED (checked 2026-11-11): contact form `/rozmowa`. Vercel Production `SALES_LEADS_ENABLED` = `true` (last changed 2026-11-02), `private.sales_lead_settings.leads_enabled` = `true`, `SALES_AUTO_REPLY_ENABLED` = `false`. The latest production deployments (2026-11-11) are newer than the last change of the variable, so the redeploy step is covered.
 
-Frozen (do not work on): voice, Quality of Hire, talent pool, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+Frozen (do not work on): voice, Quality of Hire, talent pool, further erasure stages, Fakturownia automation, agent-pipeline tooling. The Przelewy24 **Sandbox** on the production domain is NOT frozen (owner decision 2026-11-11, by voice; see „Przelewy24 Sandbox on the production domain" in `AGENTS.md`); live Przelewy24 payments remain frozen.
 
 ## Scope reopened (owner decision 2026-11-02)
 
@@ -120,7 +120,9 @@ answer: *"Tak, budowa weryfikacji i assessment center jest moją decyzją i trze
 robić."* Assessment Center is therefore removed from the frozen list and is in scope alongside
 the modules listed above in this section (SC-014, SC-015, SC-PRICING). WERYFIKACJA was already in
 scope via SC-014 and SC-015; this confirms it. Nothing else moves: the voicebot, interview analysis,
-Quality of Hire, talent pool and the Przelewy24/Fakturownia automation stay frozen. (White-label
+Quality of Hire, talent pool, the Fakturownia automation and **live** Przelewy24 payments stay
+frozen; the Przelewy24 **Sandbox** on the production domain does not (owner decision 2026-11-11,
+by voice — same section in `AGENTS.md`). (White-label
 was reopened on 2026-11-09 — see the „SC-020 and SC-021 reopened" section below.)
 
 For the record, the sequence was: #272 merged into `integration` that morning and its migration
