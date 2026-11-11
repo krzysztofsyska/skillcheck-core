@@ -52,7 +52,7 @@ MVP = a new company, without technical help, can: visit the site → sign up (on
 Owner decisions (all YES, 2026-11-01):
 1. No voicebot in the MVP.
 2. Starting price: PRESELEKCJA 300 zł gross for 60 CVs (as on the site, owner decision 2026-10-28, reconfirmed 2026-11-01), FREE 5 CVs. **WERYFIKACJA 615 zł gross for 60 CVs (owner decision 2026-11-02)** — the site previously said 899 zł and the calculator demo said 615 zł at 50 CVs; that split is resolved in favour of 615 zł / 60 CVs. **ASSESSMENT CENTER 1 499 zł gross for 50 CVs (owner decision 2026-11-02)** — this replaces the earlier illustrative 1 799 zł on the site and 1 845 zł in the demo; the process is sized for 5–6 people, 10 at most. Every customer-facing surface and every file an agent or LLM reads must carry the same numbers. The derivation of all four package prices is in [docs/cennik-2026-11-02.md](docs/cennik-2026-11-02.md), which is the single source of truth until the catalog ships (SC-PRICING-W2).
-3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). Przelewy24 and Fakturownia automation are frozen until there are paying customers.
+3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). The Fakturownia automation and **live** Przelewy24 payments are frozen until there are paying customers. The Przelewy24 **Sandbox** on the production domain is not (owner decision 2026-11-11, by voice; see „Przelewy24 Sandbox on the production domain" in `AGENTS.md`) — it exists so the Przelewy24 verifier can walk the purchase path, and it takes no money from anyone.
 4. Bulk CV upload (PR #228) is part of the MVP.
 5. Everything outside the MVP is labelled `później` and closed; old branches stay (agent sessions cannot delete branches or push tags).
 6. `main` and `integration` are protected: merges only through PRs with green required checks. Codex is the designated builder.
@@ -120,7 +120,9 @@ answer: *"Tak, budowa weryfikacji i assessment center jest moją decyzją i trze
 robić."* Assessment Center is therefore removed from the frozen list and is in scope alongside
 the modules listed above in this section (SC-014, SC-015, SC-PRICING). WERYFIKACJA was already in
 scope via SC-014 and SC-015; this confirms it. Nothing else moves: the voicebot, interview analysis,
-Quality of Hire, talent pool and the Przelewy24/Fakturownia automation stay frozen. (White-label
+Quality of Hire, talent pool, the Fakturownia automation and **live** Przelewy24 payments stay
+frozen; the Przelewy24 **Sandbox** on the production domain does not (owner decision 2026-11-11,
+by voice — same section in `AGENTS.md`). (White-label
 was reopened on 2026-11-09 — see the „SC-020 and SC-021 reopened" section below.)
 
 For the record, the sequence was: #272 merged into `integration` that morning and its migration

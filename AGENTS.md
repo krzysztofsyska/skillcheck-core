@@ -190,10 +190,15 @@ adapter. Implementation: PR #421.
 keys and any real payment; any other payment provider; the Fakturownia automation; taking money from
 anyone other than himself. A sandbox payment grants REAL analyses on production, which is accepted
 because there are no customers and the offer is visible only to a company the owner has verified.
+Joined with the no-limit rule, that means test payments can grant an unbounded number of real
+60-analysis packages, and spending them costs real money at the AI provider. Nothing caps this in
+code by design; if the balance on production ever looks wrong, this is the first thing to check.
 
 **Still his clicks, never an agent's:** the Vercel Production variables, the password of the new
-database role, and publishing the offer in `/operator/billing`. Production access rules 1-5 are
-unchanged by this.
+database role, and publishing the offer in `/operator/billing`. The role itself reaches production
+the only way anything reaches it: as a migration in a promotion PR he approves, applied by the
+`db-migrate-production` workflow under rule 1. Production access rules 1-6 are unchanged by this,
+rule 6 included: the role's password is a secret an agent session neither reads nor needs.
 
 This record exists because the HOLD above would otherwise make a future session revert the work in
 good faith. Only the owner opens a gate; this records that he did, and with what scope. An
