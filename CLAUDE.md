@@ -4,7 +4,7 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
-> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera aktualne SHA i status implementacji/review. Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
+> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera stan wydania i wskazuje, gdzie sprawdzać bieżące SHA oraz status implementacji/review (git, issue i PR — nie ten dokument). Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
 
 ## Who does what (owner decision 2026-11-05)
 
@@ -103,7 +103,7 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
    Also removed from the packages table and from the public calculator demo, where it was still
    shown as available. Revisit when a customer actually asks for it — the minimal 3–4 day version
    is kept in the plan under "MODUŁ B". `SC-022` stays reserved for it; never reuse `SC-021`,
-   which is the frozen AI gateway work (`feat/sc-021-*` branches).
+   which is the SC-021 AI gateway work (`feat/sc-021-*` branches), odmrożona 2026-11-09 — zob. sekcję „SC-020 and SC-021 reopened" niżej.
 
 4. **SC-PRICING-W1…W4** — the internal pricing calculator, ending in the public price list reading
    from one catalog. Owner decision 2026-11-02: "żeby prace nad tym poszły", replacing the earlier
@@ -120,7 +120,8 @@ answer: *"Tak, budowa weryfikacji i assessment center jest moją decyzją i trze
 robić."* Assessment Center is therefore removed from the frozen list and is in scope alongside
 the modules listed above in this section (SC-014, SC-015, SC-PRICING). WERYFIKACJA was already in
 scope via SC-014 and SC-015; this confirms it. Nothing else moves: the voicebot, interview analysis,
-Quality of Hire, talent pool, white-label and the Przelewy24/Fakturownia automation stay frozen.
+Quality of Hire, talent pool and the Przelewy24/Fakturownia automation stay frozen. (White-label
+was reopened on 2026-11-09 — see the „SC-020 and SC-021 reopened" section below.)
 
 For the record, the sequence was: #272 merged into `integration` that morning and its migration
 `20261106120000_sc_ac_inventory_r13.sql` was applied on the Preview database (test data only)
