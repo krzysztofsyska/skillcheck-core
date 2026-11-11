@@ -19,6 +19,11 @@ const paymentsPending='Płatność online jest w trakcie uruchamiania (trwa wery
 // meaningful — so the screen says both, and promises no payment method of its own
 // beyond what the operator's sandbox offers.
 const sandboxNotice='Płatność testowa w Sandboxie Przelewy24: żadne pieniądze nie zostaną pobrane. Analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
+/** A failure we have no dedicated sentence for. The code is shown on purpose: it
+ * is the only thing that tells support whether to retry or to look at the payment
+ * operator, and it contains no private data. */
+const checkoutFailed=(code:string)=>
+  `Nie udało się otworzyć płatności. Ponów próbę — serwer sprawdzi istniejące zamówienie. Jeśli to się powtarza, napisz na pomoc@skillcheck.pl i podaj kod: ${code}.`;
 const reconciliationRequired='Tego zamówienia nie można już otworzyć ani potwierdzić automatycznie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy — odblokujemy zamówienie i będziesz mógł złożyć nowe.';
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${companyId.toLowerCase()}:${orderId.toLowerCase()}`;
@@ -127,7 +132,11 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
       try {sessionStorage.setItem(key,requestId);} catch { /* optional */ }
       const response=await fetch('/api/billing/checkout',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId})});
-      const data=await response.json();
+      // A killed invocation or a platform error answers with HTML, not JSON. Bare
+      // `response.json()` threw here and every failure — including our own error
+      // codes — fell into the generic catch below, which is why a broken checkout
+      // could not be told apart from a provider outage without reading the database.
+      const data=await response.json().catch(()=>null)??{};
       if(!response.ok){
         if(data.error==='SC19_PAYMENT_OFFER_UNAVAILABLE'){
           setMessage('Oferta wygasła lub zmieniły się jej warunki. Odświeżamy dostępne oferty. Sprawdź je i zaakceptuj ponownie.');
@@ -145,7 +154,10 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
         if(data.error==='SC19_PAYMENT_RECONCILIATION_REQUIRED'){
           setMessage(reconciliationRequired);return;
         }
-        throw Error();
+        // Anything else: name the code instead of hiding it. These are short machine
+        // codes (SC19_PAYMENT_RETRY, HTTP 503) with nothing private in them, and they
+        // are the difference between "retry" and "the payment operator is refusing us".
+        setMessage(checkoutFailed(typeof data.error==='string'?data.error:`HTTP ${response.status}`));return;
       }
       setOrderId(data.orderId);
       if (uuid(companyId) && uuid(data.orderId) && uuid(recruitmentId)) try {

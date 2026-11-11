@@ -44,7 +44,10 @@ export const PRZELEWY24_NOTIFY_IPS = Object.freeze(['5.252.202.254', '5.252.202.
 const ORDER = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SESSION = /^sc19-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
 const TOKEN = /^[A-Za-z0-9-]{8,100}$/;
-const TIMEOUT_MS = 15_000;
+/** SC-P24-DIAG-001: this must stay comfortably inside the route's own time
+ * budget (`maxDuration`), or a slow operator does not produce `P24_UNAVAILABLE`
+ * — it produces a killed invocation, a platform HTML 503 and no record at all. */
+const TIMEOUT_MS = 10_000;
 const NOTIFY_KEYS = ['merchantId', 'posId', 'sessionId', 'amount', 'originAmount', 'currency', 'orderId', 'methodId', 'statement', 'sign'];
 
 export class Przelewy24Error extends Error {
