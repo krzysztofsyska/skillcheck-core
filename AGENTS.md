@@ -10,9 +10,9 @@ Do not require the owner to copy handoffs between agents.
 
 ## Roles
 
-Owner decision 2026-10-31: Cursor and Codex are retired; Claude holds both the orchestrator and builder roles. See `CLAUDE.md`.
+Owner decision 2026-11-05: Codex coordinates and implements programming work across the entire SkillCheck project. See `CLAUDE.md`.
 
-- **Claude / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
+- **Codex / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
 - **Independent REVIEWER** — a separate agent session with fresh context that did not write the change; reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
 - **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.
@@ -162,6 +162,10 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
    Any such action by an agent session is an incident under rule 4.
 
 The required status `production-approval-attestation` (`.github/workflows/production-approval-attestation.yml`) passes only after the owner approves the `production-approval` environment for the exact PR head SHA. While agent sessions act through the owner's identity (rule 5, variant B), the separation between an agent and the owner's approval is procedural, not technical: GitHub would accept an approval or a `main` merge made with that identity. Only the owner approves and merges into `main`. Moving agent writes to the `skillcheck-agent-ks[bot]` App token restores the technical separation.
+
+## Continuous release policy (owner decision 2026-11-08, issue #369)
+
+Within the scope approved in [docs/continuous-release-policy.md](docs/continuous-release-policy.md), the per-release owner click in the Production loop is replaced by a trusted, fail-closed automatic preflight, **once that publisher is implemented and verified**. Until then the Production loop above applies unchanged. HOLD P24 stays absolute. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent. All technical protections remain.
 
 ## Agent controller
 

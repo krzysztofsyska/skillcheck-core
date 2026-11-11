@@ -4,16 +4,18 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
-## Who does what (owner decision 2026-10-31)
+> **Bieżący punkt wejścia — SC-CONTEXT (8.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera aktualne SHA, status implementacji/review i HOLD wydania. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
 
-Cursor and Codex are no longer used. ChatGPT is no longer the orchestrator.
+## Who does what (owner decision 2026-11-05)
 
-- **Claude** — orchestrator and builder: picks the next task, writes the code, runs the tests, opens the PR to `integration`.
-- **Independent reviewer** — a separate Claude agent started with fresh context that did not write the change. It reviews architecture, security, correctness, tests and scope against the current PR commit and returns PASS / PASS WITH FIXES / FAIL. This satisfies "independent review" in the Review loop of `AGENTS.md`. The verdict is posted as a PR comment (not a GitHub "Approve", see rule 5 in `AGENTS.md`) and names the full SHA of the reviewed commit; a merge into `integration` needs a PASS (or PASS WITH FIXES with every fix made and checked again) whose SHA equals the current PR head; any push after the verdict needs a new review.
+Codex coordinates and implements programming work across the entire SkillCheck project.
+
+- **Codex** — orchestrator and builder: picks the next task, writes the code, runs the tests, opens the PR to `integration`.
+- **Independent reviewer** — a separate reviewer agent started with fresh context that did not write the change. It reviews architecture, security, correctness, tests and scope against the current PR commit and returns PASS / PASS WITH FIXES / FAIL. This satisfies "independent review" in the Review loop of `AGENTS.md`. The verdict is posted as a PR comment (not a GitHub "Approve", see rule 5 in `AGENTS.md`) and names the full SHA of the reviewed commit; a merge into `integration` needs a PASS (or PASS WITH FIXES with every fix made and checked again) whose SHA equals the current PR head; any push after the verdict needs a new review.
 - **CI** — deterministic checks, unchanged.
 - **Owner (Krzysztof)** — production approval, merging the promotion PR into `main`, new costs, external or irreversible actions. Nothing else.
 
-Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as builder or Codex as reviewer, read them as the roles above. Do not hand work off to Cursor, Codex or ChatGPT. The `chatgpt-codex-connector` bot still reviews PRs automatically. Do not wait for it; handle its findings only if it has posted. Before merging, every bot finding on any commit of the PR that the current head has not fixed is verified and either fixed or answered in its thread with a reason, and the independent reviewer's verdict on the current head lists each bot finding as fixed or rejected. Security findings are always fixed on the branch before merging (owner decision 2026-11-01); only if the builder considers one invalid is the PR blocked and the owner asked one YES/NO question in Polish with a recommendation. Fixed security findings need no owner decision.
+Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as builder or Codex as reviewer, read them as the roles above. Earlier builder assignments transfer to Codex. Preserve work already in progress. The `chatgpt-codex-connector` bot still reviews PRs automatically. Do not wait for it; handle its findings only if it has posted. Before merging, every bot finding on any commit of the PR that the current head has not fixed is verified and either fixed or answered in its thread with a reason, and the independent reviewer's verdict on the current head lists each bot finding as fixed or rejected. Security findings are always fixed on the branch before merging (owner decision 2026-11-01); only if the builder considers one invalid is the PR blocked and the owner asked one YES/NO question in Polish with a recommendation. Fixed security findings need no owner decision.
 
 ## How the owner works
 
@@ -53,7 +55,7 @@ Owner decisions (all YES, 2026-11-01):
 3. First sales are paid by invoice/bank transfer and activated manually by the operator (`/operator/billing`). Przelewy24 and Fakturownia automation are frozen until there are paying customers.
 4. Bulk CV upload (PR #228) is part of the MVP.
 5. Everything outside the MVP is labelled `później` and closed; old branches stay (agent sessions cannot delete branches or push tags).
-6. `main` and `integration` are protected: merges only through PRs with green required checks. Claude is the only builder.
+6. `main` and `integration` are protected: merges only through PRs with green required checks. Codex is the designated builder.
 
 Order of work:
 1. Housekeeping (this PR, branch protection, `później` labels).
@@ -65,7 +67,7 @@ Known production blockers (owner action, give him a direct link and exact clicks
 - No package policy and no balances on production, so every new AI analysis is refused (`sc19_quota_exhausted`). Set FREE = 5 and PRESELEKCJA = 60 in `/operator/billing`.
 - Contact form `/rozmowa`: Vercel Production `SALES_LEADS_ENABLED=true` (+ redeploy) and `private.sales_lead_settings.leads_enabled = true`. Auto-reply mail stays off.
 
-Frozen (do not work on): voice, Assessment Center, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
+Frozen (do not work on): voice, Quality of Hire, talent pool, white-label, SC-021 AI gateway, further erasure stages, Przelewy24/Fakturownia automation, agent-pipeline tooling.
 
 ## Scope reopened (owner decision 2026-11-02)
 
@@ -105,6 +107,26 @@ Build order and task contracts: [docs/plan-budowy-2026-11-02.md](docs/plan-budow
    an owner decision. Includes **SC-PRICING-W2b** — a volume slider in steps of 5 at every package,
    with manual entry restricted to multiples of 5 (owner decision 2026-11-02).
 
+### Assessment Center unfrozen — owner in chat, 2026-11-06, 11:00 Europe/Warsaw
+
+Asked directly whether building Assessment Center was his decision, since it was still on the
+frozen list above while SC-AC-001 (#272) had been merged into `integration` that morning. His
+answer: *"Tak, budowa weryfikacji i assessment center jest moją decyzją i trzeba to po prostu
+robić."* Assessment Center is therefore removed from the frozen list and is in scope alongside
+the modules listed above in this section (SC-014, SC-015, SC-PRICING). WERYFIKACJA was already in
+scope via SC-014 and SC-015; this confirms it. Nothing else moves: the voicebot, interview analysis,
+Quality of Hire, talent pool, white-label and the Przelewy24/Fakturownia automation stay frozen.
+
+For the record, the sequence was: #272 merged into `integration` that morning and its migration
+`20261106120000_sc_ac_inventory_r13.sql` was applied on the Preview database (test data only)
+before the module was unfrozen.
+
+This changes what is built, not the gates. Price, package contents and anything touching
+production still need a separate owner decision under the list above, and
+`docs/plan-budowy-2026-11-02.md` still has Assessment Center outside the scope of that particular
+plan document — the order of work there (module A, then C, calculator in between) stands unless
+the owner says otherwise.
+
 ### Voicebot on the public offer — settled 2026-11-02 (evening, owner in chat)
 
 **The voicebot is not shown anywhere on the public surfaces.** Not in the package copy, not in
@@ -143,6 +165,18 @@ attached to selling it. Any further change to price or package contents is still
 under the list above.
 
 The MVP path to the first paid PRESELEKCJA keeps priority when the two compete for time.
+
+### SC-020 and SC-021 reopened (owner decision 2026-11-09)
+
+The owner ordered development of **SC-020 white-label** (issue #21) and **SC-021 AI gateway & cost
+control** (issue #81), A–D each, in his own message typed into the Claude Code session of 2026-11-09
+(https://claude.ai/code/session_01TVLzgbHVMAPJSAtb449hht), confirming the issue #21/#81 reopen comments. This removes white-label and SC-021
+from the frozen list above. Approved variants: white-label shows **only the customer's own brand**
+(no switch back to SkillCheck, legally required operator/controller notices stay); the AI gateway
+is multi-provider in design but **only OpenAI is active** — other providers get adapters and
+synthetic tests, no accounts, keys, paid calls or automatic fallback. Production, new costs, real
+DNS/domain changes, real sends and activating another provider remain owner gates. Work plan and
+status: [docs/sc-021-a-ai-gateway.md](docs/sc-021-a-ai-gateway.md) and the issues.
 
 ### A note on these records
 

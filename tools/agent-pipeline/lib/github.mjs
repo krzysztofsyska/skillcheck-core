@@ -1,3 +1,4 @@
+import { controlPlane, integrationOnly } from './control-plane.mjs';
 import { completeComparison } from './comparison.mjs';
 import { createSign } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
@@ -6,6 +7,7 @@ export { protectionFromRulesets } from './protection.mjs';
 import { withTransportRetry } from './transport.mjs';
 import { canonicalJson } from './canonical.mjs';
 import { withRulesetEvidence } from './ruleset-evidence.mjs';
+import { evaluateChecks, evaluateDiscussion } from './quality.mjs';
 
 export function githubAppJwt({ appId, privateKey, now = Date.now() }) {
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -74,7 +76,9 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
         detailed.push(withRulesetEvidence(await request(`/repos/${owner}/${repo}/rulesets/${item.id}`), policy));
       }
       const environments = {};
-      for (const e of [policy.environments?.owner_acceptance, policy.environments?.production_approval, policy.environments?.agent_review]) {
+      const configured = [policy.environments?.owner_acceptance, policy.environments?.production_approval, policy.environments?.agent_review];
+      if (integrationOnly(policy)) configured.push(policy.environments?.agent_control);
+      for (const e of configured) {
         if (!e?.name) continue;
         const path = `/repos/${owner}/${repo}/environments/${encodeURIComponent(e.name)}`;
         const env = await request(path);
@@ -189,8 +193,32 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       return request(`/repos/${owner}/${repo}/actions/runs/${runId}/approvals`);
     },
     async readJobs(runId) {
-      const payload = await request(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs`);
-      return payload.jobs ?? [];
+      return pages(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs?filter=latest`, 'jobs');
+    },
+    async readMergeQuality(number, head, baseRef) {
+      const [rules, checks, statuses, threads, reviews] = await Promise.all([
+        pages(`/repos/${owner}/${repo}/rules/branches/${encodeURIComponent(baseRef)}`),
+        pages(`/repos/${owner}/${repo}/commits/${head}/check-runs?filter=latest`, 'check_runs'),
+        pages(`/repos/${owner}/${repo}/commits/${head}/statuses`),
+        this.readReviewThreads(number), pages(`/repos/${owner}/${repo}/pulls/${number}/reviews`),
+      ]);
+      const required = rules.filter(r => r.type === 'required_status_checks').flatMap(r => r.parameters?.required_status_checks ?? []);
+      const check = evaluateChecks({ head, checks, statuses, required, controllerAppId: policy.controller_app_id,
+        generated: policy.required_checks?.[baseRef] ?? [] });
+      return check.ok ? evaluateDiscussion(threads, reviews) : check;
+    },
+    async readPostMergeCi(head) {
+      const configured = policy.post_merge_ci;
+      if (!configured?.workflow_id || !configured.path) return { ok: false, reason: 'POST_MERGE_CONFIGURATION_MISSING' };
+      const runs = await pages(`/repos/${owner}/${repo}/actions/workflows/${configured.workflow_id}/runs?head_sha=${head}&event=push`, 'workflow_runs');
+      const candidates = runs.filter(r => r.head_sha === head && r.head_branch === 'integration' && r.event === 'push'
+        && r.workflow_id === configured.workflow_id && r.path === configured.path);
+      candidates.sort((a, b) => b.id - a.id || b.run_attempt - a.run_attempt);
+      const run = candidates[0];
+      if (!run || run.status !== 'completed') return { ok: false, pending: true, reason: 'POST_MERGE_CI_PENDING' };
+      const jobs = await this.readJobs(run.id);
+      if (run.conclusion !== 'success' || !jobs.length || jobs.some(j => j.status !== 'completed' || j.conclusion !== 'success')) return { ok: false, reason: 'POST_MERGE_CI_FAILED', runId: run.id };
+      return { ok: true, runId: run.id, runAttempt: run.run_attempt, headSha: head };
     },
     async readStateFile(path) {
       return request(`/repos/${owner}/${repo}/contents/${path}?ref=agent-state`);
@@ -198,6 +226,34 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
     async readComparison(base, head) {
       return completeComparison(request, `/repos/${owner}/${repo}`, base, head);
 
+    },
+    // #369 4b read-only Codex evidence readers.
+    async readPullsForCommit(sha) {
+      if (!/^[0-9a-f]{40}$/.test(sha ?? '')) throw new Error('SHA_INVALID');
+      return pages(`/repos/${owner}/${repo}/commits/${sha}/pulls`);
+    },
+    async readCommit(sha) {
+      if (!/^[0-9a-f]{40}$/.test(sha ?? '')) throw new Error('SHA_INVALID');
+      return request(`/repos/${owner}/${repo}/commits/${sha}`);
+    },
+    async readReviews(number) { return pages(`/repos/${owner}/${repo}/pulls/${Number(number)}/reviews`); },
+    // Only exception to GET-only: ONE fixed read-only GraphQL query (no mutation, no caller-supplied query text).
+    async readReviewThreads(rawNumber) {
+      const number = Number(rawNumber);
+      if (!Number.isInteger(number) || number <= 0) throw new Error('PR_NUMBER_INVALID');
+      const query = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{id isResolved isOutdated}}}}}';
+      const all = []; const seen = new Set(); let cursor = null;
+      for (let i = 0; i < 50; i++) {
+        const res = await request('/graphql', { method: 'POST', body: { query, variables: { o: owner, r: repo, n: number, c: cursor } } });
+        const t = res?.data?.repository?.pullRequest?.reviewThreads;
+        if (res?.errors?.length || !t || !Array.isArray(t.nodes) || typeof t.pageInfo?.hasNextPage !== 'boolean') throw new Error('REVIEW_THREADS_INCOMPLETE');
+        all.push(...t.nodes);
+        if (!t.pageInfo.hasNextPage) return all;
+        cursor = t.pageInfo.endCursor;
+        if (typeof cursor !== 'string' || seen.has(cursor)) throw new Error('REVIEW_THREADS_CURSOR_LOOP');
+        seen.add(cursor);
+      }
+      throw new Error('REVIEW_THREADS_LIMIT');
     },
     async readReleasePlan(ref) {
       try { const file = await request(`/repos/${owner}/${repo}/contents/.github/agent-pipeline/production-runbook.json?ref=${ref}`); return JSON.parse(decodeGithubContent(file)); }
@@ -228,16 +284,26 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
       return request(`/repos/${owner}/${repo}/check-runs${matches.length ? `/${matches[0].id}` : ''}`, { method: matches.length ? 'PATCH' : 'POST', body });
     },
     async createPull({ head, base, title, body }) {
+      if (integrationOnly(policy) && base !== 'integration') throw new Error('PRODUCTION_DISABLED_FOR_CONTROL_PLANE');
       return request(`/repos/${owner}/${repo}/pulls`, { method: 'POST', body: { head, base, title, body, draft: true } });
     },
-    async dispatch({ workflow, inputs, ref = 'main' }) {
+    async dispatch({ workflow, inputs, ref = controlPlane(policy).branch }) {
       const file = workflow.split('/').at(-1);
+      if (integrationOnly(policy)) {
+        const allowed = ['reconcile', 'verify', 'review'].map(kind => policy.workflows?.[kind]?.split('/').at(-1));
+        if (policy.builder_provider === 'claude-code') allowed.push(policy.claude_builder?.workflow_path?.split('/').at(-1));
+        if (ref !== controlPlane(policy).branch || !allowed.includes(file)) throw new Error('PRODUCTION_DISABLED_FOR_CONTROL_PLANE');
+      }
       await request(`/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(file)}/dispatches`, { method: 'POST', body: { ref, inputs: stringifyInputs(inputs) } });
       // Resolve on the next tick by exact request ID, actor, workflow and policy
       // commit. Never adopt an arbitrary recently created run.
       return { run_id: null, dispatched: true };
     },
     async merge({ prNumber, sha }) {
+      if (integrationOnly(policy)) {
+        const pull = await request(`/repos/${owner}/${repo}/pulls/${prNumber}`);
+        if (pull.base?.ref !== 'integration' || pull.base?.repo?.id !== policy.repository_id) throw new Error('PRODUCTION_DISABLED_FOR_CONTROL_PLANE');
+      }
       const result = await request(`/repos/${owner}/${repo}/pulls/${prNumber}/merge`, { method: 'PUT', body: { sha, merge_method: 'merge' } });
       return { merged: result.merged === true, mergeCommitSha: result.sha ?? null };
     },

@@ -4,10 +4,12 @@ import Link from 'next/link';
 import type { ExerciseDefinition, ExerciseCriterion } from '../../../../../lib/exercise-definition';
 import type { ExerciseEditorContext } from '../../../../../lib/exercise-editor';
 import { saveExerciseDefinition } from './exercise-actions';
+import { editExerciseAiProposal } from './exercise-ai-actions';
+import type { ExerciseAiApprovalContext } from '../../../../../lib/exercise-ai-review';
 
 const blankCriterion = (): ExerciseCriterion => ({ competency: '', below: '', meets: '', above: '' });
-export function ExerciseForm({ companyId, context, initial }: {
-  companyId: string; context: ExerciseEditorContext; initial?: ExerciseDefinition;
+export function ExerciseForm({ companyId, context, initial, aiContext }: {
+  companyId: string; context: ExerciseEditorContext; initial?: ExerciseDefinition; aiContext?:ExerciseAiApprovalContext;
 }) {
   // Keep the profile/version the user saw, even if another form revalidates the page.
   const [opened, setOpened] = useState(context);
@@ -19,7 +21,9 @@ export function ExerciseForm({ companyId, context, initial }: {
   const [criteria, setCriteria] = useState(() => (initial?.criteria ?? [blankCriterion()]).map((value, id) => ({ id, ...value })));
   const nextId = useRef(criteria.length);
   const [state, action, pending] = useActionState(async (previous: { error?: string; entryId?: string }, form: FormData) => {
-    const result = await saveExerciseDefinition(companyId, opened, previous, form);
+    const result = aiContext
+      ? await editExerciseAiProposal(companyId,aiContext,opened.positionUpdatedAt,previous,form)
+      : await saveExerciseDefinition(companyId, opened, previous, form);
     if (result.entryId) setOpened(current => ({ ...current, expectedVersion: current.expectedVersion + 1 }));
     return result;
   }, {});
@@ -29,7 +33,8 @@ export function ExerciseForm({ companyId, context, initial }: {
     {state.error && <p role="alert">{state.error}</p>}
     {state.entryId && <p role="status">Zapisano wersję {opened.expectedVersion}. Kolejny zapis zachowa poprzednią wersję w historii.{' '}
       <Link href={`/dashboard/${companyId}/recruitments/${opened.recruitmentId}/exercises/${opened.exerciseId}`}>Otwórz historię zadania</Link></p>}
-    <fieldset disabled={pending}>
+    {aiContext && <p>Korekta zachowa pochodzenie AI i poprzednią wersję. Nowa wersja wymaga osobnego zatwierdzenia, zanim będzie dostępna kandydatom.</p>}
+    <fieldset disabled={pending || (!!aiContext && !!state.entryId)}>
       <legend>Instrukcja zadania</legend>
       <label>Rodzaj zadania<select name="kind" value={kind} onChange={event => setKind(event.target.value as ExerciseDefinition['kind'])}>
         <option value="competency_test">Test kompetencji</option><option value="assessment_center">Assessment Center</option>

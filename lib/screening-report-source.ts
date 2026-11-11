@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
+import { parseRequirementFlagRows } from './requirement-flags.ts';
 import {
-  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, parseGroupRow, parseRanking, parseShortlist,
+  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, isUuid, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
@@ -21,6 +22,10 @@ async function allRows<T>(query: (from: number, to: number) => PromiseLike<DbRes
   const rows: T[] = [];
   while (true) {
     const page = checked(await query(rows.length, rows.length + 199), rpc);
+    // A successful PostgREST/RPC list response must be an array. A malformed
+    // object with a falsy `length` must not masquerade as an empty page and
+    // silently drop candidates or human-reviewed evidence from the report.
+    if (!Array.isArray(page) || page.length > 200) throw new ScreeningReportError('changed');
     if (!page.length) return rows;
     rows.push(...page);
     if (rows.length > max) throw new ScreeningReportError('too_large');
@@ -44,12 +49,24 @@ export async function loadScreeningReport(
   if (authError || !user) throw new ScreeningReportError('unauthenticated');
   const readSource = async () => {
     const company = checked(await client.from('companies').select('id,name,updated_at').eq('id', p.companyId).maybeSingle());
+    // Query filters are necessary, but the response must also prove its tenant and
+    // recruitment links before any candidate data is assembled into an export.
+    requireReport(isUuid(company.id) && company.id.toLowerCase() === p.companyId);
     const recruitment = checked(await client.from('recruitments').select('id,company_id,position_id,name,updated_at')
       .eq('company_id', p.companyId).eq('id', p.recruitmentId).maybeSingle());
+    requireReport(isUuid(recruitment.id) && recruitment.id.toLowerCase() === p.recruitmentId &&
+      isUuid(recruitment.company_id) && recruitment.company_id.toLowerCase() === p.companyId &&
+      isUuid(recruitment.position_id));
     const position = checked(await client.from('positions').select('id,company_id,title,tasks,kpis,required_competencies,updated_at')
       .eq('company_id', p.companyId).eq('id', recruitment.position_id).maybeSingle());
-    const applications = await allRows((from, to) => client.from('applications').select('id,updated_at')
+    requireReport(isUuid(position.id) && position.id.toLowerCase() === recruitment.position_id.toLowerCase() &&
+      isUuid(position.company_id) && position.company_id.toLowerCase() === p.companyId);
+    const applications = await allRows((from, to) => client.from('applications').select('id,company_id,recruitment_id,updated_at')
       .eq('company_id', p.companyId).eq('recruitment_id', p.recruitmentId).order('id').range(from, to), MAX_REPORT_APPLICATIONS);
+    // Never accept a partial/mis-scoped Data API response merely because a filter was sent.
+    // This also protects exports if a future view/RPC changes its filtering contract.
+    requireReport(applications.every(a => isUuid(a.id) && isUuid(a.company_id) && isUuid(a.recruitment_id) &&
+      a.company_id.toLowerCase() === p.companyId && a.recruitment_id.toLowerCase() === p.recruitmentId));
     const rankings = (await allRows((from, to) => client.rpc('get_screening_ranking', {
       target_recruitment: p.recruitmentId, target_size: p.targetSize,
     }).order('application_id').range(from, to), MAX_REPORT_APPLICATIONS, true)).map(parseRanking);
@@ -85,9 +102,17 @@ export async function loadScreeningReport(
       groups = (groupResult.data as unknown[]).map(row => {
         const group = parseGroupRow(row);
         const source = (row ?? {}) as { analysis_id?: unknown };
-        requireReport(source.analysis_id === undefined || source.analysis_id === null || (typeof source.analysis_id === 'string' && /^[0-9a-f-]{36}$/i.test(source.analysis_id)));
+        requireReport(source.analysis_id === undefined || source.analysis_id === null || isUuid(source.analysis_id));
         return { ...group, stale: !groupAnalysisCurrent(source.analysis_id, rankingById.get(group.application_id)) };
-      }).filter(g => ids.has(g.application_id));
+      });
+      // The RPC is scoped to this recruitment. A foreign/stale application row
+      // is a contract violation, not an empty result: silently filtering it
+      // could conceal a broken tenant/recruitment filter or a partial export.
+      requireReport(groups.every(g => ids.has(g.application_id)));
+      // The SQL contract returns at most one preselection group per application.
+      // A malformed/duplicated RPC response must not double-count a candidate
+      // or display contradictory groups in the report and CSV.
+      requireReport(new Set(groups.map(g => g.application_id.toLowerCase())).size === groups.length);
     }
     return { company, recruitment, position, applications, rankings, shortlist, groups };
   };
@@ -96,27 +121,39 @@ export async function loadScreeningReport(
   const analysisIds = reviewed.map(r => r.analysis_id!);
   const reviewIds = reviewed.map(r => r.review_id!);
   requireReport(new Set(analysisIds).size === analysisIds.length && new Set(reviewIds).size === reviewIds.length);
-  const analyses = await batches(analysisIds, (ids, from, to) => client.from('screening_analysis_versions')
-    .select('id,application_id,recruitment_id,execution_status,stale_at,latest_review_version,criteria_snapshot')
-    .eq('company_id', p.companyId).eq('recruitment_id', p.recruitmentId).in('id', ids).order('id').range(from, to));
-  const reviews = await batches(reviewIds, (ids, from, to) => client.from('screening_result_reviews')
-    .select('id,analysis_id,review_version,disposition').eq('company_id', p.companyId).in('id', ids).order('id').range(from, to));
-  const results = await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
-    .select('id,analysis_id,criterion_id,criterion_kind,criterion_order,criterion_text_snapshot,rating,evidence,explanation')
-    .eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to));
-  // Step 3 matrix reviews live in columns that exist only after the Step 3 migrations.
-  // Before they reach a database (42703 undefined column) no row can carry one, so the
-  // legacy report stays available; any other error still fails closed.
-  const matrixFields = 'id,analysis_id,verdict,human_status,human_verdict,human_evidence';
-  const probe = analysisIds.length ? await client.from('screening_criterion_results').select(matrixFields)
-    .eq('company_id', p.companyId).in('analysis_id', analysisIds.slice(0, 50)).order('id').range(0, 0) : null;
-  if (probe?.error && probe.error.code !== '42703') checked(probe);
-  const matrix = probe && !probe.error ? await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
-    .select(matrixFields).eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to)) : [];
-  const overrides = await batches(reviewIds, (ids, from, to) => client.from('screening_criterion_review_overrides')
-    .select('id,review_id,criterion_result_id,rating_override,evidence_override,explanation_override')
-    .eq('company_id', p.companyId).in('review_id', ids).order('id').range(from, to));
-  [analyses, reviews, results, matrix, overrides].forEach(uniqueIds);
+  // A report spans multiple queries. Re-read the evidence and human-review rows
+  // before publishing: a concurrent correction must not leave stale citations
+  // in a report whose ranking metadata did not change.
+  const readDetailSnapshot = async () => {
+    const analyses = await batches(analysisIds, (ids, from, to) => client.from('screening_analysis_versions')
+      .select('id,application_id,recruitment_id,execution_status,stale_at,latest_review_version,criteria_snapshot')
+      .eq('company_id', p.companyId).eq('recruitment_id', p.recruitmentId).in('id', ids).order('id').range(from, to));
+    const reviews = await batches(reviewIds, (ids, from, to) => client.from('screening_result_reviews')
+      .select('id,analysis_id,review_version,disposition').eq('company_id', p.companyId).in('id', ids).order('id').range(from, to));
+    const results = await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
+      .select('id,analysis_id,criterion_id,criterion_kind,criterion_order,criterion_text_snapshot,rating,evidence,explanation')
+      .eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to));
+    // Step 3 matrix reviews live in columns that exist only after the Step 3 migrations.
+    // Before they reach a database (42703 undefined column) no row can carry one, so the
+    // legacy report stays available; any other error still fails closed.
+    const matrixFields = 'id,analysis_id,verdict,human_status,human_verdict,human_evidence';
+    const probe = analysisIds.length ? await client.from('screening_criterion_results').select(matrixFields)
+      .eq('company_id', p.companyId).in('analysis_id', analysisIds.slice(0, 50)).order('id').range(0, 0) : null;
+    if (probe?.error && probe.error.code !== '42703') checked(probe);
+    const matrix = probe && !probe.error ? await batches(analysisIds, (ids, from, to) => client.from('screening_criterion_results')
+      .select(matrixFields).eq('company_id', p.companyId).in('analysis_id', ids).order('id').range(from, to)) : [];
+    // When the v2 columns exist, matrix and base evidence project the same
+    // criterion-result rows. A partial matrix response must never resurrect
+    // AI evidence that a human rejected or corrected.
+    if (probe && !probe.error) requireReport(matrix.length === results.length);
+    const overrides = await batches(reviewIds, (ids, from, to) => client.from('screening_criterion_review_overrides')
+      .select('id,review_id,criterion_result_id,rating_override,evidence_override,explanation_override')
+      .eq('company_id', p.companyId).in('review_id', ids).order('id').range(from, to));
+    [analyses, reviews, results, matrix, overrides].forEach(uniqueIds);
+    return { analyses, reviews, results, matrix, overrides };
+  };
+  const firstDetails = await readDetailSnapshot();
+  const { analyses, reviews, results, matrix, overrides } = firstDetails;
   requireReport(matrix.every(m => results.some(r => r.id === m.id && r.analysis_id === m.analysis_id)));
   requireReport(analyses.length === reviewed.length && reviews.length === reviewed.length);
   // Detect relationships outside the requested result set even if the backend contract regresses.
@@ -164,8 +201,21 @@ export async function loadScreeningReport(
     }
     details.set(row.application_id, rendered);
   }
+  const latestDetails = await readDetailSnapshot();
+  requireReport(JSON.stringify(firstDetails) === JSON.stringify(latestDetails));
   const rechecked = await readSource();
   requireReport(JSON.stringify(source) === JSON.stringify(rechecked));
+  // SC-015 / #268. Oznaczenia wymagań są czytane poza readSource celowo: nie wchodzą
+  // do porównania spójności, bo ich zmiana niczego w analizach nie unieważnia.
+  // Brak funkcji (baza sprzed migracji) znaczy „nic jeszcze nie oznaczono".
+  const flagResult = await client.rpc('position_requirement_flags' as never, {
+    target_company: p.companyId, target_position: source.position.id,
+  } as never);
+  if (flagResult.error && !['PGRST202', '42883'].includes(flagResult.error.code ?? '')) checked(flagResult, true);
+  // Nie traktuj niepoprawnego RPC jako braku oznaczeń; to mogłoby po cichu
+  // przenieść wymaganie „konieczne” do „nieoznaczone” w porównaniu CV.
+  const requirementFlags = flagResult.error ? [] : parseRequirementFlagRows(flagResult.data);
+  requireReport(requirementFlags !== null);
   const report: ScreeningReport = {
     version: REPORT_VERSION, generatedAt: new Date().toISOString(), companyId: p.companyId, companyName: source.company.name,
     recruitmentId: p.recruitmentId, recruitmentName: source.recruitment.name, positionTitle: source.position.title, targetSize: p.targetSize,
@@ -178,6 +228,8 @@ export async function loadScreeningReport(
       .map(ranking => ({ ranking, shortlist: source.shortlist.find(s => s.application_id === ranking.application_id) ?? null,
         criteria: details.get(ranking.application_id) ?? [] })),
     groups: source.groups,
+    positionId: source.position.id,
+    requirementFlags,
   };
   if (Buffer.byteLength(JSON.stringify(report), 'utf8') > 10 * 1024 * 1024) throw new ScreeningReportError('too_large');
   return report;

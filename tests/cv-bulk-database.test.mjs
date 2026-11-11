@@ -8,6 +8,77 @@ import {
 } from './helpers/sc19-migration-fixture.mjs';
 import { setupExecutionLedger } from './helpers/erasure-execution-fixture.mjs';
 import { retentionHarness } from './helpers/retention-scheduler-fixture.mjs';
+import { activeBoot } from './helpers/competency-active-fixture.mjs';
+import { lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
+import { users } from './helpers/screening-ranking-fixture.mjs';
+
+test('single analysis grouping: v1/v2 completion, replay, manual choice, scope, erasure and rollback', async t => {
+  const {db,h,seed,x} = await activeBoot(t,{fullChain:true});
+  const group = async app => {await h.asAdmin();return (await db.query('select g.*, g.updated_at::text as updated_at from private.application_preselection_groups g where application_id=$1',[app])).rows[0];};
+  const events = async app => {await h.asAdmin();return (await db.query('select count(*)::int n from private.application_preselection_group_events where application_id=$1',[app])).rows[0].n;};
+  const f=await seed({shortlist:false});
+  const started=await h.start(f),claimed=await h.claim(started);
+  await h.finishClaim(started,claimed,Array(5).fill('above'));
+  let g=await group(f.application.id);
+  assert.deepEqual([g.group_key,g.source,Number(g.raw_score)],['passed','auto',100]);
+  await h.asUser(f.owner);
+  assert.equal((await h.row(f)).eligibility_reason,'no_human_review');
+  assert.equal((await h.shortlist(f)).length,0);
+  assert.equal((await db.query('select status from public.applications where id=$1',[f.application.id])).rows[0].status,'new');
+  const count=await events(f.application.id);
+  await h.finishClaim(started,claimed,Array(5).fill('above'));
+  assert.equal(await events(f.application.id),count);
+  assert.deepEqual(await group(f.application.id),g,'completion replay is side-effect free');
+  await h.asUser(f.owner);
+  await db.query("select public.move_preselection_group($1,'rejected',$2,'Synthetic manual decision')",[f.application.id,g.updated_at]);
+  const again=await h.start(f,{force:true}),claimAgain=await h.claim(again);
+  await h.finishClaim(again,claimAgain,Array(5).fill('above'));
+  g=await group(f.application.id);
+  assert.deepEqual([g.group_key,g.source,g.analysis_id],['rejected','manual',again.analysis_id]);
+
+  const v2=await seed({tenant:f,shortlist:false});
+  await h.asAdmin();
+  const fingerprint=(await db.query("select private.screening_material($1,false)->>'input_fingerprint' value",[v2.application.id])).rows[0].value;
+  await h.asUser(v2.owner);
+  const a=(await db.query("select * from public.start_screening_analysis($1,$2,1,2,'screening-evidence-v2','openai','ranking-test-model',null,$3,false)",[v2.application.id,fingerprint,randomUUID()])).rows[0];
+  await h.asWorker();
+  const c=(await db.query('select * from public.claim_screening_attempt_v2($1)',[a.attempt_id])).rows[0];
+  const rows=c.criteria_snapshot.map(r=>({criterion_id:r.id,verdict:'supported',evidence:[{start:0,end:3,quote:'SQL',document_id:c.candidate_document_id}],missing_info:'',suggested_question:'',explanation:'Synthetic.'}));
+  const finishV2=async()=>{await h.asWorker();return db.query('select public.complete_screening_evidence($1,$2,$3,$4,$5::jsonb)',[a.attempt_id,c.lease_token,c.input_fingerprint,c.analysis_contract_hash,JSON.stringify(rows)]);};
+  await finishV2();
+  const v2g=await group(v2.application.id);
+  assert.deepEqual([v2g.group_key,Number(v2g.raw_score),Number(v2g.coverage)],['passed',100,1],'v2 groups final verdicts, not intermediate neutral legacy ratings');
+  await finishV2();assert.deepEqual(await group(v2.application.id),v2g);
+
+  const other=await seed({owner:users.otherOwner,shortlist:false});
+  await h.asAdmin();
+  for(const [app,analysis] of [[other.application.id,a.analysis_id],[randomUUID(),a.analysis_id],[v2.application.id,randomUUID()]])
+    await db.query('select private.screening_apply_single_group($1,$2)',[app,analysis]);
+  assert.equal(await group(other.application.id),undefined);
+  const pending=await h.start(other),pc=await h.claim(pending);
+  await h.asAdmin();await db.query('select private.screening_apply_single_group($1,$2)',[other.application.id,pending.analysis_id]);
+  assert.equal(await group(other.application.id),undefined,'processing results are not grouped');
+  await h.asWorker();await db.query("select public.fail_screening_attempt($1,$2,$3,$4,'provider_timeout','Synthetic')",[pending.attempt_id,pc.lease_token,pc.input_fingerprint,pc.analysis_contract_hash]);
+  await h.asAdmin();await db.query('select private.screening_apply_single_group($1,$2)',[other.application.id,pending.analysis_id]);
+  assert.equal(await group(other.application.id),undefined,'failed results are not grouped');
+  for(const role of ['anon','authenticated','screening_worker']) {
+    assert.equal((await db.query("select has_function_privilege($1,'private.screening_apply_single_group(uuid,uuid)','execute') allowed",[role])).rows[0].allowed,false);
+  }
+  // Prepare an independent rollback subject before freezing the first recruitment.
+  const post=await seed({tenant:other,shortlist:false});
+  await h.asUser(v2.owner);await x.policy(v2,0,lifecycleRules);v2.resolutionId=await x.resolve(v2,[v2.candidate.id]);
+  await x.freeze(v2);
+  await h.asAdmin();
+  await assert.rejects(db.query('select private.screening_apply_single_group($1,$2)',[v2.application.id,a.analysis_id]),e=>e.code==='PT409');
+  assert.deepEqual(await group(v2.application.id),v2g,'freeze preserves grouping and history');
+  const signature=(await db.query('select private.erasure_schema_signature() value')).rows[0].value;
+  await db.exec(await readFile(new URL('../supabase/rollbacks/20261107170432_single_analysis_preselection_group_down.sql',import.meta.url),'utf8'));
+  assert.equal((await db.query('select private.erasure_schema_signature() value')).rows[0].value,signature);
+  assert.equal((await db.query("select to_regprocedure('private.screening_apply_single_group(uuid,uuid)') value")).rows[0].value,null);
+  const ps=await h.start(post),pclaim=await h.claim(ps);
+  await h.finishClaim(ps,pclaim,Array(5).fill('above'));
+  assert.equal(await group(post.application.id),undefined,'rollback restores old individual completion');
+});
 
 // Real checked-in migrations on disposable native PostgreSQL (CI: PG 16/17).
 const chain = [
@@ -790,4 +861,156 @@ test('SC-BULK-001 rollbacks restore R9, R8 and remove the bulk schema', async t 
   for (const name of [bulk, r9, fixes, r10, phoneFix, skipFrozen, erasureGuards]) await run(db, await migration(name));
   await assert.rejects(run(db, await migration(skipFrozen)), /cv_bulk_skip_frozen_already_installed/);
   await assert.rejects(run(db, await migration(erasureGuards)), /cv_bulk_erasure_guards_already_installed/);
+});
+
+
+test('SC-BULK-001: both authenticated and signed bulk pumps serialize global slots; rollback restores wrappers', async t => {
+  const { db, h } = await install(t);
+  await run(db, await migration('20261106230000_cv_bulk_global_capacity_lock.sql'));
+  await h.asAdmin();
+  const names = ['cv_bulk_pump(uuid,jsonb,jsonb)', 'cv_bulk_worker_pump(uuid,bigint,text,jsonb,jsonb)'];
+  for (const name of names) {
+    const fn = (await db.query("select pg_get_functiondef(('public.' || $1)::regprocedure) as body", [name])).rows[0].body;
+    const globalLock = fn.indexOf("pg_advisory_xact_lock(hashtextextended('cv_bulk_global_capacity_v1'");
+    const companyLock = fn.includes('private.sc19_lock_company')
+      ? fn.indexOf('private.sc19_lock_company') : fn.indexOf('from public.companies where id = target.company_id for update');
+    assert.ok(globalLock >= 0, name + ' uses global capacity lock');
+    assert.ok(companyLock > globalLock, name + ' takes global lock before company lock');
+    assert.match(fn, /if contract is not null then perform pg_advisory_xact_lock/,
+      name + ' does not block inactive AI sessions');
+  }
+  await run(db, await rollback('20261106230000_cv_bulk_global_capacity_lock_down.sql'));
+  await h.asAdmin();
+  for (const name of names) {
+    const fn = (await db.query("select pg_get_functiondef(('public.' || $1)::regprocedure) as body", [name])).rows[0].body;
+    assert.doesNotMatch(fn, /cv_bulk_global_capacity_v1/, name + ' rollback removes global lock');
+  }
+});
+test('SC-BULK-001: concurrent recruiter pumps in two tenants cannot exceed the global capacity', async t => {
+  const env = await install(t);
+  const { db, h } = env;
+  await run(db, await migration('20261106230000_cv_bulk_global_capacity_lock.sql'));
+  await h.asAdmin();
+  await db.query('update private.cv_bulk_settings set max_parallel_global=1, max_parallel_company=2, pricing=$1::jsonb',
+    [JSON.stringify(pricing)]);
+  const b = bulkHarness(env);
+  const batches = [];
+  for (let i = 0; i < 2; i++) {
+    const tenant = await b.tenant(paymentUsers.owner, 1);
+    const batch = await b.create(tenant, 1);
+    const [item] = await b.items(batch.batch_id);
+    assert.equal((await b.register(tenant, item.id)).status, 'queued');
+    batches.push({ tenant, batch });
+  }
+
+  await h.asAdmin();
+  const pool = env.pool();
+  const gate = await pool.connect();
+  const pumps = await Promise.all([pool.connect(), pool.connect()]);
+  let inFlight = [];
+  try {
+    // Hold the same lock outside both tenants to force overlapping pump calls.
+    // Once both are waiting, releasing it must allow at most one new analysis.
+    await gate.query('begin');
+    await gate.query("select pg_advisory_xact_lock(hashtextextended('cv_bulk_global_capacity_v1', 0))");
+    const gatePid = (await gate.query('select pg_backend_pid() pid')).rows[0].pid;
+    const pids = [];
+    for (let i = 0; i < pumps.length; i++) {
+      await pumps[i].query('begin');
+      await pumps[i].query('set local role authenticated');
+      await pumps[i].query("select set_config('request.jwt.claim.sub',$1,true)", [batches[i].tenant.owner]);
+      await pumps[i].query("set local statement_timeout='20s'");
+      pids.push((await pumps[i].query('select pg_backend_pid() pid')).rows[0].pid);
+    }
+    inFlight = pumps.map(async (client, i) => {
+      try {
+        const result = (await client.query('select public.cv_bulk_pump($1,$2::jsonb,$3::jsonb) r',
+          [batches[i].batch.batch_id, JSON.stringify(contract), JSON.stringify(pricing)])).rows[0].r;
+        // Each transaction must commit separately to release the advisory xact lock.
+        await client.query('commit');
+        return result;
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      }
+    });
+    let blocked = false;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const waiters = await db.query(
+        'select pid from pg_stat_activity where pid=any($1::integer[]) and $2::integer = any(pg_blocking_pids(pid))',
+        [pids, gatePid]);
+      if (waiters.rows.length === 2) { blocked = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    assert.equal(blocked, true, 'both tenant pumps must block on the same global advisory lock');
+    await gate.query('commit');
+    const result = await Promise.all(inFlight);
+    assert.equal(result.reduce((n, r) => n + r.dispatch.length, 0), 1, 'only one global analysis slot');
+    const counted = (await db.query("select count(*)::int n from private.cv_bulk_items where phase='analyzing'")).rows[0].n;
+    assert.equal(counted, 1, 'the second tenant did not exceed the global slot count');
+  } finally {
+    // A failed assertion must never leave blocked connections or an open transaction.
+    await gate.query('rollback').catch(() => {});
+    await Promise.allSettled(inFlight);
+    await Promise.all(pumps.map(async client => {
+      await client.query('rollback').catch(() => {});
+      client.release();
+    }));
+    gate.release();
+  }
+});
+
+test('SC-BULK-001: signed scheduler pumps registered CVs before batch upload closes', async t => {
+  const env = await install(t);
+  const { db, h } = env;
+  const b = bulkHarness(env);
+  await run(db, await migration('20261106230000_cv_bulk_global_capacity_lock.sql'));
+  await run(db, await migration('20261106231000_cv_bulk_uploading_scheduler.sql'));
+  const secret = 'w'.repeat(40);
+  await h.asAdmin();
+  await db.query('update private.cv_bulk_settings set worker_secret=$1', [secret]);
+
+  const f = await b.tenant(paymentUsers.owner, 3);
+  const batch = await b.create(f, 2);
+  const [registered, stillUploading] = await b.items(batch.batch_id);
+  assert.equal((await b.register(f, registered.id)).status, 'queued');
+  const idle = await b.create(f, 1); // one file still awaiting upload; cron must not claim it.
+  await h.asAdmin();
+  assert.equal((await db.query('select status from private.cv_bulk_batches where id=$1', [batch.batch_id])).rows[0].status, 'uploading');
+
+  const signedPump = async activeContract => {
+    await h.asAdmin();
+    const payload = activeContract ? JSON.stringify(activeContract) : null;
+    const price = JSON.stringify(pricing);
+    const extra = (await db.query("select encode(extensions.digest(coalesce($1::jsonb::text,'') || '|' || coalesce($2::jsonb::text,''), 'sha256'), 'hex') d",
+      [payload, price])).rows[0].d;
+    const id = randomUUID(), stamp = Date.now();
+    const signature = createHmac('sha256', secret).update(['cv-bulk-v1', 'pump', id, String(stamp), '-', extra].join('\n')).digest('hex');
+    await h.asUser(null, 'anon');
+    const result = (await db.query('select public.cv_bulk_worker_pump($1,$2,$3,$4::jsonb,$5::jsonb) r',
+      [id, stamp, signature, payload, price])).rows[0].r;
+    await h.asAdmin();
+    return result;
+  };
+  const result = await signedPump(contract);
+  assert.equal(result.find(x => x.batch_id === idle.batch_id), undefined, 'fresh uploads with no queued files are ignored');
+  const mine = result.find(x => x.batch_id === batch.batch_id);
+  assert.equal(mine?.dispatch.length, 1, 'registered CV is dispatched without a two-hour delay');
+  let rows = await b.items(batch.batch_id);
+  assert.deepEqual(rows.map(x => [x.phase, x.slot_state]), [['analyzing', 'transferred'], ['awaiting_upload', 'held']]);
+  assert.equal((await db.query('select status from private.cv_bulk_batches where id=$1', [batch.batch_id])).rows[0].status,
+    'uploading', 'signed scheduler never closes an active upload');
+
+  // The existing abandoned-upload rule still releases a truly missing file after two hours.
+  await db.query("update private.cv_bulk_batches set created_at=now()-interval '121 minutes' where id=$1", [batch.batch_id]);
+  await signedPump(null);
+  rows = await b.items(batch.batch_id);
+  assert.deepEqual(rows.map(x => [x.phase, x.slot_state, x.error_reason]),
+    [['analyzing', 'transferred', null], ['error', 'released', 'not_uploaded']]);
+
+  await run(db, await rollback('20261106231000_cv_bulk_uploading_scheduler_down.sql'));
+  const body = (await db.query("select pg_get_functiondef('public.cv_bulk_worker_pump(uuid,bigint,text,jsonb,jsonb)'::regprocedure) s")).rows[0].s;
+  assert.match(body, /cv_bulk_global_capacity_v1/, 'rollback preserves global capacity safety');
+  assert.doesNotMatch(body, /cv_bulk_scheduler_uploading_ready_v1/, 'rollback removes only this selector change');
 });

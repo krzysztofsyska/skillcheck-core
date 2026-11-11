@@ -23,7 +23,8 @@ const related: { key: LegalDocumentKey; label: string }[] = [
   { key: "odstapienie", label: "Załącznik nr 2 – Formularz odstąpienia" },
   { key: "prywatnosc", label: "Polityka prywatności" },
   { key: "ai", label: "AI i nadzór człowieka" },
-  { key: "aneks1", label: "Aneks nr 1 – Rozmowy głosowe z asystentem AI" },
+  // The voice annex is not listed because it is no longer published (withdrawn 2026-11-11,
+  // archive copy in docs/legal/withdrawn/, see lib/legal.ts).
 ];
 
 export function LegalDocumentPage({ documentKey }: { documentKey: LegalDocumentKey }) {

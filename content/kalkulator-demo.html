@@ -323,11 +323,13 @@
       </tbody>
     </table></div>
     <p class="fine-print">* Shortlista zależy od rzeczywistej puli i dostępnych informacji. FREE obejmuje 5 CV niezależnie od suwaka.</p>
+    <!--future-offers:start-->
     <div class="agency-caption" style="margin-top:25px">
       <div><h3>WERYFIKACJA — kolejny etap</h3><p>Pogłębienie sprawdzenia kompetencji szerzej niż we wstępnym zestawieniu materiałów, z rozszerzonym raportem kandydata. Cena zatwierdzona: <strong>615 zł brutto za 60 CV</strong>. Bez terminu uruchomienia — pakietu nie można dziś kupić.</p></div>
-      <div><h3>ASSESSMENT CENTER — kolejny etap</h3><p>Zadania praktyczne i obserwacje osadzone w realiach stanowiska, proces dla 5–6 osób, maksymalnie 10. Cena zatwierdzona: <strong>1 499 zł brutto za 50 CV</strong>. Bez terminu uruchomienia — pakietu nie można dziś kupić.</p></div>
+      <div><h3>ASSESSMENT CENTER — kolejny etap</h3><p>Zadania praktyczne i obserwacje prowadzone przez dwie osoby z Twojej firmy, do 6 finalistów w cenie, 3 ćwiczenia na osobę; 7–10 osób wymaga osobnej oferty. Cena zatwierdzona: <strong>1 499 zł brutto za 50 CV</strong>. Bez terminu uruchomienia — pakietu nie można dziś kupić.</p></div>
     </div>
-    <p class="fine-print">WERYFIKACJA i ASSESSMENT CENTER to kolejne etapy oferty. Ceny są zatwierdzone: WERYFIKACJA <strong>615 zł brutto za 60 CV</strong> (testy kompetencji, pula CV zwiększana co 5), ASSESSMENT CENTER <strong>1 499 zł brutto za 50 CV</strong> (zadania praktyczne, proces dla 5–6 osób, maksymalnie 10). Oba pakiety są jeszcze w budowie — nie mają terminu uruchomienia i nie można ich dziś kupić. <a href="/rozmowa">Napisz, jeśli chcesz o nich porozmawiać.</a></p>
+    <p class="fine-print">WERYFIKACJA i ASSESSMENT CENTER to kolejne etapy oferty. Ceny są zatwierdzone: WERYFIKACJA <strong>615 zł brutto za 60 CV</strong> (test dla maksymalnie 10 osób z shortlisty, oceniany przez rekrutera klienta), ASSESSMENT CENTER <strong>1 499 zł brutto za 50 CV</strong> (zadania praktyczne, do 6 finalistów w cenie, 3 ćwiczenia na osobę; 7–10 osób wymaga osobnej oferty). Oba pakiety są jeszcze w budowie — nie mają terminu uruchomienia i nie można ich dziś kupić. <a href="/rozmowa">Napisz, jeśli chcesz o nich porozmawiać.</a></p>
+    <!--future-offers:end-->
   </section>
 
   <section id="agencja" class="surface agency" aria-labelledby="agencyTitle">
@@ -359,7 +361,9 @@
     <p style="font-size:14px;color:#5b705f;max-width:760px">Symulacja nie ukrywa przyjętych parametrów. Sprawdź sposób liczenia, przykładowe stawki i ograniczenia przed wysłaniem zapytania.</p>
     <details open><summary>Ceny i zasada przeliczania wolumenu</summary>
       <p>PRESELEKCJA: <strong>300,00 zł brutto</strong> (243,90 zł netto + 23% VAT) za pakiet 60 analiz CV, ważnych 3 miesiące od przyznania. To aktualna cena, nie symulacja. Przy większej puli CV liczymy kolejne pakiety: do 60 CV jeden, do 120 CV dwa, do 180 CV trzy. FREE: 0 zł za 5 analiz CV, jedna próba na firmę; rejestracja wymaga numeru NIP i firmowego adresu e-mail.</p>
+      <!--future-offers:start-->
       <p>WERYFIKACJA i ASSESSMENT CENTER są pokazane jako kolejne etapy oferty, z <strong>zatwierdzonymi cenami</strong> (WERYFIKACJA 615 zł brutto za 60 CV, ASSESSMENT CENTER 1 499 zł brutto za 50 CV; decyzja właściciela 2026-11-02) i <strong>bez terminu uruchomienia</strong>. Żadnego z nich nie można dziś kupić ani aktywować.</p>
+      <!--future-offers:end-->
     </details>
     <details><summary>Koszt ręcznej analizy CV</summary>
       <p>Czas ręcznego czytania liczymy jako: liczba CV × minuty na jedno CV ÷ 60. Koszt tego czasu to liczba godzin × koszt godziny pracy netto. Domyślnie 6 minut na CV i 65 zł za godzinę — obie wartości zmieniasz w kalkulatorze. Przy 50 CV daje to około 5 godzin i 325 zł netto. <strong>To koszt ręcznej analizy przy podanych założeniach, a nie gwarantowana oszczędność dzięki SkillCheck</strong>; porównanie nie uwzględnia czasu potrzebnego na przejrzenie wyników.</p>
@@ -399,7 +403,7 @@
   'use strict';
   // Current offer approved by the owner (2026-11-02): FREE 0 zł / 5 analiz CV,
   // PRESELEKCJA 300 zł brutto za pakiet 60 analiz CV. A larger pool is charged as
-  // further packages. WERYFIKACJA and ASSESSMENT CENTER carry no price here.
+  // further packages. Later stages carry no price in this script.
   const VAT=1.23;
   const BASE_GROSS_CENTS={free:0,pre:30000};
   const PRE_PACKAGE_CV=60;

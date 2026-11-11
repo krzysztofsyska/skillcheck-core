@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
-import { bootHostedRehearsal, replayObservedHistory } from './helpers/sc19-hosted-rehearsal.mjs';
+import { bootHostedRehearsal, replayObservedHistory, LEGACY_HISTORY } from './helpers/sc19-hosted-rehearsal.mjs';
 import { assertCurrentInventory, assertR6, catalogSnapshot, migrationManifest } from './helpers/sc19-migration-fixture.mjs';
 
 const m13 = '20261021084732_sc019_credits_payments_inventory.sql';
@@ -60,7 +60,7 @@ test('inspected production state: normalization then the unchanged M13 reach the
   assert.equal(url.pathname, '/sc19_production_hosted');
   assert.equal(process.env.SC19_TEST_PG_MAJOR, '17', 'The observed production state is PostgreSQL 17');
   const { db } = await bootHostedRehearsal(t, url);
-  const history = await replayObservedHistory(t, db);
+  const history = await replayObservedHistory(t, db, LEGACY_HISTORY);
   const applied = new Set(history.map(entry => entry.name));
   const pending = (await readdir(dir)).filter(f => f.endsWith('.sql') && !applied.has(f.replace(/^\d+_/, '').replace(/\.sql$/, ''))).sort();
   const normalizeIndex = pending.indexOf(normalize), m13Index = pending.indexOf(m13);

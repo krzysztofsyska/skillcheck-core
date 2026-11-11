@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { createClient } from '../../../../../../lib/supabase/server';
+import { brandedTitle } from '../../../../../../lib/brand-server';
 import { loadScreeningReport } from '../../../../../../lib/screening-report-source';
 import { ScreeningReportError, type ScreeningReport } from '../../../../../../lib/screening-report';
 import { ScreeningReportView } from './report-view';
@@ -8,7 +9,11 @@ import { PrintReportButton } from './print-button';
 import styles from './report.module.css';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Raport preselekcji | SkillCheck', robots: { index: false, follow: false }, referrer: 'no-referrer' };
+// SC-020-C: tytuł (także nagłówek wydruku/PDF) w marce klienta, jeśli jest opublikowana.
+export async function generateMetadata({ params }: { params: Promise<{ companyId: string }> }) {
+  const { companyId } = await params;
+  return { title: await brandedTitle(companyId, 'Raport preselekcji'), robots: { index: false, follow: false }, referrer: 'no-referrer' as const };
+}
 
 export default async function ReportPage({ params, searchParams }: {
   params: Promise<{ companyId: string; recruitmentId: string }>;

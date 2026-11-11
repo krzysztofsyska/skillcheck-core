@@ -77,29 +77,6 @@ export const capabilities = [
   },
 ] as const;
 
-// WERYFIKACJA and ASSESSMENT CENTER are shown as later stages WITH their approved prices, next
-// to the fact that neither can be bought yet (owner decision 2026-11-02, evening). Bot calls are
-// not mentioned here or anywhere else customer-facing until they work.
-export const nextStages = [
-  {
-    name: "WERYFIKACJA",
-    title: "Pogłębienie sprawdzenia kompetencji",
-    body: "Kolejny etap po preselekcji: sprawdzenie kompetencji szerzej niż we wstępnym zestawieniu materiałów, z rozszerzonym raportem kandydata.",
-    price: "615 zł brutto",
-    scope: "60 CV · testy kompetencji · pula CV zwiększana co 5",
-  },
-  {
-    name: "ASSESSMENT CENTER",
-    title: "Szerszy proces oceny kompetencji",
-    body: "Kolejny etap po weryfikacji: zadania praktyczne i obserwacje osadzone w realiach stanowiska. W koncie można już ręcznie prowadzić zadania i obserwacje.",
-    price: "1 499 zł brutto",
-    scope: "50 CV · zadania praktyczne · proces dla 5–6 osób, maksymalnie 10",
-  },
-] as const;
-
-export const nextStagesNote =
-  "WERYFIKACJA i ASSESSMENT CENTER to kolejne etapy oferty. Ceny są zatwierdzone (decyzja właściciela 2026-11-02), ale pakiety są jeszcze w budowie — nie mają terminu uruchomienia i nie można ich dziś kupić.";
-
 export const assumptions = [
   { label: "Czas analizy jednego CV", value: "6 minut", note: "Wartość przykładowa. W kalkulatorze wpisujesz własną." },
   { label: "Koszt godziny pracy", value: "65 zł netto", note: "Wartość przykładowa. W kalkulatorze wpisujesz własną." },

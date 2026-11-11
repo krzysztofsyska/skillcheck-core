@@ -20,11 +20,20 @@ export const SCREENING_PROVIDER_ERROR_CODES = [
   'openai_network_error',
   'contract_mismatch',
   'worker_internal_error',
+  // SC-021-C (AI gateway path only): refused before any provider call, never retried.
+  'ai_budget_exceeded',
+  'ai_budget_unavailable',
 ] as const;
 export type ScreeningProviderErrorCode = typeof SCREENING_PROVIDER_ERROR_CODES[number];
 
 export type ScreeningWorkerClaim = {
   analysis_id: string;
+  /**
+   * SC-021-B: tenant of the claimed attempt, read by the worker from the database in the claim
+   * transaction (public.screening_attempt_tenant). Not part of the claim RPC result; only the
+   * AI gateway path uses it.
+   */
+  company_id?: string | null;
   candidate_document_id?: string | null;
   attempt_id: string;
   lease_token: string;
@@ -200,6 +209,8 @@ export function sanitizeScreeningError(code: ScreeningProviderErrorCode) {
     case 'openai_server_error': return 'Usługa modelu jest chwilowo niedostępna.';
     case 'openai_network_error': return 'Nie udało się połączyć z modelem.';
     case 'contract_mismatch': return 'Kontrakt analizy jest niezgodny.';
+    case 'ai_budget_exceeded': return 'Miesięczny limit kosztów AI firmy został wyczerpany. Analiza nie została wysłana do modelu. Skontaktuj się z obsługą SkillCheck.';
+    case 'ai_budget_unavailable': return 'Limit kosztów AI firmy nie jest ustawiony albo jest chwilowo niedostępny. Analiza nie została wysłana do modelu. Skontaktuj się z obsługą SkillCheck.';
     default: return 'Analiza nie została ukończona.';
   }
 }
@@ -260,7 +271,8 @@ export function parseScreeningProviderOutput(input: unknown, claim: ScreeningWor
       throw new ScreeningProviderError('openai_invalid_output', 'Invalid criterion result.', 'criterion_result');
     }
     seen.add(row.criterion_id);
-    const evidence = evidenceFromExactQuotes(claim.input_cv_text_snapshot, row.evidence_quotes.map(String));
+    // Pass the unmodified model values to the runtime string validator; never coerce JSON primitives into CV evidence.
+    const evidence = evidenceFromExactQuotes(claim.input_cv_text_snapshot, row.evidence_quotes as string[]);
     if (row.rating !== 'insufficient_data' && evidence.length === 0) {
       throw new ScreeningProviderError('openai_invalid_output', 'Supported ratings require evidence.', 'missing_evidence');
     }

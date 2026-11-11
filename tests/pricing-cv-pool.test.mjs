@@ -13,9 +13,10 @@ import { readFileSync } from 'node:fs';
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 
-const demo = read('public/kalkulator-demo.html');
+const demo = read('content/kalkulator-demo.html');
 const cennik = read('docs/cennik-2026-11-02.md');
 const content = read('app/components/marketing/content.ts');
+const future = read('app/components/marketing/future-offers.ts');
 const comparison = read('app/components/marketing/package-comparison.tsx');
 const internal = read('lib/pricing/internal-calculator.ts');
 
@@ -34,13 +35,13 @@ test('dokument cennika podaje zatwierdzone liczby', () => {
 });
 
 test('kolejne etapy na stronie mają zatwierdzone ceny, nie są bezcenowe', () => {
-  assert.match(content, /price: "615 zł brutto"/);
-  assert.match(content, /price: "1 499 zł brutto"/);
-  assert.match(content, /60 CV · testy kompetencji · pula CV zwiększana co 5/);
-  assert.match(content, /50 CV · zadania praktyczne · proces dla 5–6 osób, maksymalnie 10/);
+  assert.match(future, /price: "615 zł brutto"/);
+  assert.match(future, /price: "1 499 zł brutto"/);
+  assert.match(future, /60 CV · do 10 testowanych osób · jedno stanowisko/);
+  assert.match(future, /50 CV · do 6 finalistów · 3 ćwiczenia na osobę/);
   // Cena zatwierdzona, pakiet jeszcze nie do kupienia — obie rzeczy muszą być powiedziane.
-  assert.match(content, /Ceny są zatwierdzone/);
-  assert.match(content, /nie można ich dziś kupić/);
+  assert.match(comparison, /Cena zatwierdzona/);
+  assert.match(comparison, /Nie można ich jeszcze kupić/);
   assert.match(comparison, /Cena zatwierdzona · pakiet w przygotowaniu/);
   assert.match(comparison, /stage\.price/);
 });
@@ -48,13 +49,14 @@ test('kolejne etapy na stronie mają zatwierdzone ceny, nie są bezcenowe', () =
 test('demo kalkulatora podaje te same ceny etapów co strona', () => {
   assert.match(demo, /615 zł brutto za 60 CV/);
   assert.match(demo, /1 499 zł brutto za 50 CV/);
-  assert.match(demo, /proces dla 5–6 osób, maksymalnie 10/);
+  assert.match(demo, /do 6 finalistów w cenie/);
+  assert.match(demo, /7–10 osób wymaga osobnej oferty/);
 });
 
 test('voicebot nie jest pokazywany nigdzie na powierzchniach publicznych', () => {
   // Decyzja właściciela 2026-11-02 (wieczór): bota nie pokazujemy w ogóle. Wróci dopiero,
   // gdy zacznie działać — wtedy jako dodatek do pakietu, gratis albo za niewielką opłatą.
-  for (const [name, text] of [['treść strony', content], ['komponent porównania', comparison], ['demo', demo]]) {
+  for (const [name, text] of [['treść strony', content], ['planowane oferty', future], ['komponent porównania', comparison], ['demo', demo]]) {
     for (const word of ['voicebot', 'Voicebot', 'rozmów z botem', 'Rozmowy z botem', 'rozmowy z botem', 'rozmów AI', 'rozmowy AI']) {
       assert.equal(text.includes(word), false, `${name}: wzmianka o voicebocie „${word}"`);
     }
@@ -64,6 +66,7 @@ test('voicebot nie jest pokazywany nigdzie na powierzchniach publicznych', () =>
 test('wycofane ceny nie wracają', () => {
   for (const stale of ['899', '1799', '1 799', '1845']) {
     assert.equal(demo.includes(stale), false, `demo: wycofana cena ${stale}`);
+    assert.equal(future.includes(stale), false, `planowane oferty: wycofana cena ${stale}`);
     assert.equal(content.includes(stale), false, `treść strony: wycofana cena ${stale}`);
     assert.equal(comparison.includes(stale), false, `komponent porównania: wycofana cena ${stale}`);
   }

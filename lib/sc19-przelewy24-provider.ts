@@ -121,6 +121,18 @@ export function createPrzelewy24Provider(deps: Przelewy24ProviderDeps, fetchImpl
     return d as { orderId: number; amount: number; status: 0 | 1 | 2 | 3 };
   }
 
+  async function verifiedSettlement(orderId: string, sessionId: string, providerId: number, amount: number): Promise<VerifiedPayment> {
+    await call('PUT', '/api/v1/transaction/verify', { merchantId: c.merchantId, posId, sessionId,
+      amount, currency: 'PLN', orderId: providerId,
+      sign: przelewy24Sign({ sessionId, orderId: providerId, amount, currency: 'PLN', crc: c.crc }) });
+    // Replays may reject verify for an already-settled payment. Always re-read it.
+    const t = await findSession(sessionId);
+    if (!t || t.orderId !== providerId) return fail('P24_RESPONSE_INVALID');
+    return { eventId: `przelewy24:${t.orderId}:${t.status}`, orderId, sessionId,
+      paymentId: `przelewy24:${t.orderId}`, scope, amountMinor: t.amount, currency: 'PLN',
+      status: t.status === 2 ? 'paid' : t.status === 3 ? 'failed' : 'pending' };
+  }
+
   return Object.freeze({
     async createCheckout(order: PaymentOrder, key: string): Promise<HostedCheckout> {
       checkOrder(order, key);
@@ -150,6 +162,14 @@ export function createPrzelewy24Provider(deps: Przelewy24ProviderDeps, fetchImpl
       // Present but the hosted token is unknowable here: uncertainty, not absence.
       return existing ? fail('P24_SESSION_EXISTS') : null;
     },
+    async readSettlement(order: PaymentOrder) {
+      const sessionId = sessionIdFor(order.id);
+      if (order.sessionId !== sessionId) return fail('P24_SCOPE_MISMATCH');
+      const tx = await findSession(sessionId);
+      if (!tx || tx.status === 0 || tx.status === 3) return null;
+      if (tx.amount !== order.amountMinor) return fail('P24_ORDER_INVALID');
+      return verifiedSettlement(order.id, sessionId, tx.orderId, tx.amount);
+    },
     async verifyAndRetrieve(raw: Uint8Array, signature: string): Promise<VerifiedPayment | null> {
       let n: Record<string, unknown>;
       try { n = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)); } catch { return fail('P24_NOTIFICATION_INVALID'); }
@@ -166,20 +186,7 @@ export function createPrzelewy24Provider(deps: Przelewy24ProviderDeps, fetchImpl
       if (!sameHex(n.sign, expected) || !/^[0-9a-f]{96}$/.test(signature) || !sameHex(signature, expected))
         return fail('P24_NOTIFICATION_UNAUTHENTICATED');
       const sessionId = n.sessionId, orderId = SESSION.exec(sessionId)![1];
-      // Confirm receipt; without verify Przelewy24 does not settle the payment.
-      const v = await call('PUT', '/api/v1/transaction/verify', { merchantId: c.merchantId, posId, sessionId,
-        amount: n.amount, currency: 'PLN', orderId: n.orderId,
-        sign: przelewy24Sign({ sessionId, orderId: n.orderId as number, amount: n.amount as number, currency: 'PLN', crc: c.crc }) });
-      // A repeated notification may get a non-success verify answer for an
-      // already-settled transaction; the fresh read below decides, not this call.
-      void v;
-      // Payment truth: fresh read, never the notification fields alone.
-      // Status 2 = payment settled (after verify); 1 = awaiting verify; 3 = returned.
-      const t = await findSession(sessionId);
-      if (!t || t.orderId !== n.orderId) return fail('P24_RESPONSE_INVALID');
-      const status: VerifiedPayment['status'] = t.status === 2 ? 'paid' : t.status === 3 ? 'failed' : 'pending';
-      return Object.freeze({ eventId: `przelewy24:${t.orderId}:${t.status}`, orderId, sessionId,
-        paymentId: `przelewy24:${t.orderId}`, scope, amountMinor: t.amount, currency: 'PLN', status });
+      return verifiedSettlement(orderId, sessionId, n.orderId as number, n.amount);
     },
   });
 }

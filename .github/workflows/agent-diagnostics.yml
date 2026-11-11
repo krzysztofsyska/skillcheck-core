@@ -3,9 +3,15 @@ name: Agent connection diagnostics
 on:
   workflow_dispatch:
     inputs:
-      agent_id:
-        description: Existing Cursor agent ID to read (does not start an agent)
+      mode:
+        description: Existing connection checks or installed-runtime ruleset visibility
         required: true
+        type: choice
+        default: connections
+        options: [connections, ruleset_visibility]
+      agent_id:
+        description: Existing Cursor agent ID (connections mode only)
+        required: false
         type: string
 
 permissions:
@@ -18,6 +24,7 @@ concurrency:
 jobs:
   diagnostics:
     if: >-
+      inputs.mode != 'ruleset_visibility' &&
       github.repository == 'krzysztofsyska/skillcheck-core' &&
       github.ref == 'refs/heads/main' &&
       vars.AGENT_PIPELINE_ENABLED == 'false' &&
@@ -45,3 +52,56 @@ jobs:
           AGENT_PIPELINE_APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           CURSOR_DIAGNOSTIC_AGENT_ID: ${{ inputs.agent_id }}
+  authorize_visibility:
+    if: inputs.mode == 'ruleset_visibility'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      allowed: ${{ steps.source.outputs.allowed }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: source
+        run: node tools/agent-pipeline/authorize-diagnostics.mjs
+        env:
+          AGENT_DIAGNOSTIC_MODE: ruleset_visibility
+          GITHUB_TOKEN: ${{ github.token }}
+          AGENT_PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+          AGENT_PIPELINE_MERGE_ENABLED: ${{ vars.AGENT_PIPELINE_MERGE_ENABLED }}
+          AGENT_FEEDBACK_ENABLED: ${{ vars.AGENT_FEEDBACK_ENABLED }}
+  ruleset_visibility:
+    needs: authorize_visibility
+    if: needs.authorize_visibility.outputs.allowed == 'true' && inputs.mode == 'ruleset_visibility' && github.ref == 'refs/heads/agent-control-runtime'
+    environment: agent-control
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Compare existing App token visibility without controller effects
+        run: node tools/agent-pipeline/diagnose.mjs
+        env:
+          AGENT_DIAGNOSTIC_MODE: ruleset_visibility
+          GITHUB_TOKEN: ${{ github.token }}
+          AGENT_PIPELINE_ENABLED: ${{ vars.AGENT_PIPELINE_ENABLED }}
+          AGENT_PIPELINE_MERGE_ENABLED: ${{ vars.AGENT_PIPELINE_MERGE_ENABLED }}
+          AGENT_FEEDBACK_ENABLED: ${{ vars.AGENT_FEEDBACK_ENABLED }}
+          AGENT_PIPELINE_APP_ID: ${{ secrets.AGENT_PIPELINE_APP_ID }}
+          AGENT_PIPELINE_APP_INSTALLATION_ID: ${{ secrets.AGENT_PIPELINE_APP_INSTALLATION_ID }}
+          AGENT_PIPELINE_APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}

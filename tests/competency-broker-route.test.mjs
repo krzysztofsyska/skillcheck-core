@@ -25,6 +25,7 @@ test('B3 actual enabled route -> production construct -> trusted TLS PostgreSQL1
   execArgv:[],stdio:['ignore','ignore','pipe','ipc'],env:{...process.env,
    NODE_EXTRA_CA_CERTS:ca,SC014_TEST_TLS_KEY:key,SC014_TEST_TLS_CERT:cert,
    COMPETENCY_BROKER_ENABLED:'true',VERCEL:'1',COMPETENCY_BROKER_GATEWAY_DATABASE_URL:dsn.toString(),
+   COMPETENCY_BROKER_LIMITER:'redis',
    COMPETENCY_BROKER_CSRF_KEY:randomBytes(32).toString('hex'),
    COMPETENCY_BROKER_SOURCE_HMAC_KEY:randomBytes(32).toString('hex'),
    COMPETENCY_BROKER_LIMITER_REST_TOKEN:'isolated-route-fixture-token'}});

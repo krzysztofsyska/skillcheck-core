@@ -8,7 +8,27 @@ on:
       - 'docs/prototypes/sc19-payment-storage.sql'
       - 'docs/sc19-migrations*.md'
       - 'lib/sc19-payment*.ts'
+      - 'lib/sc19-offer-*.ts'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/competency-active-*.mjs'
+      - 'tests/sc-wer-r12-rollback-from-production.test.mjs'
+      - 'tests/helpers/competency-active-fixture.mjs'
+      - 'scripts/sc-wer-c1-compose.mjs'
+      - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/sc-c6-compose.mjs'
+      - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'scripts/sc-c6-revision-compose.mjs'
+      - 'scripts/sc19-commerce-inventory-compose.mjs'
+      - 'db/components/exercise-ai-revision-workflow.sql'
+      - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
+      - 'db/components/exercise-ai-proposals.sql'
+      - 'tests/exercise-ai-*.test.mjs'
+      - 'scripts/preview-migration-stream.mjs'
+      - 'tests/preview-db-migrate-workflow.test.mjs'
+      - '.github/workflows/preview-db-migrate.yml'
+      - 'db/components/sc-ac-paired-sheets.sql'
+      - 'tests/assessment-center-active-*.mjs'
+      - 'tests/helpers/assessment-center-active-fixture.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step4-erasure-r8.test.mjs'
       - 'tests/cv-bulk-database.test.mjs'
@@ -16,14 +36,19 @@ on:
       - 'supabase/rollbacks/*cv_bulk*'
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
+      - 'tests/sc19-auto-trial-database.test.mjs'
       - 'tests/db-migrate/**'
       - 'tools/db-migrate/**'
       - '.github/workflows/db-migrate-production.yml'
       - 'supabase/rollbacks/**'
+      # Preview-only commercial seeds: not migrations, but exercised by
+      # tests/sc-019-migrations.test.mjs, so a change to one must re-run this.
+      - 'supabase/preview-seeds/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
       - 'tests/fixtures/sc19-production-history.json'
+      - 'tests/fixtures/sc19-production-history-2026-10-24.json'
       - 'tests/fixtures/sc19-hosted-acl-differences.json'
       - 'tests/fixtures/sc19-rehearsal.Dockerfile'
       - 'tests/helpers/sc19-migration-fixture.mjs'
@@ -37,6 +62,25 @@ on:
     paths:
       - 'supabase/migrations/**'
       - 'tests/sc-019-migrations*.mjs'
+      - 'tests/competency-active-*.mjs'
+      - 'tests/sc-wer-r12-rollback-from-production.test.mjs'
+      - 'tests/helpers/competency-active-fixture.mjs'
+      - 'scripts/sc-wer-c1-compose.mjs'
+      - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/sc-c6-compose.mjs'
+      - 'scripts/sc-c6-grant-guard-compose.mjs'
+      - 'scripts/sc-c6-revision-compose.mjs'
+      - 'scripts/sc19-commerce-inventory-compose.mjs'
+      - 'db/components/exercise-ai-revision-workflow.sql'
+      - 'tests/helpers/exercise-ai-grant-guard-fixture.mjs'
+      - 'db/components/exercise-ai-proposals.sql'
+      - 'tests/exercise-ai-*.test.mjs'
+      - 'scripts/preview-migration-stream.mjs'
+      - 'tests/preview-db-migrate-workflow.test.mjs'
+      - '.github/workflows/preview-db-migrate.yml'
+      - 'db/components/sc-ac-paired-sheets.sql'
+      - 'tests/assessment-center-active-*.mjs'
+      - 'tests/helpers/assessment-center-active-fixture.mjs'
       - 'tests/sc-step3-erasure-r7.test.mjs'
       - 'tests/sc-step4-erasure-r8.test.mjs'
       - 'tests/cv-bulk-database.test.mjs'
@@ -44,14 +88,19 @@ on:
       - 'supabase/rollbacks/*cv_bulk*'
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
+      - 'tests/sc19-auto-trial-database.test.mjs'
       - 'tests/db-migrate/**'
       - 'tools/db-migrate/**'
       - '.github/workflows/db-migrate-production.yml'
       - 'supabase/rollbacks/**'
+      # Preview-only commercial seeds: not migrations, but exercised by
+      # tests/sc-019-migrations.test.mjs, so a change to one must re-run this.
+      - 'supabase/preview-seeds/**'
       - 'tests/data-api-grants.test.mjs'
       - 'tests/sales-leads-database.test.mjs'
       - 'tests/fixtures/sc19-migration-manifest.json'
       - 'tests/fixtures/sc19-production-history.json'
+      - 'tests/fixtures/sc19-production-history-2026-10-24.json'
       - 'tests/fixtures/sc19-hosted-acl-differences.json'
       - 'tests/fixtures/sc19-rehearsal.Dockerfile'
       - 'tests/helpers/sc19-migration-fixture.mjs'
@@ -92,6 +141,14 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
+      # Offline generator checks first: they must not depend on the network step below (a failed
+      # curl there once skipped all of them).
+      - run: node scripts/sc-wer-c1-compose.mjs --check
+      - run: node scripts/sc-ac-compose.mjs --check
+      - run: node scripts/sc-c6-compose.mjs --check
+      - run: node scripts/sc19-commerce-inventory-compose.mjs --check
+      - run: node scripts/sc-c6-grant-guard-compose.mjs --check
+      - run: node scripts/sc-c6-revision-compose.mjs --check
       - name: Matching native dump and restore clients
         env:
           PG_MAJOR: ${{ matrix.postgres }}
@@ -114,21 +171,35 @@ jobs:
           fi
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_dump" --version
           "/usr/lib/postgresql/$PG_MAJOR/bin/pg_restore" --version
+      - name: Catalog orders, settlement and erasure
+        run: node --experimental-strip-types --test tests/sc19-catalog-orders.test.mjs
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
       - name: Real migration, concurrency, ACL, purge and native restore
         run: |
           set +e
           node --experimental-strip-types --test --test-concurrency=1 \
             tests/sc-019-migrations.test.mjs tests/sc-019-migrations-retention.test.mjs \
-            tests/sc-019-migrations-mvp-e2e.test.mjs \
+            tests/sc-019-migrations-mvp-e2e.test.mjs tests/preview-db-migrate-workflow.test.mjs \
+            tests/competency-active-migration.test.mjs tests/competency-active-concurrency.test.mjs tests/competency-active-limiter.test.mjs tests/competency-active-staff.test.mjs \
+            tests/assessment-center-active-database.test.mjs tests/assessment-center-active-concurrency.test.mjs \
+            tests/exercise-ai-inventory.test.mjs tests/exercise-ai-concurrency.test.mjs \
+            tests/exercise-ai-grant-guard.test.mjs tests/exercise-ai-grant-guard-concurrency.test.mjs \
+            tests/exercise-ai-recruiter-api.test.mjs tests/exercise-ai-recruiter-api-concurrency.test.mjs \
+            tests/exercise-ai-revision.test.mjs tests/exercise-ai-revision-concurrency.test.mjs \
+            tests/exercise-ai-generation-database.test.mjs \
             tests/data-api-grants.test.mjs tests/sales-leads-database.test.mjs \
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/cv-bulk-database.test.mjs tests/sc-step3-evidence-worker.test.mjs \
-            tests/sc-019-operator-fulfillment.test.mjs tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
+            tests/sc-019-operator-fulfillment.test.mjs tests/sc19-auto-trial-database.test.mjs \
+            tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
             tests/db-migrate/normalize-line-endings.test.mjs \
             > sc19-migrations.log 2>&1
           test_result=$?
           tail -n 250 sc19-migrations.log
           exit "$test_result"
         env:
+          PREVIEW_MIGRATE_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SCREENING_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
@@ -152,7 +223,7 @@ jobs:
         include:
           - { postgres: '16', image_tag: '16', label: '16' }
           - { postgres: '17', image_tag: '17', label: '17' }
-          # Exact minor of production project wsvjawuikxfzjyivxgsu (read 2026-10-24).
+          # Exact minor of production project wsvjawuikxfzjyivxgsu (PostgreSQL 17.6, 49 migrations; state read 2026-11-10).
           - { postgres: '17', image_tag: '17.6', label: '17.6-production' }
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -199,6 +270,49 @@ jobs:
         run: |
           set -o pipefail
           node --test tests/sc-019-migrations-production-history.test.mjs 2>&1 | tee sc19-production-history.log
+      - name: Rehearse the release from the CURRENT production state (49 recorded migrations, read 2026-11-10)
+        env:
+          SC19_REHEARSAL_DISPOSABLE: 'yes'
+          SC19_CURRENT_REHEARSAL_DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:55434/sc19_production_current
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          set -o pipefail
+          # Third disposable cluster: roles are cluster-wide and pg_cron accepts one database per cluster,
+          # so the legacy (2026-10-24) rehearsal above cannot share a cluster with this one.
+          docker run -d --name sc19-current -p 127.0.0.1:55434:5432 \
+            -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_production_current \
+            sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_production_current
+          ready=''
+          for attempt in $(seq 1 60); do
+            if docker exec sc19-current pg_isready -h 127.0.0.1 -U supabase_admin -d sc19_production_current >/dev/null; then
+              ready=$(docker exec -e PGPASSWORD=synthetic-only sc19-current psql -h 127.0.0.1 -U supabase_admin -d sc19_production_current -tAc 'select 1' 2>/dev/null) || ready=''
+              [ "$ready" = 1 ] && break
+            fi
+            sleep 1
+          done
+          [ "$ready" = 1 ] || { echo "::error::current-state rehearsal server did not become ready over TCP"; docker logs --tail 50 sc19-current; exit 1; }
+          node --test tests/sc-019-migrations-production-current.test.mjs 2>&1 | tee -a sc19-production-history.log
+      - name: SC-WER r12 rollback from the state the release reaches after r12 (production history replay)
+        env:
+          SC19_REHEARSAL_DISPOSABLE: 'yes'
+          SC19_R12_ROLLBACK_DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:55435/sc19_r12_rollback
+          SC19_TEST_PG_MAJOR: ${{ matrix.postgres }}
+        run: |
+          set -o pipefail
+          # Fourth disposable cluster (cluster-wide roles, one pg_cron database per cluster).
+          docker run -d --name sc19-r12 -p 127.0.0.1:55435:5432 \
+            -e POSTGRES_USER=supabase_admin -e POSTGRES_PASSWORD=synthetic-only -e POSTGRES_DB=sc19_r12_rollback \
+            sc19-rehearsal -c shared_preload_libraries=pg_cron -c cron.database_name=sc19_r12_rollback
+          ready=''
+          for attempt in $(seq 1 60); do
+            if docker exec sc19-r12 pg_isready -h 127.0.0.1 -U supabase_admin -d sc19_r12_rollback >/dev/null; then
+              ready=$(docker exec -e PGPASSWORD=synthetic-only sc19-r12 psql -h 127.0.0.1 -U supabase_admin -d sc19_r12_rollback -tAc 'select 1' 2>/dev/null) || ready=''
+              [ "$ready" = 1 ] && break
+            fi
+            sleep 1
+          done
+          [ "$ready" = 1 ] || { echo "::error::r12 rollback rehearsal server did not become ready over TCP"; docker logs --tail 50 sc19-r12; exit 1; }
+          node --test tests/sc-wer-r12-rollback-from-production.test.mjs 2>&1 | tee -a sc19-production-history.log
       - name: Reproduce the inspected production state (CRLF functions), normalization and M13
         if: matrix.postgres == '17'
         env:
@@ -231,4 +345,4 @@ jobs:
           retention-days: 7
       - name: Remove only this job's disposable container
         if: always()
-        run: docker rm -f sc19-rehearsal sc19-hosted || true
+        run: docker rm -f sc19-rehearsal sc19-hosted sc19-current sc19-r12 || true

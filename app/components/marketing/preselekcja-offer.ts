@@ -1,24 +1,12 @@
 import { loadSc19PackageSizes, loadSc19PublicOfferSizes, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
 import { createClient } from "../../../lib/supabase/server";
+import { freeOffer, preselekcjaOffer } from "../../../lib/preselekcja-offer";
 
-// Current PRESELEKCJA offer approved by the owner on 2026-10-28, reconfirmed
-// 2026-11-01 and 2026-11-02. The paid grant reads private.sc19_package_policy,
+// The approved figures live in lib/preselekcja-offer.ts so the checkout client
+// component can read them too. The paid grant reads private.sc19_package_policy,
 // so once the SC-019 catalog is enabled its quota wins and an enabled but
-// failing catalog shows no number.
-export const preselekcjaOffer = {
-  analyses: 60,
-  grossPln: 300,
-  netPln: "243,90",
-  validityMonths: 3,
-} as const;
-
-// FREE offer approved by the owner on 2026-11-02: 5 CV, 0 zł, one per company,
-// registration by NIP and a company e-mail address. Same catalog precedence as
-// PRESELEKCJA: a live policy wins, an enabled but failing catalog shows no number.
-export const freeOffer = {
-  analyses: 5,
-  grossPln: 0,
-} as const;
+// failing catalog shows no number. FREE follows the same catalog precedence.
+export { preselekcjaOffer, freeOffer } from "../../../lib/preselekcja-offer";
 
 export const preselekcjaPrice = `${preselekcjaOffer.grossPln} zł brutto`;
 export const preselekcjaScope = `${preselekcjaOffer.analyses} analiz CV`;

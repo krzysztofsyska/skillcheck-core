@@ -16,6 +16,8 @@ import {
   steps,
 } from "./content";
 import { PackageComparison } from "./package-comparison";
+import { isPublicFutureOffersEnabled } from "../../../lib/public-future-offers";
+import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 import { SiteFooter } from "./site-footer";
 import { SiteHeader } from "./site-header";
 
@@ -45,7 +47,8 @@ export async function HomePage() {
               <h1 id="hero-title">{heroTitle}</h1>
               <p className={styles.lede}>{heroLede}</p>
               <div className={styles.actions}>
-                <Link href="/preselekcja#free" className={styles.primary}>{`Wypróbuj FREE — ${freePrice}`}</Link>
+                <Link href={BUY_PRESELEKCJA_PATH} className={styles.primary}>{BUY_PRESELEKCJA_LABEL}</Link>
+                <Link href="/preselekcja#free" className={styles.secondary}>{`Wypróbuj FREE — ${freePrice}`}</Link>
                 <Link href="/kalkulator" className={styles.secondary}>Sprawdź koszt rekrutacji</Link>
               </div>
               <p className={styles.note}>
@@ -153,7 +156,7 @@ export async function HomePage() {
             <p className={styles.kicker}>Wybierz zakres</p>
             <h2 id="pkg-title">Nie płać za większy zakres, niż potrzebujesz.</h2>
             <p className={styles.intro}>Dziś kupisz FREE i PRESELEKCJĘ. FREE jest opcjonalnym pierwszym krokiem, a nie warunkiem zakupu PRESELEKCJI.</p>
-            <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} />
+            <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} futureOffersEnabled={isPublicFutureOffersEnabled()} />
           </div>
         </section>
 

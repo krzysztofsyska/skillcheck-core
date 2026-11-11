@@ -1,6 +1,9 @@
+import { workflowRef, integrationOnly } from './control-plane.mjs';
 import { basename } from 'node:path';
+import { historyCoverage } from './history.mjs';
 
 export async function findRun(github, policy, kind, requestId, recordedId) {
+  if (integrationOnly(policy) && ['accept', 'promote'].includes(kind)) return null;
   let run;
   if (recordedId) run = await github.readRun(recordedId);
   else {
@@ -10,7 +13,7 @@ export async function findRun(github, policy, kind, requestId, recordedId) {
     run = matches[0];
   }
   if (run.workflow_id !== policy.workflow_ids[kind] || run.path !== policy.workflows[kind]
-      || run.event !== 'workflow_dispatch' || run.head_branch !== 'main'
+      || run.event !== 'workflow_dispatch' || run.head_branch !== workflowRef(policy, kind)
       || run.actor?.id !== policy.controller_actor_id
       || run.display_title !== `sc-agent:${requestId}`) return null;
   return run;
@@ -38,8 +41,16 @@ export async function readEvidence(github, policy, records) {
       if (kind === 'verify') {
         if (body.head_sha !== record.head_sha || body.base_sha !== record.base_sha) continue;
         const jobs = await github.readJobs(run.id);
-        pair.ci = { ...body, conclusion: run.conclusion, jobs: jobs.map(j => ({ name: j.name, conclusion: j.conclusion })) };
-      } else pair.review = body;
+        pair.ci = { ...body, conclusion: run.conclusion, jobs: jobs.map(j => ({ name: j.name, conclusion: j.status === 'completed' ? j.conclusion : 'pending' })) };
+      } else {
+        if (body.payload?.verdict === 'PASS') {
+          let comparison;
+          try { comparison = await github.readComparison(record.base_sha, record.head_sha); }
+          catch (error) { if (error.message === 'PROMOTION_DIFF_INCOMPLETE') continue; throw error; }
+          if (!historyCoverage(body.payload, comparison.commits.map(c => c.sha))) continue;
+        }
+        pair.review = body;
+      }
     }
     evidence[record.task_id] = pair;
   }

@@ -325,7 +325,7 @@ Podsumowanie: w `supabase_migrations.schema_migrations` jest 31 wierszy, w repoz
 | `20261008155719` | `sc005_keep_worker_role_explicit_only` |
 | `20261011165916` | `sales_retention_cron_extension` |
 
-Odtwarza je fixture `tests/fixtures/sc19-production-history.json`
+Odtwarza je fixture `tests/fixtures/sc19-production-history-2026-10-24.json`
 (zob. `docs/release/sc-mvp-production-runbook.md`). Od #200 są też w `supabase/migrations` z tymi samymi numerami.
 
 ### Różnice numeracji (7) — ta sama nazwa, inna wersja
@@ -393,6 +393,10 @@ w modelu hosted (`sc19-rehearsal.Dockerfile`):
 
 Pokrycie testami w tym repozytorium:
 - `tests/db-migrate/normalize-line-endings.test.mjs` (#194) sprawdza normalizację na syntetycznym stanie `r4_legacy` z dodanym CRLF;
+- `tests/sc-019-migrations-production-current.test.mjs` (od 2026-11-10) to próba generalna wydania: odtwarza **aktualną** historię produkcji
+  (`tests/fixtures/sc19-production-history.json`, 49 pozycji, ostatnia `20261102120000`) pod numerami produkcyjnymi, a potem stosuje
+  pojedynczo wszystkie pozostałe migracje z repozytorium. Starszy stan z 2026-10-24 (19 pozycji) zachowano w
+  `tests/fixtures/sc19-production-history-2026-10-24.json` dla testów M13 i normalizacji.
 - `tests/sc-019-migrations-production-history.test.mjs` odtwarza zapisaną historię produkcji i oczekujące migracje, ale bez CRLF
   i bez porównania z 8 odciskami z inspect.
 

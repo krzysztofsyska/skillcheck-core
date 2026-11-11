@@ -38,7 +38,7 @@ test('a newer head, base, or policy rejects the previous PASS and approval', () 
   const { policy } = loadedPolicy();
   const stale = validateReview({
     workflow_id: policy.workflow_ids.review, workflow_path: policy.workflows.review, run_id: 1, run_attempt: 1, policy_sha: 'old',
-    payload: { schema_version: 1, request_id: 'r', repository_id: policy.repository_id, pr_number: 50, head_sha: HEAD, base_sha: BASE, contract_hash: 'hash', verdict: 'PASS', acceptance_checks: [], findings: [], limitations: [] },
+    payload: { schema_version: 1, request_id: 'r', repository_id: policy.repository_id, pr_number: 50, head_sha: HEAD, base_sha: BASE, contract_hash: 'hash', verdict: 'PASS', acceptance_checks: [], findings: [], limitations: [], full_diff_reviewed: false, reviewed_commits: [] },
   }, {
     workflowId: policy.workflow_ids.review, workflowPath: policy.workflows.review, runId: 1, runAttempt: 1, policySha: 'new', requestId: 'r', repositoryId: policy.repository_id, prNumber: 50, headSha: NEXT_HEAD, baseSha: BASE, contractHash: 'hash', requiredChecks: [],
   });

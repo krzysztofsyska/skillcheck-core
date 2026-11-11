@@ -9,6 +9,12 @@ const config = JSON.parse(readFileSync(file, 'utf8'));
 test('SC deployment allowlist keeps ordinary feature commits out of Vercel', () => {
   assert.equal(config.$schema, 'https://openapi.vercel.sh/vercel.json');
   assert.deepEqual(Object.keys(config).sort(), ['$schema', 'git']);
+  // SC-DIGEST-001: no `crons` block. Vercel passes the value of the environment
+  // variable named CRON_SECRET and no other into a cron request's Authorization
+  // header, and two invocations a day of one path needs a paid plan. The daily
+  // summary is scheduled by .github/workflows/sc19-daily-digest.yml instead,
+  // the pattern cv-bulk-pump.yml already uses. No cost, and no 401.
+  assert.equal('crons' in config, false);
   assert.deepEqual(config.git, {
     deploymentEnabled: {
       '**': false,
@@ -19,7 +25,7 @@ test('SC deployment allowlist keeps ordinary feature commits out of Vercel', () 
   });
 });
 
-test('SC deployment examples: only integration, main and release are eligible', () => {
+test('SC deployment examples: integration, main and release are eligible (preview freeze lifted 2026-11-11); everything else is not', () => {
   const rules = config.git.deploymentEnabled;
   // Vercel's documented priority: any matching true rule beats a false rule.
   // The assertions above fix the rule set, and these examples test intent.
@@ -40,6 +46,8 @@ test('SC deployment examples: only integration, main and release are eligible', 
     'chore/vercel-selective-deploy-20261012',
     'docs/sc-010-retention',
     'agent-feedback-state',
+    'integration-hotfix',
+    'preview-db/anything',
   ]) {
     assert.equal(isEligible(branch), false, branch);
   }

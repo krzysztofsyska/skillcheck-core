@@ -3,6 +3,7 @@ import { sha256 } from './canonical.mjs';
 function promotionCandidate(record) {
   const mergeSha = record.binding?.merge?.mergeCommitSha;
   if (record.state !== 'ACCEPTED' || record.binding?.lane === 'promotion' || !mergeSha) return null;
+  if (record.binding.post_merge_ci?.ok !== true || record.binding.post_merge_ci.headSha !== mergeSha) return null;
   const approval = record.binding.approval;
   if (approval?.gate === 'B') return null;
   if (approval?.gate === 'A') {

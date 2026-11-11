@@ -7,6 +7,7 @@ import {
   BULK_MAX_ZIP_BYTES, BULK_OCR_UPLOAD_CONCURRENCY, BULK_UPLOAD_CONCURRENCY, bulkFileKind, bulkMayNeedOcr, displayFileName, isIgnoredZipEntry,
   type BulkFileMeta,
 } from '../../../../../../lib/cv-bulk';
+import { createBatchCloser } from '../../../../../../lib/cv-bulk-close';
 import { closeBulkUpload, createBulkBatch } from './actions';
 
 type Picked = { name: string; size: number; blob: Blob };
@@ -30,6 +31,10 @@ export function BulkUploader(props: Props) {
   // same batch instead of reserving package slots twice. A new pick gets a new key.
   const requestKey = useRef<string | null>(null);
   const startLock = useRef(false);
+  // Set when the upload finished but closing the batch was not confirmed. Retrying only repeats the close
+  // of this same batch: never a new batch, a re-upload or a new request key.
+  const [unclosed, setUnclosed] = useState<{ base: string; batchId: string } | null>(null);
+  const [closing, setClosing] = useState(false);
 
   async function pick(list: FileList | null) {
     setProblem(null); setConfirmed(false);
@@ -126,14 +131,29 @@ export function BulkUploader(props: Props) {
     });
     try {
       await Promise.all([...drain(ocrLane, BULK_OCR_UPLOAD_CONCURRENCY), ...drain(textLane, BULK_UPLOAD_CONCURRENCY)]);
-      await closeBulkUpload(props.companyId, created.batchId);
     } catch {
       // The batch exists either way: its page shows what arrived, and an upload left open is closed
       // by the background pump. Never leave the button stuck on "Tworzę paczkę…".
-    } finally {
       router.push(base);
+      return;
     }
+    await closeBatch(base, created.batchId);
   }
+
+  async function closeBatch(base: string, batchId: string) {
+    setClosing(true);
+    const outcome = await createBatchCloser(() => closeBulkUpload(props.companyId, props.recruitmentId, batchId))();
+    if (outcome === 'closed') { router.push(base); return; }
+    setUnclosed({ base, batchId });
+    setClosing(false);
+  }
+
+  if (unclosed) return <section aria-live="polite">
+    <h2>Paczka utworzona, zamknięcie niepotwierdzone</h2>
+    <p role="alert">Pliki zostały wysłane, ale nie udało się potwierdzić zamknięcia wysyłania. Analiza w tle zamknie paczkę sama; możesz też ponowić zamknięcie.</p>
+    <button type="button" disabled={closing} onClick={() => { if (!closing) void closeBatch(unclosed.base, unclosed.batchId); }}>{closing ? 'Zamykam…' : 'Ponów zamknięcie paczki'}</button>
+    {' '}<Link href={unclosed.base}>Przejdź do utworzonej paczki</Link>
+  </section>;
 
   if (progress) return <section aria-live="polite">
     <h2>Wysyłanie plików</h2>

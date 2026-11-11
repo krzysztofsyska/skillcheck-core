@@ -11,6 +11,11 @@ import { reportDatabaseClient } from './helpers/screening-report-database-client
 import { loadScreeningReport } from '../lib/screening-report-source.ts';
 import { exportScreeningReport } from '../lib/screening-report-export.ts';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
+// The billing action now goes through the automatic-FREE flow. The flow module
+// carries no 'server-only' guard, so the real code runs here; only the thin
+// server adapter is substituted, and with no SC19_TRIAL_AUTO_SECRET set the
+// flow behaves exactly as before: claim, and otherwise manual review.
+import { activateFreeWithWhitelist, trialStore } from '../lib/sc19-trial-auto-flow.ts';
 
 // Synthetic composed integration, NOT a deployed runtime/provider/browser test.
 // Auth transport and provider are test doubles; billing, screening, review,
@@ -23,6 +28,7 @@ function activationAction(access) {
   mod.paths = Module._nodeModulePaths(fileURLToPath(new URL('../', import.meta.url)));
   const mocks = {
     '../../../../lib/company-access': { companyAccess: access },
+    '../../../../lib/sc19-trial-auto-server': { activateFreeWithWhitelist, trialStore },
     'next/cache': { revalidatePath() {} },
     'next/navigation': { redirect(url) { throw Object.assign(new Error('NEXT_REDIRECT'), { url }); } },
   };
@@ -151,6 +157,60 @@ test('FREE and signed fake payment feed real screening, human review, shortlist 
     assert.equal(entries.reduce((sum, r) => sum + r.delta, 0), -1);
   });
 
+  await t.test('remaining FREE credits accept four bulk CVs, reject the sixth, and produce a five-CV report', async () => {
+    await h.asUser(first.owner);
+    const files = Array.from({ length: 5 }, (_, i) => ({ name: `synthetic-${i}.pdf`, kind: 'pdf', size: 100 }));
+    const key = randomUUID();
+    const create = () => db.query('select public.cv_bulk_create_batch($1,$2,$3::jsonb) value',
+      [first.recruitment.id, key, JSON.stringify(files)]);
+    const batch = (await create()).rows[0].value;
+    assert.equal(batch.reserved_slots, 4);
+    assert.equal(batch.over_limit, 1);
+    assert.equal((await create()).rows[0].value.batch_id, batch.batch_id, 'upload retry reuses the reservation');
+    await assertBalance(0);
+    await h.asAdmin();
+    const items = (await db.query('select * from private.cv_bulk_items where batch_id=$1 order by position', [batch.batch_id])).rows;
+    const accepted = items.filter(item => item.slot_state === 'held');
+    assert.equal(accepted.length, 4);
+    for (const [i, item] of accepted.entries()) {
+      await h.asUser(first.owner);
+      const extracted = { first_name: 'Synthetic', last_name: `Person${i}`, email: null, phone: null,
+        source_text: 'SQL synthetic CV', redacted_text: 'SQL synthetic CV', name_detected: true, ocr_used: false };
+      const registered = (await db.query('select public.cv_bulk_register_item($1,$2::jsonb) value', [item.id, JSON.stringify(extracted)])).rows[0].value;
+      assert.equal(registered.status, 'queued');
+    }
+    const contract = { payload_schema_version: 1, result_schema_version: 1, prompt_version: 'screening-v1',
+      provider: 'openai', model: 'ranking-test-model', model_revision: 'test-rev' };
+    const pump = async () => {
+      await h.asUser(first.owner);
+      return (await db.query('select public.cv_bulk_pump($1,$2::jsonb,null) value', [batch.batch_id, JSON.stringify(contract)])).rows[0].value;
+    };
+    const completed = [];
+    for (let round = 0; round < 5 && completed.length < 4; round++) {
+      const result = await pump();
+      for (const attemptId of result.dispatch) {
+        const started = { attempt_id: attemptId };
+        const claimed = await h.claim(started);
+        await h.finishClaim(started, claimed, Array(claimed.criteria_snapshot.length).fill('meets'));
+        completed.push(attemptId);
+      }
+    }
+    assert.equal(completed.length, 4);
+    await pump();
+    await h.asAdmin();
+    const analyses = (await db.query('select application_id,analysis_id from private.cv_bulk_items where batch_id=$1 and analysis_id is not null', [batch.batch_id])).rows;
+    for (const row of analyses) await h.review({ ...first, application: { id: row.application_id } }, row.analysis_id);
+    await h.asUser(first.owner);
+    const value = await loadScreeningReport(reportDatabaseClient(db, () => ({ id: first.owner })), first.companyId, first.recruitment.id, '5');
+    assert.equal(value.applications.length, 5);
+    assert.equal(value.applications.filter(row => row.ranking.eligibility_reason === 'eligible').length, 5);
+    assert.equal(value.groups.length, 5, 'single and bulk analyses reach the same provisional group report');
+    const sixth = await h.candidate(first, 'synthetic-sixth');
+    await assert.rejects(h.start(sixth), /sc19_quota_exhausted/);
+    await assertBalance(0);
+    // Payment assertions below intentionally start at exhausted FREE.
+  });
+
   await t.test('immutable selected quote, lost response, signed settlement and duplicate webhook', async () => {
     const offers = await http().offers(new Request(`https://app.fixture.invalid/api/billing/offers?companyId=${first.companyId}`));
     assert.equal(offers.status, 200);
@@ -176,7 +236,7 @@ test('FREE and signed fake payment feed real screening, human review, shortlist 
     const payment = p.payment(recovered);
     const before = await audit();
     assert.notEqual((await notify(payment, { invalid: true })).status, 200);
-    assert.deepEqual(await audit(), before); await assertBalance(4);
+    assert.deepEqual(await audit(), before); await assertBalance(0);
     for (const changed of [
       { amountMinor: 1 }, { currency: 'EUR' },
       { scope: { ...p.scope, account: 'wrong-merchant' } },
@@ -184,11 +244,11 @@ test('FREE and signed fake payment feed real screening, human review, shortlist 
       { sessionId: 'wrong-session' },
     ]) {
       assert.notEqual((await notify({ ...payment, ...changed })).status, 200);
-      await assertBalance(4);
+      await assertBalance(0);
     }
     assert.equal((await notify(payment)).status, 200);
     assert.equal((await (await notify(payment)).json()).state, 'already_applied');
-    await assertBalance(16);
+    await assertBalance(12);
     assert.deepEqual(await runtime().service.checkout(input), { orderId: original.id, paid: true });
   });
 
@@ -197,10 +257,10 @@ test('FREE and signed fake payment feed real screening, human review, shortlist 
     assert.equal(p.sessions.size, 2);
     const prior = (await p.pool.query("select payment_id from private.sc19_payment_orders where status='paid' and company_id=$1", [first.companyId])).rows[0];
     assert.notEqual((await notify(p.payment(next, { paymentId: prior.payment_id }))).status, 200);
-    await assertBalance(16);
+    await assertBalance(12);
     await assert.rejects(runtime(first.owner, { enabled: false }).service.checkout(p.request(first.companyId)), /DISABLED/);
     assert.equal((await notify(p.payment(next), { extra: { enabled: false } })).status, 200);
-    await assertBalance(28);
+    await assertBalance(24);
     assert.equal(await p.count('sc19_payment_grants'), 2);
     assert.equal((await audit()).filter(r => r.reason === 'paid_grant').length, 2);
   });
@@ -210,7 +270,7 @@ test('FREE and signed fake payment feed real screening, human review, shortlist 
     const started = await h.start(candidate), claimed = await h.claim(started);
     await h.finishClaim(started, claimed, Array(claimed.criteria_snapshot.length).fill('above'));
     await report({ ...candidate, ...started });
-    await assertBalance(27);
+    await assertBalance(23);
     assert.equal((await audit()).filter(r => r.reason === 'paid_grant').every(r => r.delta === 12 && r.reference.startsWith('settlement:sc19:')), true);
     await h.asUser(second.owner);
     assert.equal((await exportScreeningReport(reportDatabaseClient(db, () => ({ id: second.owner })), first.companyId, first.recruitment.id, '5')).status, 404);

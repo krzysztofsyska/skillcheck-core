@@ -2,16 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { createRankingHarness, users } from './helpers/screening-ranking-fixture.mjs';
-import { bootHostedRehearsal, replayObservedHistory } from './helpers/sc19-hosted-rehearsal.mjs';
+import { bootHostedRehearsal, replayObservedHistory, LEGACY_HISTORY } from './helpers/sc19-hosted-rehearsal.mjs';
 import { assertCurrentInventory, assertR6, accountingSnapshot, catalogSnapshot, migrationManifest } from './helpers/sc19-migration-fixture.mjs';
 
-test('observed production history + pending chain preserves completed synthetic screening and installs empty R6 billing', async t => {
+test('LEGACY (2026-10-24) observed production history + pending chain preserves completed synthetic screening and installs empty R6 billing', async t => {
   const url = new URL(process.env.SC19_REHEARSAL_DATABASE_URL);
   assert.equal(url.port, '55432');
   assert.equal(url.pathname, '/sc19_production_rehearsal');
   assert.ok(['16','17'].includes(process.env.SC19_TEST_PG_MAJOR));
   const { platform, db } = await bootHostedRehearsal(t, url);
-  const history = await replayObservedHistory(t, db);
+  const history = await replayObservedHistory(t, db, LEGACY_HISTORY);
   assert.equal((await db.query("select count(*)::int n from pg_extension where extname='pg_cron'")).rows[0].n,1);
   assert.equal((await platform.query('select count(*)::int n from cron.job')).rows[0].n,0,'No scheduled destructive job');
   const membership=(await db.query(`select grantor::regrole::text grantor,admin_option,inherit_option,set_option from pg_auth_members where roleid='screening_worker'::regrole and member='postgres'::regrole order by grantor::regrole::text`)).rows;

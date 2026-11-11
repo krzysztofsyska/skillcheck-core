@@ -22,21 +22,35 @@ export const COMPANY = {
   phoneHref: 'tel:+48730266909',
 } as const;
 
+// Only documents that are published belong here: the registry drives the pages, the footer links and
+// the downloadable .docx set. The voice annex (Aneks nr 1) was withdrawn from publication on
+// 2026-11-11 and is kept only as an archive copy, see docs/legal/withdrawn/README.md.
 export const LEGAL_DOCUMENTS = {
   regulamin: { file: '01_Regulamin_SkillCheck.md', docx: '/legal/01_Regulamin_SkillCheck_v1.0.docx', href: '/regulamin' },
   prywatnosc: { file: '02_Polityka_prywatnosci.md', docx: '/legal/02_Polityka_prywatnosci_v1.0.docx', href: '/polityka-prywatnosci' },
   dpa: { file: '03_Umowa_powierzenia_DPA.md', docx: '/legal/03_Umowa_powierzenia_DPA_v1.0.docx', href: '/regulamin/umowa-powierzenia' },
   odstapienie: { file: '04_Formularz_odstapienia.md', docx: '/legal/04_Formularz_odstapienia_v1.0.docx', href: '/regulamin/formularz-odstapienia' },
   ai: { file: '05_AI_i_nadzor_czlowieka.md', docx: '/legal/05_AI_i_nadzor_czlowieka_v1.0.docx', href: '/ai' },
-  aneks1: { file: '06_Aneks_1_Rozmowy_glosowe.md', docx: '/legal/06_Aneks_1_Rozmowy_glosowe_v1.0.docx', href: '/regulamin/aneks-rozmowy-glosowe' },
 } as const;
 export type LegalDocumentKey = keyof typeof LEGAL_DOCUMENTS;
 
 /** Registration form field and the only accepted value. */
 export const LEGAL_ACCEPTANCE_FIELD = 'legal_acceptance';
-/** Accepted document set. Bump when a document is added, so a stale form cannot record acceptance of an older set. */
-export const LEGAL_ACCEPTANCE_REVISION = `${LEGAL_VERSION}+aneks1`;
-export const LEGAL_ACCEPTED_DOCUMENTS = ['regulamin', 'dpa', 'polityka-prywatnosci', 'aneks-1-rozmowy-glosowe'] as const;
+/**
+ * Accepted document set. Change the revision whenever the wording or the set of accepted documents
+ * changes, so a stale form cannot record acceptance of an older set and the stored value tells
+ * which text a customer agreed to (it is kept in the auth user metadata, see app/auth/actions.ts).
+ *
+ * History (the stored `revision` values):
+ * - `1.0+aneks1` (until 2026-11-11): Regulamin + DPA + Polityka prywatności + Aneks nr 1 (rozmowy głosowe).
+ * - `1.0+r2` (from 2026-11-11, owner decision): Regulamin + DPA + Polityka prywatności. The voice
+ *   annex is no longer part of the mandatory registration consent; the voicebot is not offered
+ *   (CLAUDE.md, "Voicebot on the public offer"). The annex was then withdrawn from publication the
+ *   same day (owner decision 2026-11-11): no page, no download, no link. Its text is archived in
+ *   docs/legal/withdrawn/. No production account ever stored an acceptance of `1.0+aneks1`.
+ */
+export const LEGAL_ACCEPTANCE_REVISION = `${LEGAL_VERSION}+r2`;
+export const LEGAL_ACCEPTED_DOCUMENTS = ['regulamin', 'dpa', 'polityka-prywatnosci'] as const;
 export const LEGAL_ACCEPTANCE_VALUE = `v${LEGAL_ACCEPTANCE_REVISION}`;
 
 export function hasLegalAcceptance(form: FormData): boolean {
