@@ -84,6 +84,41 @@ test('the migration chain itself publishes no offer and sets no quota', async t 
   await assertCurrentInventory(db);
 });
 
+test('the migration can be applied again without changing anything', async t => {
+  const { db, h } = await ready(t);
+  await setQuota(db, h, 60);
+  await h.asUser(operator);
+  await publish(db);
+  await h.asAdmin();
+  const before = await purchasable(db);
+
+  // A Preview resync re-applies a listed migration. Every function is CREATE OR
+  // REPLACE and every grant idempotent, so this must succeed and must not
+  // withdraw, re-issue or duplicate anything.
+  const forward = await readFile(new URL('../supabase/migrations/20261111090000_sc19_offer_publication.sql',
+    import.meta.url), 'utf8');
+  await db.exec(forward);
+  assert.deepEqual(await purchasable(db), before, 'the published offer is unchanged');
+  for (const signature of ['public.sc19_operator_publish_offer()', 'public.sc19_operator_published_offer()',
+    'private.sc19_offer_revision()']) {
+    assert.ok((await rows(db, 'select to_regprocedure($1) value', [signature]))[0].value, `${signature} still exists`);
+  }
+  // And the privileges are still exactly the reviewed ones.
+  for (const role of ['anon', 'authenticated']) {
+    for (const signature of ['public.sc19_operator_publish_offer()', 'public.sc19_operator_published_offer()']) {
+      assert.equal((await rows(db, 'select has_function_privilege($1,$2,$3) allowed',
+        [role, signature, 'execute']))[0].allowed, role === 'authenticated', `${role} ${signature}`);
+    }
+  }
+  // The revision constants stay unreachable from the browser roles.
+  for (const role of ['anon', 'authenticated']) {
+    assert.equal((await rows(db, 'select has_function_privilege($1,$2,$3) allowed',
+      [role, 'private.sc19_offer_revision()', 'execute']))[0].allowed, false, role);
+  }
+  assert.equal((await rows(db, `select has_function_privilege('authenticated',
+    'public.sc19_operator_publish_offer()','execute') allowed`))[0].allowed, true);
+});
+
 test('both RPCs refuse anon, ordinary users and non-operators', async t => {
   const { db, h } = await ready(t);
   const attempts = [

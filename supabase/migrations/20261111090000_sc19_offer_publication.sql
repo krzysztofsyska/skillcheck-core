@@ -69,6 +69,10 @@
 -- the offer makes the package, its price and its terms visible to a verified
 -- company; the sale itself is settled by bank transfer and the package is granted
 -- by the operator (owner decision 2026-11-01).
+--
+-- Re-runnable: every function is CREATE OR REPLACE and every grant is idempotent,
+-- so applying the file twice (a Preview resync, for example) leaves the same
+-- three functions and the same privileges, and still publishes nothing.
 begin;
 
 do $preflight$
@@ -94,7 +98,7 @@ $preflight$;
 -- Changing any value here is a new revision: give it a NEW id, because
 -- private.sc19_payment_offers rows are immutable once issued and a paid order
 -- references the id it was bought under.
-create function private.sc19_offer_revision()
+create or replace function private.sc19_offer_revision()
 returns table(offer_id text, revision text, terms_revision text, terms_text text,
   plan text, amount_minor integer, currency text, credits integer, valid_until_ms bigint)
 language sql immutable set search_path = '' as $$
@@ -133,7 +137,7 @@ comment on function private.sc19_offer_revision() is
 -- quota side by side, so the panel can state why publication would be refused
 -- instead of only failing. Always returns exactly one row; the published_* fields
 -- are null when nothing is published.
-create function public.sc19_operator_published_offer()
+create or replace function public.sc19_operator_published_offer()
 returns table(
   published_offer_id text, published_revision text, published_terms_revision text,
   published_amount_minor integer, published_credits integer,
@@ -199,7 +203,7 @@ grant execute on function public.sc19_operator_published_offer() to authenticate
 -- Publishes the reviewed revision. No arguments: the operator decides WHETHER to
 -- publish, never WHAT. Idempotent — publishing the revision that is already
 -- published changes nothing and returns the same row.
-create function public.sc19_operator_publish_offer()
+create or replace function public.sc19_operator_publish_offer()
 returns table(offer_id text, revision text, amount_minor integer, credits integer,
   terms_revision text, valid_until_ms bigint, published_at timestamptz, withdrawn integer)
 language plpgsql volatile security definer set search_path = '' as $$
