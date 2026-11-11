@@ -165,6 +165,12 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.doesNotMatch(summaryHtml, /zapłacić online przez Przelewy24/);
 
 
+  // Owner decision 2026-11-11: the voice annex is withdrawn. Neither the page nor its .docx is served.
+  for (const gone of ['/regulamin/aneks-rozmowy-glosowe', '/legal/06_Aneks_1_Rozmowy_glosowe_v1.0.docx']) {
+    const response = await fetch(`${base}${gone}`, { redirect: 'manual' });
+    assert.equal(response.status, 404, `${gone} is not published`);
+  }
+
   // Sales pilot intake is available without enabling paid checkout or AI.
   assert.ok(homeHrefs.includes('/kalkulator'), 'marketing links to clickable calculator');
   assert.match(home, /Sprawdź koszt rekrutacji/);
