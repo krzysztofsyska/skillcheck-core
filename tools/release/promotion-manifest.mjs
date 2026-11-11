@@ -21,6 +21,26 @@ const head = args.head ?? 'origin/integration';
 const git = (...a) => execFileSync('git', a, { encoding: 'utf8', maxBuffer: 1 << 28 }).trim();
 const lines = text => (text ? text.split('\n') : []);
 
+// Commits that reached integration without a PR number in their subject (a squash merge whose title
+// lost the "(#N)" suffix). The generator never guesses an attribution: a commit is attributed only
+// by its subject or by an entry here. An entry is evidence, not a rule, so every one records where it
+// can be re-checked. Keep this list as short as possible; do not add an entry you cannot verify.
+export const ATTRIBUTION_EXCEPTIONS = {
+  '0632e05ad5c8ca9b695c9550ecd73145452424a5': {
+    pr: 356,
+    source: 'GitHub API repos/krzysztofsyska/skillcheck-core/commits/0632e05ad5c8ca9b695c9550ecd73145452424a5/pulls '
+      + 'lists #356 (base integration, merged 2026-11-08T12:39:52Z); the commit time is 2026-11-08 13:39:52 +0100, '
+      + 'the same second. The only other PR listed for it is the open promotion PR #266.',
+  },
+};
+
+export function resolveStepPr(step, exceptions = ATTRIBUTION_EXCEPTIONS) {
+  const fromSubject = prNumberFromSubject(step.subject);
+  if (fromSubject !== null) return { pr: fromSubject, exception: null };
+  const entry = Object.hasOwn(exceptions, step.sha) ? exceptions[step.sha] : null;
+  return entry ? { pr: entry.pr, exception: { sha: step.sha, pr: entry.pr, source: entry.source } } : { pr: null, exception: null };
+}
+
 export function prNumberFromSubject(subject) {
   const match = /(?:Merge pull request #|PR #|\(#|\(PR #)(\d+)/.exec(subject);
   return match ? Number(match[1]) : null;
@@ -51,8 +71,10 @@ function build() {
     .reverse();
   const owner = new Map();
   const entries = [];
+  const exceptionsUsed = [];
   for (const step of firstParent) {
-    const pr = prNumberFromSubject(step.subject);
+    const { pr, exception } = resolveStepPr(step);
+    if (exception) exceptionsUsed.push(exception);
     const commits = step.parents.length > 1
       ? lines(git('rev-list', step.parents[1], `^${step.parents[0]}`, `^${baseSha}`))
       : [];
@@ -70,7 +92,7 @@ function build() {
   for (const f of files) categories[classifyFile(f)] = (categories[classifyFile(f)] ?? 0) + 1;
   const manifest = { base_ref: base, head_ref: head, base_sha: baseSha, head_sha: headSha,
     commit_count: all.size, attributed_count: all.size - unattributed.length, unattributed,
-    steps: entries, files, file_categories: categories, migrations_added: migrations.filter(f =>
+    attribution_exceptions_used: exceptionsUsed, steps: entries, files, file_categories: categories, migrations_added: migrations.filter(f =>
       !lines(git('ls-tree', '-r', '--name-only', baseSha, 'supabase/migrations/')).includes(f)) };
   manifest.manifest_hash = createHash('sha256').update(JSON.stringify({ ...manifest, steps: entries.map(({ files, ...r }) => r) })).digest('hex');
   return manifest;
@@ -89,6 +111,10 @@ function markdown(m, pulls) {
   for (const [k, v] of Object.entries(m.file_categories).sort((a, b) => b[1] - a[1])) out.push(`| ${k} | ${v} |`);
   out.push('', '## Nowe migracje (kolejność repozytorium)', '');
   m.migrations_added.forEach((f, i) => out.push(`${i + 1}. \`${f}\``));
+  if (m.attribution_exceptions_used.length) {
+    out.push('', '## Przypisania spoza tytułu commita', '', 'Commit bez numeru PR w tytule przypisany jawnym wpisem w narzędziu (dane, nie reguła):', '');
+    for (const e of m.attribution_exceptions_used) out.push(`- \`${e.sha}\` → #${e.pr}. ${e.source}`);
+  }
   out.push('', '## Kroki historii integration (chronologicznie)', '', '| # | Commit | PR | Commity | Migracje | Tytuł PR |', '| ---: | --- | --- | ---: | :---: | --- |');
   m.steps.forEach((s, i) => {
     const pull = s.pr ? pulls[s.pr] : null;
