@@ -203,7 +203,14 @@ type ExpectedFunctions =
   | "ac_confirm_reconciliation"
   | "ac_session_record_entry"
   | "ac_session_find"
-  | "ac_session_read";
+  | "ac_session_read"
+  | "method_profile_save_draft"
+  | "method_profile_approve"
+  | "method_profile_state"
+  | "method_profile_version"
+  | "method_bind_definition"
+  | "method_bind_recruitment_definitions"
+  | "method_definition_binding";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;

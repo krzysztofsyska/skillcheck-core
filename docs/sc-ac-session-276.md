@@ -80,6 +80,8 @@ Rollback `supabase/rollbacks/20261112120000_sc_ac_session_inventory_r16_down.sql
 
 **Zmiana poza modułem:** trzy rollbacki SC-020 (`20261109190000`, `20261109200000`, `20261109220000`) przypinały sygnaturę R15 i po instalacji R16 odmawiałyby działania. Preflight akceptuje teraz jedną z dwóch sprawdzonych sygnatur (R15 albo R16) i zapamiętuje ją na czas transakcji, a postflight wymaga dokładnie tej samej wartości; same rollbacki nie dotykają relacji inwentarza.
 
+To samo dotyczy rollbacku SC-METHOD (`20261112100000_sc_method_profile_down.sql`, #275): akceptuje R15 albo R16 i wymaga tej samej wartości po zakończeniu. Sama migracja SC-METHOD nie jest zmieniana i pozostaje przypięta do R15 — w łańcuchu działa przed R16. Po instalacji R16 jej ponowna instalacja po rollbacku wymaga nowej, sprawdzonej migracji naprzód (test pokazuje odmowę na pełnym łańcuchu i ponowną instalację na pozycji R15). Schemat `method` nie ma relacji ani kluczy obcych w inwentarzu `public`/`private`, więc nie wpływa na sygnaturę R16.
+
 ## Znane ograniczenia
 
 - Asesorzy są pokazywani identyfikatorem użytkownika („Ty” dla własnych zapisów), tak jak w istniejącym widoku arkuszy par.
