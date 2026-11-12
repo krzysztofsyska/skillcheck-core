@@ -131,6 +131,12 @@ test('the checklist form maps to canonical content; shape and limits are enforce
   assert.throws(() => parseDiagnosticForm(formFor({}, { kind: 'cut_budget' })), /Wybierz zalecenie/);
   assert.throws(() => parseDiagnosticForm(formFor({ tasks: 'maybe' })), /Wybierz status obszaru „Zadania”/);
   assert.throws(() => parseDiagnosticForm(formFor({ tasks: ['ok', 'x'.repeat(DIAGNOSTIC_LIMITS.note + 1)] })), /Skróć pole „Zadania — notatka” do 500 znaków/);
+  // PostgreSQL liczy znaki Unicode, więc dopuszcza 500 emoji, choć JS .length to 1000.
+  const emojiNote = '🦊'.repeat(DIAGNOSTIC_LIMITS.note);
+  assert.equal(parseDiagnosticForm(formFor({ tasks: ['ok', emojiNote] })).content.areas.tasks.note, emojiNote);
+  assert.throws(() => parseDiagnosticForm(formFor({ tasks: ['ok', emojiNote + '🦊'] })), /Skróć pole „Zadania — notatka”/);
+  assert.equal(parseDiagnosticForm(formFor({}, { recommendation: '🦊'.repeat(DIAGNOSTIC_LIMITS.recommendation) })).recommendation.length,
+    DIAGNOSTIC_LIMITS.recommendation * 2);
   assert.throws(() => parseDiagnosticForm(formFor({}, { recommendation: 'x'.repeat(DIAGNOSTIC_LIMITS.recommendation + 1) })), /Skróć pole „Zalecenie — uzasadnienie”/);
   assert.throws(() => parseDiagnosticForm(formFor({ tasks: ['ok', 'a\u0007b'] })), /niedozwolone znaki/);
   assert.throws(() => parseDiagnosticForm(formFor({}, { channels: ['telepatia'] })), /Niepoprawna lista kanałów/);
@@ -193,6 +199,11 @@ test('database errors become plain Polish messages; unexpected state is refused'
   assert.equal(state.can_edit, true);
   assert.deepEqual(state.inflow, inflow);
   assert.deepEqual(state.history, [row]);
+  const unicodeRecord = { ...row, content: { ...row.content, areas: { ...row.content.areas,
+    tasks: { status: 'ok', note: '🦊'.repeat(251) } } } };
+  const withUnicode = parseDiagnosticsState({ can_edit: true, latest_record_no: 1, inflow, history: [unicodeRecord] });
+  assert.equal(withUnicode?.history[0]?.content.areas.tasks.note, '🦊'.repeat(251),
+    'a note accepted by PostgreSQL must never hide the whole diagnostics page');
   assert.equal(parseDiagnosticsState({ can_edit: 'yes', latest_record_no: 0, inflow, history: [] }).can_edit, false, 'only a literal true grants editing');
   for (const broken of [null, [], 'x', { latest_record_no: 0, history: [] }, { latest_record_no: 0, inflow, history: 'x' },
     { latest_record_no: -1, inflow, history: [] }, { latest_record_no: 0, inflow: { ...inflow, total: '2' }, history: [] },
