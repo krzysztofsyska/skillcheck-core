@@ -21,5 +21,9 @@ export default async function PositionPage({params,searchParams}:{params:Promise
     {saved==="1"&&<p role="status" className="notice">Profil stanowiska został zapisany.</p>}
     {canEdit ? <PositionForm companyId={companyId} position={position}/> : <><p>{position.description}</p>{[["Zadania",position.tasks],["KPI",position.kpis],["Kompetencje",position.required_competencies],["Zachowania",position.required_behaviors]].map(([title,items])=><div key={title as string}><h2>{title}</h2><ul>{(items as string[]).map((s,i)=><li key={i}>{s}</li>)}</ul></div>)}<p>Samodzielność: {position.autonomy_level}/5</p></>}
     <RequirementMarks companyId={companyId} positionId={position.id} requirements={requirements} marks={marks} canEdit={canEdit}/>
+    <section aria-label="Profil metody"><h2>Jak sprawdzamy kompetencje</h2>
+      <p>Dla każdej kompetencji: oczekiwany dowód, metoda oceny, kryteria i granice wniosku — dopasowane do poziomu stanowiska.</p>
+      <p><Link href={`/dashboard/${companyId}/positions/${position.id}/metoda`}>Otwórz profil metody</Link></p>
+    </section>
   </section></main>;
 }

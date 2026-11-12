@@ -84,6 +84,8 @@ async function action(options={},form=new FormData(),ctx=context) {
  '../../../../../lib/exercise-context':{exerciseContext:async()=>a.value},
  '../../../../../lib/exercise-ai-review':reviewHelpers,
  '../../../../../lib/exercise-definition':definitionHelpers,
+ // SC-METHOD binding after approval/correction is tested in tests/method-profile.test.mjs.
+ '../../../../../lib/method-binding':{bindMethodToDefinitions:async()=>{}},
  });
  const result=await withFlag(options.flag??'true',()=>mod.approveExerciseAiProposal(ids.company,ctx,{},form));
  return {result,calls:a.calls,revalidated};
@@ -123,7 +125,8 @@ async function mutation(name,options={},form=new FormData(),ctx=context) {
  const a=access(options),revalidated=[];
  const mod=load(basePath+'exercise-ai-actions.ts',{'next/cache':{revalidatePath:(...args)=>revalidated.push(args)},
  '../../../../../lib/exercise-context':{exerciseContext:async()=>a.value},'../../../../../lib/exercise-ai-review':reviewHelpers,
- '../../../../../lib/exercise-definition':definitionHelpers});
+ '../../../../../lib/exercise-definition':definitionHelpers,
+ '../../../../../lib/method-binding':{bindMethodToDefinitions:async()=>{}},});
  const args=[ids.company,ctx,...(name==='editExerciseAiProposal'?[stamp]:[]),{},form];
  const result=await withFlag(options.flag??'true',()=>mod[name](...args));return {result,calls:a.calls,revalidated};
 }

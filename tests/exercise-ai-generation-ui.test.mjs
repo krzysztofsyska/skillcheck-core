@@ -27,6 +27,8 @@ async function run(options={}){
  const mod=load(base+'exercise-generation-action.ts',{'next/cache':{revalidatePath:()=>calls.push('revalidate')},
  '../../../../../lib/exercise-context':{exerciseUuid:/^[a-f0-9-]{36}$/i,exerciseContext:async()=>{calls.push('access');return {client,canEdit:options.canEdit??true,editable:true,position,base:'/exercises'};}},
  '../../../../../lib/exercise-ai':contract,
+ // SC-METHOD binding after a completed generation is tested in tests/method-profile.test.mjs.
+ '../../../../../lib/method-binding':{bindMethodToDefinitions:async()=>{}},
  '../../../../../lib/ai-gateway/contract':{isAiGatewayEnabled:value=>value==='true'},
  '../../../../../lib/ai-ledger-writer':{exerciseLedgerWriterFromEnv:(...args)=>{writerArgs=args;return options.writer??null;},
   exerciseBudgetFromEnv:(...args)=>{budgetArgs=args;return options.budget??null;}},

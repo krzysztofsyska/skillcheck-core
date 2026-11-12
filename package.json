@@ -73,6 +73,8 @@
     "test:ai-cost": "node --test tests/ai-cost-dashboard.test.mjs",
     "test:ai-cost-db": "node --test --test-concurrency=1 tests/ai-cost-dashboard-database.test.mjs",
     "test:competency": "node --test tests/competency-test.test.mjs",
+    "test:method": "node --experimental-strip-types --test tests/method-profile.test.mjs",
+    "test:method-db": "node --experimental-strip-types --test --test-concurrency=1 tests/method-profile-database.test.mjs",
     "test:brand": "node --experimental-strip-types --test tests/brand-config.test.mjs tests/brand-ui.test.mjs tests/brand-messages.test.mjs",
     "test:brand-db": "node --experimental-strip-types --test --test-concurrency=1 tests/brand-database.test.mjs",
     "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs tests/sc19-przelewy24-provider.test.mjs",
