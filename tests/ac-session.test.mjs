@@ -67,6 +67,18 @@ test('report: both assessors per competency, agreed versus discrepant, first ver
   assert.deepEqual(result.finalists.map(finalist => finalist.slot), [1, 2]);
 });
 
+test('all append-only expert notes remain readable after the 200th note', () => {
+  const payload = sessionPayload();
+  const example = payload.finalists[0].expertNotes[0];
+  payload.finalists[0].expertNotes = Array.from({ length: 201 }, (_, index) =>
+    ({ ...example, note: `Konsultacja nr ${index + 1}` }));
+  const parsed = parseAssessmentCenterSession(payload);
+  assert.equal(parsed.finalists[0].expertNotes.length, 201);
+  const result = buildAssessmentCenterSessionReport(parsed);
+  assert.equal(result.finalists[0].expertNotes.length, 201);
+  assert.equal(result.finalists[0].expertNotes[200].note, 'Konsultacja nr 201');
+});
+
 test('a disputed reconciliation is never shown as an agreement', () => {
   const payload = sessionPayload();
   Object.assign(payload.finalists[0].stages[0].pair.reconciliation, { confirmation: 'disputed', disputeNote: 'Nie zgadzam się z zapisem uzgodnienia.' });
