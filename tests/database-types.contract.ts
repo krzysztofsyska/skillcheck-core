@@ -191,7 +191,13 @@ type ExpectedFunctions =
   | "sc021_operator_fx_rates"
   | "sc021_operator_add_fx_rate"
   | "sc021_operator_other_costs"
-  | "sc021_operator_add_other_cost";
+  | "sc021_operator_add_other_cost"
+  | "method_profile_save_draft"
+  | "method_profile_approve"
+  | "method_profile_state"
+  | "method_profile_version"
+  | "method_bind_definition"
+  | "method_definition_binding";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;

@@ -416,6 +416,34 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      /** SC-METHOD / #275 method profile (20261112100000_sc_method_profile.sql).
+       * Tables live in schema `method`, closed to API roles; these functions are the
+       * only way in. Reads: any company member. Draft, approval and binding: owner
+       * or recruiter of that company (42501 otherwise). Shapes: lib/method-profile.ts. */
+      method_profile_save_draft: {
+        Args: { target_company: string; target_position: string; draft_content: Json; expected_revision: number };
+        Returns: number;
+      };
+      method_profile_approve: {
+        Args: { target_company: string; target_position: string; expected_revision: number };
+        Returns: string;
+      };
+      method_profile_state: {
+        Args: { target_company: string; target_position: string };
+        Returns: Json;
+      };
+      method_profile_version: {
+        Args: { target_company: string; target_version: string };
+        Returns: Json | null;
+      };
+      method_bind_definition: {
+        Args: { target_company: string; target_definition: string };
+        Returns: string | null;
+      };
+      method_definition_binding: {
+        Args: { target_company: string; target_definition: string };
+        Returns: Json | null;
+      };
       /** SC-020-A brand configuration (20261109190000_sc020_brand_configuration.sql).
        * Writes and the editor state are owner-only (42501 otherwise); published
        * reads are for any company member. */

@@ -37,6 +37,8 @@ on:
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
       - 'tests/sc19-offer-publication.test.mjs'
+      - 'tests/method-profile-database.test.mjs'
+      - 'lib/method-profile.ts'
       - 'tests/sc19-auto-trial-database.test.mjs'
       - 'tests/db-migrate/**'
       - 'tools/db-migrate/**'
@@ -90,6 +92,8 @@ on:
       - 'tests/sc-step3-evidence-worker.test.mjs'
       - 'tests/sc-019-operator-fulfillment.test.mjs'
       - 'tests/sc19-offer-publication.test.mjs'
+      - 'tests/method-profile-database.test.mjs'
+      - 'lib/method-profile.ts'
       - 'tests/sc19-auto-trial-database.test.mjs'
       - 'tests/db-migrate/**'
       - 'tools/db-migrate/**'
@@ -195,6 +199,7 @@ jobs:
             tests/sc-step3-erasure-r7.test.mjs tests/sc-step4-erasure-r8.test.mjs tests/cv-bulk-database.test.mjs tests/sc-step3-evidence-worker.test.mjs \
             tests/sc-019-operator-fulfillment.test.mjs tests/sc19-auto-trial-database.test.mjs \
             tests/sc19-offer-publication.test.mjs \
+            tests/method-profile-database.test.mjs \
             tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
             tests/db-migrate/normalize-line-endings.test.mjs \
             > sc19-migrations.log 2>&1

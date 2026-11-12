@@ -26,6 +26,13 @@ export async function saveExerciseDefinition(companyId: string, context: Exercis
   });
   if (result.error) return { error: exerciseSaveError(result.error.code) };
   if (!result.data) return { error: exerciseSaveError() };
+  // SC-METHOD / #275: zapisz, z którą zatwierdzoną wersją profilu metody powstała ta wersja zadania.
+  // Baza wybiera wersję obowiązującą w chwili utworzenia definicji, więc wynik nie zależy od momentu
+  // tego wywołania, a ponowienie jest bezpieczne. Zadanie jest już zapisane: błąd tutaj (np. baza bez
+  // tej migracji) nie może go cofnąć ani pokazać rekruterowi fałszywego „nie zapisano".
+  try {
+    await client.rpc('method_bind_definition', { target_company: companyId, target_definition: result.data });
+  } catch { /* powiązanie można bezpiecznie odtworzyć później tą samą funkcją */ }
   revalidatePath(`/dashboard/${companyId}/recruitments/${context.recruitmentId}/exercises`, 'layout');
   return { entryId: result.data };
 }
