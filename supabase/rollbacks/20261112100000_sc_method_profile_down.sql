@@ -47,6 +47,7 @@ $guard$;
 drop schema if exists method cascade;
 
 drop function if exists public.method_definition_binding(uuid, uuid);
+drop function if exists public.method_bind_recruitment_definitions(uuid, uuid);
 drop function if exists public.method_bind_definition(uuid, uuid);
 drop function if exists public.method_profile_version(uuid, uuid);
 drop function if exists public.method_profile_state(uuid, uuid);

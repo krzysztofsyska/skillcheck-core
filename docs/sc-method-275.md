@@ -43,7 +43,10 @@ SHA-256 treści i tej kopii.
 ### Cykl życia
 
 1. **Szkic** — `method_profile_save_draft`. Pola mogą być puste; sprawdzany jest kształt i limity. `expected_revision`
-   chroni przed nadpisaniem zmian z drugiej karty (PT409).
+   chroni przed nadpisaniem zmian z drugiej karty (PT409). To licznik zmian profilu metody **stanowiska**, nie
+   pojedynczego szkicu: rośnie przy każdym zapisie szkicu i przy zatwierdzeniu, a nowy szkic kontynuuje numerację
+   (nigdy nie wraca do 1). Panel bierze go z pola `revision` w `method_profile_state` (0, gdy nic jeszcze nie
+   zapisano). Karta otwarta przed zatwierdzeniem nie nadpisze więc szkicu utworzonego po nim.
 2. **Zatwierdzenie** — `method_profile_approve`. Pełna walidacja: uzupełnione cel, wynik, ograniczenia i poziom,
    a macierz obejmuje **dokładnie** kompetencje z aktualnego profilu stanowiska, każda z dowodem, metodą,
    uzasadnieniem, co najmniej jednym kryterium i granicami wniosku. Błąd `method_profile_incomplete:<pole>`
@@ -54,7 +57,9 @@ SHA-256 treści i tej kopii.
 ### Powiązanie z definicją zadania (reguła migawki)
 
 Definicja zadania (`public.exercise_definition_entries`) jest niezmienną wersją, a nadania i próby wskazują dokładny
-`definition_entry_id`. `method_bind_definition(firma, definicja)` zapisuje, z którą wersją metody powstała definicja.
+`definition_entry_id`. Powiązanie zapisuje, z którą wersją metody powstała definicja. Są dwie funkcje o tej samej
+regule: `method_bind_definition(firma, definicja)` dla jednej definicji i
+`method_bind_recruitment_definitions(firma, rekrutacja)` dla wszystkich jeszcze niepowiązanych definicji rekrutacji.
 
 - Reguła jest deterministyczna: wybierana jest zatwierdzona wersja metody stanowiska, która obowiązywała
   **w chwili utworzenia definicji** (`approved_at <= created_at` definicji, najwyższy numer). Wynik nie zależy od
@@ -62,16 +67,43 @@ Definicja zadania (`public.exercise_definition_entries`) jest niezmienną wersj�
 - Powiązanie jest niezmienne. Zatwierdzenie nowej wersji metody nie zmienia powiązania, definicji, nadania ani
   rozpoczętej próby (test: „a new method version changes neither a started attempt…").
 - Definicja utworzona, zanim stanowisko miało zatwierdzoną metodę, nie dostaje powiązania (funkcja zwraca `null`).
-- Akcja zapisu zadania (`exercise-actions.ts`) woła tę funkcję po udanym zapisie; błąd powiązania nie cofa zapisu.
+- **Każda ścieżka aplikacji, która tworzy lub zatwierdza wersję definicji, wiąże ją** przez jeden wspólny pomocnik
+  `bindMethodToDefinitions` (`lib/method-binding.ts`), wołany po udanym zapisie:
+
+  | Akcja serwera | Funkcja bazy, która tworzy/zatwierdza definicję |
+  | --- | --- |
+  | `saveExerciseDefinition` (`exercise-actions.ts`) | `save_exercise_definition` |
+  | `editExerciseAiProposal` (`exercise-ai-actions.ts`) | `edit_exercise_ai_proposal` (nowa wersja powstaje w bazie) |
+  | `generateExerciseProposal` (`exercise-generation-action.ts`) | `finish_exercise_ai_generation` (akcja nie dostaje id definicji) |
+  | `approveExerciseAiProposal` (`exercise-ai-actions.ts`) | `approve_exercise_ai_proposal` (nie tworzy definicji; domyka ewentualne wcześniej nieudane powiązanie) |
+
+  Pomocnik woła wariant dla całej rekrutacji, bo nie każda akcja zna id nowej definicji, a przypiętych treści
+  istniejących funkcji `public.*` ta zmiana nie podmienia. Dzięki regule czasu wynik jest ten sam co przy wiązaniu
+  pojedynczym, a każde kolejne wywołanie nadrabia definicje, których wcześniej nie udało się powiązać.
+- Błąd powiązania nie cofa zapisu zadania i nie zmienia odpowiedzi dla rekrutera. Trafia do logu serwera jako
+  `method_bind_failed code=<kod>` — sam kod błędu, bez komunikatu bazy i bez danych.
+- Definicja utworzona inną drogą niż te akcje (np. bezpośrednie wywołanie funkcji bazy) zostaje niepowiązana do
+  następnego wywołania pomocnika dla tej rekrutacji.
 
 **Dlaczego osobna tabela, a nie pole w `position_snapshot` definicji.** Dopisanie odcisku do migawki wymagałoby
 podmiany `public.save_exercise_definition`, której treść jest przypięta w testach łańcucha migracji, i zmieniałoby
 kształt migawki czytanej przez test kompetencji i Assessment Center. Powiązanie w schemacie `method`, bez klucza
 obcego, nie dotyka żadnej relacji objętej inwentarzem usuwania danych.
 
-**Znane ograniczenie.** `created_at` definicji to początek jej transakcji, `approved_at` to zegar w chwili
-zatwierdzenia. Gdy zatwierdzenie metody i zapis zadania nakładają się w tej samej sekundzie, definicja może
-zostać związana z poprzednią wersją (albo z żadną). Nigdy nie zostaje związana z wersją późniejszą niż ona sama.
+**Znane ograniczenie — nakładające się transakcje.** `created_at` definicji to początek jej transakcji.
+`approved_at` to odczyt zegara (`clock_timestamp()`) wewnątrz transakcji zatwierdzenia, czyli chwilę **przed** jej
+zatwierdzeniem w bazie (commit). Reguła porównuje te dwa znaczniki, a nie kolejność commitów, więc gdy zatwierdzenie
+metody i zapis zadania nakładają się w czasie, możliwe są dwa odstępstwa:
+
+- definicja zostaje związana z poprzednią wersją metody albo z żadną, mimo że nowa wersja powstała ułamek sekundy
+  wcześniej (powiązanie zapisano, zanim transakcja zatwierdzenia stała się widoczna);
+- definicja zostaje związana z wersją, której transakcja zatwierdzenia nie była jeszcze zakończona, gdy definicja
+  powstawała (`approved_at` minimalnie wcześniejsze niż `created_at`, commit później). Autor zadania nie mógł tej
+  wersji widzieć. Okno ma długość końcówki transakcji zatwierdzenia — zwykle poniżej milisekundy.
+
+Poza takim nakładaniem się definicja nigdy nie jest wiązana z wersją zatwierdzoną po jej utworzeniu, a raz zapisane
+powiązanie nigdy się nie zmienia. Zmiana tej reguły wymagałaby zapisu powiązania w tej samej transakcji co
+definicja, czyli podmiany `public.save_exercise_definition`.
 
 ## Role i dostęp
 
@@ -82,11 +114,17 @@ przez `authenticated`:
 | Funkcja | Kto |
 | --- | --- |
 | `method_profile_state`, `method_profile_version`, `method_definition_binding` | każdy członek firmy (viewer też); szkic widzą tylko osoby z prawem zapisu |
-| `method_profile_save_draft`, `method_profile_approve`, `method_bind_definition` | właściciel lub rekruter tej firmy (`private.has_company_access(firma, true)`) |
+| `method_profile_save_draft`, `method_profile_approve`, `method_bind_definition`, `method_bind_recruitment_definitions` | właściciel lub rekruter tej firmy (`private.has_company_access(firma, true)`) |
 
-Każda funkcja sprawdza zalogowanie, członkostwo w `target_company` i to, że stanowisko/definicja/wersja należy do
-tej samej firmy. Identyfikator z innej firmy daje `42501` albo `null` — bez rozróżnienia „nie istnieje" od „cudze".
+Każda funkcja sprawdza zalogowanie i członkostwo w `target_company`, a wiersze wybiera wyłącznie po `company_id` tej
+firmy. Identyfikator z innej firmy daje `42501` albo `null` — bez rozróżnienia „nie istnieje" od „cudze".
 Zarchiwizowanego stanowiska nie da się edytować (`55000`).
+
+Co dokładnie sprawdza odczyt:
+
+- `method_profile_state(firma, stanowisko)` wymaga, żeby stanowisko nadal istniało w tej firmie;
+- `method_profile_version(firma, wersja)` i `method_definition_binding(firma, definicja)` sprawdzają **tylko
+  członkostwo w firmie** i szukają po id. Nie sprawdzają, czy stanowisko albo definicja nadal istnieje.
 
 ## Propozycja dla poziomu (bez AI)
 
@@ -111,15 +149,24 @@ historia wersji z podglądem. Osoba z dostępem tylko do odczytu widzi zatwierdz
 ## Minimalizacja i retencja
 
 - **Wyłącznie dane firmy o stanowisku.** Żadnych danych kandydata: brak imion, CV, odpowiedzi, wyników.
-  Jedyne identyfikatory osób to id użytkowników firmy, którzy zapisali i zatwierdzili wersję.
+- **Identyfikatory pracowników firmy zostają.** Każda wersja trzyma id użytkowników, którzy ją utworzyli, ostatnio
+  zapisali i zatwierdzili (`created_by`, `updated_by`, `approved_by`), a powiązanie — id osoby, której akcja je
+  zapisała (`bound_by`). To gołe identyfikatory bez klucza obcego do `auth.users`: usunięcie konta użytkownika ich
+  nie czyści i nic w tej zmianie ich nie anonimizuje. Kopia profilu stanowiska w zatwierdzonej wersji
+  (`position_snapshot`) również zostaje po zmianie lub usunięciu stanowiska.
 - Do propozycji nie jest wysyłane nic na zewnątrz; nie ma wywołania modelu AI.
 - Schemat `method` nie ma kluczy obcych do `public`/`private`, więc `private.erasure_schema_signature()` (SC-010,
   R15) pozostaje bez zmian — migracja i rollback sprawdzają to na wejściu i na wyjściu, test po instalacji.
   Usunięcie danych kandydata nie dotyka profilu metody i nie musi: nie ma w nim danych kandydata.
-- Historia jest niezmienna. Wiersze osierocone po usunięciu stanowiska są niewidoczne (każdy odczyt sprawdza
-  stanowisko lub definicję w tej samej firmie). Jedyna droga usunięcia to przyszła uprzywilejowana procedura
-  usuwania firmy, która w swojej transakcji ustawi `set_config('method.purge_company', '<uuid firmy>', true)`;
-  wtedy wyzwalacze pozwalają usunąć wiersze tylko tej firmy. Ta zmiana takiej procedury nie dodaje.
+- Historia jest niezmienna i **nic jej dziś nie usuwa**. Po usunięciu stanowiska albo rekrutacji wiersze w schemacie
+  `method` zostają (nie ma klucza obcego, więc nie ma kaskady). Panel przestaje je pokazywać, bo
+  `method_profile_state` wymaga istniejącego stanowiska, ale członek **tej samej firmy**, który zna id wersji lub
+  definicji, nadal odczyta je przez `method_profile_version` i `method_definition_binding`. Osoba spoza firmy nie
+  odczyta nic.
+- Wyzwalacze przewidują jedną drogę usunięcia: uprzywilejowana procedura w swojej transakcji ustawia
+  `set_config('method.purge_company', '<uuid firmy>', true)` i wtedy może usunąć wiersze tylko tej firmy. **Żadna
+  procedura tego dziś nie robi** — ani usuwanie firmy, ani retencja, ani ta zmiana. Dopóki taka procedura nie
+  powstanie, profile metody i powiązania są przechowywane bezterminowo.
 - Rollback odmawia, gdy istnieje jakikolwiek profil lub powiązanie: usunięcie zapisanych decyzji rekrutera to
   decyzja właściciela, nie rollback.
 
@@ -132,9 +179,12 @@ a zapis zadania działa jak dotąd.
 ## Testy
 
 - `npm run test:method` — propozycja dla trzech poziomów (różne, adekwatne kryteria), brak danych, walidacja,
-  komunikaty, akcja serwera od formularza do wywołań bazy (pozytywna, niekompletna, tylko odczyt, konflikt).
+  komunikaty, akcja serwera od formularza do wywołań bazy (pozytywna, niekompletna, tylko odczyt, konflikt) oraz
+  każda z czterech akcji tworzących lub zatwierdzających definicję: powiązanie po udanym zapisie, brak powiązania
+  po nieudanym, błąd powiązania nie zmienia wyniku i trafia do logu jako sam kod.
 - `npm run test:method-db` — natywny PostgreSQL 16/17, pełny łańcuch migracji, dwie syntetyczne firmy: sygnatura
   SC-010 bez zmian, zamknięty schemat, ścieżka pozytywna od propozycji do zapisanej wersji, każdy brak danych,
   viewer / osoba spoza firmy / anon, dostęp między firmami, niezmienność historii, rozpoczęta próba kontra nowa
-  wersja metody, rollback i ponowna instalacja. Wymaga `SC19_TEST_DATABASE_URL` i `SC19_TEST_PG_MAJOR`.
+  wersja metody, nieaktualna karta kontra szkic utworzony po zatwierdzeniu, białe znaki w kompetencjach, definicje
+  utworzone w bazie przez generowanie i korektę propozycji AI, rollback i ponowna instalacja. Wymaga `SC19_TEST_DATABASE_URL` i `SC19_TEST_PG_MAJOR`.
 - Oba zestawy są w `.github/workflows/checks.yml`; zestaw bazodanowy także w `.github/workflows/sc19-migrations.yml`.

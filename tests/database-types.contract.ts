@@ -197,6 +197,7 @@ type ExpectedFunctions =
   | "method_profile_state"
   | "method_profile_version"
   | "method_bind_definition"
+  | "method_bind_recruitment_definitions"
   | "method_definition_binding";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;

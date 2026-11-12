@@ -440,6 +440,10 @@ export type Database = {
         Args: { target_company: string; target_definition: string };
         Returns: string | null;
       };
+      method_bind_recruitment_definitions: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: number;
+      };
       method_definition_binding: {
         Args: { target_company: string; target_definition: string };
         Returns: Json | null;

@@ -51,11 +51,19 @@ export const isResponsibilityLevel = (value: unknown): value is ResponsibilityLe
 export const isAssessmentMethod = (value: unknown): value is AssessmentMethod =>
   typeof value === 'string' && (assessmentMethods as readonly string[]).includes(value);
 
-const key = (text: string) => text.trim().toLowerCase();
+/**
+ * Przycięcie białych znaków z obu końców: dokładnie ten sam zestaw co
+ * method.trim_ws() w bazie (spacja, tabulator, nowa linia, CR, FF, VT, twarda
+ * spacja). Porównanie kompetencji musi dawać ten sam wynik po obu stronach.
+ */
+export const trimWs = (text: string) => text.replace(/^[ \t\n\r\f\v\u00a0]+|[ \t\n\r\f\v\u00a0]+$/g, '');
+/** Klucz porównania kompetencji: bez białych znaków na końcach, bez wielkości liter. */
+export const competencyKey = (text: string) => trimWs(text).toLowerCase();
+const key = competencyKey;
 /** Kompetencje stanowiska bez pustych wierszy i powtórzeń, w kolejności z profilu. */
 export function positionCompetencies(position: Pick<MethodPosition, 'required_competencies'>): string[] {
   const seen = new Set<string>();
-  return position.required_competencies.map(item => item.trim()).filter(item => {
+  return position.required_competencies.map(trimWs).filter(item => {
     if (!item || seen.has(key(item))) return false;
     seen.add(key(item));
     return true;
@@ -144,7 +152,7 @@ const proposedConstraints: Record<ResponsibilityLevel, (autonomy: number | null)
 };
 
 const clip = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
-const listed = (items: readonly string[]) => items.map(item => item.trim()).filter(Boolean).join('; ');
+const listed = (items: readonly string[]) => items.map(trimWs).filter(Boolean).join('; ');
 
 export type MethodProposal = { content: MethodProfileContent; missing: ('competencies')[] };
 
@@ -157,9 +165,9 @@ export type MethodProposal = { content: MethodProfileContent; missing: ('compete
  */
 export function proposeMethodProfile(position: MethodPosition, level: ResponsibilityLevel): MethodProposal {
   const competencies = positionCompetencies(position).slice(0, METHOD_LIMITS.rows);
-  const description = (position.description ?? '').trim();
+  const description = trimWs(position.description ?? '');
   const tasks = listed(position.tasks), kpis = listed(position.kpis);
-  const goal = description || (tasks ? `Stanowisko „${position.title.trim()}” istnieje po to, aby: ${tasks}.` : '');
+  const goal = description || (tasks ? `Stanowisko „${trimWs(position.title)}” istnieje po to, aby: ${tasks}.` : '');
   const matrix = competencies.map(competency => {
     const short = clip(competency, 120);
     const method = proposedMethod(level, competency);
@@ -189,8 +197,9 @@ export function proposeMethodProfile(position: MethodPosition, level: Responsibi
 const controlChars = /[\u0001-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 function cleanText(value: unknown, max: number, label: string): string {
   if (value === null || value === undefined) return '';
-  if (typeof value !== 'string' || controlChars.test(value)) throw new Error(`Pole „${label}” ma niepoprawną treść.`);
-  const text = value.trim();
+  if (typeof value !== 'string') throw new Error(`Pole „${label}” ma niepoprawną treść.`);
+  const text = trimWs(value);
+  if (controlChars.test(text)) throw new Error(`Pole „${label}” ma niepoprawną treść.`);
   // Baza liczy znaki, TypeScript jednostki UTF-16: ten limit bywa minimalnie ostrzejszy.
   if (text.length > max) throw new Error(`Skróć pole „${label}” do ${max} znaków.`);
   return text;
@@ -249,7 +258,7 @@ export function parseMethodProfileForm(form: FormData): MethodProfileContent {
       evidence: text(`matrix.${index}.evidence`),
       method: text(`matrix.${index}.method`),
       justification: text(`matrix.${index}.justification`),
-      criteria: text(`matrix.${index}.criteria`).split(/\r?\n/).map(item => item.trim()).filter(Boolean),
+      criteria: text(`matrix.${index}.criteria`).split(/\r?\n/).map(trimWs).filter(Boolean),
       limits: text(`matrix.${index}.limits`),
     })),
   });
@@ -338,7 +347,10 @@ export type MethodHistoryEntry = {
   id: string; version_no: number; approved_at: string; content_hash: string; responsibility_level: string;
 };
 export type MethodProfileState = {
-  can_edit: boolean; draft: MethodDraft | null; approved: MethodApprovedVersion | null; history: MethodHistoryEntry[];
+  can_edit: boolean;
+  /** Licznik zmian profilu metody stanowiska (szkic i zatwierdzenia); 0, gdy nic jeszcze nie zapisano. */
+  revision: number;
+  draft: MethodDraft | null; approved: MethodApprovedVersion | null; history: MethodHistoryEntry[];
 };
 
 function parseApproved(value: unknown): MethodApprovedVersion | null {
@@ -370,6 +382,7 @@ export function parseMethodProfileState(value: unknown): MethodProfileState | nu
             content_hash: String(row.content_hash ?? ''), responsibility_level: String(row.responsibility_level ?? '') }]
         : [];
     }) : [];
-    return { can_edit: state.can_edit === true, draft, approved: parseApproved(state.approved), history };
+    if (typeof state.revision !== 'number' || !Number.isInteger(state.revision) || state.revision < 0) return null;
+    return { can_edit: state.can_edit === true, revision: state.revision, draft, approved: parseApproved(state.approved), history };
   } catch { return null; }
 }

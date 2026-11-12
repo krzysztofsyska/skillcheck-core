@@ -11,6 +11,7 @@ import ts from 'typescript';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as method from '../lib/method-profile.ts';
+import * as binding from '../lib/method-binding.ts';
 
 const {
   METHOD_LIMITS, alignMatrix, assessmentMethods, methodProfileError, methodProfileProblems, parseMethodProfileContent,
@@ -133,6 +134,13 @@ test('parsing enforces shape and limits; the form maps to canonical content', ()
   assert.throws(() => parseMethodProfileForm(form), /Odśwież stronę/);
 
   assert.deepEqual(positionCompetencies({ required_competencies: [' SQL ', 'sql', '', 'Excel'] }), ['SQL', 'Excel']);
+  // Te same białe znaki co method.trim_ws() w bazie: tabulator, nowa linia, CR, FF, VT, twarda spacja.
+  assert.equal(method.trimWs('\t\n\r\f\v  SQL i raporty  \v\f\r\n\t'), 'SQL i raporty');
+  assert.deepEqual(positionCompetencies({ required_competencies: ['SQL\t', '\nsql\r\n', 'Excel '] }), ['SQL', 'Excel']);
+  const tabbed = proposeMethodProfile({ ...position, required_competencies: ['Analiza danych\t', 'Excel\n'] }, 'specialist').content;
+  assert.deepEqual(tabbed.matrix.map(item => item.competency), ['Analiza danych', 'Excel']);
+  assert.deepEqual(methodProfileProblems(tabbed, ['Analiza danych\t', 'Excel\n']), [], 'trailing whitespace in the position profile does not block approval');
+  assert.equal(parseMethodProfileContent({ goal: 'Cel\f\v' }).goal, 'Cel');
   const aligned = alignMatrix(byLevel.specialist.content, ['Prawo jazdy kategorii B', 'Nowa kompetencja']);
   assert.deepEqual(aligned.matrix.map(item => item.competency),
     ['Prawo jazdy kategorii B', 'Nowa kompetencja', 'Analiza danych w SQL', 'Komunikacja z zespołem sprzedaży']);
@@ -152,10 +160,12 @@ test('database errors become plain Polish messages; unexpected state is refused'
   assert.doesNotMatch(methodProfileError({ code: 'XX000', message: 'relation method.profile_versions secret detail' }), /relation|secret/);
 
   assert.equal(parseMethodProfileState(null), null);
-  assert.equal(parseMethodProfileState({ can_edit: true, draft: { id: 'x', revision: 1, content: { matrix: 'x' } }, history: [] }), null);
-  const state = parseMethodProfileState({ can_edit: true, draft: null, history: [{ id: 'v', version_no: 1, approved_at: 't', content_hash: 'h', responsibility_level: 'manager' }],
+  assert.equal(parseMethodProfileState({ can_edit: true, revision: 1, draft: { id: 'x', revision: 1, content: { matrix: 'x' } }, history: [] }), null);
+  assert.equal(parseMethodProfileState({ can_edit: true, draft: null, approved: null, history: [] }), null, 'the change counter is required');
+  const state = parseMethodProfileState({ can_edit: true, revision: 2, draft: null, history: [{ id: 'v', version_no: 1, approved_at: 't', content_hash: 'h', responsibility_level: 'manager' }],
     approved: { id: 'v', version_no: 1, content: byLevel.manager.content, content_hash: 'h', approved_at: 't', position_snapshot: { title: 'T' } } });
   assert.equal(state.approved.version_no, 1);
+  assert.equal(state.revision, 2);
   assert.deepEqual(state.approved.content, byLevel.manager.content);
 });
 
@@ -256,16 +266,144 @@ test('server action: read-only members, bad input and database refusals never wr
   assert.deepEqual(conflict.calls.map(call => call[0]), ['from', 'method_profile_save_draft'], 'no approval after a refused save');
 });
 
-test('panel wiring: guarded page, link from the position profile, binding after an exercise is saved', () => {
+test('panel wiring: guarded page and link from the position profile', () => {
   const read = file => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
   const page = read('app/dashboard/[companyId]/positions/[positionId]/metoda/page.tsx');
   assert.match(page, /companyAccess\(companyId\)/);
   assert.match(page, /method_profile_state/);
   assert.match(page, /system nie podejmuje decyzji o kandydacie/);
   assert.match(read('app/dashboard/[companyId]/positions/[positionId]/page.tsx'), /positions\/\$\{position\.id\}\/metoda/);
-  const exercise = read('app/dashboard/[companyId]/recruitments/[recruitmentId]/exercise-actions.ts');
-  assert.ok(exercise.indexOf("rpc('method_bind_definition'") > exercise.indexOf("rpc('save_exercise_definition'"), 'binding follows a successful save');
-  assert.match(exercise, /target_company: companyId, target_definition: result\.data/);
+});
+
+// --- każda akcja, która tworzy lub zatwierdza definicję zadania, wiąże ją z wersją metody ---
+// Prawdziwy lib/method-binding.ts, sztuczny klient bazy. Dla każdej ścieżki: powiązanie idzie po udanym
+// zapisie i tylko wtedy; błąd powiązania nie zmienia wyniku zapisu i trafia do logu jako sam kod.
+
+const recruitmentId = '33333333-3333-4333-8333-333333333333', definitionId = '44444444-4444-4444-8444-444444444444';
+const exerciseId = '55555555-5555-4555-8555-555555555555', stamp = '2026-11-12T10:00:00Z';
+const recruitmentBase = 'app/dashboard/[companyId]/recruitments/[recruitmentId]/';
+function loadModule(file, mocks) {
+  const path = fileURLToPath(new URL(`../${file}`, import.meta.url));
+  const mod = new Module(path); mod.filename = path;
+  const require = createRequire(path);
+  mod.require = id => Object.hasOwn(mocks, id) ? mocks[id] : require(id);
+  mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, path);
+  return mod.exports;
+}
+const aiContext = { recruitmentId, exerciseId, definitionId, positionUpdatedAt: stamp };
+const lib = '../../../../../lib/';
+const aiMocks = client => ({
+  'next/cache': { revalidatePath: () => {} },
+  [`${lib}exercise-context`]: { exerciseContext: async () => ({ client, canEdit: true, editable: true, base: '/exercises' }) },
+  [`${lib}exercise-ai-review`]: { validExerciseAiApprovalContext: () => true, exerciseAiApprovalError: code => `ai:${code}` },
+  [`${lib}exercise-definition`]: { parseExerciseFormData: () => ({ kind: 'competency_test' }) },
+  [`${lib}method-binding`]: binding,
+});
+async function withEnv(values, run) {
+  const old = Object.fromEntries(Object.keys(values).map(name => [name, process.env[name]]));
+  Object.assign(process.env, values);
+  try { return await run(); }
+  finally { for (const [name, value] of Object.entries(old)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } }
+}
+const confirmedForm = () => { const form = new FormData(); form.set('confirm', 'yes'); return form; };
+const definitionPaths = {
+  'manual save (save_exercise_definition)': {
+    writeRpc: 'save_exercise_definition', okData: definitionId, okResult: { entryId: definitionId },
+    run: client => loadModule(`${recruitmentBase}exercise-actions.ts`, {
+      'next/cache': { revalidatePath: () => {} },
+      [`${lib}company-access`]: { companyAccess: async () => ({ client, canEdit: true }) },
+      [`${lib}exercise-definition`]: { parseExerciseFormData: () => ({ kind: 'competency_test' }) },
+      [`${lib}exercise-editor`]: { validExerciseEditorContext: () => true, exerciseSaveError: code => `save:${code}` },
+      [`${lib}method-binding`]: binding,
+    }).saveExerciseDefinition(companyId, { recruitmentId, exerciseId, expectedVersion: 0, positionId, positionUpdatedAt: stamp }, {}, new FormData()),
+  },
+  'AI proposal correction (edit_exercise_ai_proposal)': {
+    writeRpc: 'edit_exercise_ai_proposal', okData: definitionId, okResult: { entryId: definitionId },
+    run: client => withEnv({ EXERCISE_AI_ENABLED: 'true' }, () => loadModule(`${recruitmentBase}exercise-ai-actions.ts`, aiMocks(client))
+      .editExerciseAiProposal(companyId, aiContext, stamp, {}, new FormData())),
+  },
+  'AI proposal approval (approve_exercise_ai_proposal)': {
+    writeRpc: 'approve_exercise_ai_proposal', okData: true, okResult: { approved: true },
+    run: client => withEnv({ EXERCISE_AI_ENABLED: 'true' }, () => loadModule(`${recruitmentBase}exercise-ai-actions.ts`, aiMocks(client))
+      .approveExerciseAiProposal(companyId, aiContext, {}, confirmedForm())),
+  },
+  'AI generation (finish_exercise_ai_generation)': {
+    writeRpc: 'finish_exercise_ai_generation', okData: { status: 'completed', exercise_id: exerciseId }, okResult: { exerciseId },
+    run: client => withEnv({ EXERCISE_AI_ENABLED: 'true', OPENAI_API_KEY: 'synthetic-only', AI_GATEWAY_ENABLED: 'false' },
+      () => loadModule(`${recruitmentBase}exercise-generation-action.ts`, {
+        'next/cache': { revalidatePath: () => {} },
+        [`${lib}exercise-context`]: { exerciseUuid: /^[a-f0-9-]{36}$/i, exerciseContext: async () => ({ client, canEdit: true, editable: true,
+          position: { id: positionId, updated_at: stamp }, base: '/exercises' }) },
+        [`${lib}exercise-ai`]: { ExerciseAiError: class extends Error {} },
+        // The real orchestration is covered by tests/exercise-ai-generation-ui.test.mjs; here the draft step
+        // only has to reach the same finish RPC the real one calls and report its outcome the same way.
+        [`${lib}exercise-ai-generation`]: { generateExerciseDraft: async (_input, _position, deps) => {
+          try { const item = await deps.finish('f'.repeat(64), {}, {}, null); return item.exercise_id ? { exerciseId: item.exercise_id } : { error: 'failed' }; }
+          catch { return { error: 'failed' }; } } },
+        [`${lib}exercise-ai-provider`]: { requestExerciseDraft: async () => ({}) },
+        [`${lib}ai-gateway/contract`]: { isAiGatewayEnabled: () => false },
+        [`${lib}ai-ledger-writer`]: { exerciseBudgetFromEnv: () => null, exerciseLedgerWriterFromEnv: () => null },
+        [`${lib}exercise-ai-budget`]: { withExerciseBudget: async () => assert.fail('gateway is off') },
+        [`${lib}method-binding`]: binding,
+      }).generateExerciseProposal(companyId, recruitmentId, definitionId, stamp, null, {}, confirmedForm())),
+  },
+};
+// bind: 'ok' | 'error' | 'throw'; writeOk: whether the definition-writing RPC succeeds.
+async function walk(path, { bind = 'ok', writeOk = true } = {}) {
+  const calls = [], logged = [];
+  const client = {
+    from: () => ({ select() { return this; }, eq() { return this; }, maybeSingle: async () => ({ data: { id: recruitmentId, updated_at: null }, error: null }) }),
+    rpc: async (name, args) => {
+      calls.push([name, args]);
+      if (name === 'method_bind_recruitment_definitions') {
+        if (bind === 'throw') throw new Error('socket closed with secret detail');
+        return bind === 'error' ? { data: null, error: { code: '42883', message: 'function secret detail does not exist' } } : { data: 1, error: null };
+      }
+      if (name === 'read_exercise_ai_proposal') return { error: null, data: { definitionEntry: { company_id: companyId, recruitment_id: recruitmentId,
+        exercise_id: exerciseId, id: definitionId, position_updated_at: stamp } } };
+      if (name === path.writeRpc) return writeOk ? { data: path.okData, error: null } : { data: null, error: { code: 'PT409', message: 'changed' } };
+      return { data: null, error: { code: 'XX000', message: `unexpected ${name}` } };
+    },
+  };
+  const original = console.error; console.error = (...args) => logged.push(args.join(' '));
+  try { return { result: await path.run(client), calls, logged, names: calls.map(call => call[0]) }; }
+  finally { console.error = original; }
+}
+
+for (const [label, path] of Object.entries(definitionPaths)) {
+  test(`definition path binds the method version: ${label}`, async () => {
+    const ok = await walk(path);
+    assert.deepEqual(ok.result, path.okResult);
+    assert.equal(ok.names.at(-1), 'method_bind_recruitment_definitions', 'binding is the last database call');
+    assert.equal(ok.names.indexOf(path.writeRpc), ok.names.length - 2, 'binding follows the write that created or approved the definition');
+    assert.deepEqual(ok.calls.at(-1)[1], { target_company: companyId, target_recruitment: recruitmentId });
+    assert.equal(ok.names.filter(name => name === 'method_bind_recruitment_definitions').length, 1);
+    assert.deepEqual(ok.logged, []);
+
+    // Błąd powiązania: wynik zapisu bez zmian, w logu sam kod błędu.
+    const failed = await walk(path, { bind: 'error' });
+    assert.deepEqual(failed.result, path.okResult, 'a binding error leaves the save result unchanged');
+    assert.deepEqual(failed.logged, ['method_bind_failed code=42883']);
+    const thrown = await walk(path, { bind: 'throw' });
+    assert.deepEqual(thrown.result, path.okResult, 'a thrown binding call leaves the save result unchanged');
+    assert.deepEqual(thrown.logged, ['method_bind_failed code=exception']);
+    for (const line of [...failed.logged, ...thrown.logged]) assert.doesNotMatch(line, /secret|detail|function/);
+
+    // Nieudany zapis: nie ma czego wiązać.
+    const refused = await walk(path, { writeOk: false });
+    assert.ok(refused.result.error, 'the write failure is reported');
+    assert.equal(refused.names.includes('method_bind_recruitment_definitions'), false, 'nothing is bound after a failed write');
+  });
+}
+
+test('binding helper logs only a safe error code', async () => {
+  const lines = [];
+  const client = code => ({ rpc: async () => ({ data: null, error: { code, message: 'secret' } }) });
+  for (const code of ['PT409', '42501', 'PGRST202']) await binding.bindMethodToDefinitions(client(code), companyId, recruitmentId, line => lines.push(line));
+  for (const code of [undefined, null, 'x'.repeat(40), 'drop table; --', 7]) await binding.bindMethodToDefinitions(client(code), companyId, recruitmentId, line => lines.push(line));
+  assert.deepEqual(lines, ['method_bind_failed code=PT409', 'method_bind_failed code=42501', 'method_bind_failed code=PGRST202',
+    ...Array(5).fill('method_bind_failed code=unknown')]);
 });
 
 test('panel form renders every field of the proposal, with the revision and a removable stale row', () => {

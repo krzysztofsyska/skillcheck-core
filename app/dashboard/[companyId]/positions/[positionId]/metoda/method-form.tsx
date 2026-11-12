@@ -2,7 +2,7 @@
 import { useActionState, useState } from "react";
 import { saveMethodProfile, type MethodFormState } from "./actions";
 import {
-  METHOD_LIMITS, assessmentMethodLabels, assessmentMethods, responsibilityLevelHints, responsibilityLevelLabels,
+  METHOD_LIMITS, assessmentMethodLabels, competencyKey, assessmentMethods, responsibilityLevelHints, responsibilityLevelLabels,
   responsibilityLevels, type EvidenceRow, type MethodProfileContent,
 } from "../../../../../../lib/method-profile";
 
@@ -28,7 +28,7 @@ export function MethodForm({ companyId, positionId, initial, revision, staleComp
   const setRow = (index: number, name: keyof RowText, value: string) =>
     setRows(current => current.map((row, i) => i === index ? { ...row, [name]: value } : row));
   const removeRow = (index: number) => setRows(current => current.filter((_, i) => i !== index));
-  const stale = new Set(staleCompetencies.map(item => item.trim().toLowerCase()));
+  const stale = new Set(staleCompetencies.map(competencyKey));
 
   return <form action={action}>
     {state.error && <p role="alert" className="notice">{state.error}</p>}
@@ -59,7 +59,7 @@ export function MethodForm({ companyId, positionId, initial, revision, staleComp
     {rows.map((row, index) => <fieldset key={row.competency}>
       <legend>{row.competency}</legend>
       <input type="hidden" name={`matrix.${index}.competency`} value={row.competency} />
-      {stale.has(row.competency.trim().toLowerCase()) && <p className="notice">Tej kompetencji nie ma już w profilu stanowiska.{" "}
+      {stale.has(competencyKey(row.competency)) && <p className="notice">Tej kompetencji nie ma już w profilu stanowiska.{" "}
         <button type="button" onClick={() => removeRow(index)}>Usuń ten wiersz</button></p>}
       <label>Oczekiwany dowód
         <textarea name={`matrix.${index}.evidence`} rows={2} maxLength={METHOD_LIMITS.rowText} value={row.evidence} onChange={event => setRow(index, "evidence", event.target.value)} />

@@ -22,7 +22,7 @@
 -- sygnaturę); firmę, stanowisko i uprawnienia sprawdzają wyłącznie funkcje
 -- poniżej. Ta migracja nie tworzy, nie zmienia ani nie usuwa żadnej relacji,
 -- kolumny, więzu, wyzwalacza ani funkcji w 'public' lub 'private' poza
--- dodaniem sześciu funkcji public.method_*. Sygnatura SC-010 pozostaje
+-- dodaniem siedmiu funkcji public.method_*. Sygnatura SC-010 pozostaje
 -- niezmieniona (sprawdzane w preflight i postflight).
 --
 -- Powiązanie z definicją zadania (SC-014 / #270, #271): definicja zadania
@@ -36,6 +36,10 @@
 -- definicji (approved_at <= created_at definicji, najwyższy numer). Wynik nie
 -- zależy więc od tego, kiedy powiązanie zostało zapisane, a zatwierdzenie
 -- nowszej wersji metody nie zmienia ani powiązania, ani definicji, ani próby.
+-- approved_at to clock_timestamp() wewnątrz transakcji zatwierdzenia, czyli
+-- chwilę przed jej commitem: przy nakładających się transakcjach reguła może
+-- wybrać wersję poprzednią albo taką, której commit jeszcze trwał
+-- (docs/sc-method-275.md, „Znane ograniczenie").
 --
 -- Dostęp: schemat `method` nie jest widoczny dla anon/authenticated; RLS jest
 -- włączone bez polityk, więc każdy bezpośredni odczyt i zapis jest odmawiany.
@@ -76,8 +80,11 @@ create table method.profile_versions (
   company_id uuid not null,
   position_id uuid not null,
   status text not null check (status in ('draft', 'approved')),
-  -- Licznik zapisów szkicu: ochrona przed nadpisaniem zmian z drugiej karty.
-  revision integer not null default 1 check (revision between 1 and 1000000),
+  -- Licznik zmian profilu metody stanowiska: ochrona przed nadpisaniem zmian
+  -- z drugiej karty. Rośnie przy każdym zapisie szkicu i przy zatwierdzeniu,
+  -- a nowy szkic kontynuuje numerację stanowiska (nigdy nie wraca do 1), więc
+  -- numer zapamiętany przez starą kartę nie pasuje do późniejszego szkicu.
+  revision integer not null check (revision between 1 and 1000000),
   version_no integer check (version_no between 1 and 1000000),
   -- Kanoniczna treść z method.normalize_content(): goal, expectedOutcome,
   -- constraints, responsibilityLevel, matrix[]. Wyłącznie dane o stanowisku.
@@ -168,6 +175,16 @@ $$;
 create trigger guard_bindings before update or delete on method.definition_bindings
   for each row execute function method.guard_binding();
 
+-- Przycięcie białych znaków z obu końców: spacja, tabulator, nowa linia, CR,
+-- FF, VT i twarda spacja. Ten sam zestaw co trimWs() w lib/method-profile.ts.
+-- Samo btrim(x) zdejmuje wyłącznie spacje, więc kompetencja zapisana w profilu
+-- stanowiska z tabulatorem lub nową linią na końcu nigdy nie zgadzałaby się
+-- z wierszem macierzy i zatwierdzenie byłoby trwale zablokowane.
+create function method.trim_ws(value text) returns text
+language sql immutable set search_path = '' as $$
+  select btrim(value, E' \t\n\r\f\u000B\u00A0')
+$$;
+
 -- Tekst z JSON: przycięty, bez znaków sterujących, do max_len znaków.
 -- Brak pola lub null = pusty tekst; zły typ lub przekroczony limit = null.
 create function method.clean_text(value jsonb, max_len integer) returns text
@@ -175,9 +192,9 @@ language sql immutable set search_path = '' as $$
   select case
     when value is null or jsonb_typeof(value) = 'null' then ''
     when jsonb_typeof(value) = 'string'
-      and length(btrim(value #>> '{}')) <= max_len
-      and (value #>> '{}') !~ '[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]'
-      then btrim(value #>> '{}')
+      and length(method.trim_ws(value #>> '{}')) <= max_len
+      and method.trim_ws(value #>> '{}') !~ '[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]'
+      then method.trim_ws(value #>> '{}')
   end
 $$;
 
@@ -251,8 +268,8 @@ begin
     if outcome = '' then raise exception 'method_profile_incomplete:expectedOutcome' using errcode = '22023'; end if;
     if profile_limits = '' then raise exception 'method_profile_incomplete:constraints' using errcode = '22023'; end if;
     if level_code = '' then raise exception 'method_profile_incomplete:responsibilityLevel' using errcode = '22023'; end if;
-    select coalesce(array_agg(distinct lower(btrim(c))), array[]::text[]) into required
-      from unnest(coalesce(competencies, array[]::text[])) c where btrim(c) <> '';
+    select coalesce(array_agg(distinct lower(method.trim_ws(c))), array[]::text[]) into required
+      from unnest(coalesce(competencies, array[]::text[])) c where method.trim_ws(c) <> '';
     if cardinality(required) = 0 then
       raise exception 'method_profile_incomplete:position.competencies' using errcode = '22023';
     end if;
@@ -291,15 +308,18 @@ end;
 $$;
 
 revoke all on function method.purge_allowed(uuid), method.guard_version(), method.guard_binding(),
-  method.clean_text(jsonb, integer), method.normalize_content(jsonb, boolean, text[]),
+  method.trim_ws(text), method.clean_text(jsonb, integer), method.normalize_content(jsonb, boolean, text[]),
   method.require_writer(uuid, uuid) from public;
 
--- Zapis szkicu. expected_revision = 0, gdy szkicu jeszcze nie ma; w przeciwnym
--- razie numer zapisu, który rekruter widział. Niezgodność = PT409, bez zapisu.
+-- Zapis szkicu. expected_revision to licznik zmian stanowiska, który rekruter
+-- widział (pole `revision` z method_profile_state; 0, gdy stanowisko nie ma
+-- jeszcze żadnego profilu metody). Niezgodność = PT409, bez zapisu. Licznik
+-- obejmuje szkic ORAZ zatwierdzone wersje: karta otwarta przed zatwierdzeniem
+-- nie nadpisze szkicu utworzonego po nim, bo jej numer jest już nieaktualny.
 create function public.method_profile_save_draft(target_company uuid, target_position uuid,
   draft_content jsonb, expected_revision integer)
 returns integer language plpgsql volatile security definer set search_path = '' as $$
-declare actor uuid := (select auth.uid()); canonical jsonb; d method.profile_versions; saved integer;
+declare actor uuid := (select auth.uid()); canonical jsonb; d method.profile_versions; current_revision integer; saved integer;
 begin
   perform method.require_writer(target_company, target_position);
   if expected_revision is null or expected_revision < 0 then
@@ -309,16 +329,18 @@ begin
   perform pg_advisory_xact_lock(hashtextextended('sc-method:' || target_position::text, 0));
   select * into d from method.profile_versions v
    where v.company_id = target_company and v.position_id = target_position and v.status = 'draft' for update;
-  if coalesce(d.revision, 0) <> expected_revision then
+  select coalesce(max(v.revision), 0) into current_revision from method.profile_versions v
+   where v.company_id = target_company and v.position_id = target_position;
+  if current_revision <> expected_revision then
     raise exception 'method_draft_changed' using errcode = 'PT409';
   end if;
   if d.id is null then
-    insert into method.profile_versions (company_id, position_id, status, content, created_by, updated_by)
-      values (target_company, target_position, 'draft', canonical, actor, actor)
+    insert into method.profile_versions (company_id, position_id, status, revision, content, created_by, updated_by)
+      values (target_company, target_position, 'draft', current_revision + 1, canonical, actor, actor)
       returning revision into saved;
   else
     update method.profile_versions
-       set content = canonical, revision = d.revision + 1, updated_by = actor, updated_at = clock_timestamp()
+       set content = canonical, revision = current_revision + 1, updated_by = actor, updated_at = clock_timestamp()
      where id = d.id
      returning revision into saved;
   end if;
@@ -347,8 +369,9 @@ begin
     'position_updated_at', p.updated_at);
   select coalesce(max(v.version_no), 0) + 1 into next_no from method.profile_versions v
    where v.company_id = target_company and v.position_id = target_position;
+  -- revision + 1: karta, która widziała ten szkic przed zatwierdzeniem, ma już nieaktualny numer.
   update method.profile_versions
-     set status = 'approved', version_no = next_no, content = canonical, position_snapshot = snapshot,
+     set status = 'approved', version_no = next_no, revision = d.revision + 1, content = canonical, position_snapshot = snapshot,
          content_hash = encode(sha256(convert_to(
            jsonb_build_object('content', canonical, 'position', snapshot)::text, 'UTF8')), 'hex'),
          approved_by = actor, approved_at = clock_timestamp(), updated_by = actor, updated_at = clock_timestamp()
@@ -373,6 +396,8 @@ begin
   writer := private.has_company_access(target_company, true);
   return jsonb_build_object(
     'can_edit', writer,
+    'revision', (select coalesce(max(v.revision), 0) from method.profile_versions v
+                  where v.company_id = target_company and v.position_id = target_position),
     'draft', case when writer then (
       select jsonb_build_object('id', d.id, 'revision', d.revision, 'content', d.content, 'updated_at', d.updated_at)
         from method.profile_versions d
@@ -446,6 +471,43 @@ begin
 end;
 $$;
 
+-- To samo dla wszystkich jeszcze niepowiązanych definicji zadań jednej
+-- rekrutacji. Potrzebne, bo nie każda ścieżka aplikacji zna id nowej wersji
+-- definicji: public.finish_exercise_ai_generation i
+-- public.edit_exercise_ai_proposal tworzą definicję wewnątrz bazy, a ich
+-- przypiętych treści ta migracja nie podmienia. Ta sama reguła czasu
+-- (approved_at <= created_at definicji), więc wynik nie zależy od momentu
+-- wywołania; istniejących powiązań nie zmienia. Zwraca liczbę nowych powiązań.
+create function public.method_bind_recruitment_definitions(target_company uuid, target_recruitment uuid)
+returns integer language plpgsql volatile security definer set search_path = '' as $$
+declare actor uuid := (select auth.uid()); r public.recruitments; bound integer;
+begin
+  if actor is null or target_company is null or target_recruitment is null
+     or not private.has_company_access(target_company, true) then
+    raise exception 'method_forbidden' using errcode = '42501';
+  end if;
+  select * into r from public.recruitments x
+   where x.company_id = target_company and x.id = target_recruitment;
+  if not found then
+    raise exception 'method_forbidden' using errcode = '42501';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('sc-method:' || r.position_id::text, 0));
+  insert into method.definition_bindings (definition_entry_id, company_id, position_id, method_version_id, content_hash, bound_by)
+    select e.id, e.company_id, e.position_id, chosen.id, chosen.content_hash, actor
+      from public.exercise_definition_entries e
+      cross join lateral (
+        select v.id, v.content_hash from method.profile_versions v
+         where v.company_id = e.company_id and v.position_id = e.position_id
+           and v.status = 'approved' and v.approved_at <= e.created_at
+         order by v.version_no desc limit 1) chosen
+     where e.company_id = target_company and e.recruitment_id = target_recruitment
+       and not exists (select 1 from method.definition_bindings b where b.definition_entry_id = e.id)
+    on conflict (definition_entry_id) do nothing;
+  get diagnostics bound = row_count;
+  return bound;
+end;
+$$;
+
 -- Odczyt powiązania: dokładna wersja metody, z którą powstała definicja zadania.
 create function public.method_definition_binding(target_company uuid, target_definition uuid)
 returns jsonb language plpgsql stable security definer set search_path = '' as $$
@@ -472,6 +534,7 @@ begin
     'public.method_profile_state(uuid,uuid)',
     'public.method_profile_version(uuid,uuid)',
     'public.method_bind_definition(uuid,uuid)',
+    'public.method_bind_recruitment_definitions(uuid,uuid)',
     'public.method_definition_binding(uuid,uuid)'] loop
     execute format('revoke all on function %s from public', fn);
     if exists (select 1 from pg_roles where rolname = 'anon') then

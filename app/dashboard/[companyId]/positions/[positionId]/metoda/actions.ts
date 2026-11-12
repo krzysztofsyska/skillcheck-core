@@ -18,6 +18,7 @@ export async function saveMethodProfile(companyId: string, positionId: string, _
   if (!canEdit) return { error: "Masz dostęp tylko do odczytu." };
   if (!uuid.test(positionId)) return { error: "Nie rozpoznano stanowiska. Odśwież stronę." };
   const expected = Number(form.get("expectedRevision"));
+  // Licznik zmian profilu metody tego stanowiska, który rekruter widział (rośnie też przy zatwierdzeniu).
   if (!Number.isInteger(expected) || expected < 0) return { error: "Odśwież stronę, aby wczytać aktualny szkic." };
   let content;
   try { content = parseMethodProfileForm(form); }

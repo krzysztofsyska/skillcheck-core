@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { companyAccess } from "../../../../../../lib/company-access";
 import {
-  alignMatrix, assessmentMethodLabels, isAssessmentMethod, isResponsibilityLevel, parseMethodProfileState, parseMethodVersion,
+  alignMatrix, assessmentMethodLabels, competencyKey, isAssessmentMethod, isResponsibilityLevel, parseMethodProfileState, parseMethodVersion,
   positionCompetencies, proposeMethodProfile, responsibilityLevelLabels, responsibilityLevels,
   type MethodApprovedVersion, type MethodProfileContent,
 } from "../../../../../../lib/method-profile";
@@ -72,8 +72,8 @@ export default async function MethodPage({ params, searchParams }: {
   const source: MethodProfileContent = requestedLevel ? proposeMethodProfile(position, requestedLevel).content
     : state.draft?.content ?? state.approved?.content ?? proposeMethodProfile(position, "specialist").content;
   const initial = alignMatrix(source, position.required_competencies);
-  const known = new Set(competencies.map(item => item.toLowerCase()));
-  const staleCompetencies = initial.matrix.map(row => row.competency).filter(item => !known.has(item.trim().toLowerCase()));
+  const known = new Set(competencies.map(competencyKey));
+  const staleCompetencies = initial.matrix.map(row => row.competency).filter(item => !known.has(competencyKey(item)));
   const origin = requestedLevel ? `propozycja dla poziomu „${responsibilityLevelLabels[requestedLevel]}”`
     : state.draft ? `szkic zapisany ${when(state.draft.updated_at)}`
     : state.approved ? `zatwierdzona wersja ${state.approved.version_no}` : "propozycja dla poziomu „Specjalista”";
@@ -105,7 +105,7 @@ export default async function MethodPage({ params, searchParams }: {
       {/* Klucz bez numeru szkicu: zapis szkicu nie może przeładować formularza i zgubić potwierdzenia. */}
       <MethodForm key={`${requestedLevel ?? "stan"}:${state.approved?.id ?? ""}:${competencies.join("|")}`}
         companyId={companyId} positionId={positionId} initial={initial}
-        revision={state.draft?.revision ?? 0} staleCompetencies={staleCompetencies} />
+        revision={state.revision} staleCompetencies={staleCompetencies} />
     </> : <p className="notice">{position.status === "archived"
       ? "Stanowisko jest zarchiwizowane, więc profilu metody nie można już zmieniać."
       : "Masz dostęp tylko do odczytu. Profil metody zmienia właściciel konta lub rekruter."}</p>}
