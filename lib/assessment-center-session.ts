@@ -173,7 +173,8 @@ export function parseAssessmentCenterSession(input: unknown) {
       // withholds what assessors and experts wrote (feedback, proof of change, expert notes),
       // so none of it can steer that sheet. The candidate's work itself stays readable.
       textHidden: raw.textHidden as boolean,
-      expertNotes: list(raw.expertNotes, 200).map(note => {
+      // The RPC has no fixed count limit for append-only consultations. Never reject the entire session after the 201st note.
+      expertNotes: list(raw.expertNotes, Number.MAX_SAFE_INTEGER).map(note => {
         const item = object(note);
         return { note: text(item.note, 8000), authorId: id(item.authorId), createdAt: time(item.createdAt) };
       }),
