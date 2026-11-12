@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
+import { lifecycleHarness } from './helpers/erasure-lifecycle-fixture.mjs';
 import {
   diagnosticAreas, diagnosticProblems, parseDiagnosticContent, parseDiagnosticForm, parseDiagnosticsState, processError, proposeDiagnosticAreas,
 } from '../lib/process-diagnostics.ts';
@@ -411,6 +412,26 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
     assert.equal((await state(a.companyId, quiet.id)).history.length, 4);
     await h.asAdmin();
     assert.equal((await db.query('select count(*)::int n from process.diagnostic_records where company_id=$1', [b.companyId])).rows[0].n, 1);
+  });
+
+  await t.test('erasure freeze hides candidate data from security-definer aggregates', async () => {
+    const lifecycle = lifecycleHarness(h);
+    const f = await lifecycle.ready();
+    await h.asUser(f.owner);
+    const before = await state(f.companyId, f.recruitment.id);
+    assert.ok(before.inflow.total > 0, 'the fixture has an application');
+    const beforeMetrics = byKey(await metrics(f.companyId, f.recruitment.id));
+    assert.equal(beforeMetrics.days_to_first_application.state, 'measured');
+    await lifecycle.freeze(f);
+    await h.asUser(f.owner);
+    const after = await state(f.companyId, f.recruitment.id);
+    assert.equal(after.inflow.total, 0, 'the frozen candidate does not contribute to counts');
+    assert.equal(after.inflow.first_application_at, null, 'no first-application timestamp is disclosed');
+    assert.equal(after.inflow.last_application_at, null, 'no last-application timestamp is disclosed');
+    const afterMetrics = byKey(await metrics(f.companyId, f.recruitment.id));
+    assert.equal(afterMetrics.days_to_first_application.state, 'not_measured');
+    assert.equal(afterMetrics.days_to_first_application.value, null);
+    assert.equal(afterMetrics.days_to_first_application.scope.rows, 0);
   });
 
   await t.test('history is append-only for every role, including the table owner', async () => {
