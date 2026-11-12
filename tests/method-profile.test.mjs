@@ -517,3 +517,49 @@ test('a re-render with a newer revision never raises the revision a form with st
   await reloaded.render({ initial: theirs, revision: 3 }).submit(formFor(theirs, 'save', 3));
   assert.equal(stored.revision, 4, 'consecutive own saves keep working');
 });
+
+test('the form revision is monotonic: an error result without a revision does not roll it back', async () => {
+  const content = byLevel.specialist.content;
+  const s = scenario();
+  let stored = 1;
+  s.context.access.client.rpc = async (name, args) => {
+    s.calls.push([name, args]);
+    if (name !== 'method_profile_save_draft') return { data: null, error: { code: 'XX000', message: 'unexpected' } };
+    if (args.expected_revision !== stored) return { data: null, error: { code: 'PT409', message: 'method_draft_changed' } };
+    return { data: ++stored, error: null };
+  };
+  const form = mountForm();
+  form.setServerAction(s.action);
+  const sent = () => s.calls.filter(call => call[0] === 'method_profile_save_draft').map(call => call[1].expected_revision);
+  const view = () => form.render({ initial: content, revision: 1 }); // the prop is never refreshed in this test
+
+  // 1. Otwarte w numerze 1; „Zapisz szkic" udaje się -> 2.
+  assert.equal(view().revision, 1);
+  await view().submit(formFor(content, 'save', view().revision));
+  assert.equal(stored, 2);
+  assert.equal(view().revision, 2);
+
+  // 2. „Zapisz i zatwierdź" z brakami: akcja zwraca błąd BEZ numeru i niczego nie zapisuje.
+  const gaps = structuredClone(content); gaps.goal = '';
+  await view().submit(formFor(gaps, 'approve', view().revision));
+  assert.deepEqual(sent(), [1], 'the incomplete approval never reached the database');
+  assert.equal(view().revision, 2, 'the error result does not send the form back to revision 1');
+  // Inne błędy bez numeru też niczego nie cofają: błąd parsowania i odmowa bazy.
+  const tooLong = structuredClone(content); tooLong.goal = 'x'.repeat(1001);
+  await view().submit(formFor(tooLong, 'save', view().revision));
+  assert.equal(view().revision, 2);
+
+  // 3. Kolejny zapis wysyła 2 i udaje się (wcześniej: 1 i „Szkic zmienił się w innym oknie" aż do odświeżenia).
+  await view().submit(formFor(content, 'save', view().revision));
+  assert.deepEqual(sent(), [1, 2]);
+  assert.equal(stored, 3);
+  assert.equal(view().revision, 3);
+
+  // 4. Odmowa bazy (konflikt) po drodze też nie cofa numeru ani go nie podnosi.
+  stored = 9; // ktoś inny zapisał w międzyczasie
+  await view().submit(formFor(content, 'save', view().revision));
+  assert.deepEqual(sent(), [1, 2, 3]);
+  assert.equal(view().revision, 3, 'a refused save leaves the revision where it was');
+  // Nowszy numer z właściwości nadal go nie podnosi (formularz wciąż pokazuje starą treść).
+  assert.equal(form.render({ initial: content, revision: 9 }).revision, 3);
+});

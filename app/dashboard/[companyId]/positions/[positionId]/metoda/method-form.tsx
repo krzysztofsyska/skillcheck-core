@@ -31,8 +31,12 @@ export function MethodForm({ companyId, positionId, initial, revision, staleComp
   // szkic) NIE może go podnieść — pola nadal pokazują starą treść, więc zapis ma skończyć się konfliktem,
   // a nie nadpisać cudzych zmian. Numer rośnie tylko po własnym udanym zapisie (state.revision) albo gdy
   // formularz jest montowany od nowa z nową treścią (zmiana `key` na stronie albo odświeżenie).
-  const [loadedRevision] = useState(revision);
-  const expectedRevision = Math.max(state.revision ?? 0, loadedRevision);
+  // Numer jest monotoniczny: `state` jest podmieniany wynikiem KAŻDEJ akcji, a większość błędów nie niesie
+  // numeru (np. „Nie można jeszcze zatwierdzić"). Dlatego najwyższy poznany numer trzymamy we własnym stanie
+  // i podnosimy go tylko wtedy, gdy wynik akcji przynosi wyższy — błąd bez numeru niczego nie cofa.
+  const [knownRevision, setKnownRevision] = useState(revision);
+  const expectedRevision = Math.max(knownRevision, state.revision ?? 0);
+  if (expectedRevision !== knownRevision) setKnownRevision(expectedRevision);
   const setField = (name: keyof typeof profile, value: string) => setProfile(current => ({ ...current, [name]: value }));
   const setRow = (index: number, name: keyof RowText, value: string) =>
     setRows(current => current.map((row, i) => i === index ? { ...row, [name]: value } : row));
