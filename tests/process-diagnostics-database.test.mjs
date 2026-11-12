@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
-import { lifecycleHarness } from './helpers/erasure-lifecycle-fixture.mjs';
+import { lifecycleHarness, lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
 import {
   diagnosticAreas, diagnosticProblems, parseDiagnosticContent, parseDiagnosticForm, parseDiagnosticsState, processError, proposeDiagnosticAreas,
 } from '../lib/process-diagnostics.ts';
@@ -416,8 +416,11 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
 
   await t.test('erasure freeze hides candidate data from security-definer aggregates', async () => {
     const lifecycle = lifecycleHarness(h);
-    const f = await lifecycle.ready();
+    // Właściciel ma limit jednej firmy: użyj już istniejącej, izolowanej firmy B.
+    const f = b;
     await h.asUser(f.owner);
+    await lifecycle.policy(f, 0, lifecycleRules);
+    f.resolutionId = await lifecycle.resolve(f, [f.candidate.id]);
     const before = await state(f.companyId, f.recruitment.id);
     assert.ok(before.inflow.total > 0, 'the fixture has an application');
     const beforeMetrics = byKey(await metrics(f.companyId, f.recruitment.id));
