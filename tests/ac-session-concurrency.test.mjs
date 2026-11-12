@@ -41,7 +41,17 @@ test('AC session native PostgreSQL: reconciliation is recorded once and answered
   await rival.exec('commit');
  } finally { await rival.exec('rollback'); }
  await assert.rejects(e.confirm(pairId,'disputed','Druga karta przeglądarki próbuje zmienić odpowiedź.',second),code('PT409'));
+ // Closing the session against a late sheet: whichever commits first wins, the other is refused.
+ const late = stages[1], latePair = await (async () => {await h.asUser(f.owner);return e.assign(sessionId,late,f);})();
+ await db.exec('begin');
+ try {
+  await e.setStatus(sessionId,'closed');
+  await assert.rejects(e.submit(latePair,sheetFor(late.definition),rival),busy);
+  await db.exec('commit');
+ } finally { await db.exec('rollback'); }
+ await assert.rejects(e.submit(latePair,sheetFor(late.definition),rival),code('42501'));
  await h.asAdmin();
+ assert.equal(await count(db,'private.ac_paired_sheets where id=$1 and first_sheet is null and second_sheet is null',[latePair]),1);
  const rows = (await db.query('select recorded_by,confirmation,confirmed_by,items->0->>\'rating\' rating from private.ac_reconciliations where pair_id=$1',[pairId])).rows;
  assert.deepEqual(rows,[{recorded_by:f.owner,confirmation:'confirmed',confirmed_by:users.recruiter,rating:'above'}]);
 });

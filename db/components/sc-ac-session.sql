@@ -153,7 +153,18 @@ begin
  if current_user='erasure_purge_owner' then
   if tg_op='DELETE' and private.erasure_purge_allowed(adapter,to_jsonb(old)) then return old;end if;
   raise exception using errcode='42501',message='Purge boundary';end if;
- if tg_op='DELETE' then raise exception using errcode='42501',message='Controlled erasure required';end if;
+ if tg_op='DELETE' then
+  -- The only ordinary DELETE: a mistaken finalist of a DRAFT session with no evidence yet.
+  past:=to_jsonb(old);
+  if tg_table_name<>'ac_session_finalists'
+   or not exists(select 1 from private.ac_sessions s where s.id=(past->>'session_id')::uuid and s.status='draft')
+   or exists(select 1 from private.ac_session_entries e where e.session_id=(past->>'session_id')::uuid and e.application_id=(past->>'application_id')::uuid)
+   or exists(select 1 from private.ac_session_stages g join private.ac_paired_sheets p on p.definition_id=g.definition_id
+    where g.session_id=(past->>'session_id')::uuid and p.application_id=(past->>'application_id')::uuid) then
+   raise exception using errcode='42501',message='Controlled erasure required';end if;
+  perform private.erasure_normal_row_guard(tg_op,tg_table_schema,tg_table_name,past,null);
+  return old;
+ end if;
  perform private.erasure_normal_row_guard(tg_op,tg_table_schema,tg_table_name,case when tg_op='UPDATE' then to_jsonb(old) end,to_jsonb(new));
  perform 1 from private.erasure_execution_config where singleton for share nowait;
  if not found or exists(select 1 from private.erasure_execution_config where singleton and restore_isolated) then
@@ -167,7 +178,8 @@ begin
    or fresh->>'confirmed_by' is distinct from auth.uid()::text then
    raise exception using errcode='42501',message='Immutable assessment';end if;
   select * into pair from private.ac_paired_sheets where id=(fresh->>'pair_id')::uuid;
-  if pair.id is null or auth.uid() not in (pair.first_assessor,pair.second_assessor) then
+  if pair.id is null or auth.uid() not in (pair.first_assessor,pair.second_assessor)
+   or private.ac_pair_open_session(pair.company_id,pair.recruitment_id,pair.application_id,pair.definition_id) is null then
    raise exception using errcode='42501',message='Immutable assessment';end if;
   return new;
  end if;
@@ -182,8 +194,9 @@ begin
   if pair.id is null or pair.first_sheet is null or pair.second_sheet is null or fresh->>'confirmation' is not null
    or pair.company_id<>(fresh->>'company_id')::uuid or pair.recruitment_id<>(fresh->>'recruitment_id')::uuid
    or pair.application_id<>(fresh->>'application_id')::uuid
-   or (fresh->>'recorded_by')::uuid not in (pair.first_assessor,pair.second_assessor) then
-   raise exception using errcode='42501',message='Reconciliation requires both sheets';end if;
+   or (fresh->>'recorded_by')::uuid not in (pair.first_assessor,pair.second_assessor)
+   or private.ac_pair_open_session(pair.company_id,pair.recruitment_id,pair.application_id,pair.definition_id) is null then
+   raise exception using errcode='42501',message='Reconciliation requires both sheets in an open session';end if;
  else
   if not exists(select 1 from private.ac_sessions s where s.id=(fresh->>'session_id')::uuid and s.status='open'
    and s.company_id=(fresh->>'company_id')::uuid and s.recruitment_id=(fresh->>'recruitment_id')::uuid) then
@@ -241,6 +254,46 @@ begin
  return s;
 exception when lock_not_available then raise exception using errcode='PT409',message='Session busy';end;$$;
 
+-- The OPEN session in which this pair is the assessment of a finalist on a stage; else null.
+create function private.ac_pair_open_session(tenant uuid,target_recruitment uuid,application uuid,revision uuid) returns uuid
+language sql stable security definer set search_path='' as $$
+ select s.id from private.ac_sessions s
+ join private.ac_session_stages g on g.session_id=s.id and g.definition_id=revision
+ join private.ac_session_finalists f on f.session_id=s.id and f.application_id=application
+ where s.company_id=tenant and s.recruitment_id=target_recruitment and s.status='open'
+$$;
+
+-- Reconciliation is a session act: open session (held until COMMIT against closing),
+-- finalist, and rule R1 again: a person taken off the shortlist gets no new record.
+create function private.ac_pair_lock_session(target uuid) returns void
+language plpgsql security definer set search_path='' as $$
+declare pair private.ac_paired_sheets;found_session uuid;
+begin
+ select * into pair from private.ac_paired_sheets where id=target;
+ found_session:=private.ac_pair_open_session(pair.company_id,pair.recruitment_id,pair.application_id,pair.definition_id);
+ perform 1 from private.ac_sessions where id=found_session and status='open' for share nowait;
+ if not found then raise exception using errcode='42501',message='Session is not open';end if;
+ perform 1 from public.recruitment_shortlist_entries e where e.company_id=pair.company_id and e.recruitment_id=pair.recruitment_id
+  and e.application_id=pair.application_id and e.removed_at is null for share nowait;
+ if not found then raise exception using errcode='42501',message='Finalist must be shortlisted';end if;
+end;$$;
+
+-- Pairs on a session stage belong to the session: the unchanged R13 RPCs (ac_assign_pair,
+-- ac_submit_sheet) can create or fill one only for a finalist of an OPEN session. A draft
+-- or closed session accepts no pair and no sheet, so a closed report cannot change.
+-- Revisions that are not a stage of any session keep the plain R13 behaviour.
+create function private.ac_session_pair_guard() returns trigger language plpgsql security definer set search_path='' as $$
+declare s private.ac_sessions;
+begin
+ select x.* into s from private.ac_session_stages g join private.ac_sessions x on x.id=g.session_id
+ where g.company_id=new.company_id and g.recruitment_id=new.recruitment_id and g.definition_id=new.definition_id for share of x nowait;
+ if s.id is null then return new;end if;
+ if s.status<>'open' or not exists(select 1 from private.ac_session_finalists f where f.session_id=s.id and f.application_id=new.application_id) then
+  raise exception using errcode='42501',message='Session is not open';end if;
+ return new;
+exception when lock_not_available then raise exception using errcode='PT409',message='Assessment busy';end;$$;
+create trigger ac_session_pair_guard before insert or update on private.ac_paired_sheets for each row execute function private.ac_session_pair_guard();
+
 create function public.ac_session_create(recruitment uuid,session_title text,competencies text[]) returns uuid
 language plpgsql security definer set search_path='' as $$
 declare r public.recruitments;p public.positions;keys text[]:='{}';item text;saved uuid;
@@ -264,7 +317,8 @@ begin
  insert into private.ac_sessions(company_id,recruitment_id,title,planned_competencies,created_by)
  values(r.company_id,r.id,private.behavior_trim(session_title),keys,auth.uid()) returning id into saved;
  return saved;
-exception when unique_violation or lock_not_available then raise exception using errcode='PT409',message='Session already exists';end;$$;
+exception when unique_violation then raise exception using errcode='PT409',message='Session already exists';
+ when lock_not_available then raise exception using errcode='PT409',message='Session busy';end;$$;
 
 create function public.ac_session_add_stage(session uuid,kind text,stage_title text,revision uuid,counterpart text) returns uuid
 language plpgsql security definer set search_path='' as $$
@@ -323,6 +377,18 @@ begin
  return saved;
 exception when unique_violation or lock_not_available then raise exception using errcode='PT409',message='Session busy';end;$$;
 
+-- A mistaken finalist is taken back only while the session is a draft and nothing was
+-- recorded for them; the row guard enforces the same rule below this RPC.
+create function public.ac_session_remove_finalist(session uuid,application uuid) returns void
+language plpgsql security definer set search_path='' as $$
+declare s private.ac_sessions;
+begin
+ s:=private.ac_session_lock(session,true);
+ if s.status<>'draft' then raise exception using errcode='PT409',message='Session plan is closed';end if;
+ delete from private.ac_session_finalists f where f.session_id=s.id and f.application_id=application;
+ if not found then raise exception using errcode='42501',message='Session unavailable';end if;
+exception when lock_not_available then raise exception using errcode='PT409',message='Session busy';end;$$;
+
 create function public.ac_session_set_status(session uuid,next_status text) returns void
 language plpgsql security definer set search_path='' as $$
 declare s private.ac_sessions;
@@ -358,6 +424,7 @@ begin
  if seed.id is null or auth.uid() is null or auth.uid() not in (seed.first_assessor,seed.second_assessor) then
   raise exception using errcode='42501',message='Assessment unavailable';end if;
  a:=private.ac_lock_application(seed.application_id);
+ perform private.ac_pair_lock_session(seed.id);
  select * into pair from private.ac_paired_sheets where id=pair_id and company_id=a.company_id for update nowait;
  if pair.id is null or auth.uid() not in (pair.first_assessor,pair.second_assessor) then
   raise exception using errcode='42501',message='Assessment unavailable';end if;
@@ -406,6 +473,7 @@ begin
  if seed.id is null or auth.uid() is null or auth.uid() not in (seed.first_assessor,seed.second_assessor) then
   raise exception using errcode='42501',message='Assessment unavailable';end if;
  a:=private.ac_lock_application(seed.application_id);
+ perform private.ac_pair_lock_session(seed.id);
  select * into pair from private.ac_paired_sheets where id=pair_id and company_id=a.company_id for update nowait;
  select * into rec from private.ac_reconciliations r where r.pair_id=pair.id for update nowait;
  if pair.id is null or rec.id is null or auth.uid() not in (pair.first_assessor,pair.second_assessor) or rec.recorded_by=auth.uid() then
@@ -494,12 +562,12 @@ begin
   'stages',coalesce((select jsonb_agg(jsonb_build_object('id',g.id,'ordinal',g.ordinal,'type',g.stage_type,'title',g.title,
     'definitionId',g.definition_id,'definition',d.definition,'counterpartBrief',g.counterpart_brief) order by g.ordinal)
    from private.ac_session_stages g join public.exercise_definition_entries d on d.id=g.definition_id where g.session_id=s.id),'[]'::jsonb),
-  'finalists',coalesce((select jsonb_agg(jsonb_build_object('applicationId',f.application_id,'slot',f.slot,
+  'finalists',coalesce((select jsonb_agg(jsonb_build_object('applicationId',f.application_id,'slot',f.slot,'textHidden',h.hidden,
     'expertNotes',coalesce((select jsonb_agg(jsonb_build_object('note',e.body->>'note','authorId',e.author_id,'createdAt',e.created_at) order by e.created_at,e.id)
-     from private.ac_session_entries e where e.session_id=s.id and e.application_id=f.application_id and e.kind='expert_consultation'),'[]'::jsonb),
+     from private.ac_session_entries e where not h.hidden and e.session_id=s.id and e.application_id=f.application_id and e.kind='expert_consultation'),'[]'::jsonb),
     'stages',coalesce((select jsonb_agg(jsonb_build_object('stageId',g.id,
       'entries',coalesce((select jsonb_agg(jsonb_build_object('kind',e.kind,'body',e.body,'authorId',e.author_id,'createdAt',e.created_at) order by e.created_at,e.id)
-       from private.ac_session_entries e where e.session_id=s.id and e.application_id=f.application_id and e.session_stage_id=g.id),'[]'::jsonb),
+       from private.ac_session_entries e where not h.hidden and e.session_id=s.id and e.application_id=f.application_id and e.session_stage_id=g.id),'[]'::jsonb),
       'pair',case
        when p.id is null then jsonb_build_object('state','unassigned')
        when not (owner or auth.uid() in (p.first_assessor,p.second_assessor)) then jsonb_build_object('state','restricted')
@@ -515,5 +583,11 @@ begin
      left join private.ac_paired_sheets p on p.application_id=f.application_id and p.definition_id=g.definition_id
      where g.session_id=s.id),'[]'::jsonb)) order by f.slot)
    from private.ac_session_finalists f join public.applications a on a.id=f.application_id and a.company_id=f.company_id
+   -- Free text (work, feedback, expert notes) could carry a rating. A caller who still owes
+   -- an independent sheet for this finalist gets none of it until that sheet is submitted.
+   cross join lateral (select exists(select 1 from private.ac_session_stages g
+     join private.ac_paired_sheets p on p.application_id=f.application_id and p.definition_id=g.definition_id
+     where g.session_id=s.id and ((p.first_assessor=auth.uid() and p.first_sheet is null)
+      or (p.second_assessor=auth.uid() and p.second_sheet is null))) hidden) h
    where f.session_id=s.id and private.candidate_workflow_visible(f.company_id,a.candidate_id)),'[]'::jsonb));
 end;$$;

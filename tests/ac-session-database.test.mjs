@@ -107,6 +107,17 @@ test('AC session R16: plan → finalists → two assessors → reconciliation �
   // A removed shortlist entry is no longer a source of finalists.
   await h.remove(f2.shortlistId);await assert.rejects(e.addFinalist(sessionId,f2),denied('42501'));
   f2.shortlistId = await h.add(f2);await e.addFinalist(sessionId,f2);
+  // A mistaken finalist of a DRAFT is taken back by the owner and the slot is reused.
+  await h.asUser(users.recruiter);await assert.rejects(call('public.ac_session_remove_finalist',[sessionId,f2.application.id]),forbidden);
+  await h.asUser(other.owner);await assert.rejects(call('public.ac_session_remove_finalist',[sessionId,f2.application.id]),forbidden);
+  await h.asUser(f1.owner);
+  await call('public.ac_session_remove_finalist',[sessionId,f2.application.id]);
+  await assert.rejects(call('public.ac_session_remove_finalist',[sessionId,f2.application.id]),denied('42501'));
+  assert.deepEqual((await e.read(sessionId)).finalists.map(f=>[f.applicationId,f.slot]),[[f1.application.id,1]]);
+  await e.addFinalist(sessionId,f2);
+  assert.deepEqual((await e.read(sessionId)).finalists.map(f=>[f.applicationId,f.slot]),[[f1.application.id,1],[f2.application.id,2]]);
+  // A stage revision belongs to the session: no pair on it through the plain R13 RPC while the session is a draft.
+  await assert.rejects(call('public.ac_assign_pair',[f1.application.id,stages[0].definitionId,f1.owner,users.recruiter]),denied('42501'));
   await h.asAdmin();await db.query("select set_config('request.jwt.claim.sub',$1,false)",[f1.owner]);
   await assert.rejects(db.query('insert into private.ac_session_finalists(session_id,company_id,recruitment_id,application_id,slot,added_by) values($1,$2,$3,$4,9,$5)',
    [sessionId,f1.companyId,f1.recruitment.id,outsiderCandidate.application.id,f1.owner]),denied('42501'));
@@ -127,6 +138,9 @@ test('AC session R16: plan → finalists → two assessors → reconciliation �
   await assert.rejects(e.setStatus(sessionId,'open'),denied('PT409'));
   await assert.rejects(e.addStage(f1,sessionId,hrbpCaseTemplate.stages[0]),denied('PT409'));
   await assert.rejects(call('public.ac_session_remove_last_stage',[sessionId]),denied('PT409'));
+  await assert.rejects(call('public.ac_session_remove_finalist',[sessionId,f2.application.id]),denied('PT409'));
+  // Open session: the plain R13 RPC still cannot attach a non-finalist to a stage revision.
+  await assert.rejects(call('public.ac_assign_pair',[outsiderCandidate.application.id,stages[0].definitionId,f1.owner,users.recruiter]),denied('42501'));
   await h.asAdmin();
   await assert.rejects(db.query("update private.ac_session_stages set title='Zmieniony' where session_id=$1",[sessionId]),denied('42501'));
   await assert.rejects(db.query('delete from private.ac_session_stages where session_id=$1',[sessionId]),denied('42501'));
@@ -134,7 +148,7 @@ test('AC session R16: plan → finalists → two assessors → reconciliation �
   await assert.rejects(db.query("update private.ac_sessions set status='draft',opened_by=null,opened_at=null where id=$1",[sessionId]),denied('42501'));
  });
 
- const pairs = {};
+ const pairs = {}, closing = {};
  await t.test('one pair per finalist and stage through the R13 engine; only the owner assigns, only for finalists and own stages', async () => {
   await h.asUser(users.recruiter);await assert.rejects(e.assign(sessionId,stages[0],f1),forbidden);
   await h.asUser(f1.owner);
@@ -251,6 +265,28 @@ test('AC session R16: plan → finalists → two assessors → reconciliation �
   await assert.rejects(db.query('delete from private.ac_session_finalists where session_id=$1',[sessionId]),denied('42501'));
  });
 
+ await t.test('free text is withheld from an assessor who still owes an independent sheet for that finalist', async () => {
+  // Stages 2 and 4 are assigned and empty: both assessors still owe sheets for the first finalist,
+  // while the expert notes and the attempt texts (which could carry a rating) already exist.
+  for (const user of [users.recruiter,f1.owner]) {
+   await h.asUser(user);
+   const seen = (await e.read(sessionId)).finalists;
+   assert.equal(seen[0].textHidden,true);assert.deepEqual(seen[0].expertNotes,[]);
+   assert.ok(seen[0].stages.every(s=>s.entries.length===0));
+   assert.doesNotMatch(JSON.stringify(seen),/Konsultacja eksperta|notatka eksperta|Syntetyczna praca|Diagnoza myli|Nowa tabela/);
+   assert.equal(seen[1].textHidden,false,'a finalist the caller owes nothing for is unaffected');
+   assert.equal(buildAssessmentCenterSessionReport(parseAssessmentCenterSession(await e.read(sessionId))).finalists[0].textHidden,true);
+  }
+  // A recruiter outside every pair owes nothing and sees the records.
+  await h.asUser(third);assert.equal((await e.read(sessionId)).finalists[0].textHidden,false);
+  // Once the owner has submitted his remaining sheets the text is his to read; the recruiter still owes two.
+  await h.asUser(f1.owner);
+  for (const stage of [stages[1],stages[3]]) await e.submit(pairs[stage.id],sheetFor(stage.definition));
+  const mine = (await e.read(sessionId)).finalists[0];
+  assert.equal(mine.textHidden,false);assert.equal(mine.expertNotes.length,2);assert.equal(mine.stages[0].entries.length,4);
+  await h.asUser(users.recruiter);assert.equal((await e.read(sessionId)).finalists[0].textHidden,true);
+ });
+
  await t.test('report: both assessors per competency, agreed versus discrepant, first versus revised, "brak danych", no ranking or decision', async () => {
   await h.asUser(f1.owner);
   const raw = await e.read(sessionId);
@@ -359,13 +395,52 @@ test('AC session R16: plan → finalists → two assessors → reconciliation �
   assert.deepEqual((await e.read(sessionId)).finalists.map(f=>f.applicationId),[f2.application.id]);
  });
 
- await t.test('a closed session keeps its report and refuses new session writes', async () => {
+ await t.test('rule R1 again: no reconciliation or answer for a finalist taken off the shortlist', async () => {
+  await h.asUser(f1.owner);
+  for (const stage of stages.slice(0,3)) closing[stage.id] = await e.assign(sessionId,stage,f2);
+  for (const stage of stages.slice(0,2)) {
+   await h.asUser(f1.owner);await e.submit(closing[stage.id],sheetFor(stage.definition));
+   await h.asUser(users.recruiter);await e.submit(closing[stage.id],sheetFor(stage.definition));
+  }
+  await h.asUser(f1.owner);
+  await e.submit(closing[stages[2].id],sheetFor(stages[2].definition));
+  await e.reconcile(closing[stages[0].id],[agreed(0,'meets')]);
+  await h.remove(f2.shortlistId);
+  await assert.rejects(e.reconcile(closing[stages[1].id],[agreed(0,'meets')]),error => error.code==='42501' && /shortlisted/.test(error.message));
+  await h.asUser(users.recruiter);
+  await assert.rejects(e.confirm(closing[stages[0].id]),error => error.code==='42501' && /shortlisted/.test(error.message));
+  await h.asUser(f1.owner);f2.shortlistId = await h.add(f2);
+  await h.asAdmin();
+  assert.equal(await count(db,'private.ac_reconciliations where application_id=$1 and confirmation is null',[f2.application.id]),1);
+ });
+
+ await t.test('a closed session is frozen: no sheet, pair, reconciliation, answer or entry changes its report', async () => {
   await h.asUser(users.recruiter);await assert.rejects(e.setStatus(sessionId,'closed'),forbidden);
-  await h.asUser(f1.owner);await e.setStatus(sessionId,'closed');
+  await h.asUser(f1.owner);
+  const before = JSON.stringify((await e.read(sessionId)).finalists);
+  await e.setStatus(sessionId,'closed');
   await assert.rejects(e.setStatus(sessionId,'open'),denied('PT409'));
   await assert.rejects(e.record(sessionId,f2,null,'expert_consultation',{note:'Notatka po zamknięciu sesji.'}),denied('42501'));
-  await assert.rejects(e.assign(sessionId,stages[1],f2),denied('42501'));
+  await assert.rejects(e.assign(sessionId,stages[3],f2),denied('42501'));
+  // The unchanged R13 RPCs are stopped by the pair guard on the session's stage revisions.
+  await assert.rejects(call('public.ac_assign_pair',[f2.application.id,stages[3].definitionId,f1.owner,users.recruiter]),denied('42501'));
+  await assert.rejects(e.reconcile(closing[stages[1].id],[agreed(0,'meets')]),denied('42501'));
+  await h.asUser(users.recruiter);
+  await assert.rejects(e.submit(closing[stages[2].id],sheetFor(stages[2].definition)),denied('42501'));
+  await assert.rejects(e.confirm(closing[stages[0].id]),denied('42501'));
+  await assert.rejects(e.confirm(closing[stages[0].id],'disputed','Niezgoda zgłoszona po zamknięciu sesji.'),denied('42501'));
+  // Below the RPCs the tables refuse the same writes.
+  await h.asAdmin();await db.query("select set_config('request.jwt.claim.sub',$1,false)",[users.recruiter]);
+  await assert.rejects(db.query("update private.ac_reconciliations set confirmation='confirmed',confirmed_by=$2,confirmed_at=now() where pair_id=$1",[closing[stages[0].id],users.recruiter]),denied('42501'));
+  await assert.rejects(db.query("insert into private.ac_reconciliations(pair_id,company_id,recruitment_id,application_id,items,recorded_by) values($1,$2,$3,$4,'[]',$5)",
+   [closing[stages[1].id],f2.companyId,f2.recruitment.id,f2.application.id,users.recruiter]),denied('42501'));
+  await assert.rejects(db.query("update private.ac_paired_sheets set second_sheet=first_sheet,second_submitted_at=now() where id=$1",[closing[stages[2].id]]),denied('42501'));
+  assert.equal(await count(db,'private.ac_paired_sheets where id=$1 and second_sheet is null',[closing[stages[2].id]]),1);
+  assert.equal(await count(db,'private.ac_reconciliations where application_id=$1',[f2.application.id]),1);
+  assert.equal(await count(db,'private.ac_reconciliations where application_id=$1 and confirmation is null',[f2.application.id]),1);
+  await h.asUser(f1.owner);
   const closed = await e.read(sessionId);assert.equal(closed.session.status,'closed');assert.ok(closed.session.closedAt);
+  assert.equal(JSON.stringify(closed.finalists),before,'the report of a closed session is exactly the report at closing');
  });
 
  await t.test('reapplying the migration is refused without modifying existing data', async () => {
@@ -385,7 +460,7 @@ test('AC session R16: plan → finalists → two assessors → reconciliation �
   await assert.rejects(e.record(sessionId,f2,null,'expert_consultation',{note:'Notatka po wycofaniu funkcji.'}),denied('42501'));
   assert.ok(!(await x.preview(f2)).blockers.includes('schema_dependency_unknown'));
   assert.equal((await x.preview(f2)).counts['private.ac_session_finalists'],1);
-  assert.equal(await call('public.ac_find_pair',[f2.application.id,stages[0].definitionId]),null);
+  assert.equal(await call('public.ac_find_pair',[f2.application.id,stages[0].definitionId]),closing[stages[0].id]);
  });
 });
 

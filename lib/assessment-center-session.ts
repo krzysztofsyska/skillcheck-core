@@ -166,9 +166,12 @@ export function parseAssessmentCenterSession(input: unknown) {
     const raw = object(value);
     if (!Number.isInteger(raw.slot) || (raw.slot as number) < 1 || (raw.slot as number) > AC_FINALIST_LIMIT) fail();
     const stageRows = list(raw.stages, AC_STAGE_LIMIT);
-    if (stageRows.length !== stages.length) fail();
-    return {
+    if (stageRows.length !== stages.length || typeof raw.textHidden !== 'boolean') fail();
+    const finalist = {
       applicationId: id(raw.applicationId), slot: raw.slot as number,
+      // True while the caller still owes an independent sheet for this finalist: the RPC
+      // then withholds every free-text record, so none of it can steer that sheet.
+      textHidden: raw.textHidden as boolean,
       expertNotes: list(raw.expertNotes, 200).map(note => {
         const item = object(note);
         return { note: text(item.note, 8000), authorId: id(item.authorId), createdAt: time(item.createdAt) };
@@ -179,6 +182,8 @@ export function parseAssessmentCenterSession(input: unknown) {
         return { stageId: stage.id, pair: parsePair(row.pair, stage.definitionId, stage.definition), entries: parseEntries(row.entries) };
       }),
     };
+    if (finalist.textHidden && (finalist.expertNotes.length || finalist.stages.some(stage => stage.entries.length))) fail();
+    return finalist;
   });
   if (new Set(finalists.map(finalist => finalist.applicationId)).size !== finalists.length) fail();
   const planned = list(session.plannedCompetencies, 24).map(value => competencyKey(text(value, 200)));
@@ -223,7 +228,7 @@ export function buildAssessmentCenterSessionReport(session: AssessmentCenterSess
     finalistAdvice: finalistAdvice(session.finalists.length),
     stages: session.stages.map(({ id: stageId, ordinal, type, title, counterpartBrief, definition }) => ({ id: stageId, ordinal, type, title, counterpartBrief, exerciseTitle: definition.title })),
     finalists: session.finalists.map(finalist => ({
-      applicationId: finalist.applicationId, slot: finalist.slot,
+      applicationId: finalist.applicationId, slot: finalist.slot, textHidden: finalist.textHidden,
       competencies: session.session.plannedCompetencies.map(competency => {
         const evidence = session.stages.flatMap((stage, stageIndex) => {
           const criterionIndex = stage.definition.criteria.findIndex(criterion => competencyKey(criterion.competency) === competency);

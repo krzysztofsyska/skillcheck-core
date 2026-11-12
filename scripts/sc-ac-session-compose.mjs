@@ -13,7 +13,7 @@ const r13 = pinned('supabase/migrations/20261106120000_sc_ac_inventory_r13.sql',
 const r15 = pinned('supabase/migrations/20261107164252_sc019_catalog_orders.sql','38a70fb37c9e42bf60b3f333770b312a3199a9126360ea3642f55eac0868a08c');
 const domain = readFileSync('db/components/sc-ac-session.sql','utf8');
 const sourceSignature = '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44';
-const signature = '8408d01335341053b516a379bb1ed1a5d14e059f69724e19230bba2fe713bd25';
+const signature = 'e958cb168fc311a1e908b374cfc1bfee6524945b56f00e9639899ad72f75aea8';
 function fn(source,name){
  const start = source.search(new RegExp(`create (?:or replace )?function ${name.replaceAll('.','\\.')}\\(`));
  const end = source.indexOf('$$;',start);if(start<0||end<0)throw Error('Missing source '+name);
@@ -34,12 +34,13 @@ const expectedConfig = name => ['private.erasure_row_candidates','public.get_ret
 const candidateTables = ['private.ac_session_entries','private.ac_reconciliations','private.ac_session_finalists'];
 const newTables = ['private.ac_sessions','private.ac_session_stages',...[...candidateTables].reverse()];
 const publicRpcs = ['public.ac_session_create(uuid,text,text[])','public.ac_session_add_stage(uuid,text,text,uuid,text)','public.ac_session_remove_last_stage(uuid)',
- 'public.ac_session_add_finalist(uuid,uuid)','public.ac_session_set_status(uuid,text)',
+ 'public.ac_session_add_finalist(uuid,uuid)','public.ac_session_remove_finalist(uuid,uuid)','public.ac_session_set_status(uuid,text)',
  'public.ac_session_assign_pair(uuid,uuid,uuid,uuid,uuid)','public.ac_record_reconciliation(uuid,jsonb)',
  'public.ac_confirm_reconciliation(uuid,text,text)','public.ac_session_record_entry(uuid,uuid,uuid,text,jsonb)',
  'public.ac_session_find(uuid)','public.ac_session_read(uuid)'];
 const privateFunctions = ['private.ac_competency_key(text)','private.ac_session_uncovered(uuid)','private.ac_session_config_guard()',
- 'private.ac_session_row_guard()','private.ac_session_lock(uuid,boolean)','private.ac_session_lock_finalist(uuid,uuid)',
+ 'private.ac_session_row_guard()','private.ac_session_pair_guard()','private.ac_pair_open_session(uuid,uuid,uuid,uuid)',
+ 'private.ac_pair_lock_session(uuid)','private.ac_session_lock(uuid,boolean)','private.ac_session_lock_finalist(uuid,uuid)',
  'private.erasure_row_candidates(text,jsonb)','private.erasure_inventory_rows(uuid,uuid[])'];
 const pinnedFunction = (source,[name,args],strict) => {
  const owner = name.endsWith('erasure_purge_engine')?'erasure_purge_owner':'postgres';
@@ -79,7 +80,7 @@ end $preflight$;`,domain,`
 alter function private.erasure_inventory_rows(uuid,uuid[]) rename to erasure_inventory_rows_r15;
 alter function private.erasure_row_candidates(text,jsonb) rename to erasure_row_candidates_r15;
 create function private.erasure_row_candidates(adapter text,data jsonb) returns uuid[]
-language plpgsql security definer set search_path='' as $$
+language plpgsql stable security definer set search_path='' as $$
 declare subject uuid;
 begin
  if adapter in (${candidateTables.map(t=>`'${t}'`).join(',')}) then

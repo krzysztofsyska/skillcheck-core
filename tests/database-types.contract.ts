@@ -196,6 +196,7 @@ type ExpectedFunctions =
   | "ac_session_add_stage"
   | "ac_session_remove_last_stage"
   | "ac_session_add_finalist"
+  | "ac_session_remove_finalist"
   | "ac_session_set_status"
   | "ac_session_assign_pair"
   | "ac_record_reconciliation"

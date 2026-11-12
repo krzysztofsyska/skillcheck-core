@@ -98,6 +98,9 @@ test('malformed payloads fail closed instead of rendering a partial report', () 
     payload => { payload.finalists[0].stages[0].entries[0].body.extra = 'pole'; },
     payload => { payload.finalists[0].stages[1].pair = { state: 'ready' }; },
     payload => { payload.finalists[0].expertNotes[0].createdAt = 'kiedyś'; },
+    // "Text withheld" together with text is a contradiction, never rendered.
+    payload => { payload.finalists[0].textHidden = true; },
+    payload => { delete payload.finalists[1].textHidden; },
   ];
   for (const [index, mutate] of broken.entries()) {
     const payload = sessionPayload(); mutate(payload);
@@ -105,6 +108,8 @@ test('malformed payloads fail closed instead of rendering a partial report', () 
   }
   for (const value of [null, [], {}, { session: {} }]) assert.throws(() => parseAssessmentCenterSession(value));
   assert.doesNotThrow(() => parseAssessmentCenterSession(sessionPayload({ status: 'draft' })));
+  const withheld = sessionPayload(); withheld.finalists[1].textHidden = true;
+  assert.equal(report(withheld).finalists[1].textHidden, true);
 });
 
 test('reconciliation form: one decision per criterion, justified; no free rating outside the form contract', () => {

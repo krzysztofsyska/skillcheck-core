@@ -4,10 +4,10 @@ import { hrbpCaseTemplate } from '../../lib/assessment-center-session-template.t
 export { users, hrbpCaseTemplate };
 export const sessionMigration = '20261112120000_sc_ac_session_inventory_r16.sql';
 export const sessionRollback = '20261112120000_sc_ac_session_inventory_r16_down.sql';
-export const sessionSignature = '8408d01335341053b516a379bb1ed1a5d14e059f69724e19230bba2fe713bd25';
+export const sessionSignature = 'e958cb168fc311a1e908b374cfc1bfee6524945b56f00e9639899ad72f75aea8';
 export const sessionTables = ['private.ac_sessions','private.ac_session_stages','private.ac_session_finalists','private.ac_reconciliations','private.ac_session_entries'];
 export const candidateTables = ['private.ac_session_finalists','private.ac_reconciliations','private.ac_session_entries'];
-export const sessionRpcs = ['ac_session_create','ac_session_add_stage','ac_session_remove_last_stage','ac_session_add_finalist','ac_session_set_status','ac_session_assign_pair',
+export const sessionRpcs = ['ac_session_create','ac_session_add_stage','ac_session_remove_last_stage','ac_session_add_finalist','ac_session_remove_finalist','ac_session_set_status','ac_session_assign_pair',
  'ac_record_reconciliation','ac_confirm_reconciliation','ac_session_record_entry','ac_session_find','ac_session_read'];
 // Synthetic observations only. `ratings` overrides single criteria by index.
 export const sheetFor = (definition,ratings={}) => definition.criteria.map((_,criterionIndex) => {

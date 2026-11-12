@@ -29,6 +29,7 @@ function failure(error: { code?: string; message?: string }): AcSessionActionSta
   if (error.code === 'PT409') return { error: 'Stan sesji zmienił się albo zapis już istnieje. Odśwież stronę i sprawdź, co zostało zapisane.' };
   if (error.code === '22023') return { error: 'Sprawdź wypełnione pola: brakuje wymaganej treści albo jest za krótka.' };
   if (message.includes('Finalist must be shortlisted')) return { error: 'Finalistą może być tylko osoba z aktualnej krótkiej listy tej rekrutacji.' };
+  if (message.includes('Session is not open')) return { error: 'Sesja nie jest otwarta. W szkicu i po zamknięciu nie można dodawać ocen, uzgodnień ani zapisów.' };
   if (message.includes('Assessor required')) return { error: 'Ten zapis może dodać tylko asesor przypisany do tego etapu.' };
   return { error: 'Nie zapisano. Sprawdź uprawnienia oraz stan rekrutacji i sesji.' };
 }
@@ -100,6 +101,14 @@ export async function addAcSessionFinalist(route: AcSessionRoute, _previous: AcS
   const application = field(form, 'application');
   if (!uuid.test(application)) return { error: 'Wybierz osobę z krótkiej listy.' };
   const result = await loaded.base.client.rpc('ac_session_add_finalist', { session: loaded.sessionId, application });
+  return result.error ? failure(result.error) : done(route);
+}
+
+export async function removeAcSessionFinalist(route: AcSessionRoute, applicationId: string, _previous: AcSessionActionState, _form: FormData): Promise<AcSessionActionState> {
+  const loaded = await sessionOf(route, true);
+  if ('error' in loaded) return loaded;
+  if (!uuid.test(applicationId)) return { error: 'Nieprawidłowy finalista.' };
+  const result = await loaded.base.client.rpc('ac_session_remove_finalist', { session: loaded.sessionId, application: applicationId });
   return result.error ? failure(result.error) : done(route);
 }
 

@@ -537,6 +537,7 @@ export type Database = {
       ac_session_add_stage: {Args:{session:string;kind:string;stage_title:string;revision:string;counterpart:string|null};Returns:string};
       ac_session_remove_last_stage: {Args:{session:string};Returns:undefined};
       ac_session_add_finalist: {Args:{session:string;application:string};Returns:string};
+      ac_session_remove_finalist: {Args:{session:string;application:string};Returns:undefined};
       ac_session_set_status: {Args:{session:string;next_status:string};Returns:undefined};
       ac_session_assign_pair: {Args:{session:string;stage:string;application:string;first_id:string;second_id:string};Returns:string};
       ac_record_reconciliation: {Args:{pair_id:string;decisions:Json};Returns:string};

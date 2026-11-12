@@ -10,7 +10,7 @@ import {
 } from '../../../../../../lib/assessment-center-session';
 import {
   addAcSessionFinalist, addAcSessionStage, assignAcSessionPair, confirmAcReconciliation, createAcSession, createAcSessionFromTemplate,
-  recordAcReconciliation, recordAcSessionEntry, removeLastAcSessionStage, setAcSessionStatus,
+  recordAcReconciliation, recordAcSessionEntry, removeAcSessionFinalist, removeLastAcSessionStage, setAcSessionStatus,
 } from './actions';
 import { AcSessionForm } from './forms';
 
@@ -147,6 +147,9 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
       const raw = session.finalists[finalistIndex];
       return <article key={finalist.applicationId}>
         <h3>{nameOf(finalist.applicationId)}</h3>
+        {isOwner && editable && status === 'draft' && <AcSessionForm action={removeAcSessionFinalist.bind(null, route, finalist.applicationId)}
+          legend="Korekta listy finalistów" button="Usuń z sesji" saved="Usunięto finalistę z sesji."><p>Możliwe tylko przed otwarciem sesji, dopóki dla tej osoby nic nie zapisano.</p></AcSessionForm>}
+        {finalist.textHidden && <p role="status">Masz jeszcze nieoddany niezależny arkusz dla tej osoby. Do czasu jego oddania nie pokazujemy zapisów tekstowych (prób, informacji zwrotnych, notatek eksperta), żeby nie wpływały na Twoją ocenę.</p>}
 
         <h4>Dowody według kompetencji</h4>
         {finalist.competencies.map(item => <section key={item.competency}><h5>{item.competency}</h5>
@@ -195,20 +198,20 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
                 <label>Powód niezgody (wymagany przy niezgodzie)<textarea name="note" maxLength={2000} /></label>
               </AcSessionForm>}
 
-            <dl>
+            {!finalist.textHidden && <dl>
               <dt>Pierwsza próba</dt><dd>{attempt.firstAttempt ? <><span className="cv-text">{attempt.firstAttempt.work}</span> ({who(attempt.firstAttempt.authorId)}, {when(attempt.firstAttempt.createdAt)})</> : AC_NO_DATA}</dd>
               <dt>Informacja zwrotna asesora</dt><dd>{attempt.feedback ? <><span className="cv-text">{attempt.feedback.feedback}</span> ({who(attempt.feedback.authorId)}, {when(attempt.feedback.createdAt)})</> : AC_NO_DATA}</dd>
               <dt>Poprawiona praca</dt><dd>{attempt.revisedAttempt ? <><span className="cv-text">{attempt.revisedAttempt.work}</span> ({who(attempt.revisedAttempt.authorId)}, {when(attempt.revisedAttempt.createdAt)})</> : AC_NO_DATA}</dd>
               <dt>Dowód zmiany</dt><dd>{attempt.changeProof ? <><strong>{changeLabel(attempt.changeProof.assessment)}</strong>. Co się zmieniło: <span className="cv-text">{attempt.changeProof.changes}</span>
                 {attempt.changeProof.evidence ? <> Dowód: <span className="cv-text">{attempt.changeProof.evidence}</span></> : <> Dowód: {AC_NO_DATA}</>} ({who(attempt.changeProof.authorId)}, {when(attempt.changeProof.createdAt)})</> : AC_NO_DATA}</dd>
-            </dl>
-            {processOpen && !attempt.firstAttempt && <AcSessionForm action={entry('first_attempt')} legend="Zapisz pierwszą próbę" button="Zapisz pierwszą próbę" saved="Zapisano pierwszą próbę. Tego zapisu nie można zmienić.">
+            </dl>}
+            {processOpen && !finalist.textHidden && !attempt.firstAttempt && <AcSessionForm action={entry('first_attempt')} legend="Zapisz pierwszą próbę" button="Zapisz pierwszą próbę" saved="Zapisano pierwszą próbę. Tego zapisu nie można zmienić.">
               <label>Praca finalisty w pierwszej próbie (co najmniej 20 znaków)<textarea name="work" minLength={20} maxLength={20000} required /></label></AcSessionForm>}
-            {processOpen && attempt.firstAttempt && !attempt.feedback && isAssessor && <AcSessionForm action={entry('feedback')} legend="Informacja zwrotna asesora" button="Zapisz informację zwrotną" saved="Zapisano informację zwrotną.">
+            {processOpen && !finalist.textHidden && attempt.firstAttempt && !attempt.feedback && isAssessor && <AcSessionForm action={entry('feedback')} legend="Informacja zwrotna asesora" button="Zapisz informację zwrotną" saved="Zapisano informację zwrotną.">
               <label>Informacja zwrotna po pierwszej próbie (co najmniej 20 znaków)<textarea name="feedback" minLength={20} maxLength={8000} required /></label></AcSessionForm>}
-            {processOpen && attempt.feedback && !attempt.revisedAttempt && <AcSessionForm action={entry('revised_attempt')} legend="Zapisz poprawioną pracę" button="Zapisz poprawioną pracę" saved="Zapisano poprawioną pracę. Pierwsza próba pozostaje bez zmian.">
+            {processOpen && !finalist.textHidden && attempt.feedback && !attempt.revisedAttempt && <AcSessionForm action={entry('revised_attempt')} legend="Zapisz poprawioną pracę" button="Zapisz poprawioną pracę" saved="Zapisano poprawioną pracę. Pierwsza próba pozostaje bez zmian.">
               <label>Poprawiona praca finalisty (co najmniej 20 znaków)<textarea name="work" minLength={20} maxLength={20000} required /></label></AcSessionForm>}
-            {processOpen && attempt.revisedAttempt && !attempt.changeProof && isAssessor && <AcSessionForm action={entry('change_proof')} legend="Dowód zmiany" button="Zapisz dowód zmiany" saved="Zapisano dowód zmiany.">
+            {processOpen && !finalist.textHidden && attempt.revisedAttempt && !attempt.changeProof && isAssessor && <AcSessionForm action={entry('change_proof')} legend="Dowód zmiany" button="Zapisz dowód zmiany" saved="Zapisano dowód zmiany.">
               <label>Co się zmieniło między pierwszą próbą a poprawioną pracą (co najmniej 20 znaków)<textarea name="changes" minLength={20} maxLength={8000} required /></label>
               <label>Ocena dowodu<select name="assessment">{acChangeAssessments.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               <label>Dowód zmiany — konkretny fragment pracy (pozostaw pusty przy „Niewystarczające dane”)<textarea name="evidence" maxLength={4000} /></label></AcSessionForm>}
@@ -216,7 +219,7 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
         })}
 
         <h4>Konsultacja eksperta</h4>
-        {!finalist.expertNotes.length && <p>{AC_NO_DATA}</p>}
+        {!finalist.textHidden && !finalist.expertNotes.length && <p>{AC_NO_DATA}</p>}
         <ul>{finalist.expertNotes.map((note, index) => <li key={index}><span className="cv-text">{note.note}</span> ({who(note.authorId)}, {when(note.createdAt)})</li>)}</ul>
         {processOpen && <AcSessionForm key={finalist.expertNotes.length} action={recordAcSessionEntry.bind(null, route, finalist.applicationId, null, 'expert_consultation')}
           legend="Dodaj notatkę z konsultacji eksperta" button="Dodaj notatkę" saved="Dodano notatkę.">

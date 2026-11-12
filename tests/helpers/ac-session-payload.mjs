@@ -29,7 +29,7 @@ export function sessionPayload({ status = 'open' } = {}) {
       openedAt: status === 'draft' ? null : at(1), closedAt: status === 'closed' ? at(50) : null, finalistLimit: 10, recommendedFinalists: [5, 6] },
     stages,
     finalists: [{
-      applicationId: ids.applicationA, slot: 1,
+      applicationId: ids.applicationA, slot: 1, textHidden: false,
       expertNotes: [{ note: 'NotatkaEksperta: omówiono rozbieżność w planie zmiany.', authorId: ids.owner, createdAt: at(40) }],
       stages: [
         { stageId: ids.stage(0),
@@ -48,6 +48,6 @@ export function sessionPayload({ status = 'open' } = {}) {
               recordedBy: ids.owner, recordedAt: at(25), confirmation: null, confirmedBy: null, confirmedAt: null, disputeNote: null } } },
         empty(3),
       ],
-    }, { applicationId: ids.applicationB, slot: 2, expertNotes: [], stages: stages.map((_, index) => empty(index)) }],
+    }, { applicationId: ids.applicationB, slot: 2, textHidden: false, expertNotes: [], stages: stages.map((_, index) => empty(index)) }],
   };
 }
