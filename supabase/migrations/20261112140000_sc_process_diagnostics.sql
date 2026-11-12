@@ -216,12 +216,13 @@ language sql immutable set search_path = '' as $$
   select round((extract(epoch from (to_at - from_at)) / 86400.0)::numeric, 1)
 $$;
 
--- Napływ CV: wyłącznie liczby i dwie skrajne daty zgłoszeń tej rekrutacji.
+-- Napływ CV: liczby i skrajne daty tylko z widocznych zgłoszeń, z poszanowaniem zamrożenia kandydata.
 create function process.inflow(r public.recruitments) returns jsonb
 language sql stable set search_path = '' as $$
   with apps as (
     select a.created_at from public.applications a
-     where a.company_id = r.company_id and a.recruitment_id = r.id),
+     where a.company_id = r.company_id and a.recruitment_id = r.id
+       and private.erasure_row_visible('public.applications', to_jsonb(a))),
   moment as (select now() as ts)
   select jsonb_build_object(
     'status', r.status,
@@ -360,7 +361,8 @@ begin
   started := process.started_at(r);
 
   select count(*), min(a.created_at) into apps, first_app from public.applications a
-   where a.company_id = target_company and a.recruitment_id = target_recruitment;
+   where a.company_id = target_company and a.recruitment_id = target_recruitment
+     and private.erasure_row_visible('public.applications', to_jsonb(a));
   metrics := metrics || jsonb_build_object('key', 'days_to_first_application', 'unit', 'days',
     'state', case when apps > 0 then 'measured' else 'not_measured' end,
     'value', case when apps > 0 then process.days_between(started, first_app) end,
@@ -369,7 +371,8 @@ begin
 
   -- Wszystkie wpisy krótkiej listy, także później wycofane: liczy się chwila pierwszego wyboru.
   select count(*), min(s.selected_at) into shortlisted, first_shortlist from public.recruitment_shortlist_entries s
-   where s.company_id = target_company and s.recruitment_id = target_recruitment;
+   where s.company_id = target_company and s.recruitment_id = target_recruitment
+     and private.erasure_row_visible('public.recruitment_shortlist_entries', to_jsonb(s));
   metrics := metrics || jsonb_build_object('key', 'days_to_first_shortlist', 'unit', 'days',
     'state', case when shortlisted > 0 then 'measured' else 'not_measured' end,
     'value', case when shortlisted > 0 then process.days_between(started, first_shortlist) end,
@@ -377,7 +380,8 @@ begin
     'scope', jsonb_build_object('source', 'recruitment_shortlist_entries', 'rows', shortlisted, 'period_from', started, 'period_to', first_shortlist));
 
   select count(*), min(e.created_at) into next_stage, first_next_stage from public.application_decision_events e
-   where e.company_id = target_company and e.recruitment_id = target_recruitment and e.new_decision = 'next_stage';
+   where e.company_id = target_company and e.recruitment_id = target_recruitment and e.new_decision = 'next_stage'
+     and private.erasure_row_visible('public.application_decision_events', to_jsonb(e));
   metrics := metrics || jsonb_build_object('key', 'days_to_first_next_stage_decision', 'unit', 'days',
     'state', case when next_stage > 0 then 'measured' else 'not_measured' end,
     'value', case when next_stage > 0 then process.days_between(started, first_next_stage) end,
@@ -393,6 +397,8 @@ begin
             join public.application_decision_events e
               on e.company_id = a.company_id and e.recruitment_id = a.recruitment_id and e.application_id = a.id
            where a.company_id = target_company and a.recruitment_id = target_recruitment
+             and private.erasure_row_visible('public.applications', to_jsonb(a))
+             and private.erasure_row_visible('public.application_decision_events', to_jsonb(e))
            group by a.id, a.created_at) d;
   metrics := metrics || jsonb_build_object('key', 'median_days_application_to_decision', 'unit', 'days',
     'state', case when decided >= min_rows then 'measured' else 'not_measured' end,
