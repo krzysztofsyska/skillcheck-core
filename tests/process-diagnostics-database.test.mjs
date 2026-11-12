@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
 import {
-  diagnosticAreas, diagnosticProblems, parseDiagnosticForm, parseDiagnosticsState, processError, proposeDiagnosticAreas,
+  diagnosticAreas, diagnosticProblems, parseDiagnosticContent, parseDiagnosticForm, parseDiagnosticsState, processError, proposeDiagnosticAreas,
 } from '../lib/process-diagnostics.ts';
 import { describeMetrics, metricKeys } from '../lib/process-metrics.ts';
 
@@ -56,7 +56,10 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
   await h.asUser(users.owner);
   const quietPosition = await h.insert('positions', { company_id: a.companyId, title: 'Sales Ninja B2B LVL 3',
     description: 'Szukamy osoby do działu.', tasks: [], kpis: [], required_competencies: [], status: 'active' });
-  const quiet = await h.insert('recruitments', { company_id: a.companyId, position_id: quietPosition.id, name: 'Cicha rekrutacja', status: 'open' });
+  // Tak jak panel (createRecruitment w app/dashboard/[companyId]/actions.ts): bez statusu, czyli `draft`,
+  // bez opened_at i closed_at. Nic w aplikacji tych pól później nie zmienia.
+  const quiet = await h.insert('recruitments', { company_id: a.companyId, position_id: quietPosition.id, name: 'Cicha rekrutacja' });
+  assert.deepEqual([quiet.status, quiet.opened_at, quiet.closed_at], ['draft', null, null]);
   await h.asAdmin();
   await db.query("update public.recruitments set created_at = now() - interval '20 days 1 hour' where id=$1", [quiet.id]);
   const signatureInstalled = await signature();
@@ -79,7 +82,14 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
       where table_schema='process' and table_name='diagnostic_records' order by 1`)).rows.map(row => row.column_name);
     assert.deepEqual(columns, ['company_id', 'content', 'created_at', 'created_by', 'id', 'inflow_snapshot', 'recommendation',
       'recommendation_kind', 'record_no', 'recruitment_id']);
-    for (const role of ['anon', 'authenticated', 'screening_worker']) {
+    // service_role zwykle nie istnieje w klastrze testowym, a role są wspólne dla całego klastra: inne zestawy
+    // wymagają, żeby jej nie było. Dlatego powstaje tylko wewnątrz transakcji, która jest zawsze wycofywana.
+    // Migracja odbiera jej prawa, gdy istnieje; bez grantu dla PUBLIC rola utworzona później też ich nie ma.
+    const serviceRoleBefore = (await db.query("select count(*)::int n from pg_roles where rolname='service_role'")).rows[0].n;
+    await db.exec('begin');
+    try {
+    if ((await db.query("select count(*)::int n from pg_roles where rolname='service_role'")).rows[0].n === 0) await db.exec('create role service_role nologin');
+    for (const role of ['anon', 'authenticated', 'screening_worker', 'service_role']) {
       assert.equal((await db.query("select has_schema_privilege($1,'process','USAGE') v", [role])).rows[0].v, false, role);
       for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
         assert.equal((await db.query("select has_table_privilege($1,'process.diagnostic_records',$2) v", [role, privilege])).rows[0].v, false, `${role} ${privilege}`);
@@ -89,6 +99,8 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
           role === 'authenticated', `${role} ${fn}`);
       }
     }
+    } finally { await db.exec('rollback'); }
+    assert.equal((await db.query("select count(*)::int n from pg_roles where rolname='service_role'")).rows[0].n, serviceRoleBefore, 'the cluster-wide role list is left as it was');
     const definer = (await db.query(`select p.proname, p.prosecdef, p.proconfig from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname='public' and p.proname like 'process\\_%' order by 1`)).rows;
     assert.equal(definer.length, functions.length);
@@ -108,6 +120,7 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
     assert.deepEqual(empty.history, []);
     assert.equal(empty.inflow.total, 0);
     assert.equal(empty.inflow.days_open, 20);
+    assert.equal(empty.inflow.status, 'draft', 'a panel-created recruitment is a draft and is still judged');
     assert.equal(empty.inflow.start_source, 'created_at');
     assert.equal(empty.inflow.last_application_at, null);
     assert.deepEqual(empty.inflow.weekly.map(week => week.count), [0, 0, 0, 0, 0, 0, 0, 0]);
@@ -117,6 +130,7 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
       applicationsTotal: empty.inflow.total, applicationsLast14Days: empty.inflow.last_14_days,
       title: quietPosition.title, description: quietPosition.description, tasks: quietPosition.tasks });
     assert.equal(proposal.level, 'none');
+    assert.equal(proposal.levelText, 'Przez 20 dni nie wpłynęło żadne CV.');
     assert.deepEqual(proposal.hints.map(hint => hint.area), ['channels', 'role_name', 'tasks', 'job_ad', 'market']);
 
     const first = form({ channels: ['problem', '  Ogłoszenie tylko na stronie firmy.\t'], role_name: ['problem', 'Nazwa z wewnętrznym oznaczeniem.'], tasks: 'ok' },
@@ -173,6 +187,13 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
     await assert.rejects(db.query(`insert into process.diagnostic_records(company_id,recruitment_id,record_no,content,recommendation_kind,recommendation,inflow_snapshot,created_by)
       select company_id,recruitment_id,99,jsonb_set(content,'{areas,tasks,status}','"not_checked"'),'change_budget','x','{}',created_by
         from process.diagnostic_records where record_no=4 and recruitment_id=$1`, [quiet.id]), code('23514'));
+    // Więz nie zależy od kształtu `content`: brak `areas`, brak obszaru albo brak statusu też blokuje budżet.
+    const four = { channels: { status: 'ok' }, role_name: { status: 'ok' }, tasks: { status: 'ok' }, job_ad: { status: 'ok' } };
+    for (const content of ['{}', '{"areas":{}}', '{"areas":null}', JSON.stringify({ areas: four }),
+      JSON.stringify({ areas: { ...four, market: {} } }), JSON.stringify({ areas: { ...four, market: { status: 'later' } } })]) {
+      await assert.rejects(db.query(`insert into process.diagnostic_records(company_id,recruitment_id,record_no,content,recommendation_kind,recommendation,inflow_snapshot,created_by)
+        values($1,$2,99,$3::jsonb,'change_budget','x','{}',$4)`, [a.companyId, quiet.id, content, users.owner]), code('23514'), content);
+    }
   });
 
   await t.test('validation: incomplete or malformed diagnostics are refused and say what is missing', async () => {
@@ -196,6 +217,22 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
       await assert.rejects(send(invalid), says('22023', 'process_diagnostic_invalid'), JSON.stringify(invalid).slice(0, 80));
     }
     for (const kind of ['cut_budget', '', null]) await assert.rejects(send(base, kind), says('22023', 'process_diagnostic_invalid'));
+    // Dane kontaktowe w wolnym tekście: baza odmawia także wtedy, gdy ktoś ominie panel.
+    for (const text of ['Pisać na jan.kowalski@example.com', 'Kandydat: 600 700 800', 'tel. +48 600-700-800']) {
+      await assert.rejects(send(withArea('tasks', { status: 'ok', note: text })), error => {
+        assert.ok(says('22023', 'process_diagnostic_contact_data:tasks')(error), text);
+        assert.match(processError(error), /^Pole „Zadania — notatka”: treść wygląda na adres e-mail lub numer telefonu/);
+        return true;
+      });
+      await assert.rejects(send(base, 'keep_watching', text), says('22023', 'process_diagnostic_contact_data:recommendation'));
+      assert.throws(() => parseDiagnosticContent(withArea('tasks', { status: 'ok', note: text })), /adres e-mail lub numer telefonu/, 'the panel refuses the same text');
+    }
+    await h.asAdmin();
+    for (const [text, expected] of [['Widełki 8 000–9 500 zł, konkurencja 10 000 - 12 000 zł.', false], ['Ogłoszenie wygasło 2026-11-01.', false],
+      ['a@b.pl', true], ['600700800', true], [null, false]]) {
+      assert.equal((await db.query('select process.has_contact_data($1) v', [text])).rows[0].v, expected, String(text));
+    }
+    await h.asUser(users.owner);
     await assert.rejects(send(base, 'keep_watching', 'x'.repeat(1001)), says('22023', 'process_diagnostic_invalid'));
     // Nieaktualny numer ostatniego wpisu (druga karta) — konflikt, bez zapisu.
     for (const stale of [0, 3, 5]) {

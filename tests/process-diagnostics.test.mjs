@@ -92,11 +92,20 @@ test('hints are deterministic, make no AI call and differ for different syntheti
   }
 });
 
-test('inflow level: too early or a draft is "not measured", not "no applications"', () => {
+test('inflow level: too early is "not measured"; a draft recruitment is judged like an open one', () => {
   const facts = { status: 'open', daysOpen: 3, applicationsTotal: 0, applicationsLast14Days: 0 };
   assert.equal(inflowLevel(facts).level, 'not_measured');
   assert.match(inflowLevel(facts).levelText, /^Brak pomiaru: rekrutacja trwa 3 dni/);
-  assert.equal(inflowLevel({ ...facts, daysOpen: 40, status: 'draft' }).level, 'not_measured');
+  // Panel tworzy każdą rekrutację jako `draft` i nie zmienia statusu, a szkic zbiera CV — status nie może wyłączać oceny.
+  for (const status of ['draft', 'open', 'paused', 'closed']) {
+    assert.deepEqual(inflowLevel({ ...facts, daysOpen: 40, status }), { level: 'none', levelText: 'Przez 40 dni nie wpłynęło żadne CV.' }, status);
+    assert.equal(inflowLevel({ ...facts, daysOpen: 3, status }).level, 'not_measured', `${status}: the 7-day rule still applies`);
+  }
+  const draft = proposeDiagnosticAreas({ ...healthy, status: 'draft', daysOpen: 10, applicationsTotal: 0, applicationsLast14Days: 0 });
+  assert.deepEqual([draft.level, areasOf(draft)], ['none', ['channels']], 'the low-inflow hint fires for a panel-created (draft) recruitment');
+  assert.doesNotMatch(read('lib/process-diagnostics.ts'), /status === 'draft'|nie zbiera zgłoszeń\./, 'no branch treats a draft as not collecting');
+  // Akcja panelu rzeczywiście tworzy rekrutację bez statusu (czyli `draft`) — na tym opiera się powyższe.
+  assert.match(read('app/dashboard/[companyId]/actions.ts'), /from\("recruitments"\)\.insert\(\{company_id:companyId,position_id:position\.id,name\}\)/);
   assert.equal(inflowLevel({ ...facts, daysOpen: null }).level, 'not_measured');
   assert.equal(inflowLevel({ ...facts, daysOpen: INFLOW_RULES.minDaysToJudge }).level, 'none');
   assert.equal(inflowLevel({ ...facts, daysOpen: 20, applicationsTotal: 6, applicationsLast14Days: INFLOW_RULES.lowLast14Days - 1 }).level, 'low');
@@ -125,6 +134,15 @@ test('the checklist form maps to canonical content; shape and limits are enforce
   assert.throws(() => parseDiagnosticForm(formFor({}, { recommendation: 'x'.repeat(DIAGNOSTIC_LIMITS.recommendation + 1) })), /Skróć pole „Zalecenie — uzasadnienie”/);
   assert.throws(() => parseDiagnosticForm(formFor({ tasks: ['ok', 'a\u0007b'] })), /niedozwolone znaki/);
   assert.throws(() => parseDiagnosticForm(formFor({}, { channels: ['telepatia'] })), /Niepoprawna lista kanałów/);
+  // Dane kontaktowe w wolnym tekście są odrzucane (wpisu nie da się później poprawić).
+  for (const text of ['Napisać do jan.kowalski@example.com w sprawie ogłoszenia.', 'Kandydat prosił o telefon: 600 700 800.', 'tel. +48 600-700-800', 'Zadzwonić 600700800']) {
+    assert.throws(() => parseDiagnosticForm(formFor({ tasks: ['ok', text] })), /Pole „Zadania — notatka”: treść wygląda na adres e-mail lub numer telefonu\. Nie wpisuj tu danych kandydatów/, text);
+    assert.throws(() => parseDiagnosticForm(formFor({}, { recommendation: text })), /Pole „Zalecenie — uzasadnienie”: treść wygląda na adres e-mail lub numer telefonu/, text);
+  }
+  // Zwykłe liczby z diagnozy (widełki, daty, liczba CV) przechodzą.
+  for (const text of ['Widełki 8 000–9 500 zł brutto, konkurencja daje 10 000 - 12 000 zł.', 'Ogłoszenie wygasło 2026-11-01, odnowić do 15.11.2026.', 'Stawka 8000-9500 zł; 3 CV w 14 dni.', 'Publikacja @ portal branżowy']) {
+    assert.equal(parseDiagnosticForm(formFor({ tasks: ['ok', text] })).content.areas.tasks.note, text);
+  }
   const { market: _dropped, ...four } = parsed.content.areas;
   for (const invalid of [null, [], 'x', {}, { areas: [] }, { areas: four }, { areas: { ...parsed.content.areas, budget: { status: 'ok', note: '' } } },
     { ...parsed.content, channelsUsed: ['job_board', 'job_board'] }, { ...parsed.content, channelsUsed: 'job_board' },
@@ -161,6 +179,8 @@ test('database errors become plain Polish messages; unexpected state is refused'
   assert.equal(processError({ code: '42501', message: 'process_forbidden' }), 'Masz dostęp tylko do odczytu.');
   assert.match(processError({ code: '22023', message: 'process_diagnostic_invalid' }), /Sprawdź pola formularza/);
   assert.match(processError({ code: '54000', message: 'process_diagnostic_limit' }), /maksymalną liczbę zapisów/);
+  assert.match(processError({ code: '22023', message: 'process_diagnostic_contact_data:job_ad' }), /^Pole „Ogłoszenie — notatka”: treść wygląda na adres e-mail lub numer telefonu/);
+  assert.match(processError({ code: '22023', message: 'process_diagnostic_contact_data:recommendation' }), /^Pole „Zalecenie — uzasadnienie”: treść wygląda na adres e-mail/);
   for (const unknown of [null, undefined, {}, { code: 'XX000', message: 'boom' }]) assert.match(processError(unknown), /^Nie udało się zapisać diagnozy/);
 
   const inflow = { status: 'open', started_at: '2026-11-01T10:00:00Z', start_source: 'created_at', closed_at: null, days_open: 11,

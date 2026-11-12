@@ -81,10 +81,17 @@ create table process.diagnostic_records (
   created_by uuid not null,
   created_at timestamptz not null default clock_timestamp(),
   unique (company_id, recruitment_id, record_no),
-  -- Druga linia obrony reguły z #277, niezależna od funkcji zapisu.
+  -- Druga linia obrony reguły z #277, niezależna od funkcji zapisu i od kształtu `content`:
+  -- przy zaleceniu zmiany budżetu KAŻDY z pięciu obszarów musi istnieć i mieć status ok albo problem.
+  -- Brak `areas`, brak obszaru lub brak statusu daje null -> coalesce(false) -> odmowa.
   constraint budget_requires_full_check check (
     recommendation_kind <> 'change_budget'
-    or not (content -> 'areas') @? '$.* ? (@.status == "not_checked")')
+    or coalesce(
+      (content #>> '{areas,channels,status}') in ('ok', 'problem')
+      and (content #>> '{areas,role_name,status}') in ('ok', 'problem')
+      and (content #>> '{areas,tasks,status}') in ('ok', 'problem')
+      and (content #>> '{areas,job_ad,status}') in ('ok', 'problem')
+      and (content #>> '{areas,market,status}') in ('ok', 'problem'), false))
 );
 
 alter table process.diagnostic_records enable row level security;
@@ -135,6 +142,15 @@ language sql immutable set search_path = '' as $$
   end
 $$;
 
+-- Prosta zapora przed danymi kontaktowymi w wolnym tekście: adres e-mail albo ciąg co najmniej
+-- 9 cyfr (z pojedynczymi spacjami lub myślnikami). Te same wzorce co hasContactData()
+-- w lib/process-diagnostics.ts. Nie wykrywa imion i nazwisk. Powód: wpisy są niezmienne i leżą
+-- poza inwentarzem usuwania danych SC-010, więc danych osobowych nie wolno tu w ogóle zapisać.
+create function process.has_contact_data(value text) returns boolean
+language sql immutable set search_path = '' as $$
+  select coalesce(value ~ '[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+' or value ~ '[0-9]([ -]?[0-9]){8,}', false)
+$$;
+
 -- Walidacja i postać kanoniczna diagnozy. Te same reguły co
 -- parseDiagnosticContent() / diagnosticProblems() w lib/process-diagnostics.ts;
 -- baza jest ostateczną granicą.
@@ -161,6 +177,9 @@ begin
     note := process.clean_text(item ->> 'note', 500);
     if status_code not in ('ok', 'problem', 'not_checked') or note is null then
       raise exception 'process_diagnostic_invalid' using errcode = '22023';
+    end if;
+    if process.has_contact_data(note) then
+      raise exception 'process_diagnostic_contact_data:%', area using errcode = '22023';
     end if;
     -- „Problem" bez opisu nie mówi następnej osobie, co poprawić.
     if status_code = 'problem' and note = '' then
@@ -244,7 +263,7 @@ end;
 $$;
 
 revoke all on function process.purge_allowed(uuid), process.guard_record(), process.trim_ws(text),
-  process.clean_text(text, integer), process.normalize_content(jsonb), process.started_at(public.recruitments),
+  process.clean_text(text, integer), process.has_contact_data(text), process.normalize_content(jsonb), process.started_at(public.recruitments),
   process.days_between(timestamptz, timestamptz), process.inflow(public.recruitments),
   process.require_member(uuid, uuid, boolean) from public;
 
@@ -269,6 +288,9 @@ begin
   end if;
   if advice = '' then
     raise exception 'process_diagnostic_incomplete:recommendation' using errcode = '22023';
+  end if;
+  if process.has_contact_data(advice) then
+    raise exception 'process_diagnostic_contact_data:recommendation' using errcode = '22023';
   end if;
   -- #277: kanały, nazwa roli, zadania, ogłoszenie i warunki rynkowe sprawdza się PRZED zmianą budżetu.
   select coalesce(array_agg(a.key order by a.key), array[]::text[]) into unchecked

@@ -59,6 +59,13 @@ export const isRecommendationKind = isOneOf(recommendationKinds);
 /** Ten sam zestaw białych znaków co process.trim_ws() w bazie. */
 export const trimWs = (text: string) => text.replace(/^[ \t\n\r\f\v ]+|[ \t\n\r\f\v ]+$/g, '');
 const controlChars = /[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/;
+// Prosta zapora przed danymi kontaktowymi w wolnym tekście: adres e-mail albo ciąg co najmniej 9 cyfr
+// (z pojedynczymi spacjami lub myślnikami), czyli numer telefonu. Te same wzorce co process.has_contact_data()
+// w bazie. Nie wykrywa imion i nazwisk — to tylko zabezpieczenie przed najczęstszą pomyłką.
+const emailLike = /[^\s@]+@[^\s@]+\.[^\s@]+/;
+const phoneLike = /[0-9](?:[ -]?[0-9]){8,}/;
+export const hasContactData = (text: string) => emailLike.test(text) || phoneLike.test(text);
+export const CONTACT_DATA_MESSAGE = 'wygląda na adres e-mail lub numer telefonu. Nie wpisuj tu danych kandydatów ani innych osób — tego wpisu nie da się później poprawić.';
 
 function cleanText(value: unknown, max: number, label: string): string {
   if (value === null || value === undefined) return '';
@@ -66,6 +73,7 @@ function cleanText(value: unknown, max: number, label: string): string {
   const text = trimWs(value);
   if (text.length > max) throw new Error(`Skróć pole „${label}” do ${max} znaków.`);
   if (controlChars.test(text)) throw new Error(`Pole „${label}” zawiera niedozwolone znaki.`);
+  if (hasContactData(text)) throw new Error(`Pole „${label}”: treść ${CONTACT_DATA_MESSAGE}`);
   return text;
 }
 
@@ -145,7 +153,11 @@ export const INFLOW_RULES = { minDaysToJudge: 7, lowLast14Days: 5, longTitleChar
 
 export type InflowLevel = 'not_measured' | 'none' | 'low' | 'ok';
 export type DiagnosticFacts = {
-  /** Status rekrutacji: draft / open / paused / closed. */
+  /**
+   * Status rekrutacji: draft / open / paused / closed. Tylko informacyjnie — NIE wpływa na ocenę napływu.
+   * Panel tworzy każdą rekrutację jako `draft` i nigdzie nie zmienia statusu, a szkic normalnie zbiera CV
+   * (wgrywanie paczek i preselekcja przyjmują `draft` i `open`), więc „szkic" nie znaczy „nie zbiera zgłoszeń".
+   */
   status: string;
   daysOpen: number | null;
   applicationsTotal: number;
@@ -163,8 +175,7 @@ const salaryWords = /(?<![a-ząćęłńóśźż])zł(?![a-ząćęłńóśźż])|
 const placeWords = /zdaln|hybryd|stacjonarn|biur|lokalizacj|miejsce pracy|siedzib/i;
 
 /** Poziom napływu CV. „not_measured" to brak podstaw do oceny, a nie zero zgłoszeń. */
-export function inflowLevel(facts: Pick<DiagnosticFacts, 'status' | 'daysOpen' | 'applicationsTotal' | 'applicationsLast14Days'>): { level: InflowLevel; levelText: string } {
-  if (facts.status === 'draft') return { level: 'not_measured', levelText: 'Brak pomiaru: rekrutacja jest jeszcze szkicem, więc nie zbiera zgłoszeń.' };
+export function inflowLevel(facts: Pick<DiagnosticFacts, 'daysOpen' | 'applicationsTotal' | 'applicationsLast14Days'>): { level: InflowLevel; levelText: string } {
   if (facts.daysOpen === null || !Number.isFinite(facts.daysOpen)) return { level: 'not_measured', levelText: 'Brak pomiaru: nie wiadomo, od kiedy trwa rekrutacja.' };
   if (facts.daysOpen < INFLOW_RULES.minDaysToJudge) {
     return { level: 'not_measured', levelText: `Brak pomiaru: rekrutacja trwa ${facts.daysOpen} dni, a napływ oceniamy najwcześniej po ${INFLOW_RULES.minDaysToJudge} dniach.` };
@@ -231,6 +242,11 @@ export function processError(error: { code?: string | null; message?: string | n
   if (budget) {
     const names = budget[1].split(',').filter(isDiagnosticArea).map(area => diagnosticAreaLabels[area]);
     return `Zanim zalecisz zmianę budżetu, sprawdź wszystkie obszary. Jeszcze nie sprawdzone: ${names.join(', ')}.`;
+  }
+  const contact = /process_diagnostic_contact_data:([a-z_]+)/.exec(message);
+  if (contact) {
+    const label = isDiagnosticArea(contact[1]) ? `${diagnosticAreaLabels[contact[1]]} — notatka` : 'Zalecenie — uzasadnienie';
+    return `Pole „${label}”: treść ${CONTACT_DATA_MESSAGE}`;
   }
   const incomplete = /process_diagnostic_incomplete:([a-z_.]+)/.exec(message);
   if (incomplete) {

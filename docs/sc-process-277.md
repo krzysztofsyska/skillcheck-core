@@ -60,7 +60,8 @@ Bez identyfikatorów i bez dat zgłoszeń.
 
 1. **Budżet na końcu.** Zalecenia `change_budget` nie da się zapisać, dopóki którykolwiek z pięciu obszarów ma
    status `not_checked`. Funkcja zwraca `process_budget_requires_full_check:<obszary>` (22023), a tabela ma
-   dodatkowo więz `budget_requires_full_check`, niezależny od funkcji. Obszar sprawdzony z wynikiem `problem`
+   dodatkowo więz `budget_requires_full_check`, niezależny od funkcji i od kształtu treści: wymaga, żeby każdy
+   z pięciu obszarów istniał i miał status `ok` albo `problem` (brak `areas` lub obszaru też blokuje). Obszar sprawdzony z wynikiem `problem`
    liczy się jako sprawdzony.
 2. Status `problem` wymaga notatki (`process_diagnostic_incomplete:<obszar>.note`).
 3. Zalecenie `fix_areas` wymaga co najmniej jednego obszaru ze statusem `problem`.
@@ -95,7 +96,11 @@ Z prostych faktów wskazuje obszary w kolejności sprawdzania:
 | w opisie nie widać wynagrodzenia lub miejsca pracy | warunki rynkowe |
 
 Progi są umowne i jawne (`INFLOW_RULES`). To wskazówka, nie diagnoza i nie decyzja. Rekrutacja krótsza niż 7 dni
-albo będąca szkicem ma poziom napływu „brak pomiaru”, a nie „brak zgłoszeń”.
+ma poziom napływu „brak pomiaru”, a nie „brak zgłoszeń”.
+
+**Status rekrutacji nie wpływa na ocenę napływu.** Panel tworzy każdą rekrutację ze statusem `draft`
+(`createRecruitment` nie podaje statusu) i nigdzie go nie zmienia, a szkic normalnie zbiera CV — wgrywanie paczek
+i preselekcja przyjmują `draft` i `open`. Szkic jest więc oceniany tak samo jak rekrutacja otwarta.
 
 ## Wskaźniki
 
@@ -161,8 +166,20 @@ w starym wpisie diagnozy zostaje — to cztery liczby, z których nie da się od
 
 ## Minimalizacja i retencja
 
-- Zapisywane są wyłącznie dane firmy o rekrutacji. Notatki są wolnym tekstem rekrutera; formularz prosi, żeby
-  nie wpisywać danych kandydatów.
+- Zapisywane są wyłącznie dane firmy o rekrutacji.
+- **Notatki i uzasadnienie zalecenia to wolny tekst, który po zapisie jest niezmienny i leży poza inwentarzem
+  usuwania danych SC-010.** Automatyczne usuwanie danych kandydata tych wpisów nie obejmuje i nie przeszukuje.
+  Dlatego danych osobowych nie wolno tu wpisywać: formularz o to prosi, a panel i baza odrzucają tekst, który
+  zawiera adres e-mail albo ciąg co najmniej 9 cyfr (numer telefonu) — błąd
+  `process_diagnostic_contact_data:<pole>` (22023). To prosta zapora na najczęstszą pomyłkę; imion i nazwisk
+  nie wykrywa.
+- **Procedura na żądanie usunięcia danych (art. 17 RODO), gdy dane osobowe mimo to trafią do wpisu.** Wpisu nie
+  da się poprawić ani usunąć z panelu. Jedyna droga to ręczne, uprzywilejowane usunięcie przez osobę z dostępem
+  do bazy, w jednej transakcji: `select set_config('process.purge_company', '<uuid firmy>', true);` a potem
+  `delete from process.diagnostic_records where company_id = '<uuid firmy>' and id = '<id wpisu>';`. Ustawienie
+  działa tylko w tej transakcji i tylko dla wskazanej firmy; bez niego wyzwalacz odmawia. Na produkcji jest to
+  zmiana danych poza zwykłym pipeline'em — wymaga decyzji właściciela i odnotowania (kto, kiedy, który wpis,
+  na czyje żądanie). Usuwany jest cały wpis; pozostałe wpisy rekrutacji zachowują swoje numery.
 - `created_by` to identyfikator użytkownika firmy, który zapisał wpis. Nie jest zwracany do panelu.
 - Wpisy żyją tak długo jak firma. Usuwa je wyłącznie przyszła, uprzywilejowana procedura usuwania firmy, która
   w tej samej transakcji ustawi `set_config('process.purge_company', '<uuid firmy>', true)`. Nic w tej migracji
@@ -194,8 +211,11 @@ Uruchomienie: `npm run test:process`, `npm run test:process-db` (natywny Postgre
 - **Usunięta rekrutacja.** Tabela nie ma klucza obcego do `public.recruitments`, więc po usunięciu rekrutacji jej
   wpisy zostają w bazie, ale są nieosiągalne (każda funkcja wymaga istniejącej rekrutacji tej firmy). Posprząta
   je procedura usuwania firmy.
-- **Brak daty otwarcia.** Panel nie ustawia dziś `opened_at`, więc początek rekrutacji to zwykle data jej
-  utworzenia. Odpowiedź mówi o tym wprost (`start_source`).
+- **Brak daty otwarcia, zamknięcia i zmiany statusu.** Nic w aplikacji nie ustawia dziś `opened_at`, `closed_at`
+  ani nie zmienia `status` (rekrutacja zostaje `draft`). Skutki: początek rekrutacji to data jej utworzenia
+  (odpowiedź mówi o tym wprost, `start_source`); „rekrutacja trwa N dni” rośnie bez końca; wskaźnik
+  `recruitment_duration_days` pozostaje „brak pomiaru: rekrutacja nie została jeszcze zamknięta”, dopóki nie
+  powstanie funkcja zamykania rekrutacji. Kod liczy go poprawnie, gdy `closed_at` jest ustawione (test bazy).
 - **Podpowiedzi czytają opis stanowiska, nie opublikowane ogłoszenie.** System nie przechowuje treści ogłoszenia
   ani listy kanałów, dlatego to rekruter potwierdza stan faktyczny na liście.
 - **Daty krótkiej listy.** Wpisy krótkiej listy są niezmienne, więc wskaźnik liczy pierwszy wpis, także później
