@@ -80,6 +80,24 @@ test('AC session native PostgreSQL: the tenth slot, the shortlist rule and the p
   await assert.rejects(h.remove(people[8].shortlistId),busy);
   await rival.exec('commit');
  } finally { await rival.exec('rollback'); }
+ // A revision is adopted as a stage or gets a plain R13 pair, never both, in either order.
+ const pairOn = (revision,client) => e.call('public.ac_assign_pair',[people[0].application.id,revision,owner,users.recruiter],client);
+ const stageOn = (revision,client) => e.call('public.ac_session_add_stage',[sessionId,'case_study','Etap w wyścigu',revision,null],client);
+ const racedFirst = await e.saveDefinition(people[0],hrbpCaseTemplate.stages[0].definition);
+ const racedSecond = await e.saveDefinition(people[0],hrbpCaseTemplate.stages[0].definition);
+ await db.exec('begin');
+ try {
+  await stageOn(racedFirst,db);
+  await assert.rejects(pairOn(racedFirst,rival),busy);
+  await db.exec('rollback');
+ } finally { await db.exec('rollback'); }
+ await rival.exec('begin');
+ try {
+  await pairOn(racedSecond,rival);
+  await assert.rejects(stageOn(racedSecond,db),busy);
+  await rival.exec('commit');
+ } finally { await rival.exec('rollback'); }
+ await assert.rejects(stageOn(racedSecond,db),error => error.code==='PT409' && /already has assessments/.test(error.message));
  // Two owners' tabs race for the last slot: one finalist is added, the other is refused.
  await db.exec('begin');
  try {

@@ -110,6 +110,12 @@ test('malformed payloads fail closed instead of rendering a partial report', () 
   assert.doesNotThrow(() => parseAssessmentCenterSession(sessionPayload({ status: 'draft' })));
   const withheld = sessionPayload(); withheld.finalists[1].textHidden = true;
   assert.equal(report(withheld).finalists[1].textHidden, true);
+  // Withheld text never includes the candidate's own work; assessor text with the flag is a contradiction.
+  const entry = (kind, body) => ({ kind, body, authorId: ids.recruiter, createdAt: '2026-11-12T09:05:00+00:00' });
+  withheld.finalists[1].stages[0].entries = [entry('first_attempt', { work: 'PracaKandydata: pierwsza próba widoczna dla asesora.' })];
+  assert.match(report(withheld).finalists[1].attempts[0].firstAttempt.work, /^PracaKandydata/);
+  withheld.finalists[1].stages[0].entries.push(entry('feedback', { feedback: 'Informacja zwrotna innego asesora.' }));
+  assert.throws(() => parseAssessmentCenterSession(withheld));
 });
 
 test('reconciliation form: one decision per criterion, justified; no free rating outside the form contract', () => {

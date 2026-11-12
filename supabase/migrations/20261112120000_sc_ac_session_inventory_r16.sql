@@ -345,15 +345,25 @@ end;$$;
 -- Pairs on a session stage belong to the session: the unchanged R13 RPCs (ac_assign_pair,
 -- ac_submit_sheet) can create or fill one only for a finalist of an OPEN session. A draft
 -- or closed session accepts no pair and no sheet, so a closed report cannot change.
+-- Rule R1 holds here too: a finalist taken off the shortlist gets no new pair and no sheet.
 -- Revisions that are not a stage of any session keep the plain R13 behaviour.
 create function private.ac_session_pair_guard() returns trigger language plpgsql security definer set search_path='' as $$
 declare s private.ac_sessions;
 begin
+ if tg_op='INSERT' then
+  -- Serializes a new pair against ac_session_add_stage adopting this revision (which
+  -- takes FOR UPDATE on the same row): one of the two is told to retry, so a revision
+  -- never becomes a stage while a pair on it is being created, in either order.
+  perform 1 from public.exercise_definition_entries d where d.id=new.definition_id for share nowait;
+ end if;
  select x.* into s from private.ac_session_stages g join private.ac_sessions x on x.id=g.session_id
  where g.company_id=new.company_id and g.recruitment_id=new.recruitment_id and g.definition_id=new.definition_id for share of x nowait;
  if s.id is null then return new;end if;
  if s.status<>'open' or not exists(select 1 from private.ac_session_finalists f where f.session_id=s.id and f.application_id=new.application_id) then
   raise exception using errcode='42501',message='Session is not open';end if;
+ perform 1 from public.recruitment_shortlist_entries e where e.company_id=new.company_id and e.recruitment_id=new.recruitment_id
+  and e.application_id=new.application_id and e.removed_at is null for share nowait;
+ if not found then raise exception using errcode='42501',message='Finalist must be shortlisted';end if;
  return new;
 exception when lock_not_available then raise exception using errcode='PT409',message='Assessment busy';end;$$;
 create trigger ac_session_pair_guard before insert or update on private.ac_paired_sheets for each row execute function private.ac_session_pair_guard();
@@ -397,12 +407,20 @@ begin
  if not exists(select 1 from public.exercise_definition_entries d where d.id=revision and d.company_id=s.company_id
   and d.recruitment_id=s.recruitment_id and d.definition->>'kind'='assessment_center') then
   raise exception using errcode='42501',message='Session unavailable';end if;
+ -- A stage starts without assessments. A revision that already has R13 pairs is refused:
+ -- adopting it would close those pairs to their assessors and present assessors chosen
+ -- outside the session as the stage pair. FOR UPDATE on the revision excludes a pair
+ -- being created right now (the pair guard holds FOR SHARE on the same row).
+ perform 1 from public.exercise_definition_entries d where d.id=revision for update nowait;
+ if exists(select 1 from private.ac_paired_sheets p where p.definition_id=revision) then
+  raise exception using errcode='PT409',message='Stage revision already has assessments';end if;
  select coalesce(max(ordinal),0)+1 into next_ordinal from private.ac_session_stages where session_id=s.id;
  if next_ordinal>8 then raise exception using errcode='PT422',message='Stage limit reached';end if;
  insert into private.ac_session_stages(session_id,company_id,recruitment_id,ordinal,stage_type,title,definition_id,counterpart_brief)
  values(s.id,s.company_id,s.recruitment_id,next_ordinal,kind,private.behavior_trim(stage_title),revision,brief) returning id into saved;
  return saved;
-exception when unique_violation then raise exception using errcode='PT409',message='Stage revision already used';end;$$;
+exception when unique_violation then raise exception using errcode='PT409',message='Stage revision already used';
+ when lock_not_available then raise exception using errcode='PT409',message='Session busy';end;$$;
 
 -- A draft plan is corrected by taking back its last stage; stages are never edited in place.
 create function public.ac_session_remove_last_stage(session uuid) returns void
@@ -631,7 +649,8 @@ begin
      from private.ac_session_entries e where not h.hidden and e.session_id=s.id and e.application_id=f.application_id and e.kind='expert_consultation'),'[]'::jsonb),
     'stages',coalesce((select jsonb_agg(jsonb_build_object('stageId',g.id,
       'entries',coalesce((select jsonb_agg(jsonb_build_object('kind',e.kind,'body',e.body,'authorId',e.author_id,'createdAt',e.created_at) order by e.created_at,e.id)
-       from private.ac_session_entries e where not h.hidden and e.session_id=s.id and e.application_id=f.application_id and e.session_stage_id=g.id),'[]'::jsonb),
+       from private.ac_session_entries e where (not h.hidden or e.kind in ('first_attempt','revised_attempt'))
+        and e.session_id=s.id and e.application_id=f.application_id and e.session_stage_id=g.id),'[]'::jsonb),
       'pair',case
        when p.id is null then jsonb_build_object('state','unassigned')
        when not (owner or auth.uid() in (p.first_assessor,p.second_assessor)) then jsonb_build_object('state','restricted')
@@ -647,8 +666,10 @@ begin
      left join private.ac_paired_sheets p on p.application_id=f.application_id and p.definition_id=g.definition_id
      where g.session_id=s.id),'[]'::jsonb)) order by f.slot)
    from private.ac_session_finalists f join public.applications a on a.id=f.application_id and a.company_id=f.company_id
-   -- Free text (work, feedback, expert notes) could carry a rating. A caller who still owes
-   -- an independent sheet for this finalist gets none of it until that sheet is submitted.
+   -- Text written by assessors and experts (feedback, proof of change, expert notes) could
+   -- carry a rating. A caller who still owes an independent sheet for this finalist gets none
+   -- of it until that sheet is submitted. The candidate's own work (first and revised
+   -- attempt) is never withheld: an assessor must read it to assess the stage.
    cross join lateral (select exists(select 1 from private.ac_session_stages g
      join private.ac_paired_sheets p on p.application_id=f.application_id and p.definition_id=g.definition_id
      where g.session_id=s.id and ((p.first_assessor=auth.uid() and p.first_sheet is null)

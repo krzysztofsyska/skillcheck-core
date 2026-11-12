@@ -26,6 +26,7 @@ function failure(error: { code?: string; message?: string }): AcSessionActionSta
     if (message.includes('Stage limit reached')) return { error: 'Sesja może mieć najwyżej 8 etapów.' };
     return { error: 'Sesja wymaga co najmniej jednego etapu i jednego finalisty.' };
   }
+  if (message.includes('Stage revision already has assessments')) return { error: 'To ćwiczenie ma już przypisanych asesorów poza sesją. Zapisz nową wersję ćwiczenia i wybierz ją jako etap.' };
   if (error.code === 'PT409') return { error: 'Stan sesji zmienił się albo zapis już istnieje. Odśwież stronę i sprawdź, co zostało zapisane.' };
   if (error.code === '22023') return { error: 'Sprawdź wypełnione pola: brakuje wymaganej treści albo jest za krótka.' };
   if (message.includes('Finalist must be shortlisted')) return { error: 'Finalistą może być tylko osoba z aktualnej krótkiej listy tej rekrutacji.' };

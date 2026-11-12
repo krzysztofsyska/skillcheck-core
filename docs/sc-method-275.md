@@ -187,4 +187,8 @@ a zapis zadania działa jak dotąd.
   viewer / osoba spoza firmy / anon, dostęp między firmami, niezmienność historii, rozpoczęta próba kontra nowa
   wersja metody, nieaktualna karta kontra szkic utworzony po zatwierdzeniu, białe znaki w kompetencjach, definicje
   utworzone w bazie przez generowanie i korektę propozycji AI, rollback i ponowna instalacja. Wymaga `SC19_TEST_DATABASE_URL` i `SC19_TEST_PG_MAJOR`.
+  Uwaga po SC-AC-SESSION (#276, inwentarz R16): plik migracji SC-METHOD jest przypięty do sygnatury R15, więc po
+  instalacji R16 nie da się go zainstalować ponownie po rollbacku — potrzebna jest nowa, sprawdzona migracja naprzód.
+  Rollback działa przy R15 i R16. Test pokazuje odmowę ponownej instalacji na pełnym łańcuchu oraz rollback i
+  ponowną instalację na pozycji R15 (łańcuch tylko do migracji SC-METHOD).
 - Oba zestawy są w `.github/workflows/checks.yml`; zestaw bazodanowy także w `.github/workflows/sc19-migrations.yml`.

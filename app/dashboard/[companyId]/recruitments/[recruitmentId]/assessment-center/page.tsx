@@ -149,7 +149,7 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
         <h3>{nameOf(finalist.applicationId)}</h3>
         {isOwner && editable && status === 'draft' && <AcSessionForm action={removeAcSessionFinalist.bind(null, route, finalist.applicationId)}
           legend="Korekta listy finalistów" button="Usuń z sesji" saved="Usunięto finalistę z sesji."><p>Możliwe tylko przed otwarciem sesji, dopóki dla tej osoby nic nie zapisano.</p></AcSessionForm>}
-        {finalist.textHidden && <p role="status">Masz jeszcze nieoddany niezależny arkusz dla tej osoby. Do czasu jego oddania nie pokazujemy zapisów tekstowych (prób, informacji zwrotnych, notatek eksperta), żeby nie wpływały na Twoją ocenę.</p>}
+        {finalist.textHidden && <p role="status">Masz jeszcze nieoddany niezależny arkusz dla tej osoby. Do czasu jego oddania nie pokazujemy tego, co zapisali inni asesorzy i ekspert (informacji zwrotnych, dowodów zmiany, notatek), żeby nie wpływało to na Twoją ocenę. Praca kandydata pozostaje widoczna.</p>}
 
         <h4>Dowody według kompetencji</h4>
         {finalist.competencies.map(item => <section key={item.competency}><h5>{item.competency}</h5>
@@ -165,6 +165,7 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
         {session.stages.map((stage, stageIndex) => {
           const { pair } = raw.stages[stageIndex], attempt = finalist.attempts[stageIndex];
           const isAssessor = pair.state === 'ready' && pair.sheets.some(sheet => sheet.authorId === user.id);
+          const withheld = finalist.textHidden ? 'niewidoczne do czasu oddania Twojego arkusza' : AC_NO_DATA;
           const entry = (kind: Parameters<typeof recordAcSessionEntry>[3]) => recordAcSessionEntry.bind(null, route, finalist.applicationId, stage.id, kind);
           return <section key={stage.id}><h5>{stage.title}</h5>
             {pair.state === 'unassigned' && <p>Asesorzy: {AC_NO_DATA} — nie przypisano.</p>}
@@ -198,14 +199,14 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
                 <label>Powód niezgody (wymagany przy niezgodzie)<textarea name="note" maxLength={2000} /></label>
               </AcSessionForm>}
 
-            {!finalist.textHidden && <dl>
+            <dl>
               <dt>Pierwsza próba</dt><dd>{attempt.firstAttempt ? <><span className="cv-text">{attempt.firstAttempt.work}</span> ({who(attempt.firstAttempt.authorId)}, {when(attempt.firstAttempt.createdAt)})</> : AC_NO_DATA}</dd>
-              <dt>Informacja zwrotna asesora</dt><dd>{attempt.feedback ? <><span className="cv-text">{attempt.feedback.feedback}</span> ({who(attempt.feedback.authorId)}, {when(attempt.feedback.createdAt)})</> : AC_NO_DATA}</dd>
+              <dt>Informacja zwrotna asesora</dt><dd>{attempt.feedback ? <><span className="cv-text">{attempt.feedback.feedback}</span> ({who(attempt.feedback.authorId)}, {when(attempt.feedback.createdAt)})</> : withheld}</dd>
               <dt>Poprawiona praca</dt><dd>{attempt.revisedAttempt ? <><span className="cv-text">{attempt.revisedAttempt.work}</span> ({who(attempt.revisedAttempt.authorId)}, {when(attempt.revisedAttempt.createdAt)})</> : AC_NO_DATA}</dd>
               <dt>Dowód zmiany</dt><dd>{attempt.changeProof ? <><strong>{changeLabel(attempt.changeProof.assessment)}</strong>. Co się zmieniło: <span className="cv-text">{attempt.changeProof.changes}</span>
-                {attempt.changeProof.evidence ? <> Dowód: <span className="cv-text">{attempt.changeProof.evidence}</span></> : <> Dowód: {AC_NO_DATA}</>} ({who(attempt.changeProof.authorId)}, {when(attempt.changeProof.createdAt)})</> : AC_NO_DATA}</dd>
-            </dl>}
-            {processOpen && !finalist.textHidden && !attempt.firstAttempt && <AcSessionForm action={entry('first_attempt')} legend="Zapisz pierwszą próbę" button="Zapisz pierwszą próbę" saved="Zapisano pierwszą próbę. Tego zapisu nie można zmienić.">
+                {attempt.changeProof.evidence ? <> Dowód: <span className="cv-text">{attempt.changeProof.evidence}</span></> : <> Dowód: {AC_NO_DATA}</>} ({who(attempt.changeProof.authorId)}, {when(attempt.changeProof.createdAt)})</> : withheld}</dd>
+            </dl>
+            {processOpen && !attempt.firstAttempt && <AcSessionForm action={entry('first_attempt')} legend="Zapisz pierwszą próbę" button="Zapisz pierwszą próbę" saved="Zapisano pierwszą próbę. Tego zapisu nie można zmienić.">
               <label>Praca finalisty w pierwszej próbie (co najmniej 20 znaków)<textarea name="work" minLength={20} maxLength={20000} required /></label></AcSessionForm>}
             {processOpen && !finalist.textHidden && attempt.firstAttempt && !attempt.feedback && isAssessor && <AcSessionForm action={entry('feedback')} legend="Informacja zwrotna asesora" button="Zapisz informację zwrotną" saved="Zapisano informację zwrotną.">
               <label>Informacja zwrotna po pierwszej próbie (co najmniej 20 znaków)<textarea name="feedback" minLength={20} maxLength={8000} required /></label></AcSessionForm>}

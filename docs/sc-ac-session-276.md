@@ -30,7 +30,12 @@ Migracja `supabase/migrations/20261112120000_sc_ac_session_inventory_r16.sql` je
 - **Jedna sesja na rekrutację.** Po otwarciu plan i etapy są zamrożone.
 - **Zamknięta sesja jest zamrożona w całości.** Po zamknięciu nie da się oddać arkusza, przypisać pary, zapisać uzgodnienia, odpowiedzieć na nie ani dopisać zapisu — raport zamkniętej sesji jest dokładnie raportem z chwili zamknięcia. Dla arkuszy i par pilnuje tego trigger `ac_session_pair_guard` na `private.ac_paired_sheets` (funkcje R13 `ac_assign_pair` i `ac_submit_sheet` pozostają niezmienione): para na rewizji będącej etapem sesji może powstać i być wypełniana tylko dla finalisty **otwartej** sesji. W szkicu również nie da się utworzyć pary na rewizji etapu. Rewizje, które nie są etapem żadnej sesji, działają jak w R13.
 - **Uzgodnienie jest czynnością sesji.** Zapis i odpowiedź wymagają otwartej sesji, w której para jest oceną finalisty na etapie, oraz — ponownie — aktywnego wpisu na krótkiej liście (R1). Pary spoza sesji (zwykłe R13) nie mają uzgodnień.
-- **Teksty nie są kanałem bocznym.** Zapisy tekstowe (próby, informacja zwrotna, dowód zmiany, notatki eksperta) mogłyby zdradzić ocenę. Osoba, która ma jeszcze nieoddany niezależny arkusz dla danego finalisty, nie dostaje z `ac_session_read` żadnego z tych tekstów dla tego finalisty (`textHidden`), dopóki nie odda arkusza.
+- **Teksty asesorów nie są kanałem bocznym.** Informacja zwrotna, dowód zmiany i notatki eksperta mogłyby zdradzić ocenę. Osoba, która ma jeszcze nieoddany niezależny arkusz dla danego finalisty (na dowolnym etapie), nie dostaje z `ac_session_read` żadnego z tych tekstów dla tego finalisty (`textHidden`), dopóki nie odda arkusza. Zakres jest celowo taki:
+  - `textHidden` działa na finalistę, przez wszystkie etapy, i obejmuje informację zwrotną, dowód zmiany oraz notatki eksperta;
+  - praca kandydata (pierwsza próba i poprawiona praca) **nie jest** ukrywana — asesor musi ją przeczytać, żeby ocenić etap. Te zapisy wpisuje zespół, więc zasada „nie wpisujemy ocen do treści pracy” pozostaje zasadą pracy zespołu, nie blokadą systemu;
+  - osoba z nieoddanym arkuszem nadal widzi oddane w całości arkusze (`ready`) i uzasadnienia uzgodnień z innych etapów, na których jest asesorem lub właścicielem — to oceny innych kompetencji tego samego finalisty, pokazywane zgodnie z regułą R13.
+- **Etapem może zostać tylko rewizja bez ocen.** `ac_session_add_stage` odrzuca (`PT409`) rewizję, która ma już pary R13: jej pary zostałyby zamknięte dla asesorów, a asesorzy wybrani poza sesją staliby się parą etapu. Wyścig z równoczesnym utworzeniem pary jest zamknięty blokadą wiersza rewizji (`FOR UPDATE` w `ac_session_add_stage`, `FOR SHARE` w strażniku par): jedna ze stron dostaje `PT409` i ponawia. Nie pozostaje znane okno wyścigu przy poziomie izolacji READ COMMITTED, którego wymaga blokada kandydata z R13.
+- **R1 także dla par i arkuszy.** Strażnik par wymaga aktywnego wpisu na krótkiej liście (z blokadą wiersza) przy każdym utworzeniu pary i każdym oddaniu arkusza na etapie sesji — również przez niezmienione RPC z R13.
 - Kolumna dziennika nazywa się `session_stage_id`, bo wspólny strażnik wierszy rezerwuje klucz `stage_id` dla `public.assessment_stages`.
 
 ## RPC
@@ -40,7 +45,7 @@ Wszystkie funkcje są `SECURITY DEFINER` z pustym `search_path`, mają `EXECUTE`
 | RPC | Kto | Kontrakt |
 | --- | --- | --- |
 | `ac_session_create(recruitment, session_title, competencies)` | właściciel | Szkic sesji; 1–24 różne kompetencje; druga sesja dla tej samej rekrutacji → `PT409`. |
-| `ac_session_add_stage(session, kind, stage_title, revision, counterpart)` | właściciel | Tylko w szkicu; rewizja AC tej rekrutacji; opis roli człowieka wymagany dla symulacji. |
+| `ac_session_add_stage(session, kind, stage_title, revision, counterpart)` | właściciel | Tylko w szkicu; rewizja AC tej rekrutacji bez żadnej pary R13 (inaczej `PT409`); opis roli człowieka wymagany dla symulacji. |
 | `ac_session_remove_last_stage(session)` | właściciel | Tylko w szkicu: cofa ostatnio dodany etap (etapów nie edytuje się w miejscu). |
 | `ac_session_add_finalist(session, application)` | właściciel | Aktywna krótka lista tej rekrutacji; jedenasta osoba → `PT422`. |
 | `ac_session_remove_finalist(session, application)` | właściciel | Tylko w szkicu i tylko gdy dla tej osoby nic nie zapisano (brak par i zapisów); miejsce wraca do puli. Ta sama reguła jest w strażniku tabeli. |
@@ -52,7 +57,7 @@ Wszystkie funkcje są `SECURITY DEFINER` z pustym `search_path`, mają `EXECUTE`
 | `ac_session_find(recruitment)` | właściciel/rekruter | Identyfikator sesji albo `null`. |
 | `ac_session_read(session)` | właściciel/rekruter | Jeden model odczytu dla strony i raportu. |
 
-Arkusze nadal oddaje się przez `ac_submit_sheet` (R13). `ac_session_read` pokazuje arkusze i ich uzgodnienie dopiero po oddaniu obu i tylko dwóm asesorom etapu oraz właścicielowi — rekruter spoza pary dostaje stan `restricted`. Przed oddaniem obu arkuszy nikt nie widzi cudzego arkusza. Teksty finalisty są wstrzymane dla osoby z nieoddanym arkuszem dla tego finalisty. Kandydat zamrożony do usunięcia znika z odczytu. Rola `viewer`, inna firma i nieznane identyfikatory dostają odmowę.
+Arkusze nadal oddaje się przez `ac_submit_sheet` (R13). `ac_session_read` pokazuje arkusze i ich uzgodnienie dopiero po oddaniu obu i tylko dwóm asesorom etapu oraz właścicielowi — rekruter spoza pary dostaje stan `restricted`. Przed oddaniem obu arkuszy nikt nie widzi cudzego arkusza. Informacja zwrotna, dowód zmiany i notatki eksperta finalisty są wstrzymane dla osoby z nieoddanym arkuszem dla tego finalisty; praca kandydata pozostaje widoczna. Kandydat zamrożony do usunięcia znika z odczytu. Rola `viewer`, inna firma i nieznane identyfikatory dostają odmowę.
 
 Zapisy dla finalisty biorą blokady z R13 (`ac_lock_application`): kandydat, konfiguracja restore, zgłoszenie, uprawnienia, status procesu, znaczniki wycofania — do końca transakcji. Zamknięta rekrutacja, wycofane zgłoszenie lub zamrożenie blokują nowe zapisy; historia pozostaje czytelna dla uprawnionych.
 
@@ -78,6 +83,8 @@ R16 wymaga dokładnego R15 (sygnatura `1093b01d…be44`) i niezmienionych źród
 
 Rollback `supabase/rollbacks/20261112120000_sc_ac_session_inventory_r16_down.sql` odbiera dostęp do RPC sesji, zachowując dowody, R16 i możliwość kontrolowanego usunięcia danych; RPC par z R13 pozostają. Ponowne włączenie wymaga sprawdzonej migracji naprzód. Żaden rollback nie usuwa zapisanych ocen.
 
+Strażnik par (`ac_session_pair_guard`) celowo zostaje po rollbacku. Usunięcie triggera zmieniłoby sprawdzoną sygnaturę R16 i zablokowało każde usuwanie danych, a jego wyłączenie pozwoliłoby zmieniać arkuszami raport zamkniętej sesji. Skutek, dokładnie: po rollbacku etapy **otwartej** sesji nadal przyjmują pary i arkusze finalistów z krótkiej listy przez RPC z R13; rewizje będące etapami sesji w szkicu lub zamkniętej pozostają zamknięte dla par (szkicu nie da się już otworzyć, bo RPC sesji są odebrane). Aby użyć zwykłych par R13 dla takiego ćwiczenia, zapisuje się jego nową wersję — rewizja, która nie jest etapem żadnej sesji, działa dokładnie jak w R13 (pokrywa to test rollbacku).
+
 **Zmiana poza modułem:** trzy rollbacki SC-020 (`20261109190000`, `20261109200000`, `20261109220000`) przypinały sygnaturę R15 i po instalacji R16 odmawiałyby działania. Preflight akceptuje teraz jedną z dwóch sprawdzonych sygnatur (R15 albo R16) i zapamiętuje ją na czas transakcji, a postflight wymaga dokładnie tej samej wartości; same rollbacki nie dotykają relacji inwentarza.
 
 To samo dotyczy rollbacku SC-METHOD (`20261112100000_sc_method_profile_down.sql`, #275): akceptuje R15 albo R16 i wymaga tej samej wartości po zakończeniu. Sama migracja SC-METHOD nie jest zmieniana i pozostaje przypięta do R15 — w łańcuchu działa przed R16. Po instalacji R16 jej ponowna instalacja po rollbacku wymaga nowej, sprawdzonej migracji naprzód (test pokazuje odmowę na pełnym łańcuchu i ponowną instalację na pozycji R15). Schemat `method` nie ma relacji ani kluczy obcych w inwentarzu `public`/`private`, więc nie wpływa na sygnaturę R16.
@@ -87,7 +94,8 @@ To samo dotyczy rollbacku SC-METHOD (`20261112100000_sc_method_profile_down.sql`
 - Asesorzy są pokazywani identyfikatorem użytkownika („Ty” dla własnych zapisów), tak jak w istniejącym widoku arkuszy par.
 - Po utworzeniu sesji nie zmienia się listy planowanych kompetencji; w szkicu można cofnąć ostatni etap i usunąć finalistę bez zapisów.
 - Utworzenie sesji z szablonu HRBP to kilka wywołań, nie jedna transakcja; po błędzie w połowie zostaje szkic do dokończenia ręcznie.
-- Wstrzymanie tekstów dotyczy odczytu z systemu; nie zastąpi zasady, że asesorzy nie omawiają ocen przed oddaniem arkuszy. Testy SC-020 na pełnym łańcuchu oczekują R16.
+- Wstrzymanie tekstów dotyczy odczytu z systemu i tekstów asesorów oraz eksperta; nie obejmuje pracy kandydata i nie zastąpi zasady, że asesorzy nie omawiają ocen przed oddaniem arkuszy.
+- Ćwiczenie, które ma już pary R13, nie może zostać etapem; trzeba zapisać jego nową wersję.
 
 ## Weryfikacja
 

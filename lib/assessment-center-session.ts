@@ -169,8 +169,9 @@ export function parseAssessmentCenterSession(input: unknown) {
     if (stageRows.length !== stages.length || typeof raw.textHidden !== 'boolean') fail();
     const finalist = {
       applicationId: id(raw.applicationId), slot: raw.slot as number,
-      // True while the caller still owes an independent sheet for this finalist: the RPC
-      // then withholds every free-text record, so none of it can steer that sheet.
+      // True while the caller still owes an independent sheet for this finalist: the RPC then
+      // withholds what assessors and experts wrote (feedback, proof of change, expert notes),
+      // so none of it can steer that sheet. The candidate's work itself stays readable.
       textHidden: raw.textHidden as boolean,
       expertNotes: list(raw.expertNotes, 200).map(note => {
         const item = object(note);
@@ -182,7 +183,8 @@ export function parseAssessmentCenterSession(input: unknown) {
         return { stageId: stage.id, pair: parsePair(row.pair, stage.definitionId, stage.definition), entries: parseEntries(row.entries) };
       }),
     };
-    if (finalist.textHidden && (finalist.expertNotes.length || finalist.stages.some(stage => stage.entries.length))) fail();
+    if (finalist.textHidden && (finalist.expertNotes.length || finalist.stages.some(stage =>
+      stage.entries.some(entry => entry.kind === 'feedback' || entry.kind === 'change_proof')))) fail();
     return finalist;
   });
   if (new Set(finalists.map(finalist => finalist.applicationId)).size !== finalists.length) fail();
