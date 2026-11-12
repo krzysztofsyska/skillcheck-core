@@ -531,6 +531,19 @@ export type Database = {
       ac_find_pair: {Args:{application:string;revision:string};Returns:string|null};
       ac_read_pair: {Args:{pair_id:string};Returns:Json};
       ac_submit_sheet: {Args:{pair_id:string;sheet:Json};Returns:undefined};
+      // SC-AC-SESSION (#276, 20261112120000_sc_ac_session_inventory_r16.sql). jsonb results are
+      // validated in lib/assessment-center-session.ts; the tables are private and RPC-only.
+      ac_session_create: {Args:{recruitment:string;session_title:string;competencies:string[]};Returns:string};
+      ac_session_add_stage: {Args:{session:string;kind:string;stage_title:string;revision:string;counterpart:string|null};Returns:string};
+      ac_session_remove_last_stage: {Args:{session:string};Returns:undefined};
+      ac_session_add_finalist: {Args:{session:string;application:string};Returns:string};
+      ac_session_set_status: {Args:{session:string;next_status:string};Returns:undefined};
+      ac_session_assign_pair: {Args:{session:string;stage:string;application:string;first_id:string;second_id:string};Returns:string};
+      ac_record_reconciliation: {Args:{pair_id:string;decisions:Json};Returns:string};
+      ac_confirm_reconciliation: {Args:{pair_id:string;verdict:string;note:string|null};Returns:undefined};
+      ac_session_record_entry: {Args:{session:string;application:string;stage:string|null;entry_kind:string;entry:Json};Returns:string};
+      ac_session_find: {Args:{recruitment:string};Returns:string|null};
+      ac_session_read: {Args:{session:string};Returns:Json};
       list_competency_test_access: { Args:{target:string}; Returns:Json };
       create_competency_test_grant: { Args:{target_application:string;target_definition:string;start_by:string;request_key:string}; Returns:Json };
       rotate_competency_test_grant: { Args:{target:string;expected_revision:number;request_key:string}; Returns:Json };

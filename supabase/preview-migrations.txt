@@ -66,3 +66,5 @@
 20261111090000_sc19_offer_publication.sql
 # SC-P24: dedicated least-privilege login role for the Przelewy24 sandbox checkout (role, grants and policies only; no password, no data).
 20261111140000_sc19_p24_checkout_role.sql
+# SC-AC-SESSION (#276): AC session, coverage plan, finalists from the shortlist (max 10), reconciliation, second attempt + erasure inventory R16 (RPC-only private tables; UI behind AC_PAIRED_SHEETS_PREVIEW).
+20261112120000_sc_ac_session_inventory_r16.sql

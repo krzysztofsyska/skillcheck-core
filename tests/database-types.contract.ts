@@ -191,7 +191,18 @@ type ExpectedFunctions =
   | "sc021_operator_fx_rates"
   | "sc021_operator_add_fx_rate"
   | "sc021_operator_other_costs"
-  | "sc021_operator_add_other_cost";
+  | "sc021_operator_add_other_cost"
+  | "ac_session_create"
+  | "ac_session_add_stage"
+  | "ac_session_remove_last_stage"
+  | "ac_session_add_finalist"
+  | "ac_session_set_status"
+  | "ac_session_assign_pair"
+  | "ac_record_reconciliation"
+  | "ac_confirm_reconciliation"
+  | "ac_session_record_entry"
+  | "ac_session_find"
+  | "ac_session_read";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;

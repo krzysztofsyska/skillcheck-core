@@ -27,7 +27,10 @@ begin;
 
 do $preflight$
 begin
-  if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
+  -- R15, or R16 once SC-AC-SESSION (#276) is installed: both are reviewed baselines and this
+  -- rollback touches no relation of the public/private inventory, so it cannot move between them.
+  if private.erasure_schema_signature() not in ('1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44',
+      '8408d01335341053b516a379bb1ed1a5d14e059f69724e19230bba2fe713bd25') then
     raise exception 'sc020d_rollback_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
   end if;
 end
@@ -56,7 +59,10 @@ drop function if exists tenant_domains.reverify_due(integer, timestamptz, uuid);
 
 do $postflight$
 begin
-  if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
+  -- R15, or R16 once SC-AC-SESSION (#276) is installed: both are reviewed baselines and this
+  -- rollback touches no relation of the public/private inventory, so it cannot move between them.
+  if private.erasure_schema_signature() not in ('1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44',
+      '8408d01335341053b516a379bb1ed1a5d14e059f69724e19230bba2fe713bd25') then
     raise exception 'sc020d_rollback_inventory_changed:%', private.erasure_schema_signature() using errcode = '55000';
   end if;
   if to_regprocedure('tenant_domains.reverify_due(integer,timestamptz,uuid)') is not null
