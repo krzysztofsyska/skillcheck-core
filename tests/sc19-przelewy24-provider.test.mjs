@@ -19,7 +19,8 @@ const offer = () => ({ id: 'preselection-v1', revision: 'rev-1', plan: 'PRESELEK
 const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => structuredClone(body) });
 
 function fakeP24() {
-  const s = { tx: new Map(), registers: [], verifies: [], nextOrder: 900001, dropRegisterResponse: false };
+  const s = { tx: new Map(), registers: [], verifies: [], reads: 0, nextOrder: 900001, dropRegisterResponse: false,
+    registerReply: null, readReply: null };
   const fetchImpl = async (url, init) => {
     const u = new URL(url);
     assert.equal(u.origin, ORIGIN);
@@ -27,6 +28,7 @@ function fakeP24() {
     if (init.method === 'POST' && u.pathname === '/api/v1/transaction/register') {
       const b = JSON.parse(init.body);
       s.registers.push(b);
+      if (s.registerReply) return s.registerReply;
       const sign = createHash('sha384').update(JSON.stringify({ sessionId: b.sessionId, merchantId: MERCHANT, amount: b.amount, currency: b.currency, crc: CRC })).digest('hex');
       if (b.sign !== sign) return reply(400, { error: 'Incorrect sign', code: 400 });
       if (s.tx.has(b.sessionId)) return reply(400, { error: 'sessionId already used', code: 400 });
@@ -45,6 +47,8 @@ function fakeP24() {
     }
     const m = /^\/api\/v1\/transaction\/by\/sessionId\/(.+)$/.exec(u.pathname);
     if (init.method === 'GET' && m) {
+      s.reads++;
+      if (s.readReply) return s.readReply;
       const t = s.tx.get(decodeURIComponent(m[1]));
       return t ? reply(200, { data: { ...t } }) : reply(404, { error: 'not found', code: 404 });
     }
@@ -113,6 +117,7 @@ test('checkout registers exactly one signed transaction and returns the sandbox 
   assert.equal(r.urlStatus, 'https://skillcheck.pl/api/billing/przelewy24/notify');
   assert.ok(r.urlReturn.startsWith('https://skillcheck.pl/dashboard/'));
   assert.equal(r.email, 'owner@fixture.invalid');
+  assert.equal(r.timeLimit, 0, 'the stored link must stay payable; no 30-minute expiry');
   assert.ok(out.url.startsWith(`${ORIGIN}/trnRequest/`));
   assert.equal(out.amountMinor, 36900);
   const again = await h.checkout();
@@ -123,11 +128,72 @@ test('checkout registers exactly one signed transaction and returns the sandbox 
 test('a lost register response never leads to a second registration', async () => {
   const h = harness();
   h.api.s.dropRegisterResponse = true;
-  await assert.rejects(h.checkout(), e => e.code === 'P24_SESSION_EXISTS');
-  await assert.rejects(h.checkout(), e => e.code === 'P24_SESSION_EXISTS');
+  await assert.rejects(h.checkout(), e => e.code === 'P24_SESSION_EXISTS' && e.httpStatus === 504);
+  await assert.rejects(h.checkout(), e => e.code === 'P24_SESSION_EXISTS' && e.httpStatus === 400);
   assert.equal(h.api.s.tx.size, 1);
   assert.equal(h.api.s.registers.length, 2, 'second attempt was refused by Przelewy24 (duplicate sessionId)');
   assert.equal(h.st.credits.get(id(1)), undefined);
+});
+
+// SC-P24-UNBLOCK-001: a refused registration is named by a fixed code and the
+// numeric HTTP status only; the provider's own message never leaves the adapter.
+const named = (code, httpStatus) => e => e instanceof Error && e.code === code && e.httpStatus === httpStatus &&
+  e.message === code && !/Incorrect|invalid|credential|synthetic/i.test(JSON.stringify(e));
+
+test('401 on register is P24_UNAUTHORIZED and does not read the session', async () => {
+  const h = harness();
+  h.api.s.registerReply = reply(401, { error: 'Incorrect authentication', code: 401 });
+  await assert.rejects(h.checkout(), named('P24_UNAUTHORIZED', 401));
+  assert.equal(h.api.s.reads, 0);
+  assert.equal(h.api.s.tx.size, 0);
+});
+
+test('a rejected register is named: wrong CRC/sign vs other rejection, each with the HTTP status', async () => {
+  const crc = harness();
+  crc.api.s.registerReply = reply(400, { error: 'Incorrect CRC value', code: 400 });
+  await assert.rejects(crc.checkout(), named('P24_SIGN_REJECTED', 400));
+  assert.equal(crc.api.s.reads, 1, 'absence is still confirmed before naming the rejection');
+  const other = harness();
+  other.api.s.registerReply = reply(400, { error: 'Invalid email', code: 400 });
+  await assert.rejects(other.checkout(), named('P24_REGISTER_REJECTED', 400));
+  const design = harness();
+  design.api.s.registerReply = reply(400, { error: 'Session assigned to another design', code: 400 });
+  await assert.rejects(design.checkout(), named('P24_REGISTER_REJECTED', 400));
+  const noBody = harness();
+  noBody.api.s.registerReply = reply(500, null);
+  await assert.rejects(noBody.checkout(), named('P24_REGISTER_REJECTED', 500));
+  // The real signature check of the in-memory operator, with a wrong CRC key configured.
+  const api = fakeP24();
+  const wrong = createPrzelewy24Provider({ config: { ...config, crc: 'another-crc-key-0123' }, scope,
+    urlStatus: 'https://skillcheck.pl/api/billing/przelewy24/notify', urlReturn: () => 'https://skillcheck.pl/x',
+    email: async () => 'owner@fixture.invalid', description: () => 'x' }, api.fetchImpl);
+  const order = { id: id(30), amountMinor: 36900, currency: 'PLN' };
+  await assert.rejects(wrong.createCheckout(order, `sc19:${id(30)}`), named('P24_SIGN_REJECTED', 400));
+});
+
+test('401 on a session read is P24_UNAUTHORIZED', async () => {
+  const h = harness();
+  h.api.s.readReply = reply(401, { error: 'Incorrect authentication', code: 401 });
+  await assert.rejects(h.provider.lookupCheckout({ id: id(31), amountMinor: 36900, currency: 'PLN' }, `sc19:${id(31)}`),
+    named('P24_UNAUTHORIZED', 401));
+});
+
+test('#427: a register that never happened is retried with the same session once the order is past its deadline', async () => {
+  const h = harness();
+  h.api.s.registerReply = reply(401, { error: 'Incorrect authentication', code: 401 });
+  await assert.rejects(h.checkout(), e => e.code === 'P24_UNAUTHORIZED');
+  const [order] = h.st.orders.values();
+  assert.equal(order.sessionId, null);
+  h.st.orders.set(order.id, { ...order, checkoutDeadlineMs: Date.now() - 1 });
+  h.api.s.registerReply = null;
+  const out = await h.checkout(id(11));
+  assert.equal(out.orderId, order.id);
+  assert.equal(h.api.s.registers.length, 2);
+  assert.equal(h.api.s.registers[1].sessionId, sessionIdFor(order.id));
+  assert.equal(h.api.s.registers[1].sessionId, h.api.s.registers[0].sessionId);
+  assert.equal(h.api.s.tx.size, 1);
+  assert.equal(h.st.orders.get(order.id).sessionId, sessionIdFor(order.id));
+  assert.equal(h.st.orders.size, 1);
 });
 
 test('a verified, settled payment grants the order credits exactly once', async () => {

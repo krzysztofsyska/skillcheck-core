@@ -9,6 +9,9 @@ on:
       - 'app/api/billing/**'
       - 'app/dashboard/**/billing/checkout/**'
       - 'tests/sc-019-payment*.mjs'
+      - 'lib/sc19-p24-diagnostic.ts'
+      - 'app/operator/billing/**'
+      - 'tests/sc19-p24-diagnostic.test.mjs'
       - 'tests/sc-019-offer-catalog.test.mjs'
       - 'docs/prototypes/sc19-payment-storage.sql'
       - 'docs/prototypes/sc-019-mvp-credits.sql'
@@ -46,7 +49,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: node --experimental-strip-types --test tests/sc-019-payment-preview.test.mjs tests/sc19-przelewy24-provider.test.mjs tests/sc-019-payments.test.mjs tests/sc-019-payment-http.test.mjs tests/sc-019-payment-postgres.test.mjs tests/sc-019-payment-checkout.test.mjs tests/sc-019-offer-catalog.test.mjs
+      - run: node --experimental-strip-types --test tests/sc-019-payment-preview.test.mjs tests/sc19-przelewy24-provider.test.mjs tests/sc-019-payments.test.mjs tests/sc-019-payment-http.test.mjs tests/sc-019-payment-postgres.test.mjs tests/sc-019-payment-checkout.test.mjs tests/sc-019-offer-catalog.test.mjs tests/sc19-p24-diagnostic.test.mjs
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run build
