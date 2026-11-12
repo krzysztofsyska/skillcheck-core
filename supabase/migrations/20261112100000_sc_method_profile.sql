@@ -491,7 +491,12 @@ begin
   if not found then
     raise exception 'method_forbidden' using errcode = '42501';
   end if;
-  perform pg_advisory_xact_lock(hashtextextended('sc-method:' || r.position_id::text, 0));
+  -- Blokada na tych samych stanowiskach, po których niżej wyszukiwana jest wersja metody
+  -- (position_id definicji), w stałej kolejności — tak samo jak w method_bind_definition.
+  perform pg_advisory_xact_lock(hashtextextended('sc-method:' || p.position_id::text, 0))
+     from (select distinct e.position_id from public.exercise_definition_entries e
+            where e.company_id = target_company and e.recruitment_id = target_recruitment
+            order by e.position_id) p;
   insert into method.definition_bindings (definition_entry_id, company_id, position_id, method_version_id, content_hash, bound_by)
     select e.id, e.company_id, e.position_id, chosen.id, chosen.content_hash, actor
       from public.exercise_definition_entries e

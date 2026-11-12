@@ -433,3 +433,87 @@ test('panel form renders every field of the proposal, with the revision and a re
   assert.match(html, /<button type="submit" value="save" name="intent">Zapisz szkic</);
   assert.match(html, /<button type="submit" value="approve" name="intent">Zapisz i zatwierdź</);
 });
+
+// --- numer zmian idzie razem z treścią formularza (Codex P2) -----------------
+// Prawdziwy komponent z minimalną implementacją hooków: ten sam egzemplarz formularza jest renderowany
+// ponownie z nowszym `revision`, tak jak po nawigacji, która odświeża stan strony bez zmiany `key`.
+function mountForm() {
+  const file = 'app/dashboard/[companyId]/positions/[positionId]/metoda/method-form.tsx';
+  const path = fileURLToPath(new URL(`../${file}`, import.meta.url));
+  const slots = []; let cursor = 0;
+  const hooks = {
+    useState: initial => { const index = cursor++;
+      if (!(index in slots)) slots[index] = typeof initial === 'function' ? initial() : initial;
+      return [slots[index], next => { slots[index] = typeof next === 'function' ? next(slots[index]) : next; }]; },
+    useActionState: (action, initial) => { const index = cursor++;
+      if (!(index in slots)) slots[index] = initial;
+      return [slots[index], async form => { slots[index] = await action(slots[index], form); }, false]; },
+  };
+  const mod = new Module(path); mod.filename = path;
+  const require = createRequire(path);
+  let serverAction = async () => ({});
+  const mocks = { react: hooks, './actions': { saveMethodProfile: (...args) => serverAction(...args) }, '../../../../../../lib/method-profile': method };
+  mod.require = id => Object.hasOwn(mocks, id) ? mocks[id] : require(id);
+  mod._compile(ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText, path);
+  const find = (node, test) => {
+    if (!node || typeof node !== 'object') return null;
+    if (Array.isArray(node)) { for (const child of node) { const hit = find(child, test); if (hit) return hit; } return null; }
+    return test(node) ? node : find(node.props?.children, test);
+  };
+  const render = props => { cursor = 0; return mod.exports.MethodForm({ companyId, positionId, staleCompetencies: [], ...props }); };
+  const read = tree => ({
+    revision: find(tree, node => node.type === 'input' && node.props.name === 'expectedRevision').props.value,
+    goal: find(tree, node => node.type === 'textarea' && node.props.name === 'goal').props.value,
+    submit: form => find(tree, node => node.type === 'form').props.action(form),
+  });
+  return { render: props => read(render(props)), setServerAction: next => { serverAction = next; } };
+}
+
+test('a re-render with a newer revision never raises the revision a form with stale content will send', async () => {
+  const mine = structuredClone(byLevel.specialist.content); mine.goal = 'Treść rekrutera A (stara)';
+  const theirs = structuredClone(byLevel.manager.content); theirs.goal = 'Treść rekrutera B (nowsza)';
+  // Baza: szkic B jest w numerze 2. Zapis z innym numerem to konflikt, dokładnie jak method_profile_save_draft.
+  const s = scenario();
+  let stored = { revision: 2, content: theirs };
+  s.context.access.client.rpc = async (name, args) => {
+    s.calls.push([name, args]);
+    if (name !== 'method_profile_save_draft') return { data: null, error: { code: 'XX000', message: 'unexpected' } };
+    if (args.expected_revision !== stored.revision) return { data: null, error: { code: 'PT409', message: 'method_draft_changed' } };
+    stored = { revision: stored.revision + 1, content: args.draft_content };
+    return { data: stored.revision, error: null };
+  };
+
+  // A otworzył formularz, gdy szkic miał numer 1.
+  const form = mountForm();
+  form.setServerAction(s.action);
+  const opened = form.render({ initial: mine, revision: 1 });
+  assert.equal(opened.revision, 1);
+  // B zapisał szkic (numer 2). A klika „Pokaż" w historii: strona wczytuje stan od nowa i podaje nowszy numer
+  // (oraz nowszą treść) temu samemu egzemplarzowi formularza, bo jego `key` się nie zmienił.
+  const rerendered = form.render({ initial: theirs, revision: 2 });
+  assert.equal(rerendered.goal, 'Treść rekrutera A (stara)', 'the fields keep what A has on screen');
+  assert.equal(rerendered.revision, 1, 'so the revision to send stays the one that content was loaded with');
+
+  // Zapis A: serwer dostaje stary numer i odmawia; szkic B zostaje nietknięty.
+  await rerendered.submit(formFor(mine, 'save', rerendered.revision));
+  assert.deepEqual(s.calls.at(-1), ['method_profile_save_draft', { target_company: companyId, target_position: positionId,
+    draft_content: mine, expected_revision: 1 }]);
+  assert.deepEqual(stored, { revision: 2, content: theirs }, 'B\'s draft was not overwritten');
+  const refused = form.render({ initial: theirs, revision: 2 });
+  assert.equal(refused.revision, 1, 'a refused save does not advance the revision either');
+
+  // Formularz zamontowany od nowa (odświeżenie strony / zmiana `key`) wczytuje treść B razem z jej numerem.
+  const reloaded = mountForm();
+  reloaded.setServerAction(s.action);
+  const fresh = reloaded.render({ initial: theirs, revision: 2 });
+  assert.equal(fresh.goal, 'Treść rekrutera B (nowsza)');
+  assert.equal(fresh.revision, 2);
+  // Własny udany zapis podnosi numer — z wyniku akcji, nie z właściwości.
+  await fresh.submit(formFor(theirs, 'save', fresh.revision));
+  assert.equal(stored.revision, 3);
+  assert.equal(reloaded.render({ initial: theirs, revision: 2 }).revision, 3, 'own successful save advances it even before the page re-renders');
+  assert.equal(reloaded.render({ initial: theirs, revision: 3 }).revision, 3);
+  await reloaded.render({ initial: theirs, revision: 3 }).submit(formFor(theirs, 'save', 3));
+  assert.equal(stored.revision, 4, 'consecutive own saves keep working');
+});

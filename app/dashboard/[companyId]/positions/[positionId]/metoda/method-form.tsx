@@ -14,7 +14,9 @@ type RowText = Omit<EvidenceRow, "criteria"> & { criteria: string };
  * odpowiedzi zostają w formularzu.
  */
 export function MethodForm({ companyId, positionId, initial, revision, staleCompetencies }: {
-  companyId: string; positionId: string; initial: MethodProfileContent; revision: number; staleCompetencies: string[];
+  companyId: string; positionId: string; initial: MethodProfileContent;
+  /** Licznik zmian odpowiadający treści `initial`; czytany tylko przy montowaniu formularza. */
+  revision: number; staleCompetencies: string[];
 }) {
   const [state, action, pending] = useActionState<MethodFormState, FormData>(
     saveMethodProfile.bind(null, companyId, positionId), {},
@@ -24,6 +26,13 @@ export function MethodForm({ companyId, positionId, initial, revision, staleComp
     responsibilityLevel: initial.responsibilityLevel as string,
   });
   const [rows, setRows] = useState<RowText[]>(initial.matrix.map(row => ({ ...row, criteria: row.criteria.join("\n") })));
+  // Numer zmian należy do treści, którą ten formularz wczytał: zapamiętany raz, razem z polami powyżej.
+  // Późniejszy render z nowszym `revision` (np. po kliknięciu „Pokaż" w historii, gdy ktoś inny zapisał
+  // szkic) NIE może go podnieść — pola nadal pokazują starą treść, więc zapis ma skończyć się konfliktem,
+  // a nie nadpisać cudzych zmian. Numer rośnie tylko po własnym udanym zapisie (state.revision) albo gdy
+  // formularz jest montowany od nowa z nową treścią (zmiana `key` na stronie albo odświeżenie).
+  const [loadedRevision] = useState(revision);
+  const expectedRevision = Math.max(state.revision ?? 0, loadedRevision);
   const setField = (name: keyof typeof profile, value: string) => setProfile(current => ({ ...current, [name]: value }));
   const setRow = (index: number, name: keyof RowText, value: string) =>
     setRows(current => current.map((row, i) => i === index ? { ...row, [name]: value } : row));
@@ -33,7 +42,7 @@ export function MethodForm({ companyId, positionId, initial, revision, staleComp
   return <form action={action}>
     {state.error && <p role="alert" className="notice">{state.error}</p>}
     {state.saved && <p role="status" className="notice">Szkic zapisany. Nic nie obowiązuje, dopóki go nie zatwierdzisz.</p>}
-    <input type="hidden" name="expectedRevision" value={Math.max(state.revision ?? 0, revision)} />
+    <input type="hidden" name="expectedRevision" value={expectedRevision} />
     <input type="hidden" name="rows" value={rows.length} />
 
     <label>Po co jest to stanowisko? (cel)
