@@ -29,6 +29,8 @@ export function DiagnosticForm({ companyId, recruitmentId, initial, latestRecord
   const [knownRecordNo, setKnownRecordNo] = useState(latestRecordNo);
   const expectedRecordNo = Math.max(knownRecordNo, state.recordNo ?? 0);
   if (expectedRecordNo !== knownRecordNo) setKnownRecordNo(expectedRecordNo);
+  // Długość jak w PostgreSQL: jeden znak Unicode może zajmować dwie jednostki UTF-16.
+  const clip = (text: string, limit: number) => Array.from(text).slice(0, limit).join("");
   const setArea = (area: DiagnosticArea, field: "status" | "note", value: string) =>
     setAreas(current => ({ ...current, [area]: { ...current[area], [field]: value } }));
   const toggleChannel = (channel: string) =>
@@ -59,8 +61,8 @@ export function DiagnosticForm({ companyId, recruitmentId, initial, latestRecord
       </label>
       <label>Krótka notatka
         <small>Co sprawdzono i co z tego wynika. Bez danych kandydatów.</small>
-        <textarea name={`area.${area}.note`} rows={2} maxLength={DIAGNOSTIC_LIMITS.note} value={areas[area].note}
-          onChange={event => setArea(area, "note", event.target.value)} />
+        <textarea name={`area.${area}.note`} rows={2} value={areas[area].note}
+          onChange={event => setArea(area, "note", clip(event.target.value, DIAGNOSTIC_LIMITS.note))} />
       </label>
     </fieldset>)}
 
@@ -75,8 +77,8 @@ export function DiagnosticForm({ companyId, recruitmentId, initial, latestRecord
       {kind === "change_budget" && unchecked.length > 0 && <p className="notice">Zmianę budżetu można zalecić dopiero po sprawdzeniu
         wszystkich obszarów. Jeszcze nie sprawdzone: {unchecked.map(area => diagnosticAreaLabels[area]).join(", ")}.</p>}
       <label>Uzasadnienie zalecenia
-        <textarea name="recommendation" rows={3} maxLength={DIAGNOSTIC_LIMITS.recommendation} value={recommendation}
-          onChange={event => setRecommendation(event.target.value)} />
+        <textarea name="recommendation" rows={3} value={recommendation}
+          onChange={event => setRecommendation(clip(event.target.value, DIAGNOSTIC_LIMITS.recommendation))} />
       </label>
     </fieldset>
 
