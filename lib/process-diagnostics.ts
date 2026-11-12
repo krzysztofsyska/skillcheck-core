@@ -71,7 +71,8 @@ function cleanText(value: unknown, max: number, label: string): string {
   if (value === null || value === undefined) return '';
   if (typeof value !== 'string') throw new Error(`Pole „${label}” ma niepoprawną treść.`);
   const text = trimWs(value);
-  if (text.length > max) throw new Error(`Skróć pole „${label}” do ${max} znaków.`);
+  // PostgreSQL length(text) liczy punkty kodowe, nie jednostki UTF-16.
+  if (Array.from(text).length > max) throw new Error(`Skróć pole „${label}” do ${max} znaków.`);
   if (controlChars.test(text)) throw new Error(`Pole „${label}” zawiera niedozwolone znaki.`);
   if (hasContactData(text)) throw new Error(`Pole „${label}”: treść ${CONTACT_DATA_MESSAGE}`);
   return text;
