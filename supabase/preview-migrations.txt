@@ -70,3 +70,5 @@
 20261112100000_sc_method_profile.sql
 # SC-AC-SESSION (#276): AC session, coverage plan, finalists from the shortlist (max 10), reconciliation, second attempt + erasure inventory R16 (RPC-only private tables; UI behind AC_PAIRED_SHEETS_PREVIEW).
 20261112120000_sc_ac_session_inventory_r16.sql
+# SC-PROCESS / #277 part A: recruitment diagnostics for low CV inflow and time metrics (own schema `process`, functions and grants only in public; no data seeded).
+20261112140000_sc_process_diagnostics.sql

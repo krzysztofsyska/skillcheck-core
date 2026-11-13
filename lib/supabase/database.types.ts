@@ -416,6 +416,27 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      /** SC-PROCESS / #277 part A recruitment diagnostics (20261112140000_sc_process_diagnostics.sql).
+       * The table lives in schema `process`, closed to API roles; these functions are
+       * the only way in. Reads: any company member. Recording a diagnostic: owner or
+       * recruiter of that company (42501 otherwise). A `change_budget` recommendation is
+       * refused (22023) while any checklist area is `not_checked`.
+       * Shapes: lib/process-diagnostics.ts, lib/process-metrics.ts. */
+      process_record_diagnostic: {
+        Args: {
+          target_company: string; target_recruitment: string; diagnostic: Json;
+          recommendation_kind: string; recommendation: string; expected_record_no: number;
+        };
+        Returns: number;
+      };
+      process_diagnostics_state: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: Json;
+      };
+      process_recruitment_metrics: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: Json;
+      };
       /** SC-METHOD / #275 method profile (20261112100000_sc_method_profile.sql).
        * Tables live in schema `method`, closed to API roles; these functions are the
        * only way in. Reads: any company member. Draft, approval and binding: owner

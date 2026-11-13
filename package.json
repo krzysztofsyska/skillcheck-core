@@ -76,6 +76,8 @@
     "test:ai-cost-db": "node --test --test-concurrency=1 tests/ai-cost-dashboard-database.test.mjs",
     "test:competency": "node --test tests/competency-test.test.mjs",
     "test:method": "node --experimental-strip-types --test tests/method-profile.test.mjs",
+    "test:process": "node --experimental-strip-types --test tests/process-diagnostics.test.mjs",
+    "test:process-db": "node --experimental-strip-types --test --test-concurrency=1 tests/process-diagnostics-database.test.mjs",
     "test:method-db": "node --experimental-strip-types --test --test-concurrency=1 tests/method-profile-database.test.mjs",
     "test:brand": "node --experimental-strip-types --test tests/brand-config.test.mjs tests/brand-ui.test.mjs tests/brand-messages.test.mjs",
     "test:brand-db": "node --experimental-strip-types --test --test-concurrency=1 tests/brand-database.test.mjs",
