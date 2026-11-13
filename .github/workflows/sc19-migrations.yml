@@ -15,6 +15,11 @@ on:
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/sc-ac-session-compose.mjs'
+      - 'db/components/sc-ac-session.sql'
+      - 'tests/ac-session-*.mjs'
+      - 'tests/helpers/ac-session-fixture.mjs'
+      - 'lib/assessment-center-session*.ts'
       - 'scripts/sc-c6-compose.mjs'
       - 'scripts/sc-c6-grant-guard-compose.mjs'
       - 'scripts/sc-c6-revision-compose.mjs'
@@ -70,6 +75,11 @@ on:
       - 'tests/helpers/competency-active-fixture.mjs'
       - 'scripts/sc-wer-c1-compose.mjs'
       - 'scripts/sc-ac-compose.mjs'
+      - 'scripts/sc-ac-session-compose.mjs'
+      - 'db/components/sc-ac-session.sql'
+      - 'tests/ac-session-*.mjs'
+      - 'tests/helpers/ac-session-fixture.mjs'
+      - 'lib/assessment-center-session*.ts'
       - 'scripts/sc-c6-compose.mjs'
       - 'scripts/sc-c6-grant-guard-compose.mjs'
       - 'scripts/sc-c6-revision-compose.mjs'
@@ -151,6 +161,7 @@ jobs:
       # curl there once skipped all of them).
       - run: node scripts/sc-wer-c1-compose.mjs --check
       - run: node scripts/sc-ac-compose.mjs --check
+      - run: node scripts/sc-ac-session-compose.mjs --check
       - run: node scripts/sc-c6-compose.mjs --check
       - run: node scripts/sc19-commerce-inventory-compose.mjs --check
       - run: node scripts/sc-c6-grant-guard-compose.mjs --check
@@ -190,6 +201,7 @@ jobs:
             tests/sc-019-migrations-mvp-e2e.test.mjs tests/preview-db-migrate-workflow.test.mjs \
             tests/competency-active-migration.test.mjs tests/competency-active-concurrency.test.mjs tests/competency-active-limiter.test.mjs tests/competency-active-staff.test.mjs \
             tests/assessment-center-active-database.test.mjs tests/assessment-center-active-concurrency.test.mjs \
+            tests/ac-session-database.test.mjs tests/ac-session-concurrency.test.mjs \
             tests/exercise-ai-inventory.test.mjs tests/exercise-ai-concurrency.test.mjs \
             tests/exercise-ai-grant-guard.test.mjs tests/exercise-ai-grant-guard-concurrency.test.mjs \
             tests/exercise-ai-recruiter-api.test.mjs tests/exercise-ai-recruiter-api-concurrency.test.mjs \

@@ -1,6 +1,6 @@
 # SC-AC-001 — minimalny przepływ oceny
 
-Zakres #271 / PR #272: istniejąca definicja ćwiczenia AC i jej niezmienna rewizja → kryteria i opisowe skale → zapis oceny obserwatora → raport pokazujący dowody. Nie powstaje odrębny silnik WERYFIKACJA ani automatyczna decyzja o zatrudnieniu. Pełne sesje wielu asesorów z #276 pozostają poza zakresem.
+Zakres #271 / PR #272: istniejąca definicja ćwiczenia AC i jej niezmienna rewizja → kryteria i opisowe skale → zapis oceny obserwatora → raport pokazujący dowody. Nie powstaje odrębny silnik WERYFIKACJA ani automatyczna decyzja o zatrudnieniu. Pełne sesje wielu asesorów z #276 pozostają poza zakresem. (Zbudowane później na tym kontrakcie: [sc-ac-session-276.md](sc-ac-session-276.md).)
 
 ## Interfejs użytkownika i danych
 

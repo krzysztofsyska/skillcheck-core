@@ -15,7 +15,10 @@ import {
 } from '../lib/method-profile.ts';
 
 const migration = '20261112100000_sc_method_profile.sql';
-const signature = '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44';
+// Inventory signature SC-METHOD was reviewed against (R15) and the one of the full current chain
+// (R16 since SC-AC-SESSION #276). Schema `method` itself stays outside the inventory.
+const r15 = '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44';
+const signature = 'e958cb168fc311a1e908b374cfc1bfee6524945b56f00e9639899ad72f75aea8';
 const code = (...codes) => error => codes.includes(error.code);
 const says = (sqlstate, text) => error => error.code === sqlstate && error.message.includes(text);
 const sql = name => readFile(new URL(`../supabase/${name}`, import.meta.url), 'utf8');
@@ -458,9 +461,28 @@ test('SC-METHOD method profile: approval, missing data, roles, tenant isolation 
     assert.equal((await db.query("select count(*)::int n from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'method\\_%'")).rows[0].n, 0);
     assert.equal((await db.query('select private.erasure_schema_signature() v')).rows[0].v, signature);
     await db.exec(down); // idempotentny
-    await db.exec(await sql(`migrations/${migration}`));
-    assert.equal((await db.query('select private.erasure_schema_signature() v')).rows[0].v, signature);
-    await assert.rejects(db.exec(await sql(`migrations/${migration}`)), says('55000', 'sc_method_already_installed'));
+    // Migracja SC-METHOD jest przypięta do R15 i nie jest zmieniana. Po R16 (pełny łańcuch) jej
+    // ponowna instalacja wymaga nowej, sprawdzonej migracji naprzód: odmawia atomowo.
+    await assert.rejects(db.exec(await sql(`migrations/${migration}`)), says('55000', 'sc_method_source_schema_unreviewed'));
     await db.exec('rollback');
+    assert.equal((await db.query("select to_regnamespace('method') v")).rows[0].v, null);
+    assert.equal((await db.query('select private.erasure_schema_signature() v')).rows[0].v, signature);
   });
+});
+
+test('SC-METHOD at its reviewed position in the chain (R15): rollback, re-install and refusal of a second install', async t => {
+  const e = await activeBoot(t, { fullChain: true, throughMigration: migration });
+  const { db, h } = e;
+  await h.asAdmin();
+  const down = await sql('rollbacks/20261112100000_sc_method_profile_down.sql');
+  assert.equal((await db.query('select private.erasure_schema_signature() v')).rows[0].v, r15);
+  await db.exec(down);
+  assert.equal((await db.query("select to_regnamespace('method') v")).rows[0].v, null);
+  assert.equal((await db.query('select private.erasure_schema_signature() v')).rows[0].v, r15);
+  await db.exec(down); // idempotentny
+  await db.exec(await sql(`migrations/${migration}`));
+  assert.equal((await db.query("select count(*)::int n from pg_namespace where nspname='method'")).rows[0].n, 1);
+  assert.equal((await db.query('select private.erasure_schema_signature() v')).rows[0].v, r15);
+  await assert.rejects(db.exec(await sql(`migrations/${migration}`)), says('55000', 'sc_method_already_installed'));
+  await db.exec('rollback');
 });

@@ -27,9 +27,13 @@ begin;
 
 do $preflight$
 begin
-  if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
+  -- R15, or R16 once SC-AC-SESSION (#276) is installed: both are reviewed baselines. The
+  -- accepted value is remembered for this transaction and the postflight requires the same one.
+  if private.erasure_schema_signature() not in ('1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44',
+      'e958cb168fc311a1e908b374cfc1bfee6524945b56f00e9639899ad72f75aea8') then
     raise exception 'sc020d_rollback_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
   end if;
+  perform set_config('sc020.rollback_signature', private.erasure_schema_signature(), true);
 end
 $preflight$;
 
@@ -56,7 +60,9 @@ drop function if exists tenant_domains.reverify_due(integer, timestamptz, uuid);
 
 do $postflight$
 begin
-  if private.erasure_schema_signature() is distinct from '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44' then
+  -- The inventory signature must be exactly the one the preflight accepted: this rollback
+  -- touches no relation of the public/private inventory.
+  if private.erasure_schema_signature() is distinct from current_setting('sc020.rollback_signature', true) then
     raise exception 'sc020d_rollback_inventory_changed:%', private.erasure_schema_signature() using errcode = '55000';
   end if;
   if to_regprocedure('tenant_domains.reverify_due(integer,timestamptz,uuid)') is not null
