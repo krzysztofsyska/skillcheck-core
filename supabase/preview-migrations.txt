@@ -72,3 +72,5 @@
 20261112120000_sc_ac_session_inventory_r16.sql
 # SC-PROCESS / #277 part A: recruitment diagnostics for low CV inflow and time metrics (own schema `process`, functions and grants only in public; no data seeded).
 20261112140000_sc_process_diagnostics.sql
+# SC-PROCESS #277 B: explicit-purpose follow-up and R17 erasure coverage, test data only.
+20261113090000_sc_process_followup_r17.sql

@@ -260,7 +260,7 @@ test('every metric carries a definition and a data scope; not measured is never 
   // Przejście próby i retencja: zdefiniowane, ale nigdy nie udawane — nawet gdyby baza zwróciła liczbę.
   for (const key of ['probation_pass_rate', 'retention_rate', 'days_to_hire']) {
     assert.equal(metricCatalogue[key].availableToday, false);
-    assert.match(metricCatalogue[key].dataScope, /część B/);
+    assert.match(metricCatalogue[key].dataScope, key === 'days_to_hire' ? /część B/ : /odrębne uprawnienia/);
     const forged = describeMetrics(rawMetrics({ [key]: { state: 'measured', value: 100, reason: null } })).find(metric => metric.key === key);
     assert.deepEqual([forged.state, forged.value], ['not_measured', null], `${key}: cannot be measured in part A`);
   }

@@ -45,6 +45,9 @@ on:
       - 'tests/method-profile-database.test.mjs'
       - 'lib/method-profile.ts'
       - 'tests/process-diagnostics-database.test.mjs'
+      - 'tests/process-followup-database.test.mjs'
+      - 'db/components/process-followup.sql'
+      - 'scripts/process-followup-compose.mjs'
       - 'lib/process-diagnostics.ts'
       - 'lib/process-metrics.ts'
       - 'tests/sc19-auto-trial-database.test.mjs'
@@ -108,6 +111,9 @@ on:
       - 'tests/method-profile-database.test.mjs'
       - 'lib/method-profile.ts'
       - 'tests/process-diagnostics-database.test.mjs'
+      - 'tests/process-followup-database.test.mjs'
+      - 'db/components/process-followup.sql'
+      - 'scripts/process-followup-compose.mjs'
       - 'lib/process-diagnostics.ts'
       - 'lib/process-metrics.ts'
       - 'tests/sc19-auto-trial-database.test.mjs'
@@ -219,6 +225,7 @@ jobs:
             tests/sc19-offer-publication.test.mjs \
             tests/method-profile-database.test.mjs \
             tests/process-diagnostics-database.test.mjs \
+            tests/process-followup-database.test.mjs \
             tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
             tests/db-migrate/normalize-line-endings.test.mjs \
             > sc19-migrations.log 2>&1
