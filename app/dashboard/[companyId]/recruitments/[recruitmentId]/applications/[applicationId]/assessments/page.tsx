@@ -39,6 +39,8 @@ export default async function Assessments({ params }: { params: Promise<{ compan
     <p className="notice">Postęp, notatki i decyzję zapisuje wyłącznie człowiek. Status etapu nie jest decyzją o zatrudnieniu. Nie uruchamia wiadomości do kandydata.</p>
     <p><Link href={`${base}/applications/${applicationId}/screening`}>Przygotowanie preselekcji</Link> · <Link href={`${base}/applications/${applicationId}/interview`}>Pytania na rozmowę z analizy CV</Link> · <Link href={`${base}/interview-guide`}>Przewodnik rozmowy</Link> · <Link href={`${base}/applications/${applicationId}/behaviors`}>Oceny z dowodami i historią</Link> · <Link href={`${base}/applications/${applicationId}/exercises`}>Wykonanie zadań i historia</Link></p>
 
+    {canEdit && <p><Link href={`${base}/applications/${applicationId}/followup`}>Dalsza obserwacja 30/90/180 dni i ocena przy awansie</Link></p>}
+
     <h2>Aktualny etap</h2>
     <p><strong>{stageName(application.data.current_stage_id)}</strong></p>
     {canEdit && <CandidateStageForm companyId={companyId} recruitmentId={recruitmentId} applicationId={applicationId}

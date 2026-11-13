@@ -63,12 +63,12 @@ export const metricCatalogue: Record<MetricKey, MetricDefinition> = {
   probation_pass_rate: {
     label: 'Przejście okresu próbnego', unit: 'percent', availableToday: false,
     definition: 'Odsetek osób zatrudnionych w tej rekrutacji, które zakończyły okres próbny i pozostały w firmie.',
-    dataScope: 'Wymaga obserwacji po zatrudnieniu (30/90/180 dni), których system dziś nie zbiera (część B).',
+    dataScope: 'Obserwacje 30/90/180 dni są mierzone osobno przez funkcję respektującą odrębne uprawnienia do celów oceny.',
   },
   retention_rate: {
     label: 'Retencja', unit: 'percent', availableToday: false,
     definition: 'Odsetek osób zatrudnionych w tej rekrutacji, które nadal pracują w firmie po 90 i po 180 dniach.',
-    dataScope: 'Wymaga obserwacji po zatrudnieniu (30/90/180 dni), których system dziś nie zbiera (część B).',
+    dataScope: 'Obserwacje 30/90/180 dni są mierzone osobno przez funkcję respektującą odrębne uprawnienia do celów oceny.',
   },
 };
 
@@ -77,7 +77,7 @@ export const metricReasonLabels: Record<MetricReason, string> = {
   too_few_rows: 'za mało danych, żeby wynik coś znaczył',
   recruitment_not_closed: 'rekrutacja nie została jeszcze zamknięta',
   requires_hire_date: 'system nie zapisuje jeszcze daty zatrudnienia',
-  requires_post_hire_observations: 'wymaga obserwacji po zatrudnieniu, których system jeszcze nie zbiera',
+  requires_post_hire_observations: 'pomiar po zatrudnieniu wymaga odrębnego zakresu uprawnień; sprawdź tabelę dalszych obserwacji',
   unavailable: 'nie udało się odczytać pomiaru',
 };
 const isReason = (value: unknown): value is MetricReason => typeof value === 'string' && Object.hasOwn(metricReasonLabels, value);

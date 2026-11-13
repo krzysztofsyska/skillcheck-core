@@ -422,6 +422,23 @@ export type Database = {
        * recruiter of that company (42501 otherwise). A `change_budget` recommendation is
        * refused (22023) while any checklist area is `not_checked`.
        * Shapes: lib/process-diagnostics.ts, lib/process-metrics.ts. */
+      process_followup_create: {
+        Args: { target_application: string; purpose: string; start_date: string; criteria: string; initial_result: string };
+        Returns: string;
+      };
+      process_followup_grant: {
+        Args: { target_case: string; target_user: string; allowed: boolean };
+        Returns: undefined;
+      };
+      process_followup_record: {
+        Args: { target_case: string; checkpoint: number; observation: Json };
+        Returns: string;
+      };
+      process_followup_recruitment_metrics: {
+        Args: { target_company: string; target_recruitment: string; checkpoint: number };
+        Returns: Json;
+      };
+      process_followup_read: { Args: { target_application: string }; Returns: Json };
       process_record_diagnostic: {
         Args: {
           target_company: string; target_recruitment: string; diagnostic: Json;

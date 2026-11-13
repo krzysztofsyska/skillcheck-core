@@ -103,7 +103,7 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
     } finally { await db.exec('rollback'); }
     assert.equal((await db.query("select count(*)::int n from pg_roles where rolname='service_role'")).rows[0].n, serviceRoleBefore, 'the cluster-wide role list is left as it was');
     const definer = (await db.query(`select p.proname, p.prosecdef, p.proconfig from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-      where n.nspname='public' and p.proname like 'process\\_%' order by 1`)).rows;
+      where n.nspname='public' and p.proname in ('process_record_diagnostic','process_diagnostics_state','process_recruitment_metrics') order by 1`)).rows;
     assert.equal(definer.length, functions.length);
     for (const row of definer) {
       assert.equal(row.prosecdef, true, row.proname);
@@ -463,7 +463,7 @@ test('SC-PROCESS diagnostics: record, budget rule, not_measured, roles, tenant i
     }
     await db.exec(down);
     assert.equal((await db.query("select to_regnamespace('process') v")).rows[0].v, null);
-    assert.equal((await db.query("select count(*)::int n from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'process\\_%'")).rows[0].n, 0);
+    assert.equal((await db.query("select count(*)::int n from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in ('process_record_diagnostic','process_diagnostics_state','process_recruitment_metrics')")).rows[0].n, 0);
     // Porównanie przed/po, bez przypiętej wartości: sygnatura bez migracji = sygnatura z migracją.
     assert.equal(await signature(), signatureInstalled, 'the schema without the migration has the same inventory signature');
     await db.exec(down); // idempotentny

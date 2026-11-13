@@ -9,7 +9,7 @@ import { setupRankingDatabase, users } from './screening-ranking-fixture.mjs';
 
 export { users };
 // Full current chain: R16 since SC-AC-SESSION (#276). SC-020 itself stays outside the inventory.
-export const signature = 'e958cb168fc311a1e908b374cfc1bfee6524945b56f00e9639899ad72f75aea8';
+export const signature = '8ad238e75d4d4ccb82e03b89f368ba06483580781494fe1f7f9306a3c9c7f73f';
 export const code = (...codes) => error => codes.includes(error.code);
 export const brandConfig = (brandName, overrides = {}) => ({
   brandName,
