@@ -13,6 +13,7 @@ const reject = reason => ({ ok: false, reason });
 export function verifyCodexConnectorReview({ comments, threads, headSha, builderActorId } = {}) {
   if (!SHA.test(headSha ?? '')) return reject('CODEX_HEAD_INVALID');
   if (!Array.isArray(comments) || !Array.isArray(threads)) return reject('CODEX_GITHUB_DATA_INCOMPLETE');
+  if (!Number.isSafeInteger(builderActorId) || builderActorId <= 0) return reject('CODEX_BUILDER_IDENTITY_UNKNOWN');
   if (builderActorId === CODEX_CONNECTOR_BOT.id) return reject('CODEX_SELF_REVIEW');
   if (threads.some(thread => thread?.isResolved !== true)) return reject('CODEX_REVIEW_THREAD_OPEN');
 
