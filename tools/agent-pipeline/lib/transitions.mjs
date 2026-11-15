@@ -10,6 +10,7 @@ import { block, newRecord, touch } from './record.mjs';
 import { validateReview } from './review.mjs';
 import { filesOutside } from './scope.mjs';
 import { builderConfiguration } from './claude-builder.mjs';
+import { verifyCodexConnectorReview } from './codex-connector-review.mjs';
 
 const ACTIVE_RUN = new Set(['CREATING', 'RUNNING']);
 const TERMINAL_RUN = new Set(['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED']);
@@ -382,6 +383,7 @@ function buildingStep(record, obs) {
 }
 
 function reviewStep(record, obs) {
+  if (obs.policy.execution_mode === 'SUBSCRIPTION_ONLY' && record.binding.lane !== 'promotion') return codexReviewStep(record, obs);
   if (!record.review_request_id) {
     if (record.binding.substantive_reviews >= obs.policy.limits.substantive_reviews) return done(block(record, 'REVIEW_LIMIT', obs.now));
     const requestId = sha256(operationKey({
@@ -482,6 +484,66 @@ function reviewStep(record, obs) {
   return beginRepair(next, obs, review.payload.findings ?? []);
 }
 
+// SC-436: in SUBSCRIPTION_ONLY the GitHub Codex connector is the independent
+// reviewer. Its evidence moves PR_REVIEW to FIXING or READY_FOR_OWNER only; it
+// never arms a merge (that still needs the signed review envelope, see
+// approvalStep). Anything that is not a completed exact-HEAD clean review is
+// a wait (until CI_REVIEW_TIMEOUT), a repair, or a block - never a PASS.
+const CODEX_WAIT = new Set(['CODEX_SUMMARY_MISSING_OR_AMBIGUOUS', 'CODEX_REVIEW_PENDING',
+  'CODEX_REVIEW_STALE_HEAD', 'CODEX_SECURITY_REVIEW_UNCONFIRMED']);
+const CODEX_REPAIR = new Set(['CODEX_REVIEW_FINDINGS_OR_UNKNOWN', 'CODEX_REVIEW_THREAD_OPEN']);
+
+function codexReviewStep(record, obs) {
+  if (!record.review_request_id) {
+    if (record.binding.substantive_reviews >= obs.policy.limits.substantive_reviews) return done(block(record, 'REVIEW_LIMIT', obs.now));
+    const requestId = sha256(operationKey({
+      repositoryId: record.repository_id, taskId: record.task_id, taskRevision: record.task_revision,
+      headSha: record.head_sha, baseSha: record.base_sha, action: 'review', round: record.binding.substantive_reviews,
+    }));
+    const pre = touch(record, obs.now, { review_request_id: requestId, technical_state: 'WAITING_CI' });
+    // Only the deterministic CI workflow is dispatched; the billed review workflow is not.
+    return { record: pre, preEffectRecord: pre, journal: journalFor(pre, 'dispatch-evidence'),
+      effects: [{ type: 'github.dispatch', workflow: 'verify', external: true, requestId, headSha: record.head_sha,
+        baseSha: record.base_sha, policySha: record.policy_sha, taskId: record.task_id }] };
+  }
+  if (obs.github.ci && !record.ci_run_id) return done(touch(record, obs.now, { ci_run_id: obs.github.ci.run_id, ci_run_attempt: obs.github.ci.run_attempt }));
+  const waitOrTimeout = () => Date.parse(obs.now) - Date.parse(record.last_transition_at) >= obs.policy.timeouts.ci_review_ms
+    ? done(block(record, 'CI_REVIEW_TIMEOUT', obs.now)) : done(record);
+  const codex = obs.github.codexReview;
+  if (!obs.github.ci || !codex) return waitOrTimeout();
+  const ci = validateCi(obs.github.ci, { workflowId: obs.policy.workflow_ids.verify, workflowPath: obs.policy.workflows.verify,
+    policySha: record.policy_sha, headSha: record.head_sha, baseSha: record.base_sha,
+    requiredCommands: obs.policy.required_ci_commands, runAttempt: 1, runId: record.ci_run_id });
+  const review = verifyCodexConnectorReview({ comments: codex.comments, threads: codex.threads,
+    headSha: record.head_sha, builderActorId: obs.github.pull?.authorId });
+  const signature = sha256({ ci: obs.github.ci, codex, request: record.review_request_id });
+  if (record.binding.last_evidence_signature === signature) return done(record);
+  const ciTrusted = ci.ok || String(ci.reason).startsWith('conclusion_') || ci.reason === 'job_not_success';
+  if (!ciTrusted || (!review.ok && !CODEX_WAIT.has(review.reason) && !CODEX_REPAIR.has(review.reason))) {
+    const rejected = touch(record, obs.now);
+    rejected.binding.evidence = { ci, review: null, codex: review };
+    rejected.binding.last_evidence_signature = signature;
+    rejected.binding.reports.push({ kind: 'EVIDENCE_REJECTED', ci: ci.reason ?? null, review: review.reason ?? null, at: obs.now });
+    return done(block(rejected, 'EVIDENCE_REJECTED', obs.now));
+  }
+  if (!review.ok && CODEX_WAIT.has(review.reason)) return waitOrTimeout();
+  const next = touch(record, obs.now);
+  next.binding.evidence = { ci, review: null, codex: review };
+  next.binding.last_evidence_signature = signature;
+  next.binding.substantive_reviews += 1;
+  if (ci.ok) { next.ci_run_id = obs.github.ci.run_id; next.ci_run_attempt = obs.github.ci.run_attempt; }
+  if (ci.pass && review.ok) {
+    next.state = 'READY_FOR_OWNER';
+    next.technical_state = 'CODEX_REVIEW_PASSED';
+    return done(next);
+  }
+  const findings = (Array.isArray(codex.threads) ? codex.threads : [])
+    .filter(thread => thread?.isResolved !== true)
+    .map(thread => ({ id: String(thread?.id ?? ''), source: 'github_codex_connector' }));
+  if (!review.ok && findings.length === 0) findings.push({ id: `codex:${review.reason}`, source: 'github_codex_connector' });
+  return beginRepair(next, obs, findings);
+}
+
 function beginRepair(record, obs, findings) {
   const findingHash = sha256((findings ?? []).map(finding => finding.id).sort());
   if (findingHash === record.binding.last_finding_hash) record.binding.finding_streak += 1;
@@ -550,6 +612,8 @@ function armGateA(record, obs) {
 }
 
 function approvalStep(record, obs) {
+  // Codex connector evidence is not a signed review envelope; hold, never merge.
+  if (record.state === 'READY_FOR_OWNER' && record.technical_state === 'CODEX_REVIEW_PASSED') return done(record);
   if (!obs.simulation && obs.policy.integration_merge_policy === 'verified_ci_review') return autoIntegrationStep(record, obs);
   if (record.state === 'ACCEPTED') return done(record);
   if (!record.binding.approval) return armGateA(record, obs);

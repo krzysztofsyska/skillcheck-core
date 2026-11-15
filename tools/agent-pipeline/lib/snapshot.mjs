@@ -99,6 +99,7 @@ function observe({ policy, policySha, now, secrets, prompts, snapshot, issue, re
       protection: snapshot.protection ?? null,
       ci: evidence.ci ?? null,
       review: evidence.review ?? null,
+      codexReview: snapshot.codexReviews?.[record?.task_id] ?? null,
       postMergeCi: snapshot.postMergeCi?.[record?.task_id] ?? null,
     },
     cursor: agentId ? snapshot.cursor?.[agentId] ?? null : null,
@@ -199,7 +200,8 @@ function awaitingExternalResult(item, now, policy, flags) {
         && Number.isFinite(started) && Date.parse(now) - started < (policy.timeouts?.build_ms ?? 7200000)) return true;
   }
   if (record.state === 'PR_REVIEW' && record.review_request_id) {
-    const waiting = !obs.github.ci || (record.binding?.review_dispatched === true && !obs.github.review);
+    const waiting = !obs.github.ci || (record.binding?.review_dispatched === true && !obs.github.review)
+      || (policy.execution_mode === 'SUBSCRIPTION_ONLY' && record.binding?.lane !== 'promotion' && !obs.github.codexReview);
     const started = Date.parse(record.last_transition_at);
     return waiting && Number.isFinite(started)
       && Date.parse(now) - started < (policy.timeouts?.ci_review_ms ?? 2700000);
