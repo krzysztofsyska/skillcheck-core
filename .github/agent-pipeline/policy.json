@@ -111,9 +111,9 @@
   "controller_app_id": 5216184,
   "controller_actor_id": 338844913,
   "integration_merge_policy": "verified_ci_review",
-  "builder_provider": "cursor",
+  "builder_provider": "claude-code",
   "claude_builder": {
-    "enabled": false,
+    "enabled": true,
     "cost_approved": false,
     "workflow_id": null,
     "workflow_path": ".github/workflows/claude-code-dispatch.yml",
@@ -125,5 +125,6 @@
     "workflow_id": 371409699,
     "path": ".github/workflows/checks.yml",
     "timeout_ms": 2700000
-  }
+  },
+  "execution_mode": "SUBSCRIPTION_ONLY"
 }
