@@ -2,7 +2,7 @@ import { integrationOnly } from './control-plane.mjs';
 import { parseContract } from './contract.mjs';
 import { reservedBuilderBudget } from './claude-builder.mjs';
 
-export function assembleWork({ policy, policySha, now, secrets, prompts = null, snapshot }) {
+export function assembleWork({ policy, policySha, now, secrets, prompts = null, snapshot, flags = {} }) {
   const integrationSha = snapshot.integrationSha ?? null;
   const mainSha = snapshot.mainSha ?? null;
   const records = snapshot.records ?? {};
@@ -37,8 +37,8 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && notificationBlocksQueue(i.record, policy));
   const postMerge = items.filter(i => i.record?.technical_state === 'WAITING_POST_MERGE_CI' || i.record?.binding?.post_merge_ci?.blocked);
   const readyPostMerge = postMerge.filter(i => postMergeNeedsAttention(i, now, policy));
-  const readyActive = active.filter(i => !awaitingExternalResult(i, now, policy));
-  const waitingActive = active.filter(i => awaitingExternalResult(i, now, policy));
+  const readyActive = active.filter(i => !awaitingExternalResult(i, now, policy, flags));
+  const waitingActive = active.filter(i => awaitingExternalResult(i, now, policy, flags));
   // At most two active tasks per repository. Waiting on a build/CI/review or
   // a blocked post-merge check must not monopolise the controller's next poll.
   // Dependencies are separately gated until post-merge verification succeeds.
@@ -158,9 +158,11 @@ function postMergeNeedsAttention(item, now, policy) {
   return Number.isFinite(started) && Date.parse(now) - started >= timeout;
 }
 
-function awaitingExternalResult(item, now, policy) {
+function awaitingExternalResult(item, now, policy, flags) {
   const record = item.record;
   const obs = item.observation;
+  if (record.state === 'READY_FOR_OWNER' && policy.integration_merge_policy === 'verified_ci_review'
+      && flags.mergeEnabled !== true) return true;
   if (['BUILDING', 'FIXING'].includes(record.state)) {
     const run = obs.cursor?.runs?.find(r => r.id === record.cursor_run_id);
     const started = Date.parse(run?.createdAt ?? record.binding?.dispatch?.started_at ?? record.last_transition_at);
