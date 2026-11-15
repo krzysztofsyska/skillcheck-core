@@ -238,16 +238,30 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
     },
     async readReviews(number) { return pages(`/repos/${owner}/${repo}/pulls/${Number(number)}/reviews`); },
     // Only exception to GET-only: ONE fixed read-only GraphQL query (no mutation, no caller-supplied query text).
-    async readReviewThreads(rawNumber) {
+    async readReviewThreads(rawNumber, { includeComments = false } = {}) {
       const number = Number(rawNumber);
       if (!Number.isInteger(number) || number <= 0) throw new Error('PR_NUMBER_INVALID');
-      const query = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{id isResolved isOutdated}}}}}';
+      // Two fixed, read-only GraphQL variants. The subscription reviewer needs
+      // authenticated thread text and source location to produce useful repairs.
+      const fields = includeComments
+        ? 'id isResolved isOutdated comments(first:100){pageInfo{hasNextPage}nodes{body path line author{login}}}'
+        : 'id isResolved isOutdated';
+      const query = `query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{${fields}}}}}}`;
       const all = []; const seen = new Set(); let cursor = null;
       for (let i = 0; i < 50; i++) {
         const res = await request('/graphql', { method: 'POST', body: { query, variables: { o: owner, r: repo, n: number, c: cursor } } });
         const t = res?.data?.repository?.pullRequest?.reviewThreads;
         if (res?.errors?.length || !t || !Array.isArray(t.nodes) || typeof t.pageInfo?.hasNextPage !== 'boolean') throw new Error('REVIEW_THREADS_INCOMPLETE');
-        all.push(...t.nodes);
+        if (includeComments) {
+          for (const node of t.nodes) {
+            if (!Array.isArray(node?.comments?.nodes) || node.comments?.pageInfo?.hasNextPage !== false) {
+              throw new Error('REVIEW_THREAD_COMMENTS_INCOMPLETE');
+            }
+            all.push({ ...node, comments: node.comments.nodes });
+          }
+        } else {
+          all.push(...t.nodes);
+        }
         if (!t.pageInfo.hasNextPage) return all;
         cursor = t.pageInfo.endCursor;
         if (typeof cursor !== 'string' || seen.has(cursor)) throw new Error('REVIEW_THREADS_CURSOR_LOOP');
