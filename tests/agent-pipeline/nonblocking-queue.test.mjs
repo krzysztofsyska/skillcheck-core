@@ -16,10 +16,10 @@ function readyIssue(number, id, dependsOn = 'NONE') {
   };
 }
 
-function work(records, issues, postMergeCi = {}, now = NOW) {
+function work(records, issues, postMergeCi = {}, now = NOW, flags = {}) {
   const { policy, policySha } = loadedPolicy();
   return assembleWork({
-    policy, policySha, now, secrets: { cursor: false, openai: false, githubApp: false },
+    policy, policySha, now, flags, secrets: { cursor: false, openai: false, githubApp: false },
     snapshot: {
       records, issues, pulls: [], postMergeCi,
       integrationSha: 'c'.repeat(40), mainSha: 'd'.repeat(40),
@@ -94,4 +94,15 @@ test('two unfinished tasks preserve the WIP limit and do not create a third', ()
     [first.task_id]: first, [second.task_id]: second,
   }, [readyIssue(21, 'SC-THIRD')]);
   assert.notEqual(result.items[0].observation.issue?.number, 21);
+});
+
+test('a merge-disabled READY_FOR_OWNER task yields to unrelated work; enabling merge restores priority', () => {
+  const approved = taskRecord({ state: 'READY_FOR_OWNER' });
+  approved.task_id = 'SC-MERGE-PENDING';
+  const records = { [approved.task_id]: approved };
+  const issues = [readyIssue(21, 'SC-UNRELATED')];
+  const disabled = work(records, issues, {}, NOW, { enabled: true, mergeEnabled: false });
+  assert.equal(disabled.items[0].observation.issue.number, 21);
+  const enabled = work(records, issues, {}, NOW, { enabled: true, mergeEnabled: true });
+  assert.equal(enabled.items[0].record?.task_id, approved.task_id);
 });
