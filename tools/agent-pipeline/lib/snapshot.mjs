@@ -40,7 +40,8 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   // Production promotion must never overtake an unverified post-merge check.
   const readyActive = active.filter(i => (postMerge.length === 0 || i.observation.kind !== 'promotion')
     && !awaitingExternalResult(i, now, policy, flags));
-  const waitingActive = active.filter(i => awaitingExternalResult(i, now, policy, flags));
+  const waitingActive = active.filter(i => (postMerge.length === 0 || i.observation.kind !== 'promotion')
+    && awaitingExternalResult(i, now, policy, flags));
   const freshTask = fresh.find(i => i.observation.kind !== 'promotion');
   const freshPromotion = postMerge.length === 0 && active.length === 0
     ? fresh.find(i => i.observation.kind === 'promotion') : null;
