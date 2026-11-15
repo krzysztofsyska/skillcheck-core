@@ -50,7 +50,8 @@ function fixture() {
 }
 
 test('disabled/unapproved budget never starts a paid operation', async()=>{
- assert.throws(()=>builderConfiguration(loadPolicy()),/CLAUDE_DISABLED/);
+ const disabledPolicy=loadPolicy();disabledPolicy.claude_builder.enabled=false;
+ assert.throws(()=>builderConfiguration(disabledPolicy),/CLAUDE_DISABLED/);
  for(const c of [{max_run_usd:0},{cost_approved:false},{workflow_id:null},{max_total_usd:0},{max_turns:100}]){const f=fixture();Object.assign(f.policy.claude_builder,c);await assert.rejects(f.client.createAgent({agentId:'bc-test',prompt:{text:'task'}}));assert.equal(f.calls.length,0);}
 });
 
