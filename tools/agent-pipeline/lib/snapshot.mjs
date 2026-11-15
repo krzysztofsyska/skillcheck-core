@@ -161,7 +161,7 @@ function scopesMayOverlap(left, right) {
     if (typeof pattern !== 'string') return [];
     const result = [];
     for (const part of pattern.split('/')) {
-      if (!part || /[*?\\[\\]{}!]/.test(part)) break;
+      if (!part || ['*', '?', '[', ']', '{', '}', '!'].some(symbol => part.includes(symbol))) break;
       result.push(part);
     }
     return result;
