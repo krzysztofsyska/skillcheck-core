@@ -42,7 +42,8 @@ test('completed exact-HEAD review by pinned GitHub bot is accepted as read-only 
 test('forged, missing, duplicate, malformed and unknown-source evidence fails closed', () => {
   reason({ comments: [] }, 'CODEX_SUMMARY_MISSING_OR_AMBIGUOUS');
   reason({ comments: [summary(), summary()] }, 'CODEX_SUMMARY_MISSING_OR_AMBIGUOUS');
-  reason({ comments: [summary(), { ...summary(), id: 25, user: { id: 1, login: 'malicious' } }] }, 'CODEX_SUMMARY_MISSING_OR_AMBIGUOUS' === 'x' ? 'x' : 'CODEX_SUMMARY_MISSING_OR_AMBIGUOUS');
+  reason({ comments: [{ ...summary(), id: 25, user: { id: 1, login: 'malicious' } }] }, 'CODEX_SUMMARY_MISSING_OR_AMBIGUOUS');
+  assert.equal(verifyCodexConnectorReview(args({ comments: [summary(), { ...summary(), id: 25, user: { id: 1, login: 'malicious' } }] })).ok, true);
   reason({ comments: [summary()], threads: null }, 'CODEX_GITHUB_DATA_INCOMPLETE');
   reason({ comments: null }, 'CODEX_GITHUB_DATA_INCOMPLETE');
   reason({ comments: [summary()], headSha: 'wrong' }, 'CODEX_HEAD_INVALID');
