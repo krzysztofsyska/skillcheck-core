@@ -98,6 +98,8 @@ export function createAutoReleaseReaders({ client, repository, policy = {} }) {
       // Re-read page 1: a run created or deleted during pagination shifts pages; refuse.
       const again = await page(1);
       if (again.total !== first.total || again.runs.some(run => !seen.has(run.id))) throw new Error('LOCK_INCOMPLETE');
+      // A completed run can be re-run (same id, active again): a run is active if ANY read saw it active.
+      for (const run of again.runs) if (run.status !== 'completed') seen.set(run.id, run.status);
       let inflight = 0;
       for (const status of seen.values()) if (status !== 'completed') inflight += 1;
       return { held: inflight > 0, inflight };

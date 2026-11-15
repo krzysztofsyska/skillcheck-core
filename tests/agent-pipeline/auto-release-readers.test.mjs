@@ -85,6 +85,12 @@ test('lock: a run moving between statuses during the read is still counted (no p
   const { r } = mkLock(call => [run(7, call === 0 ? 'waiting' : 'in_progress')]);
   assert.deepEqual(await r.readLock(), { held: true, inflight: 1 });
 });
+test('lock: a completed run re-run between reads (same id) holds the lock', async () => {
+  const { r } = mkLock(call => [run(7, call === 0 ? 'completed' : 'in_progress'), run(8)]);
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1 });
+  // and the reverse (active → completed during the read) stays conservatively held
+  assert.deepEqual(await mkLock(call => [run(7, call === 0 ? 'queued' : 'completed')]).r.readLock(), { held: true, inflight: 1 });
+});
 test('lock: reads every page; an active run on a later page holds the lock', async () => {
   const runs = Array.from({ length: 250 }, (_, k) => run(k + 1));
   runs[230] = run(231, 'queued');
