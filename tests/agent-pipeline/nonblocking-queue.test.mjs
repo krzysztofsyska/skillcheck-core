@@ -12,7 +12,8 @@ function readyIssue(number, id, dependsOn = 'NONE') {
     user: { id: loadedPolicy().policy.owner.id, login: 'krzysztofsyska' },
     body: contractBody()
       .replace('TASK: SC-DEMO-001', `TASK: ${id}`)
-      .replace('DEPENDS_ON: NONE', `DEPENDS_ON: ${dependsOn}`),
+      .replace('DEPENDS_ON: NONE', `DEPENDS_ON: ${dependsOn}`)
+      .replace('- app/demo/**', `- app/${id.toLowerCase().replace(/^sc-/, '')}/**`),
   };
 }
 
@@ -123,4 +124,20 @@ test('production promotion never overtakes an unverified post-merge check', () =
   });
   assert.equal(result.items[0].observation.issue.number, 21);
   assert.equal(result.items[0].observation.kind, 'task');
+});
+
+test('a ready task with overlapping file scope cannot start beside another active task', () => {
+  const waiting = taskRecord({ state: 'PR_REVIEW', technical_state: 'WAITING_CI' });
+  waiting.task_id = 'SC-ACTIVE';
+  waiting.review_request_id = 'review-request';
+  waiting.binding.review_dispatched = true;
+  const conflicting = readyIssue(21, 'SC-CONFLICT');
+  conflicting.body = conflicting.body.replace('- app/conflict/**', '- app/demo/**');
+  const independent = readyIssue(22, 'SC-INDEPENDENT');
+  const records = { [waiting.task_id]: waiting };
+
+  const result = work(records, [conflicting, independent]);
+  assert.equal(result.items[0].observation.issue.number, 22);
+  const onlyConflict = work(records, [conflicting]);
+  assert.equal(onlyConflict.items[0].record?.task_id, waiting.task_id);
 });
