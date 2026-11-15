@@ -4,7 +4,18 @@ export function assessConfiguration(env, flags, policy = {}) {
   controlPlane(policy);
   if (!flags.enabled) return { ok: true, mode: 'read-only', missing: [] };
   const missing = [];
-  if (policy.builder_provider === 'claude-code') {
+  // Subscription-only must never silently reuse the legacy Cursor/API-key
+  // builder or the billed openai/codex-action reviewer. Until the trusted
+  // subscription runtime and independent review are wired, enabling LIVE
+  // is an explicit configuration failure (even when paid API keys exist).
+  if (policy.execution_mode === 'SUBSCRIPTION_ONLY') {
+    missing.push('SUBSCRIPTION_ONLY_RUNTIME_NOT_READY');
+  } else if (policy.execution_mode && policy.execution_mode !== 'LEGACY') {
+    missing.push('EXECUTION_MODE_UNRECOGNIZED');
+  }
+  if (policy.execution_mode === 'SUBSCRIPTION_ONLY') {
+    // Do not inspect or select paid provider credentials as a fallback.
+  } else if (policy.builder_provider === 'claude-code') {
     try { builderConfiguration(policy); } catch(error) { missing.push(error.code); }
   } else if (!env.CURSOR_API_KEY) missing.push('CURSOR_API_KEY');
   const hasApp = Boolean(env.AGENT_PIPELINE_APP_ID && env.AGENT_PIPELINE_APP_PRIVATE_KEY);
