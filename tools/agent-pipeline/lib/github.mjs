@@ -257,7 +257,9 @@ export function createGitHubClient({ fetch: fetchImpl, token, repository, apiBas
             if (!Array.isArray(node?.comments?.nodes) || node.comments?.pageInfo?.hasNextPage !== false) {
               throw new Error('REVIEW_THREAD_COMMENTS_INCOMPLETE');
             }
-            all.push({ ...node, comments: node.comments.nodes });
+            const botComment = node.comments.nodes.find(item => ['chatgpt-codex-connector', 'chatgpt-codex-connector[bot]'].includes(item?.author?.login));
+            const source = botComment ?? node.comments.nodes[0];
+            all.push({ ...node, comments: node.comments.nodes, path: source?.path ?? null, line: source?.line ?? null });
           }
         } else {
           all.push(...t.nodes);
