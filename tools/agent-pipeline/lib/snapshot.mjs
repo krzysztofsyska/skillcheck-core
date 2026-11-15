@@ -33,7 +33,8 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   }
   const active = items.filter(i => i.record && !['ACCEPTED', 'DONE', 'BLOCKED'].includes(i.record.state));
   const terminal = items.filter(i => i.record && ['ACCEPTED', 'DONE', 'BLOCKED'].includes(i.record.state));
-  const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId))));
+  const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId)
+    && !active.some(a => scopesMayOverlap(a.record.binding?.allowed_files, parseContract(i.observation.issue?.body).allowed_files)))));
   const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && notificationBlocksQueue(i.record, policy));
   const postMerge = items.filter(i => i.record?.technical_state === 'WAITING_POST_MERGE_CI' || i.record?.binding?.post_merge_ci?.blocked);
   const readyPostMerge = postMerge.filter(i => postMergeNeedsAttention(i, now, policy));
@@ -150,6 +151,28 @@ export function cursorSnapshot(agent, runsPayload) {
     },
     runs,
   };
+}
+
+function scopesMayOverlap(left, right) {
+  // Fail closed for unknown globs. Only disjoint literal path segments prove
+  // that two concurrent builders cannot edit the same file.
+  if (!Array.isArray(left) || !left.length || !Array.isArray(right) || !right.length) return true;
+  const prefix = pattern => {
+    if (typeof pattern !== 'string') return [];
+    const result = [];
+    for (const part of pattern.split('/')) {
+      if (!part || /[*?\\[\\]{}!]/.test(part)) break;
+      result.push(part);
+    }
+    return result;
+  };
+  for (const a of left) for (const b of right) {
+    const x = prefix(a), y = prefix(b);
+    if (!x.length || !y.length) return true;
+    if (x.slice(0, Math.min(x.length, y.length))
+      .every((part, index) => part === y[index])) return true;
+  }
+  return false;
 }
 
 function postMergeNeedsAttention(item, now, policy) {
