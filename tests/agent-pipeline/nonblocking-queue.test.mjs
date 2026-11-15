@@ -106,3 +106,21 @@ test('a merge-disabled READY_FOR_OWNER task yields to unrelated work; enabling m
   const enabled = work(records, issues, {}, NOW, { enabled: true, mergeEnabled: true });
   assert.equal(enabled.items[0].record?.task_id, approved.task_id);
 });
+
+test('production promotion never overtakes an unverified post-merge check', () => {
+  const blocked = blockedPostMerge();
+  const { policy, policySha } = loadedPolicy();
+  const result = assembleWork({
+    policy, policySha, now: NOW, secrets: {},
+    flags: { enabled: true, mergeEnabled: true },
+    snapshot: {
+      records: { [blocked.task_id]: blocked },
+      issues: [readyIssue(21, 'SC-UNRELATED')], pulls: [],
+      postMergeCi: { 'SC-ROOT': { pending: true } },
+      promotion: { taskId: 'SC-PROMOTION', manifest: { tasks: [] }, runbook: { id: 'test' } },
+      integrationSha: 'c'.repeat(40), mainSha: 'd'.repeat(40),
+    },
+  });
+  assert.equal(result.items[0].observation.issue.number, 21);
+  assert.equal(result.items[0].observation.kind, 'task');
+});
