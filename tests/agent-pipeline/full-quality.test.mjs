@@ -67,6 +67,9 @@ test('post-merge CI blocks next task, records exact evidence and recovers after 
 
 test('known pre-mutation pending gate waits and later retries without manual resume', async () => {
   const obs=observation({simulation:false,flags:{enabled:true,mergeEnabled:true},preflight:{ok:true},lockHolder:'holder',mergeLock:{holder:'holder'}});
+  // Legacy state-machine fixture: verify prior merge retry behavior offline;
+  // the selected SUBSCRIPTION_ONLY policy must still block actual LIVE effects.
+  obs.policy = { ...obs.policy, execution_mode: 'LEGACY' };
   const record=taskRecord({state:'READY_FOR_OWNER',review_run_id:1,ci_run_id:2});
   record.binding.evidence={ci:{pass:true},review:{pass:true}};
   obs.github.ci={run_id:2};obs.github.review={run_id:1,payload:{verdict:'PASS'}};
