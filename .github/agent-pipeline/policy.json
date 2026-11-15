@@ -111,7 +111,7 @@
   "controller_app_id": 5216184,
   "controller_actor_id": 338844913,
   "integration_merge_policy": "verified_ci_review",
-  "builder_provider": "cursor",
+  "builder_provider": "claude-code",
   "claude_builder": {
     "enabled": false,
     "cost_approved": false,
