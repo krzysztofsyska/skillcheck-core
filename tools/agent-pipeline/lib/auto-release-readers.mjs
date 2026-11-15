@@ -7,8 +7,10 @@ import { withRulesetEvidence } from './ruleset-evidence.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const SAFE_PATH = /^[A-Za-z0-9._\-/]+$/;
-// Every non-terminal workflow-run status GitHub reports; a run in any of them may still write.
-const ACTIVE_RUN_STATUSES = ['queued', 'in_progress', 'waiting', 'requested', 'pending'];
+// Lock snapshot: runs are read from ONE unfiltered listing and only 'completed' (terminal)
+// runs are dropped locally; any other or unknown status holds the lock. Bounded pagination.
+const LOCK_PAGE = 100;
+const LOCK_MAX_PAGES = 10;
 
 export function createAutoReleaseReaders({ client, repository, policy = {} }) {
   if (!client?.request || !client.readComparison || !client.readReleasePlan) throw new Error('READERS_CLIENT_INVALID');
@@ -63,20 +65,41 @@ export function createAutoReleaseReaders({ client, repository, policy = {} }) {
       const c = mine[0];
       return { head_sha: c.head_sha, completed: c.status === 'completed', conclusion: c.conclusion ?? null };
     },
-    // Stage 4d: release serialization. Counts every non-terminal run of the pinned promote
-    // workflow. Unpinned id, truncated or inconsistent pages, or a run of another workflow
-    // throw, so the collector records READ_LOCK_FAILED and the release is DENIED.
+    // Stage 4d: release serialization. Takes ONE unfiltered snapshot of the pinned promote
+    // workflow's runs (all pages) and counts every run whose status is not 'completed'.
+    // Per-status queries are not used: a run moving between statuses between two such
+    // queries could appear in none of them. Unpinned id, malformed/truncated/duplicated
+    // pages, a total_count that changes during the read, more than LOCK_MAX_PAGES pages or
+    // a run of another workflow throw, so the collector records READ_LOCK_FAILED → DENY.
     async readLock() {
       const workflowId = policy.workflow_ids?.promote;
       if (!Number.isInteger(workflowId)) throw new Error('LOCK_WORKFLOW_NOT_PINNED');
-      let inflight = 0;
-      for (const status of ACTIVE_RUN_STATUSES) {
-        const res = await get(`${root}/actions/workflows/${workflowId}/runs?status=${status}&per_page=100`);
+      const page = async n => {
+        const res = await get(`${root}/actions/workflows/${workflowId}/runs?per_page=${LOCK_PAGE}&page=${n}&exclude_pull_requests=true`);
         const runs = res?.workflow_runs;
-        if (!Array.isArray(runs) || res.total_count !== runs.length || runs.length >= 100) throw new Error('LOCK_INCOMPLETE');
-        if (runs.some(run => run?.workflow_id !== workflowId || run.status !== status)) throw new Error('LOCK_FOREIGN_RUN');
-        inflight += runs.length;
+        if (!Array.isArray(runs) || !Number.isSafeInteger(res.total_count) || res.total_count < 0) throw new Error('LOCK_INCOMPLETE');
+        if (runs.some(run => run?.workflow_id !== workflowId || !Number.isSafeInteger(run.id) || typeof run.status !== 'string')) throw new Error('LOCK_FOREIGN_RUN');
+        return { total: res.total_count, runs };
+      };
+      const first = await page(1);
+      const pages = Math.ceil(first.total / LOCK_PAGE);
+      if (pages > LOCK_MAX_PAGES) throw new Error('LOCK_INCOMPLETE');
+      const seen = new Map();
+      for (let n = 1; n <= Math.max(pages, 1); n += 1) {
+        const p = n === 1 ? first : await page(n);
+        if (p.total !== first.total) throw new Error('LOCK_INCOMPLETE');
+        if (p.runs.length !== (n < pages ? LOCK_PAGE : first.total - LOCK_PAGE * (pages - 1)) && first.total > 0) throw new Error('LOCK_INCOMPLETE');
+        for (const run of p.runs) {
+          if (seen.has(run.id)) throw new Error('LOCK_INCOMPLETE');
+          seen.set(run.id, run.status);
+        }
       }
+      if (seen.size !== first.total) throw new Error('LOCK_INCOMPLETE');
+      // Re-read page 1: a run created or deleted during pagination shifts pages; refuse.
+      const again = await page(1);
+      if (again.total !== first.total || again.runs.some(run => !seen.has(run.id))) throw new Error('LOCK_INCOMPLETE');
+      let inflight = 0;
+      for (const status of seen.values()) if (status !== 'completed') inflight += 1;
       return { held: inflight > 0, inflight };
     },
     async readMigrationSql(path, ref) {

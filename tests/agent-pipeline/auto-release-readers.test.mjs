@@ -51,38 +51,65 @@ test('CI evidence: exact SHA, pinned app, unique run', async () => {
 });
 
 const PROMOTE = 42;
-const mkLock = (byStatus = {}, opts = {}) => {
+const run = (id, status = 'completed', o = {}) => ({ id, workflow_id: PROMOTE, status, ...o });
+// Serves an unfiltered, paginated listing. `script` may return a different run list per call
+// (call index starts at 0) to model runs changing between requests.
+const mkLock = (runsOrScript = [], opts = {}) => {
+  let call = 0;
   const c = mkClient({ request: async p => {
-    const status = new URL(p, 'https://x').searchParams.get('status');
-    const runs = (byStatus[status] ?? []).map(o => ({ workflow_id: PROMOTE, status, ...o }));
-    return { total_count: opts.total?.[status] ?? runs.length, workflow_runs: runs };
+    const u = new URL(p, 'https://x');
+    assert.equal(u.searchParams.get('status'), null);
+    const all = typeof runsOrScript === 'function' ? runsOrScript(call) : runsOrScript;
+    call += 1;
+    const n = Number(u.searchParams.get('page'));
+    const per = Number(u.searchParams.get('per_page'));
+    return { total_count: opts.total ?? all.length, workflow_runs: all.slice((n - 1) * per, n * per) };
   } });
   return { c, r: createAutoReleaseReaders({ client: c, repository: 'o/r', policy: { workflow_ids: { promote: PROMOTE }, ...opts.policy } }) };
 };
-test('lock: free only when no promote run is active, GET only', async () => {
-  const { c, r } = mkLock();
+test('lock: one unfiltered snapshot, free only when every promote run is completed, GET only', async () => {
+  const { c, r } = mkLock([run(1), run(2)]);
   assert.deepEqual(await r.readLock(), { held: false, inflight: 0 });
-  assert.ok(c.calls.every(([m, p]) => m === 'GET' && p.startsWith(`/repos/o/r/actions/workflows/${PROMOTE}/runs?status=`)));
-  assert.equal(c.calls.length, 5);
+  assert.ok(c.calls.every(([m, p]) => m === 'GET' && p.startsWith(`/repos/o/r/actions/workflows/${PROMOTE}/runs?per_page=100&page=`)));
+  assert.equal(c.calls.length, 2); // page 1 + consistency re-read
+  assert.deepEqual(await mkLock([]).r.readLock(), { held: false, inflight: 0 });
 });
-test('lock: any queued, waiting or running promote run holds the lock', async () => {
-  for (const s of ['queued', 'in_progress', 'waiting', 'requested', 'pending']) {
-    assert.deepEqual(await mkLock({ [s]: [{}] }).r.readLock(), { held: true, inflight: 1 });
+test('lock: any non-completed (incl. unknown) status holds the lock', async () => {
+  for (const s of ['queued', 'in_progress', 'waiting', 'requested', 'pending', 'action_required', 'something_new']) {
+    assert.deepEqual(await mkLock([run(1), run(2, s)]).r.readLock(), { held: true, inflight: 1 });
   }
-  assert.deepEqual(await mkLock({ queued: [{}], in_progress: [{}] }).r.readLock(), { held: true, inflight: 2 });
+  assert.deepEqual(await mkLock([run(1, 'queued'), run(2, 'in_progress')]).r.readLock(), { held: true, inflight: 2 });
 });
-test('lock: unpinned, truncated, inconsistent or foreign runs fail closed', async () => {
+test('lock: a run moving between statuses during the read is still counted (no per-status gap)', async () => {
+  // Call 0 sees it waiting, the re-read sees it in_progress: it is never missed.
+  const { r } = mkLock(call => [run(7, call === 0 ? 'waiting' : 'in_progress')]);
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1 });
+});
+test('lock: reads every page; an active run on a later page holds the lock', async () => {
+  const runs = Array.from({ length: 250 }, (_, k) => run(k + 1));
+  runs[230] = run(231, 'queued');
+  const { c, r } = mkLock(runs);
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1 });
+  assert.equal(c.calls.length, 4);
+});
+test('lock: unpinned, truncated, inconsistent, shifting or foreign listings fail closed', async () => {
   await assert.rejects(mk(mkClient()).readLock(), /LOCK_WORKFLOW_NOT_PINNED/);
-  await assert.rejects(mkLock({}, { policy: { workflow_ids: { promote: '42' } } }).r.readLock(), /LOCK_WORKFLOW_NOT_PINNED/);
-  await assert.rejects(mkLock({ queued: [{}] }, { total: { queued: 2 } }).r.readLock(), /LOCK_INCOMPLETE/);
-  await assert.rejects(mkLock({ in_progress: Array.from({ length: 100 }, () => ({})) }).r.readLock(), /LOCK_INCOMPLETE/);
-  await assert.rejects(mkLock({ waiting: [{ workflow_id: 7 }] }).r.readLock(), /LOCK_FOREIGN_RUN/);
-  await assert.rejects(mkLock({ queued: [{ status: 'completed' }] }).r.readLock(), /LOCK_FOREIGN_RUN/);
+  await assert.rejects(mkLock([], { policy: { workflow_ids: { promote: '42' } } }).r.readLock(), /LOCK_WORKFLOW_NOT_PINNED/);
+  await assert.rejects(mkLock([run(1)], { total: 2 }).r.readLock(), /LOCK_INCOMPLETE/);
+  await assert.rejects(mkLock([run(1), run(1)]).r.readLock(), /LOCK_INCOMPLETE/);
+  await assert.rejects(mkLock(Array.from({ length: 1001 }, (_, k) => run(k + 1))).r.readLock(), /LOCK_INCOMPLETE/);
+  // A new run appears during pagination: total_count changes → refuse.
+  await assert.rejects(mkLock(call => Array.from({ length: 150 + (call > 0 ? 1 : 0) }, (_, k) => run(k + 1))).r.readLock(), /LOCK_INCOMPLETE/);
+  // Same total but a different run set on re-read (one deleted, one created) → refuse.
+  await assert.rejects(mkLock(call => [run(call === 0 ? 1 : 2, 'queued')]).r.readLock(), /LOCK_INCOMPLETE/);
+  await assert.rejects(mkLock([run(1, 'waiting', { workflow_id: 7 })]).r.readLock(), /LOCK_FOREIGN_RUN/);
+  await assert.rejects(mkLock([run(1, null)]).r.readLock(), /LOCK_FOREIGN_RUN/);
+  await assert.rejects(mkLock([run('1')]).r.readLock(), /LOCK_FOREIGN_RUN/);
   const bad = createAutoReleaseReaders({ client: mkClient({ request: async () => ({}) }), repository: 'o/r', policy: { workflow_ids: { promote: PROMOTE } } });
   await assert.rejects(bad.readLock(), /LOCK_INCOMPLETE/);
 });
 test('lock reader alone never turns the decision into ALLOW', async () => {
-  const { r } = mkLock();
+  const { r } = mkLock([run(1)]);
   const d = await qualifyRelease({ readers: r, trusted: { p24Hold: true }, policy: { workflow_ids: { promote: PROMOTE } } });
   assert.equal(d.decision, 'DENY');
   assert.ok(!d.reasons.includes('COLLECT:READ_LOCK_FAILED'));
