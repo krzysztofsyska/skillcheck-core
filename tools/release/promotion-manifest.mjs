@@ -64,9 +64,26 @@ function build() {
   const baseSha = git('rev-parse', base);
   const headSha = git('rev-parse', head);
   const mergeBase = git('merge-base', baseSha, headSha);
-  if (mergeBase !== baseSha) throw new Error(`PROMOTION_HISTORY_DIVERGED: merge-base ${mergeBase} != base ${baseSha}`);
-  const all = new Set(lines(git('rev-list', `${baseSha}..${headSha}`)));
-  const firstParent = lines(git('log', '--first-parent', '--format=%H%x09%P%x09%s', `${baseSha}..${headSha}`))
+  let historyBaseSha = baseSha;
+  if (mergeBase !== baseSha) {
+    // After a production merge, main has a new merge commit that is not on
+    // integration's first-parent path. Its second parent is the last released
+    // integration SHA. Accept this shape only when no production tree changes
+    // are lost, BOTH merge parents are already included in integration, and
+    // the released SHA is on integration's first-parent path. Otherwise fail
+    // closed; a squash, independent production edit or incomplete back-merge
+    // cannot be silently treated as a normal post-release divergence.
+    const parents = git('rev-list', '--parents', '-n', '1', baseSha).split(' ').slice(1);
+    const releasedHead = parents[1];
+    const compatible = parents.length === 2
+      && git('rev-parse', `${baseSha}^{tree}`) === git('rev-parse', `${releasedHead}^{tree}`)
+      && parents.every(parent => git('merge-base', parent, headSha) === parent)
+      && lines(git('rev-list', '--first-parent', headSha)).includes(releasedHead);
+    if (!compatible) throw new Error(`PROMOTION_HISTORY_DIVERGED: merge-base ${mergeBase} != base ${baseSha}`);
+    historyBaseSha = releasedHead;
+  }
+  const all = new Set(lines(git('rev-list', `${historyBaseSha}..${headSha}`)));
+  const firstParent = lines(git('log', '--first-parent', '--format=%H%x09%P%x09%s', `${historyBaseSha}..${headSha}`))
     .map(line => { const [sha, parents, subject] = line.split('\t'); return { sha, parents: parents.split(' '), subject }; })
     .reverse();
   const owner = new Map();
@@ -76,7 +93,7 @@ function build() {
     const { pr, exception } = resolveStepPr(step);
     if (exception) exceptionsUsed.push(exception);
     const commits = step.parents.length > 1
-      ? lines(git('rev-list', step.parents[1], `^${step.parents[0]}`, `^${baseSha}`))
+      ? lines(git('rev-list', step.parents[1], `^${step.parents[0]}`, `^${historyBaseSha}`))
       : [];
     commits.push(step.sha);
     // Only a step with an identified PR attributes its commits; otherwise they stay unattributed.
@@ -90,7 +107,7 @@ function build() {
   const migrations = files.filter(f => f.startsWith('supabase/migrations/') && f.endsWith('.sql'));
   const categories = {};
   for (const f of files) categories[classifyFile(f)] = (categories[classifyFile(f)] ?? 0) + 1;
-  const manifest = { base_ref: base, head_ref: head, base_sha: baseSha, head_sha: headSha,
+  const manifest = { base_ref: base, head_ref: head, base_sha: baseSha, history_base_sha: historyBaseSha, head_sha: headSha,
     commit_count: all.size, attributed_count: all.size - unattributed.length, unattributed,
     attribution_exceptions_used: exceptionsUsed, steps: entries, files, file_categories: categories, migrations_added: migrations.filter(f =>
       !lines(git('ls-tree', '-r', '--name-only', baseSha, 'supabase/migrations/')).includes(f)) };
@@ -102,7 +119,7 @@ function markdown(m, pulls) {
   const out = [];
   out.push(`# Manifest promocji ${m.head_ref} → ${m.base_ref}`, '');
   out.push('Wygenerowano narzędziem `tools/release/promotion-manifest.mjs` (tylko odczyt lokalnego Git).', '');
-  out.push(`- Kandydat (head): \`${m.head_sha}\``, `- Produkcja (base): \`${m.base_sha}\``);
+  out.push(`- Kandydat (head): \`${m.head_sha}\``, `- Produkcja (base): \`${m.base_sha}\``);\n  if (m.history_base_sha !== m.base_sha) out.push(`- Ostatni wydany commit integration (punkt historii): \`${m.history_base_sha}\``);
   out.push(`- Commity: **${m.commit_count}**, przypisane do PR: **${m.attributed_count}**, nieprzypisane: **${m.unattributed.length}**`);
   out.push(`- Pliki: **${m.files.length}**; nowe migracje: **${m.migrations_added.length}**`);
   out.push(`- Hash manifestu (sha256): \`${m.manifest_hash}\``, '');
