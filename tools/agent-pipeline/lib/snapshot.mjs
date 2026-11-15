@@ -37,15 +37,20 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && notificationBlocksQueue(i.record, policy));
   const postMerge = items.filter(i => i.record?.technical_state === 'WAITING_POST_MERGE_CI' || i.record?.binding?.post_merge_ci?.blocked);
   const readyPostMerge = postMerge.filter(i => postMergeNeedsAttention(i, now, policy));
-  const readyActive = active.filter(i => !awaitingExternalResult(i, now, policy, flags));
+  // Production promotion must never overtake an unverified post-merge check.
+  const readyActive = active.filter(i => (postMerge.length === 0 || i.observation.kind !== 'promotion')
+    && !awaitingExternalResult(i, now, policy, flags));
   const waitingActive = active.filter(i => awaitingExternalResult(i, now, policy, flags));
+  const freshTask = fresh.find(i => i.observation.kind !== 'promotion');
+  const freshPromotion = postMerge.length === 0 && active.length === 0
+    ? fresh.find(i => i.observation.kind === 'promotion') : null;
   // At most two active tasks per repository. Waiting on a build/CI/review or
   // a blocked post-merge check must not monopolise the controller's next poll.
   // Dependencies are separately gated until post-merge verification succeeds.
   const freeSlots = Math.max(0, 2 - active.length);
   const next = readyPostMerge[0] ?? readyActive[0] ?? acceptedOutbox[0]
-    ?? (freeSlots ? fresh[0] : null) ?? waitingActive[0]
-    ?? postMerge[0] ?? terminalWork(terminal, policy)[0];
+    ?? (freeSlots ? freshTask : null) ?? waitingActive[0]
+    ?? postMerge[0] ?? freshPromotion ?? terminalWork(terminal, policy)[0];
   const selected = next ? [next] : [];
   return { items: selected, integrationSha, mainSha, read: snapshot.read ?? 'github' };
 }
