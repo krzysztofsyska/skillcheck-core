@@ -321,9 +321,9 @@ test('subscription work loader injects authenticated Codex evidence and keeps fa
 test('subscription thread reader returns Codex finding text and rejects truncated comments', async () => {
   let incomplete = false;
   const fetchMock = async (url, init) => {
-    assert.match(String(url), /\\/graphql$/);
+    assert.ok(String(url).endsWith('/graphql'));
     assert.equal(init.method, 'POST');
-    assert.match(JSON.parse(init.body).query, /comments\\(first:100\\)/);
+    assert.ok(JSON.parse(init.body).query.includes('comments(first:100)'));
     return jsonResponse({ data: { repository: { pullRequest: { reviewThreads: {
       nodes: [{ id: 'PRRT_1', isResolved: false, isOutdated: false,
         comments: { pageInfo: { hasNextPage: incomplete }, nodes: [
