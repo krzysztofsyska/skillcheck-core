@@ -47,6 +47,7 @@ test('forged, missing, duplicate, malformed and unknown-source evidence fails cl
   reason({ comments: [summary()], threads: null }, 'CODEX_GITHUB_DATA_INCOMPLETE');
   reason({ comments: null }, 'CODEX_GITHUB_DATA_INCOMPLETE');
   reason({ comments: [summary()], headSha: 'wrong' }, 'CODEX_HEAD_INVALID');
+  reason({ comments: [summary()], builderActorId: undefined }, 'CODEX_BUILDER_IDENTITY_UNKNOWN');
   reason({ comments: [summary()], builderActorId: CODEX_CONNECTOR_BOT.id }, 'CODEX_SELF_REVIEW');
   reason({ comments: [{ ...summary(), id: 'unknown' }] }, 'CODEX_SUMMARY_INVALID');
   reason({ comments: [{ ...summary(), body: '<!-- codex-pull-request-review-summary -->\nnot-json' }] }, 'CODEX_STATE_MISSING_OR_AMBIGUOUS');
