@@ -541,6 +541,7 @@ function codexReviewStep(record, obs) {
       // Restricted Claude runners need the review text; IDs alone are not actionable.
       const comment = (Array.isArray(thread.comments) ? thread.comments : []).find(item =>
         item?.user?.id === CODEX_CONNECTOR_BOT.id ||
+        item?.author?.login === CODEX_CONNECTOR_BOT.login ||
         item?.author?.login === 'chatgpt-codex-connector');
       const description = typeof comment?.body === 'string' ? comment.body.slice(0, 12000) : '';
       return {
