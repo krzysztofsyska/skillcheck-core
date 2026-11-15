@@ -1,6 +1,7 @@
 import { integrationOnly } from './control-plane.mjs';
 import { parseContract } from './contract.mjs';
 import { reservedBuilderBudget } from './claude-builder.mjs';
+import { CODEX_WAIT_REASONS, verifyCodexConnectorReview } from './codex-connector-review.mjs';
 
 export function assembleWork({ policy, policySha, now, secrets, prompts = null, snapshot, flags = {} }) {
   const integrationSha = snapshot.integrationSha ?? null;
@@ -200,8 +201,15 @@ function awaitingExternalResult(item, now, policy, flags) {
         && Number.isFinite(started) && Date.parse(now) - started < (policy.timeouts?.build_ms ?? 7200000)) return true;
   }
   if (record.state === 'PR_REVIEW' && record.review_request_id) {
+    const subscriptionReview = policy.execution_mode === 'SUBSCRIPTION_ONLY' && record.binding?.lane !== 'promotion';
+    const codex = obs.github.codexReview;
+    const pendingCodex = subscriptionReview && (!codex || CODEX_WAIT_REASONS.has(
+      verifyCodexConnectorReview({
+        comments: codex.comments, threads: codex.threads,
+        headSha: record.head_sha, builderActorId: obs.github.pull?.authorId,
+      }).reason));
     const waiting = !obs.github.ci || (record.binding?.review_dispatched === true && !obs.github.review)
-      || (policy.execution_mode === 'SUBSCRIPTION_ONLY' && record.binding?.lane !== 'promotion' && !obs.github.codexReview);
+      || pendingCodex;
     const started = Date.parse(record.last_transition_at);
     return waiting && Number.isFinite(started)
       && Date.parse(now) - started < (policy.timeouts?.ci_review_ms ?? 2700000);

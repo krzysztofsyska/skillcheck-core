@@ -70,6 +70,28 @@ test('open threads or findings go to FIXING with the thread ids as findings', ()
   assert.deepEqual(findings.record.binding.dispatch.findings.map(f => f.id), ['codex:CODEX_REVIEW_FINDINGS_OR_UNKNOWN']);
 });
 
+test('stale review and older unresolved thread wait, with no repeated repair', () => {
+  const { before, result } = step({
+    comments: [summary({ commit_sha: NEXT_HEAD })],
+    threads: [{ id: 'PRRT_OLD', isResolved: false }],
+  });
+  assert.equal(result.record, before);
+  assert.deepEqual(result.effects ?? [], []);
+});
+
+test('repair preserves Codex bot review text and location', () => {
+  const { result } = step({ threads: [{
+    id: 'PRRT_DETAIL', isResolved: false, path: 'lib/verification.mjs', line: 42,
+    comments: [{ author: { login: 'chatgpt-codex-connector' }, body: 'Guard against stale HEAD before repairing.' }],
+  }] });
+  assert.equal(result.record.state, 'FIXING');
+  assert.deepEqual(result.record.binding.dispatch.findings, [{
+    id: 'PRRT_DETAIL', source: 'github_codex_connector', path: 'lib/verification.mjs',
+    line: 42, description: 'Guard against stale HEAD before repairing.',
+    required_fix: 'Guard against stale HEAD before repairing.',
+  }]);
+});
+
 test('reviewer identity equal to builder, unknown builder or forged comment is rejected', () => {
   for (const [opts, reason] of [[{ author: CODEX_CONNECTOR_BOT.id }, 'CODEX_SELF_REVIEW'],
     [{ author: null }, 'CODEX_BUILDER_IDENTITY_UNKNOWN'],

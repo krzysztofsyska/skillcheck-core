@@ -10,7 +10,7 @@ import { block, newRecord, touch } from './record.mjs';
 import { validateReview } from './review.mjs';
 import { filesOutside } from './scope.mjs';
 import { builderConfiguration } from './claude-builder.mjs';
-import { verifyCodexConnectorReview } from './codex-connector-review.mjs';
+import { CODEX_CONNECTOR_BOT, CODEX_WAIT_REASONS, verifyCodexConnectorReview } from './codex-connector-review.mjs';
 
 const ACTIVE_RUN = new Set(['CREATING', 'RUNNING']);
 const TERMINAL_RUN = new Set(['FINISHED', 'ERROR', 'CANCELLED', 'EXPIRED']);
@@ -489,8 +489,6 @@ function reviewStep(record, obs) {
 // never arms a merge (that still needs the signed review envelope, see
 // approvalStep). Anything that is not a completed exact-HEAD clean review is
 // a wait (until CI_REVIEW_TIMEOUT), a repair, or a block - never a PASS.
-const CODEX_WAIT = new Set(['CODEX_SUMMARY_MISSING_OR_AMBIGUOUS', 'CODEX_REVIEW_PENDING',
-  'CODEX_REVIEW_STALE_HEAD', 'CODEX_SECURITY_REVIEW_UNCONFIRMED']);
 const CODEX_REPAIR = new Set(['CODEX_REVIEW_FINDINGS_OR_UNKNOWN', 'CODEX_REVIEW_THREAD_OPEN']);
 
 function codexReviewStep(record, obs) {
@@ -519,14 +517,14 @@ function codexReviewStep(record, obs) {
   const signature = sha256({ ci: obs.github.ci, codex, request: record.review_request_id });
   if (record.binding.last_evidence_signature === signature) return done(record);
   const ciTrusted = ci.ok || String(ci.reason).startsWith('conclusion_') || ci.reason === 'job_not_success';
-  if (!ciTrusted || (!review.ok && !CODEX_WAIT.has(review.reason) && !CODEX_REPAIR.has(review.reason))) {
+  if (!ciTrusted || (!review.ok && !CODEX_WAIT_REASONS.has(review.reason) && !CODEX_REPAIR.has(review.reason))) {
     const rejected = touch(record, obs.now);
     rejected.binding.evidence = { ci, review: null, codex: review };
     rejected.binding.last_evidence_signature = signature;
     rejected.binding.reports.push({ kind: 'EVIDENCE_REJECTED', ci: ci.reason ?? null, review: review.reason ?? null, at: obs.now });
     return done(block(rejected, 'EVIDENCE_REJECTED', obs.now));
   }
-  if (!review.ok && CODEX_WAIT.has(review.reason)) return waitOrTimeout();
+  if (!review.ok && CODEX_WAIT_REASONS.has(review.reason)) return waitOrTimeout();
   const next = touch(record, obs.now);
   next.binding.evidence = { ci, review: null, codex: review };
   next.binding.last_evidence_signature = signature;
@@ -539,7 +537,19 @@ function codexReviewStep(record, obs) {
   }
   const findings = (Array.isArray(codex.threads) ? codex.threads : [])
     .filter(thread => thread?.isResolved !== true)
-    .map(thread => ({ id: String(thread?.id ?? ''), source: 'github_codex_connector' }));
+    .map(thread => {
+      // Restricted Claude runners need the review text; IDs alone are not actionable.
+      const comment = (Array.isArray(thread.comments) ? thread.comments : []).find(item =>
+        item?.user?.id === CODEX_CONNECTOR_BOT.id ||
+        item?.author?.login === 'chatgpt-codex-connector');
+      const description = typeof comment?.body === 'string' ? comment.body.slice(0, 12000) : '';
+      return {
+        id: String(thread?.id ?? ''), source: 'github_codex_connector',
+        path: typeof thread?.path === 'string' ? thread.path : '',
+        line: Number.isSafeInteger(thread?.line) && thread.line > 0 ? thread.line : null,
+        description, required_fix: description,
+      };
+    });
   if (!review.ok && findings.length === 0) findings.push({ id: `codex:${review.reason}`, source: 'github_codex_connector' });
   return beginRepair(next, obs, findings);
 }
