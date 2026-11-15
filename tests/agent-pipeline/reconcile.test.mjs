@@ -183,7 +183,10 @@ test('reconcileFromEnv does not call the network without configuration', async (
     assert.equal(missing.status, 'NOT_CONFIGURED');
     assert.equal(missing.controllerInvoked, false);
     assert.deepEqual(missing.effects, []);
-    assert.equal(missing.missing.includes('CURSOR_API_KEY'), true);
+    assert.equal(missing.missing.includes('SUBSCRIPTION_CLAUDE_WORKFLOW_UNCONFIGURED'), true);
+    assert.equal(missing.missing.includes('SUBSCRIPTION_OAUTH_BUDGET_ADAPTER_NOT_WIRED'), true);
+    assert.equal(missing.missing.includes('SUBSCRIPTION_INDEPENDENT_REVIEW_NOT_WIRED'), true);
+    assert.equal(missing.missing.includes('CURSOR_API_KEY'), false);
     const disabled = await reconcileFromEnv({
       AGENT_PIPELINE_ENABLED: 'false',
       AGENT_PIPELINE_MERGE_ENABLED: 'false',
