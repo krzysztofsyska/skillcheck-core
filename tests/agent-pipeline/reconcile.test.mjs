@@ -336,6 +336,8 @@ test('subscription thread reader returns Codex finding text and rejects truncate
   const threads = await gh.readReviewThreads(50, { includeComments: true });
   assert.equal(threads[0].comments[0].body, 'Fix stale SHA');
   assert.equal(threads[0].comments[0].line, 11);
+  assert.equal(threads[0].path, 'a.mjs');
+  assert.equal(threads[0].line, 11);
   incomplete = true;
   await assert.rejects(gh.readReviewThreads(50, { includeComments: true }), /REVIEW_THREAD_COMMENTS_INCOMPLETE/);
 });
