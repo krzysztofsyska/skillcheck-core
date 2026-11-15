@@ -119,7 +119,8 @@ function markdown(m, pulls) {
   const out = [];
   out.push(`# Manifest promocji ${m.head_ref} → ${m.base_ref}`, '');
   out.push('Wygenerowano narzędziem `tools/release/promotion-manifest.mjs` (tylko odczyt lokalnego Git).', '');
-  out.push(`- Kandydat (head): \`${m.head_sha}\``, `- Produkcja (base): \`${m.base_sha}\``);\n  if (m.history_base_sha !== m.base_sha) out.push(`- Ostatni wydany commit integration (punkt historii): \`${m.history_base_sha}\``);
+  out.push(`- Kandydat (head): \`${m.head_sha}\``, `- Produkcja (base): \`${m.base_sha}\``);
+  if (m.history_base_sha !== m.base_sha) out.push(`- Ostatni wydany commit integration (punkt historii): \`${m.history_base_sha}\``);
   out.push(`- Commity: **${m.commit_count}**, przypisane do PR: **${m.attributed_count}**, nieprzypisane: **${m.unattributed.length}**`);
   out.push(`- Pliki: **${m.files.length}**; nowe migracje: **${m.migrations_added.length}**`);
   out.push(`- Hash manifestu (sha256): \`${m.manifest_hash}\``, '');
