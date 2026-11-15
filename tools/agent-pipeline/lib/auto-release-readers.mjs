@@ -1,12 +1,14 @@
 // SC-AUTO-RELEASE (#369) stage 4a: GitHub-backed READ-ONLY readers for the collector.
-// Only GET requests through an injected client. Evidence readers (CI/review/Codex),
-// scope-verdict issuer, lock and ledger are deliberately NOT provided here: the
+// Only GET requests through an injected client. Evidence readers (review/Codex),
+// scope-verdict issuer and the released ledger are deliberately NOT provided here: the
 // collector then records COLLECT:* errors and the decision is DENY (fail closed).
 import { decodeGithubContent } from './github.mjs';
 import { withRulesetEvidence } from './ruleset-evidence.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const SAFE_PATH = /^[A-Za-z0-9._\-/]+$/;
+// Every non-terminal workflow-run status GitHub reports; a run in any of them may still write.
+const ACTIVE_RUN_STATUSES = ['queued', 'in_progress', 'waiting', 'requested', 'pending'];
 
 export function createAutoReleaseReaders({ client, repository, policy = {} }) {
   if (!client?.request || !client.readComparison || !client.readReleasePlan) throw new Error('READERS_CLIENT_INVALID');
@@ -60,6 +62,22 @@ export function createAutoReleaseReaders({ client, repository, policy = {} }) {
       if (mine.length !== 1) throw new Error('CI_NOT_UNIQUE');
       const c = mine[0];
       return { head_sha: c.head_sha, completed: c.status === 'completed', conclusion: c.conclusion ?? null };
+    },
+    // Stage 4d: release serialization. Counts every non-terminal run of the pinned promote
+    // workflow. Unpinned id, truncated or inconsistent pages, or a run of another workflow
+    // throw, so the collector records READ_LOCK_FAILED and the release is DENIED.
+    async readLock() {
+      const workflowId = policy.workflow_ids?.promote;
+      if (!Number.isInteger(workflowId)) throw new Error('LOCK_WORKFLOW_NOT_PINNED');
+      let inflight = 0;
+      for (const status of ACTIVE_RUN_STATUSES) {
+        const res = await get(`${root}/actions/workflows/${workflowId}/runs?status=${status}&per_page=100`);
+        const runs = res?.workflow_runs;
+        if (!Array.isArray(runs) || res.total_count !== runs.length || runs.length >= 100) throw new Error('LOCK_INCOMPLETE');
+        if (runs.some(run => run?.workflow_id !== workflowId || run.status !== status)) throw new Error('LOCK_FOREIGN_RUN');
+        inflight += runs.length;
+      }
+      return { held: inflight > 0, inflight };
     },
     async readMigrationSql(path, ref) {
       if (!SAFE_PATH.test(path) || path.includes('..') || !SHA.test(ref ?? '')) throw new Error('MIGRATION_REF_INVALID');

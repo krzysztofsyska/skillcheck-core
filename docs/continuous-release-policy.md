@@ -48,3 +48,6 @@ Until (a)–(d) are resolved the status is IMPLEMENTED (qualification + tests), 
 
 ## Stage 4c (#369): CI evidence reader
 `readCiEvidence(sha)` in `auto-release-readers.mjs` is read-only (GET). It accepts only one `sc-agent/ci` check run for the exact SHA created by the pinned `controller_app_id`; partial, duplicate, foreign-app or other-SHA results are refused. Review, Codex, scope-verdict, backup, lock and ledger readers are still missing, so the collector still returns DENY. Status: IMPLEMENTED (offline tests), not LIVE.
+
+## Stage 4d (#369): release lock reader
+`readLock()` in `auto-release-readers.mjs` is read-only (GET). It lists runs of the pinned `workflow_ids.promote` workflow in every non-terminal status (`queued`, `in_progress`, `waiting`, `requested`, `pending`) and returns `{ held, inflight }`; any active run holds the lock. An unpinned workflow id, a truncated or inconsistent page, or a run of another workflow or status throws, so the collector records `READ_LOCK_FAILED` and the decision is DENY. It complements, and does not replace, the Actions `concurrency` group of item 2 above. Review, Codex, scope-verdict, backup and released-ledger readers are still missing, so the collector still returns DENY. Status: IMPLEMENTED (offline tests), not LIVE.
