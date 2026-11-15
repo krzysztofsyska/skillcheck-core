@@ -83,6 +83,19 @@ test('reviewer identity equal to builder, unknown builder or forged comment is r
   assert.equal(forged.record.state, 'PR_REVIEW', 'a forged summary is not evidence');
 });
 
+test('completed Codex review without CI evidence cannot pass or authorize merge', () => {
+  const { record, obs } = setup({ ci: null });
+  const pending = plan(record, obs);
+  assert.equal(pending.record.state, 'PR_REVIEW');
+  assert.deepEqual(pending.effects ?? [], []);
+  assert.equal(pending.record.binding.merge ?? null, null);
+  const timed = setup({ ci: null });
+  timed.obs.now = '2026-10-07T12:00:00.000Z';
+  const expired = plan(timed.record, timed.obs);
+  assert.equal(expired.record.state, 'BLOCKED');
+  assert.equal(expired.record.blocked_reason, 'CI_REVIEW_TIMEOUT');
+});
+
 test('failed CI with a clean Codex review is repaired, not passed', () => {
   const { result } = step({ ci: 'failure' });
   assert.equal(result.record.state, 'FIXING');
