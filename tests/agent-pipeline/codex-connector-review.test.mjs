@@ -60,6 +60,11 @@ test('stale, running, finding and ambiguous reviews never count as PASS', () => 
   reason({ comments: [summary(state({ has_any_findings: true }))] }, 'CODEX_REVIEW_FINDINGS_OR_UNKNOWN');
   reason({ comments: [summary(state({ has_unresolved_findings: null }))] }, 'CODEX_REVIEW_FINDINGS_OR_UNKNOWN');
   reason({ comments: [summary(state({ status: 'completed' }, { status: 'running' }))] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
+  reason({ comments: [summary({ code_review: state().code_review, security_review: 'unknown' })] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
+  reason({ comments: [summary({ code_review: state().code_review })] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
+  reason({ comments: [summary(state({}, { has_any_findings: true }))] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
+  reason({ comments: [summary(state({}, { has_unresolved_findings: true }))] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
+  reason({ comments: [summary({ code_review: state().code_review, security_review: { status: null } })] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
   reason({ comments: [summary(state({}, { status: 'completed', commit_sha: OTHER,
     has_any_findings: false, has_unresolved_findings: false }))] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
   reason({ threads: [{ isResolved: false }] }, 'CODEX_REVIEW_THREAD_OPEN');
