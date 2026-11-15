@@ -148,7 +148,7 @@ export function dispatchInputs(effect) {
   return inputs;
 }
 
-export async function loadWorkFromClients({ github, cursor = null, policy, now, secrets, prompts = null, policyCommit = null }) {
+export async function loadWorkFromClients({ github, cursor = null, policy, now, secrets, prompts = null, policyCommit = null, flags = {} }) {
   const controlBranch = controlPlane(policy).branch;
   const [integration, main, issues, pulls, projection, control] = await Promise.all([
     github.readBranch('integration'),
@@ -205,6 +205,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
     now,
     secrets,
     prompts,
+    flags,
     snapshot: {
       integrationSha: integration?.commit?.sha ?? null,
       mainSha: main?.commit?.sha ?? null,
@@ -239,6 +240,7 @@ async function loadWorkFromEnv(env, policy, flags, configuration, sharedGithub) 
     secrets: secretsFromEnv(env, policy),
     prompts: readPrompts(),
     policyCommit: env.AGENT_POLICY_COMMIT,
+    flags,
   });
   if (flags.enabled && !configuration.ok) return work;
   return work;

@@ -85,7 +85,8 @@ begin
   -- R15, or R16 once SC-AC-SESSION (#276) is installed: both are reviewed baselines. The
   -- accepted value is remembered for this transaction and the postflight requires the same one.
   if private.erasure_schema_signature() not in ('1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44',
-      'e958cb168fc311a1e908b374cfc1bfee6524945b56f00e9639899ad72f75aea8') then
+      'e958cb168fc311a1e908b374cfc1bfee6524945b56f00e9639899ad72f75aea8',
+      '8ad238e75d4d4ccb82e03b89f368ba06483580781494fe1f7f9306a3c9c7f73f') then
     raise exception 'sc020b_rollback_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
   end if;
   perform set_config('sc020.rollback_signature', private.erasure_schema_signature(), true);

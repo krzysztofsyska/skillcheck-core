@@ -6,6 +6,7 @@ import {
   recommendationKindLabels, recruitmentChannelLabels,
 } from "../../../../../../lib/process-diagnostics";
 import { describeMetrics, describeScope } from "../../../../../../lib/process-metrics";
+import { checkpoints, parseRecruitmentFollowupMetrics, recruitmentFollowupRateText } from "../../../../../../lib/process-followup";
 import { DiagnosticForm } from "./diagnostic-form";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,7 +45,14 @@ export default async function DiagnosticsPage({ params }: { params: Promise<{ co
   if (position.error) throw new Error("Nie udało się wczytać stanowiska.");
   const measured = await client.rpc("process_recruitment_metrics", { target_company: companyId, target_recruitment: recruitmentId });
   // Błąd odczytu wskaźników nie zamienia się w zera: każdy wskaźnik pokaże wtedy „brak pomiaru".
-  const metrics = describeMetrics(measured.error ? null : measured.data);
+  const metrics = describeMetrics(measured.error ? null : measured.data).filter(m => !['probation_pass_rate','retention_rate'].includes(m.key));
+  // This separate RPC scopes candidate-linked observations to each caller's explicit grants.
+  // RPCs take NOWAIT locks on the same visible cases: serialize checkpoints to avoid self-conflicts.
+  const followupMetrics: {checkpoint: number; data: ReturnType<typeof parseRecruitmentFollowupMetrics>}[] = [];
+  for (const checkpoint of checkpoints) {
+    const result = await client.rpc("process_followup_recruitment_metrics", { target_company: companyId, target_recruitment: recruitmentId, checkpoint });
+    followupMetrics.push({ checkpoint, data: result.error ? null : parseRecruitmentFollowupMetrics(result.data) });
+  }
 
   const { inflow, history } = state;
   const proposal = proposeDiagnosticAreas({
@@ -105,6 +113,12 @@ export default async function DiagnosticsPage({ params }: { params: Promise<{ co
         <td>{metric.dataScope} {metric.availableToday && <small>{describeScope(metric)}</small>}</td>
       </tr>)}</tbody>
     </table>
-    <p><small>Wskaźniki mierzą czas i przebieg rekrutacji, nie ludzi. Przejście okresu próbnego i retencja wymagają obserwacji po zatrudnieniu, których system jeszcze nie zbiera.</small></p>
+    <h2>Przejście próby i retencja po zatrudnieniu</h2>
+    <p>Zakres: tylko udostępnione Ci obserwacje po zatrudnieniu w tej rekrutacji. Każde zgłoszenie liczymy raz, z jego najnowszego dostępnego celu po zatrudnieniu. Oceny wewnętrzne i awansowe oraz zamrożone dane nie są liczone.</p>
+    <p>Przejście próby to pozytywne wyniki / wszystkie zmierzone wyniki próby. Retencja to trwające zatrudnienie / wszystkie znane stany zatrudnienia. Brak obserwacji lub brak pomiaru nie jest wynikiem negatywnym i nie wchodzi do mianownika.</p>
+    <table><thead><tr><th scope="col">Okres</th><th scope="col">Dostępne zgłoszenia</th><th scope="col">Przejście próby</th><th scope="col">Retencja</th></tr></thead>
+      <tbody>{followupMetrics.map(({checkpoint,data})=><tr key={checkpoint}><th scope="row">{checkpoint} dni</th><td>{data?.population ?? "dane niedostępne"}</td><td>{recruitmentFollowupRateText(data?.probation ?? null)}</td><td>{recruitmentFollowupRateText(data?.retention ?? null)}</td></tr>)}</tbody>
+    </table>
+    <p><small>Wskaźniki mierzą czas i przebieg rekrutacji, nie ludzi. Obserwacje 30/90/180 dni zapisuje uprawniona osoba na stronie etapów oceny konkretnego zgłoszenia. Wyniki nie podejmują decyzji kadrowych.</small></p>
   </section></main>;
 }
