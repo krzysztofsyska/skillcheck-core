@@ -66,6 +66,13 @@ export function guardEffects(effects, observation) {
       suppressed.push(effect);
       continue;
     }
+    // #436: a LIVE flag cannot activate either paid model workflow while
+    // the subscription handoff/reviewer runtime remains unverified. This
+    // second gate protects even if callers incorrectly bypass configuration.
+    if (!observation.simulation && observation.policy?.execution_mode === 'SUBSCRIPTION_ONLY') {
+      suppressed.push(effect);
+      continue;
+    }
     // Reconcile overwrites preflight with the current trusted protection read.
     // An enabled flag or stale snapshot is not permission to spend provider
     // budget when environment/ruleset verification failed or was unavailable.
