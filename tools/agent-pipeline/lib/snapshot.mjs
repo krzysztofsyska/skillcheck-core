@@ -36,10 +36,17 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId))));
   const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && notificationBlocksQueue(i.record, policy));
   const postMerge = items.filter(i => i.record?.technical_state === 'WAITING_POST_MERGE_CI' || i.record?.binding?.post_merge_ci?.blocked);
-  // One active task per repository. A reconcilable accepted report still runs
-  // before new work. An unconfirmed report past the transport bound does not,
-  // including in the terminal fallback, so a later DONE or BLOCKED report can run.
-  const selected = postMerge.length ? [postMerge[0]] : active.length ? active : acceptedOutbox.length ? [acceptedOutbox[0]] : fresh.length ? [fresh[0]] : terminalWork(terminal, policy);
+  const readyPostMerge = postMerge.filter(i => postMergeNeedsAttention(i, now, policy));
+  const readyActive = active.filter(i => !awaitingExternalResult(i, now, policy));
+  const waitingActive = active.filter(i => awaitingExternalResult(i, now, policy));
+  // At most two active tasks per repository. Waiting on a build/CI/review or
+  // a blocked post-merge check must not monopolise the controller's next poll.
+  // Dependencies are separately gated until post-merge verification succeeds.
+  const freeSlots = Math.max(0, 2 - active.length);
+  const next = readyPostMerge[0] ?? readyActive[0] ?? acceptedOutbox[0]
+    ?? (freeSlots ? fresh[0] : null) ?? waitingActive[0]
+    ?? postMerge[0] ?? terminalWork(terminal, policy)[0];
+  const selected = next ? [next] : [];
   return { items: selected, integrationSha, mainSha, read: snapshot.read ?? 'github' };
 }
 
@@ -139,7 +146,42 @@ export function cursorSnapshot(agent, runsPayload) {
   };
 }
 
-function recordsDependency(snapshot, id) { return ['ACCEPTED', 'DONE'].includes(snapshot.records?.[id]?.state); }
+function postMergeNeedsAttention(item, now, policy) {
+  const record = item.record;
+  const result = item.observation.github.postMergeCi;
+  if (result?.ok === true) return result.headSha === record.binding?.merge?.mergeCommitSha;
+  const blocked = record.binding?.post_merge_ci?.blocked === true;
+  if (result && result.pending !== true && (!blocked || result.reason !== record.blocked_reason)) return true;
+  if (blocked) return false;
+  const started = Date.parse(record.binding?.merge?.confirmed_at ?? record.last_transition_at);
+  const timeout = policy.post_merge_ci?.timeout_ms ?? policy.timeouts?.ci_review_ms ?? 2700000;
+  return Number.isFinite(started) && Date.parse(now) - started >= timeout;
+}
+
+function awaitingExternalResult(item, now, policy) {
+  const record = item.record;
+  const obs = item.observation;
+  if (['BUILDING', 'FIXING'].includes(record.state)) {
+    const run = obs.cursor?.runs?.find(r => r.id === record.cursor_run_id);
+    const started = Date.parse(run?.createdAt ?? record.binding?.dispatch?.started_at ?? record.last_transition_at);
+    if (['CREATING', 'RUNNING'].includes(run?.status)
+        && Number.isFinite(started) && Date.parse(now) - started < (policy.timeouts?.build_ms ?? 7200000)) return true;
+  }
+  if (record.state === 'PR_REVIEW' && record.review_request_id) {
+    const waiting = !obs.github.ci || (record.binding?.review_dispatched === true && !obs.github.review);
+    const started = Date.parse(record.last_transition_at);
+    return waiting && Number.isFinite(started)
+      && Date.parse(now) - started < (policy.timeouts?.ci_review_ms ?? 2700000);
+  }
+  return false;
+}
+
+function recordsDependency(snapshot, id) {
+  const record = snapshot.records?.[id];
+  return record && ['ACCEPTED', 'DONE'].includes(record.state)
+    && record.technical_state !== 'WAITING_POST_MERGE_CI'
+    && record.binding?.post_merge_ci?.blocked !== true;
+}
 
 function notificationBlocksQueue(record, policy) {
   const pending = record.binding?.pending_notification;
