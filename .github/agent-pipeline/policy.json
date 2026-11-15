@@ -125,5 +125,6 @@
     "workflow_id": 371409699,
     "path": ".github/workflows/checks.yml",
     "timeout_ms": 2700000
-  }
+  },
+  "execution_mode": "SUBSCRIPTION_ONLY"
 }
