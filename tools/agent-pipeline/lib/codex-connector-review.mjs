@@ -40,12 +40,17 @@ export function verifyCodexConnectorReview({ comments, threads, headSha, builder
     return reject('CODEX_REVIEW_FINDINGS_OR_UNKNOWN');
   }
   const security = state.security_review;
-  if (security?.status != null &&
-      (security.status !== 'completed' || security.commit_sha !== headSha ||
-       security.has_any_findings !== false || security.has_unresolved_findings !== false)) {
+  if (!security || typeof security !== 'object' || Array.isArray(security)) {
     return reject('CODEX_SECURITY_REVIEW_UNCONFIRMED');
   }
+  // Explicit all-null fields are the only legitimate "not requested" state.
+  // Missing fields, partial findings and contradictory states must fail closed.
+  const notRequested = security.status === null && security.commit_sha === null &&
+    security.has_any_findings === null && security.has_unresolved_findings === null;
+  const completed = security.status === 'completed' && security.commit_sha === headSha &&
+    security.has_any_findings === false && security.has_unresolved_findings === false;
+  if (!notRequested && !completed) return reject('CODEX_SECURITY_REVIEW_UNCONFIRMED');
   return { ok: true, source: 'github_codex_connector', headSha,
     reviewerId: CODEX_CONNECTOR_BOT.id, commentId: comment.id,
-    codeReview: 'completed', securityReview: security?.status ?? 'not_requested' };
+    codeReview: 'completed', securityReview: completed ? 'completed' : 'not_requested' };
 }
