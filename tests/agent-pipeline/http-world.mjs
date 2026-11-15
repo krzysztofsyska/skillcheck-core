@@ -8,7 +8,7 @@ export const MAIN = 'd'.repeat(40), BASE = 'c'.repeat(40), H1 = 'a'.repeat(40), 
 export function configuredPolicy() {
   // Synthetic legacy controller regression fixture only. The real policy
   // selects SUBSCRIPTION_ONLY and remains fail-closed until its new path works.
-  const p = loadPolicy(); p.execution_mode = 'LEGACY'; p.controller_app_id = 123; p.controller_actor_id = 456;
+  const p = loadPolicy(); p.execution_mode = 'LEGACY'; p.builder_provider = 'cursor'; p.controller_app_id = 123; p.controller_actor_id = 456;
   Object.keys(p.workflow_ids).forEach((key, i) => { p.workflow_ids[key] = 1000 + i; });
   p.environments.owner_acceptance.id = 800; p.environments.production_approval.id = 801; p.environments.agent_review.id = 802;
   return p;
