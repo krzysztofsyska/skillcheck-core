@@ -28,10 +28,21 @@ test('LIVE rejects subscription-only before any paid provider credentials can he
   for (const env of [{}, paidCredentials, { ...paidCredentials, CLAUDE_CODE_OAUTH_TOKEN: 'fake-oauth' }]) {
     const result = assessConfiguration(env, on, policy);
     assert.equal(result.ok, false);
-    assert.ok(result.missing.includes('SUBSCRIPTION_ONLY_RUNTIME_NOT_READY'));
+    assert.ok(result.missing.includes('SUBSCRIPTION_CLAUDE_WORKFLOW_UNCONFIGURED'));
+    assert.ok(result.missing.includes('SUBSCRIPTION_OAUTH_BUDGET_ADAPTER_NOT_WIRED'));
+    assert.ok(result.missing.includes('SUBSCRIPTION_INDEPENDENT_REVIEW_NOT_WIRED'));
     assert.equal(result.missing.includes('CURSOR_API_KEY'), false, 'no Cursor fallback');
     assert.equal(result.missing.includes('CLAUDE_BUDGET_UNAPPROVED'), false, 'no billed Claude fallback');
   }
+  const disabledBuilder = assessConfiguration(paidCredentials, on, {
+    ...policy, claude_builder: { ...policy.claude_builder, enabled: false },
+  });
+  assert.ok(disabledBuilder.missing.includes('SUBSCRIPTION_CLAUDE_BUILDER_DISABLED'));
+  const fakeConfiguredWorkflow = assessConfiguration(paidCredentials, on, {
+    ...policy, claude_builder: { ...policy.claude_builder, workflow_id: 123 },
+  });
+  assert.equal(fakeConfiguredWorkflow.missing.includes('SUBSCRIPTION_CLAUDE_WORKFLOW_UNCONFIGURED'), false);
+  assert.equal(fakeConfiguredWorkflow.ok, false, 'workflow ID alone cannot authorize LIVE');
   assert.ok(assessConfiguration(paidCredentials, on, { ...policy, execution_mode: 'typo' })
     .missing.includes('EXECUTION_MODE_UNRECOGNIZED'));
 });
