@@ -113,7 +113,7 @@ test('model workflow has no GitHub write token and no direct label scheduler',()
  const source=readFileSync(file,'utf8');assert.equal(source.includes('id-token: write'),false);assert.equal(source.includes('APP_PRIVATE_KEY'),false);assert.equal(source.includes('issues:\n    types'),false);
  assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);
  assert.match(source,/HAS_OAUTH:.*CLAUDE_CODE_OAUTH_TOKEN/);
- assert.match(source,/run: test "\\$HAS_OAUTH" = true/);
+ assert.match(source,/run: test "\$HAS_OAUTH" = true/);
  assert.equal(source.includes('ANTHROPIC_API_KEY'),false);
  assert.equal(source.includes('anthropic_api_key:'),false);
  assert.equal(source.includes('OPENAI_API_KEY'),false);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.execution_file/);assert.match(source,/--setting-sources user/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
