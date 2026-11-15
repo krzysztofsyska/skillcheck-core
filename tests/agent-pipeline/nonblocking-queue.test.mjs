@@ -183,3 +183,23 @@ test('pending, stale and incomplete Codex review do not starve second active tas
     assert.equal(result.items[0].record?.task_id, second.task_id);
   }
 });
+
+test('held CODEX_REVIEW_PASSED task yields to another active task even with merge enabled', () => {
+  const { policy, policySha } = loadedPolicy();
+  policy.execution_mode = 'SUBSCRIPTION_ONLY';
+  const held = taskRecord({ state: 'READY_FOR_OWNER', technical_state: 'CODEX_REVIEW_PASSED' });
+  held.task_id = 'SC-HELD-CODEX-PASS';
+  const second = taskRecord({ state: 'BUILDING' });
+  second.task_id = 'SC-INDEPENDENT-ACTIVE';
+  second.pr_number = 51;
+  for (const mergeEnabled of [false, true]) {
+    const result = assembleWork({
+      policy, policySha, now: NOW, secrets: {}, flags: { mergeEnabled },
+      snapshot: {
+        records: { [held.task_id]: held, [second.task_id]: second },
+        issues: [], integrationSha: 'c'.repeat(40), mainSha: 'd'.repeat(40), pulls: [],
+      },
+    });
+    assert.equal(result.items[0].record?.task_id, second.task_id, `mergeEnabled=${mergeEnabled}`);
+  }
+});

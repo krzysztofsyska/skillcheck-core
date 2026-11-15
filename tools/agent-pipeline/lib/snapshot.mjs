@@ -194,6 +194,9 @@ function awaitingExternalResult(item, now, policy, flags) {
   const obs = item.observation;
   if (record.state === 'READY_FOR_OWNER' && policy.integration_merge_policy === 'verified_ci_review'
       && flags.mergeEnabled !== true) return true;
+  // Codex connector PASS is held for an independent reviewer regardless of the merge
+  // flag (approvalStep never arms a merge for it), so it must not monopolise the queue.
+  if (record.state === 'READY_FOR_OWNER' && record.technical_state === 'CODEX_REVIEW_PASSED') return true;
   if (['BUILDING', 'FIXING'].includes(record.state)) {
     const run = obs.cursor?.runs?.find(r => r.id === record.cursor_run_id);
     const started = Date.parse(run?.createdAt ?? record.binding?.dispatch?.started_at ?? record.last_transition_at);
