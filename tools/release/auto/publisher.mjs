@@ -92,9 +92,9 @@ async function candidates(d) {
 }
 
 function heldFor(comments, headSha, botLogin) {
-  // A transient hold (a failed evidence read) does not hold the PR: the next run retries it,
-  // bounded by TRANSIENT_ATTEMPTS, after which a permanent hold is written instead.
-  return markers(comments, headSha, botLogin).some(j => j.transient !== true);
+  // Only a `scope` hold (an unmarked one, or an older marker without `kind`) holds this commit.
+  // `transient` and `review` holds are reconsidered by the next run — see `hold` above.
+  return markers(comments, headSha, botLogin).some(j => j.kind !== 'transient' && j.kind !== 'review' && j.transient !== true);
 }
 
 async function evaluate(d, pr, comments) {
@@ -396,12 +396,16 @@ async function finish(d, pr, started) {
     // times: each attempt costs a cherry-pick, a release PR and a full CI run, so an evidence
     // source that stays unreadable would otherwise repeat that every run, for ever. After
     // TRANSIENT_ATTEMPTS the hold becomes permanent like any other and waits for a new commit.
-    // Counted from the PR's own comments, read here: `finish` does not receive them, and the list
-    // must be fresh anyway — an earlier run of this same release may have added a marker since.
-    const seenSoFar = countTransient(await d.gh.paginate(`/issues/${pr.number}/comments`), pr.head.sha, d.appBotLogin);
-    const transient = isTransient(r.codes) && seenSoFar + 1 < TRANSIENT_ATTEMPTS;
+    let kind = 'scope';
+    if (isReviewState(r.codes)) kind = 'review';
+    else if (isTransient(r.codes)) {
+      // Counted from the PR's own comments, read here: `finish` does not receive them, and the
+      // list must be fresh — an earlier run of this same release may have added a marker since.
+      const seenSoFar = countTransient(await d.gh.paginate(`/issues/${pr.number}/comments`), pr.head.sha, d.appBotLogin);
+      if (seenSoFar + 1 < TRANSIENT_ATTEMPTS) kind = 'transient';
+    }
     if (!r.codes.includes('RELEASE_FROZEN')) {
-      await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200), transient);
+      await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200), kind);
     }
     return { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
   }
@@ -450,17 +454,31 @@ async function rollbackRelease(d, { mergeSha, sourcePr }) {
   return { ok: r.ok, codes: r.ok ? [] : [`ROLLBACK_${String(r.stage).toUpperCase()}_FAILED`, ...(r.codes ?? [])] };
 }
 
-// A hold recorded as `transient` is a failed read, not a verdict on the change: `heldFor` steps
-// over it so the next run retries, and `countTransient` bounds how often that may happen.
+// Why a hold was written decides whether it may ever be reconsidered for the same commit.
+// `scope` (payments, destructive SQL, provenance, a failed CI of the release itself…) cannot
+// change without a new commit, so it holds for good. The other two can change on their own:
+//  - `transient`: an evidence read failed. Says nothing about the change. Retried, but bounded by
+//    TRANSIENT_ATTEMPTS, because every attempt costs a cherry-pick, a release PR and a CI run.
+//  - `review`: the review state said no (an unresolved conversation, a standing change request).
+//    Resolving the conversation is exactly how that is answered, and then the commit must become
+//    releasable again — a closed PR cannot get a new SHA, so a permanent hold here would mean a
+//    correct change, already on `integration`, never reaching production. Unbounded, and cheap:
+//    `evaluate` reads the review state before any cherry-pick, so while it still says no the run
+//    ends without opening anything.
 export const TRANSIENT_ATTEMPTS = 3;
 export const isTransient = codes => Array.isArray(codes) && codes.length > 0 && codes.every(c => /_UNKNOWN$/.test(String(c)));
+export const isReviewState = codes => Array.isArray(codes) && codes.length > 0
+  && codes.every(c => /^REVIEW_/.test(String(c))) && !isTransient(codes);
 
-async function hold(d, pr, reason, transient = false) {
-  const note = transient
-    ? 'Dowodu nie udało się odczytać, to nie jest ocena samej zmiany — kolejny przebieg spróbuje ponownie.'
-    : 'Nowy commit w tym PR (nowy SHA) i nowe review odblokowują ponowną próbę.';
+async function hold(d, pr, reason, kind = 'scope') {
+  const note = {
+    transient: 'Dowodu nie udało się odczytać, to nie jest ocena samej zmiany — kolejny przebieg spróbuje ponownie.',
+    review: 'Stan review blokuje wydanie. Po zamknięciu wątku lub wycofaniu żądania zmian kolejny przebieg oceni tę wersję ponownie, bez nowego commita.',
+    scope: 'Nowy commit w tym PR (nowy SHA) i nowe review odblokowują ponowną próbę.',
+  }[kind] ?? 'Nowy commit w tym PR (nowy SHA) i nowe review odblokowują ponowną próbę.';
+  const mark = { head_sha: pr.head.sha, reason: String(reason).slice(0, 200), ...(kind === 'scope' ? {} : { kind }) };
   await d.gh.post(`/issues/${pr.number}/comments`, {
-    body: `Automatyczne wydanie wstrzymane: \`${reason}\`. ${note}\n\n<!-- ${HELD} ${JSON.stringify({ head_sha: pr.head.sha, reason: String(reason).slice(0, 200), ...(transient ? { transient: true } : {}) })} -->`,
+    body: `Automatyczne wydanie wstrzymane: \`${reason}\`. ${note}\n\n<!-- ${HELD} ${JSON.stringify(mark)} -->`,
   });
 }
 
@@ -475,7 +493,7 @@ function markers(comments, headSha, botLogin) {
 }
 
 function countTransient(comments, headSha, botLogin) {
-  return markers(comments, headSha, botLogin).filter(j => j.transient === true).length;
+  return markers(comments, headSha, botLogin).filter(j => j.kind === 'transient' || j.transient === true).length;
 }
 
 async function openFreeze(d, codes, where, details = {}) {

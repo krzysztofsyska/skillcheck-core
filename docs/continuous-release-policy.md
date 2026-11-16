@@ -125,11 +125,17 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
 A PR held by these gates is only logged (run log and step summary) and retried on the next run; a
 new commit (new SHA) and a new review retry it too. A `HELD` comment on the PR is written only
 where the hold must survive restarts: a refusal found again right before the merge, a release whose own CI went red
-(`RELEASE_CI_FAILED`), or a failed start. A hold whose every reason code ends in `_UNKNOWN` (a read that failed, saying nothing about the
-change) is recorded as `transient`: the next run steps over it and retries, because losing a
-release to one failed read would be wrong. That retry is bounded (`TRANSIENT_ATTEMPTS`, 3): each
-attempt costs a cherry-pick, a release PR and a full CI run, so an evidence source that stays
-unreadable becomes a permanent hold like any other and waits for a new commit.
+(`RELEASE_CI_FAILED`), or a failed start. Why a hold was written decides whether the same commit may be reconsidered. A `scope` hold
+(payments, destructive SQL, provenance, the release's own CI) cannot change without a new commit
+and holds for good. Two kinds can change on their own and are reconsidered by the next run:
+`transient` — every reason code ends in `_UNKNOWN`, so an evidence read failed and said nothing
+about the change; bounded by `TRANSIENT_ATTEMPTS` (3), because each attempt costs a cherry-pick, a
+release PR and a CI run, after which it becomes a `scope` hold. `review` — the review state said
+no (`REVIEW_*`): resolving the conversation or withdrawing the change request is exactly how that
+is answered, and the commit must then become releasable again, because a closed PR cannot get a
+new SHA and a permanent hold would mean a correct change, already on `integration`, never reaching
+production. Unbounded, and cheap: while the review state still says no, `evaluate` refuses before
+any cherry-pick, so the run opens nothing.
 `REVIEW_PENDING_SUBMISSION` is defence in depth only: GitHub shows a `PENDING` review to its
 author alone, so the publisher's App token will not normally see one.
 

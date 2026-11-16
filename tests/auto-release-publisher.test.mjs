@@ -487,7 +487,7 @@ test('C12: przejściowy brak dowodu jest ponawiany do granicy prób, potem wstrz
   // znaczniki: TRANSIENT_ATTEMPTS-1 przejściowych, a ostatni trwały
   const held = state.comments[100].filter(c => /sc-auto-release-held:v1/.test(c.body ?? ''));
   assert.equal(held.length, TRANSIENT_ATTEMPTS, `po jednym znaczniku na przebieg: ${held.length}`);
-  const transientMarks = held.filter(c => /"transient":true/.test(c.body));
+  const transientMarks = held.filter(c => /"kind":"transient"/.test(c.body));
   assert.equal(transientMarks.length, TRANSIENT_ATTEMPTS - 1, 'ostatnia próba zapisuje wstrzymanie trwałe');
 
   // po trwałym wstrzymaniu kolejny przebieg nie podejmuje już nawet próby wydania
@@ -497,4 +497,35 @@ test('C12: przejściowy brak dowodu jest ponawiany do granicy prób, potem wstrz
   assert.equal(after.status, 'NOTHING_TO_RELEASE', JSON.stringify(after));
   assert.deepEqual(after.held, [{ pr: 100, reasons: ['HELD_EARLIER'] }]);
   assert.equal(state.pulls.length, before, 'żaden nowy PR wydania nie powstał');
+});
+
+// C13 (#460, uwaga Codexa): wstrzymanie z powodu stanu review musi być ponownie oceniane.
+// Wątek pojawia się dopiero w trakcie CI PR-a wydaniowego, więc trafia na ponowne sprawdzenie
+// przed scaleniem. Po zamknięciu wątku ta sama, już scalona do integration zmiana musi wyjść —
+// zamknięty PR nie dostanie nowego SHA, więc trwałe wstrzymanie znaczyłoby "nigdy".
+test('C13: wstrzymanie z powodu review jest ponawiane po zamknięciu wątku', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  let calls = 0; let open = true;
+  // pierwszy odczyt w przebiegu (evaluate) jest czysty, drugi (recheck przed scaleniem) widzi wątek
+  gh.reviewThreads = async () => {
+    calls += 1;
+    return open && calls > 1 ? [{ resolved: false, outdated: false, path: 'app/regulamin/page.tsx' }] : [];
+  };
+
+  calls = 0;
+  const first = await runPublisher(deps(fx, gh));
+  assert.equal(first.status, 'HELD', JSON.stringify(first));
+  assert.ok(first.codes.some(c => c.includes('REVIEW_THREADS_UNRESOLVED')), first.codes.join(','));
+  assert.equal(state.merged.length, 0);
+  const held = state.comments[100].filter(c => /sc-auto-release-held:v1/.test(c.body ?? ''));
+  assert.equal(held.length, 1);
+  assert.match(held[0].body, /"kind":"review"/);
+
+  // wątek zamknięty: kolejny przebieg ocenia tę samą wersję ponownie i wydaje ją
+  open = false; calls = 0;
+  const second = await runPublisher(deps(fx, gh));
+  assert.equal(second.status, 'RELEASED', JSON.stringify(second));
+  assert.equal(second.source_pr, 100);
+  assert.equal(fx.originGit('show', 'main:app/regulamin/page.tsx').trim(), 'v2');
 });
