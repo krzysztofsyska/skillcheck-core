@@ -36,6 +36,12 @@ const withVerdict = i => {
   i.scopeVerdict = { source: 'trusted_independent_scope_reader', verdict: 'LOW_RISK_COMPATIBLE', repository: i.current?.repository,
     base_sha: i.current?.mainSha, head_sha: i.current?.integrationSha, manifest_hash: sha256(i.promotion.manifest) };
   i.codex = codexFor(i);
+  if (i.backupEvidence) {
+    i.backupEvidence.repository = i.current.repository;
+    i.backupEvidence.base_sha = i.current.mainSha;
+    i.backupEvidence.head_sha = i.current.integrationSha;
+    i.backupEvidence.manifest_hash = sha256(i.promotion.manifest);
+  }
   return i;
 };
 const good0 = () => ({
@@ -63,12 +69,38 @@ test('compliant low-risk release with full evidence is qualified and bound', () 
   const r = evaluateAutoRelease(good());
   assert.equal(r.decision, 'ALLOW'); assert.match(r.binding, /^[0-9a-f]{64}$/);
 });
-test('additive migration with recovery plan is qualified', () => {
+test('additive migration requires independent PITR/restore evidence as well as a recovery plan', () => {
   const i = good0(); i.promotion.manifest.files.push('supabase/migrations/20261108_x.sql');
   i.migrations = [{ path: 'supabase/migrations/20261108_x.sql', sql: 'alter table t add column c text' }];
   i.promotion.runbook = { id: 'x', backup: 'pitr', rollback_db_compatible: true };
+  assert.ok(evaluateAutoRelease(withVerdict(i)).reasons.includes('MIGRATION_BACKUP_EVIDENCE_MISSING_OR_STALE'));
+  i.backupEvidence = {
+    source: 'trusted_backup_pitr_reader', verified: true, pitr_enabled: true, restore_tested: true,
+  };
   assert.equal(evaluateAutoRelease(withVerdict(i)).decision, 'ALLOW');
 });
+test('migration backup proof rejects forged source, stale binding and untested restore', () => {
+  const i = good0();
+  i.promotion.manifest.files.push('supabase/migrations/20261108_x.sql');
+  i.migrations = [{ path: 'supabase/migrations/20261108_x.sql', sql: 'alter table t add column c text' }];
+  i.promotion.runbook = { id: 'x', backup: 'pitr', rollback_db_compatible: true };
+  i.backupEvidence = {
+    source: 'trusted_backup_pitr_reader', verified: true, pitr_enabled: true, restore_tested: true,
+  };
+  withVerdict(i);
+  assert.equal(evaluateAutoRelease(i).decision, 'ALLOW');
+  for (const change of [
+    { source: 'builder_json' }, { verified: false }, { pitr_enabled: false },
+    { restore_tested: false }, { base_sha: 'f'.repeat(40) },
+    { head_sha: 'f'.repeat(40) }, { manifest_hash: 'f'.repeat(64) },
+    { repository: 'foreign/repo' },
+  ]) {
+    const result = evaluateAutoRelease({ ...i, backupEvidence: { ...i.backupEvidence, ...change } });
+    assert.equal(result.decision, 'DENY');
+    assert.ok(result.reasons.includes('MIGRATION_BACKUP_EVIDENCE_MISSING_OR_STALE'));
+  }
+});
+
 test('P24 hold denies; anything but literal false keeps hold', () => {
   deny(i => { i.trusted = { p24Hold: true }; }, 'P24_HOLD');
   deny(i => { i.trusted = {}; }, 'P24_HOLD');
