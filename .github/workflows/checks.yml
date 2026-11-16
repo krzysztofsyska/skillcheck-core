@@ -145,6 +145,11 @@ jobs:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       - run: npm run test:screening-report
       - run: npm run test:candidate-report
+      # SC-015-D: candidate report CSV export audit on native PostgreSQL (two synthetic companies, withdrawal, rollback).
+      - run: npm run test:candidate-report-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       - run: npm run test:screening-joint
       - run: npm run test:communication
       - run: npm run test:contact-verification
