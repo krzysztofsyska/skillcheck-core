@@ -145,3 +145,64 @@ export async function exportCandidateReport(
     return Response.json({ error: safe.code, message: safe.message }, { status: safe.status, headers: candidateReportExportHeaders });
   }
 }
+
+// SC-015-D2 — historia eksportu na ekranie raportu kandydata.
+// Jedyna droga odczytu dziennika: public.list_candidate_report_exports (baza
+// sama sprawdza członkostwo i przynależność zgłoszenia; najwyżej 50 wpisów,
+// najnowsze pierwsze). Bez danych kandydata: tylko kiedy, kto (rola) i czy to Ty.
+// Błąd odczytu nigdy nie psuje raportu — sekcja pokazuje neutralny komunikat.
+
+export const EXPORT_HISTORY_LIMIT = 50;
+export type ExportActorRole = 'owner' | 'recruiter' | 'viewer' | 'former_member';
+export const exportActorRoleLabels: Record<ExportActorRole, string> = {
+  owner: 'Właściciel konta firmy', recruiter: 'Rekruter', viewer: 'Czytelnik', former_member: 'Osoba spoza obecnego zespołu',
+};
+export type ExportHistoryEntry = { exportedAt: string; actorId: string; actorRole: ExportActorRole; isMe: boolean };
+export type ExportHistory = { ok: true; entries: ExportHistoryEntry[] } | { ok: false };
+
+export const exportHistoryEmptyMessage = 'Ten raport nie był jeszcze eksportowany.';
+export const exportHistoryErrorMessage = 'Nie udało się teraz wczytać historii eksportu. Raport poniżej jest aktualny.';
+
+function parseHistoryRow(row: unknown): ExportHistoryEntry | null {
+  if (!row || typeof row !== 'object') return null;
+  const { exported_at: exportedAt, actor_id: actorId, actor_role: actorRole, is_me: isMe } = row as Record<string, unknown>;
+  if (typeof exportedAt !== 'string' || Number.isNaN(Date.parse(exportedAt)) || !isUuid(actorId)
+      || typeof actorRole !== 'string' || !Object.hasOwn(exportActorRoleLabels, actorRole) || typeof isMe !== 'boolean') return null;
+  return { exportedAt, actorId, actorRole: actorRole as ExportActorRole, isMe };
+}
+
+/** Odczyt historii. Każdy błąd, wyjątek lub nieoczekiwany kształt = { ok: false }. */
+export async function loadCandidateReportExportHistory(
+  client: SupabaseClient<Database>, route: ScreeningRoute,
+): Promise<ExportHistory> {
+  try {
+    if (!route || ![route.companyId, route.recruitmentId, route.applicationId].every(isUuid)) return { ok: false };
+    const { data, error } = await client.rpc('list_candidate_report_exports', {
+      target_company: route.companyId.toLowerCase(), target_recruitment: route.recruitmentId.toLowerCase(),
+      target_application: route.applicationId.toLowerCase(),
+    });
+    if (error || !Array.isArray(data) || data.length > EXPORT_HISTORY_LIMIT) return { ok: false };
+    const entries = data.map(parseHistoryRow);
+    if (entries.some(entry => entry === null)) return { ok: false };
+    return { ok: true, entries: entries as ExportHistoryEntry[] };
+  } catch { return { ok: false }; }
+}
+
+export type ExportHistoryView =
+  | { kind: 'error' | 'empty'; message: string }
+  | { kind: 'list'; items: { key: string; when: string; who: string }[]; truncated: boolean };
+
+/** Teksty sekcji „Historia eksportu" (czas w strefie Europe/Warsaw). */
+export function exportHistoryView(history: ExportHistory): ExportHistoryView {
+  if (!history.ok) return { kind: 'error', message: exportHistoryErrorMessage };
+  if (!history.entries.length) return { kind: 'empty', message: exportHistoryEmptyMessage };
+  return {
+    kind: 'list',
+    truncated: history.entries.length >= EXPORT_HISTORY_LIMIT,
+    items: history.entries.map((entry, index) => ({
+      key: `${entry.exportedAt}-${index}`,
+      when: new Date(entry.exportedAt).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' }),
+      who: entry.isMe ? `Ty (${exportActorRoleLabels[entry.actorRole].toLowerCase()})` : exportActorRoleLabels[entry.actorRole],
+    })),
+  };
+}
