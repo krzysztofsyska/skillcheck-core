@@ -255,3 +255,29 @@ test('F3: a rollback cut off mid-way is finished by the next run although releas
   fx.git('fetch', 'origin', 'main');
   assert.equal((await runPublisher(deps(fx, gh))).status, 'FROZEN', 'still frozen until a human closes the issue');
 });
+
+test('F2b: an App rollback PR with an extra commit under the revert is refused', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'broken\n' }]);
+  const pending = new Set();
+  const ci = new Proxy({}, { get: (_, sha) => (pending.has(sha) ? green(sha).map(x => ({ ...x, status: 'in_progress' })) : green(sha)) });
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] }, ci });
+  let n = 0;
+  const post = gh.post;
+  gh.post = async (p, b) => { const r = await post(p, b); if (p === '/pulls' && /revert/.test(b.head)) pending.add(r.head.sha); return r; };
+  await runPublisher(deps(fx, gh, { smoke: async () => (++n === 1 ? { ok: false, failures: ['x'] } : { ok: true, failures: [] }) }));
+  const pr = state.pulls.find(p => p.state === 'open');
+  // Rewrite the branch: an extra commit below the (re-applied) revert.
+  const root = fx.git('rev-parse', '--show-toplevel').trim();
+  fx.git('fetch', 'origin', 'main');
+  fx.git('checkout', '-B', 'tamper', 'origin/main');
+  writeFileSync(join(root, 'app/evil.ts'), 'x\n'); fx.git('add', '.'); fx.git('commit', '-m', 'evil');
+  fx.git('revert', '-m', '1', '--no-edit', state.merged[0]);
+  fx.git('push', '--force', 'origin', `HEAD:refs/heads/${pr.head.ref}`);
+  const head = fx.git('rev-parse', 'HEAD').trim();
+  const meta = readMarker(pr.body);
+  pr.head.sha = head; pr.body = pr.body.replace(meta.release_head, head);
+  pending.clear();
+  const r = await runPublisher(deps(fx, gh));
+  assert.ok(r.codes.includes('RELEASE_PR_TAMPERED_OR_UNREADABLE'), JSON.stringify(r));
+  assert.equal(state.merged.length, 1, 'only the original release was ever merged');
+});
