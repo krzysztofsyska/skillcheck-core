@@ -35,8 +35,29 @@ export function createGithub({ token, repository, fetchImpl = fetch }) {
     }
     return out;
   }
+  // Resolved/unresolved state of review conversations exists only in GraphQL; REST cannot
+  // answer it. Read only, fixed query, fail closed: any error or partial page throws, and
+  // the policy then refuses the release for want of evidence.
+  async function reviewThreads(number) {
+    if (!Number.isInteger(number) || number <= 0) throw new Error('REVIEW_THREADS_PR_INVALID');
+    const [owner, repo] = repository.split('/');
+    const query = `query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{isResolved isOutdated comments(first:1){nodes{path}}}}}}}`;
+    const out = []; let cursor = null;
+    for (let i = 0; i < 20; i++) {
+      const { json } = await call('POST', 'https://api.github.com/graphql', { query, variables: { o: owner, r: repo, n: number, c: cursor } });
+      const t = json?.data?.repository?.pullRequest?.reviewThreads;
+      if (json?.errors?.length || !t || !Array.isArray(t.nodes) || typeof t.pageInfo?.hasNextPage !== 'boolean') throw new Error('REVIEW_THREADS_INCOMPLETE');
+      for (const n of t.nodes) {
+        out.push({ resolved: n?.isResolved === true, outdated: n?.isOutdated === true, path: n?.comments?.nodes?.[0]?.path ?? null });
+      }
+      if (!t.pageInfo.hasNextPage) return out;
+      cursor = t.pageInfo.endCursor;
+    }
+    throw new Error('REVIEW_THREADS_PAGINATION_LIMIT');
+  }
   return {
     repository,
+    reviewThreads,
     get: path => call('GET', path).then(r => r.json),
     post: (path, body) => call('POST', path, body).then(r => r.json),
     put: (path, body) => call('PUT', path, body).then(r => r.json),

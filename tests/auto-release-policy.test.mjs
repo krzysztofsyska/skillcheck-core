@@ -17,6 +17,7 @@ const base = () => ({
   files: ['app/regulamin/page.tsx'], migrations: [], checkRuns: green(H), comments: [pass()],
   migrationExecutor: false, backups: null, now: new Date('2026-11-16T12:00:00Z'),
   patches: [{ path: 'app/regulamin/page.tsx', patch: '--- a/x\n+++ b/x\n-stary tekst\n+nowy tekst' }], unreleasedMigrations: [], provenance: [],
+  reviewThreads: [], reviews: [], workerModules: ['supabase/functions/screening-worker/index.ts', 'lib/screening-hmac.ts'],
 });
 const reasons = mut => { const i = base(); mut(i); return evaluateCandidate(i).reasons; };
 
@@ -219,4 +220,59 @@ test('C2: every file that really sends mail/voice is refused by path (repository
 test('merge provenance: unknown or failed provenance refuses', () => {
   assert.ok(evaluateCandidate({ ...base(), provenance: null }).reasons.includes('MERGE_PROVENANCE_UNKNOWN'));
   assert.ok(evaluateCandidate({ ...base(), provenance: ['MERGE_NOT_CLEAN'] }).reasons.includes('MERGE_NOT_CLEAN'));
+});
+
+// C9 (#369): an unresolved review conversation blocks on its own. The `codex-review-state`
+// marker codexGate looks for is published by nothing, so it can never be the only source.
+test('C9: unresolved review threads and standing change requests refuse; missing evidence refuses', async () => {
+  const { reviewThreadsGate, reviewStatesGate } = await import('../tools/release/auto/policy.mjs');
+  assert.deepEqual(reviewThreadsGate([]), []);
+  assert.deepEqual(reviewThreadsGate([{ resolved: true }, { resolved: true }]), []);
+  assert.deepEqual(reviewThreadsGate(null), ['REVIEW_THREADS_UNKNOWN']);
+  assert.deepEqual(reviewThreadsGate('x'), ['REVIEW_THREADS_UNKNOWN']);
+  // outdated is not answered: the line moved, the finding did not go away
+  assert.ok(reviewThreadsGate([{ resolved: false, outdated: true, path: 'lib/a.ts' }])[0].startsWith('REVIEW_THREADS_UNRESOLVED:1:'));
+  assert.ok(reviewThreadsGate([{ resolved: undefined }])[0].startsWith('REVIEW_THREADS_UNRESOLVED:'));
+  assert.ok(reviewThreadsGate([null])[0].startsWith('REVIEW_THREADS_UNRESOLVED:'));
+
+  assert.deepEqual(reviewStatesGate([], H), []);
+  assert.deepEqual(reviewStatesGate(null, H), ['REVIEW_STATES_UNKNOWN']);
+  assert.deepEqual(reviewStatesGate([{ user: { login: 'b' }, state: 'CHANGES_REQUESTED', commit_id: H, submitted_at: '1' }], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // a newer review from the same author supersedes it; another SHA does not count
+  assert.deepEqual(reviewStatesGate([
+    { user: { login: 'b' }, state: 'CHANGES_REQUESTED', commit_id: H, submitted_at: '2026-01-01T00:00:00Z' },
+    { user: { login: 'b' }, state: 'COMMENTED', commit_id: H, submitted_at: '2026-01-02T00:00:00Z' },
+  ], H), []);
+  assert.deepEqual(reviewStatesGate([{ user: { login: 'b' }, state: 'CHANGES_REQUESTED', commit_id: 'b'.repeat(40), submitted_at: '1' }], H), []);
+
+  // and the whole decision refuses when either is missing or open
+  assert.ok(reasons(i => { i.reviewThreads = null; }).includes('REVIEW_THREADS_UNKNOWN'));
+  assert.ok(reasons(i => { i.reviews = null; }).includes('REVIEW_STATES_UNKNOWN'));
+  assert.ok(reasons(i => { i.reviewThreads = [{ resolved: false, path: 'lib/a.ts' }]; }).some(r => r.startsWith('REVIEW_THREADS_UNRESOLVED:')));
+});
+
+// C10 (#369): the screening worker is deployed by hand, so a change to it or to a module it
+// shares with the app must not ship alone — the app would use a contract the worker does not.
+test('C10: worker and its shared modules are held; the real closure covers the dispatch contract', async () => {
+  const { workerGate } = await import('../tools/release/auto/policy.mjs');
+  const { workerClosure, DISPATCH_COUNTERPARTS } = await import('../tools/release/auto/publisher.mjs');
+  const { createGit } = await import('../tools/release/auto/git.mjs');
+  const closure = ['supabase/functions/screening-worker/index.ts', 'lib/screening-hmac.ts'];
+  assert.deepEqual(workerGate(['app/regulamin/page.tsx'], closure), []);
+  assert.ok(workerGate(['lib/screening-hmac.ts'], closure)[0].startsWith('WORKER_DEPLOY_REQUIRED:'));
+  assert.ok(workerGate(['supabase/functions/anything/index.ts'], [])[0].startsWith('WORKER_DEPLOY_REQUIRED:'));
+  assert.deepEqual(workerGate(['app/x.tsx'], null), ['WORKER_SCOPE_UNKNOWN']);
+  assert.deepEqual(workerGate(['app/x.tsx'], [1]), ['WORKER_SCOPE_UNKNOWN']);
+  assert.deepEqual(workerGate(null, closure), ['WORKER_SCOPE_UNKNOWN']);
+  assert.ok(reasons(i => { i.files = ['lib/screening-hmac.ts']; }).some(r => r.startsWith('WORKER_DEPLOY_REQUIRED:')));
+  assert.ok(reasons(i => { i.workerModules = null; }).includes('WORKER_SCOPE_UNKNOWN'));
+
+  // The closure is computed from this repository, not from a hand-kept list: it must contain
+  // the worker entry, the shared signing module and the app-side sender of the same contract.
+  const real = workerClosure({ git: createGit(process.cwd()) }, 'HEAD');
+  assert.ok(real.includes('supabase/functions/screening-worker/index.ts'), 'worker entry');
+  assert.ok(real.includes('lib/screening-hmac.ts'), 'shared dispatch signature module');
+  for (const f of DISPATCH_COUNTERPARTS) assert.ok(real.includes(f), f);
+  // Precision matters: holding unrelated UI files would take automation away for no reason.
+  assert.deepEqual(real.filter(f => f.startsWith('app/')), []);
 });

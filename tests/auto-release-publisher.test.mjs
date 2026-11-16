@@ -23,6 +23,11 @@ function fixture(prFiles) {
   const g = createGit(work);
   g('config', 'user.name', 't'); g('config', 'user.email', 't@t');
   write(work, 'README.md', 'hello\n'); write(work, 'app/page.tsx', 'export default 1;\n');
+  // The hand-deployed worker and the module it shares with the app: the publisher computes its
+  // import closure from the tree, so every fixture needs it exactly as the repository has it.
+  write(work, 'lib/screening-hmac.ts', 'export const HEADER = "x-sig";\n');
+  write(work, 'lib/screening-dispatch.ts', 'import { HEADER } from "./screening-hmac.ts";\nexport const send = () => HEADER;\n');
+  write(work, 'supabase/functions/screening-worker/index.ts', 'import { HEADER } from "../../../lib/screening-hmac.ts";\nexport default HEADER;\n');
   g('add', '.'); g('commit', '-m', 'init'); g('push', 'origin', 'main');
   g('checkout', '-b', 'integration'); g('push', 'origin', 'integration');
   const prs = [];
@@ -55,7 +60,8 @@ const green = sha => ['verify', 'Agent contract / scope gate'].map(name => ({ na
 
 // In-memory GitHub; state lets each test steer CI, deployments, merges.
 function fakeGithub({ fx, comments = {}, ci = {}, deploy = 'success', mergeRefused = false, issues = [] }) {
-  const state = { pulls: [], issues: [...issues], comments: structuredClone(comments), merged: [], closed: [] };
+  // reviews / threads: empty by default (nothing unresolved); a test may fill them per PR number.
+  const state = { pulls: [], issues: [...issues], comments: structuredClone(comments), merged: [], closed: [], reviews: {}, threads: {} };
   const sourcePr = p => ({ number: p.number, title: `PR ${p.number}`, merged: true, merged_at: `2026-11-16T0${p.number - 99}:00:00Z`, merge_commit_sha: p.merge, head: { sha: p.head }, base: { ref: 'integration' }, changed_files: p.files.length });
   const route = (method, path, body) => {
     let m;
@@ -64,6 +70,7 @@ function fakeGithub({ fx, comments = {}, ci = {}, deploy = 'success', mergeRefus
     if (method === 'GET' && path.startsWith('/pulls?state=closed&base=integration')) return fx.prs.map(sourcePr);
     if (method === 'GET' && (m = /^\/issues\/(\d+)\/comments/.exec(path))) return state.comments[m[1]] ?? [];
     if (method === 'GET' && (m = /^\/pulls\/(\d+)\/files/.exec(path))) return fx.prs.find(p => p.number === +m[1]).files.map(filename => ({ filename }));
+    if (method === 'GET' && (m = /^\/pulls\/(\d+)\/reviews$/.exec(path))) return state.reviews[m[1]] ?? [];
     if (method === 'GET' && (m = /^\/pulls\/(\d+)$/.exec(path))) return sourcePr(fx.prs.find(p => p.number === +m[1]));
     if (method === 'GET' && (m = /^\/commits\/([0-9a-f]{40})\/check-runs/.exec(path))) return { check_runs: ci[m[1]] ?? green(m[1]) };
     if (method === 'GET' && (m = /^\/deployments\?sha=([0-9a-f]{40})/.exec(path))) return state.merged.includes(m[1]) ? [{ id: 1, environment: 'Production – skillcheck-core' }] : [];
@@ -87,6 +94,7 @@ function fakeGithub({ fx, comments = {}, ci = {}, deploy = 'success', mergeRefus
   const gh = {
     get: async p => route('GET', p), post: async (p, b) => route('POST', p, b), put: async (p, b) => route('PUT', p, b),
     patch: async (p, b) => route('PATCH', p, b), paginate: async p => route('GET', p),
+    reviewThreads: async n => state.threads[n] ?? [],
   };
   return { gh, state };
 }
@@ -417,4 +425,38 @@ test('C5: workflow passes only the App credentials to the publisher; no one-hour
   const wf = readFileSync(new URL('../.github/workflows/auto-release.yml', import.meta.url), 'utf8');
   assert.doesNotMatch(wf, /create-github-app-token/);
   assert.match(wf, /APP_PRIVATE_KEY: \$\{\{ secrets\.AGENT_PIPELINE_APP_PRIVATE_KEY \}\}/);
+});
+
+// C9/C10 (#369), end to end: the two gates that the Codex review of #456/#458 found missing.
+test('C10: a change to a module shared with the hand-deployed worker is held, not released', async () => {
+  const fx = fixture([{ 'lib/screening-hmac.ts': 'export const HEADER = "x-sig-2";\n' }, { 'app/regulamin/page.tsx': 'v3\n' }]);
+  const { gh } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)], 101: [pass(fx.prs[1].head)] } });
+  const r = await runPublisher(deps(fx, gh));
+  // the unrelated change still ships; the worker-contract change waits for a worker deploy
+  assert.equal(r.status, 'RELEASED'); assert.equal(r.source_pr, 101);
+  assert.equal(r.held[0].pr, 100);
+  assert.ok(r.held[0].reasons.some(x => x.startsWith('WORKER_DEPLOY_REQUIRED:')), r.held[0].reasons.join(','));
+  assert.equal(fx.originGit('show', 'main:lib/screening-hmac.ts').trim(), 'export const HEADER = "x-sig";');
+});
+
+test('C9: an unresolved review conversation holds the release; resolving it lets the same change ship', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+  const a = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  a.state.threads[100] = [{ resolved: false, outdated: true, path: 'app/regulamin/page.tsx' }];
+  const held = await runPublisher(deps(fx, a.gh));
+  assert.equal(held.status, 'NOTHING_TO_RELEASE');
+  assert.ok(held.held[0].reasons.some(x => x.startsWith('REVIEW_THREADS_UNRESOLVED:')), held.held[0].reasons.join(','));
+  assert.throws(() => fx.originGit('cat-file', '-e', 'main:app/regulamin/page.tsx'));
+
+  // a standing change request blocks the same way
+  const b = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  b.state.reviews[100] = [{ user: { login: 'chatgpt-codex-connector[bot]' }, state: 'CHANGES_REQUESTED', commit_id: fx.prs[0].head, submitted_at: '2026-11-16T09:00:00Z' }];
+  const cr = await runPublisher(deps(fx, b.gh));
+  assert.ok(cr.held[0].reasons.some(x => x.startsWith('REVIEW_CHANGES_REQUESTED:')), cr.held[0].reasons.join(','));
+
+  // nothing unresolved: the very same change goes out
+  const c = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  c.state.threads[100] = [{ resolved: true, path: 'app/regulamin/page.tsx' }];
+  const ok = await runPublisher(deps(fx, c.gh));
+  assert.equal(ok.status, 'RELEASED');
 });

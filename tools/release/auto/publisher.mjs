@@ -129,13 +129,65 @@ async function evaluate(d, pr, comments) {
       .map(p => ({ path: p, patch: d.git('diff', parent, full.merge_commit_sha, '--', p) }));
     unreleasedMigrations = d.git('diff', '--name-only', 'origin/main', parent, '--', 'supabase/migrations').split('\n').filter(Boolean);
   } catch { /* left null: the policy denies */ }
+  // Unresolved review conversations and standing change requests must block on their own:
+  // the marker codexGate looks for is published by nothing today. Any read failure leaves
+  // these null and the policy refuses (REVIEW_THREADS_UNKNOWN / REVIEW_STATES_UNKNOWN).
+  let reviewThreads = null; let reviews = null;
+  try { reviewThreads = await d.gh.reviewThreads(full.number); } catch { /* left null: the policy denies */ }
+  try { reviews = await d.gh.paginate(`/pulls/${full.number}/reviews`); } catch { /* left null: the policy denies */ }
+  // Which files the hand-deployed screening worker would carry: itself plus its import closure.
+  let workerModules = null;
+  try { workerModules = workerClosure(d, full.merge_commit_sha); } catch { /* left null: the policy denies */ }
   return evaluateCandidate({
-    patches, unreleasedMigrations, provenance,
+    patches, unreleasedMigrations, provenance, reviewThreads, reviews, workerModules,
     pr: { number: full.number, merged: full.merged === true, head_sha: full.head.sha, merge_commit_sha: full.merge_commit_sha, base_ref: full.base.ref },
     files: paths, migrations, checkRuns: checks?.check_runs, comments,
     migrationExecutor: false, backups: d.backups ?? null, now: d.now(),
   });
 }
+
+/**
+ * Every repository file the hand-deployed Supabase Edge Functions depend on: each function's
+ * entry file plus the transitive closure of its relative imports, read from the release commit.
+ * Used by `workerGate`: a change to any of these ships to Vercel while the worker stays on its
+ * old version, so it is held for a deploy of the worker. Throws if the tree cannot be read,
+ * so a missing closure refuses the release instead of silently allowing it.
+ */
+export function workerClosure(d, commit) {
+  const entries = d.git('ls-tree', '-r', '--name-only', commit, 'supabase/functions/')
+    .split('\n').filter(f => /\/index\.(ts|js|mjs)$/.test(f));
+  if (!entries.length) throw new Error('WORKER_ENTRY_MISSING');
+  const seen = new Set(entries); const queue = [...entries];
+  const IMPORT = /(?:^|[\s;{(])(?:import|export)\b[^'"`;]*?from\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  for (let i = 0; i < 500 && queue.length; i++) {
+    const file = queue.shift();
+    let text; try { text = d.git('show', `${commit}:${file}`); } catch { continue; }
+    for (const m of text.matchAll(IMPORT)) {
+      const spec = m[1] ?? m[2];
+      if (!spec || !spec.startsWith('.')) continue; // npm:/jsr:/https: are not repository files
+      const parts = `${file.split('/').slice(0, -1).join('/')}/${spec}`.split('/');
+      const out = [];
+      for (const p of parts) {
+        if (p === '.' || p === '') continue;
+        if (p === '..') out.pop(); else out.push(p);
+      }
+      const resolved = out.join('/');
+      if (!resolved || seen.has(resolved)) continue;
+      seen.add(resolved);
+      if (d.git.ok('cat-file', '-e', `${commit}:${resolved}`)) queue.push(resolved);
+    }
+  }
+  // The app side of the dispatch contract: it signs and sends what the worker verifies, so a
+  // change there splits the two halves exactly as a change to a shared module would, even
+  // though the worker does not import it. Kept as an explicit list rather than a reverse
+  // import scan, which cannot be made precise enough without holding unrelated UI files;
+  // `tests/auto-release-policy.test.mjs` fails if one of these stops being part of the
+  // contract, so a rename cannot quietly drop it.
+  for (const f of DISPATCH_COUNTERPARTS) if (d.git.ok('cat-file', '-e', `${commit}:${f}`)) seen.add(f);
+  return [...seen];
+}
+
+export const DISPATCH_COUNTERPARTS = ['lib/screening-dispatch.ts'];
 
 function patchId(d, from, to) {
   const diff = d.git('diff', '--binary', from, to);

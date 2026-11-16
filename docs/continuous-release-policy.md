@@ -77,6 +77,23 @@ technical: the `reviewer`/`builder` session ids are declared by the reviewer, no
   database credential lives in `production-approval`, which needs a human).
 - `CI_*`, `REVIEW_*`, `CODEX_UNRESOLVED_FINDINGS:*`, `FILE_LIST_TRUNCATED`, `PATCH_MISMATCH`,
   `CHERRY_PICK_CONFLICT_OR_EMPTY`, `RELEASE_NOT_SERIALIZED`, `RELEASE_FROZEN`.
+- `REVIEW_THREADS_UNRESOLVED:<n>:<paths>` / `REVIEW_CHANGES_REQUESTED:<author>` — a real review
+  conversation left unresolved, or a standing `CHANGES_REQUESTED` on the exact head SHA, whoever
+  opened it. Added 2026-11-16 after the Codex review of #456/#458: `CODEX_UNRESOLVED_FINDINGS`
+  reads only a `codex-review-state:v1` marker that nothing in the repository publishes, so an
+  inline finding alone could not stop a release. Threads come from GraphQL (`isResolved` exists
+  nowhere else); an **outdated** thread still counts, because the line moved, not the finding.
+  Fail closed: a failed read is `REVIEW_THREADS_UNKNOWN` / `REVIEW_STATES_UNKNOWN`.
+- `WORKER_DEPLOY_REQUIRED:<files>` — the change touches the screening worker or a module it shares
+  with the app. `deploy-screening-worker.yml` is `workflow_dispatch` only, so a merge to `main`
+  updates the Vercel app and leaves the Edge Function on its old version; a changed dispatch
+  contract (for example the signature header in `lib/screening-hmac.ts`) would then stop CV
+  analyses silently, since the production smoke test runs no real analysis. The held set is the
+  worker's import closure computed from the release commit (`workerClosure`, 23 files today) plus
+  `DISPATCH_COUNTERPARTS`, the app-side half of the same contract; an unreadable closure is
+  `WORKER_SCOPE_UNKNOWN`. A reverse import scan was tried and rejected: it could not be made
+  precise and held two dozen unrelated UI files. Accepted cost (owner, 2026-11-16): releases
+  touching the worker contract lose automation until the worker is deployed with them.
 - After deploy: `SMOKE_FAILED` / `DEPLOYMENT_NOT_CONFIRMED` → rollback + freeze. If the release
   had touched data through a migration, the log and the freeze issue also carry
   **`ROLLBACK_INSUFFICIENT_DATA_CHANGED`**: reverting code does not restore data.
