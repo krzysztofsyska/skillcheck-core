@@ -27,9 +27,10 @@ const LOCK_MAX_PAGES = 10;
 const RELEASE_JOB = 'release';
 const RELEASE_STEPS = ['merge', 'deploy', 'smoke'];
 const UNBLOCK_JOB = 'unblock';
-// Upper bound on runs inspected for a proof per read (newest first); past it nothing more is
-// proven and the freeze stays.
-const FREEZE_MAX_PROOF_READS = 25;
+// Upper bound on runs whose jobs are read for a proof per evaluation (newest first, only
+// runs that pass the zero-cost trust check). Past it nothing more is proven: if a failure
+// lies further back, the freeze stays (fail closed) until the owner unblocks again.
+const FREEZE_MAX_PROOF_READS = 100;
 // Stage 4i: task records come only from the protected `agent-state` branch, all files read
 // at ONE pinned commit. Keys must already be filesystem-safe (no safeTaskId collisions).
 const STATE_REF = 'agent-state';
@@ -69,10 +70,16 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
   // is reachable from the current protected `main` (a branch or tag copy of the workflow could
   // otherwise define a fake `release`/`unblock` job). Any doubt → not trusted → no proof.
   let mainSha = null;
-  const trustedRun = async r => {
+  // Zero-cost part of the trust check (no request): pinned path, dispatch, main, a full SHA.
+  const mayProve = r => {
     const path = policy.workflows?.promote;
-    if (typeof path !== 'string' || !path || r.path !== path || r.event !== 'workflow_dispatch'
-      || r.headBranch !== 'main' || !SHA.test(r.headSha ?? '')) return false;
+    return typeof path === 'string' && !!path && r.path === path && r.event === 'workflow_dispatch'
+      && r.headBranch === 'main' && SHA.test(r.headSha ?? '');
+  };
+  const freezeOf = r => ({ run_number: r.runNumber,
+    conclusion: r.conclusion === 'success' ? 'rerun' : (typeof r.conclusion === 'string' ? r.conclusion : 'unknown') });
+  const trustedRun = async r => {
+    if (!mayProve(r)) return false;
     if (!mainSha) {
       const ref = await get(`${root}/git/ref/heads/main`);
       if (ref?.ref !== 'refs/heads/main' || ref.object?.type !== 'commit' || !SHA.test(ref.object?.sha ?? '')) throw new Error('LOCK_MAIN_UNREADABLE');
@@ -325,23 +332,21 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
         if (status === 'completed') completed.push(m);
       }
       completed.sort((x, y) => y.runNumber - x.runNumber); // newest first
-      let budget = FREEZE_MAX_PROOF_READS; // bounded proof reads; when exhausted, nothing is proven
-      const proves = async r => (budget-- > 0 ? proveClearing(r) : false);
-      let start = null;
-      for (const r of completed) {
-        if (r.conclusion !== 'success') { start = r; break; }
-        if (r.runAttempt !== 1 && !(await proves(r))) { start = r; break; }
-      }
+      // ONE newest-first walk. The first proven release/unblock clears everything older; the
+      // first failure or unproven re-run met before any proof is the freeze start. Runs that
+      // cannot be proof (wrong event/branch/path) cost no read; the others share a bounded
+      // budget. When it is spent nothing more is proven (fail closed, never a throw).
+      let budget = FREEZE_MAX_PROOF_READS;
       const held = inflight > 0;
-      if (!start) return { held, inflight, freeze: null };
-      // Newest later runs first; the first proof clears. Older later runs past the budget are
-      // simply not inspected: the freeze stays (never a throw that would also block an unblock).
+      // No failure and no re-run anywhere in the snapshot → nothing to clear, no extra reads.
+      if (!completed.some(r => r.conclusion !== 'success' || r.runAttempt !== 1)) return { held, inflight, freeze: null };
       for (const r of completed) {
-        if (r.runNumber <= start.runNumber) break;
-        if (await proves(r)) return { held, inflight, freeze: null };
+        if (r.conclusion !== 'success') return { held, inflight, freeze: freezeOf(r) };
+        const proven = mayProve(r) && budget > 0 ? (budget -= 1, await proveClearing(r)) : false;
+        if (proven) return { held, inflight, freeze: null };
+        if (r.runAttempt !== 1) return { held, inflight, freeze: freezeOf(r) };
       }
-      const conclusion = start.conclusion !== 'success' ? (typeof start.conclusion === 'string' ? start.conclusion : 'unknown') : 'rerun';
-      return { held, inflight, freeze: { run_number: start.runNumber, conclusion } };
+      return { held, inflight, freeze: null };
     },
     async readCodexEvidence(args) {
       return codex()(args);

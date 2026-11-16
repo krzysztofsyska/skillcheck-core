@@ -253,8 +253,24 @@ test('lock (4l): many DENY runs after a failure never make the newest owner unbl
   assert.equal(lock.freeze, null);
   // Without any proof the freeze stays and the read does not throw.
   assert.deepEqual((await mkLock([failed(1), ...many]).r.readLock()).freeze, { run_number: 1, conclusion: 'failure' });
-  // A proof older than the newest 25 is not inspected: the freeze stays (fail closed, no throw).
-  assert.deepEqual((await mkLock([failed(1), ...many], { jobs: { 3: jobsOf(releaseJob(3)) } }).r.readLock()).freeze, { run_number: 1, conclusion: 'failure' });
+  // A proof older than the newest 40 DENY runs is still found (budget is 100 proof reads).
+  assert.equal((await mkLock([failed(1), ...many], { jobs: { 3: jobsOf(releaseJob(3)) } }).r.readLock()).freeze, null);
+});
+test('lock (4l): a cleared failure does not re-freeze after many later DENY runs (re-review finding 1)', async () => {
+  // [failure #1, proven release #2, 26 DENY no-ops #3–#28] → cleared, not frozen again.
+  const deny = Array.from({ length: 26 }, (_, k) => run(k + 3));
+  assert.equal((await mkLock([failed(1), run(2), ...deny], { jobs: { 2: jobsOf(releaseJob(2)) } }).r.readLock()).freeze, null);
+  // Same with an owner unblock as the clearing run.
+  assert.equal((await mkLock([failed(1), run(2), ...deny], { jobs: { 2: jobsOf(job(2, 'unblock')) }, approvals: { 2: [ownerApproval()] }, policy: unblockPolicy }).r.readLock()).freeze, null);
+  // Runs that cannot be proof cost no read; only trusted runs spend the budget.
+  const foreign = Array.from({ length: 150 }, (_, k) => run(k + 3, 'completed', { head_branch: 'feature-x' }));
+  const { c, r } = mkLock([failed(1), run(2), ...foreign], { jobs: { 2: jobsOf(releaseJob(2)) } });
+  assert.equal((await r.readLock()).freeze, null);
+  assert.equal(c.calls.filter(([, p]) => p.includes('/jobs')).length, 1);
+  // Past the bound (more than 100 trusted non-proving runs since the clearing run) the freeze
+  // comes back rather than guessing: fail closed, documented, owner unblocks again.
+  const lots = Array.from({ length: 101 }, (_, k) => run(k + 3));
+  assert.deepEqual((await mkLock([failed(1), run(2), ...lots], { jobs: { 2: jobsOf(releaseJob(2)) } }).r.readLock()).freeze, { run_number: 1, conclusion: 'failure' });
 });
 test('lock (4l): missing, invalid or duplicated run_number fails closed', async () => {
   await assert.rejects(mkLock([run(1, 'completed', { run_number: undefined })]).r.readLock(), /LOCK_FOREIGN_RUN/);
