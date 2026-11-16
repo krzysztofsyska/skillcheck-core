@@ -7,7 +7,7 @@ Nowa baza aplikacji SkillCheck.
 - TypeScript
 - Vercel
 - Supabase
-- OpenAI API — kolejny etap
+- OpenAI API — analiza CV (preselekcja AI)
 
 ## Supabase
 Projekt zawiera klienta przeglądarkowego i serwerowego zgodnego z `@supabase/ssr`.
