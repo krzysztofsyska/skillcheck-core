@@ -45,13 +45,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - id: app
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.AGENT_PIPELINE_APP_ID }}
-          private-key: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -60,17 +53,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Prepare git (push only to release/auto-* through the App token)
-        env:
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-          APP_SLUG: ${{ steps.app.outputs.app-slug }}
-        run: |
-          git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --no-tags origin main integration
       - name: Publish
         run: node tools/release/auto/run.mjs
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          # The publisher mints and refreshes the App installation token itself (tokens live
+          # 1 hour; one run can take up to ~2 hours). Push target: release/auto-* branches only.
+          APP_ID: ${{ secrets.AGENT_PIPELINE_APP_ID }}
+          APP_INSTALLATION_ID: ${{ secrets.AGENT_PIPELINE_APP_INSTALLATION_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}

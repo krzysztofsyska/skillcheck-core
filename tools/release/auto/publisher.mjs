@@ -33,10 +33,13 @@ export async function runPublisher(d) {
     const meta = readMarker(openReleases[0].body);
     if (meta?.kind === 'rollback' || !freeze.length) return resume(d, openReleases[0], freeze);
   }
-  if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };
-
+  // Runs EVEN WHILE FROZEN (C4): a release left unchecked or half rolled back by a killed job is
+  // finished here before anything else, so production never stays on an unverified release.
   const unchecked = await verifyLastRelease(d);
-  if (unchecked) {
+  if (unchecked?.reverted) {
+    await doneMarker(d, unchecked.pr, unchecked.merge, 'cofnięte (zapis uzupełniony po przerwanym przebiegu)');
+    if (!freeze.length) return freezeWith(d, ['ROLLBACK_RECORD_INCOMPLETE'], `release ${unchecked.merge} (source #${unchecked.pr})`);
+  } else if (unchecked) {
     const check = await verifyProduction(d, unchecked.merge);
     if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, 'wydane, sprawdzone po przerwanym przebiegu, smoke OK');
     else {
@@ -44,6 +47,7 @@ export async function runPublisher(d) {
       return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge });
     }
   }
+  if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };
 
   const released = releasedFromMain(d.git('log', 'origin/main', '--format=%B'));
   const held = [];
@@ -146,6 +150,7 @@ async function startRelease(d, pr) {
   const message = d.git('log', '-1', '--format=%B').trimEnd();
   d.git('commit', '--amend', '-m', `${message}\n\nAuto-Release-Source-PR: #${pr.number}\nAuto-Release-Source-Head: ${pr.head.sha}`);
   const releaseHead = d.git('rev-parse', 'HEAD').trim();
+  await d.beforePush?.();
   d.git('push', '--force', 'origin', `HEAD:refs/heads/${branch}`);
   const files = d.git('diff', '--name-only', 'origin/main', 'HEAD').split('\n').filter(Boolean);
   const scope = d.detectScope(files);
@@ -193,6 +198,7 @@ async function resume(d, open, freeze = []) {
       || !d.appBotLogin || open.user?.login !== d.appBotLogin || open.user?.type !== 'Bot') {
     return tampered(`PR #${open.number}`);
   }
+  await d.beforePush?.();
   if (!d.git.ok('fetch', 'origin', `+refs/heads/${open.head.ref}:refs/remotes/origin/${open.head.ref}`)
       || d.git('rev-parse', `origin/${open.head.ref}`).trim() !== meta.release_head) return tampered(`PR #${open.number} (ref)`);
   if (meta.kind === 'rollback') {
@@ -267,15 +273,18 @@ async function doneMarker(d, pr, mainSha, outcome) {
 // publisher release on main must carry the App's "done" marker; otherwise it is checked now.
 async function verifyLastRelease(d) {
   const firstParent = d.git('log', '--first-parent', '--format=%H %P', '-n', '200', 'origin/main').trim().split('\n');
+  const reverted = new Set();
   for (const line of firstParent) {
     const [merge, , second] = line.split(' ');
     if (!second) continue;
-    const prs = [...releasedFromMain(d.git('log', '-1', '--format=%B', second))];
+    const body = d.git('log', '-1', '--format=%B', second);
+    for (const m of body.matchAll(/This reverts commit ([0-9a-f]{40})/g)) reverted.add(m[1]);
+    const prs = [...releasedFromMain(body)];
     if (!prs.length) continue;
     const comments = await d.gh.paginate(`/issues/${prs[0]}/comments`);
     const done = comments.some(c => c?.user?.login === d.appBotLogin && new RegExp(`<!--\\s*${DONE}\\s+\\{[^<>]*"main_sha":"${merge}"`).test(c.body ?? ''));
     if (done) return null;
-    return { merge, pr: prs[0] };
+    return { merge, pr: prs[0], reverted: reverted.has(merge) };
   }
   return null;
 }
@@ -317,19 +326,25 @@ async function finishAfterDeploy(d, pr, started, r, migrationsApplied = []) {
     return { status: 'RELEASED', codes: [], source_pr: pr.number, release_pr: started.releasePr, main_sha: r.mergeSha, deployment: r.deployment.url ?? null };
   }
   for (const code of after.codes) (d.error ?? d.log ?? (() => {}))(code);
-  const issue = await openFreeze(d, after.codes, `release PR #${started.releasePr} (source #${pr.number}), main ${r.mergeSha}`, { deployment: r.deployment, smoke: r.smoke });
-  const rollback = await rollbackRelease(d, { mergeSha: r.mergeSha, sourcePr: pr.number });
-  await doneMarker(d, pr.number, r.mergeSha, rollback.ok ? 'cofnięte' : 'cofnięcie nieudane');
-  await d.gh.post(`/issues/${issue}/comments`, { body: `Wynik cofnięcia: ${rollback.ok ? 'OK — poprzednia wersja działa (smoke OK).' : `NIEUDANE: ${rollback.codes.join(', ')}`}` });
+  // C4: the revert comes first. If this job dies anywhere below, the next run finds either the
+  // open revert PR (resumed even while frozen) or the unchecked release (re-verified and rolled
+  // back even while frozen); the freeze issue is only the record, opened last.
+  let rollback;
+  try { rollback = await rollbackRelease(d, { mergeSha: r.mergeSha, sourcePr: pr.number }); }
+  catch (e) { rollback = { ok: false, codes: [`ROLLBACK_ERROR:${String(e?.status ?? e?.message ?? 'ERR').slice(0, 40)}`] }; }
+  if (rollback.ok) await doneMarker(d, pr.number, r.mergeSha, 'cofnięte');
+  const issue = await openFreeze(d, [...after.codes, ...rollback.codes], `release PR #${started.releasePr} (source #${pr.number}), main ${r.mergeSha}`, { deployment: r.deployment, smoke: r.smoke, rollback: rollback.ok ? 'OK — poprzednia wersja działa (smoke OK)' : 'NIEUDANE' });
   return { status: rollback.ok ? 'ROLLED_BACK' : 'ROLLBACK_FAILED', codes: [...after.codes, ...rollback.codes], freeze: issue, source_pr: pr.number };
 }
 
 async function rollbackRelease(d, { mergeSha, sourcePr }) {
   const branch = `${RELEASE_PREFIX}revert-pr-${sourcePr}`;
+  await d.beforePush?.();
   d.git('fetch', 'origin', 'main');
   d.git('checkout', '-B', branch, 'origin/main');
   if (!d.git.ok('revert', '-m', '1', '--no-edit', mergeSha)) { d.git.ok('revert', '--abort'); return { ok: false, codes: ['ROLLBACK_REVERT_CONFLICT'] }; }
   const releaseHead = d.git('rev-parse', 'HEAD').trim();
+  await d.beforePush?.();
   d.git('push', '--force', 'origin', `HEAD:refs/heads/${branch}`);
   const files = d.git('diff', '--name-only', 'origin/main', 'HEAD').split('\n').filter(Boolean);
   const meta = { source_pr: sourcePr, source_head: mergeSha, release_head: releaseHead, kind: 'rollback', reverts_pr: sourcePr };

@@ -2,17 +2,18 @@
 const API = 'https://api.github.com';
 const MAX_PAGES = 20;
 
+// `token` is a string or an async function returning a fresh token (refreshed by the caller).
 export function createGithub({ token, repository, fetchImpl = fetch }) {
   if (!token || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? '')) throw new Error('GITHUB_CONFIG_INVALID');
   const headers = {
-    authorization: `Bearer ${token}`,
     accept: 'application/vnd.github+json',
     'x-github-api-version': '2022-11-28',
     'user-agent': 'skillcheck-auto-release',
   };
   async function call(method, path, body) {
     const url = path.startsWith('http') ? path : `${API}${path.startsWith('/repos') ? '' : `/repos/${repository}`}${path}`;
-    const res = await fetchImpl(url, { method, headers: { ...headers, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    const auth = typeof token === 'function' ? await token() : token;
+    const res = await fetchImpl(url, { method, headers: { ...headers, authorization: `Bearer ${auth}`, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
     const text = await res.text();
     let json = null; try { json = text ? JSON.parse(text) : null; } catch { json = null; }
     if (!res.ok) {
