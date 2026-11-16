@@ -191,6 +191,8 @@ export function evaluateCandidate(input) {
     const scope = classifyRelease(input.files, input.migrations);
     reasons.push(...scope.reasons);
     reasons.push(...paymentContentFindings(input.patches));
+    if (!Array.isArray(input.provenance)) reasons.push('MERGE_PROVENANCE_UNKNOWN');
+    else reasons.push(...input.provenance);
     // Migrations already on integration but not yet on production: product code may depend on
     // them, so only changes outside product code (docs, tests) may ship before they do.
     if (!Array.isArray(input.unreleasedMigrations)) reasons.push('UNRELEASED_MIGRATIONS_UNKNOWN');
