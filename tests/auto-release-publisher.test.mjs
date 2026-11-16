@@ -603,8 +603,10 @@ test('#461: no token (or no deploy step at all) fails closed: WORKER_DEPLOY_UNAV
       ? { deployWorker: createWorkerDeployer({ git: fx.git, env: { SUPABASE_ACCESS_TOKEN: '  ' }, spawn: () => { spawned++; return { status: 0 }; } }) }
       : {};
     const r = await runPublisher(deps(fx, gh, extra));
-    assert.equal(r.status, 'ROLLED_BACK', JSON.stringify(r));
-    assert.ok(r.codes.includes('WORKER_DEPLOY_UNAVAILABLE'), r.codes.join(','));
+    // This fixture reaches the step through recovery, where the earlier worker state is unknown:
+    // without a deploy capability the rollback is never confirmed (fail closed), still frozen.
+    assert.equal(r.status, 'ROLLBACK_FAILED', JSON.stringify(r));
+    assert.ok(r.codes.some(c => /WORKER_DEPLOY_UNAVAILABLE/.test(c)), r.codes.join(','));
     assert.equal(spawned, 0, 'the CLI never runs without a token');
     assert.equal(state.issues.length, 1); assert.match(state.issues[0].body, /WORKER_DEPLOY_UNAVAILABLE/);
     assert.equal(released(state).length, 0);
@@ -655,4 +657,24 @@ test('#461 stage 1: workflow sets up the pinned Supabase CLI and passes the toke
   assert.match(wf, /uses: supabase\/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1\.7\.3\n\s+with:\n\s+version: 2\.121\.0/);
   assert.match(wf, /environment: agent-control/);
   assert.doesNotMatch(wf, /production-approval/);
+});
+
+test('#461 recovery: worker deployed, smoke failed, run cut off before the revert PR; next run without a token never confirms the rollback', async () => {
+  const fx = fixture([{ 'docs/x.md': 'x\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  workerReleaseOnMain(fx, state);
+  let pushes = 0; const deployed = [];
+  const d1 = deps(fx, gh, {
+    deployWorker: async ({ sha }) => { deployed.push(sha); return { ok: true, sha }; },
+    smoke: async () => ({ ok: false, failures: ['/:STATUS_500'] }),
+    beforePush: async () => { if (++pushes === 3) throw new Error('job killed before the revert branch was pushed'); },
+  });
+  const r1 = await runPublisher(d1);
+  assert.equal(r1.status, 'ROLLBACK_FAILED', JSON.stringify(r1));
+  assert.equal(deployed.length, 1, 'the faulty worker was deployed by the first run');
+  fx.git('fetch', 'origin', 'main');
+  const r2 = await runPublisher(deps(fx, gh, { smoke: async () => ({ ok: true, failures: [] }) })); // no deployWorker: no token
+  assert.notEqual(r2.status, 'ROLLED_BACK', JSON.stringify(r2));
+  assert.ok(r2.codes.some(c => /WORKER_DEPLOY_UNAVAILABLE/.test(c)), r2.codes.join(','));
+  assert.ok(!(state.comments[100] ?? []).some(c => /sc-auto-release-done/.test(c.body) && /cofni/.test(c.body)), 'no completion marker');
 });

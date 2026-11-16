@@ -51,7 +51,7 @@ export async function runPublisher(d) {
     if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, 'wydane, sprawdzone po przerwanym przebiegu, smoke OK');
     else {
       const pr = await d.gh.get(`/pulls/${unchecked.pr}`);
-      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge });
+      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge }, [], true);
     }
   }
   if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };
@@ -457,7 +457,7 @@ async function finish(d, pr, started) {
   return finishAfterDeploy(d, pr, started, r, migrationsApplied);
 }
 
-async function finishAfterDeploy(d, pr, started, r, migrationsApplied = []) {
+async function finishAfterDeploy(d, pr, started, r, migrationsApplied = [], recovered = false) {
   const after = afterDeploy({ deployed: r.deployment.ok, smokeOk: r.smoke.ok, migrationsApplied, worker: r.worker });
   if (after.action === 'DONE') {
     await doneMarker(d, pr.number, r.mergeSha, `wydane, smoke OK (PR #${started.releasePr})`);
@@ -470,7 +470,10 @@ async function finishAfterDeploy(d, pr, started, r, migrationsApplied = []) {
   let rollback;
   // A worker deploy that was attempted (even one reported as failed: it may have half landed) is
   // undone by deploying the worker again from the reverted main; one that never ran is left alone.
-  const workerMode = r.worker?.attempted === true ? 'auto' : 'skip';
+  // A recovered release (an earlier run was cut off) keeps no record of what that run deployed, so
+  // the worker state is UNKNOWN: never 'skip' — without a deploy capability the rollback then
+  // fails closed (WORKER_DEPLOY_UNAVAILABLE) instead of being confirmed over a faulty worker.
+  const workerMode = recovered || r.worker?.attempted === true ? 'auto' : 'skip';
   try { rollback = await rollbackRelease(d, { mergeSha: r.mergeSha, sourcePr: pr.number, workerMode }); }
   catch (e) { rollback = { ok: false, codes: [`ROLLBACK_ERROR:${String(e?.status ?? e?.message ?? 'ERR').slice(0, 40)}`] }; }
   const issue = await openFreeze(d, [...after.codes, ...rollback.codes], `release PR #${started.releasePr} (source #${pr.number}), main ${r.mergeSha}`, { deployment: r.deployment, worker: r.worker, smoke: r.smoke, rollback: rollback.ok ? 'OK — poprzednia wersja działa (smoke OK)' : 'NIEUDANE' });
