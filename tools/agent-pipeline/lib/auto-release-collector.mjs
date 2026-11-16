@@ -19,6 +19,7 @@ async function attempt(errors, code, fn) {
  *   repository, readBranchSha(name), readRecords(), readComparisonComplete(base, head) -> {status, commits, files, complete},
  *   readReleasePlan(ref), readRulesets(), readEnvironments(), readMigrationSql(path, ref),
  *   readCiEvidence(sha), readReviewEvidence(sha), readCodexEvidence({repository, base, head, manifest}), readScopeVerdict({base, head, manifest}),
+ *   readBackupEvidence({repository, base, head, manifest}) for migrations (independent verified PITR/restore proof),
  *   readLock(), readReleased({base, head}) -> [head] when head is already reachable from base, else []
  * @param trusted  { p24Hold } from trusted configuration; passed through untouched
  * @param policy   pipeline policy (for protection evaluation)
@@ -60,6 +61,13 @@ export async function collectAutoReleaseInput({ readers, trusted, policy }) {
     input.migrations = migrations;
   }
 
+  // Only migration-bearing candidates require a real backup/PITR attestation.
+  // The reader is deliberately absent until its trusted, independent issuer
+  // and production restore proof are verified. Missing method => DENY.
+  if (migrationPaths.length > 0 && migrationPaths.length <= MAX_MIGRATIONS && input.promotion?.manifest) {
+    input.backupEvidence = await attempt(errors, 'READ_BACKUP_EVIDENCE_FAILED',
+      () => r.readBackupEvidence({ repository: r.repository, base: mainSha, head: integrationSha, manifest: input.promotion.manifest }));
+  }
   input.ci = await attempt(errors, 'READ_CI_FAILED', () => r.readCiEvidence(integrationSha));
   input.review = await attempt(errors, 'READ_REVIEW_FAILED', () => r.readReviewEvidence(integrationSha));
   if (input.promotion?.manifest) {
