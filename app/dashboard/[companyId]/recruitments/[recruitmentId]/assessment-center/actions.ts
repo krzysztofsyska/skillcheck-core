@@ -5,6 +5,7 @@ import { exerciseContext } from '../../../../../../lib/exercise-context';
 import { assessmentCenterPreviewEnabled } from '../../../../../../lib/assessment-center-preview';
 import { acChangeAssessments, acStageTypes, parseAssessmentCenterSession, parseReconciliationForm } from '../../../../../../lib/assessment-center-session';
 import { hrbpCaseTemplate } from '../../../../../../lib/assessment-center-session-template';
+import { bindMethodToDefinitions } from '../../../../../../lib/method-binding';
 
 /**
  * SC-AC-SESSION (#276) server actions. Every action re-derives the session from the
@@ -60,7 +61,12 @@ export async function createAcSession(route: AcSessionRoute, _previous: AcSessio
   return result.error ? failure(result.error) : done(route);
 }
 
-/** Synthetic HRBP case: four human-authored rubrics saved as exact revisions, then pinned as stages. */
+/**
+ * Synthetic HRBP case: four human-authored rubrics saved as exact revisions, then pinned as stages.
+ * Every definition saved here is bound to the method version (docs/sc-method-275.md), also when the
+ * template stops part-way: the binding runs once, after the last saved definition, and never changes
+ * the result shown to the recruiter.
+ */
 export async function createAcSessionFromTemplate(route: AcSessionRoute, _previous: AcSessionActionState, _form: FormData): Promise<AcSessionActionState> {
   const loaded = await context(route, true);
   if ('error' in loaded) return loaded;
@@ -68,14 +74,22 @@ export async function createAcSessionFromTemplate(route: AcSessionRoute, _previo
   const created = await client.rpc('ac_session_create', { recruitment: route.recruitmentId,
     session_title: hrbpCaseTemplate.title, competencies: hrbpCaseTemplate.plannedCompetencies });
   if (created.error) return failure(created.error);
+  let savedDefinitions = 0;
+  const partial = async (): Promise<AcSessionActionState> => {
+    if (savedDefinitions > 0) await bindMethodToDefinitions(client, route.companyId, route.recruitmentId);
+    revalidatePath(path(route));
+    return { error: 'Utworzono sesję, ale nie wszystkie etapy szablonu. Dodaj brakujące etapy ręcznie.' };
+  };
   for (const stage of hrbpCaseTemplate.stages) {
     const revision = await client.rpc('save_exercise_definition', { target_recruitment: route.recruitmentId, target_exercise: randomUUID(),
       new_definition: stage.definition, expected_version: 0, expected_position_id: position.id, expected_position_updated_at: position.updated_at });
-    if (revision.error || !revision.data) { revalidatePath(path(route)); return { error: 'Utworzono sesję, ale nie wszystkie etapy szablonu. Dodaj brakujące etapy ręcznie.' }; }
+    if (revision.error || !revision.data) return partial();
+    savedDefinitions += 1;
     const added = await client.rpc('ac_session_add_stage', { session: created.data, kind: stage.type, stage_title: stage.title,
       revision: revision.data, counterpart: stage.counterpartBrief });
-    if (added.error) { revalidatePath(path(route)); return { error: 'Utworzono sesję, ale nie wszystkie etapy szablonu. Dodaj brakujące etapy ręcznie.' }; }
+    if (added.error) return partial();
   }
+  await bindMethodToDefinitions(client, route.companyId, route.recruitmentId);
   return done(route);
 }
 
