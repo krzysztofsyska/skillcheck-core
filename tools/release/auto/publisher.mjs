@@ -36,9 +36,15 @@ export async function runPublisher(d) {
   // Runs EVEN WHILE FROZEN (C4): a release left unchecked or half rolled back by a killed job is
   // finished here before anything else, so production never stays on an unverified release.
   const unchecked = await verifyLastRelease(d);
-  if (unchecked?.reverted) {
-    await doneMarker(d, unchecked.pr, unchecked.merge, 'cofnięte (zapis uzupełniony po przerwanym przebiegu)');
-    if (!freeze.length) return freezeWith(d, ['ROLLBACK_RECORD_INCOMPLETE'], `release ${unchecked.merge} (source #${unchecked.pr})`);
+  if (unchecked?.revertedBy) {
+    // C6: the revert itself must be deployed and healthy before the record is closed.
+    // C7: the freeze issue is written before the "done" marker, never after.
+    const check = await verifyProduction(d, unchecked.revertedBy);
+    const codes = check.ok ? ['ROLLBACK_RECORD_INCOMPLETE'] : ['ROLLBACK_NOT_HEALTHY', ...(check.deployment?.codes ?? []), ...(check.smoke?.failures ?? []).map(f => `SMOKE:${f}`)];
+    let issue = freeze[0]?.number;
+    if (!issue || !check.ok) issue = await openFreeze(d, codes, `release ${unchecked.merge} (source #${unchecked.pr}), revert ${unchecked.revertedBy}`, { deployment: check.deployment, smoke: check.smoke });
+    if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, `cofnięte, sprawdzone po przerwanym przebiegu (zamrożenie #${issue})`);
+    return { status: 'FROZEN', codes, freeze: issue };
   } else if (unchecked) {
     const check = await verifyProduction(d, unchecked.merge);
     if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, 'wydane, sprawdzone po przerwanym przebiegu, smoke OK');
@@ -238,9 +244,14 @@ async function waitForChecks(d, sha) {
   }
 }
 
-async function mergeAndVerify(d, { releasePr, releaseHead }) {
+async function mergeAndVerify(d, { releasePr, releaseHead }, recheck = null) {
   const ci = await waitForChecks(d, releaseHead);
   if (ci.length) return { ok: false, stage: 'ci', codes: ci };
+  // C8: authorization may have changed while CI ran (new verdict, Codex finding, freeze, new push).
+  if (recheck) {
+    const reasons = await recheck().catch(() => ['RECHECK_FAILED']);
+    if (reasons.length) return { ok: false, stage: 'recheck', codes: reasons };
+  }
   let merged;
   try {
     merged = await d.gh.put(`/pulls/${releasePr}/merge`, { merge_method: 'merge', sha: releaseHead });
@@ -273,18 +284,18 @@ async function doneMarker(d, pr, mainSha, outcome) {
 // publisher release on main must carry the App's "done" marker; otherwise it is checked now.
 async function verifyLastRelease(d) {
   const firstParent = d.git('log', '--first-parent', '--format=%H %P', '-n', '200', 'origin/main').trim().split('\n');
-  const reverted = new Set();
+  const reverted = new Map(); // release merge -> the first-parent merge that reverted it
   for (const line of firstParent) {
     const [merge, , second] = line.split(' ');
     if (!second) continue;
     const body = d.git('log', '-1', '--format=%B', second);
-    for (const m of body.matchAll(/This reverts commit ([0-9a-f]{40})/g)) reverted.add(m[1]);
+    for (const m of body.matchAll(/This reverts commit ([0-9a-f]{40})/g)) if (!reverted.has(m[1])) reverted.set(m[1], merge);
     const prs = [...releasedFromMain(body)];
     if (!prs.length) continue;
     const comments = await d.gh.paginate(`/issues/${prs[0]}/comments`);
     const done = comments.some(c => c?.user?.login === d.appBotLogin && new RegExp(`<!--\\s*${DONE}\\s+\\{[^<>]*"main_sha":"${merge}"`).test(c.body ?? ''));
     if (done) return null;
-    return { merge, pr: prs[0], reverted: reverted.has(merge) };
+    return { merge, pr: prs[0], revertedBy: reverted.get(merge) ?? null };
   }
   return null;
 }
@@ -307,7 +318,19 @@ export async function waitForDeployment(d, sha) {
 
 async function finish(d, pr, started) {
   const migrationsApplied = []; // the publisher never runs migrations today (MIGRATION_EXECUTOR_UNAVAILABLE)
-  const r = await mergeAndVerify(d, started);
+  const recheck = async () => {
+    if ((await openFreezeIssues(d)).length) return ['RELEASE_FROZEN'];
+    const fresh = await d.gh.get(`/pulls/${pr.number}`);
+    if (fresh.head?.sha !== pr.head.sha || fresh.merge_commit_sha !== pr.merge_commit_sha) return ['SOURCE_CHANGED'];
+    const decision = await evaluate(d, fresh, await d.gh.paginate(`/issues/${pr.number}/comments`));
+    return decision.decision === 'ALLOW' ? [] : decision.reasons;
+  };
+  const r = await mergeAndVerify(d, started, recheck);
+  if (r.stage === 'recheck') {
+    await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
+    if (!r.codes.includes('RELEASE_FROZEN')) await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200));
+    return { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+  }
   if (r.stage === 'ci') {
     await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
     await hold(d, pr, `RELEASE_CI_FAILED:${r.codes.join(',')}`);
@@ -332,8 +355,8 @@ async function finishAfterDeploy(d, pr, started, r, migrationsApplied = []) {
   let rollback;
   try { rollback = await rollbackRelease(d, { mergeSha: r.mergeSha, sourcePr: pr.number }); }
   catch (e) { rollback = { ok: false, codes: [`ROLLBACK_ERROR:${String(e?.status ?? e?.message ?? 'ERR').slice(0, 40)}`] }; }
-  if (rollback.ok) await doneMarker(d, pr.number, r.mergeSha, 'cofnięte');
   const issue = await openFreeze(d, [...after.codes, ...rollback.codes], `release PR #${started.releasePr} (source #${pr.number}), main ${r.mergeSha}`, { deployment: r.deployment, smoke: r.smoke, rollback: rollback.ok ? 'OK — poprzednia wersja działa (smoke OK)' : 'NIEUDANE' });
+  if (rollback.ok) await doneMarker(d, pr.number, r.mergeSha, `cofnięte (zamrożenie #${issue})`);
   return { status: rollback.ok ? 'ROLLED_BACK' : 'ROLLBACK_FAILED', codes: [...after.codes, ...rollback.codes], freeze: issue, source_pr: pr.number };
 }
 

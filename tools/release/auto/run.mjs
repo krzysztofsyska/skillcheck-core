@@ -12,6 +12,7 @@ const config = JSON.parse(readFileSync(new URL('./config.json', import.meta.url)
 const repository = process.env.GITHUB_REPOSITORY;
 const app = createAppTokenProvider({
   appId: process.env.APP_ID, installationId: process.env.APP_INSTALLATION_ID, privateKey: process.env.APP_PRIVATE_KEY,
+  onToken: t => console.log(`::add-mask::${t}`), // every minted token is masked in the job log
 });
 const gh = createGithub({ token: app.token, repository });
 const appSlug = await app.slug();
