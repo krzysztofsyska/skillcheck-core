@@ -35,7 +35,7 @@ Never ask, just do:
 - technical and product-detail choices inside the agreed MVP scope (technical limits such as file size or rate limits — not package sizes or CV counts; wording, error handling, data minimisation, test setup). Pick the safer option, write the reasoning in the PR description and mention it in one line in the report.
 
 Still the owner's decision (ask once, YES/NO with a recommendation, all open questions in one message):
-- a full `integration -> main` promotion outside the automatic publisher (single reviewed PRs are released automatically since 2026-11-16, #369);
+- approving production database migrations in `production-approval` (an `integration -> main` promotion itself is merged by an independent reviewer session under „Production loop" in `AGENTS.md`, owner decision 2026-11-16; single reviewed PRs are released automatically, #369);
 - new costs (paid services, plans, domains);
 - external or irreversible actions (any contact with real candidates or customers by any channel, deleting real data, changing production settings or secrets);
 - billing and charge actions, including package or balance changes in `/operator/billing` on production;
@@ -205,7 +205,7 @@ gate has misread it.
 
 Open security item from the audit (owner only, rule 3):
 - Done: the variables `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL` and `POSTGRES_PASSWORD` are no longer present in Vercel Production (found 2026-11-11 in the project variable list; values not read). The removal date is unknown.
-- Still open: rotation of the database password. It cannot be confirmed from outside, and the owner has not confirmed that it was done.
+- Done 2026-11-16: rotation of the database password. The owner rotated it in Supabase and updated the `PRODUCTION_DATABASE_URL` secret of `production-approval` himself; a read-only `db-migrate-production` inspect run with the new secret succeeded (run 43919976736, owner approval). Recorded in #420. Still open in #420: rotation of `private.sales_lead_settings.request_secret_current`.
 
 ## Keep the process light
 

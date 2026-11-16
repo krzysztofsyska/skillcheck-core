@@ -38,7 +38,7 @@ The owner is not technical and has limited time at the computer. Agents do all t
 - Never ask the owner to click through GitHub, Vercel or Supabase, run tests, check a browser console, copy handoffs or look up settings. Agents read these themselves through their tools.
 - If a check needs something the agent does not have (an account, a credential, a test database), report it as a blocker together with a proposal that removes the need for the owner next time.
 - Prefer automated checks (CI, browser tests) over manual verification by the owner.
-- The owner's own actions are limited to: production approval, merging the promotion PR into `main`, new costs, and external or irreversible actions. For each, give the owner a direct link and say exactly what to click.
+- The owner's own actions are limited to: approving production database migrations in `production-approval`, new costs, and external or irreversible actions. Since 2026-11-16 an `integration -> main` promotion is merged by an independent reviewer session, not by the owner (see „Production loop"). For each, give the owner a direct link and say exactly what to click.
 
 ## Required task metadata
 
@@ -121,16 +121,18 @@ Do not ask the owner to paste this handoff into another agent.
 
 Since 2026-11-16 single reviewed PRs reach production through the automatic publisher with no owner step (see „Continuous release policy"). The loop below applies to a full `integration -> main` promotion done outside the publisher.
 
-1. Orchestrator prepares a promotion PR from `integration` to `main`.
-2. CI/review must be green.
-3. Owner is asked: PRODUCTION APPROVAL — YES/NO.
-4. Without explicit YES, do not merge promotion PR and do not deploy DB/functions/secrets.
-5. After YES, orchestrator may promote and execute the approved production runbook.
-6. Smoke tests and production documentation are required before DONE.
+Owner decision 2026-11-16 (15:19, confirmed 15:21 in the promotion PR #463 description, and again in his own words on 2026-11-16 at 18:47 Europe/Warsaw in session https://claude.ai/code/session_01TVLzgakSJXczDxExtJ8Zba: „sesja recenzenta może sama scalić wydanie na produkcję"; this text updated at his request the same evening): **the owner no longer merges promotion PRs himself.**
+
+1. Orchestrator/builder prepares a promotion PR from `integration` to `main`, with the release manifest and the exact list of migrations.
+2. All required checks must be green on the **exact** head SHA of the promotion PR.
+3. An independent reviewer session (fresh context, that wrote none of the changes in the promotion) posts PASS naming that exact head SHA. Every Codex finding on the PR is fixed or answered with a reason.
+4. Only then that **reviewer session** merges the promotion PR into `main` (merge method `merge`, `expectedHeadSha` = the reviewed SHA). The builder never merges a promotion. Any push after the verdict needs a new review.
+5. Unchanged by this decision: the payment-path freeze, no changes to secrets or settings, no data deletion, no new costs. Production migrations still run only through `db-migrate-production` after the **owner's** approval in `production-approval` (Production access rule 1); Edge Functions and secrets are not deployed by an agent.
+6. Right after the merge the merging session tells the owner, in Polish, with the direct link to approve the migrations, so the window between new code and new schema lasts minutes. Smoke tests and production documentation are required before DONE.
 
 ## Prohibited actions without explicit owner production approval
 
-- merge/push production promotion to `main`
+- push anything directly to `main`, or merge a promotion PR other than by an independent reviewer session under „Production loop" (owner decision 2026-11-16)
 - `supabase db push` against production
 - production Edge Function deploy
 - production secret changes
@@ -154,7 +156,7 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 
    With the owner's identity an agent session **never**:
    - approves the `production-approval` environment or any pull request review;
-   - merges or pushes anything to `main`, including production promotion PRs. Automatic releases to `main` are merged only by the publisher workflow with the pipeline GitHub App identity, never by an agent session;
+   - merges or pushes anything to `main`, with one exception: an independent reviewer session may merge an `integration -> main` promotion PR under „Production loop" (green required checks + its own PASS on the exact head SHA; owner decision 2026-11-16). A builder session never merges into `main`. Automatic single-PR releases are merged only by the publisher workflow with the pipeline GitHub App identity;
    - changes rulesets, branch protection, environments, repository settings, secrets or deploy keys;
    - deletes branches it did not create.
 
