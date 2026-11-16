@@ -1,9 +1,11 @@
 // SC-AUTO-RELEASE (#369) stage 4a: GitHub-backed READ-ONLY readers for the collector.
-// Only GET requests through an injected client. Evidence readers (review/Codex),
-// scope-verdict issuer and the released ledger are deliberately NOT provided here: the
-// collector then records COLLECT:* errors and the decision is DENY (fail closed).
+// Only GET requests through an injected client (plus the one fixed read-only GraphQL query
+// used for review threads). The review evidence reader, scope-verdict issuer and the released
+// ledger are deliberately NOT provided here: the collector then records COLLECT:* errors and
+// the decision is DENY (fail closed).
 import { decodeGithubContent } from './github.mjs';
 import { withRulesetEvidence } from './ruleset-evidence.mjs';
+import { createCodexEvidenceReader } from './codex-evidence.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
 const SAFE_PATH = /^[A-Za-z0-9._\-/]+$/;
@@ -12,10 +14,23 @@ const SAFE_PATH = /^[A-Za-z0-9._\-/]+$/;
 const LOCK_PAGE = 100;
 const LOCK_MAX_PAGES = 10;
 
-export function createAutoReleaseReaders({ client, repository, policy = {} }) {
+/**
+ * @param codexReviewerId  numeric GitHub id of the Codex reviewer, pinned by the TRUSTED caller
+ *   (the same value it passes to evaluateAutoRelease as trusted.codexReviewerId). Never read
+ *   from PR text, labels or candidate code. Unpinned => readCodexEvidence throws => DENY.
+ */
+export function createAutoReleaseReaders({ client, repository, policy = {}, codexReviewerId } = {}) {
   if (!client?.request || !client.readComparison || !client.readReleasePlan) throw new Error('READERS_CLIENT_INVALID');
   const root = `/repos/${repository}`;
   const get = path => client.request(path); // GET only: no method passed
+  // Stage 4e: Codex evidence (stage 4b reader). Built lazily so a missing pin or client method
+  // is an explicit per-read error (COLLECT:READ_CODEX_FAILED), never an omitted check.
+  let codexReader = null;
+  const codex = () => {
+    if (!Number.isInteger(codexReviewerId) || codexReviewerId <= 0) throw new Error('CODEX_REVIEWER_NOT_PINNED');
+    codexReader ??= createCodexEvidenceReader({ client, repository, reviewerId: codexReviewerId });
+    return codexReader;
+  };
   return {
     repository,
     async readBranchSha(name) {
@@ -103,6 +118,9 @@ export function createAutoReleaseReaders({ client, repository, policy = {} }) {
       let inflight = 0;
       for (const status of seen.values()) if (status !== 'completed') inflight += 1;
       return { held: inflight > 0, inflight };
+    },
+    async readCodexEvidence(args) {
+      return codex()(args);
     },
     async readMigrationSql(path, ref) {
       if (!SAFE_PATH.test(path) || path.includes('..') || !SHA.test(ref ?? '')) throw new Error('MIGRATION_REF_INVALID');
