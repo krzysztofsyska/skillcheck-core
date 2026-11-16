@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { startAnalysis, retryAnalysis, reviewAnalysis } from './actions';
@@ -36,8 +36,16 @@ export function AnalysisControl({ route, requestId, retryId, label, disabled, up
 
 /** Analysis-level reanalysis request for evidence (v2) results; row edits never trigger a rerun. */
 export function EvidenceAnalysisReview({ route, analysisId, version, unreviewed }: { route: ScreeningRoute; analysisId: string; version: number; unreviewed: number }) {
-  const [state, submit, pending] = useActionState(reviewAnalysis.bind(null, route, analysisId), {});
-  return <form action={submit}>
+  // React clears uncontrolled fields after every form action, including a validation error.
+  // Keep what was typed after a failed save; let the reset happen after a successful one.
+  const saved = useRef(false);
+  const review = reviewAnalysis.bind(null, route, analysisId);
+  const [state, submit, pending] = useActionState(async (previous: ScreeningFormState, form: FormData) => {
+    const next = await review(previous, form);
+    saved.current = !next.error;
+    return next;
+  }, {});
+  return <form action={submit} onReset={event => { if (!saved.current) event.preventDefault(); }}>
     <h2>Przegląd całej analizy</h2>
     <input type="hidden" name="reviewVersion" value={version} />
     <fieldset><legend>Wynik przeglądu</legend>

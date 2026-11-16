@@ -31,12 +31,20 @@ export function StageForm({ companyId, recruitmentId, nextSequence }: { companyI
 export function StageControls({ companyId, recruitmentId, stageId, name, first, last }: {
   companyId: string; recruitmentId: string; stageId: string; name: string; first: boolean; last: boolean;
 }) {
-  const [renameState, rename] = useActionState(renameRecruitmentStage.bind(null, companyId, recruitmentId, stageId), {});
+  // React clears uncontrolled fields after every form action, including a validation error.
+  // Keep what was typed after a failed save; let the reset happen after a successful one.
+  const renameSaved = useRef(false);
+  const renameStage = renameRecruitmentStage.bind(null, companyId, recruitmentId, stageId);
+  const [renameState, rename] = useActionState(async (previous: EditorState, form: FormData) => {
+    const next = await renameStage(previous, form);
+    renameSaved.current = !next.error;
+    return next;
+  }, {});
   const [upState, up] = useActionState(reorderRecruitmentStage.bind(null, companyId, recruitmentId, stageId, -1), {});
   const [downState, down] = useActionState(reorderRecruitmentStage.bind(null, companyId, recruitmentId, stageId, 1), {});
   const [deleteState, remove] = useActionState(removeUnusedRecruitmentStage.bind(null, companyId, recruitmentId, stageId), {});
   return <details><summary>Zmień etap</summary>
-    <form action={rename}><Feedback state={renameState}/><label>Nowa nazwa etapu
+    <form action={rename} onReset={event => { if (!renameSaved.current) event.preventDefault(); }}><Feedback state={renameState}/><label>Nowa nazwa etapu
       <input key={name} name="name" defaultValue={name} required maxLength={200}/></label><SubmitButton>Zapisz nazwę</SubmitButton></form>
     <form action={up}><Feedback state={upState}/><button type="submit" disabled={first}>Przesuń wyżej</button></form>
     <form action={down}><Feedback state={downState}/><button type="submit" disabled={last}>Przesuń niżej</button></form>
@@ -64,8 +72,16 @@ export function CandidateStageForm({ companyId, recruitmentId, applicationId, cu
 export function HumanDecisionForm({ companyId, recruitmentId, applicationId }: {
   companyId: string; recruitmentId: string; applicationId: string;
 }) {
-  const [state, action] = useActionState(saveHumanDecision.bind(null, companyId, recruitmentId, applicationId), {});
-  return <form action={action}><Feedback state={state}/>
+  // React clears uncontrolled fields after every form action, including a validation error.
+  // Keep what was typed after a failed save; let the reset happen after a successful one.
+  const saved = useRef(false);
+  const decide = saveHumanDecision.bind(null, companyId, recruitmentId, applicationId);
+  const [state, action] = useActionState(async (previous: EditorState, form: FormData) => {
+    const next = await decide(previous, form);
+    saved.current = !next.error;
+    return next;
+  }, {});
+  return <form action={action} onReset={event => { if (!saved.current) event.preventDefault(); }}><Feedback state={state}/>
     <label>Decyzja człowieka
       <select name="decision" required defaultValue="">
         <option value="" disabled>Wybierz decyzję</option>
