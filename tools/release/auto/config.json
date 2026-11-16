@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "min_pr": 457,
+  "production_url": "https://skillcheck.pl",
+  "ci_timeout_min": 45,
+  "deploy_timeout_min": 25,
+  "smoke": [
+    { "path": "/", "status": 200, "contains": "SkillCheck" },
+    { "path": "/login", "status": 200, "contains": "type=\"password\"" },
+    { "path": "/api/health/supabase", "status": 200, "json": { "ok": true } },
+    { "path": "/register", "status": 200, "contains": "type=\"password\"" }
+  ]
+}

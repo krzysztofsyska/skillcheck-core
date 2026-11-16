@@ -1,0 +1,75 @@
+# SC-AUTO-RELEASE (#369): automatic production releases, no human step.
+#
+# Triggers: a schedule and the completion of "Checks" on integration. Both run THIS file and
+# tools/release/auto from the default branch (main) — never candidate code. There is
+# deliberately no workflow_dispatch: nobody starts a release by hand.
+#
+# Authorization of a release = green required checks on the exact SHA (source PR head and
+# release PR head) + an independent reviewer's PASS on the exact source PR head SHA.
+# Hard refusals (tools/release/auto/policy.mjs): payment-path freeze, payments, outbound
+# sends, pipeline/workflows/secrets, destructive SQL, migrations without a fresh backup and an
+# unattended executor (none exists today). After the merge: Vercel Production deployment is
+# confirmed and production is smoke-tested; a failure reverts the release and opens a
+# "[auto-release-freeze]" issue that stops every later release.
+#
+# Identity: the existing pipeline GitHub App (environment agent-control). The production
+# database environment (production-approval) is NOT used here.
+name: Auto release
+
+on:
+  schedule:
+    - cron: '23 5,11,17 * * *'
+  workflow_run:
+    workflows: [Checks]
+    branches: [integration]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'krzysztofsyska/skillcheck-core' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    environment: agent-control
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.AGENT_PIPELINE_APP_ID }}
+          private-key: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare git (push only to release/auto-* through the App token)
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags origin main integration
+      - name: Publish
+        run: node tools/release/auto/run.mjs
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
