@@ -9,6 +9,14 @@ import { withRulesetEvidence } from './ruleset-evidence.mjs';
 import { createCodexEvidenceReader } from './codex-evidence.mjs';
 
 const SHA = /^[0-9a-f]{40}$/;
+// Stage 4j: independent scope verdict (sha256 binds the verdict to the exact manifest).
+import { sha256 } from './canonical.mjs';
+// Stage 4j: scope-verdict output contract (exact key set, bounded size, known verdicts only).
+const SCOPE_SCHEMA = 'sc-scope-verdict/v1';
+const SCOPE_KEYS = ['base_sha', 'head_sha', 'manifest_hash', 'repository', 'schema', 'verdict'];
+const SCOPE_VERDICTS = new Set(['LOW_RISK_COMPATIBLE', 'NOT_LOW_RISK']);
+const SCOPE_TEXT_MAX = 4096;
+const SCOPE_CHECK_NAME = /^[A-Za-z0-9._\-/]{1,100}$/;
 const SAFE_PATH = /^[A-Za-z0-9._\-/]+$/;
 // Lock snapshot: runs are read from ONE unfiltered listing and only 'completed' (terminal)
 // runs are dropped locally; any other or unknown status holds the lock. Bounded pagination.
@@ -148,6 +156,45 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
       const completed = check.status === 'completed';
       const conclusion = completed ? check.conclusion ?? null : null;
       return { head_sha: sha, completed, conclusion, verdict: completed && conclusion === 'success' ? 'PASS' : null };
+    },
+    // Stage 4j (#369): independent whole-release scope verdict. Read-only (GET). Accepted only
+    // from ONE completed/success check run on the exact candidate SHA, with the check name and
+    // issuing App id pinned in TRUSTED policy (`scope_verdict.check_name`/`app_id`). The issuer
+    // must be a different App than the controller (builder side), so the pipeline can never
+    // certify its own release. Its `output.text` must be exactly one JSON object bound to
+    // repository + base + head + sha256(manifest). Anything else throws, so the collector
+    // records READ_SCOPE_VERDICT_FAILED and the decision is DENY. Issuing the verdict is NOT
+    // part of this stage.
+    async readScopeVerdict({ base, head, manifest } = {}) {
+      if (!SHA.test(base ?? '') || !SHA.test(head ?? '')) throw new Error('SCOPE_REF_INVALID');
+      if (!manifest || typeof manifest !== 'object' || manifest.main_sha !== base
+          || manifest.integration_sha !== head) throw new Error('SCOPE_MANIFEST_BINDING_INVALID');
+      const pin = policy.scope_verdict;
+      const appId = pin?.app_id, name = pin?.check_name;
+      if (!Number.isSafeInteger(appId) || appId <= 0 || typeof name !== 'string'
+          || !SCOPE_CHECK_NAME.test(name)) throw new Error('SCOPE_ISSUER_NOT_PINNED');
+      if (appId === policy.controller_app_id) throw new Error('SCOPE_ISSUER_NOT_INDEPENDENT');
+      const res = await get(`${root}/commits/${head}/check-runs?check_name=${encodeURIComponent(name)}&per_page=100`);
+      if (!Array.isArray(res?.check_runs) || res.total_count !== res.check_runs.length
+          || res.check_runs.length >= 100) throw new Error('SCOPE_INCOMPLETE');
+      if (res.check_runs.length !== 1) throw new Error('SCOPE_NOT_UNIQUE');
+      const check = res.check_runs[0];
+      if (check?.name !== name || check.app?.id !== appId || check.head_sha !== head) throw new Error('SCOPE_PROVENANCE_MISMATCH');
+      if (check.status !== 'completed' || check.conclusion !== 'success') throw new Error('SCOPE_NOT_COMPLETED_SUCCESS');
+      const text = check.output?.text;
+      if (typeof text !== 'string' || text.length > SCOPE_TEXT_MAX) throw new Error('SCOPE_OUTPUT_INVALID');
+      let body;
+      try { body = JSON.parse(text); } catch { throw new Error('SCOPE_OUTPUT_INVALID'); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)
+          || JSON.stringify(Object.keys(body).sort()) !== JSON.stringify(SCOPE_KEYS)) throw new Error('SCOPE_OUTPUT_INVALID');
+      if (body.schema !== SCOPE_SCHEMA) throw new Error('SCOPE_OUTPUT_INVALID');
+      if (body.repository !== repository || body.base_sha !== base || body.head_sha !== head
+          || body.manifest_hash !== sha256(manifest)) throw new Error('SCOPE_BINDING_MISMATCH');
+      if (!SCOPE_VERDICTS.has(body.verdict)) throw new Error('SCOPE_VERDICT_UNKNOWN');
+      return {
+        source: 'trusted_independent_scope_reader', verdict: body.verdict, repository,
+        base_sha: base, head_sha: head, manifest_hash: body.manifest_hash, check_run_id: check.id ?? null,
+      };
     },
     // Stage 4d: release serialization. Takes ONE unfiltered snapshot of the pinned promote
     // workflow's runs (all pages) and counts every run whose status is not 'completed'.
