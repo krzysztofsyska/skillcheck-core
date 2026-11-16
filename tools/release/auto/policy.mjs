@@ -157,6 +157,82 @@ export function codexGate(comments, headSha) {
   return reasons;
 }
 
+/**
+ * The screening worker is a Supabase Edge Function deployed by hand
+ * (`deploy-screening-worker.yml` is `workflow_dispatch` only), so merging to `main` updates
+ * the Vercel app and leaves the worker on its old version. A change to the worker or to any
+ * module it shares with the app (for example the dispatch signature header in
+ * `lib/screening-hmac.ts`) would therefore split the two sides: the app sends the new
+ * contract, the undeployed worker rejects it, and CV analyses stop — silently, because the
+ * production smoke test does not run a real analysis. Such a release is held until the
+ * worker is deployed together with it.
+ * `workerModules` is the import closure of the worker, computed by the trusted caller from
+ * the release commit. Fail closed: not an array means the closure is unknown.
+ */
+export const WORKER_PATHS = /^supabase\/functions\//;
+export function workerGate(files, workerModules) {
+  if (!Array.isArray(files)) return ['WORKER_SCOPE_UNKNOWN'];
+  if (!Array.isArray(workerModules) || workerModules.some(m => typeof m !== 'string' || !m)) return ['WORKER_SCOPE_UNKNOWN'];
+  const shared = new Set(workerModules);
+  const hit = files.filter(f => WORKER_PATHS.test(f) || shared.has(f));
+  if (!hit.length) return [];
+  return [`WORKER_DEPLOY_REQUIRED:${[...new Set(hit)].slice(0, 3).map(f => f.slice(0, 50)).join(',')}`];
+}
+
+/**
+ * Real review conversations on the task PR, whoever opened them (Codex connector, a human,
+ * another agent). The marker read by `codexGate` is published by nothing today, so it can
+ * never be the only source: an inline finding left unresolved must block on its own.
+ * Fail closed — the trusted caller hands in the thread list; absence is never silence.
+ * An outdated thread still counts: "outdated" means the line moved, not that it was answered.
+ * @param threads [{ resolved: boolean, outdated?: boolean, path?: string }]
+ */
+export function reviewThreadsGate(threads) {
+  if (!Array.isArray(threads)) return ['REVIEW_THREADS_UNKNOWN'];
+  const open = threads.filter(t => !t || typeof t !== 'object' || t.resolved !== true);
+  if (!open.length) return [];
+  const where = [...new Set(open.map(t => String(t?.path ?? '?').slice(0, 40)))].slice(0, 3).join(',');
+  return [`REVIEW_THREADS_UNRESOLVED:${open.length}:${where}`];
+}
+
+// GitHub's own semantics, which this gate follows: a change request stands until its author
+// APPROVES or it is DISMISSED. A COMMENTED review is not a decision and must never cancel one —
+// otherwise a reply in a thread (GitHub records one as a COMMENTED review) would clear the
+// objection, and because agent sessions write with the owner's identity (AGENTS.md rule 5), an
+// agent could clear the owner's. PENDING means a review someone started and never submitted.
+const REVIEW_DECISIONS = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED']);
+const REVIEW_STATES = new Set([...REVIEW_DECISIONS, 'COMMENTED', 'PENDING']);
+/**
+ * A submitted review that asks for changes blocks until its author withdraws it, whatever SHA
+ * it was made on — pushing a new commit does not answer an objection. Only the newest DECISION
+ * per author counts (APPROVED / DISMISSED clear it, COMMENTED does not); on equal timestamps the
+ * blocking one wins. An unsubmitted (PENDING) review on the exact head blocks too.
+ * Fail closed: a missing list, an unreadable entry, an unknown state or an unparsable timestamp
+ * all refuse rather than pass.
+ * @param reviews [{ user: { login }, state, commit_id, submitted_at }]
+ */
+export function reviewStatesGate(reviews, headSha) {
+  if (!SHA.test(headSha ?? '')) return ['REVIEW_HEAD_INVALID'];
+  if (!Array.isArray(reviews)) return ['REVIEW_STATES_UNKNOWN'];
+  const newest = new Map(); const pending = new Set();
+  for (const r of reviews) {
+    if (!r || typeof r !== 'object' || typeof r.state !== 'string' || !REVIEW_STATES.has(r.state)) return ['REVIEW_STATE_UNREADABLE'];
+    const who = String(r.user?.login ?? '?');
+    if (r.state === 'PENDING') { if (r.commit_id === headSha) pending.add(who); continue; }
+    if (!REVIEW_DECISIONS.has(r.state)) continue;
+    const at = Date.parse(r.submitted_at ?? '');
+    if (!Number.isFinite(at)) return ['REVIEW_STATE_UNREADABLE'];
+    const prev = newest.get(who);
+    // equal timestamps: keep whichever blocks, never let a tie decide in favour of releasing
+    if (!prev || at > prev.at || (at === prev.at && r.state === 'CHANGES_REQUESTED')) newest.set(who, { at, state: r.state });
+  }
+  const who = [...newest.entries()].filter(([, r]) => r.state === 'CHANGES_REQUESTED').map(([login]) => login);
+  const reasons = [];
+  if (who.length) reasons.push(`REVIEW_CHANGES_REQUESTED:${who.map(x => x.slice(0, 30)).join(',')}`);
+  if (pending.size) reasons.push(`REVIEW_PENDING_SUBMISSION:${[...pending].map(x => x.slice(0, 30)).join(',')}`);
+  return reasons;
+}
+
 export const REQUIRED_CHECKS = ['verify', 'Agent contract / scope gate'];
 
 /** Green CI on the exact SHA: the newest run of every required check completed with success. */
@@ -204,6 +280,9 @@ export function evaluateCandidate(input) {
     reasons.push(...ciGate(input.checkRuns, pr?.head_sha));
     reasons.push(...reviewGate(input.comments, pr?.head_sha));
     reasons.push(...codexGate(input.comments, pr?.head_sha));
+    reasons.push(...reviewThreadsGate(input.reviewThreads));
+    reasons.push(...reviewStatesGate(input.reviews, pr?.head_sha));
+    reasons.push(...workerGate(input.files, input.workerModules));
     const unique = [...new Set(reasons)];
     return unique.length ? deny(unique) : { decision: 'ALLOW', reasons: [], migrations: scope.migrations };
   } catch {
