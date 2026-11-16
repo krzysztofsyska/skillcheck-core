@@ -13,11 +13,13 @@ export const SHA = /^[0-9a-f]{40}$/;
 export const OWNER_CONSENT_PATHS = [
   ['PAYMENTS', /(^|\/)(p24|przelewy24|billing|payments?|pricing|fakturownia|invoices?)(\/|\.|-|_|$)/i],
   ['OUTBOUND_SENDS', /(^|\/)(mail|email|sms|voice|retell|voip|notifications?|sales-leads?)(\/|\.|-|_|$)/i],
-  ['PAYMENT_PATH_FREEZE', /(^|[/._-])(kup|checkout|orders?|catalogs?|offers?|packages?|cennik|prices?|purchases?|stripe|zakupy?|zamowieni[ae])([/._-]|$)/i],
+  ['PAYMENT_PATH_FREEZE', /(^|[/._-])(kup|buy|checkout|orders?|catalogs?|offers?|packages?|cennik|prices?|purchases?|stripe|zakupy?|zamowieni[ae])([/._-]|$)/i],
   // The publisher never ships changes to itself, workflows, env files or Supabase config:
   // those change who can do what, so they need a human merge.
   ['SECRETS_OR_PIPELINE', /^(\.github\/|\.env|vercel\.json$|tools\/agent-pipeline\/|tools\/release\/|supabase\/config)/i],
 ];
+
+const NPM_MANIFEST = /^(package|package-lock)\.json$/;
 
 // Destructive SQL: hard refusal, explicit code per kind. Scans the RAW text (comments and
 // literals included) so nothing can be hidden; a false positive only means "not automatic".
@@ -48,7 +50,11 @@ export function classifyRelease(files, migrations = []) {
   }
   const reasons = [];
   for (const file of files) {
-    for (const [code, re] of OWNER_CONSENT_PATHS) if (re.test(file)) reasons.push(`${code}:${file}`);
+    for (const [code, re] of OWNER_CONSENT_PATHS) {
+      // npm manifests are not the package catalog ("pakiety"); only the freeze token "package" hits them.
+      if (code === 'PAYMENT_PATH_FREEZE' && NPM_MANIFEST.test(file)) continue;
+      if (re.test(file)) reasons.push(`${code}:${file}`);
+    }
   }
   const migrationFiles = files.filter(f => /^supabase\/migrations\//.test(f));
   const list = Array.isArray(migrations) ? migrations : [];

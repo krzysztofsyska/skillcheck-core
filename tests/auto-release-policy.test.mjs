@@ -69,6 +69,10 @@ test('payment-path freeze and other owner-consent areas stay refused', () => {
   ]) {
     assert.ok(classifyRelease([file]).reasons.includes(`${code}:${file}`), file);
   }
+  assert.ok(classifyRelease(['tests/buy-preselekcja.test.mjs']).reasons.includes('PAYMENT_PATH_FREEZE:tests/buy-preselekcja.test.mjs'));
+  // npm manifests are not the package catalog; a nested package.json still is refused (not an npm root manifest).
+  assert.deepEqual(classifyRelease(['package.json', 'package-lock.json']).reasons, []);
+  assert.ok(classifyRelease(['app/packages/package.json']).reasons.some(r => r.startsWith('PAYMENT_PATH_FREEZE')));
   assert.deepEqual(classifyRelease([]).reasons, ['INVALID_OR_EMPTY_FILE_LIST']);
   assert.deepEqual(classifyRelease(['app/regulamin/page.tsx', 'docs/x.md']).reasons, []);
 });
