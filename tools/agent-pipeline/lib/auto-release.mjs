@@ -10,6 +10,11 @@ import { codexAggregateProblems } from './codex-evidence.mjs';
 const OWNER_CONSENT_PATHS = [
   ['PAYMENTS', /(^|\/)(p24|przelewy24|billing|payments?|pricing|fakturownia|invoices?)(\/|\.|-|_|$)/i],
   ['OUTBOUND_SENDS', /(^|\/)(mail|email|sms|voice|retell|voip|notifications?|sales-leads?)(\/|\.|-|_|$)/i],
+  // Owner decision 2026-11-15 (#369): payment-path freeze until the owner lifts it. No
+  // release may change the purchase flow, prices, the package catalog/offers or order
+  // states. Tokens match a whole path segment or a -/_/. delimited part of one, so
+  // `lib/sc19-catalog-orders.ts` and `app/kup/**` are caught. Always on; no switch.
+  ['PAYMENT_PATH_FREEZE', /(^|[/._-])(kup|checkout|orders?|catalogs?|offers?|packages?|cennik|prices?|purchases?|stripe|zakupy?|zamowieni[ae])([/._-]|$)/i],
   ['SECRETS_OR_PIPELINE', /^(\.github\/|\.env|vercel\.json$|tools\/agent-pipeline\/|supabase\/config)/i],
 ];
 // Migrations qualify ONLY if every statement matches an explicitly recognised
