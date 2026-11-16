@@ -74,3 +74,5 @@
 20261112140000_sc_process_diagnostics.sql
 # SC-PROCESS #277 B: explicit-purpose follow-up and R17 erasure coverage, test data only.
 20261113090000_sc_process_followup_r17.sql
+# SC-015-D: candidate report CSV export audit log (own schema `report_audit`, one public function, no data seeded), test data only.
+20261116120000_sc015d_candidate_report_export_audit.sql
