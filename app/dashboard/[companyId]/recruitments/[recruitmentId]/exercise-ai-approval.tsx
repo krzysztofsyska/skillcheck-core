@@ -1,5 +1,5 @@
 'use client';
-import { useActionState } from 'react';
+import { useActionState, useRef } from 'react';
 import { approveExerciseAiProposal, rejectExerciseAiProposal } from './exercise-ai-actions';
 import type { ExerciseAiApprovalContext } from '../../../../../lib/exercise-ai-review';
 
@@ -16,8 +16,16 @@ export function ExerciseAiApproval({companyId,context}: {companyId:string;contex
 }
 
 export function ExerciseAiRejection({companyId,context}: {companyId:string;context:ExerciseAiApprovalContext}) {
-  const [state,action,pending]=useActionState(rejectExerciseAiProposal.bind(null,companyId,context),{});
-  return <form action={action}>
+  // React clears uncontrolled fields after every form action, including a validation error.
+  // Keep what was typed after a failed save; let the reset happen after a successful one.
+  const saved=useRef(false);
+  const reject=rejectExerciseAiProposal.bind(null,companyId,context);
+  const [state,action,pending]=useActionState(async (previous:{error?:string;rejected?:boolean},form:FormData)=>{
+    const next=await reject(previous,form);
+    saved.current=!next.error;
+    return next;
+  },{});
+  return <form action={action} onReset={event=>{ if(!saved.current) event.preventDefault(); }}>
     {state.error && <p role="alert">{state.error}</p>}
     {state.rejected ? <p role="status">Odrzucono propozycję. Jej treść i powód pozostają w historii; ta wersja nie może zostać zatwierdzona.</p> : <fieldset disabled={pending}>
       <legend>Odrzucenie propozycji</legend>
