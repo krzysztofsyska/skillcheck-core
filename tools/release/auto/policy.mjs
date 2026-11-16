@@ -70,7 +70,8 @@ export function classifyRelease(files, migrations = []) {
 
 // Changed LINES (added or removed) that touch payments or prices, whatever the file is called:
 // a payment change hidden in an innocently named file is still caught. Fail-closed by design.
-const PAYMENT_CONTENT = /przelewy24|\bp24[_A-Za-z]|P24_|sc19[-_]payment|fakturownia|stripe|checkout|\bzł\b|\bPLN\b|grosz|price|cennik|\bcen[ay]\b|amount_(gross|net)|orders?_status/i;
+// `zł` without \b: ł is not a word character for the regex engine, so \bzł\b would miss "300 zł".
+const PAYMENT_CONTENT = /przelewy24|\bp24[_A-Za-z]|P24_|sc19[-_]payment|fakturownia|stripe|checkout|zł|\bPLN\b|grosz|price|cennik|\bcen[ay]\b|amount_(gross|net)|orders?_status/iu;
 export function paymentContentFindings(patches) {
   if (!Array.isArray(patches)) return ['PAYMENT_CONTENT_UNREADABLE'];
   const out = [];

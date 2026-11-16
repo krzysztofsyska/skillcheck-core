@@ -179,7 +179,8 @@ async function resume(d, open, freeze = []) {
     const merge = meta.source_head;
     const onMain = SHA.test(merge ?? '') && d.git.ok('merge-base', '--is-ancestor', merge, 'origin/main');
     const released = onMain && releasedFromMain(d.git('log', '-1', '--format=%B', `${merge}^2`)).has(meta.reverts_pr);
-    const revert = onMain && patchId(d, `${meta.release_head}^`, meta.release_head);
+    // The whole branch (from where it left main) must be exactly the revert: no extra commits.
+    const revert = onMain && patchId(d, d.git('merge-base', 'origin/main', meta.release_head).trim(), meta.release_head);
     const expected = onMain && patchId(d, merge, `${merge}^1`);
     if (!released || !revert || revert !== expected) return tampered(`rollback PR #${open.number}`);
     const r = await mergeAndVerify(d, { releasePr: open.number, releaseHead: meta.release_head });

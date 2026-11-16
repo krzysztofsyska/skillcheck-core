@@ -179,6 +179,9 @@ test('payment content in changed lines is frozen whatever the file is called', (
   const r = p => evaluateCandidate({ ...base(), patches: [{ path: 'app/regulamin/page.tsx', patch: p }] }).reasons;
   assert.ok(r('+const x = createPrzelewy24Order()').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
   assert.ok(r('-  cena: "300 zł brutto"').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
+  for (const line of ['+PRESELEKCJA za 300 zł brutto', '-<b>615 zł</b>', '+  label: "1 499 zł",', '+cena 300 zł', '-300 zł']) {
+    assert.ok(r(line).includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'), line);
+  }
   assert.ok(r('+ status = orders_status').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
   assert.deepEqual(r(' context line with 300 zł only\n+nowy akapit regulaminu'), []);
   assert.ok(evaluateCandidate({ ...base(), patches: null }).reasons.includes('PAYMENT_CONTENT_UNREADABLE'));
@@ -189,4 +192,13 @@ test('N1: product code waits while integration has migrations not yet on product
   assert.ok(evaluateCandidate({ ...base(), unreleasedMigrations: pending }).reasons.includes('UNRELEASED_MIGRATIONS_PRECEDE'));
   assert.deepEqual(evaluateCandidate({ ...base(), files: ['README.md'], patches: [{ path: 'README.md', patch: '+x' }], unreleasedMigrations: pending }).reasons, []);
   assert.ok(evaluateCandidate({ ...base(), unreleasedMigrations: null }).reasons.includes('UNRELEASED_MIGRATIONS_UNKNOWN'));
+});
+
+test('F1b: every price line in the product (repository-wide) trips the content freeze when changed', async () => {
+  const { execSync } = await import('node:child_process');
+  const { paymentContentFindings } = await import('../tools/release/auto/policy.mjs');
+  const lines = execSync("git grep -hE '[0-9][[:space:]]*zł' -- app lib components || true", { encoding: 'utf8' }).split('\n').filter(Boolean);
+  assert.ok(lines.length > 0, 'the product shows prices somewhere');
+  const missed = lines.filter(l => !paymentContentFindings([{ path: 'x.tsx', patch: `+${l}` }]).length);
+  assert.deepEqual(missed, []);
 });
