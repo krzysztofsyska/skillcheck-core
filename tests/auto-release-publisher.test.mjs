@@ -29,13 +29,16 @@ function fixture(prFiles) {
   prFiles.forEach((files, i) => {
     const n = 100 + i;
     g('checkout', '-b', `pr-${n}`, 'integration');
-    for (const [f, t] of Object.entries(files)) write(work, f, t);
+    for (const [f, t] of Object.entries(files)) if (f !== '__evil') write(work, f, t);
     g('add', '.'); g('commit', '-m', `change ${n}`);
     const head = g('rev-parse', 'HEAD').trim();
-    g('checkout', 'integration'); g('merge', '--no-ff', '-m', `Merge pull request #${n}`, `pr-${n}`);
+    g('checkout', 'integration');
+    if (files.__evil) { // merge commit carrying an extra file that the reviewed head does not have
+      g('merge', '--no-ff', '--no-commit', `pr-${n}`); write(work, files.__evil, 'x\n'); g('add', '.'); g('commit', '-m', `Merge pull request #${n}`);
+    } else g('merge', '--no-ff', '-m', `Merge pull request #${n}`, `pr-${n}`);
     const merge = g('rev-parse', 'HEAD').trim();
     g('push', 'origin', 'integration');
-    prs.push({ number: n, head, merge, files: Object.keys(files) });
+    prs.push({ number: n, head, merge, files: Object.keys(files).filter(f => f !== '__evil') });
   });
   // The publisher's own checkout (like the workflow): fresh clone with both branches fetched.
   const runner = join(root, 'runner');
@@ -312,4 +315,14 @@ test('C1: a release merged by a run that was killed before its check is verified
       assert.equal(state.issues.length, 1);
     }
   }
+});
+
+test('a merge commit that adds anything beyond the reviewed head is refused (evil merge)', async () => {
+  const fx = fixture([{ 'docs/x.md': 'ok\n', __evil: '.github/workflows/extra.yml' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  const r = await runPublisher(deps(fx, gh));
+  assert.equal(r.status, 'NOTHING_TO_RELEASE');
+  assert.ok(r.held[0].reasons.includes('MERGE_NOT_CLEAN'), JSON.stringify(r.held));
+  assert.ok(r.held[0].reasons.includes('SECRETS_OR_PIPELINE:.github/workflows/extra.yml'));
+  assert.equal(state.pulls.length, 0);
 });

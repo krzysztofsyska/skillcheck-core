@@ -101,15 +101,26 @@ async function evaluate(d, pr, comments) {
   const migrations = paths.filter(p => p.startsWith('supabase/migrations/'))
     .map(p => ({ path: p, sql: d.git.ok('cat-file', '-e', `${full.merge_commit_sha}:${p}`) ? d.git('show', `${full.merge_commit_sha}:${p}`) : null }));
   const checks = await d.gh.get(`/commits/${full.head.sha}/check-runs?per_page=100`);
-  let patches = null; let unreleasedMigrations = null;
+  let patches = null; let unreleasedMigrations = null; let provenance = null;
   try {
-    const parent = d.git('rev-list', '--parents', '-n', '1', full.merge_commit_sha).trim().split(/\s+/)[1];
+    // The patch that will be copied must be exactly the reviewed head merged without extra edits:
+    // two parents, second parent = reviewed head SHA, merge tree = git's automatic merge tree.
+    const [, parent, second, ...more] = d.git('rev-list', '--parents', '-n', '1', full.merge_commit_sha).trim().split(/\s+/);
+    provenance = [];
+    if (!second || more.length) provenance.push('MERGE_SHAPE_UNSUPPORTED');
+    else if (second !== full.head.sha) provenance.push('MERGE_PARENT_NOT_REVIEWED_HEAD');
+    else {
+      const auto = d.git.ok('merge-tree', '--write-tree', parent, second) ? d.git('merge-tree', '--write-tree', parent, second).trim().split('\n')[0] : null;
+      if (!auto || auto !== d.git('rev-parse', `${full.merge_commit_sha}^{tree}`).trim()) provenance.push('MERGE_NOT_CLEAN');
+    }
+    // Classify what is actually copied, not only what the API lists.
+    for (const f of d.git('diff', '--name-only', parent, full.merge_commit_sha).split('\n').filter(Boolean)) if (!paths.includes(f)) paths.push(f);
     patches = paths.filter(p => d.git.ok('cat-file', '-e', `${full.merge_commit_sha}:${p}`) || d.git.ok('cat-file', '-e', `${parent}:${p}`))
       .map(p => ({ path: p, patch: d.git('diff', parent, full.merge_commit_sha, '--', p) }));
     unreleasedMigrations = d.git('diff', '--name-only', 'origin/main', parent, '--', 'supabase/migrations').split('\n').filter(Boolean);
   } catch { /* left null: the policy denies */ }
   return evaluateCandidate({
-    patches, unreleasedMigrations,
+    patches, unreleasedMigrations, provenance,
     pr: { number: full.number, merged: full.merged === true, head_sha: full.head.sha, merge_commit_sha: full.merge_commit_sha, base_ref: full.base.ref },
     files: paths, migrations, checkRuns: checks?.check_runs, comments,
     migrationExecutor: false, backups: d.backups ?? null, now: d.now(),

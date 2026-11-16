@@ -16,7 +16,7 @@ const base = () => ({
   pr: { number: 7, merged: true, head_sha: H, merge_commit_sha: M, base_ref: 'integration' },
   files: ['app/regulamin/page.tsx'], migrations: [], checkRuns: green(H), comments: [pass()],
   migrationExecutor: false, backups: null, now: new Date('2026-11-16T12:00:00Z'),
-  patches: [{ path: 'app/regulamin/page.tsx', patch: '--- a/x\n+++ b/x\n-stary tekst\n+nowy tekst' }], unreleasedMigrations: [],
+  patches: [{ path: 'app/regulamin/page.tsx', patch: '--- a/x\n+++ b/x\n-stary tekst\n+nowy tekst' }], unreleasedMigrations: [], provenance: [],
 });
 const reasons = mut => { const i = base(); mut(i); return evaluateCandidate(i).reasons; };
 
@@ -214,4 +214,9 @@ test('C2: every file that really sends mail/voice is refused by path (repository
     assert.ok(classifyRelease([f]).reasons.some(r => r.startsWith('OUTBOUND_SENDS:')), f);
   }
   assert.deepEqual(paymentContentFindings([{ path: 'lib/x.ts', patch: "+await fetch('https://api.resend.com/emails')" }]), ['OUTBOUND_CONTENT:lib/x.ts']);
+});
+
+test('merge provenance: unknown or failed provenance refuses', () => {
+  assert.ok(evaluateCandidate({ ...base(), provenance: null }).reasons.includes('MERGE_PROVENANCE_UNKNOWN'));
+  assert.ok(evaluateCandidate({ ...base(), provenance: ['MERGE_NOT_CLEAN'] }).reasons.includes('MERGE_NOT_CLEAN'));
 });
