@@ -1,6 +1,7 @@
 import { integrationOnly } from './control-plane.mjs';
 import { parseContract } from './contract.mjs';
 import { reservedBuilderBudget } from './claude-builder.mjs';
+import { CODEX_WAIT_REASONS, verifyCodexConnectorReview } from './codex-connector-review.mjs';
 
 export function assembleWork({ policy, policySha, now, secrets, prompts = null, snapshot, flags = {} }) {
   const integrationSha = snapshot.integrationSha ?? null;
@@ -99,6 +100,7 @@ function observe({ policy, policySha, now, secrets, prompts, snapshot, issue, re
       protection: snapshot.protection ?? null,
       ci: evidence.ci ?? null,
       review: evidence.review ?? null,
+      codexReview: snapshot.codexReviews?.[record?.task_id] ?? null,
       postMergeCi: snapshot.postMergeCi?.[record?.task_id] ?? null,
     },
     cursor: agentId ? snapshot.cursor?.[agentId] ?? null : null,
@@ -192,6 +194,9 @@ function awaitingExternalResult(item, now, policy, flags) {
   const obs = item.observation;
   if (record.state === 'READY_FOR_OWNER' && policy.integration_merge_policy === 'verified_ci_review'
       && flags.mergeEnabled !== true) return true;
+  // Codex connector PASS is held for an independent reviewer regardless of the merge
+  // flag (approvalStep never arms a merge for it), so it must not monopolise the queue.
+  if (record.state === 'READY_FOR_OWNER' && record.technical_state === 'CODEX_REVIEW_PASSED') return true;
   if (['BUILDING', 'FIXING'].includes(record.state)) {
     const run = obs.cursor?.runs?.find(r => r.id === record.cursor_run_id);
     const started = Date.parse(run?.createdAt ?? record.binding?.dispatch?.started_at ?? record.last_transition_at);
@@ -199,7 +204,15 @@ function awaitingExternalResult(item, now, policy, flags) {
         && Number.isFinite(started) && Date.parse(now) - started < (policy.timeouts?.build_ms ?? 7200000)) return true;
   }
   if (record.state === 'PR_REVIEW' && record.review_request_id) {
-    const waiting = !obs.github.ci || (record.binding?.review_dispatched === true && !obs.github.review);
+    const subscriptionReview = policy.execution_mode === 'SUBSCRIPTION_ONLY' && record.binding?.lane !== 'promotion';
+    const codex = obs.github.codexReview;
+    const pendingCodex = subscriptionReview && (!codex || CODEX_WAIT_REASONS.has(
+      verifyCodexConnectorReview({
+        comments: codex.comments, threads: codex.threads,
+        headSha: record.head_sha, builderActorId: obs.github.pull?.authorId,
+      }).reason));
+    const waiting = !obs.github.ci || (record.binding?.review_dispatched === true && !obs.github.review)
+      || pendingCodex;
     const started = Date.parse(record.last_transition_at);
     return waiting && Number.isFinite(started)
       && Date.parse(now) - started < (policy.timeouts?.ci_review_ms ?? 2700000);

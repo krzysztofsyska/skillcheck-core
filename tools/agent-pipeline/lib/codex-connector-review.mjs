@@ -9,14 +9,16 @@ export const CODEX_CONNECTOR_BOT = Object.freeze({
   login: 'chatgpt-codex-connector[bot]',
 });
 const reject = reason => ({ ok: false, reason });
+export const CODEX_WAIT_REASONS = new Set([
+  'CODEX_SUMMARY_MISSING_OR_AMBIGUOUS', 'CODEX_REVIEW_PENDING',
+  'CODEX_REVIEW_STALE_HEAD', 'CODEX_SECURITY_REVIEW_UNCONFIRMED',
+]);
 
 export function verifyCodexConnectorReview({ comments, threads, headSha, builderActorId } = {}) {
   if (!SHA.test(headSha ?? '')) return reject('CODEX_HEAD_INVALID');
   if (!Array.isArray(comments) || !Array.isArray(threads)) return reject('CODEX_GITHUB_DATA_INCOMPLETE');
   if (!Number.isSafeInteger(builderActorId) || builderActorId <= 0) return reject('CODEX_BUILDER_IDENTITY_UNKNOWN');
   if (builderActorId === CODEX_CONNECTOR_BOT.id) return reject('CODEX_SELF_REVIEW');
-  if (threads.some(thread => thread?.isResolved !== true)) return reject('CODEX_REVIEW_THREAD_OPEN');
-
   // GitHub-authenticated issue comments are required. Neither a copied marker
   // by another account nor a comment inside a PR body constitutes evidence.
   const trusted = comments.filter(comment =>
@@ -36,6 +38,8 @@ export function verifyCodexConnectorReview({ comments, threads, headSha, builder
   if (!review || typeof review !== 'object') return reject('CODEX_REVIEW_MISSING');
   if (review.commit_sha !== headSha) return reject('CODEX_REVIEW_STALE_HEAD');
   if (review.status !== 'completed') return reject('CODEX_REVIEW_PENDING');
+  // Prior-HEAD threads must not initiate a second repair before the new review.
+  if (threads.some(thread => thread?.isResolved !== true)) return reject('CODEX_REVIEW_THREAD_OPEN');
   if (review.has_any_findings !== false || review.has_unresolved_findings !== false) {
     return reject('CODEX_REVIEW_FINDINGS_OR_UNKNOWN');
   }
