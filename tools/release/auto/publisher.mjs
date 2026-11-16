@@ -35,6 +35,16 @@ export async function runPublisher(d) {
   }
   if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };
 
+  const unchecked = await verifyLastRelease(d);
+  if (unchecked) {
+    const check = await verifyProduction(d, unchecked.merge);
+    if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, 'wydane, sprawdzone po przerwanym przebiegu, smoke OK');
+    else {
+      const pr = await d.gh.get(`/pulls/${unchecked.pr}`);
+      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge });
+    }
+  }
+
   const released = releasedFromMain(d.git('log', 'origin/main', '--format=%B'));
   const held = [];
   for (const pr of await candidates(d)) {
@@ -222,9 +232,41 @@ async function mergeAndVerify(d, { releasePr, releaseHead }) {
   }
   const mergeSha = merged?.sha;
   if (!SHA.test(mergeSha ?? '')) return { ok: false, stage: 'merge', codes: ['MERGE_SHA_UNKNOWN'] };
-  const deployment = await waitForDeployment(d, mergeSha);
-  const smoke = deployment.ok ? await d.smoke() : { ok: false, failures: ['NOT_RUN'] };
-  return { ok: deployment.ok && smoke.ok, stage: 'deploy', mergeSha, deployment, smoke, codes: [] };
+  return { ...(await verifyProduction(d, mergeSha)), stage: 'deploy', mergeSha, codes: [] };
+}
+
+// Deployment + smoke of a commit already on main. Any error counts as a failed check, so a
+// merged release can never end up unchecked (C1): the caller then rolls back and freezes.
+async function verifyProduction(d, mergeSha) {
+  try {
+    const deployment = await waitForDeployment(d, mergeSha);
+    const smoke = deployment.ok ? await d.smoke() : { ok: false, failures: ['NOT_RUN'] };
+    return { ok: deployment.ok && smoke.ok, deployment, smoke };
+  } catch (e) {
+    return { ok: false, deployment: { ok: false, codes: [`POST_MERGE_CHECK_ERROR:${String(e?.status ?? e?.message ?? 'ERR').slice(0, 40)}`] }, smoke: { ok: false, failures: ['NOT_RUN'] } };
+  }
+}
+
+const DONE = 'sc-auto-release-done:v1';
+async function doneMarker(d, pr, mainSha, outcome) {
+  await d.gh.post(`/issues/${pr}/comments`, { body: `Automatyczne wydanie — wynik: ${outcome} (main ${mainSha}).\n\n<!-- ${DONE} ${JSON.stringify({ main_sha: mainSha, outcome })} -->` });
+}
+
+// A job killed after a merge leaves a release on main that nobody checked. At start, the newest
+// publisher release on main must carry the App's "done" marker; otherwise it is checked now.
+async function verifyLastRelease(d) {
+  const firstParent = d.git('log', '--first-parent', '--format=%H %P', '-n', '200', 'origin/main').trim().split('\n');
+  for (const line of firstParent) {
+    const [merge, , second] = line.split(' ');
+    if (!second) continue;
+    const prs = [...releasedFromMain(d.git('log', '-1', '--format=%B', second))];
+    if (!prs.length) continue;
+    const comments = await d.gh.paginate(`/issues/${prs[0]}/comments`);
+    const done = comments.some(c => c?.user?.login === d.appBotLogin && new RegExp(`<!--\\s*${DONE}\\s+\\{[^<>]*"main_sha":"${merge}"`).test(c.body ?? ''));
+    if (done) return null;
+    return { merge, pr: prs[0] };
+  }
+  return null;
 }
 
 export async function waitForDeployment(d, sha) {
@@ -254,14 +296,19 @@ async function finish(d, pr, started) {
   if (r.stage === 'merge') {
     return freezeWith(d, r.codes, `release PR #${started.releasePr} (source #${pr.number})`);
   }
+  return finishAfterDeploy(d, pr, started, r, migrationsApplied);
+}
+
+async function finishAfterDeploy(d, pr, started, r, migrationsApplied = []) {
   const after = afterDeploy({ deployed: r.deployment.ok, smokeOk: r.smoke.ok, migrationsApplied });
   if (after.action === 'DONE') {
-    await d.gh.post(`/issues/${pr.number}/comments`, { body: `Wydane automatycznie na produkcję: ${r.mergeSha} (PR #${started.releasePr}). Smoke OK.\n\n<!-- sc-auto-release-done:v1 {"head_sha":"${pr.head.sha}","main_sha":"${r.mergeSha}"} -->` });
+    await doneMarker(d, pr.number, r.mergeSha, `wydane, smoke OK (PR #${started.releasePr})`);
     return { status: 'RELEASED', codes: [], source_pr: pr.number, release_pr: started.releasePr, main_sha: r.mergeSha, deployment: r.deployment.url ?? null };
   }
   for (const code of after.codes) (d.error ?? d.log ?? (() => {}))(code);
   const issue = await openFreeze(d, after.codes, `release PR #${started.releasePr} (source #${pr.number}), main ${r.mergeSha}`, { deployment: r.deployment, smoke: r.smoke });
   const rollback = await rollbackRelease(d, { mergeSha: r.mergeSha, sourcePr: pr.number });
+  await doneMarker(d, pr.number, r.mergeSha, rollback.ok ? 'cofnięte' : 'cofnięcie nieudane');
   await d.gh.post(`/issues/${issue}/comments`, { body: `Wynik cofnięcia: ${rollback.ok ? 'OK — poprzednia wersja działa (smoke OK).' : `NIEUDANE: ${rollback.codes.join(', ')}`}` });
   return { status: rollback.ok ? 'ROLLED_BACK' : 'ROLLBACK_FAILED', codes: [...after.codes, ...rollback.codes], freeze: issue, source_pr: pr.number };
 }

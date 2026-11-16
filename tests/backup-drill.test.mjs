@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { validateSourceUrl, parseCounts, compareCounts, pendingMigrations, EXCLUDED_SQL, SCHEMAS_SQL } from '../tools/release/backup-drill/drill.mjs';
+import { classifyRestoreErrors, validateSourceUrl, parseCounts, compareCounts, pendingMigrations, EXCLUDED_SQL, SCHEMAS_SQL } from '../tools/release/backup-drill/drill.mjs';
 
 test('source must be a remote TLS Postgres URL', () => {
   assert.equal(validateSourceUrl('postgresql://u:p@aws-0-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require'), null);
@@ -40,4 +40,14 @@ test('workflow: nightly, no manual start, disposable database, no production-app
   assert.doesNotMatch(wf, /PRODUCTION_DATABASE_URL|SUPABASE_ACCESS_TOKEN/);
   assert.doesNotMatch(wf, /upload-artifact/, 'the dump must never leave the runner');
   assert.match(wf, /BACKUP_DRILL_DATABASE_URL/);
+});
+
+test('C3: restore errors fail the drill unless expected (public schema, FK to excluded data)', () => {
+  const fk = t => `pg_restore: error: could not execute query: ERROR:  insert or update on table "companies" violates foreign key constraint "c_fk"\nDETAIL:  Key (owner)=(x) is not present in table "${t}".\nCommand was: ALTER TABLE ...\n`;
+  const pub = 'pg_restore: error: could not execute query: ERROR:  schema "public" already exists\nCommand was: CREATE SCHEMA public;\n';
+  const other = 'pg_restore: error: could not execute query: ERROR:  function extensions.uuid_generate_v4() does not exist\n';
+  assert.deepEqual(classifyRestoreErrors(pub + fk('users'), ['auth.users']), { expected: 2, unexpected: 0 });
+  assert.deepEqual(classifyRestoreErrors(fk('companies'), ['auth.users']), { expected: 0, unexpected: 1 });
+  assert.deepEqual(classifyRestoreErrors(other + 'pg_restore: warning: errors ignored on restore: 1\n', []), { expected: 0, unexpected: 1 });
+  assert.deepEqual(classifyRestoreErrors('', []), { expected: 0, unexpected: 0 });
 });
