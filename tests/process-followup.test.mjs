@@ -88,3 +88,12 @@ test('recruitment diagnostics renders scoped 30/90/180 measurements without lega
  assert.deepEqual(calls.filter(c=>c.name==='process_followup_recruitment_metrics').map(c=>c.args.checkpoint),[30,90,180]);
  assert.ok(calls.filter(c=>c.name==='process_followup_recruitment_metrics').every(c=>c.args.target_company===id&&c.args.target_recruitment===id));
 });
+
+test('observation form keeps typed values after a rejected save (React clears uncontrolled fields after every action)',()=>{
+ const path=fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/followup/forms.tsx',import.meta.url));
+ const source=readFileSync(path,'utf8');
+ assert.match(source,/const saved = useRef\(false\);/);
+ assert.match(source,/saved\.current = Boolean\(next\.saved\);/);
+ assert.match(source,/onReset=\{event => \{ if \(!saved\.current\) event\.preventDefault\(\); \}\}/);
+ assert.doesNotMatch(source,/onReset=\{event => event\.preventDefault\(\)\}/,'an unconditional preventDefault would also keep values after success');
+});

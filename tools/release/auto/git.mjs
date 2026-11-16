@@ -9,8 +9,12 @@ export function createGit(cwd = process.cwd()) {
     return r.stdout;
   }
   git.ok = (...args) => exec(args).status === 0;
+  // `--verbatim`, not `--stable`: `--stable` strips whitespace, so a reviewed change and one that
+  // only edits whitespace inside a string literal ("Hello world" -> "Helloworld") would share an
+  // ID. The ID authorizes a release and a rollback, so it must cover the bytes that were reviewed.
+  // Like `--stable`, `--verbatim` still ignores line numbers and file order.
   git.patchId = diff => {
-    const r = exec(['patch-id', '--stable'], diff);
+    const r = exec(['patch-id', '--verbatim'], diff);
     return r.status === 0 ? (r.stdout.split(' ')[0] || null) : null;
   };
   return git;
