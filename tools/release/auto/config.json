@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "min_pr": 456,
+  "min_pr": 457,
   "production_url": "https://skillcheck.pl",
   "ci_timeout_min": 45,
   "deploy_timeout_min": 25,
