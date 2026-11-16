@@ -25,7 +25,7 @@ const readers = (over = {}) => {
     readReviewEvidence: async sha => ({ head_sha: sha, completed: true, conclusion: 'success', verdict: 'PASS' }),
     readCodexEvidence: async () => ({ source: 'trusted_codex_reader' }),
     readScopeVerdict: async () => undefined,
-    readLock: async () => ({ held: false, inflight: 0, lastConclusion: null }), readReleased: async () => [],
+    readLock: async () => ({ held: false, inflight: 0, freeze: null }), readReleased: async () => [],
     ...over,
   };
   return rd;

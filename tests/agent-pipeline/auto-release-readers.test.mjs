@@ -58,6 +58,15 @@ const mkLock = (runsOrScript = [], opts = {}) => {
   let call = 0;
   const c = mkClient({ request: async p => {
     const u = new URL(p, 'https://x');
+    const jobs = u.pathname.match(/^\/repos\/o\/r\/actions\/runs\/(\d+)\/jobs$/);
+    if (jobs) {
+      assert.equal(u.searchParams.get('filter'), 'latest');
+      const j = opts.jobs?.[jobs[1]];
+      if (j === undefined) return { total_count: 0, jobs: [] };
+      return typeof j === 'function' ? j() : j;
+    }
+    const appr = u.pathname.match(/^\/repos\/o\/r\/actions\/runs\/(\d+)\/approvals$/);
+    if (appr) return opts.approvals?.[appr[1]] ?? [];
     assert.equal(u.searchParams.get('status'), null);
     const all = typeof runsOrScript === 'function' ? runsOrScript(call) : runsOrScript;
     call += 1;
@@ -69,33 +78,33 @@ const mkLock = (runsOrScript = [], opts = {}) => {
 };
 test('lock: one unfiltered snapshot, free only when every promote run is completed, GET only', async () => {
   const { c, r } = mkLock([run(1), run(2)]);
-  assert.deepEqual(await r.readLock(), { held: false, inflight: 0, lastConclusion: 'success' });
+  assert.deepEqual(await r.readLock(), { held: false, inflight: 0, freeze: null });
   assert.ok(c.calls.every(([m, p]) => m === 'GET' && p.startsWith(`/repos/o/r/actions/workflows/${PROMOTE}/runs?per_page=100&page=`)));
   assert.equal(c.calls.length, 2); // page 1 + consistency re-read
-  assert.deepEqual(await mkLock([]).r.readLock(), { held: false, inflight: 0, lastConclusion: null });
+  assert.deepEqual(await mkLock([]).r.readLock(), { held: false, inflight: 0, freeze: null });
 });
 test('lock: any non-completed (incl. unknown) status holds the lock', async () => {
   for (const s of ['queued', 'in_progress', 'waiting', 'requested', 'pending', 'action_required', 'something_new']) {
-    assert.deepEqual(await mkLock([run(1), run(2, s)]).r.readLock(), { held: true, inflight: 1, lastConclusion: 'success' });
+    assert.deepEqual(await mkLock([run(1), run(2, s)]).r.readLock(), { held: true, inflight: 1, freeze: null });
   }
-  assert.deepEqual(await mkLock([run(1, 'queued'), run(2, 'in_progress')]).r.readLock(), { held: true, inflight: 2, lastConclusion: null });
+  assert.deepEqual(await mkLock([run(1, 'queued'), run(2, 'in_progress')]).r.readLock(), { held: true, inflight: 2, freeze: null });
 });
 test('lock: a run moving between statuses during the read is still counted (no per-status gap)', async () => {
   // Call 0 sees it waiting, the re-read sees it in_progress: it is never missed.
   const { r } = mkLock(call => [run(7, call === 0 ? 'waiting' : 'in_progress')]);
-  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, lastConclusion: null });
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, freeze: null });
 });
 test('lock: a completed run re-run between reads (same id) holds the lock', async () => {
   const { r } = mkLock(call => [run(7, call === 0 ? 'completed' : 'in_progress'), run(8)]);
-  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, lastConclusion: 'success' });
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, freeze: null });
   // and the reverse (active → completed during the read) stays conservatively held
-  assert.deepEqual(await mkLock(call => [run(7, call === 0 ? 'queued' : 'completed')]).r.readLock(), { held: true, inflight: 1, lastConclusion: null });
+  assert.deepEqual(await mkLock(call => [run(7, call === 0 ? 'queued' : 'completed')]).r.readLock(), { held: true, inflight: 1, freeze: null });
 });
 test('lock: reads every page; an active run on a later page holds the lock', async () => {
   const runs = Array.from({ length: 250 }, (_, k) => run(k + 1));
   runs[230] = run(231, 'queued');
   const { c, r } = mkLock(runs);
-  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, lastConclusion: 'success' });
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, freeze: null });
   assert.equal(c.calls.length, 4);
 });
 test('lock: unpinned, truncated, inconsistent, shifting or foreign listings fail closed', async () => {
@@ -114,16 +123,92 @@ test('lock: unpinned, truncated, inconsistent, shifting or foreign listings fail
   const bad = createAutoReleaseReaders({ client: mkClient({ request: async () => ({}) }), repository: 'o/r', policy: { workflow_ids: { promote: PROMOTE } } });
   await assert.rejects(bad.readLock(), /LOCK_INCOMPLETE/);
 });
-test('lock (4l): reports the conclusion of the most recent completed run by run_number', async () => {
-  // Listing order does not matter: run_number decides which completed run is the latest.
-  assert.equal((await mkLock([run(3, 'completed', { conclusion: 'failure' }), run(1), run(2)]).r.readLock()).lastConclusion, 'failure');
-  assert.equal((await mkLock([run(1, 'completed', { conclusion: 'failure' }), run(2)]).r.readLock()).lastConclusion, 'success');
-  assert.equal((await mkLock([run(1), run(2, 'completed', { conclusion: 'cancelled' })]).r.readLock()).lastConclusion, 'cancelled');
-  // A missing or non-string conclusion on a completed run is reported as 'unknown', never success.
-  assert.equal((await mkLock([run(1, 'completed', { conclusion: null })]).r.readLock()).lastConclusion, 'unknown');
-  assert.equal((await mkLock([run(1, 'completed', { conclusion: undefined })]).r.readLock()).lastConclusion, 'unknown');
+// Stage 4l helpers: a GitHub jobs listing for run `id`, and the pieces of a proof.
+const step = (name, conclusion = 'success') => ({ name, status: 'completed', conclusion });
+const job = (id, name, o = {}) => ({ run_id: id, name, status: 'completed', conclusion: 'success', steps: [], ...o });
+const jobsOf = (...list) => ({ total_count: list.length, jobs: list });
+const releaseJob = (id, steps = [step('merge'), step('deploy'), step('smoke')]) => job(id, 'release', { steps });
+const OWNER = 501;
+const unblockPolicy = { owner: { id: OWNER }, environments: { production_approval: { name: 'production-approval' } } };
+const ownerApproval = (o = {}) => ({ state: 'approved', user: { id: OWNER }, environments: [{ name: 'production-approval' }], ...o });
+const failed = (id, conclusion = 'failure') => run(id, 'completed', { conclusion });
+test('lock (4l): no failed run → no freeze, and no job reads at all', async () => {
+  const { c, r } = mkLock([run(1), run(2)]);
+  assert.equal((await r.readLock()).freeze, null);
+  assert.ok(!c.calls.some(([, p]) => p.includes('/jobs') || p.includes('/approvals')));
+});
+test('lock (4l): [failure, DENY success] stays RELEASE_FROZEN_AFTER_FAILURE (Codex finding on 472e189)', async () => {
+  // Run 2 ended as success because the qualifier DENIED and the executor did nothing.
+  // Its own conclusion must never clear the freeze.
+  const { r } = mkLock([failed(1), run(2)], { jobs: { 2: jobsOf(job(2, 'qualify')) } });
+  const lock = await r.readLock();
+  assert.deepEqual(lock, { held: false, inflight: 0, freeze: { run_number: 1, conclusion: 'failure' } });
+  const i = { lock };
+  // and through the pure qualifier → RELEASE_FROZEN_AFTER_FAILURE
+  const { evaluateAutoRelease } = await import('../../tools/agent-pipeline/lib/auto-release.mjs');
+  assert.ok(evaluateAutoRelease(i).reasons.includes('RELEASE_FROZEN_AFTER_FAILURE'));
+  // Many DENY successes after the failure still do not clear it; no jobs at all neither.
+  assert.deepEqual((await mkLock([failed(1), run(2), run(3), run(4)]).r.readLock()).freeze, { run_number: 1, conclusion: 'failure' });
+});
+test('lock (4l): a release job that did not really merge+deploy+smoke does not clear the freeze', async () => {
+  const cases = [
+    releaseJob(2, [step('merge'), step('deploy')]), // smoke missing
+    releaseJob(2, [step('merge'), step('deploy'), step('smoke', 'skipped')]),
+    releaseJob(2, [step('merge', 'skipped'), step('deploy', 'skipped'), step('smoke', 'skipped')]), // DENY no-op
+    releaseJob(2, [step('merge'), step('deploy'), { name: 'smoke', status: 'in_progress', conclusion: null }]),
+    job(2, 'release', { conclusion: 'skipped', steps: [step('merge'), step('deploy'), step('smoke')] }),
+    job(2, 'release', { conclusion: 'failure', steps: [step('merge'), step('deploy'), step('smoke')] }),
+    job(2, 'Release', { steps: [step('merge'), step('deploy'), step('smoke')] }),
+  ];
+  for (const j of cases) {
+    assert.deepEqual((await mkLock([failed(1), run(2)], { jobs: { 2: jobsOf(j) } }).r.readLock()).freeze, { run_number: 1, conclusion: 'failure' });
+  }
+});
+test('lock (4l): a later proven release (merge + deploy + smoke all success) clears the freeze', async () => {
+  const { c, r } = mkLock([failed(1), run(2), run(3)], { jobs: { 3: jobsOf(job(3, 'qualify'), releaseJob(3)) } });
+  assert.deepEqual(await r.readLock(), { held: false, inflight: 0, freeze: null });
+  assert.ok(c.calls.every(([m]) => m === 'GET'));
+  // A proven release BEFORE the latest failure does not clear the newer failure.
+  assert.deepEqual((await mkLock([run(1), failed(2, 'timed_out'), run(3)], { jobs: { 1: jobsOf(releaseJob(1)) } }).r.readLock()).freeze,
+    { run_number: 2, conclusion: 'timed_out' });
+  // A missing/unknown conclusion freezes like a failure and is reported as 'unknown'.
+  assert.deepEqual((await mkLock([run(1, 'completed', { conclusion: null })]).r.readLock()).freeze, { run_number: 1, conclusion: 'unknown' });
   // An active newer run does not hide an older failure (and holds the lock anyway).
-  assert.deepEqual(await mkLock([run(1, 'completed', { conclusion: 'failure' }), run(2, 'queued')]).r.readLock(), { held: true, inflight: 1, lastConclusion: 'failure' });
+  assert.deepEqual(await mkLock([failed(1), run(2, 'queued')]).r.readLock(), { held: true, inflight: 1, freeze: { run_number: 1, conclusion: 'failure' } });
+});
+test('lock (4l): explicit unblock needs the unblock job AND the pinned owner approving production-approval', async () => {
+  const base = [failed(1, 'cancelled'), run(2)];
+  const frozen = { run_number: 1, conclusion: 'cancelled' };
+  const unblock = { 2: jobsOf(job(2, 'unblock')) };
+  const cleared = await mkLock(base, { jobs: unblock, approvals: { 2: [ownerApproval()] }, policy: unblockPolicy }).r.readLock();
+  assert.equal(cleared.freeze, null);
+  for (const approvals of [[], [ownerApproval({ state: 'rejected' })], [ownerApproval({ user: { id: 777 } })],
+    [ownerApproval({ environments: [{ name: 'owner-acceptance' }] })], [ownerApproval({ environments: null })]]) {
+    assert.deepEqual((await mkLock(base, { jobs: unblock, approvals: { 2: approvals }, policy: unblockPolicy }).r.readLock()).freeze, frozen);
+  }
+  // owner approval without an unblock job (an ordinary approved-but-denied run) is not an unblock
+  assert.deepEqual((await mkLock(base, { jobs: { 2: jobsOf(job(2, 'evidence')) }, approvals: { 2: [ownerApproval()] }, policy: unblockPolicy }).r.readLock()).freeze, frozen);
+  // unpinned owner or environment → unblock unavailable → freeze stays
+  for (const policy of [{}, { owner: { id: OWNER } }, { environments: unblockPolicy.environments }, { ...unblockPolicy, owner: { id: '501' } }]) {
+    assert.deepEqual((await mkLock(base, { jobs: unblock, approvals: { 2: [ownerApproval()] }, policy }).r.readLock()).freeze, frozen);
+  }
+  // a failed unblock job is not an unblock
+  assert.deepEqual((await mkLock(base, { jobs: { 2: jobsOf(job(2, 'unblock', { conclusion: 'failure' })) }, approvals: { 2: [ownerApproval()] }, policy: unblockPolicy }).r.readLock()).freeze, frozen);
+});
+test('lock (4l): unreadable, foreign, truncated or ambiguous proof data fails closed', async () => {
+  const base = [failed(1), run(2)];
+  const bad = [
+    {}, { total_count: 2, jobs: [releaseJob(2)] }, { total_count: '1', jobs: [releaseJob(2)] },
+    jobsOf(releaseJob(99)), jobsOf(job(2, null)),
+    jobsOf(releaseJob(2), releaseJob(2)),
+    jobsOf(releaseJob(2, [step('merge'), step('deploy'), step('smoke'), step('smoke')])),
+    jobsOf(job(2, 'release', { steps: undefined })),
+    jobsOf(...Array.from({ length: 100 }, (_, k) => job(2, `j${k}`))),
+  ];
+  for (const j of bad) await assert.rejects(mkLock(base, { jobs: { 2: j } }).r.readLock(), /LOCK_JOBS_/);
+  await assert.rejects(mkLock(base, { jobs: { 2: jobsOf(job(2, 'unblock')) }, approvals: { 2: {} }, policy: unblockPolicy }).r.readLock(), /LOCK_APPROVALS_INCOMPLETE/);
+  // more later successful runs than the inspection bound → refuse rather than guess
+  await assert.rejects(mkLock([failed(1), ...Array.from({ length: 26 }, (_, k) => run(k + 2))]).r.readLock(), /LOCK_INCOMPLETE/);
 });
 test('lock (4l): missing, invalid or duplicated run_number fails closed', async () => {
   await assert.rejects(mkLock([run(1, 'completed', { run_number: undefined })]).r.readLock(), /LOCK_FOREIGN_RUN/);

@@ -46,7 +46,7 @@ const good0 = () => ({
   rulesets, policy, environments,
   ci: { completed: true, conclusion: 'success', head_sha: I },
   review: { completed: true, conclusion: 'success', head_sha: I, verdict: 'PASS' },
-  migrations: [], lock: { held: false, inflight: 0, lastConclusion: null }, released: [],
+  migrations: [], lock: { held: false, inflight: 0, freeze: null }, released: [],
 });
 const good = () => withVerdict(good0());
 const deny = (mut, code, rebind = false) => {
@@ -134,22 +134,22 @@ test('unreadable or weak protection denies', () => {
 test('parallel or duplicate release and incompatible rollback deny', () => {
   deny(i => { i.lock = { held: true, inflight: 1 }; }, 'RELEASE_NOT_SERIALIZED');
   deny(i => { i.lock = undefined; }, 'RELEASE_NOT_SERIALIZED');
-});
-test('stage 4l: a failed (or unknown) latest release run freezes later releases', () => {
-  for (const c of ['failure', 'cancelled', 'timed_out', 'startup_failure', 'action_required', 'neutral', 'skipped', 'stale', 'unknown', 'SUCCESS', '', undefined, false, 0]) {
-    deny(i => { i.lock = { held: false, inflight: 0, lastConclusion: c }; }, 'RELEASE_FROZEN_AFTER_FAILURE');
-  }
-  deny(i => { delete i.lock.lastConclusion; }, 'RELEASE_FROZEN_AFTER_FAILURE');
-  deny(i => { i.lock = undefined; }, 'RELEASE_FROZEN_AFTER_FAILURE');
-  for (const c of [null, 'success']) {
-    const i = good(); i.lock = { held: false, inflight: 0, lastConclusion: c };
-    assert.equal(evaluateAutoRelease(i).decision, 'ALLOW');
-  }
   deny(i => { i.released = [I]; }, 'DUPLICATE_OR_UNKNOWN');
   deny(i => { i.released = undefined; }, 'DUPLICATE_OR_UNKNOWN');
   deny(i => { i.promotion.manifest.files.push('supabase/migrations/m.sql'); i.migrations = [{ path: 'supabase/migrations/m.sql', sql: 'create table t(a int);' }];
     i.promotion.runbook = { id: 'x', backup: 'b', rollback_db_compatible: false }; }, 'MIGRATION_RECOVERY');
   deny(i => { i.promotion.smokeTests = []; }, 'MISSING_SMOKE_OR_ROLLBACK');
+});
+test('stage 4l: only an explicit freeze === null passes; any freeze value or missing field denies', () => {
+  for (const f of [{ run_number: 3, conclusion: 'failure' }, { run_number: 3, conclusion: 'unknown' }, {}, 'success', '', undefined, false, 0]) {
+    deny(i => { i.lock = { held: false, inflight: 0, freeze: f }; }, 'RELEASE_FROZEN_AFTER_FAILURE');
+  }
+  deny(i => { delete i.lock.freeze; }, 'RELEASE_FROZEN_AFTER_FAILURE');
+  // The old field is not honoured: a "success" conclusion alone never clears a freeze.
+  deny(i => { i.lock = { held: false, inflight: 0, lastConclusion: 'success' }; }, 'RELEASE_FROZEN_AFTER_FAILURE');
+  deny(i => { i.lock = undefined; }, 'RELEASE_FROZEN_AFTER_FAILURE');
+  const i = good(); i.lock = { held: false, inflight: 0, freeze: null };
+  assert.equal(evaluateAutoRelease(i).decision, 'ALLOW');
 });
 
 test('scope verdict is required, trusted, and bound to repo/base/head/manifest hash', () => {

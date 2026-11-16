@@ -64,8 +64,9 @@ export function classifyReleaseFiles(files, migrations = []) {
  * @param input.ci / input.review  per-SHA evidence { head_sha, conclusion, completed }
  * @param input.codex      aggregate from createCodexEvidenceReader (see codex-evidence.mjs); trusted.codexReviewerId pins the reviewer
  * @param input.migrations [{ path, sql }] read by the trusted caller
- * @param input.lock       { held, inflight, lastConclusion } release serialization state;
- *   lastConclusion = conclusion of the latest completed release run (null = none yet)
+ * @param input.lock       { held, inflight, freeze } release serialization state;
+ *   freeze = null only when no failed release run exists or a later run proved a release or
+ *   an owner-verified unblock; otherwise { run_number, conclusion } of the failed run
  * @param input.released   array of integration SHAs already released (idempotency)
  */
 function evaluateUnsafe(input) {
@@ -121,9 +122,10 @@ function evaluateUnsafe(input) {
     if (!ok) deny.push('PROTECTION_WEAK');
   }
   if (!lock || lock.held !== false || lock.inflight !== 0) deny.push('RELEASE_NOT_SERIALIZED');
-  // Stage 4l: "a failure stops later releases". Only an explicit null (no completed release run
-  // yet) or exactly 'success' for the latest completed run passes; anything else freezes.
-  if (!lock || (lock.lastConclusion !== null && lock.lastConclusion !== 'success')) deny.push('RELEASE_FROZEN_AFTER_FAILURE');
+  // Stage 4l: "a failure stops later releases". Only an explicit freeze === null passes (the
+  // reader cleared it by a proven release or an owner-verified unblock, never by a run's own
+  // 'success', which a DENY no-op also has). Missing/undefined/any other value freezes.
+  if (!lock || lock.freeze !== null) deny.push('RELEASE_FROZEN_AFTER_FAILURE');
   if (!Array.isArray(input.released) || input.released.includes(current?.integrationSha)) deny.push('DUPLICATE_OR_UNKNOWN_RELEASE_STATE');
   const reasons = [...new Set(deny)];
   const binding = repoOk(current) && promotion?.manifest ? sha256({ repository: current.repository, base: current.mainSha, head: current.integrationSha, manifest: promotion.manifest }) : null;

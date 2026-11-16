@@ -22,6 +22,13 @@ const SAFE_PATH = /^[A-Za-z0-9._\-/]+$/;
 // runs are dropped locally; any other or unknown status holds the lock. Bounded pagination.
 const LOCK_PAGE = 100;
 const LOCK_MAX_PAGES = 10;
+// Stage 4l: job/step names the pinned promote workflow must use to PROVE a release or an
+// explicit unblock (contract for the future executor; fixed here, never read from PR text).
+const RELEASE_JOB = 'release';
+const RELEASE_STEPS = ['merge', 'deploy', 'smoke'];
+const UNBLOCK_JOB = 'unblock';
+// Upper bound on later successful runs inspected for a proof; more → fail closed.
+const FREEZE_MAX_CANDIDATES = 25;
 // Stage 4i: task records come only from the protected `agent-state` branch, all files read
 // at ONE pinned commit. Keys must already be filesystem-safe (no safeTaskId collisions).
 const STATE_REF = 'agent-state';
@@ -46,6 +53,45 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
     if (!Number.isInteger(codexReviewerId) || codexReviewerId <= 0) throw new Error('CODEX_REVIEWER_NOT_PINNED');
     codexReader ??= createCodexEvidenceReader({ client, repository, reviewerId: codexReviewerId });
     return codexReader;
+  };
+  // Stage 4l: does completed run `id` of the pinned promote workflow prove that the freeze may
+  // be cleared? Two proofs only, both from GitHub-origin run data (never PR text):
+  //  1. RELEASE: its latest-attempt job `release` concluded success and its steps `merge`,
+  //     `deploy` and `smoke` each concluded success (a skipped step is not success);
+  //  2. UNBLOCK: its job `unblock` concluded success AND the run carries an `approved` review of
+  //     the pinned production-approval environment by the pinned owner id.
+  // Any malformed, truncated or foreign response throws → READ_LOCK_FAILED → DENY. A run that
+  // proves neither (e.g. a DENY no-op that ended as success) returns false: the freeze stays.
+  const proveClearing = async id => {
+    const res = await get(`${root}/actions/runs/${id}/jobs?filter=latest&per_page=100`);
+    const jobs = res?.jobs;
+    if (!Array.isArray(jobs) || !Number.isSafeInteger(res.total_count) || res.total_count !== jobs.length || jobs.length >= 100) throw new Error('LOCK_JOBS_INCOMPLETE');
+    if (jobs.some(j => j?.run_id !== id || typeof j.name !== 'string')) throw new Error('LOCK_JOBS_FOREIGN');
+    const only = name => {
+      const found = jobs.filter(j => j.name === name);
+      if (found.length > 1) throw new Error('LOCK_JOBS_AMBIGUOUS');
+      return found[0] ?? null;
+    };
+    const ok = x => x?.status === 'completed' && x.conclusion === 'success';
+    const release = only(RELEASE_JOB);
+    if (ok(release)) {
+      if (!Array.isArray(release.steps)) throw new Error('LOCK_JOBS_INCOMPLETE');
+      const proven = RELEASE_STEPS.every(name => {
+        const steps = release.steps.filter(st => st?.name === name);
+        if (steps.length > 1) throw new Error('LOCK_JOBS_AMBIGUOUS');
+        return ok(steps[0]);
+      });
+      if (proven) return true;
+    }
+    const unblock = only(UNBLOCK_JOB);
+    if (!ok(unblock)) return false;
+    const ownerId = policy.owner?.id;
+    const envName = policy.environments?.production_approval?.name;
+    if (!Number.isSafeInteger(ownerId) || ownerId <= 0 || typeof envName !== 'string' || !envName) return false;
+    const approvals = await get(`${root}/actions/runs/${id}/approvals`);
+    if (!Array.isArray(approvals)) throw new Error('LOCK_APPROVALS_INCOMPLETE');
+    return approvals.some(a => a?.state === 'approved' && a.user?.id === ownerId
+      && Array.isArray(a.environments) && a.environments.some(e => e?.name === envName));
   };
   return {
     repository,
@@ -239,19 +285,29 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
       }
       let inflight = 0;
       for (const status of seen.values()) if (status !== 'completed') inflight += 1;
-      // Stage 4l: a failed release freezes later ones. Report the conclusion of the most recent
-      // (highest run_number) completed run; null only when no run has ever completed. A
-      // duplicated run_number is ambiguous and throws. The qualifier, not this reader, decides.
-      let last = null;
+      // Stage 4l: a failed release freezes later ones. The freeze starts at the most recent
+      // (highest run_number) completed run whose conclusion is not exactly 'success' (missing or
+      // unknown counts as failed). A run's own 'success' is NOT enough to clear it: a DENY also
+      // ends as success. Only a later run that PROVES a release or an explicit owner-verified
+      // unblock clears it (see proveClearing). A duplicated run_number is ambiguous and throws.
+      const completed = [];
       const numbers = new Set();
       for (const [id, status] of seen) {
         const m = meta.get(id);
         if (numbers.has(m.runNumber)) throw new Error('LOCK_INCOMPLETE');
         numbers.add(m.runNumber);
-        if (status === 'completed' && (!last || m.runNumber > last.runNumber)) last = m;
+        if (status === 'completed') completed.push({ id, ...m });
       }
-      const lastConclusion = last ? (typeof last.conclusion === 'string' ? last.conclusion : 'unknown') : null;
-      return { held: inflight > 0, inflight, lastConclusion };
+      let failed = null;
+      for (const r of completed) if (r.conclusion !== 'success' && (!failed || r.runNumber > failed.runNumber)) failed = r;
+      if (!failed) return { held: inflight > 0, inflight, freeze: null };
+      const later = completed.filter(r => r.runNumber > failed.runNumber).sort((a, b) => b.runNumber - a.runNumber);
+      if (later.length > FREEZE_MAX_CANDIDATES) throw new Error('LOCK_INCOMPLETE');
+      for (const r of later) {
+        if (await proveClearing(r.id)) return { held: inflight > 0, inflight, freeze: null };
+      }
+      const conclusion = typeof failed.conclusion === 'string' ? failed.conclusion : 'unknown';
+      return { held: inflight > 0, inflight, freeze: { run_number: failed.runNumber, conclusion } };
     },
     async readCodexEvidence(args) {
       return codex()(args);
