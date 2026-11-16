@@ -64,11 +64,15 @@ test('application roles are created (NOLOGIN, idempotent, no password) before pg
   const ignore = new Set([...SUPABASE_ROLES, 'postgres', 'public', 'it', 'sc19_p24_preview', 'current_user', 'session_user']);
   const missing = [...found].filter(r => !ignore.has(r) && !APP_ROLES.includes(r));
   assert.deepEqual(missing, []);
-  for (const stmt of roleSetupSql(APP_ROLES)) {
-    assert.match(stmt, /create role [a-z0-9_]+ nologin; exception when duplicate_object/);
+  for (const stmt of roleSetupSql(APP_ROLES, { noinherit: true })) {
+    assert.match(stmt, /create role [a-z0-9_]+ nologin noinherit; exception when duplicate_object/);
     assert.doesNotMatch(stmt, /password|login;.*login/i);
   }
   const src = readFileSync(new URL('../tools/release/backup-drill/drill.mjs', import.meta.url), 'utf8');
-  assert.ok(src.indexOf('roleSetupSql([...SUPABASE_ROLES, ...APP_ROLES])') > 0);
-  assert.ok(src.indexOf('roleSetupSql([...SUPABASE_ROLES, ...APP_ROLES])') < src.indexOf('pg_restore -d'));
+  // migrations reject an existing app role with rolinherit = true, so the drill must create them NOINHERIT
+  const appCall = 'roleSetupSql(APP_ROLES, { noinherit: true })';
+  assert.ok(src.indexOf(appCall) > 0);
+  assert.ok(src.indexOf(appCall) < src.indexOf('pg_restore -d'));
+  assert.ok(src.indexOf('roleSetupSql(SUPABASE_ROLES)') < src.indexOf('pg_restore -d'));
+  assert.doesNotMatch(src, /roleSetupSql\(\[\.\.\.SUPABASE_ROLES, \.\.\.APP_ROLES\]\)/);
 });

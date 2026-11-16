@@ -28,7 +28,10 @@ export const APP_ROLES = [
   'erasure_worker', 'sc19_p24_checkout', 'screening_worker', 'tenant_domain_reverifier', 'tenant_domain_verifier',
 ];
 export const SUPABASE_ROLES = ['anon', 'authenticated', 'service_role', 'authenticator', 'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin', 'dashboard_user', 'pgbouncer', 'supabase_read_only_user'];
-export const roleSetupSql = (roles) => roles.map(r => `do $$ begin create role ${r} nologin; exception when duplicate_object then null; end $$`);
+// App roles are NOINHERIT: several migrations (e.g. 20261109210000_sc021_ai_ledger.sql,
+// 20261111140000_sc19_p24_checkout_role.sql) raise when an existing role has rolinherit = true.
+export const roleSetupSql = (roles, { noinherit = false } = {}) =>
+  roles.map(r => `do $$ begin create role ${r} nologin${noinherit ? ' noinherit' : ''}; exception when duplicate_object then null; end $$`);
 
 export function validateSourceUrl(url) {
   let u;
@@ -163,7 +166,8 @@ async function main() {
 
   // 2. Restore into the disposable database (Supabase roles/extensions stubbed).
   const prep = [
-    ...roleSetupSql([...SUPABASE_ROLES, ...APP_ROLES]),
+    ...roleSetupSql(SUPABASE_ROLES),
+    ...roleSetupSql(APP_ROLES, { noinherit: true }),
     'create schema if not exists extensions',
     ...['pgcrypto', 'uuid-ossp', 'pg_trgm', 'citext', 'pg_cron'].map(e => `create extension if not exists "${e}" with schema ${e === 'pg_cron' ? 'pg_catalog' : 'extensions'}`),
   ].join(';\n');
