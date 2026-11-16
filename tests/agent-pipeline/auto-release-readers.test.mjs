@@ -55,7 +55,7 @@ const PROMOTE_PATH = '.github/workflows/agent-promote.yml';
 const MAIN = 'a'.repeat(40);
 const OLD_MAIN = 'b'.repeat(40);
 const run = (id, status = 'completed', o = {}) => ({ id, workflow_id: PROMOTE, status, run_number: id, run_attempt: 1,
-  conclusion: status === 'completed' ? 'success' : null, event: 'workflow_dispatch', head_branch: 'main', head_sha: MAIN, path: PROMOTE_PATH, ...o });
+  conclusion: status === 'completed' ? 'success' : null, run_started_at: new Date(Date.UTC(2026, 10, 1, 0, id)).toISOString(), event: 'workflow_dispatch', head_branch: 'main', head_sha: MAIN, path: PROMOTE_PATH, ...o });
 // Serves an unfiltered, paginated listing. `script` may return a different run list per call
 // (call index starts at 0) to model runs changing between requests.
 const mkLock = (runsOrScript = [], opts = {}) => {
@@ -231,6 +231,25 @@ test('lock (4l): a re-run hiding a failed attempt behind a DENY success keeps th
   assert.equal((await mkLock([failed(5), run(7, 'completed', { run_attempt: 2 })], { jobs: { 7: jobsOf(releaseJob(7)) } }).r.readLock()).freeze, null);
   // ...and a later proven release clears a re-run freeze.
   assert.equal((await mkLock([run(7, 'completed', { run_attempt: 2 }), run(8)], { jobs: { 8: jobsOf(releaseJob(8)) } }).r.readLock()).freeze, null);
+});
+test('lock (4l): an older run re-run AFTER a newer proof still freezes (final-review finding 1)', async () => {
+  const later = '2026-11-20T00:00:00.000Z';
+  const proof = { jobs: { 2: jobsOf(releaseJob(2)) } };
+  // run 1 re-run after proven release #2 and failed (e.g. smoke) → frozen at run 1
+  assert.deepEqual((await mkLock([run(1, 'completed', { run_attempt: 2, conclusion: 'failure', run_started_at: later }), run(2)], proof).r.readLock()).freeze,
+    { run_number: 1, conclusion: 'failure' });
+  // ...or failed and was re-run again into a DENY success → still frozen ('rerun')
+  assert.deepEqual((await mkLock([run(1, 'completed', { run_attempt: 3, run_started_at: later }), run(2)], proof).r.readLock()).freeze,
+    { run_number: 1, conclusion: 'rerun' });
+  // unreadable start times fail closed
+  for (const t of [undefined, null, 'garbage']) {
+    assert.deepEqual((await mkLock([run(1, 'completed', { run_attempt: 2, conclusion: 'failure', run_started_at: t }), run(2)], proof).r.readLock()).freeze,
+      { run_number: 1, conclusion: 'failure' });
+  }
+  // an older re-run that finished before the proof started is cleared by it
+  assert.equal((await mkLock([run(1, 'completed', { run_attempt: 2, conclusion: 'failure', run_started_at: '2026-10-01T00:00:00.000Z' }), run(2)], proof).r.readLock()).freeze, null);
+  // an older re-run after the proof that proves a release itself does not freeze
+  assert.equal((await mkLock([run(1, 'completed', { run_attempt: 2, run_started_at: later }), run(2)], { jobs: { 1: jobsOf(releaseJob(1)), 2: jobsOf(releaseJob(2)) } }).r.readLock()).freeze, null);
 });
 test('lock (4l): proof only from the pinned workflow dispatched on main at a commit on main (review finding 2)', async () => {
   const frozen = { run_number: 1, conclusion: 'failure' };

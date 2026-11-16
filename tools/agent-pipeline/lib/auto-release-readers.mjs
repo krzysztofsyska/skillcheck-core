@@ -65,7 +65,7 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
   // Any malformed, truncated or foreign response throws → READ_LOCK_FAILED → DENY. A run that
   // proves neither (e.g. a DENY no-op that ended as success) returns false: the freeze stays.
   const facts = run => ({ id: run.id, runNumber: run.run_number, conclusion: run.conclusion,
-    runAttempt: run.run_attempt, headBranch: run.head_branch, headSha: run.head_sha, event: run.event, path: run.path });
+    runAttempt: run.run_attempt, startedAt: run.run_started_at, headBranch: run.head_branch, headSha: run.head_sha, event: run.event, path: run.path });
   // A proof counts only from the pinned workflow file, dispatched on `main`, at a commit that
   // is reachable from the current protected `main` (a branch or tag copy of the workflow could
   // otherwise define a fake `release`/`unblock` job). Any doubt → not trusted → no proof.
@@ -343,7 +343,21 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
       for (const r of completed) {
         if (r.conclusion !== 'success') return { held, inflight, freeze: freezeOf(r) };
         const proven = mayProve(r) && budget > 0 ? (budget -= 1, await proveClearing(r)) : false;
-        if (proven) return { held, inflight, freeze: null };
+        if (proven) {
+          // run_number is fixed at dispatch, so a RE-RUN of an older run can execute (and fail,
+          // or fail and be re-run again into a DENY no-op) AFTER this proof while sorting below
+          // it. Any older re-run whose latest attempt did not start strictly before this proof
+          // started (or with an unreadable time) freezes, unless that re-run proves itself.
+          const pStart = Date.parse(r.startedAt);
+          for (const o of completed) {
+            if (o.runNumber >= r.runNumber || o.runAttempt === 1) continue;
+            const oStart = Date.parse(o.startedAt);
+            if (Number.isFinite(pStart) && Number.isFinite(oStart) && oStart < pStart) continue;
+            const ok = o.conclusion === 'success' && mayProve(o) && budget > 0 ? (budget -= 1, await proveClearing(o)) : false;
+            if (!ok) return { held, inflight, freeze: freezeOf(o) };
+          }
+          return { held, inflight, freeze: null };
+        }
         if (r.runAttempt !== 1) return { held, inflight, freeze: freezeOf(r) };
       }
       return { held, inflight, freeze: null };
