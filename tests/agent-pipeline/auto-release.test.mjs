@@ -33,13 +33,11 @@ const codexFor = i => ({ source: 'trusted_codex_reader', repository: i.current?.
   entries: [{ task_id: 'T1', pr_number: 5, task_head_sha: H, review_head_sha: H, task_merge_sha: G, merge_commit_sha: G, review_id: 11,
     reviewer_id: RID, reviewer_login: 'chatgpt-codex-connector[bot]', review_state: 'COMMENTED', completed: true, open_findings: 0 }] });
 const withVerdict = i => {
-  i.scopeVerdict = { source: 'trusted_independent_scope_reader', verdict: 'LOW_RISK_COMPATIBLE', repository: i.current?.repository,
-    base_sha: i.current?.mainSha, head_sha: i.current?.integrationSha, manifest_hash: sha256(i.promotion.manifest) };
   i.codex = codexFor(i);
   return i;
 };
 const good0 = () => ({
-  trusted: { p24Hold: false, codexReviewerId: RID },
+  trusted: { codexReviewerId: RID },
   current: { repository: 'r/r', integrationSha: I, mainSha: M },
   promotion: { blockedReason: null, manifest: { integration_sha: I, main_sha: M, tasks: [task], commits: [H, G], files: ['app/page.tsx'] },
     runbook: { id: 'x' }, smokeTests: ['smoke'], rollback: 'redeploy previous' },
@@ -69,11 +67,9 @@ test('additive migration with recovery plan is qualified', () => {
   i.promotion.runbook = { id: 'x', backup: 'pitr', rollback_db_compatible: true };
   assert.equal(evaluateAutoRelease(withVerdict(i)).decision, 'ALLOW');
 });
-test('P24 hold denies; anything but literal false keeps hold', () => {
-  deny(i => { i.trusted = { p24Hold: true }; }, 'P24_HOLD');
-  deny(i => { i.trusted = {}; }, 'P24_HOLD');
-  deny(i => { i.trusted = { p24Hold: 'false' }; }, 'P24_HOLD');
-  deny(i => { i.trusted = undefined; }, 'P24_HOLD');
+test('the lifted P24 hold is no longer a reason code (owner decision 2026-11-15/16, #369)', () => {
+  const i = good(); i.trusted = { p24Hold: true, codexReviewerId: RID };
+  assert.ok(!evaluateAutoRelease(i).reasons.includes('P24_HOLD'));
 });
 test('only explicitly recognised additive SQL qualifies; everything else is not proven', () => {
   const bad = ['drop table t;', 'truncate t;', 'delete from t;', 'alter table t drop column c;', 'update t set a=1;', 'grant all on t to anon;',
@@ -94,6 +90,16 @@ test('payments, sends, pipeline/secrets paths need owner consent', () => {
   for (const [f, c] of [['lib/billing/x.ts', 'PAYMENTS'], ['lib/p24/client.ts', 'PAYMENTS'], ['lib/mail/send.ts', 'OUTBOUND_SENDS'], ['.github/workflows/a.yml', 'SECRETS_OR_PIPELINE'], ['tools/agent-pipeline/lib/x.mjs', 'SECRETS_OR_PIPELINE']])
     deny(i => { i.promotion.manifest.files.push(f); }, c);
   assert.deepEqual(classifyReleaseFiles(['app/page.tsx']).reasons, []);
+});
+test('payment-path freeze (owner 2026-11-15) denies purchase flow, prices, catalog and orders', () => {
+  for (const f of ['app/kup/preselekcja/page.tsx', 'lib/sc19-catalog-orders.ts', 'lib/sc19-offer-catalog-runtime.ts',
+    'lib/sc19-offer-amounts.ts', 'lib/sc19-package-sizes.ts', 'lib/preselekcja-offer.ts',
+    'app/components/marketing/package-comparison.tsx', 'app/checkout/route.ts', 'lib/stripe/client.ts',
+    'supabase/migrations/20261107164252_sc019_catalog_orders.sql', 'app/cennik/page.tsx', 'lib/Prices.ts'])
+    assert.ok(classifyReleaseFiles([f]).reasons.includes(`PAYMENT_PATH_FREEZE:${f}`), f);
+  deny(i => { i.promotion.manifest.files.push('lib/sc19-catalog-orders.ts'); }, 'PAYMENT_PATH_FREEZE');
+  for (const f of ['app/page.tsx', 'lib/screening-ai.ts', 'lib/interview-gaps.ts', 'app/kupon.tsx', 'lib/reorder.ts', 'docs/offerings.md'])
+    assert.deepEqual(classifyReleaseFiles([f]).reasons, [], f);
 });
 test('missing, stale or failing CI/review/auto-review deny', () => {
   deny(i => { i.ci = undefined; }, 'CI_MISSING_OR_STALE');
@@ -131,16 +137,9 @@ test('parallel or duplicate release and incompatible rollback deny', () => {
   deny(i => { i.promotion.smokeTests = []; }, 'MISSING_SMOKE_OR_ROLLBACK');
 });
 
-test('scope verdict is required, trusted, and bound to repo/base/head/manifest hash', () => {
-  deny(i => { i.scopeVerdict = undefined; }, 'SCOPE_VERDICT_MISSING');
-  deny(i => { i.scopeVerdict.source = 'builder'; }, 'SCOPE_VERDICT_MISMATCH');
-  deny(i => { i.scopeVerdict.verdict = 'NEEDS_OWNER_CONSENT'; }, 'SCOPE_VERDICT_MISMATCH');
-  deny(i => { i.scopeVerdict.repository = 'x/y'; }, 'SCOPE_VERDICT_MISMATCH');
-  deny(i => { i.scopeVerdict.base_sha = 'c'.repeat(40); }, 'SCOPE_VERDICT_MISMATCH');
-  deny(i => { i.scopeVerdict.head_sha = 'c'.repeat(40); }, 'SCOPE_VERDICT_MISMATCH');
-  deny(i => { i.scopeVerdict.manifest_hash = 'd'.repeat(64); }, 'SCOPE_VERDICT_MISMATCH');
-  // manifest changed after the verdict (e.g. payment logic hidden in app/page.tsx added later) -> stale verdict
-  deny(i => { i.promotion.manifest.files.push('app/other.tsx'); }, 'SCOPE_VERDICT_MISMATCH');
+test('no signed scope verdict is required any more (owner decision 2026-11-16, #369)', () => {
+  const i = good(); delete i.scopeVerdict;
+  assert.ok(!evaluateAutoRelease(i).reasons.some(r => r.startsWith('SCOPE_VERDICT')));
 });
 test('malformed input returns DENY and never throws', () => {
   for (const bad of [undefined, null, 5, 'x', [], {}]) assert.equal(evaluateAutoRelease(bad).decision, 'DENY');
@@ -152,14 +151,14 @@ test('malformed input returns DENY and never throws', () => {
     i => { i.migrations = [null, 5, 'x', {}, { path: 5, sql: {} }]; i.promotion.manifest.files.push('supabase/migrations/m.sql'); },
     i => { i.migrations = { path: 'x' }; }, i => { i.rulesets = 'x'; }, i => { i.rulesets = [null]; }, i => { i.policy = null; },
     i => { i.environments = 5; }, i => { i.ci = 5; }, i => { i.review = 'x'; }, i => { i.codex = []; }, i => { i.lock = 'x'; },
-    i => { i.released = 'x'; }, i => { i.scopeVerdict = 5; }, i => { i.current = 'x'; }, i => { i.trusted = 5; },
+    i => { i.released = 'x'; }, i => { i.current = 'x'; },
   ];
   for (const m of muts) { const i = good(); m(i); let r; assert.doesNotThrow(() => { r = evaluateAutoRelease(i); }); assert.equal(r.decision, 'DENY'); }
   assert.equal(classifyReleaseFiles(null).reasons[0], 'INVALID_FILES');
   assert.equal(classifyReleaseFiles([1]).reasons[0], 'INVALID_FILES');
 });
 
-test('SQL comment markers (even inside literals) are refused; repository must be valid in current and verdict', () => {
+test('SQL comment markers (even inside literals) are refused; repository must be valid', () => {
   for (const sql of [
     "alter table public.companies add column c text default '/*'; delete from public.company_members; select '*/';",
     "alter table t add column c text default '--'",
@@ -168,10 +167,9 @@ test('SQL comment markers (even inside literals) are refused; repository must be
   ]) assert.equal(isRecognisedAdditiveSql(sql), false, sql);
   assert.equal(isRecognisedAdditiveSql('alter table t add column c text'), true);
   for (const bad of [undefined, null, '', '   ', 'noslash', 5, {}]) {
-    deny(i => { i.current.repository = bad; delete i.scopeVerdict; }, 'CURRENT_REPOSITORY_INVALID');
-    deny(i => { i.scopeVerdict.repository = bad; }, 'SCOPE_VERDICT_MISMATCH');
+    deny(i => { i.current.repository = bad; }, 'CURRENT_REPOSITORY_INVALID');
   }
-  deny(i => { delete i.current.repository; delete i.scopeVerdict.repository; }, 'CURRENT_REPOSITORY_INVALID');
+  deny(i => { delete i.current.repository; }, 'CURRENT_REPOSITORY_INVALID');
 });
 
 test('codex aggregate: review/merge SHA confusion, coverage, identity and findings all DENY', () => {

@@ -76,11 +76,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: sc-builder-input
-      - name: Check existing credential presence
+      - name: Require subscription OAuth credential
         env:
-          HAS_API: ${{ secrets.ANTHROPIC_API_KEY != '' }}
           HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
-        run: test "$HAS_API" = true || test "$HAS_OAUTH" = true
+        run: test "$HAS_OAUTH" = true
       - name: Revalidate reservation after environment wait
         run: node trusted/tools/agent-pipeline/authorize-builder.mjs
         env:
@@ -96,7 +95,6 @@ jobs:
         env:
           CLAUDE_WORKING_DIR: ${{ github.workspace }}/builder-source
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt_file: ${{ github.workspace }}/builder-prompt.txt
           show_full_output: 'false'

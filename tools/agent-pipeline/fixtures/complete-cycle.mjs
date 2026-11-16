@@ -13,7 +13,7 @@ const BASE = 'cccccccccccccccccccccccccccccccccccccccc';
 const MAIN = 'dddddddddddddddddddddddddddddddddddddddd';
 
 export async function runCompleteCycle() {
-  const policy = loadPolicy();
+  const policy = { ...loadPolicy(), execution_mode: 'LEGACY', builder_provider: 'cursor' };
   const policySha = MAIN;
   const calls = [];
   const network = [];

@@ -29,7 +29,12 @@ export function contractBody() {
 }
 
 export function loadedPolicy() {
+  // Existing synthetic Cursor/state-machine fixtures exercise the LEGACY path.
+  // Keep the checked-in SUBSCRIPTION_ONLY policy unchanged for production and
+  // use loadPolicy() directly in tests of the new subscription path.
   const policy = loadPolicy();
+  policy.execution_mode = 'LEGACY';
+  policy.builder_provider = 'cursor';
   return { policy, policySha: 'd'.repeat(40) };
 }
 

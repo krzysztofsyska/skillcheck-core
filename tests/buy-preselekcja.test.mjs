@@ -267,6 +267,10 @@ async function renderRecruitmentPurchase(enabled) {
       loadCurrentRanking:async()=>new Map(),
       withGroupCurrency:rows=>rows.map(row=>({...row,group_current:false})),
     },
+    // SC-AC-SESSION (#276): same rule as lib/assessment-center-preview.ts, so the
+    // session link stays hidden here exactly as it is outside Preview/development.
+    '../../../../../lib/assessment-center-preview':{assessmentCenterPreviewEnabled:()=>
+      process.env.AC_PAIRED_SHEETS_PREVIEW==='true'&&(process.env.VERCEL_ENV==='preview'||process.env.NODE_ENV==='development')},
   };
   mod.require=id=>id in mocks?mocks[id]:req(id);
   mod._compile(ts.transpileModule(readFileSync(abs,'utf8'),{compilerOptions:{
@@ -289,6 +293,8 @@ test('recruitment shows purchase links only while package sales are enabled',asy
   assert.ok(html.includes('href="'+prefix+'/checkout?recruitmentId=bbbbbbbb-1111-4222-8333-444444444444">Kup kolejną PRESELEKCJĘ</a>'));
   const disabled=await renderRecruitmentPurchase(false);
   assert.equal(disabled.includes('/billing/checkout?recruitmentId='),false);
+  // The Preview-only AC session link is not part of the purchase path and is off by default.
+  for(const page of [html,disabled])assert.equal(page.includes('/assessment-center'),false);
 });
 async function renderReturnFromCheckout(recruitmentId) {
   const file='app/dashboard/[companyId]/billing/checkout/page.tsx';

@@ -148,7 +148,7 @@ export function dispatchInputs(effect) {
   return inputs;
 }
 
-export async function loadWorkFromClients({ github, cursor = null, policy, now, secrets, prompts = null, policyCommit = null }) {
+export async function loadWorkFromClients({ github, cursor = null, policy, now, secrets, prompts = null, policyCommit = null, flags = {} }) {
   const controlBranch = controlPlane(policy).branch;
   const [integration, main, issues, pulls, projection, control] = await Promise.all([
     github.readBranch('integration'),
@@ -190,6 +190,30 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
   }
   const promotion = !integrationOnly(policy) && github.readComparison ? await preparePromotion(github, policy, records, integration?.commit?.sha, main?.commit?.sha) : null;
   const evidence = await readEvidence(github, policy, records);
+  // SC-436: feed the existing controller with authenticated, exact-PR Codex
+  // evidence. Offline fixtures and other execution modes are unaffected.
+  // A failed read is never promoted into review PASS; each task fails closed
+  // independently so another READY task can progress.
+  const codexReviews = {};
+  if (policy.execution_mode === 'SUBSCRIPTION_ONLY') {
+    for (const record of Object.values(records)) {
+      if (record.binding?.lane === 'promotion' || record.state !== 'PR_REVIEW'
+          || !record.pr_number || !record.review_request_id) continue;
+      try {
+        if (!github.readComments || !github.readReviewThreads) throw new Error('CODEX_READER_UNAVAILABLE');
+        const [comments, threads] = await Promise.all([
+          github.readComments(record.pr_number),
+          github.readReviewThreads(record.pr_number, { includeComments: true }),
+        ]);
+        codexReviews[record.task_id] = { comments, threads };
+      } catch (error) {
+        codexReviews[record.task_id] = {
+          comments: null, threads: null,
+          readError: String(error?.code || error?.status || error?.message || 'CODEX_READ_FAILED').slice(0, 200),
+        };
+      }
+    }
+  }
   const postMergeCi = {};
   for (const record of Object.values(records)) {
     if (record.technical_state === 'WAITING_POST_MERGE_CI' || record.binding?.post_merge_ci?.blocked) {
@@ -205,6 +229,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
     now,
     secrets,
     prompts,
+    flags,
     snapshot: {
       integrationSha: integration?.commit?.sha ?? null,
       mainSha: main?.commit?.sha ?? null,
@@ -214,6 +239,7 @@ export async function loadWorkFromClients({ github, cursor = null, policy, now, 
       branches,
       cursor: cursorState,
       evidence,
+      codexReviews,
       postMergeCi,
       approvals,
       protection,
@@ -239,6 +265,7 @@ async function loadWorkFromEnv(env, policy, flags, configuration, sharedGithub) 
     secrets: secretsFromEnv(env, policy),
     prompts: readPrompts(),
     policyCommit: env.AGENT_POLICY_COMMIT,
+    flags,
   });
   if (flags.enabled && !configuration.ok) return work;
   return work;

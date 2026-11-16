@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { plan } from '../../tools/agent-pipeline/lib/transitions.mjs';
 import { defaultPorts, loadWorkFromClients, reconcile, reconcileFromEnv } from '../../tools/agent-pipeline/lib/reconcile.mjs';
-import { contractBody, loadedPolicy, observation } from './helpers.mjs';
+import { contractBody, loadedPolicy, observation, taskRecord, HEAD, BASE } from './helpers.mjs';
+import { createGitHubClient } from '../../tools/agent-pipeline/lib/github.mjs';
 import { configuredPolicy, protectionFixtures } from './http-world.mjs';
 import { protectionFromRulesets } from '../../tools/agent-pipeline/lib/protection.mjs';
 
@@ -183,7 +184,10 @@ test('reconcileFromEnv does not call the network without configuration', async (
     assert.equal(missing.status, 'NOT_CONFIGURED');
     assert.equal(missing.controllerInvoked, false);
     assert.deepEqual(missing.effects, []);
-    assert.equal(missing.missing.includes('CURSOR_API_KEY'), true);
+    assert.equal(missing.missing.includes('SUBSCRIPTION_CLAUDE_WORKFLOW_UNCONFIGURED'), true);
+    assert.equal(missing.missing.includes('SUBSCRIPTION_OAUTH_BUDGET_ADAPTER_NOT_WIRED'), true);
+    assert.equal(missing.missing.includes('SUBSCRIPTION_INDEPENDENT_REVIEW_NOT_WIRED'), true);
+    assert.equal(missing.missing.includes('CURSOR_API_KEY'), false);
     const disabled = await reconcileFromEnv({
       AGENT_PIPELINE_ENABLED: 'false',
       AGENT_PIPELINE_MERGE_ENABLED: 'false',
@@ -264,4 +268,76 @@ test('the reconcile CLI blocks effects when flags are off or configuration is mi
   assert.equal(liveBody.status, 'NOT_CONFIGURED');
   assert.equal(liveBody.controllerInvoked, false);
   assert.deepEqual(liveBody.effects, []);
+});
+
+test('subscription work loader injects authenticated Codex evidence and keeps failed reads fail-closed', async () => {
+  const { policy } = loadedPolicy();
+  policy.execution_mode = 'SUBSCRIPTION_ONLY';
+  policy.builder_provider = 'claude-code';
+  const record = taskRecord({ state: 'PR_REVIEW', review_request_id: 'e'.repeat(64) });
+  const comments = [{ id: 18, user: { id: 199175422, login: 'chatgpt-codex-connector[bot]' },
+    body: '<!-- codex-pull-request-review-summary -->\\n<!-- codex-review-state:v1 {} -->' }];
+  const threads = [{ id: 'PRRT_1', isResolved: false, comments: [
+    { body: 'Guard against stale head', author: { login: 'chatgpt-codex-connector' }, path: 'lib/a.mjs', line: 7 },
+  ] }];
+  let reads = 0;
+  let fail = false;
+  const github = {
+    async readBranch(name) { return { commit: { sha: name === 'main' ? 'f'.repeat(40) : name === 'integration' ? BASE : 'd'.repeat(40) } }; },
+    async readIssues() { return [{ number: 7, body: contractBody(), user: { id: policy.owner.id, login: policy.owner.login } }]; },
+    async readIssue() { return { number: 7, body: contractBody(), user: { id: policy.owner.id, login: policy.owner.login } }; },
+    async readPulls() { return []; },
+    async readPull() { return { number: 50, user: { id: policy.owner.id },
+      head: { ref: record.binding.branch, sha: HEAD, repo: { id: policy.repository_id } },
+      base: { ref: 'integration', sha: BASE, repo: { id: policy.repository_id } } }; },
+    async readProjection() { return { tasks: { [record.task_id]: record } }; },
+    async readProtection() { return null; },
+    async readChangedFiles() { return []; },
+    async listWorkflowRuns() { return []; },
+    async readComments(n) { reads++; assert.equal(n, 50); return comments; },
+    async readReviewThreads(n, options) {
+      reads++; assert.equal(n, 50); assert.deepEqual(options, { includeComments: true });
+      if (fail) throw new Error('READ_FORBIDDEN');
+      return threads;
+    },
+  };
+  const load = () => loadWorkFromClients({ policy, github, secrets: {}, now: '2026-10-06T12:00:00.000Z' });
+  const good = await load();
+  assert.equal(good.items.length, 1);
+  assert.deepEqual(good.items[0].observation.github.codexReview, { comments, threads });
+  assert.equal(reads, 2);
+  fail = true;
+  const denied = await load();
+  assert.deepEqual(denied.items[0].observation.github.codexReview.comments, null);
+  assert.deepEqual(denied.items[0].observation.github.codexReview.threads, null);
+  assert.equal(denied.items[0].observation.github.codexReview.readError, 'READ_FORBIDDEN');
+  policy.execution_mode = 'LEGACY';
+  reads = 0;
+  const legacy = await load();
+  assert.equal(legacy.items[0].observation.github.codexReview, null);
+  assert.equal(reads, 0);
+});
+
+test('subscription thread reader returns Codex finding text and rejects truncated comments', async () => {
+  let incomplete = false;
+  const fetchMock = async (url, init) => {
+    assert.ok(String(url).endsWith('/graphql'));
+    assert.equal(init.method, 'POST');
+    assert.ok(JSON.parse(init.body).query.includes('comments(first:100)'));
+    return jsonResponse({ data: { repository: { pullRequest: { reviewThreads: {
+      nodes: [{ id: 'PRRT_1', isResolved: false, isOutdated: false,
+        comments: { pageInfo: { hasNextPage: incomplete }, nodes: [
+          { body: 'Fix stale SHA', path: 'a.mjs', line: 11, author: { login: 'chatgpt-codex-connector' } },
+        ] } }],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    } } } } });
+  };
+  const gh = createGitHubClient({ fetch: fetchMock, token: 'fixture', repository: 'o/r' });
+  const threads = await gh.readReviewThreads(50, { includeComments: true });
+  assert.equal(threads[0].comments[0].body, 'Fix stale SHA');
+  assert.equal(threads[0].comments[0].line, 11);
+  assert.equal(threads[0].path, 'a.mjs');
+  assert.equal(threads[0].line, 11);
+  incomplete = true;
+  await assert.rejects(gh.readReviewThreads(50, { includeComments: true }), /REVIEW_THREAD_COMMENTS_INCOMPLETE/);
 });

@@ -416,6 +416,76 @@ export type Database = {
       latest_exercise_definitions: { Row: ExerciseDefinitionEntry; Relationships: [] };
     };
     Functions: {
+      /** SC-PROCESS / #277 part A recruitment diagnostics (20261112140000_sc_process_diagnostics.sql).
+       * The table lives in schema `process`, closed to API roles; these functions are
+       * the only way in. Reads: any company member. Recording a diagnostic: owner or
+       * recruiter of that company (42501 otherwise). A `change_budget` recommendation is
+       * refused (22023) while any checklist area is `not_checked`.
+       * Shapes: lib/process-diagnostics.ts, lib/process-metrics.ts. */
+      process_followup_create: {
+        Args: { target_application: string; purpose: string; start_date: string; criteria: string; initial_result: string };
+        Returns: string;
+      };
+      process_followup_grant: {
+        Args: { target_case: string; target_user: string; allowed: boolean };
+        Returns: undefined;
+      };
+      process_followup_record: {
+        Args: { target_case: string; checkpoint: number; observation: Json };
+        Returns: string;
+      };
+      process_followup_recruitment_metrics: {
+        Args: { target_company: string; target_recruitment: string; checkpoint: number };
+        Returns: Json;
+      };
+      process_followup_read: { Args: { target_application: string }; Returns: Json };
+      process_record_diagnostic: {
+        Args: {
+          target_company: string; target_recruitment: string; diagnostic: Json;
+          recommendation_kind: string; recommendation: string; expected_record_no: number;
+        };
+        Returns: number;
+      };
+      process_diagnostics_state: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: Json;
+      };
+      process_recruitment_metrics: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: Json;
+      };
+      /** SC-METHOD / #275 method profile (20261112100000_sc_method_profile.sql).
+       * Tables live in schema `method`, closed to API roles; these functions are the
+       * only way in. Reads: any company member. Draft, approval and binding: owner
+       * or recruiter of that company (42501 otherwise). Shapes: lib/method-profile.ts. */
+      method_profile_save_draft: {
+        Args: { target_company: string; target_position: string; draft_content: Json; expected_revision: number };
+        Returns: number;
+      };
+      method_profile_approve: {
+        Args: { target_company: string; target_position: string; expected_revision: number };
+        Returns: string;
+      };
+      method_profile_state: {
+        Args: { target_company: string; target_position: string };
+        Returns: Json;
+      };
+      method_profile_version: {
+        Args: { target_company: string; target_version: string };
+        Returns: Json | null;
+      };
+      method_bind_definition: {
+        Args: { target_company: string; target_definition: string };
+        Returns: string | null;
+      };
+      method_bind_recruitment_definitions: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: number;
+      };
+      method_definition_binding: {
+        Args: { target_company: string; target_definition: string };
+        Returns: Json | null;
+      };
       /** SC-020-A brand configuration (20261109190000_sc020_brand_configuration.sql).
        * Writes and the editor state are owner-only (42501 otherwise); published
        * reads are for any company member. */
@@ -531,6 +601,20 @@ export type Database = {
       ac_find_pair: {Args:{application:string;revision:string};Returns:string|null};
       ac_read_pair: {Args:{pair_id:string};Returns:Json};
       ac_submit_sheet: {Args:{pair_id:string;sheet:Json};Returns:undefined};
+      // SC-AC-SESSION (#276, 20261112120000_sc_ac_session_inventory_r16.sql). jsonb results are
+      // validated in lib/assessment-center-session.ts; the tables are private and RPC-only.
+      ac_session_create: {Args:{recruitment:string;session_title:string;competencies:string[]};Returns:string};
+      ac_session_add_stage: {Args:{session:string;kind:string;stage_title:string;revision:string;counterpart:string|null};Returns:string};
+      ac_session_remove_last_stage: {Args:{session:string};Returns:undefined};
+      ac_session_add_finalist: {Args:{session:string;application:string};Returns:string};
+      ac_session_remove_finalist: {Args:{session:string;application:string};Returns:undefined};
+      ac_session_set_status: {Args:{session:string;next_status:string};Returns:undefined};
+      ac_session_assign_pair: {Args:{session:string;stage:string;application:string;first_id:string;second_id:string};Returns:string};
+      ac_record_reconciliation: {Args:{pair_id:string;decisions:Json};Returns:string};
+      ac_confirm_reconciliation: {Args:{pair_id:string;verdict:string;note:string|null};Returns:undefined};
+      ac_session_record_entry: {Args:{session:string;application:string;stage:string|null;entry_kind:string;entry:Json};Returns:string};
+      ac_session_find: {Args:{recruitment:string};Returns:string|null};
+      ac_session_read: {Args:{session:string};Returns:Json};
       list_competency_test_access: { Args:{target:string}; Returns:Json };
       create_competency_test_grant: { Args:{target_application:string;target_definition:string;start_by:string;request_key:string}; Returns:Json };
       rotate_competency_test_grant: { Args:{target:string;expected_revision:number;request_key:string}; Returns:Json };

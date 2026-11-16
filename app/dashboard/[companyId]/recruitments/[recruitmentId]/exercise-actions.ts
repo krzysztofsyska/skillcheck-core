@@ -4,6 +4,7 @@ import { companyAccess } from '../../../../../lib/company-access';
 import { parseExerciseFormData } from '../../../../../lib/exercise-definition';
 import { validExerciseEditorContext, exerciseSaveError } from '../../../../../lib/exercise-editor';
 import type { ExerciseEditorContext } from '../../../../../lib/exercise-editor';
+import { bindMethodToDefinitions } from '../../../../../lib/method-binding';
 
 export async function saveExerciseDefinition(companyId: string, context: ExerciseEditorContext,
   _previous: { error?: string; entryId?: string }, form: FormData): Promise<{ error?: string; entryId?: string }> {
@@ -26,6 +27,9 @@ export async function saveExerciseDefinition(companyId: string, context: Exercis
   });
   if (result.error) return { error: exerciseSaveError(result.error.code) };
   if (!result.data) return { error: exerciseSaveError() };
+  // SC-METHOD / #275: zapisz, z którą zatwierdzoną wersją profilu metody powstała ta wersja zadania.
+  // Zadanie jest już zapisane; błąd powiązania trafia do logu i nie zmienia wyniku (lib/method-binding.ts).
+  await bindMethodToDefinitions(client, companyId, context.recruitmentId);
   revalidatePath(`/dashboard/${companyId}/recruitments/${context.recruitmentId}/exercises`, 'layout');
   return { entryId: result.data };
 }

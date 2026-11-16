@@ -21,6 +21,15 @@ function nip(prefix) {
 const nipA = nip('526025099'), nipB = nip('951000001'), nipC = nip('118000002');
 const code = expected => error => error.code === expected;
 const call = (db, sql, params) => db.query(sql, params).then(r => r.rows);
+// Only return boolean evidence: neither the secret nor its fingerprint leaves PostgreSQL.
+// SHA-256 compares the stored secret with the synthetic fixture without reading it back.
+const secretProof = async (db, expected) => (await call(db, `
+  select request_secret is not null as configured,
+         coalesce(octet_length(request_secret) >= 32, false) as has_min_length,
+         coalesce(sha256(convert_to(request_secret, 'UTF8')) =
+                  sha256(convert_to($1::text, 'UTF8')), false) as fingerprint_matches,
+         updated_at
+  from private.sc19_trial_auto_settings where singleton`, [expected]))[0];
 const precheck = (db, companyId, nipValue) =>
   call(db, 'select * from public.sc19_auto_free_precheck($1,$2)', [companyId, nipValue]).then(rows => rows[0]);
 
@@ -924,7 +933,7 @@ test('the request secret can be installed and rotated without a raw UPDATE', asy
   // could never be switched on at all.
   const { db, h, a } = await ready(t, { secret: null });
   await h.asAdmin();
-  assert.equal((await call(db, 'select request_secret from private.sc19_trial_auto_settings'))[0].request_secret, null);
+  assert.equal((await call(db, 'select request_secret is not null as configured from private.sc19_trial_auto_settings'))[0].configured, false);
   // With no secret nothing can be signed, so nothing is granted.
   await h.asUser(users.owner);
   await assert.rejects(autoClaim(db, a.companyId, nipA), code('42501'));
@@ -934,8 +943,10 @@ test('the request secret can be installed and rotated without a raw UPDATE', asy
     await assert.rejects(db.query('select private.rotate_sc19_trial_auto_secret($1)', [bad]), code('22023'), String(bad));
   }
   await db.query('select private.rotate_sc19_trial_auto_secret($1)', [SECRET]);
-  let row = (await call(db, 'select request_secret, updated_at from private.sc19_trial_auto_settings'))[0];
-  assert.equal(row.request_secret, SECRET);
+  let row = await secretProof(db, SECRET);
+  assert.equal(row.configured, true);
+  assert.equal(row.has_min_length, true);
+  assert.equal(row.fingerprint_matches, true);
   assert.ok(row.updated_at instanceof Date);
   // And now the same client-side signature is accepted: this is the whole
   // point — without this function the column could be set only by a raw UPDATE.
@@ -952,8 +963,11 @@ test('the request secret can be installed and rotated without a raw UPDATE', asy
   // Rotating replaces the value and clears the replay nonces.
   await db.query('insert into private.sc19_trial_auto_nonces(request_id) values($1)', [randomUUID()]);
   await db.query('select private.rotate_sc19_trial_auto_secret($1)', ['z'.repeat(40)]);
-  row = (await call(db, 'select request_secret from private.sc19_trial_auto_settings'))[0];
-  assert.equal(row.request_secret, 'z'.repeat(40));
+  row = await secretProof(db, 'z'.repeat(40));
+  assert.equal(row.configured, true);
+  assert.equal(row.has_min_length, true);
+  assert.equal(row.fingerprint_matches, true);
+  assert.equal((await secretProof(db, SECRET)).fingerprint_matches, false, 'old secret no longer matches');
   assert.equal((await call(db, 'select count(*)::int n from private.sc19_trial_auto_nonces'))[0].n, 0);
   // It is private: no Data API role may call it.
   for (const role of ['anon', 'authenticated']) {
@@ -1538,9 +1552,9 @@ test('the erasure inventory still matches after the new tables', async t => {
   }
   assert.equal((await call(env.db, 'select private.erasure_schema_signature() v'))[0].v, baseline.schema_signature);
   // Automatic FREE ships switched off: installing the migration grants nothing.
-  const settings = (await call(env.db, 'select auto_free_enabled, request_secret from private.sc19_trial_auto_settings'))[0];
+  const settings = (await call(env.db, 'select auto_free_enabled, request_secret is not null as secret_configured from private.sc19_trial_auto_settings'))[0];
   assert.equal(settings.auto_free_enabled, false);
-  assert.equal(settings.request_secret, null);
+  assert.equal(settings.secret_configured, false);
   assert.equal((await call(env.db, 'select count(*)::int n from private.marketing_consent_events'))[0].n, 0);
   assert.equal((await call(env.db, 'select count(*)::int n from private.sc19_trial_auto_checks'))[0].n, 0);
 });

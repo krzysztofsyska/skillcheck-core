@@ -24,17 +24,16 @@ const readers = (over = {}) => {
     readCiEvidence: async sha => ({ head_sha: sha, completed: true, conclusion: 'success' }),
     readReviewEvidence: async sha => ({ head_sha: sha, completed: true, conclusion: 'success', verdict: 'PASS' }),
     readCodexEvidence: async () => ({ source: 'trusted_codex_reader' }),
-    readScopeVerdict: async () => undefined,
     readLock: async () => ({ held: false, inflight: 0 }), readReleased: async () => [],
     ...over,
   };
   return rd;
 };
-const run = (over, trusted = { p24Hold: true }) => qualifyRelease({ readers: readers(over), trusted, policy: {} });
+const run = (over, trusted = {}) => qualifyRelease({ readers: readers(over), trusted, policy: {} });
 
-test('P24 hold denies even with a fully collected input', async () => {
+test('a fully collected input is no longer denied by the lifted P24 hold', async () => {
   const r = await run();
-  assert.equal(r.decision, 'DENY'); assert.ok(r.reasons.includes('P24_HOLD'));
+  assert.ok(!r.reasons.includes('P24_HOLD'));
 });
 test('collector is read-only: only read* readers exist and none is a writer', async () => {
   const rd = readers();
@@ -51,14 +50,14 @@ test('SHA race between first read and recheck -> deny', async () => {
 });
 test('missing/failed evidence readers never become ALLOW', async () => {
   for (const k of ['readCiEvidence', 'readReviewEvidence', 'readCodexEvidence', 'readLock', 'readReleased', 'readRulesets']) {
-    const r = await run({ [k]: async () => { throw new Error('boom'); } }, { p24Hold: false });
+    const r = await run({ [k]: async () => { throw new Error('boom'); } }, {});
     assert.equal(r.decision, 'DENY', k);
   }
-  const absent = await qualifyRelease({ readers: { repository: 'r/r' }, trusted: { p24Hold: false }, policy: {} });
+  const absent = await qualifyRelease({ readers: { repository: 'r/r' }, trusted: {}, policy: {} });
   assert.equal(absent.decision, 'DENY');
 });
 test('stale/foreign CI evidence is denied by the evaluator', async () => {
-  const r = await run({ readCiEvidence: async () => ({ head_sha: 'f'.repeat(40), completed: true, conclusion: 'success' }) }, { p24Hold: false });
+  const r = await run({ readCiEvidence: async () => ({ head_sha: 'f'.repeat(40), completed: true, conclusion: 'success' }) }, {});
   assert.ok(r.reasons.includes('CI_MISSING_OR_STALE'));
 });
 test('unreadable branch heads stop collection early', async () => {
@@ -70,4 +69,10 @@ test('migration files are read at the bound integration SHA only', async () => {
   await run({ readComparisonComplete: async b => b === M ? { status: 'ahead', complete: true, commits: [{ sha: 'e'.repeat(40) }], files: [{ filename: 'supabase/migrations/1.sql' }] } : { status: 'ahead', complete: true, commits: [], files: [] },
     readMigrationSql: async (p, ref) => { seen.push([p, ref]); return 'alter table t add column c text'; } });
   assert.deepEqual(seen, [['supabase/migrations/1.sql', I]]);
+});
+test('released ledger is read for the exact main/integration pair; an already released candidate is denied', async () => {
+  let args;
+  const r = await run({ readReleased: async a => { args = a; return [a.head]; } }, {});
+  assert.deepEqual(args, { base: M, head: I });
+  assert.equal(r.decision, 'DENY'); assert.ok(r.reasons.includes('DUPLICATE_OR_UNKNOWN_RELEASE_STATE'));
 });

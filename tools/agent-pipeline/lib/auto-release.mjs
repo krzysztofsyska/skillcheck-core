@@ -5,13 +5,9 @@ import { sha256 } from './canonical.mjs';
 import { protectionFromRulesets } from './protection.mjs';
 import { codexAggregateProblems } from './codex-evidence.mjs';
 
-// Release scope that always needs separate owner consent (path based; it is a
-// denylist on top of the evidence checks, never proof of safety by itself).
-const OWNER_CONSENT_PATHS = [
-  ['PAYMENTS', /(^|\/)(p24|przelewy24|billing|payments?|pricing|fakturownia|invoices?)(\/|\.|-|_|$)/i],
-  ['OUTBOUND_SENDS', /(^|\/)(mail|email|sms|voice|retell|voip|notifications?|sales-leads?)(\/|\.|-|_|$)/i],
-  ['SECRETS_OR_PIPELINE', /^(\.github\/|\.env|vercel\.json$|tools\/agent-pipeline\/|supabase\/config)/i],
-];
+// Release scope that always needs separate owner consent, including the owner's payment-path
+// freeze of 2026-11-15 (#369). Single source of truth shared with the automatic publisher.
+import { OWNER_CONSENT_PATHS } from '../../release/auto/policy.mjs';
 // Migrations qualify ONLY if every statement matches an explicitly recognised
 // narrow additive shape. Anything else (including things a denylist never
 // thought of: DROP VIEW, DO $$, function calls, NOT NULL adds, new tables whose
@@ -54,7 +50,7 @@ export function classifyReleaseFiles(files, migrations = []) {
 /**
  * @param input.promotion  result of preparePromotion() built from trusted records
  * @param input.current    { repository, integrationSha, mainSha } freshly read by the trusted caller
- * @param input.trusted    { p24Hold } from trusted configuration; ONLY literal false releases the hold
+ * @param input.trusted    { codexReviewerId } from trusted configuration
  * @param input.rulesets / input.policy / input.environments  raw evidence for protectionFromRulesets
  * @param input.ci / input.review  per-SHA evidence { head_sha, conclusion, completed }
  * @param input.codex      aggregate from createCodexEvidenceReader (see codex-evidence.mjs); trusted.codexReviewerId pins the reviewer
@@ -65,7 +61,6 @@ export function classifyReleaseFiles(files, migrations = []) {
 function evaluateUnsafe(input) {
   const deny = [];
   const { promotion, current, trusted, ci, review, codex, lock } = input;
-  if (trusted?.p24Hold !== false) deny.push('P24_HOLD');
   const repoOk = x => typeof x?.repository === 'string' && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(x.repository);
   if (!repoOk(current)) deny.push('CURRENT_REPOSITORY_INVALID');
   if (!current || !SHA.test(current.integrationSha ?? '') || !SHA.test(current.mainSha ?? '')) deny.push('CURRENT_STATE_UNKNOWN');
@@ -95,16 +90,6 @@ function evaluateUnsafe(input) {
   // Codex evidence is a per-task aggregate bound to repo/base/head/manifest; review SHA and merge SHA are distinct.
   const codexProblems = codexAggregateProblems(codex, { current, manifest: promotion?.manifest, reviewerId: trusted?.codexReviewerId });
   if (codexProblems.length) deny.push('AUTO_REVIEW_PENDING_OR_FINDINGS', ...codexProblems);
-  // Independent semantic verdict for the WHOLE release, bound to repo/base/head/manifest.
-  // Must come from a trusted independent reader, never from builder JSON/labels.
-  const v = input.scopeVerdict;
-  const expectedHash = promotion?.manifest && current ? sha256(promotion.manifest) : null;
-  const verdictOk = v && typeof v === 'object' && v.source === 'trusted_independent_scope_reader'
-    && v.verdict === 'LOW_RISK_COMPATIBLE' && expectedHash
-    && repoOk(v) && repoOk(current) && v.repository === current.repository && v.base_sha === current.mainSha
-    && v.head_sha === current.integrationSha && v.manifest_hash === expectedHash;
-  if (!v) deny.push('SCOPE_VERDICT_MISSING');
-  else if (!verdictOk) deny.push('SCOPE_VERDICT_MISMATCH_OR_UNTRUSTED');
   let protection = null;
   try { protection = protectionFromRulesets(input.rulesets, input.policy, input.environments); } catch { protection = null; }
   if (!protection) deny.push('PROTECTION_UNREADABLE');

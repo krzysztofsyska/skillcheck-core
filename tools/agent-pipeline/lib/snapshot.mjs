@@ -1,8 +1,9 @@
 import { integrationOnly } from './control-plane.mjs';
 import { parseContract } from './contract.mjs';
 import { reservedBuilderBudget } from './claude-builder.mjs';
+import { CODEX_WAIT_REASONS, verifyCodexConnectorReview } from './codex-connector-review.mjs';
 
-export function assembleWork({ policy, policySha, now, secrets, prompts = null, snapshot }) {
+export function assembleWork({ policy, policySha, now, secrets, prompts = null, snapshot, flags = {} }) {
   const integrationSha = snapshot.integrationSha ?? null;
   const mainSha = snapshot.mainSha ?? null;
   const records = snapshot.records ?? {};
@@ -33,13 +34,27 @@ export function assembleWork({ policy, policySha, now, secrets, prompts = null, 
   }
   const active = items.filter(i => i.record && !['ACCEPTED', 'DONE', 'BLOCKED'].includes(i.record.state));
   const terminal = items.filter(i => i.record && ['ACCEPTED', 'DONE', 'BLOCKED'].includes(i.record.state));
-  const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId))));
+  const fresh = items.filter(i => !i.record && (i.observation.kind === 'promotion' || (i.observation.dependenciesReady && parseContract(i.observation.issue?.body).ready && [policy.owner.id, ...(policy.orchestrators ?? []).map(a => a.id)].includes(i.observation.issue?.authorId)
+    && !active.some(a => scopesMayOverlap(a.record.binding?.allowed_files, parseContract(i.observation.issue?.body).allowed_files)))));
   const acceptedOutbox = terminal.filter(i => i.record.state === 'ACCEPTED' && notificationBlocksQueue(i.record, policy));
   const postMerge = items.filter(i => i.record?.technical_state === 'WAITING_POST_MERGE_CI' || i.record?.binding?.post_merge_ci?.blocked);
-  // One active task per repository. A reconcilable accepted report still runs
-  // before new work. An unconfirmed report past the transport bound does not,
-  // including in the terminal fallback, so a later DONE or BLOCKED report can run.
-  const selected = postMerge.length ? [postMerge[0]] : active.length ? active : acceptedOutbox.length ? [acceptedOutbox[0]] : fresh.length ? [fresh[0]] : terminalWork(terminal, policy);
+  const readyPostMerge = postMerge.filter(i => postMergeNeedsAttention(i, now, policy));
+  // Production promotion must never overtake an unverified post-merge check.
+  const readyActive = active.filter(i => (postMerge.length === 0 || i.observation.kind !== 'promotion')
+    && !awaitingExternalResult(i, now, policy, flags));
+  const waitingActive = active.filter(i => (postMerge.length === 0 || i.observation.kind !== 'promotion')
+    && awaitingExternalResult(i, now, policy, flags));
+  const freshTask = fresh.find(i => i.observation.kind !== 'promotion');
+  const freshPromotion = postMerge.length === 0 && active.length === 0
+    ? fresh.find(i => i.observation.kind === 'promotion') : null;
+  // At most two active tasks per repository. Waiting on a build/CI/review or
+  // a blocked post-merge check must not monopolise the controller's next poll.
+  // Dependencies are separately gated until post-merge verification succeeds.
+  const freeSlots = Math.max(0, 2 - active.length);
+  const next = readyPostMerge[0] ?? readyActive[0] ?? acceptedOutbox[0]
+    ?? (freeSlots ? freshTask : null) ?? waitingActive[0]
+    ?? postMerge[0] ?? freshPromotion ?? terminalWork(terminal, policy)[0];
+  const selected = next ? [next] : [];
   return { items: selected, integrationSha, mainSha, read: snapshot.read ?? 'github' };
 }
 
@@ -85,6 +100,7 @@ function observe({ policy, policySha, now, secrets, prompts, snapshot, issue, re
       protection: snapshot.protection ?? null,
       ci: evidence.ci ?? null,
       review: evidence.review ?? null,
+      codexReview: snapshot.codexReviews?.[record?.task_id] ?? null,
       postMergeCi: snapshot.postMergeCi?.[record?.task_id] ?? null,
     },
     cursor: agentId ? snapshot.cursor?.[agentId] ?? null : null,
@@ -139,7 +155,77 @@ export function cursorSnapshot(agent, runsPayload) {
   };
 }
 
-function recordsDependency(snapshot, id) { return ['ACCEPTED', 'DONE'].includes(snapshot.records?.[id]?.state); }
+function scopesMayOverlap(left, right) {
+  // Fail closed for unknown globs. Only disjoint literal path segments prove
+  // that two concurrent builders cannot edit the same file.
+  if (!Array.isArray(left) || !left.length || !Array.isArray(right) || !right.length) return true;
+  const prefix = pattern => {
+    if (typeof pattern !== 'string') return [];
+    const result = [];
+    for (const part of pattern.split('/')) {
+      if (!part || ['*', '?', '[', ']', '{', '}', '!'].some(symbol => part.includes(symbol))) break;
+      result.push(part);
+    }
+    return result;
+  };
+  for (const a of left) for (const b of right) {
+    const x = prefix(a), y = prefix(b);
+    if (!x.length || !y.length) return true;
+    if (x.slice(0, Math.min(x.length, y.length))
+      .every((part, index) => part === y[index])) return true;
+  }
+  return false;
+}
+
+function postMergeNeedsAttention(item, now, policy) {
+  const record = item.record;
+  const result = item.observation.github.postMergeCi;
+  if (result?.ok === true) return result.headSha === record.binding?.merge?.mergeCommitSha;
+  const blocked = record.binding?.post_merge_ci?.blocked === true;
+  if (result && result.pending !== true && (!blocked || result.reason !== record.blocked_reason)) return true;
+  if (blocked) return false;
+  const started = Date.parse(record.binding?.merge?.confirmed_at ?? record.last_transition_at);
+  const timeout = policy.post_merge_ci?.timeout_ms ?? policy.timeouts?.ci_review_ms ?? 2700000;
+  return Number.isFinite(started) && Date.parse(now) - started >= timeout;
+}
+
+function awaitingExternalResult(item, now, policy, flags) {
+  const record = item.record;
+  const obs = item.observation;
+  if (record.state === 'READY_FOR_OWNER' && policy.integration_merge_policy === 'verified_ci_review'
+      && flags.mergeEnabled !== true) return true;
+  // Codex connector PASS is held for an independent reviewer regardless of the merge
+  // flag (approvalStep never arms a merge for it), so it must not monopolise the queue.
+  if (record.state === 'READY_FOR_OWNER' && record.technical_state === 'CODEX_REVIEW_PASSED') return true;
+  if (['BUILDING', 'FIXING'].includes(record.state)) {
+    const run = obs.cursor?.runs?.find(r => r.id === record.cursor_run_id);
+    const started = Date.parse(run?.createdAt ?? record.binding?.dispatch?.started_at ?? record.last_transition_at);
+    if (['CREATING', 'RUNNING'].includes(run?.status)
+        && Number.isFinite(started) && Date.parse(now) - started < (policy.timeouts?.build_ms ?? 7200000)) return true;
+  }
+  if (record.state === 'PR_REVIEW' && record.review_request_id) {
+    const subscriptionReview = policy.execution_mode === 'SUBSCRIPTION_ONLY' && record.binding?.lane !== 'promotion';
+    const codex = obs.github.codexReview;
+    const pendingCodex = subscriptionReview && (!codex || CODEX_WAIT_REASONS.has(
+      verifyCodexConnectorReview({
+        comments: codex.comments, threads: codex.threads,
+        headSha: record.head_sha, builderActorId: obs.github.pull?.authorId,
+      }).reason));
+    const waiting = !obs.github.ci || (record.binding?.review_dispatched === true && !obs.github.review)
+      || pendingCodex;
+    const started = Date.parse(record.last_transition_at);
+    return waiting && Number.isFinite(started)
+      && Date.parse(now) - started < (policy.timeouts?.ci_review_ms ?? 2700000);
+  }
+  return false;
+}
+
+function recordsDependency(snapshot, id) {
+  const record = snapshot.records?.[id];
+  return record && ['ACCEPTED', 'DONE'].includes(record.state)
+    && record.technical_state !== 'WAITING_POST_MERGE_CI'
+    && record.binding?.post_merge_ci?.blocked !== true;
+}
 
 function notificationBlocksQueue(record, policy) {
   const pending = record.binding?.pending_notification;

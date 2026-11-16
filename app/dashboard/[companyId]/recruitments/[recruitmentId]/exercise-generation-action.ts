@@ -8,6 +8,7 @@ import { isAiGatewayEnabled } from '../../../../../lib/ai-gateway/contract';
 import { exerciseBudgetFromEnv, exerciseLedgerWriterFromEnv } from '../../../../../lib/ai-ledger-writer';
 import { withExerciseBudget } from '../../../../../lib/exercise-ai-budget';
 import type { Json } from '../../../../../lib/supabase/database.types';
+import { bindMethodToDefinitions } from '../../../../../lib/method-binding';
 
 export async function generateExerciseProposal(companyId:string,recruitmentId:string,requestKey:string,
   expectedPositionStamp:string,expectedCompanyStamp:string|null,_previous:ExerciseGenerationResult,form:FormData):Promise<ExerciseGenerationResult> {
@@ -56,6 +57,9 @@ export async function generateExerciseProposal(companyId:string,recruitmentId:st
   // SC-021-C: on the gateway path the budget is checked before the generation slot is reserved, so an
   // over-budget company gets a clear message and keeps its draft slot. Flag off: unchanged.
   const result:ExerciseGenerationResult=budget?await withExerciseBudget(budget,requestKey,generate):await generate();
+  // SC-METHOD / #275: finish_exercise_ai_generation tworzy definicję wewnątrz bazy i ta akcja nie dostaje
+  // jej id, dlatego wiązane są wszystkie niepowiązane definicje tej rekrutacji (reguła czasu, idempotentnie).
+  if(result.exerciseId) await bindMethodToDefinitions(client,companyId,recruitmentId);
   if(result.exerciseId) revalidatePath(base,'layout');
   return result;
 }

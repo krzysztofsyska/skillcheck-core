@@ -50,7 +50,8 @@ function fixture() {
 }
 
 test('disabled/unapproved budget never starts a paid operation', async()=>{
- assert.throws(()=>builderConfiguration(loadPolicy()),/CLAUDE_DISABLED/);
+ const disabledPolicy=loadPolicy();disabledPolicy.claude_builder.enabled=false;
+ assert.throws(()=>builderConfiguration(disabledPolicy),/CLAUDE_DISABLED/);
  for(const c of [{max_run_usd:0},{cost_approved:false},{workflow_id:null},{max_total_usd:0},{max_turns:100}]){const f=fixture();Object.assign(f.policy.claude_builder,c);await assert.rejects(f.client.createAgent({agentId:'bc-test',prompt:{text:'task'}}));assert.equal(f.calls.length,0);}
 });
 
@@ -111,9 +112,16 @@ test('model workflow has no GitHub write token and no direct label scheduler',()
  const file='.github/workflows/claude-code-dispatch.yml';const r=spawnSync('python3',['-c','import json,yaml,sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))',file],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);
  const w=JSON.parse(r.stdout);assert.deepEqual(w.jobs.model.permissions,{contents:'read',issues:'read',actions:'read'});
  const source=readFileSync(file,'utf8');assert.equal(source.includes('id-token: write'),false);assert.equal(source.includes('APP_PRIVATE_KEY'),false);assert.equal(source.includes('issues:\n    types'),false);
- assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.execution_file/);assert.match(source,/--setting-sources user/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
+ assert.match(source,/base-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe/);assert.match(source,/max-budget-usd/);
+ assert.match(source,/HAS_OAUTH:.*CLAUDE_CODE_OAUTH_TOKEN/);
+ assert.match(source,/run: test "\$HAS_OAUTH" = true/);
+ assert.equal(source.includes('ANTHROPIC_API_KEY'),false);
+ assert.equal(source.includes('anthropic_api_key:'),false);
+ assert.equal(source.includes('OPENAI_API_KEY'),false);assert.match(source,/--tools Read,Glob,Grep/);assert.match(source,/steps.builder.outputs.execution_file/);assert.match(source,/--setting-sources user/);assert.match(source,/prepare-builder-source/);assert.equal(source.includes('--tools Read,Edit'),false);
  assert.equal(parseContract('TASK: SC-020\nOWNER: Claude Code\nSTATUS: READY').ready,false);
  const model=w.jobs.model.steps.find(step=>step.id==='builder');
+ assert.ok(model.with.claude_code_oauth_token.includes('CLAUDE_CODE_OAUTH_TOKEN'));
+ assert.equal(Object.hasOwn(model.with,'anthropic_api_key'),false);
  assert.match(model.with.claude_args,/--restricted(?:\s|$)/);
  assert.match(model.with.claude_args,/--strict-mcp-config/);
  assert.match(model.with.claude_args,/--mcp-config '\{"mcpServers":\{\}\}'/);

@@ -4,16 +4,16 @@
 
 Everything in `AGENTS.md` applies. This file adds what changed and what matters most right now.
 
-> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera stan wydania i wskazuje, gdzie sprawdzać bieżące SHA oraz status implementacji/review (git, issue i PR — nie ten dokument). Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 z `AGENTS.md` nadal obowiązuje dla **prawdziwych** płatności Przelewy24; tryb **Sandbox** na `skillcheck.pl` właściciel odmroził głosem 11.11.2026 — zob. sekcję „Przelewy24 Sandbox on the production domain" w `AGENTS.md`. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
+> **Bieżący punkt wejścia — SC-CONTEXT (11.11.2026):** [docs/BACKLOG.md — Aktualny punkt wejścia](docs/BACKLOG.md#aktualny-punkt-wejścia--8-listopada-2026-r) zawiera stan wydania i wskazuje, gdzie sprawdzać bieżące SHA oraz status implementacji/review (git, issue i PR — nie ten dokument). Wydanie na produkcję zrealizowano 11.11.2026 (`main` = `01429af`, PR #266 scalony przez właściciela); HOLD P24 nie istnieje już jako blokada wydań (zdjęty 15.11.2026, potwierdzone 16.11.2026); obowiązuje **zamrożenie ścieżki płatności** — żadne wydanie nie zmienia integracji płatności, przepływu zakupu, cen, katalogu pakietów ani stanów zamówień do odwołania przez właściciela. **Od 16.11.2026 wydania na produkcję są automatyczne, bez kliknięć właściciela** (#369): zielone CI + niezależny PASS na dokładnym SHA (znacznik `sc-review-verdict:v1`, zob. „Continuous release policy" w `AGENTS.md`), publikator `.github/workflows/auto-release.yml`. Sekcja „Przelewy24 Sandbox on the production domain" w `AGENTS.md` zostaje jako zapis historyczny. Stara tabela jest archiwum. Zgodnie z [#355](https://github.com/krzysztofsyska/skillcheck-core/issues/355) Codex koordynuje przydziały, Claude realizuje zlecony zakres, a osobny reviewer ocenia finalny commit. Nie traktuj zmian w `integration` jako wdrożenia produkcyjnego.
 
 ## Who does what (owner decision 2026-11-05)
 
 Codex coordinates and implements programming work across the entire SkillCheck project.
 
 - **Codex** — orchestrator and builder: picks the next task, writes the code, runs the tests, opens the PR to `integration`.
-- **Independent reviewer** — a separate reviewer agent started with fresh context that did not write the change. It reviews architecture, security, correctness, tests and scope against the current PR commit and returns PASS / PASS WITH FIXES / FAIL. This satisfies "independent review" in the Review loop of `AGENTS.md`. The verdict is posted as a PR comment (not a GitHub "Approve", see rule 5 in `AGENTS.md`) and names the full SHA of the reviewed commit; a merge into `integration` needs a PASS (or PASS WITH FIXES with every fix made and checked again) whose SHA equals the current PR head; any push after the verdict needs a new review.
+- **Independent reviewer** — a separate reviewer agent started with fresh context that did not write the change. It reviews architecture, security, correctness, tests and scope against the current PR commit and returns PASS / PASS WITH FIXES / FAIL. This satisfies "independent review" in the Review loop of `AGENTS.md`. The verdict is posted as a PR comment (not a GitHub "Approve", see rule 5 in `AGENTS.md`) and names the full SHA of the reviewed commit and ends with the machine-readable marker `<!-- sc-review-verdict:v1 {"verdict":"PASS","head_sha":"<full SHA>","reviewer":"session_<reviewer>","builder":"session_<builder>"} -->` (the automatic publisher reads only this); a merge into `integration` needs a PASS (or PASS WITH FIXES with every fix made and checked again) whose SHA equals the current PR head; any push after the verdict needs a new review.
 - **CI** — deterministic checks, unchanged.
-- **Owner (Krzysztof)** — production approval, merging the promotion PR into `main`, new costs, external or irreversible actions. Nothing else.
+- **Owner (Krzysztof)** — approving production migrations in `production-approval`, new costs, external or irreversible actions. Promotions into `main` are merged by an independent reviewer session („Production loop" in `AGENTS.md`, owner decision 2026-11-16); single reviewed PRs are released automatically (#369). Nothing else.
 
 Where `AGENTS.md`, `docs/AGENT_WORKFLOW.md` or `.cursor/rules/` name Cursor as builder or Codex as reviewer, read them as the roles above. Earlier builder assignments transfer to Codex. Preserve work already in progress. The `chatgpt-codex-connector` bot still reviews PRs automatically. Do not wait for it; handle its findings only if it has posted. Before merging, every bot finding on any commit of the PR that the current head has not fixed is verified and either fixed or answered in its thread with a reason, and the independent reviewer's verdict on the current head lists each bot finding as fixed or rejected. Security findings are always fixed on the branch before merging (owner decision 2026-11-01); only if the builder considers one invalid is the PR blocked and the owner asked one YES/NO question in Polish with a recommendation. Fixed security findings need no owner decision.
 
@@ -35,7 +35,7 @@ Never ask, just do:
 - technical and product-detail choices inside the agreed MVP scope (technical limits such as file size or rate limits — not package sizes or CV counts; wording, error handling, data minimisation, test setup). Pick the safer option, write the reasoning in the PR description and mention it in one line in the report.
 
 Still the owner's decision (ask once, YES/NO with a recommendation, all open questions in one message):
-- production approval and the merge of the promotion PR into `main`;
+- approving production database migrations in `production-approval` (an `integration -> main` promotion itself is merged by an independent reviewer session under „Production loop" in `AGENTS.md`, owner decision 2026-11-16; single reviewed PRs are released automatically, #369);
 - new costs (paid services, plans, domains);
 - external or irreversible actions (any contact with real candidates or customers by any channel, deleting real data, changing production settings or secrets);
 - billing and charge actions, including package or balance changes in `/operator/billing` on production;
@@ -205,7 +205,7 @@ gate has misread it.
 
 Open security item from the audit (owner only, rule 3):
 - Done: the variables `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL` and `POSTGRES_PASSWORD` are no longer present in Vercel Production (found 2026-11-11 in the project variable list; values not read). The removal date is unknown.
-- Still open: rotation of the database password. It cannot be confirmed from outside, and the owner has not confirmed that it was done.
+- Done 2026-11-16: rotation of the database password. The owner rotated it in Supabase and updated the `PRODUCTION_DATABASE_URL` secret of `production-approval` himself; a read-only `db-migrate-production` inspect run with the new secret succeeded (run 43919976736, owner approval). Recorded in #420. Still open in #420: rotation of `private.sales_lead_settings.request_secret_current`.
 
 ## Keep the process light
 

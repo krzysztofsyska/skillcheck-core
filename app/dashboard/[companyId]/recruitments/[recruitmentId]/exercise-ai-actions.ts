@@ -5,6 +5,7 @@ import { exerciseAiApprovalError, validExerciseAiApprovalContext } from '../../.
 import type { ExerciseAiApprovalContext } from '../../../../../lib/exercise-ai-review';
 import { parseExerciseFormData } from '../../../../../lib/exercise-definition';
 import type { Json } from '../../../../../lib/supabase/database.types';
+import { bindMethodToDefinitions } from '../../../../../lib/method-binding';
 
 export async function approveExerciseAiProposal(companyId: string, context: ExerciseAiApprovalContext,
   _previous: {error?:string; approved?:boolean}, form: FormData): Promise<{error?:string; approved?:boolean}> {
@@ -29,6 +30,9 @@ export async function approveExerciseAiProposal(companyId: string, context: Exer
     expected_position_updated_at:context.positionUpdatedAt,
   });
   if(result.error || !result.data) return {error:exerciseAiApprovalError(result.error?.code)};
+  // SC-METHOD / #275: zatwierdzana definicja ma mieć zapisaną wersję profilu metody, z którą powstała
+  // (także gdy wcześniejsze powiązanie się nie udało). Błąd powiązania nie zmienia wyniku zatwierdzenia.
+  await bindMethodToDefinitions(client,companyId,context.recruitmentId);
   revalidatePath(base,'layout');
   return {approved:true};
 }
@@ -47,6 +51,8 @@ export async function editExerciseAiProposal(companyId:string,context:ExerciseAi
     expected_current_position_updated_at:currentPositionUpdatedAt,
   });
   if(result.error || !result.data) return {error:result.error?.code==='PT409' ? exerciseAiApprovalError('PT409') : 'Nie udało się zapisać korekty. Odśwież stronę i spróbuj ponownie.'};
+  // SC-METHOD / #275: korekta tworzy nową wersję definicji wewnątrz bazy — powiąż ją z wersją profilu metody.
+  await bindMethodToDefinitions(client,companyId,context.recruitmentId);
   revalidatePath(base,'layout');return {entryId:result.data};
 }
 

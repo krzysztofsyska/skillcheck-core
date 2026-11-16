@@ -15,7 +15,7 @@ Owner decision 2026-11-05: Codex coordinates and implements programming work acr
 - **Codex / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
 - **Independent REVIEWER** — a separate agent session with fresh context that did not write the change; reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
-- **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.
+- **Owner** — approves production database migrations in `production-approval`, decides on new costs and irreversible/external actions. No routine acceptance is required for integration merges.
 
 ## Branch model
 
@@ -23,10 +23,9 @@ Owner decision 2026-11-05: Codex coordinates and implements programming work acr
 - `integration` = accepted-but-not-yet-production changes.
 - task branches start from `integration`.
 - normal task PRs target `integration`.
-- only a production promotion PR may target `main`.
-- promotion PR must be `integration -> main` by default.
+- only a production promotion PR may target `main`: `integration -> main`, or a `release/auto-*` PR opened by the automatic publisher (owner decision 2026-11-16, #369; see „Continuous release policy").
 - **Proposal only, NOT active**: selective `release/sales-mvp-intake-YYYYMMDD -> main` may be considered after a separately reviewed governance rollout. The offline checker `tools/agent-pipeline/lib/sales-release.mjs` only analyzes scope and ALWAYS denies Production authorization.
-- Current `main` classifier still denies all PR heads except `integration`. A future trusted production gate must be installed from the protected main revision, verify every commit and exact release scope, enforce owner acceptance and production approval as separate GitHub-origin attestations (not editable PR text), and fail closed if protection settings cannot be verified. Never use PR-supplied code as its own authorization gate. No billing, migrations, workers, secrets, database or payments belong to the limited sales-intake candidate.
+- The `main` classifier accepts `integration` and `release/auto-*` heads only. Never use PR-supplied code as its own authorization gate.
 
 Do not merge task branches directly to `main` or use this exception before its production safeguards are verified.
 
@@ -39,7 +38,7 @@ The owner is not technical and has limited time at the computer. Agents do all t
 - Never ask the owner to click through GitHub, Vercel or Supabase, run tests, check a browser console, copy handoffs or look up settings. Agents read these themselves through their tools.
 - If a check needs something the agent does not have (an account, a credential, a test database), report it as a blocker together with a proposal that removes the need for the owner next time.
 - Prefer automated checks (CI, browser tests) over manual verification by the owner.
-- The owner's own actions are limited to: production approval, merging the promotion PR into `main`, new costs, and external or irreversible actions. For each, give the owner a direct link and say exactly what to click.
+- The owner's own actions are limited to: approving production database migrations in `production-approval`, new costs, and external or irreversible actions. Since 2026-11-16 an `integration -> main` promotion is merged by an independent reviewer session, not by the owner (see „Production loop"). For each, give the owner a direct link and say exactly what to click.
 
 ## Required task metadata
 
@@ -120,22 +119,24 @@ Do not ask the owner to paste this handoff into another agent.
 
 ## Production loop
 
-Production is a separate decision.
+Since 2026-11-16 single reviewed PRs reach production through the automatic publisher with no owner step (see „Continuous release policy"). The loop below applies to a full `integration -> main` promotion done outside the publisher.
 
-1. Orchestrator prepares a promotion PR from `integration` to `main`.
-2. CI/review must be green.
-3. Owner is asked: PRODUCTION APPROVAL — YES/NO.
-4. Without explicit YES, do not merge promotion PR and do not deploy DB/functions/secrets.
-5. After YES, orchestrator may promote and execute the approved production runbook.
-6. Smoke tests and production documentation are required before DONE.
+Owner decision 2026-11-16 (15:19, confirmed 15:21; quoted in the PR #463 description; confirmed again in his own words on 2026-11-16 at 18:47 Europe/Warsaw in session https://claude.ai/code/session_01TVLzgakSJXczDxExtJ8Zba: „sesja recenzenta może sama scalić wydanie na produkcję"; this text updated at his request the same evening): **the owner no longer merges promotion PRs himself.**
+
+1. Orchestrator/builder prepares a promotion PR from `integration` to `main`, with the release manifest and the exact list of migrations.
+2. All required checks must be green on the **exact** head SHA of the promotion PR.
+3. An independent reviewer session (fresh context, that wrote none of the changes in the promotion) posts PASS naming that exact head SHA. Every `chatgpt-codex-connector` bot finding on the PR is fixed or answered with a reason. If the promotion contains migrations, the PASS states whether the released code works on the pre-migration schema; if it does not, the reviewer merges only after the owner has said he can approve the migrations right away.
+4. Only then that **reviewer session** merges the promotion PR into `main` (merge method `merge`, `expectedHeadSha` = the reviewed SHA). The builder never merges a promotion. Any push after the verdict needs a new review.
+5. Unchanged by this decision: the payment-path freeze, no changes to secrets or settings, no data deletion, no new costs. Production migrations still run only through `db-migrate-production` after the **owner's** approval in `production-approval` (Production access rule 1); Edge Functions and secrets are not deployed by an agent.
+6. Right after the merge the merging session tells the owner, in Polish, with the direct link to approve the migrations, so the window between new code and new schema lasts minutes. Smoke tests and production documentation are required before DONE.
 
 ## Prohibited actions without explicit owner production approval
 
-- merge/push production promotion to `main`
+- push anything directly to `main`; a promotion PR is merged only by an independent reviewer session under „Production loop" (owner decision 2026-11-16)
 - `supabase db push` against production
 - production Edge Function deploy
 - production secret changes
-- production Vercel deploy outside the approved promotion
+- production Vercel deploy outside a promotion merged under „Production loop" or the automatic publisher
 - external candidate contact
 - billing/charge actions
 
@@ -155,21 +156,28 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 
    With the owner's identity an agent session **never**:
    - approves the `production-approval` environment or any pull request review;
-   - merges or pushes anything to `main`, including production promotion PRs (the owner merges them after approving);
+   - merges or pushes anything to `main`, with one exception: an independent reviewer session may merge an `integration -> main` promotion PR under „Production loop" (green required checks + its own PASS on the exact head SHA; owner decision 2026-11-16). A builder session never merges into `main`. Automatic single-PR releases are merged only by the publisher workflow with the pipeline GitHub App identity;
    - changes rulesets, branch protection, environments, repository settings, secrets or deploy keys;
    - deletes branches it did not create.
 
    Any such action by an agent session is an incident under rule 4.
-6. Agent sessions never read secret columns. This covers every query an agent session runs itself, by hand or through a tool (MCP, console, ad-hoc or helper scripts), against any database, production included. It does not cover server-side code inside migrations or functions that reads a secret to compute or verify a signature (for example `select * into` in a `security definer` function); that is application logic, not an agent read. Committed tests that read a secret value are a known exception scheduled for removal (`tests/sc19-auto-trial-database.test.mjs`); do not copy that pattern.
+6. Agent sessions never read secret columns. This covers every query an agent session runs itself, by hand or through a tool (MCP, console, ad-hoc or helper scripts), against any database, production included. It does not cover server-side code inside migrations or functions that reads a secret to compute or verify a signature (for example `select * into` in a `security definer` function); that is application logic, not an agent read.
    - Secret columns are identified by what they hold, not by name. The names below are examples, not a complete list: `request_secret`, `request_secret_current`, `request_secret_previous` and `worker_secret`, in `private.sales_lead_settings`, `private.sc19_trial_auto_settings`, `private.cv_bulk_settings` and `private.sales_mail_settings`, and `secret` in `ai_ledger.pseudonym_key`. Before querying a settings or key table, list its columns (`information_schema.columns`) and treat every column that holds a key, secret or token as off-limits.
    - Such tables are read by named columns, never with `select *`, because one plain read exposes every secret in the row.
    - To check that a secret is configured, use a presence test (`is not null`, `octet_length(...) >= 32`), never its value.
 
-The required status `production-approval-attestation` (`.github/workflows/production-approval-attestation.yml`) passes only after the owner approves the `production-approval` environment for the exact PR head SHA. While agent sessions act through the owner's identity (rule 5, variant B), the separation between an agent and the owner's approval is procedural, not technical: GitHub would accept an approval or a `main` merge made with that identity. Only the owner approves and merges into `main`. Moving agent writes to the `skillcheck-agent-ks[bot]` App token restores the technical separation.
+While agent sessions act through the owner's identity (rule 5, variant B), the separation between an agent and an owner action is procedural, not technical. The `production-approval-attestation` status was removed on 2026-11-16 (#369) and is not a required check.
 
-## Continuous release policy (owner decision 2026-11-08, issue #369)
+## Continuous release policy (owner decision 2026-11-16, issue #369)
 
-Within the scope approved in [docs/continuous-release-policy.md](docs/continuous-release-policy.md), the per-release owner click in the Production loop is replaced by a trusted, fail-closed automatic preflight, **once that publisher is implemented and verified**. Until then the Production loop above applies unchanged. HOLD P24 stays absolute for LIVE Przelewy24 (real money), with one narrow exception the owner opened himself — see "Przelewy24 Sandbox on the production domain" below. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent. All technical protections remain.
+The owner decided in his own message on 2026-11-16 (https://claude.ai/code/session_01TVLzgcKNUtgiz4KTVzeVwF) that **no step of the release process may require a click, an approval or a manual start by him**. Details and reason codes: [docs/continuous-release-policy.md](docs/continuous-release-policy.md).
+
+- **Authorization of a release** = green required CI on the exact SHA + an independent reviewer's PASS on the exact SHA, from a session other than the builder's. No owner environment approval, no signed scope verdict from a separate App. The builder never merges its own code.
+- **Independent reviewers** post the verdict with the machine-readable marker `<!-- sc-review-verdict:v1 {"verdict":"PASS","head_sha":"<full SHA>","reviewer":"session_<reviewer>","builder":"session_<builder>"} -->` on the task PR. Without it the publisher cannot release that PR.
+- **The publisher** (`.github/workflows/auto-release.yml`, runs from `main`, schedule + after `Checks` on `integration`, no manual start) releases one reviewed PR at a time to `main` as `release/auto-pr-<N>`, confirms the Vercel deployment, smoke-tests production, and on failure reverts and opens an `[auto-release-freeze]` issue that stops further releases.
+- **HOLD P24 no longer exists as a release block** (lifted by the owner 2026-11-15; confirmed 2026-11-16). It is replaced by the **payment-path freeze**: no release may change the payment integration (Przelewy24 or any other provider), the purchase flow, prices, the package catalog or order states until Stripe works in test mode and the owner lifts the freeze. Such a change is refused (`PAYMENT_PATH_FREEZE`) even when every gate is green. Do not cite HOLD P24 as a reason to block work.
+- **Always refused automatically**: payments, outbound sends, workflows/pipeline/secrets, destructive SQL, and every migration until a fresh backup and an unattended migration executor exist (today none: the production database credential lives only in `production-approval`, which needs a human).
+- Rulesets `main-production-protection` and `protect-main-integration` stay as they are. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent.
 
 ## Przelewy24 Sandbox on the production domain (owner decision 2026-11-11, by voice)
 
@@ -200,13 +208,13 @@ the only way anything reaches it: as a migration in a promotion PR he approves, 
 `db-migrate-production` workflow under rule 1. Production access rules 1-6 are unchanged by this,
 rule 6 included: the role's password is a secret an agent session neither reads nor needs.
 
-This record exists because the HOLD above would otherwise make a future session revert the work in
-good faith. Only the owner opens a gate; this records that he did, and with what scope. An
+This record is kept as history: HOLD P24 was lifted on 2026-11-15 and no longer exists as a release
+block; the payment-path freeze in „Continuous release policy" above applies instead. Only the owner opens a gate; this records that he did, and with what scope. An
 agent-written line never widens it.
 
 ## Agent controller
 
-SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. An integration merge is authorized by verified CI plus independent review (not PR prose); production approval remains a separate owner-only GitHub Environment approval. Do not enable the controller, merge, or deploy from a task implementation.
+SC-OPS-002B adds an operations controller under `tools/agent-pipeline/`. It is not a product feature. Both `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` default to false. An integration merge is authorized by verified CI plus independent review (not PR prose); production releases go through the automatic publisher (see „Continuous release policy"). Do not enable the controller, merge, or deploy from a task implementation.
 
 ## Existing SkillCheck guardrails
 
