@@ -19,6 +19,17 @@ export const INTERNAL_SCHEMAS = [
 // Columns whose content is a secret/credential: the table's DATA is not dumped.
 export const SECRET_COLUMN = '(secret|token|password|api_?key|private_?key|crc|signature_key|pseudonym)';
 
+// Application roles referenced by migrations (policies, grants, owners). pg_dump does not dump global
+// roles, so the disposable target needs them before pg_restore. NOLOGIN, no password: nothing copied.
+// Pinned list, checked against supabase/migrations by tests/backup-drill.test.mjs.
+export const APP_ROLES = [
+  'ai_ledger_writer', 'competency_test_gateway', 'competency_test_marker_writer', 'contact_verifier',
+  'erasure_ledger_attestor', 'erasure_purge_owner', 'erasure_restore_attestor', 'erasure_scheduler',
+  'erasure_worker', 'sc19_p24_checkout', 'screening_worker', 'tenant_domain_reverifier', 'tenant_domain_verifier',
+];
+export const SUPABASE_ROLES = ['anon', 'authenticated', 'service_role', 'authenticator', 'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin', 'dashboard_user', 'pgbouncer', 'supabase_read_only_user'];
+export const roleSetupSql = (roles) => roles.map(r => `do $$ begin create role ${r} nologin; exception when duplicate_object then null; end $$`);
+
 export function validateSourceUrl(url) {
   let u;
   try { u = new URL(url); } catch { return 'SOURCE_URL_INVALID'; }
@@ -152,8 +163,7 @@ async function main() {
 
   // 2. Restore into the disposable database (Supabase roles/extensions stubbed).
   const prep = [
-    ...['anon', 'authenticated', 'service_role', 'authenticator', 'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin', 'dashboard_user', 'pgbouncer', 'supabase_read_only_user']
-      .map(r => `do $$ begin create role ${r} nologin; exception when duplicate_object then null; end $$`),
+    ...roleSetupSql([...SUPABASE_ROLES, ...APP_ROLES]),
     'create schema if not exists extensions',
     ...['pgcrypto', 'uuid-ossp', 'pg_trgm', 'citext', 'pg_cron'].map(e => `create extension if not exists "${e}" with schema ${e === 'pg_cron' ? 'pg_catalog' : 'extensions'}`),
   ].join(';\n');
