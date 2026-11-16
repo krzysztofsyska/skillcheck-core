@@ -15,7 +15,7 @@ Owner decision 2026-11-05: Codex coordinates and implements programming work acr
 - **Codex / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
 - **Independent REVIEWER** — a separate agent session with fresh context that did not write the change; reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
-- **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.
+- **Owner** — approves production database migrations in `production-approval`, decides on new costs and irreversible/external actions. No routine acceptance is required for integration merges.
 
 ## Branch model
 
@@ -121,22 +121,22 @@ Do not ask the owner to paste this handoff into another agent.
 
 Since 2026-11-16 single reviewed PRs reach production through the automatic publisher with no owner step (see „Continuous release policy"). The loop below applies to a full `integration -> main` promotion done outside the publisher.
 
-Owner decision 2026-11-16 (15:19, confirmed 15:21 in the promotion PR #463 description, and again in his own words on 2026-11-16 at 18:47 Europe/Warsaw in session https://claude.ai/code/session_01TVLzgakSJXczDxExtJ8Zba: „sesja recenzenta może sama scalić wydanie na produkcję"; this text updated at his request the same evening): **the owner no longer merges promotion PRs himself.**
+Owner decision 2026-11-16 (15:19, confirmed 15:21; quoted in the PR #463 description; confirmed again in his own words on 2026-11-16 at 18:47 Europe/Warsaw in session https://claude.ai/code/session_01TVLzgakSJXczDxExtJ8Zba: „sesja recenzenta może sama scalić wydanie na produkcję"; this text updated at his request the same evening): **the owner no longer merges promotion PRs himself.**
 
 1. Orchestrator/builder prepares a promotion PR from `integration` to `main`, with the release manifest and the exact list of migrations.
 2. All required checks must be green on the **exact** head SHA of the promotion PR.
-3. An independent reviewer session (fresh context, that wrote none of the changes in the promotion) posts PASS naming that exact head SHA. Every Codex finding on the PR is fixed or answered with a reason.
+3. An independent reviewer session (fresh context, that wrote none of the changes in the promotion) posts PASS naming that exact head SHA. Every `chatgpt-codex-connector` bot finding on the PR is fixed or answered with a reason. If the promotion contains migrations, the PASS states whether the released code works on the pre-migration schema; if it does not, the reviewer merges only after the owner has said he can approve the migrations right away.
 4. Only then that **reviewer session** merges the promotion PR into `main` (merge method `merge`, `expectedHeadSha` = the reviewed SHA). The builder never merges a promotion. Any push after the verdict needs a new review.
 5. Unchanged by this decision: the payment-path freeze, no changes to secrets or settings, no data deletion, no new costs. Production migrations still run only through `db-migrate-production` after the **owner's** approval in `production-approval` (Production access rule 1); Edge Functions and secrets are not deployed by an agent.
 6. Right after the merge the merging session tells the owner, in Polish, with the direct link to approve the migrations, so the window between new code and new schema lasts minutes. Smoke tests and production documentation are required before DONE.
 
 ## Prohibited actions without explicit owner production approval
 
-- push anything directly to `main`, or merge a promotion PR other than by an independent reviewer session under „Production loop" (owner decision 2026-11-16)
+- push anything directly to `main`; a promotion PR is merged only by an independent reviewer session under „Production loop" (owner decision 2026-11-16)
 - `supabase db push` against production
 - production Edge Function deploy
 - production secret changes
-- production Vercel deploy outside the approved promotion
+- production Vercel deploy outside a promotion merged under „Production loop" or the automatic publisher
 - external candidate contact
 - billing/charge actions
 
