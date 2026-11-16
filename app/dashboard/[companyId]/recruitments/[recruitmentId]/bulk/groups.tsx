@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useActionState } from 'react';
+import { useActionState, useRef } from 'react';
 import { groupLabel, type BulkGroup } from '../../../../../../lib/cv-bulk';
 import { SubmitButton } from '../../../../../components/submit-button';
 import { movePreselectionGroup } from './actions';
@@ -14,8 +14,16 @@ export type GroupRow = {
 };
 
 function MoveForm({ companyId, recruitmentId, row }: { companyId: string; recruitmentId: string; row: GroupRow }) {
-  const [state, action] = useActionState(movePreselectionGroup.bind(null, companyId, recruitmentId, row.application_id, row.updated_at), {});
-  return <details><summary>Przenieś</summary><form action={action}>
+  // React clears uncontrolled fields after every form action, including a validation error.
+  // Keep what was typed after a failed save; let the reset happen after a successful one.
+  const saved = useRef(false);
+  const move = movePreselectionGroup.bind(null, companyId, recruitmentId, row.application_id, row.updated_at);
+  const [state, action] = useActionState(async (previous: Awaited<ReturnType<typeof move>>, form: FormData) => {
+    const next = await move(previous, form);
+    saved.current = !next.error;
+    return next;
+  }, {});
+  return <details><summary>Przenieś</summary><form action={action} onReset={event => { if (!saved.current) event.preventDefault(); }}>
     {state.error && <p role="alert">{state.error}</p>}
     <label>Nowa grupa<select name="group" defaultValue={row.group_key}>
       {(Object.keys(groupLabel) as BulkGroup[]).map(g => <option key={g} value={g}>{groupLabel[g]}</option>)}</select></label>
