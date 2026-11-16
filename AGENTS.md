@@ -15,7 +15,7 @@ Owner decision 2026-11-05: Codex coordinates and implements programming work acr
 - **Codex / ORCHESTRATOR + BUILDER** — owns backlog, dependencies, task scope, owner checkpoints and the production approval flow; implements the task on a dedicated branch and opens/updates the PR.
 - **Independent REVIEWER** — a separate agent session with fresh context that did not write the change; reviews architecture, security, correctness, tests and scope. Verdict: PASS / PASS WITH FIXES / FAIL.
 - **CI / TESTER** — executes deterministic checks.
-- **Owner** — decides on PRODUCTION APPROVAL, new costs and irreversible/external actions. No routine acceptance is required for integration merges.
+- **Owner** — approves production database migrations in `production-approval`, decides on new costs and irreversible/external actions. No routine acceptance is required for integration merges.
 
 ## Branch model
 
@@ -38,7 +38,7 @@ The owner is not technical and has limited time at the computer. Agents do all t
 - Never ask the owner to click through GitHub, Vercel or Supabase, run tests, check a browser console, copy handoffs or look up settings. Agents read these themselves through their tools.
 - If a check needs something the agent does not have (an account, a credential, a test database), report it as a blocker together with a proposal that removes the need for the owner next time.
 - Prefer automated checks (CI, browser tests) over manual verification by the owner.
-- The owner's own actions are limited to: production approval, new costs, and external or irreversible actions. The `integration -> main` promotion PR is merged by a reviewer session under the owner decision of 2026-11-16 quoted in Production loop step 3. For each, give the owner a direct link and say exactly what to click.
+- The owner's own actions are limited to: approving production database migrations in `production-approval`, new costs, and external or irreversible actions. Since 2026-11-16 an `integration -> main` promotion is merged by an independent reviewer session, not by the owner (see „Production loop"). For each, give the owner a direct link and say exactly what to click.
 
 ## Required task metadata
 
@@ -121,20 +121,24 @@ Do not ask the owner to paste this handoff into another agent.
 
 Since 2026-11-16 single reviewed PRs reach production through the automatic publisher with no owner step (see „Continuous release policy"). The loop below applies to a full `integration -> main` promotion done outside the publisher.
 
-1. Orchestrator prepares a promotion PR from `integration` to `main`.
-2. CI/review must be green.
-3. Owner decision 2026-11-16 (his own message in chat, 15:19, confirmed 15:21), quoted verbatim: „Sesja recenzenta może scalić promocję integration → main, gdy testy są zielone na dokładnej wersji i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów i ustawień, zakaz kasowania danych i nowych kosztów.” A reviewer session therefore merges the promotion PR only when CI is green on its exact head SHA and an independent review returned PASS on that same SHA. The builder never merges it.
-4. Not changed by that decision: migrations reach production only through `db-migrate-production` after the owner's approval (Production access rule 1); no session deploys functions or changes secrets or settings, deletes data or adds costs; the payment-path freeze stays.
-5. After YES, orchestrator may promote and execute the approved production runbook.
-6. Smoke tests and production documentation are required before DONE.
+Owner decision 2026-11-16 (15:19, confirmed 15:21; quoted in the PR #463 description; confirmed again in his own words on 2026-11-16 at 18:47 Europe/Warsaw in session https://claude.ai/code/session_01TVLzgakSJXczDxExtJ8Zba: „sesja recenzenta może sama scalić wydanie na produkcję"; this text updated at his request the same evening): **the owner no longer merges promotion PRs himself.**
+
+The 15:19 decision, quoted verbatim: „Sesja recenzenta może scalić promocję integration → main, gdy testy są zielone na dokładnej wersji i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów i ustawień, zakaz kasowania danych i nowych kosztów.”
+
+1. Orchestrator/builder prepares a promotion PR from `integration` to `main`, with the release manifest and the exact list of migrations.
+2. All required checks must be green on the **exact** head SHA of the promotion PR.
+3. An independent reviewer session (fresh context, that wrote none of the changes in the promotion) posts PASS naming that exact head SHA. Every `chatgpt-codex-connector` bot finding on the PR is fixed or answered with a reason. If the promotion contains migrations, the PASS states whether the released code works on the pre-migration schema; if it does not, the reviewer merges only after the owner has said he can approve the migrations right away.
+4. Only then that **reviewer session** merges the promotion PR into `main` (merge method `merge`, `expectedHeadSha` = the reviewed SHA). The builder never merges a promotion. Any push after the verdict needs a new review.
+5. Unchanged by this decision: the payment-path freeze, no changes to secrets or settings, no data deletion, no new costs. Production migrations still run only through `db-migrate-production` after the **owner's** approval in `production-approval` (Production access rule 1); Edge Functions and secrets are not deployed by an agent.
+6. Right after the merge the merging session tells the owner, in Polish, with the direct link to approve the migrations, so the window between new code and new schema lasts minutes. Smoke tests and production documentation are required before DONE.
 
 ## Prohibited actions without explicit owner production approval
 
-- push to `main`, or merge into `main` anything other than the `integration -> main` promotion PR merged by a reviewer session under Production loop step 3 (owner decision 2026-11-16: „Sesja recenzenta może scalić promocję integration → main, gdy testy są zielone na dokładnej wersji i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów i ustawień, zakaz kasowania danych i nowych kosztów.”)
+- push anything directly to `main`; a promotion PR is merged only by an independent reviewer session under „Production loop" (owner decision 2026-11-16)
 - `supabase db push` against production
 - production Edge Function deploy
 - production secret changes
-- production Vercel deploy outside the approved promotion
+- production Vercel deploy outside a promotion merged under „Production loop" or the automatic publisher
 - external candidate contact
 - billing/charge actions
 
@@ -154,7 +158,7 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 
    With the owner's identity an agent session **never**:
    - approves the `production-approval` environment or any pull request review;
-   - merges or pushes anything to `main`, with one exception: a reviewer session may merge the `integration -> main` promotion PR when CI is green on its exact head SHA and an independent review returned PASS on that SHA (owner decision 2026-11-16: „Sesja recenzenta może scalić promocję integration → main, gdy testy są zielone na dokładnej wersji i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów i ustawień, zakaz kasowania danych i nowych kosztów.”). A builder session never merges into `main`. Automatic releases to `main` are merged only by the publisher workflow with the pipeline GitHub App identity, never by an agent session;
+   - merges or pushes anything to `main`, with one exception: an independent reviewer session may merge an `integration -> main` promotion PR under „Production loop" (green required checks + its own PASS on the exact head SHA; owner decision 2026-11-16). A builder session never merges into `main`. Automatic single-PR releases are merged only by the publisher workflow with the pipeline GitHub App identity;
    - changes rulesets, branch protection, environments, repository settings, secrets or deploy keys;
    - deletes branches it did not create.
 
