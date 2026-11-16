@@ -195,25 +195,42 @@ export function reviewThreadsGate(threads) {
   return [`REVIEW_THREADS_UNRESOLVED:${open.length}:${where}`];
 }
 
+// GitHub's own semantics, which this gate follows: a change request stands until its author
+// APPROVES or it is DISMISSED. A COMMENTED review is not a decision and must never cancel one —
+// otherwise a reply in a thread (GitHub records one as a COMMENTED review) would clear the
+// objection, and because agent sessions write with the owner's identity (AGENTS.md rule 5), an
+// agent could clear the owner's. PENDING means a review someone started and never submitted.
+const REVIEW_DECISIONS = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED']);
+const REVIEW_STATES = new Set([...REVIEW_DECISIONS, 'COMMENTED', 'PENDING']);
 /**
- * A submitted review that asks for changes blocks while it stands on the exact head SHA.
- * Only the newest review per author counts, so a later APPROVED/COMMENTED supersedes it.
- * Fail closed on a missing list or an unreadable entry.
+ * A submitted review that asks for changes blocks until its author withdraws it, whatever SHA
+ * it was made on — pushing a new commit does not answer an objection. Only the newest DECISION
+ * per author counts (APPROVED / DISMISSED clear it, COMMENTED does not); on equal timestamps the
+ * blocking one wins. An unsubmitted (PENDING) review on the exact head blocks too.
+ * Fail closed: a missing list, an unreadable entry, an unknown state or an unparsable timestamp
+ * all refuse rather than pass.
  * @param reviews [{ user: { login }, state, commit_id, submitted_at }]
  */
 export function reviewStatesGate(reviews, headSha) {
   if (!SHA.test(headSha ?? '')) return ['REVIEW_HEAD_INVALID'];
   if (!Array.isArray(reviews)) return ['REVIEW_STATES_UNKNOWN'];
-  const newest = new Map();
+  const newest = new Map(); const pending = new Set();
   for (const r of reviews) {
-    if (!r || typeof r !== 'object') return ['REVIEW_STATE_UNREADABLE'];
-    if (r.commit_id !== headSha) continue;
+    if (!r || typeof r !== 'object' || typeof r.state !== 'string' || !REVIEW_STATES.has(r.state)) return ['REVIEW_STATE_UNREADABLE'];
     const who = String(r.user?.login ?? '?');
+    if (r.state === 'PENDING') { if (r.commit_id === headSha) pending.add(who); continue; }
+    if (!REVIEW_DECISIONS.has(r.state)) continue;
+    const at = Date.parse(r.submitted_at ?? '');
+    if (!Number.isFinite(at)) return ['REVIEW_STATE_UNREADABLE'];
     const prev = newest.get(who);
-    if (!prev || String(prev.submitted_at ?? '').localeCompare(String(r.submitted_at ?? '')) <= 0) newest.set(who, r);
+    // equal timestamps: keep whichever blocks, never let a tie decide in favour of releasing
+    if (!prev || at > prev.at || (at === prev.at && r.state === 'CHANGES_REQUESTED')) newest.set(who, { at, state: r.state });
   }
-  const blocking = [...newest.values()].filter(r => r.state === 'CHANGES_REQUESTED');
-  return blocking.length ? [`REVIEW_CHANGES_REQUESTED:${blocking.map(r => String(r.user?.login ?? '?').slice(0, 30)).join(',')}`] : [];
+  const who = [...newest.entries()].filter(([, r]) => r.state === 'CHANGES_REQUESTED').map(([login]) => login);
+  const reasons = [];
+  if (who.length) reasons.push(`REVIEW_CHANGES_REQUESTED:${who.map(x => x.slice(0, 30)).join(',')}`);
+  if (pending.size) reasons.push(`REVIEW_PENDING_SUBMISSION:${[...pending].map(x => x.slice(0, 30)).join(',')}`);
+  return reasons;
 }
 
 export const REQUIRED_CHECKS = ['verify', 'Agent contract / scope gate'];

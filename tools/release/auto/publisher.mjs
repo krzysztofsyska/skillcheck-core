@@ -158,12 +158,18 @@ export function workerClosure(d, commit) {
     .split('\n').filter(f => /\/index\.(ts|js|mjs)$/.test(f));
   if (!entries.length) throw new Error('WORKER_ENTRY_MISSING');
   const seen = new Set(entries); const queue = [...entries];
-  const IMPORT = /(?:^|[\s;{(])(?:import|export)\b[^'"`;]*?from\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-  for (let i = 0; i < 500 && queue.length; i++) {
+  // `from '...'`, a bare `import '...'` side-effect import, and dynamic `import('...')`.
+  const IMPORT = /(?:^|[\s;{(])(?:import|export)\b[^'"`;]*?from\s*['"]([^'"]+)['"]|(?:^|[\s;{(])import\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  // A specifier written without an extension (TypeScript/Next style) must still resolve to the
+  // file it means; adding the bare specifier would put a path that does not exist in the closure
+  // and silently drop that whole subtree — and with it the gate for every file under it.
+  const CANDIDATES = ['', '.ts', '.tsx', '.mts', '.js', '.mjs', '/index.ts', '/index.tsx', '/index.js'];
+  for (let i = 0; queue.length; i++) {
+    if (i >= 2000) throw new Error('WORKER_CLOSURE_LIMIT'); // never truncate in silence
     const file = queue.shift();
     let text; try { text = d.git('show', `${commit}:${file}`); } catch { continue; }
     for (const m of text.matchAll(IMPORT)) {
-      const spec = m[1] ?? m[2];
+      const spec = m[1] ?? m[2] ?? m[3];
       if (!spec || !spec.startsWith('.')) continue; // npm:/jsr:/https: are not repository files
       const parts = `${file.split('/').slice(0, -1).join('/')}/${spec}`.split('/');
       const out = [];
@@ -171,10 +177,12 @@ export function workerClosure(d, commit) {
         if (p === '.' || p === '') continue;
         if (p === '..') out.pop(); else out.push(p);
       }
-      const resolved = out.join('/');
-      if (!resolved || seen.has(resolved)) continue;
+      const base = out.join('/');
+      if (!base) continue;
+      const resolved = CANDIDATES.map(ext => `${base}${ext}`).find(p => d.git.ok('cat-file', '-e', `${commit}:${p}`));
+      if (!resolved || seen.has(resolved)) continue; // only real files enter the closure
       seen.add(resolved);
-      if (d.git.ok('cat-file', '-e', `${commit}:${resolved}`)) queue.push(resolved);
+      queue.push(resolved);
     }
   }
   // The app side of the dispatch contract: it signs and sends what the worker verifies, so a
@@ -380,7 +388,10 @@ async function finish(d, pr, started) {
   const r = await mergeAndVerify(d, started, recheck);
   if (r.stage === 'recheck') {
     await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
-    if (!r.codes.includes('RELEASE_FROZEN')) await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200));
+    // A read that failed (every code ends in _UNKNOWN) says nothing about the change itself, so
+    // it must not cost this commit its release for good: no HELD marker, the next run retries.
+    const transient = r.codes.length > 0 && r.codes.every(c => /_UNKNOWN$/.test(c));
+    if (!r.codes.includes('RELEASE_FROZEN') && !transient) await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200));
     return { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
   }
   if (r.stage === 'ci') {

@@ -235,15 +235,36 @@ test('C9: unresolved review threads and standing change requests refuse; missing
   assert.ok(reviewThreadsGate([{ resolved: undefined }])[0].startsWith('REVIEW_THREADS_UNRESOLVED:'));
   assert.ok(reviewThreadsGate([null])[0].startsWith('REVIEW_THREADS_UNRESOLVED:'));
 
+  const rev = (state, at, extra = {}) => ({ user: { login: 'b' }, state, commit_id: H, submitted_at: at, ...extra });
   assert.deepEqual(reviewStatesGate([], H), []);
   assert.deepEqual(reviewStatesGate(null, H), ['REVIEW_STATES_UNKNOWN']);
-  assert.deepEqual(reviewStatesGate([{ user: { login: 'b' }, state: 'CHANGES_REQUESTED', commit_id: H, submitted_at: '1' }], H), ['REVIEW_CHANGES_REQUESTED:b']);
-  // a newer review from the same author supersedes it; another SHA does not count
+  assert.deepEqual(reviewStatesGate([rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z')], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // A COMMENTED review is not a decision and must NOT cancel a change request: GitHub records a
+  // reply in a thread as one, and agent sessions write with the owner's identity (AGENTS.md
+  // rule 5), so allowing it would let an agent clear the owner's objection.
   assert.deepEqual(reviewStatesGate([
-    { user: { login: 'b' }, state: 'CHANGES_REQUESTED', commit_id: H, submitted_at: '2026-01-01T00:00:00Z' },
-    { user: { login: 'b' }, state: 'COMMENTED', commit_id: H, submitted_at: '2026-01-02T00:00:00Z' },
-  ], H), []);
-  assert.deepEqual(reviewStatesGate([{ user: { login: 'b' }, state: 'CHANGES_REQUESTED', commit_id: 'b'.repeat(40), submitted_at: '1' }], H), []);
+    rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z'), rev('COMMENTED', '2026-01-02T00:00:00Z'),
+  ], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // only the author's own later APPROVED / DISMISSED clears it
+  for (const state of ['APPROVED', 'DISMISSED']) {
+    assert.deepEqual(reviewStatesGate([
+      rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z'), rev(state, '2026-01-02T00:00:00Z'),
+    ], H), [], state);
+  }
+  // …and an older APPROVED does not clear a newer change request
+  assert.deepEqual(reviewStatesGate([
+    rev('APPROVED', '2026-01-01T00:00:00Z'), rev('CHANGES_REQUESTED', '2026-01-02T00:00:00Z'),
+  ], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // equal timestamps must not decide in favour of releasing, whatever the array order
+  assert.deepEqual(reviewStatesGate([rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z'), rev('APPROVED', '2026-01-01T00:00:00Z')], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  assert.deepEqual(reviewStatesGate([rev('APPROVED', '2026-01-01T00:00:00Z'), rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z')], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // a change request on an earlier commit still stands: a new push does not answer an objection
+  assert.deepEqual(reviewStatesGate([rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z', { commit_id: 'b'.repeat(40) })], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // an unsubmitted review on the exact head blocks; unknown state or unparsable time refuse
+  assert.deepEqual(reviewStatesGate([rev('PENDING', null)], H), ['REVIEW_PENDING_SUBMISSION:b']);
+  assert.deepEqual(reviewStatesGate([rev('WAT', '2026-01-01T00:00:00Z')], H), ['REVIEW_STATE_UNREADABLE']);
+  assert.deepEqual(reviewStatesGate([rev('APPROVED', 'nie-data')], H), ['REVIEW_STATE_UNREADABLE']);
+  assert.deepEqual(reviewStatesGate([{ state: 'APPROVED' }], H), ['REVIEW_STATE_UNREADABLE']);
 
   // and the whole decision refuses when either is missing or open
   assert.ok(reasons(i => { i.reviewThreads = null; }).includes('REVIEW_THREADS_UNKNOWN'));
@@ -275,4 +296,21 @@ test('C10: worker and its shared modules are held; the real closure covers the d
   for (const f of DISPATCH_COUNTERPARTS) assert.ok(real.includes(f), f);
   // Precision matters: holding unrelated UI files would take automation away for no reason.
   assert.deepEqual(real.filter(f => f.startsWith('app/')), []);
+});
+
+// C10b (#460 review): the closure must contain only real files. A specifier written without an
+// extension used to enter it verbatim, which silently dropped that file and everything it imports
+// — so a change to it would not be held. Checked against this repository, not a fixture.
+test('C10b: the worker closure holds real files only, and covers extensionless imports', async () => {
+  const { workerClosure } = await import('../tools/release/auto/publisher.mjs');
+  const { createGit } = await import('../tools/release/auto/git.mjs');
+  const git = createGit(process.cwd());
+  const closure = workerClosure({ git }, 'HEAD');
+  const ghosts = closure.filter(f => !git.ok('cat-file', '-e', `HEAD:${f}`));
+  assert.deepEqual(ghosts, [], 'every entry of the closure exists in the tree');
+  // lib/screening.ts imports './supabase/database.types' without an extension; the real file
+  // must be in the closure under its true name.
+  assert.ok(closure.includes('lib/screening.ts'), 'lib/screening.ts');
+  assert.ok(closure.includes('lib/supabase/database.types.ts'), 'extensionless import resolved to the real file');
+  assert.ok(closure.every(f => /\.(ts|tsx|mts|js|mjs)$/.test(f)), 'no bare specifiers');
 });

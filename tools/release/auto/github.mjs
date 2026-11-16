@@ -42,8 +42,10 @@ export function createGithub({ token, repository, fetchImpl = fetch }) {
     if (!Number.isInteger(number) || number <= 0) throw new Error('REVIEW_THREADS_PR_INVALID');
     const [owner, repo] = repository.split('/');
     const query = `query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){pageInfo{hasNextPage endCursor}nodes{isResolved isOutdated comments(first:1){nodes{path}}}}}}}`;
-    const out = []; let cursor = null;
+    const out = []; let cursor = null; const cursors = new Set();
     for (let i = 0; i < 20; i++) {
+      if (cursor !== null && cursors.has(cursor)) throw new Error('REVIEW_THREADS_CURSOR_LOOP');
+      if (cursor !== null) cursors.add(cursor);
       const { json } = await call('POST', 'https://api.github.com/graphql', { query, variables: { o: owner, r: repo, n: number, c: cursor } });
       const t = json?.data?.repository?.pullRequest?.reviewThreads;
       if (json?.errors?.length || !t || !Array.isArray(t.nodes) || typeof t.pageInfo?.hasNextPage !== 'boolean') throw new Error('REVIEW_THREADS_INCOMPLETE');
