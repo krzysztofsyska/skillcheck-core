@@ -71,6 +71,34 @@ test('migration files are read at the bound integration SHA only', async () => {
     readMigrationSql: async (p, ref) => { seen.push([p, ref]); return 'alter table t add column c text'; } });
   assert.deepEqual(seen, [['supabase/migrations/1.sql', I]]);
 });
+test('migration backup evidence reader is required and bound to repo and exact release', async () => {
+  const mfile = 'supabase/migrations/1.sql';
+  const comparison = async b => b === M
+    ? { status: 'ahead', complete: true, commits: [{ sha: 'e'.repeat(40) }], files: [{ filename: mfile }] }
+    : { status: 'ahead', complete: true, commits: [], files: [] };
+  const without = await run({ readComparisonComplete: comparison });
+  assert.equal(without.decision, 'DENY');
+  assert.ok(without.reasons.includes('COLLECT:READ_BACKUP_EVIDENCE_FAILED'));
+  let requested;
+  const withReader = await run({
+    readComparisonComplete: comparison,
+    readBackupEvidence: async a => {
+      requested = a;
+      return { source: 'trusted_backup_pitr_reader', verified: false };
+    },
+  });
+  assert.equal(requested.repository, 'r/r');
+  assert.equal(requested.base, M);
+  assert.equal(requested.head, I);
+  assert.equal(requested.manifest.main_sha, M);
+  assert.equal(requested.manifest.integration_sha, I);
+  assert.ok(!withReader.reasons.includes('COLLECT:READ_BACKUP_EVIDENCE_FAILED'));
+  assert.ok(withReader.reasons.includes('MIGRATION_BACKUP_EVIDENCE_MISSING_OR_STALE'));
+  const failed = await run({ readComparisonComplete: comparison,
+    readBackupEvidence: async () => { throw new Error('backup unavailable'); } });
+  assert.ok(failed.reasons.includes('COLLECT:READ_BACKUP_EVIDENCE_FAILED'));
+});
+
 test('released ledger is read for the exact main/integration pair; an already released candidate is denied', async () => {
   let args;
   const r = await run({ readReleased: async a => { args = a; return [a.head]; } }, { p24Hold: false });
