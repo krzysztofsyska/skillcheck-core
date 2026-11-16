@@ -12,7 +12,7 @@ function appJwt(appId, privateKey, nowMs) {
   return `${body}.${createSign('RSA-SHA256').update(body).sign(privateKey, 'base64url')}`;
 }
 
-export function createAppTokenProvider({ appId, installationId, privateKey, fetchImpl = fetch, now = () => Date.now() }) {
+export function createAppTokenProvider({ appId, installationId, privateKey, fetchImpl = fetch, now = () => Date.now(), onToken = () => {} }) {
   if (!/^\d+$/.test(String(appId ?? '')) || !/^\d+$/.test(String(installationId ?? '')) || !privateKey) throw new Error('APP_CONFIG_MISSING');
   let cached = null;
   const headers = jwt => ({ authorization: `Bearer ${jwt}`, accept: 'application/vnd.github+json', 'user-agent': 'skillcheck-auto-release' });
@@ -21,6 +21,7 @@ export function createAppTokenProvider({ appId, installationId, privateKey, fetc
     const res = await fetchImpl(`https://api.github.com/app/installations/${installationId}/access_tokens`, { method: 'POST', headers: headers(appJwt(appId, privateKey, now())) });
     const body = await res.json().catch(() => null);
     if (!res.ok || !body?.token) throw new Error(`APP_TOKEN_FAILED:${res.status}`);
+    onToken(body.token);
     cached = { token: body.token, expiresAt: Date.parse(body.expires_at) || now() + 3600000 };
     return cached.token;
   }

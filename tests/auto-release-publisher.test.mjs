@@ -345,19 +345,48 @@ test('C4: a job dying before the revert PR exists: next run rolls back although 
   assert.throws(() => fx.originGit('cat-file', '-t', 'main:app/regulamin/page.tsx'), 'reverted on main');
 });
 
-test('C4: a job dying right after the rollback merge: next run completes the record and freezes', async () => {
-  const fx = fixture([{ 'app/regulamin/page.tsx': 'broken\n' }]);
-  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
-  let smoke = 0;
-  const post = gh.post;
-  let killed = false;
-  gh.post = async (p, b) => { if (!killed && /cofnięte/.test(b?.body ?? '')) { killed = true; throw new Error('job killed'); } return post(p, b); };
-  await assert.rejects(runPublisher(deps(fx, gh, { smoke: async () => (++smoke === 1 ? { ok: false, failures: ['x'] } : { ok: true, failures: [] }) })));
-  assert.equal(state.issues.length, 0, 'the kill happened before the freeze record');
-  fx.git('fetch', 'origin', 'main');
+test('C4/C7: a job dying right after the rollback merge (before the freeze record): next run checks the revert, freezes, then records', async () => {
+  for (const healthy of [true, false]) {
+    const fx = fixture([{ 'app/regulamin/page.tsx': 'broken\n' }]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    let smoke = 0;
+    const post = gh.post;
+    let killed = false;
+    gh.post = async (p, b) => { if (!killed && p === '/issues') { killed = true; throw new Error('job killed'); } return post(p, b); };
+    await assert.rejects(runPublisher(deps(fx, gh, { smoke: async () => (++smoke === 1 ? { ok: false, failures: ['x'] } : { ok: true, failures: [] }) })));
+    assert.equal(state.issues.length, 0, 'the kill happened before the freeze record');
+    assert.ok(!(state.comments[100] ?? []).some(c => /sc-auto-release-done/.test(c.body)), 'no done marker before the freeze');
+    fx.git('fetch', 'origin', 'main');
+    const r = await runPublisher(deps(fx, gh, { smoke: async () => ({ ok: healthy, failures: healthy ? [] : ['/:STATUS_500'] }) }));
+    assert.equal(r.status, 'FROZEN');
+    assert.equal(state.issues.length, 1);
+    if (healthy) {
+      assert.deepEqual(r.codes, ['ROLLBACK_RECORD_INCOMPLETE']);
+      assert.ok(state.comments[100].some(c => /sc-auto-release-done/.test(c.body)));
+    } else {
+      assert.equal(r.codes[0], 'ROLLBACK_NOT_HEALTHY', 'C6: the revert itself is checked');
+      assert.ok(!state.comments[100].some(c => /sc-auto-release-done/.test(c.body)), 'never recorded as done while unhealthy');
+    }
+  }
+});
+
+test('C8: authorization is re-checked right before the merge (verdict changed while CI ran)', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+  const comments = { 100: [pass(fx.prs[0].head)] };
+  const { gh, state } = fakeGithub({ fx, comments });
+  const get = gh.get;
+  gh.get = async p => {
+    const r = await get(p);
+    if (/^\/commits\/[0-9a-f]{40}\/check-runs/.test(p) && state.pulls.length && !state.flipped) {
+      state.flipped = true; // a reviewer posts FAIL on the same SHA while the release PR's CI runs
+      state.comments[100].push({ ...pass(fx.prs[0].head), body: pass(fx.prs[0].head).body.replace('"PASS"', '"FAIL"') });
+    }
+    return r;
+  };
   const r = await runPublisher(deps(fx, gh));
-  assert.equal(r.status, 'FROZEN'); assert.deepEqual(r.codes, ['ROLLBACK_RECORD_INCOMPLETE']);
-  assert.ok(state.comments[100].some(c => /sc-auto-release-done/.test(c.body)));
+  assert.equal(r.status, 'HELD', JSON.stringify(r));
+  assert.ok(r.codes.includes('REVIEW_NOT_PASS:FAIL'));
+  assert.equal(state.merged.length, 0); assert.deepEqual(state.closed, [900]);
 });
 
 test('C5: the App installation token is refreshed before it expires (runs can outlast one token)', async () => {
