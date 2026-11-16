@@ -91,6 +91,16 @@ function evaluateUnsafe(input) {
     if (scope.hasMigrations) {
       const rb = promotion.runbook;
       if (!rb || typeof rb.backup !== 'string' || !rb.backup || rb.rollback_db_compatible !== true) deny.push('MIGRATION_RECOVERY_OR_ROLLBACK_INCOMPATIBLE');
+      // A runbook's "backup: pitr" string is not proof that the production database
+      // has a usable backup. Until a separate trusted reader supplies verified,
+      // release-bound PITR/restore evidence, migrations remain DENIED.
+      const proof = input.backupEvidence;
+      const backedUp = proof?.source === 'trusted_backup_pitr_reader'
+        && proof.verified === true && proof.pitr_enabled === true && proof.restore_tested === true
+        && current && proof.repository === current.repository
+        && proof.base_sha === current.mainSha && proof.head_sha === current.integrationSha
+        && proof.manifest_hash === sha256(m);
+      if (!backedUp) deny.push('MIGRATION_BACKUP_EVIDENCE_MISSING_OR_STALE');
     }
     if (!(promotion.smokeTests?.length > 0) || !promotion.rollback) deny.push('MISSING_SMOKE_OR_ROLLBACK');
   }
