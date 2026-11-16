@@ -51,7 +51,7 @@ test('CI evidence: exact SHA, pinned app, unique run', async () => {
 });
 
 const PROMOTE = 42;
-const run = (id, status = 'completed', o = {}) => ({ id, workflow_id: PROMOTE, status, ...o });
+const run = (id, status = 'completed', o = {}) => ({ id, workflow_id: PROMOTE, status, run_number: id, conclusion: status === 'completed' ? 'success' : null, ...o });
 // Serves an unfiltered, paginated listing. `script` may return a different run list per call
 // (call index starts at 0) to model runs changing between requests.
 const mkLock = (runsOrScript = [], opts = {}) => {
@@ -69,33 +69,33 @@ const mkLock = (runsOrScript = [], opts = {}) => {
 };
 test('lock: one unfiltered snapshot, free only when every promote run is completed, GET only', async () => {
   const { c, r } = mkLock([run(1), run(2)]);
-  assert.deepEqual(await r.readLock(), { held: false, inflight: 0 });
+  assert.deepEqual(await r.readLock(), { held: false, inflight: 0, lastConclusion: 'success' });
   assert.ok(c.calls.every(([m, p]) => m === 'GET' && p.startsWith(`/repos/o/r/actions/workflows/${PROMOTE}/runs?per_page=100&page=`)));
   assert.equal(c.calls.length, 2); // page 1 + consistency re-read
-  assert.deepEqual(await mkLock([]).r.readLock(), { held: false, inflight: 0 });
+  assert.deepEqual(await mkLock([]).r.readLock(), { held: false, inflight: 0, lastConclusion: null });
 });
 test('lock: any non-completed (incl. unknown) status holds the lock', async () => {
   for (const s of ['queued', 'in_progress', 'waiting', 'requested', 'pending', 'action_required', 'something_new']) {
-    assert.deepEqual(await mkLock([run(1), run(2, s)]).r.readLock(), { held: true, inflight: 1 });
+    assert.deepEqual(await mkLock([run(1), run(2, s)]).r.readLock(), { held: true, inflight: 1, lastConclusion: 'success' });
   }
-  assert.deepEqual(await mkLock([run(1, 'queued'), run(2, 'in_progress')]).r.readLock(), { held: true, inflight: 2 });
+  assert.deepEqual(await mkLock([run(1, 'queued'), run(2, 'in_progress')]).r.readLock(), { held: true, inflight: 2, lastConclusion: null });
 });
 test('lock: a run moving between statuses during the read is still counted (no per-status gap)', async () => {
   // Call 0 sees it waiting, the re-read sees it in_progress: it is never missed.
   const { r } = mkLock(call => [run(7, call === 0 ? 'waiting' : 'in_progress')]);
-  assert.deepEqual(await r.readLock(), { held: true, inflight: 1 });
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, lastConclusion: null });
 });
 test('lock: a completed run re-run between reads (same id) holds the lock', async () => {
   const { r } = mkLock(call => [run(7, call === 0 ? 'completed' : 'in_progress'), run(8)]);
-  assert.deepEqual(await r.readLock(), { held: true, inflight: 1 });
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, lastConclusion: 'success' });
   // and the reverse (active → completed during the read) stays conservatively held
-  assert.deepEqual(await mkLock(call => [run(7, call === 0 ? 'queued' : 'completed')]).r.readLock(), { held: true, inflight: 1 });
+  assert.deepEqual(await mkLock(call => [run(7, call === 0 ? 'queued' : 'completed')]).r.readLock(), { held: true, inflight: 1, lastConclusion: null });
 });
 test('lock: reads every page; an active run on a later page holds the lock', async () => {
   const runs = Array.from({ length: 250 }, (_, k) => run(k + 1));
   runs[230] = run(231, 'queued');
   const { c, r } = mkLock(runs);
-  assert.deepEqual(await r.readLock(), { held: true, inflight: 1 });
+  assert.deepEqual(await r.readLock(), { held: true, inflight: 1, lastConclusion: 'success' });
   assert.equal(c.calls.length, 4);
 });
 test('lock: unpinned, truncated, inconsistent, shifting or foreign listings fail closed', async () => {
@@ -113,6 +113,23 @@ test('lock: unpinned, truncated, inconsistent, shifting or foreign listings fail
   await assert.rejects(mkLock([run('1')]).r.readLock(), /LOCK_FOREIGN_RUN/);
   const bad = createAutoReleaseReaders({ client: mkClient({ request: async () => ({}) }), repository: 'o/r', policy: { workflow_ids: { promote: PROMOTE } } });
   await assert.rejects(bad.readLock(), /LOCK_INCOMPLETE/);
+});
+test('lock (4l): reports the conclusion of the most recent completed run by run_number', async () => {
+  // Listing order does not matter: run_number decides which completed run is the latest.
+  assert.equal((await mkLock([run(3, 'completed', { conclusion: 'failure' }), run(1), run(2)]).r.readLock()).lastConclusion, 'failure');
+  assert.equal((await mkLock([run(1, 'completed', { conclusion: 'failure' }), run(2)]).r.readLock()).lastConclusion, 'success');
+  assert.equal((await mkLock([run(1), run(2, 'completed', { conclusion: 'cancelled' })]).r.readLock()).lastConclusion, 'cancelled');
+  // A missing or non-string conclusion on a completed run is reported as 'unknown', never success.
+  assert.equal((await mkLock([run(1, 'completed', { conclusion: null })]).r.readLock()).lastConclusion, 'unknown');
+  assert.equal((await mkLock([run(1, 'completed', { conclusion: undefined })]).r.readLock()).lastConclusion, 'unknown');
+  // An active newer run does not hide an older failure (and holds the lock anyway).
+  assert.deepEqual(await mkLock([run(1, 'completed', { conclusion: 'failure' }), run(2, 'queued')]).r.readLock(), { held: true, inflight: 1, lastConclusion: 'failure' });
+});
+test('lock (4l): missing, invalid or duplicated run_number fails closed', async () => {
+  await assert.rejects(mkLock([run(1, 'completed', { run_number: undefined })]).r.readLock(), /LOCK_FOREIGN_RUN/);
+  await assert.rejects(mkLock([run(1, 'completed', { run_number: '1' })]).r.readLock(), /LOCK_FOREIGN_RUN/);
+  await assert.rejects(mkLock([run(1, 'completed', { run_number: 0 })]).r.readLock(), /LOCK_FOREIGN_RUN/);
+  await assert.rejects(mkLock([run(1), run(2, 'completed', { run_number: 1 })]).r.readLock(), /LOCK_INCOMPLETE/);
 });
 test('lock reader alone never turns the decision into ALLOW', async () => {
   const { r } = mkLock([run(1)]);

@@ -209,13 +209,15 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
         const res = await get(`${root}/actions/workflows/${workflowId}/runs?per_page=${LOCK_PAGE}&page=${n}&exclude_pull_requests=true`);
         const runs = res?.workflow_runs;
         if (!Array.isArray(runs) || !Number.isSafeInteger(res.total_count) || res.total_count < 0) throw new Error('LOCK_INCOMPLETE');
-        if (runs.some(run => run?.workflow_id !== workflowId || !Number.isSafeInteger(run.id) || typeof run.status !== 'string')) throw new Error('LOCK_FOREIGN_RUN');
+        if (runs.some(run => run?.workflow_id !== workflowId || !Number.isSafeInteger(run.id) || typeof run.status !== 'string'
+          || !Number.isSafeInteger(run.run_number) || run.run_number <= 0)) throw new Error('LOCK_FOREIGN_RUN');
         return { total: res.total_count, runs };
       };
       const first = await page(1);
       const pages = Math.ceil(first.total / LOCK_PAGE);
       if (pages > LOCK_MAX_PAGES) throw new Error('LOCK_INCOMPLETE');
       const seen = new Map();
+      const meta = new Map(); // id -> { runNumber, conclusion } from the latest read of that run
       for (let n = 1; n <= Math.max(pages, 1); n += 1) {
         const p = n === 1 ? first : await page(n);
         if (p.total !== first.total) throw new Error('LOCK_INCOMPLETE');
@@ -223,6 +225,7 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
         for (const run of p.runs) {
           if (seen.has(run.id)) throw new Error('LOCK_INCOMPLETE');
           seen.set(run.id, run.status);
+          meta.set(run.id, { runNumber: run.run_number, conclusion: run.conclusion });
         }
       }
       if (seen.size !== first.total) throw new Error('LOCK_INCOMPLETE');
@@ -230,10 +233,25 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
       const again = await page(1);
       if (again.total !== first.total || again.runs.some(run => !seen.has(run.id))) throw new Error('LOCK_INCOMPLETE');
       // A completed run can be re-run (same id, active again): a run is active if ANY read saw it active.
-      for (const run of again.runs) if (run.status !== 'completed') seen.set(run.id, run.status);
+      for (const run of again.runs) {
+        if (run.status !== 'completed') seen.set(run.id, run.status);
+        meta.set(run.id, { runNumber: run.run_number, conclusion: run.conclusion });
+      }
       let inflight = 0;
       for (const status of seen.values()) if (status !== 'completed') inflight += 1;
-      return { held: inflight > 0, inflight };
+      // Stage 4l: a failed release freezes later ones. Report the conclusion of the most recent
+      // (highest run_number) completed run; null only when no run has ever completed. A
+      // duplicated run_number is ambiguous and throws. The qualifier, not this reader, decides.
+      let last = null;
+      const numbers = new Set();
+      for (const [id, status] of seen) {
+        const m = meta.get(id);
+        if (numbers.has(m.runNumber)) throw new Error('LOCK_INCOMPLETE');
+        numbers.add(m.runNumber);
+        if (status === 'completed' && (!last || m.runNumber > last.runNumber)) last = m;
+      }
+      const lastConclusion = last ? (typeof last.conclusion === 'string' ? last.conclusion : 'unknown') : null;
+      return { held: inflight > 0, inflight, lastConclusion };
     },
     async readCodexEvidence(args) {
       return codex()(args);
