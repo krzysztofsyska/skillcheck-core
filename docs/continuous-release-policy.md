@@ -110,7 +110,7 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   — the closure is all or nothing, never silently truncated. A
   reverse import scan was tried and rejected: it could not be made precise and held two dozen
   unrelated UI files.
-  **Cost, and it is a real one:** the closure holds 21 `lib/` modules that change often
+  **Cost, and it is a real one:** the closure holds 25 `lib/` modules that change often
   (`lib/screening.ts`, `lib/screening-ai.ts`, `lib/cv-bulk.ts`, `lib/ai-gateway/*`), so this code
   will trip frequently, and today nothing in the automatic path can clear it — deploying the
   worker is `workflow_dispatch` plus `production-approval`, both human steps. That contradicts the

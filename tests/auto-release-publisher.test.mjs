@@ -460,3 +460,41 @@ test('C9: an unresolved review conversation holds the release; resolving it lets
   const ok = await runPublisher(deps(fx, c.gh));
   assert.equal(ok.status, 'RELEASED');
 });
+
+// C12 (#460 runda 3): nieudany odczyt dowodu tuż przed scaleniem jest ponawiany, ale ograniczoną
+// liczbę razy. Ten test musi padać zarówno gdy przejściowe wstrzymanie zaczyna blokować PR, jak i
+// gdy ograniczenie prób zniknie — brak takiego testu przepuścił wcześniej błąd w tej samej ścieżce.
+test('C12: przejściowy brak dowodu jest ponawiany do granicy prób, potem wstrzymuje trwale', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  const { TRANSIENT_ATTEMPTS } = await import('../tools/release/auto/publisher.mjs');
+  // domknięcie workera staje się nieczytelne dopiero w ponownym sprawdzeniu przed scaleniem:
+  // pierwsze przejście przez evaluate musi dać ALLOW, żeby doszło do etapu recheck
+  let evaluated = 0;
+  gh.reviewThreads = async () => { evaluated += 1; if (evaluated > 1) throw new Error('GRAPHQL_DOWN'); return []; };
+
+  const runs = [];
+  for (let i = 0; i < TRANSIENT_ATTEMPTS; i++) {
+    evaluated = 0; // każdy przebieg zaczyna od czytelnego odczytu w evaluate
+    runs.push(await runPublisher(deps(fx, gh)));
+  }
+  for (const [i, r] of runs.entries()) {
+    assert.equal(r.status, 'HELD', `przebieg ${i + 1}: ${JSON.stringify(r)}`);
+    assert.ok(r.codes.some(c => c.endsWith('_UNKNOWN')), `przebieg ${i + 1}: ${r.codes.join(',')}`);
+  }
+  assert.equal(state.merged.length, 0, 'nic nie zostało scalone');
+
+  // znaczniki: TRANSIENT_ATTEMPTS-1 przejściowych, a ostatni trwały
+  const held = state.comments[100].filter(c => /sc-auto-release-held:v1/.test(c.body ?? ''));
+  assert.equal(held.length, TRANSIENT_ATTEMPTS, `po jednym znaczniku na przebieg: ${held.length}`);
+  const transientMarks = held.filter(c => /"transient":true/.test(c.body));
+  assert.equal(transientMarks.length, TRANSIENT_ATTEMPTS - 1, 'ostatnia próba zapisuje wstrzymanie trwałe');
+
+  // po trwałym wstrzymaniu kolejny przebieg nie podejmuje już nawet próby wydania
+  const before = state.pulls.length;
+  evaluated = 0;
+  const after = await runPublisher(deps(fx, gh));
+  assert.equal(after.status, 'NOTHING_TO_RELEASE', JSON.stringify(after));
+  assert.deepEqual(after.held, [{ pr: 100, reasons: ['HELD_EARLIER'] }]);
+  assert.equal(state.pulls.length, before, 'żaden nowy PR wydania nie powstał');
+});

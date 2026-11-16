@@ -396,7 +396,10 @@ async function finish(d, pr, started) {
     // times: each attempt costs a cherry-pick, a release PR and a full CI run, so an evidence
     // source that stays unreadable would otherwise repeat that every run, for ever. After
     // TRANSIENT_ATTEMPTS the hold becomes permanent like any other and waits for a new commit.
-    const transient = isTransient(r.codes) && countTransient(comments, pr.head.sha, d.appBotLogin) + 1 < TRANSIENT_ATTEMPTS;
+    // Counted from the PR's own comments, read here: `finish` does not receive them, and the list
+    // must be fresh anyway — an earlier run of this same release may have added a marker since.
+    const seenSoFar = countTransient(await d.gh.paginate(`/issues/${pr.number}/comments`), pr.head.sha, d.appBotLogin);
+    const transient = isTransient(r.codes) && seenSoFar + 1 < TRANSIENT_ATTEMPTS;
     if (!r.codes.includes('RELEASE_FROZEN')) {
       await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200), transient);
     }
