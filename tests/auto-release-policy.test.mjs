@@ -17,6 +17,7 @@ const base = () => ({
   files: ['app/regulamin/page.tsx'], migrations: [], checkRuns: green(H), comments: [pass()],
   migrationExecutor: false, backups: null, now: new Date('2026-11-16T12:00:00Z'),
   patches: [{ path: 'app/regulamin/page.tsx', patch: '--- a/x\n+++ b/x\n-stary tekst\n+nowy tekst' }], unreleasedMigrations: [], provenance: [],
+  reviewThreads: [], reviews: [], workerModules: ['supabase/functions/screening-worker/index.ts', 'lib/screening-hmac.ts'],
 });
 const reasons = mut => { const i = base(); mut(i); return evaluateCandidate(i).reasons; };
 
@@ -219,4 +220,114 @@ test('C2: every file that really sends mail/voice is refused by path (repository
 test('merge provenance: unknown or failed provenance refuses', () => {
   assert.ok(evaluateCandidate({ ...base(), provenance: null }).reasons.includes('MERGE_PROVENANCE_UNKNOWN'));
   assert.ok(evaluateCandidate({ ...base(), provenance: ['MERGE_NOT_CLEAN'] }).reasons.includes('MERGE_NOT_CLEAN'));
+});
+
+// C9 (#369): an unresolved review conversation blocks on its own. The `codex-review-state`
+// marker codexGate looks for is published by nothing, so it can never be the only source.
+test('C9: unresolved review threads and standing change requests refuse; missing evidence refuses', async () => {
+  const { reviewThreadsGate, reviewStatesGate } = await import('../tools/release/auto/policy.mjs');
+  assert.deepEqual(reviewThreadsGate([]), []);
+  assert.deepEqual(reviewThreadsGate([{ resolved: true }, { resolved: true }]), []);
+  assert.deepEqual(reviewThreadsGate(null), ['REVIEW_THREADS_UNKNOWN']);
+  assert.deepEqual(reviewThreadsGate('x'), ['REVIEW_THREADS_UNKNOWN']);
+  // outdated is not answered: the line moved, the finding did not go away
+  assert.ok(reviewThreadsGate([{ resolved: false, outdated: true, path: 'lib/a.ts' }])[0].startsWith('REVIEW_THREADS_UNRESOLVED:1:'));
+  assert.ok(reviewThreadsGate([{ resolved: undefined }])[0].startsWith('REVIEW_THREADS_UNRESOLVED:'));
+  assert.ok(reviewThreadsGate([null])[0].startsWith('REVIEW_THREADS_UNRESOLVED:'));
+
+  const rev = (state, at, extra = {}) => ({ user: { login: 'b' }, state, commit_id: H, submitted_at: at, ...extra });
+  assert.deepEqual(reviewStatesGate([], H), []);
+  assert.deepEqual(reviewStatesGate(null, H), ['REVIEW_STATES_UNKNOWN']);
+  assert.deepEqual(reviewStatesGate([rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z')], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // A COMMENTED review is not a decision and must NOT cancel a change request: GitHub records a
+  // reply in a thread as one, and agent sessions write with the owner's identity (AGENTS.md
+  // rule 5), so allowing it would let an agent clear the owner's objection.
+  assert.deepEqual(reviewStatesGate([
+    rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z'), rev('COMMENTED', '2026-01-02T00:00:00Z'),
+  ], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // only the author's own later APPROVED / DISMISSED clears it
+  for (const state of ['APPROVED', 'DISMISSED']) {
+    assert.deepEqual(reviewStatesGate([
+      rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z'), rev(state, '2026-01-02T00:00:00Z'),
+    ], H), [], state);
+  }
+  // …and an older APPROVED does not clear a newer change request
+  assert.deepEqual(reviewStatesGate([
+    rev('APPROVED', '2026-01-01T00:00:00Z'), rev('CHANGES_REQUESTED', '2026-01-02T00:00:00Z'),
+  ], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // equal timestamps must not decide in favour of releasing, whatever the array order
+  assert.deepEqual(reviewStatesGate([rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z'), rev('APPROVED', '2026-01-01T00:00:00Z')], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  assert.deepEqual(reviewStatesGate([rev('APPROVED', '2026-01-01T00:00:00Z'), rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z')], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // a change request on an earlier commit still stands: a new push does not answer an objection
+  assert.deepEqual(reviewStatesGate([rev('CHANGES_REQUESTED', '2026-01-01T00:00:00Z', { commit_id: 'b'.repeat(40) })], H), ['REVIEW_CHANGES_REQUESTED:b']);
+  // an unsubmitted review on the exact head blocks; unknown state or unparsable time refuse
+  assert.deepEqual(reviewStatesGate([rev('PENDING', null)], H), ['REVIEW_PENDING_SUBMISSION:b']);
+  assert.deepEqual(reviewStatesGate([rev('WAT', '2026-01-01T00:00:00Z')], H), ['REVIEW_STATE_UNREADABLE']);
+  assert.deepEqual(reviewStatesGate([rev('APPROVED', 'nie-data')], H), ['REVIEW_STATE_UNREADABLE']);
+  assert.deepEqual(reviewStatesGate([{ state: 'APPROVED' }], H), ['REVIEW_STATE_UNREADABLE']);
+
+  // and the whole decision refuses when either is missing or open
+  assert.ok(reasons(i => { i.reviewThreads = null; }).includes('REVIEW_THREADS_UNKNOWN'));
+  assert.ok(reasons(i => { i.reviews = null; }).includes('REVIEW_STATES_UNKNOWN'));
+  assert.ok(reasons(i => { i.reviewThreads = [{ resolved: false, path: 'lib/a.ts' }]; }).some(r => r.startsWith('REVIEW_THREADS_UNRESOLVED:')));
+});
+
+// C10 (#369): the screening worker is deployed by hand, so a change to it or to a module it
+// shares with the app must not ship alone — the app would use a contract the worker does not.
+test('C10: worker and its shared modules are held; the real closure covers the dispatch contract', async () => {
+  const { workerGate } = await import('../tools/release/auto/policy.mjs');
+  const { workerClosure, DISPATCH_COUNTERPARTS } = await import('../tools/release/auto/publisher.mjs');
+  const { createGit } = await import('../tools/release/auto/git.mjs');
+  const closure = ['supabase/functions/screening-worker/index.ts', 'lib/screening-hmac.ts'];
+  assert.deepEqual(workerGate(['app/regulamin/page.tsx'], closure), []);
+  assert.ok(workerGate(['lib/screening-hmac.ts'], closure)[0].startsWith('WORKER_DEPLOY_REQUIRED:'));
+  assert.ok(workerGate(['supabase/functions/anything/index.ts'], [])[0].startsWith('WORKER_DEPLOY_REQUIRED:'));
+  assert.deepEqual(workerGate(['app/x.tsx'], null), ['WORKER_SCOPE_UNKNOWN']);
+  assert.deepEqual(workerGate(['app/x.tsx'], [1]), ['WORKER_SCOPE_UNKNOWN']);
+  assert.deepEqual(workerGate(null, closure), ['WORKER_SCOPE_UNKNOWN']);
+  assert.ok(reasons(i => { i.files = ['lib/screening-hmac.ts']; }).some(r => r.startsWith('WORKER_DEPLOY_REQUIRED:')));
+  assert.ok(reasons(i => { i.workerModules = null; }).includes('WORKER_SCOPE_UNKNOWN'));
+
+  // The closure is computed from this repository, not from a hand-kept list: it must contain
+  // the worker entry, the shared signing module and the app-side sender of the same contract.
+  const real = workerClosure({ git: createGit(process.cwd()) }, 'HEAD');
+  assert.ok(real.includes('supabase/functions/screening-worker/index.ts'), 'worker entry');
+  assert.ok(real.includes('lib/screening-hmac.ts'), 'shared dispatch signature module');
+  for (const f of DISPATCH_COUNTERPARTS) assert.ok(real.includes(f), f);
+  // Precision matters: holding unrelated UI files would take automation away for no reason.
+  assert.deepEqual(real.filter(f => f.startsWith('app/')), []);
+});
+
+// C10b (#460 review): the closure must contain only real files. A specifier written without an
+// extension used to enter it verbatim, which silently dropped that file and everything it imports
+// — so a change to it would not be held. Checked against this repository, not a fixture.
+test('C10b: the worker closure holds real files only, and covers extensionless imports', async () => {
+  const { workerClosure } = await import('../tools/release/auto/publisher.mjs');
+  const { createGit } = await import('../tools/release/auto/git.mjs');
+  const git = createGit(process.cwd());
+  const closure = workerClosure({ git }, 'HEAD');
+  const ghosts = closure.filter(f => !git.ok('cat-file', '-e', `HEAD:${f}`));
+  assert.deepEqual(ghosts, [], 'every entry of the closure exists in the tree');
+  // lib/screening.ts imports './supabase/database.types' without an extension; the real file
+  // must be in the closure under its true name.
+  assert.ok(closure.includes('lib/screening.ts'), 'lib/screening.ts');
+  assert.ok(closure.includes('lib/supabase/database.types.ts'), 'extensionless import resolved to the real file');
+  assert.ok(closure.every(f => /\.(ts|tsx|mts|js|mjs)$/.test(f)), 'no bare specifiers');
+});
+
+// C11 (#460 review, runda 2): ponawianie po nieudanym odczycie musi być ograniczone i musi
+// odróżniać "nie dało się sprawdzić" od "sprawdzone i odrzucone". Brak tego testu pozwolił
+// recenzentowi podmienić logikę na "zawsze ponawiaj" bez ani jednego czerwonego testu.
+test('C11: tylko powody _UNKNOWN są przejściowe, i tylko ograniczoną liczbę razy', async () => {
+  const { isTransient, TRANSIENT_ATTEMPTS } = await import('../tools/release/auto/publisher.mjs');
+  assert.equal(isTransient(['REVIEW_THREADS_UNKNOWN']), true);
+  assert.equal(isTransient(['WORKER_SCOPE_UNKNOWN', 'REVIEW_STATES_UNKNOWN']), true);
+  // jeden powód mówiący coś o samej zmianie odbiera całości charakter przejściowy
+  assert.equal(isTransient(['REVIEW_THREADS_UNKNOWN', 'PAYMENT_PATH_FREEZE:app/kup/page.tsx']), false);
+  assert.equal(isTransient(['REVIEW_CHANGES_REQUESTED:bot']), false);
+  assert.equal(isTransient([]), false, 'brak powodów nie jest przejściowy');
+  assert.equal(isTransient(null), false);
+  // dopasowanie po końcówce, nie po początku: kod zaczynający się od UNKNOWN nie jest przejściowy
+  assert.equal(isTransient(['UNKNOWN_THING']), false, 'tylko końcówka _UNKNOWN liczy się jako nieudany odczyt');
+  assert.ok(Number.isInteger(TRANSIENT_ATTEMPTS) && TRANSIENT_ATTEMPTS >= 2 && TRANSIENT_ATTEMPTS <= 10);
 });

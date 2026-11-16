@@ -53,7 +53,10 @@ Only comments by the repository owner/members/collaborators count; `reviewer` mu
 cancels it. Free-text "PASS" without the marker does not count. While every agent session posts
 with the owner's GitHub identity, reviewer/builder separation is procedural (session ids), not
 technical: the `reviewer`/`builder` session ids are declared by the reviewer, not proven by GitHub
-(same limitation as rule 5 in `AGENTS.md`). Unresolved Codex findings on the exact SHA also block.
+(same limitation as rule 5 in `AGENTS.md`). An unresolved review conversation or a standing
+change request also blocks — see `REVIEW_THREADS_UNRESOLVED` below. The older
+`CODEX_UNRESOLVED_FINDINGS` code reads a `codex-review-state:v1` marker that nothing in this
+repository publishes, so it blocks nothing on its own and is kept only as an extra source.
 
 ## Refused automatically (hard, with an explicit reason code)
 
@@ -77,11 +80,64 @@ technical: the `reviewer`/`builder` session ids are declared by the reviewer, no
   database credential lives in `production-approval`, which needs a human).
 - `CI_*`, `REVIEW_*`, `CODEX_UNRESOLVED_FINDINGS:*`, `FILE_LIST_TRUNCATED`, `PATCH_MISMATCH`,
   `CHERRY_PICK_CONFLICT_OR_EMPTY`, `RELEASE_NOT_SERIALIZED`, `RELEASE_FROZEN`.
+- `REVIEW_THREADS_UNRESOLVED:<n>:<paths>` / `REVIEW_CHANGES_REQUESTED:<author>` — a real review
+  conversation left unresolved, or a standing `CHANGES_REQUESTED`, whoever opened it. The change
+  request stands until its own author `APPROVED`s or it is `DISMISSED`, on any commit — a new push
+  does not answer an objection, and a `COMMENTED` review is not a decision, so it never cancels
+  one (GitHub records a reply in a thread as `COMMENTED`, and agent sessions write with the
+  owner's identity, so the opposite rule would let an agent clear the owner's objection). An
+  unsubmitted (`PENDING`) review on the exact head is `REVIEW_PENDING_SUBMISSION`; an unknown
+  state or an unparsable timestamp is `REVIEW_STATE_UNREADABLE`; equal timestamps keep the
+  blocking review. Added 2026-11-16 after the Codex review of #456/#458: `CODEX_UNRESOLVED_FINDINGS`
+  reads only a `codex-review-state:v1` marker that nothing in the repository publishes, so an
+  inline finding alone could not stop a release. Threads come from GraphQL (`isResolved` exists
+  nowhere else); an **outdated** thread still counts, because the line moved, not the finding.
+  Fail closed: a failed read is `REVIEW_THREADS_UNKNOWN` / `REVIEW_STATES_UNKNOWN`.
+- `WORKER_DEPLOY_REQUIRED:<files>` — the change touches the screening worker or a module it shares
+  with the app. `deploy-screening-worker.yml` is `workflow_dispatch` only, so a merge to `main`
+  updates the Vercel app and leaves the Edge Function on its old version; a changed dispatch
+  contract (for example the signature header in `lib/screening-hmac.ts`) would then stop CV
+  analyses silently, since the production smoke test runs no real analysis. The held set is the
+  worker's import closure computed from the release commit (`workerClosure`, 26 files today, all
+  of them `supabase/functions/**` or `lib/**`, none under `app/`) plus `DISPATCH_COUNTERPARTS`,
+  the app-side half of the same contract. Only files that exist in the tree enter the closure: a
+  specifier written without an extension is resolved to the real file, because adding the bare
+  path would drop that file and everything it imports out of the gate. Candidates tried for a
+  specifier without an extension: the path itself, `.ts`, `.tsx`, `.mts`, `.d.ts`, `.js`, `.mjs`
+  and the `index.*` of a directory of that name; `@/x` is resolved from the repository root, and
+  only a blob counts, because a directory also satisfies an existence check. A specifier that
+  resolves to nothing, an unreadable tree or the iteration limit all give `WORKER_SCOPE_UNKNOWN`
+  — the closure is all or nothing, never silently truncated. A
+  reverse import scan was tried and rejected: it could not be made precise and held two dozen
+  unrelated UI files.
+  **Cost, and it is a real one:** the closure holds 25 `lib/` modules that change often
+  (`lib/screening.ts`, `lib/screening-ai.ts`, `lib/cv-bulk.ts`, `lib/ai-gateway/*`), so this code
+  will trip frequently, and today nothing in the automatic path can clear it — deploying the
+  worker is `workflow_dispatch` plus `production-approval`, both human steps. That contradicts the
+  owner's standing rule that no release step may need his click. The owner was told the cost in
+  chat on 2026-11-16 and did not object, which is **not** the same as approving it; no decision of
+  his is recorded in the repository. The way out is to make the worker deploy part of the release
+  instead of widening the gate — until then, a release touching these files waits for a human.
 - After deploy: `SMOKE_FAILED` / `DEPLOYMENT_NOT_CONFIRMED` → rollback + freeze. If the release
   had touched data through a migration, the log and the freeze issue also carry
   **`ROLLBACK_INSUFFICIENT_DATA_CHANGED`**: reverting code does not restore data.
 
-A held PR gets one comment with the reason; a new commit (new SHA) and a new review retry it.
+A PR held by these gates is only logged (run log and step summary) and retried on the next run; a
+new commit (new SHA) and a new review retry it too. A `HELD` comment on the PR is written only
+where the hold must survive restarts: a refusal found again right before the merge, a release whose own CI went red
+(`RELEASE_CI_FAILED`), or a failed start. Why a hold was written decides whether the same commit may be reconsidered. A `scope` hold
+(payments, destructive SQL, provenance, the release's own CI) cannot change without a new commit
+and holds for good. Two kinds can change on their own and are reconsidered by the next run:
+`transient` — every reason code ends in `_UNKNOWN`, so an evidence read failed and said nothing
+about the change; bounded by `TRANSIENT_ATTEMPTS` (3), because each attempt costs a cherry-pick, a
+release PR and a CI run, after which it becomes a `scope` hold. `review` — the review state said
+no (`REVIEW_*`): resolving the conversation or withdrawing the change request is exactly how that
+is answered, and the commit must then become releasable again, because a closed PR cannot get a
+new SHA and a permanent hold would mean a correct change, already on `integration`, never reaching
+production. Unbounded, and cheap: while the review state still says no, `evaluate` refuses before
+any cherry-pick, so the run opens nothing.
+`REVIEW_PENDING_SUBMISSION` is defence in depth only: GitHub shows a `PENDING` review to its
+author alone, so the publisher's App token will not normally see one.
 
 ## Nightly restore drill
 

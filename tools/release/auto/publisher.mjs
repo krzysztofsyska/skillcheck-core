@@ -92,13 +92,9 @@ async function candidates(d) {
 }
 
 function heldFor(comments, headSha, botLogin) {
-  if (!botLogin) return false;
-  const re = new RegExp(`<!--\\s*${HELD}\\s+(\\{[^<>]{1,400}\\})\\s*-->`);
-  return comments.some(c => {
-    if (c?.user?.login !== botLogin) return false;
-    const m = re.exec(c.body ?? ''); if (!m) return false;
-    try { return JSON.parse(m[1]).head_sha === headSha; } catch { return false; }
-  });
+  // Only a `scope` hold (an unmarked one, or an older marker without `kind`) holds this commit.
+  // `transient` and `review` holds are reconsidered by the next run — see `hold` above.
+  return markers(comments, headSha, botLogin).some(j => j.kind !== 'transient' && j.kind !== 'review' && j.transient !== true);
 }
 
 async function evaluate(d, pr, comments) {
@@ -129,13 +125,80 @@ async function evaluate(d, pr, comments) {
       .map(p => ({ path: p, patch: d.git('diff', parent, full.merge_commit_sha, '--', p) }));
     unreleasedMigrations = d.git('diff', '--name-only', 'origin/main', parent, '--', 'supabase/migrations').split('\n').filter(Boolean);
   } catch { /* left null: the policy denies */ }
+  // Unresolved review conversations and standing change requests must block on their own:
+  // the marker codexGate looks for is published by nothing today. Any read failure leaves
+  // these null and the policy refuses (REVIEW_THREADS_UNKNOWN / REVIEW_STATES_UNKNOWN).
+  let reviewThreads = null; let reviews = null;
+  try { reviewThreads = await d.gh.reviewThreads(full.number); } catch { /* left null: the policy denies */ }
+  try { reviews = await d.gh.paginate(`/pulls/${full.number}/reviews`); } catch { /* left null: the policy denies */ }
+  // Which files the hand-deployed screening worker would carry: itself plus its import closure.
+  let workerModules = null;
+  try { workerModules = workerClosure(d, full.merge_commit_sha); } catch { /* left null: the policy denies */ }
   return evaluateCandidate({
-    patches, unreleasedMigrations, provenance,
+    patches, unreleasedMigrations, provenance, reviewThreads, reviews, workerModules,
     pr: { number: full.number, merged: full.merged === true, head_sha: full.head.sha, merge_commit_sha: full.merge_commit_sha, base_ref: full.base.ref },
     files: paths, migrations, checkRuns: checks?.check_runs, comments,
     migrationExecutor: false, backups: d.backups ?? null, now: d.now(),
   });
 }
+
+/**
+ * Every repository file the hand-deployed Supabase Edge Functions depend on: each function's
+ * entry file plus the transitive closure of its relative imports, read from the release commit.
+ * Used by `workerGate`: a change to any of these ships to Vercel while the worker stays on its
+ * old version, so it is held for a deploy of the worker. Throws if the tree cannot be read,
+ * so a missing closure refuses the release instead of silently allowing it.
+ */
+export function workerClosure(d, commit) {
+  const entries = d.git('ls-tree', '-r', '--name-only', commit, 'supabase/functions/')
+    .split('\n').filter(f => /\/index\.(ts|js|mjs)$/.test(f));
+  if (!entries.length) throw new Error('WORKER_ENTRY_MISSING');
+  const seen = new Set(entries); const queue = [...entries];
+  // `from '...'`, a bare `import '...'` side-effect import, and dynamic `import('...')`.
+  const IMPORT = /(?:^|[\s;{(])(?:import|export)\b[^'"`;]*?from\s*['"]([^'"]+)['"]|(?:^|[\s;{(])import\s*['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  // A specifier written without an extension (TypeScript/Next style) must still resolve to the
+  // file it means; adding the bare specifier would put a path that does not exist in the closure
+  // and silently drop that whole subtree — and with it the gate for every file under it.
+  const CANDIDATES = ['', '.ts', '.tsx', '.mts', '.d.ts', '.js', '.mjs', '/index.ts', '/index.tsx', '/index.mts', '/index.js', '/index.mjs'];
+  const isFile = p => d.git.ok('cat-file', '-e', `${commit}:${p}`)
+    && d.git('cat-file', '-t', `${commit}:${p}`).trim() === 'blob'; // a directory also passes -e
+  for (let i = 0; queue.length; i++) {
+    if (i >= 2000) throw new Error('WORKER_CLOSURE_LIMIT'); // never truncate in silence
+    const file = queue.shift();
+    let text; try { text = d.git('show', `${commit}:${file}`); } catch { continue; }
+    for (const m of text.matchAll(IMPORT)) {
+      const spec = m[1] ?? m[2] ?? m[3];
+      // `@/x` is the repository-root alias used by the app; npm:/jsr:/https: are not files here.
+      if (!spec || !(spec.startsWith('.') || spec.startsWith('@/'))) continue;
+      const from = spec.startsWith('@/') ? spec.slice(2) : `${file.split('/').slice(0, -1).join('/')}/${spec}`;
+      const parts = from.split('/');
+      const out = [];
+      for (const p of parts) {
+        if (p === '.' || p === '') continue;
+        if (p === '..') out.pop(); else out.push(p);
+      }
+      const base = out.join('/');
+      if (!base) continue;
+      const resolved = CANDIDATES.map(ext => `${base}${ext}`).find(isFile);
+      // A specifier that resolves to nothing would silently cut this file and everything it
+      // imports out of the gate, so it is an error, not a skip: the closure is all or nothing.
+      if (!resolved) throw new Error(`WORKER_IMPORT_UNRESOLVED:${`${file} -> ${spec}`.slice(0, 80)}`);
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+      queue.push(resolved);
+    }
+  }
+  // The app side of the dispatch contract: it signs and sends what the worker verifies, so a
+  // change there splits the two halves exactly as a change to a shared module would, even
+  // though the worker does not import it. Kept as an explicit list rather than a reverse
+  // import scan, which cannot be made precise enough without holding unrelated UI files;
+  // `tests/auto-release-policy.test.mjs` fails if one of these stops being part of the
+  // contract, so a rename cannot quietly drop it.
+  for (const f of DISPATCH_COUNTERPARTS) if (d.git.ok('cat-file', '-e', `${commit}:${f}`)) seen.add(f);
+  return [...seen];
+}
+
+export const DISPATCH_COUNTERPARTS = ['lib/screening-dispatch.ts'];
 
 function patchId(d, from, to) {
   const diff = d.git('diff', '--binary', from, to);
@@ -328,7 +391,22 @@ async function finish(d, pr, started) {
   const r = await mergeAndVerify(d, started, recheck);
   if (r.stage === 'recheck') {
     await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
-    if (!r.codes.includes('RELEASE_FROZEN')) await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200));
+    // A read that failed (every code ends in _UNKNOWN) says nothing about the change itself, so
+    // it must not cost this commit its release for good. It is retried — but a bounded number of
+    // times: each attempt costs a cherry-pick, a release PR and a full CI run, so an evidence
+    // source that stays unreadable would otherwise repeat that every run, for ever. After
+    // TRANSIENT_ATTEMPTS the hold becomes permanent like any other and waits for a new commit.
+    let kind = 'scope';
+    if (isReviewState(r.codes)) kind = 'review';
+    else if (isTransient(r.codes)) {
+      // Counted from the PR's own comments, read here: `finish` does not receive them, and the
+      // list must be fresh — an earlier run of this same release may have added a marker since.
+      const seenSoFar = countTransient(await d.gh.paginate(`/issues/${pr.number}/comments`), pr.head.sha, d.appBotLogin);
+      if (seenSoFar + 1 < TRANSIENT_ATTEMPTS) kind = 'transient';
+    }
+    if (!r.codes.includes('RELEASE_FROZEN')) {
+      await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200), kind);
+    }
     return { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
   }
   if (r.stage === 'ci') {
@@ -376,10 +454,46 @@ async function rollbackRelease(d, { mergeSha, sourcePr }) {
   return { ok: r.ok, codes: r.ok ? [] : [`ROLLBACK_${String(r.stage).toUpperCase()}_FAILED`, ...(r.codes ?? [])] };
 }
 
-async function hold(d, pr, reason) {
+// Why a hold was written decides whether it may ever be reconsidered for the same commit.
+// `scope` (payments, destructive SQL, provenance, a failed CI of the release itself…) cannot
+// change without a new commit, so it holds for good. The other two can change on their own:
+//  - `transient`: an evidence read failed. Says nothing about the change. Retried, but bounded by
+//    TRANSIENT_ATTEMPTS, because every attempt costs a cherry-pick, a release PR and a CI run.
+//  - `review`: the review state said no (an unresolved conversation, a standing change request).
+//    Resolving the conversation is exactly how that is answered, and then the commit must become
+//    releasable again — a closed PR cannot get a new SHA, so a permanent hold here would mean a
+//    correct change, already on `integration`, never reaching production. Unbounded, and cheap:
+//    `evaluate` reads the review state before any cherry-pick, so while it still says no the run
+//    ends without opening anything.
+export const TRANSIENT_ATTEMPTS = 3;
+export const isTransient = codes => Array.isArray(codes) && codes.length > 0 && codes.every(c => /_UNKNOWN$/.test(String(c)));
+export const isReviewState = codes => Array.isArray(codes) && codes.length > 0
+  && codes.every(c => /^REVIEW_/.test(String(c))) && !isTransient(codes);
+
+async function hold(d, pr, reason, kind = 'scope') {
+  const note = {
+    transient: 'Dowodu nie udało się odczytać, to nie jest ocena samej zmiany — kolejny przebieg spróbuje ponownie.',
+    review: 'Stan review blokuje wydanie. Po zamknięciu wątku lub wycofaniu żądania zmian kolejny przebieg oceni tę wersję ponownie, bez nowego commita.',
+    scope: 'Nowy commit w tym PR (nowy SHA) i nowe review odblokowują ponowną próbę.',
+  }[kind] ?? 'Nowy commit w tym PR (nowy SHA) i nowe review odblokowują ponowną próbę.';
+  const mark = { head_sha: pr.head.sha, reason: String(reason).slice(0, 200), ...(kind === 'scope' ? {} : { kind }) };
   await d.gh.post(`/issues/${pr.number}/comments`, {
-    body: `Automatyczne wydanie wstrzymane: \`${reason}\`. Nowy commit w tym PR (nowy SHA) i nowe review odblokowują ponowną próbę.\n\n<!-- ${HELD} ${JSON.stringify({ head_sha: pr.head.sha, reason: String(reason).slice(0, 200) })} -->`,
+    body: `Automatyczne wydanie wstrzymane: \`${reason}\`. ${note}\n\n<!-- ${HELD} ${JSON.stringify(mark)} -->`,
   });
+}
+
+function markers(comments, headSha, botLogin) {
+  if (!botLogin) return [];
+  const re = new RegExp(`<!--\\s*${HELD}\\s+(\\{[^<>]{1,400}\\})\\s*-->`);
+  return (Array.isArray(comments) ? comments : []).flatMap(c => {
+    if (c?.user?.login !== botLogin) return [];
+    const m = re.exec(c.body ?? ''); if (!m) return [];
+    try { const j = JSON.parse(m[1]); return j?.head_sha === headSha ? [j] : []; } catch { return []; }
+  });
+}
+
+function countTransient(comments, headSha, botLogin) {
+  return markers(comments, headSha, botLogin).filter(j => j.kind === 'transient' || j.transient === true).length;
 }
 
 async function openFreeze(d, codes, where, details = {}) {
