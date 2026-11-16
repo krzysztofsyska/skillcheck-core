@@ -27,8 +27,9 @@ const LOCK_MAX_PAGES = 10;
 const RELEASE_JOB = 'release';
 const RELEASE_STEPS = ['merge', 'deploy', 'smoke'];
 const UNBLOCK_JOB = 'unblock';
-// Upper bound on later successful runs inspected for a proof; more → fail closed.
-const FREEZE_MAX_CANDIDATES = 25;
+// Upper bound on runs inspected for a proof per read (newest first); past it nothing more is
+// proven and the freeze stays.
+const FREEZE_MAX_PROOF_READS = 25;
 // Stage 4i: task records come only from the protected `agent-state` branch, all files read
 // at ONE pinned commit. Keys must already be filesystem-safe (no safeTaskId collisions).
 const STATE_REF = 'agent-state';
@@ -54,7 +55,7 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
     codexReader ??= createCodexEvidenceReader({ client, repository, reviewerId: codexReviewerId });
     return codexReader;
   };
-  // Stage 4l: does completed run `id` of the pinned promote workflow prove that the freeze may
+  // Stage 4l: does completed run `r` of the pinned promote workflow prove that the freeze may
   // be cleared? Two proofs only, both from GitHub-origin run data (never PR text):
   //  1. RELEASE: its latest-attempt job `release` concluded success and its steps `merge`,
   //     `deploy` and `smoke` each concluded success (a skipped step is not success);
@@ -62,7 +63,29 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
   //     the pinned production-approval environment by the pinned owner id.
   // Any malformed, truncated or foreign response throws → READ_LOCK_FAILED → DENY. A run that
   // proves neither (e.g. a DENY no-op that ended as success) returns false: the freeze stays.
-  const proveClearing = async id => {
+  const facts = run => ({ id: run.id, runNumber: run.run_number, conclusion: run.conclusion,
+    runAttempt: run.run_attempt, headBranch: run.head_branch, headSha: run.head_sha, event: run.event, path: run.path });
+  // A proof counts only from the pinned workflow file, dispatched on `main`, at a commit that
+  // is reachable from the current protected `main` (a branch or tag copy of the workflow could
+  // otherwise define a fake `release`/`unblock` job). Any doubt → not trusted → no proof.
+  let mainSha = null;
+  const trustedRun = async r => {
+    const path = policy.workflows?.promote;
+    if (typeof path !== 'string' || !path || r.path !== path || r.event !== 'workflow_dispatch'
+      || r.headBranch !== 'main' || !SHA.test(r.headSha ?? '')) return false;
+    if (!mainSha) {
+      const ref = await get(`${root}/git/ref/heads/main`);
+      if (ref?.ref !== 'refs/heads/main' || ref.object?.type !== 'commit' || !SHA.test(ref.object?.sha ?? '')) throw new Error('LOCK_MAIN_UNREADABLE');
+      mainSha = ref.object.sha;
+    }
+    if (r.headSha === mainSha) return true;
+    const c = await get(`${root}/compare/${mainSha}...${r.headSha}?per_page=1`);
+    if (c?.base_commit?.sha !== mainSha || !Number.isSafeInteger(c.ahead_by) || !Number.isSafeInteger(c.behind_by)) throw new Error('LOCK_MAIN_UNREADABLE');
+    return c.status === 'behind' && c.ahead_by === 0 && c.behind_by > 0 && c.merge_base_commit?.sha === r.headSha;
+  };
+  const proveClearing = async r => {
+    if (r.conclusion !== 'success' || !(await trustedRun(r))) return false;
+    const id = r.id;
     const res = await get(`${root}/actions/runs/${id}/jobs?filter=latest&per_page=100`);
     const jobs = res?.jobs;
     if (!Array.isArray(jobs) || !Number.isSafeInteger(res.total_count) || res.total_count !== jobs.length || jobs.length >= 100) throw new Error('LOCK_JOBS_INCOMPLETE');
@@ -263,7 +286,7 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
       const pages = Math.ceil(first.total / LOCK_PAGE);
       if (pages > LOCK_MAX_PAGES) throw new Error('LOCK_INCOMPLETE');
       const seen = new Map();
-      const meta = new Map(); // id -> { runNumber, conclusion } from the latest read of that run
+      const meta = new Map(); // id -> run facts from the latest read of that run (stage 4l)
       for (let n = 1; n <= Math.max(pages, 1); n += 1) {
         const p = n === 1 ? first : await page(n);
         if (p.total !== first.total) throw new Error('LOCK_INCOMPLETE');
@@ -271,7 +294,7 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
         for (const run of p.runs) {
           if (seen.has(run.id)) throw new Error('LOCK_INCOMPLETE');
           seen.set(run.id, run.status);
-          meta.set(run.id, { runNumber: run.run_number, conclusion: run.conclusion });
+          meta.set(run.id, facts(run));
         }
       }
       if (seen.size !== first.total) throw new Error('LOCK_INCOMPLETE');
@@ -281,33 +304,44 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
       // A completed run can be re-run (same id, active again): a run is active if ANY read saw it active.
       for (const run of again.runs) {
         if (run.status !== 'completed') seen.set(run.id, run.status);
-        meta.set(run.id, { runNumber: run.run_number, conclusion: run.conclusion });
+        meta.set(run.id, facts(run));
       }
       let inflight = 0;
       for (const status of seen.values()) if (status !== 'completed') inflight += 1;
-      // Stage 4l: a failed release freezes later ones. The freeze starts at the most recent
-      // (highest run_number) completed run whose conclusion is not exactly 'success' (missing or
-      // unknown counts as failed). A run's own 'success' is NOT enough to clear it: a DENY also
-      // ends as success. Only a later run that PROVES a release or an explicit owner-verified
-      // unblock clears it (see proveClearing). A duplicated run_number is ambiguous and throws.
+      // Stage 4l: a failed release freezes later ones. A run's own 'success' never clears it (a
+      // DENY also ends as success), so the reader looks for a freeze START and then for a later
+      // run that PROVES a release or an owner-verified unblock (see proveClearing).
+      // Freeze start = the highest-run_number completed run that either concluded anything but
+      // exactly 'success' (missing/unknown included), or is a RE-RUN (run_attempt !== 1, or
+      // missing/invalid): the listing shows only the latest attempt, so a re-run can hide an
+      // earlier failed attempt behind a DENY no-op. A re-run counts only if it proves clearing
+      // itself. A duplicated run_number is ambiguous and throws.
       const completed = [];
       const numbers = new Set();
       for (const [id, status] of seen) {
         const m = meta.get(id);
         if (numbers.has(m.runNumber)) throw new Error('LOCK_INCOMPLETE');
         numbers.add(m.runNumber);
-        if (status === 'completed') completed.push({ id, ...m });
+        if (status === 'completed') completed.push(m);
       }
-      let failed = null;
-      for (const r of completed) if (r.conclusion !== 'success' && (!failed || r.runNumber > failed.runNumber)) failed = r;
-      if (!failed) return { held: inflight > 0, inflight, freeze: null };
-      const later = completed.filter(r => r.runNumber > failed.runNumber).sort((a, b) => b.runNumber - a.runNumber);
-      if (later.length > FREEZE_MAX_CANDIDATES) throw new Error('LOCK_INCOMPLETE');
-      for (const r of later) {
-        if (await proveClearing(r.id)) return { held: inflight > 0, inflight, freeze: null };
+      completed.sort((x, y) => y.runNumber - x.runNumber); // newest first
+      let budget = FREEZE_MAX_PROOF_READS; // bounded proof reads; when exhausted, nothing is proven
+      const proves = async r => (budget-- > 0 ? proveClearing(r) : false);
+      let start = null;
+      for (const r of completed) {
+        if (r.conclusion !== 'success') { start = r; break; }
+        if (r.runAttempt !== 1 && !(await proves(r))) { start = r; break; }
       }
-      const conclusion = typeof failed.conclusion === 'string' ? failed.conclusion : 'unknown';
-      return { held: inflight > 0, inflight, freeze: { run_number: failed.runNumber, conclusion } };
+      const held = inflight > 0;
+      if (!start) return { held, inflight, freeze: null };
+      // Newest later runs first; the first proof clears. Older later runs past the budget are
+      // simply not inspected: the freeze stays (never a throw that would also block an unblock).
+      for (const r of completed) {
+        if (r.runNumber <= start.runNumber) break;
+        if (await proves(r)) return { held, inflight, freeze: null };
+      }
+      const conclusion = start.conclusion !== 'success' ? (typeof start.conclusion === 'string' ? start.conclusion : 'unknown') : 'rerun';
+      return { held, inflight, freeze: { run_number: start.runNumber, conclusion } };
     },
     async readCodexEvidence(args) {
       return codex()(args);

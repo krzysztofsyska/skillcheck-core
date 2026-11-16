@@ -51,7 +51,11 @@ test('CI evidence: exact SHA, pinned app, unique run', async () => {
 });
 
 const PROMOTE = 42;
-const run = (id, status = 'completed', o = {}) => ({ id, workflow_id: PROMOTE, status, run_number: id, conclusion: status === 'completed' ? 'success' : null, ...o });
+const PROMOTE_PATH = '.github/workflows/agent-promote.yml';
+const MAIN = 'a'.repeat(40);
+const OLD_MAIN = 'b'.repeat(40);
+const run = (id, status = 'completed', o = {}) => ({ id, workflow_id: PROMOTE, status, run_number: id, run_attempt: 1,
+  conclusion: status === 'completed' ? 'success' : null, event: 'workflow_dispatch', head_branch: 'main', head_sha: MAIN, path: PROMOTE_PATH, ...o });
 // Serves an unfiltered, paginated listing. `script` may return a different run list per call
 // (call index starts at 0) to model runs changing between requests.
 const mkLock = (runsOrScript = [], opts = {}) => {
@@ -67,6 +71,12 @@ const mkLock = (runsOrScript = [], opts = {}) => {
     }
     const appr = u.pathname.match(/^\/repos\/o\/r\/actions\/runs\/(\d+)\/approvals$/);
     if (appr) return opts.approvals?.[appr[1]] ?? [];
+    if (u.pathname === '/repos/o/r/git/ref/heads/main') return opts.mainRef ?? { ref: 'refs/heads/main', object: { type: 'commit', sha: MAIN } };
+    const cmp = u.pathname.match(/^\/repos\/o\/r\/compare\/([0-9a-f]{40})\.\.\.([0-9a-f]{40})$/);
+    if (cmp) {
+      if (cmp[2] === OLD_MAIN) return { status: 'behind', ahead_by: 0, behind_by: 3, base_commit: { sha: cmp[1] }, merge_base_commit: { sha: OLD_MAIN } };
+      return { status: 'diverged', ahead_by: 1, behind_by: 3, base_commit: { sha: cmp[1] }, merge_base_commit: { sha: OLD_MAIN } };
+    }
     assert.equal(u.searchParams.get('status'), null);
     const all = typeof runsOrScript === 'function' ? runsOrScript(call) : runsOrScript;
     call += 1;
@@ -74,7 +84,7 @@ const mkLock = (runsOrScript = [], opts = {}) => {
     const per = Number(u.searchParams.get('per_page'));
     return { total_count: opts.total ?? all.length, workflow_runs: all.slice((n - 1) * per, n * per) };
   } });
-  return { c, r: createAutoReleaseReaders({ client: c, repository: 'o/r', policy: { workflow_ids: { promote: PROMOTE }, ...opts.policy } }) };
+  return { c, r: createAutoReleaseReaders({ client: c, repository: 'o/r', policy: { workflow_ids: { promote: PROMOTE }, workflows: { promote: PROMOTE_PATH }, ...opts.policy } }) };
 };
 test('lock: one unfiltered snapshot, free only when every promote run is completed, GET only', async () => {
   const { c, r } = mkLock([run(1), run(2)]);
@@ -207,8 +217,44 @@ test('lock (4l): unreadable, foreign, truncated or ambiguous proof data fails cl
   ];
   for (const j of bad) await assert.rejects(mkLock(base, { jobs: { 2: j } }).r.readLock(), /LOCK_JOBS_/);
   await assert.rejects(mkLock(base, { jobs: { 2: jobsOf(job(2, 'unblock')) }, approvals: { 2: {} }, policy: unblockPolicy }).r.readLock(), /LOCK_APPROVALS_INCOMPLETE/);
-  // more later successful runs than the inspection bound → refuse rather than guess
-  await assert.rejects(mkLock([failed(1), ...Array.from({ length: 26 }, (_, k) => run(k + 2))]).r.readLock(), /LOCK_INCOMPLETE/);
+  await assert.rejects(mkLock(base, { jobs: { 2: jobsOf(releaseJob(2)) }, mainRef: { ref: 'refs/heads/main', object: { type: 'commit', sha: 'x' } } }).r.readLock(), /LOCK_MAIN_UNREADABLE/);
+});
+test('lock (4l): a re-run hiding a failed attempt behind a DENY success keeps the freeze (review finding 1)', async () => {
+  // Run 7 failed, then was re-run; attempt 2 was a DENY no-op that ended as success.
+  for (const attempt of [2, 3, undefined, null, '1', 0]) {
+    assert.deepEqual((await mkLock([run(6), run(7, 'completed', { run_attempt: attempt })], { jobs: { 7: jobsOf(job(7, 'qualify')) } }).r.readLock()).freeze,
+      { run_number: 7, conclusion: 'rerun' });
+  }
+  // A later plain DENY success does not clear the re-run freeze either.
+  assert.deepEqual((await mkLock([run(7, 'completed', { run_attempt: 2 }), run(8)]).r.readLock()).freeze, { run_number: 7, conclusion: 'rerun' });
+  // A re-run that itself proves a release is not a freeze start.
+  assert.equal((await mkLock([failed(5), run(7, 'completed', { run_attempt: 2 })], { jobs: { 7: jobsOf(releaseJob(7)) } }).r.readLock()).freeze, null);
+  // ...and a later proven release clears a re-run freeze.
+  assert.equal((await mkLock([run(7, 'completed', { run_attempt: 2 }), run(8)], { jobs: { 8: jobsOf(releaseJob(8)) } }).r.readLock()).freeze, null);
+});
+test('lock (4l): proof only from the pinned workflow dispatched on main at a commit on main (review finding 2)', async () => {
+  const frozen = { run_number: 1, conclusion: 'failure' };
+  const proof = { jobs: { 2: jobsOf(releaseJob(2)) } };
+  for (const o of [{ head_branch: 'feature-x' }, { event: 'push' }, { event: 'schedule' }, { path: '.github/workflows/other.yml' },
+    { path: `${PROMOTE_PATH}@refs/heads/feature-x` }, { head_sha: 'c'.repeat(40) } /* tag/branch named main, not on main */, { head_sha: 'nope' }]) {
+    assert.deepEqual((await mkLock([failed(1), run(2, 'completed', o)], proof).r.readLock()).freeze, frozen, JSON.stringify(o));
+  }
+  // workflow path not pinned → no proof possible
+  assert.deepEqual((await mkLock([failed(1), run(2)], { ...proof, policy: { workflows: {} } }).r.readLock()).freeze, frozen);
+  // an older main commit (reachable from main) is accepted
+  assert.equal((await mkLock([failed(1), run(2, 'completed', { head_sha: OLD_MAIN })], proof).r.readLock()).freeze, null);
+  // the unblock path has the same restriction
+  const unblock = { jobs: { 2: jobsOf(job(2, 'unblock')) }, approvals: { 2: [ownerApproval()] }, policy: unblockPolicy };
+  assert.deepEqual((await mkLock([failed(1), run(2, 'completed', { head_branch: 'feature-x' })], unblock).r.readLock()).freeze, frozen);
+});
+test('lock (4l): many DENY runs after a failure never make the newest owner unblock unreachable (review finding 3)', async () => {
+  const many = Array.from({ length: 40 }, (_, k) => run(k + 2));
+  const lock = await mkLock([failed(1), ...many], { jobs: { 41: jobsOf(job(41, 'unblock')) }, approvals: { 41: [ownerApproval()] }, policy: unblockPolicy }).r.readLock();
+  assert.equal(lock.freeze, null);
+  // Without any proof the freeze stays and the read does not throw.
+  assert.deepEqual((await mkLock([failed(1), ...many]).r.readLock()).freeze, { run_number: 1, conclusion: 'failure' });
+  // A proof older than the newest 25 is not inspected: the freeze stays (fail closed, no throw).
+  assert.deepEqual((await mkLock([failed(1), ...many], { jobs: { 3: jobsOf(releaseJob(3)) } }).r.readLock()).freeze, { run_number: 1, conclusion: 'failure' });
 });
 test('lock (4l): missing, invalid or duplicated run_number fails closed', async () => {
   await assert.rejects(mkLock([run(1, 'completed', { run_number: undefined })]).r.readLock(), /LOCK_FOREIGN_RUN/);
