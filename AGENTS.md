@@ -38,7 +38,7 @@ The owner is not technical and has limited time at the computer. Agents do all t
 - Never ask the owner to click through GitHub, Vercel or Supabase, run tests, check a browser console, copy handoffs or look up settings. Agents read these themselves through their tools.
 - If a check needs something the agent does not have (an account, a credential, a test database), report it as a blocker together with a proposal that removes the need for the owner next time.
 - Prefer automated checks (CI, browser tests) over manual verification by the owner.
-- The owner's own actions are limited to: production approval, merging the promotion PR into `main`, new costs, and external or irreversible actions. For each, give the owner a direct link and say exactly what to click.
+- The owner's own actions are limited to: production approval, new costs, and external or irreversible actions. The `integration -> main` promotion PR is merged by a reviewer session under the owner decision of 2026-11-16 quoted in Production loop step 3. For each, give the owner a direct link and say exactly what to click.
 
 ## Required task metadata
 
@@ -123,14 +123,14 @@ Since 2026-11-16 single reviewed PRs reach production through the automatic publ
 
 1. Orchestrator prepares a promotion PR from `integration` to `main`.
 2. CI/review must be green.
-3. Owner is asked: PRODUCTION APPROVAL — YES/NO.
-4. Without explicit YES, do not merge promotion PR and do not deploy DB/functions/secrets.
+3. Owner decision 2026-11-16 (his own message in chat, 15:19, confirmed 15:21), quoted verbatim: „Sesja recenzenta może scalić promocję integration → main, gdy testy są zielone na dokładnej wersji i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów i ustawień, zakaz kasowania danych i nowych kosztów.” A reviewer session therefore merges the promotion PR only when CI is green on its exact head SHA and an independent review returned PASS on that same SHA. The builder never merges it.
+4. Not changed by that decision: migrations reach production only through `db-migrate-production` after the owner's approval (Production access rule 1); no session deploys functions or changes secrets or settings, deletes data or adds costs; the payment-path freeze stays.
 5. After YES, orchestrator may promote and execute the approved production runbook.
 6. Smoke tests and production documentation are required before DONE.
 
 ## Prohibited actions without explicit owner production approval
 
-- merge/push production promotion to `main`
+- push to `main`, or merge into `main` anything other than the `integration -> main` promotion PR merged by a reviewer session under Production loop step 3 (owner decision 2026-11-16: „Sesja recenzenta może scalić promocję integration → main, gdy testy są zielone na dokładnej wersji i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów i ustawień, zakaz kasowania danych i nowych kosztów.”)
 - `supabase db push` against production
 - production Edge Function deploy
 - production secret changes
@@ -154,7 +154,7 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 
    With the owner's identity an agent session **never**:
    - approves the `production-approval` environment or any pull request review;
-   - merges or pushes anything to `main`, including production promotion PRs. Automatic releases to `main` are merged only by the publisher workflow with the pipeline GitHub App identity, never by an agent session;
+   - merges or pushes anything to `main`, with one exception: a reviewer session may merge the `integration -> main` promotion PR when CI is green on its exact head SHA and an independent review returned PASS on that SHA (owner decision 2026-11-16: „Sesja recenzenta może scalić promocję integration → main, gdy testy są zielone na dokładnej wersji i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów i ustawień, zakaz kasowania danych i nowych kosztów.”). A builder session never merges into `main`. Automatic releases to `main` are merged only by the publisher workflow with the pipeline GitHub App identity, never by an agent session;
    - changes rulesets, branch protection, environments, repository settings, secrets or deploy keys;
    - deletes branches it did not create.
 
