@@ -121,3 +121,40 @@ test('lock reader alone never turns the decision into ALLOW', async () => {
   assert.ok(!d.reasons.includes('COLLECT:READ_LOCK_FAILED'));
   assert.ok(d.reasons.includes('P24_HOLD'));
 });
+
+// Stage 4e: Codex evidence wired through the auto-release readers.
+import { codexAggregateProblems } from '../../tools/agent-pipeline/lib/codex-evidence.mjs';
+const H1 = '1'.repeat(40), MG1 = '2'.repeat(40), RID = 199175422;
+const codexManifest = { integration_sha: I, main_sha: M, tasks: [{ task_id: 'T1', head_sha: H1, merge_sha: MG1 }], commits: [MG1] };
+const codexArgs = { repository: 'o/r', base: M, head: I, manifest: codexManifest };
+const codexClient = (over = {}) => mkClient({ client: {
+  readPullsForCommit: async () => [{ number: 5 }],
+  readPull: async () => ({ number: 5, merged: true, base: { ref: 'integration', repo: { full_name: 'o/r' } }, merge_commit_sha: MG1 }),
+  readCommit: async s => ({ sha: s, parents: [{ sha: '9'.repeat(40) }, { sha: H1 }] }),
+  readReviews: async () => [{ id: 7, user: { id: RID, login: 'chatgpt-codex-connector[bot]' }, commit_id: H1, state: 'COMMENTED', body: 'No major issues.', submitted_at: 't' }],
+  readReviewThreads: async () => over.threads ?? [{ isResolved: true }],
+  ...over.client } });
+const mkCodex = (c, codexReviewerId) => createAutoReleaseReaders({ client: c, repository: 'o/r', policy: {}, codexReviewerId });
+
+test('codex reader: unpinned reviewer id fails closed with an explicit error', async () => {
+  for (const id of [undefined, 0, -1, '199175422', 1.5]) await assert.rejects(mkCodex(codexClient(), id).readCodexEvidence(codexArgs), /CODEX_REVIEWER_NOT_PINNED/);
+});
+test('codex reader: client without the read-only Codex methods is refused', async () => {
+  await assert.rejects(mkCodex(mkClient(), RID).readCodexEvidence(codexArgs), /CODEX_CLIENT_INVALID/);
+});
+test('codex reader: pinned reviewer yields an aggregate the evaluator accepts only for the same pin', async () => {
+  const c = codexClient();
+  const ev = await mkCodex(c, RID).readCodexEvidence(codexArgs);
+  const current = { repository: 'o/r', integrationSha: I, mainSha: M };
+  assert.equal(ev.source, 'trusted_codex_reader');
+  assert.deepEqual(codexAggregateProblems(ev, { current, manifest: codexManifest, reviewerId: RID }), []);
+  assert.ok(codexAggregateProblems(ev, { current, manifest: codexManifest, reviewerId: 42 }).includes('CODEX_REVIEWER_MISMATCH'));
+  assert.ok(c.calls.every(([m]) => m === 'GET'));
+});
+test('codex reader: open thread or foreign reviewer never becomes clean evidence', async () => {
+  const open = await mkCodex(codexClient({ threads: [{ isResolved: false }] }), RID).readCodexEvidence(codexArgs);
+  const current = { repository: 'o/r', integrationSha: I, mainSha: M };
+  assert.ok(codexAggregateProblems(open, { current, manifest: codexManifest, reviewerId: RID }).includes('CODEX_OPEN_FINDINGS'));
+  await assert.rejects(mkCodex(codexClient(), 42).readCodexEvidence(codexArgs), /CODEX_REVIEW_MISSING_FOR_HEAD/);
+  await assert.rejects(mkCodex(codexClient(), RID).readCodexEvidence({ ...codexArgs, repository: 'x/y' }), /CODEX_INPUT_INVALID/);
+});
