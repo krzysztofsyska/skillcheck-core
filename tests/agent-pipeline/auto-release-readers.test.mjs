@@ -205,3 +205,68 @@ test('review check alone does not authorize a release without independent scope 
   assert.ok(!d.reasons.includes('COLLECT:READ_REVIEW_FAILED'));
   assert.ok(d.reasons.includes('SCOPE_VERDICT_MISSING') || d.reasons.includes('NO_PROMOTION_MANIFEST'));
 });
+
+// Stage 4i: task records from the protected agent-state branch, pinned to one commit.
+const S1 = 'c'.repeat(40), S2 = 'd'.repeat(40);
+const b64 = v => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64');
+const mkState = ({ tasks = { 'SC-1': { task_id: 'SC-1', state_revision: 3 } }, index, refs = [S1, S1], ref, files = {} } = {}) => {
+  let refCall = 0;
+  const idx = index ?? { schema_version: 1, tasks: Object.fromEntries(Object.entries(tasks).map(([k, r]) => [k, { revision: r?.state_revision }])) };
+  const c = mkClient({ request: async p => {
+    if (p === '/repos/o/r/git/ref/heads/agent-state') {
+      const sha = refs[Math.min(refCall++, refs.length - 1)];
+      return ref ?? { ref: 'refs/heads/agent-state', object: { type: 'commit', sha } };
+    }
+    const m = /^\/repos\/o\/r\/contents\/(state\/[^?]+)\?ref=([0-9a-f]{40})$/.exec(p);
+    if (!m) throw Object.assign(new Error('unexpected ' + p), { status: 404 });
+    assert.equal(m[2], S1, 'every file is read at the pinned commit');
+    const path = m[1];
+    if (Object.hasOwn(files, path)) return files[path];
+    const body = path === 'state/index.json' ? idx : tasks[/state\/tasks\/(.+)\.json$/.exec(path)?.[1]];
+    if (body === undefined) throw Object.assign(new Error('nf'), { status: 404 });
+    return { type: 'file', path, encoding: 'base64', content: b64(body) };
+  } });
+  return { c, r: mk(c) };
+};
+
+test('records: read at one pinned agent-state commit, GET only', async () => {
+  const { c, r } = mkState({ tasks: { 'SC-1': { task_id: 'SC-1', state_revision: 3 }, 'SC-2': { task_id: 'SC-2', state_revision: 1 } } });
+  const recs = await r.readRecords();
+  assert.deepEqual(Object.keys(recs), ['SC-1', 'SC-2']);
+  assert.equal(recs['SC-2'].state_revision, 1);
+  assert.equal(Object.getPrototypeOf(recs), null);
+  assert.ok(c.calls.every(([m]) => m === 'GET'));
+  assert.deepEqual(Object.keys(await mkState({ tasks: {} }).r.readRecords()), []);
+});
+test('records: moved ref, missing branch or bad ref is refused', async () => {
+  await assert.rejects(mkState({ refs: [S1, S2] }).r.readRecords(), /RECORDS_RACE/);
+  await assert.rejects(mkState({ ref: { ref: 'refs/heads/agent-state', object: { type: 'tag', sha: S1 } } }).r.readRecords(), /RECORDS_REF_INVALID/);
+  await assert.rejects(mkState({ ref: { ref: 'refs/heads/other', object: { type: 'commit', sha: S1 } } }).r.readRecords(), /RECORDS_REF_INVALID/);
+  const missing = mk(mkClient({ request: async () => { throw Object.assign(new Error('nf'), { status: 404 }); } }));
+  await assert.rejects(missing.readRecords(), /nf/);
+});
+test('records: malformed index, files and keys are refused', async () => {
+  await assert.rejects(mkState({ index: { schema_version: 2, tasks: {} } }).r.readRecords(), /RECORDS_INDEX_INVALID/);
+  await assert.rejects(mkState({ index: { schema_version: 1, tasks: [] } }).r.readRecords(), /RECORDS_INDEX_INVALID/);
+  const big = Object.fromEntries(Array.from({ length: 501 }, (_, i) => [`T${i}`, { revision: 1 }]));
+  await assert.rejects(mkState({ index: { schema_version: 1, tasks: big } }).r.readRecords(), /RECORDS_TOO_MANY/);
+  for (const key of ['a/b', '../x', 'a b', '', 'x'.repeat(129)]) {
+    await assert.rejects(mkState({ index: { schema_version: 1, tasks: { [key]: { revision: 1 } } } }).r.readRecords(), /RECORDS_TASK_ID_INVALID/);
+  }
+  const proto = JSON.parse('{"schema_version":1,"tasks":{"__proto__":{"revision":1}}}');
+  await assert.rejects(mkState({ index: proto }).r.readRecords(), /RECORDS_TASK_ID_INVALID/);
+  await assert.rejects(mkState({ files: { 'state/index.json': { type: 'file', path: 'state/index.json', encoding: 'none', content: '' } } }).r.readRecords(), /RECORDS_FILE_UNREADABLE/);
+  await assert.rejects(mkState({ files: { 'state/index.json': { type: 'file', path: 'state/other.json', encoding: 'base64', content: b64({}) } } }).r.readRecords(), /RECORDS_FILE_UNREADABLE/);
+  await assert.rejects(mkState({ files: { 'state/tasks/SC-1.json': { type: 'file', path: 'state/tasks/SC-1.json', encoding: 'base64', content: b64('{not json') } } }).r.readRecords(), /RECORDS_FILE_INVALID/);
+});
+test('records: task_id or revision disagreeing with the index is refused', async () => {
+  await assert.rejects(mkState({ tasks: { 'SC-1': { task_id: 'SC-9', state_revision: 3 } } }).r.readRecords(), /RECORDS_INCONSISTENT/);
+  await assert.rejects(mkState({ index: { schema_version: 1, tasks: { 'SC-1': { revision: 4 } } } }).r.readRecords(), /RECORDS_INCONSISTENT/);
+  await assert.rejects(mkState({ index: { schema_version: 1, tasks: { 'SC-1': { revision: '3' } } } }).r.readRecords(), /RECORDS_INCONSISTENT/);
+  await assert.rejects(mkState({ tasks: { 'SC-1': [] }, index: { schema_version: 1, tasks: { 'SC-1': { revision: 1 } } } }).r.readRecords(), /RECORDS_INCONSISTENT/);
+});
+test('records failure feeds the collector as READ_RECORDS_FAILED (DENY)', async () => {
+  const d = await qualifyRelease({ readers: mkState({ refs: [S1, S2] }).r, trusted: { p24Hold: false }, policy: {} });
+  assert.equal(d.decision, 'DENY');
+  assert.ok(d.reasons.includes('COLLECT:READ_RECORDS_FAILED'));
+});

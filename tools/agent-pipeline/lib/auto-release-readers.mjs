@@ -1,8 +1,9 @@
 // SC-AUTO-RELEASE (#369) stage 4a: GitHub-backed READ-ONLY readers for the collector.
 // Only GET requests through an injected client (plus the one fixed read-only GraphQL query
-// used for review threads). The review evidence reader and the scope-verdict issuer are
-// deliberately NOT provided here: the collector then records COLLECT:* errors and the
-// decision is DENY (fail closed). The released ledger is derived from `main` (stage 4g).
+// used for review threads). The independent scope-verdict issuer is deliberately NOT
+// provided here: the collector then records COLLECT:READ_SCOPE_VERDICT_FAILED and the
+// decision is DENY (fail closed). The released ledger is derived from `main` (stage 4g);
+// task records come from the protected `agent-state` branch (stage 4i).
 import { decodeGithubContent } from './github.mjs';
 import { withRulesetEvidence } from './ruleset-evidence.mjs';
 import { createCodexEvidenceReader } from './codex-evidence.mjs';
@@ -21,6 +22,13 @@ const SAFE_PATH = /^[A-Za-z0-9._\-/]+$/;
 // runs are dropped locally; any other or unknown status holds the lock. Bounded pagination.
 const LOCK_PAGE = 100;
 const LOCK_MAX_PAGES = 10;
+// Stage 4i: task records come only from the protected `agent-state` branch, all files read
+// at ONE pinned commit. Keys must already be filesystem-safe (no safeTaskId collisions).
+const STATE_REF = 'agent-state';
+const TASK_KEY = /^[A-Za-z0-9._-]{1,128}$/;
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_RECORDS = 500;
+const plainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 /**
  * @param codexReviewerId  numeric GitHub id of the Codex reviewer, pinned by the TRUSTED caller
@@ -53,6 +61,43 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
       return { ...c, complete: true };
     },
     readReleasePlan: ref => client.readReleasePlan(ref),
+    // Stage 4i (#369): task records for preparePromotion, read-only from the protected
+    // `agent-state` branch (the controller's journal projection; protection is checked
+    // separately by evaluateAutoRelease via agentStateProtected). The ref is resolved once,
+    // the index and every task file are read at that exact commit, and the ref is re-read
+    // at the end: a moved ref, a missing/oversized/non-JSON file, a key that is not already
+    // safe, a record whose task_id or state_revision disagrees with the index, or more than
+    // MAX_RECORDS tasks throws, so the collector records READ_RECORDS_FAILED and DENIES.
+    // A missing branch is an error too (never "no records"). Never written, never PR text.
+    async readRecords() {
+      const resolve = async () => {
+        const ref = await get(`${root}/git/ref/heads/${STATE_REF}`);
+        const sha = ref?.object?.sha;
+        if (ref?.ref !== `refs/heads/${STATE_REF}` || ref.object.type !== 'commit' || !SHA.test(sha ?? '')) throw new Error('RECORDS_REF_INVALID');
+        return sha;
+      };
+      const readJson = async (path, head) => {
+        const file = await get(`${root}/contents/${path}?ref=${head}`);
+        if (file?.type !== 'file' || file.path !== path || file.encoding !== 'base64' || typeof file.content !== 'string') throw new Error('RECORDS_FILE_UNREADABLE');
+        try { return JSON.parse(decodeGithubContent(file)); } catch { throw new Error('RECORDS_FILE_INVALID'); }
+      };
+      const head = await resolve();
+      const index = await readJson('state/index.json', head);
+      if (!plainObject(index) || index.schema_version !== 1 || !plainObject(index.tasks)) throw new Error('RECORDS_INDEX_INVALID');
+      const keys = Object.keys(index.tasks);
+      if (keys.length > MAX_RECORDS) throw new Error('RECORDS_TOO_MANY');
+      const records = Object.create(null);
+      for (const key of keys) {
+        if (!TASK_KEY.test(key) || RESERVED_KEYS.has(key)) throw new Error('RECORDS_TASK_ID_INVALID');
+        const entry = index.tasks[key];
+        const record = await readJson(`state/tasks/${key}.json`, head);
+        if (!plainObject(record) || record.task_id !== key || !plainObject(entry)
+            || !Number.isSafeInteger(entry.revision) || record.state_revision !== entry.revision) throw new Error('RECORDS_INCONSISTENT');
+        records[key] = record;
+      }
+      if (await resolve() !== head) throw new Error('RECORDS_RACE');
+      return records;
+    },
     async readRulesets() {
       const listed = await get(`${root}/rulesets?per_page=100`);
       if (!Array.isArray(listed) || listed.length >= 100) throw new Error('RULESETS_INCOMPLETE');
