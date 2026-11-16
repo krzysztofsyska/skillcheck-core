@@ -35,7 +35,7 @@ Never ask, just do:
 - technical and product-detail choices inside the agreed MVP scope (technical limits such as file size or rate limits — not package sizes or CV counts; wording, error handling, data minimisation, test setup). Pick the safer option, write the reasoning in the PR description and mention it in one line in the report.
 
 Still the owner's decision (ask once, YES/NO with a recommendation, all open questions in one message):
-- a full `integration -> main` promotion outside the automatic publisher (single reviewed PRs are released automatically since 2026-11-16, #369);
+- approving production migrations in `production-approval` (rule 1 in `AGENTS.md`). The `integration -> main` promotion itself is merged by the independent reviewer session after green CI and its PASS on the exact SHA (owner decision 2026-11-16, rule 5 in `AGENTS.md`);
 - new costs (paid services, plans, domains);
 - external or irreversible actions (any contact with real candidates or customers by any channel, deleting real data, changing production settings or secrets);
 - billing and charge actions, including package or balance changes in `/operator/billing` on production;

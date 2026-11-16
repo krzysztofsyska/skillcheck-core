@@ -38,7 +38,7 @@ The owner is not technical and has limited time at the computer. Agents do all t
 - Never ask the owner to click through GitHub, Vercel or Supabase, run tests, check a browser console, copy handoffs or look up settings. Agents read these themselves through their tools.
 - If a check needs something the agent does not have (an account, a credential, a test database), report it as a blocker together with a proposal that removes the need for the owner next time.
 - Prefer automated checks (CI, browser tests) over manual verification by the owner.
-- The owner's own actions are limited to: production approval, merging the promotion PR into `main`, new costs, and external or irreversible actions. For each, give the owner a direct link and say exactly what to click.
+- The owner's own actions are limited to: approving production migrations in `production-approval` (rule 1), new costs, and external or irreversible actions. Merging the `integration -> main` promotion is done by the independent reviewer session (rule 5, owner decision 2026-11-16). For each, give the owner a direct link and say exactly what to click.
 
 ## Required task metadata
 
@@ -123,14 +123,14 @@ Since 2026-11-16 single reviewed PRs reach production through the automatic publ
 
 1. Orchestrator prepares a promotion PR from `integration` to `main`.
 2. CI/review must be green.
-3. Owner is asked: PRODUCTION APPROVAL — YES/NO.
-4. Without explicit YES, do not merge promotion PR and do not deploy DB/functions/secrets.
+3. Standing owner approval (2026-11-16, rule 5): an independent reviewer session merges the promotion PR when every required check is green on the exact head SHA and its own PASS verdict names that SHA. The owner is not asked per promotion.
+4. Production migrations, functions and secrets still need the owner: migrations only through `db-migrate-production` with his approval in `production-approval` (rule 1); functions and secrets as before.
 5. After YES, orchestrator may promote and execute the approved production runbook.
 6. Smoke tests and production documentation are required before DONE.
 
 ## Prohibited actions without explicit owner production approval
 
-- merge/push production promotion to `main`
+- merge/push production promotion to `main` — except the standing approval in rule 5 (independent reviewer, green CI + PASS on the exact SHA)
 - `supabase db push` against production
 - production Edge Function deploy
 - production secret changes
@@ -150,11 +150,12 @@ These rules apply to every agent session (Claude, Cursor, Codex, ChatGPT) and to
 5. GitHub identity of agent sessions (owner decision 2026-10-29, variant B). The target is the `skillcheck-agent-ks[bot]` GitHub App token for every agent write. Until a session can use it, an agent session may act through the owner's GitHub identity **only** for:
    - commits and pushes to task branches (never to `main` or `integration` directly);
    - opening and updating pull requests, review replies and comments;
-   - merging a pull request into `integration` under the Review loop rules (CI green and an independent review with no unresolved findings on the current commit).
+   - merging a pull request into `integration` under the Review loop rules (CI green and an independent review with no unresolved findings on the current commit);
+   - **merging an `integration -> main` promotion PR (owner decision 2026-11-16, his messages of 15:19/15:21 quoted in PR #463 and in session https://claude.ai/code/session_01TVLzgcKNUtgiz4KTVzeVwF)**, only when all of this holds: the session is an independent reviewer with fresh context that built none of the changes in the promotion; every required check is green on the exact head SHA; its own verdict on that PR is PASS and names that SHA (`sc-review-verdict:v1` marker); it merges with that SHA pinned (`expectedHeadSha`). Unchanged by this: the payment-path freeze, no secret/settings changes, no data deletion, no new costs, and production migrations only through `db-migrate-production` with the owner's approval (rule 1).
 
    With the owner's identity an agent session **never**:
    - approves the `production-approval` environment or any pull request review;
-   - merges or pushes anything to `main`, including production promotion PRs. Automatic releases to `main` are merged only by the publisher workflow with the pipeline GitHub App identity, never by an agent session;
+   - pushes anything to `main`, or merges anything into `main` other than the promotion PR allowed above (the builder of a change never merges it). Automatic releases (`release/auto-*`) are merged only by the publisher workflow with the pipeline GitHub App identity;
    - changes rulesets, branch protection, environments, repository settings, secrets or deploy keys;
    - deletes branches it did not create.
 
