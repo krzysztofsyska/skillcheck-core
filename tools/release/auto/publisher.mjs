@@ -92,13 +92,9 @@ async function candidates(d) {
 }
 
 function heldFor(comments, headSha, botLogin) {
-  if (!botLogin) return false;
-  const re = new RegExp(`<!--\\s*${HELD}\\s+(\\{[^<>]{1,400}\\})\\s*-->`);
-  return comments.some(c => {
-    if (c?.user?.login !== botLogin) return false;
-    const m = re.exec(c.body ?? ''); if (!m) return false;
-    try { return JSON.parse(m[1]).head_sha === headSha; } catch { return false; }
-  });
+  // A transient hold (a failed evidence read) does not hold the PR: the next run retries it,
+  // bounded by TRANSIENT_ATTEMPTS, after which a permanent hold is written instead.
+  return markers(comments, headSha, botLogin).some(j => j.transient !== true);
 }
 
 async function evaluate(d, pr, comments) {
@@ -163,15 +159,19 @@ export function workerClosure(d, commit) {
   // A specifier written without an extension (TypeScript/Next style) must still resolve to the
   // file it means; adding the bare specifier would put a path that does not exist in the closure
   // and silently drop that whole subtree — and with it the gate for every file under it.
-  const CANDIDATES = ['', '.ts', '.tsx', '.mts', '.js', '.mjs', '/index.ts', '/index.tsx', '/index.js'];
+  const CANDIDATES = ['', '.ts', '.tsx', '.mts', '.d.ts', '.js', '.mjs', '/index.ts', '/index.tsx', '/index.mts', '/index.js', '/index.mjs'];
+  const isFile = p => d.git.ok('cat-file', '-e', `${commit}:${p}`)
+    && d.git('cat-file', '-t', `${commit}:${p}`).trim() === 'blob'; // a directory also passes -e
   for (let i = 0; queue.length; i++) {
     if (i >= 2000) throw new Error('WORKER_CLOSURE_LIMIT'); // never truncate in silence
     const file = queue.shift();
     let text; try { text = d.git('show', `${commit}:${file}`); } catch { continue; }
     for (const m of text.matchAll(IMPORT)) {
       const spec = m[1] ?? m[2] ?? m[3];
-      if (!spec || !spec.startsWith('.')) continue; // npm:/jsr:/https: are not repository files
-      const parts = `${file.split('/').slice(0, -1).join('/')}/${spec}`.split('/');
+      // `@/x` is the repository-root alias used by the app; npm:/jsr:/https: are not files here.
+      if (!spec || !(spec.startsWith('.') || spec.startsWith('@/'))) continue;
+      const from = spec.startsWith('@/') ? spec.slice(2) : `${file.split('/').slice(0, -1).join('/')}/${spec}`;
+      const parts = from.split('/');
       const out = [];
       for (const p of parts) {
         if (p === '.' || p === '') continue;
@@ -179,8 +179,11 @@ export function workerClosure(d, commit) {
       }
       const base = out.join('/');
       if (!base) continue;
-      const resolved = CANDIDATES.map(ext => `${base}${ext}`).find(p => d.git.ok('cat-file', '-e', `${commit}:${p}`));
-      if (!resolved || seen.has(resolved)) continue; // only real files enter the closure
+      const resolved = CANDIDATES.map(ext => `${base}${ext}`).find(isFile);
+      // A specifier that resolves to nothing would silently cut this file and everything it
+      // imports out of the gate, so it is an error, not a skip: the closure is all or nothing.
+      if (!resolved) throw new Error(`WORKER_IMPORT_UNRESOLVED:${`${file} -> ${spec}`.slice(0, 80)}`);
+      if (seen.has(resolved)) continue;
       seen.add(resolved);
       queue.push(resolved);
     }
@@ -389,9 +392,14 @@ async function finish(d, pr, started) {
   if (r.stage === 'recheck') {
     await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
     // A read that failed (every code ends in _UNKNOWN) says nothing about the change itself, so
-    // it must not cost this commit its release for good: no HELD marker, the next run retries.
-    const transient = r.codes.length > 0 && r.codes.every(c => /_UNKNOWN$/.test(c));
-    if (!r.codes.includes('RELEASE_FROZEN') && !transient) await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200));
+    // it must not cost this commit its release for good. It is retried — but a bounded number of
+    // times: each attempt costs a cherry-pick, a release PR and a full CI run, so an evidence
+    // source that stays unreadable would otherwise repeat that every run, for ever. After
+    // TRANSIENT_ATTEMPTS the hold becomes permanent like any other and waits for a new commit.
+    const transient = isTransient(r.codes) && countTransient(comments, pr.head.sha, d.appBotLogin) + 1 < TRANSIENT_ATTEMPTS;
+    if (!r.codes.includes('RELEASE_FROZEN')) {
+      await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200), transient);
+    }
     return { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
   }
   if (r.stage === 'ci') {
@@ -439,10 +447,32 @@ async function rollbackRelease(d, { mergeSha, sourcePr }) {
   return { ok: r.ok, codes: r.ok ? [] : [`ROLLBACK_${String(r.stage).toUpperCase()}_FAILED`, ...(r.codes ?? [])] };
 }
 
-async function hold(d, pr, reason) {
+// A hold recorded as `transient` is a failed read, not a verdict on the change: `heldFor` steps
+// over it so the next run retries, and `countTransient` bounds how often that may happen.
+export const TRANSIENT_ATTEMPTS = 3;
+export const isTransient = codes => Array.isArray(codes) && codes.length > 0 && codes.every(c => /_UNKNOWN$/.test(String(c)));
+
+async function hold(d, pr, reason, transient = false) {
+  const note = transient
+    ? 'Dowodu nie udało się odczytać, to nie jest ocena samej zmiany — kolejny przebieg spróbuje ponownie.'
+    : 'Nowy commit w tym PR (nowy SHA) i nowe review odblokowują ponowną próbę.';
   await d.gh.post(`/issues/${pr.number}/comments`, {
-    body: `Automatyczne wydanie wstrzymane: \`${reason}\`. Nowy commit w tym PR (nowy SHA) i nowe review odblokowują ponowną próbę.\n\n<!-- ${HELD} ${JSON.stringify({ head_sha: pr.head.sha, reason: String(reason).slice(0, 200) })} -->`,
+    body: `Automatyczne wydanie wstrzymane: \`${reason}\`. ${note}\n\n<!-- ${HELD} ${JSON.stringify({ head_sha: pr.head.sha, reason: String(reason).slice(0, 200), ...(transient ? { transient: true } : {}) })} -->`,
   });
+}
+
+function markers(comments, headSha, botLogin) {
+  if (!botLogin) return [];
+  const re = new RegExp(`<!--\\s*${HELD}\\s+(\\{[^<>]{1,400}\\})\\s*-->`);
+  return (Array.isArray(comments) ? comments : []).flatMap(c => {
+    if (c?.user?.login !== botLogin) return [];
+    const m = re.exec(c.body ?? ''); if (!m) return [];
+    try { const j = JSON.parse(m[1]); return j?.head_sha === headSha ? [j] : []; } catch { return []; }
+  });
+}
+
+function countTransient(comments, headSha, botLogin) {
+  return markers(comments, headSha, botLogin).filter(j => j.transient === true).length;
 }
 
 async function openFreeze(d, codes, where, details = {}) {

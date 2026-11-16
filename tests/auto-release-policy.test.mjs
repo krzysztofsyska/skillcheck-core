@@ -314,3 +314,20 @@ test('C10b: the worker closure holds real files only, and covers extensionless i
   assert.ok(closure.includes('lib/supabase/database.types.ts'), 'extensionless import resolved to the real file');
   assert.ok(closure.every(f => /\.(ts|tsx|mts|js|mjs)$/.test(f)), 'no bare specifiers');
 });
+
+// C11 (#460 review, runda 2): ponawianie po nieudanym odczycie musi być ograniczone i musi
+// odróżniać "nie dało się sprawdzić" od "sprawdzone i odrzucone". Brak tego testu pozwolił
+// recenzentowi podmienić logikę na "zawsze ponawiaj" bez ani jednego czerwonego testu.
+test('C11: tylko powody _UNKNOWN są przejściowe, i tylko ograniczoną liczbę razy', async () => {
+  const { isTransient, TRANSIENT_ATTEMPTS } = await import('../tools/release/auto/publisher.mjs');
+  assert.equal(isTransient(['REVIEW_THREADS_UNKNOWN']), true);
+  assert.equal(isTransient(['WORKER_SCOPE_UNKNOWN', 'REVIEW_STATES_UNKNOWN']), true);
+  // jeden powód mówiący coś o samej zmianie odbiera całości charakter przejściowy
+  assert.equal(isTransient(['REVIEW_THREADS_UNKNOWN', 'PAYMENT_PATH_FREEZE:app/kup/page.tsx']), false);
+  assert.equal(isTransient(['REVIEW_CHANGES_REQUESTED:bot']), false);
+  assert.equal(isTransient([]), false, 'brak powodów nie jest przejściowy');
+  assert.equal(isTransient(null), false);
+  // dopasowanie po końcówce, nie po początku: kod zaczynający się od UNKNOWN nie jest przejściowy
+  assert.equal(isTransient(['UNKNOWN_THING']), false, 'tylko końcówka _UNKNOWN liczy się jako nieudany odczyt');
+  assert.ok(Number.isInteger(TRANSIENT_ATTEMPTS) && TRANSIENT_ATTEMPTS >= 2 && TRANSIENT_ATTEMPTS <= 10);
+});

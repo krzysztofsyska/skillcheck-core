@@ -53,6 +53,8 @@ export function createGithub({ token, repository, fetchImpl = fetch }) {
         out.push({ resolved: n?.isResolved === true, outdated: n?.isOutdated === true, path: n?.comments?.nodes?.[0]?.path ?? null });
       }
       if (!t.pageInfo.hasNextPage) return out;
+      // hasNextPage with no usable cursor would repeat the same page until the limit.
+      if (typeof t.pageInfo.endCursor !== 'string' || !t.pageInfo.endCursor) throw new Error('REVIEW_THREADS_CURSOR_MISSING');
       cursor = t.pageInfo.endCursor;
     }
     throw new Error('REVIEW_THREADS_PAGINATION_LIMIT');

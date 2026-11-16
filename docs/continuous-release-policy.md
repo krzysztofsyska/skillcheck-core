@@ -102,8 +102,12 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   of them `supabase/functions/**` or `lib/**`, none under `app/`) plus `DISPATCH_COUNTERPARTS`,
   the app-side half of the same contract. Only files that exist in the tree enter the closure: a
   specifier written without an extension is resolved to the real file, because adding the bare
-  path would drop that file and everything it imports out of the gate. An unreadable closure, or
-  one that hits the iteration limit, is `WORKER_SCOPE_UNKNOWN` — never a truncated closure. A
+  path would drop that file and everything it imports out of the gate. Candidates tried for a
+  specifier without an extension: the path itself, `.ts`, `.tsx`, `.mts`, `.d.ts`, `.js`, `.mjs`
+  and the `index.*` of a directory of that name; `@/x` is resolved from the repository root, and
+  only a blob counts, because a directory also satisfies an existence check. A specifier that
+  resolves to nothing, an unreadable tree or the iteration limit all give `WORKER_SCOPE_UNKNOWN`
+  — the closure is all or nothing, never silently truncated. A
   reverse import scan was tried and rejected: it could not be made precise and held two dozen
   unrelated UI files.
   **Cost, and it is a real one:** the closure holds 21 `lib/` modules that change often
@@ -120,9 +124,14 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
 
 A PR held by these gates is only logged (run log and step summary) and retried on the next run; a
 new commit (new SHA) and a new review retry it too. A `HELD` comment on the PR is written only
-where the hold must survive restarts: a refusal found again right before the merge, or a failed
-start. A hold whose every reason code ends in `_UNKNOWN` (a read that failed, saying nothing about
-the change) writes no marker, so the next run retries it instead of losing that release for good.
+where the hold must survive restarts: a refusal found again right before the merge, a release whose own CI went red
+(`RELEASE_CI_FAILED`), or a failed start. A hold whose every reason code ends in `_UNKNOWN` (a read that failed, saying nothing about the
+change) is recorded as `transient`: the next run steps over it and retries, because losing a
+release to one failed read would be wrong. That retry is bounded (`TRANSIENT_ATTEMPTS`, 3): each
+attempt costs a cherry-pick, a release PR and a full CI run, so an evidence source that stays
+unreadable becomes a permanent hold like any other and waits for a new commit.
+`REVIEW_PENDING_SUBMISSION` is defence in depth only: GitHub shows a `PENDING` review to its
+author alone, so the publisher's App token will not normally see one.
 
 ## Nightly restore drill
 
