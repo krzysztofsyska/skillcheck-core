@@ -39,6 +39,8 @@ const EXEMPT = [
   ['scripts/preview-freeze-guard.mjs', 'appends allow=... to the GitHub step output file'],
   ['tools/agent-pipeline/', 'CI runtime packets, journals and step outputs in working directories; nothing committed'],
   ['tools/release/promotion-manifest.mjs', 'records origin/main..origin/integration history to paths given on the command line; depends on remote refs, so it has no byte-for-byte --check (covered by tests/release-promotion-manifest.test.mjs)'],
+  ['tools/release/auto/', 'automatic publisher (#369): appends its decision to the GitHub step summary; nothing committed'],
+  ['tools/release/backup-drill/', 'nightly restore drill (#369): writes a report next to a throw-away dump in the runner; nothing committed'],
   ['tools/db-migrate/inspect.mjs', 'writes a read-only inspection report (inspection.json) from a live database; nothing committed'],
 ];
 // Generators whose output depends on the Node runtime itself. Behaviour is checked only when the runtime matches;
