@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { createGit } from '../tools/release/auto/git.mjs';
 import { runPublisher, releasedFromMain, readMarker, FREEZE_TITLE } from '../tools/release/auto/publisher.mjs';
+import { createWorkerDeployer } from '../tools/release/auto/worker-deploy.mjs';
 
 const ENV = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 Object.assign(process.env, ENV);
@@ -51,7 +52,7 @@ function fixture(prFiles) {
   const rg = createGit(runner);
   rg('config', 'user.name', 'bot'); rg('config', 'user.email', 'b@b');
   rg('fetch', 'origin', 'main', 'integration');
-  return { origin, git: rg, prs, originGit: createGit(origin) };
+  return { origin, runner, git: rg, prs, originGit: createGit(origin) };
 }
 
 const pass = sha => ({ author_association: 'OWNER', created_at: '2026-11-16T10:00:00Z', user: { login: 'owner' },
@@ -341,7 +342,8 @@ test('C4: a job dying before the revert PR exists: next run rolls back although 
   let smoke = 0; let pushes = 0;
   const d = deps(fx, gh, {
     smoke: async () => (++smoke <= 2 ? { ok: false, failures: ['/:STATUS_500'] } : { ok: true, failures: [] }),
-    beforePush: async () => { if (++pushes === 2) throw new Error('job killed before the revert branch was pushed'); },
+    // 1: release push, 2: fetch of the merged release for the worker step (#461), 3: revert push.
+    beforePush: async () => { if (++pushes === 3) throw new Error('job killed before the revert branch was pushed'); },
   });
   const r1 = await runPublisher(d);
   assert.equal(r1.status, 'ROLLBACK_FAILED');
@@ -528,4 +530,129 @@ test('C13: wstrzymanie z powodu review jest ponawiane po zamknięciu wątku', as
   assert.equal(second.status, 'RELEASED', JSON.stringify(second));
   assert.equal(second.source_pr, 100);
   assert.equal(fx.originGit('show', 'main:app/regulamin/page.tsx').trim(), 'v2');
+});
+
+// #461 stage 1: the worker deploy step. `workerGate` still refuses every worker release before the
+// merge, so these tests reach the step through the path that runs whatever is already on main: a
+// publisher release merged by a run that was killed before its check (C1). Same code as a fresh
+// release: verifyProduction -> afterDeploy -> rollback.
+function workerReleaseOnMain(fx, state, sourcePr = 100) {
+  const g = fx.git;
+  g('fetch', 'origin', 'main'); g('checkout', '-B', 'tmp-release', 'origin/main');
+  write(fx.runner, 'lib/screening-hmac.ts', 'export const HEADER = "x-sig-2";\n');
+  g('add', '.'); g('commit', '-m', `worker contract\n\nAuto-Release-Source-PR: #${sourcePr}\nAuto-Release-Source-Head: ${fx.prs[0].head}`);
+  const head = g('rev-parse', 'HEAD').trim();
+  g('push', 'origin', `HEAD:refs/heads/release/auto-pr-${sourcePr}`);
+  const merge = fx.originGit('commit-tree', `${head}^{tree}`, '-p', 'main', '-p', head, '-m', 'Merge pull request #950').trim();
+  fx.originGit('update-ref', 'refs/heads/main', merge);
+  state.merged.push(merge);
+  g('fetch', 'origin', 'main');
+  return merge;
+}
+const released = state => (state.comments[100] ?? []).filter(c => /sc-auto-release-done/.test(c.body) && /wydane/.test(c.body));
+
+test('#461: worker release is deployed from the exact merge SHA, after the merge and before smoke', async () => {
+  const fx = fixture([{ 'docs/x.md': 'x\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  const merge = workerReleaseOnMain(fx, state);
+  const order = [];
+  const r = await runPublisher(deps(fx, gh, {
+    deployWorker: async ({ sha }) => { order.push(`deploy:${sha}`); return { ok: true, sha }; },
+    smoke: async () => { order.push('smoke'); return { ok: true, failures: [] }; },
+  }));
+  assert.equal(r.status, 'NOTHING_TO_RELEASE', JSON.stringify(r));
+  assert.deepEqual(order, [`deploy:${merge}`, 'smoke']);
+  assert.equal(released(state).length, 1);
+  assert.equal(state.issues.length, 0);
+});
+
+test('#461: a failed or unconfirmed worker deploy rolls back, redeploys the worker from the reverted main, freezes, never marks released', async () => {
+  for (const answer of [{ ok: false, code: 'X' }, { ok: true }, { ok: true, sha: 'f'.repeat(40) }, 'throw']) {
+    const fx = fixture([{ 'docs/x.md': 'x\n' }]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    const merge = workerReleaseOnMain(fx, state);
+    const calls = []; let smoke = 0;
+    const r = await runPublisher(deps(fx, gh, {
+      deployWorker: async ({ sha }) => {
+        calls.push(sha);
+        if (calls.length > 1) return { ok: true, sha }; // the redeploy of the reverted main works
+        if (answer === 'throw') throw new Error('boom');
+        return answer;
+      },
+      smoke: async () => { smoke++; return { ok: true, failures: [] }; },
+    }));
+    assert.equal(r.status, 'ROLLED_BACK', JSON.stringify(r));
+    assert.ok(r.codes.includes('WORKER_DEPLOY_FAILED'), r.codes.join(','));
+    assert.equal(calls[0], merge);
+    assert.equal(calls.length, 2, 'worker redeployed from the reverted main');
+    assert.equal(calls[1], fx.originGit('rev-parse', 'main').trim());
+    assert.equal(smoke, 1, 'smoke runs only for the revert, never after a failed worker deploy');
+    assert.equal(fx.originGit('show', 'main:lib/screening-hmac.ts').trim(), 'export const HEADER = "x-sig";');
+    assert.equal(state.issues.length, 1); assert.match(state.issues[0].body, /WORKER_DEPLOY_FAILED/);
+    assert.equal(released(state).length, 0);
+  }
+});
+
+test('#461: no token (or no deploy step at all) fails closed: WORKER_DEPLOY_UNAVAILABLE, rollback, freeze', async () => {
+  for (const variant of ['no-token', 'no-dependency']) {
+    const fx = fixture([{ 'docs/x.md': 'x\n' }]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    workerReleaseOnMain(fx, state);
+    let spawned = 0;
+    const extra = variant === 'no-token'
+      ? { deployWorker: createWorkerDeployer({ git: fx.git, env: { SUPABASE_ACCESS_TOKEN: '  ' }, spawn: () => { spawned++; return { status: 0 }; } }) }
+      : {};
+    const r = await runPublisher(deps(fx, gh, extra));
+    assert.equal(r.status, 'ROLLED_BACK', JSON.stringify(r));
+    assert.ok(r.codes.includes('WORKER_DEPLOY_UNAVAILABLE'), r.codes.join(','));
+    assert.equal(spawned, 0, 'the CLI never runs without a token');
+    assert.equal(state.issues.length, 1); assert.match(state.issues[0].body, /WORKER_DEPLOY_UNAVAILABLE/);
+    assert.equal(released(state).length, 0);
+  }
+});
+
+test('#461: a release that does not touch the worker never calls the deploy step', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+  const { gh } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  let calls = 0;
+  const r = await runPublisher(deps(fx, gh, { deployWorker: async () => { calls++; return { ok: false }; } }));
+  assert.equal(r.status, 'RELEASED', JSON.stringify(r));
+  assert.equal(calls, 0);
+});
+
+test('#461: worker deployer runs the CLI on a worktree of the exact main SHA, with the token only, and needs its confirmation', async () => {
+  const fx = fixture([{ 'docs/x.md': 'x\n' }]);
+  const { state } = fakeGithub({ fx });
+  const merge = workerReleaseOnMain(fx, state);
+  const TOKEN = 'sbp_secret_token_value';
+  const seen = [];
+  const deployer = out => createWorkerDeployer({
+    git: fx.git, env: { SUPABASE_ACCESS_TOKEN: TOKEN, PATH: '/usr/bin', APP_PRIVATE_KEY: 'k' }, log: l => seen.push(l),
+    spawn: (cmd, args, opts) => {
+      assert.equal(cmd, 'supabase');
+      assert.deepEqual(args, ['functions', 'deploy', 'screening-worker', '--project-ref', 'wsvjawuikxfzjyivxgsu']);
+      assert.equal(createGit(opts.cwd)('rev-parse', 'HEAD').trim(), merge, 'deploys the exact SHA');
+      assert.notEqual(opts.cwd, fx.runner, 'never the publisher checkout');
+      assert.deepEqual(Object.keys(opts.env).sort(), ['PATH', 'SUPABASE_ACCESS_TOKEN']);
+      return out;
+    },
+  });
+  const ok = { status: 0, stdout: 'Deployed Functions on project wsvjawuikxfzjyivxgsu: screening-worker\n', stderr: '' };
+  assert.deepEqual(await deployer(ok)({ sha: merge }), { ok: true, sha: merge });
+  assert.equal((await deployer({ status: 0, stdout: 'done', stderr: '' })({ sha: merge })).code, 'WORKER_DEPLOY_NOT_CONFIRMED');
+  assert.equal((await deployer({ status: 1, stdout: '', stderr: `bad token ${TOKEN}\n` })({ sha: merge })).code, 'WORKER_DEPLOY_EXIT_1');
+  assert.ok(seen.every(l => !l.includes(TOKEN)), 'token never logged');
+  // not on main (an integration-only commit) and not a SHA: refused before anything runs
+  assert.equal((await deployer(ok)({ sha: fx.prs[0].merge })).code, 'WORKER_DEPLOY_NOT_ON_MAIN');
+  assert.equal((await deployer(ok)({ sha: 'main' })).code, 'WORKER_DEPLOY_SHA_INVALID');
+  assert.equal(fx.git('worktree', 'list').trim().split('\n').length, 1, 'worktrees cleaned up');
+});
+
+test('#461 stage 1: workflow sets up the pinned Supabase CLI and passes the token to the publisher only', async () => {
+  const { readFileSync } = await import('node:fs');
+  const wf = readFileSync(new URL('../.github/workflows/auto-release.yml', import.meta.url), 'utf8')
+    .split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+  assert.match(wf, /uses: supabase\/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1\.7\.3\n\s+with:\n\s+version: 2\.121\.0/);
+  assert.match(wf, /environment: agent-control/);
+  assert.doesNotMatch(wf, /production-approval/);
 });
