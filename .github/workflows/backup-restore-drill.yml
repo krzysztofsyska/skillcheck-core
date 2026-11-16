@@ -1,0 +1,69 @@
+# SC-AUTO-RELEASE (#369) point 5: nightly restore drill of the production database.
+#
+# production (read only, default_transaction_read_only=on, one REPEATABLE READ snapshot)
+#   -> pg_dump inside this runner
+#   -> pg_restore into a DISPOSABLE Postgres 17.6 container started in this runner
+#   -> completeness check (every table, exact row counts) and the pending migrations of
+#      `integration` applied on top of the restored copy
+#   -> report in the run summary (counts and SQLSTATE codes only, never row data).
+# The container, the dump and the report directory are removed at the end. Nothing is restored
+# into any Supabase project; no project is created. No manual start (no workflow_dispatch).
+#
+# Credential: secret BACKUP_DRILL_DATABASE_URL in environment `backup-drill` (no required
+# reviewers, deployment branch: main). It is NOT the production-approval environment. Until
+# the owner creates it, every run reports BLOCKED_MISSING_SECRET:BACKUP_DRILL_DATABASE_URL.
+name: Backup restore drill
+
+on:
+  schedule:
+    - cron: '41 2 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    if: github.repository == 'krzysztofsyska/skillcheck-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: backup-drill
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: integration
+          path: candidate
+          persist-credentials: false
+          sparse-checkout: supabase/migrations
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Disposable target database (tmpfs, removed at the end)
+        run: |
+          mkdir -p /tmp/drill/dump
+          # Same PostgreSQL minor as production (17.6) plus pg_cron, as in sc19-migrations.yml.
+          docker build -q --build-arg PG_MAJOR=17 --build-arg PG_IMAGE_TAG=17.6 -t drill-pg -f tests/fixtures/sc19-rehearsal.Dockerfile tests/fixtures
+          docker run -d --name drill-target --network host --tmpfs /var/lib/postgresql/data \
+            -e POSTGRES_PASSWORD=disposable-only drill-pg -p 55432 \
+            -c shared_preload_libraries=pg_cron -c cron.database_name=postgres
+          for i in $(seq 1 60); do docker exec drill-target pg_isready -h 127.0.0.1 -p 55432 -U postgres >/dev/null 2>&1 && break; sleep 1; done
+      - name: Restore drill
+        run: node tools/release/backup-drill/drill.mjs
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.BACKUP_DRILL_DATABASE_URL }}
+          TARGET_DATABASE_URL: postgresql://postgres:disposable-only@127.0.0.1:55432/postgres
+          DUMP_DIR: /tmp/drill/dump
+          MIGRATIONS_DIR: candidate/supabase/migrations
+          PG_IMAGE: drill-pg
+      - name: Destroy the disposable database and the dump
+        if: always()
+        run: |
+          docker rm -f drill-target >/dev/null 2>&1 || true
+          sudo rm -rf /tmp/drill

@@ -18,9 +18,9 @@ async function attempt(errors, code, fn) {
  * @param readers  injected, read-only:
  *   repository, readBranchSha(name), readRecords(), readComparisonComplete(base, head) -> {status, commits, files, complete},
  *   readReleasePlan(ref), readRulesets(), readEnvironments(), readMigrationSql(path, ref),
- *   readCiEvidence(sha), readReviewEvidence(sha), readCodexEvidence({repository, base, head, manifest}), readScopeVerdict({base, head, manifest}),
+ *   readCiEvidence(sha), readReviewEvidence(sha), readCodexEvidence({repository, base, head, manifest}),
  *   readLock(), readReleased({base, head}) -> [head] when head is already reachable from base, else []
- * @param trusted  { p24Hold } from trusted configuration; passed through untouched
+ * @param trusted  { codexReviewerId } from trusted configuration; passed through untouched
  * @param policy   pipeline policy (for protection evaluation)
  */
 export async function collectAutoReleaseInput({ readers, trusted, policy }) {
@@ -65,8 +65,6 @@ export async function collectAutoReleaseInput({ readers, trusted, policy }) {
   if (input.promotion?.manifest) {
     input.codex = await attempt(errors, 'READ_CODEX_FAILED',
       () => r.readCodexEvidence({ repository: r.repository, base: mainSha, head: integrationSha, manifest: input.promotion.manifest }));
-    input.scopeVerdict = await attempt(errors, 'READ_SCOPE_VERDICT_FAILED',
-      () => r.readScopeVerdict({ base: mainSha, head: integrationSha, manifest: input.promotion.manifest }));
   }
   input.lock = await attempt(errors, 'READ_LOCK_FAILED', () => r.readLock());
   input.released = await attempt(errors, 'READ_RELEASED_FAILED', () => r.readReleased({ base: mainSha, head: integrationSha }));
