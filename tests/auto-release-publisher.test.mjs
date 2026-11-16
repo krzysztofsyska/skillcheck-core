@@ -326,3 +326,66 @@ test('a merge commit that adds anything beyond the reviewed head is refused (evi
   assert.ok(r.held[0].reasons.includes('SECRETS_OR_PIPELINE:.github/workflows/extra.yml'));
   assert.equal(state.pulls.length, 0);
 });
+
+test('C4: a job dying before the revert PR exists: next run rolls back although frozen', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'broken\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  let smoke = 0; let pushes = 0;
+  const d = deps(fx, gh, {
+    smoke: async () => (++smoke <= 2 ? { ok: false, failures: ['/:STATUS_500'] } : { ok: true, failures: [] }),
+    beforePush: async () => { if (++pushes === 2) throw new Error('job killed before the revert branch was pushed'); },
+  });
+  const r1 = await runPublisher(d);
+  assert.equal(r1.status, 'ROLLBACK_FAILED');
+  assert.equal(state.issues.length, 1, 'frozen');
+  assert.equal(state.pulls.filter(p => p.state === 'open').length, 0, 'no revert PR was created');
+  fx.git('fetch', 'origin', 'main');
+  const r2 = await runPublisher({ ...d, beforePush: async () => {} });
+  assert.equal(r2.status, 'ROLLED_BACK', JSON.stringify(r2));
+  assert.throws(() => fx.originGit('cat-file', '-t', 'main:app/regulamin/page.tsx'), 'reverted on main');
+});
+
+test('C4: a job dying right after the rollback merge: next run completes the record and freezes', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'broken\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  let smoke = 0;
+  const post = gh.post;
+  let killed = false;
+  gh.post = async (p, b) => { if (!killed && /cofnięte/.test(b?.body ?? '')) { killed = true; throw new Error('job killed'); } return post(p, b); };
+  await assert.rejects(runPublisher(deps(fx, gh, { smoke: async () => (++smoke === 1 ? { ok: false, failures: ['x'] } : { ok: true, failures: [] }) })));
+  assert.equal(state.issues.length, 0, 'the kill happened before the freeze record');
+  fx.git('fetch', 'origin', 'main');
+  const r = await runPublisher(deps(fx, gh));
+  assert.equal(r.status, 'FROZEN'); assert.deepEqual(r.codes, ['ROLLBACK_RECORD_INCOMPLETE']);
+  assert.ok(state.comments[100].some(c => /sc-auto-release-done/.test(c.body)));
+});
+
+test('C5: the App installation token is refreshed before it expires (runs can outlast one token)', async () => {
+  const { generateKeyPairSync, createVerify } = await import('node:crypto');
+  const { createAppTokenProvider } = await import('../tools/release/auto/app-token.mjs');
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  let t = Date.parse('2026-11-16T10:00:00Z'); let minted = 0;
+  const fetchImpl = async (url, opts) => {
+    const jwt = opts.headers.authorization.replace('Bearer ', '');
+    const [h, b, sig] = jwt.split('.');
+    assert.ok(createVerify('RSA-SHA256').update(`${h}.${b}`).verify(publicKey, sig, 'base64url'), 'JWT signed by the App key');
+    assert.equal(JSON.parse(Buffer.from(b, 'base64url')).iss, '42');
+    if (url.endsWith('/app')) return { ok: true, status: 200, json: async () => ({ slug: 'skillcheck-agent-ks' }) };
+    assert.match(url, /\/app\/installations\/7\/access_tokens$/);
+    minted++;
+    return { ok: true, status: 201, json: async () => ({ token: `tok${minted}`, expires_at: new Date(t + 3600000).toISOString() }) };
+  };
+  const app = createAppTokenProvider({ appId: '42', installationId: '7', privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }), fetchImpl, now: () => t });
+  assert.equal(await app.slug(), 'skillcheck-agent-ks');
+  assert.equal(await app.token(), 'tok1');
+  t += 30 * 60000; assert.equal(await app.token(), 'tok1', 'reused while fresh');
+  t += 20 * 60000; assert.equal(await app.token(), 'tok2', 'refreshed 15 min before expiry');
+  assert.throws(() => createAppTokenProvider({ appId: '', installationId: '7', privateKey: 'x' }), /APP_CONFIG_MISSING/);
+});
+
+test('C5: workflow passes only the App credentials to the publisher; no one-hour action token', async () => {
+  const { readFileSync } = await import('node:fs');
+  const wf = readFileSync(new URL('../.github/workflows/auto-release.yml', import.meta.url), 'utf8');
+  assert.doesNotMatch(wf, /create-github-app-token/);
+  assert.match(wf, /APP_PRIVATE_KEY: \$\{\{ secrets\.AGENT_PIPELINE_APP_PRIVATE_KEY \}\}/);
+});
