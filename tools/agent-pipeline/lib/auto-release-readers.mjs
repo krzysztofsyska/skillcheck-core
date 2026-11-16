@@ -80,6 +80,30 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
       const c = mine[0];
       return { head_sha: c.head_sha, completed: c.status === 'completed', conclusion: c.conclusion ?? null };
     },
+    // Stage 4f (#369): consume only the controller App's exact-SHA review gate.
+    // This is the controller's validated review check, NOT the per-task Codex
+    // evidence or independent whole-release scope verdict; both are mandatory
+    // separate gates in evaluateAutoRelease. A foreign, missing, stale or
+    // ambiguous check can never produce PASS.
+    async readReviewEvidence(sha) {
+      if (!SHA.test(sha ?? '')) throw new Error('REVIEW_REF_INVALID');
+      const appId = policy.controller_app_id;
+      if (!Number.isSafeInteger(appId) || appId <= 0) throw new Error('REVIEW_APP_NOT_PINNED');
+      const name = 'sc-agent/review';
+      if (!Array.isArray(policy.required_checks?.integration)
+          || !policy.required_checks.integration.includes(name)) throw new Error('REVIEW_CHECK_NOT_REQUIRED');
+      const res = await get(`${root}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}&per_page=100`);
+      if (!Array.isArray(res?.check_runs) || res.total_count !== res.check_runs.length
+          || res.check_runs.length >= 100) throw new Error('REVIEW_INCOMPLETE');
+      if (res.check_runs.length !== 1) throw new Error('REVIEW_NOT_UNIQUE');
+      const check = res.check_runs[0];
+      if (check?.name !== name || check.app?.id !== appId || check.head_sha !== sha) {
+        throw new Error('REVIEW_PROVENANCE_MISMATCH');
+      }
+      const completed = check.status === 'completed';
+      const conclusion = completed ? check.conclusion ?? null : null;
+      return { head_sha: sha, completed, conclusion, verdict: completed && conclusion === 'success' ? 'PASS' : null };
+    },
     // Stage 4d: release serialization. Takes ONE unfiltered snapshot of the pinned promote
     // workflow's runs (all pages) and counts every run whose status is not 'completed'.
     // Per-status queries are not used: a run moving between statuses between two such

@@ -158,3 +158,50 @@ test('codex reader: open thread or foreign reviewer never becomes clean evidence
   await assert.rejects(mkCodex(codexClient(), 42).readCodexEvidence(codexArgs), /CODEX_REVIEW_MISSING_FOR_HEAD/);
   await assert.rejects(mkCodex(codexClient(), RID).readCodexEvidence({ ...codexArgs, repository: 'x/y' }), /CODEX_INPUT_INVALID/);
 });
+
+// Stage 4f: controller review check, distinct from Codex and scope evidence.
+const reviewCheck = (over = {}) => ({
+  name: 'sc-agent/review', app: { id: 7 }, head_sha: I,
+  status: 'completed', conclusion: 'success', ...over,
+});
+const mkReviewCheck = (runs, total = runs.length, policyOverride = {}) => {
+  const c = mkClient({ request: async () => ({ total_count: total, check_runs: runs }) });
+  const r = createAutoReleaseReaders({
+    client: c, repository: 'o/r',
+    policy: { controller_app_id: 7, required_checks: { integration: ['sc-agent/review'] }, ...policyOverride },
+  });
+  return { c, r };
+};
+test('review check: exact SHA, pinned controller App, unique completed success', async () => {
+  const { c, r } = mkReviewCheck([reviewCheck()]);
+  assert.deepEqual(await r.readReviewEvidence(I), {
+    head_sha: I, completed: true, conclusion: 'success', verdict: 'PASS',
+  });
+  assert.ok(c.calls.every(([method, p]) => method === 'GET' && p.includes(`/commits/${I}/check-runs?`)));
+});
+test('review check: pending, cancelled or failing check never emits PASS', async () => {
+  const pending = await mkReviewCheck([reviewCheck({ status: 'in_progress', conclusion: 'success' })]).r.readReviewEvidence(I);
+  assert.deepEqual(pending, { head_sha: I, completed: false, conclusion: null, verdict: null });
+  for (const conclusion of ['failure', 'cancelled', 'neutral', null]) {
+    const v = await mkReviewCheck([reviewCheck({ conclusion })]).r.readReviewEvidence(I);
+    assert.equal(v.verdict, null);
+  }
+});
+test('review check: foreign App, stale SHA, duplicates and incomplete pages are refused', async () => {
+  await assert.rejects(mkReviewCheck([reviewCheck({ app: { id: 9 } })]).r.readReviewEvidence(I), /REVIEW_PROVENANCE_MISMATCH/);
+  await assert.rejects(mkReviewCheck([reviewCheck({ head_sha: M })]).r.readReviewEvidence(I), /REVIEW_PROVENANCE_MISMATCH/);
+  await assert.rejects(mkReviewCheck([reviewCheck({ name: 'sc-agent/ci' })]).r.readReviewEvidence(I), /REVIEW_PROVENANCE_MISMATCH/);
+  await assert.rejects(mkReviewCheck([reviewCheck(), reviewCheck()]).r.readReviewEvidence(I), /REVIEW_NOT_UNIQUE/);
+  await assert.rejects(mkReviewCheck([reviewCheck()], 2).r.readReviewEvidence(I), /REVIEW_INCOMPLETE/);
+  await assert.rejects(mkReviewCheck([]).r.readReviewEvidence(I), /REVIEW_NOT_UNIQUE/);
+  await assert.rejects(mkReviewCheck([reviewCheck()]).r.readReviewEvidence('integration'), /REVIEW_REF_INVALID/);
+  await assert.rejects(mkReviewCheck([reviewCheck()], 1, { controller_app_id: null }).r.readReviewEvidence(I), /REVIEW_APP_NOT_PINNED/);
+  await assert.rejects(mkReviewCheck([reviewCheck()], 1, { required_checks: { integration: [] } }).r.readReviewEvidence(I), /REVIEW_CHECK_NOT_REQUIRED/);
+});
+test('review check alone does not authorize a release without independent scope evidence', async () => {
+  const { r } = mkReviewCheck([reviewCheck()]);
+  const d = await qualifyRelease({ readers: r, trusted: { p24Hold: false }, policy: {} });
+  assert.equal(d.decision, 'DENY');
+  assert.ok(!d.reasons.includes('COLLECT:READ_REVIEW_FAILED'));
+  assert.ok(d.reasons.includes('SCOPE_VERDICT_MISSING') || d.reasons.includes('NO_PROMOTION_MANIFEST'));
+});
