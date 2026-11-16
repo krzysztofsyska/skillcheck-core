@@ -110,3 +110,67 @@ test('proposed controller runbook stays inactive and fail-closed', () => {
   assert.deepEqual(runbook.secret_names, []);
   assert.ok(runbook.operations.every(op => !/db push/i.test(op) || /never|nigdy|zakaz/i.test(op)));
 });
+
+
+function releasedHistory({ outsideParent = false, divergentTree = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'promotion-post-release-'));
+  const git = (...args) => {
+    const result = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+      '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git('init', '-q', '-b', 'main');
+  writeFileSync(join(dir, 'a.txt'), 'original');
+  git('add', '.');
+  git('commit', '-q', '-m', 'initial');
+  git('switch', '-q', '-c', 'integration');
+  writeFileSync(join(dir, 'a.txt'), 'release');
+  git('commit', '-q', '-am', 'feat: previous release (#7)');
+  const releasedHead = git('rev-parse', 'integration');
+  git('switch', '-q', 'main');
+  if (outsideParent) git('commit', '--allow-empty', '-q', '-m', 'unbackported main-only commit');
+  if (divergentTree) git('merge', '-q', '--no-ff', '-s', 'ours', '-m', 'release with a different tree', 'integration');
+  else git('merge', '-q', '--no-ff', '-m', 'production merge', 'integration');
+  const productionSha = git('rev-parse', 'main');
+  git('switch', '-q', 'integration');
+  writeFileSync(join(dir, 'a.txt'), 'next release');
+  git('commit', '-q', '-am', 'fix: post-release (#8)');
+  const run = () => spawnSync('node', [TOOL, '--base', 'main', '--head', 'integration'],
+    { cwd: dir, encoding: 'utf8' });
+  return { run, productionSha, releasedHead, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test('post-release merge tree equals released integration: list only new commits, preserve actual main SHA', () => {
+  const h = releasedHistory();
+  try {
+    const result = h.run();
+    assert.equal(result.status, 0, result.stderr);
+    const manifest = JSON.parse(result.stdout);
+    assert.equal(manifest.base_sha, h.productionSha);
+    assert.equal(manifest.history_base_sha, h.releasedHead);
+    assert.equal(manifest.commit_count, 1);
+    assert.equal(manifest.attributed_count, 1);
+    assert.deepEqual(manifest.steps.map(s => s.pr), [8]);
+    assert.deepEqual(manifest.files, ['a.txt']);
+    assert.deepEqual(manifest.unattributed, []);
+  } finally { h.cleanup(); }
+});
+
+test('post-release history refuses a main-only parent not contained in integration', () => {
+  const h = releasedHistory({ outsideParent: true });
+  try {
+    const result = h.run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /PROMOTION_HISTORY_DIVERGED/);
+  } finally { h.cleanup(); }
+});
+
+test('post-release history refuses a production merge whose tree differs from released integration', () => {
+  const h = releasedHistory({ divergentTree: true });
+  try {
+    const result = h.run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /PROMOTION_HISTORY_DIVERGED/);
+  } finally { h.cleanup(); }
+});
