@@ -86,7 +86,8 @@
     "smoke:preview": "node scripts/preview-smoke.cjs",
     "e2e:step4": "node scripts/step4-browser-e2e.cjs",
     "test:process-followup": "node scripts/process-followup-compose.mjs --check && node --experimental-strip-types --test tests/process-followup.test.mjs",
-    "test:process-followup-db": "node --experimental-strip-types --test --test-concurrency=1 tests/process-followup-database.test.mjs"
+    "test:process-followup-db": "node --experimental-strip-types --test --test-concurrency=1 tests/process-followup-database.test.mjs",
+    "test:form-reset": "node --test tests/form-reset-on-error.test.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "0.1.80",
