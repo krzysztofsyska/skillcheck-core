@@ -202,3 +202,16 @@ test('F1b: every price line in the product (repository-wide) trips the content f
   const missed = lines.filter(l => !paymentContentFindings([{ path: 'x.tsx', patch: `+${l}` }]).length);
   assert.deepEqual(missed, []);
 });
+
+test('C2: every file that really sends mail/voice is refused by path (repository-wide); sending lines are refused anywhere', async () => {
+  const { execSync } = await import('node:child_process');
+  const { paymentContentFindings } = await import('../tools/release/auto/policy.mjs');
+  const files = execSync("git grep -liE 'api\\.resend\\.com|RESEND_API_KEY|retell' -- app lib components scripts || true", { encoding: 'utf8' }).split('\n').filter(Boolean);
+  const NOT_SENDER = { 'app/prywatnosc/page.tsx': 'privacy policy text names Resend as a processor; it sends nothing' };
+  const missed = files.filter(f => !NOT_SENDER[f] && !classifyRelease([f]).reasons.some(r => r.startsWith('OUTBOUND_SENDS:')));
+  assert.deepEqual(missed, []);
+  for (const f of ['lib/sales-mail.ts', 'lib/sales-mail-server.ts', 'lib/sales-mail-template.ts', 'app/api/internal/sales-mail/route.ts', 'lib/cv-bulk.ts', 'app/api/internal/daily-digest/route.ts']) {
+    assert.ok(classifyRelease([f]).reasons.some(r => r.startsWith('OUTBOUND_SENDS:')), f);
+  }
+  assert.deepEqual(paymentContentFindings([{ path: 'lib/x.ts', patch: "+await fetch('https://api.resend.com/emails')" }]), ['OUTBOUND_CONTENT:lib/x.ts']);
+});

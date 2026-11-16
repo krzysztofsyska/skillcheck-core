@@ -60,6 +60,20 @@ export function compareCounts(source, target, excluded = []) {
   return { tables: Object.keys(source).length - [...skip].filter(t => t in source).length, rows, missing, mismatched };
 }
 
+// pg_restore errors, without ever returning their text (it can carry row values). Expected:
+// "schema public already exists" and foreign keys to tables whose DATA is excluded by design.
+// Everything else is unexpected and fails the drill.
+export function classifyRestoreErrors(stderr, excluded = []) {
+  const names = new Set(excluded.map(t => t.split('.').pop()));
+  const blocks = String(stderr).split(/^(?=pg_restore: error:)/m).filter(b => b.startsWith('pg_restore: error:'));
+  let expected = 0; let unexpected = 0;
+  for (const b of blocks) {
+    const fk = /violates foreign key constraint/.test(b) && /is not present in table "([^"]+)"/.exec(b);
+    if (/schema "public" already exists/.test(b) || (fk && names.has(fk[1]))) expected++; else unexpected++;
+  }
+  return { expected, unexpected };
+}
+
 export function pendingMigrations(files, ledger) {
   const have = new Set(ledger);
   const versions = files.filter(f => /^\d{14}_.+\.sql$/.test(f)).sort();
@@ -99,8 +113,7 @@ function session(url, env, { stopOnError = true } = {}) {
 
 function docker(cmd, env) {
   const r = spawnSync('docker', dockerPg(cmd, env), { env: { ...process.env, ...env }, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  const errors = r.stderr.split('\n').filter(l => /^pg_restore: error:/.test(l) && !/schema "public" already exists/.test(l));
-  return { status: r.status, errors: errors.length, sqlstates: [...new Set(r.stderr.match(/ERROR:\s+[0-9A-Z]{5}/g) ?? [])] };
+  return { status: r.status, stderr: r.stderr, sqlstates: [...new Set(r.stderr.match(/ERROR:\s+[0-9A-Z]{5}/g) ?? [])] };
 }
 
 async function main() {
@@ -148,7 +161,9 @@ async function main() {
   for (const st of prep.split(';\n')) await tgtPrep.ask(st);
   tgtPrep.end();
   const restore = docker('exec pg_restore -d "$DB_URL" --no-owner --no-privileges /drill/prod.dump', { DB_URL: target });
-  report.restore = { exit: restore.status, error_count: restore.errors, sqlstates: restore.sqlstates };
+  const restoreErrors = classifyRestoreErrors(restore.stderr, excluded);
+  report.restore = { exit: restore.status, expected_errors: restoreErrors.expected, unexpected_errors: restoreErrors.unexpected };
+  if (restoreErrors.unexpected) report.reasons.push('RESTORE_ERRORS');
 
   // 3. Completeness: every table present, exact row counts (excluded-by-design data skipped).
   const tgt = session(target, {});

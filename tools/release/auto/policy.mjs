@@ -13,7 +13,9 @@ export const SHA = /^[0-9a-f]{40}$/;
 export const OWNER_CONSENT_PATHS = [
   // Tokens match a whole path segment or any -/_/. delimited part of one (lib/sc19-payment-http.ts).
   ['PAYMENTS', /(^|[/._-])(p24|przelewy24|billing|payments?|pricing|fakturownia|invoices?|platnosci)([/._-]|$)/i],
-  ['OUTBOUND_SENDS', /(^|\/)(mail|email|sms|voice|retell|voip|notifications?|sales-leads?)(\/|\.|-|_|$)/i],
+  ['OUTBOUND_SENDS', /(^|[/._-])(mail|email|sms|voice|retell|voip|notifications?|leads?|digest|resend)([/._-]|$)/i],
+  // Senders whose names say nothing about sending (bulk CV upload notifies by e-mail).
+  ['OUTBOUND_SENDS', /^lib\/cv-bulk(-runner)?\.ts$/],
   // Files whose names say nothing about money but hold customer-facing prices / package copy.
   ['PAYMENT_PATH_FREEZE', /^(app\/components\/marketing\/(content\.ts|package-comparison\.tsx)|app\/preselekcja\/|lib\/public-future-offers\.ts$)/],
   ['PAYMENT_PATH_FREEZE', /(^|[/._-])(kup|buy|checkout|orders?|catalogs?|offers?|packages?|cennik|prices?|purchases?|stripe|zakupy?|zamowieni[ae])([/._-]|$)/i],
@@ -72,6 +74,8 @@ export function classifyRelease(files, migrations = []) {
 // a payment change hidden in an innocently named file is still caught. Fail-closed by design.
 // `zł` without \b: ł is not a word character for the regex engine, so \bzł\b would miss "300 zł".
 const PAYMENT_CONTENT = /przelewy24|\bp24[_A-Za-z]|P24_|sc19[-_]payment|fakturownia|stripe|checkout|zł|\bPLN\b|grosz|price|cennik|\bcen[ay]\b|amount_(gross|net)|orders?_status/iu;
+// Changed lines that touch real outbound sending (e-mail provider, voice provider).
+const OUTBOUND_CONTENT = /api\.resend\.com|RESEND_API_KEY|\bretell|sendBulkEmail|sendMail|twilio/i;
 export function paymentContentFindings(patches) {
   if (!Array.isArray(patches)) return ['PAYMENT_CONTENT_UNREADABLE'];
   const out = [];
@@ -79,6 +83,7 @@ export function paymentContentFindings(patches) {
     if (!p || typeof p.path !== 'string' || typeof p.patch !== 'string') { out.push('PAYMENT_CONTENT_UNREADABLE'); continue; }
     const changed = p.patch.split('\n').filter(l => /^[+-]/.test(l) && !/^(\+\+\+|---) /.test(l));
     if (changed.some(l => PAYMENT_CONTENT.test(l))) out.push(`PAYMENT_CONTENT_FREEZE:${p.path}`);
+    if (changed.some(l => OUTBOUND_CONTENT.test(l))) out.push(`OUTBOUND_CONTENT:${p.path}`);
   }
   return out;
 }

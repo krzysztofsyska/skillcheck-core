@@ -281,3 +281,35 @@ test('F2b: an App rollback PR with an extra commit under the revert is refused',
   assert.ok(r.codes.includes('RELEASE_PR_TAMPERED_OR_UNREADABLE'), JSON.stringify(r));
   assert.equal(state.merged.length, 1, 'only the original release was ever merged');
 });
+
+test('C1: an error while checking the deployment after the merge rolls back and freezes', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  const get = gh.get;
+  let broken = true;
+  gh.get = async p => { if (broken && p.startsWith('/deployments')) { broken = false; const e = new Error('boom'); e.status = 502; throw e; } return get(p); };
+  const r = await runPublisher(deps(fx, gh));
+  assert.equal(r.status, 'ROLLED_BACK', JSON.stringify(r));
+  assert.ok(r.codes.includes('DEPLOYMENT_NOT_CONFIRMED'));
+  assert.equal(state.issues.length, 1);
+});
+
+test('C1: a release merged by a run that was killed before its check is verified by the next run', async () => {
+  for (const smokeOk of [true, false]) {
+    const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    assert.equal((await runPublisher(deps(fx, gh))).status, 'RELEASED');
+    // Simulate the kill: the App's "done" marker was never written.
+    state.comments[100] = state.comments[100].filter(c => !/sc-auto-release-done/.test(c.body));
+    fx.git('fetch', 'origin', 'main');
+    let calls = 0; // when failing: only the first check fails (the reverted version is healthy)
+    const r = await runPublisher(deps(fx, gh, { smoke: async () => ((smokeOk || ++calls > 1) ? { ok: true, failures: [] } : { ok: false, failures: ['/:STATUS_500'] }) }));
+    if (smokeOk) {
+      assert.equal(r.status, 'NOTHING_TO_RELEASE');
+      assert.ok(state.comments[100].some(c => /sc-auto-release-done/.test(c.body)));
+    } else {
+      assert.equal(r.status, 'ROLLED_BACK', JSON.stringify(r));
+      assert.equal(state.issues.length, 1);
+    }
+  }
+});
