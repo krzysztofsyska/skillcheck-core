@@ -25,7 +25,7 @@
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
     "test:screening-report": "node --test tests/screening-report.test.mjs",
     "test:candidate-report": "node --experimental-strip-types --test tests/candidate-report.test.mjs tests/candidate-report-export.test.mjs tests/position-requirement-flags-database.test.mjs",
-    "test:candidate-report-db": "node --experimental-strip-types --test --test-concurrency=1 tests/candidate-report-export-database.test.mjs",
+    "test:candidate-report-db": "node --experimental-strip-types --test --test-concurrency=1 tests/candidate-report-export-database.test.mjs tests/candidate-report-export-history-database.test.mjs",
     "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
     "test:ac-report-http": "node --test tests/assessment-center-report-http.test.mjs",
     "test:ac-session-db": "node --experimental-strip-types --test --test-concurrency=1 tests/ac-session-database.test.mjs tests/ac-session-concurrency.test.mjs",
