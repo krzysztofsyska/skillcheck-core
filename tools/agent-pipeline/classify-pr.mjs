@@ -37,8 +37,11 @@ export function classify({ files, body, base, headRef }) {
   const errors = [];
   if (metadata.SCOPE !== detected) errors.push(`Declared SCOPE=${metadata.SCOPE} but changed files classify as ${detected}`);
   if ((database || security || operations) && metadata.LEVEL !== 'L3') errors.push('DB, security, or controller changes require LEVEL: L3');
-  if (base === 'main' && (headRef !== 'integration' || metadata.PROMOTION !== 'YES')) {
-    errors.push('Only an integration -> main promotion may target main (approval is validated separately)');
+  // #369: besides integration -> main, the automatic publisher opens release/auto-* -> main PRs
+  // (one reviewed PR cherry-picked onto main, or its automatic revert).
+  const releaseHead = headRef === 'integration' || /^release\/auto-[a-z0-9-]{1,60}$/.test(headRef ?? '');
+  if (base === 'main' && (!releaseHead || metadata.PROMOTION !== 'YES')) {
+    errors.push('Only an integration -> main promotion or an automatic release/auto-* release may target main');
   }
   return {
     ok: errors.length === 0,

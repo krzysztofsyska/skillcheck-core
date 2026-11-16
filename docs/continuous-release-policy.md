@@ -1,56 +1,96 @@
 # Continuous release policy (SC-AUTO-RELEASE, issue #369)
 
-Owner-approved 2026-11-08. This is a standing consent for the scope below. It is **not** proof that any gate passed and **not** permission to bypass one. Writing this policy does not mean automatic publishing works: that is true only after the trusted publisher is implemented, reviewed and verified (see "Status").
+Owner decision of **2026-11-16**, in his own message in the Claude Code session
+https://claude.ai/code/session_01TVLzgcKNUtgiz4KTVzeVwF. It replaces every earlier arrangement
+recorded in #369 (2026-11-08 policy, the 2026-11-15 conditions, stages 4a–4k).
 
-## Pipeline
-coding -> tests -> independent review -> merge to `integration` -> automatic production release (only when every condition below holds).
+**Overriding rule: no step of the release process requires a click, an approval or a manual start
+by the owner.** Anything that truly cannot work without one is reported in #369 as one item with
+the exact name of the setting — never worked around.
 
-## Automatic (when all evidence is present)
-- Fixes, UI and features inside the agreed scope.
-- Backward-compatible database additions (optional columns/tables).
-- Only after: current CI green, independent review PASS on the exact head SHA, and verification of the **whole** release (all changes from current production to the candidate, not just the last PR).
+## How a change reaches production
 
-## Needs separate owner consent
-- Deleting data or irreversible transformations.
-- Price, charge or payment-rule changes.
-- New real outbound messages, or wider recipients/frequency/purpose. Already-approved payment/sending behaviour needs no new consent.
-- New costs, wider access, production secrets.
+1. A task PR is merged into `integration` as today: green required CI on its exact head SHA and
+   an independent reviewer's **PASS on that exact SHA**, from a reviewer session other than the
+   builder's. The builder never merges or reviews its own code.
+2. The publisher (`.github/workflows/auto-release.yml`, code in `tools/release/auto/`) runs from
+   `main` only — on a schedule and when `Checks` finish on `integration`. It has no manual start.
+3. It takes the oldest merged PR that is not on `main` yet (from `min_pr` in
+   `tools/release/auto/config.json`) and checks it with `tools/release/auto/policy.mjs`.
+4. If allowed, it cherry-picks **exactly that PR's patch** onto `main` as `release/auto-pr-<N>`,
+   verifies the patch is identical (`git patch-id`), opens a PR to `main`, waits for the required
+   checks (`verify`, `Agent contract / scope gate`) on the exact release SHA and merges with the
+   pinned SHA, using the existing pipeline GitHub App (environment `agent-control`).
+5. It confirms the Vercel Production deployment of the merge commit (GitHub deployment status)
+   and smoke-tests production: home page, login page (password form), Supabase auth health,
+   registration page. No real login, payment or contact with anyone.
+6. On a failed deployment or smoke test it reverts the release through an automatic
+   `release/auto-revert-pr-<N>` PR and opens an issue titled `[auto-release-freeze] …`; while any
+   such issue is open, **no** further release happens. Closing it (after a fix) resumes releases.
 
-## Absolute HOLD
-HOLD P24 stays in force until documented tests and a separate owner release. Green CI and this policy do **not** lift it.
+One release per run, serialized by the workflow concurrency group; an in-flight release PR is
+resumed only if its head is exactly the SHA the publisher pushed (anything else freezes).
 
-## Rules for the publisher
-- Fail closed: missing or stale data means refuse. Never an assumed PASS. Mixed-scope releases are held.
-- Uses trusted code and gates, never candidate code as its own authorization. A builder's own JSON, label or comment does not authorize anything. No privileged execution of PR code, no untrusted artifacts.
-- Evidence is bound to repo, base SHA, head SHA and artifact. Any SHA change invalidates the decision.
-- Releases are serialized; retries must not double-apply effects.
-- Before publishing: CI/review evidence, base compatibility, a working recovery/backup plan for migrations, tests of the prepared version. After: smoke test without real payments or contacts. A failure stops later releases. Application rollback only if the database is compatible; code rollback does not restore data.
-- Does not forge `production-approval-attestation`, does not approve environments as the owner, does not change permissions, secrets or branch protection.
+## Authorization of a release
 
-## Roles
-Builder and reviewer stay separate; the builder never merges or reviews its own change. After Draft -> Ready, merge waits for all configured automatic reviews (including Codex) to complete on the current SHA with no open findings.
+Green required CI on the exact SHA **plus** an independent PASS on the exact SHA. Nothing else:
+no owner environment approval, no signed scope verdict from a separate App (both removed on
+2026-11-16). The PASS is the machine-readable comment a reviewer posts on the source PR:
 
-## Status
-- IMPLEMENTED: this policy document.
-- NOT IMPLEMENTED: trusted fail-closed release preflight in `tools/agent-pipeline` (next step of #369), activation stage, live verification.
-- Until the publisher is deployed and verified: prepare releases and fix blockers; no manual production workarounds.
+```
+<!-- sc-review-verdict:v1 {"verdict":"PASS","head_sha":"<40-hex SHA>","reviewer":"session_<reviewer>","builder":"session_<builder>"} -->
+```
 
-## Qualification module (step 2–4 of #369)
-`tools/agent-pipeline/lib/auto-release.mjs` — `evaluateAutoRelease()` is pure and fail-closed. It builds on `preparePromotion` (whole-range manifest, per-task `verified_ci_review` evidence) and `protectionFromRulesets` (effective rulesets/environments). It returns `DENY` with reason codes unless: P24 hold released by trusted config (only literal `false`), manifest covers every commit, every task has verified CI+review, CI/review/Codex are completed on the exact current integration SHA with no open findings, SHA/base unchanged, protection confirmed, scope is not payments / outbound sends / pipeline-secrets, no file falls under the owner's payment-path freeze of 2026-11-15 (`PAYMENT_PATH_FREEZE`: purchase flow `kup`/`checkout`/`purchase`, prices/`cennik`, package catalog/offers, orders, `stripe`; always on until a reviewed change lifts it after the owner does), every migration statement matches an explicitly recognised narrow additive shape (nullable `ADD COLUMN` of a simple type, plain `CREATE INDEX`; anything else, including new tables, RLS/policies/grants, functions, `DO` blocks, `NOT NULL` adds, is refused as not proven — the check is an allowlist, not a denylist), an independent trusted scope verdict (`scopeVerdict`: source `trusted_independent_scope_reader`, verdict `LOW_RISK_COMPATIBLE`) is bound to repo+base+head+manifest hash (builder JSON/labels never count; paths alone never prove semantic safety), malformed input yields DENY (never an exception), recovery plan and DB-compatible rollback exist, smoke tests and rollback are defined, and no other release is in flight or already done for this SHA. `ALLOW` only means qualified, with a binding hash of repo+base+head+manifest. Tests: `tests/agent-pipeline/auto-release.test.mjs` (fixtures, no remote effects). Nothing calls it yet and no controller flag is changed.
+Only comments by the repository owner/members/collaborators count; `reviewer` must differ from
+`builder`; a later verdict on the same SHA that is not `PASS` (e.g. `FAIL`, `PASS WITH FIXES`)
+cancels it. Free-text "PASS" without the marker does not count. While every agent session posts
+with the owner's GitHub identity, reviewer/builder separation is procedural (session ids), not
+technical. Unresolved Codex findings on the exact SHA also block.
 
-## Activation plan (not executed)
-Separate stage, needs owner-provided items that agents must not create:
-1. Trusted workflow on the protected `main` revision (not PR code) that reads live rulesets/environments, CI/review check runs and Codex review state via the existing controller App identity, then calls `evaluateAutoRelease`.
-2. Serialization: GitHub Actions `concurrency` group plus a release ledger keyed by integration SHA (feeds `lock` / `released`).
-3. Executor: the existing `agent-promote` identity merges the `integration -> main` PR only on `ALLOW`; Vercel production deploy happens from `main` as today; smoke without real payments/contacts; failure freezes later releases.
-4. Concrete BLOCKERS before activation: (a) P24 hold must be released by the owner in trusted config; (b) the `production-approval` environment currently requires the owner as reviewer, so an unattended release needs an owner-made change to that environment or a new unattended environment — agents may not change it; (c) no DB backup/PITR evidence reader exists yet; (d) the Codex review state reader is not implemented; (e) the independent trusted scope-verdict reader does not exist, so `scopeVerdict` cannot be produced for real yet.
-Until (a)–(d) are resolved the status is IMPLEMENTED (qualification + tests), not LIVE.
+## Refused automatically (hard, with an explicit reason code)
 
-## Stage 4c (#369): CI evidence reader
-`readCiEvidence(sha)` in `auto-release-readers.mjs` is read-only (GET). It accepts only one `sc-agent/ci` check run for the exact SHA created by the pinned `controller_app_id`; partial, duplicate, foreign-app or other-SHA results are refused. Review, Codex, scope-verdict, backup, lock and ledger readers are still missing, so the collector still returns DENY. Status: IMPLEMENTED (offline tests), not LIVE.
+- `PAYMENT_PATH_FREEZE:<file>` — the owner's payment-path freeze (2026-11-15, unchanged):
+  payment integration, purchase flow (`kup`, `checkout`), prices (`cennik`), package catalog and
+  offers, order states, `stripe`. Lifted only when Stripe works in test mode and the owner says so.
+- `PAYMENTS:<file>`, `OUTBOUND_SENDS:<file>` — billing/P24/invoices; mail/SMS/voice/notifications.
+- `SECRETS_OR_PIPELINE:<file>` — `.github/`, env files, `vercel.json`, `supabase/config`, the
+  agent pipeline and the publisher itself. Changes to the gates need a human merge.
+- `DESTRUCTIVE_SQL:<KIND>:<file>` — any `DROP …`, `DELETE FROM`, `TRUNCATE`, `ALTER TABLE … DROP`,
+  `ALTER … TYPE`, `RENAME`, `UPDATE … SET` anywhere in a migration (comments included).
+- Migrations at all, until both hold: a completed Supabase backup at most 24 h old
+  (`BACKUP_EVIDENCE_MISSING` / `BACKUP_NOT_COMPLETED` / `BACKUP_STALE`) **and** an unattended
+  migration executor (`MIGRATION_EXECUTOR_UNAVAILABLE` — today always: the only production
+  database credential lives in `production-approval`, which needs a human).
+- `CI_*`, `REVIEW_*`, `CODEX_UNRESOLVED_FINDINGS:*`, `FILE_LIST_TRUNCATED`, `PATCH_MISMATCH`,
+  `CHERRY_PICK_CONFLICT_OR_EMPTY`, `RELEASE_NOT_SERIALIZED`, `RELEASE_FROZEN`.
+- After deploy: `SMOKE_FAILED` / `DEPLOYMENT_NOT_CONFIRMED` → rollback + freeze. If the release
+  had touched data through a migration, the log and the freeze issue also carry
+  **`ROLLBACK_INSUFFICIENT_DATA_CHANGED`**: reverting code does not restore data.
 
-## Stage 4d (#369): release lock reader
-`readLock()` in `auto-release-readers.mjs` is read-only (GET). It takes one unfiltered snapshot of all runs of the pinned `workflow_ids.promote` workflow (every page, at most 10 × 100, then re-reads page 1 to confirm nothing shifted) and returns `{ held, inflight }`; every run whose status is not `completed` — including unknown statuses — holds the lock; a run seen active in either read (e.g. a completed run that was re-run) counts as active. Per-status queries are not used, because a run changing status between two such queries could appear in none of them. An unpinned workflow id, a truncated, duplicated or shifting listing, or a run of another workflow throws, so the collector records `READ_LOCK_FAILED` and the decision is DENY. It complements, and does not replace, the Actions `concurrency` group of item 2 above. Review, Codex, scope-verdict, backup and released-ledger readers are still missing, so the collector still returns DENY. Status: IMPLEMENTED (offline tests), not LIVE.
+A held PR gets one comment with the reason; a new commit (new SHA) and a new review retry it.
 
-## Stage 4j (#369): independent scope-verdict reader
-`readScopeVerdict({ base, head, manifest })` in `auto-release-readers.mjs` is read-only (GET). It accepts only one completed/success check run on the exact candidate SHA whose name and issuing App id are pinned in trusted policy (`scope_verdict.check_name`, `scope_verdict.app_id`); the issuer must be a different App than `controller_app_id`, so the pipeline can never certify its own release. The check's `output.text` must be exactly one JSON object `{schema: "sc-scope-verdict/v1", repository, base_sha, head_sha, manifest_hash, verdict}` (no other keys, at most 4 KiB) bound to the repository, `main` SHA, integration SHA and sha256 of the manifest; `verdict` is `LOW_RISK_COMPATIBLE` or `NOT_LOW_RISK`. Anything unpinned, foreign, stale, duplicated, truncated, pending, failing or malformed throws, so the collector records `READ_SCOPE_VERDICT_FAILED` and the decision is DENY. The issuer itself (blocker (e)) still does not exist and is not created here: no new App, permission or secret. Status: IMPLEMENTED (offline tests), not LIVE.
+## Nightly restore drill
+
+`.github/workflows/backup-restore-drill.yml` (`tools/release/backup-drill/drill.mjs`), every
+night, no manual start: read-only dump of production from one snapshot → restore into a
+disposable Postgres 17.6 container in the runner → every table and exact row counts compared →
+pending `integration` migrations applied on top → report in the run summary (counts and SQLSTATE
+codes only). The dump never leaves the runner. Data of tables holding secrets/tokens/passwords and
+live auth sessions is excluded by design. Needs the secret `BACKUP_DRILL_DATABASE_URL`
+(environment `backup-drill`); without it the run reports `BLOCKED_MISSING_SECRET`.
+
+## Unchanged
+
+Rulesets `main-production-protection` and `protect-main-integration` stay as they are (pull
+request required, no deletions, no force pushes, conversation resolution). Production secrets,
+permissions and costs are not changed by the publisher. A full `integration → main` promotion
+outside the publisher still follows the Production loop in `AGENTS.md`.
+
+## Superseded
+
+`production-approval-attestation.yml` and `tools/production-approval/` are deleted (the job only
+waited for the owner's environment approval; without it the workflow had no purpose and it is no
+longer a required check). The `P24_HOLD` reason code and the signed scope-verdict requirement
+(stage 4j, `readScopeVerdict`) are removed from `tools/agent-pipeline`. The agent-pipeline
+qualifier (`evaluateAutoRelease`, whole `integration → main` range) stays as an offline tool and
+shares the refusal list with the publisher (`OWNER_CONSENT_PATHS` in `tools/release/auto/policy.mjs`).
