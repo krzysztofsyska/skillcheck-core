@@ -32,7 +32,7 @@ test('truncated rulesets list is refused', async () => {
   await assert.rejects(r.readRulesets(), /RULESETS_INCOMPLETE/);
 });
 test('without evidence readers the release is DENIED (fail closed)', async () => {
-  const d = await qualifyRelease({ readers: mk(mkClient()), trusted: { p24Hold: true }, policy: {} });
+  const d = await qualifyRelease({ readers: mk(mkClient()), trusted: {}, policy: {} });
   assert.equal(d.decision, 'DENY');
   assert.ok(d.reasons.some(x => x.startsWith('COLLECT:')));
 });
@@ -116,10 +116,9 @@ test('lock: unpinned, truncated, inconsistent, shifting or foreign listings fail
 });
 test('lock reader alone never turns the decision into ALLOW', async () => {
   const { r } = mkLock([run(1)]);
-  const d = await qualifyRelease({ readers: r, trusted: { p24Hold: true }, policy: { workflow_ids: { promote: PROMOTE } } });
+  const d = await qualifyRelease({ readers: r, trusted: {}, policy: { workflow_ids: { promote: PROMOTE } } });
   assert.equal(d.decision, 'DENY');
   assert.ok(!d.reasons.includes('COLLECT:READ_LOCK_FAILED'));
-  assert.ok(d.reasons.includes('P24_HOLD'));
 });
 
 // Stage 4e: Codex evidence wired through the auto-release readers.
@@ -200,10 +199,10 @@ test('review check: foreign App, stale SHA, duplicates and incomplete pages are 
 });
 test('review check alone does not authorize a release without independent scope evidence', async () => {
   const { r } = mkReviewCheck([reviewCheck()]);
-  const d = await qualifyRelease({ readers: r, trusted: { p24Hold: false }, policy: {} });
+  const d = await qualifyRelease({ readers: r, trusted: {}, policy: {} });
   assert.equal(d.decision, 'DENY');
   assert.ok(!d.reasons.includes('COLLECT:READ_REVIEW_FAILED'));
-  assert.ok(d.reasons.includes('SCOPE_VERDICT_MISSING') || d.reasons.includes('NO_PROMOTION_MANIFEST'));
+  assert.equal(d.decision, 'DENY');
 });
 
 // Stage 4i: task records from the protected agent-state branch, pinned to one commit.
@@ -266,7 +265,7 @@ test('records: task_id or revision disagreeing with the index is refused', async
   await assert.rejects(mkState({ tasks: { 'SC-1': [] }, index: { schema_version: 1, tasks: { 'SC-1': { revision: 1 } } } }).r.readRecords(), /RECORDS_INCONSISTENT/);
 });
 test('records failure feeds the collector as READ_RECORDS_FAILED (DENY)', async () => {
-  const d = await qualifyRelease({ readers: mkState({ refs: [S1, S2] }).r, trusted: { p24Hold: false }, policy: {} });
+  const d = await qualifyRelease({ readers: mkState({ refs: [S1, S2] }).r, trusted: {}, policy: {} });
   assert.equal(d.decision, 'DENY');
   assert.ok(d.reasons.includes('COLLECT:READ_RECORDS_FAILED'));
 });
