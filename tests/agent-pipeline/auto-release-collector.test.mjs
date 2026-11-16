@@ -71,3 +71,9 @@ test('migration files are read at the bound integration SHA only', async () => {
     readMigrationSql: async (p, ref) => { seen.push([p, ref]); return 'alter table t add column c text'; } });
   assert.deepEqual(seen, [['supabase/migrations/1.sql', I]]);
 });
+test('released ledger is read for the exact main/integration pair; an already released candidate is denied', async () => {
+  let args;
+  const r = await run({ readReleased: async a => { args = a; return [a.head]; } }, { p24Hold: false });
+  assert.deepEqual(args, { base: M, head: I });
+  assert.equal(r.decision, 'DENY'); assert.ok(r.reasons.includes('DUPLICATE_OR_UNKNOWN_RELEASE_STATE'));
+});

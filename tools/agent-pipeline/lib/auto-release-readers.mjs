@@ -1,8 +1,8 @@
 // SC-AUTO-RELEASE (#369) stage 4a: GitHub-backed READ-ONLY readers for the collector.
 // Only GET requests through an injected client (plus the one fixed read-only GraphQL query
-// used for review threads). The review evidence reader, scope-verdict issuer and the released
-// ledger are deliberately NOT provided here: the collector then records COLLECT:* errors and
-// the decision is DENY (fail closed).
+// used for review threads). The review evidence reader and the scope-verdict issuer are
+// deliberately NOT provided here: the collector then records COLLECT:* errors and the
+// decision is DENY (fail closed). The released ledger is derived from `main` (stage 4g).
 import { decodeGithubContent } from './github.mjs';
 import { withRulesetEvidence } from './ruleset-evidence.mjs';
 import { createCodexEvidenceReader } from './codex-evidence.mjs';
@@ -145,6 +145,26 @@ export function createAutoReleaseReaders({ client, repository, policy = {}, code
     },
     async readCodexEvidence(args) {
       return codex()(args);
+    },
+    // Stage 4g: release ledger (idempotency) without any new write path or state store.
+    // `main` is the production source branch, so a candidate is already released exactly
+    // when it is reachable from `main`. One compare main...candidate bound to both exact
+    // SHAs: 'identical'/'behind' => released, 'ahead'/'diverged' => not yet. An unknown
+    // status, counts inconsistent with the status, or a response bound to other commits
+    // throws, so the collector records READ_RELEASED_FAILED and the decision is DENY.
+    async readReleased({ base, head } = {}) {
+      if (!SHA.test(base ?? '') || !SHA.test(head ?? '')) throw new Error('RELEASED_REF_INVALID');
+      const res = await get(`${root}/compare/${base}...${head}?per_page=1`);
+      const ahead = res?.ahead_by, behind = res?.behind_by;
+      if (!Number.isSafeInteger(ahead) || ahead < 0 || !Number.isSafeInteger(behind) || behind < 0) throw new Error('RELEASED_UNREADABLE');
+      if (res.base_commit?.sha !== base) throw new Error('RELEASED_BINDING_MISMATCH');
+      const expected = { identical: ahead === 0 && behind === 0, behind: ahead === 0 && behind > 0,
+        ahead: ahead > 0 && behind === 0, diverged: ahead > 0 && behind > 0 };
+      if (!Object.hasOwn(expected, res.status) || expected[res.status] !== true) throw new Error('RELEASED_STATUS_INCONSISTENT');
+      const released = res.status === 'identical' || res.status === 'behind';
+      // Reachable from main means the merge base IS the candidate itself.
+      if (released && res.merge_base_commit?.sha !== head) throw new Error('RELEASED_BINDING_MISMATCH');
+      return released ? [head] : [];
     },
     async readMigrationSql(path, ref) {
       if (!SAFE_PATH.test(path) || path.includes('..') || !SHA.test(ref ?? '')) throw new Error('MIGRATION_REF_INVALID');
