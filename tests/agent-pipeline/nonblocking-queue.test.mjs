@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assembleWork } from '../../tools/agent-pipeline/lib/snapshot.mjs';
 import { contractBody, loadedPolicy, taskRecord } from './helpers.mjs';
+import { CODEX_CONNECTOR_BOT } from '../../tools/agent-pipeline/lib/codex-connector-review.mjs';
 
 const NOW = '2026-10-06T12:05:00.000Z';
 const MERGE = 'f'.repeat(40);
@@ -140,4 +141,65 @@ test('a ready task with overlapping file scope cannot start beside another activ
   assert.equal(result.items[0].observation.issue.number, 22);
   const onlyConflict = work(records, [conflicting]);
   assert.equal(onlyConflict.items[0].record?.task_id, waiting.task_id);
+});
+
+test('pending, stale and incomplete Codex review do not starve second active task', () => {
+  const { policy, policySha } = loadedPolicy();
+  policy.execution_mode = 'SUBSCRIPTION_ONLY';
+  const first = taskRecord({ state: 'PR_REVIEW', technical_state: 'WAITING_CI' });
+  first.task_id = 'SC-WAITING-CODEX';
+  first.review_request_id = 'review-request';
+  const second = taskRecord({ state: 'BUILDING' });
+  second.task_id = 'SC-INDEPENDENT-ACTIVE';
+  second.pr_number = 51;
+  const summary = (sha, status) => ({
+    id: 6851727812,
+    user: { id: CODEX_CONNECTOR_BOT.id, login: CODEX_CONNECTOR_BOT.login },
+    body: '<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 ' +
+      JSON.stringify({
+        code_review: { commit_sha: sha, status, has_any_findings: false, has_unresolved_findings: false },
+        security_review: { commit_sha: null, status: null, has_any_findings: null, has_unresolved_findings: null },
+      }) + ' -->',
+  });
+  for (const codexReview of [
+    { comments: [], threads: [] },
+    { comments: [summary('b'.repeat(40), 'completed')], threads: [{ id: 'PRRT_OLD', isResolved: false }] },
+    { comments: [summary(first.head_sha, 'running')], threads: [] },
+  ]) {
+    const result = assembleWork({
+      policy, policySha, now: NOW, secrets: {}, flags: {},
+      snapshot: {
+        records: { [first.task_id]: first, [second.task_id]: second },
+        issues: [], integrationSha: 'c'.repeat(40), mainSha: 'd'.repeat(40),
+        pulls: [{
+          number: first.pr_number, authorId: 222297538,
+          headRef: first.binding.branch, baseRef: 'integration',
+          headSha: first.head_sha, baseSha: first.base_sha,
+        }],
+        evidence: { [first.task_id]: { ci: { run_id: 900 } } },
+        codexReviews: { [first.task_id]: codexReview },
+      },
+    });
+    assert.equal(result.items[0].record?.task_id, second.task_id);
+  }
+});
+
+test('held CODEX_REVIEW_PASSED task yields to another active task even with merge enabled', () => {
+  const { policy, policySha } = loadedPolicy();
+  policy.execution_mode = 'SUBSCRIPTION_ONLY';
+  const held = taskRecord({ state: 'READY_FOR_OWNER', technical_state: 'CODEX_REVIEW_PASSED' });
+  held.task_id = 'SC-HELD-CODEX-PASS';
+  const second = taskRecord({ state: 'BUILDING' });
+  second.task_id = 'SC-INDEPENDENT-ACTIVE';
+  second.pr_number = 51;
+  for (const mergeEnabled of [false, true]) {
+    const result = assembleWork({
+      policy, policySha, now: NOW, secrets: {}, flags: { mergeEnabled },
+      snapshot: {
+        records: { [held.task_id]: held, [second.task_id]: second },
+        issues: [], integrationSha: 'c'.repeat(40), mainSha: 'd'.repeat(40), pulls: [],
+      },
+    });
+    assert.equal(result.items[0].record?.task_id, second.task_id, `mergeEnabled=${mergeEnabled}`);
+  }
 });

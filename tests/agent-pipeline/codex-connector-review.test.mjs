@@ -67,6 +67,8 @@ test('stale, running, finding and ambiguous reviews never count as PASS', () => 
   reason({ comments: [summary({ code_review: state().code_review, security_review: { status: null } })] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
   reason({ comments: [summary(state({}, { status: 'completed', commit_sha: OTHER,
     has_any_findings: false, has_unresolved_findings: false }))] }, 'CODEX_SECURITY_REVIEW_UNCONFIRMED');
+  reason({ comments: [summary(state({ commit_sha: OTHER }))], threads: [{ isResolved: false }] }, 'CODEX_REVIEW_STALE_HEAD');
+  reason({ comments: [summary(state({ status: 'running' }))], threads: [{ isResolved: false }] }, 'CODEX_REVIEW_PENDING');
   reason({ threads: [{ isResolved: false }] }, 'CODEX_REVIEW_THREAD_OPEN');
   reason({ threads: [{}] }, 'CODEX_REVIEW_THREAD_OPEN');
   const repeated = summary();
