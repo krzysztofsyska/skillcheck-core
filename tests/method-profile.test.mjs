@@ -563,3 +563,62 @@ test('the form revision is monotonic: an error result without a revision does no
   // Nowszy numer z właściwości nadal go nie podnosi (formularz wciąż pokazuje starą treść).
   assert.equal(form.render({ initial: content, revision: 9 }).revision, 3);
 });
+
+// --- #463 Codex: szablon HRBP sesji AC też wiąże zapisane definicje z wersją metody, także przy częściowym wykonaniu ---
+test('AC session template binds the method version once, after the saved definitions', async () => {
+  const acLib = '../../../../../../lib/';
+  const stages = [1, 2, 3].map(n => ({ type: 'case_study', title: `Etap ${n}`, definition: { n }, counterpartBrief: null }));
+  async function runTemplate({ failSaveAt = 0, failAddAt = 0, bind = 'ok' } = {}) {
+    const calls = [], logged = [];
+    let saves = 0, adds = 0;
+    const client = { rpc: async (name, args) => {
+      calls.push([name, args]);
+      if (name === 'ac_session_create') return { data: 'session-1', error: null };
+      if (name === 'save_exercise_definition') { saves += 1; return saves === failSaveAt ? { data: null, error: { code: 'PT409' } } : { data: `rev-${saves}`, error: null }; }
+      if (name === 'ac_session_add_stage') { adds += 1; return adds === failAddAt ? { data: null, error: { code: 'PT409' } } : { data: true, error: null }; }
+      if (name === 'method_bind_recruitment_definitions') {
+        if (bind === 'throw') throw new Error('secret detail');
+        return bind === 'error' ? { data: null, error: { code: '42883', message: 'secret detail' } } : { data: 1, error: null };
+      }
+      return { data: null, error: { code: 'XX000', message: `unexpected ${name}` } };
+    } };
+    const actions = loadModule(`${recruitmentBase}assessment-center/actions.ts`, {
+      'next/cache': { revalidatePath: () => {} },
+      [`${acLib}exercise-context`]: { exerciseContext: async () => ({ client, canEdit: true, company: { owner_id: 'u' }, user: { id: 'u' },
+        position: { id: positionId, updated_at: stamp } }) },
+      [`${acLib}assessment-center-preview`]: { assessmentCenterPreviewEnabled: () => true },
+      [`${acLib}assessment-center-session`]: { acChangeAssessments: [], acStageTypes: [], parseAssessmentCenterSession: () => ({}), parseReconciliationForm: () => [] },
+      [`${acLib}assessment-center-session-template`]: { hrbpCaseTemplate: { title: 'HRBP', plannedCompetencies: ['a'], stages } },
+      [`${acLib}method-binding`]: binding,
+    });
+    const original = console.error; console.error = (...args) => logged.push(args.join(' '));
+    try {
+      const result = await actions.createAcSessionFromTemplate({ companyId, recruitmentId }, {}, new FormData());
+      return { result, logged, names: calls.map(call => call[0]), last: calls.at(-1) };
+    } finally { console.error = original; }
+  }
+  const binds = names => names.filter(name => name === 'method_bind_recruitment_definitions').length;
+
+  const full = await runTemplate();
+  assert.deepEqual(full.result, { saved: true });
+  assert.equal(binds(full.names), 1, 'one binding for the whole template');
+  assert.equal(full.names.at(-1), 'method_bind_recruitment_definitions', 'binding follows the last saved definition');
+  assert.deepEqual(full.last[1], { target_company: companyId, target_recruitment: recruitmentId });
+
+  for (const partial of [{ failSaveAt: 2 }, { failAddAt: 1 }, { failAddAt: 3 }]) {
+    const run = await runTemplate(partial);
+    assert.match(run.result.error, /nie wszystkie etapy szablonu/);
+    assert.equal(binds(run.names), 1, `a partial template still binds what it saved: ${JSON.stringify(partial)}`);
+    assert.equal(run.names.at(-1), 'method_bind_recruitment_definitions');
+  }
+
+  const nothingSaved = await runTemplate({ failSaveAt: 1 });
+  assert.match(nothingSaved.result.error, /nie wszystkie etapy szablonu/);
+  assert.equal(binds(nothingSaved.names), 0, 'nothing to bind when no definition was saved');
+
+  for (const [bind, line] of [['error', 'method_bind_failed code=42883'], ['throw', 'method_bind_failed code=exception']]) {
+    const run = await runTemplate({ bind });
+    assert.deepEqual(run.result, { saved: true }, 'a binding failure does not change the result');
+    assert.deepEqual(run.logged, [line]);
+  }
+});
