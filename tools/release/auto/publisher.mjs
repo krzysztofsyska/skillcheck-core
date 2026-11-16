@@ -24,13 +24,16 @@ export async function runPublisher(d) {
   if (config?.enabled !== true) return { status: 'DISABLED', codes: ['PUBLISHER_DISABLED'] };
   if (!Number.isInteger(config.min_pr) || config.min_pr < 1) return { status: 'BLOCKED', codes: ['CONFIG_MIN_PR_INVALID'] };
 
-  const freeze = await openFreezeIssues(d);
-  if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };
-
+  // In-flight PRs first: an interrupted ROLLBACK must be finished even while frozen.
   const openReleases = (await d.gh.paginate('/pulls?state=open&base=main'))
     .filter(p => p.head?.ref?.startsWith(RELEASE_PREFIX));
-  if (openReleases.length > 1) return { status: 'BLOCKED', codes: ['RELEASE_NOT_SERIALIZED'] };
-  if (openReleases.length === 1) return resume(d, openReleases[0]);
+  const freeze = await openFreezeIssues(d);
+  if (openReleases.length > 1) return freeze.length ? { status: 'FROZEN', codes: ['RELEASE_FROZEN', 'RELEASE_NOT_SERIALIZED'] } : freezeWith(d, ['RELEASE_NOT_SERIALIZED'], openReleases.map(p => `#${p.number}`).join(', '));
+  if (openReleases.length === 1) {
+    const meta = readMarker(openReleases[0].body);
+    if (meta?.kind === 'rollback' || !freeze.length) return resume(d, openReleases[0], freeze);
+  }
+  if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };
 
   const released = releasedFromMain(d.git('log', 'origin/main', '--format=%B'));
   const held = [];
@@ -88,7 +91,15 @@ async function evaluate(d, pr, comments) {
   const migrations = paths.filter(p => p.startsWith('supabase/migrations/'))
     .map(p => ({ path: p, sql: d.git.ok('cat-file', '-e', `${full.merge_commit_sha}:${p}`) ? d.git('show', `${full.merge_commit_sha}:${p}`) : null }));
   const checks = await d.gh.get(`/commits/${full.head.sha}/check-runs?per_page=100`);
+  let patches = null; let unreleasedMigrations = null;
+  try {
+    const parent = d.git('rev-list', '--parents', '-n', '1', full.merge_commit_sha).trim().split(/\s+/)[1];
+    patches = paths.filter(p => d.git.ok('cat-file', '-e', `${full.merge_commit_sha}:${p}`) || d.git.ok('cat-file', '-e', `${parent}:${p}`))
+      .map(p => ({ path: p, patch: d.git('diff', parent, full.merge_commit_sha, '--', p) }));
+    unreleasedMigrations = d.git('diff', '--name-only', 'origin/main', parent, '--', 'supabase/migrations').split('\n').filter(Boolean);
+  } catch { /* left null: the policy denies */ }
   return evaluateCandidate({
+    patches, unreleasedMigrations,
     pr: { number: full.number, merged: full.merged === true, head_sha: full.head.sha, merge_commit_sha: full.merge_commit_sha, base_ref: full.base.ref },
     files: paths, migrations, checkRuns: checks?.check_runs, comments,
     migrationExecutor: false, backups: d.backups ?? null, now: d.now(),
@@ -150,16 +161,34 @@ export function readMarker(body) {
   try { return JSON.parse(m[1]); } catch { return null; }
 }
 
-async function resume(d, open) {
+// An in-flight PR is trusted only if the publisher's own App opened it AND its content is
+// exactly what the publisher would have produced (recomputed here, never read from the marker).
+async function resume(d, open, freeze = []) {
   const meta = readMarker(open.body);
-  if (!meta || !SHA.test(meta.release_head ?? '') || open.head?.sha !== meta.release_head) {
-    return freezeWith(d, ['RELEASE_PR_TAMPERED_OR_UNREADABLE'], `PR #${open.number}`);
+  const tampered = where => (freeze.length
+    ? { status: 'FROZEN', codes: ['RELEASE_FROZEN', 'RELEASE_PR_TAMPERED_OR_UNREADABLE'], where }
+    : freezeWith(d, ['RELEASE_PR_TAMPERED_OR_UNREADABLE'], where));
+  if (!meta || !SHA.test(meta.release_head ?? '') || open.head?.sha !== meta.release_head
+      || !d.appBotLogin || open.user?.login !== d.appBotLogin || open.user?.type !== 'Bot') {
+    return tampered(`PR #${open.number}`);
   }
+  if (!d.git.ok('fetch', 'origin', `+refs/heads/${open.head.ref}:refs/remotes/origin/${open.head.ref}`)
+      || d.git('rev-parse', `origin/${open.head.ref}`).trim() !== meta.release_head) return tampered(`PR #${open.number} (ref)`);
   if (meta.kind === 'rollback') {
+    // Must be exactly the revert of a merge on main that carries the publisher's release trailer.
+    const merge = meta.source_head;
+    const onMain = SHA.test(merge ?? '') && d.git.ok('merge-base', '--is-ancestor', merge, 'origin/main');
+    const released = onMain && releasedFromMain(d.git('log', '-1', '--format=%B', `${merge}^2`)).has(meta.reverts_pr);
+    const revert = onMain && patchId(d, `${meta.release_head}^`, meta.release_head);
+    const expected = onMain && patchId(d, merge, `${merge}^1`);
+    if (!released || !revert || revert !== expected) return tampered(`rollback PR #${open.number}`);
     const r = await mergeAndVerify(d, { releasePr: open.number, releaseHead: meta.release_head });
-    return { status: r.ok ? 'ROLLED_BACK' : 'ROLLBACK_FAILED', codes: r.codes, release_pr: open.number };
+    return { status: r.ok ? 'ROLLED_BACK' : 'ROLLBACK_FAILED', codes: r.codes ?? [], release_pr: open.number };
   }
   const pr = await d.gh.get(`/pulls/${meta.source_pr}`);
+  const parent = d.git('rev-list', '--parents', '-n', '1', pr.merge_commit_sha).trim().split(/\s+/)[1];
+  const base = d.git('merge-base', 'origin/main', meta.release_head).trim();
+  if (!parent || patchId(d, parent, pr.merge_commit_sha) !== patchId(d, base, meta.release_head)) return tampered(`PR #${open.number} (patch)`);
   const comments = await d.gh.paginate(`/issues/${pr.number}/comments`);
   const decision = await evaluate(d, pr, comments);
   if (decision.decision !== 'ALLOW' || pr.head.sha !== meta.source_head) {

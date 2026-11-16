@@ -65,13 +65,16 @@ function fakeGithub({ fx, comments = {}, ci = {}, deploy = 'success', mergeRefus
     if (method === 'GET' && (m = /^\/commits\/([0-9a-f]{40})\/check-runs/.exec(path))) return { check_runs: ci[m[1]] ?? green(m[1]) };
     if (method === 'GET' && (m = /^\/deployments\?sha=([0-9a-f]{40})/.exec(path))) return state.merged.includes(m[1]) ? [{ id: 1, environment: 'Production – skillcheck-core' }] : [];
     if (method === 'GET' && path.startsWith('/deployments/1/statuses')) return [{ state: deploy, environment_url: 'https://x.vercel.app' }];
-    if (method === 'POST' && path === '/pulls') { const pr = { number: 900 + state.pulls.length, state: 'open', ...body, head: { ref: body.head, sha: readMarker(body.body).release_head } }; state.pulls.push(pr); return pr; }
+    if (method === 'POST' && path === '/pulls') { const pr = { number: 900 + state.pulls.length, state: 'open', user: { login: 'app[bot]', type: 'Bot' }, ...body, head: { ref: body.head, sha: readMarker(body.body).release_head } }; state.pulls.push(pr); return pr; }
     if (method === 'PUT' && (m = /^\/pulls\/(\d+)\/merge$/.exec(path))) {
       if (mergeRefused) { const e = new Error('refused'); e.status = 405; throw e; }
       const pr = state.pulls.find(p => p.number === +m[1]);
       assert.equal(body.sha, pr.head.sha, 'merge must pin the exact release SHA');
-      fx.originGit('update-ref', 'refs/heads/main', body.sha); // fast-forward stands in for the merge commit
-      pr.state = 'closed'; state.merged.push(body.sha); return { sha: body.sha };
+      // A real merge commit (main + release head), as GitHub's "merge" method makes.
+      const merge = fx.originGit('commit-tree', `${body.sha}^{tree}`, '-p', 'main', '-p', body.sha, '-m', `Merge pull request #${pr.number}`).trim();
+      fx.originGit('update-ref', 'refs/heads/main', merge);
+      pr.state = 'closed'; state.merged.push(merge); if (state.stopAfterMerge?.(pr)) throw new Error('job killed');
+      return { sha: merge };
     }
     if (method === 'PATCH' && (m = /^\/pulls\/(\d+)$/.exec(path))) { state.pulls.find(p => p.number === +m[1]).state = body.state; state.closed.push(+m[1]); return {}; }
     if (method === 'POST' && (m = /^\/issues\/(\d+)\/comments$/.exec(path))) { (state.comments[m[1]] ??= []).push({ ...body, user: { login: 'app[bot]' } }); return {}; }
@@ -203,4 +206,52 @@ test('an in-flight release PR whose head moved is treated as tampering and freez
     body: `<!-- sc-auto-release:v1 ${JSON.stringify({ source_pr: 100, source_head: fx.prs[0].head, release_head: 'd'.repeat(40), kind: 'release' })} -->` });
   const r = await runPublisher(deps(fx, gh));
   assert.equal(r.status, 'FROZEN'); assert.deepEqual(r.codes, ['RELEASE_PR_TAMPERED_OR_UNREADABLE']);
+});
+
+test('F2: an open release/auto-* PR not opened by the App is never merged, even with a valid-looking marker', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+  const { gh, state } = fakeGithub({ fx });
+  const head = fx.git('rev-parse', 'origin/main').trim();
+  state.pulls.push({ number: 5, state: 'open', user: { login: 'someone', type: 'User' }, head: { ref: 'release/auto-revert-pr-1', sha: head },
+    body: `<!-- sc-auto-release:v1 ${JSON.stringify({ source_pr: 1, source_head: head, release_head: head, kind: 'rollback', reverts_pr: 1 })} -->` });
+  const r = await runPublisher(deps(fx, gh));
+  assert.equal(r.status, 'FROZEN'); assert.ok(r.codes.includes('RELEASE_PR_TAMPERED_OR_UNREADABLE'));
+  assert.equal(state.merged.length, 0);
+});
+
+test('F2: an App-authored release PR whose content differs from the reviewed patch is refused', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'v2\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  fx.git('checkout', '-B', 'release/auto-pr-100', 'origin/main');
+  writeFileSync(join(fx.git('rev-parse', '--show-toplevel').trim(), 'app/evil.ts'), 'x\n');
+  fx.git('add', '.'); fx.git('commit', '-m', 'evil');
+  fx.git('push', '--force', 'origin', 'HEAD:refs/heads/release/auto-pr-100');
+  const head = fx.git('rev-parse', 'HEAD').trim();
+  state.pulls.push({ number: 6, state: 'open', user: { login: 'app[bot]', type: 'Bot' }, head: { ref: 'release/auto-pr-100', sha: head },
+    body: `<!-- sc-auto-release:v1 ${JSON.stringify({ source_pr: 100, source_head: fx.prs[0].head, release_head: head, kind: 'release' })} -->` });
+  const r = await runPublisher(deps(fx, gh));
+  assert.equal(r.status, 'FROZEN'); assert.ok(r.codes.includes('RELEASE_PR_TAMPERED_OR_UNREADABLE'));
+  assert.equal(state.merged.length, 0);
+});
+
+test('F3: a rollback cut off mid-way is finished by the next run although releases are frozen', async () => {
+  const fx = fixture([{ 'app/regulamin/page.tsx': 'broken\n' }]);
+  const pendingRevert = new Set();
+  const ci = new Proxy({}, { get: (_, sha) => (pendingRevert.has(sha) ? green(sha).map(x => ({ ...x, status: 'in_progress' })) : green(sha)) });
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] }, ci });
+  let smokeCalls = 0;
+  const first = deps(fx, gh, { smoke: async () => (++smokeCalls === 1 ? { ok: false, failures: ['/:STATUS_500'] } : { ok: true, failures: [] }) });
+  // The revert PR's CI never finishes in the first job (stands in for the job being killed).
+  const post = gh.post;
+  gh.post = async (p, b) => { const r = await post(p, b); if (p === '/pulls' && /revert/.test(b.head)) pendingRevert.add(r.head.sha); return r; };
+  const r1 = await runPublisher(first);
+  assert.equal(r1.status, 'ROLLBACK_FAILED');
+  assert.equal(state.pulls.filter(p => p.state === 'open').length, 1);
+  pendingRevert.clear();
+  fx.git('fetch', 'origin', 'main');
+  const r2 = await runPublisher(deps(fx, gh));
+  assert.equal(r2.status, 'ROLLED_BACK', JSON.stringify(r2));
+  assert.throws(() => fx.originGit('cat-file', '-t', 'main:app/regulamin/page.tsx'), 'broken release reverted on main');
+  fx.git('fetch', 'origin', 'main');
+  assert.equal((await runPublisher(deps(fx, gh))).status, 'FROZEN', 'still frozen until a human closes the issue');
 });

@@ -11,8 +11,11 @@ export const SHA = /^[0-9a-f]{40}$/;
 // release may change the payment path (integration, purchase flow, prices, package catalog,
 // order states) until Stripe works in test mode and the owner lifts the freeze. Always on.
 export const OWNER_CONSENT_PATHS = [
-  ['PAYMENTS', /(^|\/)(p24|przelewy24|billing|payments?|pricing|fakturownia|invoices?)(\/|\.|-|_|$)/i],
+  // Tokens match a whole path segment or any -/_/. delimited part of one (lib/sc19-payment-http.ts).
+  ['PAYMENTS', /(^|[/._-])(p24|przelewy24|billing|payments?|pricing|fakturownia|invoices?|platnosci)([/._-]|$)/i],
   ['OUTBOUND_SENDS', /(^|\/)(mail|email|sms|voice|retell|voip|notifications?|sales-leads?)(\/|\.|-|_|$)/i],
+  // Files whose names say nothing about money but hold customer-facing prices / package copy.
+  ['PAYMENT_PATH_FREEZE', /^(app\/components\/marketing\/(content\.ts|package-comparison\.tsx)|app\/preselekcja\/|lib\/public-future-offers\.ts$)/],
   ['PAYMENT_PATH_FREEZE', /(^|[/._-])(kup|buy|checkout|orders?|catalogs?|offers?|packages?|cennik|prices?|purchases?|stripe|zakupy?|zamowieni[ae])([/._-]|$)/i],
   // The publisher never ships changes to itself, workflows, env files or Supabase config:
   // those change who can do what, so they need a human merge.
@@ -63,6 +66,20 @@ export function classifyRelease(files, migrations = []) {
     for (const kind of destructiveSql(m?.sql)) reasons.push(`DESTRUCTIVE_SQL:${kind}:${path}`);
   }
   return { reasons, migrations: migrationFiles };
+}
+
+// Changed LINES (added or removed) that touch payments or prices, whatever the file is called:
+// a payment change hidden in an innocently named file is still caught. Fail-closed by design.
+const PAYMENT_CONTENT = /przelewy24|\bp24[_A-Za-z]|P24_|sc19[-_]payment|fakturownia|stripe|checkout|\bzł\b|\bPLN\b|grosz|price|cennik|\bcen[ay]\b|amount_(gross|net)|orders?_status/i;
+export function paymentContentFindings(patches) {
+  if (!Array.isArray(patches)) return ['PAYMENT_CONTENT_UNREADABLE'];
+  const out = [];
+  for (const p of patches) {
+    if (!p || typeof p.path !== 'string' || typeof p.patch !== 'string') { out.push('PAYMENT_CONTENT_UNREADABLE'); continue; }
+    const changed = p.patch.split('\n').filter(l => /^[+-]/.test(l) && !/^(\+\+\+|---) /.test(l));
+    if (changed.some(l => PAYMENT_CONTENT.test(l))) out.push(`PAYMENT_CONTENT_FREEZE:${p.path}`);
+  }
+  return out;
 }
 
 /**
@@ -167,6 +184,11 @@ export function evaluateCandidate(input) {
     if (!SHA.test(pr?.head_sha ?? '') || !SHA.test(pr?.merge_commit_sha ?? '')) reasons.push('PR_SHA_INVALID');
     const scope = classifyRelease(input.files, input.migrations);
     reasons.push(...scope.reasons);
+    reasons.push(...paymentContentFindings(input.patches));
+    // Migrations already on integration but not yet on production: product code may depend on
+    // them, so only changes outside product code (docs, tests) may ship before they do.
+    if (!Array.isArray(input.unreleasedMigrations)) reasons.push('UNRELEASED_MIGRATIONS_UNKNOWN');
+    else if (input.unreleasedMigrations.length && input.files?.some?.(f => PRODUCT_CODE.test(f))) reasons.push('UNRELEASED_MIGRATIONS_PRECEDE');
     if (scope.migrations.length) {
       reasons.push(...backupGate({ backups: input.backups, now: input.now }));
       if (input.migrationExecutor !== true) reasons.push('MIGRATION_EXECUTOR_UNAVAILABLE');
@@ -180,6 +202,7 @@ export function evaluateCandidate(input) {
     return deny(['INVALID_INPUT']);
   }
 }
+const PRODUCT_CODE = /^(app|lib|components|scripts|supabase|db|public|middleware\.ts|next\.config)/;
 const deny = reasons => ({ decision: 'DENY', reasons, migrations: [] });
 
 /** What to do after the production deployment was checked. */

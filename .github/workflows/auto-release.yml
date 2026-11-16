@@ -40,7 +40,8 @@ jobs:
        (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-latest
     environment: agent-control
-    timeout-minutes: 120
+    # Worst case: release CI 35 + deploy 20 + smoke 2 + rollback CI 35 + deploy 20 + smoke 2 = 114 min.
+    timeout-minutes: 150
     permissions:
       contents: read
     steps:

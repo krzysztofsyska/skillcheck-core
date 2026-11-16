@@ -16,6 +16,7 @@ const base = () => ({
   pr: { number: 7, merged: true, head_sha: H, merge_commit_sha: M, base_ref: 'integration' },
   files: ['app/regulamin/page.tsx'], migrations: [], checkRuns: green(H), comments: [pass()],
   migrationExecutor: false, backups: null, now: new Date('2026-11-16T12:00:00Z'),
+  patches: [{ path: 'app/regulamin/page.tsx', patch: '--- a/x\n+++ b/x\n-stary tekst\n+nowy tekst' }], unreleasedMigrations: [],
 });
 const reasons = mut => { const i = base(); mut(i); return evaluateCandidate(i).reasons; };
 
@@ -149,4 +150,43 @@ test('scope gate: main accepts integration and release/auto-* promotions only', 
   assert.equal(run('claude/feature'), false);
   assert.equal(run('release/other'), false);
   assert.equal(classify({ files: ['app/x.tsx'], body: body.replace('PROMOTION: YES', 'PROMOTION: NO'), base: 'main', headRef: 'release/auto-pr-1' }).ok, false);
+});
+
+test('F1: every known payment/price file is frozen by path (repository-wide, cannot regress)', async () => {
+  const { execSync } = await import('node:child_process');
+  const files = execSync("git ls-files app lib components scripts", { encoding: 'utf8' }).split('\n').filter(Boolean);
+  const { readFileSync } = await import('node:fs');
+  // Files that mention payment identifiers in their content but are not payment code.
+  const NOT_PAYMENT = {
+    'lib/ai-ledger-writer.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
+    'lib/competency-broker-tls.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
+    'lib/tenant-domain-network.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
+  };
+  const missed = [];
+  for (const f of files) {
+    let text = ''; try { text = readFileSync(f, 'utf8'); } catch { continue; }
+    if (!/przelewy24|sc19-payment|P24_|fakturownia/i.test(text) || NOT_PAYMENT[f]) continue;
+    if (!classifyRelease([f]).reasons.some(r => /^(PAYMENTS|PAYMENT_PATH_FREEZE):/.test(r))) missed.push(f);
+  }
+  assert.deepEqual(missed, []);
+  for (const f of ['lib/sc19-payments.ts', 'lib/sc19-przelewy24-provider.ts', 'lib/sc19-fakturownia-provider.ts', 'lib/sc19-payment-http.ts',
+    'lib/sc19-p24-diagnostic.ts', 'app/components/marketing/content.ts', 'app/components/marketing/package-comparison.tsx', 'app/preselekcja/page.tsx']) {
+    assert.ok(classifyRelease([f]).reasons.length, f);
+  }
+});
+
+test('payment content in changed lines is frozen whatever the file is called', () => {
+  const r = p => evaluateCandidate({ ...base(), patches: [{ path: 'app/regulamin/page.tsx', patch: p }] }).reasons;
+  assert.ok(r('+const x = createPrzelewy24Order()').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
+  assert.ok(r('-  cena: "300 zł brutto"').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
+  assert.ok(r('+ status = orders_status').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
+  assert.deepEqual(r(' context line with 300 zł only\n+nowy akapit regulaminu'), []);
+  assert.ok(evaluateCandidate({ ...base(), patches: null }).reasons.includes('PAYMENT_CONTENT_UNREADABLE'));
+});
+
+test('N1: product code waits while integration has migrations not yet on production; docs may ship', () => {
+  const pending = ['supabase/migrations/20261112100000_sc_method_profile.sql'];
+  assert.ok(evaluateCandidate({ ...base(), unreleasedMigrations: pending }).reasons.includes('UNRELEASED_MIGRATIONS_PRECEDE'));
+  assert.deepEqual(evaluateCandidate({ ...base(), files: ['README.md'], patches: [{ path: 'README.md', patch: '+x' }], unreleasedMigrations: pending }).reasons, []);
+  assert.ok(evaluateCandidate({ ...base(), unreleasedMigrations: null }).reasons.includes('UNRELEASED_MIGRATIONS_UNKNOWN'));
 });
