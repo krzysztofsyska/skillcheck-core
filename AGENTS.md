@@ -169,7 +169,7 @@ The required status `production-approval-attestation` (`.github/workflows/produc
 
 ## Continuous release policy (owner decision 2026-11-08, issue #369)
 
-Within the scope approved in [docs/continuous-release-policy.md](docs/continuous-release-policy.md), the per-release owner click in the Production loop is replaced by a trusted, fail-closed automatic preflight, **once that publisher is implemented and verified**. Until then the Production loop above applies unchanged. HOLD P24 stays absolute for LIVE Przelewy24 (real money), with one narrow exception the owner opened himself — see "Przelewy24 Sandbox on the production domain" below. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent. All technical protections remain.
+Within the scope approved in [docs/continuous-release-policy.md](docs/continuous-release-policy.md), the per-release owner click in the Production loop is replaced by a trusted, fail-closed automatic preflight, **once that publisher is implemented and verified**. Until then the Production loop above applies unchanged. HOLD P24 was **lifted by the owner on 2026-11-15** (issue #367; he is moving away from Przelewy24 to Stripe). It is replaced by a narrower **payment-path freeze**: until the owner revokes it, no release may change the payment integration (Przelewy24 or any other provider), the purchase flow, prices, the package catalog or order states; such a change is BLOCKED and goes to the owner as a question, even when every gate is green. The freeze is lifted only when Stripe works in test mode and the owner confirms it. Lifting HOLD P24 is **not** consent to a release. These gates stay in full: production publishing only through the verified trusted mechanism of this policy (no such mechanism = BLOCKED, never a manual deploy or a manual write to `main`); the three agent-pipeline flags stay `false`; the formal approval of the `production-approval` environment is a separate owner decision; rotation of the production database password (#420) happens before the first automatic release. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent. All technical protections remain.
 
 ## Przelewy24 Sandbox on the production domain (owner decision 2026-11-11, by voice)
 
@@ -201,7 +201,8 @@ the only way anything reaches it: as a migration in a promotion PR he approves, 
 rule 6 included: the role's password is a secret an agent session neither reads nor needs.
 
 This record exists because the HOLD above would otherwise make a future session revert the work in
-good faith. Only the owner opens a gate; this records that he did, and with what scope. An
+good faith. It is kept as history: since HOLD P24 was lifted on 2026-11-15 it opens nothing beyond the
+payment-path freeze described in „Continuous release policy" above. Only the owner opens a gate; this records that he did, and with what scope. An
 agent-written line never widens it.
 
 ## Agent controller
