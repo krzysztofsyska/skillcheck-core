@@ -24,7 +24,7 @@
     "test:screening": "node --test tests/screening.test.mjs tests/screening-result-database.test.mjs tests/screening-hmac.test.mjs tests/screening-ai.test.mjs tests/screening-worker.test.mjs tests/screening-dispatch.test.mjs tests/screening-synthetic-fixture.test.mjs tests/screening-ui.test.mjs tests/screening-evidence.test.mjs tests/screening-evidence-schema.test.mjs tests/screening-evidence-database.test.mjs tests/screening-claim-routing.test.mjs tests/interview-gaps.test.mjs tests/screening-worker-edge-imports.test.mjs tests/screening-gateway.test.mjs",
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
     "test:screening-report": "node --test tests/screening-report.test.mjs",
-    "test:candidate-report": "node --experimental-strip-types --test tests/candidate-report.test.mjs tests/candidate-report-export.test.mjs tests/company-report-export-history.test.mjs tests/position-requirement-flags-database.test.mjs",
+    "test:candidate-report": "node --experimental-strip-types --test tests/candidate-report.test.mjs tests/candidate-report-export.test.mjs tests/company-report-export-history.test.mjs tests/position-requirement-flags-database.test.mjs tests/candidate-report-print.test.mjs",
     "test:candidate-report-db": "node --experimental-strip-types --test --test-concurrency=1 tests/candidate-report-export-database.test.mjs tests/candidate-report-export-history-database.test.mjs tests/company-report-export-history-database.test.mjs",
     "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
     "test:ac-report-http": "node --test tests/assessment-center-report-http.test.mjs",
