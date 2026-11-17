@@ -34,6 +34,27 @@ w poleceniu właściciela, z którego pochodzi ten cytat; pełniejszego dosłown
 nie ma. Dosłowną odpowiedzią właściciela na wszystkie pięć pozycji jest wyłącznie „tak jak polecasz"
 (16.11.2026, 22:39).
 
+## Decyzje właściciela 17.11.2026
+
+Zapisane na polecenie właściciela z 17.11.2026 (zadania jednorazowe J1 i J2). Cytaty dosłowne z czatu.
+
+**Automatyczne wgrywanie bezpiecznych zmian bazy (J1, issue [#491](https://github.com/krzysztofsyska/skillcheck-core/issues/491)).**
+Droga B w czacie brzmiała: „B. Automat dla bezpiecznych zmian — Zmiany, które tylko dodają (nowa tabela, nowa kolumna), idą same po sprawdzeniu świeżej kopii; kasujące lub przerabiające dane dalej czekają na Ciebie". Właściciel:
+
+- 07:20 „Na pierwsze pytanie to będzie B"
+- 07:25 „Część pierwsza to uruchom."
+
+**Gwarancja PRESELEKCJI (J2, issue [#492](https://github.com/krzysztofsyska/skillcheck-core/issues/492)).** Właściciel:
+
+- 07:25 „Jest powtórka połączona ze zwrotem. Najpierw poprawiamy za darmo, a jeżeli nie pasuje, oddajemy pieniądze. […] Minimum 5 kandydatów."
+- 07:49 „Ok" — w odpowiedzi na trzy doprecyzowania czatu: kandydat „wart rozmowy" spełnia wszystkie wymagania konieczne klienta; zwrot dopiero po powtórce z udziałem klienta; gwarancja działa także przy słabym naborze, ale tylko dla pierwszych 20 firm.
+- 07:53 „Termin zgłoszenia gwarancji to 7 dni od otrzymania raportu. Zapis o gwarancji nie idzie do prawnika, tylko od razu do polityki."
+- 07:56 „Musi zostać załadowana do obu baz, i zarówno do skill check core, jak i skill check preselekcja. Dobrze, przeniesiemy go przy okazji podłączenia Stripe'a."
+
+Uwaga: „[…]" to skrót w poleceniu właściciela, z którego pochodzi cytat; pełniejszego brzmienia w
+repozytorium nie ma. Zgodnie z wiadomością z 07:56 zapis trafia teraz do `skillcheck-core`, a do
+`skillcheck-preselekcja` przy podłączaniu Stripe'a.
+
 ## Kolejność funkcji
 
 Wykonawca bierze pierwszy wolny krok z najwyższej pozycji, pomijając pozycje oznaczone CZEKA.
@@ -90,6 +111,7 @@ treści strony; nie zmienia integracji płatności, przepływu zakupu, cen w kat
 |---|---|---|
 | Ukrycie pakietów na czas weryfikacji Przelewy24 | ZROBIONE (do odwrócenia) | PR #398, issue #397 (`lib/public-future-offers.ts`) |
 | Pakiety widoczne na stronie głównej, w kalkulatorze i na stronie płatności, z dopiskiem „nie można jeszcze kupić" i bez wzmianki o bocie | DO ZROBIENIA | dziś ukryte, gdy `PUBLIC_FUTURE_OFFERS_ENABLED` nie jest `true` (`.env.example` ma `false`); wartość na produkcji DO SPRAWDZENIA |
+| Gwarancja wyniku PRESELEKCJI w regulaminie (nowa wersja dokumentu) i na stronie oferty przy PRESELEKCJI; zwrot wykonuje operator poza aplikacją; bez zmiany ceny, katalogu, przepływu zakupu i płatności | DO ZROBIENIA | issue #492 (polecenie właściciela 17.11.2026, cytaty wyżej) |
 
 ### R5. Kalkulator wyceny (SC-PRICING-W1…W4) — CZEKA
 
@@ -136,3 +158,4 @@ dopisywać bez takiego uzasadnienia.
 
 - [#369](https://github.com/krzysztofsyska/skillcheck-core/issues/369) — polityka wydań i automatyczny publikator.
 - [#461](https://github.com/krzysztofsyska/skillcheck-core/issues/461) — wdrożenie screening-worker razem z wydaniem (PR #465 otwarty); do tego czasu obowiązuje tymczasowa bramka workera (`WORKER_DEPLOY_REQUIRED` w `docs/continuous-release-policy.md`).
+- [#491](https://github.com/krzysztofsyska/skillcheck-core/issues/491) — Automatyczne wgrywanie bezpiecznych migracji na produkcję (droga B). Uzasadnienie: dziś każda migracja blokuje wydanie gotowych funkcji (`UNRELEASED_MIGRATIONS_PRECEDE`, `MIGRATION_EXECUTOR_UNAVAILABLE`) do ręcznej zgody właściciela. Zależy od #465 (te same pliki publikatora).
