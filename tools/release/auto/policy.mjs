@@ -43,6 +43,34 @@ export function destructiveSql(sql) {
   return DESTRUCTIVE.filter(([, re]) => re.test(sql)).map(([code]) => code);
 }
 
+// #491 (review fix): ALLOWLIST of additive statements, an extra gate beside DESTRUCTIVE. Anything
+// not clearly additive is refused (NON_ADDITIVE_SQL) and waits for the owner via db-migrate-production.
+// Comments and string literals are stripped first; dollar quoting (function bodies, DO blocks) is
+// refused outright, as are policies, grants, functions, views, triggers, types and extensions.
+const IDENT = String.raw`("?[a-z_][\w$]*"?\.)?"?[a-z_][\w$]*"?`;
+const ADDITIVE = [
+  ['TXN', /^(begin|commit)$/],
+  ['CREATE_SCHEMA', /^create schema (if not exists )?\S+$/],
+  ['CREATE_TABLE', new RegExp(`^create table (if not exists )?${IDENT} ?\\(`)],
+  ['CREATE_INDEX', /^create (unique )?index (concurrently )?(if not exists )?\S+ on /],
+  ['ENABLE_RLS', new RegExp(`^alter table (if exists )?${IDENT} enable row level security$`)],
+  ['COMMENT', /^comment on (table|column|schema|index) /],
+  // only ADD COLUMN actions: any other action after a comma refuses
+  ['ADD_COLUMN', new RegExp(`^alter table (if exists )?${IDENT} add column (if not exists )?(?!.*,\\s*(?!add column\\b)(add|drop|alter|disable|enable|no|force|rename|owner|set|reset|validate|replica|cluster|inherit|attach|detach)\\b)`)],
+];
+export function nonAdditiveSql(sql) {
+  if (typeof sql !== 'string' || !sql.trim()) return ['UNREADABLE'];
+  const text = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ').replace(/'(?:[^']|'')*'/g, "''");
+  if (/\$[a-z_0-9]*\$/i.test(text)) return ['DOLLAR_QUOTING'];
+  const bad = [];
+  for (const raw of text.split(';')) {
+    const st = raw.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!st) continue;
+    if (!ADDITIVE.some(([, re]) => re.test(st))) bad.push(st.split(' ').slice(0, 2).join('_').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 30) || 'STATEMENT');
+  }
+  return [...new Set(bad)];
+}
+
 /**
  * Scope of one candidate change.
  * @param files       changed paths (strings)
@@ -65,7 +93,9 @@ export function classifyRelease(files, migrations = []) {
   const list = Array.isArray(migrations) ? migrations : [];
   for (const path of migrationFiles) {
     const m = list.find(x => x && x.path === path);
-    for (const kind of destructiveSql(m?.sql)) reasons.push(`DESTRUCTIVE_SQL:${kind}:${path}`);
+    const destructive = destructiveSql(m?.sql);
+    for (const kind of destructive) reasons.push(`DESTRUCTIVE_SQL:${kind}:${path}`);
+    if (!destructive.length) for (const kind of nonAdditiveSql(m?.sql)) reasons.push(`NON_ADDITIVE_SQL:${kind}:${path}`);
   }
   return { reasons, migrations: migrationFiles };
 }

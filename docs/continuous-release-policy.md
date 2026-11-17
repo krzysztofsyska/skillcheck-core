@@ -74,6 +74,13 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   agent pipeline and the publisher itself. Changes to the gates need a human merge.
 - `DESTRUCTIVE_SQL:<KIND>:<file>` — any `DROP …`, `DELETE FROM`, `TRUNCATE`, `ALTER TABLE … DROP`,
   `ALTER … TYPE`, `RENAME`, `UPDATE … SET` anywhere in a migration (comments included).
+- `NON_ADDITIVE_SQL:<KIND>:<file>` — allowlist gate beside `DESTRUCTIVE_SQL`: a migration may contain
+  only `begin`/`commit`, `create schema`, `create table`, `create index`, `alter table … add column`,
+  `alter table … enable row level security` and `comment on`. Anything else (`disable row level
+  security`, `grant`/`revoke`, `create`/`alter policy`, functions or any `$$` quoting, views, inserts,
+  other `alter table` actions …) is refused in the publisher and again in the migrate job, and waits
+  for the owner via `db-migrate-production`. After an interrupted run the list of applied migrations
+  is re-derived from the merge commit, so a later rollback still carries `ROLLBACK_INSUFFICIENT_DATA_CHANGED`.
 - Migrations at all, until both hold: a completed Supabase backup at most 24 h old
   (`BACKUP_EVIDENCE_MISSING` / `BACKUP_NOT_COMPLETED` / `BACKUP_STALE`) **and** an unattended
   migration executor (`MIGRATION_EXECUTOR_UNAVAILABLE` — until the owner places the secret below;

@@ -33,11 +33,11 @@ function fixture(files = SQL, { modifyBase = false } = {}) {
   const g = createGit(work);
   write(work, `supabase/migrations/${BASE}`, 'begin;\ncreate table public.base(id int);\ncommit;\n');
   g('add', '.'); g('commit', '-m', 'init'); g('push', 'origin', 'main');
-  g('checkout', '-b', 'release/auto-pr-900');
+  g('checkout', '-b', 'release/auto-pr-100');
   // Written in reverse order on purpose: the runner must apply in repository order.
   for (const [f, t] of Object.entries(files).reverse()) write(work, `supabase/migrations/${f}`, t);
   if (modifyBase) write(work, `supabase/migrations/${BASE}`, 'begin;\ncreate table public.base2(id int);\ncommit;\n');
-  g('add', '.'); g('commit', '-m', 'release'); g('push', 'origin', 'release/auto-pr-900');
+  g('add', '.'); g('commit', '-m', 'release'); g('push', 'origin', 'release/auto-pr-100');
   const head = g('rev-parse', 'HEAD').trim();
   const runner = join(root, 'runner');
   createGit(root)('clone', origin, runner); // like actions/checkout with fetch-depth 0: every branch
@@ -111,12 +111,41 @@ test('#491: destructive SQL is refused again in the migrate job before anything 
   assert.equal(apply.calls.length, 0);
 });
 
+test('#491: NON_ADDITIVE_SQL allowlist: anything not clearly additive is refused before anything runs', async () => {
+  const bad = {
+    'alter table method.profile_versions disable row level security;': 'ALTER_TABLE',
+    'alter table public.notes alter column id set not null;': 'ALTER_TABLE',
+    'alter table public.notes add column x int, alter column id set not null;': 'ALTER_TABLE',
+    'revoke select on public.notes from anon;': 'REVOKE_SELECT',
+    'grant select on public.notes to anon;': 'GRANT_SELECT',
+    'alter policy p on public.notes using (true);': 'ALTER_POLICY',
+    'create policy p on public.notes for select using (true);': 'CREATE_POLICY',
+    'insert into public.notes values (1);': 'INSERT_INTO',
+    'create or replace function public.f() returns int language sql as $$ select 1 $$;': 'DOLLAR_QUOTING',
+    'create view public.v as select 1;': 'CREATE_VIEW',
+  };
+  for (const [stmt, kind] of Object.entries(bad)) {
+    const fx = fixture({ [A]: `begin;\n${stmt}\ncommit;\n` });
+    const apply = fakeApply();
+    const r = await run(fx, { applyImpl: apply.fn });
+    assert.deepEqual([r.status, r.applied], ['refused', []], stmt);
+    assert.equal(r.code, `NON_ADDITIVE_SQL:${kind}:supabase/migrations/${A}`, stmt);
+    assert.equal(apply.calls.length, 0);
+  }
+  // Clearly additive statements, comments and literals containing ';' still pass.
+  const ok = fixture({ [A]: "-- add notes; safe\nbegin;\ncreate schema if not exists notes_s;\ncreate table public.notes(id int default 1, t text default 'a;b');\nalter table public.notes enable row level security;\nalter table public.notes add column if not exists x int;\ncreate unique index if not exists n_i on public.notes(id);\ncomment on table public.notes is 'x';\ncommit;\n" });
+  assert.equal((await run(ok, { applyImpl: fakeApply().fn })).status, 'applied');
+});
+
 test('#491: only the head of the publisher\'s own release branch, only new migration files', async () => {
   const fx = fixture();
   const apply = fakeApply();
-  const other = await run(fx, { applyImpl: apply.fn, request: { release_pr: 900, release_head: 'f'.repeat(40) } });
+  const other = await run(fx, { applyImpl: apply.fn, request: { release_pr: 900, source_pr: 100, release_head: 'f'.repeat(40) } });
   assert.equal(other.code, 'MIGRATION_REQUEST_NOT_RELEASE_HEAD');
-  const wrongPr = await run(fx, { applyImpl: apply.fn, request: { release_pr: 901, release_head: fx.head } });
+  const wrongPr = await run(fx, { applyImpl: apply.fn, request: { release_pr: 900, source_pr: 101, release_head: fx.head } });
+  // The branch is named after the SOURCE PR (100), never after the release PR number (900).
+  assert.equal((await run(fx, { applyImpl: apply.fn, request: { release_pr: 100, source_pr: 900, release_head: fx.head } })).code, 'MIGRATION_REQUEST_NOT_RELEASE_HEAD');
+  assert.equal((await run(fx, { applyImpl: apply.fn, request: { release_pr: 900, release_head: fx.head } })).code, 'MIGRATION_REQUEST_INVALID');
   assert.equal(wrongPr.code, 'MIGRATION_REQUEST_NOT_RELEASE_HEAD');
   for (const request of [null, {}, { release_pr: '900', release_head: fx.head }, { release_pr: 900, release_head: 'main' }]) {
     assert.equal((await run(fx, { applyImpl: apply.fn, request })).code, 'MIGRATION_REQUEST_INVALID');

@@ -4,11 +4,13 @@
 //
 // - Trusted code only: this file runs from the `main` checkout. The release commit is read as
 //   data (SQL files of a detached worktree), never executed.
-// - The release SHA must be the tip of the publisher's own branch `release/auto-pr-<N>`.
+// - The release SHA must be the tip of the publisher's own branch `release/auto-pr-<N>`, where N is
+//   the SOURCE PR number (request.source_pr), not the number of the release PR.
 // - The migration list is computed HERE from that commit (files added under supabase/migrations/
 //   since it left main), not taken from the request. Only new files; a changed or removed
 //   migration file is refused.
-// - DESTRUCTIVE_SQL is checked again with the publisher's own gate (defence in depth).
+// - DESTRUCTIVE_SQL is checked again with the publisher's own gate (defence in depth), plus the
+//   NON_ADDITIVE_SQL allowlist: anything not clearly additive is refused.
 // - Applied one by one in order by tools/db-migrate/apply.mjs (same ledger: statements + sha256,
 //   never `supabase db push`), stopping at the first error.
 // - The connection string is never printed; only migration names, hashes and SQLSTATE codes.
@@ -21,7 +23,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { apply, migrationName, sha256, tlsOptions, withoutTlsParameters } from '../../db-migrate/apply.mjs';
-import { SHA, destructiveSql } from './policy.mjs';
+import { SHA, destructiveSql, nonAdditiveSql } from './policy.mjs';
 import { createGit } from './git.mjs';
 
 export const MIGRATIONS_DIR = 'supabase/migrations/';
@@ -31,11 +33,11 @@ export async function runMigrate({ request, git, databaseUrl, applyImpl = apply,
   const out = (status, code, applied = []) => ({ release_head: head, status, applied, code: String(code).slice(0, 160) });
   // No secret: exactly today's behaviour, nothing is touched.
   if (typeof databaseUrl !== 'string' || !databaseUrl.trim()) return out('unavailable', 'MIGRATION_EXECUTOR_UNAVAILABLE');
-  if (!head || !Number.isInteger(request?.release_pr) || request.release_pr < 1) return out('refused', 'MIGRATION_REQUEST_INVALID');
+  if (!head || !Number.isInteger(request?.release_pr) || request.release_pr < 1 || !Number.isInteger(request?.source_pr) || request.source_pr < 1) return out('refused', 'MIGRATION_REQUEST_INVALID');
   if (!runId) return out('refused', 'MIGRATION_RUN_ID_MISSING');
 
   let tip = null;
-  try { tip = git('rev-parse', '--verify', `origin/release/auto-pr-${request.release_pr}^{commit}`).trim(); } catch { /* refused below */ }
+  try { tip = git('rev-parse', '--verify', `origin/release/auto-pr-${request.source_pr}^{commit}`).trim(); } catch { /* refused below */ }
   if (tip !== head) return out('refused', 'MIGRATION_REQUEST_NOT_RELEASE_HEAD');
   let base;
   try { base = git('merge-base', 'origin/main', head).trim(); } catch { return out('refused', 'MIGRATION_BASE_UNKNOWN'); }
@@ -51,6 +53,9 @@ export async function runMigrate({ request, git, databaseUrl, applyImpl = apply,
   for (const f of files) {
     const kinds = destructiveSql(sql[f]);
     if (kinds.length) return out('refused', `DESTRUCTIVE_SQL:${kinds[0]}:${MIGRATIONS_DIR}${f}`);
+    // Allowlist: only clearly additive statements run unattended; the rest waits for the owner.
+    const other = nonAdditiveSql(sql[f]);
+    if (other.length) return out('refused', `NON_ADDITIVE_SQL:${other[0]}:${MIGRATIONS_DIR}${f}`);
   }
 
   // What production already holds. A run cut off after applying would otherwise retry and fail

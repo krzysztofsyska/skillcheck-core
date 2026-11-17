@@ -51,7 +51,12 @@ export async function runPublisher(d) {
     if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, 'wydane, sprawdzone po przerwanym przebiegu, smoke OK');
     else {
       const pr = await d.gh.get(`/pulls/${unchecked.pr}`);
-      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge }, [], true);
+      // The in-memory applied list died with the cut-off run. A release is merged only after its
+      // migrations were applied, so the files the merge added under supabase/migrations/ are exactly
+      // what reached the database: derive them, so a rollback still says the data changed.
+      const added = d.git('diff', '--name-only', '--diff-filter=A', `${unchecked.merge}^1`, unchecked.merge, '--', 'supabase/migrations')
+        .split('\n').filter(Boolean).map(f => f.slice(f.lastIndexOf('/') + 1)).sort();
+      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge }, added, true);
     }
   }
   if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };

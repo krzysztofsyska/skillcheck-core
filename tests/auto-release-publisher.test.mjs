@@ -764,6 +764,20 @@ test('#491: error mid-batch: stop, release PR closed unmerged, freeze issue with
   assert.equal((await runPublisher(migDeps(fx, gh))).status, 'FROZEN');
 });
 
+test('#491: migration release merged, run cut off before the done marker, next smoke fails: rollback still carries ROLLBACK_INSUFFICIENT_DATA_CHANGED', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  await runPublisher(migDeps(fx, gh));
+  const outcome = { release_head: state.pulls[0].head.sha, status: 'applied', applied: [MIG] };
+  assert.equal((await runPublisher(migDeps(fx, gh, { migrationOutcome: outcome }))).status, 'RELEASED');
+  state.comments[100] = state.comments[100].filter(c => !/sc-auto-release-done/.test(c.body));
+  fx.git('fetch', 'origin', 'main');
+  let calls = 0;
+  const r = await runPublisher(migDeps(fx, gh, { smoke: async () => (++calls === 1 ? { ok: false, failures: ['/:STATUS_500'] } : { ok: true, failures: [] }) }));
+  assert.equal(r.status, 'ROLLED_BACK', JSON.stringify(r));
+  assert.ok(r.codes.includes('ROLLBACK_INSUFFICIENT_DATA_CHANGED'), JSON.stringify(r.codes));
+});
+
 test('#491: failure before any migration committed freezes without the data-changed code; unknown outcome says so', async () => {
   for (const [outcome, codes] of [
     [{ status: 'failed', applied: [], code: `MIGRATION_FAILED:${MIG}:42601` }, [`MIGRATION_FAILED:${MIG}:42601`]],
