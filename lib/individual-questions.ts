@@ -147,39 +147,79 @@ export async function loadShortlistIndividualQuestions(
     const label = (candidateId && nameOf.get(candidateId)) || `Kandydat ${index + 1}`;
     const base = { applicationId: entry.application_id, label };
     if (!candidateId) return { ...base, ...none('unavailable') };
-    const route = { companyId, recruitmentId, applicationId: entry.application_id };
-    const readAnalysis = () => client.from('screening_analysis_versions').select(analysisColumns)
-      .eq('company_id', companyId).eq('application_id', entry.application_id).eq('recruitment_id', recruitmentId)
-      .order('analysis_version', { ascending: false }).limit(1).maybeSingle();
-    const analysis = await readAnalysis();
-    if (analysis.error) return { ...base, ...none('unavailable') };
-    const current = analysis.data as AnalysisSnapshot | null;
-    if (!current || current.execution_status !== 'completed') return { ...base, ...none('no_analysis') };
-    const readReview = () => client.from('screening_result_reviews').select('id,analysis_id,review_version,disposition')
-      .eq('company_id', companyId).eq('analysis_id', current.id).order('review_version', { ascending: false }).limit(1);
-    const [review, rows, fingerprint] = await Promise.all([
-      readReview(),
-      client.from('screening_criterion_results').select(criterionColumns)
-        .eq('company_id', companyId).eq('analysis_id', current.id).order('criterion_order'),
-      deps.fingerprint(client, route),
-    ]);
-    if (review.error || rows.error || !Array.isArray(review.data) || review.data.length > 1 || !Array.isArray(rows.data)) {
-      return { ...base, ...none('unavailable') };
-    }
-    // Data API reads are not one transaction: an analysis or review that changed
-    // in between must not produce a mixed snapshot. Fail closed instead.
-    const [againAnalysis, againReview] = await Promise.all([readAnalysis(), readReview()]);
-    if (againAnalysis.error || againReview.error
-      || JSON.stringify(againAnalysis.data) !== JSON.stringify(analysis.data)
-      || JSON.stringify(againReview.data) !== JSON.stringify(review.data)) {
-      return { ...base, ...none('unavailable') };
-    }
-    return { ...base, ...individualQuestionsForCandidate({
-      entry, analysis: current, latestReview: (review.data[0] as ReviewSnapshot | undefined) ?? null,
-      rows: rows.data as unknown as CriterionSnapshot[], fingerprint,
-    }) };
+    return { ...base, ...await readCandidateQuestions(client, { companyId, recruitmentId }, entry, deps) };
   }));
   return { candidates, truncated };
+}
+
+/**
+ * Reads one shortlisted candidate's latest analysis, latest review and criterion
+ * rows, then runs the pure gate `individualQuestionsForCandidate`.
+ */
+async function readCandidateQuestions(
+  client: Client,
+  { companyId, recruitmentId }: { companyId: string; recruitmentId: string },
+  entry: ShortlistEntrySnapshot,
+  deps: IndividualQuestionsDeps,
+): Promise<CandidateQuestions> {
+  const route = { companyId, recruitmentId, applicationId: entry.application_id };
+  const readAnalysis = () => client.from('screening_analysis_versions').select(analysisColumns)
+    .eq('company_id', companyId).eq('application_id', entry.application_id).eq('recruitment_id', recruitmentId)
+    .order('analysis_version', { ascending: false }).limit(1).maybeSingle();
+  const analysis = await readAnalysis();
+  if (analysis.error) return none('unavailable');
+  const current = analysis.data as AnalysisSnapshot | null;
+  if (!current || current.execution_status !== 'completed') return none('no_analysis');
+  const readReview = () => client.from('screening_result_reviews').select('id,analysis_id,review_version,disposition')
+    .eq('company_id', companyId).eq('analysis_id', current.id).order('review_version', { ascending: false }).limit(1);
+  const [review, rows, fingerprint] = await Promise.all([
+    readReview(),
+    client.from('screening_criterion_results').select(criterionColumns)
+      .eq('company_id', companyId).eq('analysis_id', current.id).order('criterion_order'),
+    deps.fingerprint(client, route),
+  ]);
+  if (review.error || rows.error || !Array.isArray(review.data) || review.data.length > 1 || !Array.isArray(rows.data)) {
+    return none('unavailable');
+  }
+  // Data API reads are not one transaction: an analysis or review that changed
+  // in between must not produce a mixed snapshot. Fail closed instead.
+  const [againAnalysis, againReview] = await Promise.all([readAnalysis(), readReview()]);
+  if (againAnalysis.error || againReview.error
+    || JSON.stringify(againAnalysis.data) !== JSON.stringify(analysis.data)
+    || JSON.stringify(againReview.data) !== JSON.stringify(review.data)) {
+    return none('unavailable');
+  }
+  return individualQuestionsForCandidate({
+    entry, analysis: current, latestReview: (review.data[0] as ReviewSnapshot | undefined) ?? null,
+    rows: rows.data as unknown as CriterionSnapshot[], fingerprint,
+  });
+}
+
+/**
+ * The same questions for ONE candidate, shown on that candidate's task page
+ * next to the competency test access. Same gate as the list: flag on and the
+ * user is the company owner or a recruiter, otherwise null and nothing is read.
+ * Without an active shortlist entry the result is 'not_shortlisted' and nothing
+ * else is read. Read-only: nothing is written or sent to the candidate.
+ */
+export async function loadCandidateIndividualQuestions(
+  client: Client,
+  { companyId, recruitmentId, applicationId, canEdit, flag }: {
+    companyId: string; recruitmentId: string; applicationId: string; canEdit: boolean; flag: string | undefined;
+  },
+  deps: IndividualQuestionsDeps = { fingerprint: defaultFingerprint },
+): Promise<CandidateQuestions | null> {
+  if (!isExerciseAiEnabled(flag) || !canEdit) return null;
+  const shortlist = await client.from('recruitment_shortlist_entries')
+    .select('application_id,analysis_id,review_id,removed_at')
+    .eq('company_id', companyId).eq('recruitment_id', recruitmentId).eq('application_id', applicationId)
+    .is('removed_at', null).limit(2);
+  if (shortlist.error || !Array.isArray(shortlist.data)) return none('unavailable');
+  const entries = (shortlist.data as ShortlistEntrySnapshot[]).filter(entry => entry && entry.removed_at === null);
+  if (!entries.length) return none('not_shortlisted');
+  // At most one active entry per application is expected; anything else fails closed.
+  if (entries.length > 1 || entries[0].application_id !== applicationId) return none('unavailable');
+  return readCandidateQuestions(client, { companyId, recruitmentId }, entries[0], deps);
 }
 
 export const individualQuestionsStatusLabels: Record<Exclude<IndividualQuestionsStatus, 'ready'>, string> = {
