@@ -157,6 +157,29 @@ test('ochrona przed formułami: każda komórka zaczynająca się od =, +, -, @ 
   }
 });
 
+test('#338: sekcja „Brak dowodu” — każdy brak z powodem i etykietą asesora, bez identyfikatorów i cudzych tekstów', async () => {
+  const lines = (await body(await run(fakeClient()))).split('\r\n');
+  const header = lines.indexOf('"Finalista";"Zgłoszenie";"Kompetencja";"Etap";"Brak dowodu"');
+  assert.ok(header > 0, 'sekcja braków jest w pliku');
+  const gaps = lines.slice(header + 1).filter(Boolean);
+  assert.deepEqual(gaps.filter(line => line.startsWith('"Anna Syntetyczna"')).map(line => line.split(';').slice(2).join(';')), [
+    '"Myślenie finansowe";"Etap 2 — konsekwencje finansowe";"Czeka na oddanie obu niezależnych arkuszy."',
+    '"Myślenie finansowe";"Etap 3 — plan zmiany";"Niewystarczające dane, bez dowodu: Asesor 2 (Członek zespołu 1)."',
+    '"Planowanie zmiany";"Etap 4 — rozmowa z dyrektorem operacyjnym";"Nie przypisano asesorów — brak arkuszy."',
+    '"Komunikacja z biznesem";"Etap 4 — rozmowa z dyrektorem operacyjnym";"Nie przypisano asesorów — brak arkuszy."',
+  ]);
+  assert.equal(gaps.filter(line => line.includes('Formuła')).length, 6);
+  const section = gaps.join('\n');
+  assert.ok(!section.includes(ids.owner) && !section.includes(ids.recruiter));
+  assert.doesNotMatch(section, /AsesorPierwszy|AsesorDrugi|Uzasadnienie|OpisRozbieznosci|NotatkaEksperta/);
+  // Pełny dowód od obu asesorów: jawne „brak braków”, a nie pusta sekcja.
+  const full = sessionPayload();
+  full.session.plannedCompetencies = ['Diagnoza przyczyn'];
+  full.finalists = full.finalists.slice(0, 1);
+  const csv = await body(await run(fakeClient({ payload: full })));
+  assert.match(csv, /"Anna Syntetyczna";"[0-9a-f-]+";"";"";"Brak braków: każda kompetencja ma dowód od obu asesorów w każdym etapie\."/);
+});
+
 test('ślepa ocena: bez własnego arkusza plik nie zawiera tekstów innych asesorów ani eksperta', async () => {
   const csv = await body(await run(fakeClient({ payload: blindPayload() })));
   for (const hidden of ['InformacjaZwrotna', 'OpisZmiany', 'DowodZmiany', 'NotatkaEksperta', 'UzasadnienieUzgodnienia', 'OpisRozbieznosci', 'UzasadnienieDrugie']) {
@@ -219,6 +242,7 @@ test('strona i trasa: link „Pobierz CSV” tylko przy istniejącej sesji, tras
   assert.ok(link > page.indexOf("read.state === 'invalid'"), 'link dopiero po wczytaniu i weryfikacji sesji');
   assert.match(page, /readAcSession\(client, recruitmentId\)/);
   assert.match(page, /acAgreementText\(row\.agreement, who\)/);
+  assert.match(page, /acEvidenceGapText\(gap, who\)/, '#338: ten sam tekst braków na stronie i w pliku');
   assert.match(routeSource, /createClient\(\)/);
   assert.match(routeSource, /assessmentCenterPreviewEnabled\(\)/);
   assert.doesNotMatch(routeSource + readFileSync('lib/assessment-center-session-export.ts', 'utf8'), /SERVICE_ROLE|serviceRole|createAdminClient/);
