@@ -651,6 +651,14 @@ export type Database = {
         Args: { target_company: string; target_recruitment: string; enabled: boolean };
         Returns: boolean;
       };
+      /** R1-AUTO-ACCESS (20261117200000_r1_auto_competency_access.sql). Same access check as
+       * read_exercise_ai_settings (42501). In auto mode only, issues competency test access for released
+       * AI tests to shortlisted applications (R1 in the database); never returns a link secret. The
+       * jsonb result is validated in lib/exercise-ai-auto-access.ts. */
+      issue_exercise_ai_auto_access: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: Json;
+      };
       ac_assign_pair: {Args:{application:string;revision:string;first_id:string;second_id:string};Returns:string};
       ac_find_pair: {Args:{application:string;revision:string};Returns:string|null};
       ac_read_pair: {Args:{pair_id:string};Returns:Json};

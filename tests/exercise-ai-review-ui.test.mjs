@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import * as reviewHelpers from '../lib/exercise-ai-review.ts';
 import * as definitionHelpers from '../lib/exercise-definition.ts';
 import * as contextIdentity from '../lib/exercise-context-identity.ts';
+import * as autoAccessHelpers from '../lib/exercise-ai-auto-access.ts';
 
 const ids={company:'aaaaaaaa-1111-4222-8333-444444444444',recruitment:'bbbbbbbb-1111-4222-8333-444444444444',exercise:'cccccccc-1111-4222-8333-444444444444',definition:'dddddddd-1111-4222-8333-444444444444'};
 const stamp='2026-11-06T10:00:00+00:00';
@@ -180,9 +181,13 @@ test('R1-SWITCH action maps database errors to plain Polish without details and 
  const mismatch=await autoReleaseAction({result:{data:false,error:null}},'auto');assert.ok(mismatch.result.error);
 });
 async function renderSwitch(options={}) {
- const {calls,client}=switchClient(options.result??{data:true,error:null}),rendered=[];
+ const calls=[],rendered=[];
+ const client={rpc:async(name,args)=>{calls.push({name,args});
+  return name==='issue_exercise_ai_auto_access'?(options.issueResult??{data:{autoRelease:true,issued:0,access:[]},error:null}):(options.result??{data:true,error:null});}};
  const mod=load(basePath+'exercise-ai-auto-release-section.tsx',{
+ 'next/link':{default:props=>createElement('a',{href:props.href},props.children)},
  './exercise-ai-auto-release':{ExerciseAiAutoReleaseSwitch:props=>{rendered.push(props);return createElement('div',{'data-switch':'yes'},'Switch');}},
+ '../../../../../lib/exercise-ai-auto-access':autoAccessHelpers,
  });
  const element=await withFlag(options.flag??'true',()=>mod.ExerciseAiAutoReleaseSection({client,companyId:ids.company,recruitmentId:ids.recruitment,canEdit:options.canEdit??true,editable:true}));
  return {element,calls,rendered};
@@ -253,4 +258,47 @@ test('R1-SWITCH exerciseContext marks an archived position as not editable for a
 test('R1-SWITCH is not rendered on the recruitment page (the payment-named test renders it with a fixed mock map)',()=>{
  const page=readFileSync(fileURLToPath(new URL('../'+basePath+'page.tsx',import.meta.url)),'utf8');
  assert.doesNotMatch(page,/ExerciseAiAutoRelease/);
+});
+
+
+// R1-AUTO-ACCESS: lista dostępów wydanych automatycznie (bez wysyłki do kandydata).
+const grantRow={grantId:'99999999-1111-4222-8333-444444444444',applicationId:'88888888-1111-4222-8333-444444444444',definitionId:ids.definition,
+ candidateName:'Anna Testowa',title:'Plan wdrożenia',version:2,revision:1,startBy:'2026-11-24T10:00:00+00:00',revoked:false};
+async function withPreview(fn,env={COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'preview'}) {
+ const previous=Object.fromEntries(Object.keys(env).map(k=>[k,process.env[k]]));Object.assign(process.env,env);
+ try{return await fn();}finally{for(const [k,v] of Object.entries(previous)){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
+}
+test('R1-AUTO-ACCESS issues only in auto mode behind the preview test flag, with exact scoped IDs, and lists access without any secret',async()=>{
+ // Bez flagi testu kandydata (produkcja) i w trybie ręcznym: żadnego wywołania wydania.
+ const off=await renderSwitch();assert.deepEqual(off.calls.map(c=>c.name),['read_exercise_ai_settings']);
+ const prodLike=await withPreview(()=>renderSwitch(),{COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'production',NODE_ENV:'production'});
+ assert.deepEqual(prodLike.calls.map(c=>c.name),['read_exercise_ai_settings']);
+ for(const result of [{data:false,error:null},{data:null,error:{code:'42501'}}]) {
+  const manual=await withPreview(()=>renderSwitch({result}));assert.deepEqual(manual.calls.map(c=>c.name),['read_exercise_ai_settings']);
+ }
+ const r=await withPreview(()=>renderSwitch({issueResult:{data:{autoRelease:true,issued:1,access:[grantRow]},error:null}}));
+ assert.deepEqual(r.calls[1],{name:'issue_exercise_ai_auto_access',args:{target_company:ids.company,target_recruitment:ids.recruitment}});
+ const html=renderToStaticMarkup(r.element);
+ assert.match(html,/Dostęp do testu kompetencji wydany automatycznie/);assert.match(html,/Anna Testowa/);assert.match(html,/Wydano teraz: 1/);
+ assert.match(html,new RegExp('href="/dashboard/'+ids.company+'/recruitments/'+ids.recruitment+'/applications/'+grantRow.applicationId+'/exercises"'));
+ assert.match(html,/Nic nie jest wysyłane kandydatom/);assert.doesNotMatch(html,/#grant=|token/i);
+ assert.doesNotMatch(html,/wyśl[ea]my|zostanie wysłan|wysyłamy/i);
+});
+test('R1-AUTO-ACCESS fails closed: database errors and unexpected shapes show an alert, never an issued list',async()=>{
+ for(const issueResult of [{data:null,error:{code:'PT409',message:'private detail'}},{data:{autoRelease:true,issued:1,access:[{...grantRow,grantId:'x'}]},error:null},
+  {data:{autoRelease:'true',issued:0,access:[]},error:null},{data:[],error:null}]) {
+  const r=await withPreview(()=>renderSwitch({issueResult}));const html=renderToStaticMarkup(r.element);
+  assert.match(html,/Nie udało się sprawdzić ani wydać dostępu automatycznie/);assert.doesNotMatch(html,/Wydano teraz|private detail|Anna Testowa/);
+ }
+ assert.equal(autoAccessHelpers.parseExerciseAiAutoAccess({autoRelease:true,issued:-1,access:[]}),null);
+ assert.deepEqual(autoAccessHelpers.parseExerciseAiAutoAccess({autoRelease:false,issued:0,access:[]}),{autoRelease:false,issued:0,access:[]});
+ assert.equal(autoAccessHelpers.exerciseAiAutoAccessEnabled({EXERCISE_AI_ENABLED:'true',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'production',NODE_ENV:'production'}),false);
+ assert.equal(autoAccessHelpers.exerciseAiAutoAccessEnabled({EXERCISE_AI_ENABLED:'false',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'preview'}),false);
+ assert.equal(autoAccessHelpers.exerciseAiAutoAccessEnabled({EXERCISE_AI_ENABLED:'true',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'preview'}),true);
+});
+test('R1-AUTO-ACCESS code uses the user RLS client only and imports no mail, send or service-role code',()=>{
+ for(const file of ['lib/exercise-ai-auto-access.ts',basePath+'exercise-ai-auto-release-section.tsx']) {
+  const source=readFileSync(fileURLToPath(new URL('../'+file,import.meta.url)),'utf8');
+  assert.doesNotMatch(source,/service_role|SERVICE_ROLE|createAdminClient|supabase\/admin|resend|nodemailer|sendMail|send-?mail|outbound|\bfetch\(/i,file);
+ }
 });

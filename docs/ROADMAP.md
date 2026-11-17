@@ -75,7 +75,7 @@ W tym wybór rekrutera: zatwierdza zadania sam albo testy generują się i wycho
 | Reguła R1 — test tylko dla kandydata z shortlisty, pilnowane w bazie | ZROBIONE | PR #273 (sprawdzenie `recruitment_shortlist_entries` w migracji C1) |
 | Tryb automatyczny w bazie (`auto_release`, zapis trybu zwolnienia) | ZROBIONE | PR #291 |
 | Przełącznik rekrutera: „zatwierdzam sam" / „automatycznie" na ekranie | DO ZROBIENIA | brak wywołania `set_auto_release` w `app/` i `lib/` |
-| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | DO ZROBIENIA | `docs/plan-budowy-2026-11-02.md` (C6) miał to poza zakresem; decyzja z 16.11.2026 wyżej |
+| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU | PR #PRNUM: w trybie automatycznym dostęp do testu dla kandydatów z krótkiej listy wydaje się automatycznie (bez kliknięcia rekrutera, R1 pilnowane w bazie); dostarczenie linku kandydatowi (e-mail/SMS) pozostaje zamknięte jako nowa prawdziwa wysyłka |
 | Włączenie testu kompetencji w Preview i przejście ścieżki | DO SPRAWDZENIA | brak dowodu w issue/PR |
 
 ### R2. Rozszerzony raport kandydata (SC-015-A…D), bez części głosowej

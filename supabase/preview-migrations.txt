@@ -84,3 +84,5 @@
 20261117120000_sc_ac_session_export_audit.sql
 # R1-SWITCH: two public security-definer functions to read/set the recruiter auto-release mode (delegates to exercise_ai.set_auto_release; no tables, no data seeded), test data only.
 20261117150000_exercise_ai_auto_release_api.sql
+# R1-AUTO-ACCESS: one public security-definer function that, in auto mode only, issues competency test access to shortlisted candidates for released AI tests (no tables, no data seeded, nothing sent), test data only.
+20261117200000_r1_auto_competency_access.sql
