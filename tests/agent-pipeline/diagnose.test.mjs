@@ -42,7 +42,7 @@ function fixture(change = {}) {
     if (data[path] instanceof Error) throw data[path];
     return new Response(JSON.stringify(data[path]));
   }
-  return { env, calls, data, run: () => diagnose(env, fetchMock, { repository: env.GITHUB_REPOSITORY, owner: { id: 222297538 }, feedback_state_bootstrap: { owner_id: 222297538, sha: env.GITHUB_SHA } }) };
+  return { env, calls, data, run: (policyExtra = {}) => diagnose(env, fetchMock, { repository: env.GITHUB_REPOSITORY, owner: { id: 222297538 }, feedback_state_bootstrap: { owner_id: 222297538, sha: env.GITHUB_SHA }, ...policyExtra }) };
 }
 
 test('diagnostic only reads services and issues/revokes a scoped read token', async () => {
@@ -116,4 +116,18 @@ test('invalid agent path cannot redirect credentialed requests', async () => {
   const result = await f.run();
   assert.ok(result.checks.some(c => c.check === 'cursor_agent_read' && c.status === 'FAIL'));
   assert.equal(f.calls.some(c => c.path.startsWith('/v1/')), false);
+});
+
+test('subscription claude-code mode needs no Cursor agent read', async () => {
+  const f = fixture({ CURSOR_API_KEY: '', CURSOR_DIAGNOSTIC_AGENT_ID: '' });
+  const result = await f.run({ execution_mode: 'SUBSCRIPTION_ONLY', builder_provider: 'claude-code' });
+  assert.equal(result.checks.some(c => c.check === 'cursor_agent_read'), false);
+  assert.ok(result.checks.length > 0 && result.checks.every(c => c.status === 'PASS'));
+  assert.equal(f.calls.some(c => c.path.startsWith('/v1/')), false);
+});
+
+test('cursor mode still requires the Cursor agent read', async () => {
+  const f = fixture({ CURSOR_API_KEY: '', CURSOR_DIAGNOSTIC_AGENT_ID: '' });
+  const result = await f.run({ execution_mode: 'LEGACY', builder_provider: 'cursor' });
+  assert.ok(result.checks.some(c => c.check === 'cursor_agent_read' && c.status === 'FAIL'));
 });

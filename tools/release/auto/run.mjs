@@ -6,6 +6,7 @@ import { createGit } from './git.mjs';
 import { createAppTokenProvider } from './app-token.mjs';
 import { runPublisher } from './publisher.mjs';
 import { runSmoke } from './smoke.mjs';
+import { createWorkerDeployer } from './worker-deploy.mjs';
 import { classify } from '../../agent-pipeline/classify-pr.mjs';
 
 const config = JSON.parse(readFileSync(new URL('./config.json', import.meta.url), 'utf8'));
@@ -38,6 +39,9 @@ const result = await runPublisher({
   appBotLogin: `${appSlug}[bot]`,
   beforePush: refreshRemote,
   smoke: () => runSmoke({ baseUrl: config.production_url, checks: config.smoke, sleep }),
+  // #461: deploys screening-worker from the exact release SHA. Without SUPABASE_ACCESS_TOKEN in
+  // this job it answers `unavailable` and the release fails closed (WORKER_DEPLOY_UNAVAILABLE).
+  deployWorker: createWorkerDeployer({ git, log: line => console.log(line) }),
   log: line => console.log(line),
   error: code => console.log(`::error::${code}`),
 });
