@@ -82,3 +82,5 @@
 20261117090000_sc015d3_company_report_export_history.sql
 # SC-AC-EXPORT-AUDIT: append-only audit of Assessment Center session CSV downloads (one report_audit table + one public security-definer function, no data seeded), test data only.
 20261117120000_sc_ac_session_export_audit.sql
+# R1-SWITCH: two public security-definer functions to read/set the recruiter auto-release mode (delegates to exercise_ai.set_auto_release; no tables, no data seeded), test data only.
+20261117150000_exercise_ai_auto_release_api.sql

@@ -499,6 +499,62 @@ test('AC session R16: plan → finalists → two assessors → reconciliation �
  });
 });
 
+// R3-AC-ACCESS: assessors are current recruiters (or the owner) of the company that owns the
+// recruitment, enforced in the database for the session path too, not only in the UI.
+test('AC session assessors: only current recruiters of the owning company; a removed or demoted member loses the sheet', async t => {
+ const e = await sessionBoot(t), {db,h,call} = e;
+ const f = await e.finalist(), other = await e.finalist(users.otherOwner), member = users.viewer;
+ const unavailable = error => error.code==='42501' && /Assessor unavailable/.test(error.message);
+ const find = stage => call('public.ac_find_pair',[f.application.id,stage.definitionId]);
+ await h.asUser(f.owner);
+ await h.insert('company_members',{company_id:f.companyId,user_id:member,role:'recruiter'});
+ const {sessionId,stages} = await e.plan(f);
+ await e.addFinalist(sessionId,f);await e.setStatus(sessionId,'open');
+
+ await t.test('a person from another company or with no membership is refused as either assessor', async () => {
+  await h.asUser(f.owner);
+  for (const stranger of [other.owner,users.outsider]) {
+   await assert.rejects(e.assign(sessionId,stages[0],f,f.owner,stranger),unavailable);
+   await assert.rejects(e.assign(sessionId,stages[0],f,stranger,member),unavailable);
+  }
+  await h.asAdmin();
+  assert.equal(await count(db,'private.ac_paired_sheets where application_id=$1',[f.application.id]),0);
+ });
+
+ await t.test('a removed member cannot be assigned, find, read or write the sheet; the owner keeps working', async () => {
+  await h.asUser(f.owner);
+  const pairId = await e.assign(sessionId,stages[0],f,f.owner,member);
+  await h.asUser(member);assert.equal(await find(stages[0]),pairId);
+  await h.asUser(f.owner);
+  await db.query('delete from public.company_members where company_id=$1 and user_id=$2',[f.companyId,member]);
+  await assert.rejects(e.assign(sessionId,stages[1],f,f.owner,member),unavailable);
+  await h.asUser(member);
+  assert.equal(await find(stages[0]),null);
+  await assert.rejects(call('public.ac_read_pair',[pairId]),denied('42501'));
+  await assert.rejects(e.submit(pairId,sheetFor(stages[0].definition)),denied('42501'));
+  await assert.rejects(e.read(sessionId),denied('42501'));
+  await assert.rejects(e.record(sessionId,f,null,'expert_consultation',{note:'Notatka od osoby usuniętej z firmy.'}),forbidden);
+  await h.asUser(f.owner);
+  await e.submit(pairId,sheetFor(stages[0].definition));
+  assert.deepEqual(await call('public.ac_read_pair',[pairId]),{state:'pending',ownSubmitted:true});
+  await h.asAdmin();
+  assert.equal(await count(db,'private.ac_paired_sheets where id=$1 and second_sheet is null',[pairId]),1);
+ });
+
+ await t.test('a recruiter demoted to viewer cannot be assigned or write; restored, the pair works again', async () => {
+  await h.asUser(f.owner);
+  const pairId = await e.assign(sessionId,stages[1],f);
+  await db.query("update public.company_members set role='viewer' where company_id=$1 and user_id=$2",[f.companyId,users.recruiter]);
+  await assert.rejects(e.assign(sessionId,stages[2],f),unavailable);
+  await h.asUser(users.recruiter);
+  await assert.rejects(e.submit(pairId,sheetFor(stages[1].definition)),denied('42501'));
+  await h.asUser(f.owner);
+  await db.query("update public.company_members set role='recruiter' where company_id=$1 and user_id=$2",[f.companyId,users.recruiter]);
+  await h.asUser(users.recruiter);await e.submit(pairId,sheetFor(stages[1].definition));
+  assert.deepEqual(await call('public.ac_read_pair',[pairId]),{state:'pending',ownSubmitted:true});
+ });
+});
+
 test('AC session: hard cap of ten finalists in the table, five to six only recommended', async t => {
  const e = await sessionBoot(t), {db,h} = e;
  const people = [];
