@@ -84,3 +84,5 @@
 20261117120000_sc_ac_session_export_audit.sql
 # R1-SWITCH: two public security-definer functions to read/set the recruiter auto-release mode (delegates to exercise_ai.set_auto_release; no tables, no data seeded), test data only.
 20261117150000_exercise_ai_auto_release_api.sql
+# R3-AC-NAMES: one public security-definer read function returning assessor e-mails (owner + recruiters of the same company only; no tables, no data seeded), test data only.
+20261117213000_ac_assessor_display_names.sql
