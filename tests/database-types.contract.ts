@@ -220,7 +220,8 @@ type ExpectedFunctions =
   | "process_followup_read"
   | "process_followup_recruitment_metrics"
   | "record_candidate_report_export"
-  | "list_candidate_report_exports";
+  | "list_candidate_report_exports"
+  | "list_company_report_exports";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -590,6 +591,9 @@ type _OperatorRevokeReturn = Expect<Equal<Database["public"]["Functions"]["revok
 type _SalesArgs = Expect<Equal<Database["public"]["Functions"]["submit_sales_lead"]["Args"], {
   idempotency_key: string; first_name: string; company_name: string; email: string;
   phone: string | null; needs: string; source_ip: string; issued_at_us: number; request_signature: string;
+}>>;
+type _CompanyReportExportArgs = Expect<Equal<Database["public"]["Functions"]["list_company_report_exports"]["Args"], {
+  target_company: string; row_limit?: number; before_at?: string; before_id?: string;
 }>>;
 type _ListArgs = Expect<Equal<Database["public"]["Functions"]["list_sales_leads"]["Args"], { result_limit?: number }>>;
 type _ListReturn = Expect<Equal<Database["public"]["Functions"]["list_sales_leads"]["Returns"], Row<"sales_leads">[]>>;

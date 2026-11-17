@@ -442,6 +442,18 @@ export type Database = {
         Args: { target_company: string; target_recruitment: string; target_application: string };
         Returns: { exported_at: string; actor_id: string; actor_role: 'owner' | 'recruiter' | 'viewer' | 'former_member'; is_me: boolean }[];
       };
+      /** SC-015-D3 company-level export history (20261117090000_sc015d3_company_report_export_history.sql).
+       * Company owner only (42501 for everyone else, same error for foreign or missing companies).
+       * Default 100, at most 200 rows, newest first; keyset paging with before_at + before_id
+       * (both or neither, 22023 otherwise). No e-mail and no candidate data. */
+      list_company_report_exports: {
+        Args: { target_company: string; row_limit?: number; before_at?: string; before_id?: string };
+        Returns: {
+          export_id: string; exported_at: string; actor_id: string;
+          actor_role: 'owner' | 'recruiter' | 'viewer' | 'former_member'; is_me: boolean;
+          recruitment_id: string; application_id: string;
+        }[];
+      };
       process_followup_create: {
         Args: { target_application: string; purpose: string; start_date: string; criteria: string; initial_result: string };
         Returns: string;
