@@ -422,6 +422,26 @@ export type Database = {
        * recruiter of that company (42501 otherwise). A `change_budget` recommendation is
        * refused (22023) while any checklist area is `not_checked`.
        * Shapes: lib/process-diagnostics.ts, lib/process-metrics.ts. */
+      /** SC-015-D candidate report CSV export audit (20261116120000_sc015d_candidate_report_export_audit.sql).
+       * Re-checks company membership (viewer included), that the application belongs to
+       * that company and recruitment (42501 otherwise, same error for foreign records)
+       * and that the candidate is not withdrawn or frozen for erasure (55000). Appends
+       * one row to `report_audit.candidate_report_exports` and returns its id. */
+      record_candidate_report_export: {
+        Args: {
+          target_company: string; target_recruitment: string; target_application: string;
+          export_kind: 'candidate_report_csv'; analysis_version?: number | null;
+        };
+        Returns: string;
+      };
+      /** SC-015-D2 read-only export history (20261116210000_sc015d2_candidate_report_export_history.sql).
+       * Same membership and company -> recruitment -> application binding as
+       * record_candidate_report_export (42501 otherwise, same error for foreign records).
+       * At most 50 rows, newest first; no candidate data. */
+      list_candidate_report_exports: {
+        Args: { target_company: string; target_recruitment: string; target_application: string };
+        Returns: { exported_at: string; actor_id: string; actor_role: 'owner' | 'recruiter' | 'viewer' | 'former_member'; is_me: boolean }[];
+      };
       process_followup_create: {
         Args: { target_application: string; purpose: string; start_date: string; criteria: string; initial_result: string };
         Returns: string;

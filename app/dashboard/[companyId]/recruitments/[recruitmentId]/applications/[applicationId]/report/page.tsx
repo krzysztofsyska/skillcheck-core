@@ -8,6 +8,7 @@ import {
   CandidateReportError, loadCandidateReport, noMissingDataDisclaimer,
   requirementStatusLabels, type CandidateReport, type CandidateRequirement,
 } from '../../../../../../../../lib/candidate-report';
+import { exportHistoryView, loadCandidateReportExportHistory } from '../../../../../../../../lib/candidate-report-export';
 import { criterionKindLabels, requirementMarkLabels, requirementMarkOrder, type RequirementMark } from '../../../../../../../../lib/requirement-flags';
 import styles from '../screening/screening.module.css';
 
@@ -70,6 +71,8 @@ export default async function CandidateReportPage({ params }: { params: Promise<
     throw error;
   }
   const { summary } = report;
+  // SC-015-D2: błąd odczytu historii daje neutralny komunikat, nigdy nie psuje raportu.
+  const exportHistory = exportHistoryView(await loadCandidateReportExportHistory(client, route));
 
   return <main className={`workspace ${styles.screening}`}><section>
     <Link href={base}>← Rekrutacja</Link>
@@ -79,6 +82,16 @@ export default async function CandidateReportPage({ params }: { params: Promise<
     <p><small>Zgłoszenie {applicationId.slice(0, 8)} · wygenerowano {new Date(report.generatedAt).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })} (Warszawa)</small></p>
     <p className="notice">Raport zestawia wymagania stanowiska z informacjami z CV i wspiera ocenę człowieka.
       Nie jest decyzją o zatrudnieniu i nie zawiera wyniku ogólnego. {noMissingDataDisclaimer}</p>
+    {/* Zwykły odnośnik, nie <Link>: prefetch nie może tworzyć wpisów audytu pobrania (SC-015-D). */}
+    <p><a href={`${base}/applications/${applicationId}/report/export`} download>Pobierz CSV</a>
+      {' '}<small>Każde pobranie jest zapisywane (kto i kiedy).</small></p>
+    <details>
+      <summary>Historia eksportu</summary>
+      {exportHistory.kind === 'list'
+        ? <><ul>{exportHistory.items.map(item => <li key={item.key}>{item.when} · {item.who}</li>)}</ul>
+          {exportHistory.truncated && <p><small>Pokazujemy 50 ostatnich pobrań.</small></p>}</>
+        : <p role="status">{exportHistory.message}</p>}
+    </details>
 
     <h2>Podsumowanie</h2>
     {!report.analysisStatus && <p role="status">Dla tego zgłoszenia nie ma jeszcze analizy CV.

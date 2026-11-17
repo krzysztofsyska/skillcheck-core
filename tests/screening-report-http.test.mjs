@@ -9,8 +9,8 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
   const token = [Buffer.from('{}').toString('base64url'), Buffer.from(JSON.stringify({ sub: userId, exp: Math.floor(Date.now()/1000)+3600 })).toString('base64url'), 'synthetic'].join('.');
   const cookieValue = 'base64-' + Buffer.from(JSON.stringify({ access_token: token, refresh_token: 'synthetic', expires_at: Math.floor(Date.now()/1000)+3600, expires_in: 3600, token_type: 'bearer', user: { id: userId } })).toString('base64url');
   const cookie = 'sb-127-auth-token=' + cookieValue;
-  let unavailable = false, revoked = false;
-  const requests = [];
+  let unavailable = false, revoked = false, auditFails = false, auditWithdrawn = false, historyFails = false;
+  const requests = [], audits = [];
   const stub = createServer(async (req,res) => {
     const url = new URL(req.url,'http://stub');
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
@@ -19,6 +19,18 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
     if (!url.pathname.startsWith('/rest/v1/')) { res.statusCode=404; return res.end('{}'); }
     const table = url.pathname.split('/').at(-1);
     requests.push({ table, query: url.searchParams.toString(), auth: req.headers.authorization, body: Buffer.concat(chunks).toString() });
+    // SC-015-D: zapis audytu eksportu raportu kandydata (funkcja zwraca uuid wpisu).
+    if (table === 'record_candidate_report_export') {
+      audits.push({ auth: req.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString() || '{}') });
+      if (auditWithdrawn) { res.statusCode=400; return res.end(JSON.stringify({code:'55000',message:'SECRET_SQL_DETAILS'})); }
+      if (auditFails) { res.statusCode=500; return res.end(JSON.stringify({code:'XX000',message:'SECRET_SQL_DETAILS'})); }
+      return res.end(JSON.stringify(uuid(777)));
+    }
+    // SC-015-D2: historia eksportu odczytywana z dziennika (tu: z zapisanych wywołań audytu).
+    if (table === 'list_candidate_report_exports') {
+      if (historyFails) { res.statusCode=500; return res.end(JSON.stringify({code:'XX000',message:'SECRET_SQL_DETAILS'})); }
+      return res.end(JSON.stringify(audits.slice(0,1).map(()=>({exported_at:'2026-11-16T10:00:00+00:00',actor_id:userId,actor_role:'recruiter',is_me:true}))));
+    }
     if (unavailable && table.startsWith('get_')) { res.statusCode=404; return res.end(JSON.stringify({code:'PGRST202',message:'SECRET_SQL_DETAILS'})); }
     let rows = revoked ? [] : [...(data[table] ?? [])];
     for (const [key,value] of url.searchParams) {
@@ -97,6 +109,30 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
       comparison=await (await read()).text();
       assert.ok(comparison.includes('KorektaCV_zero'));assert.ok(!comparison.includes('DowodCV_0'));
       const changed=await one(0);assert.ok(changed.includes('KorektaCV_zero'));assert.ok(!changed.includes('DowodCV_0'));
+      // SC-015-D: CSV kandydata ma te same dowody co ekran, nagłówki bez cache i wpis audytu przed wydaniem pliku.
+      assert.match(changed,/Pobierz CSV/);
+      assert.match(changed,/Historia eksportu/);assert.match(changed,/Ten raport nie był jeszcze eksportowany\./);
+      const exportPath=base+path.replace('/report',`/applications/${uuid(100)}/report/export`);
+      const exported=await fetch(exportPath,{headers:{Cookie:cookie}});
+      assert.equal(exported.status,200);assert.match(exported.headers.get('content-type'),/text\/csv/);
+      assert.equal(exported.headers.get('cache-control'),'private, no-store');assert.equal(exported.headers.get('referrer-policy'),'no-referrer');
+      assert.equal(exported.headers.get('content-disposition'),`attachment; filename="skillcheck-raport-kandydata-${uuid(100)}.csv"`);
+      const exportedCsv=await exported.text();assert.ok(exportedCsv.includes('KorektaCV_zero'));assert.ok(!exportedCsv.includes('DowodCV_0'));
+      assert.equal(audits.length,1);assert.equal(audits[0].auth,'Bearer '+token);
+      const afterExport=await one(0);assert.match(afterExport,/Ty \(rekruter\)/);assert.doesNotMatch(afterExport,/nie był jeszcze eksportowany/);
+      historyFails=true;
+      const historyDown=await one(0);assert.match(historyDown,/KorektaCV_zero/);
+      assert.match(historyDown,/Nie udało się teraz wczytać historii eksportu/);assert.doesNotMatch(historyDown,/SECRET_SQL_DETAILS/);historyFails=false;
+      assert.deepEqual(audits[0].body,{target_company:company,target_recruitment:recruitment,target_application:uuid(100),export_kind:'candidate_report_csv',analysis_version:1});
+      auditFails=true;
+      const failedAudit=await fetch(exportPath,{headers:{Cookie:cookie}});assert.equal(failedAudit.status,503);
+      assert.doesNotMatch(await failedAudit.text(),/KorektaCV_zero|SECRET_SQL_DETAILS/);auditFails=false;
+      auditWithdrawn=true;
+      const withdrawnExport=await fetch(exportPath,{headers:{Cookie:cookie}});assert.equal(withdrawnExport.status,403);
+      assert.doesNotMatch(await withdrawnExport.text(),/KorektaCV_zero|SECRET_SQL_DETAILS/);auditWithdrawn=false;
+      assert.equal((await fetch(exportPath,{redirect:'manual'})).status,401);
+      const foreignExport=await fetch(exportPath.replace(company,uuid(999)),{headers:{Cookie:cookie}});assert.equal(foreignExport.status,404);
+      assert.equal(audits.length,3,'odmowa przed odczytem nie zapisuje audytu');
       for(let i=1;i<5;i++) {
         assert.ok(comparison.includes(`DowodCV_${i}`));
         const unchanged=await one(i);assert.ok(unchanged.includes(`DowodCV_${i}`));assert.ok(!unchanged.includes('KorektaCV_zero'));

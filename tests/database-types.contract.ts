@@ -218,7 +218,9 @@ type ExpectedFunctions =
   | "process_followup_grant"
   | "process_followup_record"
   | "process_followup_read"
-  | "process_followup_recruitment_metrics";
+  | "process_followup_recruitment_metrics"
+  | "record_candidate_report_export"
+  | "list_candidate_report_exports";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
