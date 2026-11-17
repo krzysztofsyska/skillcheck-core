@@ -53,6 +53,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # #461: Supabase CLI for the screening-worker deploy step (same pin as deploy-screening-worker.yml).
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1.7.3
+        with:
+          version: 2.121.0
       - name: Publish
         run: node tools/release/auto/run.mjs
         env:
@@ -61,3 +65,6 @@ jobs:
           APP_ID: ${{ secrets.AGENT_PIPELINE_APP_ID }}
           APP_INSTALLATION_ID: ${{ secrets.AGENT_PIPELINE_APP_INSTALLATION_ID }}
           APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
+          # #461: used only by the screening-worker deploy step, passed to the CLI process alone.
+          # Not set in agent-control yet: the step then fails closed (WORKER_DEPLOY_UNAVAILABLE).
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

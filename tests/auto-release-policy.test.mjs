@@ -122,11 +122,34 @@ test('unmerged, foreign-base or malformed candidates refuse instead of throwing'
 });
 
 test('after deploy: smoke or deployment failure means rollback + freeze; data changes are flagged', () => {
-  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: true, migrationsApplied: [] }), { action: 'DONE', freeze: false, codes: [] });
-  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: false, migrationsApplied: [] }), { action: 'ROLLBACK', freeze: true, codes: ['SMOKE_FAILED'] });
+  const none = { required: false };
+  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: true, migrationsApplied: [], worker: none }), { action: 'DONE', freeze: false, codes: [] });
+  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: false, migrationsApplied: [], worker: none }), { action: 'ROLLBACK', freeze: true, codes: ['SMOKE_FAILED'] });
   assert.deepEqual(afterDeploy({ deployed: false, smokeOk: false }), { action: 'ROLLBACK', freeze: true, codes: ['DEPLOYMENT_NOT_CONFIRMED'] });
-  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: false, migrationsApplied: ['supabase/migrations/1.sql'] }).codes,
+  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: false, migrationsApplied: ['supabase/migrations/1.sql'], worker: none }).codes,
     ['SMOKE_FAILED', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED']);
+});
+
+// #461 stage 1: the worker deploy step is part of the release; never DONE without it when required.
+test('after deploy: a required worker deploy that failed, is unavailable or unknown means rollback + freeze', () => {
+  const rb = codes => ({ action: 'ROLLBACK', freeze: true, codes });
+  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: true, worker: { required: true, ok: true } }), { action: 'DONE', freeze: false, codes: [] });
+  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: false, worker: { required: true, ok: false } }), rb(['WORKER_DEPLOY_FAILED']));
+  // "ok" alone is not enough when the smoke test reports success: the step must have confirmed
+  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: true, worker: { required: true } }), rb(['WORKER_DEPLOY_FAILED']));
+  assert.deepEqual(afterDeploy({ deployed: true, smokeOk: true, worker: { required: true, ok: false, unavailable: true } }), rb(['WORKER_DEPLOY_UNAVAILABLE']));
+  for (const worker of [undefined, null, {}, { required: 'yes' }]) {
+    assert.deepEqual(afterDeploy({ deployed: true, smokeOk: true, worker }), rb(['WORKER_SCOPE_UNKNOWN']), JSON.stringify(worker));
+  }
+});
+
+// #461: until stage 2 the gate stays a hard refusal, whatever the step can do.
+test('#461 stage 1: workerGate still refuses every release touching the worker', async () => {
+  const { workerGate } = await import('../tools/release/auto/policy.mjs');
+  assert.ok(workerGate(['supabase/functions/screening-worker/index.ts'], [])[0].startsWith('WORKER_DEPLOY_REQUIRED:'));
+  const r = reasons(i => { i.files = ['lib/screening-hmac.ts']; });
+  assert.ok(r.some(x => x.startsWith('WORKER_DEPLOY_REQUIRED:')), r.join(','));
+  assert.equal(evaluateCandidate({ ...base(), files: ['lib/screening-hmac.ts'] }).decision, 'DENY');
 });
 
 test('publisher workflow: no manual start, trusted main code, no production-approval environment', async () => {
@@ -135,7 +158,11 @@ test('publisher workflow: no manual start, trusted main code, no production-appr
     .split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
   assert.doesNotMatch(wf, /workflow_dispatch|pull_request/);
   assert.match(wf, /schedule:/); assert.match(wf, /workflow_run:/);
-  assert.doesNotMatch(wf, /production-approval|PRODUCTION_DATABASE_URL|SUPABASE_ACCESS_TOKEN/);
+  assert.doesNotMatch(wf, /production-approval|PRODUCTION_DATABASE_URL/);
+  // #461: the Supabase token reaches the publisher only as an env secret of agent-control, once,
+  // for the worker deploy step; nothing else in the workflow names it.
+  assert.equal(wf.split('\n').filter(l => /SUPABASE_ACCESS_TOKEN/.test(l)).length, 1);
+  assert.match(wf, /^\s+SUPABASE_ACCESS_TOKEN: \$\{\{ secrets\.SUPABASE_ACCESS_TOKEN \}\}$/m);
   assert.match(wf, /ref: main/);
   assert.match(wf, /github\.ref == 'refs\/heads\/main'/);
   assert.match(wf, /cancel-in-progress: false/);

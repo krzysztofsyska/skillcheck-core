@@ -4,12 +4,13 @@
 // request already merged into `integration` (green CI + independent PASS on its exact head
 // SHA), cherry-picked onto `main` as `release/auto-pr-<N>`, checked for an identical patch,
 // merged after the required checks pass on the exact release SHA, then confirmed on Vercel
-// Production and smoke-tested. A failure rolls the code back (revert PR) and freezes every
+// Production, the screening worker deployed from the same SHA when the release touches it (#461),
+// and smoke-tested. A failure rolls the code back (revert PR) and freezes every
 // later release until a human closes the freeze issue.
 //
 // Everything remote is injected (deps) so the whole flow is tested offline.
 import {
-  SHA, evaluateCandidate, ciGate, afterDeploy, REQUIRED_CHECKS,
+  SHA, evaluateCandidate, ciGate, afterDeploy, workerGate, REQUIRED_CHECKS,
 } from './policy.mjs';
 
 export const FREEZE_TITLE = '[auto-release-freeze]';
@@ -40,7 +41,7 @@ export async function runPublisher(d) {
     // C6: the revert itself must be deployed and healthy before the record is closed.
     // C7: the freeze issue is written before the "done" marker, never after.
     const check = await verifyProduction(d, unchecked.revertedBy);
-    const codes = check.ok ? ['ROLLBACK_RECORD_INCOMPLETE'] : ['ROLLBACK_NOT_HEALTHY', ...(check.deployment?.codes ?? []), ...(check.smoke?.failures ?? []).map(f => `SMOKE:${f}`)];
+    const codes = check.ok ? ['ROLLBACK_RECORD_INCOMPLETE'] : ['ROLLBACK_NOT_HEALTHY', ...(check.deployment?.codes ?? []), ...(check.worker?.code ? [check.worker.code] : []), ...(check.smoke?.failures ?? []).map(f => `SMOKE:${f}`)];
     let issue = freeze[0]?.number;
     if (!issue || !check.ok) issue = await openFreeze(d, codes, `release ${unchecked.merge} (source #${unchecked.pr}), revert ${unchecked.revertedBy}`, { deployment: check.deployment, smoke: check.smoke });
     if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, `cofnięte, sprawdzone po przerwanym przebiegu (zamrożenie #${issue})`);
@@ -50,7 +51,7 @@ export async function runPublisher(d) {
     if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, 'wydane, sprawdzone po przerwanym przebiegu, smoke OK');
     else {
       const pr = await d.gh.get(`/pulls/${unchecked.pr}`);
-      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge });
+      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge }, [], true);
     }
   }
   if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };
@@ -307,7 +308,7 @@ async function waitForChecks(d, sha) {
   }
 }
 
-async function mergeAndVerify(d, { releasePr, releaseHead }, recheck = null) {
+async function mergeAndVerify(d, { releasePr, releaseHead }, recheck = null, workerMode = 'auto') {
   const ci = await waitForChecks(d, releaseHead);
   if (ci.length) return { ok: false, stage: 'ci', codes: ci };
   // C8: authorization may have changed while CI ran (new verdict, Codex finding, freeze, new push).
@@ -323,19 +324,55 @@ async function mergeAndVerify(d, { releasePr, releaseHead }, recheck = null) {
   }
   const mergeSha = merged?.sha;
   if (!SHA.test(mergeSha ?? '')) return { ok: false, stage: 'merge', codes: ['MERGE_SHA_UNKNOWN'] };
-  return { ...(await verifyProduction(d, mergeSha)), stage: 'deploy', mergeSha, codes: [] };
+  return { ...(await verifyProduction(d, mergeSha, workerMode)), stage: 'deploy', mergeSha, codes: [] };
 }
 
-// Deployment + smoke of a commit already on main. Any error counts as a failed check, so a
-// merged release can never end up unchecked (C1): the caller then rolls back and freezes.
-async function verifyProduction(d, mergeSha) {
+// Deployment + worker deploy (when the commit touches it) + smoke of a commit already on main.
+// Any error counts as a failed check, so a merged release can never end up unchecked (C1): the
+// caller then rolls back and freezes. The worker goes out only after Vercel confirmed the app, so
+// a failed app deployment never leaves a new worker behind an old app.
+// `worker` is kept even when a later step throws: the rollback must know it was deployed.
+async function verifyProduction(d, mergeSha, workerMode = 'auto') {
+  let worker = { required: false, attempted: false, ok: true };
   try {
     const deployment = await waitForDeployment(d, mergeSha);
-    const smoke = deployment.ok ? await d.smoke() : { ok: false, failures: ['NOT_RUN'] };
-    return { ok: deployment.ok && smoke.ok, deployment, smoke };
+    if (deployment.ok) worker = await deployWorkerStep(d, mergeSha, workerMode);
+    const workerOk = !worker.required || worker.ok === true;
+    const smoke = deployment.ok && workerOk ? await d.smoke() : { ok: false, failures: ['NOT_RUN'] };
+    return { ok: deployment.ok && workerOk && smoke.ok, deployment, worker, smoke };
   } catch (e) {
-    return { ok: false, deployment: { ok: false, codes: [`POST_MERGE_CHECK_ERROR:${String(e?.status ?? e?.message ?? 'ERR').slice(0, 40)}`] }, smoke: { ok: false, failures: ['NOT_RUN'] } };
+    return { ok: false, deployment: { ok: false, codes: [`POST_MERGE_CHECK_ERROR:${String(e?.status ?? e?.message ?? 'ERR').slice(0, 40)}`] }, worker, smoke: { ok: false, failures: ['NOT_RUN'] } };
   }
+}
+
+/**
+ * #461: deploy the screening worker from the exact commit on main, when that commit changes the
+ * worker or a module it shares with the app. "Changes" is decided by `workerGate` itself on the
+ * commit's own diff and the worker closure read from that commit, so the step and the gate can
+ * never disagree; an unknown scope counts as a change (fail closed: deploying the same reviewed
+ * commit is safe, skipping it is not). `d.deployWorker({ sha })` must answer `{ ok: true, sha }`
+ * for that same SHA to count as confirmed; a missing dependency or a missing token is
+ * WORKER_DEPLOY_UNAVAILABLE, never a skip.
+ * workerMode 'skip': a rollback of a release whose worker was never deployed — the worker still
+ * runs the version the reverted main carries, so there is nothing to redeploy.
+ */
+async function deployWorkerStep(d, sha, workerMode) {
+  if (workerMode === 'skip') return { required: false, attempted: false, ok: true };
+  let files = null; let closure = null;
+  try {
+    await d.beforePush?.(); // refreshes the fetch credentials in the real run
+    d.git('fetch', '--no-tags', 'origin', 'main');
+    files = d.git('diff', '--name-only', `${sha}^1`, sha).split('\n').filter(Boolean);
+    closure = workerClosure(d, sha);
+  } catch { /* left null: workerGate answers WORKER_SCOPE_UNKNOWN, which counts as required */ }
+  if (!workerGate(files, closure).length) return { required: false, attempted: false, ok: true };
+  if (typeof d.deployWorker !== 'function') return { required: true, attempted: false, ok: false, unavailable: true, code: 'WORKER_DEPLOY_UNAVAILABLE' };
+  let res;
+  try { res = await d.deployWorker({ sha }); } catch { res = { ok: false, code: 'WORKER_DEPLOY_ERROR' }; }
+  if (res?.unavailable === true) return { required: true, attempted: false, ok: false, unavailable: true, code: 'WORKER_DEPLOY_UNAVAILABLE' };
+  const ok = res?.ok === true && res.sha === sha;
+  (d.log ?? (() => {}))(`WORKER_DEPLOY ${ok ? 'OK' : 'FAILED'} ${sha}`);
+  return { required: true, attempted: true, ok, code: ok ? null : 'WORKER_DEPLOY_FAILED', detail: ok ? null : String(res?.code ?? 'NOT_CONFIRMED').slice(0, 60) };
 }
 
 const DONE = 'sc-auto-release-done:v1';
@@ -420,8 +457,8 @@ async function finish(d, pr, started) {
   return finishAfterDeploy(d, pr, started, r, migrationsApplied);
 }
 
-async function finishAfterDeploy(d, pr, started, r, migrationsApplied = []) {
-  const after = afterDeploy({ deployed: r.deployment.ok, smokeOk: r.smoke.ok, migrationsApplied });
+async function finishAfterDeploy(d, pr, started, r, migrationsApplied = [], recovered = false) {
+  const after = afterDeploy({ deployed: r.deployment.ok, smokeOk: r.smoke.ok, migrationsApplied, worker: r.worker });
   if (after.action === 'DONE') {
     await doneMarker(d, pr.number, r.mergeSha, `wydane, smoke OK (PR #${started.releasePr})`);
     return { status: 'RELEASED', codes: [], source_pr: pr.number, release_pr: started.releasePr, main_sha: r.mergeSha, deployment: r.deployment.url ?? null };
@@ -431,14 +468,20 @@ async function finishAfterDeploy(d, pr, started, r, migrationsApplied = []) {
   // open revert PR (resumed even while frozen) or the unchecked release (re-verified and rolled
   // back even while frozen); the freeze issue is only the record, opened last.
   let rollback;
-  try { rollback = await rollbackRelease(d, { mergeSha: r.mergeSha, sourcePr: pr.number }); }
+  // A worker deploy that was attempted (even one reported as failed: it may have half landed) is
+  // undone by deploying the worker again from the reverted main; one that never ran is left alone.
+  // A recovered release (an earlier run was cut off) keeps no record of what that run deployed, so
+  // the worker state is UNKNOWN: never 'skip' — without a deploy capability the rollback then
+  // fails closed (WORKER_DEPLOY_UNAVAILABLE) instead of being confirmed over a faulty worker.
+  const workerMode = recovered || r.worker?.attempted === true ? 'auto' : 'skip';
+  try { rollback = await rollbackRelease(d, { mergeSha: r.mergeSha, sourcePr: pr.number, workerMode }); }
   catch (e) { rollback = { ok: false, codes: [`ROLLBACK_ERROR:${String(e?.status ?? e?.message ?? 'ERR').slice(0, 40)}`] }; }
-  const issue = await openFreeze(d, [...after.codes, ...rollback.codes], `release PR #${started.releasePr} (source #${pr.number}), main ${r.mergeSha}`, { deployment: r.deployment, smoke: r.smoke, rollback: rollback.ok ? 'OK — poprzednia wersja działa (smoke OK)' : 'NIEUDANE' });
+  const issue = await openFreeze(d, [...after.codes, ...rollback.codes], `release PR #${started.releasePr} (source #${pr.number}), main ${r.mergeSha}`, { deployment: r.deployment, worker: r.worker, smoke: r.smoke, rollback: rollback.ok ? 'OK — poprzednia wersja działa (smoke OK)' : 'NIEUDANE' });
   if (rollback.ok) await doneMarker(d, pr.number, r.mergeSha, `cofnięte (zamrożenie #${issue})`);
   return { status: rollback.ok ? 'ROLLED_BACK' : 'ROLLBACK_FAILED', codes: [...after.codes, ...rollback.codes], freeze: issue, source_pr: pr.number };
 }
 
-async function rollbackRelease(d, { mergeSha, sourcePr }) {
+async function rollbackRelease(d, { mergeSha, sourcePr, workerMode = 'auto' }) {
   const branch = `${RELEASE_PREFIX}revert-pr-${sourcePr}`;
   await d.beforePush?.();
   d.git('fetch', 'origin', 'main');
@@ -450,8 +493,8 @@ async function rollbackRelease(d, { mergeSha, sourcePr }) {
   const files = d.git('diff', '--name-only', 'origin/main', 'HEAD').split('\n').filter(Boolean);
   const meta = { source_pr: sourcePr, source_head: mergeSha, release_head: releaseHead, kind: 'rollback', reverts_pr: sourcePr };
   const pr = await d.gh.post('/pulls', { base: 'main', head: branch, title: `Auto-rollback: #${sourcePr}`, body: releaseBody({ meta, scope: d.detectScope(files) }) });
-  const r = await mergeAndVerify(d, { releasePr: pr.number, releaseHead });
-  return { ok: r.ok, codes: r.ok ? [] : [`ROLLBACK_${String(r.stage).toUpperCase()}_FAILED`, ...(r.codes ?? [])] };
+  const r = await mergeAndVerify(d, { releasePr: pr.number, releaseHead }, null, workerMode);
+  return { ok: r.ok, codes: r.ok ? [] : [`ROLLBACK_${String(r.stage).toUpperCase()}_FAILED`, ...(r.codes ?? []), ...(r.worker?.code ? [`ROLLBACK_${r.worker.code}`] : [])] };
 }
 
 // Why a hold was written decides whether it may ever be reconsidered for the same commit.
