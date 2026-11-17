@@ -581,6 +581,127 @@ test('AC session: hard cap of ten finalists in the table, five to six only recom
  await assert.rejects(e.addFinalist(sessionId,people[10]),denied('PT422'));
 });
 
+// R3-AC-CONCURRENCY (#338): requests that really overlap, each on its own native connection, started together
+// (the test holds no transaction open). Every statement takes its locks with NOWAIT, so a loser is told
+// "busy" (PT409) instead of waiting; what must never happen is a lost update, a second row, a raw constraint
+// error, a deadlock or an eleventh finalist.
+const asClient = async (client,id) => {await client.exec('reset role;set role authenticated');await client.query("select set_config('request.jwt.claim.sub',$1,false)",[id]);return client;};
+const overlap = calls => Promise.allSettled(calls.map(call => call()));
+const won = results => results.filter(r => r.status==='fulfilled').length;
+const lost = results => results.filter(r => r.status==='rejected').map(r => r.reason);
+const onlyConflicts = (reasons,...codes) => { for (const reason of reasons) assert.ok(codes.includes(reason.code),`unexpected failure ${reason.code}: ${reason.message}`); };
+
+test('AC session concurrency: two assessors saving the same sheet at the same moment never lose or overwrite a sheet', async t => {
+ const e = await sessionBoot(t), {db,h} = e;
+ const people = [];
+ for (let i = 0; i < 4; i++) people.push(await e.finalist());
+ const {sessionId,stages} = await e.plan(people[0]);
+ await h.asUser(people[0].owner);
+ for (const f of people) await e.addFinalist(sessionId,f);
+ await e.setStatus(sessionId,'open');
+ const stage = stages[0], pairs = [];
+ for (const f of people) pairs.push(await e.assign(sessionId,stage,f));
+ const first = await asClient(await e.connect(),people[0].owner), firstTab = await asClient(await e.connect(),people[0].owner);
+ const second = await asClient(await e.connect(),users.recruiter), secondTab = await asClient(await e.connect(),users.recruiter);
+ const sheet = rating => sheetFor(stage.definition,{0:rating});
+ const stored = async pairId => {await h.asAdmin();return (await db.query("select first_sheet->0->>'rating' a, second_sheet->0->>'rating' b from private.ac_paired_sheets where id=$1",[pairId])).rows[0];};
+ // Both independent assessors submit at once: no sheet is lost; a busy answer is retried and then succeeds.
+ for (const pairId of pairs.slice(0,2)) {
+  const results = await overlap([() => e.submit(pairId,sheet('above'),first),() => e.submit(pairId,sheet('below'),second)]);
+  assert.ok(won(results)>=1,'at least one assessor is accepted');
+  onlyConflicts(lost(results),'PT409');
+  if (results[0].status==='rejected') await e.submit(pairId,sheet('above'),first);
+  if (results[1].status==='rejected') await e.submit(pairId,sheet('below'),second);
+  assert.deepEqual(await stored(pairId),{a:'above',b:'below'});
+ }
+ // The same assessor saving from two tabs at once: exactly one sheet is kept and the late tab never overwrites it.
+ for (const [pairId,tabs,side] of [[pairs[2],[first,firstTab],'a'],[pairs[3],[second,secondTab],'b']]) {
+  const results = await overlap([() => e.submit(pairId,sheet('above'),tabs[0]),() => e.submit(pairId,sheet('below'),tabs[1])]);
+  assert.equal(won(results),1,'one tab wins');
+  onlyConflicts(lost(results),'PT409');
+  const winner = results[0].status==='fulfilled' ? 'above' : 'below', row = await stored(pairId);
+  assert.equal(row[side],winner);
+  assert.equal(row[side==='a'?'b':'a'],null,'the other assessor is untouched');
+  await assert.rejects(e.submit(pairId,sheet('meets'),tabs[results[0].status==='fulfilled'?1:0]),denied('PT409'));
+  assert.equal((await stored(pairId))[side],winner);
+ }
+});
+
+test('AC session concurrency: a second attempt cannot start while the first is open, and one entry is kept per step', async t => {
+ const e = await sessionBoot(t), {db,h} = e;
+ const f = await e.finalist();
+ const {sessionId,stages} = await e.plan(f);
+ await h.asUser(f.owner);await e.addFinalist(sessionId,f);await e.setStatus(sessionId,'open');
+ const stage = stages[0], pairId = await e.assign(sessionId,stage,f);
+ const owner = await asClient(await e.connect(),f.owner), ownerTab = await asClient(await e.connect(),f.owner), recruiter = await asClient(await e.connect(),users.recruiter);
+ const rec = (kind,body,client) => () => e.record(sessionId,f,stage,kind,body,client);
+ const kinds = async () => {await h.asAdmin();return (await db.query('select kind from private.ac_session_entries where session_id=$1 and session_stage_id=$2 order by created_at,id',[sessionId,stage.id])).rows.map(r=>r.kind);};
+ // The same first attempt from two tabs at once: one entry.
+ let results = await overlap([rec('first_attempt',{work:work('tab pierwszy')},owner),rec('first_attempt',{work:work('tab drugi')},ownerTab)]);
+ assert.equal(won(results),1);onlyConflicts(lost(results),'PT409');
+ assert.deepEqual(await kinds(),['first_attempt']);
+ // A revised attempt started while the first attempt has no feedback yet is refused, in any interleaving.
+ results = await overlap([rec('revised_attempt',{work:work('poprawka zaczęta za wcześnie')},owner),rec('revised_attempt',{work:work('poprawka z drugiej karty')},ownerTab)]);
+ assert.equal(won(results),0);onlyConflicts(lost(results),'PT409');
+ assert.deepEqual(await kinds(),['first_attempt']);
+ // Feedback needs both independent sheets. Feedback and a revision started in the same instant:
+ // the revision may only ever exist after the feedback that opens the second attempt.
+ await h.asUser(f.owner);await e.submit(pairId,sheetFor(stage.definition,{0:'above'}));
+ await h.asUser(users.recruiter);await e.submit(pairId,sheetFor(stage.definition,{0:'meets'}));
+ results = await overlap([rec('revised_attempt',{work:work('poprawka równolegle z informacją zwrotną')},owner),rec('feedback',{feedback:'Informacja zwrotna po pierwszej próbie, z konkretami.'},recruiter)]);
+ onlyConflicts(lost(results),'PT409');
+ // Either request may be told "busy"; a revision is accepted only if the feedback was committed before it.
+ const order = await kinds();
+ if (results[0].status==='fulfilled') assert.deepEqual(order,['first_attempt','feedback','revised_attempt'],`revision only after feedback: ${order}`);
+ else assert.ok(order.length===1 || (order.length===2 && order[1]==='feedback'),`no revision without feedback: ${order}`);
+ if (results[1].status==='rejected') await e.record(sessionId,f,stage,'feedback',{feedback:'Informacja zwrotna po pierwszej próbie, z konkretami.'},recruiter);
+ if (results[0].status==='rejected') await e.record(sessionId,f,stage,'revised_attempt',{work:work('poprawka po informacji zwrotnej')},owner);
+ assert.deepEqual(await kinds(),['first_attempt','feedback','revised_attempt']);
+ // The revision again from two tabs at once: already recorded, so neither is accepted and nothing is duplicated.
+ const again = await overlap([rec('revised_attempt',{work:work('druga poprawka A')},owner),rec('revised_attempt',{work:work('druga poprawka B')},ownerTab)]);
+ assert.equal(won(again),0);onlyConflicts(lost(again),'PT409');
+ assert.deepEqual(await kinds(),['first_attempt','feedback','revised_attempt']);
+});
+
+test('AC session concurrency: parallel adds never exceed ten finalists or reuse a slot', async t => {
+ const e = await sessionBoot(t), {db,h} = e;
+ const people = [];
+ for (let i = 0; i < 16; i++) people.push(await e.finalist());
+ const owner = people[0].owner;
+ const {sessionId} = await e.plan(people[0],{stages:hrbpCaseTemplate.stages.slice(0,3),competencies:hrbpCaseTemplate.plannedCompetencies.slice(0,3)});
+ await h.asUser(owner);
+ for (const person of people.slice(0,7)) await e.addFinalist(sessionId,person);
+ const clients = [];
+ for (let i = 0; i < 8; i++) clients.push(await asClient(await e.connect(),owner));
+ const add = (person,client) => () => e.call('public.ac_session_add_finalist',[sessionId,person.application.id],client);
+ const slots = async () => {await h.asAdmin();return (await db.query('select slot from private.ac_session_finalists where session_id=$1 order by slot',[sessionId])).rows.map(r=>r.slot);};
+ // Eight tabs race for three free slots, each with a different person.
+ const pending = people.slice(7,15), results = await overlap(pending.map((person,i) => add(person,clients[i])));
+ assert.ok(won(results)>=1 && won(results)<=3,`at most three of eight are accepted, got ${won(results)}`);
+ onlyConflicts(lost(results),'PT409','PT422');
+ const state = await slots();
+ assert.ok(state.length<=10);assert.equal(new Set(state).size,state.length,'no slot is used twice');
+ // Retrying the refused ones one after another fills exactly the remaining slots and then reports the limit.
+ await h.asUser(owner);
+ for (const [i,result] of results.entries()) {
+  if (result.status==='fulfilled') continue;
+  const outcome = await e.addFinalist(sessionId,pending[i]).then(() => 'added',error => error.code);
+  assert.ok(['added','PT422'].includes(outcome),outcome);
+ }
+ assert.deepEqual(await slots(),[1,2,3,4,5,6,7,8,9,10]);
+ // Ten is full: a burst of further adds is refused entirely.
+ const burst = await overlap([add(people[15],clients[0]),add(people[15],clients[1])]);
+ assert.equal(won(burst),0);onlyConflicts(lost(burst),'PT409','PT422');
+ assert.deepEqual(await slots(),[1,2,3,4,5,6,7,8,9,10]);
+ // Free one slot, then the same person added from two tabs at once: one finalist, one slot, ten in total.
+ await h.asUser(owner);await e.call('public.ac_session_remove_finalist',[sessionId,people[0].application.id]);
+ const twice = await overlap([add(people[15],clients[0]),add(people[15],clients[1])]);
+ assert.equal(won(twice),1);onlyConflicts(lost(twice),'PT409');
+ await h.asAdmin();
+ assert.equal(await count(db,'private.ac_session_finalists where session_id=$1 and application_id=$2',[sessionId,people[15].application.id]),1);
+ assert.equal(await count(db,'private.ac_session_finalists where session_id=$1',[sessionId]),10);
+});
+
 test('AC session migration refuses source drift atomically and strips hostile default grants', async t => {
  const e = await sessionBoot(t,{throughMigration:'20261111140000_sc19_p24_checkout_role.sql'}), {db,h} = e;
  await h.asAdmin();
