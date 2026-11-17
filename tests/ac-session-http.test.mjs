@@ -116,6 +116,11 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     assert.match(html, /Uzgodniono: Zgodne z wymaganiami — UzasadnienieUzgodnienia/);
     assert.match(html, /Jawna rozbieżność — obie oceny pozostają: OpisRozbieznosci/);
     assert.match(html, /Propozycja uzgodnienia \(Ty\): Zgodne z wymaganiami — UzasadnienieDrugie/);
+    // ROADMAP R3: assessors by readable label, never by account id.
+    assert.match(html, /Asesor 1 · Ty<\/strong>/); assert.match(html, /Asesor 2 · Członek zespołu 1<\/strong>/);
+    // Ids stay only as form values and React keys; the visible text never shows one.
+    const visible = html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]*>/g, ' ');
+    for (const id of [ids.owner, ids.recruiter]) assert.ok(!visible.includes(id), 'no assessor account id in the visible page text');
     for (const marker of ['PierwszaProba', 'InformacjaZwrotna', 'PoprawionaPraca', 'OpisZmiany', 'DowodZmiany', 'NotatkaEksperta', 'Zmiana potwierdzona dowodem']) assert.match(html, new RegExp(marker), marker);
     assert.match(html, /Oddaj swój niezależny arkusz/);
     assert.doesNotMatch(html, FOREIGN);
