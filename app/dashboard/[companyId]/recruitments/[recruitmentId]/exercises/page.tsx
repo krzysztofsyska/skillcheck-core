@@ -8,7 +8,7 @@ export default async function Exercises({ params, searchParams }: {
   params: Promise<{companyId: string; recruitmentId: string}>; searchParams: Promise<{after?: string}>;
 }) {
   const { companyId, recruitmentId } = await params;
-  const { client, base, editable, recruitment, position } = await exerciseContext(companyId, recruitmentId);
+  const { client, base, canEdit, editable, recruitment, position } = await exerciseContext(companyId, recruitmentId);
   const generationEnabled=editable && process.env.EXERCISE_AI_ENABLED==='true';
   const company=generationEnabled?await client.from('company_profiles').select('updated_at').eq('company_id',companyId).maybeSingle():null;
   const { after } = await searchParams;
@@ -29,6 +29,7 @@ export default async function Exercises({ params, searchParams }: {
         <ExerciseGenerationForm companyId={companyId} recruitmentId={recruitmentId} requestKey={randomUUID()}
           positionStamp={position.updated_at} companyStamp={company?.data?.updated_at??null}/>
       </details>}
+      {canEdit && process.env.EXERCISE_AI_ENABLED==='true' && <p><Link href={`${base}/individual-questions`}>Pytania indywidualne z luk w CV (osobno od wspólnego wyniku)</Link></p>}
       {!rows.length && <p>Brak zadań na tej stronie.</p>}
       <ul>{rows.map(row => <li key={row.exercise_id}><Link href={`${base}/${row.exercise_id}`}>{row.definition.title}</Link> — wersja {row.version}, {row.definition.durationMinutes} min</li>)}</ul>
       {after && <Link href={base}>Początek listy</Link>}
