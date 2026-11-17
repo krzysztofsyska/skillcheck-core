@@ -445,3 +445,76 @@ test('#491 review fix: only the outer begin ... commit frame is allowed; transac
   const r = classifyRelease(['supabase/migrations/20260101000000_a.sql'], [{ path: 'supabase/migrations/20260101000000_a.sql', sql: inner }]);
   assert.deepEqual(r.reasons, ['NON_ADDITIVE_SQL:TXN_CONTROL:supabase/migrations/20260101000000_a.sql']);
 });
+
+test('PR #499 review fix: allow rules check the WHOLE statement, never a prefix (no function calls smuggled in)', () => {
+  // Codex P1: additive-looking prefix, data-deleting function after it.
+  assert.deepEqual(nonAdditiveSql('create table public.audit_probe (removed) as select private.purge_closed_sales_leads();'), ['CREATE_TABLE']);
+  const refused = {
+    CREATE_TABLE: [
+      'create table public.t (id int) as select 1;',
+      'create table public.t (id int) inherits (public.x);',
+      'create table public.t (like public.x including all);',
+      'create table public.t partition of public.x for values in (1);',
+      'create table public.t (id int) with (fillfactor=70);',
+      'create table public.t (id int) tablespace x;',
+      'create table public.t (id int), (b int);',
+      'create table public.t (id int default private.purge());',
+      'create table public.t (id int default (now()));',
+      "create table public.t (id int default nextval('s'));",
+      'create table public.t (id int check (private.purge() > 0));',
+      'create table public.t (id int check (purge(id)));',
+      'create table public.t (id int "check"(id > 0));',
+      'create table public.t (id int generated always as (private.purge()) stored);',
+      'create table public.t (id int check (exists (select 1)));',
+      "create table public.t (id text check (id ~ 'x'));",
+    ],
+    ALTER_TABLE: [
+      'alter table public.t add column x int default private.purge_closed_sales_leads();',
+      'alter table public.t add column x int default purge();',
+      'alter table public.t add column x int check (private.purge(x));',
+      "alter table public.t add column x int, add column y int default nextval('s');",
+      'alter table public.t add column x int, alter column id set not null;',
+      'alter table public.t add column x int generated always as (purge()) stored;',
+      'alter table public.t add x int;',
+    ],
+    CREATE_INDEX: [
+      'create index i on public.t (id) where private.purge() > 0;',
+      'create index i on public.t (id) where id > 0;',
+      'create index i on public.t (private.purge(id));',
+      'create index i on public.t (lower(email));',
+      'create index i on public.t (id) include (x);',
+      'create index i on public.t (id) with (fillfactor=70);',
+      'create index i on public.t (id) tablespace x;',
+    ],
+    COMMENT_ON: ['comment on table public.t is (select 1);', "comment on table public.t is 'x' || purge();"],
+    CREATE_SCHEMA: ['create schema s authorization x;'],
+  };
+  for (const [code, list] of Object.entries(refused)) for (const sql of list) assert.deepEqual(nonAdditiveSql(sql), [code], sql);
+  // Reaches the release decision as NON_ADDITIVE_SQL (the DESTRUCTIVE gate itself is unchanged).
+  const r = classifyRelease(['supabase/migrations/1_x.sql'], [{ path: 'supabase/migrations/1_x.sql', sql: 'create table public.p (removed) as select private.purge_closed_sales_leads();' }]);
+  assert.deepEqual(r.reasons, ['NON_ADDITIVE_SQL:CREATE_TABLE:supabase/migrations/1_x.sql']);
+  // Plain additive shapes still pass.
+  assert.deepEqual(nonAdditiveSql(`begin;
+create schema if not exists notes_s;
+create table if not exists public.notes (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies (id) on delete cascade,
+  title text not null default '',
+  amount numeric(10, 2) default 0,
+  meta jsonb not null default '{}'::jsonb,
+  tags text[] not null default '{}'::text[],
+  created_at timestamp with time zone not null default now(),
+  n bigint generated always as identity,
+  status text not null check (status in ('a', 'b')),
+  constraint notes_title_len check (char_length(title) <= 200),
+  unique (company_id, title)
+);
+alter table public.notes enable row level security;
+alter table public.notes add column if not exists x int, add column y text not null default 'a';
+create unique index if not exists n_i on public.notes using btree (company_id, created_at desc);
+create index on public.notes (title);
+comment on column public.notes.title is 'x';
+comment on table public.notes is null;
+commit;
+`), []);
+});

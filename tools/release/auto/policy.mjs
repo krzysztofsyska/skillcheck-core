@@ -119,16 +119,85 @@ export function destructiveSql(sql) {
 // The text is read by `lexSql` first (comments and literals in one pass); input it cannot read
 // cleanly is refused (UNPARSEABLE_*), dollar quoting (function bodies, DO blocks) is refused
 // outright, as are policies, grants, functions, views, triggers, types and extensions.
-const IDENT = String.raw`("?[a-z_][\w$]*"?\.)?"?[a-z_][\w$]*"?`;
+const NAME = String.raw`"?[a-z_][\w$]*"?`;
+const IDENT = `(${NAME}\\.)?${NAME}`;
+// PR #499 review fix: every rule checks the WHOLE statement shape, never a prefix. A prefix rule let
+// `create table t (x) as select private.purge_closed_sales_leads()` through: additive-looking
+// start, data-deleting function call after it. Bodies of CREATE TABLE / ADD COLUMN are checked
+// element by element by `safeDefinition`; CREATE INDEX accepts plain column lists only.
+const INDEX_COL = `${NAME}( [a-z_]\\w*)?( (asc|desc))?( nulls (first|last))?`;
 const ADDITIVE = [
-  ['CREATE_SCHEMA', /^create schema (if not exists )?\S+$/],
-  ['CREATE_TABLE', new RegExp(`^create table (if not exists )?${IDENT} ?\\(`)],
-  ['CREATE_INDEX', /^create (unique )?index (concurrently )?(if not exists )?\S+ on /],
+  ['CREATE_SCHEMA', new RegExp(`^create schema (if not exists )?${NAME}$`)],
+  ['CREATE_TABLE', st => createTableOk(st)],
+  // plain column lists only: no WHERE (partial), INCLUDE, WITH, TABLESPACE or expression columns
+  ['CREATE_INDEX', new RegExp(`^create (unique )?index (concurrently )?(if not exists )?(${NAME} )?on (only )?${IDENT}( using (btree|gin|gist|brin|hash))? ?\\(${INDEX_COL}(,${INDEX_COL})*\\)$`)],
   ['ENABLE_RLS', new RegExp(`^alter table (if exists )?${IDENT} enable row level security$`)],
-  ['COMMENT', /^comment on (table|column|schema|index) /],
-  // only ADD COLUMN actions: any other action after a comma refuses
-  ['ADD_COLUMN', new RegExp(`^alter table (if exists )?${IDENT} add column (if not exists )?(?!.*,\\s*(?!add column\\b)(add|drop|alter|disable|enable|no|force|rename|owner|set|reset|validate|replica|cluster|inherit|attach|detach)\\b)`)],
+  ['COMMENT', new RegExp(`^comment on (table|column|schema|index) (${NAME}\\.){0,2}${NAME} is (''|null)$`)],
+  // only ADD COLUMN actions, each one a safe column definition
+  ['ADD_COLUMN', st => addColumnOk(st)],
 ];
+
+// Characters a column / table-constraint definition may contain. Leaves out operators that could
+// name a user-defined operator function (~ | & # @ % ^ ?) and anything else unusual.
+const SAFE_DEF_CHARS = /^[\w$ '",.()=<>!+\-*/:[\]]+$/;
+// Words that never belong in a plain column definition: subqueries, CTAS, LIKE/INHERITS/PARTITION
+// OF copies, generated expressions (AS), storage clauses, partial-index style clauses.
+const DEF_FORBIDDEN = /\b(select|like|ilike|similar|as|inherits|partition|of|exists|with|using|tablespace|execute|include|where|from|into|values|returning|lateral|over|filter|within|nextval|setval)\b/;
+// `word(` is allowed only for type modifiers, constraint keywords and a few harmless built-ins.
+const PAREN_KEYWORDS = new Set(['check', 'key', 'unique', 'in', 'and', 'or', 'not', 'any', 'all',
+  'numeric', 'decimal', 'varchar', 'char', 'character', 'varying', 'bit', 'time', 'timestamp', 'timestamptz', 'interval', 'float']);
+const SAFE_CALLS = new Set(['now', 'gen_random_uuid', 'length', 'char_length', 'octet_length', 'lower', 'upper', 'btrim', 'coalesce', 'jsonb_typeof', 'cardinality', 'array_length']);
+const QUALIFIED_CALLS = new Set(['extensions.gen_random_uuid', ...[...SAFE_CALLS].map(f => `pg_catalog.${f}`)]);
+const CALL = /(references )?((?:"?[a-z_][\w$]*"?\.)*"?[a-z_][\w$]*"?)\(/g;
+// DEFAULT only with a literal or one of the allowlisted value functions (optionally cast).
+const SAFE_DEFAULT = /\bdefault (''|-?\d+(\.\d+)?|true|false|null|(pg_catalog\.)?now\(\)|((extensions|pg_catalog)\.)?gen_random_uuid\(\)|current_timestamp|current_date|array\[\])(::[a-z_]\w*(\[\])?)?(?=[ ,)]|$)/g;
+
+function safeDefinition(def) {
+  if (typeof def !== 'string' || !def.trim() || !SAFE_DEF_CHARS.test(def)) return false;
+  const s = def.replace(/\bwith(out)? time zone\b/g, 'tz').replace(/\bgenerated (always|by default) as identity\b/g, 'identity');
+  if (DEF_FORBIDDEN.test(s)) return false;
+  for (const [, ref, name] of s.matchAll(CALL)) {
+    if (ref) continue; // references <table>(<column>)
+    if (name.includes('"')) return false; // a quoted callee is a function name, never a keyword
+    if (name.includes('.') ? !QUALIFIED_CALLS.has(name) : !(PAREN_KEYWORDS.has(name) || SAFE_CALLS.has(name))) return false;
+  }
+  return (s.match(/\bdefault\b/g) ?? []).length === [...s.matchAll(SAFE_DEFAULT)].length;
+}
+
+// Splits at commas outside parentheses; null when the parentheses do not balance.
+function splitTopLevel(text) {
+  const parts = []; let depth = 0; let from = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')') { depth--; if (depth < 0) return null; }
+    else if (text[i] === ',' && depth === 0) { parts.push(text.slice(from, i)); from = i + 1; }
+  }
+  if (depth !== 0) return null;
+  parts.push(text.slice(from));
+  return parts.map(p => p.trim());
+}
+
+const CREATE_TABLE_HEAD = new RegExp(`^create table (if not exists )?${IDENT} ?\\(`);
+function createTableOk(st) {
+  const m = CREATE_TABLE_HEAD.exec(st);
+  if (!m || !st.endsWith(')')) return false;
+  // the paren opened after the name must be the one that closes the statement: nothing after it
+  const inner = st.slice(m[0].length, -1);
+  const parts = splitTopLevel(inner);
+  return Array.isArray(parts) && parts.every(safeDefinition);
+}
+
+const ALTER_TABLE_HEAD = new RegExp(`^alter table (if exists )?${IDENT} (?=add column )`);
+const ADD_COLUMN_ACTION = new RegExp(`^add column (if not exists )?${NAME} `);
+function addColumnOk(st) {
+  const m = ALTER_TABLE_HEAD.exec(st);
+  if (!m) return false;
+  const parts = splitTopLevel(st.slice(m[0].length));
+  return Array.isArray(parts) && parts.every(p => {
+    const a = ADD_COLUMN_ACTION.exec(p);
+    return Boolean(a) && safeDefinition(p.slice(a[0].length));
+  });
+}
 export const TXN_CONTROL = /^(begin|start|commit|end|rollback|abort|savepoint|release|prepare\s+transaction|commit\s+prepared|rollback\s+prepared)\b/;
 export function nonAdditiveSql(sql) {
   if (typeof sql !== 'string' || !sql.trim()) return ['UNREADABLE'];
@@ -136,7 +205,8 @@ export function nonAdditiveSql(sql) {
   if (!lexed.ok) return [`UNPARSEABLE_${lexed.code}`];
   if (lexed.dollar) return ['DOLLAR_QUOTING'];
   const bad = [];
-  const stmts = lexed.text.split(';').map(raw => raw.replace(/\s+/g, ' ').trim().toLowerCase()).filter(Boolean);
+  // One space between words, none around ( ) and , — so every rule sees one canonical shape.
+  const stmts = lexed.text.split(';').map(raw => raw.replace(/\s+/g, ' ').replace(/ ?([(),]) ?/g, '$1').trim().toLowerCase()).filter(Boolean);
   stmts.forEach((st, idx) => {
     // Only the OUTER frame: `begin` as the first and `commit` as the last statement. Any other
     // transaction control (a COMMIT in the middle persists earlier statements and leaves the rest
@@ -144,7 +214,7 @@ export function nonAdditiveSql(sql) {
     if (st === 'begin' && idx === 0) return;
     if (st === 'commit' && idx === stmts.length - 1) return;
     if (TXN_CONTROL.test(st)) { bad.push('TXN_CONTROL'); return; }
-    if (!ADDITIVE.some(([, re]) => re.test(st))) bad.push(st.split(' ').slice(0, 2).join('_').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 30) || 'STATEMENT');
+    if (!ADDITIVE.some(([, rule]) => (typeof rule === 'function' ? rule(st) : rule.test(st)))) bad.push(st.split(' ').slice(0, 2).join('_').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 30) || 'STATEMENT');
   });
   return [...new Set(bad)];
 }
