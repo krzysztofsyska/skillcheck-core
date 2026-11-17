@@ -678,3 +678,296 @@ test('#461 recovery: worker deployed, smoke failed, run cut off before the rever
   assert.ok(r2.codes.some(c => /WORKER_DEPLOY_UNAVAILABLE/.test(c)), r2.codes.join(','));
   assert.ok(!(state.comments[100] ?? []).some(c => /sc-auto-release-done/.test(c.body) && /cofni/.test(c.body)), 'no completion marker');
 });
+
+// #491 (owner's path B): additive migrations go out by themselves after a fresh backup check;
+// destructive ones keep waiting; without the executor secret nothing changes.
+const MIG = '20261117000100_add_notes.sql';
+const addNotes = { [`supabase/migrations/${MIG}`]: 'begin;\ncreate table public.notes(id int);\ncommit;\n' };
+const FRESH = [{ status: 'COMPLETED', inserted_at: '2026-11-16T03:00:00Z' }];
+const migDeps = (fx, gh, extra = {}) => deps(fx, gh, { migrationExecutor: true, backups: FRESH, ...extra });
+const twoPrs = () => fixture([addNotes, { 'app/regulamin/page.tsx': 'v2\n' }]);
+const passBoth = fx => ({ 100: [pass(fx.prs[0].head)], 101: [pass(fx.prs[1].head)] });
+
+test('#491: without the executor secret the behaviour is exactly as before (MIGRATION_EXECUTOR_UNAVAILABLE, nothing opened)', async () => {
+  for (const extra of [{}, { migrationExecutor: false }, { migrationExecutor: 'true' }]) {
+    const fx = twoPrs();
+    const { gh, state } = fakeGithub({ fx, comments: passBoth(fx) });
+    const r = await runPublisher(deps(fx, gh, extra));
+    assert.equal(r.status, 'NOTHING_TO_RELEASE', JSON.stringify(r));
+    assert.deepEqual(r.held[0], { pr: 100, reasons: ['BACKUP_EVIDENCE_MISSING', 'MIGRATION_EXECUTOR_UNAVAILABLE'] });
+    assert.deepEqual(r.held[1], { pr: 101, reasons: ['UNRELEASED_MIGRATIONS_PRECEDE'] });
+    assert.equal(state.pulls.length, 0); assert.equal(state.merged.length, 0);
+  }
+});
+
+test('#491: backup proof missing, failed or older than 24 h refuses the migration release before anything is pushed', async () => {
+  const cases = [
+    [null, 'BACKUP_EVIDENCE_MISSING'],
+    [[{ status: 'FAILED', inserted_at: '2026-11-16T03:00:00Z' }], 'BACKUP_NOT_COMPLETED'],
+    [[{ status: 'COMPLETED', inserted_at: '2026-11-15T11:00:00Z' }], 'BACKUP_STALE'],
+  ];
+  for (const [backups, code] of cases) {
+    const fx = fixture([addNotes]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    const r = await runPublisher(migDeps(fx, gh, { backups }));
+    assert.deepEqual(r.held[0], { pr: 100, reasons: [code] }, code);
+    assert.equal(state.pulls.length, 0, code);
+  }
+});
+
+test('#491: destructive SQL still waits for the owner even with the executor and a fresh backup', async () => {
+  const fx = fixture([{ 'supabase/migrations/20261117000100_x.sql': 'begin;\nalter table public.companies drop column x;\ncommit;\n' }]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  const r = await runPublisher(migDeps(fx, gh));
+  assert.deepEqual(r.held[0], { pr: 100, reasons: ['DESTRUCTIVE_SQL:DROP:supabase/migrations/20261117000100_x.sql', 'DESTRUCTIVE_SQL:ALTER_DROP:supabase/migrations/20261117000100_x.sql'] });
+  assert.equal(state.pulls.length, 0);
+});
+
+test('#491: additive migration: publish waits for the migrate job, merges only after it applied them; then UNRELEASED_MIGRATIONS_PRECEDE is gone', async () => {
+  const fx = twoPrs();
+  const { gh, state } = fakeGithub({ fx, comments: passBoth(fx) });
+  const r1 = await runPublisher(migDeps(fx, gh));
+  assert.equal(r1.status, 'AWAIT_MIGRATIONS', JSON.stringify(r1));
+  const releaseHead = state.pulls[0].head.sha;
+  assert.deepEqual(r1.migration_request, { release_pr: 900, release_head: releaseHead, source_pr: 100, resumed: false });
+  assert.equal(state.pulls[0].state, 'open'); assert.equal(state.merged.length, 0, 'nothing merged before the migrations');
+  // An outcome for another SHA is not this release's: still waiting, still not merged.
+  const stale = await runPublisher(migDeps(fx, gh, { migrationOutcome: { release_head: 'e'.repeat(40), status: 'applied', applied: [MIG] } }));
+  assert.equal(stale.status, 'AWAIT_MIGRATIONS'); assert.equal(state.merged.length, 0);
+  // The finish job: applied for this exact head -> merge, deploy, smoke.
+  const r2 = await runPublisher(migDeps(fx, gh, { migrationOutcome: { release_head: releaseHead, status: 'applied', applied: [MIG], code: 'MIGRATIONS_APPLIED' } }));
+  assert.equal(r2.status, 'RELEASED', JSON.stringify(r2)); assert.equal(r2.source_pr, 100);
+  assert.equal(fx.originGit('show', `main:supabase/migrations/${MIG}`), addNotes[`supabase/migrations/${MIG}`]);
+  // The product change that waited behind the migration now ships.
+  fx.git('fetch', 'origin', 'main');
+  const r3 = await runPublisher(migDeps(fx, gh));
+  assert.equal(r3.status, 'RELEASED', JSON.stringify(r3)); assert.equal(r3.source_pr, 101);
+  assert.ok(!(r3.held ?? []).some(h => h.reasons.includes('UNRELEASED_MIGRATIONS_PRECEDE')));
+});
+
+test('#491: error mid-batch: stop, release PR closed unmerged, freeze issue with ROLLBACK_INSUFFICIENT_DATA_CHANGED, source held', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  await runPublisher(migDeps(fx, gh));
+  const releaseHead = state.pulls[0].head.sha;
+  const errors = [];
+  const r = await runPublisher(migDeps(fx, gh, { error: c => errors.push(c), migrationOutcome: {
+    release_head: releaseHead, status: 'failed', applied: ['20261117000050_first.sql'], code: `MIGRATION_FAILED:${MIG}:42P01` } }));
+  assert.equal(r.status, 'FROZEN');
+  assert.deepEqual(r.codes, [`MIGRATION_FAILED:${MIG}:42P01`, 'ROLLBACK_INSUFFICIENT_DATA_CHANGED']);
+  assert.deepEqual(errors, r.codes);
+  assert.equal(state.merged.length, 0); assert.deepEqual(state.closed, [900]);
+  assert.ok(state.issues[0].title.startsWith(FREEZE_TITLE));
+  assert.match(state.issues[0].body, /migracja zmieniła dane/);
+  assert.ok(state.comments[100].some(c => /sc-auto-release-held:v1/.test(c.body) && /MIGRATION_STOPPED/.test(c.body)));
+  fx.git('fetch', 'origin', 'main');
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'FROZEN');
+});
+
+test('#491: migration release merged, run cut off before the done marker, next smoke fails: rollback still carries ROLLBACK_INSUFFICIENT_DATA_CHANGED', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  await runPublisher(migDeps(fx, gh));
+  const outcome = { release_head: state.pulls[0].head.sha, status: 'applied', applied: [MIG] };
+  assert.equal((await runPublisher(migDeps(fx, gh, { migrationOutcome: outcome }))).status, 'RELEASED');
+  state.comments[100] = state.comments[100].filter(c => !/sc-auto-release-done/.test(c.body));
+  fx.git('fetch', 'origin', 'main');
+  let calls = 0;
+  const r = await runPublisher(migDeps(fx, gh, { smoke: async () => (++calls === 1 ? { ok: false, failures: ['/:STATUS_500'] } : { ok: true, failures: [] }) }));
+  assert.equal(r.status, 'ROLLED_BACK', JSON.stringify(r));
+  assert.ok(r.codes.includes('ROLLBACK_INSUFFICIENT_DATA_CHANGED'), JSON.stringify(r.codes));
+});
+
+test('#491: failure before any migration committed freezes without the data-changed code; unknown outcome says so', async () => {
+  for (const [outcome, codes] of [
+    [{ status: 'failed', applied: [], code: `MIGRATION_FAILED:${MIG}:42601` }, [`MIGRATION_FAILED:${MIG}:42601`]],
+    [{ status: 'refused', applied: [], code: 'MIGRATION_REQUEST_NOT_RELEASE_HEAD' }, ['MIGRATION_REQUEST_NOT_RELEASE_HEAD']],
+    [{ status: 'unknown', applied: null, code: 'MIGRATION_OUTCOME_UNKNOWN' }, ['MIGRATION_OUTCOME_UNKNOWN']],
+    [{ status: 'garbage' }, ['MIGRATION_OUTCOME_UNKNOWN']],
+  ]) {
+    const fx = fixture([addNotes]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    await runPublisher(migDeps(fx, gh));
+    const r = await runPublisher(migDeps(fx, gh, { migrationOutcome: { release_head: state.pulls[0].head.sha, ...outcome } }));
+    assert.equal(r.status, 'FROZEN'); assert.deepEqual(r.codes, codes);
+    assert.equal(state.merged.length, 0);
+  }
+});
+
+test('#491: applied set differing from the release migrations is never merged', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  await runPublisher(migDeps(fx, gh));
+  const r = await runPublisher(migDeps(fx, gh, { migrationOutcome: { release_head: state.pulls[0].head.sha, status: 'applied', applied: ['20261117000999_other.sql'] } }));
+  assert.equal(r.status, 'FROZEN'); assert.deepEqual(r.codes, ['MIGRATION_SET_MISMATCH', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED']);
+  assert.equal(state.merged.length, 0);
+});
+
+test('#491: secret gone between jobs (unavailable): release PR closed, nothing frozen, retried later', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  const first = await runPublisher(migDeps(fx, gh));
+  assert.equal(first.migration_request.resumed, false, 'this run opened the release PR itself');
+  const r = await runPublisher(migDeps(fx, gh, { migrationRequest: first.migration_request, migrationOutcome: { release_head: state.pulls[0].head.sha, status: 'unavailable', applied: [], code: 'MIGRATION_EXECUTOR_UNAVAILABLE' } }));
+  assert.equal(r.status, 'HELD'); assert.deepEqual(r.codes, ['MIGRATION_EXECUTOR_UNAVAILABLE']);
+  assert.equal(state.issues.length, 0); assert.equal(state.merged.length, 0);
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'AWAIT_MIGRATIONS', 'next run tries again');
+});
+
+// PR #499 review (Codex P1): `unavailable` on a RESUMED release. An earlier run reached the
+// migrate job (which may have committed) and was cut off before the finish job; the retry finds
+// the secret gone. Closing the release as a plain HELD would let the source lose its PASS and the
+// next release run over a changed database with no freeze: it must fail closed instead.
+test('#499: unavailable on a resumed release (earlier attempt may have committed): freeze MIGRATION_OUTCOME_UNKNOWN, never a quiet HELD', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'AWAIT_MIGRATIONS');
+  // Run 1's migrate job may have committed; its finish job never ran. Run 2 resumes the release.
+  const again = await runPublisher(migDeps(fx, gh));
+  assert.equal(again.status, 'AWAIT_MIGRATIONS'); assert.equal(again.migration_request.resumed, true);
+  const releaseHead = state.pulls[0].head.sha;
+  const errors = [];
+  const r = await runPublisher(migDeps(fx, gh, { error: c => errors.push(c), migrationRequest: again.migration_request, migrationOutcome: { release_head: releaseHead, status: 'unavailable', applied: [], code: 'MIGRATION_EXECUTOR_UNAVAILABLE' } }));
+  assert.equal(r.status, 'FROZEN', JSON.stringify(r));
+  assert.deepEqual(r.codes, ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED', 'MIGRATION_EXECUTOR_UNAVAILABLE']);
+  assert.deepEqual(errors, ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED']);
+  assert.equal(state.merged.length, 0); assert.deepEqual(state.closed, [900]);
+  assert.ok(state.issues[0].title.startsWith(FREEZE_TITLE));
+  assert.ok(state.comments[100].some(c => /sc-auto-release-held:v1/.test(c.body) && /MIGRATION_OUTCOME_UNKNOWN/.test(c.body)));
+  // The source then loses its PASS: still nothing is released, the freeze stands.
+  state.comments[100].push({ ...pass(fx.prs[0].head), created_at: '2026-11-16T11:00:00Z', body: pass(fx.prs[0].head).body.replace('"PASS"', '"FAIL"') });
+  fx.git('fetch', 'origin', 'main');
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'FROZEN', 'every later release waits');
+});
+
+test('#499: unavailable with no readable migration request (first attempt not provable): fails closed with a freeze', async () => {
+  for (const migrationRequest of [undefined, null, 'garbage', {}]) {
+    const fx = fixture([addNotes]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    const first = await runPublisher(migDeps(fx, gh));
+    const releaseHead = state.pulls[0].head.sha;
+    const r = await runPublisher(migDeps(fx, gh, { migrationRequest, migrationOutcome: { release_head: releaseHead, status: 'unavailable', applied: [], code: 'MIGRATION_EXECUTOR_UNAVAILABLE' } }));
+    assert.equal(r.status, 'FROZEN', JSON.stringify(migrationRequest));
+    assert.equal(r.codes[0], 'MIGRATION_OUTCOME_UNKNOWN');
+    assert.equal(state.merged.length, 0); assert.equal(state.issues.length, 1);
+    // A request for another release head never proves a first attempt either.
+    if (migrationRequest === undefined) {
+      const fx2 = fixture([addNotes]);
+      const g2 = fakeGithub({ fx: fx2, comments: { 100: [pass(fx2.prs[0].head)] } });
+      const f2 = await runPublisher(migDeps(fx2, g2.gh));
+      const r2 = await runPublisher(migDeps(fx2, g2.gh, { migrationRequest: { ...f2.migration_request, release_head: 'e'.repeat(40) }, migrationOutcome: { release_head: g2.state.pulls[0].head.sha, status: 'unavailable', applied: [], code: 'MIGRATION_EXECUTOR_UNAVAILABLE' } }));
+      assert.equal(r2.status, 'FROZEN');
+    }
+    assert.equal(first.migration_request.resumed, false);
+  }
+});
+
+test('#491: migrations applied, then smoke fails: rollback + freeze carry ROLLBACK_INSUFFICIENT_DATA_CHANGED', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  await runPublisher(migDeps(fx, gh));
+  let calls = 0;
+  const r = await runPublisher(migDeps(fx, gh, {
+    smoke: async () => (++calls === 1 ? { ok: false, failures: ['/:STATUS_500'] } : { ok: true, failures: [] }),
+    migrationOutcome: { release_head: state.pulls[0].head.sha, status: 'applied', applied: [MIG] },
+  }));
+  assert.equal(r.status, 'ROLLED_BACK', JSON.stringify(r));
+  assert.ok(r.codes.includes('ROLLBACK_INSUFFICIENT_DATA_CHANGED'));
+  assert.match(state.issues[0].body, /migracja zmieniła dane/);
+});
+
+test('#491: migrations applied but the release got held at the recheck: freeze says code did not follow', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  await runPublisher(migDeps(fx, gh));
+  const releaseHead = state.pulls[0].head.sha;
+  // A FAIL verdict on the same head lands while the migrate job runs.
+  state.comments[100].push({ ...pass(fx.prs[0].head), created_at: '2026-11-16T11:00:00Z', body: pass(fx.prs[0].head).body.replace('"PASS"', '"FAIL"') });
+  const r = await runPublisher(migDeps(fx, gh, { migrationOutcome: { release_head: releaseHead, status: 'applied', applied: [MIG] } }));
+  assert.equal(r.status, 'FROZEN', JSON.stringify(r));
+  assert.equal(r.codes[0], 'MIGRATIONS_APPLIED_RELEASE_HELD');
+  assert.equal(state.merged.length, 0);
+});
+
+test('#491 review fix: run cut off after the migrate job (outcome lost), source no longer allowed: freeze as possibly changed data, never a quiet HELD', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'AWAIT_MIGRATIONS');
+  // The migrate job may have committed; the finish job never ran. A FAIL verdict lands meanwhile.
+  state.comments[100].push({ ...pass(fx.prs[0].head), created_at: '2026-11-16T11:00:00Z', body: pass(fx.prs[0].head).body.replace('"PASS"', '"FAIL"') });
+  const errors = [];
+  const r = await runPublisher(migDeps(fx, gh, { error: c => errors.push(c) }));
+  assert.equal(r.status, 'FROZEN', JSON.stringify(r));
+  assert.deepEqual(r.codes.slice(0, 3), ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED', 'SOURCE_NO_LONGER_ALLOWED']);
+  assert.deepEqual(errors, ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED']);
+  assert.equal(state.merged.length, 0); assert.deepEqual(state.closed, [900]);
+  assert.ok(state.issues[0].title.startsWith(FREEZE_TITLE));
+  assert.match(state.issues[0].body, /nie wiadomo, czy migracje zmieniły bazę/);
+  assert.match(state.issues[0].body, /migracja zmieniła dane/);
+  assert.ok(state.comments[100].some(c => /sc-auto-release-held:v1/.test(c.body) && /MIGRATION_OUTCOME_UNKNOWN/.test(c.body)));
+  fx.git('fetch', 'origin', 'main');
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'FROZEN', 'every later release waits');
+});
+
+test('#491 review fix: run cut off, release CI then fails on resume: freeze as possibly changed data', async () => {
+  const fx = fixture([addNotes]);
+  const ci = {};
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] }, ci });
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'AWAIT_MIGRATIONS');
+  const releaseHead = state.pulls[0].head.sha;
+  const red = green(releaseHead); red[0].conclusion = 'failure'; ci[releaseHead] = red;
+  const r = await runPublisher(migDeps(fx, gh));
+  assert.equal(r.status, 'FROZEN', JSON.stringify(r));
+  assert.deepEqual(r.codes.slice(0, 2), ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED']);
+  assert.equal(state.merged.length, 0); assert.deepEqual(state.closed, [900]);
+});
+
+test('#491 review fix: run cut off, source still allowed: the migrate job is asked again (it reads the ledger) and nothing merges before it answers', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  await runPublisher(migDeps(fx, gh));
+  const releaseHead = state.pulls[0].head.sha;
+  const again = await runPublisher(migDeps(fx, gh));
+  assert.equal(again.status, 'AWAIT_MIGRATIONS'); assert.equal(again.migration_request.release_head, releaseHead);
+  assert.equal(state.merged.length, 0); assert.equal(state.issues.length, 0);
+  // The ledger says everything is already there (MIGRATIONS_ALREADY_APPLIED): the release goes on.
+  const r = await runPublisher(migDeps(fx, gh, { migrationOutcome: { release_head: releaseHead, status: 'applied', applied: [MIG], code: 'MIGRATIONS_ALREADY_APPLIED' } }));
+  assert.equal(r.status, 'RELEASED', JSON.stringify(r));
+});
+
+// PR #499 review fix: the release PR is closed LAST. A run cut off between the steps must leave a
+// freeze (or an open release PR), never a closed PR over a possibly changed database with no freeze.
+for (const [label, setup] of [
+  ['migrate job reported a mid-batch failure', async (fx, gh, state) => {
+    await runPublisher(migDeps(fx, gh));
+    return { migrationOutcome: { release_head: state.pulls[0].head.sha, status: 'failed', applied: ['20261117000050_first.sql'], code: `MIGRATION_FAILED:${MIG}:42P01` } };
+  }],
+  ['outcome lost after the migrate job, source no longer allowed', async (fx, gh, state) => {
+    await runPublisher(migDeps(fx, gh));
+    state.comments[100].push({ ...pass(fx.prs[0].head), created_at: '2026-11-16T11:00:00Z', body: pass(fx.prs[0].head).body.replace('"PASS"', '"FAIL"') });
+    return {};
+  }],
+]) {
+  test(`#499: ${label}: cut off right before the close, the freeze already stands and the next release is refused`, async () => {
+    const fx = fixture([addNotes]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    const extra = await setup(fx, gh, state);
+    const dying = { ...gh, patch: async () => { throw new Error('job killed before the close'); } };
+    await assert.rejects(runPublisher(migDeps(fx, dying, extra)), /job killed/);
+    assert.equal(state.pulls[0].state, 'open', 'not closed yet');
+    assert.ok(state.issues.some(i => i.title.startsWith(FREEZE_TITLE)), 'freeze opened before the close');
+    fx.git('fetch', 'origin', 'main');
+    const next = await runPublisher(migDeps(fx, gh));
+    assert.notEqual(next.status, 'RELEASED'); assert.equal(state.merged.length, 0);
+  });
+  test(`#499: ${label}: cut off while opening the freeze, the release PR is still open (never closed without a freeze)`, async () => {
+    const fx = fixture([addNotes]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    const extra = await setup(fx, gh, state);
+    const dying = { ...gh, post: async (p, b) => { if (p === '/issues') throw new Error('job killed before the freeze'); return gh.post(p, b); } };
+    await assert.rejects(runPublisher(migDeps(fx, dying, extra)), /job killed/);
+    assert.equal(state.pulls[0].state, 'open');
+    assert.equal(state.closed.length, 0);
+    assert.equal(state.merged.length, 0);
+  });
+}

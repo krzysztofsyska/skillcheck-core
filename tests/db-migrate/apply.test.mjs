@@ -84,7 +84,11 @@ test('stops at the first failure; later migrations in the same run are not appli
   const env = await bootMigrationDatabase(t);
   const m4 = '20990101000400_fourth.sql';
   const dir = await syntheticDir({ ...ok, [m4]: 'begin;\ncreate table public.dbm_fourth(id int);\ncommit;\n' });
-  await assert.rejects(apply({ databaseUrl: env.databaseUrl(env.name), dir, files: `${m1},${m2},${m3},${m4}`, releaseSha, runId: '7', log: quiet }), /third/);
+  const committed = [];
+  await assert.rejects(apply({ databaseUrl: env.databaseUrl(env.name), dir, files: `${m1},${m2},${m3},${m4}`, releaseSha, runId: '7', log: quiet, onApplied: f => committed.push(f) }),
+    e => /third/.test(e.message) && e.file === m3 && e.sqlstate === '22012');
+  // #491: the caller learns exactly which migrations committed before the stop.
+  assert.deepEqual(committed, [m1, m2]);
   await env.db.query('reset role');
   assert.deepEqual((await env.db.query('select name from supabase_migrations.skillcheck_migration_ledger order by name')).rows.map(r => r.name), ['first', 'second']);
   assert.equal((await env.db.query("select to_regclass('public.dbm_fourth') v")).rows[0].v, null);
@@ -139,4 +143,10 @@ test('TLS comes from code: URL ssl parameters are removed so the CA and verifica
   const ca = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n';
   assert.deepEqual(tlsOptions(ca), { ca, rejectUnauthorized: true });
   assert.deepEqual(tlsOptions(undefined), { rejectUnauthorized: false });
+});
+
+test('#491 review fix: unframe refuses transaction control inside the body, even mid-line or upper case', () => {
+  assert.throws(() => unframe('begin;\ncreate table a(id int); COMMIT; create table a(id int);\ncommit;\n', 'x'), /transaction control/);
+  assert.throws(() => unframe('begin;\ncreate table a(id int);\nsavepoint s;\ncommit;\n', 'x'), /transaction control/);
+  assert.equal(unframe('begin;\ncreate table a(id int);\ncommit;\n', 'x').includes('create table a'), true);
 });
