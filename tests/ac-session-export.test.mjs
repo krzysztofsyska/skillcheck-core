@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  AC_SESSION_EXPORT_VERSION, AC_TEXT_WITHHELD, acSessionCsv, acSessionExportFilename, exportAcSession,
+  AC_ASSESSOR_OUTSIDE_TEAM, AC_ASSESSOR_UNKNOWN, AC_SESSION_EXPORT_VERSION, AC_TEXT_WITHHELD, acAssessorLabels, acSessionCsv, acSessionExportFilename, exportAcSession,
 } from '../lib/assessment-center-session-export.ts';
 import { buildAssessmentCenterSessionReport, parseAssessmentCenterSession } from '../lib/assessment-center-session.ts';
 import { ids, sessionPayload } from './helpers/ac-session-payload.mjs';
@@ -93,7 +93,9 @@ test('plik: bezpieczne nagłówki, BOM, nazwa bez nazwisk, oceny obu asesorów i
   // Finalista jak na stronie: imię i nazwisko; kolejność = kolejność dodania.
   assert.ok(csv.indexOf('"Anna Syntetyczna"') < csv.indexOf(`"'=cmd| Formuła"`));
   const diagnosis = csv.split('\r\n').find(line => line.includes('"Diagnoza przyczyn"') && line.includes('Anna'));
-  assert.match(diagnosis, /"Ty";"Powyżej wymagań";"90000000-0000-4000-8000-000000000011";"Zgodne z wymaganiami";"Zgodne z wymaganiami"/);
+  assert.match(diagnosis, /"Ty";"Powyżej wymagań";"Członek zespołu 1";"Zgodne z wymaganiami";"Zgodne z wymaganiami"/);
+  // ROADMAP R3: asesorzy z czytelnej etykiety, nigdy z identyfikatora konta.
+  assert.ok(!csv.includes(ids.owner) && !csv.includes(ids.recruiter), 'brak identyfikatorów asesorów w pliku');
   assert.ok(csv.includes('"rozbieżność (czeka na potwierdzenie)"'));
   assert.ok(csv.includes('UzasadnienieUzgodnienia'), 'uzasadnienie widoczne na stronie jest w pliku');
   assert.ok(csv.includes('"Zmiana potwierdzona dowodem"'));
@@ -220,4 +222,40 @@ test('strona i trasa: link „Pobierz CSV” tylko przy istniejącej sesji, tras
   assert.match(routeSource, /createClient\(\)/);
   assert.match(routeSource, /assessmentCenterPreviewEnabled\(\)/);
   assert.doesNotMatch(routeSource + readFileSync('lib/assessment-center-session-export.ts', 'utf8'), /SERVICE_ROLE|serviceRole|createAdminClient/);
+});
+
+test('ROADMAP R3: etykiety asesorów — „Ty”, „Właściciel firmy”, „Członek zespołu N” wg kolejności dołączenia, nigdy identyfikator', () => {
+  const a = '90000000-0000-4000-8000-0000000000a1', b = '90000000-0000-4000-8000-0000000000a2', gone = '90000000-0000-4000-8000-0000000000a9';
+  const team = [
+    { user_id: b, role: 'recruiter', created_at: '2026-11-02T10:00:00Z' },
+    { user_id: a, role: 'viewer', created_at: '2026-11-01T10:00:00Z' },
+  ];
+  const owner = acAssessorLabels(ids.owner, ids.owner, team);
+  assert.equal(owner(ids.owner), 'Ty');
+  assert.equal(owner(a), 'Członek zespołu 1');
+  assert.equal(owner(b), 'Członek zespołu 2');
+  assert.equal(owner(gone), AC_ASSESSOR_OUTSIDE_TEAM);
+  const recruiter = acAssessorLabels(b, ids.owner, [...team].reverse());
+  assert.equal(recruiter(ids.owner), 'Właściciel firmy');
+  assert.equal(recruiter(b), 'Ty');
+  assert.equal(recruiter(a), 'Członek zespołu 1', 'numeracja nie zależy od kolejności zwróconych wierszy');
+  // Bez listy zespołu: neutralnie, bez identyfikatora.
+  const unknown = acAssessorLabels(b, ids.owner, null);
+  assert.equal(unknown(a), AC_ASSESSOR_UNKNOWN);
+  for (const label of [owner, recruiter, unknown]) for (const id of [ids.owner, a, b, gone]) assert.doesNotMatch(label(id), /[0-9a-f]{8}-/);
+  // CSV bez przekazanych etykiet też nie pokazuje identyfikatorów.
+  const report = buildAssessmentCenterSessionReport(parseAssessmentCenterSession(sessionPayload()));
+  const csv = acSessionCsv({ recruitmentId, recruitmentName: 'R', generatedAt: now().toISOString(), viewerId: ids.recruiter, report, finalistLabel: () => 'F' });
+  assert.ok(!csv.includes(ids.owner) && !csv.includes(ids.recruiter));
+});
+
+test('ROADMAP R3: strona sesji i arkusze par nie wyświetlają identyfikatora asesora', () => {
+  const dir = 'app/dashboard/[companyId]/recruitments/[recruitmentId]';
+  const page = readFileSync(`${dir}/assessment-center/page.tsx`, 'utf8');
+  const sheets = readFileSync(`${dir}/paired-assessor-sheets.tsx`, 'utf8');
+  const form = readFileSync(`${dir}/paired-assessor-form.tsx`, 'utf8');
+  assert.match(page, /const who = acAssessorLabels\(user\.id, company\.owner_id, team\)/);
+  assert.match(sheets, /acAssessorLabels\(user\.id, company\.owner_id/);
+  assert.doesNotMatch(page + sheets + form, /'Ty' : (id|sheet\.authorId)\b/);
+  assert.match(form, /\{label\}<\/option>/);
 });
