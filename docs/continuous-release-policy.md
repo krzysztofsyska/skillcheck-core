@@ -84,7 +84,14 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   for the owner via `db-migrate-production`. The SQL is read by one single-pass lexer (literals
   with `''` and `E'…'` escapes, `$tag$` bodies, quoted identifiers, `--` and nested `/* */`
   comments together), so a comment marker inside a literal hides nothing; input it cannot read
-  cleanly is refused (`NON_ADDITIVE_SQL:UNPARSEABLE_*`). `DESTRUCTIVE_SQL` scans both the raw and
+  cleanly is refused (`NON_ADDITIVE_SQL:UNPARSEABLE_*`). Each rule checks the whole statement, not
+  a prefix: `create table` only in the column-list form ending at its closing paren (no `as select`,
+  `like`, `inherits`, `partition of`, `with`, generated expressions); `add column` only, each
+  action a plain column definition; `create index` only on plain column lists (no `where`,
+  `include`, expressions); function calls only from a small built-in list (e.g. `now()`,
+  `gen_random_uuid()`, `char_length()`) and `default` only a literal, `now()`,
+  `gen_random_uuid()`, `current_timestamp` or `current_date`; `comment on … is` only a literal or
+  `null`. `DESTRUCTIVE_SQL` scans both the raw and
   the lexed text. After an interrupted run the list of applied migrations
   is re-derived from the merge commit, so a later rollback still carries `ROLLBACK_INSUFFICIENT_DATA_CHANGED`.
 - Migrations at all, until both hold: a completed Supabase backup at most 24 h old
