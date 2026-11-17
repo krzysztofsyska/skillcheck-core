@@ -8,6 +8,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as reviewHelpers from '../lib/exercise-ai-review.ts';
 import * as definitionHelpers from '../lib/exercise-definition.ts';
+import * as contextIdentity from '../lib/exercise-context-identity.ts';
 
 const ids={company:'aaaaaaaa-1111-4222-8333-444444444444',recruitment:'bbbbbbbb-1111-4222-8333-444444444444',exercise:'cccccccc-1111-4222-8333-444444444444',definition:'dddddddd-1111-4222-8333-444444444444'};
 const stamp='2026-11-06T10:00:00+00:00';
@@ -145,3 +146,111 @@ test('C6 edits/rejections validate inputs, flag and role before scoped RPC and s
  }
 });
 
+
+// R1-SWITCH: przełącznik „Zatwierdzam zadania sam" / „Automatycznie".
+function switchClient(result) {
+ const calls=[];return {calls,client:{rpc:async(name,args)=>{calls.push({name,args});return result;}}};
+}
+async function autoReleaseAction(options={},mode='auto') {
+ const {calls,client}=switchClient(options.result??{data:mode==='auto',error:null}),revalidated=[];
+ const mod=load(basePath+'exercise-ai-auto-release-action.ts',{
+ 'next/cache':{revalidatePath:(...args)=>revalidated.push(args)},
+ '../../../../../lib/exercise-context':{exerciseContext:async()=>({client,canEdit:options.canEdit??true,editable:options.editable??true})},
+ '../../../../../lib/exercise-ai-review':reviewHelpers,
+ });
+ const form=new FormData();for(const value of [].concat(mode??[])) form.append('mode',value);
+ const result=await withFlag(options.flag??'true',()=>mod.setExerciseAiAutoRelease(ids.company,ids.recruitment,{},form));
+ return {result,calls,revalidated};
+}
+test('R1-SWITCH action requires the flag, one valid mode and editable owner/recruiter before any RPC',async()=>{
+ for(const mode of [null,'yes',['auto','manual']]) {const r=await autoReleaseAction({},mode);assert.ok(r.result.error);assert.equal(r.calls.length,0);}
+ for(const options of [{flag:'false'},{flag:'TRUE'},{canEdit:false},{editable:false}]) {const r=await autoReleaseAction(options);assert.ok(r.result.error);assert.equal(r.calls.length,0);assert.equal(r.revalidated.length,0);}
+});
+test('R1-SWITCH action sends exact scoped IDs to the public RPC and revalidates the recruitment',async()=>{
+ for(const [mode,enabled] of [['auto',true],['manual',false]]) {
+ const r=await autoReleaseAction({},mode);assert.deepEqual(r.result,{autoRelease:enabled});
+ assert.deepEqual(r.calls,[{name:'set_exercise_ai_auto_release',args:{target_company:ids.company,target_recruitment:ids.recruitment,enabled}}]);
+ assert.deepEqual(r.revalidated,[['/dashboard/'+ids.company+'/recruitments/'+ids.recruitment,'layout']]);
+ }
+});
+test('R1-SWITCH action maps database errors to plain Polish without details and never claims success',async()=>{
+ const cases=[[{code:'42501',message:'private detail'},/uprawnień/],[{code:'55000'},/zamknięta/],[{code:'XX000',message:'private detail'},/Nie udało się/]];
+ for(const [error,text] of cases) {const r=await autoReleaseAction({result:{data:null,error}});assert.match(r.result.error,text);
+ assert.doesNotMatch(r.result.error,/private detail/);assert.equal(r.result.autoRelease,undefined);assert.equal(r.revalidated.length,0);}
+ const mismatch=await autoReleaseAction({result:{data:false,error:null}},'auto');assert.ok(mismatch.result.error);
+});
+async function renderSwitch(options={}) {
+ const {calls,client}=switchClient(options.result??{data:true,error:null}),rendered=[];
+ const mod=load(basePath+'exercise-ai-auto-release-section.tsx',{
+ './exercise-ai-auto-release':{ExerciseAiAutoReleaseSwitch:props=>{rendered.push(props);return createElement('div',{'data-switch':'yes'},'Switch');}},
+ });
+ const element=await withFlag(options.flag??'true',()=>mod.ExerciseAiAutoReleaseSection({client,companyId:ids.company,recruitmentId:ids.recruitment,canEdit:options.canEdit??true,editable:true}));
+ return {element,calls,rendered};
+}
+test('R1-SWITCH section is hidden behind the flag and for viewers, reads the mode through the public RPC',async()=>{
+ for(const options of [{flag:'false'},{flag:''},{canEdit:false}]) {const r=await renderSwitch(options);assert.equal(r.element,null);assert.equal(r.calls.length,0);}
+ const r=await renderSwitch();assert.deepEqual(r.calls,[{name:'read_exercise_ai_settings',args:{target_company:ids.company,target_recruitment:ids.recruitment}}]);
+ renderToStaticMarkup(r.element);assert.equal(r.rendered[0].current,true);
+ for(const result of [{data:null,error:{code:'42501'}},{data:'true',error:null}]) {const failed=await renderSwitch({result});renderToStaticMarkup(failed.element);assert.equal(failed.rendered[0].current,null);}
+});
+test('R1-SWITCH form shows both modes, current state, R1 note and promises no candidate send',async()=>{
+ const mod=load(basePath+'exercise-ai-auto-release.tsx',{'./exercise-ai-auto-release-action':{setExerciseAiAutoRelease:async()=>({})}});
+ const html=renderToStaticMarkup(createElement(mod.ExerciseAiAutoReleaseSwitch,{companyId:ids.company,recruitmentId:ids.recruitment,current:false,editable:true}));
+ assert.match(html,/Zatwierdzam zadania sam/);assert.match(html,/Automatycznie/);assert.match(html,/Obecny tryb: <strong>Zatwierdzam zadania sam/);
+ assert.match(html,/<input[^>]*checked=""[^>]*value="manual"/);assert.doesNotMatch(html,/<input[^>]*checked=""[^>]*value="auto"/);
+ assert.match(html,/tylko kandydat z krótkiej listy/);assert.match(html,/niczego nie wysyła kandydatom/);
+ assert.doesNotMatch(html,/wyśl[ea]my|zostanie wysłan|wysyłamy/i);
+ const closed=renderToStaticMarkup(createElement(mod.ExerciseAiAutoReleaseSwitch,{companyId:ids.company,recruitmentId:ids.recruitment,current:null,editable:false}));
+ assert.match(closed,/Nie udało się odczytać obecnego trybu/);assert.match(closed,/<fieldset disabled/);
+});
+test('R1-SWITCH code uses the user RLS client only and imports no mail, send or service-role code',()=>{
+ for(const file of ['exercise-ai-auto-release-action.ts','exercise-ai-auto-release.tsx','exercise-ai-auto-release-section.tsx']) {
+ const source=readFileSync(fileURLToPath(new URL('../'+basePath+file,import.meta.url)),'utf8');
+ assert.doesNotMatch(source,/service_role|SERVICE_ROLE|createAdminClient|supabase\/admin|resend|nodemailer|sendMail|send-?mail|outbound|\bfetch\(/i,file);
+ }
+ const page=readFileSync(fileURLToPath(new URL('../'+basePath+'exercises/page.tsx',import.meta.url)),'utf8');
+ assert.match(page,/<ExerciseAiAutoReleaseSection client=\{client\}[^>]*canEdit=\{canEdit\} editable=\{editable\}\/>/);
+});
+async function renderExercisesPage(contextValue) {
+ const sections=[];
+ const mod=load(basePath+'exercises/page.tsx',{
+ 'next/link':{default:props=>createElement('a',{href:props.href},props.children)},
+ 'next/navigation':{notFound(){throw new Error('notFound');}},
+ '../../../../../../lib/exercise-context':{exerciseContext:async()=>contextValue,exerciseUuid:/^[a-f0-9-]{36}$/i},
+ '../../../../../../lib/behavior-assessment':{behaviorSchemaMissing:()=>false},
+ '../exercise-generation-form':{ExerciseGenerationForm:()=>null},
+ '../exercise-ai-auto-release-section':{ExerciseAiAutoReleaseSection:props=>{sections.push(props);return null;}},
+ });
+ const html=await withFlag('true',async()=>renderToStaticMarkup(await mod.default({params:Promise.resolve({companyId:ids.company,recruitmentId:ids.recruitment}),searchParams:Promise.resolve({})})));
+ return {sections,html};
+}
+test('R1-SWITCH page passes the full editable from exerciseContext (archived position closes the switch even for an open recruitment)',async()=>{
+ const base={client:{from:()=>listQuery()},canEdit:true,base:'/exercises',recruitment:{name:'Rekrutacja',status:'open'},position:{updated_at:stamp,status:'archived'}};
+ function listQuery(){const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},gt(){return q;},maybeSingle:async()=>({data:null,error:null}),
+ then(resolve,reject){return Promise.resolve({data:[],error:null}).then(resolve,reject);}};return q;}
+ const archived=await renderExercisesPage({...base,editable:false});
+ assert.equal(archived.sections.length,1);assert.equal(archived.sections[0].editable,false);assert.equal(archived.sections[0].canEdit,true);
+ assert.doesNotMatch(archived.html,/Utwórz zadanie/);
+ const active=await renderExercisesPage({...base,editable:true,position:{updated_at:stamp,status:'active'}});
+ assert.equal(active.sections[0].editable,true);
+});
+test('R1-SWITCH exerciseContext marks an archived position as not editable for an open recruitment',async()=>{
+ const position=status=>({id:'eeeeeeee-1111-4222-8333-444444444444',company_id:ids.company,status,updated_at:stamp});
+ async function context(positionStatus,recruitmentStatus='open'){
+  const rows={recruitments:{id:ids.recruitment,company_id:ids.company,position_id:'eeeeeeee-1111-4222-8333-444444444444',status:recruitmentStatus},positions:position(positionStatus)};
+  const client={from(table){const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:rows[table],error:null})};return q;}};
+  const mod=load('lib/exercise-context.ts',{
+  'next/navigation':{notFound(){throw new Error('notFound');}},
+  './company-access':{companyAccess:async()=>({client,canEdit:true})},
+  './exercise-context-identity':contextIdentity,
+  });
+  return mod.exerciseContext(ids.company,ids.recruitment);
+ }
+ assert.equal((await context('archived')).editable,false);
+ assert.equal((await context('active')).editable,true);
+ assert.equal((await context('active','closed')).editable,false);
+});
+test('R1-SWITCH is not rendered on the recruitment page (the payment-named test renders it with a fixed mock map)',()=>{
+ const page=readFileSync(fileURLToPath(new URL('../'+basePath+'page.tsx',import.meta.url)),'utf8');
+ assert.doesNotMatch(page,/ExerciseAiAutoRelease/);
+});

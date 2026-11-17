@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   AC_ASSESSOR_OUTSIDE_TEAM, AC_ASSESSOR_UNKNOWN, AC_SESSION_EXPORT_VERSION, AC_TEXT_WITHHELD, acAssessorLabels, acSessionCsv, acSessionExportFilename, exportAcSession,
+  loadAcAssessorNames,
 } from '../lib/assessment-center-session-export.ts';
 import { buildAssessmentCenterSessionReport, parseAssessmentCenterSession } from '../lib/assessment-center-session.ts';
 import { ids, sessionPayload } from './helpers/ac-session-payload.mjs';
@@ -29,7 +30,9 @@ function blindPayload() {
 }
 
 /** Minimalny PostgREST: filtruje tylko po parametrach eq/in, które wysyła kod — jak stub w testach HTTP. */
-function fakeClient({ user = { id: ids.owner }, tables = {}, payload = sessionPayload(), findError = null, readError = null, audit = () => ({ data: auditId, error: null }) } = {}) {
+function fakeClient({ user = { id: ids.owner }, tables = {}, payload = sessionPayload(), findError = null, readError = null, audit = () => ({ data: auditId, error: null }),
+  // R3-AC-NAMES: domyślnie funkcji nazw nie ma (jak przed migracją) — zostają etykiety z PR #500.
+  names = () => ({ data: null, error: { code: 'PGRST202', message: 'function not found' } }) } = {}) {
   const calls = [];
   const data = {
     companies: [{ id: companyId, owner_id: ids.owner }],
@@ -67,6 +70,7 @@ function fakeClient({ user = { id: ids.owner }, tables = {}, payload = sessionPa
       if (name === 'ac_session_find') return findError ? { data: null, error: findError } : { data: payload ? ids.session : null, error: null };
       if (name === 'ac_session_read') return readError ? { data: null, error: readError } : { data: payload, error: null };
       if (name === 'record_assessment_center_session_export') return audit(args);
+      if (name === 'ac_assessor_display_names') return names(args);
       throw new Error(`unexpected rpc ${name}`);
     },
   };
@@ -104,7 +108,7 @@ test('plik: bezpieczne nagłówki, BOM, nazwa bez nazwisk, oceny obu asesorów i
   assert.doesNotMatch(csv, /ranking[^u]|wynik ogólny:|rekomendacja/i);
   // Ten sam klient RLS i to samo RPC co strona; żadnego service_role.
   // Wpis audytowy jako ostatni krok przed wydaniem pliku (SC-AC-EXPORT-AUDIT).
-  assert.deepEqual(fake.calls.filter(call => call.rpc).map(call => call.rpc), ['ac_session_find', 'ac_session_read', 'record_assessment_center_session_export']);
+  assert.deepEqual(fake.calls.filter(call => call.rpc).map(call => call.rpc), ['ac_session_find', 'ac_session_read', 'ac_assessor_display_names', 'record_assessment_center_session_export']);
   assert.deepEqual(fake.calls.at(-1).args, {
     target_company: companyId, target_recruitment: recruitmentId, target_session: ids.session, export_kind: 'ac_session_csv',
   });
@@ -155,6 +159,29 @@ test('ochrona przed formułami: każda komórka zaczynająca się od =, +, -, @ 
   for (const cell of csv.replace(/^﻿/, '').split(/[;\r\n]+/).filter(Boolean)) {
     assert.doesNotMatch(cell, /^"[\s]*[=+@-]/, cell);
   }
+});
+
+test('#338: sekcja „Brak dowodu” — każdy brak z powodem i etykietą asesora, bez identyfikatorów i cudzych tekstów', async () => {
+  const lines = (await body(await run(fakeClient()))).split('\r\n');
+  const header = lines.indexOf('"Finalista";"Zgłoszenie";"Kompetencja";"Etap";"Brak dowodu"');
+  assert.ok(header > 0, 'sekcja braków jest w pliku');
+  const gaps = lines.slice(header + 1).filter(Boolean);
+  assert.deepEqual(gaps.filter(line => line.startsWith('"Anna Syntetyczna"')).map(line => line.split(';').slice(2).join(';')), [
+    '"Myślenie finansowe";"Etap 2 — konsekwencje finansowe";"Czeka na oddanie obu niezależnych arkuszy."',
+    '"Myślenie finansowe";"Etap 3 — plan zmiany";"Niewystarczające dane, bez dowodu: Asesor 2 (Członek zespołu 1)."',
+    '"Planowanie zmiany";"Etap 4 — rozmowa z dyrektorem operacyjnym";"Nie przypisano asesorów — brak arkuszy."',
+    '"Komunikacja z biznesem";"Etap 4 — rozmowa z dyrektorem operacyjnym";"Nie przypisano asesorów — brak arkuszy."',
+  ]);
+  assert.equal(gaps.filter(line => line.includes('Formuła')).length, 6);
+  const section = gaps.join('\n');
+  assert.ok(!section.includes(ids.owner) && !section.includes(ids.recruiter));
+  assert.doesNotMatch(section, /AsesorPierwszy|AsesorDrugi|Uzasadnienie|OpisRozbieznosci|NotatkaEksperta/);
+  // Pełny dowód od obu asesorów: jawne „brak braków”, a nie pusta sekcja.
+  const full = sessionPayload();
+  full.session.plannedCompetencies = ['Diagnoza przyczyn'];
+  full.finalists = full.finalists.slice(0, 1);
+  const csv = await body(await run(fakeClient({ payload: full })));
+  assert.match(csv, /"Anna Syntetyczna";"[0-9a-f-]+";"";"";"Brak braków: każda kompetencja ma dowód od obu asesorów w każdym etapie\."/);
 });
 
 test('ślepa ocena: bez własnego arkusza plik nie zawiera tekstów innych asesorów ani eksperta', async () => {
@@ -219,6 +246,7 @@ test('strona i trasa: link „Pobierz CSV” tylko przy istniejącej sesji, tras
   assert.ok(link > page.indexOf("read.state === 'invalid'"), 'link dopiero po wczytaniu i weryfikacji sesji');
   assert.match(page, /readAcSession\(client, recruitmentId\)/);
   assert.match(page, /acAgreementText\(row\.agreement, who\)/);
+  assert.match(page, /acEvidenceGapText\(gap, who\)/, '#338: ten sam tekst braków na stronie i w pliku');
   assert.match(routeSource, /createClient\(\)/);
   assert.match(routeSource, /assessmentCenterPreviewEnabled\(\)/);
   assert.doesNotMatch(routeSource + readFileSync('lib/assessment-center-session-export.ts', 'utf8'), /SERVICE_ROLE|serviceRole|createAdminClient/);
@@ -254,8 +282,56 @@ test('ROADMAP R3: strona sesji i arkusze par nie wyświetlają identyfikatora as
   const page = readFileSync(`${dir}/assessment-center/page.tsx`, 'utf8');
   const sheets = readFileSync(`${dir}/paired-assessor-sheets.tsx`, 'utf8');
   const form = readFileSync(`${dir}/paired-assessor-form.tsx`, 'utf8');
-  assert.match(page, /const who = acAssessorLabels\(user\.id, company\.owner_id, team\)/);
+  assert.match(page, /const who = acAssessorLabels\(user\.id, company\.owner_id, team, assessorNames\)/);
+  assert.match(page, /loadAcAssessorNames\(client, companyId, recruitmentId\)/);
   assert.match(sheets, /acAssessorLabels\(user\.id, company\.owner_id/);
   assert.doesNotMatch(page + sheets + form, /'Ty' : (id|sheet\.authorId)\b/);
   assert.match(form, /\{label\}<\/option>/);
+});
+
+test('R3-AC-NAMES: nazwy asesorów tylko z RPC; „Ty” bez zmian, reszta z etykiet, nigdy identyfikator', async () => {
+  const a = '90000000-0000-4000-8000-0000000000a1', gone = '90000000-0000-4000-8000-0000000000a9';
+  const team = [{ user_id: a, role: 'recruiter', created_at: '2026-11-01T10:00:00Z' }];
+  const names = new Map([[ids.owner, 'wlasciciel@example.invalid'], [a, 'rekruter@example.invalid']]);
+  const asRecruiter = acAssessorLabels(a, ids.owner, team, names);
+  assert.equal(asRecruiter(a), 'Ty');
+  assert.equal(asRecruiter(ids.owner), 'wlasciciel@example.invalid (właściciel firmy)');
+  assert.equal(asRecruiter(gone), AC_ASSESSOR_OUTSIDE_TEAM, 'usunięty członek: bez nazwy');
+  const asOwner = acAssessorLabels(ids.owner, ids.owner, team, names);
+  assert.equal(asOwner(a), 'rekruter@example.invalid');
+  // Bez nazw (null albo pusta mapa) — dokładnie etykiety z PR #500.
+  for (const none of [null, new Map()]) assert.equal(acAssessorLabels(ids.owner, ids.owner, team, none)(a), 'Członek zespołu 1');
+
+  // Odczyt: argumenty RPC, walidacja wierszy, każdy błąd = null (fallback), bez wyjątku.
+  const rows = [
+    { user_id: a.toUpperCase(), display_name: ' rekruter@example.invalid ' },
+    { user_id: 'nie-uuid', display_name: 'x@example.invalid' },
+    { user_id: gone, display_name: '' },
+    { user_id: gone, display_name: 'y'.repeat(321) },
+    { user_id: gone, display_name: 42 },
+    null,
+  ];
+  let seen;
+  const ok = await loadAcAssessorNames({ rpc: async (name, args) => { seen = { name, args }; return { data: rows, error: null }; } }, companyId, recruitmentId);
+  assert.deepEqual(seen, { name: 'ac_assessor_display_names', args: { target_company: companyId, target_recruitment: recruitmentId } });
+  assert.deepEqual([...ok], [[a, 'rekruter@example.invalid']]);
+  for (const rpc of [async () => ({ data: null, error: { code: '42501' } }), async () => ({ data: {}, error: null }), async () => { throw new Error('network'); }]) {
+    assert.equal(await loadAcAssessorNames({ rpc }, companyId, recruitmentId), null);
+  }
+});
+
+test('R3-AC-NAMES: CSV pokazuje nazwę tylko, gdy baza ją wydała; odmowa bazy = etykiety, plik nadal wydany', async () => {
+  const withNames = fakeClient({ names: args => args.target_company === companyId && args.target_recruitment === recruitmentId
+    ? { data: [{ user_id: ids.recruiter, display_name: '=rekruter@example.invalid' }], error: null } : { data: null, error: { code: '42501' } } });
+  const response = await run(withNames);
+  assert.equal(response.status, 200);
+  const csv = await body(response);
+  const diagnosis = csv.split('\r\n').find(line => line.includes('"Diagnoza przyczyn"') && line.includes('Anna'));
+  // Nazwa przechodzi przez csvCell (ochrona przed formułami); „Ty” bez zmian.
+  assert.match(diagnosis, /"Ty";"Powyżej wymagań";"'=rekruter@example\.invalid";/);
+  assert.ok(!csv.includes(ids.owner) && !csv.includes(ids.recruiter));
+  const denied = fakeClient({ names: () => ({ data: null, error: { code: '42501' } }) });
+  const fallback = await body(await run(denied));
+  assert.match(fallback, /"Ty";"Powyżej wymagań";"Członek zespołu 1";/);
+  assert.doesNotMatch(fallback, /example\.invalid/);
 });

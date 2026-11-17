@@ -15,6 +15,11 @@
 
 ## 17.11.2026
 
+**Zgoda na zmiany w dokumentach pracy (#506).** Pytanie czatu: „Porządki w dokumentach pracy (#506)
+stoją, bo recenzent chce Twoich zgód wprost na czacie, w trzech sprawach: 1. Wykonawca sam
+aktualizuje statusy w planie prac. 2. Nowy podział ról: Claude pisze kod, a osobny recenzent go
+sprawdza i scala. 3. Nowy układ planu prac.” Właściciel, 21:32: „1,2,3 tak”
+
 **Porządek dokumentów pracy i statusy w ROADMAP aktualizowane przez wykonawcę.** Propozycja czatu
 (punkty 2 i 3 planu): „Zmienić zasadę: kolejność i zakres zmieniasz tylko Ty, a statusy agent
 aktualizuje sam po scaleniu PR.” oraz „Przenieść cytaty decyzji z ROADMAP, AGENTS.md i CLAUDE.md do

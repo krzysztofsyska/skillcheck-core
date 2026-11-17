@@ -47,11 +47,11 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 |---|---|---|
 | C1–C5 — dane, podejścia i limity, wydawanie dostępu, strona kandydata (za flagą), ocena człowieka z cytatami | ZROBIONE | PR #273 |
 | C6 — AI układa wspólne zadanie, rekruter zatwierdza | ZROBIONE | PR #285, #291, #293, #296, #322, #326, #332, #358 |
-| C6 — pytania indywidualne z luk w CV kandydata z shortlisty | ZROBIONE (podgląd, tylko odczyt) | PR #490 |
+| C6 — pytania indywidualne z luk w CV kandydata z shortlisty | ZROBIONE (podgląd, tylko odczyt) | PR #490, #507 |
 | Reguła R1 w bazie | ZROBIONE | PR #273 |
 | Tryb automatyczny w bazie (`auto_release`) | ZROBIONE | PR #291 |
-| Przełącznik rekrutera „zatwierdzam sam” / „automatycznie” na ekranie | W TOKU | PR #497 |
-| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | DO ZROBIENIA | — |
+| Przełącznik rekrutera „zatwierdzam sam” / „automatycznie” na ekranie | ZROBIONE | PR #497 |
+| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU (dostęp bez kliknięcia rekrutera; realna wysyłka do kandydata nadal zamknięta) | PR #510 |
 | Włączenie testu kompetencji w Preview i przejście całej ścieżki | DO SPRAWDZENIA | brak dowodu w issue/PR |
 
 ### R2. Rozszerzony raport kandydata, bez części głosowej (etap 2)
@@ -73,8 +73,10 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Arkusze ćwiczeń i raport z dowodów | ZROBIONE | PR #272, #378 |
 | Sesja finalistów: dwóch niezależnych asesorów, limit 10 osób, druga próba | ZROBIONE (za flagą `AC_PAIRED_SHEETS_PREVIEW`) | PR #434, #471 |
 | Eksport CSV podsumowania sesji i rejestr pobrań | ZROBIONE | PR #480, #486 |
-| Asesorzy pokazani czytelną etykietą zamiast identyfikatora | ZROBIONE | PR #500 |
-| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU | PR #503; issue #338, #274, #283 |
+| Asesorzy pokazani z nazwy (etykieta, potem e-mail konta z tej samej firmy) | ZROBIONE | PR #500, #513 |
+| Jawne braki dowodów w raporcie i CSV sesji | ZROBIONE | PR #508 |
+| Testy równoczesnej pracy asesorów | ZROBIONE | PR #512 |
+| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; pakiet czeka na zdjęcie zamrożenia ścieżki płatności) | PR #503; issue #338, #274, #283 |
 
 ### R4. Oferta na stronie (etap 2)
 

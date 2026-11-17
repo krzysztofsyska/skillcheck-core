@@ -463,6 +463,14 @@ export type Database = {
         Args: { target_company: string; target_recruitment: string; target_session: string; export_kind: 'ac_session_csv' };
         Returns: string;
       };
+      /** R3-AC-NAMES (20261117213000_ac_assessor_display_names.sql). Security definer; caller must be
+       * the company owner or a recruiter and the recruitment must belong to the company (42501
+       * otherwise, same error for foreign or missing records). Returns the account e-mail as
+       * display name only for the company owner and current recruiters of that company. */
+      ac_assessor_display_names: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: { user_id: string; display_name: string }[];
+      };
       process_followup_create: {
         Args: { target_application: string; purpose: string; start_date: string; criteria: string; initial_result: string };
         Returns: string;
@@ -637,6 +645,19 @@ export type Database = {
       approve_exercise_ai_proposal: {
         Args: { target_company: string; target_recruitment: string; target_definition: string; expected_position_updated_at: string };
         Returns: string;
+      };
+      /** R1-SWITCH (20261117150000_exercise_ai_auto_release_api.sql). Security definer; owner or
+       * recruiter of the company only, recruitment bound to the company (42501 otherwise, same error
+       * for foreign or missing records). True = AI-drafted tasks are approved automatically. */
+      read_exercise_ai_settings: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: boolean;
+      };
+      /** R1-SWITCH. Same access check as read_exercise_ai_settings; 55000 when the recruitment is
+       * not draft/open or the position is archived. Delegates to exercise_ai.set_auto_release. */
+      set_exercise_ai_auto_release: {
+        Args: { target_company: string; target_recruitment: string; enabled: boolean };
+        Returns: boolean;
       };
       ac_assign_pair: {Args:{application:string;revision:string;first_id:string;second_id:string};Returns:string};
       ac_find_pair: {Args:{application:string;revision:string};Returns:string|null};
