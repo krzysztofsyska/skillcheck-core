@@ -77,6 +77,7 @@ Do korzystania z Serwisu potrzebne są: urządzenie z dostępem do Internetu, ak
 2. Usługodawca rozpatruje reklamację w terminie 14 dni od jej otrzymania i przesyła odpowiedź na adres e-mail, z którego ją złożono. Jeżeli do rozpatrzenia potrzebne są dodatkowe informacje, Usługodawca prosi o nie niezwłocznie.
 3. W przypadku uznania reklamacji Usługodawca, odpowiednio do sytuacji, usuwa błąd, ponownie wykonuje Analizę bez dodatkowej opłaty, przywraca zużyte Analizy, obniża cenę albo zwraca należność w części odpowiadającej usłudze niewykonanej lub wykonanej wadliwie.
 4. Przedsiębiorcy na prawach konsumenta przysługują ponadto uprawnienia z tytułu niezgodności usługi cyfrowej z umową przewidziane w ustawie o prawach konsumenta.
+5. Gwarancja wyniku PRESELEKCJI. Jeżeli raport z analizy 60 CV wskazuje mniej niż 5 kandydatów spełniających wszystkie wymagania oznaczone przez Klienta jako konieczne, Klient może w terminie 7 dni od otrzymania raportu zgłosić to na adres kontaktowy Usługodawcy. Usługodawca wspólnie z Klientem poprawia opis stanowiska i bezpłatnie powtarza analizę tych samych CV. Jeżeli powtórzona analiza nadal wskazuje mniej niż 5 takich kandydatów, Usługodawca zwraca Klientowi pełną cenę pakietu. Gwarancja obejmuje pierwszych 20 firm, które kupiły pakiet PRESELEKCJA, i nie ogranicza uprawnień Klienta z tytułu reklamacji.
 
 # § 11. Odstąpienie od umowy i zwroty
 

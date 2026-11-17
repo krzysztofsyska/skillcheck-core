@@ -47,7 +47,7 @@ const config = {
     ],
   },
   // The static calculator page is served through a route so the announced packages can be hidden
-  // (PUBLIC_FUTURE_OFFERS_ENABLED). The file lives in content/ (not public/), so no encoded URL can reach it statically.
+  // (PUBLIC_FUTURE_OFFERS_ENABLED=false). The file lives in content/ (not public/), so no encoded URL can reach it statically.
   async rewrites() {
     return { beforeFiles: [{ source: '/kalkulator-demo.html', destination: '/kalkulator/demo-html' }], afterFiles: [], fallback: [] };
   },

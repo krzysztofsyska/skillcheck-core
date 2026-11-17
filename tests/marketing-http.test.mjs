@@ -19,7 +19,8 @@ async function startServer(t, extraEnv = {}) {
       // General marketing contract with packages disabled. The separate SC-019
       // runtime suite proves ON requests actually hit the local catalog RPC.
       SC19_PACKAGES_ENABLED: 'false',
-      // Announced packages (WERYFIKACJA, ASSESSMENT CENTER) are hidden unless a test turns them on.
+      // Announced packages (WERYFIKACJA, ASSESSMENT CENTER) are visible by default (ROADMAP R4); this suite
+      // exercises the kill switch (exact value "false") unless a test overrides it.
       PUBLIC_FUTURE_OFFERS_ENABLED: 'false',
       NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:9',
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'test-only-public-key',
@@ -85,7 +86,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 0);
   // Owner decision 2026-11-10: while Przelewy24 verifies the shop, WERYFIKACJA and ASSESSMENT CENTER are
   // hidden from the public pages (PUBLIC_FUTURE_OFFERS_ENABLED unset or not "true"). Their copy stays in the code.
-  for (const hidden of ['id="planowane-pakiety"', 'id="przyklady-pakietow"', 'WERYFIKACJA', 'ASSESSMENT CENTER', 'Assessment Center', '615 zł', '1 499 zł', 'pakiet w przygotowaniu', 'Cena zatwierdzona', 'do 10 testowanych osób', 'do 6 finalistów', 'To plan rozwoju.', 'Zapytaj o plan']) {
+  for (const hidden of ['id="planowane-pakiety"', 'id="przyklady-pakietow"', 'WERYFIKACJA', 'ASSESSMENT CENTER', 'Assessment Center', '615 zł', '1 499 zł', 'w przygotowaniu — nie można jeszcze kupić', 'Cena zatwierdzona', 'do 10 testowanych osób', 'do 6 finalistów', 'To plan rozwoju.', 'Zapytaj o plan']) {
     assert.equal(home.includes(hidden), false, `announced packages hidden on the home page: ${hidden}`);
   }
   assert.match(home, /Wypróbuj FREE — 0 zł/);
@@ -375,11 +376,11 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(logsText().includes('127.0.0.1:9'), false);
 });
 
-test('announced packages appear only when PUBLIC_FUTURE_OFFERS_ENABLED is exactly "true"', async (t) => {
+test('announced packages are visible by default and hidden only by PUBLIC_FUTURE_OFFERS_ENABLED="false"', async (t) => {
   const { isPublicFutureOffersEnabled, renderCalculatorHtml } = await import('../lib/public-future-offers.ts');
-  assert.equal(isPublicFutureOffersEnabled({}), false, 'unset means off');
-  for (const value of ['', 'false', 'TRUE', 'True', '1', 'yes', ' true']) assert.equal(isPublicFutureOffersEnabled({ PUBLIC_FUTURE_OFFERS_ENABLED: value }), false, `"${value}" means off`);
-  assert.equal(isPublicFutureOffersEnabled({ PUBLIC_FUTURE_OFFERS_ENABLED: 'true' }), true);
+  assert.equal(isPublicFutureOffersEnabled({}), true, 'unset means on (ROADMAP R4)');
+  for (const value of ['', 'true', 'TRUE', '1', 'yes']) assert.equal(isPublicFutureOffersEnabled({ PUBLIC_FUTURE_OFFERS_ENABLED: value }), true, `"${value}" means on`);
+  assert.equal(isPublicFutureOffersEnabled({ PUBLIC_FUTURE_OFFERS_ENABLED: 'false' }), false, 'exact "false" is the kill switch');
 
   const source = readFileSync(new URL('../content/kalkulator-demo.html', import.meta.url), 'utf8');
   const off = renderCalculatorHtml(source, false);
@@ -396,12 +397,17 @@ test('announced packages appear only when PUBLIC_FUTURE_OFFERS_ENABLED is exactl
   const offers = readFileSync(new URL('../app/components/marketing/future-offers.ts', import.meta.url), 'utf8');
   assert.ok(offers.includes('WERYFIKACJA') && offers.includes('ASSESSMENT CENTER'));
 
-  const { base } = await startServer(t, { PUBLIC_FUTURE_OFFERS_ENABLED: 'true' });
+  // Empty value = variable effectively unset: the default must show the packages.
+  const { base } = await startServer(t, { PUBLIC_FUTURE_OFFERS_ENABLED: '' });
   const home = await (await fetch(`${base}/`)).text();
   assert.match(home, /id="planowane-pakiety"/);
   assert.match(home, /615 zł brutto/);
   assert.match(home, /1 499 zł brutto/);
-  assert.match(home, /Cena zatwierdzona · pakiet w przygotowaniu/);
+  assert.match(home, /Cena zatwierdzona · w przygotowaniu — nie można jeszcze kupić/);
+  assert.match(home, /60 CV · do 10 testowanych osób/);
+  assert.match(home, /50 CV · do 6 finalistów/);
+  assert.match(home, /Wypróbuj FREE — 0 zł/);
+  assert.match(home, /300 zł/);
   assert.match(home, /do 10 testowanych osób/);
   assert.match(home, /do 6 finalistów/);
   assert.match(home, /Rozszerzenie do 7–10 osób wymaga osobnej oferty/);
@@ -421,4 +427,26 @@ test('announced packages appear only when PUBLIC_FUTURE_OFFERS_ENABLED is exactl
   assert.equal(calculator.includes('future-offers:'), false);
   const summary = await (await fetch(`${base}/platnosci-i-reklamacje`)).text();
   assert.match(summary, /WERYFIKACJA i ASSESSMENT CENTER mają charakter informacyjny/);
+  // No bot / voice / phone-call copy in any shown block, and no buy path for the announced packages.
+  const botWords = /voicebot|bot\b|botem|bota\b|rozmow[ayę] (?:AI|telefoniczn|z bot)|rozmów (?:AI|telefoniczn|z bot)|połączeni[ae] telefoniczn/i;
+  for (const [name, text] of [['future block', future], ['calculator', calculator]]) {
+    assert.equal(botWords.test(text.replace(/<[^>]+>/g, ' ')), false, `no bot copy in ${name}`);
+  }
+  assert.equal(/checkout|zamow|kup[- ]?weryfik|buy/i.test(hrefs(future).join(' ')), false, 'no buy link in announced packages');
+  assert.equal(/Kup WERYFIKACJ|Kup ASSESSMENT|Kup Assessment/.test(home + calculator), false, 'announced packages have no buy button');
+  assert.equal(/data-pack="(?:verify|ac)"/.test(calculator), false, 'calculator offers no announced-package purchase');
+});
+
+test('copy of announced packages has no bot copy and exact prices (source)', () => {
+  const offers = readFileSync(new URL('../app/components/marketing/future-offers.ts', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../content/kalkulator-demo.html', import.meta.url), 'utf8');
+  const block = [...html.matchAll(/<!--future-offers:start-->([\s\S]*?)<!--future-offers:end-->/g)].map(m => m[1]).join(' ');
+  assert.ok(block.length > 0);
+  for (const [name, text] of [['future-offers.ts', offers], ['calculator blocks', block]]) {
+    assert.equal(/voicebot|bot\b|botem|rozmow[ayę] (?:AI|telefoniczn|z bot)|rozmów (?:AI|telefoniczn|z bot)/i.test(text), false, `no bot copy in ${name}`);
+  }
+  assert.match(offers, /price: "615 zł brutto"/);
+  assert.match(offers, /price: "1 499 zł brutto"/);
+  assert.ok(block.includes('615 zł brutto za 60 CV') && block.includes('1 499 zł brutto za 50 CV'));
+  assert.ok(/nie można dziś kupić/.test(block));
 });

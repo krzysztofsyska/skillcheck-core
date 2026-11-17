@@ -42,7 +42,7 @@ test('kolejne etapy na stronie mają zatwierdzone ceny, nie są bezcenowe', () =
   // Cena zatwierdzona, pakiet jeszcze nie do kupienia — obie rzeczy muszą być powiedziane.
   assert.match(comparison, /Cena zatwierdzona/);
   assert.match(comparison, /Nie można ich jeszcze kupić/);
-  assert.match(comparison, /Cena zatwierdzona · pakiet w przygotowaniu/);
+  assert.match(comparison, /Cena zatwierdzona · w przygotowaniu — nie można jeszcze kupić/);
   assert.match(comparison, /stage\.price/);
 });
 
