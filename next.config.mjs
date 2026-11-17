@@ -64,7 +64,8 @@ const config = {
     },
     // These headers override those set by route handlers, so routes that carry auth codes, attempt
     // tokens or candidate data keep their stricter policy here (the last matching rule wins).
-    ...['/auth/callback', '/api/competency/attempt', '/dashboard/:companyId/recruitments/:recruitmentId/report/export']
+    ...['/auth/callback', '/api/competency/attempt', '/dashboard/:companyId/recruitments/:recruitmentId/report/export',
+      '/dashboard/:companyId/recruitments/:recruitmentId/applications/:applicationId/report/export']
       .map(source => ({ source, headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }] }))];
   },
 };

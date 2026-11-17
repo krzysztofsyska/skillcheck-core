@@ -422,6 +422,47 @@ export type Database = {
        * recruiter of that company (42501 otherwise). A `change_budget` recommendation is
        * refused (22023) while any checklist area is `not_checked`.
        * Shapes: lib/process-diagnostics.ts, lib/process-metrics.ts. */
+      /** SC-015-D candidate report CSV export audit (20261116120000_sc015d_candidate_report_export_audit.sql).
+       * Re-checks company membership (viewer included), that the application belongs to
+       * that company and recruitment (42501 otherwise, same error for foreign records)
+       * and that the candidate is not withdrawn or frozen for erasure (55000). Appends
+       * one row to `report_audit.candidate_report_exports` and returns its id. */
+      record_candidate_report_export: {
+        Args: {
+          target_company: string; target_recruitment: string; target_application: string;
+          export_kind: 'candidate_report_csv'; analysis_version?: number | null;
+        };
+        Returns: string;
+      };
+      /** SC-015-D2 read-only export history (20261116210000_sc015d2_candidate_report_export_history.sql).
+       * Same membership and company -> recruitment -> application binding as
+       * record_candidate_report_export (42501 otherwise, same error for foreign records).
+       * At most 50 rows, newest first; no candidate data. */
+      list_candidate_report_exports: {
+        Args: { target_company: string; target_recruitment: string; target_application: string };
+        Returns: { exported_at: string; actor_id: string; actor_role: 'owner' | 'recruiter' | 'viewer' | 'former_member'; is_me: boolean }[];
+      };
+      /** SC-015-D3 company-level export history (20261117090000_sc015d3_company_report_export_history.sql).
+       * Company owner only (42501 for everyone else, same error for foreign or missing companies).
+       * Default 100, at most 200 rows, newest first; keyset paging with before_at + before_id
+       * (both or neither, 22023 otherwise). No e-mail and no candidate data. */
+      list_company_report_exports: {
+        Args: { target_company: string; row_limit?: number; before_at?: string; before_id?: string };
+        Returns: {
+          export_id: string; exported_at: string; actor_id: string;
+          actor_role: 'owner' | 'recruiter' | 'viewer' | 'former_member'; is_me: boolean;
+          recruitment_id: string; application_id: string;
+        }[];
+      };
+      /** SC-AC-EXPORT-AUDIT (20261117120000_sc_ac_session_export_audit.sql). Security definer;
+       * re-checks that the caller is the company owner or a recruiter and that the session
+       * belongs to that company and recruitment (42501 otherwise, same error for foreign or
+       * missing records). Appends one row to `report_audit.assessment_center_session_exports`
+       * (identifiers, actor and role only) and returns its id. */
+      record_assessment_center_session_export: {
+        Args: { target_company: string; target_recruitment: string; target_session: string; export_kind: 'ac_session_csv' };
+        Returns: string;
+      };
       process_followup_create: {
         Args: { target_application: string; purpose: string; start_date: string; criteria: string; initial_result: string };
         Returns: string;
