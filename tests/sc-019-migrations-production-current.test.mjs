@@ -5,14 +5,14 @@ import { createRankingHarness, users } from './helpers/screening-ranking-fixture
 import { bootHostedRehearsal, replayObservedHistory, CURRENT_HISTORY } from './helpers/sc19-hosted-rehearsal.mjs';
 import { assertCurrentInventory } from './helpers/sc19-migration-fixture.mjs';
 
-// Release rehearsal from the CURRENT production state: the 49 migrations recorded in
-// supabase_migrations.schema_migrations of wsvjawuikxfzjyivxgsu (read 2026-11-10), replayed under
+// Release rehearsal from the CURRENT production state: the 79 migrations recorded in
+// supabase_migrations.schema_migrations of wsvjawuikxfzjyivxgsu (read 2026-11-16), replayed under
 // their production version numbers, then every migration the repository still has beyond that,
 // one by one in repository order, as db-migrate-production would apply them.
 // The older 19-entry state is kept in tests/sc-019-migrations-production-history.test.mjs.
 const dir = new URL('../supabase/migrations/', import.meta.url);
 
-test('CURRENT production history (49 migrations) + every pending migration applies cleanly over existing synthetic data', async t => {
+test('CURRENT production history (79 migrations) + every pending migration applies cleanly over existing synthetic data', async t => {
   const url = new URL(process.env.SC19_CURRENT_REHEARSAL_DATABASE_URL);
   assert.equal(url.port, '55434');
   assert.equal(url.pathname, '/sc19_production_current');

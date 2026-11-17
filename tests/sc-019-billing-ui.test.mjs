@@ -351,6 +351,9 @@ test('company dashboard links to domains and white-label history for the owner o
   assert.match(owner, new RegExp(`/dashboard/${companyId}/marka`));
   const member = await render(memberId, true);
   assert.doesNotMatch(member, /\/domeny|\/zmiany-marki/);
+  // SC-015-D3: historia eksportów raportów — odnośnik tylko dla właściciela, niezależnie od white-label.
+  assert.doesNotMatch(member, /\/eksporty/);
+  assert.match(await render(ownerId, false), new RegExp(`/dashboard/${companyId}/eksporty`));
   assert.match(member, new RegExp(`/dashboard/${companyId}/marka`));
   assert.doesNotMatch(await render(ownerId, false), /\/domeny|\/zmiany-marki|\/marka/);
 });

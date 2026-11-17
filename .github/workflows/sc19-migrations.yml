@@ -258,7 +258,7 @@ jobs:
         include:
           - { postgres: '16', image_tag: '16', label: '16' }
           - { postgres: '17', image_tag: '17', label: '17' }
-          # Exact minor of production project wsvjawuikxfzjyivxgsu (PostgreSQL 17.6, 49 migrations; state read 2026-11-10).
+          # Exact minor of production project wsvjawuikxfzjyivxgsu (PostgreSQL 17.6, 79 migrations; state read 2026-11-16).
           - { postgres: '17', image_tag: '17.6', label: '17.6-production' }
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -305,7 +305,7 @@ jobs:
         run: |
           set -o pipefail
           node --test tests/sc-019-migrations-production-history.test.mjs 2>&1 | tee sc19-production-history.log
-      - name: Rehearse the release from the CURRENT production state (49 recorded migrations, read 2026-11-10)
+      - name: Rehearse the release from the CURRENT production state (79 recorded migrations, read 2026-11-16)
         env:
           SC19_REHEARSAL_DISPOSABLE: 'yes'
           SC19_CURRENT_REHEARSAL_DATABASE_URL: postgres://postgres:synthetic-only@127.0.0.1:55434/sc19_production_current
