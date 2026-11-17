@@ -316,7 +316,7 @@ async function resume(d, open, freeze = []) {
     await closeRelease(d, open.number);
     return res;
   }
-  return finish(d, pr, { releasePr: open.number, releaseHead: meta.release_head, meta, migrations: decision.migrations, outcomeUnknown });
+  return finish(d, pr, { releasePr: open.number, releaseHead: meta.release_head, meta, migrations: decision.migrations, outcomeUnknown, resumed: true });
 }
 
 async function waitForChecks(d, sha) {
@@ -471,7 +471,9 @@ async function finish(d, pr, started) {
   const r = await mergeAndVerify(d, started, recheck, 'auto', beforeMerge);
   if (r.stage === 'await_migrations') {
     return { status: 'AWAIT_MIGRATIONS', codes: [], release_pr: started.releasePr, source_pr: pr.number,
-      migration_request: { release_pr: started.releasePr, release_head: started.releaseHead, source_pr: pr.number } };
+      // `resumed`: this release PR was left open by an earlier run, so a migrate job may already
+      // have run for it (see migrationStopped). Only a release PR opened by this very run is false.
+      migration_request: { release_pr: started.releasePr, release_head: started.releaseHead, source_pr: pr.number, resumed: started.resumed === true } };
   }
   if (r.stage === 'migration_stopped') return migrationStopped(d, started.releasePr, pr, r.outcome);
   // Migrations reported applied, but the release is not merged below: data changed, code did not.
@@ -563,12 +565,24 @@ function migrationOutcomeFor(d, releaseHead) {
 }
 
 // The migrate job did not apply the whole batch. The release PR is closed and never merged.
-// `unavailable` (the secret disappeared between the jobs) changed nothing and is simply retried.
+// `unavailable` (the secret disappeared between the jobs) changed nothing IN THIS RUN. It is
+// simply retried only when this run is certainly the first attempt for the release: the publish
+// job of this same run opened the release PR (`migration_request.resumed === false`). Otherwise
+// (resumed release PR, or no readable request) an earlier, cut-off run may already have committed
+// its migrations, so it fails closed like a lost outcome (MIGRATION_OUTCOME_UNKNOWN, freeze).
 // Anything else freezes every release and holds the source PR for good; if at least one migration
 // already committed, rolling code back cannot undo it (ROLLBACK_INSUFFICIENT_DATA_CHANGED); if
 // nobody knows what committed, the freeze says so (MIGRATION_OUTCOME_UNKNOWN).
 async function migrationStopped(d, releasePr, pr, o) {
   if (o.status === 'unavailable') {
+    const req = d.migrationRequest;
+    const firstAttempt = req && typeof req === 'object' && req.resumed === false
+      && SHA.test(o.release_head ?? '') && req.release_head === o.release_head && req.release_pr === releasePr;
+    if (!firstAttempt) {
+      const res = await outcomeUnknownHeld(d, releasePr, pr, ['MIGRATION_EXECUTOR_UNAVAILABLE']);
+      await closeRelease(d, releasePr); // last: the freeze and the hold already stand
+      return res;
+    }
     await closeRelease(d, releasePr);
     return { status: 'HELD', codes: ['MIGRATION_EXECUTOR_UNAVAILABLE'], release_pr: releasePr, source_pr: pr.number };
   }

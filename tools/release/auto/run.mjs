@@ -43,6 +43,7 @@ const backups = migrationExecutor ? await readBackups({ token: process.env.SUPAB
 // Missing or unreadable means the migrate job died: its effect on the database is UNKNOWN.
 const finishPhase = process.env.PUBLISHER_PHASE === 'finish';
 let migrationOutcome = null;
+let migrationRequest = null;
 if (finishPhase) {
   let request = null;
   try { request = JSON.parse(process.env.MIGRATION_REQUEST ?? ''); } catch { /* stays null */ }
@@ -50,6 +51,9 @@ if (finishPhase) {
   if (!migrationOutcome || typeof migrationOutcome !== 'object' || migrationOutcome.release_head !== request?.release_head) {
     migrationOutcome = { release_head: request?.release_head ?? null, status: 'unknown', applied: null, code: 'MIGRATION_OUTCOME_UNKNOWN' };
   }
+  // Whether the publish job of this run opened the release PR itself (`resumed: false`): only then
+  // is an `unavailable` migrate job certainly the first attempt (see migrationStopped).
+  migrationRequest = request && typeof request === 'object' ? request : null;
 }
 
 const result = await runPublisher({
@@ -63,11 +67,11 @@ const result = await runPublisher({
   deployWorker: createWorkerDeployer({ git, log: line => console.log(line) }),
   log: line => console.log(line),
   error: code => console.log(`::error::${code}`),
-  migrationExecutor, backups, migrationOutcome,
+  migrationExecutor, backups, migrationOutcome, migrationRequest,
 });
 
 console.log(JSON.stringify(result, null, 2));
-// #491: hands the waiting release to the `migrate` job (release PR number and head SHA only).
+// #491: hands the waiting release to the `migrate` job (release PR number, head SHA, source PR, resumed flag).
 if (result.status === 'AWAIT_MIGRATIONS' && !finishPhase && process.env.GITHUB_OUTPUT) {
   appendFileSync(process.env.GITHUB_OUTPUT, `migration_request=${JSON.stringify(result.migration_request)}\n`);
 }
