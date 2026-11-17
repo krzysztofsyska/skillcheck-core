@@ -7,8 +7,8 @@ import { futureOffers } from "./future-offers";
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
 
 export function PackageComparison({ sizes, catalogEnabled = false, futureOffersEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean; futureOffersEnabled?: boolean }) {
-  // WERYFIKACJA and ASSESSMENT CENTER are hidden from the public offer unless PUBLIC_FUTURE_OFFERS_ENABLED=true
-  // (owner decision 2026-11-10, Przelewy24 verification). Their copy stays in future-offers.ts and below.
+  // WERYFIKACJA and ASSESSMENT CENTER are visible on the public offer by default; hidden only by PUBLIC_FUTURE_OFFERS_ENABLED=false
+  // (owner decisions 2026-11-10 and 2026-11-16, ROADMAP R4). Their copy stays in future-offers.ts and below.
   // Live catalog wins when enabled; an enabled but failing catalog shows no number.
   // With the catalog off, the owner-approved FREE and PRESELEKCJA offers are shown.
   const analyses = preselekcjaAnalyses(catalogEnabled, sizes);
@@ -56,7 +56,7 @@ export function PackageComparison({ sizes, catalogEnabled = false, futureOffersE
   </div>
   <FutureOfferPreview />
   <div className={styles.futureGrid}>{futureOffers.map(stage=><article key={stage.name} className={styles.futureCard}>
-    <p className={`${styles.status} ${styles.statusPlanned}`}>Cena zatwierdzona · pakiet w przygotowaniu</p>
+    <p className={`${styles.status} ${styles.statusPlanned}`}>Cena zatwierdzona · w przygotowaniu — nie można jeszcze kupić</p>
     <h3>{stage.name}</h3><p className={styles.planTitle}>{stage.outcome}</p>
     <div className={styles.planPrice}><strong>{stage.price}</strong><p>{stage.scope}</p></div>
     <h4>Co planujemy w tej cenie?</h4>
