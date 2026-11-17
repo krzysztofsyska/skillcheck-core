@@ -143,11 +143,47 @@ export async function loadExercisesReportSection(
       latest.set(row.definition_entry_id, row);
     }
 
+    const loaded: unknown[] = definitions.data.slice(0, EXERCISES_SCAN_LIMIT);
+    const loadedIds = new Set(loaded.map(item => String(record(item).id)));
+
+    // Odczyt obserwacji też ma limit, a widok porządkuje je po id wersji, nie
+    // po dacie definicji: przy ponad 100 ocenionych wersjach obserwacja
+    // wczytanej (wyświetlanej) wersji mogła wypaść poza okno. Doczytujemy więc
+    // obserwacje dokładnie dla wczytanych wersji bez wpisu w `latest` (te same
+    // filtry firmy, rekrutacji i zgłoszenia). Bez tego oceniona wersja
+    // wyglądałaby na „nieocenione".
+    if (observations.data.length > EXERCISES_SCAN_LIMIT) {
+      const unobservedIds = Array.from(loadedIds).filter(key => !latest.has(key));
+      if (unobservedIds.some(key => !reportUuid.test(key))) throw new Error('Niezgodna wersja ćwiczenia.');
+      if (unobservedIds.length) {
+        const requested = new Set(unobservedIds);
+        const extra = await client.from('latest_exercise_observations').select(observationColumns)
+          .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId)
+          .eq('application_id', route.applicationId)
+          .in('definition_entry_id', unobservedIds).limit(EXERCISES_SCAN_LIMIT + 1);
+        if (extra.error) {
+          return reportSchemaMissing(extra.error.code)
+            ? { kind: 'unavailable', message: exercisesSectionMessages.unavailable }
+            : { kind: 'error', message: exercisesSectionMessages.error };
+        }
+        // Widok ma najwyżej jeden wpis na wersję, więc wynik mieści się w
+        // liście id; każdy nadmiar, obcy albo powtórzony wpis to niezgodny
+        // zapis i przerywa sekcję zamiast pokazać błędny status.
+        if (!Array.isArray(extra.data) || extra.data.length > unobservedIds.length) throw new Error('Niezgodna lista.');
+        for (const item of extra.data) {
+          const row = record(item);
+          if (typeof row.definition_entry_id !== 'string' || !requested.has(row.definition_entry_id)
+            || latest.has(row.definition_entry_id)) {
+            throw new Error('Niezgodna obserwacja.');
+          }
+          latest.set(row.definition_entry_id, row);
+        }
+      }
+    }
+
     // Wersje, do których odnoszą się obserwacje, a które nie weszły do
     // najnowszych 100 definicji, doczytujemy po id (te same filtry firmy i
     // rekrutacji). Bez tego oceniona wersja wyglądałaby na „nieocenione".
-    const loaded: unknown[] = definitions.data.slice(0, EXERCISES_SCAN_LIMIT);
-    const loadedIds = new Set(loaded.map(item => String(record(item).id)));
     const missingIds = Array.from(latest.keys()).filter(key => !loadedIds.has(key));
     let allDefinitions: unknown[] = loaded;
     if (missingIds.length) {
