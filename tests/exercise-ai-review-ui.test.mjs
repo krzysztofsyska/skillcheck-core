@@ -8,6 +8,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as reviewHelpers from '../lib/exercise-ai-review.ts';
 import * as definitionHelpers from '../lib/exercise-definition.ts';
+import * as contextIdentity from '../lib/exercise-context-identity.ts';
 
 const ids={company:'aaaaaaaa-1111-4222-8333-444444444444',recruitment:'bbbbbbbb-1111-4222-8333-444444444444',exercise:'cccccccc-1111-4222-8333-444444444444',definition:'dddddddd-1111-4222-8333-444444444444'};
 const stamp='2026-11-06T10:00:00+00:00';
@@ -208,7 +209,46 @@ test('R1-SWITCH code uses the user RLS client only and imports no mail, send or 
  assert.doesNotMatch(source,/service_role|SERVICE_ROLE|createAdminClient|supabase\/admin|resend|nodemailer|sendMail|send-?mail|outbound|\bfetch\(/i,file);
  }
  const page=readFileSync(fileURLToPath(new URL('../'+basePath+'exercises/page.tsx',import.meta.url)),'utf8');
- assert.match(page,/<ExerciseAiAutoReleaseSection client=\{client\}[^>]*canEdit=\{canEdit\}/);
+ assert.match(page,/<ExerciseAiAutoReleaseSection client=\{client\}[^>]*canEdit=\{canEdit\} editable=\{editable\}\/>/);
+});
+async function renderExercisesPage(contextValue) {
+ const sections=[];
+ const mod=load(basePath+'exercises/page.tsx',{
+ 'next/link':{default:props=>createElement('a',{href:props.href},props.children)},
+ 'next/navigation':{notFound(){throw new Error('notFound');}},
+ '../../../../../../lib/exercise-context':{exerciseContext:async()=>contextValue,exerciseUuid:/^[a-f0-9-]{36}$/i},
+ '../../../../../../lib/behavior-assessment':{behaviorSchemaMissing:()=>false},
+ '../exercise-generation-form':{ExerciseGenerationForm:()=>null},
+ '../exercise-ai-auto-release-section':{ExerciseAiAutoReleaseSection:props=>{sections.push(props);return null;}},
+ });
+ const html=await withFlag('true',async()=>renderToStaticMarkup(await mod.default({params:Promise.resolve({companyId:ids.company,recruitmentId:ids.recruitment}),searchParams:Promise.resolve({})})));
+ return {sections,html};
+}
+test('R1-SWITCH page passes the full editable from exerciseContext (archived position closes the switch even for an open recruitment)',async()=>{
+ const base={client:{from:()=>listQuery()},canEdit:true,base:'/exercises',recruitment:{name:'Rekrutacja',status:'open'},position:{updated_at:stamp,status:'archived'}};
+ function listQuery(){const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},gt(){return q;},maybeSingle:async()=>({data:null,error:null}),
+ then(resolve,reject){return Promise.resolve({data:[],error:null}).then(resolve,reject);}};return q;}
+ const archived=await renderExercisesPage({...base,editable:false});
+ assert.equal(archived.sections.length,1);assert.equal(archived.sections[0].editable,false);assert.equal(archived.sections[0].canEdit,true);
+ assert.doesNotMatch(archived.html,/Utwórz zadanie/);
+ const active=await renderExercisesPage({...base,editable:true,position:{updated_at:stamp,status:'active'}});
+ assert.equal(active.sections[0].editable,true);
+});
+test('R1-SWITCH exerciseContext marks an archived position as not editable for an open recruitment',async()=>{
+ const position=status=>({id:'eeeeeeee-1111-4222-8333-444444444444',company_id:ids.company,status,updated_at:stamp});
+ async function context(positionStatus,recruitmentStatus='open'){
+  const rows={recruitments:{id:ids.recruitment,company_id:ids.company,position_id:'eeeeeeee-1111-4222-8333-444444444444',status:recruitmentStatus},positions:position(positionStatus)};
+  const client={from(table){const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:rows[table],error:null})};return q;}};
+  const mod=load('lib/exercise-context.ts',{
+  'next/navigation':{notFound(){throw new Error('notFound');}},
+  './company-access':{companyAccess:async()=>({client,canEdit:true})},
+  './exercise-context-identity':contextIdentity,
+  });
+  return mod.exerciseContext(ids.company,ids.recruitment);
+ }
+ assert.equal((await context('archived')).editable,false);
+ assert.equal((await context('active')).editable,true);
+ assert.equal((await context('active','closed')).editable,false);
 });
 test('R1-SWITCH is not rendered on the recruitment page (the payment-named test renders it with a fixed mock map)',()=>{
  const page=readFileSync(fileURLToPath(new URL('../'+basePath+'page.tsx',import.meta.url)),'utf8');

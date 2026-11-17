@@ -24,7 +24,7 @@ export default async function Exercises({ params, searchParams }: {
     <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}`}>← Rekrutacja</Link>
     <h1>Zadania — {recruitment.name}</h1>
     <p>Testy kompetencji i ćwiczenia Assessment Center. Definicja opisuje zadanie i kryteria; nie jest oceną kandydata.</p>
-    <ExerciseAiAutoReleaseSection client={client} companyId={companyId} recruitmentId={recruitmentId} canEdit={canEdit} editable={['draft','open'].includes(recruitment.status)}/>
+    <ExerciseAiAutoReleaseSection client={client} companyId={companyId} recruitmentId={recruitmentId} canEdit={canEdit} editable={editable}/>
     {result.error ? <p role="status">Moduł zadań nie jest jeszcze dostępny w tym środowisku.</p> : <>
       {editable && <Link href={`${base}/new`}>Utwórz zadanie</Link>}
       {generationEnabled && !company?.error && <details><summary>Przygotuj zadanie z pomocą AI</summary>
