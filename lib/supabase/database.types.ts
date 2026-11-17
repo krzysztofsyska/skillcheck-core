@@ -638,6 +638,19 @@ export type Database = {
         Args: { target_company: string; target_recruitment: string; target_definition: string; expected_position_updated_at: string };
         Returns: string;
       };
+      /** R1-SWITCH (20261117150000_exercise_ai_auto_release_api.sql). Security definer; owner or
+       * recruiter of the company only, recruitment bound to the company (42501 otherwise, same error
+       * for foreign or missing records). True = AI-drafted tasks are approved automatically. */
+      read_exercise_ai_settings: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: boolean;
+      };
+      /** R1-SWITCH. Same access check as read_exercise_ai_settings; 55000 when the recruitment is
+       * not draft/open or the position is archived. Delegates to exercise_ai.set_auto_release. */
+      set_exercise_ai_auto_release: {
+        Args: { target_company: string; target_recruitment: string; enabled: boolean };
+        Returns: boolean;
+      };
       ac_assign_pair: {Args:{application:string;revision:string;first_id:string;second_id:string};Returns:string};
       ac_find_pair: {Args:{application:string;revision:string};Returns:string|null};
       ac_read_pair: {Args:{pair_id:string};Returns:Json};
