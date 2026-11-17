@@ -1,0 +1,17 @@
+/* SC-015-C: arkusz wydruku i PDF raportu kandydata. */
+.footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #cedced; font-size: .9rem; color: #44526b; }
+.requirement, .quote { break-inside: avoid; page-break-inside: avoid; }
+.quote { overflow-wrap: anywhere; }
+.reportRoot { overflow: visible; }
+
+@page { size: A4; margin: 14mm; }
+
+@media print {
+  .noPrint { display: none !important; }
+  .reportRoot { max-width: none; overflow: visible; background: white; color: #111; font-size: 10pt; }
+  .reportRoot h2, .reportRoot h3, .reportRoot h4, .reportRoot h5 { break-after: avoid; }
+  .requirement { background: white; border: 1px solid #a7b4c5; padding: 8pt; }
+  .quote { font-size: 9.5pt; }
+  .footer { color: #111; break-inside: avoid; }
+  .reportRoot a { color: inherit; text-decoration: none; }
+}
