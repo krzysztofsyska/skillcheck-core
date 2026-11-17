@@ -8,10 +8,12 @@ import { assertCurrentInventory } from './helpers/sc19-migration-fixture.mjs';
 // broker limiter / r13 (its guard needs the exact r12 schema signature and no rate_window).
 // tests/competency-active-migration.test.mjs runs it on a synthetic schema where `drop ... cascade`
 // happens to remove functions in a harmless order. This test starts from the real thing:
-// the production migration history (49 recorded, read 2026-11-10) plus the pending migrations
-// up to r12, exactly as the release applies them.
+// the production migration history up to the entry before r12 (production has had r12 since
+// 2026-11-11; fixture read 2026-11-16) plus r12 itself from the repository, i.e. the state a
+// release reaches right after r12.
 const dir = new URL('../supabase/migrations/', import.meta.url);
 const r12 = '20261106063720_sc_wer_c1_inventory_r12.sql';
+const r12Version = r12.slice(0, 14);
 const r12Signature = '48afc7b117ac';
 const r11Signature = '0d22eb7a547b1f8838298b034d3d257ca4cba9e81430f5c6b20b9212e4d88b84';
 
@@ -21,10 +23,10 @@ test('r12 rollback runs from the state the release reaches after r12, replayed f
   assert.equal(url.pathname, '/sc19_r12_rollback');
   assert.ok(['16', '17'].includes(process.env.SC19_TEST_PG_MAJOR));
   const { db } = await bootHostedRehearsal(t, url);
-  const history = await replayObservedHistory(t, db, CURRENT_HISTORY);
+  const history = await replayObservedHistory(t, db, { ...CURRENT_HISTORY, before: r12Version });
   const recorded = new Set(history.map(e => e.name));
   const pending = (await readdir(dir)).filter(f => f.endsWith('.sql') && !recorded.has(f.replace(/^\d+_/, '').replace(/\.sql$/, ''))).sort();
-  assert.ok(pending.includes(r12), 'r12 is still pending on production');
+  assert.ok(pending.includes(r12), 'r12 is not part of the replayed history, so it is applied from the repository');
   for (const name of pending.filter(f => f <= r12)) await db.query(await readFile(new URL(name, dir), 'utf8'));
   const signature = async () => (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
   assert.ok((await signature()).startsWith(r12Signature), 'state after r12 has the reviewed r12 schema signature (rollback guard passes)');

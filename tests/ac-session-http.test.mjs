@@ -40,6 +40,8 @@ const data = {
   latest_exercise_definitions: [],
 };
 const sessions = { [recA]: ids.session, [recBroken]: uuid(91) };
+// SC-AC-EXPORT-AUDIT: the stub's audit RPC succeeds unless the test switches it off.
+const audit = { fail: false, calls: [] };
 const broken = () => { const payload = sessionPayload(); payload.finalists[0].stages[0].pair.sheets[1].authorId = ids.owner; return payload; };
 
 async function startStub(t, requests) {
@@ -55,6 +57,11 @@ async function startStub(t, requests) {
       const args = JSON.parse(Buffer.concat(chunks).toString() || '{}');
       if (name === 'ac_session_find') return res.end(JSON.stringify(sessions[args.recruitment] ?? null));
       if (name === 'ac_session_read') return res.end(JSON.stringify(args.session === ids.session ? sessionPayload() : broken()));
+      if (name === 'record_assessment_center_session_export') {
+        audit.calls.push(args);
+        if (audit.fail) { res.statusCode = 503; return res.end(JSON.stringify({ code: '57P03', message: 'synthetic audit outage' })); }
+        return res.end(JSON.stringify(uuid(99)));
+      }
       res.statusCode = 404; return res.end(JSON.stringify({ code: 'PGRST202', message: 'unknown rpc' }));
     }
     let rows = [...(data[name] ?? [])];
@@ -141,6 +148,32 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     const bad = await get(base, companyA, recBroken);
     assert.equal(bad.res.status, 200); assert.match(bad.html, /Nie udało się zweryfikować danych sesji\. Raport nie jest wyświetlany\./);
     assert.doesNotMatch(bad.html, /AsesorPierwszy|PierwszaProba|Raport sesji/);
+  });
+
+  await t.test('CSV export: written to the audit log before the file; audit failure = 503 and no file', async () => {
+    const url = `${base}/dashboard/${companyA}/recruitments/${recA}/assessment-center/export`;
+    audit.fail = false; audit.calls.length = 0;
+    const ok = await fetch(url, { redirect: 'manual', headers: { Cookie: cookie } });
+    assert.equal(ok.status, 200);
+    assert.match(ok.headers.get('content-type'), /text\/csv/);
+    assert.match(ok.headers.get('content-disposition'), /attachment; filename="skillcheck-assessment-center-/);
+    assert.match(await ok.text(), /ac-session-csv-v1/);
+    assert.deepEqual(audit.calls, [{ target_company: companyA, target_recruitment: recA, target_session: ids.session, export_kind: 'ac_session_csv' }]);
+    audit.fail = true; audit.calls.length = 0;
+    const failed = await fetch(url, { redirect: 'manual', headers: { Cookie: cookie } });
+    assert.equal(failed.status, 503);
+    assert.equal(failed.headers.get('content-disposition'), null);
+    assert.equal(failed.headers.get('cache-control'), 'private, no-store');
+    const text = await failed.text();
+    assert.equal(JSON.parse(text).error, 'audit_failed');
+    assert.doesNotMatch(text, /Anna Finalistka|ac-session-csv-v1|AsesorPierwszy/);
+    assert.equal(audit.calls.length, 1);
+    audit.fail = false;
+    // A recruitment of another company in the URL never reaches the audit RPC.
+    audit.calls.length = 0;
+    const crossed = await fetch(`${base}/dashboard/${companyB}/recruitments/${recA}/assessment-center/export`, { redirect: 'manual', headers: { Cookie: cookie } });
+    assert.equal(crossed.status, 404);
+    assert.deepEqual(audit.calls, []);
   });
 
   await t.test('without the Preview flag the page does not exist', async () => {

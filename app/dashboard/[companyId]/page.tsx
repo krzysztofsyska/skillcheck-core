@@ -19,6 +19,7 @@ export default async function CompanyDashboard({params}:{params:Promise<{company
     {process.env.SC19_PACKAGES_ENABLED === 'true' && <p className="lead"><Link href={`/dashboard/${companyId}/billing`}>Twój pakiet SkillCheck i pozostałe analizy CV →</Link></p>}
     <p className="lead"><Link href={`/dashboard/${companyId}/candidates`}>Kandydaci w bazie firmy: {candidates.count ?? 0}</Link></p>
     <p className="lead"><Link href={`/dashboard/${companyId}/zgody`}>Zgody na kontakt handlowy →</Link></p>
+    {isOwner && <p className="lead"><Link href={`/dashboard/${companyId}/eksporty`}>Historia eksportów raportów →</Link></p>}
     {whiteLabelEnabled() && <p className="lead"><Link href={`/dashboard/${companyId}/marka`}>Wygląd panelu w marce firmy →</Link></p>}
     {whiteLabelEnabled() && isOwner && <p className="lead"><Link href={`/dashboard/${companyId}/domeny`}>Adres panelu w domenie firmy →</Link></p>}
     {whiteLabelEnabled() && isOwner && <p className="lead"><Link href={`/dashboard/${companyId}/zmiany-marki`}>Historia zmian marki i domen →</Link></p>}

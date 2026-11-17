@@ -2,8 +2,8 @@
 // (The full drill was run against two disposable local Postgres 17.6 containers; see PR.)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { classifyRestoreErrors, validateSourceUrl, parseCounts, compareCounts, pendingMigrations, EXCLUDED_SQL, SCHEMAS_SQL } from '../tools/release/backup-drill/drill.mjs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { APP_ROLES, SUPABASE_ROLES, roleSetupSql, classifyRestoreErrors, validateSourceUrl, parseCounts, compareCounts, pendingMigrations, EXCLUDED_SQL, SCHEMAS_SQL } from '../tools/release/backup-drill/drill.mjs';
 
 test('source must be a remote TLS Postgres URL', () => {
   assert.equal(validateSourceUrl('postgresql://u:p@aws-0-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require'), null);
@@ -50,4 +50,29 @@ test('C3: restore errors fail the drill unless expected (public schema, FK to ex
   assert.deepEqual(classifyRestoreErrors(fk('companies'), ['auth.users']), { expected: 0, unexpected: 1 });
   assert.deepEqual(classifyRestoreErrors(other + 'pg_restore: warning: errors ignored on restore: 1\n', []), { expected: 0, unexpected: 1 });
   assert.deepEqual(classifyRestoreErrors('', []), { expected: 0, unexpected: 0 });
+});
+
+test('application roles are created (NOLOGIN, idempotent, no password) before pg_restore and cover every role in migrations', () => {
+  const dir = new URL('../supabase/migrations/', import.meta.url);
+  const sql = readdirSync(dir).filter(f => f.endsWith('.sql')).map(f => readFileSync(new URL(f, dir), 'utf8')).join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '');
+  const found = new Set();
+  for (const m of sql.matchAll(/\bcreate\s+role\s+([a-z][a-z0-9_]*)/gi)) found.add(m[1].toLowerCase());
+  for (const m of sql.matchAll(/\b(?:grant\s+[^;]+?\s+to|owner\s+to)\s+([a-z][a-z0-9_]*)/gi)) found.add(m[1].toLowerCase());
+  for (const m of sql.matchAll(/\bcreate\s+policy\b[^;]*?\sto\s+([a-z][a-z0-9_]*)/gi)) found.add(m[1].toLowerCase());
+  // built-ins of the image / Supabase stubs, SQL words from comments, and a role that exists only on Preview
+  const ignore = new Set([...SUPABASE_ROLES, 'postgres', 'public', 'it', 'sc19_p24_preview', 'current_user', 'session_user']);
+  const missing = [...found].filter(r => !ignore.has(r) && !APP_ROLES.includes(r));
+  assert.deepEqual(missing, []);
+  for (const stmt of roleSetupSql(APP_ROLES, { noinherit: true })) {
+    assert.match(stmt, /create role [a-z0-9_]+ nologin noinherit; exception when duplicate_object/);
+    assert.doesNotMatch(stmt, /password|login;.*login/i);
+  }
+  const src = readFileSync(new URL('../tools/release/backup-drill/drill.mjs', import.meta.url), 'utf8');
+  // migrations reject an existing app role with rolinherit = true, so the drill must create them NOINHERIT
+  const appCall = 'roleSetupSql(APP_ROLES, { noinherit: true })';
+  assert.ok(src.indexOf(appCall) > 0);
+  assert.ok(src.indexOf(appCall) < src.indexOf('pg_restore -d'));
+  assert.ok(src.indexOf('roleSetupSql(SUPABASE_ROLES)') < src.indexOf('pg_restore -d'));
+  assert.doesNotMatch(src, /roleSetupSql\(\[\.\.\.SUPABASE_ROLES, \.\.\.APP_ROLES\]\)/);
 });

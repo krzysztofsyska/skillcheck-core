@@ -38,15 +38,18 @@ export async function bootHostedRehearsal(t, url) {
 }
 
 // The two observed states of production. CURRENT is what the release rehearsal starts from
-// (read 2026-11-10: 49 migrations, last 20261102120000). LEGACY is the older 2026-10-24 state
+// (read 2026-11-16: 79 migrations, last 20261113090000). LEGACY is the older 2026-10-24 state
 // (19 migrations) that the M13 / normalization regression tests were written against.
-export const CURRENT_HISTORY = { file: 'sc19-production-history.json', length: 49 };
+export const CURRENT_HISTORY = { file: 'sc19-production-history.json', length: 79 };
 export const LEGACY_HISTORY = { file: 'sc19-production-history-2026-10-24.json', length: 19 };
 
 // Replays an observed application migration history, not a Supabase platform dump.
-export async function replayObservedHistory(t, db, { file, length } = CURRENT_HISTORY) {
-  const { history } = JSON.parse(await readFile(new URL(`../fixtures/${file}`, import.meta.url), 'utf8'));
-  assert.equal(history.length, length);
+// `before` (a version) replays only the entries numbered below it, for tests that need the
+// production state from before a migration that production has meanwhile received.
+export async function replayObservedHistory(t, db, { file, length, before } = CURRENT_HISTORY) {
+  const all = JSON.parse(await readFile(new URL(`../fixtures/${file}`, import.meta.url), 'utf8')).history;
+  assert.equal(all.length, length);
+  const history = before ? all.filter(entry => entry.version < before) : all;
   for (const entry of history) {
     await db.query(entry.statements.join(';\n') + ';');
     t.diagnostic(`replayed observed ${entry.version} ${entry.name}`);
