@@ -137,6 +137,22 @@ test('#491: NON_ADDITIVE_SQL allowlist: anything not clearly additive is refused
   assert.equal((await run(ok, { applyImpl: fakeApply().fn })).status, 'applied');
 });
 
+test('#491 review fix: comment markers inside literals cannot smuggle a statement past the migrate job', async () => {
+  for (const sql of [
+    "begin;\ncomment on table public.notes is '--'; alter table public.notes disable row level security;\ncommit;\n",
+    "begin;\ncomment on table public.notes is '/*'; alter table public.notes disable row level security; comment on table public.notes is '*/';\ncommit;\n",
+  ]) {
+    const fx = fixture({ [A]: sql });
+    const apply = fakeApply();
+    const r = await run(fx, { applyImpl: apply.fn });
+    assert.deepEqual([r.status, r.code], ['refused', `NON_ADDITIVE_SQL:ALTER_TABLE:supabase/migrations/${A}`], sql);
+    assert.equal(apply.calls.length, 0);
+  }
+  const open = fixture({ [A]: "begin;\ncomment on table public.notes is 'never closed;\ncommit;\n" });
+  const r = await run(open, { applyImpl: fakeApply().fn });
+  assert.deepEqual([r.status, r.code], ['refused', `NON_ADDITIVE_SQL:UNPARSEABLE_UNTERMINATED_LITERAL:supabase/migrations/${A}`]);
+});
+
 test('#491: only the head of the publisher\'s own release branch, only new migration files', async () => {
   const fx = fixture();
   const apply = fakeApply();

@@ -71,7 +71,8 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   code (`app/`, `lib/`, `supabase/`, …) may depend on them, so only docs/tests ship until they do.
 - `PAYMENTS:<file>`, `OUTBOUND_SENDS:<file>` — billing/P24/invoices; mail/SMS/voice/notifications.
 - `SECRETS_OR_PIPELINE:<file>` — `.github/`, env files, `vercel.json`, `supabase/config`, the
-  agent pipeline and the publisher itself. Changes to the gates need a human merge.
+  agent pipeline, the publisher itself and `tools/db-migrate/` (the executor that runs with the
+  production database credential). Changes to the gates need a human merge.
 - `DESTRUCTIVE_SQL:<KIND>:<file>` — any `DROP …`, `DELETE FROM`, `TRUNCATE`, `ALTER TABLE … DROP`,
   `ALTER … TYPE`, `RENAME`, `UPDATE … SET` anywhere in a migration (comments included).
 - `NON_ADDITIVE_SQL:<KIND>:<file>` — allowlist gate beside `DESTRUCTIVE_SQL`: a migration may contain
@@ -79,7 +80,11 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   `alter table … enable row level security` and `comment on`. Anything else (`disable row level
   security`, `grant`/`revoke`, `create`/`alter policy`, functions or any `$$` quoting, views, inserts,
   other `alter table` actions …) is refused in the publisher and again in the migrate job, and waits
-  for the owner via `db-migrate-production`. After an interrupted run the list of applied migrations
+  for the owner via `db-migrate-production`. The SQL is read by one single-pass lexer (literals
+  with `''` and `E'…'` escapes, `$tag$` bodies, quoted identifiers, `--` and nested `/* */`
+  comments together), so a comment marker inside a literal hides nothing; input it cannot read
+  cleanly is refused (`NON_ADDITIVE_SQL:UNPARSEABLE_*`). `DESTRUCTIVE_SQL` scans both the raw and
+  the lexed text. After an interrupted run the list of applied migrations
   is re-derived from the merge commit, so a later rollback still carries `ROLLBACK_INSUFFICIENT_DATA_CHANGED`.
 - Migrations at all, until both hold: a completed Supabase backup at most 24 h old
   (`BACKUP_EVIDENCE_MISSING` / `BACKUP_NOT_COMPLETED` / `BACKUP_STALE`) **and** an unattended
@@ -106,7 +111,10 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
     them. On an error the release PR is closed unmerged, the source PR held, and a freeze issue
     opened with the code (`MIGRATION_FAILED:<file>:<SQLSTATE>`, `MIGRATION_PARTIAL_STATE`, …) plus
     `ROLLBACK_INSUFFICIENT_DATA_CHANGED` when at least one migration had committed;
-    `MIGRATION_OUTCOME_UNKNOWN` when the migrate job died; `MIGRATIONS_APPLIED_RELEASE_HELD` when
+    `MIGRATION_OUTCOME_UNKNOWN` when the migrate job died (also when a later run resumes an open
+    release with migrations whose outcome was lost and cannot go on: then with
+    `ROLLBACK_INSUFFICIENT_DATA_CHANGED`, as data may have changed; if it can go on, the migrate job
+    is asked again and re-reads the ledger); `MIGRATIONS_APPLIED_RELEASE_HELD` when
     the migrations committed but the code release was stopped afterwards.
 - `CI_*`, `REVIEW_*`, `CODEX_UNRESOLVED_FINDINGS:*`, `FILE_LIST_TRUNCATED`, `PATCH_MISMATCH`,
   `CHERRY_PICK_CONFLICT_OR_EMPTY`, `RELEASE_NOT_SERIALIZED`, `RELEASE_FROZEN`.

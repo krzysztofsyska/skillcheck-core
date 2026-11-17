@@ -839,3 +839,49 @@ test('#491: migrations applied but the release got held at the recheck: freeze s
   assert.equal(r.codes[0], 'MIGRATIONS_APPLIED_RELEASE_HELD');
   assert.equal(state.merged.length, 0);
 });
+
+test('#491 review fix: run cut off after the migrate job (outcome lost), source no longer allowed: freeze as possibly changed data, never a quiet HELD', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'AWAIT_MIGRATIONS');
+  // The migrate job may have committed; the finish job never ran. A FAIL verdict lands meanwhile.
+  state.comments[100].push({ ...pass(fx.prs[0].head), created_at: '2026-11-16T11:00:00Z', body: pass(fx.prs[0].head).body.replace('"PASS"', '"FAIL"') });
+  const errors = [];
+  const r = await runPublisher(migDeps(fx, gh, { error: c => errors.push(c) }));
+  assert.equal(r.status, 'FROZEN', JSON.stringify(r));
+  assert.deepEqual(r.codes.slice(0, 3), ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED', 'SOURCE_NO_LONGER_ALLOWED']);
+  assert.deepEqual(errors, ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED']);
+  assert.equal(state.merged.length, 0); assert.deepEqual(state.closed, [900]);
+  assert.ok(state.issues[0].title.startsWith(FREEZE_TITLE));
+  assert.match(state.issues[0].body, /nie wiadomo, czy migracje zmieniły bazę/);
+  assert.match(state.issues[0].body, /migracja zmieniła dane/);
+  assert.ok(state.comments[100].some(c => /sc-auto-release-held:v1/.test(c.body) && /MIGRATION_OUTCOME_UNKNOWN/.test(c.body)));
+  fx.git('fetch', 'origin', 'main');
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'FROZEN', 'every later release waits');
+});
+
+test('#491 review fix: run cut off, release CI then fails on resume: freeze as possibly changed data', async () => {
+  const fx = fixture([addNotes]);
+  const ci = {};
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] }, ci });
+  assert.equal((await runPublisher(migDeps(fx, gh))).status, 'AWAIT_MIGRATIONS');
+  const releaseHead = state.pulls[0].head.sha;
+  const red = green(releaseHead); red[0].conclusion = 'failure'; ci[releaseHead] = red;
+  const r = await runPublisher(migDeps(fx, gh));
+  assert.equal(r.status, 'FROZEN', JSON.stringify(r));
+  assert.deepEqual(r.codes.slice(0, 2), ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED']);
+  assert.equal(state.merged.length, 0); assert.deepEqual(state.closed, [900]);
+});
+
+test('#491 review fix: run cut off, source still allowed: the migrate job is asked again (it reads the ledger) and nothing merges before it answers', async () => {
+  const fx = fixture([addNotes]);
+  const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+  await runPublisher(migDeps(fx, gh));
+  const releaseHead = state.pulls[0].head.sha;
+  const again = await runPublisher(migDeps(fx, gh));
+  assert.equal(again.status, 'AWAIT_MIGRATIONS'); assert.equal(again.migration_request.release_head, releaseHead);
+  assert.equal(state.merged.length, 0); assert.equal(state.issues.length, 0);
+  // The ledger says everything is already there (MIGRATIONS_ALREADY_APPLIED): the release goes on.
+  const r = await runPublisher(migDeps(fx, gh, { migrationOutcome: { release_head: releaseHead, status: 'applied', applied: [MIG], code: 'MIGRATIONS_ALREADY_APPLIED' } }));
+  assert.equal(r.status, 'RELEASED', JSON.stringify(r));
+});

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  destructiveSql, classifyRelease, backupGate, reviewGate, codexGate, ciGate, evaluateCandidate, afterDeploy,
+  destructiveSql, nonAdditiveSql, lexSql, classifyRelease, backupGate, reviewGate, codexGate, ciGate, evaluateCandidate, afterDeploy,
 } from '../tools/release/auto/policy.mjs';
 
 const H = 'a'.repeat(40);
@@ -68,6 +68,8 @@ test('payment-path freeze and other owner-consent areas stay refused', () => {
     ['lib/sales-leads.ts', 'OUTBOUND_SENDS'], ['lib/email/send.ts', 'OUTBOUND_SENDS'],
     ['.github/workflows/x.yml', 'SECRETS_OR_PIPELINE'], ['tools/release/auto/policy.mjs', 'SECRETS_OR_PIPELINE'],
     ['tools/agent-pipeline/x.mjs', 'SECRETS_OR_PIPELINE'], ['vercel.json', 'SECRETS_OR_PIPELINE'],
+    // #491 review fix: the executor that runs with the production database credential.
+    ['tools/db-migrate/apply.mjs', 'SECRETS_OR_PIPELINE'], ['tools/db-migrate/run.mjs', 'SECRETS_OR_PIPELINE'],
   ]) {
     assert.ok(classifyRelease([file]).reasons.includes(`${code}:${file}`), file);
   }
@@ -360,4 +362,54 @@ test('C11: tylko powody _UNKNOWN są przejściowe, i tylko ograniczoną liczbę 
   // dopasowanie po końcówce, nie po początku: kod zaczynający się od UNKNOWN nie jest przejściowy
   assert.equal(isTransient(['UNKNOWN_THING']), false, 'tylko końcówka _UNKNOWN liczy się jako nieudany odczyt');
   assert.ok(Number.isInteger(TRANSIENT_ATTEMPTS) && TRANSIENT_ATTEMPTS >= 2 && TRANSIENT_ATTEMPTS <= 10);
+});
+
+test('#491 review fix: tools/db-migrate/ (the executor holding the DB credential) never ships automatically', () => {
+  assert.deepEqual(classifyRelease(['tools/db-migrate/apply.mjs']).reasons, ['SECRETS_OR_PIPELINE:tools/db-migrate/apply.mjs']);
+  const r = reasons(i => { i.files = ['tools/db-migrate/apply.mjs']; i.patches = [{ path: 'tools/db-migrate/apply.mjs', patch: '+x' }]; });
+  assert.ok(r.includes('SECRETS_OR_PIPELINE:tools/db-migrate/apply.mjs'));
+});
+
+test('#491 review fix: SQL lexer reads comments and literals in ONE pass: markers inside literals hide nothing', () => {
+  const evil = 'alter table public.companies disable row level security;';
+  for (const lit of ["'--'", "'/*'", "'*/'", "'it''s -- x'", "E'\\'--'", '$$--$$', '$t$ /* $t$']) {
+    const sql = `comment on table public.companies is ${lit}; ${evil}`;
+    const r = nonAdditiveSql(sql);
+    assert.ok(r.length > 0, sql);
+    if (!lit.startsWith('$')) assert.deepEqual(r, ['ALTER_TABLE'], sql);
+    else assert.deepEqual(r, ['DOLLAR_QUOTING'], sql);
+  }
+  // '/*' … '*/' split over two literals around the dangerous statement.
+  assert.deepEqual(nonAdditiveSql(`comment on table public.a is '/*'; ${evil} comment on table public.b is '*/';`), ['ALTER_TABLE']);
+  // Quote inside a comment, nested block comments, quoted identifiers with ';' / '--'.
+  assert.deepEqual(nonAdditiveSql(`-- it's\n${evil}`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql(`/* a /* b */ ' */ ${evil}`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql(`create table public."a;--b"(id int); ${evil}`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql('create table public."a;--b"(id int);'), []);
+  // Dollar-quoted bodies are refused outright (functions, DO blocks), whatever they contain.
+  assert.deepEqual(nonAdditiveSql("do $$ begin execute 'select 1'; end $$;"), ['DOLLAR_QUOTING']);
+  assert.deepEqual(nonAdditiveSql('create function public.f() returns int language sql as $body$ select 1 $body$;'), ['DOLLAR_QUOTING']);
+  assert.equal(lexSql('select $1').dollar, false, 'a positional parameter is not a dollar quote');
+  // Input the lexer cannot read cleanly fails closed.
+  for (const [sql, code] of [
+    ["comment on table public.a is 'never closed; create schema s;", 'UNPARSEABLE_UNTERMINATED_LITERAL'],
+    ['create schema s; /* never closed', 'UNPARSEABLE_UNTERMINATED_COMMENT'],
+    ['create schema s; /* a /* b */ still open', 'UNPARSEABLE_UNTERMINATED_COMMENT'],
+    ['create table public."never(id int);', 'UNPARSEABLE_UNTERMINATED_IDENTIFIER'],
+    ['comment on table public.a is $q$ never closed;', 'UNPARSEABLE_UNTERMINATED_DOLLAR_QUOTE'],
+    ["comment on table public.a is 'x\\'; create schema s; --'", 'UNPARSEABLE_AMBIGUOUS_LITERAL'],
+  ]) assert.deepEqual(nonAdditiveSql(sql), [code], sql);
+  // Additive SQL with harmless markers in literals and comments still passes.
+  assert.deepEqual(nonAdditiveSql("-- add; it's fine\nbegin;\ncreate table public.n(id int, t text default 'a;--b/*');\ncomment on table public.n is E'x\\'y';\n/* c /* d */ */\ncommit;\n"), []);
+});
+
+test('#491 review fix: DESTRUCTIVE_SQL reads the raw AND the lexed text (never weaker than before)', () => {
+  // Still caught inside literals and comments (raw scan), as before.
+  assert.ok(destructiveSql("comment on table public.a is 'drop table public.x';").includes('DROP'));
+  assert.ok(destructiveSql('-- delete from public.x\ncreate schema s;').includes('DELETE'));
+  // Newly caught: a ';' inside a literal no longer ends the ALTER TABLE pattern; a comment between keywords.
+  assert.ok(destructiveSql("alter table public.x add column y text default ';', drop column z;").includes('ALTER_DROP'));
+  assert.ok(destructiveSql('drop/**/table public.x;').includes('DROP'));
+  const r = classifyRelease(['supabase/migrations/1_x.sql'], [{ path: 'supabase/migrations/1_x.sql', sql: "comment on table public.companies is '--'; alter table public.companies disable row level security;" }]);
+  assert.deepEqual(r.reasons, ['NON_ADDITIVE_SQL:ALTER_TABLE:supabase/migrations/1_x.sql']);
 });

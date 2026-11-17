@@ -20,14 +20,83 @@ export const OWNER_CONSENT_PATHS = [
   ['PAYMENT_PATH_FREEZE', /^(app\/components\/marketing\/(content\.ts|package-comparison\.tsx)|app\/preselekcja\/|lib\/public-future-offers\.ts$)/],
   ['PAYMENT_PATH_FREEZE', /(^|[/._-])(kup|buy|checkout|orders?|catalogs?|offers?|packages?|cennik|prices?|purchases?|stripe|zakupy?|zamowieni[ae])([/._-]|$)/i],
   // The publisher never ships changes to itself, workflows, env files or Supabase config:
-  // those change who can do what, so they need a human merge.
-  ['SECRETS_OR_PIPELINE', /^(\.github\/|\.env|vercel\.json$|tools\/agent-pipeline\/|tools\/release\/|supabase\/config)/i],
+  // those change who can do what, so they need a human merge. `tools/db-migrate/` is the executor
+  // that runs with the production database credential (db-migrate-production and #491 auto-migrate).
+  ['SECRETS_OR_PIPELINE', /^(\.github\/|\.env|vercel\.json$|tools\/agent-pipeline\/|tools\/release\/|tools\/db-migrate\/|supabase\/config)/i],
 ];
 
 const NPM_MANIFEST = /^(package|package-lock)\.json$/;
 
+// Single-pass SQL lexer (#491 review fix). Comments, string literals and quoted identifiers are
+// recognised TOGETHER, left to right, as PostgreSQL reads them, so a `--` or `/*` inside a literal
+// cannot hide the statement after it (and a quote inside a comment cannot hide one either).
+// Handles: '…' with '' escapes, E'…' with backslash escapes, $$…$$ / $tag$…$tag$, "…" identifiers
+// with "" escapes, -- line comments and NESTED /* */ block comments.
+// Output: `text` with every comment replaced by a space, every literal by '' and every dollar body
+// by $$ (so `;` splits statements correctly); `dollar` when a dollar-quoted body was seen.
+// Anything it cannot read cleanly (unterminated literal, identifier, dollar body or comment; a
+// backslash in a plain literal, whose meaning depends on standard_conforming_strings) => ok:false.
+const IDENT_CHAR = /[\w$\u0080-￿]/;
+export function lexSql(sql) {
+  if (typeof sql !== 'string') return { ok: false, code: 'UNREADABLE', text: '', dollar: false };
+  let out = ''; let i = 0; let dollar = false;
+  const fail = code => ({ ok: false, code, text: out, dollar });
+  while (i < sql.length) {
+    const c = sql[i]; const next = sql[i + 1]; const prev = i > 0 ? sql[i - 1] : '';
+    if (c === '-' && next === '-') {
+      const end = sql.indexOf('\n', i + 2);
+      out += ' '; i = end < 0 ? sql.length : end + 1; continue;
+    }
+    if (c === '/' && next === '*') {
+      let depth = 1; i += 2;
+      while (i < sql.length && depth) {
+        if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2; }
+        else if (sql[i] === '*' && sql[i + 1] === '/') { depth--; i += 2; }
+        else i++;
+      }
+      if (depth) return fail('UNTERMINATED_COMMENT');
+      out += ' '; continue;
+    }
+    if (c === "'") {
+      // E'…' (escape string): the E must be a token of its own, not the end of an identifier.
+      const escape = /[eE]/.test(prev) && !IDENT_CHAR.test(i > 1 ? sql[i - 2] : '');
+      if (escape) out = out.slice(0, -1);
+      let j = i + 1; let closed = false;
+      while (j < sql.length) {
+        if (sql[j] === '\\') { if (!escape) return fail('AMBIGUOUS_LITERAL'); j += 2; continue; }
+        if (sql[j] === "'") { if (sql[j + 1] === "'") { j += 2; continue; } closed = true; break; }
+        j++;
+      }
+      if (!closed) return fail('UNTERMINATED_LITERAL');
+      out += "''"; i = j + 1; continue;
+    }
+    if (c === '"') {
+      let j = i + 1; let closed = false; let name = '';
+      while (j < sql.length) {
+        if (sql[j] === '"') { if (sql[j + 1] === '"') { name += '"'; j += 2; continue; } closed = true; break; }
+        name += sql[j]; j++;
+      }
+      if (!closed) return fail('UNTERMINATED_IDENTIFIER');
+      // A plain name keeps its spelling; anything else (spaces, ';', '--', quotes) becomes a neutral one.
+      out += /^[A-Za-z_][\w$]*$/.test(name) ? `"${name}"` : '"q"'; i = j + 1; continue;
+    }
+    if (c === '$' && !IDENT_CHAR.test(prev)) {
+      const m = /^\$([A-Za-z_\u0080-￿][\w\u0080-￿]*)?\$/.exec(sql.slice(i));
+      if (m) {
+        const end = sql.indexOf(m[0], i + m[0].length);
+        if (end < 0) return fail('UNTERMINATED_DOLLAR_QUOTE');
+        dollar = true; out += '$$'; i = end + m[0].length; continue;
+      }
+    }
+    out += c; i++;
+  }
+  return { ok: true, code: null, text: out, dollar };
+}
+
 // Destructive SQL: hard refusal, explicit code per kind. Scans the RAW text (comments and
-// literals included) so nothing can be hidden; a false positive only means "not automatic".
+// literals included, so nothing can be hidden there) AND the lexed text (where a `;` inside a
+// literal or a comment between keywords can no longer break a pattern); the union is refused.
+// A false positive only means "not automatic".
 const DESTRUCTIVE = [
   ['DROP', /\bdrop\s+(table|schema|column|view|materialized\s+view|function|procedure|type|index|sequence|trigger|policy|constraint|extension|role|owned|database|publication|rule)\b/i],
   ['DELETE', /\bdelete\s+from\b/i],
@@ -40,13 +109,15 @@ const DESTRUCTIVE = [
 
 export function destructiveSql(sql) {
   if (typeof sql !== 'string' || !sql.trim()) return ['UNREADABLE'];
-  return DESTRUCTIVE.filter(([, re]) => re.test(sql)).map(([code]) => code);
+  const lexed = lexSql(sql).text;
+  return DESTRUCTIVE.filter(([, re]) => re.test(sql) || re.test(lexed)).map(([code]) => code);
 }
 
 // #491 (review fix): ALLOWLIST of additive statements, an extra gate beside DESTRUCTIVE. Anything
 // not clearly additive is refused (NON_ADDITIVE_SQL) and waits for the owner via db-migrate-production.
-// Comments and string literals are stripped first; dollar quoting (function bodies, DO blocks) is
-// refused outright, as are policies, grants, functions, views, triggers, types and extensions.
+// The text is read by `lexSql` first (comments and literals in one pass); input it cannot read
+// cleanly is refused (UNPARSEABLE_*), dollar quoting (function bodies, DO blocks) is refused
+// outright, as are policies, grants, functions, views, triggers, types and extensions.
 const IDENT = String.raw`("?[a-z_][\w$]*"?\.)?"?[a-z_][\w$]*"?`;
 const ADDITIVE = [
   ['TXN', /^(begin|commit)$/],
@@ -60,10 +131,11 @@ const ADDITIVE = [
 ];
 export function nonAdditiveSql(sql) {
   if (typeof sql !== 'string' || !sql.trim()) return ['UNREADABLE'];
-  const text = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ').replace(/'(?:[^']|'')*'/g, "''");
-  if (/\$[a-z_0-9]*\$/i.test(text)) return ['DOLLAR_QUOTING'];
+  const lexed = lexSql(sql);
+  if (!lexed.ok) return [`UNPARSEABLE_${lexed.code}`];
+  if (lexed.dollar) return ['DOLLAR_QUOTING'];
   const bad = [];
-  for (const raw of text.split(';')) {
+  for (const raw of lexed.text.split(';')) {
     const st = raw.replace(/\s+/g, ' ').trim().toLowerCase();
     if (!st) continue;
     if (!ADDITIVE.some(([, re]) => re.test(st))) bad.push(st.split(' ').slice(0, 2).join('_').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 30) || 'STATEMENT');
