@@ -79,9 +79,9 @@ const consentLabel = () => {
   return page.slice(start, end);
 };
 
-test('the consent version is r2, differs from the Annex 1 consent, and the documents match the label', () => {
-  assert.equal(LEGAL_ACCEPTANCE_REVISION, '1.0+r2');
-  assert.equal(LEGAL_ACCEPTANCE_VALUE, 'v1.0+r2');
+test('the consent version is r3, differs from the Annex 1 consent, and the documents match the label', () => {
+  assert.equal(LEGAL_ACCEPTANCE_REVISION, '1.0+r3');
+  assert.equal(LEGAL_ACCEPTANCE_VALUE, 'v1.0+r3');
   assert.notEqual(LEGAL_ACCEPTANCE_REVISION, `${LEGAL_VERSION}+aneks1`, 'changed wording must not reuse the old revision');
   assert.deepEqual([...LEGAL_ACCEPTED_DOCUMENTS], ['regulamin', 'dpa', 'polityka-prywatnosci']);
   const label = consentLabel();
@@ -157,4 +157,28 @@ test('the archived annex 1 (voice interviews) lists voice sub-processors, retent
   const table = parsed.blocks.find((b) => b.kind === 'table');
   assert.equal(table.header.length, 3);
   assert.equal(table.rows.length, 3);
+});
+
+// R4 (issue #492): PRESELEKCJA result guarantee. Wording fixed by the owner (2026-11-17); the clause
+// must stay verbatim in the Regulamin and the .docx, and the offer copy must match the clause.
+const GUARANTEE_CLAUSE = 'Gwarancja wyniku PRESELEKCJI. Jeżeli raport z analizy 60 CV wskazuje mniej niż 5 kandydatów spełniających wszystkie wymagania oznaczone przez Klienta jako konieczne, Klient może w terminie 7 dni od otrzymania raportu zgłosić to na adres kontaktowy Usługodawcy. Usługodawca wspólnie z Klientem poprawia opis stanowiska i bezpłatnie powtarza analizę tych samych CV. Jeżeli powtórzona analiza nadal wskazuje mniej niż 5 takich kandydatów, Usługodawca zwraca Klientowi pełną cenę pakietu. Gwarancja obejmuje pierwszych 20 firm, które kupiły pakiet PRESELEKCJA, i nie ogranicza uprawnień Klienta z tytułu reklamacji.';
+
+test('the Regulamin carries the PRESELEKCJA guarantee verbatim, once, in § 10', () => {
+  const md = readFileSync(repo('docs/legal/v1.0/01_Regulamin_SkillCheck.md'), 'utf8');
+  assert.equal(md.split(GUARANTEE_CLAUSE).length - 1, 1);
+  const s10 = md.slice(md.indexOf('# § 10.'), md.indexOf('# § 11.'));
+  assert.ok(s10.includes(`5. ${GUARANTEE_CLAUSE}`), 'it is point 5 of § 10');
+});
+
+test('the PRESELEKCJA offer page shows the guarantee copy, no report time, no calls', async () => {
+  const { preselekcjaGuarantee } = await import('../lib/preselekcja-guarantee.ts');
+  const { preselekcjaOffer } = await import('../lib/preselekcja-offer.ts');
+  assert.equal(preselekcjaGuarantee.headline, '60 CV. Minimum 5 kandydatów spełniających Twoje wymagania konieczne. Albo oddajemy pieniądze.');
+  assert.equal(preselekcjaGuarantee.points.length, 3);
+  assert.match(preselekcjaGuarantee.points[1], new RegExp(`Zwrot ${preselekcjaOffer.grossPln} zł`));
+  assert.match(preselekcjaGuarantee.points.join(' '), /pierwszych 20 firm.*7 dni od otrzymania raportu/);
+  assert.doesNotMatch(JSON.stringify(preselekcjaGuarantee), /godzin|dni robocz|minut|rozmow|telefon|\bgłos|\bbot/i);
+  const page = readFileSync(repo('app/preselekcja/page.tsx'), 'utf8');
+  assert.match(page, /preselekcjaGuarantee\.headline/);
+  assert.match(page, /preselekcjaGuarantee\.points\.map/);
 });

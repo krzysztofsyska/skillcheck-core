@@ -9,6 +9,9 @@ import {
   requirementStatusLabels, type CandidateReport, type CandidateRequirement,
 } from '../../../../../../../../lib/candidate-report';
 import { exportHistoryView, loadCandidateReportExportHistory } from '../../../../../../../../lib/candidate-report-export';
+import {
+  loadCompetencyReportSection, type CompetencyReportSection, type CompetencyReportTest,
+} from '../../../../../../../../lib/candidate-report-competency';
 import { criterionKindLabels, requirementMarkLabels, requirementMarkOrder, type RequirementMark } from '../../../../../../../../lib/requirement-flags';
 import styles from '../screening/screening.module.css';
 import printStyles from './candidate-report-print.module.css';
@@ -55,10 +58,59 @@ function RequirementCard({ requirement }: { requirement: CandidateRequirement })
   </article>;
 }
 
+// R2-B: wynik testu kompetencji oceniony przez człowieka. Treść kandydata to
+// zwykły tekst w JSX (nigdy HTML). Bez wyniku zbiorczego i bez rankingu.
+function CompetencyTestCard({ test, evaluatePath }: { test: CompetencyReportTest; evaluatePath: string }) {
+  if (test.state === 'in_progress') {
+    return <article className={`${styles.criterion} ${printStyles.requirement}`}>
+      <p>Wersja zadania {test.definitionVersion}</p>
+      <p><strong>W trakcie</strong> — kandydat jeszcze nie oddał odpowiedzi.</p>
+    </article>;
+  }
+  const { review } = test;
+  // Karta testu może być dłuższa niż strona A4: dzielimy ją między kryteriami,
+  // a pojedyncze kryterium z cytatem zostaje w całości.
+  return <article className={`${styles.criterion} ${printStyles.competencyTest}`}>
+    <p>Wersja zadania {test.definitionVersion}</p>
+    <h4>{test.title}</h4>
+    {!review
+      ? <p><strong>Odpowiedź oddana — czeka na ocenę rekrutera.</strong>
+        {' '}<a href={evaluatePath} className={printStyles.noPrint}>Oceń odpowiedź</a></p>
+      : <>
+        <p><strong>Ocenione przez człowieka</strong> · wersja oceny {review.version}</p>
+        <p><small>Ocenił(a): {review.reviewer} · {new Date(review.reviewedAt).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })} (Warszawa)</small></p>
+        <p>Kryteria z cytatem z odpowiedzi: {review.evidencedCriteria} z {review.totalCriteria}.</p>
+        {review.criteria.map(criterion => <div key={criterion.criterionIndex} className={printStyles.requirement}>
+          <h5>{criterion.competency}</h5>
+          <p><strong>{criterion.ratingLabel}</strong></p>
+          {criterion.rubric && <p><small>Opis poziomu w rubryce: {criterion.rubric}</small></p>}
+          {criterion.evidence
+            ? <blockquote className={printStyles.quote}>{criterion.evidence}
+              <footer><small>Cytat z odpowiedzi kandydata wskazany przez oceniającego</small></footer></blockquote>
+            : <p>Oceniający nie wskazał cytatu — za mało danych w odpowiedzi. To nie jest niska ocena.</p>}
+        </div>)}
+      </>}
+  </article>;
+}
+
+function CompetencySection({ section, base }: { section: CompetencyReportSection; base: string }) {
+  if (section.kind === 'hidden') return null;
+  return <div>
+    <h2>Test kompetencji</h2>
+    <p>Poziomy i cytaty wskazał człowiek oceniający odpowiedź kandydata według rubryki zadania.
+      Ocena dotyczy tej wersji zadania i nie jest decyzją o zatrudnieniu.</p>
+    {section.kind === 'list'
+      ? <>{section.tests.map(test => <CompetencyTestCard key={test.attemptId} test={test}
+          evaluatePath={`${base}/exercises?attempt=${test.attemptId}`} />)}
+        {section.truncated && <p><small>Pokazujemy najnowsze testy. Pozostałe są w zakładce zadań.</small></p>}</>
+      : <p role="status">{section.message}</p>}
+  </div>;
+}
+
 export default async function CandidateReportPage({ params }: { params: Promise<ScreeningRoute> }) {
   const route = await params;
   const { companyId, recruitmentId, applicationId } = route;
-  const { client } = await companyAccess(companyId);
+  const { client, company, user, canEdit } = await companyAccess(companyId);
   if (!Object.values(route).every(isUuid)) notFound();
   const base = `/dashboard/${companyId}/recruitments/${recruitmentId}`;
   let report: CandidateReport;
@@ -75,6 +127,9 @@ export default async function CandidateReportPage({ params }: { params: Promise<
   const { summary } = report;
   // SC-015-D2: błąd odczytu historii daje neutralny komunikat, nigdy nie psuje raportu.
   const exportHistory = exportHistoryView(await loadCandidateReportExportHistory(client, route));
+  // R2-B: błąd odczytu testu daje neutralny komunikat, nigdy nie psuje raportu.
+  const competency = await loadCompetencyReportSection(client, route,
+    { userId: user.id, ownerId: company.owner_id ?? null, canEdit });
 
   return <main className={`workspace ${styles.screening} ${printStyles.reportRoot}`}><section>
     <Link href={base} className={printStyles.noPrint}>← Rekrutacja</Link>
@@ -128,6 +183,8 @@ export default async function CandidateReportPage({ params }: { params: Promise<
           : <p>Brak wymagań w tej grupie.</p>}
       </div>;
     })}
+
+    <CompetencySection section={competency} base={`${base}/applications/${applicationId}`} />
 
     <div className={printStyles.noPrint}>
       <h2>Dalsze kroki</h2>
