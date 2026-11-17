@@ -8,6 +8,8 @@ Decyzje właściciela z 2026-11-04 (czat): poziom L3 z osobną tabelą na oznacz
 profile pokazują wymagania jako **nieoznaczone**, dopóki rekruter sam ich nie sklasyfikuje;
 obecny eksport CSV raportu preselekcji zostaje bez zmian.
 
+Sekcje rozszerzonego raportu (test kompetencji, ćwiczenia, etapy rekrutacji) opisuje osobny dokument: [sc-015-extended-candidate-report.md](sc-015-extended-candidate-report.md).
+
 ## 1. Oznaczenie wymagania: konieczne / dodatkowe / nieoznaczone
 
 ### Dlaczego osobna tabela

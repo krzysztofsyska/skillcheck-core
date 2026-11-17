@@ -81,9 +81,36 @@ export function acFinalistLabels(
   return (applicationId: string) => names.get(applications.find(row => row.id === applicationId)?.candidate_id ?? '') ?? 'Finalista';
 }
 
+/** Etykieta, gdy autor zapisu nie jest już w zespole firmy albo zespołu nie udało się wczytać. */
+export const AC_ASSESSOR_OUTSIDE_TEAM = 'Osoba spoza obecnego zespołu';
+export const AC_ASSESSOR_UNKNOWN = 'Asesor';
+type AcTeamMember = { user_id: string; created_at?: string | null };
+
+/**
+ * Czytelna etykieta asesora zamiast identyfikatora konta (ROADMAP R3). Bez nowych danych osobowych:
+ * „Ty”, „Właściciel firmy” albo „Członek zespołu N” (N = kolejność dołączenia do zespołu firmy,
+ * stała między odświeżeniami). Gdy listy zespołu nie ma (null) — neutralne „Asesor”.
+ */
+export function acAssessorLabels(viewerId: string, ownerId: string, members: ReadonlyArray<AcTeamMember> | null) {
+  const ordered = [...(members ?? [])].filter(row => row.user_id !== ownerId)
+    .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? '') || a.user_id.localeCompare(b.user_id));
+  const labels = new Map<string, string>();
+  for (const row of ordered) if (!labels.has(row.user_id)) labels.set(row.user_id, `Członek zespołu ${labels.size + 1}`);
+  return (id: string) => id === viewerId ? 'Ty' : id === ownerId ? 'Właściciel firmy'
+    : labels.get(id) ?? (members ? AC_ASSESSOR_OUTSIDE_TEAM : AC_ASSESSOR_UNKNOWN);
+}
+
+/** Zespół firmy do etykiet asesorów — ten sam odczyt RLS (company_members) co lista asesorów do przypisania. */
+export async function loadAcTeam(client: Client, companyId: string) {
+  const members = await client.from('company_members').select('user_id,role,created_at').eq('company_id', companyId);
+  return members.error ? null : members.data;
+}
+
 export type AcSessionExport = {
   recruitmentId: string; recruitmentName: string; generatedAt: string; viewerId: string;
   report: AssessmentCenterSessionReport; finalistLabel: (applicationId: string) => string;
+  /** Etykieta asesora (acAssessorLabels); bez niej — tylko „Ty” albo neutralne „Asesor”, nigdy identyfikator. */
+  assessorLabel?: (userId: string) => string;
 };
 
 export function acSessionExportFilename(recruitmentId: string, generatedAt: string) {
@@ -95,7 +122,7 @@ export function acSessionExportFilename(recruitmentId: string, generatedAt: stri
 
 export function acSessionCsv(data: AcSessionExport): string {
   const { report } = data;
-  const who = (id: string) => id === data.viewerId ? 'Ty' : id;
+  const who = data.assessorLabel ?? ((id: string) => id === data.viewerId ? 'Ty' : AC_ASSESSOR_UNKNOWN);
   const rows: (string | number | null)[][] = [
     ['Wersja eksportu', AC_SESSION_EXPORT_VERSION], ['Wygenerowano (UTC)', data.generatedAt],
     ['Rekrutacja', data.recruitmentName], ['Identyfikator rekrutacji', data.recruitmentId],
@@ -207,7 +234,7 @@ async function accessContext(client: Client, companyId: string, recruitmentId: s
   const position = await client.from('positions').select('id,company_id').eq('company_id', companyId).eq('id', recruitment.data.position_id).maybeSingle();
   if (position.error) throw new AcSessionExportError('failed');
   if (!position.data || !exercisePositionMatches(position.data, companyId, recruitment.data.position_id)) throw new AcSessionExportError('not_found');
-  return { user, recruitment: recruitment.data };
+  return { user, ownerId: company.data.owner_id, recruitment: recruitment.data };
 }
 
 const uuidResult = (value: unknown): value is string => typeof value === 'string' && exerciseUuid.test(value);
@@ -237,7 +264,7 @@ export async function exportAcSession(
     if (!enabled) throw new AcSessionExportError('not_found');
     if (!route || !exerciseUuid.test(route.companyId) || !exerciseUuid.test(route.recruitmentId)) throw new AcSessionExportError('invalid');
     const companyId = route.companyId.toLowerCase(), recruitmentId = route.recruitmentId.toLowerCase();
-    const { user, recruitment } = await accessContext(client, companyId, recruitmentId);
+    const { user, ownerId, recruitment } = await accessContext(client, companyId, recruitmentId);
     const read = await readAcSession(client, recruitmentId);
     if (read.state === 'unavailable') throw new AcSessionExportError('unavailable');
     if (read.state === 'none') throw new AcSessionExportError('not_found');
@@ -247,10 +274,12 @@ export async function exportAcSession(
     if (read.session.session.recruitmentId.toLowerCase() !== recruitmentId) throw new AcSessionExportError('changed');
     const finalistLabel = await loadAcFinalistLabels(client, companyId, recruitmentId);
     if (!finalistLabel) throw new AcSessionExportError('failed');
+    const team = await loadAcTeam(client, companyId);
+    if (!team) throw new AcSessionExportError('failed');
     const generatedAt = now().toISOString();
     const csv = acSessionCsv({
       recruitmentId, recruitmentName: recruitment.name, generatedAt, viewerId: user.id,
-      report: buildAssessmentCenterSessionReport(read.session), finalistLabel,
+      report: buildAssessmentCenterSessionReport(read.session), finalistLabel, assessorLabel: acAssessorLabels(user.id, ownerId, team),
     });
     await recordAcSessionExport(client, companyId, recruitmentId, read.session.session.id.toLowerCase());
     return new Response(csv, { headers: {
