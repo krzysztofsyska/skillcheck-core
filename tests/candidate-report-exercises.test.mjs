@@ -220,6 +220,51 @@ test('R2-B ćwiczenia: oceniona wersja spoza 100 najnowszych definicji jest docz
   assert.ok(extra.eqs.some(([k, v]) => k === 'definition->>kind' && v === 'assessment_center'));
 });
 
+test('R2-B ćwiczenia: przy ponad 100 ocenionych wersjach wyświetlana wersja nie jest błędnie „nieocenione"', async () => {
+  // 101 ocenionych wersji. Widok obserwacji porządkuje po id wersji, a definicje
+  // idą po dacie: najnowsza wersja (największe id) wypada z okna obserwacji.
+  const count = EXERCISES_SCAN_LIMIT + 1;
+  const time = i => `2026-11-20T${String(10 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`;
+  const defs = Array.from({ length: count }, (_, i) => defRow(1000 + i, 100, 1 + i, time(i)));
+  const observations = Array.from({ length: count }, (_, i) => obsRow(1000 + i, { id: id(5000 + i) }));
+  const { client, calls } = fakeClient({ exercise_definition_entries: defs, latest_exercise_observations: observations });
+  const section = await loadExercisesReportSection(client, route, recruiter);
+  assert.equal(section.kind, 'list');
+  assert.equal(section.truncated, true);
+  assert.equal(section.exercises.length, EXERCISES_REPORT_LIMIT);
+  const [newest] = section.exercises;
+  assert.equal(newest.definitionEntryId, id(1000 + count - 1));
+  assert.equal(newest.status, 'incomplete_evidence');
+  assert.notEqual(newest.statusLabel, 'Nieocenione');
+  assert.equal(newest.evidencedCriteria, 1);
+  assert.equal(newest.criteria[0].observerNote, 'Zadał otwarte pytanie.');
+  assert.ok(section.exercises.every(e => e.status !== 'not_assessed' && e.observation !== null));
+  // Doczytanie obserwacji: tylko wczytane wersje bez wpisu, z pełnym zakresem firma → rekrutacja → zgłoszenie.
+  const extra = calls.filter(c => c.table === 'latest_exercise_observations').at(-1);
+  assert.equal(calls.filter(c => c.table === 'latest_exercise_observations').length, 2);
+  assert.doesNotMatch(extra.select, /\*|work_sample/);
+  assert.deepEqual(extra.eqs.slice(0, 3), [['company_id', route.companyId], ['recruitment_id', route.recruitmentId],
+    ['application_id', route.applicationId]]);
+  assert.equal(extra.eqs[3][0], 'definition_entry_id');
+
+  // Błąd doczytania albo obcy wpis w doczytaniu przerywa sekcję zamiast pokazać „nieocenione".
+  const error = { kind: 'error', message: exercisesSectionMessages.error };
+  let reads = 0;
+  const failing = { from: table => {
+    const q = client.from(table);
+    if (table !== 'latest_exercise_observations') return q;
+    reads += 1;
+    if (reads === 1) return q;
+    const broken = { ...q, then: (resolve, reject) => Promise.resolve({ data: null, error: { code: 'PT500' } }).then(resolve, reject) };
+    for (const k of ['select', 'eq', 'in', 'limit', 'order']) broken[k] = () => broken;
+    return broken;
+  } };
+  assert.deepEqual(await loadExercisesReportSection(failing, route, recruiter), error);
+  const forged = fakeClient({ exercise_definition_entries: defs, latest_exercise_observations: [
+    ...observations, { ...obsRow(9999, { id: id(9998) }), __forged: true }] });
+  assert.deepEqual(await loadExercisesReportSection(forged.client, route, recruiter), error);
+});
+
 test('R2-B ćwiczenia: 100 nowszych testów kompetencji nie ukrywa starszego, nieocenionego ćwiczenia AC', async () => {
   // Rodzaj jest filtrowany w zapytaniu przed limitem, więc testy kompetencji nie zajmują okna odczytu.
   const filler = Array.from({ length: EXERCISES_SCAN_LIMIT }, (_, i) =>
