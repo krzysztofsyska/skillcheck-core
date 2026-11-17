@@ -30,6 +30,15 @@ export function exerciseAiApprovalError(code?: string) {
   return 'Nie udało się zatwierdzić propozycji. Spróbuj ponownie.';
 }
 
+export type ExerciseAiAutoReleaseState = { error?: string; autoRelease?: boolean };
+/** R1-SWITCH: plain-Polish messages for public.set_exercise_ai_auto_release errors. */
+export function exerciseAiAutoReleaseError(code?: string) {
+  if (code === '55000') return 'Tej rekrutacji nie można już zmienić: jest zamknięta albo stanowisko jest zarchiwizowane.';
+  if (code === '42501') return 'Nie masz uprawnień do zmiany tego ustawienia.';
+  return 'Nie udało się zapisać ustawienia. Spróbuj ponownie.';
+}
+
+
 /** Lifecycle fields are written exclusively by the database revision workflow. */
 export function exerciseAiLifecycle(provenance: ExerciseAiProposalReview['proposal']['provenance']) {
   if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance)) return {state:'pending',reason:null,edited:false};

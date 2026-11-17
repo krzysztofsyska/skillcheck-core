@@ -4,6 +4,7 @@ import { exerciseContext, exerciseUuid } from '../../../../../../lib/exercise-co
 import { behaviorSchemaMissing } from '../../../../../../lib/behavior-assessment';
 import { randomUUID } from 'node:crypto';
 import { ExerciseGenerationForm } from '../exercise-generation-form';
+import { ExerciseAiAutoReleaseSection } from '../exercise-ai-auto-release-section';
 export default async function Exercises({ params, searchParams }: {
   params: Promise<{companyId: string; recruitmentId: string}>; searchParams: Promise<{after?: string}>;
 }) {
@@ -23,6 +24,7 @@ export default async function Exercises({ params, searchParams }: {
     <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}`}>← Rekrutacja</Link>
     <h1>Zadania — {recruitment.name}</h1>
     <p>Testy kompetencji i ćwiczenia Assessment Center. Definicja opisuje zadanie i kryteria; nie jest oceną kandydata.</p>
+    <ExerciseAiAutoReleaseSection client={client} companyId={companyId} recruitmentId={recruitmentId} canEdit={canEdit} editable={editable}/>
     {result.error ? <p role="status">Moduł zadań nie jest jeszcze dostępny w tym środowisku.</p> : <>
       {editable && <Link href={`${base}/new`}>Utwórz zadanie</Link>}
       {generationEnabled && !company?.error && <details><summary>Przygotuj zadanie z pomocą AI</summary>

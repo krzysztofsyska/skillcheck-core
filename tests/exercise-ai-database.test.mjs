@@ -411,6 +411,71 @@ test('propozycje AI: migracja, limit wywołań, ślad pochodzenia i zwolnienie z
     assert.ok(incoming.every(k => k.confdeltype === 'c'), 'cykl życia wymuszają FK CASCADE');
   });
 
+  await t.test('R1-SWITCH: przełącznik rekrutera przez Data API (public) z kontrolą dostępu', async () => {
+    // Migracja wymaga sygnatury inwentarza SC-010; w tym środowisku zastępuje ją stała,
+    // więc sprawdzamy, że migracja jej nie zmienia, a nie samą wartość.
+    await db.exec(`reset role;create schema if not exists private;
+      create or replace function private.erasure_schema_signature() returns text language sql stable as $$select 'test-signature'$$;`);
+    await db.exec(await readFile(new URL('../supabase/migrations/20261117150000_exercise_ai_auto_release_api.sql', import.meta.url), 'utf8'));
+    const acl = (await db.query(`select p.proname, p.proacl::text acl, p.prosecdef from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public' and p.proname in ('read_exercise_ai_settings','set_exercise_ai_auto_release') order by 1`)).rows;
+    assert.deepEqual(acl.map(r => [r.proname, r.acl, r.prosecdef]), [
+      ['read_exercise_ai_settings', '{postgres=X/postgres,authenticated=X/postgres}', true],
+      ['set_exercise_ai_auto_release', '{postgres=X/postgres,authenticated=X/postgres}', true]]);
+    const fresh = await seed(ownerA);
+    await db.query('insert into public.company_members(company_id,user_id,role) values($1,$2,$3),($1,$4,$5)',
+      [fresh.company, recruiter, 'recruiter', viewer, 'viewer']);
+    const read = async (company = fresh.company, recruitment = fresh.recruitment) =>
+      (await db.query('select public.read_exercise_ai_settings($1,$2) v', [company, recruitment])).rows[0].v;
+    const set = (enabled, company = fresh.company, recruitment = fresh.recruitment) =>
+      db.query('select public.set_exercise_ai_auto_release($1,$2,$3) v', [company, recruitment, enabled]);
+    // Brak wiersza ustawień = tryb ręczny.
+    assert.equal(await read(), false);
+    await as(recruiter);
+    assert.equal((await set(true)).rows[0].v, true);
+    assert.equal(await read(), true);
+    const row = (await db.query('select auto_release,set_by from exercise_ai.recruitment_settings where recruitment_id=$1', [fresh.recruitment])).rows[0];
+    assert.deepEqual([row.auto_release, row.set_by], [true, recruiter], 'zapis imienny przez exercise_ai.set_auto_release');
+    // Tryb ustawiony przyciskiem działa w bazie: nowa propozycja AI jest zwalniana automatycznie.
+    const entry = await saveDefinition(fresh);
+    await record(entry, fresh);
+    assert.equal((await db.query('select approval_mode from exercise_ai.proposals where definition_entry_id=$1', [entry])).rows[0].approval_mode, 'auto');
+    await as(ownerA);
+    assert.equal((await set(false)).rows[0].v, false);
+    assert.equal(await read(), false);
+    await rejects(set(null), '22023');
+    // Czytelnik, obca firma, rekrutacja innej firmy i nieistniejąca rekrutacja: jeden błąd 42501.
+    await as(viewer);
+    await rejects(read(), '42501');
+    await rejects(set(true), '42501');
+    await as(ownerB);
+    await rejects(read(), '42501');
+    await rejects(set(true), '42501');
+    await rejects(read(b.company, fresh.recruitment), '42501');
+    await rejects(set(true, b.company, fresh.recruitment), '42501');
+    await as(ownerA);
+    await rejects(read(fresh.company, b.recruitment), '42501');
+    await rejects(set(true, fresh.company, b.recruitment), '42501');
+    await rejects(set(true, fresh.company, '99999999-0000-0000-0000-000000000000'), '42501');
+    await as(null, 'anon');
+    await rejects(read(), '42501');
+    await rejects(set(true), '42501');
+    // Rekrutacja zamknięta albo stanowisko zarchiwizowane: zmiana odrzucona, odczyt działa.
+    await db.exec('reset role');
+    await db.query("update public.recruitments set status='closed' where id=$1", [fresh.recruitment]);
+    await as(ownerA);
+    await rejects(set(true), '55000');
+    assert.equal(await read(), false);
+    await db.exec('reset role');
+    await db.query("update public.recruitments set status='open' where id=$1", [fresh.recruitment]);
+    await db.query("update public.positions set status='archived' where id=$1", [fresh.position.id]);
+    await as(recruiter);
+    await rejects(set(true), '55000');
+    await db.exec('reset role');
+    await db.query("update public.positions set status='draft' where id=$1", [fresh.position.id]);
+    assert.equal((await db.query("select private.erasure_schema_signature() v")).rows[0].v, 'test-signature');
+  });
+
   await t.test('bez logowania nie da się zapisać ani zwolnić propozycji', async () => {
     await as(null, 'anon');
     await rejects(db.query('select exercise_ai.record_proposal($1,$2,$3::jsonb,$4)',

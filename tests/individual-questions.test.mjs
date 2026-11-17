@@ -4,7 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  individualQuestionsForCandidate, loadShortlistIndividualQuestions, INDIVIDUAL_QUESTIONS_MAX_CANDIDATES,
+  individualQuestionsForCandidate, loadShortlistIndividualQuestions, loadCandidateIndividualQuestions,
+  INDIVIDUAL_QUESTIONS_MAX_CANDIDATES,
 } from '../lib/individual-questions.ts';
 import { EXERCISE_AI_MAX_INDIVIDUAL_QUESTIONS } from '../lib/exercise-ai.ts';
 
@@ -193,4 +194,61 @@ test('UI: page is gated by the same flag and edit rights; copy states separation
   assert.doesNotMatch(section, /'use client'|<form|action=/);
   const list = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/exercises/page.tsx', import.meta.url), 'utf8');
   assert.match(list, /canEdit && process\.env\.EXERCISE_AI_ENABLED==='true' && <p><Link href=\{`\$\{base\}\/individual-questions`\}>/);
+});
+
+// --- one candidate, on that candidate's task page ------------------------
+const one = { ...args, applicationId: uuid(3) };
+
+test('single: flag off or no edit rights → null and no database reads', async () => {
+  for (const extra of [{ flag: undefined }, { flag: 'false' }, { canEdit: false }]) {
+    const client = fakeClient(baseTables());
+    assert.equal(await loadCandidateIndividualQuestions(client, { ...one, ...extra }, deps), null);
+    assert.equal(client.calls.length, 0);
+  }
+});
+
+test('single: reads the active shortlist entry of exactly this application, scoped to company', async () => {
+  const client = fakeClient(baseTables());
+  const result = await loadCandidateIndividualQuestions(client, one, deps);
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.questions.map(q => q.question), ['Pytanie 1?']);
+  const shortlistCall = client.calls.find(call => call.table === 'recruitment_shortlist_entries');
+  assert.equal(filter(shortlistCall, 'recruitment_id'), uuid(2));
+  assert.equal(filter(shortlistCall, 'application_id'), uuid(3));
+  assert.deepEqual(shortlistCall.filters.find(([op]) => op === 'is'), ['is', 'removed_at', null]);
+  for (const call of client.calls) assert.equal(filter(call, 'company_id'), uuid(1), `${call.table} scoped to company`);
+  // Neither candidate names nor CV text are read here.
+  assert.ok(!client.calls.some(call => call.table === 'candidates' || call.table === 'applications'));
+  for (const call of client.calls) assert.doesNotMatch(call.select ?? '', /\*|redacted_text|input_cv_text_snapshot|secret/);
+});
+
+test('single: not on the shortlist → not_shortlisted and no analysis reads', async () => {
+  const client = fakeClient(baseTables({ recruitment_shortlist_entries: () => ({ data: [], error: null }) }));
+  assert.deepEqual(await loadCandidateIndividualQuestions(client, one, deps), { status: 'not_shortlisted', questions: [] });
+  assert.deepEqual(client.calls.map(call => call.table), ['recruitment_shortlist_entries']);
+});
+
+test('single: read error, duplicate or foreign entry fails closed', async () => {
+  for (const data of [null, [entry(), entry()], [entry({ application_id: uuid(4) })]]) {
+    const client = fakeClient(baseTables({ recruitment_shortlist_entries: () => ({ data, error: data ? null : { code: '42501' } }) }));
+    assert.deepEqual(await loadCandidateIndividualQuestions(client, one, deps), { status: 'unavailable', questions: [] });
+  }
+});
+
+test('single: same human-approval gate as the list', async () => {
+  const client = fakeClient(baseTables({ screening_result_reviews: () => ({ data: [], error: null }) }));
+  assert.equal((await loadCandidateIndividualQuestions(client, one, deps)).status, 'awaiting_review');
+  const stale = fakeClient(baseTables());
+  assert.equal((await loadCandidateIndividualQuestions(stale, one, { fingerprint: async () => 'b'.repeat(64) })).status, 'outdated');
+});
+
+test('UI: candidate task page shows the questions read-only, behind flag and edit rights', () => {
+  const page = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/applications/[applicationId]/exercises/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /loadCandidateIndividualQuestions\(client,\{\.\.\.route,canEdit,flag:process\.env\.EXERCISE_AI_ENABLED\}\)/);
+  assert.match(page, /\{individual&&<CandidateIndividualQuestions result=\{individual\}\/>\}/);
+  const section = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/candidate-individual-questions.tsx', import.meta.url), 'utf8');
+  assert.match(section, /Ocenia się je osobno/);
+  assert.match(section, /nie wchodzą do wspólnego wyniku testu kompetencji/);
+  assert.match(section, /nic nie zostało wysłane kandydatowi/);
+  assert.doesNotMatch(section, /'use client'|<form|action=/);
 });

@@ -7,6 +7,8 @@ import {staffWorkSample} from '../../../../../../../../lib/competency-staff-resp
 import {competencyReport,parseCompetencyAccess,competencyStates} from '../../../../../../../../lib/competency-staff';
 import type {ExerciseDefinition} from '../../../../../../../../lib/exercise-definition';
 import {CompetencyGrantForm,CompetencyReviewForm} from '../../../competency-forms';
+import {loadCandidateIndividualQuestions} from '../../../../../../../../lib/individual-questions';
+import {CandidateIndividualQuestions} from '../../../candidate-individual-questions';
 export default async function ExerciseChoices({params,searchParams}:{params:Promise<BehaviorRoute>;searchParams:Promise<{after?:string; attempt?:string}>}){
   const route=await params,{after,attempt}=await searchParams;
   const {client,candidate,canEdit}=await loadBehaviorContext(route);
@@ -43,6 +45,8 @@ export default async function ExerciseChoices({params,searchParams}:{params:Prom
   if(result.error&&!behaviorSchemaMissing(result.error.code))throw new Error('Nie udało się wczytać zadań.');
   const base=`/dashboard/${route.companyId}/recruitments/${route.recruitmentId}/applications/${route.applicationId}`;
   const rows=result.data?.slice(0,25)??[];
+  // R1 / C6: tylko do odczytu, za flagą EXERCISE_AI_ENABLED i dla właściciela lub rekrutera.
+  const individual=await loadCandidateIndividualQuestions(client,{...route,canEdit,flag:process.env.EXERCISE_AI_ENABLED});
   return <main className="workspace"><section><Link href={`${base}/assessments`}>← Etapy oceny</Link>
     <h1>Wykonanie zadań — {candidate.first_name} {candidate.last_name}</h1>
     {staffPreview && <section><h2>Oddane testy kompetencji</h2>
@@ -79,6 +83,7 @@ export default async function ExerciseChoices({params,searchParams}:{params:Prom
       </>}
       <Link href={`${base}/exercises/${row.id}`}>Obserwacje i historia dla tej wersji</Link>
     </article>)}
+    {individual&&<CandidateIndividualQuestions result={individual}/>}
     {(result.data?.length??0)>25&&<Link href={`${base}/exercises?after=${rows[24].id}`}>Następna strona</Link>}
   </section></main>;
 }
