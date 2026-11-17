@@ -173,11 +173,10 @@ Details and reason codes: [docs/continuous-release-policy.md](docs/continuous-re
 
 - **Authorization of a release** = green required CI on the exact SHA + an independent reviewer's PASS on the exact SHA (with the `sc-review-verdict:v1` marker), from a session other than the builder's. Without the marker the publisher cannot release that PR. The builder never merges its own code.
 - **The publisher** (`.github/workflows/auto-release.yml`, runs from `main`, schedule + after `Checks` on `integration`, no manual start) releases one reviewed PR at a time to `main` as `release/auto-pr-<N>`, confirms the Vercel deployment, smoke-tests production, and on failure reverts and opens an `[auto-release-freeze]` issue that stops further releases.
-- **Payment-path freeze**: no release may change the payment integration (any provider), the purchase flow, prices, the package catalog or order states until Stripe works in test mode and the owner lifts the freeze. Such a change is refused (`PAYMENT_PATH_FREEZE`) even when every gate is green. Showing WERYFIKACJA and ASSESSMENT CENTER as not-yet-purchasable offer text (ROADMAP R4) is not such a change. HOLD P24 no longer exists; do not cite it.
+- **Payment-path freeze**: no release may change the payment integration (any provider), the purchase flow, prices, the package catalog or order states until Stripe works in test mode and the owner lifts the freeze. Such a change is refused (`PAYMENT_PATH_FREEZE`) even when every gate is green. Live payments, the Fakturownia automation and taking money from anyone remain closed. HOLD P24 no longer exists; do not cite it.
 - **Worker gate**: `WORKER_DEPLOY_REQUIRED` stays until the automatic screening-worker deploy (#461) works.
 - **Always refused automatically**: payments, outbound sends, workflows/pipeline/secrets, destructive SQL, and every migration until a fresh backup and an unattended migration executor exist (#491).
 - Rulesets `main-production-protection` and `protect-main-integration` stay as they are. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent.
-- A release block never blocks work on `integration`.
 
 ## Agent controller
 

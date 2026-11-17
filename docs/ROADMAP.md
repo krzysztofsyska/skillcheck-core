@@ -109,7 +109,7 @@ Docelowo w każdym pakiecie (FREE 1 rozmowa, płatne 10). Do czasu, aż działa,
 
 Nie podejmować i nie proponować: SC-020 white-label (issue #21); SC-021 bramka AI i kontrola
 kosztów (issue #81); Quality of Hire; talent pool; chatbot informacyjny (SC-022); automatyzacja
-Fakturowni w tym repozytorium (w `skillcheck-preselekcja` odblokowana — zob. `docs/DECYZJE.md`);
+Fakturowni w tym repozytorium (decyzja dla `skillcheck-preselekcja` — zob. `docs/DECYZJE.md`, 17.11.2026, 14:34);
 analiza treści rozmów.
 
 ## Poza tym repozytorium

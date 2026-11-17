@@ -46,13 +46,17 @@ that finds itself citing this note to skip a gate has misread it.
 
 ## Working efficiently
 
-- Independent steps can run in parallel through subagents (one subagent = one step, own branch, own
-  Draft PR, own tests). The specialised subagents in `.claude/agents/` are optional helpers:
-  payments and packages → `platnosci`, AI limits and costs → `limity-ai`, site, pricing page and
-  legal documents → `strona-i-dokumenty`, CI and build failures → `testy-i-ci`, typos and small text
-  changes → `drobne-poprawki`.
 - Do not add new GitHub workflows or agent-pipeline tooling unless the task is explicitly about that.
 - Do not paste long handoffs into the chat; the handoff goes into the PR description.
+
+## Delegowanie
+Zanim zaczniesz zadanie, przekaż je właściwemu podagentowi z .claude/agents:
+- płatności, faktury, pakiety -> platnosci
+- limity i koszty AI, abonament -> limity-ai
+- strona, cennik, regulamin, dokumenty -> strona-i-dokumenty
+- błędy CI, testy, buildy -> testy-i-ci
+- literówki, teksty, drobne zmiany -> drobne-poprawki
+Sam rób tylko planowanie i przegląd. Oszczędzaj limit: proste rzeczy zawsze do drobne-poprawki.
 
 ## Status report at the end of every session
 

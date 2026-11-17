@@ -2,20 +2,40 @@
 
 ## Zasady tego pliku
 
-1. Tu, i tylko tu, zapisujemy decyzje właściciela (Krzysztof): data, godzina, dosłowny cytat, czego
-   dotyczy. Agent nie streszcza decyzji własnymi słowami i niczego do cytatu nie dopisuje.
+1. Tu, i tylko tu, zapisujemy decyzje właściciela (Krzysztof): data, godzina i dosłowny cytat jego
+   wiadomości. Agent nie streszcza decyzji własnymi słowami. Jedyny tekst agenta to krótki nagłówek
+   wpisu i — gdy odpowiedź właściciela jest krótka („tak”, „ok”) — dosłowne brzmienie pytania lub
+   propozycji czatu, na które odpowiadał.
 2. `docs/ROADMAP.md`, `AGENTS.md` i `CLAUDE.md` zawierają tylko obowiązującą regułę, bez cytatów.
    Gdy reguła i wpis tutaj się różnią, rozstrzyga najnowsza wiadomość właściciela.
 3. Wpisy są dopisywane na górze sekcji danego dnia. Starsze wpisy zostają jako historia; nieaktualne
    oznaczamy dopiskiem „NIEAKTUALNE (data)”, nie kasujemy.
-4. Starsza historia (do 15.11.2026) jest w historii git oraz w `docs/BACKLOG.md` (archiwum).
+4. Decyzje sprzed 16.11.2026 są w historii git plików `AGENTS.md` i `CLAUDE.md` (stan sprzed
+   17.11.2026) oraz w `docs/BACKLOG.md` (archiwum).
 
 ## 17.11.2026
 
-**Porządek dokumentów pracy (ten plik, ROADMAP, AGENTS, CLAUDE).** Czat zaproponował: jedna
-roadmapa z kolejnością, osobny dziennik decyzji, krótkie AGENTS.md i CLAUDE.md, statusy
-aktualizowane przez wykonawcę w PR kończącym krok. Właściciel, 17:07: „przygotuj wszystkie trzy
-dokumenty aby były wykonawczo zbieżne”.
+**Porządek dokumentów pracy i statusy w ROADMAP aktualizowane przez wykonawcę.** Propozycja czatu
+(punkty 2 i 3 planu): „Zmienić zasadę: kolejność i zakres zmieniasz tylko Ty, a statusy agent
+aktualizuje sam po scaleniu PR.” oraz „Przenieść cytaty decyzji z ROADMAP, AGENTS.md i CLAUDE.md do
+nowego `docs/DECYZJE.md`.” Właściciel:
+
+- 17:07 „przygotuj wszystkie trzy dokumenty aby były wykonawczo zbieżne i czy to co jest w toku
+  można podmienić i czy można jeszcze podmienić”
+- 17:18 „przygotuj do wykonawcy i recenzenta polecenia aby było spójne z agents, cloude i roadmap
+  i abyśmy przyśpieszyli proces”
+- 18:10 „poszło” — po samodzielnym wklejeniu nowego polecenia zadania „Skillcheck — wykonawca zadań
+  GitHub”, którego punkt 3 brzmi: „W tym samym PR, który zaczyna albo kończy krok, aktualizujesz
+  w docs/ROADMAP.md tylko jego status i dowód (numer PR). Kolejności, zakresu, pozycji i cen nie
+  zmieniasz.”
+
+**skillcheck-preselekcja: zakres przeniesienia i Fakturownia.** 14:34 „Zakres: całość A–D przed
+startem sprzedaży. Pakiety na stronie: WERYFIKACJA i Assessment Center mają być widoczne
+w skillcheck-preselekcja jako „wkrótce” wraz z opisem funkcjonalności. 3 tak” — „3 tak” to odpowiedź
+na pytanie czatu: „Fakturownia: w core jej automatyzacja jest na liście wstrzymanych. Tu jest
+potrzebna, żeby faktury wychodziły bez Twojego udziału. Odblokowujesz ją dla tej aplikacji?”
+Dotyczy wyłącznie `skillcheck-preselekcja`; w `skillcheck-core` automatyzacja Fakturowni pozostaje
+zamknięta.
 
 **Porządki przyspieszające pracę (J3).** 10:41 „W takim razie robimy tylko punkty 1,2,3,5” —
 w odpowiedzi na plan czatu, w którym punkt 2 brzmiał: „Zlecam w skillcheck-core usunięcie starego
@@ -71,30 +91,3 @@ wyłącznie „tak jak polecasz”.
 i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów
 i ustawień, zakaz kasowania danych i nowych kosztów.” Wiadomość z 18:47: „sesja recenzenta może sama
 scalić wydanie na produkcję”.
-
-**Wydania bez kliknięć właściciela (#369).** Właściciel zdecydował w swojej wiadomości
-(https://claude.ai/code/session_01TVLzgcKNUtgiz4KTVzeVwF), że żaden krok wydania nie może wymagać
-jego kliknięcia, zatwierdzenia ani ręcznego uruchomienia. Szczegóły:
-[docs/continuous-release-policy.md](continuous-release-policy.md).
-
-**Bramka workera.** Zapis „Accepted cost (owner, 2026-11-16)” w PR #460 wpisał czat, nie właściciel.
-Bramka `WORKER_DEPLOY_REQUIRED` zostaje tymczasowo, do ukończenia
-[#461](https://github.com/krzysztofsyska/skillcheck-core/issues/461).
-
-**Rezygnacja z Przelewy24.** Właściciel zrezygnował z Przelewy24; sprzedaż FREE i PRESELEKCJI ze
-Stripe idzie w `krzysztofsyska/skillcheck-preselekcja`. Sekcja AGENTS.md o Sandboxie Przelewy24
-z 11.11.2026 jest NIEAKTUALNA (16.11.2026) i została usunięta; jej treść jest w historii git.
-
-## 15.11.2026 i wcześniej — skrót historii (nie cytaty)
-
-Poniższe linie to skrót przeniesiony z dawnych zapisów w `AGENTS.md` i `CLAUDE.md`, nie cytaty.
-Dosłowne brzmienie jest w historii git tamtych plików.
-
-- 15.11.2026: HOLD P24 zdjęty jako blokada wydań; zastąpiony zamrożeniem ścieżki płatności
-  (obowiązuje — zob. `AGENTS.md`, „Continuous release policy”).
-- 06.11.2026: rekruter może puścić testy kompetencji automatycznie (potwierdzone 16.11.2026 wyżej).
-- 05.11.2026: rola wykonawcy przypisana Codexowi — NIEAKTUALNE (17.11.2026): kod pisze sesja
-  wykonawcy Claude Code, ocenia osobna sesja recenzenta.
-- 01.11.2026: uwagi bezpieczeństwa zawsze poprawiane na gałęzi przed scaleniem; rutynowe kroki
-  agent wykonuje sam i raportuje; raport statusu na Dysk Google po każdej sesji.
-- 29.10.2026: tożsamość GitHub sesji agentów, wariant B (zob. `AGENTS.md`, Production access rule 5).
