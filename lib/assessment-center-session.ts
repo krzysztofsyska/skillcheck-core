@@ -219,6 +219,33 @@ function agreement(pair: Pair, index: number): AcCriterionAgreement {
 }
 
 /**
+ * Why one planned competency in one stage has no evidence from both assessors (#338: "jawne braki
+ * dowodów w raporcie"). Derived only from what the RPC already returned to this viewer, so it
+ * never reveals a sheet the viewer may not see: a restricted pair stays "restricted", a pending
+ * pair stays "awaiting_sheets". It carries no text written by anyone, only who left the gap.
+ */
+export type AcEvidenceGap =
+  | { competency: string; stageTitle: null; reason: 'no_stage' }
+  | { competency: string; stageTitle: string; reason: 'not_assigned' | 'restricted' | 'awaiting_sheets' }
+  | { competency: string; stageTitle: string; reason: 'insufficient_data'; assessors: Array<{ position: 1 | 2; authorId: string }> };
+
+function evidenceGaps(competency: string, rows: ReadonlyArray<{
+  stageTitle: string; agreement: AcCriterionAgreement; assessors: ReadonlyArray<{ authorId: string; hasEvidence: boolean }>;
+}>): AcEvidenceGap[] {
+  if (!rows.length) return [{ competency, stageTitle: null, reason: 'no_stage' }];
+  return rows.flatMap((row): AcEvidenceGap[] => {
+    const { stageTitle } = row;
+    if (row.agreement.status === 'not_assessed') return [{ competency, stageTitle, reason: 'not_assigned' }];
+    if (row.agreement.status === 'restricted') return [{ competency, stageTitle, reason: 'restricted' }];
+    if (row.agreement.status === 'awaiting_second_sheet') return [{ competency, stageTitle, reason: 'awaiting_sheets' }];
+    // Both sheets were returned: every "insufficient_data" rating is an explicit gap, even if an agreement exists.
+    const assessors = row.assessors.flatMap((item, index) => item.hasEvidence ? []
+      : [{ position: (index + 1) as 1 | 2, authorId: item.authorId }]);
+    return assessors.length ? [{ competency, stageTitle, reason: 'insufficient_data', assessors }] : [];
+  });
+}
+
+/**
  * Per finalist and per planned competency: both assessors' evidence, agreed versus
  * discrepant items, first versus revised attempt and the expert's notes. Finalists
  * keep the order in which they were added. There is no total, no rank, no verdict.
@@ -230,9 +257,8 @@ export function buildAssessmentCenterSessionReport(session: AssessmentCenterSess
     coverage: coverage.rows, uncovered: coverage.uncovered,
     finalistAdvice: finalistAdvice(session.finalists.length),
     stages: session.stages.map(({ id: stageId, ordinal, type, title, counterpartBrief, definition }) => ({ id: stageId, ordinal, type, title, counterpartBrief, exerciseTitle: definition.title })),
-    finalists: session.finalists.map(finalist => ({
-      applicationId: finalist.applicationId, slot: finalist.slot, textHidden: finalist.textHidden,
-      competencies: session.session.plannedCompetencies.map(competency => {
+    finalists: session.finalists.map(finalist => {
+      const competencies = session.session.plannedCompetencies.map(competency => {
         const evidence = session.stages.flatMap((stage, stageIndex) => {
           const criterionIndex = stage.definition.criteria.findIndex(criterion => competencyKey(criterion.competency) === competency);
           if (criterionIndex < 0) return [];
@@ -244,22 +270,26 @@ export function buildAssessmentCenterSessionReport(session: AssessmentCenterSess
           return [{ stageId: stage.id, stageTitle: stage.title, criterionIndex, assessors, agreement: agreement(pair, criterionIndex) }];
         });
         return { competency, evidence, hasEvidence: evidence.some(row => row.assessors.some(item => item.hasEvidence)) };
-      }),
-      attempts: session.stages.map((stage, stageIndex) => {
-        const entries = finalist.stages[stageIndex].entries;
-        const find = (kind: EntryKind) => entries.find(entry => entry.kind === kind) ?? null;
-        const first = find('first_attempt'), feedback = find('feedback'), revised = find('revised_attempt'), proof = find('change_proof');
-        return {
-          stageId: stage.id, stageTitle: stage.title,
-          firstAttempt: first && { work: first.body.work, authorId: first.authorId, createdAt: first.createdAt },
-          feedback: feedback && { feedback: feedback.body.feedback, authorId: feedback.authorId, createdAt: feedback.createdAt },
-          revisedAttempt: revised && { work: revised.body.work, authorId: revised.authorId, createdAt: revised.createdAt },
-          changeProof: proof && { changes: proof.body.changes, evidence: proof.body.evidence,
-            assessment: proof.body.assessment as AcChangeAssessment, authorId: proof.authorId, createdAt: proof.createdAt },
-        };
-      }),
-      expertNotes: finalist.expertNotes,
-    })),
+      });
+      return {
+        applicationId: finalist.applicationId, slot: finalist.slot, textHidden: finalist.textHidden, competencies,
+        evidenceGaps: competencies.flatMap(item => evidenceGaps(item.competency, item.evidence)),
+        attempts: session.stages.map((stage, stageIndex) => {
+          const entries = finalist.stages[stageIndex].entries;
+          const find = (kind: EntryKind) => entries.find(entry => entry.kind === kind) ?? null;
+          const first = find('first_attempt'), feedback = find('feedback'), revised = find('revised_attempt'), proof = find('change_proof');
+          return {
+            stageId: stage.id, stageTitle: stage.title,
+            firstAttempt: first && { work: first.body.work, authorId: first.authorId, createdAt: first.createdAt },
+            feedback: feedback && { feedback: feedback.body.feedback, authorId: feedback.authorId, createdAt: feedback.createdAt },
+            revisedAttempt: revised && { work: revised.body.work, authorId: revised.authorId, createdAt: revised.createdAt },
+            changeProof: proof && { changes: proof.body.changes, evidence: proof.body.evidence,
+              assessment: proof.body.assessment as AcChangeAssessment, authorId: proof.authorId, createdAt: proof.createdAt },
+          };
+        }),
+        expertNotes: finalist.expertNotes,
+      };
+    }),
   } as const;
 }
 export type AssessmentCenterSessionReport = ReturnType<typeof buildAssessmentCenterSessionReport>;

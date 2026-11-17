@@ -79,6 +79,34 @@ test('all append-only expert notes remain readable after the 200th note', () => 
   assert.equal(result.finalists[0].expertNotes[200].note, 'Konsultacja nr 201');
 });
 
+test('#338: explicit evidence gaps per finalist — why each competency × stage lacks evidence from both assessors', () => {
+  const [one, two] = report(sessionPayload()).finalists;
+  assert.deepEqual(one.evidenceGaps, [
+    { competency: 'Myślenie finansowe', stageTitle: 'Etap 2 — konsekwencje finansowe', reason: 'awaiting_sheets' },
+    // An agreed record does not erase the gap in the sheet that gave no evidence.
+    { competency: 'Myślenie finansowe', stageTitle: 'Etap 3 — plan zmiany', reason: 'insufficient_data', assessors: [{ position: 2, authorId: ids.recruiter }] },
+    { competency: 'Planowanie zmiany', stageTitle: 'Etap 4 — rozmowa z dyrektorem operacyjnym', reason: 'not_assigned' },
+    { competency: 'Komunikacja z biznesem', stageTitle: 'Etap 4 — rozmowa z dyrektorem operacyjnym', reason: 'not_assigned' },
+  ]);
+  // Fully evidenced pairs (stage 1, criterion 1 of stage 3) are not gaps.
+  assert.ok(!one.evidenceGaps.some(gap => gap.competency === 'Diagnoza przyczyn'));
+  assert.ok(two.evidenceGaps.length === 6 && two.evidenceGaps.every(gap => gap.reason === 'not_assigned'));
+
+  // A restricted pair never reveals whether its sheets hold evidence.
+  const restricted = sessionPayload();
+  restricted.finalists[0].stages[0].pair = { state: 'restricted' };
+  const gap = report(restricted).finalists[0].evidenceGaps.find(item => item.competency === 'Diagnoza przyczyn');
+  assert.deepEqual(gap, { competency: 'Diagnoza przyczyn', stageTitle: 'Etap 1 — diagnoza przyczyn rotacji', reason: 'restricted' });
+
+  // A planned competency with no stage (possible only in a draft) is a gap without a stage.
+  const draft = sessionPayload({ status: 'draft' });
+  draft.session.plannedCompetencies = [...draft.session.plannedCompetencies, 'Odporność na stres'];
+  assert.deepEqual(report(draft).finalists[0].evidenceGaps.at(-1), { competency: 'Odporność na stres', stageTitle: null, reason: 'no_stage' });
+
+  // Gaps carry no text written by anyone.
+  assert.doesNotMatch(JSON.stringify(one.evidenceGaps), /Asesor(Pierwszy|Drugi)|Uzasadnienie|OpisRozbieznosci|evidence|note/);
+});
+
 test('a disputed reconciliation is never shown as an agreement', () => {
   const payload = sessionPayload();
   Object.assign(payload.finalists[0].stages[0].pair.reconciliation, { confirmation: 'disputed', disputeNote: 'Nie zgadzam się z zapisem uzgodnienia.' });
