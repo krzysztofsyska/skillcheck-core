@@ -169,6 +169,13 @@ export function codexGate(comments, headSha) {
  * `workerModules` is the import closure of the worker, computed by the trusted caller from
  * the release commit. Fail closed: not an array means the closure is unknown.
  */
+// #461 stage 1: the publisher now carries a worker deploy STEP (`publisher.mjs`
+// `deployWorkerStep`, real runner in `worker-deploy.mjs`) that runs after the merge and before
+// smoke, and `afterDeploy` refuses DONE without its confirmation. This gate still refuses every
+// such release on purpose: the deploy token is not placed in the publisher's environment yet,
+// and no automatic worker deploy has been verified for real. #461 stage 2 (a separate commit and
+// review) turns this block into the step, once the token is placed and one real deploy has been
+// verified.
 export const WORKER_PATHS = /^supabase\/functions\//;
 export function workerGate(files, workerModules) {
   if (!Array.isArray(files)) return ['WORKER_SCOPE_UNKNOWN'];
@@ -292,12 +299,27 @@ export function evaluateCandidate(input) {
 const PRODUCT_CODE = /^(app|lib|components|scripts|supabase|db|public|middleware\.ts|next\.config)/;
 const deny = reasons => ({ decision: 'DENY', reasons, migrations: [] });
 
-/** What to do after the production deployment was checked. */
-export function afterDeploy({ deployed, smokeOk, migrationsApplied }) {
+/**
+ * What to do after the production deployment was checked.
+ * @param worker  result of the worker deploy step (#461): { required, ok, unavailable? }.
+ *                Fail closed: anything else is WORKER_SCOPE_UNKNOWN, never a silent skip.
+ */
+export function afterDeploy({ deployed, smokeOk, migrationsApplied, worker }) {
   const codes = [];
-  if (deployed === true && smokeOk === true) return { action: 'DONE', freeze: false, codes };
-  codes.push(deployed === true ? 'SMOKE_FAILED' : 'DEPLOYMENT_NOT_CONFIRMED');
+  const workerCode = workerOutcome(worker);
+  if (deployed === true && smokeOk === true && !workerCode) return { action: 'DONE', freeze: false, codes };
+  if (deployed !== true) codes.push('DEPLOYMENT_NOT_CONFIRMED');
+  // A failed worker step means smoke never ran, so it is not reported as a smoke failure.
+  else if (workerCode) codes.push(workerCode);
+  else codes.push('SMOKE_FAILED');
   // Rolling code back does not undo data changes made by a migration.
   if (Array.isArray(migrationsApplied) && migrationsApplied.length) codes.push('ROLLBACK_INSUFFICIENT_DATA_CHANGED');
   return { action: 'ROLLBACK', freeze: true, codes };
+}
+
+function workerOutcome(worker) {
+  if (!worker || typeof worker !== 'object' || typeof worker.required !== 'boolean') return 'WORKER_SCOPE_UNKNOWN';
+  if (!worker.required) return null;
+  if (worker.unavailable === true) return 'WORKER_DEPLOY_UNAVAILABLE';
+  return worker.ok === true ? null : 'WORKER_DEPLOY_FAILED';
 }

@@ -124,6 +124,8 @@ Since 2026-11-16 single reviewed PRs reach production through the automatic publ
 
 Owner decision 2026-11-16 (15:19, confirmed 15:21; quoted in the PR #463 description; confirmed again in his own words on 2026-11-16 at 18:47 Europe/Warsaw in session https://claude.ai/code/session_01TVLzgakSJXczDxExtJ8Zba: „sesja recenzenta może sama scalić wydanie na produkcję"; this text updated at his request the same evening): **the owner no longer merges promotion PRs himself.**
 
+The 15:19 decision, quoted verbatim: „Sesja recenzenta może scalić promocję integration → main, gdy testy są zielone na dokładnej wersji i jest niezależna ocena pozytywna. Bez zmian zostają: zamrożenie płatności, zakaz zmiany sekretów i ustawień, zakaz kasowania danych i nowych kosztów.”
+
 1. Orchestrator/builder prepares a promotion PR from `integration` to `main`, with the release manifest and the exact list of migrations.
 2. All required checks must be green on the **exact** head SHA of the promotion PR.
 3. An independent reviewer session (fresh context, that wrote none of the changes in the promotion) posts PASS naming that exact head SHA. Every `chatgpt-codex-connector` bot finding on the PR is fixed or answered with a reason. If the promotion contains migrations, the PASS states whether the released code works on the pre-migration schema; if it does not, the reviewer merges only after the owner has said he can approve the migrations right away.
