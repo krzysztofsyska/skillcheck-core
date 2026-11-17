@@ -23,7 +23,15 @@ function fakeClient(tables, { errors = {} } = {}) {
     const result = () => {
       calls.push(state);
       if (errors[table]) return { data: null, error: errors[table] };
-      let rows = (tables[table] ?? []).filter(row => state.eqs.every(([k, v]) => !(k in row) || (typeof v === 'function' ? v(row[k]) : row[k] === v) || row.__forged));
+      // Ścieżka JSON jak w PostgREST: 'definition->>kind' czyta pole obiektu.
+      const field = (row, k) => {
+        const [column, key] = k.split('->>');
+        return key === undefined ? [column in row, row[column]] : [column in row, row[column]?.[key]];
+      };
+      let rows = (tables[table] ?? []).filter(row => state.eqs.every(([k, v]) => {
+        const [present, value] = field(row, k);
+        return !present || (typeof v === 'function' ? v(value) : value === v) || row.__forged;
+      }));
       if (state.order) {
         const dir = state.order[1]?.ascending === false ? -1 : 1;
         rows = [...rows].sort((a, b) => String(a[state.order[0]]).localeCompare(String(b[state.order[0]])) * dir);
@@ -105,7 +113,9 @@ test('R2-B ćwiczenia: ocena obserwatora z notatką, wersje, rola; bez tekstu pr
   const [defs, obs] = calls;
   assert.equal(defs.table, 'exercise_definition_entries');
   assert.doesNotMatch(defs.select, /\*/);
-  assert.deepEqual(defs.eqs, [['company_id', route.companyId], ['recruitment_id', route.recruitmentId]]);
+  assert.deepEqual(defs.eqs, [['company_id', route.companyId], ['recruitment_id', route.recruitmentId],
+    ['definition->>kind', 'assessment_center']]);
+  assert.equal(defs.limit, EXERCISES_SCAN_LIMIT + 1);
   assert.equal(obs.table, 'latest_exercise_observations');
   assert.doesNotMatch(obs.select, /\*|work_sample/);
   assert.deepEqual(obs.eqs, [['company_id', route.companyId], ['recruitment_id', route.recruitmentId], ['application_id', route.applicationId]]);
@@ -186,9 +196,9 @@ const stageTables = (overrides = {}) => ({
 });
 
 test('R2-B ćwiczenia: oceniona wersja spoza 100 najnowszych definicji jest doczytana po id', async () => {
-  // 100 nowszych definicji innych ćwiczeń wypycha ocenioną wersję poza limit odczytu.
+  // 100 nowszych, nieocenionych wersji AC tego samego ćwiczenia wypycha ocenioną wersję poza limit odczytu.
   const filler = Array.from({ length: EXERCISES_SCAN_LIMIT }, (_, i) =>
-    defRow(1000 + i, 2000 + i, 1, `2026-11-20T10:${String(i % 60).padStart(2, '0')}:00Z`, competencyDefinition));
+    defRow(1000 + i, 100, 3 + i, `2026-11-20T${String(10 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`));
   const { client, calls } = fakeClient({
     exercise_definition_entries: [
       ...filler,
@@ -207,6 +217,23 @@ test('R2-B ćwiczenia: oceniona wersja spoza 100 najnowszych definicji jest docz
   assert.ok(extra.eqs.some(([k, v]) => k === 'company_id' && v === route.companyId));
   assert.ok(extra.eqs.some(([k, v]) => k === 'recruitment_id' && v === route.recruitmentId));
   assert.ok(extra.eqs.some(([k]) => k === 'id'));
+  assert.ok(extra.eqs.some(([k, v]) => k === 'definition->>kind' && v === 'assessment_center'));
+});
+
+test('R2-B ćwiczenia: 100 nowszych testów kompetencji nie ukrywa starszego, nieocenionego ćwiczenia AC', async () => {
+  // Rodzaj jest filtrowany w zapytaniu przed limitem, więc testy kompetencji nie zajmują okna odczytu.
+  const filler = Array.from({ length: EXERCISES_SCAN_LIMIT }, (_, i) =>
+    defRow(1000 + i, 2000 + i, 1, `2026-11-20T${String(10 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`, competencyDefinition));
+  const { client, calls } = fakeClient({
+    exercise_definition_entries: [...filler, defRow(10, 100, 1, '2026-11-01T10:00:00Z')],
+  });
+  const section = await loadExercisesReportSection(client, route, recruiter);
+  assert.equal(section.kind, 'list');
+  assert.equal(section.truncated, false);
+  assert.deepEqual(section.exercises.map(e => [e.definitionEntryId, e.status]), [[id(10), 'not_assessed']]);
+  const defs = calls.find(c => c.table === 'exercise_definition_entries');
+  assert.ok(defs.eqs.some(([k, v]) => k === 'definition->>kind' && v === 'assessment_center'));
+  assert.equal(defs.limit, EXERCISES_SCAN_LIMIT + 1);
 });
 
 test('R2-B etapy: czytelnik bez roli rekrutera nie wywołuje zapytań', async () => {

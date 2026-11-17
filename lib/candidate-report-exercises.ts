@@ -99,6 +99,8 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 const definitionColumns = 'id,exercise_id,company_id,recruitment_id,version,definition,created_at';
+// Rodzaj ćwiczenia leży w JSON `definition` (CHECK w 20261002000300).
+const definitionKindColumn = 'definition->>kind';
 // Bez work_sample: tekst pracy kandydata nie jest potrzebny w raporcie.
 const observationColumns = 'id,company_id,recruitment_id,application_id,definition_entry_id,version,observations,author_id,created_at';
 
@@ -113,8 +115,11 @@ export async function loadExercisesReportSection(
   try {
     if (!reportRouteValid(route)) return { kind: 'error', message: exercisesSectionMessages.error };
     const [definitions, observations] = await Promise.all([
+      // Rodzaj filtrujemy w bazie PRZED limitem: inaczej 100 nowszych testów
+      // kompetencji wypchnęłoby starsze ćwiczenie AC poza okno odczytu.
       client.from('exercise_definition_entries').select(definitionColumns)
         .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId)
+        .eq(definitionKindColumn, 'assessment_center')
         .order('created_at', { ascending: false }).limit(EXERCISES_SCAN_LIMIT + 1),
       client.from('latest_exercise_observations').select(observationColumns)
         .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId)
@@ -149,6 +154,7 @@ export async function loadExercisesReportSection(
       if (missingIds.some(key => !reportUuid.test(key))) throw new Error('Niezgodna obserwacja.');
       const referenced = await client.from('exercise_definition_entries').select(definitionColumns)
         .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId)
+        .eq(definitionKindColumn, 'assessment_center')
         .in('id', missingIds);
       if (referenced.error) {
         return reportSchemaMissing(referenced.error.code)
@@ -160,7 +166,7 @@ export async function loadExercisesReportSection(
         .sort((a, b) => String(record(b).created_at).localeCompare(String(record(a).created_at)));
     }
 
-    // Tylko ćwiczenia AC. Każda oceniona wersja zostaje; ćwiczenie bez żadnej
+    // Tylko ćwiczenia AC (baza już filtruje; tu kontrola obronna). Każda oceniona wersja zostaje; ćwiczenie bez żadnej
     // obserwacji pokazujemy raz, w najnowszej wersji, jako „nieocenione".
     const rows = allDefinitions.map(record)
       .filter(row => record(row.definition).kind === 'assessment_center');
