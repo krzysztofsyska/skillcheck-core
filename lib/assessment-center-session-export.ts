@@ -12,7 +12,10 @@
 //    bez wyniku ogólnego, rankingu i rekomendacji;
 //  * nazwa pliku zawiera tylko identyfikator rekrutacji i datę, nigdy nazwisk;
 //  * każda komórka przechodzi przez csvCell (ochrona przed formułami);
-//  * komunikaty błędów nie zdradzają, czy rekord innej firmy istnieje; nic nie trafia do logów.
+//  * komunikaty błędów nie zdradzają, czy rekord innej firmy istnieje; nic nie trafia do logów;
+//  * SC-AC-EXPORT-AUDIT: bez udanego wpisu audytowego nie ma pliku (fail closed). Tuż przed
+//    wydaniem pliku baza jeszcze raz sprawdza rolę (właściciel/rekruter) i przynależność sesji
+//    (public.record_assessment_center_session_export); wpis zawiera tylko identyfikatory i rolę.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
@@ -143,7 +146,8 @@ export function acSessionCsv(data: AcSessionExport): string {
   return csv;
 }
 
-export type AcSessionExportErrorCode = 'invalid' | 'unauthenticated' | 'not_found' | 'unavailable' | 'changed' | 'too_large' | 'failed';
+export type AcSessionExportErrorCode =
+  'invalid' | 'unauthenticated' | 'not_found' | 'unavailable' | 'changed' | 'too_large' | 'audit_failed' | 'failed';
 const errors: Record<AcSessionExportErrorCode, [number, string]> = {
   invalid: [400, 'Nieprawidłowy adres sesji.'],
   unauthenticated: [401, 'Zaloguj się, aby pobrać podsumowanie sesji.'],
@@ -151,6 +155,7 @@ const errors: Record<AcSessionExportErrorCode, [number, string]> = {
   unavailable: [503, 'Sesje Assessment Center nie są jeszcze dostępne w tym środowisku.'],
   changed: [409, 'Nie udało się zweryfikować danych sesji. Plik nie został przygotowany.'],
   too_large: [413, 'Podsumowanie przekracza dopuszczalny rozmiar pliku.'],
+  audit_failed: [503, 'Nie udało się zapisać wpisu o pobraniu podsumowania, więc plik nie został wydany. Spróbuj ponownie.'],
   failed: [500, 'Nie udało się przygotować pliku. Spróbuj ponownie.'],
 };
 export class AcSessionExportError extends Error {
@@ -205,6 +210,24 @@ async function accessContext(client: Client, companyId: string, recruitmentId: s
   return { user, recruitment: recruitment.data };
 }
 
+const uuidResult = (value: unknown): value is string => typeof value === 'string' && exerciseUuid.test(value);
+
+/** Zapis audytowy przed wydaniem pliku. Każdy błąd lub niepoprawna odpowiedź = brak pliku. */
+async function recordAcSessionExport(client: Client, companyId: string, recruitmentId: string, sessionId: string) {
+  let result: { data: unknown; error: { code?: string } | null };
+  try {
+    result = await client.rpc('record_assessment_center_session_export', {
+      target_company: companyId, target_recruitment: recruitmentId, target_session: sessionId, export_kind: 'ac_session_csv',
+    });
+  } catch { throw new AcSessionExportError('audit_failed'); }
+  if (result.error) {
+    // Baza odmówiła dostępu (np. rola odebrana między odczytem a zapisem): jak strona — 404.
+    if (result.error.code === '42501') throw new AcSessionExportError('not_found');
+    throw new AcSessionExportError('audit_failed');
+  }
+  if (!uuidResult(result.data)) throw new AcSessionExportError('audit_failed');
+}
+
 type ExportOptions = { enabled: boolean; now?: () => Date };
 export async function exportAcSession(
   client: Client, route: { companyId: string; recruitmentId: string }, { enabled, now = () => new Date() }: ExportOptions,
@@ -229,6 +252,7 @@ export async function exportAcSession(
       recruitmentId, recruitmentName: recruitment.name, generatedAt, viewerId: user.id,
       report: buildAssessmentCenterSessionReport(read.session), finalistLabel,
     });
+    await recordAcSessionExport(client, companyId, recruitmentId, read.session.session.id.toLowerCase());
     return new Response(csv, { headers: {
       ...acSessionExportHeaders, 'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="${acSessionExportFilename(recruitmentId, generatedAt)}"`,
