@@ -4,6 +4,9 @@
 .quote { overflow-wrap: anywhere; }
 /* R2-B: karta testu kompetencji dzieli się między kryteriami, nie w środku kryterium. */
 .competencyTest h4 { break-after: avoid; }
+/* R2-B: karta ćwiczenia jak karta testu; wpis etapu albo decyzji nie jest dzielony. */
+.exerciseCard h4 { break-after: avoid; }
+.stageList li { break-inside: avoid; page-break-inside: avoid; }
 .reportRoot { overflow: visible; }
 
 @page { size: A4; margin: 14mm; }
@@ -14,6 +17,8 @@
   .reportRoot h2, .reportRoot h3, .reportRoot h4, .reportRoot h5 { break-after: avoid; }
   .requirement { background: white; border: 1px solid #a7b4c5; padding: 8pt; }
   .competencyTest { background: white; border: 1px solid #a7b4c5; padding: 8pt; }
+  .exerciseCard { background: white; border: 1px solid #a7b4c5; padding: 8pt; }
+  .exerciseCard .requirement { border: none; border-top: 1px solid #cedced; padding: 6pt 0 0; }
   .competencyTest .requirement { border: none; border-top: 1px solid #cedced; padding: 6pt 0 0; }
   .quote { font-size: 9.5pt; }
   .footer { color: #111; break-inside: avoid; }
