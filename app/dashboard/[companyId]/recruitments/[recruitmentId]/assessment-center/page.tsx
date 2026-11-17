@@ -1,13 +1,16 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { exerciseContext } from '../../../../../../lib/exercise-context';
-import { behaviorRatings } from '../../../../../../lib/behavior-assessment';
 import { assessmentCenterPreviewEnabled } from '../../../../../../lib/assessment-center-preview';
 import { parseExerciseDefinition } from '../../../../../../lib/exercise-definition';
 import {
   AC_FINALIST_LIMIT, AC_NO_DATA, AC_RECOMMENDED_FINALISTS, AC_STAGE_LIMIT, acChangeAssessments, acStageTypes,
-  buildAssessmentCenterSessionReport, parseAssessmentCenterSession, type AcCriterionAgreement, type AssessmentCenterSession,
+  buildAssessmentCenterSessionReport,
 } from '../../../../../../lib/assessment-center-session';
+import {
+  AC_TEXT_WITHHELD, acAgreementText, acChangeLabel as changeLabel, acRatingLabel as ratingLabel, acSessionStatusLabel as statusLabel,
+  loadAcFinalistLabels, readAcSession,
+} from '../../../../../../lib/assessment-center-session-export';
 import {
   addAcSessionFinalist, addAcSessionStage, assignAcSessionPair, confirmAcReconciliation, createAcSession, createAcSessionFromTemplate,
   recordAcReconciliation, recordAcSessionEntry, removeAcSessionFinalist, removeLastAcSessionStage, setAcSessionStatus,
@@ -17,24 +20,8 @@ import { AcSessionForm } from './forms';
 // SC-AC-SESSION (#276). Preview-only page behind AC_PAIRED_SHEETS_PREVIEW. It shows
 // evidence for a human decision: no total, no ranking, no hire/reject suggestion.
 export const dynamic = 'force-dynamic';
-const ratingLabel = (value: string) => behaviorRatings.find(([key]) => key === value)?.[1] ?? AC_NO_DATA;
 const stageTypeLabel = (value: string) => acStageTypes.find(([key]) => key === value)?.[1] ?? value;
-const changeLabel = (value: string) => acChangeAssessments.find(([key]) => key === value)?.[1] ?? AC_NO_DATA;
 const when = (value: string) => <time dateTime={value}>{new Date(value).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })}</time>;
-const statusLabel = { draft: 'Plan w przygotowaniu', open: 'Sesja otwarta', closed: 'Sesja zamknięta' } as const;
-
-function Agreement({ value, who }: { value: AcCriterionAgreement; who: (id: string) => string }) {
-  switch (value.status) {
-    case 'not_assessed': return <p>Uzgodnienie: {AC_NO_DATA} — nie przypisano asesorów.</p>;
-    case 'restricted': return <p>Arkusze widzą tylko dwaj asesorzy tego etapu i właściciel firmy.</p>;
-    case 'awaiting_second_sheet': return <p>Uzgodnienie: {AC_NO_DATA} — porównanie będzie dostępne po oddaniu obu arkuszy.</p>;
-    case 'not_reconciled': return <p>{value.ratingsDiffer ? 'Różne oceny asesorów — wymagane uzgodnienie albo zapis rozbieżności.' : 'Oceny zgodne — brak zapisu uzgodnienia.'}</p>;
-    case 'awaiting_confirmation': return <p>Propozycja uzgodnienia ({who(value.recordedBy)}): {ratingLabel(value.rating)} — {value.justification}. Czeka na odpowiedź drugiego asesora.</p>;
-    case 'agreed': return <p>Uzgodniono: {ratingLabel(value.rating)} — {value.justification} (zapis: {who(value.recordedBy)}, potwierdzony przez drugiego asesora).</p>;
-    case 'discrepancy': return <p>Jawna rozbieżność — obie oceny pozostają: {value.note} (zapis: {who(value.recordedBy)}{value.awaitingConfirmation ? ', czeka na odpowiedź drugiego asesora' : ''}).</p>;
-    case 'disputed': return <p>Zapis uzgodnienia zakwestionowany przez {who(value.disputedBy)}: {value.disputeNote}. Obie oceny pozostają jako rozbieżność.</p>;
-  }
-}
 
 export default async function AssessmentCenterSessionPage({ params }: { params: Promise<{ companyId: string; recruitmentId: string }> }) {
   if (!assessmentCenterPreviewEnabled()) notFound();
@@ -52,9 +39,9 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
     {body}
   </section></main>;
 
-  const found = await client.rpc('ac_session_find', { recruitment: recruitmentId });
-  if (found.error) return frame(<p role="status">Sesje Assessment Center nie są jeszcze dostępne w tym środowisku.</p>);
-  if (!found.data) {
+  const read = await readAcSession(client, recruitmentId);
+  if (read.state === 'unavailable') return frame(<p role="status">Sesje Assessment Center nie są jeszcze dostępne w tym środowisku.</p>);
+  if (read.state === 'none') {
     if (!isOwner || !editable) return frame(<p>Dla tej rekrutacji nie zaplanowano jeszcze sesji. Sesję planuje właściciel firmy.</p>);
     return frame(<>
       <h2>Zaplanuj sesję</h2>
@@ -71,27 +58,22 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
     </>);
   }
 
-  const read = await client.rpc('ac_session_read', { session: found.data });
-  if (read.error) return frame(<p role="alert">Nie udało się wczytać sesji.</p>);
-  let session: AssessmentCenterSession;
-  try { session = parseAssessmentCenterSession(read.data); }
-  catch { return frame(<p role="alert">Nie udało się zweryfikować danych sesji. Raport nie jest wyświetlany.</p>); }
+  if (read.state === 'error') return frame(<p role="alert">Nie udało się wczytać sesji.</p>);
+  if (read.state === 'invalid') return frame(<p role="alert">Nie udało się zweryfikować danych sesji. Raport nie jest wyświetlany.</p>);
+  const { session } = read;
   const report = buildAssessmentCenterSessionReport(session);
   const { status } = session.session;
 
-  const [applications, shortlist, definitions, members] = await Promise.all([
-    client.from('applications').select('id,candidate_id').eq('company_id', companyId).eq('recruitment_id', recruitmentId),
+  const [nameOfFinalist, shortlist, definitions, members] = await Promise.all([
+    loadAcFinalistLabels(client, companyId, recruitmentId),
     isOwner && status !== 'closed' ? client.from('recruitment_shortlist_entries').select('application_id').eq('company_id', companyId)
       .eq('recruitment_id', recruitmentId).is('removed_at', null) : null,
     isOwner && status === 'draft' ? client.from('latest_exercise_definitions').select('id,version,definition').eq('company_id', companyId)
       .eq('recruitment_id', recruitmentId).limit(100) : null,
     isOwner && status === 'open' ? client.from('company_members').select('user_id').eq('company_id', companyId).eq('role', 'recruiter') : null,
   ]);
-  if (applications.error) return frame(<p role="alert">Nie udało się wczytać zgłoszeń.</p>);
-  const candidateIds = Array.from(new Set(applications.data.map(row => row.candidate_id)));
-  const candidates = candidateIds.length ? await client.from('candidates').select('id,first_name,last_name').eq('company_id', companyId).in('id', candidateIds) : null;
-  const names = new Map((candidates?.data ?? []).map(row => [row.id, `${row.first_name} ${row.last_name}`.trim()]));
-  const nameOf = (applicationId: string) => names.get(applications.data.find(row => row.id === applicationId)?.candidate_id ?? '') ?? 'Finalista';
+  if (!nameOfFinalist) return frame(<p role="alert">Nie udało się wczytać zgłoszeń.</p>);
+  const nameOf = nameOfFinalist;
   const finalistIds = new Set(session.finalists.map(finalist => finalist.applicationId));
   const available = (shortlist?.data ?? []).filter(row => !finalistIds.has(row.application_id));
   const usedRevisions = new Set(session.stages.map(stage => stage.definitionId));
@@ -105,6 +87,7 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
   return frame(<>
     <h2>{session.session.title}</h2>
     <p><strong>{statusLabel[status]}</strong>{session.session.openedAt && <> · otwarta {when(session.session.openedAt)}</>}{session.session.closedAt && <> · zamknięta {when(session.session.closedAt)}</>}</p>
+    <p><a href={`${recruitmentPath}/assessment-center/export`} download>Pobierz CSV</a> — podsumowanie ocen i uzgodnień sesji (bez wyniku ogólnego i rankingu).</p>
 
     <h2>Plan pokrycia kompetencji</h2>
     <dl>{report.coverage.map(row => <div key={row.competency}><dt>{row.competency}</dt>
@@ -157,7 +140,7 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
           {item.evidence.map(row => <div key={row.stageId}><p><em>{row.stageTitle}</em></p>
             {row.assessors.map((assessor, index) => <div key={assessor.authorId}><strong>Asesor {index + 1} · {who(assessor.authorId)}</strong>: {ratingLabel(assessor.rating)}
               {assessor.hasEvidence ? <><p className="cv-text">{assessor.evidence}</p><p className="cv-text">Okoliczności: {assessor.context}</p></> : <p>{AC_NO_DATA}</p>}</div>)}
-            <Agreement value={row.agreement} who={who} />
+            <p>{acAgreementText(row.agreement, who)}</p>
           </div>)}
         </section>)}
 
@@ -165,7 +148,7 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
         {session.stages.map((stage, stageIndex) => {
           const { pair } = raw.stages[stageIndex], attempt = finalist.attempts[stageIndex];
           const isAssessor = pair.state === 'ready' && pair.sheets.some(sheet => sheet.authorId === user.id);
-          const withheld = finalist.textHidden ? 'niewidoczne do czasu oddania Twojego arkusza' : AC_NO_DATA;
+          const withheld = finalist.textHidden ? AC_TEXT_WITHHELD : AC_NO_DATA;
           const entry = (kind: Parameters<typeof recordAcSessionEntry>[3]) => recordAcSessionEntry.bind(null, route, finalist.applicationId, stage.id, kind);
           return <section key={stage.id}><h5>{stage.title}</h5>
             {pair.state === 'unassigned' && <p>Asesorzy: {AC_NO_DATA} — nie przypisano.</p>}
