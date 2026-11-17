@@ -76,7 +76,7 @@ declare
   actor uuid := (select auth.uid());
   r public.recruitments; p public.positions; is_auto boolean;
   pair record; a public.applications; d public.exercise_definition_entries;
-  issued integer := 0; access_list jsonb;
+  issued integer := 0; access_list jsonb; access_total integer;
 begin
   if actor is null or target_company is null or target_recruitment is null
      or not private.has_company_access(target_company, true) then
@@ -92,6 +92,10 @@ begin
     raise exception 'exercise_ai_auto_access_forbidden' using errcode = '42501';
   end if;
   select * into p from public.positions x where x.company_id = r.company_id and x.id = r.position_id for share;
+  -- Kolejność blokad jak w reserve/finish_exercise_ai_generation: najpierw blokada doradcza
+  -- rekrutacji (ta sama co zapis/generowanie propozycji AI), potem wiersz ustawień.
+  -- Zawsze, także w trybie ręcznym, żeby żadne wywołanie nie trzymało ustawień, czekając na nią.
+  perform pg_advisory_xact_lock(hashtextextended('exercise_ai:' || r.id::text, 0));
   -- Brak wiersza ustawień znaczy tryb ręczny. FOR SHARE: przełączenie trybu
   -- (exercise_ai.set_auto_release) czeka na koniec tego wywołania, a wywołanie czekające
   -- na trwające przełączenie widzi po nim nową wartość (read committed).
@@ -102,8 +106,6 @@ begin
   is_auto := coalesce(is_auto, false);
 
   if is_auto and r.status in ('draft', 'open') and p.id is not null and p.status <> 'archived' then
-    -- Ta sama blokada co zapis/generowanie propozycji AI tej rekrutacji.
-    perform pg_advisory_xact_lock(hashtextextended('exercise_ai:' || r.id::text, 0));
     for pair in
       select e.application_id, d0.id as definition_id
         from public.recruitment_shortlist_entries e
@@ -152,7 +154,12 @@ begin
     end loop;
   end if;
 
-  -- Lista dostępów wydanych przez automat w tej rekrutacji (do pokazania rekruterowi).
+  -- Lista dostępów wydanych przez automat w tej rekrutacji (do pokazania rekruterowi):
+  -- najwyżej 200 najnowszych; `total` i `truncated` mówią, czy lista jest ucięta.
+  select count(*)::integer into access_total
+    from private.competency_test_grants g0
+   where g0.company_id = r.company_id and g0.recruitment_id = r.id
+     and g0.issuance_request_key = md5('r1-auto-access:' || g0.application_id::text || ':' || g0.definition_entry_id::text)::uuid;
   select coalesce(jsonb_agg(jsonb_build_object(
       'grantId', g.id, 'applicationId', g.application_id, 'definitionId', g.definition_entry_id,
       'candidateName', btrim(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')),
@@ -168,7 +175,8 @@ begin
     join public.exercise_definition_entries d0
       on d0.company_id = g.company_id and d0.recruitment_id = g.recruitment_id and d0.id = g.definition_entry_id;
 
-  return jsonb_build_object('autoRelease', is_auto, 'issued', issued, 'access', access_list);
+  return jsonb_build_object('autoRelease', is_auto, 'issued', issued, 'access', access_list,
+    'total', access_total, 'truncated', access_total > jsonb_array_length(access_list));
 end;
 $$;
 

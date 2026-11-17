@@ -33,6 +33,7 @@ export function ExerciseAiAutoAccessList({ value, companyId, recruitmentId }: { 
       <p>W trybie „Automatycznie” kandydaci z krótkiej listy dostają dostęp do zatwierdzonego testu bez Twojego kliknięcia.
         Nic nie jest wysyłane kandydatom: link przekazujesz sam. Na stronie zadań kandydata wybierz „Rotuj link”, aby otrzymać link do przekazania.</p>
       {value.issued > 0 && <p role="status">Wydano teraz: {value.issued}.</p>}
+      {value.truncated && <p>Pokazano {value.access.length} najnowszych z {value.total} dostępów wydanych automatycznie.</p>}
       {value.access.length === 0 ? <p>Brak dostępów wydanych automatycznie.</p> : <ul>{value.access.map(row => <li key={row.grantId}>
         {row.candidateName || 'Kandydat'} — {row.title} (wersja {row.version}) · {row.revoked ? 'dostęp odwołany' : `rozpoczęcie do ${row.startBy}`}
         {' '}<Link href={`${base}/${row.applicationId}/exercises`}>Strona zadań kandydata (link do przekazania)</Link>

@@ -1,4 +1,4 @@
-// R1-AUTO-ACCESS: wynik public.issue_exercise_ai_auto_access (20261117200000_r1_auto_competency_access.sql).
+// R1-AUTO-ACCESS: wynik public.issue_exercise_ai_auto_access (20261117220000_r1_auto_competency_access.sql).
 // Baza wydaje dostęp tylko w trybie automatycznym i tylko krótkiej liście (R1); tu jedynie
 // sprawdzamy kształt odpowiedzi. Nic nie jest wysyłane kandydatom, sekret linku nie przychodzi.
 const uuid = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -7,7 +7,8 @@ export type ExerciseAiAutoAccessRow = {
   grantId: string; applicationId: string; definitionId: string; candidateName: string;
   title: string; version: number; revision: number; startBy: string; revoked: boolean;
 };
-export type ExerciseAiAutoAccess = { autoRelease: boolean; issued: number; access: ExerciseAiAutoAccessRow[] };
+/** `access` to najwyżej 200 najnowszych; `total` to liczba wszystkich, `truncated` mówi, że lista jest ucięta. */
+export type ExerciseAiAutoAccess = { autoRelease: boolean; issued: number; access: ExerciseAiAutoAccessRow[]; total: number; truncated: boolean };
 
 /** Ten sam warunek co wydawanie i rotacja dostępu w competency-actions.ts: test kandydata działa tylko w Preview/dev. */
 export function exerciseAiAutoAccessEnabled(env: Record<string, string | undefined> = process.env) {
@@ -19,7 +20,9 @@ export function exerciseAiAutoAccessEnabled(env: Record<string, string | undefin
 export function parseExerciseAiAutoAccess(value: unknown): ExerciseAiAutoAccess | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const v = value as Record<string, unknown>;
-  if (typeof v.autoRelease !== 'boolean' || !Number.isSafeInteger(v.issued) || (v.issued as number) < 0 || !Array.isArray(v.access)) return null;
+  if (typeof v.autoRelease !== 'boolean' || !Number.isSafeInteger(v.issued) || (v.issued as number) < 0 || !Array.isArray(v.access) ||
+    !Number.isSafeInteger(v.total) || (v.total as number) < v.access.length || typeof v.truncated !== 'boolean' ||
+    v.truncated !== ((v.total as number) > v.access.length)) return null;
   const access: ExerciseAiAutoAccessRow[] = [];
   for (const item of v.access) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
@@ -31,5 +34,5 @@ export function parseExerciseAiAutoAccess(value: unknown): ExerciseAiAutoAccess 
       candidateName: r.candidateName, title: r.title, version: r.version as number, revision: r.revision as number,
       startBy: r.startBy, revoked: r.revoked });
   }
-  return { autoRelease: v.autoRelease, issued: v.issued as number, access };
+  return { autoRelease: v.autoRelease, issued: v.issued as number, access, total: v.total as number, truncated: v.truncated };
 }

@@ -4,9 +4,9 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
 
-// R1-AUTO-ACCESS (20261117200000_r1_auto_competency_access.sql): w trybie automatycznym
+// R1-AUTO-ACCESS (20261117220000_r1_auto_competency_access.sql): w trybie automatycznym
 // dostęp do zwolnionego testu AI powstaje bez kliknięcia, tylko dla krótkiej listy (R1 w bazie).
-const migration = '20261117200000_r1_auto_competency_access.sql';
+const migration = '20261117220000_r1_auto_competency_access.sql';
 const denied = (...codes) => error => codes.includes(error.code);
 const autoKey = (application, definition) => {
   const hex = createHash('md5').update(`r1-auto-access:${application}:${definition}`).digest('hex');
@@ -46,7 +46,7 @@ test('R1-AUTO-ACCESS: tryb automatyczny wydaje dostęp tylko krótkiej liście; 
 
   // Tryb ręczny (brak ustawienia): nic nie jest wydawane.
   await h.asUser(users.recruiter);
-  assert.deepEqual(await issue(), { autoRelease: false, issued: 0, access: [] });
+  assert.deepEqual(await issue(), { autoRelease: false, issued: 0, access: [], total: 0, truncated: false });
   assert.deepEqual(await grants(), []);
 
   // Obca firma, czytelnik, anonim, rekrutacja innej firmy i nieistniejąca: ten sam błąd, nic nie wydane.
@@ -99,6 +99,8 @@ test('R1-AUTO-ACCESS: tryb automatyczny wydaje dostęp tylko krótkiej liście; 
   assert.equal(issued.some(r => r.definition_entry_id === g.definitionId), false, 'niezatwierdzone zadanie AI nie wychodzi');
   assert.equal((await db.query("select count(*)::int c from private.competency_test_grant_events where recruitment_id=$1 and kind='issued'", [f.recruitment.id])).rows[0].c, 2);
   assert.equal(first.access.length, 2);
+  assert.equal(first.total, 2);
+  assert.equal(first.truncated, false);
   assert.ok(first.access.every(x => x.definitionId === f.definitionId && x.revision === 1 && x.revoked === false && x.title));
   assert.equal(JSON.stringify(first).includes('token'), false, 'sekret linku nie jest zwracany');
   assert.deepEqual(await units(), { available: 1, used: 2 }, 'jedna jednostka na każdy nowy dostęp');
@@ -187,7 +189,55 @@ test('R1-AUTO-ACCESS native PostgreSQL: przełączenie na tryb ręczny w trakcie
     assert.equal(waiting, true, 'wywołanie czeka na trwające przełączenie trybu');
     await rival.exec('commit');
   } finally { await rival.exec('rollback').catch(() => {}); }
-  assert.deepEqual(await pending, { autoRelease: false, issued: 0, access: [] });
+  assert.deepEqual(await pending, { autoRelease: false, issued: 0, access: [], total: 0, truncated: false });
   await h.asAdmin();
   assert.equal((await db.query('select count(*)::int c from private.competency_test_grants where recruitment_id=$1', [f.recruitment.id])).rows[0].c, 0);
+});
+
+test('R1-AUTO-ACCESS: kolejność blokad jak w reserve/finish_exercise_ai_generation (doradcza, potem ustawienia), zawsze', async () => {
+  const sql = await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8');
+  const body = sql.slice(sql.indexOf('create function public.issue_exercise_ai_auto_access'), sql.indexOf('alter function public.issue_exercise_ai_auto_access'));
+  const advisory = body.indexOf("pg_advisory_xact_lock(hashtextextended('exercise_ai:' || r.id::text, 0))");
+  const settings = body.indexOf('from exercise_ai.recruitment_settings s');
+  assert.ok(advisory > 0 && settings > 0);
+  assert.equal(body.split('pg_advisory_xact_lock').length, 2, 'dokładnie jedna blokada doradcza');
+  assert.ok(advisory < settings, 'blokada doradcza przed odczytem ustawień');
+  assert.ok(advisory < body.indexOf('if is_auto'), 'blokada doradcza bezwarunkowo, także w trybie ręcznym');
+});
+
+test('R1-AUTO-ACCESS native PostgreSQL: czekając na blokadę doradczą rekrutacji, wywołanie nie trzyma jeszcze wiersza ustawień', async t => {
+  if (process.env.SC_WER_PGLITE_PATH) { t.skip('Native independent connections required'); return; }
+  const e = await activeBoot(t, { fullChain: true }), { db, h, call } = e;
+  const rival = await e.connect(), observer = await e.connect();
+  const f = await e.seed();
+  await h.asUser(f.owner);
+  assert.equal(await call('public.set_exercise_ai_auto_release', [f.companyId, f.recruitment.id, true]), true);
+  // Równoległe generowanie propozycji AI trzyma blokadę doradczą tej rekrutacji.
+  await rival.exec('begin');
+  let pending;
+  try {
+    await rival.query("select pg_advisory_xact_lock(hashtextextended('exercise_ai:' || $1::text, 0))", [f.recruitment.id]);
+    await h.asUser(f.owner);
+    let settled = false;
+    pending = call('public.issue_exercise_ai_auto_access', [f.companyId, f.recruitment.id]).finally(() => { settled = true; });
+    pending.catch(() => {});
+    let waiting = false;
+    for (let i = 0; i < 60 && !settled && !waiting; i++) {
+      waiting = (await observer.query("select count(*)::int c from pg_locks where locktype='advisory' and not granted")).rows[0].c > 0;
+      if (!waiting) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.equal(waiting, true, 'wywołanie czeka na blokadę doradczą');
+    // Wiersz ustawień jest wolny: generowanie (advisory -> ustawienia FOR UPDATE) nie trafi na zakleszczenie.
+    await observer.exec('begin');
+    try {
+      const locked = await observer.query(`select 1 from exercise_ai.recruitment_settings
+        where company_id=$1 and recruitment_id=$2 for update nowait`, [f.companyId, f.recruitment.id]);
+      assert.equal(locked.rows.length, 1);
+    } finally { await observer.exec('rollback'); }
+    await rival.exec('commit');
+  } finally { await rival.exec('rollback').catch(() => {}); }
+  const result = await pending;
+  assert.equal(result.autoRelease, true);
+  assert.equal(result.issued, 0);
+  assert.deepEqual(result.access, []);
 });

@@ -104,17 +104,48 @@ export const AC_ASSESSOR_UNKNOWN = 'Asesor';
 type AcTeamMember = { user_id: string; created_at?: string | null };
 
 /**
- * Czytelna etykieta asesora zamiast identyfikatora konta (ROADMAP R3). Bez nowych danych osobowych:
- * „Ty”, „Właściciel firmy” albo „Członek zespołu N” (N = kolejność dołączenia do zespołu firmy,
+ * Czytelna etykieta asesora zamiast identyfikatora konta (ROADMAP R3): „Ty”, nazwa z bazy
+ * (R3-AC-NAMES, tylko gdy baza pozwoliła ją zobaczyć), a w pozostałych przypadkach
+ * „Właściciel firmy” albo „Członek zespołu N” (N = kolejność dołączenia do zespołu firmy,
  * stała między odświeżeniami). Gdy listy zespołu nie ma (null) — neutralne „Asesor”.
  */
-export function acAssessorLabels(viewerId: string, ownerId: string, members: ReadonlyArray<AcTeamMember> | null) {
+export function acAssessorLabels(
+  viewerId: string, ownerId: string, members: ReadonlyArray<AcTeamMember> | null, names: ReadonlyMap<string, string> | null = null,
+) {
   const ordered = [...(members ?? [])].filter(row => row.user_id !== ownerId)
     .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? '') || a.user_id.localeCompare(b.user_id));
   const labels = new Map<string, string>();
   for (const row of ordered) if (!labels.has(row.user_id)) labels.set(row.user_id, `Członek zespołu ${labels.size + 1}`);
-  return (id: string) => id === viewerId ? 'Ty' : id === ownerId ? 'Właściciel firmy'
+  const fallback = (id: string) => id === ownerId ? 'Właściciel firmy'
     : labels.get(id) ?? (members ? AC_ASSESSOR_OUTSIDE_TEAM : AC_ASSESSOR_UNKNOWN);
+  return (id: string) => {
+    if (id === viewerId) return 'Ty';
+    const name = names?.get(id);
+    return name ? (id === ownerId ? `${name} (właściciel firmy)` : name) : fallback(id);
+  };
+}
+
+const AC_NAME_MAX = 320;
+const acUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * R3-AC-NAMES: nazwy asesorów z public.ac_assessor_display_names (security definer). Baza zwraca
+ * nazwę tylko właściciela i obecnych rekruterów tej firmy i tylko dla właściciela/rekrutera tej
+ * rekrutacji. Każdy błąd albo brak funkcji = null (strona i CSV zostają przy etykietach z PR #500).
+ * Wiersz w złym kształcie jest pomijany; nic nie trafia do logów.
+ */
+export async function loadAcAssessorNames(client: Client, companyId: string, recruitmentId: string) {
+  let result: { data: unknown; error: unknown };
+  try {
+    result = await client.rpc('ac_assessor_display_names', { target_company: companyId, target_recruitment: recruitmentId });
+  } catch { return null; }
+  if (result.error || !Array.isArray(result.data)) return null;
+  const names = new Map<string, string>();
+  for (const row of result.data as Array<{ user_id?: unknown; display_name?: unknown }>) {
+    const id = typeof row?.user_id === 'string' ? row.user_id.toLowerCase() : '';
+    const name = typeof row?.display_name === 'string' ? row.display_name.trim() : '';
+    if (acUuid.test(id) && name && name.length <= AC_NAME_MAX) names.set(id, name);
+  }
+  return names;
 }
 
 /** Zespół firmy do etykiet asesorów — ten sam odczyt RLS (company_members) co lista asesorów do przypisania. */
@@ -302,10 +333,12 @@ export async function exportAcSession(
     if (!finalistLabel) throw new AcSessionExportError('failed');
     const team = await loadAcTeam(client, companyId);
     if (!team) throw new AcSessionExportError('failed');
+    // R3-AC-NAMES: nazwy tylko z RPC, które samo sprawdza uprawnienia czytającego; bez nich — etykiety.
+    const names = await loadAcAssessorNames(client, companyId, recruitmentId);
     const generatedAt = now().toISOString();
     const csv = acSessionCsv({
       recruitmentId, recruitmentName: recruitment.name, generatedAt, viewerId: user.id,
-      report: buildAssessmentCenterSessionReport(read.session), finalistLabel, assessorLabel: acAssessorLabels(user.id, ownerId, team),
+      report: buildAssessmentCenterSessionReport(read.session), finalistLabel, assessorLabel: acAssessorLabels(user.id, ownerId, team, names),
     });
     await recordAcSessionExport(client, companyId, recruitmentId, read.session.session.id.toLowerCase());
     return new Response(csv, { headers: {

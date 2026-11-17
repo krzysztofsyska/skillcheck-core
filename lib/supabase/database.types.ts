@@ -463,6 +463,14 @@ export type Database = {
         Args: { target_company: string; target_recruitment: string; target_session: string; export_kind: 'ac_session_csv' };
         Returns: string;
       };
+      /** R3-AC-NAMES (20261117213000_ac_assessor_display_names.sql). Security definer; caller must be
+       * the company owner or a recruiter and the recruitment must belong to the company (42501
+       * otherwise, same error for foreign or missing records). Returns the account e-mail as
+       * display name only for the company owner and current recruiters of that company. */
+      ac_assessor_display_names: {
+        Args: { target_company: string; target_recruitment: string };
+        Returns: { user_id: string; display_name: string }[];
+      };
       process_followup_create: {
         Args: { target_application: string; purpose: string; start_date: string; criteria: string; initial_result: string };
         Returns: string;
@@ -651,7 +659,7 @@ export type Database = {
         Args: { target_company: string; target_recruitment: string; enabled: boolean };
         Returns: boolean;
       };
-      /** R1-AUTO-ACCESS (20261117200000_r1_auto_competency_access.sql). Same access check as
+      /** R1-AUTO-ACCESS (20261117220000_r1_auto_competency_access.sql). Same access check as
        * read_exercise_ai_settings (42501). In auto mode only, issues competency test access for released
        * AI tests to shortlisted applications (R1 in the database); never returns a link secret. The
        * jsonb result is validated in lib/exercise-ai-auto-access.ts. */

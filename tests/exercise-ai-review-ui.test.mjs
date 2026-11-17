@@ -183,7 +183,7 @@ test('R1-SWITCH action maps database errors to plain Polish without details and 
 async function renderSwitch(options={}) {
  const calls=[],rendered=[];
  const client={rpc:async(name,args)=>{calls.push({name,args});
-  return name==='issue_exercise_ai_auto_access'?(options.issueResult??{data:{autoRelease:true,issued:0,access:[]},error:null}):(options.result??{data:true,error:null});}};
+  return name==='issue_exercise_ai_auto_access'?(options.issueResult??{data:{autoRelease:true,issued:0,access:[],total:0,truncated:false},error:null}):(options.result??{data:true,error:null});}};
  const mod=load(basePath+'exercise-ai-auto-release-section.tsx',{
  'next/link':{default:props=>createElement('a',{href:props.href},props.children)},
  './exercise-ai-auto-release':{ExerciseAiAutoReleaseSwitch:props=>{rendered.push(props);return createElement('div',{'data-switch':'yes'},'Switch');}},
@@ -276,22 +276,31 @@ test('R1-AUTO-ACCESS issues only in auto mode behind the preview test flag, with
  for(const result of [{data:false,error:null},{data:null,error:{code:'42501'}}]) {
   const manual=await withPreview(()=>renderSwitch({result}));assert.deepEqual(manual.calls.map(c=>c.name),['read_exercise_ai_settings']);
  }
- const r=await withPreview(()=>renderSwitch({issueResult:{data:{autoRelease:true,issued:1,access:[grantRow]},error:null}}));
+ const r=await withPreview(()=>renderSwitch({issueResult:{data:{autoRelease:true,issued:1,access:[grantRow],total:1,truncated:false},error:null}}));
  assert.deepEqual(r.calls[1],{name:'issue_exercise_ai_auto_access',args:{target_company:ids.company,target_recruitment:ids.recruitment}});
  const html=renderToStaticMarkup(r.element);
  assert.match(html,/Dostęp do testu kompetencji wydany automatycznie/);assert.match(html,/Anna Testowa/);assert.match(html,/Wydano teraz: 1/);
  assert.match(html,new RegExp('href="/dashboard/'+ids.company+'/recruitments/'+ids.recruitment+'/applications/'+grantRow.applicationId+'/exercises"'));
  assert.match(html,/Nic nie jest wysyłane kandydatom/);assert.doesNotMatch(html,/#grant=|token/i);
- assert.doesNotMatch(html,/wyśl[ea]my|zostanie wysłan|wysyłamy/i);
+ assert.doesNotMatch(html,/wyśl[ea]my|zostanie wysłan|wysyłamy/i);assert.doesNotMatch(html,/Pokazano/);
+});
+test('R1-AUTO-ACCESS says when the list is capped at the 200 newest',async()=>{
+ const access=Array.from({length:200},(_,i)=>({...grantRow,grantId:`99999999-1111-4222-8333-${String(i).padStart(12,'0')}`}));
+ const r=await withPreview(()=>renderSwitch({issueResult:{data:{autoRelease:true,issued:0,access,total:205,truncated:true},error:null}}));
+ const html=renderToStaticMarkup(r.element);
+ assert.match(html,/Pokazano 200 najnowszych z 205 dostępów wydanych automatycznie/);
+ assert.equal(html.match(/<li>/g).length,200);
 });
 test('R1-AUTO-ACCESS fails closed: database errors and unexpected shapes show an alert, never an issued list',async()=>{
  for(const issueResult of [{data:null,error:{code:'PT409',message:'private detail'}},{data:{autoRelease:true,issued:1,access:[{...grantRow,grantId:'x'}]},error:null},
-  {data:{autoRelease:'true',issued:0,access:[]},error:null},{data:[],error:null}]) {
+  {data:{autoRelease:'true',issued:0,access:[]},error:null},{data:[],error:null},
+  {data:{autoRelease:true,issued:0,access:[grantRow]},error:null},{data:{autoRelease:true,issued:0,access:[grantRow],total:0,truncated:false},error:null},
+  {data:{autoRelease:true,issued:0,access:[grantRow],total:2,truncated:false},error:null},{data:{autoRelease:true,issued:0,access:[grantRow],total:1,truncated:true},error:null}]) {
   const r=await withPreview(()=>renderSwitch({issueResult}));const html=renderToStaticMarkup(r.element);
   assert.match(html,/Nie udało się sprawdzić ani wydać dostępu automatycznie/);assert.doesNotMatch(html,/Wydano teraz|private detail|Anna Testowa/);
  }
  assert.equal(autoAccessHelpers.parseExerciseAiAutoAccess({autoRelease:true,issued:-1,access:[]}),null);
- assert.deepEqual(autoAccessHelpers.parseExerciseAiAutoAccess({autoRelease:false,issued:0,access:[]}),{autoRelease:false,issued:0,access:[]});
+ assert.deepEqual(autoAccessHelpers.parseExerciseAiAutoAccess({autoRelease:false,issued:0,access:[],total:0,truncated:false}),{autoRelease:false,issued:0,access:[],total:0,truncated:false});
  assert.equal(autoAccessHelpers.exerciseAiAutoAccessEnabled({EXERCISE_AI_ENABLED:'true',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'production',NODE_ENV:'production'}),false);
  assert.equal(autoAccessHelpers.exerciseAiAutoAccessEnabled({EXERCISE_AI_ENABLED:'false',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'preview'}),false);
  assert.equal(autoAccessHelpers.exerciseAiAutoAccessEnabled({EXERCISE_AI_ENABLED:'true',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'preview'}),true);
