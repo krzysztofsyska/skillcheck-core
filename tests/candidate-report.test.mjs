@@ -14,6 +14,10 @@ import {
 } from '../lib/requirement-flags.ts';
 import { prepareScreening } from '../lib/screening.ts';
 import { buildInterviewGaps } from '../lib/interview-gaps.ts';
+import {
+  loadCompetencyReportSection, competencyReportEnabled, competencyReviewerLabel,
+  competencySectionMessages, COMPETENCY_REPORT_LIMIT,
+} from '../lib/candidate-report-competency.ts';
 
 const position = {
   tasks: ['Dostarczanie przesyłek', 'Rozliczanie tras'],
@@ -804,4 +808,167 @@ test('zmiana samego oznaczenia zmienia kolejność w obu widokach i nie rusza wy
     { ...buildCandidateRequirement(licence, 'unmarked', completed, corrected), mark: null },
   );
   assert.equal(summariseCandidateReport([buildCandidateRequirement(licence, marksAfter.get('competency:1'), completed, corrected)]).requiredSupported, 1);
+});
+
+// --- R2-B: sekcja „Test kompetencji" (ocena człowieka z cytatami) ---
+// Dane fikcyjne. Klient udaje RPC i Data API tak, jak robi to baza: lista prób,
+// odpowiedź z ocenami i definicja zadania z tej samej firmy i rekrutacji.
+const cRoute = { companyId: id(1), recruitmentId: id(2), applicationId: id(3) };
+const attemptId = '0000000a-0000-4000-8000-00000000000a';
+const definitionId = '0000000d-0000-4000-8000-00000000000d';
+const ownerId = '0000000e-0000-4000-8000-00000000000e';
+const recruiterId = '0000000f-0000-4000-8000-00000000000f';
+const cDefinition = {
+  kind: 'competency_test', title: 'Analiza sprzedaży', instructions: 'Zaproponuj usprawnienia.',
+  expectedOutput: 'Priorytety i uzasadnienia.', durationMinutes: 20,
+  criteria: [
+    { competency: 'Diagnoza', below: 'Nie wskazuje przyczyn.', meets: 'Wskazuje przyczyny.', above: 'Sprawdza hipotezy.' },
+    { competency: 'Priorytety', below: 'Brak kolejności.', meets: 'Wskazuje kolejność.', above: 'Szacuje wpływ.' },
+  ],
+};
+const workSample = 'Najpierw sprawdzę spadek konwersji w kanale mobilnym. <b>Następnie</b> wyznaczę priorytety.';
+const reviewRow = (overrides = {}) => ({
+  company_id: cRoute.companyId, recruitment_id: cRoute.recruitmentId, application_id: cRoute.applicationId,
+  attempt_id: attemptId, definition_entry_id: definitionId, reviewer_id: recruiterId, version: 1,
+  candidate_id: id(4), policy_version: 'competency-test-rubric-v1',
+  observations: [
+    { criterionIndex: 0, rating: 'meets', evidence: 'spadek konwersji' },
+    { criterionIndex: 1, rating: 'insufficient_data', evidence: '' },
+  ],
+  coverage: 0.5, score: null, status: 'insufficient_evidence', created_at: '2026-11-16T09:30:00Z',
+  ...overrides,
+});
+const responseBase = () => ({ attemptId, workSample, definitionId, companyId: cRoute.companyId,
+  applicationId: cRoute.applicationId, recruitmentId: cRoute.recruitmentId });
+function competencyClient({ attempts, response, entry, listError = null, responseError = null } = {}) {
+  const calls = [];
+  const rpc = async (name, args) => {
+    calls.push([name, args]);
+    if (name === 'list_competency_test_attempts') return listError ? { data: null, error: listError }
+      : { data: attempts ?? [{ id: attemptId, state: 'submitted', version: 2 }], error: null };
+    if (name === 'read_competency_test_response') return responseError ? { data: null, error: responseError }
+      : { data: response ?? { ...responseBase(), reviews: [reviewRow()] }, error: null };
+    throw new Error('unexpected rpc ' + name);
+  };
+  const from = table => {
+    const eqs = [];
+    const q = {
+      select() { return q; },
+      eq(k, v) { eqs.push([k, v]); return q; },
+      async maybeSingle() {
+        calls.push([table, eqs]);
+        const row = entry === undefined ? { id: definitionId, version: 2, definition: cDefinition,
+          company_id: cRoute.companyId, recruitment_id: cRoute.recruitmentId } : entry;
+        return { data: row && eqs.every(([k, v]) => row[k] === v)
+          ? { id: row.id, version: row.version, definition: row.definition } : null, error: null };
+      },
+    };
+    return q;
+  };
+  return { client: { rpc, from }, calls };
+}
+const recruiter = { userId: recruiterId, ownerId, canEdit: true };
+
+test('R2-B: przełącznik sekcji jest ten sam co ekran zadań (tylko Preview albo dev)', () => {
+  assert.equal(competencyReportEnabled({ COMPETENCY_CANDIDATE_PREVIEW: 'true', VERCEL_ENV: 'preview' }), true);
+  assert.equal(competencyReportEnabled({ COMPETENCY_CANDIDATE_PREVIEW: 'true', NODE_ENV: 'development' }), true);
+  assert.equal(competencyReportEnabled({ COMPETENCY_CANDIDATE_PREVIEW: 'true', VERCEL_ENV: 'production', NODE_ENV: 'production' }), false);
+  assert.equal(competencyReportEnabled({ VERCEL_ENV: 'preview' }), false);
+});
+
+test('R2-B: wyłączona funkcja i czytelnik bez roli rekrutera nie wywołują RPC', async () => {
+  const off = competencyClient();
+  assert.equal((await loadCompetencyReportSection(off.client, cRoute, recruiter, false)).kind, 'hidden');
+  const viewer = competencyClient();
+  const section = await loadCompetencyReportSection(viewer.client, cRoute, { ...recruiter, canEdit: false }, true);
+  assert.deepEqual(section, { kind: 'no_access', message: competencySectionMessages.noAccess });
+  assert.equal(off.calls.length + viewer.calls.length, 0);
+});
+
+test('R2-B: ocena człowieka: poziom, cytat z odpowiedzi, rubryka, rola i czas; bez wyniku zbiorczego', async () => {
+  const { client, calls } = competencyClient();
+  const section = await loadCompetencyReportSection(client, cRoute, recruiter, true);
+  assert.equal(section.kind, 'list');
+  assert.equal(section.truncated, false);
+  const [item] = section.tests;
+  assert.equal(item.state, 'submitted');
+  assert.equal(item.title, 'Analiza sprzedaży');
+  assert.equal(item.definitionVersion, 2);
+  assert.equal(item.review.version, 1);
+  assert.equal(item.review.reviewedAt, '2026-11-16T09:30:00Z');
+  assert.equal(item.review.reviewer, 'Ty (rekruter)');
+  assert.equal(item.review.evidencedCriteria, 1);
+  assert.equal(item.review.totalCriteria, 2);
+  assert.deepEqual(item.review.criteria[0], { criterionIndex: 0, competency: 'Diagnoza', rating: 'meets',
+    ratingLabel: 'Zgodnie z wymaganiami', evidence: 'spadek konwersji', rubric: 'Wskazuje przyczyny.' });
+  assert.deepEqual(item.review.criteria[1], { criterionIndex: 1, competency: 'Priorytety', rating: 'insufficient_data',
+    ratingLabel: 'Brak wystarczających danych', evidence: null, rubric: null });
+  // Bez wyniku rubryki, pełnej odpowiedzi kandydata ani identyfikatora oceniającego.
+  assert.doesNotMatch(JSON.stringify(section), /score|Najpierw sprawdzę|<b>|0000000f-/);
+  // Definicja zadania czytana z firmy i rekrutacji z adresu raportu.
+  assert.deepEqual(calls.map(c => c[0]), ['list_competency_test_attempts', 'read_competency_test_response', 'exercise_definition_entries']);
+  assert.deepEqual(calls[0][1], { target: cRoute.applicationId });
+  assert.deepEqual(calls[2][1], [['company_id', cRoute.companyId], ['recruitment_id', cRoute.recruitmentId], ['id', definitionId]]);
+});
+
+test('R2-B: najnowsza wersja oceny wygrywa, etykieta roli bez danych osobowych', async () => {
+  const second = reviewRow({ version: 2, reviewer_id: ownerId, created_at: '2026-11-16T11:00:00Z',
+    observations: [{ criterionIndex: 0, rating: 'above', evidence: 'spadek konwersji' },
+      { criterionIndex: 1, rating: 'below', evidence: 'wyznaczę priorytety' }], coverage: 1, score: 50, status: 'review_required' });
+  const { client } = competencyClient({ response: { ...responseBase(), reviews: [reviewRow(), second] } });
+  const section = await loadCompetencyReportSection(client, cRoute, recruiter, true);
+  assert.equal(section.tests[0].review.version, 2);
+  assert.equal(section.tests[0].review.reviewer, 'Właściciel konta firmy');
+  assert.deepEqual(section.tests[0].review.criteria.map(c => c.ratingLabel), ['Powyżej wymagań', 'Poniżej wymagań']);
+  assert.equal(competencyReviewerLabel(ownerId, { userId: ownerId, ownerId, canEdit: true }), 'Ty (właściciel konta firmy)');
+});
+
+test('R2-B: brak testu, test w trakcie i odpowiedź bez oceny mają neutralne stany', async () => {
+  const none = await loadCompetencyReportSection(competencyClient({ attempts: [] }).client, cRoute, recruiter, true);
+  assert.deepEqual(none, { kind: 'empty', message: competencySectionMessages.empty });
+  const inProgress = await loadCompetencyReportSection(
+    competencyClient({ attempts: [{ id: attemptId, state: 'in_progress', version: 2 }] }).client, cRoute, recruiter, true);
+  assert.deepEqual(inProgress.tests, [{ attemptId, state: 'in_progress', definitionVersion: 2 }]);
+  const pending = await loadCompetencyReportSection(
+    competencyClient({ response: { ...responseBase(), reviews: [] } }).client, cRoute, recruiter, true);
+  assert.equal(pending.tests[0].review, null);
+});
+
+test('R2-B: obce powiązanie, zmieniona ocena lub błąd odczytu dają neutralny komunikat, nie wyjątek', async () => {
+  const error = { kind: 'error', message: competencySectionMessages.error };
+  const cases = [
+    competencyClient({ listError: { code: 'PT404' } }),
+    competencyClient({ responseError: { code: 'PT409' } }),
+    competencyClient({ attempts: [{ id: 'nie-uuid', state: 'submitted', version: 1 }] }),
+    competencyClient({ attempts: { id: attemptId } }),
+    // Odpowiedź z innej firmy albo innego zgłoszenia.
+    competencyClient({ response: { ...responseBase(), companyId: id(9), reviews: [] } }),
+    competencyClient({ response: { ...responseBase(), applicationId: id(9), reviews: [] } }),
+    // Ocena przypięta do innego zgłoszenia.
+    competencyClient({ response: { ...responseBase(), reviews: [reviewRow({ application_id: id(9) })] } }),
+    // Cytat, którego nie ma w odpowiedzi kandydata.
+    competencyClient({ response: { ...responseBase(), reviews: [reviewRow({ observations: [
+      { criterionIndex: 0, rating: 'meets', evidence: 'zmyślony cytat' },
+      { criterionIndex: 1, rating: 'insufficient_data', evidence: '' }] })] } }),
+    // Zapisane pokrycie nie zgadza się z przeliczeniem.
+    competencyClient({ response: { ...responseBase(), reviews: [reviewRow({ coverage: 1 })] } }),
+    // Brak czasu oceny.
+    competencyClient({ response: { ...responseBase(), reviews: [reviewRow({ created_at: null })] } }),
+    // Definicja z innej rekrutacji albo inna wersja niż w liście prób.
+    competencyClient({ entry: { id: definitionId, version: 2, definition: cDefinition, company_id: cRoute.companyId, recruitment_id: id(9) } }),
+    competencyClient({ entry: { id: definitionId, version: 3, definition: cDefinition, company_id: cRoute.companyId, recruitment_id: cRoute.recruitmentId } }),
+  ];
+  for (const { client } of cases) assert.deepEqual(await loadCompetencyReportSection(client, cRoute, recruiter, true), error);
+  const missing = competencyClient({ listError: { code: 'PGRST202' } });
+  assert.equal((await loadCompetencyReportSection(missing.client, cRoute, recruiter, true)).kind, 'unavailable');
+  const throwing = { rpc: async () => { throw new Error('network'); }, from: () => { throw new Error('x'); } };
+  assert.deepEqual(await loadCompetencyReportSection(throwing, cRoute, recruiter, true), error);
+});
+
+test('R2-B: raport pokazuje najwyżej kilka najnowszych prób', async () => {
+  const many = Array.from({ length: COMPETENCY_REPORT_LIMIT + 2 }, (_, i) =>
+    ({ id: `0000000a-0000-4000-8000-0000000000${10 + i}`, state: 'in_progress', version: 1 }));
+  const section = await loadCompetencyReportSection(competencyClient({ attempts: many }).client, cRoute, recruiter, true);
+  assert.equal(section.tests.length, COMPETENCY_REPORT_LIMIT);
+  assert.equal(section.truncated, true);
 });
