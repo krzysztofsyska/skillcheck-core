@@ -1,16 +1,18 @@
 // Public visibility of the announced packages WERYFIKACJA and ASSESSMENT CENTER.
 //
-// Owner decision 2026-11-10: while Przelewy24 verifies the shop, the public offer must contain only
-// what a verifier can actually buy (FREE and PRESELEKCJA). The packages are hidden, not deleted: their
-// copy stays in the code (app/components/marketing/future-offers.ts and the marked blocks of
-// content/kalkulator-demo.html) and comes back by setting one variable.
+// Owner decision 2026-11-10: while Przelewy24 verifies the shop, the public offer contained only what a
+// verifier can actually buy (FREE and PRESELEKCJA). Owner decision 2026-11-16 (ROADMAP R4, "tak jak
+// polecasz"): the packages were hidden only because of Przelewy24, so they are visible again, with their
+// approved prices and the note that they cannot be bought yet. The switch stays as a kill switch: the
+// exact value "false" hides them again (copy lives in app/components/marketing/future-offers.ts and the
+// marked blocks of content/kalkulator-demo.html).
 //
 // This switch only decides what the public pages show. It grants no access, enables no checkout and
 // touches neither billing nor the module work behind the packages.
 
-/** Strict read, like SC19_PACKAGES_ENABLED: only the exact string "true" turns it on; unset means off. */
+/** On by default; only the exact string "false" hides the announced packages (kill switch). */
 export const isPublicFutureOffersEnabled = (env: Record<string, string | undefined> = process.env) =>
-  env.PUBLIC_FUTURE_OFFERS_ENABLED === "true";
+  env.PUBLIC_FUTURE_OFFERS_ENABLED !== "false";
 
 const FUTURE_OFFERS_BLOCK = /[ \t]*<!--future-offers:start-->[\s\S]*?<!--future-offers:end-->[ \t]*\r?\n?/g;
 
