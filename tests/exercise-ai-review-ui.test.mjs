@@ -207,6 +207,10 @@ test('R1-SWITCH code uses the user RLS client only and imports no mail, send or 
  const source=readFileSync(fileURLToPath(new URL('../'+basePath+file,import.meta.url)),'utf8');
  assert.doesNotMatch(source,/service_role|SERVICE_ROLE|createAdminClient|supabase\/admin|resend|nodemailer|sendMail|send-?mail|outbound|\bfetch\(/i,file);
  }
- const page=readFileSync(fileURLToPath(new URL('../'+basePath+'page.tsx',import.meta.url)),'utf8');
+ const page=readFileSync(fileURLToPath(new URL('../'+basePath+'exercises/page.tsx',import.meta.url)),'utf8');
  assert.match(page,/<ExerciseAiAutoReleaseSection client=\{client\}[^>]*canEdit=\{canEdit\}/);
+});
+test('R1-SWITCH is not rendered on the recruitment page (the payment-named test renders it with a fixed mock map)',()=>{
+ const page=readFileSync(fileURLToPath(new URL('../'+basePath+'page.tsx',import.meta.url)),'utf8');
+ assert.doesNotMatch(page,/ExerciseAiAutoRelease/);
 });

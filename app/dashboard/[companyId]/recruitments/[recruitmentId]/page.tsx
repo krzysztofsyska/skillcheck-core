@@ -5,7 +5,6 @@ import { StageForm, StageControls } from "./assessment-forms";
 import { PreselectionGroups, type GroupRow } from "./bulk/groups";
 import { loadCurrentRanking, withGroupCurrency } from "../../../../../lib/preselection-currency";
 import { assessmentCenterPreviewEnabled } from "../../../../../lib/assessment-center-preview";
-import { ExerciseAiAutoReleaseSection } from "./exercise-ai-auto-release-section";
 export default async function Recruitment({params}: {params:Promise<{companyId:string;recruitmentId:string}>}) {
   const {companyId,recruitmentId}=await params;
   const {client,canEdit}=await companyAccess(companyId);
@@ -32,7 +31,6 @@ export default async function Recruitment({params}: {params:Promise<{companyId:s
   return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link><h1>{recruitment.name}</h1><p><Link href={`/dashboard/${companyId}/positions/${recruitment.position_id}`}>Profil stanowiska</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/interview-guide`}>Przewodnik rozmowy</Link></p><p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/exercises`}>Zadania kompetencyjne i Assessment Center</Link></p>{canEdit&&assessmentCenterPreviewEnabled()&&<p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/assessment-center`}>Sesja Assessment Center</Link></p>}
     <p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/diagnostyka`}>Mało CV? Diagnostyka rekrutacji i wskaźniki czasu</Link></p>
     {process.env.SC19_PACKAGES_ENABLED === 'true' && <p className="lead"><Link href={`/dashboard/${companyId}/billing?recruitmentId=${encodeURIComponent(recruitmentId)}`}>Pakiet i pozostałe analizy CV</Link> · <Link href={`/dashboard/${companyId}/billing/checkout?recruitmentId=${encodeURIComponent(recruitmentId)}`}>Kup kolejną PRESELEKCJĘ</Link></p>}<p>{canEdit && <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}><strong>Wgraj wiele CV</strong></Link>}{canEdit ? ' — ' : ''}<Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}>paczki CV i postęp przetwarzania</Link></p>
-    <ExerciseAiAutoReleaseSection client={client} companyId={companyId} recruitmentId={recruitmentId} canEdit={canEdit} editable={['draft','open'].includes(recruitment.status)}/>
     <h2 id="preselekcja">Wyniki preselekcji (grupy)</h2>
     <PreselectionGroups companyId={companyId} recruitmentId={recruitmentId} rows={groupRows} canEdit={canEdit}/>
     <h2 id="candidates">Kandydaci w rekrutacji</h2>
