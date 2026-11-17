@@ -8,7 +8,7 @@ import {
   buildAssessmentCenterSessionReport,
 } from '../../../../../../lib/assessment-center-session';
 import {
-  AC_TEXT_WITHHELD, acAgreementText, acChangeLabel as changeLabel, acRatingLabel as ratingLabel, acSessionStatusLabel as statusLabel,
+  AC_NO_GAPS, AC_TEXT_WITHHELD, acAgreementText, acEvidenceGapText, acChangeLabel as changeLabel, acRatingLabel as ratingLabel, acSessionStatusLabel as statusLabel,
   acAssessorLabels, loadAcFinalistLabels, loadAcTeam, readAcSession,
 } from '../../../../../../lib/assessment-center-session-export';
 import {
@@ -135,6 +135,11 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
         {isOwner && editable && status === 'draft' && <AcSessionForm action={removeAcSessionFinalist.bind(null, route, finalist.applicationId)}
           legend="Korekta listy finalistów" button="Usuń z sesji" saved="Usunięto finalistę z sesji."><p>Możliwe tylko przed otwarciem sesji, dopóki dla tej osoby nic nie zapisano.</p></AcSessionForm>}
         {finalist.textHidden && <p role="status">Masz jeszcze nieoddany niezależny arkusz dla tej osoby. Do czasu jego oddania nie pokazujemy tego, co zapisali inni asesorzy i ekspert (informacji zwrotnych, dowodów zmiany, notatek), żeby nie wpływało to na Twoją ocenę. Praca kandydata pozostaje widoczna.</p>}
+
+        <h4>Braki dowodów</h4>
+        {finalist.evidenceGaps.length
+          ? <ul>{finalist.evidenceGaps.map((gap, index) => <li key={index}><strong>{gap.competency}</strong>{gap.stageTitle && <> · {gap.stageTitle}</>}: {acEvidenceGapText(gap, who)}</li>)}</ul>
+          : <p>{AC_NO_GAPS}</p>}
 
         <h4>Dowody według kompetencji</h4>
         {finalist.competencies.map(item => <section key={item.competency}><h5>{item.competency}</h5>
