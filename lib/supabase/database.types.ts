@@ -454,6 +454,15 @@ export type Database = {
           recruitment_id: string; application_id: string;
         }[];
       };
+      /** SC-AC-EXPORT-AUDIT (20261117120000_sc_ac_session_export_audit.sql). Security definer;
+       * re-checks that the caller is the company owner or a recruiter and that the session
+       * belongs to that company and recruitment (42501 otherwise, same error for foreign or
+       * missing records). Appends one row to `report_audit.assessment_center_session_exports`
+       * (identifiers, actor and role only) and returns its id. */
+      record_assessment_center_session_export: {
+        Args: { target_company: string; target_recruitment: string; target_session: string; export_kind: 'ac_session_csv' };
+        Returns: string;
+      };
       process_followup_create: {
         Args: { target_application: string; purpose: string; start_date: string; criteria: string; initial_result: string };
         Returns: string;

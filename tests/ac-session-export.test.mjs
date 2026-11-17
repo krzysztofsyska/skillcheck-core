@@ -17,6 +17,7 @@ const positionId = '90000000-0000-4000-8000-0000000000d1';
 const recruitmentId = ids.recruitment;
 const candidateA = '90000000-0000-4000-8000-0000000000e1', candidateB = '90000000-0000-4000-8000-0000000000e2';
 const now = () => new Date('2026-11-16T10:00:00.000Z');
+const auditId = '90000000-0000-4000-8000-0000000000b1';
 
 function blindPayload() {
   const payload = sessionPayload();
@@ -28,7 +29,7 @@ function blindPayload() {
 }
 
 /** Minimalny PostgREST: filtruje tylko po parametrach eq/in, które wysyła kod — jak stub w testach HTTP. */
-function fakeClient({ user = { id: ids.owner }, tables = {}, payload = sessionPayload(), findError = null, readError = null } = {}) {
+function fakeClient({ user = { id: ids.owner }, tables = {}, payload = sessionPayload(), findError = null, readError = null, audit = () => ({ data: auditId, error: null }) } = {}) {
   const calls = [];
   const data = {
     companies: [{ id: companyId, owner_id: ids.owner }],
@@ -65,6 +66,7 @@ function fakeClient({ user = { id: ids.owner }, tables = {}, payload = sessionPa
       calls.push({ rpc: name, args });
       if (name === 'ac_session_find') return findError ? { data: null, error: findError } : { data: payload ? ids.session : null, error: null };
       if (name === 'ac_session_read') return readError ? { data: null, error: readError } : { data: payload, error: null };
+      if (name === 'record_assessment_center_session_export') return audit(args);
       throw new Error(`unexpected rpc ${name}`);
     },
   };
@@ -99,7 +101,47 @@ test('plik: bezpieczne nagłówki, BOM, nazwa bez nazwisk, oceny obu asesorów i
   assert.ok(!csv.includes('PierwszaProba') && !csv.includes('PoprawionaPraca') && !csv.includes('NotatkaEksperta'));
   assert.doesNotMatch(csv, /ranking[^u]|wynik ogólny:|rekomendacja/i);
   // Ten sam klient RLS i to samo RPC co strona; żadnego service_role.
-  assert.deepEqual(fake.calls.filter(call => call.rpc).map(call => call.rpc), ['ac_session_find', 'ac_session_read']);
+  // Wpis audytowy jako ostatni krok przed wydaniem pliku (SC-AC-EXPORT-AUDIT).
+  assert.deepEqual(fake.calls.filter(call => call.rpc).map(call => call.rpc), ['ac_session_find', 'ac_session_read', 'record_assessment_center_session_export']);
+  assert.deepEqual(fake.calls.at(-1).args, {
+    target_company: companyId, target_recruitment: recruitmentId, target_session: ids.session, export_kind: 'ac_session_csv',
+  });
+});
+
+test('audyt: bez udanego wpisu nie ma pliku — 503 bez CSV; odmowa bazy 42501 = 404', async () => {
+  const failures = [
+    () => ({ data: null, error: { code: 'PGRST202', message: 'function not found' } }),
+    () => ({ data: null, error: { code: '57014' } }),
+    () => ({ data: null, error: null }),
+    () => ({ data: 'nie-uuid', error: null }),
+    () => { throw new Error('network'); },
+  ];
+  for (const audit of failures) {
+    const response = await run(fakeClient({ audit }));
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('cache-control'), 'private, no-store');
+    assert.equal(response.headers.get('content-disposition'), null);
+    assert.match(response.headers.get('content-type'), /application\/json/);
+    const text = await body(response);
+    assert.equal(JSON.parse(text).error, 'audit_failed');
+    assert.doesNotMatch(text, /Anna|Syntetyczna|Formuła|Wersja eksportu|ac-session-csv/);
+  }
+  const denied = await run(fakeClient({ audit: () => ({ data: null, error: { code: '42501' } }) }));
+  assert.equal(denied.status, 404);
+  assert.doesNotMatch(await body(denied), /Anna|Syntetyczna/);
+  // Wpis z rolą rekrutera: plik wydany dopiero po udanym zapisie.
+  const recruiter = fakeClient({ user: { id: ids.recruiter } });
+  const ok = await run(recruiter);
+  assert.equal(ok.status, 200);
+  assert.ok((await body(ok)).includes(AC_SESSION_EXPORT_VERSION));
+  assert.equal(recruiter.calls.filter(call => call.rpc === 'record_assessment_center_session_export').length, 1);
+});
+
+test('audyt: przy błędach odczytu i braku dostępu nic nie jest zapisywane', async () => {
+  for (const client of [fakeClient({ user: null }), fakeClient({ payload: null }), fakeClient({ findError: { code: 'PGRST202' } }), fakeClient({ readError: { code: 'XX000' } })]) {
+    await run(client);
+    assert.ok(!client.calls.some(call => call.rpc === 'record_assessment_center_session_export'));
+  }
 });
 
 test('ochrona przed formułami: każda komórka zaczynająca się od =, +, -, @ dostaje apostrof', () => {
