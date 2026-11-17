@@ -129,8 +129,9 @@ const INDEX_COL = `${NAME}( [a-z_]\\w*)?( (asc|desc))?( nulls (first|last))?`;
 const ADDITIVE = [
   ['CREATE_SCHEMA', new RegExp(`^create schema (if not exists )?${NAME}$`)],
   ['CREATE_TABLE', st => createTableOk(st)],
+  // no CONCURRENTLY: migrations run inside a transaction, where PostgreSQL rejects it.
   // plain column lists only: no WHERE (partial), INCLUDE, WITH, TABLESPACE or expression columns
-  ['CREATE_INDEX', new RegExp(`^create (unique )?index (concurrently )?(if not exists )?(${NAME} )?on (only )?${IDENT}( using (btree|gin|gist|brin|hash))? ?\\(${INDEX_COL}(,${INDEX_COL})*\\)$`)],
+  ['CREATE_INDEX', new RegExp(`^create (unique )?index (if not exists )?(${NAME} )?on (only )?${IDENT}( using (btree|gin|gist|brin|hash))? ?\\(${INDEX_COL}(,${INDEX_COL})*\\)$`)],
   ['ENABLE_RLS', new RegExp(`^alter table (if exists )?${IDENT} enable row level security$`)],
   ['COMMENT', new RegExp(`^comment on (table|column|schema|index) (${NAME}\\.){0,2}${NAME} is (''|null)$`)],
   // only ADD COLUMN actions, each one a safe column definition

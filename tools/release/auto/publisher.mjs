@@ -307,11 +307,14 @@ async function resume(d, open, freeze = []) {
   const comments = await d.gh.paginate(`/issues/${pr.number}/comments`);
   const decision = await evaluate(d, pr, comments);
   if (decision.decision !== 'ALLOW' || pr.head.sha !== meta.source_head) {
-    await d.gh.patch(`/pulls/${open.number}`, { state: 'closed' });
     const codes = ['SOURCE_NO_LONGER_ALLOWED', ...decision.reasons];
-    if (outcome) return appliedButHeld(d, open.number, pr, outcome, codes);
-    if (outcomeUnknown) return outcomeUnknownHeld(d, open.number, pr, codes);
-    return { status: 'HELD', codes, release_pr: open.number };
+    // Freeze first, close the release PR last: an interruption in between must leave the freeze
+    // (and an open release PR the next run still sees), never a closed PR with no freeze.
+    let res = { status: 'HELD', codes, release_pr: open.number };
+    if (outcome) res = await appliedButHeld(d, open.number, pr, outcome, codes);
+    else if (outcomeUnknown) res = await outcomeUnknownHeld(d, open.number, pr, codes);
+    await closeRelease(d, open.number);
+    return res;
   }
   return finish(d, pr, { releasePr: open.number, releaseHead: meta.release_head, meta, migrations: decision.migrations, outcomeUnknown });
 }
@@ -476,7 +479,6 @@ async function finish(d, pr, started) {
   // Resumed release whose migrations may have run in a cut-off earlier run (see `resume`).
   const unknown = started.outcomeUnknown === true && !applied;
   if (r.stage === 'recheck') {
-    await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
     // A read that failed (every code ends in _UNKNOWN) says nothing about the change itself, so
     // it must not cost this commit its release for good. It is retried — but a bounded number of
     // times: each attempt costs a cherry-pick, a release PR and a full CI run, so an evidence
@@ -493,16 +495,19 @@ async function finish(d, pr, started) {
     if (!r.codes.includes('RELEASE_FROZEN')) {
       await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200), kind);
     }
-    if (applied?.status === 'applied') return appliedButHeld(d, started.releasePr, pr, applied, r.codes);
-    if (unknown) return outcomeUnknownHeld(d, started.releasePr, pr, r.codes, false);
-    return { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+    let res = { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+    if (applied?.status === 'applied') res = await appliedButHeld(d, started.releasePr, pr, applied, r.codes);
+    else if (unknown) res = await outcomeUnknownHeld(d, started.releasePr, pr, r.codes, false);
+    await closeRelease(d, started.releasePr);
+    return res;
   }
   if (r.stage === 'ci') {
-    await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
     await hold(d, pr, `RELEASE_CI_FAILED:${r.codes.join(',')}`);
-    if (applied?.status === 'applied') return appliedButHeld(d, started.releasePr, pr, applied, r.codes);
-    if (unknown) return outcomeUnknownHeld(d, started.releasePr, pr, r.codes, false);
-    return { status: 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+    let res = { status: 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+    if (applied?.status === 'applied') res = await appliedButHeld(d, started.releasePr, pr, applied, r.codes);
+    else if (unknown) res = await outcomeUnknownHeld(d, started.releasePr, pr, r.codes, false);
+    await closeRelease(d, started.releasePr);
+    return res;
   }
   if (r.stage === 'merge') {
     const pre = applied?.status === 'applied' ? ['MIGRATIONS_APPLIED_RELEASE_HELD'] : unknown ? ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED'] : [];
@@ -563,8 +568,10 @@ function migrationOutcomeFor(d, releaseHead) {
 // already committed, rolling code back cannot undo it (ROLLBACK_INSUFFICIENT_DATA_CHANGED); if
 // nobody knows what committed, the freeze says so (MIGRATION_OUTCOME_UNKNOWN).
 async function migrationStopped(d, releasePr, pr, o) {
-  await d.gh.patch(`/pulls/${releasePr}`, { state: 'closed' });
-  if (o.status === 'unavailable') return { status: 'HELD', codes: ['MIGRATION_EXECUTOR_UNAVAILABLE'], release_pr: releasePr, source_pr: pr.number };
+  if (o.status === 'unavailable') {
+    await closeRelease(d, releasePr);
+    return { status: 'HELD', codes: ['MIGRATION_EXECUTOR_UNAVAILABLE'], release_pr: releasePr, source_pr: pr.number };
+  }
   const known = ['failed', 'refused'].includes(o.status) && Array.isArray(o.applied);
   const codes = [known ? String(o.code || 'MIGRATION_FAILED').slice(0, 160) : 'MIGRATION_OUTCOME_UNKNOWN'];
   if (known && o.applied.length) codes.push('ROLLBACK_INSUFFICIENT_DATA_CHANGED');
@@ -573,6 +580,7 @@ async function migrationStopped(d, releasePr, pr, o) {
   const issue = await openFreeze(d, codes, `release PR #${releasePr} (source #${pr.number}), migracje`, {
     migration: { status: o.status ?? null, code: o.code ?? null, applied: known ? o.applied : 'NIEZNANE' },
   });
+  await closeRelease(d, releasePr); // last: the freeze and the hold already stand
   return { status: 'FROZEN', codes, freeze: issue, release_pr: releasePr, source_pr: pr.number };
 }
 
@@ -580,6 +588,13 @@ async function migrationStopped(d, releasePr, pr, o) {
 function releaseMigrations(d, base, releaseHead) {
   return d.git('diff', '--name-only', '--diff-filter=A', base, releaseHead, '--', 'supabase/migrations')
     .split('\n').filter(Boolean).map(f => f.slice(f.lastIndexOf('/') + 1)).sort();
+}
+
+// Closing the release PR is always the LAST step of a stop: hold and freeze come first, so a run
+// cut off in between leaves a freeze (or at worst an open release PR the next run re-handles),
+// never a closed PR over a possibly changed database with nothing stopping the next release.
+async function closeRelease(d, releasePr) {
+  await d.gh.patch(`/pulls/${releasePr}`, { state: 'closed' });
 }
 
 // A resumed release with migrations stops unmerged while nobody knows whether its migrations

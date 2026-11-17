@@ -485,6 +485,8 @@ test('PR #499 review fix: allow rules check the WHOLE statement, never a prefix 
       'create index i on public.t (id) include (x);',
       'create index i on public.t (id) with (fillfactor=70);',
       'create index i on public.t (id) tablespace x;',
+      'create index concurrently i on public.t (id);',
+      'create index concurrently if not exists i on public.t (id);',
     ],
     COMMENT_ON: ['comment on table public.t is (select 1);', "comment on table public.t is 'x' || purge();"],
     CREATE_SCHEMA: ['create schema s authorization x;'],

@@ -885,3 +885,40 @@ test('#491 review fix: run cut off, source still allowed: the migrate job is ask
   const r = await runPublisher(migDeps(fx, gh, { migrationOutcome: { release_head: releaseHead, status: 'applied', applied: [MIG], code: 'MIGRATIONS_ALREADY_APPLIED' } }));
   assert.equal(r.status, 'RELEASED', JSON.stringify(r));
 });
+
+// PR #499 review fix: the release PR is closed LAST. A run cut off between the steps must leave a
+// freeze (or an open release PR), never a closed PR over a possibly changed database with no freeze.
+for (const [label, setup] of [
+  ['migrate job reported a mid-batch failure', async (fx, gh, state) => {
+    await runPublisher(migDeps(fx, gh));
+    return { migrationOutcome: { release_head: state.pulls[0].head.sha, status: 'failed', applied: ['20261117000050_first.sql'], code: `MIGRATION_FAILED:${MIG}:42P01` } };
+  }],
+  ['outcome lost after the migrate job, source no longer allowed', async (fx, gh, state) => {
+    await runPublisher(migDeps(fx, gh));
+    state.comments[100].push({ ...pass(fx.prs[0].head), created_at: '2026-11-16T11:00:00Z', body: pass(fx.prs[0].head).body.replace('"PASS"', '"FAIL"') });
+    return {};
+  }],
+]) {
+  test(`#499: ${label}: cut off right before the close, the freeze already stands and the next release is refused`, async () => {
+    const fx = fixture([addNotes]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    const extra = await setup(fx, gh, state);
+    const dying = { ...gh, patch: async () => { throw new Error('job killed before the close'); } };
+    await assert.rejects(runPublisher(migDeps(fx, dying, extra)), /job killed/);
+    assert.equal(state.pulls[0].state, 'open', 'not closed yet');
+    assert.ok(state.issues.some(i => i.title.startsWith(FREEZE_TITLE)), 'freeze opened before the close');
+    fx.git('fetch', 'origin', 'main');
+    const next = await runPublisher(migDeps(fx, gh));
+    assert.notEqual(next.status, 'RELEASED'); assert.equal(state.merged.length, 0);
+  });
+  test(`#499: ${label}: cut off while opening the freeze, the release PR is still open (never closed without a freeze)`, async () => {
+    const fx = fixture([addNotes]);
+    const { gh, state } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)] } });
+    const extra = await setup(fx, gh, state);
+    const dying = { ...gh, post: async (p, b) => { if (p === '/issues') throw new Error('job killed before the freeze'); return gh.post(p, b); } };
+    await assert.rejects(runPublisher(migDeps(fx, dying, extra)), /job killed/);
+    assert.equal(state.pulls[0].state, 'open');
+    assert.equal(state.closed.length, 0);
+    assert.equal(state.merged.length, 0);
+  });
+}
