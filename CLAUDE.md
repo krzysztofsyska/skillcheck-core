@@ -63,8 +63,8 @@ the calculator demo, nor as "w przygotowaniu"; no customer-facing text promises,
 bot calls. Its place in the work order is in `docs/ROADMAP.md`.
 
 Competency tests: the recruiter chooses per recruitment whether they approve the AI-drafted tasks
-themselves, or the tests are generated and sent automatically (owner decision of 2026-11-06, quoted
-in `docs/ROADMAP.md`). In both modes a test goes only to a candidate on the recruitment's shortlist
+themselves, or the tests are generated and sent automatically (the owner accepted this on
+2026-11-16 at 22:39; verbatim quote in `docs/ROADMAP.md`). In both modes a test goes only to a candidate on the recruitment's shortlist
 (rule R1, enforced in the database), only redacted CV text goes to the model, and CV and profile text
 are data, never instructions.
 
