@@ -1,12 +1,20 @@
 'use client';
-import { useActionState } from 'react';
+import { useActionState, useRef } from 'react';
 import { saveFollowup, type FollowupFormState } from './actions';
 import { followupPurposes, observationFields, outcomeLabels, probationLabels, retainedLabels, checkpoints } from '../../../../../../../../lib/process-followup';
 type Props = { companyId: string; recruitmentId: string; applicationId: string; caseId?: string; operation: 'create' | 'record' | 'grant'; completed?: number[]; members?: { user_id: string; label: string }[] };
 export function FollowupForm({ companyId, recruitmentId, applicationId, caseId, operation, completed = [], members = [] }: Props) {
-  const [state, action, pending] = useActionState(saveFollowup.bind(null, companyId, recruitmentId, applicationId), {} as FollowupFormState);
+  // React clears uncontrolled fields after every form action, including a validation error.
+  // Keep what was typed after a failed save; let the reset happen after a successful one.
+  const saved = useRef(false);
+  const save = saveFollowup.bind(null, companyId, recruitmentId, applicationId);
+  const [state, action, pending] = useActionState(async (previous: FollowupFormState, form: FormData) => {
+    const next = await save(previous, form);
+    saved.current = Boolean(next.saved);
+    return next;
+  }, {} as FollowupFormState);
   const select = (name: string, label: string, values: Record<string,string>) => <label>{label}<select name={name} required defaultValue="not_measured">{Object.entries(values).map(([k,v]) => <option key={k} value={k}>{v}</option>)}</select></label>;
-  return <form action={action}>
+  return <form action={action} onReset={event => { if (!saved.current) event.preventDefault(); }}>
     <input type="hidden" name="operation" value={operation}/>{caseId && <input type="hidden" name="case_id" value={caseId}/>}
     {operation === 'create' && <>
       {select('purpose','Odrębny cel oceny',followupPurposes)}

@@ -8,8 +8,11 @@ import {
   CandidateReportError, loadCandidateReport, noMissingDataDisclaimer,
   requirementStatusLabels, type CandidateReport, type CandidateRequirement,
 } from '../../../../../../../../lib/candidate-report';
+import { exportHistoryView, loadCandidateReportExportHistory } from '../../../../../../../../lib/candidate-report-export';
 import { criterionKindLabels, requirementMarkLabels, requirementMarkOrder, type RequirementMark } from '../../../../../../../../lib/requirement-flags';
 import styles from '../screening/screening.module.css';
+import printStyles from './candidate-report-print.module.css';
+import { PrintReportButton } from '../../../report/print-button';
 
 export const dynamic = 'force-dynamic';
 // Bez danych kandydata w tytule i w adresie strony.
@@ -31,7 +34,7 @@ const groupIntros: Record<RequirementMark, string> = {
 };
 
 function RequirementCard({ requirement }: { requirement: CandidateRequirement }) {
-  return <article className={styles.criterion}>
+  return <article className={`${styles.criterion} ${printStyles.requirement}`}>
     <p>{criterionKindLabels[requirement.kind]}</p>
     <h4>{requirement.text}</h4>
     <p><strong>{requirementStatusLabels[requirement.status]}</strong>
@@ -44,7 +47,7 @@ function RequirementCard({ requirement }: { requirement: CandidateRequirement })
       <p className="notice">Ta analiza jest starszego typu i nie zawiera cytatów z CV dla tego wymagania.</p>}
     {!!requirement.quotes.length && <>
       <h5>Cytat z CV</h5>
-      {requirement.quotes.map((quote, index) => <blockquote key={index}>{quote.quote}
+      {requirement.quotes.map((quote, index) => <blockquote key={index} className={printStyles.quote}>{quote.quote}
         <footer><small>Pozycja w sprawdzonym tekście CV: {quote.start}–{quote.end}</small></footer></blockquote>)}
     </>}
     {requirement.missingInfo && <><h5>Czego brakuje</h5><p>{requirement.missingInfo}</p></>}
@@ -70,15 +73,28 @@ export default async function CandidateReportPage({ params }: { params: Promise<
     throw error;
   }
   const { summary } = report;
+  // SC-015-D2: błąd odczytu historii daje neutralny komunikat, nigdy nie psuje raportu.
+  const exportHistory = exportHistoryView(await loadCandidateReportExportHistory(client, route));
 
-  return <main className={`workspace ${styles.screening}`}><section>
-    <Link href={base}>← Rekrutacja</Link>
+  return <main className={`workspace ${styles.screening} ${printStyles.reportRoot}`}><section>
+    <Link href={base} className={printStyles.noPrint}>← Rekrutacja</Link>
     <p className="eyebrow">SKILLCHECK · RAPORT KANDYDATA</p>
     <h1>Raport kandydata</h1>
     <p>{report.recruitmentName} · {report.positionTitle}</p>
     <p><small>Zgłoszenie {applicationId.slice(0, 8)} · wygenerowano {new Date(report.generatedAt).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })} (Warszawa)</small></p>
     <p className="notice">Raport zestawia wymagania stanowiska z informacjami z CV i wspiera ocenę człowieka.
       Nie jest decyzją o zatrudnieniu i nie zawiera wyniku ogólnego. {noMissingDataDisclaimer}</p>
+    {/* Zwykły odnośnik, nie <Link>: prefetch nie może tworzyć wpisów audytu pobrania (SC-015-D). */}
+    <div className={printStyles.noPrint}><PrintReportButton /></div>
+    <p className={printStyles.noPrint}><a href={`${base}/applications/${applicationId}/report/export`} download>Pobierz CSV</a>
+      {' '}<small>Każde pobranie jest zapisywane (kto i kiedy).</small></p>
+    <details className={printStyles.noPrint}>
+      <summary>Historia eksportu</summary>
+      {exportHistory.kind === 'list'
+        ? <><ul>{exportHistory.items.map(item => <li key={item.key}>{item.when} · {item.who}</li>)}</ul>
+          {exportHistory.truncated && <p><small>Pokazujemy 50 ostatnich pobrań.</small></p>}</>
+        : <p role="status">{exportHistory.message}</p>}
+    </details>
 
     <h2>Podsumowanie</h2>
     {!report.analysisStatus && <p role="status">Dla tego zgłoszenia nie ma jeszcze analizy CV.
@@ -113,11 +129,18 @@ export default async function CandidateReportPage({ params }: { params: Promise<
       </div>;
     })}
 
-    <h2>Dalsze kroki</h2>
-    <ul>
-      <li><Link href={screeningPath(route)}>Macierz wymagań i dowodów</Link></li>
-      <li><Link href={`${base}/applications/${applicationId}/interview`}>Przygotowanie do rozmowy</Link></li>
-      <li><Link href={`${base}/report`}>Porównanie kandydatów</Link></li>
-    </ul>
+    <div className={printStyles.noPrint}>
+      <h2>Dalsze kroki</h2>
+      <ul>
+        <li><Link href={screeningPath(route)}>Macierz wymagań i dowodów</Link></li>
+        <li><Link href={`${base}/applications/${applicationId}/interview`}>Przygotowanie do rozmowy</Link></li>
+        <li><Link href={`${base}/report`}>Porównanie kandydatów</Link></li>
+      </ul>
+    </div>
+
+    {/* SC-015-C: stopka zawsze widoczna, także na wydruku i w PDF. Bez danych kandydata. */}
+    <footer className={printStyles.footer}>
+      <p>Raport wspiera ocenę człowieka i nie jest decyzją o zatrudnieniu. Decyzję podejmuje rekruter.</p>
+    </footer>
   </section></main>;
 }
