@@ -225,7 +225,8 @@ type ExpectedFunctions =
   | "record_assessment_center_session_export"
   | "read_exercise_ai_settings"
   | "set_exercise_ai_auto_release"
-  | "ac_assessor_display_names";
+  | "ac_assessor_display_names"
+  | "issue_exercise_ai_auto_access";
 
 type _Tables = Expect<Equal<TableName, ExpectedTables>>;
 type _Views = Expect<Equal<ViewName, ExpectedViews>>;
@@ -615,6 +616,9 @@ type _AcAssessorNamesReturn = Expect<Equal<Database["public"]["Functions"]["ac_a
   user_id: string; display_name: string;
 }[]>>;
 type _ExerciseAiAutoReleaseReturn = Expect<Equal<Database["public"]["Functions"]["set_exercise_ai_auto_release"]["Returns"], boolean>>;
+type _ExerciseAiAutoAccessArgs = Expect<Equal<Database["public"]["Functions"]["issue_exercise_ai_auto_access"]["Args"], {
+  target_company: string; target_recruitment: string;
+}>>;
 type _ListArgs = Expect<Equal<Database["public"]["Functions"]["list_sales_leads"]["Args"], { result_limit?: number }>>;
 type _ListReturn = Expect<Equal<Database["public"]["Functions"]["list_sales_leads"]["Returns"], Row<"sales_leads">[]>>;
 type _StatusReturn = Expect<Equal<Database["public"]["Functions"]["platform_operator_status"]["Returns"], boolean>>;
