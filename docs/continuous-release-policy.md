@@ -118,7 +118,31 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   chat on 2026-11-16 and did not object, which is **not** the same as approving it; no decision of
   his is recorded in the repository. The way out is to make the worker deploy part of the release
   instead of widening the gate — until then, a release touching these files waits for a human.
-- After deploy: `SMOKE_FAILED` / `DEPLOYMENT_NOT_CONFIRMED` → rollback + freeze. If the release
+  **#461, stage 1 — the deploy step exists, the gate stays.** The publisher now has a worker
+  deploy step (`deployWorkerStep` in `tools/release/auto/publisher.mjs`, runner in
+  `tools/release/auto/worker-deploy.mjs`). After the release merge lands on `main` and Vercel
+  has confirmed the app, and before smoke, it deploys `screening-worker` to production from a
+  detached worktree of the exact merge SHA (never the publisher's checkout, never a PR branch;
+  the SHA must be on `origin/main`), with the same command and pinned CLI as
+  `deploy-screening-worker.yml`. Whether a commit needs it is decided by `workerGate` itself on
+  that commit's diff and closure, so the step and the gate cannot disagree; an unknown scope
+  counts as needing it. Success means exit code 0 **and** the CLI's confirmation line for that
+  project and function. `afterDeploy` never returns DONE without it when it was needed:
+  `WORKER_DEPLOY_FAILED` (failed, unconfirmed or for another SHA) and
+  `WORKER_DEPLOY_UNAVAILABLE` (no `SUPABASE_ACCESS_TOKEN` in the job, or no deploy step) both
+  mean rollback + freeze, never a silent skip. On rollback the worker is deployed again from the
+  reverted `main` when the release had attempted a worker deploy (even a failed one may have
+  half landed); when it never ran, the worker is left alone. A redeploy that fails is
+  `ROLLBACK_WORKER_DEPLOY_FAILED` and the rollback counts as failed.
+  The owner's rules here (chat, 2026-11-16): no release step may need his click, and
+  `WORKER_DEPLOY_REQUIRED` stays until the automatic worker deploy actually works. So the gate
+  still refuses every such release. **One-time step, BLOCKED on the owner (a secret):** a
+  Supabase access token as the environment secret `SUPABASE_ACCESS_TOKEN` of `agent-control`
+  (today it exists only in `production-approval`). Stage 2, a separate commit and review: after
+  the token is placed and one real automatic deploy has been verified, the gate turns from a
+  block into this step.
+- After deploy: `SMOKE_FAILED` / `DEPLOYMENT_NOT_CONFIRMED` / `WORKER_DEPLOY_FAILED` /
+  `WORKER_DEPLOY_UNAVAILABLE` → rollback + freeze. If the release
   had touched data through a migration, the log and the freeze issue also carry
   **`ROLLBACK_INSUFFICIENT_DATA_CHANGED`**: reverting code does not restore data.
 
