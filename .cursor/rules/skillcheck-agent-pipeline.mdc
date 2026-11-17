@@ -1,9 +1,11 @@
 ---
 description: SkillCheck agent pipeline and owner approval gates
-alwaysApply: true
+alwaysApply: false
 ---
 
 # SkillCheck Cursor Rule
+
+> ARCHIVAL (SC-436-POLICY-CLEANUP): the owner dropped Cursor as a builder at the end of October 2026. This file is no longer applied automatically (`alwaysApply: false`) and is kept only because the pipeline allowlist and a test still reference its path. Builder roles are in `CLAUDE.md` and `AGENTS.md`.
 
 Read `AGENTS.md`, `docs/AGENT_WORKFLOW.md`, the linked GitHub Issue and the PR before changing code.
 

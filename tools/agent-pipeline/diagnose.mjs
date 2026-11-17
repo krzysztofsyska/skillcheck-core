@@ -135,7 +135,10 @@ export async function diagnose(env, fetchImpl = fetch, policy = {}) {
       await check('feedback_protection_and_environment', () => verifyFeedbackProtection(client, APP_ID, policy));
       await check('feedback_bootstrap_provenance', () => verifyStateBootstrap(client, policy));
     }
-    await check('cursor_agent_read', async () => {
+    // In SUBSCRIPTION_ONLY / claude-code mode no Cursor run exists, so a Cursor
+    // agent read must not be required for a healthy result. Cursor mode keeps it.
+    const subscriptionBuilder = policy?.execution_mode === 'SUBSCRIPTION_ONLY' && policy?.builder_provider === 'claude-code';
+    if (!subscriptionBuilder) await check('cursor_agent_read', async () => {
       requireThat(env.CURSOR_API_KEY && /^bc-[a-zA-Z0-9-]{1,100}$/.test(env.CURSOR_DIAGNOSTIC_AGENT_ID ?? ''));
       const result = await request('https://api.cursor.com', `/v1/agents/${env.CURSOR_DIAGNOSTIC_AGENT_ID}`,
         `Basic ${Buffer.from(`${env.CURSOR_API_KEY}:`).toString('base64')}`);
