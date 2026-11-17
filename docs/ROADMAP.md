@@ -99,7 +99,7 @@ W tym wybór rekrutera: zatwierdza zadania sam albo testy generują się i wycho
 | Eksport CSV podsumowania sesji | ZROBIONE | PR #480 |
 | Rejestr pobrań CSV sesji | ZROBIONE | PR #486 |
 | Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | DO ZROBIENIA | issue #338, #274, #283 |
-| Asesorzy pokazani z nazwy, nie z identyfikatora | W TOKU | gałąź `claude/r3-ac-names` (etykiety: PR #500) |
+| Asesorzy pokazani z nazwy, nie z identyfikatora | W TOKU | PR #513 (etykiety: PR #500) |
 
 ### R4. Powrót pakietów WERYFIKACJA i ASSESSMENT CENTER na stronę oferty
 
