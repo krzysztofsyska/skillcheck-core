@@ -413,3 +413,35 @@ test('#491 review fix: DESTRUCTIVE_SQL reads the raw AND the lexed text (never w
   const r = classifyRelease(['supabase/migrations/1_x.sql'], [{ path: 'supabase/migrations/1_x.sql', sql: "comment on table public.companies is '--'; alter table public.companies disable row level security;" }]);
   assert.deepEqual(r.reasons, ['NON_ADDITIVE_SQL:ALTER_TABLE:supabase/migrations/1_x.sql']);
 });
+
+test('#491 review fix: a -- comment ends at a lone CR and at CRLF, exactly as PostgreSQL reads it', () => {
+  const evil = 'alter table public.companies disable row level security;';
+  assert.deepEqual(nonAdditiveSql(`-- x\r${evil}\n`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql(`-- x\r\n${evil}\n`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql(`-- x\n${evil}\n`), ['ALTER_TABLE']);
+  // The CR-hidden statement is also seen by the destructive scan.
+  assert.ok(destructiveSql('-- x\rdrop table public.a;\n').includes('DROP'));
+  assert.ok(destructiveSql('create schema s; -- x\rupdate public.a set b = 1;\n').includes('UPDATE_ROWS'));
+  // Harmless comments with CR / CRLF still pass.
+  assert.deepEqual(nonAdditiveSql('-- note\rbegin;\r\ncreate schema s; -- more\rcommit;\r\n'), []);
+  assert.equal(lexSql('-- x\rselect 1').text.includes('select 1'), true);
+  assert.equal(lexSql('-- x').text.trim(), '');
+});
+
+test('#491 review fix: only the outer begin ... commit frame is allowed; transaction control elsewhere is refused', () => {
+  const inner = 'begin;\ncreate table public.a(id int); COMMIT; create table public.a(id int);\ncommit;\n';
+  assert.deepEqual(nonAdditiveSql(inner), ['TXN_CONTROL']);
+  assert.deepEqual(nonAdditiveSql('begin;\ncreate schema s;\ncommit;\n'), []);
+  assert.deepEqual(nonAdditiveSql('create schema s;\n'), []);
+  for (const mid of ['commit', 'begin', 'start transaction', 'end', 'rollback', 'abort', 'savepoint x', 'release savepoint x',
+    'release x', 'prepare transaction \'t\'', 'commit prepared \'t\'', 'rollback to savepoint x', 'begin transaction isolation level serializable']) {
+    assert.deepEqual(nonAdditiveSql(`begin;\ncreate schema s;\n${mid};\ncreate schema t;\ncommit;\n`), ['TXN_CONTROL'], mid);
+  }
+  // A second begin at the start, a commit that is not last, a commit-only or begin-only misplacement.
+  assert.deepEqual(nonAdditiveSql('begin;\nbegin;\ncreate schema s;\ncommit;\n'), ['TXN_CONTROL']);
+  assert.deepEqual(nonAdditiveSql('commit;\ncreate schema s;\n'), ['TXN_CONTROL']);
+  assert.deepEqual(nonAdditiveSql('create schema s;\nbegin;\n'), ['TXN_CONTROL']);
+  // Reaches the release decision with the existing reason shape.
+  const r = classifyRelease(['supabase/migrations/20260101000000_a.sql'], [{ path: 'supabase/migrations/20260101000000_a.sql', sql: inner }]);
+  assert.deepEqual(r.reasons, ['NON_ADDITIVE_SQL:TXN_CONTROL:supabase/migrations/20260101000000_a.sql']);
+});

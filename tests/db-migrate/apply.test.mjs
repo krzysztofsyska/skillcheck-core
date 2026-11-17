@@ -144,3 +144,9 @@ test('TLS comes from code: URL ssl parameters are removed so the CA and verifica
   assert.deepEqual(tlsOptions(ca), { ca, rejectUnauthorized: true });
   assert.deepEqual(tlsOptions(undefined), { rejectUnauthorized: false });
 });
+
+test('#491 review fix: unframe refuses transaction control inside the body, even mid-line or upper case', () => {
+  assert.throws(() => unframe('begin;\ncreate table a(id int); COMMIT; create table a(id int);\ncommit;\n', 'x'), /transaction control/);
+  assert.throws(() => unframe('begin;\ncreate table a(id int);\nsavepoint s;\ncommit;\n', 'x'), /transaction control/);
+  assert.equal(unframe('begin;\ncreate table a(id int);\ncommit;\n', 'x').includes('create table a'), true);
+});

@@ -44,8 +44,9 @@ export function lexSql(sql) {
   while (i < sql.length) {
     const c = sql[i]; const next = sql[i + 1]; const prev = i > 0 ? sql[i - 1] : '';
     if (c === '-' && next === '-') {
-      const end = sql.indexOf('\n', i + 2);
-      out += ' '; i = end < 0 ? sql.length : end + 1; continue;
+      // PostgreSQL ends a `--` comment at \n OR a lone \r (a CR-only line break counts).
+      const m = /[\r\n]/.exec(sql.slice(i + 2));
+      out += ' '; i = m ? i + 2 + m.index + 1 : sql.length; continue;
     }
     if (c === '/' && next === '*') {
       let depth = 1; i += 2;
@@ -120,7 +121,6 @@ export function destructiveSql(sql) {
 // outright, as are policies, grants, functions, views, triggers, types and extensions.
 const IDENT = String.raw`("?[a-z_][\w$]*"?\.)?"?[a-z_][\w$]*"?`;
 const ADDITIVE = [
-  ['TXN', /^(begin|commit)$/],
   ['CREATE_SCHEMA', /^create schema (if not exists )?\S+$/],
   ['CREATE_TABLE', new RegExp(`^create table (if not exists )?${IDENT} ?\\(`)],
   ['CREATE_INDEX', /^create (unique )?index (concurrently )?(if not exists )?\S+ on /],
@@ -129,17 +129,23 @@ const ADDITIVE = [
   // only ADD COLUMN actions: any other action after a comma refuses
   ['ADD_COLUMN', new RegExp(`^alter table (if exists )?${IDENT} add column (if not exists )?(?!.*,\\s*(?!add column\\b)(add|drop|alter|disable|enable|no|force|rename|owner|set|reset|validate|replica|cluster|inherit|attach|detach)\\b)`)],
 ];
+export const TXN_CONTROL = /^(begin|start|commit|end|rollback|abort|savepoint|release|prepare\s+transaction|commit\s+prepared|rollback\s+prepared)\b/;
 export function nonAdditiveSql(sql) {
   if (typeof sql !== 'string' || !sql.trim()) return ['UNREADABLE'];
   const lexed = lexSql(sql);
   if (!lexed.ok) return [`UNPARSEABLE_${lexed.code}`];
   if (lexed.dollar) return ['DOLLAR_QUOTING'];
   const bad = [];
-  for (const raw of lexed.text.split(';')) {
-    const st = raw.replace(/\s+/g, ' ').trim().toLowerCase();
-    if (!st) continue;
+  const stmts = lexed.text.split(';').map(raw => raw.replace(/\s+/g, ' ').trim().toLowerCase()).filter(Boolean);
+  stmts.forEach((st, idx) => {
+    // Only the OUTER frame: `begin` as the first and `commit` as the last statement. Any other
+    // transaction control (a COMMIT in the middle persists earlier statements and leaves the rest
+    // un-undoable) is refused wherever it stands.
+    if (st === 'begin' && idx === 0) return;
+    if (st === 'commit' && idx === stmts.length - 1) return;
+    if (TXN_CONTROL.test(st)) { bad.push('TXN_CONTROL'); return; }
     if (!ADDITIVE.some(([, re]) => re.test(st))) bad.push(st.split(' ').slice(0, 2).join('_').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 30) || 'STATEMENT');
-  }
+  });
   return [...new Set(bad)];
 }
 

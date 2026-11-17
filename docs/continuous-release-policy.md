@@ -76,7 +76,8 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
 - `DESTRUCTIVE_SQL:<KIND>:<file>` — any `DROP …`, `DELETE FROM`, `TRUNCATE`, `ALTER TABLE … DROP`,
   `ALTER … TYPE`, `RENAME`, `UPDATE … SET` anywhere in a migration (comments included).
 - `NON_ADDITIVE_SQL:<KIND>:<file>` — allowlist gate beside `DESTRUCTIVE_SQL`: a migration may contain
-  only `begin`/`commit`, `create schema`, `create table`, `create index`, `alter table … add column`,
+  only the outer `begin` (first statement) / `commit` (last statement) frame (any other transaction
+  control anywhere else: `NON_ADDITIVE_SQL:TXN_CONTROL:<file>`; `--` comments end at LF or CR), `create schema`, `create table`, `create index`, `alter table … add column`,
   `alter table … enable row level security` and `comment on`. Anything else (`disable row level
   security`, `grant`/`revoke`, `create`/`alter policy`, functions or any `$$` quoting, views, inserts,
   other `alter table` actions …) is refused in the publisher and again in the migrate job, and waits

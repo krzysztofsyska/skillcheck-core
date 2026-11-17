@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
+import { lexSql, TXN_CONTROL } from '../release/auto/policy.mjs';
 
 export const migrationName = /^(\d{14})_([a-z0-9_]+)\.sql$/;
 export const sha256 = text => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -40,7 +41,15 @@ export function unframe(sql, file) {
   if (meaningful[0][1] !== begins[0] || meaningful.at(-1)[1] !== commits[0]) {
     throw new Error(`${file}: begin; must be the first and commit; the last statement`);
   }
-  return lines.slice(begins[0] + 1, commits[0]).join('\n');
+  const body = lines.slice(begins[0] + 1, commits[0]).join('\n');
+  // #491 review fix: the runner owns the transaction. Any other transaction control inside the body
+  // (e.g. `COMMIT;` mid-line, which the line check above cannot see) would persist part of it and
+  // make the rollback undo nothing. Skipped only if the text cannot be lexed (unchanged behaviour).
+  const lexed = lexSql(body);
+  if (lexed.ok && lexed.text.split(';').some(st => TXN_CONTROL.test(st.replace(/\s+/g, ' ').trim().toLowerCase()))) {
+    throw new Error(`${file}: transaction control (begin/commit/rollback/savepoint/...) inside the migration body is not allowed`);
+  }
+  return body;
 }
 
 export async function loadMigrations(dir, files) {
