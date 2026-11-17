@@ -29,6 +29,11 @@ Czat przedstawił poniższe rekomendacje, właściciel odpowiedział **„tak ja
 - „Zatwierdzanie testów. 6 listopada zdecydowałeś, że rekruter może puścić testy automatycznie (…). Poprawię zapis na Twoją wersję."
 - „White-label i bramka AI (SC-020, SC-021). Polecam wstrzymać je do pierwszej sprzedaży."
 
+Uwaga do czwartej pozycji: „(…)" to skrót samej rekomendacji czatu — w takiej postaci zapisano ją
+w poleceniu właściciela, z którego pochodzi ten cytat; pełniejszego dosłownego brzmienia w repozytorium
+nie ma. Dosłowną odpowiedzią właściciela na wszystkie pięć pozycji jest wyłącznie „tak jak polecasz"
+(16.11.2026, 22:39).
+
 ## Kolejność funkcji
 
 Wykonawca bierze pierwszy wolny krok z najwyższej pozycji, pomijając pozycje oznaczone CZEKA.
