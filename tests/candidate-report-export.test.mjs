@@ -184,3 +184,66 @@ test('niespójny raport i nieoczekiwany błąd nie ujawniają szczegółów', as
   assert.equal(failed.status, 500);
   assert.doesNotMatch(await body(failed), /SECRET_SQL_DETAILS|Kowalski/);
 });
+
+// SC-015-D2 — historia eksportu na ekranie raportu.
+import {
+  EXPORT_HISTORY_LIMIT, exportHistoryEmptyMessage, exportHistoryErrorMessage, exportHistoryView, loadCandidateReportExportHistory,
+} from '../lib/candidate-report-export.ts';
+
+const actor = '77777777-7777-4777-8777-777777777777';
+const historyRow = (overrides = {}) => ({ exported_at: '2026-11-16T10:00:00+00:00', actor_id: actor, actor_role: 'recruiter', is_me: false, ...overrides });
+
+test('historia eksportu: odczyt przez list_candidate_report_exports z trasą w małych literach', async () => {
+  const fake = client({ rpc: () => ({ data: [historyRow({ is_me: true }), historyRow({ actor_role: 'owner' })], error: null }) });
+  const history = await loadCandidateReportExportHistory(fake, { companyId: companyA.toUpperCase(), recruitmentId, applicationId });
+  assert.deepEqual(fake.calls, [{ name: 'list_candidate_report_exports', args: {
+    target_company: companyA, target_recruitment: recruitmentId, target_application: applicationId,
+  } }]);
+  assert.equal(history.ok, true);
+  const view = exportHistoryView(history);
+  assert.equal(view.kind, 'list');
+  assert.equal(view.truncated, false);
+  assert.deepEqual(view.items.map(item => item.who), ['Ty (rekruter)', 'Właściciel konta firmy']);
+  // Czas pokazywany w strefie Warszawy (UTC+1 w listopadzie).
+  assert.match(view.items[0].when, /11:00:00/);
+  assert.ok(!JSON.stringify(view).includes(actor), 'identyfikator konta nie trafia na ekran');
+});
+
+test('historia eksportu: pusty stan', async () => {
+  const history = await loadCandidateReportExportHistory(client({ rpc: () => ({ data: [], error: null }) }), route());
+  assert.deepEqual(exportHistoryView(history), { kind: 'empty', message: exportHistoryEmptyMessage });
+  assert.equal(exportHistoryEmptyMessage, 'Ten raport nie był jeszcze eksportowany.');
+});
+
+test('historia eksportu: każdy błąd odczytu daje neutralny komunikat, nie wyjątek', async () => {
+  const cases = [
+    () => ({ data: null, error: { code: '42501', message: 'candidate_report_forbidden' } }),
+    () => ({ data: null, error: null }),
+    () => ({ data: [historyRow({ actor_role: 'admin' })], error: null }),
+    () => ({ data: [historyRow({ actor_id: 'nie-uuid' })], error: null }),
+    () => ({ data: [historyRow({ exported_at: 'wczoraj' })], error: null }),
+    () => ({ data: [historyRow({ is_me: 'tak' })], error: null }),
+    () => ({ data: Array.from({ length: EXPORT_HISTORY_LIMIT + 1 }, () => historyRow()), error: null }),
+    () => { throw new Error('sieć'); },
+  ];
+  for (const rpc of cases) {
+    const view = exportHistoryView(await loadCandidateReportExportHistory(client({ rpc }), route()));
+    assert.deepEqual(view, { kind: 'error', message: exportHistoryErrorMessage });
+    assert.doesNotMatch(view.message, /42501|forbidden|sieć/);
+  }
+  const fake = client();
+  assert.deepEqual(await loadCandidateReportExportHistory(fake, { ...route(), applicationId: 'x' }), { ok: false });
+  assert.equal(fake.calls.length, 0);
+});
+
+test('historia eksportu: przy 50 wpisach informacja o limicie, osoba spoza zespołu ma etykietę', () => {
+  const entries = Array.from({ length: EXPORT_HISTORY_LIMIT }, (_, i) => ({
+    exportedAt: new Date(Date.UTC(2026, 10, 16, 10, 0, 0) - i * 60000).toISOString(), actorId: actor,
+    actorRole: i ? 'viewer' : 'former_member', isMe: false,
+  }));
+  const view = exportHistoryView({ ok: true, entries });
+  assert.equal(view.truncated, true);
+  assert.equal(view.items[0].who, 'Osoba spoza obecnego zespołu');
+  assert.equal(view.items[1].who, 'Czytelnik');
+  assert.equal(new Set(view.items.map(item => item.key)).size, EXPORT_HISTORY_LIMIT);
+});
