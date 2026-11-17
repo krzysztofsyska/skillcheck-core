@@ -1,14 +1,14 @@
 # SkillCheck — Development Backlog
 
-> **ARCHIWUM:** tabela i kolejka poniżej opisują punkt startowy z 4 października 2026 r.; ich dawne statusy `BACKLOG`, `REVIEW` i `DONE` nie są aktualnym przydziałem prac. Treść historyczna pozostaje bez zmian. Bieżącym źródłem zleceń są [issue #284](https://github.com/krzysztofsyska/skillcheck-core/issues/284), powiązane issue/PR oraz `AGENTS.md`.
+> **ARCHIWUM — aktualna kolejność prac jest w [docs/ROADMAP.md](ROADMAP.md).** Ten plik niczego nie zleca. Tabela i kolejka poniżej opisują punkt startowy z 4 października 2026 r.; ich statusy (`BACKLOG`, `REVIEW`, `DONE` i inne) nie obowiązują. Treść historyczna pozostaje bez zmian.
 
-## Aktualny punkt wejścia — 8 listopada 2026 r.
+## Punkt wejścia — zapis historyczny z 8 listopada 2026 r. (stan sprawdzać w git, issue i PR)
 
 - **Baza kodu:** produkcja działa na `main` @ `01429af586c487843259d424d9b4ed24e6c6a70c` (wydanie z 11.11.2026). `integration` idzie dalej; bieżący SHA sprawdzać w git i w PR, nie w tym dokumencie. Kod na `integration` **nie oznacza działania na produkcji**.
-- **Zakres i pozostałe braki:** [issue #284](https://github.com/krzysztofsyska/skillcheck-core/issues/284) pozostaje otwarte dla SC-005–016 i SC-019; priorytet FREE/PRESELEKCJA, potem pozostałe moduły według zależności. Stan szczegółowy sprawdzać w aktualnych issue i PR, nie w historycznej tabeli poniżej.
+- **Zakres i pozostałe braki:** kolejność prac i statusy funkcji są w [docs/ROADMAP.md](ROADMAP.md). Stan szczegółowy sprawdzać w aktualnych issue i PR, nie w historycznej tabeli poniżej.
 - **WERYFIKACJA/AC:** [PR #358](https://github.com/krzysztofsyska/skillcheck-core/pull/358) poprawiający kontrolę kontekstu ćwiczenia jest scalony do `integration`, ale [issue #338](https://github.com/krzysztofsyska/skillcheck-core/issues/338) (konta, uprawnienia i pełny przepływ) nadal jest otwarte. Nie oznaczać całego modułu jako gotowego.
 - **Wydanie:** wydanie na produkcję poszło 11.11.2026. [PR #266](https://github.com/krzysztofsyska/skillcheck-core/pull/266) scalił do `main` właściciel, `main` = `01429af586c487843259d424d9b4ed24e6c6a70c`, a 24 migracje wgrano na produkcję przez `db-migrate-production` (run 43011755458) po zatwierdzeniu właściciela w `production-approval`. HOLD P24 z `AGENTS.md` nadal obowiązuje dla **prawdziwych** płatności Przelewy24; tryb **Sandbox** na `skillcheck.pl` właściciel odmroził głosem 11.11.2026 (zob. sekcję „Przelewy24 Sandbox on the production domain" w `AGENTS.md`). Zamrożenie wspólnego Preview ([issue #337](https://github.com/krzysztofsyska/skillcheck-core/issues/337)) zostało zdjęte 11.11.2026 decyzją właściciela — zob. `docs/preview-payment-freeze.md`. Brak zgody na płatności lub nowe koszty bez osobnej decyzji właściciela.
-- **Role i bramki:** Codex planuje i koordynuje, Claude wykonuje przydzielony zakres; osobna sesja wykonuje niezależny review aktualnego SHA. Testy i review są warunkiem scalenia do `integration`, a produkcja wymaga osobnej decyzji właściciela (zob. `AGENTS.md` i [issue #355](https://github.com/krzysztofsyska/skillcheck-core/issues/355)).
+- **Role i bramki:** wykonawca bierze zadania z [docs/ROADMAP.md](ROADMAP.md); osobna sesja wykonuje niezależny review aktualnego SHA, a autor nie scala własnej zmiany. Testy i review są warunkiem scalenia do `integration`; wydania na produkcję idą mechanizmem z [issue #369](https://github.com/krzysztofsyska/skillcheck-core/issues/369) (zob. „Continuous release policy" w `AGENTS.md`).
 
 ---
 

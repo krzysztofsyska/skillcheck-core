@@ -4,6 +4,7 @@ This file applies to ChatGPT, Cursor, Codex and any other coding/review agent wo
 
 ## Source of truth
 
+Order of work = [docs/ROADMAP.md](docs/ROADMAP.md). It is the only source of what is built next; a builder takes tasks only from it, in its order, and does not take or propose work outside it. It changes only on the owner's instruction. `CLAUDE.md`, `docs/BACKLOG.md` and the queue in #367 only point to it.
 GitHub Issue = task contract.
 GitHub Pull Request = implementation/review contract.
 Do not require the owner to copy handoffs between agents.
@@ -179,7 +180,9 @@ The owner decided in his own message on 2026-11-16 (https://claude.ai/code/sessi
 - **Always refused automatically**: payments, outbound sends, workflows/pipeline/secrets, destructive SQL, and every migration until a fresh backup and an unattended migration executor exist (today none: the production database credential lives only in `production-approval`, which needs a human).
 - Rulesets `main-production-protection` and `protect-main-integration` stay as they are. Data deletion, price/payment rules, new real sends, new costs, wider access and production secrets still need separate owner consent.
 
-## Przelewy24 Sandbox on the production domain (owner decision 2026-11-11, by voice)
+## Przelewy24 Sandbox on the production domain (owner decision 2026-11-11, by voice) — NIEAKTUALNE
+
+> **Nieaktualne (16.11.2026):** właściciel zrezygnował z Przelewy24 — rekomendacja przyjęta przez niego 16.11.2026 o 22:39 jest zacytowana dosłownie w [docs/ROADMAP.md](docs/ROADMAP.md). Sprzedaż FREE i PRESELEKCJI ze Stripe idzie w repozytorium `krzysztofsyska/skillcheck-preselekcja`. Ta sekcja zostaje wyłącznie jako zapis historyczny i niczego nie otwiera. Kodu płatności w tym repozytorium nie zmieniamy: obowiązuje zamrożenie ścieżki płatności z „Continuous release policy".
 
 The owner decided, by voice in the Claude Code session of 2026-11-11
 (https://claude.ai/code/session_01TVLzgZUzLdPaNdmpjaxo1f), that a Przelewy24 verifier must be able to
