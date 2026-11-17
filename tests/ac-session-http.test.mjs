@@ -118,6 +118,10 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     assert.match(html, /Propozycja uzgodnienia \(Ty\): Zgodne z wymaganiami — UzasadnienieDrugie/);
     // ROADMAP R3: assessors by readable label, never by account id.
     assert.match(html, /Asesor 1 · Ty<\/strong>/); assert.match(html, /Asesor 2 · Członek zespołu 1<\/strong>/);
+    // #338: explicit evidence gaps per finalist, with the reason and the assessor label.
+    assert.match(html, /Braki dowodów/);
+    assert.match(html, /Niewystarczające dane, bez dowodu: Asesor 2 \(Członek zespołu 1\)\./);
+    assert.match(html, /Czeka na oddanie obu niezależnych arkuszy\./); assert.match(html, /Nie przypisano asesorów — brak arkuszy\./);
     // Ids stay only as form values and React keys; the visible text never shows one.
     const visible = html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]*>/g, ' ');
     for (const id of [ids.owner, ids.recruiter]) assert.ok(!visible.includes(id), 'no assessor account id in the visible page text');
@@ -162,7 +166,7 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     assert.equal(ok.status, 200);
     assert.match(ok.headers.get('content-type'), /text\/csv/);
     assert.match(ok.headers.get('content-disposition'), /attachment; filename="skillcheck-assessment-center-/);
-    assert.match(await ok.text(), /ac-session-csv-v1/);
+    assert.match(await ok.text(), /ac-session-csv-v2/);
     assert.deepEqual(audit.calls, [{ target_company: companyA, target_recruitment: recA, target_session: ids.session, export_kind: 'ac_session_csv' }]);
     audit.fail = true; audit.calls.length = 0;
     const failed = await fetch(url, { redirect: 'manual', headers: { Cookie: cookie } });
@@ -171,7 +175,7 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     assert.equal(failed.headers.get('cache-control'), 'private, no-store');
     const text = await failed.text();
     assert.equal(JSON.parse(text).error, 'audit_failed');
-    assert.doesNotMatch(text, /Anna Finalistka|ac-session-csv-v1|AsesorPierwszy/);
+    assert.doesNotMatch(text, /Anna Finalistka|ac-session-csv-v2|AsesorPierwszy/);
     assert.equal(audit.calls.length, 1);
     audit.fail = false;
     // A recruitment of another company in the URL never reaches the audit RPC.

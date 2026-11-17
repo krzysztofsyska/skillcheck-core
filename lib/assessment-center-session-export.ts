@@ -23,11 +23,12 @@ import { behaviorRatings } from './behavior-assessment.ts';
 import { exercisePositionMatches, exerciseRecruitmentMatches, exerciseUuid } from './exercise-context-identity.ts';
 import {
   AC_NO_DATA, acChangeAssessments, buildAssessmentCenterSessionReport, parseAssessmentCenterSession,
-  type AcCriterionAgreement, type AssessmentCenterSession, type AssessmentCenterSessionReport,
+  type AcCriterionAgreement, type AcEvidenceGap, type AssessmentCenterSession, type AssessmentCenterSessionReport,
 } from './assessment-center-session.ts';
 import { csvCell } from './screening-report.ts';
 
-export const AC_SESSION_EXPORT_VERSION = 'ac-session-csv-v1';
+// v2 (#338): dodana sekcja „Brak dowodu” na końcu pliku; wcześniejsze sekcje bez zmian.
+export const AC_SESSION_EXPORT_VERSION = 'ac-session-csv-v2';
 export const AC_TEXT_WITHHELD = 'niewidoczne do czasu oddania Twojego arkusza';
 export const acSessionExportHeaders = {
   'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
@@ -52,6 +53,22 @@ export function acAgreementText(value: AcCriterionAgreement, who: (id: string) =
     case 'disputed': return `Zapis uzgodnienia zakwestionowany przez ${who(value.disputedBy)}: ${value.disputeNote}. Obie oceny pozostają jako rozbieżność.`;
   }
 }
+
+/**
+ * #338: jawny opis braku dowodu — ten sam tekst na stronie sesji i w pliku. Bez treści
+ * zapisanych przez kogokolwiek; przy niewidocznych arkuszach mówi tylko, że są niewidoczne.
+ */
+export function acEvidenceGapText(gap: AcEvidenceGap, who: (id: string) => string): string {
+  switch (gap.reason) {
+    case 'no_stage': return 'Brak etapu oceniającego tę kompetencję.';
+    case 'not_assigned': return 'Nie przypisano asesorów — brak arkuszy.';
+    case 'restricted': return 'Nie można sprawdzić — arkusze widzą tylko dwaj przypisani asesorzy i właściciel firmy.';
+    case 'awaiting_sheets': return 'Czeka na oddanie obu niezależnych arkuszy.';
+    case 'insufficient_data': return `Niewystarczające dane, bez dowodu: ${gap.assessors
+      .map(item => `Asesor ${item.position} (${who(item.authorId)})`).join(', ')}.`;
+  }
+}
+export const AC_NO_GAPS = 'Brak braków: każda kompetencja ma dowód od obu asesorów w każdym etapie.';
 
 /** Krótki wynik uzgodnienia do jednej kolumny: uzgodniona ocena albo jawne „rozbieżność”. */
 function agreementOutcome(value: AcCriterionAgreement): string {
@@ -166,6 +183,15 @@ export function acSessionCsv(data: AcSessionExport): string {
         attempt.revisedAttempt ? 'zapisana' : AC_NO_DATA,
         proof ? acChangeLabel(proof.assessment) : hidden,
       ]);
+    }
+  }
+  // #338: jawne braki dowodów — kompetencja w etapie bez dowodu od obu asesorów (bez tekstów innych osób).
+  rows.push([], ['Finalista', 'Zgłoszenie', 'Kompetencja', 'Etap', 'Brak dowodu']);
+  for (const finalist of report.finalists) {
+    const label = data.finalistLabel(finalist.applicationId);
+    if (!finalist.evidenceGaps.length) rows.push([label, finalist.applicationId, '', '', AC_NO_GAPS]);
+    for (const gap of finalist.evidenceGaps) {
+      rows.push([label, finalist.applicationId, gap.competency, gap.stageTitle ?? AC_NO_DATA, acEvidenceGapText(gap, who)]);
     }
   }
   const csv = '﻿' + rows.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';
