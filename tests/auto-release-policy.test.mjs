@@ -159,10 +159,13 @@ test('publisher workflow: no manual start, trusted main code, no production-appr
   assert.doesNotMatch(wf, /workflow_dispatch|pull_request/);
   assert.match(wf, /schedule:/); assert.match(wf, /workflow_run:/);
   assert.doesNotMatch(wf, /production-approval|PRODUCTION_DATABASE_URL/);
-  // #461: the Supabase token reaches the publisher only as an env secret of agent-control, once,
-  // for the worker deploy step; nothing else in the workflow names it.
-  assert.equal(wf.split('\n').filter(l => /SUPABASE_ACCESS_TOKEN/.test(l)).length, 1);
-  assert.match(wf, /^\s+SUPABASE_ACCESS_TOKEN: \$\{\{ secrets\.SUPABASE_ACCESS_TOKEN \}\}$/m);
+  // #461: the Supabase token reaches the publisher only as an env secret of agent-control, for
+  // the worker deploy step (#491: and the read-only backup list). Since #491 the publisher runs in
+  // two agent-control jobs (publish, finish); nothing else in the workflow names it — in
+  // particular not the auto-migrate jobs (checked in tests/auto-release-migrate.test.mjs).
+  const tokenLines = wf.split('\n').filter(l => /SUPABASE_ACCESS_TOKEN/.test(l));
+  assert.equal(tokenLines.length, 2);
+  assert.ok(tokenLines.every(l => /^\s+SUPABASE_ACCESS_TOKEN: \$\{\{ secrets\.SUPABASE_ACCESS_TOKEN \}\}$/.test(l)));
   assert.match(wf, /ref: main/);
   assert.match(wf, /github\.ref == 'refs\/heads\/main'/);
   assert.match(wf, /cancel-in-progress: false/);

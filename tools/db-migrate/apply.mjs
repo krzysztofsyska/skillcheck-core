@@ -84,7 +84,9 @@ export async function plan(client, dir, migrations) {
   if (gaps.length) throw new Error(`Earlier repository migrations are neither applied nor listed: ${gaps.join(', ')}`);
 }
 
-export async function apply({ databaseUrl, dir, files, expectedHashes, releaseSha, runId, log = console.log, ssl }) {
+// `onApplied(file)` is called after each migration has committed, so a caller that stops at an
+// error knows exactly which migrations already changed the database (#491).
+export async function apply({ databaseUrl, dir, files, expectedHashes, releaseSha, runId, log = console.log, ssl, onApplied = () => {} }) {
   if (!/^[0-9a-f]{40}$/.test(releaseSha ?? '')) throw new Error('RELEASE_SHA must be a full commit SHA');
   if (!runId) throw new Error('RUN_ID required');
   const migrations = await loadMigrations(dir, parseList(files));
@@ -111,9 +113,11 @@ export async function apply({ databaseUrl, dir, files, expectedHashes, releaseSh
         await client.query('commit');
       } catch (error) {
         await client.query('rollback').catch(() => {});
-        throw new Error(`${m.file} failed and was rolled back; later migrations were not run: ${error.message}`);
+        throw Object.assign(new Error(`${m.file} failed and was rolled back; later migrations were not run: ${error.message}`),
+          { file: m.file, sqlstate: typeof error?.code === 'string' ? error.code : null });
       }
       log(`applied ${m.file}`);
+      onApplied(m.file);
     }
     return migrations.map(({ file, hash }) => ({ file, hash }));
   } finally { await client.end(); }

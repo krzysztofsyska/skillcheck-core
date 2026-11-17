@@ -76,8 +76,31 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   `ALTER … TYPE`, `RENAME`, `UPDATE … SET` anywhere in a migration (comments included).
 - Migrations at all, until both hold: a completed Supabase backup at most 24 h old
   (`BACKUP_EVIDENCE_MISSING` / `BACKUP_NOT_COMPLETED` / `BACKUP_STALE`) **and** an unattended
-  migration executor (`MIGRATION_EXECUTOR_UNAVAILABLE` — today always: the only production
-  database credential lives in `production-approval`, which needs a human).
+  migration executor (`MIGRATION_EXECUTOR_UNAVAILABLE` — until the owner places the secret below;
+  the `production-approval` credential is never used by the publisher).
+  **Path B (#491, owner 2026-11-17: „Na pierwsze pytanie to będzie B”, „Część pierwsza to
+  uruchom.”):** additive migrations go out by themselves; destructive ones (`DESTRUCTIVE_SQL`,
+  gate unchanged) keep waiting for the owner through `db-migrate-production`.
+  - Executor = secret `AUTO_MIGRATE_DATABASE_URL` (optional `AUTO_MIGRATE_DATABASE_CA_CERT`) in
+    the environment `auto-migrate`, without required reviewers, deployment branch `main` only.
+    The name has no "production" in it on purpose: the deployment check matches `/production/i`
+    and every environment job records a GitHub deployment. The job `executor` tests only its
+    presence; without it everything is exactly as before.
+  - Backup proof = the Supabase Management API backup list (`tools/release/auto/backups.mjs`,
+    GET only, token `SUPABASE_ACCESS_TOKEN` of `agent-control`); no token or a failed read is
+    `BACKUP_EVIDENCE_MISSING`.
+  - Flow in one run: `publish` stops at `AWAIT_MIGRATIONS` (release PR open, its CI green, every
+    gate rechecked) → `migrate` (`tools/release/auto/migrate.mjs`, trusted `main` code) takes the
+    list from the release commit itself (only new files, `DESTRUCTIVE_SQL` again), checks the
+    ledger and applies them one by one through `tools/db-migrate/apply.mjs` (statements + sha256,
+    never `supabase db push`), stopping at the first error → `finish` merges only if exactly
+    that list is reported applied for that exact release SHA.
+  - After success the files are on `main`, so `UNRELEASED_MIGRATIONS_PRECEDE` disappears for
+    them. On an error the release PR is closed unmerged, the source PR held, and a freeze issue
+    opened with the code (`MIGRATION_FAILED:<file>:<SQLSTATE>`, `MIGRATION_PARTIAL_STATE`, …) plus
+    `ROLLBACK_INSUFFICIENT_DATA_CHANGED` when at least one migration had committed;
+    `MIGRATION_OUTCOME_UNKNOWN` when the migrate job died; `MIGRATIONS_APPLIED_RELEASE_HELD` when
+    the migrations committed but the code release was stopped afterwards.
 - `CI_*`, `REVIEW_*`, `CODEX_UNRESOLVED_FINDINGS:*`, `FILE_LIST_TRUNCATED`, `PATCH_MISMATCH`,
   `CHERRY_PICK_CONFLICT_OR_EMPTY`, `RELEASE_NOT_SERIALIZED`, `RELEASE_FROZEN`.
 - `REVIEW_THREADS_UNRESOLVED:<n>:<paths>` / `REVIEW_CHANGES_REQUESTED:<author>` — a real review

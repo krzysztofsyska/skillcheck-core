@@ -261,7 +261,8 @@ export function ciGate(checkRuns, sha, required = REQUIRED_CHECKS) {
  * @param input.pr          { number, merged, head_sha, merge_commit_sha, base_ref }
  * @param input.files / input.migrations / input.checkRuns / input.comments
  * @param input.migrationExecutor  true only if the trusted workflow holds an unattended
- *                                 production migration credential (today: never)
+ *                                 production migration credential (#491: AUTO_MIGRATE_DATABASE_URL
+ *                                 in the `auto-migrate` environment; absent = refused, as before)
  * @param input.backups / input.now  backup evidence for migration releases
  */
 export function evaluateCandidate(input) {
