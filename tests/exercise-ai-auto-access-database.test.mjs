@@ -65,6 +65,23 @@ test('R1-AUTO-ACCESS: tryb automatyczny wydaje dostęp tylko krótkiej liście; 
   }
   assert.deepEqual(await grants(), []);
 
+  // Rozliczenie jak przy ręcznym wydaniu: przy włączonym liczeniu testów brak jednostek
+  // (albo za mało na wszystkich) przerywa całe wywołanie; nic nie jest wydane ani zużyte.
+  const units = async () => { await h.asAdmin();
+    return (await db.query("select available, used from sc19_commerce.entitlements where company_id=$1 and code='skill_test'", [f.companyId])).rows[0]; };
+  await h.asAdmin();
+  await db.exec('update sc19_commerce.settings set skill_test_metering=true');
+  await h.asUser(users.recruiter);
+  await assert.rejects(issue(), denied('PT422'), 'brak jednostek: nic nie wychodzi');
+  assert.deepEqual(await grants(), []);
+  await h.asAdmin();
+  await db.query("insert into sc19_commerce.entitlements(company_id, code, available) values($1, 'skill_test', 1)", [f.companyId]);
+  await h.asUser(users.recruiter);
+  await assert.rejects(issue(), denied('PT422'), 'jednostka na jeden z dwóch dostępów: nic nie wychodzi');
+  assert.deepEqual(await grants(), []);
+  assert.deepEqual(await units(), { available: 1, used: 0 }, 'przerwane wywołanie niczego nie zużywa');
+  await db.query("update sc19_commerce.entitlements set available=3 where company_id=$1 and code='skill_test'", [f.companyId]);
+
   // Tryb automatyczny: dostęp tylko dla f i g (krótka lista), tylko do zwolnionego testu, nie dla n.
   await h.asUser(users.recruiter);
   const first = await issue();
@@ -84,6 +101,7 @@ test('R1-AUTO-ACCESS: tryb automatyczny wydaje dostęp tylko krótkiej liście; 
   assert.equal(first.access.length, 2);
   assert.ok(first.access.every(x => x.definitionId === f.definitionId && x.revision === 1 && x.revoked === false && x.title));
   assert.equal(JSON.stringify(first).includes('token'), false, 'sekret linku nie jest zwracany');
+  assert.deepEqual(await units(), { available: 1, used: 2 }, 'jedna jednostka na każdy nowy dostęp');
 
   // Powtórka jest idempotentna.
   await h.asUser(f.owner);
@@ -91,6 +109,7 @@ test('R1-AUTO-ACCESS: tryb automatyczny wydaje dostęp tylko krótkiej liście; 
   assert.equal(second.issued, 0);
   assert.equal(second.access.length, 2);
   assert.equal((await grants()).length, 2);
+  assert.deepEqual(await units(), { available: 1, used: 2 }, 'powtórka niczego nie zużywa');
 
   // Odwołany dostęp nie wraca przy kolejnym wywołaniu.
   await h.asUser(f.owner);
@@ -109,10 +128,12 @@ test('R1-AUTO-ACCESS: tryb automatyczny wydaje dostęp tylko krótkiej liście; 
   const entry = await h.add(n);
   await h.asUser(f.owner);
   assert.equal((await issue()).issued, 1);
+  assert.deepEqual(await units(), { available: 0, used: 3 });
   // Usunięcie z krótkiej listy blokuje rotację (R1 przy każdym użyciu) i nic nie jest wydawane ponownie.
   await h.asUser(f.owner);
   await h.remove(entry);
   assert.equal((await issue()).issued, 0);
+  assert.deepEqual(await units(), { available: 0, used: 3 }, 'bez nowego dostępu nic nie jest zużywane');
 
   // Rekrutacja zamknięta: nic nie jest wydawane (nowy kandydat z krótkiej listy czeka).
   const late = await e.seed({ tenant: f });
@@ -133,4 +154,40 @@ test('R1-AUTO-ACCESS: tryb automatyczny wydaje dostęp tylko krótkiej liście; 
   // Ponowna instalacja na tym samym schemacie działa (preflight sprawdza zależności, nie dane).
   await db.exec(await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
   await assert.rejects(db.exec(await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8')), denied('55000'));
+});
+
+test('R1-AUTO-ACCESS native PostgreSQL: przełączenie na tryb ręczny w trakcie wywołania wygrywa', async t => {
+  if (process.env.SC_WER_PGLITE_PATH) { t.skip('Native independent connections required'); return; }
+  const e = await activeBoot(t, { fullChain: true }), { db, h, call } = e;
+  const rival = await e.connect(), observer = await e.connect();
+  const f = await e.seed();
+  await h.asUser(f.owner);
+  await db.query('select exercise_ai.record_proposal($1,$2,$3::jsonb,20)', [f.recruitment.id, f.definitionId, JSON.stringify({
+    provider: 'synthetic', model: 'fixture', prompt_version: 'v1', payload_schema_version: 1, result_schema_version: 1,
+    input_fingerprint: 'a'.repeat(64), position_id: f.position.id, position_updated_at: f.position.updated_at })]);
+  await db.query('select exercise_ai.approve_proposal($1)', [f.definitionId]);
+  assert.equal(await call('public.set_exercise_ai_auto_release', [f.companyId, f.recruitment.id, true]), true);
+
+  await rival.exec('reset role;set role authenticated');
+  await rival.query("select set_config('request.jwt.claim.sub',$1,false)", [f.owner]);
+  await rival.exec('begin');
+  let pending;
+  try {
+    assert.equal(await call('public.set_exercise_ai_auto_release', [f.companyId, f.recruitment.id, false], rival), false);
+    await h.asUser(f.owner);
+    let settled = false;
+    pending = call('public.issue_exercise_ai_auto_access', [f.companyId, f.recruitment.id]).finally(() => { settled = true; });
+    pending.catch(() => {});
+    // Wywołanie musi czekać na blokadę wiersza ustawień, a nie czytać starego trybu.
+    let waiting = false;
+    for (let i = 0; i < 60 && !settled && !waiting; i++) {
+      waiting = (await observer.query("select count(*)::int c from pg_stat_activity where datname=current_database() and wait_event_type='Lock'")).rows[0].c > 0;
+      if (!waiting) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.equal(waiting, true, 'wywołanie czeka na trwające przełączenie trybu');
+    await rival.exec('commit');
+  } finally { await rival.exec('rollback').catch(() => {}); }
+  assert.deepEqual(await pending, { autoRelease: false, issued: 0, access: [] });
+  await h.asAdmin();
+  assert.equal((await db.query('select count(*)::int c from private.competency_test_grants where recruitment_id=$1', [f.recruitment.id])).rows[0].c, 0);
 });

@@ -19,6 +19,11 @@
 --    (private.competency_lock_application + private.competency_eligible): reguła R1
 --    (krótka lista, z blokadą wiersza), status zgłoszenia/rekrutacji/stanowiska,
 --    zakaz dla niezatwierdzonej propozycji AI i poprawność definicji są sprawdzane w bazie;
+--  * tryb jest czytany z blokadą FOR SHARE wiersza ustawień: przełączenie na „Ręcznie"
+--    w trakcie wywołania czeka na jego koniec albo wywołanie widzi już tryb ręczny;
+--  * każdy NOWY dostęp zużywa jednostkę testu umiejętności tą samą funkcją co ręczne
+--    wydanie (sc19_commerce.consume_skill_test, bez zmian); powtórka niczego nie zużywa;
+--    brak jednostki (commerce_skill_test_exhausted) przerywa całe wywołanie;
 --  * idempotentnie: istniejący dostęp (także odwołany) nie jest wydawany ponownie;
 --    klucz wydania jest wyliczany z pary (zgłoszenie, wersja testu), więc w dzienniku
 --    zdarzeń widać, że dostęp wydał automat; aktorem w dzienniku jest zalogowana osoba,
@@ -42,7 +47,8 @@ begin
      or to_regclass('private.competency_test_grants') is null
      or to_regclass('public.recruitment_shortlist_entries') is null
      or to_regprocedure('public.read_exercise_ai_settings(uuid,uuid)') is null
-     or to_regprocedure('private.erasure_schema_signature()') is null then
+     or to_regprocedure('private.erasure_schema_signature()') is null
+     or to_regprocedure('sc19_commerce.consume_skill_test(uuid)') is null then
     raise exception 'r1_auto_access_dependency_missing' using errcode = '55000';
   end if;
   -- Wydanie deleguje sprawdzenia do przejrzanych wersji (C1 + strażnik C6 z PR #285/#291).
@@ -70,7 +76,7 @@ declare
   actor uuid := (select auth.uid());
   r public.recruitments; p public.positions; is_auto boolean;
   pair record; a public.applications; d public.exercise_definition_entries;
-  issued integer := 0; inserted integer; access_list jsonb;
+  issued integer := 0; access_list jsonb;
 begin
   if actor is null or target_company is null or target_recruitment is null
      or not private.has_company_access(target_company, true) then
@@ -86,10 +92,14 @@ begin
     raise exception 'exercise_ai_auto_access_forbidden' using errcode = '42501';
   end if;
   select * into p from public.positions x where x.company_id = r.company_id and x.id = r.position_id for share;
-  -- Brak wiersza ustawień znaczy tryb ręczny.
-  select coalesce(s.auto_release, false) into is_auto
-    from (select 1) one
-    left join exercise_ai.recruitment_settings s on s.company_id = r.company_id and s.recruitment_id = r.id;
+  -- Brak wiersza ustawień znaczy tryb ręczny. FOR SHARE: przełączenie trybu
+  -- (exercise_ai.set_auto_release) czeka na koniec tego wywołania, a wywołanie czekające
+  -- na trwające przełączenie widzi po nim nową wartość (read committed).
+  select s.auto_release into is_auto
+    from exercise_ai.recruitment_settings s
+   where s.company_id = r.company_id and s.recruitment_id = r.id
+   for share;
+  is_auto := coalesce(is_auto, false);
 
   if is_auto and r.status in ('draft', 'open') and p.id is not null and p.status <> 'archived' then
     -- Ta sama blokada co zapis/generowanie propozycji AI tej rekrutacji.
@@ -123,16 +133,22 @@ begin
       -- wycofanie zgody, R1 z blokadą wpisu na krótkiej liście, status, zatwierdzenie AI.
       a := private.competency_lock_application(pair.application_id, true);
       d := private.competency_eligible(a, pair.definition_id);
+      -- Po blokadzie zgłoszenia: dostęp wydany w międzyczasie (ręcznie albo przez równoległe
+      -- wywołanie) nie jest wydawany ani rozliczany drugi raz.
+      continue when exists (select 1 from private.competency_test_grants g
+                             where g.company_id = a.company_id and g.application_id = a.id
+                               and g.definition_entry_id = d.id);
+      -- Ta sama granica rozliczenia co ręczne wydanie: tylko dla nowego dostępu; brak
+      -- jednostki (commerce_skill_test_exhausted) przerywa całe wywołanie, nic nie zostaje wydane.
+      perform sc19_commerce.consume_skill_test(a.company_id);
       insert into private.competency_test_grants(company_id, candidate_id, recruitment_id, application_id,
           definition_entry_id, token_digest, start_by_at, created_by, issuance_request_key, event_request_key)
         values (a.company_id, a.candidate_id, a.recruitment_id, a.id, d.id,
           extensions.digest(encode(extensions.gen_random_bytes(32), 'hex'), 'sha256'),
           clock_timestamp() + interval '7 days', actor,
           md5('r1-auto-access:' || a.id::text || ':' || d.id::text)::uuid,
-          md5('r1-auto-access:' || a.id::text || ':' || d.id::text)::uuid)
-        on conflict do nothing;
-      get diagnostics inserted = row_count;
-      issued := issued + inserted;
+          md5('r1-auto-access:' || a.id::text || ':' || d.id::text)::uuid);
+      issued := issued + 1;
     end loop;
   end if;
 
