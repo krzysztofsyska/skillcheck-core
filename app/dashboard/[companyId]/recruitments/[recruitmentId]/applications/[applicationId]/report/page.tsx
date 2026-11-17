@@ -12,6 +12,10 @@ import { exportHistoryView, loadCandidateReportExportHistory } from '../../../..
 import {
   loadCompetencyReportSection, type CompetencyReportSection, type CompetencyReportTest,
 } from '../../../../../../../../lib/candidate-report-competency';
+import {
+  loadExercisesReportSection, type ExerciseReportItem, type ExercisesReportSection,
+} from '../../../../../../../../lib/candidate-report-exercises';
+import { loadStagesReportSection, type StagesReportSection } from '../../../../../../../../lib/candidate-report-stages';
 import { criterionKindLabels, requirementMarkLabels, requirementMarkOrder, type RequirementMark } from '../../../../../../../../lib/requirement-flags';
 import styles from '../screening/screening.module.css';
 import printStyles from './candidate-report-print.module.css';
@@ -107,6 +111,83 @@ function CompetencySection({ section, base }: { section: CompetencyReportSection
   </div>;
 }
 
+// R2-B: czas wpisu w raporcie zawsze w strefie Warszawy.
+function warsawTime(value: string): string {
+  return `${new Date(value).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })} (Warszawa)`;
+}
+
+// R2-B: ćwiczenie AC ocenione przez człowieka (poziom per kryterium i notatka
+// obserwatora jako dowód). Tekst to zwykły tekst w JSX. Bez wyniku zbiorczego.
+function ExerciseCard({ exercise, exercisesPath }: { exercise: ExerciseReportItem; exercisesPath: string }) {
+  return <article className={`${styles.criterion} ${printStyles.exerciseCard}`}>
+    <p>Wersja ćwiczenia {exercise.definitionVersion}</p>
+    <h4>{exercise.title}</h4>
+    <p><strong>{exercise.statusLabel}</strong>
+      {' '}<a href={`${exercisesPath}/${exercise.definitionEntryId}`} className={printStyles.noPrint}>Otwórz ćwiczenie</a></p>
+    {exercise.observation
+      ? <p><small>Obserwacja w wersji {exercise.observation.version} · zapisał(a): {exercise.observation.observer}
+        {' '}· {warsawTime(exercise.observation.observedAt)}</small></p>
+      : <p>Ćwiczenie nie ma jeszcze obserwacji.</p>}
+    <p>Kryteria z notatką obserwatora: {exercise.evidencedCriteria} z {exercise.totalCriteria}.</p>
+    {exercise.observation && exercise.criteria.map(criterion => <div key={criterion.criterionIndex} className={printStyles.requirement}>
+      <h5>{criterion.competency}</h5>
+      <p><strong>{criterion.ratingLabel}</strong></p>
+      {criterion.observerNote
+        ? <blockquote className={printStyles.quote}>{criterion.observerNote}
+          <footer><small>Notatka obserwatora</small></footer></blockquote>
+        : <p>Brak notatki obserwatora — za mało danych z ćwiczenia. To nie jest niska ocena.</p>}
+    </div>)}
+  </article>;
+}
+
+function ExercisesSection({ section, base }: { section: ExercisesReportSection; base: string }) {
+  return <div>
+    <h2>Ćwiczenia</h2>
+    <p>Poziomy i notatki wpisał człowiek obserwujący ćwiczenie kandydata.
+      Ocena dotyczy tej wersji ćwiczenia i nie jest decyzją o zatrudnieniu.</p>
+    {section.kind === 'list'
+      ? <>{section.exercises.map(exercise => <ExerciseCard key={exercise.definitionEntryId} exercise={exercise}
+          exercisesPath={`${base}/exercises`} />)}
+        {section.truncated && <p><small>Pokazujemy najnowsze ćwiczenia. Pozostałe są w zakładce ćwiczeń.</small></p>}</>
+      : <p role="status">{section.message}</p>}
+  </div>;
+}
+
+// R2-B: etapy rekrutacji i ręczna decyzja rekrutera — zapis decyzji człowieka,
+// nie rekomendacja systemu. Bez notatek z rozmów.
+function StagesSection({ section, base }: { section: StagesReportSection; base: string }) {
+  return <div>
+    <h2>Etapy rekrutacji</h2>
+    {section.kind !== 'list' ? <p role="status">{section.message}</p> : <>
+      <p>Aktualny etap: <strong>{section.currentStage}</strong>
+        {' '}<a href={`${base}/assessments`} className={printStyles.noPrint}>Etapy oceny</a></p>
+      {section.stages.length
+        ? <ol className={printStyles.stageList}>{section.stages.map(stage => <li key={`${stage.sequence}-${stage.name}`}>
+          {stage.current ? <strong>{stage.name} (aktualny)</strong> : stage.name}</li>)}</ol>
+        : <p>Brak zdefiniowanych etapów.</p>}
+      <h3>Historia przesunięć</h3>
+      {section.moves.length
+        ? <ul className={printStyles.stageList}>{section.moves.map((move, index) => <li key={index}>
+          {move.fromStage} → {move.toStage} · {move.actor} · {warsawTime(move.at)}</li>)}</ul>
+        : <p>Brak wcześniejszych przesunięć.</p>}
+      {section.movesTruncated && <p><small>Pokazujemy najnowsze przesunięcia. Pełna historia jest w zakładce „Etapy oceny”.</small></p>}
+      <h3>Decyzja rekrutera</h3>
+      <p>Zapis decyzji wpisanej ręcznie przez człowieka, nie rekomendacja systemu.</p>
+      {section.decision
+        ? <div className={printStyles.requirement}><p><strong>{section.decision.label}</strong></p>
+          {section.decision.reason && <p className={printStyles.quote}>Uzasadnienie: {section.decision.reason}</p>}</div>
+        : <p>Żadna decyzja nie została podjęta.</p>}
+      {section.decisions.length > 0 && <>
+        <h4>Historia decyzji</h4>
+        <ul className={printStyles.stageList}>{section.decisions.map((decision, index) => <li key={index} className={printStyles.quote}>
+          {decision.previousDecision} → {decision.newDecision} · {decision.actor} · {warsawTime(decision.at)}
+          <br />Uzasadnienie: {decision.reason}</li>)}</ul>
+        {section.decisionsTruncated && <p><small>Pokazujemy najnowsze decyzje. Pełna historia jest w zakładce „Etapy oceny”.</small></p>}
+      </>}
+    </>}
+  </div>;
+}
+
 export default async function CandidateReportPage({ params }: { params: Promise<ScreeningRoute> }) {
   const route = await params;
   const { companyId, recruitmentId, applicationId } = route;
@@ -128,8 +209,13 @@ export default async function CandidateReportPage({ params }: { params: Promise<
   // SC-015-D2: błąd odczytu historii daje neutralny komunikat, nigdy nie psuje raportu.
   const exportHistory = exportHistoryView(await loadCandidateReportExportHistory(client, route));
   // R2-B: błąd odczytu testu daje neutralny komunikat, nigdy nie psuje raportu.
-  const competency = await loadCompetencyReportSection(client, route,
-    { userId: user.id, ownerId: company.owner_id ?? null, canEdit });
+  // R2-B: ćwiczenia i etapy — każdy błąd odczytu to neutralny komunikat w sekcji.
+  const viewer = { userId: user.id, ownerId: company.owner_id ?? null, canEdit };
+  const [competency, exercises, stages] = await Promise.all([
+    loadCompetencyReportSection(client, route, viewer),
+    loadExercisesReportSection(client, route, viewer),
+    loadStagesReportSection(client, route, viewer),
+  ]);
 
   return <main className={`workspace ${styles.screening} ${printStyles.reportRoot}`}><section>
     <Link href={base} className={printStyles.noPrint}>← Rekrutacja</Link>
@@ -185,6 +271,8 @@ export default async function CandidateReportPage({ params }: { params: Promise<
     })}
 
     <CompetencySection section={competency} base={`${base}/applications/${applicationId}`} />
+    <ExercisesSection section={exercises} base={`${base}/applications/${applicationId}`} />
+    <StagesSection section={stages} base={`${base}/applications/${applicationId}`} />
 
     <div className={printStyles.noPrint}>
       <h2>Dalsze kroki</h2>

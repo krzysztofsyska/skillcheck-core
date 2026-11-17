@@ -54,3 +54,41 @@ test('R2-B: sekcja testu kompetencji jest na wydruku, dzieli się między kryter
   // Bez wyniku zbiorczego rubryki w raporcie.
   assert.doesNotMatch(page, /\.score\b/);
 });
+
+test('R2-B: sekcje „Ćwiczenia” i „Etapy rekrutacji” są na wydruku, przed „Dalsze kroki”', () => {
+  assert.match(page, /<ExercisesSection section=\{exercises\}/);
+  assert.match(page, /<StagesSection section=\{stages\}/);
+  assert.match(page, /<h2>Ćwiczenia<\/h2>/);
+  assert.match(page, /<h2>Etapy rekrutacji<\/h2>/);
+  const steps = page.indexOf('<h2>Dalsze kroki</h2>');
+  assert.ok(page.indexOf('<CompetencySection') < page.indexOf('<ExercisesSection'));
+  assert.ok(page.indexOf('<ExercisesSection') < page.indexOf('<StagesSection'));
+  assert.ok(page.indexOf('<StagesSection') < steps);
+  // Karta ćwiczenia ma ramkę na wydruku, wpis historii etapów nie jest dzielony.
+  assert.match(page, /printStyles\.exerciseCard/);
+  assert.match(css, /\.exerciseCard \{[^}]*border/);
+  assert.match(css, /\.stageList li \{[^}]*break-inside: avoid/);
+});
+
+test('R2-B: dane ćwiczeń i etapów idą przez moduły raportu z klientem RLS i tym samym widzem', () => {
+  assert.match(page, /from '\.\.\/(\.\.\/)+lib\/candidate-report-exercises'/);
+  assert.match(page, /from '\.\.\/(\.\.\/)+lib\/candidate-report-stages'/);
+  assert.match(page, /loadExercisesReportSection\(client, route, viewer\)/);
+  assert.match(page, /loadStagesReportSection\(client, route, viewer\)/);
+  assert.doesNotMatch(page, /service_?role|createAdminClient|SUPABASE_SERVICE/i);
+});
+
+test('R2-B: pusty stan i błąd odczytu dają komunikat z modułu, bez danych autora i bez notatek z rozmów', () => {
+  // Każdy stan inny niż lista pokazuje neutralny komunikat sekcji.
+  assert.match(page, /section\.kind === 'list'[\s\S]*?<p role="status">\{section\.message\}<\/p>/);
+  assert.match(page, /section\.kind !== 'list' \? <p role="status">\{section\.message\}<\/p>/);
+  // Autor wpisu tylko jako rola z modułu; bez identyfikatorów autorów, pracy kandydata i notatek z rozmów.
+  assert.doesNotMatch(page, /author_?[iI]d|actor_?[iI]d|work_sample|interview_notes|\.notes\b/);
+  // Decyzja jest opisana jako ręczna decyzja człowieka, nie rekomendacja systemu.
+  assert.match(page, /nie rekomendacja systemu/);
+  assert.doesNotMatch(page, /dangerouslySetInnerHTML/);
+});
+
+test('R2-B: raport nie wspomina rozmów telefonicznych z botem', () => {
+  assert.doesNotMatch(page, /voice|voicebot|bot głosow|rozmow[aęy] z botem/i);
+});
