@@ -138,9 +138,31 @@ export async function loadExercisesReportSection(
       latest.set(row.definition_entry_id, row);
     }
 
+    // Wersje, do których odnoszą się obserwacje, a które nie weszły do
+    // najnowszych 100 definicji, doczytujemy po id (te same filtry firmy i
+    // rekrutacji). Bez tego oceniona wersja wyglądałaby na „nieocenione".
+    const loaded: unknown[] = definitions.data.slice(0, EXERCISES_SCAN_LIMIT);
+    const loadedIds = new Set(loaded.map(item => String(record(item).id)));
+    const missingIds = Array.from(latest.keys()).filter(key => !loadedIds.has(key));
+    let allDefinitions: unknown[] = loaded;
+    if (missingIds.length) {
+      if (missingIds.some(key => !reportUuid.test(key))) throw new Error('Niezgodna obserwacja.');
+      const referenced = await client.from('exercise_definition_entries').select(definitionColumns)
+        .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId)
+        .in('id', missingIds);
+      if (referenced.error) {
+        return reportSchemaMissing(referenced.error.code)
+          ? { kind: 'unavailable', message: exercisesSectionMessages.unavailable }
+          : { kind: 'error', message: exercisesSectionMessages.error };
+      }
+      if (!Array.isArray(referenced.data)) throw new Error('Niezgodna lista.');
+      allDefinitions = loaded.concat(referenced.data)
+        .sort((a, b) => String(record(b).created_at).localeCompare(String(record(a).created_at)));
+    }
+
     // Tylko ćwiczenia AC. Każda oceniona wersja zostaje; ćwiczenie bez żadnej
     // obserwacji pokazujemy raz, w najnowszej wersji, jako „nieocenione".
-    const rows = definitions.data.slice(0, EXERCISES_SCAN_LIMIT).map(record)
+    const rows = allDefinitions.map(record)
       .filter(row => record(row.definition).kind === 'assessment_center');
     const observedExercises = new Set(rows.filter(row => latest.has(String(row.id))).map(row => String(row.exercise_id)));
     const shownUnobserved = new Set<string>();

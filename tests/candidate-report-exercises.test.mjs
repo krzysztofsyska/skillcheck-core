@@ -23,7 +23,12 @@ function fakeClient(tables, { errors = {} } = {}) {
     const result = () => {
       calls.push(state);
       if (errors[table]) return { data: null, error: errors[table] };
-      const rows = (tables[table] ?? []).filter(row => state.eqs.every(([k, v]) => !(k in row) || row[k] === v || row.__forged));
+      let rows = (tables[table] ?? []).filter(row => state.eqs.every(([k, v]) => !(k in row) || (typeof v === 'function' ? v(row[k]) : row[k] === v) || row.__forged));
+      if (state.order) {
+        const dir = state.order[1]?.ascending === false ? -1 : 1;
+        rows = [...rows].sort((a, b) => String(a[state.order[0]]).localeCompare(String(b[state.order[0]])) * dir);
+      }
+      if (state.limit != null) rows = rows.slice(0, state.limit);
       return { data: rows.map(({ __forged, ...row }) => row), error: null };
     };
     const q = {
@@ -31,6 +36,7 @@ function fakeClient(tables, { errors = {} } = {}) {
       eq(k, v) { state.eqs.push([k, v]); return q; },
       order(column, options) { state.order = [column, options]; return q; },
       limit(n) { state.limit = n; return q; },
+      in(k, values) { state.eqs.push([k, v => values.includes(v)]); return q; },
       async maybeSingle() { const r = result(); return { data: r.data?.[0] ?? null, error: r.error }; },
       then(resolve, reject) { return Promise.resolve(result()).then(resolve, reject); },
     };
@@ -177,6 +183,30 @@ const stageTables = (overrides = {}) => ({
       reason: 'Spełnia wymagania konieczne z rozmowy.', actor_id: recruiterId, created_at: '2026-11-16T13:00:00Z' },
   ],
   ...overrides,
+});
+
+test('R2-B ćwiczenia: oceniona wersja spoza 100 najnowszych definicji jest doczytana po id', async () => {
+  // 100 nowszych definicji innych ćwiczeń wypycha ocenioną wersję poza limit odczytu.
+  const filler = Array.from({ length: EXERCISES_SCAN_LIMIT }, (_, i) =>
+    defRow(1000 + i, 2000 + i, 1, `2026-11-20T10:${String(i % 60).padStart(2, '0')}:00Z`, competencyDefinition));
+  const { client, calls } = fakeClient({
+    exercise_definition_entries: [
+      ...filler,
+      defRow(10, 100, 2, '2026-11-15T10:00:00Z'),
+      defRow(11, 100, 1, '2026-11-14T10:00:00Z'),
+    ],
+    latest_exercise_observations: [obsRow(10)],
+  });
+  const section = await loadExercisesReportSection(client, route, recruiter);
+  assert.equal(section.kind, 'list');
+  assert.deepEqual(section.exercises.map(e => [e.definitionEntryId, e.status, e.definitionVersion]),
+    [[id(10), 'incomplete_evidence', 2]]);
+  assert.equal(section.exercises[0].evidencedCriteria, 1);
+  // Doczytanie po id zachowuje filtry firmy i rekrutacji.
+  const extra = calls.filter(c => c.table === 'exercise_definition_entries').at(-1);
+  assert.ok(extra.eqs.some(([k, v]) => k === 'company_id' && v === route.companyId));
+  assert.ok(extra.eqs.some(([k, v]) => k === 'recruitment_id' && v === route.recruitmentId));
+  assert.ok(extra.eqs.some(([k]) => k === 'id'));
 });
 
 test('R2-B etapy: czytelnik bez roli rekrutera nie wywołuje zapytań', async () => {
