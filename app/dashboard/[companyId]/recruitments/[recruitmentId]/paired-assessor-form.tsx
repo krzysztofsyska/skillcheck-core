@@ -5,13 +5,13 @@ import type { ExerciseDefinition } from '../../../../../lib/exercise-definition'
 import type { PairedAssessorActionState } from './paired-assessor-actions';
 
 type Action = (previous: PairedAssessorActionState, form: FormData) => Promise<PairedAssessorActionState>;
-export function PairedAssessorAssignmentForm({ action, ids, userId }: { action: Action; ids: string[]; userId: string }) {
+export function PairedAssessorAssignmentForm({ action, options }: { action: Action; options: { id: string; label: string }[] }) {
   const [state, submit, pending] = useActionState(action, {});
   return <form action={submit}>
     {state.error && <p role="alert">{state.error}</p>}
     <fieldset disabled={pending || state.saved}><legend>Przypisz dwie osoby</legend>
       {['first', 'second'].map((name, i) => <label key={name}>Asesor {i + 1}
-        <select name={name} defaultValue={ids[i]}>{ids.map(id => <option value={id} key={id}>{id === userId ? 'Ty' : id}</option>)}</select>
+        <select name={name} defaultValue={options[i]?.id}>{options.map(({ id, label }) => <option value={id} key={id}>{label}</option>)}</select>
       </label>)}<button>{pending ? 'Zapisywanie…' : 'Przypisz asesorów'}</button>
     </fieldset>
   </form>;
