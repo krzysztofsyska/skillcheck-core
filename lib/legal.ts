@@ -48,8 +48,12 @@ export const LEGAL_ACCEPTANCE_FIELD = 'legal_acceptance';
  *   (CLAUDE.md, "Voicebot on the public offer"). The annex was then withdrawn from publication the
  *   same day (owner decision 2026-11-11): no page, no download, no link. Its text is archived in
  *   docs/legal/withdrawn/. No production account ever stored an acceptance of `1.0+aneks1`.
+ * - `1.0+r3` (from 2026-11-17, owner decision): Regulamin § 10 ust. 5 adds the PRESELEKCJA result
+ *   guarantee (in the customer's favour; document set unchanged). The stored value is only recorded at
+ *   registration and is never compared on later sign-ins, so existing accounts are not asked again
+ *   and nothing is sent.
  */
-export const LEGAL_ACCEPTANCE_REVISION = `${LEGAL_VERSION}+r2`;
+export const LEGAL_ACCEPTANCE_REVISION = `${LEGAL_VERSION}+r3`;
 export const LEGAL_ACCEPTED_DOCUMENTS = ['regulamin', 'dpa', 'polityka-prywatnosci'] as const;
 export const LEGAL_ACCEPTANCE_VALUE = `v${LEGAL_ACCEPTANCE_REVISION}`;
 

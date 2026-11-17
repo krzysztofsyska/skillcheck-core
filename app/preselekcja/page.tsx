@@ -5,6 +5,7 @@ import { SiteFooter } from "../components/marketing/site-footer";
 import styles from "../marketing.module.css";
 import { loadPublicOffer, preselekcjaOffer, preselekcjaPrice } from "../components/marketing/preselekcja-offer";
 import { sc19PolicyPendingScope } from "../../lib/sc19-package-sizes";
+import { preselekcjaGuarantee } from "../../lib/preselekcja-guarantee";
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../lib/buy-preselekcja";
 
 // The PRESELEKCJA count follows the SC-019 catalog flag and policy per request,
@@ -49,6 +50,13 @@ export default async function PreselectionOfferPage() {
           <li><strong>Przyznanie analiz:</strong> po potwierdzeniu płatności — najpóźniej w ciągu 2 dni roboczych od uznania naszego rachunku.</li>
           <li><strong>Faktura:</strong> po zaksięgowaniu płatności wystawiamy fakturę VAT i wysyłamy ją e-mailem.</li>
         </ul>
+        <div aria-labelledby="preselection-guarantee">
+          <h2 id="preselection-guarantee">{preselekcjaGuarantee.headline}</h2>
+          <ul>
+            {preselekcjaGuarantee.points.map((point) => <li key={point}>{point}</li>)}
+          </ul>
+          <p className={styles.note}>Pełne warunki gwarancji: <Link href="/regulamin">Regulamin, § 10 ust. 5</Link>.</p>
+        </div>
         <p>Zasady zamówienia, reklamacji i odstąpienia opisuje <Link href="/regulamin">Regulamin</Link>. Dane przetwarzamy zgodnie z <Link href="/polityka-prywatnosci">Polityką prywatności</Link>.</p>
         <div className={styles.actions}>
           <Link className={styles.primary} href={BUY_PRESELEKCJA_PATH}>{BUY_PRESELEKCJA_LABEL}</Link>

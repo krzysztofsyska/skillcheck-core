@@ -41,3 +41,16 @@ test('stopka z dopiskiem o nie-decyzji jest zawsze renderowana, poza elementami 
 test('górna informacja o nie-decyzji zostaje na stronie', () => {
   assert.match(page, /Nie jest decyzją o zatrudnieniu i nie zawiera wyniku ogólnego/);
 });
+
+test('R2-B: sekcja testu kompetencji jest na wydruku, dzieli się między kryteriami, treść jako tekst', () => {
+  assert.match(page, /<CompetencySection section=\{competency\}/);
+  assert.match(page, /<h2>Test kompetencji<\/h2>/);
+  assert.match(page, /printStyles\.competencyTest/);
+  assert.match(css, /\.competencyTest \{[^}]*border/);
+  // Cytat kandydata to zwykły tekst w JSX, nigdy HTML.
+  assert.doesNotMatch(page, /dangerouslySetInnerHTML/);
+  // Sekcja jest przed blokiem „Dalsze kroki", a nie w nim (inaczej znikałaby z wydruku).
+  assert.ok(page.indexOf('<CompetencySection') < page.indexOf('<h2>Dalsze kroki</h2>'));
+  // Bez wyniku zbiorczego rubryki w raporcie.
+  assert.doesNotMatch(page, /\.score\b/);
+});
