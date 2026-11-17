@@ -76,3 +76,9 @@
 20261113090000_sc_process_followup_r17.sql
 # SC-015-D: candidate report CSV export audit log (own schema `report_audit`, one public function, no data seeded), test data only.
 20261116120000_sc015d_candidate_report_export_audit.sql
+# SC-015-D2: read-only export history for the candidate report (one public security-definer function, no data seeded), test data only.
+20261116210000_sc015d2_candidate_report_export_history.sql
+# SC-015-D3: company-level export history for the owner (one public security-definer function, no data seeded), test data only.
+20261117090000_sc015d3_company_report_export_history.sql
+# SC-AC-EXPORT-AUDIT: append-only audit of Assessment Center session CSV downloads (one report_audit table + one public security-definer function, no data seeded), test data only.
+20261117120000_sc_ac_session_export_audit.sql
