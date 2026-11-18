@@ -34,6 +34,10 @@ nowego `docs/DECYZJE.md`.” Właściciel:
   w docs/ROADMAP.md tylko jego status i dowód (numer PR). Kolejności, zakresu, pozycji i cen nie
   zmieniasz.”
 
+Obowiązuje brzmienie z 18:10 („w tym samym PR”), potwierdzone o 21:32 („1,2,3 tak”); wcześniejsza
+propozycja czatu „po scaleniu PR” jest NIEAKTUALNA (17.11.2026). Status wpisany w PR opisuje stan
+`integration` po scaleniu tego PR.
+
 **skillcheck-preselekcja: zakres przeniesienia i Fakturownia.** 14:34 „Zakres: całość A–D przed
 startem sprzedaży. Pakiety na stronie: WERYFIKACJA i Assessment Center mają być widoczne
 w skillcheck-preselekcja jako „wkrótce” wraz z opisem funkcjonalności. 3 tak” — „3 tak” to odpowiedź
@@ -61,7 +65,8 @@ Właściciel:
 
 - 07:25 „Jest powtórka połączona ze zwrotem. Najpierw poprawiamy za darmo, a jeżeli nie pasuje,
   oddajemy pieniądze. […] Minimum 5 kandydatów.”
-- 07:49 „Ok” — w odpowiedzi na trzy doprecyzowania czatu: kandydat „wart rozmowy” spełnia wszystkie
+- 07:49 „Ok” — w odpowiedzi na trzy doprecyzowania czatu (przeniesione z `docs/ROADMAP.md`, wpis
+  z PR #493; dosłownego brzmienia pytania w repozytorium nie ma, poniżej jego zapis z ROADMAP): kandydat „wart rozmowy” spełnia wszystkie
   wymagania konieczne klienta; zwrot dopiero po powtórce z udziałem klienta; gwarancja działa także
   przy słabym naborze, ale tylko dla pierwszych 20 firm.
 - 07:53 „Termin zgłoszenia gwarancji to 7 dni od otrzymania raportu. Zapis o gwarancji nie idzie do

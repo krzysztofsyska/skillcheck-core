@@ -8,8 +8,9 @@
 2. **Kolejność, zakres, etapy i pozycje zmienia wyłącznie właściciel.** Agent nie dopisuje, nie
    usuwa i nie przestawia pozycji z własnej inicjatywy.
 3. **Statusy aktualizuje wykonawca** w tym samym PR, który kończy albo zaczyna krok: status
-   (DO ZROBIENIA / W TOKU / ZROBIONE / DO SPRAWDZENIA) i dowód (numer PR, plik). Recenzent sprawdza,
-   że status zgadza się z diffem. Status oznacza stan na `integration`, nie na produkcji.
+   (DO ZROBIENIA / W TOKU / ZROBIONE / DO SPRAWDZENIA) i dowód (numer PR, plik). Wpisany status
+   opisuje stan `integration` po scaleniu tego PR. Recenzent sprawdza, że status zgadza się
+   z diffem. Status oznacza stan na `integration`, nie na produkcji.
 4. **Decyzje właściciela** zapisujemy wyłącznie w [docs/DECYZJE.md](DECYZJE.md), jako dosłowne
    cytaty z datą. Tutaj zostaje tylko ich skutek.
 
@@ -17,7 +18,7 @@ Bramki bezpieczeństwa (zamrożenie ścieżki płatności, migracje produkcyjne,
 kasowanie danych, nowe koszty, nowe realne wysyłki, polityka wydań #369) są w `AGENTS.md`. Ten plik
 ich nie zmienia i nie otwiera.
 
-Statusy ustalono 17.11.2026 z kodu na `integration` (`a7e01c0`) oraz z issue i PR.
+Statusy ustalono 17.11.2026 z kodu na `integration` (`7ebd063`) oraz z issue i PR.
 
 ## Etapy — cały SkillCheck
 
@@ -33,8 +34,7 @@ wyznacza lista „Kolejność funkcji” niżej.
 
 ## Kolejność funkcji
 
-Wykonawca bierze pierwszy wolny krok z najwyższej pozycji, pomijając pozycje oznaczone CZEKA
-i kroki, które zmieniają te same pliki co otwarty PR innej sesji.
+Wykonawca bierze pierwszy wolny krok z najwyższej pozycji, pomijając pozycje oznaczone CZEKA.
 
 Ceny pakietów: [docs/cennik-2026-11-02.md](cennik-2026-11-02.md) (jedyne źródło liczb).
 
@@ -121,14 +121,13 @@ W `skillcheck-core` ścieżka płatności pozostaje zamrożona.
 
 ## Utrzymanie wydań
 
-Tylko otwarte zadania, bez których gotowa funkcja nie może wejść na produkcję. Wykonawca bierze
-najwyżej jedno takie zadanie na przebieg; resztę czasu poświęca funkcjom.
+Tylko otwarte zadania, bez których gotowa funkcja nie może wejść na produkcję.
 
 | Zadanie | Status | Dowód |
 |---|---|---|
 | [#369](https://github.com/krzysztofsyska/skillcheck-core/issues/369) — polityka wydań i automatyczny publikator | W TOKU (publikator działa, issue otwarte) | `.github/workflows/auto-release.yml` |
 | [#461](https://github.com/krzysztofsyska/skillcheck-core/issues/461) — wdrożenie screening-worker razem z wydaniem; do końca obowiązuje bramka `WORKER_DEPLOY_REQUIRED` | W TOKU (etap 1 scalony) | PR #465 |
-| [#491](https://github.com/krzysztofsyska/skillcheck-core/issues/491) — publikator sam wgrywa bezpieczne migracje (droga B) | W TOKU | PR #499 |
+| [#491](https://github.com/krzysztofsyska/skillcheck-core/issues/491) — publikator sam wgrywa bezpieczne migracje (droga B) | W TOKU (publikator scalony; sekret i środowisko — niżej) | PR #499 |
 
 ## Porządki przyspieszające pracę (17.11.2026)
 

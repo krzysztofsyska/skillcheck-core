@@ -51,7 +51,12 @@ export async function runPublisher(d) {
     if (check.ok) await doneMarker(d, unchecked.pr, unchecked.merge, 'wydane, sprawdzone po przerwanym przebiegu, smoke OK');
     else {
       const pr = await d.gh.get(`/pulls/${unchecked.pr}`);
-      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge }, [], true);
+      // The in-memory applied list died with the cut-off run. A release is merged only after its
+      // migrations were applied, so the files the merge added under supabase/migrations/ are exactly
+      // what reached the database: derive them, so a rollback still says the data changed.
+      const added = d.git('diff', '--name-only', '--diff-filter=A', `${unchecked.merge}^1`, unchecked.merge, '--', 'supabase/migrations')
+        .split('\n').filter(Boolean).map(f => f.slice(f.lastIndexOf('/') + 1)).sort();
+      return finishAfterDeploy(d, pr, { releasePr: null }, { ...check, mergeSha: unchecked.merge }, added, true);
     }
   }
   if (freeze.length) return { status: 'FROZEN', codes: ['RELEASE_FROZEN'], freeze: freeze.map(i => i.number) };
@@ -68,7 +73,7 @@ export async function runPublisher(d) {
     log(`ALLOW #${pr.number} ${pr.head.sha}`);
     const started = await startRelease(d, pr);
     if (started.hold) { await hold(d, pr, started.hold); held.push({ pr: pr.number, reasons: [started.hold] }); continue; }
-    const result = await finish(d, pr, started);
+    const result = await finish(d, pr, { ...started, migrations: decision.migrations });
     return { ...result, held };
   }
   return { status: 'NOTHING_TO_RELEASE', codes: [], held };
@@ -139,7 +144,9 @@ async function evaluate(d, pr, comments) {
     patches, unreleasedMigrations, provenance, reviewThreads, reviews, workerModules,
     pr: { number: full.number, merged: full.merged === true, head_sha: full.head.sha, merge_commit_sha: full.merge_commit_sha, base_ref: full.base.ref },
     files: paths, migrations, checkRuns: checks?.check_runs, comments,
-    migrationExecutor: false, backups: d.backups ?? null, now: d.now(),
+    // #491: true only when the workflow's `executor` job found AUTO_MIGRATE_DATABASE_URL in the
+    // `auto-migrate` environment (presence test, never the value). Otherwise exactly as before.
+    migrationExecutor: d.migrationExecutor === true, backups: d.backups ?? null, now: d.now(),
   });
 }
 
@@ -287,13 +294,29 @@ async function resume(d, open, freeze = []) {
   const parent = d.git('rev-list', '--parents', '-n', '1', pr.merge_commit_sha).trim().split(/\s+/)[1];
   const base = d.git('merge-base', 'origin/main', meta.release_head).trim();
   if (!parent || patchId(d, parent, pr.merge_commit_sha) !== patchId(d, base, meta.release_head)) return tampered(`PR #${open.number} (patch)`);
+  // #491: the migrate job reported a stop for this exact release: nothing more is attempted.
+  const outcome = migrationOutcomeFor(d, meta.release_head);
+  if (outcome && outcome.status !== 'applied') return migrationStopped(d, open.number, pr, outcome);
+  // #491 (review fix): an open release PR that carries migrations, with no outcome reported for
+  // its head, was left by a run cut off somewhere around the migrate job: its migrations may
+  // already be in the production database. This run cannot read the ledger (no database
+  // credential here), so it never closes such a release quietly: if it can still go on, the
+  // migrate job re-reads the ledger (MIGRATIONS_ALREADY_APPLIED / MIGRATION_PARTIAL_STATE); if it
+  // cannot, every release is frozen as possibly changed data.
+  const outcomeUnknown = !outcome && releaseMigrations(d, base, meta.release_head).length > 0;
   const comments = await d.gh.paginate(`/issues/${pr.number}/comments`);
   const decision = await evaluate(d, pr, comments);
   if (decision.decision !== 'ALLOW' || pr.head.sha !== meta.source_head) {
-    await d.gh.patch(`/pulls/${open.number}`, { state: 'closed' });
-    return { status: 'HELD', codes: ['SOURCE_NO_LONGER_ALLOWED', ...decision.reasons], release_pr: open.number };
+    const codes = ['SOURCE_NO_LONGER_ALLOWED', ...decision.reasons];
+    // Freeze first, close the release PR last: an interruption in between must leave the freeze
+    // (and an open release PR the next run still sees), never a closed PR with no freeze.
+    let res = { status: 'HELD', codes, release_pr: open.number };
+    if (outcome) res = await appliedButHeld(d, open.number, pr, outcome, codes);
+    else if (outcomeUnknown) res = await outcomeUnknownHeld(d, open.number, pr, codes);
+    await closeRelease(d, open.number);
+    return res;
   }
-  return finish(d, pr, { releasePr: open.number, releaseHead: meta.release_head, meta });
+  return finish(d, pr, { releasePr: open.number, releaseHead: meta.release_head, meta, migrations: decision.migrations, outcomeUnknown, resumed: true });
 }
 
 async function waitForChecks(d, sha) {
@@ -308,13 +331,18 @@ async function waitForChecks(d, sha) {
   }
 }
 
-async function mergeAndVerify(d, { releasePr, releaseHead }, recheck = null, workerMode = 'auto') {
+async function mergeAndVerify(d, { releasePr, releaseHead }, recheck = null, workerMode = 'auto', beforeMerge = null) {
   const ci = await waitForChecks(d, releaseHead);
   if (ci.length) return { ok: false, stage: 'ci', codes: ci };
   // C8: authorization may have changed while CI ran (new verdict, Codex finding, freeze, new push).
   if (recheck) {
     const reasons = await recheck().catch(() => ['RECHECK_FAILED']);
     if (reasons.length) return { ok: false, stage: 'recheck', codes: reasons };
+  }
+  // #491: migrations of the release reach production after every gate, right before the merge.
+  if (beforeMerge) {
+    const stop = await beforeMerge();
+    if (stop) return { ok: false, codes: [], ...stop };
   }
   let merged;
   try {
@@ -417,7 +445,22 @@ export async function waitForDeployment(d, sha) {
 }
 
 async function finish(d, pr, started) {
-  const migrationsApplied = []; // the publisher never runs migrations today (MIGRATION_EXECUTOR_UNAVAILABLE)
+  // #491: a release that carries migrations is merged only after the `migrate` job (environment
+  // `auto-migrate`) reported them applied for this exact release head. The first pass stops at
+  // AWAIT_MIGRATIONS (release PR open, its CI green, every gate rechecked); the workflow then runs
+  // the migrate job and this publisher again (`finish` job) with the outcome.
+  const migrations = (Array.isArray(started.migrations) ? started.migrations : []).map(p => p.slice(p.lastIndexOf('/') + 1)).sort();
+  let migrationsApplied = [];
+  const beforeMerge = async () => {
+    if (!migrations.length) return null;
+    const o = migrationOutcomeFor(d, started.releaseHead);
+    if (!o) return { stage: 'await_migrations' };
+    if (o.status !== 'applied') return { stage: 'migration_stopped', outcome: o };
+    const applied = Array.isArray(o.applied) ? [...o.applied].sort() : [];
+    if (applied.join(',') !== migrations.join(',')) return { stage: 'migration_stopped', outcome: { ...o, status: 'failed', code: 'MIGRATION_SET_MISMATCH' } };
+    migrationsApplied = applied;
+    return null;
+  };
   const recheck = async () => {
     if ((await openFreezeIssues(d)).length) return ['RELEASE_FROZEN'];
     const fresh = await d.gh.get(`/pulls/${pr.number}`);
@@ -425,9 +468,19 @@ async function finish(d, pr, started) {
     const decision = await evaluate(d, fresh, await d.gh.paginate(`/issues/${pr.number}/comments`));
     return decision.decision === 'ALLOW' ? [] : decision.reasons;
   };
-  const r = await mergeAndVerify(d, started, recheck);
+  const r = await mergeAndVerify(d, started, recheck, 'auto', beforeMerge);
+  if (r.stage === 'await_migrations') {
+    return { status: 'AWAIT_MIGRATIONS', codes: [], release_pr: started.releasePr, source_pr: pr.number,
+      // `resumed`: this release PR was left open by an earlier run, so a migrate job may already
+      // have run for it (see migrationStopped). Only a release PR opened by this very run is false.
+      migration_request: { release_pr: started.releasePr, release_head: started.releaseHead, source_pr: pr.number, resumed: started.resumed === true } };
+  }
+  if (r.stage === 'migration_stopped') return migrationStopped(d, started.releasePr, pr, r.outcome);
+  // Migrations reported applied, but the release is not merged below: data changed, code did not.
+  const applied = migrations.length ? migrationOutcomeFor(d, started.releaseHead) : null;
+  // Resumed release whose migrations may have run in a cut-off earlier run (see `resume`).
+  const unknown = started.outcomeUnknown === true && !applied;
   if (r.stage === 'recheck') {
-    await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
     // A read that failed (every code ends in _UNKNOWN) says nothing about the change itself, so
     // it must not cost this commit its release for good. It is retried — but a bounded number of
     // times: each attempt costs a cherry-pick, a release PR and a full CI run, so an evidence
@@ -444,15 +497,23 @@ async function finish(d, pr, started) {
     if (!r.codes.includes('RELEASE_FROZEN')) {
       await hold(d, pr, `RECHECK_BEFORE_MERGE:${r.codes.join(',')}`.slice(0, 200), kind);
     }
-    return { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+    let res = { status: r.codes.includes('RELEASE_FROZEN') ? 'FROZEN' : 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+    if (applied?.status === 'applied') res = await appliedButHeld(d, started.releasePr, pr, applied, r.codes);
+    else if (unknown) res = await outcomeUnknownHeld(d, started.releasePr, pr, r.codes, false);
+    await closeRelease(d, started.releasePr);
+    return res;
   }
   if (r.stage === 'ci') {
-    await d.gh.patch(`/pulls/${started.releasePr}`, { state: 'closed' });
     await hold(d, pr, `RELEASE_CI_FAILED:${r.codes.join(',')}`);
-    return { status: 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+    let res = { status: 'HELD', codes: r.codes, release_pr: started.releasePr, source_pr: pr.number };
+    if (applied?.status === 'applied') res = await appliedButHeld(d, started.releasePr, pr, applied, r.codes);
+    else if (unknown) res = await outcomeUnknownHeld(d, started.releasePr, pr, r.codes, false);
+    await closeRelease(d, started.releasePr);
+    return res;
   }
   if (r.stage === 'merge') {
-    return freezeWith(d, r.codes, `release PR #${started.releasePr} (source #${pr.number})`);
+    const pre = applied?.status === 'applied' ? ['MIGRATIONS_APPLIED_RELEASE_HELD'] : unknown ? ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED'] : [];
+    return freezeWith(d, [...pre, ...r.codes], `release PR #${started.releasePr} (source #${pr.number})`);
   }
   return finishAfterDeploy(d, pr, started, r, migrationsApplied);
 }
@@ -495,6 +556,76 @@ async function rollbackRelease(d, { mergeSha, sourcePr, workerMode = 'auto' }) {
   const pr = await d.gh.post('/pulls', { base: 'main', head: branch, title: `Auto-rollback: #${sourcePr}`, body: releaseBody({ meta, scope: d.detectScope(files) }) });
   const r = await mergeAndVerify(d, { releasePr: pr.number, releaseHead }, null, workerMode);
   return { ok: r.ok, codes: r.ok ? [] : [`ROLLBACK_${String(r.stage).toUpperCase()}_FAILED`, ...(r.codes ?? []), ...(r.worker?.code ? [`ROLLBACK_${r.worker.code}`] : [])] };
+}
+
+// #491: the outcome the `migrate` job reported, only if it is for this exact release head.
+function migrationOutcomeFor(d, releaseHead) {
+  const o = d.migrationOutcome;
+  return o && typeof o === 'object' && SHA.test(releaseHead ?? '') && o.release_head === releaseHead ? o : null;
+}
+
+// The migrate job did not apply the whole batch. The release PR is closed and never merged.
+// `unavailable` (the secret disappeared between the jobs) changed nothing IN THIS RUN. It is
+// simply retried only when this run is certainly the first attempt for the release: the publish
+// job of this same run opened the release PR (`migration_request.resumed === false`). Otherwise
+// (resumed release PR, or no readable request) an earlier, cut-off run may already have committed
+// its migrations, so it fails closed like a lost outcome (MIGRATION_OUTCOME_UNKNOWN, freeze).
+// Anything else freezes every release and holds the source PR for good; if at least one migration
+// already committed, rolling code back cannot undo it (ROLLBACK_INSUFFICIENT_DATA_CHANGED); if
+// nobody knows what committed, the freeze says so (MIGRATION_OUTCOME_UNKNOWN).
+async function migrationStopped(d, releasePr, pr, o) {
+  if (o.status === 'unavailable') {
+    const req = d.migrationRequest;
+    const firstAttempt = req && typeof req === 'object' && req.resumed === false
+      && SHA.test(o.release_head ?? '') && req.release_head === o.release_head && req.release_pr === releasePr;
+    if (!firstAttempt) {
+      const res = await outcomeUnknownHeld(d, releasePr, pr, ['MIGRATION_EXECUTOR_UNAVAILABLE']);
+      await closeRelease(d, releasePr); // last: the freeze and the hold already stand
+      return res;
+    }
+    await closeRelease(d, releasePr);
+    return { status: 'HELD', codes: ['MIGRATION_EXECUTOR_UNAVAILABLE'], release_pr: releasePr, source_pr: pr.number };
+  }
+  const known = ['failed', 'refused'].includes(o.status) && Array.isArray(o.applied);
+  const codes = [known ? String(o.code || 'MIGRATION_FAILED').slice(0, 160) : 'MIGRATION_OUTCOME_UNKNOWN'];
+  if (known && o.applied.length) codes.push('ROLLBACK_INSUFFICIENT_DATA_CHANGED');
+  for (const code of codes) (d.error ?? d.log ?? (() => {}))(code);
+  await hold(d, pr, `MIGRATION_STOPPED:${codes.join(',')}`.slice(0, 200));
+  const issue = await openFreeze(d, codes, `release PR #${releasePr} (source #${pr.number}), migracje`, {
+    migration: { status: o.status ?? null, code: o.code ?? null, applied: known ? o.applied : 'NIEZNANE' },
+  });
+  await closeRelease(d, releasePr); // last: the freeze and the hold already stand
+  return { status: 'FROZEN', codes, freeze: issue, release_pr: releasePr, source_pr: pr.number };
+}
+
+// Migration files the release commit adds since it left main (what the migrate job would apply).
+function releaseMigrations(d, base, releaseHead) {
+  return d.git('diff', '--name-only', '--diff-filter=A', base, releaseHead, '--', 'supabase/migrations')
+    .split('\n').filter(Boolean).map(f => f.slice(f.lastIndexOf('/') + 1)).sort();
+}
+
+// Closing the release PR is always the LAST step of a stop: hold and freeze come first, so a run
+// cut off in between leaves a freeze (or at worst an open release PR the next run re-handles),
+// never a closed PR over a possibly changed database with nothing stopping the next release.
+async function closeRelease(d, releasePr) {
+  await d.gh.patch(`/pulls/${releasePr}`, { state: 'closed' });
+}
+
+// A resumed release with migrations stops unmerged while nobody knows whether its migrations
+// committed (the run that reached the migrate job was cut off): the source PR is held for good
+// and every release is frozen, assuming the data MAY have changed. The owner checks the ledger.
+async function outcomeUnknownHeld(d, releasePr, pr, reasons, holdSource = true) {
+  const codes = ['MIGRATION_OUTCOME_UNKNOWN', 'ROLLBACK_INSUFFICIENT_DATA_CHANGED', ...reasons].slice(0, 10);
+  for (const code of codes.slice(0, 2)) (d.error ?? d.log ?? (() => {}))(code);
+  if (holdSource) await hold(d, pr, `MIGRATION_OUTCOME_UNKNOWN:${reasons.join(',')}`.slice(0, 200));
+  const issue = await openFreeze(d, codes, `release PR #${releasePr} (source #${pr.number}), migracje`, { migration: { status: 'unknown', applied: 'NIEZNANE' } });
+  return { status: 'FROZEN', codes, freeze: issue, release_pr: releasePr, source_pr: pr.number };
+}
+
+async function appliedButHeld(d, releasePr, pr, o, reasons) {
+  const codes = ['MIGRATIONS_APPLIED_RELEASE_HELD', ...reasons].slice(0, 10);
+  const issue = await openFreeze(d, codes, `release PR #${releasePr} (source #${pr.number})`, { migration: { status: o.status, applied: o.applied } });
+  return { status: 'FROZEN', codes, freeze: issue, release_pr: releasePr, source_pr: pr.number };
 }
 
 // Why a hold was written decides whether it may ever be reconsidered for the same commit.
@@ -549,6 +680,10 @@ async function openFreeze(d, codes, where, details = {}) {
       `Kody: ${codes.map(c => `\`${c}\``).join(', ')}`,
       codes.includes('ROLLBACK_INSUFFICIENT_DATA_CHANGED')
         ? '\n**UWAGA: cofnięcie kodu NIE wystarczy — migracja zmieniła dane. Potrzebne odtworzenie danych z kopii.**' : '',
+      codes.includes('MIGRATION_OUTCOME_UNKNOWN')
+        ? '\n**UWAGA: nie wiadomo, czy migracje zmieniły bazę. Przed kolejnymi wydaniami sprawdzić rejestr migracji (supabase_migrations.skillcheck_migration_ledger).**' : '',
+      codes.includes('MIGRATIONS_APPLIED_RELEASE_HELD')
+        ? '\n**UWAGA: migracje są już w bazie produkcyjnej, a kod tego wydania nie trafił na main.**' : '',
       '',
       '```json', JSON.stringify(details, null, 2).slice(0, 4000), '```',
     ].join('\n'),

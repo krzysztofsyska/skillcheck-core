@@ -86,3 +86,5 @@
 20261117150000_exercise_ai_auto_release_api.sql
 # R3-AC-NAMES: one public security-definer read function returning assessor e-mails (owner + recruiters of the same company only; no tables, no data seeded), test data only.
 20261117213000_ac_assessor_display_names.sql
+# R1-AUTO-ACCESS: one public security-definer function that, in auto mode only, issues competency test access to shortlisted candidates for released AI tests (no tables, no data seeded, nothing sent; each new access consumes the skill_test entitlement exactly like the manual grant when metering is on), test data only.
+20261117220000_r1_auto_competency_access.sql

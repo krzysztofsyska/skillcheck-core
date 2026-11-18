@@ -71,13 +71,59 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
   code (`app/`, `lib/`, `supabase/`, …) may depend on them, so only docs/tests ship until they do.
 - `PAYMENTS:<file>`, `OUTBOUND_SENDS:<file>` — billing/P24/invoices; mail/SMS/voice/notifications.
 - `SECRETS_OR_PIPELINE:<file>` — `.github/`, env files, `vercel.json`, `supabase/config`, the
-  agent pipeline and the publisher itself. Changes to the gates need a human merge.
+  agent pipeline, the publisher itself and `tools/db-migrate/` (the executor that runs with the
+  production database credential). Changes to the gates need a human merge.
 - `DESTRUCTIVE_SQL:<KIND>:<file>` — any `DROP …`, `DELETE FROM`, `TRUNCATE`, `ALTER TABLE … DROP`,
   `ALTER … TYPE`, `RENAME`, `UPDATE … SET` anywhere in a migration (comments included).
+- `NON_ADDITIVE_SQL:<KIND>:<file>` — allowlist gate beside `DESTRUCTIVE_SQL`: a migration may contain
+  only the outer `begin` (first statement) / `commit` (last statement) frame (any other transaction
+  control anywhere else: `NON_ADDITIVE_SQL:TXN_CONTROL:<file>`; `--` comments end at LF or CR), `create schema`, `create table`, `create index`, `alter table … add column`,
+  `alter table … enable row level security` and `comment on`. Anything else (`disable row level
+  security`, `grant`/`revoke`, `create`/`alter policy`, functions or any `$$` quoting, views, inserts,
+  other `alter table` actions …) is refused in the publisher and again in the migrate job, and waits
+  for the owner via `db-migrate-production`. The SQL is read by one single-pass lexer (literals
+  with `''` and `E'…'` escapes, `$tag$` bodies, quoted identifiers, `--` and nested `/* */`
+  comments together), so a comment marker inside a literal hides nothing; input it cannot read
+  cleanly is refused (`NON_ADDITIVE_SQL:UNPARSEABLE_*`). Each rule checks the whole statement, not
+  a prefix: `create table` only in the column-list form ending at its closing paren (no `as select`,
+  `like`, `inherits`, `partition of`, `with`, generated expressions); `add column` only, each
+  action a plain column definition; `create index` only on plain column lists (no `where`,
+  `include`, expressions); function calls only from a small built-in list (e.g. `now()`,
+  `gen_random_uuid()`, `char_length()`) and `default` only a literal, `now()`,
+  `gen_random_uuid()`, `current_timestamp` or `current_date`; `comment on … is` only a literal or
+  `null`. `DESTRUCTIVE_SQL` scans both the raw and
+  the lexed text. After an interrupted run the list of applied migrations
+  is re-derived from the merge commit, so a later rollback still carries `ROLLBACK_INSUFFICIENT_DATA_CHANGED`.
 - Migrations at all, until both hold: a completed Supabase backup at most 24 h old
   (`BACKUP_EVIDENCE_MISSING` / `BACKUP_NOT_COMPLETED` / `BACKUP_STALE`) **and** an unattended
-  migration executor (`MIGRATION_EXECUTOR_UNAVAILABLE` — today always: the only production
-  database credential lives in `production-approval`, which needs a human).
+  migration executor (`MIGRATION_EXECUTOR_UNAVAILABLE` — until the owner places the secret below;
+  the `production-approval` credential is never used by the publisher).
+  **Path B (#491, owner 2026-11-17: „Na pierwsze pytanie to będzie B”, „Część pierwsza to
+  uruchom.”):** additive migrations go out by themselves; destructive ones (`DESTRUCTIVE_SQL`,
+  gate unchanged) keep waiting for the owner through `db-migrate-production`.
+  - Executor = secret `AUTO_MIGRATE_DATABASE_URL` (optional `AUTO_MIGRATE_DATABASE_CA_CERT`) in
+    the environment `auto-migrate`, without required reviewers, deployment branch `main` only.
+    The name has no "production" in it on purpose: the deployment check matches `/production/i`
+    and every environment job records a GitHub deployment. The job `executor` tests only its
+    presence; without it everything is exactly as before.
+  - Backup proof = the Supabase Management API backup list (`tools/release/auto/backups.mjs`,
+    GET only, token `SUPABASE_ACCESS_TOKEN` of `agent-control`); no token or a failed read is
+    `BACKUP_EVIDENCE_MISSING`.
+  - Flow in one run: `publish` stops at `AWAIT_MIGRATIONS` (release PR open, its CI green, every
+    gate rechecked) → `migrate` (`tools/release/auto/migrate.mjs`, trusted `main` code) takes the
+    list from the release commit itself (only new files, `DESTRUCTIVE_SQL` again), checks the
+    ledger and applies them one by one through `tools/db-migrate/apply.mjs` (statements + sha256,
+    never `supabase db push`), stopping at the first error → `finish` merges only if exactly
+    that list is reported applied for that exact release SHA.
+  - After success the files are on `main`, so `UNRELEASED_MIGRATIONS_PRECEDE` disappears for
+    them. On an error the release PR is closed unmerged, the source PR held, and a freeze issue
+    opened with the code (`MIGRATION_FAILED:<file>:<SQLSTATE>`, `MIGRATION_PARTIAL_STATE`, …) plus
+    `ROLLBACK_INSUFFICIENT_DATA_CHANGED` when at least one migration had committed;
+    `MIGRATION_OUTCOME_UNKNOWN` when the migrate job died (also when a later run resumes an open
+    release with migrations whose outcome was lost and cannot go on: then with
+    `ROLLBACK_INSUFFICIENT_DATA_CHANGED`, as data may have changed; if it can go on, the migrate job
+    is asked again and re-reads the ledger); `MIGRATIONS_APPLIED_RELEASE_HELD` when
+    the migrations committed but the code release was stopped afterwards.
 - `CI_*`, `REVIEW_*`, `CODEX_UNRESOLVED_FINDINGS:*`, `FILE_LIST_TRUNCATED`, `PATCH_MISMATCH`,
   `CHERRY_PICK_CONFLICT_OR_EMPTY`, `RELEASE_NOT_SERIALIZED`, `RELEASE_FROZEN`.
 - `REVIEW_THREADS_UNRESOLVED:<n>:<paths>` / `REVIEW_CHANGES_REQUESTED:<author>` — a real review

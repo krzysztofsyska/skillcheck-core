@@ -8,12 +8,18 @@
 # release PR head) + an independent reviewer's PASS on the exact source PR head SHA.
 # Hard refusals (tools/release/auto/policy.mjs): payment-path freeze, payments, outbound
 # sends, pipeline/workflows/secrets, destructive SQL, migrations without a fresh backup and an
-# unattended executor (none exists today). After the merge: Vercel Production deployment is
+# unattended executor. After the merge: Vercel Production deployment is
 # confirmed and production is smoke-tested; a failure reverts the release and opens a
 # "[auto-release-freeze]" issue that stops every later release.
 #
 # Identity: the existing pipeline GitHub App (environment agent-control). The production
 # database environment (production-approval) is NOT used here.
+#
+# #491 (owner's path B, 2026-11-17): additive migrations of a release are applied by the job
+# `migrate` (environment `auto-migrate`, secret AUTO_MIGRATE_DATABASE_URL) after every gate and
+# before the merge. Jobs: executor (presence of the secret, never its value) -> publish (stops
+# at AWAIT_MIGRATIONS for a release with migrations) -> migrate -> finish (merges or freezes).
+# Without the secret: executor says false and everything is exactly as before.
 name: Auto release
 
 on:
@@ -32,8 +38,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  executor:
     if: >-
+      github.repository == 'krzysztofsyska/skillcheck-core' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    # No "production" in the name on purpose: the publisher confirms the Vercel deployment by a
+    # GitHub deployment whose environment matches /production/i, and every job with an
+    # environment records a GitHub deployment of its own.
+    environment: auto-migrate
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      ready: ${{ steps.probe.outputs.ready }}
+    steps:
+      - name: Is the migration secret present (value never read)
+        id: probe
+        env:
+          AUTO_MIGRATE_DATABASE_URL: ${{ secrets.AUTO_MIGRATE_DATABASE_URL }}
+        run: |
+          if [ -n "$AUTO_MIGRATE_DATABASE_URL" ]; then echo "ready=true" >> "$GITHUB_OUTPUT"; else echo "ready=false" >> "$GITHUB_OUTPUT"; fi
+
+  publish:
+    needs: executor
+    if: >-
+      always() &&
       github.repository == 'krzysztofsyska/skillcheck-core' &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'schedule' ||
@@ -44,6 +75,8 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: read
+    outputs:
+      migration_request: ${{ steps.publish.outputs.migration_request }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,6 +91,7 @@ jobs:
         with:
           version: 2.121.0
       - name: Publish
+        id: publish
         run: node tools/release/auto/run.mjs
         env:
           # The publisher mints and refreshes the App installation token itself (tokens live
@@ -67,4 +101,70 @@ jobs:
           APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
           # #461: used only by the screening-worker deploy step, passed to the CLI process alone.
           # Not set in agent-control yet: the step then fails closed (WORKER_DEPLOY_UNAVAILABLE).
+          # #491: also reads the backup list (backups.mjs, GET only); without it BACKUP_EVIDENCE_MISSING.
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          AUTO_MIGRATE_EXECUTOR: ${{ needs.executor.outputs.ready == 'true' && 'true' || 'false' }}
+
+  migrate:
+    needs: publish
+    if: always() && needs.publish.outputs.migration_request != ''
+    runs-on: ubuntu-latest
+    environment: auto-migrate
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.migrate.outputs.outcome }}
+    steps:
+      # Trusted code from main; the release commit is read as data (its SQL files) only.
+      # fetch-depth 0 brings every branch, including release/auto-pr-<N> pushed by the publisher.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Apply the release migrations one by one
+        id: migrate
+        run: node tools/release/auto/migrate.mjs
+        env:
+          MIGRATION_REQUEST: ${{ needs.publish.outputs.migration_request }}
+          AUTO_MIGRATE_DATABASE_URL: ${{ secrets.AUTO_MIGRATE_DATABASE_URL }}
+          AUTO_MIGRATE_DATABASE_CA_CERT: ${{ secrets.AUTO_MIGRATE_DATABASE_CA_CERT }}
+
+  finish:
+    needs: [publish, migrate]
+    if: always() && needs.publish.outputs.migration_request != ''
+    runs-on: ubuntu-latest
+    environment: agent-control
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1.7.3
+        with:
+          version: 2.121.0
+      - name: Merge after migrations, or freeze
+        run: node tools/release/auto/run.mjs
+        env:
+          APP_ID: ${{ secrets.AGENT_PIPELINE_APP_ID }}
+          APP_INSTALLATION_ID: ${{ secrets.AGENT_PIPELINE_APP_INSTALLATION_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AGENT_PIPELINE_APP_PRIVATE_KEY }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          AUTO_MIGRATE_EXECUTOR: 'true'
+          PUBLISHER_PHASE: finish
+          MIGRATION_REQUEST: ${{ needs.publish.outputs.migration_request }}
+          # Empty when the migrate job died: the publisher then freezes (MIGRATION_OUTCOME_UNKNOWN).
+          MIGRATION_OUTCOME: ${{ needs.migrate.outputs.outcome }}

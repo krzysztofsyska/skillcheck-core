@@ -47,7 +47,7 @@ The owner is not technical and works mostly from his phone.
 - When something truly needs him (a key, a credential, an approval listed above): a direct link and
   exactly what to click. If a check needs something the agent lacks, report it as a blocker with a
   proposal that removes the need for the owner next time.
-- Do not add gates or steps that need an owner click or a proof issuer that does not exist.
+- In the release path (CI, review, merge into `integration`, the automatic publisher #369, promotions), do not add gates or steps that need an owner click or a proof issuer that does not exist. This does not remove any owner decision listed in `CLAUDE.md` or the prohibitions below: production migrations through `production-approval`, new costs, secrets and settings, data deletion and external or irreversible actions still need the owner.
 
 ## Commands
 
