@@ -58,39 +58,85 @@ const criteria = [
   { id: "task:1", kind: "task", text: "Zarządzanie zespołem" }, { id: "task:2", kind: "task", text: "Planowanie" },
   { id: "kpi:1", kind: "kpi", text: "Przychody regionu" }, { id: "competency:1", kind: "competency", text: "Zarządzanie ludźmi" },
 ];
-const ratings = { "task:1": "meets", "task:2": "insufficient_data", "kpi:1": "insufficient_data", "competency:1": "above" };
+// Realistic v2 evidence-matrix rows: the legacy `rating` is always
+// insufficient_data (migration 20261026220200), the verdict carries the result.
+const matrix = {
+  "task:1": ["supported", "accepted", null], "task:2": ["missing", "accepted", null],
+  "kpi:1": ["contradicted", "accepted", null], "competency:1": ["supported", "accepted", null],
+};
+const row = (c, i, [verdict, human_status, human_verdict]) => ({
+  id: uuid(100 + i), analysis_id: uuid(10), criterion_id: c.id, criterion_kind: c.kind, criterion_order: i,
+  rating: "insufficient_data", verdict, human_status, human_verdict,
+});
+const rows = (changes = {}) => criteria.map((c, i) => row(c, i, changes[c.id] ?? matrix[c.id]));
 const source = (extra = {}) => ({
   companyId: uuid(1), applicationId: uuid(3), position: position(), fingerprint: FP,
   entry: { application_id: uuid(3), analysis_id: uuid(10), review_id: uuid(20), removed_at: null },
   analysis: { id: uuid(10), application_id: uuid(3), execution_status: "completed", input_fingerprint: FP,
     stale_at: null, latest_review_version: 1, criteria_snapshot: criteria },
   review: { id: uuid(20), analysis_id: uuid(10), review_version: 1, disposition: "approved" },
-  results: criteria.map((c, i) => ({ id: uuid(100 + i), analysis_id: uuid(10), criterion_id: c.id, rating: ratings[c.id] })),
+  results: rows(),
   overrides: [],
   ...extra,
 });
+const clarifications = preview => preview.plan.questions.filter(q => q.kind === "clarification");
+const gapIds = preview => clarifications(preview).map(q => q.criterionId);
 
-test("ready: plan from approved screening gaps, minimal data only", () => {
+test("ready: plan from the reviewed evidence matrix, minimal data only", () => {
   const preview = buildVoicePlanPreview(source());
   assert.equal(preview.state, "ready");
   const { plan } = preview;
   assert.equal(plan.status, "generated");
   assert.equal(plan.reviewIsApproved, false);
   assert.equal(plan.questions.filter(q => q.kind === "common").length, 4);
-  assert.deepEqual(plan.questions.filter(q => q.kind === "clarification").map(q => q.criterionId), ["task:2", "kpi:1"]);
+  // Every row has rating=insufficient_data, yet supported criteria are NOT gaps.
+  assert.deepEqual(gapIds(preview), ["task:2", "kpi:1"]);
+  // A contradicted verdict gets the contradiction follow-up, a missing one does not.
+  const [missing, contradicted] = clarifications(preview);
+  assert.notDeepEqual(missing.followUps, contradicted.followUps);
   const json = JSON.stringify(plan);
   for (const forbidden of ["00000000-0000-4000", "Kierownik", "Zarządzanie zespołem", "Przychody", "maxSeconds"]) {
     assert.ok(!json.includes(forbidden), forbidden);
   }
 });
 
-test("human override is respected (approved_with_changes)", () => {
-  const preview = buildVoicePlanPreview(source({
-    review: { id: uuid(20), analysis_id: uuid(10), review_version: 1, disposition: "approved_with_changes" },
-    overrides: [{ review_id: uuid(20), criterion_result_id: uuid(101), rating_override: "meets" }],
-  }));
+test("all criteria supported: no clarification questions", () => {
+  const supported = ["supported", "accepted", null];
+  const preview = buildVoicePlanPreview(source({ results: rows({ "task:2": supported, "kpi:1": supported }) }));
   assert.equal(preview.state, "ready");
-  assert.deepEqual(preview.plan.questions.filter(q => q.kind === "clarification").map(q => q.criterionId), ["kpi:1"]);
+  assert.deepEqual(gapIds(preview), []);
+});
+
+test("partial evidence is a gap; at most two gaps in kind order", () => {
+  const preview = buildVoicePlanPreview(source({ results: rows({ "competency:1": ["partial", "accepted", null] }) }));
+  assert.deepEqual(gapIds(preview), ["task:2", "kpi:1"]);
+  const only = buildVoicePlanPreview(source({ results: rows({
+    "task:2": ["supported", "accepted", null], "kpi:1": ["supported", "accepted", null],
+    "competency:1": ["partial", "accepted", null],
+  }) }));
+  assert.deepEqual(gapIds(only), ["competency:1"]);
+});
+
+test("recruiter corrections on the matrix rows change the result", () => {
+  // Recruiter edits the AI "missing" to supported: no longer a gap.
+  const closed = buildVoicePlanPreview(source({ results: rows({ "task:2": ["missing", "edited", "supported"] }) }));
+  assert.equal(closed.state, "ready");
+  assert.deepEqual(gapIds(closed), ["kpi:1"]);
+  // Recruiter edits the AI "supported" to missing: becomes a gap.
+  const opened = buildVoicePlanPreview(source({ results: rows({
+    "task:1": ["supported", "edited", "missing"], "kpi:1": ["supported", "accepted", null],
+  }) }));
+  assert.deepEqual(gapIds(opened), ["task:1", "task:2"]);
+  // Recruiter rejects an AI "supported" row: the requirement stays open.
+  const rejected = buildVoicePlanPreview(source({ results: rows({
+    "competency:1": ["supported", "rejected", null], "task:2": ["supported", "accepted", null],
+  }) }));
+  assert.deepEqual(gapIds(rejected), ["kpi:1", "competency:1"]);
+  // Editing "contradicted" to "partial" keeps the gap but drops the contradiction follow-up.
+  const base = clarifications(buildVoicePlanPreview(source())).find(q => q.criterionId === "kpi:1");
+  const edited = clarifications(buildVoicePlanPreview(source({ results: rows({ "kpi:1": ["contradicted", "edited", "partial"] }) })))
+    .find(q => q.criterionId === "kpi:1");
+  assert.notDeepEqual(edited.followUps, base.followUps);
 });
 
 test("gate: shortlist, analysis, human approval and freshness are required", () => {
@@ -115,6 +161,19 @@ test("gate: shortlist, analysis, human approval and freshness are required", () 
     [{ position: { ...s.position, required_behaviors: [] } }, "unavailable"],
     [{ analysis: { ...s.analysis, criteria_snapshot: null } }, "unavailable"],
     [{ review: { ...s.review, disposition: "approved_with_changes" } }, "unavailable"],
+    // v2 approvals never carry legacy rating overrides.
+    [{ overrides: [{ review_id: uuid(20), criterion_result_id: uuid(101), rating_override: "meets" }] }, "unavailable"],
+    // Legacy v1 rows without a verdict: no reviewed evidence, re-analysis needed.
+    [{ results: s.results.map(r => ({ ...r, verdict: null })) }, "outdated"],
+    [{ results: [] }, "outdated"],
+    [{ results: rows({ "task:2": ["missing", "unreviewed", null] }) }, "awaiting_review"],
+    [{ results: rows({ "task:2": ["unknown", "accepted", null] }) }, "unavailable"],
+    [{ results: rows({ "task:2": ["missing", "approved", null] }) }, "unavailable"],
+    [{ results: rows({ "task:2": ["missing", "edited", null] }) }, "unavailable"],
+    [{ results: rows({ "task:2": ["missing", "edited", "maybe"] }) }, "unavailable"],
+    [{ results: s.results.map((r, i) => i === 1 ? { ...r, criterion_kind: "kpi" } : r) }, "unavailable"],
+    [{ results: s.results.map((r, i) => i === 1 ? { ...r, id: s.results[0].id } : r) }, "unavailable"],
+    [{ results: s.results.map((r, i) => i === 1 ? { ...r, criterion_id: "task:9" } : r) }, "unavailable"],
   ];
   for (const [extra, expected] of cases) {
     assert.equal(buildVoicePlanPreview(source(extra)).state, expected, JSON.stringify(extra));

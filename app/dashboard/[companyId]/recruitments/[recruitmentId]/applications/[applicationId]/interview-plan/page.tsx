@@ -5,7 +5,7 @@ import { prepareScreening } from '../../../../../../../../lib/screening';
 import { loadScreeningContext, ScreeningNotFoundError } from '../../../../../../../../lib/screening-flow';
 import { isUuid, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
 import {
-  buildVoicePlanPreview, voicePlanPreviewEnabled, voicePlanPreviewStateLabels, type VoicePlanPreviewSource,
+  buildVoicePlanPreview, voicePlanCriterionColumns, voicePlanPreviewEnabled, voicePlanPreviewStateLabels, type VoicePlanPreviewSource,
 } from '../../../../../../../../lib/voice/plan-preview';
 import { VoicePlanApprovalPanel } from '../../../../../../../../components/voice/VoicePlanApprovalPanel';
 
@@ -44,7 +44,7 @@ export default async function InterviewPlanPreview({ params }: { params: Promise
   const [review, results] = current?.execution_status === 'completed' ? await Promise.all([
     client.from('screening_result_reviews').select('id,analysis_id,review_version,disposition')
       .eq('company_id', companyId).eq('analysis_id', current.id).order('review_version', { ascending: false }).limit(1).maybeSingle(),
-    client.from('screening_criterion_results').select('id,analysis_id,criterion_id,rating')
+    client.from('screening_criterion_results').select(voicePlanCriterionColumns)
       .eq('company_id', companyId).eq('analysis_id', current.id).order('criterion_order'),
   ]) : [{ data: null, error: null }, { data: [], error: null }];
   if (review.error || results.error) throw new Error('Nie udało się wczytać analizy CV.');
