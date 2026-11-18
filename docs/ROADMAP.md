@@ -64,7 +64,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | B — sekcje ćwiczeń i etapów rekrutacji (dane, ekran, wydruk A4) | ZROBIONE | PR #501, #505 |
 | C — ekran raportu i wydruk A4 | ZROBIONE | PR #483 |
 | D — eksport CSV z rejestrem dostępu, historia eksportów (raport i firma) | ZROBIONE | PR #476, #477, #482 |
-| Przejście całego raportu na Preview na danych testowych | DO SPRAWDZENIA (częściowo — zob. `docs/checks/r2-preview-walk-2026-11-18.md`) | sprawdzenie 18.11.2026 |
+| Przejście całego raportu na Preview na danych testowych | DO SPRAWDZENIA (częściowo — zob. `docs/checks/r2-preview-walk-2026-11-18.md`) | sprawdzenie 18.11.2026; O1 (grupy „nieaktualny”) — PR #520 |
 
 ### R3. Assessment Center — pełny przepływ (etap 3, issue #338)
 
