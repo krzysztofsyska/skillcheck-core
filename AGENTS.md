@@ -180,9 +180,7 @@ Details and reason codes: [docs/continuous-release-policy.md](docs/continuous-re
 
 ## Agent controller
 
-The old controller under `tools/agent-pipeline/` (from the Cursor period) is being removed (task J3
-in `docs/ROADMAP.md`). Its flags `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` stay
-false. Do not enable it, merge with it or deploy from it.
+The old controller from the Cursor period was removed (task J3); only the files the release path uses remain in `tools/agent-pipeline/`, and the flags `AGENT_PIPELINE_ENABLED` and `AGENT_PIPELINE_MERGE_ENABLED` stay false.
 
 ## Existing SkillCheck guardrails
 
