@@ -78,3 +78,86 @@ Częściowo. Ćwiczenia, etapy, wydruk A4, CSV z rejestrem i odcięcie obcej fir
 Nie sprawdzono sekcji testu kompetencji (flaga wyłączona na Preview) ani widoku historii
 eksportów właściciela. Błąd B1 sprawia, że wymagania z CV pokazują się jako nieaktualne po
 użyciu etapów. Zrzuty ekranu i PDF są w notatniku sesji, nie w repo.
+
+## Ponowne sprawdzenie 18.11.2026 (B1, O1)
+
+Sprawdzenie poprawek po PR #521 (B1) i PR #520 (O1). Tylko Preview `skillcheck-preview`
+(`orbyscrupgnupifzlqxp`), tylko dane testowe. Produkcji nie dotykano. Migracja
+`20261118120000_r2_screening_stale_input_columns` jest już zastosowana na Preview. Wszystkie zmiany
+w bazie robiono w jednym bloku `do $$ ... $$`, który na końcu celowo rzuca wyjątek (`raise exception`),
+więc transakcja wraca do stanu wyjściowego. Po sprawdzeniu odczytano wiersz ponownie: `stale_at`
+(`2026-11-18 01:25:05.72+00`, `application_changed`), etap, decyzja i status zgłoszenia oraz nazwa
+rekrutacji są takie jak przed sprawdzeniem. Nie czytano kolumn z sekretami.
+
+Dane: zgłoszenie `2b3dc581-…` (fikcyjna kandydatka), rekrutacja `f732a556-…`, wersja analizy
+`2019ca1b-…` (ta sama, która w pierwszym przejściu dostała `stale_at` przed poprawką).
+
+### B1 — wynik: PASS
+
+Kroki (wszystkie w jednej transakcji z wycofaniem):
+
+1. `update public.screening_analysis_versions set stale_at = null, stale_reason = null where id = <wersja>;`
+   (czysty punkt wyjścia; stary `stale_at` pochodził sprzed poprawki), zapamiętano
+   `applications.updated_at`.
+2. T1: `update public.applications set current_stage_id = <inny etap tej rekrutacji z public.assessment_stages> where id = <zgłoszenie>;`
+3. T2: `update public.applications set human_decision = 'on_hold', human_decision_reason = 'recheck test' where id = <zgłoszenie>;`
+   (dozwolone wartości z ograniczenia: `next_stage`, `on_hold`, `closed`).
+4. T3: `update public.recruitments set name = name || ' (rename test)' where id = <rekrutacja>;`
+5. T4 (kontrola odwrotna): `update public.applications set status = 'in_progress' where id = <zgłoszenie>;`
+6. T5 (kontrola odwrotna): wyczyszczenie `stale_at`, potem `update public.recruitments set status = <inna wartość> where id = <rekrutacja>;`
+7. Po każdym kroku odczyt `stale_at` wersji analizy i `updated_at` zgłoszenia / rekrutacji; na końcu `raise exception` (wycofanie).
+
+| Krok | Oczekiwane | Wynik |
+|---|---|---|
+| T1 zmiana etapu | `stale_at` puste, `updated_at` bez zmian | PASS (puste, bez zmian) |
+| T2 decyzja człowieka | `stale_at` puste, `updated_at` bez zmian | PASS (puste, bez zmian) |
+| T3 zmiana nazwy rekrutacji | `stale_at` puste, `updated_at` bez zmian | PASS (puste, bez zmian) |
+| T4 zmiana `applications.status` (kolumna wejścia) | `stale_at` ustawione, `updated_at` zmienione | PASS (ustawione, zmienione) |
+| T5 zmiana `recruitments.status` (kolumna wejścia) | `stale_at` ustawione | PASS (ustawione, `updated_at` zmienione) |
+
+Uwaga: istniejący `stale_at` z pierwszego przejścia (01:25:05 UTC, sprzed poprawki) zostaje na wersji
+analizy — migracja niczego nie czyści (tak jest opisane w jej nagłówku). Ta analiza wymaga ponownego
+uruchomienia, żeby w raporcie znów była aktualna. Nie uruchamiano jej (to zmiana trwała danych
+i koszt AI).
+
+### O1 — wynik: PASS (kod i dane), UI NOT RUN
+
+Kod: `lib/screening-report.ts` (`groupAnalysisState`) zwraca trzy stany: `current` (analiza ta sama co
+w rankingu i `eligible` / `insufficient_evidence`), `unreviewed` (ta sama analiza, `no_human_review`)
+i `stale` (inna analiza, brak powiązania albo każdy inny powód). Ten sam stan liczą
+`lib/preselection-currency.ts` (lista grup) i `lib/screening-report-source.ts` (raport i CSV).
+Test jednostkowy `node --test tests/screening-report.test.mjs`: 29 z 29 PASS (lokalnie, po `npm ci`).
+
+Dane na Preview — ta sama reguła policzona w SQL na wyniku RPC `get_preselection_groups` i
+`get_screening_ranking(<rekrutacja>, 10)`, wywołanych w transakcji z wycofaniem jako konto testowe
+rekrutera (`set local role authenticated` + `request.jwt.claims` z `sub` konta testowego):
+
+```sql
+with g as (select (e->>'application_id')::uuid application_id, (e->>'analysis_id')::uuid analysis_id
+           from jsonb_array_elements(public.get_preselection_groups(<rekrutacja>)) e)
+select case when g.analysis_id is null or k.analysis_id is null or g.analysis_id <> k.analysis_id then 'stale'
+            when k.eligibility_reason in ('eligible','insufficient_evidence') then 'current'
+            when k.eligibility_reason = 'no_human_review' then 'unreviewed' else 'stale' end as state,
+       k.eligibility_reason, count(*)
+from g left join public.get_screening_ranking(<rekrutacja>, 10) k on k.application_id = g.application_id
+group by 1, 2;
+```
+
+Wynik: 9 grup `unreviewed` (`no_human_review`, analiza aktualna, jeszcze bez przeglądu człowieka) i
+1 grupa `stale` (zgłoszenie z `stale_at` sprzed poprawki B1, czyli naprawdę do ponownej analizy).
+Przed poprawką wszystkie 10 pokazywały „Wynik nieaktualny”. Zgodnie z poprawką 9 z 10 nie jest już
+nieaktualnych.
+
+Ekran „Wyniki preselekcji (grupy)” w przeglądarce na Preview: NOT RUN (nie sprawdzano wdrożenia
+Vercel w tej sesji; dane i kod potwierdzone powyżej).
+
+### Nadal NOT RUN
+
+- Sekcja testu kompetencji w raporcie (flaga `COMPETENCY_CANDIDATE_PREVIEW` na Preview wymaga zmiennej
+  w Vercel — zmiana ustawień poza zakresem agenta).
+- Widok historii eksportów właściciela firmy (brak konta właściciela firmy testowej).
+- Ekran grup i raport w przeglądarce po poprawkach (UI).
+
+### Werdykt ponownego sprawdzenia
+
+B1: PASS. O1: PASS w kodzie i danych, UI NOT RUN. Wiersz R2 zostaje „DO SPRAWDZENIA (częściowo)”.
