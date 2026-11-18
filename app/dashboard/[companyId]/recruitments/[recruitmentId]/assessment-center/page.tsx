@@ -8,8 +8,8 @@ import {
   buildAssessmentCenterSessionReport,
 } from '../../../../../../lib/assessment-center-session';
 import {
-  AC_TEXT_WITHHELD, acAgreementText, acChangeLabel as changeLabel, acRatingLabel as ratingLabel, acSessionStatusLabel as statusLabel,
-  loadAcFinalistLabels, readAcSession,
+  AC_NO_GAPS, AC_TEXT_WITHHELD, acAgreementText, acEvidenceGapText, acChangeLabel as changeLabel, acRatingLabel as ratingLabel, acSessionStatusLabel as statusLabel,
+  acAssessorLabels, loadAcAssessorNames, loadAcFinalistLabels, loadAcTeam, readAcSession,
 } from '../../../../../../lib/assessment-center-session-export';
 import {
   addAcSessionFinalist, addAcSessionStage, assignAcSessionPair, confirmAcReconciliation, createAcSession, createAcSessionFromTemplate,
@@ -31,7 +31,6 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
   const { companyId, recruitmentId } = route;
   const recruitmentPath = `/dashboard/${companyId}/recruitments/${recruitmentId}`;
   const isOwner = company.owner_id === user.id;
-  const who = (id: string) => id === user.id ? 'Ty' : id;
   const frame = (body: React.ReactNode) => <main className="workspace"><section>
     <Link href={recruitmentPath}>← Rekrutacja</Link>
     <h1>Sesja Assessment Center — {recruitment.name}</h1>
@@ -64,14 +63,18 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
   const report = buildAssessmentCenterSessionReport(session);
   const { status } = session.session;
 
-  const [nameOfFinalist, shortlist, definitions, members] = await Promise.all([
+  const [nameOfFinalist, shortlist, definitions, team, assessorNames] = await Promise.all([
     loadAcFinalistLabels(client, companyId, recruitmentId),
     isOwner && status !== 'closed' ? client.from('recruitment_shortlist_entries').select('application_id').eq('company_id', companyId)
       .eq('recruitment_id', recruitmentId).is('removed_at', null) : null,
     isOwner && status === 'draft' ? client.from('latest_exercise_definitions').select('id,version,definition').eq('company_id', companyId)
       .eq('recruitment_id', recruitmentId).limit(100) : null,
-    isOwner && status === 'open' ? client.from('company_members').select('user_id').eq('company_id', companyId).eq('role', 'recruiter') : null,
+    loadAcTeam(client, companyId),
+    loadAcAssessorNames(client, companyId, recruitmentId),
   ]);
+  // ROADMAP R3: asesor jako „Ty”, nazwa z bazy (R3-AC-NAMES, gdy wolno ją zobaczyć), „Właściciel firmy”
+  // albo „Członek zespołu N” — nigdy identyfikator konta.
+  const who = acAssessorLabels(user.id, company.owner_id, team, assessorNames);
   if (!nameOfFinalist) return frame(<p role="alert">Nie udało się wczytać zgłoszeń.</p>);
   const nameOf = nameOfFinalist;
   const finalistIds = new Set(session.finalists.map(finalist => finalist.applicationId));
@@ -81,7 +84,8 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
     try { const definition = parseExerciseDefinition(row.definition); return definition.kind === 'assessment_center' && !usedRevisions.has(row.id) ? [{ id: row.id, version: row.version, title: definition.title }] : []; }
     catch { return []; }
   });
-  const assessors = Array.from(new Set([company.owner_id, ...(members?.data ?? []).map(row => row.user_id)]));
+  const assessors = isOwner && status === 'open'
+    ? Array.from(new Set([company.owner_id, ...(team ?? []).filter(row => row.role === 'recruiter').map(row => row.user_id)])) : [];
   const processOpen = editable && status === 'open';
 
   return frame(<>
@@ -133,6 +137,11 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
         {isOwner && editable && status === 'draft' && <AcSessionForm action={removeAcSessionFinalist.bind(null, route, finalist.applicationId)}
           legend="Korekta listy finalistów" button="Usuń z sesji" saved="Usunięto finalistę z sesji."><p>Możliwe tylko przed otwarciem sesji, dopóki dla tej osoby nic nie zapisano.</p></AcSessionForm>}
         {finalist.textHidden && <p role="status">Masz jeszcze nieoddany niezależny arkusz dla tej osoby. Do czasu jego oddania nie pokazujemy tego, co zapisali inni asesorzy i ekspert (informacji zwrotnych, dowodów zmiany, notatek), żeby nie wpływało to na Twoją ocenę. Praca kandydata pozostaje widoczna.</p>}
+
+        <h4>Braki dowodów</h4>
+        {finalist.evidenceGaps.length
+          ? <ul>{finalist.evidenceGaps.map((gap, index) => <li key={index}><strong>{gap.competency}</strong>{gap.stageTitle && <> · {gap.stageTitle}</>}: {acEvidenceGapText(gap, who)}</li>)}</ul>
+          : <p>{AC_NO_GAPS}</p>}
 
         <h4>Dowody według kompetencji</h4>
         {finalist.competencies.map(item => <section key={item.competency}><h5>{item.competency}</h5>

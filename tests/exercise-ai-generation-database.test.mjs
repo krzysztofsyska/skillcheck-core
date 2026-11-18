@@ -5,9 +5,11 @@ import {readFile} from 'node:fs/promises';
 import {guardBoot,denied} from './helpers/exercise-ai-grant-guard-fixture.mjs';
 import {users} from './helpers/competency-active-fixture.mjs';
 const migration='20261107171053_exercise_ai_generation.sql';
+// R1-AUTO-GEN-FIX (PR #504 finding): the finishing function honours the recruiter's mode.
+const autoFix='20261118100000_r1_auto_generation_approval.sql';
 test('C6 non-owner recruiter completes a pending draft; viewers, other tenants and other actors cannot use the reservation',async t=>{
  const e=await guardBoot(t),{db,h}=e;await e.install();
- for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration])
+ for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration,autoFix])
   await db.exec(await readFile(new URL('../supabase/migrations/'+name,import.meta.url),'utf8'));
  const f=await e.seed(),foreign=await e.seed({owner:users.otherOwner}),key=randomUUID(),fingerprint='a'.repeat(64);
  await h.asAdmin();
@@ -26,12 +28,13 @@ test('C6 non-owner recruiter completes a pending draft; viewers, other tenants a
  await h.asAdmin();await db.query("update public.company_members set role='recruiter' where company_id=$1 and user_id=$2",[f.companyId,users.recruiter]);
  await h.asUser(users.recruiter);const done=await finish();assert.equal(done.status,'completed');assert.equal((await finish()).definition_id,done.definition_id);
  const row=(await db.query('select created_by,approved_at,approval_mode from exercise_ai.proposals where definition_entry_id=$1',[done.definition_id])).rows[0];
+ // Manual mode (no auto_release): the generated proposal waits for a human approval.
  assert.equal(row.created_by,users.recruiter);assert.equal(row.approved_at,null);assert.equal(row.approval_mode,null);
  assert.equal((await db.query('select author_id from public.exercise_definition_entries where id=$1',[done.definition_id])).rows[0].author_id,users.recruiter);
 });
 test('C6 durable generation: tenant/actor/snapshot binding, single claim, quota, timeout and atomic pending completion',async t=>{
  const e=await guardBoot(t),{db,h}=e;await e.install();
- for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration]) {
+ for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration,autoFix]) {
   if(name==='20261107164252_sc019_catalog_orders.sql') {
    await assert.rejects(db.exec(await readFile(new URL('../supabase/migrations/'+migration,import.meta.url),'utf8')),
     error=>error.code==='55000'&&error.message==='c6_generation_requires_r15');
@@ -56,7 +59,15 @@ test('C6 durable generation: tenant/actor/snapshot binding, single claim, quota,
  const done=await finish();assert.equal(done.status,'completed');assert.ok(done.exercise_id);
  assert.equal((await finish(key,null,null,'exercise_ai_timeout')).definition_id,done.definition_id,'completion cannot become failure');
  assert.equal((await reserve()).exercise_id,done.exercise_id);
- await h.asAdmin();assert.equal((await db.query('select approved_at from exercise_ai.proposals where definition_entry_id=$1',[done.definition_id])).rows[0].approved_at,null);
+ // Auto mode: the generated proposal is released exactly like exercise_ai.record_proposal does it.
+ await h.asAdmin();const auto=(await db.query('select approved_by,approved_at,approval_mode from exercise_ai.proposals where definition_entry_id=$1',[done.definition_id])).rows[0];
+ assert.equal(auto.approval_mode,'auto');assert.equal(auto.approved_by,f.owner);assert.ok(auto.approved_at);
+ // Back to manual: the next generated proposal is pending again.
+ await h.asUser(f.owner);await db.query('select exercise_ai.set_auto_release($1,false)',[f.recruitment.id]);
+ const manualKey=randomUUID();assert.equal((await reserve([args[0],args[1],manualKey,...args.slice(3)])).claimed,true);
+ const manualDone=await finish(manualKey);assert.equal(manualDone.status,'completed');
+ await h.asAdmin();const manual=(await db.query('select approved_by,approved_at,approval_mode from exercise_ai.proposals where definition_entry_id=$1',[manualDone.definition_id])).rows[0];
+ assert.deepEqual(manual,{approved_by:null,approved_at:null,approval_mode:null});
  assert.equal((await db.query('select private.erasure_schema_signature() value')).rows[0].value,'1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44');
  await h.asUser(f.owner);
  const crash=randomUUID();await reserve([args[0],args[1],crash,...args.slice(3)]);
@@ -75,7 +86,7 @@ test('C6 durable generation: tenant/actor/snapshot binding, single claim, quota,
 test('C6 native two sessions cannot claim one generation twice or overspend last slot',async t=>{
  assert.equal(process.env.SC_WER_PGLITE_PATH,undefined,'Native connections required');
  const e=await guardBoot(t),{db,h}=e,rival=await e.connect();await e.install();
- for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration])
+ for(const name of ['20261106150000_exercise_ai_recruiter_api.sql','20261107164219_exercise_ai_revision_workflow.sql','20261107164252_sc019_catalog_orders.sql','20261107170432_single_analysis_preselection_group.sql',migration,autoFix])
   await db.exec(await readFile(new URL('../supabase/migrations/'+name,import.meta.url),'utf8'));
  const f=await e.seed(),key=randomUUID(),stamp=(await db.query('select updated_at::text from public.company_profiles where company_id=$1',[f.companyId])).rows[0]?.updated_at??null;
  await rival.exec("set role authenticated;set lock_timeout='100ms'");await rival.query("select set_config('request.jwt.claim.sub',$1,false)",[f.owner]);

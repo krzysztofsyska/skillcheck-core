@@ -42,6 +42,9 @@ const data = {
 const sessions = { [recA]: ids.session, [recBroken]: uuid(91) };
 // SC-AC-EXPORT-AUDIT: the stub's audit RPC succeeds unless the test switches it off.
 const audit = { fail: false, calls: [] };
+// R3-AC-NAMES: off = the name RPC does not exist (404, as before the migration); on = it answers
+// only for company A + its recruitment, like the database (42501 for anything else).
+const names = { on: false, calls: [] };
 const broken = () => { const payload = sessionPayload(); payload.finalists[0].stages[0].pair.sheets[1].authorId = ids.owner; return payload; };
 
 async function startStub(t, requests) {
@@ -61,6 +64,11 @@ async function startStub(t, requests) {
         audit.calls.push(args);
         if (audit.fail) { res.statusCode = 503; return res.end(JSON.stringify({ code: '57P03', message: 'synthetic audit outage' })); }
         return res.end(JSON.stringify(uuid(99)));
+      }
+      if (name === 'ac_assessor_display_names' && names.on) {
+        names.calls.push(args);
+        if (args.target_company !== companyA || args.target_recruitment !== recA) { res.statusCode = 403; return res.end(JSON.stringify({ code: '42501', message: 'forbidden' })); }
+        return res.end(JSON.stringify([{ user_id: ids.recruiter, display_name: 'rekruter@example.invalid' }]));
       }
       res.statusCode = 404; return res.end(JSON.stringify({ code: 'PGRST202', message: 'unknown rpc' }));
     }
@@ -116,11 +124,20 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     assert.match(html, /Uzgodniono: Zgodne z wymaganiami — UzasadnienieUzgodnienia/);
     assert.match(html, /Jawna rozbieżność — obie oceny pozostają: OpisRozbieznosci/);
     assert.match(html, /Propozycja uzgodnienia \(Ty\): Zgodne z wymaganiami — UzasadnienieDrugie/);
+    // ROADMAP R3: assessors by readable label, never by account id.
+    assert.match(html, /Asesor 1 · Ty<\/strong>/); assert.match(html, /Asesor 2 · Członek zespołu 1<\/strong>/);
+    // #338: explicit evidence gaps per finalist, with the reason and the assessor label.
+    assert.match(html, /Braki dowodów/);
+    assert.match(html, /Niewystarczające dane, bez dowodu: Asesor 2 \(Członek zespołu 1\)\./);
+    assert.match(html, /Czeka na oddanie obu niezależnych arkuszy\./); assert.match(html, /Nie przypisano asesorów — brak arkuszy\./);
+    // Ids stay only as form values and React keys; the visible text never shows one.
+    const visible = html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]*>/g, ' ');
+    for (const id of [ids.owner, ids.recruiter]) assert.ok(!visible.includes(id), 'no assessor account id in the visible page text');
     for (const marker of ['PierwszaProba', 'InformacjaZwrotna', 'PoprawionaPraca', 'OpisZmiany', 'DowodZmiany', 'NotatkaEksperta', 'Zmiana potwierdzona dowodem']) assert.match(html, new RegExp(marker), marker);
     assert.match(html, /Oddaj swój niezależny arkusz/);
     assert.doesNotMatch(html, FOREIGN);
     // Reading the page changes nothing: its two read RPCs (plus the layout's read-only brand lookup), every other request is a GET.
-    assert.deepEqual(Array.from(new Set(seen.filter(request => request.method !== 'GET' && request.name !== 'brand_published').map(request => `${request.method} ${request.name}`))).sort(), ['POST ac_session_find', 'POST ac_session_read']);
+    assert.deepEqual(Array.from(new Set(seen.filter(request => request.method !== 'GET' && request.name !== 'brand_published').map(request => `${request.method} ${request.name}`))).sort(), ['POST ac_assessor_display_names', 'POST ac_session_find', 'POST ac_session_read']);
   });
 
   await t.test('missing data stays "brak danych"; no points, ranking position or hiring suggestion anywhere', async () => {
@@ -157,7 +174,7 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     assert.equal(ok.status, 200);
     assert.match(ok.headers.get('content-type'), /text\/csv/);
     assert.match(ok.headers.get('content-disposition'), /attachment; filename="skillcheck-assessment-center-/);
-    assert.match(await ok.text(), /ac-session-csv-v1/);
+    assert.match(await ok.text(), /ac-session-csv-v2/);
     assert.deepEqual(audit.calls, [{ target_company: companyA, target_recruitment: recA, target_session: ids.session, export_kind: 'ac_session_csv' }]);
     audit.fail = true; audit.calls.length = 0;
     const failed = await fetch(url, { redirect: 'manual', headers: { Cookie: cookie } });
@@ -166,7 +183,7 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     assert.equal(failed.headers.get('cache-control'), 'private, no-store');
     const text = await failed.text();
     assert.equal(JSON.parse(text).error, 'audit_failed');
-    assert.doesNotMatch(text, /Anna Finalistka|ac-session-csv-v1|AsesorPierwszy/);
+    assert.doesNotMatch(text, /Anna Finalistka|ac-session-csv-v2|AsesorPierwszy/);
     assert.equal(audit.calls.length, 1);
     audit.fail = false;
     // A recruitment of another company in the URL never reaches the audit RPC.
@@ -174,6 +191,27 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
     const crossed = await fetch(`${base}/dashboard/${companyB}/recruitments/${recA}/assessment-center/export`, { redirect: 'manual', headers: { Cookie: cookie } });
     assert.equal(crossed.status, 404);
     assert.deepEqual(audit.calls, []);
+  });
+
+  await t.test('R3-AC-NAMES: the database-supplied name replaces the label on the page and in the CSV; ids never shown', async () => {
+    names.on = true; names.calls.length = 0;
+    try {
+      const { res, html } = await get(base, companyA, recA);
+      assert.equal(res.status, 200);
+      assert.match(html, /Asesor 1 · Ty<\/strong>/); assert.match(html, /Asesor 2 · rekruter@example\.invalid<\/strong>/);
+      assert.match(html, /Niewystarczające dane, bez dowodu: Asesor 2 \(rekruter@example\.invalid\)\./);
+      assert.doesNotMatch(html, /Członek zespołu 1/);
+      const visible = html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]*>/g, ' ');
+      for (const id of [ids.owner, ids.recruiter]) assert.ok(!visible.includes(id));
+      assert.deepEqual(names.calls, [{ target_company: companyA, target_recruitment: recA }]);
+      const csv = await (await fetch(`${base}/dashboard/${companyA}/recruitments/${recA}/assessment-center/export`, { redirect: 'manual', headers: { Cookie: cookie } })).text();
+      assert.match(csv, /"rekruter@example\.invalid"/);
+      assert.ok(!csv.includes(ids.recruiter));
+      // Another company's page never asks for or shows company A's names.
+      names.calls.length = 0;
+      const other = await get(base, companyB, recB);
+      assert.doesNotMatch(other.html, /example\.invalid/);
+    } finally { names.on = false; }
   });
 
   await t.test('without the Preview flag the page does not exist', async () => {

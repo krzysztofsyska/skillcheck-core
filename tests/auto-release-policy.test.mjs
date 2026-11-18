@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  destructiveSql, classifyRelease, backupGate, reviewGate, codexGate, ciGate, evaluateCandidate, afterDeploy,
+  destructiveSql, nonAdditiveSql, lexSql, classifyRelease, backupGate, reviewGate, codexGate, ciGate, evaluateCandidate, afterDeploy,
 } from '../tools/release/auto/policy.mjs';
 
 const H = 'a'.repeat(40);
@@ -68,6 +68,8 @@ test('payment-path freeze and other owner-consent areas stay refused', () => {
     ['lib/sales-leads.ts', 'OUTBOUND_SENDS'], ['lib/email/send.ts', 'OUTBOUND_SENDS'],
     ['.github/workflows/x.yml', 'SECRETS_OR_PIPELINE'], ['tools/release/auto/policy.mjs', 'SECRETS_OR_PIPELINE'],
     ['tools/agent-pipeline/x.mjs', 'SECRETS_OR_PIPELINE'], ['vercel.json', 'SECRETS_OR_PIPELINE'],
+    // #491 review fix: the executor that runs with the production database credential.
+    ['tools/db-migrate/apply.mjs', 'SECRETS_OR_PIPELINE'], ['tools/db-migrate/run.mjs', 'SECRETS_OR_PIPELINE'],
   ]) {
     assert.ok(classifyRelease([file]).reasons.includes(`${code}:${file}`), file);
   }
@@ -159,10 +161,13 @@ test('publisher workflow: no manual start, trusted main code, no production-appr
   assert.doesNotMatch(wf, /workflow_dispatch|pull_request/);
   assert.match(wf, /schedule:/); assert.match(wf, /workflow_run:/);
   assert.doesNotMatch(wf, /production-approval|PRODUCTION_DATABASE_URL/);
-  // #461: the Supabase token reaches the publisher only as an env secret of agent-control, once,
-  // for the worker deploy step; nothing else in the workflow names it.
-  assert.equal(wf.split('\n').filter(l => /SUPABASE_ACCESS_TOKEN/.test(l)).length, 1);
-  assert.match(wf, /^\s+SUPABASE_ACCESS_TOKEN: \$\{\{ secrets\.SUPABASE_ACCESS_TOKEN \}\}$/m);
+  // #461: the Supabase token reaches the publisher only as an env secret of agent-control, for
+  // the worker deploy step (#491: and the read-only backup list). Since #491 the publisher runs in
+  // two agent-control jobs (publish, finish); nothing else in the workflow names it — in
+  // particular not the auto-migrate jobs (checked in tests/auto-release-migrate.test.mjs).
+  const tokenLines = wf.split('\n').filter(l => /SUPABASE_ACCESS_TOKEN/.test(l));
+  assert.equal(tokenLines.length, 2);
+  assert.ok(tokenLines.every(l => /^\s+SUPABASE_ACCESS_TOKEN: \$\{\{ secrets\.SUPABASE_ACCESS_TOKEN \}\}$/.test(l)));
   assert.match(wf, /ref: main/);
   assert.match(wf, /github\.ref == 'refs\/heads\/main'/);
   assert.match(wf, /cancel-in-progress: false/);
@@ -357,4 +362,161 @@ test('C11: tylko powody _UNKNOWN są przejściowe, i tylko ograniczoną liczbę 
   // dopasowanie po końcówce, nie po początku: kod zaczynający się od UNKNOWN nie jest przejściowy
   assert.equal(isTransient(['UNKNOWN_THING']), false, 'tylko końcówka _UNKNOWN liczy się jako nieudany odczyt');
   assert.ok(Number.isInteger(TRANSIENT_ATTEMPTS) && TRANSIENT_ATTEMPTS >= 2 && TRANSIENT_ATTEMPTS <= 10);
+});
+
+test('#491 review fix: tools/db-migrate/ (the executor holding the DB credential) never ships automatically', () => {
+  assert.deepEqual(classifyRelease(['tools/db-migrate/apply.mjs']).reasons, ['SECRETS_OR_PIPELINE:tools/db-migrate/apply.mjs']);
+  const r = reasons(i => { i.files = ['tools/db-migrate/apply.mjs']; i.patches = [{ path: 'tools/db-migrate/apply.mjs', patch: '+x' }]; });
+  assert.ok(r.includes('SECRETS_OR_PIPELINE:tools/db-migrate/apply.mjs'));
+});
+
+test('#491 review fix: SQL lexer reads comments and literals in ONE pass: markers inside literals hide nothing', () => {
+  const evil = 'alter table public.companies disable row level security;';
+  for (const lit of ["'--'", "'/*'", "'*/'", "'it''s -- x'", "E'\\'--'", '$$--$$', '$t$ /* $t$']) {
+    const sql = `comment on table public.companies is ${lit}; ${evil}`;
+    const r = nonAdditiveSql(sql);
+    assert.ok(r.length > 0, sql);
+    if (!lit.startsWith('$')) assert.deepEqual(r, ['ALTER_TABLE'], sql);
+    else assert.deepEqual(r, ['DOLLAR_QUOTING'], sql);
+  }
+  // '/*' … '*/' split over two literals around the dangerous statement.
+  assert.deepEqual(nonAdditiveSql(`comment on table public.a is '/*'; ${evil} comment on table public.b is '*/';`), ['ALTER_TABLE']);
+  // Quote inside a comment, nested block comments, quoted identifiers with ';' / '--'.
+  assert.deepEqual(nonAdditiveSql(`-- it's\n${evil}`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql(`/* a /* b */ ' */ ${evil}`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql(`create table public."a;--b"(id int); ${evil}`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql('create table public."a;--b"(id int);'), []);
+  // Dollar-quoted bodies are refused outright (functions, DO blocks), whatever they contain.
+  assert.deepEqual(nonAdditiveSql("do $$ begin execute 'select 1'; end $$;"), ['DOLLAR_QUOTING']);
+  assert.deepEqual(nonAdditiveSql('create function public.f() returns int language sql as $body$ select 1 $body$;'), ['DOLLAR_QUOTING']);
+  assert.equal(lexSql('select $1').dollar, false, 'a positional parameter is not a dollar quote');
+  // Input the lexer cannot read cleanly fails closed.
+  for (const [sql, code] of [
+    ["comment on table public.a is 'never closed; create schema s;", 'UNPARSEABLE_UNTERMINATED_LITERAL'],
+    ['create schema s; /* never closed', 'UNPARSEABLE_UNTERMINATED_COMMENT'],
+    ['create schema s; /* a /* b */ still open', 'UNPARSEABLE_UNTERMINATED_COMMENT'],
+    ['create table public."never(id int);', 'UNPARSEABLE_UNTERMINATED_IDENTIFIER'],
+    ['comment on table public.a is $q$ never closed;', 'UNPARSEABLE_UNTERMINATED_DOLLAR_QUOTE'],
+    ["comment on table public.a is 'x\\'; create schema s; --'", 'UNPARSEABLE_AMBIGUOUS_LITERAL'],
+  ]) assert.deepEqual(nonAdditiveSql(sql), [code], sql);
+  // Additive SQL with harmless markers in literals and comments still passes.
+  assert.deepEqual(nonAdditiveSql("-- add; it's fine\nbegin;\ncreate table public.n(id int, t text default 'a;--b/*');\ncomment on table public.n is E'x\\'y';\n/* c /* d */ */\ncommit;\n"), []);
+});
+
+test('#491 review fix: DESTRUCTIVE_SQL reads the raw AND the lexed text (never weaker than before)', () => {
+  // Still caught inside literals and comments (raw scan), as before.
+  assert.ok(destructiveSql("comment on table public.a is 'drop table public.x';").includes('DROP'));
+  assert.ok(destructiveSql('-- delete from public.x\ncreate schema s;').includes('DELETE'));
+  // Newly caught: a ';' inside a literal no longer ends the ALTER TABLE pattern; a comment between keywords.
+  assert.ok(destructiveSql("alter table public.x add column y text default ';', drop column z;").includes('ALTER_DROP'));
+  assert.ok(destructiveSql('drop/**/table public.x;').includes('DROP'));
+  const r = classifyRelease(['supabase/migrations/1_x.sql'], [{ path: 'supabase/migrations/1_x.sql', sql: "comment on table public.companies is '--'; alter table public.companies disable row level security;" }]);
+  assert.deepEqual(r.reasons, ['NON_ADDITIVE_SQL:ALTER_TABLE:supabase/migrations/1_x.sql']);
+});
+
+test('#491 review fix: a -- comment ends at a lone CR and at CRLF, exactly as PostgreSQL reads it', () => {
+  const evil = 'alter table public.companies disable row level security;';
+  assert.deepEqual(nonAdditiveSql(`-- x\r${evil}\n`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql(`-- x\r\n${evil}\n`), ['ALTER_TABLE']);
+  assert.deepEqual(nonAdditiveSql(`-- x\n${evil}\n`), ['ALTER_TABLE']);
+  // The CR-hidden statement is also seen by the destructive scan.
+  assert.ok(destructiveSql('-- x\rdrop table public.a;\n').includes('DROP'));
+  assert.ok(destructiveSql('create schema s; -- x\rupdate public.a set b = 1;\n').includes('UPDATE_ROWS'));
+  // Harmless comments with CR / CRLF still pass.
+  assert.deepEqual(nonAdditiveSql('-- note\rbegin;\r\ncreate schema s; -- more\rcommit;\r\n'), []);
+  assert.equal(lexSql('-- x\rselect 1').text.includes('select 1'), true);
+  assert.equal(lexSql('-- x').text.trim(), '');
+});
+
+test('#491 review fix: only the outer begin ... commit frame is allowed; transaction control elsewhere is refused', () => {
+  const inner = 'begin;\ncreate table public.a(id int); COMMIT; create table public.a(id int);\ncommit;\n';
+  assert.deepEqual(nonAdditiveSql(inner), ['TXN_CONTROL']);
+  assert.deepEqual(nonAdditiveSql('begin;\ncreate schema s;\ncommit;\n'), []);
+  assert.deepEqual(nonAdditiveSql('create schema s;\n'), []);
+  for (const mid of ['commit', 'begin', 'start transaction', 'end', 'rollback', 'abort', 'savepoint x', 'release savepoint x',
+    'release x', 'prepare transaction \'t\'', 'commit prepared \'t\'', 'rollback to savepoint x', 'begin transaction isolation level serializable']) {
+    assert.deepEqual(nonAdditiveSql(`begin;\ncreate schema s;\n${mid};\ncreate schema t;\ncommit;\n`), ['TXN_CONTROL'], mid);
+  }
+  // A second begin at the start, a commit that is not last, a commit-only or begin-only misplacement.
+  assert.deepEqual(nonAdditiveSql('begin;\nbegin;\ncreate schema s;\ncommit;\n'), ['TXN_CONTROL']);
+  assert.deepEqual(nonAdditiveSql('commit;\ncreate schema s;\n'), ['TXN_CONTROL']);
+  assert.deepEqual(nonAdditiveSql('create schema s;\nbegin;\n'), ['TXN_CONTROL']);
+  // Reaches the release decision with the existing reason shape.
+  const r = classifyRelease(['supabase/migrations/20260101000000_a.sql'], [{ path: 'supabase/migrations/20260101000000_a.sql', sql: inner }]);
+  assert.deepEqual(r.reasons, ['NON_ADDITIVE_SQL:TXN_CONTROL:supabase/migrations/20260101000000_a.sql']);
+});
+
+test('PR #499 review fix: allow rules check the WHOLE statement, never a prefix (no function calls smuggled in)', () => {
+  // Codex P1: additive-looking prefix, data-deleting function after it.
+  assert.deepEqual(nonAdditiveSql('create table public.audit_probe (removed) as select private.purge_closed_sales_leads();'), ['CREATE_TABLE']);
+  const refused = {
+    CREATE_TABLE: [
+      'create table public.t (id int) as select 1;',
+      'create table public.t (id int) inherits (public.x);',
+      'create table public.t (like public.x including all);',
+      'create table public.t partition of public.x for values in (1);',
+      'create table public.t (id int) with (fillfactor=70);',
+      'create table public.t (id int) tablespace x;',
+      'create table public.t (id int), (b int);',
+      'create table public.t (id int default private.purge());',
+      'create table public.t (id int default (now()));',
+      "create table public.t (id int default nextval('s'));",
+      'create table public.t (id int check (private.purge() > 0));',
+      'create table public.t (id int check (purge(id)));',
+      'create table public.t (id int "check"(id > 0));',
+      'create table public.t (id int generated always as (private.purge()) stored);',
+      'create table public.t (id int check (exists (select 1)));',
+      "create table public.t (id text check (id ~ 'x'));",
+    ],
+    ALTER_TABLE: [
+      'alter table public.t add column x int default private.purge_closed_sales_leads();',
+      'alter table public.t add column x int default purge();',
+      'alter table public.t add column x int check (private.purge(x));',
+      "alter table public.t add column x int, add column y int default nextval('s');",
+      'alter table public.t add column x int, alter column id set not null;',
+      'alter table public.t add column x int generated always as (purge()) stored;',
+      'alter table public.t add x int;',
+    ],
+    CREATE_INDEX: [
+      'create index i on public.t (id) where private.purge() > 0;',
+      'create index i on public.t (id) where id > 0;',
+      'create index i on public.t (private.purge(id));',
+      'create index i on public.t (lower(email));',
+      'create index i on public.t (id) include (x);',
+      'create index i on public.t (id) with (fillfactor=70);',
+      'create index i on public.t (id) tablespace x;',
+      'create index concurrently i on public.t (id);',
+      'create index concurrently if not exists i on public.t (id);',
+    ],
+    COMMENT_ON: ['comment on table public.t is (select 1);', "comment on table public.t is 'x' || purge();"],
+    CREATE_SCHEMA: ['create schema s authorization x;'],
+  };
+  for (const [code, list] of Object.entries(refused)) for (const sql of list) assert.deepEqual(nonAdditiveSql(sql), [code], sql);
+  // Reaches the release decision as NON_ADDITIVE_SQL (the DESTRUCTIVE gate itself is unchanged).
+  const r = classifyRelease(['supabase/migrations/1_x.sql'], [{ path: 'supabase/migrations/1_x.sql', sql: 'create table public.p (removed) as select private.purge_closed_sales_leads();' }]);
+  assert.deepEqual(r.reasons, ['NON_ADDITIVE_SQL:CREATE_TABLE:supabase/migrations/1_x.sql']);
+  // Plain additive shapes still pass.
+  assert.deepEqual(nonAdditiveSql(`begin;
+create schema if not exists notes_s;
+create table if not exists public.notes (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies (id) on delete cascade,
+  title text not null default '',
+  amount numeric(10, 2) default 0,
+  meta jsonb not null default '{}'::jsonb,
+  tags text[] not null default '{}'::text[],
+  created_at timestamp with time zone not null default now(),
+  n bigint generated always as identity,
+  status text not null check (status in ('a', 'b')),
+  constraint notes_title_len check (char_length(title) <= 200),
+  unique (company_id, title)
+);
+alter table public.notes enable row level security;
+alter table public.notes add column if not exists x int, add column y text not null default 'a';
+create unique index if not exists n_i on public.notes using btree (company_id, created_at desc);
+create index on public.notes (title);
+comment on column public.notes.title is 'x';
+comment on table public.notes is null;
+commit;
+`), []);
 });
