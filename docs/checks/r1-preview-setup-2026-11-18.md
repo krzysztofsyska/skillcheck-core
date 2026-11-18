@@ -1,0 +1,51 @@
+# R1 — włączenie testu kompetencji na Preview (przygotowanie, 18.11.2026)
+
+Decyzja właściciela: `docs/DECYZJE.md`, 18.11.2026 („TAK na 1 i 2”). Dotyczy wyłącznie Preview
+gałęzi `integration` i bazy testowej `skillcheck-preview` (`orbyscrupgnupifzlqxp`). Produkcja bez zmian.
+
+## Zrobione przez agenta (baza Preview)
+
+- Login pośrednika `competency_gateway_preview` utworzony **bez możliwości logowania i bez hasła**:
+  `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT`, jedyne członkostwo
+  `competency_test_gateway` (`INHERIT FALSE, SET TRUE`), ustawienia roli wyłączające zapis parametrów
+  w logach: `log_statement=none`, `log_parameter_max_length=0`, `log_parameter_max_length_on_error=0`,
+  `auto_explain.log_min_duration=-1` (wymaga tego audyt w `lib/competency-broker-role.ts`).
+- Ogranicznik prób: `postgres` (funkcja `private.consume_competency_rate_limit` jest w bazie Preview) —
+  bez dodatkowej usługi i bez kosztu.
+
+## Do zrobienia przez właściciela (jedyne sekrety)
+
+Hasło loginu i dwa klucze generuje baza, a wartości widzi tylko właściciel. Agent ich nie czyta.
+
+1. Supabase, projekt **skillcheck-preview**, SQL Editor:
+   https://supabase.com/dashboard/project/orbyscrupgnupifzlqxp/sql/new — wkleić i uruchomić (Run):
+
+   ```sql
+   select set_config('sc.pw', encode(extensions.gen_random_bytes(24), 'hex'), false);
+   do $$ begin
+     execute format('alter role competency_gateway_preview login password %L', current_setting('sc.pw'));
+   end $$;
+   select
+     'postgresql://competency_gateway_preview:' || current_setting('sc.pw')
+       || '@db.orbyscrupgnupifzlqxp.supabase.co:5432/postgres' as "1_COMPETENCY_BROKER_GATEWAY_DATABASE_URL",
+     encode(extensions.gen_random_bytes(32), 'hex') as "2_COMPETENCY_BROKER_CSRF_KEY",
+     encode(extensions.gen_random_bytes(32), 'hex') as "3_COMPETENCY_BROKER_SOURCE_HMAC_KEY";
+   ```
+
+   Wynik to jeden wiersz z trzema wartościami. Hasło nie trafia do historii zapytań (jest tworzone w bazie).
+2. Vercel: https://vercel.com/krzysztofs-projects-b7ce87b5/skillcheck-core/settings/environment-variables —
+   dla każdej z trzech wartości „Add New”: nazwa jak w nagłówku kolumny (bez `1_`, `2_`, `3_`),
+   wartość z wyniku, środowisko **tylko Preview**, gałąź `integration`, zaznaczone **Sensitive**, Save.
+3. Napisać agentowi „klucze wpisane”.
+
+## Potem agent (bez właściciela)
+
+- Ustawia jawne (niesekretne) zmienne tylko dla Preview `integration`: `COMPETENCY_BROKER_LIMITER=postgres`,
+  `COMPETENCY_BROKER_ORIGIN` (dokładny adres HTTPS aliasu Preview `integration`), `EXERCISE_AI_ENABLED=true`,
+  a po sprawdzeniu połączenia `COMPETENCY_BROKER_ENABLED=true` i `COMPETENCY_CANDIDATE_PREVIEW=true`.
+- Uruchamia ponowne wdrożenie Preview `integration` i przechodzi ścieżkę R1/R2 w przeglądarce
+  (`docs/checks/r1-preview-walk-2026-11-18.md`, kroki 1, 3a, 8b).
+
+Ryzyko do sprawdzenia przy pierwszym uruchomieniu: połączenie Vercel → bezpośredni host bazy
+(`db.…supabase.co:5432`). Gdy nie zadziała (odpowiedź 503), agent opisze to jako blokadę z propozycją —
+bez płatnych dodatków bez zgody właściciela.
