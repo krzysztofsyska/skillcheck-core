@@ -98,9 +98,12 @@ zamówień.
 | W2b — suwak liczby CV co 5 | W TOKU (część 1/2) | PR #286 |
 | W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | DO ZROBIENIA (CZEKA) | — |
 
-### R6. Voicebot — na końcu, po R1–R3
+### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
 
 Docelowo w każdym pakiecie (FREE 1 rozmowa, płatne 10). Do czasu, aż działa, niewidoczny dla klientów.
+Od 18.11.2026 prowadzony równolegle z R1–R3 (decyzja w `docs/DECYZJE.md`). Część dotykająca
+katalogu pakietów czeka na zdjęcie zamrożenia ścieżki płatności; płatny dostawca rozmów to nowy
+koszt (osobna zgoda właściciela).
 
 | Krok | Status | Dowód |
 |---|---|---|
@@ -141,5 +144,6 @@ Rzeczy, których agent nie może zrobić sam. Szczegóły i linki są w podanych
 
 | Sprawa | Gdzie |
 |---|---|
+| Trzy klucze testu kompetencji w Vercel (tylko Preview `integration`) — reszta przygotowana przez agenta | `docs/checks/r1-preview-setup-2026-11-18.md` |
 | Zmiana sekretu `request_secret_current` (rotacja z audytu bezpieczeństwa) | issue [#420](https://github.com/krzysztofsyska/skillcheck-core/issues/420) |
 | Sekret i środowisko dla automatycznego wgrywania migracji (droga B) — po scaleniu PR #499 | issue [#491](https://github.com/krzysztofsyska/skillcheck-core/issues/491) |

@@ -13,6 +13,16 @@
 4. Decyzje sprzed 16.11.2026 są w historii git plików `AGENTS.md` i `CLAUDE.md` (stan sprzed
    17.11.2026) oraz w `docs/BACKLOG.md` (archiwum).
 
+## 18.11.2026
+
+**Test kompetencji na Preview i równoległy start voicebota (R6).** Propozycja czatu:
+„1. Ustawić zmienne Vercel dla Preview (polecam jako pierwsze). Jest najtańsze i najbezpieczniejsze:
+dotyczy tylko strony testowej, bez prawdziwych klientów. Od razu odblokowuje dokończenie R1 i R2,
+czyli prawie cały etap 2 (WERYFIKACJA).” oraz „2. Pozwolić zacząć R6 (voicebot) już teraz,
+równolegle. Podpięcie voicebota do limitów pakietów nie wymaga wysyłek ani płatności, więc agenci
+mogliby nad tym pracować od razu. Klienci nadal by go nie widzieli.” Właściciel, ok. 22:05:
+„TAK na 1 i 2”
+
 ## 17.11.2026
 
 **Zgoda na zmiany w dokumentach pracy (#506).** Pytanie czatu: „Porządki w dokumentach pracy (#506)
