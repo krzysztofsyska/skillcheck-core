@@ -241,3 +241,82 @@ test('R1-AUTO-ACCESS native PostgreSQL: czekając na blokadę doradczą rekrutac
   assert.equal(result.issued, 0);
   assert.deepEqual(result.access, []);
 });
+
+// R1-AUTO-GEN-FIX (20261118100000_r1_auto_generation_approval.sql, uwaga bota w PR #504):
+// zadanie wygenerowane z ekranu (reserve + finish_exercise_ai_generation) respektuje tryb.
+test('R1-AUTO-GEN-FIX: wygenerowane zadanie w trybie automatycznym jest zwolnione i dostaje je krótka lista; w ręcznym czeka', async t => {
+  const e = await activeBoot(t, { fullChain: true }), { db, h, call } = e;
+  const f = await e.seed(), n = await e.seed({ tenant: f, shortlist: false });
+  await h.asAdmin();
+  await db.query("insert into public.company_members(company_id,user_id,role) values($1,$2,'recruiter')", [f.companyId, users.recruiter]);
+  const companyStamp = (await db.query('select updated_at::text value from public.company_profiles where company_id=$1', [f.companyId])).rows[0]?.value ?? null;
+  const generate = async (fingerprint) => {
+    await h.asUser(users.recruiter);
+    const key = randomUUID();
+    assert.equal((await call('public.reserve_exercise_ai_generation',
+      [f.companyId, f.recruitment.id, key, f.position.updated_at, companyStamp, fingerprint])).claimed, true);
+    const trace = { provider: 'synthetic', model: 'fixture', prompt_version: 'v1', payload_schema_version: 1, result_schema_version: 1,
+      input_fingerprint: fingerprint, position_id: f.position.id, position_updated_at: f.position.updated_at };
+    const done = await call('public.finish_exercise_ai_generation',
+      [f.companyId, f.recruitment.id, key, fingerprint, JSON.stringify(f.definition), JSON.stringify(trace), null]);
+    assert.equal(done.status, 'completed');
+    // Powtórka zakończenia jest idempotentna i nie tworzy drugiej propozycji.
+    assert.equal((await call('public.finish_exercise_ai_generation',
+      [f.companyId, f.recruitment.id, key, fingerprint, JSON.stringify(f.definition), JSON.stringify(trace), null])).definition_id, done.definition_id);
+    return done.definition_id;
+  };
+  const proposal = async definitionId => { await h.asAdmin();
+    return (await db.query('select created_by, approved_by, approved_at is not null as approved, approval_mode from exercise_ai.proposals where definition_entry_id=$1', [definitionId])).rows; };
+  const grants = async () => { await h.asAdmin();
+    return (await db.query('select application_id, definition_entry_id from private.competency_test_grants where recruitment_id=$1 order by application_id, definition_entry_id', [f.recruitment.id])).rows; };
+  const signature = async () => { await h.asAdmin(); return (await db.query('select private.erasure_schema_signature() s')).rows[0].s; };
+  const before = await signature();
+
+  // Tryb ręczny (domyślny): propozycja czeka na człowieka, automat niczego nie wydaje.
+  const manual = await generate('b'.repeat(64));
+  assert.deepEqual(await proposal(manual), [{ created_by: users.recruiter, approved_by: null, approved: false, approval_mode: null }]);
+
+  // Tryb automatyczny: wygenerowane zadanie jest zwolnione tak jak w exercise_ai.record_proposal.
+  await h.asUser(f.owner);
+  assert.equal(await call('public.set_exercise_ai_auto_release', [f.companyId, f.recruitment.id, true]), true);
+  const auto = await generate('c'.repeat(64));
+  assert.deepEqual(await proposal(auto), [{ created_by: users.recruiter, approved_by: users.recruiter, approved: true, approval_mode: 'auto' }]);
+  // Wcześniejsza propozycja z trybu ręcznego nie zostaje zatwierdzona wstecz.
+  assert.equal((await proposal(manual))[0].approved, false);
+
+  // Automatyczne wydanie dostępu (#510) obejmuje teraz to zadanie, tylko dla krótkiej listy (R1).
+  await h.asUser(users.recruiter);
+  const result = await call('public.issue_exercise_ai_auto_access', [f.companyId, f.recruitment.id]);
+  assert.equal(result.autoRelease, true);
+  assert.equal(result.issued, 1);
+  assert.deepEqual(await grants(), [{ application_id: f.application.id, definition_entry_id: auto }]);
+  assert.equal((await grants()).some(r => r.application_id === n.application.id), false, 'R1: brak dostępu poza krótką listą');
+  assert.equal((await grants()).some(r => r.definition_entry_id === manual), false, 'niezatwierdzone zadanie nie wychodzi');
+
+  // Powrót do trybu ręcznego: nowe wygenerowane zadanie znów czeka na zatwierdzenie.
+  await h.asUser(f.owner);
+  assert.equal(await call('public.set_exercise_ai_auto_release', [f.companyId, f.recruitment.id, false]), false);
+  const again = await generate('d'.repeat(64));
+  assert.deepEqual(await proposal(again), [{ created_by: users.recruiter, approved_by: null, approved: false, approval_mode: null }]);
+
+  // Uprawnienia i właściciel funkcji bez zmian; brak nowych relacji (sygnatura SC-010).
+  await h.asAdmin();
+  const acl = (await db.query(`select proacl::text acl, prosecdef, proconfig, pg_get_userbyid(proowner) owner from pg_proc
+    where oid='public.finish_exercise_ai_generation(uuid,uuid,uuid,text,jsonb,jsonb,text)'::regprocedure`)).rows[0];
+  assert.deepEqual(acl, { acl: '{postgres=X/postgres,authenticated=X/postgres}', prosecdef: true, proconfig: ['search_path=""'], owner: 'postgres' });
+  assert.equal(await signature(), before);
+  // Migracja nie daje się nałożyć drugi raz (preflight przypina poprzednią treść), a rollback
+  // przywraca poprzednie zachowanie bez kasowania czegokolwiek.
+  const fix = '20261118100000_r1_auto_generation_approval.sql';
+  await assert.rejects(db.exec(await readFile(new URL(`../supabase/migrations/${fix}`, import.meta.url), 'utf8')), denied('55000'));
+  await db.exec('rollback');
+  await db.exec(await readFile(new URL(`../supabase/rollbacks/${fix.replace('.sql', '_down.sql')}`, import.meta.url), 'utf8'));
+  assert.equal((await db.query('select count(*)::int c from private.competency_test_grants where recruitment_id=$1', [f.recruitment.id])).rows[0].c, 1);
+  await h.asUser(f.owner);
+  assert.equal(await call('public.set_exercise_ai_auto_release', [f.companyId, f.recruitment.id, true]), true);
+  const legacy = await generate('e'.repeat(64));
+  assert.equal((await proposal(legacy))[0].approved, false, 'po rollbacku generowanie znów zawsze czeka na człowieka');
+  await h.asAdmin();
+  await db.exec(await readFile(new URL(`../supabase/migrations/${fix}`, import.meta.url), 'utf8'));
+  assert.equal(await signature(), before);
+});

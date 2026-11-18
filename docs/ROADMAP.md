@@ -51,7 +51,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Reguła R1 w bazie | ZROBIONE | PR #273 |
 | Tryb automatyczny w bazie (`auto_release`) | ZROBIONE | PR #291 |
 | Przełącznik rekrutera „zatwierdzam sam” / „automatycznie” na ekranie | ZROBIONE | PR #497 |
-| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU (dostęp bez kliknięcia rekrutera; realna wysyłka do kandydata nadal zamknięta) | PR #510 |
+| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU (dostęp bez kliknięcia rekrutera; realna wysyłka do kandydata nadal zamknięta) | PR #510, PR #517 |
 | Włączenie testu kompetencji w Preview i przejście całej ścieżki | DO SPRAWDZENIA (częściowo — zob. `docs/checks/r1-preview-walk-2026-11-18.md`) | ścieżka ręczna przeszła w bazie Preview; na stronie Preview test wyłączony (brak zmiennych Vercel) |
 
 ### R2. Rozszerzony raport kandydata, bez części głosowej (etap 2)
@@ -64,7 +64,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | B — sekcje ćwiczeń i etapów rekrutacji (dane, ekran, wydruk A4) | ZROBIONE | PR #501, #505 |
 | C — ekran raportu i wydruk A4 | ZROBIONE | PR #483 |
 | D — eksport CSV z rejestrem dostępu, historia eksportów (raport i firma) | ZROBIONE | PR #476, #477, #482 |
-| Przejście całego raportu na Preview na danych testowych | DO SPRAWDZENIA | — |
+| Przejście całego raportu na Preview na danych testowych | DO SPRAWDZENIA (częściowo — zob. `docs/checks/r2-preview-walk-2026-11-18.md`) | sprawdzenie 18.11.2026 |
 
 ### R3. Assessment Center — pełny przepływ (etap 3, issue #338)
 
