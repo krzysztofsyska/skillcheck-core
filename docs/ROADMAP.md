@@ -104,7 +104,7 @@ Docelowo w każdym pakiecie (FREE 1 rozmowa, płatne 10). Do czasu, aż działa,
 
 | Krok | Status | Dowód |
 |---|---|---|
-| Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #PRNUM, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e) |
+| Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e) |
 | Podpięcie do limitów pakietów (FREE 1, płatne 10) | DO ZROBIENIA | — |
 
 ## Wstrzymane do pierwszej sprzedaży
