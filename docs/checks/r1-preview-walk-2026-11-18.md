@@ -56,6 +56,7 @@ Na Preview gałęzi `integration` (i w całym projekcie Vercel) **nie istnieje �
 - `COMPETENCY_BROKER_ENABLED=true` — włącza pośrednika strony kandydata;
 - `COMPETENCY_BROKER_GATEWAY_DATABASE_URL` — połączenie pośrednika z bazą **Preview** dedykowanym loginem `competency_gateway_<nazwa>` (sekret; hasło tego loginu ustawia właściciel). Login jest członkiem roli `competency_test_gateway`, a sama rola `competency_test_gateway` nie ma loginu. Login o innej nazwie kończy się odpowiedzią 503 (zgodnie z `docs/sc-wer-001-preview-runtime.md`);
 - `COMPETENCY_BROKER_ORIGIN` — adres strony Preview, z którego pośrednik przyjmuje żądania;
+- `COMPETENCY_BROKER_CSRF_KEY` i `COMPETENCY_BROKER_SOURCE_HMAC_KEY` — dwa niezależne klucze, każdy 32 bajty zapisane szesnastkowo (64 znaki `0-9a-f`); sekrety, wartości ustawia właściciel, agent ich nie czyta. Brak któregokolwiek albo zły format kończy się odpowiedzią 503 (`lib/competency-attempt-broker-runtime.ts`, funkcja `key`);
 - `COMPETENCY_BROKER_LIMITER` (oraz, zależnie od wybranego rodzaju, `COMPETENCY_BROKER_LIMITER_REST_URL` i `COMPETENCY_BROKER_LIMITER_REST_TOKEN`) — ograniczenie liczby prób;
 - `EXERCISE_AI_ENABLED=true` — generowanie zadania przez AI (krok 3a).
 
