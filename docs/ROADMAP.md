@@ -51,7 +51,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Reguła R1 w bazie | ZROBIONE | PR #273 |
 | Tryb automatyczny w bazie (`auto_release`) | ZROBIONE | PR #291 |
 | Przełącznik rekrutera „zatwierdzam sam” / „automatycznie” na ekranie | ZROBIONE | PR #497 |
-| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU (dostęp bez kliknięcia rekrutera; realna wysyłka do kandydata nadal zamknięta) | PR #510 |
+| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU (dostęp bez kliknięcia rekrutera; realna wysyłka do kandydata nadal zamknięta) | PR #510, PR #517 |
 | Włączenie testu kompetencji w Preview i przejście całej ścieżki | DO SPRAWDZENIA | brak dowodu w issue/PR |
 
 ### R2. Rozszerzony raport kandydata, bez części głosowej (etap 2)
