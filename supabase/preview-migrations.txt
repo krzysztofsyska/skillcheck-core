@@ -90,3 +90,5 @@
 20261117220000_r1_auto_competency_access.sql
 # R1-AUTO-GEN-FIX: public.finish_exercise_ai_generation honours the recruiter's mode (auto mode saves the generated proposal approved with approval_mode 'auto', like exercise_ai.record_proposal; manual unchanged). No tables, no data seeded, nothing sent, test data only.
 20261118100000_r1_auto_generation_approval.sql
+# R2-B1: a stage move or a recruiter decision (applications) and a recruitment rename no longer mark the CV analysis stale nor bump updated_at (create or replace of 3 existing functions; triggers, tables and grants unchanged, no data changed, nothing sent), test data only.
+20261118120000_r2_screening_stale_input_columns.sql
