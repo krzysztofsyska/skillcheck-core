@@ -365,7 +365,7 @@ test('automatic preselection groups appear in the report and CSV without per-row
   ];
   const report = await load(data), csv = screeningReportCsv(report);
   assert.equal(report.groups.length, 1);
-  assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875, stale: false });
+  assert.deepEqual(report.groups[0], { application_id: application, candidate_name: 'Jan Testowy', group: 'passed', source: 'auto', raw_score: 87.5, coverage: 0.875, stale: false, unreviewed: false });
   assert.match(csv, /"Preselekcja automatyczna/); assert.match(csv, new RegExp(`"${application}";"Przeszli sito";"87.5";"0.875";"Automatycznie";"Aktualny"`));
   assert.doesNotMatch(csv, /Jan Testowy/, 'CSV keeps candidates by application ID only');
 });
@@ -454,6 +454,7 @@ test('a saved group is historical when the ranking no longer has a human-reviewe
     'no_human_review', 'pending', 'processing', 'failed', 'cancelled',
     'no_completed_result', 'result_incomplete', 'review_inconsistent',
   ]) {
+    const unreviewed = reason === 'no_human_review';
     const data = fixture();
     Object.assign(data.get_screening_ranking[0], {
       rank: null, rankable: false, raw_score: null,
@@ -466,9 +467,15 @@ test('a saved group is historical when the ranking no longer has a human-reviewe
     }];
     const report = await load(data);
     assert.equal(report.groups.length, 1);
-    assert.equal(report.groups[0].stale, true, reason);
+    // R2-O1: the same, current analysis without a human review is "unreviewed", not outdated;
+    // its score stays hidden either way.
+    assert.equal(report.groups[0].stale, !unreviewed, reason);
+    assert.equal(report.groups[0].unreviewed, unreviewed, reason);
     const csv = screeningReportCsv(report);
-    assert.match(csv, /Wynik nieaktualny — wymaga ponownej analizy/, reason);
+    const groupsCsv = csv.slice(csv.indexOf('Preselekcja automatyczna'));
+    assert.match(groupsCsv, unreviewed ? /Wynik aktualny — punkty pokażemy po sprawdzeniu przez człowieka/ : /Wynik nieaktualny — wymaga ponownej analizy/, reason);
+    if (unreviewed) assert.doesNotMatch(groupsCsv, /nieaktualny/, reason);
+    assert.doesNotMatch(groupsCsv, /;95;/, `${reason}: no score shown as current`);
   }
 });
 
@@ -535,6 +542,22 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
     assert.equal(groupAnalysisCurrent(a, { analysis_id: a, eligibility_reason: reason }), false, reason);
   }
   assert.equal(groupAnalysisCurrent(a, undefined), false, 'no ranking row (e.g. ranking unreadable): fail closed');
+
+  // R2-O1: a current analysis that no human has reviewed yet is not "outdated". The candidate report
+  // and the screening screen show it as current (stale_at empty), so the groups must not say otherwise.
+  const { groupAnalysisState } = await import('../lib/screening-report.ts');
+  assert.equal(groupAnalysisState(a, { analysis_id: a, eligibility_reason: 'eligible' }), 'current');
+  assert.equal(groupAnalysisState(a, { analysis_id: a, eligibility_reason: 'insufficient_evidence' }), 'current');
+  assert.equal(groupAnalysisState(a, { analysis_id: a.toUpperCase(), eligibility_reason: 'no_human_review' }), 'unreviewed');
+  assert.equal(groupAnalysisState(a, { analysis_id: b, eligibility_reason: 'no_human_review' }), 'stale',
+    'an unreviewed newer analysis does not make an older group current');
+  for (const reason of ['stale', 'needs_reanalysis', 'review_inconsistent', 'result_incomplete', 'pending', 'processing', 'failed',
+    'cancelled', 'no_completed_result', 'unknown', null]) {
+    assert.equal(groupAnalysisState(a, { analysis_id: a, eligibility_reason: reason }), 'stale', String(reason));
+  }
+  assert.equal(groupAnalysisState(a, { analysis_id: null, eligibility_reason: 'stale' }), 'stale', 'ranking links no current analysis');
+  assert.equal(groupAnalysisState(a, undefined), 'stale');
+  assert.equal(groupAnalysisState(null, { analysis_id: a, eligibility_reason: 'no_human_review' }), 'stale');
   for (const bad of [null, undefined, '', 'not-a-uuid', 42]) assert.equal(groupAnalysisCurrent(bad, { analysis_id: a, eligibility_reason: 'eligible' }), false);
 
   const filename = fileURLToPath(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/groups.tsx', import.meta.url));
@@ -545,11 +568,17 @@ test('recruitment-page groups use the report currency rule: an outdated group sh
     : name.endsWith('/lib/cv-bulk') ? require('../../../../../../lib/cv-bulk.ts') : require(name);
   module._compile(ts.transpileModule(readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const row = { application_id: a, candidate_name: 'Kandydat nr 1', has_phone: true, group_key: 'passed', source: 'auto', raw_score: 83.33, coverage: 1, updated_at: '2026-11-02T10:00:00Z' };
-  const render = stale => renderToStaticMarkup(React.createElement(module.exports.PreselectionGroups, { companyId: b, recruitmentId: b, rows: [{ ...row, stale }], canEdit: false }));
-  const current = render(false), outdated = render(true);
+  const render = (stale, unreviewed = false) => renderToStaticMarkup(React.createElement(module.exports.PreselectionGroups, { companyId: b, recruitmentId: b, rows: [{ ...row, stale, unreviewed }], canEdit: false }));
+  const current = render(false), outdated = render(true), unreviewed = render(false, true);
   assert.match(current, /83 pkt/); assert.match(current, /pokrycie kryteriów 100%/); assert.doesNotMatch(current, /nieaktualny/);
   assert.match(outdated, /Wynik nieaktualny — wymaga ponownej analizy/);
   assert.doesNotMatch(outdated, /83 pkt|pokrycie kryteriów/, 'no historical score shown as current');
+  assert.match(unreviewed, /Wynik aktualny — punkty pokażemy po sprawdzeniu przez człowieka/);
+  assert.doesNotMatch(unreviewed, /nieaktualny/, 'R2-O1: a current, unreviewed analysis is not outdated');
+  assert.doesNotMatch(unreviewed, /83 pkt|pokrycie kryteriów/, 'an unreviewed score is still not shown');
+  // The recruitment page maps group_state, not only group_current.
+  const pageSrc = readFileSync(new URL('../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', import.meta.url), 'utf8');
+  assert.match(pageSrc, /stale: group_state === 'stale', unreviewed: group_state === 'unreviewed'/);
 });
 
 test('ranking currency: every page is read, a failed page fails closed; recruitment and batch pages use it', async () => {
@@ -646,6 +675,10 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   ];
   assert.deepEqual(withGroupCurrency(items, map).map(i => i.group_current), [true, false, false, false]);
   assert.deepEqual(withGroupCurrency(items, null).map(i => i.group_current), [false, false, false, false], 'unreadable ranking: outdated');
+  assert.deepEqual(withGroupCurrency(items, map).map(i => i.group_state), ['current', 'stale', 'stale', 'stale']);
+  const unreviewedMap = new Map([[id(1), { application_id: id(1), analysis_id: id(10001), eligibility_reason: 'no_human_review' }]]);
+  assert.deepEqual(withGroupCurrency([{ application_id: id(1), group_key: 'passed', group_analysis_id: id(10001) }], unreviewedMap)
+    .map(i => [i.group_current, i.group_state]), [[false, 'unreviewed']]);
   for (const file of ['../app/dashboard/[companyId]/recruitments/[recruitmentId]/page.tsx', '../app/dashboard/[companyId]/recruitments/[recruitmentId]/bulk/[batchId]/page.tsx', '../lib/cv-bulk-actions.ts']) {
     const src = readFileSync(new URL(file, import.meta.url), 'utf8');
     assert.match(src, /loadCurrentRanking\(client, /, file);
@@ -670,4 +703,8 @@ test('ranking currency: every page is read, a failed page fails closed; recruitm
   assert.match(outdated, /Wynik nieaktualny — wymaga ponownej analizy/);
   assert.doesNotMatch(outdated, /83 pkt/, 'no historical score shown as current');
   assert.match(render(undefined), /Wynik nieaktualny/, 'missing flag means outdated');
+  const unreviewedHtml = renderToStaticMarkup(React.createElement(module.exports.BatchProgress, { companyId: id(1), recruitmentId: id(2), batchId: id(3), billingHref: '/b',
+    initial: { batch: { id: id(3), recruitment_id: id(2), status: 'completed', declared_files: 1, reserved_slots: 1, completed_at: null }, items: [{ ...item, group_current: false, group_state: 'unreviewed' }] } }));
+  assert.match(unreviewedHtml, /Wynik aktualny — punkty pokażemy po sprawdzeniu przez człowieka/);
+  assert.doesNotMatch(unreviewedHtml, /nieaktualny|83 pkt/);
 });

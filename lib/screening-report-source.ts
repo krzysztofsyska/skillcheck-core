@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from './supabase/database.types';
 import { parseRequirementFlagRows } from './requirement-flags.ts';
 import {
-  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisCurrent, isUuid, parseGroupRow, parseRanking, parseShortlist,
+  MAX_REPORT_APPLICATIONS, REPORT_VERSION, ScreeningReportError, groupAnalysisState, isUuid, parseGroupRow, parseRanking, parseShortlist,
   requireReport, reportEvidence, reportMatrixVerdict, reportParameters, reportRating, reportText,
   type ReportCriterion, type ScreeningReport,
 } from './screening-report.ts';
@@ -103,7 +103,8 @@ export async function loadScreeningReport(
         const group = parseGroupRow(row);
         const source = (row ?? {}) as { analysis_id?: unknown };
         requireReport(source.analysis_id === undefined || source.analysis_id === null || isUuid(source.analysis_id));
-        return { ...group, stale: !groupAnalysisCurrent(source.analysis_id, rankingById.get(group.application_id)) };
+        const state = groupAnalysisState(source.analysis_id, rankingById.get(group.application_id));
+        return { ...group, stale: state === 'stale', unreviewed: state === 'unreviewed' };
       });
       // The RPC is scoped to this recruitment. A foreign/stale application row
       // is a contract violation, not an empty result: silently filtering it

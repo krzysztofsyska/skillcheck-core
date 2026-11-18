@@ -122,6 +122,14 @@ export const groupLabel: Record<BulkGroup, string> = {
   passed: 'Przeszli sito', review: 'Do decyzji rekrutera', rejected: 'Nie spełniają kryteriów',
 };
 
+/** Currency of a saved group; computed by groupAnalysisState in lib/screening-report.ts. */
+export type GroupAnalysisState = 'current' | 'unreviewed' | 'stale';
+/** One wording for every place that lists saved groups (recruitment page, batch progress, report, CSV). */
+export const groupStateNotice: Record<Exclude<GroupAnalysisState, 'current'>, string> = {
+  stale: 'Wynik nieaktualny — wymaga ponownej analizy',
+  unreviewed: 'Wynik aktualny — punkty pokażemy po sprawdzeniu przez człowieka',
+};
+
 /** PostgreSQL move_preselection_group returns timestamptz only after it records the change.
  * A transport-level success with null/malformed data is not proof of a saved move. */
 export function groupMoveConfirmed(value: unknown): boolean {

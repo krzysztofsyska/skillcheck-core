@@ -1,3 +1,4 @@
+import { groupStateNotice } from '../../../../../../lib/cv-bulk';
 import { kindLabels, matrixVerdictLabels, preselectionGroupLabels, rankingStatusLabel, ratingLabels, reviewedEvidenceAnalysis, shortlistLabel, type ScreeningReport } from '../../../../../../lib/screening-report';
 import { buildCandidateComparison, MAX_COMPARISON_CANDIDATES } from '../../../../../../lib/candidate-comparison';
 import { noMissingDataDisclaimer, requirementStatusLabels } from '../../../../../../lib/requirement-status';
@@ -25,9 +26,9 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
         <caption>Kandydaci według grup (najpierw najwyższy wynik)</caption>
         <thead><tr><th scope="col">Grupa</th><th scope="col">Kandydat</th><th scope="col">Wynik</th><th scope="col">Pokrycie</th><th scope="col">Źródło</th></tr></thead>
         <tbody>{report.groups.map(g => <tr key={g.application_id}>
-          <td>{preselectionGroupLabels[g.group]}{g.stale && <><br /><strong>Wynik nieaktualny — wymaga ponownej analizy</strong></>}</td>
+          <td>{preselectionGroupLabels[g.group]}{(g.stale || g.unreviewed) && <><br /><strong>{groupStateNotice[g.stale ? 'stale' : 'unreviewed']}</strong></>}</td>
           <td><a href={`${basePath}/applications/${g.application_id}/screening`}>{g.candidate_name}</a></td>
-          <td>{g.stale ? '—' : number(g.raw_score)}</td><td>{g.stale || g.coverage === null ? '—' : `${number(g.coverage * 100)}%`}</td>
+          <td>{g.stale || g.unreviewed ? '—' : number(g.raw_score)}</td><td>{g.stale || g.unreviewed || g.coverage === null ? '—' : `${number(g.coverage * 100)}%`}</td>
           <td>{g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie'}</td>
         </tr>)}</tbody></table></div>
     </>}
@@ -66,10 +67,10 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
       <tbody>{report.applications.map(app => { const { ranking: r, shortlist } = app; const group = groupsById.get(r.application_id);
         // Only a human-reviewed evidence-matrix analysis with a current group shows the group score; never a misleading 0%.
         const evidence = reviewedEvidenceAnalysis(app);
-        const grouped = evidence && !!group && !group.stale && r.raw_score === null;
+        const grouped = evidence && !!group && !group.stale && !group.unreviewed && r.raw_score === null;
         return <tr key={r.application_id}>
         <td>{number(r.rank)}</td><td><a href={`#application-${r.application_id}`}>{r.application_id.slice(0, 8)}</a></td>
-        <td>{rankingStatusLabel(app, !!group && !group.stale)}</td><td>{grouped ? <>{number(group!.raw_score)} <small>(grupa)</small></> : number(r.raw_score)}</td>
+        <td>{rankingStatusLabel(app, !!group && !group.stale && !group.unreviewed)}</td><td>{grouped ? <>{number(group!.raw_score)} <small>(grupa)</small></> : number(r.raw_score)}</td>
         <td>{evidence || r.coverage === null ? '—' : `${number(r.coverage * 100)}%`}</td>
         <td>{r.suggested_shortlist ? 'Tak' : 'Nie'}</td><td>{shortlistLabel(shortlist)}</td>
       </tr>; })}</tbody></table></div>}
@@ -80,7 +81,7 @@ export function ScreeningReportView({ report, basePath }: { report: ScreeningRep
     <h2>Oceny i dowody po sprawdzeniu przez człowieka</h2>
     {report.applications.map(({ ranking: r, criteria }) => <article className={styles.application} id={`application-${r.application_id}`} key={r.application_id}>
       <h3>Zgłoszenie {r.application_id.slice(0, 8)}</h3><p className={styles.meta}>{r.application_id}</p>
-      <p>{rankingStatusLabel({ ranking: r, criteria }, !!groupsById.get(r.application_id) && !groupsById.get(r.application_id)!.stale)} · Polityka: {r.ranking_policy_version}</p>
+      <p>{rankingStatusLabel({ ranking: r, criteria }, !!groupsById.get(r.application_id) && !groupsById.get(r.application_id)!.stale && !groupsById.get(r.application_id)!.unreviewed)} · Polityka: {r.ranking_policy_version}</p>
       <p className={styles.controls}><a href={`${basePath}/applications/${r.application_id}/screening`}>Otwórz preselekcję zgłoszenia</a>
         {' · '}<a href={`${basePath}/applications/${r.application_id}/report`}>Raport kandydata</a></p>
       {!criteria.length ? <p>Brak aktualnych, zatwierdzonych dowodów do raportu. Sprawdź status zgłoszenia.</p> : criteria.map(c => <section className={styles.criterion} key={c.id}>
