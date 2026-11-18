@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
+import { lexSql, TXN_CONTROL } from '../release/auto/policy.mjs';
 
 export const migrationName = /^(\d{14})_([a-z0-9_]+)\.sql$/;
 export const sha256 = text => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -40,7 +41,15 @@ export function unframe(sql, file) {
   if (meaningful[0][1] !== begins[0] || meaningful.at(-1)[1] !== commits[0]) {
     throw new Error(`${file}: begin; must be the first and commit; the last statement`);
   }
-  return lines.slice(begins[0] + 1, commits[0]).join('\n');
+  const body = lines.slice(begins[0] + 1, commits[0]).join('\n');
+  // #491 review fix: the runner owns the transaction. Any other transaction control inside the body
+  // (e.g. `COMMIT;` mid-line, which the line check above cannot see) would persist part of it and
+  // make the rollback undo nothing. Skipped only if the text cannot be lexed (unchanged behaviour).
+  const lexed = lexSql(body);
+  if (lexed.ok && lexed.text.split(';').some(st => TXN_CONTROL.test(st.replace(/\s+/g, ' ').trim().toLowerCase()))) {
+    throw new Error(`${file}: transaction control (begin/commit/rollback/savepoint/...) inside the migration body is not allowed`);
+  }
+  return body;
 }
 
 export async function loadMigrations(dir, files) {
@@ -84,7 +93,9 @@ export async function plan(client, dir, migrations) {
   if (gaps.length) throw new Error(`Earlier repository migrations are neither applied nor listed: ${gaps.join(', ')}`);
 }
 
-export async function apply({ databaseUrl, dir, files, expectedHashes, releaseSha, runId, log = console.log, ssl }) {
+// `onApplied(file)` is called after each migration has committed, so a caller that stops at an
+// error knows exactly which migrations already changed the database (#491).
+export async function apply({ databaseUrl, dir, files, expectedHashes, releaseSha, runId, log = console.log, ssl, onApplied = () => {} }) {
   if (!/^[0-9a-f]{40}$/.test(releaseSha ?? '')) throw new Error('RELEASE_SHA must be a full commit SHA');
   if (!runId) throw new Error('RUN_ID required');
   const migrations = await loadMigrations(dir, parseList(files));
@@ -111,9 +122,11 @@ export async function apply({ databaseUrl, dir, files, expectedHashes, releaseSh
         await client.query('commit');
       } catch (error) {
         await client.query('rollback').catch(() => {});
-        throw new Error(`${m.file} failed and was rolled back; later migrations were not run: ${error.message}`);
+        throw Object.assign(new Error(`${m.file} failed and was rolled back; later migrations were not run: ${error.message}`),
+          { file: m.file, sqlstate: typeof error?.code === 'string' ? error.code : null });
       }
       log(`applied ${m.file}`);
+      onApplied(m.file);
     }
     return migrations.map(({ file, hash }) => ({ file, hash }));
   } finally { await client.end(); }

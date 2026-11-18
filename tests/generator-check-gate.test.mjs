@@ -54,6 +54,7 @@ const EXEMPT = [
   // tools/release/ directories below) must be reviewed and named here instead of being invisible to the gate.
   ['tools/release/promotion-manifest.mjs', 'records origin/main..origin/integration history to paths given on the command line; depends on remote refs, so it has no byte-for-byte --check (covered by tests/release-promotion-manifest.test.mjs)'],
   ['tools/release/auto/run.mjs', 'automatic publisher (#369): appends its decision to the GitHub step summary; nothing committed'],
+  ['tools/release/auto/migrate.mjs', 'automatic migrate job (#491): appends its outcome to the GitHub step output and summary; nothing committed'],
   ['tools/release/backup-drill/drill.mjs', 'nightly restore drill (#369): writes a report next to a throw-away dump in the runner; nothing committed'],
   ['tools/db-migrate/inspect.mjs', 'writes a read-only inspection report (inspection.json) from a live database; nothing committed'],
 ];

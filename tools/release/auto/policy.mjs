@@ -20,14 +20,84 @@ export const OWNER_CONSENT_PATHS = [
   ['PAYMENT_PATH_FREEZE', /^(app\/components\/marketing\/(content\.ts|package-comparison\.tsx)|app\/preselekcja\/|lib\/public-future-offers\.ts$)/],
   ['PAYMENT_PATH_FREEZE', /(^|[/._-])(kup|buy|checkout|orders?|catalogs?|offers?|packages?|cennik|prices?|purchases?|stripe|zakupy?|zamowieni[ae])([/._-]|$)/i],
   // The publisher never ships changes to itself, workflows, env files or Supabase config:
-  // those change who can do what, so they need a human merge.
-  ['SECRETS_OR_PIPELINE', /^(\.github\/|\.env|vercel\.json$|tools\/agent-pipeline\/|tools\/release\/|supabase\/config)/i],
+  // those change who can do what, so they need a human merge. `tools/db-migrate/` is the executor
+  // that runs with the production database credential (db-migrate-production and #491 auto-migrate).
+  ['SECRETS_OR_PIPELINE', /^(\.github\/|\.env|vercel\.json$|tools\/agent-pipeline\/|tools\/release\/|tools\/db-migrate\/|supabase\/config)/i],
 ];
 
 const NPM_MANIFEST = /^(package|package-lock)\.json$/;
 
+// Single-pass SQL lexer (#491 review fix). Comments, string literals and quoted identifiers are
+// recognised TOGETHER, left to right, as PostgreSQL reads them, so a `--` or `/*` inside a literal
+// cannot hide the statement after it (and a quote inside a comment cannot hide one either).
+// Handles: '…' with '' escapes, E'…' with backslash escapes, $$…$$ / $tag$…$tag$, "…" identifiers
+// with "" escapes, -- line comments and NESTED /* */ block comments.
+// Output: `text` with every comment replaced by a space, every literal by '' and every dollar body
+// by $$ (so `;` splits statements correctly); `dollar` when a dollar-quoted body was seen.
+// Anything it cannot read cleanly (unterminated literal, identifier, dollar body or comment; a
+// backslash in a plain literal, whose meaning depends on standard_conforming_strings) => ok:false.
+const IDENT_CHAR = /[\w$\u0080-￿]/;
+export function lexSql(sql) {
+  if (typeof sql !== 'string') return { ok: false, code: 'UNREADABLE', text: '', dollar: false };
+  let out = ''; let i = 0; let dollar = false;
+  const fail = code => ({ ok: false, code, text: out, dollar });
+  while (i < sql.length) {
+    const c = sql[i]; const next = sql[i + 1]; const prev = i > 0 ? sql[i - 1] : '';
+    if (c === '-' && next === '-') {
+      // PostgreSQL ends a `--` comment at \n OR a lone \r (a CR-only line break counts).
+      const m = /[\r\n]/.exec(sql.slice(i + 2));
+      out += ' '; i = m ? i + 2 + m.index + 1 : sql.length; continue;
+    }
+    if (c === '/' && next === '*') {
+      let depth = 1; i += 2;
+      while (i < sql.length && depth) {
+        if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2; }
+        else if (sql[i] === '*' && sql[i + 1] === '/') { depth--; i += 2; }
+        else i++;
+      }
+      if (depth) return fail('UNTERMINATED_COMMENT');
+      out += ' '; continue;
+    }
+    if (c === "'") {
+      // E'…' (escape string): the E must be a token of its own, not the end of an identifier.
+      const escape = /[eE]/.test(prev) && !IDENT_CHAR.test(i > 1 ? sql[i - 2] : '');
+      if (escape) out = out.slice(0, -1);
+      let j = i + 1; let closed = false;
+      while (j < sql.length) {
+        if (sql[j] === '\\') { if (!escape) return fail('AMBIGUOUS_LITERAL'); j += 2; continue; }
+        if (sql[j] === "'") { if (sql[j + 1] === "'") { j += 2; continue; } closed = true; break; }
+        j++;
+      }
+      if (!closed) return fail('UNTERMINATED_LITERAL');
+      out += "''"; i = j + 1; continue;
+    }
+    if (c === '"') {
+      let j = i + 1; let closed = false; let name = '';
+      while (j < sql.length) {
+        if (sql[j] === '"') { if (sql[j + 1] === '"') { name += '"'; j += 2; continue; } closed = true; break; }
+        name += sql[j]; j++;
+      }
+      if (!closed) return fail('UNTERMINATED_IDENTIFIER');
+      // A plain name keeps its spelling; anything else (spaces, ';', '--', quotes) becomes a neutral one.
+      out += /^[A-Za-z_][\w$]*$/.test(name) ? `"${name}"` : '"q"'; i = j + 1; continue;
+    }
+    if (c === '$' && !IDENT_CHAR.test(prev)) {
+      const m = /^\$([A-Za-z_\u0080-￿][\w\u0080-￿]*)?\$/.exec(sql.slice(i));
+      if (m) {
+        const end = sql.indexOf(m[0], i + m[0].length);
+        if (end < 0) return fail('UNTERMINATED_DOLLAR_QUOTE');
+        dollar = true; out += '$$'; i = end + m[0].length; continue;
+      }
+    }
+    out += c; i++;
+  }
+  return { ok: true, code: null, text: out, dollar };
+}
+
 // Destructive SQL: hard refusal, explicit code per kind. Scans the RAW text (comments and
-// literals included) so nothing can be hidden; a false positive only means "not automatic".
+// literals included, so nothing can be hidden there) AND the lexed text (where a `;` inside a
+// literal or a comment between keywords can no longer break a pattern); the union is refused.
+// A false positive only means "not automatic".
 const DESTRUCTIVE = [
   ['DROP', /\bdrop\s+(table|schema|column|view|materialized\s+view|function|procedure|type|index|sequence|trigger|policy|constraint|extension|role|owned|database|publication|rule)\b/i],
   ['DELETE', /\bdelete\s+from\b/i],
@@ -40,7 +110,114 @@ const DESTRUCTIVE = [
 
 export function destructiveSql(sql) {
   if (typeof sql !== 'string' || !sql.trim()) return ['UNREADABLE'];
-  return DESTRUCTIVE.filter(([, re]) => re.test(sql)).map(([code]) => code);
+  const lexed = lexSql(sql).text;
+  return DESTRUCTIVE.filter(([, re]) => re.test(sql) || re.test(lexed)).map(([code]) => code);
+}
+
+// #491 (review fix): ALLOWLIST of additive statements, an extra gate beside DESTRUCTIVE. Anything
+// not clearly additive is refused (NON_ADDITIVE_SQL) and waits for the owner via db-migrate-production.
+// The text is read by `lexSql` first (comments and literals in one pass); input it cannot read
+// cleanly is refused (UNPARSEABLE_*), dollar quoting (function bodies, DO blocks) is refused
+// outright, as are policies, grants, functions, views, triggers, types and extensions.
+const NAME = String.raw`"?[a-z_][\w$]*"?`;
+const IDENT = `(${NAME}\\.)?${NAME}`;
+// PR #499 review fix: every rule checks the WHOLE statement shape, never a prefix. A prefix rule let
+// `create table t (x) as select private.purge_closed_sales_leads()` through: additive-looking
+// start, data-deleting function call after it. Bodies of CREATE TABLE / ADD COLUMN are checked
+// element by element by `safeDefinition`; CREATE INDEX accepts plain column lists only.
+const INDEX_COL = `${NAME}( [a-z_]\\w*)?( (asc|desc))?( nulls (first|last))?`;
+const ADDITIVE = [
+  ['CREATE_SCHEMA', new RegExp(`^create schema (if not exists )?${NAME}$`)],
+  ['CREATE_TABLE', st => createTableOk(st)],
+  // no CONCURRENTLY: migrations run inside a transaction, where PostgreSQL rejects it.
+  // plain column lists only: no WHERE (partial), INCLUDE, WITH, TABLESPACE or expression columns
+  ['CREATE_INDEX', new RegExp(`^create (unique )?index (if not exists )?(${NAME} )?on (only )?${IDENT}( using (btree|gin|gist|brin|hash))? ?\\(${INDEX_COL}(,${INDEX_COL})*\\)$`)],
+  ['ENABLE_RLS', new RegExp(`^alter table (if exists )?${IDENT} enable row level security$`)],
+  ['COMMENT', new RegExp(`^comment on (table|column|schema|index) (${NAME}\\.){0,2}${NAME} is (''|null)$`)],
+  // only ADD COLUMN actions, each one a safe column definition
+  ['ADD_COLUMN', st => addColumnOk(st)],
+];
+
+// Characters a column / table-constraint definition may contain. Leaves out operators that could
+// name a user-defined operator function (~ | & # @ % ^ ?) and anything else unusual.
+const SAFE_DEF_CHARS = /^[\w$ '",.()=<>!+\-*/:[\]]+$/;
+// Words that never belong in a plain column definition: subqueries, CTAS, LIKE/INHERITS/PARTITION
+// OF copies, generated expressions (AS), storage clauses, partial-index style clauses.
+const DEF_FORBIDDEN = /\b(select|like|ilike|similar|as|inherits|partition|of|exists|with|using|tablespace|execute|include|where|from|into|values|returning|lateral|over|filter|within|nextval|setval)\b/;
+// `word(` is allowed only for type modifiers, constraint keywords and a few harmless built-ins.
+const PAREN_KEYWORDS = new Set(['check', 'key', 'unique', 'in', 'and', 'or', 'not', 'any', 'all',
+  'numeric', 'decimal', 'varchar', 'char', 'character', 'varying', 'bit', 'time', 'timestamp', 'timestamptz', 'interval', 'float']);
+const SAFE_CALLS = new Set(['now', 'gen_random_uuid', 'length', 'char_length', 'octet_length', 'lower', 'upper', 'btrim', 'coalesce', 'jsonb_typeof', 'cardinality', 'array_length']);
+const QUALIFIED_CALLS = new Set(['extensions.gen_random_uuid', ...[...SAFE_CALLS].map(f => `pg_catalog.${f}`)]);
+const CALL = /(references )?((?:"?[a-z_][\w$]*"?\.)*"?[a-z_][\w$]*"?)\(/g;
+// DEFAULT only with a literal or one of the allowlisted value functions (optionally cast).
+const SAFE_DEFAULT = /\bdefault (''|-?\d+(\.\d+)?|true|false|null|(pg_catalog\.)?now\(\)|((extensions|pg_catalog)\.)?gen_random_uuid\(\)|current_timestamp|current_date|array\[\])(::[a-z_]\w*(\[\])?)?(?=[ ,)]|$)/g;
+
+function safeDefinition(def) {
+  if (typeof def !== 'string' || !def.trim() || !SAFE_DEF_CHARS.test(def)) return false;
+  const s = def.replace(/\bwith(out)? time zone\b/g, 'tz').replace(/\bgenerated (always|by default) as identity\b/g, 'identity');
+  if (DEF_FORBIDDEN.test(s)) return false;
+  for (const [, ref, name] of s.matchAll(CALL)) {
+    if (ref) continue; // references <table>(<column>)
+    if (name.includes('"')) return false; // a quoted callee is a function name, never a keyword
+    if (name.includes('.') ? !QUALIFIED_CALLS.has(name) : !(PAREN_KEYWORDS.has(name) || SAFE_CALLS.has(name))) return false;
+  }
+  return (s.match(/\bdefault\b/g) ?? []).length === [...s.matchAll(SAFE_DEFAULT)].length;
+}
+
+// Splits at commas outside parentheses; null when the parentheses do not balance.
+function splitTopLevel(text) {
+  const parts = []; let depth = 0; let from = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')') { depth--; if (depth < 0) return null; }
+    else if (text[i] === ',' && depth === 0) { parts.push(text.slice(from, i)); from = i + 1; }
+  }
+  if (depth !== 0) return null;
+  parts.push(text.slice(from));
+  return parts.map(p => p.trim());
+}
+
+const CREATE_TABLE_HEAD = new RegExp(`^create table (if not exists )?${IDENT} ?\\(`);
+function createTableOk(st) {
+  const m = CREATE_TABLE_HEAD.exec(st);
+  if (!m || !st.endsWith(')')) return false;
+  // the paren opened after the name must be the one that closes the statement: nothing after it
+  const inner = st.slice(m[0].length, -1);
+  const parts = splitTopLevel(inner);
+  return Array.isArray(parts) && parts.every(safeDefinition);
+}
+
+const ALTER_TABLE_HEAD = new RegExp(`^alter table (if exists )?${IDENT} (?=add column )`);
+const ADD_COLUMN_ACTION = new RegExp(`^add column (if not exists )?${NAME} `);
+function addColumnOk(st) {
+  const m = ALTER_TABLE_HEAD.exec(st);
+  if (!m) return false;
+  const parts = splitTopLevel(st.slice(m[0].length));
+  return Array.isArray(parts) && parts.every(p => {
+    const a = ADD_COLUMN_ACTION.exec(p);
+    return Boolean(a) && safeDefinition(p.slice(a[0].length));
+  });
+}
+export const TXN_CONTROL = /^(begin|start|commit|end|rollback|abort|savepoint|release|prepare\s+transaction|commit\s+prepared|rollback\s+prepared)\b/;
+export function nonAdditiveSql(sql) {
+  if (typeof sql !== 'string' || !sql.trim()) return ['UNREADABLE'];
+  const lexed = lexSql(sql);
+  if (!lexed.ok) return [`UNPARSEABLE_${lexed.code}`];
+  if (lexed.dollar) return ['DOLLAR_QUOTING'];
+  const bad = [];
+  // One space between words, none around ( ) and , — so every rule sees one canonical shape.
+  const stmts = lexed.text.split(';').map(raw => raw.replace(/\s+/g, ' ').replace(/ ?([(),]) ?/g, '$1').trim().toLowerCase()).filter(Boolean);
+  stmts.forEach((st, idx) => {
+    // Only the OUTER frame: `begin` as the first and `commit` as the last statement. Any other
+    // transaction control (a COMMIT in the middle persists earlier statements and leaves the rest
+    // un-undoable) is refused wherever it stands.
+    if (st === 'begin' && idx === 0) return;
+    if (st === 'commit' && idx === stmts.length - 1) return;
+    if (TXN_CONTROL.test(st)) { bad.push('TXN_CONTROL'); return; }
+    if (!ADDITIVE.some(([, rule]) => (typeof rule === 'function' ? rule(st) : rule.test(st)))) bad.push(st.split(' ').slice(0, 2).join('_').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 30) || 'STATEMENT');
+  });
+  return [...new Set(bad)];
 }
 
 /**
@@ -65,7 +242,9 @@ export function classifyRelease(files, migrations = []) {
   const list = Array.isArray(migrations) ? migrations : [];
   for (const path of migrationFiles) {
     const m = list.find(x => x && x.path === path);
-    for (const kind of destructiveSql(m?.sql)) reasons.push(`DESTRUCTIVE_SQL:${kind}:${path}`);
+    const destructive = destructiveSql(m?.sql);
+    for (const kind of destructive) reasons.push(`DESTRUCTIVE_SQL:${kind}:${path}`);
+    if (!destructive.length) for (const kind of nonAdditiveSql(m?.sql)) reasons.push(`NON_ADDITIVE_SQL:${kind}:${path}`);
   }
   return { reasons, migrations: migrationFiles };
 }
@@ -261,7 +440,8 @@ export function ciGate(checkRuns, sha, required = REQUIRED_CHECKS) {
  * @param input.pr          { number, merged, head_sha, merge_commit_sha, base_ref }
  * @param input.files / input.migrations / input.checkRuns / input.comments
  * @param input.migrationExecutor  true only if the trusted workflow holds an unattended
- *                                 production migration credential (today: never)
+ *                                 production migration credential (#491: AUTO_MIGRATE_DATABASE_URL
+ *                                 in the `auto-migrate` environment; absent = refused, as before)
  * @param input.backups / input.now  backup evidence for migration releases
  */
 export function evaluateCandidate(input) {
