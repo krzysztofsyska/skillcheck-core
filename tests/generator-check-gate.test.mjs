@@ -52,17 +52,6 @@ const EXEMPT = [
   ['scripts/preview-freeze-guard.mjs', 'appends allow=... to the GitHub step output file'],
   // Listed file by file, not as a directory prefix: a new writer dropped into tools/agent-pipeline/ (or the two
   // tools/release/ directories below) must be reviewed and named here instead of being invisible to the gate.
-  ['tools/agent-pipeline/authorize-builder.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/write-approval-marker.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/collect-builder.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/authorize-control-source.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/wrap-review.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/run-ci-commands.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/prepare-builder-source.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/prepare-review.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/authorize-review-dispatch.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/authorize-diagnostics.mjs', 'CI runtime packet, journal or step output in a working directory; nothing committed'],
-  ['tools/agent-pipeline/lib/journal.mjs', 'CI journal in a working directory; nothing committed'],
   ['tools/release/promotion-manifest.mjs', 'records origin/main..origin/integration history to paths given on the command line; depends on remote refs, so it has no byte-for-byte --check (covered by tests/release-promotion-manifest.test.mjs)'],
   ['tools/release/auto/run.mjs', 'automatic publisher (#369): appends its decision to the GitHub step summary; nothing committed'],
   ['tools/release/auto/migrate.mjs', 'automatic migrate job (#491): appends its outcome to the GitHub step output and summary; nothing committed'],

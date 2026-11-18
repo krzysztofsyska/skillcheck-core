@@ -133,7 +133,7 @@ Tylko otwarte zadania, bez których gotowa funkcja nie może wejść na produkcj
 
 | Zadanie | Status | Dowód |
 |---|---|---|
-| J3 — usunięcie starego automatu z czasów Cursora (`tools/agent-pipeline`, workflowy `agent-*.yml`, `.cursor/rules`, polecenia dla Cursora w `docs/`); instrukcje AGENTS/CLAUDE już uporządkowane w tym PR | DO ZROBIENIA | osobne zadanie cykliczne „porządki J3” |
+| J3 — usunięcie starego automatu z czasów Cursora (`tools/agent-pipeline`, workflowy `agent-*.yml`, `.cursor/rules`, polecenia dla Cursora w `docs/`); instrukcje AGENTS/CLAUDE już uporządkowane w tym PR | ZROBIONE (po scaleniu PR #514) | PR [#514](https://github.com/krzysztofsyska/skillcheck-core/pull/514): usunięte 116 plików starego kontrolera; zostały tylko pliki używane przez `checks.yml`, `agent-gates.yml`, `sales-release-scope.yml` i `auto-release.yml` |
 
 ## Czeka na właściciela (przy komputerze)
 
