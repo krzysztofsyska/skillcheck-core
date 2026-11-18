@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { errorLabel, groupLabel, statusLabel, type BulkErrorReason, type BulkGroup, type BulkPhase } from '../../../../../../../lib/cv-bulk';
+import { errorLabel, groupLabel, groupStateNotice, statusLabel, type BulkErrorReason, type BulkGroup, type BulkPhase, type GroupAnalysisState } from '../../../../../../../lib/cv-bulk';
 import { createProgressPoller } from '../../../../../../../lib/cv-bulk-poll';
 import { bulkProgress } from '../actions';
 
@@ -11,7 +11,7 @@ export type BatchItem = {
   application_id: string | null; candidate_name: string | null; has_phone: boolean | null; group_key: BulkGroup | null;
   raw_score: number | null; duplicate_of_application: string | null;
   /** Server-computed: the group belongs to the analysis the ranking uses now. Missing means outdated. */
-  group_analysis_id?: string | null; group_current?: boolean;
+  group_analysis_id?: string | null; group_current?: boolean; group_state?: GroupAnalysisState;
 };
 export type BatchStatus = {
   batch: { id: string; recruitment_id: string; status: 'uploading' | 'processing' | 'completed'; declared_files: number; reserved_slots: number; completed_at: string | null };
@@ -67,7 +67,7 @@ function BatchProgressInner({ companyId, recruitmentId, batchId, initial, billin
           {i.application_id && i.has_phone === false && <span> · brak telefonu w CV</span>}</td>
         <td>{!i.group_key ? '—' : i.group_current
           ? `${groupLabel[i.group_key]}${i.raw_score !== null ? ` (${Math.round(Number(i.raw_score))} pkt)` : ''}`
-          : <>{groupLabel[i.group_key]}<br /><strong>Wynik nieaktualny — wymaga ponownej analizy</strong></>}</td>
+          : <>{groupLabel[i.group_key]}<br /><strong>{groupStateNotice[i.group_state === 'unreviewed' ? 'unreviewed' : 'stale']}</strong></>}</td>
       </tr>)}</tbody>
     </table>
   </section>;

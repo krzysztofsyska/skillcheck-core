@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useActionState, useRef } from 'react';
-import { groupLabel, type BulkGroup } from '../../../../../../lib/cv-bulk';
+import { groupLabel, groupStateNotice, type BulkGroup } from '../../../../../../lib/cv-bulk';
 import { SubmitButton } from '../../../../../components/submit-button';
 import { movePreselectionGroup } from './actions';
 
@@ -11,6 +11,8 @@ export type GroupRow = {
   raw_score: number | null; coverage: number | null; updated_at: string;
   /** The saved score no longer matches the candidate's current analysis (CV, position or re-analysis). */
   stale: boolean;
+  /** Current analysis without human review: not outdated, but the score is not shown yet. */
+  unreviewed: boolean;
 };
 
 function MoveForm({ companyId, recruitmentId, row }: { companyId: string; recruitmentId: string; row: GroupRow }) {
@@ -43,7 +45,7 @@ export function PreselectionGroups({ companyId, recruitmentId, rows, canEdit }: 
         <h3>{groupLabel[group]} ({list.length})</h3>
         {list.length ? <ol>{list.map(r => <li key={r.application_id}>
           <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/applications/${r.application_id}/screening`}>{r.candidate_name}</Link>
-          {r.stale ? <strong> · Wynik nieaktualny — wymaga ponownej analizy</strong> : <>
+          {r.stale || r.unreviewed ? <strong> · {groupStateNotice[r.stale ? 'stale' : 'unreviewed']}</strong> : <>
             {r.raw_score !== null && <> · {Math.round(Number(r.raw_score))} pkt</>}
             {r.coverage !== null && <> · pokrycie kryteriów {Math.round(Number(r.coverage) * 100)}%</>}
           </>}

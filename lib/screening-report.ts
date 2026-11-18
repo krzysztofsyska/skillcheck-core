@@ -1,5 +1,7 @@
 import type { ScreeningRating } from './supabase/database.types';
 import type { RequirementFlagRow } from './requirement-flags.ts';
+import { groupStateNotice, type GroupAnalysisState } from './cv-bulk.ts';
+export type { GroupAnalysisState };
 
 export const REPORT_VERSION = 'screening-report-v1';
 export const MAX_REPORT_APPLICATIONS = 500;
@@ -144,6 +146,8 @@ export type ReportGroupRow = {
   raw_score: number | null; coverage: number | null;
   /** The underlying analysis no longer matches the position or CV (ranking says stale / needs re-analysis). */
   stale: boolean;
+  /** The analysis is current but not yet reviewed by a human; the score is not shown (see groupAnalysisState). */
+  unreviewed: boolean;
 };
 export type ScreeningReport = {
   version: typeof REPORT_VERSION; generatedAt: string; companyId: string; companyName: string;
@@ -156,18 +160,30 @@ export type ScreeningReport = {
   requirementFlags?: RequirementFlagRow[];
 };
 /**
- * A saved preselection group is current only while it was computed from the analysis the SC-008
- * ranking uses now, and that analysis is not outdated. A re-analysis outside the batch, a CV or
- * position change, a missing human-approved result, a missing link or a malformed id all make the saved score historical.
+ * Currency of a saved preselection group (bulk CV intake), shared by the recruitment page, the batch
+ * progress view, the recruitment report and its CSV (R2-O1).
+ * - `stale`: the group was not computed from the analysis the SC-008 ranking uses now, or that analysis
+ *   is outdated (CV or position change, re-analysis outside the batch, review inconsistent, needs
+ *   re-analysis, incomplete result). A missing link or a malformed id also counts as stale (fail closed).
+ * - `unreviewed`: the group's analysis is the current one (completed, `stale_at` empty, fresh — the
+ *   ranking only links such an analysis), but no human has reviewed it yet. This is not outdated;
+ *   the candidate report and the screening screen show the same analysis as current.
+ * - `current`: the current analysis after human review. Only then is the saved score shown.
  */
+export function groupAnalysisState(groupAnalysisId: unknown,
+  ranking: { analysis_id: unknown; eligibility_reason: unknown } | undefined): GroupAnalysisState {
+  if (!isUuid(groupAnalysisId) || !ranking || !isUuid(ranking.analysis_id)) return 'stale';
+  // PostgreSQL UUIDs are case-insensitive; a differently cased Data API value must not make a current group appear stale.
+  if (ranking.analysis_id.toLowerCase() !== groupAnalysisId.toLowerCase()) return 'stale';
+  // A matching analysis UUID alone does not prove a valid, human-reviewed result.
+  if (ranking.eligibility_reason === 'eligible' || ranking.eligibility_reason === 'insufficient_evidence') return 'current';
+  if (ranking.eligibility_reason === 'no_human_review') return 'unreviewed';
+  return 'stale';
+}
+/** Only a current, human-reviewed group shows its saved score as current. */
 export function groupAnalysisCurrent(groupAnalysisId: unknown,
   ranking: { analysis_id: unknown; eligibility_reason: unknown } | undefined): boolean {
-  if (!isUuid(groupAnalysisId) || !ranking || !isUuid(ranking.analysis_id)) return false;
-  // A matching analysis UUID alone does not prove a valid, human-reviewed result.
-  // Pending/failed/unreviewed rankings may still reference a historical analysis.
-  if (ranking.eligibility_reason !== 'eligible' && ranking.eligibility_reason !== 'insufficient_evidence') return false;
-  // PostgreSQL UUIDs are case-insensitive; a differently cased Data API value must not make a current group appear stale.
-  return ranking.analysis_id.toLowerCase() === groupAnalysisId.toLowerCase();
+  return groupAnalysisState(groupAnalysisId, ranking) === 'current';
 }
 export function parseGroupRow(value: unknown): ReportGroupRow {
   const g = object(value);
@@ -177,7 +193,7 @@ export function parseGroupRow(value: unknown): ReportGroupRow {
   return {
     application_id: applicationId, candidate_name: text(g.candidate_name, 300),
     group: g.group_key as PreselectionGroupKey, source: g.source as 'auto' | 'manual',
-    raw_score: numeric(g.raw_score, 100, true), coverage: numeric(g.coverage, 1, true), stale: false,
+    raw_score: numeric(g.raw_score, 100, true), coverage: numeric(g.coverage, 1, true), stale: false, unreviewed: false,
   };
 }
 export function reportEvidence(value: unknown): ReportCriterion['evidence'] {
@@ -223,7 +239,7 @@ export function screeningReportCsv(report: ScreeningReport): string {
   for (const application of report.applications) {
     const { ranking: r, shortlist: s } = application;
     for (const criterion of application.criteria.length ? application.criteria : [null]) {
-      rows.push([r.application_id, r.rank, rankingStatusLabel(application, !!report.groups?.some(g => g.application_id === r.application_id && !g.stale)), r.raw_score, reviewedEvidenceAnalysis(application) ? null : r.coverage,
+      rows.push([r.application_id, r.rank, rankingStatusLabel(application, !!report.groups?.some(g => g.application_id === r.application_id && !g.stale && !g.unreviewed)), r.raw_score, reviewedEvidenceAnalysis(application) ? null : r.coverage,
         r.known_criteria, r.total_criteria, r.suggested_shortlist ? 'Tak' : 'Nie', shortlistLabel(s),
         s?.source === 'manual' ? 'Ręczny' : s ? 'Z sugestii' : '', s?.selected_at ?? '', r.ranking_policy_version,
         r.analysis_id, r.review_id, criterion?.text ?? '', criterion ? kindLabels[criterion.kind] : '',
@@ -239,8 +255,9 @@ export function screeningReportCsv(report: ScreeningReport): string {
       ['Zgłoszenie', 'Grupa', 'Wynik', 'Pokrycie', 'Źródło grupy', 'Aktualność']);
     for (const g of report.groups) rows.push([g.application_id, preselectionGroupLabels[g.group],
       // A historical classification stays visible, but its score and coverage must not be read as current.
-      g.stale ? null : g.raw_score, g.stale ? null : g.coverage,
-      g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie', g.stale ? 'Wynik nieaktualny — wymaga ponownej analizy' : 'Aktualny']);
+      g.stale || g.unreviewed ? null : g.raw_score, g.stale || g.unreviewed ? null : g.coverage,
+      g.source === 'manual' ? 'Przeniesione przez człowieka' : 'Automatycznie',
+      g.stale ? groupStateNotice.stale : g.unreviewed ? groupStateNotice.unreviewed : 'Aktualny']);
   }
   const csv = '\uFEFF' + rows.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';
   if (Buffer.byteLength(csv, 'utf8') > 10 * 1024 * 1024) throw new ScreeningReportError('too_large');

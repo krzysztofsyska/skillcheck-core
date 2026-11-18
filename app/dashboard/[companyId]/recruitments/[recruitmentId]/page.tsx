@@ -25,9 +25,9 @@ export default async function Recruitment({params}: {params:Promise<{companyId:s
   // Reuse the batch/report currency rule: PostgreSQL UUIDs are case-insensitive,
   // while the ranking map uses normalized keys. A missing link still means stale.
   const groupRows: GroupRow[] = withGroupCurrency(
-    groups.error ? [] : (groups.data ?? []) as (Omit<GroupRow,'stale'> & {analysis_id?:unknown})[],
+    groups.error ? [] : (groups.data ?? []) as (Omit<GroupRow,'stale'|'unreviewed'> & {analysis_id?:unknown})[],
     rankingById,
-  ).map(({group_current, ...row})=>({...row, stale: !group_current}));
+  ).map(({group_current: _current, group_state, ...row})=>({...row, stale: group_state === 'stale', unreviewed: group_state === 'unreviewed'}));
   return <main className="workspace"><section><Link href={`/dashboard/${companyId}`}>← Panel firmy</Link><h1>{recruitment.name}</h1><p><Link href={`/dashboard/${companyId}/positions/${recruitment.position_id}`}>Profil stanowiska</Link> · <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/interview-guide`}>Przewodnik rozmowy</Link></p><p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/exercises`}>Zadania kompetencyjne i Assessment Center</Link></p>{canEdit&&assessmentCenterPreviewEnabled()&&<p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/assessment-center`}>Sesja Assessment Center</Link></p>}
     <p><Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/diagnostyka`}>Mało CV? Diagnostyka rekrutacji i wskaźniki czasu</Link></p>
     {process.env.SC19_PACKAGES_ENABLED === 'true' && <p className="lead"><Link href={`/dashboard/${companyId}/billing?recruitmentId=${encodeURIComponent(recruitmentId)}`}>Pakiet i pozostałe analizy CV</Link> · <Link href={`/dashboard/${companyId}/billing/checkout?recruitmentId=${encodeURIComponent(recruitmentId)}`}>Kup kolejną PRESELEKCJĘ</Link></p>}<p>{canEdit && <Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}><strong>Wgraj wiele CV</strong></Link>}{canEdit ? ' — ' : ''}<Link href={`/dashboard/${companyId}/recruitments/${recruitmentId}/bulk`}>paczki CV i postęp przetwarzania</Link></p>
