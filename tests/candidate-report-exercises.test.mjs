@@ -265,6 +265,53 @@ test('R2-B ćwiczenia: przy ponad 100 ocenionych wersjach wyświetlana wersja ni
   assert.deepEqual(await loadExercisesReportSection(forged.client, route, recruiter), error);
 });
 
+test('R2-B ćwiczenia: oceniona starsza wersja poza oknem obserwacji i 100 najnowszych definicji nie jest „nieocenione"', async () => {
+  // Ćwiczenie 100 ma 60 nowszych wersji bez oceny oraz starszą, ocenioną wersję 10; 101 innych ćwiczeń zapełnia okno 100 definicji.
+  // Obserwacji jest ponad 100 (inne ćwiczenia), więc okno obserwacji też jest obcięte, a wersja 10 wypada z obu.
+  const time = i => `2026-11-20T${String(10 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00Z`;
+  const newer = Array.from({ length: 60 }, (_, i) => defRow(1000 + i, 100, 3 + i, time(i)));
+  const others = Array.from({ length: EXERCISES_SCAN_LIMIT + 1 }, (_, i) => defRow(3000 + i, 3000 + i, 1, '2026-11-01T10:00:00Z'));
+  const tables = {
+    exercise_definition_entries: [...newer, defRow(10, 100, 1, '2026-11-02T10:00:00Z'), ...others],
+    latest_exercise_observations: [obsRow(10), ...others.map((d, i) => obsRow(3000 + i, { id: id(7000 + i) }))],
+  };
+  // Wersja 10 jest na końcu listy obserwacji, więc wypada poza okno 100 wierszy.
+  tables.latest_exercise_observations = [...tables.latest_exercise_observations.slice(1), obsRow(10)];
+  const { client, calls } = fakeClient(tables);
+  const section = await loadExercisesReportSection(client, route, recruiter);
+  assert.equal(section.kind, 'list');
+  const mine = section.exercises.find(e => e.definitionEntryId === id(10));
+  assert.ok(mine, 'oceniona starsza wersja jest pokazana');
+  assert.equal(mine.status, 'incomplete_evidence');
+  assert.ok(!section.exercises.some(e => e.definitionEntryId === id(1059) && e.status === 'not_assessed'));
+  // Odczyt wszystkich wersji ćwiczenia zachowuje filtry firmy, rekrutacji i rodzaju.
+  const siblings = calls.find(c => c.table === 'exercise_definition_entries' && c.select === 'id,exercise_id');
+  assert.ok(siblings);
+  assert.ok(siblings.eqs.some(([k, v]) => k === 'company_id' && v === route.companyId));
+  assert.ok(siblings.eqs.some(([k, v]) => k === 'recruitment_id' && v === route.recruitmentId));
+  assert.ok(siblings.eqs.some(([k, v]) => k === 'definition->>kind' && v === 'assessment_center'));
+  assert.equal(siblings.limit, EXERCISES_SCAN_LIMIT + 1);
+
+  // Przekroczenie limitu albo błąd odczytu wersji ćwiczenia daje stan błędu, nigdy „nieocenione".
+  const error = { kind: 'error', message: exercisesSectionMessages.error };
+  const overLimit = fakeClient({ ...tables, exercise_definition_entries: [...tables.exercise_definition_entries,
+    ...Array.from({ length: 50 }, (_, i) => defRow(9000 + i, 100, 500 + i, '2026-11-03T10:00:00Z'))] });
+  assert.deepEqual(await loadExercisesReportSection(overLimit.client, route, recruiter), error);
+  let defReads = 0;
+  const failing = { from: table => {
+    const q = client.from(table);
+    if (table !== 'exercise_definition_entries') return q;
+    defReads += 1;
+    let select = null;
+    const wrapped = { ...q, select: cols => { select = cols; q.select(cols); return wrapped; } };
+    for (const k of ['eq', 'in', 'limit', 'order']) wrapped[k] = (...a) => { q[k](...a); return wrapped; };
+    wrapped.then = (resolve, reject) => (select === 'id,exercise_id'
+      ? Promise.resolve({ data: null, error: { code: 'PT500' } }) : Promise.resolve(q)).then(resolve, reject);
+    return wrapped;
+  } };
+  assert.deepEqual(await loadExercisesReportSection(failing, route, recruiter), error);
+});
+
 test('R2-B ćwiczenia: 100 nowszych testów kompetencji nie ukrywa starszego, nieocenionego ćwiczenia AC', async () => {
   // Rodzaj jest filtrowany w zapytaniu przed limitem, więc testy kompetencji nie zajmują okna odczytu.
   const filler = Array.from({ length: EXERCISES_SCAN_LIMIT }, (_, i) =>

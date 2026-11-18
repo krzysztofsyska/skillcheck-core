@@ -153,23 +153,24 @@ export async function loadExercisesReportSection(
     // filtry firmy, rekrutacji i zgłoszenia). Bez tego oceniona wersja
     // wyglądałaby na „nieocenione".
     if (observations.data.length > EXERCISES_SCAN_LIMIT) {
-      const unobservedIds = Array.from(loadedIds).filter(key => !latest.has(key));
-      if (unobservedIds.some(key => !reportUuid.test(key))) throw new Error('Niezgodna wersja ćwiczenia.');
-      if (unobservedIds.length) {
-        const requested = new Set(unobservedIds);
+      // Doczytuje obserwacje dla podanych wersji (te same filtry firmy,
+      // rekrutacji i zgłoszenia). Widok ma najwyżej jeden wpis na wersję, więc
+      // wynik mieści się w liście id; nadmiar, obcy albo powtórzony wpis to
+      // niezgodny zapis i przerywa sekcję zamiast pokazać błędny status.
+      const readObservations = async (ids: string[]): Promise<ExercisesReportSection | null> => {
+        if (!ids.length) return null;
+        if (ids.some(key => !reportUuid.test(key))) throw new Error('Niezgodna wersja ćwiczenia.');
+        const requested = new Set(ids);
         const extra = await client.from('latest_exercise_observations').select(observationColumns)
           .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId)
           .eq('application_id', route.applicationId)
-          .in('definition_entry_id', unobservedIds).limit(EXERCISES_SCAN_LIMIT + 1);
+          .in('definition_entry_id', ids).limit(EXERCISES_SCAN_LIMIT + 1);
         if (extra.error) {
           return reportSchemaMissing(extra.error.code)
             ? { kind: 'unavailable', message: exercisesSectionMessages.unavailable }
             : { kind: 'error', message: exercisesSectionMessages.error };
         }
-        // Widok ma najwyżej jeden wpis na wersję, więc wynik mieści się w
-        // liście id; każdy nadmiar, obcy albo powtórzony wpis to niezgodny
-        // zapis i przerywa sekcję zamiast pokazać błędny status.
-        if (!Array.isArray(extra.data) || extra.data.length > unobservedIds.length) throw new Error('Niezgodna lista.');
+        if (!Array.isArray(extra.data) || extra.data.length > ids.length) throw new Error('Niezgodna lista.');
         for (const item of extra.data) {
           const row = record(item);
           if (typeof row.definition_entry_id !== 'string' || !requested.has(row.definition_entry_id)
@@ -177,6 +178,47 @@ export async function loadExercisesReportSection(
             throw new Error('Niezgodna obserwacja.');
           }
           latest.set(row.definition_entry_id, row);
+        }
+        return null;
+      };
+      const unobservedIds = () => Array.from(loadedIds).filter(key => !latest.has(key));
+      const failed = await readObservations(unobservedIds());
+      if (failed) return failed;
+
+      // Oceniona STARSZA wersja ćwiczenia mogła wypaść i z okna obserwacji, i z
+      // okna 100 najnowszych definicji (przy ponad 100 wersjach). Dla ćwiczeń,
+      // których wczytane wersje nadal nie mają wpisu, czytamy więc wszystkie
+      // wersje AC i doczytujemy ich obserwacje; błąd albo przekroczenie limitu
+      // daje stan błędu, nigdy „nieocenione".
+      if (definitions.data.length > EXERCISES_SCAN_LIMIT) {
+        const exerciseIds = Array.from(new Set(loaded.map(record)
+          .filter(row => !latest.has(String(row.id))).map(row => row.exercise_id)));
+        if (exerciseIds.some(key => typeof key !== 'string' || !reportUuid.test(key))) {
+          throw new Error('Niezgodna wersja ćwiczenia.');
+        }
+        if (exerciseIds.length) {
+          const siblings = await client.from('exercise_definition_entries').select('id,exercise_id')
+            .eq('company_id', route.companyId).eq('recruitment_id', route.recruitmentId)
+            .eq(definitionKindColumn, 'assessment_center')
+            .in('exercise_id', exerciseIds as string[]).limit(EXERCISES_SCAN_LIMIT + 1);
+          if (siblings.error) {
+            return reportSchemaMissing(siblings.error.code)
+              ? { kind: 'unavailable', message: exercisesSectionMessages.unavailable }
+              : { kind: 'error', message: exercisesSectionMessages.error };
+          }
+          if (!Array.isArray(siblings.data) || siblings.data.length > EXERCISES_SCAN_LIMIT) {
+            throw new Error('Za dużo wersji ćwiczeń do pełnego sprawdzenia.');
+          }
+          const olderIds = siblings.data.map(item => record(item))
+            .map(row => {
+              if (typeof row.id !== 'string' || !exerciseIds.includes(row.exercise_id as string)) {
+                throw new Error('Niezgodna wersja ćwiczenia.');
+              }
+              return row.id;
+            })
+            .filter(key => !loadedIds.has(key) && !latest.has(key));
+          const failedOlder = await readObservations(Array.from(new Set(olderIds)));
+          if (failedOlder) return failedOlder;
         }
       }
     }
