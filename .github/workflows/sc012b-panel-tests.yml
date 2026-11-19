@@ -32,6 +32,4 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
-      # Isolated CI-only React state renderer. Do not alter application dependencies.
-      - run: npm install --no-save --package-lock=false react-test-renderer@19.3.0
       - run: node --test tests/voice-plan-panel-state.test.mjs tests/voice-plan-panel-component.test.mjs tests/voice-plan-panel-react-state.test.mjs

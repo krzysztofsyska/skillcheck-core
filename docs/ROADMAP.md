@@ -64,7 +64,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | B — sekcje ćwiczeń i etapów rekrutacji (dane, ekran, wydruk A4) | ZROBIONE | PR #501, #505 |
 | C — ekran raportu i wydruk A4 | ZROBIONE | PR #483 |
 | D — eksport CSV z rejestrem dostępu, historia eksportów (raport i firma) | ZROBIONE | PR #476, #477, #482 |
-| Przejście całego raportu na Preview na danych testowych | DO SPRAWDZENIA (częściowo — zob. `docs/checks/r2-preview-walk-2026-11-18.md`) | sprawdzenie 18.11.2026; poprawka B1: PR #521; O1 (grupy „nieaktualny”) — PR #520 |
+| Przejście całego raportu na Preview na danych testowych | DO SPRAWDZENIA (częściowo — zob. `docs/checks/r2-preview-walk-2026-11-18.md`) | sprawdzenie 18.11.2026; poprawka B1: PR #521; O1 (grupy „nieaktualny”) — PR #520; ponowne sprawdzenie B1 i O1 na Preview: PASS (baza i kod; ekran NOT RUN), brakuje testu kompetencji (zmienne Vercel) — PR #524 |
 
 ### R3. Assessment Center — pełny przepływ (etap 3, issue #338)
 
@@ -98,14 +98,17 @@ zamówień.
 | W2b — suwak liczby CV co 5 | W TOKU (część 1/2) | PR #286 |
 | W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | DO ZROBIENIA (CZEKA) | — |
 
-### R6. Voicebot — na końcu, po R1–R3
+### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
 
 Docelowo w każdym pakiecie (FREE 1 rozmowa, płatne 10). Do czasu, aż działa, niewidoczny dla klientów.
+Od 18.11.2026 prowadzony równolegle z R1–R3 (decyzja w `docs/DECYZJE.md`). Część dotykająca
+katalogu pakietów czeka na zdjęcie zamrożenia ścieżki płatności; płatny dostawca rozmów to nowy
+koszt (osobna zgoda właściciela).
 
 | Krok | Status | Dowód |
 |---|---|---|
-| Architektura i MVP rozmowy (dawne SC-011, SC-012) | DO SPRAWDZENIA | issue #12, #13 zamknięte; kod częściowo w `lib/voice/` |
-| Podpięcie do limitów pakietów (FREE 1, płatne 10) | DO ZROBIENIA | — |
+| Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540 |
+| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora i sprawdzanie limitu bez pakietów; pakiety czekają na zdjęcie zamrożenia) | PR #532 |
 
 ## Wstrzymane do pierwszej sprzedaży
 
@@ -141,5 +144,6 @@ Rzeczy, których agent nie może zrobić sam. Szczegóły i linki są w podanych
 
 | Sprawa | Gdzie |
 |---|---|
+| Trzy klucze testu kompetencji w Vercel (tylko Preview `integration`) — reszta przygotowana przez agenta | `docs/checks/r1-preview-setup-2026-11-18.md` |
 | Zmiana sekretu `request_secret_current` (rotacja z audytu bezpieczeństwa) | issue [#420](https://github.com/krzysztofsyska/skillcheck-core/issues/420) |
 | Sekret i środowisko dla automatycznego wgrywania migracji (droga B) — po scaleniu PR #499 | issue [#491](https://github.com/krzysztofsyska/skillcheck-core/issues/491) |

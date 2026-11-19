@@ -72,6 +72,41 @@ jobs:
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_PG_MAJOR: '16'
+      # R6-1c voice plan tables as a migration: closed ACL, RPCs on the full chain, erasure inventory R18, rollback.
+      - run: npm run test:voice-plan-migration-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+      # R6-1c part 2: voice permission receipts, voice pool and preparations as a migration: closed ACL, erasure inventory R19, refund, rollback.
+      - run: npm run test:voice-pool-migration-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+      # R6-1c part 4: voice dispatch claims, call attempts and webhook receipts as a migration: closed ACL, erasure inventory R20, rollback.
+      - run: npm run test:voice-dispatch-migration-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+      # R6-1c part 5: voice settlement (pool use only for a call that took place, do-not-call blocks every channel) as a migration: closed ACL, erasure inventory R21, rollback.
+      - run: npm run test:voice-settlement-migration-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+      # R6-1c part 6: operator resolution of unknown voice dispatches (owner-only, settled once through the R21 ledger) as a migration: closed ACL, erasure inventory R22, rollback.
+      - run: npm run test:voice-resolution-migration-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+      # R6-1c part 7: voice interview transcripts (bound to a completed call, retention 90 days after the recruitment closes, skipped while frozen) as a migration: closed ACL, erasure inventory R23, rollback.
+      - run: npm run test:voice-transcripts-migration-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
+      # R6-1c part 8: the last SC-010-R4-VOICE differences (fail-closed voice request-key purge scope, no-op UPDATE keeps the retention clock) as a migration: signature and inventory stay R23, owner-only ACL, rollback.
+      - run: npm run test:voice-retention-migration-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       - run: npm run test:db
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
