@@ -95,6 +95,7 @@
     "test:voice-dispatch-migration-db": "node scripts/r6-voice-dispatch-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-dispatch-migration-database.test.mjs",
     "test:voice-settlement-migration-db": "node scripts/r6-voice-settlement-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-settlement-migration-database.test.mjs",
     "test:voice-resolution-migration-db": "node scripts/r6-voice-resolution-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-resolution-migration-database.test.mjs",
+    "test:voice-transcripts-migration-db": "node scripts/r6-voice-transcripts-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-transcripts-migration-database.test.mjs",
     "test:form-reset": "node --test tests/form-reset-on-error.test.mjs"
   },
   "dependencies": {
