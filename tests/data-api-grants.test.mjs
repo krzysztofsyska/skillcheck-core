@@ -18,6 +18,8 @@ const readOnly = ['behavior_assessment_entries', 'exercise_definition_entries',
   'candidate_communications', 'candidate_communication_events', 'candidate_communication_approvals'];
 const rpcOnly = ['sales_leads', 'platform_operators'];
 const competencyRpcOnly=['competency_test_attempts','competency_test_review_entries'];
+// R6-1c: voice plan history is reachable only through owner-executed RPCs; no API role gets anything.
+const voicePlanRpcOnly=['voice_plan_versions'];
 const views = ['latest_behavior_assessments', 'latest_exercise_definitions', 'latest_exercise_observations'];
 const tables = [...crud, ...readOnly, ...rpcOnly, 'companies', 'candidate_documents'].sort();
 const relations = [...tables, ...views].sort();
@@ -81,7 +83,8 @@ async function assertApiContract(db) {
     where n.nspname='public' and c.relkind in ('r','p','v') order by c.relname`)).rows;
   const step4Present = catalog.some(row => row.relname === 'application_stage_events');
   const competencyPresent=catalog.some(row=>row.relname==='competency_test_attempts');
-  const expectedRelations=[...relations,...(step4Present?step4Audit:[]),...(competencyPresent?competencyRpcOnly:[])].sort();
+  const voicePlanPresent=catalog.some(row=>row.relname==='voice_plan_versions');
+  const expectedRelations=[...relations,...(step4Present?step4Audit:[]),...(competencyPresent?competencyRpcOnly:[]),...(voicePlanPresent?voicePlanRpcOnly:[])].sort();
   assert.deepEqual(catalog.map(r => r.relname), expectedRelations, 'new tables require a reviewed API contract');
   for (const row of catalog) {
     if (row.relkind === 'v') assert.ok(row.reloptions.includes('security_invoker=true'), row.relname);
@@ -89,13 +92,13 @@ async function assertApiContract(db) {
   }
   for (const row of await apiMatrix(db)) {
     const expected = row.rolname === 'authenticated' && (
-      (row.privilege === 'SELECT' && ![...rpcOnly,...competencyRpcOnly].includes(row.relname)) ||
+      (row.privilege === 'SELECT' && ![...rpcOnly,...competencyRpcOnly,...voicePlanRpcOnly].includes(row.relname)) ||
       (['INSERT','DELETE'].includes(row.privilege) && crud.includes(row.relname)));
     assert.equal(row.allowed, expected, JSON.stringify(row));
   }
   for (const row of await columnMatrix(db)) {
     const expected = row.rolname === 'authenticated' && (
-      (row.privilege === 'SELECT' && ![...rpcOnly,...competencyRpcOnly].includes(row.relname)) ||
+      (row.privilege === 'SELECT' && ![...rpcOnly,...competencyRpcOnly,...voicePlanRpcOnly].includes(row.relname)) ||
       (row.privilege === 'INSERT' && (crud.includes(row.relname) ||
         (row.relname === 'candidate_documents' && documentInsert.includes(row.attname)))) ||
       (row.privilege === 'UPDATE' && (updates[row.relname] ?? []).includes(row.attname)));

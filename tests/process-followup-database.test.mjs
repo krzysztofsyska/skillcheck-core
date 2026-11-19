@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { activeBoot,users } from './helpers/competency-active-fixture.mjs';
 import { parseFollowupState } from '../lib/process-followup.ts';
 import { lifecycleHarness,lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
-const signature='8ad238e75d4d4ccb82e03b89f368ba06483580781494fe1f7f9306a3c9c7f73f';
+// Full current chain: R18 since R6-1c voice plan tables (R17 added the follow-up adapters).
+const signature='d77384591cfa80a1a2f16d641b7af5e653a21ce49ccc1b7f2db2bbc2539aaebb';
 const rejected=e=>['42501','PT404'].includes(e.code);
 const body={tasks:'Faktyczne zadania wykonane.',onboarding:'Wdrożenie zapewniono.',resources:'Zasoby dostępne.',support:'Wsparcie udzielone.',autonomy:'Samodzielna praca.',evidence:'Syntetyczny wynik zadania zgodny z kryteriami.',outcome:'met',probation:'passed',retained:'yes'};
 test('SC-PROCESS B: purposes, evidence, independent permission, freeze and erasure inventory',async t=>{

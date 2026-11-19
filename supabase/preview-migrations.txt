@@ -92,3 +92,5 @@
 20261118100000_r1_auto_generation_approval.sql
 # R2-B1: a stage move or a recruiter decision (applications) and a recruitment rename no longer mark the CV analysis stale nor bump updated_at (create or replace of 3 existing functions; triggers, tables and grants unchanged, no data changed, nothing sent), test data only.
 20261118120000_r2_screening_stale_input_columns.sql
+# R6-1c: voice interview plan tables (SC-012-B) and owner-only review/release RPCs, erasure inventory R18 for the five candidate-linked plan tables. Nothing granted to API roles, no template version seeded, not used by the app, nothing sent, test data only.
+20261119100000_r6_voice_plan_r18.sql
