@@ -100,3 +100,5 @@
 20261119150000_r6_voice_pool_operator_grant.sql
 # R6-1c part 4: voice dispatch ledger (SC-011-B2 provider call attempts and webhook receipts) and once-only dispatch claims (SC-011-B5), erasure inventory R20 for the three candidate-linked tables, purged before their preparation. No settlement, transcripts or operator resolution, no provider transport or webhook route, nothing granted to API roles, not used by the app, nothing sent, test data only.
 20261119180000_r6_voice_dispatch_r20.sql
+# R6-1c part 5: voice settlement (SC-011-B4): only a call that took place uses an interview from the voice pool, any other finished call releases its reservation, each prepared call is settled once (settlement ledger, erasure inventory R21, purged after its preparation without a refund), and an in-call do-not-call request blocks every contact channel for good. No operator resolution or transcripts, no provider transport or webhook route, nothing granted to API roles, not used by the app, nothing sent, test data only.
+20261119210000_r6_voice_settlement_r21.sql

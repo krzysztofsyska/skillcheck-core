@@ -15,6 +15,7 @@ import { canonicalVoiceSourceSnapshot } from '../lib/voice/plan-persistence-cont
 import { trustedVoiceTemplateDigest } from '../lib/voice/template-registry.ts';
 import { reconstructTrustedVoiceSource } from '../lib/voice/trusted-source-verifier.ts';
 
+// Pinned to its own step: R21 (part 5) adds settlement of finished calls on top.
 const signature = '1a657cdd163107054029c177c44c66e44a05ad5615a374fb85466c30bc95b806';
 const candidateTables = ['private.sc011b_voice_attempts', 'private.sc011b_voice_webhook_receipts', 'private.sc011b_voice_dispatches'];
 const guards = ['private.sc011b_attempt_guard()', 'private.sc011b_receipt_guard()', 'private.sc011b_dispatch_guard()'];
@@ -28,7 +29,7 @@ const agentId = 'agent_' + 'a'.repeat(24);
 const code = (...codes) => e => codes.includes(e.code);
 
 test('R6-1c part 4: voice dispatch migration is closed, once-only and erased with the candidate', async t => {
-  const { db, h, x } = await activeBoot(t, { fullChain: true });
+  const { db, h, x } = await activeBoot(t, { fullChain: true, throughMigration: '20261119180000_r6_voice_dispatch_r20.sql' });
   const one = async (sql, args) => (await db.query(sql, args)).rows[0].v;
   const asServer = async actor => { await h.asAdmin(); await db.query("select set_config('request.jwt.claim.sub',$1,false)", [actor]); };
   let policySeeded = false;
