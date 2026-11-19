@@ -13,8 +13,8 @@ import { canonicalVoiceSourceSnapshot } from '../lib/voice/plan-persistence-cont
 import { trustedVoiceTemplateDigest } from '../lib/voice/template-registry.ts';
 import { reconstructTrustedVoiceSource } from '../lib/voice/trusted-source-verifier.ts';
 
-// Full current chain: R21 since R6-1c part 5 (voice settlement) builds on R20 (voice dispatch), R19 and R18.
-const signature = '680f3eaa808e7280b545ad9aaabaa0d4144aafdf8c26f40d174d7670d4da7189';
+// Full current chain: R22 since R6-1c part 6 (voice dispatch resolution) builds on R21 (voice settlement), R20, R19 and R18.
+const signature = '3e6a9df7b8146c65fac9b7b04cbb60f68b1b47b98039461d077a252426e1adee';
 const planTables = ['public.voice_plan_versions', 'private.voice_plan_review_entries', 'private.voice_plan_release_entries',
   'private.voice_plan_current_releases', 'private.voice_plan_request_keys'];
 const newTables = [...planTables, 'private.voice_plan_template_catalog'];

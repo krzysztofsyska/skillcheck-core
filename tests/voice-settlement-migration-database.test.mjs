@@ -18,6 +18,7 @@ import { canonicalVoiceSourceSnapshot } from '../lib/voice/plan-persistence-cont
 import { trustedVoiceTemplateDigest } from '../lib/voice/template-registry.ts';
 import { reconstructTrustedVoiceSource } from '../lib/voice/trusted-source-verifier.ts';
 
+// Pinned to its own step: R22 (part 6) adds the operator resolution of unknown dispatches on top.
 const signature = '680f3eaa808e7280b545ad9aaabaa0d4144aafdf8c26f40d174d7670d4da7189';
 const ledger = 'private.sc011b_voice_settlements';
 const guards = ['private.sc011b_settlement_guard()'];
@@ -32,7 +33,7 @@ const code = (...codes) => e => codes.includes(e.code);
 const message = (c, m) => e => e.code === c && e.message === m;
 
 test('R6-1c part 5: voice settlement uses the pool once, releases unplaced calls and blocks on do-not-call', async t => {
-  const { db, h, x } = await activeBoot(t, { fullChain: true });
+  const { db, h, x } = await activeBoot(t, { fullChain: true, throughMigration: '20261119210000_r6_voice_settlement_r21.sql' });
   const one = async (sql, args) => (await db.query(sql, args)).rows[0].v;
   const asServer = async actor => { await h.asAdmin(); await db.query("select set_config('request.jwt.claim.sub',$1,false)", [actor]); };
   let policySeeded = false;

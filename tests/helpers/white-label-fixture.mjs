@@ -8,8 +8,8 @@ import { bootMigrationDatabase } from './sc19-migration-fixture.mjs';
 import { setupRankingDatabase, users } from './screening-ranking-fixture.mjs';
 
 export { users };
-// Full current chain: R21 since R6-1c part 5 voice settlement (R20: part 4 voice dispatch). SC-020 itself stays outside the inventory.
-export const signature = '680f3eaa808e7280b545ad9aaabaa0d4144aafdf8c26f40d174d7670d4da7189';
+// Full current chain: R22 since R6-1c part 6 voice dispatch resolution (R21: part 5 voice settlement). SC-020 itself stays outside the inventory.
+export const signature = '3e6a9df7b8146c65fac9b7b04cbb60f68b1b47b98039461d077a252426e1adee';
 export const code = (...codes) => error => codes.includes(error.code);
 export const brandConfig = (brandName, overrides = {}) => ({
   brandName,

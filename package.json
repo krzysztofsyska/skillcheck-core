@@ -94,6 +94,7 @@
     "test:voice-pool-migration-db": "node scripts/r6-voice-permission-pool-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-pool-migration-database.test.mjs tests/voice-pool-grant-database.test.mjs",
     "test:voice-dispatch-migration-db": "node scripts/r6-voice-dispatch-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-dispatch-migration-database.test.mjs",
     "test:voice-settlement-migration-db": "node scripts/r6-voice-settlement-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-settlement-migration-database.test.mjs",
+    "test:voice-resolution-migration-db": "node scripts/r6-voice-resolution-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-resolution-migration-database.test.mjs",
     "test:form-reset": "node --test tests/form-reset-on-error.test.mjs"
   },
   "dependencies": {
