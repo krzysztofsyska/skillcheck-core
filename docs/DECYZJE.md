@@ -13,6 +13,29 @@
 4. Decyzje sprzed 16.11.2026 są w historii git plików `AGENTS.md` i `CLAUDE.md` (stan sprzed
    17.11.2026) oraz w `docs/BACKLOG.md` (archiwum).
 
+## 19.11.2026
+
+**Zdjęcie zamrożenia ścieżki płatności w tym repozytorium, Stripe zamiast Przelewy24, voicebot
+z płatnym dostawcą do 50 zł miesięcznie.** Propozycje czatu (22:50):
+„1. Zdjąć zamrożenie płatności w core i przejść tam na Stripe (to samo konto KTIG). Polecam to.
+Odblokowuje R3, R5 i część R6. Agenci od razu dostaną kilkanaście kroków.”
+„2. Voicebot: zgoda na Retell z miesięcznym limitem wydatków albo dalsza praca tylko na udawanym
+dostawcy. Jeśli bez zgody, R6 wkrótce stanie.”
+Właściciel, 22:59: **„1 tak, 2 limit 50 zł, 3 tak, 4 dokładna kontrola pliku w samej aplikacji”**
+(punkty 3 i 4 dotyczą repozytorium `skillcheck-preselekcja`).
+
+Następnie czat przedstawił listę zmian, m.in.:
+„W poleceniach wykonawcy i recenzenta core dopiszę Twoje decyzje jako cytaty. Pierwszym zadaniem
+wykonawcy będzie PR z dokumentami (DECYZJE.md, ROADMAP.md, AGENTS.md): zamrożenie ścieżki płatności
+zdjęte; płatności przez Stripe na tym samym koncie KTIG Consulting; Przelewy24 do usunięcia.”
+„To odblokowuje kolejne kroki w core: podpięcie Assessment Center do kupionego pakietu; kalkulator
+wyceny; limity rozmów z voicebotem w pakietach; zakup WERYFIKACJI i AC przez Stripe.”
+„Voicebot: zgoda na płatnego dostawcę rozmów (Retell) z limitem 50 zł miesięcznie. Limit będzie
+pilnowany w samej aplikacji: po przekroczeniu nowe rozmowy się nie uruchamiają, a Ty dostajesz
+powiadomienie.”
+„Bez zmian zostają: zakaz ruszania sekretów, kasowania danych i prawdziwych wysyłek do klientów.”
+Właściciel, 23:01: **„wszystko tak”**.
+
 ## 18.11.2026
 
 **Test kompetencji na Preview i równoległy start voicebota (R6).** Propozycja czatu:

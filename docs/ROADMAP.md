@@ -14,7 +14,7 @@
 4. **Decyzje właściciela** zapisujemy wyłącznie w [docs/DECYZJE.md](DECYZJE.md), jako dosłowne
    cytaty z datą. Tutaj zostaje tylko ich skutek.
 
-Bramki bezpieczeństwa (zamrożenie ścieżki płatności, migracje produkcyjne, sekrety, ustawienia,
+Bramki bezpieczeństwa (ścieżka płatności — zamrożenie zdjęte 19.11.2026, migracje produkcyjne, sekrety, ustawienia,
 kasowanie danych, nowe koszty, nowe realne wysyłki, polityka wydań #369) są w `AGENTS.md`. Ten plik
 ich nie zmienia i nie otwiera.
 
@@ -27,7 +27,7 @@ Statusy ustalono 17.11.2026 z kodu na `integration` (`7ebd063`) oraz z issue i P
 | **1. Pierwsza sprzedaż** | firma kupuje FREE / PRESELEKCJĘ przez Stripe i dostaje raport | pierwsza prawdziwa płatność za PRESELEKCJĘ | repo `skillcheck-preselekcja`, jego [docs/ROADMAP.md](https://github.com/krzysztofsyska/skillcheck-preselekcja/blob/integration/docs/ROADMAP.md) |
 | **2. WERYFIKACJA gotowa** | rekruter daje test kompetencji z shortlisty i dostaje rozszerzony raport | ścieżka R1 + R2 przechodzi na Preview, pakiet opisany na stronie (R4) | to repo: R1, R2, R4 |
 | **3. Assessment Center gotowe** | firma prowadzi sesję finalistów z dwoma asesorami | ścieżka R3 przechodzi na Preview dla konta firmy z pakietem | to repo: R3 |
-| **4. Później** | kalkulator wyceny i voicebot | — | to repo: R5 (CZEKA), R6 |
+| **4. Później** | kalkulator wyceny i voicebot | — | to repo: R5, R6 |
 
 Etap 1 nie blokuje etapów 2–3: oba repozytoria pracują równolegle. Kolejność w tym repozytorium
 wyznacza lista „Kolejność funkcji” niżej.
@@ -76,7 +76,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Asesorzy pokazani z nazwy (etykieta, potem e-mail konta z tej samej firmy) | ZROBIONE | PR #500, #513 |
 | Jawne braki dowodów w raporcie i CSV sesji | ZROBIONE | PR #508 |
 | Testy równoczesnej pracy asesorów | ZROBIONE | PR #512 |
-| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; pakiet czeka na zdjęcie zamrożenia ścieżki płatności) | PR #503; issue #338, #274, #283 |
+| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; zamrożenie płatności zdjęte 19.11.2026 — pakiet do podpięcia) | PR #503; issue #338, #274, #283 |
 
 ### R4. Oferta na stronie (etap 2)
 
@@ -88,27 +88,39 @@ zamówień.
 | WERYFIKACJA i ASSESSMENT CENTER widoczne na stronie, z opisem i dopiskiem „nie można jeszcze kupić”, bez wzmianki o bocie | ZROBIONE | PR #489 |
 | Gwarancja wyniku PRESELEKCJI w regulaminie i na stronie oferty | ZROBIONE | PR #494 (issue #492) |
 
-### R5. Kalkulator wyceny (SC-PRICING-W1…W4) — CZEKA
+### R5. Kalkulator wyceny (SC-PRICING-W1…W4)
 
-**CZEKA na zdjęcie zamrożenia ścieżki płatności przez właściciela.** Do tego czasu nie podejmować.
+Zamrożenie ścieżki płatności zdjęte 19.11.2026 (`docs/DECYZJE.md`). Ceny wyłącznie według `docs/cennik-2026-11-02.md`.
 
 | Krok | Status | Dowód |
 |---|---|---|
 | W1 + W2 — audyt źródeł cennika i katalog cen w bazie | ZROBIONE | PR #265 |
 | W2b — suwak liczby CV co 5 | W TOKU (część 1/2) | PR #286 |
-| W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | DO ZROBIENIA (CZEKA) | — |
+| W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | DO ZROBIENIA | — |
 
 ### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
 
 Docelowo w każdym pakiecie (FREE 1 rozmowa, płatne 10). Do czasu, aż działa, niewidoczny dla klientów.
 Od 18.11.2026 prowadzony równolegle z R1–R3 (decyzja w `docs/DECYZJE.md`). Część dotykająca
-katalogu pakietów czeka na zdjęcie zamrożenia ścieżki płatności; płatny dostawca rozmów to nowy
-koszt (osobna zgoda właściciela).
+katalogu pakietów jest odblokowana (19.11.2026). Płatny dostawca rozmów (Retell) dozwolony do 50 zł
+miesięcznie, z limitem pilnowanym w aplikacji (decyzja 19.11.2026, `docs/DECYZJE.md`).
 
 | Krok | Status | Dowód |
 |---|---|---|
 | Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540; transkrypt w podglądzie (#542): PR #543 |
-| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu przy zlecaniu rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pakiety czekają na zdjęcie zamrożenia) | PR #532, PR #544 |
+| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu przy zlecaniu rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pakiety do podpięcia po zdjęciu zamrożenia 19.11.2026) | PR #532, PR #544 |
+
+### R7. Płatności Stripe w tym repozytorium (od 19.11.2026)
+
+Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto KTIG Consulting co
+`skillcheck-preselekcja`. Prawdziwe pieniądze dopiero po wpisaniu kluczy na żywo przez właściciela.
+
+| Krok | Status | Dowód |
+|---|---|---|
+| Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO ZROBIENIA | — |
+| Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | DO ZROBIENIA | — |
+| Usunięcie kodu Przelewy24 | DO ZROBIENIA | — |
+| Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | DO ZROBIENIA | — |
 
 ## Wstrzymane do pierwszej sprzedaży
 
@@ -120,7 +132,7 @@ analiza treści rozmów.
 ## Poza tym repozytorium
 
 Sprzedaż FREE i PRESELEKCJI oraz Stripe: `krzysztofsyska/skillcheck-preselekcja` (etap 1).
-W `skillcheck-core` ścieżka płatności pozostaje zamrożona.
+W `skillcheck-core` zamrożenie ścieżki płatności zdjęte 19.11.2026 — zob. R7.
 
 ## Utrzymanie wydań
 
