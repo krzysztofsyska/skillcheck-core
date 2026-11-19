@@ -383,7 +383,8 @@ test("SC010/012/019: one persistent offline draft from current database authorit
       const field = packageName === "FREE" ? "free_trial_approved" : "paid_settlement_verified";
       await db.query("update private.sc19_voice_entitlements set " + field + "=false where id=$1",
         [s.request.entitlementId]);
-      await assert.rejects(run(s), denied("UNAVAILABLE"));
+      // R6-2: an unusable grant is the company's only one, so the recruiter reads "no free interview".
+      await assert.rejects(run(s), denied("QUOTA_EXHAUSTED"));
       assert.equal((await stats(s)).counter.reserved, 0);
     }
   });
