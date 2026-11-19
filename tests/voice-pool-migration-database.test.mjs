@@ -14,6 +14,8 @@ import { behaviorGuideDefinitions } from '../lib/behavior-guide.ts';
 import { canonicalVoiceSourceSnapshot } from '../lib/voice/plan-persistence-contract.ts';
 import { trustedVoiceTemplateDigest } from '../lib/voice/template-registry.ts';
 import { reconstructTrustedVoiceSource } from '../lib/voice/trusted-source-verifier.ts';
+import { prepareOfflineVoiceDraft, cancelOfflineVoicePreparation } from '../lib/voice/offline-preparation.ts';
+import { syntheticRetellProof } from './helpers/voice-preparation-provider-fixture.mjs';
 
 const signature = 'c2a45d8684f605083170a4e1b15e5438228729099836b687bdbb362280c3db39';
 const candidateTables = ['private.voice_interview_permission_receipts', 'private.voice_interview_permission_revocations',
@@ -223,6 +225,65 @@ test('R6-1c part 2: voice permission, pool and preparation migration is closed a
     assert.deepEqual(Object.values(await counts(b)), [2, 1, 1, 1], 'same-company survivor keeps its rows');
     assert.deepEqual((await db.query(`select (select count(*)::int from private.voice_interview_permission_policies) p,
       (select count(*)::int from private.voice_interview_permission_issuers) i`)).rows[0], policiesBefore, 'configuration is not candidate data');
+  });
+
+  await t.test('R6-1c part 3: the offline preparation module runs on the migrated pool and binds no package', async () => {
+    const c = await ready(a);
+    const own = await grant(c, 2);
+    const originalFetch = globalThis.fetch;
+    let networkCalls = 0;
+    globalThis.fetch = async () => { networkCalls++; throw new Error('External network forbidden'); };
+    try {
+      const proof = await syntheticRetellProof();
+      const vaultKey = randomBytes(32);
+      const deps = () => ({ retell: proof.retell, verifiedAgent: proof.verifiedAgent,
+        contactVault: structuredClone(c.contactConfig),
+        idempotencyVault: { keyId: 'synthetic-offline-provider-key-v1', encryptionKey: vaultKey } });
+      const request = { communicationId: c.communicationId, approvalId: c.approvalId, permissionReceiptId: c.permissionReceiptId,
+        planId: c.planId, releaseId: c.releaseId, pointerVersion: Number(c.pointerVersion), entitlementId: own, requestKey: randomUUID() };
+      await asServer(c.owner);
+      const first = await prepareOfflineVoiceDraft(db, { companyId: c.companyId }, request, deps());
+      assert.equal(first.state, 'prepared_offline');
+      assert.equal(first.replayed, false);
+      assert.equal(first.preflightOnly, true);
+      await asServer(c.owner);
+      const again = await prepareOfflineVoiceDraft(db, { companyId: c.companyId }, request, deps());
+      assert.equal(again.operationId, first.operationId);
+      assert.equal(again.replayed, true);
+      assert.equal((await quota(own)).reserved, 1, 'a replay holds no second unit');
+      await h.asAdmin();
+      const row = (await db.query('select binding_json,binding_hash,entitlement_id from private.sc010c_voice_preparations where id=$1',
+        [first.operationId])).rows[0];
+      assert.equal(row.entitlement_id, own);
+      for (const forbidden of ['package', 'price', 'order', 'freeTrialApproved', 'paidSettlementVerified'])
+        assert.ok(!(forbidden in row.binding_json), forbidden);
+      const pool = await quota(own);
+      assert.equal(row.binding_json.entitlementGrant, pool.grant_reference);
+      assert.equal(row.binding_json.total, pool.total);
+      assert.equal(row.binding_json.recordingAllowed, false);
+      assert.match(row.binding_hash, /^[0-9a-f]{64}$/);
+      await asServer(c.owner);
+      assert.deepEqual(await cancelOfflineVoicePreparation(db, { companyId: c.companyId }, first.operationId),
+        { operationId: first.operationId, state: 'cancelled_offline' });
+      const after = await quota(own);
+      assert.equal(after.reserved, 0, 'cancellation releases the held unit');
+      assert.equal(after.used, 0);
+      // A pool row whose operator grant is not verified is never usable.
+      const d = await ready(a);
+      await h.asAdmin();
+      const unverified = await one(`insert into private.sc19_voice_entitlements
+        (company_id,total,grant_reference,valid_from,expires_at,active,company_verified,
+         company_verification_reference,company_verification_expires_at,grant_verified)
+        values($1,1,$2,clock_timestamp()-interval '1 minute',clock_timestamp()+interval '1 day',true,true,$3,
+         clock_timestamp()+interval '1 hour',false) returning id as v`, [d.companyId, randomUUID(), randomUUID()]);
+      await asServer(d.owner);
+      await assert.rejects(prepareOfflineVoiceDraft(db, { companyId: d.companyId }, { communicationId: d.communicationId,
+        approvalId: d.approvalId, permissionReceiptId: d.permissionReceiptId, planId: d.planId, releaseId: d.releaseId,
+        pointerVersion: Number(d.pointerVersion), entitlementId: unverified, requestKey: randomUUID() }, deps()),
+      e => e.code === 'VOICE_PREPARATION_UNAVAILABLE');
+      assert.equal((await quota(unverified)).reserved, 0);
+      assert.equal(networkCalls, 0, 'no provider is called');
+    } finally { globalThis.fetch = originalFetch; await h.asAdmin(); }
   });
 
   await t.test('operational rollback keeps rows, adapters and signature', async () => {
