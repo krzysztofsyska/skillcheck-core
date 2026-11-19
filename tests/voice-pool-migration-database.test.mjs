@@ -17,7 +17,8 @@ import { reconstructTrustedVoiceSource } from '../lib/voice/trusted-source-verif
 import { prepareOfflineVoiceDraft, cancelOfflineVoicePreparation } from '../lib/voice/offline-preparation.ts';
 import { syntheticRetellProof } from './helpers/voice-preparation-provider-fixture.mjs';
 
-const signature = 'c2a45d8684f605083170a4e1b15e5438228729099836b687bdbb362280c3db39';
+// Full current chain: R20 since R6-1c part 4 (voice dispatch) builds on this step.
+const signature = '1a657cdd163107054029c177c44c66e44a05ad5615a374fb85466c30bc95b806';
 const candidateTables = ['private.voice_interview_permission_receipts', 'private.voice_interview_permission_revocations',
   'private.sc010c_voice_preparations', 'private.sc010c_voice_preparation_requests'];
 const sharedTables = ['private.voice_interview_permission_policies', 'private.voice_interview_permission_issuers',
