@@ -98,3 +98,5 @@
 20261119120000_r6_voice_permission_pool_r19.sql
 # R6-2 (freeze-independent part): owner-only operator grant of voice interviews to a company (trial_single exactly 1 and once per company, operator_manual by reference, idempotent) and the remaining-interview balance. Functions only, no schema change, no package/price/order, nothing granted to API roles, not used by the app, test data only.
 20261119150000_r6_voice_pool_operator_grant.sql
+# R6-1c part 4: voice dispatch ledger (SC-011-B2 provider call attempts and webhook receipts) and once-only dispatch claims (SC-011-B5), erasure inventory R20 for the three candidate-linked tables, purged before their preparation. No settlement, transcripts or operator resolution, no provider transport or webhook route, nothing granted to API roles, not used by the app, nothing sent, test data only.
+20261119180000_r6_voice_dispatch_r20.sql
