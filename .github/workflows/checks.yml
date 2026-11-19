@@ -87,6 +87,11 @@ jobs:
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
           SC19_TEST_PG_MAJOR: '16'
+      # R6-1c part 5: voice settlement (pool use only for a call that took place, do-not-call blocks every channel) as a migration: closed ACL, erasure inventory R21, rollback.
+      - run: npm run test:voice-settlement-migration-db
+        env:
+          SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          SC19_TEST_PG_MAJOR: '16'
       - run: npm run test:db
         env:
           SC19_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
