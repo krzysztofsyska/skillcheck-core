@@ -230,7 +230,7 @@ async function renderExercisesPage(contextValue) {
  return {sections,html};
 }
 test('R1-SWITCH page passes the full editable from exerciseContext (archived position closes the switch even for an open recruitment)',async()=>{
- const base={client:{from:()=>listQuery()},canEdit:true,base:'/exercises',recruitment:{name:'Rekrutacja',status:'open'},position:{updated_at:stamp,status:'archived'}};
+ const base={client:{from:()=>listQuery(),rpc:async()=>({data:false,error:null})},canEdit:true,base:'/exercises',recruitment:{name:'Rekrutacja',status:'open'},position:{updated_at:stamp,status:'archived'}};
  function listQuery(){const q={select(){return q;},eq(){return q;},order(){return q;},limit(){return q;},gt(){return q;},maybeSingle:async()=>({data:null,error:null}),
  then(resolve,reject){return Promise.resolve({data:[],error:null}).then(resolve,reject);}};return q;}
  const archived=await renderExercisesPage({...base,editable:false});

@@ -13,8 +13,13 @@ export default async function Exercises({ params, searchParams }: {
   const generationEnabled=editable && process.env.EXERCISE_AI_ENABLED==='true';
   const company=generationEnabled?await client.from('company_profiles').select('updated_at').eq('company_id',companyId).maybeSingle():null;
   // Ten sam istniejący, tylko odczytowy RPC co w ExerciseAiAutoReleaseSection. Błąd lub brak danych = tryb ręczny.
-  const mode=generationEnabled?await client.rpc('read_exercise_ai_settings',{target_company:companyId,target_recruitment:recruitmentId}):null;
-  const autoRelease=!mode?.error&&mode?.data===true;
+  let autoRelease=false;
+  if(generationEnabled){
+    try{
+      const mode=await client.rpc('read_exercise_ai_settings',{target_company:companyId,target_recruitment:recruitmentId});
+      autoRelease=!mode?.error&&mode?.data===true;
+    }catch{autoRelease=false;}
+  }
   const { after } = await searchParams;
   if (after !== undefined && (typeof after !== 'string' || !exerciseUuid.test(after))) notFound();
   let query = client.from('latest_exercise_definitions').select('exercise_id,version,definition').eq('company_id', companyId)
