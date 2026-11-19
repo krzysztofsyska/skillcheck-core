@@ -94,3 +94,5 @@
 20261118120000_r2_screening_stale_input_columns.sql
 # R6-1c: voice interview plan tables (SC-012-B) and owner-only review/release RPCs, erasure inventory R18 for the five candidate-linked plan tables. Nothing granted to API roles, no template version seeded, not used by the app, nothing sent, test data only.
 20261119100000_r6_voice_plan_r18.sql
+# R6-1c part 2: voice interview permission receipts and revocations (SC-010-C), the voice interview pool without packages or prices (SC-019) and offline voice preparations (SC-010-C), erasure inventory R19 for the four candidate-linked tables with the held-unit refund on purge. Nothing granted to API roles, no issuer/policy/pool grant seeded, not used by the app, nothing sent, test data only.
+20261119120000_r6_voice_permission_pool_r19.sql

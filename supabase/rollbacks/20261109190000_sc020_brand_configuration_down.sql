@@ -81,13 +81,14 @@ set local lock_timeout = '500ms';
 
 do $preflight$
 begin
-  -- R15, R16 (SC-AC-SESSION #276), R17 (SC-PROCESS #277) or R18 (R6-1c voice plan tables): all
-  -- reviewed baselines. The accepted value is remembered for this transaction and the postflight
+  -- R15, R16 (SC-AC-SESSION #276), R17 (SC-PROCESS #277), R18 (R6-1c voice plan tables) or R19
+  -- (R6-1c part 2 voice permission/pool/preparation): all reviewed baselines. The accepted value is remembered for this transaction and the postflight
   -- requires the same one.
   if private.erasure_schema_signature() not in ('1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44',
       'e958cb168fc311a1e908b374cfc1bfee6524945b56f00e9639899ad72f75aea8',
       '8ad238e75d4d4ccb82e03b89f368ba06483580781494fe1f7f9306a3c9c7f73f',
-      'd77384591cfa80a1a2f16d641b7af5e653a21ce49ccc1b7f2db2bbc2539aaebb') then
+      'd77384591cfa80a1a2f16d641b7af5e653a21ce49ccc1b7f2db2bbc2539aaebb',
+      'c2a45d8684f605083170a4e1b15e5438228729099836b687bdbb362280c3db39') then
     raise exception 'sc020a_rollback_schema_unreviewed:%', private.erasure_schema_signature() using errcode = '55000';
   end if;
   perform set_config('sc020.rollback_signature', private.erasure_schema_signature(), true);
