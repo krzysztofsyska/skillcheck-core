@@ -52,6 +52,12 @@ on:
       - 'tests/voice-plan-migration-database.test.mjs'
       - 'db/prototypes/sc012b-plan-schema.sql'
       - 'db/isolated/sc012b-*.sql'
+      - 'scripts/r6-voice-permission-pool-compose.mjs'
+      - 'tests/voice-pool-migration-database.test.mjs'
+      - 'db/isolated/sc010c-interview-permission.sql'
+      - 'db/isolated/sc019-voice-entitlements.sql'
+      - 'db/isolated/sc010c-voice-preparation.sql'
+      - 'db/isolated/sc010-r4-voice-retention.sql'
       - 'lib/process-diagnostics.ts'
       - 'lib/process-metrics.ts'
       - 'tests/sc19-auto-trial-database.test.mjs'
@@ -122,6 +128,12 @@ on:
       - 'tests/voice-plan-migration-database.test.mjs'
       - 'db/prototypes/sc012b-plan-schema.sql'
       - 'db/isolated/sc012b-*.sql'
+      - 'scripts/r6-voice-permission-pool-compose.mjs'
+      - 'tests/voice-pool-migration-database.test.mjs'
+      - 'db/isolated/sc010c-interview-permission.sql'
+      - 'db/isolated/sc019-voice-entitlements.sql'
+      - 'db/isolated/sc010c-voice-preparation.sql'
+      - 'db/isolated/sc010-r4-voice-retention.sql'
       - 'lib/process-diagnostics.ts'
       - 'lib/process-metrics.ts'
       - 'tests/sc19-auto-trial-database.test.mjs'
@@ -184,6 +196,7 @@ jobs:
       - run: node scripts/sc-ac-session-compose.mjs --check
       - run: node scripts/process-followup-compose.mjs --check
       - run: node scripts/r6-voice-plan-compose.mjs --check
+      - run: node scripts/r6-voice-permission-pool-compose.mjs --check
       - run: node scripts/sc-c6-compose.mjs --check
       - run: node scripts/sc19-commerce-inventory-compose.mjs --check
       - run: node scripts/sc-c6-grant-guard-compose.mjs --check
@@ -237,6 +250,7 @@ jobs:
             tests/process-diagnostics-database.test.mjs \
             tests/process-followup-database.test.mjs \
             tests/voice-plan-migration-database.test.mjs \
+            tests/voice-pool-migration-database.test.mjs \
             tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
             tests/db-migrate/normalize-line-endings.test.mjs \
             > sc19-migrations.log 2>&1

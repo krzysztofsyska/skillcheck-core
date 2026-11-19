@@ -26,6 +26,7 @@ export const APP_ROLES = [
   'ai_ledger_writer', 'competency_test_gateway', 'competency_test_marker_writer', 'contact_verifier',
   'erasure_ledger_attestor', 'erasure_purge_owner', 'erasure_restore_attestor', 'erasure_scheduler',
   'erasure_worker', 'sc19_p24_checkout', 'screening_worker', 'tenant_domain_reverifier', 'tenant_domain_verifier',
+  'voice_permission_verifier',
 ];
 export const SUPABASE_ROLES = ['anon', 'authenticated', 'service_role', 'authenticator', 'supabase_admin', 'supabase_auth_admin', 'supabase_storage_admin', 'dashboard_user', 'pgbouncer', 'supabase_read_only_user'];
 // App roles are NOINHERIT: several migrations (e.g. 20261109210000_sc021_ai_ledger.sql,
