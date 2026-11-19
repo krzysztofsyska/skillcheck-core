@@ -96,3 +96,5 @@
 20261119100000_r6_voice_plan_r18.sql
 # R6-1c part 2: voice interview permission receipts and revocations (SC-010-C), the voice interview pool without packages or prices (SC-019) and offline voice preparations (SC-010-C), erasure inventory R19 for the four candidate-linked tables with the held-unit refund on purge. Nothing granted to API roles, no issuer/policy/pool grant seeded, not used by the app, nothing sent, test data only.
 20261119120000_r6_voice_permission_pool_r19.sql
+# R6-2 (freeze-independent part): owner-only operator grant of voice interviews to a company (trial_single exactly 1 and once per company, operator_manual by reference, idempotent) and the remaining-interview balance. Functions only, no schema change, no package/price/order, nothing granted to API roles, not used by the app, test data only.
+20261119150000_r6_voice_pool_operator_grant.sql
