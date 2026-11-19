@@ -223,6 +223,7 @@ type ExpectedFunctions =
   | "list_candidate_report_exports"
   | "list_company_report_exports"
   | "record_assessment_center_session_export"
+  | "read_voice_interview_transcripts"
   | "read_exercise_ai_settings"
   | "set_exercise_ai_auto_release"
   | "ac_assessor_display_names"
