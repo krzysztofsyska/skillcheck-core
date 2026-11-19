@@ -281,8 +281,8 @@ test('R6-1c part 2: voice permission, pool and preparation migration is closed a
       await assert.rejects(prepareOfflineVoiceDraft(db, { companyId: d.companyId }, { communicationId: d.communicationId,
         approvalId: d.approvalId, permissionReceiptId: d.permissionReceiptId, planId: d.planId, releaseId: d.releaseId,
         pointerVersion: Number(d.pointerVersion), entitlementId: unverified, requestKey: randomUUID() }, deps()),
-      // R6-2: d has no usable grant at all, so the recruiter-readable code is "no free interview".
-      e => e.code === 'VOICE_PREPARATION_QUOTA_EXHAUSTED');
+      // R6-2: the company still has another usable grant with free units, so this is not "no free interview".
+      e => e.code === 'VOICE_PREPARATION_UNAVAILABLE');
       assert.equal((await quota(unverified)).reserved, 0);
       assert.equal(networkCalls, 0, 'no provider is called');
     } finally { globalThis.fetch = originalFetch; await h.asAdmin(); }
