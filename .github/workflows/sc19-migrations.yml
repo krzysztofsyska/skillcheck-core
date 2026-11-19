@@ -11,6 +11,9 @@ on:
       - 'scripts/r6-voice-settlement-compose.mjs'
       - 'tests/voice-settlement-migration-database.test.mjs'
       - 'db/isolated/sc011b4-voice-settlement.sql'
+      - 'scripts/r6-voice-resolution-compose.mjs'
+      - 'tests/voice-resolution-migration-database.test.mjs'
+      - 'db/isolated/sc011b6-voice-dispatch-resolution.sql'
       - 'docs/prototypes/sc-019-mvp-credits.sql'
       - 'docs/prototypes/sc19-payment-storage.sql'
       - 'docs/sc19-migrations*.md'
@@ -72,6 +75,9 @@ on:
       - 'scripts/r6-voice-settlement-compose.mjs'
       - 'tests/voice-settlement-migration-database.test.mjs'
       - 'db/isolated/sc011b4-voice-settlement.sql'
+      - 'scripts/r6-voice-resolution-compose.mjs'
+      - 'tests/voice-resolution-migration-database.test.mjs'
+      - 'db/isolated/sc011b6-voice-dispatch-resolution.sql'
       - 'lib/process-diagnostics.ts'
       - 'lib/process-metrics.ts'
       - 'tests/sc19-auto-trial-database.test.mjs'
@@ -155,6 +161,9 @@ on:
       - 'scripts/r6-voice-settlement-compose.mjs'
       - 'tests/voice-settlement-migration-database.test.mjs'
       - 'db/isolated/sc011b4-voice-settlement.sql'
+      - 'scripts/r6-voice-resolution-compose.mjs'
+      - 'tests/voice-resolution-migration-database.test.mjs'
+      - 'db/isolated/sc011b6-voice-dispatch-resolution.sql'
       - 'lib/process-diagnostics.ts'
       - 'lib/process-metrics.ts'
       - 'tests/sc19-auto-trial-database.test.mjs'
@@ -220,6 +229,7 @@ jobs:
       - run: node scripts/r6-voice-permission-pool-compose.mjs --check
       - run: node scripts/r6-voice-dispatch-compose.mjs --check
       - run: node scripts/r6-voice-settlement-compose.mjs --check
+      - run: node scripts/r6-voice-resolution-compose.mjs --check
       - run: node scripts/sc-c6-compose.mjs --check
       - run: node scripts/sc19-commerce-inventory-compose.mjs --check
       - run: node scripts/sc-c6-grant-guard-compose.mjs --check
@@ -276,6 +286,7 @@ jobs:
             tests/voice-pool-migration-database.test.mjs \
             tests/voice-dispatch-migration-database.test.mjs \
             tests/voice-settlement-migration-database.test.mjs \
+            tests/voice-resolution-migration-database.test.mjs \
             tests/db-migrate/apply.test.mjs tests/db-migrate/inspect.test.mjs \
             tests/db-migrate/normalize-line-endings.test.mjs \
             > sc19-migrations.log 2>&1
