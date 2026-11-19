@@ -16,9 +16,9 @@ import {
 
 const migration = '20261112100000_sc_method_profile.sql';
 // Inventory signature SC-METHOD was reviewed against (R15) and the one of the full current chain
-// (R16 since SC-AC-SESSION #276). Schema `method` itself stays outside the inventory.
+// (R18 since R6-1c voice plan tables). Schema `method` itself stays outside the inventory.
 const r15 = '1093b01d527503638d0204fc4d0df7382c8a3ed2dece1ac21cc644ac2285be44';
-const signature = '8ad238e75d4d4ccb82e03b89f368ba06483580781494fe1f7f9306a3c9c7f73f';
+const signature = 'd77384591cfa80a1a2f16d641b7af5e653a21ce49ccc1b7f2db2bbc2539aaebb';
 const code = (...codes) => error => codes.includes(error.code);
 const says = (sqlstate, text) => error => error.code === sqlstate && error.message.includes(text);
 const sql = name => readFile(new URL(`../supabase/${name}`, import.meta.url), 'utf8');
