@@ -5,6 +5,7 @@ import { prepareScreening } from '../../../../../../../../lib/screening';
 import { loadScreeningContext, ScreeningNotFoundError } from '../../../../../../../../lib/screening-flow';
 import { screeningStatus, screeningPath, isUuid, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
 import { buildInterviewGaps } from '../../../../../../../../lib/interview-gaps';
+import { voicePlanPreviewEnabled } from '../../../../../../../../lib/voice/plan-preview';
 import styles from '../screening/screening.module.css';
 
 const kinds = { task: 'Zadanie', kpi: 'Miernik sukcesu', competency: 'Kompetencja' };
@@ -70,6 +71,7 @@ export default async function CandidateInterview({ params }: { params: Promise<S
     <ul>
       <li><Link href={screeningPath(route)}>Macierz wymagań i dowodów</Link></li>
       <li><Link href={`${base}/interview-guide`}>Przewodnik rozmowy dla ośmiu obszarów zachowania</Link></li>
+      {voicePlanPreviewEnabled() && <li><Link href={`${base}/applications/${route.applicationId}/interview-plan`}>Scenariusz rozmowy — podgląd</Link></li>}
       <li><Link href={`${base}#candidates`}>Etapy, notatki i decyzja człowieka</Link></li>
     </ul>
   </section></main>;
