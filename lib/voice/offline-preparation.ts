@@ -246,8 +246,11 @@ export async function prepareOfflineVoiceDraft(
       planSourceFingerprint: current.snapshot.planSourceFingerprint,
       planContractHash: current.snapshot.planContractHash,
       noticeVersion: contact.noticeVersion, permissionPolicySha256: contact.permissionPolicySha256,
+      // The migrated SC-019 pool has no package, price or order: only the
+      // immutable grant reference and size are bound. grant_verified is already
+      // required by sc19_voice_entitlement_eligible() above and at COMMIT.
       entitlementId: request.entitlementId, entitlementGrant: entitlement.grant_reference,
-      package: entitlement.package, total: entitlement.total,
+      total: entitlement.total,
       companyNameSha256: digest(companyName),
       // Only a hash of reviewed server configuration; no contact destination,
       // key material, CV, transcript, HTTP body or provider response is persisted.
