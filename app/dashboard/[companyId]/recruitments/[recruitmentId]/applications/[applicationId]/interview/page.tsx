@@ -72,6 +72,7 @@ export default async function CandidateInterview({ params }: { params: Promise<S
       <li><Link href={screeningPath(route)}>Macierz wymagań i dowodów</Link></li>
       <li><Link href={`${base}/interview-guide`}>Przewodnik rozmowy dla ośmiu obszarów zachowania</Link></li>
       {voicePlanPreviewEnabled() && <li><Link href={`${base}/applications/${route.applicationId}/interview-plan`}>Scenariusz rozmowy — podgląd</Link></li>}
+      {voicePlanPreviewEnabled() && <li><Link href={`${base}/applications/${route.applicationId}/interview-transcript`}>Transkrypt rozmowy głosowej — podgląd</Link></li>}
       <li><Link href={`${base}#candidates`}>Etapy, notatki i decyzja człowieka</Link></li>
     </ul>
   </section></main>;

@@ -454,6 +454,19 @@ export type Database = {
           recruitment_id: string; application_id: string;
         }[];
       };
+      /** R6 #542 voice transcript reader (20261120180000_r6_voice_transcript_reader.sql). Security definer;
+       * company owner or recruiter only, application bound to that company and recruitment (42501
+       * otherwise, same error for foreign or missing records); withdrawn or frozen candidate 55000.
+       * Completed calls of that application only; utterances only when transcript_state='available'
+       * (past the 90-day retention: 'erased_retention'). Logs every read in report_audit.voice_transcript_reads. */
+      read_voice_interview_transcripts: {
+        Args: { target_company: string; target_recruitment: string; target_application: string };
+        Returns: {
+          call_no: number; call_at: string;
+          transcript_state: 'available' | 'erased_retention' | 'not_received';
+          utterances: { speaker: 'agent' | 'candidate'; text: string }[] | null;
+        }[];
+      };
       /** SC-AC-EXPORT-AUDIT (20261117120000_sc_ac_session_export_audit.sql). Security definer;
        * re-checks that the caller is the company owner or a recruiter and that the session
        * belongs to that company and recruitment (42501 otherwise, same error for foreign or
