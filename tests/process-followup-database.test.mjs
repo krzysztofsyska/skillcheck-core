@@ -4,8 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { activeBoot,users } from './helpers/competency-active-fixture.mjs';
 import { parseFollowupState } from '../lib/process-followup.ts';
 import { lifecycleHarness,lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
-// Full current chain: R22 since R6-1c part 6 voice dispatch resolution (R21 voice settlement; R17 added the follow-up adapters).
-const signature='3e6a9df7b8146c65fac9b7b04cbb60f68b1b47b98039461d077a252426e1adee';
+// Full current chain: R23 since R6-1c part 7 voice transcripts (R22 voice dispatch resolution; R17 added the follow-up adapters).
+const signature='4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
 const rejected=e=>['42501','PT404'].includes(e.code);
 const body={tasks:'Faktyczne zadania wykonane.',onboarding:'Wdrożenie zapewniono.',resources:'Zasoby dostępne.',support:'Wsparcie udzielone.',autonomy:'Samodzielna praca.',evidence:'Syntetyczny wynik zadania zgodny z kryteriami.',outcome:'met',probation:'passed',retained:'yes'};
 test('SC-PROCESS B: purposes, evidence, independent permission, freeze and erasure inventory',async t=>{

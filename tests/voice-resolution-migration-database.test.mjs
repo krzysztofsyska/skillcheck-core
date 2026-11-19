@@ -20,6 +20,7 @@ import { canonicalVoiceSourceSnapshot } from '../lib/voice/plan-persistence-cont
 import { trustedVoiceTemplateDigest } from '../lib/voice/template-registry.ts';
 import { reconstructTrustedVoiceSource } from '../lib/voice/trusted-source-verifier.ts';
 
+// Pinned to its own step: R23 (part 7) adds the voice transcripts on top.
 const signature = '3e6a9df7b8146c65fac9b7b04cbb60f68b1b47b98039461d077a252426e1adee';
 const table = 'private.sc011b_dispatch_resolutions';
 const ledger = 'private.sc011b_voice_settlements';
@@ -36,7 +37,7 @@ const code = (...codes) => e => codes.includes(e.code);
 const message = (c, m) => e => e.code === c && e.message === m;
 
 test('R6-1c part 6: operator resolution of unknown voice dispatches settles the pool once and is erased with the candidate', async t => {
-  const { db, h, x } = await activeBoot(t, { fullChain: true });
+  const { db, h, x } = await activeBoot(t, { fullChain: true, throughMigration: '20261120090000_r6_voice_resolution_r22.sql' });
   const one = async (sql, args) => (await db.query(sql, args)).rows[0].v;
   const asServer = async actor => { await h.asAdmin(); await db.query("select set_config('request.jwt.claim.sub',$1,false)", [actor]); };
   let policySeeded = false;

@@ -9,8 +9,8 @@ import { bootMigrationDatabase } from './helpers/sc19-migration-fixture.mjs';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 
 const migration = '20261109190000_sc020_brand_configuration.sql';
-// Full current chain: R22 since R6-1c part 6 voice dispatch resolution (R21: part 5 voice settlement). SC-020 itself stays outside the inventory.
-const signature = '3e6a9df7b8146c65fac9b7b04cbb60f68b1b47b98039461d077a252426e1adee';
+// Full current chain: R23 since R6-1c part 7 voice transcripts (R22: part 6 voice dispatch resolution). SC-020 itself stays outside the inventory.
+const signature = '4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
 const code = (...codes) => error => codes.includes(error.code);
 const config = (overrides = {}) => ({
   brandName: 'Acme Rekrutacja',
