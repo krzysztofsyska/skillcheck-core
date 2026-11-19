@@ -72,6 +72,24 @@ export class OfflineVoicePreparationError extends Error {
     this.code = "VOICE_PREPARATION_" + reason;
   }
 }
+/** Plain Polish text for the recruiter, one per error code. It names no
+ * company, candidate, grant or internal detail. */
+export const VOICE_PREPARATION_RECRUITER_MESSAGES: Readonly<Record<`VOICE_PREPARATION_${Failure}`, string>> =
+  Object.freeze({
+    VOICE_PREPARATION_QUOTA_EXHAUSTED:
+      "Brak wolnych rozmów w puli firmy. Rozmowa nie została zlecona.",
+    VOICE_PREPARATION_CONFLICT:
+      "Dane zmieniły się w trakcie zlecania albo trwa inne zlecenie. Spróbuj ponownie za chwilę.",
+    VOICE_PREPARATION_UNAVAILABLE:
+      "Nie można teraz zlecić tej rozmowy. Spróbuj ponownie później.",
+    VOICE_PREPARATION_REJECTED:
+      "Nie można zlecić tej rozmowy.",
+  });
+export function voicePreparationRecruiterMessage(error: unknown): string {
+  const code = error instanceof OfflineVoicePreparationError ? error.code : "";
+  return (VOICE_PREPARATION_RECRUITER_MESSAGES as Readonly<Record<string, string>>)[code] ??
+    VOICE_PREPARATION_RECRUITER_MESSAGES.VOICE_PREPARATION_REJECTED;
+}
 const fail = (reason: Failure = "REJECTED"): never => {
   throw new OfflineVoicePreparationError(reason);
 };
@@ -219,7 +237,16 @@ export async function prepareOfflineVoiceDraft(
       "from private.sc19_voice_entitlements e",
       "where e.company_id=$1 and e.id=$2 for update nowait",
     ].join(" "), [companyId, request.entitlementId])).rows;
-    if (entitlements.length !== 1 || entitlements[0].eligible !== true) return fail("UNAVAILABLE");
+    if (entitlements.length !== 1 || entitlements[0].eligible !== true) {
+      // R6-2: tell the recruiter "no free interview" when the company itself has
+      // no usable grant with a free unit. Only this company's rows are counted,
+      // so the answer never depends on (or reveals) another company's pool.
+      const open = (await db.query([
+        "select count(*)::int as open from private.sc19_voice_entitlements e",
+        "where e.company_id=$1 and private.sc19_voice_entitlement_eligible(e) and e.used+e.reserved<e.total",
+      ].join(" "), [companyId])).rows[0]?.open;
+      return fail(open === 0 ? "QUOTA_EXHAUSTED" : "UNAVAILABLE");
+    }
     const entitlement = entitlements[0];
     const actor = (await db.query("select auth.uid() as id")).rows[0]?.id;
     if (typeof actor !== "string" || !uuid.test(actor)) return fail("UNAVAILABLE");
