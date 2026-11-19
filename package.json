@@ -91,7 +91,7 @@
     "test:process-followup": "node scripts/process-followup-compose.mjs --check && node --experimental-strip-types --test tests/process-followup.test.mjs",
     "test:process-followup-db": "node --experimental-strip-types --test --test-concurrency=1 tests/process-followup-database.test.mjs",
     "test:voice-plan-migration-db": "node scripts/r6-voice-plan-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-plan-migration-database.test.mjs",
-    "test:voice-pool-migration-db": "node scripts/r6-voice-permission-pool-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-pool-migration-database.test.mjs",
+    "test:voice-pool-migration-db": "node scripts/r6-voice-permission-pool-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-pool-migration-database.test.mjs tests/voice-pool-grant-database.test.mjs",
     "test:form-reset": "node --test tests/form-reset-on-error.test.mjs"
   },
   "dependencies": {
