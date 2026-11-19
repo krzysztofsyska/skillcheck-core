@@ -106,3 +106,5 @@
 20261120090000_r6_voice_resolution_r22.sql
 # R6-1c part 7: voice interview transcripts (SC-011-B3): one minimized transcript per completed call, bound to its call attempt and never changed, removed 90 days after its recruitment closes (reopening pauses it, a candidate frozen for erasure is skipped) or earlier by a candidate erasure (erasure inventory R23, purged before its call attempt); closing a recruitment by status alone stamps closed_at. Nothing granted to API roles, no scheduler, no reader, report or screen, no provider transport, not used by the app, nothing sent, test data only.
 20261120120000_r6_voice_transcripts_r23.sql
+# R6-1c part 8: the last SC-010-R4-VOICE differences (voice erasure and retention): the purge manifest and retention authorization refuse a tenant with a voice plan request key whose result cannot be resolved (as the erasure preview already does), and an UPDATE that changes nothing no longer restarts a candidate's retention clock. No table, row or grant change, erasure signature and inventory stay R23, owner-only functions, not used by the app, nothing sent, test data only.
+20261120150000_r6_voice_retention.sql
