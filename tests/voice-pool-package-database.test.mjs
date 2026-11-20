@@ -9,13 +9,17 @@
 //    company that has a package, and is not callable by any API role;
 //  - FREE and an operator trial are the same single interview;
 //  - a catalog settlement (order + journal row) is one package, not two;
+//  - 10 interviews PER package: one payment or order for several packages
+//    gives one pool of 10 per package (20261121160000), an odd or unprovable
+//    amount counts as 1 package, and extra packages of a purchase that already
+//    had its pool are added exactly once;
 //  - retries and parallel calls never grant twice;
 //  - one company's packages never give or show a pool to another company.
 // Native disposable PostgreSQL only; synthetic data; package data is only read;
 // no provider, no network, nothing granted to API roles.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { bootMigrationDatabase, seedSyntheticPolicy } from './helpers/sc19-migration-fixture.mjs';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
@@ -28,6 +32,7 @@ const topupFn = 'private.sc19_voice_grant_topup(uuid,uuid,integer,timestamptz)';
 const functions = [syncFn, topupFn, 'private.sc19_voice_package_events(uuid)', 'private.sc19_voice_package_reference(uuid,text,text)',
   'private.sc19_voice_package_allowance(text)', 'private.sc19_voice_package_window()'];
 const migration = '20261121130000_r6_voice_package_pools.sql';
+const countMigration = '20261121160000_r6_voice_pool_package_count.sql';
 
 test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', async t => {
   const env = await bootMigrationDatabase(t);
@@ -99,11 +104,13 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
     await h.asUser(users.owner);
     await rejects(sync(a.companyId), '42501');
     await h.asAdmin();
-    const source = (await readFile(new URL(`../supabase/migrations/${migration}`, import.meta.url), 'utf8')).replace(/--[^\n]*/g, '').toLowerCase();
+    for (const file of [migration, countMigration]) {
+    const source = (await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8')).replace(/--[^\n]*/g, '').toLowerCase();
     for (const write of ['insert into private.sc19_credit_journal', 'update private.sc19_credit_journal', 'sc19_commerce.entitlements',
       'update sc19_commerce', 'insert into sc19_commerce', 'private.sc19_balances', 'pricing.', 'create table', 'alter table',
       'create trigger', 'grant execute', 'stripe', 'p24', 'retell'])
-      assert.ok(!source.includes(write), `migration code mentions ${write}`);
+      assert.ok(!source.includes(write), `${file} code mentions ${write}`);
+    }
   });
 
   await t.test('no package: no pool and nothing to pick', async () => {
@@ -314,6 +321,117 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
     await h.asUser(users.owner);
     await assert.rejects(ensurePackageVoicePool(db, a.companyId), e2 => e2 instanceof PackageVoicePoolError);
     await h.asAdmin();
+  });
+
+  // A PRESELEKCJA checkout settled the way the payment store does it: a paid
+  // order, its receipt in sc19_payment_grants and the CV journal row under
+  // 'settlement:sc19:'||sha256(payment key). Synthetic provider/account only.
+  const checkout = async (company, credits, amountMinor, offer = { credits: 60, amountMinor: 30000 }) => {
+    const offerId = `synthetic-offer-${randomUUID()}`;
+    await db.query(`insert into private.sc19_payment_offers(id,revision,plan,active,approved,amount_minor,currency,credits,
+      terms_revision,terms_text,valid_until_ms) values($1,'synthetic-rev','PRESELEKCJA',true,true,$2,'PLN',$3,'synthetic-terms','synthetic',$4)`,
+    [offerId, offer.amountMinor, offer.credits, Date.now() + 86400000]);
+    const orderId = randomUUID();
+    const paymentId = `synthetic-payment-${randomUUID()}`;
+    await db.query(`insert into private.sc19_payment_orders(id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,
+      amount_minor,currency,credits,provider,account,mode,status,session_id,checkout_url,payment_id,checkout_deadline_ms)
+      values($1,$2,$3,$4,$5,'synthetic-rev','synthetic-terms',$6,'PLN',$7,'synthetic','synthetic','test','paid',$8,
+      'https://example.invalid/checkout',$9,$10)`,
+    [orderId, company, users.owner, randomUUID(), offerId, amountMinor, credits, `synthetic-session-${randomUUID()}`, paymentId, Date.now() + 1800000]);
+    const key = JSON.stringify(['synthetic', 'synthetic', 'test', paymentId]);
+    await db.query('insert into private.sc19_payment_grants(payment_key,order_id) values($1,$2)', [key, orderId]);
+    await db.query(`insert into private.sc19_credit_journal(company_id,reason,delta,reference) values($1,'paid_grant',$2,$3)`,
+      [company, credits, `settlement:sc19:${createHash('sha256').update(key).digest('hex')}`]);
+    return orderId;
+  };
+  const legacyPack = (company, credits) => db.query(`insert into private.sc19_credit_journal(company_id,reason,delta,reference)
+    values($1,'paid_grant',$2,$3)`, [company, credits, `settlement:synthetic-legacy-${randomUUID()}`]);
+  const totals = async company => (await pools(company)).map(p => p.total);
+
+  await t.test('10 interviews PER package: one payment for 2 packages gives 20, replays and parallel calls add nothing', async () => {
+    const two = await fresh();
+    await checkout(two.companyId, 120, 60000);
+    const sales = await salesState();
+    assert.deepEqual(await sync(two.companyId), { package_pools: 2, created: 2 });
+    assert.deepEqual(await totals(two.companyId), [10, 10]);
+    assert.deepEqual(await balance(two.companyId), { granted: 20, used: 0, reserved: 0, available: 20 });
+    assert.deepEqual(await sync(two.companyId), { package_pools: 2, created: 0 }, 'a replay grants nothing');
+    assert.deepEqual(await balance(two.companyId), { granted: 20, used: 0, reserved: 0, available: 20 });
+    const refs = (await pools(two.companyId)).map(p => p.grant_reference);
+    assert.equal(new Set(refs).size, 2, 'each package has its own reference');
+    // Parallel calls for a 3-package payment grant each package exactly once.
+    const three = await fresh();
+    await checkout(three.companyId, 180, 90000);
+    const clients = await Promise.all(Array.from({ length: 6 }, () => env.connect()));
+    const results = await Promise.all(clients.map(client => sync(three.companyId, client)));
+    assert.equal(results.reduce((sum, r) => sum + r.created, 0), 3);
+    assert.ok(results.every(r => r.package_pools === 3));
+    assert.deepEqual(await totals(three.companyId), [10, 10, 10]);
+    // 1 package is still 10.
+    const one1 = await fresh();
+    await checkout(one1.companyId, 60, 30000);
+    assert.deepEqual(await sync(one1.companyId), { package_pools: 1, created: 1 });
+    assert.deepEqual(await totals(one1.companyId), [10]);
+    // A catalog order for 2 packages gives 20 as well.
+    const cat = await fresh();
+    const order = await one(`insert into sc19_commerce.orders(company_id,buyer_id,request_id,version_id,kind,code,package_code,
+      quantity,gross_minor,cv_credits,service_code,service_units,terms_revision,terms_text)
+      values($1,$2,$3,$4,'package','WERYFIKACJA','WERYFIKACJA',2,200,0,null,0,'catalog-orders-v1','synthetic') returning id as v`,
+    [cat.companyId, users.owner, randomUUID(), version]);
+    await db.query(`update sc19_commerce.orders set status='paid',settlement_reference=$2,settled_by=$3,settled_at=now() where id=$1`,
+      [order, `synthetic-order-${randomUUID()}`, users.owner]);
+    assert.deepEqual(await sync(cat.companyId), { package_pools: 2, created: 2 });
+    assert.deepEqual(await totals(cat.companyId), [10, 10]);
+    assert.deepEqual((await db.query('select package_code from private.sc19_voice_package_events($1)', [cat.companyId])).rows,
+      [{ package_code: 'WERYFIKACJA' }, { package_code: 'WERYFIKACJA' }]);
+    // Syncing read the sales data only (the catalog order above was the only write).
+    assert.notEqual(await salesState(), sales);
+    const now = await salesState();
+    for (const f of [two, three, one1, cat]) await sync(f.companyId);
+    assert.equal(await salesState(), now);
+  });
+
+  await t.test('an odd or unprovable amount is 1 package (10), never more', async () => {
+    const cases = [
+      // [label, setup, expected pools]
+      ['checkout: credits not a whole number of packages', f => checkout(f, 90, 45000), [10]],
+      ['checkout: amount does not match the credits', f => checkout(f, 120, 30000), [10]],
+      ['checkout: more than 20 packages', f => checkout(f, 21 * 60, 21 * 30000), [10]],
+      ['checkout: offer revision of 30 credits, 60 credits = 2 packages', f => checkout(f, 60, 30000, { credits: 30, amountMinor: 15000 }), [10, 10]],
+      ['legacy pack: 90 credits', f => legacyPack(f, 90), [10]],
+      ['legacy pack: 1 credit', f => legacyPack(f, 1), [10]],
+      ['legacy pack: 120 credits = 2 packages', f => legacyPack(f, 120), [10, 10]],
+      ['legacy pack: 660 credits (11 packages, above 10)', f => legacyPack(f, 660), [10]],
+    ];
+    for (const [label, setup, expected] of cases) {
+      const f = await fresh();
+      await setup(f.companyId);
+      assert.deepEqual(await sync(f.companyId), { package_pools: expected.length, created: expected.length }, label);
+      assert.deepEqual(await totals(f.companyId), expected, label);
+    }
+  });
+
+  await t.test('upgrade: a purchase whose first pool exists gets only its extra packages, exactly once; rollback restores the old body', async () => {
+    const f = await fresh();
+    await checkout(f.companyId, 120, 60000);
+    // The previous body (one pool per purchase) is what Preview ran before this fix.
+    await db.query(await readFile(new URL('../supabase/rollbacks/20261121160000_r6_voice_pool_package_count_down.sql', import.meta.url), 'utf8'));
+    for (const fn of functions) assert.equal(await one('select to_regprocedure($1) is not null as v', [fn]), true, fn);
+    assert.deepEqual(await sync(f.companyId), { package_pools: 1, created: 1 });
+    assert.deepEqual(await totals(f.companyId), [10]);
+    await db.query(await readFile(new URL(`../supabase/migrations/${countMigration}`, import.meta.url), 'utf8'));
+    await rejects(db.query(await readFile(new URL(`../supabase/migrations/${countMigration}`, import.meta.url), 'utf8')),
+      '55000', 'voice_pool_package_count_already_installed');
+    await db.query('rollback').catch(() => {});
+    assert.deepEqual(await sync(f.companyId), { package_pools: 2, created: 1 }, 'only the second package is added');
+    assert.deepEqual(await sync(f.companyId), { package_pools: 2, created: 0 });
+    assert.deepEqual(await totals(f.companyId), [10, 10]);
+    for (const fn of functions) {
+      assert.equal(await one('select prosecdef as v from pg_proc where oid=$1::regprocedure', [fn]), true, fn);
+      assert.equal(await one(`select count(*)::int as v from pg_proc p,aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+        where p.oid=$1::regprocedure and a.grantee<>p.proowner`, [fn]), 0, fn);
+    }
+    assert.equal(await one('select private.erasure_schema_signature() as v'), signature);
   });
 
   await t.test('rollback removes only the functions; pools and signature stay', async () => {
