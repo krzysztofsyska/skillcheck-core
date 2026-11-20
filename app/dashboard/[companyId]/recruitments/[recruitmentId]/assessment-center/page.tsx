@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { exerciseContext } from '../../../../../../lib/exercise-context';
 import { assessmentCenterPreviewEnabled } from '../../../../../../lib/assessment-center-preview';
+import { AC_PACKAGE_MISSING_TEXT, loadAcPackageState } from '../../../../../../lib/assessment-center-package';
 import { parseExerciseDefinition } from '../../../../../../lib/exercise-definition';
 import {
   AC_FINALIST_LIMIT, AC_NO_DATA, AC_RECOMMENDED_FINALISTS, AC_STAGE_LIMIT, acChangeAssessments, acStageTypes,
@@ -42,6 +43,8 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
   if (read.state === 'unavailable') return frame(<p role="status">Sesje Assessment Center nie są jeszcze dostępne w tym środowisku.</p>);
   if (read.state === 'none') {
     if (!isOwner || !editable) return frame(<p>Dla tej rekrutacji nie zaplanowano jeszcze sesji. Sesję planuje właściciel firmy.</p>);
+    // ROADMAP R3: without the paid package the database refuses the session; say it instead of a form.
+    if (await loadAcPackageState(client, companyId) === 'missing') return frame(<p role="status">{AC_PACKAGE_MISSING_TEXT}</p>);
     return frame(<>
       <h2>Zaplanuj sesję</h2>
       <p>Jedna sesja na rekrutację. Zalecane {AC_RECOMMENDED_FINALISTS[0]}–{AC_RECOMMENDED_FINALISTS[1]} finalistów, najwyżej {AC_FINALIST_LIMIT}.</p>
@@ -63,7 +66,7 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
   const report = buildAssessmentCenterSessionReport(session);
   const { status } = session.session;
 
-  const [nameOfFinalist, shortlist, definitions, team, assessorNames] = await Promise.all([
+  const [nameOfFinalist, shortlist, definitions, team, assessorNames, packageState] = await Promise.all([
     loadAcFinalistLabels(client, companyId, recruitmentId),
     isOwner && status !== 'closed' ? client.from('recruitment_shortlist_entries').select('application_id').eq('company_id', companyId)
       .eq('recruitment_id', recruitmentId).is('removed_at', null) : null,
@@ -71,6 +74,7 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
       .eq('recruitment_id', recruitmentId).limit(100) : null,
     loadAcTeam(client, companyId),
     loadAcAssessorNames(client, companyId, recruitmentId),
+    isOwner && status === 'draft' ? loadAcPackageState(client, companyId) : null,
   ]);
   // ROADMAP R3: asesor jako „Ty”, nazwa z bazy (R3-AC-NAMES, gdy wolno ją zobaczyć), „Właściciel firmy”
   // albo „Członek zespołu N” — nigdy identyfikator konta.
@@ -123,7 +127,8 @@ export default async function AssessmentCenterSessionPage({ params }: { params: 
       : <p>Na krótkiej liście nie ma kolejnych osób do dodania.</p>)}
 
     {isOwner && editable && status === 'draft' && <AcSessionForm action={setAcSessionStatus.bind(null, route, 'open')} legend="Otwarcie sesji"
-      button="Otwórz sesję" saved="Sesja została otwarta."><p>Po otwarciu plan i etapy są zamrożone. Sesja otworzy się tylko wtedy, gdy każda kompetencja ma etap, który ją ocenia.</p></AcSessionForm>}
+      button="Otwórz sesję" saved="Sesja została otwarta."><p>Po otwarciu plan i etapy są zamrożone. Sesja otworzy się tylko wtedy, gdy każda kompetencja ma etap, który ją ocenia.</p>
+      {packageState === 'missing' && <p role="status">{AC_PACKAGE_MISSING_TEXT}</p>}</AcSessionForm>}
     {isOwner && status === 'open' && <AcSessionForm action={setAcSessionStatus.bind(null, route, 'closed')} legend="Zamknięcie sesji"
       button="Zamknij sesję" saved="Sesja została zamknięta."><p>Po zamknięciu raport pozostaje dostępny, ale nie można dodawać kolejnych zapisów.</p></AcSessionForm>}
 
