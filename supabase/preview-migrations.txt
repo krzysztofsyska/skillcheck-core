@@ -112,3 +112,5 @@
 20261120180000_r6_voice_transcript_reader.sql
 # R3: an Assessment Center finalist session is tied to the company's paid ASSESSMENT CENTER package (sc19_commerce.entitlements 'package:ASSESSMENT_CENTER', available > 0): ac_session_create and opening a draft session (ac_session_set_status draft -> open) are refused without it (PT402). Functions only, owner-only helper, existing grants kept, erasure signature unchanged, no order, grant, price or payment change, nothing sent, test data only.
 20261121090000_r3_ac_package_gate.sql
+# R7: Stripe Checkout for PRESELEKCJA (TEST mode only on the adapter roles): new schema sc19_stripe (customers: one Stripe customer per company and mode; buyer(): company name and NIP only while the company has an unpaid Stripe order), grants and new policies for sc19_p24_preview/sc19_p24_checkout where they exist (Stripe orders of the KTIG account, mode test). Additive, erasure signature unchanged, no offer, price, credit or key, nothing sent, test data only.
+20261121110000_r7_stripe_checkout.sql

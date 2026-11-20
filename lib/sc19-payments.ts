@@ -4,6 +4,7 @@
  * Provider verification MUST authenticate the raw notification and retrieve payment truth.
  */
 import { randomUUID } from 'node:crypto';
+import { MAX_PACKAGES, STRIPE_CATALOG, isStripePackageCode } from './stripe-catalog.ts';
 
 export type PaymentMode = 'test' | 'live';
 export type PaymentScope = Readonly<{ provider: string; account: string; mode: PaymentMode }>;
@@ -83,6 +84,11 @@ export interface PaymentProvider {
    * Do not accept a success redirect, browser JSON or screenshot as evidence.
    */
   readSettlement?(order: PaymentOrder): Promise<VerifiedPayment | null>;
+  /** OPTIONAL, READ ONLY: true only when the provider confirms the order's stored
+   * session has expired and can never be paid (Stripe Checkout: status=expired).
+   * The order may then be bound to ONE fresh session at its snapshot price while
+   * its offer revision is still on sale. Throw on any uncertainty. */
+  expiredSession?(order: PaymentOrder): Promise<boolean>;
   verifyAndRetrieve(rawBody: Uint8Array, signature: string): Promise<VerifiedPayment | null>;
 }
 export type PaymentDependencies = Readonly<{
@@ -91,6 +97,11 @@ export type PaymentDependencies = Readonly<{
   authenticate(): Promise<{ userId: string } | null>;
   scope: PaymentScope; checkoutOrigins: readonly string[];
   enabled: boolean; liveApproved: boolean;
+  /** R7: the ONE call site for work that follows a granted package (the VAT
+   * invoice will hook in here). Runs after the grant has committed, only for the
+   * delivery that actually applied it (never for a duplicate). It must never undo
+   * the grant: a failure is logged by a fixed code and the grant stays. */
+  onPaid?(order: PaymentOrder): Promise<void>;
 }>;
 export class Sc19PaymentError extends Error {
   readonly code: string;
@@ -122,6 +133,34 @@ function offerValid(offer: PaymentOffer | null, id: string, terms: string): offe
     Number.isSafeInteger(offer.credits) && offer.credits >= 1 && offer.credits <= 100_000 &&
     stringId(offer.revision) && offer.termsRevision === terms && stringId(offer.termsRevision) &&
     Number.isSafeInteger(offer.validUntilMs) && offer.validUntilMs > Date.now();
+}
+
+/** How many whole packages of `offer` the order holds, or null when its amount and
+ * credits are not the same whole multiple of the offer (a changed price). */
+function packagesOf(offer: PaymentOffer, order: PaymentOrder): number | null {
+  const n = order.credits / offer.credits;
+  return Number.isSafeInteger(n) && n >= 1 && n <= MAX_PACKAGES &&
+    order.credits === offer.credits * n && order.amountMinor === offer.amountMinor * n ? n : null;
+}
+/** Optional R7 purchase fields. `packages` = whole packages (default 1, the
+ * pre-R7 behaviour); `packageCode` must name the offer's package. A catalog
+ * package that is not on sale yet („wkrótce”) is refused with its own code. */
+function purchaseShape(req: Record<string, unknown>): { packages: number | null } {
+  if ('packageCode' in req) {
+    if (!isStripePackageCode(req.packageCode)) return deny('SC19_PAYMENT_INVALID');
+    if (!STRIPE_CATALOG[req.packageCode].available) return deny('SC19_PAYMENT_PACKAGE_UNAVAILABLE');
+    if (req.packageCode !== 'PRESELEKCJA') return deny('SC19_PAYMENT_INVALID');
+  }
+  if (!('packages' in req)) return { packages: null };
+  if (!Number.isSafeInteger(req.packages) || Number(req.packages) < 1 || Number(req.packages) > MAX_PACKAGES)
+    return deny('SC19_PAYMENT_INVALID');
+  return { packages: Number(req.packages) };
+}
+const requiredKeys = ['companyId', 'offerId', 'requestId', 'termsRevision'] as const;
+function checkoutShape(input: unknown): input is Record<string, unknown> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
+  const optional = ['packages', 'packageCode'].filter(k => Object.prototype.hasOwnProperty.call(input, k));
+  return exact(input, [...requiredKeys, ...optional]);
 }
 
 export function createSc19Payments(deps: PaymentDependencies) {
@@ -224,21 +263,71 @@ export function createSc19Payments(deps: PaymentDependencies) {
         return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
       const offer = clone(await tx.offer(current.offerId));
       if (!offerValid(offer, current.offerId, current.termsRevision) ||
-          offer.revision !== current.offerRevision || offer.amountMinor !== current.amountMinor ||
-          offer.credits !== current.credits) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+          offer.revision !== current.offerRevision || packagesOf(offer, current) === null)
+        return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
       return { reopen: clone(current) };
+    });
+  }
+
+  /** The stored session is provider-confirmed expired (unpayable). Re-check the
+   * order under its lock, create ONE fresh session with a key derived from the
+   * expired one (a retry reuses it), then bind it only if the order still points
+   * at the expired session. A paid order is never touched. */
+  async function replaceExpiredSession(order: PaymentOrder, userId: string):
+      Promise<HostedCheckout | { orderId: string; paid: true }> {
+    const expired = order.sessionId;
+    const checked = await deps.store.transaction<{ orderId: string; paid: true } | { reopen: PaymentOrder }>(async tx => {
+      const current = await tx.order(order.id);
+      if (!current) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      requireOrderScope(current);
+      const access = await tx.companyAccess(current.companyId, userId);
+      if (access.owner !== true || access.verified !== true ||
+          current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
+      if (current.status === 'paid') return { orderId: current.id, paid: true as const };
+      if (current.status !== 'awaiting_payment' || current.sessionId !== expired)
+        return deny('SC19_PAYMENT_SESSION_CONFLICT');
+      const offer = clone(await tx.offer(current.offerId));
+      if (!offerValid(offer, current.offerId, current.termsRevision) ||
+          offer.revision !== current.offerRevision || packagesOf(offer, current) === null)
+        return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      return { reopen: clone(current) };
+    });
+    if (!('reopen' in checked)) return checked;
+    const fresh = validateHosted(checked.reopen, clone(await deps.provider.createCheckout(
+      clone(checked.reopen), `${checkoutKey(checked.reopen)}:after:${expired}`)));
+    return deps.store.transaction(async tx => {
+      const current = await tx.order(order.id);
+      if (!current) return deny('SC19_PAYMENT_ORDER_MISSING');
+      requireOrderScope(current);
+      validateHosted(current, fresh);
+      const access = await tx.companyAccess(current.companyId, userId);
+      if (access.owner !== true || access.verified !== true ||
+          current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
+      if (current.status === 'paid') return { orderId: current.id, paid: true as const };
+      if (current.sessionId === fresh.sessionId && current.checkoutUrl === fresh.url) return fresh;
+      if (current.sessionId !== expired) return deny('SC19_PAYMENT_SESSION_CONFLICT');
+      await tx.saveOrder({ ...current, sessionId: fresh.sessionId, checkoutUrl: fresh.url });
+      return fresh;
     });
   }
 
   async function checkout(input: unknown): Promise<HostedCheckout | { orderId: string; paid: true }> {
     checkoutGate();
     const req = clone(input);
-    if (!exact(req, ['companyId', 'offerId', 'requestId', 'termsRevision']) ||
+    if (!checkoutShape(req) ||
         typeof req.companyId !== 'string' || !uuid.test(req.companyId) ||
         typeof req.requestId !== 'string' || !uuid.test(req.requestId) ||
         !stringId(req.offerId) || !stringId(req.termsRevision)) return deny('SC19_PAYMENT_INVALID');
     const companyId = req.companyId, requestId = req.requestId;
     const offerId = req.offerId, terms = req.termsRevision;
+    const { packages } = purchaseShape(req);
+    // With explicit packages, an existing order counts as "the same purchase" only
+    // when it holds exactly that many whole packages of its own offer revision.
+    const samePackages = async (tx: PaymentTransaction, existing: PaymentOrder) => {
+      if (packages === null) return true;
+      const offer = await tx.offer(existing.offerId);
+      return !!offer && offer.revision === existing.offerRevision && packagesOf(offer, existing) === packages;
+    };
     const auth = await deps.authenticate();
     if (!auth || typeof auth.userId !== 'string' || !uuid.test(auth.userId)) return deny('SC19_PAYMENT_FORBIDDEN');
     const userId = auth.userId;
@@ -248,7 +337,8 @@ export function createSc19Payments(deps: PaymentDependencies) {
       const previous = await tx.orderByRequest(companyId, requestId);
       if (previous) {
         requireOrderScope(previous);
-        if (previous.buyerId !== userId || previous.offerId !== offerId || previous.termsRevision !== terms)
+        if (previous.buyerId !== userId || previous.offerId !== offerId || previous.termsRevision !== terms ||
+            !(await samePackages(tx, previous)))
           return deny('SC19_PAYMENT_REQUEST_CONFLICT');
         return clone(previous);
       }
@@ -258,17 +348,19 @@ export function createSc19Payments(deps: PaymentDependencies) {
       const pending = await tx.unresolvedOrder(companyId);
       if (pending) {
         if (!sameScope(pending.scope, scope) || pending.buyerId !== userId ||
-            pending.offerId !== offerId || pending.termsRevision !== terms)
+            pending.offerId !== offerId || pending.termsRevision !== terms ||
+            !(await samePackages(tx, pending)))
           return deny('SC19_PAYMENT_PURCHASE_PENDING');
         await tx.bindRequest(companyId, requestId, pending.id);
         return clone(pending);
       }
       const offer = clone(await tx.offer(offerId));
       if (!offerValid(offer, offerId, terms)) return deny('SC19_PAYMENT_OFFER_UNAVAILABLE');
+      const units = packages ?? 1;
       const created: PaymentOrder = Object.freeze({
         id: randomUUID(), companyId, buyerId: userId, requestId, offerId,
         offerRevision: offer.revision, termsRevision: offer.termsRevision,
-        amountMinor: offer.amountMinor, currency: 'PLN', credits: offer.credits,
+        amountMinor: offer.amountMinor * units, currency: 'PLN', credits: offer.credits * units,
         scope, status: 'awaiting_payment', sessionId: null, checkoutUrl: null, paymentId: null,
         checkoutDeadlineMs: Math.min(offer.validUntilMs, Date.now() + 30 * 60_000),
       });
@@ -277,7 +369,11 @@ export function createSc19Payments(deps: PaymentDependencies) {
       return created;
     });
     if (order.status === 'paid') return { orderId: order.id, paid: true };
-    if (order.sessionId && order.checkoutUrl) return storedCheckout(order);
+    if (order.sessionId && order.checkoutUrl) {
+      if (!deps.provider.expiredSession || !(await deps.provider.expiredSession(clone(order))))
+        return storedCheckout(order);
+      return replaceExpiredSession(order, userId);
+    }
     let pending = order;
     if (Date.now() >= order.checkoutDeadlineMs) {
       const recovered = await reconcileSession(order, userId);
@@ -297,7 +393,19 @@ export function createSc19Payments(deps: PaymentDependencies) {
     if (!(raw instanceof Uint8Array) || raw.byteLength === 0 || raw.byteLength > 262144 ||
         typeof signature !== 'string' || signature.length === 0 || signature.length > 8192)
       return deny('SC19_PAYMENT_NOTIFICATION_INVALID');
-    return applySettlement(clone(await deps.provider.verifyAndRetrieve(new Uint8Array(raw), signature)));
+    const result = await applySettlement(clone(await deps.provider.verifyAndRetrieve(new Uint8Array(raw), signature)));
+    if (result.state === 'applied') await afterPaid(result.orderId);
+    return result;
+  }
+
+  /** Post-grant hook (see PaymentDependencies.onPaid). The grant has committed;
+   * nothing here can roll it back, and the webhook is still acknowledged. */
+  async function afterPaid(orderId: string) {
+    if (!deps.onPaid) return;
+    try {
+      const order = await deps.store.transaction(tx => tx.order(orderId));
+      if (order && order.status === 'paid') await deps.onPaid(clone(order));
+    } catch { console.error('SC19_PAYMENT_AFTER_PAID_FAILED'); }
   }
 
   // Called only after the HTTP handler has authorized a read of THIS order.
