@@ -37,7 +37,7 @@ test('company identifiers are identical across documents', () => {
 
 test('regulamin parses ordered lists with sub-points and tables', () => {
   const reg = parseLegalMarkdown(readFileSync(new URL('01_Regulamin_SkillCheck.md', dir), 'utf8'));
-  const payments = reg.blocks.find((b) => b.kind === 'ordered' && JSON.stringify(b).includes('Przelewy24'));
+  const payments = reg.blocks.find((b) => b.kind === 'ordered' && JSON.stringify(b).includes('Stripe'));
   assert.ok(payments.items[0].sub.length === 2, 'payment methods a) and b)');
   const policy = parseLegalMarkdown(readFileSync(new URL('02_Polityka_prywatnosci.md', dir), 'utf8'));
   const table = policy.blocks.find((b) => b.kind === 'table');
@@ -80,8 +80,8 @@ const consentLabel = () => {
 };
 
 test('the consent version is r3, differs from the Annex 1 consent, and the documents match the label', () => {
-  assert.equal(LEGAL_ACCEPTANCE_REVISION, '1.0+r3');
-  assert.equal(LEGAL_ACCEPTANCE_VALUE, 'v1.0+r3');
+  assert.equal(LEGAL_ACCEPTANCE_REVISION, '1.0+r4');
+  assert.equal(LEGAL_ACCEPTANCE_VALUE, 'v1.0+r4');
   assert.notEqual(LEGAL_ACCEPTANCE_REVISION, `${LEGAL_VERSION}+aneks1`, 'changed wording must not reuse the old revision');
   assert.deepEqual([...LEGAL_ACCEPTED_DOCUMENTS], ['regulamin', 'dpa', 'polityka-prywatnosci']);
   const label = consentLabel();
@@ -181,4 +181,15 @@ test('the PRESELEKCJA offer page shows the guarantee copy, no report time, no ca
   const page = readFileSync(repo('app/preselekcja/page.tsx'), 'utf8');
   assert.match(page, /preselekcjaGuarantee\.headline/);
   assert.match(page, /preselekcjaGuarantee\.points\.map/);
+});
+
+// R7 (owner decision 2026-11-19): Stripe replaces Przelewy24. The published legal texts must name Stripe
+// Payments Europe, Limited and no longer name Przelewy24/PayPro (the .docx copies are held to the
+// Markdown by tests/legal-docx-sync.test.mjs).
+test('Regulamin and Polityka name Stripe, not Przelewy24 or PayPro', () => {
+  for (const doc of ['01_Regulamin_SkillCheck.md', '02_Polityka_prywatnosci.md']) {
+    const source = readFileSync(new URL(doc, dir), 'utf8');
+    assert.ok(source.includes('Stripe Payments Europe, Limited'), doc);
+    assert.doesNotMatch(source, /Przelewy ?24|PayPro/i, doc);
+  }
 });
