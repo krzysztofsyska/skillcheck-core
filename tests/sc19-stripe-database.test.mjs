@@ -125,6 +125,14 @@ const packagesRollback = readFileSync(new URL('../supabase/rollbacks/20261121130
 const gateSource = readFileSync(new URL('../supabase/migrations/20261121090000_r3_ac_package_gate.sql', import.meta.url), 'utf8');
 const gateStart = gateSource.indexOf('create function private.ac_package_required');
 const gateFn = gateSource.slice(gateStart, gateSource.indexOf('end;$$;', gateStart) + 'end;$$;'.length);
+// The REAL catalog order function as the SC-019 catalog migration created it (the
+// R7 packages migration redefines it; Codex P2, PR #563).
+const catalogSource = readFileSync(new URL('../supabase/migrations/20261107164252_sc019_catalog_orders.sql', import.meta.url), 'utf8');
+const catalogStart = catalogSource.indexOf('create function public.sc19_create_catalog_order(');
+const catalogOrderFn = catalogSource.slice(catalogStart, catalogSource.indexOf('end;$$;', catalogStart) + 'end;$$;'.length);
+const CATALOG_QUOTE = { kind: 'service', code: 'fixture-service', packageCode: null, quantity: 1,
+  versionId: '00000000-0000-4000-8000-000000000301', termsRevision: 'terms-fixture', termsText: 'Warunki.',
+  cvCredits: 0, serviceCode: 'fixture-service', serviceUnits: 1, grossMinor: 10000 };
 const fullFixture = `
  do $$ begin
   if not exists(select from pg_roles where rolname='anon') then create role anon nologin; end if;
@@ -151,7 +159,10 @@ const fullFixture = `
   reason text not null, delta integer not null, reference text unique, created_at timestamptz not null default now());
  create table private.sc19_balances(company_id uuid primary key references public.companies(id), plan text not null check(plan in ('FREE','PRESELEKCJA')),
   available integer not null default 0 check(available>=0), free_claimed boolean not null default false, updated_at timestamptz not null default now());
- create table sc19_commerce.orders(company_id uuid not null, status text not null);
+ create table sc19_commerce.orders(id uuid primary key default gen_random_uuid(), company_id uuid not null, buyer_id uuid,
+  request_id uuid, version_id uuid, kind text, code text, package_code text, quantity integer, gross_minor integer,
+  cv_credits integer, service_code text, service_units integer, terms_revision text, terms_text text,
+  status text not null default 'pending');
  create table sc19_commerce.entitlements(company_id uuid not null references public.companies(id), code text not null,
   available integer not null default 0 check(available>=0), used integer not null default 0, primary key(company_id,code));
  create function private.sc19_has_pending_catalog_order(target_company uuid) returns boolean language sql security definer set search_path='' as
@@ -197,6 +208,16 @@ const fullFixture = `
  insert into private.sc19_trial_approvals(company_id,nip) values ('00000000-0000-4000-8000-000000000001','7394002294');
  insert into private.sc19_payment_offers values ('preselekcja-60-2026-11-r3','preselekcja-60-v3','PRESELEKCJA',true,true,30000,'PLN',60,
   'preselekcja-terms-2026-11-v3','Warunki.',1830297599000,now());
+ -- Stand-ins for what the REAL catalog order function (appended below) calls.
+ create schema auth;
+ create function auth.uid() returns uuid language sql stable as $f$ select '00000000-0000-4000-8000-000000000002'::uuid $f$;
+ create function sc19_commerce.authorize(target_company uuid, purchase boolean default false) returns void language plpgsql as $f$ begin end $f$;
+ create function private.sc19_lock_company(target_company uuid) returns void language plpgsql as $f$ begin end $f$;
+ create function sc19_commerce.quote(target_company uuid, kind text, code text, package_code text, quantity integer) returns jsonb
+  language sql as $f$ select '${JSON.stringify(CATALOG_QUOTE)}'::jsonb $f$;
+` + catalogOrderFn + `
+ revoke all on function public.sc19_create_catalog_order(uuid,uuid,jsonb,boolean) from public,anon,authenticated;
+ grant execute on function public.sc19_create_catalog_order(uuid,uuid,jsonb,boolean) to authenticated;
 `;
 
 test('R7 packages: paid test-mode WERYFIKACJA / ASSESSMENT CENTER grant once through the adapter role and satisfy the R3 AC gate',
@@ -458,4 +479,69 @@ test('R7: a stale unpaid Przelewy24 order neither blocks a Stripe purchase nor g
   await db.query(packagesRollback);
   assert.match((await db.query(`select pg_get_indexdef('private.sc19_payment_one_unresolved'::regclass) d`)).rows[0].d,
     /\(company_id\) WHERE \(status = 'awaiting_payment'::text\)$/);
+});
+
+// Codex P2 (PR #563): public.sc19_create_catalog_order must not open a catalog
+// order next to an unpaid WERYFIKACJA / ASSESSMENT CENTER Stripe order. Fails on
+// the pre-fix body (it checked only PRESELEKCJA payment orders and catalog orders).
+test('R7: an unpaid package order blocks a new catalog order; a stale Przelewy24 order does not; rollback restores the old body',
+  { skip: !url && 'SC19_TEST_DATABASE_URL required' }, async t => {
+  const u = new URL(url);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
+  const root = new pg.Client({ connectionString: u.href }); await root.connect();
+  const name = 'r7catalog_' + randomBytes(6).toString('hex');
+  await root.query(`create database "${name}"`); u.pathname = '/' + name;
+  const db = new pg.Client({ connectionString: u.href }); await db.connect();
+  t.after(async () => { await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
+  await db.query(fullFixture);
+  await db.query(migration);
+  const fn = 'public.sc19_create_catalog_order(uuid,uuid,jsonb,boolean)';
+  const meta = async () => (await db.query(`select prosecdef definer, proconfig config,
+    has_function_privilege('anon',oid,'execute') anon, has_function_privilege('authenticated',oid,'execute') staff,
+    pg_get_functiondef(oid) ~ 'package_orders' package_guard from pg_proc where oid=$1::regprocedure`, [fn])).rows[0];
+  assert.deepEqual(await meta(), { definer: true, config: ['search_path=""'], anon: false, staff: true, package_guard: false });
+  const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
+  await db.query(packagesMigration);
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature, 'erasure signature unchanged');
+  // Same signature, security definer, empty search_path and grants; now with the package guard.
+  assert.deepEqual(await meta(), { definer: true, config: ['search_path=""'], anon: false, staff: true, package_guard: true });
+
+  const A = '00000000-0000-4000-8000-000000000001', OWNER = '00000000-0000-4000-8000-000000000002';
+  const catalog = () => db.query(`select public.sc19_create_catalog_order($1,gen_random_uuid(),$2::jsonb,true) id`,
+    [A, JSON.stringify(CATALOG_QUOTE)]);
+  const pending = e => e.code === '23505' && /commerce_pending_order/.test(e.message);
+  // An unpaid TEST-mode package order: no catalog order next to it.
+  const pkg = (await db.query(`insert into sc19_stripe.package_orders
+    (id,company_id,buyer_id,request_id,package_code,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,session_id,checkout_url,checkout_deadline_ms)
+    values (gen_random_uuid(),$1,$2,gen_random_uuid(),'WERYFIKACJA','x','x','x',61500,'PLN',60,'stripe','ktig-consulting','test','awaiting_payment',
+     'cs_test_catalog','https://checkout.stripe.com/c/pay/cs_test_catalog',1) returning id`, [A, OWNER])).rows[0].id;
+  await assert.rejects(catalog(), pending);
+  assert.equal((await db.query('select count(*)::int n from sc19_commerce.orders')).rows[0].n, 0);
+  // Once paid, it no longer blocks; a stale unpaid Przelewy24 order never does.
+  await db.query(`alter table sc19_stripe.package_orders disable trigger package_order_immutable;
+   update sc19_stripe.package_orders set status='paid', payment_id='pi_fixturecatalog1' where id='${pkg}';
+   alter table sc19_stripe.package_orders enable trigger package_order_immutable;`);
+  await db.query(`insert into private.sc19_payment_orders
+    (id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms)
+    values (gen_random_uuid(),$1,$2,gen_random_uuid(),'preselekcja-60-2026-11-r3','x','x',30000,'PLN',60,'przelewy24','sandbox-merchant','test','awaiting_payment',1)`,
+    [A, OWNER]);
+  const created = (await catalog()).rows[0].id;
+  assert.deepEqual((await db.query('select company_id, status from sc19_commerce.orders where id=$1', [created])).rows, [{ company_id: A, status: 'pending' }]);
+  // The open catalog order blocks the next one, as before.
+  await assert.rejects(catalog(), pending);
+  // An unpaid Stripe PRESELEKCJA order still blocks too.
+  await db.query(`update sc19_commerce.orders set status='cancelled'`);
+  await db.query(`insert into private.sc19_payment_orders
+    (id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms)
+    values (gen_random_uuid(),$1,$2,gen_random_uuid(),'preselekcja-60-2026-11-r3','x','x',30000,'PLN',60,'stripe','ktig-consulting','test','awaiting_payment',1)`,
+    [A, OWNER]);
+  await assert.rejects(catalog(), pending);
+
+  // Rollback restores the SC-019 body (no reference to the dropped table), same grants.
+  await db.query(`delete from private.sc19_payment_orders;
+   alter table sc19_stripe.package_orders disable trigger package_order_immutable; delete from sc19_stripe.package_orders;`);
+  await db.query(packagesRollback);
+  assert.deepEqual(await meta(), { definer: true, config: ['search_path=""'], anon: false, staff: true, package_guard: false });
+  assert.equal((await db.query(`select prosrc from pg_proc where oid=$1::regprocedure`, [fn])).rows[0].prosrc,
+    catalogOrderFn.slice(catalogOrderFn.indexOf('$$') + 2, catalogOrderFn.lastIndexOf('$$')));
 });
