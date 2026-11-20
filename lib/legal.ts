@@ -5,7 +5,7 @@ export const LEGAL_VERSION = '1.0';
 
 /**
  * Effective/publication date shown in place of the "[DATA PUBLIKACJI]" marker.
- * Must be set by the owner before promotion to production (P24 verification).
+ * Must be set by the owner before promotion to production.
  */
 export const LEGAL_EFFECTIVE_DATE: string | null = "29.10.2026";
 

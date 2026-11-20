@@ -84,7 +84,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   // Only FREE and PRESELEKCJA can be bought today, but the later stages carry their
   // approved prices (owner decision 2026-11-02, reconfirmed in chat the same evening).
   assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 0);
-  // Owner decision 2026-11-10: while Przelewy24 verifies the shop, WERYFIKACJA and ASSESSMENT CENTER are
+  // Owner decision 2026-11-10: while the payment operator was verifying the shop, WERYFIKACJA and ASSESSMENT CENTER are
   // hidden from the public pages (PUBLIC_FUTURE_OFFERS_ENABLED unset or not "true"). Their copy stays in the code.
   for (const hidden of ['id="planowane-pakiety"', 'id="przyklady-pakietow"', 'WERYFIKACJA', 'ASSESSMENT CENTER', 'Assessment Center', '615 zł', '1 499 zł', 'w przygotowaniu — nie można jeszcze kupić', 'Cena zatwierdzona', 'do 10 testowanych osób', 'do 6 finalistów', 'To plan rozwoju.', 'Zapytaj o plan']) {
     assert.equal(home.includes(hidden), false, `announced packages hidden on the home page: ${hidden}`);
@@ -110,9 +110,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(home.includes('Zapłać'), false);
   assert.equal(home.includes('Aktywuj pakiet'), false);
 
-  // SC-LEGAL-001: company data and legal documents required for Przelewy24 shop verification.
+  // SC-LEGAL-001: company data and legal documents required for payment operator shop verification.
   for (const text of ['NIP 7394002294', 'KRS 0001110252', 'REGON 528903093', '+48 730 266 909']) assert.ok(home.includes(text), `footer ${text}`);
-  // Every legal document required for the Przelewy24 shop verification is reachable
+  // Every legal document required for the payment operator shop verification is reachable
   // from the footer of every public page, not only from the registration form.
   for (const href of ['/regulamin', '/regulamin/umowa-powierzenia', '/regulamin/formularz-odstapienia',
     '/polityka-prywatnosci', '/ai', '/platnosci-i-reklamacje', '/kontakt']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
@@ -139,7 +139,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   assert.equal(home.includes('Kup teraz'), false);
   assert.equal(home.includes('127.0.0.1:9'), false);
 
-  // SC-P24-VERIFY-002: contact and payments/complaints summary, public, data from shared sources.
+  // SC-PAYMENTS-SUMMARY: contact and payments/complaints summary, public, data from shared sources.
   const { COMPANY } = await import('../lib/legal.ts');
   const { preselekcjaOffer } = await import('../lib/preselekcja-offer.ts');
   const contact = await fetch(`${base}/kontakt`, { redirect: 'manual' });
@@ -161,9 +161,9 @@ test('public offer and demo pages respond without an account', async (t) => {
   for (const fact of ['2 dni roboczych', 'w ciągu 14 dni od jej otrzymania', 'w ciągu 14 dni od zawarcia umowy', 'wyłącznie przedsiębiorcy na prawach konsumenta', 'niezgodności usługi cyfrowej z umową']) assert.ok(summaryHtml.includes(fact), fact);
   assert.doesNotMatch(summaryHtml, /voicebot|rozmow[ay] głosow|DRAFT/i);
   assert.doesNotMatch(summaryHtml, /WERYFIKACJA|ASSESSMENT CENTER/, 'announced packages hidden in the payments summary');
-  // Same rule as the offer pages: Przelewy24 only as a method being prepared.
-  assert.match(summaryHtml, /Przelewy24 jest przygotowywana/);
-  assert.doesNotMatch(summaryHtml, /zapłacić online przez Przelewy24/);
+  // Same rule as the offer pages: Stripe only as a method being prepared.
+  assert.match(summaryHtml, /Płatność online przez Stripe jest przygotowywana/);
+  assert.doesNotMatch(summaryHtml, /Przelewy24|PayPro/);
 
 
   // Owner decision 2026-11-11: the voice annex is withdrawn. Neither the page nor its .docx is served.
@@ -267,13 +267,13 @@ test('public offer and demo pages respond without an account', async (t) => {
   const orderText = order.replaceAll('<!-- -->', '');
   for (const fact of [/243,90 zł netto/, /ważne przez 3 miesiące/, /faktury proforma/, /2 dni roboczych/, /fakturę VAT/]) assert.match(orderText, fact);
   // Payment on the offer page (owner decision 2026-11-02, narrowed after review):
-  // only the method that actually works is offered. Przelewy24 may be named as being
+  // only the method that actually works is offered. Stripe may be named as being
   // prepared, never as a way to pay now, because there is no live checkout behind it.
   assert.match(orderText, /faktury proforma/);
-  assert.doesNotMatch(orderText, /Przelewy24[^.]{0,40}(albo|lub) przelew/, 'Przelewy24 is never offered as a way to pay now');
-  assert.doesNotMatch(orderText, /PayPro/);
-  if (orderText.includes('Przelewy24')) {
-    assert.match(orderText, /Przelewy24 jest przygotowywana/, 'Przelewy24 only as a prepared method');
+  assert.doesNotMatch(orderText, /Stripe[^.]{0,40}(albo|lub) przelew/, 'Stripe is never offered as a way to pay now');
+  assert.doesNotMatch(orderText, /Przelewy24|PayPro/);
+  if (orderText.includes('Stripe')) {
+    assert.match(orderText, /przez Stripe jest przygotowywana/, 'Stripe only as a prepared method');
   }
   assert.ok(hrefs(order).includes('/regulamin') && hrefs(order).includes('/polityka-prywatnosci'));
   assert.doesNotMatch(order, /potwierdzane indywidualnie|pilotaż/);
