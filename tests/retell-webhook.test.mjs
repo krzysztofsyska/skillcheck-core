@@ -181,6 +181,11 @@ test("R7: USD cents become whole grosze at the fixed 4.50 zł/USD, rounded up an
   assert.equal(retellCostCentsToGrosze(0.1), 1);
   assert.equal(retellCostCentsToGrosze(0.0001), 1);
   assert.equal(retellCostCentsToGrosze(0.3), 2, "1.35 rounds up without float drift");
+  assert.equal(retellCostCentsToGrosze(40.00001), 181, "4.50000045 rounds up, no precision loss before the ceil");
+  assert.equal(retellCostCentsToGrosze(0.00001), 1, "0.000045 rounds up to 1, never down to 0");
+  assert.equal(retellCostCentsToGrosze(1e-7), 1, "exponent notation");
+  assert.equal(retellCostCentsToGrosze(1.5e-7), 1, "exponent notation, fractional");
+  assert.equal(retellCostCentsToGrosze(222.22), 1000, "exact 999.99 rounds up to 1000");
   // 600 s at USD 0.31/min = 186 cents = 837 grosze: below the 1500 grosze reservation.
   assert.equal(retellCostCentsToGrosze(186), 837);
   assert.ok(retellCostCentsToGrosze(186) <= VOICE_CALL_RESERVE_GROSZE);

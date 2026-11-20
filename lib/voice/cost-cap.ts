@@ -51,8 +51,21 @@ export const VOICE_COST_MAX_GROSZE = 1_000_000;
 export function retellCostCentsToGrosze(cents: unknown): number | null {
   if (typeof cents !== "number" || !Number.isFinite(cents) || cents < 0) return null;
   if (cents > 1e9) return VOICE_COST_MAX_GROSZE;
-  // Integer arithmetic on 1/10000 of a cent: no float drift in the rounding.
-  const tenThousandths = Math.round(cents * 10_000);
-  const grosze = Math.ceil((tenThousandths * VOICE_COST_GROSZE_PER_USD) / 1_000_000);
-  return Math.min(grosze, VOICE_COST_MAX_GROSZE);
+  // Exact decimal arithmetic, no rounding before the ceil: `String(cents)` is the
+  // shortest decimal that round-trips to the number (e.g. "40.00001", "1e-7"), and
+  // grosze = cents × 450 / 100 = mantissa × 450 × 10^exp / 100, rounded up with BigInt.
+  const match = /^(\d+)(?:\.(\d+))?(?:e([+-]\d+))?$/.exec(String(cents));
+  if (!match) return null;
+  const [, integerPart, fractionPart = "", exponentPart = "0"] = match;
+  const mantissa = BigInt(integerPart + fractionPart);
+  const exponent = Number(exponentPart) - fractionPart.length;
+  // BigInt(...) instead of literals and `**`: the project targets below ES2020.
+  const powerOfTen = (n: number) => BigInt("1" + "0".repeat(n));
+  let numerator = mantissa * BigInt(VOICE_COST_GROSZE_PER_USD);
+  let denominator = BigInt(100);
+  if (exponent >= 0) numerator *= powerOfTen(exponent);
+  else denominator *= powerOfTen(-exponent);
+  const grosze = (numerator + denominator - BigInt(1)) / denominator;
+  const limit = BigInt(VOICE_COST_MAX_GROSZE);
+  return Number(grosze > limit ? limit : grosze);
 }
