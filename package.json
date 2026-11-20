@@ -35,8 +35,9 @@
     "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-context-identity.test.mjs tests/exercise-definition.test.mjs tests/exercise-ai.test.mjs tests/individual-questions.test.mjs tests/voice-plan-preview.test.mjs tests/exercise-ai-review-ui.test.mjs tests/exercise-ai-generation.test.mjs tests/exercise-ai-generation-ui.test.mjs tests/exercise-ai-gateway.test.mjs tests/exercise-ai-database.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs tests/assessment-center-evaluation.test.mjs tests/assessment-center-report.test.mjs tests/assessment-center-pair.test.mjs tests/ac-session.test.mjs tests/ac-session-export.test.mjs tests/ac-package.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
-    "test:pricing-cv-pool": "node --test tests/pricing-cv-pool.test.mjs tests/pricing-cv-pool-module.test.mjs",
+    "test:pricing-cv-pool": "node --test tests/pricing-cv-pool.test.mjs tests/pricing-cv-pool-module.test.mjs tests/pricing-cv-pool-slider.test.mjs tests/pricing-paid-options.test.mjs tests/pricing-public-catalog.test.mjs",
     "test:pricing-catalog": "node --test tests/pricing-catalog.test.mjs",
+    "test:stripe": "node --experimental-strip-types --test tests/sc19-stripe.test.mjs",
     "test:migration-pairs": "node --test tests/migration-rollback-pairs.test.mjs",
     "test:legal": "node --experimental-strip-types --test tests/legal.test.mjs tests/legal-docx-sync.test.mjs",
     "test:marketing-consent": "node --experimental-strip-types --test tests/marketing-consent.test.mjs tests/sc19-trial-auto.test.mjs tests/sc19-daily-digest.test.mjs",
@@ -85,7 +86,7 @@
     "test:method-db": "node --experimental-strip-types --test --test-concurrency=1 tests/method-profile-database.test.mjs",
     "test:brand": "node --experimental-strip-types --test tests/brand-config.test.mjs tests/brand-ui.test.mjs tests/brand-messages.test.mjs",
     "test:brand-db": "node --experimental-strip-types --test --test-concurrency=1 tests/brand-database.test.mjs",
-    "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs tests/sc19-przelewy24-provider.test.mjs",
+    "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs",
     "smoke:preview": "node scripts/preview-smoke.cjs",
     "e2e:step4": "node scripts/step4-browser-e2e.cjs",
     "test:process-followup": "node scripts/process-followup-compose.mjs --check && node --experimental-strip-types --test tests/process-followup.test.mjs",
@@ -96,7 +97,7 @@
     "test:voice-settlement-migration-db": "node scripts/r6-voice-settlement-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-settlement-migration-database.test.mjs",
     "test:voice-resolution-migration-db": "node scripts/r6-voice-resolution-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-resolution-migration-database.test.mjs",
     "test:voice-transcripts-migration-db": "node scripts/r6-voice-transcripts-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-transcripts-migration-database.test.mjs tests/voice-transcript-reader-database.test.mjs",
-    "test:voice-retention-migration-db": "node scripts/r6-voice-retention-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-retention-migration-database.test.mjs",
+    "test:voice-retention-migration-db": "node scripts/r6-voice-retention-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-retention-migration-database.test.mjs tests/voice-cost-cap-database.test.mjs",
     "test:form-reset": "node --test tests/form-reset-on-error.test.mjs"
   },
   "dependencies": {

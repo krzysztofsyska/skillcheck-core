@@ -1,5 +1,5 @@
 // R6-2 (packages): a company with a package gets its voice interview pool
-// automatically (20261121100000_r6_voice_package_pools.sql and
+// automatically (20261121130000_r6_voice_package_pools.sql and
 // lib/voice/package-pools.ts) on the full checked-in chain:
 //  - FREE gives 1 interview; PRESELEKCJA, WERYFIKACJA and ASSESSMENT CENTER 10
 //    each (owner 20.11.2026); an unknown package, an add-on, a pending or a
@@ -27,7 +27,7 @@ const syncFn = 'private.sc19_voice_sync_package_pools(uuid)';
 const topupFn = 'private.sc19_voice_grant_topup(uuid,uuid,integer,timestamptz)';
 const functions = [syncFn, topupFn, 'private.sc19_voice_package_events(uuid)', 'private.sc19_voice_package_reference(uuid,text,text)',
   'private.sc19_voice_package_allowance(text)', 'private.sc19_voice_package_window()'];
-const migration = '20261121100000_r6_voice_package_pools.sql';
+const migration = '20261121130000_r6_voice_package_pools.sql';
 
 test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', async t => {
   const env = await bootMigrationDatabase(t);
@@ -311,7 +311,7 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
 
   await t.test('rollback removes only the functions; pools and signature stay', async () => {
     const rows = await one('select count(*)::int as v from private.sc19_voice_entitlements');
-    await db.query(await readFile(new URL('../supabase/rollbacks/20261121100000_r6_voice_package_pools_down.sql', import.meta.url), 'utf8'));
+    await db.query(await readFile(new URL('../supabase/rollbacks/20261121130000_r6_voice_package_pools_down.sql', import.meta.url), 'utf8'));
     for (const fn of functions) assert.equal(await one('select to_regprocedure($1) is null as v', [fn]), true, fn);
     assert.equal(await one('select to_regprocedure($1) is not null as v',
       ['private.sc19_voice_grant_interviews(uuid,text,integer,uuid,timestamptz,uuid,timestamptz)']), true, 'operator grant stays');

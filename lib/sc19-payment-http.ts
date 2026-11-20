@@ -1,4 +1,3 @@
-import { Przelewy24Error, przelewy24NotificationSignature } from './sc19-przelewy24-provider.ts';
 import type { CheckoutOffer } from './sc19-payment-postgres.ts';
 import type { OfferCatalog } from './sc19-offer-catalog.ts';
 import { SC19_VAT_BASIS_POINTS, sc19OfferAmounts } from './sc19-offer-amounts.ts';
@@ -10,7 +9,8 @@ export type PaymentHttpRuntime = Readonly<{
   readOrder(companyId: string,userId: string,orderId: string): Promise<PaymentOrder | null>;
   listOffers(companyId: string,userId: string): Promise<CheckoutOffer[]>;
   appOrigin: string;
-  signatureHeader: string | null;
+  /** Request header that carries the provider's webhook signature (Stripe: stripe-signature). */
+  signatureHeader: string;
 }>;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{
@@ -35,27 +35,17 @@ async function bodyBytes(request: Request, max: number) {
   for(const chunk of chunks) { all.set(chunk,offset); offset+=chunk.byteLength; }
   return all;
 }
-const P24_DETAIL=/^P24_[A-Z_]{3,40}$/;
 function errorResponse(error: unknown, webhook=false) {
   const code=error instanceof Sc19PaymentError ? error.code : 'SC19_PAYMENT_RETRY';
-  // Name the Przelewy24 failure: fixed code and numeric HTTP status only, never
-  // the provider's message, the request or a credential. The public webhook
-  // body stays unchanged; the authenticated buyer gets the code as `detail`.
-  let detail: string | null=null;
-  if(error instanceof Przelewy24Error) {
-    const p24=P24_DETAIL.test(error.code) ? error.code : 'P24_UNKNOWN';
-    const status=Number.isSafeInteger(error.httpStatus) ? error.httpStatus : null;
-    console.error('SC19_P24_FAILURE',p24,status ?? '-');
-    if(!webhook && p24!=='P24_UNKNOWN')detail=p24;
-  }
   const map: Record<string,number> = {
     SC19_PAYMENTS_DISABLED:503, SC19_PAYMENT_RETRY:503, SC19_PAYMENT_FORBIDDEN:403, SC19_PAYMENT_INVALID:400,
     SC19_PAYMENT_BODY_TOO_LARGE:413, SC19_PAYMENT_ORIGIN:403, SC19_PAYMENT_CONTENT_TYPE:415,
     SC19_PAYMENT_OFFER_UNAVAILABLE:409, SC19_PAYMENT_REQUEST_CONFLICT:409,
+    SC19_PAYMENT_PACKAGE_UNAVAILABLE:409,
     SC19_PAYMENT_NOTIFICATION_INVALID:400, SC19_PAYMENT_ORDER_MISSING:404,
   };
   // No successful acknowledgment until verification AND transaction commit.
-  return json(detail ? {error:code,detail} : {error:code},map[code] ?? (webhook ? 503 : 409));
+  return json({error:code},map[code] ?? (webhook ? 503 : 409));
 }
 /** Serialized offer. `checkoutAvailable` says whether a payment can actually be
  * taken right now; the gross `amountMinor` stays authoritative and net/VAT are
@@ -98,7 +88,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
     },
     /** Reading an approved offer needs no payment provider, so this is the one
      * route that still answers while checkout is gated: the price, the terms and
-     * the order summary must be verifiable (Przelewy24 integration review). The
+     * the order summary must be verifiable before payment. The
      * authorization is unchanged either way — a server-authenticated user who
      * owns the company AND whose company has a private.sc19_trial_approvals row.
      * `checkoutAvailable:false` tells the client a payment cannot be taken; it
@@ -126,7 +116,10 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
               ['cross-site','none'].includes(request.headers.get('sec-fetch-site') ?? ''))
             throw new Sc19PaymentError('SC19_PAYMENT_ORIGIN');
           if (o.status === 'awaiting_payment' && o.sessionId) {
-            await runtime.service.refreshSettlement(o);
+            // An order of another provider (a historical Przelewy24 sandbox order; that
+            // provider was removed in R7) cannot be settled here; only show its status.
+            try { await runtime.service.refreshSettlement(o); }
+            catch (e) { if (!(e instanceof Sc19PaymentError && e.code === 'SC19_PAYMENT_SCOPE_MISMATCH')) throw e; }
             o = await runtime.readOrder(companyId,uid,orderId);
             if (!o) return json({error:'SC19_PAYMENT_ORDER_MISSING'},404);
           }
@@ -141,8 +134,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
       if(!runtime)return paymentsUnavailable();
       try {
         const raw = await bodyBytes(request,262144);
-        const signature = runtime.signatureHeader === null ? przelewy24NotificationSignature(raw) :
-          request.headers.get(runtime.signatureHeader) ?? '';
+        const signature = request.headers.get(runtime.signatureHeader) ?? '';
         const result=await runtime.service.notification(raw,signature);
         return json({state:result.state});
       } catch(e) { return errorResponse(e,true); }

@@ -2,7 +2,9 @@ import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { loadSc19PackageSizes, loadSc19PublicOfferSizes } from "../../../lib/sc19-package-sizes";
 import { createClient } from "../../../lib/supabase/server";
-import { freeAnalyses, freePrice, isSc19CatalogEnabled, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
+import { freeAnalyses, freePrice as staticFreePrice, isSc19CatalogEnabled, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice as staticPreselekcjaPrice } from "./preselekcja-offer";
+import { loadPublicCatalogPrices } from "../../../lib/pricing/public-catalog-server";
+import { freeLabel, grossLabel } from "../../../lib/pricing/public-catalog";
 import {
   assumptions,
   availabilityNote,
@@ -36,6 +38,11 @@ export async function HomePage() {
   );
   const preselekcja = preselekcjaAnalyses(catalogEnabled, sizes);
   const free = freeAnalyses(catalogEnabled, sizes);
+  // SC-PRICING-W4: PRICING_PUBLIC_CATALOG_ENABLED (exact "true"); off = no query, current static prices.
+  const prices = await loadPublicCatalogPrices();
+  const freePrice = prices ? freeLabel(prices.FREE) : staticFreePrice;
+  const preselekcjaPrice = prices ? grossLabel(prices.PRESELEKCJA) : staticPreselekcjaPrice;
+  const pricesMatchStatic = !prices || prices.PRESELEKCJA === preselekcjaOffer.grossPln * 100;
   return (
     <main className={styles.page}>
       <SiteHeader />
@@ -156,7 +163,7 @@ export async function HomePage() {
             <p className={styles.kicker}>Wybierz zakres</p>
             <h2 id="pkg-title">Nie płać za większy zakres, niż potrzebujesz.</h2>
             <p className={styles.intro}>Dziś kupisz FREE i PRESELEKCJĘ. FREE jest opcjonalnym pierwszym krokiem, a nie warunkiem zakupu PRESELEKCJI.</p>
-            <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} futureOffersEnabled={isPublicFutureOffersEnabled()} />
+            <PackageComparison sizes={sizes} catalogEnabled={catalogEnabled} futureOffersEnabled={isPublicFutureOffersEnabled()} prices={prices} />
           </div>
         </section>
 
@@ -164,9 +171,10 @@ export async function HomePage() {
           <div className={styles.wrap}>
             <p className={styles.kicker}>Porównanie z agencją</p>
             <h2 id="agency-title">Masz już kandydatów? Porównaj budżety.</h2>
-            <p className={styles.intro}>
+            {/* Netto and the difference are derived from the static price; with the catalog showing a different price they would be wrong, so the sentence is hidden rather than recomputed. */}
+            {pricesMatchStatic && <p className={styles.intro}>
               Przykładowy scenariusz dla jednego stanowiska, w kwotach netto: pełna usługa agencji za 10 000 zł wobec PRESELEKCJI za {preselekcjaOffer.netPln} zł powiększonej o 1 500 zł własnych kosztów klienta. Różnica budżetów w tym scenariuszu to około 8 256 zł.
-            </p>
+            </p>}
             <p className={styles.note}>{comparisonNote}</p>
             <div className={styles.actions}>
               <Link href="/kalkulator" className={styles.secondary}>Zmień założenia w kalkulatorze</Link>
@@ -206,7 +214,7 @@ export async function HomePage() {
               {faq.map((item) => (
                 <div key={item.question} className={styles.faqItem}>
                   <h3>{item.question}</h3>
-                  <p>{item.answer}</p>
+                  <p>{item.answer.replace(staticPreselekcjaPrice, preselekcjaPrice)}</p>
                 </div>
               ))}
             </div>

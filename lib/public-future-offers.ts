@@ -1,8 +1,8 @@
 // Public visibility of the announced packages WERYFIKACJA and ASSESSMENT CENTER.
 //
-// Owner decision 2026-11-10: while Przelewy24 verifies the shop, the public offer contained only what a
+// Owner decision 2026-11-10: while the payment operator was verifying the shop, the public offer contained only what a
 // verifier can actually buy (FREE and PRESELEKCJA). Owner decision 2026-11-16 (ROADMAP R4, "tak jak
-// polecasz"): the packages were hidden only because of Przelewy24, so they are visible again, with their
+// polecasz"): the packages were hidden only because of that verification, so they are visible again, with their
 // approved prices and the note that they cannot be bought yet. The switch stays as a kill switch: the
 // exact value "false" hides them again (copy lives in app/components/marketing/future-offers.ts and the
 // marked blocks of content/kalkulator-demo.html).

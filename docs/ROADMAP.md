@@ -96,8 +96,8 @@ Zamrożenie ścieżki płatności zdjęte 19.11.2026 (`docs/DECYZJE.md`). Ceny w
 | Krok | Status | Dowód |
 |---|---|---|
 | W1 + W2 — audyt źródeł cennika i katalog cen w bazie | ZROBIONE | PR #265 |
-| W2b — suwak liczby CV co 5 | W TOKU (część 1/2) | PR #286 |
-| W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | DO ZROBIENIA | — |
+| W2b — suwak liczby CV co 5 | W TOKU (część 2/2: suwak za flagą PRICING_CV_SLIDER_ENABLED, domyślnie wyłączoną) | PR #286 (część 1), część 2: PR #552 |
+| W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | ZROBIONE (W3 i W4 za wyłączonymi flagami PRICING_PAID_OPTIONS_ENABLED i PRICING_PUBLIC_CATALOG_ENABLED; włączenie flag — decyzja właściciela, TAK/NIE z liczbami przed i po) | W3: PR #557, W4: PR #559 |
 
 ### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
 
@@ -122,10 +122,10 @@ Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto
 
 | Krok | Status | Dowód |
 |---|---|---|
-| Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO ZROBIENIA | — |
-| Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | DO ZROBIENIA | — |
-| Usunięcie kodu Przelewy24 | DO ZROBIENIA | — |
-| Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | DO ZROBIENIA | — |
+| Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO SPRAWDZENIA (zamrożenie usunięte w całości: `PAYMENT_PATH_FREEZE` i `PAYMENT_CONTENT_FREEZE`; zostaje tylko blokada kodu, który rusza pieniądze lub faktury — `PAYMENTS`; działa na produkcji po promocji #564 na `main`) | kod: PR #564, zasady: PR #565 |
+| Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | W TOKU (PRESELEKCJA w całych pakietach po 60 CV, tylko tryb testowy; WERYFIKACJA i ASSESSMENT CENTER „wkrótce”; bez faktur) | PR #556 |
+| Usunięcie kodu Przelewy24 | W TOKU (część 1: kod płatności, trasy, panel operatora i ekran zakupu bez Przelewy24; cz. 2 (teksty stron): PR #567 — teksty stron publicznych i kalkulatora mówią o Stripe; zostają martwe gałęzie w komponencie zakupu (PR #563), regulamin w wersji .docx, dokumentacja oraz lista plików w workflow) | PR #562, PR #567 |
+| Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | W TOKU (blokada w bazie i alert dla właściciela w bazie; każda rozmowa rezerwuje 15 zł, czyli jej najwyższy możliwy koszt, więc limitu nie da się przekroczyć także bez rozliczenia rzeczywistych kosztów — przy obecnej rezerwie mieszczą się 3 rozmowy w miesiącu; usunięcie danych kandydata nie zmienia miesięcznej sumy; rzeczywisty koszt rozmowy z webhooka Retell (call_analyzed, przeliczony po stałym kursie 4,50 zł/USD) zastępuje rezerwę raz na rozmowę, a koszt wyższy niż rezerwa blokuje resztę miesiąca; zostaje wysyłka powiadomienia właściciela) | PR #558, PR #561 |
 
 ## Wstrzymane do pierwszej sprzedaży
 
